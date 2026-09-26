@@ -296,9 +296,7 @@ def test_stage_context_carries_provenance_fields(aa: types.ModuleType, tmp_path:
     assert len(ctx.audio_signature) == 64
 
 
-def test_the_variant_is_the_declared_transform_not_a_guess_from_the_name(
-    aa: types.ModuleType, tmp_path: Path
-) -> None:
+def test_the_variant_is_the_declared_transform_not_a_guess_from_the_name(aa: types.ModuleType, tmp_path: Path) -> None:
     """``variant`` comes from the perturbation's declaration, never from how its name is spelled.
 
     It used to be ``"speech_enhanced" if label.startswith("enhanced")``. A perturbation named for

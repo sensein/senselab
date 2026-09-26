@@ -1,0 +1,1404 @@
+"""The file-level fold: pass, flag, discard, and each branch authority over its own subject.
+
+A branch reports and this fold decides, so a branch enters through ``branch_reports`` and
+``spans_by_node`` rather than through ``node_verdicts``: what it *found* is the spans it proposed and
+what it *claims* is its conformance. ``node_verdicts`` now carries only the nodes that decide.
+"""
+
+from __future__ import annotations
+
+import inspect
+from dataclasses import replace
+from typing import Any, Mapping, Sequence
+
+from senselab.audio.workflows.triage.vocabulary import (
+    BAD_MAP_VALUES,
+    CRITICAL_ABSENCE,
+    DECLINED,
+    NO_LEXICAL_ITEM_PRODUCED,
+    NO_LEXICAL_WORD,
+    NO_TRANSCRIPT,
+    NON_LEXICAL_TASK,
+    REDACTION_OWED,
+    RELEASE_UNKNOWN_GROUNDS,
+    RELEASE_WITH_REDACTION_GROUNDS,
+    RELEASE_WITHHELD_GROUNDS,
+    RELEASE_WITHOUT_REDACTION_GROUNDS,
+    REVIEWER_CLEARED_RESCAN,
+    REVIEWER_PROPOSED_REDACTION,
+    REVIEWER_RESET_EVERY_MASK,
+    REVIEWER_RESET_SOME_MASKS,
+    ROUTED,
+    SCAN_UNRECORDED,
+    SPEECH_UNREAD,
+    TASK,
+    UNAVAILABLE,
+    UNDETERMINED,
+    UNEXPLAINED_CONTENT,
+    UNJUDGED,
+    UNREAD_DECLARATION,
+    UNREADABLE_EMPTINESS,
+    BranchDecision,
+    BranchReport,
+    Conformance,
+    FileVerdict,
+    FoldPolicy,
+    NodeVerdict,
+    Outcome,
+    RedactionEvidence,
+    Release,
+    RunState,
+    Triage,
+    _release_from,
+    fold_file_verdict,
+)
+
+
+def _report(node: str, kind: str, *, conformance: Conformance = UNDETERMINED) -> BranchReport:
+    """One branch's report, as a branch writes it: a conformance and no outcome.
+
+    Args:
+        node: The branch's name.
+        kind: The kind it reports on.
+        conformance: Whether what the instruction asked for happened.
+
+    Returns:
+        The report.
+    """
+    return BranchReport(node=node, kind=kind, conformance=conformance, conformance_of=TASK)
+
+
+def _found(*nodes: str) -> dict[str, int]:
+    """One proposed span per named node, which is what the fold reads as ``present``.
+
+    Args:
+        *nodes: The nodes that proposed a span.
+
+    Returns:
+        The span counts, for ``spans_by_node``.
+    """
+    return {node: 1 for node in nodes}
+
+
+def _decisions(forced: Sequence[str] = (), **routes: str) -> dict[str, BranchDecision]:
+    """One decision per named branch, as ROUTING writes them.
+
+    Args:
+        forced: Branches the declaration added although the ruleset did not route them.
+        **routes: Branch name to its route state.
+
+    Returns:
+        The decisions, keyed by branch name.
+    """
+    return {
+        branch: BranchDecision(
+            branch=branch,
+            will_run=state == ROUTED or branch in forced,
+            route_state=state,
+            forced_by_declaration=branch in forced,
+            declared=branch in forced,
+        )
+        for branch, state in routes.items()
+    }
+
+
+def _all_declined(forced: Sequence[str] = ()) -> dict[str, BranchDecision]:
+    """The empty execution set: every branch declined.
+
+    Args:
+        forced: Branches the declaration added anyway.
+
+    Returns:
+        The three decisions.
+    """
+    return _decisions(forced, AIRWAY=DECLINED, SPEECH=DECLINED, VOICE=DECLINED)
+
+
+def _with_redact(redact: Outcome, *, speech: bool | None = None, speech_route: str = DECLINED) -> FileVerdict:
+    """A fold whose only interesting node is REDACT, optionally with a SPEECH branch beside it.
+
+    Args:
+        redact: What REDACT concluded.
+        speech: True when the SPEECH branch reported a conforming, span-bearing reading, or None
+            when the branch never ran. REDACT is a deciding node and keeps its ``Outcome``; SPEECH
+            is a reporting node and has none.
+        speech_route: What the ruleset made of SPEECH.
+
+    Returns:
+        The folded file verdict.
+    """
+    node_verdicts = [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")]
+    node_verdicts.append(NodeVerdict("REDACT", redact, None, "the scan concluded"))
+    return fold_file_verdict(
+        node_verdicts,
+        branch_reports=[] if speech is None else [_report("SPEECH", "speech", conformance=True)],
+        spans_by_node={} if speech is None else _found("SPEECH"),
+        branch_decisions=_decisions(AIRWAY=DECLINED, SPEECH=speech_route, VOICE=DECLINED),
+        ran={},
+        hint_claims={},
+        route_state=ROUTED,
+    )
+
+
+def _without_redact(evidence: RedactionEvidence, *, speech: RunState, speech_route: str = ROUTED) -> FileVerdict:
+    """A fold REDACT left no verdict on, over one state of the redaction evidence.
+
+    Args:
+        evidence: What the store says about whether anything was redactable.
+        speech: Whether SPEECH ran.
+        speech_route: What the ruleset made of SPEECH. ``DECLINED`` is a task that asks for no
+            words, which the release axis reads as a clearance rather than as an absence.
+
+    Returns:
+        The folded file verdict.
+    """
+    return fold_file_verdict(
+        [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
+        branch_decisions=_decisions(AIRWAY=DECLINED, SPEECH=speech_route, VOICE=DECLINED),
+        ran={"SPEECH": speech},
+        hint_claims={},
+        route_state=ROUTED,
+        redaction=evidence,
+    )
+
+
+class TestTheTriageVocabulary:
+    """pass, flag, discard — three values, and fail is not one of them."""
+
+    def test_the_members_are_exactly_three(self) -> None:
+        """verdict.md's triage axis; a branch's ``fail`` has no counterpart here."""
+        assert {member.value for member in Triage} == {"pass", "flag", "discard"}
+
+    def test_a_node_outcome_is_not_a_triage(self) -> None:
+        """Outcome stays the node-level vocabulary; the file axis is its own type."""
+        assert not isinstance(Outcome.FAIL, Triage)
+
+
+class TestDiscardIsNarrow:
+    """Exactly two grounds, and they carry different reasons."""
+
+    def test_admit_failure_discards_as_unmeasurable(self) -> None:
+        """Nothing ran and nothing is claimed about the recording."""
+        folded = fold_file_verdict(
+            [NodeVerdict("ADMIT", Outcome.FAIL, None, "decode failure")],
+            branch_decisions={},
+            ran={},
+            hint_claims={},
+            route_state=None,
+        )
+        assert folded.triage is Triage.DISCARD
+        assert folded.discard_ground == "unmeasurable"
+
+    def test_the_emptiness_bypass_discards_as_acoustically_empty(self) -> None:
+        """Measured: every tracked stream peak fell under the floor, so there is nothing in it."""
+        folded = fold_file_verdict(
+            [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
+            branch_decisions=_all_declined(),
+            ran={},
+            hint_claims={},
+            route_state="empty",
+        )
+        assert folded.triage is Triage.DISCARD
+        assert folded.discard_ground == "acoustically_empty"
+
+    def test_nothing_routed_but_not_empty_flags_rather_than_discarding(self) -> None:
+        """Content no gate could account for is a charge against the ruleset, never against the file."""
+        folded = fold_file_verdict(
+            [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
+            branch_decisions=_all_declined(),
+            ran={},
+            hint_claims={},
+            route_state="unexplained",
+        )
+        assert folded.triage is Triage.FLAG
+        assert folded.discard_ground is None
+        assert any(reason.why == UNEXPLAINED_CONTENT for reason in folded.reasons)
+
+    def test_an_unreadable_bypass_flags_under_its_own_ground(self) -> None:
+        """Nothing routed and no bypass to read still flags, and says which of the two it was.
+
+        It is not a discard: neither discard ground is a claim about a measurement that was never
+        taken. It is not ``unexplained`` either, which would charge the ruleset for evidence the
+        run failed to produce.
+        """
+        folded = fold_file_verdict(
+            [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
+            branch_decisions=_all_declined(),
+            ran={},
+            hint_claims={},
+            route_state="unreadable",
+        )
+        assert folded.triage is Triage.FLAG
+        assert folded.discard_ground is None
+        assert any(reason.why == UNREADABLE_EMPTINESS for reason in folded.reasons)
+        assert not any(reason.why == UNEXPLAINED_CONTENT for reason in folded.reasons)
+
+    def test_the_two_grounds_are_told_apart_by_their_ground_not_by_their_axis(self) -> None:
+        """Both discard; a consumer that cannot tell them apart treats an empty file as a broken one."""
+        broken = fold_file_verdict(
+            [NodeVerdict("ADMIT", Outcome.FAIL, None, "decode failure")],
+            branch_decisions={},
+            ran={},
+            hint_claims={},
+            route_state=None,
+        )
+        empty = fold_file_verdict(
+            [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
+            branch_decisions=_all_declined(),
+            ran={},
+            hint_claims={},
+            route_state="empty",
+        )
+        assert broken.triage is empty.triage is Triage.DISCARD
+        assert broken.discard_ground != empty.discard_ground
+
+    def test_a_pass_carries_no_ground(self) -> None:
+        """``discard_ground`` describes a discard and nothing else."""
+        folded = fold_file_verdict(
+            [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
+            branch_reports=[_report("AIRWAY", "airway", conformance=True)],
+            spans_by_node=_found("AIRWAY"),
+            branch_decisions=_decisions(AIRWAY=ROUTED, SPEECH=DECLINED, VOICE=DECLINED),
+            ran={},
+            hint_claims={},
+            route_state=ROUTED,
+        )
+        assert folded.triage is Triage.PASS
+        assert folded.discard_ground is None
+
+    def test_no_routing_at_all_is_not_an_empty_recording(self) -> None:
+        """A run that routed nothing because ROUTING never concluded has measured nothing."""
+        folded = fold_file_verdict(
+            [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
+            branch_decisions={},
+            ran={},
+            hint_claims={},
+            route_state=None,
+        )
+        assert folded.triage is Triage.PASS
+        assert folded.discard_ground is None
+
+    def test_a_branch_fail_is_not_a_discard(self) -> None:
+        """A cough recording has no speech; SPEECH failing is the expected outcome."""
+        folded = fold_file_verdict(
+            [
+                NodeVerdict("ADMIT", Outcome.PASS, None, "ok"),
+                NodeVerdict("AIRWAY", Outcome.PASS, "airway", "labelled"),
+                NodeVerdict("SPEECH", Outcome.FAIL, "speech", "no consensus word"),
+            ],
+            branch_decisions=_decisions(AIRWAY=ROUTED, SPEECH=ROUTED, VOICE=DECLINED),
+            ran={},
+            hint_claims={},
+            route_state=ROUTED,
+        )
+        assert folded.triage is not Triage.DISCARD
+
+    def test_a_hint_turns_the_empty_ground_into_a_flag(self) -> None:
+        """Discarding would delete the evidence that the graph was wrong."""
+        folded = fold_file_verdict(
+            [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
+            branch_decisions=_all_declined(),
+            ran={},
+            hint_claims={"SPEECH": True},
+            route_state="empty",
+        )
+        assert folded.triage is Triage.FLAG
+
+    def test_the_empty_execution_set_discards_rather_than_flagging_on_its_own(self) -> None:
+        """ROUTING records the empty set on its decisions; a ``pass`` verdict beside them does not preempt.
+
+        The alternative recorded in ``benchmarks/open.md`` — routing flagging the empty set — made
+        verdict.md's acoustically-empty discard unreachable, since the fold tests any flag first.
+        """
+        folded = fold_file_verdict(
+            [
+                NodeVerdict("ADMIT", Outcome.PASS, None, "ok"),
+                NodeVerdict("routing", Outcome.PASS, None, "no branch runs (empty); AIRWAY declined"),
+            ],
+            branch_decisions=_all_declined(),
+            ran={},
+            hint_claims={},
+            route_state="empty",
+        )
+        assert folded.triage is Triage.DISCARD
+        assert folded.discard_ground == "acoustically_empty"
+
+
+class TestBranchAuthorityIsScoped:
+    """A branch is the authority on its own subject and on nothing else."""
+
+    def test_speech_resolves_speech_and_touches_nothing_else(self) -> None:
+        """It refutes neither AIRWAY nor VOICE, and it does not settle them either."""
+        folded = fold_file_verdict(
+            [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
+            branch_reports=[_report("SPEECH", "speech", conformance=True)],
+            spans_by_node=_found("SPEECH"),
+            branch_decisions=_decisions(AIRWAY=DECLINED, SPEECH=ROUTED, VOICE=DECLINED),
+            ran={},
+            hint_claims={},
+            route_state=ROUTED,
+        )
+        assert folded.findings["SPEECH"] == "present"
+        assert folded.findings["AIRWAY"] == "uncertain"
+        assert folded.findings["VOICE"] == "uncertain"
+
+    def test_a_non_conforming_branch_still_resolves_its_subject(self) -> None:
+        """The flag the fold raises travels beside the resolution and does not withhold it."""
+        folded = fold_file_verdict(
+            [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
+            branch_reports=[_report("VOICE", "voice", conformance=False)],
+            spans_by_node=_found("VOICE"),
+            branch_decisions=_decisions(AIRWAY=DECLINED, SPEECH=DECLINED, VOICE=ROUTED),
+            ran={},
+            hint_claims={},
+            route_state=ROUTED,
+        )
+        assert folded.findings["VOICE"] == "present"
+        assert folded.conformance["VOICE"] is False
+        assert folded.triage is Triage.FLAG
+
+    def test_a_branch_that_proposed_no_span_resolves_its_subject_absent(self) -> None:
+        """A branch with no subject is authority for that too, and the spans are what say so."""
+        folded = fold_file_verdict(
+            [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
+            branch_reports=[_report("SPEECH", "speech"), _report("AIRWAY", "airway", conformance=True)],
+            spans_by_node=_found("AIRWAY"),
+            branch_decisions=_decisions(AIRWAY=ROUTED, SPEECH=ROUTED, VOICE=DECLINED),
+            ran={},
+            hint_claims={},
+            route_state=ROUTED,
+        )
+        assert folded.findings["SPEECH"] == "absent"
+
+    def test_an_empty_handed_branch_does_not_carry_its_absence_onto_a_sibling(self) -> None:
+        """SPEECH found no subject; that says nothing about the airway AIRWAY found."""
+        folded = fold_file_verdict(
+            [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
+            branch_reports=[_report("SPEECH", "speech"), _report("AIRWAY", "airway", conformance=True)],
+            spans_by_node=_found("AIRWAY"),
+            branch_decisions=_decisions(AIRWAY=ROUTED, SPEECH=ROUTED, VOICE=DECLINED),
+            ran={},
+            hint_claims={},
+            route_state=ROUTED,
+        )
+        assert folded.findings["AIRWAY"] == "present"
+        assert folded.findings["SPEECH"] == "absent"
+
+
+class TestTheRoutingIsReportedBeside:
+    """Both maps are always present, and agreement is checkable by a reader."""
+
+    def test_routes_and_findings_are_both_present(self) -> None:
+        """Keeping both is what makes agreement checkable rather than asserted."""
+        folded = fold_file_verdict(
+            [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
+            branch_reports=[_report("SPEECH", "speech", conformance=True)],
+            spans_by_node=_found("SPEECH"),
+            branch_decisions=_decisions(["SPEECH"], AIRWAY=DECLINED, SPEECH=DECLINED, VOICE=DECLINED),
+            ran={},
+            hint_claims={},
+            route_state=ROUTED,
+        )
+        assert folded.routes["SPEECH"] == DECLINED
+        assert folded.findings["SPEECH"] == "present"
+        assert folded.route_state == ROUTED
+
+    def test_a_declined_branch_that_found_its_subject_is_a_mismatch_and_flags(self) -> None:
+        """The ruleset missed it; the mismatch is the product, and it never overrides either side."""
+        folded = fold_file_verdict(
+            [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
+            branch_reports=[_report("SPEECH", "speech", conformance=True)],
+            spans_by_node=_found("SPEECH"),
+            branch_decisions=_decisions(["SPEECH"], AIRWAY=DECLINED, SPEECH=DECLINED, VOICE=DECLINED),
+            ran={},
+            hint_claims={},
+            route_state=ROUTED,
+        )
+        assert folded.agreement["SPEECH"] == "mismatch"
+        assert folded.triage is Triage.FLAG
+        assert [reason for reason in folded.reasons if "it found it" in reason.why]
+
+    def test_a_routed_branch_that_found_nothing_is_a_mismatch_and_does_not_flag(self) -> None:
+        """Routing is lenient by design, so a branch finding none of its kind is it being right.
+
+        The mismatch stays in the agreement table, which is where a reader checks the ruleset against
+        the detectors. It is not a ground: charging the recording for routing's leniency made this
+        the largest single flag ground in the corpus, 830 records over a 2,269-recording pilot.
+        """
+        folded = fold_file_verdict(
+            [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
+            branch_reports=[_report("SPEECH", "speech")],
+            spans_by_node={},
+            branch_decisions=_decisions(AIRWAY=DECLINED, SPEECH=ROUTED, VOICE=DECLINED),
+            ran={},
+            hint_claims={},
+            route_state=ROUTED,
+        )
+        assert folded.agreement["SPEECH"] == "mismatch"
+        assert folded.findings["SPEECH"] == "absent"
+        assert folded.triage is Triage.PASS
+        assert not [reason for reason in folded.reasons if "found no subject" in reason.why]
+
+    def test_a_declared_branch_that_found_nothing_still_flags(self) -> None:
+        """The informative case survives: the recording said it held this kind and it does not."""
+        folded = fold_file_verdict(
+            [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
+            branch_reports=[_report("SPEECH", "speech")],
+            spans_by_node={},
+            branch_decisions=_decisions(AIRWAY=DECLINED, SPEECH=ROUTED, VOICE=DECLINED),
+            ran={},
+            hint_claims={"SPEECH": True},
+            route_state=ROUTED,
+        )
+        assert folded.triage is Triage.FLAG
+        assert [reason for reason in folded.reasons if "was declared and did not find it" in reason.why]
+
+    def test_an_unreadable_route_is_resolved_not_mismatched(self) -> None:
+        """A branch whose gates could not be read made no claim to disagree with."""
+        folded = fold_file_verdict(
+            [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
+            branch_reports=[_report("SPEECH", "speech", conformance=True)],
+            spans_by_node=_found("SPEECH"),
+            branch_decisions=_decisions(["SPEECH"], AIRWAY=DECLINED, SPEECH=UNAVAILABLE, VOICE=DECLINED),
+            ran={},
+            hint_claims={},
+            route_state=ROUTED,
+        )
+        assert folded.agreement["SPEECH"] == "resolved"
+        assert folded.triage is Triage.PASS
+
+    def test_agreeing_branches_are_recorded_as_agreeing(self) -> None:
+        """``agree`` is a value a reader can see, not the absence of a mismatch."""
+        folded = fold_file_verdict(
+            [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
+            branch_reports=[_report("AIRWAY", "airway", conformance=True), _report("SPEECH", "speech")],
+            spans_by_node=_found("AIRWAY"),
+            branch_decisions=_decisions(["SPEECH"], AIRWAY=ROUTED, SPEECH=DECLINED, VOICE=DECLINED),
+            ran={},
+            hint_claims={},
+            route_state=ROUTED,
+        )
+        assert folded.agreement["AIRWAY"] == "agree"
+        assert folded.agreement["SPEECH"] == "agree"
+        assert folded.triage is Triage.PASS
+
+    def test_the_route_is_never_rewritten_by_the_branch(self) -> None:
+        """``routes`` reports what the ruleset made of the branch even where the branch overruled it."""
+        folded = fold_file_verdict(
+            [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
+            branch_reports=[_report("AIRWAY", "airway")],
+            spans_by_node={},
+            branch_decisions=_decisions(AIRWAY=ROUTED, SPEECH=DECLINED, VOICE=DECLINED),
+            ran={},
+            hint_claims={},
+            route_state=ROUTED,
+        )
+        assert folded.routes["AIRWAY"] == ROUTED
+        assert folded.findings["AIRWAY"] == "absent"
+
+    def test_a_branch_with_neither_a_route_nor_a_verdict_reads_uncertain(self) -> None:
+        """Nothing said anything about VOICE; reading that as absent would invent a measurement."""
+        folded = fold_file_verdict(
+            [
+                NodeVerdict("ADMIT", Outcome.PASS, None, "ok"),
+                NodeVerdict("SPEECH", Outcome.FAIL, "speech", "no consensus word"),
+            ],
+            branch_decisions={},
+            ran={},
+            hint_claims={"VOICE": True},
+            route_state=ROUTED,
+        )
+        assert folded.routes["VOICE"] == UNJUDGED
+        assert folded.findings["VOICE"] == "uncertain"
+        assert folded.triage is not Triage.DISCARD
+
+    def test_a_branch_routing_never_judged_is_told_from_one_whose_gates_were_unreadable(self) -> None:
+        """Two different facts that shared one token: no decision written, and a decision of unavailable.
+
+        ``unavailable`` is ROUTING's own reading -- it looked, and every gate of the branch was
+        unreadable. A branch with no decision entity at all was never looked at. Both resolve the
+        agreement table the same way and neither is a claim about the recording, which is exactly
+        why one token for both was unreadable rather than harmless.
+        """
+        judged = fold_file_verdict(
+            [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
+            branch_decisions=_decisions(VOICE=UNAVAILABLE),
+            ran={},
+            hint_claims={},
+            route_state=ROUTED,
+        )
+        never = fold_file_verdict(
+            [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
+            branch_decisions={},
+            ran={},
+            hint_claims={"VOICE": True},
+            route_state=ROUTED,
+        )
+        assert judged.routes["VOICE"] == UNAVAILABLE
+        assert never.routes["VOICE"] == UNJUDGED
+        assert judged.routes["VOICE"] != never.routes["VOICE"]
+
+    def test_a_routed_branch_that_never_concluded_reads_uncertain(self) -> None:
+        """A branch asked to look and silent has not established an absence."""
+        folded = fold_file_verdict(
+            [
+                NodeVerdict("ADMIT", Outcome.PASS, None, "ok"),
+                NodeVerdict("AIRWAY", Outcome.PASS, "airway", "labelled"),
+            ],
+            branch_decisions=_decisions(AIRWAY=ROUTED, SPEECH=ROUTED, VOICE=ROUTED),
+            ran={"SPEECH": RunState.COMPLETED, "VOICE": RunState.COMPLETED},
+            hint_claims={},
+            route_state=ROUTED,
+        )
+        assert folded.routes["SPEECH"] == ROUTED
+        assert folded.findings["SPEECH"] == "uncertain"
+
+
+class TestABranchThatNeverRanIsNotOneThatFailed:
+    """The branch_decision elements are what distinguish the two."""
+
+    def test_declined_and_unforced_is_expected(self) -> None:
+        """The graph declined to look, and said why."""
+        folded = fold_file_verdict(
+            [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
+            branch_reports=[_report("AIRWAY", "airway", conformance=True)],
+            spans_by_node=_found("AIRWAY"),
+            branch_decisions=_decisions(AIRWAY=ROUTED, SPEECH=DECLINED, VOICE=DECLINED),
+            ran={},
+            hint_claims={},
+            route_state=ROUTED,
+        )
+        assert folded.agreement["SPEECH"] == "not_run"
+        assert folded.triage is Triage.PASS
+
+    def test_asked_but_silent_flags(self) -> None:
+        """will_run true with no verdict is a branch that left no answer."""
+        folded = fold_file_verdict(
+            [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
+            branch_decisions=_decisions(AIRWAY=DECLINED, SPEECH=ROUTED, VOICE=DECLINED),
+            ran={"SPEECH": RunState.ERRORED},
+            hint_claims={},
+            route_state=ROUTED,
+        )
+        assert folded.triage is Triage.FLAG
+        assert any("errored without a verdict" in reason.why for reason in folded.reasons)
+
+    def test_the_three_silent_reasons_are_distinguished(self) -> None:
+        """errored, completed-without-a-verdict and never-ran are different findings."""
+        for state, phrase in (
+            (RunState.ERRORED, "errored without a verdict"),
+            (RunState.COMPLETED, "completed without a verdict"),
+            (RunState.SKIPPED, "never ran"),
+        ):
+            folded = fold_file_verdict(
+                [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
+                branch_decisions=_decisions(AIRWAY=DECLINED, SPEECH=ROUTED, VOICE=DECLINED),
+                ran={"SPEECH": state},
+                hint_claims={},
+                route_state=ROUTED,
+            )
+            assert any(phrase in reason.why for reason in folded.reasons)
+
+    def test_the_silent_reason_names_the_branch(self) -> None:
+        """A reason a reader cannot attribute to a branch is one they cannot act on."""
+        folded = fold_file_verdict(
+            [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
+            branch_decisions=_decisions(AIRWAY=DECLINED, SPEECH=ROUTED, VOICE=DECLINED),
+            ran={},
+            hint_claims={},
+            route_state=ROUTED,
+        )
+        assert any(reason.node == "SPEECH" for reason in folded.reasons)
+
+    def test_a_routed_branch_with_no_node_is_reported_rather_than_ignored(self) -> None:
+        """A routed branch that left no verdict flags the file, whatever silenced it.
+
+        The state the fold is handed is the general one: the branch was asked to run and concluded
+        nothing — skipped, errored, or completed without a verdict. The fold must say so rather
+        than pass quietly, and that is what is pinned.
+        """
+        folded = fold_file_verdict(
+            [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
+            branch_decisions=_decisions(AIRWAY=DECLINED, SPEECH=ROUTED, VOICE=DECLINED),
+            ran={"SPEECH": RunState.SKIPPED},
+            hint_claims={},
+            route_state=ROUTED,
+        )
+        assert folded.triage is Triage.FLAG
+        assert any(reason.node == "SPEECH" and "never ran" in reason.why for reason in folded.reasons)
+
+    def test_the_branches_map_joins_the_decision_to_the_reported_conformance(self) -> None:
+        """A skipped branch carries the reason it was skipped, beside a branch that reported."""
+        folded = fold_file_verdict(
+            [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
+            branch_reports=[_report("AIRWAY", "airway", conformance=True)],
+            spans_by_node=_found("AIRWAY"),
+            branch_decisions=_decisions(AIRWAY=ROUTED, SPEECH=DECLINED, VOICE=DECLINED),
+            ran={},
+            hint_claims={},
+            route_state=ROUTED,
+        )
+        assert folded.branches["AIRWAY"]["conformance"] is True
+        assert folded.branches["SPEECH"]["conformance"] is None
+        assert folded.branches["SPEECH"]["will_run"] is False
+        assert folded.branches["SPEECH"]["route_state"] == DECLINED
+
+
+class TestHintsForMismatchOnly:
+    """A hint names a mismatch and prevents a discard. It has no other power on this axis."""
+
+    def test_a_hinted_branch_that_found_nothing_flags(self) -> None:
+        """The branch, the hint that claimed it, and its conclusion, all named."""
+        folded = fold_file_verdict(
+            [
+                NodeVerdict("ADMIT", Outcome.PASS, None, "ok"),
+                NodeVerdict("AIRWAY", Outcome.FAIL, "airway", "no span carries a label"),
+            ],
+            branch_decisions=_decisions(["AIRWAY"], AIRWAY=DECLINED, SPEECH=DECLINED, VOICE=DECLINED),
+            ran={},
+            hint_claims={"AIRWAY": True},
+            route_state=ROUTED,
+        )
+        assert folded.triage is Triage.FLAG
+        assert folded.hints["AIRWAY"] == "claimed_not_found"
+
+    def test_a_hinted_branch_that_found_its_subject_is_an_agreement(self) -> None:
+        """The declaration and the measurement said the same thing; nothing is owed a human."""
+        folded = fold_file_verdict(
+            [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
+            branch_reports=[_report("AIRWAY", "airway", conformance=True)],
+            spans_by_node=_found("AIRWAY"),
+            branch_decisions=_decisions(AIRWAY=ROUTED, SPEECH=DECLINED, VOICE=DECLINED),
+            ran={},
+            hint_claims={"AIRWAY": True},
+            route_state=ROUTED,
+        )
+        assert folded.hints["AIRWAY"] == "claimed_and_found"
+        assert folded.triage is Triage.PASS
+
+    def test_a_subject_found_that_no_hint_claimed_is_recorded_not_flagged(self) -> None:
+        """Recorded; not a flag on its own."""
+        folded = fold_file_verdict(
+            [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
+            branch_reports=[_report("AIRWAY", "airway", conformance=True)],
+            spans_by_node=_found("AIRWAY"),
+            branch_decisions=_decisions(AIRWAY=ROUTED, SPEECH=DECLINED, VOICE=DECLINED),
+            ran={},
+            hint_claims={},
+            route_state=ROUTED,
+        )
+        assert folded.hints["AIRWAY"] == "found_unclaimed"
+        assert folded.triage is Triage.PASS
+
+    def test_an_unclaimed_branch_that_found_nothing_carries_no_claim(self) -> None:
+        """The fourth cell of the table, so a reader never has to infer it from a missing key."""
+        folded = fold_file_verdict(
+            [
+                NodeVerdict("ADMIT", Outcome.PASS, None, "ok"),
+                NodeVerdict("AIRWAY", Outcome.PASS, "airway", "labelled"),
+            ],
+            branch_decisions=_decisions(AIRWAY=ROUTED, SPEECH=DECLINED, VOICE=DECLINED),
+            ran={},
+            hint_claims={},
+            route_state=ROUTED,
+        )
+        assert folded.hints["SPEECH"] == "no_claim"
+
+    def test_a_hint_never_turns_a_flag_into_a_pass(self) -> None:
+        """Its one power is to prevent a discard and to name a mismatch."""
+        folded = fold_file_verdict(
+            [
+                NodeVerdict("ADMIT", Outcome.PASS, None, "ok"),
+                NodeVerdict("SPEECH", Outcome.FLAG, "speech", "pii in the target's speech"),
+            ],
+            branch_decisions=_decisions(AIRWAY=DECLINED, SPEECH=ROUTED, VOICE=DECLINED),
+            ran={},
+            hint_claims={"SPEECH": True},
+            route_state=ROUTED,
+        )
+        assert folded.triage is Triage.FLAG
+
+    def test_a_hint_never_resolves_a_subject(self) -> None:
+        """A claim is an expectation; only a branch resolves, and here none concluded."""
+        folded = fold_file_verdict(
+            [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
+            branch_decisions=_all_declined(),
+            ran={},
+            hint_claims={"SPEECH": True},
+            route_state="empty",
+        )
+        assert folded.findings["SPEECH"] == "uncertain"
+
+    def test_a_declaration_nothing_could_read_empties_the_hints_and_flags(self) -> None:
+        """Unknown claims are not no claims: reporting them as ``no_claim`` would clear the file quietly."""
+        folded = fold_file_verdict(
+            [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
+            branch_decisions={},
+            ran={},
+            hint_claims=None,
+            route_state=ROUTED,
+        )
+        assert folded.hints == {}
+        assert folded.triage is Triage.FLAG
+        assert any(reason.why == UNREAD_DECLARATION for reason in folded.reasons)
+
+
+class TestAConfigTypoIsNamedNotSwallowed:
+    """A map value that is not a branch under-claims every file in the run; it must not discard one."""
+
+    def test_a_bad_map_value_flags_where_the_file_would_otherwise_discard(self) -> None:
+        """One character in the map turns a declared cough into a silent discard of the evidence."""
+        decisions = _all_declined()
+        decisions["AIRWAY"] = replace(decisions["AIRWAY"], bad_map_values={"cough": "AIRWY"})
+        folded = fold_file_verdict(
+            [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
+            branch_decisions=decisions,
+            ran={},
+            hint_claims={},
+            route_state="empty",
+        )
+        assert folded.triage is Triage.FLAG
+        assert folded.discard_ground is None
+        assert folded.bad_map_values == {"cough": "AIRWY"}
+        assert any(BAD_MAP_VALUES in reason.why and "AIRWY" in reason.why for reason in folded.reasons)
+
+    def test_a_well_formed_map_flags_nothing(self) -> None:
+        """The control: the same recording discards when the map is sound."""
+        folded = fold_file_verdict(
+            [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
+            branch_decisions=_all_declined(),
+            ran={},
+            hint_claims={},
+            route_state="empty",
+        )
+        assert folded.bad_map_values == {}
+        assert folded.triage is Triage.DISCARD
+
+
+class TestReleaseIsDecidedFromEvidenceNotFromRedactsAbsence:
+    """REDACT runs only where there is something to redact, so its silence decides nothing.
+
+    ``specs/20260817-triage-workflow-dag/verdict.md``, the release fold. Measured over 62,548
+    recordings, the old rule reported 44,623 as unexamined when 44,622 of them were determined.
+    """
+
+    def test_a_scan_that_found_nothing_is_not_unassessed(self) -> None:
+        """The largest population the old rule mislabelled: SPEECH scanned and the transcript was clean."""
+        folded = _without_redact(
+            RedactionEvidence(lexical_words_n=42, scanned=True, findings_n=0), speech=RunState.COMPLETED
+        )
+        assert folded.release is not Release.NOT_ASSESSED
+
+    def test_a_declined_scan_is_not_unassessed(self) -> None:
+        """SPEECH read every lexical word out of the task's own stimulus, so nothing was disclosed."""
+        folded = _without_redact(
+            RedactionEvidence(lexical_words_n=9, scanned=False, findings_n=0), speech=RunState.COMPLETED
+        )
+        assert folded.release is not Release.NOT_ASSESSED
+
+    def test_a_transcript_with_no_lexical_word_is_not_unassessed(self) -> None:
+        """SPEECH ran and the consensus carried no word; a redaction has nothing to read."""
+        folded = _without_redact(
+            RedactionEvidence(lexical_words_n=0, scanned=None, findings_n=0), speech=RunState.COMPLETED
+        )
+        assert folded.release is not Release.NOT_ASSESSED
+
+    def test_a_recording_speech_never_ran_on_is_unassessed(self) -> None:
+        """Nothing read its lexical content, so the axis cannot say the original may be handed on.
+
+        ``specs/20260924-which-artefact-is-releasable/design.md`` §3: the 2026-09-22 rule put this
+        row beside the three a reading cleared, on the premise that the axis described REDACT's
+        artifacts only. The axis now describes the original too, and that premise is void.
+        """
+        folded = _without_redact(RedactionEvidence(), speech=RunState.SKIPPED)
+        assert folded.release is Release.NOT_ASSESSED
+        assert folded.release_ground == NO_TRANSCRIPT
+
+    def test_the_four_cleared_grounds_name_the_same_state(self) -> None:
+        """One state, four evidence grounds: a reading that cleared the recording is not four answers.
+
+        The fifth ground in the group is the reviewer's, which only a reading reaches.
+        """
+        cleared = [
+            _without_redact(RedactionEvidence(lexical_words_n=42, scanned=True), speech=RunState.COMPLETED),
+            _without_redact(RedactionEvidence(lexical_words_n=9, scanned=False), speech=RunState.COMPLETED),
+            _without_redact(RedactionEvidence(lexical_words_n=0), speech=RunState.COMPLETED),
+            _without_redact(RedactionEvidence(), speech=RunState.SKIPPED, speech_route=DECLINED),
+        ]
+        assert {folded.release for folded in cleared} == {Release.WITHOUT_REDACTION}
+        assert {folded.release_ground for folded in cleared} == set(RELEASE_WITHOUT_REDACTION_GROUNDS) - {
+            REVIEWER_RESET_EVERY_MASK
+        }
+
+    def test_a_speech_that_errored_is_unassessed(self) -> None:
+        """The one genuine unknown: nothing can say whether the recording carried anything."""
+        folded = _without_redact(RedactionEvidence(), speech=RunState.ERRORED)
+        assert folded.release is Release.NOT_ASSESSED
+        assert folded.release_ground == SPEECH_UNREAD
+
+    def test_a_finding_redact_never_answered_is_unassessed(self) -> None:
+        """The scan found something and no redaction verdict stands over it."""
+        folded = _without_redact(
+            RedactionEvidence(lexical_words_n=42, scanned=True, findings_n=3), speech=RunState.COMPLETED
+        )
+        assert folded.release is Release.NOT_ASSESSED
+        assert folded.release_ground == REDACTION_OWED
+
+    def test_lexical_content_with_no_scan_record_is_unassessed(self) -> None:
+        """SPEECH reached words and recorded no scan either way; the graph cannot say."""
+        folded = _without_redact(
+            RedactionEvidence(lexical_words_n=42, scanned=None, findings_n=0), speech=RunState.COMPLETED
+        )
+        assert folded.release is Release.NOT_ASSESSED
+        assert folded.release_ground == SCAN_UNRECORDED
+
+    def test_a_cleared_recording_does_not_read_as_a_redacted_one(self) -> None:
+        """Nothing was redacted, so there is no redacted artifact for the axis to be about."""
+        folded = _without_redact(RedactionEvidence(lexical_words_n=0), speech=RunState.COMPLETED)
+        assert folded.release is not Release.WITH_REDACTION
+
+    def test_a_redact_verdict_still_decides_where_one_stands(self) -> None:
+        """Evidence never overrides the node that actually ran."""
+        assert _with_redact(Outcome.PASS).release is Release.WITH_REDACTION
+        assert _with_redact(Outcome.PASS).release_ground is None
+
+
+class TestTheReleaseAxisNamesWhichArtefactMayBeHandedOn:
+    """Four values over one question: which artefact of this recording may I hand on?
+
+    ``specs/20260924-which-artefact-is-releasable/design.md``.
+    """
+
+    def test_the_axis_offers_exactly_the_four_answers(self) -> None:
+        """Total and exclusive: the original, only the redacted copy, neither, or unknown."""
+        assert {member.value for member in Release} == {
+            "release_without_redaction",
+            "release_with_redaction",
+            "withheld",
+            "not_assessed",
+        }
+
+    def test_a_redact_flag_withholds(self) -> None:
+        """Unresolved is not cleared."""
+        folded = _with_redact(Outcome.FLAG)
+        assert folded.release is Release.WITHHELD
+
+    def test_a_redact_fail_withholds(self) -> None:
+        """A finding survived verification."""
+        assert _with_redact(Outcome.FAIL).release is Release.WITHHELD
+
+    def test_a_redact_pass_releases_only_the_redacted_artefact(self) -> None:
+        """REDACT passes on having removed findings the original still carries."""
+        assert _with_redact(Outcome.PASS).release is Release.WITH_REDACTION
+
+    def test_only_a_reading_that_ran_releases_the_original(self) -> None:
+        """Every ground behind the permissive value is one where something read the recording."""
+        assert NO_TRANSCRIPT not in RELEASE_WITHOUT_REDACTION_GROUNDS
+        assert NO_TRANSCRIPT in RELEASE_UNKNOWN_GROUNDS
+
+    def test_no_ground_stands_behind_two_states(self) -> None:
+        """A reader must be able to go from the ground back to the state without the table."""
+        groups = [
+            RELEASE_WITHOUT_REDACTION_GROUNDS,
+            RELEASE_UNKNOWN_GROUNDS,
+            RELEASE_WITHHELD_GROUNDS,
+            RELEASE_WITH_REDACTION_GROUNDS,
+        ]
+        for i, group in enumerate(groups):
+            for other in groups[i + 1 :]:
+                assert not set(group) & set(other)
+
+    def test_the_reviewer_reaches_the_axis_through_two_declared_parameters(self) -> None:
+        """``_release_from``'s parameters are the whole input to the axis.
+
+        ``design.md`` §5. The reviewer reaches it through one parameter that tightens, one that
+        clears a re-scan fail, and one that resets masks, and all three default to reading nothing.
+        """
+        parameters = inspect.signature(_release_from).parameters
+        assert set(parameters) == {
+            "node_verdicts",
+            "evidence",
+            "ran",
+            "reviewer_withholds",
+            "speech_declined",
+            "reviewer_clears",
+            "reviewer_resets",
+        }
+        assert parameters["reviewer_withholds"].default is False
+        assert parameters["reviewer_clears"].default is False
+        assert parameters["reviewer_resets"].default == (False, False)
+        assert parameters["speech_declined"].default is False
+        assert sorted(name for name in parameters if "review" in name) == [
+            "reviewer_clears",
+            "reviewer_resets",
+            "reviewer_withholds",
+        ]
+
+    def test_the_reviewer_tightens_a_pass_and_no_withholding_loosens_a_fail(self) -> None:
+        """Without a clearing reading, a REDACT fail stays withheld. ``design.md`` §5."""
+        passed = [NodeVerdict("REDACT", Outcome.PASS, None, "the scan concluded")]
+        failed = [NodeVerdict("REDACT", Outcome.FAIL, None, "the scan concluded")]
+        evidence = RedactionEvidence(rescan_survivors=("DATE_TIME",))
+        ran: dict[str, RunState] = {}
+        assert _release_from(passed, evidence, ran)[0] is Release.WITH_REDACTION
+        assert _release_from(passed, evidence, ran, reviewer_withholds=True)[0] is Release.WITHHELD
+        assert _release_from(failed, evidence, ran, reviewer_withholds=False)[0] is Release.WITHHELD
+        assert _release_from(failed, evidence, ran, reviewer_withholds=True)[0] is Release.WITHHELD
+
+    def test_the_reviewer_withholds_where_redact_never_ran(self) -> None:
+        """Every path that would release is tightened, not only the one through a REDACT pass."""
+        ran = {"SPEECH": RunState.COMPLETED}
+        for evidence in (
+            RedactionEvidence(lexical_words_n=42, scanned=True),
+            RedactionEvidence(lexical_words_n=9, scanned=False),
+            RedactionEvidence(lexical_words_n=0),
+        ):
+            assert _release_from([], evidence, ran)[0] is Release.WITHOUT_REDACTION
+            assert _release_from([], evidence, ran, reviewer_withholds=True) == (
+                Release.WITHHELD,
+                REVIEWER_PROPOSED_REDACTION,
+            )
+        assert _release_from([], RedactionEvidence(), {}, reviewer_withholds=True, speech_declined=True) == (
+            Release.WITHHELD,
+            REVIEWER_PROPOSED_REDACTION,
+        )
+
+    def test_a_reviewer_withholding_names_its_ground(self) -> None:
+        """A withholding REDACT did not make must be told apart from one it did."""
+        passed = [NodeVerdict("REDACT", Outcome.PASS, None, "the scan concluded")]
+        failed = [NodeVerdict("REDACT", Outcome.FAIL, None, "the scan concluded")]
+        assert _release_from(passed, RedactionEvidence(), {}, reviewer_withholds=True)[1] == REVIEWER_PROPOSED_REDACTION
+        assert _release_from(failed, RedactionEvidence(), {}, reviewer_withholds=True)[1] is None
+
+    def test_a_reviewer_withholding_leaves_a_discard_a_discard(self) -> None:
+        """The release axis tightens; the triage axis is not the reviewer's to move."""
+        proposal = {
+            "status": "flagged",
+            "redaction": "incomplete",
+            "original": "carries_pii",
+            "proposal": [{"text": "alice", "action": "redact", "category": "PERSON", "why": "a name"}],
+        }
+        folded = fold_file_verdict(
+            [NodeVerdict("ADMIT", Outcome.FAIL, None, "unmeasurable")],
+            branch_decisions=_decisions(AIRWAY=DECLINED, SPEECH=ROUTED, VOICE=DECLINED),
+            ran={"SPEECH": RunState.COMPLETED},
+            hint_claims={},
+            route_state=ROUTED,
+            redaction=RedactionEvidence(lexical_words_n=42, scanned=True),
+            llm_redaction=proposal,
+            policy=FoldPolicy(llm_redaction_withholds=True),
+        )
+        assert folded.triage is Triage.DISCARD
+        assert folded.release is Release.WITHHELD
+
+    def test_the_reviewer_never_moves_an_unassessed_recording(self) -> None:
+        """``not_assessed`` stays what it is: a gap is not a release for the reviewer to tighten."""
+        cases = [
+            (RedactionEvidence(), {"SPEECH": RunState.ERRORED}),
+            (RedactionEvidence(lexical_words_n=42, scanned=True, findings_n=3), {"SPEECH": RunState.COMPLETED}),
+            (RedactionEvidence(), {"SPEECH": RunState.SKIPPED}),
+        ]
+        for evidence, ran in cases:
+            assert _release_from([], evidence, ran, reviewer_withholds=True) == _release_from([], evidence, ran)
+            assert _release_from([], evidence, ran)[0] is Release.NOT_ASSESSED
+
+
+class TestAReviewerReadingClearsAReScanFail:
+    """A clean reading releases the redacted copy of a REDACT re-scan fail.
+
+    Owner, 2026-09-26: where REDACT withholds only because its re-scan still reads a finding, the
+    reviewer, which already read the text, decides.
+    """
+
+    _FAILED = [NodeVerdict("REDACT", Outcome.FAIL, None, "verification found pii on the redacted transcript")]
+    _CLEAN: Mapping[str, Any] = {"status": "clean", "original": "clean", "redaction": "complete", "proposal": []}
+
+    def test_a_clean_reading_releases_the_redacted_copy_under_its_own_ground(self) -> None:
+        """The redacted copy, never the original, and a ground no other path carries."""
+        evidence = RedactionEvidence(lexical_words_n=40, scanned=True, findings_n=1, rescan_survivors=("DATE_TIME",))
+        assert _release_from(self._FAILED, evidence, {}, reviewer_clears=True) == (
+            Release.WITH_REDACTION,
+            REVIEWER_CLEARED_RESCAN,
+        )
+        assert _release_from(self._FAILED, evidence, {}) == (Release.WITHHELD, None)
+
+    def test_an_incomplete_scan_is_never_cleared(self) -> None:
+        """A fail with no re-scan survivor is an unchecked recording, which no reading clears."""
+        evidence = RedactionEvidence(lexical_words_n=40, scanned=True, findings_n=1)
+        assert _release_from(self._FAILED, evidence, {}, reviewer_clears=True) == (Release.WITHHELD, None)
+
+    def test_clearing_moves_nothing_but_a_redact_fail(self) -> None:
+        """A pass, a recording REDACT never read, and an unassessed one are untouched."""
+        passed = [NodeVerdict("REDACT", Outcome.PASS, None, "the scan concluded")]
+        survivors = RedactionEvidence(lexical_words_n=40, scanned=True, rescan_survivors=("PERSON",))
+        assert _release_from(passed, survivors, {}, reviewer_clears=True) == _release_from(passed, survivors, {})
+        ran = {"SPEECH": RunState.COMPLETED}
+        for evidence in (
+            RedactionEvidence(lexical_words_n=42, scanned=True),
+            RedactionEvidence(lexical_words_n=42, scanned=True, findings_n=3),
+        ):
+            assert _release_from([], evidence, ran, reviewer_clears=True) == _release_from([], evidence, ran)
+
+    def _fold(self, annotation: Mapping[str, Any], policy: FoldPolicy) -> FileVerdict:
+        """A REDACT re-scan fail folded with this reading under this policy."""
+        return fold_file_verdict(
+            self._FAILED,
+            branch_decisions=_decisions(AIRWAY=DECLINED, SPEECH=ROUTED, VOICE=DECLINED),
+            ran={"SPEECH": RunState.COMPLETED, "REDACT": RunState.COMPLETED},
+            hint_claims={},
+            route_state=ROUTED,
+            redaction=RedactionEvidence(
+                lexical_words_n=42, scanned=True, findings_n=1, rescan_survivors=("DATE_TIME",)
+            ),
+            llm_redaction=annotation,
+            policy=policy,
+        )
+
+    def test_the_fold_clears_on_a_clean_original_with_nothing_to_hide(self) -> None:
+        """``flagged`` with only releases proposed is still a reading that the original is clean."""
+        on = FoldPolicy(llm_redaction_withholds=True, llm_rescan_clears=True)
+        release_only = {
+            "status": "flagged",
+            "original": "clean",
+            "redaction": "incomplete",
+            "proposal": [{"text": "the past couple of weeks", "action": "release", "category": "DATE_TIME"}],
+        }
+        for annotation in (self._CLEAN, release_only):
+            folded = self._fold(annotation, on)
+            assert (folded.release, folded.release_ground) == (Release.WITH_REDACTION, REVIEWER_CLEARED_RESCAN)
+
+    def test_a_reading_that_finds_pii_keeps_it_withheld(self) -> None:
+        """A redact proposal, or an original read as carrying PII, is not a clearing reading."""
+        on = FoldPolicy(llm_redaction_withholds=True, llm_rescan_clears=True)
+        redact = {
+            "status": "flagged",
+            "original": "clean",
+            "proposal": [{"text": "brooklyn", "action": "redact", "category": "LOCATION"}],
+        }
+        carries = {"status": "flagged", "original": "carries_pii", "proposal": []}
+        for annotation in (redact, carries):
+            assert self._fold(annotation, on).release is Release.WITHHELD
+
+    def test_no_reading_and_the_policy_off_clear_nothing(self) -> None:
+        """``absent``, ``disabled`` and ``nothing_to_read`` are not readings; the key is the switch."""
+        on = FoldPolicy(llm_rescan_clears=True)
+        for status in ("absent", "disabled", "nothing_to_read"):
+            assert self._fold({"status": status, "original": "clean", "proposal": []}, on).release is Release.WITHHELD
+        assert self._fold(self._CLEAN, FoldPolicy(llm_rescan_clears=False)).release is Release.WITHHELD
+
+
+class TestAReviewerReadingResetsMasks:
+    """A reading's ``release`` entries reset REDACT's masks, so fewer are kept or none.
+
+    Owner, 2026-09-26: the redacted copy is released only where the reviewer does not find resetting
+    a redaction to the original words fine; otherwise the original, or a partial redaction.
+    """
+
+    _PASSED = [NodeVerdict("REDACT", Outcome.PASS, None, "every finding redacted")]
+    _FAILED = [NodeVerdict("REDACT", Outcome.FAIL, None, "verification found pii on the redacted transcript")]
+
+    @staticmethod
+    def _evidence(reset_n: int, *, masks_n: int = 2, survivors: tuple[str, ...] = ()) -> RedactionEvidence:
+        """A recording REDACT masked ``masks_n`` times, ``reset_n`` of them named by release entries."""
+        return RedactionEvidence(
+            lexical_words_n=40,
+            scanned=True,
+            findings_n=masks_n,
+            rescan_survivors=survivors,
+            masks_n=masks_n,
+            masks_reset_n=reset_n,
+        )
+
+    def test_none_some_and_every_mask_reset(self) -> None:
+        """No reset keeps REDACT's copy, some yields a partial copy, every one releases the original."""
+        both = (True, True)
+        assert _release_from(self._PASSED, self._evidence(0), {}, reviewer_resets=both) == (
+            Release.WITH_REDACTION,
+            None,
+        )
+        assert _release_from(self._PASSED, self._evidence(1), {}, reviewer_resets=both) == (
+            Release.WITH_REDACTION,
+            REVIEWER_RESET_SOME_MASKS,
+        )
+        assert _release_from(self._PASSED, self._evidence(2), {}, reviewer_resets=both) == (
+            Release.WITHOUT_REDACTION,
+            REVIEWER_RESET_EVERY_MASK,
+        )
+
+    def test_an_original_read_as_identifying_never_releases_whole(self) -> None:
+        """Every mask reset over an original judged to carry PII contradicts itself; the masks stand."""
+        some_only = (True, False)
+        assert _release_from(self._PASSED, self._evidence(2), {}, reviewer_resets=some_only) == (
+            Release.WITH_REDACTION,
+            None,
+        )
+        assert _release_from(self._PASSED, self._evidence(1), {}, reviewer_resets=some_only)[1] == (
+            REVIEWER_RESET_SOME_MASKS
+        )
+
+    def test_a_cleared_rescan_fail_with_every_mask_reset_releases_the_original(self) -> None:
+        """The two moves compose: the reading clears the fail and then resets what it masked."""
+        evidence = self._evidence(2, survivors=("DATE_TIME",))
+        assert _release_from(self._FAILED, evidence, {}, reviewer_clears=True, reviewer_resets=(True, True)) == (
+            Release.WITHOUT_REDACTION,
+            REVIEWER_RESET_EVERY_MASK,
+        )
+        assert _release_from(self._FAILED, evidence, {}, reviewer_resets=(True, True)) == (Release.WITHHELD, None)
+
+    def test_resets_never_move_a_withholding_or_an_unassessed_recording(self) -> None:
+        """A reset only thins a released copy; it releases nothing the evidence withheld."""
+        assert _release_from(self._FAILED, self._evidence(2), {}, reviewer_resets=(True, True)) == (
+            Release.WITHHELD,
+            None,
+        )
+        ran = {"SPEECH": RunState.COMPLETED}
+        owed = RedactionEvidence(lexical_words_n=42, scanned=True, findings_n=3, masks_n=0, masks_reset_n=0)
+        assert _release_from([], owed, ran, reviewer_resets=(True, True))[0] is Release.NOT_ASSESSED
+
+    def _fold(self, annotation: Mapping[str, Any] | None, policy: FoldPolicy, reset_n: int = 2) -> FileVerdict:
+        """A REDACT pass with two masks, folded with this reading under this policy."""
+        return fold_file_verdict(
+            self._PASSED,
+            branch_decisions=_decisions(AIRWAY=DECLINED, SPEECH=ROUTED, VOICE=DECLINED),
+            ran={"SPEECH": RunState.COMPLETED, "REDACT": RunState.COMPLETED},
+            hint_claims={},
+            route_state=ROUTED,
+            redaction=self._evidence(reset_n),
+            llm_redaction=annotation,
+            policy=policy,
+        )
+
+    def test_the_fold_resets_only_from_a_reading_that_hides_nothing_more(self) -> None:
+        """A release-only reading resets; a redact proposal, no reading, or the key off do not."""
+        on = FoldPolicy(llm_reset_redactions=True)
+        release_only = {
+            "status": "flagged",
+            "original": "clean",
+            "proposal": [{"text": "brooklyn", "action": "release", "category": "LOCATION"}],
+        }
+        assert self._fold(release_only, on).release is Release.WITHOUT_REDACTION
+        assert self._fold(release_only, on, reset_n=1).release_ground == REVIEWER_RESET_SOME_MASKS
+        hides_more = {
+            "status": "flagged",
+            "original": "clean",
+            "proposal": [
+                {"text": "brooklyn", "action": "release", "category": "LOCATION"},
+                {"text": "alice", "action": "redact", "category": "PERSON"},
+            ],
+        }
+        assert self._fold(hides_more, on).release is Release.WITH_REDACTION
+        assert self._fold(None, on).release is Release.WITH_REDACTION
+        assert self._fold({"status": "nothing_to_read", "proposal": []}, on).release is Release.WITH_REDACTION
+        assert self._fold(release_only, FoldPolicy(llm_reset_redactions=False)).release is Release.WITH_REDACTION
+
+
+class TestANonLexicalTaskIsClearedRatherThanHeld:
+    """Owner, 2026-09-25: a task that asks for no words is not a recording the graph cannot judge.
+
+    19,097 recordings -- breath, cough, sustained vowels, glides -- reached ``NO_TRANSCRIPT`` and
+    answered ``not_assessed`` because the ruleset had declined SPEECH. The ruleset's own decision is
+    the reading: there is nothing a redaction could remove from a task that never asked for a word.
+    """
+
+    def test_a_declined_speech_branch_clears_the_recording(self) -> None:
+        """The ruleset declining SPEECH is evidence, not the absence of it."""
+        folded = _without_redact(RedactionEvidence(), speech=RunState.SKIPPED, speech_route=DECLINED)
+        assert folded.release is Release.WITHOUT_REDACTION
+        assert folded.release_ground == NON_LEXICAL_TASK
+
+    def test_a_routed_speech_branch_that_never_ran_is_still_unassessed(self) -> None:
+        """Routing asked for SPEECH and got nothing back: that is a gap, not a clearance."""
+        folded = _without_redact(RedactionEvidence(), speech=RunState.SKIPPED, speech_route=ROUTED)
+        assert folded.release is Release.NOT_ASSESSED
+        assert folded.release_ground == NO_TRANSCRIPT
+
+    def test_clearing_a_non_lexical_task_raises_no_flag(self) -> None:
+        """A cough that reads as a cough is not a finding."""
+        folded = _without_redact(RedactionEvidence(), speech=RunState.SKIPPED, speech_route=DECLINED)
+        assert folded.triage is Triage.PASS
+
+
+class TestASpeechTaskThatProducedNoWordIsFlagged:
+    """The other half of the same instruction: cleared is not the same as unremarkable.
+
+    A task the ruleset routed to SPEECH is a task that asks for words. SPEECH running over it and
+    reading none is the task not having happened, and the release axis calling it releasable is
+    true without being the whole of it.
+    """
+
+    def test_a_routed_speech_task_with_no_lexical_item_flags(self) -> None:
+        """What the owner asked to see: the task asked for words and none came."""
+        folded = _without_redact(RedactionEvidence(lexical_words_n=0), speech=RunState.COMPLETED)
+        assert folded.triage is Triage.FLAG
+        assert any(NO_LEXICAL_ITEM_PRODUCED in reason.why for reason in folded.reasons)
+
+    def test_it_is_still_releasable(self) -> None:
+        """Flagging it does not withhold it: there is nothing in it to redact."""
+        folded = _without_redact(RedactionEvidence(lexical_words_n=0), speech=RunState.COMPLETED)
+        assert folded.release is Release.WITHOUT_REDACTION
+        assert folded.release_ground == NO_LEXICAL_WORD
+
+    def test_a_declined_branch_with_no_words_does_not_flag(self) -> None:
+        """A task that asks for no words may produce none without it meaning anything."""
+        folded = _without_redact(RedactionEvidence(), speech=RunState.SKIPPED, speech_route=DECLINED)
+        assert not any(NO_LEXICAL_ITEM_PRODUCED in reason.why for reason in folded.reasons)
+
+    def test_a_task_that_produced_words_does_not_flag(self) -> None:
+        """The obvious control."""
+        folded = _without_redact(RedactionEvidence(lexical_words_n=42, scanned=True), speech=RunState.COMPLETED)
+        assert not any(NO_LEXICAL_ITEM_PRODUCED in reason.why for reason in folded.reasons)
+
+
+class TestARedactNonPassIsVisibleWithoutFlippingTriage:
+    """Triage asks whether a human must look; release asks whether an artifact may be handed on."""
+
+    def test_a_surviving_finding_does_not_move_triage(self) -> None:
+        """A release problem is not a measurement problem."""
+        folded = _with_redact(Outcome.FAIL, speech=True, speech_route=ROUTED)
+        assert folded.triage is Triage.PASS
+        assert folded.release is Release.WITHHELD
+
+    def test_it_appears_in_reasons_regardless(self) -> None:
+        """A consumer filtering on triage == pass sees the release axis in the same record."""
+        folded = _with_redact(Outcome.FAIL, speech=True, speech_route=ROUTED)
+        assert any(reason.node == "REDACT" for reason in folded.reasons)
+
+    def test_an_incomplete_verification_still_flags(self) -> None:
+        """REDACT's ``flag`` is a node flag like any other: verification that did not finish."""
+        folded = _with_redact(Outcome.FLAG, speech=True, speech_route=ROUTED)
+        assert folded.triage is Triage.FLAG
+        assert folded.release is Release.WITHHELD
+
+
+class TestReasonsCarryEveryContribution:
+    """A flag naming one cause hides the others."""
+
+    def test_two_non_conforming_branches_both_appear(self) -> None:
+        """Not only the first, and not only the deciding one."""
+        folded = fold_file_verdict(
+            [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
+            branch_reports=[
+                _report("AIRWAY", "airway", conformance=False),
+                _report("VOICE", "voice", conformance=False),
+            ],
+            spans_by_node=_found("AIRWAY", "VOICE"),
+            branch_decisions=_decisions(AIRWAY=ROUTED, SPEECH=DECLINED, VOICE=ROUTED),
+            ran={},
+            hint_claims={},
+            route_state=ROUTED,
+        )
+        assert folded.triage is Triage.FLAG
+        assert len([reason for reason in folded.reasons if reason.outcome is Outcome.FLAG]) == 2
+
+    def test_an_admit_failure_leads_the_reasons_without_erasing_them(self) -> None:
+        """The deciding verdict reads first; what else the graph found is still in the record."""
+        folded = fold_file_verdict(
+            [
+                NodeVerdict("PREPROCESS", Outcome.PASS, None, "conditioned"),
+                NodeVerdict("ADMIT", Outcome.FAIL, None, "decode failure"),
+                NodeVerdict("AIRWAY", Outcome.FLAG, "airway", "a labelled span is short"),
+            ],
+            branch_decisions=_decisions(AIRWAY=ROUTED),
+            ran={},
+            hint_claims={},
+            route_state=ROUTED,
+        )
+        assert folded.triage is Triage.DISCARD
+        assert folded.reasons[0].node == "ADMIT"
+        assert {"PREPROCESS", "AIRWAY"} <= {reason.node for reason in folded.reasons}
+
+
+_CONSENSUS_GONE = {"SPEECH": {"speech.lexical": "consensus_transcript: both asr blocks failed"}}
+
+
+class TestACriticalAbsenceFlagsAndNamesItself:
+    """A short-circuited run reaches the fold; it must not reach it silently."""
+
+    def test_the_reason_names_the_branch_the_gate_and_the_recorded_absence(self) -> None:
+        """A file the graph refused to route must say which measurement it was refused over."""
+        folded = fold_file_verdict(
+            [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
+            branch_decisions=_all_declined(),
+            ran={},
+            hint_claims={},
+            route_state="unexplained",
+            critical_absences=_CONSENSUS_GONE,
+        )
+        why = next(reason.why for reason in folded.reasons if reason.why.startswith(CRITICAL_ABSENCE))
+        assert "SPEECH" in why
+        assert "speech.lexical" in why
+        assert "consensus_transcript" in why
+        assert "both asr blocks failed" in why
+
+    def test_it_flags_rather_than_discarding(self) -> None:
+        """Neither discard ground is a claim about a measurement that failed to be taken."""
+        folded = fold_file_verdict(
+            [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
+            branch_decisions=_all_declined(),
+            ran={},
+            hint_claims={},
+            route_state="unexplained",
+            critical_absences=_CONSENSUS_GONE,
+        )
+        assert folded.triage is Triage.FLAG
+        assert folded.discard_ground is None
+        assert folded.critical_absences == _CONSENSUS_GONE
+
+    def test_an_admit_refusal_still_wins(self) -> None:
+        """The existing refusal path is not weakened by a ground that only ever flags."""
+        folded = fold_file_verdict(
+            [NodeVerdict("ADMIT", Outcome.FAIL, None, "decode failure")],
+            branch_decisions=_all_declined(),
+            ran={},
+            hint_claims={},
+            route_state="unexplained",
+            critical_absences=_CONSENSUS_GONE,
+        )
+        assert folded.triage is Triage.DISCARD
+        assert folded.discard_ground == "unmeasurable"
+
+    def test_an_ordinary_run_carries_no_critical_absence(self) -> None:
+        """A branch partly unreadable is not a critical failure and must not read as one."""
+        folded = fold_file_verdict(
+            [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
+            branch_decisions=_decisions(AIRWAY=ROUTED),
+            ran={},
+            hint_claims={},
+            route_state=ROUTED,
+        )
+        assert folded.critical_absences == {}
+        assert not any(reason.why.startswith(CRITICAL_ABSENCE) for reason in folded.reasons)
+
+
+class TestAWithheldBranchIsNotAnUnselectedOne:
+    """Four states, and the two that share ``will_run: false`` need a second field to separate."""
+
+    def test_the_branch_view_separates_withheld_from_not_selected(self) -> None:
+        """Without this a branch nobody could ask reads exactly like one nobody wanted."""
+        withheld = replace(_all_declined()["VOICE"], withheld_critical=True)
+        folded = fold_file_verdict(
+            [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
+            branch_decisions={**_all_declined(), "VOICE": withheld},
+            ran={},
+            hint_claims={},
+            route_state="unexplained",
+            critical_absences=_CONSENSUS_GONE,
+        )
+        assert folded.branches["VOICE"]["withheld_critical"] is True
+        assert folded.branches["AIRWAY"]["withheld_critical"] is False
+        assert folded.branches["VOICE"]["will_run"] is False
+        assert folded.branches["AIRWAY"]["will_run"] is False
+
+    def test_a_branch_that_ran_and_found_nothing_stays_distinct_from_both(self) -> None:
+        """It reported; the two withheld states did not, and no report is what says so."""
+        folded = fold_file_verdict(
+            [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
+            branch_reports=[_report("VOICE", "voice")],
+            branch_decisions=_decisions(VOICE=ROUTED),
+            ran={},
+            hint_claims={},
+            route_state=ROUTED,
+        )
+        assert folded.findings["VOICE"] == "absent"
+        assert folded.branches["VOICE"]["withheld_critical"] is False
+        assert folded.branches["VOICE"]["will_run"] is True

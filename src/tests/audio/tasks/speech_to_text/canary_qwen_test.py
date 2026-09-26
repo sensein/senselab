@@ -27,12 +27,13 @@ from senselab.audio.tasks.speech_to_text.canary_qwen import (
     _regroup_chunk_transcripts,
 )
 from senselab.utils.data_structures import HFModel
+from senselab.utils.subprocess_venv import provisioned_venv_dirs
 
 REPO_ROOT = Path(__file__).resolve().parents[5]
 FIXTURE_WAV = REPO_ROOT / "src" / "tests" / "data_for_testing" / "audio_48khz_mono_16bits.wav"
-SENSELAB_VENV_ROOT = Path.home() / ".cache" / "senselab" / "venvs" / "nemo-canary-qwen"
+CANARY_VENVS = provisioned_venv_dirs("nemo-canary-qwen")
 
-canary_venv_present = SENSELAB_VENV_ROOT.exists()
+canary_venv_present = bool(CANARY_VENVS)
 
 
 def _load_16k_mono_fixture() -> Audio:
@@ -77,7 +78,7 @@ def test_canary_worker_loads_requested_revision() -> None:
 
 @pytest.mark.skipif(
     not canary_venv_present,
-    reason=f"nemo-canary-qwen venv not provisioned at {SENSELAB_VENV_ROOT}",
+    reason="nemo-canary-qwen venv not provisioned for this host's device key",
 )
 def test_canary_qwen_returns_text_only_scriptlines() -> None:
     """transcribe_with_canary_qwen returns a list of text-only ScriptLines.

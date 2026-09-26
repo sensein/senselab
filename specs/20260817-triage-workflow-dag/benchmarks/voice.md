@@ -1,0 +1,82 @@
+# Voice branch
+
+## The gate constrains an interval, not a value
+
+| region | RMS | F0 | periodicity |
+| --- | --- | --- | --- |
+| sustained voicing, 3.20–3.40 s | 0.0188 | 87.4 Hz | **0.933** |
+| sustained voicing, 4.40–4.60 s | 0.0161 | 88.1 Hz | **0.934** |
+| quiet stretches | 0.0004–0.0007 | unstable | **0.22–0.44** |
+
+Two observations. Any periodicity floor in `(0.44, 0.933)` separates them, and any RMS floor in
+`(0.0007, 0.0161)` does too — a factor of 2.1 and a factor of 23. **A wide gap on one recording is
+precisely what cannot tell you where the boundary sits on another**, so the config records the interval
+and leaves the derivation empty. A midpoint would be an invented decision.
+
+**Provenance caveat.** These periodicity figures (0.933, 0.934) come from an *unlabelled* recording
+(2026-08-20), not the labelled one. On the labelled file the same timestamps read **0.558 and 0.134**.
+The two files are not interchangeable and the numbers above describe only the first. An earlier note
+described "sustained voicing" at those timestamps as justification for the gate — which was circular,
+since the voicing was inferred from those very periodicity values.
+
+## F0 search range serves two irreconcilable populations
+
+A range wide enough for a low adult male fundamental (~88 Hz here) admits period-doubling artefacts; a
+range narrow enough to exclude them cuts off infant and high-F0 voices. No single range serves both, so a
+run whose F0 sits where the range is ambiguous is flagged rather than resolved.
+
+### The vacuity boundary is two octaves, not one
+
+A run is flagged ambiguous when `f0 * factor <= f0_max` **or** `f0 / factor >= f0_min`. With
+`factor` 2.0 the band that is *not* flagged is therefore `(f0_max / 2, 2 * f0_min)`, which is
+non-empty iff
+
+    f0_max < 4 * f0_min
+
+— a range narrower than **two** octaves. The b2ai-28 override's comment said one octave, which is
+wrong in the safe direction only by accident: it understates how wide the check goes vacuous. At the
+override's 75–500 Hz the range is 6.67x, the unflagged band `(250, 150)` is empty, and **100% of
+clean phonation flags**, so `ambiguous_runs_n` carries no information at all under that range. Any
+range at or beyond 4x makes the flag unconditional; the check only says something when the caller
+declares a range under two octaves.
+
+## Why the product is periods and not a contour
+
+At 87.4 Hz one glottal period is **11.44 ms**. A fixed-hop contour has already committed to a resolution
+coarser than or comparable to the quantity it samples. Jitter, and shimmer from the amplitudes, are
+defined *between consecutive periods* and are unrecoverable from a resampled contour — so the primary
+product is a point process and the tracks are secondary.
+
+Both F0 routes measured on the same 400 ms agree: waveform autocorrelation 87.75 Hz, and autocorrelation
+along the time axis of the 5 ms-window spectrogram 86.96 Hz. See
+[`preprocess-params.md`](preprocess-params.md).
+
+## Two boundary facts
+
+**A leaked cough is indistinguishable from a downward glide by trajectory alone.** Both show falling F0
+across a short run, so trajectory shape cannot separate them and the residual's exclusion of
+airway-labelled spans is doing the work instead. This is why the branch reads the other branches'
+assertions rather than re-detecting.
+
+**RETRACTED — "Breath is unvoiced, the gate rejects it, and that is correct."** The claim was that
+exhalations carry energy without periodicity, so the energy-and-periodicity conjunction excludes them.
+The campaign measured the opposite. Under the per-fragment reference — one `hnr_track`/`f0_track` call
+per residual interval, each interval handed to Praat as its own `Sound` — the dedicated breathing files
+passed **3.4-5.4 s of "voiced" runs per file**, at a reported f0 of **397-412 Hz**. On a breathing file
+**39.4% of frames** read at or above a 5 dB HNR floor against **3.1%** when the same file is measured
+whole; real phonation moved by only ~1.1x under the same comparison. The mechanism is Praat's
+`silence_threshold`, which is relative to the maximum of the `Sound` it is handed: a quiet breath given
+its own `Sound` becomes that `Sound`'s maximum, so frames that read as silent against the recording's
+loud phonation are analysed instead and inherit whatever periodicity band-limited breath noise has.
+
+**Whole-stream computation is therefore required.** `hnr_track` and `f0_track` are measured once over
+the plain stream and their returned arrays sliced per residual interval by time, each track on its own
+`times` array because the two frame counts differ. `period_marks` already ran whole-stream. What the
+gate rejects on breath is now a property of the recording, not of how the residual happened to be cut.
+
+## The residual had no producer before the store
+
+Earlier designs declared a `residual_windows` input that nothing in the graph produced — the shape of
+finding F-187. With an append-only store the residual is a fold over what AIRWAY and SPEECH asserted, so
+it has a producer for the first time. An unlabelled span is deliberately *not* excluded: a span AIRWAY
+proposed and declined to label is exactly where unclaimed vocalic activity would sit.

@@ -1,0 +1,11 @@
+{
+    "name": "senselab-viewer-e2e",
+    "private": true,
+    "description": "Playwright harness for the triage recording-vectors viewer. Not part of the Python package.",
+    "scripts": {
+        "test:e2e": "playwright test"
+    },
+    "devDependencies": {
+        "@playwright/test": "^1.63.0"
+    }
+}

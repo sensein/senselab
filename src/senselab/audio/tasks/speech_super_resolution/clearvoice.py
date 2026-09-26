@@ -1,4 +1,4 @@
-"""ClearVoice speech super-resolution: MossFormer2_SR_48K, bandwidth extension to 48 kHz.
+"""ClearerVoice speech super-resolution: MossFormer2_SR_48K, bandwidth extension to 48 kHz.
 
 Runs in an isolated subprocess venv; see :mod:`senselab.utils.clearvoice` for the venv, the pin and
 the device contract, and design.md D-2 for why super-resolution is its own task package rather than a
@@ -39,7 +39,7 @@ def super_resolve_audios_with_clearvoice(
         One 48 kHz ``Audio`` per input, each carrying a ``metadata["clearvoice"]`` record.
 
     Raises:
-        ValueError: If ``model`` does not name the ClearVoice super-resolution checkpoint, or if
+        ValueError: If ``model`` does not name the ClearerVoice super-resolution checkpoint, or if
             ``timeout_s`` is not positive, or if ``device`` is neither CUDA nor CPU.
         RuntimeError: If the worker fails or exceeds its ceiling.
     """

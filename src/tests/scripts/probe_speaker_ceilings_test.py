@@ -279,7 +279,18 @@ def test_generate_mode_shard_k_outside_counts_is_rejected(tmp_path: Path, monkey
 def test_evaluate_mode_refuses_without_corpus(tmp_path: Path) -> None:
     """Phase 2 must never silently generate its own audio -- --corpus is mandatory."""
     rc = cli.main(
-        ["--mode", "evaluate", "--counts", "1", "--sessions", "1", "--out", str(tmp_path / "out"), "--backends", "pyannote"]
+        [
+            "--mode",
+            "evaluate",
+            "--counts",
+            "1",
+            "--sessions",
+            "1",
+            "--out",
+            str(tmp_path / "out"),
+            "--backends",
+            "pyannote",
+        ]
     )
     assert rc == 2
 
@@ -444,7 +455,18 @@ def test_evaluate_mode_refuses_a_cached_cell_from_a_different_corpus(
     _install_scripted_diarizer(monkeypatch, predicted_by_k={1: 1})
     out_dir = tmp_path / "out"
 
-    common_args = ["--mode", "evaluate", "--counts", "1", "--sessions", "1", "--out", str(out_dir), "--backends", "pyannote"]
+    common_args = [
+        "--mode",
+        "evaluate",
+        "--counts",
+        "1",
+        "--sessions",
+        "1",
+        "--out",
+        str(out_dir),
+        "--backends",
+        "pyannote",
+    ]
     assert cli.main([*common_args, "--corpus", str(corpus_a)]) == 0
     assert cli.main([*common_args, "--corpus", str(corpus_b)]) == 2
 
@@ -499,15 +521,24 @@ def test_evaluate_mode_resumed_after_a_deleted_cell_matches_an_uninterrupted_run
 
 def test_aggregate_mode_refuses_without_corpus(tmp_path: Path) -> None:
     rc = cli.main(
-        ["--mode", "aggregate", "--counts", "1", "--sessions", "1", "--out", str(tmp_path / "out"), "--backends", "pyannote"]
+        [
+            "--mode",
+            "aggregate",
+            "--counts",
+            "1",
+            "--sessions",
+            "1",
+            "--out",
+            str(tmp_path / "out"),
+            "--backends",
+            "pyannote",
+        ]
     )
     assert rc == 2
 
 
 def test_out_is_required_for_evaluate_and_aggregate_modes(tmp_path: Path) -> None:
-    rc_evaluate = cli.main(
-        ["--mode", "evaluate", "--counts", "1", "--sessions", "1", "--corpus", str(tmp_path / "c")]
-    )
+    rc_evaluate = cli.main(["--mode", "evaluate", "--counts", "1", "--sessions", "1", "--corpus", str(tmp_path / "c")])
     rc_aggregate = cli.main(
         ["--mode", "aggregate", "--counts", "1", "--sessions", "1", "--corpus", str(tmp_path / "c")]
     )
@@ -544,7 +575,21 @@ def test_aggregate_refuses_a_missing_cell(tmp_path: Path, monkeypatch: pytest.Mo
     )
 
     rc = cli.main(
-        ["--mode", "aggregate", "--counts", "1", "2", "--sessions", "2", "--out", str(out_dir), "--corpus", str(corpus_dir), "--backends", "pyannote"]
+        [
+            "--mode",
+            "aggregate",
+            "--counts",
+            "1",
+            "2",
+            "--sessions",
+            "2",
+            "--out",
+            str(out_dir),
+            "--corpus",
+            str(corpus_dir),
+            "--backends",
+            "pyannote",
+        ]
     )
     assert rc == 1
     assert not (out_dir / "profile.json").exists()
@@ -584,7 +629,20 @@ def test_aggregate_refuses_when_cells_disagree_about_the_corpus(
     )
 
     rc = cli.main(
-        ["--mode", "aggregate", "--counts", "1", "--sessions", "1", "--out", str(out_dir), "--corpus", str(corpus_b), "--backends", "pyannote"]
+        [
+            "--mode",
+            "aggregate",
+            "--counts",
+            "1",
+            "--sessions",
+            "1",
+            "--out",
+            str(out_dir),
+            "--corpus",
+            str(corpus_b),
+            "--backends",
+            "pyannote",
+        ]
     )
     assert rc == 1
     assert not (out_dir / "profile.json").exists()
@@ -618,7 +676,20 @@ def test_aggregate_refuses_when_more_sessions_are_required_than_were_evaluated(
 
     # Aggregate as though 3 sessions were required, but the corpus (and thus the cell) only has 2.
     rc = cli.main(
-        ["--mode", "aggregate", "--counts", "1", "--sessions", "3", "--out", str(out_dir), "--corpus", str(corpus_dir), "--backends", "pyannote"]
+        [
+            "--mode",
+            "aggregate",
+            "--counts",
+            "1",
+            "--sessions",
+            "3",
+            "--out",
+            str(out_dir),
+            "--corpus",
+            str(corpus_dir),
+            "--backends",
+            "pyannote",
+        ]
     )
     assert rc == 1
     assert not (out_dir / "profile.json").exists()
@@ -633,7 +704,9 @@ def test_aggregate_refuses_when_a_backend_produced_zero_successes_at_the_smalles
     _write_real_corpus_fixture(corpus_dir, counts=[1, 2], sessions_per_count=1, seed=1)
     monkeypatch.setattr(evaluate, "Audio", _FakeAudio)
 
-    def _always_raises(audios: List[Any], model: Any = None, device: Any = None, **kwargs: Any) -> List[List[ScriptLine]]:
+    def _always_raises(
+        audios: List[Any], model: Any = None, device: Any = None, **kwargs: Any
+    ) -> List[List[ScriptLine]]:
         (audio,) = audios
         k = int(Path(audio.filepath).parent.name.split("=")[1])
         if k == 1:
@@ -662,7 +735,21 @@ def test_aggregate_refuses_when_a_backend_produced_zero_successes_at_the_smalles
     )
 
     rc = cli.main(
-        ["--mode", "aggregate", "--counts", "1", "2", "--sessions", "1", "--out", str(out_dir), "--corpus", str(corpus_dir), "--backends", "pyannote"]
+        [
+            "--mode",
+            "aggregate",
+            "--counts",
+            "1",
+            "2",
+            "--sessions",
+            "1",
+            "--out",
+            str(out_dir),
+            "--corpus",
+            str(corpus_dir),
+            "--backends",
+            "pyannote",
+        ]
     )
     assert rc == 1
     assert not (out_dir / "profile.json").exists()
@@ -683,7 +770,21 @@ def test_full_three_phase_flow_produces_a_correct_profile(tmp_path: Path, monkey
 
     assert (
         cli.main(
-            ["--mode", "generate", "--counts", "1", "2", "--sessions", "2", "--seed", "5", "--corpus", str(corpus_dir), "--device", "cpu"]
+            [
+                "--mode",
+                "generate",
+                "--counts",
+                "1",
+                "2",
+                "--sessions",
+                "2",
+                "--seed",
+                "5",
+                "--corpus",
+                str(corpus_dir),
+                "--device",
+                "cpu",
+            ]
         )
         == 0
     )
@@ -712,7 +813,21 @@ def test_full_three_phase_flow_produces_a_correct_profile(tmp_path: Path, monkey
     assert not (out_dir / "profile.json").exists()
     assert (
         cli.main(
-            ["--mode", "aggregate", "--counts", "1", "2", "--sessions", "2", "--out", str(out_dir), "--corpus", str(corpus_dir), "--backends", "pyannote"]
+            [
+                "--mode",
+                "aggregate",
+                "--counts",
+                "1",
+                "2",
+                "--sessions",
+                "2",
+                "--out",
+                str(out_dir),
+                "--corpus",
+                str(corpus_dir),
+                "--backends",
+                "pyannote",
+            ]
         )
         == 0
     )
@@ -785,7 +900,21 @@ def test_sharded_generate_and_evaluate_then_aggregate_produces_the_same_profile(
         )
 
     rc = cli.main(
-        ["--mode", "aggregate", "--counts", "1", "2", "--sessions", "2", "--out", str(out_dir), "--corpus", str(corpus_dir), "--backends", "pyannote"]
+        [
+            "--mode",
+            "aggregate",
+            "--counts",
+            "1",
+            "2",
+            "--sessions",
+            "2",
+            "--out",
+            str(out_dir),
+            "--corpus",
+            str(corpus_dir),
+            "--backends",
+            "pyannote",
+        ]
     )
     assert rc == 0
     profile = json.loads((out_dir / "profile.json").read_text())
@@ -809,17 +938,47 @@ def test_a_wrong_count_and_a_refusal_land_in_different_confusion_buckets(
         if calls["n"] == 1:
             return [[ScriptLine(speaker="S0", start=0.0, end=1.0)]]  # right: 1 speaker
         if calls["n"] == 2:
-            return [[ScriptLine(speaker="S0", start=0.0, end=1.0), ScriptLine(speaker="S1", start=0.0, end=1.0)]]  # wrong: 2
+            return [
+                [ScriptLine(speaker="S0", start=0.0, end=1.0), ScriptLine(speaker="S1", start=0.0, end=1.0)]
+            ]  # wrong: 2
         raise ValueError("refused")  # refused
 
     monkeypatch.setattr(evaluate, "diarize_audios", _mixed)
     out_dir = tmp_path / "out"
 
     cli.main(
-        ["--mode", "evaluate", "--counts", "1", "--sessions", "3", "--out", str(out_dir), "--corpus", str(corpus_dir), "--device", "cpu", "--backends", "pyannote"]
+        [
+            "--mode",
+            "evaluate",
+            "--counts",
+            "1",
+            "--sessions",
+            "3",
+            "--out",
+            str(out_dir),
+            "--corpus",
+            str(corpus_dir),
+            "--device",
+            "cpu",
+            "--backends",
+            "pyannote",
+        ]
     )
     rc = cli.main(
-        ["--mode", "aggregate", "--counts", "1", "--sessions", "3", "--out", str(out_dir), "--corpus", str(corpus_dir), "--backends", "pyannote"]
+        [
+            "--mode",
+            "aggregate",
+            "--counts",
+            "1",
+            "--sessions",
+            "3",
+            "--out",
+            str(out_dir),
+            "--corpus",
+            str(corpus_dir),
+            "--backends",
+            "pyannote",
+        ]
     )
 
     assert rc == 0

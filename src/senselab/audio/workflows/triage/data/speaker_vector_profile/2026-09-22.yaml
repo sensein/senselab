@@ -1,0 +1,14 @@
+# Refusal floor for the per-speaker embedding built over task extents.
+# Read by `senselab.audio.workflows.triage.speaker_vectors.load_min_extent_s`.
+# Nothing in the triage pipeline reads this file: it governs an offline derivative only, and no
+# value here can change how a recording routes.
+schema_version: '1'
+
+# Shortest task extent that may contribute to a speaker vector, in seconds. An extent below this
+# is excluded and counted in the shard report rather than embedded.
+# Fitted, not rounded: the shortest point on a 13-point grid at which the 5th percentile of the
+# same-speaker cosine clears the 95th percentile of the between-speaker cosine (0.249 against
+# 0.213 at 1.0 s; 0.176 against 0.196 at 0.75 s, where they still overlap).
+# What was swept, the AUC and d-prime curves, and why the tail of the distribution rather than its
+# mean decides this: specs/20260922-speaker-vectors/design.md.
+min_extent_s: 1.0

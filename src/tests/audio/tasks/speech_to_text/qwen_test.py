@@ -25,12 +25,13 @@ from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.preprocessing import downmix_audios_to_mono, resample_audios
 from senselab.audio.tasks.speech_to_text.qwen import QwenASR
 from senselab.utils.data_structures import HFModel, Language, ScriptLine
+from senselab.utils.subprocess_venv import provisioned_venv_dirs
 
 REPO_ROOT = Path(__file__).resolve().parents[5]
 FIXTURE_WAV = REPO_ROOT / "src" / "tests" / "data_for_testing" / "audio_48khz_mono_16bits.wav"
-SENSELAB_VENV_ROOT = Path.home() / ".cache" / "senselab" / "venvs" / "qwen-asr"
+QWEN_VENVS = provisioned_venv_dirs("qwen-asr")
 
-qwen_venv_present = SENSELAB_VENV_ROOT.exists()
+qwen_venv_present = bool(QWEN_VENVS)
 
 
 def _load_16k_mono_fixture() -> Audio:
@@ -43,7 +44,7 @@ def _load_16k_mono_fixture() -> Audio:
 
 @pytest.mark.skipif(
     not qwen_venv_present,
-    reason=f"qwen-asr venv not provisioned at {SENSELAB_VENV_ROOT}",
+    reason="qwen-asr venv not provisioned for this host's device key",
 )
 def test_qwen_asr_with_timestamps_populates_chunks() -> None:
     """transcribe_with_qwen with return_timestamps=True yields chunks."""
@@ -68,7 +69,7 @@ def test_qwen_asr_with_timestamps_populates_chunks() -> None:
 
 @pytest.mark.skipif(
     not qwen_venv_present,
-    reason=f"qwen-asr venv not provisioned at {SENSELAB_VENV_ROOT}",
+    reason="qwen-asr venv not provisioned for this host's device key",
 )
 def test_qwen_asr_without_timestamps_returns_text_only() -> None:
     """transcribe_with_qwen with return_timestamps=False returns text-only ScriptLines."""

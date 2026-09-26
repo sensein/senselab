@@ -1,0 +1,2555 @@
+"""REPORT: both products on every file and every outcome, no elements written, no matched text."""
+
+from __future__ import annotations
+
+import json
+import re
+import time
+from pathlib import Path
+from typing import Any, Sequence
+
+import numpy as np
+import pytest
+import soundfile as sf
+import torch
+
+from senselab.audio.data_structures import Audio, AudioHints
+from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
+from senselab.audio.workflows.triage.nodes.branches import contest, deviation, write_findings
+from senselab.audio.workflows.triage.nodes.common import software_agent, write_report, write_verdict
+from senselab.audio.workflows.triage.nodes.figure import SUMMARY_LANES
+from senselab.audio.workflows.triage.nodes.report import (
+    ReportRenderError,
+    _assertions_by_source,
+    _consensus_word_color,
+    _decision_blocks,
+    _header,
+    _paginate_panels,
+    _report_document,
+    _window_label_scores,
+    report,
+)
+from senselab.audio.workflows.triage.nodes.verdict import verdict as fold_verdict
+from senselab.audio.workflows.triage.vocabulary import TASK, Outcome
+from senselab.utils.prov_store import ProvStore
+from tests.audio.workflows.triage.nodes.conftest import SEED_SOURCES, word_attributes
+
+_SHA = "0" * 39 + "1"
+_DURATION_S = 6.0
+_RATE = 16000
+_UNLABELLED_LABEL = "unlabelled"
+
+
+def _write(tmp_path: Path, body: str) -> Path:
+    """A partial config override on disk."""
+    path = tmp_path / "override.yaml"
+    path.write_text(body)
+    return path
+
+
+def _override(tmp_path: Path, body: str) -> TriageConfig:
+    """The packaged config with one partial override merged over it."""
+    return load_triage_config(_write(tmp_path, body))
+
+
+def _png(tmp_path: Path) -> TriageConfig:
+    """The packaged config with the report format declared as an image."""
+    path = tmp_path / "report.yaml"
+    path.write_text("report:\n  format: png\n")
+    return load_triage_config(path)
+
+
+def _capture_panels(monkeypatch: pytest.MonkeyPatch) -> list[list[dict[str, Any]]]:
+    """Record the panel specifications every render is handed, without changing what it draws."""
+    from senselab.audio.workflows.triage.nodes import report as report_module
+
+    captured: list[list[dict[str, Any]]] = []
+    real = report_module.plot_aligned_panels
+
+    def _spy(audio: Any, panels: list[dict[str, Any]], **kwargs: Any) -> Any:  # noqa: ANN401
+        captured.append([dict(panel) for panel in panels])
+        return real(audio, panels, **kwargs)
+
+    monkeypatch.setattr(report_module, "plot_aligned_panels", _spy)
+    return captured
+
+
+def _capture_titles(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """Record the title every aligned render is handed, without changing what it draws."""
+    from senselab.audio.workflows.triage.nodes import report as report_module
+
+    captured: list[str] = []
+    real = report_module.plot_aligned_panels
+
+    def _spy(audio: Any, panels: list[dict[str, Any]], **kwargs: Any) -> Any:  # noqa: ANN401
+        captured.append(str(kwargs.get("title") or ""))
+        return real(audio, panels, **kwargs)
+
+    monkeypatch.setattr(report_module, "plot_aligned_panels", _spy)
+    return captured
+
+
+def _capture_headers(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, str]]:
+    """Record the decision header supplied to the time-aligned page."""
+    from senselab.audio.workflows.triage.nodes import report as report_module
+
+    captured: list[dict[str, str]] = []
+    real = report_module.plot_aligned_panels
+
+    def _spy(audio: Any, panels: list[dict[str, Any]], **kwargs: Any) -> Any:  # noqa: ANN401
+        captured.append({str(key): str(value) for key, value in (kwargs.get("header") or {}).items()})
+        return real(audio, panels, **kwargs)
+
+    monkeypatch.setattr(report_module, "plot_aligned_panels", _spy)
+    return captured
+
+
+def _capture_figures(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
+    """Record the figure each aligned render produced, so a drawn lane can be inspected."""
+    from senselab.audio.workflows.triage.nodes import report as report_module
+
+    captured: list[Any] = []
+    real = report_module.plot_aligned_panels
+
+    def _spy(audio: Any, panels: list[dict[str, Any]], **kwargs: Any) -> Any:  # noqa: ANN401
+        figure = real(audio, panels, **kwargs)
+        captured.append(figure)
+        return figure
+
+    monkeypatch.setattr(report_module, "plot_aligned_panels", _spy)
+    return captured
+
+
+def _lane_panel(panels: list[dict[str, Any]], name: str) -> dict[str, Any]:
+    """The one panel a lane drew."""
+    return next(panel for panel in panels if panel.get("name") == name)
+
+
+def _lane_rows(panels: list[dict[str, Any]], name: str) -> dict[str, list[dict[str, Any]]]:
+    """A paired lane's tokens, grouped by the row each declares, in declaration order."""
+    rows: dict[str, list[dict[str, Any]]] = {}
+    for token in _lane_panel(panels, name)["tokens"]:
+        rows.setdefault(str(token["row"]), []).append(token)
+    return rows
+
+
+def _stub_the_drawing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Replace the aligned-panel render with a bare figure, to time the store-reading path alone."""
+    from matplotlib import pyplot
+
+    from senselab.audio.workflows.triage.nodes import report as report_module
+
+    monkeypatch.setattr(report_module, "plot_aligned_panels", lambda audio, panels, **kw: pyplot.figure())
+
+
+_SYLLABLE_DETAIL = {
+    "trains_n": 1,
+    "train_s": 2.5,
+    "train_fraction": 0.4,
+    "modulation_peak_hz": 5.5,
+    "modulation_unit": "syllables_per_s",
+    "ppg_syllable_rate_hz": 5.4,
+    "ppg_cycle_rate_hz": 1.8,
+    "ppg_repetitions": 9,
+    "ppg_typical_repetitions": 10,
+    "ppg_period_s": 0.556,
+    "ppg_period_cv": 0.12,
+    "ppg_period_trend_s_per_step": 0.001,
+    "ppg_positions": ["b", "ah", "t", "er", "k", "ah", "p"],
+    "ppg_realised_mass": [0.78, 0.78, 0.69, 0.57, 0.81, 0.83, 0.77],
+    "ppg_occupancy_s": [0.42, 0.9, 0.38, 0.5, 0.4, 0.95, 0.35],
+    "ppg_filler_fraction": 0.32,
+    "ppg_score_per_frame": -0.61,
+    "ppg_contradicted_words_n": 2,
+}
+"""What ``ddk.syllable_detail`` returns for an in-family syllable task, as ``speech()`` merges it."""
+
+
+def _seed_report_store(  # noqa: C901, D417 — one independent block per node, as the graph itself has
+    store: ProvStore,
+    tmp_path: Path,
+    *,
+    full: bool = False,
+    admit_failed: bool = False,
+    words: Sequence[Any] = ("the", "quick", "brown", "fox"),
+    marked_words: Sequence[tuple[str, str]] = (),
+    airway_labelled: Sequence[tuple[float, float]] = ((1.0, 1.3),),
+    airway_unlabelled: Sequence[tuple[float, float]] = ((2.0, 2.3),),
+    absent: dict[str, str] | None = None,
+    classifiers: Sequence[tuple[str, float, str]] | None = None,
+    yamnet_labels: Sequence[str] | None = None,
+    skip_voice: bool = False,
+    foreign_span_label: str | None = None,
+    scan: str = "complete",
+    syllable: bool = False,
+    duration_s: float = _DURATION_S,
+    typed_findings: bool = False,
+) -> None:
+    """Write what a completed graph would have left behind, so REPORT has a store to read.
+
+    Args:
+        store: The store to seed.
+        tmp_path: Where the plain stream and the envelope sidecar are written.
+        full: Whether to seed every node's output. False seeds ADMIT and nothing else.
+        admit_failed: Whether ADMIT refused the file, which is the outcome REPORT must still speak to.
+        words: The consensus words — texts, or dicts in the shared seeder's word shape — rendered
+            verbatim unless a mark covers them.
+        marked_words: ``(text, category)`` words the PII scan marked, appended to ``words``.
+        airway_labelled: Extents AIRWAY proposed one of its own labelled spans over.
+        airway_unlabelled: Extents AIRWAY looked at and proposed nothing over.
+        absent: What PREPROCESS records as uncomputed, ``{derivative: ExceptionClass}``.
+    classifiers: ``(name, grid_s, label)`` per window classifier; ``()`` writes none at all,
+            which is the state a null threshold leaves behind. None writes the three defaults.
+        yamnet_labels: One extra label per YAMNet window, for a category list long enough to truncate.
+        skip_voice: Whether VOICE writes an activity and no verdict — the store's own reading of a
+            node that raised.
+        duration_s: The seeded stream's length, for a test that needs more than one evidence page.
+        foreign_span_label: A labelled span of another family generated by a node other
+            than AIRWAY, which must not reach the airway lane.
+        scan: ``"complete"`` writes SPEECH's ``pii_scan`` with every detector attempted,
+            ``"incomplete"`` writes one with a failed detector, and ``"absent"`` writes none —
+            which is what routing declining SPEECH leaves behind.
+        syllable: Whether SPEECH ran in family on a syllable-repetition task, so its report
+            detail carries the syllable instrument's measures beside its own.
+        typed_findings: Whether SPEECH and VOICE each write typed findings through
+            ``write_findings``: a located deviation, a contest, and a per-recording deviation.
+    """
+    config = load_triage_config()
+    software = software_agent(store)
+    activity = store.activity(
+        node="ADMIT", step=None, parameters={"audio_file": str(tmp_path / ("refused.wav" if admit_failed else "r.wav"))}
+    )
+    store.was_associated_with(activity, software)
+
+    def _entity(prov_type: str, extent: tuple[float, float] | None, attributes: dict[str, Any]) -> str:
+        """One seeded entity, generated and attributed like the node that would have written it."""
+        entity_id = store.entity(prov_type=prov_type, extent=extent, attributes=attributes)  # type: ignore[arg-type]
+        store.was_generated_by(entity_id, activity)
+        store.was_attributed_to(entity_id, software)
+        return entity_id
+
+    if admit_failed:
+        write_verdict(
+            store, activity, software, node="ADMIT", outcome=Outcome.FAIL, kind=None, why="decode failure", detail={}
+        )
+        fold_verdict(store, None, config, None, run_dir=tmp_path)
+        return
+
+    (tmp_path / "streams").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "derivatives").mkdir(parents=True, exist_ok=True)
+    samples = np.linspace(-0.4, 0.4, int(duration_s * _RATE), dtype=np.float32)
+    sf.write(str(tmp_path / "streams" / "plain.wav"), samples, _RATE)
+    for name in ("recording", "plain"):
+        _entity(
+            "stream",
+            (0.0, duration_s),
+            {"name": name, "path": "streams/plain.wav", "sampling_rate": _RATE, "channels": 1},
+        )
+
+    write_verdict(store, activity, software, node="ADMIT", outcome=Outcome.PASS, kind=None, why="it decodes", detail={})
+    if not full:
+        fold_verdict(store, None, config, None, run_dir=tmp_path)
+        return
+
+    store.agent(agent_type="model", model_id="openai/whisper-large-v3", commit_sha=_SHA)
+    store.agent(agent_type="model", model_id="https://tfhub.dev/google/yamnet/1", unresolved_reason="TF-Hub URL pin")
+
+    envelope = np.linspace(-60.0, -10.0, int(duration_s * _RATE), dtype=np.float64)
+    np.savez(tmp_path / "derivatives" / "energy_envelope.npz", envelope_dbfs=envelope, floor_dbfs=envelope - 20.0)
+    preprocess = store.activity(node="PREPROCESS", step="envelope", parameters={})
+    store.was_associated_with(preprocess, software)
+    _entity(
+        "measurement",
+        None,
+        {
+            "name": "energy_envelope",
+            "signal": "preemphasised",
+            "path": "derivatives/energy_envelope.npz",
+            "sampling_rate": _RATE,
+        },
+    )
+    envelope_spans = [*airway_labelled, *airway_unlabelled]
+    span_ids = {
+        tuple(extent): _entity(
+            "span",
+            (extent[0], extent[1]),
+            {"peak_over_floor_db": 24.0 + index, "k_db": 18.0, "signal": "preemphasised", "merged_proposals": 1},
+        )
+        for index, extent in enumerate(envelope_spans)
+    }
+    declared = (
+        (("yamnet", 0.96, "Speech"), ("ast", 10.24, "Cough"), ("hear", 2.0, "Breathe"))
+        if classifiers is None
+        else tuple(classifiers)
+    )
+    for classifier, grid, label in declared:
+        start = 0.0
+        index = 0
+        while start < _DURATION_S:
+            extra = [yamnet_labels[index % len(yamnet_labels)]] if classifier == "yamnet" and yamnet_labels else []
+            _entity(
+                "measurement",
+                (start, min(start + grid, _DURATION_S)),
+                {
+                    "name": f"{classifier}_window",
+                    "classifier": classifier,
+                    "signal": "plain",
+                    "labels": [label, *extra],
+                    "scores": {name: 0.9 for name in (label, *extra)},
+                    "raw_scores": {name: 0.9 for name in (label, *extra)},
+                },
+            )
+            start += grid
+            index += 1
+        _entity(
+            "measurement",
+            None,
+            {
+                "name": f"{classifier}_windows",
+                "classifier": classifier,
+                "signal": "plain",
+                "labels": [label],
+                "windows_by_label": {label: ["seeded"]},
+                "n_windows": 1,
+                "win_length_s": grid,
+                "hop_s": grid,
+            },
+        )
+    write_verdict(
+        store,
+        preprocess,
+        software,
+        node="PREPROCESS",
+        outcome=Outcome.PASS,
+        kind=None,
+        why="conditioning complete",
+        detail={"absent": dict(absent or {}), "derivatives": {}},
+    )
+
+    fold = store.activity(node="TAXONOMY", step="conclude", parameters={})
+    store.was_associated_with(fold, software)
+    write_verdict(
+        store,
+        fold,
+        software,
+        node="TAXONOMY",
+        outcome=Outcome.PASS,
+        kind=None,
+        why="consolidated 2 label(s) from hear, yamnet",
+        detail={"classifiers": ["hear", "yamnet"], "n_labels": 2},
+    )
+
+    route = store.activity(node="routing", step=None, parameters={})
+    store.was_associated_with(route, software)
+    _entity(
+        "measurement",
+        None,
+        {
+            "name": "ruleset_routing",
+            "signal": "plain",
+            "state": "routed",
+            "routed": ["AIRWAY", "SPEECH", "VOICE"],
+            "gate_outcomes": {"airway.cough": "fired", "speech.words": "fired", "voice.glide": "unavailable"},
+            "unavailable": {"VOICE": ["voice.glide"]},
+            "flags": {"SPEECH": ["speech.short"]},
+            "sources": ["words"],
+            "stem": "rec",
+        },
+    )
+    for branch in ("AIRWAY", "SPEECH", "VOICE"):
+        _entity(
+            "branch_decision",
+            None,
+            {
+                "branch": branch,
+                "will_run": True,
+                "route_state": "routed",
+                "unavailable_gates": [],
+                "flag_gates": [],
+                "declared": False,
+                "forced_by_declaration": False,
+                "declared_family": "",
+                "declared_by_family": False,
+                "hint_tags": [],
+                "unmapped_tags": [],
+                "bad_map_values": {},
+                "why": "route_routed",
+                "stream": "plain",
+            },
+        )
+    write_verdict(
+        store,
+        route,
+        software,
+        node="routing",
+        outcome=Outcome.PASS,
+        kind=None,
+        why="runs: AIRWAY, SPEECH, VOICE",
+        detail={"runs": ["AIRWAY", "SPEECH", "VOICE"], "skipped": [], "forced": [], "empty_set": False},
+    )
+
+    classify = store.activity(node="AIRWAY", step="align", parameters={})
+    store.was_associated_with(classify, software)
+    for index, extent in enumerate(airway_labelled):
+        own_span_id = store.entity(
+            prov_type="span",
+            extent=(extent[0], extent[1]),
+            attributes={
+                "family": "airway",
+                "role": "cough_event",
+                "label": "cough",
+                "index": index,
+                "boundaries": "envelope_event",
+            },
+        )
+        store.was_generated_by(own_span_id, classify)
+        store.was_attributed_to(own_span_id, software)
+        store.was_derived_from(own_span_id, span_ids[tuple(extent)])
+    if foreign_span_label is not None and airway_unlabelled:
+        elsewhere = store.activity(node="TAXONOMY", step="label", parameters={})
+        store.was_associated_with(elsewhere, software)
+        target = span_ids[tuple(airway_unlabelled[0])]
+        foreign = store.entity(
+            prov_type="span",
+            extent=(airway_unlabelled[0][0], airway_unlabelled[0][1]),
+            attributes={"family": "quality", "label": foreign_span_label},
+        )
+        store.was_generated_by(foreign, elsewhere)
+        store.was_attributed_to(foreign, software)
+        store.was_derived_from(foreign, target)
+    write_report(
+        store,
+        classify,
+        software,
+        node="AIRWAY",
+        kind="airway",
+        conformance=True,
+        conformance_of=TASK,
+        deviations=(),
+        detail={"labelled_n": len(airway_labelled), "by_label": {"cough": len(airway_labelled)}, "notes": []},
+    )
+
+    consensus = store.activity(node="PREPROCESS", step="consensus", parameters={})
+    store.was_associated_with(consensus, software)
+    every_word: list[tuple[dict[str, Any], str | None]] = [
+        (dict(entry) if isinstance(entry, dict) else {"text": entry}, None) for entry in words
+    ] + [({"text": text}, category) for text, category in marked_words]
+    word_ids: list[str] = []
+    for index, (spec, category) in enumerate(every_word):
+        extent = (0.2 * index, 0.2 * index + 0.15)
+        word_id = _entity(
+            "word",
+            extent,
+            word_attributes(str(spec["text"]), extent, index=index, **{k: v for k, v in spec.items() if k != "text"}),
+        )
+        word_ids.append(word_id)
+        if category is not None:
+            mark_id = _entity("assertion", extent, {"verb": "label", "label": "pii", "category": category})
+            store.was_derived_from(mark_id, word_id)
+    _entity(
+        "measurement",
+        None,
+        {
+            "name": "consensus_transcript",
+            "signal": "plain",
+            "role": "consensus",
+            "sources": [{"name": source} for source in SEED_SOURCES],
+            "n_sources": len(SEED_SOURCES),
+            "n_words": len(every_word),
+            "word_ids": word_ids,
+            "text": " ".join(str(spec["text"]) for spec, _ in every_word),
+        },
+    )
+
+    speech = store.activity(node="SPEECH", step="corroborate", parameters={})
+    store.was_associated_with(speech, software)
+    speech_span = _entity(
+        "span",
+        (0.0, 1.0),
+        {"family": "speech", "words_n": len(every_word), "attributed_to": "SPEAKER_00", "nontarget": False},
+    )
+    if typed_findings:
+        write_findings(
+            store,
+            speech,
+            software,
+            [
+                deviation("stimulus_mismatch", 0.4, 0.55, speech_span, expected_index=2),
+                contest(speech_span, (0.0, 1.0), "speech", "no_consensus_word_inside"),
+            ],
+            signal="plain",
+        )
+    for _, category in marked_words:
+        _entity(
+            "pii",
+            (0.0, 1.0),
+            {"category": category, "source": "gliner", "occurrence": 0, "occurrences_n": 1, "sources": []},
+        )
+    if scan != "absent":
+        _entity(
+            "measurement",
+            None,
+            {
+                "name": "pii_scan",
+                "signal": "consensus_transcript",
+                "scanned_by": ["gliner", "presidio", "rules"],
+                "failed": ["presidio"] if scan == "incomplete" else [],
+                "missing": [],
+            },
+        )
+    write_report(
+        store,
+        speech,
+        software,
+        node="SPEECH",
+        kind="speech",
+        conformance=True,
+        conformance_of=TASK,
+        deviations=(),
+        detail={
+            "speaker_count": 1,
+            "words_n": len(every_word),
+            **(_SYLLABLE_DETAIL if syllable else {}),
+            "pii": {"categories": sorted({category for _, category in marked_words}), "n": len(marked_words)},
+            "notes": [],
+        },
+    )
+
+    voice = store.activity(node="VOICE", step=None, parameters={})
+    store.was_associated_with(voice, software)
+    if skip_voice:
+        plan_only = store.activity(node="REDACT", step="plan", parameters={})
+        store.was_associated_with(plan_only, software)
+        fold_verdict(store, None, config, None, run_dir=tmp_path)
+        return
+    voice_span = _entity(
+        "span",
+        (3.0, 3.8),
+        {
+            "family": "voice",
+            "role": "phonation",
+            "member": "sustained",
+            "production": "voiced",
+            "duration_s": 0.8,
+            "offset_kind": "criterion",
+            "offset_criterion": "f0_stability",
+            "marks_n": 12,
+        },
+    )
+    if typed_findings:
+        write_findings(
+            store,
+            voice,
+            software,
+            [
+                deviation("truncation", 3.0, 3.8, voice_span, reading="right_censored"),
+                deviation("omission", None, None, expected="sustained"),
+            ],
+            signal="plain",
+        )
+    write_report(
+        store,
+        voice,
+        software,
+        node="VOICE",
+        kind="voice",
+        conformance=True,
+        conformance_of=TASK,
+        deviations=(),
+        detail={"spans_n": 1, "phonation_s": 0.8, "gate_interval": "unmeasured", "notes": []},
+    )
+
+    plan = store.activity(node="REDACT", step="plan", parameters={})
+    store.was_associated_with(plan, software)
+    for _, category in marked_words:
+        _entity("span", (0.0, 1.0), {"name": "redaction", "category": category})
+    write_verdict(
+        store,
+        plan,
+        software,
+        node="REDACT",
+        outcome=Outcome.PASS if marked_words else Outcome.FLAG,
+        kind=None,
+        why="every finding redacted" if marked_words else "no finding to redact",
+        detail={"redactions_n": len(marked_words), "by_category": {}, "artifacts_withheld": not marked_words},
+    )
+    fold_verdict(store, None, config, None, run_dir=tmp_path)
+
+
+class TestBothProductsAlways:
+    """One summary and one JSON per file, whatever the graph concluded."""
+
+    def test_a_full_run_emits_both(self, store: ProvStore, tmp_path: Path) -> None:
+        """The ordinary path."""
+        _seed_report_store(store, tmp_path, full=True)
+        artifacts = report(store, tmp_path / "summary", _png(tmp_path))
+        assert artifacts["summary"].exists() and artifacts["summary"].suffix == ".png"
+        assert artifacts["json"].exists()
+
+    def test_an_admit_refusal_emits_both_and_says_nothing_was_measured(self, store: ProvStore, tmp_path: Path) -> None:
+        """A file ADMIT refused gets a report that says that, not an exception (V24)."""
+        _seed_report_store(store, tmp_path, admit_failed=True)
+        artifacts = report(store, tmp_path / "summary", _png(tmp_path))
+        payload = json.loads(artifacts["json"].read_text())
+        assert payload["verdict"]["triage"] == "discard"
+        assert payload["routing"] == {}
+        assert artifacts["summary"].exists()
+
+    def test_a_store_holding_nothing_at_all_still_emits_both(self, store: ProvStore, tmp_path: Path) -> None:
+        """Not even ADMIT concluded, so there is no verdict to read; the products are owed anyway."""
+        artifacts = report(store, tmp_path / "summary", _png(tmp_path))
+        payload = json.loads(artifacts["json"].read_text())
+        assert payload["verdict"]["triage"] is None
+        assert artifacts["summary"].exists()
+
+    def test_the_packaged_config_emits_a_report(self, store: ProvStore, config: TriageConfig, tmp_path: Path) -> None:
+        """The one unconditional product must be reachable with no override at all (I4)."""
+        _seed_report_store(store, tmp_path, full=True)
+        artifacts = report(store, tmp_path / "summary", config)
+        assert artifacts["summary"].suffix == ".pdf"
+        assert artifacts["json"].exists()
+
+    def test_an_unknown_format_refuses(self, store: ProvStore, tmp_path: Path) -> None:
+        """A typo must not fall through to a silent default."""
+        _seed_report_store(store, tmp_path, full=True)
+        with pytest.raises(ValueError, match="report.format"):
+            report(store, tmp_path / "summary", _override(tmp_path, "report:\n  format: jpeg\n"))
+
+    def test_png_is_reachable_by_config(self, store: ProvStore, tmp_path: Path) -> None:
+        """The two forms carry the same claims; the choice does not change the content."""
+        _seed_report_store(store, tmp_path, full=True)
+        artifacts = report(store, tmp_path / "summary", _png(tmp_path))
+        assert artifacts["summary"].suffix == ".png"
+
+    def test_the_two_forms_carry_the_same_json(self, store: ProvStore, tmp_path: Path) -> None:
+        """``report.format`` is a presentation choice and changes no claim."""
+        _seed_report_store(store, tmp_path, full=True)
+        as_png = json.loads(report(store, tmp_path / "png", _png(tmp_path))["json"].read_text())
+        pdf_config = load_triage_config(_write(tmp_path, "report:\n  format: pdf\n"))
+        as_pdf = json.loads(report(store, tmp_path / "pdf", pdf_config)["json"].read_text())
+        assert as_png["steps"] == as_pdf["steps"]
+        assert as_png["verdict"] == as_pdf["verdict"]
+        assert as_png["transcript"] == as_pdf["transcript"]
+
+
+class TestItWritesNoElements:
+    """A rendering is not evidence."""
+
+    def test_the_store_is_unchanged(self, store: ProvStore, tmp_path: Path) -> None:
+        """No entity, no activity, no agent, no relation."""
+        _seed_report_store(store, tmp_path, full=True)
+        before = store.fingerprint()
+        report(store, tmp_path / "summary", _png(tmp_path))
+        assert store.fingerprint() == before
+
+
+class TestTheStructuredJsonCompanion:
+    """The JSON is the same report model as the PDF, with a stable machine interface."""
+
+    def test_pdf_and_versioned_json_agree_on_the_file_decision(self, store: ProvStore, tmp_path: Path) -> None:
+        """Both sibling artifacts exist and the decision fields are one source of truth."""
+        _seed_report_store(store, tmp_path, full=True, marked_words=[("alice", "PERSON")])
+        pdf_config = load_triage_config(_write(tmp_path, "report:\n  format: pdf\n"))
+        artifacts = report(store, tmp_path / "summary", pdf_config)
+        payload = json.loads(artifacts["json"].read_text())
+        assert artifacts["summary"].exists() and artifacts["json"].exists()
+        assert payload["schema_version"] == "triage-summary/v9"
+        assert payload["decisions"]["file_triage"] == payload["verdict"]["triage"]
+        assert payload["decisions"]["release"] == payload["verdict"]["release"]
+        assert payload["artifacts"]["summary"]["path"] == artifacts["summary"].name
+        assert payload["artifacts"]["json"]["path"] == artifacts["json"].name
+
+    def test_the_lanes_the_pages_draw_are_in_the_one_json(self, store: ProvStore, tmp_path: Path) -> None:
+        """One record, not two: the figure's own block folds in rather than sitting beside it."""
+        _seed_report_store(store, tmp_path, full=True)
+        payload = json.loads(report(store, tmp_path / "summary", _png(tmp_path))["json"].read_text())
+        lanes = payload["evidence"]["lanes"]
+        assert [lane["lane"] for lane in lanes] == list(SUMMARY_LANES)
+        assert not (tmp_path / "summary" / "branch_summary.json").exists()
+
+    def test_a_lane_record_names_the_span_each_proposal_came_from(self, store: ProvStore, tmp_path: Path) -> None:
+        """The pairing a page draws as a connector is checkable without reading pixels."""
+        _seed_report_store(store, tmp_path, full=True, airway_labelled=[(1.0, 1.3)])
+        payload = json.loads(report(store, tmp_path / "summary", _png(tmp_path))["json"].read_text())
+        [airway] = [lane for lane in payload["evidence"]["lanes"] if lane["lane"] == "AIRWAY"]
+        proposed = [span for span in airway["spans"] if span["row"] == "proposed"]
+        initial = {span["entity_id"] for span in airway["spans"] if span["row"] == "initial"}
+        assert proposed and all(span["derived_from"] for span in proposed)
+        assert {parent for span in proposed for parent in span["derived_from"]} == initial
+
+    def test_a_lane_that_did_not_run_is_still_a_record(self, store: ProvStore, tmp_path: Path) -> None:
+        """A missing lane would read as a lane with nothing in it; the state is the finding."""
+        _seed_report_store(store, tmp_path, full=True, skip_voice=True)
+        payload = json.loads(report(store, tmp_path / "summary", _png(tmp_path))["json"].read_text())
+        [voice] = [lane for lane in payload["evidence"]["lanes"] if lane["lane"] == "VOICE"]
+        assert voice["state"] != "ran"
+        assert voice["spans"] == []
+
+    def test_airway_branch_evidence_describes_what_airway_actually_wrote(
+        self, store: ProvStore, tmp_path: Path
+    ) -> None:
+        """AIRWAY's own span carries its label; the envelope span it read carries PREPROCESS's level."""
+        _seed_report_store(store, tmp_path, full=True, airway_labelled=[(1.0, 1.3)], airway_unlabelled=[(2.0, 2.3)])
+        payload = json.loads(report(store, tmp_path / "summary", _png(tmp_path))["json"].read_text())
+        descriptions = {item["description"] for item in payload["evidence"]["branches"]["AIRWAY"]}
+        assert "airway span: cough" in descriptions
+        assert not any(description.endswith(_UNLABELLED_LABEL) for description in descriptions)
+        source = [item for item in descriptions if item.startswith("airway source span: ")]
+        assert source and all(item.endswith(" dB") for item in source)
+
+    def test_speech_and_voice_typed_deviations_reach_the_evidence(self, store: ProvStore, tmp_path: Path) -> None:
+        """A typed, located deviation from any branch renders its type, as AIRWAY's already does."""
+        _seed_report_store(store, tmp_path, full=True, typed_findings=True)
+        payload = json.loads(report(store, tmp_path / "summary", _png(tmp_path))["json"].read_text())
+        branches = payload["evidence"]["branches"]
+        speech = {item["description"]: item for item in branches["SPEECH"]}
+        voice = {item["description"]: item for item in branches["VOICE"]}
+        assert "speech deviate: stimulus_mismatch" in speech
+        assert speech["speech deviate: stimulus_mismatch"]["timing"] == {"start_s": 0.4, "end_s": 0.55}
+        assert "speech contest: speech" in speech
+        assert "voice deviate: truncation" in voice
+        assert voice["voice deviate: truncation"]["timing"] == {"start_s": 3.0, "end_s": 3.8}
+        assert voice["voice deviate: omission"]["timing"] is None
+        typed = [item for item in (*speech.values(), *voice.values()) if " deviate: " in item["description"]]
+        assert len(typed) == 3
+        assert all(item["type"] == "assertion" and item["provenance"]["node"] in {"SPEECH", "VOICE"} for item in typed)
+
+    def test_pii_label_assertions_stay_out_of_the_branch_evidence(self, store: ProvStore, tmp_path: Path) -> None:
+        """The per-word PII markings are the redacted transcript's business, not the audit lane."""
+        _seed_report_store(store, tmp_path, full=True, typed_findings=True, marked_words=[("alice", "PERSON")])
+        payload = json.loads(report(store, tmp_path / "summary", _png(tmp_path))["json"].read_text())
+        items = [item for branch in payload["evidence"]["branches"].values() for item in branch]
+        assert not any("label" in str(item["description"]) for item in items)
+        assert not any("alice" in json.dumps(item) for item in items)
+
+    def test_json_exposes_context_routing_and_timed_evidence(self, store: ProvStore, tmp_path: Path) -> None:
+        """A consumer can audit a branch without parsing PDF prose."""
+        _seed_report_store(store, tmp_path, full=True)
+        payload = json.loads(report(store, tmp_path / "summary", _png(tmp_path))["json"].read_text())
+        assert {"recording", "screening", "routing", "evidence"} <= set(payload)
+        assert payload["recording"]["run_label"]
+        assert payload["routing"]["SPEECH"]["conformance"] is True
+        assert payload["routing"]["SPEECH"]["reported"] is True
+        assert payload["routing"]["SPEECH"]["deviations"] == []
+        assert payload["routing"]["SPEECH"]["unmeasured"] == []
+        assert payload["routing"]["SPEECH"]["notes"] == []
+        speech_items = payload["evidence"]["branches"]["SPEECH"]
+        assert any(item["timing"] and item["provenance"]["node"] for item in speech_items)
+        token = payload["evidence"]["consensus_transcript_tokens"][0]
+        assert set(token) == {
+            "entity_id",
+            "text",
+            "bracketed",
+            "outcome",
+            "sources",
+            "readings",
+            "timings",
+            "variants",
+            "agreement",
+            "timing",
+            "onset_spread_s",
+            "offset_spread_s",
+            "temporal_uncertainty_s",
+            "provenance",
+        }
+        assert token["outcome"] == "agreement" and token["agreement"] == 1.0
+        assert token["sources"] == list(SEED_SOURCES)
+        assert set(token["timings"]) == set(SEED_SOURCES)
+        for retired in ("confidence", "existence_confidence", "recognizers", "timing_sources", "timing_authority"):
+            assert retired not in token
+        assert all("entity_id" in item for item in payload["evidence"]["consensus_transcript_tokens"])
+        assert all("entity_id" in item for item in payload["evidence"]["redacted_transcript_tokens"])
+
+
+class TestConsensusWordColorIsRobust:
+    """An agreement outside [0, 1], including non-finite, must not take rendering down with it."""
+
+    def test_a_nan_agreement_falls_back_to_the_neutral_fill(self) -> None:
+        """A NaN passes the numeric isinstance check, so it needs its own finiteness guard."""
+        assert _consensus_word_color(float("nan")) == "#e5e7eb"
+
+    def test_an_infinite_agreement_falls_back_to_the_neutral_fill(self) -> None:
+        """An infinite value is finite-looking arithmetic that still breaks the color channel math."""
+        assert _consensus_word_color(float("inf")) == "#e5e7eb"
+        assert _consensus_word_color(float("-inf")) == "#e5e7eb"
+
+    def test_a_missing_agreement_falls_back_to_the_same_neutral_fill(self) -> None:
+        """The non-finite fallback must match the existing missing-value fallback exactly."""
+        assert _consensus_word_color(None) == "#e5e7eb"
+
+    def test_an_ordinary_agreement_still_interpolates(self) -> None:
+        """The finiteness guard must not turn every ordinary agreement into the same fill."""
+        assert _consensus_word_color(0.0) != _consensus_word_color(1.0)
+
+
+class TestTheTranscriptCarriesTheOutcomes:
+    """Test 29: bold means agreed, a/b means contested, and the plain text carries neither mark."""
+
+    @staticmethod
+    def _words() -> list[Any]:
+        return [
+            "hi",
+            {
+                "text": "Jon",
+                "variants": [
+                    {"text": "Jon", "sources": ["asr_crisperwhisper"], "share": 0.5},
+                    {"text": "John", "sources": ["asr_qwen"], "share": 0.5},
+                ],
+                "readings": {"asr_crisperwhisper": "Jon", "asr_qwen": "John"},
+            },
+            {"text": "[UM]", "sources": ["asr_crisperwhisper"]},
+            "there",
+        ]
+
+    def test_marked_text_bolds_agreement_and_joins_variants_while_text_stays_plain(
+        self, store: ProvStore, tmp_path: Path
+    ) -> None:
+        """The plain join is what the PII scan read; the marked form is what a reader sees."""
+        _seed_report_store(store, tmp_path, full=True, words=self._words())
+        payload = json.loads(report(store, tmp_path / "summary", _png(tmp_path))["json"].read_text())
+        transcript = payload["transcript"]
+        assert transcript["marked_text"] == "**hi** Jon/John [UM] **there**"
+        assert transcript["text"] == "hi Jon [UM] there"
+        assert "**" not in transcript["text"] and "/" not in transcript["text"]
+        assert transcript["tokens_n"] == 4
+        assert "words_n" not in transcript
+
+    def test_the_token_lane_sets_bold_iff_agreement_and_never_on_a_placeholder(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The lane's weight is the outcome; a redaction placeholder inherits nothing."""
+        panels = _capture_panels(monkeypatch)
+        _seed_report_store(store, tmp_path, full=True, words=self._words(), marked_words=[("alice", "PERSON")])
+        report(store, tmp_path / "summary", _png(tmp_path))
+        consensus = next(panel for panel in panels[0] if panel.get("report_lane") == "words")
+        assert [(token["text"], token["bold"]) for token in consensus["tokens"]] == [
+            ("hi", True),
+            ("Jon/John", False),
+            ("[UM]", False),
+            ("there", True),
+            ("alice", True),
+        ]
+        redacted = next(panel for panel in panels[0] if panel.get("report_lane") == "redacted")
+        placeholder = next(token for token in redacted["tokens"] if token["text"] == "[PERSON]")
+        assert placeholder["bold"] is False
+        assert placeholder["color"] == _consensus_word_color(None)
+
+    def test_the_summary_page_prints_the_marked_transcript(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The monospaced page cannot bold, so ** is the mark it prints."""
+        panels = _capture_panels(monkeypatch)
+        _seed_report_store(store, tmp_path, full=True, words=self._words())
+        report(store, tmp_path / "summary", _png(tmp_path))
+        text = "\n".join("\n".join(panel["lines"]) for panel in panels[0] if panel.get("type") == "text")
+        assert "**hi** Jon/John [UM] **there**" in text
+
+
+class TestItSeparatesConsensusAndRedactedTranscript:
+    """The audit transcript and the redacted release representation stay visibly distinct."""
+
+    def test_a_marked_word_is_preserved_in_consensus_and_replaced_in_redacted_json(
+        self, store: ProvStore, tmp_path: Path
+    ) -> None:
+        """A placeholder is a REDACT result, never a claim about what ASR emitted."""
+        _seed_report_store(store, tmp_path, full=True, marked_words=[("alice", "PERSON")])
+        artifacts = report(store, tmp_path / "summary", _png(tmp_path))
+        payload = json.loads(artifacts["json"].read_text())
+        assert payload["transcript"]["text"].endswith("alice")
+        assert payload["transcript"]["redacted_text"].endswith("[PERSON]")
+        assert payload["evidence"]["consensus_transcript_tokens"][-1]["text"] == "alice"
+        assert payload["evidence"]["redacted_transcript_tokens"][-1]["text"] == "[PERSON]"
+
+    def test_an_unmarked_transcript_does_not_draw_a_duplicate_redacted_lane(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A second identical token lane would add clutter without communicating a redaction."""
+        panels = _capture_panels(monkeypatch)
+        _seed_report_store(store, tmp_path, full=True, words=["hello"], marked_words=[])
+        report(store, tmp_path / "summary", _png(tmp_path))
+        assert not any(panel.get("report_lane") == "redacted" for panel in panels[0])
+
+    def test_the_marked_word_uses_distinct_consensus_and_redacted_lanes(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Readers can distinguish a PII replacement from the word ASR and consensus supplied."""
+        panels = _capture_panels(monkeypatch)
+        _seed_report_store(store, tmp_path, full=True, marked_words=[("alice", "PERSON")])
+        report(store, tmp_path / "summary", _png(tmp_path))
+        consensus = next(panel for panel in panels[0] if panel.get("report_lane") == "words")
+        redacted = next(panel for panel in panels[0] if panel.get("report_lane") == "redacted")
+        assert [token["text"] for token in consensus["tokens"]][-1] == "alice"
+        assert [token["text"] for token in redacted["tokens"]][-1] == "[PERSON]"
+
+    def test_the_redacted_placeholder_does_not_borrow_the_original_words_confidence(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A placeholder's fill must not read as confidence evidence for text the lane no longer shows."""
+        panels = _capture_panels(monkeypatch)
+        _seed_report_store(store, tmp_path, full=True, words=["hello"], marked_words=[("alice", "PERSON")])
+        report(store, tmp_path / "summary", _png(tmp_path))
+        consensus = next(panel for panel in panels[0] if panel.get("report_lane") == "words")
+        redacted = next(panel for panel in panels[0] if panel.get("report_lane") == "redacted")
+        placeholder = next(token for token in redacted["tokens"] if token["text"] == "[PERSON]")
+        unredacted = next(token for token in redacted["tokens"] if token["text"] == "hello")
+        original_hello = next(token for token in consensus["tokens"] if token["text"] == "hello")
+        assert placeholder["color"] == _consensus_word_color(None)
+        assert unredacted["color"] == original_hello["color"]
+
+
+class TestTheProvenanceIsEmbedded:
+    """A hash identifies a run; the mapping is what makes it readable without the repository."""
+
+    def test_the_config_hash_and_the_mapping_both_appear(self, store: ProvStore, tmp_path: Path) -> None:
+        """Both, always."""
+        _seed_report_store(store, tmp_path, full=True)
+        payload = json.loads(report(store, tmp_path / "summary", _png(tmp_path))["json"].read_text())
+        assert payload["provenance"]["config_hash"]
+        assert payload["provenance"]["config"]["name"] == "senselab-triage/default"
+
+    def test_every_model_carries_its_resolved_commit_or_a_reason(self, store: ProvStore, tmp_path: Path) -> None:
+        """An agent whose commit could not be resolved appears with its reason, never with a bare ref."""
+        _seed_report_store(store, tmp_path, full=True)
+        payload = json.loads(report(store, tmp_path / "summary", _png(tmp_path))["json"].read_text())
+        assert payload["provenance"]["models"]
+        for model in payload["provenance"]["models"]:
+            assert model["revision"] is not None or model["unresolved_reason"] is not None
+            assert model["revision"] != "main"
+
+    def test_the_senselab_commit_is_a_sha_or_a_reason(self, store: ProvStore, tmp_path: Path) -> None:
+        """The run's own commit obeys the rule its models do."""
+        _seed_report_store(store, tmp_path, full=True)
+        payload = json.loads(report(store, tmp_path / "summary", _png(tmp_path))["json"].read_text())
+        provenance = payload["provenance"]
+        assert provenance["commit"] is not None or provenance["commit_unresolved_reason"] is not None
+        assert provenance["commit"] != "main"
+
+    def test_every_step_names_the_elements_behind_it(self, store: ProvStore, tmp_path: Path) -> None:
+        """This is what makes the JSON a view of the store rather than a second copy of it."""
+        _seed_report_store(store, tmp_path, full=True)
+        payload = json.loads(report(store, tmp_path / "summary", _png(tmp_path))["json"].read_text())
+        assert payload["steps"]
+        for entry in payload["steps"].values():
+            assert isinstance(entry["element_ids"], list)
+            assert entry["element_ids"]
+
+    def test_the_named_elements_are_in_the_store(self, store: ProvStore, tmp_path: Path) -> None:
+        """An id that joins back to nothing is not a join key."""
+        _seed_report_store(store, tmp_path, full=True)
+        payload = json.loads(report(store, tmp_path / "summary", _png(tmp_path))["json"].read_text())
+        named = [element for entry in payload["steps"].values() for element in entry["element_ids"]]
+        assert named
+        for element in named:
+            assert store.get_entity(element).id == element
+
+
+class TestTheSummaryLayers:
+    """One shared time axis, drawn from the store."""
+
+    def test_the_shared_axis_carries_every_layer_the_store_holds(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Waveform, envelope with floor, spans, phonation, probability rasters and branch evidence."""
+        panels = _capture_panels(monkeypatch)
+        _seed_report_store(store, tmp_path, full=True)
+        report(store, tmp_path / "summary", _png(tmp_path))
+        kinds = [panel["type"] for panel in panels[0]]
+        lanes = {panel.get("name") for panel in panels[0] if panel["type"] in {"segments", "tokens"}}
+        assert {"speech spans", "airway", "voice"} <= lanes
+        assert kinds.count("score_raster") == 2
+        assert "waveform" in kinds
+        assert panels[0][0]["twin"]["data"]
+
+    def test_the_header_leads_with_decisions_and_routing(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A reader sees the file decision before inspecting the supporting lanes."""
+        headers = _capture_headers(monkeypatch)
+        _seed_report_store(store, tmp_path, full=True)
+        report(store, tmp_path / "summary", _png(tmp_path))
+        header = headers[0]
+        assert header["decision_label"] == "PRIMARY FILE DECISION"
+        assert "TRIAGE:" in header["decision"] and "RELEASE:" in header["decision"]
+        assert header["evidence_label"] == "LEADING DECISION EVIDENCE"
+        assert header["context_label"].endswith("(context only)")
+        assert header["support_label"].endswith("(report-only summary)")
+
+    def test_the_header_compacts_repeated_span_flags(self) -> None:
+        """The page header summarizes repeated events while JSON retains each event."""
+        document = {
+            "recording": {"task_type": "prolonged vowel", "declared_hints": {}},
+            "decisions": {
+                "reasons": [],
+                "flags": [
+                    {
+                        "node": "VOICE",
+                        "why": (
+                            "period_doubling_alias in range for span at 0.072s; "
+                            "period_doubling_alias in range for span at 0.719s; "
+                            "period_doubling_alias in range for span at 1.028s"
+                        ),
+                    }
+                ],
+                "file_triage": "flag",
+                "release": "withheld",
+            },
+            "screening": {"routes": {}, "route_state": None, "ruleset": {}},
+            "routing": {},
+        }
+        header = _header(document)
+        assert header["evidence"] == "VOICE: period_doubling_alias flagged in 3 span(s); see summary.json"
+
+    def test_the_header_context_carries_the_run_label(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The plain title is suppressed whenever a header is drawn, so the run label must live here."""
+        headers = _capture_headers(monkeypatch)
+        _seed_report_store(store, tmp_path, full=True)
+        report(store, tmp_path / "summary", _png(tmp_path))
+        assert headers[0]["context"].startswith("test-run")
+
+    def test_the_header_support_names_the_route_state_and_every_branch(self) -> None:
+        """A reader must see what the ruleset made of the recording, not only which branches ran."""
+        document = {
+            "recording": {"task_type": "cough", "declared_hints": {}},
+            "decisions": {
+                "reasons": [{"node": "routing", "why": "n/a"}],
+                "flags": [],
+                "file_triage": "flag",
+                "release": "withheld",
+            },
+            "screening": {
+                "routes": {"AIRWAY": "routed", "SPEECH": "declined", "VOICE": "unavailable"},
+                "route_state": "routed",
+                "ruleset": {},
+            },
+            "routing": {},
+        }
+        header = _header(document)
+        assert "routes (routed):" in header["support"]
+        assert "AIRWAY=routed" in header["support"]
+        assert "VOICE=unavailable" in header["support"]
+
+    def test_the_header_outcome_is_the_conformance_a_branch_actually_reported(
+        self, store: ProvStore, tmp_path: Path
+    ) -> None:
+        """A branch writes no verdict, so the header may not read one; conformance stands in its place."""
+        _seed_report_store(store, tmp_path, full=True)
+        document = _report_document(store, _assertions_by_source(store), load_triage_config(), summary_format="pdf")
+        assert "verdict" not in next(iter(document["routing"].values()))
+        assert "outcomes: AIRWAY=True" in _header(document)["support"]
+
+    def test_the_measured_findings_read_the_gate_names_routing_writes(self, store: ProvStore, tmp_path: Path) -> None:
+        """ROUTING writes ``flag_gates``; a line keyed to ``flags`` can never show one."""
+        _seed_report_store(store, tmp_path, full=True)
+        document = _report_document(store, _assertions_by_source(store), load_triage_config(), summary_format="pdf")
+        decision = next(iter(document["routing"].values()))
+        assert "flags" not in decision and "flag_gates" in decision
+        document["routing"]["AIRWAY"]["flag_gates"] = ["cough_present"]
+        blocks = _decision_blocks(document)
+        assert any("cough_present" in line for line in blocks)
+
+    def test_the_spectrogram_and_the_blocks_are_both_drawn(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A reviewer judging the output needs the time-frequency picture and the judgment beside it."""
+        panels = _capture_panels(monkeypatch)
+        _seed_report_store(store, tmp_path, full=True)
+        report(store, tmp_path / "summary", _png(tmp_path))
+        kinds = [panel["type"] for panel in panels[0]]
+        assert "spectrogram" in kinds
+        assert kinds[-1] == "text"
+
+    def test_the_blocks_carry_the_decision_the_transcript_and_the_categories(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The content a reviewer judges the run by, on the page rather than only in the JSON."""
+        panels = _capture_panels(monkeypatch)
+        _seed_report_store(store, tmp_path, full=True, words=["hello", "world"])
+        report(store, tmp_path / "summary", _png(tmp_path))
+        blocks = "\n".join(panels[0][-1]["lines"])
+        assert "triage:" in blocks and "release:" in blocks
+        assert "**hello** **world**" in blocks
+        assert "Speech" in blocks
+        assert "AIRWAY" in blocks
+
+    def test_coarse_ast_labels_are_summarized_instead_of_drawn_as_a_timeline(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """One 10.24-second AST context is a coarse label summary, not a time-local event lane."""
+        panels = _capture_panels(monkeypatch)
+        _seed_report_store(store, tmp_path, full=True)
+        artifacts = report(store, tmp_path / "summary", _png(tmp_path))
+        assert "ast labels" not in {panel.get("name") for panel in panels[0]}
+        payload = json.loads(artifacts["json"].read_text())
+        assert payload["evidence"]["label_presentations"]["ast"] == {
+            "mode": "summary_only",
+            "hop_s": 10.24,
+            "window_length_s": 10.24,
+            "reason": "coarse_window_hop",
+        }
+        blocks = "\n".join(panels[0][-1]["lines"])
+        assert "ast: summary only (10.24 s window, 10.24 s hop) Cough (1)" in blocks
+
+    def test_ast_with_a_dense_historical_grid_remains_a_timeline(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The presentation follows the stored grid, preserving honest rendering of old runs."""
+        panels = _capture_panels(monkeypatch)
+        _seed_report_store(
+            store,
+            tmp_path,
+            full=True,
+            classifiers=(("yamnet", 0.96, "Speech"), ("ast", 2.0, "Cough"), ("hear", 2.0, "Breathe")),
+        )
+        artifacts = report(store, tmp_path / "summary", _png(tmp_path))
+        assert "ast labels" in {panel.get("name") for panel in panels[0]}
+        payload = json.loads(artifacts["json"].read_text())
+        assert payload["evidence"]["label_presentations"]["ast"]["mode"] == "timeline"
+
+    def test_classifier_rasters_and_json_keep_labels_paired_with_probabilities(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Comma-separated classes alone discard the magnitude that made each one relevant."""
+        panels = _capture_panels(monkeypatch)
+        _seed_report_store(store, tmp_path, full=True)
+
+        payload = json.loads(report(store, tmp_path / "summary", _png(tmp_path))["json"].read_text())
+
+        raster = next(panel for panel in panels[0] if panel.get("name") == "yamnet labels")
+        assert raster["type"] == "score_raster"
+        assert raster["rows"] == ["Speech"]
+        assert raster["windows"][0]["scores"] == {"Speech": 0.9}
+        assert payload["evidence"]["classifier_windows"]["yamnet"][0]["label_scores"] == {"Speech": 0.9}
+
+    def test_a_non_finite_score_is_dropped_rather_than_rendered_or_crashed_on(self, store: ProvStore) -> None:
+        """A NaN or infinite score is not a probability; a missing cell is honest, a wrong one is not."""
+        entity_id = store.entity(
+            prov_type="measurement",
+            extent=(0.0, 2.0),
+            attributes={
+                "name": "hear_window",
+                "labels": [],
+                "scores": {},
+                "raw_scores": {"Cough": float("nan"), "Breathe": float("inf"), "Speech": 0.4},
+            },
+        )
+        window = store.get_entity(entity_id)
+        assert _window_label_scores(window, raw=True) == {"Speech": 0.4}
+
+    def test_hear_raster_keeps_all_raw_probabilities_separate_from_decision_membership(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A HEAR display row is not erased merely because no decision threshold fired."""
+        panels = _capture_panels(monkeypatch)
+        _seed_report_store(store, tmp_path, full=True)
+        hear_windows = [
+            entity for entity in store.entities("measurement") if entity.attributes.get("name") == "hear_window"
+        ]
+        assert hear_windows
+        hear_windows[0].attributes["labels"] = []
+        hear_windows[0].attributes["scores"] = {}
+        hear_windows[0].attributes["raw_scores"] = {"Cough": 0.12, "Breathe": 0.31, "Speech": 0.44}
+
+        payload = json.loads(report(store, tmp_path / "summary", _png(tmp_path))["json"].read_text())
+
+        raster = next(panel for panel in panels[0] if panel.get("name") == "hear labels")
+        assert raster["rows"] == [
+            "Cough",
+            "Snore",
+            "Baby Cough",
+            "Breathe",
+            "Sneeze",
+            "Throat Clear",
+            "Laugh",
+            "Speech",
+        ]
+        assert raster["windows"][0]["scores"] == {"Cough": 0.12, "Breathe": 0.31, "Speech": 0.44}
+        first_window = payload["evidence"]["classifier_windows"]["hear"][0]
+        assert first_window["label_scores"] == {}
+        assert first_window["raw_label_scores"] == {"Breathe": 0.31, "Cough": 0.12, "Speech": 0.44}
+
+    def test_airway_hear_probabilities_are_a_separate_candidate_span_lane(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The per-span re-evaluations must not be conflated with PREPROCESS's whole-stream HEAR windows."""
+        panels = _capture_panels(monkeypatch)
+        _seed_report_store(store, tmp_path, full=True)
+        store.entity(
+            prov_type="measurement",
+            extent=(1.0, 3.0),
+            attributes={
+                "name": "span_hear",
+                "classifier": "hear",
+                "span_id": "span-airway",
+                "labels": ["Breathe"],
+                "scores": {"Breathe": 0.82},
+                "raw_scores": {"Cough": 0.12, "Breathe": 0.82, "Speech": 0.09},
+                "input_window_s": 2.0,
+            },
+        )
+
+        payload = json.loads(report(store, tmp_path / "summary", _png(tmp_path))["json"].read_text())
+
+        raster = next(panel for panel in panels[0] if panel.get("name") == "airway HeAR probabilities")
+        assert raster["rows"][0] == "Cough" and raster["windows"][0]["span_id"] == "span-airway"
+        candidate = payload["evidence"]["airway_hear_span_windows"][0]
+        assert candidate["timing"] == {"start_s": 1.0, "end_s": 3.0}
+        assert candidate["raw_label_scores"]["Breathe"] == 0.82
+
+    def test_the_airway_lane_draws_airways_own_labelled_spans(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """branch-airway.md requires it on the shared axis; the label is the span's own attribute."""
+        panels = _capture_panels(monkeypatch)
+        _seed_report_store(store, tmp_path, full=True, airway_labelled=[(1.0, 1.3)], airway_unlabelled=[(2.0, 2.3)])
+        report(store, tmp_path / "summary", _png(tmp_path))
+        proposed = _lane_rows(panels[0], "airway")["proposed"]
+        assert [token["text"] for token in proposed] == ["cough"]
+        assert (proposed[0]["start"], proposed[0]["end"]) == (1.0, 1.3)
+
+    def test_a_layer_the_store_does_not_hold_is_simply_absent(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Nothing raises for want of a derivative; a report is owed on every outcome."""
+        panels = _capture_panels(monkeypatch)
+        _seed_report_store(store, tmp_path)
+        report(store, tmp_path / "summary", _png(tmp_path))
+        kinds = [panel["type"] for panel in panels[0]]
+        assert "waveform" in kinds
+        assert "features" not in kinds
+
+
+class TestItReadsTheStoreOnceRatherThanPerWord:
+    """The index behind the PII rule and the airway labels is built once, not per element."""
+
+    def test_the_assertion_index_is_built_once(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Two readers ask the same reverse question; one pass over the assertions answers both."""
+        from senselab.audio.workflows.triage.nodes import report as report_module
+
+        calls: list[int] = []
+        real = report_module._assertions_by_source
+
+        def _counted(store_: ProvStore) -> dict[str, list[Any]]:
+            calls.append(1)
+            return real(store_)
+
+        monkeypatch.setattr(report_module, "_assertions_by_source", _counted)
+        _seed_report_store(store, tmp_path, full=True, marked_words=[("alice", "PERSON")])
+        report(store, tmp_path / "summary", _png(tmp_path))
+        assert len(calls) == 1
+
+    def test_a_long_transcript_renders_in_bounded_time(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """800 words and 800 markings; per-word rescanning made this quadratic and then some."""
+        _stub_the_drawing(monkeypatch)
+        _seed_report_store(
+            store,
+            tmp_path,
+            full=True,
+            words=[],
+            marked_words=[(f"name{index}", "PERSON") for index in range(800)],
+        )
+        started = time.monotonic()
+        artifacts = report(store, tmp_path / "summary", _png(tmp_path))
+        elapsed = time.monotonic() - started
+        assert json.loads(artifacts["json"].read_text())["transcript"]["tokens_n"] == 800
+        assert elapsed < 15.0, f"reading the store took {elapsed:.1f}s; the per-word rescan is back"
+
+
+class TestARenderFailureKeepsTheJson:
+    """The JSON is complete before the picture is drawn, and must not go down with it."""
+
+    def test_the_json_survives_and_the_error_names_the_cause(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A consumer reading many files loses nothing because one page could not be drawn."""
+        from senselab.audio.workflows.triage.nodes import report as report_module
+
+        def _raise(*args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
+            raise RuntimeError("the canvas is gone")
+
+        monkeypatch.setattr(report_module, "_render", _raise)
+        _seed_report_store(store, tmp_path, full=True)
+        with pytest.raises(ReportRenderError) as caught:
+            report(store, tmp_path / "summary", _png(tmp_path))
+        artifacts = caught.value.artifacts
+        assert sorted(artifacts) == ["json"]
+        assert json.loads(artifacts["json"].read_text())["verdict"]["triage"]
+        assert "the canvas is gone" in str(caught.value)
+
+
+class TestTheAbsentLanesAreOnThePage:
+    """A lane not drawn must never read as a measured absence."""
+
+    def test_an_unfitted_derivative_is_named_apart_from_an_errored_one(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A null config key and a crash are different facts about the run."""
+        panels = _capture_panels(monkeypatch)
+        _seed_report_store(
+            store,
+            tmp_path,
+            full=True,
+            absent={"phonation_spans": "ValueError", "gammatone": "AttributeError", "silence": "LookupError"},
+        )
+        report(store, tmp_path / "summary", _png(tmp_path))
+        blocks = "\n".join(panels[0][-1]["lines"])
+        assert "ABSENT" in blocks
+        assert "unfitted (a config key it reads is null): phonation_spans [ValueError]" in blocks
+        assert "unavailable (a derivative it reads is absent): silence [LookupError]" in blocks
+        assert "errored: gammatone [AttributeError]" in blocks
+
+    def test_the_recorded_message_is_rendered_beside_the_reading(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """PREPROCESS records which key was null; a page that showed only the class would drop it."""
+        panels = _capture_panels(monkeypatch)
+        _seed_report_store(
+            store,
+            tmp_path,
+            full=True,
+            absent={"phonation_spans": "ValueError: phonation_spans.silence_floor_db is null"},
+        )
+        report(store, tmp_path / "summary", _png(tmp_path))
+        blocks = "\n".join(panels[0][-1]["lines"])
+        assert "unfitted (a config key it reads is null)" in blocks
+        assert "phonation_spans [ValueError: phonation_spans.silence_floor_db is null]" in blocks
+
+    def test_a_lane_absence_carries_the_message_too(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The lane line is where a reader looks first, so the attribution must reach it."""
+        panels = _capture_panels(monkeypatch)
+        _seed_report_store(
+            store,
+            tmp_path,
+            full=True,
+            absent={"yamnet_windows": "ValueError: yamnet.window_s is null"},
+            classifiers=(),
+        )
+        report(store, tmp_path / "summary", _png(tmp_path))
+        blocks = "\n".join(panels[0][-1]["lines"])
+        assert "lane not drawn — yamnet labels: PREPROCESS/yamnet_windows unfitted" in blocks
+        assert "yamnet.window_s is null" in blocks
+
+
+class TestTheHintReadingIsOnThePage:
+    """``verdict.hints`` reached the JSON and not the page, so a reader saw the flag and not its cause."""
+
+    def test_an_unclaimed_branch_reads_found_unclaimed(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """With nothing declared, every subject the graph found is found and unclaimed, and says so."""
+        panels = _capture_panels(monkeypatch)
+        _seed_report_store(store, tmp_path, full=True)
+        report(store, tmp_path / "summary", _png(tmp_path))
+        blocks = "\n".join(panels[0][-1]["lines"])
+        assert "AIRWAY: route=routed found=present conformance=True agreement=agree hint=found_unclaimed" in blocks
+
+    def test_a_declared_branch_that_found_nothing_reads_claimed_not_found(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The reason line names the mismatch; the branch line must agree with it rather than omit it."""
+        panels = _capture_panels(monkeypatch)
+        _seed_report_store(store, tmp_path, full=True)
+        software = software_agent(store)
+        supersede = store.activity(node="routing", step="declare", parameters={})
+        store.was_associated_with(supersede, software)
+        decision = store.entity(
+            prov_type="branch_decision",
+            extent=None,
+            attributes={
+                "branch": "AIRWAY",
+                "will_run": True,
+                "route_state": "routed",
+                "unavailable_gates": [],
+                "flag_gates": [],
+                "declared": True,
+                "forced_by_declaration": False,
+                "declared_family": "voluntary-cough",
+                "declared_by_family": True,
+                "hint_tags": ["cough"],
+                "unmapped_tags": [],
+                "bad_map_values": {},
+                "why": "route_routed",
+                "stream": "plain",
+            },
+        )
+        store.was_generated_by(decision, supersede)
+        refuted = store.activity(node="AIRWAY", step="reclassify", parameters={})
+        store.was_associated_with(refuted, software)
+        # Withdraw the base seed's own AIRWAY span: this scenario is AIRWAY finding nothing, so
+        # VERDICT's fold must read zero live spans in the branch's family, not the base seed's one.
+        for span in store.entities("span"):
+            if span.attributes.get("family") == "airway" and not store.is_invalidated(span.id):
+                store.was_invalidated_by(span.id, refuted)
+        write_report(
+            store,
+            refuted,
+            software,
+            node="AIRWAY",
+            kind="airway",
+            conformance=False,
+            conformance_of=TASK,
+            deviations=(),
+            detail={},
+        )
+        fold_verdict(store, None, load_triage_config(), AudioHints(may_contain=["cough"]), run_dir=tmp_path)
+
+        report(store, tmp_path / "summary", _png(tmp_path))
+        blocks = "\n".join(panels[0][-1]["lines"])
+        assert "AIRWAY: route=routed found=absent conformance=False agreement=mismatch hint=claimed_not_found" in blocks
+
+    def test_a_lane_the_page_did_not_draw_is_named_with_its_reason(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Under the packaged config the label lanes are missing; the page must say why."""
+        panels = _capture_panels(monkeypatch)
+        _seed_report_store(store, tmp_path, full=True, absent={"yamnet_windows": "ValueError"}, classifiers=())
+        report(store, tmp_path / "summary", _png(tmp_path))
+        blocks = "\n".join(panels[0][-1]["lines"])
+        assert "lane not drawn — yamnet labels: PREPROCESS/yamnet_windows unfitted" in blocks
+
+    def test_a_page_that_drew_every_lane_says_so(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Silence about absences is indistinguishable from having none."""
+        panels = _capture_panels(monkeypatch)
+        _seed_report_store(store, tmp_path, full=True, marked_words=[("alice", "PERSON")])
+        report(store, tmp_path / "summary", _png(tmp_path))
+        blocks = "\n".join(panels[0][-1]["lines"])
+        assert "every declared lane was drawn" in blocks
+        assert "PREPROCESS reports no absent derivative" in blocks
+
+
+class TestThePageCarriesItsOwnProvenanceAndRunState:
+    """A reviewer judging one page must not have to open the JSON to know where it came from."""
+
+    def test_the_provenance_line_names_the_config_the_commit_and_the_models(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The full model list stays in the JSON; the identity belongs on the page."""
+        panels = _capture_panels(monkeypatch)
+        config = _png(tmp_path)
+        _seed_report_store(store, tmp_path, full=True)
+        report(store, tmp_path / "summary", config)
+        blocks = "\n".join(panels[0][-1]["lines"])
+        assert f"config {config.config_hash}" in blocks
+        assert "senselab " in blocks
+        assert "models: 1 at a resolved commit, 1 with a reason" in blocks
+
+    def test_the_ran_line_tells_an_errored_node_from_a_silent_one(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The distinction the whole graph is built to preserve must reach the page."""
+        panels = _capture_panels(monkeypatch)
+        _seed_report_store(store, tmp_path, full=True, skip_voice=True)
+        report(store, tmp_path / "summary", _png(tmp_path))
+        blocks = "\n".join(panels[0][-1]["lines"])
+        assert "ran: ADMIT:completed" in blocks
+        assert "VOICE:errored" in blocks
+
+    def test_the_branch_block_carries_its_measurements(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A branch conclusion without its numbers cannot be judged, only believed."""
+        panels = _capture_panels(monkeypatch)
+        _seed_report_store(store, tmp_path, full=True, marked_words=[("alice", "PERSON")])
+        report(store, tmp_path / "summary", _png(tmp_path))
+        blocks = "\n".join(panels[0][-1]["lines"])
+        assert "speaker_count=1" in blocks
+        assert "phonation_s=0.8" in blocks and "0.79999" not in blocks
+        assert "words_n=5" in blocks
+        assert "labelled_n=1" in blocks
+        assert "redactions_n=1" in blocks
+
+    def test_a_truncated_category_list_says_how_many_it_left_out(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Six of six and six of forty must not render identically."""
+        panels = _capture_panels(monkeypatch)
+        _seed_report_store(store, tmp_path, full=True, yamnet_labels=[f"L{index}" for index in range(9)])
+        report(store, tmp_path / "summary", _png(tmp_path))
+        blocks = "\n".join(panels[0][-1]["lines"])
+        assert "yamnet (top 6 of " in blocks
+        assert "top 6 of 6" not in blocks
+        assert "ast:" in blocks
+
+
+class TestTheRefusalPage:
+    """The file ADMIT refused is the one that most needs a legible page."""
+
+    def test_it_names_the_file_and_shows_unknowns_as_a_dash(self, store: ProvStore, tmp_path: Path) -> None:
+        """A refusal page that cannot name the file, or that prints "None", is of no use."""
+        _seed_report_store(store, tmp_path, admit_failed=True)
+        artifacts = report(store, tmp_path / "summary", _png(tmp_path))
+        payload = json.loads(artifacts["json"].read_text())
+        assert payload["recording"]["path"] is not None and payload["recording"]["path"].endswith("refused.wav")
+        assert payload["recording"]["duration_s"] is None
+
+    def test_the_page_itself_carries_the_name_the_dash_and_the_reason(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Everything the reviewer needs, with no Python repr leaking through."""
+        drawn: list[list[str]] = []
+        from senselab.audio.workflows.triage.nodes import report as report_module
+
+        real = report_module._blocks
+
+        def _spy(document: dict[str, Any], lanes: set[str]) -> list[str]:
+            lines = real(document, lanes)
+            drawn.append(lines)
+            return lines
+
+        monkeypatch.setattr(report_module, "_blocks", _spy)
+        _seed_report_store(store, tmp_path, admit_failed=True)
+        report(store, tmp_path / "summary", _png(tmp_path))
+        blocks = "\n".join(drawn[0])
+        assert "refused.wav" in blocks
+        assert "duration: — s" in blocks
+        assert "decode failure" in blocks
+        assert ": None" not in blocks
+
+
+class TestOnlyAirwayLabelsTheAirwayLane:
+    """A label reaches the airway lane only when it is on a span of AIRWAY's own family."""
+
+    def test_a_label_from_another_node_does_not_reach_the_lane(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The lane answers "what did AIRWAY propose", not "what has anyone labelled over this span"."""
+        panels = _capture_panels(monkeypatch)
+        _seed_report_store(store, tmp_path, full=True, foreign_span_label="Applause")
+        report(store, tmp_path / "summary", _png(tmp_path))
+        assert {token["text"] for token in _lane_rows(panels[0], "airway")["proposed"]} == {"cough"}
+
+
+class TestTheSyllableMeasuresReachThePage:
+    """The syllable instrument measures what no other does, and dissolving DDK must not drop it.
+
+    The measures now arrive through SPEECH's report detail, because SPEECH is the branch that runs
+    the syllable body. Both readers of ``BRANCH_MEASURES`` have to find them under ``SPEECH``.
+    """
+
+    def test_the_branch_detail_block_states_the_syllable_measurements(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A branch conclusion without its numbers cannot be judged, only believed."""
+        panels = _capture_panels(monkeypatch)
+        _seed_report_store(store, tmp_path, full=True, syllable=True)
+        report(store, tmp_path / "summary", _png(tmp_path))
+        blocks = "\n".join(panels[0][-1]["lines"])
+        assert "modulation_peak_hz=5.5" in blocks
+        assert "modulation_unit=syllables_per_s" in blocks
+        assert "ppg_period_cv=0.12" in blocks
+
+    def test_every_ppg_field_the_instrument_measures_reaches_the_page(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The decode's readings are the branch's own evidence and once reached nothing."""
+        panels = _capture_panels(monkeypatch)
+        _seed_report_store(store, tmp_path, full=True, syllable=True)
+        report(store, tmp_path / "summary", _png(tmp_path))
+        blocks = "\n".join(panels[0][-1]["lines"])
+        expected = {
+            "ppg_syllable_rate_hz=5.4",
+            "ppg_cycle_rate_hz=1.8",
+            "ppg_repetitions=9",
+            "ppg_typical_repetitions=10",
+            "ppg_period_s=0.556",
+            "ppg_period_cv=0.12",
+            "ppg_period_trend_s_per_step=0.001",
+            "ppg_filler_fraction=0.32",
+            "ppg_score_per_frame=-0.61",
+            "ppg_contradicted_words_n=2",
+        }
+        assert expected <= set(blocks.split())
+        assert "ppg_positions=" in blocks
+        assert "ppg_realised_mass=" in blocks
+
+    def test_the_pdf_decision_pages_measured_findings_name_them_too(self, store: ProvStore, tmp_path: Path) -> None:
+        """Both readers of ``BRANCH_MEASURES`` were blind to these, not just the branch-detail one."""
+        _seed_report_store(store, tmp_path, full=True, syllable=True)
+        payload = json.loads(report(store, tmp_path / "summary", _png(tmp_path))["json"].read_text())
+        blocks = "\n".join(_decision_blocks(payload))
+        findings = blocks.split("MEASURED BRANCH FINDINGS", 1)[1].split("SUPPORTING EVIDENCE", 1)[0]
+        assert "SPEECH: " in findings
+        named = {token.strip("; ") for token in findings.split()}
+        assert "trains_n=1" in named, "the train count itself, not the ppg_ prefixed one"
+        assert "ppg_syllable_rate_hz=5.4" in named
+
+    def test_a_recording_that_ran_no_syllable_body_carries_none_of_the_keys(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The keys are absent rather than null off a syllable task, which is what the readers expect."""
+        panels = _capture_panels(monkeypatch)
+        _seed_report_store(store, tmp_path, full=True)
+        report(store, tmp_path / "summary", _png(tmp_path))
+        blocks = "\n".join(panels[0][-1]["lines"])
+        assert "trains_n" not in blocks
+        assert "ppg_syllable_rate_hz" not in blocks
+
+
+class TestInitialAndUpdatedSpansShareALane:
+    """A lane shows what came in beside what a branch made of it, joined by ``wasDerivedFrom``."""
+
+    def _airway_span(self, store: ProvStore, extent: tuple[float, float], *sources: str) -> str:
+        """One further AIRWAY proposal, derived from whatever ids are named."""
+        activity = store.activities("AIRWAY")[0]
+        agent = store.agents("software")[0]
+        span_id = store.entity(
+            prov_type="span",
+            extent=extent,
+            attributes={"family": "airway", "role": "cough_event", "label": "cough"},
+        )
+        store.was_generated_by(span_id, activity.id)
+        store.was_attributed_to(span_id, agent.id)
+        for source in sources:
+            store.was_derived_from(span_id, source)
+        return span_id
+
+    def test_a_lane_whose_spans_name_no_span_is_the_segments_lane_it_always_was(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Nothing was derived over this region, so the lane must be untouched by the pairing."""
+        panels = _capture_panels(monkeypatch)
+        _seed_report_store(store, tmp_path, full=True)
+        report(store, tmp_path / "summary", _png(tmp_path))
+        voice = _lane_panel(panels[0], "voice")
+        assert voice["type"] == "segments"
+        assert [(segment["start"], segment["end"]) for segment in voice["segments"]] == [(3.0, 3.8)]
+        assert "tokens" not in voice
+
+    def test_a_lane_whose_spans_name_a_span_pairs_the_two_over_one_another(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """AIRWAY derives its proposal from a PREPROCESS span; both belong on the lane."""
+        panels = _capture_panels(monkeypatch)
+        _seed_report_store(store, tmp_path, full=True)
+        report(store, tmp_path / "summary", _png(tmp_path))
+        airway = _lane_panel(panels[0], "airway")
+        assert airway["type"] == "tokens"
+        rows = _lane_rows(panels[0], "airway")
+        assert list(rows) == ["proposed", "initial"]
+        assert [token["text"] for token in rows["proposed"]] == ["cough"]
+        assert [(token["start"], token["end"]) for token in rows["proposed"]] == [(1.0, 1.3)]
+        assert [(token["start"], token["end"]) for token in rows["initial"]] == [(1.0, 1.3)]
+        assert rows["initial"][0]["text"].endswith(" dB")
+
+    def test_each_proposal_names_the_span_it_was_derived_from_rather_than_the_one_it_overlaps(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The edge decides the pairing: a proposal over another span's extent still names its own."""
+        panels = _capture_panels(monkeypatch)
+        _seed_report_store(store, tmp_path, full=True, airway_labelled=[(1.0, 1.3)], airway_unlabelled=[(2.0, 2.3)])
+        envelope = {
+            span.extent: span.id
+            for span in store.entities("span")
+            if "peak_over_floor_db" in span.attributes and span.extent is not None
+        }
+        self._airway_span(store, (1.0, 1.3), envelope[(2.0, 2.3)])
+        report(store, tmp_path / "summary", _png(tmp_path))
+        rows = _lane_rows(panels[0], "airway")
+        derived = {token["key"]: token["derived_from"] for token in rows["proposed"]}
+        assert sorted(sum(derived.values(), [])) == sorted([envelope[(1.0, 1.3)], envelope[(2.0, 2.3)]])
+        initial = {token["key"]: (token["start"], token["end"]) for token in rows["initial"]}
+        assert initial == {envelope[(1.0, 1.3)]: (1.0, 1.3), envelope[(2.0, 2.3)]: (2.0, 2.3)}
+
+    def test_one_initial_span_is_drawn_once_however_many_proposals_name_it(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Two readings of one region are two proposals over one initial span, not two of each."""
+        panels = _capture_panels(monkeypatch)
+        _seed_report_store(store, tmp_path, full=True)
+        parent = next(
+            span.id
+            for span in store.entities("span")
+            if span.extent == (1.0, 1.3) and "peak_over_floor_db" in span.attributes
+        )
+        self._airway_span(store, (1.05, 1.25), parent)
+        report(store, tmp_path / "summary", _png(tmp_path))
+        rows = _lane_rows(panels[0], "airway")
+        assert len(rows["proposed"]) == 2
+        assert [token["key"] for token in rows["initial"]] == [parent]
+
+    def test_a_proposal_whose_initial_span_is_not_in_the_store_still_draws(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A derivation naming nothing the store holds loses the link, never the span."""
+        panels = _capture_panels(monkeypatch)
+        _seed_report_store(store, tmp_path, full=True)
+        orphan = self._airway_span(store, (4.0, 4.4), "no-such-entity")
+        report(store, tmp_path / "summary", _png(tmp_path))
+        rows = _lane_rows(panels[0], "airway")
+        drawn = {token["key"]: token["derived_from"] for token in rows["proposed"]}
+        assert drawn[orphan] == []
+        assert "no-such-entity" not in {token["key"] for token in rows["initial"]}
+
+    def test_a_proposal_whose_initial_span_was_withdrawn_still_draws(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An invalidated span is not evidence, so it is not drawn as what came in."""
+        panels = _capture_panels(monkeypatch)
+        _seed_report_store(store, tmp_path, full=True)
+        parent = next(
+            span.id
+            for span in store.entities("span")
+            if span.extent == (1.0, 1.3) and "peak_over_floor_db" in span.attributes
+        )
+        store.was_invalidated_by(parent, store.activities("PREPROCESS")[0].id)
+        report(store, tmp_path / "summary", _png(tmp_path))
+        airway = _lane_panel(panels[0], "airway")
+        assert airway["type"] == "segments"
+        assert [segment["label"] for segment in airway["segments"]] == ["cough"]
+
+    def test_a_link_to_an_initial_span_on_another_page_draws_nothing(self, store: ProvStore, tmp_path: Path) -> None:
+        """The PDF pages the timeline, so a pair can straddle a boundary and land on two pages."""
+        from senselab.audio.data_structures import Audio
+        from senselab.audio.tasks.plotting.plotting import TOKEN_DERIVATION_LINK_COLOR, plot_aligned_panels
+
+        del store, tmp_path
+        audio = Audio(waveform=torch.zeros(1, _RATE * 4), sampling_rate=_RATE)
+        panel = {
+            "type": "tokens",
+            "name": "airway",
+            "show_row_labels": True,
+            "tokens": [
+                {"text": "cough", "start": 3.2, "end": 3.6, "row": "proposed", "key": "c", "derived_from": ["p"]},
+                {"text": "12 dB", "start": 0.2, "end": 0.6, "row": "initial", "key": "p"},
+            ],
+        }
+        split = plot_aligned_panels(audio, [panel], time_limits=(2.0, 4.0))
+        lane = next(axis for axis in split.axes if axis.get_ylabel() == "airway")
+        assert [line for line in lane.lines if line.get_color() == TOKEN_DERIVATION_LINK_COLOR] == []
+        whole = plot_aligned_panels(audio, [panel])
+        lane = next(axis for axis in whole.axes if axis.get_ylabel() == "airway")
+        assert len([line for line in lane.lines if line.get_color() == TOKEN_DERIVATION_LINK_COLOR]) == 1
+
+    def test_the_lane_draws_one_link_per_edge_it_paired(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The relationship is drawn, not left to the reader to infer from two coincident extents."""
+        from senselab.audio.tasks.plotting.plotting import TOKEN_DERIVATION_LINK_COLOR
+
+        figures = _capture_figures(monkeypatch)
+        _seed_report_store(store, tmp_path, full=True)
+        report(store, tmp_path / "summary", _png(tmp_path))
+        lane = next(axis for axis in figures[0].axes if axis.get_ylabel() == "airway")
+        links = [line for line in lane.lines if line.get_color() == TOKEN_DERIVATION_LINK_COLOR]
+        assert len(links) == 1
+        (x0, x1), (y0, y1) = links[0].get_xdata(), links[0].get_ydata()
+        assert (x0, x1) == (pytest.approx(1.15), pytest.approx(1.15))
+        assert y0 < y1
+
+
+class TestALaneOfSeveralSpanKindsDrawsARowPerKind:
+    """SPEECH mints a task extent, the phrase runs inside it and the structure spans over both.
+
+    Drawn on one row they were overlapping bars carrying the same caption, since the caption is the
+    speaker and the speaker is the same. The role is what separates them and it was being dropped.
+    """
+
+    def _speech_spans(
+        self, store: ProvStore, proposals: Sequence[tuple[str, tuple[float, float], dict[str, Any]]]
+    ) -> None:
+        """Mint SPEECH proposals through the only writer of one, each derived from a live span."""
+        from senselab.audio.workflows.triage.nodes.branches import PROPOSERS, propose_spans
+
+        parent = next(entity.id for entity in store.entities("span") if "peak_over_floor_db" in entity.attributes)
+        activity = store.activities("SPEECH")[0].id
+        agent = software_agent(store)
+        mint = PROPOSERS["SPEECH"]
+        propose_spans(
+            store,
+            activity,
+            agent,
+            [mint(role, extent, parent, **attributes) for role, extent, attributes in proposals],
+        )
+
+    @pytest.fixture
+    def many_roles(self, store: ProvStore, tmp_path: Path) -> ProvStore:
+        """Three SPEECH roles over one another, all attributed to the same speaker."""
+        _seed_report_store(store, tmp_path, full=True)
+        self._speech_spans(
+            store,
+            [
+                ("task_extent", (1.0, 2.6), {"attributed_to": "SPEAKER_00"}),
+                ("phrase_run_0", (1.1, 1.7), {"attributed_to": "SPEAKER_00", "run_index": 0}),
+                ("phrase_run_1", (1.9, 2.5), {"attributed_to": "SPEAKER_00", "run_index": 1}),
+                ("structure_0", (1.1, 2.5), {"attributed_to": "SPEAKER_00", "structure_index": 0}),
+            ],
+        )
+        return store
+
+    def test_the_roles_land_on_rows_of_their_own(
+        self, many_roles: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The defect: four spans over one another, all captioned SPEAKER_00, all on one row."""
+        panels = _capture_panels(monkeypatch)
+        report(many_roles, tmp_path / "summary", _png(tmp_path))
+        rows = _lane_rows(panels[0], "speech spans")
+        assert {"task_extent", "phrase_run", "structure"} <= set(rows)
+        assert "proposed" not in rows
+
+    def test_the_two_phrase_runs_share_the_one_row_their_kind_has(
+        self, many_roles: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A row per span, rather than a row per kind of span, would be no more readable."""
+        panels = _capture_panels(monkeypatch)
+        report(many_roles, tmp_path / "summary", _png(tmp_path))
+        rows = _lane_rows(panels[0], "speech spans")
+        assert len(rows["phrase_run"]) == 2
+
+    def test_no_two_tokens_of_one_row_cover_the_same_time(
+        self, many_roles: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Stated as the invariant: a row may hold many bars, never two over one another."""
+        panels = _capture_panels(monkeypatch)
+        report(many_roles, tmp_path / "summary", _png(tmp_path))
+        rows = _lane_rows(panels[0], "speech spans")
+        for name, tokens in rows.items():
+            if name == "initial":
+                continue
+            overlapping = [
+                (first["text"], second["text"])
+                for index, first in enumerate(tokens)
+                for second in tokens[index + 1 :]
+                if first["start"] < second["end"] and second["start"] < first["end"]
+            ]
+            assert overlapping == [], name
+
+    def test_a_lane_of_one_kind_keeps_the_single_proposed_row(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """AIRWAY mints one kind here, so its lane must be untouched by the split."""
+        panels = _capture_panels(monkeypatch)
+        _seed_report_store(store, tmp_path, full=True)
+        report(store, tmp_path / "summary", _png(tmp_path))
+        assert list(_lane_rows(panels[0], "airway")) == ["proposed", "initial"]
+
+    def test_the_json_carries_the_row_each_proposal_is_drawn_on(self, many_roles: ProvStore, tmp_path: Path) -> None:
+        """The lane records are what the page draws, checkable without pixels — the sub-row included.
+
+        The seeder's own speech span is hand-built and carries no role, which is why ``unroled`` is
+        here: a span with no role takes a row saying so rather than joining another kind's.
+        """
+        payload = json.loads(report(many_roles, tmp_path / "summary", _png(tmp_path))["json"].read_text())
+        [speech] = [lane for lane in payload["evidence"]["lanes"] if lane["lane"] == "SPEECH"]
+        proposed = [span for span in speech["spans"] if span["row"] == "proposed"]
+        assert {span["role"] for span in proposed} == {"task_extent", "phrase_run", "structure", "unroled"}
+        assert all(span["role"] == "" for span in speech["spans"] if span["row"] == "initial")
+
+    def test_the_initial_row_still_holds_every_parent_once(
+        self, many_roles: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Splitting the proposals may not split the row that says what they were made from."""
+        panels = _capture_panels(monkeypatch)
+        report(many_roles, tmp_path / "summary", _png(tmp_path))
+        rows = _lane_rows(panels[0], "speech spans")
+        assert len(rows["initial"]) == 1
+        assert rows["initial"][0]["text"].startswith("envelope ")
+
+    def test_a_split_lane_with_no_derivation_separates_its_rows_by_label(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The segments fallback keys rows on the label, so the kind has to reach the label."""
+        panels = _capture_panels(monkeypatch)
+        _seed_report_store(store, tmp_path, full=True)
+        self._speech_spans(
+            store,
+            [
+                ("task_extent", (1.0, 2.6), {"attributed_to": "SPEAKER_00"}),
+                ("phrase_run_0", (1.1, 1.7), {"attributed_to": "SPEAKER_00", "run_index": 0}),
+            ],
+        )
+        parent = next(entity for entity in store.entities("span") if "peak_over_floor_db" in entity.attributes)
+        store.was_invalidated_by(parent.id, store.activities("PREPROCESS")[0].id)
+        report(store, tmp_path / "summary", _png(tmp_path))
+        lane = _lane_panel(panels[0], "speech spans")
+        assert lane["type"] == "segments"
+        assert len({segment["label"] for segment in lane["segments"]}) == len(lane["segments"])
+        assert all(" · " in segment["label"] for segment in lane["segments"])
+
+
+class TestElementIdsNameLiveEvidenceOnly:
+    """A join key to a withdrawn element credits a claim to evidence that no longer stands."""
+
+    def test_an_invalidated_entity_is_not_cited(self, store: ProvStore, tmp_path: Path) -> None:
+        """The store's shared read rule applies to the report's citations too."""
+        _seed_report_store(store, tmp_path, full=True)
+        withdrawn = [entity for entity in store.entities("span") if entity.attributes.get("family") == "speech"][0]
+        store.was_invalidated_by(withdrawn.id, store.activities("SPEECH")[0].id)
+        payload = json.loads(report(store, tmp_path / "summary", _png(tmp_path))["json"].read_text())
+        cited = [element for entry in payload["steps"].values() for element in entry["element_ids"]]
+        assert withdrawn.id not in cited
+
+
+class TestAnUnscannedTranscriptIsNotACleanOne:
+    """The marking is what redacts, so no marking is only reassuring if something looked."""
+
+    def test_a_transcript_nobody_scanned_keeps_consensus_and_marks_the_redacted_view(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A missing PII scan changes only the redacted representation, never consensus ASR evidence."""
+        panels = _capture_panels(monkeypatch)
+        _seed_report_store(store, tmp_path, full=True, words=["hello", "world"], scan="absent")
+        artifacts = report(store, tmp_path / "summary", _png(tmp_path))
+        payload = json.loads(artifacts["json"].read_text())
+        assert payload["transcript"]["text"] == "hello world"
+        assert {token["text"] for token in payload["evidence"]["redacted_transcript_tokens"]} == {"[unscanned]"}
+        blocks = "\n".join(panels[0][-1]["lines"])
+        assert "CONSENSUS TRANSCRIPT" in blocks
+        assert "no pii scan is in the store" in blocks
+
+    def test_an_incomplete_scan_marks_the_redacted_view_and_names_the_detector(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A scan that lost a detector leaves consensus intact and marks the redacted form as unscanned."""
+        panels = _capture_panels(monkeypatch)
+        _seed_report_store(store, tmp_path, full=True, words=["hello"], scan="incomplete")
+        payload = json.loads(report(store, tmp_path / "summary", _png(tmp_path))["json"].read_text())
+        assert payload["transcript"]["text"] == "hello"
+        assert payload["transcript"]["redacted_text"] == "[unscanned]"
+        blocks = "\n".join(panels[0][-1]["lines"])
+        assert "detectors failed: presidio" in blocks
+
+    def test_a_complete_scan_renders_the_words_it_cleared(self, store: ProvStore, tmp_path: Path) -> None:
+        """Withholding everything unconditionally would make the marking pointless."""
+        _seed_report_store(store, tmp_path, full=True, words=["hello"], marked_words=[("alice", "PERSON")])
+        text = report(store, tmp_path / "summary", _png(tmp_path))["json"].read_text()
+        assert "hello" in text
+        assert "[PERSON]" in text
+        assert "alice" in text
+        assert "[unscanned]" not in text
+
+
+class TestTheTitleIsShort:
+    """The title carries the decision at a glance; the run id is provenance and belongs in the block."""
+
+    _RUN_ID = "sub-1f4ea26f_ses-D987B8B0_task-Respiration-and-cough-(v2)-Breath_20260825-123640"
+
+    def test_it_names_the_task_token_the_date_and_the_decision(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The four things a reader needs before anything else, and nothing else."""
+        titles = _capture_titles(monkeypatch)
+        store = ProvStore(run_id=self._RUN_ID)
+        _seed_report_store(store, tmp_path, full=True)
+        report(store, tmp_path / "summary", _png(tmp_path))
+        assert titles[0].startswith("task-Respiration-and-cough-(v2)-Breath · 2026-08-25")
+        assert "triage:" in titles[0] and "release:" in titles[0]
+
+    def test_the_full_run_id_is_not_in_the_title(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """An unwrapped 70-character id across the top of the page is the objection this answers."""
+        titles = _capture_titles(monkeypatch)
+        store = ProvStore(run_id=self._RUN_ID)
+        _seed_report_store(store, tmp_path, full=True)
+        report(store, tmp_path / "summary", _png(tmp_path))
+        assert self._RUN_ID not in titles[0]
+
+    def test_the_full_run_id_and_the_path_are_in_the_block(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Dropping the id from the title must not drop it from the page."""
+        panels = _capture_panels(monkeypatch)
+        store = ProvStore(run_id=self._RUN_ID)
+        _seed_report_store(store, tmp_path, full=True)
+        report(store, tmp_path / "summary", _png(tmp_path))
+        blocks = "\n".join(panels[0][-1]["lines"])
+        assert self._RUN_ID in blocks
+        assert "file: streams/plain.wav" in blocks
+
+    def test_a_run_id_with_no_task_token_still_titles(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Not every corpus is BIDS-named; the title falls back to the stem rather than to nothing."""
+        titles = _capture_titles(monkeypatch)
+        store = ProvStore(run_id="recording-42_20260825-123640")
+        _seed_report_store(store, tmp_path, full=True)
+        report(store, tmp_path / "summary", _png(tmp_path))
+        assert titles[0].startswith("recording-42 · 2026-08-25")
+
+    def test_a_long_line_is_wrapped_rather_than_run_off_the_page(self, tmp_path: Path) -> None:
+        """A path wider than the block is text nobody can read; every block line is wrapped."""
+        from senselab.audio.workflows.triage.nodes.report import _BLOCK_COLUMNS, _wrapped
+
+        wrapped = _wrapped(["  file: " + "x" * 400])
+        assert len(wrapped) > 1
+        assert max(len(line) for line in wrapped) <= _BLOCK_COLUMNS
+
+    def test_wrapping_keeps_the_blank_lines_that_separate_the_blocks(self) -> None:
+        """An empty string wraps to nothing, and the blocks would run together if the pass let it."""
+        from senselab.audio.workflows.triage.nodes.report import _wrapped
+
+        assert _wrapped(["BRANCHES", "", "TAXONOMY"]) == ["BRANCHES", "", "TAXONOMY"]
+
+
+def _pdf_pages(path: Path) -> int:
+    """How many pages a rendered PDF carries, counted from its own page objects."""
+    return len(re.findall(rb"/Type\s*/Page[^s]", path.read_bytes()))
+
+
+def _pdf_letter_landscape_pages(path: Path) -> int:
+    """How many PDF pages declare the US Letter landscape media box, in points."""
+    return len(re.findall(rb"/MediaBox\s*\[\s*0\s+0\s+792\s+612\s*\]", path.read_bytes()))
+
+
+class TestThePdfPagination:
+    """The PDF keeps evidence legible, then gives its decision prose a dedicated Letter page."""
+
+    def test_the_packaged_format_is_the_pdf(self, config: TriageConfig) -> None:
+        """The form the packaged config ships is the paginated document, not the tall image."""
+        assert config.require("report.format") == "pdf"
+
+    def test_a_full_run_leads_with_the_decision_then_the_evidence(self, store: ProvStore, tmp_path: Path) -> None:
+        """The decision record first, then the figure's cover, then one page per page_seconds."""
+        _seed_report_store(store, tmp_path, full=True)
+        pdf_config = load_triage_config(_write(tmp_path, "report:\n  format: pdf\n"))
+        artifacts = report(store, tmp_path / "summary", pdf_config)
+        assert artifacts["summary"].suffix == ".pdf"
+        # one decision page for this record, the figure's cover, one 20 s page for 6 s of audio
+        assert _pdf_pages(artifacts["summary"]) == 3
+        assert _pdf_letter_landscape_pages(artifacts["summary"]) == 3
+
+    def test_a_refusal_renders_the_decision_and_says_there_is_no_axis(self, store: ProvStore, tmp_path: Path) -> None:
+        """A file with no readable stream has no axis to draw, and still owes the decision record."""
+        _seed_report_store(store, tmp_path, admit_failed=True)
+        pdf_config = load_triage_config(_write(tmp_path, "report:\n  format: pdf\n"))
+        artifacts = report(store, tmp_path / "summary", pdf_config)
+        assert _pdf_pages(artifacts["summary"]) == 2
+        assert _pdf_letter_landscape_pages(artifacts["summary"]) == 2
+
+    def test_a_long_recording_gets_one_evidence_page_per_page_width(self, store: ProvStore, tmp_path: Path) -> None:
+        """Long timelines are paginated rather than compressed into unreadable labels."""
+        _seed_report_store(store, tmp_path, full=True, duration_s=70.0)
+        pdf_config = load_triage_config(_write(tmp_path, "report:\n  format: pdf\n"))
+        artifacts = report(store, tmp_path / "summary", pdf_config)
+        # one decision page, the cover, then four 20 s pages covering 70 s
+        assert _pdf_pages(artifacts["summary"]) == 1 + 1 + 4
+
+    def test_the_evidence_pages_are_the_figure_s_own(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """One page builder behind both products, so the summary cannot drift from the figure."""
+        from senselab.audio.workflows.triage.nodes import report as report_module
+
+        names: list[str] = []
+        real = report_module.summary_pages
+
+        def _spy(*args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
+            for name, figure in real(*args, **kwargs):
+                names.append(name)
+                yield name, figure
+
+        monkeypatch.setattr(report_module, "summary_pages", _spy)
+        _seed_report_store(store, tmp_path, full=True, duration_s=25.0)
+        pdf_config = load_triage_config(_write(tmp_path, "report:\n  format: pdf\n"))
+        report(store, tmp_path / "summary", pdf_config)
+        assert names == ["cover", "page01", "page02"]
+
+    def test_the_decision_page_carries_every_block(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The decision page contains the reader-facing findings while JSON retains the full audit."""
+        from senselab.audio.workflows.triage.nodes import report as report_module
+
+        drawn: list[list[str]] = []
+        real = report_module._text_figure
+
+        def _spy(lines: list[str], title: str, **kwargs: Any) -> Any:  # noqa: ANN401
+            drawn.append(list(lines))
+            return real(lines, title, **kwargs)
+
+        monkeypatch.setattr(report_module, "_text_figure", _spy)
+        _seed_report_store(store, tmp_path, full=True, words=["hello", "world"])
+        pdf_config = load_triage_config(_write(tmp_path, "report:\n  format: pdf\n"))
+        report(store, tmp_path / "summary", pdf_config)
+        blocks = "\n".join(drawn[0])
+        assert "DECISION SUMMARY" in blocks and "SCREENING AND ROUTING" in blocks and "**hello** **world**" in blocks
+        assert "ROUTING GATES" in blocks and "fired:" in blocks
+        assert "ANALYTIC RECORD" in blocks and "summary.json" in blocks
+
+    def test_the_png_stays_one_image_with_the_blocks_on_it(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The image form is unchanged: one uncut canvas, blocks included."""
+        panels = _capture_panels(monkeypatch)
+        _seed_report_store(store, tmp_path, full=True)
+        artifacts = report(store, tmp_path / "summary", _png(tmp_path))
+        assert artifacts["summary"].suffix == ".png"
+        assert panels[0][-1]["type"] == "text"
+
+    def test_an_incomplete_scan_is_flagged_on_the_pdf_decision_page_too(self, store: ProvStore, tmp_path: Path) -> None:
+        """The PDF decision page is the standalone reviewed document; the caveat must live there."""
+        _seed_report_store(store, tmp_path, full=True, words=["hello"], scan="incomplete")
+        payload = json.loads(report(store, tmp_path / "png", _png(tmp_path))["json"].read_text())
+        blocks = "\n".join(_decision_blocks(payload))
+        assert "PII scan incomplete" in blocks
+
+    def test_a_non_positive_duration_gets_a_report_only_page_not_a_silent_empty_one(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A zero-length stream has no window to page; the PDF must say so, not say nothing."""
+        from senselab.audio.workflows.triage.nodes import report as report_module
+
+        drawn: list[list[str]] = []
+        real = report_module._text_figure
+
+        def _spy(lines: list[str], title: str, **kwargs: Any) -> Any:  # noqa: ANN401
+            drawn.append(list(lines))
+            return real(lines, title, **kwargs)
+
+        _seed_report_store(store, tmp_path, full=True)
+        empty_audio = Audio(waveform=np.zeros((1, 0), dtype=np.float32), sampling_rate=_RATE)
+        monkeypatch.setattr(report_module, "_stream", lambda *_args: empty_audio)
+        monkeypatch.setattr(report_module, "_text_figure", _spy)
+        pdf_config = load_triage_config(_write(tmp_path, "report:\n  format: pdf\n"))
+
+        artifacts = report(store, tmp_path / "summary", pdf_config)
+
+        assert _pdf_pages(artifacts["summary"]) == 2
+        assert any("REPORT-ONLY" in line for page in drawn for line in page)
+
+    def test_every_page_is_saved_and_closed_before_the_next_is_built(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Building every page before saving any would hold one live Figure per page at peak."""
+        from matplotlib import pyplot
+
+        from senselab.audio.workflows.triage.nodes import report as report_module
+
+        pyplot.close("all")
+        open_before_this_page: list[int] = []
+        real = report_module.summary_pages
+
+        def _spy(*args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
+            for name, figure in real(*args, **kwargs):
+                yield name, figure
+                # Counted after the caller has had the page: anything still live here was never
+                # closed, which is exactly what eager, all-at-once materialization does.
+                open_before_this_page.append(len(pyplot.get_fignums()))
+
+        monkeypatch.setattr(report_module, "summary_pages", _spy)
+        _seed_report_store(store, tmp_path, full=True, duration_s=70.0)
+        pdf_config = load_triage_config(_write(tmp_path, "report:\n  format: pdf\n"))
+
+        report(store, tmp_path / "summary", pdf_config)
+
+        assert len(open_before_this_page) > 1  # multiple evidence pages were actually built
+        assert open_before_this_page == [0] * len(open_before_this_page)
+
+
+class TestPanelPagination:
+    """Panels are bucketed onto pages once, so a PDF page never rescans the whole recording."""
+
+    def test_an_item_lands_only_on_the_page_it_overlaps(self) -> None:
+        """An item wholly inside one page must not be handed to every other page's render call."""
+        panels = [{"type": "segments", "segments": [{"start": 3.0, "end": 4.0, "label": "x"}]}]
+        pages = _paginate_panels(panels, [(0.0, 10.0), (10.0, 20.0)])
+        assert pages[0][0]["segments"] == panels[0]["segments"]
+        assert pages[1][0]["segments"] == []
+
+    def test_an_item_straddling_a_page_boundary_lands_on_both(self) -> None:
+        """A conservative superset is safe; plot_aligned_panels still clips to the page it draws."""
+        panels = [{"type": "tokens", "tokens": [{"start": 9.5, "end": 10.5, "text": "x"}]}]
+        pages = _paginate_panels(panels, [(0.0, 10.0), (10.0, 20.0)])
+        assert len(pages[0][0]["tokens"]) == 1
+        assert len(pages[1][0]["tokens"]) == 1
+
+    def test_a_score_raster_windows_list_is_bucketed_the_same_way(self) -> None:
+        """The nested rows x windows loop is the expensive one; its windows must be filtered too."""
+        panels = [
+            {
+                "type": "score_raster",
+                "rows": ["Cough"],
+                "windows": [{"start": 0.0, "end": 2.0, "scores": {"Cough": 0.5}}],
+            }
+        ]
+        pages = _paginate_panels(panels, [(0.0, 10.0), (10.0, 20.0)])
+        assert pages[0][0]["windows"] and not pages[1][0]["windows"]
+        assert pages[0][0]["rows"] == ["Cough"]  # every other field is preserved unchanged
+
+    def test_an_untimed_panel_type_is_copied_onto_every_page(self) -> None:
+        """A waveform or spectrogram panel has no item list to bucket; every page still gets it."""
+        panels = [{"type": "waveform"}]
+        pages = _paginate_panels(panels, [(0.0, 10.0), (10.0, 20.0)])
+        assert pages[0] == [{"type": "waveform"}]
+        assert pages[1] == [{"type": "waveform"}]
+
+
+class TestTheWaveformAndTheEnvelopeShareOneRow:
+    """Two scales over one signal, not two rows a reader has to register by eye."""
+
+    def test_the_envelope_has_no_row_of_its_own(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The separate features row is gone; nothing else moved."""
+        panels = _capture_panels(monkeypatch)
+        _seed_report_store(store, tmp_path, full=True)
+        report(store, tmp_path / "summary", _png(tmp_path))
+        assert "features" not in [panel["type"] for panel in panels[0]]
+        assert [panel for panel in panels[0] if panel.get("name") == "envelope"] == []
+
+    def test_the_waveform_row_carries_the_envelope_and_its_floor(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Both curves reach the twin axis, and the axis says what its scale is."""
+        panels = _capture_panels(monkeypatch)
+        _seed_report_store(store, tmp_path, full=True)
+        report(store, tmp_path / "summary", _png(tmp_path))
+        twin = panels[0][0]["twin"]
+        assert panels[0][0]["type"] == "waveform"
+        assert [curve[2] for curve in twin["data"]] == ["envelope dBFS", "floor dBFS"]
+        assert "dBFS" in twin["name"]
+
+    def test_a_store_with_no_envelope_leaves_the_waveform_bare(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An absent derivative is an absent curve, not a twin axis with nothing on it."""
+        panels = _capture_panels(monkeypatch)
+        _seed_report_store(store, tmp_path)
+        report(store, tmp_path / "summary", _png(tmp_path))
+        assert panels[0][0]["type"] == "waveform"
+        assert "twin" not in panels[0][0]
+
+    def test_the_envelope_lane_still_reads_as_drawn(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Sharing a row is not being absent; the ABSENT block must not claim it was skipped."""
+        panels = _capture_panels(monkeypatch)
+        _seed_report_store(store, tmp_path, full=True)
+        report(store, tmp_path / "summary", _png(tmp_path))
+        blocks = "\n".join(panels[0][-1]["lines"])
+        assert "lane not drawn — envelope" not in blocks
+
+
+class TestTheSpansAreAnOverlayNotALane:
+    """A span is a stretch of the waveform; it belongs over the waveform, not in a row beneath it."""
+
+    def test_the_spans_row_is_gone(self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """One row fewer, and the one it merged into is the one it was measured from."""
+        panels = _capture_panels(monkeypatch)
+        _seed_report_store(store, tmp_path, full=True)
+        report(store, tmp_path / "summary", _png(tmp_path))
+        assert [panel for panel in panels[0] if panel.get("name") == "spans (dB over floor)"] == []
+
+    def test_the_waveform_row_carries_the_spans_and_their_decibels(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The dB over floor is the number the span exists to report; it must survive the move."""
+        panels = _capture_panels(monkeypatch)
+        _seed_report_store(store, tmp_path, full=True)
+        report(store, tmp_path / "summary", _png(tmp_path))
+        overlay = panels[0][0]["spans"]
+        assert overlay["name"] == "spans (dB over floor)"
+        assert overlay["segments"]
+        assert all(segment["label"].endswith(" dB") for segment in overlay["segments"])
+
+    def test_the_drawn_figure_keeps_the_right_hand_scale_compact(self, store: ProvStore, tmp_path: Path) -> None:
+        """Span labels stay on their spans; the shared scale needs only its unit."""
+        from senselab.audio.workflows.triage.nodes import report as report_module
+
+        drawn: list[Any] = []
+        real = report_module.plot_aligned_panels
+
+        def _spy(audio: Any, panels: list[dict[str, Any]], **kwargs: Any) -> Any:  # noqa: ANN401
+            figure = real(audio, panels, **kwargs)
+            drawn.append(figure)
+            return figure
+
+        with pytest.MonkeyPatch.context() as patched:
+            patched.setattr(report_module, "plot_aligned_panels", _spy)
+            _seed_report_store(store, tmp_path, full=True)
+            report(store, tmp_path / "summary", _png(tmp_path))
+        labels = [axis.get_ylabel() for axis in drawn[0].axes]
+        assert "dBFS" in labels
+
+    def test_the_spans_lane_still_reads_as_drawn(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Becoming an overlay is not becoming absent."""
+        panels = _capture_panels(monkeypatch)
+        _seed_report_store(store, tmp_path, full=True, marked_words=[("alice", "PERSON")])
+        report(store, tmp_path / "summary", _png(tmp_path))
+        blocks = "\n".join(panels[0][-1]["lines"])
+        assert "lane not drawn — spans (dB over floor)" not in blocks
+        assert "every declared lane was drawn" in blocks
+
+
+class TestTheEnvelopePanelsScaleIsTheSignals:
+    """The dB panel's y-scale must come from measured values, never from a clamp's own value."""
+
+    @staticmethod
+    def _undershooting_envelope(tmp_path: Path) -> np.ndarray:
+        """PREPROCESS's own envelope over a burst with a sharp offset, written to the run's sidecar.
+
+        The zero-phase lowpass undershoots at the offset, which is where a clamped floor used to be
+        fabricated. This is the real producer feeding the real panel.
+        """
+        from senselab.audio.data_structures import Audio
+        from senselab.audio.tasks.envelope import ButterworthSmoothing, global_floor_dbfs, hilbert_envelope_dbfs
+
+        grid = np.arange(int(_DURATION_S * _RATE)) / _RATE
+        samples = np.zeros_like(grid)
+        voiced = (grid >= 1.0) & (grid < 3.0)
+        samples[voiced] = 0.6 * np.sin(2 * np.pi * 220.0 * grid[voiced])
+        audio = Audio(waveform=samples.astype(np.float32)[None, :], sampling_rate=_RATE)
+        envelope = hilbert_envelope_dbfs(audio, smoothing=ButterworthSmoothing(cutoff_hz=40.0, order=4))
+        floor = global_floor_dbfs(envelope, percentile=10.0)
+        np.savez(
+            tmp_path / "derivatives" / "energy_envelope.npz",
+            envelope_dbfs=envelope,
+            floor_dbfs=np.full_like(envelope, floor),
+        )
+        return envelope
+
+    def test_the_twin_axis_stays_inside_the_measured_range(self, store: ProvStore, tmp_path: Path) -> None:
+        """15 fabricated -240 dBFS spikes stretched the axis to -250 and squashed -50..-90 flat."""
+        from senselab.audio.workflows.triage.nodes import report as report_module
+
+        drawn: list[Any] = []
+        real = report_module.plot_aligned_panels
+
+        def _spy(audio: Any, panels: list[dict[str, Any]], **kwargs: Any) -> Any:  # noqa: ANN401
+            figure = real(audio, panels, **kwargs)
+            drawn.append(figure)
+            return figure
+
+        with pytest.MonkeyPatch.context() as patched:
+            patched.setattr(report_module, "plot_aligned_panels", _spy)
+            _seed_report_store(store, tmp_path, full=True)
+            envelope = self._undershooting_envelope(tmp_path)
+            report(store, tmp_path / "summary", _png(tmp_path))
+        twin = [axis for axis in drawn[0].axes if "dBFS" in axis.get_ylabel()]
+        assert twin, "the envelope's twin axis must be on the figure"
+        low, high = twin[0].get_ylim()
+        assert high < 20.0, "a 0.6-amplitude tone reads near -4 dBFS"
+        assert low > -120.0, f"the axis floor {low:.0f} dBFS is below anything this signal can measure"
+        assert high - low < 150.0, "the informative band must not be squashed into a corner"
+        assert envelope.size == int(_DURATION_S * _RATE)
+
+    def test_no_curve_carries_the_clamps_value(self, store: ProvStore, tmp_path: Path) -> None:
+        """Whatever the axis does, -240 dBFS must not reach the panel as a datum."""
+        panels: list[list[dict[str, Any]]] = []
+        with pytest.MonkeyPatch.context() as patched:
+            captured = _capture_panels(patched)
+            _seed_report_store(store, tmp_path, full=True)
+            self._undershooting_envelope(tmp_path)
+            report(store, tmp_path / "summary", _png(tmp_path))
+            panels = captured
+        values = np.concatenate([np.asarray(curve[1], dtype=float) for curve in panels[0][0]["twin"]["data"]])
+        assert not np.any(values <= -240.0)
+
+
+class TestTheWordsLaneFollowsTheConsensusStyle:
+    """A word's text belongs on its own bar, as the analyze_audio consensus row draws it."""
+
+    @staticmethod
+    def _render(store: ProvStore, tmp_path: Path, **seed: Any) -> Any:  # noqa: ANN401
+        """Seed the store, draw the real figure, and hand back the figure and the panels."""
+        from senselab.audio.workflows.triage.nodes import report as report_module
+
+        drawn: list[Any] = []
+        captured: list[list[dict[str, Any]]] = []
+        real = report_module.plot_aligned_panels
+
+        def _spy(audio: Any, panels: list[dict[str, Any]], **kwargs: Any) -> Any:  # noqa: ANN401
+            captured.append([dict(panel) for panel in panels])
+            figure = real(audio, panels, **kwargs)
+            drawn.append(figure)
+            return figure
+
+        with pytest.MonkeyPatch.context() as patched:
+            patched.setattr(report_module, "plot_aligned_panels", _spy)
+            _seed_report_store(store, tmp_path, full=True, **seed)
+            report(store, tmp_path / "summary", _png(tmp_path))
+        return drawn[0], captured[0]
+
+    @staticmethod
+    def _words_axis(figure: Any, panels: list[dict[str, Any]]) -> Any:  # noqa: ANN401
+        """The axis the words lane was drawn on, found by the lane's position in the stack."""
+        index = [position for position, panel in enumerate(panels) if panel.get("report_lane") == "words"]
+        assert index, "the words lane must be on the page"
+        return figure.axes[index[0]]
+
+    def test_the_words_lane_is_a_token_lane(self, store: ProvStore, tmp_path: Path) -> None:
+        """A generic segments lane turns each word's text into a y-tick label."""
+        _, panels = self._render(store, tmp_path, words=["hello", "world"])
+        lane = [panel for panel in panels if panel.get("report_lane") == "words"]
+        assert [panel["type"] for panel in lane] == ["tokens"]
+        assert lane[0]["name"] == "consensus ASR"
+        assert [token["text"] for token in lane[0]["tokens"]] == ["hello", "world"]
+        assert all(token["color"].startswith("#") for token in lane[0]["tokens"])
+
+    def test_every_word_is_drawn_on_the_bar_and_in_a_small_cycling_lane(self, store: ProvStore, tmp_path: Path) -> None:
+        """The reader sees timed artists; compact lane ids never become token labels."""
+        figure, panels = self._render(store, tmp_path, words=["hello", "world"])
+        axis = self._words_axis(figure, panels)
+        assert [text.get_text() for text in axis.texts] == ["hello", "world"]
+        assert [tick.get_text() for tick in axis.get_yticklabels()] == []
+
+    def test_short_timed_consensus_words_remain_visible(self, store: ProvStore, tmp_path: Path) -> None:
+        """The timing bar stays short, but its cycling row gives every normal word readable label space."""
+        figure, panels = self._render(
+            store,
+            tmp_path,
+            words=["one", "two", "three", "four"],
+            marked_words=[("five", "PERSON")],
+        )
+        axis = self._words_axis(figure, panels)
+        figure.canvas.draw()
+        assert {text.get_text() for text in axis.texts if text.get_visible()} == {
+            "one",
+            "two",
+            "three",
+            "four",
+            "five",
+        }
+
+    def test_forty_words_do_not_become_forty_ticks(self, store: ProvStore, tmp_path: Path) -> None:
+        """The rendered failure: 40+ overlapping tick labels beside unlabelled coloured dashes."""
+        figure, panels = self._render(store, tmp_path, words=[f"word{index}" for index in range(40)])
+        axis = self._words_axis(figure, panels)
+        assert 0 < len(axis.patches) < 40, "off-page words are not artists on this timeline"
+        assert [tick.get_text() for tick in axis.get_yticklabels()] == []
+
+    def test_a_marked_word_stays_in_consensus_and_is_replaced_in_the_redacted_lane(
+        self, store: ProvStore, tmp_path: Path
+    ) -> None:
+        """The two lanes make clear that a replacement is not an ASR token."""
+        figure, panels = self._render(store, tmp_path, words=["hello"], marked_words=[("alice", "PERSON")])
+        drawn = [text.get_text() for text in self._words_axis(figure, panels).texts]
+        redacted_index = next(index for index, panel in enumerate(panels) if panel.get("report_lane") == "redacted")
+        redacted = [text.get_text() for text in figure.axes[redacted_index].texts]
+        assert "alice" in drawn
+        assert "[PERSON]" in redacted
+
+    def test_an_unscanned_transcript_keeps_consensus_and_withholds_the_redacted_lane(
+        self, store: ProvStore, tmp_path: Path
+    ) -> None:
+        """The ASR evidence remains visible while the release representation declares its uncertainty."""
+        figure, panels = self._render(store, tmp_path, words=["hello", "world"], scan="absent")
+        drawn = [text.get_text() for text in self._words_axis(figure, panels).texts]
+        redacted_index = next(index for index, panel in enumerate(panels) if panel.get("report_lane") == "redacted")
+        redacted = [text.get_text() for text in figure.axes[redacted_index].texts]
+        assert drawn == ["hello", "world"]
+        assert redacted == ["[unscanned]", "[unscanned]"]
+
+    @staticmethod
+    def _placed(axis: Any) -> list[Any]:  # noqa: ANN401
+        """The labels the saved page actually drew, the fit having been decided against its renderer."""
+        return [text for text in axis.texts if text.get_visible()]
+
+    def test_a_marked_word_is_drawn_verbatim_only_in_the_consensus_lane(self, store: ProvStore, tmp_path: Path) -> None:
+        """The fit decides legibility, while the lane decides whether the text is raw or redacted."""
+        figure, panels = self._render(store, tmp_path, words=["hello"], marked_words=[("alice", "PERSON")])
+        drawn = {text.get_text() for text in self._placed(self._words_axis(figure, panels))}
+        assert drawn <= {"hello", "alice"}
+
+    def test_an_unscanned_page_keeps_the_consensus_words(self, store: ProvStore, tmp_path: Path) -> None:
+        """ASR evidence is not silently rewritten because the independent PII scan failed."""
+        figure, panels = self._render(store, tmp_path, words=["hello", "world"], scan="absent")
+        drawn = {text.get_text() for text in self._placed(self._words_axis(figure, panels))}
+        assert drawn <= {"hello", "world"}
+
+    def test_no_two_words_collide_on_the_rendered_page(self, store: ProvStore, tmp_path: Path) -> None:
+        """The defect as the reader met it: adjacent labels ran into one another's glyphs."""
+        prose = (
+            "grandfather remembered everything about wandering along riverbanks collecting interesting pebbles".split()
+        )
+        figure, panels = self._render(store, tmp_path, words=[prose[index % len(prose)] for index in range(40)])
+        axis = self._words_axis(figure, panels)
+        renderer = figure.canvas.get_renderer()
+        extents = [text.get_window_extent(renderer) for text in self._placed(axis)]
+        assert extents, "the page must still carry words"
+        collisions = [
+            (one, two) for index, one in enumerate(extents) for two in extents[index + 1 :] if one.overlaps(two)
+        ]
+        assert collisions == []
+
+    def test_words_cycle_through_three_inspectable_rows(self, store: ProvStore, tmp_path: Path) -> None:
+        """Row cycling makes dense consensus timing inspectable without a label pileup."""
+        prose = (
+            "grandfather remembered everything about wandering along riverbanks collecting interesting pebbles".split()
+        )
+        figure, panels = self._render(store, tmp_path, words=[prose[index % len(prose)] for index in range(40)])
+        axis = self._words_axis(figure, panels)
+        assert len({round(float(patch.get_y()), 6) for patch in axis.patches}) == 3
+        assert self._placed(axis)
+
+    def test_the_staggered_page_keeps_the_consensus_words(self, store: ProvStore, tmp_path: Path) -> None:
+        """More rows widen label slots but do not turn consensus evidence into placeholders."""
+        figure, panels = self._render(
+            store,
+            tmp_path,
+            words=[f"word{index}" for index in range(40)],
+            marked_words=[("alice", "PERSON"), ("bob", "PERSON")],
+        )
+        drawn = {text.get_text() for text in self._placed(self._words_axis(figure, panels))}
+        assert drawn <= {f"word{index}" for index in range(40)} | {"alice", "bob"}
+
+
+class TestASpeechSpanNobodyDiarizedSaysWhatItIs:
+    """A span that was never attributed is not a span whose attribution failed."""
+
+    def _decoded_task(self, store: ProvStore) -> None:
+        """Mint the SPEECH proposal DDK writes for a task extent read off the posteriorgram."""
+        from senselab.audio.workflows.triage.nodes.branches import PROPOSERS, propose_spans
+
+        parent = next(entity.id for entity in store.entities("span") if "peak_over_floor_db" in entity.attributes)
+        activity = store.activities("SPEECH")[0].id
+        mint = PROPOSERS["SPEECH"]
+        propose_spans(
+            store,
+            activity,
+            software_agent(store),
+            [mint("task_extent", (1.0, 2.6), parent, production="syllable_task_from_decode")],
+        )
+
+    @pytest.fixture
+    def with_train(self, store: ProvStore, tmp_path: Path) -> ProvStore:
+        """The seeded store plus one decoded ``task_extent``, which no diarizer ever looked at."""
+        _seed_report_store(store, tmp_path, full=True)
+        self._decoded_task(store)
+        return store
+
+    def test_the_lane_caption_names_the_span_rather_than_a_missing_speaker(
+        self, with_train: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``unattributed`` on a span never diarized reads as a diarizer that failed."""
+        panels = _capture_panels(monkeypatch)
+        report(with_train, tmp_path / "summary", _png(tmp_path))
+        captions = [token["text"] for tokens in _lane_rows(panels[0], "speech spans").values() for token in tokens]
+        train = [caption for caption in captions if "syllable_task_from_decode" in caption]
+        assert train, captions
+        assert not any("unattributed" in caption for caption in captions), captions
+
+    def test_the_branch_evidence_description_names_the_span_too(self, with_train: ProvStore, tmp_path: Path) -> None:
+        """The JSON a consumer audits carries the same reading the lane draws."""
+        payload = json.loads(report(with_train, tmp_path / "summary", _png(tmp_path))["json"].read_text())
+        descriptions = {item["description"] for item in payload["evidence"]["branches"]["SPEECH"]}
+        assert "speech span: task_extent/syllable_task_from_decode" in descriptions
+        assert not any("unattributed" in description for description in descriptions), descriptions
+
+    def test_a_diarized_span_still_captions_itself_with_its_speaker(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Narrowing what ``unattributed`` meant may not cost the attributed span its speaker."""
+        from senselab.audio.workflows.triage.nodes.branches import PROPOSERS, propose_spans
+
+        panels = _capture_panels(monkeypatch)
+        _seed_report_store(store, tmp_path, full=True)
+        parent = next(entity.id for entity in store.entities("span") if "peak_over_floor_db" in entity.attributes)
+        propose_spans(
+            store,
+            store.activities("SPEECH")[0].id,
+            software_agent(store),
+            [PROPOSERS["SPEECH"]("task_extent", (1.0, 2.6), parent, attributed_to="SPEAKER_00")],
+        )
+        payload = json.loads(report(store, tmp_path / "summary", _png(tmp_path))["json"].read_text())
+        descriptions = {item["description"] for item in payload["evidence"]["branches"]["SPEECH"]}
+        assert "speech span: task_extent/SPEAKER_00" in descriptions
+        captions = [token["text"] for tokens in _lane_rows(panels[0], "speech spans").values() for token in tokens]
+        assert any("SPEAKER_00" in caption for caption in captions), captions

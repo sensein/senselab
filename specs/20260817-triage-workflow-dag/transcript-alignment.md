@@ -1,0 +1,185 @@
+# Transcript alignment
+
+The reasoning behind `_align_pair` and the slot lattice in
+`src/senselab/audio/workflows/audio_analysis/harmonize.py`. The code states what the aligner is; this
+file holds why, and the measurements.
+
+`harmonize_transcripts` is the only caller of `_align_pair`. It has two callers outside its tests:
+`aligned_columns` (`audio_analysis/asr.py`), which feeds `fuse_word_streams` in the audio-analysis
+workflow, and `align_sources` (`triage/consensus.py`), which emits the triage `consensus_transcript`
+one word per column, in column order.
+
+## Why an alignment path, not a distance
+
+H3's purpose is *which* positions correspond. A distance says a model missed a word; an alignment
+says which one and leaves the rest lined up. A time-based comparison cannot do this: a model that
+inserts or drops one word shifts every timestamp after it, so one miss reads as a tail of
+substitutions.
+
+## Cost model: sclite weights, indel-preferring backtrace
+
+Match 0, substitution 4, insertion or deletion 3 (the weights sclite uses for word alignment).
+Backtrace preference at each cell, among candidates that reproduce the cell's cost: matching
+diagonal, deletion from the reference, insertion from the model, mismatched diagonal.
+
+### The defect this replaced
+
+The aligner was unit-cost Levenshtein with a diagonal-first backtrace. Under unit costs two
+substitutions (2) tie with delete + match + insert (2), and the diagonal won the tie, so a genuine
+insertion beside any other difference was rendered as a run of substitutions. Measured on the
+function before the change:
+
+```
+CW "I uh think"     Qwen "I think so"  ->  {I,I} {uh,think} {think,so}
+CW "oh I uh think"  Qwen "I think so"  ->  {oh,-} {I,I} {uh,think} {think,so}
+```
+
+`uh` is an insertion by CrisperWhisper and `so` an insertion by Qwen, with `think` agreed; instead
+the filler became a substitution and `think` was never recorded as agreed. CrisperWhisper is a
+verbatim recognizer that emits fillers (`[UM]`, `[UH]`) and partial words (`a-`, `d-`, `ba-`) that
+Qwen does not, so this is the common case in a CW/Qwen pair, not an edge case.
+
+### Why these weights
+
+With 4/3/3, `sub + sub` (8) is strictly worse than `del + match + ins` (6), so the DP itself no
+longer produces the tie the backtrace was breaking wrongly, and a single substitution (4) stays
+strictly cheaper than a deletion plus an insertion (6), so a one-for-one word difference is not
+split into two single-source slots. Making the backtrace prefer indels over a mismatched diagonal
+covers the ties that remain — a substitution that could sit at either of two positions, e.g.
+CW "they are" against Qwen "they're" — and the rule the code follows is: take the diagonal only when
+the tokens actually match; on a tie between a mismatched diagonal and an indel, take the indel.
+
+The matching-diagonal-first order is what pins a repetition: "the the the" against "the" aligns the
+**last** copy (`{the,-} {the,-} {the,the}`), and symmetrically in the other direction. That was the
+behaviour before the change as well; it is now stated in the docstring and held by a test so that a
+change to the rule shows up as a test change. The triage consensus emits every copy verbatim, so
+which copy carries two sources decides only which of them is bold, never what the transcript says;
+the audio-analysis fold still depends on it.
+
+### Residual tie: which of two adjacent tokens is the substituted one
+
+When one model inserts a token right beside a word the other model reads differently, the cost
+model cannot say which of the two adjacent tokens is the substitution: for CW "I uh think" against
+Qwen "I thing", `sub(uh, thing) + del(think)` and `del(uh) + sub(think, thing)` both cost 7. The
+indel-first backtrace, walking from the end, resolves this toward the **earlier** token:
+`{I,I} {uh,thing} {think,-}`. Held by `test_a_substitution_beside_an_insertion_lands_on_the_earlier_token`
+so that a change to the rule shows up as a test change rather than a silent shift.
+
+On the real pair this direction was right both times it fired — Qwen had merged two CW words
+("they are" → "they're", "is, the" → "isthe") and pairing the merge with the first word is the
+closer reading. It is the wrong direction for CrisperWhisper's filler-before-word pattern
+(`[UM] the` against `a` would pair the filler with `a` and leave `the` alone), which did not occur
+in this recording. Deciding it properly needs a graded substitution cost — how alike the two
+tokens are — which `_normalise_token` does not provide and which has not been measured; until it
+is, the earlier-token rule stands as documented behaviour, not as a claim of correctness.
+
+Rejected: keeping unit costs and only changing the backtrace order. It gives the right answer on
+the two cases above, but the DP still assigns the same cost to both readings, so the answer would
+rest entirely on tie-breaking rather than on the cost model, and any later change to the backtrace
+would silently move it. With the weights the DP and the backtrace agree.
+
+### Measured effect on a real CW/Qwen pair
+
+Story-recall recording `sub-1f4ea26f…_ses-D987B8B0…` (2026-09-04 run), 225 CrisperWhisper words
+against 213 Qwen words, columns from `aligned_columns`:
+
+| | columns | agreement | single-source | multi-key |
+| --- | --- | --- | --- | --- |
+| before | 226 | 209 | 14 | 3 |
+| after | 226 | 209 | 14 | 3 |
+
+The counts do not move on this recording because the bug needs both recognizers to insert around
+one shared word, and here Qwen's only insertion ("But", column 164) sits between two agreed words.
+Two columns change, both substitution-position ties that the indel-preferring backtrace now
+resolves toward the earlier token: CW "they are" against Qwen "they're" was `{they} {are,they're}`
+and is `{they,they're} {are}`; CW "is, the" against Qwen "isthe" was `{is,} {the,isthe}` and is
+`{is,,isthe} {the}`.
+
+The six adjacent duplicate pairs in the consensus text ("gets gets", "and and", "the the the"
+counted twice, "The the", "he he") were already indels or agreements under the old aligner, with
+the last copy of each CW repetition agreeing with Qwen's single word; the change leaves them where
+they were:
+
+| consensus | CW words | Qwen words | columns, before and after |
+| --- | --- | --- | --- |
+| gets gets | `gets a- gets` | `gets` | `{cw:gets} {cw:a-} {cw:gets,qw:gets}` |
+| and and | `and the and` | `and` | `{cw:and} {cw:the} {cw:and,qw:and}` |
+| the the the | `the … the d- the` | `the` | `{cw:the} {cw:d-} {cw:the,qw:the}` (first `the` single-source two columns earlier) |
+| The the | `The [UM] the` | `the` | `{cw:The} {cw:[UM]} {cw:the,qw:the}` |
+| he he | `he he` | `he he` | `{cw:he,qw:he} {cw:he,qw:he}` |
+
+The triage consensus text used to order them differently from the columns ("and the and the d-
+the" became "and and the the the d-") because `fuse_word_streams` re-sorted slots by their averaged
+member times after grouping; that was downstream of the aligner, and the triage path no longer goes
+through it — `align_sources` emits the columns in order
+([`consensus-asr-redesign.md`](consensus-asr-redesign.md) C-1). `fuse_word_streams` itself is
+unchanged and still re-sorts for the audio-analysis workflow.
+
+## The slot carries a word index, not an onset
+
+`TranscriptSlot.indices` is `{model → index into that model's word list}`. A consumer rebuilding
+richer word objects from the lattice cannot re-derive identity from `times`: forced aligners emit
+words that share an onset and words of zero duration. Measured on the 5-speaker clip: a recognizer
+placed "Josh" at `[2.72, 2.72]` and another placed two words at `2.72`. Matching by onset put one
+word in two columns and dropped another, which is how "wanted to take" became "wanted take take".
+
+## `times` is built from `members[m]`, not a loop variable
+
+The `times` comprehension in `harmonize_transcripts` once read a bare `i` that resolved to whatever
+the enclosing loop had left behind, so every model reported the last member's span. The lattice
+still looked like a lattice while placing one word in two columns and losing another. The test
+`test_each_model_reports_its_own_span_in_a_slot` holds this.
+
+## `normalise_token` decides agreement, never surface
+
+`normalise_token` (casefold; keep alphanumerics and the apostrophe) is the key two readings are
+compared on, and nothing else. Models differ in casing and punctuation convention — `Is,` against
+`is`, `[UM]` against `um` — and those differences are not transcription disputes, so the key drops
+them. What a model actually said stays on the slot (`TranscriptSlot.words`) and, in the triage
+consensus, in `ConsensusWord.readings`; the key never replaces it. The function was `_normalise_token`
+and private to `harmonize.py` until the triage consensus (`triage/consensus.py`) needed the same key
+for its column classification; it is public so that the aligner and the consensus cannot drift apart
+on what counts as the same token.
+
+## The tie-break: the sources' own times, among equal-cost paths only
+
+sclite's weights leave many paths tied. The backtrace resolved them by a fixed preference order —
+matching diagonal, deletion, insertion, mismatched diagonal — so a run of identical tokens against
+a single token always paired its **last** copy. Nothing chose that; it fell out of the traversal.
+
+On real data it is usually the wrong copy. CrisperWhisper reads `gets`@9.66, `a-`@9.88,
+`gets`@9.99 where Qwen reads one `gets`@9.60. Pairing the last copy puts the agreed word 0.39 s
+from Qwen's reading and forces the isotonic fit to pool two positions to keep the stream monotone.
+Pairing the first costs exactly the same in edit distance and needs no fit at all.
+
+`_align_pair` therefore minimises `(edit cost, summed pair gap)` lexicographically. **Edit cost
+still decides**; the gap only separates paths of equal cost, so a time-preferred pairing can never
+buy a costlier alignment. The gap of one paired column is the interval distance between the two
+tokens' spans in whole milliseconds, zero when they overlap or touch. Milliseconds rather than
+floats so that two paths whose gaps differ by less than a millisecond stay tied and fall back to
+the traversal order, which keeps the result deterministic. With no spans supplied every gap is
+zero, the comparison collapses to cost alone, and the path is byte-identical to the untimed one.
+
+This is R-5 rule 1 holding: the sequence decides, and time is admitted only where the sequence
+evidence is genuinely indifferent. It never rejects an alignment.
+
+### Measured effect
+
+On `sub-1f4ea26f…task-Story-recall-(v2)`, 226 words and the 209 / 3 / 14 outcome split unchanged —
+the structure is identical, only which copy of a repetition pairs:
+
+| | untimed | timed |
+| --- | --- | --- |
+| positions the isotonic fit had to move | 8 | 2 |
+| max time shift | 0.200 s | 0.030 s |
+| derived extents overlapping no source | 7 | 4 |
+| summed temporal uncertainty | 24.56 s | 19.52 s |
+
+Two cases resolve outright. `gets` pairs its first copy, so `a-` and the second copy keep their own
+spans at zero uncertainty. And the 4.1 s `the` — CrisperWhisper's `the`@35.30 paired with Qwen's
+`the`@31.20 across an intervening `[UM]` — now pairs Qwen@31.20 with `The`@31.30, 0.10 s away; the
+4.10 s uncertainty is gone, and CW's `the`@35.30 is an insertion on its own span.
+
+What remains at 4 extents overlapping no source is a different shape: `out.`, `loses`, `the`@150
+and `he`@219 are words the two recognizers place 0.4–1.3 s apart with no repetition to choose
+between, so the fit averages them and the uncertainty is the honest report of that disagreement.

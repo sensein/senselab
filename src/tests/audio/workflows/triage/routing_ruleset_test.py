@@ -1,0 +1,812 @@
+"""The family taxonomy ruleset, over synthetic feature records rather than corpus files."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+from senselab.audio.workflows.triage.config import load_triage_config
+from senselab.audio.workflows.triage.routing_analysis.features import TRANSCRIPT_CAP, RecordingFeatures
+from senselab.audio.workflows.triage.routing_analysis.ruleset import (
+    AT_LEAST,
+    FAMILY_SETS,
+    ROUTE_STATES,
+    UNRECORDED_ABSENCE,
+    GateOutcome,
+    RouteState,
+    Ruleset,
+    critical_blocks,
+    evaluate_gate,
+    evaluate_routes,
+    load_ruleset,
+    max_token_repeat,
+    score_branches,
+    tally_families,
+    unreadable_branches,
+)
+from senselab.audio.workflows.triage.vocabulary import BRANCHES, GRAPH_ORDER, QUALITY
+
+
+@pytest.fixture(scope="module")
+def ruleset() -> Ruleset:
+    """The packaged ruleset.
+
+    Returns:
+        The ruleset as ``data/config/default.yaml`` declares it.
+    """
+    return load_ruleset(load_triage_config())
+
+
+def _features(family: str, **overrides: object) -> RecordingFeatures:
+    """A feature record whose every gate is readable and silent, before the overrides.
+
+    Args:
+        family: The task family.
+        overrides: Fields to replace.
+
+    Returns:
+        The record.
+    """
+    record = RecordingFeatures(
+        stem=f"sub-1_ses-1_task-{family}",
+        run_root="run",
+        task_id=family,
+        family=family,
+        duration_s=10.0,
+        words={"agreement": 0, "total": 0, "lexical": 0},
+        consensus_present=True,
+        transcript="",
+        residual={"energy_fraction": 0.0},
+        span_longest_s={"amplitude": 0.0},
+        span_stats={"all.peak_over_floor_db_max": 0.0},
+        span_label_set_stats={"yamnet.cough_labels.span_count": 0.0, "yamnet.cough_labels.peak_over_floor_db_n": 0.0},
+        ppg={"silent_fraction": 0.0, "segment_rate_per_s": 0.0},
+        classifier_streams=["plain|yamnet"],
+    )
+    for name, value in overrides.items():
+        setattr(record, name, value)
+    return record
+
+
+class TestTheReferenceStandardIsNotARouter:
+    """The declared family scores the routed set; it never decides which gates run."""
+
+    def test_every_branch_names_a_family_set_that_exists(self, ruleset: Ruleset) -> None:
+        """A branch naming a set the families module does not have would score against nothing."""
+        assert set(ruleset.reference_family_set) == set(BRANCHES)
+        for set_name in ruleset.reference_family_set.values():
+            assert set_name in FAMILY_SETS
+
+    def test_the_reference_branch_comes_off_the_task_entity(self, ruleset: Ruleset) -> None:
+        """Read through the family sets rather than restated here.
+
+        A diadochokinesis family declares SPEECH, because ``speech`` is
+        ``lexical_speech | syllable_repetition``: a syllable train is a speaking task and SPEECH is
+        the branch that evaluates whether it happened.
+        """
+        assert ruleset.reference_branches("harvard-sentences-list") == ("SPEECH",)
+        assert ruleset.reference_branches("voluntary-cough") == ("AIRWAY",)
+        assert ruleset.reference_branches("prolonged-vowel") == ("VOICE",)
+        assert ruleset.reference_branches("diadochokinesis-pataka") == ("SPEECH",)
+
+    def test_a_family_no_set_carries_is_a_reference_positive_for_nothing(self, ruleset: Ruleset) -> None:
+        """An unrecognised task id is not silently swept into a branch."""
+        assert ruleset.reference_branches("unknown") == ()
+
+    def test_every_gate_a_branch_names_exists(self, ruleset: Ruleset) -> None:
+        """A gate no ``gates:`` entry defines would be a route the ruleset could never evaluate."""
+        assert set(ruleset.branch_gates) == set(BRANCHES)
+        for names in ruleset.branch_gates.values():
+            assert all(name in ruleset.gates for name in names)
+
+    def test_every_branch_names_at_least_one_gate_of_its_own(self, ruleset: Ruleset) -> None:
+        """A gateless branch is one content can never reach, and the packaged ruleset ships none."""
+        for branch, names in ruleset.branch_gates.items():
+            assert names, branch
+
+
+class TestNoDdkGateSurvivesTheBranch:
+    """The two DDK content gates were removed; no definition may be left for another branch to pick up."""
+
+    def test_the_configuration_defines_no_ddk_gate_to_name(self, ruleset: Ruleset) -> None:
+        """A definition left behind is a gate another branch could pick up by accident."""
+        assert [name for name in ruleset.gates if name.startswith("ddk.")] == []
+
+    def test_no_reading_of_any_recording_evaluates_a_ddk_gate(self, ruleset: Ruleset) -> None:
+        """Every feature a removed gate read, at a value that used to fire, is now read by nothing."""
+        record = _features(
+            "diadochokinesis-pataka",
+            transcript="pa ta ka " * 12,
+            ppg={"silent_fraction": 0.0, "segment_rate_per_s": 14.70},
+        )
+        result = evaluate_routes(record, ruleset)
+        assert result.gate_outcomes.keys() == set(ruleset.gates)
+        assert not [name for name in result.gate_outcomes if name.startswith("ddk.")]
+
+
+class TestEachGateFiresAndDoesNot:
+    """Every gate, at and under its own threshold."""
+
+    @pytest.mark.parametrize(
+        ("gate", "field", "key"),
+        [
+            ("speech.lexical", "words", "lexical"),
+            ("speech.transcript_agreement", "words", "agreement"),
+            ("voice.sustained", "span_longest_s", "amplitude"),
+            ("airway.breath", "residual", "energy_fraction"),
+            ("airway.cough", "span_label_set_stats", "yamnet.cough_labels.peak_over_floor_db_max"),
+            ("airway.ppg_silent_fraction", "ppg", "silent_fraction"),
+        ],
+    )
+    def test_a_scalar_gate_fires_at_its_threshold_and_not_below(
+        self, ruleset: Ruleset, gate: str, field: str, key: str
+    ) -> None:
+        """The comparison is inclusive, so the threshold itself is a firing value.
+
+        The firing pair is read from the gate's own threshold rather than restated, so a fitted
+        threshold moving in the configuration cannot leave this test asserting the old one.
+        """
+        rule = ruleset.gates[gate]
+        step = abs(rule.threshold) * 1e-6 or 1e-6
+        below = rule.threshold - step if rule.op == AT_LEAST else rule.threshold + step
+        assert evaluate_gate(_features("free-speech", **{field: {key: rule.threshold}}), rule) is GateOutcome.FIRED
+        assert evaluate_gate(_features("free-speech", **{field: {key: below}}), rule) is GateOutcome.SILENT
+
+    def test_the_glide_gate_reads_the_yamnet_singing_union(self, ruleset: Ruleset) -> None:
+        """Any member of the union carries the gate, not only the bare ``Singing`` label."""
+        rule = ruleset.gates["voice.glide"]
+        assert evaluate_gate(_features("glides-low-to-high", peaks={"plain|yamnet|Humming": 0.05}), rule) is (
+            GateOutcome.FIRED
+        )
+        assert evaluate_gate(_features("glides-low-to-high", peaks={"plain|yamnet|Humming": 0.04}), rule) is (
+            GateOutcome.SILENT
+        )
+
+    def test_the_chant_gate_reads_the_yamnet_chant_label_alone(self, ruleset: Ruleset) -> None:
+        """The union's own cut is 0.05; chant carries VOICE from 0.02 on its single label."""
+        rule = ruleset.gates["voice.chant"]
+        assert evaluate_gate(_features("prolonged-vowel", peaks={"plain|yamnet|Chant": 0.02}), rule) is (
+            GateOutcome.FIRED
+        )
+        assert evaluate_gate(_features("prolonged-vowel", peaks={"plain|yamnet|Chant": 0.019}), rule) is (
+            GateOutcome.SILENT
+        )
+
+
+class TestContentRoutesWithoutTheInstruction:
+    """Every branch's gates run on every recording, whatever the task asked for."""
+
+    def test_a_branch_the_family_never_declared_still_routes(self, ruleset: Ruleset) -> None:
+        """A cough recording that carries five lexical words routes to SPEECH as well as AIRWAY."""
+        record = _features(
+            "voluntary-cough",
+            words={"agreement": 1, "total": 5, "lexical": 5},
+            span_label_set_stats={"yamnet.cough_labels.peak_over_floor_db_max": 55.0},
+        )
+        result = evaluate_routes(record, ruleset)
+        assert result.declared == ("AIRWAY",)
+        assert result.routed == ("AIRWAY", "SPEECH")
+        assert result.agreed == ("AIRWAY",)
+        assert result.extra == ("SPEECH",)
+        assert result.missed == ()
+        assert result.state is RouteState.ROUTED
+
+    def test_a_declared_branch_that_does_not_route_is_missed(self, ruleset: Ruleset) -> None:
+        """A prolonged vowel with no held span, no singing and no chant is a miss, not a pass."""
+        result = evaluate_routes(_features("prolonged-vowel"), ruleset)
+        assert result.declared == ("VOICE",)
+        assert result.routed == ()
+        assert result.missed == ("VOICE",)
+        assert result.agreed == ()
+        assert result.extra == ()
+        assert result.state is RouteState.UNREADABLE
+
+    def test_speech_routes_on_lexical_words_alone_when_one_recogniser_disagreed(self, ruleset: Ruleset) -> None:
+        """The harvard case: nine lexical words, three agreed, unambiguous read speech."""
+        record = _features("harvard-sentences-list", words={"agreement": 3, "total": 9, "lexical": 9})
+        assert evaluate_gate(record, ruleset.gates["speech.lexical"]) is GateOutcome.FIRED
+        result = evaluate_routes(record, ruleset)
+        assert result.routed == ("SPEECH",)
+        assert result.agreed == ("SPEECH",)
+
+    def test_the_four_harvard_recordings_that_the_old_declared_gate_discarded_all_route(self, ruleset: Ruleset) -> None:
+        """Every measured row of the harvard fall-through, at its own lexical and agreement counts."""
+        for lexical, agreement in ((4, 3), (6, 3), (9, 3), (21, 3)):
+            record = _features(
+                "harvard-sentences-list", words={"agreement": agreement, "total": lexical, "lexical": lexical}
+            )
+            assert evaluate_routes(record, ruleset).routed == ("SPEECH",)
+
+    def test_a_recording_can_route_to_more_than_one_branch(self, ruleset: Ruleset) -> None:
+        """A held vowel with an intruding voice routes to both, and neither suppresses the other."""
+        record = _features(
+            "prolonged-vowel",
+            span_longest_s={"amplitude": 6.0},
+            words={"agreement": 3, "total": 6, "lexical": 6},
+        )
+        result = evaluate_routes(record, ruleset)
+        assert result.routed == ("SPEECH", "VOICE")
+        assert result.extra == ("SPEECH",)
+        assert result.agreed == ("VOICE",)
+
+
+class TestAMissingMeasurementIsNotANegative:
+    """``unavailable`` is carried through the gate, the evaluation and the tally."""
+
+    def test_a_gate_whose_feature_was_never_written_reads_unavailable(self, ruleset: Ruleset) -> None:
+        """An absent residual measurement is not a residual of zero."""
+        record = _features("breath-sounds", residual={})
+        assert evaluate_gate(record, ruleset.gates["airway.breath"]) is GateOutcome.UNAVAILABLE
+
+    def test_a_gate_whose_classifier_never_ran_reads_unavailable(self, ruleset: Ruleset) -> None:
+        """A stream with no YAMNet summary cannot be scored against the singing union."""
+        record = _features("glides-low-to-high", classifier_streams=[])
+        assert evaluate_gate(record, ruleset.gates["voice.glide"]) is GateOutcome.UNAVAILABLE
+
+    def test_a_gate_with_no_consensus_transcript_reads_unavailable(self, ruleset: Ruleset) -> None:
+        """No transcript is no bracketed token, which is not a bracketed-token count of zero."""
+        record = _features("breath-sounds", consensus_present=False)
+        assert evaluate_gate(record, ruleset.gates["airway.bracketed_event"]) is GateOutcome.UNAVAILABLE
+
+    def test_a_lexical_count_with_no_transcript_reads_unavailable_not_declined(self, ruleset: Ruleset) -> None:
+        """No recogniser ran, which is not a recording carrying fewer than two lexical words.
+
+        ``features.words`` is built from the live word entities, so both ASR blocks failing leaves
+        every count at zero. Reading that as a measurement records SPEECH as declined on a false
+        claim about the recording, which is worse than an admitted absence.
+        """
+        record = _features("lexical-speech", consensus_present=False, words={})
+        assert evaluate_gate(record, ruleset.gates["speech.lexical"]) is GateOutcome.UNAVAILABLE
+        assert evaluate_gate(record, ruleset.gates["speech.transcript_agreement"]) is GateOutcome.UNAVAILABLE
+        result = evaluate_routes(record, ruleset)
+        assert "SPEECH" not in result.routed
+        assert "speech.lexical" in result.unavailable["SPEECH"]
+
+    def test_a_non_finite_energy_fraction_reads_unavailable_not_silent(self, ruleset: Ruleset) -> None:
+        """``residual_energy_fraction`` is nan when the input carried no energy at all.
+
+        ``nan >= 0.10`` is False, so an unrouted read of it would record AIRWAY as silent on a
+        number that does not exist.
+        """
+        record = _features("breath-sounds", residual={"energy_fraction": float("nan")})
+        assert evaluate_gate(record, ruleset.gates["airway.breath"]) is GateOutcome.UNAVAILABLE
+
+    def test_a_label_set_that_ran_and_carried_nothing_reads_silent_not_unavailable(self, ruleset: Ruleset) -> None:
+        """A measured count of zero measurable cough-labelled spans is a definite non-fire.
+
+        ``airway.cough`` names ``peak_over_floor_db_max``, which an empty sample has no value for.
+        ``peak_over_floor_db_n`` is that sample's own size, and a zero there says the classifier ran
+        and nothing it could measure carried the set -- which the gate must read as a reason not to
+        fire, not as a reason it could not be read.
+        """
+        record = _features(
+            "voluntary-cough",
+            span_label_set_stats={
+                "yamnet.cough_labels.span_count": 0.0,
+                "yamnet.cough_labels.peak_over_floor_db_n": 0.0,
+            },
+        )
+        assert evaluate_gate(record, ruleset.gates["airway.cough"]) is GateOutcome.SILENT
+
+    def test_a_label_set_carried_only_by_spans_with_no_level_still_reads_silent(self, ruleset: Ruleset) -> None:
+        """A cough label on a gap span is a candidate with no decibel, and closes the gate.
+
+        The group's ``span_count`` counts it and the decibel sample does not, so the count the gate
+        consults must be the sample's own. Reading ``span_count`` here made the gate unavailable on
+        a recording where the classifier had done its job.
+        """
+        record = _features(
+            "voluntary-cough",
+            span_label_set_stats={
+                "yamnet.cough_labels.span_count": 1.0,
+                "yamnet.cough_labels.peak_over_floor_db_n": 0.0,
+            },
+        )
+        assert evaluate_gate(record, ruleset.gates["airway.cough"]) is GateOutcome.SILENT
+
+    def test_a_label_set_never_written_at_all_still_reads_unavailable(self, ruleset: Ruleset) -> None:
+        """No count key is the per-span classifier never having run, which is not a count of zero.
+
+        The distinction the count key carries: present and zero is ``ran, found none``; absent is
+        ``never written``.
+        """
+        record = _features("voluntary-cough", span_label_set_stats={})
+        assert evaluate_gate(record, ruleset.gates["airway.cough"]) is GateOutcome.UNAVAILABLE
+
+    def test_an_unreadable_gate_carries_the_reason_the_node_recorded(self, ruleset: Ruleset) -> None:
+        """PREPROCESS already wrote why the block is missing; the gate states it rather than guess.
+
+        Without this an unread gate says only that it was unread, which is "never judged" with no
+        way to tell a model that raised from a block that was never reached.
+        """
+        record = _features(
+            "breath-sounds",
+            residual={},
+            absent={"residual": "ValueError: FRCRN enhancement unavailable: RuntimeError: worker timed out"},
+        )
+        reason = evaluate_routes(record, ruleset).unavailable["AIRWAY"]["airway.breath"]
+        assert reason == "residual: ValueError: FRCRN enhancement unavailable: RuntimeError: worker timed out"
+
+    def test_an_unreadable_gate_with_no_recorded_absence_says_that_rather_than_inventing_one(
+        self, ruleset: Ruleset
+    ) -> None:
+        """Nothing having recorded a reason is itself a fact about the store, not a blank."""
+        record = _features("breath-sounds", residual={})
+        reason = evaluate_routes(record, ruleset).unavailable["AIRWAY"]["airway.breath"]
+        assert reason == f"{UNRECORDED_ABSENCE} residual"
+
+    def test_an_unreadable_gate_is_named_rather_than_counted_as_silent(self, ruleset: Ruleset) -> None:
+        """A breath recording with no residual and no span statistic is unmeasured, not empty."""
+        record = _features("breath-sounds", residual={}, span_label_set_stats={})
+        result = evaluate_routes(record, ruleset)
+        assert tuple(result.unavailable["AIRWAY"]) == ("airway.breath", "airway.cough")
+        assert result.routed == ()
+        assert result.missed == ("AIRWAY",)
+        assert result.gate_outcomes["airway.breath"] is GateOutcome.UNAVAILABLE
+        assert result.gate_outcomes["voice.sustained"] is GateOutcome.SILENT
+
+    def test_a_silent_branch_carries_no_unavailable_entry(self, ruleset: Ruleset) -> None:
+        """Silent is a measurement; only an unread feature is named in ``unavailable``."""
+        result = evaluate_routes(_features("breath-sounds"), ruleset)
+        assert result.unavailable == {}
+        assert result.routed == ()
+
+    def test_a_branch_routes_on_a_readable_gate_beside_an_unreadable_one(self, ruleset: Ruleset) -> None:
+        """One unread gate does not withhold the branch a second gate fired for."""
+        record = _features(
+            "voluntary-cough",
+            residual={},
+            span_label_set_stats={"yamnet.cough_labels.peak_over_floor_db_max": 55.0},
+        )
+        result = evaluate_routes(record, ruleset)
+        assert result.routed == ("AIRWAY",)
+        assert tuple(result.unavailable["AIRWAY"]) == ("airway.breath",)
+
+    def test_the_tally_counts_unavailable_separately_from_a_silent_gate(self, ruleset: Ruleset) -> None:
+        """Collapsing the two would report a broken store as a negative measurement."""
+        unmeasured = _features("breath-sounds", residual={}, span_label_set_stats={})
+        silent = _features("breath-sounds")
+        tallies = tally_families([evaluate_routes(unmeasured, ruleset), evaluate_routes(silent, ruleset)])
+        row = tallies["breath-sounds"]
+        assert row.recordings == 2
+        assert row.declared["AIRWAY"] == 2
+        assert row.unavailable["AIRWAY"] == 1
+        assert row.routed["AIRWAY"] == 0
+        assert row.missed["AIRWAY"] == 2
+        assert row.states["unreadable"] == 2
+        assert row.states["unexplained"] == 0
+
+
+class TestARecordingRoutesToNothing:
+    """The unexplained count is a first-class output, and the only one that indicts the ruleset."""
+
+    def test_the_tally_counts_the_unexplained_per_family(self, ruleset: Ruleset) -> None:
+        """Two families, one unexplained each, counted where the owner asked to read them.
+
+        Every record here carries a readable emptiness bypass over content, so a recording nothing
+        routed really is content the ruleset could not account for rather than evidence it never saw.
+        """
+        evaluations = [
+            evaluate_routes(_classified("prolonged-vowel", 0.9, 0.3), ruleset),
+            evaluate_routes(_classified("prolonged-vowel", 0.9, 0.3, span_longest_s={"amplitude": 4.0}), ruleset),
+            evaluate_routes(_classified("voluntary-cough", 0.9, 0.3), ruleset),
+        ]
+        tallies = tally_families(evaluations)
+        assert tallies["prolonged-vowel"].states == {"routed": 1, "empty": 0, "unexplained": 1, "unreadable": 0}
+        assert tallies["prolonged-vowel"].routed["VOICE"] == 1
+        assert tallies["prolonged-vowel"].agreed["VOICE"] == 1
+        assert tallies["voluntary-cough"].states["unexplained"] == 1
+        assert tallies["voluntary-cough"].declared["AIRWAY"] == 1
+        assert set(tallies["voluntary-cough"].declared) == set(BRANCHES)
+
+    def test_every_tally_carries_all_four_states_and_they_sum(self, ruleset: Ruleset) -> None:
+        """A state a family never reached reads zero rather than being absent from the row."""
+        row = tally_families([evaluate_routes(_features("voluntary-cough"), ruleset)])["voluntary-cough"]
+        assert list(row.states) == list(ROUTE_STATES)
+        assert sum(row.states.values()) == row.recordings
+
+
+class TestScoringContentAgainstTheDeclaredFamily:
+    """Can content-only routing recover the overarching families?"""
+
+    def test_the_two_by_two_counts_every_recording_once_per_branch(self, ruleset: Ruleset) -> None:
+        """Each branch sees every recording, as a positive or a negative, predicted or not."""
+        evaluations = [
+            evaluate_routes(_features("harvard-sentences-list", words={"agreement": 3, "lexical": 9}), ruleset),
+            evaluate_routes(_features("prolonged-vowel"), ruleset),
+            evaluate_routes(_features("prolonged-vowel", peaks={"plain|yamnet|Chant": 0.5}), ruleset),
+        ]
+        scores = score_branches(evaluations, ruleset)
+        assert list(scores) == list(BRANCHES)
+        for score in scores.values():
+            table = score.against_reference
+            assert table.tp + table.fp + table.tn + table.fn == 3
+
+    def test_sensitivity_and_specificity_read_off_the_raw_counts(self, ruleset: Ruleset) -> None:
+        """One declared vowel routed, one declared vowel missed, one speech recording not a vowel."""
+        evaluations = [
+            evaluate_routes(_features("prolonged-vowel", peaks={"plain|yamnet|Chant": 0.5}), ruleset),
+            evaluate_routes(_features("prolonged-vowel"), ruleset),
+            evaluate_routes(_features("harvard-sentences-list", words={"agreement": 3, "lexical": 9}), ruleset),
+        ]
+        voice = score_branches(evaluations, ruleset)["VOICE"].against_reference
+        assert (voice.tp, voice.fn, voice.fp, voice.tn) == (1, 1, 0, 1)
+        assert voice.sensitivity == 0.5
+        assert voice.specificity == 1.0
+
+    def test_a_branch_no_recording_declares_has_no_sensitivity(self, ruleset: Ruleset) -> None:
+        """No reference positive is not a sensitivity of zero."""
+        evaluations = [evaluate_routes(_features("prolonged-vowel"), ruleset)]
+        airway = score_branches(evaluations, ruleset)["AIRWAY"].against_reference
+        assert airway.sensitivity is None
+        assert airway.specificity == 1.0
+
+
+class TestTheTokenRepeatCounter:
+    """The one feature the ruleset reads that no extraction writes."""
+
+    def test_a_transcript_with_no_repeat_counts_one(self) -> None:
+        """Every token distinct is a maximum of one, which no threshold above one clears."""
+        assert max_token_repeat("the quick brown fox") == 1
+
+    def test_an_empty_transcript_counts_zero(self) -> None:
+        """No token is not one token."""
+        assert max_token_repeat("") == 0
+
+    def test_case_and_punctuation_do_not_split_a_repeat(self) -> None:
+        """``Pa,`` and ``pa`` are the same syllable, and a hyphenated run is four of them."""
+        assert max_token_repeat("Pa, pa. PA! pa") == 4
+        assert max_token_repeat("pa-pa-pa-pa") == 4
+
+    def test_a_token_the_cap_cut_in_half_is_not_another_instance(self) -> None:
+        """The 300-character cap truncates mid-token, and the fragment counts as its own token."""
+        transcript = ("diadochokinesis " * 25)[:TRANSCRIPT_CAP]
+        assert len(transcript) == TRANSCRIPT_CAP
+        assert transcript.endswith("diadochokine")
+        assert max_token_repeat(transcript) == 18
+
+
+class TestSpeechRoutesOnAsrWordsAlone:
+    """The SPEECH gate is lexical content; agreement is not part of entering the branch."""
+
+    def test_the_branch_has_exactly_one_gate_and_it_reads_lexical_words(self, ruleset: Ruleset) -> None:
+        """A second entry gate would let something other than words decide that speech was said."""
+        assert ruleset.branch_gates["SPEECH"] == ("speech.lexical",)
+        assert ruleset.gates["speech.lexical"].feature == ("words", "lexical")
+
+    def test_two_lexical_words_with_no_agreement_at_all_route(self, ruleset: Ruleset) -> None:
+        """Nothing the recognisers agreed on, and the recording is still speech."""
+        record = _features("free-speech", words={"agreement": 0, "total": 2, "lexical": 2})
+        result = evaluate_routes(record, ruleset)
+        assert result.routed == ("SPEECH",)
+        assert result.gate_outcomes["speech.transcript_agreement"] is GateOutcome.SILENT
+
+    def test_one_lexical_word_does_not_route(self, ruleset: Ruleset) -> None:
+        """A single spurious token on a held vowel is the artifact the cut of 2 exists to drop."""
+        record = _features("prolonged-vowel", words={"agreement": 0, "total": 1, "lexical": 1})
+        assert evaluate_routes(record, ruleset).routed == ()
+
+    def test_agreement_alone_no_longer_routes(self, ruleset: Ruleset) -> None:
+        """Agreed bracketed tokens are not lexical words and carry no branch on their own."""
+        record = _features("free-speech", words={"agreement": 3, "total": 3, "bracketed": 3, "lexical": 0})
+        assert evaluate_routes(record, ruleset).routed == ()
+
+    def test_the_agreement_gate_is_not_a_branch_gate_anywhere(self, ruleset: Ruleset) -> None:
+        """It was deleted from ``branch_gates``, not moved to another branch's entry list."""
+        for names in ruleset.branch_gates.values():
+            assert "speech.transcript_agreement" not in names
+
+
+class TestAgreementIsAFlagAndNotAGate:
+    """Agreement records doubt about what was said, so it is carried and never routes."""
+
+    def test_the_flag_is_declared_on_the_speech_branch(self, ruleset: Ruleset) -> None:
+        """A flag is per branch, beside the gates it annotates rather than inside them."""
+        assert ruleset.branch_flags["SPEECH"] == ("speech.transcript_agreement",)
+
+    def test_a_routed_recording_carries_the_flag(self, ruleset: Ruleset) -> None:
+        """Nine lexical words, three agreed: routed on the words, annotated by the agreement."""
+        record = _features("harvard-sentences-list", words={"agreement": 3, "total": 9, "lexical": 9})
+        result = evaluate_routes(record, ruleset)
+        assert result.routed == ("SPEECH",)
+        assert result.flags == {"SPEECH": ("speech.transcript_agreement",)}
+
+    def test_the_flag_does_not_route_a_recording_that_no_gate_carried(self, ruleset: Ruleset) -> None:
+        """Three agreed bracketed tokens raise the flag and leave ``routed`` empty."""
+        record = _features("free-speech", words={"agreement": 3, "total": 3, "bracketed": 3, "lexical": 0})
+        result = evaluate_routes(record, ruleset)
+        assert result.flags == {"SPEECH": ("speech.transcript_agreement",)}
+        assert result.routed == ()
+        assert result.state is RouteState.UNREADABLE
+
+    def test_a_silent_flag_is_absent_rather_than_keyed_empty(self, ruleset: Ruleset) -> None:
+        """Only a fired flag is reported, so a branch's absence from the mapping is the negative."""
+        record = _features("free-speech", words={"agreement": 0, "total": 4, "lexical": 4})
+        assert evaluate_routes(record, ruleset).flags == {}
+
+    def test_the_tally_counts_the_flag_per_branch(self, ruleset: Ruleset) -> None:
+        """A flag is reported at corpus scale beside the axes it does not belong to."""
+        flagged = _features("free-speech", words={"agreement": 3, "total": 9, "lexical": 9})
+        plain = _features("free-speech", words={"agreement": 0, "total": 9, "lexical": 9})
+        row = tally_families([evaluate_routes(flagged, ruleset), evaluate_routes(plain, ruleset)])["free-speech"]
+        assert row.flagged["SPEECH"] == 1
+        assert row.routed["SPEECH"] == 2
+
+
+def _classified(family: str, enhanced: float, residual: float, **overrides: object) -> RecordingFeatures:
+    """A record whose enhanced and residual YAMNet summaries both exist and carry a top score.
+
+    Args:
+        family: The task family.
+        enhanced: The highest tracked-label score on the enhanced stream.
+        residual: The same on the residual stream.
+        overrides: Further fields to replace.
+
+    Returns:
+        The record.
+    """
+    record = _features(
+        family,
+        classifier_streams=["plain|yamnet", "enhanced|yamnet", "residual|yamnet"],
+        peaks={"enhanced|yamnet|Speech": enhanced, "residual|yamnet|Speech": residual},
+    )
+    for name, value in overrides.items():
+        setattr(record, name, value)
+    return record
+
+
+class TestEmptinessIsABypassAndNotAPrecondition:
+    """Every gate runs first; emptiness only explains a recording no gate claimed."""
+
+    def test_both_streams_under_the_floor_is_empty(self, ruleset: Ruleset) -> None:
+        """The short-recording case: the enhanced and the residual stream are both silent."""
+        result = evaluate_routes(_classified("prolonged-vowel", 0.003, 0.0), ruleset)
+        assert result.state is RouteState.EMPTY
+        assert result.routed == ()
+
+    def test_one_stream_at_the_floor_is_not_empty(self, ruleset: Ruleset) -> None:
+        """The floor is inclusive on the content side, so a stream at 0.2 carries something."""
+        assert evaluate_routes(_classified("prolonged-vowel", 0.2, 0.0), ruleset).state is RouteState.UNEXPLAINED
+        assert evaluate_routes(_classified("prolonged-vowel", 0.0, 0.2), ruleset).state is RouteState.UNEXPLAINED
+
+    def test_an_empty_recording_is_not_unexplained(self, ruleset: Ruleset) -> None:
+        """The number that indicts the ruleset is the content that landed nowhere, not the silence."""
+        blank = evaluate_routes(_classified("prolonged-vowel", 0.001, 0.0), ruleset)
+        content = evaluate_routes(_classified("prolonged-vowel", 0.9, 0.3), ruleset)
+        assert blank.state is RouteState.EMPTY
+        assert content.state is RouteState.UNEXPLAINED
+
+    def test_the_tally_counts_the_two_separately(self, ruleset: Ruleset) -> None:
+        """One empty and one content-bearing miss, in a family whose total is two."""
+        blank = evaluate_routes(_classified("prolonged-vowel", 0.001, 0.0), ruleset)
+        content = evaluate_routes(_classified("prolonged-vowel", 0.9, 0.3), ruleset)
+        row = tally_families([blank, content])["prolonged-vowel"]
+        assert row.recordings == 2
+        assert row.states == {"routed": 0, "empty": 1, "unexplained": 1, "unreadable": 0}
+
+    def test_a_gate_firing_on_a_silent_file_routes_it_rather_than_calling_it_empty(self, ruleset: Ruleset) -> None:
+        """The gates decide first, so a lexical word in a stream-silent file is SPEECH, not empty."""
+        record = _classified("prolonged-vowel", 0.0, 0.0, words={"agreement": 0, "total": 4, "lexical": 4})
+        result = evaluate_routes(record, ruleset)
+        assert result.state is RouteState.ROUTED
+        assert result.routed == ("SPEECH",)
+        assert result.extra == ("SPEECH",)
+
+    def test_every_gate_is_evaluated_even_on_an_empty_recording(self, ruleset: Ruleset) -> None:
+        """Emptiness no longer short-circuits, so the gate record is complete on every recording."""
+        result = evaluate_routes(_classified("prolonged-vowel", 0.0, 0.0), ruleset)
+        assert result.state is RouteState.EMPTY
+        assert set(result.gate_outcomes) == set(ruleset.gates)
+        assert result.missed == ("VOICE",)
+
+    def test_a_stream_with_no_summary_cannot_be_called_empty(self, ruleset: Ruleset) -> None:
+        """An absent classifier summary is not a stream that scored zero."""
+        assert evaluate_routes(_features("prolonged-vowel"), ruleset).state is not RouteState.EMPTY
+
+    def test_an_unreadable_bypass_is_not_charged_to_the_ruleset(self, ruleset: Ruleset) -> None:
+        """Nothing routed and no bypass to read is a fact about the run, not about the ruleset.
+
+        ``UNEXPLAINED`` is the one state the enum calls a charge against the ruleset, so a recording
+        whose emptiness bypass was never written must not land there: the ruleset was shown no
+        content it failed to account for. The three are told apart on one axis -- the bypass reading
+        -- with the branch gates silent in all three.
+        """
+        unreadable = evaluate_routes(_features("prolonged-vowel"), ruleset)
+        empty = evaluate_routes(_classified("prolonged-vowel", 0.001, 0.0), ruleset)
+        unexplained = evaluate_routes(_classified("prolonged-vowel", 0.9, 0.3), ruleset)
+        assert (unreadable.routed, empty.routed, unexplained.routed) == ((), (), ())
+        assert unreadable.state is RouteState.UNREADABLE
+        assert empty.state is RouteState.EMPTY
+        assert unexplained.state is RouteState.UNEXPLAINED
+
+
+class TestTheCoughGateIsSetConditioned:
+    """The router reads cough-labelled spans, not the loudest span in the file."""
+
+    def test_the_gate_reads_the_cough_label_set(self, ruleset: Ruleset) -> None:
+        """The blanket ``span_stat`` reader fired on 38.7% of non-airway recordings and is gone."""
+        assert ruleset.gates["airway.cough"].feature == (
+            "span_label_set_stat",
+            "yamnet.cough_labels.peak_over_floor_db_max",
+        )
+        for gate in ruleset.gates.values():
+            assert gate.feature != ("span_stat", "all.peak_over_floor_db_max")
+
+    def test_a_loud_span_no_classifier_called_cough_does_not_route_airway(self, ruleset: Ruleset) -> None:
+        """A door slam is a loud span and is not an airway event."""
+        record = _features("free-speech", span_stats={"all.peak_over_floor_db_max": 70.0})
+        assert evaluate_routes(record, ruleset).routed == ()
+
+    def test_the_two_reasons_the_gate_reads_no_decibel_are_told_apart(self, ruleset: Ruleset) -> None:
+        """Every instrument running and finding no cough is not the same as no instrument running.
+
+        The per-span classifier writes ``<classifier>.<set>.peak_over_floor_db_n`` for every
+        declared set on every recording, so its presence is what separates the two. Present and
+        zero: the sample was taken and held nothing, and the gate must not fire. Absent: nothing
+        measured it, and the gate cannot be read.
+        """
+        measured = _features(
+            "voluntary-cough",
+            span_label_set_stats={
+                "yamnet.cough_labels.span_count": 0.0,
+                "yamnet.cough_labels.peak_over_floor_db_n": 0.0,
+            },
+        )
+        unmeasured = _features("voluntary-cough", span_label_set_stats={})
+        assert evaluate_gate(measured, ruleset.gates["airway.cough"]) is GateOutcome.SILENT
+        assert evaluate_gate(unmeasured, ruleset.gates["airway.cough"]) is GateOutcome.UNAVAILABLE
+        assert evaluate_routes(measured, ruleset).unavailable == {}
+        assert tuple(evaluate_routes(unmeasured, ruleset).unavailable["AIRWAY"]) == ("airway.cough",)
+
+
+class TestQualityIsATerminalNodeAndNotABranch:
+    """Everything reaches quality after the branches, so it is a graph edge and never a route."""
+
+    def test_quality_is_in_the_graph_after_every_branch(self) -> None:
+        """It sits after the last branch, which is what "terminal" means for this graph."""
+        assert QUALITY in GRAPH_ORDER
+        assert GRAPH_ORDER.index(QUALITY) > max(
+            GRAPH_ORDER.index(branch) for branch in GRAPH_ORDER if branch in BRANCHES
+        )
+
+    def test_quality_is_not_a_branch_and_has_no_gate(self, ruleset: Ruleset) -> None:
+        """A node every recording reaches cannot be selected by a gate; it would gate nothing."""
+        assert QUALITY not in BRANCHES
+        assert QUALITY not in ruleset.branch_gates
+        assert QUALITY not in ruleset.branch_flags
+        assert QUALITY not in ruleset.reference_family_set
+
+
+class TestThePosteriorgramGateRoutesWithoutATranscript:
+    """A posteriorgram is taken whether or not any recogniser could spell what was said."""
+
+    def test_the_gate_is_a_branch_gate_whose_threshold_comes_off_the_configuration(self, ruleset: Ruleset) -> None:
+        """The cut is not a literal: the gate carries whatever ``taxonomy.ruleset.gates`` says."""
+        gates = load_triage_config().require("taxonomy.ruleset.gates")
+        assert "airway.ppg_silent_fraction" in ruleset.branch_gates["AIRWAY"]
+        assert ruleset.gates["airway.ppg_silent_fraction"].threshold == float(
+            gates["airway.ppg_silent_fraction"]["threshold"]
+        )
+        assert ruleset.gates["airway.ppg_silent_fraction"].op == "at_least"
+
+    def test_the_silent_fraction_gate_joins_the_residual_rather_than_replacing_it(self, ruleset: Ruleset) -> None:
+        """Both gates carry AIRWAY, so a recording either one reads is a recording AIRWAY gets."""
+        assert ruleset.branch_gates["AIRWAY"] == (
+            "airway.breath",
+            "airway.cough",
+            "airway.bracketed_event",
+            "airway.ppg_silent_fraction",
+        )
+        assert ruleset.gates["airway.ppg_silent_fraction"].feature == ("ppg", "silent_fraction")
+
+    def test_a_syllable_train_no_gate_reads_routes_nowhere(self, ruleset: Ruleset) -> None:
+        """A syllable train carries no lexical word, so content routes it nowhere and SPEECH is missed.
+
+        The declaration is what routes it, through ``reference_family_set``, and that is why
+        SPEECH's set carries ``syllable_repetition``.
+        """
+        record = _features(
+            "diadochokinesis-pa",
+            transcript="pa pa pa pa",
+            ppg={"silent_fraction": 0.0, "segment_rate_per_s": 12.0},
+        )
+        result = evaluate_routes(record, ruleset)
+        assert result.routed == ()
+        assert result.missed == ("SPEECH",)
+
+    def test_airway_routes_on_the_silent_fraction_with_no_residual_measurement(self, ruleset: Ruleset) -> None:
+        """The 2345 recordings with no posteriorgram are not the ones with no residual."""
+        record = _features(
+            "respiration-and-cough-threequickbreaths",
+            residual={},
+            ppg={"silent_fraction": 0.95, "segment_rate_per_s": 0.0},
+        )
+        result = evaluate_routes(record, ruleset)
+        assert result.routed == ("AIRWAY",)
+        assert tuple(result.unavailable["AIRWAY"]) == ("airway.breath",)
+
+    def test_airway_still_routes_on_the_residual_with_no_posteriorgram(self, ruleset: Ruleset) -> None:
+        """The converse: each gate covers the population the other cannot read."""
+        record = _features("respiration-and-cough-threequickbreaths", residual={"energy_fraction": 0.5}, ppg={})
+        result = evaluate_routes(record, ruleset)
+        assert result.routed == ("AIRWAY",)
+        assert tuple(result.unavailable["AIRWAY"]) == ("airway.ppg_silent_fraction",)
+
+    def test_no_posteriorgram_is_not_a_silent_fraction_of_zero(self, ruleset: Ruleset) -> None:
+        """An absent sidecar leaves the gate unread, which is not the gate staying silent."""
+        record = _features("respiration-and-cough-threequickbreaths", ppg={})
+        assert evaluate_gate(record, ruleset.gates["airway.ppg_silent_fraction"]) is GateOutcome.UNAVAILABLE
+
+
+class TestBracketedTokensAreAirwayEvidence:
+    """``[breath]`` is a detection with a timing, and ``[um]`` is a filler."""
+
+    def test_the_bracket_gate_is_an_airway_branch_gate(self, ruleset: Ruleset) -> None:
+        """It enters AIRWAY beside the residual and span gates rather than annotating it."""
+        assert "airway.bracketed_event" in ruleset.branch_gates["AIRWAY"]
+
+    def test_the_airway_bracket_types_come_off_the_configuration(self, ruleset: Ruleset) -> None:
+        """Which brackets are airway is data, resolved into the gate at load."""
+        assert ruleset.gates["airway.bracketed_event"].feature == (
+            "bracketed_set",
+            "breath",
+            "cough",
+            "sniff",
+            "throatclearing",
+        )
+
+    def test_a_breath_bracket_routes_airway(self, ruleset: Ruleset) -> None:
+        """One bracketed breath is one airway event."""
+        record = _features("breath-sounds", bracketed_types={"breath": 1})
+        assert evaluate_routes(record, ruleset).routed == ("AIRWAY",)
+
+    def test_a_filler_bracket_does_not_route_airway(self, ruleset: Ruleset) -> None:
+        """``[um]`` is speech, and it is not in the airway set."""
+        record = _features("free-speech", bracketed_types={"um": 4})
+        assert evaluate_routes(record, ruleset).routed == ()
+
+    def test_every_airway_bracket_type_carries_the_gate_on_its_own(self, ruleset: Ruleset) -> None:
+        """The gate is a union, so no member depends on another being present."""
+        rule = ruleset.gates["airway.bracketed_event"]
+        for token in ("breath", "cough", "throatclearing", "sniff"):
+            assert evaluate_gate(_features("breath-sounds", bracketed_types={token: 1}), rule) is GateOutcome.FIRED
+
+    def test_no_consensus_transcript_is_not_a_bracket_count_of_zero(self, ruleset: Ruleset) -> None:
+        """A store that never ran consensus has an unread gate, not a silent one."""
+        record = _features("breath-sounds", consensus_present=False)
+        assert evaluate_gate(record, ruleset.gates["airway.bracketed_event"]) is GateOutcome.UNAVAILABLE
+
+
+class TestWhichAbsenceIsCritical:
+    """Derived from the configured gates, so a campaign's own ruleset gets its own answer.
+
+    ``specs/20260817-triage-workflow-dag/critical-failure.md`` carries the derivation.
+    """
+
+    def test_the_packaged_critical_set_is_the_consensus_transcript_alone(self, ruleset: Ruleset) -> None:
+        """SPEECH names one gate, so losing its one block is what leaves a branch unjudgeable."""
+        assert critical_blocks(ruleset) == ("consensus_transcript",)
+
+    def test_a_span_derived_block_becomes_critical_when_it_is_a_branchs_only_gate(self, tmp_path: Path) -> None:
+        """The owner named span-based measurements; they are critical exactly when nothing sits beside them."""
+        path = tmp_path / "spans_only.yaml"
+        path.write_text("taxonomy:\n  ruleset:\n    branch_gates:\n      VOICE: [voice.sustained]\n")
+        assert critical_blocks(load_ruleset(load_triage_config(path))) == ("consensus_transcript", "spans")
+
+    def test_a_second_gate_over_another_block_ends_the_criticality(self, tmp_path: Path) -> None:
+        """Nothing is hard-coded: the set is whatever the configured gates make it."""
+        path = tmp_path / "two_gates.yaml"
+        path.write_text("taxonomy:\n  ruleset:\n    branch_gates:\n      SPEECH: [speech.lexical, voice.sustained]\n")
+        assert critical_blocks(load_ruleset(load_triage_config(path))) == ()
+
+    def test_a_branch_with_one_readable_gate_is_never_unreadable(self, ruleset: Ruleset) -> None:
+        """A silent gate is an opinion; only a branch with no opinion at all is critical."""
+        evaluation = evaluate_routes(_features("free-speech", consensus_present=False), ruleset)
+        assert "AIRWAY" not in unreadable_branches(evaluation, ruleset)
+        assert unreadable_branches(evaluation, ruleset) == ("SPEECH",)
+
+    def test_a_readable_consensus_leaves_no_branch_unreadable(self, ruleset: Ruleset) -> None:
+        """An ASR that ran and transcribed nothing is a measured nothing, not an absence."""
+        evaluation = evaluate_routes(_features("free-speech", consensus_present=True), ruleset)
+        assert "SPEECH" not in unreadable_branches(evaluation, ruleset)

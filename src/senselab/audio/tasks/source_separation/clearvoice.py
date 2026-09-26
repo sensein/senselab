@@ -1,4 +1,4 @@
-"""ClearVoice speech separation: MossFormer2_SS_16K, two sources at 16 kHz.
+"""ClearerVoice speech separation: MossFormer2_SS_16K, two sources at 16 kHz.
 
 Reached through :func:`senselab.audio.tasks.source_separation.separate_audios` by naming the
 checkpoint, or called directly. Runs in an isolated subprocess venv; see
@@ -27,7 +27,7 @@ def separate_audios_with_clearvoice(
     device: Optional[DeviceType] = None,
     timeout_s: Optional[float] = None,
 ) -> List[List[Audio]]:
-    """Separate each audio into the sources ClearVoice's separator produces.
+    """Separate each audio into the sources ClearerVoice's separator produces.
 
     Inputs are resampled to 16 kHz and downmixed to mono.
 
@@ -43,7 +43,7 @@ def separate_audios_with_clearvoice(
         resolved commit, its source index, and the RMS scalar that was **not** applied to it.
 
     Raises:
-        ValueError: If ``model`` does not name the ClearVoice separation checkpoint, or if
+        ValueError: If ``model`` does not name the ClearerVoice separation checkpoint, or if
             ``timeout_s`` is not positive, or if ``device`` is neither CUDA nor CPU.
         RuntimeError: If any input yields fewer than two sources, or if the worker fails or exceeds
             its ceiling.

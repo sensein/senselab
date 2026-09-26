@@ -27,6 +27,16 @@ def _heartbeat_file(resource: Path) -> Path:
     return Path(str(resource) + ".heartbeat")
 
 
+def _holder_file(resource: Path) -> Path:
+    """Mirror SharedFileLock's own derivation: append, not `Path.with_suffix`.
+
+    Holder identity (user/host/pid/token) lives here, never in `.lock` itself -- see
+    specs/20260907-shared-lock-heartbeat-inf/stampede-timeout-and-identity-file.md for why
+    `filelock`'s own polling makes `.lock`'s content unfit to carry it.
+    """
+    return Path(str(resource) + ".holder")
+
+
 def test_lock_and_heartbeat_files_are_group_writable(tmp_path: Path) -> None:
     """A second user must be able to refresh the heartbeat and break a stale lock.
 
@@ -39,8 +49,10 @@ def test_lock_and_heartbeat_files_are_group_writable(tmp_path: Path) -> None:
     with SharedFileLock(resource):
         lock_file = _lock_file(resource)
         heartbeat = _heartbeat_file(resource)
+        holder = _holder_file(resource)
         assert stat.S_IMODE(lock_file.stat().st_mode) & 0o060 == 0o060
         assert stat.S_IMODE(heartbeat.stat().st_mode) & 0o060 == 0o060
+        assert stat.S_IMODE(holder.stat().st_mode) & 0o060 == 0o060
 
 
 def test_lock_directory_is_setgid_and_group_writable(tmp_path: Path) -> None:
@@ -87,7 +99,7 @@ def test_holder_identity_is_recorded_while_held(tmp_path: Path) -> None:
     """
     resource = tmp_path / "thing"
     with SharedFileLock(resource):
-        holder = lock_holder(_lock_file(resource))
+        holder = lock_holder(_holder_file(resource))
         assert holder is not None
         assert holder["pid"] == os.getpid()
         assert holder["user"] and holder["host"]
@@ -99,7 +111,7 @@ def test_holder_is_cleared_on_release(tmp_path: Path) -> None:
     resource = tmp_path / "thing"
     with SharedFileLock(resource):
         pass
-    assert lock_holder(_lock_file(resource)) is None
+    assert lock_holder(_holder_file(resource)) is None
 
 
 def test_a_stale_heartbeat_is_taken_over(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
@@ -112,16 +124,16 @@ def test_a_stale_heartbeat_is_taken_over(tmp_path: Path, caplog: pytest.LogCaptu
     import logging
 
     resource = tmp_path / "thing"
-    lock_file = _lock_file(resource)
+    holder_file = _holder_file(resource)
     heartbeat = _heartbeat_file(resource)
     resource.parent.mkdir(parents=True, exist_ok=True)
-    lock_file.write_text(json.dumps({"user": "alice", "host": "node1234", "pid": 4211, "taken_at": 0}))
+    holder_file.write_text(json.dumps({"user": "alice", "host": "node1234", "pid": 4211, "taken_at": 0}))
     heartbeat.touch()
     os.utime(heartbeat, (0, 0))  # aged, not slept
 
     with caplog.at_level(logging.WARNING):
         with SharedFileLock(resource, timeout=1.0, stale_after=60.0):
-            holder = lock_holder(lock_file)
+            holder = lock_holder(holder_file)
             assert holder is not None
             assert holder["pid"] == os.getpid()
     message = " ".join(r.message for r in caplog.records)
@@ -276,6 +288,142 @@ def test_a_second_process_waits_rather_than_proceeding(tmp_path: Path) -> None:
         waited = time.monotonic() - started
     proc.join(timeout=10)
     assert waited > 0.5, f"second acquirer did not wait (waited {waited:.2f}s)"
+
+
+def test_a_normal_handoff_after_waiting_is_not_logged_as_a_stale_takeover(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A second acquirer that waited for a holder which then exited cleanly must not treat that as stale.
+
+    Reproduces the ORCD collision in
+    specs/20260817-triage-workflow-dag/benchmarks/orcd-scheduling-2026-09-08.md: the holder
+    identity a waiter reads is captured *before* its (possibly long) blocking acquire, so
+    once the wait resolves via a normal ``__exit__`` -- which clears the heartbeat and lock
+    content before releasing the flock -- the old snapshot's heartbeat looks gone. Before the
+    fix, that made every ordinary contended-then-succeeded handoff log and perform a "stale
+    lock" takeover, even though the previous holder had just finished normally.
+    """
+    import logging
+    import multiprocessing as mp
+    import time
+
+    resource = tmp_path / "thing"
+    ctx = mp.get_context("spawn")
+    acquired = ctx.Event()
+    proc = ctx.Process(target=_hold, args=(str(resource), 2.0, acquired))
+    proc.start()
+    try:
+        assert acquired.wait(timeout=30), "child never acquired the lock within 30s"
+        started = time.monotonic()
+        with caplog.at_level(logging.WARNING):
+            with SharedFileLock(resource, timeout=10.0):
+                pass
+        waited = time.monotonic() - started
+        assert waited > 0.5, f"parent did not actually wait for the child (waited {waited:.2f}s)"
+    finally:
+        proc.join(timeout=10)
+    assert not any("Stale lock" in r.message for r in caplog.records), caplog.text
+
+
+def test_a_holder_without_a_heartbeat_yet_is_not_taken_over(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """A holder that has just acquired and not yet written a heartbeat must not be judged stale.
+
+    Manufactures the exact state a missing heartbeat produces at the instant of acquisition:
+    a legible holder identity with a recent ``taken_at`` and no ``.heartbeat`` file at all.
+    Before the fix, a missing heartbeat read as ``float("inf")``, which is always greater than
+    ``stale_after`` -- so this holder would have been declared stale and taken over instantly.
+    """
+    import logging
+    import time
+
+    resource = tmp_path / "thing"
+    holder_file = _holder_file(resource)
+    heartbeat = _heartbeat_file(resource)
+    resource.parent.mkdir(parents=True, exist_ok=True)
+    holder_file.write_text(json.dumps({"user": "alice", "host": "node1234", "pid": 4211, "taken_at": time.time()}))
+    assert not heartbeat.exists()
+
+    with caplog.at_level(logging.WARNING):
+        with SharedFileLock(resource, stale_after=120.0, timeout=600.0):
+            pass
+    assert not any("Stale lock" in r.message for r in caplog.records), caplog.text
+
+
+def test_a_holder_mid_long_install_without_a_readable_heartbeat_is_not_taken_over(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A holder hundreds of seconds into a long install must not be judged stale merely for an unreadable heartbeat.
+
+    ``crisperwhisper`` cold builds measured 579.7-794.1s in
+    specs/20260817-triage-workflow-dag/benchmarks/orcd-scheduling-2026-09-08.md, far past the
+    120s ``stale_after``. This holder is 400s into acquiring the lock -- past ``stale_after``
+    but still well inside the 600s ``timeout`` this test configures -- with no heartbeat file
+    readable at all. The fallback must use ``taken_at`` against ``timeout``, not
+    ``stale_after``, or this legitimately-running holder is wrongly evicted.
+    """
+    import logging
+    import time
+
+    resource = tmp_path / "thing"
+    holder_file = _holder_file(resource)
+    heartbeat = _heartbeat_file(resource)
+    resource.parent.mkdir(parents=True, exist_ok=True)
+    holder_file.write_text(
+        json.dumps({"user": "alice", "host": "node1234", "pid": 4211, "taken_at": time.time() - 400})
+    )
+    assert not heartbeat.exists()
+
+    with caplog.at_level(logging.WARNING):
+        with SharedFileLock(resource, stale_after=120.0, timeout=600.0):
+            pass
+    assert not any("Stale lock" in r.message for r in caplog.records), caplog.text
+
+
+def test_a_holder_with_no_heartbeat_and_an_old_taken_at_is_eventually_taken_over(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """An unreadable heartbeat must not disable staleness detection outright.
+
+    Mirrors the test above but with ``taken_at`` past the ``timeout`` bound: this holder must
+    still be recognised as abandoned and taken over, or the fix would have simply turned off
+    staleness detection for any holder whose heartbeat cannot be read.
+    """
+    import logging
+    import time
+
+    resource = tmp_path / "thing"
+    holder_file = _holder_file(resource)
+    heartbeat = _heartbeat_file(resource)
+    resource.parent.mkdir(parents=True, exist_ok=True)
+    holder_file.write_text(
+        json.dumps({"user": "alice", "host": "node1234", "pid": 4211, "taken_at": time.time() - 700})
+    )
+    assert not heartbeat.exists()
+
+    with caplog.at_level(logging.WARNING):
+        with SharedFileLock(resource, stale_after=120.0, timeout=600.0):
+            holder = lock_holder(holder_file)
+            assert holder is not None
+            assert holder["pid"] == os.getpid()
+    message = " ".join(r.message for r in caplog.records)
+    assert "Stale lock" in message and "alice" in message and "node1234" in message and "4211" in message
+
+
+def test_heartbeat_is_refreshed_while_held(tmp_path: Path) -> None:
+    """The heartbeat file's mtime must keep advancing for the duration the lock is held.
+
+    Uses a short ``heartbeat_interval`` rather than sleeping through the real 30s default, so
+    this stays fast while still proving the background thread actually ticks more than once.
+    """
+    import time
+
+    resource = tmp_path / "thing"
+    heartbeat = _heartbeat_file(resource)
+    with SharedFileLock(resource, heartbeat_interval=0.05, stale_after=10.0):
+        first = heartbeat.stat().st_mtime
+        time.sleep(0.2)
+        second = heartbeat.stat().st_mtime
+    assert second > first, "heartbeat mtime did not advance while the lock was held"
 
 
 def test_timeout_tolerates_a_holder_without_taken_at(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

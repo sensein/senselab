@@ -52,6 +52,7 @@ htmlcov/
 scripts/cache/
 nosetests.xml
 coverage.xml
+pytest.xml
 *.cover
 *.py,cover
 .hypothesis/
@@ -188,6 +189,10 @@ data/
 # back to the undocumented in-code default instead of failing loudly.
 !src/senselab/utils/tasks/data/
 !src/senselab/utils/tasks/data/**
+# ...but the triage workflow ships checked-in package data (the versioned config); a bare
+# `data/` pattern would hide it from both git and hatchling's VCS-aware file selection.
+!src/senselab/audio/workflows/triage/data/
+!src/senselab/audio/workflows/triage/data/**
 # pdoc documentation
 docs/
 
@@ -238,3 +243,23 @@ dist/
 
 # matplotlib's font cache — machine-local, and it was committed by accident once
 .matplotlib/
+
+# Sensitive: the compact recording vectors carry transcript text and marked PII extents.
+# Mode 600, never committed. See specs/20260922-compact-recording-vectors/schema.md.
+recording_vectors*.parquet
+recording_vectors*.report.json
+recording_vectors*.summary.json
+
+# Sensitive: the per-speaker vectors are a voice biometric derived from human-subject audio.
+# Mode 600, never committed. See specs/20260922-speaker-vectors/schema.md.
+speaker_vectors*.parquet
+speaker_vectors*.report.json
+speaker_vectors*.summary.json
+
+# Playwright harness for the recording-vectors viewer (installed locally, not vendored).
+# No trailing slash: a worktree that symlinks node_modules at an existing install is not a
+# directory, and the slash form would leave it showing as untracked.
+node_modules
+package-lock.json
+test-results/
+playwright-report/

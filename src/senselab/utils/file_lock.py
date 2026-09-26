@@ -23,6 +23,7 @@ import os
 import socket
 import threading
 import time
+import uuid
 from pathlib import Path
 from typing import Optional
 
@@ -139,9 +140,12 @@ def lock_holder(lock_path: Path) -> Optional[dict]:
 class SharedFileLock:
     """A cross-user file lock with a heartbeat that stale-detection actually reads.
 
-    ``path`` names the resource being guarded; the lock itself lives at
-    ``path`` with ``.lock`` appended and the heartbeat at ``path`` with
-    ``.heartbeat`` appended -- string concatenation, not ``Path.with_suffix``.
+    ``path`` names the resource being guarded; the lock itself lives at ``path`` with ``.lock``
+    appended, the heartbeat at ``path`` with ``.heartbeat`` appended, and the holder identity
+    (user/host/pid/token) at ``path`` with ``.holder`` appended -- string concatenation, not
+    ``Path.with_suffix``. The identity lives in its own file, never inside ``.lock`` itself: see
+    ``specs/20260907-shared-lock-heartbeat-inf/`` for why ``filelock``'s own polling makes the
+    ``.lock`` file's content unfit to carry anything this class needs to read back.
 
     ``with_suffix`` *replaces* everything from the resource name's last dot
     onward rather than appending after it, and both prior lock implementations
@@ -158,6 +162,12 @@ class SharedFileLock:
     calling this class; that workaround is gone now that the primitive itself
     cannot collide).
     """
+
+    # Above this, a successful acquire is treated as "we waited for a live holder to
+    # release", never as a stale takeover -- see `__enter__`. Comfortably above
+    # filelock's own 0.05s poll interval, comfortably below any real contention in this
+    # codebase (seconds to minutes).
+    _UNCONTENDED_ACQUIRE_THRESHOLD = 0.5
 
     def __init__(
         self,
@@ -202,6 +212,7 @@ class SharedFileLock:
         # Path.with_suffix here used to produce.
         self._lock_path = Path(str(path) + ".lock")
         self._heartbeat_path = Path(str(path) + ".heartbeat")
+        self._holder_path = Path(str(path) + ".holder")
         self._timeout = timeout
         self._heartbeat_interval = heartbeat_interval
         self._stale_after = stale_after
@@ -209,6 +220,7 @@ class SharedFileLock:
         self._lock = FileLock(str(self._lock_path))
         self._stop_event = threading.Event()
         self._heartbeat_thread: Optional[threading.Thread] = None
+        self._token: Optional[str] = None
 
     def _heartbeat_loop(self) -> None:
         while not self._stop_event.wait(self._heartbeat_interval):
@@ -225,139 +237,163 @@ class SharedFileLock:
                 # I/O errors (e.g. the underlying directory being removed).
                 pass
 
-    def _heartbeat_age(self) -> float:
+    def _heartbeat_age(self) -> Optional[float]:
+        """Return seconds since the heartbeat file was last touched, or None if it cannot be read.
+
+        ``None`` covers a missing file and every other ``OSError`` from ``stat`` alike --
+        see ``specs/20260907-shared-lock-heartbeat-inf/`` for why this must not be coerced
+        to ``float("inf")``.
+        """
         try:
             return time.time() - self._heartbeat_path.stat().st_mtime
         except OSError:
-            # No heartbeat file at all reads as infinitely stale.
-            return float("inf")
+            return None
+
+    def _staleness(self, holder: dict) -> tuple[Optional[float], str, float]:
+        """Return ``(age, basis, bound)`` for judging whether ``holder``'s lock is stale.
+
+        ``basis`` is ``"heartbeat"`` when the heartbeat file's own age decides it, or
+        ``"taken_at"`` when falling back to how long ago ``holder`` recorded acquiring the
+        lock because the heartbeat could not be read. ``age`` is ``None`` when neither
+        source is available, and callers must not treat that as stale.
+        """
+        hb_age = self._heartbeat_age()
+        if hb_age is not None:
+            return hb_age, "heartbeat", self._stale_after
+        taken_at = holder.get("taken_at")
+        if isinstance(taken_at, (int, float)):
+            return max(0.0, time.time() - taken_at), "taken_at", self._timeout
+        return None, "unknown", self._timeout
 
     def _write_holder(self) -> None:
+        self._token = uuid.uuid4().hex
         payload = {
             "user": getpass.getuser(),
             "host": socket.gethostname(),
             "pid": os.getpid(),
             "taken_at": time.time(),
+            "token": self._token,
         }
-        self._lock_path.write_text(json.dumps(payload))
+        self._holder_path.write_text(json.dumps(payload))
+        # write_text recreates the inode on some filesystems, which can drop the
+        # group-writable bit _touch_shared set up before acquisition; reassert it.
+        try:
+            os.chmod(self._holder_path, LOCK_FILE_MODE)
+        except OSError:
+            pass
 
-    def _warn_stale_takeover(self, holder: Optional[dict], age: float) -> None:
+    def owns(self) -> bool:
+        """Return whether this instance is still the identity recorded at the holder path.
+
+        A takeover elsewhere overwrites that identity without contacting this process, so a
+        caller doing long-running work under the lock should call this before an
+        irreversible step (e.g. declaring a build complete) rather than assume that holding
+        this Python object still means holding the resource.
+
+        Reads ``.holder``, never ``.lock``: unlike the lock file, nothing but an actual new
+        holder's own ``_write_holder()`` call ever writes to ``.holder``, so a waiter's failed,
+        non-blocking poll attempts -- which truncate ``.lock`` on every single one, per
+        ``lock_holder``'s docstring -- cannot erase this instance's own identity out from under
+        it while it is still the genuine, live holder.
+        """
+        current = lock_holder(self._holder_path)
+        return current is not None and self._token is not None and current.get("token") == self._token
+
+    def _warn_stale_takeover(self, holder: dict, age: float, basis: str, bound: float) -> None:
         """Log the "we are taking over a dead holder's lock" warning.
 
-        Named identity (user/host/pid) is what lets someone on a cluster check
-        whether the job that held this lock actually died, rather than just
-        being told "stale lock detected".
+        Named identity (user/host/pid), the age actually read, and the basis it came from
+        are what let someone on a cluster check whether the job that held this lock really
+        died, rather than just being told "stale lock detected".
         """
-        if holder is not None:
-            logger.warning(
-                "Stale lock at %s: heartbeat is %.1fs old (> stale_after=%.1fs). "
-                "Previous holder was user=%s host=%s pid=%s. Breaking lock and taking over.",
-                self._lock_path,
-                age,
-                self._stale_after,
-                holder.get("user"),
-                holder.get("host"),
-                holder.get("pid"),
-            )
-        else:
-            logger.warning(
-                "Stale lock at %s: heartbeat is %.1fs old (> stale_after=%.1fs), "
-                "and no holder identity could be read. Breaking lock and taking over.",
-                self._lock_path,
-                age,
-                self._stale_after,
-            )
+        logger.warning(
+            "Stale lock at %s: %s is %.1fs old (> %s threshold %.1fs). "
+            "Previous holder was user=%s host=%s pid=%s. Breaking lock and taking over.",
+            self._lock_path,
+            "heartbeat" if basis == "heartbeat" else "time since previous holder recorded acquiring the lock",
+            age,
+            basis,
+            bound,
+            holder.get("user"),
+            holder.get("host"),
+            holder.get("pid"),
+        )
 
     def __enter__(self) -> "SharedFileLock":
         """Acquire the lock, taking over a dead holder's leftovers if found.
 
-        The two branches below are deliberately asymmetric, and that
-        asymmetry is the safety property this class provides:
-
-        - **Uncontended acquire, stale identity on disk** (the ``else``
-          branch): the OS-level ``flock`` was free — a crashed process's
-          ``flock`` is released by the kernel the instant it exits — so what
-          is left behind is a leftover: a lock file naming a dead holder.
-          Safe to clean up and log.
-        - **``filelock.Timeout``** (the ``except`` branch): reaching this
-          proves the ``flock`` was held *continuously* for the entire
-          ``timeout`` window. A crashed process cannot do that — so a timeout
-          always means a live process holds the lock, no matter how stale its
-          heartbeat looks (heartbeat writes can stall or die independently of
-          the holder, e.g. an uncaught exception in the heartbeat thread, or
-          the thread simply not being scheduled under load — the holder's
-          real work continues regardless). Unlinking here would hand a new
-          claimant a lock on a **fresh inode** while the original holder still
-          holds the ``flock`` on the now-orphaned one: both then believe they
-          hold the lock, which is precisely the concurrent clobber this class
-          exists to prevent. So this branch never unlinks or retries; it only
-          raises, naming the holder so a human can decide whether to kill it.
+        See ``specs/20260907-shared-lock-heartbeat-inf/`` for why the ``else`` branch
+        gates on *how long the acquire took* rather than re-reading holder content
+        afterward: ``filelock`` truncates the ``.lock`` file on every attempt (including a
+        contender's failed polls), so content read post-acquire cannot distinguish a
+        clean release from a crash leftover, but elapsed wait time can. Holder identity
+        itself lives in the separate ``.holder`` file precisely so this reasoning about
+        the ``.lock`` file's content doesn't have to extend to identity too.
 
         Returns:
             This instance, for use as a context manager.
 
         Raises:
-            TimeoutError: The lock is held by a live process (see above).
+            TimeoutError: The lock is held by a live process, or staleness cannot be
+                determined for a holder identity left behind by an uncontended acquire.
         """
         _ensure_dir(self._lock_path.parent, manage_mode=self._manage_dir_mode)
         _touch_shared(self._lock_path)
-        # Read whatever identity is on disk *before* we touch anything else,
-        # for both branches below: the uncontended-acquire check needs it to
-        # decide whether to log a takeover, and the Timeout branch needs it
-        # purely to name the current holder in the error message.
-        previous_holder: Optional[dict] = lock_holder(self._lock_path)
+        _touch_shared(self._holder_path)
+        # Read whatever identity is on disk before any acquire attempt. `.holder` is never
+        # touched by `filelock`'s own polling (unlike `.lock`, which it truncates on every
+        # `_acquire()` call, including a failed poll -- see `lock_holder`'s docstring), so
+        # this snapshot stays valid for the whole attempt, not just up to the first poll.
+        previous_holder: Optional[dict] = lock_holder(self._holder_path)
+        acquire_started = time.monotonic()
         try:
             self._lock.acquire(timeout=self._timeout)
         except Timeout:
             age = self._heartbeat_age()
+            age_display = f"{age:.1f}s old" if age is not None else "unreadable"
             if previous_holder is not None:
-                # `.get`, not `[...]`, like every neighbouring field. This guards against a lock
-                # file senselab did not write: a hand-edited one, or a foreign `<resource>.lock`
-                # met on the FileRef path in subprocess_venv.call_in_venv, which appends `.lock` to
-                # a caller-supplied path and so can land on some other tool's file of that name.
-                #
-                # It is not version tolerance, and the comment should not claim to be: no senselab
-                # ever wrote a holder without `taken_at`. `_write_holder` has emitted it since this
-                # class was introduced (61840d7b), and the `_HeartbeatLock` it replaced (removed in
-                # 51589e6f) wrote no payload at all -- an empty file, which `lock_holder` maps to
-                # None. A truncated write cannot produce one either: `taken_at` is serialised last,
-                # so a partial file has no closing brace, `json.loads` fails, and `lock_holder`
-                # returns None again.
-                #
-                # A bare subscript would raise KeyError (or TypeError on a non-numeric value) out
-                # of __enter__, where nothing expects a non-timeout: the retry loops in
-                # ensure_hf_model / ensure_venv / record_resolution catch only TimeoutError, and
-                # the fourth call site -- the FileRef locks in call_in_venv -- has no handler at
-                # all. Failing to report a lock timeout is not worth a crash on any of them.
+                # `.get`, not `[...]`: guards against a lock file senselab did not write --
+                # a hand-edited one, or a foreign `<resource>.lock` met on the FileRef path
+                # in subprocess_venv.call_in_venv.
                 taken_at = previous_holder.get("taken_at")
                 held_for = f"{time.time() - taken_at:.1f}s" if isinstance(taken_at, (int, float)) else "an unknown time"
                 detail = (
                     f"held by user={previous_holder.get('user')} host={previous_holder.get('host')} "
                     f"pid={previous_holder.get('pid')} for {held_for} "
-                    f"(heartbeat {age:.1f}s old)"
+                    f"(heartbeat {age_display})"
                 )
             else:
-                detail = f"held by an unknown process (heartbeat {age:.1f}s old, no identity on disk)"
+                detail = f"held by an unknown process (heartbeat {age_display}, no identity on disk)"
             raise TimeoutError(
                 f"Timed out after {self._timeout:.1f}s waiting for lock at {self._lock_path}: {detail}. "
                 "The OS-level lock was held for the entire wait, which a crashed process cannot do, so this "
                 "is a live holder even though its heartbeat may look stale -- it is not broken automatically. "
-                "If that process is confirmed dead, remove the .lock file by hand."
+                "If that process is confirmed dead, remove the .lock and .holder files by hand."
             ) from None
         else:
-            if previous_holder is not None:
-                age = self._heartbeat_age()
-                if age > self._stale_after:
-                    self._warn_stale_takeover(previous_holder, age)
+            # A measurable wait means the flock was actually held until moments ago: a
+            # live holder finished and released normally during it (`__exit__` clears the
+            # heartbeat and holder identity before releasing the flock, so `previous_holder`
+            # is now a snapshot of a resource that no longer needs taking over from anyone).
+            # Only a genuinely uncontended (near-instant) acquire can mean `previous_holder`,
+            # if present, is an untouched leftover from a holder that never released at all.
+            contended = (time.monotonic() - acquire_started) > self._UNCONTENDED_ACQUIRE_THRESHOLD
+            if previous_holder is not None and not contended:
+                age, basis, bound = self._staleness(previous_holder)
+                if age is None:
+                    # Release the OS-level lock we just took: raising here must leave this
+                    # process holding nothing, matching the Timeout branch's contract.
+                    self._lock.release()
+                    raise TimeoutError(
+                        f"Cannot determine whether the lock at {self._lock_path} is stale: "
+                        f"held by user={previous_holder.get('user')} host={previous_holder.get('host')} "
+                        f"pid={previous_holder.get('pid')}, no heartbeat and no recorded acquire time. "
+                        "Not taking over."
+                    )
+                if age > bound:
+                    self._warn_stale_takeover(previous_holder, age, basis, bound)
 
         self._write_holder()
-        # The lock file's mode survives write_text (it rewrites content, not the
-        # inode), but re-assert it: some filesystems/implementations recreate
-        # the inode on write, which would silently drop the group-writable bit.
-        try:
-            os.chmod(self._lock_path, LOCK_FILE_MODE)
-        except OSError:
-            pass
         self._stop_event.clear()
         self._heartbeat_thread = threading.Thread(target=self._heartbeat_loop, daemon=True)
         self._heartbeat_thread.start()
@@ -370,17 +406,5 @@ class SharedFileLock:
         if self._heartbeat_thread is not None:
             self._heartbeat_thread.join(timeout=5)
         self._heartbeat_path.unlink(missing_ok=True)
-        try:
-            # `filelock.UnixFileLock._release()` (called below) unconditionally
-            # attempts to unlink the lock file itself, so this content does not
-            # normally survive past this call -- the next acquirer's
-            # `_touch_shared` recreates the file from nothing, not from what we
-            # leave here. Truncating first is a backstop for the case where
-            # that unlink silently fails (`_release()` suppresses `OSError`,
-            # e.g. a permission or network hiccup on a shared tree): even then,
-            # `lock_holder()` reads the leftover file as unheld rather than
-            # reporting our identity indefinitely.
-            self._lock_path.write_text("")
-        except OSError:
-            pass
+        self._holder_path.unlink(missing_ok=True)
         self._lock.release()

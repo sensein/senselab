@@ -19,12 +19,19 @@ checkpoint — the property under test is that quiet content survives serializat
 from __future__ import annotations
 
 import math
+import subprocess
+from collections.abc import Iterator
 from pathlib import Path
 
 import numpy as np
 import pytest
+import torch
 
+from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.classification.yamnet import (
+    YAMNET_WINDOW_SECONDS,
+    SpanTooShortForYAMNet,
+    span_yamnet_input,
     write_worker_wav,
 )
 from senselab.utils.portable_audio_io import LOSSLESS_WAV_SUBTYPE
@@ -116,3 +123,167 @@ def test_multichannel_input_is_collapsed_to_mono(tmp_path: Path) -> None:
     back, _ = sf.read(tmp_path / "m.wav", dtype="float32")
     assert back.ndim == 1
     assert _rms_dbfs(back) == pytest.approx(-40.0, abs=0.5)
+
+
+class TestSpanFrameGate:
+    """A span shorter than YAMNet's native frame is never classified directly.
+
+    See ``specs/20260817-triage-workflow-dag/benchmarks/span-fill-recovery-2026-09-08.md`` for the
+    measurement behind removing the periodic fill this replaced. The caller attributes a short span
+    from covering whole-file windows instead (:func:`~senselab.audio.workflows.triage.nodes.
+    preprocess._covering_window_attribution`); this module only slices the native, at-or-over-frame
+    case and refuses the rest.
+    """
+
+    @staticmethod
+    def _recording(seconds: float = 5.0, rate: int = 16000) -> Audio:
+        t = torch.arange(int(seconds * rate), dtype=torch.float32) / rate
+        return Audio(waveform=torch.sin(2 * torch.pi * 60.0 * t).unsqueeze(0) * 0.1, sampling_rate=rate)
+
+    def test_a_long_span_is_passed_through_untouched(self) -> None:
+        """At or over the frame, YAMNet's own grid applies and nothing should be added."""
+        audio = self._recording()
+        out = span_yamnet_input(audio, (1.0, 3.0))
+        assert out.waveform.shape[-1] == 2 * audio.sampling_rate
+
+    def test_a_span_exactly_one_frame_long_is_passed_through(self) -> None:
+        """The boundary itself is native, not short."""
+        audio = self._recording()
+        rate = audio.sampling_rate
+        out = span_yamnet_input(audio, (1.0, 1.0 + YAMNET_WINDOW_SECONDS))
+        assert out.waveform.shape[-1] == int(round(YAMNET_WINDOW_SECONDS * rate))
+
+    def test_a_short_span_is_refused(self) -> None:
+        """Shorter than the frame: the caller must attribute it, not classify it directly."""
+        audio = self._recording()
+        with pytest.raises(SpanTooShortForYAMNet):
+            span_yamnet_input(audio, (1.0, 1.1))
+
+    def test_an_empty_span_is_refused(self) -> None:
+        """A zero-length span is the shortest possible short span."""
+        audio = self._recording()
+        with pytest.raises(SpanTooShortForYAMNet):
+            span_yamnet_input(audio, (1.0, 1.0))
+
+
+_STUB_WORKER = r"""
+import json
+import os
+import sys
+
+MARKER = "@@SENSELAB_YAMNET@@"
+_replies = sys.stdout
+sys.stdout = sys.stderr
+
+
+def emit(payload):
+    _replies.write(MARKER + json.dumps(payload) + "\n")
+    _replies.flush()
+
+
+emit({"ready": True, "load_s": 0.0})
+calls = 0
+while True:
+    line = sys.stdin.readline()
+    if not line:
+        break
+    if not line.strip():
+        continue
+    request = json.loads(line)
+    if request.get("stop"):
+        break
+    calls += 1
+    mode = os.environ.get("SENSELAB_STUB_MODE", "ok")
+    if mode == "raise":
+        emit({"error": {"type": "ValueError", "message": "stub refused"}})
+        sys.exit(1)
+    if mode == "die":
+        os._exit(7)
+    emit({
+        "results": [
+            [{"label_scores": [{"Speech": float(calls)}]}] for _ in request["audio_paths"]
+        ]
+    })
+"""
+
+
+@pytest.fixture
+def stub_worker(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[None]:
+    """Point the resident worker at a protocol-speaking stub that needs no TensorFlow."""
+    import os
+    import sys
+
+    from senselab.audio.tasks.classification import yamnet as mod
+
+    mod.shutdown_yamnet_worker()
+    monkeypatch.setattr(mod, "_YAMNET_WORKER", _STUB_WORKER)
+    monkeypatch.setattr(mod, "ensure_venv", lambda *a, **k: tmp_path)  # noqa: ARG005
+    monkeypatch.setattr(mod, "venv_python", lambda _d: sys.executable)
+    monkeypatch.setattr(mod, "_clean_subprocess_env", lambda: dict(os.environ))
+    yield
+    mod.shutdown_yamnet_worker()
+
+
+def _one_second() -> Audio:
+    """A one-second silent recording; the stub ignores the samples."""
+    return Audio(waveform=torch.zeros(1, SR, dtype=torch.float32), sampling_rate=SR)
+
+
+def _live_process(mod: object) -> subprocess.Popen:
+    """The running worker's child process, asserting there is one."""
+    worker = mod._WORKER  # type: ignore[attr-defined]  # noqa: SLF001 — the worker is under test
+    assert worker is not None
+    process = worker._process  # noqa: SLF001
+    assert process is not None
+    return process
+
+
+@pytest.mark.usefixtures("stub_worker")
+def test_the_worker_is_reused_across_calls() -> None:
+    """A second classification must reach the same process, not a fresh one."""
+    from senselab.audio.tasks.classification import yamnet as mod
+
+    first = mod.YAMNetClassifier.classify_with_yamnet([_one_second()], top_k=1)
+    pid = _live_process(mod).pid  # the process identity is the property under test
+    second = mod.YAMNetClassifier.classify_with_yamnet([_one_second()], top_k=1)
+    assert _live_process(mod).pid == pid
+    # The stub counts the requests it has served, so a reused process answers 1 then 2.
+    assert first[0][0]["label_scores"] == [{"Speech": 1.0}]
+    assert second[0][0]["label_scores"] == [{"Speech": 2.0}]
+
+
+@pytest.mark.usefixtures("stub_worker")
+def test_shutdown_ends_the_worker_and_the_next_call_starts_another() -> None:
+    """Handing the memory back early must not make the next classification fail."""
+    from senselab.audio.tasks.classification import yamnet as mod
+
+    mod.YAMNetClassifier.classify_with_yamnet([_one_second()], top_k=1)
+    process = _live_process(mod)
+    mod.shutdown_yamnet_worker()
+    assert mod._WORKER is None
+    assert process.poll() is not None
+    again = mod.YAMNetClassifier.classify_with_yamnet([_one_second()], top_k=1)
+    assert again[0][0]["label_scores"] == [{"Speech": 1.0}]
+
+
+@pytest.mark.usefixtures("stub_worker")
+def test_a_worker_reported_error_keeps_its_type(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The one-shot parser reconstructed ValueError and TypeError; the resident path must too."""
+    from senselab.audio.tasks.classification import yamnet as mod
+
+    monkeypatch.setenv("SENSELAB_STUB_MODE", "raise")
+    with pytest.raises(ValueError, match="stub refused"):
+        mod.YAMNetClassifier.classify_with_yamnet([_one_second()], top_k=1)
+
+
+@pytest.mark.usefixtures("stub_worker")
+def test_a_dead_worker_is_replaced_rather_than_reused(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A worker that vanished must not block the next call."""
+    from senselab.audio.tasks.classification import yamnet as mod
+
+    monkeypatch.setenv("SENSELAB_STUB_MODE", "die")
+    with pytest.raises(RuntimeError):
+        mod.YAMNetClassifier.classify_with_yamnet([_one_second()], top_k=1)
+    monkeypatch.setenv("SENSELAB_STUB_MODE", "ok")
+    recovered = mod.YAMNetClassifier.classify_with_yamnet([_one_second()], top_k=1)
+    assert recovered[0][0]["label_scores"] == [{"Speech": 1.0}]

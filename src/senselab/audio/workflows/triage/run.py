@@ -1,0 +1,506 @@
+"""The triage runner: one recording driven through the graph over one provenance store.
+
+Builds the run's directory layout, calls each node in the graph's order, records whether each one
+completed, was skipped or raised, and hands that mapping to VERDICT. See
+``specs/20260817-triage-workflow-dag/dag.md``.
+"""
+
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Callable, TypeVar
+
+from senselab.audio.data_structures import Audio, AudioHints
+from senselab.audio.workflows.triage.config import TriageConfig
+from senselab.audio.workflows.triage.enrollment import Enrollment
+from senselab.audio.workflows.triage.nodes.admit import admit
+from senselab.audio.workflows.triage.nodes.airway import airway
+from senselab.audio.workflows.triage.nodes.branches import declared_task_family
+from senselab.audio.workflows.triage.nodes.common import (
+    BranchResult,
+    NodeResult,
+    capture_environments,
+    describe_exception,
+)
+from senselab.audio.workflows.triage.nodes.preprocess import preprocess
+from senselab.audio.workflows.triage.nodes.quality import quality
+from senselab.audio.workflows.triage.nodes.redact import redact, settle_release
+from senselab.audio.workflows.triage.nodes.report import report
+from senselab.audio.workflows.triage.nodes.review import NODE as REVIEW_NODE
+from senselab.audio.workflows.triage.nodes.review import ReviewOutcome, review
+from senselab.audio.workflows.triage.nodes.routing import routing
+from senselab.audio.workflows.triage.nodes.speech import speech
+from senselab.audio.workflows.triage.nodes.taxonomy import taxonomy
+from senselab.audio.workflows.triage.nodes.verdict import verdict
+from senselab.audio.workflows.triage.nodes.voice import voice
+from senselab.audio.workflows.triage.vocabulary import (
+    BRANCHES,
+    GRAPH_ORDER,
+    QUALITY,
+    BranchReport,
+    FileVerdict,
+    NodeVerdict,
+    Outcome,
+    RunState,
+)
+from senselab.utils.prov_store import ProvStore
+from senselab.utils.subprocess_venv import record_venv_use
+
+REPORT_NODE = "REPORT"
+
+NO_NODE = "no node implements this branch"
+"""The note a branch with no implementation carries, selected or not."""
+
+WITHHELD_CRITICAL = "withheld: a critical measurement was absent and the run went straight to VERDICT"
+"""The note every branch carries when ROUTING short-circuited the run."""
+
+STORE_FILE = "store.jsonl"
+LOG_FILE = "run.json"
+RUN_SUBDIR = "run"
+RELEASE_SUBDIR = "released"
+SUMMARY_SUBDIR = "summary"
+SIDECAR_SUBDIRS = ("streams", "derivatives")
+
+_RUN_STAMP = "%Y%m%d-%H%M%S"
+_ENTITY_ORDER = ("sub-", "ses-")
+_CONDITIONED_STREAM = "plain"
+_SOURCE_STREAM = "recording"
+
+_R = TypeVar("_R", bound="NodeResult | BranchResult | ReviewOutcome")
+
+
+@dataclass(frozen=True)
+class NodeOutcome:
+    """What one node did on one run.
+
+    Attributes:
+        node: The node's name.
+        state: Whether it completed, was skipped, or raised.
+        verdict: Its conclusion, or None — which is every reporting node.
+        report: What it reported, or None — which is every deciding node.
+        error: The exception's type and message when it raised, else None.
+        note: Why the state is what it is, where the state alone does not say.
+    """
+
+    node: str
+    state: RunState
+    verdict: NodeVerdict | None = None
+    report: BranchReport | None = None
+    error: str | None = None
+    note: str | None = None
+
+
+@dataclass(frozen=True)
+class TriageRunResult:
+    """What one run of the graph produced.
+
+    Attributes:
+        file_verdict: The graph's conclusion on both axes, or None when VERDICT itself raised.
+        nodes: Per-node outcome, in graph order, with any branch the graph does not name last.
+        run_dir: The run directory holding the store and every sidecar.
+        artifacts_dir: The release directory REDACT was given; disjoint from ``run_dir``.
+        store_path: The persisted store.
+        summary_dir: Where REPORT's two products go, a sibling of ``run_dir`` and ``artifacts_dir``.
+        released: REDACT's released pair, empty unless it cleared one.
+        summary: REPORT's two products, empty when REPORT itself raised.
+    """
+
+    file_verdict: FileVerdict | None
+    nodes: dict[str, NodeOutcome]
+    run_dir: Path
+    artifacts_dir: Path
+    store_path: Path
+    summary_dir: Path
+    released: dict[str, Path] = field(default_factory=dict)
+    summary: dict[str, Path] = field(default_factory=dict)
+
+    @property
+    def ran(self) -> dict[str, RunState]:
+        """Whether each node ran, keyed by node name.
+
+        Returns:
+            The run state per node, in graph order.
+        """
+        return {node: outcome.state for node, outcome in self.nodes.items()}
+
+
+@dataclass(frozen=True)
+class RunLayout:
+    """One run's directories.
+
+    Attributes:
+        entity_dir: The directory the run root sits in — ``out_dir`` joined with
+            :func:`entity_subdir` of the stem.
+        root: The per-run root the three trees below are siblings in.
+        run_dir: Where the store and every sidecar go.
+        artifacts_dir: Where REDACT may release a pair. Fresh and empty on every run.
+        store_path: Where the store is persisted.
+        summary_dir: Where REPORT's two products go.
+    """
+
+    entity_dir: Path
+    root: Path
+    run_dir: Path
+    artifacts_dir: Path
+    store_path: Path
+    summary_dir: Path
+
+
+def entity_subdir(stem: str) -> Path:
+    """The relative directory a stem's outputs belong in, mirroring the input BIDS tree.
+
+    The stem is split on ``_`` into entity chunks, so a label may itself contain hyphens
+    (``sub-00053adb-a1f4-4724-a694-c10e01b8cbe6``). A chunk with an empty label is not an entity.
+
+    Args:
+        stem: A recording's file stem, such as ``sub-01_ses-02_task-vowel``.
+
+    Returns:
+        ``sub-<label>/ses-<label>`` in BIDS order, with either component dropped when the stem does
+        not carry it, and ``Path(".")`` when it carries neither.
+    """
+    chunks = stem.split("_")
+    parts: list[str] = []
+    for prefix in _ENTITY_ORDER:
+        entity = next((chunk for chunk in chunks if chunk.startswith(prefix) and chunk != prefix), None)
+        if entity is not None:
+            parts.append(entity)
+    return Path(*parts) if parts else Path(".")
+
+
+def prepare_run_layout(out_dir: Path, stem: str) -> RunLayout:
+    """Create a fresh run root under the stem's entity path, with store tree and release tree apart.
+
+    Two runs landing in the same second are separated by a numeric suffix. See
+    ``specs/20260817-triage-workflow-dag/dag.md``.
+
+    Args:
+        out_dir: The tree run roots are created in, under each stem's :func:`entity_subdir`.
+        stem: The recording's file stem, used both to place and to name the run root.
+
+    Returns:
+        The run's directories, all of them created.
+    """
+    entity_dir = out_dir / entity_subdir(stem)
+    stamp = datetime.now(timezone.utc).strftime(_RUN_STAMP)
+    attempt = 0
+    while True:
+        suffix = "" if attempt == 0 else f"-{attempt}"
+        root = entity_dir / f"{stem}_{stamp}{suffix}"
+        try:
+            root.mkdir(parents=True, exist_ok=False)
+        except FileExistsError:
+            attempt += 1
+            continue
+        break
+    run_dir = root / RUN_SUBDIR
+    for subdir in SIDECAR_SUBDIRS:
+        (run_dir / subdir).mkdir(parents=True)
+    artifacts_dir = root / RELEASE_SUBDIR
+    artifacts_dir.mkdir()
+    return RunLayout(
+        entity_dir=entity_dir,
+        root=root,
+        run_dir=run_dir,
+        artifacts_dir=artifacts_dir,
+        store_path=run_dir / STORE_FILE,
+        summary_dir=root / SUMMARY_SUBDIR,
+    )
+
+
+def _attempt(outcomes: dict[str, NodeOutcome], node: str, call: Callable[[], _R]) -> _R | None:
+    """Call one node, recording what happened instead of propagating a failure.
+
+    Args:
+        outcomes: The per-node record this call is added to.
+        node: The node's name.
+        call: The node call, already bound to its arguments.
+
+    Returns:
+        The node's result, or None when it raised or returned no result.
+    """
+    try:
+        result = call()
+        if result is None:
+            raise RuntimeError(f"{node} returned no result")
+        concluded = result.verdict if isinstance(result, NodeResult) else None
+        reported = result.report if isinstance(result, BranchResult) else None
+    except Exception as error:  # noqa: BLE001 — any failure is an operational fact about the run
+        outcomes[node] = NodeOutcome(node=node, state=RunState.ERRORED, error=describe_exception(error))
+        return None
+    outcomes[node] = NodeOutcome(node=node, state=RunState.COMPLETED, verdict=concluded, report=reported)
+    return result
+
+
+def _speech_found_pii(store: ProvStore) -> bool:
+    """Whether SPEECH's scan over the consensus transcript found anything.
+
+    Args:
+        store: The provenance store.
+
+    Returns:
+        True when at least one live ``pii`` entity is in the store.
+    """
+    return bool([finding for finding in store.entities("pii") if not store.is_invalidated(finding.id)])
+
+
+def _drive_branches(
+    store: ProvStore,
+    audio: Audio,
+    config: TriageConfig,
+    hint: AudioHints | None,
+    *,
+    run_dir: Path,
+    artifacts_dir: Path,
+    outcomes: dict[str, NodeOutcome],
+    enrollment: Enrollment | None,
+) -> dict[str, Path]:
+    """Run PREPROCESS, then hand the rest of the graph to :func:`drive_decisions`.
+
+    A PREPROCESS that fails records every node between it and VERDICT ``SKIPPED`` and calls
+    nothing further. See ``specs/20260817-triage-workflow-dag/dag.md``.
+
+    Args:
+        store: The provenance store, already holding ADMIT's ``recording`` stream.
+        audio: The audio ADMIT decoded.
+        config: The triage configuration.
+        hint: What the recording was declared to contain.
+        run_dir: The run directory sidecar paths are relative to.
+        artifacts_dir: The release directory handed to REDACT.
+        outcomes: The per-node record each call is added to.
+        enrollment: The target speaker's enrollment, when the caller supplied one.
+
+    Returns:
+        REDACT's released pair, empty unless it cleared one.
+    """
+    preprocessed = _attempt(outcomes, "PREPROCESS", lambda: preprocess(store, audio, config, hint, run_dir=run_dir))
+    if preprocessed is None:
+        for node in GRAPH_ORDER[GRAPH_ORDER.index("PREPROCESS") + 1 : GRAPH_ORDER.index("VERDICT")]:
+            outcomes[node] = NodeOutcome(node=node, state=RunState.SKIPPED)
+        return {}
+    return drive_decisions(
+        store,
+        config,
+        hint,
+        run_dir=run_dir,
+        artifacts_dir=artifacts_dir,
+        outcomes=outcomes,
+        enrollment=enrollment,
+    )
+
+
+def drive_decisions(
+    store: ProvStore,
+    config: TriageConfig,
+    hint: AudioHints | None,
+    *,
+    run_dir: Path,
+    artifacts_dir: Path,
+    outcomes: dict[str, NodeOutcome],
+    enrollment: Enrollment | None,
+) -> dict[str, Path]:
+    """Run TAXONOMY, routing, the branches routing selects, QUALITY and REDACT over a preprocessed store.
+
+    Every input is the store and the sidecars under ``run_dir``, so the caller may be a graph pass
+    that has just run PREPROCESS or a driver replaying over a finished run. A branch routing
+    declined, one no node implements (noted :data:`NO_NODE`) and one withheld by a critical failure
+    (noted :data:`WITHHELD_CRITICAL`) are all recorded ``SKIPPED`` and never called. QUALITY is
+    called after the branch loop over the source recording; REDACT only when SPEECH ran and its scan
+    found PII. See ``specs/20260817-triage-workflow-dag/dag.md``.
+
+    Args:
+        store: The provenance store, holding ADMIT's ``recording`` stream and PREPROCESS's output.
+        config: The triage configuration.
+        hint: What the recording was declared to contain.
+        run_dir: The run directory sidecar paths are relative to.
+        artifacts_dir: The release directory handed to REDACT.
+        outcomes: The per-node record each call is added to.
+        enrollment: The target speaker's enrollment, when the caller supplied one.
+
+    Returns:
+        REDACT's released pair, empty unless it cleared one.
+    """
+    _attempt(outcomes, "TAXONOMY", lambda: taxonomy(store, _CONDITIONED_STREAM, config, hint, run_dir=run_dir))
+    routed = _attempt(outcomes, "routing", lambda: routing(store, None, config, hint, run_dir=run_dir))
+    selected = set(routed.runs) if routed is not None else set()
+    withheld = WITHHELD_CRITICAL if routed is not None and routed.critical else None
+    branches: dict[str, Callable[[], BranchResult]] = {
+        "AIRWAY": lambda: airway(store, _CONDITIONED_STREAM, config, hint, run_dir=run_dir),
+        "SPEECH": lambda: speech(store, _CONDITIONED_STREAM, config, hint, run_dir=run_dir, enrollment=enrollment),
+        "VOICE": lambda: voice(store, _CONDITIONED_STREAM, config, hint, run_dir=run_dir),
+    }
+    for branch in BRANCHES:
+        call = branches.get(branch)
+        if call is None:
+            outcomes[branch] = NodeOutcome(node=branch, state=RunState.SKIPPED, note=NO_NODE)
+        elif branch in selected:
+            _attempt(outcomes, branch, call)
+        else:
+            outcomes[branch] = NodeOutcome(node=branch, state=RunState.SKIPPED, note=withheld)
+    _attempt(outcomes, QUALITY, lambda: quality(store, _SOURCE_STREAM, config, hint, run_dir=run_dir))
+    if "SPEECH" in selected and _speech_found_pii(store):
+        redacted = _attempt(
+            outcomes,
+            "REDACT",
+            lambda: redact(
+                store,
+                _SOURCE_STREAM,
+                config,
+                hint,
+                run_dir=run_dir,
+                artifacts_dir=artifacts_dir,
+                task_family=declared_task_family(store, hint),
+            ),
+        )
+        artifacts = dict(redacted.artifacts) if redacted is not None else {}
+    else:
+        outcomes["REDACT"] = NodeOutcome(node="REDACT", state=RunState.SKIPPED)
+        artifacts = {}
+    _attempt(outcomes, REVIEW_NODE, lambda: review(store, config, hint))
+    return artifacts
+
+
+def _attempt_artifacts(
+    outcomes: dict[str, NodeOutcome], node: str, call: Callable[[], dict[str, Path]]
+) -> dict[str, Path]:
+    """Call one node that renders rather than concludes, recording what happened.
+
+    Args:
+        outcomes: The per-node record this call is added to.
+        node: The node's name.
+        call: The node call, already bound to its arguments.
+
+    Returns:
+        The artifacts it produced, including any the exception carried on an ``artifacts``
+        attribute when it raised.
+    """
+    try:
+        artifacts = call()
+    except Exception as error:  # noqa: BLE001 — any failure is an operational fact about the run
+        outcomes[node] = NodeOutcome(node=node, state=RunState.ERRORED, error=describe_exception(error))
+        salvaged = getattr(error, "artifacts", None)
+        return dict(salvaged) if isinstance(salvaged, dict) else {}
+    outcomes[node] = NodeOutcome(node=node, state=RunState.COMPLETED)
+    return artifacts
+
+
+def _write_log(path: Path, source: Path, config: TriageConfig, result: TriageRunResult) -> None:
+    """Write the runner's own record of the run beside the store.
+
+    Args:
+        path: Where the log goes.
+        source: The recording that was triaged.
+        config: The configuration the run used.
+        result: What the run produced.
+    """
+    payload: dict[str, Any] = {
+        "source": str(source),
+        "config": {"name": config.name, "version": config.version, "config_hash": config.config_hash},
+        "run_dir": str(result.run_dir),
+        "artifacts_dir": str(result.artifacts_dir),
+        "store": str(result.store_path),
+        "decision": result.file_verdict.record() if result.file_verdict is not None else None,
+        "ran": {node: outcome.state.value for node, outcome in result.nodes.items()},
+        "errors": {node: outcome.error for node, outcome in result.nodes.items() if outcome.error is not None},
+        "notes": {node: outcome.note for node, outcome in result.nodes.items() if outcome.note is not None},
+        "released": {name: str(released) for name, released in result.released.items()},
+        "summary_dir": str(result.summary_dir),
+        "summary": {name: str(product) for name, product in result.summary.items()},
+    }
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+
+
+def run_triage(
+    source: Path,
+    out_dir: Path,
+    config: TriageConfig,
+    hint: AudioHints | None = None,
+    enrollment: Enrollment | None = None,
+) -> TriageRunResult:
+    """Triage one recording: the whole graph, one store, one fresh run directory.
+
+    ADMIT, PREPROCESS and ROUTING are dependency gates: a ``fail`` or a raise in one records every
+    node that reads it as ``skipped``. Every other node's failure is captured rather than propagated
+    and the store is persisted either way.
+
+    Args:
+        source: The recording to triage.
+        out_dir: Where the run root is created.
+        config: The triage configuration.
+        hint: What the recording was declared to contain, if anything.
+        enrollment: The target speaker's enrollment, handed to SPEECH when the caller supplied one.
+
+    Returns:
+        The file verdict, the per-node outcomes and errors, the run's paths, REDACT's released pair
+        and REPORT's two products.
+    """
+    source = Path(source)
+    layout = prepare_run_layout(Path(out_dir), source.stem)
+    store = ProvStore(run_id=layout.root.name)
+    outcomes: dict[str, NodeOutcome] = {}
+
+    with record_venv_use() as used_venvs:
+        admitted = _attempt(outcomes, "ADMIT", lambda: admit(store, source, config, hint, run_dir=layout.run_dir))
+        measurable = (
+            admitted is not None and admitted.verdict.outcome is not Outcome.FAIL and admitted.audio is not None
+        )
+
+        released: dict[str, Path] = {}
+        if admitted is not None and measurable and admitted.audio is not None:
+            released = _drive_branches(
+                store,
+                admitted.audio,
+                config,
+                hint,
+                run_dir=layout.run_dir,
+                artifacts_dir=layout.artifacts_dir,
+                outcomes=outcomes,
+                enrollment=enrollment,
+            )
+        else:
+            for node in GRAPH_ORDER[1:-1]:
+                outcomes[node] = NodeOutcome(node=node, state=RunState.SKIPPED)
+
+        ran = {node: outcome.state for node, outcome in outcomes.items()}
+        folded = _attempt(
+            outcomes,
+            "VERDICT",
+            lambda: verdict(store, None, config, hint, run_dir=layout.run_dir, ran=ran),
+        )
+        if folded is not None:
+            released = {
+                **released,
+                **settle_release(
+                    store,
+                    folded.file_verdict.release.value,
+                    folded.file_verdict.release_ground,
+                    run_dir=layout.run_dir,
+                    artifacts_dir=layout.artifacts_dir,
+                    bleep_hz=config.get("redaction.bleep_hz"),
+                ),
+            }
+
+    capture_environments(store, used_venvs)
+    store.write_jsonl(layout.store_path)
+
+    summary = _attempt_artifacts(
+        outcomes,
+        REPORT_NODE,
+        lambda: report(store, layout.summary_dir, config, run_dir=layout.run_dir),
+    )
+
+    result = TriageRunResult(
+        file_verdict=folded.file_verdict if folded is not None else None,
+        nodes={node: outcomes[node] for node in (*GRAPH_ORDER, REPORT_NODE, *BRANCHES) if node in outcomes},
+        run_dir=layout.run_dir,
+        artifacts_dir=layout.artifacts_dir,
+        store_path=layout.store_path,
+        summary_dir=layout.summary_dir,
+        released=released,
+        summary=summary,
+    )
+    _write_log(layout.run_dir / LOG_FILE, source, config, result)
+    return result

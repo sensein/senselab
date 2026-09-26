@@ -34,7 +34,7 @@ def enhance_audios(
 
     - a ``SpeechBrainModel`` (or ``None``) uses SpeechBrain, in process;
     - an ``HFModel`` under ``LIANGXU123/DriftSE`` uses DriftSE, one-step diffusion in an isolated venv;
-    - an ``HFModel`` naming a ClearVoice enhancement checkpoint uses ClearVoice, in an isolated venv.
+    - an ``HFModel`` naming a ClearerVoice enhancement checkpoint uses ClearerVoice, in an isolated venv.
 
     Args:
         audios: The audios to enhance.
@@ -44,7 +44,7 @@ def enhance_audios(
             signature: an unknown or misspelled key raises rather than being ignored, and the
             effective set is recorded on each result's ``metadata["backend_parameters"]``. DriftSE
             declares ``variant``, ``seed``, ``sigma``, ``chunk_s``, ``overlap_s`` and ``timeout_s``;
-            ClearVoice declares ``timeout_s``; SpeechBrain declares none.
+            ClearerVoice declares ``timeout_s``; SpeechBrain declares none.
 
     Returns:
         One enhanced ``Audio`` per input, in order.
@@ -71,7 +71,7 @@ def enhance_audios(
     if backend is None:
         raise NotImplementedError(
             f"No enhancement backend for {model.path_or_uri!r}. Supported: SpeechBrain models, HFModel "
-            f"ids starting with {_DRIFTSE_MODEL_PREFIX!r}, and ClearVoice enhancement checkpoints "
+            f"ids starting with {_DRIFTSE_MODEL_PREFIX!r}, and ClearerVoice enhancement checkpoints "
             "under 'alibabasglab/'."
         )
 
