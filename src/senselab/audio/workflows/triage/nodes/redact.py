@@ -58,7 +58,12 @@ from senselab.audio.workflows.triage.nodes.common import (
     write_verdict,
 )
 from senselab.audio.workflows.triage.stimulus import NearMatch, near_match, split_prompts
-from senselab.audio.workflows.triage.vocabulary import Outcome
+from senselab.audio.workflows.triage.vocabulary import (
+    REDACTION_LLM_ANNOTATION,
+    REVIEWER_RESET_SOME_MASKS,
+    Outcome,
+    Release,
+)
 from senselab.text.tasks.pii_detection.api import scan_for_pii
 from senselab.utils.prov_store import Entity, ProvStore
 
@@ -970,35 +975,220 @@ def redact(
 RELEASED_FILES = ("audio.wav", "transcript.txt", "consensus.json")
 """What a release of the redacted copy writes into the release directory."""
 
+_QUOTE_EDGE = "\"'`.,;:!?()[]{}<>-\u2018\u2019\u201c\u201d\u2026"  # stripped from a token's two ends before matching
 
-def settle_release(store: ProvStore, release: str, *, run_dir: Path, artifacts_dir: Path) -> dict[str, Path]:
-    """Make the release directory hold the redacted copy exactly when the fold released it over a REDACT fail.
 
-    A REDACT pass writes its own copy and is left alone, as is a recording REDACT never read. Where
-    REDACT failed, the fold may still release the redacted copy (``release_with_redaction``); the copy
-    is then written from what REDACT left in the store -- the masked ``redacted`` stream and its
-    planned spans over the consensus words. Any other release removes whatever copy is there.
+def _match_token(text: str) -> str:
+    """One token as a reviewer quote and a transcript word are compared.
+
+    Args:
+        text: A word's surface, or one whitespace-separated piece of a quote.
+
+    Returns:
+        The token lower-cased, curly apostrophes made straight, and punctuation stripped from both
+        ends. Empty where nothing but punctuation was there.
+    """
+    return text.replace("\u2019", "'").strip(_QUOTE_EDGE).lower()
+
+
+@dataclass(frozen=True)
+class MaskReset:
+    """Which of REDACT's masks the reviewer's ``release`` entries reset to the original words.
+
+    Attributes:
+        planned: REDACT's masks, in stream order.
+        kept: The masks no ``release`` entry reset, in stream order.
+        reset_n: How many masks were reset.
+        unplaced: The ``release`` quotes that match no run of the recording's residue words.
+        straddling_n: Masks some but not all of whose residue words a quote names, over an
+            original not read as clean; kept.
+    """
+
+    planned: list[RedactionExtent]
+    kept: list[RedactionExtent]
+    reset_n: int
+    unplaced: tuple[str, ...]
+    straddling_n: int
+
+
+def reviewer_reset(store: ProvStore) -> MaskReset:
+    """Which masks the reviewer's ``release`` entries reset, decided the same way on every read.
+
+    A quote is matched as a run of whole tokens against the residue words the reviewer read, at
+    every place it occurs. Where the reviewer read the original as clean, a mask is reset once a
+    matched run names any residue word it hides: the other words a padded mask folds in are part of
+    an original the reviewer already judged. Otherwise a mask is reset only where every residue word
+    it hides lies inside a matched run. A mask hiding no residue word is kept, and a quote matching
+    nothing resets nothing.
+
+    Args:
+        store: The provenance store, carrying REDACT's planned spans, SPEECH's residue and REVIEW's
+            annotation.
+
+    Returns:
+        The reset. Nothing is reset where REDACT planned no mask, REVIEW wrote no annotation, or
+        the store predates the lexical residue.
+    """
+    planned = planned_extents(store)
+    annotation = find_measurement(store, REDACTION_LLM_ANNOTATION)
+    quotes = [
+        str(entry.get("text") or "")
+        for entry in ((annotation.attributes.get("proposal") or ()) if annotation is not None else ())
+        if str(entry.get("action")) == "release"
+    ]
+    unchanged = MaskReset(planned=planned, kept=list(planned), reset_n=0, unplaced=(), straddling_n=0)
+    if not planned or not quotes:
+        return unchanged
+    try:
+        residue = residue_words(store)
+    except ValueError:
+        return unchanged
+    tokens = [
+        (_match_token(str(word.attributes.get("text") or "")), word)
+        for word in residue
+        if not word.attributes.get("bracketed") and word.extent is not None
+    ]
+    tokens = [(token, word) for token, word in tokens if token]
+    surfaces = [token for token, _ in tokens]
+    released: set[str] = set()
+    unplaced: list[str] = []
+    for quote in quotes:
+        wanted = [token for token in (_match_token(piece) for piece in quote.split()) if token]
+        width = len(wanted)
+        starts = [i for i in range(len(surfaces) - width + 1) if width and surfaces[i : i + width] == wanted]
+        if not starts:
+            unplaced.append(quote)
+            continue
+        for start in starts:
+            released.update(word.id for _, word in tokens[start : start + width])
+    judged_clean = annotation is not None and annotation.attributes.get("original") == "clean"
+    kept: list[RedactionExtent] = []
+    straddling = 0
+    for extent in planned:
+        hidden = [word.id for _, word in tokens if _overlaps(word_hull(word), (extent.start, extent.end))]
+        named = [word_id for word_id in hidden if word_id in released]
+        if hidden and (len(named) == len(hidden) or (judged_clean and named)):
+            continue
+        if named:
+            straddling += 1
+        kept.append(extent)
+    return MaskReset(
+        planned=planned,
+        kept=kept,
+        reset_n=len(planned) - len(kept),
+        unplaced=tuple(unplaced),
+        straddling_n=straddling,
+    )
+
+
+def _holds_full_copy(artifacts_dir: Path, planned_n: int) -> bool:
+    """Whether the release directory holds a redacted copy carrying every planned mask.
+
+    Args:
+        artifacts_dir: The release directory.
+        planned_n: How many masks REDACT planned.
+
+    Returns:
+        True where all of :data:`RELEASED_FILES` exist and the consensus artifact records
+        ``planned_n`` redactions, or is not one this module wrote.
+    """
+    if not all((artifacts_dir / name).exists() for name in RELEASED_FILES):
+        return False
+    try:
+        written = json.loads((artifacts_dir / "consensus.json").read_text())
+    except (OSError, ValueError):
+        return True
+    if not isinstance(written, dict) or written.get("schema") != CONSENSUS_ARTIFACT_SCHEMA:
+        return True
+    return int(written.get("n_redactions") or 0) == planned_n
+
+
+def _has_stream(store: ProvStore, name: str) -> bool:
+    """Whether a live stream carries this name.
+
+    Args:
+        store: The provenance store.
+        name: The stream's ``name`` attribute.
+
+    Returns:
+        True where one does.
+    """
+    return any(entity.attributes.get("name") == name for entity in live_entities(store, "stream"))
+
+
+def _masked_source(store: ProvStore, run_dir: Path) -> Audio:
+    """The stream REDACT's ``redacted`` copy was masked from, loaded from its sidecar.
+
+    Args:
+        store: The provenance store.
+        run_dir: The run directory sidecar paths are relative to.
+
+    Returns:
+        The source audio.
+
+    Raises:
+        LookupError: If the store holds no ``redacted`` stream or does not say what it came from.
+    """
+    redacted_id, _ = resolve_stream(store, run_dir, STREAM_NAME)
+    for source_id in store.derived_from(redacted_id):
+        source = store.get_entity(source_id)
+        if source.prov_type == "stream":
+            path = Path(source.attributes["path"])
+            return Audio(filepath=str(path if path.is_absolute() else run_dir / path))
+    raise LookupError("the redacted stream records no source stream")
+
+
+def settle_release(
+    store: ProvStore,
+    release: str,
+    release_ground: str | None,
+    *,
+    run_dir: Path,
+    artifacts_dir: Path,
+    bleep_hz: float | None,
+) -> dict[str, Path]:
+    """Make the release directory hold exactly the copy the fold released.
+
+    The directory holds the redacted copy only under ``release_with_redaction``; every other release
+    empties it, including of a copy REDACT itself wrote on a pass. A pass released as planned keeps
+    the copy REDACT wrote, unless an earlier fold emptied the directory or thinned the copy, in which
+    case it is written again. Otherwise the copy is written from the store: REDACT's masked
+    ``redacted`` stream where every planned mask is kept, and the source stream re-masked with the
+    kept masks alone where the reviewer reset some (:data:`REVIEWER_RESET_SOME_MASKS`).
 
     Args:
         store: The provenance store, after VERDICT.
         release: The fold's release axis value.
+        release_ground: The fold's release ground.
         run_dir: The run directory sidecar paths are relative to.
         artifacts_dir: The release directory.
+        bleep_hz: ``redaction.bleep_hz``, for a re-masked copy under a bleep fill.
 
     Returns:
         The written paths, keyed as :func:`_write_artifacts` keys them; empty where nothing was
         written.
     """
     verdict = find_verdict(store, NODE)
-    if verdict is None or verdict.attributes.get("outcome") != Outcome.FAIL.value:
+    if verdict is None:
         return {}
-    if release != "release_with_redaction":
+    if release != Release.WITH_REDACTION.value:
         for name in RELEASED_FILES:
             (artifacts_dir / name).unlink(missing_ok=True)
         return {}
-    records, text, _ = _render(consensus_words(store), planned_extents(store))
-    _, redacted = resolve_stream(store, run_dir, STREAM_NAME)
-    return _write_artifacts(redacted, text, records, artifacts_dir)
+    if release_ground != REVIEWER_RESET_SOME_MASKS:
+        planned = planned_extents(store)
+        if verdict.attributes.get("outcome") == Outcome.PASS.value and (
+            _holds_full_copy(artifacts_dir, len(planned)) or not _has_stream(store, STREAM_NAME)
+        ):
+            return {}
+        records, text, _ = _render(consensus_words(store), planned)
+        _, redacted = resolve_stream(store, run_dir, STREAM_NAME)
+        return _write_artifacts(redacted, text, records, artifacts_dir)
+    kept = reviewer_reset(store).kept
+    records, text, _ = _render(consensus_words(store), kept)
+    fill = str(verdict.attributes.get("fill") or "")
+    masked = apply_redactions(_masked_source(store, run_dir), kept, fill=fill, bleep_hz=bleep_hz)
+    return _write_artifacts(masked, text, records, artifacts_dir)
 
 
 REDACTION_SPAN = "redaction"
