@@ -120,29 +120,78 @@ def test_read_store_light_drops_measurement_payloads_but_keeps_the_scan(tmp_path
         _FAMILY_STEM,
         [
             _entity("measurement-big", "measurement", {"name": "gammatone", "values": [0.0] * 32}),
-            _entity("measurement-scan", "measurement", {"name": "pii_scan", "scanned": True}),
+            _entity("measurement-scan", "measurement", {"name": "pii_scan", "scanned_by": ["gliner"]}),
             _word(0, "hello"),
         ],
     )
     view = page.read_store_light(run_root / "run" / "store.jsonl")
     assert [entity.id for entity in view.live("measurement")] == ["measurement-scan"]
-    assert page.scan_state(view) is True
+    assert page.scan_state(page.pii_scan_of(view)) is True
 
 
 def test_scan_state_reads_a_declined_scan(tmp_path: Path) -> None:
-    """A scan the graph declined reads as False, not as an absence."""
+    """A record in which no detector ran reads as False, not as an absence or as a scan."""
     run_root = _store(
         tmp_path,
         _FAMILY_STEM,
-        [_entity("measurement-scan", "measurement", {"name": "pii_scan", "scanned": False, "why": "declined"})],
+        [_entity("measurement-scan", "measurement", {"name": "pii_scan", "scanned_by": [], "residue_content": False})],
     )
-    assert page.scan_state(page.read_store_light(run_root / "run" / "store.jsonl")) is False
+    view = page.read_store_light(run_root / "run" / "store.jsonl")
+    assert page.scan_state(page.pii_scan_of(view)) is False
 
 
 def test_scan_state_is_none_without_a_measurement(tmp_path: Path) -> None:
     """No pii_scan measurement is unknown, which is not the same as a scan that found nothing."""
     run_root = _store(tmp_path, _FAMILY_STEM, [_word(0, "hello")])
-    assert page.scan_state(page.read_store_light(run_root / "run" / "store.jsonl")) is None
+    view = page.read_store_light(run_root / "run" / "store.jsonl")
+    assert page.scan_state(page.pii_scan_of(view)) is None
+    assert page.residue_of(page.pii_scan_of(view), []) is None
+
+
+def test_residue_names_the_words_the_detectors_read(tmp_path: Path) -> None:
+    """The residue positions come from the scan's word ids, in transcript order."""
+    scan = {
+        "name": "pii_scan",
+        "scanned_by": ["gliner", "presidio"],
+        "residue_method": "stimulus_alignment",
+        "residue_words_n": 2,
+        "residue_content": True,
+        "residue_word_ids": ["word-2", "word-0"],
+    }
+    run_root = _store(
+        tmp_path,
+        _FAMILY_STEM,
+        [_entity("measurement-scan", "measurement", scan), _word(0, "Alice"), _word(1, "the"), _word(2, "Smith")],
+    )
+    view = page.read_store_light(run_root / "run" / "store.jsonl")
+    words = sorted(view.live("word"), key=lambda entity: int(entity.attributes.get("index", 0)))
+    residue = page.residue_of(page.pii_scan_of(view), words)
+    assert residue == {"n": 2, "m": "stimulus_alignment", "c": True, "i": [0, 2]}
+
+
+def test_a_card_shows_the_residue_and_a_declined_scan() -> None:
+    """The card says the scan was declined and which words were left, and why."""
+    row = {
+        "p": "p",
+        "ses": "s",
+        "task": "free-speech-1",
+        "stem": "p_s_task-free-speech-1",
+        "fam": "free-speech",
+        "rel": "release_without_redaction",
+        "rg": None,
+        "why": "",
+        "rwhy": "",
+        "scan": False,
+        "res": {"n": 1, "m": "stimulus_alignment", "c": False, "i": [1]},
+        "w": [["Hello", 0, -1], ["the", 0, -1]],
+        "f": [],
+        "nl": 2,
+        "nw": 2,
+    }
+    card = page.recording_html(row)
+    assert "scan declined" in card
+    assert "residue: 1 words (stimulus_alignment, function words only)" in card
+    assert "<q>the</q>" in card
 
 
 def test_marked_words_follows_the_live_label_assertions(tmp_path: Path) -> None:
@@ -718,7 +767,7 @@ def test_the_measurement_kept_is_the_exemption_one_too(tmp_path: Path) -> None:
         [
             _entity("measurement-big", "measurement", {"name": "gammatone", "values": [0.0] * 8}),
             _entity("measurement-ex", "measurement", {"name": "redaction_exemptions", "n": 0}),
-            _entity("measurement-scan", "measurement", {"name": "pii_scan", "scanned": True}),
+            _entity("measurement-scan", "measurement", {"name": "pii_scan", "scanned_by": ["gliner"]}),
         ],
     )
     view = page.read_store_light(run_root / "run" / "store.jsonl")

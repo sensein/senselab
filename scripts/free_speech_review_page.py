@@ -166,22 +166,58 @@ def marked_words(view: StoreView) -> dict[str, list[str]]:
     return marked
 
 
-def scan_state(view: StoreView) -> bool | None:
-    """Whether SPEECH's PII scan ran over this recording's transcript.
+def pii_scan_of(view: StoreView) -> dict[str, Any] | None:
+    """SPEECH's latest live ``pii_scan`` record.
 
     Args:
         view: The store view.
 
     Returns:
-        False when a live ``pii_scan`` measurement records the scan as declined, True when one
-        records it as run, and None when the store carries none.
+        Its attributes, or None when the store carries none.
     """
-    state: bool | None = None
+    found: dict[str, Any] | None = None
     for measurement in view.live("measurement"):
-        if measurement.attributes.get("name") != PII_SCAN:
-            continue
-        state = bool(measurement.attributes.get("scanned", True))
-    return state
+        if measurement.attributes.get("name") == PII_SCAN:
+            found = dict(measurement.attributes)
+    return found
+
+
+def scan_state(scan: Mapping[str, Any] | None) -> bool | None:
+    """Whether SPEECH's PII scan ran over this recording's residue.
+
+    Args:
+        scan: The ``pii_scan`` attributes, or None.
+
+    Returns:
+        True when some detector ran (``scanned_by`` is non-empty), False when the record shows none
+        did, and None when the store carries no record.
+    """
+    if scan is None:
+        return None
+    return bool(scan.get("scanned_by"))
+
+
+def residue_of(scan: Mapping[str, Any] | None, entities: Sequence[Entity]) -> dict[str, Any] | None:
+    """The lexical residue the detectors and the reviewer read, as the page shows it.
+
+    Args:
+        scan: The ``pii_scan`` attributes, or None.
+        entities: The transcript's word entities in order.
+
+    Returns:
+        ``n`` residue words, ``m`` the method that set the rest aside, ``c`` whether any residue
+        word is content, and ``i`` the residue words' positions in ``entities``; None when the
+        store carries no scan record or one written before the residue existed.
+    """
+    if scan is None or scan.get("residue_method") is None:
+        return None
+    ids = set(scan.get("residue_word_ids") or ())
+    return {
+        "n": int(scan.get("residue_words_n") or 0),
+        "m": str(scan.get("residue_method")),
+        "c": bool(scan.get("residue_content")),
+        "i": [position for position, entity in enumerate(entities) if entity.id in ids],
+    }
 
 
 def overlaps(first: tuple[float, float], second: tuple[float, float]) -> bool:
@@ -405,6 +441,7 @@ def recording_record(run_root: Path, families: frozenset[str]) -> dict[str, Any]
         if not bracketed:
             lexical += 1
     redact = view.last("verdict", node=REDACT_NODE)
+    scan = pii_scan_of(view)
     return {
         "p": participant or "",
         "ses": session or "",
@@ -416,7 +453,8 @@ def recording_record(run_root: Path, families: frozenset[str]) -> dict[str, Any]
         "tri": str(attributes.get("triage") or attributes.get("outcome") or ""),
         "why": str(attributes.get("why") or ""),
         "rwhy": str(redact.attributes.get("why") or "") if redact is not None else "",
-        "scan": scan_state(view),
+        "scan": scan_state(scan),
+        "res": residue_of(scan, entities),
         "w": words,
         "f": marks,
         "pii": [
@@ -919,6 +957,17 @@ def recording_html(row: dict[str, Any]) -> str:
     why = row.get("rwhy") or row.get("why") or ""
     why_html = f'<div class="why">{html.escape(str(why))}</div>' if why else ""
     scan_text = {True: "scanned", False: "scan declined", None: "no scan recorded"}[row.get("scan")]
+    residue = row.get("res")
+    residue_html = ""
+    if residue is not None:
+        words = row.get("w") or []
+        said = " ".join(str(words[position][0]) for position in residue["i"] if position < len(words))
+        content = "content" if residue["c"] else "function words only"
+        residue_html = (
+            f'<div class="residue">residue: {residue["n"]} words ({html.escape(residue["m"])}, {content})'
+            + (f" &middot; <q>{html.escape(said)}</q>" if said else "")
+            + "</div>"
+        )
     body = paragraph(row.get("w") or [], marks) or '<span class="empty">no consensus words</span>'
     stem = str(row.get("stem") or f"{row['p']}_{row['ses']}_task-{row['task']}")
     return (
@@ -930,7 +979,7 @@ def recording_html(row: dict[str, Any]) -> str:
         f'<span class="fam">{html.escape(str(row["fam"]))}</span>{_chip(str(row["rel"]))}'
         f'<span class="meta">{row["nl"]} lexical / {row["nw"]} tokens &middot; {scan_text} '
         f"&middot; findings: {summary}</span></header>"
-        f"{ground_html}{why_html}"
+        f"{ground_html}{why_html}{residue_html}"
         f'<p class="text">{body}</p>'
         f'<div class="whyrow">{_triage_controls(stem)}{_release_controls(stem)}'
         f'<button type="button" class="whybtn" data-stem="{html.escape(stem)}">'
@@ -1216,7 +1265,7 @@ margin-bottom:6px}
 .task{font-family:ui-monospace,Menlo,monospace;font-size:12px;color:var(--acc)}
 .fam,.meta{color:var(--mut)}
 .meta{font-size:11.5px}
-.ground,.why{font-size:11.5px;color:var(--mut);font-style:italic;margin:0 0 6px}
+.ground,.why,.residue{font-size:11.5px;color:var(--mut);font-style:italic;margin:0 0 6px}
 .text{margin:0;font-size:16px}
 .empty{color:var(--mut);font-style:italic}
 .bracket{font-family:ui-monospace,Menlo,monospace;font-size:.82em;color:var(--brk);
