@@ -156,8 +156,9 @@ and we can weigh the verdict towards the LLM reviewer."* REVIEW's `redaction_llm
 measurement with provenance, and `fold_file_verdict` reads it onto this axis through exactly one
 declared parameter, `_release_from(..., reviewer_withholds=...)`, resolved from
 `verdict.llm_redaction_withholds` and defaulting to False. It may only **tighten**: a reviewer that
-read residue turns a REDACT `pass` into `withheld`, and no reading of any kind moves a recording out
-of `withheld`. The section's title is therefore still exact — nothing moves a recording *toward*
+read residue turns either release into `withheld` — a REDACT `pass`, and since 2026-09-26 also a
+`release_without_redaction` where REDACT never ran — and no reading of any kind moves a recording out
+of `withheld` or `not_assessed`. The section's title is therefore still exact — nothing moves a recording *toward*
 release without a human — and `vocabulary_test.py` asserts both halves: the parameter set is closed,
 and the movement is one-directional.
 

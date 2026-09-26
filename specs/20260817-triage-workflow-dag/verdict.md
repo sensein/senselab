@@ -436,6 +436,12 @@ Read in order; the first row that matches wins.
 
 The table is total: the last row is the fall-through.
 
+**Then one tightening, applied to whatever the table answered.** With `verdict.llm_redaction_withholds`
+on, a reviewer reading that is residue — flagged, and proposing at least one `redact` — turns either
+release (`release_with_redaction` or `release_without_redaction`) into `withheld` with ground
+`REVIEWER_PROPOSED_REDACTION`. It never moves `withheld` or `not_assessed`, and never touches the
+triage axis. A withholding REDACT made itself keeps ground `—`, so the two can be told apart.
+
 **Why one axis and not two.** "Was there anything to redact" and "did redaction succeed" are
 different questions, and collapsing them is what produced the defect — so the split was considered
 and rejected. The reason is that the second question does not exist wherever the first answers *no*:
@@ -484,8 +490,9 @@ annotation now reaches the triage axis and only the triage axis; see
 by design and is append-only. `release` describes the recording's artefacts — the original and
 REDACT's redacted copy — and nothing else.
 
-**Nothing a reviewer concluded reaches this axis either.** `_release_from`'s three parameters are
-the whole input to it: the node verdicts, the redaction evidence and `ran`. The free-speech review
+**Nothing a reviewer concluded moves this axis toward release.** `_release_from`'s parameters are
+the whole input to it: the node verdicts, the redaction evidence, `ran`, `speech_declined`, and one
+reviewer input, `reviewer_withholds`, which may only tighten (above). The free-speech review
 page's release decision is a human record in its own export, and the fold has no parameter for it.
 A reviewer calling a withheld recording clean is a reading someone may act on; it is not the act.
 
@@ -581,7 +588,7 @@ record and cannot mistake one for the other.
 triage:   pass | flag | discard
 release:  release_without_redaction | release_with_redaction | withheld | not_assessed
 discard_ground: "unmeasurable" | "acoustically_empty" | null
-release_ground: one of the seven controlled grounds | null   # null wherever REDACT itself decided
+release_ground: one of the nine controlled grounds | null   # null wherever REDACT itself decided
 llm_redaction: { status, iterations, flagged, model_id, revision, failure }   # {} when REDACT wrote none
 reasons:  [ { node, outcome, kind?, why } ]        # every contributing verdict, in order
 ran:      { node: "completed" | "skipped" | "errored" }

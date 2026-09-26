@@ -157,3 +157,11 @@ fillers.
 - **`extend_llm_review.standing`.** A replay under the packaged config writes REVIEW's own
   `disabled` annotation into every store. Counting it as a standing reading would have made the
   review pass after a replay report `present` on every row.
+- **The reviewer's withholding reaches every release, not only a REDACT pass** (2026-09-26,
+  `vocabulary._release_from`). The tightening sat inside the `redact is not None` branch, so where
+  the scan found nothing and REDACT never ran, a reading proposing a redaction was ignored and the
+  recording went out as `release_without_redaction`. Across the 15,208 recordings the r5 review read,
+  7 were in that state. The table now answers from the evidence first and the tightening applies to
+  whichever release it gave, recording `REVIEWER_PROPOSED_REDACTION` as the ground (new, in
+  `RELEASE_WITHHELD_GROUNDS`). That ground also marks the REDACT-pass case, which used to carry `None`
+  and so read the same as a withholding REDACT made itself.

@@ -21,7 +21,9 @@ from senselab.audio.workflows.triage.vocabulary import (
     NON_LEXICAL_TASK,
     REDACTION_OWED,
     RELEASE_UNKNOWN_GROUNDS,
+    RELEASE_WITHHELD_GROUNDS,
     RELEASE_WITHOUT_REDACTION_GROUNDS,
+    REVIEWER_PROPOSED_REDACTION,
     ROUTED,
     SCAN_UNRECORDED,
     SPEECH_UNREAD,
@@ -888,6 +890,9 @@ class TestTheReleaseAxisNamesWhichArtefactMayBeHandedOn:
     def test_no_ground_stands_behind_two_states(self) -> None:
         """A reader must be able to go from the ground back to the state without the table."""
         assert not set(RELEASE_WITHOUT_REDACTION_GROUNDS) & set(RELEASE_UNKNOWN_GROUNDS)
+        assert not set(RELEASE_WITHHELD_GROUNDS) & (
+            set(RELEASE_WITHOUT_REDACTION_GROUNDS) | set(RELEASE_UNKNOWN_GROUNDS)
+        )
 
     def test_the_only_reviewer_input_to_the_axis_is_the_one_that_withholds(self) -> None:
         """``_release_from``'s parameters are the whole input to the axis.
@@ -912,6 +917,63 @@ class TestTheReleaseAxisNamesWhichArtefactMayBeHandedOn:
         assert _release_from(passed, evidence, ran, reviewer_withholds=True)[0] is Release.WITHHELD
         assert _release_from(failed, evidence, ran, reviewer_withholds=False)[0] is Release.WITHHELD
         assert _release_from(failed, evidence, ran, reviewer_withholds=True)[0] is Release.WITHHELD
+
+    def test_the_reviewer_withholds_where_redact_never_ran(self) -> None:
+        """Every path that would release is tightened, not only the one through a REDACT pass."""
+        ran = {"SPEECH": RunState.COMPLETED}
+        for evidence in (
+            RedactionEvidence(lexical_words_n=42, scanned=True),
+            RedactionEvidence(lexical_words_n=9, scanned=False),
+            RedactionEvidence(lexical_words_n=0),
+        ):
+            assert _release_from([], evidence, ran)[0] is Release.WITHOUT_REDACTION
+            assert _release_from([], evidence, ran, reviewer_withholds=True) == (
+                Release.WITHHELD,
+                REVIEWER_PROPOSED_REDACTION,
+            )
+        assert _release_from([], RedactionEvidence(), {}, reviewer_withholds=True, speech_declined=True) == (
+            Release.WITHHELD,
+            REVIEWER_PROPOSED_REDACTION,
+        )
+
+    def test_a_reviewer_withholding_names_its_ground(self) -> None:
+        """A withholding REDACT did not make must be told apart from one it did."""
+        passed = [NodeVerdict("REDACT", Outcome.PASS, None, "the scan concluded")]
+        failed = [NodeVerdict("REDACT", Outcome.FAIL, None, "the scan concluded")]
+        assert _release_from(passed, RedactionEvidence(), {}, reviewer_withholds=True)[1] == REVIEWER_PROPOSED_REDACTION
+        assert _release_from(failed, RedactionEvidence(), {}, reviewer_withholds=True)[1] is None
+
+    def test_a_reviewer_withholding_leaves_a_discard_a_discard(self) -> None:
+        """The release axis tightens; the triage axis is not the reviewer's to move."""
+        proposal = {
+            "status": "flagged",
+            "redaction": "incomplete",
+            "original": "carries_pii",
+            "proposal": [{"text": "alice", "action": "redact", "category": "PERSON", "why": "a name"}],
+        }
+        folded = fold_file_verdict(
+            [NodeVerdict("ADMIT", Outcome.FAIL, None, "unmeasurable")],
+            branch_decisions=_decisions(AIRWAY=DECLINED, SPEECH=ROUTED, VOICE=DECLINED),
+            ran={"SPEECH": RunState.COMPLETED},
+            hint_claims={},
+            route_state=ROUTED,
+            redaction=RedactionEvidence(lexical_words_n=42, scanned=True),
+            llm_redaction=proposal,
+            policy=FoldPolicy(llm_redaction_withholds=True),
+        )
+        assert folded.triage is Triage.DISCARD
+        assert folded.release is Release.WITHHELD
+
+    def test_the_reviewer_never_moves_an_unassessed_recording(self) -> None:
+        """``not_assessed`` stays what it is: a gap is not a release for the reviewer to tighten."""
+        cases = [
+            (RedactionEvidence(), {"SPEECH": RunState.ERRORED}),
+            (RedactionEvidence(lexical_words_n=42, scanned=True, findings_n=3), {"SPEECH": RunState.COMPLETED}),
+            (RedactionEvidence(), {"SPEECH": RunState.SKIPPED}),
+        ]
+        for evidence, ran in cases:
+            assert _release_from([], evidence, ran, reviewer_withholds=True) == _release_from([], evidence, ran)
+            assert _release_from([], evidence, ran)[0] is Release.NOT_ASSESSED
 
 
 class TestANonLexicalTaskIsClearedRatherThanHeld:
