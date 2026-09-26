@@ -1,5 +1,30 @@
 # Resuming the review pass
 
+## Settled, 2026-09-26 — read this first; everything below is the 2026-09-25 history
+
+The campaign is complete at `ef2bb815`. Nothing is running.
+
+| | path |
+|---|---|
+| corpus (r5, 62,550 = every in-scope BIDS WAV) | `/orcd/scratch/bcs/002/satra/triage_r5_20260925/out` |
+| checkout, pinned | `/orcd/scratch/bcs/002/satra/senselab-r5` @ `ef2bb815` |
+| review manifest (15,208 with lexical residue) | `triage_r5_20260925/review/review_manifest.jsonl` |
+| final re-fold, all 62,550, `review_on.yaml` | `triage_r5_20260925/refold/` |
+| parquet, schema 7 | `recording_vectors_r5_v7/`; laptop `~/Downloads/recording_vectors_20260926_v7/` |
+| evaluations | `evaluations_r5_20260926_v2/`; laptop `~/Downloads/evaluations_r5_20260926_v2/` |
+| page | `free_speech_page_20260926_v2/`; laptop `~/Downloads/free_speech_review_20260926_v2/` |
+| 2 corpus-fill recordings (run at `b7d882a9`, replayed at r5) | `tmp_complete/`; both `flag / not_assessed`, one ASR hypothesis only |
+
+What changed since the note below: the PII pathway sees only lexical residue
+(`specs/20260925-lexical-only-pii-pathway/`); a reviewer reading is residue only where it proposes a redaction,
+on both axes and on every release path. Outcome: 9,930 flagged (baseline 8,915), 3,700 withheld, 864 reviewer
+redaction proposals all withheld, 0 released with one.
+
+Open for the owner: 4,369 free-response readings propose only un-hiding (detector over-redaction in open speech);
+2,836 withholdings come from REDACT failing where the reviewer proposed nothing to hide; the two fill
+recordings need a one-hypothesis consensus or another recogniser for a real verdict.
+
+
 Written 2026-09-25, mid-campaign. What is running, what is pinned, what is decided, what is open,
 and the exact commands to carry on. Branch `design/triage-workflow-dag`.
 
