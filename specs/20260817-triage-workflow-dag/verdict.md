@@ -442,6 +442,14 @@ release (`release_with_redaction` or `release_without_redaction`) into `withheld
 `REVIEWER_PROPOSED_REDACTION`. It never moves `withheld` or `not_assessed`, and never touches the
 triage axis. A withholding REDACT made itself keeps ground `—`, so the two can be told apart.
 
+**And one clearing.** With `verdict.llm_rescan_clears` on, a REDACT `fail` whose re-scan still read
+a finding after its one re-plan (`unremediable` non-empty) becomes `release_with_redaction` with
+ground `REVIEWER_CLEARED_RESCAN`, where the reviewer read the original as `clean` and proposed no
+`redact`. The redacted copy is released, never the original, and the fold writes it from the store
+(`settle_release`) because REDACT writes it only on a pass. A fail from an incomplete scan names no
+survivor and is never cleared; `flag`, `not_assessed` and every other row are untouched. See
+`specs/20260926-redact-rescan-survival/design.md`.
+
 **Why one axis and not two.** "Was there anything to redact" and "did redaction succeed" are
 different questions, and collapsing them is what produced the defect — so the split was considered
 and rejected. The reason is that the second question does not exist wherever the first answers *no*:
@@ -490,11 +498,11 @@ annotation now reaches the triage axis and only the triage axis; see
 by design and is append-only. `release` describes the recording's artefacts — the original and
 REDACT's redacted copy — and nothing else.
 
-**Nothing a reviewer concluded moves this axis toward release.** `_release_from`'s parameters are
-the whole input to it: the node verdicts, the redaction evidence, `ran`, `speech_declined`, and one
-reviewer input, `reviewer_withholds`, which may only tighten (above). The free-speech review
-page's release decision is a human record in its own export, and the fold has no parameter for it.
-A reviewer calling a withheld recording clean is a reading someone may act on; it is not the act.
+**Two reviewer inputs reach this axis, and each is declared.** `_release_from`'s parameters are the
+whole input to it: the node verdicts, the redaction evidence, `ran`, `speech_declined`,
+`reviewer_withholds`, which tightens, and `reviewer_clears`, which releases the redacted copy of a
+re-scan fail and nothing else (both above). The free-speech review page's release decision is a
+human record in its own export, and the fold has no parameter for it.
 
 **The goal on this axis is to minimise `withheld`**: a withhold is a file no consumer can use, and
 every withhold that rests on a scan of text nobody uttered is one the graph created.
@@ -588,7 +596,7 @@ record and cannot mistake one for the other.
 triage:   pass | flag | discard
 release:  release_without_redaction | release_with_redaction | withheld | not_assessed
 discard_ground: "unmeasurable" | "acoustically_empty" | null
-release_ground: one of the nine controlled grounds | null   # null wherever REDACT itself decided
+release_ground: one of the ten controlled grounds | null   # null wherever REDACT itself decided
 llm_redaction: { status, iterations, flagged, model_id, revision, failure }   # {} when REDACT wrote none
 reasons:  [ { node, outcome, kind?, why } ]        # every contributing verdict, in order
 ran:      { node: "completed" | "skipped" | "errored" }

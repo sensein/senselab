@@ -38,6 +38,7 @@ from senselab.audio.workflows.triage.nodes.common import (
     NodeResult,
     find_measurement,
     find_measurements,
+    find_verdict,
     software_agent,
     write_verdict,
 )
@@ -83,6 +84,7 @@ SPEECH = "SPEECH"
 _GRAPH_ORDER = GRAPH_ORDER[:-1]
 
 _REVIEW = "REVIEW"
+_REDACT_NODE = "REDACT"
 
 
 @dataclass(frozen=True)
@@ -304,16 +306,19 @@ def _redaction_evidence(store: ProvStore, reports: Sequence[tuple[Entity, Branch
             SPEECH's own lexical count can be read off its report.
 
     Returns:
-        SPEECH's lexical count, its scan record as a tri-state, and how many live ``pii`` findings
-        the store holds.
+        SPEECH's lexical count, its scan record as a tri-state, how many live ``pii`` findings the
+        store holds, and what REDACT's re-scan still read after its re-plan.
     """
     speech = next((entity for entity, report in reports if report.node == SPEECH), None)
     words = None if speech is None else speech.attributes.get("words_n")
     scans = [measurement.attributes for measurement in find_measurements(store, PII_SCAN)]
+    redact = find_verdict(store, _REDACT_NODE)
+    survivors = () if redact is None else tuple(str(c) for c in redact.attributes.get("unremediable") or ())
     return RedactionEvidence(
         lexical_words_n=None if words is None else int(words),
         scanned=None if not scans else not any(scan.get(SCANNED) is False for scan in scans),
         findings_n=len([finding for finding in store.entities("pii") if not store.is_invalidated(finding.id)]),
+        rescan_survivors=survivors,
     )
 
 

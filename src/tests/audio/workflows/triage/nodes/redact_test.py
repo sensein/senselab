@@ -22,7 +22,7 @@ from senselab.audio.data_structures.audio_hints import AudioHints, ExpectedSpeec
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.nodes import redact as redact_module
 from senselab.audio.workflows.triage.nodes.common import resolve_stream
-from senselab.audio.workflows.triage.nodes.redact import STREAM_NAME, redact
+from senselab.audio.workflows.triage.nodes.redact import RELEASED_FILES, STREAM_NAME, redact, settle_release
 from senselab.audio.workflows.triage.vocabulary import Outcome
 from senselab.text.tasks.pii_detection.api import PiiScan, PiiSpan
 from senselab.text.tasks.pii_detection.api import scan_for_pii as real_scan_for_pii
@@ -500,6 +500,60 @@ class TestAPlaceholderIsNotASurvivor:
         _stub_pii(monkeypatch, findings=[("PERSON", "alice")])
         result = redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
         assert result.verdict.outcome is Outcome.FAIL
+
+
+class TestTheFoldSettlesTheReleaseOfAFail:
+    """REDACT writes a copy only on a pass; where the fold releases a fail, the copy comes from the store."""
+
+    def _failed(self, store: ProvStore, config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+        """A REDACT fail whose re-scan still reads the name, and its (empty) release directory."""
+        _seed_redact_store(store, tmp_path, words=["hello", "alice"], findings=[("PERSON", (1.0, 2.0))])
+        _stub_pii(monkeypatch, findings=[("PERSON", "alice")])
+        result = redact(store, "recording", config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
+        assert result.verdict.outcome is Outcome.FAIL and result.artifacts == {}
+        return _release(tmp_path)
+
+    def test_a_released_fail_gets_the_masked_copy(
+        self,
+        store: ProvStore,
+        redact_config: TriageConfig,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The triple a pass would have written, over the plan REDACT left in the store."""
+        released = self._failed(store, redact_config, tmp_path, monkeypatch)
+        written = settle_release(store, "release_with_redaction", run_dir=tmp_path, artifacts_dir=released)
+        assert sorted(path.name for path in written.values()) == sorted(RELEASED_FILES)
+        assert (released / "transcript.txt").read_text() == "hello [PERSON]\n"
+        assert "alice" not in (released / "consensus.json").read_text()
+
+    def test_a_withheld_fail_leaves_no_copy(
+        self,
+        store: ProvStore,
+        redact_config: TriageConfig,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A fold that withholds again removes a copy an earlier fold released."""
+        released = self._failed(store, redact_config, tmp_path, monkeypatch)
+        settle_release(store, "release_with_redaction", run_dir=tmp_path, artifacts_dir=released)
+        assert settle_release(store, "withheld", run_dir=tmp_path, artifacts_dir=released) == {}
+        assert not any((released / name).exists() for name in RELEASED_FILES)
+
+    def test_a_pass_is_left_as_redact_wrote_it(
+        self,
+        store: ProvStore,
+        redact_config: TriageConfig,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """REDACT's own release is not the fold's to rewrite or remove."""
+        _seed_redact_store(store, tmp_path, words=["hello", "alice"], findings=[("PERSON", (1.0, 2.0))])
+        _stub_pii(monkeypatch, findings=[])
+        result = redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
+        assert result.verdict.outcome is Outcome.PASS
+        assert settle_release(store, "withheld", run_dir=tmp_path, artifacts_dir=_release(tmp_path)) == {}
+        assert all((_release(tmp_path) / name).exists() for name in RELEASED_FILES)
 
 
 class TestTheFillIsDeclared:

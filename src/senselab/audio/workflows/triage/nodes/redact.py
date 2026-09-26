@@ -48,6 +48,7 @@ from senselab.audio.workflows.triage.nodes.common import (
     NodeResult,
     consensus_words,
     find_measurement,
+    find_verdict,
     live_entities,
     path_attributes,
     resolve_stream,
@@ -964,6 +965,40 @@ def redact(
     )
     view.append(verdict_id)
     return RedactResult(verdict=verdict, view=tuple(view), verdict_entity_id=verdict_id, artifacts=artifacts)
+
+
+RELEASED_FILES = ("audio.wav", "transcript.txt", "consensus.json")
+"""What a release of the redacted copy writes into the release directory."""
+
+
+def settle_release(store: ProvStore, release: str, *, run_dir: Path, artifacts_dir: Path) -> dict[str, Path]:
+    """Make the release directory hold the redacted copy exactly when the fold released it over a REDACT fail.
+
+    A REDACT pass writes its own copy and is left alone, as is a recording REDACT never read. Where
+    REDACT failed, the fold may still release the redacted copy (``release_with_redaction``); the copy
+    is then written from what REDACT left in the store -- the masked ``redacted`` stream and its
+    planned spans over the consensus words. Any other release removes whatever copy is there.
+
+    Args:
+        store: The provenance store, after VERDICT.
+        release: The fold's release axis value.
+        run_dir: The run directory sidecar paths are relative to.
+        artifacts_dir: The release directory.
+
+    Returns:
+        The written paths, keyed as :func:`_write_artifacts` keys them; empty where nothing was
+        written.
+    """
+    verdict = find_verdict(store, NODE)
+    if verdict is None or verdict.attributes.get("outcome") != Outcome.FAIL.value:
+        return {}
+    if release != "release_with_redaction":
+        for name in RELEASED_FILES:
+            (artifacts_dir / name).unlink(missing_ok=True)
+        return {}
+    records, text, _ = _render(consensus_words(store), planned_extents(store))
+    _, redacted = resolve_stream(store, run_dir, STREAM_NAME)
+    return _write_artifacts(redacted, text, records, artifacts_dir)
 
 
 REDACTION_SPAN = "redaction"

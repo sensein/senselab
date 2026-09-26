@@ -158,9 +158,18 @@ declared parameter, `_release_from(..., reviewer_withholds=...)`, resolved from
 `verdict.llm_redaction_withholds` and defaulting to False. It may only **tighten**: a reviewer that
 read residue turns either release into `withheld` — a REDACT `pass`, and since 2026-09-26 also a
 `release_without_redaction` where REDACT never ran — and no reading of any kind moves a recording out
-of `withheld` or `not_assessed`. The section's title is therefore still exact — nothing moves a recording *toward*
-release without a human — and `vocabulary_test.py` asserts both halves: the parameter set is closed,
-and the movement is one-directional.
+of `withheld` or `not_assessed`.
+
+**On 2026-09-26 the owner opened one path the other way.** Owner: *"isn't it the reviewer's call"*,
+then *"diagnose, then reviewer rule, but the reviewer is already assessing these date time ones"*.
+A second declared parameter, `reviewer_clears`, resolved from `verdict.llm_rescan_clears`, releases
+the **redacted copy** of a recording REDACT withheld only because its re-scan still read a finding,
+where the reviewer read the original as `clean` and proposed nothing to hide. The ground is
+`REVIEWER_CLEARED_RESCAN`. It moves nothing else: a scan that did not complete, a `flag`, a
+`not_assessed`, and every reading that proposes a redaction or finds the original carrying PII stay
+where they were. So the title above no longer holds in full: exactly one kind of withholding is now
+cleared by the reviewer rather than by a person. `vocabulary_test.py` asserts the parameter set is
+closed at these two, and `specs/20260926-redact-rescan-survival/design.md` has the measurement.
 
 ## 6. The reviewer action on the free-speech page
 

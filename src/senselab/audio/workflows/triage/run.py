@@ -27,7 +27,7 @@ from senselab.audio.workflows.triage.nodes.common import (
 )
 from senselab.audio.workflows.triage.nodes.preprocess import preprocess
 from senselab.audio.workflows.triage.nodes.quality import quality
-from senselab.audio.workflows.triage.nodes.redact import redact
+from senselab.audio.workflows.triage.nodes.redact import redact, settle_release
 from senselab.audio.workflows.triage.nodes.report import report
 from senselab.audio.workflows.triage.nodes.review import NODE as REVIEW_NODE
 from senselab.audio.workflows.triage.nodes.review import ReviewOutcome, review
@@ -470,6 +470,16 @@ def run_triage(
             "VERDICT",
             lambda: verdict(store, None, config, hint, run_dir=layout.run_dir, ran=ran),
         )
+        if folded is not None:
+            released = {
+                **released,
+                **settle_release(
+                    store,
+                    folded.file_verdict.release.value,
+                    run_dir=layout.run_dir,
+                    artifacts_dir=layout.artifacts_dir,
+                ),
+            }
 
     capture_environments(store, used_venvs)
     store.write_jsonl(layout.store_path)

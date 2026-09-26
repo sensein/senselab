@@ -64,7 +64,7 @@ from senselab.audio.workflows.triage.extend import (
     write_store,
 )
 from senselab.audio.workflows.triage.nodes.common import describe_exception
-from senselab.audio.workflows.triage.run import SUMMARY_SUBDIR
+from senselab.audio.workflows.triage.run import RELEASE_SUBDIR, SUMMARY_SUBDIR
 
 NODE = "REFOLD"
 UNCHANGED = "unchanged"
@@ -163,6 +163,7 @@ def _fold(store: Any, config: TriageConfig, hint: Any, *, run_root: Path, commit
         config,
         hint,
         run_dir=run_root / RUN_SUBDIR,
+        artifacts_dir=run_root / RELEASE_SUBDIR,
         summary_dir=run_root / SUMMARY_SUBDIR,
         commit=commit,
     )
