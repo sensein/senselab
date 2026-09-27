@@ -198,7 +198,7 @@ MARK_STATE_LABELS = {
     MASKED: "masked",
     UNMASKED_BY_REVIEWER: "unmasked by reviewer",
     PROPOSED_BY_REVIEWER: "reviewer proposes masking",
-    UNMASKED_BY_TRIM: "unmasked, not content",
+    UNMASKED_BY_TRIM: "unmasked, padding or not content",
     DETECTED: "detected, not masked",
 }
 """What the card and the legend say for each state."""
@@ -2235,8 +2235,8 @@ _DOCUMENT = """<!doctype html>
 REDACT masked it and a reviewer release entry named it</li>
 <li><mark class="swatch s-proposed_by_reviewer"><span class="st">reviewer proposes masking</span>word</mark>
 a reviewer redact entry names it and no mask hides it; a condition alone goes to human review</li>
-<li><mark class="swatch s-unmasked_by_trim"><span class="st">unmasked, not content</span>word</mark>
-a mask covered it and it is not a content word</li>
+<li><mark class="swatch s-unmasked_by_trim"><span class="st">unmasked, padding or not content</span>word</mark>
+a mask covered it, and it is not a content word or only the padding reached it</li>
 <li><mark class="swatch s-detected"><span class="st">detected, not masked</span>word</mark>
 a detector marked it and no mask covers it</li>
 </ul></details>
