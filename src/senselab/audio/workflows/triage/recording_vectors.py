@@ -26,7 +26,9 @@ from typing import Any, Iterable, Iterator, Mapping, Sequence
 import numpy as np
 import pyarrow as pa
 
-SCHEMA_VERSION = 8
+from senselab.audio.workflows.triage.cohort import CONDITION_KINDS
+
+SCHEMA_VERSION = 9
 """Bumped whenever a column is added, removed or retyped, a binary layout changes, or a categorical
 column's controlled vocabulary changes."""
 
@@ -711,8 +713,9 @@ def _ledger_columns(view: StoreView) -> dict[str, Any]:
         view: The store.
 
     Returns:
-        ``masks_n``, ``masks_final_n``, a count and a category list per :data:`LEDGER_STATES`, and
-        ``condition_review``. All null where the store carries no ledger.
+        ``masks_n``, ``masks_final_n``, ``task_words_n``, a count and a category list per
+        :data:`LEDGER_STATES`, ``condition_review``, ``condition_review_kind``, a count per condition
+        kind and ``cohort_diagnoses``. All null where the store carries no ledger.
     """
     ledger: Mapping[str, Any] | None = None
     for entity in view.live("measurement"):
@@ -721,9 +724,13 @@ def _ledger_columns(view: StoreView) -> dict[str, Any]:
     names = [
         "masks_n",
         "masks_final_n",
+        "task_words_n",
         *(f"{state}_n" for state in LEDGER_STATES),
         *(f"{state}_categories" for state in LEDGER_STATES),
         "condition_review",
+        "condition_review_kind",
+        *(f"{kind}_condition_n" for kind in CONDITION_KINDS),
+        "cohort_diagnoses",
     ]
     if ledger is None:
         return dict.fromkeys(names)
@@ -732,9 +739,13 @@ def _ledger_columns(view: StoreView) -> dict[str, Any]:
     return {
         "masks_n": int(counts.get("masks_n") or 0),
         "masks_final_n": int(counts.get("final_masks_n") or 0),
+        "task_words_n": int(counts.get("task_words_n") or 0),
         **{f"{state}_n": int(counts.get(f"{state}_n") or 0) for state in LEDGER_STATES},
         **{f"{state}_categories": [str(name) for name in categories.get(state) or ()] for state in LEDGER_STATES},
         "condition_review": bool(ledger.get("human_review")),
+        "condition_review_kind": ledger.get("human_review_kind") or None,
+        **{f"{kind}_condition_n": int(counts.get(f"{kind}_condition_n") or 0) for kind in CONDITION_KINDS},
+        "cohort_diagnoses": [str(name) for name in ledger.get("cohort_diagnoses") or ()],
     }
 
 
@@ -1125,9 +1136,13 @@ def schema() -> pa.Schema:
         pa.field("scanned_by", pa.list_(pa.string())),
         pa.field("masks_n", pa.int32()),
         pa.field("masks_final_n", pa.int32()),
+        pa.field("task_words_n", pa.int32()),
         *[pa.field(f"{state}_n", pa.int32()) for state in LEDGER_STATES],
         *[pa.field(f"{state}_categories", pa.list_(pa.string())) for state in LEDGER_STATES],
         pa.field("condition_review", pa.bool_()),
+        pa.field("condition_review_kind", pa.string()),
+        *[pa.field(f"{kind}_condition_n", pa.int32()) for kind in CONDITION_KINDS],
+        pa.field("cohort_diagnoses", pa.list_(pa.string())),
         pa.field("gate_node", pa.string()),
         pa.field("gate_group", pa.string()),
         pa.field("gate_family", pa.string()),
