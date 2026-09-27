@@ -45,6 +45,7 @@ VERDICT_NODE = "VERDICT"
 REDACT_NODE = "REDACT"
 SPEECH_NODE = "SPEECH"
 PII_SCAN = "pii_scan"
+PII_LEDGER = "pii_ledger"
 REDACTION_EXEMPTIONS = "redaction_exemptions"
 
 TASK_EXTENT_ROLE = "task_extent"
@@ -54,7 +55,7 @@ SPEECH_FAMILY = "speech"
 """The span family SPEECH stamps; every free-response recording routes to SPEECH."""
 
 MEASUREMENT_MARKER = '"prov_type": "measurement"'
-KEPT_MEASUREMENTS = (PII_SCAN, REDACTION_EXEMPTIONS)
+KEPT_MEASUREMENTS = (PII_SCAN, REDACTION_EXEMPTIONS, PII_LEDGER)
 KEPT_MEASUREMENT_MARKERS = tuple(f'"name": "{name}"' for name in KEPT_MEASUREMENTS)
 
 RELEASE_ORDER = (
@@ -67,22 +68,10 @@ RELEASE_ORDER = (
 """The graph's own release axis, most permissive first, plus the page's own ``unrecorded``."""
 
 EXTRACT_SCHEMA = "senselab.fsreview.extract"
-EXTRACT_VERSION = 5
-"""5 is the first version read from a graph that has both the release split and REVIEW.
+EXTRACT_VERSION = 6
+"""6 is the first version whose marks are the fold's PII ledger: every span and each word's state.
 
-Two changes landed between 3 and here, and each alone would make an older extract describe the
-wrong thing. The release axis now names which artefact may be handed on: a version-3 row's ``rel``
-is the old vocabulary, in which ``releasable`` means what ``release_with_redaction`` now means and
-``nothing_to_redact`` spans both ``release_without_redaction`` and ``not_assessed``, so the chips,
-the facet and the determination panel would all name the wrong artefact. And the reviewer is now
-REVIEW rather than a step inside REDACT: under 3 it was reached only through REDACT, so it read the
-recordings the detectors marked and no others, and ``not_run`` was its state for a transcript the
-detectors marked nothing in. REVIEW reads every transcript, so that state is gone and its sentence
-would be false twice over -- about which recordings were read, and about why one was not.
-
-Both sides of the merge that brought them together had independently called themselves 4, so 4
-names two different graphs and vouches for neither. The version is what lets the page refuse to
-speak over an extract whose graph it cannot vouch for.
+``specs/20260927-pii-span-ledger/design.md``. An older extract's marks are the detectors' labels alone.
 """
 
 
@@ -197,6 +186,76 @@ def scan_state(scan: Mapping[str, Any] | None) -> bool | None:
     return bool(scan.get("scanned_by"))
 
 
+MASKED = "masked"
+UNMASKED_BY_REVIEWER = "unmasked_by_reviewer"
+UNMASKED_BY_TRIM = "unmasked_by_trim"
+PROPOSED_BY_REVIEWER = "proposed_by_reviewer"
+DETECTED = "detected"
+MARK_STATES = (MASKED, UNMASKED_BY_REVIEWER, PROPOSED_BY_REVIEWER, UNMASKED_BY_TRIM, DETECTED)
+"""Every state a mark can carry: the ledger's four, and a detector finding no mask covers."""
+
+MARK_STATE_LABELS = {
+    MASKED: "masked",
+    UNMASKED_BY_REVIEWER: "unmasked by reviewer",
+    PROPOSED_BY_REVIEWER: "reviewer proposes masking",
+    UNMASKED_BY_TRIM: "unmasked, not content",
+    DETECTED: "detected, not masked",
+}
+"""What the card and the legend say for each state."""
+
+_STATE_PRIORITY = {state: rank for rank, state in enumerate((MASKED, UNMASKED_BY_REVIEWER, UNMASKED_BY_TRIM))}
+
+
+def ledger_of(view: StoreView) -> dict[str, Any] | None:
+    """The fold's latest live ``pii_ledger``.
+
+    Args:
+        view: The store view.
+
+    Returns:
+        Its attributes, or None when the store carries none.
+    """
+    found: dict[str, Any] | None = None
+    for measurement in view.live("measurement"):
+        if measurement.attributes.get("name") == PII_LEDGER:
+            found = dict(measurement.attributes)
+    return found
+
+
+def word_states(ledger: Mapping[str, Any] | None) -> dict[str, dict[str, Any]]:
+    """Each word the ledger names, with its state, its categories and what the reviewer said of it.
+
+    Args:
+        ledger: The ``pii_ledger`` attributes, or None.
+
+    Returns:
+        Word id to ``{s, c, nm, pr, hr}``: the state, the categories, whether a ``release`` entry named
+        it, whether a ``redact`` entry named it, and whether that entry routes to human review. A
+        word two masks cover takes the tighter state, masked first.
+    """
+    states: dict[str, dict[str, Any]] = {}
+    for mask in (ledger or {}).get("masks") or ():
+        category = str(mask.get("category") or "")
+        for word in mask.get("words") or ():
+            word_id, state = str(word.get("id")), str(word.get("state") or MASKED)
+            held = states.get(word_id)
+            if held is not None and _STATE_PRIORITY.get(held["s"], 9) <= _STATE_PRIORITY.get(state, 9):
+                continue
+            states[word_id] = {"s": state, "c": [category], "nm": int(bool(word.get("named"))), "pr": 0, "hr": 0}
+    for proposal in (ledger or {}).get("proposals") or ():
+        category = str(proposal.get("category") or "")
+        review = int(bool(proposal.get("human_review")))
+        for word_id in proposal.get("word_ids") or ():
+            held = states.get(str(word_id))
+            if held is None or held["s"] != MASKED:
+                states[str(word_id)] = {"s": PROPOSED_BY_REVIEWER, "c": [category], "nm": 0, "pr": 1, "hr": review}
+                continue
+            held["pr"], held["hr"] = 1, max(held["hr"], review)
+            if category not in held["c"]:
+                held["c"].append(category)
+    return states
+
+
 def residue_of(scan: Mapping[str, Any] | None, entities: Sequence[Entity]) -> dict[str, Any] | None:
     """The lexical residue the detectors and the reviewer read, as the page shows it.
 
@@ -269,17 +328,18 @@ def finding_key(stem: str, categories: Sequence[str], start: int, end: int) -> s
 def marks_of(
     stem: str,
     words: Sequence[Entity],
-    categories: Sequence[Sequence[str]],
+    labels: Sequence[Mapping[str, Any] | None],
     hulls: Sequence[tuple[float, float]],
     pii: Sequence[Entity],
     extent: tuple[float, float] | None,
 ) -> list[dict[str, Any]]:
-    """The reviewable marks: maximal runs of adjacent words sharing one category set.
+    """The reviewable marks: maximal runs of adjacent words sharing one label.
 
     Args:
         stem: The recording's BIDS stem.
         words: The consensus words, in index order.
-        categories: Each word's categories, aligned with ``words``.
+        labels: Each word's ``{s, c, nm, pr, hr}`` label, aligned with ``words``; None for a word no
+            span covers.
         hulls: Each word's timing hull, aligned with ``words``.
         pii: The live ``pii`` entities, read for detector attribution.
         extent: The task extent, or None when the recording carries none.
@@ -290,14 +350,15 @@ def marks_of(
     marks: list[dict[str, Any]] = []
     index = 0
     while index < len(words):
-        current = list(categories[index])
-        if not current:
+        label = labels[index]
+        if not label:
             index += 1
             continue
         cursor = index + 1
-        while cursor < len(words) and list(categories[cursor]) == current:
+        while cursor < len(words) and labels[cursor] == label:
             cursor += 1
         run = words[index:cursor]
+        current = list(label["c"])
         hull = (
             min(hulls[position][0] for position in range(index, cursor)),
             max(hulls[position][1] for position in range(index, cursor)),
@@ -306,8 +367,12 @@ def marks_of(
         surface = " ".join(str(word.attributes.get("text") or "") for word in run)
         marks.append(
             {
-                "k": finding_key(stem, current, index, cursor),
+                "k": finding_key(stem, [*current, str(label["s"])], index, cursor),
                 "c": current,
+                "s": str(label["s"]),
+                "nm": int(label.get("nm") or 0),
+                "pr": int(label.get("pr") or 0),
+                "hr": int(label.get("hr") or 0),
                 "d": [str(finding.attributes.get("source") or "") for finding in contributing],
                 "dn": len(contributing),
                 "i": [index, cursor],
@@ -424,11 +489,17 @@ def recording_record(run_root: Path, families: frozenset[str]) -> dict[str, Any]
         return None
     participant, session, _ = identity(stem)
     marked = marked_words(view)
+    ledger = ledger_of(view)
+    states = word_states(ledger)
     entities = sorted(view.live("word"), key=lambda entity: int(entity.attributes.get("index", 0)))
-    categories = [marked.get(entity.id, []) for entity in entities]
+    labels: list[Mapping[str, Any] | None] = [
+        states.get(entity.id)
+        or ({"s": DETECTED, "c": marked[entity.id], "nm": 0, "pr": 0, "hr": 0} if entity.id in marked else None)
+        for entity in entities
+    ]
     hulls = [word_hull(entity) for entity in entities]
     pii = view.live("pii")
-    marks = marks_of(stem, entities, categories, hulls, pii, task_extent(view))
+    marks = marks_of(stem, entities, labels, hulls, pii, task_extent(view))
     owner = {position: number for number, mark in enumerate(marks) for position in range(mark["i"][0], mark["i"][1])}
     words: list[list[Any]] = []
     characters = 0
@@ -455,6 +526,7 @@ def recording_record(run_root: Path, families: frozenset[str]) -> dict[str, Any]
         "rwhy": str(redact.attributes.get("why") or "") if redact is not None else "",
         "scan": scan_state(scan),
         "res": residue_of(scan, entities),
+        "led": None if ledger is None else dict((ledger.get("counts") or {})),
         "w": words,
         "f": marks,
         "pii": [
@@ -893,7 +965,7 @@ def paragraph(words: Sequence[Sequence[Any]], marks: Sequence[dict[str, Any]]) -
 
 
 def _mark(mark: dict[str, Any], run: Sequence[Sequence[Any]]) -> str:
-    """One reviewable mark.
+    """One reviewable mark, classed by its state.
 
     Args:
         mark: The mark record.
@@ -903,13 +975,22 @@ def _mark(mark: dict[str, Any], run: Sequence[Sequence[Any]]) -> str:
         The mark's HTML.
     """
     label = html.escape("+".join(str(name) for name in mark["c"]))
+    state = str(mark.get("s") or DETECTED)
     detectors = html.escape(" ".join(str(name) for name in mark["d"]) or "unattributed")
     inner = " ".join(_plain(item) for item in run)
+    notes = [MARK_STATE_LABELS.get(state, state)]
+    if mark.get("nm") and state == MASKED:
+        notes.append("reviewer would unmask")
+    if mark.get("pr") and state == MASKED:
+        notes.append("reviewer also proposes")
+    if mark.get("hr"):
+        notes.append("human review")
     return (
-        f'<mark class="pii" data-k="{html.escape(str(mark["k"]))}" data-c="{label}" '
+        f'<mark class="pii s-{html.escape(state)}" data-k="{html.escape(str(mark["k"]))}" data-c="{label}" '
+        f'data-s="{html.escape(state)}" data-nm="{int(mark.get("nm") or 0)}" data-hr="{int(mark.get("hr") or 0)}" '
         f'data-d="{detectors}" data-brk="{mark["brk"]}" data-tx="{mark["tx"]}" '
         f'data-nt="{mark["nt"]}" data-stim="{mark["stim"]}" tabindex="0">'
-        f'<span class="cat">{label}</span>{inner}</mark>'
+        f'<span class="cat">{label}</span><span class="st">{html.escape(" · ".join(notes))}</span>{inner}</mark>'
     )
 
 
@@ -952,6 +1033,18 @@ def recording_html(row: dict[str, Any]) -> str:
     categories = Counter(str(name) for mark in marks for name in mark["c"])
     fired = "yes" if marks else "no"
     summary = ", ".join(f"{html.escape(name)}&times;{count}" for name, count in sorted(categories.items())) or "none"
+    counts = row.get("led") or {}
+    ledger_html = (
+        '<div class="ledger">'
+        + " &middot; ".join(
+            f'<span class="s-{state}">{html.escape(MARK_STATE_LABELS[state])} '
+            f"{int(counts.get(f'{state}_n') or 0)}</span>"
+            for state in (MASKED, UNMASKED_BY_REVIEWER, PROPOSED_BY_REVIEWER, UNMASKED_BY_TRIM)
+        )
+        + "</div>"
+        if row.get("led") is not None
+        else '<div class="ledger">no PII ledger: the fold that wrote this store predates it</div>'
+    )
     ground = row.get("rg")
     ground_html = f'<div class="ground">{html.escape(str(ground))}</div>' if ground else ""
     why = row.get("rwhy") or row.get("why") or ""
@@ -979,7 +1072,7 @@ def recording_html(row: dict[str, Any]) -> str:
         f'<span class="fam">{html.escape(str(row["fam"]))}</span>{_chip(str(row["rel"]))}'
         f'<span class="meta">{row["nl"]} lexical / {row["nw"]} tokens &middot; {scan_text} '
         f"&middot; findings: {summary}</span></header>"
-        f"{ground_html}{why_html}{residue_html}"
+        f"{ground_html}{why_html}{residue_html}{ledger_html}"
         f'<p class="text">{body}</p>'
         f'<div class="whyrow">{_triage_controls(stem)}{_release_controls(stem)}'
         f'<button type="button" class="whybtn" data-stem="{html.escape(stem)}">'
@@ -1291,6 +1384,15 @@ border:1px solid var(--line);border-radius:8px;padding:5px 10px;font-size:12px;c
 z-index:8}
 .hidden{display:none !important}
 mark.pii{cursor:pointer}
+mark.pii.s-unmasked_by_reviewer,mark.swatch.s-unmasked_by_reviewer{background:#dcefd9;border-bottom-color:#2c6b2c}
+mark.pii.s-proposed_by_reviewer,mark.swatch.s-proposed_by_reviewer{background:#f6d6d2;border-bottom:2px dashed #8a2f24}
+mark.pii.s-unmasked_by_trim,mark.swatch.s-unmasked_by_trim{background:transparent;border-bottom:1px dotted var(--piib)}
+mark.pii.s-detected,mark.swatch.s-detected{background:transparent;border-bottom:2px solid var(--line)}
+.ledger{font-size:12px;color:var(--mut);margin:2px 0 4px}
+mark.pii .st{font-size:9.5px;letter-spacing:.04em;color:var(--mut);margin-right:4px}
+mark.swatch{background:var(--pii);border-bottom:2px solid var(--piib);padding:0 3px;font-size:11px}
+ul.legend{list-style:none;padding:0;margin:4px 0;font-size:12px;line-height:1.5}
+ul.legend li{margin-bottom:4px}
 mark.pii:focus{outline:2px solid var(--acc);outline-offset:1px}
 mark.pii.dim{background:transparent;border-bottom:1px dotted var(--line);opacity:.45}
 mark.pii.dim .cat{background:transparent;color:var(--mut)}
@@ -1428,6 +1530,8 @@ mark.pii{padding:1px 3px}
 #why .ok{color:#a8d3a8}
 #why .bad{color:#e8a89e}
 mark.pii[data-v="identifying"]{border-bottom-color:#e8a89e}
+mark.pii.s-unmasked_by_reviewer,mark.swatch.s-unmasked_by_reviewer{background:#1f3a1f;border-bottom-color:#8fcf8f}
+mark.pii.s-proposed_by_reviewer,mark.swatch.s-proposed_by_reviewer{background:#4a2420;border-bottom-color:#e8a89e}
 mark.pii[data-v="not-identifying"]{border-bottom-color:#a7bce4}
 mark.pii[data-v="not-the-category"]{border-bottom-color:#a8d3a8}
 .verdict.on{color:#171614}
@@ -2125,6 +2229,17 @@ _DOCUMENT = """<!doctype html>
 <div class="sum">{participants} participants &middot; {recordings} recordings &middot;
 {marks} findings &middot; {characters} characters</div>
 {errors}
+<details id="legend" open><summary>PII marks</summary><ul class="legend">
+<li><mark class="swatch s-masked"><span class="st">masked</span>word</mark> the released copy hides it</li>
+<li><mark class="swatch s-unmasked_by_reviewer"><span class="st">unmasked by reviewer</span>word</mark>
+REDACT masked it and a reviewer release entry named it</li>
+<li><mark class="swatch s-proposed_by_reviewer"><span class="st">reviewer proposes masking</span>word</mark>
+a reviewer redact entry names it and no mask hides it; a condition alone goes to human review</li>
+<li><mark class="swatch s-unmasked_by_trim"><span class="st">unmasked, not content</span>word</mark>
+a mask covered it and it is not a content word</li>
+<li><mark class="swatch s-detected"><span class="st">detected, not masked</span>word</mark>
+a detector marked it and no mask covers it</li>
+</ul></details>
 <details id="keys"><summary>keyboard</summary><dl>
 <dt>j / k</dt><dd>next / previous sample</dd>
 <dt>J / K</dt><dd>next / previous participant</dd>
