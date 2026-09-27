@@ -1032,3 +1032,49 @@ def test_the_dominant_share_is_folded_by_min_as_the_gate_folds_it(tmp_path: Path
     assert row is not None
     assert row["extent_dominant_speaker_share_min"] == pytest.approx(0.4)
     assert row["m_extent_dominant_speaker_share"] == pytest.approx(0.65)
+
+
+def test_the_ledger_columns_count_every_state(tmp_path: Path) -> None:
+    """The fold's pii_ledger reaches the parquet as counts and categories per state."""
+    run_root = build_recording(tmp_path, with_pii_scan=True, pii_findings=1)
+    with (run_root / "run" / "store.jsonl").open("a") as handle:
+        handle.write(
+            _entity(
+                "measurement-pii-ledger",
+                "measurement",
+                None,
+                name="pii_ledger",
+                counts={
+                    "masks_n": 2,
+                    "final_masks_n": 1,
+                    "masked_n": 1,
+                    "unmasked_by_reviewer_n": 1,
+                    "unmasked_by_trim_n": 2,
+                    "proposed_by_reviewer_n": 2,
+                },
+                categories={
+                    "masked": ["PERSON"],
+                    "unmasked_by_reviewer": ["DATE_TIME"],
+                    "unmasked_by_trim": ["DATE_TIME", "PERSON"],
+                    "proposed_by_reviewer": ["CONDITION"],
+                },
+                human_review=True,
+            )
+            + "\n"
+        )
+    row = rv.extract(run_root, tmp_path)
+    assert row is not None
+    assert (row["masks_n"], row["masks_final_n"]) == (2, 1)
+    assert (row["masked_n"], row["unmasked_by_reviewer_n"], row["unmasked_by_trim_n"]) == (1, 1, 2)
+    assert row["proposed_by_reviewer_n"] == 2
+    assert row["proposed_by_reviewer_categories"] == ["CONDITION"]
+    assert row["condition_review"] is True
+    rv.to_table([row])
+
+
+def test_no_ledger_leaves_every_ledger_column_null(tmp_path: Path) -> None:
+    """A store folded before the ledger existed says nothing about which masks stood."""
+    row = rv.extract(build_recording(tmp_path, with_pii_scan=True, pii_findings=1), tmp_path)
+    assert row is not None
+    for column in ("masks_n", "masked_n", "proposed_by_reviewer_categories", "condition_review"):
+        assert row[column] is None

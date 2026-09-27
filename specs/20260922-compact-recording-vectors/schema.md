@@ -9,7 +9,7 @@
 > stay counts and categories only.
 
 Produced by `senselab.audio.workflows.triage.recording_vectors` and
-`scripts/triage_recording_vectors.py`. **One row per recording.** `schema_version` is `7`; any
+`scripts/triage_recording_vectors.py`. **One row per recording.** `schema_version` is `8`; any
 change to a column, a byte layout or a categorical column's controlled vocabulary bumps it and
 changes this file with it. The same number is in
 the parquet's own key-value metadata, under `senselab.recording_vectors.schema_version`, so a
@@ -91,7 +91,7 @@ Owner-directed: `participant`, `task`, `verdict` are the first three columns, in
 | `duration_conditioned_s` | double | seconds, the conditioned stream | PREPROCESS wrote no stream |
 | `time_scale_s` | double | seconds — **the denominator for every `uint16` time** | neither duration is known |
 | `sampling_rate` | int32 | Hz, of the conditioned stream | no conditioned stream |
-| `schema_version` | int32 | `7` | never |
+| `schema_version` | int32 | `8` | never |
 | `malformed_store_lines` | int32 | lines of `store.jsonl` that did not parse; `0` is the normal value | never |
 | `flags_n` | int32 | how many node verdicts in the fold carry outcome `flag`, `fail` or `discard` — the same filter `report.py` calls a flag | never |
 | `flag_nodes` | list\<string\> | which nodes those were, e.g. `["SPEECH"]` | never; `[]` when none |
@@ -103,6 +103,14 @@ Owner-directed: `participant`, `task`, `verdict` are the first three columns, in
 | `residue_content` | bool | whether any residue word is outside the closed-class list, which is what lets the scan run | as `residue_words_n` |
 | `scan_ran` | bool | whether any detector ran (`scanned_by` non-empty) | no `pii_scan` |
 | `scanned_by` | list\<string\> | the detectors that ran | no `pii_scan` |
+| `masks_n` | int32 | masks REDACT planned, as the fold's `pii_ledger` records them | no `pii_ledger` |
+| `masks_final_n` | int32 | masks standing once the reviewer's unmasks and the content-word trim are applied | no `pii_ledger` |
+| `masked_n` | int32 | words a standing mask hides | no `pii_ledger` |
+| `unmasked_by_reviewer_n` | int32 | words a mask hid that a reviewer `release` entry named and the fold applied | no `pii_ledger` |
+| `unmasked_by_trim_n` | int32 | words a mask covered that are not residue content words | no `pii_ledger` |
+| `proposed_by_reviewer_n` | int32 | words a reviewer `redact` entry names that no standing mask hides | no `pii_ledger` |
+| `masked_categories`, `unmasked_by_reviewer_categories`, `unmasked_by_trim_categories`, `proposed_by_reviewer_categories` | list\<string\> | the categories carrying at least one word in that state | no `pii_ledger` |
+| `condition_review` | bool | whether a reviewer `redact` entry is in a category routed to human review (`verdict.llm_human_review_categories`); `release_ground` says whether it decided the release | no `pii_ledger` |
 | `wave_peak` | double | amplitude; the scale `wave_minmax` is encoded against | no stream decoded |
 | `floor_dbfs` | double | dBFS; the noise floor, a **scalar** — see §9 | `energy_envelope` is absent |
 | `spans_unrowed_n` | int32 | general spans with no five-row code, left out of `spans` — see §9 | PREPROCESS did not run |

@@ -26,7 +26,7 @@ from typing import Any, Iterable, Iterator, Mapping, Sequence
 import numpy as np
 import pyarrow as pa
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 """Bumped whenever a column is added, removed or retyped, a binary layout changes, or a categorical
 column's controlled vocabulary changes."""
 
@@ -700,6 +700,44 @@ def _residue_columns(view: StoreView) -> dict[str, Any]:
     }
 
 
+LEDGER_STATES = ("masked", "unmasked_by_reviewer", "unmasked_by_trim", "proposed_by_reviewer")
+"""The word states the fold's ``pii_ledger`` counts, each a ``<state>_n`` and a ``<state>_categories`` column."""
+
+
+def _ledger_columns(view: StoreView) -> dict[str, Any]:
+    """What the fold's latest live ``pii_ledger`` says became of every PII span.
+
+    Args:
+        view: The store.
+
+    Returns:
+        ``masks_n``, ``masks_final_n``, a count and a category list per :data:`LEDGER_STATES`, and
+        ``condition_review``. All null where the store carries no ledger.
+    """
+    ledger: Mapping[str, Any] | None = None
+    for entity in view.live("measurement"):
+        if entity.attributes.get("name") == "pii_ledger":
+            ledger = entity.attributes
+    names = [
+        "masks_n",
+        "masks_final_n",
+        *(f"{state}_n" for state in LEDGER_STATES),
+        *(f"{state}_categories" for state in LEDGER_STATES),
+        "condition_review",
+    ]
+    if ledger is None:
+        return dict.fromkeys(names)
+    counts = ledger.get("counts") or {}
+    categories = ledger.get("categories") or {}
+    return {
+        "masks_n": int(counts.get("masks_n") or 0),
+        "masks_final_n": int(counts.get("final_masks_n") or 0),
+        **{f"{state}_n": int(counts.get(f"{state}_n") or 0) for state in LEDGER_STATES},
+        **{f"{state}_categories": [str(name) for name in categories.get(state) or ()] for state in LEDGER_STATES},
+        "condition_review": bool(ledger.get("human_review")),
+    }
+
+
 def _reviewer_columns(decision: Mapping[str, Any]) -> dict[str, Any]:
     """REVIEW's reading, as the columns a viewer can facet on.
 
@@ -911,6 +949,7 @@ def extract(run_root: Path, root: Path, anomalies: dict[str, int] | None = None)
 
     residue = _residue_columns(view)
     row.update(residue)
+    row.update(_ledger_columns(view))
     scanned = bool(residue["scan_ran"])
     pii_entities = [e for e in view.live("pii") if e.extent is not None]
     row["pii_findings_n"] = len(pii_entities) if scanned else None
@@ -1084,6 +1123,11 @@ def schema() -> pa.Schema:
         pa.field("residue_content", pa.bool_()),
         pa.field("scan_ran", pa.bool_()),
         pa.field("scanned_by", pa.list_(pa.string())),
+        pa.field("masks_n", pa.int32()),
+        pa.field("masks_final_n", pa.int32()),
+        *[pa.field(f"{state}_n", pa.int32()) for state in LEDGER_STATES],
+        *[pa.field(f"{state}_categories", pa.list_(pa.string())) for state in LEDGER_STATES],
+        pa.field("condition_review", pa.bool_()),
         pa.field("gate_node", pa.string()),
         pa.field("gate_group", pa.string()),
         pa.field("gate_family", pa.string()),
