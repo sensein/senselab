@@ -1616,3 +1616,82 @@ def test_the_speaker_reading_is_rendered_outside_the_pii_ladder() -> None:
     ladder_ends = page._SCRIPT.index("No annotation was recorded.")
     speakers = page._SCRIPT.index("more than one person speaking")
     assert speakers > ladder_ends, "the speaker reading must not sit inside a pii-status branch"
+
+
+def _ledger(masks: list[dict[str, Any]], proposals: list[dict[str, Any]], counts: dict[str, int]) -> dict[str, Any]:
+    """The fold's ``pii_ledger`` measurement.
+
+    Args:
+        masks: The ledger's masks, each carrying its words and their states.
+        proposals: The reviewer's placed ``redact`` entries.
+        counts: The per-state counts.
+
+    Returns:
+        The JSONL record.
+    """
+    return _entity(
+        "measurement-ledger",
+        "measurement",
+        {"name": "pii_ledger", "masks": masks, "proposals": proposals, "counts": counts},
+    )
+
+
+def test_the_marks_are_the_ledgers_spans_each_with_its_state(tmp_path: Path) -> None:
+    """r6's free-speech-1 card: the date REDACT masked stays masked, and the conditions are shown too."""
+    records = [
+        _word(0, "this"),
+        _word(1, "morning"),
+        _word(2, "essential"),
+        _word(3, "tremors"),
+        _word(4, "today"),
+        _pii("pii-1", "DATE_TIME", "presidio", 0, 2),
+        *_label("assertion-1", "DATE_TIME", "word-1"),
+        *_label("assertion-2", "DATE_TIME", "word-4"),
+        _ledger(
+            masks=[
+                {
+                    "category": "DATE_TIME",
+                    "words": [
+                        {"id": "word-0", "text": "this", "state": "unmasked_by_trim", "named": True, "content": False},
+                        {"id": "word-1", "text": "morning", "state": "masked", "named": True, "content": True},
+                    ],
+                }
+            ],
+            proposals=[{"category": "CONDITION", "word_ids": ["word-2", "word-3"], "human_review": True}],
+            counts={"masked_n": 1, "unmasked_by_trim_n": 1, "proposed_by_reviewer_n": 2},
+        ),
+        _verdict("withheld"),
+    ]
+    row = page.recording_record(_store(tmp_path, _FAMILY_STEM, records), page.free_response_families())
+    assert row is not None
+    states = [(mark["c"], mark["s"], mark["i"]) for mark in row["f"]]
+    assert states == [
+        (["DATE_TIME"], "unmasked_by_trim", [0, 1]),
+        (["DATE_TIME"], "masked", [1, 2]),
+        (["CONDITION"], "proposed_by_reviewer", [2, 4]),
+        (["DATE_TIME"], "detected", [4, 5]),
+    ]
+    assert row["f"][1]["nm"] == 1
+    assert row["f"][2]["hr"] == 1
+    card = page.recording_html(row)
+    assert 'class="pii s-proposed_by_reviewer"' in card
+    assert "reviewer would unmask" in card
+    assert "human review" in card
+    assert "reviewer proposes masking 2" in card
+
+
+def test_a_store_without_a_ledger_says_so_and_keeps_the_detectors_marks(tmp_path: Path) -> None:
+    """A store folded before the ledger existed shows what the detectors marked, labelled as such."""
+    records = [_word(0, "Tuesday"), *_label("assertion-1", "DATE_TIME", "word-0"), _verdict("withheld")]
+    row = page.recording_record(_store(tmp_path, _FAMILY_STEM, records), page.free_response_families())
+    assert row is not None
+    assert [mark["s"] for mark in row["f"]] == ["detected"]
+    assert "no PII ledger" in page.recording_html(row)
+
+
+def test_the_legend_is_not_a_reviewable_mark() -> None:
+    """The page script binds every ``mark.pii``; the legend's swatches must not be among them."""
+    legend = page._DOCUMENT[page._DOCUMENT.index('<details id="legend"') :]
+    legend = legend[: legend.index("</details>")]
+    assert 'class="pii' not in legend
+    assert legend.count('class="swatch') == len(page.MARK_STATES)
