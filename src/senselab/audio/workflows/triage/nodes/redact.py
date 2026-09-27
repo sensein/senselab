@@ -1066,6 +1066,8 @@ class MaskOutcome:
             itself where no word changed state, and empty where no word stays masked.
         final_words: The masked word ids each of ``final`` hides, aligned with it.
         outcome: One of :data:`MASK_OUTCOMES`.
+        task_words_n: How many words outside the residue -- the task's own content, which no mask
+            ever covers -- the planned extent reached.
     """
 
     planned: RedactionExtent
@@ -1073,6 +1075,7 @@ class MaskOutcome:
     final: tuple[RedactionExtent, ...]
     final_words: tuple[tuple[str, ...], ...]
     outcome: str
+    task_words_n: int = 0
 
 
 @dataclass(frozen=True)
@@ -1181,6 +1184,7 @@ class MaskPlan:
                     "start_s": float(mask.planned.start),
                     "end_s": float(mask.planned.end),
                     "outcome": mask.outcome,
+                    "task_words_n": mask.task_words_n,
                     "words": [
                         {
                             "id": word.word_id,
@@ -1223,6 +1227,7 @@ class MaskPlan:
             "counts": {
                 "masks_n": len(self.masks),
                 "final_masks_n": len(self.final),
+                "task_words_n": sum(mask.task_words_n for mask in self.masks),
                 **{
                     f"{outcome}_n": sum(1 for mask in self.masks if mask.outcome == outcome)
                     for outcome in MASK_OUTCOMES
@@ -1360,14 +1365,17 @@ def mask_plan(
 ) -> MaskPlan:
     """Which words stay masked: REDACT's plan, the reviewer's unmasks, and the content-word trim.
 
-    Each planned mask covers the consensus words its extent overlaps. A word leaves the mask when a
-    reviewer ``release`` entry names it -- whole-token runs, at every place the quote occurs -- and
-    ``reviewer_applies``; or when it is not a residue content word
+    Each planned mask covers the residue words its extent overlaps; a word outside the residue is the
+    task's own content and no mask covers it. A word leaves the mask when a reviewer ``release``
+    entry names it -- whole-token runs, at every place the quote occurs -- and ``reviewer_applies``;
+    or when it is not a residue content word
     (:func:`~senselab.audio.workflows.triage.residue.is_content_word`), which no mask ever keeps; or
     when no detector marked it and some word of the same mask is marked, so only the padding reached
-    it. The kept words of each mask are re-cut into one extent per adjacent run. A mask whose words
-    all left disappears; a mask covering no word at all is kept as planned. The rule and its
-    derivation are in ``specs/20260927-pii-span-ledger/design.md``.
+    it. The kept words of each mask are re-cut into one extent per adjacent run, and a mask whose
+    planned extent reaches a task word's audio is re-cut even where no word changed state. A mask
+    whose words all left, or that covers task words only, disappears; a mask covering no word at
+    all is kept as planned. The rule and its derivation are in
+    ``specs/20260927-pii-span-ledger/design.md``.
 
     Args:
         store: The provenance store, carrying REDACT's planned spans, SPEECH's residue and REVIEW's
@@ -1393,7 +1401,16 @@ def mask_plan(
     residue_ids = {word.id for word in residue}
     tokens = _tokens(residue)
     words = [word for word in consensus_words(store) if word.extent is not None]
-    covered = [[word for word in words if _overlaps(word_hull(word), (extent.start, extent.end))] for extent in planned]
+    reached = [[word for word in words if _overlaps(word_hull(word), (extent.start, extent.end))] for extent in planned]
+    if residue_ids:
+        covered = [[word for word in group if word.id in residue_ids] for group in reached]
+        task = [word.extent for word in words if word.id not in residue_ids and word.extent is not None]
+        task_heard = [
+            any(_overlaps((float(start), float(end)), (extent.start, extent.end)) for start, end in task)
+            for extent in planned
+        ]
+    else:
+        covered, task_heard = reached, [False] * len(planned)
     under_masks = {word.id for group in covered for word in group}
     marked = _pii_marked_words(store)
 
@@ -1436,7 +1453,7 @@ def mask_plan(
     def build(apply_reviewer: bool) -> tuple[MaskOutcome, ...]:
         kept_ids = {word_id for word_id in keepable_ids if not (apply_reviewer and word_id in named)}
         outcomes: list[MaskOutcome] = []
-        for extent, group in zip(planned, covered):
+        for extent, group, reach, heard in zip(planned, covered, reached, task_heard):
             states = [
                 MaskWord(
                     word_id=word.id,
@@ -1455,11 +1472,11 @@ def mask_plan(
                 for word in group
             ]
             kept = [word for word in group if word.id in kept_ids]
-            if not group or len(kept) == len(group):
+            if not reach or (len(kept) == len(group) and group and not heard):
                 outcome = MASK_UNCHANGED
                 runs = [(extent, tuple(word.id for word in group))]
             else:
-                runs = _final_extents(kept, words, kept_ids, extent.category, padding_ms / 1000.0)
+                runs = _final_extents(kept, words, kept_ids, extent.category, padding_ms / 1000.0) if kept else []
                 reviewer_moved = any(word.state == UNMASKED_BY_REVIEWER for word in states)
                 outcome = MASK_UNMASKED if not kept else MASK_PARTLY_UNMASKED if reviewer_moved else MASK_TRIMMED
             outcomes.append(
@@ -1469,6 +1486,7 @@ def mask_plan(
                     final=tuple(run for run, _ in runs),
                     final_words=tuple(members for _, members in runs),
                     outcome=outcome,
+                    task_words_n=sum(1 for word in reach if word.id not in residue_ids) if residue_ids else 0,
                 )
             )
         return tuple(outcomes)
