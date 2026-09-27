@@ -68,9 +68,12 @@ named. The first released words the reviewer never named (an r6 Spanish card res
 "mi estado de ánimo" under a quote of "de que"); the second kept whole masks over words nobody
 thought identifying (5,259 masks on r5, all from padding). Both are gone.
 
-**Known risk.** `FUNCTION_WORDS` holds `may` and `will`, so a name spelled as a closed-class word
-("May", "Will") that a detector masked is unmasked by the trim. The owner's instruction covers words
-the finding itself caught; the count on r6 is in §6.
+**Names spelled as closed-class words.** `FUNCTION_WORDS` holds `may`, `will`, `can`, `us`, and the
+Spanish articles, so rule 3 alone unmasked "May", "U.S.", "Los" where a detector had marked them. A
+word a detector marked in one of `verdict.trim_protected_categories` (PERSON, NAME, LOCATION, LOC)
+and written as a proper noun (`residue.is_proper_form`: capitalised, not a first-person pronoun, and
+mid-sentence or one of `NAME_HOMOGRAPHS`) counts as content for the trim; only a reviewer entry naming
+it unmasks it. §7 has the measurement that chose this over protecting every marked word.
 
 ## 2. The ledger
 
@@ -154,3 +157,26 @@ rate a prompt change asking the reviewer to cite word or mask ids is not needed.
 Capitalised closed-class words the trim unmasked: 335, of which "So" 186 and "Well" 125 are
 discourse markers; "May" 13, "Will" 3 and "Can" 3 are the names-as-function-words risk of §1.
 122 readings had their `release` entries withheld by the `carries_pii` guard.
+
+## 7. The two changes of 2026-09-27, afternoon
+
+**Named unmasks always apply.** The `carries_pii` guard is gone, and a reading that also proposes a
+redaction unmasks what it named; its redact entries still decide the release. On r6, the 122 readings
+the guard had held: 121 move from release with redaction to release without redaction under
+`REVIEWER_UNMASKED_ALL`, 1 stays a partial copy; their masked words go from 386 to 1. The free-speech-1
+card (withheld for two conditions) now shows "morning" as `unmasked_by_reviewer`; its release is
+unchanged.
+
+**The trim protects marked proper nouns.** Measured on the same replay with PERSON and NAME protected:
+
+| rule | closed-class words kept masked | PERSON/NAME "May"/"Will"/"Can" trimmed |
+|---|---|---|
+| none | 0 | 19 |
+| every marked word | 2,976 ("and" 162, "the" 154, "I" 144, …) | 0 |
+| marked and written as a proper noun | 71 | 0 |
+
+The literal rule contradicts rule 3, because a finding labels every word its span overlaps. With the
+proper-form rule, the marked proper-form words the trim still released were, by category, PERSON 205
+(the caterpillar passage's own words, which are task content, not residue), DATE_TIME 39 ("May" 11,
+"The" 10), LOCATION/LOC 64 ("Los" 14, "U.S." 11, "Las" 8, "La" 4). LOCATION and LOC are protected;
+DATE_TIME is not.

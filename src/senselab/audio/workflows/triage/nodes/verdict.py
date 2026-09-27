@@ -650,6 +650,7 @@ def verdict(
         reviewer_applies=policy.llm_reset_redactions and reviewer_may_unmask(annotation),
         padding_ms=padding_ms(config) if planned_extents(store) else 0,
         human_review_categories=policy.llm_human_review_categories,
+        protected_categories=policy.trim_protected_categories,
     )
     file_verdict = fold_file_verdict(
         node_verdicts,

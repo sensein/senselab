@@ -57,7 +57,7 @@ from senselab.audio.workflows.triage.nodes.common import (
     write_stream,
     write_verdict,
 )
-from senselab.audio.workflows.triage.residue import is_content_word
+from senselab.audio.workflows.triage.residue import is_content_word, is_proper_form
 from senselab.audio.workflows.triage.stimulus import NearMatch, near_match, split_prompts
 from senselab.audio.workflows.triage.vocabulary import (
     REDACTION_LLM_ANNOTATION,
@@ -1037,8 +1037,12 @@ class MaskWord:
         text: Its surface.
         state: :data:`MASKED`, :data:`UNMASKED_BY_REVIEWER` or :data:`UNMASKED_BY_TRIM`.
         named: Whether a reviewer ``release`` entry named it, whether or not the fold applied it.
-        content: Whether it is a residue content word.
+        content: Whether it counts as content for the trim: a residue content word, or one a
+            detector marked in a protected category.
         finding: Whether a detector marked it, rather than the padding reaching it.
+        categories: The categories the detectors marked on it, sorted.
+        proper: Whether it is written as a proper noun
+            (:func:`~senselab.audio.workflows.triage.residue.is_proper_form`).
     """
 
     word_id: str
@@ -1047,6 +1051,8 @@ class MaskWord:
     named: bool
     content: bool
     finding: bool
+    categories: tuple[str, ...] = ()
+    proper: bool = False
 
 
 @dataclass(frozen=True)
@@ -1183,6 +1189,8 @@ class MaskPlan:
                             "named": word.named,
                             "content": word.content,
                             "finding": word.finding,
+                            "categories": list(word.categories),
+                            "proper": word.proper,
                         }
                         for word in mask.words
                     ],
@@ -1348,6 +1356,7 @@ def mask_plan(
     reviewer_applies: bool,
     padding_ms: int,
     human_review_categories: Sequence[str] = (),
+    protected_categories: Sequence[str] = (),
 ) -> MaskPlan:
     """Which words stay masked: REDACT's plan, the reviewer's unmasks, and the content-word trim.
 
@@ -1367,6 +1376,9 @@ def mask_plan(
         padding_ms: ``redaction.padding_ms``, the margin kept around each run of masked words.
         human_review_categories: Upper-cased categories whose ``redact`` entries the fold routes to
             human review; marked on the ledger's proposals.
+        protected_categories: Upper-cased detector categories under which a marked word written as a
+            proper noun counts as content: the trim never releases it, and only a reviewer
+            ``release`` entry naming it does.
 
     Returns:
         The plan. Every mask is unchanged where REDACT planned none or the store predates the residue.
@@ -1400,8 +1412,20 @@ def mask_plan(
             off_mask.append(quote)
         named.update(word.id for word in hits)
 
+    protected = {category.upper() for category in protected_categories}
+    previous = {
+        word.id: (str(words[i - 1].attributes.get("text") or "") if i else None) for i, word in enumerate(words)
+    }
+
+    def proper(word: Entity) -> bool:
+        return is_proper_form(str(word.attributes.get("text") or ""), previous.get(word.id))
+
     def content(word: Entity) -> bool:
-        return word.id in residue_ids and is_content_word(str(word.attributes.get("text") or ""))
+        if word.id not in residue_ids:
+            return False
+        if protected & {category.upper() for category in marked.get(word.id, {})} and proper(word):
+            return True
+        return is_content_word(str(word.attributes.get("text") or ""))
 
     def keepable(group: Sequence[Entity]) -> set[str]:
         found = {word.id for word in group if word.id in marked}
@@ -1425,6 +1449,8 @@ def mask_plan(
                     named=word.id in named,
                     content=content(word),
                     finding=word.id in marked,
+                    categories=tuple(sorted(marked.get(word.id, {}))),
+                    proper=proper(word),
                 )
                 for word in group
             ]

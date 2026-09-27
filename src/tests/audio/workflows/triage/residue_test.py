@@ -228,3 +228,20 @@ class TestAFreeResponseIsAllResidue:
         """The filler is taken out, nothing else."""
         words: Sequence[str] = "um I live in Springfield uh".split()
         assert _residue(" ".join(words), "free-speech", rule) == ["I", "live", "in", "Springfield"]
+
+
+class TestAProperForm:
+    """A marked closed-class word counts as a name only where its capitalisation says so."""
+
+    def test_mid_sentence_capitals_and_name_homographs_are_proper(self) -> None:
+        """Mid-sentence "U.S." and "Los" are; "May" is even opening a sentence; "I" and "And" after a stop are not."""
+        from senselab.audio.workflows.triage.residue import is_proper_form
+
+        assert is_proper_form("U.S.", "the") is True
+        assert is_proper_form("Los", "in") is True
+        assert is_proper_form("May", "done.") is True
+        assert is_proper_form("May,", None) is True
+        assert is_proper_form("And", "done.") is False
+        assert is_proper_form("I", "and") is False
+        assert is_proper_form("I'm", "so") is False
+        assert is_proper_form("may", "you") is False
