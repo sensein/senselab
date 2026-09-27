@@ -190,3 +190,18 @@ review 200; REDACT 69. Masks: 10,316 unmasked, 482 split, 2,952 trimmed, 278 unc
 masked. Closed-class words the protection keeps masked: 97. No PERSON/NAME/LOCATION-marked
 "May", "Will", "Can", "Los", "Las", "La" or "U.S." written as a proper noun is released by the trim;
 the 12 "May" still trimmed are DATE_TIME months.
+
+## 8. The released text follows the ledger where the extents did not move (2026-09-27, evening)
+
+**Defect.** Across all 1,946 r6 releases with redaction, 13 released transcripts dropped a word the
+ledger marks `unmasked_by_trim` (the page's sample of 408 had found 7). In every one the trim's re-cut
+extent came out equal to REDACT's planned extent, so `settle_release` took its "REDACT's own plan"
+branch, which rendered the text by geometry: every word whose *hull* overlaps an extent folds into the
+placeholder. The dropped word's hull reached the mask because one recogniser timed it far wider than
+its derived extent, e.g. "in" at 8.63–8.94 s with a hull to 9.04 s against a mask from 8.95 s, or
+"sorry," with a hull of 28.7–69.7 s. The audio was right in all 13 (the extents are the same); only
+the text was wrong, and it erred toward hiding.
+
+**Fix.** The text is rendered from the ledger's owners on every path. Only the audio source depends
+on whether the final extents are REDACT's own: they are, and REDACT's `redacted` stream is reused;
+they are not, and the source is re-masked. The test is built from the r6 "back in [DATE_TIME]" case.

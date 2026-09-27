@@ -1606,10 +1606,11 @@ def settle_release(
 
     The directory holds a redacted copy only under ``release_with_redaction``; every other release
     empties it, including of a copy REDACT itself wrote on a pass. The copy masks the fold's final
-    masks, as its ledger records them (:func:`released_masks`). Where they are REDACT's own plan and
-    REDACT passed, the copy REDACT wrote stands, unless an earlier fold emptied the directory or
-    wrote a different copy, in which case REDACT's ``redacted`` stream is written again. Otherwise
-    the source stream is re-masked with the final masks alone.
+    masks, as its ledger records them (:func:`released_masks`), and its text hides exactly the words
+    the ledger keeps masked. Where the final extents are REDACT's own, the audio is REDACT's
+    ``redacted`` stream: the copy REDACT wrote stands where it passed and already carries this
+    text, and is written again otherwise. Elsewhere the source stream is re-masked with the final
+    masks alone.
 
     Args:
         store: The provenance store, after VERDICT.
@@ -1633,15 +1634,14 @@ def settle_release(
     planned = planned_extents(store)
     final, owners = released_masks(store)
     words = consensus_words(store)
+    records, text, _ = _render(words, final, owners)
     if final == planned:
-        records, text, _ = _render(words, planned)
         if verdict.attributes.get("outcome") == Outcome.PASS.value and (
             _holds_copy(artifacts_dir, records) or not _has_stream(store, STREAM_NAME)
         ):
             return {}
         _, redacted = resolve_stream(store, run_dir, STREAM_NAME)
         return _write_artifacts(redacted, text, records, artifacts_dir)
-    records, text, _ = _render(words, final, owners)
     fill = str(verdict.attributes.get("fill") or "")
     masked = apply_redactions(_masked_source(store, run_dir), final, fill=fill, bleep_hz=bleep_hz)
     return _write_artifacts(masked, text, records, artifacts_dir)
