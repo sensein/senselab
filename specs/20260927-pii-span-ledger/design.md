@@ -180,3 +180,13 @@ proper-form rule, the marked proper-form words the trim still released were, by 
 (the caterpillar passage's own words, which are task content, not residue), DATE_TIME 39 ("May" 11,
 "The" 10), LOCATION/LOC 64 ("Los" 14, "U.S." 11, "Las" 8, "La" 4). LOCATION and LOC are protected;
 DATE_TIME is not.
+
+**Both changes, as shipped** (`f1d2e2f4`, protected categories PERSON, NAME, LOCATION, LOC; job
+24111691, all 15,210 reviewed r6 stores): without redaction, scan found nothing 6,687; reviewer
+unmasked all 5,522; no content masked 163. With redaction, REDACT's plan 604; reviewer unmasked some
+630; trimmed to content 709; re-scan cleared 3. Withheld: reviewer proposed redaction 623; human
+review 200; REDACT 69. Masks: 10,316 unmasked, 482 split, 2,952 trimmed, 278 unchanged. Words:
+10,410 masked, 24,332 unmasked by the reviewer, 62,584 unmasked by the trim, 1,744 proposed and not
+masked. Closed-class words the protection keeps masked: 97. No PERSON/NAME/LOCATION-marked
+"May", "Will", "Can", "Los", "Las", "La" or "U.S." written as a proper noun is released by the trim;
+the 12 "May" still trimmed are DATE_TIME months.
