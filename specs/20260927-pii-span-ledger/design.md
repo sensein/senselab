@@ -294,3 +294,42 @@ naming any other condition, under `REVIEWER_NEEDS_HUMAN_REVIEW_OTHER`, since the
 one a reviewer must weigh. The ledger records each proposal's `condition_kind` and `cohort_diagnosis`,
 and the recording's `human_review_kind`, `cohort_diagnoses` and per-kind counts. Those feed the page
 section and the parquet (schema 9).
+
+## 11. The page shows the state, the popup says why (2026-09-27, evening)
+
+**Owner:** "i don't need an explanation when reviewing the text. such a thing can be put into the popup
+of what determined status if it's not already there. regarding the text itself, let's minimize
+explanations embedded. simply show the category and use underline colors to dissociate between masked
+(red), unmasked (green), and padding unmasked (orange). no need for a condition for padding." And:
+"also for those without consensus words show a single stream if available".
+
+**The text.** Each span carries its category and an underline colour, and nothing else.
+- **Red:** masked in the released copy, or proposed by the reviewer for masking; either way it is
+  meant to be hidden.
+- **Green:** unmasked by the reviewer, or a real detector finding the release shows unmasked, such as
+  one exempted as expected speech.
+- **Orange:** a word the trim released because only the padding reached it or it is not a content
+  word. No category label.
+- **Nothing drawn:** a detector mark on a word outside the residue, which is the §9 placement artefact.
+
+The reviewer's own per-finding verdict moved from the underline colour to a small dot after the span,
+so the underline carries only the state. The legend has three swatches.
+
+**The popup** ("what determined this status") gained an "on this card" section with everything that
+used to sit on the card or inside the marks:
+- the release ground and the deciding reason;
+- the scan state;
+- the residue method, its count and its words;
+- the ledger's per-state counts, and the task words REDACT's plan reached;
+- the condition-review kind and diagnoses;
+- a table with one row per span: its words, category, state, why the trim released it, whether the
+  reviewer named it, its condition kind and diagnosis, and whether it is held for human review.
+
+**Condition review** is a rail filter: study cohort condition, other condition, or none. It sits on
+the card as `data-hk`, not as text.
+
+**A single stream.** Where the consensus carries no words, the card shows the first live
+`asr_hypothesis` with words, in the order the store wrote them, which is the order PREPROCESS runs its
+recognisers (`asr_crisperwhisper`, then `asr_qwen`). The card is tagged "<source> only", and the
+popup says why. No PII mark is drawn on it, because the ledger's spans are placed on consensus words
+and this stream has none.

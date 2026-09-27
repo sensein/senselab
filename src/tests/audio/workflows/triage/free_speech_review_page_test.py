@@ -5,6 +5,7 @@ Every transcript in this file is invented. No fixture here carries corpus speech
 
 import importlib.util
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -169,8 +170,8 @@ def test_residue_names_the_words_the_detectors_read(tmp_path: Path) -> None:
     assert residue == {"n": 2, "m": "stimulus_alignment", "c": True, "i": [0, 2]}
 
 
-def test_a_card_shows_the_residue_and_a_declined_scan() -> None:
-    """The card says the scan was declined and which words were left, and why."""
+def test_the_residue_and_a_declined_scan_are_in_the_popup_not_on_the_card() -> None:
+    """Owner, 2026-09-27: no explanation on the text; the popup carries the scan and the residue."""
     row = {
         "p": "p",
         "ses": "s",
@@ -189,9 +190,11 @@ def test_a_card_shows_the_residue_and_a_declined_scan() -> None:
         "nw": 2,
     }
     card = page.recording_html(row)
-    assert "scan declined" in card
-    assert "residue: 1 words (stimulus_alignment, function words only)" in card
-    assert "<q>the</q>" in card
+    assert "scan" not in card.split('<p class="text">')[0] and "residue" not in card
+    account = page.card_account(row)
+    assert account["scan"] is False
+    assert account["res"] == {"n": 1, "m": "stimulus_alignment", "c": False, "said": "the"}
+    assert "the scan was declined" in page._SCRIPT and "function words only" in page._SCRIPT
 
 
 def test_marked_words_follows_the_live_label_assertions(tmp_path: Path) -> None:
@@ -1263,8 +1266,8 @@ def test_the_overlays_fit_a_narrow_viewport() -> None:
 
 def test_the_why_tables_scroll_inside_their_own_box() -> None:
     """Five columns of gate detail do not fit a phone; the table scrolls, the page does not."""
-    assert page._SCRIPT.count('<div class="tw">') == 3
-    assert page._SCRIPT.count("</table></div>") == 3
+    assert page._SCRIPT.count('<div class="tw">') == 4
+    assert page._SCRIPT.count("</table></div>") == 4
 
 
 def test_the_rail_collapses_on_a_narrow_screen() -> None:
@@ -1674,10 +1677,15 @@ def test_the_marks_are_the_ledgers_spans_each_with_its_state(tmp_path: Path) -> 
     assert row["f"][1]["nm"] == 1
     assert row["f"][2]["hr"] == 1
     card = page.recording_html(row)
-    assert 'class="pii s-proposed_by_reviewer"' in card
-    assert "reviewer would unmask" in card
-    assert "human review" in card
-    assert "reviewer proposes masking 2" in card
+    text = card[card.index('<p class="text">') : card.index("</p>", card.index('<p class="text">'))]
+    assert 'class="pii u-red"' in text and 'data-s="proposed_by_reviewer"' in text
+    assert 'class="pii u-orange"' in text and 'class="pii u-green"' in text
+    visible = re.sub(r"<[^>]+>", " ", text)
+    for inline in ("reviewer would unmask", "human review", "proposes", "masked", "padding", "trim"):
+        assert inline not in visible, inline
+    orange = text[text.index('class="pii u-orange"') :]
+    assert orange[: orange.index("</mark>")].count('class="cat"') == 0, "a padding span carries no label"
+    assert '<span class="cat">CONDITION</span>' in text
 
 
 def test_a_store_without_a_ledger_says_so_and_keeps_the_detectors_marks(tmp_path: Path) -> None:
@@ -1686,12 +1694,101 @@ def test_a_store_without_a_ledger_says_so_and_keeps_the_detectors_marks(tmp_path
     row = page.recording_record(_store(tmp_path, _FAMILY_STEM, records), page.free_response_families())
     assert row is not None
     assert [mark["s"] for mark in row["f"]] == ["detected"]
-    assert "no PII ledger" in page.recording_html(row)
+    assert "no PII ledger" not in page.recording_html(row)
+    assert page.card_account(row)["led"] is None and "no PII ledger" in page._SCRIPT
 
 
 def test_the_legend_is_not_a_reviewable_mark() -> None:
     """The page script binds every ``mark.pii``; the legend's swatches must not be among them."""
-    legend = page._DOCUMENT[page._DOCUMENT.index('<details id="legend"') :]
-    legend = legend[: legend.index("</details>")]
-    assert 'class="pii' not in legend
-    assert legend.count('class="swatch') == len(page.MARK_STATES)
+    assert "{legend}" in page._DOCUMENT
+    assert 'class="pii' not in page.LEGEND_HTML
+    assert page.LEGEND_HTML.count('class="swatch') == 3 == len(page.COLOUR_LEGEND)
+    assert page.LEGEND_HTML.count('class="cat"') == 2, "the orange swatch carries no label"
+
+
+def test_a_detector_mark_on_a_task_word_is_not_drawn(tmp_path: Path) -> None:
+    """A finding placed back onto the task's own words is not a span: only residue words are drawn."""
+    scan = {
+        "name": "pii_scan",
+        "scanned_by": ["gliner"],
+        "residue_method": "stimulus_alignment",
+        "residue_words_n": 1,
+        "residue_content": True,
+        "residue_word_ids": ["word-2"],
+    }
+    records = [
+        _entity("measurement-scan", "measurement", scan),
+        _word(0, "the"),
+        _word(1, "caterpillar"),
+        _word(2, "Maria"),
+        *_label("assertion-1", "PERSON", "word-1"),
+        *_label("assertion-2", "PERSON", "word-2"),
+        _verdict("release_without_redaction"),
+    ]
+    row = page.recording_record(_store(tmp_path, _FAMILY_STEM, records), page.free_response_families())
+    assert row is not None
+    assert [(mark["s"], mark["i"]) for mark in row["f"]] == [("detected", [2, 3])]
+    assert 'class="pii u-green"' in page.recording_html(row)
+
+
+def test_a_card_with_no_consensus_words_shows_one_recogniser_s_stream(tmp_path: Path) -> None:
+    """Owner, 2026-09-27: the corpus-fill case, only asr_qwen left words; the card shows that stream."""
+    records = [
+        _entity(
+            "measurement-cw",
+            "measurement",
+            {"name": "asr_crisperwhisper", "role": "asr_hypothesis", "source": "asr_crisperwhisper", "words": []},
+        ),
+        _entity(
+            "measurement-qwen",
+            "measurement",
+            {
+                "name": "asr_qwen",
+                "role": "asr_hypothesis",
+                "source": "asr_qwen",
+                "words": [{"text": "When", "start": 1.4, "end": 1.6}, {"text": "the", "start": 1.6, "end": 1.7}],
+            },
+        ),
+        _verdict("not_assessed"),
+    ]
+    row = page.recording_record(_store(tmp_path, _FAMILY_STEM, records), page.free_response_families())
+    assert row is not None
+    assert row["ss"] == {"src": "asr_qwen", "n": 1}
+    assert [entry[0] for entry in row["w"]] == ["When", "the"] and row["f"] == []
+    card = page.recording_html(row)
+    assert '<span class="ss">asr_qwen only</span>' in card
+    assert '<p class="text">When the</p>' in card
+    assert page.card_account(row)["ss"] == {"src": "asr_qwen", "n": 1}
+
+
+def test_a_card_carries_no_explanation_of_its_status() -> None:
+    """The release ground and the deciding reason are in the popup's data, not written on the card."""
+    row = {
+        "p": "p",
+        "ses": "s",
+        "task": "free-speech-1",
+        "stem": "p_s_task-free-speech-1",
+        "fam": "free-speech",
+        "rel": "withheld",
+        "rg": "the redaction reviewer proposed hiding more",
+        "why": "folded",
+        "rwhy": "",
+        "scan": True,
+        "res": None,
+        "hk": "cohort",
+        "w": [["Hello", 0, -1]],
+        "f": [],
+        "nl": 1,
+        "nw": 1,
+    }
+    card = page.recording_html(row)
+    assert "proposed hiding more" not in card and "folded" not in card
+    assert 'data-hk="cohort"' in card
+    assert page.card_account(row)["rg"] == "the redaction reviewer proposed hiding more"
+
+
+def test_the_condition_filter_separates_the_study_s_conditions() -> None:
+    """The rail offers the cohort conditions apart from every other, as a filter rather than as text."""
+    assert '<select id="hkf">' in page._DOCUMENT
+    assert "r.dataset.hk===hk" in page._SCRIPT
+    assert [value for value, _ in page.CONDITION_SECTIONS] == ["cohort", "other", "none"]

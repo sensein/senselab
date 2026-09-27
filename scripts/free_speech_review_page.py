@@ -68,11 +68,16 @@ RELEASE_ORDER = (
 """The graph's own release axis, most permissive first, plus the page's own ``unrecorded``."""
 
 EXTRACT_SCHEMA = "senselab.fsreview.extract"
-EXTRACT_VERSION = 6
-"""6 is the first version whose marks are the fold's PII ledger: every span and each word's state.
+EXTRACT_VERSION = 7
+"""7 carries each span's trim reason and condition kind, and a single ASR stream where the consensus is empty.
 
+6 was the first version whose marks are the fold's PII ledger: every span and each word's state.
 ``specs/20260927-pii-span-ledger/design.md``. An older extract's marks are the detectors' labels alone.
 """
+
+ASR_HYPOTHESIS_ROLE = "asr_hypothesis"
+ASR_HYPOTHESIS_MARKER = '"role": "asr_hypothesis"'
+"""The measurement role PREPROCESS gives each recogniser's own transcript."""
 
 
 def free_response_families() -> frozenset[str]:
@@ -90,21 +95,23 @@ def free_response_families() -> frozenset[str]:
     )
 
 
-def read_store_light(path: Path) -> StoreView:
+def read_store_light(path: Path, extra_markers: Sequence[str] = ()) -> StoreView:
     """Read a store, skipping the measurement payloads this page never reads.
 
     Args:
         path: The ``store.jsonl``.
+        extra_markers: Further substrings whose measurement lines are kept.
 
     Returns:
         The view, in the same shape :func:`recording_vectors.read_store` returns.
     """
+    kept = (*KEPT_MEASUREMENT_MARKERS, *extra_markers)
     view = StoreView()
     with path.open() as handle:
         for line in handle:
             if not line.strip():
                 continue
-            if MEASUREMENT_MARKER in line and not any(marker in line for marker in KEPT_MEASUREMENT_MARKERS):
+            if MEASUREMENT_MARKER in line and not any(marker in line for marker in kept):
                 continue
             try:
                 record = json.loads(line)
@@ -194,14 +201,26 @@ DETECTED = "detected"
 MARK_STATES = (MASKED, UNMASKED_BY_REVIEWER, PROPOSED_BY_REVIEWER, UNMASKED_BY_TRIM, DETECTED)
 """Every state a mark can carry: the ledger's four, and a detector finding no mask covers."""
 
-MARK_STATE_LABELS = {
-    MASKED: "masked",
-    UNMASKED_BY_REVIEWER: "unmasked by reviewer",
-    PROPOSED_BY_REVIEWER: "reviewer proposes masking",
-    UNMASKED_BY_TRIM: "unmasked, padding or not content",
-    DETECTED: "detected, not masked",
+MARK_COLOURS = {
+    MASKED: "red",
+    PROPOSED_BY_REVIEWER: "red",
+    UNMASKED_BY_REVIEWER: "green",
+    DETECTED: "green",
+    UNMASKED_BY_TRIM: "orange",
 }
-"""What the card and the legend say for each state."""
+"""The underline each state draws: red is hidden or to be hidden, green shown, orange shown because
+only the padding or a non-content word was under the mask. Orange carries no category label."""
+
+COLOUR_LEGEND = (
+    ("red", "masked, or the reviewer proposes masking"),
+    ("green", "unmasked"),
+    ("orange", "padding unmasked"),
+)
+"""The three swatches of the legend."""
+
+TRIM_PADDING = "p"
+TRIM_NOT_CONTENT = "n"
+"""Why the trim unmasked a word: only the padding reached it, or it is not a content word."""
 
 _STATE_PRIORITY = {state: rank for rank, state in enumerate((MASKED, UNMASKED_BY_REVIEWER, UNMASKED_BY_TRIM))}
 
@@ -229,9 +248,11 @@ def word_states(ledger: Mapping[str, Any] | None) -> dict[str, dict[str, Any]]:
         ledger: The ``pii_ledger`` attributes, or None.
 
     Returns:
-        Word id to ``{s, c, nm, pr, hr}``: the state, the categories, whether a ``release`` entry named
-        it, whether a ``redact`` entry named it, and whether that entry routes to human review. A
-        word two masks cover takes the tighter state, masked first.
+        Word id to ``{s, c, nm, pr, hr, tr, k, dx}``: the state, the categories, whether a ``release``
+        entry named it, whether a ``redact`` entry named it, whether that entry routes to human
+        review, why the trim unmasked it (:data:`TRIM_PADDING`, :data:`TRIM_NOT_CONTENT` or empty),
+        and a human-review entry's condition kind and cohort diagnosis. A word two masks cover takes
+        the tighter state, masked first.
     """
     states: dict[str, dict[str, Any]] = {}
     for mask in (ledger or {}).get("masks") or ():
@@ -241,19 +262,72 @@ def word_states(ledger: Mapping[str, Any] | None) -> dict[str, dict[str, Any]]:
             held = states.get(word_id)
             if held is not None and _STATE_PRIORITY.get(held["s"], 9) <= _STATE_PRIORITY.get(state, 9):
                 continue
-            states[word_id] = {"s": state, "c": [category], "nm": int(bool(word.get("named"))), "pr": 0, "hr": 0}
+            trim = ""
+            if state == UNMASKED_BY_TRIM:
+                trim = TRIM_NOT_CONTENT if not word.get("content") else TRIM_PADDING
+            states[word_id] = {
+                "s": state,
+                "c": [category],
+                "nm": int(bool(word.get("named"))),
+                "pr": 0,
+                "hr": 0,
+                "tr": trim,
+                "k": "",
+                "dx": "",
+            }
     for proposal in (ledger or {}).get("proposals") or ():
         category = str(proposal.get("category") or "")
         review = int(bool(proposal.get("human_review")))
+        kind = str(proposal.get("condition_kind") or "")
+        diagnosis = str(proposal.get("cohort_diagnosis") or "")
         for word_id in proposal.get("word_ids") or ():
             held = states.get(str(word_id))
             if held is None or held["s"] != MASKED:
-                states[str(word_id)] = {"s": PROPOSED_BY_REVIEWER, "c": [category], "nm": 0, "pr": 1, "hr": review}
+                states[str(word_id)] = {
+                    "s": PROPOSED_BY_REVIEWER,
+                    "c": [category],
+                    "nm": 0,
+                    "pr": 1,
+                    "hr": review,
+                    "tr": "",
+                    "k": kind,
+                    "dx": diagnosis,
+                }
                 continue
             held["pr"], held["hr"] = 1, max(held["hr"], review)
+            held["k"], held["dx"] = held["k"] or kind, held["dx"] or diagnosis
             if category not in held["c"]:
                 held["c"].append(category)
     return states
+
+
+def single_stream(path: Path) -> dict[str, Any] | None:
+    """One recogniser's own transcript, for a recording whose consensus carries no words.
+
+    The first live ``asr_hypothesis`` with any word, in the order the store wrote them -- the order
+    PREPROCESS runs its recognisers.
+
+    Args:
+        path: The ``store.jsonl``.
+
+    Returns:
+        ``{src, w, n}``: the recogniser, its words' surfaces, and how many recognisers left any word;
+        None when none did.
+    """
+    view = read_store_light(path, extra_markers=(ASR_HYPOTHESIS_MARKER,))
+    streams = [
+        measurement
+        for measurement in view.live("measurement")
+        if measurement.attributes.get("role") == ASR_HYPOTHESIS_ROLE and measurement.attributes.get("words")
+    ]
+    if not streams:
+        return None
+    first = streams[0].attributes
+    return {
+        "src": str(first.get("source") or first.get("name") or ""),
+        "w": [str(word.get("text") or "") for word in first.get("words") or () if str(word.get("text") or "")],
+        "n": len(streams),
+    }
 
 
 def residue_of(scan: Mapping[str, Any] | None, entities: Sequence[Entity]) -> dict[str, Any] | None:
@@ -338,8 +412,8 @@ def marks_of(
     Args:
         stem: The recording's BIDS stem.
         words: The consensus words, in index order.
-        labels: Each word's ``{s, c, nm, pr, hr}`` label, aligned with ``words``; None for a word no
-            span covers.
+        labels: Each word's ``{s, c, nm, pr, hr, tr, k, dx}`` label, aligned with ``words``; None for a
+            word no span covers.
         hulls: Each word's timing hull, aligned with ``words``.
         pii: The live ``pii`` entities, read for detector attribution.
         extent: The task extent, or None when the recording carries none.
@@ -373,6 +447,9 @@ def marks_of(
                 "nm": int(label.get("nm") or 0),
                 "pr": int(label.get("pr") or 0),
                 "hr": int(label.get("hr") or 0),
+                "tr": str(label.get("tr") or ""),
+                "kd": str(label.get("k") or ""),
+                "dx": str(label.get("dx") or ""),
                 "d": [str(finding.attributes.get("source") or "") for finding in contributing],
                 "dn": len(contributing),
                 "i": [index, cursor],
@@ -492,10 +569,17 @@ def recording_record(run_root: Path, families: frozenset[str]) -> dict[str, Any]
     ledger = ledger_of(view)
     states = word_states(ledger)
     entities = sorted(view.live("word"), key=lambda entity: int(entity.attributes.get("index", 0)))
+    scan = pii_scan_of(view)
+    residue = residue_of(scan, entities)
+    readable = None if residue is None else set(residue["i"])
     labels: list[Mapping[str, Any] | None] = [
         states.get(entity.id)
-        or ({"s": DETECTED, "c": marked[entity.id], "nm": 0, "pr": 0, "hr": 0} if entity.id in marked else None)
-        for entity in entities
+        or (
+            {"s": DETECTED, "c": marked[entity.id], "nm": 0, "pr": 0, "hr": 0, "tr": "", "k": "", "dx": ""}
+            if entity.id in marked and (readable is None or position in readable)
+            else None
+        )
+        for position, entity in enumerate(entities)
     ]
     hulls = [word_hull(entity) for entity in entities]
     pii = view.live("pii")
@@ -511,8 +595,13 @@ def recording_record(run_root: Path, families: frozenset[str]) -> dict[str, Any]
         characters += len(text)
         if not bracketed:
             lexical += 1
+    stream = None if entities else single_stream(run_root / RUN_SUBDIR / STORE_NAME)
+    if stream is not None:
+        for text in stream["w"]:
+            words.append([text, 0, -1])
+            characters += len(text)
+            lexical += 1
     redact = view.last("verdict", node=REDACT_NODE)
-    scan = pii_scan_of(view)
     return {
         "p": participant or "",
         "ses": session or "",
@@ -525,8 +614,11 @@ def recording_record(run_root: Path, families: frozenset[str]) -> dict[str, Any]
         "why": str(attributes.get("why") or ""),
         "rwhy": str(redact.attributes.get("why") or "") if redact is not None else "",
         "scan": scan_state(scan),
-        "res": residue_of(scan, entities),
+        "res": residue,
         "led": None if ledger is None else dict((ledger.get("counts") or {})),
+        "hk": None if ledger is None else ledger.get("human_review_kind"),
+        "cd": [] if ledger is None else [str(name) for name in ledger.get("cohort_diagnoses") or ()],
+        "ss": None if stream is None else {"src": stream["src"], "n": stream["n"]},
         "w": words,
         "f": marks,
         "pii": [
@@ -846,6 +938,7 @@ def pooled_determination(determination: Mapping[str, Any], pool: ValuePool) -> d
         "e": pool.add(determination.get("exempt") or {}),
         "s": determination.get("stim") or [0, 0, 0],
         "nn": int(determination.get("names") or 0),
+        "c": {key: pool.add(value) for key, value in (determination.get("card") or {}).items()},
         "f": [
             [
                 pool.add(finding.get("c") or ""),
@@ -855,6 +948,34 @@ def pooled_determination(determination: Mapping[str, Any], pool: ValuePool) -> d
             ]
             for finding in determination.get("findings") or []
         ],
+    }
+
+
+def card_account(row: Mapping[str, Any]) -> dict[str, Any]:
+    """What used to be written on the card, for the status popup instead.
+
+    Args:
+        row: The extract row.
+
+    Returns:
+        The release ground and the deciding reason, the scan state, the residue and the words it
+        holds, the ledger's counts, the condition-review kind and diagnoses, and the single stream
+        read where the consensus carries no words.
+    """
+    residue = row.get("res")
+    words = row.get("w") or []
+    said = ""
+    if residue is not None:
+        said = " ".join(str(words[position][0]) for position in residue["i"] if position < len(words))
+    return {
+        "rg": row.get("rg") or "",
+        "why": row.get("rwhy") or row.get("why") or "",
+        "scan": row.get("scan"),
+        "res": None if residue is None else {"n": residue["n"], "m": residue["m"], "c": residue["c"], "said": said},
+        "led": row.get("led"),
+        "hk": row.get("hk") or "",
+        "cd": list(row.get("cd") or ()),
+        "ss": row.get("ss"),
     }
 
 
@@ -869,6 +990,8 @@ class Corpus:
         categories: PII category to how many marks carry it.
         detectors: Detector name to how many marks it contributed to.
         reviewer: Reviewer state to how many recordings carry it.
+        review_kinds: Condition-review kind (``cohort``, ``other`` or ``none``) to how many recordings.
+        single_streams: The recogniser read where the consensus is empty, to how many recordings.
         recordings: How many recordings in total.
         characters: How many transcript characters in total.
         marks: How many reviewable marks in total.
@@ -882,6 +1005,8 @@ class Corpus:
     categories: Counter[str] = field(default_factory=Counter)
     detectors: Counter[str] = field(default_factory=Counter)
     reviewer: Counter[str] = field(default_factory=Counter)
+    review_kinds: Counter[str] = field(default_factory=Counter)
+    single_streams: Counter[str] = field(default_factory=Counter)
     recordings: int = 0
     characters: int = 0
     marks: int = 0
@@ -896,6 +1021,9 @@ class Corpus:
         """
         self.participants.setdefault(str(row["p"]), []).append(row)
         self.reviewer[_llm_status(row)] += 1
+        self.review_kinds[str(row.get("hk") or "none")] += 1
+        if row.get("ss"):
+            self.single_streams[str(row["ss"]["src"])] += 1
         self.families[str(row["fam"])] += 1
         self.releases[str(row["rel"]) or "unrecorded"] += 1
         for mark in row.get("f") or []:
@@ -965,7 +1093,10 @@ def paragraph(words: Sequence[Sequence[Any]], marks: Sequence[dict[str, Any]]) -
 
 
 def _mark(mark: dict[str, Any], run: Sequence[Sequence[Any]]) -> str:
-    """One reviewable mark, classed by its state.
+    """One reviewable mark: its words, underlined in its state's colour, and its category.
+
+    The text carries no explanation. An orange mark carries no category either; everything that
+    says why a span is in its state is on the mark's data attributes, for the status popup.
 
     Args:
         mark: The mark record.
@@ -976,21 +1107,17 @@ def _mark(mark: dict[str, Any], run: Sequence[Sequence[Any]]) -> str:
     """
     label = html.escape("+".join(str(name) for name in mark["c"]))
     state = str(mark.get("s") or DETECTED)
+    colour = MARK_COLOURS.get(state, "green")
     detectors = html.escape(" ".join(str(name) for name in mark["d"]) or "unattributed")
     inner = " ".join(_plain(item) for item in run)
-    notes = [MARK_STATE_LABELS.get(state, state)]
-    if mark.get("nm") and state == MASKED:
-        notes.append("reviewer would unmask")
-    if mark.get("pr") and state == MASKED:
-        notes.append("reviewer also proposes")
-    if mark.get("hr"):
-        notes.append("human review")
+    category = "" if colour == "orange" else f'<span class="cat">{label}</span>'
     return (
-        f'<mark class="pii s-{html.escape(state)}" data-k="{html.escape(str(mark["k"]))}" data-c="{label}" '
-        f'data-s="{html.escape(state)}" data-nm="{int(mark.get("nm") or 0)}" data-hr="{int(mark.get("hr") or 0)}" '
+        f'<mark class="pii u-{colour}" data-k="{html.escape(str(mark["k"]))}" data-c="{label}" '
+        f'data-s="{html.escape(state)}" data-nm="{int(mark.get("nm") or 0)}" data-pr="{int(mark.get("pr") or 0)}" '
+        f'data-hr="{int(mark.get("hr") or 0)}" data-tr="{html.escape(str(mark.get("tr") or ""))}" '
+        f'data-kd="{html.escape(str(mark.get("kd") or ""))}" data-dx="{html.escape(str(mark.get("dx") or ""))}" '
         f'data-d="{detectors}" data-brk="{mark["brk"]}" data-tx="{mark["tx"]}" '
-        f'data-nt="{mark["nt"]}" data-stim="{mark["stim"]}" tabindex="0">'
-        f'<span class="cat">{label}</span><span class="st">{html.escape(" · ".join(notes))}</span>{inner}</mark>'
+        f'data-nt="{mark["nt"]}" data-stim="{mark["stim"]}" tabindex="0">{category}{inner}</mark>'
     )
 
 
@@ -1021,7 +1148,10 @@ def _chip(release: str) -> str:
 
 
 def recording_html(row: dict[str, Any]) -> str:
-    """One recording's card.
+    """One recording's card: its header, its text, and its controls.
+
+    Nothing explanatory sits on the card: the release ground, the residue, the scan and each span's
+    reasons are in the status popup, read from the page's data.
 
     Args:
         row: The extract row.
@@ -1030,49 +1160,19 @@ def recording_html(row: dict[str, Any]) -> str:
         The card's HTML.
     """
     marks = row.get("f") or []
-    categories = Counter(str(name) for mark in marks for name in mark["c"])
     fired = "yes" if marks else "no"
-    summary = ", ".join(f"{html.escape(name)}&times;{count}" for name, count in sorted(categories.items())) or "none"
-    counts = row.get("led") or {}
-    ledger_html = (
-        '<div class="ledger">'
-        + " &middot; ".join(
-            f'<span class="s-{state}">{html.escape(MARK_STATE_LABELS[state])} '
-            f"{int(counts.get(f'{state}_n') or 0)}</span>"
-            for state in (MASKED, UNMASKED_BY_REVIEWER, PROPOSED_BY_REVIEWER, UNMASKED_BY_TRIM)
-        )
-        + "</div>"
-        if row.get("led") is not None
-        else '<div class="ledger">no PII ledger: the fold that wrote this store predates it</div>'
-    )
-    ground = row.get("rg")
-    ground_html = f'<div class="ground">{html.escape(str(ground))}</div>' if ground else ""
-    why = row.get("rwhy") or row.get("why") or ""
-    why_html = f'<div class="why">{html.escape(str(why))}</div>' if why else ""
-    scan_text = {True: "scanned", False: "scan declined", None: "no scan recorded"}[row.get("scan")]
-    residue = row.get("res")
-    residue_html = ""
-    if residue is not None:
-        words = row.get("w") or []
-        said = " ".join(str(words[position][0]) for position in residue["i"] if position < len(words))
-        content = "content" if residue["c"] else "function words only"
-        residue_html = (
-            f'<div class="residue">residue: {residue["n"]} words ({html.escape(residue["m"])}, {content})'
-            + (f" &middot; <q>{html.escape(said)}</q>" if said else "")
-            + "</div>"
-        )
-    body = paragraph(row.get("w") or [], marks) or '<span class="empty">no consensus words</span>'
+    stream = row.get("ss")
+    tag = f'<span class="ss">{html.escape(str(stream["src"]))} only</span>' if stream else ""
+    body = paragraph(row.get("w") or [], marks) or '<span class="empty">no words</span>'
     stem = str(row.get("stem") or f"{row['p']}_{row['ses']}_task-{row['task']}")
     return (
         f'<article class="rec" data-rel="{html.escape(str(row["rel"]) or "unrecorded")}" '
         f'data-fam="{html.escape(str(row["fam"]))}" data-fired="{fired}" '
         f'data-stem="{html.escape(stem)}" data-nf="{len(marks)}" '
+        f'data-hk="{html.escape(str(row.get("hk") or "none"))}" '
         f'data-llm="{html.escape(_llm_status(row))}">'
         f'<header><span class="task">{html.escape(str(row["task"]))}</span>'
-        f'<span class="fam">{html.escape(str(row["fam"]))}</span>{_chip(str(row["rel"]))}'
-        f'<span class="meta">{row["nl"]} lexical / {row["nw"]} tokens &middot; {scan_text} '
-        f"&middot; findings: {summary}</span></header>"
-        f"{ground_html}{why_html}{residue_html}{ledger_html}"
+        f'<span class="fam">{html.escape(str(row["fam"]))}</span>{_chip(str(row["rel"]))}{tag}</header>'
         f'<p class="text">{body}</p>'
         f'<div class="whyrow">{_triage_controls(stem)}{_release_controls(stem)}'
         f'<button type="button" class="whybtn" data-stem="{html.escape(stem)}">'
@@ -1260,6 +1360,7 @@ def render(corpus: Corpus, title: str) -> str:
             determination = dict(row.get("d") or {})
             determination["findings"] = row.get("pii") or []
             determination["names"] = row.get("names") or 0
+            determination["card"] = card_account(row)
             rows[str(row.get("stem") or "")] = pooled_determination(determination, pool)
     why = json.dumps({"pool": pool.values, "rows": rows}, separators=(",", ":"))
     return _DOCUMENT.format(
@@ -1276,10 +1377,31 @@ def render(corpus: Corpus, title: str) -> str:
         categories=categories,
         detectors=detectors,
         verdicts=_VERDICT_CONTROLS,
+        legend=LEGEND_HTML,
+        conditions="".join(
+            f'<option value="{value}">{html.escape(label)} ({corpus.review_kinds.get(value, 0)})</option>'
+            for value, label in CONDITION_SECTIONS
+        ),
         jump=jump,
         sections=sections,
         errors=errors,
     )
+
+
+LEGEND_HTML = "\n".join(
+    f'<li><mark class="swatch u-{colour}">'
+    + ("" if colour == "orange" else '<span class="cat">CATEGORY</span>')
+    + f"word</mark> {html.escape(meaning)}</li>"
+    for colour, meaning in COLOUR_LEGEND
+)
+"""The legend: three colours."""
+
+CONDITION_SECTIONS = (
+    ("cohort", "study cohort condition"),
+    ("other", "other condition"),
+    ("none", "no condition held for review"),
+)
+"""The condition-review filter: the study's own conditions apart from every other."""
 
 
 VERDICTS = (
@@ -1356,16 +1478,19 @@ margin:0 0 10px;max-width:76ch;scroll-margin-top:12px;scroll-margin-bottom:96px}
 .rec header{display:flex;gap:8px;align-items:baseline;flex-wrap:wrap;font-size:12px;
 margin-bottom:6px}
 .task{font-family:ui-monospace,Menlo,monospace;font-size:12px;color:var(--acc)}
-.fam,.meta{color:var(--mut)}
-.meta{font-size:11.5px}
-.ground,.why,.residue{font-size:11.5px;color:var(--mut);font-style:italic;margin:0 0 6px}
+.fam{color:var(--mut)}
+.ss{font-family:ui-monospace,Menlo,monospace;font-size:10.5px;color:var(--mut);border:1px solid var(--line);
+border-radius:3px;padding:0 4px}
 .text{margin:0;font-size:16px}
 .empty{color:var(--mut);font-style:italic}
 .bracket{font-family:ui-monospace,Menlo,monospace;font-size:.82em;color:var(--brk);
 background:var(--brkbg);border-radius:3px;padding:0 3px;letter-spacing:.02em}
-mark.pii{background:var(--pii);color:var(--fg);border-bottom:2px solid var(--piib);
-border-radius:3px;padding:0 2px}
-mark.pii .cat{font-size:9.5px;letter-spacing:.06em;color:var(--catfg);background:var(--catbg);
+mark.pii,mark.swatch{background:transparent;color:var(--fg);border-bottom:2px solid var(--line);
+border-radius:0;padding:0 1px}
+mark.pii.u-red,mark.swatch.u-red{border-bottom-color:#c0392b}
+mark.pii.u-green,mark.swatch.u-green{border-bottom-color:#2e8b3a}
+mark.pii.u-orange,mark.swatch.u-orange{border-bottom-color:#e08a1e}
+mark.pii .cat,mark.swatch .cat{font-size:9.5px;letter-spacing:.06em;color:var(--catfg);background:var(--catbg);
 border-radius:3px;padding:0 3px;margin-right:4px;vertical-align:.18em;
 font-family:ui-monospace,Menlo,monospace}
 .chip{font-size:10.5px;letter-spacing:.04em;padding:1px 7px;border-radius:9px;border:1px solid}
@@ -1384,12 +1509,6 @@ border:1px solid var(--line);border-radius:8px;padding:5px 10px;font-size:12px;c
 z-index:8}
 .hidden{display:none !important}
 mark.pii{cursor:pointer}
-mark.pii.s-unmasked_by_reviewer,mark.swatch.s-unmasked_by_reviewer{background:#dcefd9;border-bottom-color:#2c6b2c}
-mark.pii.s-proposed_by_reviewer,mark.swatch.s-proposed_by_reviewer{background:#f6d6d2;border-bottom:2px dashed #8a2f24}
-mark.pii.s-unmasked_by_trim,mark.swatch.s-unmasked_by_trim{background:transparent;border-bottom:1px dotted var(--piib)}
-mark.pii.s-detected,mark.swatch.s-detected{background:transparent;border-bottom:2px solid var(--line)}
-.ledger{font-size:12px;color:var(--mut);margin:2px 0 4px}
-mark.pii .st{font-size:9.5px;letter-spacing:.04em;color:var(--mut);margin-right:4px}
 mark.swatch{background:var(--pii);border-bottom:2px solid var(--piib);padding:0 3px;font-size:11px}
 ul.legend{list-style:none;padding:0;margin:4px 0;font-size:12px;line-height:1.5}
 ul.legend li{margin-bottom:4px}
@@ -1397,11 +1516,11 @@ mark.pii:focus{outline:2px solid var(--acc);outline-offset:1px}
 mark.pii.dim{background:transparent;border-bottom:1px dotted var(--line);opacity:.45}
 mark.pii.dim .cat{background:transparent;color:var(--mut)}
 mark.pii.sel{box-shadow:0 0 0 2px var(--acc)}
-mark.pii[data-v]{border-bottom-width:3px}
-mark.pii[data-v="identifying"]{border-bottom-color:#8a2f24}
-mark.pii[data-v="not-identifying"]{border-bottom-color:#2f4670}
-mark.pii[data-v="not-the-category"]{border-bottom-color:#2c5c2c}
-mark.pii[data-v="unsure"]{border-bottom-color:#6b6350;border-bottom-style:dashed}
+mark.pii[data-v]::after{content:'';display:inline-block;width:6px;height:6px;border-radius:50%;
+margin-left:2px;vertical-align:.35em;background:#6b6350}
+mark.pii[data-v="identifying"]::after{background:#8a2f24}
+mark.pii[data-v="not-identifying"]::after{background:#2f4670}
+mark.pii[data-v="not-the-category"]::after{background:#2c5c2c}
 .recnote{margin-top:8px}
 .recnote label{font-size:11px;color:var(--mut);display:block}
 .recnote textarea{width:100%;font:inherit;font-size:12.5px;background:var(--bg);color:var(--fg);
@@ -1529,11 +1648,12 @@ mark.pii{padding:1px 3px}
 .errors{color:#e8a89e}
 #why .ok{color:#a8d3a8}
 #why .bad{color:#e8a89e}
-mark.pii[data-v="identifying"]{border-bottom-color:#e8a89e}
-mark.pii.s-unmasked_by_reviewer,mark.swatch.s-unmasked_by_reviewer{background:#1f3a1f;border-bottom-color:#8fcf8f}
-mark.pii.s-proposed_by_reviewer,mark.swatch.s-proposed_by_reviewer{background:#4a2420;border-bottom-color:#e8a89e}
-mark.pii[data-v="not-identifying"]{border-bottom-color:#a7bce4}
-mark.pii[data-v="not-the-category"]{border-bottom-color:#a8d3a8}
+mark.pii.u-red,mark.swatch.u-red{border-bottom-color:#e8766b}
+mark.pii.u-green,mark.swatch.u-green{border-bottom-color:#7fcf8a}
+mark.pii.u-orange,mark.swatch.u-orange{border-bottom-color:#f0a64a}
+mark.pii[data-v="identifying"]::after{background:#e8a89e}
+mark.pii[data-v="not-identifying"]::after{background:#a7bce4}
+mark.pii[data-v="not-the-category"]::after{background:#a8d3a8}
 .verdict.on{color:#171614}
 .verdict.on kbd{color:#171614;border-color:rgba(0,0,0,.4)}
 }
@@ -1552,6 +1672,7 @@ const brkSel=document.getElementById('brk');
 const txSel=document.getElementById('tx');
 const revSel=document.getElementById('rev');
 const llmSel=document.getElementById('llm');
+const hkSel=document.getElementById('hkf');
 const minNf=document.getElementById('minnf');
 const minNt=document.getElementById('minnt');
 const maxNt=document.getElementById('maxnt');
@@ -1582,7 +1703,7 @@ for(const m of marks)cardOf.set(m,m.closest('.rec'));
    page's own vocabulary would otherwise match every card. */
 function haystackOf(card){
   const parts=[card.closest('.participant').dataset.p];
-  for(const selector of ['header','.ground','.why','.text'])
+  for(const selector of ['header','.text'])
     {const el=card.querySelector(selector); if(el)parts.push(el.textContent);}
   return parts.join(' ').toLowerCase();
 }
@@ -1786,7 +1907,7 @@ function apply(){
   const fams=checked('fam-f'), rels=checked('rel-f');
   const cats=checked('cat-f'), dets=checked('det-f');
   const fired=firedSel.value, brk=brkSel.value, tx=txSel.value, rev=revSel.value;
-  const tri=triSel.value, llmWant=llmSel.value, dec=decSel.value;
+  const tri=triSel.value, llmWant=llmSel.value, dec=decSel.value, hk=hkSel.value;
   const nf=+minNf.value||0;
   const lo=+minNt.value||1, hi=+maxNt.value||9999;
   const narrowed=!allChecked('cat-f')||!allChecked('det-f')||brk!=='any'||tx!=='any'
@@ -1808,6 +1929,7 @@ function apply(){
         const st=r.dataset.llm||'';
         ok=llmWant==='ran'?(st==='absent'||st==='clean'||st==='flagged'):st===llmWant;
       }
+      if(ok&&hk!=='any') ok=r.dataset.hk===hk;
       if(ok&&fired!=='any') ok=r.dataset.fired===fired;
       if(ok&&nf) ok=+r.dataset.nf>=nf;
       if(ok&&needle) ok=haystack.get(r).includes(needle);
@@ -1860,7 +1982,8 @@ function open(m){
   current=m; m.classList.add('sel');
   const rec=store.findings[m.dataset.k]||{};
   panel.hidden=false;
-  panel.querySelector('.surface').textContent=m.textContent.slice(m.dataset.c.length);
+  const label=m.querySelector('.cat');
+  panel.querySelector('.surface').textContent=m.textContent.slice(label?label.textContent.length:0);
   panel.querySelector('.facts').textContent=
     m.dataset.c+' \\u00b7 '+(m.dataset.d||'unattributed')+' \\u00b7 '+m.dataset.nt+' token(s)'
     +(m.dataset.brk==='1'?' \\u00b7 touches a bracketed token':'')
@@ -1973,13 +2096,69 @@ function stimWord(v){
   if(v===0)return 'not in the stimulus';
   return '<span class="neutral">no stimulus to check</span>';
 }
+const STATE_WHY={masked:'masked in the released copy',
+  proposed_by_reviewer:'the reviewer proposes masking it; no mask hides it',
+  unmasked_by_reviewer:'REDACT masked it and a reviewer release entry named it, so it is shown',
+  unmasked_by_trim:'a mask covered it and it is shown',
+  detected:'a detector marked it and no mask covers it, so it is shown'};
+const TRIM_WHY={p:'only the padding reached it',n:'it is not a content word'};
+const KIND_WHY={cohort:'a condition the study recruits for',other:'a condition outside the study\\'s cohorts'};
+function cardAccount(a,card){
+  const out=['<h4>on this card</h4>'];
+  if(a.why)out.push('<p class="note">deciding reason: '+esc(a.why)+'</p>');
+  if(a.ss){
+    out.push('<p><b>'+esc(a.ss.src)+' only.</b> The consensus transcript carries no words, so the card '
+      +'shows this recogniser\\'s own transcript ('+esc(a.ss.n)+' recogniser(s) left words; the '
+      +'consensus needs two). Nothing here is marked: the PII marks are placed on consensus words, '
+      +'which this stream does not have.</p>');
+  }
+  const scan={true:'the detectors scanned the residue',false:'the scan was declined',
+    null:'no scan was recorded'}[String(a.scan)];
+  if(scan)out.push('<p class="note">'+esc(scan)+'.</p>');
+  if(a.res){
+    out.push('<p class="note">residue: '+esc(a.res.n)+' word(s) ('+esc(a.res.m)+', '
+      +(a.res.c?'content':'function words only')+')'
+      +(a.res.said?': <q>'+esc(a.res.said)+'</q>':'')+'</p>');
+  }
+  if(a.led){
+    const n=k=>esc(a.led[k+'_n']||0);
+    out.push('<p class="note">words masked '+n('masked')+' \\u00b7 unmasked by the reviewer '
+      +n('unmasked_by_reviewer')+' \\u00b7 unmasked by the trim '+n('unmasked_by_trim')
+      +' \\u00b7 proposed by the reviewer '+n('proposed_by_reviewer')
+      +(a.led.task_words_n?' \\u00b7 task words REDACT\\'s plan reached, never masked '+esc(a.led.task_words_n):'')
+      +'</p>');
+  }else{
+    out.push('<p class="note">no PII ledger: the fold that wrote this store predates it.</p>');
+  }
+  if(a.hk&&a.hk!=='none')
+    out.push('<p>condition review: <b>'+esc(KIND_WHY[a.hk]||a.hk)+'</b>'
+      +(a.cd&&a.cd.length?' ('+esc(a.cd.join(', '))+')':'')+'.</p>');
+  const rows=[];
+  for(const m of card.querySelectorAll('mark.pii')){
+    const label=m.querySelector('.cat');
+    const words=m.textContent.slice(label?label.textContent.length:0);
+    const bits=[STATE_WHY[m.dataset.s]||m.dataset.s];
+    if(m.dataset.tr)bits.push(TRIM_WHY[m.dataset.tr]||m.dataset.tr);
+    if(m.dataset.nm==='1'&&m.dataset.s!=='unmasked_by_reviewer')bits.push('a reviewer release entry named it');
+    if(m.dataset.pr==='1'&&m.dataset.s==='masked')bits.push('the reviewer also proposes masking it');
+    if(m.dataset.kd)bits.push((KIND_WHY[m.dataset.kd]||m.dataset.kd)+(m.dataset.dx?' ('+m.dataset.dx+')':''));
+    if(m.dataset.hr==='1')bits.push('held for human review');
+    rows.push('<tr><td>'+esc(words)+'</td><td>'+esc(m.dataset.c)+'</td><td>'+esc(bits.join('; '))+'</td></tr>');
+  }
+  if(rows.length)
+    out.push('<div class="tw"><table><tr><th>words</th><th>category</th><th>why</th></tr>'
+      +rows.join('')+'</table></div>');
+  return out.join('');
+}
 function buildWhy(stem,card){
   const r=WHY&&WHY.rows[stem];
   if(!r)return '<p class="note">this recording carries no recorded determination.</p>';
   const out=[];
   const rel=card.dataset.rel;
   const rd=P(r.r)||{};
-  const ground=card.querySelector('.ground');
+  const acct={};
+  for(const key of Object.keys(r.c||{}))acct[key]=P(r.c[key]);
+  const ground=acct.rg?{textContent:acct.rg}:null;
 
   out.push('<p class="decisive">release is <b>'+esc(rel.replace(/_/g,' '))+'</b>');
   if(rd.outcome)out.push(' \\u2014 <b>REDACT decided it</b>, returning <b>'+esc(rd.outcome)+'</b>');
@@ -1999,6 +2178,8 @@ function buildWhy(stem,card){
   }else if(!ground){
     out.push('<p class="note">no release ground was recorded and REDACT left no verdict.</p>');
   }
+
+  out.push(cardAccount(acct,card));
 
   /* the LLM reviewer: never let "did not run" read as "agreed" */
   const llm=P(r.l)||{};
@@ -2192,7 +2373,7 @@ document.addEventListener('keydown',e=>{if(e.key==='Escape'&&!whyBox.hidden)clos
 
 for(const el of document.querySelectorAll('.fam-f,.rel-f,.cat-f,.det-f'))
   el.addEventListener('change',apply);
-for(const el of [firedSel,brkSel,txSel,revSel,triSel,decSel,llmSel,minNf,minNt,maxNt])
+for(const el of [firedSel,brkSel,txSel,revSel,triSel,decSel,llmSel,hkSel,minNf,minNt,maxNt])
   el.addEventListener('change',apply);
 let timer;q.addEventListener('input',()=>{clearTimeout(timer);timer=setTimeout(apply,140);});
 for(const [id,cls] of [['allcat','cat-f'],['nocat','cat-f'],['alldet','det-f'],['nodet','det-f']])
@@ -2203,7 +2384,7 @@ document.getElementById('all').addEventListener('click',e=>{
   e.preventDefault();
   for(const el of document.querySelectorAll('.fam-f,.rel-f,.cat-f,.det-f'))el.checked=true;
   firedSel.value='any';brkSel.value='any';txSel.value='any';revSel.value='any';triSel.value='any';
-  decSel.value='any';llmSel.value='any';
+  decSel.value='any';llmSel.value='any';hkSel.value='any';
   minNf.value='';minNt.value='';maxNt.value='';q.value='';apply();});
 const rail=document.getElementById('rail');
 const railToggle=document.getElementById('railtoggle');
@@ -2230,15 +2411,7 @@ _DOCUMENT = """<!doctype html>
 {marks} findings &middot; {characters} characters</div>
 {errors}
 <details id="legend" open><summary>PII marks</summary><ul class="legend">
-<li><mark class="swatch s-masked"><span class="st">masked</span>word</mark> the released copy hides it</li>
-<li><mark class="swatch s-unmasked_by_reviewer"><span class="st">unmasked by reviewer</span>word</mark>
-REDACT masked it and a reviewer release entry named it</li>
-<li><mark class="swatch s-proposed_by_reviewer"><span class="st">reviewer proposes masking</span>word</mark>
-a reviewer redact entry names it and no mask hides it; a condition alone goes to human review</li>
-<li><mark class="swatch s-unmasked_by_trim"><span class="st">unmasked, padding or not content</span>word</mark>
-a mask covered it, and it is not a content word or only the padding reached it</li>
-<li><mark class="swatch s-detected"><span class="st">detected, not masked</span>word</mark>
-a detector marked it and no mask covers it</li>
+{legend}
 </ul></details>
 <details id="keys"><summary>keyboard</summary><dl>
 <dt>j / k</dt><dd>next / previous sample</dd>
@@ -2257,6 +2430,8 @@ and release keys act on.</p></details>
 findings</div>
 </fieldset>
 <fieldset><legend>release</legend>{releases}</fieldset>
+<fieldset><legend>condition review</legend>
+<select id="hkf"><option value="any">any recording</option>{conditions}</select></fieldset>
 <fieldset><legend>family</legend>{families}</fieldset>
 <fieldset><legend>finding &mdash; category
 <button id="allcat" type="button">all</button><button id="nocat" type="button">none</button></legend>
