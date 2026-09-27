@@ -1047,6 +1047,9 @@ def test_the_ledger_columns_count_every_state(tmp_path: Path) -> None:
                 counts={
                     "masks_n": 2,
                     "final_masks_n": 1,
+                    "task_words_n": 7,
+                    "cohort_condition_n": 1,
+                    "other_condition_n": 0,
                     "masked_n": 1,
                     "unmasked_by_reviewer_n": 1,
                     "unmasked_by_trim_n": 2,
@@ -1059,12 +1062,16 @@ def test_the_ledger_columns_count_every_state(tmp_path: Path) -> None:
                     "proposed_by_reviewer": ["CONDITION"],
                 },
                 human_review=True,
+                human_review_kind="cohort",
+                cohort_diagnoses=["parkinsons_disease"],
             )
             + "\n"
         )
     row = rv.extract(run_root, tmp_path)
     assert row is not None
-    assert (row["masks_n"], row["masks_final_n"]) == (2, 1)
+    assert (row["masks_n"], row["masks_final_n"], row["task_words_n"]) == (2, 1, 7)
+    assert (row["condition_review_kind"], row["cohort_condition_n"], row["other_condition_n"]) == ("cohort", 1, 0)
+    assert row["cohort_diagnoses"] == ["parkinsons_disease"]
     assert (row["masked_n"], row["unmasked_by_reviewer_n"], row["unmasked_by_trim_n"]) == (1, 1, 2)
     assert row["proposed_by_reviewer_n"] == 2
     assert row["proposed_by_reviewer_categories"] == ["CONDITION"]
@@ -1076,5 +1083,12 @@ def test_no_ledger_leaves_every_ledger_column_null(tmp_path: Path) -> None:
     """A store folded before the ledger existed says nothing about which masks stood."""
     row = rv.extract(build_recording(tmp_path, with_pii_scan=True, pii_findings=1), tmp_path)
     assert row is not None
-    for column in ("masks_n", "masked_n", "proposed_by_reviewer_categories", "condition_review"):
+    for column in (
+        "masks_n",
+        "masked_n",
+        "proposed_by_reviewer_categories",
+        "condition_review",
+        "condition_review_kind",
+        "cohort_diagnoses",
+    ):
         assert row[column] is None
