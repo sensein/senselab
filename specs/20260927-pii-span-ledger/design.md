@@ -118,3 +118,35 @@ and the driver logged every row `ok`. `extend_llm_review.standing` counted that 
 standing reading, so a plain resubmission would have read nothing. Now an `absent` annotation that
 carries a `failure` is not standing, and a read that produces one is logged `error` and not written,
 so the store keeps whatever reading it had.
+
+## 6. Measured on r6
+
+An in-memory re-fold of all 15,210 reviewed r6 stores at `83d89d0e` (job 24106151; nothing written
+into the tree), over the stored REVIEW readings, with `review_on.yaml`.
+
+| release, ground | r6 as folded | word-level rule |
+|---|---|---|
+| without redaction, scan found nothing | 6,687 | 6,687 |
+| without redaction, reviewer unmasked all | 6,118 (reset every) | 5,398 |
+| without redaction, no content word masked | — | 177 |
+| with redaction, REDACT's plan | 1,316 | 612 |
+| with redaction, reviewer unmasked some | 174 (reset some) | 621 |
+| with redaction, trimmed to content | — | 820 |
+| with redaction, re-scan cleared | 23 | 3 |
+| withheld, reviewer proposed redaction | 823 | 623 |
+| withheld, human review (condition only) | — | 200 |
+| withheld, REDACT | 69 | 69 |
+
+Of 14,028 planned masks over 7,977 recordings: 9,621 unmasked, 362 partly unmasked, 3,741 trimmed,
+304 unchanged. Words: 12,714 stay masked, 21,800 unmasked by the reviewer, 62,812 unmasked by the
+trim, 1,743 proposed by the reviewer and not masked. The triage axis is unchanged in count (2,016
+flags among these); 200 flags now carry the human-review ground.
+
+Release quotes that place on no residue word: 46 of 11,204 (0.41%), most of them placeholders the
+reviewer quoted back (`[PERSON+NAME]`, `the [DATE_TIME]`). 287 more name only words no mask covers.
+Of 1,503 `redact` entries, 1,487 place as whole-token runs, 10 only as substrings, 6 nowhere. At this
+rate a prompt change asking the reviewer to cite word or mask ids is not needed.
+
+Capitalised closed-class words the trim unmasked: 335, of which "So" 186 and "Well" 125 are
+discourse markers; "May" 13, "Will" 3 and "Can" 3 are the names-as-function-words risk of §1.
+122 readings had their `release` entries withheld by the `carries_pii` guard.
