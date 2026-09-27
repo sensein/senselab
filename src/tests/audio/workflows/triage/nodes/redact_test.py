@@ -138,6 +138,7 @@ def _seed_redact_store(  # noqa: C901 — one independent block per author, as t
     scanned: bool = True,
     scanned_by: Sequence[str] = ALL_DETECTORS,
     scan_failed: Sequence[str] = (),
+    timings: dict[int, dict[str, tuple[float, float]]] | None = None,
 ) -> None:
     """Write the store PREPROCESS and SPEECH leave for REDACT, with ``tmp_path`` as the run dir.
 
@@ -146,7 +147,8 @@ def _seed_redact_store(  # noqa: C901 — one independent block per author, as t
     overlaps — the store's shared shape for a marking. ``extra_marks`` are ``(word_text, category)``
     markings placed on a word the finding's own extent does not reach, which is the state a
     re-planning pass exists to widen. ``target_speaker`` writes SPEECH's verdict so a speaker-scoped
-    reader has something to scope by.
+    reader has something to scope by. ``timings`` gives a word, by index, its sources' own timings,
+    so its hull can reach past its derived extent.
     """
     ends = [_word_extent(i)[1] for i in range(len(words))] + [float(extent[1]) for _c, extent, *_r in findings]
     duration_s = max([5.0, *(end + 1.0 for end in ends)])
@@ -173,7 +175,7 @@ def _seed_redact_store(  # noqa: C901 — one independent block per author, as t
         word_id = store.entity(
             prov_type="word",
             extent=_word_extent(index),
-            attributes=word_attributes(text, _word_extent(index), index=index),
+            attributes=word_attributes(text, _word_extent(index), index=index, timings=(timings or {}).get(index)),
         )
         store.was_generated_by(word_id, consensus)
         word_ids.append(word_id)
@@ -786,6 +788,35 @@ class TestTheWordLevelMaskRule:
             "LOCATION",
             "LOC",
         )
+
+    def test_a_trimmed_word_is_released_where_the_trim_leaves_the_extent_as_planned(
+        self, store: ProvStore, redact_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """r6's "back in [DATE_TIME]": the trim releases "in" though its hull reaches the mask.
+
+        One source times "in" into the padded mask and the re-cut extent equals REDACT's own; the
+        released text still shows "in".
+        """
+        _seed_redact_store(
+            store,
+            tmp_path,
+            words=["back", "in", "twenty", "twenty", "is"],
+            findings=[("DATE_TIME", (2.0, 3.5))],
+            timings={1: {"asr_crisperwhisper": (1.0, 1.5), "asr_qwen": (1.0, 1.97)}},
+        )
+        _stub_pii(monkeypatch, findings=[])
+        redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
+        plan = _plan(store, applies=False)
+        assert [mask.outcome for mask in plan.masks] == [MASK_TRIMMED]
+        assert _states(plan)["in"] == UNMASKED_BY_TRIM
+        assert plan.final == plan.planned, "the case under test: the trim leaves REDACT's extent as it was"
+        _write_ledger(store, plan, "release_with_redaction", None)
+        _settle(store, "release_with_redaction", None, tmp_path)
+        released = _release(tmp_path)
+        assert (released / "transcript.txt").read_text() == "back in [DATE_TIME] is\n"
+        assert '"words_n": 2' in (released / "consensus.json").read_text()
+        assert _silent(released / "audio.wav", 2.1, 3.4)
+        assert not _silent(released / "audio.wav", 1.1, 1.4)
 
     def test_a_mask_over_function_words_only_disappears(
         self, store: ProvStore, redact_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
