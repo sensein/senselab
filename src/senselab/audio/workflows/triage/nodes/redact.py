@@ -42,6 +42,7 @@ from typing import Any, Callable, Mapping, Sequence
 
 from senselab.audio.data_structures import Audio, AudioHints
 from senselab.audio.tasks.redaction.api import RedactionExtent, apply_redactions, plan_redactions
+from senselab.audio.workflows.triage.cohort import COHORT, CONDITION_KINDS, OTHER, load_cohort_profile
 from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.nodes.branches import branch_params, declared_carrier, expected_names
 from senselab.audio.workflows.triage.nodes.common import (
@@ -1091,6 +1092,9 @@ class ReviewerSpan:
         texts: Their surfaces.
         masked_ids: Those of them a final mask already hides.
         human_review: Whether its category is one the fold routes to human review.
+        condition_kind: For a human-review entry, :data:`~senselab.audio.workflows.triage.cohort.COHORT`
+            or :data:`~senselab.audio.workflows.triage.cohort.OTHER`; empty otherwise.
+        cohort_diagnosis: The cohort diagnosis its text matches; empty where none does.
     """
 
     category: str
@@ -1100,6 +1104,8 @@ class ReviewerSpan:
     texts: tuple[str, ...]
     masked_ids: tuple[str, ...]
     human_review: bool
+    condition_kind: str = ""
+    cohort_diagnosis: str = ""
 
 
 @dataclass(frozen=True)
@@ -1160,6 +1166,14 @@ class MaskPlan:
             return sorted({span.category for span in self.proposals if set(span.word_ids) - set(span.masked_ids)})
         return sorted({mask.planned.category for mask in self.masks if any(word.state == state for word in mask.words)})
 
+    @property
+    def human_review_kind(self) -> str | None:
+        """Which kind of condition the human-review proposals name: ``other`` if any does, else ``cohort``."""
+        kinds = {span.condition_kind for span in self.proposals if span.human_review}
+        if not kinds:
+            return None
+        return OTHER if OTHER in kinds else COHORT
+
     def record(self, *, release: str, release_ground: str | None) -> dict[str, Any]:
         """The ledger, as the measurement VERDICT writes carries it.
 
@@ -1219,6 +1233,8 @@ class MaskPlan:
                     "texts": list(span.texts),
                     "masked_ids": list(span.masked_ids),
                     "human_review": span.human_review,
+                    "condition_kind": span.condition_kind,
+                    "cohort_diagnosis": span.cohort_diagnosis,
                 }
                 for span in self.proposals
             ],
@@ -1233,9 +1249,19 @@ class MaskPlan:
                     for outcome in MASK_OUTCOMES
                 },
                 **{f"{state}_n": self.count(state) for state in WORD_STATES},
+                **{
+                    f"{kind}_condition_n": sum(
+                        1 for span in self.proposals if span.human_review and span.condition_kind == kind
+                    )
+                    for kind in CONDITION_KINDS
+                },
             },
             "categories": {state: self.categories(state) for state in WORD_STATES},
             "human_review": any(span.human_review for span in self.proposals),
+            "human_review_kind": self.human_review_kind,
+            "cohort_diagnoses": sorted(
+                {span.cohort_diagnosis for span in self.proposals if span.human_review and span.cohort_diagnosis}
+            ),
         }
 
 
@@ -1362,6 +1388,7 @@ def mask_plan(
     padding_ms: int,
     human_review_categories: Sequence[str] = (),
     protected_categories: Sequence[str] = (),
+    cohort_conditions: str | None = None,
 ) -> MaskPlan:
     """Which words stay masked: REDACT's plan, the reviewer's unmasks, and the content-word trim.
 
@@ -1387,6 +1414,8 @@ def mask_plan(
         protected_categories: Upper-cased detector categories under which a marked word written as a
             proper noun counts as content: the trim never releases it, and only a reviewer
             ``release`` entry naming it does.
+        cohort_conditions: The cohort profile a human-review proposal's text is read against, as
+            ``verdict.cohort_conditions``; every such proposal is ``other`` where None.
 
     Returns:
         The plan. Every mask is unchanged where REDACT planned none or the store predates the residue.
@@ -1496,6 +1525,7 @@ def mask_plan(
 
     final_ids = {word.word_id for mask in masks for word in mask.words if word.state == MASKED}
     review_set = {category.upper() for category in human_review_categories}
+    profile = load_cohort_profile(cohort_conditions) if cohort_conditions else None
     proposals: list[ReviewerSpan] = []
     for entry in entries:
         if str(entry.get("action")) == "release":
@@ -1507,6 +1537,8 @@ def mask_plan(
             hits = _place_substring(quote, residue)
             placed = PLACED_SUBSTRING if hits else ""
         category = str(entry.get("category") or "OTHER").upper()
+        held = category in review_set
+        diagnosis = (profile.diagnosis(quote) if profile is not None else None) if held else None
         proposals.append(
             ReviewerSpan(
                 category=category,
@@ -1515,7 +1547,9 @@ def mask_plan(
                 word_ids=tuple(word.id for word in hits),
                 texts=tuple(str(word.attributes.get("text") or "") for word in hits),
                 masked_ids=tuple(word.id for word in hits if word.id in final_ids),
-                human_review=category in review_set,
+                human_review=held,
+                condition_kind=(COHORT if diagnosis else OTHER) if held else "",
+                cohort_diagnosis=diagnosis or "",
             )
         )
     return MaskPlan(

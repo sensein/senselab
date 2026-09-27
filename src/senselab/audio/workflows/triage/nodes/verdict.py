@@ -651,6 +651,7 @@ def verdict(
         padding_ms=padding_ms(config) if planned_extents(store) else 0,
         human_review_categories=policy.llm_human_review_categories,
         protected_categories=policy.trim_protected_categories,
+        cohort_conditions=policy.cohort_conditions,
     )
     file_verdict = fold_file_verdict(
         node_verdicts,

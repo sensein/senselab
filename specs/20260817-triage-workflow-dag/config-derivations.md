@@ -1670,7 +1670,8 @@ verdict.llm_reset_redactions: true
 
 verdict.llm_human_review_categories: [CONDITION]
   The reviewer categories whose `redact` entries route a recording to human review under
-  `REVIEWER_NEEDS_HUMAN_REVIEW`, where every `redact` entry of the reading is in one of them; a
+  `REVIEWER_NEEDS_HUMAN_REVIEW_COHORT` or `REVIEWER_NEEDS_HUMAN_REVIEW_OTHER` (by
+  `verdict.cohort_conditions`), where every `redact` entry of the reading is in one of them; a
   reading also proposing another category keeps the plain proposed-redaction ground. Owner,
   2026-09-27, on a named health condition: "this depends on uniqueness of condition, especially when
   coupled with other information being released. so should be flagged for review". CONDITION only,
@@ -1678,6 +1679,18 @@ verdict.llm_human_review_categories: [CONDITION]
   on rarity and context rather than on the words alone. The release stays withheld pending that
   review, and the triage axis flags on the same ground. 190 of r6's 823 reviewer withholdings carry
   CONDITION as their only category.
+
+verdict.cohort_conditions: bridge2ai_voice_adult_2026-09-04
+  The packaged profile under `data/cohort_conditions/` naming the conditions the study itself
+  recruits for. A reading held for human review whose every `redact` entry matches one is withheld
+  under `REVIEWER_NEEDS_HUMAN_REVIEW_COHORT`; one naming any condition outside the profile, under
+  `REVIEWER_NEEDS_HUMAN_REVIEW_OTHER`. Both stay withheld pending that review: only the ground and the
+  page section differ. Owner, 2026-09-27: "put study's conditions in a separate section", after the
+  r6 human-review list turned out to be led by the cohort's own recruitment diagnoses (Parkinson's in
+  50 recordings, idiopathic subglottic stenosis 13, spasmodic dysphonia 11), which say little about who
+  someone is within this corpus. The profile is read from the release's `phenotype/diagnosis/` files,
+  not recalled; its derivation is in `specs/20260927-pii-span-ledger/design.md`, section 10. Unset,
+  every held condition is an `other` one.
 
 verdict.trim_protected_categories: [PERSON, NAME, LOCATION, LOC]
   Detector categories under which a marked word written as a proper noun counts as content for the

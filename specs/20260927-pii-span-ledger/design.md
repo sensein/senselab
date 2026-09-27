@@ -254,3 +254,43 @@ without it; the placement defect is recorded for the next SPEECH change.
 
 REVIEW's inputs are untouched: it read REDACT's rendering of the planned extents, and the stored
 readings stand.
+
+## 10. The study's own conditions are a separate section (2026-09-27, evening)
+
+**Owner:** "put study's conditions in a separate section". The r6 human-review list was led by the
+cohort's own recruitment diagnoses (Parkinson's in 50 recordings, idiopathic subglottic stenosis 13,
+spasmodic dysphonia 11), which say little about who someone is inside a corpus recruited for them;
+the rest were 222 phrases each in a single recording.
+
+**Where the list comes from.** Not recall: the release's
+`phenotype/diagnosis/` (`b2aivoice/4.0-release/adult/bids_adult_2026_09_04`) holds one file per
+diagnosis the study recruits for, 21 files with `control`, so 20 cohort diagnoses. The profile
+`data/cohort_conditions/bridge2ai_voice_adult_2026-09-04.yaml` has one entry per file, keyed by the
+file's stem. Each entry's patterns are the diagnosis name and the spellings the r6 reviewer actually
+quoted (e.g. "sublotic stenosis", "spasmatic dysphonia", "lavaedoba"). A treatment is included only
+where that diagnosis's own phenotype file names it:
+- levodopa, dopamine agonists and deep brain stimulation (DBS): `parkinsons_disease`, which also
+  names DBS alongside `essential_tremor` and `laryngeal_dystonia`;
+- botulinum toxin (Botox): `laryngeal_dystonia`;
+- dilation: `airway_stenosis`;
+- thyroplasty: `glottic_insufficiency` and `unilateral_vocal_fold_paralysis`.
+
+"Spasmodic dysphonia" appears in no file. `laryngeal_dystonia` names its adductor subtype ADLD, the
+current name for adductor spasmodic dysphonia, so the older name maps there.
+
+**Checked against every distinct r6 CONDITION phrase:** 148 of 266 phrases are cohort (282 mentions),
+118 are other (135 mentions).
+- By diagnosis: airway stenosis 28, Parkinson's 24, vocal fold paralysis 22, laryngeal dystonia 16,
+  benign lesions 10, and the rest 1–7 each.
+- The other list is cancers, strokes, surgeries, sleep disorders, autoimmune disease and medication
+  names, plus "a very rare voice disorder", which correctly stays other.
+- Kept other on purpose: "vocal cord dysfunction" (a distinct disorder, not a cohort diagnosis);
+  "damage to my voice box" and "vocal cord damage" (no diagnosis named); a growth on the thyroid
+  (not a laryngeal lesion); a joint cyst and a brain cyst.
+
+**Behaviour.** Policy is unchanged: both kinds stay withheld for human review. A reading whose every
+human-review proposal is a cohort condition withholds under `REVIEWER_NEEDS_HUMAN_REVIEW_COHORT`; one
+naming any other condition, under `REVIEWER_NEEDS_HUMAN_REVIEW_OTHER`, since the rarer condition is the
+one a reviewer must weigh. The ledger records each proposal's `condition_kind` and `cohort_diagnosis`,
+and the recording's `human_review_kind`, `cohort_diagnoses` and per-kind counts. Those feed the page
+section and the parquet (schema 9).

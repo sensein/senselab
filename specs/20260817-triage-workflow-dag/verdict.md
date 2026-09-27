@@ -465,9 +465,12 @@ are in `specs/20260927-pii-span-ledger/design.md`.
 
 **A condition is held for a person.** With `verdict.llm_human_review_categories` naming it
 (`[CONDITION]` shipped), a residue reading every `redact` entry of which is in one of those
-categories withholds under `REVIEWER_NEEDS_HUMAN_REVIEW` instead of `REVIEWER_PROPOSED_REDACTION`, and
-the triage axis flags on the same ground with the categories appended. A reading proposing a
-condition beside any other category is residue the ordinary way.
+categories withholds for human review instead of under `REVIEWER_PROPOSED_REDACTION`, and the triage
+axis flags on the same ground with the categories appended. The ground names which kind of condition:
+`REVIEWER_NEEDS_HUMAN_REVIEW_COHORT` where every proposed condition is one the study recruits for
+(`verdict.cohort_conditions`, a profile read from the release's `phenotype/diagnosis/`), else
+`REVIEWER_NEEDS_HUMAN_REVIEW_OTHER`. Both withhold. A reading proposing a condition beside any other
+category is residue the ordinary way; the ledger still records each condition's kind.
 
 **Why one axis and not two.** "Was there anything to redact" and "did redaction succeed" are
 different questions, and collapsing them is what produced the defect — so the split was considered

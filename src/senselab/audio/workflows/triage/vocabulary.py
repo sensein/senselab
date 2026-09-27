@@ -13,6 +13,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Literal, Mapping, Sequence
 
+from senselab.audio.workflows.triage.cohort import COHORT, OTHER, load_cohort_profile
+
 GRAPH_ORDER = (
     "ADMIT",
     "PREPROCESS",
@@ -152,12 +154,25 @@ RELEASE_UNKNOWN_GROUNDS = (NO_TRANSCRIPT, SPEECH_UNREAD, REDACTION_OWED, SCAN_UN
 
 REVIEWER_PROPOSED_REDACTION = "the redaction reviewer proposed hiding more and the policy lets that withhold"
 
-REVIEWER_NEEDS_HUMAN_REVIEW = (
-    "the redaction reviewer proposed hiding only content whose identifying power depends on its rarity and on what "
-    "else is released, such as a health condition, so the recording needs human review"
+REVIEWER_NEEDS_HUMAN_REVIEW_COHORT = (
+    "the redaction reviewer proposed hiding only health conditions the study itself recruits for; whether naming "
+    "one identifies someone depends on what else is released, so the recording needs human review"
 )
 
-RELEASE_WITHHELD_GROUNDS = (REVIEWER_PROPOSED_REDACTION, REVIEWER_NEEDS_HUMAN_REVIEW)
+REVIEWER_NEEDS_HUMAN_REVIEW_OTHER = (
+    "the redaction reviewer proposed hiding only health conditions, at least one outside the study's own cohorts; "
+    "whether it identifies someone depends on its rarity and on what else is released, so the recording needs "
+    "human review"
+)
+
+HUMAN_REVIEW_GROUNDS = {COHORT: REVIEWER_NEEDS_HUMAN_REVIEW_COHORT, OTHER: REVIEWER_NEEDS_HUMAN_REVIEW_OTHER}
+"""The human-review ground for each kind of condition the reading proposed."""
+
+RELEASE_WITHHELD_GROUNDS = (
+    REVIEWER_PROPOSED_REDACTION,
+    REVIEWER_NEEDS_HUMAN_REVIEW_COHORT,
+    REVIEWER_NEEDS_HUMAN_REVIEW_OTHER,
+)
 """Why a recording is withheld where REDACT itself did not withhold it."""
 
 REVIEWER_CLEARED_RESCAN = (
@@ -399,6 +414,9 @@ class FoldPolicy:
             entry of the reading is in one of them.
         trim_protected_categories: Upper-cased detector categories under which a marked word
             written as a proper noun is never unmasked by the content-word trim.
+        cohort_conditions: The packaged cohort profile a human-review proposal is read against
+            (:mod:`senselab.audio.workflows.triage.cohort`), or None where the study declares none,
+            in which case every such proposal is an ``other`` condition.
     """
 
     conformance_flags: bool = True
@@ -411,6 +429,7 @@ class FoldPolicy:
     llm_reset_redactions: bool = False
     llm_human_review_categories: tuple[str, ...] = ()
     trim_protected_categories: tuple[str, ...] = ()
+    cohort_conditions: str | None = None
     conformance_flags_by_family: dict[str, bool] = field(default_factory=dict)
 
     @classmethod
@@ -440,6 +459,7 @@ class FoldPolicy:
             trim_protected_categories=tuple(
                 str(category).upper() for category in (config.get(f"{_SECTION}.trim_protected_categories") or ())
             ),
+            cohort_conditions=str(config.get(f"{_SECTION}.cohort_conditions") or "") or None,
             conformance_flags_by_family={
                 str(family): bool(flags)
                 for family, flags in (config.get(f"{_SECTION}.conformance_flags_by_family") or {}).items()
@@ -667,6 +687,34 @@ def needs_human_review(llm_redaction: Mapping[str, Any] | None, categories: Sequ
         for entry in dict(llm_redaction or {}).get("proposal") or ()
         if str(entry.get("action")) == "redact"
     )
+
+
+def human_review_kind(
+    llm_redaction: Mapping[str, Any] | None, categories: Sequence[str], cohort_conditions: str | None
+) -> str | None:
+    """Which kind of condition a reading held for human review names.
+
+    Args:
+        llm_redaction: REVIEW's annotation, or None where it wrote none.
+        categories: Upper-cased categories, as ``verdict.llm_human_review_categories``.
+        cohort_conditions: The cohort profile's name, as ``verdict.cohort_conditions``.
+
+    Returns:
+        None where the reading is not held for human review (:func:`needs_human_review`);
+        :data:`~senselab.audio.workflows.triage.cohort.COHORT` where every ``redact`` entry names a
+        cohort condition; :data:`~senselab.audio.workflows.triage.cohort.OTHER` otherwise.
+    """
+    if not needs_human_review(llm_redaction, categories):
+        return None
+    if cohort_conditions is None:
+        return OTHER
+    profile = load_cohort_profile(cohort_conditions)
+    kinds = {
+        profile.kind(str(entry.get("text") or ""))
+        for entry in dict(llm_redaction or {}).get("proposal") or ()
+        if str(entry.get("action")) == "redact"
+    }
+    return COHORT if kinds == {COHORT} else OTHER
 
 
 def _release_from(
@@ -936,7 +984,7 @@ def fold_file_verdict(
     ):
         reasons.append(NodeVerdict(_SPEECH, Outcome.FLAG, None, NO_LEXICAL_ITEM_PRODUCED))
     annotation = dict(llm_redaction or {})
-    human_review = needs_human_review(annotation, rules.llm_human_review_categories)
+    human_review = human_review_kind(annotation, rules.llm_human_review_categories, rules.cohort_conditions)
     if rules.llm_redaction_flags and _reviewer_found_residue(annotation):
         named = ", ".join(
             sorted(
@@ -947,7 +995,7 @@ def fold_file_verdict(
                 }
             )
         )
-        ground_text = REVIEWER_NEEDS_HUMAN_REVIEW if human_review else LLM_REDACTION_RESIDUE
+        ground_text = HUMAN_REVIEW_GROUNDS[human_review] if human_review else LLM_REDACTION_RESIDUE
         reasons.append(NodeVerdict(_VERDICT, Outcome.FLAG, None, f"{ground_text}: {named}" if named else ground_text))
     for record in flag_gates or ():
         if record.get("passed") is not False:
@@ -1023,7 +1071,7 @@ def fold_file_verdict(
         node_verdicts,
         redaction or RedactionEvidence(),
         ran,
-        (REVIEWER_NEEDS_HUMAN_REVIEW if human_review else REVIEWER_PROPOSED_REDACTION) if withholds else None,
+        (HUMAN_REVIEW_GROUNDS[human_review] if human_review else REVIEWER_PROPOSED_REDACTION) if withholds else None,
         speech_declined=routes.get(_SPEECH) == DECLINED,
         reviewer_clears=clears,
     )

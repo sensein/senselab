@@ -27,7 +27,8 @@ from senselab.audio.workflows.triage.vocabulary import (
     RELEASE_WITHHELD_GROUNDS,
     RELEASE_WITHOUT_REDACTION_GROUNDS,
     REVIEWER_CLEARED_RESCAN,
-    REVIEWER_NEEDS_HUMAN_REVIEW,
+    REVIEWER_NEEDS_HUMAN_REVIEW_COHORT,
+    REVIEWER_NEEDS_HUMAN_REVIEW_OTHER,
     REVIEWER_PROPOSED_REDACTION,
     REVIEWER_UNMASKED_ALL,
     REVIEWER_UNMASKED_SOME,
@@ -1216,20 +1217,50 @@ class TestAConditionAloneRoutesToHumanReview:
             policy=policy,
         )
 
-    _POLICY = FoldPolicy(llm_redaction_withholds=True, llm_human_review_categories=("CONDITION",))
+    _POLICY = FoldPolicy(
+        llm_redaction_withholds=True,
+        llm_human_review_categories=("CONDITION",),
+        cohort_conditions="bridge2ai_voice_adult_2026-09-04",
+    )
 
-    def test_a_condition_only_reading_is_held_for_human_review_on_both_axes(self) -> None:
-        """Withheld pending review, and the triage flag names the same ground."""
-        folded = self._fold(self._reading("CONDITION", "CONDITION"), self._POLICY)
-        assert (folded.release, folded.release_ground) == (Release.WITHHELD, REVIEWER_NEEDS_HUMAN_REVIEW)
+    @staticmethod
+    def _conditions(*texts: str) -> dict[str, Any]:
+        """A reading proposing to hide these conditions, and releasing a date."""
+        return {
+            "status": "flagged",
+            "original": "carries_pii",
+            "proposal": [
+                {"text": "this morning", "action": "release", "category": "DATE_TIME"},
+                *({"text": text, "action": "redact", "category": "CONDITION"} for text in texts),
+            ],
+        }
+
+    def test_a_cohort_condition_is_held_for_human_review_on_both_axes(self) -> None:
+        """Withheld pending review under the cohort ground, and the triage flag names the same ground."""
+        folded = self._fold(self._conditions("Parkinson's", "idiopathic subglottic stenosis"), self._POLICY)
+        assert (folded.release, folded.release_ground) == (Release.WITHHELD, REVIEWER_NEEDS_HUMAN_REVIEW_COHORT)
         assert folded.triage is Triage.FLAG
-        assert any(reason.why == f"{REVIEWER_NEEDS_HUMAN_REVIEW}: CONDITION" for reason in folded.reasons)
+        assert any(reason.why == f"{REVIEWER_NEEDS_HUMAN_REVIEW_COHORT}: CONDITION" for reason in folded.reasons)
+
+    def test_one_condition_outside_the_cohorts_makes_it_an_other_condition(self) -> None:
+        """A cohort diagnosis beside a joint cyst is held as an other condition: the rarer one decides."""
+        folded = self._fold(self._conditions("parkinson's", "synovial joint cyst"), self._POLICY)
+        assert (folded.release, folded.release_ground) == (Release.WITHHELD, REVIEWER_NEEDS_HUMAN_REVIEW_OTHER)
+
+    def test_without_a_cohort_profile_every_condition_is_other(self) -> None:
+        """No profile declared, nothing can be recognised as the study's own."""
+        policy = FoldPolicy(llm_redaction_withholds=True, llm_human_review_categories=("CONDITION",))
+        folded = self._fold(self._conditions("parkinson's"), policy)
+        assert folded.release_ground == REVIEWER_NEEDS_HUMAN_REVIEW_OTHER
 
     def test_a_condition_beside_another_category_is_a_plain_proposed_redaction(self) -> None:
         """A name or a place beside the condition is residue the ordinary way."""
         folded = self._fold(self._reading("CONDITION", "PERSON"), self._POLICY)
         assert (folded.release, folded.release_ground) == (Release.WITHHELD, REVIEWER_PROPOSED_REDACTION)
-        assert not any(reason.why.startswith(REVIEWER_NEEDS_HUMAN_REVIEW) for reason in folded.reasons)
+        assert not any(
+            reason.why.startswith((REVIEWER_NEEDS_HUMAN_REVIEW_COHORT, REVIEWER_NEEDS_HUMAN_REVIEW_OTHER))
+            for reason in folded.reasons
+        )
 
     def test_no_categories_routes_nothing_to_review(self) -> None:
         """The key empty, a condition is withheld as any other proposal is."""
@@ -1241,6 +1272,15 @@ class TestAConditionAloneRoutesToHumanReview:
         from senselab.audio.workflows.triage.config import load_triage_config
 
         assert FoldPolicy.from_config(load_triage_config()).llm_human_review_categories == ("CONDITION",)
+
+    def test_the_packaged_config_names_the_study_s_cohort_profile(self) -> None:
+        """The shipped key names the Bridge2AI-Voice adult profile, and it loads."""
+        from senselab.audio.workflows.triage.cohort import load_cohort_profile
+        from senselab.audio.workflows.triage.config import load_triage_config
+
+        name = FoldPolicy.from_config(load_triage_config()).cohort_conditions
+        assert name == "bridge2ai_voice_adult_2026-09-04"
+        assert load_cohort_profile(name).diagnosis("spasmodic dysphonia") == "laryngeal_dystonia"
 
 
 class TestANonLexicalTaskIsClearedRatherThanHeld:

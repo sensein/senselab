@@ -1,0 +1,63 @@
+# The health conditions the Bridge2AI-Voice adult study recruits for, one entry per diagnosis file in
+# the release's phenotype/diagnosis/ (control excluded). Read by
+# `senselab.audio.workflows.triage.cohort`: a reviewer CONDITION proposal any of whose patterns match
+# is a cohort condition; every other is an "other" condition. Derivation, the release the list was
+# read from and the r6 phrases each pattern was checked against:
+# specs/20260927-pii-span-ledger/design.md, section 10.
+schema_version: '1'
+release: b2aivoice/4.0-release/adult/bids_adult_2026_09_04
+# Patterns are Python regular expressions, searched case-insensitively in the proposal's text with
+# curly apostrophes straightened and whitespace collapsed.
+conditions:
+  airway_stenosis: ['stenos', 'tenosis', '\btrache', '\btrach\b', 'windpipe', 'subglott', '\bairway', '\bdilat', '\biss\b']
+  amyotrophic_lateral_sclerosis: ['amyotrophic', '\bals\b', 'lou gehrig']
+  anxiety: ['anxiety', 'ansiedad']
+  ataxia: ['ataxi']
+  benign_lesions:
+    - 'nodule'
+    - 'polyp'
+    - 'granuloma'
+    - 'r[ei]i?nke'
+    - 'cyst\b.{0,30}vocal'
+    - '(growth|mass|lesion)\w*\b.{0,30}vocal'
+  bipolar_disorder: ['bipolar', '\bmania\b', '\bmanic\b']
+  cognitive_impairment: ['alzheimer', 'dementia', 'cognitive impairment', '\bmci\b']
+  copd_and_asthma: ['\bcopd\b', 'asthma', 'albuterol', 's[iy]mbicort', 'emphysema']
+  depression: ['depress']
+  essential_tremor: ['\btremors?\b']
+  glottic_insufficiency: ['glottic insufficiency', 'presbyphonia', 'thyroplasty', 'vocal (fold|cord)s? atrophy']
+  huntingtons_disease: ['huntington']
+  laryngeal_cancer: ['laryngeal cancer', 'cancer\w*\b.{0,40}vocal', 'vocal\b.{0,40}cancer']
+  laryngeal_dystonia:
+    - 'dystonia'
+    - 'spasmodic'
+    - 'spasmatic'
+    - 'spastic dysphonia'
+    - '\bsd\b'
+    - '\b(ab|ad)sd\b'
+    - '\b(ad|ab)ld\b'
+    - 'botox'
+    - 'botulinum'
+    - 'vocal spasms'
+    - 'spasms in my vocal'
+  laryngitis: ['laryngitis']
+  muscle_tension_dysphonia: ['muscle tension', 'muscular tension', '\bmtd\b', 'dysphonia', 'dysponia']
+  parkinsons_disease:
+    - 'parkinson'
+    - '\bpd\b'
+    - 'levodopa'
+    - 'carbidopa'
+    - 'lavaedoba'
+    - 'sinemet'
+    - 'cinemat'
+    - 'dopamine agonist'
+    - 'brain stimulat'
+    - '\bdbs\b'
+    - 'dyskinesia'
+  precancerous_lesions: ['leukoplakia', 'dysplasia', 'papilloma', '\bhpv\b']
+  unexplained_chronic_cough: ['chronic cough', 'tos cr[oó]nica']
+  unilateral_vocal_fold_paralysis:
+    - '(vocal|cord|fold|focal|local)\b.{0,30}paraly'
+    - 'paraly\w*\b.{0,30}(vocal|cord|fold)'
+    - '^paraly[sz]\w*$'
+    - '(vocal|cord)\w*\b.{0,40}(not moving|stopped moving)'
