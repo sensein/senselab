@@ -38,6 +38,7 @@ __all__ = [
     "Residue",
     "ResidueRule",
     "is_content_word",
+    "is_proper_form",
     "is_non_lexical",
     "residue_method",
     "residue_rule",
@@ -256,6 +257,37 @@ def is_non_lexical(text: str, *, vocal_task: bool = False) -> bool:
     if all(_VOCALISATION.fullmatch(piece) for piece in pieces):
         return True
     return vocal_task and all(_VOCAL_RUN.fullmatch(piece) for piece in pieces)
+
+
+NAME_HOMOGRAPHS = frozenset({"may", "will", "can"})
+"""Closed-class words that are also names or a month, so capitalised they are read as one even where a
+sentence begins with them."""
+
+_FIRST_PERSON = frozenset({"i", "i'm", "i'll", "i've", "i'd"})
+_SENTENCE_END = (".", "?", "!", "\u2026")
+
+
+def is_proper_form(text: str, previous: str | None) -> bool:
+    """Whether a token is written as a proper noun: capitalised where capitalisation says so.
+
+    Args:
+        text: The token as the recognizer wrote it.
+        previous: The token before it in the stream, or None where it opens the transcript.
+
+    Returns:
+        True where the first letter is upper case, the token is not a first-person pronoun, and it
+        either stands mid-sentence (the previous token does not end one) or its base is one of
+        :data:`NAME_HOMOGRAPHS`.
+    """
+    stripped = _stripped(text)
+    if not stripped[:1].isupper():
+        return False
+    key = _base(_key(text))
+    if key in _FIRST_PERSON or _key(text) in _FIRST_PERSON:
+        return False
+    if key in NAME_HOMOGRAPHS:
+        return True
+    return previous is not None and not str(previous).strip().endswith(_SENTENCE_END)
 
 
 def is_content_word(text: str) -> bool:

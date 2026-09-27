@@ -1679,6 +1679,19 @@ verdict.llm_human_review_categories: [CONDITION]
   review, and the triage axis flags on the same ground. 190 of r6's 823 reviewer withholdings carry
   CONDITION as their only category.
 
+verdict.trim_protected_categories: [PERSON, NAME, LOCATION, LOC]
+  Detector categories under which a marked word written as a proper noun counts as content for the
+  mask trim, so the trim never unmasks it and only a reviewer `release` entry naming it does. Owner,
+  2026-09-27: the trim must never release a word a detector marked PERSON or NAME ("May", "Will",
+  "Can"). "Written as a proper noun" is `residue.is_proper_form`: capitalised, not a first-person
+  pronoun, and mid-sentence or one of `NAME_HOMOGRAPHS`. The literal rule, every marked word, kept
+  2,976 closed-class words masked on the reviewed r6 corpus, because a finding labels every word its
+  span overlaps ("and", "the", "she" inside a name span); the proper-form rule keeps 71. LOCATION and
+  LOC added on the same replay: the trim was releasing "Los", "Las", "La", "U.S." out of place names
+  (≈60 words). DATE_TIME left out: its proper-form survivors are 11 "May" (the month, whose day or
+  year stays masked) and sentence-level noise ("The", "Every"). Measurement in
+  `specs/20260927-pii-span-ledger/design.md` §7.
+
 verdict.conformance_flags_by_family: {}
   Declared task family -> whether a non-conformance on it flags, overriding `conformance_flags`.
   **This is what makes the fold task-aware** (owner: "verdict has to evaluate based on all branches

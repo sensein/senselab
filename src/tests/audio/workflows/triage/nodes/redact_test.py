@@ -748,6 +748,45 @@ class TestTheWordLevelMaskRule:
         (extent,) = plan.final
         assert (extent.start, extent.end) == (1.5, 3.0), "the margin stops at each unmasked neighbour"
 
+    def test_a_name_spelled_as_a_function_word_is_never_trimmed(
+        self, store: ProvStore, redact_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A "May" marked PERSON keeps its mask through the trim; only a reviewer quote naming it unmasks it."""
+        _seed_redact_store(store, tmp_path, words=["i", "met", "May", "today"], findings=[("PERSON", _word_extent(2))])
+        _stub_pii(monkeypatch, findings=[])
+        redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
+        unprotected = mask_plan(store, reviewer_applies=False, padding_ms=50)
+        assert _states(unprotected)["May"] == UNMASKED_BY_TRIM
+        protected = mask_plan(store, reviewer_applies=False, padding_ms=50, protected_categories=("PERSON", "NAME"))
+        assert _states(protected)["May"] == MASKED
+        (word,) = [word for mask in protected.masks for word in mask.words if word.text == "May"]
+        assert (word.categories, word.proper) == (("PERSON",), True)
+        _annotate(store, [_release_entry("may")])
+        released = mask_plan(store, reviewer_applies=True, padding_ms=50, protected_categories=("PERSON", "NAME"))
+        assert _states(released)["May"] == UNMASKED_BY_REVIEWER
+
+    def test_a_function_word_a_name_finding_spans_is_still_trimmed(
+        self, store: ProvStore, redact_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A PERSON finding over "and the" does not make them names; lower case, they are trimmed."""
+        _seed_redact_store(store, tmp_path, words=["alice", "and", "the", "dog"], findings=[("PERSON", (0.0, 2.5))])
+        _stub_pii(monkeypatch, findings=[])
+        redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
+        plan = mask_plan(store, reviewer_applies=False, padding_ms=50, protected_categories=("PERSON", "NAME"))
+        assert _states(plan)["and"] == UNMASKED_BY_TRIM and _states(plan)["the"] == UNMASKED_BY_TRIM
+        assert _states(plan)["alice"] == MASKED
+
+    def test_the_packaged_config_protects_person_and_name(self) -> None:
+        """The shipped key names the person and the place categories."""
+        from senselab.audio.workflows.triage.vocabulary import FoldPolicy
+
+        assert FoldPolicy.from_config(load_triage_config()).trim_protected_categories == (
+            "PERSON",
+            "NAME",
+            "LOCATION",
+            "LOC",
+        )
+
     def test_a_mask_over_function_words_only_disappears(
         self, store: ProvStore, redact_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

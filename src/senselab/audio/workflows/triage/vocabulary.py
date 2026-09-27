@@ -397,6 +397,8 @@ class FoldPolicy:
         llm_human_review_categories: Upper-cased reviewer categories whose ``redact`` entries route
             the recording to human review rather than to a plain withholding, where every ``redact``
             entry of the reading is in one of them.
+        trim_protected_categories: Upper-cased detector categories under which a marked word
+            written as a proper noun is never unmasked by the content-word trim.
     """
 
     conformance_flags: bool = True
@@ -408,6 +410,7 @@ class FoldPolicy:
     llm_rescan_clears: bool = False
     llm_reset_redactions: bool = False
     llm_human_review_categories: tuple[str, ...] = ()
+    trim_protected_categories: tuple[str, ...] = ()
     conformance_flags_by_family: dict[str, bool] = field(default_factory=dict)
 
     @classmethod
@@ -433,6 +436,9 @@ class FoldPolicy:
             llm_reset_redactions=bool(config.get(f"{_SECTION}.llm_reset_redactions", False)),
             llm_human_review_categories=tuple(
                 str(category).upper() for category in (config.get(f"{_SECTION}.llm_human_review_categories") or ())
+            ),
+            trim_protected_categories=tuple(
+                str(category).upper() for category in (config.get(f"{_SECTION}.trim_protected_categories") or ())
             ),
             conformance_flags_by_family={
                 str(family): bool(flags)
