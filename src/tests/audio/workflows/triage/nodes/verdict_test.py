@@ -26,7 +26,8 @@ from senselab.audio.workflows.triage.vocabulary import (
     REDACTION_LLM_ANNOTATION,
     REDACTION_OWED,
     REVIEWER_CLEARED_RESCAN,
-    REVIEWER_NEEDS_HUMAN_REVIEW,
+    REVIEWER_NEEDS_HUMAN_REVIEW_COHORT,
+    REVIEWER_NEEDS_HUMAN_REVIEW_OTHER,
     REVIEWER_PROPOSED_REDACTION,
     REVIEWER_UNMASKED_ALL,
     REVIEWER_UNMASKED_SOME,
@@ -925,7 +926,7 @@ class TestTheRedactionReviewerAnnotatesAndThisNodeDecides:
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
         assert (result.file_verdict.release, result.file_verdict.release_ground) == (
             Release.WITHHELD,
-            REVIEWER_NEEDS_HUMAN_REVIEW,
+            REVIEWER_NEEDS_HUMAN_REVIEW_COHORT,
         )
         ledger = find_measurement(store, PII_LEDGER)
         assert ledger is not None
@@ -935,10 +936,37 @@ class TestTheRedactionReviewerAnnotatesAndThisNodeDecides:
             ["essential", "tremors"],
             True,
         )
+        assert (proposal["condition_kind"], proposal["cohort_diagnosis"]) == ("cohort", "essential_tremor")
+        assert (ledger.attributes["human_review_kind"], ledger.attributes["cohort_diagnoses"]) == (
+            "cohort",
+            ["essential_tremor"],
+        )
         morning = next(
             word for mask in ledger.attributes["masks"] for word in mask["words"] if word["text"] == "morning"
         )
         assert (morning["state"], morning["named"]) == ("unmasked_by_reviewer", True)
+
+    def test_a_condition_outside_the_cohorts_is_held_as_other(
+        self, make_verdict_store: Callable[..., ProvStore], tmp_path: Path
+    ) -> None:
+        """r6's other half of that card: a joint cyst is not a condition the study recruits for."""
+        config = _policy_config(tmp_path, "verdict:\n  llm_redaction_withholds: true\n")
+        store = make_verdict_store(concluded=[*BASE, ("REDACT", Outcome.PASS, None)], routed=ROUTED_PAIR, pii_n=1)
+        self._mask(store, ["a", "synovial", "joint", "cyst", "this", "morning"], [5])
+        _annotate(
+            store,
+            status="flagged",
+            redaction="complete",
+            original="carries_pii",
+            flagged=["CONDITION"],
+            proposal=[{"text": "synovial joint cyst", "action": "redact", "category": "CONDITION"}],
+        )
+        result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
+        assert result.file_verdict.release_ground == REVIEWER_NEEDS_HUMAN_REVIEW_OTHER
+        ledger = find_measurement(store, PII_LEDGER)
+        assert ledger is not None
+        assert ledger.attributes["human_review_kind"] == "other"
+        assert ledger.attributes["counts"]["other_condition_n"] == 1
 
     def test_the_clearing_key_ships_on(self) -> None:
         """Owner, 2026-09-26: the reviewer, which already read these, decides a re-scan fail."""
