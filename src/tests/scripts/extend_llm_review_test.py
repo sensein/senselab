@@ -22,9 +22,10 @@ import pytest
 import soundfile as sf
 
 from senselab.audio.workflows.triage.config import load_triage_config
-from senselab.audio.workflows.triage.extend import REFOLD_MARKER_STEP, REFOLD_NODE
+from senselab.audio.workflows.triage.extend import REFOLD_MARKER_STEP, REFOLD_NODE, refold_verdict
 from senselab.audio.workflows.triage.nodes import review as review_module
 from senselab.audio.workflows.triage.nodes.common import software_agent, write_verdict
+from senselab.audio.workflows.triage.nodes.redact import PII_LEDGER
 from senselab.audio.workflows.triage.run import LOG_FILE
 from senselab.audio.workflows.triage.vocabulary import REDACTION_LLM_ANNOTATION, Outcome
 from senselab.text.tasks.pii_detection.redaction_review import ReviewProposal, ReviewResult
@@ -174,6 +175,31 @@ def _stub(monkeypatch: pytest.MonkeyPatch, *proposal: ReviewProposal) -> list[in
     return calls
 
 
+_CUDA_FAILURE = "AcceleratorError: CUDA error: an illegal memory access was encountered"
+
+
+def _stub_failing(monkeypatch: pytest.MonkeyPatch) -> list[int]:
+    """Replace the reviewer with one whose worker faults, as node2119's did on r6 slices 25 and 34."""
+    calls: list[int] = []
+
+    def _fake(original: str, **kw: Any) -> ReviewResult:  # noqa: ANN401
+        calls.append(1)
+        return ReviewResult(
+            available=False,
+            reasoning="",
+            redaction="",
+            original="",
+            speakers="",
+            proposal=[],
+            model_id="stub/model",
+            revision=None,
+            failure=_CUDA_FAILURE,
+        )
+
+    monkeypatch.setattr(review_module, "review_transcript", _fake)
+    return calls
+
+
 def _annotations(run_root: Path) -> list[dict[str, Any]]:
     """Every live annotation the written store holds."""
     store = ProvStore.read_jsonl(run_root / "run" / "store.jsonl", run_id=run_root.name)
@@ -251,6 +277,28 @@ class TestTheDecisionIsTakenAgainOverTheReading:
         assert store.is_invalidated(held["VERDICT"])
         live = [entity for entity in store.entities("verdict") if not store.is_invalidated(entity.id)]
         assert [entity.attributes["node"] for entity in live].count("VERDICT") == 1
+
+    def test_an_unchanged_re_fold_keeps_one_live_ledger(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The store is content-addressed: a second fold mints the same ledger, which must stay live."""
+        run_root = _finished_run(tmp_path / "corpus")
+        _seed_verdicts(run_root)
+        config = _config(tmp_path)
+        store = ProvStore.read_jsonl(run_root / "run" / "store.jsonl", run_id=run_root.name)
+        for _ in range(2):
+            refold_verdict(
+                store,
+                config,
+                None,
+                run_dir=run_root / "run",
+                artifacts_dir=run_root / "released",
+                summary_dir=tmp_path / "summary",
+            )
+        live = [
+            entity
+            for entity in store.entities("measurement")
+            if entity.attributes.get("name") == PII_LEDGER and not store.is_invalidated(entity.id)
+        ]
+        assert len(live) == 1
 
     def test_only_verdicts_own_conclusion_is_retired(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """What separates this from the replay driver: every other node's verdict stands."""
@@ -393,6 +441,44 @@ class TestItIsResumableTheWayTheFamilyIs:
         assert second["counts"] == {"present": 1}
         assert len(calls) == 1, "the second pass contacted the model again"
         assert len(_annotations(run_root)) == 1
+
+    def test_a_failed_reading_is_an_error_and_a_resubmission_reads_again(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A faulted worker reads nothing: the row is an error, nothing is written, the retry reads."""
+        run_root = _finished_run(tmp_path / "corpus")
+        manifest = _manifest(tmp_path, run_root)
+        _stub_failing(monkeypatch)
+        first = cli.run_slice(manifest, slice_index=0, slice_count=1, config=_config(tmp_path), log_dir=tmp_path)
+        assert first["counts"] == {"error": 1}
+        assert _annotations(run_root) == []
+        calls = _stub(monkeypatch)
+        second = cli.run_slice(manifest, slice_index=0, slice_count=1, config=_config(tmp_path), log_dir=tmp_path)
+        assert second["counts"] == {"ok": 1}
+        assert len(calls) == 1
+        assert [annotation["status"] for annotation in _annotations(run_root)] == ["clean"]
+
+    def test_a_failed_reading_already_in_a_store_does_not_stand(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """What r6 left on 715 stores: an ``absent`` annotation carrying the failure is not a reading."""
+        run_root = _finished_run(tmp_path / "corpus")
+        store = ProvStore.read_jsonl(run_root / "run" / "store.jsonl", run_id=run_root.name)
+        activity = store.activity(node="REVIEW", step="llm_check", parameters={"enabled": True})
+        store.was_associated_with(activity, software_agent(store))
+        failed = store.entity(
+            prov_type="measurement",
+            extent=None,
+            attributes={"name": REDACTION_LLM_ANNOTATION, "status": "absent", "failure": _CUDA_FAILURE},
+        )
+        store.was_generated_by(failed, activity)
+        store.write_jsonl(run_root / "run" / "store.jsonl")
+        assert cli.standing(store) is None
+        _stub(monkeypatch)
+        summary = cli.run_slice(
+            _manifest(tmp_path, run_root), slice_index=0, slice_count=1, config=_config(tmp_path), log_dir=tmp_path
+        )
+        assert summary["counts"] == {"ok": 1}
 
     def test_a_disabled_reading_review_left_is_not_a_standing_reading(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

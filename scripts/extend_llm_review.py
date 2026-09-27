@@ -97,7 +97,7 @@ from senselab.audio.workflows.triage.nodes.common import (
     software_agent,
 )
 from senselab.audio.workflows.triage.nodes.redact import STREAM_NAME as REDACTED_STREAM
-from senselab.audio.workflows.triage.nodes.review import DISABLED, NODE, apply_proposal, review
+from senselab.audio.workflows.triage.nodes.review import ABSENT, DISABLED, NODE, apply_proposal, review
 from senselab.audio.workflows.triage.run import RELEASE_SUBDIR, REPORT_NODE, SUMMARY_SUBDIR
 from senselab.audio.workflows.triage.vocabulary import REDACTION_LLM_ANNOTATION
 from senselab.utils.prov_store import Entity, ProvStore
@@ -194,13 +194,15 @@ def standing(store: ProvStore) -> Entity | None:
     ``llm_check`` step -- ``disabled`` over the whole r4 corpus, because the packaged config leaves
     the reviewer off -- and counting that as a standing reading makes the whole pass a silent no-op
     that reports ``present`` on every row. The same holds for REVIEW's own ``disabled`` annotation,
-    which a replay under the packaged config writes into every store it touches.
+    which a replay under the packaged config writes into every store it touches, and for an
+    ``absent`` annotation carrying a ``failure``: the reviewer was invoked and read nothing.
 
     Args:
         store: The run's store.
 
     Returns:
-        The annotation entity, or None where REVIEW has left none or left only ``disabled``.
+        The annotation entity, or None where REVIEW has left none, left only ``disabled``, or left
+        only a failed attempt.
     """
     annotation = find_measurement(store, REDACTION_LLM_ANNOTATION)
     if annotation is None:
@@ -212,9 +214,24 @@ def standing(store: ProvStore) -> Entity | None:
         node = store.get_activity(activity_id).node
     except KeyError:
         return None
-    if node != NODE or annotation.attributes.get("status") == DISABLED:
+    if node != NODE or annotation.attributes.get("status") == DISABLED or failed_reading(annotation) is not None:
         return None
     return annotation
+
+
+def failed_reading(annotation: Entity | None) -> str | None:
+    """Why an annotation records a reviewer invocation that produced no reading, if it does.
+
+    Args:
+        annotation: A ``redaction_llm_annotation`` entity, or None.
+
+    Returns:
+        The recorded failure where the status is ``absent`` and a failure is named, else None.
+    """
+    if annotation is None or annotation.attributes.get("status") != ABSENT:
+        return None
+    failure = annotation.attributes.get("failure")
+    return str(failure) if failure else None
 
 
 def live_annotations(store: ProvStore) -> list[str]:
@@ -306,7 +323,9 @@ def extend_one(
 
     Returns:
         ``{status, REVIEW}`` -- ``ok`` when a reading landed, ``present`` when one already stood,
-        ``error`` when the store would not open or the node refused it. A re-fold adds ``refold``
+        ``error`` when the store would not open, the node refused it, or the reviewer was invoked and
+        read nothing. A failed invocation is not written, so the store keeps whatever reading it had
+        and a resubmission reads it again. A re-fold adds ``refold``
         with the two axes it reached, or the reason it could not run.
     """
     try:
@@ -324,6 +343,9 @@ def extend_one(
         )
     if outcome.failed:
         return {"status": ERROR, NODE: outcome.detail}
+    failure = failed_reading(find_measurement(store, REDACTION_LLM_ANNOTATION))
+    if failure is not None:
+        return {"status": ERROR, NODE: f"{ABSENT}: {failure}"}
     if store.fingerprint() == before:
         return {"status": PRESENT, NODE: outcome.detail}
     capture_environments(store, used)
