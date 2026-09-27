@@ -171,19 +171,19 @@ where they were. So the title above no longer holds in full: exactly one kind of
 cleared by the reviewer rather than by a person. `specs/20260926-redact-rescan-survival/design.md`
 has the measurement.
 
-**The same day the owner let the reviewer thin a released copy.** Owner: *"released with redaction ->
-only if the reviewer considers resetting the redaction to the original prose is not fine, otherwise
-release without redaction or partial redaction."* A third declared parameter, `reviewer_resets`,
-resolved from `verdict.llm_reset_redactions`, reads the reading's `release` entries as masks to reset
-to the original words. Where the copy is released with redaction: no mask reset keeps it; some
-reset releases a **partial** redaction, still `release_with_redaction`, under
-`REVIEWER_RESET_SOME_MASKS`; every mask reset releases the **original**, `release_without_redaction`,
-under `REVIEWER_RESET_EVERY_MASK`. The axis keeps its four values: it answers which artefact may be
-handed on, and a partial redaction is still the redacted copy, with its own mask set named by the
-ground. A reading that proposes a `redact` resets nothing, one that read the original as carrying PII
-never releases it whole, and no reset moves `withheld` or `not_assessed`. `vocabulary_test.py`
-asserts the parameter set is closed at these three; `specs/20260926-reviewer-reset-redaction/design.md`
-has the mapping and the measurement.
+**The same day the owner let the reviewer thin a released copy, and the next day made it word-level.**
+Owner, 2026-09-26: *"released with redaction -> only if the reviewer considers resetting the
+redaction to the original prose is not fine, otherwise release without redaction or partial
+redaction."* Owner, 2026-09-27: *"the reviewer should indicate specifically what words or masks to
+unmask or what words to mask. this could involve the entire mask or part of a mask. it should never
+keep not content words masked if that happens."* Which masks stand is decided before the fold, in
+`nodes/redact.py`'s `mask_plan`, and reaches `_release_from` on the evidence (`masks_final_n`,
+`masks_changed`, `reviewer_unmasked_n`), not as a parameter. A partial redaction is still the
+redacted copy, `release_with_redaction`, under `REVIEWER_UNMASKED_SOME` or, where no reviewer was
+involved, `MASKS_TRIMMED_TO_CONTENT`; no mask left releases the **original** under
+`REVIEWER_UNMASKED_ALL` or `NO_CONTENT_MASKED`. `vocabulary_test.py` asserts the parameter set is
+closed at two reviewer parameters, `reviewer_withholds` (now the withholding ground, or None) and
+`reviewer_clears`. `specs/20260927-pii-span-ledger/design.md` has the rule and the measurement.
 
 ## 6. The reviewer action on the free-speech page
 

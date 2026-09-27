@@ -69,7 +69,7 @@ from senselab.audio.workflows.triage.nodes.quality import (
     clip_spans,
     quality,
 )
-from senselab.audio.workflows.triage.nodes.redact import settle_release
+from senselab.audio.workflows.triage.nodes.redact import PII_LEDGER, settle_release
 from senselab.audio.workflows.triage.nodes.report import report
 from senselab.audio.workflows.triage.nodes.taxonomy import NODE as TAXONOMY_NODE
 from senselab.audio.workflows.triage.nodes.taxonomy import _write_consensus_taxonomy
@@ -752,11 +752,9 @@ def refold_verdict(
     # retiring first invalidates it and the re-fold hands it straight back, leaving the recording
     # with no live verdict at all. Measured -- a second pass over one run left 0 live and 2 retired
     # -- and a preempted slice is re-run by definition, so this is the ordinary path, not an edge.
-    retired = retire_decisions(
-        store,
-        [entity_id for entity_id in held if folded is None or entity_id != folded.id],
-        software=software,
-    )
+    ledger = find_measurement(store, PII_LEDGER)
+    fresh = {entity.id for entity in (folded, ledger) if entity is not None}
+    retired = retire_decisions(store, [entity_id for entity_id in held if entity_id not in fresh], software=software)
     _settle(store, config, run_dir=run_dir, artifacts_dir=artifacts_dir)
     summary = _attempt_artifacts(outcomes, REPORT_NODE, lambda: report(store, summary_dir, config, run_dir=run_dir))
     # The marker says which configuration and commit folded this store, and deliberately not how

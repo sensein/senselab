@@ -57,10 +57,10 @@ from senselab.audio.workflows.triage.nodes.common import (
     write_stream,
     write_verdict,
 )
+from senselab.audio.workflows.triage.residue import is_content_word
 from senselab.audio.workflows.triage.stimulus import NearMatch, near_match, split_prompts
 from senselab.audio.workflows.triage.vocabulary import (
     REDACTION_LLM_ANNOTATION,
-    REVIEWER_RESET_SOME_MASKS,
     Outcome,
     Release,
 )
@@ -122,7 +122,7 @@ class _Verification:
     missing: list[str]
 
 
-def _padding_ms(config: TriageConfig) -> int:
+def padding_ms(config: TriageConfig) -> int:
     """The redaction margin, in whole milliseconds.
 
     Args:
@@ -392,16 +392,20 @@ def _word_record(word: Entity) -> dict[str, Any]:
     }
 
 
-def _render(words: list[Entity], planned: list[RedactionExtent]) -> tuple[list[dict[str, Any]], str, int]:
+def _render(
+    words: list[Entity], planned: list[RedactionExtent], owners: Mapping[str, int] | None = None
+) -> tuple[list[dict[str, Any]], str, int]:
     """The redacted consensus stream, as records and as the flat text derived from them.
 
-    Words are released in stream order. Every word a planned extent overlaps folds into one
-    ``redaction`` record emitted at the first such position; a word the store places nowhere becomes
-    an ``unplaced`` record. Neither record carries ``text``, ``readings`` or ``variants``.
+    Words are released in stream order. Every word an extent hides folds into one ``redaction``
+    record emitted at the first such position; a word the store places nowhere becomes an
+    ``unplaced`` record. Neither record carries ``text``, ``readings`` or ``variants``.
 
     Args:
         words: PREPROCESS's consensus words, in stream order.
-        planned: The padded, merged extents.
+        planned: The extents.
+        owners: Which extent hides each masked word, by index into ``planned``, as the fold's
+            ledger records it. None hides every word an extent overlaps, which is REDACT's own plan.
 
     Returns:
         ``(records, text, unplaced_n)``, ``text`` being the join of each record's placeholder or
@@ -415,8 +419,11 @@ def _render(words: list[Entity], planned: list[RedactionExtent]) -> tuple[list[d
             unplaced += 1
             records.append({"kind": "unplaced", "index": int(word.attributes["index"]), "token": _UNPLACED_PLACEHOLDER})
             continue
-        hull = word_hull(word)
-        index = next((i for i, p in enumerate(planned) if _overlaps(hull, (p.start, p.end))), None)
+        if owners is None:
+            hull = word_hull(word)
+            index = next((i for i, p in enumerate(planned) if _overlaps(hull, (p.start, p.end))), None)
+        else:
+            index = owners.get(word.id)
         if index is None:
             records.append(_word_record(word))
         elif index not in position:
@@ -740,7 +747,7 @@ def redact(
 
     Raises:
         ValueError: If ``redaction.fill`` has no value, if ``redaction.padding_ms`` has no usable
-            value (see :func:`_padding_ms`), if ``artifacts_dir`` and ``run_dir`` contain one
+            value (see :func:`padding_ms`), if ``artifacts_dir`` and ``run_dir`` contain one
             another, if any ``redaction.llm_check`` key is unmeasured, if the store carries no PII
             scan measurement (N15), or if a finding's category is unusable (see
             :func:`_extents_from_findings`).
@@ -748,7 +755,7 @@ def redact(
     """
     fill = str(config.require(_FILL_KEY))
     bleep_hz = config.get(_BLEEP_HZ_KEY)
-    padding_ms = _padding_ms(config)
+    margin_ms = padding_ms(config)
     required_detectors = sorted(str(name) for name in config.require(_REQUIRED_DETECTORS_KEY))
     run_resolved, release_resolved = run_dir.resolve(), artifacts_dir.resolve()
     if run_resolved.is_relative_to(release_resolved) or release_resolved.is_relative_to(run_resolved):
@@ -773,7 +780,7 @@ def redact(
     consulted = _pii_marking_assertions(store)
     marked = _pii_marked_words(store)
 
-    planned = plan_redactions(extents, padding_ms=padding_ms)
+    planned = plan_redactions(extents, padding_ms=margin_ms)
     records, transcript_text, unplaced_n = _render(words, planned)
     checked = (
         _verify(_render(residue, planned)[0], required_detectors)
@@ -797,7 +804,7 @@ def redact(
                 hull = word_hull(word)
                 extents.append(RedactionExtent(start=hull[0], end=hull[1], category=category))
                 widened.append((hull, marks[category]))
-        planned = plan_redactions(extents, padding_ms=padding_ms)
+        planned = plan_redactions(extents, padding_ms=margin_ms)
         records, transcript_text, unplaced_n = _render(words, planned)
         checked = _verify(_render(residue, planned)[0], required_detectors)
         attributed = _expected_survivors(checked.survived, residue, marked, planned, exempt_word_ids)
@@ -810,7 +817,7 @@ def redact(
     software = software_agent(store)
     view: list[str] = []
 
-    plan_act = store.activity(node=NODE, step="plan", parameters={"padding_ms": padding_ms, "replanned_n": replanned_n})
+    plan_act = store.activity(node=NODE, step="plan", parameters={"padding_ms": margin_ms, "replanned_n": replanned_n})
     store.was_associated_with(plan_act, software)
     store.used(plan_act, scan_measurement.id)
     for finding in findings:
@@ -947,7 +954,7 @@ def redact(
         detail={
             "redactions_n": len(planned),
             "by_category": dict(Counter(extent.category for extent in planned)),
-            "padding_ms": padding_ms,
+            "padding_ms": margin_ms,
             "fill": fill,
             "verified": checked.verified,
             "survived": checked.survived,
@@ -991,106 +998,531 @@ def _match_token(text: str) -> str:
     return text.replace("\u2019", "'").strip(_QUOTE_EDGE).lower()
 
 
+MASKED = "masked"
+"""A word a mask still hides in the released copy."""
+
+UNMASKED_BY_REVIEWER = "unmasked_by_reviewer"
+"""A word a mask hid that a reviewer ``release`` entry named, and the fold let the entry unmask."""
+
+UNMASKED_BY_TRIM = "unmasked_by_trim"
+"""A word a mask hid that is not content: a closed-class word, a filler, a marker, or task content."""
+
+PROPOSED_BY_REVIEWER = "proposed_by_reviewer"
+"""A word a reviewer ``redact`` entry named that no mask hides."""
+
+WORD_STATES = (MASKED, UNMASKED_BY_REVIEWER, UNMASKED_BY_TRIM, PROPOSED_BY_REVIEWER)
+
+MASK_UNCHANGED = "unchanged"
+MASK_TRIMMED = "trimmed"
+MASK_PARTLY_UNMASKED = "partly_unmasked"
+MASK_UNMASKED = "unmasked"
+MASK_OUTCOMES = (MASK_UNCHANGED, MASK_TRIMMED, MASK_PARTLY_UNMASKED, MASK_UNMASKED)
+"""What became of one planned mask: kept whole, trimmed to its content words only, some of its words
+unmasked by the reviewer, or none of its words left masked."""
+
+PII_LEDGER = "pii_ledger"
+"""The measurement VERDICT writes: every PII span, the words it covers and their state."""
+
+PLACED_WORDS = "words"
+PLACED_SUBSTRING = "substring"
+
+
 @dataclass(frozen=True)
-class MaskReset:
-    """Which of REDACT's masks the reviewer's ``release`` entries reset to the original words.
+class MaskWord:
+    """One word a planned mask covers, and what became of it.
 
     Attributes:
-        planned: REDACT's masks, in stream order.
-        kept: The masks no ``release`` entry reset, in stream order.
-        reset_n: How many masks were reset.
-        unplaced: The ``release`` quotes that match no run of the recording's residue words.
-        straddling_n: Masks some but not all of whose residue words a quote names, over an
-            original not read as clean; kept.
+        word_id: The consensus word's entity id.
+        text: Its surface.
+        state: :data:`MASKED`, :data:`UNMASKED_BY_REVIEWER` or :data:`UNMASKED_BY_TRIM`.
+        named: Whether a reviewer ``release`` entry named it, whether or not the fold applied it.
+        content: Whether it is a residue content word, the only kind a mask keeps.
     """
 
-    planned: list[RedactionExtent]
-    kept: list[RedactionExtent]
-    reset_n: int
-    unplaced: tuple[str, ...]
-    straddling_n: int
+    word_id: str
+    text: str
+    state: str
+    named: bool
+    content: bool
 
 
-def reviewer_reset(store: ProvStore) -> MaskReset:
-    """Which masks the reviewer's ``release`` entries reset, decided the same way on every read.
+@dataclass(frozen=True)
+class MaskOutcome:
+    """One planned mask and what the word-level rule made of it.
 
-    A quote is matched as a run of whole tokens against the residue words the reviewer read, at
-    every place it occurs. Where the reviewer read the original as clean, a mask is reset once a
-    matched run names any residue word it hides: the other words a padded mask folds in are part of
-    an original the reviewer already judged. Otherwise a mask is reset only where every residue word
-    it hides lies inside a matched run. A mask hiding no residue word is kept, and a quote matching
-    nothing resets nothing.
+    Attributes:
+        planned: REDACT's padded, merged extent.
+        words: Every consensus word the extent covers, in stream order.
+        final: The extents that stay masked, one per run of adjacent kept words; the planned extent
+            itself where no word changed state, and empty where no word stays masked.
+        final_words: The masked word ids each of ``final`` hides, aligned with it.
+        outcome: One of :data:`MASK_OUTCOMES`.
+    """
+
+    planned: RedactionExtent
+    words: tuple[MaskWord, ...]
+    final: tuple[RedactionExtent, ...]
+    final_words: tuple[tuple[str, ...], ...]
+    outcome: str
+
+
+@dataclass(frozen=True)
+class ReviewerSpan:
+    """One reviewer ``redact`` entry, placed on the words it names.
+
+    Attributes:
+        category: The category the reviewer gave it, upper-cased.
+        text: The quote, verbatim.
+        placed: :data:`PLACED_WORDS` where it matched whole-token runs, :data:`PLACED_SUBSTRING`
+            where only a substring of the residue matched, empty where nothing did.
+        word_ids: Every word it names, over every place it occurs.
+        texts: Their surfaces.
+        masked_ids: Those of them a final mask already hides.
+        human_review: Whether its category is one the fold routes to human review.
+    """
+
+    category: str
+    text: str
+    placed: str
+    word_ids: tuple[str, ...]
+    texts: tuple[str, ...]
+    masked_ids: tuple[str, ...]
+    human_review: bool
+
+
+@dataclass(frozen=True)
+class MaskPlan:
+    """Which words stay masked once the reviewer's unmasks and the content-word trim are applied.
+
+    Attributes:
+        masks: One outcome per planned mask, in stream order.
+        reviewer_applied: Whether the reviewer's ``release`` entries were applied.
+        reviewer_guarded: Whether they were withheld because they would have unmasked every word of
+            an original the reviewer itself read as carrying PII.
+        release_unplaced: ``release`` quotes that match no run of residue words.
+        release_off_mask: ``release`` quotes that match words no mask covers.
+        proposals: The reviewer's ``redact`` entries, placed.
+        padding_ms: The margin kept around each run of masked words.
+    """
+
+    masks: tuple[MaskOutcome, ...]
+    reviewer_applied: bool
+    reviewer_guarded: bool
+    release_unplaced: tuple[str, ...]
+    release_off_mask: tuple[str, ...]
+    proposals: tuple[ReviewerSpan, ...]
+    padding_ms: int
+
+    @property
+    def planned(self) -> list[RedactionExtent]:
+        """REDACT's own extents, in stream order."""
+        return [mask.planned for mask in self.masks]
+
+    @property
+    def final(self) -> list[RedactionExtent]:
+        """The extents that stay masked, in stream order."""
+        return [extent for mask in self.masks for extent in mask.final]
+
+    @property
+    def changed(self) -> bool:
+        """Whether any planned mask lost a word."""
+        return any(mask.outcome != MASK_UNCHANGED for mask in self.masks)
+
+    def owners(self) -> dict[str, int]:
+        """Which final extent hides each masked word, by index into :attr:`final`."""
+        owners: dict[str, int] = {}
+        index = 0
+        for mask in self.masks:
+            for members in mask.final_words:
+                for word_id in members:
+                    owners.setdefault(word_id, index)
+                index += 1
+        return owners
+
+    def count(self, state: str) -> int:
+        """How many words are in one state; :data:`PROPOSED_BY_REVIEWER` counts unmasked proposed words."""
+        if state == PROPOSED_BY_REVIEWER:
+            return len({i for span in self.proposals for i in span.word_ids if i not in span.masked_ids})
+        return len({word.word_id for mask in self.masks for word in mask.words if word.state == state})
+
+    def categories(self, state: str) -> list[str]:
+        """The categories carrying at least one word in one state, sorted."""
+        if state == PROPOSED_BY_REVIEWER:
+            return sorted({span.category for span in self.proposals if set(span.word_ids) - set(span.masked_ids)})
+        return sorted({mask.planned.category for mask in self.masks if any(word.state == state for word in mask.words)})
+
+    def record(self, *, release: str, release_ground: str | None) -> dict[str, Any]:
+        """The ledger, as the measurement VERDICT writes carries it.
+
+        Args:
+            release: The fold's release axis value.
+            release_ground: The fold's release ground.
+
+        Returns:
+            JSON-ready attributes. Word surfaces are the store's own transcript words; the released
+            artifacts carry none of the masked ones.
+        """
+        owners = self.owners()
+        return {
+            "name": PII_LEDGER,
+            "release": release,
+            "release_ground": release_ground,
+            "reviewer_applied": self.reviewer_applied,
+            "reviewer_guarded": self.reviewer_guarded,
+            "padding_ms": self.padding_ms,
+            "masks": [
+                {
+                    "category": mask.planned.category,
+                    "start_s": float(mask.planned.start),
+                    "end_s": float(mask.planned.end),
+                    "outcome": mask.outcome,
+                    "words": [
+                        {
+                            "id": word.word_id,
+                            "text": word.text,
+                            "state": word.state,
+                            "named": word.named,
+                            "content": word.content,
+                        }
+                        for word in mask.words
+                    ],
+                }
+                for mask in self.masks
+            ],
+            "final_masks": [
+                {
+                    "category": extent.category,
+                    "start_s": float(extent.start),
+                    "end_s": float(extent.end),
+                    "word_ids": sorted(word_id for word_id, owner in owners.items() if owner == index),
+                }
+                for index, extent in enumerate(self.final)
+            ],
+            "proposals": [
+                {
+                    "category": span.category,
+                    "text": span.text,
+                    "placed": span.placed,
+                    "word_ids": list(span.word_ids),
+                    "texts": list(span.texts),
+                    "masked_ids": list(span.masked_ids),
+                    "human_review": span.human_review,
+                }
+                for span in self.proposals
+            ],
+            "release_unplaced": list(self.release_unplaced),
+            "release_off_mask": list(self.release_off_mask),
+            "counts": {
+                "masks_n": len(self.masks),
+                "final_masks_n": len(self.final),
+                **{
+                    f"{outcome}_n": sum(1 for mask in self.masks if mask.outcome == outcome)
+                    for outcome in MASK_OUTCOMES
+                },
+                **{f"{state}_n": self.count(state) for state in WORD_STATES},
+            },
+            "categories": {state: self.categories(state) for state in WORD_STATES},
+            "human_review": any(span.human_review for span in self.proposals),
+        }
+
+
+def _tokens(words: Sequence[Entity]) -> list[tuple[str, Entity]]:
+    """The residue words a quote is matched against, each as its matching token.
+
+    Args:
+        words: The residue words, in stream order.
+
+    Returns:
+        ``(token, word)`` for every non-bracketed, timed word whose token is not empty.
+    """
+    tokens = [
+        (_match_token(str(word.attributes.get("text") or "")), word)
+        for word in words
+        if not word.attributes.get("bracketed") and word.extent is not None
+    ]
+    return [(token, word) for token, word in tokens if token]
+
+
+def _place(quote: str, tokens: Sequence[tuple[str, Entity]]) -> list[Entity]:
+    """Every word a quote names, as whole-token runs, over every place it occurs.
+
+    Args:
+        quote: The reviewer's quote.
+        tokens: :func:`_tokens`' output.
+
+    Returns:
+        The words, in stream order, without repeats. Empty where the quote matches no run.
+    """
+    wanted = [token for token in (_match_token(piece) for piece in quote.split()) if token]
+    width = len(wanted)
+    surfaces = [token for token, _ in tokens]
+    named: dict[str, Entity] = {}
+    if width:
+        for start in range(len(surfaces) - width + 1):
+            if surfaces[start : start + width] == wanted:
+                for _, word in tokens[start : start + width]:
+                    named[word.id] = word
+    return list(named.values())
+
+
+def _place_substring(quote: str, words: Sequence[Entity]) -> list[Entity]:
+    """The words a quote overlaps as a substring of the residue text, where no whole-token run matched.
+
+    Args:
+        quote: The reviewer's quote.
+        words: The residue words, in stream order.
+
+    Returns:
+        Every word the first occurrence overlaps. Empty where the text does not contain the quote.
+    """
+    parts: list[str] = []
+    spans: list[tuple[int, int, Entity]] = []
+    cursor = 0
+    for word in words:
+        if word.attributes.get("bracketed"):
+            continue
+        surface = str(word.attributes.get("text") or "")
+        if parts:
+            cursor += 1
+        parts.append(surface)
+        spans.append((cursor, cursor + len(surface), word))
+        cursor += len(surface)
+    needle = quote.strip().lower()
+    at = " ".join(parts).lower().find(needle) if needle else -1
+    if at == -1:
+        return []
+    end = at + len(needle)
+    return [word for first, last, word in spans if first < end and last > at]
+
+
+def _final_extents(
+    kept: Sequence[Entity],
+    words: Sequence[Entity],
+    kept_ids: set[str],
+    category: str,
+    padding_s: float,
+) -> list[tuple[RedactionExtent, tuple[str, ...]]]:
+    """The extents that silence one mask's kept words and leave every other word audible.
+
+    Kept words adjacent in the stream form one run. A run's extent is its words' timing hull widened
+    by the padding on each side; the widening stops where the nearest word left unmasked on that
+    side ends (or begins), and the extent never shrinks below the run's own consensus extents.
+
+    Args:
+        kept: The mask's words that stay masked.
+        words: Every timed consensus word of the recording, in stream order.
+        kept_ids: The ids of every word any mask keeps.
+        category: The mask's category.
+        padding_s: The margin, in seconds.
+
+    Returns:
+        One ``(extent, word_ids)`` per run, in stream order.
+    """
+    order = {word.id: position for position, word in enumerate(words)}
+    runs: list[list[Entity]] = []
+    for word in sorted(kept, key=lambda item: order[item.id]):
+        if runs and order[word.id] == order[runs[-1][-1].id] + 1:
+            runs[-1].append(word)
+        else:
+            runs.append([word])
+    out: list[tuple[RedactionExtent, tuple[str, ...]]] = []
+    for run in runs:
+        first, last = order[run[0].id], order[run[-1].id]
+        previous = next((words[i] for i in range(first - 1, -1, -1) if words[i].id not in kept_ids), None)
+        following = next((words[i] for i in range(last + 1, len(words)) if words[i].id not in kept_ids), None)
+        start = min(word_hull(word)[0] for word in run) - padding_s
+        end = max(word_hull(word)[1] for word in run) + padding_s
+        if previous is not None and previous.extent is not None:
+            start = max(start, float(previous.extent[1]))
+        if following is not None and following.extent is not None:
+            end = min(end, float(following.extent[0]))
+        start = min(start, min(float(word.extent[0]) for word in run if word.extent is not None))
+        end = max(end, max(float(word.extent[1]) for word in run if word.extent is not None))
+        out.append((RedactionExtent(start=start, end=end, category=category), tuple(word.id for word in run)))
+    return out
+
+
+def mask_plan(
+    store: ProvStore,
+    *,
+    reviewer_applies: bool,
+    padding_ms: int,
+    human_review_categories: Sequence[str] = (),
+) -> MaskPlan:
+    """Which words stay masked: REDACT's plan, the reviewer's unmasks, and the content-word trim.
+
+    Each planned mask covers the consensus words its extent overlaps. A word leaves the mask when a
+    reviewer ``release`` entry names it -- whole-token runs, at every place the quote occurs -- and
+    ``reviewer_applies``; or when it is not a residue content word
+    (:func:`~senselab.audio.workflows.triage.residue.is_content_word`), which no mask ever keeps. The
+    kept words of each mask are re-cut into one extent per adjacent run. A mask whose words all left
+    disappears; a mask covering no word at all is kept as planned. Where applying the reviewer's
+    entries would leave no mask over an original the reviewer read as carrying PII, they are not
+    applied. The rule and its derivation are in ``specs/20260927-pii-span-ledger/design.md``.
 
     Args:
         store: The provenance store, carrying REDACT's planned spans, SPEECH's residue and REVIEW's
             annotation.
+        reviewer_applies: Whether the fold lets the reviewer's ``release`` entries unmask words.
+        padding_ms: ``redaction.padding_ms``, the margin kept around each run of masked words.
+        human_review_categories: Upper-cased categories whose ``redact`` entries the fold routes to
+            human review; marked on the ledger's proposals.
 
     Returns:
-        The reset. Nothing is reset where REDACT planned no mask, REVIEW wrote no annotation, or
-        the store predates the lexical residue.
+        The plan. Every mask is unchanged where REDACT planned none or the store predates the residue.
     """
     planned = planned_extents(store)
     annotation = find_measurement(store, REDACTION_LLM_ANNOTATION)
-    quotes = [
-        str(entry.get("text") or "")
-        for entry in ((annotation.attributes.get("proposal") or ()) if annotation is not None else ())
-        if str(entry.get("action")) == "release"
-    ]
-    unchanged = MaskReset(planned=planned, kept=list(planned), reset_n=0, unplaced=(), straddling_n=0)
-    if not planned or not quotes:
-        return unchanged
+    entries = list((annotation.attributes.get("proposal") or ()) if annotation is not None else ())
+    identifying = annotation is not None and annotation.attributes.get("original") == "carries_pii"
     try:
         residue = residue_words(store)
     except ValueError:
-        return unchanged
-    tokens = [
-        (_match_token(str(word.attributes.get("text") or "")), word)
-        for word in residue
-        if not word.attributes.get("bracketed") and word.extent is not None
-    ]
-    tokens = [(token, word) for token, word in tokens if token]
-    surfaces = [token for token, _ in tokens]
-    released: set[str] = set()
+        residue = []
+    residue_ids = {word.id for word in residue}
+    tokens = _tokens(residue)
+    words = [word for word in consensus_words(store) if word.extent is not None]
+    covered = [[word for word in words if _overlaps(word_hull(word), (extent.start, extent.end))] for extent in planned]
+    under_masks = {word.id for group in covered for word in group}
+
+    named: set[str] = set()
     unplaced: list[str] = []
-    for quote in quotes:
-        wanted = [token for token in (_match_token(piece) for piece in quote.split()) if token]
-        width = len(wanted)
-        starts = [i for i in range(len(surfaces) - width + 1) if width and surfaces[i : i + width] == wanted]
-        if not starts:
+    off_mask: list[str] = []
+    for entry in entries:
+        if str(entry.get("action")) != "release":
+            continue
+        quote = str(entry.get("text") or "")
+        hits = _place(quote, tokens)
+        if not hits:
             unplaced.append(quote)
             continue
-        for start in starts:
-            released.update(word.id for _, word in tokens[start : start + width])
-    judged_clean = annotation is not None and annotation.attributes.get("original") == "clean"
-    kept: list[RedactionExtent] = []
-    straddling = 0
-    for extent in planned:
-        hidden = [word.id for _, word in tokens if _overlaps(word_hull(word), (extent.start, extent.end))]
-        named = [word_id for word_id in hidden if word_id in released]
-        if hidden and (len(named) == len(hidden) or (judged_clean and named)):
+        if not any(word.id in under_masks for word in hits):
+            off_mask.append(quote)
+        named.update(word.id for word in hits)
+
+    def content(word: Entity) -> bool:
+        return word.id in residue_ids and is_content_word(str(word.attributes.get("text") or ""))
+
+    def build(apply_reviewer: bool) -> tuple[MaskOutcome, ...]:
+        kept_ids = {
+            word.id
+            for group in covered
+            for word in group
+            if content(word) and not (apply_reviewer and word.id in named)
+        }
+        outcomes: list[MaskOutcome] = []
+        for extent, group in zip(planned, covered):
+            states = [
+                MaskWord(
+                    word_id=word.id,
+                    text=str(word.attributes.get("text") or ""),
+                    state=MASKED
+                    if word.id in kept_ids
+                    else UNMASKED_BY_REVIEWER
+                    if apply_reviewer and word.id in named and content(word)
+                    else UNMASKED_BY_TRIM,
+                    named=word.id in named,
+                    content=content(word),
+                )
+                for word in group
+            ]
+            kept = [word for word in group if word.id in kept_ids]
+            if not group or len(kept) == len(group):
+                outcome = MASK_UNCHANGED
+                runs = [(extent, tuple(word.id for word in group))]
+            else:
+                runs = _final_extents(kept, words, kept_ids, extent.category, padding_ms / 1000.0)
+                reviewer_moved = any(word.state == UNMASKED_BY_REVIEWER for word in states)
+                outcome = MASK_UNMASKED if not kept else MASK_PARTLY_UNMASKED if reviewer_moved else MASK_TRIMMED
+            outcomes.append(
+                MaskOutcome(
+                    planned=extent,
+                    words=tuple(states),
+                    final=tuple(run for run, _ in runs),
+                    final_words=tuple(members for _, members in runs),
+                    outcome=outcome,
+                )
+            )
+        return tuple(outcomes)
+
+    guarded = False
+    masks = build(reviewer_applies and bool(named))
+    if reviewer_applies and named and identifying and planned and not any(mask.final for mask in masks):
+        masks = build(False)
+        guarded = True
+    applied = reviewer_applies and bool(named) and not guarded
+
+    final_ids = {word.word_id for mask in masks for word in mask.words if word.state == MASKED}
+    review_set = {category.upper() for category in human_review_categories}
+    proposals: list[ReviewerSpan] = []
+    for entry in entries:
+        if str(entry.get("action")) == "release":
             continue
-        if named:
-            straddling += 1
-        kept.append(extent)
-    return MaskReset(
-        planned=planned,
-        kept=kept,
-        reset_n=len(planned) - len(kept),
-        unplaced=tuple(unplaced),
-        straddling_n=straddling,
+        quote = str(entry.get("text") or "")
+        hits = _place(quote, tokens)
+        placed = PLACED_WORDS if hits else ""
+        if not hits:
+            hits = _place_substring(quote, residue)
+            placed = PLACED_SUBSTRING if hits else ""
+        category = str(entry.get("category") or "OTHER").upper()
+        proposals.append(
+            ReviewerSpan(
+                category=category,
+                text=quote,
+                placed=placed,
+                word_ids=tuple(word.id for word in hits),
+                texts=tuple(str(word.attributes.get("text") or "") for word in hits),
+                masked_ids=tuple(word.id for word in hits if word.id in final_ids),
+                human_review=category in review_set,
+            )
+        )
+    return MaskPlan(
+        masks=masks,
+        reviewer_applied=applied,
+        reviewer_guarded=guarded,
+        release_unplaced=tuple(unplaced),
+        release_off_mask=tuple(off_mask),
+        proposals=tuple(proposals),
+        padding_ms=int(padding_ms),
     )
 
 
-def _holds_full_copy(artifacts_dir: Path, planned_n: int) -> bool:
-    """Whether the release directory holds a redacted copy carrying every planned mask.
+def released_masks(store: ProvStore) -> tuple[list[RedactionExtent], dict[str, int] | None]:
+    """The masks the fold released, as the ledger VERDICT wrote records them.
+
+    Args:
+        store: The provenance store, after VERDICT.
+
+    Returns:
+        ``(extents, owners)``: the final extents and which of them hides each masked word. REDACT's
+        planned extents and None where no ledger stands, which renders by geometry.
+    """
+    ledger = find_measurement(store, PII_LEDGER)
+    if ledger is None:
+        return planned_extents(store), None
+    extents: list[RedactionExtent] = []
+    owners: dict[str, int] = {}
+    for index, entry in enumerate(ledger.attributes.get("final_masks") or ()):
+        extents.append(
+            RedactionExtent(
+                start=float(entry["start_s"]), end=float(entry["end_s"]), category=str(entry.get("category") or "")
+            )
+        )
+        for word_id in entry.get("word_ids") or ():
+            owners[str(word_id)] = index
+    return extents, owners
+
+
+def _holds_copy(artifacts_dir: Path, records: list[dict[str, Any]]) -> bool:
+    """Whether the release directory holds the copy these records render.
 
     Args:
         artifacts_dir: The release directory.
-        planned_n: How many masks REDACT planned.
+        records: :func:`_render`'s records for the copy wanted.
 
     Returns:
-        True where all of :data:`RELEASED_FILES` exist and the consensus artifact records
-        ``planned_n`` redactions, or is not one this module wrote.
+        True where all of :data:`RELEASED_FILES` exist and the consensus artifact carries exactly
+        these records, each mask's bounds included; or where it is not one this module wrote.
     """
     if not all((artifacts_dir / name).exists() for name in RELEASED_FILES):
         return False
@@ -1100,7 +1532,7 @@ def _holds_full_copy(artifacts_dir: Path, planned_n: int) -> bool:
         return True
     if not isinstance(written, dict) or written.get("schema") != CONSENSUS_ARTIFACT_SCHEMA:
         return True
-    return int(written.get("n_redactions") or 0) == planned_n
+    return written.get("records") == json.loads(json.dumps(records))
 
 
 def _has_stream(store: ProvStore, name: str) -> bool:
@@ -1149,17 +1581,17 @@ def settle_release(
 ) -> dict[str, Path]:
     """Make the release directory hold exactly the copy the fold released.
 
-    The directory holds the redacted copy only under ``release_with_redaction``; every other release
-    empties it, including of a copy REDACT itself wrote on a pass. A pass released as planned keeps
-    the copy REDACT wrote, unless an earlier fold emptied the directory or thinned the copy, in which
-    case it is written again. Otherwise the copy is written from the store: REDACT's masked
-    ``redacted`` stream where every planned mask is kept, and the source stream re-masked with the
-    kept masks alone where the reviewer reset some (:data:`REVIEWER_RESET_SOME_MASKS`).
+    The directory holds a redacted copy only under ``release_with_redaction``; every other release
+    empties it, including of a copy REDACT itself wrote on a pass. The copy masks the fold's final
+    masks, as its ledger records them (:func:`released_masks`). Where they are REDACT's own plan and
+    REDACT passed, the copy REDACT wrote stands, unless an earlier fold emptied the directory or
+    wrote a different copy, in which case REDACT's ``redacted`` stream is written again. Otherwise
+    the source stream is re-masked with the final masks alone.
 
     Args:
         store: The provenance store, after VERDICT.
         release: The fold's release axis value.
-        release_ground: The fold's release ground.
+        release_ground: The fold's release ground. Recorded on the ledger; not read here.
         run_dir: The run directory sidecar paths are relative to.
         artifacts_dir: The release directory.
         bleep_hz: ``redaction.bleep_hz``, for a re-masked copy under a bleep fill.
@@ -1175,19 +1607,20 @@ def settle_release(
         for name in RELEASED_FILES:
             (artifacts_dir / name).unlink(missing_ok=True)
         return {}
-    if release_ground != REVIEWER_RESET_SOME_MASKS:
-        planned = planned_extents(store)
+    planned = planned_extents(store)
+    final, owners = released_masks(store)
+    words = consensus_words(store)
+    if final == planned:
+        records, text, _ = _render(words, planned)
         if verdict.attributes.get("outcome") == Outcome.PASS.value and (
-            _holds_full_copy(artifacts_dir, len(planned)) or not _has_stream(store, STREAM_NAME)
+            _holds_copy(artifacts_dir, records) or not _has_stream(store, STREAM_NAME)
         ):
             return {}
-        records, text, _ = _render(consensus_words(store), planned)
         _, redacted = resolve_stream(store, run_dir, STREAM_NAME)
         return _write_artifacts(redacted, text, records, artifacts_dir)
-    kept = reviewer_reset(store).kept
-    records, text, _ = _render(consensus_words(store), kept)
+    records, text, _ = _render(words, final, owners)
     fill = str(verdict.attributes.get("fill") or "")
-    masked = apply_redactions(_masked_source(store, run_dir), kept, fill=fill, bleep_hz=bleep_hz)
+    masked = apply_redactions(_masked_source(store, run_dir), final, fill=fill, bleep_hz=bleep_hz)
     return _write_artifacts(masked, text, records, artifacts_dir)
 
 

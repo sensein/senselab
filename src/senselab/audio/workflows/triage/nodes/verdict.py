@@ -55,7 +55,13 @@ from senselab.audio.workflows.triage.nodes.gates import (
     conformance_gate_names,
     load_gate_bounds,
 )
-from senselab.audio.workflows.triage.nodes.redact import reviewer_reset
+from senselab.audio.workflows.triage.nodes.redact import (
+    UNMASKED_BY_REVIEWER,
+    MaskPlan,
+    mask_plan,
+    padding_ms,
+    planned_extents,
+)
 from senselab.audio.workflows.triage.vocabulary import (
     GRAPH_ORDER,
     PII_SCAN,
@@ -74,6 +80,7 @@ from senselab.audio.workflows.triage.vocabulary import (
     RedactionEvidence,
     RunState,
     fold_file_verdict,
+    reviewer_may_unmask,
 )
 from senselab.utils.prov_store import PROV_TYPE, Entity, ProvStore
 
@@ -298,31 +305,35 @@ def _llm_redaction(store: ProvStore) -> tuple[dict[str, object] | None, list[str
     ]
 
 
-def _redaction_evidence(store: ProvStore, reports: Sequence[tuple[Entity, BranchReport]]) -> RedactionEvidence:
+def _redaction_evidence(
+    store: ProvStore, reports: Sequence[tuple[Entity, BranchReport]], plan: MaskPlan
+) -> RedactionEvidence:
     """What the store says about whether this recording carried anything a redaction could remove.
 
     Args:
         store: The provenance store, read for its ``pii_scan`` measurements and its live findings.
         reports: The reporting nodes' reports, paired with the entities they were read from, so
             SPEECH's own lexical count can be read off its report.
+        plan: Which masks stand once the reviewer's unmasks and the content-word trim are applied.
 
     Returns:
         SPEECH's lexical count, its scan record as a tri-state, how many live ``pii`` findings the
-        store holds, and what REDACT's re-scan still read after its re-plan.
+        store holds, what REDACT's re-scan still read after its re-plan, and the masks that stand.
     """
     speech = next((entity for entity, report in reports if report.node == SPEECH), None)
     words = None if speech is None else speech.attributes.get("words_n")
     scans = [measurement.attributes for measurement in find_measurements(store, PII_SCAN)]
     redact = find_verdict(store, _REDACT_NODE)
     survivors = () if redact is None else tuple(str(c) for c in redact.attributes.get("unremediable") or ())
-    reset = reviewer_reset(store)
     return RedactionEvidence(
         lexical_words_n=None if words is None else int(words),
         scanned=None if not scans else not any(scan.get(SCANNED) is False for scan in scans),
         findings_n=len([finding for finding in store.entities("pii") if not store.is_invalidated(finding.id)]),
         rescan_survivors=survivors,
-        masks_n=len(reset.planned),
-        masks_reset_n=reset.reset_n,
+        masks_n=len(plan.masks),
+        masks_final_n=len(plan.final),
+        masks_changed=plan.changed,
+        reviewer_unmasked_n=plan.count(UNMASKED_BY_REVIEWER),
     )
 
 
@@ -633,6 +644,13 @@ def verdict(
     decisions, decision_ids = _branch_decisions(store)
     annotation, annotation_ids = _llm_redaction(store)
     resolved_ran = {**_derived_ran(store, node_verdicts, reports), **(ran or {})}
+    policy = FoldPolicy.from_config(config)
+    plan = mask_plan(
+        store,
+        reviewer_applies=policy.llm_reset_redactions and reviewer_may_unmask(annotation),
+        padding_ms=padding_ms(config) if planned_extents(store) else 0,
+        human_review_categories=policy.llm_human_review_categories,
+    )
     file_verdict = fold_file_verdict(
         node_verdicts,
         branch_reports=reports,
@@ -642,12 +660,12 @@ def verdict(
         hint_claims=_hint_claims(decisions, hint, declared_family=declared_family),
         route_state=route_state,
         declared_family=declared_family or None,
-        redaction=_redaction_evidence(store, report_pairs),
+        redaction=_redaction_evidence(store, report_pairs, plan),
         llm_redaction=annotation,
         critical_absences=_critical_absences(store),
         gates=outcome.record(),
         flag_gates=[gate.record() for gate in outcome.flagging],
-        policy=FoldPolicy.from_config(config),
+        policy=policy,
     )
 
     software = software_agent(store)
@@ -676,6 +694,14 @@ def verdict(
         ),
         detail=file_verdict.record(),
     )
+    ledger_id = store.entity(
+        prov_type="measurement",
+        extent=None,
+        attributes=plan.record(release=file_verdict.release.value, release_ground=file_verdict.release_ground),
+    )
+    store.was_generated_by(ledger_id, activity)
+    store.was_attributed_to(ledger_id, software)
+    store.was_derived_from(ledger_id, verdict_id)
     return VerdictResult(
         verdict=node_verdict,
         view=(verdict_id, *folded_ids),

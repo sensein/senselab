@@ -15,6 +15,8 @@ from senselab.audio.workflows.triage.vocabulary import (
     BAD_MAP_VALUES,
     CRITICAL_ABSENCE,
     DECLINED,
+    MASKS_TRIMMED_TO_CONTENT,
+    NO_CONTENT_MASKED,
     NO_LEXICAL_ITEM_PRODUCED,
     NO_LEXICAL_WORD,
     NO_TRANSCRIPT,
@@ -25,9 +27,10 @@ from senselab.audio.workflows.triage.vocabulary import (
     RELEASE_WITHHELD_GROUNDS,
     RELEASE_WITHOUT_REDACTION_GROUNDS,
     REVIEWER_CLEARED_RESCAN,
+    REVIEWER_NEEDS_HUMAN_REVIEW,
     REVIEWER_PROPOSED_REDACTION,
-    REVIEWER_RESET_EVERY_MASK,
-    REVIEWER_RESET_SOME_MASKS,
+    REVIEWER_UNMASKED_ALL,
+    REVIEWER_UNMASKED_SOME,
     ROUTED,
     SCAN_UNRECORDED,
     SPEECH_UNREAD,
@@ -51,6 +54,7 @@ from senselab.audio.workflows.triage.vocabulary import (
     Triage,
     _release_from,
     fold_file_verdict,
+    reviewer_may_unmask,
 )
 
 
@@ -827,7 +831,8 @@ class TestReleaseIsDecidedFromEvidenceNotFromRedactsAbsence:
         ]
         assert {folded.release for folded in cleared} == {Release.WITHOUT_REDACTION}
         assert {folded.release_ground for folded in cleared} == set(RELEASE_WITHOUT_REDACTION_GROUNDS) - {
-            REVIEWER_RESET_EVERY_MASK
+            REVIEWER_UNMASKED_ALL,
+            NO_CONTENT_MASKED,
         }
 
     def test_a_speech_that_errored_is_unassessed(self) -> None:
@@ -911,8 +916,9 @@ class TestTheReleaseAxisNamesWhichArtefactMayBeHandedOn:
     def test_the_reviewer_reaches_the_axis_through_two_declared_parameters(self) -> None:
         """``_release_from``'s parameters are the whole input to the axis.
 
-        ``design.md`` §5. The reviewer reaches it through one parameter that tightens, one that
-        clears a re-scan fail, and one that resets masks, and all three default to reading nothing.
+        ``design.md`` §5. The reviewer reaches it through one parameter that tightens and one that
+        clears a re-scan fail, both defaulting to reading nothing; which words its ``release``
+        entries unmask arrives already decided, on the evidence.
         """
         parameters = inspect.signature(_release_from).parameters
         assert set(parameters) == {
@@ -922,17 +928,11 @@ class TestTheReleaseAxisNamesWhichArtefactMayBeHandedOn:
             "reviewer_withholds",
             "speech_declined",
             "reviewer_clears",
-            "reviewer_resets",
         }
-        assert parameters["reviewer_withholds"].default is False
+        assert parameters["reviewer_withholds"].default is None
         assert parameters["reviewer_clears"].default is False
-        assert parameters["reviewer_resets"].default == (False, False)
         assert parameters["speech_declined"].default is False
-        assert sorted(name for name in parameters if "review" in name) == [
-            "reviewer_clears",
-            "reviewer_resets",
-            "reviewer_withholds",
-        ]
+        assert sorted(name for name in parameters if "review" in name) == ["reviewer_clears", "reviewer_withholds"]
 
     def test_the_reviewer_tightens_a_pass_and_no_withholding_loosens_a_fail(self) -> None:
         """Without a clearing reading, a REDACT fail stays withheld. ``design.md`` §5."""
@@ -941,9 +941,13 @@ class TestTheReleaseAxisNamesWhichArtefactMayBeHandedOn:
         evidence = RedactionEvidence(rescan_survivors=("DATE_TIME",))
         ran: dict[str, RunState] = {}
         assert _release_from(passed, evidence, ran)[0] is Release.WITH_REDACTION
-        assert _release_from(passed, evidence, ran, reviewer_withholds=True)[0] is Release.WITHHELD
-        assert _release_from(failed, evidence, ran, reviewer_withholds=False)[0] is Release.WITHHELD
-        assert _release_from(failed, evidence, ran, reviewer_withholds=True)[0] is Release.WITHHELD
+        assert (
+            _release_from(passed, evidence, ran, reviewer_withholds=REVIEWER_PROPOSED_REDACTION)[0] is Release.WITHHELD
+        )
+        assert _release_from(failed, evidence, ran, reviewer_withholds=None)[0] is Release.WITHHELD
+        assert (
+            _release_from(failed, evidence, ran, reviewer_withholds=REVIEWER_PROPOSED_REDACTION)[0] is Release.WITHHELD
+        )
 
     def test_the_reviewer_withholds_where_redact_never_ran(self) -> None:
         """Every path that would release is tightened, not only the one through a REDACT pass."""
@@ -954,11 +958,13 @@ class TestTheReleaseAxisNamesWhichArtefactMayBeHandedOn:
             RedactionEvidence(lexical_words_n=0),
         ):
             assert _release_from([], evidence, ran)[0] is Release.WITHOUT_REDACTION
-            assert _release_from([], evidence, ran, reviewer_withholds=True) == (
+            assert _release_from([], evidence, ran, reviewer_withholds=REVIEWER_PROPOSED_REDACTION) == (
                 Release.WITHHELD,
                 REVIEWER_PROPOSED_REDACTION,
             )
-        assert _release_from([], RedactionEvidence(), {}, reviewer_withholds=True, speech_declined=True) == (
+        assert _release_from(
+            [], RedactionEvidence(), {}, reviewer_withholds=REVIEWER_PROPOSED_REDACTION, speech_declined=True
+        ) == (
             Release.WITHHELD,
             REVIEWER_PROPOSED_REDACTION,
         )
@@ -967,8 +973,11 @@ class TestTheReleaseAxisNamesWhichArtefactMayBeHandedOn:
         """A withholding REDACT did not make must be told apart from one it did."""
         passed = [NodeVerdict("REDACT", Outcome.PASS, None, "the scan concluded")]
         failed = [NodeVerdict("REDACT", Outcome.FAIL, None, "the scan concluded")]
-        assert _release_from(passed, RedactionEvidence(), {}, reviewer_withholds=True)[1] == REVIEWER_PROPOSED_REDACTION
-        assert _release_from(failed, RedactionEvidence(), {}, reviewer_withholds=True)[1] is None
+        assert (
+            _release_from(passed, RedactionEvidence(), {}, reviewer_withholds=REVIEWER_PROPOSED_REDACTION)[1]
+            == REVIEWER_PROPOSED_REDACTION
+        )
+        assert _release_from(failed, RedactionEvidence(), {}, reviewer_withholds=REVIEWER_PROPOSED_REDACTION)[1] is None
 
     def test_a_reviewer_withholding_leaves_a_discard_a_discard(self) -> None:
         """The release axis tightens; the triage axis is not the reviewer's to move."""
@@ -999,7 +1008,9 @@ class TestTheReleaseAxisNamesWhichArtefactMayBeHandedOn:
             (RedactionEvidence(), {"SPEECH": RunState.SKIPPED}),
         ]
         for evidence, ran in cases:
-            assert _release_from([], evidence, ran, reviewer_withholds=True) == _release_from([], evidence, ran)
+            assert _release_from([], evidence, ran, reviewer_withholds=REVIEWER_PROPOSED_REDACTION) == _release_from(
+                [], evidence, ran
+            )
             assert _release_from([], evidence, ran)[0] is Release.NOT_ASSESSED
 
 
@@ -1087,109 +1098,144 @@ class TestAReviewerReadingClearsAReScanFail:
         assert self._fold(self._CLEAN, FoldPolicy(llm_rescan_clears=False)).release is Release.WITHHELD
 
 
-class TestAReviewerReadingResetsMasks:
-    """A reading's ``release`` entries reset REDACT's masks, so fewer are kept or none.
+class TestTheMasksThatStandDecideTheRelease:
+    """The evidence carries which masks stand; the fold names the release and its ground from it.
 
-    Owner, 2026-09-26: the redacted copy is released only where the reviewer does not find resetting
-    a redaction to the original words fine; otherwise the original, or a partial redaction.
+    Owner, 2026-09-27: the reviewer unmasks exactly the words it names, and no mask ever keeps a
+    non-content word. Which words those are is decided before the fold, in ``redact.mask_plan``.
     """
 
     _PASSED = [NodeVerdict("REDACT", Outcome.PASS, None, "every finding redacted")]
     _FAILED = [NodeVerdict("REDACT", Outcome.FAIL, None, "verification found pii on the redacted transcript")]
 
     @staticmethod
-    def _evidence(reset_n: int, *, masks_n: int = 2, survivors: tuple[str, ...] = ()) -> RedactionEvidence:
-        """A recording REDACT masked ``masks_n`` times, ``reset_n`` of them named by release entries."""
+    def _evidence(
+        final_n: int, *, unmasked_n: int = 0, changed: bool = True, survivors: tuple[str, ...] = ()
+    ) -> RedactionEvidence:
+        """A recording REDACT masked twice, ``final_n`` masks standing after the word-level rule."""
         return RedactionEvidence(
             lexical_words_n=40,
             scanned=True,
-            findings_n=masks_n,
+            findings_n=2,
             rescan_survivors=survivors,
-            masks_n=masks_n,
-            masks_reset_n=reset_n,
+            masks_n=2,
+            masks_final_n=final_n,
+            masks_changed=changed,
+            reviewer_unmasked_n=unmasked_n,
         )
 
-    def test_none_some_and_every_mask_reset(self) -> None:
-        """No reset keeps REDACT's copy, some yields a partial copy, every one releases the original."""
-        both = (True, True)
-        assert _release_from(self._PASSED, self._evidence(0), {}, reviewer_resets=both) == (
+    def test_unchanged_masks_keep_redacts_own_decision(self) -> None:
+        """No mask lost a word: REDACT's copy, with no ground of the fold's own."""
+        assert _release_from(self._PASSED, self._evidence(2, changed=False), {}) == (Release.WITH_REDACTION, None)
+
+    def test_the_reviewers_unmasks_thin_the_copy_or_release_the_original(self) -> None:
+        """Some masks standing is a partial copy; none standing is the original."""
+        assert _release_from(self._PASSED, self._evidence(1, unmasked_n=2), {}) == (
             Release.WITH_REDACTION,
-            None,
+            REVIEWER_UNMASKED_SOME,
         )
-        assert _release_from(self._PASSED, self._evidence(1), {}, reviewer_resets=both) == (
-            Release.WITH_REDACTION,
-            REVIEWER_RESET_SOME_MASKS,
-        )
-        assert _release_from(self._PASSED, self._evidence(2), {}, reviewer_resets=both) == (
+        assert _release_from(self._PASSED, self._evidence(0, unmasked_n=3), {}) == (
             Release.WITHOUT_REDACTION,
-            REVIEWER_RESET_EVERY_MASK,
+            REVIEWER_UNMASKED_ALL,
         )
 
-    def test_an_original_read_as_identifying_never_releases_whole(self) -> None:
-        """Every mask reset over an original judged to carry PII contradicts itself; the masks stand."""
-        some_only = (True, False)
-        assert _release_from(self._PASSED, self._evidence(2), {}, reviewer_resets=some_only) == (
-            Release.WITH_REDACTION,
-            None,
-        )
-        assert _release_from(self._PASSED, self._evidence(1), {}, reviewer_resets=some_only)[1] == (
-            REVIEWER_RESET_SOME_MASKS
-        )
+    def test_the_content_word_trim_alone_has_its_own_grounds(self) -> None:
+        """A mask trimmed to its content words with no reviewer involved is named as the trim's."""
+        assert _release_from(self._PASSED, self._evidence(2), {}) == (Release.WITH_REDACTION, MASKS_TRIMMED_TO_CONTENT)
+        assert _release_from(self._PASSED, self._evidence(0), {}) == (Release.WITHOUT_REDACTION, NO_CONTENT_MASKED)
 
-    def test_a_cleared_rescan_fail_with_every_mask_reset_releases_the_original(self) -> None:
-        """The two moves compose: the reading clears the fail and then resets what it masked."""
-        evidence = self._evidence(2, survivors=("DATE_TIME",))
-        assert _release_from(self._FAILED, evidence, {}, reviewer_clears=True, reviewer_resets=(True, True)) == (
+    def test_a_cleared_rescan_fail_composes_with_the_unmasks(self) -> None:
+        """The reading clears the fail and then unmasks what it named."""
+        evidence = self._evidence(0, unmasked_n=2, survivors=("DATE_TIME",))
+        assert _release_from(self._FAILED, evidence, {}, reviewer_clears=True) == (
             Release.WITHOUT_REDACTION,
-            REVIEWER_RESET_EVERY_MASK,
+            REVIEWER_UNMASKED_ALL,
         )
-        assert _release_from(self._FAILED, evidence, {}, reviewer_resets=(True, True)) == (Release.WITHHELD, None)
+        assert _release_from(self._FAILED, evidence, {}) == (Release.WITHHELD, None)
 
-    def test_resets_never_move_a_withholding_or_an_unassessed_recording(self) -> None:
-        """A reset only thins a released copy; it releases nothing the evidence withheld."""
-        assert _release_from(self._FAILED, self._evidence(2), {}, reviewer_resets=(True, True)) == (
+    def test_standing_masks_never_move_a_withholding_or_an_unassessed_recording(self) -> None:
+        """The word-level rule only thins a released copy; it releases nothing the evidence withheld."""
+        assert _release_from(self._FAILED, self._evidence(0, unmasked_n=2), {}) == (Release.WITHHELD, None)
+        assert _release_from(self._PASSED, self._evidence(0, unmasked_n=2), {}, REVIEWER_PROPOSED_REDACTION) == (
             Release.WITHHELD,
-            None,
+            REVIEWER_PROPOSED_REDACTION,
         )
         ran = {"SPEECH": RunState.COMPLETED}
-        owed = RedactionEvidence(lexical_words_n=42, scanned=True, findings_n=3, masks_n=0, masks_reset_n=0)
-        assert _release_from([], owed, ran, reviewer_resets=(True, True))[0] is Release.NOT_ASSESSED
+        owed = RedactionEvidence(lexical_words_n=42, scanned=True, findings_n=3, masks_changed=True)
+        assert _release_from([], owed, ran)[0] is Release.NOT_ASSESSED
 
-    def _fold(self, annotation: Mapping[str, Any] | None, policy: FoldPolicy, reset_n: int = 2) -> FileVerdict:
-        """A REDACT pass with two masks, folded with this reading under this policy."""
+    def test_only_a_reading_that_hides_nothing_more_may_unmask(self) -> None:
+        """A release-only reading may unmask; a redact entry, no reading, or no reading taken may not."""
+        release_only = {"status": "flagged", "proposal": [{"text": "brooklyn", "action": "release"}]}
+        hides_more = {
+            "status": "flagged",
+            "proposal": [{"text": "brooklyn", "action": "release"}, {"text": "alice", "action": "redact"}],
+        }
+        assert reviewer_may_unmask(release_only) is True
+        assert reviewer_may_unmask({"status": "clean", "proposal": []}) is True
+        assert reviewer_may_unmask(hides_more) is False
+        assert reviewer_may_unmask(None) is False
+        assert reviewer_may_unmask({"status": "absent", "failure": "CUDA error", "proposal": []}) is False
+
+
+class TestAConditionAloneRoutesToHumanReview:
+    """Owner, 2026-09-27: a named condition identifies by rarity and context, so it is flagged for review."""
+
+    _PASSED = [NodeVerdict("REDACT", Outcome.PASS, None, "every finding redacted")]
+
+    @staticmethod
+    def _reading(*categories: str) -> dict[str, Any]:
+        """A reading proposing one ``redact`` entry per category, and releasing a date."""
+        return {
+            "status": "flagged",
+            "original": "carries_pii",
+            "proposal": [
+                {"text": "this morning", "action": "release", "category": "DATE_TIME"},
+                *(
+                    {"text": f"a {category.lower()}", "action": "redact", "category": category}
+                    for category in categories
+                ),
+            ],
+        }
+
+    def _fold(self, annotation: Mapping[str, Any], policy: FoldPolicy) -> FileVerdict:
+        """A REDACT pass folded with this reading under this policy."""
         return fold_file_verdict(
             self._PASSED,
             branch_decisions=_decisions(AIRWAY=DECLINED, SPEECH=ROUTED, VOICE=DECLINED),
             ran={"SPEECH": RunState.COMPLETED, "REDACT": RunState.COMPLETED},
             hint_claims={},
             route_state=ROUTED,
-            redaction=self._evidence(reset_n),
+            redaction=RedactionEvidence(lexical_words_n=40, scanned=True, findings_n=1, masks_n=1, masks_final_n=1),
             llm_redaction=annotation,
             policy=policy,
         )
 
-    def test_the_fold_resets_only_from_a_reading_that_hides_nothing_more(self) -> None:
-        """A release-only reading resets; a redact proposal, no reading, or the key off do not."""
-        on = FoldPolicy(llm_reset_redactions=True)
-        release_only = {
-            "status": "flagged",
-            "original": "clean",
-            "proposal": [{"text": "brooklyn", "action": "release", "category": "LOCATION"}],
-        }
-        assert self._fold(release_only, on).release is Release.WITHOUT_REDACTION
-        assert self._fold(release_only, on, reset_n=1).release_ground == REVIEWER_RESET_SOME_MASKS
-        hides_more = {
-            "status": "flagged",
-            "original": "clean",
-            "proposal": [
-                {"text": "brooklyn", "action": "release", "category": "LOCATION"},
-                {"text": "alice", "action": "redact", "category": "PERSON"},
-            ],
-        }
-        assert self._fold(hides_more, on).release is Release.WITH_REDACTION
-        assert self._fold(None, on).release is Release.WITH_REDACTION
-        assert self._fold({"status": "nothing_to_read", "proposal": []}, on).release is Release.WITH_REDACTION
-        assert self._fold(release_only, FoldPolicy(llm_reset_redactions=False)).release is Release.WITH_REDACTION
+    _POLICY = FoldPolicy(llm_redaction_withholds=True, llm_human_review_categories=("CONDITION",))
+
+    def test_a_condition_only_reading_is_held_for_human_review_on_both_axes(self) -> None:
+        """Withheld pending review, and the triage flag names the same ground."""
+        folded = self._fold(self._reading("CONDITION", "CONDITION"), self._POLICY)
+        assert (folded.release, folded.release_ground) == (Release.WITHHELD, REVIEWER_NEEDS_HUMAN_REVIEW)
+        assert folded.triage is Triage.FLAG
+        assert any(reason.why == f"{REVIEWER_NEEDS_HUMAN_REVIEW}: CONDITION" for reason in folded.reasons)
+
+    def test_a_condition_beside_another_category_is_a_plain_proposed_redaction(self) -> None:
+        """A name or a place beside the condition is residue the ordinary way."""
+        folded = self._fold(self._reading("CONDITION", "PERSON"), self._POLICY)
+        assert (folded.release, folded.release_ground) == (Release.WITHHELD, REVIEWER_PROPOSED_REDACTION)
+        assert not any(reason.why.startswith(REVIEWER_NEEDS_HUMAN_REVIEW) for reason in folded.reasons)
+
+    def test_no_categories_routes_nothing_to_review(self) -> None:
+        """The key empty, a condition is withheld as any other proposal is."""
+        folded = self._fold(self._reading("CONDITION"), FoldPolicy(llm_redaction_withholds=True))
+        assert folded.release_ground == REVIEWER_PROPOSED_REDACTION
+
+    def test_the_packaged_config_routes_condition(self) -> None:
+        """The shipped key names CONDITION and nothing else."""
+        from senselab.audio.workflows.triage.config import load_triage_config
+
+        assert FoldPolicy.from_config(load_triage_config()).llm_human_review_categories == ("CONDITION",)
 
 
 class TestANonLexicalTaskIsClearedRatherThanHeld:
