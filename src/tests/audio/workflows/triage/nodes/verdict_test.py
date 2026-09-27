@@ -938,7 +938,7 @@ class TestTheRedactionReviewerAnnotatesAndThisNodeDecides:
         morning = next(
             word for mask in ledger.attributes["masks"] for word in mask["words"] if word["text"] == "morning"
         )
-        assert (morning["state"], morning["named"]) == ("masked", True)
+        assert (morning["state"], morning["named"]) == ("unmasked_by_reviewer", True)
 
     def test_the_clearing_key_ships_on(self) -> None:
         """Owner, 2026-09-26: the reviewer, which already read these, decides a re-scan fail."""

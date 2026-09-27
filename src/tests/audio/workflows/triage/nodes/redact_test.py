@@ -808,10 +808,10 @@ class TestTheWordLevelMaskRule:
         plan = _plan(store)
         assert (plan.changed, plan.release_off_mask) == (False, ("today",))
 
-    def test_entries_the_fold_does_not_apply_are_named_but_stay_masked(
+    def test_with_the_key_off_named_words_stay_masked_and_say_so(
         self, store: ProvStore, redact_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A reading that also proposes a redaction unmasks nothing, and the ledger still shows what it named."""
+        """``verdict.llm_reset_redactions`` off: nothing is unmasked, and the ledger still shows what was named."""
         self._passed(store, redact_config, tmp_path, monkeypatch)
         _annotate(store, [_release_entry("brooklyn"), _redact_entry("today", "DATE_TIME")])
         plan = _plan(store, applies=False)
@@ -819,15 +819,16 @@ class TestTheWordLevelMaskRule:
         assert (brooklyn.state, brooklyn.named) == (MASKED, True)
         assert not plan.reviewer_applied
 
-    def test_an_identifying_original_is_never_unmasked_whole(
+    def test_an_identifying_original_is_unmasked_where_the_reviewer_says(
         self, store: ProvStore, redact_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Unmasking every word of an original the reviewer read as carrying PII contradicts it; masks stand."""
+        """Owner, 2026-09-27: named unmasks always apply, over an original read as carrying PII too."""
         self._passed(store, redact_config, tmp_path, monkeypatch)
         _annotate(store, [_release_entry("alice"), _release_entry("brooklyn")], original="carries_pii")
         plan = _plan(store)
-        assert plan.reviewer_guarded and not plan.reviewer_applied
-        assert len(plan.final) == 2
+        assert plan.reviewer_applied
+        assert plan.final == []
+        assert set(_states(plan).values()) == {UNMASKED_BY_REVIEWER}
 
     def test_redact_entries_are_placed_on_words_and_marked_for_review(
         self, store: ProvStore, redact_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
