@@ -351,3 +351,28 @@ The first choice put red and orange 27° apart; red was moved toward crimson and
 The recording-vectors viewer is not themed: it is dark-only, and its canvas plots draw with 59 fixed
 dark-palette colours in `recording.js` and `corpus.js`, so a light theme there is a redraw of every
 plot, not a stylesheet.
+
+## 12. Measured: the final code replayed over the reviewed r6 corpus (2026-09-27, evening)
+
+All 15,210 reviewed r6 stores were folded again in memory at `864de752` (the fold code; later commits
+touch only the page). None failed, and nothing was written to the tree.
+
+- **Release and triage totals are unchanged**: 12,372 without redaction, 1,946 with redaction, 892
+  withheld, 2,016 flagged. No recording changes release.
+- **Released text (§8):** 13 releases with redaction change text, exactly the 13 defect cases. For
+  example, the stroop "[MISC]" placeholder moves from a distant "Blue." whose hull overlapped the mask
+  to the word it actually masks, and "forest," and "dying" return to their released transcripts.
+- **Read passages (§9):** the masked words did not change: harvard 86, stroop 83, rainbow 58,
+  caterpillar 92, cape-v 54. The trim already refused to keep a task word and re-cut such extents, so
+  the released audio and text were already confined. What changed is the ledger and the page: the
+  13,291 task words they listed under masks as "unmasked by trim" are no longer listed (caterpillar
+  9,895, rainbow 1,312, harvard 1,152, stroop 711, cape-v 221). They are counted as `task_words_n`
+  instead. Three masks whose only non-kept words were task words reached by hull alone now read as
+  REDACT's plan unchanged rather than trimmed.
+- **Conditions (§10):** 314 recordings carry a human-review proposal, 206 cohort and 108 other. Of the
+  200 withheld on a human-review ground, 124 are cohort only and 76 name another condition. The 420
+  proposal spans are 286 cohort and 134 other. The most named diagnoses are Parkinson's (75), airway
+  stenosis (55), vocal fold paralysis (30), laryngeal dystonia (24) and muscle tension dysphonia (13).
+- **Single stream (§11):** no free-response card needs it. The two recordings with one recogniser are
+  rainbow-passage and random-item-generation-v2, neither free-response, and on both the fallback
+  picks `asr_qwen`. The 43 empty free-response cards have no recogniser words at all.
