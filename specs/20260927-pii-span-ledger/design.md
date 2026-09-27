@@ -101,7 +101,7 @@ ledger (`test_an_unchanged_re_fold_keeps_one_live_ledger` fails on the old line 
 ## 3. A condition is held for a person
 
 `verdict.llm_human_review_categories: [CONDITION]`. A residue reading every `redact` entry of which is
-in one of those categories withholds under `REVIEWER_NEEDS_HUMAN_REVIEW`, and the triage axis flags
+in one of those categories withholds for human review (§10 names the two grounds), and the triage axis flags
 on the same ground with the categories appended. A reading proposing a condition beside a name, a
 place or anything else keeps `REVIEWER_PROPOSED_REDACTION`, and the ledger still lists the condition
 spans. The redact proposals are not applied as masks; the release policy for them is unchanged.
@@ -333,3 +333,21 @@ the card as `data-hk`, not as text.
 recognisers (`asr_crisperwhisper`, then `asr_qwen`). The card is tagged "<source> only", and the
 popup says why. No PII mark is drawn on it, because the ledger's spans are placed on consensus words
 and this stream has none.
+
+**Theme** (owner: "also add a dark/light toggle to the html viewer"). The review page's colours are
+custom properties with a light and a dark set. The dark set applies where the system prefers dark and
+the reader has not chosen light, and wherever the reader chose dark. A rail button cycles through
+system, light and dark, and the choice is kept in `localStorage` (`senselab.fsreview.theme`); every
+access is wrapped, so a page with storage blocked still works. A head script applies a stored choice
+before the page paints. The underline colours were chosen by contrast, measured against each theme's
+card background:
+
+| theme | red | green | orange | red vs orange |
+|---|---|---|---|---|
+| light | #b3123a, 6.9:1 | #1e7b34, 5.3:1 | #a86b00, 4.4:1 | 1.56:1 luminance, 53° hue apart |
+| dark | #ff5c7a, 5.6:1 | #5fcf7a, 8.5:1 | #ffc145, 10.3:1 | 1.84:1 luminance, 51° hue apart |
+
+The first choice put red and orange 27° apart; red was moved toward crimson and orange toward amber.
+The recording-vectors viewer is not themed: it is dark-only, and its canvas plots draw with 59 fixed
+dark-palette colours in `recording.js` and `corpus.js`, so a light theme there is a redraw of every
+plot, not a stylesheet.

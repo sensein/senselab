@@ -1792,3 +1792,33 @@ def test_the_condition_filter_separates_the_study_s_conditions() -> None:
     assert '<select id="hkf">' in page._DOCUMENT
     assert "r.dataset.hk===hk" in page._SCRIPT
     assert [value for value, _ in page.CONDITION_SECTIONS] == ["cohort", "other", "none"]
+
+
+def test_both_themes_define_every_colour_and_the_toggle_is_wired() -> None:
+    """Owner, 2026-09-27: a dark/light toggle; the system decides until the reader does, and it persists."""
+    style = page._STYLE
+    light = style[style.index(":root{") : style.index("}", style.index(":root{"))]
+    dark = style[style.index(':root[data-theme="dark"]{') :]
+    dark = dark[: dark.index("}")]
+    for name in ("--bg", "--fg", "--card", "--line", "--ured", "--ugreen", "--uorange", "--catbg", "--catfg"):
+        assert f"{name}:" in light and f"{name}:" in dark, name
+    assert ':root:not([data-theme="light"])' in style[style.index("@media (prefers-color-scheme:dark)") :]
+    assert 'id="themetoggle"' in page._DOCUMENT and "{theme_boot}" in page._DOCUMENT
+    assert "themeBtn.addEventListener('click'" in page._SCRIPT
+    assert "localStorage.setItem(THEMEKEY,next)" in page._SCRIPT and page.THEME_KEY in page._THEME_BOOT
+    assert "try{" in page._THEME_BOOT and "catch(e){}" in page._THEME_BOOT
+
+
+def test_the_theme_boot_script_is_valid_javascript() -> None:
+    """The head script runs before the page paints; a parse error there would leave the theme unset."""
+    import shutil
+    import subprocess
+    import tempfile
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed")
+    with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False) as handle:
+        handle.write(page._THEME_BOOT)
+    result = subprocess.run([node, "--check", handle.name], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
