@@ -13,7 +13,8 @@ from senselab.audio.workflows.triage.config import TriageConfig, load_triage_con
 from senselab.audio.workflows.triage.nodes import routing as routing_module
 from senselab.audio.workflows.triage.nodes import verdict as verdict_module
 from senselab.audio.workflows.triage.nodes.branches import BRANCH_FAMILY
-from senselab.audio.workflows.triage.nodes.common import software_agent, write_report, write_verdict
+from senselab.audio.workflows.triage.nodes.common import find_measurement, software_agent, write_report, write_verdict
+from senselab.audio.workflows.triage.nodes.redact import PII_LEDGER
 from senselab.audio.workflows.triage.nodes.routing import routing
 from senselab.audio.workflows.triage.routing_analysis.ruleset import GateOutcome, RouteEvaluation, RouteState
 from senselab.audio.workflows.triage.run import GRAPH_ORDER
@@ -25,9 +26,10 @@ from senselab.audio.workflows.triage.vocabulary import (
     REDACTION_LLM_ANNOTATION,
     REDACTION_OWED,
     REVIEWER_CLEARED_RESCAN,
+    REVIEWER_NEEDS_HUMAN_REVIEW,
     REVIEWER_PROPOSED_REDACTION,
-    REVIEWER_RESET_EVERY_MASK,
-    REVIEWER_RESET_SOME_MASKS,
+    REVIEWER_UNMASKED_ALL,
+    REVIEWER_UNMASKED_SOME,
     SCAN_FOUND_NOTHING,
     TASK,
     UNDETERMINED,
@@ -826,7 +828,7 @@ class TestTheRedactionReviewerAnnotatesAndThisNodeDecides:
         assert result.file_verdict.release is Release.WITHHELD
 
     def test_the_reset_key_ships_on(self) -> None:
-        """Owner, 2026-09-26: a reading's release entries reset the masks they name."""
+        """Owner, 2026-09-27: a reading's release entries unmask the words they name."""
         assert load_triage_config().require("verdict.llm_reset_redactions") is True
         assert FoldPolicy.from_config(load_triage_config()).llm_reset_redactions is True
 
@@ -864,8 +866,8 @@ class TestTheRedactionReviewerAnnotatesAndThisNodeDecides:
         """The masks and the quotes are read off the store; some reset is partial, every one is the original."""
         config = _policy_config(tmp_path, "verdict:\n  llm_redaction_withholds: true\n  llm_reset_redactions: true\n")
         for released, expected in (
-            (["alice"], (Release.WITH_REDACTION, REVIEWER_RESET_SOME_MASKS)),
-            (["alice", "brooklyn"], (Release.WITHOUT_REDACTION, REVIEWER_RESET_EVERY_MASK)),
+            (["alice"], (Release.WITH_REDACTION, REVIEWER_UNMASKED_SOME)),
+            (["alice", "brooklyn"], (Release.WITHOUT_REDACTION, REVIEWER_UNMASKED_ALL)),
             ([], (Release.WITH_REDACTION, None)),
         ):
             store = make_verdict_store(concluded=[*BASE, ("REDACT", Outcome.PASS, None)], routed=ROUTED_PAIR, pii_n=2)
@@ -879,6 +881,64 @@ class TestTheRedactionReviewerAnnotatesAndThisNodeDecides:
             )
             result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
             assert (result.file_verdict.release, result.file_verdict.release_ground) == expected
+
+    def test_the_verdict_writes_the_ledger_it_decided_from(
+        self, make_verdict_store: Callable[..., ProvStore], tmp_path: Path
+    ) -> None:
+        """One ``pii_ledger`` per fold, carrying the release, every mask's words and their states."""
+        config = _policy_config(tmp_path, "verdict:\n  llm_redaction_withholds: true\n  llm_reset_redactions: true\n")
+        store = make_verdict_store(concluded=[*BASE, ("REDACT", Outcome.PASS, None)], routed=ROUTED_PAIR, pii_n=2)
+        self._mask(store, ["i", "met", "alice", "in", "brooklyn"], [2, 4])
+        _annotate(
+            store,
+            status="flagged",
+            redaction="incomplete",
+            original="clean",
+            proposal=[{"text": "brooklyn", "action": "release", "category": "LOCATION"}],
+        )
+        verdict_module.verdict(store, None, config, run_dir=tmp_path)
+        ledger = find_measurement(store, PII_LEDGER)
+        assert ledger is not None
+        assert ledger.attributes["release_ground"] == REVIEWER_UNMASKED_SOME
+        states = {word["text"]: word["state"] for mask in ledger.attributes["masks"] for word in mask["words"]}
+        assert states == {"alice": "masked", "brooklyn": "unmasked_by_reviewer"}
+        assert [len(entry["word_ids"]) for entry in ledger.attributes["final_masks"]] == [1]
+
+    def test_a_condition_only_reading_is_held_for_human_review(
+        self, make_verdict_store: Callable[..., ProvStore], tmp_path: Path
+    ) -> None:
+        """r6's free-speech-1 case: a date released, two conditions proposed; review, not a plain withholding."""
+        config = _policy_config(tmp_path, "verdict:\n  llm_redaction_withholds: true\n")
+        store = make_verdict_store(concluded=[*BASE, ("REDACT", Outcome.PASS, None)], routed=ROUTED_PAIR, pii_n=1)
+        self._mask(store, ["i", "woke", "this", "morning", "with", "essential", "tremors"], [3])
+        _annotate(
+            store,
+            status="flagged",
+            redaction="complete",
+            original="carries_pii",
+            flagged=["CONDITION"],
+            proposal=[
+                {"text": "this morning", "action": "release", "category": "DATE_TIME"},
+                {"text": "essential tremors", "action": "redact", "category": "CONDITION"},
+            ],
+        )
+        result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
+        assert (result.file_verdict.release, result.file_verdict.release_ground) == (
+            Release.WITHHELD,
+            REVIEWER_NEEDS_HUMAN_REVIEW,
+        )
+        ledger = find_measurement(store, PII_LEDGER)
+        assert ledger is not None
+        (proposal,) = ledger.attributes["proposals"]
+        assert (proposal["category"], proposal["texts"], proposal["human_review"]) == (
+            "CONDITION",
+            ["essential", "tremors"],
+            True,
+        )
+        morning = next(
+            word for mask in ledger.attributes["masks"] for word in mask["words"] if word["text"] == "morning"
+        )
+        assert (morning["state"], morning["named"]) == ("masked", True)
 
     def test_the_clearing_key_ships_on(self) -> None:
         """Owner, 2026-09-26: the reviewer, which already read these, decides a re-scan fail."""

@@ -1655,15 +1655,29 @@ verdict.llm_rescan_clears: true
   The measurement of what it moves is in `specs/20260926-redact-rescan-survival/design.md`.
 
 verdict.llm_reset_redactions: true
-  Whether a REVIEW reading's `release` entries reset the masks they name, so that a copy released
-  with redaction keeps only the rest, or the original is released where every mask was reset.
-  Owner, 2026-09-26: "released with redaction -> only if the reviewer considers resetting the
-  redaction to the original prose is not fine, otherwise release without redaction or partial
-  redaction." True on that instruction, and not fitted: no false-release rate for the reviewer on
-  this corpus exists. A reading proposing any `redact` resets nothing; an original read as
-  `carries_pii` is never released whole; it never moves `withheld` or `not_assessed`, and has no
-  effect while the reviewer is off, because a disabled reading resets nothing. The mapping from a
-  quote to a mask is in `specs/20260926-reviewer-reset-redaction/design.md`.
+  Whether a REVIEW reading's `release` entries unmask the words they name. Owner, 2026-09-26:
+  "released with redaction -> only if the reviewer considers resetting the redaction to the original
+  prose is not fine, otherwise release without redaction or partial redaction"; and 2026-09-27: "the
+  reviewer should indicate specifically what words or masks to unmask or what words to mask. this
+  could involve the entire mask or part of a mask. it should never keep not content words masked if
+  that happens." True on those instructions, and not fitted: no false-release rate for the reviewer
+  on this corpus exists. An entry unmasks exactly the words it names, as whole-token runs at every
+  place it occurs, whether that is a whole mask or part of one. A reading proposing any `redact`
+  unmasks nothing; the entries are not applied where they would leave no mask over an original the
+  reviewer read as `carries_pii`; it never moves `withheld` or `not_assessed`, and has no effect
+  while the reviewer is off. The content-word trim is not governed by this key: no mask ever keeps a
+  non-content word. The rule is in `specs/20260927-pii-span-ledger/design.md`.
+
+verdict.llm_human_review_categories: [CONDITION]
+  The reviewer categories whose `redact` entries route a recording to human review under
+  `REVIEWER_NEEDS_HUMAN_REVIEW`, where every `redact` entry of the reading is in one of them; a
+  reading also proposing another category keeps the plain proposed-redaction ground. Owner,
+  2026-09-27, on a named health condition: "this depends on uniqueness of condition, especially when
+  coupled with other information being released. so should be flagged for review". CONDITION only,
+  on that instruction: it is the one category whose identifying power the owner named as depending
+  on rarity and context rather than on the words alone. The release stays withheld pending that
+  review, and the triage axis flags on the same ground. 190 of r6's 823 reviewer withholdings carry
+  CONDITION as their only category.
 
 verdict.conformance_flags_by_family: {}
   Declared task family -> whether a non-conformance on it flags, overriding `conformance_flags`.

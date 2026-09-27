@@ -450,16 +450,24 @@ ground `REVIEWER_CLEARED_RESCAN`, where the reviewer read the original as `clean
 survivor and is never cleared; `flag`, `not_assessed` and every other row are untouched. See
 `specs/20260926-redact-rescan-survival/design.md`.
 
-**And the reviewer's resets, last.** With `verdict.llm_reset_redactions` on, a recording the steps
-above release **with redaction** has its masks thinned by the reading's `release` entries
-(`reviewer_reset` in `nodes/redact.py`): none reset leaves the answer as it is; some reset keeps
-`release_with_redaction` under ground `REVIEWER_RESET_SOME_MASKS`, and the release directory then
-holds the source re-masked with the kept masks alone; every mask reset gives
-`release_without_redaction` under `REVIEWER_RESET_EVERY_MASK`, and the directory is emptied. A reading
-that proposes any `redact` resets nothing, and one that read the original as `carries_pii` never
-reaches the whole reset. A reset only thins a released copy: it never moves `withheld` or
-`not_assessed`. The mapping and its measurement are in
-`specs/20260926-reviewer-reset-redaction/design.md`.
+**And the masks that stand, last.** A recording the steps above release **with redaction** is
+released with the masks the word-level rule leaves (`mask_plan` in `nodes/redact.py`, recorded on the
+`pii_ledger` measurement VERDICT writes beside its verdict). Each planned mask covers words; a word
+leaves it when a reviewer `release` entry names it and `verdict.llm_reset_redactions` lets the reading
+unmask (read the text, proposed no `redact`), or when it is not a residue content word, which no mask
+keeps. No mask changed leaves the answer as it is. Some masks standing gives `release_with_redaction`
+under `REVIEWER_UNMASKED_SOME` where the reviewer unmasked a word, else `MASKS_TRIMMED_TO_CONTENT`;
+none standing gives `release_without_redaction` under `REVIEWER_UNMASKED_ALL`, else
+`NO_CONTENT_MASKED`. The release directory holds the source re-masked with the standing masks, or is
+emptied. The reviewer's entries are not applied where they would unmask every word of an original it
+read as `carries_pii`. Nothing here moves `withheld` or `not_assessed`. The rule and its measurement
+are in `specs/20260927-pii-span-ledger/design.md`.
+
+**A condition is held for a person.** With `verdict.llm_human_review_categories` naming it
+(`[CONDITION]` shipped), a residue reading every `redact` entry of which is in one of those
+categories withholds under `REVIEWER_NEEDS_HUMAN_REVIEW` instead of `REVIEWER_PROPOSED_REDACTION`, and
+the triage axis flags on the same ground with the categories appended. A reading proposing a
+condition beside any other category is residue the ordinary way.
 
 **Why one axis and not two.** "Was there anything to redact" and "did redaction succeed" are
 different questions, and collapsing them is what produced the defect — so the split was considered

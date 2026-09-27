@@ -37,6 +37,7 @@ __all__ = [
     "VOCAL",
     "Residue",
     "ResidueRule",
+    "is_content_word",
     "is_non_lexical",
     "residue_method",
     "residue_rule",
@@ -257,6 +258,22 @@ def is_non_lexical(text: str, *, vocal_task: bool = False) -> bool:
     return vocal_task and all(_VOCAL_RUN.fullmatch(piece) for piece in pieces)
 
 
+def is_content_word(text: str) -> bool:
+    """Whether a transcript token carries content: lexical, and not a closed-class word.
+
+    The one definition the residue's ``content`` test and the redaction's mask trim both read.
+
+    Args:
+        text: The token as the recognizer wrote it.
+
+    Returns:
+        False for a bracketed marker, a vocalisation, a filler, a fragment, an empty token and any
+        word whose base form is in :data:`FUNCTION_WORDS`; True otherwise, numbers included.
+    """
+    key = _key(text)
+    return bool(key) and not is_non_lexical(text) and _base(key) not in FUNCTION_WORDS
+
+
 def _syllable_letters(sequence: Sequence[str]) -> frozenset[str]:
     return frozenset(letter for phoneme in sequence for letter in _SYLLABLE_LETTERS.get(phoneme, ""))
 
@@ -442,5 +459,5 @@ def task_residue(texts: Sequence[str], task_family: str | None, stimulus: Sequen
         flagged = _aligned_residue(keys, expected, rule) if expected else set(range(len(keys)))
         task = {index for index in range(len(keys)) if index not in flagged or index in in_vocabulary}
     kept = tuple(position for index, position in enumerate(lexical) if index not in task)
-    content = any(_base(_key(texts[position])) not in FUNCTION_WORDS for position in kept)
+    content = any(is_content_word(texts[position]) for position in kept)
     return Residue(kept, method, non_lexical_n, len(task), content)

@@ -126,14 +126,19 @@ NO_LEXICAL_WORD = "SPEECH ran and the consensus transcript carries no lexical wo
 NOTHING_BEYOND_STIMULUS = "no lexical word lies outside what the task asked for, so the scan was declined"
 SCAN_FOUND_NOTHING = "the scan ran over the transcript and found nothing to redact"
 NON_LEXICAL_TASK = "the ruleset declined SPEECH because the task carries no lexical content"
-REVIEWER_RESET_EVERY_MASK = "the redaction reviewer reset every mask REDACT planned to the original words"
+REVIEWER_UNMASKED_ALL = (
+    "the redaction reviewer unmasked the words it named and no content word was left masked, "
+    "so the original is released"
+)
+NO_CONTENT_MASKED = "every mask REDACT planned hid only non-content words, so the original is released"
 
 RELEASE_WITHOUT_REDACTION_GROUNDS = (
     NO_LEXICAL_WORD,
     NOTHING_BEYOND_STIMULUS,
     SCAN_FOUND_NOTHING,
     NON_LEXICAL_TASK,
-    REVIEWER_RESET_EVERY_MASK,
+    REVIEWER_UNMASKED_ALL,
+    NO_CONTENT_MASKED,
 )
 """Which reading cleared the recording. One stands behind every :attr:`Release.WITHOUT_REDACTION`."""
 
@@ -147,18 +152,25 @@ RELEASE_UNKNOWN_GROUNDS = (NO_TRANSCRIPT, SPEECH_UNREAD, REDACTION_OWED, SCAN_UN
 
 REVIEWER_PROPOSED_REDACTION = "the redaction reviewer proposed hiding more and the policy lets that withhold"
 
-RELEASE_WITHHELD_GROUNDS = (REVIEWER_PROPOSED_REDACTION,)
+REVIEWER_NEEDS_HUMAN_REVIEW = (
+    "the redaction reviewer proposed hiding only content whose identifying power depends on its rarity and on what "
+    "else is released, such as a health condition, so the recording needs human review"
+)
+
+RELEASE_WITHHELD_GROUNDS = (REVIEWER_PROPOSED_REDACTION, REVIEWER_NEEDS_HUMAN_REVIEW)
 """Why a recording is withheld where REDACT itself did not withhold it."""
 
 REVIEWER_CLEARED_RESCAN = (
     "REDACT's re-scan still read a finding, and the reviewer read the original as clean and proposed nothing to hide"
 )
 
-REVIEWER_RESET_SOME_MASKS = (
-    "the redaction reviewer reset some of REDACT's masks to the original words; the copy keeps the rest"
+REVIEWER_UNMASKED_SOME = (
+    "the redaction reviewer unmasked the words it named; the copy keeps the content words still masked"
 )
 
-RELEASE_WITH_REDACTION_GROUNDS = (REVIEWER_CLEARED_RESCAN, REVIEWER_RESET_SOME_MASKS)
+MASKS_TRIMMED_TO_CONTENT = "REDACT's masks were trimmed to the content words they hide; the copy keeps those"
+
+RELEASE_WITH_REDACTION_GROUNDS = (REVIEWER_CLEARED_RESCAN, REVIEWER_UNMASKED_SOME, MASKS_TRIMMED_TO_CONTENT)
 """Why a redacted copy is released other than as REDACT itself planned and passed it."""
 
 
@@ -175,9 +187,10 @@ class RedactionEvidence:
         rescan_survivors: The categories REDACT's re-scan still read after its one re-plan, its
             ``unremediable``. Empty where REDACT did not run, passed, or could not complete a scan.
         masks_n: How many masks REDACT planned over the recording.
-        masks_reset_n: How many of them the reviewer's ``release`` entries reset to the original
-            words, every word each hides being named by one; see
-            :func:`~senselab.audio.workflows.triage.nodes.redact.reviewer_reset`.
+        masks_final_n: How many masks stand once the reviewer's unmasks and the content-word trim
+            are applied; see :func:`~senselab.audio.workflows.triage.nodes.redact.mask_plan`.
+        masks_changed: Whether any planned mask lost a word.
+        reviewer_unmasked_n: How many words the reviewer's ``release`` entries unmasked.
     """
 
     lexical_words_n: int | None = None
@@ -185,7 +198,9 @@ class RedactionEvidence:
     findings_n: int = 0
     rescan_survivors: tuple[str, ...] = ()
     masks_n: int = 0
-    masks_reset_n: int = 0
+    masks_final_n: int = 0
+    masks_changed: bool = False
+    reviewer_unmasked_n: int = 0
 
 
 UNMEASURABLE = "unmeasurable"
@@ -378,9 +393,10 @@ class FoldPolicy:
         llm_rescan_clears: Whether a reading of the original as clean, proposing nothing to hide,
             releases the redacted copy of a recording REDACT withheld only because its re-scan still
             read a finding. An incomplete scan or re-scan is never cleared.
-        llm_reset_redactions: Whether a reading's ``release`` entries reset the masks they name to
-            the original words, so a redacted copy is released with fewer masks, or the original is
-            released where every mask was reset.
+        llm_reset_redactions: Whether a reading's ``release`` entries unmask the words they name.
+        llm_human_review_categories: Upper-cased reviewer categories whose ``redact`` entries route
+            the recording to human review rather than to a plain withholding, where every ``redact``
+            entry of the reading is in one of them.
     """
 
     conformance_flags: bool = True
@@ -391,6 +407,7 @@ class FoldPolicy:
     llm_redaction_withholds: bool = False
     llm_rescan_clears: bool = False
     llm_reset_redactions: bool = False
+    llm_human_review_categories: tuple[str, ...] = ()
     conformance_flags_by_family: dict[str, bool] = field(default_factory=dict)
 
     @classmethod
@@ -414,6 +431,9 @@ class FoldPolicy:
             llm_redaction_withholds=bool(config.get(f"{_SECTION}.llm_redaction_withholds", False)),
             llm_rescan_clears=bool(config.get(f"{_SECTION}.llm_rescan_clears", False)),
             llm_reset_redactions=bool(config.get(f"{_SECTION}.llm_reset_redactions", False)),
+            llm_human_review_categories=tuple(
+                str(category).upper() for category in (config.get(f"{_SECTION}.llm_human_review_categories") or ())
+            ),
             conformance_flags_by_family={
                 str(family): bool(flags)
                 for family, flags in (config.get(f"{_SECTION}.conformance_flags_by_family") or {}).items()
@@ -608,34 +628,50 @@ def _reviewer_cleared(llm_redaction: Mapping[str, Any] | None) -> bool:
     return not any(str(entry.get("action")) == "redact" for entry in annotation.get("proposal") or ())
 
 
-def _reviewer_may_reset(llm_redaction: Mapping[str, Any] | None) -> tuple[bool, bool]:
-    """Whether the reading may reset REDACT's masks, and whether it may reset every one of them.
+def reviewer_may_unmask(llm_redaction: Mapping[str, Any] | None) -> bool:
+    """Whether the reading's ``release`` entries may unmask the words they name.
 
     Args:
         llm_redaction: REVIEW's annotation, or None where it wrote none.
 
     Returns:
-        ``(some, all)``. ``some`` is True only where the reviewer read the text (``clean`` or
-        ``flagged``) and proposed no ``redact`` entry: a reading asking to hide more moves nothing
-        toward release. ``all`` further requires that the original was not read as carrying PII,
-        since resetting every mask of an original judged identifying contradicts that judgment.
+        True only where the reviewer read the text (``clean`` or ``flagged``) and proposed no
+        ``redact`` entry: a reading asking to hide more moves nothing toward release.
     """
     annotation = dict(llm_redaction or {})
     if annotation.get("status") not in ("clean", "flagged"):
-        return False, False
-    if any(str(entry.get("action")) == "redact" for entry in annotation.get("proposal") or ()):
-        return False, False
-    return True, annotation.get("original") != "carries_pii"
+        return False
+    return not any(str(entry.get("action")) == "redact" for entry in annotation.get("proposal") or ())
+
+
+def needs_human_review(llm_redaction: Mapping[str, Any] | None, categories: Sequence[str]) -> bool:
+    """Whether every ``redact`` entry of a reading is in a category routed to human review.
+
+    Args:
+        llm_redaction: REVIEW's annotation, or None where it wrote none.
+        categories: Upper-cased categories, as ``verdict.llm_human_review_categories``.
+
+    Returns:
+        True only where the reading proposes hiding more (:func:`_reviewer_found_residue`) and each
+        of its ``redact`` entries carries one of ``categories``.
+    """
+    if not categories or not _reviewer_found_residue(llm_redaction):
+        return False
+    wanted = set(categories)
+    return all(
+        str(entry.get("category") or "").upper() in wanted
+        for entry in dict(llm_redaction or {}).get("proposal") or ()
+        if str(entry.get("action")) == "redact"
+    )
 
 
 def _release_from(
     node_verdicts: Sequence[NodeVerdict],
     evidence: RedactionEvidence,
     ran: Mapping[str, RunState],
-    reviewer_withholds: bool = False,
+    reviewer_withholds: str | None = None,
     speech_declined: bool = False,
     reviewer_clears: bool = False,
-    reviewer_resets: tuple[bool, bool] = (False, False),
 ) -> tuple[Release, str | None]:
     """Which artefact may be handed on: the evidence's answer, then the reviewer's moves.
 
@@ -645,29 +681,27 @@ def _release_from(
 
     Args:
         node_verdicts: Every node verdict the fold was given.
-        evidence: What the store says about whether anything was redactable.
+        evidence: What the store says about whether anything was redactable, and which masks
+            stand once the reviewer's unmasks and the content-word trim are applied.
         ran: Whether each node ran.
-        reviewer_withholds: Whether the reviewer read residue and the policy lets that withhold.
-            It may only tighten: it turns either release into a withholding, whether or not REDACT
-            ran, and never touches a withholding or a ``not_assessed``.
+        reviewer_withholds: The withholding ground where the reviewer read residue and the policy
+            lets that withhold, else None. It may only tighten: it turns either release into a
+            withholding, whether or not REDACT ran, and never touches a withholding or a
+            ``not_assessed``.
         speech_declined: Whether the ruleset declined SPEECH, in which case a task that carries no
             lexical content by construction is released without redaction.
         reviewer_clears: Whether the reviewer read the original as clean, proposed nothing to hide,
             and the policy lets that release. It moves only a REDACT ``fail`` whose re-scan still read
             a finding, and only to the redacted copy.
-        reviewer_resets: ``(some, all)`` from :func:`_reviewer_may_reset` under the policy. Where
-            the redacted copy is released and the reading's ``release`` entries reset some of
-            REDACT's masks, the copy keeps only the rest; where they reset every mask and ``all``
-            holds, the original is released.
 
     Returns:
         Which artefact may be handed on, never anything about the store, and the ground behind it.
         A REDACT ``pass`` clears the redacted copy and not the original; the ground is None wherever
-        REDACT itself decided, and one of the controlled grounds otherwise.
+        REDACT itself decided and its plan stands, and one of the controlled grounds otherwise.
     """
     release, ground = _release_from_evidence(node_verdicts, evidence, ran, speech_declined)
-    if reviewer_withholds and release in (Release.WITH_REDACTION, Release.WITHOUT_REDACTION):
-        return Release.WITHHELD, REVIEWER_PROPOSED_REDACTION
+    if reviewer_withholds is not None and release in (Release.WITH_REDACTION, Release.WITHOUT_REDACTION):
+        return Release.WITHHELD, reviewer_withholds
     redact = next((verdict for verdict in node_verdicts if verdict.node == _REDACT), None)
     if (
         reviewer_clears
@@ -678,13 +712,11 @@ def _release_from(
         and evidence.rescan_survivors
     ):
         release, ground = Release.WITH_REDACTION, REVIEWER_CLEARED_RESCAN
-    some, every = reviewer_resets
-    if some and release is Release.WITH_REDACTION and 0 < evidence.masks_reset_n <= evidence.masks_n:
-        if evidence.masks_reset_n == evidence.masks_n:
-            if every:
-                return Release.WITHOUT_REDACTION, REVIEWER_RESET_EVERY_MASK
-            return release, ground
-        return Release.WITH_REDACTION, REVIEWER_RESET_SOME_MASKS
+    if release is Release.WITH_REDACTION and evidence.masks_changed:
+        reviewer = evidence.reviewer_unmasked_n > 0
+        if evidence.masks_final_n == 0:
+            return Release.WITHOUT_REDACTION, REVIEWER_UNMASKED_ALL if reviewer else NO_CONTENT_MASKED
+        return Release.WITH_REDACTION, REVIEWER_UNMASKED_SOME if reviewer else MASKS_TRIMMED_TO_CONTENT
     return release, ground
 
 
@@ -900,6 +932,7 @@ def fold_file_verdict(
     ):
         reasons.append(NodeVerdict(_SPEECH, Outcome.FLAG, None, NO_LEXICAL_ITEM_PRODUCED))
     annotation = dict(llm_redaction or {})
+    human_review = needs_human_review(annotation, rules.llm_human_review_categories)
     if rules.llm_redaction_flags and _reviewer_found_residue(annotation):
         named = ", ".join(
             sorted(
@@ -910,11 +943,8 @@ def fold_file_verdict(
                 }
             )
         )
-        reasons.append(
-            NodeVerdict(
-                _VERDICT, Outcome.FLAG, None, f"{LLM_REDACTION_RESIDUE}: {named}" if named else LLM_REDACTION_RESIDUE
-            )
-        )
+        ground_text = REVIEWER_NEEDS_HUMAN_REVIEW if human_review else LLM_REDACTION_RESIDUE
+        reasons.append(NodeVerdict(_VERDICT, Outcome.FLAG, None, f"{ground_text}: {named}" if named else ground_text))
     for record in flag_gates or ():
         if record.get("passed") is not False:
             continue
@@ -985,15 +1015,13 @@ def fold_file_verdict(
 
     withholds = rules.llm_redaction_withholds and _reviewer_found_residue(llm_redaction)
     clears = rules.llm_rescan_clears and _reviewer_cleared(llm_redaction)
-    resets = _reviewer_may_reset(llm_redaction) if rules.llm_reset_redactions else (False, False)
     release, release_ground = _release_from(
         node_verdicts,
         redaction or RedactionEvidence(),
         ran,
-        withholds,
+        (REVIEWER_NEEDS_HUMAN_REVIEW if human_review else REVIEWER_PROPOSED_REDACTION) if withholds else None,
         speech_declined=routes.get(_SPEECH) == DECLINED,
         reviewer_clears=clears,
-        reviewer_resets=resets,
     )
 
     return FileVerdict(
