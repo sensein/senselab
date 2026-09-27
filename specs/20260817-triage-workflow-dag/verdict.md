@@ -454,13 +454,13 @@ survivor and is never cleared; `flag`, `not_assessed` and every other row are un
 released with the masks the word-level rule leaves (`mask_plan` in `nodes/redact.py`, recorded on the
 `pii_ledger` measurement VERDICT writes beside its verdict). Each planned mask covers words; a word
 leaves it when a reviewer `release` entry names it and `verdict.llm_reset_redactions` lets the reading
-unmask (read the text, proposed no `redact`), or when it is not a residue content word, which no mask
+unmask (the reviewer read the text), or when it is not a residue content word, which no mask
 keeps. No mask changed leaves the answer as it is. Some masks standing gives `release_with_redaction`
 under `REVIEWER_UNMASKED_SOME` where the reviewer unmasked a word, else `MASKS_TRIMMED_TO_CONTENT`;
 none standing gives `release_without_redaction` under `REVIEWER_UNMASKED_ALL`, else
 `NO_CONTENT_MASKED`. The release directory holds the source re-masked with the standing masks, or is
-emptied. The reviewer's entries are not applied where they would unmask every word of an original it
-read as `carries_pii`. Nothing here moves `withheld` or `not_assessed`. The rule and its measurement
+emptied. A reading's `redact` entries do not stop its `release` entries from unmasking: they decide the
+release on their own, and the withholding above is applied first. Nothing here moves `withheld` or `not_assessed`. The rule and its measurement
 are in `specs/20260927-pii-span-ledger/design.md`.
 
 **A condition is held for a person.** With `verdict.llm_human_review_categories` naming it

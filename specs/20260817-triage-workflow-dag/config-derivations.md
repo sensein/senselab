@@ -1662,10 +1662,10 @@ verdict.llm_reset_redactions: true
   could involve the entire mask or part of a mask. it should never keep not content words masked if
   that happens." True on those instructions, and not fitted: no false-release rate for the reviewer
   on this corpus exists. An entry unmasks exactly the words it names, as whole-token runs at every
-  place it occurs, whether that is a whole mask or part of one. A reading proposing any `redact`
-  unmasks nothing; the entries are not applied where they would leave no mask over an original the
-  reviewer read as `carries_pii`; it never moves `withheld` or `not_assessed`, and has no effect
-  while the reviewer is off. The content-word trim is not governed by this key: no mask ever keeps a
+  place it occurs, whether that is a whole mask or part of one, whatever else the reading proposes
+  or concludes about the original (owner, 2026-09-27: named unmasks always apply). A reading's
+  `redact` entries still decide its release on their own; this key only changes which masked words
+  stand. It never moves `withheld` or `not_assessed`, and has no effect while the reviewer is off. The content-word trim is not governed by this key: no mask ever keeps a
   non-content word. The rule is in `specs/20260927-pii-span-ledger/design.md`.
 
 verdict.llm_human_review_categories: [CONDITION]

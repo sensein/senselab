@@ -1164,8 +1164,12 @@ class TestTheMasksThatStandDecideTheRelease:
         owed = RedactionEvidence(lexical_words_n=42, scanned=True, findings_n=3, masks_changed=True)
         assert _release_from([], owed, ran)[0] is Release.NOT_ASSESSED
 
-    def test_only_a_reading_that_hides_nothing_more_may_unmask(self) -> None:
-        """A release-only reading may unmask; a redact entry, no reading, or no reading taken may not."""
+    def test_any_reading_taken_may_unmask(self) -> None:
+        """Owner, 2026-09-27: the reviewer names exactly what to unmask, whatever else it proposes.
+
+        A reading that also proposes a redaction is withheld on that ground; its unmasks still
+        change which words the ledger shows masked. No reading, or none taken, unmasks nothing.
+        """
         release_only = {"status": "flagged", "proposal": [{"text": "brooklyn", "action": "release"}]}
         hides_more = {
             "status": "flagged",
@@ -1173,9 +1177,10 @@ class TestTheMasksThatStandDecideTheRelease:
         }
         assert reviewer_may_unmask(release_only) is True
         assert reviewer_may_unmask({"status": "clean", "proposal": []}) is True
-        assert reviewer_may_unmask(hides_more) is False
+        assert reviewer_may_unmask(hides_more) is True
         assert reviewer_may_unmask(None) is False
         assert reviewer_may_unmask({"status": "absent", "failure": "CUDA error", "proposal": []}) is False
+        assert reviewer_may_unmask({"status": "nothing_to_read", "proposal": []}) is False
 
 
 class TestAConditionAloneRoutesToHumanReview:

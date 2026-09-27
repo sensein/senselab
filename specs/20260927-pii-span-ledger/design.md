@@ -28,7 +28,7 @@ it produced.
 1. A planned mask covers every consensus word whose timing hull its extent overlaps.
 2. A word leaves the mask when a reviewer `release` entry names it — matched as a run of whole
    tokens, at every place the quote occurs — and the fold lets the reading unmask
-   (`verdict.llm_reset_redactions`, and the reading proposed no `redact`). An entry may cover a whole
+   (`verdict.llm_reset_redactions`, and the reviewer read the text). An entry may cover a whole
    mask or part of one.
 3. A word also leaves the mask when it is not a residue content word:
    `residue.is_content_word` — lexical, not a vocalisation, filler, fragment or bracketed marker, and
@@ -44,8 +44,12 @@ it produced.
 4. The kept words of each mask are re-cut into one extent per run of stream-adjacent kept words.
 5. A mask none of whose words stays masked disappears. A mask covering no word at all is kept as
    planned: nothing says what it hides.
-6. Where applying the reviewer's entries would leave no mask over an original the reviewer itself
-   read as `carries_pii`, they are not applied (`reviewer_guarded` on the ledger); the trim still is.
+6. The reviewer's entries apply whatever else the reading proposes. A reading that also proposes a
+   `redact`, or reads the original as `carries_pii`, still unmasks exactly the words it named; its
+   `redact` entries decide the release on their own (withheld, or held for human review), and only
+   the mask state changes. Owner, 2026-09-27: the reviewer indicates exactly what to unmask. This
+   removed a guard that withheld the entries where they would have unmasked every word of an
+   original read as `carries_pii` (122 readings on r6; §6).
 
 **The padding.** A kept run's extent is the words' timing hull widened by `redaction.padding_ms` on
 each side, the widening stopping at the consensus extent of the nearest word left unmasked on that

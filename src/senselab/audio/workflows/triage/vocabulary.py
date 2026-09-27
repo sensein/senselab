@@ -635,13 +635,11 @@ def reviewer_may_unmask(llm_redaction: Mapping[str, Any] | None) -> bool:
         llm_redaction: REVIEW's annotation, or None where it wrote none.
 
     Returns:
-        True only where the reviewer read the text (``clean`` or ``flagged``) and proposed no
-        ``redact`` entry: a reading asking to hide more moves nothing toward release.
+        True wherever the reviewer read the text (``clean`` or ``flagged``). Its ``redact`` entries
+        decide the release on their own (:func:`_reviewer_found_residue`); they do not stop its
+        ``release`` entries from saying which masked words are not identifying.
     """
-    annotation = dict(llm_redaction or {})
-    if annotation.get("status") not in ("clean", "flagged"):
-        return False
-    return not any(str(entry.get("action")) == "redact" for entry in annotation.get("proposal") or ())
+    return dict(llm_redaction or {}).get("status") in ("clean", "flagged")
 
 
 def needs_human_review(llm_redaction: Mapping[str, Any] | None, categories: Sequence[str]) -> bool:

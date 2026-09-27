@@ -1100,8 +1100,6 @@ class MaskPlan:
     Attributes:
         masks: One outcome per planned mask, in stream order.
         reviewer_applied: Whether the reviewer's ``release`` entries were applied.
-        reviewer_guarded: Whether they were withheld because they would have unmasked every word of
-            an original the reviewer itself read as carrying PII.
         release_unplaced: ``release`` quotes that match no run of residue words.
         release_off_mask: ``release`` quotes that match words no mask covers.
         proposals: The reviewer's ``redact`` entries, placed.
@@ -1110,7 +1108,6 @@ class MaskPlan:
 
     masks: tuple[MaskOutcome, ...]
     reviewer_applied: bool
-    reviewer_guarded: bool
     release_unplaced: tuple[str, ...]
     release_off_mask: tuple[str, ...]
     proposals: tuple[ReviewerSpan, ...]
@@ -1171,7 +1168,6 @@ class MaskPlan:
             "release": release,
             "release_ground": release_ground,
             "reviewer_applied": self.reviewer_applied,
-            "reviewer_guarded": self.reviewer_guarded,
             "padding_ms": self.padding_ms,
             "masks": [
                 {
@@ -1360,10 +1356,9 @@ def mask_plan(
     ``reviewer_applies``; or when it is not a residue content word
     (:func:`~senselab.audio.workflows.triage.residue.is_content_word`), which no mask ever keeps; or
     when no detector marked it and some word of the same mask is marked, so only the padding reached
-    it. The kept words of each mask are re-cut into one extent per adjacent run. A mask whose words all left
-    disappears; a mask covering no word at all is kept as planned. Where applying the reviewer's
-    entries would leave no mask over an original the reviewer read as carrying PII, they are not
-    applied. The rule and its derivation are in ``specs/20260927-pii-span-ledger/design.md``.
+    it. The kept words of each mask are re-cut into one extent per adjacent run. A mask whose words
+    all left disappears; a mask covering no word at all is kept as planned. The rule and its
+    derivation are in ``specs/20260927-pii-span-ledger/design.md``.
 
     Args:
         store: The provenance store, carrying REDACT's planned spans, SPEECH's residue and REVIEW's
@@ -1379,7 +1374,6 @@ def mask_plan(
     planned = planned_extents(store)
     annotation = find_measurement(store, REDACTION_LLM_ANNOTATION)
     entries = list((annotation.attributes.get("proposal") or ()) if annotation is not None else ())
-    identifying = annotation is not None and annotation.attributes.get("original") == "carries_pii"
     try:
         residue = residue_words(store)
     except ValueError:
@@ -1453,12 +1447,8 @@ def mask_plan(
             )
         return tuple(outcomes)
 
-    guarded = False
-    masks = build(reviewer_applies and bool(named))
-    if reviewer_applies and named and identifying and planned and not any(mask.final for mask in masks):
-        masks = build(False)
-        guarded = True
-    applied = reviewer_applies and bool(named) and not guarded
+    applied = reviewer_applies and bool(named)
+    masks = build(applied)
 
     final_ids = {word.word_id for mask in masks for word in mask.words if word.state == MASKED}
     review_set = {category.upper() for category in human_review_categories}
@@ -1487,7 +1477,6 @@ def mask_plan(
     return MaskPlan(
         masks=masks,
         reviewer_applied=applied,
-        reviewer_guarded=guarded,
         release_unplaced=tuple(unplaced),
         release_off_mask=tuple(off_mask),
         proposals=tuple(proposals),
