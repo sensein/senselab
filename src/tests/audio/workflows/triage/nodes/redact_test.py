@@ -139,6 +139,7 @@ def _seed_redact_store(  # noqa: C901 — one independent block per author, as t
     scanned_by: Sequence[str] = ALL_DETECTORS,
     scan_failed: Sequence[str] = (),
     timings: dict[int, dict[str, tuple[float, float]]] | None = None,
+    residue: Sequence[int] | None = None,
 ) -> None:
     """Write the store PREPROCESS and SPEECH leave for REDACT, with ``tmp_path`` as the run dir.
 
@@ -148,7 +149,8 @@ def _seed_redact_store(  # noqa: C901 — one independent block per author, as t
     markings placed on a word the finding's own extent does not reach, which is the state a
     re-planning pass exists to widen. ``target_speaker`` writes SPEECH's verdict so a speaker-scoped
     reader has something to scope by. ``timings`` gives a word, by index, its sources' own timings,
-    so its hull can reach past its derived extent.
+    so its hull can reach past its derived extent. ``residue`` names, by index, the words the scan's
+    residue holds; every word when None.
     """
     ends = [_word_extent(i)[1] for i in range(len(words))] + [float(extent[1]) for _c, extent, *_r in findings]
     duration_s = max([5.0, *(end + 1.0 for end in ends)])
@@ -241,7 +243,7 @@ def _seed_redact_store(  # noqa: C901 — one independent block per author, as t
                 "name": "pii_scan",
                 "scanned_by": list(scanned_by),
                 "failed": list(scan_failed),
-                "residue_word_ids": list(word_ids),
+                "residue_word_ids": list(word_ids) if residue is None else [word_ids[i] for i in residue],
             },
         )
         store.was_generated_by(scan_id, pii_act)
@@ -817,6 +819,67 @@ class TestTheWordLevelMaskRule:
         assert '"words_n": 2' in (released / "consensus.json").read_text()
         assert _silent(released / "audio.wav", 2.1, 3.4)
         assert not _silent(released / "audio.wav", 1.1, 1.4)
+
+    def test_a_finding_bridging_task_words_masks_only_the_residue_either_side(
+        self, store: ProvStore, redact_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A read passage's residue "maria ... smith" around stimulus words: two masks, the passage audible."""
+        _seed_redact_store(
+            store,
+            tmp_path,
+            words=["the", "caterpillar", "maria", "ate", "leaves", "smith"],
+            findings=[("PERSON", (2.0, 5.5))],
+            residue=[2, 5],
+        )
+        _stub_pii(monkeypatch, findings=[])
+        redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
+        plan = _plan(store, applies=False)
+        (mask,) = plan.masks
+        assert (mask.outcome, mask.task_words_n) == (MASK_TRIMMED, 2)
+        assert _states(plan) == {"maria": MASKED, "smith": MASKED}, "no task word is listed under a mask"
+        assert len(plan.final) == 2
+        _write_ledger(store, plan, "release_with_redaction", None)
+        _settle(store, "release_with_redaction", None, tmp_path)
+        released = _release(tmp_path)
+        assert (released / "transcript.txt").read_text() == "the caterpillar [PERSON] ate leaves [PERSON]\n"
+        assert _silent(released / "audio.wav", 2.1, 2.4) and _silent(released / "audio.wav", 5.1, 5.4)
+        assert not _silent(released / "audio.wav", 3.1, 3.4)
+        assert not _silent(released / "audio.wav", 4.1, 4.4)
+
+    def test_a_mask_over_task_words_only_disappears(
+        self, store: ProvStore, redact_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A finding placed on the passage's own words masks nothing: the scan never read them."""
+        _seed_redact_store(
+            store,
+            tmp_path,
+            words=["the", "caterpillar", "ate", "maria"],
+            findings=[("PERSON", _word_extent(1))],
+            residue=[3],
+        )
+        _stub_pii(monkeypatch, findings=[])
+        redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
+        plan = _plan(store, applies=False)
+        (mask,) = plan.masks
+        assert (mask.outcome, mask.words, plan.final, mask.task_words_n) == (MASK_UNMASKED, (), [], 1)
+
+    def test_a_finding_over_the_whole_transcript_masks_only_residue_content(
+        self, store: ProvStore, redact_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """SPEECH's fail-safe for an unlocated finding covers every word; only the residue's content stays masked."""
+        _seed_redact_store(
+            store,
+            tmp_path,
+            words=["the", "caterpillar", "ate", "maria", "and", "leaves"],
+            findings=[("PERSON", (0.0, 5.5))],
+            residue=[3, 4],
+        )
+        _stub_pii(monkeypatch, findings=[])
+        redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
+        plan = _plan(store, applies=False)
+        assert _states(plan) == {"maria": MASKED, "and": UNMASKED_BY_TRIM}
+        (extent,) = plan.final
+        assert extent.start >= 2.5 and extent.end <= 4.0, "the mask stops at the task words either side"
 
     def test_a_mask_over_function_words_only_disappears(
         self, store: ProvStore, redact_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

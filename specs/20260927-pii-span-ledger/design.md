@@ -205,3 +205,52 @@ the text was wrong, and it erred toward hiding.
 **Fix.** The text is rendered from the ledger's owners on every path. Only the audio source depends
 on whether the final extents are REDACT's own: they are, and REDACT's `redacted` stream is reused;
 they are not, and the source is re-masked. The test is built from the r6 "back in [DATE_TIME]" case.
+
+## 9. A mask covers only the residue: the task's own words are never masked (2026-09-27, evening)
+
+**Owner:** "regarding redact for caterpillar passage or any read passage there should be very little
+to redact that's related to the text itself."
+
+**Measured on r6** (every read-aloud recording REDACT planned masks for; words counted by consensus
+extent overlapping a planned extent):
+
+| family | recordings | masks | seconds masked | words reached | of them task words | residue words |
+|---|---|---|---|---|---|---|
+| caterpillar | 124 | 164 | 4,357 | 10,213 | 9,831 | 382 |
+| rainbow | 67 | 87 | 765 | 1,505 | 1,235 | 270 |
+| harvard | 428 | 451 | 822 | 1,870 | 1,069 | 801 |
+| stroop | 131 | 185 | 2,462 | 1,357 | 610 | 747 |
+| cape-v | 129 | 139 | 221 | 478 | 211 | 267 |
+
+Single caterpillar masks ran 157 s, 145 s and 125 s: the whole take.
+
+**Mechanism, in SPEECH step 7 (`nodes/speech.py`, the pii placement loop).** The scan reads only the
+residue, but a finding is placed back on the full consensus transcript, and two paths carry it onto
+the task's words:
+
+1. **Bridging.** A located finding runs from the position of its first residue token to that of its
+   last, and every consensus word between them is covered and marked. Residue tokens are adjacent in
+   the scanned text and far apart in the transcript, so a two-token finding over a misread word at
+   10 s and another at 150 s covers the passage between.
+2. **The unlocated fail-safe.** A finding whose text cannot be matched back to the scanned tokens
+   covers `(0, len(words) - 1)`: every word of the transcript, the passage included. The caterpillar
+   examples carry `haystack: consensus` and mark "Do you like amusement parks? Well, I sure do. To
+   amuse myself…", the passage's own opening.
+
+Neither is a finding on the task's words: the detectors never read them.
+
+**Fix, at the fold (`mask_plan`), so no REDACT re-run and no re-review.** A mask covers only residue
+words; a word outside the residue is never listed under a mask and never masked. A planned extent
+that reaches a task word's audio (its consensus extent) is re-cut to runs of its kept residue words
+even where no word changed state, with the padding stopping at the nearest unmasked word, which now
+includes the task's words either side. A mask left covering task words only disappears. The unlocated
+fail-safe keeps its intent, narrowed to what the scan read: every residue content word stays masked.
+Each mask records `task_words_n`, how many task words its planned extent reached, so the ledger keeps
+the evidence of what REDACT planned without listing those words as masked.
+
+SPEECH's placement itself is not changed here: changing it re-runs SPEECH's PII step, which retires
+every REVIEW reading and needs a GPU re-review. The fold-level rule makes the released copy right
+without it; the placement defect is recorded for the next SPEECH change.
+
+REVIEW's inputs are untouched: it read REDACT's rendering of the planned extents, and the stored
+readings stand.
