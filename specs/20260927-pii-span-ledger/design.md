@@ -35,6 +35,12 @@ it produced.
    not in `residue.FUNCTION_WORDS`, the list the residue's own `content` test reads — or when it is
    not in the residue at all (task content the padding reached). This applies with or without a
    reading, whether the padding or the finding itself caught the word.
+3a. And a content word leaves the mask when no detector marked it (SPEECH's `label`/`pii`
+   assertions, the words each finding overlaps) while another word of the same mask is marked: only
+   the padding reached it. On the first replay the free-speech-1 card's DATE_TIME mask, planned over
+   "this morning" with 250 ms of padding, also held "study", a content word no detector marked; under
+   rules 1-3 alone it stayed masked. A mask none of whose words is marked keeps its content words,
+   since nothing then says which of them the finding was.
 4. The kept words of each mask are re-cut into one extent per run of stream-adjacent kept words.
 5. A mask none of whose words stays masked disappears. A mask covering no word at all is kept as
    planned: nothing says what it hides.

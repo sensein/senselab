@@ -731,6 +731,23 @@ class TestTheWordLevelMaskRule:
         assert [mask.outcome for mask in plan.masks] == [MASK_TRIMMED]
         assert _states(plan) == {"alice": MASKED, "in": UNMASKED_BY_TRIM}
 
+    def test_a_content_word_only_the_padding_reached_is_unmasked(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A 600 ms margin reaches "met" and "in"; only the word the detector marked stays masked."""
+        config = _override(tmp_path, "redaction:\n  padding_ms: 600\n  fill: silence\n")
+        self._passed(store, config, tmp_path, monkeypatch, findings=[("PERSON", _word_extent(2))])
+        plan = mask_plan(store, reviewer_applies=False, padding_ms=600)
+        (mask,) = plan.masks
+        assert mask.outcome == MASK_TRIMMED
+        assert {word.text: (word.state, word.finding) for word in mask.words} == {
+            "met": (UNMASKED_BY_TRIM, False),
+            "alice": (MASKED, True),
+            "in": (UNMASKED_BY_TRIM, False),
+        }
+        (extent,) = plan.final
+        assert (extent.start, extent.end) == (1.5, 3.0), "the margin stops at each unmasked neighbour"
+
     def test_a_mask_over_function_words_only_disappears(
         self, store: ProvStore, redact_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

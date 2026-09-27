@@ -1005,7 +1005,8 @@ UNMASKED_BY_REVIEWER = "unmasked_by_reviewer"
 """A word a mask hid that a reviewer ``release`` entry named, and the fold let the entry unmask."""
 
 UNMASKED_BY_TRIM = "unmasked_by_trim"
-"""A word a mask hid that is not content: a closed-class word, a filler, a marker, or task content."""
+"""A word a mask covered and does not keep: not a residue content word (a closed-class word, a filler,
+a marker, task content), or a content word no detector marked, which only the padding reached."""
 
 PROPOSED_BY_REVIEWER = "proposed_by_reviewer"
 """A word a reviewer ``redact`` entry named that no mask hides."""
@@ -1036,7 +1037,8 @@ class MaskWord:
         text: Its surface.
         state: :data:`MASKED`, :data:`UNMASKED_BY_REVIEWER` or :data:`UNMASKED_BY_TRIM`.
         named: Whether a reviewer ``release`` entry named it, whether or not the fold applied it.
-        content: Whether it is a residue content word, the only kind a mask keeps.
+        content: Whether it is a residue content word.
+        finding: Whether a detector marked it, rather than the padding reaching it.
     """
 
     word_id: str
@@ -1044,6 +1046,7 @@ class MaskWord:
     state: str
     named: bool
     content: bool
+    finding: bool
 
 
 @dataclass(frozen=True)
@@ -1183,6 +1186,7 @@ class MaskPlan:
                             "state": word.state,
                             "named": word.named,
                             "content": word.content,
+                            "finding": word.finding,
                         }
                         for word in mask.words
                     ],
@@ -1354,8 +1358,9 @@ def mask_plan(
     Each planned mask covers the consensus words its extent overlaps. A word leaves the mask when a
     reviewer ``release`` entry names it -- whole-token runs, at every place the quote occurs -- and
     ``reviewer_applies``; or when it is not a residue content word
-    (:func:`~senselab.audio.workflows.triage.residue.is_content_word`), which no mask ever keeps. The
-    kept words of each mask are re-cut into one extent per adjacent run. A mask whose words all left
+    (:func:`~senselab.audio.workflows.triage.residue.is_content_word`), which no mask ever keeps; or
+    when no detector marked it and some word of the same mask is marked, so only the padding reached
+    it. The kept words of each mask are re-cut into one extent per adjacent run. A mask whose words all left
     disappears; a mask covering no word at all is kept as planned. Where applying the reviewer's
     entries would leave no mask over an original the reviewer read as carrying PII, they are not
     applied. The rule and its derivation are in ``specs/20260927-pii-span-ledger/design.md``.
@@ -1384,6 +1389,7 @@ def mask_plan(
     words = [word for word in consensus_words(store) if word.extent is not None]
     covered = [[word for word in words if _overlaps(word_hull(word), (extent.start, extent.end))] for extent in planned]
     under_masks = {word.id for group in covered for word in group}
+    marked = _pii_marked_words(store)
 
     named: set[str] = set()
     unplaced: list[str] = []
@@ -1403,13 +1409,14 @@ def mask_plan(
     def content(word: Entity) -> bool:
         return word.id in residue_ids and is_content_word(str(word.attributes.get("text") or ""))
 
+    def keepable(group: Sequence[Entity]) -> set[str]:
+        found = {word.id for word in group if word.id in marked}
+        return {word.id for word in group if content(word) and (word.id in found or not found)}
+
+    keepable_ids = {word_id for group in covered for word_id in keepable(group)}
+
     def build(apply_reviewer: bool) -> tuple[MaskOutcome, ...]:
-        kept_ids = {
-            word.id
-            for group in covered
-            for word in group
-            if content(word) and not (apply_reviewer and word.id in named)
-        }
+        kept_ids = {word_id for word_id in keepable_ids if not (apply_reviewer and word_id in named)}
         outcomes: list[MaskOutcome] = []
         for extent, group in zip(planned, covered):
             states = [
@@ -1419,10 +1426,11 @@ def mask_plan(
                     state=MASKED
                     if word.id in kept_ids
                     else UNMASKED_BY_REVIEWER
-                    if apply_reviewer and word.id in named and content(word)
+                    if apply_reviewer and word.id in named and word.id in keepable_ids
                     else UNMASKED_BY_TRIM,
                     named=word.id in named,
                     content=content(word),
+                    finding=word.id in marked,
                 )
                 for word in group
             ]
