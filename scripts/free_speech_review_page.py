@@ -1378,6 +1378,7 @@ def render(corpus: Corpus, title: str) -> str:
         detectors=detectors,
         verdicts=_VERDICT_CONTROLS,
         legend=LEGEND_HTML,
+        theme_boot=_THEME_BOOT,
         conditions="".join(
             f'<option value="{value}">{html.escape(label)} ({corpus.review_kinds.get(value, 0)})</option>'
             for value, label in CONDITION_SECTIONS
@@ -1421,7 +1422,8 @@ _VERDICT_CONTROLS = "".join(
 
 _STYLE = """
 :root{--bg:#fbfaf8;--fg:#1d1c1a;--mut:#6b6860;--line:#e2ded6;--card:#fff;--acc:#7a4b12;
---pii:#fde8c8;--piib:#c98a2b;--brk:#8d8a83;--brkbg:#f0eeea;--catbg:#f7dcb0;--catfg:#7a4b12;}
+--pii:#fde8c8;--piib:#c98a2b;--brk:#8d8a83;--brkbg:#f0eeea;--catbg:#f7dcb0;--catfg:#7a4b12;
+--ured:#b3123a;--ugreen:#1e7b34;--uorange:#a86b00;color-scheme:light}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--fg);
 font:16px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;}
@@ -1485,11 +1487,13 @@ border-radius:3px;padding:0 4px}
 .empty{color:var(--mut);font-style:italic}
 .bracket{font-family:ui-monospace,Menlo,monospace;font-size:.82em;color:var(--brk);
 background:var(--brkbg);border-radius:3px;padding:0 3px;letter-spacing:.02em}
-mark.pii,mark.swatch{background:transparent;color:var(--fg);border-bottom:2px solid var(--line);
+mark.pii,mark.swatch{background:transparent;color:var(--fg);border-bottom:3px solid var(--line);
 border-radius:0;padding:0 1px}
-mark.pii.u-red,mark.swatch.u-red{border-bottom-color:#c0392b}
-mark.pii.u-green,mark.swatch.u-green{border-bottom-color:#2e8b3a}
-mark.pii.u-orange,mark.swatch.u-orange{border-bottom-color:#e08a1e}
+mark.pii.u-red,mark.swatch.u-red{border-bottom-color:var(--ured)}
+mark.pii.u-green,mark.swatch.u-green{border-bottom-color:var(--ugreen)}
+mark.pii.u-orange,mark.swatch.u-orange{border-bottom-color:var(--uorange)}
+.themebtn{font:inherit;font-size:11px;padding:1px 7px;border:1px solid var(--line);border-radius:9px;
+background:var(--card);color:var(--mut);cursor:pointer}
 mark.pii .cat,mark.swatch .cat{font-size:9.5px;letter-spacing:.06em;color:var(--catfg);background:var(--catbg);
 border-radius:3px;padding:0 3px;margin-right:4px;vertical-align:.18em;
 font-family:ui-monospace,Menlo,monospace}
@@ -1634,9 +1638,12 @@ main{padding:12px 10px 120px}
 mark.pii{padding:1px 3px}
 }
 @media (prefers-reduced-motion:reduce){*{scroll-behavior:auto !important}}
-@media (prefers-color-scheme:dark){
+"""
+
+_DARK_RULES = """
 :root{--bg:#171614;--fg:#eceae5;--mut:#9a958c;--line:#33312d;--card:#1f1e1b;--acc:#d9a45f;
---pii:#4a3413;--piib:#c08a38;--brk:#a09b91;--brkbg:#2a2825;--catbg:#5f4418;--catfg:#f0d7a8;}
+--pii:#4a3413;--piib:#c08a38;--brk:#a09b91;--brkbg:#2a2825;--catbg:#5f4418;--catfg:#f0d7a8;
+--ured:#ff5c7a;--ugreen:#5fcf7a;--uorange:#ffc145;color-scheme:dark}
 .r-release_without_redaction{background:#1d2e1d;border-color:#4f7a4f;color:#a8d3a8}
 .r-withheld{background:#331e1b;border-color:#8a4b42;color:#e8a89e}
 .r-release_with_redaction{background:#1c2334;border-color:#4a5c86;color:#a7bce4}
@@ -1648,19 +1655,73 @@ mark.pii{padding:1px 3px}
 .errors{color:#e8a89e}
 #why .ok{color:#a8d3a8}
 #why .bad{color:#e8a89e}
-mark.pii.u-red,mark.swatch.u-red{border-bottom-color:#e8766b}
-mark.pii.u-green,mark.swatch.u-green{border-bottom-color:#7fcf8a}
-mark.pii.u-orange,mark.swatch.u-orange{border-bottom-color:#f0a64a}
 mark.pii[data-v="identifying"]::after{background:#e8a89e}
 mark.pii[data-v="not-identifying"]::after{background:#a7bce4}
 mark.pii[data-v="not-the-category"]::after{background:#a8d3a8}
 .verdict.on{color:#171614}
 .verdict.on kbd{color:#171614;border-color:rgba(0,0,0,.4)}
-}
 """
+
+"""The dark theme, applied where the system prefers dark and the reader has not chosen light, and
+wherever the reader has chosen dark."""
+
+
+def themed(rules: str, scope: str) -> str:
+    """Every rule of a stylesheet fragment, scoped under one root selector.
+
+    Args:
+        rules: Flat ``selector{declarations}`` rules, no nesting.
+        scope: The root selector each rule is placed under; ``:root`` itself becomes it.
+
+    Returns:
+        The scoped rules.
+    """
+    out: list[str] = []
+    for rule in rules.split("}"):
+        if "{" not in rule:
+            continue
+        selectors, declarations = rule.split("{", 1)
+        scoped = [scope if part.strip() == ":root" else f"{scope} {part.strip()}" for part in selectors.split(",")]
+        out.append(",".join(scoped) + "{" + declarations.strip() + "}")
+    return "\n".join(out)
+
+
+_STYLE += (
+    "\n@media (prefers-color-scheme:dark){\n"
+    + themed(_DARK_RULES, ':root:not([data-theme="light"])')
+    + "\n}\n"
+    + themed(_DARK_RULES, ':root[data-theme="dark"]')
+    + "\n"
+)
+
+THEME_KEY = "senselab.fsreview.theme"
+"""The localStorage key holding the reader's theme choice, ``light`` or ``dark``; absent follows the system."""
+
+_THEME_BOOT = (
+    "(function(){try{var t=localStorage.getItem('"
+    + THEME_KEY
+    + "');if(t==='light'||t==='dark')document.documentElement.dataset.theme=t;}catch(e){}})();"
+)
+"""Applied in the head, before the page paints, so a stored choice does not flash the other theme."""
+
 
 _SCRIPT = """
 const KEY='senselab.fsreview.v1';
+/* ---- theme: follows the system until the reader chooses; the choice persists where storage allows ---- */
+const THEMEKEY='senselab.fsreview.theme';
+const themeBtn=document.getElementById('themetoggle');
+const THEMES=['system','light','dark'];
+function themeNow(){return document.documentElement.dataset.theme||'system';}
+function themeLabel(){themeBtn.textContent='theme: '+themeNow();}
+themeBtn.addEventListener('click',()=>{
+  const next=THEMES[(THEMES.indexOf(themeNow())+1)%THEMES.length];
+  if(next==='system')delete document.documentElement.dataset.theme;
+  else document.documentElement.dataset.theme=next;
+  try{if(next==='system')localStorage.removeItem(THEMEKEY);else localStorage.setItem(THEMEKEY,next);}
+  catch(e){}
+  themeLabel();
+});
+themeLabel();
 const sections=[...document.querySelectorAll('.participant')];
 const cards=[...document.querySelectorAll('.rec')];
 const marks=[...document.querySelectorAll('mark.pii')];
@@ -2401,10 +2462,11 @@ _DOCUMENT = """<!doctype html>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="robots" content="noindex,nofollow">
 <title>{title}</title>
-<style>{style}</style></head>
+<style>{style}</style><script>{theme_boot}</script></head>
 <body><div id="wrap">
 <nav id="rail">
 <div class="railhead"><h1>{title}</h1>
+<button id="themetoggle" class="themebtn" type="button">theme: system</button>
 <button id="railtoggle" type="button" aria-expanded="true">filters</button></div>
 <div id="railbody">
 <div class="sum">{participants} participants &middot; {recordings} recordings &middot;
