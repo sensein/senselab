@@ -39,6 +39,7 @@ from senselab.audio.workflows.triage.nodes.common import (
     find_measurement,
     find_measurements,
     find_verdict,
+    mint_live,
     software_agent,
     write_verdict,
 )
@@ -101,9 +102,11 @@ class VerdictResult(NodeResult):
 
     Attributes:
         file_verdict: The graph's conclusion about the recording, on both axes.
+        ledger_entity_id: The ``pii_ledger`` measurement written beside the verdict.
     """
 
     file_verdict: FileVerdict
+    ledger_entity_id: str
 
 
 def _node_verdict_from_entity(entity: Entity) -> NodeVerdict:
@@ -696,7 +699,8 @@ def verdict(
         ),
         detail=file_verdict.record(),
     )
-    ledger_id = store.entity(
+    ledger_id = mint_live(
+        store,
         prov_type="measurement",
         extent=None,
         attributes=plan.record(release=file_verdict.release.value, release_ground=file_verdict.release_ground),
@@ -709,4 +713,5 @@ def verdict(
         view=(verdict_id, *folded_ids),
         verdict_entity_id=verdict_id,
         file_verdict=file_verdict,
+        ledger_entity_id=ledger_id,
     )

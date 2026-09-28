@@ -300,6 +300,70 @@ class TestTheDecisionIsTakenAgainOverTheReading:
         ]
         assert len(live) == 1
 
+    def test_a_fold_that_returns_to_an_earlier_decision_leaves_that_decision_live(self, tmp_path: Path) -> None:
+        """A -> B -> A: the third fold's verdict and ledger stand, not the second's.
+
+        r6, three recordings: the fold at 00015c4a concluded what 374c5fae had, re-minting a verdict
+        e0801b73 had retired. The re-fold then took the store's latest *live* verdict -- e0801b73's
+        -- as its own, kept it, and retired the new ledger instead of the old one.
+        """
+        run_root = _finished_run(tmp_path / "corpus")
+        _seed_verdicts(run_root)
+        config = _config(tmp_path)
+        store = ProvStore.read_jsonl(run_root / "run" / "store.jsonl", run_id=run_root.name)
+
+        def fold() -> None:
+            refold_verdict(
+                store,
+                config,
+                None,
+                run_dir=run_root / "run",
+                artifacts_dir=run_root / "released",
+                summary_dir=tmp_path / "summary",
+            )
+
+        fold()
+        first = next(
+            e
+            for e in store.entities("verdict")
+            if e.attributes.get("node") == "VERDICT" and not store.is_invalidated(e.id)
+        )
+        reading = store.entity(
+            prov_type="measurement",
+            extent=None,
+            attributes={
+                "name": REDACTION_LLM_ANNOTATION,
+                "signal": "consensus_transcript",
+                "status": "flagged",
+                "original": "carries_pii",
+                "proposal": [{"action": "redact", "category": "PERSON", "text": "somebody"}],
+            },
+        )
+        fold()
+        retirer = store.activity(node="TEST", step="retire_reading", parameters={})
+        store.was_invalidated_by(reading, retirer)
+        fold()
+
+        live_verdicts = [
+            e
+            for e in store.entities("verdict")
+            if e.attributes.get("node") == "VERDICT" and not store.is_invalidated(e.id)
+        ]
+        live_ledgers = [
+            e
+            for e in store.entities("measurement")
+            if e.attributes.get("name") == PII_LEDGER and not store.is_invalidated(e.id)
+        ]
+        assert len(live_verdicts) == 1
+        assert len(live_ledgers) == 1
+        (verdict_entity,) = live_verdicts
+        (ledger,) = live_ledgers
+        assert verdict_entity.id != first.id
+        stripped = {k: v for k, v in verdict_entity.attributes.items() if k != "remint"}
+        assert stripped == dict(first.attributes)
+        assert ledger.attributes.get("release_ground") == verdict_entity.attributes.get("release_ground")
+        assert ledger.attributes.get("release") == verdict_entity.attributes.get("release")
+
     def test_only_verdicts_own_conclusion_is_retired(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """What separates this from the replay driver: every other node's verdict stands."""
         run_root = _finished_run(tmp_path / "corpus")

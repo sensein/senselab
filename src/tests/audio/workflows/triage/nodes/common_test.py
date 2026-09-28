@@ -19,6 +19,7 @@ from senselab.audio.workflows.triage.nodes.common import (
     find_measurement,
     host_environment,
     lexical_words,
+    mint_live,
     path_attributes,
     resolve_stream,
     software_agent,
@@ -69,6 +70,35 @@ class TestWriteVerdict:
             detail={"kinds": {"speech": "present"}},
         )
         assert store.get_entity(entity_id).attributes["kinds"] == {"speech": "present"}
+
+
+class TestMintLive:
+    """A conclusion equal to a retired one is minted again, never handed back retired."""
+
+    def test_an_unretired_conclusion_is_the_same_entity(self, store: ProvStore) -> None:
+        """Content-addressed as ever: two identical mints are one live entity."""
+        first = mint_live(store, prov_type="verdict", extent=None, attributes={"node": "TEST", "why": "a"})
+        again = mint_live(store, prov_type="verdict", extent=None, attributes={"node": "TEST", "why": "a"})
+        assert first == again
+        assert not store.is_invalidated(first)
+
+    def test_a_retired_conclusion_comes_back_as_a_new_live_entity(self, store: ProvStore) -> None:
+        """A -> B -> A: the third fold must not return the entity the second retired."""
+        activity_id = store.activity(node="TEST", step=None, parameters={})
+        first = mint_live(store, prov_type="verdict", extent=None, attributes={"node": "TEST", "why": "a"})
+        store.was_invalidated_by(first, activity_id)
+        again = mint_live(store, prov_type="verdict", extent=None, attributes={"node": "TEST", "why": "a"})
+        assert again != first
+        assert not store.is_invalidated(again)
+        assert store.get_entity(again).attributes["remint"] == 1
+        store.was_invalidated_by(again, activity_id)
+        third = mint_live(store, prov_type="verdict", extent=None, attributes={"node": "TEST", "why": "a"})
+        assert store.get_entity(third).attributes["remint"] == 2
+
+    def test_the_reserved_key_is_refused(self, store: ProvStore) -> None:
+        """A caller cannot pass ``remint`` itself."""
+        with pytest.raises(ValueError, match="remint"):
+            mint_live(store, prov_type="verdict", extent=None, attributes={"remint": 3})
 
 
 class TestHostEnvironment:
