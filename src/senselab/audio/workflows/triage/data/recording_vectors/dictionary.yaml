@@ -249,10 +249,11 @@ columns:
     description: How many PII findings the detectors placed on the transcript.
     computation: >-
       Count of live `pii` entities carrying an extent. SPEECH scans the residue of the consensus and
-      of each ASR source's own reading, and writes one entity per distinct (category, word run)
-      occurrence across them. A finding it cannot place on the words gets one entity spanning the
-      whole transcript.
-    source: [recording_vectors.py:extract, nodes/speech.py:speech]
+      of each ASR source's own reading, matches each finding's text to whole scanned tokens, cuts a
+      date or an over-long name to the words of its kind, and writes one entity per distinct
+      (category, word run) occurrence across them, recording its text and `word_ids`. A finding it
+      cannot place writes no entity: it is an `unplaced_findings` record on `pii_scan`.
+    source: [recording_vectors.py:extract, nodes/speech.py:speech, finding_placement.py:locate, finding_placement.py:cut]
     null_means: No detector ran (`scan_ran` false or null); `0` means scanned and nothing found.
 
   residue_words_n:
@@ -317,7 +318,7 @@ columns:
 
   task_words_n:
     units: count
-    description: Task words (outside the residue) inside a mask's findings' own extents; no mask covers them.
+    description: Task words (outside the residue) among the words a mask's findings name; no mask covers them.
     computation: The ledger's `counts.task_words_n`, summed over masks.
     source: [recording_vectors.py:_ledger_columns, nodes/redact.py:MaskPlan.record, nodes/redact.py:mask_plan]
     null_means: No `pii_ledger`.
@@ -398,10 +399,11 @@ columns:
   unplaced_n:
     units: count
     description: >-
-      Detector findings SPEECH could not place on the transcript's words (it notes `pii_unlocated` and
-      places such a finding over the whole transcript). None of them masks anything.
-    computation: The ledger's `counts.unplaced_n`, the length of its `unplaced_findings`.
-    source: [recording_vectors.py:_ledger_columns, nodes/redact.py:_located_findings, nodes/redact.py:MaskPlan.record]
+      Detector findings SPEECH could not place on the transcript's words: their text matches no run of
+      scanned tokens. SPEECH records each on `pii_scan.unplaced_findings` with its text and writes no
+      `pii` entity; none masks anything.
+    computation: The ledger's `counts.unplaced_n`, the length of its `unplaced_findings`, read from `pii_scan`.
+    source: [recording_vectors.py:_ledger_columns, nodes/speech.py:speech, nodes/redact.py:_located_findings, nodes/redact.py:MaskPlan.record]
     null_means: No `pii_ledger`.
 
   unplaced_open:

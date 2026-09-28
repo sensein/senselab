@@ -246,7 +246,13 @@ def _pii(
     return _entity(
         entity_id,
         "pii",
-        {"category": category, "source": source, "haystack": "consensus", "in_stimulus": in_stimulus},
+        {
+            "category": category,
+            "source": source,
+            "haystack": "consensus",
+            "in_stimulus": in_stimulus,
+            "word_ids": [f"word-{i}" for i in range(int(start), max(int(start) + 1, int(end)))],
+        },
         [start, end],
     )
 
@@ -324,7 +330,7 @@ def test_recording_record_builds_one_mark_with_its_detector(tmp_path: Path) -> N
 
 
 def test_a_mark_prefers_the_tightest_finding_that_contains_it(tmp_path: Path) -> None:
-    """Two findings of one category over nested ranges: the narrower one is attributed first."""
+    """Two findings of one category naming the mark's word: the one naming fewer words comes first."""
     records = [
         _word(0, "alpha"),
         _pii("pii-wide", "PERSON", "gliner/name", 0, 9),
@@ -1515,13 +1521,25 @@ def test_a_mark_matched_by_the_stimulus_reads_as_matched(tmp_path: Path) -> None
         _entity(
             "pii-1",
             "pii",
-            {"category": "NAME", "source": "rules/ner", "haystack": "consensus", "in_stimulus": False},
+            {
+                "category": "NAME",
+                "source": "rules/ner",
+                "haystack": "consensus",
+                "in_stimulus": False,
+                "word_ids": ["word-0"],
+            },
             [0, 1],
         ),
         _entity(
             "pii-2",
             "pii",
-            {"category": "NAME", "source": "presidio", "haystack": "consensus", "in_stimulus": True},
+            {
+                "category": "NAME",
+                "source": "presidio",
+                "haystack": "consensus",
+                "in_stimulus": True,
+                "word_ids": ["word-0"],
+            },
             [0, 1],
         ),
         *_label("assertion-1", "NAME", "word-0"),

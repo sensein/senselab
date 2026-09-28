@@ -437,7 +437,7 @@ def marks_of(
             min(hulls[position][0] for position in range(index, cursor)),
             max(hulls[position][1] for position in range(index, cursor)),
         )
-        contributing = _contributing(hull, current, pii)
+        contributing = _contributing([word.id for word in run], current, pii)
         surface = " ".join(str(word.attributes.get("text") or "") for word in run)
         marks.append(
             {
@@ -483,34 +483,25 @@ def _mark_stimulus(contributing: Sequence[Entity]) -> int:
     return 0 if 0 in states else -1
 
 
-def _contributing(hull: tuple[float, float], categories: Sequence[str], pii: Sequence[Entity]) -> list[Entity]:
-    """The findings that plausibly produced one mark, tightest first.
-
-    The join is geometric and approximate. A ``pii`` entity's extent is the hull of every
-    recognizer's placement of its words, so it is generally wider than the mark it produced and can
-    reach neighbouring unmarked words; and the label assertion carries no pointer back to the
-    finding. A finding whose extent contains the mark is preferred over one that merely meets it,
-    and the narrowest comes first, but a store can carry two findings of one category over nested
-    word ranges and then the attribution is genuinely ambiguous — which is what ``dn`` records.
+def _contributing(word_ids: Sequence[str], categories: Sequence[str], pii: Sequence[Entity]) -> list[Entity]:
+    """The findings that produced one mark: those of its categories naming any of its words.
 
     Args:
-        hull: The mark's timing hull.
+        word_ids: The mark's word ids.
         categories: The mark's categories.
-        pii: The live ``pii`` entities.
+        pii: The live ``pii`` entities, each carrying the ``word_ids`` SPEECH placed it on.
 
     Returns:
-        The candidate findings, containing ones first and narrowest first within each group.
+        The findings, fewest words first.
     """
-    candidates: list[tuple[int, float, Entity]] = []
-    for finding in pii:
-        if str(finding.attributes.get("category") or "") not in categories or finding.extent is None:
-            continue
-        span = (float(finding.extent[0]), float(finding.extent[1]))
-        if not overlaps(hull, span):
-            continue
-        contains = span[0] <= hull[0] and span[1] >= hull[1]
-        candidates.append((0 if contains else 1, span[1] - span[0], finding))
-    return [finding for _, _, finding in sorted(candidates, key=lambda item: (item[0], item[1]))]
+    wanted = set(word_ids)
+    found = [
+        finding
+        for finding in pii
+        if str(finding.attributes.get("category") or "") in categories
+        and wanted & {str(i) for i in finding.attributes.get("word_ids") or ()}
+    ]
+    return sorted(found, key=lambda finding: len(finding.attributes.get("word_ids") or ()))
 
 
 def _extent_flag(hull: tuple[float, float], extent: tuple[float, float] | None) -> int:
