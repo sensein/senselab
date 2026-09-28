@@ -66,7 +66,7 @@ test('the fixture is the size every count below is read against', () => {
 test('every categorical and set column is offered, and the two unusable ones are refused', () => {
   const names = F.CATALOGUE.map(f => f.col.name)
   for (const n of ['verdict', 'task', 'release', 'release_ground', 'route_state',
-    'route_airway', 'conformance_speech', 'gate_train_min_s_passed']) {
+    'route_airway', 'conformance_speech', 'gate_repetitions_min_passed']) {
     assert.ok(names.includes(n), `${n} must be offered as a facet`)
   }
   assert.ok(!names.includes('participant'), 'participant is a list, not a facet')
@@ -76,9 +76,9 @@ test('every categorical and set column is offered, and the two unusable ones are
   for (const f of F.CATALOGUE) assert.ok(['categorical', 'set'].includes(f.col.kind), f.col.name)
 })
 
-test('all 21 gate outcomes are facets, and the set columns face by membership', () => {
+test('the outcomes of the 13 applied gates are facets, and the set columns face by membership', () => {
   const passed = F.CATALOGUE.filter(f => /^gate_.*_passed$/.test(f.col.name))
-  assert.equal(passed.length, 21)
+  assert.equal(passed.length, 13)
   assert.equal(F.BY_NAME.gate_failed_names.mode, 'set')
   assert.equal(F.BY_NAME.flag_nodes.mode, 'set')
   assert.equal(F.BY_NAME.verdict.mode, 'scalar')

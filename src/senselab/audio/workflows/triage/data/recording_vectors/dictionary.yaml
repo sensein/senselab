@@ -1156,9 +1156,9 @@ families:
 
   gate:
     about: >-
-      Every gate VERDICT resolves gets three columns. The writer reads only the fold's
-      `gates.applied` and `gates.flagging` records. A located gate never enters either, so its three
-      columns are always null.
+      A gate the fold applies gets three columns, read from its record in the fold's `gates.applied`
+      or `gates.flagging`. A located gate, applied per extent inside a reporting node and never by
+      the fold, gets only its bound, read from the fold's resolved `gates.bounds`.
     defaults:
       extra_source: ''
     readers:
@@ -1201,32 +1201,22 @@ families:
           source: ['recording_vectors.py:_gate_columns', 'nodes/gates.py:apply_gates']
           null_means: The fold did not apply `{name}`.
       located:
-        gate_{name}:
-          units: '{units}'
-          description: 'Always null. `{name}` is a located gate, applied inside {applied_in}.'
-          computation: >-
-            Always null. A located gate is applied inside its reporting node, where its finding's
-            extent is known, and never enters VERDICT's `gates.applied` or `gates.flagging`, which
-            are all this column reads. Its bound is recorded in the fold's `gates.bounds`, which the
-            writer does not read.
-          source: ['recording_vectors.py:_gate_columns', 'nodes/gates.py:GATE_SPECS', '{applied_source}']
-          null_means: Always.
         gate_{name}_bound:
           units: '{units}'
-          description: 'Always null; the bound of the located gate `{name}` is not carried.'
+          description: >-
+            The bound the located gate `{name}` held this recording to, as resolved for its task
+            group; the gate itself is applied per extent inside {applied_in}.
           computation: >-
-            Always null: the writer reads bounds only from `gates.applied` and `gates.flagging`, which
-            a located gate never enters; the fold's `gates.bounds` holds its bound and is not read.
-          source: ['recording_vectors.py:_gate_columns', 'nodes/gates.py:GateBounds.record']
-          null_means: Always.
-        gate_{name}_passed:
-          units: none
-          description: 'Always null; the outcome of the located gate `{name}` is not carried.'
-          computation: >-
-            Always null, for the same reason as `gate_{name}`. Where the gate refused something, the
-            finding it produced is in the store, not here.
-          source: ['recording_vectors.py:_gate_columns', '{applied_source}']
-          null_means: Always.
+            `gates.bounds["{name}"]` of the fold, the table `load_gate_bounds` resolves from
+            `verdict.gates` family, then group, then default, most specific first and key by key,
+            and VERDICT records as `GateOutcome.record`. A located gate is applied inside its
+            reporting node against the same resolved value and never enters `gates.applied` or
+            `gates.flagging`, so it has no per-recording reading or outcome column. The column is
+            the bound as a finite float.
+          source: ['recording_vectors.py:_gate_columns', 'recording_vectors.py:_number', 'nodes/gates.py:load_gate_bounds', 'nodes/gates.py:GateBounds.record', 'nodes/verdict.py:GateOutcome.record', '{applied_source}']
+          null_means: >-
+            No task group was resolved, no layer names `{name}` for this recording's group or family,
+            or the most specific layer naming it leaves the bound unmeasured (null).
     members:
       production_min_s:
         kind: applied

@@ -30,7 +30,7 @@ import yaml  # type: ignore[import-untyped]
 
 from senselab.audio.workflows.triage.cohort import CONDITION_KINDS
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 """Bumped whenever a column is added, removed or retyped, a binary layout changes, or a categorical
 column's controlled vocabulary changes."""
 
@@ -135,6 +135,26 @@ GATE_NAMES = (
 Spelled here rather than imported so that reading a store costs no model-framework import, and so
 that a gate added to the registry fails a test until this schema is bumped with it.
 """
+
+LOCATED_GATE_NAMES = (
+    "repeat_overlap_min",
+    "echo_overlap_max",
+    "verbatim_overlap_max",
+    "gap_off_task_min_s",
+    "interval_max_s",
+    "score_min",
+    "train_min_s",
+    "rate_prominence_min",
+)
+"""The gates applied per extent inside a reporting node, which the fold never applies itself.
+
+Each carries only a ``gate_<name>_bound`` column, read from the fold's ``gates.bounds``; the other
+gates carry a reading, a bound and an outcome. Pinned against the gates whose ``GateSpec.reading``
+is None by ``recording_vectors_test``.
+"""
+
+APPLIED_GATE_NAMES = tuple(name for name in GATE_NAMES if name not in LOCATED_GATE_NAMES)
+"""The gates the fold applies and records, in column order."""
 
 GATE_UNDETERMINED = "undetermined"
 """What a gate's ``_passed`` column carries when either the reading or the bound was absent."""
@@ -794,7 +814,8 @@ def _gate_columns(decision: dict[str, Any]) -> dict[str, Any]:
 
     Returns:
         ``gate_<name>``, ``gate_<name>_bound`` and ``gate_<name>_passed`` for every gate the fold
-        applied, and the summary columns. A gate the fold did not apply is null in all three.
+        applied, ``gate_<name>_bound`` for every located gate from the resolved ``gates.bounds``,
+        and the summary columns. A gate the fold did not apply is null in all three.
     """
     gates = decision.get("gates")
     gates = gates if isinstance(gates, dict) else {}
@@ -806,10 +827,14 @@ def _gate_columns(decision: dict[str, Any]) -> dict[str, Any]:
         "gate_group": gates.get("group"),
         "gate_family": gates.get("family"),
     }
+    bounds = gates.get("bounds")
+    bounds = bounds if isinstance(bounds, dict) else {}
+    for name in LOCATED_GATE_NAMES:
+        row[f"gate_{name}_bound"] = _number(bounds.get(name))
     outcomes: dict[str, str | None] = {}
     for record in (*applied, *flagging):
         name = str(record.get("gate"))
-        if name not in GATE_NAMES:
+        if name not in APPLIED_GATE_NAMES:
             continue
         row[f"gate_{name}"] = _number(record.get("value"))
         row[f"gate_{name}_bound"] = _number(record.get("bound"))
@@ -1173,9 +1198,13 @@ def _fields() -> list[pa.Field]:
             field
             for name in GATE_NAMES
             for field in (
-                pa.field(f"gate_{name}", pa.float64()),
-                pa.field(f"gate_{name}_bound", pa.float64()),
-                pa.field(f"gate_{name}_passed", pa.string()),
+                (pa.field(f"gate_{name}_bound", pa.float64()),)
+                if name in LOCATED_GATE_NAMES
+                else (
+                    pa.field(f"gate_{name}", pa.float64()),
+                    pa.field(f"gate_{name}_bound", pa.float64()),
+                    pa.field(f"gate_{name}_passed", pa.string()),
+                )
             )
         ],
         pa.field("separated_n", pa.int32()),
