@@ -151,6 +151,7 @@ def _seed_redact_store(  # noqa: C901 — one independent block per author, as t
     scan_failed: Sequence[str] = (),
     timings: dict[int, dict[str, tuple[float, float]]] | None = None,
     residue: Sequence[int] | None = None,
+    unplaced: Sequence[tuple[str, str]] = (),
 ) -> None:
     """Write the store PREPROCESS and SPEECH leave for REDACT, with ``tmp_path`` as the run dir.
 
@@ -222,26 +223,22 @@ def _seed_redact_store(  # noqa: C901 — one independent block per author, as t
 
     for category, extent, *_rest in findings:
         bounds = (float(extent[0]), float(extent[1]))
+        covered = [
+            word_ids[i] for i in range(len(words)) if _word_extent(i)[0] < bounds[1] and _word_extent(i)[1] > bounds[0]
+        ]
         pii_id = store.entity(
             prov_type="pii",
             extent=bounds,
             attributes={
                 "category": category,
                 "source": "presidio",
+                "word_ids": covered,
                 "detectors_used": list(scanned_by),
                 "detectors_failed": list(scan_failed),
             },
         )
         store.was_generated_by(pii_id, pii_act)
-        _mark(
-            str(category),
-            bounds,
-            [
-                word_ids[i]
-                for i in range(len(words))
-                if _word_extent(i)[0] < bounds[1] and _word_extent(i)[1] > bounds[0]
-            ],
-        )
+        _mark(str(category), bounds, covered)
     for text, category in extra_marks:
         index = list(words).index(text)
         _mark(str(category), _word_extent(index), [word_ids[index]])
@@ -255,6 +252,10 @@ def _seed_redact_store(  # noqa: C901 — one independent block per author, as t
                 "scanned_by": list(scanned_by),
                 "failed": list(scan_failed),
                 "residue_word_ids": list(word_ids) if residue is None else [word_ids[i] for i in residue],
+                "unplaced_findings": [
+                    {"category": category, "text": text, "source": "gliner", "haystack": "consensus"}
+                    for category, text in unplaced
+                ],
             },
         )
         store.was_generated_by(scan_id, pii_act)
@@ -2416,15 +2417,6 @@ class TestTheReScanDoesNotReadBracketedTokens:
         assert result.verdict.outcome is not Outcome.PASS
 
 
-def _speech_notes(store: ProvStore, notes: Sequence[str]) -> None:
-    """SPEECH's report carrying its notes, as step 7 leaves them for a finding it could not place."""
-    agent = store.agent(agent_type="software", version="senselab test-speech")
-    activity = store.activity(node="SPEECH", step="report", parameters={})
-    store.was_associated_with(activity, agent)
-    report = store.entity(prov_type="branch_report", extent=None, attributes={"node": "SPEECH", "notes": list(notes)})
-    store.was_generated_by(report, activity)
-
-
 class TestAMaskIsAFindingsOwnWords:
     """Owner, 2026-09-27: a mask is one finding's own words, never the whole transcript or a chain of them."""
 
@@ -2438,13 +2430,14 @@ class TestAMaskIsAFindingsOwnWords:
         located: Sequence[tuple[str, tuple[float, float]]],
         unplaced: Sequence[str] = (),
     ) -> None:
-        """A REDACT pass over ``words``; each ``unplaced`` category a finding SPEECH placed over everything."""
-        whole = (0.0, _word_extent(len(words) - 1)[1])
+        """A REDACT pass over ``words``; each ``unplaced`` category a finding SPEECH could not place."""
         _seed_redact_store(
-            store, tmp_path, words=list(words), findings=[*located, *((category, whole) for category in unplaced)]
+            store,
+            tmp_path,
+            words=list(words),
+            findings=list(located),
+            unplaced=[(category, "Alan") for category in unplaced],
         )
-        if unplaced:
-            _speech_notes(store, [f"pii_unlocated ({category})" for category in unplaced])
         _stub_pii(monkeypatch, findings=[])
         redact(store, "recording", config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
 

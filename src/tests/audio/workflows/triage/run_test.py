@@ -286,7 +286,7 @@ def _fakes(
         )
         store.was_generated_by(measurement, scan)
         if pii:
-            finding = store.entity(prov_type="pii", extent=(0.0, 1.0), attributes={"category": "name"})
+            finding = store.entity(prov_type="pii", extent=(0.0, 1.0), attributes={"category": "name", "word_ids": []})
             store.was_generated_by(finding, scan)
         entity_id, report = _report(store, "SPEECH", "speech", detail={"words_n": 12})
         return BranchResult(report=report, view=(entity_id,), report_entity_id=entity_id)

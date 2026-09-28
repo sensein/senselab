@@ -89,7 +89,9 @@ def _seed(
         store.was_generated_by(scan_id, consensus)
     for index in range(findings_n):
         finding = store.entity(
-            prov_type="pii", extent=_extent(index), attributes={"category": "PERSON", "detector": "stub"}
+            prov_type="pii",
+            extent=_extent(index),
+            attributes={"category": "PERSON", "detector": "stub", "word_ids": []},
         )
         store.was_generated_by(finding, consensus)
     redact_act = store.activity(node="REDACT", step="plan", parameters={})

@@ -515,6 +515,7 @@ disruptions:
 # The detector set a PII scan is required to have run.
 pii:
   required_detectors: [gliner, presidio, rules]   # the pii_detection module's own detector set
+  name_words_max: 3                    # a name, place or organisation finding longer than this keeps only its proper nouns
 
 # What a released transcript replaces, and by how much padding.
 redaction:
