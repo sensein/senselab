@@ -2318,7 +2318,13 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
     near = near_match(config)
     declared_tokens = declared_content(hint, declared_family)
     lexical_texts = [word_text(word) for word in lexical]
-    residue = task_residue(lexical_texts, declared_family, prompt_tokens(hint), residue_rule(config))
+    residue = task_residue(
+        lexical_texts,
+        declared_family,
+        prompt_tokens(hint),
+        residue_rule(config),
+        speech_type=hint.speech_type if hint is not None else None,
+    )
     residue_positions = {lexical_index[position] for position in residue.positions}
     haystacks: list[tuple[str, str, list[int], list[str]]] = []
     for name in ("consensus", *source_names):

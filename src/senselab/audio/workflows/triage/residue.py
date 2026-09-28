@@ -32,6 +32,7 @@ if TYPE_CHECKING:  # pragma: no cover
 __all__ = [
     "ALIGNED",
     "FREE",
+    "RECALL",
     "FUNCTION_WORDS",
     "SYLLABLE",
     "VOCAL",
@@ -58,6 +59,13 @@ ALIGNED = "stimulus_alignment"
 
 FREE = "free_response"
 """A task that asks the participant to speak freely: every lexical word is residue."""
+
+RECALL = "stimulus_recall"
+"""A task that asks the participant to retell a declared stimulus: a word the stimulus holds, in any
+order and close spelling, is the task."""
+
+RECALL_SPEECH_TYPE = "recall"
+"""The declared ``speech_type`` under which a free-response family with a stimulus is read as a recall."""
 
 _VOCALISATION = re.compile(
     r"(?:u+h+|u+m+|h*m{2,}|hm+|m+h+m+|e+r+m*|e+h+|a+h+|a{2,}|o+h+|o{2,}h*|e{2,}|i{2,}|u{2,}|h+u+h+)"
@@ -444,7 +452,30 @@ def _aligned_residue(keys: Sequence[str], expected: Sequence[str], rule: Residue
     return residue
 
 
-def task_residue(texts: Sequence[str], task_family: str | None, stimulus: Sequence[str], rule: ResidueRule) -> Residue:
+def _recalled(keys: Sequence[str], stimulus: Sequence[str], rule: ResidueRule) -> set[int]:
+    """The positions of ``keys`` a recall of the stimulus accounts for: any of its content words, in any order."""
+    vocabulary = {_key(token) for token in stimulus if is_content_word(token)}
+    vocabulary.discard("")
+    recalled: set[int] = set()
+    for index, key in enumerate(keys):
+        if not key:
+            continue
+        base = _base(key)
+        if key in vocabulary or base in vocabulary:
+            recalled.add(index)
+            continue
+        if any(_variant(key, word, rule) or (base != key and _variant(base, word, rule)) for word in vocabulary):
+            recalled.add(index)
+    return recalled
+
+
+def task_residue(
+    texts: Sequence[str],
+    task_family: str | None,
+    stimulus: Sequence[str],
+    rule: ResidueRule,
+    speech_type: str | None = None,
+) -> Residue:
     """Which transcript words are neither non-lexical nor what the task asked for.
 
     Args:
@@ -452,13 +483,18 @@ def task_residue(texts: Sequence[str], task_family: str | None, stimulus: Sequen
         task_family: The declared family, or None.
         stimulus: The recording's declared prompt tokens, verbatim, in declared order.
         rule: The residue rule.
+        speech_type: The declared speech type; ``recall`` reads a free-response family that declares
+            a stimulus as :data:`RECALL`.
 
     Returns:
         The residue over ``texts``.
     """
     method = residue_method(task_family)
-    if method == FREE and _expectation(task_family) is None and any(_key(token) for token in stimulus):
+    declares = any(_key(token) for token in stimulus)
+    if method == FREE and _expectation(task_family) is None and declares:
         method = ALIGNED
+    elif method == FREE and declares and speech_type == RECALL_SPEECH_TYPE:
+        method = RECALL
     vocal = method == VOCAL
     lexical = [
         position for position, text in enumerate(texts) if _key(text) and not is_non_lexical(text, vocal_task=vocal)
@@ -481,7 +517,9 @@ def task_residue(texts: Sequence[str], task_family: str | None, stimulus: Sequen
         non_lexical_n += len(lexical) - len(remaining)
         lexical = remaining
     task: set[int] = set()
-    if method != FREE:
+    if method == RECALL:
+        task = _recalled([_key(texts[position]) for position in lexical], stimulus, rule)
+    elif method != FREE:
         vocabulary = _declared_vocabulary(task_family)
         keys = [_key(texts[position]) for position in lexical]
         in_vocabulary = {

@@ -374,7 +374,7 @@ class TestHintsForceAndNothingElse:
     ) -> None:
         """Both ``may_contain`` and the task's ``speech_type`` are forcing inputs."""
         reads(_evaluation([]))
-        hint = AudioHints(metadata={"speech_type": "read-speech"})
+        hint = AudioHints(speech_type="read-speech")
         assert routing(store, None, _map(tmp_path), hint, run_dir=tmp_path).runs == ("SPEECH",)
 
     def test_forcing_does_not_rewrite_the_route_state(

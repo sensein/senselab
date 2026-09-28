@@ -42,7 +42,6 @@ from senselab.utils.prov_store import ProvStore
 
 NODE = "routing"
 
-_SPEECH_TYPE = "speech_type"
 _STREAM = "plain"
 
 
@@ -90,7 +89,7 @@ def _declared_tags(hint: AudioHints | None) -> list[str]:
     if hint is None:
         return []
     declared = [str(tag) for tag in hint.may_contain]
-    speech_type = hint.metadata.get(_SPEECH_TYPE)
+    speech_type = hint.speech_type
     if speech_type is not None:
         declared.append(str(speech_type))
     seen: dict[str, None] = {}
