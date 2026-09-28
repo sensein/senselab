@@ -22,6 +22,7 @@
   var state = {
     file: null,
     metadata: null,
+    dictionary: null,
     rows: null,
     axes: SchemaAxes.DEFAULT_AXES.slice(),
     view: null,
@@ -75,6 +76,7 @@
     var buf = bufferFor(file);
     var t0 = performance.now();
     state.metadata = await Hyparquet.parquetMetadataAsync(buf);
+    state.dictionary = SchemaDecode.readDictionary(state.metadata);
     state.buffer = buf;
     var columns = SchemaAxes.corpusColumns();
     status('reading ' + columns.length + ' corpus columns…');
@@ -103,6 +105,7 @@
     status('corpus read in ' + ms.toFixed(0) + ' ms (' + columns.length + ' columns; the binary blocks are not read yet)', 'good');
     $('landing').hidden = true;
     $('main').hidden = false;
+    wireDictionary();
     buildCorpus();
   }
 
@@ -199,6 +202,7 @@
       columnOptions(sel, name);
       sel.onchange = function () { state.axes[i] = sel.value; state.view.setAxes(state.axes); renderAxisRail(); state.view.draw(); };
       head.appendChild(sel);
+      head.appendChild(infoButton(name));
       var btns = el('div', 'axis-btns');
       btns.appendChild(button('◀', 'move left', function () { swap(i, i - 1); }, i === 0));
       btns.appendChild(button('▶', 'move right', function () { swap(i, i + 1); }, i === state.axes.length - 1));
@@ -534,7 +538,10 @@
   }
 
   function field(dl, key, value, cls) {
-    dl.appendChild(el('dt', null, key));
+    var dt = el('dt', null, key);
+    var column = key.split(' ')[0];
+    if (dictEntry(column)) dt.appendChild(infoButton(column));
+    dl.appendChild(dt);
     var dd = el('dd', cls || null);
     if (value == null) { dd.className = (cls || '') + ' null'; dd.textContent = 'null'; }
     else dd.textContent = String(value);
@@ -641,7 +648,9 @@
     body.innerHTML = '';
     function tr(name, value, n, note, absent) {
       var r = el('tr', absent ? 'absent-row' : null);
-      r.appendChild(el('td', 'mname', name));
+      var cell = el('td', 'mname', name);
+      cell.appendChild(infoButton('m_' + name));
+      r.appendChild(cell);
       var v = el('td', 'mvalue' + (absent ? ' null' : ''));
       v.textContent = absent ? 'not measured' : value;
       r.appendChild(v);
@@ -801,6 +810,7 @@
     var openForQuery = state.facetQuery && name.toLowerCase().indexOf(state.facetQuery) < 0;
     var sum = el('summary');
     sum.appendChild(el('span', 'fg-name', name));
+    sum.appendChild(infoButton(name));
     if (f.mode === 'set') sum.appendChild(el('span', 'fg-mode', 'contains'));
     var n = state.facets.chosen(name).length;
     if (n) sum.appendChild(el('span', 'fg-badge', String(n)));
@@ -874,6 +884,137 @@
     b.dataset.term = x.term;
     b.onclick = function () { state.facets.toggle(name, x.term); applyFacets(); };
     return b;
+  }
+
+  // ---------------------------------------------------------------- the data dictionary
+
+  /** The file's dictionary entry for one column, or null when it has none. */
+  function dictEntry(name) {
+    var d = state.dictionary;
+    return d && d.byName[name] ? d.byName[name] : null;
+  }
+
+  /** A small button that opens a column's dictionary entry beside it. */
+  function infoButton(name) {
+    var entry = dictEntry(name);
+    var b = el('button', 'info-btn', 'i');
+    b.type = 'button';
+    b.disabled = !entry;
+    b.title = entry ? name + ': ' + entry.description
+      : state.dictionary ? 'the data dictionary has no entry for ' + name
+        : 'this file carries no data dictionary';
+    b.onclick = function (e) {
+      e.preventDefault();
+      e.stopPropagation();
+      showEntry(name, b);
+    };
+    return b;
+  }
+
+  /** One entry, every field it states, as a block. */
+  function entryNode(entry) {
+    var box = el('div', 'dict-entry');
+    var head = el('div', 'dict-head');
+    head.appendChild(el('span', 'dict-name', entry.name));
+    head.appendChild(el('span', 'dict-type',
+      entry.dtype + (entry.units && entry.units !== 'none' ? ' · ' + entry.units : '')));
+    box.appendChild(head);
+    box.appendChild(el('p', 'dict-desc', entry.description));
+    var dl = el('dl', 'dict-fields');
+    function row(label, text) {
+      if (!text) return;
+      dl.appendChild(el('dt', null, label));
+      dl.appendChild(el('dd', null, text));
+    }
+    row('computed', entry.computation);
+    row('null means', entry.null_means);
+    if (entry.values) row('values', entry.values.join(' · '));
+    if (entry.source) {
+      var root = state.dictionary && state.dictionary.sourceRoot ? state.dictionary.sourceRoot + '/' : '';
+      row('source', entry.source.map(function (s) { return root + s; }).join('\n'));
+    }
+    box.appendChild(dl);
+    return box;
+  }
+
+  function showEntry(name, anchor) {
+    var entry = dictEntry(name);
+    var pop = $('dict-pop');
+    if (!entry || !pop) return;
+    pop.innerHTML = '';
+    var close = el('button', 'icon-btn dict-x', '✕');
+    close.title = 'close';
+    close.onclick = hideEntry;
+    pop.appendChild(close);
+    pop.appendChild(entryNode(entry));
+    pop.hidden = false;
+    var r = anchor.getBoundingClientRect();
+    var w = pop.offsetWidth;
+    var h = pop.offsetHeight;
+    var left = Math.min(window.innerWidth - w - 8, Math.max(8, r.left));
+    var top = r.bottom + 6;
+    if (top + h > window.innerHeight - 8) top = Math.max(8, r.top - h - 6);
+    pop.style.left = left + 'px';
+    pop.style.top = top + 'px';
+  }
+
+  function hideEntry() {
+    var pop = $('dict-pop');
+    if (pop) pop.hidden = true;
+  }
+
+  /** The searchable list of every column the file describes. */
+  function renderDictionaryPanel() {
+    var list = $('dict-list');
+    var d = state.dictionary;
+    list.innerHTML = '';
+    if (!d) return;
+    var q = ($('dict-search').value || '').trim().toLowerCase();
+    var shown = 0;
+    d.columns.forEach(function (entry) {
+      var hay = [entry.name, entry.description, entry.computation, entry.units, entry.null_means,
+        (entry.source || []).join(' ')].join(' ').toLowerCase();
+      if (q && hay.indexOf(q) < 0) return;
+      shown++;
+      var item = el('details', 'dict-item');
+      var sum = el('summary');
+      sum.appendChild(el('span', 'dict-name', entry.name));
+      sum.appendChild(el('span', 'dict-type', entry.dtype));
+      sum.appendChild(el('span', 'dict-sum', entry.description));
+      item.appendChild(sum);
+      item.addEventListener('toggle', function () {
+        if (item.open && !item.querySelector('.dict-entry')) item.appendChild(entryNode(entry));
+      });
+      list.appendChild(item);
+    });
+    $('dict-count').textContent = shown + ' of ' + d.columns.length + ' columns';
+  }
+
+  var dictionaryWired = false;
+
+  function wireDictionary() {
+    var d = state.dictionary;
+    var open = $('dict-open');
+    open.disabled = !d;
+    open.title = d
+      ? 'what every column is and how it was computed (' + d.columns.length + ' columns)'
+      : 'this file carries no data dictionary; it was written before the dictionary existed';
+    $('dict-panel').hidden = true;
+    hideEntry();
+    if (dictionaryWired) return;
+    dictionaryWired = true;
+    open.onclick = function () {
+      var panel = $('dict-panel');
+      panel.hidden = !panel.hidden;
+      if (!panel.hidden) { renderDictionaryPanel(); $('dict-search').focus(); }
+    };
+    $('dict-search').oninput = renderDictionaryPanel;
+    $('dict-close').onclick = function () { $('dict-panel').hidden = true; };
+    document.addEventListener('keydown', function (e) { if (e.key === 'Escape') hideEntry(); });
+    document.addEventListener('click', function (e) {
+      var pop = $('dict-pop');
+      if (pop && !pop.hidden && !pop.contains(e.target)) hideEntry();
+    });
   }
 
   // ---------------------------------------------------------------- landing

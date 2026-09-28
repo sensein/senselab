@@ -1,4 +1,5 @@
-// Decoders for the binary blocks of recording_vectors.parquet, schema_version 6.
+// Decoders for the binary blocks of recording_vectors.parquet, schema_version 9, and the reader
+// of the data dictionary the file carries in its key-value metadata.
 // Byte layouts and enumerations mirror senselab.audio.workflows.triage.recording_vectors;
 // specs/20260922-compact-recording-vectors/schema.md is the contract.
 //
@@ -11,6 +12,7 @@
 
 var SchemaDecode = (function () {
   var SCHEMA_VERSION = 9;
+  var DICTIONARY_KEY = 'senselab.recording_vectors.dictionary';
   var TIME_SCALE = 65535;
   var TRACE_POINTS = 256;
   var UNKNOWN_CODE = 255;
@@ -317,8 +319,41 @@ var SchemaDecode = (function () {
     };
   }
 
+  /**
+   * The data dictionary a file carries, from its parquet footer's key-value metadata.
+   *
+   * Returns `{schemaVersion, sourceRoot, columns, byName}`, or null when the file carries no
+   * dictionary or one that does not parse: a file written before the dictionary existed still
+   * opens, and simply has nothing to show.
+   */
+  function readDictionary(metadata) {
+    var pairs = metadata && metadata.key_value_metadata;
+    if (!pairs || !pairs.length) return null;
+    var text = null;
+    for (var i = 0; i < pairs.length; i++) {
+      if (pairs[i] && pairs[i].key === DICTIONARY_KEY) { text = pairs[i].value; break; }
+    }
+    if (text == null) return null;
+    if (typeof text !== 'string') {
+      try { text = new TextDecoder().decode(text); } catch (e) { return null; }
+    }
+    var doc;
+    try { doc = JSON.parse(text); } catch (e) { return null; }
+    if (!doc || !Array.isArray(doc.columns)) return null;
+    var byName = {};
+    doc.columns.forEach(function (c) { if (c && c.name) byName[c.name] = c; });
+    return {
+      schemaVersion: doc.schema_version == null ? null : doc.schema_version,
+      sourceRoot: doc.source_root || '',
+      columns: doc.columns,
+      byName: byName,
+    };
+  }
+
   return {
     SCHEMA_VERSION: SCHEMA_VERSION,
+    DICTIONARY_KEY: DICTIONARY_KEY,
+    readDictionary: readDictionary,
     TIME_SCALE: TIME_SCALE,
     TRACE_POINTS: TRACE_POINTS,
     UNKNOWN_CODE: UNKNOWN_CODE,

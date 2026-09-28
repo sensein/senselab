@@ -240,3 +240,37 @@ test('a whole row decodes with its blocks cross-indexed', () => {
   assert.equal(out.continuity[0], 1.05)
   assert.equal(out.wave.max[0], out.wave.min[0])
 })
+
+// -------------------------------------------------------------- the data dictionary
+
+test('the dictionary is read from the footer key the writer uses', () => {
+  const doc = {
+    schema_version: 9,
+    source_root: 'src/senselab/audio/workflows/triage',
+    columns: [
+      { name: 'verdict', dtype: 'string', units: 'none', description: 'd', computation: 'c', source: ['s'], null_means: 'n' },
+    ],
+  }
+  const metadata = { key_value_metadata: [{ key: 'other', value: 'x' }, { key: D.DICTIONARY_KEY, value: JSON.stringify(doc) }] }
+  const dict = D.readDictionary(metadata)
+  assert.equal(D.DICTIONARY_KEY, 'senselab.recording_vectors.dictionary')
+  assert.equal(dict.schemaVersion, 9)
+  assert.equal(dict.sourceRoot, 'src/senselab/audio/workflows/triage')
+  assert.equal(dict.columns.length, 1)
+  assert.equal(dict.byName.verdict.computation, 'c')
+})
+
+test('a dictionary stored as bytes decodes the same', () => {
+  const doc = { schema_version: 9, source_root: '', columns: [{ name: 'task' }] }
+  const value = new TextEncoder().encode(JSON.stringify(doc))
+  const dict = D.readDictionary({ key_value_metadata: [{ key: D.DICTIONARY_KEY, value }] })
+  assert.ok(dict.byName.task)
+})
+
+test('a file without a dictionary, or with one that does not parse, reads as none', () => {
+  assert.equal(D.readDictionary(null), null)
+  assert.equal(D.readDictionary({}), null)
+  assert.equal(D.readDictionary({ key_value_metadata: [{ key: 'x', value: '{}' }] }), null)
+  assert.equal(D.readDictionary({ key_value_metadata: [{ key: D.DICTIONARY_KEY, value: '{not json' }] }), null)
+  assert.equal(D.readDictionary({ key_value_metadata: [{ key: D.DICTIONARY_KEY, value: '{"columns": 3}' }] }), null)
+})
