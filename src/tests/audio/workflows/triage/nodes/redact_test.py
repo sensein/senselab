@@ -2576,3 +2576,24 @@ class TestAFunctionWordIsNotATerm:
         flags = {word.text: word.propagated for word in second.words}
         assert flags == {"the": False, "prince": True}
         assert [word.state for word in second.words] == [UNMASKED_BY_TRIM, UNMASKED_BY_REVIEWER]
+
+
+def test_an_extent_reaching_no_word_is_labelled_by_its_family(
+    store: ProvStore, redact_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An audio-only REDACT extent keeps its bounds and reads one category, never REDACT's joined one."""
+    from senselab.audio.workflows.triage.nodes.redact import REDACTION_SPAN
+
+    _seed_redact_store(store, tmp_path, words=["hello", "there"], findings=[])
+    agent = store.agent(agent_type="software", version="senselab test-redact")
+    activity = store.activity(node="REDACT", step="plan", parameters={})
+    store.was_associated_with(activity, agent)
+    span = store.entity(
+        prov_type="span", extent=(3.2, 3.4), attributes={"name": REDACTION_SPAN, "category": "PERSON+NAME"}
+    )
+    store.was_generated_by(span, activity)
+    plan = _plan(store, applies=False)
+    (mask,) = plan.masks
+    assert (mask.planned.category, mask.categories, mask.words) == ("PERSON", ("PERSON", "NAME"), ())
+    assert [(extent.start, extent.end, extent.category) for extent in plan.final] == [(3.2, 3.4, "PERSON")]
+    assert not plan.changed
