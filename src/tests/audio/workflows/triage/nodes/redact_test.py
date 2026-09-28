@@ -2512,8 +2512,12 @@ class TestAMaskIsAFindingsOwnWords:
             words,
             [("LOCATION", _word_extent(2)), ("LOC", _word_extent(2))],
         )
-        (mask,) = _plan(store, applies=False).masks
+        plan = _plan(store, applies=False)
+        (mask,) = plan.masks
         assert (mask.planned.category, mask.categories) == ("LOCATION", ("LOC", "LOCATION"))
+        assert "+" in plan.planned[0].category, "REDACT's own extent carries the joined label"
+        assert [extent.category for extent in plan.final] == ["LOCATION"]
+        assert not plan.changed, "a relabelled extent silences the same audio"
 
 
 class TestTheReviewerJudgesATermNotAnInstance:
@@ -2546,3 +2550,29 @@ class TestTheReviewerJudgesATermNotAnInstance:
         plan = _plan(store)
         states = [word.state for mask in plan.masks for word in mask.words]
         assert states == [UNMASKED_BY_REVIEWER, MASKED, MASKED]
+
+
+class TestAFunctionWordIsNotATerm:
+    """Term propagation carries content words; a released "the" is the trim's, not a term's."""
+
+    def test_the_second_prince_is_released_and_its_article_is_not_propagated(
+        self, store: ProvStore, redact_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Two PERSON findings over "the prince"; the reviewer releases the first."""
+        words = ["the", "prince", "sang", "the", "prince"]
+        _seed_redact_store(
+            store,
+            tmp_path,
+            words=words,
+            findings=[
+                ("PERSON", (_word_extent(0)[0], _word_extent(1)[1])),
+                ("PERSON", (_word_extent(3)[0], _word_extent(4)[1])),
+            ],
+        )
+        _stub_pii(monkeypatch, findings=[])
+        redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
+        _annotate(store, [_release_entry("the prince sang", "PERSON")])
+        second = _plan(store).masks[1]
+        flags = {word.text: word.propagated for word in second.words}
+        assert flags == {"the": False, "prince": True}
+        assert [word.state for word in second.words] == [UNMASKED_BY_TRIM, UNMASKED_BY_REVIEWER]

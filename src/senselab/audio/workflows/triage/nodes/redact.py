@@ -1073,6 +1073,19 @@ def _families() -> dict[str, str]:
     return table
 
 
+def same_extents(one: Sequence[RedactionExtent], other: Sequence[RedactionExtent]) -> bool:
+    """Whether two sets of masks silence the same audio, whatever each one is labelled.
+
+    Args:
+        one: A set of extents.
+        other: Another.
+
+    Returns:
+        True where both hold the same ``(start, end)`` bounds in the same order.
+    """
+    return [(float(e.start), float(e.end)) for e in one] == [(float(e.start), float(e.end)) for e in other]
+
+
 def category_family(category: str) -> str:
     """The family a detector or reviewer category belongs to, in the reviewer's own terms.
 
@@ -1236,7 +1249,7 @@ class MaskPlan:
     @property
     def changed(self) -> bool:
         """Whether the final masks differ from REDACT's own extents, so REDACT's copy is not the one released."""
-        return self.final != list(self.redact_planned)
+        return not same_extents(self.final, self.redact_planned)
 
     @property
     def agreed(self) -> frozenset[int]:
@@ -1723,7 +1736,10 @@ def mask_plan(
     propagated = {
         word_id
         for word_id in family_of_word
-        if word_id not in named and term(word_id) in named_terms and term(word_id)[0] not in blocked_tokens
+        if word_id not in named
+        and content(by_id[word_id])
+        and term(word_id) in named_terms
+        and term(word_id)[0] not in blocked_tokens
     }
     applied = reviewer_applies and bool(named)
     released = (named | propagated) if applied else set()
@@ -1867,10 +1883,11 @@ def mask_plan(
         if not inside or covered != reach_ids:
             continue
         order = [word.id for word in reach]
+        labelled = replace(extent, category=outcomes[inside[0]].planned.category)
         for rank, position in enumerate(inside):
             outcomes[position] = replace(
                 outcomes[position],
-                final=(extent,) if rank == 0 else (),
+                final=(labelled,) if rank == 0 else (),
                 final_words=(tuple(order),) if rank == 0 else (),
             )
     # A planned extent that reaches no word masks audio no transcript word accounts for; it stands as
@@ -2047,7 +2064,7 @@ def settle_release(
     final, owners = released_masks(store)
     words = consensus_words(store)
     records, text, _ = _render(words, final, owners)
-    if final == planned:
+    if same_extents(final, planned):
         if verdict.attributes.get("outcome") == Outcome.PASS.value and (
             _holds_copy(artifacts_dir, records) or not _has_stream(store, STREAM_NAME)
         ):
