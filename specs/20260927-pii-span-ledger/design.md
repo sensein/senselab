@@ -376,3 +376,40 @@ touch only the page). None failed, and nothing was written to the tree.
 - **Single stream (§11):** no free-response card needs it. The two recordings with one recogniser are
   rainbow-passage and random-item-generation-v2, neither free-response, and on both the fallback
   picks `asr_qwen`. The 43 empty free-response cards have no recogniser words at all.
+
+## 13. A copy that masks nothing is not a redacted copy, and a re-fold keeps its own decision (2026-09-27, night)
+
+**Zero-mask release.** 539 r6 recordings were `release_with_redaction` with REDACT's own ground
+(none) and no mask at all. In each, REDACT passed "every finding redacted except N the declared
+stimulus accounts for" with `redactions_n` 0: the detector's findings were the task's own content
+(a story character, a vocabulary target read as a name), REDACT exempted every one, and its
+"redacted" copy was the original byte for byte. By family: productive-vocabulary 197, story-recall
+140, story-recall-v2 121, free-speech-v2 43, free-speech 35, cinderella-story 2, one respiration
+task. Two more were re-scan fails the reviewer cleared, whose one planned mask stood.
+
+The fold now releases the original wherever no mask stands and REDACT's own decision would have
+released a copy: `FINDINGS_ARE_TASK_CONTENT`, and `REVIEWER_CLEARED_UNMASKED` for a cleared re-scan
+fail that planned no mask. They sit beside the existing without-redaction grounds rather than
+reusing them, because "the reviewer unmasked every content word" and "every mask hid only
+non-content words" both describe masks that existed; these describe a plan with none. A standing
+mask that places on no transcript word still masks audio, so it keeps the copy: that is the two
+cleared re-scan fails, which stay `release_with_redaction`.
+
+**Stale verdict.** Three r6 stores (one each stroop, harvard, rainbow) held a live verdict whose
+ground disagreed with the live ledger. The cause was not the ledger. Ids are content-addressed
+under the run's own id, and the fold at `00015c4a` concluded exactly what `374c5fae` had, so it
+re-minted the verdict `e0801b73` had retired. The re-fold then took the store's latest *live*
+verdict by position as its own — `e0801b73`'s — kept it, and retired the ledger the new fold had
+just written instead. A corpus-wide scan found exactly these three.
+
+`mint_live` re-mints a retired conclusion under `remint` = 1, 2, …, so a fold's own entity is
+always live; VERDICT returns the ledger's id beside the verdict's, and the re-fold retires
+everything but the ids the fold returned. A repeated identical fold over a live decision still
+mints the same entity and settles.
+
+**Measured.** Every r6 recording REDACT ran on (8,516) re-folded in memory with the final code, no
+store written: 0 errors; exactly one live verdict and one live ledger in every store; ledger and
+verdict agree on release and ground in every store; no `release_with_redaction` without a standing
+mask; the released transcript equals the ledger's rendering on all 1,407 masked releases; the
+release directory is empty for every other release. Moves: 539 to `FINDINGS_ARE_TASK_CONTENT`, and
+the three stale stores from "trimmed" to REDACT's plan unchanged, which is what their ledgers said.
