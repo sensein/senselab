@@ -478,3 +478,107 @@ def test_presidio_only_sends_no_gliner_snapshot_path(fake_venv: Path, monkeypatc
     detect_pii_via_subprocess({"whisper": "Sample."}, detectors=[DETECTOR_PRESIDIO])
 
     assert recorder.calls[0]["input"]["gliner_model_path"] is None
+
+
+# ── Result cache ──────────────────────────────────────────────────────
+
+
+_FULL = {"failures": {}, "detectors_used": ["gliner", "presidio", "rules"]}
+
+
+def _echo(parsed: dict[str, Any]) -> dict[str, Any]:
+    """One span per transcript, naming its text, so a reused result is recognisable."""
+    return {
+        "spans_by_asr": {
+            asr: [{"text": text, "category": "PERSON", "source": "presidio", "score": 0.9}]
+            for asr, text in parsed["transcripts"].items()
+        },
+        **_FULL,
+    }
+
+
+def test_a_transcript_scanned_once_is_not_scanned_again(fake_venv: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Identical text under an identical detector set is served without starting the worker."""
+    recorder = _SubprocessRecorder({})
+    recorder.input_hook = _echo
+    monkeypatch.setattr(subprocess, "run", recorder)
+    first = detect_pii_via_subprocess({"0": "Alice lives in Boston."})
+    second = detect_pii_via_subprocess({"0": "Alice lives in Boston."})
+    assert len(recorder.calls) == 1
+    assert second["spans_by_asr"] == first["spans_by_asr"]
+    assert second["detectors_used"] == first["detectors_used"]
+    assert first["cache"]["0"]["hit"] is False and second["cache"]["0"]["hit"] is True
+    assert first["cache"]["0"]["key"] == second["cache"]["0"]["key"]
+
+
+def test_only_the_unseen_transcripts_reach_the_worker(fake_venv: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A batch mixing held and new texts sends the worker the new ones alone."""
+    recorder = _SubprocessRecorder({})
+    recorder.input_hook = _echo
+    monkeypatch.setattr(subprocess, "run", recorder)
+    detect_pii_via_subprocess({"0": "Alice lives in Boston."})
+    result = detect_pii_via_subprocess({"0": "Alice lives in Boston.", "1": "Bob works at MIT."})
+    assert len(recorder.calls) == 2
+    assert list(recorder.calls[1]["input"]["transcripts"]) == ["1"]
+    assert result["spans_by_asr"]["0"][0]["text"] == "Alice lives in Boston."
+    assert result["spans_by_asr"]["1"][0]["text"] == "Bob works at MIT."
+    assert [result["cache"][k]["hit"] for k in ("0", "1")] == [True, False]
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"detectors": [DETECTOR_PRESIDIO, DETECTOR_RULES]},
+        {"presidio_score_threshold": 0.7},
+        {"gliner_threshold": 0.8},
+        {"gliner_labels": ["person"]},
+    ],
+)
+def test_a_changed_process_parameter_misses(
+    fake_venv: Path, monkeypatch: pytest.MonkeyPatch, change: dict[str, Any]
+) -> None:
+    """Every parameter that shapes the scan is in the key."""
+    recorder = _SubprocessRecorder({})
+    recorder.input_hook = lambda parsed: {**_echo(parsed), "detectors_used": sorted(parsed["detectors"])}
+    monkeypatch.setattr(subprocess, "run", recorder)
+    detect_pii_via_subprocess({"0": "Alice lives in Boston."})
+    detect_pii_via_subprocess({"0": "Alice lives in Boston."}, **change)
+    assert len(recorder.calls) == 2
+
+
+def test_a_different_gliner_commit_misses(fake_venv: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """New GLiNER weights never serve a scan made with the old ones."""
+    recorder = _SubprocessRecorder({})
+    recorder.input_hook = _echo
+    monkeypatch.setattr(subprocess, "run", recorder)
+    detect_pii_via_subprocess({"0": "Alice lives in Boston."})
+    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: "a" * 40)
+    detect_pii_via_subprocess({"0": "Alice lives in Boston."})
+    assert len(recorder.calls) == 2
+
+
+def test_an_incomplete_scan_is_not_stored(fake_venv: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A detector that failed to load leaves a result a retry could improve, so it is recomputed."""
+    recorder = _SubprocessRecorder(
+        {"spans_by_asr": {"0": []}, "failures": {"gliner": "boom"}, "detectors_used": ["presidio", "rules"]}
+    )
+    monkeypatch.setattr(subprocess, "run", recorder)
+    detect_pii_via_subprocess({"0": "Alice lives in Boston."})
+    detect_pii_via_subprocess({"0": "Alice lives in Boston."})
+    assert len(recorder.calls) == 2
+
+
+def test_a_fully_held_batch_builds_no_venv(fake_venv: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """When every transcript is held, neither the venv nor the model is touched."""
+    recorder = _SubprocessRecorder({})
+    recorder.input_hook = _echo
+    monkeypatch.setattr(subprocess, "run", recorder)
+    detect_pii_via_subprocess({"0": "Alice lives in Boston."})
+
+    def refuse(*_: object, **__: object) -> Path:
+        raise AssertionError("a fully cached batch must not build the venv")
+
+    monkeypatch.setattr(pii_subprocess, "ensure_venv", refuse)
+    monkeypatch.setattr(pii_subprocess, "_staged_snapshot", refuse)
+    detect_pii_via_subprocess({"0": "Alice lives in Boston."})
+    assert len(recorder.calls) == 1

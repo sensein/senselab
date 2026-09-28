@@ -155,11 +155,15 @@ class PiiScan:
         failures: Why a detector did not run, keyed by name. An empty ``spans`` with a
             populated ``failures`` is "we could not check", which must never be read as
             "we checked and it was clean".
+        cache: The result-cache record of this input's detector scan — ``key``, whether it was
+            reused (``hit``) and where a reused scan was first computed (``origin``). Empty when
+            the input never reached the detectors.
     """
 
     spans: list[PiiSpan] = field(default_factory=list)
     detectors_used: list[str] = field(default_factory=list)
     failures: dict[str, str] = field(default_factory=dict)
+    cache: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -488,6 +492,7 @@ def scan_for_pii(
         return _finish(_empty({"pii_subprocess": msg}))
 
     spans_by_index_raw = result.get("spans_by_asr", {})
+    cache_by_index = dict(result.get("cache", {}))
     failures = dict(result.get("failures", {}))
     detectors_used = list(result.get("detectors_used", []))
 
@@ -531,6 +536,7 @@ def scan_for_pii(
                 spans=_materialize_spans(spans_by_index_raw.get(str(i), []), str(i), line=line),
                 detectors_used=list(detectors_used),
                 failures=dict(failures),
+                cache=dict(cache_by_index.get(str(i), {})),
             )
         )
     return _finish(scans)

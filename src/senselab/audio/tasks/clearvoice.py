@@ -21,6 +21,9 @@ from senselab.audio.data_structures import Audio
 from senselab.utils.clearvoice import ClearVoiceModelSpec, run_clearvoice_audio
 from senselab.utils.data_structures import DeviceType
 
+CLEARVOICE_PROCESS = "clearvoice"
+"""The result-cache process name every ClearerVoice capability is keyed under."""
+
 
 def prepare_audios_for_clearvoice(audios: List[Audio], spec: ClearVoiceModelSpec) -> List[Audio]:
     """Resample to the checkpoint's rate and downmix to mono.
@@ -61,7 +64,8 @@ def run_clearvoice_over_audios(
         One list per input, holding as many ``Audio`` objects as the checkpoint actually produced —
         not as many as its name suggests. Each carries the input's metadata plus a ``"clearvoice"``
         entry naming the model, the resolved commit, the source index, and the RMS scalar upstream's
-        reader applied.
+        reader applied, and a ``"cache"`` record: the result-cache key, whether the sources were
+        reused, and where a reused result was first computed.
 
     Raises:
         RuntimeError: If the worker fails or exceeds its ceiling.
@@ -69,49 +73,90 @@ def run_clearvoice_over_audios(
     if not audios:
         return []
 
+    from senselab.utils.model_revision import resolve_revision
+    from senselab.utils.tasks.cached_inference import audio_signature, result_cache_key, result_lookup, result_store
+
     prepared = prepare_audios_for_clearvoice(audios, spec)
-    total_audio_s = sum(audio.waveform.shape[-1] / audio.sampling_rate for audio in prepared)
-
-    with tempfile.TemporaryDirectory(prefix="senselab-clearvoice-io-") as tmpdir:
-        tmp = Path(tmpdir)
-        in_paths = []
-        for index, audio in enumerate(prepared):
-            in_path = str(tmp / f"in_{index}.wav")
-            # A plain .wav resolves to FLOAT and round-trips these samples bit-exactly; out-of-range
-            # data raises rather than being clipped on the way in.
-            audio.save_to_file(in_path)
-            in_paths.append(in_path)
-
-        output_paths, scalars, sha = run_clearvoice_audio(
-            spec,
-            in_paths,
-            str(tmp),
-            total_audio_s=total_audio_s,
-            device=device,
-            timeout_s=timeout_s,
-            revision=revision,
+    sha = resolve_revision(spec.model_id, revision)
+    params = {"capability": spec.capability, "sampling_rate": spec.sampling_rate}
+    keys = [
+        result_cache_key(
+            input_signature=audio_signature(audio),
+            process=CLEARVOICE_PROCESS,
+            model_id=spec.model_id,
+            commit_sha=sha,
+            params=params,
         )
+        for audio in prepared
+    ]
+    held = [result_lookup(key) for key in keys]
+    missing = [index for index, entry in enumerate(held) if entry is None]
 
-        results: List[List[Audio]] = []
-        for original, paths, scalar in zip(prepared, output_paths, scalars):
-            sources = []
-            for source_index, path in enumerate(paths):
-                produced = Audio(filepath=path)
+    computed: dict[int, tuple[list[Audio], float]] = {}
+    if missing:
+        run_on = [prepared[index] for index in missing]
+        total_audio_s = sum(audio.waveform.shape[-1] / audio.sampling_rate for audio in run_on)
+        with tempfile.TemporaryDirectory(prefix="senselab-clearvoice-io-") as tmpdir:
+            tmp = Path(tmpdir)
+            in_paths = []
+            for position, audio in enumerate(run_on):
+                in_path = str(tmp / f"in_{position}.wav")
+                # A plain .wav resolves to FLOAT and round-trips these samples bit-exactly; out-of-range
+                # data raises rather than being clipped on the way in.
+                audio.save_to_file(in_path)
+                in_paths.append(in_path)
+
+            output_paths, scalars, sha = run_clearvoice_audio(
+                spec,
+                in_paths,
+                str(tmp),
+                total_audio_s=total_audio_s,
+                device=device,
+                timeout_s=timeout_s,
+                revision=sha,
+            )
+            for index, paths, scalar in zip(missing, output_paths, scalars):
+                read_back = [Audio(filepath=path) for path in paths]
                 # Force the lazy load before the temporary directory holding the file is removed.
-                _ = produced.waveform
-                produced.metadata = dict(original.metadata)
-                produced.metadata["clearvoice"] = {
-                    "model": spec.model_id,
-                    "commit": sha,
-                    "capability": spec.capability,
-                    "sampling_rate": spec.sampling_rate,
-                    "source_index": source_index,
-                    "n_sources": len(paths),
-                    "input_norm_scalar": scalar,
-                    "input_norm_applied_to_output": len(paths) == 1,
-                }
-                sources.append(produced)
-            results.append(sources)
+                waveforms = [audio.waveform for audio in read_back]
+                sources = [Audio(waveform=waveform, sampling_rate=spec.sampling_rate) for waveform in waveforms]
+                computed[index] = (sources, scalar)
+                result_store(
+                    keys[index],
+                    {"input_norm_scalar": scalar, "n_sources": len(sources)},
+                    process=CLEARVOICE_PROCESS,
+                    model_id=spec.model_id,
+                    commit_sha=sha,
+                    arrays={f"source_{n}": waveform.numpy() for n, waveform in enumerate(waveforms)},
+                )
+
+    results: List[List[Audio]] = []
+    for index, original in enumerate(prepared):
+        entry = held[index]
+        if entry is None:
+            sources, scalar = computed[index]
+            cache = {"key": keys[index], "hit": False, "origin": None}
+        else:
+            count = int(entry["result"]["n_sources"])
+            sources = [
+                Audio(waveform=entry["arrays"][f"source_{n}"], sampling_rate=spec.sampling_rate) for n in range(count)
+            ]
+            scalar = entry["result"]["input_norm_scalar"]
+            cache = {"key": keys[index], "hit": True, "origin": entry.get("origin")}
+        for source_index, produced in enumerate(sources):
+            produced.metadata = dict(original.metadata)
+            produced.metadata["clearvoice"] = {
+                "model": spec.model_id,
+                "commit": sha,
+                "capability": spec.capability,
+                "sampling_rate": spec.sampling_rate,
+                "source_index": source_index,
+                "n_sources": len(sources),
+                "input_norm_scalar": scalar,
+                "input_norm_applied_to_output": len(sources) == 1,
+                "cache": cache,
+            }
+        results.append(sources)
     return results
 
 
