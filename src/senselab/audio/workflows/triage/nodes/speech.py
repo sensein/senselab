@@ -38,6 +38,8 @@ from senselab.audio.workflows.audio_analysis.harmonize import normalise_token
 from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.consensus import is_bracketed
 from senselab.audio.workflows.triage.enrollment import Enrollment
+from senselab.audio.workflows.triage.finding_placement import cut as cut_to_kind
+from senselab.audio.workflows.triage.finding_placement import locate, match_key
 from senselab.audio.workflows.triage.nodes.branches import (
     BRANCH_FAMILY,
     DETECT_GROUP,
@@ -109,6 +111,7 @@ from senselab.audio.workflows.triage.nodes.ddk import (
     read_ddk,
     syllable_detail,
 )
+from senselab.audio.workflows.triage.nodes.redact import category_family
 from senselab.audio.workflows.triage.residue import residue_rule, task_residue
 from senselab.audio.workflows.triage.routing_analysis.families import SYLLABLE_REPETITION
 from senselab.audio.workflows.triage.stimulus import (
@@ -555,47 +558,6 @@ def _speech_coverage(windows: list[Entity], extent: tuple[float, float], family:
         1 for window in overlapping if family & {str(label) for label in (window.attributes.get("labels") or [])}
     )
     return carried / len(overlapping)
-
-
-def _norm_token(token: str) -> str:
-    """A token normalised for subsequence matching: casefolded, edge punctuation stripped.
-
-    Args:
-        token: The raw token.
-
-    Returns:
-        The normalised token.
-    """
-    return token.casefold().strip(".,;:!?\"'()[]{}")
-
-
-def _locate(finding_text: str, haystack_tokens: list[str]) -> list[tuple[int, int]]:
-    """Every place the finding's tokens match the haystack, as contiguous runs (N11).
-
-    Every occurrence, not the first.
-    See ``specs/20260817-triage-workflow-dag/branch-speech-implementation.md``.
-
-    Args:
-        finding_text: The detector's matched text.
-        haystack_tokens: The scanned text's tokens, one per word, in the order they were scanned.
-
-    Returns:
-        ``[(first index, last index), ...]`` into ``haystack_tokens``, non-overlapping and in order.
-        Empty when nothing matches.
-    """
-    tokens = [_norm_token(token) for token in finding_text.split()]
-    haystack = [_norm_token(token) for token in haystack_tokens]
-    if not tokens or not haystack or len(tokens) > len(haystack):
-        return []
-    matches: list[tuple[int, int]] = []
-    start = 0
-    while start <= len(haystack) - len(tokens):
-        if haystack[start : start + len(tokens)] == tokens:
-            matches.append((start, start + len(tokens) - 1))
-            start += len(tokens)
-        else:
-            start += 1
-    return matches
 
 
 def _reading(word: Entity, haystack: str) -> str:
@@ -2377,25 +2339,32 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
     failures: dict[str, str] = {}
     scanned_by: set[str] = set()
     findings: list[dict[str, Any]] = []
-    recorded: set[tuple[str, int, int]] = set()
+    recorded: set[tuple[str, tuple[int, ...]]] = set()
+    placed_terms: set[tuple[str, str]] = set()
+    unplaced: dict[tuple[str, str], dict[str, str]] = {}
+    name_words_max = int(config.require("pii.name_words_max"))
     for (haystack, _, positions, tokens), scan in zip(haystacks, scans):
         failures.update(scan.failures)
         scanned_by.update(scan.detectors_used)
         for finding in scan.spans:
-            # Every occurrence of this finding, not just its first.
-            located = [(positions[first], positions[last]) for first, last in _locate(str(finding.text or ""), tokens)]
-            if not located:
-                notes.append(f"pii_unlocated ({finding.category})")
-                occurrences = [(0, len(words) - 1)]
-            else:
-                occurrences = located
-            for first, last in occurrences:
-                if (str(finding.category), first, last) in recorded:
+            text = str(finding.text or "")
+            category = str(finding.category)
+            term = (category_family(category), "".join(match_key(piece) for piece in text.split()))
+            runs = [
+                part for run in locate(text, tokens) for part in cut_to_kind(run, tokens, category, name_words_max)[0]
+            ]
+            if not runs:
+                unplaced.setdefault(
+                    term, {"category": category, "text": text, "source": str(finding.source), "haystack": haystack}
+                )
+                continue
+            placed_terms.add(term)
+            occurrences = [tuple(positions[index] for index in range(first, last + 1)) for first, last in runs]
+            for occurrence, covered in enumerate(occurrences):
+                if (category, covered) in recorded:
                     continue
-                recorded.add((str(finding.category), first, last))
-                covered = list(range(first, last + 1))
-                # A finding nothing in the transcript places covers the whole of it.
-                extent = _timings_hull(words, list(range(len(words)))) if not located else _timings_hull(words, covered)
+                recorded.add((category, covered))
+                extent = _timings_hull(words, list(covered))
                 sources = sorted({str(name) for index in covered for name in words[index].attributes["sources"]})
                 speakers = {word_speakers[index] for index in covered}
                 resolved = len(speakers) == 1 and None not in speakers
@@ -2403,12 +2372,14 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
                     prov_type="pii",
                     extent=extent,
                     attributes={
-                        "category": finding.category,
+                        "category": category,
                         "source": finding.source,
                         "haystack": haystack,
-                        "in_stimulus": in_stimulus(str(finding.text or ""), declared_tokens, near),
+                        "text": text,
+                        "word_ids": [words[index].id for index in covered],
+                        "in_stimulus": in_stimulus(text, declared_tokens, near),
                         "sources": sources,
-                        "occurrence": occurrences.index((first, last)),
+                        "occurrence": occurrence,
                         "occurrences_n": len(occurrences),
                         "detectors_used": sorted(scan.detectors_used),
                         "detectors_failed": sorted(scan.failures),
@@ -2422,7 +2393,7 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
                     mark_id = store.entity(
                         prov_type="assertion",
                         extent=words[index].extent,
-                        attributes={"verb": "label", "label": "pii", "category": finding.category},
+                        attributes={"verb": "label", "label": "pii", "category": category},
                     )
                     store.was_generated_by(mark_id, pii_act)
                     store.was_attributed_to(mark_id, software)
@@ -2430,11 +2401,14 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
                     view.append(mark_id)
                 findings.append(
                     {
-                        "category": finding.category,
+                        "category": category,
                         "speaker": next(iter(speakers)) if resolved else None,
                         "resolved": resolved,
                     }
                 )
+    unplaced_findings = [record for term, record in unplaced.items() if term not in placed_terms]
+    for record in unplaced_findings:
+        notes.append(f"pii_unplaced ({record['category']})")
     missing = _missing_detectors(values["required_detectors"], scanned_by, failures)
     notes.extend(_pii_notes(findings, failures, missing, target_speaker))
     scan_id = store.entity(
@@ -2446,6 +2420,7 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
             "scanned_by": sorted(scanned_by),
             "failed": sorted(failures),
             "missing": missing,
+            "unplaced_findings": unplaced_findings,
             **residue_attributes,
         },
     )

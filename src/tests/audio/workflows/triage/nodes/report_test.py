@@ -435,6 +435,7 @@ def _seed_report_store(  # noqa: C901, D417 — one independent block per node, 
         (dict(entry) if isinstance(entry, dict) else {"text": entry}, None) for entry in words
     ] + [({"text": text}, category) for text, category in marked_words]
     word_ids: list[str] = []
+    marked_ids: dict[str, list[str]] = {}
     for index, (spec, category) in enumerate(every_word):
         extent = (0.2 * index, 0.2 * index + 0.15)
         word_id = _entity(
@@ -444,6 +445,7 @@ def _seed_report_store(  # noqa: C901, D417 — one independent block per node, 
         )
         word_ids.append(word_id)
         if category is not None:
+            marked_ids.setdefault(category, []).append(word_id)
             mark_id = _entity("assertion", extent, {"verb": "label", "label": "pii", "category": category})
             store.was_derived_from(mark_id, word_id)
     _entity(
@@ -483,7 +485,14 @@ def _seed_report_store(  # noqa: C901, D417 — one independent block per node, 
         _entity(
             "pii",
             (0.0, 1.0),
-            {"category": category, "source": "gliner", "occurrence": 0, "occurrences_n": 1, "sources": []},
+            {
+                "category": category,
+                "source": "gliner",
+                "occurrence": 0,
+                "occurrences_n": 1,
+                "sources": [],
+                "word_ids": marked_ids.get(category, []),
+            },
         )
     if scan != "absent":
         _entity(

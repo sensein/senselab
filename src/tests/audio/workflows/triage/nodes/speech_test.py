@@ -2309,22 +2309,22 @@ class TestPiiOnTheConsensus:
         assert _report_entity(store, "SPEECH").attributes["pii"]["n"] == 1
         assert live_entities(store, "pii")[0].attributes["haystack"] == "consensus"
 
-    def test_a_scanned_recording_marks_a_finding_that_is_the_script_s_own_words(
+    def test_a_finding_on_words_the_scan_never_read_is_recorded_unplaced(
         self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """One novel word brings the scan; a finding on the script's words is still minted, and marked.
+        """A finding whose text is not in the scanned residue masks nothing and is kept, with its text.
 
-        The scan gate removes the recordings that produced nothing but their prompt. It cannot remove
-        this: a recording that did say something of its own, whose detector then fired on the prompt.
+        It used to be placed over the whole transcript. Annotate, never suppress: the scan records it.
         """
         _seed_speech_store(store, tmp_path, words=["the", "rainbow", "springfield"])
         _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
         _stub_pii(monkeypatch, findings=[("PERSON", "rainbow")])
         hint = AudioHints(expected_speech=[ExpectedSpeech(text="the rainbow")])
         speech(store, "plain", speech_config, hint, run_dir=tmp_path, enrollment=None)
-        findings = live_entities(store, "pii")
-        assert findings, "the finding must still be minted: annotate, never suppress"
-        assert all(finding.attributes["in_stimulus"] is True for finding in findings)
+        assert live_entities(store, "pii") == []
+        scan = next(m for m in live_entities(store, "measurement") if m.attributes.get("name") == "pii_scan")
+        assert [(r["category"], r["text"]) for r in scan.attributes["unplaced_findings"]] == [("PERSON", "rainbow")]
+        assert "pii_unplaced (PERSON)" in _report_entity(store, "SPEECH").attributes["notes"]
 
     def test_a_disclosure_inside_a_read_task_is_not_marked_as_the_script_s(
         self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -2425,10 +2425,10 @@ class TestPiiOnTheConsensus:
         marks = [e for e in live_entities(store, "assertion") if e.attributes.get("label") == "pii"]
         assert [store.derived_from(m.id) for m in marks] == [[alice.id]]
 
-    def test_a_finding_carries_category_and_extent_never_text(
+    def test_a_finding_carries_its_text_and_words_and_the_report_does_not(
         self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """The report and the element both refuse to carry the matched text."""
+        """Owner, 2026-09-27: the finding records its own text and the words it covers; the report stays text-free."""
         _seed_speech_store(store, tmp_path, words=["my", "name", "is", "alice"])
         _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
         _stub_pii(monkeypatch, findings=[("PERSON", "alice")])
@@ -2436,7 +2436,9 @@ class TestPiiOnTheConsensus:
         finding = live_entities(store, "pii")[0]
         assert finding.attributes["category"] == "PERSON"
         assert finding.extent is not None
-        assert "alice" not in str(finding.attributes)
+        assert finding.attributes["text"] == "alice"
+        words = [word for word in live_entities(store, "word") if word.attributes.get("text") == "alice"]
+        assert finding.attributes["word_ids"] == [words[0].id]
         assert "alice" not in str(_report_entity(store, "SPEECH").attributes)
 
     def test_a_finding_names_the_sources_behind_the_words_it_rests_on(
@@ -3532,3 +3534,70 @@ class TestBracketedTokensNeverReachTheScan:
         )
         assert word.attributes["text"] == "alice"
         assert word.attributes["bracketed"] is False
+
+
+class TestAFindingSitsOnItsOwnWords:
+    """Owner, 2026-09-27: a finding covers the words its text names, cut to the words of its kind."""
+
+    WORDS = [
+        "a",
+        "week",
+        "ago",
+        "my",
+        "brother",
+        "in",
+        "Australia,",
+        "my",
+        "brother",
+        "Alan's",
+        "wife,",
+        "had",
+        "died",
+        "that",
+        "week.",
+    ]
+
+    def _covered(self, store: ProvStore) -> dict[str, list[str]]:
+        text = {word.id: str(word.attributes.get("text")) for word in live_entities(store, "word")}
+        out: dict[str, list[str]] = {}
+        for finding in live_entities(store, "pii"):
+            out.setdefault(str(finding.attributes["category"]), []).append(
+                " ".join(text[i] for i in finding.attributes["word_ids"])
+            )
+        return out
+
+    def test_the_open_response_card(
+        self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """r6 open-response: "Alan" places on "Alan's"; the overrunning DATE keeps only its week."""
+        _seed_speech_store(store, tmp_path, words=self.WORDS)
+        _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
+        _stub_pii(
+            monkeypatch,
+            findings=[
+                ("PERSON", "Alan"),
+                ("DATE", "Australia, my brother Alan's wife, had died that week"),
+                ("DATE_TIME", "a week ago"),
+                ("LOCATION", "Australia"),
+            ],
+        )
+        speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
+        covered = self._covered(store)
+        assert covered["PERSON"] == ["Alan's"]
+        assert covered["DATE"] == ["week."]
+        assert covered["DATE_TIME"] == ["week ago"], "a function word at the edge is not the date"
+        assert covered["LOCATION"] == ["Australia,"]
+        every = {word for texts in covered.values() for text in texts for word in text.split()}
+        assert not {"brother", "wife,", "died"} & every
+
+    def test_no_finding_covers_the_whole_transcript(
+        self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """r6 story-recall: a PERSON the words do not hold covers nothing; the date still places."""
+        _seed_speech_store(store, tmp_path, words=["you", "have", "up", "to", "five", "minutes", "grandpa's", "old"])
+        _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
+        _stub_pii(monkeypatch, findings=[("PERSON", "Mister Banana"), ("DATE_TIME", "five minutes")])
+        speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
+        assert self._covered(store) == {"DATE_TIME": ["five minutes"]}
+        scan = next(m for m in live_entities(store, "measurement") if m.attributes.get("name") == "pii_scan")
+        assert [r["text"] for r in scan.attributes["unplaced_findings"]] == ["Mister Banana"]

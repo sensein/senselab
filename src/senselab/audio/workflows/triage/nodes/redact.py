@@ -1054,9 +1054,6 @@ NEW = "new"
 """A reviewer ``redact`` entry naming a content word no mask hides, or one its quote cannot be placed on:
 the reviewer proposing to hide more."""
 
-_UNLOCATED_NOTE = re.compile(r"^pii_unlocated \((?P<category>.+)\)$")
-_WHOLE_TOLERANCE_S = 1e-3  # the float slack between SPEECH's whole-transcript hull and a recomputed one
-
 
 @lru_cache(maxsize=1)
 def _families() -> dict[str, str]:
@@ -1204,11 +1201,13 @@ class UnplacedFinding:
         family: Its family (:func:`category_family`).
         state: :data:`UNPLACED_PLACED`, :data:`UNPLACED_CLEARED`, :data:`UNPLACED_OPEN` or
             :data:`UNPLACED_UNREAD`.
+        text: The detector's own text for it.
     """
 
     category: str
     family: str
     state: str
+    text: str = ""
 
 
 @dataclass(frozen=True)
@@ -1375,7 +1374,7 @@ class MaskPlan:
                 for span in self.proposals
             ],
             "unplaced_findings": [
-                {"category": finding.category, "family": finding.family, "state": finding.state}
+                {"category": finding.category, "family": finding.family, "state": finding.state, "text": finding.text}
                 for finding in self.unplaced
             ],
             "release_unplaced": list(self.release_unplaced),
@@ -1533,24 +1532,9 @@ def _final_extents(
     return out
 
 
-def _speech_notes(store: ProvStore) -> list[str]:
-    """SPEECH's latest live report's notes.
-
-    Args:
-        store: The provenance store.
-
-    Returns:
-        The notes as written; empty where SPEECH left no report.
-    """
-    reports = [entity for entity in live_entities(store, "branch_report") if entity.attributes.get("node") == "SPEECH"]
-    if not reports:
-        return []
-    return [str(note) for note in reports[-1].attributes.get("notes") or ()]
-
-
 @dataclass(frozen=True)
 class _Finding:
-    """One live, non-exempt detector finding SPEECH placed on words, with the residue words it covers."""
+    """One live, non-exempt detector finding and the residue words SPEECH placed it on."""
 
     finding_id: str
     category: str
@@ -1559,26 +1543,21 @@ class _Finding:
     task_words_n: int
 
 
-def _located_findings(
-    store: ProvStore, words: Sequence[Entity], residue_ids: set[str], marked: Mapping[str, Mapping[str, str]]
-) -> tuple[list[_Finding], list[str]]:
-    """The findings placed on their own words, and the categories of those SPEECH could not place.
-
-    SPEECH places a finding whose text matches no run of the scanned tokens over the whole transcript
-    and notes ``pii_unlocated (<category>)``. Such a finding names no word, so it is returned apart and
-    masks nothing. Every other finding covers the words its own extent holds that carry its category's
-    mark: the words SPEECH matched, and no neighbour its timing hull merely reaches. A finding REDACT
-    exempted as declared stimulus is neither.
+def _located_findings(store: ProvStore, residue_ids: set[str]) -> tuple[list[_Finding], list[dict[str, str]]]:
+    """The findings on the words SPEECH placed them on, and those it could not place.
 
     Args:
         store: The provenance store.
-        words: The timed consensus words, in stream order.
-        residue_ids: The residue's word ids; empty where the store predates the residue, which admits
-            every word.
-        marked: :func:`_pii_marked_words`' output.
+        residue_ids: The residue's word ids; empty where the scan read none, which admits every word.
 
     Returns:
-        ``(located, unplaced categories)``, located in stream order.
+        ``(located, unplaced)``: located in stream order, each covering the residue words of its
+        ``word_ids``; unplaced as the live ``pii_scan`` records them, ``{category, text, ...}``. A
+        finding REDACT exempted as declared stimulus is neither.
+
+    Raises:
+        ValueError: If a finding carries no ``word_ids``, which a store written before SPEECH recorded
+            them does not; such a store is replayed, not re-folded.
     """
     exempt = {
         source
@@ -1586,37 +1565,27 @@ def _located_findings(
         if assertion.attributes.get("verb") == _EXEMPT_VERB
         for source in store.derived_from(assertion.id)
     }
-    unlocated = Counter(
-        match.group("category") for note in _speech_notes(store) if (match := _UNLOCATED_NOTE.match(note))
-    )
-    spans = [span for word in words for span in (word.attributes.get("timings") or {}).values()]
-    whole = (min(float(span[0]) for span in spans), max(float(span[1]) for span in spans)) if spans else None
     located: list[_Finding] = []
-    unplaced: list[str] = []
     for finding in live_entities(store, "pii"):
         if finding.extent is None or finding.id in exempt:
             continue
-        category = str(finding.attributes.get("category") or "")
-        low, high = float(finding.extent[0]), float(finding.extent[1])
-        if (
-            whole is not None
-            and unlocated.get(category)
-            and abs(low - whole[0]) <= _WHOLE_TOLERANCE_S
-            and abs(high - whole[1]) <= _WHOLE_TOLERANCE_S
-        ):
-            unplaced.append(category)
-            continue
-        inside = [
-            word
-            for word in words
-            if category in marked.get(word.id, {})
-            and word_hull(word)[0] >= low - _WHOLE_TOLERANCE_S
-            and word_hull(word)[1] <= high + _WHOLE_TOLERANCE_S
-        ]
-        members = tuple(word.id for word in inside if not residue_ids or word.id in residue_ids)
-        task = sum(1 for word in inside if residue_ids and word.id not in residue_ids)
-        located.append(_Finding(finding.id, category, (low, high), members, task))
+        ids = finding.attributes.get("word_ids")
+        if ids is None:
+            raise ValueError("a pii finding names no word_ids; the store predates SPEECH's placement, replay it")
+        members = tuple(str(i) for i in ids if not residue_ids or str(i) in residue_ids)
+        task = sum(1 for i in ids if residue_ids and str(i) not in residue_ids)
+        located.append(
+            _Finding(
+                finding.id,
+                str(finding.attributes.get("category") or ""),
+                (float(finding.extent[0]), float(finding.extent[1])),
+                members,
+                task,
+            )
+        )
     located.sort(key=lambda item: (item.extent[0], item.extent[1]))
+    scan = find_measurement(store, "pii_scan")
+    unplaced = [dict(record) for record in ((scan.attributes.get("unplaced_findings") or ()) if scan else ())]
     return located, unplaced
 
 
@@ -1671,8 +1640,9 @@ def mask_plan(
     tokens = _tokens(residue)
     words = [word for word in consensus_words(store) if word.extent is not None]
     by_id = {word.id: word for word in words}
-    marked = _pii_marked_words(store)
-    located, unplaced_categories = _located_findings(store, words, residue_ids, marked)
+    located, unplaced_records = _located_findings(store, residue_ids)
+    unplaced_categories = [str(record.get("category") or "") for record in unplaced_records]
+    redact_ran = find_verdict(store, NODE) is not None
 
     groups: dict[tuple[str, ...], list[_Finding]] = {}
     for finding in located:
@@ -1762,7 +1732,7 @@ def mask_plan(
             agreement = AGREED_MASKED
             if family in unplaced_families:
                 placed_families.add(family)
-        elif hits and family in unplaced_families:
+        elif hits and family in unplaced_families and redact_ran:
             agreement = AGREED_PLACED
             placed_families.add(family)
             reviewer_masks.append((family, uncovered))
@@ -1910,17 +1880,18 @@ def mask_plan(
     cleared = read and reading.get("original") == "clean"
     unplaced = tuple(
         UnplacedFinding(
-            category=category,
-            family=category_family(category),
+            category=str(record.get("category") or ""),
+            family=category_family(str(record.get("category") or "")),
             state=UNPLACED_PLACED
-            if category_family(category) in placed_families
+            if category_family(str(record.get("category") or "")) in placed_families
             else UNPLACED_CLEARED
             if cleared
             else UNPLACED_OPEN
             if read
             else UNPLACED_UNREAD,
+            text=str(record.get("text") or ""),
         )
-        for category in unplaced_categories
+        for record in unplaced_records
     )
     off_mask = [
         str(entry.get("text") or "")

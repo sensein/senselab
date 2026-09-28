@@ -864,7 +864,13 @@ class TestTheRedactionReviewerAnnotatesAndThisNodeDecides:
             finding = store.entity(
                 prov_type="pii",
                 extent=(float(index), float(index) + 0.5),
-                attributes={"category": "PERSON", "source": "rules", "occurrence": 0, "occurrences_n": 1},
+                attributes={
+                    "category": "PERSON",
+                    "source": "rules",
+                    "occurrence": 0,
+                    "occurrences_n": 1,
+                    "word_ids": [word_ids[index]],
+                },
             )
             store.was_generated_by(finding, activity)
             mark = store.entity(
