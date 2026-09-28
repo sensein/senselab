@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 import torch
@@ -51,7 +52,6 @@ def test_cache_key_is_deterministic() -> None:
         "model_id": "pyannote/x",
         "params": {"b": 2, "a": 1},
         "code_version": "diarization@1",
-        "senselab_ver": "1.2.3",
         "commit_sha": "a" * 40,
     }
     first = cache_key(**kwargs)  # type: ignore[arg-type]
@@ -78,7 +78,6 @@ def test_two_commits_of_one_model_do_not_share_a_cache_key() -> None:
             model_id="openai/whisper-large-v3-turbo",
             params={"device": "cpu"},
             code_version="v1",
-            senselab_ver="0.1.0",
             commit_sha=commit_sha,
         )
 
@@ -94,7 +93,7 @@ def test_cache_key_requires_commit_sha_as_a_keyword() -> None:
     """
     with pytest.raises(TypeError):
         cache_key(  # type: ignore[call-arg]
-            audio_sig="s", task="t", model_id="m", params={}, code_version="t@1", senselab_ver="v"
+            audio_sig="s", task="t", model_id="m", params={}, code_version="t@1"
         )
 
 
@@ -137,7 +136,6 @@ def test_param_order_does_not_change_the_key() -> None:
         model_id="m",
         params={"a": 1, "b": 2},
         code_version="t@1",
-        senselab_ver="v",
         commit_sha="a" * 40,
     )
     b = cache_key(
@@ -146,7 +144,6 @@ def test_param_order_does_not_change_the_key() -> None:
         model_id="m",
         params={"b": 2, "a": 1},
         code_version="t@1",
-        senselab_ver="v",
         commit_sha="a" * 40,
     )
     assert a == b
@@ -154,7 +151,7 @@ def test_param_order_does_not_change_the_key() -> None:
 
 @pytest.mark.parametrize(
     "field",
-    ["audio_sig", "task", "model_id", "params", "code_version", "senselab_ver", "commit_sha"],
+    ["audio_sig", "task", "model_id", "params", "code_version", "commit_sha"],
 )
 def test_every_keyed_field_changes_the_key(field: str) -> None:
     """Each component genuinely participates — none is silently ignored (FR-010).
@@ -169,7 +166,6 @@ def test_every_keyed_field_changes_the_key(field: str) -> None:
         "model_id": "m",
         "params": {"a": 1},
         "code_version": "t@1",
-        "senselab_ver": "v",
         "commit_sha": "a" * 40,
     }
     altered = dict(base)
@@ -197,7 +193,6 @@ def test_two_commits_of_one_aligner_do_not_share_an_align_key() -> None:
             aligner_model_id="facebook/mms-1b-all",
             aligner_params={"x": 1},
             code_version="alignment@1",
-            senselab_ver="0.1.0",
             aligner_commit_sha=aligner_commit_sha,
         )
 
@@ -214,7 +209,6 @@ def test_align_cache_key_requires_aligner_commit_sha_as_a_keyword() -> None:
             aligner_model_id="mms",
             aligner_params={},
             code_version="t@1",
-            senselab_ver="v",
         )
 
 
@@ -230,7 +224,6 @@ def test_alignment_key_is_independent_of_the_task_key() -> None:
         aligner_model_id="mms",
         aligner_params={"x": 1},
         code_version="t@1",
-        senselab_ver="v",
         aligner_commit_sha="a" * 40,
     )
     task = cache_key(
@@ -239,7 +232,6 @@ def test_alignment_key_is_independent_of_the_task_key() -> None:
         model_id="mms",
         params={"x": 1},
         code_version="t@1",
-        senselab_ver="v",
         commit_sha="a" * 40,
     )
     assert align != task
@@ -254,7 +246,6 @@ def test_alignment_key_tracks_the_transcript() -> None:
         "aligner_model_id": "mms",
         "aligner_params": {},
         "code_version": "t@1",
-        "senselab_ver": "v",
         "aligner_commit_sha": "a" * 40,
     }
     assert align_cache_key(transcript_sha="a", **kwargs) != align_cache_key(transcript_sha="b", **kwargs)  # type: ignore[arg-type]
@@ -352,13 +343,15 @@ def test_sync_wipes_when_marker_is_unreadable_but_entries_exist(tmp_path: Path) 
     assert not (tmp_path / "orphan.json").exists()
 
 
-def test_sync_wipes_nested_directories(tmp_path: Path) -> None:
-    """Directory-shaped entries are removed too (shutil path)."""
+def test_sync_leaves_directories_it_did_not_write(tmp_path: Path) -> None:
+    """Only ``cache_store``'s top-level ``*.json`` entries are this cache's; a directory is not."""
     (tmp_path / "subdir").mkdir()
     (tmp_path / "subdir" / "f.json").write_text("{}")
+    cache_store(tmp_path, "old", {"v": 1})
     (tmp_path / ".schema_version").write_text(str(CACHE_SCHEMA_VERSION + 1))
     sync_cache_with_schema_version(tmp_path)
-    assert not (tmp_path / "subdir").exists()
+    assert (tmp_path / "subdir" / "f.json").exists()
+    assert not (tmp_path / "old.json").exists()
 
 
 def test_stored_entry_is_valid_json_on_disk(tmp_path: Path) -> None:
@@ -512,7 +505,6 @@ def test_audio_signature_joins_summary_to_cache_provenance(tmp_path: Path) -> No
         model_id="whisper",
         params={},
         code_version="asr@1",
-        senselab_ver="v",
         commit_sha=None,
     )
     cache_store(tmp_path, key, {"status": "ok", "result": [], "provenance": provenance})
@@ -549,14 +541,14 @@ def _entry(tmp_path: Path, key: str, *, senselab_ver: str, task: str, code_versi
     )
 
 
-def test_prune_removes_entries_from_another_senselab_version(tmp_path: Path) -> None:
-    """A senselab release orphans every entry — nothing could ever hit them again."""
+def test_prune_keeps_entries_from_another_senselab_version(tmp_path: Path) -> None:
+    """The senselab version is not in the key, so an entry from another version is still reachable."""
     from senselab.utils.tasks.cached_inference import prune_unreachable_entries
 
     _entry(tmp_path, "old", senselab_ver="1.0.0", task="asr", code_version="asr@1")
     _entry(tmp_path, "cur", senselab_ver="9.9.9", task="asr", code_version="asr@1")
-    assert prune_unreachable_entries(tmp_path, senselab_ver="9.9.9") == 1
-    assert cache_lookup(tmp_path, "old") is None
+    assert prune_unreachable_entries(tmp_path) == 0
+    assert cache_lookup(tmp_path, "old") is not None
     assert cache_lookup(tmp_path, "cur") is not None
 
 
@@ -566,7 +558,7 @@ def test_prune_removes_entries_from_a_bumped_stage_version(tmp_path: Path) -> No
 
     _entry(tmp_path, "stale_asr", senselab_ver="9.9.9", task="asr", code_version="asr@0")
     _entry(tmp_path, "live_asr", senselab_ver="9.9.9", task="asr", code_version="asr@1")
-    assert prune_unreachable_entries(tmp_path, senselab_ver="9.9.9") == 1
+    assert prune_unreachable_entries(tmp_path) == 1
     assert cache_lookup(tmp_path, "stale_asr") is None
     assert cache_lookup(tmp_path, "live_asr") is not None
 
@@ -576,7 +568,7 @@ def test_prune_removes_entries_for_undeclared_tasks(tmp_path: Path) -> None:
     from senselab.utils.tasks.cached_inference import prune_unreachable_entries
 
     _entry(tmp_path, "gone", senselab_ver="9.9.9", task="a_retired_stage", code_version="a_retired_stage@1")
-    assert prune_unreachable_entries(tmp_path, senselab_ver="9.9.9") == 1
+    assert prune_unreachable_entries(tmp_path) == 1
 
 
 def test_prune_keeps_entries_without_provenance(tmp_path: Path) -> None:
@@ -584,7 +576,7 @@ def test_prune_keeps_entries_without_provenance(tmp_path: Path) -> None:
     from senselab.utils.tasks.cached_inference import prune_unreachable_entries
 
     cache_store(tmp_path, "bare", {"status": "ok", "result": []})
-    assert prune_unreachable_entries(tmp_path, senselab_ver="9.9.9") == 0
+    assert prune_unreachable_entries(tmp_path) == 0
     assert cache_lookup(tmp_path, "bare") is not None
 
 
@@ -593,5 +585,50 @@ def test_prune_is_a_noop_on_a_fully_live_cache(tmp_path: Path) -> None:
     from senselab.utils.tasks.cached_inference import prune_unreachable_entries, senselab_version
 
     _entry(tmp_path, "k", senselab_ver=senselab_version(), task="diarization", code_version="diarization@1")
-    assert prune_unreachable_entries(tmp_path, senselab_ver=senselab_version()) == 0
+    assert prune_unreachable_entries(tmp_path) == 0
     assert cache_lookup(tmp_path, "k") is not None
+
+
+def _result_entry(root: Path) -> Path:
+    """A result-cache entry laid out as :func:`result_store` lays it out, under ``root``."""
+    entry = root / "ab" / ("ab" + "0" * 62)
+    entry.mkdir(parents=True)
+    (entry / "result.json").write_text(json.dumps({"provenance": {"task": "not_a_stage"}}))
+    return entry
+
+
+def test_prune_never_touches_the_result_cache_sharing_its_directory(tmp_path: Path) -> None:
+    """Only this cache's top-level ``*.json`` entries are considered; the result cache's are not."""
+    from senselab.utils.tasks.cached_inference import prune_unreachable_entries
+
+    entry = _result_entry(tmp_path)
+    _entry(tmp_path, "gone", senselab_ver="9.9.9", task="a_retired_stage", code_version="a_retired_stage@1")
+    assert prune_unreachable_entries(tmp_path) == 1
+    assert (entry / "result.json").exists()
+
+
+def test_a_schema_wipe_never_touches_the_result_cache_sharing_its_directory(tmp_path: Path) -> None:
+    """A schema mismatch wipes this cache's entries and leaves any other directory's content alone."""
+    (tmp_path / ".schema_version").write_text("1")
+    entry = _result_entry(tmp_path)
+    cache_store(tmp_path, "old", {"status": "ok", "result": []})
+    sync_cache_with_schema_version(tmp_path)
+    assert cache_lookup(tmp_path, "old") is None
+    assert (entry / "result.json").exists()
+
+
+def test_the_key_does_not_move_with_the_senselab_version(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An unchanged stage hits across a senselab version change: the version is not an input."""
+    from senselab.utils.tasks import cached_inference
+
+    kwargs: dict[str, Any] = {
+        "audio_sig": "s",
+        "task": "asr",
+        "model_id": "openai/whisper-tiny",
+        "params": {"device": "cpu"},
+        "code_version": "asr@1",
+        "commit_sha": "a" * 40,
+    }
+    before = cache_key(**kwargs)
+    monkeypatch.setattr(cached_inference, "senselab_version", lambda: "0.0.0.dev9999")
+    assert cache_key(**kwargs) == before

@@ -36,8 +36,10 @@ Layout under ``--out/<stem>_<utc-timestamp>/``:
 
 Cache + provenance: every per-task outcome is stored under the config's ``cache.dir`` keyed by
 
-    sha256(audio_signature || task || model_id || params ||
-           stage_version || senselab_version || cache_schema_version)
+    sha256(audio_signature || task || model_id || model_commit || params ||
+           stage_version || cache_schema_version)
+
+The senselab version is recorded as provenance, not keyed: it changes with every commit.
 
 The audio signature is the sha256 of the post-resample, post-downmix PCM samples plus sampling rate,
 so two files with identical waveforms share cache entries regardless of container or filename. On a

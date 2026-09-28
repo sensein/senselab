@@ -4,10 +4,13 @@ Lifted out of ``scripts/analyze_audio.py`` so the cache contract is importable,
 unit-testable, and reusable by the adaptive loop rather than living in a 2500-line
 CLI script.
 
-A cache entry is keyed on everything that can change the result:
+A cache entry is keyed on what the process reads and what the process is:
 
-    (schema version, audio signature, task, model id, params,
-     code version, senselab version)
+    (schema version, audio signature, task, model id, resolved commit, params, code version)
+
+The installed senselab version is recorded on each entry as provenance and is not keyed: under
+hatch-vcs it is the distance from the last tag, so it changes with every commit of the repository
+whether or not the stage changed, and a key containing it missed on every run at a new commit.
 
 ``code_version`` is a caller-supplied string identifying the *behavior* that
 produced an entry. It deliberately replaced an earlier ``wrapper_hash`` that was
@@ -19,13 +22,10 @@ shared one file. Callers now pass a coarse, hand-managed identifier (see
 counterpart obligation is explicit: bump a stage's version when the stored shape
 of its outcome changes.
 
-``senselab_version`` still participates, and covers the larger surface — most
-stages are thin pass-throughs to a ``tasks/`` API, so library-side changes are
-what usually matter.
-
-Cache keys are NOT stable across senselab versions and are not intended to be:
-:data:`CACHE_SCHEMA_VERSION` is the deliberate global invalidation lever, and
-:func:`sync_cache_with_schema_version` wipes stale entries automatically on every
+The counterpart obligation of leaving the senselab version out: a change to a ``tasks/`` API that
+changes what a stage returns for the same input must bump that stage's code version (or
+:data:`CACHE_SCHEMA_VERSION` for a change reaching every stage). :data:`CACHE_SCHEMA_VERSION` is the
+global lever, and :func:`sync_cache_with_schema_version` wipes stale entries automatically on every
 host rather than requiring anyone to delete a directory by hand.
 """
 
@@ -71,7 +71,7 @@ __all__ = [
     "write_json",
 ]
 
-CACHE_SCHEMA_VERSION = 23
+CACHE_SCHEMA_VERSION = 24
 """Bump to invalidate every on-disk entry (see :func:`sync_cache_with_schema_version`).
 
 Bumped 1 → 2 when ``wrapper_hash`` became ``code_version``: the key payload
@@ -264,6 +264,10 @@ branch) made every load pick up the new weights while the key stayed byte-identi
 result computed from the old commit was served as current with no signal that anything had moved.
 Every pre-existing entry predates commit-awareness and cannot be retroactively attributed to a
 commit, so none may be reused — the first run after this change recomputes everything.
+
+Bumped 23 → 24 when the senselab version left the key. Its hatch-vcs value changes with every commit,
+so the old key missed on every run at a new commit; the new key omits it and is a different payload,
+so no pre-24 entry is readable under it.
 """
 
 
@@ -367,7 +371,6 @@ def cache_key(
     model_id: str | None,
     params: dict[str, Any],
     code_version: str,
-    senselab_ver: str,
     commit_sha: str | None,
 ) -> str:
     """Compute the deterministic cache key for one (audio, task, model, params, commit) combo.
@@ -382,8 +385,7 @@ def cache_key(
         task: The stage name, e.g. ``"asr"``.
         model_id: The Hub id or backend name, or ``None`` for a model-less stage.
         params: The call's other keyword arguments, canonicalized.
-        code_version: Caller-supplied wrapper-behavior version (see module docstring).
-        senselab_ver: Installed senselab version.
+        code_version: Caller-supplied stage-behaviour version (see module docstring).
         commit_sha: The immutable 40-hex commit this call resolved ``model_id`` to, or ``None``
             when ``model_id`` names no Hub repo (a local backend name, or no model at all).
 
@@ -397,7 +399,6 @@ def cache_key(
         "model": model_id,
         "params": params,
         "code_version": code_version,
-        "senselab_version": senselab_ver,
         # Without this, an upstream push to a tracked ref loads new weights under
         # an unchanged key and a stale result is served as current.
         "commit_sha": commit_sha,
@@ -413,7 +414,6 @@ def align_cache_key(
     aligner_model_id: str,
     aligner_params: dict[str, Any],
     code_version: str,
-    senselab_ver: str,
     aligner_commit_sha: str | None,
 ) -> str:
     """Cache key for one (audio, transcript, language, aligner, commit) alignment call.
@@ -434,8 +434,7 @@ def align_cache_key(
         language: ISO language code passed to the aligner, or ``None``.
         aligner_model_id: The aligner's Hub id or backend name.
         aligner_params: The aligner's other keyword arguments, canonicalized.
-        code_version: Caller-supplied wrapper-behavior version.
-        senselab_ver: Installed senselab version.
+        code_version: Caller-supplied stage-behaviour version.
         aligner_commit_sha: The immutable 40-hex commit ``aligner_model_id`` resolved to, or
             ``None`` when it names no Hub repo.
 
@@ -451,7 +450,6 @@ def align_cache_key(
         "aligner_model": aligner_model_id,
         "aligner_params": aligner_params,
         "code_version": code_version,
-        "senselab_version": senselab_ver,
         # Same reasoning as cache_key's commit_sha: without it, an upstream push to the
         # aligner repo serves timestamps from the old commit under an unchanged key.
         "aligner_commit_sha": aligner_commit_sha,
@@ -490,24 +488,22 @@ def cache_store(cache_dir: Path, key: str, payload: dict[str, Any]) -> None:
     (cache_dir / f"{key}.json").write_text(json.dumps(serialize(payload), indent=2, default=str), encoding="utf-8")
 
 
-def prune_unreachable_entries(cache_dir: Path, *, senselab_ver: str) -> int:
+def prune_unreachable_entries(cache_dir: Path) -> int:
     """Delete cache entries no current key can ever hit; return how many were removed.
 
-    ``senselab_version`` and ``code_version`` are *inside* the cache key, so a
-    senselab release orphans every entry and a ``STAGE_VERSIONS`` bump orphans that
-    stage's. Nothing previously reclaimed them: ``CACHE_SCHEMA_VERSION`` only wipes
-    on a schema change, so the directory grew monotonically across releases and a
-    cache that looked healthy could be entirely dead weight.
+    ``code_version`` is inside the cache key, so a ``STAGE_VERSIONS`` bump orphans that stage's
+    entries, and nothing else reclaims them: ``CACHE_SCHEMA_VERSION`` only wipes on a schema change.
+    An entry is unreachable when its recorded ``provenance.code_version`` no longer matches the
+    declared version for its task, or its task no longer declares one. The recorded senselab version
+    is not a criterion: it is not in the key, so an entry from another version is still reachable.
 
-    An entry is unreachable when its recorded ``provenance.senselab_version``
-    differs from the running one, or its ``provenance.code_version`` no longer
-    matches the declared version for that task. Entries without provenance are
-    kept — absence of evidence isn't evidence of staleness, and a hit on them is
-    still correct.
+    Only this cache's own entries are considered — ``*.json`` files directly under ``cache_dir``, the
+    only thing :func:`cache_store` writes. Anything else in the directory (another tool's cache, the
+    result cache's per-key directories) is never touched. Entries without provenance are kept:
+    absence of evidence isn't evidence of staleness, and a hit on them is still correct.
 
     Args:
         cache_dir: The cache directory.
-        senselab_ver: The running senselab version.
 
     Returns:
         Number of entries removed.
@@ -519,22 +515,22 @@ def prune_unreachable_entries(cache_dir: Path, *, senselab_ver: str) -> int:
 
     removed = 0
     for entry in cache_dir.glob("*.json"):
+        if not entry.is_file():
+            continue
         try:
             prov = (json.loads(entry.read_text(encoding="utf-8")) or {}).get("provenance") or {}
         except (json.JSONDecodeError, OSError):
             continue  # corrupt entries already read as a miss; leave them to be overwritten
         if not prov:
             continue
-        recorded_ver = prov.get("senselab_version")
-        stale = recorded_ver is not None and recorded_ver != senselab_ver
-        if not stale:
-            task = prov.get("task")
-            recorded_code = prov.get("code_version")
-            if task and recorded_code is not None:
-                try:
-                    stale = recorded_code != stage_code_version(str(task))
-                except KeyError:
-                    stale = True  # task no longer declares a version → unreachable
+        task = prov.get("task")
+        recorded_code = prov.get("code_version")
+        if not task or recorded_code is None:
+            continue
+        try:
+            stale = recorded_code != stage_code_version(str(task))
+        except KeyError:
+            stale = True  # task no longer declares a version → unreachable
         if stale:
             try:
                 entry.unlink()
@@ -544,10 +540,15 @@ def prune_unreachable_entries(cache_dir: Path, *, senselab_ver: str) -> int:
     if removed:
         print(
             f"Cache: pruned {removed} unreachable entr{'y' if removed == 1 else 'ies'} "
-            f"(senselab/stage version drift) in {cache_dir}",
+            f"(stage version drift) in {cache_dir}",
             file=sys.stderr,
         )
     return removed
+
+
+def _is_own_entry(path: Path) -> bool:
+    """Whether ``path`` is one of this cache's entries: a ``*.json`` file :func:`cache_store` wrote."""
+    return path.suffix == ".json" and path.is_file()
 
 
 def sync_cache_with_schema_version(cache_dir: Path) -> None:
@@ -560,7 +561,8 @@ def sync_cache_with_schema_version(cache_dir: Path) -> None:
       data wipe is needed because there's nothing to wipe.
     - If the marker exists and matches the current code version → keep cache.
     - If the marker exists but doesn't match → the code has bumped the
-      schema since the cache was populated. Wipe all cache entries and
+      schema since the cache was populated. Wipe this cache's entries (the
+      top-level ``*.json`` files; nothing else in the directory) and
       rewrite the marker with the current version.
 
     Bidirectional invariant: clearing the cache resets the version to current
@@ -578,11 +580,12 @@ def sync_cache_with_schema_version(cache_dir: Path) -> None:
         except (ValueError, OSError):
             on_disk_version = None
 
-    # Has the cache been populated with non-marker entries?
-    has_entries = any(p.name != ".schema_version" for p in cache_dir.iterdir())
+    # Has the cache been populated with entries of its own? Only top-level ``*.json`` files are this
+    # cache's; anything else sharing the directory is left alone by the check and by the wipe.
+    has_entries = any(_is_own_entry(p) for p in cache_dir.iterdir())
 
     if on_disk_version == CACHE_SCHEMA_VERSION:
-        prune_unreachable_entries(cache_dir, senselab_ver=senselab_version())
+        prune_unreachable_entries(cache_dir)
         return
 
     if on_disk_version is None and not has_entries:
@@ -597,13 +600,10 @@ def sync_cache_with_schema_version(cache_dir: Path) -> None:
     # Mismatch — wipe and rewrite the marker.
     n_removed = 0
     for p in cache_dir.iterdir():
-        if p.name == ".schema_version":
+        if not _is_own_entry(p):
             continue
         try:
-            if p.is_dir():
-                shutil.rmtree(p)
-            else:
-                p.unlink()
+            p.unlink()
             n_removed += 1
         except OSError:
             continue
