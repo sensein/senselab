@@ -34,12 +34,16 @@ from __future__ import annotations
 import hashlib
 import importlib.metadata
 import json
+import os
 import shutil
+import socket
 import sys
 import time
 import traceback
+import uuid
 from pathlib import Path
-from typing import Any, Protocol, runtime_checkable
+from types import MappingProxyType
+from typing import Any, Final, Mapping, Protocol, runtime_checkable
 
 __all__ = [
     "CACHE_SCHEMA_VERSION",
@@ -56,6 +60,12 @@ __all__ = [
     "senselab_version",
     "serialize",
     "prune_unreachable_entries",
+    "RESULT_PROCESS_VERSIONS",
+    "annotate_result_origin",
+    "result_cache_dir",
+    "result_cache_key",
+    "result_lookup",
+    "result_store",
     "sync_cache_with_schema_version",
     "transcript_signature",
     "write_json",
@@ -735,3 +745,228 @@ def run_alignment_cached(
         hit_label="alignment cache",
         **kwargs,
     )
+
+
+# ── Result cache: one entry per (input content, process) ──────────────
+
+
+RESULT_PROCESS_VERSIONS: Final[Mapping[str, int]] = MappingProxyType(
+    {
+        "clearvoice": 1,
+        "pii_detection": 1,
+    }
+)
+"""The behaviour version of each process the result cache serves.
+
+Bump a process's number when what it returns for the same input changes — its output shape, the
+parameters it forwards, the post-processing around the model. The model's own weights are keyed by
+their resolved commit, not by this number.
+"""
+
+_RESULT_CACHE_ENV = "SENSELAB_RESULT_CACHE"
+_RESULT_CACHE_OFF = frozenset({"0", "off", "false", "no", "none", "disabled"})
+_RESULT_FILE = "result.json"
+_ORIGIN_FILE = "origin.json"
+
+
+def result_cache_dir() -> Path | None:
+    """The directory the result cache reads and writes, or ``None`` when it is switched off.
+
+    ``SENSELAB_RESULT_CACHE`` names the root, or switches the cache off with ``off``/``0``/``false``.
+    Unset, the root is ``<SENSELAB_CACHE>/results``. Entries live under ``schema-<N>/`` for the
+    current :data:`CACHE_SCHEMA_VERSION`, so a schema bump starts an empty directory rather than
+    deleting one that concurrent jobs are reading.
+
+    Returns:
+        The schema-scoped cache directory, or ``None``.
+    """
+    raw = os.environ.get(_RESULT_CACHE_ENV)
+    if raw is not None and raw.strip().lower() in _RESULT_CACHE_OFF:
+        return None
+    if raw:
+        root = Path(raw)
+    else:
+        from senselab.utils.model_revision import cache_root
+
+        root = cache_root() / "results"
+    return root / f"schema-{CACHE_SCHEMA_VERSION}"
+
+
+def result_cache_key(
+    *,
+    input_signature: str,
+    process: str,
+    model_id: str | None,
+    commit_sha: str | None,
+    params: Mapping[str, Any],
+) -> str:
+    """The key of one process applied to one input.
+
+    Everything that can change the result is in the key: the input's content, the process and its
+    behaviour version, the model and the commit its weights resolved to, and the parameters. The
+    installed senselab version is not: it changes with every commit of the repository whether or not
+    the process did, which would make every entry miss after any unrelated change.
+
+    Args:
+        input_signature: A digest of exactly what the process reads — :func:`audio_signature` of the
+            prepared audio, :func:`transcript_signature` of the text.
+        process: A key of :data:`RESULT_PROCESS_VERSIONS`.
+        model_id: The model the process runs, or ``None``.
+        commit_sha: The 40-hex commit the model resolved to, or ``None`` for no Hub model.
+        params: Every other input to the process, JSON-serialisable.
+
+    Returns:
+        A 64-character hex sha256 digest.
+
+    Raises:
+        KeyError: If ``process`` declares no version.
+    """
+    payload = {
+        "schema": CACHE_SCHEMA_VERSION,
+        "input": input_signature,
+        "process": process,
+        "process_version": RESULT_PROCESS_VERSIONS[process],
+        "model": model_id,
+        "commit_sha": commit_sha,
+        "params": dict(params),
+    }
+    return hashlib.sha256(canonical_params(payload).encode()).hexdigest()
+
+
+def _entry_dir(cache_dir: Path, key: str) -> Path:
+    return cache_dir / key[:2] / key
+
+
+def result_lookup(key: str) -> dict[str, Any] | None:
+    """Return a stored result and its arrays, or ``None`` on a miss or with the cache off.
+
+    Args:
+        key: From :func:`result_cache_key`.
+
+    Returns:
+        The stored payload, with ``"arrays"`` mapping each stored array's name to a NumPy array and
+        ``"origin"`` holding what :func:`annotate_result_origin` recorded, or ``None``. A corrupt or
+        partly readable entry is a miss.
+    """
+    cache_dir = result_cache_dir()
+    if cache_dir is None:
+        return None
+    entry = _entry_dir(cache_dir, key)
+    try:
+        payload = json.loads((entry / _RESULT_FILE).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    arrays: dict[str, Any] = {}
+    names = payload.get("array_names") or []
+    if names:
+        import numpy as np
+
+        try:
+            for name in names:
+                arrays[name] = np.load(entry / f"{name}.npy", allow_pickle=False)
+        except (OSError, ValueError):
+            return None
+    payload["arrays"] = arrays
+    try:
+        payload["origin"] = json.loads((entry / _ORIGIN_FILE).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        payload["origin"] = None
+    return payload
+
+
+def result_store(
+    key: str,
+    result: Mapping[str, Any],
+    *,
+    process: str,
+    model_id: str | None,
+    commit_sha: str | None,
+    arrays: Mapping[str, Any] | None = None,
+) -> bool:
+    """Store one result, atomically; the first writer of a key wins.
+
+    The entry is assembled in a private directory and renamed into place, so a concurrent reader
+    never sees half an entry and two jobs computing the same key cannot interleave their files.
+
+    Args:
+        key: From :func:`result_cache_key`.
+        result: The JSON-serialisable result.
+        process: The process that produced it, recorded as provenance.
+        model_id: The model it ran, recorded as provenance.
+        commit_sha: The commit that model resolved to, recorded as provenance.
+        arrays: Named NumPy arrays stored losslessly beside the result.
+
+    Returns:
+        True when this call wrote the entry, False when the cache is off or the key was already held.
+    """
+    cache_dir = result_cache_dir()
+    if cache_dir is None:
+        return False
+    final = _entry_dir(cache_dir, key)
+    if (final / _RESULT_FILE).exists():
+        return False
+    final.parent.mkdir(parents=True, exist_ok=True)
+    staging = final.parent / f".{key}.{os.getpid()}.{uuid.uuid4().hex[:8]}"
+    staging.mkdir()
+    try:
+        names = sorted(arrays or {})
+        if names:
+            import numpy as np
+
+            for name in names:
+                np.save(staging / f"{name}.npy", np.asarray((arrays or {})[name]), allow_pickle=False)
+        payload = {
+            "result": serialize(dict(result)),
+            "array_names": names,
+            "provenance": {
+                "process": process,
+                "process_version": RESULT_PROCESS_VERSIONS[process],
+                "model": model_id,
+                "commit_sha": commit_sha,
+                "senselab_version": senselab_version(),
+                "computed_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+                "host": socket.gethostname(),
+                "senselab_run_id": os.environ.get("SENSELAB_RUN_ID"),
+            },
+        }
+        (staging / _RESULT_FILE).write_text(json.dumps(payload, default=str), encoding="utf-8")
+        try:
+            os.rename(staging, final)
+        except OSError:
+            shutil.rmtree(staging, ignore_errors=True)
+            return False
+        return True
+    except BaseException:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+
+
+def annotate_result_origin(key: str, origin: Mapping[str, Any]) -> bool:
+    """Record, once, which caller-side activity computed an entry.
+
+    A library call does not know the provenance graph it runs inside; the caller that does (a triage
+    node that wrote the result as an entity) names its run and activity here, so a later hit can say
+    where the reused result was first computed. The first annotation stands.
+
+    Args:
+        key: The entry's key.
+        origin: JSON-serialisable description, e.g. ``{"run": ..., "activity": ..., "node": ...}``.
+
+    Returns:
+        True when this call wrote the origin.
+    """
+    cache_dir = result_cache_dir()
+    if cache_dir is None:
+        return False
+    entry = _entry_dir(cache_dir, key)
+    if not (entry / _RESULT_FILE).exists():
+        return False
+    try:
+        fd = os.open(entry / _ORIGIN_FILE, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o664)
+    except FileExistsError:
+        return False
+    except OSError:
+        return False
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        json.dump(serialize(dict(origin)), handle, default=str)
+    return True
