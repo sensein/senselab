@@ -1,32 +1,35 @@
 # Resuming the review pass
 
-## Settled, 2026-09-26 — read this first; everything below is the 2026-09-25 history
+## Settled, 2026-09-27 — read this first; everything below is history
 
-The campaign is complete at `ef2bb815`. Nothing is running.
+The corpus is r6, folded at `e0eadb37`. r5 is superseded and was left half re-folded: do not evaluate it.
 
 | | path |
 |---|---|
-| corpus (r5, 62,550 = every in-scope BIDS WAV) | `/orcd/scratch/bcs/002/satra/triage_r5_20260925/out` |
-| checkout, pinned | `/orcd/scratch/bcs/002/satra/senselab-r5` @ `ef2bb815` |
-| review manifest (15,208 with lexical residue) | `triage_r5_20260925/review/review_manifest.jsonl` |
-| final re-fold, all 62,550, `review_on.yaml` | `triage_r5_20260925/refold/` |
-| parquet, schema 7 | `recording_vectors_r5_v7/`; laptop `~/Downloads/recording_vectors_20260926_v7/` |
-| evaluations | `evaluations_r5_20260926_v2/`; laptop `~/Downloads/evaluations_r5_20260926_v2/` |
-| page | `free_speech_page_20260926_v2/`; laptop `~/Downloads/free_speech_review_20260926_v2/` |
-| 2 corpus-fill recordings (run at `b7d882a9`, replayed at r5) | `tmp_complete/`; both `flag / not_assessed`, one ASR hypothesis only |
+| corpus (r6, 62,550 = every in-scope BIDS WAV) | `/orcd/scratch/bcs/002/satra/triage_r6_20260926/out` |
+| checkout, pinned | `/orcd/scratch/bcs/002/satra/senselab-r5` @ `e0eadb37` |
+| job ids and submit order | `triage_r6_20260926/jobs.txt`, `RUN.md` |
+| review manifest (15,210) / readings | `triage_r6_20260926/review/` |
+| parquet, schema 9 | `recording_vectors_r6_v9b/`; laptop `~/Downloads/recording_vectors_20260927_r6_v9b/` |
+| evaluations / page | `evaluations_r6_20260927_v4/`, `free_speech_page_20260927_v4/` (laptop `~/Downloads/…_v4/`) |
 
-What changed since the note below: the PII pathway sees only lexical residue
-(`specs/20260925-lexical-only-pii-pathway/`); a reviewer reading is residue only where it proposes a redaction,
-on both axes and on every release path. Outcome: 9,930 flagged (baseline 8,915), 3,700 withheld, 864 reviewer
-redaction proposals all withheld, 0 released with one.
+What r6 carries beyond r5: REDACT no longer counts its own placeholders as re-scan survivors; a reviewer's
+release entries unmask exactly the words they name; masks keep content words only, and never task words
+or marked proper nouns (PERSON/NAME/LOCATION); a `pii_ledger` per recording records every span's state;
+a condition-only reviewer proposal is withheld for human review, split cohort / other against the
+release's own `phenotype/diagnosis/`; a copy that would mask nothing releases the original.
 
-Open for the owner: 4,369 free-response readings propose only un-hiding (detector over-redaction in open speech);
-2,836 withholdings come from REDACT failing where the reviewer proposed nothing to hide; the two fill
-recordings need a one-hypothesis consensus or another recogniser for a real verdict.
+Outcome: 60,217 released without redaction, 1,407 with, 892 withheld (623 reviewer, 124 cohort
+condition, 76 other condition, 69 REDACT), 34 not assessed; 0 released with a reviewer redact proposal.
 
+Open for the owner: SPEECH still places a finding it cannot locate over the whole transcript (the fold
+confines it; fixing SPEECH retires every REVIEW reading, so it waits for the next corpus run); the two
+fill recordings have one ASR hypothesis and read `not_assessed`; human-review lists in the evaluations.
 
-Written 2026-09-25, mid-campaign. What is running, what is pinned, what is decided, what is open,
-and the exact commands to carry on. Branch `design/triage-workflow-dag`.
+Cluster traps met this run: node2621 ran two replay slices past 6 h (exclude it); node2119 threw a CUDA
+illegal-memory-access that failed every later reading in its slice (exclude it; the driver now logs a
+crashed reading as an error and a resubmission re-reads it); `afterok` on an already-finished job is
+rejected ("Job dependency problem"); `grep -c` with no match exits 1 under `set -e`.
 
 ## In flight right now
 
