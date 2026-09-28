@@ -108,6 +108,11 @@ def _cache_root() -> Path:
     return Path.home() / ".cache" / "senselab" / "hf"
 
 
+def cache_root() -> Path:
+    """Return senselab's cache root, honouring ``SENSELAB_CACHE``."""
+    return _cache_root()
+
+
 def manifest_path(run: Optional[str] = None) -> Path:
     """Return the path to a run's resolution manifest."""
     return _cache_root() / "runs" / (run or run_id()) / "resolutions.json"
