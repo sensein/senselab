@@ -83,3 +83,11 @@ def test_the_hint_carries_the_instructions_and_names_their_source(tmp_path: Path
     assert [prompt.text for prompt in hint.expected_speech] == ["he is nearly ninety-three years old"]
     assert hint.metadata["stimulus_from"] == SIDECAR
     assert hint.metadata["registry_task"] == "adult.story-recall.v1"
+
+
+def test_a_recording_in_another_language_keeps_its_own_instructions() -> None:
+    """r6's Spanish sessions: the curated corrections are English and would replace Spanish text."""
+    spanish = "A continuación, se le presentará una historia."
+    text = task_text("story-recall", {"instructions": spanish, "language": "es", "speech_type": "recall"})
+    assert (text.instructions, text.instructions_source) == (spanish, SIDECAR)
+    assert text.stimulus is None, "no English prompt is borrowed for a Spanish recording"
