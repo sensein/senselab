@@ -9,7 +9,7 @@
 > stay counts and categories only.
 
 Produced by `senselab.audio.workflows.triage.recording_vectors` and
-`scripts/triage_recording_vectors.py`. **One row per recording.** `schema_version` is `10`; any
+`scripts/triage_recording_vectors.py`. **One row per recording.** `schema_version` is `11`; any
 change to a column, a byte layout or a categorical column's controlled vocabulary bumps it and
 changes this file with it. The same number is in
 the parquet's own key-value metadata, under `senselab.recording_vectors.schema_version`, so a
@@ -37,6 +37,7 @@ What each bump added:
 | **8** | the `pii_ledger` counts: `masks_n`, `masks_final_n`, a count and a category list per word state, `condition_review` |
 | **9** | `task_words_n`, `condition_review_kind`, `cohort_condition_n`, `other_condition_n`, `cohort_diagnoses` |
 | **10** | the eight located gates lose their reading and `_passed` columns, which could never carry a value; their `_bound` columns now carry the fold's resolved `gates.bounds` (§6) |
+| **11** | `propagated_n`, `unplaced_n`, `unplaced_open`, `redact_agreed_n`, `redact_new_n`; the ledger columns now count per-finding masks, and the state columns count only new reviewer proposals. See `specs/20260927-mask-placement-and-second-speaker/design.md` |
 
 The data dictionary in the file's metadata was added without a bump: it adds no column, changes no
 layout and no vocabulary, and a reader that ignores the key reads the file exactly as before.
@@ -107,7 +108,7 @@ Owner-directed: `participant`, `task`, `verdict` are the first three columns, in
 | `duration_conditioned_s` | double | seconds, the conditioned stream | PREPROCESS wrote no stream |
 | `time_scale_s` | double | seconds — **the denominator for every `uint16` time** | neither duration is known |
 | `sampling_rate` | int32 | Hz, of the conditioned stream | no conditioned stream |
-| `schema_version` | int32 | `10` | never |
+| `schema_version` | int32 | `11` | never |
 | `malformed_store_lines` | int32 | lines of `store.jsonl` that did not parse; `0` is the normal value | never |
 | `flags_n` | int32 | how many node verdicts in the fold carry outcome `flag`, `fail` or `discard` — the same filter `report.py` calls a flag | never |
 | `flag_nodes` | list\<string\> | which nodes those were, e.g. `["SPEECH"]` | never; `[]` when none |
@@ -119,15 +120,20 @@ Owner-directed: `participant`, `task`, `verdict` are the first three columns, in
 | `residue_content` | bool | whether any residue word is outside the closed-class list, which is what lets the scan run | as `residue_words_n` |
 | `scan_ran` | bool | whether any detector ran (`scanned_by` non-empty) | no `pii_scan` |
 | `scanned_by` | list\<string\> | the detectors that ran | no `pii_scan` |
-| `masks_n` | int32 | masks REDACT planned, as the fold's `pii_ledger` records them | no `pii_ledger` |
+| `masks_n` | int32 | masks the fold placed: one per detector finding on its own residue words (findings on the same words are one), one per reviewer entry placing an unplaced finding, one per REDACT extent reaching no word | no `pii_ledger` |
 | `masks_final_n` | int32 | masks standing once the reviewer's unmasks and the content-word trim are applied | no `pii_ledger` |
-| `task_words_n` | int32 | words outside the residue — the task's own content, which no mask covers — that REDACT's planned extents reached | no `pii_ledger` |
+| `task_words_n` | int32 | words outside the residue — the task's own content, which no mask covers — inside a mask's findings' own extents | no `pii_ledger` |
 | `masked_n` | int32 | words a standing mask hides | no `pii_ledger` |
-| `unmasked_by_reviewer_n` | int32 | words a mask hid that a reviewer `release` entry named and the fold applied | no `pii_ledger` |
-| `unmasked_by_trim_n` | int32 | words a mask covered that are not residue content words | no `pii_ledger` |
-| `proposed_by_reviewer_n` | int32 | words a reviewer `redact` entry names that no standing mask hides | no `pii_ledger` |
-| `masked_categories`, `unmasked_by_reviewer_categories`, `unmasked_by_trim_categories`, `proposed_by_reviewer_categories` | list\<string\> | the categories carrying at least one word in that state | no `pii_ledger` |
-| `condition_review` | bool | whether a reviewer `redact` entry is in a category routed to human review (`verdict.llm_human_review_categories`); `release_ground` says whether it decided the release | no `pii_ledger` |
+| `unmasked_by_reviewer_n` | int32 | words a mask hid that a reviewer `release` entry named, or that share a content-word term (surface and family) with one it named elsewhere | no `pii_ledger` |
+| `unmasked_by_trim_n` | int32 | a finding's own words that are not residue content words | no `pii_ledger` |
+| `proposed_by_reviewer_n` | int32 | words a new reviewer `redact` entry names that no standing mask hides | no `pii_ledger` |
+| `masked_categories`, `unmasked_by_reviewer_categories`, `unmasked_by_trim_categories`, `proposed_by_reviewer_categories` | list\<string\> | the mask families (reviewer categories, for `proposed_by_reviewer`) carrying at least one word in that state | no `pii_ledger` |
+| `propagated_n` | int32 | words unmasked because a `release` entry named the same content-word term elsewhere in the recording | no `pii_ledger` |
+| `unplaced_n` | int32 | detector findings SPEECH could not place on words; none masks anything | no `pii_ledger` |
+| `unplaced_open` | bool | whether an unplaced finding is `open` (flags) or `unread` (withholds and flags) | no `pii_ledger` |
+| `redact_agreed_n` | int32 | reviewer `redact` entries that agree with the masks (words already masked, or placing an unplaced finding) | no `pii_ledger` |
+| `redact_new_n` | int32 | reviewer `redact` entries proposing to hide more | no `pii_ledger` |
+| `condition_review` | bool | whether a new reviewer `redact` entry is in a category routed to human review (`verdict.llm_human_review_categories`); `release_ground` says whether it decided the release | no `pii_ledger` |
 | `condition_review_kind` | string | `cohort` where every human-review proposal names a condition the study recruits for (`verdict.cohort_conditions`), `other` where any does not; null where none is held | no `pii_ledger`, or no human-review proposal |
 | `cohort_condition_n`, `other_condition_n` | int32 | human-review proposals naming a cohort condition, and naming another | no `pii_ledger` |
 | `cohort_diagnoses` | list\<string\> | the cohort diagnoses the human-review proposals name, by the release's `phenotype/diagnosis/` file stem | no `pii_ledger` |

@@ -296,7 +296,10 @@ columns:
 
   masks_n:
     units: count
-    description: Masks REDACT planned.
+    description: >-
+      Masks the fold placed: one per detector finding on the residue words it was placed on (findings
+      covering the same words are one), one per reviewer `redact` entry that places a finding SPEECH
+      could not place, and one per REDACT extent that reaches no transcript word.
     computation: '`counts.masks_n` of the latest live `pii_ledger` measurement, which VERDICT writes from `mask_plan`.'
     source: [recording_vectors.py:_ledger_columns, nodes/redact.py:MaskPlan.record, nodes/redact.py:mask_plan]
     null_means: No `pii_ledger`.
@@ -305,15 +308,16 @@ columns:
     units: count
     description: Masks standing in the released copy, after the reviewer's unmasks and the content-word trim.
     computation: >-
-      The ledger's `counts.final_masks_n`. An unchanged mask contributes its planned extent; a
-      changed one contributes one extent per run of adjacent kept words, or none. It can exceed
-      `masks_n`.
+      The ledger's `counts.final_masks_n`: one extent per run of adjacent kept words, padded up to the
+      nearest unmasked word; REDACT's own extent where it hides exactly the kept words of the masks
+      inside it and reaches no other word. A word two masks share is counted under the smaller. It
+      can exceed `masks_n`.
     source: [recording_vectors.py:_ledger_columns, nodes/redact.py:MaskPlan.record, nodes/redact.py:mask_plan]
     null_means: No `pii_ledger`.
 
   task_words_n:
     units: count
-    description: Task words (outside the residue) that REDACT's planned extents reached; no mask covers them.
+    description: Task words (outside the residue) inside a mask's findings' own extents; no mask covers them.
     computation: The ledger's `counts.task_words_n`, summed over masks.
     source: [recording_vectors.py:_ledger_columns, nodes/redact.py:MaskPlan.record, nodes/redact.py:mask_plan]
     null_means: No `pii_ledger`.
@@ -327,7 +331,10 @@ columns:
 
   unmasked_by_reviewer_n:
     units: count
-    description: Words a mask covered that the reviewer's `release` entries named and the fold unmasked.
+    description: >-
+      Words a mask covered that the fold unmasked on the reviewer's word: named by a `release` entry,
+      or the same content-word term (surface and family) as one a `release` entry named elsewhere in
+      the recording (`propagated_n`).
     computation: The ledger's `counts.unmasked_by_reviewer_n`, distinct word ids in that state.
     source: [recording_vectors.py:_ledger_columns, nodes/redact.py:MaskPlan.count, nodes/redact.py:mask_plan]
     null_means: No `pii_ledger`.
@@ -335,52 +342,101 @@ columns:
   unmasked_by_trim_n:
     units: count
     description: >-
-      Words a mask covered that the trim released: non-content words, and words only the padding
-      reached when another word of the same mask was marked. A marked word written as a proper noun
-      in a `verdict.trim_protected_categories` category counts as content and is never trimmed.
+      A finding's own words the trim released because they are not content words. A word written as a
+      proper noun under a located finding in a `verdict.trim_protected_categories` category counts as
+      content and is never trimmed.
     computation: The ledger's `counts.unmasked_by_trim_n`, distinct word ids in that state.
     source: [recording_vectors.py:_ledger_columns, nodes/redact.py:MaskPlan.count, nodes/redact.py:mask_plan]
     null_means: No `pii_ledger`.
 
   proposed_by_reviewer_n:
     units: count
-    description: Words the reviewer's `redact` entries name that no standing mask hides.
-    computation: The ledger's `counts.proposed_by_reviewer_n`, distinct word ids named by a placed `redact` entry and not masked.
+    description: Words the reviewer's new `redact` entries name that no standing mask hides.
+    computation: >-
+      The ledger's `counts.proposed_by_reviewer_n`, distinct word ids named by a placed `redact` entry
+      whose agreement is `new` and not masked. An entry agreeing with the masks is not counted.
     source: [recording_vectors.py:_ledger_columns, nodes/redact.py:MaskPlan.count]
     null_means: No `pii_ledger`.
 
   masked_categories:
     units: none
-    description: Categories of the masks that keep at least one word masked.
+    description: Families (`data/pii_category_families.yaml`) of the masks that keep at least one word masked.
     computation: The ledger's `categories.masked`, sorted.
     source: [recording_vectors.py:_ledger_columns, nodes/redact.py:MaskPlan.categories]
     null_means: No `pii_ledger`.
 
   unmasked_by_reviewer_categories:
     units: none
-    description: Categories of the masks with at least one word unmasked by the reviewer.
+    description: Families of the masks with at least one word unmasked by the reviewer.
     computation: The ledger's `categories.unmasked_by_reviewer`, sorted.
     source: [recording_vectors.py:_ledger_columns, nodes/redact.py:MaskPlan.categories]
     null_means: No `pii_ledger`.
 
   unmasked_by_trim_categories:
     units: none
-    description: Categories of the masks with at least one word released by the trim.
+    description: Families of the masks with at least one word released by the trim.
     computation: The ledger's `categories.unmasked_by_trim`, sorted.
     source: [recording_vectors.py:_ledger_columns, nodes/redact.py:MaskPlan.categories]
     null_means: No `pii_ledger`.
 
   proposed_by_reviewer_categories:
     units: none
-    description: Categories of the reviewer's `redact` entries that name at least one unmasked word.
+    description: Categories of the reviewer's new `redact` entries that name at least one unmasked word.
     computation: The ledger's `categories.proposed_by_reviewer`, sorted.
     source: [recording_vectors.py:_ledger_columns, nodes/redact.py:MaskPlan.categories]
+    null_means: No `pii_ledger`.
+
+  propagated_n:
+    units: count
+    description: >-
+      Words unmasked because a reviewer `release` entry named the same content-word term -- surface and
+      family -- elsewhere in the recording, and no `redact` entry names that surface.
+    computation: The ledger's `counts.propagated_n`, distinct word ids whose `propagated` is true.
+    source: [recording_vectors.py:_ledger_columns, nodes/redact.py:MaskPlan.record, nodes/redact.py:mask_plan]
+    null_means: No `pii_ledger`.
+
+  unplaced_n:
+    units: count
+    description: >-
+      Detector findings SPEECH could not place on the transcript's words (it notes `pii_unlocated` and
+      places such a finding over the whole transcript). None of them masks anything.
+    computation: The ledger's `counts.unplaced_n`, the length of its `unplaced_findings`.
+    source: [recording_vectors.py:_ledger_columns, nodes/redact.py:_located_findings, nodes/redact.py:MaskPlan.record]
+    null_means: No `pii_ledger`.
+
+  unplaced_open:
+    units: bool
+    description: >-
+      Whether an unplaced finding is left `open` (a reading neither placed it nor read the original as
+      clean) or `unread` (no reading). Either flags the recording; `unread` also withholds it.
+    computation: Any `unplaced_findings[].state` of the ledger in `open` or `unread`.
+    source: [recording_vectors.py:_ledger_columns, nodes/redact.py:mask_plan, vocabulary.py:fold_file_verdict]
+    null_means: No `pii_ledger`.
+
+  redact_agreed_n:
+    units: count
+    description: >-
+      Reviewer `redact` entries that agree with the masks: every content word they name is already
+      masked, or they place a finding SPEECH could not place. They propose nothing more and withhold
+      nothing.
+    computation: The ledger's `counts.proposals_masked_n` plus `counts.proposals_placed_unplaced_n`.
+    source: [recording_vectors.py:_ledger_columns, nodes/redact.py:mask_plan, vocabulary.py:deciding_reading]
+    null_means: No `pii_ledger`.
+
+  redact_new_n:
+    units: count
+    description: >-
+      Reviewer `redact` entries that propose hiding more: a content word no mask hides, or a quote the
+      fold cannot place. These withhold the recording, or route it to human review where every one is
+      in a human-review category.
+    computation: The ledger's `counts.proposals_new_n`.
+    source: [recording_vectors.py:_ledger_columns, nodes/redact.py:mask_plan, vocabulary.py:fold_file_verdict]
     null_means: No `pii_ledger`.
 
   condition_review:
     units: bool
     description: >-
-      Whether any reviewer `redact` entry is in a category the fold routes to human review
+      Whether any new reviewer `redact` entry is in a category the fold routes to human review
       (`verdict.llm_human_review_categories`, CONDITION by default); `release_ground` says whether
       that decided the release.
     computation: The ledger's `human_review`.
@@ -399,14 +455,14 @@ columns:
 
   cohort_condition_n:
     units: count
-    description: Human-review proposals naming a study-cohort condition.
+    description: New human-review proposals naming a study-cohort condition.
     computation: The ledger's `counts.cohort_condition_n`.
     source: [recording_vectors.py:_ledger_columns, nodes/redact.py:MaskPlan.record]
     null_means: No `pii_ledger`.
 
   other_condition_n:
     units: count
-    description: Human-review proposals naming a condition outside the study's cohorts.
+    description: New human-review proposals naming a condition outside the study's cohorts.
     computation: The ledger's `counts.other_condition_n`.
     source: [recording_vectors.py:_ledger_columns, nodes/redact.py:MaskPlan.record]
     null_means: No `pii_ledger`.

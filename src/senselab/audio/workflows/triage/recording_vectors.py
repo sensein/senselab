@@ -29,8 +29,9 @@ import pyarrow as pa
 import yaml  # type: ignore[import-untyped]
 
 from senselab.audio.workflows.triage.cohort import CONDITION_KINDS
+from senselab.audio.workflows.triage.vocabulary import UNPLACED_OPEN, UNPLACED_UNREAD
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 """Bumped whenever a column is added, removed or retyped, a binary layout changes, or a categorical
 column's controlled vocabulary changes."""
 
@@ -725,6 +726,9 @@ def _residue_columns(view: StoreView) -> dict[str, Any]:
 
 
 LEDGER_STATES = ("masked", "unmasked_by_reviewer", "unmasked_by_trim", "proposed_by_reviewer")
+
+UNPLACED_SETTLES_NOTHING = (UNPLACED_OPEN, UNPLACED_UNREAD)
+"""The states of an unplaced finding that no reading placed or cleared."""
 """The word states the fold's ``pii_ledger`` counts, each a ``<state>_n`` and a ``<state>_categories`` column."""
 
 
@@ -736,8 +740,9 @@ def _ledger_columns(view: StoreView) -> dict[str, Any]:
 
     Returns:
         ``masks_n``, ``masks_final_n``, ``task_words_n``, a count and a category list per
-        :data:`LEDGER_STATES`, ``condition_review``, ``condition_review_kind``, a count per condition
-        kind and ``cohort_diagnoses``. All null where the store carries no ledger.
+        :data:`LEDGER_STATES`, ``propagated_n``, ``unplaced_n``, ``unplaced_open``,
+        ``redact_agreed_n``, ``redact_new_n``, ``condition_review``, ``condition_review_kind``, a count
+        per condition kind and ``cohort_diagnoses``. All null where the store carries no ledger.
     """
     ledger: Mapping[str, Any] | None = None
     for entity in view.live("measurement"):
@@ -749,6 +754,11 @@ def _ledger_columns(view: StoreView) -> dict[str, Any]:
         "task_words_n",
         *(f"{state}_n" for state in LEDGER_STATES),
         *(f"{state}_categories" for state in LEDGER_STATES),
+        "propagated_n",
+        "unplaced_n",
+        "unplaced_open",
+        "redact_agreed_n",
+        "redact_new_n",
         "condition_review",
         "condition_review_kind",
         *(f"{kind}_condition_n" for kind in CONDITION_KINDS),
@@ -764,6 +774,14 @@ def _ledger_columns(view: StoreView) -> dict[str, Any]:
         "task_words_n": int(counts.get("task_words_n") or 0),
         **{f"{state}_n": int(counts.get(f"{state}_n") or 0) for state in LEDGER_STATES},
         **{f"{state}_categories": [str(name) for name in categories.get(state) or ()] for state in LEDGER_STATES},
+        "propagated_n": int(counts.get("propagated_n") or 0),
+        "unplaced_n": int(counts.get("unplaced_n") or 0),
+        "unplaced_open": any(
+            str(finding.get("state")) in UNPLACED_SETTLES_NOTHING for finding in ledger.get("unplaced_findings") or ()
+        ),
+        "redact_agreed_n": int(counts.get("proposals_masked_n") or 0)
+        + int(counts.get("proposals_placed_unplaced_n") or 0),
+        "redact_new_n": int(counts.get("proposals_new_n") or 0),
         "condition_review": bool(ledger.get("human_review")),
         "condition_review_kind": ledger.get("human_review_kind") or None,
         **{f"{kind}_condition_n": int(counts.get(f"{kind}_condition_n") or 0) for kind in CONDITION_KINDS},
@@ -1167,6 +1185,11 @@ def _fields() -> list[pa.Field]:
         pa.field("task_words_n", pa.int32()),
         *[pa.field(f"{state}_n", pa.int32()) for state in LEDGER_STATES],
         *[pa.field(f"{state}_categories", pa.list_(pa.string())) for state in LEDGER_STATES],
+        pa.field("propagated_n", pa.int32()),
+        pa.field("unplaced_n", pa.int32()),
+        pa.field("unplaced_open", pa.bool_()),
+        pa.field("redact_agreed_n", pa.int32()),
+        pa.field("redact_new_n", pa.int32()),
         pa.field("condition_review", pa.bool_()),
         pa.field("condition_review_kind", pa.string()),
         *[pa.field(f"{kind}_condition_n", pa.int32()) for kind in CONDITION_KINDS],
