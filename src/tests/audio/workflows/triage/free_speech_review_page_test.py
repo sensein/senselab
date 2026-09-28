@@ -484,9 +484,11 @@ def test_paragraph_carries_the_facets_onto_the_mark() -> None:
     assert 'data-nt="1"' in rendered
 
 
-def test_paragraph_labels_a_mark_carrying_two_categories() -> None:
-    """Two categories on one mark render as one joined label."""
-    assert ">PERSON+ORG<" in page.paragraph([["Acme", 0, 0]], [_mark("k1", ["PERSON", "ORG"], [], 0, 1)])
+def test_paragraph_labels_a_mark_carrying_two_categories_with_its_own() -> None:
+    """Two categories on one mark: the text shows the first, the attribute carries both."""
+    rendered = page.paragraph([["Acme", 0, 0]], [_mark("k1", ["PERSON", "ORG"], [], 0, 1)])
+    assert '<span class="cat">PERSON</span>' in rendered
+    assert 'data-c="PERSON+ORG"' in rendered
 
 
 def test_paragraph_with_an_unattributed_mark_says_so() -> None:
@@ -640,7 +642,7 @@ def test_the_category_facet_reaches_a_compound_mark() -> None:
     dropped every compound mark from every category facet.
     """
     assert "m.dataset.c.split('+').some(c=>cats.has(c))" in page._SCRIPT
-    assert ">PERSON+ORG<" in page.paragraph([["Acme", 0, 0]], [_mark("k1", ["PERSON", "ORG"], [], 0, 1)])
+    assert 'data-c="PERSON+ORG"' in page.paragraph([["Acme", 0, 0]], [_mark("k1", ["PERSON", "ORG"], [], 0, 1)])
 
 
 def test_a_recording_note_refreshes_the_progress_line() -> None:
@@ -651,7 +653,7 @@ def test_a_recording_note_refreshes_the_progress_line() -> None:
 def test_the_store_reads_and_writes_are_guarded() -> None:
     """Storage throws outright in some contexts, so the page must render without it."""
     assert page._SCRIPT.count("try{") >= 2
-    assert "catch(e){store={findings:{},recordings:{},triage:{},release:{}};}" in page._SCRIPT
+    assert "catch(e){store={findings:{},recordings:{},release:{},flags:{}};}" in page._SCRIPT
 
 
 def test_in_stimulus_keeps_none_apart_from_false() -> None:
@@ -945,64 +947,59 @@ def test_the_page_says_a_ground_is_empty_by_construction() -> None:
     assert "REDACT decided it" in page._SCRIPT
 
 
-def test_the_row_vocabulary_is_the_owners_own() -> None:
-    """Three states, named as the owner named them, with their keys."""
-    assert [value for value, _, _ in page.ROW_TRIAGE] == ["+1", "-1", "flag"]
-    assert [key for _, key, _ in page.ROW_TRIAGE] == ["+", "-", "f"]
-
-
-def test_the_row_keys_do_not_collide_with_the_finding_keys() -> None:
-    """A row mark and a finding verdict must never be one keystroke apart."""
-    row = {key for _, key, _ in page.ROW_TRIAGE}
+def test_the_flag_key_does_not_collide_with_the_finding_keys() -> None:
+    """A review flag and a finding verdict must never be one keystroke apart."""
     finding = {key for _, key, _ in page.VERDICTS}
-    assert not row & finding
+    assert page.FLAG_KEY not in finding
 
 
-def test_a_card_carries_the_row_controls() -> None:
-    """Every recording gets the three buttons; the card's own stem names the row."""
+def test_a_card_carries_the_review_flag() -> None:
+    """Every recording gets one flag toggle, independent of its release decision."""
     corpus = page.Corpus()
     corpus.add(_row("sub-a"))
     document = page.render(corpus, "Review")
-    assert document.count('class="trigroup"') == 1
-    for value, key, slug in page.ROW_TRIAGE:
-        assert f'class="tri t-{slug}" data-v="{value}"' in document
-        assert f"<kbd>{key}</kbd>" in document
+    assert document.count('class="flagtoggle"') == 1
+    assert f"<kbd>{page.FLAG_KEY}</kbd>" in document
     assert 'data-stem="sub-a_ses-b_task-free-speech-1"' in document
 
 
-def test_the_row_control_markup_does_not_repeat_the_stem() -> None:
-    """Three buttons on 11,701 cards: a repeated stem and title cost megabytes for nothing."""
-    assert "data-stem" not in page._TRIAGE_GROUP
-    assert "title=" not in page._TRIAGE_GROUP
+def test_the_flag_markup_does_not_repeat_the_stem() -> None:
+    """One toggle on 11,701 cards: a repeated stem and title cost megabytes for nothing."""
+    assert "data-stem" not in page._FLAG_TOGGLE
+    assert "title=" not in page._FLAG_TOGGLE
 
 
-def test_the_row_mark_is_a_separate_collection_from_the_finding_verdicts() -> None:
-    """Two records in the export, distinguishable, neither shadowing the other."""
-    assert "triage:store.triage" in page._SCRIPT
+def test_the_flag_is_a_separate_collection_from_the_decision_and_the_verdicts() -> None:
+    """Three records in the export, distinguishable, none shadowing another."""
+    assert "flags:store.flags" in page._SCRIPT
+    assert "release:store.release" in page._SCRIPT
     assert "findings:store.findings" in page._SCRIPT
-    assert "version:3" in page._SCRIPT
+    assert "version:4" in page._SCRIPT
+    assert "triage:" not in page._SCRIPT.split("function payload()")[1].split("}")[0]
 
 
-def test_the_row_mark_persists_and_degrades_like_the_finding_verdicts() -> None:
-    """Same namespace, same guarded access, same three collections restored on load."""
-    assert "triage:parsed.triage||{}" in page._SCRIPT
-    assert "catch(e){store={findings:{},recordings:{},triage:{},release:{}};}" in page._SCRIPT
+def test_the_flag_persists_and_degrades_like_the_finding_verdicts() -> None:
+    """Same namespace, same guarded access, the same collections restored on load."""
+    assert "flags:parsed.flags||{}" in page._SCRIPT
+    assert "catch(e){store={findings:{},recordings:{},release:{},flags:{}};}" in page._SCRIPT
 
 
-def test_re_pressing_a_row_mark_clears_it() -> None:
-    """Matching the un-judging behaviour the finding panel already has."""
-    assert "if(held===value)delete store.triage[stem];" in page._SCRIPT
+def test_the_flag_toggles_and_never_touches_the_release_decision() -> None:
+    """Pressing it again clears it; it is independent of which release the reviewer chose."""
+    body = page._SCRIPT.split("function toggleFlag(card){")[1].split("\n}")[0]
+    assert "if(store.flags[stem])delete store.flags[stem];" in body
+    assert "store.release" not in body
 
 
-def test_the_row_mark_reaches_the_filters_and_the_progress_line() -> None:
-    """The reader can sweep the unmarked, or read back only what they marked +1."""
+def test_the_flag_reaches_the_filters_and_the_progress_line() -> None:
+    """The reader can sweep what they flagged, or everything they did not."""
     corpus = page.Corpus()
     corpus.add(_row("sub-a"))
     document = page.render(corpus, "Review")
-    assert 'id="tri"' in document
-    for value in ("marked", "unmarked", "+1", "-1", "flag"):
+    assert 'id="flag"' in document
+    for value in ("flagged", "unflagged"):
         assert f'<option value="{value}">' in document
-    assert "rows marked" in page._SCRIPT
+    assert "flagged for review" in page._SCRIPT
 
 
 def test_the_release_decision_is_the_axis_own_vocabulary() -> None:
@@ -1010,20 +1007,26 @@ def test_the_release_decision_is_the_axis_own_vocabulary() -> None:
 
     ``specs/20260924-which-artefact-is-releasable/design.md`` §6.
     """
-    assert [value for value, _, _ in page.RELEASE_DECISIONS] == [
-        "release_without_redaction",
+    assert [value for value, _, _, _ in page.RELEASE_DECISIONS] == [
+        "withheld",
         "release_with_redaction",
+        "release_without_redaction",
     ]
-    assert set(value for value, _, _ in page.RELEASE_DECISIONS) <= set(page.RELEASE_ORDER)
+    assert set(value for value, _, _, _ in page.RELEASE_DECISIONS) <= set(page.RELEASE_ORDER)
+
+
+def test_the_three_release_choices_are_mutually_exclusive() -> None:
+    """One value per recording: choosing one replaces the other two, and choosing it again clears it."""
+    assert "else store.release[stem]={v:value,t:new Date().toISOString()};" in page._SCRIPT
+    assert "for(const b of card.querySelectorAll('.dec'))b.classList.toggle('on',b.dataset.v===value);" in page._SCRIPT
 
 
 def test_the_release_decision_keys_collide_with_nothing_else_on_the_page() -> None:
     """Four key families now share one page; a keystroke must mean exactly one thing."""
-    decision = {key for _, key, _ in page.RELEASE_DECISIONS}
-    row = {key for _, key, _ in page.ROW_TRIAGE}
+    decision = {key for _, key, _, _ in page.RELEASE_DECISIONS}
     finding = {key for _, key, _ in page.VERDICTS}
     movement = {"j", "k", "J", "K"}
-    assert not decision & row
+    assert page.FLAG_KEY not in decision
     assert not decision & finding
     assert not decision & movement
 
@@ -1034,9 +1037,9 @@ def test_a_card_carries_the_release_decision_controls() -> None:
     corpus.add(_row("sub-a"))
     document = page.render(corpus, "Review")
     assert document.count('class="decgroup"') == 1
-    for value, key, slug in page.RELEASE_DECISIONS:
+    for value, key, slug, label in page.RELEASE_DECISIONS:
         assert f'class="dec d-{slug}" data-v="{value}"' in document
-        assert f"<kbd>{key}</kbd>" in document
+        assert f"{label}<kbd>{key}</kbd>" in document
 
 
 def test_the_release_decision_markup_does_not_repeat_the_stem() -> None:
@@ -1045,16 +1048,16 @@ def test_the_release_decision_markup_does_not_repeat_the_stem() -> None:
 
 
 def test_the_release_decision_is_its_own_collection() -> None:
-    """A row mark says how the row reads; a release decision says which artefact may be handed on."""
+    """A flag says come back to this; a release decision says which artefact may be handed on."""
     assert "release:store.release" in page._SCRIPT
-    assert "triage:store.triage" in page._SCRIPT
-    assert "version:3" in page._SCRIPT
+    assert "flags:store.flags" in page._SCRIPT
+    assert "version:4" in page._SCRIPT
 
 
 def test_the_release_decision_persists_and_degrades_like_the_others() -> None:
     """The same localStorage namespace, the same guarded access, four collections restored."""
     assert "release:parsed.release||{}" in page._SCRIPT
-    assert "catch(e){store={findings:{},recordings:{},triage:{},release:{}};}" in page._SCRIPT
+    assert "catch(e){store={findings:{},recordings:{},release:{},flags:{}};}" in page._SCRIPT
 
 
 def test_re_pressing_a_release_decision_clears_it() -> None:
@@ -1068,7 +1071,7 @@ def test_the_release_decision_reaches_the_filters_and_the_progress_line() -> Non
     corpus.add(_row("sub-a"))
     document = page.render(corpus, "Review")
     assert 'id="dec"' in document
-    for value in ("decided", "undecided", "release_without_redaction", "release_with_redaction"):
+    for value in ("decided", "undecided", "withheld", "release_without_redaction", "release_with_redaction"):
         assert f'<option value="{value}">' in document
     assert "rows given a release decision" in page._SCRIPT
 
@@ -1088,22 +1091,22 @@ def test_the_release_decision_keys_are_discoverable() -> None:
     corpus = page.Corpus()
     corpus.add(_row("sub-a"))
     document = page.render(corpus, "Review")
-    for _, key, _ in page.RELEASE_DECISIONS:
+    for _, key, _, _ in page.RELEASE_DECISIONS:
         assert f"<kbd>{key}</kbd>" in document
 
 
 def test_reset_clears_the_release_decision_filter_too() -> None:
     """A reset that leaves one facet set shows a narrowed page while claiming to show everything."""
     reset = page._SCRIPT.split("getElementById('all')")[1].split("});")[0]
-    for control in ("firedSel", "brkSel", "txSel", "revSel", "triSel", "decSel", "llmSel"):
+    for control in ("firedSel", "brkSel", "txSel", "revSel", "flagSel", "decSel", "llmSel"):
         assert f"{control}.value='any'" in reset, control
 
 
 def test_the_reviewer_controls_are_not_searchable_text() -> None:
     """A control labelled in the page's own vocabulary would match every card in the search box.
 
-    The row marks read ``+1``/``-1``/``flag``, which nobody searches for. A release decision reads
-    ``without redaction``, which is exactly what a reviewer would type to find one.
+    A release decision reads ``without redaction``, which is exactly what a reviewer would type to
+    find one.
     """
     assert "haystack.set(r,(r.textContent" not in page._SCRIPT
     assert "function haystackOf(card)" in page._SCRIPT
@@ -1114,7 +1117,7 @@ def test_every_progress_term_counts_the_cards_on_this_page() -> None:
 
     Counting the store's keys against this page's cards can report more decisions than rows.
     """
-    for collection in ("triage", "release", "recordings"):
+    for collection in ("flags", "release", "recordings"):
         assert f"Object.keys(store.{collection}).length" not in page._SCRIPT
     assert "rows given a release decision" in page._SCRIPT
 
@@ -1122,12 +1125,12 @@ def test_every_progress_term_counts_the_cards_on_this_page() -> None:
 def test_the_decided_row_stripe_is_legible_in_both_themes() -> None:
     """A 3px stripe at the light theme's value is all but invisible on the dark card."""
     dark = page._STYLE.split("@media (prefers-color-scheme:dark)")[1]
-    for value in ("release_without_redaction", "release_with_redaction"):
+    for value in ("release_without_redaction", "release_with_redaction", "withheld"):
         assert f'.rec[data-dec="{value}"]' in dark, value
 
 
 def test_the_row_keys_are_inert_while_typing() -> None:
-    """A minus typed into a note must not mark the row."""
+    """An f typed into a note must not flag the row."""
     assert "e.target.tagName==='TEXTAREA'||e.target.tagName==='INPUT'" in page._SCRIPT
 
 
@@ -1156,11 +1159,10 @@ def test_a_card_carries_the_reviewer_state_for_the_facet() -> None:
 def test_the_movement_keys_do_not_collide_with_either_mark_set() -> None:
     """Three key sets share one document; none may overlap another."""
     movement = {"j", "k", "J", "K"}
-    row = {key for _, key, _ in page.ROW_TRIAGE}
     finding = {key for _, key, _ in page.VERDICTS}
-    assert not movement & row
+    assert page.FLAG_KEY not in movement
     assert not movement & finding
-    assert not row & finding
+    assert page.FLAG_KEY not in finding
 
 
 def test_the_page_binds_movement_and_leaves_the_arrows_alone() -> None:
@@ -1208,8 +1210,8 @@ def test_the_keys_are_discoverable_in_the_page() -> None:
     assert "<dt>j / k</dt>" in document
     assert "<dt>J / K</dt>" in document
     assert "next / previous sample" in document
-    for _, key, _ in page.ROW_TRIAGE:
-        assert key in document
+    assert f"<dt>{page.FLAG_KEY}</dt>" in document
+    assert "<dt>w / d / o</dt>" in document
 
 
 def test_the_outline_extends_the_rail_rather_than_duplicating_it() -> None:
@@ -1229,7 +1231,7 @@ def test_the_outline_extends_the_rail_rather_than_duplicating_it() -> None:
 def test_the_outline_reports_progress_and_what_the_filters_left() -> None:
     """It doubles as progress, so it earns the width it takes."""
     assert "function outline()" in page._SCRIPT
-    assert "rows marked, " in page._SCRIPT
+    assert "rows decided, " in page._SCRIPT
     assert "findings judged, " in page._SCRIPT
     assert "' shown'" in page._SCRIPT
     assert ".jn').textContent=shown" in page._SCRIPT
@@ -1822,3 +1824,20 @@ def test_the_theme_boot_script_is_valid_javascript() -> None:
         handle.write(page._THEME_BOOT)
     result = subprocess.run([node, "--check", handle.name], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
+
+
+def test_a_mark_shows_one_category_and_keeps_every_one_for_the_popup() -> None:
+    """Owner, 2026-09-27: a span never reads "PERSON+DATE_TIME+MISC"; the popup still has the list."""
+    mark = {
+        "k": "k",
+        "c": ["DATE_TIME", "PERSON"],
+        "s": "masked",
+        "d": ["rules"],
+        "brk": 0,
+        "tx": -1,
+        "nt": 1,
+        "stim": -1,
+    }
+    rendered = page._mark(mark, [["Alan's", 0, 0]])
+    assert '<span class="cat">DATE_TIME</span>' in rendered
+    assert 'data-c="DATE_TIME+PERSON"' in rendered
