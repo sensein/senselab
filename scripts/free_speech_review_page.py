@@ -1095,7 +1095,9 @@ def paragraph(words: Sequence[Sequence[Any]], marks: Sequence[dict[str, Any]]) -
 def _mark(mark: dict[str, Any], run: Sequence[Sequence[Any]]) -> str:
     """One reviewable mark: its words, underlined in its state's colour, and its category.
 
-    The text carries no explanation. An orange mark carries no category either; everything that
+    The text shows one category, the mask's own; every category that names the span, the reviewer's
+    included, is on ``data-c`` for the popup. The text carries no explanation. An orange mark
+    carries no category either; everything that
     says why a span is in its state is on the mark's data attributes, for the status popup.
 
     Args:
@@ -1106,11 +1108,12 @@ def _mark(mark: dict[str, Any], run: Sequence[Sequence[Any]]) -> str:
         The mark's HTML.
     """
     label = html.escape("+".join(str(name) for name in mark["c"]))
+    shown = html.escape(str(mark["c"][0])) if mark["c"] else ""
     state = str(mark.get("s") or DETECTED)
     colour = MARK_COLOURS.get(state, "green")
     detectors = html.escape(" ".join(str(name) for name in mark["d"]) or "unattributed")
     inner = " ".join(_plain(item) for item in run)
-    category = "" if colour == "orange" else f'<span class="cat">{label}</span>'
+    category = "" if colour == "orange" else f'<span class="cat">{shown}</span>'
     return (
         f'<mark class="pii u-{colour}" data-k="{html.escape(str(mark["k"]))}" data-c="{label}" '
         f'data-s="{html.escape(state)}" data-nm="{int(mark.get("nm") or 0)}" data-pr="{int(mark.get("pr") or 0)}" '
@@ -1174,7 +1177,7 @@ def recording_html(row: dict[str, Any]) -> str:
         f'<header><span class="task">{html.escape(str(row["task"]))}</span>'
         f'<span class="fam">{html.escape(str(row["fam"]))}</span>{_chip(str(row["rel"]))}{tag}</header>'
         f'<p class="text">{body}</p>'
-        f'<div class="whyrow">{_triage_controls(stem)}{_release_controls(stem)}'
+        f'<div class="whyrow">{_release_controls(stem)}{_flag_control(stem)}'
         f'<button type="button" class="whybtn" data-stem="{html.escape(stem)}">'
         f"what determined this status</button></div>"
         f'<div class="recnote"><label>note on this recording '
@@ -1183,46 +1186,36 @@ def recording_html(row: dict[str, Any]) -> str:
     )
 
 
-ROW_TRIAGE = (("+1", "+", "plus"), ("-1", "-", "minus"), ("flag", "f", "flag"))
-"""The owner's own row vocabulary, each with its key and the class that styles it.
-
-Deliberately non-specific. ``flag`` means come back to this, not a fourth quality judgment, and
-these are not the finding-level verdicts under another name.
-"""
-
-
-_TRIAGE_GROUP = (
-    '<span class="trigroup">'
-    + "".join(
-        f'<button class="tri t-{slug}" data-v="{html.escape(value)}">{html.escape(value)}'
-        f"<kbd>{html.escape(key)}</kbd></button>"
-        for value, key, slug in ROW_TRIAGE
-    )
-    + "</span>"
-)
-"""The control group, identical on every card; the card's own ``data-stem`` names the row."""
-
-
 RELEASE_DECISIONS = (
-    ("release_without_redaction", "o", "without"),
-    ("release_with_redaction", "d", "with"),
+    ("withheld", "w", "withhold", "withhold"),
+    ("release_with_redaction", "d", "with", "with redaction"),
+    ("release_without_redaction", "o", "without", "without redaction"),
 )
-"""The two releases a reviewer can say a recording warrants, each with its key and its class slug.
+"""The three releases a reviewer can say a recording warrants, mutually exclusive, each with its key,
+class slug and label.
 
 The values are the graph's own ``Release`` member values, so an exported decision joins to a verdict
 without a mapping between them. ``specs/20260924-which-artefact-is-releasable/design.md``.
 """
 
+FLAG_KEY = "f"
+"""The key that flags a recording for review, independent of its release decision."""
+
 _DECISION_GROUP = (
     '<span class="decgroup">'
     + "".join(
         f'<button class="dec d-{slug}" data-v="{html.escape(value)}">'
-        f"{html.escape(slug)} redaction<kbd>{html.escape(key)}</kbd></button>"
-        for value, key, slug in RELEASE_DECISIONS
+        f"{html.escape(label)}<kbd>{html.escape(key)}</kbd></button>"
+        for value, key, slug, label in RELEASE_DECISIONS
     )
     + "</span>"
 )
 """The release-decision group, identical on every card; the card's own ``data-stem`` names the row."""
+
+_FLAG_TOGGLE = (
+    f'<button class="flagtoggle" type="button" aria-pressed="false">flag for review<kbd>{FLAG_KEY}</kbd></button>'
+)
+"""The review flag, identical on every card and independent of the release decision."""
 
 
 def _release_controls(stem: str) -> str:
@@ -1237,16 +1230,16 @@ def _release_controls(stem: str) -> str:
     return _DECISION_GROUP
 
 
-def _triage_controls(stem: str) -> str:
-    """The per-recording triage buttons.
+def _flag_control(stem: str) -> str:
+    """The per-recording review flag.
 
     Args:
         stem: The recording's BIDS stem, carried by the enclosing card rather than repeated.
 
     Returns:
-        The control group's HTML.
+        The toggle's HTML.
     """
-    return _TRIAGE_GROUP
+    return _FLAG_TOGGLE
 
 
 LLM_STATES = ("disabled", "nothing_to_read", "absent", "clean", "flagged")
@@ -1557,19 +1550,13 @@ border:1px solid var(--line);border-radius:6px;padding:4px 6px;resize:vertical}
 #panel .close{float:right;border:0;background:none;color:var(--mut);cursor:pointer;font-size:14px}
 #progress{font-size:11.5px;color:var(--mut);margin-top:6px}
 .whyrow{margin-top:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-.trigroup{display:inline-flex;gap:3px}
-.tri{font:inherit;font-size:11.5px;padding:2px 7px;border:1px solid var(--line);border-radius:6px;
+.flagtoggle{font:inherit;font-size:11.5px;padding:2px 8px;border:1px solid var(--line);border-radius:6px;
 background:var(--bg);color:var(--mut);cursor:pointer;display:inline-flex;gap:4px;align-items:center}
-.tri kbd{font-size:9px;color:var(--mut);border:1px solid var(--line);border-radius:3px;padding:0 3px}
-.tri:hover{color:var(--fg);border-color:var(--acc)}
-.tri.on{color:#fff;border-color:transparent}
-.tri.on kbd{color:#fff;border-color:rgba(255,255,255,.5)}
-.t-plus.on{background:#2c5c2c}
-.t-minus.on{background:#8a2f24}
-.t-flag.on{background:#7a4b12}
-.rec[data-t="+1"]{border-left:3px solid #2c5c2c}
-.rec[data-t="-1"]{border-left:3px solid #8a2f24}
-.rec[data-t="flag"]{border-left:3px solid #c98a2b}
+.flagtoggle kbd{font-size:9px;color:var(--mut);border:1px solid var(--line);border-radius:3px;padding:0 3px}
+.flagtoggle:hover{color:var(--fg);border-color:var(--acc)}
+.flagtoggle[aria-pressed="true"]{color:#fff;background:#7a4b12;border-color:transparent}
+.flagtoggle[aria-pressed="true"] kbd{color:#fff;border-color:rgba(255,255,255,.5)}
+.rec[data-flag="1"]{border-left:3px solid #c98a2b}
 
 .decgroup{display:inline-flex;gap:4px;margin-right:8px}
 .dec{font:inherit;font-size:11.5px;padding:2px 9px;border:1px solid var(--line);
@@ -1579,8 +1566,10 @@ border-radius:6px;background:var(--bg);color:var(--mut);cursor:pointer}
 .dec.on{color:#fff;border-color:transparent}
 .d-without.on{background:#2c5c2c}
 .d-with.on{background:#2f4670}
+.d-withhold.on{background:#8a2f24}
 .rec[data-dec="release_without_redaction"]{border-right:3px solid #2c5c2c}
 .rec[data-dec="release_with_redaction"]{border-right:3px solid #2f4670}
+.rec[data-dec="withheld"]{border-right:3px solid #8a2f24}
 .whybtn{font:inherit;font-size:11.5px;padding:2px 9px;border:1px solid var(--line);
 border-radius:6px;background:var(--bg);color:var(--mut);cursor:pointer}
 .whybtn:hover{color:var(--fg);border-color:var(--acc)}
@@ -1634,7 +1623,7 @@ main{padding:12px 10px 120px}
 #status{pointer-events:none}
 /* A pointer that cannot hover gets larger hit targets. */
 @media (hover:none){
-.tri,.dec,.whybtn,.verdict{padding:6px 10px}
+.flagtoggle,.dec,.whybtn,.verdict{padding:6px 10px}
 mark.pii{padding:1px 3px}
 }
 @media (prefers-reduced-motion:reduce){*{scroll-behavior:auto !important}}
@@ -1650,8 +1639,10 @@ _DARK_RULES = """
 .r-not_assessed,.r-unrecorded{background:#282622;border-color:#5a5449;color:#bdb5a5}
 .rec[data-dec="release_without_redaction"]{border-right-color:#4f7a4f}
 .rec[data-dec="release_with_redaction"]{border-right-color:#4a5c86}
+.rec[data-dec="withheld"]{border-right-color:#a8463a}
 .d-without.on{background:#3a6b3a}
 .d-with.on{background:#3d5687}
+.d-withhold.on{background:#a8463a}
 .errors{color:#e8a89e}
 #why .ok{color:#a8d3a8}
 #why .bad{color:#e8a89e}
@@ -1741,14 +1732,14 @@ const panel=document.getElementById('panel');
 const progress=document.getElementById('progress');
 
 /* ---- store: localStorage is a convenience, the export is the record ---- */
-let store={findings:{},recordings:{},triage:{},release:{}};
+let store={findings:{},recordings:{},release:{},flags:{}};
 function load(){
   try{
     const raw=localStorage.getItem(KEY);
     if(raw){const parsed=JSON.parse(raw);
       store={findings:parsed.findings||{},recordings:parsed.recordings||{},
-             triage:parsed.triage||{},release:parsed.release||{}};}
-  }catch(e){store={findings:{},recordings:{},triage:{},release:{}};}
+             release:parsed.release||{},flags:parsed.flags||{}};}
+  }catch(e){store={findings:{},recordings:{},release:{},flags:{}};}
 }
 function save(){
   try{localStorage.setItem(KEY,JSON.stringify(store));}
@@ -1789,26 +1780,23 @@ for(const t of document.querySelectorAll('.rnote')){
     save();tally();});
 }
 
-/* ---- row triage: the owner's +1 / -1 / flag, one per recording ---- */
-const triSel=document.getElementById('tri');
-const TRIKEYS={'+':'+1','=':'+1','-':'-1','f':'flag','F':'flag'};
-function paintRow(card){
-  const rec=store.triage[card.dataset.stem];
-  const value=rec&&rec.v;
-  if(value)card.dataset.t=value; else card.removeAttribute('data-t');
-  for(const b of card.querySelectorAll('.tri'))b.classList.toggle('on',b.dataset.v===value);
+/* ---- the review flag: come back to this, independent of the release decision ---- */
+const flagSel=document.getElementById('flag');
+function paintFlag(card){
+  const on=!!store.flags[card.dataset.stem];
+  if(on)card.dataset.flag='1'; else card.removeAttribute('data-flag');
+  for(const b of card.querySelectorAll('.flagtoggle'))b.setAttribute('aria-pressed',on?'true':'false');
 }
-function setRow(card,value){
+function toggleFlag(card){
   const stem=card.dataset.stem;
-  const held=(store.triage[stem]||{}).v;
-  if(held===value)delete store.triage[stem];
-  else store.triage[stem]={v:value,t:new Date().toISOString()};
-  save();paintRow(card);tally();outline();
-  if(triSel.value!=='any')apply();
+  if(store.flags[stem])delete store.flags[stem];
+  else store.flags[stem]={t:new Date().toISOString()};
+  save();paintFlag(card);tally();outline();
+  if(flagSel.value!=='any')apply();
 }
 /* ---- the release decision: which artefact this reviewer would hand on ---- */
 const decSel=document.getElementById('dec');
-const DECKEYS={'o':'release_without_redaction','O':'release_without_redaction',
+const DECKEYS={'w':'withheld','W':'withheld','o':'release_without_redaction','O':'release_without_redaction',
                'd':'release_with_redaction','D':'release_with_redaction'};
 function paintDecision(card){
   const rec=store.release[card.dataset.stem];
@@ -1836,12 +1824,12 @@ function markActive(card,scroll){
 }
 document.addEventListener('mousemove',()=>{pointerOwns=true;},{passive:true});
 for(const card of cards){
-  paintRow(card);
+  paintFlag(card);
   paintDecision(card);
   card.addEventListener('mouseenter',()=>{if(pointerOwns)markActive(card,false);});
   card.addEventListener('focusin',()=>markActive(card,false));
-  for(const b of card.querySelectorAll('.tri'))
-    b.addEventListener('click',()=>{markActive(card,false);setRow(card,b.dataset.v);});
+  for(const b of card.querySelectorAll('.flagtoggle'))
+    b.addEventListener('click',()=>{markActive(card,false);toggleFlag(card);});
   for(const b of card.querySelectorAll('.dec'))
     b.addEventListener('click',()=>{markActive(card,false);setDecision(card,b.dataset.v);});
 }
@@ -1887,11 +1875,10 @@ document.addEventListener('keydown',e=>{
 document.addEventListener('keydown',e=>{
   if(e.target.tagName==='TEXTAREA'||e.target.tagName==='INPUT'||e.target.tagName==='SELECT')return;
   if(e.metaKey||e.ctrlKey||e.altKey)return;
-  const value=TRIKEYS[e.key];
-  if(!value)return;
+  if(e.key!=='f'&&e.key!=='F')return;
   const card=activeCard||(e.target.closest&&e.target.closest('.rec'));
   if(!card)return;
-  e.preventDefault();setRow(card,value);
+  e.preventDefault();toggleFlag(card);
 });
 document.addEventListener('keydown',e=>{
   if(e.target.tagName==='TEXTAREA'||e.target.tagName==='INPUT'||e.target.tagName==='SELECT')return;
@@ -1927,7 +1914,7 @@ function outline(){
     const key=s.dataset.p;
     const own=sectionCards.get(key)||[];
     const shown=own.filter(c=>!c.classList.contains('hidden')).length;
-    const marked=own.filter(c=>c.dataset.t).length;
+    const marked=own.filter(c=>c.dataset.dec).length;
     const own2=sectionMarks.get(key)||[];
     const done=own2.filter(m=>m.hasAttribute('data-v')).length;
     seen+=shown;markedRows+=marked;judged+=done;totalMarks+=own2.length;
@@ -1938,7 +1925,7 @@ function outline(){
     a.querySelector('.mj').style.width=own2.length?(100*done/own2.length)+'%':'0';
   }
   const out=document.getElementById('outsum');
-  if(out)out.textContent='\\u2014 '+markedRows+' rows marked, '+judged+' findings judged, '
+  if(out)out.textContent='\\u2014 '+markedRows+' rows decided, '+judged+' findings judged, '
     +seen+' shown';
 }
 
@@ -1968,7 +1955,7 @@ function apply(){
   const fams=checked('fam-f'), rels=checked('rel-f');
   const cats=checked('cat-f'), dets=checked('det-f');
   const fired=firedSel.value, brk=brkSel.value, tx=txSel.value, rev=revSel.value;
-  const tri=triSel.value, llmWant=llmSel.value, dec=decSel.value, hk=hkSel.value;
+  const flg=flagSel.value, llmWant=llmSel.value, dec=decSel.value, hk=hkSel.value;
   const nf=+minNf.value||0;
   const lo=+minNt.value||1, hi=+maxNt.value||9999;
   const narrowed=!allChecked('cat-f')||!allChecked('det-f')||brk!=='any'||tx!=='any'
@@ -1978,9 +1965,9 @@ function apply(){
     let any=false;
     for(const r of s.querySelectorAll('.rec')){
       let ok=fams.has(r.dataset.fam)&&rels.has(r.dataset.rel);
-      if(ok&&tri!=='any'){
-        const held=r.dataset.t||'';
-        ok=tri==='marked'?!!held:tri==='unmarked'?!held:held===tri;
+      if(ok&&flg!=='any'){
+        const on=r.dataset.flag==='1';
+        ok=flg==='flagged'?on:!on;
       }
       if(ok&&dec!=='any'){
         const said=r.dataset.dec||'';
@@ -2024,16 +2011,15 @@ function tally(){
   for(const m of marks)if((store.findings[m.dataset.k]||{}).v)done++;
   /* every term counts the cards on this page. One localStorage namespace spans every shard, so
      counting the store's own keys can report more decisions than there are rows. */
-  let notes=0, rows=0, said=0;
+  let notes=0, flagged=0, said=0;
   for(const c of cards){
     const stem=c.dataset.stem;
     if((store.recordings[stem]||{}).n)notes++;
-    if((store.triage[stem]||{}).v)rows++;
+    if(store.flags[stem])flagged++;
     if((store.release[stem]||{}).v)said++;
   }
-  progress.textContent=done+' of '+marks.length+' findings judged \\u00b7 '+rows+' of '
-    +cards.length+' rows marked \\u00b7 '+said+' of '+cards.length
-    +' rows given a release decision \\u00b7 '+notes+' recording notes';
+  progress.textContent=done+' of '+marks.length+' findings judged \\u00b7 '+said+' of '+cards.length
+    +' rows given a release decision \\u00b7 '+flagged+' flagged for review \\u00b7 '+notes+' recording notes';
 }
 
 /* ---- review panel ---- */
@@ -2095,9 +2081,9 @@ document.addEventListener('keydown',e=>{
 
 /* ---- export and import: the durable artefact ---- */
 function payload(){
-  return JSON.stringify({schema:'senselab.fsreview',version:3,
+  return JSON.stringify({schema:'senselab.fsreview',version:4,
     exported:new Date().toISOString(),findings:store.findings,recordings:store.recordings,
-    triage:store.triage,release:store.release},null,1);
+    release:store.release,flags:store.flags},null,1);
 }
 document.getElementById('export').addEventListener('click',()=>{
   const text=payload();
@@ -2117,11 +2103,11 @@ document.getElementById('import').addEventListener('click',()=>{
     const parsed=JSON.parse(text);
     store={findings:Object.assign({},store.findings,parsed.findings||{}),
            recordings:Object.assign({},store.recordings,parsed.recordings||{}),
-           triage:Object.assign({},store.triage,parsed.triage||{}),
-           release:Object.assign({},store.release,parsed.release||{})};
+           release:Object.assign({},store.release,parsed.release||{}),
+           flags:Object.assign({},store.flags,parsed.flags||{})};
     save();
     for(const m of marks)paint(m);
-    for(const card of cards){paintRow(card);paintDecision(card);}
+    for(const card of cards){paintFlag(card);paintDecision(card);}
     for(const t of document.querySelectorAll('.rnote')){
       const rec=store.recordings[t.dataset.stem]; if(rec&&rec.n)t.value=rec.n;}
     apply();
@@ -2434,7 +2420,7 @@ document.addEventListener('keydown',e=>{if(e.key==='Escape'&&!whyBox.hidden)clos
 
 for(const el of document.querySelectorAll('.fam-f,.rel-f,.cat-f,.det-f'))
   el.addEventListener('change',apply);
-for(const el of [firedSel,brkSel,txSel,revSel,triSel,decSel,llmSel,hkSel,minNf,minNt,maxNt])
+for(const el of [firedSel,brkSel,txSel,revSel,flagSel,decSel,llmSel,hkSel,minNf,minNt,maxNt])
   el.addEventListener('change',apply);
 let timer;q.addEventListener('input',()=>{clearTimeout(timer);timer=setTimeout(apply,140);});
 for(const [id,cls] of [['allcat','cat-f'],['nocat','cat-f'],['alldet','det-f'],['nodet','det-f']])
@@ -2444,7 +2430,7 @@ for(const [id,cls] of [['allcat','cat-f'],['nocat','cat-f'],['alldet','det-f'],[
 document.getElementById('all').addEventListener('click',e=>{
   e.preventDefault();
   for(const el of document.querySelectorAll('.fam-f,.rel-f,.cat-f,.det-f'))el.checked=true;
-  firedSel.value='any';brkSel.value='any';txSel.value='any';revSel.value='any';triSel.value='any';
+  firedSel.value='any';brkSel.value='any';txSel.value='any';revSel.value='any';flagSel.value='any';
   decSel.value='any';llmSel.value='any';hkSel.value='any';
   minNf.value='';minNt.value='';maxNt.value='';q.value='';apply();});
 const rail=document.getElementById('rail');
@@ -2478,12 +2464,12 @@ _DOCUMENT = """<!doctype html>
 <details id="keys"><summary>keyboard</summary><dl>
 <dt>j / k</dt><dd>next / previous sample</dd>
 <dt>J / K</dt><dd>next / previous participant</dd>
-<dt>+ or = / - / f</dt><dd>mark the row +1 / -1 / flag</dd>
-<dt>o / d</dt><dd>release this recording without / with redaction</dd>
+<dt>w / d / o</dt><dd>withhold / release with redaction / release without redaction</dd>
+<dt>f</dt><dd>flag this recording for review, whatever its release</dd>
 <dt>1 &ndash; 4</dt><dd>judge the selected finding</dd>
 <dt>Esc</dt><dd>close a panel</dd>
-</dl><p class="note">Movement follows the filters, and the card it lands on is what the row-mark
-and release keys act on.</p></details>
+</dl><p class="note">Movement follows the filters, and the card it lands on is what the release and
+flag keys act on.</p></details>
 <input type="search" id="q" placeholder="search transcripts, tasks, ids">
 <fieldset><legend>recording</legend>
 <select id="fired"><option value="any">redaction fired or not</option>
@@ -2522,14 +2508,14 @@ placeholder="max"> tokens</div>
 <option value="nothing_to_read">there was no text to read</option>
 <option value="disabled">switched off</option>
 </select>
-<select id="tri"><option value="any">row mark, any</option>
-<option value="marked">marked</option><option value="unmarked">unmarked</option>
-<option value="+1">+1</option><option value="-1">-1</option><option value="flag">flag</option>
+<select id="flag"><option value="any">review flag, any</option>
+<option value="flagged">flagged for review</option><option value="unflagged">not flagged</option>
 </select>
 <select id="dec"><option value="any">release decision, any</option>
 <option value="decided">decided</option><option value="undecided">undecided</option>
-<option value="release_without_redaction">release without redaction</option>
+<option value="withheld">withhold</option>
 <option value="release_with_redaction">release with redaction</option>
+<option value="release_without_redaction">release without redaction</option>
 </select>
 <select id="rev"><option value="any">judged or not</option>
 <option value="unreviewed">unjudged only</option><option value="reviewed">judged only</option>
