@@ -178,10 +178,30 @@ REVIEWER_NEEDS_HUMAN_REVIEW_OTHER = (
 HUMAN_REVIEW_GROUNDS = {COHORT: REVIEWER_NEEDS_HUMAN_REVIEW_COHORT, OTHER: REVIEWER_NEEDS_HUMAN_REVIEW_OTHER}
 """The human-review ground for each kind of condition the reading proposed."""
 
+UNPLACED_PLACED = "placed"
+"""A detector finding the fold could not place, placed by a reviewer ``redact`` entry of its family."""
+
+UNPLACED_CLEARED = "cleared"
+"""A detector finding the fold could not place, where the reviewer read the original as clean."""
+
+UNPLACED_OPEN = "open"
+"""A detector finding the fold could not place, which a reading neither placed nor cleared."""
+
+UNPLACED_UNREAD = "unread"
+"""A detector finding the fold could not place, where no reviewer read the recording."""
+
+DOMINANT_SPEAKER_GATE = "dominant_speaker_share_min"
+"""The gate whose failure is diarization's own reading of another speaker in the task extent."""
+
+UNPLACED_FINDING_UNREAD = (
+    "a detector finding could not be placed on the transcript's words and no reviewer read the recording"
+)
+
 RELEASE_WITHHELD_GROUNDS = (
     REVIEWER_PROPOSED_REDACTION,
     REVIEWER_NEEDS_HUMAN_REVIEW_COHORT,
     REVIEWER_NEEDS_HUMAN_REVIEW_OTHER,
+    UNPLACED_FINDING_UNREAD,
 )
 """Why a recording is withheld where REDACT itself did not withhold it."""
 
@@ -292,6 +312,19 @@ NO_LEXICAL_ITEM_PRODUCED = "SPEECH ran over a task that asks for words and read 
 
 Never a discard ground. See ``specs/20260817-triage-workflow-dag/critical-failure.md``.
 """
+
+UNPLACED_FINDING_OPEN = (
+    "a detector finding could not be placed on the transcript's words, and the reviewer neither placed it "
+    "nor read the original as clean"
+)
+"""The flag ground an unplaced finding contributes where a reading exists and settles nothing about it.
+
+Controlled vocabulary, with the families of the unplaced findings appended.
+"""
+
+REVIEWER_HEARD_SECOND_SPEAKER = "the redaction reviewer read more than one speaker in the transcript"
+"""The flag ground a reading's ``speakers: more_than_one`` contributes, under ``verdict.llm_second_speaker_flags``,
+where diarization's own gate has not already flagged another speaker in the task extent."""
 
 LLM_REDACTION_RESIDUE = "the redaction reviewer flagged residue on the redacted transcript"
 """The flag ground a reviewer reading that proposes hiding more contributes to the triage axis.
@@ -427,6 +460,8 @@ class FoldPolicy:
         cohort_conditions: The packaged cohort profile a human-review proposal is read against
             (:mod:`senselab.audio.workflows.triage.cohort`), or None where the study declares none,
             in which case every such proposal is an ``other`` condition.
+        llm_second_speaker_flags: Whether a reading that heard more than one speaker is a flag ground
+            on the triage axis.
     """
 
     conformance_flags: bool = True
@@ -440,6 +475,7 @@ class FoldPolicy:
     llm_human_review_categories: tuple[str, ...] = ()
     trim_protected_categories: tuple[str, ...] = ()
     cohort_conditions: str | None = None
+    llm_second_speaker_flags: bool = False
     conformance_flags_by_family: dict[str, bool] = field(default_factory=dict)
 
     @classmethod
@@ -470,6 +506,7 @@ class FoldPolicy:
                 str(category).upper() for category in (config.get(f"{_SECTION}.trim_protected_categories") or ())
             ),
             cohort_conditions=str(config.get(f"{_SECTION}.cohort_conditions") or "") or None,
+            llm_second_speaker_flags=bool(config.get(f"{_SECTION}.llm_second_speaker_flags", False)),
             conformance_flags_by_family={
                 str(family): bool(flags)
                 for family, flags in (config.get(f"{_SECTION}.conformance_flags_by_family") or {}).items()
@@ -644,6 +681,30 @@ def _reviewer_found_residue(llm_redaction: Mapping[str, Any] | None) -> bool:
     if annotation.get("status") != "flagged":
         return False
     return any(str(entry.get("action")) == "redact" for entry in annotation.get("proposal") or ())
+
+
+def deciding_reading(llm_redaction: Mapping[str, Any] | None, agreed: frozenset[int]) -> dict[str, Any]:
+    """The reading with the ``redact`` entries that agree with the masks set aside.
+
+    Args:
+        llm_redaction: REVIEW's annotation, or None where it wrote none.
+        agreed: The ``proposal`` positions of ``redact`` entries whose words a mask already hides or
+            that place a finding the fold could not place
+            (:attr:`~senselab.audio.workflows.triage.nodes.redact.MaskPlan.agreed`).
+
+    Returns:
+        The annotation, its ``proposal`` without those entries. An agreeing entry is not the reviewer
+        proposing to hide more, so no test of residue or human review reads it.
+    """
+    annotation = dict(llm_redaction or {})
+    if not agreed:
+        return annotation
+    proposal = [
+        entry
+        for index, entry in enumerate(annotation.get("proposal") or ())
+        if str(entry.get("action")) == "release" or index not in agreed
+    ]
+    return {**annotation, "proposal": proposal}
 
 
 def _reviewer_cleared(llm_redaction: Mapping[str, Any] | None) -> bool:
@@ -887,6 +948,8 @@ def fold_file_verdict(
     gates: Mapping[str, Any] | None = None,
     flag_gates: Sequence[Mapping[str, Any]] | None = None,
     policy: FoldPolicy | None = None,
+    agreed_redactions: frozenset[int] = frozenset(),
+    unplaced: Sequence[tuple[str, str]] = (),
 ) -> FileVerdict:
     """Decide the file, from the deciding nodes' verdicts and the reporting nodes' reports.
 
@@ -925,6 +988,11 @@ def fold_file_verdict(
             ``ground``; one that answered :data:`UNDETERMINED` is never one.
         policy: What to do with what was reported, from the ``verdict.*`` config section. None is
             the packaged policy.
+        agreed_redactions: The ``proposal`` positions of reviewer ``redact`` entries that agree with
+            the masks; they propose nothing more (:func:`deciding_reading`).
+        unplaced: ``(family, state)`` for every detector finding SPEECH could not place on words, as
+            :class:`~senselab.audio.workflows.triage.nodes.redact.UnplacedFinding` records them. An
+            ``open`` one flags; an ``unread`` one flags and withholds.
 
     Returns:
         The file verdict on both axes, carrying every contributing reason rather than only the
@@ -1002,19 +1070,31 @@ def fold_file_verdict(
     ):
         reasons.append(NodeVerdict(_SPEECH, Outcome.FLAG, None, NO_LEXICAL_ITEM_PRODUCED))
     annotation = dict(llm_redaction or {})
-    human_review = human_review_kind(annotation, rules.llm_human_review_categories, rules.cohort_conditions)
-    if rules.llm_redaction_flags and _reviewer_found_residue(annotation):
+    deciding = deciding_reading(annotation, agreed_redactions)
+    human_review = human_review_kind(deciding, rules.llm_human_review_categories, rules.cohort_conditions)
+    if rules.llm_redaction_flags and _reviewer_found_residue(deciding):
         named = ", ".join(
             sorted(
                 {
                     str(entry.get("category"))
-                    for entry in annotation.get("proposal") or ()
+                    for entry in deciding.get("proposal") or ()
                     if str(entry.get("action")) == "redact" and entry.get("category")
                 }
             )
         )
         ground_text = HUMAN_REVIEW_GROUNDS[human_review] if human_review else LLM_REDACTION_RESIDUE
         reasons.append(NodeVerdict(_VERDICT, Outcome.FLAG, None, f"{ground_text}: {named}" if named else ground_text))
+    diarized_other = any(
+        record.get("passed") is False and record.get("gate") == DOMINANT_SPEAKER_GATE for record in flag_gates or ()
+    )
+    if rules.llm_second_speaker_flags and annotation.get("speakers") == "more_than_one" and not diarized_other:
+        reasons.append(NodeVerdict(_VERDICT, Outcome.FLAG, None, REVIEWER_HEARD_SECOND_SPEAKER))
+    open_families = sorted({family for family, state in unplaced if state in (UNPLACED_OPEN, UNPLACED_UNREAD)})
+    if open_families:
+        ground_text = (
+            UNPLACED_FINDING_UNREAD if any(state == UNPLACED_UNREAD for _, state in unplaced) else UNPLACED_FINDING_OPEN
+        )
+        reasons.append(NodeVerdict(_VERDICT, Outcome.FLAG, None, f"{ground_text}: {', '.join(open_families)}"))
     for record in flag_gates or ():
         if record.get("passed") is not False:
             continue
@@ -1083,13 +1163,21 @@ def fold_file_verdict(
     else:
         triage = Triage.PASS
 
-    withholds = rules.llm_redaction_withholds and _reviewer_found_residue(llm_redaction)
-    clears = rules.llm_rescan_clears and _reviewer_cleared(llm_redaction)
+    withholds = rules.llm_redaction_withholds and _reviewer_found_residue(deciding)
+    clears = rules.llm_rescan_clears and _reviewer_cleared(deciding)
+    unread = any(state == UNPLACED_UNREAD for _, state in unplaced)
+    withholding = (
+        (HUMAN_REVIEW_GROUNDS[human_review] if human_review else REVIEWER_PROPOSED_REDACTION)
+        if withholds
+        else UNPLACED_FINDING_UNREAD
+        if unread
+        else None
+    )
     release, release_ground = _release_from(
         node_verdicts,
         redaction or RedactionEvidence(),
         ran,
-        (HUMAN_REVIEW_GROUNDS[human_review] if human_review else REVIEWER_PROPOSED_REDACTION) if withholds else None,
+        withholding,
         speech_declined=routes.get(_SPEECH) == DECLINED,
         reviewer_clears=clears,
     )

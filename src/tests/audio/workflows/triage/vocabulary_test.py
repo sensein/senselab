@@ -15,6 +15,7 @@ from senselab.audio.workflows.triage.vocabulary import (
     BAD_MAP_VALUES,
     CRITICAL_ABSENCE,
     DECLINED,
+    DOMINANT_SPEAKER_GATE,
     FINDINGS_ARE_TASK_CONTENT,
     MASKS_TRIMMED_TO_CONTENT,
     NO_CONTENT_MASKED,
@@ -29,6 +30,7 @@ from senselab.audio.workflows.triage.vocabulary import (
     RELEASE_WITHOUT_REDACTION_GROUNDS,
     REVIEWER_CLEARED_RESCAN,
     REVIEWER_CLEARED_UNMASKED,
+    REVIEWER_HEARD_SECOND_SPEAKER,
     REVIEWER_NEEDS_HUMAN_REVIEW_COHORT,
     REVIEWER_NEEDS_HUMAN_REVIEW_OTHER,
     REVIEWER_PROPOSED_REDACTION,
@@ -42,6 +44,11 @@ from senselab.audio.workflows.triage.vocabulary import (
     UNDETERMINED,
     UNEXPLAINED_CONTENT,
     UNJUDGED,
+    UNPLACED_FINDING_OPEN,
+    UNPLACED_FINDING_UNREAD,
+    UNPLACED_OPEN,
+    UNPLACED_PLACED,
+    UNPLACED_UNREAD,
     UNREAD_DECLARATION,
     UNREADABLE_EMPTINESS,
     BranchDecision,
@@ -1535,3 +1542,80 @@ class TestAWithheldBranchIsNotAnUnselectedOne:
         assert folded.findings["VOICE"] == "absent"
         assert folded.branches["VOICE"]["withheld_critical"] is False
         assert folded.branches["VOICE"]["will_run"] is True
+
+
+class TestAgreementUnplacedFindingsAndASecondSpeaker:
+    """Owner, 2026-09-27: agreeing with a mask is not hiding more; an unplaced finding and a second voice flag."""
+
+    POLICY = FoldPolicy(llm_redaction_withholds=True, llm_second_speaker_flags=True)
+
+    def _fold(
+        self,
+        reading: Mapping[str, Any],
+        *,
+        agreed: frozenset[int] = frozenset(),
+        unplaced: Sequence[tuple[str, str]] = (),
+        flag_gates: Sequence[Mapping[str, Any]] = (),
+        policy: FoldPolicy | None = None,
+    ) -> FileVerdict:
+        """A REDACT pass with one mask standing, and one reading."""
+        return fold_file_verdict(
+            [NodeVerdict("ADMIT", Outcome.PASS, None, "ok"), NodeVerdict("REDACT", Outcome.PASS, None, "ok")],
+            branch_decisions=_decisions(AIRWAY=DECLINED, SPEECH=DECLINED, VOICE=DECLINED),
+            ran={},
+            hint_claims={},
+            route_state=ROUTED,
+            redaction=RedactionEvidence(findings_n=1, masks_n=1, masks_final_n=1),
+            llm_redaction=reading,
+            flag_gates=list(flag_gates),
+            policy=policy or self.POLICY,
+            agreed_redactions=agreed,
+            unplaced=list(unplaced),
+        )
+
+    READING = {
+        "status": "flagged",
+        "original": "carries_pii",
+        "speakers": "one",
+        "proposal": [{"action": "redact", "category": "LOCATION", "text": "Wisconsin"}],
+    }
+
+    def test_a_redact_entry_a_mask_already_hides_withholds_nothing(self) -> None:
+        """r6's open-response card: "Wisconsin" is masked, so agreeing with it releases the redacted copy."""
+        assert self._fold(self.READING).release is Release.WITHHELD
+        agreed = self._fold(self.READING, agreed=frozenset({0}))
+        assert (agreed.release, agreed.triage) == (Release.WITH_REDACTION, Triage.PASS)
+
+    def test_an_unplaced_finding_no_one_read_withholds_and_flags(self) -> None:
+        """Nothing placed the finding and no reviewer read the transcript: nothing may be released."""
+        folded = self._fold({}, unplaced=[("PERSON", UNPLACED_UNREAD)])
+        assert (folded.release, folded.release_ground) == (Release.WITHHELD, UNPLACED_FINDING_UNREAD)
+        assert folded.triage is Triage.FLAG
+
+    def test_an_open_unplaced_finding_flags_and_a_placed_one_does_not(self) -> None:
+        """A reading that settles nothing about it sends the recording to review; placing it settles it."""
+        reading = {"status": "flagged", "original": "carries_pii", "proposal": []}
+        opened = self._fold(reading, unplaced=[("PERSON", UNPLACED_OPEN)])
+        assert opened.triage is Triage.FLAG
+        assert any(reason.why.startswith(UNPLACED_FINDING_OPEN) for reason in opened.reasons)
+        assert opened.release is Release.WITH_REDACTION
+        placed = self._fold(reading, unplaced=[("PERSON", UNPLACED_PLACED)])
+        assert placed.triage is Triage.PASS
+
+    def test_a_second_speaker_flags_unless_diarization_already_did(self) -> None:
+        """The reviewer's ``more_than_one`` flags; off by policy, or already a diarization flag, it adds nothing."""
+        reading = {"status": "clean", "original": "clean", "speakers": "more_than_one", "proposal": []}
+        heard = self._fold(reading)
+        assert heard.triage is Triage.FLAG
+        assert [reason.why for reason in heard.reasons if reason.node == "VERDICT"] == [REVIEWER_HEARD_SECOND_SPEAKER]
+        assert heard.release is Release.WITH_REDACTION, "a flag for review, not a release decision"
+        assert self._fold(reading, policy=FoldPolicy()).triage is Triage.PASS
+        gate = {"gate": DOMINANT_SPEAKER_GATE, "passed": False, "ground": "another speaker", "reading": "share"}
+        diarized = self._fold(reading, flag_gates=[gate])
+        assert REVIEWER_HEARD_SECOND_SPEAKER not in [reason.why for reason in diarized.reasons]
+
+    def test_the_packaged_config_turns_the_second_speaker_flag_on(self) -> None:
+        """Owner, 2026-09-27."""
+        from senselab.audio.workflows.triage.config import load_triage_config
+
+        assert FoldPolicy.from_config(load_triage_config()).llm_second_speaker_flags is True

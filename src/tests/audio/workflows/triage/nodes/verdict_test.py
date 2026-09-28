@@ -842,7 +842,7 @@ class TestTheRedactionReviewerAnnotatesAndThisNodeDecides:
 
     @staticmethod
     def _mask(store: ProvStore, words: Sequence[str], masked: Sequence[int]) -> None:
-        """Consensus words, SPEECH's residue over all of them, and one REDACT mask per ``masked`` word."""
+        """Consensus words, SPEECH's residue, and a located finding and a REDACT mask per ``masked`` word."""
         agent = software_agent(store)
         activity = store.activity(node="SPEECH", step="residue-seed", parameters={})
         store.was_associated_with(activity, agent)
@@ -861,6 +861,19 @@ class TestTheRedactionReviewerAnnotatesAndThisNodeDecides:
         )
         store.was_generated_by(scan, activity)
         for index in masked:
+            finding = store.entity(
+                prov_type="pii",
+                extent=(float(index), float(index) + 0.5),
+                attributes={"category": "PERSON", "source": "rules", "occurrence": 0, "occurrences_n": 1},
+            )
+            store.was_generated_by(finding, activity)
+            mark = store.entity(
+                prov_type="assertion",
+                extent=(float(index), float(index) + 0.5),
+                attributes={"verb": "label", "label": "pii", "category": "PERSON"},
+            )
+            store.was_generated_by(mark, activity)
+            store.was_derived_from(mark, word_ids[index])
             span = store.entity(
                 prov_type="span",
                 extent=(float(index) - 0.05, float(index) + 0.55),

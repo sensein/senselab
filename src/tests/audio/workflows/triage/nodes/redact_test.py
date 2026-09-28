@@ -24,15 +24,20 @@ from senselab.audio.workflows.triage.nodes import redact as redact_module
 from senselab.audio.workflows.triage.nodes import verdict as verdict_module
 from senselab.audio.workflows.triage.nodes.common import resolve_stream
 from senselab.audio.workflows.triage.nodes.redact import (
+    AGREED_MASKED,
+    AGREED_PLACED,
+    DETECTOR,
     MASK_PARTLY_UNMASKED,
     MASK_TRIMMED,
     MASK_UNCHANGED,
     MASK_UNMASKED,
     MASKED,
+    NEW,
     PII_LEDGER,
     PLACED_SUBSTRING,
     PLACED_WORDS,
     RELEASED_FILES,
+    REVIEWER,
     STREAM_NAME,
     UNMASKED_BY_REVIEWER,
     UNMASKED_BY_TRIM,
@@ -46,6 +51,10 @@ from senselab.audio.workflows.triage.vocabulary import (
     REDACTION_LLM_ANNOTATION,
     REVIEWER_CLEARED_RESCAN,
     REVIEWER_UNMASKED_SOME,
+    UNPLACED_CLEARED,
+    UNPLACED_OPEN,
+    UNPLACED_PLACED,
+    UNPLACED_UNREAD,
     Outcome,
 )
 from senselab.text.tasks.pii_detection.api import PiiScan, PiiSpan
@@ -737,20 +746,17 @@ class TestTheWordLevelMaskRule:
         assert [mask.outcome for mask in plan.masks] == [MASK_TRIMMED]
         assert _states(plan) == {"alice": MASKED, "in": UNMASKED_BY_TRIM}
 
-    def test_a_content_word_only_the_padding_reached_is_unmasked(
+    def test_a_word_only_the_padding_reached_is_not_under_the_mask(
         self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A 600 ms margin reaches "met" and "in"; only the word the detector marked stays masked."""
+        """A 600 ms margin reaches "met" and "in"; the mask is the finding's own word and nothing else."""
         config = _override(tmp_path, "redaction:\n  padding_ms: 600\n  fill: silence\n")
         self._passed(store, config, tmp_path, monkeypatch, findings=[("PERSON", _word_extent(2))])
         plan = mask_plan(store, reviewer_applies=False, padding_ms=600)
         (mask,) = plan.masks
-        assert mask.outcome == MASK_TRIMMED
-        assert {word.text: (word.state, word.finding) for word in mask.words} == {
-            "met": (UNMASKED_BY_TRIM, False),
-            "alice": (MASKED, True),
-            "in": (UNMASKED_BY_TRIM, False),
-        }
+        assert mask.outcome == MASK_UNCHANGED
+        assert {word.text: (word.state, word.finding) for word in mask.words} == {"alice": (MASKED, True)}
+        assert plan.changed, "REDACT's padded extent reached the neighbours; the released copy does not"
         (extent,) = plan.final
         assert (extent.start, extent.end) == (1.5, 3.0), "the margin stops at each unmasked neighbour"
 
@@ -811,9 +817,8 @@ class TestTheWordLevelMaskRule:
         _stub_pii(monkeypatch, findings=[])
         redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
         plan = _plan(store, applies=False)
-        assert [mask.outcome for mask in plan.masks] == [MASK_TRIMMED]
-        assert _states(plan)["in"] == UNMASKED_BY_TRIM
-        assert plan.final == plan.planned, "the case under test: the trim leaves REDACT's extent as it was"
+        assert [mask.outcome for mask in plan.masks] == [MASK_UNCHANGED]
+        assert "in" not in _states(plan), "a word only a timing hull reaches is not the finding's"
         _write_ledger(store, plan, "release_with_redaction", None)
         _settle(store, "release_with_redaction", None, tmp_path)
         released = _release(tmp_path)
@@ -837,7 +842,7 @@ class TestTheWordLevelMaskRule:
         redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
         plan = _plan(store, applies=False)
         (mask,) = plan.masks
-        assert (mask.outcome, mask.task_words_n) == (MASK_TRIMMED, 2)
+        assert (mask.outcome, mask.task_words_n) == (MASK_UNCHANGED, 2)
         assert _states(plan) == {"maria": MASKED, "smith": MASKED}, "no task word is listed under a mask"
         assert len(plan.final) == 2
         _write_ledger(store, plan, "release_with_redaction", None)
@@ -910,7 +915,7 @@ class TestTheWordLevelMaskRule:
     def test_a_quote_naming_a_different_phrase_leaves_that_mask(
         self, store: ProvStore, redact_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """r6's hoarse card: "am very hoarse" is not "is very hoarse", so only the phrase quoted is unmasked."""
+        """r6's hoarse card: the quoted phrase goes, and "hoarse" -- the term the reviewer judged -- goes everywhere."""
         _seed_redact_store(
             store,
             tmp_path,
@@ -921,9 +926,11 @@ class TestTheWordLevelMaskRule:
         redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
         _annotate(store, [_release_entry("am very hoarse", "OTHER")])
         plan = _plan(store)
-        assert [mask.outcome for mask in plan.masks] == [MASK_UNMASKED, MASK_TRIMMED]
+        assert [mask.outcome for mask in plan.masks] == [MASK_UNMASKED, MASK_PARTLY_UNMASKED]
         kept = {word.text for mask in plan.masks for word in mask.words if word.state == MASKED}
-        assert kept == {"voice", "hoarse"}
+        assert kept == {"voice"}
+        (second,) = [word for word in plan.masks[1].words if word.text == "hoarse"]
+        assert second.propagated and not second.named
 
     def test_an_unplaceable_quote_unmasks_nothing(
         self, store: ProvStore, redact_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -2407,3 +2414,135 @@ class TestTheReScanDoesNotReadBracketedTokens:
         _stub_pii(monkeypatch, findings=[("PERSON", "alice")])
         result = redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
         assert result.verdict.outcome is not Outcome.PASS
+
+
+def _speech_notes(store: ProvStore, notes: Sequence[str]) -> None:
+    """SPEECH's report carrying its notes, as step 7 leaves them for a finding it could not place."""
+    agent = store.agent(agent_type="software", version="senselab test-speech")
+    activity = store.activity(node="SPEECH", step="report", parameters={})
+    store.was_associated_with(activity, agent)
+    report = store.entity(prov_type="branch_report", extent=None, attributes={"node": "SPEECH", "notes": list(notes)})
+    store.was_generated_by(report, activity)
+
+
+class TestAMaskIsAFindingsOwnWords:
+    """Owner, 2026-09-27: a mask is one finding's own words, never the whole transcript or a chain of them."""
+
+    def _seed(
+        self,
+        store: ProvStore,
+        config: TriageConfig,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        words: Sequence[str],
+        located: Sequence[tuple[str, tuple[float, float]]],
+        unplaced: Sequence[str] = (),
+    ) -> None:
+        """A REDACT pass over ``words``; each ``unplaced`` category a finding SPEECH placed over everything."""
+        whole = (0.0, _word_extent(len(words) - 1)[1])
+        _seed_redact_store(
+            store, tmp_path, words=list(words), findings=[*located, *((category, whole) for category in unplaced)]
+        )
+        if unplaced:
+            _speech_notes(store, [f"pii_unlocated ({category})" for category in unplaced])
+        _stub_pii(monkeypatch, findings=[])
+        redact(store, "recording", config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
+
+    def test_an_unplaced_finding_masks_nothing(
+        self, store: ProvStore, redact_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """r6's story-recall card: an unlocated PERSON no longer masks the examiner's instructions."""
+        words = ["okay", "you", "were", "given", "the", "test", "grandpa", "ninety"]
+        self._seed(store, redact_config, tmp_path, monkeypatch, words, [("DATE_TIME", _word_extent(7))], ["PERSON"])
+        plan = _plan(store, applies=False)
+        assert _states(plan) == {"ninety": MASKED}
+        assert [(f.category, f.state) for f in plan.unplaced] == [("PERSON", UNPLACED_UNREAD)]
+        assert [mask.planned.category for mask in plan.masks] == ["DATE_TIME"]
+
+    def test_a_reviewer_entry_of_its_family_places_it(
+        self, store: ProvStore, redact_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """r6's open-response card: "Alan" places the unlocated PERSON; "Wisconsin" agrees with its mask."""
+        words = ["my", "brother", "alan", "lives", "in", "wisconsin"]
+        self._seed(store, redact_config, tmp_path, monkeypatch, words, [("LOCATION", _word_extent(5))], ["PERSON"])
+        _annotate(
+            store,
+            [_redact_entry("Alan", "PERSON"), _redact_entry("Wisconsin", "LOCATION")],
+            original="carries_pii",
+        )
+        plan = _plan(store)
+        assert [span.agreement for span in plan.proposals] == [AGREED_PLACED, AGREED_MASKED]
+        assert plan.agreed == frozenset({0, 1})
+        assert [(f.category, f.state) for f in plan.unplaced] == [("PERSON", UNPLACED_PLACED)]
+        assert _states(plan) == {"alan": MASKED, "wisconsin": MASKED}
+        assert sorted(mask.source for mask in plan.masks) == [DETECTOR, REVIEWER]
+
+    def test_a_clean_reading_clears_an_unplaced_finding_and_a_silent_one_leaves_it_open(
+        self, store: ProvStore, redact_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Read clean: cleared. Read as identifying but naming nothing of its family: open for review."""
+        words = ["grandpa", "is", "ninety"]
+        self._seed(store, redact_config, tmp_path, monkeypatch, words, [("DATE_TIME", _word_extent(2))], ["PERSON"])
+        _annotate(store, [], original="clean")
+        assert [f.state for f in _plan(store).unplaced] == [UNPLACED_CLEARED]
+        _annotate(store, [_release_entry("ninety", "DATE_TIME")], original="carries_pii")
+        assert [f.state for f in _plan(store).unplaced] == [UNPLACED_OPEN]
+
+    def test_a_new_word_is_a_new_proposal(
+        self, store: ProvStore, redact_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A redact entry naming a content word no mask hides is the reviewer proposing to hide more."""
+        words = ["i", "met", "alice", "in", "brooklyn"]
+        self._seed(store, redact_config, tmp_path, monkeypatch, words, [("PERSON", _word_extent(2))])
+        _annotate(store, [_redact_entry("alice", "PERSON"), _redact_entry("brooklyn", "LOCATION")])
+        plan = _plan(store)
+        assert [span.agreement for span in plan.proposals] == [AGREED_MASKED, NEW]
+        assert plan.agreed == frozenset({0})
+
+    def test_identical_findings_are_one_mask_labelled_by_family(
+        self, store: ProvStore, redact_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Two detectors' LOCATION and LOC on "wisconsin" are one mask, labelled LOCATION, carrying both."""
+        words = ["lives", "in", "wisconsin"]
+        self._seed(
+            store,
+            redact_config,
+            tmp_path,
+            monkeypatch,
+            words,
+            [("LOCATION", _word_extent(2)), ("LOC", _word_extent(2))],
+        )
+        (mask,) = _plan(store, applies=False).masks
+        assert (mask.planned.category, mask.categories) == ("LOCATION", ("LOC", "LOCATION"))
+
+
+class TestTheReviewerJudgesATermNotAnInstance:
+    """Owner, 2026-09-27: a released finding term is released at every occurrence, unless redacted there."""
+
+    def _seed(self, store: ProvStore, config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Three PERSON findings on "prince" in "the prince danced the prince smiled the prince"."""
+        words = ["the", "prince", "danced", "the", "prince", "smiled", "the", "prince"]
+        _seed_redact_store(store, tmp_path, words=words, findings=[("PERSON", _word_extent(i)) for i in (1, 4, 7)])
+        _stub_pii(monkeypatch, findings=[])
+        redact(store, "recording", config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
+
+    def test_one_quoted_occurrence_releases_every_one(
+        self, store: ProvStore, redact_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """r6's Cinderella card: "the prince danced" releases the other two princes as well."""
+        self._seed(store, redact_config, tmp_path, monkeypatch)
+        _annotate(store, [_release_entry("the prince danced", "PERSON")])
+        plan = _plan(store)
+        princes = [word for mask in plan.masks for word in mask.words]
+        assert [word.state for word in princes] == [UNMASKED_BY_REVIEWER] * 3
+        assert [(word.named, word.propagated) for word in princes] == [(True, False), (False, True), (False, True)]
+
+    def test_a_redact_entry_on_the_term_stops_it_spreading(
+        self, store: ProvStore, redact_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Where the reviewer also asks for the term hidden, only the quoted occurrence is released."""
+        self._seed(store, redact_config, tmp_path, monkeypatch)
+        _annotate(store, [_release_entry("the prince danced", "PERSON"), _redact_entry("prince smiled", "PERSON")])
+        plan = _plan(store)
+        states = [word.state for mask in plan.masks for word in mask.words]
+        assert states == [UNMASKED_BY_REVIEWER, MASKED, MASKED]

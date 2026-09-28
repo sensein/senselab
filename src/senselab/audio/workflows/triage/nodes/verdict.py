@@ -671,6 +671,8 @@ def verdict(
         gates=outcome.record(),
         flag_gates=[gate.record() for gate in outcome.flagging],
         policy=policy,
+        agreed_redactions=plan.agreed,
+        unplaced=[(finding.family, finding.state) for finding in plan.unplaced],
     )
 
     software = software_agent(store)

@@ -322,6 +322,7 @@ verdict:
   llm_human_review_categories: [CONDITION]  # owner, 2026-09-27: a reading proposing only these is routed to human review
   cohort_conditions: bridge2ai_voice_adult_2026-09-04  # data/cohort_conditions profile: which human-review conditions the study recruits for
   trim_protected_categories: [PERSON, NAME, LOCATION, LOC]  # owner, 2026-09-27: a marked word written as a proper noun is never trimmed
+  llm_second_speaker_flags: true       # owner, 2026-09-27: a reading that heard more than one speaker flags the recording for review
   # The branches for which finding the subject IS evaluating the task, so an out-of-family result
   # is a covariate on the detector rather than a reading of the recording. DDK only: a rapid
   # alternating train does not occur incidentally, where breath, phonation and lexical content all do.
