@@ -93,7 +93,7 @@ var SchemaAxes = (function () {
     route_speech: ['routed', 'declined', 'unavailable'],
     route_voice: ['routed', 'declined', 'unavailable'],
   };
-  GATES.forEach(function (g) { ORDERINGS['gate_' + g[0] + '_passed'] = ['true', 'undetermined', 'false']; });
+  GATES.forEach(function (g) { if (g[1]) ORDERINGS['gate_' + g[0] + '_passed'] = ['true', 'undetermined', 'false']; });
 
   function column(spec) {
     return {
@@ -270,21 +270,28 @@ var SchemaAxes = (function () {
     return out;
   }
 
-  // One column group per gate: the reading VERDICT read, the bound it resolved for this
-  // recording's task group, and what it made of the two. The reading is the axis; the bound
-  // rides along on `boundColumn` so the corpus view can draw it as a reference line.
+  // One column group per gate the fold applies: the reading VERDICT read, the bound it resolved for
+  // this recording's task group, and what it made of the two. The reading is the axis; the bound
+  // rides along on `boundColumn` so the corpus view can draw it as a reference line. A located gate
+  // (no reading) is applied per extent inside a reporting node, so it carries only its bound.
   function gateColumns() {
     var out = [];
     GATES.forEach(function (g) {
       var name = g[0], reading = g[1], op = g[2], unit = g[3];
       var asks = op === 'at_least' ? 'at least' : 'at most';
+      if (!reading) {
+        out.push(column({
+          name: 'gate_' + name + '_bound', kind: 'numeric', group: 'gate bound', unit: unit,
+          label: name + ' · bound (' + asks + ', located)', gate: name,
+          nullMeans: 'no layer named a bound for this recording’s task group, or it is unmeasured',
+        }));
+        return;
+      }
       out.push(column({
         name: 'gate_' + name, kind: 'numeric', group: 'gate reading', unit: unit,
-        label: name + ' · ' + (reading || 'located reading'),
+        label: name + ' · ' + reading,
         boundColumn: 'gate_' + name + '_bound', op: op, gate: name,
-        nullMeans: reading
-          ? 'this gate was not applied, or nothing carried ' + reading
-          : 'this gate is applied where its finding is located, not by VERDICT',
+        nullMeans: 'this gate was not applied, or nothing carried ' + reading,
       }));
       out.push(column({
         name: 'gate_' + name + '_bound', kind: 'numeric', group: 'gate bound', unit: unit,

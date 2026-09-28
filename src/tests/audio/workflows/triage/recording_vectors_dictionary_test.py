@@ -140,18 +140,17 @@ def test_the_gate_members_read_what_the_registry_says() -> None:
         assert spec["kind"] == ("located" if GATE_SPECS[name].reading is None else "applied"), name
 
 
-def test_a_located_gate_says_its_columns_are_always_null() -> None:
-    """A located gate is never applied by the fold, and its entry says so."""
+def test_a_located_gate_is_described_by_its_bound_alone() -> None:
+    """A located gate is never applied by the fold, so its one column is the resolved bound."""
     applied = {name for names in CONFORMANCE_GATES.values() for name in names} | set(FLAG_GATES)
     assert not {name for name, spec in GATE_SPECS.items() if spec.reading is None} & applied
     entries = _entries()
     for name, spec in GATE_SPECS.items():
         if spec.reading is None:
-            assert "located gate" in entries[f"gate_{name}"]["computation"], name
-            for column in (f"gate_{name}", f"gate_{name}_bound", f"gate_{name}_passed"):
-                assert entries[column]["null_means"] == "Always.", column
-                assert entries[column]["description"].startswith("Always null"), column
-                assert not any("gate_readings" in source for source in entries[column]["source"]), column
+            entry = entries[f"gate_{name}_bound"]
+            assert 'gates.bounds["' + name + '"]' in entry["computation"], name
+            assert "nodes/gates.py:load_gate_bounds" in entry["source"], name
+            assert f"gate_{name}" not in entries and f"gate_{name}_passed" not in entries, name
 
 
 def test_the_byte_codes_the_entries_state_are_the_writers() -> None:

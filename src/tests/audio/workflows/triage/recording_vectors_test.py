@@ -24,8 +24,21 @@ GATES: dict[str, Any] = {
     "node": "SPEECH",
     "group": "syllable_train",
     "family": "diadochokinesis-pa",
-    "bounds": {"repetitions_min": 1, "train_min_s": 1.0, "dominant_speaker_share_min": 0.9},
-    "layers": {"repetitions_min": "by_group", "train_min_s": "by_group"},
+    "bounds": {
+        "repetitions_min": 1,
+        "events_min": 1,
+        "items_min": 1,
+        "dominant_speaker_share_min": 0.9,
+        "train_min_s": 1.0,
+        "rate_prominence_min": None,
+    },
+    "layers": {
+        "repetitions_min": "by_group",
+        "events_min": "by_group",
+        "items_min": "by_group",
+        "train_min_s": "by_group",
+        "rate_prominence_min": "by_group",
+    },
     "applied": [
         {
             "gate": "repetitions_min",
@@ -39,9 +52,9 @@ GATES: dict[str, Any] = {
             "passed": True,
         },
         {
-            "gate": "train_min_s",
+            "gate": "events_min",
             "group": "syllable_train",
-            "reading": "train_duration_s",
+            "reading": "airway_events_found",
             "value": 0.0,
             "bound": 1.0,
             "layer": "by_group",
@@ -50,9 +63,9 @@ GATES: dict[str, Any] = {
             "passed": False,
         },
         {
-            "gate": "rate_prominence_min",
+            "gate": "items_min",
             "group": "syllable_train",
-            "reading": "rate_prominence",
+            "reading": "items_produced",
             "value": None,
             "bound": 2.0,
             "layer": "by_group",
@@ -76,7 +89,11 @@ GATES: dict[str, Any] = {
         }
     ],
 }
-"""A fold's gates: one passing, one failing on a genuine zero, one undetermined, one flagging."""
+"""A fold's gates: one passing, one failing on a genuine zero, one undetermined, one flagging.
+
+The located gates are in ``bounds`` only, as the fold records them: ``train_min_s`` resolved to a
+bound, ``rate_prominence_min`` named with its bound unmeasured, and ``score_min`` named by no layer.
+"""
 
 RESIDUAL: dict[str, Any] = {
     "name": "residual",
@@ -890,11 +907,31 @@ def test_the_gate_column_order_is_the_registry_the_graph_applies() -> None:
     assert rv.GATE_NAMES == GATE_KEYS
 
 
-def test_every_gate_has_a_reading_a_bound_and_an_outcome_column() -> None:
-    """Three columns per gate, and the schema carries no gate the registry does not name."""
+def test_the_located_gates_are_the_registrys_gates_with_no_reading() -> None:
+    """``LOCATED_GATE_NAMES`` is exactly the gates the fold can never apply."""
+    from senselab.audio.workflows.triage.nodes.gates import GATE_SPECS
+
+    assert set(rv.LOCATED_GATE_NAMES) == {name for name, spec in GATE_SPECS.items() if spec.reading is None}
+
+
+def test_an_applied_gate_has_three_columns_and_a_located_gate_only_a_bound() -> None:
+    """The fold applies and records an applied gate; a located gate is held to a bound only."""
     names = {field.name for field in rv.schema()}
-    for gate in rv.GATE_NAMES:
+    for gate in rv.APPLIED_GATE_NAMES:
         assert {f"gate_{gate}", f"gate_{gate}_bound", f"gate_{gate}_passed"} <= names
+    for gate in rv.LOCATED_GATE_NAMES:
+        assert f"gate_{gate}_bound" in names
+        assert f"gate_{gate}" not in names and f"gate_{gate}_passed" not in names
+
+
+def test_a_located_bound_is_the_folds_resolved_bound(one_row: dict[str, Any]) -> None:
+    """Each located ``_bound`` equals ``gates.bounds``: a resolved value, or null when unmeasured or unnamed."""
+    for gate in rv.LOCATED_GATE_NAMES:
+        expected = GATES["bounds"].get(gate)
+        assert one_row[f"gate_{gate}_bound"] == (None if expected is None else float(expected)), gate
+    assert one_row["gate_train_min_s_bound"] == 1.0
+    assert one_row["gate_rate_prominence_min_bound"] is None
+    assert one_row["gate_score_min_bound"] is None
 
 
 def test_an_applied_gate_carries_its_reading_its_bound_and_its_outcome(one_row: dict[str, Any]) -> None:
@@ -906,22 +943,22 @@ def test_an_applied_gate_carries_its_reading_its_bound_and_its_outcome(one_row: 
 
 def test_a_gate_that_failed_on_a_genuine_zero_reads_zero_not_null(one_row: dict[str, Any]) -> None:
     """A reading of 0.0 is a measured value; only an absent reading is null."""
-    assert one_row["gate_train_min_s"] == 0.0
-    assert one_row["gate_train_min_s_passed"] == "false"
+    assert one_row["gate_events_min"] == 0.0
+    assert one_row["gate_events_min_passed"] == "false"
 
 
 def test_a_gate_whose_reading_was_absent_is_undetermined_with_a_null_reading(one_row: dict[str, Any]) -> None:
     """Null reading, real bound, and an outcome that is neither true nor false."""
-    assert one_row["gate_rate_prominence_min"] is None
-    assert one_row["gate_rate_prominence_min_bound"] == 2.0
-    assert one_row["gate_rate_prominence_min_passed"] == "undetermined"
+    assert one_row["gate_items_min"] is None
+    assert one_row["gate_items_min_bound"] == 2.0
+    assert one_row["gate_items_min_passed"] == "undetermined"
 
 
 def test_a_gate_the_fold_did_not_apply_is_null_in_all_three_columns(one_row: dict[str, Any]) -> None:
     """A gate no layer named for this group carries no reading, no bound and no outcome."""
-    assert one_row.get("gate_items_min") is None
-    assert one_row.get("gate_items_min_bound") is None
-    assert one_row.get("gate_items_min_passed") is None
+    assert one_row.get("gate_omissions_max") is None
+    assert one_row.get("gate_omissions_max_bound") is None
+    assert one_row.get("gate_omissions_max_passed") is None
 
 
 def test_a_flagging_gate_lands_in_the_same_columns_as_a_conformance_gate(one_row: dict[str, Any]) -> None:
@@ -941,7 +978,7 @@ def test_the_fold_summarises_which_gates_it_applied_and_which_refused(one_row: d
     assert one_row["gate_flagging_n"] == 1
     assert one_row["gate_failed_n"] == 2
     assert one_row["gate_undetermined_n"] == 1
-    assert one_row["gate_failed_names"] == ["dominant_speaker_share_min", "train_min_s"]
+    assert one_row["gate_failed_names"] == ["dominant_speaker_share_min", "events_min"]
 
 
 def test_a_recording_whose_fold_resolved_no_group_carries_no_gates(tmp_path: Path) -> None:

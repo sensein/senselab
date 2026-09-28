@@ -9,7 +9,7 @@
 > stay counts and categories only.
 
 Produced by `senselab.audio.workflows.triage.recording_vectors` and
-`scripts/triage_recording_vectors.py`. **One row per recording.** `schema_version` is `9`; any
+`scripts/triage_recording_vectors.py`. **One row per recording.** `schema_version` is `10`; any
 change to a column, a byte layout or a categorical column's controlled vocabulary bumps it and
 changes this file with it. The same number is in
 the parquet's own key-value metadata, under `senselab.recording_vectors.schema_version`, so a
@@ -36,6 +36,7 @@ What each bump added:
 | **7** | `residue_words_n`, `residue_method`, `residue_content`, `scan_ran`, `scanned_by`; `pii_findings_n`, `pii_marks` and `pii_category` became null wherever no detector ran |
 | **8** | the `pii_ledger` counts: `masks_n`, `masks_final_n`, a count and a category list per word state, `condition_review` |
 | **9** | `task_words_n`, `condition_review_kind`, `cohort_condition_n`, `other_condition_n`, `cohort_diagnoses` |
+| **10** | the eight located gates lose their reading and `_passed` columns, which could never carry a value; their `_bound` columns now carry the fold's resolved `gates.bounds` (§6) |
 
 The data dictionary in the file's metadata was added without a bump: it adds no column, changes no
 layout and no vocabulary, and a reader that ignores the key reads the file exactly as before.
@@ -106,7 +107,7 @@ Owner-directed: `participant`, `task`, `verdict` are the first three columns, in
 | `duration_conditioned_s` | double | seconds, the conditioned stream | PREPROCESS wrote no stream |
 | `time_scale_s` | double | seconds — **the denominator for every `uint16` time** | neither duration is known |
 | `sampling_rate` | int32 | Hz, of the conditioned stream | no conditioned stream |
-| `schema_version` | int32 | `9` | never |
+| `schema_version` | int32 | `10` | never |
 | `malformed_store_lines` | int32 | lines of `store.jsonl` that did not parse; `0` is the normal value | never |
 | `flags_n` | int32 | how many node verdicts in the fold carry outcome `flag`, `fail` or `discard` — the same filter `report.py` calls a flag | never |
 | `flag_nodes` | list\<string\> | which nodes those were, e.g. `["SPEECH"]` | never; `[]` when none |
@@ -338,7 +339,7 @@ why the bound is stored per row rather than looked up from the config at read ti
 by a test, so a gate added to the registry fails that test until this schema is bumped with it.
 The design is `specs/20260921-gates-in-verdict/design.md`.
 
-Three columns per gate, 21 gates, 63 columns:
+Three columns for each of the 13 gates the fold applies, and one for each of the 8 located gates — 47 columns:
 
 | column | type | what it carries |
 | --- | --- | --- |
@@ -394,11 +395,12 @@ The 21, in column order, with the reading each is read against and the direction
 
 A gate marked *located* produces a finding that carries an extent — a rejected carrier, a located
 deviation, a per-event count — and is therefore applied inside the reporting node that knows where
-the extent is, against the same bound this table names. **It does not reach these columns**: no
-located gate is a conformance gate of any pattern or a flag gate, and `gate_readings` skips a gate
-with no reading, so the fold never records one and all three of its columns are always null. Where
-such a gate refused something, the finding it produced is in the store (a `carrier_rejected`
-measurement names the gate, for example), not here.
+the extent is, against the same bound this table names. The fold never applies one, so a located
+gate has **only its `gate_<name>_bound` column**, read from the fold's `gates.bounds` — the table
+`load_gate_bounds` resolved for the recording's group and family — and null where no layer names it
+or the naming layer leaves it unmeasured. Before `schema_version` 10 it also had a reading and a
+`_passed` column, both always null. Where such a gate refused something, the finding it produced is
+in the store (a `carrier_rejected` measurement names the gate, for example), not here.
 
 Beside them, the fold's own summary, once per row:
 

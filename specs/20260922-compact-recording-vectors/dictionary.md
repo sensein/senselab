@@ -21,7 +21,8 @@ each variable was computed. verify in code. make this info available in the parq
   - every closed vocabulary listed under `values` equals the constants the code declares: `Triage`,
     `Release`, the route states, the residue methods, the condition kinds, REVIEW's statuses, and
     the reviewer's judgment states;
-  - no located gate is a conformance or flag gate, which is why its columns are always null.
+  - no located gate is a conformance or flag gate, which is why, since `schema_version` 10, it carries
+    only its bound, read from the fold's `gates.bounds`.
 - **The tests check that names resolve, not that prose is right.** Each `computation` was written by
   reading the cited code at `e0eadb37`. A change to what a node computes can leave its entry wrong
   while every test passes, so an edit to a writer should be read against its entry.
