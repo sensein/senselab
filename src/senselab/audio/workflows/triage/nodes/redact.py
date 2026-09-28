@@ -51,6 +51,7 @@ from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.nodes.branches import branch_params, declared_carrier, expected_names
 from senselab.audio.workflows.triage.nodes.common import (
     NodeResult,
+    cache_attributes,
     consensus_words,
     find_measurement,
     find_verdict,
@@ -75,6 +76,7 @@ from senselab.audio.workflows.triage.vocabulary import (
 )
 from senselab.text.tasks.pii_detection.api import scan_for_pii
 from senselab.utils.prov_store import Entity, ProvStore
+from senselab.utils.tasks.cached_inference import annotate_result_origin
 
 NODE = "REDACT"
 
@@ -122,6 +124,8 @@ class _Verification:
         missing: Detectors ``pii.required_detectors`` names that the verification re-scan never
             attempted. Reported in the verdict separately from the planning scan's own
             ``scan_failed`` and ``scan_missing``.
+        cache: The result-cache use of the re-scan (:func:`cache_attributes`), None when it did not
+            reach the detectors.
     """
 
     verified: bool
@@ -129,6 +133,7 @@ class _Verification:
     scan_ran: bool
     failed: list[str]
     missing: list[str]
+    cache: dict[str, Any] | None = None
 
 
 def padding_ms(config: TriageConfig) -> int:
@@ -280,13 +285,14 @@ def _verify(records: list[dict[str, Any]], required: list[str]) -> _Verification
     """
     scan = scan_for_pii(_verification_text(records))
     scan = scan[0] if isinstance(scan, list) else scan
+    cache = cache_attributes(scan.cache)
     missing = sorted(set(required) - set(scan.detectors_used) - set(scan.failures))
     failed = sorted(scan.failures)
     if failed or not scan.detectors_used or missing:
-        return _Verification(verified=False, survived=[], scan_ran=False, failed=failed, missing=missing)
+        return _Verification(verified=False, survived=[], scan_ran=False, failed=failed, missing=missing, cache=cache)
     masks = _mask_tokens(records)
     survived = sorted({span.category for span in scan.spans if not _is_mask(str(span.text or ""), masks)})
-    return _Verification(verified=not survived, survived=survived, scan_ran=True, failed=[], missing=[])
+    return _Verification(verified=not survived, survived=survived, scan_ran=True, failed=[], missing=[], cache=cache)
 
 
 def _overlaps(a: tuple[float, float], b: tuple[float, float]) -> bool:
@@ -905,6 +911,10 @@ def redact(
 
     verify_act = store.activity(node=NODE, step="verify", parameters={"required_detectors": required_detectors})
     store.was_associated_with(verify_act, software)
+    if checked.cache is not None and not checked.cache["hit"]:
+        annotate_result_origin(
+            checked.cache["key"], {"run": store.run_id, "activity": verify_act, "node": NODE, "step": "verify"}
+        )
     if consensus is not None:
         store.used(verify_act, consensus.id)
     for word in words:
@@ -978,6 +988,7 @@ def redact(
             "scan_missing": scan_missing,
             "verify_failed": checked.failed,
             "verify_missing": checked.missing,
+            "verify_cache": checked.cache,
             "required_detectors": required_detectors,
             "unplaced_words_n": unplaced_n,
             "audio_check": _AUDIO_CHECK,

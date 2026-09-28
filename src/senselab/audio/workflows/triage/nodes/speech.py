@@ -90,6 +90,7 @@ from senselab.audio.workflows.triage.nodes.branches import (
 from senselab.audio.workflows.triage.nodes.common import (
     BranchResult,
     bound_reading,
+    cache_attributes,
     clamp_extent,
     consensus_words,
     find_measurement,
@@ -125,6 +126,7 @@ from senselab.audio.workflows.triage.vocabulary import TASK
 from senselab.text.tasks.pii_detection.api import PiiScan, scan_for_pii
 from senselab.utils.data_structures import HFModel, SpeechBrainModel
 from senselab.utils.prov_store import Entity, ProvStore
+from senselab.utils.tasks.cached_inference import annotate_result_origin
 
 NODE = "SPEECH"
 TASK_EXTENT_ROLE = "task_extent"
@@ -1996,10 +1998,17 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
 
     separated_ids: list[str] = []
     if separated and mixture_id is not None:
+        reuse = dict(separated[0].metadata.get("clearvoice", {}).get("cache") or {})
         separate_act = store.activity(
             node=NODE,
             step="separate",
-            parameters={"backend": str(backend), "signal": separation_signal, "extent": list(stream_span)},
+            parameters={
+                "backend": str(backend),
+                "signal": separation_signal,
+                "extent": list(stream_span),
+                "cache_key": reuse.get("key"),
+                "cache_hit": bool(reuse.get("hit")),
+            },
         )
         store.was_associated_with(separate_act, software)
         store.used(separate_act, mixture_id)
@@ -2022,6 +2031,7 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
                     "separation_model": meta.get("model"),
                     "separation_commit": meta.get("commit"),
                     "write_gain": written.gain,
+                    "cache": cache_attributes(meta.get("cache")),
                 },
             )
             store.was_generated_by(stream_id, separate_act)
@@ -2029,6 +2039,11 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
             store.was_derived_from(stream_id, mixture_id)
             view.append(stream_id)
             separated_ids.append(stream_id)
+        if reuse.get("key") and not reuse.get("hit"):
+            annotate_result_origin(
+                str(reuse["key"]),
+                {"run": store.run_id, "activity": separate_act, "node": NODE, "step": "separate"},
+            )
 
     # Step 5b — the separated streams read back: which source holds which frame of the task
     # extent, which diarized label each source is, and the run one source holds alone. Every
@@ -2421,12 +2436,22 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
             "failed": sorted(failures),
             "missing": missing,
             "unplaced_findings": unplaced_findings,
+            "cache": [
+                {"text": name, **(cache_attributes(scan.cache) or {})}
+                for (name, _, _, _), scan in zip(haystacks, scans)
+                if scan.cache
+            ],
             **residue_attributes,
         },
     )
     store.was_generated_by(scan_id, pii_act)
     store.was_attributed_to(scan_id, software)
     view.append(scan_id)
+    for scan in scans:
+        if scan.cache.get("key") and not scan.cache.get("hit"):
+            annotate_result_origin(
+                str(scan.cache["key"]), {"run": store.run_id, "activity": pii_act, "node": NODE, "step": "pii"}
+            )
 
     # Step 8 — quality: SQUIM on plain, disruptions on the original recording.
     quality = store.activity(
