@@ -49,6 +49,7 @@ from senselab.audio.workflows.triage.vocabulary import (
     FoldPolicy,
     NodeVerdict,
     Outcome,
+    RedactionEvidence,
     Release,
     Triage,
     fold_file_verdict,
@@ -140,6 +141,12 @@ def _fold(
         route_state=ROUTED,
         declared_family=declared_family,
         policy=policy,
+        # A REDACT verdict concludes over a plan: one planned mask, as the real node leaves.
+        redaction=(
+            RedactionEvidence(findings_n=1, masks_n=1, masks_final_n=1)
+            if any(verdict.node == "REDACT" for verdict in node_verdicts)
+            else None
+        ),
     )
 
 

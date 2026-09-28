@@ -14,7 +14,7 @@ from senselab.audio.workflows.triage.nodes import routing as routing_module
 from senselab.audio.workflows.triage.nodes import verdict as verdict_module
 from senselab.audio.workflows.triage.nodes.branches import BRANCH_FAMILY
 from senselab.audio.workflows.triage.nodes.common import find_measurement, software_agent, write_report, write_verdict
-from senselab.audio.workflows.triage.nodes.redact import PII_LEDGER
+from senselab.audio.workflows.triage.nodes.redact import PII_LEDGER, REDACTION_SPAN
 from senselab.audio.workflows.triage.nodes.routing import routing
 from senselab.audio.workflows.triage.routing_analysis.ruleset import GateOutcome, RouteEvaluation, RouteState
 from senselab.audio.workflows.triage.run import GRAPH_ORDER
@@ -125,6 +125,7 @@ def make_verdict_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Calla
         scanned: bool | None = None,
         pii_n: int = 0,
         redact_detail: Mapping[str, Any] | None = None,
+        planned_mask: bool = True,
     ) -> ProvStore:
         store = ProvStore(run_id="verdict-test")
         agent = software_agent(store)
@@ -163,6 +164,12 @@ def make_verdict_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Calla
                 if node == "SPEECH":
                     _write_redaction_evidence(store, activity, agent, scanned=scanned, pii_n=pii_n)
                 continue
+            if node == "REDACT" and planned_mask:
+                # REDACT concluded over a plan, as the real node does: one planned mask.
+                mask = store.entity(
+                    prov_type="span", extent=(0.1, 0.2), attributes={"name": REDACTION_SPAN, "category": "PERSON"}
+                )
+                store.was_generated_by(mask, activity)
             write_verdict(
                 store,
                 activity,
@@ -871,7 +878,9 @@ class TestTheRedactionReviewerAnnotatesAndThisNodeDecides:
             (["alice", "brooklyn"], (Release.WITHOUT_REDACTION, REVIEWER_UNMASKED_ALL)),
             ([], (Release.WITH_REDACTION, None)),
         ):
-            store = make_verdict_store(concluded=[*BASE, ("REDACT", Outcome.PASS, None)], routed=ROUTED_PAIR, pii_n=2)
+            store = make_verdict_store(
+                concluded=[*BASE, ("REDACT", Outcome.PASS, None)], routed=ROUTED_PAIR, pii_n=2, planned_mask=False
+            )
             self._mask(store, ["i", "met", "alice", "in", "brooklyn"], [2, 4])
             _annotate(
                 store,
@@ -888,7 +897,9 @@ class TestTheRedactionReviewerAnnotatesAndThisNodeDecides:
     ) -> None:
         """One ``pii_ledger`` per fold, carrying the release, every mask's words and their states."""
         config = _policy_config(tmp_path, "verdict:\n  llm_redaction_withholds: true\n  llm_reset_redactions: true\n")
-        store = make_verdict_store(concluded=[*BASE, ("REDACT", Outcome.PASS, None)], routed=ROUTED_PAIR, pii_n=2)
+        store = make_verdict_store(
+            concluded=[*BASE, ("REDACT", Outcome.PASS, None)], routed=ROUTED_PAIR, pii_n=2, planned_mask=False
+        )
         self._mask(store, ["i", "met", "alice", "in", "brooklyn"], [2, 4])
         _annotate(
             store,

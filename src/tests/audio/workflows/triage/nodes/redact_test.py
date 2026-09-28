@@ -21,6 +21,7 @@ from senselab.audio.data_structures import Audio
 from senselab.audio.data_structures.audio_hints import AudioHints, ExpectedSpeech
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.nodes import redact as redact_module
+from senselab.audio.workflows.triage.nodes import verdict as verdict_module
 from senselab.audio.workflows.triage.nodes.common import resolve_stream
 from senselab.audio.workflows.triage.nodes.redact import (
     MASK_PARTLY_UNMASKED,
@@ -41,6 +42,7 @@ from senselab.audio.workflows.triage.nodes.redact import (
     settle_release,
 )
 from senselab.audio.workflows.triage.vocabulary import (
+    FINDINGS_ARE_TASK_CONTENT,
     REDACTION_LLM_ANNOTATION,
     REVIEWER_CLEARED_RESCAN,
     REVIEWER_UNMASKED_SOME,
@@ -1751,6 +1753,30 @@ class TestTheStimulusAccountsForACandidate:
         assert result.verdict.outcome is Outcome.PASS
         assert result.artifacts["transcript"].read_text().split() == ["form", "a", "rainbow"]
         assert _verdict_entity(store, "REDACT").attributes["redactions_n"] == 0
+
+    def test_a_pass_that_masked_nothing_releases_the_original_and_no_copy(
+        self,
+        store: ProvStore,
+        redact_config: TriageConfig,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Every finding exempt: the fold releases the original, and REDACT's identical copy goes.
+
+        Measured on r6: 539 recordings, story-recall and productive-vocabulary above all, were
+        released "with redaction" under a copy byte-for-byte the original.
+        """
+        _seed_redact_store(store, tmp_path, words=["form", "a", "rainbow"], findings=[("LOCATION", (2.0, 2.5))])
+        _stub_pii(monkeypatch, findings=[("LOCATION", "rainbow")])
+        redact(store, "recording", redact_config, _hint(RAINBOW), run_dir=tmp_path, artifacts_dir=_release(tmp_path))
+        assert all((_release(tmp_path) / name).exists() for name in RELEASED_FILES)
+        result = verdict_module.verdict(store, None, redact_config, run_dir=tmp_path)
+        folded = result.file_verdict
+        assert (folded.release.value, folded.release_ground) == ("release_without_redaction", FINDINGS_ARE_TASK_CONTENT)
+        ledger = store.get_entity(result.ledger_entity_id)
+        assert ledger.attributes["release_ground"] == FINDINGS_ARE_TASK_CONTENT
+        assert _settle(store, folded.release.value, folded.release_ground, tmp_path) == {}
+        assert not any((_release(tmp_path) / name).exists() for name in RELEASED_FILES)
 
     def test_the_suppression_is_recorded_with_what_accounted_for_it(
         self,

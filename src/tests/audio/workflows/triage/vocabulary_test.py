@@ -15,6 +15,7 @@ from senselab.audio.workflows.triage.vocabulary import (
     BAD_MAP_VALUES,
     CRITICAL_ABSENCE,
     DECLINED,
+    FINDINGS_ARE_TASK_CONTENT,
     MASKS_TRIMMED_TO_CONTENT,
     NO_CONTENT_MASKED,
     NO_LEXICAL_ITEM_PRODUCED,
@@ -27,6 +28,7 @@ from senselab.audio.workflows.triage.vocabulary import (
     RELEASE_WITHHELD_GROUNDS,
     RELEASE_WITHOUT_REDACTION_GROUNDS,
     REVIEWER_CLEARED_RESCAN,
+    REVIEWER_CLEARED_UNMASKED,
     REVIEWER_NEEDS_HUMAN_REVIEW_COHORT,
     REVIEWER_NEEDS_HUMAN_REVIEW_OTHER,
     REVIEWER_PROPOSED_REDACTION,
@@ -142,6 +144,7 @@ def _with_redact(redact: Outcome, *, speech: bool | None = None, speech_route: s
         ran={},
         hint_claims={},
         route_state=ROUTED,
+        redaction=RedactionEvidence(findings_n=1, masks_n=1, masks_final_n=1),
     )
 
 
@@ -822,7 +825,8 @@ class TestReleaseIsDecidedFromEvidenceNotFromRedactsAbsence:
     def test_the_four_cleared_grounds_name_the_same_state(self) -> None:
         """One state, four evidence grounds: a reading that cleared the recording is not four answers.
 
-        The fifth ground in the group is the reviewer's, which only a reading reaches.
+        The rest of the group is reached only through REDACT's masks: the reviewer's, the trim's, and
+        a plan that masked nothing.
         """
         cleared = [
             _without_redact(RedactionEvidence(lexical_words_n=42, scanned=True), speech=RunState.COMPLETED),
@@ -834,6 +838,8 @@ class TestReleaseIsDecidedFromEvidenceNotFromRedactsAbsence:
         assert {folded.release_ground for folded in cleared} == set(RELEASE_WITHOUT_REDACTION_GROUNDS) - {
             REVIEWER_UNMASKED_ALL,
             NO_CONTENT_MASKED,
+            FINDINGS_ARE_TASK_CONTENT,
+            REVIEWER_CLEARED_UNMASKED,
         }
 
     def test_a_speech_that_errored_is_unassessed(self) -> None:
@@ -939,7 +945,7 @@ class TestTheReleaseAxisNamesWhichArtefactMayBeHandedOn:
         """Without a clearing reading, a REDACT fail stays withheld. ``design.md`` §5."""
         passed = [NodeVerdict("REDACT", Outcome.PASS, None, "the scan concluded")]
         failed = [NodeVerdict("REDACT", Outcome.FAIL, None, "the scan concluded")]
-        evidence = RedactionEvidence(rescan_survivors=("DATE_TIME",))
+        evidence = RedactionEvidence(rescan_survivors=("DATE_TIME",), masks_n=1, masks_final_n=1)
         ran: dict[str, RunState] = {}
         assert _release_from(passed, evidence, ran)[0] is Release.WITH_REDACTION
         assert (
@@ -1027,7 +1033,9 @@ class TestAReviewerReadingClearsAReScanFail:
 
     def test_a_clean_reading_releases_the_redacted_copy_under_its_own_ground(self) -> None:
         """The redacted copy, never the original, and a ground no other path carries."""
-        evidence = RedactionEvidence(lexical_words_n=40, scanned=True, findings_n=1, rescan_survivors=("DATE_TIME",))
+        evidence = RedactionEvidence(
+            lexical_words_n=40, scanned=True, findings_n=1, rescan_survivors=("DATE_TIME",), masks_n=1, masks_final_n=1
+        )
         assert _release_from(self._FAILED, evidence, {}, reviewer_clears=True) == (
             Release.WITH_REDACTION,
             REVIEWER_CLEARED_RESCAN,
@@ -1060,7 +1068,12 @@ class TestAReviewerReadingClearsAReScanFail:
             hint_claims={},
             route_state=ROUTED,
             redaction=RedactionEvidence(
-                lexical_words_n=42, scanned=True, findings_n=1, rescan_survivors=("DATE_TIME",)
+                lexical_words_n=42,
+                scanned=True,
+                findings_n=1,
+                rescan_survivors=("DATE_TIME",),
+                masks_n=1,
+                masks_final_n=1,
             ),
             llm_redaction=annotation,
             policy=policy,
@@ -1153,6 +1166,35 @@ class TestTheMasksThatStandDecideTheRelease:
             REVIEWER_UNMASKED_ALL,
         )
         assert _release_from(self._FAILED, evidence, {}) == (Release.WITHHELD, None)
+
+    def test_a_pass_that_planned_no_mask_releases_the_original(self) -> None:
+        """REDACT exempted every finding as declared task content: no copy masks anything.
+
+        Measured on r6: 539 recordings released "with redaction" whose copy was byte-for-byte the
+        original, story-recall and productive-vocabulary above all.
+        """
+        exempt_only = RedactionEvidence(lexical_words_n=40, scanned=True, findings_n=1, masks_n=0, masks_final_n=0)
+        assert _release_from(self._PASSED, exempt_only, {}) == (Release.WITHOUT_REDACTION, FINDINGS_ARE_TASK_CONTENT)
+
+    def test_a_cleared_rescan_fail_with_no_mask_releases_the_original(self) -> None:
+        """The reviewer clears a fail REDACT planned no mask over: the original, under its own ground."""
+        unmasked = RedactionEvidence(
+            lexical_words_n=40, scanned=True, findings_n=1, rescan_survivors=("PERSON",), masks_n=0, masks_final_n=0
+        )
+        assert _release_from(self._FAILED, unmasked, {}, reviewer_clears=True) == (
+            Release.WITHOUT_REDACTION,
+            REVIEWER_CLEARED_UNMASKED,
+        )
+
+    def test_a_mask_over_no_word_still_masks_the_audio(self) -> None:
+        """A standing mask that placed on no transcript word keeps the copy: its audio is still masked."""
+        kept = RedactionEvidence(
+            lexical_words_n=40, scanned=True, findings_n=1, rescan_survivors=("PERSON",), masks_n=1, masks_final_n=1
+        )
+        assert _release_from(self._FAILED, kept, {}, reviewer_clears=True) == (
+            Release.WITH_REDACTION,
+            REVIEWER_CLEARED_RESCAN,
+        )
 
     def test_standing_masks_never_move_a_withholding_or_an_unassessed_recording(self) -> None:
         """The word-level rule only thins a released copy; it releases nothing the evidence withheld."""
