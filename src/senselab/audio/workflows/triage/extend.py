@@ -69,7 +69,7 @@ from senselab.audio.workflows.triage.nodes.quality import (
     clip_spans,
     quality,
 )
-from senselab.audio.workflows.triage.nodes.redact import PII_LEDGER, settle_release
+from senselab.audio.workflows.triage.nodes.redact import settle_release
 from senselab.audio.workflows.triage.nodes.report import report
 from senselab.audio.workflows.triage.nodes.taxonomy import NODE as TAXONOMY_NODE
 from senselab.audio.workflows.triage.nodes.taxonomy import _write_consensus_taxonomy
@@ -745,15 +745,12 @@ def refold_verdict(
     software = software_agent(store)
     held = live_decisions(store, nodes=(VERDICT_NODE,))
     outcomes: dict[str, NodeOutcome] = {}
-    _attempt(outcomes, VERDICT_NODE, lambda: verdict(store, None, config, hint, run_dir=run_dir))
-    folded = find_verdict(store, VERDICT_NODE)
-    # Fold first, then retire, and only what the new decision did not itself take. The store is
-    # content-addressed, so a fold that concludes what already stands mints the *same* entity:
-    # retiring first invalidates it and the re-fold hands it straight back, leaving the recording
-    # with no live verdict at all. Measured -- a second pass over one run left 0 live and 2 retired
-    # -- and a preempted slice is re-run by definition, so this is the ordinary path, not an edge.
-    ledger = find_measurement(store, PII_LEDGER)
-    fresh = {entity.id for entity in (folded, ledger) if entity is not None}
+    result = _attempt(outcomes, VERDICT_NODE, lambda: verdict(store, None, config, hint, run_dir=run_dir))
+    # Fold first, then retire everything the fold did not itself write. The fresh ids are the ones
+    # the fold returned, never the store's latest by position: a conclusion equal to a retired one
+    # is re-minted, and a positional lookup then hands back the decision it superseded.
+    fresh = set() if result is None else {result.verdict_entity_id, result.ledger_entity_id}
+    folded = None if result is None else store.get_entity(result.verdict_entity_id)
     retired = retire_decisions(store, [entity_id for entity_id in held if entity_id not in fresh], software=software)
     _settle(store, config, run_dir=run_dir, artifacts_dir=artifacts_dir)
     summary = _attempt_artifacts(outcomes, REPORT_NODE, lambda: report(store, summary_dir, config, run_dir=run_dir))

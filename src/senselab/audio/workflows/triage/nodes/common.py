@@ -154,6 +154,43 @@ def capture_environments(store: ProvStore, used_venvs: dict[str, Path]) -> list[
     return ids
 
 
+REMINT = "remint"
+"""The attribute that tells a re-minted conclusion apart from an identical one already retired."""
+
+
+def mint_live(
+    store: ProvStore, *, prov_type: PROV_TYPE, extent: tuple[float, float] | None, attributes: dict[str, Any]
+) -> str:
+    """Add an entity and return a live one carrying these attributes.
+
+    Ids are content-addressed, so a conclusion identical to one a later decision retired would
+    otherwise come back as that retired entity. Where the plain id is invalidated, the same content
+    is minted again under ``remint`` = 1, 2, ... until the id is live. An identical conclusion over
+    a live entity still returns that entity, so a repeated fold settles.
+
+    Args:
+        store: The provenance store.
+        prov_type: What sort of thing it is.
+        extent: ``(start, end)`` in seconds, or None.
+        attributes: Whatever describes it; must not carry ``remint``.
+
+    Returns:
+        The id of a live entity with these attributes, ``remint`` aside.
+
+    Raises:
+        ValueError: If ``attributes`` already carries ``remint``.
+    """
+    if REMINT in attributes:
+        raise ValueError(f"attributes must not carry the reserved key {REMINT!r}")
+    count = 0
+    while True:
+        candidate = attributes if count == 0 else {**attributes, REMINT: count}
+        entity_id = store.entity(prov_type=prov_type, extent=extent, attributes=candidate)
+        if not store.is_invalidated(entity_id):
+            return entity_id
+        count += 1
+
+
 def write_verdict(
     store: ProvStore,
     activity_id: str,
@@ -184,10 +221,11 @@ def write_verdict(
         ValueError: If ``detail`` carries any of the reserved keys ``node``, ``outcome``, ``kind``
             or ``why``.
     """
-    shadowed = detail.keys() & {"node", "outcome", "kind", "why"}
+    shadowed = detail.keys() & {"node", "outcome", "kind", "why", REMINT}
     if shadowed:
         raise ValueError(f"detail must not shadow the reserved verdict keys: {sorted(shadowed)}")
-    entity_id = store.entity(
+    entity_id = mint_live(
+        store,
         prov_type="verdict",
         extent=None,
         attributes={"node": node, "outcome": outcome.value, "kind": kind, "why": why, **detail},
