@@ -168,6 +168,22 @@ class TestTheWorkedExampleIsAssertedOnBothSides:
 # ---------------------------------------------------------------- the built page
 
 
+class TestTheDictionaryReachesThePage:
+    """The page reads the data dictionary from the footer key the writer puts it under."""
+
+    def test_the_footer_key_is_the_writers(self) -> None:
+        """The key the decoder looks for is the one ``schema()`` writes the dictionary under."""
+        match = re.search(r"var DICTIONARY_KEY = '([^']+)';", DECODE_JS)
+        assert match is not None, "DICTIONARY_KEY is not declared in decode.js"
+        assert match.group(1).encode() == rv.DICTIONARY_KEY
+
+    def test_the_page_offers_the_dictionary_panel_and_the_per_column_affordance(self) -> None:
+        """The panel, its search, the pop-up, and the info button the columns carry are in the page."""
+        page = viewer.BUILT_PAGE.read_text(encoding="utf-8")
+        for needle in ('id="dict-open"', 'id="dict-panel"', 'id="dict-search"', 'id="dict-pop"', "infoButton("):
+            assert needle in page, needle
+
+
 class TestThePageIsWhatItsPartsSay:
     """The committed page is a build output; a stale one is a page that decodes yesterday."""
 
@@ -321,6 +337,21 @@ def test_the_javascript_suite_passes(suite: str) -> None:
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert re.search(r"^# fail 0$", result.stdout, re.M), result.stdout
+
+
+@pytest.mark.skipif(_node() is None, reason="node is not on PATH; the JavaScript suites cannot run")
+def test_every_script_in_the_built_page_parses(tmp_path: Path) -> None:
+    """``node --check`` over each inline script: a substring test cannot see a syntax error."""
+    node = _node()
+    assert node is not None
+    page = viewer.BUILT_PAGE.read_text(encoding="utf-8")
+    scripts = re.findall(r"<script>(.*?)</script>", page, flags=re.DOTALL)
+    assert scripts
+    for index, body in enumerate(scripts):
+        path = tmp_path / f"part{index}.js"
+        path.write_text(body, encoding="utf-8")
+        result = subprocess.run([node, "--check", str(path)], capture_output=True, text=True, timeout=60)
+        assert result.returncode == 0, f"script {index} does not parse:\n{result.stderr}"
 
 
 @pytest.mark.skipif(_node() is None, reason="node is not on PATH; the JavaScript suites cannot run")

@@ -14,7 +14,7 @@
 
 <div id="landing">
   <h1>recording vectors</h1>
-  <p>Two views over <code>recording_vectors.parquet</code>, schema_version 5: a parallel-coordinate
+  <p>Two views over <code>recording_vectors.parquet</code>, schema_version 9: a parallel-coordinate
   view of the corpus where each line is one recording, and a recording view drawn from that
   recording's compact vectors.</p>
   <div class="caution">
@@ -37,6 +37,7 @@
   <div class="topbar">
     <h1>recording vectors</h1>
     <span id="file-info"></span>
+    <button id="dict-open" class="dict-open" type="button" disabled>data dictionary</button>
     <span class="grow"></span>
     <span id="status-2" class="status"></span>
   </div>
@@ -51,6 +52,20 @@
     <button id="clear-brushes">clear brushes</button>
     <button id="reset-axes">reset axes</button>
     <span id="legend"></span>
+  </div>
+
+  <div id="dict-panel" hidden>
+    <div class="dict-bar">
+      <h2>data dictionary</h2>
+      <input id="dict-search" type="search" placeholder="find a column, a node, a function, a word">
+      <span id="dict-count"></span>
+      <span class="grow"></span>
+      <button id="dict-close" class="icon-btn" type="button" title="close">✕</button>
+    </div>
+    <p class="dict-note">Read from this file's own footer: what each column is, how it was computed,
+    the code that produces it, and what null means. The <b>i</b> beside a column's name anywhere on
+    the page opens the same entry.</p>
+    <div id="dict-list"></div>
   </div>
 
   <div class="plotrow">
@@ -133,6 +148,8 @@
   </div>
 
 </div>
+
+<div id="dict-pop" hidden></div>
 
 <script>
 /*@INLINE:vendor/hyparquet-1.31.1-fzstd-0.1.1.bundle.js@*/
