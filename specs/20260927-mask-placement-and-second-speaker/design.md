@@ -178,3 +178,50 @@ NAME 394, AGE 213 ("ninety-three"), LOCATION 50.
   reading), the review manifest, a full GPU review of every recording with residue (about 15,200;
   the owner asked for every reading to come from one prompt), re-fold, parquet, page. Staged under
   `/orcd/scratch/bcs/002/satra/triage_r7_20260927/`, with `RUN.md`.
+
+## 9. SPEECH places each finding on its own words (replay set)
+
+Owner, 2026-09-27: fix the placement in SPEECH rather than compensate in the fold. `nodes/speech.py`
+step 7 matched a finding's text to the scanned tokens by exact normalised token equality, placed a
+finding that matched nowhere over the whole transcript, and covered every word between the first and
+last matched positions, which bridged words the scan never read. It now (`finding_placement.py`):
+
+- matches the finding's text to whole scanned tokens by their joined keys -- edge punctuation, a
+  possessive and internal hyphens dropped -- at every occurrence (`Alan` on `Alan's`, `ninety-three`
+  on `ninety three` or `ninetythree`); where no run matches, a token whose hyphen pieces hold the
+  text as consecutive whole pieces (`year-old` in `93-year-old`); never a part of any other word;
+- covers exactly the matched words, never the words between them the scan skipped;
+- cuts a date, time or age finding to its temporal words (`data/temporal_words.yaml`: units, calendar
+  and relative-time words, digits, number words and their compounds), each kept run starting and
+  ending on one; a name, place or organisation finding longer than `pii.name_words_max` (3) to its
+  proper nouns; a run with nothing of its kind stands;
+- records each finding's `text` and `word_ids`; a finding that places nowhere is an
+  `unplaced_findings` record on `pii_scan` with its text, and writes no `pii` entity.
+
+The fold (`mask_plan`) reads `word_ids` and `unplaced_findings` directly; the extent-based
+re-placement and the `pii_unlocated` note reading are gone, and a store without `word_ids` is refused
+(r6 cannot be re-folded under this code; r7 replays it). A reviewer entry places an unplaced finding
+only where REDACT ran to mask it; otherwise it is a new proposal. The page joins a mark to its
+findings by word id.
+
+Measured by re-scanning the stored residue of the 8,516 reviewed r6 recordings with findings
+(detectors re-run on CPU, no ASR, no REVIEW; the reviewer column applies the stored release quotes
+as an approximation of the fold -- the r7 readings will differ):
+
+| | old placement | new placement |
+|---|---|---|
+| findings (all haystacks) | 61,301 | 61,301 |
+| placed over the whole transcript | 1,263 (473 recordings) | 0 |
+| bridged over unread words | 2,680 (799 recordings) | 0 |
+| unplaced | -- | 9 (PERSON, texts like "you", "i", "haven", empty) |
+| words covered | 67,972 | 33,341 |
+| content words covered | 37,239 | 29,053 |
+| content words left after the stored release quotes | 12,888 | 10,773 |
+
+Cuts: 9,126 runs cut, 1,870 of them dropping a content word (3,156 words): DATE_TIME 1,529, PERSON
+226, LOCATION 115. Examples: DATE "Australia, my brother Alan's wife, had died that week" -> "week";
+DATE "last year that I also have PVCs AFib started probably ten years ago" -> "last year",
+"ten years ago"; DATE_TIME "forty-six seconds Water." -> "forty-six seconds". The remaining 7,256
+cuts drop only a leading or trailing function word ("the past two weeks" -> "past two weeks"),
+which the mask trim released anyway. `name_words_max` 3: a name span of four or more words was cut
+226 + 115 times, and no name of three words or fewer is touched.
