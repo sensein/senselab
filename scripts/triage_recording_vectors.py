@@ -22,7 +22,7 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from senselab.audio.workflows.triage.recording_vectors import SCHEMA_VERSION, scan, schema, to_table
+from senselab.audio.workflows.triage.recording_vectors import DICTIONARY_KEY, SCHEMA_VERSION, scan, schema, to_table
 
 SHARD_GLOB = "recording_vectors.*.parquet"
 MERGED_NAME = "recording_vectors.parquet"
@@ -55,11 +55,19 @@ def merge(shard_dir: Path, out: Path) -> int:
 
     Returns:
         How many rows were written.
+
+    Raises:
+        SystemExit: When there are no shards, or the shards carry different data dictionaries.
     """
     shards = sorted(shard_dir.glob(SHARD_GLOB))
     if not shards:
         raise SystemExit(f"no shards matching {SHARD_GLOB} under {shard_dir}")
-    table = pa.concat_tables([pq.read_table(shard) for shard in shards]).combine_chunks()
+    tables = [pq.read_table(shard) for shard in shards]
+    dictionaries = {(table.schema.metadata or {}).get(DICTIONARY_KEY) for table in tables}
+    if len(dictionaries) != 1:
+        raise SystemExit(f"the shards under {shard_dir} carry {len(dictionaries)} different data dictionaries")
+    table = pa.concat_tables(tables).combine_chunks()
+    table = table.replace_schema_metadata(tables[0].schema.metadata)
     out.parent.mkdir(parents=True, exist_ok=True)
     size = write_private(table, out)
     reports = [json.loads(p.read_text()) for p in sorted(shard_dir.glob("recording_vectors.*.report.json"))]
