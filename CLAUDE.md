@@ -116,13 +116,14 @@ Key audio processing capabilities in `audio/tasks/`:
   `src/senselab/utils/tasks/cached_inference.py` rather than reasoning about which
   `artifacts/analyze_audio_cache/` entries survive. A stale entry that *looks* readable costs far
   more than recomputing one, and the wipe is automatic on every host.
-- **Cache keys are commit-aware as of schema 23, so the first run after that change recomputes
-  everything.** Keys used to carry a bare `model_id`, so an upstream push to a tracked ref loaded
-  new weights under an unchanged key and served a result computed by the *old* commit as current.
-  Keys now include the resolved 40-hex commit, which is what makes an upstream push invalidate on
-  its own. Every pre-23 entry predates that and cannot be attributed to a commit, so none is
-  reused — a one-time full recompute, not a regression, and worth saying out loud before someone
-  reports it as one.
+- **A cache key is the input's content plus the process, and nothing else (schema 24).** Keys carry
+  the audio/text signature, the stage and its `STAGE_VERSIONS` number, the model id and its resolved
+  40-hex commit, and every result-shaping parameter. The senselab version is provenance, not key:
+  hatch-vcs changes it on every commit, so keying on it missed on every run (the bump to 24 recomputes
+  everything once). The price is that a
+  `tasks/` change altering a stage's output must bump that stage's number. Triage's own result cache
+  (`result_cache_key`, under `SENSELAB_CACHE/results/`) follows the same rule, and the
+  `analyze_audio` cache's prune and schema wipe touch only its own top-level `*.json` entries.
 - **A model load must pass a commit SHA, never a ref.** Resolving `main` to a SHA binds nothing by
   itself: `snapshot_download(revision="main")` writes `refs/main` and the caller stays
   ref-addressed, so a later load passing `"main"` goes back through that pointer, which may have

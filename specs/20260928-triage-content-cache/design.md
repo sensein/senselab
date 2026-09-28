@@ -104,5 +104,36 @@ cached arrays). 25 entries took 28 MB.
 - A resident PII worker. With the cache, the subprocess starts only for unseen text; a resident worker
   would still help a first run, but needs a request/response protocol over the worker's stdio, which is
   more than this change.
-- `audio_analysis`'s own `cache_key` still includes `senselab_version`, so it misses after every
-  commit. The same reasoning applies to it; changing it is outside this change.
+
+## `audio_analysis` under the same rule
+
+`cache_key` and `align_cache_key` no longer take the senselab version; `StageContext` keeps it and
+writes it into every fresh outcome's provenance. `CACHE_SCHEMA_VERSION` 23 → 24, so the first run after
+this recomputes once. `prune_unreachable_entries` stops treating another senselab version as stale
+(it is reachable now) and prunes only on a stage-version change; it and the schema wipe now touch only
+the top-level `*.json` files `cache_store` writes, so a result-cache tree placed in the same directory
+survives both.
+
+The price of leaving the version out: a `tasks/` change that alters a stage's output for the same input
+must bump that stage's `STAGE_VERSIONS` number. Before, the version bump caught it by missing on every
+commit, which is to say it caught everything and reused nothing.
+
+Every cached stage's key, audited against its call in `stages.py`:
+
+| stage | model / commit | params keyed | under-keyed (stale reuse) | over-keyed (needless miss) |
+|---|---|---|---|---|
+| `diarization` | id + resolved commit | `device`, `exclusive` | the library's diarizer defaults (speaker bounds, clustering) — now carried by the stage number | `device` (`auto` vs an explicit device, CPU vs GPU float noise) |
+| `ast` | id + commit | `win_length`, `hop_length`, `top_k`, `device`, `function_to_apply` | — | `device` |
+| `yamnet` | `google/yamnet`, no Hub commit (a TF-Hub module pinned at `tfhub.dev/google/yamnet/1`) | `win_length`, `hop_length`, `top_k` | the unpinned TensorFlow venv (`_YAMNET_REQUIREMENTS` names packages without versions) | — |
+| `features` | none | backend descriptors, `win_length`, `hop_length`, `device` | the opensmile, parselmouth and SQUIM settings inside `extract_temporal_features`, and the torchaudio SQUIM bundle — carried by the stage number | `device` |
+| `asr` | id + commit | `device`; `return_timestamps` only when Qwen's is off | subprocess-venv backends' own pinned requirements (Canary, NeMo, Qwen) | `device` |
+| `alignment` | aligner id + commit | transcript digest, `language`, `romanize`, `levels_to_keep` | — | `romanize` (derived from `language`, and not passed to the aligner — harmless) |
+
+`background_mask`, `noise_floor`, `background_sources` and `level_probe` hold `STAGE_VERSIONS`
+entries but are not cached: they compute on every run and record provenance only.
+
+Two classes remain, deliberately not fixed here. **Dependency versions** — no key carries the
+installed version of a third-party package or an unpinned subprocess venv, before or after this
+change (the senselab version never covered them). **`device`** — kept in the key: it changes float
+noise, not the result, but dropping it would let a CPU result serve a GPU request on a stage where
+nobody has measured that the two agree.
