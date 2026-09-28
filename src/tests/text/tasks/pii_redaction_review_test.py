@@ -312,3 +312,33 @@ class TestTheProtocolIsNotConfusedByTheLoaderSOwnOutput:
         result = review_transcript("one", model_id="stub/model", timeout_s=2)
         assert result.failure is not None
         assert "chatter on stdout that is not a reply" in result.failure or "loading shards" in result.failure
+
+
+def test_the_request_names_the_task_its_instructions_and_its_stimulus() -> None:
+    """Owner, 2026-09-27: the reviewer is told what the participant was asked to do and to say."""
+    from senselab.text.tasks.pii_detection.redaction_review import _compose
+
+    body = _compose(
+        "he is ninety-three",
+        None,
+        {
+            "task": "story-recall",
+            "speech_type": "recall",
+            "instructions": "Recall the story in your own words.",
+            "asked_to_say": "he is nearly ninety-three years old",
+        },
+    )
+    assert "TASK: story-recall" in body
+    assert "SPEECH TYPE: recall" in body
+    assert "INSTRUCTIONS GIVEN TO THE PARTICIPANT: Recall the story in your own words." in body
+    assert "STIMULUS THE PARTICIPANT WAS GIVEN TO SAY OR RECALL: he is nearly ninety-three years old" in body
+    assert "not identifying for being said" in body
+    assert body.index("TASK:") < body.index("ORIGINAL:")
+
+
+def test_a_request_with_no_task_facts_carries_no_task_lines() -> None:
+    """Nothing declared, nothing claimed."""
+    from senselab.text.tasks.pii_detection.redaction_review import _compose
+
+    body = _compose("hello", None, {})
+    assert "INSTRUCTIONS" not in body and "not identifying for being said" not in body

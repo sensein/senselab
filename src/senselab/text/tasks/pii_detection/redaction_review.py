@@ -112,8 +112,9 @@ def _compose(original: str, redacted: str | None, context: Mapping[str, Any] | N
     Args:
         original: The transcript as the recording's words were read.
         redacted: The text an applied redaction produced, or None where none was applied.
-        context: What the recording declares about itself -- ``task``, ``asked_to_say`` and
-            ``declared_names``. Any key absent or empty is omitted rather than sent empty.
+        context: What the recording declares about itself -- ``task``, ``speech_type``,
+            ``instructions``, ``asked_to_say`` and ``declared_names``. Any key absent or empty is
+            omitted rather than sent empty.
 
     Returns:
         The body the prompt is prefixed to.
@@ -122,16 +123,22 @@ def _compose(original: str, redacted: str | None, context: Mapping[str, Any] | N
     facts = dict(context or {})
     if facts.get("task"):
         lines.append(f"TASK: {facts['task']}")
+    if facts.get("speech_type"):
+        lines.append(f"SPEECH TYPE: {facts['speech_type']}")
+    if facts.get("instructions"):
+        lines.append(f"INSTRUCTIONS GIVEN TO THE PARTICIPANT: {facts['instructions']}")
     if facts.get("asked_to_say"):
-        lines.append(f"ASKED TO SAY: {facts['asked_to_say']}")
+        lines.append(f"STIMULUS THE PARTICIPANT WAS GIVEN TO SAY OR RECALL: {facts['asked_to_say']}")
     names = facts.get("declared_names") or ()
     if names:
         lines.append(f"NAMES THE TASK'S OWN MATERIALS CONTAIN: {', '.join(str(name) for name in names)}")
     if lines:
         lines.append(
-            "Those lines are facts about what was asked for. They are not a conclusion about what "
-            "is in the transcript, and neither matching them nor departing from them settles any "
-            "of the four questions on its own."
+            "Those lines are the task. Words that are the task's own stimulus, or that the instructions "
+            "ask the participant to say, are not identifying for being said: a character, a number or a "
+            "date in the stimulus identifies nobody. Anything the speaker adds of their own -- their "
+            "name, where they live, who they know, their health -- is judged as it would be anywhere, "
+            "and instructions read aloud by someone else are a sign of more than one speaker."
         )
         lines.append("")
     released = redacted if redacted is not None else "(no redaction was applied to this recording)"

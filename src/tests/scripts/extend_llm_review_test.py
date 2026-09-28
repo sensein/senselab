@@ -696,3 +696,62 @@ class TestItOpensNoAudioUnlessAskedTo:
             log_dir=tmp_path,
         )
         assert summary["counts"] == {"ok": 1}, "it read a run whose audio is not even on disk"
+
+
+class TestTheReviewerReadsTheTaskItWasGiven:
+    """Owner, 2026-09-27: the reviewer is told the task's instructions and its stimulus, not only its name."""
+
+    def test_the_hint_reaches_the_reviewer_and_not_only_the_re_fold(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """r6's story-recall cards read ``{'task': 'story-recall'}``: the driver built the hint for the re-fold only."""
+        run_root = _finished_run(tmp_path / "corpus")
+        _seed_verdicts(run_root)
+        directory = tmp_path / "scope"
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / "hints.py").write_text(
+            "from senselab.audio.data_structures import AudioHints\n"
+            "from senselab.audio.data_structures.audio_hints import ExpectedSpeech\n"
+            "\n"
+            "\n"
+            "def build_hint(path):\n"
+            "    return (AudioHints(instructions='Recall the story.', speech_type='recall',\n"
+            "                       expected_speech=[ExpectedSpeech(text='he is ninety-three')]),)\n",
+            encoding="utf-8",
+        )
+        seen: list[dict[str, Any]] = []
+
+        def _fake(original: str, **kw: Any) -> ReviewResult:  # noqa: ANN401
+            seen.append(dict(kw.get("context") or {}))
+            return ReviewResult(
+                available=True,
+                reasoning="read it",
+                redaction="not_applicable",
+                original="clean",
+                speakers="one",
+                proposal=[],
+                model_id="stub/model",
+                revision="a" * 40,
+            )
+
+        monkeypatch.setattr(review_module, "review_transcript", _fake)
+        manifest = tmp_path / "with-source.jsonl"
+        manifest.write_text(
+            json.dumps(
+                {
+                    "stem": run_root.name,
+                    "enhanced": str(run_root / "run" / "streams" / "enhanced.flac"),
+                    "source": str(run_root / "run" / "streams" / "recording.flac"),
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        summary = cli.run_slice(
+            manifest, slice_index=0, slice_count=1, config=_config(tmp_path), log_dir=tmp_path, hints=directory
+        )
+        assert summary["counts"] == {"ok": 1}
+        (context,) = seen
+        assert context["instructions"] == "Recall the story."
+        assert context["speech_type"] == "recall"
+        assert context["asked_to_say"] == "he is ninety-three"

@@ -164,10 +164,9 @@ def task_context(store: ProvStore, hint: AudioHints | None) -> dict[str, Any]:
         hint: The caller's declaration, or None.
 
     Returns:
-        ``task``, ``asked_to_say`` and ``declared_names``, each omitted where the recording
-        declares none. Facts about what was asked for; the prompt says outright that they settle
-        nothing, because a task whose materials contain names is not a task in which every name is
-        the task's.
+        ``task``, ``speech_type``, ``instructions``, ``asked_to_say`` and ``declared_names``, each
+        omitted where the recording declares none, and ``instructions_from`` and ``stimulus_from``
+        naming where those texts came from.
     """
     family = declared_task_family(store, hint)
     prompts = [
@@ -176,8 +175,15 @@ def task_context(store: ProvStore, hint: AudioHints | None) -> dict[str, Any]:
     context: dict[str, Any] = {}
     if family:
         context["task"] = str(family)
+    if hint is not None and hint.speech_type:
+        context["speech_type"] = str(hint.speech_type)
+    if hint is not None and hint.instructions:
+        context["instructions"] = str(hint.instructions)
     if prompts:
         context["asked_to_say"] = " ".join(str(prompt) for prompt in prompts)
+    for key in ("instructions_from", "stimulus_from"):
+        if hint is not None and hint.metadata.get(key):
+            context[key] = str(hint.metadata[key])
     names = expected_names(family)
     if names:
         context["declared_names"] = list(names)
