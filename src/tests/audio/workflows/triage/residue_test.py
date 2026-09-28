@@ -245,3 +245,32 @@ class TestAProperForm:
         assert is_proper_form("I", "and") is False
         assert is_proper_form("I'm", "so") is False
         assert is_proper_form("may", "you") is False
+
+
+class TestARecallSubtractsItsStory:
+    """Owner, 2026-09-27: a retelling's words that the story holds are the task, in any order."""
+
+    STORY = "You wished to know all about my grandfather. Well, he is nearly ninety-three years old.".split()
+
+    def test_story_words_leave_the_residue_and_the_speakers_own_do_not(self) -> None:
+        """r6's story-recall card: "ninety-three" reached the detector as an AGE; a name said stays."""
+        from senselab.audio.workflows.triage.config import load_triage_config
+        from senselab.audio.workflows.triage.residue import RECALL, residue_rule, task_residue
+
+        rule = residue_rule(load_triage_config())
+        said = "well grandfather is ninetythree years old and I am Alice Smith".split()
+        residue = task_residue(said, "story-recall", self.STORY, rule, speech_type="recall")
+        assert residue.method == RECALL
+        kept = [said[i] for i in residue.positions]
+        assert "ninetythree" not in kept and "grandfather" not in kept and "years" not in kept
+        assert "Alice" in kept and "Smith" in kept
+
+    def test_without_a_recall_speech_type_every_word_is_residue(self) -> None:
+        """A free response that happens to declare text is not read as a recall unless it says so."""
+        from senselab.audio.workflows.triage.config import load_triage_config
+        from senselab.audio.workflows.triage.residue import FREE, residue_rule, task_residue
+
+        rule = residue_rule(load_triage_config())
+        said = "grandfather is ninetythree".split()
+        residue = task_residue(said, "story-recall", self.STORY, rule)
+        assert residue.method == FREE and len(residue.positions) == len(said)

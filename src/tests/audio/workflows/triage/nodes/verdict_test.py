@@ -466,7 +466,7 @@ class TestHintsAreReadThroughRoutingsMap:
         self, make_verdict_store: Callable[..., ProvStore], tmp_path: Path
     ) -> None:
         """``speech_type`` goes through the same map, so the two cannot disagree about a tag."""
-        hint = AudioHints(metadata={"speech_type": "read-speech"})
+        hint = AudioHints(speech_type="read-speech")
         hint_config = _hint_config(tmp_path)
         store = make_verdict_store(
             concluded=[("ADMIT", Outcome.PASS, None), ("SPEECH", Outcome.FAIL, "speech")],
