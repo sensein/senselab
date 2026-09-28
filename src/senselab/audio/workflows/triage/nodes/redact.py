@@ -1893,14 +1893,16 @@ def mask_plan(
     # A planned extent that reaches no word masks audio no transcript word accounts for; it stands as
     # REDACT planned it.
     for extent in silent:
+        parts = tuple(part for part in extent.category.split("+") if part)
+        labelled = replace(extent, category=category_family(parts[0]) if parts else extent.category)
         outcomes.append(
             MaskOutcome(
-                planned=extent,
+                planned=labelled,
                 words=(),
-                final=(extent,),
+                final=(labelled,),
                 final_words=((),),
                 outcome=MASK_UNCHANGED,
-                categories=(extent.category,),
+                categories=parts or (extent.category,),
             )
         )
     outcomes.sort(key=lambda mask: (mask.planned.start, mask.planned.end))
