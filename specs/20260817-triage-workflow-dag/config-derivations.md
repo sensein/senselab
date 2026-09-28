@@ -1713,6 +1713,14 @@ verdict.llm_second_speaker_flags: true
   `dominant_speaker_share_min` gate already failed. 379 flags on the reviewed r6 corpus. Measurement in
   `specs/20260927-mask-placement-and-second-speaker/design.md` §4.
 
+pii.name_words_max: 3
+  A PERSON, LOCATION or ORGANIZATION finding placed on more words than this is cut to its proper
+  nouns. Owner, 2026-09-27: a detector span that overruns its words must be cut to the words that
+  carry it. On the r6 placement replay (8,516 recordings, 61,301 findings) the cut dropped content
+  words from 226 PERSON and 115 LOCATION spans of four or more words; no span of three or fewer is
+  touched, which keeps "my brother Alan" and two-word place names whole. Measurement in
+  `specs/20260927-mask-placement-and-second-speaker/design.md` §9.
+
 verdict.conformance_flags_by_family: {}
   Declared task family -> whether a non-conformance on it flags, overriding `conformance_flags`.
   **This is what makes the fold task-aware** (owner: "verdict has to evaluate based on all branches
