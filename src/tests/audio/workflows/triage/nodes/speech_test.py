@@ -678,6 +678,7 @@ def _stub_separator(
     *,
     sources: int = 0,
     active: Optional[list[list[tuple[float, float]]]] = None,
+    cache: Optional[dict[str, Any]] = None,
 ) -> list[dict[str, Any]]:
     """Fake source separation and return the log of what it was asked for.
 
@@ -686,6 +687,7 @@ def _stub_separator(
         sources: How many streams the fake returns.
         active: Per source, the extents it carries signal over; elsewhere it is silent. None
             returns a copy of the mixture in every slot, which localises nothing.
+        cache: The result-cache record the fake reports on every source, as the real separator does.
 
     Returns:
         The mutable call log.
@@ -723,6 +725,7 @@ def _stub_separator(
                 "source_index": index,
                 "n_sources": sources,
                 "input_norm_scalar": 0.31,
+                **({"cache": cache} if cache is not None else {}),
             }
             out.append(separated)
         return [out]
@@ -2091,6 +2094,57 @@ class TestTheMultiSpeakerInstrument:
         activity_id = store.generated_by(separated[0].id)
         assert activity_id is not None
         assert enhanced_id in store.uses_of(activity_id)
+
+    def test_a_reused_separation_names_where_it_was_first_computed(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A stream restored from the result cache records the key and the run and activity behind it."""
+        self._two_voices(store, tmp_path, monkeypatch)
+        origin = {"run": "earlier-run", "activity": "act-earlier", "node": "SPEECH", "step": "separate"}
+        _stub_separator(
+            monkeypatch,
+            sources=2,
+            active=[[(1.0, 1.8), (2.6, 3.6)], [(1.8, 2.6)]],
+            cache={"key": "k" * 64, "hit": True, "origin": origin},
+        )
+        speech(store, "plain", _speech_config(tmp_path), self._hint(), run_dir=tmp_path, enrollment=None)
+        separated = self._separated(store)
+        assert separated
+        for entity in separated:
+            assert entity.attributes["cache"] == {
+                "key": "k" * 64,
+                "hit": True,
+                "origin_run": "earlier-run",
+                "origin_activity": "act-earlier",
+            }
+        [separate] = [a for a in store.activities() if a.step == "separate"]
+        assert separate.parameters["cache_hit"] is True
+        assert separate.parameters["cache_key"] == "k" * 64
+
+    def test_a_fresh_separation_registers_this_run_as_its_origin(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """On a miss SPEECH names its own run and activity on the entry, for later hits to report."""
+        from senselab.utils.tasks import cached_inference as ci
+
+        key = ci.result_cache_key(
+            input_signature="s" * 64, process="clearvoice", model_id="m", commit_sha=None, params={}
+        )
+        ci.result_store(key, {"n_sources": 2}, process="clearvoice", model_id="m", commit_sha=None)
+        self._two_voices(store, tmp_path, monkeypatch)
+        _stub_separator(
+            monkeypatch,
+            sources=2,
+            active=[[(1.0, 1.8), (2.6, 3.6)], [(1.8, 2.6)]],
+            cache={"key": key, "hit": False, "origin": None},
+        )
+        speech(store, "plain", _speech_config(tmp_path), self._hint(), run_dir=tmp_path, enrollment=None)
+        [separate] = [a for a in store.activities() if a.step == "separate"]
+        entry = ci.result_lookup(key)
+        assert entry is not None
+        assert entry["origin"]["run"] == store.run_id
+        assert entry["origin"]["activity"] == separate.id
+        assert all(e.attributes["cache"]["hit"] is False for e in self._separated(store))
 
     def _two_voices(self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """One task extent, two diarized speakers inside it, and a separation that splits them.

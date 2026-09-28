@@ -15,7 +15,7 @@ import re
 from dataclasses import dataclass
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.features_extraction.praat_parselmouth import CppsSettings
@@ -583,6 +583,27 @@ def cpps_settings(config: TriageConfig) -> CppsSettings:
         peak_interpolation=str(config.require("praat_features.cpps.peak_interpolation")),
         **scalars,
     )
+
+
+def cache_attributes(record: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    """The store's description of one result-cache use, from a library call's cache record.
+
+    Args:
+        record: The ``{"key", "hit", "origin"}`` record a cached library call returned, or None.
+
+    Returns:
+        ``key``, ``hit`` and, for a reused result, ``origin_run`` / ``origin_activity`` naming where
+        it was first computed (None when that run did not record itself); None without a record.
+    """
+    if not record or not record.get("key"):
+        return None
+    origin = dict(record.get("origin") or {})
+    return {
+        "key": str(record["key"]),
+        "hit": bool(record.get("hit")),
+        "origin_run": origin.get("run"),
+        "origin_activity": origin.get("activity"),
+    }
 
 
 def resolve_stream(store: ProvStore, run_dir: Path, name: str) -> tuple[str, Audio]:
