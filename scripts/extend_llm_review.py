@@ -69,6 +69,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
+from senselab.audio.data_structures import AudioHints
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.extend import (
     ERROR,
@@ -260,7 +261,15 @@ def live_annotations(store: ProvStore) -> list[str]:
     ]
 
 
-def review_one(store: ProvStore, config: TriageConfig, *, run_dir: Path, apply: bool, held: Sequence[str]) -> str:
+def review_one(
+    store: ProvStore,
+    config: TriageConfig,
+    *,
+    run_dir: Path,
+    apply: bool,
+    held: Sequence[str],
+    hint: AudioHints | None = None,
+) -> str:
     """Read one finished run back, write the refined audio where asked to, and retire what it replaced.
 
     The retirement happens after the write and only for ids the new annotation did not itself take,
@@ -274,11 +283,14 @@ def review_one(store: ProvStore, config: TriageConfig, *, run_dir: Path, apply: 
         run_dir: The run directory, ``<run_root>/run``.
         apply: Whether to write the redacted stream from the proposal.
         held: The ids of every annotation that was live before this read.
+        hint: The recording's declaration, which is where the reviewer's task context comes from:
+            the task's instructions, its stimulus and its speech type. None reads with the task name
+            alone.
 
     Returns:
         The reading's status, with ``+applied`` appended where a stream was written.
     """
-    outcome = review(store, config)
+    outcome = review(store, config, hint)
     for entity_id in held:
         if entity_id == outcome.annotation_id:
             continue
@@ -336,10 +348,14 @@ def extend_one(
     if held is not None and not force:
         return {"status": PRESENT, NODE: str(held.attributes.get("status") or "")}
     replaced = live_annotations(store)
+    try:
+        hint = build_hint(source)[0] if build_hint is not None and source is not None else None
+    except Exception as error:  # noqa: BLE001 — a hint that cannot be built is this row's error
+        return {"status": ERROR, NODE: f"hint: {describe_exception(error)}"}
     before = store.fingerprint()
     with record_venv_use() as used:
         outcome = attempt_derivation(
-            lambda: review_one(store, config, run_dir=run_root / RUN_SUBDIR, apply=apply, held=replaced)
+            lambda: review_one(store, config, run_dir=run_root / RUN_SUBDIR, apply=apply, held=replaced, hint=hint)
         )
     if outcome.failed:
         return {"status": ERROR, NODE: outcome.detail}
