@@ -28,6 +28,9 @@ CURATED = "curated"
 DESCRIPTIONS = "descriptions"
 """A recall task's stimulus from the flat task descriptions' prompts, where the sidecar carries none."""
 
+CURATED_LANGUAGE = "en"
+"""The language the curated corrections are written in; a recording in another keeps its sidecar's text."""
+
 RECALL = "recall"
 """The sidecar ``speech_type`` of a task that asks the participant to retell what they were given."""
 
@@ -134,14 +137,16 @@ def task_text(name: str, sidecar: Mapping[str, Any], population: str = "adult") 
 
     Returns:
         The sidecar's instructions unless the registry's curated file corrects that task (per
-        recording where it keys its corrections so); the sidecar's ``stimulus_text`` where it is not
+        recording where it keys its corrections so) and the recording is in the curated file's own
+        language, :data:`CURATED_LANGUAGE`; the sidecar's ``stimulus_text`` where it is not
         empty, else, for a recall task only, the flat descriptions' prompts for the name. A sidecar
         stimulus left empty by design -- a breath, a picture description -- stays empty.
     """
     task_id, recording = registry_task(name, population)
     instructions = str(sidecar.get("instructions") or "").strip() or None
     instructions_source = SIDECAR if instructions else ""
-    curated = _curated().get(task_id or "") if task_id else None
+    language = str(sidecar.get("language") or CURATED_LANGUAGE).strip().lower()
+    curated = _curated().get(task_id or "") if task_id and language == CURATED_LANGUAGE else None
     if curated:
         corrected = str(curated.get("instructions") or "").strip()
         per_recording = curated.get("recordings") or {}
@@ -152,7 +157,7 @@ def task_text(name: str, sidecar: Mapping[str, Any], population: str = "adult") 
     stimulus = str(sidecar.get("stimulus_text") or "").strip() or None
     stimulus_source = SIDECAR if stimulus else ""
     speech_type = str(sidecar.get("speech_type") or "").strip() or None
-    if stimulus is None and speech_type == RECALL:
+    if stimulus is None and speech_type == RECALL and language == CURATED_LANGUAGE:
         prompts = [str(prompt) for prompt in (_descriptions().get(description_key(name)) or {}).get("prompts") or ()]
         joined = " ".join(prompt.strip() for prompt in prompts if prompt.strip())
         if joined:
