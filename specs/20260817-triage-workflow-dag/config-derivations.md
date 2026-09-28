@@ -1705,6 +1705,14 @@ verdict.trim_protected_categories: [PERSON, NAME, LOCATION, LOC]
   year stays masked) and sentence-level noise ("The", "Every"). Measurement in
   `specs/20260927-pii-span-ledger/design.md` §7.
 
+verdict.llm_second_speaker_flags: true
+  Whether a REVIEW reading of `speakers: more_than_one` is a triage flag ground
+  (`REVIEWER_HEARD_SECOND_SPEAKER`). Owner, 2026-09-27, on an r6 story-recall card where the examiner
+  read the instructions aloud and no gate fired: diarization read one speaker (dominant share 1.0).
+  It flags for review and never moves the release, and is skipped where diarization's own
+  `dominant_speaker_share_min` gate already failed. 379 flags on the reviewed r6 corpus. Measurement in
+  `specs/20260927-mask-placement-and-second-speaker/design.md` §4.
+
 verdict.conformance_flags_by_family: {}
   Declared task family -> whether a non-conformance on it flags, overriding `conformance_flags`.
   **This is what makes the fold task-aware** (owner: "verdict has to evaluate based on all branches
