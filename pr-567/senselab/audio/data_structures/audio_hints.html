@@ -119,6 +119,12 @@
                                 <a class="variable" href="#AudioHints.target_speaker">target_speaker</a>
                         </li>
                         <li>
+                                <a class="variable" href="#AudioHints.instructions">instructions</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#AudioHints.speech_type">speech_type</a>
+                        </li>
+                        <li>
                                 <a class="variable" href="#AudioHints.metadata">metadata</a>
                         </li>
                 </ul>
@@ -302,15 +308,20 @@ Keeping them apart means hints work with no provider, no corpus, and no network.
 </span><span id="L-143"><a href="#L-143"><span class="linenos">143</span></a><span class="sd">            concatenated string, because &quot;which sentence was skipped&quot; is a different question</span>
 </span><span id="L-144"><a href="#L-144"><span class="linenos">144</span></a><span class="sd">            from &quot;how close was the whole thing&quot;.</span>
 </span><span id="L-145"><a href="#L-145"><span class="linenos">145</span></a><span class="sd">        target_speaker: The declared target speaker&#39;s embedding, with provenance.</span>
-</span><span id="L-146"><a href="#L-146"><span class="linenos">146</span></a><span class="sd">        metadata: Escape hatch for corpus-specific extras that do not deserve a typed field.</span>
-</span><span id="L-147"><a href="#L-147"><span class="linenos">147</span></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="L-148"><a href="#L-148"><span class="linenos">148</span></a>
-</span><span id="L-149"><a href="#L-149"><span class="linenos">149</span></a>    <span class="n">may_contain</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default_factory</span><span class="o">=</span><span class="nb">list</span><span class="p">)</span>
-</span><span id="L-150"><a href="#L-150"><span class="linenos">150</span></a>    <span class="n">targeted_speaker_count</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
-</span><span id="L-151"><a href="#L-151"><span class="linenos">151</span></a>    <span class="n">environment</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
-</span><span id="L-152"><a href="#L-152"><span class="linenos">152</span></a>    <span class="n">expected_speech</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">ExpectedSpeech</span><span class="p">]</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default_factory</span><span class="o">=</span><span class="nb">list</span><span class="p">)</span>
-</span><span id="L-153"><a href="#L-153"><span class="linenos">153</span></a>    <span class="n">target_speaker</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">TargetSpeakerEmbedding</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
-</span><span id="L-154"><a href="#L-154"><span class="linenos">154</span></a>    <span class="n">metadata</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default_factory</span><span class="o">=</span><span class="nb">dict</span><span class="p">)</span>
+</span><span id="L-146"><a href="#L-146"><span class="linenos">146</span></a><span class="sd">        instructions: What the participant was told to do, verbatim, or None.</span>
+</span><span id="L-147"><a href="#L-147"><span class="linenos">147</span></a><span class="sd">        speech_type: What kind of speech the task asks for, as the corpus names it (``read``,</span>
+</span><span id="L-148"><a href="#L-148"><span class="linenos">148</span></a><span class="sd">            ``recall``, ``free``, ``non-lexical`` ...), or None.</span>
+</span><span id="L-149"><a href="#L-149"><span class="linenos">149</span></a><span class="sd">        metadata: Escape hatch for corpus-specific extras that do not deserve a typed field.</span>
+</span><span id="L-150"><a href="#L-150"><span class="linenos">150</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="L-151"><a href="#L-151"><span class="linenos">151</span></a>
+</span><span id="L-152"><a href="#L-152"><span class="linenos">152</span></a>    <span class="n">may_contain</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default_factory</span><span class="o">=</span><span class="nb">list</span><span class="p">)</span>
+</span><span id="L-153"><a href="#L-153"><span class="linenos">153</span></a>    <span class="n">targeted_speaker_count</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
+</span><span id="L-154"><a href="#L-154"><span class="linenos">154</span></a>    <span class="n">environment</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
+</span><span id="L-155"><a href="#L-155"><span class="linenos">155</span></a>    <span class="n">expected_speech</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">ExpectedSpeech</span><span class="p">]</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default_factory</span><span class="o">=</span><span class="nb">list</span><span class="p">)</span>
+</span><span id="L-156"><a href="#L-156"><span class="linenos">156</span></a>    <span class="n">target_speaker</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">TargetSpeakerEmbedding</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
+</span><span id="L-157"><a href="#L-157"><span class="linenos">157</span></a>    <span class="n">instructions</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
+</span><span id="L-158"><a href="#L-158"><span class="linenos">158</span></a>    <span class="n">speech_type</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
+</span><span id="L-159"><a href="#L-159"><span class="linenos">159</span></a>    <span class="n">metadata</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default_factory</span><span class="o">=</span><span class="nb">dict</span><span class="p">)</span>
 </span></pre></div>
 
 
@@ -747,15 +758,20 @@ other means (e.g. a corpus-supplied enrollment vector with no windowed audio beh
 </span><span id="AudioHints-144"><a href="#AudioHints-144"><span class="linenos">144</span></a><span class="sd">            concatenated string, because &quot;which sentence was skipped&quot; is a different question</span>
 </span><span id="AudioHints-145"><a href="#AudioHints-145"><span class="linenos">145</span></a><span class="sd">            from &quot;how close was the whole thing&quot;.</span>
 </span><span id="AudioHints-146"><a href="#AudioHints-146"><span class="linenos">146</span></a><span class="sd">        target_speaker: The declared target speaker&#39;s embedding, with provenance.</span>
-</span><span id="AudioHints-147"><a href="#AudioHints-147"><span class="linenos">147</span></a><span class="sd">        metadata: Escape hatch for corpus-specific extras that do not deserve a typed field.</span>
-</span><span id="AudioHints-148"><a href="#AudioHints-148"><span class="linenos">148</span></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="AudioHints-149"><a href="#AudioHints-149"><span class="linenos">149</span></a>
-</span><span id="AudioHints-150"><a href="#AudioHints-150"><span class="linenos">150</span></a>    <span class="n">may_contain</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default_factory</span><span class="o">=</span><span class="nb">list</span><span class="p">)</span>
-</span><span id="AudioHints-151"><a href="#AudioHints-151"><span class="linenos">151</span></a>    <span class="n">targeted_speaker_count</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
-</span><span id="AudioHints-152"><a href="#AudioHints-152"><span class="linenos">152</span></a>    <span class="n">environment</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
-</span><span id="AudioHints-153"><a href="#AudioHints-153"><span class="linenos">153</span></a>    <span class="n">expected_speech</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">ExpectedSpeech</span><span class="p">]</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default_factory</span><span class="o">=</span><span class="nb">list</span><span class="p">)</span>
-</span><span id="AudioHints-154"><a href="#AudioHints-154"><span class="linenos">154</span></a>    <span class="n">target_speaker</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">TargetSpeakerEmbedding</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
-</span><span id="AudioHints-155"><a href="#AudioHints-155"><span class="linenos">155</span></a>    <span class="n">metadata</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default_factory</span><span class="o">=</span><span class="nb">dict</span><span class="p">)</span>
+</span><span id="AudioHints-147"><a href="#AudioHints-147"><span class="linenos">147</span></a><span class="sd">        instructions: What the participant was told to do, verbatim, or None.</span>
+</span><span id="AudioHints-148"><a href="#AudioHints-148"><span class="linenos">148</span></a><span class="sd">        speech_type: What kind of speech the task asks for, as the corpus names it (``read``,</span>
+</span><span id="AudioHints-149"><a href="#AudioHints-149"><span class="linenos">149</span></a><span class="sd">            ``recall``, ``free``, ``non-lexical`` ...), or None.</span>
+</span><span id="AudioHints-150"><a href="#AudioHints-150"><span class="linenos">150</span></a><span class="sd">        metadata: Escape hatch for corpus-specific extras that do not deserve a typed field.</span>
+</span><span id="AudioHints-151"><a href="#AudioHints-151"><span class="linenos">151</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="AudioHints-152"><a href="#AudioHints-152"><span class="linenos">152</span></a>
+</span><span id="AudioHints-153"><a href="#AudioHints-153"><span class="linenos">153</span></a>    <span class="n">may_contain</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default_factory</span><span class="o">=</span><span class="nb">list</span><span class="p">)</span>
+</span><span id="AudioHints-154"><a href="#AudioHints-154"><span class="linenos">154</span></a>    <span class="n">targeted_speaker_count</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
+</span><span id="AudioHints-155"><a href="#AudioHints-155"><span class="linenos">155</span></a>    <span class="n">environment</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
+</span><span id="AudioHints-156"><a href="#AudioHints-156"><span class="linenos">156</span></a>    <span class="n">expected_speech</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">ExpectedSpeech</span><span class="p">]</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default_factory</span><span class="o">=</span><span class="nb">list</span><span class="p">)</span>
+</span><span id="AudioHints-157"><a href="#AudioHints-157"><span class="linenos">157</span></a>    <span class="n">target_speaker</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">TargetSpeakerEmbedding</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
+</span><span id="AudioHints-158"><a href="#AudioHints-158"><span class="linenos">158</span></a>    <span class="n">instructions</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
+</span><span id="AudioHints-159"><a href="#AudioHints-159"><span class="linenos">159</span></a>    <span class="n">speech_type</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
+</span><span id="AudioHints-160"><a href="#AudioHints-160"><span class="linenos">160</span></a>    <span class="n">metadata</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default_factory</span><span class="o">=</span><span class="nb">dict</span><span class="p">)</span>
 </span></pre></div>
 
 
@@ -777,6 +793,9 @@ not a count of who is audible. A range is deliberately not modelled; it goes in
 concatenated string, because "which sentence was skipped" is a different question
 from "how close was the whole thing".</li>
 <li><strong>target_speaker:</strong>  The declared target speaker's embedding, with provenance.</li>
+<li><strong>instructions:</strong>  What the participant was told to do, verbatim, or None.</li>
+<li><strong>speech_type:</strong>  What kind of speech the task asks for, as the corpus names it (<code>read</code>,
+<code>recall</code>, <code>free</code>, <code>non-lexical</code> ...), or None.</li>
 <li><strong>metadata:</strong>  Escape hatch for corpus-specific extras that do not deserve a typed field.</li>
 </ul>
 </div>
@@ -838,6 +857,30 @@ from "how close was the whole thing".</li>
         
     </div>
     <a class="headerlink" href="#AudioHints.target_speaker"></a>
+    
+    
+
+                            </div>
+                            <div id="AudioHints.instructions" class="classattr">
+                                <div class="attr variable">
+            <span class="name">instructions</span><span class="annotation">: Optional[str]</span>        =
+<span class="default_value">None</span>
+
+        
+    </div>
+    <a class="headerlink" href="#AudioHints.instructions"></a>
+    
+    
+
+                            </div>
+                            <div id="AudioHints.speech_type" class="classattr">
+                                <div class="attr variable">
+            <span class="name">speech_type</span><span class="annotation">: Optional[str]</span>        =
+<span class="default_value">None</span>
+
+        
+    </div>
+    <a class="headerlink" href="#AudioHints.speech_type"></a>
     
     
 
