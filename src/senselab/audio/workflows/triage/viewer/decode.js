@@ -1,4 +1,4 @@
-// Decoders for the binary blocks of recording_vectors.parquet, schema_version 10, and the reader
+// Decoders for the binary blocks of recording_vectors.parquet, schema_version 11, and the reader
 // of the data dictionary the file carries in its key-value metadata.
 // Byte layouts and enumerations mirror senselab.audio.workflows.triage.recording_vectors;
 // specs/20260922-compact-recording-vectors/schema.md is the contract.
@@ -11,7 +11,7 @@
 'use strict';
 
 var SchemaDecode = (function () {
-  var SCHEMA_VERSION = 10;
+  var SCHEMA_VERSION = 11;
   var DICTIONARY_KEY = 'senselab.recording_vectors.dictionary';
   var TIME_SCALE = 65535;
   var TRACE_POINTS = 256;
