@@ -49,3 +49,11 @@ def test_temporal_words() -> None:
     """Digits, number words and their compounds, calendar and unit words."""
     assert all(is_temporal(t) for t in ["1998", "ninetythree", "Tuesday", "weeks", "ago"])
     assert not any(is_temporal(t) for t in ["brother", "Alan", "died"])
+
+
+def test_a_hyphen_piece_places_and_a_run_ends_on_a_date_word() -> None:
+    """r6: "yearold" inside "93-year-old"; "last year that I also have ... ten years ago" keeps two dates."""
+    assert locate("yearold", ["a", "93-year-old", "man"]) == [(1, 1)]
+    tokens = "last year that I also have PVCs AFib started probably ten years ago".split()
+    runs, _ = cut((0, len(tokens) - 1), tokens, "DATE", 3)
+    assert [" ".join(tokens[a : b + 1]) for a, b in runs] == ["last year", "ten years ago"]

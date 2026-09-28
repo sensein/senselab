@@ -54,7 +54,9 @@ def locate(text: str, tokens: Sequence[str]) -> list[tuple[int, int]]:
     """Every place a finding's text matches a run of whole tokens.
 
     The finding's keys, joined, must equal the joined keys of a contiguous run of tokens, so a
-    split or a joined spelling places and a part of a word does not.
+    split or a joined spelling places. Where no run matches, a token whose hyphen-separated pieces
+    hold the text as consecutive whole pieces places it (``year-old`` in ``93-year-old``); any other
+    part of a word does not.
 
     Args:
         text: The detector's own text for the finding.
@@ -69,6 +71,21 @@ def locate(text: str, tokens: Sequence[str]) -> list[tuple[int, int]]:
     runs: list[tuple[int, int]] = []
     if not target:
         return runs
+    runs = _whole_runs(target, keys)
+    if runs:
+        return runs
+    for index, token in enumerate(tokens):
+        pieces = [match_key(piece) for piece in re.split(r"[-\u2010]", token)]
+        pieces = [piece for piece in pieces if piece]
+        if len(pieces) > 1 and any(
+            "".join(pieces[a:b]) == target for a in range(len(pieces)) for b in range(a + 1, len(pieces) + 1)
+        ):
+            runs.append((index, index))
+    return runs
+
+
+def _whole_runs(target: str, keys: Sequence[str]) -> list[tuple[int, int]]:
+    runs: list[tuple[int, int]] = []
     start = 0
     while start < len(keys):
         if not keys[start] or not target.startswith(keys[start]):
@@ -138,8 +155,9 @@ def cut(
 ) -> tuple[list[tuple[int, int]], bool]:
     """The parts of a placed run that carry the finding's kind.
 
-    A date, time or age finding keeps its temporal tokens and any other token lying between two of
-    them; one with no temporal token keeps its run. A name, place or organisation finding longer than
+    A date, time or age finding keeps its temporal tokens and any non-content token lying between two
+    of them, each kept run starting and ending on a temporal token; one with no temporal token keeps
+    its run. A name, place or organisation finding longer than
     ``name_words_max`` tokens keeps its proper nouns (:func:`~senselab.audio.workflows.triage.residue.is_proper_form`);
     one with none keeps its run. Any other finding keeps its run.
 
@@ -175,4 +193,14 @@ def cut(
     else:
         return [run], False
     runs = _runs(kept)
+    if family in TEMPORAL_FAMILIES:
+        trimmed = []
+        for low, high in runs:
+            while low < high and not is_temporal(tokens[low]):
+                low += 1
+            while high > low and not is_temporal(tokens[high]):
+                high -= 1
+            if is_temporal(tokens[low]):
+                trimmed.append((low, high))
+        runs = trimmed or runs
     return runs, runs != [run]
