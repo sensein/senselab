@@ -35,10 +35,14 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
+
+import yaml
 
 from senselab.audio.data_structures import Audio, AudioHints
 from senselab.audio.tasks.redaction.api import RedactionExtent, apply_redactions, plan_redactions
@@ -62,6 +66,10 @@ from senselab.audio.workflows.triage.residue import is_content_word, is_proper_f
 from senselab.audio.workflows.triage.stimulus import NearMatch, near_match, split_prompts
 from senselab.audio.workflows.triage.vocabulary import (
     REDACTION_LLM_ANNOTATION,
+    UNPLACED_CLEARED,
+    UNPLACED_OPEN,
+    UNPLACED_PLACED,
+    UNPLACED_UNREAD,
     Outcome,
     Release,
 )
@@ -1025,6 +1033,60 @@ unmasked by the reviewer, or none of its words left masked."""
 PII_LEDGER = "pii_ledger"
 """The measurement VERDICT writes: every PII span, the words it covers and their state."""
 
+FAMILIES_PATH = Path(__file__).parents[1] / "data" / "pii_category_families.yaml"
+"""Which detector categories name the same kind of content, keyed by the reviewer's category for it."""
+
+DETECTOR = "detector"
+"""A mask placed on a detector finding's own words."""
+
+REVIEWER = "reviewer"
+"""A mask placed on a reviewer ``redact`` entry's words where it places a detector finding the fold could
+not place itself."""
+
+AGREED_MASKED = "masked"
+"""A reviewer ``redact`` entry every content word of which a detector mask already hides: agreement."""
+
+AGREED_PLACED = "placed_unplaced"
+"""A reviewer ``redact`` entry in the family of a detector finding the fold could not place on words: the
+reviewer's quote places it, and its words are masked."""
+
+NEW = "new"
+"""A reviewer ``redact`` entry naming a content word no mask hides, or one its quote cannot be placed on:
+the reviewer proposing to hide more."""
+
+_UNLOCATED_NOTE = re.compile(r"^pii_unlocated \((?P<category>.+)\)$")
+_WHOLE_TOLERANCE_S = 1e-3  # the float slack between SPEECH's whole-transcript hull and a recomputed one
+
+
+@lru_cache(maxsize=1)
+def _families() -> dict[str, str]:
+    """Every category the families file names, mapped to its family.
+
+    Returns:
+        ``{category: family}``, upper-cased; each family maps to itself.
+    """
+    raw = yaml.safe_load(FAMILIES_PATH.read_text()) or {}
+    table: dict[str, str] = {}
+    for family, members in (raw.get("families") or {}).items():
+        for member in [family, *(members or ())]:
+            table[str(member).upper()] = str(family).upper()
+    return table
+
+
+def category_family(category: str) -> str:
+    """The family a detector or reviewer category belongs to, in the reviewer's own terms.
+
+    Args:
+        category: A category as a detector or the reviewer wrote it.
+
+    Returns:
+        Its family from ``data/pii_category_families.yaml``; the category itself, upper-cased, where no
+        family lists it.
+    """
+    key = str(category or "").upper()
+    return _families().get(key, key)
+
+
 PLACED_WORDS = "words"
 PLACED_SUBSTRING = "substring"
 
@@ -1044,6 +1106,8 @@ class MaskWord:
         categories: The categories the detectors marked on it, sorted.
         proper: Whether it is written as a proper noun
             (:func:`~senselab.audio.workflows.triage.residue.is_proper_form`).
+        propagated: Whether a reviewer ``release`` entry named the same term elsewhere in the recording
+            -- the same surface under the same family -- and unmasked this occurrence with it.
     """
 
     word_id: str
@@ -1054,6 +1118,7 @@ class MaskWord:
     finding: bool
     categories: tuple[str, ...] = ()
     proper: bool = False
+    propagated: bool = False
 
 
 @dataclass(frozen=True)
@@ -1068,7 +1133,10 @@ class MaskOutcome:
         final_words: The masked word ids each of ``final`` hides, aligned with it.
         outcome: One of :data:`MASK_OUTCOMES`.
         task_words_n: How many words outside the residue -- the task's own content, which no mask
-            ever covers -- the planned extent reached.
+            ever covers -- the finding's own extent reached.
+        categories: The detector categories of the findings the mask stands for, sorted; the
+            reviewer's category for a :data:`REVIEWER` mask.
+        source: :data:`DETECTOR` or :data:`REVIEWER`.
     """
 
     planned: RedactionExtent
@@ -1077,6 +1145,8 @@ class MaskOutcome:
     final_words: tuple[tuple[str, ...], ...]
     outcome: str
     task_words_n: int = 0
+    categories: tuple[str, ...] = ()
+    source: str = DETECTOR
 
 
 @dataclass(frozen=True)
@@ -1095,6 +1165,8 @@ class ReviewerSpan:
         condition_kind: For a human-review entry, :data:`~senselab.audio.workflows.triage.cohort.COHORT`
             or :data:`~senselab.audio.workflows.triage.cohort.OTHER`; empty otherwise.
         cohort_diagnosis: The cohort diagnosis its text matches; empty where none does.
+        agreement: :data:`AGREED_MASKED`, :data:`AGREED_PLACED` or :data:`NEW`.
+        entry_index: Its position in the reading's ``proposal``.
     """
 
     category: str
@@ -1106,6 +1178,24 @@ class ReviewerSpan:
     human_review: bool
     condition_kind: str = ""
     cohort_diagnosis: str = ""
+    agreement: str = NEW
+    entry_index: int = -1
+
+
+@dataclass(frozen=True)
+class UnplacedFinding:
+    """A detector finding SPEECH could not place on the transcript's words, and what became of it.
+
+    Attributes:
+        category: The detector's category.
+        family: Its family (:func:`category_family`).
+        state: :data:`UNPLACED_PLACED`, :data:`UNPLACED_CLEARED`, :data:`UNPLACED_OPEN` or
+            :data:`UNPLACED_UNREAD`.
+    """
+
+    category: str
+    family: str
+    state: str
 
 
 @dataclass(frozen=True)
@@ -1119,6 +1209,9 @@ class MaskPlan:
         release_off_mask: ``release`` quotes that match words no mask covers.
         proposals: The reviewer's ``redact`` entries, placed.
         padding_ms: The margin kept around each run of masked words.
+        unplaced: The detector findings SPEECH could not place on words, and what became of each.
+        redact_planned: REDACT's own padded, merged extents, which the released copy replaces
+            wherever the final masks differ from them.
     """
 
     masks: tuple[MaskOutcome, ...]
@@ -1127,11 +1220,13 @@ class MaskPlan:
     release_off_mask: tuple[str, ...]
     proposals: tuple[ReviewerSpan, ...]
     padding_ms: int
+    unplaced: tuple[UnplacedFinding, ...] = ()
+    redact_planned: tuple[RedactionExtent, ...] = ()
 
     @property
     def planned(self) -> list[RedactionExtent]:
         """REDACT's own extents, in stream order."""
-        return [mask.planned for mask in self.masks]
+        return list(self.redact_planned)
 
     @property
     def final(self) -> list[RedactionExtent]:
@@ -1140,8 +1235,17 @@ class MaskPlan:
 
     @property
     def changed(self) -> bool:
-        """Whether any planned mask lost a word."""
-        return any(mask.outcome != MASK_UNCHANGED for mask in self.masks)
+        """Whether the final masks differ from REDACT's own extents, so REDACT's copy is not the one released."""
+        return self.final != list(self.redact_planned)
+
+    @property
+    def agreed(self) -> frozenset[int]:
+        """The ``proposal`` positions of the reviewer's ``redact`` entries that agree with the masks."""
+        return frozenset(span.entry_index for span in self.proposals if span.agreement != NEW)
+
+    def unplaced_in(self, state: str) -> list[str]:
+        """The families of the unplaced findings in one state, sorted and without repeats."""
+        return sorted({finding.family for finding in self.unplaced if finding.state == state})
 
     def owners(self) -> dict[str, int]:
         """Which final extent hides each masked word, by index into :attr:`final`."""
@@ -1157,19 +1261,33 @@ class MaskPlan:
     def count(self, state: str) -> int:
         """How many words are in one state; :data:`PROPOSED_BY_REVIEWER` counts unmasked proposed words."""
         if state == PROPOSED_BY_REVIEWER:
-            return len({i for span in self.proposals for i in span.word_ids if i not in span.masked_ids})
+            return len(
+                {
+                    i
+                    for span in self.proposals
+                    if span.agreement == NEW
+                    for i in span.word_ids
+                    if i not in span.masked_ids
+                }
+            )
         return len({word.word_id for mask in self.masks for word in mask.words if word.state == state})
 
     def categories(self, state: str) -> list[str]:
         """The categories carrying at least one word in one state, sorted."""
         if state == PROPOSED_BY_REVIEWER:
-            return sorted({span.category for span in self.proposals if set(span.word_ids) - set(span.masked_ids)})
+            return sorted(
+                {
+                    span.category
+                    for span in self.proposals
+                    if span.agreement == NEW and set(span.word_ids) - set(span.masked_ids)
+                }
+            )
         return sorted({mask.planned.category for mask in self.masks if any(word.state == state for word in mask.words)})
 
     @property
     def human_review_kind(self) -> str | None:
         """Which kind of condition the human-review proposals name: ``other`` if any does, else ``cohort``."""
-        kinds = {span.condition_kind for span in self.proposals if span.human_review}
+        kinds = {span.condition_kind for span in self.proposals if span.human_review and span.agreement == NEW}
         if not kinds:
             return None
         return OTHER if OTHER in kinds else COHORT
@@ -1198,6 +1316,8 @@ class MaskPlan:
                     "start_s": float(mask.planned.start),
                     "end_s": float(mask.planned.end),
                     "outcome": mask.outcome,
+                    "source": mask.source,
+                    "categories": list(mask.categories),
                     "task_words_n": mask.task_words_n,
                     "words": [
                         {
@@ -1209,6 +1329,7 @@ class MaskPlan:
                             "finding": word.finding,
                             "categories": list(word.categories),
                             "proper": word.proper,
+                            "propagated": word.propagated,
                         }
                         for word in mask.words
                     ],
@@ -1235,8 +1356,14 @@ class MaskPlan:
                     "human_review": span.human_review,
                     "condition_kind": span.condition_kind,
                     "cohort_diagnosis": span.cohort_diagnosis,
+                    "agreement": span.agreement,
+                    "entry_index": span.entry_index,
                 }
                 for span in self.proposals
+            ],
+            "unplaced_findings": [
+                {"category": finding.category, "family": finding.family, "state": finding.state}
+                for finding in self.unplaced
             ],
             "release_unplaced": list(self.release_unplaced),
             "release_off_mask": list(self.release_off_mask),
@@ -1249,18 +1376,30 @@ class MaskPlan:
                     for outcome in MASK_OUTCOMES
                 },
                 **{f"{state}_n": self.count(state) for state in WORD_STATES},
+                "propagated_n": len({w.word_id for mask in self.masks for w in mask.words if w.propagated}),
+                "unplaced_n": len(self.unplaced),
+                **{
+                    f"proposals_{agreement}_n": sum(1 for span in self.proposals if span.agreement == agreement)
+                    for agreement in (AGREED_MASKED, AGREED_PLACED, NEW)
+                },
                 **{
                     f"{kind}_condition_n": sum(
-                        1 for span in self.proposals if span.human_review and span.condition_kind == kind
+                        1
+                        for span in self.proposals
+                        if span.human_review and span.agreement == NEW and span.condition_kind == kind
                     )
                     for kind in CONDITION_KINDS
                 },
             },
             "categories": {state: self.categories(state) for state in WORD_STATES},
-            "human_review": any(span.human_review for span in self.proposals),
+            "human_review": any(span.human_review and span.agreement == NEW for span in self.proposals),
             "human_review_kind": self.human_review_kind,
             "cohort_diagnoses": sorted(
-                {span.cohort_diagnosis for span in self.proposals if span.human_review and span.cohort_diagnosis}
+                {
+                    span.cohort_diagnosis
+                    for span in self.proposals
+                    if span.human_review and span.agreement == NEW and span.cohort_diagnosis
+                }
             ),
         }
 
@@ -1381,6 +1520,93 @@ def _final_extents(
     return out
 
 
+def _speech_notes(store: ProvStore) -> list[str]:
+    """SPEECH's latest live report's notes.
+
+    Args:
+        store: The provenance store.
+
+    Returns:
+        The notes as written; empty where SPEECH left no report.
+    """
+    reports = [entity for entity in live_entities(store, "branch_report") if entity.attributes.get("node") == "SPEECH"]
+    if not reports:
+        return []
+    return [str(note) for note in reports[-1].attributes.get("notes") or ()]
+
+
+@dataclass(frozen=True)
+class _Finding:
+    """One live, non-exempt detector finding SPEECH placed on words, with the residue words it covers."""
+
+    finding_id: str
+    category: str
+    extent: tuple[float, float]
+    word_ids: tuple[str, ...]
+    task_words_n: int
+
+
+def _located_findings(
+    store: ProvStore, words: Sequence[Entity], residue_ids: set[str], marked: Mapping[str, Mapping[str, str]]
+) -> tuple[list[_Finding], list[str]]:
+    """The findings placed on their own words, and the categories of those SPEECH could not place.
+
+    SPEECH places a finding whose text matches no run of the scanned tokens over the whole transcript
+    and notes ``pii_unlocated (<category>)``. Such a finding names no word, so it is returned apart and
+    masks nothing. Every other finding covers the words its own extent holds that carry its category's
+    mark: the words SPEECH matched, and no neighbour its timing hull merely reaches. A finding REDACT
+    exempted as declared stimulus is neither.
+
+    Args:
+        store: The provenance store.
+        words: The timed consensus words, in stream order.
+        residue_ids: The residue's word ids; empty where the store predates the residue, which admits
+            every word.
+        marked: :func:`_pii_marked_words`' output.
+
+    Returns:
+        ``(located, unplaced categories)``, located in stream order.
+    """
+    exempt = {
+        source
+        for assertion in live_entities(store, "assertion")
+        if assertion.attributes.get("verb") == _EXEMPT_VERB
+        for source in store.derived_from(assertion.id)
+    }
+    unlocated = Counter(
+        match.group("category") for note in _speech_notes(store) if (match := _UNLOCATED_NOTE.match(note))
+    )
+    spans = [span for word in words for span in (word.attributes.get("timings") or {}).values()]
+    whole = (min(float(span[0]) for span in spans), max(float(span[1]) for span in spans)) if spans else None
+    located: list[_Finding] = []
+    unplaced: list[str] = []
+    for finding in live_entities(store, "pii"):
+        if finding.extent is None or finding.id in exempt:
+            continue
+        category = str(finding.attributes.get("category") or "")
+        low, high = float(finding.extent[0]), float(finding.extent[1])
+        if (
+            whole is not None
+            and unlocated.get(category)
+            and abs(low - whole[0]) <= _WHOLE_TOLERANCE_S
+            and abs(high - whole[1]) <= _WHOLE_TOLERANCE_S
+        ):
+            unplaced.append(category)
+            continue
+        inside = [
+            word
+            for word in words
+            if category in marked.get(word.id, {})
+            and word_hull(word)[0] >= low - _WHOLE_TOLERANCE_S
+            and word_hull(word)[1] <= high + _WHOLE_TOLERANCE_S
+        ]
+        members = tuple(word.id for word in inside if not residue_ids or word.id in residue_ids)
+        task = sum(1 for word in inside if residue_ids and word.id not in residue_ids)
+        located.append(_Finding(finding.id, category, (low, high), members, task))
+    located.sort(key=lambda item: (item.extent[0], item.extent[1]))
+    return located, unplaced
+
+
 def mask_plan(
     store: ProvStore,
     *,
@@ -1390,23 +1616,23 @@ def mask_plan(
     protected_categories: Sequence[str] = (),
     cohort_conditions: str | None = None,
 ) -> MaskPlan:
-    """Which words stay masked: REDACT's plan, the reviewer's unmasks, and the content-word trim.
+    """Which words stay masked: one mask per detector finding, the reviewer's unmasks, and the trim.
 
-    Each planned mask covers the residue words its extent overlaps; a word outside the residue is the
-    task's own content and no mask covers it. A word leaves the mask when a reviewer ``release``
-    entry names it -- whole-token runs, at every place the quote occurs -- and ``reviewer_applies``;
-    or when it is not a residue content word
-    (:func:`~senselab.audio.workflows.triage.residue.is_content_word`), which no mask ever keeps; or
-    when no detector marked it and some word of the same mask is marked, so only the padding reached
-    it. The kept words of each mask are re-cut into one extent per adjacent run, and a mask whose
-    planned extent reaches a task word's audio is re-cut even where no word changed state. A mask
-    whose words all left, or that covers task words only, disappears; a mask covering no word at
-    all is kept as planned. The rule and its derivation are in
-    ``specs/20260927-pii-span-ledger/design.md``.
+    A mask stands for one finding, or several covering exactly the same words, and covers the residue
+    words that finding was placed on -- never a neighbour its padding or timing reaches, never a task
+    word, never the whole transcript. A finding SPEECH could not place masks nothing; it is recorded as
+    unplaced, and a reviewer ``redact`` entry of its family places it on the words the reviewer
+    quotes. A word leaves its mask when a reviewer ``release`` entry names it -- whole-token runs, at
+    every place the quote occurs -- or names the same term (surface and family) elsewhere, unless a
+    ``redact`` entry places on that term; or when it is not a residue content word
+    (:func:`~senselab.audio.workflows.triage.residue.is_content_word`). A ``redact`` entry whose content
+    words a mask already hides agrees with the masks. The kept words are cut into one extent per
+    adjacent run, padded up to the nearest unmasked word. The rule and its derivation are in
+    ``specs/20260927-mask-placement-and-second-speaker/design.md``.
 
     Args:
-        store: The provenance store, carrying REDACT's planned spans, SPEECH's residue and REVIEW's
-            annotation.
+        store: The provenance store, carrying SPEECH's findings and residue, REDACT's plan and
+            REVIEW's annotation.
         reviewer_applies: Whether the fold lets the reviewer's ``release`` entries unmask words.
         padding_ms: ``redaction.padding_ms``, the margin kept around each run of masked words.
         human_review_categories: Upper-cased categories whose ``redact`` entries the fold routes to
@@ -1418,11 +1644,12 @@ def mask_plan(
             ``verdict.cohort_conditions``; every such proposal is ``other`` where None.
 
     Returns:
-        The plan. Every mask is unchanged where REDACT planned none or the store predates the residue.
+        The plan.
     """
-    planned = planned_extents(store)
     annotation = find_measurement(store, REDACTION_LLM_ANNOTATION)
-    entries = list((annotation.attributes.get("proposal") or ()) if annotation is not None else ())
+    reading = dict(annotation.attributes) if annotation is not None else {}
+    entries = list(reading.get("proposal") or ())
+    read = reading.get("status") in ("clean", "flagged")
     try:
         residue = residue_words(store)
     except ValueError:
@@ -1430,33 +1657,19 @@ def mask_plan(
     residue_ids = {word.id for word in residue}
     tokens = _tokens(residue)
     words = [word for word in consensus_words(store) if word.extent is not None]
-    reached = [[word for word in words if _overlaps(word_hull(word), (extent.start, extent.end))] for extent in planned]
-    if residue_ids:
-        covered = [[word for word in group if word.id in residue_ids] for group in reached]
-        task = [word.extent for word in words if word.id not in residue_ids and word.extent is not None]
-        task_heard = [
-            any(_overlaps((float(start), float(end)), (extent.start, extent.end)) for start, end in task)
-            for extent in planned
-        ]
-    else:
-        covered, task_heard = reached, [False] * len(planned)
-    under_masks = {word.id for group in covered for word in group}
+    by_id = {word.id: word for word in words}
     marked = _pii_marked_words(store)
+    located, unplaced_categories = _located_findings(store, words, residue_ids, marked)
 
-    named: set[str] = set()
-    unplaced: list[str] = []
-    off_mask: list[str] = []
-    for entry in entries:
-        if str(entry.get("action")) != "release":
-            continue
-        quote = str(entry.get("text") or "")
-        hits = _place(quote, tokens)
-        if not hits:
-            unplaced.append(quote)
-            continue
-        if not any(word.id in under_masks for word in hits):
-            off_mask.append(quote)
-        named.update(word.id for word in hits)
+    groups: dict[tuple[str, ...], list[_Finding]] = {}
+    for finding in located:
+        groups.setdefault(finding.word_ids, []).append(finding)
+    # A word's categories are those of the located findings placed on it. An unplaced finding marks
+    # every word of the transcript, and those marks say nothing about any one word.
+    found: dict[str, set[str]] = {}
+    for finding in located:
+        for word_id in finding.word_ids:
+            found.setdefault(word_id, set()).add(finding.category)
 
     protected = {category.upper() for category in protected_categories}
     previous = {
@@ -1467,76 +1680,79 @@ def mask_plan(
         return is_proper_form(str(word.attributes.get("text") or ""), previous.get(word.id))
 
     def content(word: Entity) -> bool:
-        if word.id not in residue_ids:
+        if residue_ids and word.id not in residue_ids:
             return False
-        if protected & {category.upper() for category in marked.get(word.id, {})} and proper(word):
+        if protected & {category.upper() for category in found.get(word.id, set())} and proper(word):
             return True
         return is_content_word(str(word.attributes.get("text") or ""))
 
-    def keepable(group: Sequence[Entity]) -> set[str]:
-        found = {word.id for word in group if word.id in marked}
-        return {word.id for word in group if content(word) and (word.id in found or not found)}
+    family_of_word: dict[str, str] = {}
+    for member_ids, members in groups.items():
+        for word_id in member_ids:
+            family_of_word.setdefault(word_id, category_family(members[0].category))
 
-    keepable_ids = {word_id for group in covered for word_id in keepable(group)}
+    def term(word_id: str) -> tuple[str, str]:
+        return _match_token(str(by_id[word_id].attributes.get("text") or "")), family_of_word.get(word_id, "")
 
-    def build(apply_reviewer: bool) -> tuple[MaskOutcome, ...]:
-        kept_ids = {word_id for word_id in keepable_ids if not (apply_reviewer and word_id in named)}
-        outcomes: list[MaskOutcome] = []
-        for extent, group, reach, heard in zip(planned, covered, reached, task_heard):
-            states = [
-                MaskWord(
-                    word_id=word.id,
-                    text=str(word.attributes.get("text") or ""),
-                    state=MASKED
-                    if word.id in kept_ids
-                    else UNMASKED_BY_REVIEWER
-                    if apply_reviewer and word.id in named and word.id in keepable_ids
-                    else UNMASKED_BY_TRIM,
-                    named=word.id in named,
-                    content=content(word),
-                    finding=word.id in marked,
-                    categories=tuple(sorted(marked.get(word.id, {}))),
-                    proper=proper(word),
-                )
-                for word in group
-            ]
-            kept = [word for word in group if word.id in kept_ids]
-            if not reach or (len(kept) == len(group) and group and not heard):
-                outcome = MASK_UNCHANGED
-                runs = [(extent, tuple(word.id for word in group))]
-            else:
-                runs = _final_extents(kept, words, kept_ids, extent.category, padding_ms / 1000.0) if kept else []
-                reviewer_moved = any(word.state == UNMASKED_BY_REVIEWER for word in states)
-                outcome = MASK_UNMASKED if not kept else MASK_PARTLY_UNMASKED if reviewer_moved else MASK_TRIMMED
-            outcomes.append(
-                MaskOutcome(
-                    planned=extent,
-                    words=tuple(states),
-                    final=tuple(run for run, _ in runs),
-                    final_words=tuple(members for _, members in runs),
-                    outcome=outcome,
-                    task_words_n=sum(1 for word in reach if word.id not in residue_ids) if residue_ids else 0,
-                )
-            )
-        return tuple(outcomes)
+    def placed_words(quote: str) -> tuple[list[Entity], str]:
+        hits = _place(quote, tokens)
+        if hits:
+            return hits, PLACED_WORDS
+        hits = _place_substring(quote, residue)
+        return hits, (PLACED_SUBSTRING if hits else "")
 
+    named: set[str] = set()
+    unplaced_quotes: list[str] = []
+    for entry in entries:
+        if str(entry.get("action")) != "release":
+            continue
+        hits = _place(str(entry.get("text") or ""), tokens)
+        if not hits:
+            unplaced_quotes.append(str(entry.get("text") or ""))
+            continue
+        named.update(word.id for word in hits)
+    redact_placed = {
+        index: placed_words(str(entry.get("text") or ""))
+        for index, entry in enumerate(entries)
+        if str(entry.get("action")) != "release"
+    }
+    blocked_tokens = {
+        _match_token(str(word.attributes.get("text") or "")) for hits, _ in redact_placed.values() for word in hits
+    }
+    named_terms = {term(word_id) for word_id in named if word_id in family_of_word}
+    propagated = {
+        word_id
+        for word_id in family_of_word
+        if word_id not in named and term(word_id) in named_terms and term(word_id)[0] not in blocked_tokens
+    }
     applied = reviewer_applies and bool(named)
-    masks = build(applied)
+    released = (named | propagated) if applied else set()
+    keepable = {word_id for member_ids in groups for word_id in member_ids if content(by_id[word_id])}
+    kept_ids = keepable - released
 
-    final_ids = {word.word_id for mask in masks for word in mask.words if word.state == MASKED}
+    proposals: list[ReviewerSpan] = []
+    reviewer_masks: list[tuple[str, list[Entity]]] = []
+    unplaced_families = {category_family(category) for category in unplaced_categories}
+    placed_families: set[str] = set()
     review_set = {category.upper() for category in human_review_categories}
     profile = load_cohort_profile(cohort_conditions) if cohort_conditions else None
-    proposals: list[ReviewerSpan] = []
-    for entry in entries:
-        if str(entry.get("action")) == "release":
-            continue
+    for index, (hits, placed) in redact_placed.items():
+        entry = entries[index]
         quote = str(entry.get("text") or "")
-        hits = _place(quote, tokens)
-        placed = PLACED_WORDS if hits else ""
-        if not hits:
-            hits = _place_substring(quote, residue)
-            placed = PLACED_SUBSTRING if hits else ""
         category = str(entry.get("category") or "OTHER").upper()
+        family = category_family(category)
+        uncovered = [word for word in hits if word.id not in kept_ids and content(word)]
+        if hits and not uncovered:
+            agreement = AGREED_MASKED
+            if family in unplaced_families:
+                placed_families.add(family)
+        elif hits and family in unplaced_families:
+            agreement = AGREED_PLACED
+            placed_families.add(family)
+            reviewer_masks.append((family, uncovered))
+            kept_ids |= {word.id for word in uncovered}
+        else:
+            agreement = NEW
         held = category in review_set
         diagnosis = (profile.diagnosis(quote) if profile is not None else None) if held else None
         proposals.append(
@@ -1546,19 +1762,163 @@ def mask_plan(
                 placed=placed,
                 word_ids=tuple(word.id for word in hits),
                 texts=tuple(str(word.attributes.get("text") or "") for word in hits),
-                masked_ids=tuple(word.id for word in hits if word.id in final_ids),
+                masked_ids=tuple(word.id for word in hits if word.id in kept_ids),
                 human_review=held,
                 condition_kind=(COHORT if diagnosis else OTHER) if held else "",
                 cohort_diagnosis=diagnosis or "",
+                agreement=agreement,
+                entry_index=index,
             )
         )
+
+    def state_of(word: Entity) -> str:
+        if word.id in kept_ids:
+            return MASKED
+        if word.id in released and word.id in keepable:
+            return UNMASKED_BY_REVIEWER
+        return UNMASKED_BY_TRIM
+
+    pending: list[tuple[RedactionExtent, list[Entity], tuple[str, ...], str, int]] = []
+    for member_ids, members in groups.items():
+        low = min(finding.extent[0] for finding in members)
+        high = max(finding.extent[1] for finding in members)
+        family = category_family(members[0].category)
+        pending.append(
+            (
+                RedactionExtent(start=low, end=high, category=family),
+                [by_id[word_id] for word_id in member_ids],
+                tuple(sorted({finding.category for finding in members})),
+                DETECTOR,
+                max(finding.task_words_n for finding in members),
+            )
+        )
+    for family, group in reviewer_masks:
+        if not group:
+            continue
+        hull = (min(word_hull(word)[0] for word in group), max(word_hull(word)[1] for word in group))
+        pending.append((RedactionExtent(start=hull[0], end=hull[1], category=family), group, (family,), REVIEWER, 0))
+    redact_planned = planned_extents(store)
+    silent = [
+        extent
+        for extent in redact_planned
+        if not any(_overlaps(word_hull(word), (extent.start, extent.end)) for word in words)
+    ]
+    pending.sort(key=lambda item: (item[0].start, item[0].end))
+
+    owner: dict[str, int] = {}
+    for position in sorted(range(len(pending)), key=lambda i: len(pending[i][1])):
+        for word in pending[position][1]:
+            if word.id in kept_ids:
+                owner.setdefault(word.id, position)
+
+    outcomes: list[MaskOutcome] = []
+    for position, (extent, group, categories, source, task_words_n) in enumerate(pending):
+        states = tuple(
+            MaskWord(
+                word_id=word.id,
+                text=str(word.attributes.get("text") or ""),
+                state=state_of(word),
+                named=word.id in named,
+                content=content(word),
+                finding=word.id in found,
+                categories=tuple(sorted(found.get(word.id, set()))),
+                proper=proper(word),
+                propagated=word.id in propagated,
+            )
+            for word in group
+        )
+        own = [word for word in group if owner.get(word.id) == position]
+        runs = _final_extents(own, words, kept_ids, extent.category, padding_ms / 1000.0) if own else []
+        kept_here = [word for word in group if word.id in kept_ids]
+        if group and len(kept_here) == len(group):
+            outcome = MASK_UNCHANGED
+        elif not kept_here:
+            outcome = MASK_UNMASKED
+        elif any(word.state == UNMASKED_BY_REVIEWER for word in states):
+            outcome = MASK_PARTLY_UNMASKED
+        else:
+            outcome = MASK_TRIMMED
+        outcomes.append(
+            MaskOutcome(
+                planned=extent,
+                words=states,
+                final=tuple(run for run, _ in runs),
+                final_words=tuple(members for _, members in runs),
+                outcome=outcome,
+                task_words_n=task_words_n,
+                categories=categories,
+                source=source,
+            )
+        )
+
+    # REDACT's own extent stands wherever it hides exactly the kept words of the masks inside it and
+    # reaches no other word, so the copy REDACT wrote is the one released.
+    for extent in redact_planned:
+        reach = [word for word in words if _overlaps(word_hull(word), (extent.start, extent.end))]
+        if not reach or any(word.id not in kept_ids for word in reach):
+            continue
+        reach_ids = {word.id for word in reach}
+        inside = [
+            position
+            for position, outcome in enumerate(outcomes)
+            if outcome.final_words and {word_id for members in outcome.final_words for word_id in members} <= reach_ids
+        ]
+        covered = {word_id for position in inside for members in outcomes[position].final_words for word_id in members}
+        if not inside or covered != reach_ids:
+            continue
+        order = [word.id for word in reach]
+        for rank, position in enumerate(inside):
+            outcomes[position] = replace(
+                outcomes[position],
+                final=(extent,) if rank == 0 else (),
+                final_words=(tuple(order),) if rank == 0 else (),
+            )
+    # A planned extent that reaches no word masks audio no transcript word accounts for; it stands as
+    # REDACT planned it.
+    for extent in silent:
+        outcomes.append(
+            MaskOutcome(
+                planned=extent,
+                words=(),
+                final=(extent,),
+                final_words=((),),
+                outcome=MASK_UNCHANGED,
+                categories=(extent.category,),
+            )
+        )
+    outcomes.sort(key=lambda mask: (mask.planned.start, mask.planned.end))
+
+    cleared = read and reading.get("original") == "clean"
+    unplaced = tuple(
+        UnplacedFinding(
+            category=category,
+            family=category_family(category),
+            state=UNPLACED_PLACED
+            if category_family(category) in placed_families
+            else UNPLACED_CLEARED
+            if cleared
+            else UNPLACED_OPEN
+            if read
+            else UNPLACED_UNREAD,
+        )
+        for category in unplaced_categories
+    )
+    off_mask = [
+        str(entry.get("text") or "")
+        for entry in entries
+        if str(entry.get("action")) == "release"
+        and (hits := _place(str(entry.get("text") or ""), tokens))
+        and not any(word.id in family_of_word for word in hits)
+    ]
     return MaskPlan(
-        masks=masks,
+        masks=tuple(outcomes),
         reviewer_applied=applied,
-        release_unplaced=tuple(unplaced),
+        release_unplaced=tuple(unplaced_quotes),
         release_off_mask=tuple(off_mask),
         proposals=tuple(proposals),
         padding_ms=int(padding_ms),
+        unplaced=unplaced,
+        redact_planned=tuple(redact_planned),
     )
 
 

@@ -1,0 +1,33 @@
+# Which detector categories name the same kind of identifying content, keyed by the reviewer's own
+# category for it.
+#
+# derivation: the keys are the reviewer's vocabulary, the categories REVIEW's model is asked to use
+# (src/senselab/text/tasks/pii_detection/redaction_review.py). The members are every category the
+# three detectors (gliner, presidio, rules) wrote on a finding anywhere in the r6 corpus
+# (recording_vectors_r6_v9b, column pii_category, 62,550 recordings, 23 distinct values), each
+# placed under the reviewer category that names the same thing. AGE sits with DATE_TIME because the
+# reviewer has no age category and HIPAA Safe Harbor lists ages over 89 with the date elements; MISC
+# and NRP (nationality, religious or political group) have no reviewer counterpart and sit with
+# OTHER. A category missing from every family is its own family, labelled as written.
+#
+# Used for two things: the label a mask carries (the family, so one span reads one category in the
+# reviewer's own terms), and whether a reviewer ``redact`` entry agrees with a detector finding the
+# fold could not place on words (same family).
+families:
+  PERSON: [PERSON, NAME]
+  LOCATION: [LOCATION, LOC]
+  DATE_TIME: [DATE_TIME, DATE, AGE]
+  ORGANIZATION: [ORGANIZATION, ORG]
+  ID:
+    - UNIQUE_IDENTIFIER
+    - VEHICLE_IDENTIFIER
+    - US_SSN
+    - DEVICE_IDENTIFIER
+    - US_DRIVER_LICENSE
+    - MEDICAL_RECORD_NUMBER
+    - LICENSE_NUMBER
+    - HEALTH_PLAN_NUMBER
+    - BIOMETRIC_IDENTIFIER
+    - PHOTOGRAPHIC_IMAGE
+  CONTACT: [EMAIL_ADDRESS, PHONE_NUMBER, FAX_NUMBER, URL]
+  OTHER: [MISC, NRP]
