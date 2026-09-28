@@ -133,6 +133,14 @@ REVIEWER_UNMASKED_ALL = (
     "so the original is released"
 )
 NO_CONTENT_MASKED = "every mask REDACT planned hid only non-content words, so the original is released"
+FINDINGS_ARE_TASK_CONTENT = (
+    "every finding REDACT read is content the task itself declares, so REDACT masked nothing and the original "
+    "is released"
+)
+REVIEWER_CLEARED_UNMASKED = (
+    "REDACT's re-scan still read a finding it had planned no mask over, and the reviewer read the original as "
+    "clean and proposed nothing to hide, so the original is released"
+)
 
 RELEASE_WITHOUT_REDACTION_GROUNDS = (
     NO_LEXICAL_WORD,
@@ -141,6 +149,8 @@ RELEASE_WITHOUT_REDACTION_GROUNDS = (
     NON_LEXICAL_TASK,
     REVIEWER_UNMASKED_ALL,
     NO_CONTENT_MASKED,
+    FINDINGS_ARE_TASK_CONTENT,
+    REVIEWER_CLEARED_UNMASKED,
 )
 """Which reading cleared the recording. One stands behind every :attr:`Release.WITHOUT_REDACTION`."""
 
@@ -749,7 +759,8 @@ def _release_from(
     Returns:
         Which artefact may be handed on, never anything about the store, and the ground behind it.
         A REDACT ``pass`` clears the redacted copy and not the original; the ground is None wherever
-        REDACT itself decided and its plan stands, and one of the controlled grounds otherwise.
+        REDACT itself decided and a planned mask stands, and one of the controlled grounds otherwise.
+        A copy that would mask nothing is never released as a redacted copy: the original is.
     """
     release, ground = _release_from_evidence(node_verdicts, evidence, ran, speech_declined)
     if reviewer_withholds is not None and release in (Release.WITH_REDACTION, Release.WITHOUT_REDACTION):
@@ -764,10 +775,17 @@ def _release_from(
         and evidence.rescan_survivors
     ):
         release, ground = Release.WITH_REDACTION, REVIEWER_CLEARED_RESCAN
-    if release is Release.WITH_REDACTION and evidence.masks_changed:
-        reviewer = evidence.reviewer_unmasked_n > 0
-        if evidence.masks_final_n == 0:
+    if release is not Release.WITH_REDACTION:
+        return release, ground
+    reviewer = evidence.reviewer_unmasked_n > 0
+    if evidence.masks_final_n == 0:
+        if evidence.masks_changed:
             return Release.WITHOUT_REDACTION, REVIEWER_UNMASKED_ALL if reviewer else NO_CONTENT_MASKED
+        if ground is None:
+            return Release.WITHOUT_REDACTION, FINDINGS_ARE_TASK_CONTENT
+        if ground == REVIEWER_CLEARED_RESCAN:
+            return Release.WITHOUT_REDACTION, REVIEWER_CLEARED_UNMASKED
+    if evidence.masks_changed:
         return Release.WITH_REDACTION, REVIEWER_UNMASKED_SOME if reviewer else MASKS_TRIMMED_TO_CONTENT
     return release, ground
 

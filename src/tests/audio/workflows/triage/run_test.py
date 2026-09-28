@@ -35,7 +35,7 @@ from senselab.audio.workflows.triage.nodes.common import (
     write_verdict,
 )
 from senselab.audio.workflows.triage.nodes.preprocess import PreprocessResult, write_clip_spans
-from senselab.audio.workflows.triage.nodes.redact import RedactResult
+from senselab.audio.workflows.triage.nodes.redact import REDACTION_SPAN, RedactResult
 from senselab.audio.workflows.triage.nodes.report import ReportRenderError
 from senselab.audio.workflows.triage.nodes.routing import routing as real_routing
 from senselab.audio.workflows.triage.nodes.taxonomy import TaxonomyResult
@@ -309,7 +309,11 @@ def _fakes(
         task_family: str | None = None,
     ) -> RedactResult:
         _record("REDACT")
+        mask = store.entity(
+            prov_type="span", extent=(0.1, 0.2), attributes={"name": REDACTION_SPAN, "category": "PERSON"}
+        )
         entity_id, verdict = _conclude(store, "REDACT", Outcome.PASS, None)
+        store.was_generated_by(mask, store.generated_by(entity_id) or "")
         artifacts: dict[str, Path] = {}
         for name, payload in (released or {}).items():
             path = artifacts_dir / Path(payload).name
