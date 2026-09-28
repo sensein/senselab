@@ -20,11 +20,13 @@ import math
 import re
 import struct
 from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Iterable, Iterator, Mapping, Sequence
 
 import numpy as np
 import pyarrow as pa
+import yaml  # type: ignore[import-untyped]
 
 from senselab.audio.workflows.triage.cohort import CONDITION_KINDS
 
@@ -760,7 +762,8 @@ def _reviewer_columns(decision: Mapping[str, Any]) -> dict[str, Any]:
         decision: The fold's record.
 
     Returns:
-        The ``llm_*`` columns. Every one is None where the fold carries no annotation.
+        The ``llm_*`` columns. Where the fold carries no annotation each is None, except
+        ``llm_flagged_categories`` and ``llm_flagged_n``, which are ``[]`` and ``0``.
 
     """
     annotation = decision.get("llm_redaction") or {}
@@ -1100,11 +1103,11 @@ def _row_code(entity: Entity) -> str:
 # ---------------------------------------------------------------------------------------- schema
 
 
-def schema() -> pa.Schema:
-    """The parquet schema, in column order.
+def _fields() -> list[pa.Field]:
+    """Every column, in order.
 
     Returns:
-        The schema every shard is written with, so shards concatenate without a cast.
+        The fields :func:`schema` is built from.
     """
     fields = [
         pa.field("participant", pa.string()),
@@ -1214,7 +1217,163 @@ def schema() -> pa.Schema:
         pa.field("branch_lanes", pa.binary()),
         pa.field("branch_lane_role", pa.list_(pa.string())),
     ]
-    return pa.schema(fields, metadata={b"senselab.recording_vectors.schema_version": str(SCHEMA_VERSION).encode()})
+    return fields
+
+
+def schema() -> pa.Schema:
+    """The parquet schema, in column order, carrying its version and its data dictionary.
+
+    Returns:
+        The schema every shard is written with, so shards concatenate without a cast.
+    """
+    return pa.schema(
+        _fields(),
+        metadata={
+            VERSION_KEY: str(SCHEMA_VERSION).encode(),
+            DICTIONARY_KEY: json.dumps(dictionary_document(), sort_keys=True).encode(),
+        },
+    )
+
+
+# ------------------------------------------------------------------------------ the dictionary
+
+VERSION_KEY = b"senselab.recording_vectors.schema_version"
+DICTIONARY_KEY = b"senselab.recording_vectors.dictionary"
+"""The parquet key-value metadata key the data dictionary is written under, as JSON."""
+
+DICTIONARY_PATH = Path(__file__).parent / "data" / "recording_vectors" / "dictionary.yaml"
+DICTIONARY_FIELDS = ("units", "description", "computation", "source", "null_means")
+"""What every dictionary entry states. ``values`` is added where a column has a closed vocabulary."""
+
+_OP_TEXT = {"at_least": "at least", "at_most": "at most"}
+
+
+def _format(value: Any, facts: Mapping[str, Any]) -> Any:  # noqa: ANN401 -- a YAML node is any type
+    """One template value with a member's facts filled in.
+
+    Args:
+        value: A string, a list of strings, or anything else, which is returned as it is.
+        facts: The member's facts, keyed as the template's placeholders.
+
+    Returns:
+        The filled value.
+    """
+    if isinstance(value, str):
+        return " ".join(value.format(**facts).split())
+    if isinstance(value, list):
+        return [_format(item, facts) for item in value]
+    return value
+
+
+def _entry(name: str, spec: Mapping[str, Any]) -> dict[str, Any]:
+    """One column's entry, with its prose collapsed onto one line.
+
+    Args:
+        name: The column.
+        spec: Its fields as written.
+
+    Returns:
+        The entry.
+    """
+    entry: dict[str, Any] = {"name": name}
+    for key, value in spec.items():
+        entry[key] = " ".join(value.split()) if isinstance(value, str) else value
+    return entry
+
+
+def _expand_families(families: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
+    """Every column a family's templates produce over its members.
+
+    Args:
+        families: The dictionary's ``families`` mapping.
+
+    Returns:
+        Column name to entry. Each entry names its ``family`` and ``member``.
+
+    Raises:
+        ValueError: When a member's kind has no template, or two templates produce one column.
+    """
+    out: dict[str, dict[str, Any]] = {}
+    for family, spec in families.items():
+        templates = spec["templates"]
+        for member, facts in spec["members"].items():
+            filled = {"name": member, **facts, "op_text": _OP_TEXT.get(str(facts.get("op")), facts.get("op"))}
+            readers = spec.get("readers") or {}
+            if readers:
+                rule = readers["located"] if facts.get("reading") is None else readers[facts["reader"]]
+                filled["reading_rule"] = " ".join(str(rule).format(**filled).split())
+            group = templates[facts["kind"]] if "kind" in facts else templates
+            if not isinstance(group, dict) or not group:
+                raise ValueError(f"family {family}: no template for member {member}")
+            for pattern, template in group.items():
+                column = pattern.format(**filled)
+                if column in out:
+                    raise ValueError(f"family {family}: two templates produce {column}")
+                entry = {"name": column, **{key: _format(value, filled) for key, value in template.items()}}
+                entry["family"] = family
+                entry["member"] = member
+                for key in ("kind", "reading", "op"):
+                    if key in facts:
+                        entry[key] = facts[key]
+                out[column] = entry
+    return out
+
+
+@lru_cache(maxsize=1)
+def _dictionary_source() -> dict[str, Any]:
+    """The dictionary file, parsed once.
+
+    Returns:
+        The YAML mapping.
+    """
+    return yaml.safe_load(DICTIONARY_PATH.read_text(encoding="utf-8"))
+
+
+def dictionary() -> list[dict[str, Any]]:
+    """The data dictionary: one entry per column, in schema order, with the column's dtype.
+
+    Returns:
+        The entries. Each carries ``name``, ``dtype`` and every field of :data:`DICTIONARY_FIELDS`.
+
+    Raises:
+        ValueError: When the dictionary does not name exactly the columns the schema declares, or an
+            entry lacks a field.
+    """
+    source = _dictionary_source()
+    entries = {name: _entry(name, spec) for name, spec in (source.get("columns") or {}).items()}
+    expanded = _expand_families(source.get("families") or {})
+    both = sorted(set(entries) & set(expanded))
+    if both:
+        raise ValueError(f"columns described twice: {both}")
+    entries.update(expanded)
+    fields = _fields()
+    declared = [field.name for field in fields]
+    missing = [name for name in declared if name not in entries]
+    stale = sorted(set(entries) - set(declared))
+    if missing or stale:
+        raise ValueError(f"the dictionary misses {missing} and describes columns the schema lacks: {stale}")
+    out = []
+    for column in fields:
+        entry = entries[column.name]
+        lacking = [key for key in DICTIONARY_FIELDS if not entry.get(key)]
+        if lacking:
+            raise ValueError(f"{column.name}: the dictionary entry lacks {lacking}")
+        out.append({"name": column.name, "dtype": str(column.type), **{k: v for k, v in entry.items() if k != "name"}})
+    return out
+
+
+def dictionary_document() -> dict[str, Any]:
+    """The dictionary as the parquet's metadata carries it.
+
+    Returns:
+        ``schema_version``, the ``source_root`` every ``source`` path is relative to, and the
+        ``columns``.
+    """
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "source_root": _dictionary_source()["source_root"],
+        "columns": dictionary(),
+    }
 
 
 def to_table(rows: Sequence[dict[str, Any]]) -> pa.Table:

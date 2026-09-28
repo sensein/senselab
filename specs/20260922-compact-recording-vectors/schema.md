@@ -15,6 +15,14 @@ changes this file with it. The same number is in
 the parquet's own key-value metadata, under `senselab.recording_vectors.schema_version`, so a
 reader can check it before decoding a byte.
 
+**What every column is and how it is computed is the data dictionary**,
+`src/senselab/audio/workflows/triage/data/recording_vectors/dictionary.yaml`: one entry per column
+giving its units, description, computation, the code that produces it and what null means. The
+writer embeds the expanded dictionary in every file as JSON under the metadata key
+`senselab.recording_vectors.dictionary`, and the viewer shows it. This document keeps the byte
+layouts (§1, §4, §5) and the design notes; where a column table below and the dictionary differ,
+the dictionary is the one tested against the code.
+
 What each bump added:
 
 | version | added |
@@ -24,6 +32,13 @@ What each bump added:
 | **3** | VERDICT's gates (§6), the multi-speaker instrument (§7), the enhanced/residual levels (§8), and four measurement names |
 | **4** | removed the three `coverage_min` gate columns; the `source_content_coverage` measurement column is unchanged. See `specs/20260924-recall-conformance-is-production/design.md` |
 | **5** | no column change: the `release` vocabulary now names which artefact may be handed on — `release_without_redaction` \| `release_with_redaction` \| `withheld` \| `not_assessed`. See `specs/20260924-which-artefact-is-releasable/design.md` |
+| **6** | the fourteen `llm_*` columns: what the redaction reviewer read (the section at the end) |
+| **7** | `residue_words_n`, `residue_method`, `residue_content`, `scan_ran`, `scanned_by`; `pii_findings_n`, `pii_marks` and `pii_category` became null wherever no detector ran |
+| **8** | the `pii_ledger` counts: `masks_n`, `masks_final_n`, a count and a category list per word state, `condition_review` |
+| **9** | `task_words_n`, `condition_review_kind`, `cohort_condition_n`, `other_condition_n`, `cohort_diagnoses` |
+
+The data dictionary in the file's metadata was added without a bump: it adds no column, changes no
+layout and no vocabulary, and a reader that ignores the key reads the file exactly as before.
 
 ---
 
@@ -84,7 +99,7 @@ Owner-directed: `participant`, `task`, `verdict` are the first three columns, in
 | `run_dir` | string | the run directory, relative to the scan root | never |
 | `declared_family` | string | the declared task family, e.g. `story-recall-v2` | nothing was declared |
 | `release` | string | `release_without_redaction` \| `release_with_redaction` \| `withheld` \| `not_assessed` | the fold wrote none |
-| `release_ground` | string | why the release axis reads as it does — one of the seven controlled grounds `vocabulary.py` declares: three behind `release_without_redaction`, four behind `not_assessed` | **REDACT itself decided**, so the state stands on its own verdict and needs no ground |
+| `release_ground` | string | why the release axis reads as it does — one of the controlled grounds `vocabulary.py` declares under `RELEASE_WITHOUT_REDACTION_GROUNDS`, `RELEASE_UNKNOWN_GROUNDS`, `RELEASE_WITHHELD_GROUNDS` and `RELEASE_WITH_REDACTION_GROUNDS` | **REDACT itself decided**, so the state stands on its own verdict and needs no ground |
 | `grounds` | string | VERDICT's `discard_ground` | **nothing was discarded** — the common case |
 | `route_state` | string | e.g. `routed`, `declined` | the fold wrote none |
 | `duration_s` | double | seconds, the **source** recording | ADMIT's `recording` stream entity is absent |
@@ -97,7 +112,7 @@ Owner-directed: `participant`, `task`, `verdict` are the first three columns, in
 | `flag_nodes` | list\<string\> | which nodes those were, e.g. `["SPEECH"]` | never; `[]` when none |
 | `conformance_airway` \| `_speech` \| `_voice` \| `_quality` | string | `true` \| `false` \| `undetermined` | **that node wrote no branch report** — it did not run |
 | `route_airway` \| `_speech` \| `_voice` | string | e.g. `routed`, `declined` | routing wrote no state for it |
-| `pii_findings_n` | int32 | how many `pii` entities the store holds | **no detector ran** (`scan_ran` false or null). A recording never scanned is null, not `0`. `0` means scanned and clean |
+| `pii_findings_n` | int32 | how many live `pii` entities carrying an extent the store holds | **no detector ran** (`scan_ran` false or null). A recording never scanned is null, not `0`. `0` means scanned and clean |
 | `residue_words_n` | int32 | words in the lexical residue SPEECH's `pii_scan` recorded: what the detectors and the reviewer were given | no `pii_scan`, or one written before the residue existed |
 | `residue_method` | string | how the non-residue words were set aside: `syllable_train`, `vocal_task`, `stimulus_alignment`, `free_response` | as `residue_words_n` |
 | `residue_content` | bool | whether any residue word is outside the closed-class list, which is what lets the scan run | as `residue_words_n` |
@@ -138,8 +153,11 @@ and one gets a third:
 - **`m_<name>_n`** — `int32`, **never null**, how many readings the store held. `0` is a fact: the
   graph ran and wrote nothing.
 
-> **The invariant, enforced by a test:** `m_<name> IS NULL` ⟺ `m_<name>_n == 0`. A reading of
-> `0.0` is a measurement and reads as `0.0` with `_n == 1`. Null is not zero anywhere in this file.
+> **The invariant:** `m_<name> IS NULL` ⟺ `m_<name>_n == 0`, with one exception for the scalars: a
+> reading stored as a non-finite number (a peak over floor taken outside the envelope is NaN) counts
+> in `_n` but not in the mean, so a scalar whose every reading is non-finite is null with `_n > 0`.
+> A reading of `0.0` is a measurement and reads as `0.0` with `_n == 1`. Null is not zero anywhere in
+> this file.
 
 **21 scalar numerics** — `double`, the **arithmetic mean** of the recording's readings. Identical
 to the reading when `_n == 1`, which is the case for 13 of the 17 that the 2026-09-21 corpus
@@ -312,7 +330,7 @@ The block is the five bytes `02 00 40 00 80`. Decoding: `0x4000 / 65535 × 4.0 =
 
 ## 6. The gates
 
-`schema_version` 5 carries every gate VERDICT resolved. A **gate** says what reading is good
+Since `schema_version` 3 the file carries every gate VERDICT resolved. A **gate** says what reading is good
 enough. Its bound resolves **family → group → default**, most specific first and key by key, so
 two rows of the same corpus can be judged against different bounds for the same gate — which is
 why the bound is stored per row rather than looked up from the config at read time.
@@ -376,8 +394,11 @@ The 21, in column order, with the reading each is read against and the direction
 
 A gate marked *located* produces a finding that carries an extent — a rejected carrier, a located
 deviation, a per-event count — and is therefore applied inside the reporting node that knows where
-the extent is, against the same bound this table names. It reaches these columns the same way,
-through the fold's record.
+the extent is, against the same bound this table names. **It does not reach these columns**: no
+located gate is a conformance gate of any pattern or a flag gate, and `gate_readings` skips a gate
+with no reading, so the fold never records one and all three of its columns are always null. Where
+such a gate refused something, the finding it produced is in the store (a `carrier_rejected`
+measurement names the gate, for example), not here.
 
 Beside them, the fold's own summary, once per row:
 
@@ -385,8 +406,8 @@ Beside them, the fold's own summary, once per row:
 | --- | --- | --- |
 | `gate_node` | string | no task group resolved |
 | `gate_group` | string | no task group resolved |
-| `gate_family` | string | no task group resolved, or the recording declared no family — the out-of-family mode, which reads only the group and default layers |
-| `gate_applied_n` | int32 | never null; `0` means no group resolved |
+| `gate_family` | string | no task group resolved; a group is resolved only for a declared family this graph holds a row for, so a resolved group always carries its family |
+| `gate_applied_n` | int32 | never null; `0` means no group resolved, or the owning branch left no in-family report, so no conformance gate was applied (the flag gates still are) |
 | `gate_flagging_n` | int32 | never null |
 | `gate_failed_n` | int32 | never null; `0` means nothing refused |
 | `gate_undetermined_n` | int32 | never null; `0` means every applied gate could be answered |

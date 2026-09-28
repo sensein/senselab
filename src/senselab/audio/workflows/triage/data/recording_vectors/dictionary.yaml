@@ -1,0 +1,1262 @@
+# The recording_vectors.parquet data dictionary: what every column is and how it is computed.
+#
+# One entry per column, either under `columns` (one column each) or produced by a `families` entry
+# (one template over a member list). `recording_vectors.dictionary()` expands both, takes each
+# column's dtype from `recording_vectors.schema()`, and refuses a dictionary that does not name
+# exactly the columns the schema declares. The expanded list is written into every parquet the
+# writer produces, under the key `senselab.recording_vectors.dictionary`.
+#
+# Fields: units; description (what the value is); computation (how it is derived: the store record
+# read, the node that writes it, and any transform); source (`path:qualname`, relative to
+# `source_root`: the extractor first, then the code that computes the stored value); null_means (when the
+# column is null). `values` lists a closed vocabulary where one exists.
+#
+# The byte layout of every binary column is specified in
+# specs/20260922-compact-recording-vectors/schema.md; the entries here say what those bytes carry.
+
+source_root: src/senselab/audio/workflows/triage
+
+columns:
+  participant:
+    units: none
+    description: The BIDS participant id.
+    computation: >-
+      The first `sub-…` token of the stem (the run directory name with its `_YYYYmmdd-HHMMSS` launch
+      suffix removed).
+    source: [recording_vectors.py:identity, recording_vectors.py:stem_of]
+    null_means: The stem carries no `sub-` token.
+
+  task:
+    units: none
+    description: The BIDS task id, including any trailing index, e.g. `harvard-sentences-list-12-3`.
+    computation: Everything after `task-` in the stem.
+    source: [recording_vectors.py:identity]
+    null_means: The stem carries no `task-` token.
+
+  verdict:
+    units: none
+    values: [pass, flag, discard]
+    description: The file-level triage outcome.
+    computation: >-
+      The `triage` attribute of the latest live `verdict` entity with `node = VERDICT` (the fold);
+      the fold's `FileVerdict.triage`.
+    source: [recording_vectors.py:extract, vocabulary.py:FileVerdict.record, nodes/verdict.py:verdict]
+    null_means: Never; a row is written only where the fold exists.
+
+  session:
+    units: none
+    description: The BIDS session id.
+    computation: The first `ses-…` token of the stem.
+    source: [recording_vectors.py:identity]
+    null_means: The stem carries no `ses-` token.
+
+  stem:
+    units: none
+    description: The BIDS stem of the recording.
+    computation: The run directory's name with its trailing `_YYYYmmdd-HHMMSS` suffix removed.
+    source: [recording_vectors.py:stem_of]
+    null_means: Never.
+
+  run_dir:
+    units: none
+    description: The recording's run directory.
+    computation: >-
+      The run directory relative to the scan root, or its absolute path when it is not under the
+      root. Where a stem has more than one timestamped run directory, the lexically latest is the
+      one read.
+    source: [recording_vectors.py:extract, recording_vectors.py:scan]
+    null_means: Never.
+
+  declared_family:
+    units: none
+    description: The task family the recording's stem declares, e.g. `story-recall-v2`.
+    computation: >-
+      The fold's `declared_family`: the task family read off the `recording` stream's stem by
+      `declared_task`, which drops the trailing task index.
+    source: [recording_vectors.py:extract, nodes/verdict.py:verdict]
+    null_means: The store holds no `recording` stream to read a stem from (ADMIT failed), or the stem declares no task.
+
+  release:
+    units: none
+    values: [release_without_redaction, release_with_redaction, withheld, not_assessed]
+    description: Which artefact of the recording may be handed on.
+    computation: The fold's `release` attribute (`FileVerdict.release`).
+    source: [recording_vectors.py:extract, vocabulary.py:FileVerdict.record, vocabulary.py:_release_from]
+    null_means: Never in a fold written by this code; null only if the fold omits the attribute.
+
+  release_ground:
+    units: none
+    description: >-
+      Why the release axis reads as it does, as one of the controlled ground strings `vocabulary.py`
+      declares under RELEASE_WITHOUT_REDACTION_GROUNDS, RELEASE_UNKNOWN_GROUNDS,
+      RELEASE_WITHHELD_GROUNDS and RELEASE_WITH_REDACTION_GROUNDS.
+    computation: The fold's `release_ground` attribute.
+    source: [recording_vectors.py:extract, vocabulary.py:FileVerdict.record, vocabulary.py:_release_from]
+    null_means: REDACT's own verdict decided the release, which then needs no further ground.
+
+  grounds:
+    units: none
+    values: [unmeasurable, acoustically_empty]
+    description: Why the recording was discarded.
+    computation: The fold's `discard_ground` attribute.
+    source: [recording_vectors.py:extract, vocabulary.py:FileVerdict.record]
+    null_means: The recording was not discarded.
+
+  route_state:
+    units: none
+    values: [routed, empty, unexplained, unreadable]
+    description: What the routing ruleset made of the whole recording.
+    computation: The fold's `route_state` attribute, read off ROUTING's evaluation.
+    source: [recording_vectors.py:extract, vocabulary.py:FileVerdict.record]
+    null_means: ROUTING wrote no evaluation.
+
+  duration_s:
+    units: s
+    description: Duration of the source recording as decoded.
+    computation: >-
+      End of the extent of the latest live `stream` named `recording`, which ADMIT writes as the
+      decoded frame count over the sampling rate.
+    source: [recording_vectors.py:extract, nodes/admit.py:admit]
+    null_means: No `recording` stream carries an extent (ADMIT did not decode the file).
+
+  duration_conditioned_s:
+    units: s
+    description: Duration of the conditioned stream the graph's extents are measured on.
+    computation: >-
+      End of the extent of the latest live `stream` named `preemphasised`, falling back to `plain`;
+      both written by PREPROCESS.
+    source: [recording_vectors.py:extract, nodes/preprocess.py:preprocess]
+    null_means: Neither stream carries an extent.
+
+  time_scale_s:
+    units: s
+    description: The full scale every uint16 time code in the binary columns is quantised against.
+    computation: '`duration_conditioned_s` where known, otherwise `duration_s`.'
+    source: [recording_vectors.py:extract, recording_vectors.py:quantise_time]
+    null_means: Neither duration is known.
+
+  sampling_rate:
+    units: Hz
+    description: Sampling rate of the conditioned stream.
+    computation: The `sampling_rate` attribute of the `preemphasised` (else `plain`) stream.
+    source: [recording_vectors.py:extract, nodes/preprocess.py:preprocess]
+    null_means: No conditioned stream, or it carries no sampling rate.
+
+  schema_version:
+    units: none
+    description: The version of this parquet's layout.
+    computation: The constant `SCHEMA_VERSION` of the writer.
+    source: [recording_vectors.py:extract]
+    null_means: Never.
+
+  malformed_store_lines:
+    units: count
+    description: Lines of the recording's `store.jsonl` that did not parse as JSON.
+    computation: Counted while the store is read; such lines are skipped.
+    source: [recording_vectors.py:read_store]
+    null_means: Never.
+
+  flags_n:
+    units: count
+    description: How many node verdicts in the fold's reasons flagged the recording.
+    computation: Count of the fold's `reasons` entries whose `outcome` is `flag`, `fail` or `discard`.
+    source: [recording_vectors.py:extract, vocabulary.py:FileVerdict.record]
+    null_means: Never.
+
+  flag_nodes:
+    units: none
+    description: The nodes behind `flags_n`, e.g. `["SPEECH"]`.
+    computation: The `node` of each `reasons` entry counted by `flags_n`, in fold order.
+    source: [recording_vectors.py:extract]
+    null_means: Never; `[]` when none flagged.
+
+  conformance_airway:
+    units: none
+    values: ['true', 'false', undetermined]
+    description: Whether AIRWAY's report conforms to the declared task.
+    computation: >-
+      The fold's `conformance["AIRWAY"]`, True/False written as `true`/`false` and UNDETERMINED as
+      `undetermined`. For the branch owning the declared family this is the gates' conformance.
+    source: [recording_vectors.py:_conformance, nodes/verdict.py:gate_conformance]
+    null_means: AIRWAY left no branch report.
+
+  conformance_speech:
+    units: none
+    values: ['true', 'false', undetermined]
+    description: Whether SPEECH's report conforms to the declared task.
+    computation: The fold's `conformance["SPEECH"]`, encoded as for `conformance_airway`.
+    source: [recording_vectors.py:_conformance, nodes/verdict.py:gate_conformance]
+    null_means: SPEECH left no branch report.
+
+  conformance_voice:
+    units: none
+    values: ['true', 'false', undetermined]
+    description: Whether VOICE's report conforms to the declared task.
+    computation: The fold's `conformance["VOICE"]`, encoded as for `conformance_airway`.
+    source: [recording_vectors.py:_conformance, nodes/verdict.py:gate_conformance]
+    null_means: VOICE left no branch report.
+
+  conformance_quality:
+    units: none
+    values: ['true', 'false', undetermined]
+    description: QUALITY's conformance over the store's own assertions.
+    computation: The fold's `conformance["QUALITY"]`, encoded as for `conformance_airway`.
+    source: [recording_vectors.py:_conformance]
+    null_means: QUALITY left no report.
+
+  route_airway:
+    units: none
+    values: [routed, declined, unavailable, ungated, unjudged]
+    description: What the routing ruleset made of the AIRWAY branch.
+    computation: The fold's `routes["AIRWAY"]`, from ROUTING's `branch_decision` for AIRWAY.
+    source: [recording_vectors.py:extract, nodes/routing.py:routing]
+    null_means: The fold's routes omit AIRWAY.
+
+  route_speech:
+    units: none
+    values: [routed, declined, unavailable, ungated, unjudged]
+    description: What the routing ruleset made of the SPEECH branch.
+    computation: The fold's `routes["SPEECH"]`.
+    source: [recording_vectors.py:extract, nodes/routing.py:routing]
+    null_means: The fold's routes omit SPEECH.
+
+  route_voice:
+    units: none
+    values: [routed, declined, unavailable, ungated, unjudged]
+    description: What the routing ruleset made of the VOICE branch.
+    computation: The fold's `routes["VOICE"]`.
+    source: [recording_vectors.py:extract, nodes/routing.py:routing]
+    null_means: The fold's routes omit VOICE.
+
+  pii_findings_n:
+    units: count
+    description: How many PII findings the detectors placed on the transcript.
+    computation: >-
+      Count of live `pii` entities carrying an extent, which SPEECH writes one per detector finding
+      it places on the consensus words.
+    source: [recording_vectors.py:extract, nodes/speech.py:speech]
+    null_means: No detector ran (`scan_ran` false or null); `0` means scanned and nothing found.
+
+  residue_words_n:
+    units: count
+    description: Words in the lexical residue, the text the PII detectors and the reviewer were given.
+    computation: The `residue_words_n` attribute of the latest live `pii_scan` measurement SPEECH wrote.
+    source: [recording_vectors.py:_residue_columns, nodes/speech.py:speech]
+    null_means: No `pii_scan`, or one written before the residue attributes existed.
+
+  residue_method:
+    units: none
+    values: [syllable_train, vocal_task, stimulus_alignment, free_response]
+    description: How the words outside the residue were set aside.
+    computation: The latest live `pii_scan`'s `residue_method`.
+    source: [recording_vectors.py:_residue_columns, nodes/speech.py:speech, residue.py:residue_method, residue.py:task_residue]
+    null_means: As `residue_words_n`.
+
+  residue_content:
+    units: bool
+    description: Whether any residue word is a content word rather than a closed-class one; the scan runs only where it is.
+    computation: The latest live `pii_scan`'s `residue_content`.
+    source: [recording_vectors.py:_residue_columns, nodes/speech.py:speech]
+    null_means: As `residue_words_n`.
+
+  scan_ran:
+    units: bool
+    description: Whether any PII detector ran.
+    computation: True when the latest live `pii_scan`'s `scanned_by` is non-empty.
+    source: [recording_vectors.py:_residue_columns, nodes/speech.py:speech]
+    null_means: No `pii_scan`.
+
+  scanned_by:
+    units: none
+    description: The detectors that ran, e.g. `[gliner, presidio, rules]`.
+    computation: The latest live `pii_scan`'s `scanned_by`; `[]` where SPEECH declined the scan.
+    source: [recording_vectors.py:_residue_columns, nodes/speech.py:speech]
+    null_means: No `pii_scan`.
+
+  masks_n:
+    units: count
+    description: Masks REDACT planned.
+    computation: '`counts.masks_n` of the latest live `pii_ledger` measurement, which VERDICT writes from `mask_plan`.'
+    source: [recording_vectors.py:_ledger_columns, nodes/redact.py:MaskPlan.record, nodes/redact.py:mask_plan]
+    null_means: No `pii_ledger`.
+
+  masks_final_n:
+    units: count
+    description: Masks standing in the released copy, after the reviewer's unmasks and the content-word trim.
+    computation: >-
+      The ledger's `counts.final_masks_n`: one extent per run of adjacent kept words in each planned
+      mask, so it can exceed `masks_n`.
+    source: [recording_vectors.py:_ledger_columns, nodes/redact.py:MaskPlan.record]
+    null_means: No `pii_ledger`.
+
+  task_words_n:
+    units: count
+    description: Task words (outside the residue) that REDACT's planned extents reached; no mask covers them.
+    computation: The ledger's `counts.task_words_n`, summed over masks.
+    source: [recording_vectors.py:_ledger_columns, nodes/redact.py:MaskPlan.record, nodes/redact.py:mask_plan]
+    null_means: No `pii_ledger`.
+
+  masked_n:
+    units: count
+    description: Words a standing mask hides.
+    computation: The ledger's `counts.masked_n`, distinct word ids in state `masked`.
+    source: [recording_vectors.py:_ledger_columns, nodes/redact.py:MaskPlan.count]
+    null_means: No `pii_ledger`.
+
+  unmasked_by_reviewer_n:
+    units: count
+    description: Words a mask covered that the reviewer's `release` entries named and the fold unmasked.
+    computation: The ledger's `counts.unmasked_by_reviewer_n`, distinct word ids in that state.
+    source: [recording_vectors.py:_ledger_columns, nodes/redact.py:MaskPlan.count, nodes/redact.py:mask_plan]
+    null_means: No `pii_ledger`.
+
+  unmasked_by_trim_n:
+    units: count
+    description: >-
+      Words a mask covered that the trim released: non-content words, and words only the padding
+      reached when another word of the same mask was marked. A marked word written as a proper noun
+      in a `verdict.trim_protected_categories` category counts as content and is never trimmed.
+    computation: The ledger's `counts.unmasked_by_trim_n`, distinct word ids in that state.
+    source: [recording_vectors.py:_ledger_columns, nodes/redact.py:MaskPlan.count, nodes/redact.py:mask_plan]
+    null_means: No `pii_ledger`.
+
+  proposed_by_reviewer_n:
+    units: count
+    description: Words the reviewer's `redact` entries name that no standing mask hides.
+    computation: The ledger's `counts.proposed_by_reviewer_n`, distinct word ids named by a placed `redact` entry and not masked.
+    source: [recording_vectors.py:_ledger_columns, nodes/redact.py:MaskPlan.count]
+    null_means: No `pii_ledger`.
+
+  masked_categories:
+    units: none
+    description: Categories of the masks that keep at least one word masked.
+    computation: The ledger's `categories.masked`, sorted.
+    source: [recording_vectors.py:_ledger_columns, nodes/redact.py:MaskPlan.categories]
+    null_means: No `pii_ledger`.
+
+  unmasked_by_reviewer_categories:
+    units: none
+    description: Categories of the masks with at least one word unmasked by the reviewer.
+    computation: The ledger's `categories.unmasked_by_reviewer`, sorted.
+    source: [recording_vectors.py:_ledger_columns, nodes/redact.py:MaskPlan.categories]
+    null_means: No `pii_ledger`.
+
+  unmasked_by_trim_categories:
+    units: none
+    description: Categories of the masks with at least one word released by the trim.
+    computation: The ledger's `categories.unmasked_by_trim`, sorted.
+    source: [recording_vectors.py:_ledger_columns, nodes/redact.py:MaskPlan.categories]
+    null_means: No `pii_ledger`.
+
+  proposed_by_reviewer_categories:
+    units: none
+    description: Categories of the reviewer's `redact` entries that name at least one unmasked word.
+    computation: The ledger's `categories.proposed_by_reviewer`, sorted.
+    source: [recording_vectors.py:_ledger_columns, nodes/redact.py:MaskPlan.categories]
+    null_means: No `pii_ledger`.
+
+  condition_review:
+    units: bool
+    description: >-
+      Whether any reviewer `redact` entry is in a category the fold routes to human review
+      (`verdict.llm_human_review_categories`, CONDITION by default); `release_ground` says whether
+      that decided the release.
+    computation: The ledger's `human_review`.
+    source: [recording_vectors.py:_ledger_columns, nodes/redact.py:MaskPlan.record]
+    null_means: No `pii_ledger`.
+
+  condition_review_kind:
+    units: none
+    values: [cohort, other]
+    description: >-
+      `cohort` where every human-review proposal names a condition the study recruits for
+      (`verdict.cohort_conditions`), `other` where any does not.
+    computation: The ledger's `human_review_kind`.
+    source: [recording_vectors.py:_ledger_columns, nodes/redact.py:MaskPlan.human_review_kind]
+    null_means: No `pii_ledger`, or no human-review proposal.
+
+  cohort_condition_n:
+    units: count
+    description: Human-review proposals naming a study-cohort condition.
+    computation: The ledger's `counts.cohort_condition_n`.
+    source: [recording_vectors.py:_ledger_columns, nodes/redact.py:MaskPlan.record]
+    null_means: No `pii_ledger`.
+
+  other_condition_n:
+    units: count
+    description: Human-review proposals naming a condition outside the study's cohorts.
+    computation: The ledger's `counts.other_condition_n`.
+    source: [recording_vectors.py:_ledger_columns, nodes/redact.py:MaskPlan.record]
+    null_means: No `pii_ledger`.
+
+  cohort_diagnoses:
+    units: none
+    description: The cohort diagnoses the human-review proposals name, by the release's `phenotype/diagnosis/` file stem.
+    computation: The ledger's `cohort_diagnoses`, sorted and distinct.
+    source: [recording_vectors.py:_ledger_columns, nodes/redact.py:MaskPlan.record, cohort.py:load_cohort_profile]
+    null_means: No `pii_ledger`.
+
+  gate_node:
+    units: none
+    values: [AIRWAY, SPEECH, VOICE]
+    description: The branch owning the declared family, whose report the gates judge.
+    computation: '`gates.node` of the fold: the branch whose expectation table holds the declared family.'
+    source: [recording_vectors.py:_gate_columns, nodes/verdict.py:GateOutcome.record, nodes/verdict.py:declared_expectation]
+    null_means: No task group was resolved (the recording declares no family this graph holds a row for).
+
+  gate_group:
+    units: none
+    description: The task group the gate bounds were resolved for, e.g. `ordered_tokens`.
+    computation: '`gates.group` of the fold, the pattern of the declared family''s expectation row.'
+    source: [recording_vectors.py:_gate_columns, nodes/gates.py:GateBounds.record]
+    null_means: No task group was resolved.
+
+  gate_family:
+    units: none
+    description: The family whose own bounds layer was consulted.
+    computation: '`gates.family` of the fold.'
+    source: [recording_vectors.py:_gate_columns, nodes/gates.py:GateBounds.record]
+    null_means: No task group was resolved, or the bounds were resolved without a family.
+
+  gate_applied_n:
+    units: count
+    description: Conformance gates the fold applied.
+    computation: Length of the fold's `gates.applied`.
+    source: [recording_vectors.py:_gate_columns, nodes/verdict.py:gate_conformance]
+    null_means: Never; `0` when no group resolved or the owning branch left no in-family report.
+
+  gate_flagging_n:
+    units: count
+    description: Flag gates the fold applied.
+    computation: Length of the fold's `gates.flagging`.
+    source: [recording_vectors.py:_gate_columns, nodes/verdict.py:gate_conformance]
+    null_means: Never.
+
+  gate_failed_n:
+    units: count
+    description: Gates with a column in this schema whose outcome is `false`.
+    computation: Count over the applied and flagging records whose gate is in `GATE_NAMES`; a gate in both lists counts once.
+    source: [recording_vectors.py:_gate_columns]
+    null_means: Never.
+
+  gate_undetermined_n:
+    units: count
+    description: Gates with a column in this schema whose outcome is `undetermined`.
+    computation: As `gate_failed_n`, for `undetermined`.
+    source: [recording_vectors.py:_gate_columns]
+    null_means: Never.
+
+  gate_failed_names:
+    units: none
+    description: The gates counted by `gate_failed_n`.
+    computation: Their names, sorted.
+    source: [recording_vectors.py:_gate_columns]
+    null_means: Never; `[]` when none failed.
+
+  gate_flagged_names:
+    units: none
+    description: The flag gates that failed.
+    computation: Names of the fold's `gates.flagging` records whose `passed` is false, sorted.
+    source: [recording_vectors.py:_gate_columns]
+    null_means: Never; `[]` when none failed.
+
+  llm_status:
+    units: none
+    values: [clean, flagged, absent, disabled, nothing_to_read]
+    description: >-
+      What the redaction reviewer's reading concluded. `flagged`: a round judged the redaction
+      incomplete, the original as carrying PII, or proposed a redaction; `absent`: the model gave no
+      usable answer; `disabled`: the reviewer was switched off when the annotation was written;
+      `nothing_to_read`: the residue was empty.
+    computation: '`status` of the latest live `redaction_llm_annotation` measurement, which REVIEW writes and the fold copies into `llm_redaction`.'
+    source: [recording_vectors.py:_reviewer_columns, nodes/review.py:review, nodes/review.py:_rounds, nodes/verdict.py:_llm_redaction]
+    null_means: REVIEW wrote no annotation.
+
+  llm_iterations:
+    units: count
+    description: Review, mask and re-review rounds the reviewer ran.
+    computation: The annotation's `iterations`; `0` where no model was contacted.
+    source: [recording_vectors.py:_reviewer_columns, nodes/review.py:_rounds]
+    null_means: REVIEW wrote no annotation.
+
+  llm_redaction_judgment:
+    units: none
+    values: [complete, incomplete, not_applicable]
+    description: The reviewer's judgment of whether the applied redaction removed what identifies the speaker.
+    computation: The annotation's `redaction`, from the last round's answer.
+    source: [recording_vectors.py:_reviewer_columns, nodes/review.py:_rounds]
+    null_means: No annotation, or no round was answered (disabled, nothing to read, or the model gave no answer).
+
+  llm_original_judgment:
+    units: none
+    values: [clean, carries_pii]
+    description: The reviewer's judgment of whether the recording's own words carry identifying content.
+    computation: The annotation's `original`, from the last round's answer.
+    source: [recording_vectors.py:_reviewer_columns, nodes/review.py:_rounds]
+    null_means: As `llm_redaction_judgment`.
+
+  llm_speakers:
+    units: none
+    values: [one, more_than_one, unclear]
+    description: How many people the reviewer judged the words show speaking.
+    computation: The annotation's `speakers`, from the last round's answer.
+    source: [recording_vectors.py:_reviewer_columns, nodes/review.py:_rounds]
+    null_means: As `llm_redaction_judgment`.
+
+  llm_flagged_categories:
+    units: none
+    description: The categories the reviewer's `redact` entries named across rounds.
+    computation: The annotation's `flagged`, sorted and distinct.
+    source: [recording_vectors.py:_reviewer_columns, nodes/review.py:_rounds]
+    null_means: Never; `[]` where there is no annotation or nothing was named.
+
+  llm_flagged_n:
+    units: count
+    description: How many categories `llm_flagged_categories` holds.
+    computation: Its length.
+    source: [recording_vectors.py:_reviewer_columns]
+    null_means: Never; `0` where there is no annotation.
+
+  llm_proposal_redact_n:
+    units: count
+    description: Entries of the reviewer's final proposal asking for text to be removed.
+    computation: The annotation's `proposal_redact_n`, entries whose action is `redact`.
+    source: [recording_vectors.py:_reviewer_columns, nodes/review.py:review]
+    null_means: REVIEW wrote no annotation.
+
+  llm_proposal_release_n:
+    units: count
+    description: Entries of the reviewer's final proposal asking for removed text to be restored.
+    computation: The annotation's `proposal_release_n`, entries whose action is not `redact`.
+    source: [recording_vectors.py:_reviewer_columns, nodes/review.py:review]
+    null_means: REVIEW wrote no annotation.
+
+  llm_read_redacted:
+    units: bool
+    description: Whether a redacted text existed and was read beside the original.
+    computation: The annotation's `read_redacted`.
+    source: [recording_vectors.py:_reviewer_columns, nodes/review.py:review]
+    null_means: REVIEW wrote no annotation.
+
+  llm_detector_outcome:
+    units: none
+    values: [pass, fail, flag]
+    description: REDACT's own outcome at the time the reviewer read.
+    computation: The annotation's `detector_outcome`, the outcome of REDACT's latest verdict.
+    source: [recording_vectors.py:_reviewer_columns, nodes/review.py:_redact_outcome]
+    null_means: No annotation, or REDACT had written no verdict.
+
+  llm_model_id:
+    units: none
+    description: The reviewer model's id.
+    computation: The annotation's `model_id`.
+    source: [recording_vectors.py:_reviewer_columns, nodes/review.py:review]
+    null_means: No annotation, or no model was contacted.
+
+  llm_revision:
+    units: none
+    description: The resolved commit of the reviewer model's weights.
+    computation: The annotation's `revision`.
+    source: [recording_vectors.py:_reviewer_columns, nodes/review.py:_rounds]
+    null_means: No annotation, or no model was loaded.
+
+  llm_failed:
+    units: bool
+    description: Whether the reading records a failure.
+    computation: True when the annotation's `failure` is non-empty.
+    source: [recording_vectors.py:_reviewer_columns, nodes/review.py:_rounds]
+    null_means: REVIEW wrote no annotation.
+
+  separated_n:
+    units: count
+    description: Sources the multi-speaker instrument separated.
+    computation: Count of live `stream` entities whose name begins `separated_`, which SPEECH writes.
+    source: [recording_vectors.py:_speaker_columns, nodes/speech.py:speech]
+    null_means: Never; `0` means separation did not run.
+
+  secondary_extent_n:
+    units: count
+    description: Runs inside a task extent held by a separated source other than the loudest one.
+    computation: Count of live spans with role `secondary_source_extent` and an extent, which SPEECH mints.
+    source: [recording_vectors.py:_speaker_columns, nodes/speech.py:speech]
+    null_means: Never.
+
+  secondary_extent_s:
+    units: s
+    description: Total duration of those runs.
+    computation: Sum of the `secondary_source_extent` spans' durations.
+    source: [recording_vectors.py:_speaker_columns]
+    null_means: No such span.
+
+  solo_extent_s:
+    units: s
+    description: Total duration of the solo runs, over which one separated source holds every attributed frame.
+    computation: Sum of the durations of live spans with role `solo_extent`.
+    source: [recording_vectors.py:_speaker_columns, nodes/speech.py:speech]
+    null_means: No such span.
+
+  extent_dominant_speaker_share_min:
+    units: fraction
+    description: The worst dominant-speaker share over the recording's task extents; the value the `dominant_speaker_share_min` flag gate reads.
+    computation: Minimum of the numeric values of every live `extent_dominant_speaker_share` measurement.
+    source: [recording_vectors.py:_speaker_columns, nodes/speech.py:_speakers_within, nodes/verdict.py:flag_gate_readings]
+    null_means: No numeric share reading.
+
+  residual_peak_dbfs:
+    units: dBFS
+    description: Peak level of the residual stream (the conditioned stream minus the gain-fitted enhanced one).
+    computation: The `peak_dbfs` attribute of the latest live `residual` measurement PREPROCESS writes.
+    source: [recording_vectors.py:_residual_levels, nodes/preprocess.py:_residual]
+    null_means: No `residual` measurement, or its `peak_dbfs` is not a finite number.
+
+  residual_rms_dbfs:
+    units: dBFS
+    description: RMS level of the residual stream.
+    computation: The `residual` measurement's `rms_dbfs`, 20·log10 of the residual's RMS (floored at 1e-12).
+    source: [recording_vectors.py:_residual_levels, nodes/preprocess.py:_residual]
+    null_means: No `residual` measurement, or its `rms_dbfs` is not a finite number.
+
+  enhanced_rms_dbfs:
+    units: dBFS
+    description: RMS level of the enhanced stream, reconstructed.
+    computation: '`residual_rms_dbfs + enhanced_over_residual_rms_db`.'
+    source: [recording_vectors.py:_residual_levels]
+    null_means: Either energy fraction is absent or non-positive, or `rms_dbfs` is absent.
+
+  enhanced_over_residual_rms_db:
+    units: dB
+    description: How far the enhanced stream's RMS sits above the residual's.
+    computation: 10·log10(`enhanced_energy_fraction` / `energy_fraction`) of the `residual` measurement.
+    source: [recording_vectors.py:_residual_levels, nodes/preprocess.py:_residual]
+    null_means: Either energy fraction is absent, zero or negative.
+
+  enhanced_over_residual_rms_fitted_db:
+    units: dB
+    description: The same difference for the gain-fitted speech component.
+    computation: '`enhanced_over_residual_rms_db` plus the `residual` measurement''s `gain_db`.'
+    source: [recording_vectors.py:_residual_levels, nodes/preprocess.py:_residual]
+    null_means: As `enhanced_over_residual_rms_db`, or `gain_db` is absent.
+
+  wave_minmax:
+    units: bytes
+    description: The conditioned waveform as 256 (min, max) uint8 pairs over `[-wave_peak, +wave_peak]`.
+    computation: >-
+      The `preemphasised` stream (else `plain`) read as mono (channel mean), non-finite samples
+      dropped, cut into 256 equal buckets, each bucket's min and max quantised.
+    source: [recording_vectors.py:_waveform, recording_vectors.py:encode_waveform]
+    null_means: Neither stream decodes, or it holds no finite sample.
+
+  wave_peak:
+    units: amplitude
+    description: The scale `wave_minmax` is encoded against.
+    computation: Maximum absolute sample value of that stream, or 1.0 when every sample is zero.
+    source: [recording_vectors.py:encode_waveform]
+    null_means: As `wave_minmax`.
+
+  env_dbfs:
+    units: bytes
+    description: The energy envelope as 256 uint8 values over [-100, 0] dBFS.
+    computation: >-
+      The `envelope_dbfs` array of the `energy_envelope` derivative PREPROCESS writes, reduced to 256
+      buckets by their maximum and quantised.
+    source: [recording_vectors.py:_npz_array, recording_vectors.py:encode_trace, nodes/preprocess.py:_envelope]
+    null_means: The `energy_envelope` measurement, its file or its key is absent, or the trace holds no finite value.
+
+  floor_dbfs:
+    units: dBFS
+    description: The recording's global envelope noise floor.
+    computation: Element 0 of the `energy_envelope` derivative's `floor_dbfs` array, which is constant.
+    source: [recording_vectors.py:extract, nodes/preprocess.py:_envelope]
+    null_means: The derivative is absent or its first element is not finite.
+
+  continuity:
+    units: bytes
+    description: The spectral continuity trace as 256 uint8 values over [0, 1.05].
+    computation: >-
+      The `continuity` array of the `continuity_trace` derivative PREPROCESS writes, reduced to 256
+      buckets by their mean and quantised.
+    source: [recording_vectors.py:_npz_array, recording_vectors.py:encode_trace, nodes/preprocess.py:_continuity_trace]
+    null_means: The derivative is absent or holds no finite value.
+
+  spans:
+    units: bytes
+    description: PREPROCESS's general spans, 5 bytes each (row, t0, t1), on the five-row lane E, C, A, S, G.
+    computation: >-
+      Live spans with no `family` and an extent whose `measure` maps to a row (amplitude → E, or S
+      where `signal` is `normalized`; continuity → C; asr → A; gap → G), in store order.
+    source: [recording_vectors.py:_spans, recording_vectors.py:_row_code, nodes/preprocess.py:_spans]
+    null_means: PREPROCESS wrote no verdict; `b""` when it wrote no such span.
+
+  spans_unrowed_n:
+    units: count
+    description: General spans left out of `spans` for carrying no row code (e.g. REDACT's redaction spans).
+    computation: Live spans with no `family` and an extent, minus those in `spans`.
+    source: [recording_vectors.py:_spans]
+    null_means: PREPROCESS wrote no verdict.
+
+  span_labels:
+    units: bytes
+    description: The strongest classifier label per span and classifier, 4 bytes each (span index, classifier, score).
+    computation: >-
+      For each (span, classifier) over the live measurements carrying `classifier`, `span_id` and a
+      `raw_scores` mapping (PREPROCESS's per-span classifier windows), the per-label maximum score;
+      the record holds the label with the highest maximum, its score quantised over [0, 1].
+    source: [recording_vectors.py:_span_top_labels, nodes/preprocess.py:_span_window_attributes]
+    null_means: As `spans`.
+
+  span_label_name:
+    units: none
+    description: The label name of each `span_labels` record, in the same order.
+    computation: As `span_labels`.
+    source: [recording_vectors.py:_span_top_labels]
+    null_means: As `spans`.
+
+  span_squim:
+    units: bytes
+    description: SQUIM's STOI, PESQ and SI-SDR per span, 5 bytes each.
+    computation: Live `assertion` entities named `squim` carrying `stoi`, one record per span each is derived from.
+    source: [recording_vectors.py:_span_squim, nodes/preprocess.py:_squim_for]
+    null_means: As `spans`.
+
+  asr_words:
+    units: bytes
+    description: The consensus transcript's words, 5 bytes each (t0, t1, outcome).
+    computation: >-
+      Live `word` entities with an extent, sorted by their `index`; `outcome` coded agreement,
+      variant or insertion.
+    source: [recording_vectors.py:extract, nodes/preprocess.py:_consensus]
+    null_means: No `consensus_transcript` measurement; `b""` when it has no words.
+
+  asr_word_text:
+    units: none
+    description: The text of each `asr_words` record, in the same order.
+    computation: Each word's `text` attribute.
+    source: [recording_vectors.py:extract]
+    null_means: As `asr_words`.
+
+  pii_marks:
+    units: bytes
+    description: The PII findings' extents, 4 bytes each (t0, t1).
+    computation: The live `pii` entities counted by `pii_findings_n`, in store order.
+    source: [recording_vectors.py:extract, nodes/speech.py:speech]
+    null_means: No detector ran; `b""` when scanned and nothing found.
+
+  pii_category:
+    units: none
+    description: The category of each `pii_marks` record, e.g. `PERSON`.
+    computation: Each `pii` entity's `category`.
+    source: [recording_vectors.py:extract]
+    null_means: As `pii_marks`.
+
+  branch_lanes:
+    units: bytes
+    description: The spans the branches and REDACT proposed, 5 bytes each (lane, t0, t1).
+    computation: >-
+      Live spans with an extent: those named `redaction` (REDACT's, and REVIEW's applied proposals)
+      go to the REDACT lane; others by their `family` to AIRWAY, SPEECH or VOICE.
+    source: [recording_vectors.py:_branch_lanes, nodes/redact.py:redact, nodes/review.py:apply_proposal]
+    null_means: ROUTING wrote no `branch_decision`.
+
+  branch_lane_role:
+    units: none
+    description: The role of each `branch_lanes` record.
+    computation: The span's `role` with its trailing instance index removed, or the redaction's category.
+    source: [recording_vectors.py:_branch_lanes, recording_vectors.py:role_kind]
+    null_means: As `branch_lanes`.
+
+families:
+  measurement:
+    about: >-
+      Every measurement name the graph writes gets `m_<name>` and `m_<name>_n`; the matrix one also
+      gets `m_<name>_width`. A reading counts only when the live `measurement` entity named
+      `<name>` carries a non-null `value`.
+    templates:
+      scalar:
+        m_{name}:
+          units: '{units}'
+          description: '{description}'
+          computation: >-
+            {computation} The column is the arithmetic mean of the finite numeric values of every
+            live `{name}` reading.
+          source: ['recording_vectors.py:extract', '{source}']
+          null_means: No reading carries a finite number (`m_{name}_n` is 0, or every value is non-finite).
+        m_{name}_n:
+          units: count
+          description: 'How many `{name}` readings the store holds.'
+          computation: Count of live `{name}` measurements carrying a non-null value.
+          source: ['recording_vectors.py:_measurement_readings']
+          null_means: Never; `0` means the graph wrote no reading.
+      vector:
+        m_{name}:
+          units: '{units}'
+          description: '{description}'
+          computation: '{computation} The column concatenates every reading''s list, nulls kept.'
+          source: ['recording_vectors.py:extract', '{source}']
+          null_means: '`m_{name}_n` is 0.'
+        m_{name}_n:
+          units: count
+          description: 'How many `{name}` readings the store holds.'
+          computation: Count of live `{name}` measurements carrying a non-null value.
+          source: ['recording_vectors.py:_measurement_readings']
+          null_means: Never.
+      matrix:
+        m_{name}:
+          units: '{units}'
+          description: '{description}'
+          computation: >-
+            {computation} The column is every reading's rows concatenated and flattened row-major;
+            `m_{name}_width` is the longest row.
+          source: ['recording_vectors.py:extract', '{source}']
+          null_means: '`m_{name}_n` is 0.'
+        m_{name}_n:
+          units: count
+          description: 'How many `{name}` readings the store holds.'
+          computation: Count of live `{name}` measurements carrying a non-null value.
+          source: ['recording_vectors.py:_measurement_readings']
+          null_means: Never.
+        m_{name}_width:
+          units: count
+          description: 'The row width of `m_{name}`, so the matrix can be rebuilt as rows.'
+          computation: The length of the longest row across the readings.
+          source: ['recording_vectors.py:extract']
+          null_means: '`m_{name}_n` is 0.'
+      categorical:
+        m_{name}:
+          units: none
+          description: '{description}'
+          computation: '{computation} The column is the distinct values written, sorted.'
+          source: ['recording_vectors.py:extract', '{source}']
+          null_means: '`m_{name}_n` is 0.'
+        m_{name}_n:
+          units: count
+          description: 'How many times `{name}` was written.'
+          computation: Count of live `{name}` measurements carrying a non-null value.
+          source: ['recording_vectors.py:_measurement_readings']
+          null_means: Never.
+    members:
+      breath_coverage_fraction:
+        kind: scalar
+        units: fraction
+        description: Fraction of the asked duration covered by breath-scoring HeAR windows (AIRWAY sound coverage).
+        computation: >-
+          AIRWAY merges the HeAR windows scoring at least `score_min` on the task's label set and
+          writes covered seconds over the asked seconds, rounded to 3 places.
+        source: nodes/airway.py:_airway_coverage
+      breath_peak_over_floor_db:
+        kind: scalar
+        units: dB
+        description: Per breath event, how far the loudest envelope sample stands above the recording's noise floor.
+        computation: >-
+          AIRWAY writes one reading per detected breath event: max of the energy envelope (dBFS)
+          inside the event minus the envelope's global floor, rounded to 2 places; NaN when the event
+          falls outside the envelope.
+        source: nodes/airway.py:event_measurements
+      cough_peak_over_floor_db:
+        kind: scalar
+        units: dB
+        description: Per cough event, how far the loudest envelope sample stands above the recording's noise floor.
+        computation: As `breath_peak_over_floor_db`, one reading per detected cough event.
+        source: nodes/airway.py:event_measurements
+      ddk_ppg_period_dispersion:
+        kind: scalar
+        units: ratio
+        description: Coefficient of variation of the inter-repetition periods of the DDK posteriorgram decode.
+        computation: >-
+          SPEECH's DDK instrument decodes the declared syllable template from the phonetic
+          posteriorgram and writes the sample standard deviation of the periods over their mean;
+          None on fewer than two intervals.
+        source: nodes/ddk.py:decode_evidence
+      ddk_repetition_count_from_ppg_decode:
+        kind: scalar
+        units: count
+        description: Repetitions of the declared DDK template the posteriorgram decode completed.
+        computation: The decode's repetition count; 0 is a value.
+        source: nodes/ddk.py:decode_evidence
+      ddk_syllable_rate_from_envelope_modulation_hz:
+        kind: scalar
+        units: Hz
+        description: Repetition rate of the DDK syllable train read from the energy envelope's modulation.
+        computation: >-
+          The rate `ddk_carrier` reads over the longest amplitude span at least `train_min_s` long
+          whose envelope modulation peak stands over its band; None when the envelope is absent.
+        source: nodes/ddk.py:align_ddk
+      ddk_syllable_rate_from_ppg_decode_hz:
+        kind: scalar
+        units: Hz
+        description: Syllable rate of the posteriorgram decode over its decoded extent.
+        computation: The decode's `rate_hz`; None when no repetition completed or the posteriorgram is absent.
+        source: nodes/ddk.py:decode_evidence
+      expected_sequence_repeat_fraction:
+        kind: scalar
+        units: fraction
+        description: Fraction of the prescribed tokens the reading produced more than once.
+        computation: >-
+          For an ordered-token task, the distinct expected token keys whose normalised form appears
+          more than once among the consensus lexical words, over the number of distinct expected
+          keys, rounded to 3 places.
+        source: nodes/speech.py:_speech_ordered
+      extent_dominant_speaker_share:
+        kind: scalar
+        units: fraction
+        description: Per task extent, the largest diarized speaker's share of the attributed seconds inside it.
+        computation: >-
+          SPEECH reads the diarized segments against each task extent and writes the largest
+          contributor's seconds over every attributed second inside the extent; None where no
+          segment intersects it. Per extent, so the mean differs from `extent_dominant_speaker_share_min`
+          wherever a recording has more than one extent.
+        source: nodes/speech.py:_speakers_within
+      extent_secondary_source_s:
+        kind: scalar
+        units: s
+        description: Per task extent, the seconds a separated source other than the dominant one holds.
+        computation: >-
+          Over the diarizer-attributed frames inside the extent, each frame goes to the separated
+          source loudest on it; the value is the seconds going to sources other than the largest.
+        source: nodes/speech.py:_localise_sources
+      extent_source_active_s:
+        kind: scalar
+        units: s
+        description: Per separated source and task extent, the seconds on which that source holds the frame.
+        computation: As `extent_secondary_source_s`, one reading per source.
+        source: nodes/speech.py:_localise_sources
+      extent_speaker_count:
+        kind: scalar
+        units: count
+        description: Per task extent, how many diarized speakers hold a segment intersecting it.
+        computation: The number of distinct speaker labels among the segments intersecting the extent.
+        source: nodes/speech.py:_speakers_within
+      glide_extent_semitones:
+        kind: scalar
+        units: semitones
+        description: How far the pitch travelled across the selected glide.
+        computation: >-
+          VOICE takes the longest monotone pitch run (within `monotone_tolerance_semitones`) of the
+          longest qualifying sweep and writes |pitch(last) − pitch(first)| in semitones, rounded to 2 places.
+        source: nodes/voice.py:_voice_glide
+      interruptions:
+        kind: scalar
+        units: count
+        description: Unvoiced intervals inside a voiced production.
+        computation: >-
+          The number of unvoiced runs between the first and last voiced frame of the carrier's pitch
+          track; one reading per qualifying carrier or detected phonation.
+        source: nodes/voice.py:_interruptions
+      pause_fraction_of_response:
+        kind: scalar
+        units: fraction
+        description: Fraction of a connected free response spent in pauses.
+        computation: >-
+          Total duration of inter-word gaps of at least `pause_min_s` over the response duration (the
+          hull of the lexical consensus words), rounded to 3 places; connected families only.
+        source: nodes/speech.py:_speech_free_response
+      phonation_onset_to_offset_s:
+        kind: scalar
+        units: s
+        description: Duration of a voiced production from its first to its last voiced frame.
+        computation: The voiced extent of the carrier (first voiced frame to last voiced frame plus one hop), rounded to 3 places; one reading per carrier.
+        source: nodes/voice.py:_voice_sustained
+      source_content_coverage:
+        kind: scalar
+        units: fraction
+        description: Fraction of the source text's distinct tokens that the production contains.
+        computation: >-
+          For a family whose anti-pattern is `verbatim_source`, the distinct normalised stimulus
+          tokens found among the produced tokens, over the distinct stimulus tokens, rounded to 3 places.
+        source: nodes/speech.py:_speech_free_response
+      speech_rate_from_consensus_words_per_s:
+        kind: scalar
+        units: words/s
+        description: Lexical words per second over a connected free response.
+        computation: Lexical consensus word count over the response duration, rounded to 3 places; connected families only.
+        source: nodes/speech.py:_speech_free_response
+      train_fraction_of_recording:
+        kind: scalar
+        units: fraction
+        description: Fraction of the recording the DDK task extent occupies.
+        computation: The task extent's duration over the recording stream's duration, rounded to 3 places.
+        source: nodes/ddk.py:align_ddk
+      verbatim_overlap_fraction:
+        kind: scalar
+        units: fraction
+        description: Fraction of the stimulus's n-grams the production reproduces.
+        computation: >-
+          The stimulus n-grams (n = `echo_ngram_n`) present in the produced lexical tokens, over the
+          stimulus n-grams, rounded to 3 places; families with a stimulus anti-pattern only.
+        source: nodes/speech.py:_speech_free_response
+      voiced_duration_s:
+        kind: scalar
+        units: s
+        description: Voiced time inside a sustained production.
+        computation: The number of voiced pitch-track frames in the carrier times the hop, rounded to 3 places.
+        source: nodes/voice.py:_voice_sustained
+      ddk_position_realised_mass:
+        kind: vector
+        units: fraction
+        description: Per template position the DDK decode reached, the posterior mass the expected class held where it placed that position.
+        computation: The decode's `realised_mass`, one value per position.
+        source: nodes/ddk.py:decode_evidence
+      ddk_cv_instrument_reading:
+        kind: matrix
+        units: fraction
+        description: The DDK posteriorgram instrument's reading, per completed repetition and template position.
+        computation: The decode's per-repetition realised mass over the decoded extent (rows are repetitions, columns positions).
+        source: nodes/ddk.py:instrument_authority
+      carrier_rejected:
+        kind: categorical
+        description: The gates or existence criteria that discarded a candidate carrier span.
+        computation: >-
+          VOICE writes one reading per discarded amplitude span, whose value names what discarded it
+          (e.g. `production_min_s`, `no_voicing`, `no_monotone_run`).
+        source: nodes/voice.py:Rejection.finding
+      category_membership:
+        kind: categorical
+        description: A measurement the design records as not separable; the value is the sentinel `NOT_SEPARABLE_BY_THIS_DESIGN`.
+        computation: Written by `unviable_findings` for each expectation row listing it under `unviable`.
+        source: nodes/branches.py:unviable_findings
+      defines_its_cue:
+        kind: categorical
+        description: As `category_membership`.
+        computation: Written by `unviable_findings` for each expectation row listing it under `unviable`.
+        source: nodes/branches.py:unviable_findings
+      effort_absolute:
+        kind: categorical
+        description: As `category_membership`.
+        computation: Written by `unviable_findings` for each expectation row listing it under `unviable`.
+        source: nodes/branches.py:unviable_findings
+      measured_route:
+        kind: categorical
+        description: AIRWAY's measured breathing route; the value is the sentinel `NOT_SEPARABLE_BY_THIS_DESIGN`.
+        computation: Written by AIRWAY's route findings, with the content band as a covariate.
+        source: nodes/airway.py:route_findings
+      phonation_extent:
+        kind: categorical
+        description: VOICE's phonation extent where the pitch tracks are absent; the value is the sentinel.
+        computation: Written by `unviable` when PREPROCESS left no pitch tracks.
+        source: nodes/voice.py:_voice_sustained
+      repetition_rule:
+        kind: categorical
+        description: An item-list task's repetition rule where the category is undeclared; the value is the sentinel.
+        computation: Written by `unviable` when the task's category is not in the hint.
+        source: nodes/speech.py:_speech_item_list
+      route:
+        kind: categorical
+        description: As `category_membership`.
+        computation: Written by `unviable_findings` for each expectation row listing it under `unviable`.
+        source: nodes/branches.py:unviable_findings
+      source_overlap:
+        kind: categorical
+        description: As `category_membership`.
+        computation: Written by `unviable_findings` for each expectation row listing it under `unviable`.
+        source: nodes/branches.py:unviable_findings
+      sweep_extent:
+        kind: categorical
+        description: VOICE's glide extent where the pitch tracks are absent; the value is the sentinel.
+        computation: Written by `unviable` when PREPROCESS left no pitch tracks.
+        source: nodes/voice.py:_voice_glide
+
+  gate:
+    about: >-
+      Every gate VERDICT resolves gets three columns. A gate whose `reading` is null is a located
+      gate, applied inside the reporting node where its finding's extent is known; the fold never
+      records it, so its three columns are always null.
+    readers:
+      gate_readings: The fold reads the latest live `{reading}` measurement carrying a value.
+      flag_gate_readings: >-
+        The fold reads every live `{reading}` measurement carrying a value and takes the worst: the
+        minimum for an `at_least` gate, the maximum for an `at_most` one.
+      located: ''
+    templates:
+      gate_{name}:
+        units: '{units}'
+        description: 'The reading the `{name}` gate was judged on: {reading_description}'
+        computation: >-
+          The `value` of the fold's `gates` record for `{name}`; the gate passes when the value is
+          {op_text} the bound. {reading_rule} {reading_computation}
+        source: ['recording_vectors.py:_gate_columns', 'nodes/verdict.py:{reader}', '{reading_source}']
+        null_means: The fold did not apply `{name}`, or the reading was absent (then `_passed` is `undetermined`).
+      gate_{name}_bound:
+        units: '{units}'
+        description: 'The bound `{name}` was judged against for this recording.'
+        computation: >-
+          The `bound` of the fold's record for `{name}`, resolved from `verdict.gates` family → group →
+          default, most specific first.
+        source: ['recording_vectors.py:_gate_columns', 'nodes/verdict.py:gate_conformance']
+        null_means: The fold did not apply `{name}`, or no layer configured a bound.
+      gate_{name}_passed:
+        units: none
+        values: ['true', 'false', undetermined]
+        description: 'Whether the reading cleared the `{name}` bound.'
+        computation: >-
+          The record's `passed`: True/False by whether the value is {op_text} the bound, UNDETERMINED
+          (written `undetermined`) when either side is absent.
+        source: ['recording_vectors.py:_gate_columns', 'nodes/gates.py:apply_gates']
+        null_means: The fold did not apply `{name}`.
+    members:
+      production_min_s:
+        reading: carrier_duration_s
+        op: at_least
+        units: s
+        reader: gate_readings
+        reading_description: how long the qualifying carrier span ran.
+        reading_computation: VOICE writes the carrier span's duration, rounded to 3 places.
+        reading_source: nodes/voice.py:carrier_readings
+      voiced_fraction_min:
+        reading: carrier_voiced_fraction
+        op: at_least
+        units: fraction
+        reader: gate_readings
+        reading_description: the fraction of the carrier's pitch-track frames that are voiced.
+        reading_computation: VOICE writes the voiced frames over all frames of the carrier's track, rounded to 4 places.
+        reading_source: nodes/voice.py:carrier_readings
+      f0_spread_max_semitones:
+        reading: carrier_f0_spread_semitones
+        op: at_most
+        units: semitones
+        reader: gate_readings
+        reading_description: the representative local F0 spread over the carrier.
+        reading_computation: VOICE writes the carrier's F0 spread in semitones, rounded to 3 places; None when the window cannot resolve it.
+        reading_source: nodes/voice.py:carrier_readings
+      continuity_min:
+        reading: carrier_continuity
+        op: at_least
+        units: ratio
+        reader: gate_readings
+        reading_description: the median spectral continuity over the carrier.
+        reading_computation: VOICE writes the carrier's median spectral-stationarity value, rounded to 4 places.
+        reading_source: nodes/voice.py:carrier_readings
+      dominant_segment_min_fraction:
+        reading: sweep_dominant_fraction
+        op: at_least
+        units: fraction
+        reader: gate_readings
+        reading_description: the share of the carrier the dominant monotone pitch run holds.
+        reading_computation: VOICE writes the longest monotone run's duration over the carrier's, rounded to 4 places.
+        reading_source: nodes/voice.py:_voice_glide
+      monotone_tolerance_semitones:
+        reading: sweep_monotone_reversal_semitones
+        op: at_most
+        units: semitones
+        reader: gate_readings
+        reading_description: the largest step the dominant monotone run takes back on itself.
+        reading_computation: VOICE writes `monotone_reversal` over the run, rounded to 3 places.
+        reading_source: nodes/voice.py:_voice_glide
+      expected_tokens_matched_min:
+        reading: expected_tokens_matched
+        op: at_least
+        units: count
+        reader: gate_readings
+        reading_description: how many prescribed tokens the reading realised in order.
+        reading_computation: SPEECH writes the count of expected stimulus tokens matched by consensus words.
+        reading_source: nodes/speech.py:_speech_ordered
+      omissions_max:
+        reading: expected_tokens_omitted
+        op: at_most
+        units: count
+        reader: gate_readings
+        reading_description: how many prescribed tokens nothing realised.
+        reading_computation: SPEECH writes the count of omitted expected tokens.
+        reading_source: nodes/speech.py:_speech_ordered
+      response_min_s:
+        reading: response_duration_s
+        op: at_least
+        units: s
+        reader: gate_readings
+        reading_description: how long the consensus's lexical words span.
+        reading_computation: SPEECH writes the duration of the hull of the lexical consensus words, rounded to 3 places.
+        reading_source: nodes/speech.py:_speech_free_response
+      dominant_speaker_share_min:
+        reading: extent_dominant_speaker_share
+        op: at_least
+        units: fraction
+        reader: flag_gate_readings
+        reading_description: the worst dominant-speaker share over the task extents (a flag gate).
+        reading_computation: SPEECH writes one share per task extent.
+        reading_source: nodes/speech.py:_speakers_within
+      items_min:
+        reading: items_produced
+        op: at_least
+        units: count
+        reader: gate_readings
+        reading_description: how many items an item-list response produced.
+        reading_computation: SPEECH writes the count of lexical consensus words.
+        reading_source: nodes/speech.py:_speech_item_list
+      events_min:
+        reading: airway_events_found
+        op: at_least
+        units: count
+        reader: gate_readings
+        reading_description: how many breath or cough events AIRWAY found.
+        reading_computation: AIRWAY writes the count of its detected events.
+        reading_source: nodes/airway.py:events_found
+      repetitions_min:
+        reading: ddk_repetitions_found
+        op: at_least
+        units: count
+        reader: gate_readings
+        reading_description: how many DDK repetitions either instrument found.
+        reading_computation: The DDK instrument writes the larger of the decode's repetition count and 1 where the envelope carrier was found.
+        reading_source: nodes/ddk.py:repetitions_found
+      repeat_overlap_min:
+        reading: null
+        op: at_least
+        units: fraction
+        reader: gate_readings
+        reading_description: a located gate, applied inside the reporting node.
+        reading_computation: The fold records no value for a located gate.
+        reading_source: nodes/gates.py:GATE_SPECS
+      echo_overlap_max:
+        reading: null
+        op: at_most
+        units: fraction
+        reader: gate_readings
+        reading_description: a located gate, applied inside the reporting node.
+        reading_computation: The fold records no value for a located gate.
+        reading_source: nodes/gates.py:GATE_SPECS
+      verbatim_overlap_max:
+        reading: null
+        op: at_most
+        units: fraction
+        reader: gate_readings
+        reading_description: a located gate, applied inside the reporting node.
+        reading_computation: The fold records no value for a located gate.
+        reading_source: nodes/gates.py:GATE_SPECS
+      gap_off_task_min_s:
+        reading: null
+        op: at_least
+        units: s
+        reader: gate_readings
+        reading_description: a located gate, applied inside the reporting node.
+        reading_computation: The fold records no value for a located gate.
+        reading_source: nodes/gates.py:GATE_SPECS
+      interval_max_s:
+        reading: null
+        op: at_most
+        units: s
+        reader: gate_readings
+        reading_description: a located gate, applied inside the reporting node.
+        reading_computation: The fold records no value for a located gate.
+        reading_source: nodes/gates.py:GATE_SPECS
+      score_min:
+        reading: null
+        op: at_least
+        units: score
+        reader: gate_readings
+        reading_description: a located gate, applied inside the reporting node.
+        reading_computation: The fold records no value for a located gate.
+        reading_source: nodes/gates.py:GATE_SPECS
+      train_min_s:
+        reading: null
+        op: at_least
+        units: s
+        reader: gate_readings
+        reading_description: a located gate, applied inside the reporting node.
+        reading_computation: The fold records no value for a located gate.
+        reading_source: nodes/gates.py:GATE_SPECS
+      rate_prominence_min:
+        reading: null
+        op: at_least
+        units: ratio
+        reader: gate_readings
+        reading_description: a located gate, applied inside the reporting node.
+        reading_computation: The fold records no value for a located gate.
+        reading_source: nodes/gates.py:GATE_SPECS
