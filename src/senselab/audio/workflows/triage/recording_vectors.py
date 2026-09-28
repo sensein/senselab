@@ -1261,8 +1261,22 @@ def _format(value: Any, facts: Mapping[str, Any]) -> Any:  # noqa: ANN401 -- a Y
     if isinstance(value, str):
         return " ".join(value.format(**facts).split())
     if isinstance(value, list):
-        return [_format(item, facts) for item in value]
+        return [part for item in value for part in _split_sources(_format(item, facts))]
     return value
+
+
+def _split_sources(value: Any) -> list[Any]:  # noqa: ANN401 -- a filled template value
+    """A filled list element, split where a member names several comma-separated sources.
+
+    Args:
+        value: One element of a filled template list.
+
+    Returns:
+        Its non-empty parts.
+    """
+    if not isinstance(value, str):
+        return [value]
+    return [part.strip() for part in value.split(",") if part.strip()]
 
 
 def _entry(name: str, spec: Mapping[str, Any]) -> dict[str, Any]:
@@ -1297,7 +1311,12 @@ def _expand_families(families: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
     for family, spec in families.items():
         templates = spec["templates"]
         for member, facts in spec["members"].items():
-            filled = {"name": member, **facts, "op_text": _OP_TEXT.get(str(facts.get("op")), facts.get("op"))}
+            filled = {
+                "name": member,
+                **(spec.get("defaults") or {}),
+                **facts,
+                "op_text": _OP_TEXT.get(str(facts.get("op")), facts.get("op")),
+            }
             readers = spec.get("readers") or {}
             if readers:
                 rule = readers["located"] if facts.get("reading") is None else readers[facts["reader"]]
@@ -1309,12 +1328,18 @@ def _expand_families(families: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
                 column = pattern.format(**filled)
                 if column in out:
                     raise ValueError(f"family {family}: two templates produce {column}")
-                entry = {"name": column, **{key: _format(value, filled) for key, value in template.items()}}
+                takes_values = bool(template.get("takes_values"))
+                entry = {
+                    "name": column,
+                    **{key: _format(value, filled) for key, value in template.items() if key != "takes_values"},
+                }
                 entry["family"] = family
                 entry["member"] = member
                 for key in ("kind", "reading", "op"):
                     if key in facts:
                         entry[key] = facts[key]
+                if takes_values and "values" in facts:
+                    entry["values"] = list(facts["values"])
                 out[column] = entry
     return out
 

@@ -135,8 +135,9 @@ def test_the_gate_members_read_what_the_registry_says() -> None:
     members = rv._dictionary_source()["families"]["gate"]["members"]
     assert list(members) == list(rv.GATE_NAMES)
     for name, spec in members.items():
-        assert spec["reading"] == GATE_SPECS[name].reading, name
+        assert spec.get("reading") == GATE_SPECS[name].reading, name
         assert spec["op"] == GATE_SPECS[name].op, name
+        assert spec["kind"] == ("located" if GATE_SPECS[name].reading is None else "applied"), name
 
 
 def test_a_located_gate_says_its_columns_are_always_null() -> None:
@@ -147,6 +148,42 @@ def test_a_located_gate_says_its_columns_are_always_null() -> None:
     for name, spec in GATE_SPECS.items():
         if spec.reading is None:
             assert "located gate" in entries[f"gate_{name}"]["computation"], name
+            for column in (f"gate_{name}", f"gate_{name}_bound", f"gate_{name}_passed"):
+                assert entries[column]["null_means"] == "Always.", column
+                assert entries[column]["description"].startswith("Always null"), column
+                assert not any("gate_readings" in source for source in entries[column]["source"]), column
+
+
+def test_the_byte_codes_the_entries_state_are_the_writers() -> None:
+    """The classifier and word-outcome codes the block entries list are the writer's tuples."""
+    entries = _entries()
+    classifiers = ", ".join(f"{index} {name}" for index, name in enumerate(rv.CLASSIFIERS))
+    assert f"{classifiers}, {rv.UNKNOWN_CODE} any other" in entries["span_labels"]["description"]
+    outcomes = ", ".join(f"{index} {name}" for index, name in enumerate(rv.WORD_OUTCOMES))
+    assert f"{outcomes}, {rv.UNKNOWN_CODE} any other" in entries["asr_words"]["description"]
+    for name, (low, high) in rv.SQUIM_RANGES:
+        assert f"[{low:g}, {high:g}]" in entries["span_squim"]["description"], name
+
+
+def test_carrier_rejected_lists_every_name_voice_can_write() -> None:
+    """The listed values are exactly the gate names and criteria VOICE passes to ``Rejection``."""
+    tree = ast.parse((REPO / "src/senselab/audio/workflows/triage/nodes/voice.py").read_text(encoding="utf-8"))
+    constants = {
+        target.id: node.value.value
+        for node in tree.body
+        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant)
+        for target in node.targets
+        if isinstance(target, ast.Name)
+    }
+    written = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and getattr(node.func, "id", None) == "Rejection" and len(node.args) > 1:
+            gate = node.args[1]
+            if isinstance(gate, ast.Constant):
+                written.add(gate.value)
+            elif isinstance(gate, ast.Name):
+                written.add(constants[gate.id])
+    assert set(_entries()["m_carrier_rejected"]["values"]) == written
 
 
 # ------------------------------------------------------------------------------ the vocabularies
