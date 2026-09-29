@@ -487,7 +487,7 @@ columns:
   gate_group:
     units: none
     description: The task group the gate bounds were resolved for, e.g. `ordered_tokens`.
-    computation: '`gates.group` of the fold, the pattern of the declared family''s expectation row.'
+    computation: "`gates.group` of the fold, the pattern of the declared family's expectation row."
     source: [recording_vectors.py:_gate_columns, nodes/gates.py:GateBounds.record]
     null_means: No task group was resolved.
 
@@ -729,7 +729,7 @@ columns:
   enhanced_over_residual_rms_fitted_db:
     units: dB
     description: The same difference for the gain-fitted speech component `g·enhanced`.
-    computation: '`enhanced_over_residual_rms_db` plus the `residual` measurement''s `gain_db` (20·log10|g|).'
+    computation: "`enhanced_over_residual_rms_db` plus the `residual` measurement's `gain_db` (20·log10|g|)."
     source: [recording_vectors.py:_residual_levels, nodes/preprocess.py:_residual]
     null_means: As `enhanced_over_residual_rms_db`, or `gain_db` is absent or non-finite (−inf when the fitted gain is exactly 0).
 
@@ -891,15 +891,15 @@ families:
           computation: >-
             {computation} The column is the arithmetic mean of the finite numeric values of every
             live `{name}` reading.
-          source: ['recording_vectors.py:extract', '{source}']
+          source: [recording_vectors.py:extract, '{source}']
           null_means: >-
             No live reading carries a finite number: `m_{name}_n` is 0, or every counted value is
             non-finite. {none_readings}
         m_{name}_n:
           units: count
-          description: 'How many live `{name}` readings carry a non-null value.'
+          description: How many live `{name}` readings carry a non-null value.
           computation: Count of live `{name}` measurements whose `value` is not null.
-          source: ['recording_vectors.py:_measurement_readings']
+          source: [recording_vectors.py:_measurement_readings]
           null_means: >-
             Never; `0` means no live reading carried a non-null value, which includes a node having
             written only None-valued readings. {none_readings}
@@ -907,14 +907,14 @@ families:
         m_{name}:
           units: '{units}'
           description: '{description}'
-          computation: '{computation} The column concatenates every counted reading''s list, nulls kept.'
-          source: ['recording_vectors.py:extract', '{source}']
+          computation: "{computation} The column concatenates every counted reading's list, nulls kept."
+          source: [recording_vectors.py:extract, '{source}']
           null_means: '`m_{name}_n` is 0. {none_readings}'
         m_{name}_n:
           units: count
-          description: 'How many live `{name}` readings carry a non-null value.'
+          description: How many live `{name}` readings carry a non-null value.
           computation: Count of live `{name}` measurements whose `value` is not null.
-          source: ['recording_vectors.py:_measurement_readings']
+          source: [recording_vectors.py:_measurement_readings]
           null_means: Never; `0` means no live reading carried a non-null value.
       matrix:
         m_{name}:
@@ -923,19 +923,19 @@ families:
           computation: >-
             {computation} The column is every counted reading's rows concatenated and flattened
             row-major; `m_{name}_width` is the longest row.
-          source: ['recording_vectors.py:extract', '{source}']
+          source: [recording_vectors.py:extract, '{source}']
           null_means: '`m_{name}_n` is 0.'
         m_{name}_n:
           units: count
-          description: 'How many live `{name}` readings carry a non-null value.'
+          description: How many live `{name}` readings carry a non-null value.
           computation: Count of live `{name}` measurements whose `value` is not null.
-          source: ['recording_vectors.py:_measurement_readings']
+          source: [recording_vectors.py:_measurement_readings]
           null_means: Never; `0` means no live reading carried a non-null value.
         m_{name}_width:
           units: count
-          description: 'The row width of `m_{name}`, so the matrix can be rebuilt as rows.'
+          description: The row width of `m_{name}`, so the matrix can be rebuilt as rows.
           computation: The length of the longest row across the readings.
-          source: ['recording_vectors.py:extract']
+          source: [recording_vectors.py:extract]
           null_means: '`m_{name}_n` is 0.'
       categorical:
         m_{name}:
@@ -943,13 +943,13 @@ families:
           units: none
           description: '{description}'
           computation: '{computation} The column is the distinct values written, sorted.'
-          source: ['recording_vectors.py:extract', '{source}']
+          source: [recording_vectors.py:extract, '{source}']
           null_means: '`m_{name}_n` is 0.'
         m_{name}_n:
           units: count
-          description: 'How many times `{name}` was written with a non-null value.'
+          description: How many times `{name}` was written with a non-null value.
           computation: Count of live `{name}` measurements whose `value` is not null.
-          source: ['recording_vectors.py:_measurement_readings']
+          source: [recording_vectors.py:_measurement_readings]
           null_means: Never; `0` means nothing was written.
     members:
       breath_coverage_fraction:
@@ -1236,15 +1236,15 @@ families:
             The `value` of the fold's `gates` record for `{name}`; the gate passes when the value is
             {op_text} the bound. {reading_rule} The column is that value as a finite float; a
             non-numeric or non-finite value is null. {reading_computation}
-          source: ['recording_vectors.py:_gate_columns', 'recording_vectors.py:_number', 'nodes/verdict.py:{reader}', '{reading_source}']
+          source: [recording_vectors.py:_gate_columns, recording_vectors.py:_number, 'nodes/verdict.py:{reader}', '{reading_source}']
           null_means: The fold did not apply `{name}`, or the reading was absent (then `_passed` is `undetermined`).
         gate_{name}_bound:
           units: '{units}'
-          description: 'The bound `{name}` was judged against for this recording.'
+          description: The bound `{name}` was judged against for this recording.
           computation: >-
             The `bound` of the fold's record for `{name}`, resolved from `verdict.gates` family, then
             group, then default, most specific first and key by key.
-          source: ['recording_vectors.py:_gate_columns', 'nodes/gates.py:load_gate_bounds', 'nodes/gates.py:apply_gates']
+          source: [recording_vectors.py:_gate_columns, nodes/gates.py:load_gate_bounds, nodes/gates.py:apply_gates]
           null_means: >-
             The fold did not apply `{name}`, because no layer names it (then all three columns are
             null); or the most specific layer naming it sets the bound to null, i.e. unmeasured (then
@@ -1252,11 +1252,11 @@ families:
         gate_{name}_passed:
           units: none
           values: ['true', 'false', undetermined]
-          description: 'Whether the reading cleared the `{name}` bound.'
+          description: Whether the reading cleared the `{name}` bound.
           computation: >-
             The record's `passed`: True/False by whether the value is {op_text} the bound, UNDETERMINED
             (written `undetermined`) when either side is absent.
-          source: ['recording_vectors.py:_gate_columns', 'nodes/gates.py:apply_gates']
+          source: [recording_vectors.py:_gate_columns, nodes/gates.py:apply_gates]
           null_means: The fold did not apply `{name}`.
       located:
         gate_{name}_bound:
@@ -1271,7 +1271,7 @@ families:
             reporting node against the same resolved value and never enters `gates.applied` or
             `gates.flagging`, so it has no per-recording reading or outcome column. The column is
             the bound as a finite float.
-          source: ['recording_vectors.py:_gate_columns', 'recording_vectors.py:_number', 'nodes/gates.py:load_gate_bounds', 'nodes/gates.py:GateBounds.record', 'nodes/verdict.py:GateOutcome.record', '{applied_source}']
+          source: [recording_vectors.py:_gate_columns, recording_vectors.py:_number, nodes/gates.py:load_gate_bounds, nodes/gates.py:GateBounds.record, nodes/verdict.py:GateOutcome.record, '{applied_source}']
           null_means: >-
             No task group was resolved, no layer names `{name}` for this recording's group or family,
             or the most specific layer naming it leaves the bound unmeasured (null).

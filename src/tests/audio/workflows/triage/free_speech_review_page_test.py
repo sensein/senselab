@@ -1601,6 +1601,7 @@ def test_the_page_script_is_valid_javascript() -> None:
     node = shutil.which("node")
     if node is None:
         pytest.skip("node is not installed; the javascript cannot be parsed here")
+    assert node is not None
     with tempfile.TemporaryDirectory() as directory:
         script = Path(directory) / "script.js"
         script.write_text(page._SCRIPT, encoding="utf-8")
@@ -1897,6 +1898,7 @@ def test_the_theme_boot_script_is_valid_javascript() -> None:
     node = shutil.which("node")
     if node is None:
         pytest.skip("node is not installed")
+    assert node is not None
     with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False) as handle:
         handle.write(page._THEME_BOOT)
     result = subprocess.run([node, "--check", handle.name], capture_output=True, text=True)

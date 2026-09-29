@@ -19,12 +19,7 @@ sources:
     The DATE_TIME-family detector texts on the 258 r7 cinderella-story recordings that are story
     events (midnight, one day, the next day, twelve o'clock, one night, ...).
   owner: Owner, 2026-09-28 -- the common Cinderella themes approved as task content.
-characters: [cinderella, prince, prince charming, charming, princess, fairy godmother, godmother, fairy,
-  king, queen, duke, grand duke, stepmother, stepsister, sister, mother, father, daughter, lady tremaine,
-  tremaine, anastasia, drizella, lucifer, gus, jaq, bruno, mouse, mice, horse, footman, coachman, lizard]
-objects: [pumpkin, carriage, coach, glass slipper, slipper, glass shoe, shoe, ball, gown, dress, ballgown,
-  wand, magic, spell, clock, invitation, castle, palace, kingdom, staircase, stairs, steps]
+characters: [cinderella, prince, prince charming, charming, princess, fairy godmother, godmother, fairy, king, queen, duke, grand duke, stepmother, stepsister, sister, mother, father, daughter, lady tremaine, tremaine, anastasia, drizella, lucifer, gus, jaq, bruno, mouse, mice, horse, footman, coachman, lizard]
+objects: [pumpkin, carriage, coach, glass slipper, slipper, glass shoe, shoe, ball, gown, dress, ballgown, wand, magic, spell, clock, invitation, castle, palace, kingdom, staircase, stairs, steps]
 events: [dance, dancing, marry, married, wedding, happily ever after, once upon a time]
-time: [midnight, stroke of midnight, twelve o'clock, twelve am, before midnight, almost midnight,
-  one day, next day, the next day, one night, that night, the night, all night, next morning,
-  the next morning, one evening, that evening]
+time: [midnight, stroke of midnight, twelve o'clock, twelve am, before midnight, almost midnight, one day, next day, the next day, one night, that night, the night, all night, next morning, the next morning, one evening, that evening]
