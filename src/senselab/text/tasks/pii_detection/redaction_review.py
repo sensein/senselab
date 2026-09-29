@@ -555,8 +555,9 @@ def answer_problem(result: "ReviewResult", original: str, redacted: str | None) 
     Returns:
         None where the answer is usable. Otherwise one sentence naming the problem: a judgment that
         asks for the redaction to change (incomplete, clean original over removed words, or words
-        that carry something identifying where no complete redaction covers them) with an empty proposal, or proposal quotes that do not
-        occur in the ORIGINAL.
+        that carry something identifying where no complete redaction covers them) with an empty
+        proposal, a place released without a reason, or proposal quotes that do not occur in the
+        ORIGINAL.
     """
     if not result.available:
         return None
