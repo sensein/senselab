@@ -393,7 +393,7 @@ def test_no_audio_means_no_worker(
 def _counting(monkeypatch: pytest.MonkeyPatch) -> List[int]:
     """Count calls to the stubbed worker, keeping its behaviour."""
     calls: List[int] = []
-    inner = cv.subprocess.run
+    inner: Callable[..., Any] = cv.subprocess.run
 
     def counted(cmd: list, **kwargs: object) -> types.SimpleNamespace:
         calls.append(len(json.loads(str(kwargs["input"]))["in_paths"]))
