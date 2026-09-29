@@ -342,3 +342,47 @@ def test_a_request_with_no_task_facts_carries_no_task_lines() -> None:
 
     body = _compose("hello", None, {})
     assert "INSTRUCTIONS" not in body and "not identifying for being said" not in body
+
+
+def test_the_prompt_states_every_safe_harbor_identifier_and_the_residual_clause() -> None:
+    """Owner, 2026-09-28: the reviewer applies Safe Harbor, rendered from the packaged data."""
+    from senselab.text.tasks.pii_detection import redaction_review
+
+    standard = redaction_review.safe_harbor()
+    codes = [identifier["code"] for identifier in standard["identifiers"]]
+    assert codes == [chr(ord("A") + i) for i in range(18)]
+    assert standard["citation"] in redaction_review._PROMPT
+    assert all(f"({code})" in redaction_review._PROMPT for code in codes)
+    assert "Actual knowledge" in redaction_review._PROMPT and "St. Petersburg" in redaction_review._PROMPT
+    assert redaction_review.safe_harbor_codes("location") == ("B",)
+    assert redaction_review.safe_harbor_codes("CONDITION") == ()
+
+
+def test_a_place_released_without_a_reason_is_fed_back() -> None:
+    """A place may be released under Safe Harbor only with a reason weighed against the transcript."""
+    from senselab.text.tasks.pii_detection.redaction_review import (
+        ReviewProposal,
+        ReviewResult,
+        answer_problem,
+    )
+
+    def result(*proposal: ReviewProposal) -> ReviewResult:
+        return ReviewResult(available=True, redaction="complete", original="clean", proposal=list(proposal))
+
+    bare = ReviewProposal(text="Florida", action="release", category="LOCATION", why="")
+    reasoned = ReviewProposal(text="Florida", action="release", category="LOCATION", why="a state, nothing else")
+    assert "give no reason" in (answer_problem(result(bare), "i grew up in Florida", "i grew up in [LOCATION]") or "")
+    assert answer_problem(result(reasoned), "i grew up in Florida", "i grew up in [LOCATION]") is None
+    empty = ReviewResult(available=True, redaction="incomplete", original="clean")
+    assert "listed no words" in (answer_problem(empty, "hello alice", "hello [PERSON]") or "")
+
+
+def test_the_parser_keeps_the_safe_harbor_letter() -> None:
+    """Each entry carries the identifier the model named, one letter, upper-cased."""
+    from senselab.text.tasks.pii_detection.redaction_review import parse_completion
+
+    parsed = parse_completion(
+        "REASONING: x\nREDACTION: complete\nORIGINAL: clean\nSPEAKERS: one\nPROPOSAL: "
+        '[{"text": "Florida", "action": "release", "category": "LOCATION", "safe_harbor": "b", "why": "a state"}]'
+    )
+    assert [(entry.safe_harbor, entry.why) for entry in parsed.proposal] == [("B", "a state")]
