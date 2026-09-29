@@ -68,7 +68,7 @@ RELEASE_ORDER = (
 """The graph's own release axis, most permissive first, plus the page's own ``unrecorded``."""
 
 EXTRACT_SCHEMA = "senselab.fsreview.extract"
-EXTRACT_VERSION = 7
+EXTRACT_VERSION = 8
 """7 carries each span's trim reason and condition kind, and a single ASR stream where the consensus is empty.
 
 6 was the first version whose marks are the fold's PII ledger: every span and each word's state.
@@ -248,11 +248,12 @@ def word_states(ledger: Mapping[str, Any] | None) -> dict[str, dict[str, Any]]:
         ledger: The ``pii_ledger`` attributes, or None.
 
     Returns:
-        Word id to ``{s, c, nm, pr, hr, tr, k, dx}``: the state, the categories, whether a ``release``
-        entry named it, whether a ``redact`` entry named it, whether that entry routes to human
-        review, why the trim unmasked it (:data:`TRIM_PADDING`, :data:`TRIM_NOT_CONTENT` or empty),
-        and a human-review entry's condition kind and cohort diagnosis. A word two masks cover takes
-        the tighter state, masked first.
+        Word id to ``{s, c, nm, pr, hr, tr, k, dx, o}``: the state, the one category, whether a
+        ``release`` entry named it, whether a ``redact`` entry named it, whether that entry routes to
+        human review, why the trim unmasked it (:data:`TRIM_PADDING`, :data:`TRIM_NOT_CONTENT` or empty),
+        a human-review entry's condition kind and cohort diagnosis, and ``o``: the other spans of a
+        different category on the same word, each ``{c, s, hr, k, dx}``, rendered as their own marks.
+        A word two masks cover takes the tighter state, masked first.
     """
     states: dict[str, dict[str, Any]] = {}
     for mask in (ledger or {}).get("masks") or ():
@@ -274,6 +275,7 @@ def word_states(ledger: Mapping[str, Any] | None) -> dict[str, dict[str, Any]]:
                 "tr": trim,
                 "k": "",
                 "dx": "",
+                "o": [],
             }
     for proposal in (ledger or {}).get("proposals") or ():
         category = str(proposal.get("category") or "")
@@ -292,12 +294,16 @@ def word_states(ledger: Mapping[str, Any] | None) -> dict[str, dict[str, Any]]:
                     "tr": "",
                     "k": kind,
                     "dx": diagnosis,
+                    "o": [],
                 }
                 continue
-            held["pr"], held["hr"] = 1, max(held["hr"], review)
-            held["k"], held["dx"] = held["k"] or kind, held["dx"] or diagnosis
-            if category not in held["c"]:
-                held["c"].append(category)
+            if category in held["c"]:
+                held["pr"], held["hr"] = 1, max(held["hr"], review)
+                held["k"], held["dx"] = held["k"] or kind, held["dx"] or diagnosis
+                continue
+            overlay = {"c": category, "s": PROPOSED_BY_REVIEWER, "hr": review, "k": kind, "dx": diagnosis}
+            if all(existing["c"] != category for existing in held["o"]):
+                held["o"].append(overlay)
     return states
 
 
@@ -399,6 +405,29 @@ def finding_key(stem: str, categories: Sequence[str], start: int, end: int) -> s
     return hashlib.sha1(payload.encode(), usedforsecurity=False).hexdigest()[:16]
 
 
+def _detected_label(categories: Sequence[str]) -> dict[str, Any]:
+    """A word only a detector marked: its first category, and each further one as its own span.
+
+    Args:
+        categories: The categories the live label assertions place on the word, in first-seen order.
+
+    Returns:
+        The word's label, as :func:`word_states` shapes one.
+    """
+    first, *rest = list(categories)
+    return {
+        "s": DETECTED,
+        "c": [first],
+        "nm": 0,
+        "pr": 0,
+        "hr": 0,
+        "tr": "",
+        "k": "",
+        "dx": "",
+        "o": [{"c": category, "s": DETECTED, "hr": 0, "k": "", "dx": ""} for category in rest],
+    }
+
+
 def marks_of(
     stem: str,
     words: Sequence[Entity],
@@ -437,7 +466,22 @@ def marks_of(
             min(hulls[position][0] for position in range(index, cursor)),
             max(hulls[position][1] for position in range(index, cursor)),
         )
-        contributing = _contributing([word.id for word in run], current, pii)
+        run_ids = [word.id for word in run]
+        contributing = _contributing(run_ids, current, pii)
+        overlays = []
+        for overlay in label.get("o") or ():
+            own = _contributing(run_ids, [str(overlay["c"])], pii)
+            overlays.append(
+                {
+                    "k": finding_key(stem, [str(overlay["c"]), str(overlay["s"])], index, cursor),
+                    "c": str(overlay["c"]),
+                    "s": str(overlay["s"]),
+                    "hr": int(overlay.get("hr") or 0),
+                    "kd": str(overlay.get("k") or ""),
+                    "dx": str(overlay.get("dx") or ""),
+                    "d": [str(finding.attributes.get("source") or "") for finding in own],
+                }
+            )
         surface = " ".join(str(word.attributes.get("text") or "") for word in run)
         marks.append(
             {
@@ -458,6 +502,7 @@ def marks_of(
                 "brk": 1 if any(word.attributes.get("bracketed") for word in run) else 0,
                 "stim": _mark_stimulus(contributing),
                 "tx": _extent_flag(hull, extent),
+                "o": overlays,
             }
         )
         index = cursor
@@ -566,7 +611,7 @@ def recording_record(run_root: Path, families: frozenset[str]) -> dict[str, Any]
     labels: list[Mapping[str, Any] | None] = [
         states.get(entity.id)
         or (
-            {"s": DETECTED, "c": marked[entity.id], "nm": 0, "pr": 0, "hr": 0, "tr": "", "k": "", "dx": ""}
+            _detected_label(marked[entity.id])
             if entity.id in marked and (readable is None or position in readable)
             else None
         )
@@ -1019,7 +1064,7 @@ class Corpus:
         self.releases[str(row["rel"]) or "unrecorded"] += 1
         for mark in row.get("f") or []:
             self.marks += 1
-            for category in mark["c"]:
+            for category in [*mark["c"], *(overlay["c"] for overlay in mark.get("o") or ())]:
                 self.categories[str(category)] += 1
             for detector in mark["d"] or ["unattributed"]:
                 self.detectors[str(detector)] += 1
@@ -1086,10 +1131,11 @@ def paragraph(words: Sequence[Sequence[Any]], marks: Sequence[dict[str, Any]]) -
 def _mark(mark: dict[str, Any], run: Sequence[Sequence[Any]]) -> str:
     """One reviewable mark: its words, underlined in its state's colour, and its category.
 
-    The text shows one category, the mask's own; every category that names the span, the reviewer's
-    included, is on ``data-c`` for the popup. The text carries no explanation. An orange mark
-    carries no category either; everything that
-    says why a span is in its state is on the mark's data attributes, for the status popup.
+    A mark carries exactly one category, on its label and on ``data-c`` alike. A span of another
+    category over the same words -- a reviewer's proposal over a detector's mask, or a second
+    detector category -- is its own mark nested inside, with its own category and state. The text
+    carries no explanation, and an orange mark no category; everything that says why a span is in
+    its state is on the mark's data attributes, for the status popup.
 
     Args:
         mark: The mark record.
@@ -1098,20 +1144,47 @@ def _mark(mark: dict[str, Any], run: Sequence[Sequence[Any]]) -> str:
     Returns:
         The mark's HTML.
     """
-    label = html.escape("+".join(str(name) for name in mark["c"]))
     shown = html.escape(str(mark["c"][0])) if mark["c"] else ""
     state = str(mark.get("s") or DETECTED)
     colour = MARK_COLOURS.get(state, "green")
     detectors = html.escape(" ".join(str(name) for name in mark["d"]) or "unattributed")
     inner = " ".join(_plain(item) for item in run)
+    for overlay in reversed(mark.get("o") or []):
+        inner = _overlay_mark(overlay, mark, inner)
     category = "" if colour == "orange" else f'<span class="cat">{shown}</span>'
     return (
-        f'<mark class="pii u-{colour}" data-k="{html.escape(str(mark["k"]))}" data-c="{label}" '
+        f'<mark class="pii u-{colour}" data-k="{html.escape(str(mark["k"]))}" data-c="{shown}" '
         f'data-s="{html.escape(state)}" data-nm="{int(mark.get("nm") or 0)}" data-pr="{int(mark.get("pr") or 0)}" '
         f'data-hr="{int(mark.get("hr") or 0)}" data-tr="{html.escape(str(mark.get("tr") or ""))}" '
         f'data-kd="{html.escape(str(mark.get("kd") or ""))}" data-dx="{html.escape(str(mark.get("dx") or ""))}" '
         f'data-d="{detectors}" data-brk="{mark["brk"]}" data-tx="{mark["tx"]}" '
         f'data-nt="{mark["nt"]}" data-stim="{mark["stim"]}" tabindex="0">{category}{inner}</mark>'
+    )
+
+
+def _overlay_mark(overlay: Mapping[str, Any], outer: Mapping[str, Any], inner: str) -> str:
+    """A span of another category over an outer mark's words, as its own single-category mark.
+
+    Args:
+        overlay: The overlay record from :func:`marks_of`.
+        outer: The mark it sits inside, whose word-level facets it shares.
+        inner: The HTML it wraps.
+
+    Returns:
+        The nested mark's HTML.
+    """
+    state = str(overlay.get("s") or DETECTED)
+    colour = MARK_COLOURS.get(state, "green")
+    shown = html.escape(str(overlay.get("c") or ""))
+    detectors = html.escape(" ".join(str(name) for name in overlay.get("d") or ()) or "unattributed")
+    category = "" if colour == "orange" else f'<span class="cat">{shown}</span>'
+    return (
+        f'<mark class="pii u-{colour}" data-k="{html.escape(str(overlay["k"]))}" data-c="{shown}" '
+        f'data-s="{html.escape(state)}" data-nm="0" data-pr="{1 if state == PROPOSED_BY_REVIEWER else 0}" '
+        f'data-hr="{int(overlay.get("hr") or 0)}" data-tr="" '
+        f'data-kd="{html.escape(str(overlay.get("kd") or ""))}" data-dx="{html.escape(str(overlay.get("dx") or ""))}" '
+        f'data-d="{detectors}" data-brk="{outer["brk"]}" data-tx="{outer["tx"]}" '
+        f'data-nt="{outer["nt"]}" data-stim="{outer["stim"]}" tabindex="0">{category}{inner}</mark>'
     )
 
 
@@ -1926,7 +1999,7 @@ function checked(cls){
 function allChecked(cls){
   return [...document.querySelectorAll('.'+cls)].every(i=>i.checked);}
 function markMatches(m,cats,dets,brk,tx,rev,lo,hi){
-  if(!m.dataset.c.split('+').some(c=>cats.has(c)))return false;
+  if(!cats.has(m.dataset.c))return false;
   const own=m.dataset.d.split(' ');
   if(!own.some(d=>dets.has(d)))return false;
   if(brk!=='any'&&m.dataset.brk!==brk)return false;
@@ -2020,8 +2093,7 @@ function open(m){
   current=m; m.classList.add('sel');
   const rec=store.findings[m.dataset.k]||{};
   panel.hidden=false;
-  const label=m.querySelector('.cat');
-  panel.querySelector('.surface').textContent=m.textContent.slice(label?label.textContent.length:0);
+  panel.querySelector('.surface').textContent=markWords(m);
   panel.querySelector('.facts').textContent=
     m.dataset.c+' \\u00b7 '+(m.dataset.d||'unattributed')+' \\u00b7 '+m.dataset.nt+' token(s)'
     +(m.dataset.brk==='1'?' \\u00b7 touches a bracketed token':'')
@@ -2048,7 +2120,7 @@ function setVerdict(v){
   if(revSel.value!=='any')apply();
 }
 for(const m of marks){
-  m.addEventListener('click',e=>{e.preventDefault();open(m);});
+  m.addEventListener('click',e=>{e.preventDefault();e.stopPropagation();open(m);});
   m.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();open(m);}});
 }
 for(const b of panel.querySelectorAll('.verdict'))
@@ -2117,6 +2189,8 @@ let WHY=null;
 try{WHY=JSON.parse(document.getElementById('whydata').textContent);}catch(e){WHY=null;}
 const whyBox=document.getElementById('why');
 function esc(s){const d=document.createElement('div');d.textContent=String(s);return d.innerHTML;}
+function markWords(m){const c=m.cloneNode(true);c.querySelectorAll('.cat').forEach(x=>x.remove());
+  return c.textContent.replace(/\\s+/g,' ').trim();}
 function P(i){return WHY&&WHY.pool[i];}
 function scrimOn(){
   if(document.getElementById('scrim'))return;
@@ -2173,8 +2247,7 @@ function cardAccount(a,card){
       +(a.cd&&a.cd.length?' ('+esc(a.cd.join(', '))+')':'')+'.</p>');
   const rows=[];
   for(const m of card.querySelectorAll('mark.pii')){
-    const label=m.querySelector('.cat');
-    const words=m.textContent.slice(label?label.textContent.length:0);
+    const words=markWords(m);
     const bits=[STATE_WHY[m.dataset.s]||m.dataset.s];
     if(m.dataset.tr)bits.push(TRIM_WHY[m.dataset.tr]||m.dataset.tr);
     if(m.dataset.nm==='1'&&m.dataset.s!=='unmasked_by_reviewer')bits.push('a reviewer release entry named it');
@@ -2651,7 +2724,7 @@ def census(path: Path) -> dict[str, Any]:
                 if mark.get("brk"):
                     totals["bracketed_marks"] += 1
                     per["bracketed_marks"] += 1
-                    for category in mark["c"]:
+                    for category in [*mark["c"], *(overlay["c"] for overlay in mark.get("o") or ())]:
                         totals[f"bracketed:{category}"] += 1
     return {
         "totals": dict(sorted(totals.items())),
