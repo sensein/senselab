@@ -253,7 +253,9 @@ def word_states(ledger: Mapping[str, Any] | None) -> dict[str, dict[str, Any]]:
         human review, why the trim unmasked it (:data:`TRIM_PADDING`, :data:`TRIM_NOT_CONTENT` or empty),
         a human-review entry's condition kind and cohort diagnosis, and ``o``: the other spans of a
         different category on the same word, each ``{c, s, hr, k, dx}``, rendered as their own marks.
-        A word two masks cover takes the tighter state, masked first.
+        A word two masks cover takes the tighter state, masked first. Only a ``redact`` entry proposing
+        to hide more (agreement ``new``) marks a word no mask hides; an entry agreeing with the masks, or
+        naming the task's own words, leaves such a word unmarked, as the release leaves it visible.
     """
     states: dict[str, dict[str, Any]] = {}
     for mask in (ledger or {}).get("masks") or ():
@@ -282,9 +284,12 @@ def word_states(ledger: Mapping[str, Any] | None) -> dict[str, dict[str, Any]]:
         review = int(bool(proposal.get("human_review")))
         kind = str(proposal.get("condition_kind") or "")
         diagnosis = str(proposal.get("cohort_diagnosis") or "")
+        new = str(proposal.get("agreement") or "new") == "new"
         for word_id in proposal.get("word_ids") or ():
             held = states.get(str(word_id))
             if held is None or held["s"] != MASKED:
+                if not new:
+                    continue
                 states[str(word_id)] = {
                     "s": PROPOSED_BY_REVIEWER,
                     "c": [category],

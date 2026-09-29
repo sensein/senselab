@@ -1922,3 +1922,25 @@ def test_a_mark_shows_one_category_on_its_label_and_on_data_c() -> None:
     assert '<span class="cat">DATE_TIME</span>' in rendered
     assert 'data-c="DATE_TIME"' in rendered
     assert "+" not in rendered
+
+
+def test_an_agreeing_redact_entry_draws_no_red_on_words_the_release_shows() -> None:
+    """r8's open-response card: an entry agreeing with DATE_TIME masks leaves "or so" unmarked, as released."""
+    ledger = {
+        "masks": [
+            {"category": "DATE_TIME", "words": [{"id": "w-week", "state": "masked", "content": True}]},
+            {"category": "DATE_TIME", "words": [{"id": "w-ago", "state": "masked", "content": True}]},
+        ],
+        "proposals": [
+            {
+                "category": "DATE_TIME",
+                "agreement": "masked",
+                "word_ids": ["w-a", "w-week", "w-or", "w-so", "w-ago", "w-that"],
+            },
+            {"category": "LOCATION", "agreement": "new", "word_ids": ["w-wisconsin"]},
+        ],
+    }
+    states = page.word_states(ledger)
+    assert {word_id for word_id, state in states.items() if state["s"] == page.PROPOSED_BY_REVIEWER} == {"w-wisconsin"}
+    assert states["w-week"]["s"] == page.MASKED and states["w-week"]["pr"] == 1
+    assert not {"w-a", "w-or", "w-so", "w-that"} & set(states)
