@@ -116,7 +116,7 @@ GATE_NAMES = (
     "dominant_segment_min_fraction",
     "monotone_tolerance_semitones",
     "expected_tokens_matched_min",
-    "omissions_max",
+    "content_omission_fraction_max",
     "response_min_s",
     "dominant_speaker_share_min",
     "items_min",

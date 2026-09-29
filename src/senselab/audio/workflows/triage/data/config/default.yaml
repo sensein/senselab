@@ -376,7 +376,7 @@ verdict:
         dominant_segment_min_fraction: 0.5  # fraction of the carrier one direction must hold
       ORDERED_TOKENS:                    # a prescribed token sequence
         expected_tokens_matched_min: 1   # prescribed tokens the recording must realise
-        omissions_max: 0                 # prescribed tokens nothing realised that are tolerated
+        content_omission_fraction_max: 0.0  # a sentence: any content word unread fails; function-word drops do not
         dominant_speaker_share_min: 0.9  # share of the task extent's attributed seconds one voice must hold
         repeat_overlap_min: 0.5          # overlap at which an alignment covers the sequence twice
         gap_off_task_min_s: 1.0          # shortest gap reported as off-task extent
@@ -419,7 +419,15 @@ verdict:
     # per-family difference has been derived yet. What it buys now is that the differences the
     # design names -- `maximum-phonation-time` declaring `expect_inhale` where its v2 does not,
     # inside one group -- are expressible without a code change.
-    by_family: {}
+    by_family:
+      # UNFITTED: fractions of a passage's or the Stroop list's content tokens left unread. Proposed
+      # from the r8 distribution; see specs/20260929-task-check-alignment/design.md § B.
+      rainbow-passage:
+        content_omission_fraction_max: 0.1
+      caterpillar-passage:
+        content_omission_fraction_max: 0.1
+      word-color-stroop:
+        content_omission_fraction_max: 0.2
 
 # The label consolidation. TAXONOMY runs no models: it consolidates PREPROCESS's stored scores.
 taxonomy:

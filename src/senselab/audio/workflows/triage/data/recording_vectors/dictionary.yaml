@@ -1396,15 +1396,20 @@ families:
         reading_description: how many prescribed tokens the reading realised in order.
         reading_computation: SPEECH writes the count of expected stimulus tokens matched by consensus words.
         reading_source: nodes/speech.py:_speech_ordered
-      omissions_max:
+      content_omission_fraction_max:
         kind: applied
-        reading: expected_tokens_omitted
+        reading: expected_content_omitted_fraction
         op: at_most
-        units: count
+        units: fraction
         reader: gate_readings
-        reading_description: how many prescribed tokens nothing realised.
-        reading_computation: SPEECH writes the count of omitted expected tokens.
-        reading_source: nodes/speech.py:_speech_ordered
+        reading_description: of the stimulus's content tokens, the fraction nothing realised.
+        reading_computation: >-
+          SPEECH aligns the consensus words to the stimulus (joining an adjacent pair whose
+          concatenation is the other side's one token, and pairing an absent token with an unpaired
+          word of its own key within two positions), then writes the absent tokens that carry content
+          (residue.is_content_word) over all the stimulus's content tokens, rounded to 4 places; over
+          every token where the stimulus carries no content token.
+        reading_source: nodes/speech.py:_content_omitted_fraction, nodes/speech.py:_speech_ordered, stimulus.py:align_stimulus
       response_min_s:
         kind: applied
         reading: response_duration_s

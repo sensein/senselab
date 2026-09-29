@@ -40,6 +40,9 @@ _NEAR_MATCH_SECTION = "stimulus.near_match"
 ALGORITHM = "weighted_levenshtein_alignment"
 ROUTINE = "senselab.audio.workflows.triage.stimulus.align_stimulus"
 NORMALISATION = "casefold; keep alphanumerics and apostrophe"
+COMPOUNDS = "adjacent pair joined when its concatenation is the other side's single token"
+TRANSPOSITION_WINDOW = 1
+"""How far an unpaired word may sit from an absent token of its own key and be a swap of neighbours."""
 
 Realisation = Literal["realised", "substituted", "absent"]
 
@@ -360,6 +363,51 @@ def split_prompts(prompts: Sequence[ExpectedSpeech], *, terminators: str) -> lis
     ]
 
 
+def _join_compounds(keys: Sequence[str], other: set[str]) -> list[list[int]]:
+    """Group adjacent keys whose concatenation is one token of the other side.
+
+    ``desk top`` read against ``desktop``, or ``halfway`` read against ``half way``: the two are the
+    same words spelled with and without the space. A pair is joined only when its concatenation is a
+    token of the other side and the two keys are not both tokens of it on their own.
+
+    Args:
+        keys: One side's normalised keys, in order.
+        other: The other side's keys.
+
+    Returns:
+        The groups, each a list of positions into ``keys``, covering every position once, in order.
+    """
+    groups: list[list[int]] = []
+    index = 0
+    while index < len(keys):
+        if (
+            index + 1 < len(keys)
+            and keys[index]
+            and keys[index + 1]
+            and keys[index] + keys[index + 1] in other
+            and not (keys[index] in other and keys[index + 1] in other)
+        ):
+            groups.append([index, index + 1])
+            index += 2
+            continue
+        groups.append([index])
+        index += 1
+    return groups
+
+
+def _joins(key: str, word_key: str) -> bool:
+    """Whether an expected key is one half of a compound a single word spelled whole.
+
+    Args:
+        key: The expected token's key.
+        word_key: The consensus word's key.
+
+    Returns:
+        True when the word is longer than the key and starts or ends with it.
+    """
+    return len(word_key) > len(key) > 0 and (word_key.startswith(key) or word_key.endswith(key))
+
+
 def align_stimulus(
     prompts: Sequence[ExpectedSpeech], words: Sequence[LexicalWord], *, terminators: str
 ) -> StimulusAlignment:
@@ -392,28 +440,47 @@ def align_stimulus(
         unit_tokens.append(covered)
 
     word_keys = [normalise_token(word.text) for word in words]
-    path = align_pair(expected_keys, word_keys)
+    word_groups = _join_compounds(word_keys, set(expected_keys))
+    expected_groups = _join_compounds(expected_keys, set(word_keys))
+    grouped_words = ["".join(word_keys[i] for i in group) for group in word_groups]
+    grouped_expected = ["".join(expected_keys[i] for i in group) for group in expected_groups]
+    path = align_pair(grouped_expected, grouped_words)
 
     paired: dict[int, int] = {}
-    unexpected: list[UnexpectedWord] = []
+    unpaired_words: list[tuple[int, int]] = []
     last_expected = -1
-    for expected_index, word_index in path:
-        if expected_index is not None and word_index is not None:
-            paired[expected_index] = word_index
-            last_expected = expected_index
-        elif expected_index is not None:
-            last_expected = expected_index
-        elif word_index is not None:
-            word = words[word_index]
-            unexpected.append(
-                UnexpectedWord(
-                    index=word.index,
-                    text=word.text,
-                    extent=word.extent,
-                    agreement=word.agreement,
-                    after=last_expected,
-                )
-            )
+    for expected_group, word_group in path:
+        if expected_group is not None and word_group is not None:
+            for expected_index in expected_groups[expected_group]:
+                paired[expected_index] = word_groups[word_group][0]
+            last_expected = expected_groups[expected_group][-1]
+        elif expected_group is not None:
+            last_expected = expected_groups[expected_group][-1]
+        elif word_group is not None:
+            for position in word_groups[word_group]:
+                unpaired_words.append((position, last_expected))
+
+    joined = {word_groups[g][0]: grouped_words[g] for g in range(len(word_groups)) if len(word_groups[g]) > 1}
+    halves = {index for group in expected_groups if len(group) > 1 for index in group}
+    for index, key in enumerate(expected_keys):
+        if index in paired:
+            continue
+        for position, (candidate, after) in enumerate(unpaired_words):
+            if word_keys[candidate] == key and abs(after + 1 - index) <= TRANSPOSITION_WINDOW:
+                paired[index] = candidate
+                del unpaired_words[position]
+                break
+
+    unexpected = [
+        UnexpectedWord(
+            index=words[position].index,
+            text=words[position].text,
+            extent=words[position].extent,
+            agreement=words[position].agreement,
+            after=after,
+        )
+        for position, after in unpaired_words
+    ]
 
     expected: list[ExpectedToken] = []
     for index, key in enumerate(expected_keys):
@@ -440,7 +507,13 @@ def align_stimulus(
                 unit=expected_unit[index],
                 text=expected_text[index],
                 key=key,
-                realisation="realised" if word_keys[word_index] == key else "substituted",
+                realisation=(
+                    "realised"
+                    if word_keys[word_index] == key
+                    or joined.get(word_index) == key
+                    or (index in halves and _joins(key, word_keys[word_index]))
+                    else "substituted"
+                ),
                 word_index=word.index,
                 read=word.text,
                 extent=word.extent,
@@ -469,6 +542,8 @@ def align_stimulus(
         "algorithm": ALGORITHM,
         "routine": ROUTINE,
         "normalisation": NORMALISATION,
+        "compounds": COMPOUNDS,
+        "transposition_window": TRANSPOSITION_WINDOW,
         "sentence_terminators": terminators,
         "n_prompts": len(prompts),
         "n_units": len(units),

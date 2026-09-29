@@ -234,3 +234,32 @@ class TestProvenance:
         assert provenance["sentence_terminators"] == TERMINATORS
         assert provenance["algorithm"] == "weighted_levenshtein_alignment"
         assert provenance["normalisation"] == "casefold; keep alphanumerics and apostrophe"
+
+
+class TestCompoundsAndSwaps:
+    """The same words spelled with or without a space, or two neighbours swapped, are not omissions."""
+
+    def _counts(self, stimulus: str, said: str) -> tuple[int, int, int, list[str]]:
+        alignment = align_stimulus([ExpectedSpeech(text=stimulus)], _spoken(said), terminators=".?!")
+        prov = alignment.provenance
+        return prov["n_realised"], prov["n_absent"], prov["n_substituted"], [word.text for word in alignment.unexpected]
+
+    def test_two_words_read_for_one_compound_realise_it(self) -> None:
+        """``desk top`` read against ``desktop``."""
+        assert self._counts("The desktop is clean.", "The desk top is clean") == (4, 0, 0, [])
+
+    def test_one_word_read_for_a_two_word_compound_realises_both(self) -> None:
+        """``halfway`` read against ``half way``."""
+        assert self._counts("Go half way there.", "Go halfway there") == (4, 0, 0, [])
+
+    def test_two_neighbours_swapped_are_both_realised(self) -> None:
+        """``to not spend`` read against ``not to spend``."""
+        assert self._counts("Try not to spend it all.", "Try to not spend it all") == (6, 0, 0, [])
+
+    def test_a_plural_is_still_a_substitution(self) -> None:
+        """A word that merely starts with the expected one is not a compound of it."""
+        assert self._counts("the canoe is here", "the canoes is here") == (3, 0, 1, [])
+
+    def test_a_word_moved_further_than_a_neighbour_is_not_a_swap(self) -> None:
+        """Order carries the task where the stimulus is a list: a rotation stays a departure."""
+        assert self._counts("blue green red", "red blue green") == (2, 1, 0, ["red"])

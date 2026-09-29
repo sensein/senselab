@@ -63,3 +63,45 @@ Parquet schema 12: `gate_<name>_reason` for each of the 13 applied gates, `gate_
 `gate_exempt`, `gate_not_applicable_n`, and `not_applicable` as a `gate_<name>_passed` value. The
 data dictionary describes each; the viewer offers the reasons as categorical axes; the review page
 shows "not applicable" and the reason beside each gate.
+
+## B. The read-aloud alignment (ORDERED_TOKENS)
+
+### What the audit found
+
+1,800 of 13,700 Harvard recordings flagged; Caterpillar 49%, Stroop 31%, Rainbow 23%. The bound was
+`omissions_max: 0`, whose only derivation was "the value the code used". A 40-recording stratified
+sample of flagged Harvard (`harvard_sample.jsonl`) split into: nothing read at all (1,012 corpus-wide:
+empty, `[breath]`, one or two words); exactly one omission (540), of which about 230 were alignment
+defects (compounds `desk top`/`desktop`, `half way`, `thumb tacks`, `pure bred`; a swap `not to
+spend`/`to not spend`), about 230 a single dropped function word, about 80 real misreadings; several
+omissions (62), mostly real.
+
+### What changed
+
+1. **Compounds and swaps** (`stimulus.align_stimulus`). An adjacent pair on either side whose
+   concatenation is one token of the other side, and which are not both tokens of it on their own, is
+   aligned as that one token; an expected pair so joined is realised by the single word. After the
+   alignment, an absent expected token is paired with an unpaired word of its own key at most one
+   position away (`TRANSPOSITION_WINDOW = 1`): a swap of neighbours. One position, not two, because
+   Stroop's list is ordered and a rotation of three answers is a real departure. A plural is not a
+   compound (`canoes` stays a substitution of `canoe`). PREPROCESS's stored alignment is not rebuilt
+   by a replay, so `stimulus_alignment_rebuild_agrees` reads False wherever the new pairing moved a
+   count; it is a record, not a ground.
+2. **Nothing read** is its own conformance ground ("read none of the words the stimulus asked for")
+   where `expected_tokens_matched` is 0, instead of the generic non-conformance.
+3. **The omission gate reads content, as a fraction.** `omissions_max` is replaced outright by
+   `content_omission_fraction_max`, reading `expected_content_omitted_fraction`: of the stimulus's
+   content tokens (`residue.is_content_word`), the fraction nothing realised; over every token where
+   the stimulus has no content token (`hey hey hey`). Function-word drops are left out of both counts:
+   the ~230 single dropped "the"/"a"/"to" were the sentence read, not unread. The count
+   `expected_tokens_omitted` is still written.
+   - Sentences (group `ORDERED_TOKENS`): **0.0** — any content word unread fails. This is not a fit;
+     it is the instruction ("read the following sentences"), now applied to the words that carry the
+     sentence.
+   - **UNFITTED**: `rainbow-passage` 0.1, `caterpillar-passage` 0.1, `word-color-stroop` 0.2. No
+     labelled verdicts exist to fit against; the values are proposals from the r8 distribution below,
+     for the owner to approve.
+4. **Stroop's stimulus is the answers.** `stimulus_text` lists the displayed ink colours, which is
+   what the instruction asks to be said: over 400 r8 Stroop recordings the realised fraction has
+   median 0.73 and 49% at or above 0.8, which could not happen if the text were the printed words
+   (about half of which differ from the ink). The expectation already matched; only the bound changed.
