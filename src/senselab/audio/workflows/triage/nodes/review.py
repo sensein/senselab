@@ -22,7 +22,7 @@ See ``specs/20260924-reviewer-over-every-transcript/design.md``.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -48,10 +48,12 @@ from senselab.audio.workflows.triage.nodes.redact import (
     transcript_texts,
 )
 from senselab.audio.workflows.triage.nodes.redact import STREAM_NAME as REDACTED_STREAM
+from senselab.audio.workflows.triage.task_lexicon import TaskLexicon, task_lexicon
 from senselab.audio.workflows.triage.vocabulary import PII_SCAN, REDACTION_LLM_ANNOTATION, SCANNED
 from senselab.text.tasks.pii_detection.redaction_review import (
     REDACT,
     ReviewProposal,
+    answer_problem,
     review_payload,
     review_transcript,
     shutdown_review_worker,
@@ -109,6 +111,10 @@ class _Reading:
         model_id: The repo asked, or the empty string when nothing was.
         revision: The commit the reviewer loaded, or None.
         failure: Why it did not run, when it did not.
+        converged: Whether the final round's answer was usable under the prompt's rule
+            (:func:`~senselab.text.tasks.pii_detection.redaction_review.answer_problem`); False where
+            the loop ran out of rounds on an answer it had fed back.
+        problem: The final round's unresolved problem, or None.
     """
 
     status: str
@@ -121,6 +127,8 @@ class _Reading:
     model_id: str
     revision: str | None
     failure: str | None
+    converged: bool = True
+    problem: str | None = None
 
 
 def _stamp() -> str:
@@ -156,15 +164,17 @@ def _llm_settings(config: TriageConfig) -> dict[str, Any]:
     return {name: config.require(f"{_LLM_SECTION}.{name}") for name in names}
 
 
-def task_context(store: ProvStore, hint: AudioHints | None) -> dict[str, Any]:
+def task_context(store: ProvStore, hint: AudioHints | None, lexicon: TaskLexicon | None = None) -> dict[str, Any]:
     """What this recording declares about itself, for the reviewer to reason with.
 
     Args:
         store: The provenance store.
         hint: The caller's declaration, or None.
+        lexicon: The family's task lexicon; its phrases that are not declared names are sent as
+            ``task_words``.
 
     Returns:
-        ``task``, ``speech_type``, ``instructions``, ``asked_to_say`` and ``declared_names``, each
+        ``task``, ``speech_type``, ``instructions``, ``asked_to_say``, ``declared_names`` and ``task_words``, each
         omitted where the recording declares none, and ``instructions_from`` and ``stimulus_from``
         naming where those texts came from.
     """
@@ -187,6 +197,10 @@ def task_context(store: ProvStore, hint: AudioHints | None) -> dict[str, Any]:
     names = expected_names(family)
     if names:
         context["declared_names"] = list(names)
+    named = {name.casefold() for name in names}
+    words = [phrase for phrase in (lexicon.texts() if lexicon is not None else ()) if phrase not in named]
+    if words:
+        context["task_words"] = words
     return context
 
 
@@ -285,6 +299,25 @@ def _is_flag(result: Any) -> bool:  # noqa: ANN401 — the backend's own result 
 def _rounds(
     original: str, redacted: str | None, settings: Mapping[str, Any], context: Mapping[str, Any]
 ) -> tuple[_Reading, list[dict[str, Any]]]:
+    """The bounded loop, with whether its final answer was usable recorded on the reading.
+
+    Args:
+        original: The recording's words.
+        redacted: The text an applied redaction produced, or None where none was applied.
+        settings: :func:`_llm_settings`' mapping.
+        context: :func:`task_context`'s mapping.
+
+    Returns:
+        ``(reading, reviews)``, as :func:`_loop`.
+    """
+    reading, reviews = _loop(original, redacted, settings, context)
+    problem = reviews[-1].get("problem") if reviews and reviews[-1].get("available") else None
+    return replace(reading, converged=problem is None, problem=problem), reviews
+
+
+def _loop(
+    original: str, redacted: str | None, settings: Mapping[str, Any], context: Mapping[str, Any]
+) -> tuple[_Reading, list[dict[str, Any]]]:
     """The bounded review / mask / re-review loop, without the worker's lifetime.
 
     Args:
@@ -302,7 +335,9 @@ def _rounds(
     model_id = str(settings["model_id"])
     revision: str | None = None
     last: Any = None
-    for iteration in range(1, int(settings["max_iterations"]) + 1):
+    feedback: str | None = None
+    ceiling = int(settings["max_iterations"])
+    for iteration in range(1, ceiling + 1):
         result = review_transcript(
             original,
             redacted=current,
@@ -311,9 +346,18 @@ def _rounds(
             ref=str(settings["ref"]),
             max_new_tokens=int(settings["max_new_tokens"]),
             timeout_s=int(settings["timeout_s"]),
+            feedback=feedback,
         )
-        reviews.append({**review_payload(result), "iteration": iteration})
+        problem = answer_problem(result, original, redacted)
+        reviews.append({**review_payload(result), "iteration": iteration, "feedback": feedback, "problem": problem})
         revision = result.revision or revision
+        # An answer the prompt's own rule rejects -- a judgment that asks for the redaction to change
+        # with no words named, or quotes that are not in the text -- is fed back and asked again over
+        # the same text, until the ceiling. See specs/20260928-reviewer-contradictions-and-task-lexicon/.
+        if result.available and problem is not None and iteration < ceiling:
+            last = result
+            feedback = problem
+            continue
         if not result.available:
             status = FLAGGED if flagged else ABSENT
             return (
@@ -433,7 +477,7 @@ def review(store: ProvStore, config: TriageConfig, hint: AudioHints | None = Non
             before any model is contacted.
     """
     settings = _llm_settings(config)
-    context = task_context(store, hint)
+    context = task_context(store, hint, task_lexicon(config, declared_task_family(store, hint)))
     original, redacted = transcript_texts(store)
     state = detector_state(store)
     findings_n = _findings_n(store)
@@ -501,6 +545,8 @@ def review(store: ProvStore, config: TriageConfig, hint: AudioHints | None = Non
             "signal": "consensus_transcript",
             "status": reading.status,
             "iterations": reading.iterations,
+            "converged": reading.converged,
+            "problem": reading.problem,
             "flagged": list(reading.flagged),
             "redaction": reading.redaction,
             "original": reading.original,
