@@ -93,7 +93,9 @@ var SchemaAxes = (function () {
     route_speech: ['routed', 'declined', 'unavailable'],
     route_voice: ['routed', 'declined', 'unavailable'],
   };
-  GATES.forEach(function (g) { if (g[1]) ORDERINGS['gate_' + g[0] + '_passed'] = ['true', 'undetermined', 'false']; });
+  GATES.forEach(function (g) {
+    if (g[1]) ORDERINGS['gate_' + g[0] + '_passed'] = ['true', 'not_applicable', 'undetermined', 'false'];
+  });
 
   function column(spec) {
     return {
@@ -303,6 +305,11 @@ var SchemaAxes = (function () {
         label: name + ' · passed', gate: name,
         nullMeans: 'this gate was not applied to this recording',
       }));
+      out.push(column({
+        name: 'gate_' + name + '_reason', kind: 'categorical', group: 'gate outcome',
+        label: name + ' · reason', gate: name,
+        nullMeans: 'the gate compared its reading with its bound, or was not applied',
+      }));
     });
     return out;
   }
@@ -318,6 +325,11 @@ var SchemaAxes = (function () {
       name: 'gate_undetermined_n', kind: 'count', group: 'gate',
       nullMeans: 'never null; 0 means every applied gate could be answered',
     }),
+    column({
+      name: 'gate_not_applicable_n', kind: 'count', group: 'gate',
+      nullMeans: 'never null; gates with nothing to be asked of',
+    }),
+    column({ name: 'gate_reason', kind: 'categorical', group: 'gate', nullMeans: 'the conformance gates were applied' }),
     column({
       name: 'gate_failed_names', kind: 'set', group: 'gate', assignable: false,
       reason: 'a set of gate names, not a value — put its size on the axis, or filter by a term',

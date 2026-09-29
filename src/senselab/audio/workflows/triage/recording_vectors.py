@@ -31,7 +31,7 @@ import yaml  # type: ignore[import-untyped]
 from senselab.audio.workflows.triage.cohort import CONDITION_KINDS
 from senselab.audio.workflows.triage.vocabulary import UNPLACED_OPEN, UNPLACED_UNREAD
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 """Bumped whenever a column is added, removed or retyped, a binary layout changes, or a categorical
 column's controlled vocabulary changes."""
 
@@ -158,6 +158,7 @@ APPLIED_GATE_NAMES = tuple(name for name in GATE_NAMES if name not in LOCATED_GA
 """The gates the fold applies and records, in column order."""
 
 GATE_UNDETERMINED = "undetermined"
+GATE_NOT_APPLICABLE = "not_applicable"
 """What a gate's ``_passed`` column carries when either the reading or the bound was absent."""
 
 RESIDUAL_MEASUREMENT = "residual"
@@ -844,6 +845,8 @@ def _gate_columns(decision: dict[str, Any]) -> dict[str, Any]:
         "gate_node": gates.get("node"),
         "gate_group": gates.get("group"),
         "gate_family": gates.get("family"),
+        "gate_reason": gates.get("reason"),
+        "gate_exempt": sorted(str(name) for name in (gates.get("exempt") or [])),
     }
     bounds = gates.get("bounds")
     bounds = bounds if isinstance(bounds, dict) else {}
@@ -858,11 +861,13 @@ def _gate_columns(decision: dict[str, Any]) -> dict[str, Any]:
         row[f"gate_{name}_bound"] = _number(record.get("bound"))
         outcomes[name] = _conformance(record.get("passed"))
         row[f"gate_{name}_passed"] = outcomes[name]
+        row[f"gate_{name}_reason"] = record.get("reason")
 
     row["gate_applied_n"] = len(applied)
     row["gate_flagging_n"] = len(flagging)
     row["gate_failed_n"] = sum(1 for v in outcomes.values() if v == "false")
     row["gate_undetermined_n"] = sum(1 for v in outcomes.values() if v == GATE_UNDETERMINED)
+    row["gate_not_applicable_n"] = sum(1 for v in outcomes.values() if v == GATE_NOT_APPLICABLE)
     row["gate_failed_names"] = sorted(name for name, v in outcomes.items() if v == "false")
     row["gate_flagged_names"] = sorted(str(g.get("gate")) for g in flagging if _conformance(g.get("passed")) == "false")
     return row
@@ -1197,10 +1202,13 @@ def _fields() -> list[pa.Field]:
         pa.field("gate_node", pa.string()),
         pa.field("gate_group", pa.string()),
         pa.field("gate_family", pa.string()),
+        pa.field("gate_reason", pa.string()),
+        pa.field("gate_exempt", pa.list_(pa.string())),
         pa.field("gate_applied_n", pa.int32()),
         pa.field("gate_flagging_n", pa.int32()),
         pa.field("gate_failed_n", pa.int32()),
         pa.field("gate_undetermined_n", pa.int32()),
+        pa.field("gate_not_applicable_n", pa.int32()),
         pa.field("gate_failed_names", pa.list_(pa.string())),
         pa.field("gate_flagged_names", pa.list_(pa.string())),
         pa.field("llm_status", pa.string()),
@@ -1227,6 +1235,7 @@ def _fields() -> list[pa.Field]:
                     pa.field(f"gate_{name}", pa.float64()),
                     pa.field(f"gate_{name}_bound", pa.float64()),
                     pa.field(f"gate_{name}_passed", pa.string()),
+                    pa.field(f"gate_{name}_reason", pa.string()),
                 )
             )
         ],

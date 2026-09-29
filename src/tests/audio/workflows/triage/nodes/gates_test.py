@@ -27,22 +27,32 @@ from senselab.audio.workflows.triage.nodes.branches import (
 from senselab.audio.workflows.triage.nodes.gates import (
     AT_LEAST,
     AT_MOST,
+    BOUND_UNMEASURED,
     CONFORMANCE_GATES,
     DEFAULT_LAYER,
+    FAIL,
     FAMILY_LAYER,
     GATE_KEYS,
+    GATE_REASONS,
     GATE_SECTION,
     GATE_SPECS,
     GROUP_LAYER,
+    INAPPLICABLE,
     LAYERS,
+    NO_CARRIER,
+    NO_SPEECH,
+    NOT_APPLICABLE,
+    NOT_COMPUTED,
     REQUIRED_COUNT,
     TYPICAL_COUNT,
+    UNCOMPUTED_REASONS,
     UNDETERMINED,
     UNGATEABLE_READINGS,
     GateBounds,
     GateSpec,
     Pattern,
     _gate_specs,
+    apply_flag_gates,
     apply_gates,
     conformance_gate_names,
     load_gate_bounds,
@@ -205,7 +215,7 @@ class TestAnAbsentReadingIsUndeterminedAndNeverFalse:
         assert conformance == UNDETERMINED
         assert applied[0].passed == UNDETERMINED
 
-    def test_one_unanswerable_gate_makes_the_whole_conformance_undetermined(self) -> None:
+    def test_one_unanswerable_gate_makes_an_otherwise_passing_conformance_undetermined(self) -> None:
         """Answering on the gates that could be read would report a partial reading as a whole one."""
         bounds = _bounds(Pattern.SUSTAINED, production_min_s=0.5, continuity_min=0.5)
         conformance, _ = apply_gates(("production_min_s", "continuity_min"), bounds, {"carrier_duration_s": 1.0})
@@ -218,6 +228,63 @@ class TestAnAbsentReadingIsUndeterminedAndNeverFalse:
         )
         assert conformance is False
         assert applied[0].passed is False
+
+
+class TestAnAbsenceIsAnsweredByItsReason:
+    """What an absent reading means is the caller's to say; the gate records the reason it was given."""
+
+    def test_an_absence_given_as_a_failure_fails_and_says_why(self) -> None:
+        """No carrier qualified: nothing was produced, which is a failure of the task, not an unknown."""
+        conformance, applied = apply_gates(
+            ("production_min_s",),
+            _bounds(Pattern.SUSTAINED, production_min_s=0.5),
+            {},
+            {"carrier_duration_s": (FAIL, NO_CARRIER)},
+        )
+        assert conformance is False
+        assert applied[0].passed is False
+        assert applied[0].reason == NO_CARRIER
+        assert applied[0].record()["reason"] == NO_CARRIER
+
+    def test_an_inapplicable_gate_takes_no_part(self) -> None:
+        """A gate with nothing to ask of neither passes nor holds the conformance undecided."""
+        bounds = _bounds(Pattern.SUSTAINED, production_min_s=0.5, continuity_min=0.5)
+        conformance, applied = apply_gates(
+            ("production_min_s", "continuity_min"),
+            bounds,
+            {"carrier_duration_s": 1.0},
+            {"carrier_continuity": (INAPPLICABLE, NO_SPEECH)},
+        )
+        assert conformance is True
+        assert [gate.passed for gate in applied] == [True, NOT_APPLICABLE]
+
+    def test_a_failed_gate_decides_even_beside_an_undecided_one(self) -> None:
+        """A failure that is read must not be hidden by a sibling nobody could answer."""
+        bounds = _bounds(Pattern.SUSTAINED, production_min_s=0.5, continuity_min=0.5)
+        conformance, applied = apply_gates(("production_min_s", "continuity_min"), bounds, {"carrier_duration_s": 0.1})
+        assert conformance is False
+        assert applied[1].passed == UNDETERMINED
+        assert applied[1].reason == NOT_COMPUTED
+
+    def test_an_unmeasured_bound_says_so(self) -> None:
+        """A null bound is its own reason, apart from an absent reading."""
+        _, applied = apply_gates(
+            ("production_min_s",), _bounds(Pattern.SUSTAINED, production_min_s=None), {"carrier_duration_s": 0.1}
+        )
+        assert applied[0].reason == BOUND_UNMEASURED
+
+    def test_every_reason_is_one_of_the_vocabulary(self) -> None:
+        """The reasons are controlled vocabulary, so a corpus count never mixes spellings."""
+        assert set(UNCOMPUTED_REASONS) <= set(GATE_REASONS)
+        assert len(set(GATE_REASONS)) == len(GATE_REASONS)
+
+    def test_an_exempt_flag_gate_is_not_applied(self) -> None:
+        """A family whose instruction permits a model speaker is not asked who spoke."""
+        bounds = _bounds(Pattern.ORDERED_TOKENS, dominant_speaker_share_min=0.9)
+        applied = apply_flag_gates(
+            bounds, {"extent_dominant_speaker_share": 0.5}, exempt=("dominant_speaker_share_min",)
+        )
+        assert applied == []
 
 
 class TestTheComparisonRunsTheWayTheGateDeclares:

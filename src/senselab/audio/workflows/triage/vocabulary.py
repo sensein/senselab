@@ -277,6 +277,13 @@ CONFORMANCE_REFERENTS = (TASK, STORE_ASSERTIONS)
 """What a conformance can be about. Named so a corpus count never mixes the two."""
 
 TASK_NOT_CONFORMED = "reported that what the instruction asked for did not happen"
+NOTHING_READ = "read none of the words the stimulus asked for"
+"""The conformance ground for a read-aloud task whose alignment realised no expected token at all."""
+
+UNCOMPUTED_READING = "a reading this task is judged on was not computed"
+"""The flag ground an undecided conformance gate contributes when its reading should exist and does not.
+
+Controlled vocabulary, with each gate and its reason appended."""
 CONFORMANCE_UNANSWERED = "answered no conformance question"
 UNMEASURED_ASKED = "asked for an operating point nobody has measured"
 STORE_ASSERTION_CONTRADICTED = "reported that a stored assertion the same store's measurements contradict"
@@ -471,6 +478,8 @@ class FoldPolicy:
             on the triage axis.
         llm_contradiction_flags: Whether a flagged reading that names no words is a flag ground on
             the triage axis.
+        uncomputed_reading_flags: Whether a conformance gate left undecided because a reading the
+            task is judged on was never computed is a flag ground of its own.
     """
 
     conformance_flags: bool = True
@@ -486,6 +495,7 @@ class FoldPolicy:
     cohort_conditions: str | None = None
     llm_second_speaker_flags: bool = False
     llm_contradiction_flags: bool = False
+    uncomputed_reading_flags: bool = False
     conformance_flags_by_family: dict[str, bool] = field(default_factory=dict)
 
     @classmethod
@@ -518,6 +528,7 @@ class FoldPolicy:
             cohort_conditions=str(config.get(f"{_SECTION}.cohort_conditions") or "") or None,
             llm_second_speaker_flags=bool(config.get(f"{_SECTION}.llm_second_speaker_flags", False)),
             llm_contradiction_flags=bool(config.get(f"{_SECTION}.llm_contradiction_flags", False)),
+            uncomputed_reading_flags=bool(config.get(f"{_SECTION}.uncomputed_reading_flags", False)),
             conformance_flags_by_family={
                 str(family): bool(flags)
                 for family, flags in (config.get(f"{_SECTION}.conformance_flags_by_family") or {}).items()
@@ -1139,9 +1150,31 @@ def fold_file_verdict(
                 f"{record.get('reading')} read {record.get('value')} against {record.get('bound')}",
             )
         )
+    gate_record = dict(gates or {})
+    applied_gates = [g for g in (gate_record.get("applied") or ()) if isinstance(g, Mapping)]
+    nothing_read = any(
+        g.get("reading") == "expected_tokens_matched" and g.get("value") == 0 and g.get("passed") is False
+        for g in applied_gates
+    )
+    uncomputed = sorted(
+        f"{g.get('gate')} ({g.get('reason')})"
+        for g in applied_gates
+        if g.get("passed") == "UNDETERMINED" and g.get("reason") in ("absent_not_computed", "instrument_absent")
+    )
+    if uncomputed and rules.uncomputed_reading_flags:
+        reasons.append(
+            NodeVerdict(
+                str(gate_record.get("node") or _VERDICT),
+                Outcome.FLAG,
+                None,
+                f"{UNCOMPUTED_READING}: {', '.join(uncomputed)}",
+            )
+        )
     for name, report in reports.items():
         if report.conformance is False and rules.flags_conformance(report.conformance_of, declared_family):
             why = TASK_NOT_CONFORMED if report.conformance_of == TASK else STORE_ASSERTION_CONTRADICTED
+            if report.conformance_of == TASK and nothing_read and name == gate_record.get("node"):
+                why = NOTHING_READ
             named = f" on {declared_family}" if report.conformance_of == TASK and declared_family else ""
             reasons.append(NodeVerdict(name, Outcome.FLAG, report.kind, f"{name} {why}{named}"))
         if report.conformance == UNDETERMINED and rules.undetermined_flags:

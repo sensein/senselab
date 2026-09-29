@@ -9,7 +9,7 @@
 > stay counts and categories only.
 
 Produced by `senselab.audio.workflows.triage.recording_vectors` and
-`scripts/triage_recording_vectors.py`. **One row per recording.** `schema_version` is `11`; any
+`scripts/triage_recording_vectors.py`. **One row per recording.** `schema_version` is `12`; any
 change to a column, a byte layout or a categorical column's controlled vocabulary bumps it and
 changes this file with it. The same number is in
 the parquet's own key-value metadata, under `senselab.recording_vectors.schema_version`, so a
@@ -38,6 +38,7 @@ What each bump added:
 | **9** | `task_words_n`, `condition_review_kind`, `cohort_condition_n`, `other_condition_n`, `cohort_diagnoses` |
 | **10** | the eight located gates lose their reading and `_passed` columns, which could never carry a value; their `_bound` columns now carry the fold's resolved `gates.bounds` (§6) |
 | **11** | `propagated_n`, `unplaced_n`, `unplaced_open`, `redact_agreed_n`, `redact_new_n`; the ledger columns now count per-finding masks, and the state columns count only new reviewer proposals. See `specs/20260927-mask-placement-and-second-speaker/design.md` |
+| **12** | `gate_<name>_reason` per applied gate, `gate_reason`, `gate_exempt`, `gate_not_applicable_n`; `gate_<name>_passed` gains `not_applicable`. See `specs/20260929-task-check-alignment/design.md` |
 
 The data dictionary in the file's metadata was added without a bump: it adds no column, changes no
 layout and no vocabulary, and a reader that ignores the key reads the file exactly as before.
@@ -108,7 +109,7 @@ Owner-directed: `participant`, `task`, `verdict` are the first three columns, in
 | `duration_conditioned_s` | double | seconds, the conditioned stream | PREPROCESS wrote no stream |
 | `time_scale_s` | double | seconds — **the denominator for every `uint16` time** | neither duration is known |
 | `sampling_rate` | int32 | Hz, of the conditioned stream | no conditioned stream |
-| `schema_version` | int32 | `11` | never |
+| `schema_version` | int32 | `12` | never |
 | `malformed_store_lines` | int32 | lines of `store.jsonl` that did not parse; `0` is the normal value | never |
 | `flags_n` | int32 | how many node verdicts in the fold carry outcome `flag`, `fail` or `discard` — the same filter `report.py` calls a flag | never |
 | `flag_nodes` | list\<string\> | which nodes those were, e.g. `["SPEECH"]` | never; `[]` when none |
@@ -345,13 +346,14 @@ why the bound is stored per row rather than looked up from the config at read ti
 by a test, so a gate added to the registry fails that test until this schema is bumped with it.
 The design is `specs/20260921-gates-in-verdict/design.md`.
 
-Three columns for each of the 13 gates the fold applies, and one for each of the 8 located gates — 47 columns:
+Four columns for each of the 13 gates the fold applies, and one for each of the 8 located gates — 60 columns:
 
 | column | type | what it carries |
 | --- | --- | --- |
 | `gate_<name>` | double | the reading VERDICT read |
 | `gate_<name>_bound` | double | the bound it resolved for this recording |
-| `gate_<name>_passed` | string | `true` \| `false` \| `undetermined` |
+| `gate_<name>_passed` | string | `true` \| `false` \| `undetermined` \| `not_applicable` |
+| `gate_<name>_reason` | string | why the gate was not a plain comparison: `no_carrier`, `no_speech`, `absent_not_computed`, `instrument_absent`, `null_no_overlap`, `null_value`, `bound_unmeasured` |
 
 Nullability, one case at a time, each stated by its own test:
 
@@ -415,10 +417,13 @@ Beside them, the fold's own summary, once per row:
 | `gate_node` | string | no task group resolved |
 | `gate_group` | string | no task group resolved |
 | `gate_family` | string | no task group resolved; a group is resolved only for a declared family this graph holds a row for, so a resolved group always carries its family |
+| `gate_reason` | string | `no_owner_report` where the owning branch left no in-family report; else null |
+| `gate_exempt` | list\<string\> | never null; the flag gates the declared family's instruction exempts |
 | `gate_applied_n` | int32 | never null; `0` means no group resolved, or the owning branch left no in-family report, so no conformance gate was applied (the flag gates still are) |
 | `gate_flagging_n` | int32 | never null |
 | `gate_failed_n` | int32 | never null; `0` means nothing refused |
 | `gate_undetermined_n` | int32 | never null; `0` means every applied gate could be answered |
+| `gate_not_applicable_n` | int32 | never null; gates with nothing to be asked of |
 | `gate_failed_names` | list\<string\> | never null; `[]` when nothing refused |
 | `gate_flagged_names` | list\<string\> | never null; `[]` when no flag gate refused |
 

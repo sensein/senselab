@@ -503,6 +503,26 @@ columns:
     source: [recording_vectors.py:_gate_columns, nodes/gates.py:load_gate_bounds, nodes/gates.py:GateBounds.record]
     null_means: No task group was resolved; null exactly when `gate_node` is null.
 
+  gate_reason:
+    units: none
+    values: [no_owner_report]
+    description: Why no conformance gate was applied, where a task group resolved and none was.
+    computation: >-
+      `gates.reason` of the fold: `no_owner_report` when the branch owning the declared family left
+      no in-family report, so the flag gates were applied and the conformance gates were not.
+    source: [recording_vectors.py:_gate_columns, nodes/verdict.py:gate_conformance, nodes/verdict.py:GateOutcome.record]
+    null_means: The conformance gates were applied, or no task group resolved.
+
+  gate_exempt:
+    units: none
+    description: The flag gates the declared family's own instruction makes inapplicable, which were not applied.
+    computation: >-
+      `gates.exempt` of the fold, from `verdict.flag_gate_exemptions` keyed by the declared family,
+      sorted. The read-aloud sentence tasks name the speaker gate because their session instruction
+      permits someone else to say the sentence first.
+    source: [recording_vectors.py:_gate_columns, nodes/verdict.py:flag_gate_exemptions, nodes/gates.py:apply_flag_gates]
+    null_means: Never; `[]` when the family exempts none.
+
   gate_applied_n:
     units: count
     description: Conformance gates the fold applied.
@@ -532,6 +552,15 @@ columns:
     description: Gates with a column in this schema whose outcome is `undetermined`.
     computation: As `gate_failed_n`, for `undetermined`.
     source: [recording_vectors.py:_gate_columns]
+    null_means: Never.
+
+  gate_not_applicable_n:
+    units: count
+    description: Gates with a column in this schema whose outcome is `not_applicable`.
+    computation: >-
+      As `gate_failed_n`, for `not_applicable`: a gate with nothing to be asked of, e.g. the speaker
+      gate over a recording carrying no lexical word.
+    source: [recording_vectors.py:_gate_columns, nodes/verdict.py:reading_absences, nodes/gates.py:apply_gates]
     null_means: Never.
 
   gate_failed_names:
@@ -1240,7 +1269,9 @@ families:
             {op_text} the bound. {reading_rule} The column is that value as a finite float; a
             non-numeric or non-finite value is null. {reading_computation}
           source: [recording_vectors.py:_gate_columns, recording_vectors.py:_number, 'nodes/verdict.py:{reader}', '{reading_source}']
-          null_means: The fold did not apply `{name}`, or the reading was absent (then `_passed` is `undetermined`).
+          null_means: >-
+            The fold did not apply `{name}`, or the reading was absent; `_reason` then says why and
+            `_passed` what the absence was taken to mean.
         gate_{name}_bound:
           units: '{units}'
           description: The bound `{name}` was judged against for this recording.
@@ -1254,13 +1285,28 @@ families:
             `_passed` is `undetermined`).
         gate_{name}_passed:
           units: none
-          values: ['true', 'false', undetermined]
+          values: ['true', 'false', undetermined, not_applicable]
           description: Whether the reading cleared the `{name}` bound.
           computation: >-
-            The record's `passed`: True/False by whether the value is {op_text} the bound, UNDETERMINED
-            (written `undetermined`) when either side is absent.
-          source: [recording_vectors.py:_gate_columns, nodes/gates.py:apply_gates]
+            The record's `passed`: True/False by whether the value is {op_text} the bound. Where the
+            reading is absent the fold answers by why (`_reason`): False where the branch looked for a
+            production and found none (`no_carrier`), NOT_APPLICABLE where the recording holds nothing
+            to ask of (`no_speech`), else UNDETERMINED; UNDETERMINED too where the bound is null.
+          source: [recording_vectors.py:_gate_columns, nodes/gates.py:apply_gates, nodes/verdict.py:reading_absences]
           null_means: The fold did not apply `{name}`.
+        gate_{name}_reason:
+          units: none
+          values: [no_carrier, no_speech, absent_not_computed, instrument_absent, null_no_overlap, null_value, bound_unmeasured, no_owner_report]
+          description: Why `{name}` answered something other than a comparison of its reading with its bound.
+          computation: >-
+            The record's `reason`, from `reading_absences` for an absent reading: `no_carrier` (no
+            qualifying carrier; a failure), `no_speech` (no lexical word; not applicable),
+            `instrument_absent` (a derivative the reading is taken off never arrived),
+            `absent_not_computed` (the branch had its inputs and wrote no reading), `null_no_overlap`
+            (the speaker share was written null because no diarized segment meets the task extent),
+            `null_value` (another reading written null); `bound_unmeasured` where the bound is null.
+          source: [recording_vectors.py:_gate_columns, nodes/verdict.py:reading_absences, nodes/gates.py:_answer]
+          null_means: The gate was answered by comparing its reading with its bound, or was not applied.
       located:
         gate_{name}_bound:
           units: '{units}'

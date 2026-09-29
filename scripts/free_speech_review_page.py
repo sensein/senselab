@@ -915,11 +915,14 @@ class ValuePool:
         return found
 
 
-GATE_SPEC_KEYS = ("gate", "reading", "op", "bound", "group", "keyed_under", "layer", "ground")
-"""The fields of an evaluated gate that do not vary between recordings."""
+GATE_SPEC_KEYS = ("gate", "reading", "op", "bound", "group", "keyed_under", "layer", "ground", "reason")
+"""The fields of an evaluated gate pooled across recordings; `reason` takes a handful of values."""
 
 UNDETERMINED = "UNDETERMINED"
 """What ``passed`` reads when the gate was applied and could not be answered."""
+
+NOT_APPLICABLE = "NOT_APPLICABLE"
+"""What ``passed`` reads when the recording holds nothing the gate could be asked of."""
 
 
 def gate_state(passed: Any) -> int:  # noqa: ANN401 -- a store attribute is any type
@@ -932,12 +935,14 @@ def gate_state(passed: Any) -> int:  # noqa: ANN401 -- a store attribute is any 
         passed: The gate record's ``passed`` field.
 
     Returns:
-        1 passed, 0 failed, -1 applied but unanswerable.
+        1 passed, 0 failed, -2 not applicable (nothing to ask of), -1 applied but unanswerable.
     """
     if passed is True:
         return 1
     if passed is False:
         return 0
+    if passed == NOT_APPLICABLE:
+        return -2
     return -1
 
 
@@ -2384,11 +2389,12 @@ function buildWhy(stem,card){
     const state=g[2];
     const cell=state===1?'<span class="ok">passed</span>'
       :state===0?'<span class="bad">FAILED</span>'
+      :state===-2?'<span class="neutral">not applicable</span>'
       :'<span class="neutral">could not be answered</span>';
-    const missing=state===-1
+    const missing=spec.reason?' \\u2014 '+esc(String(spec.reason).replace(/_/g,' ')):(state===-1
       ?(g[1]==null?' \\u2014 nothing measured the reading':(spec.bound==null
-        ?' \\u2014 nobody has measured the bound':'')):'';
-    out.push('<tr'+(state===-1?' class="off"':'')+'><td>'+esc(spec.gate)
+        ?' \\u2014 nobody has measured the bound':'')):'');
+    out.push('<tr'+(state<0?' class="off"':'')+'><td>'+esc(spec.gate)
       +(spec.kind==='flagging'?' <span class="neutral">(flagging)</span>':'')
       +'</td><td>'+esc(spec.reading||'\\u2014')+'</td><td>'+(g[1]==null?'\\u2014':esc(val))
       +'</td><td>'+esc((spec.op||'').replace(/_/g,' '))+' '

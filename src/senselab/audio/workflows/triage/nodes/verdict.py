@@ -33,6 +33,7 @@ from typing import Any, Callable, Mapping, Sequence
 from senselab.audio.data_structures import AudioHints
 from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.live_evidence import declared_task, recording_stem
+from senselab.audio.workflows.triage.nodes.airway import INSTRUMENT_ABSENT as AIRWAY_INSTRUMENT_ABSENT
 from senselab.audio.workflows.triage.nodes.branches import (
     BRANCH_FAMILY,
     EXPECTATIONS,
@@ -44,6 +45,7 @@ from senselab.audio.workflows.triage.nodes.common import (
     find_measurement,
     find_measurements,
     find_verdict,
+    lexical_words,
     mint_live,
     software_agent,
     write_verdict,
@@ -51,9 +53,19 @@ from senselab.audio.workflows.triage.nodes.common import (
 from senselab.audio.workflows.triage.nodes.gates import (
     AT_LEAST,
     DEFAULT_LAYER,
+    FAIL,
     FLAG_GATES,
     GATE_SECTION,
     GATE_SPECS,
+    INAPPLICABLE,
+    INSTRUMENT_ABSENT,
+    NO_CARRIER,
+    NO_OWNER_REPORT,
+    NO_SPEECH,
+    NOT_COMPUTED,
+    NULL_NO_OVERLAP,
+    NULL_VALUE,
+    UNDECIDED,
     AppliedGate,
     GateBounds,
     apply_flag_gates,
@@ -471,6 +483,63 @@ def flag_gate_readings(store: ProvStore, names: Sequence[str]) -> dict[str, Any]
     return readings
 
 
+CARRIER_READING_PREFIXES = ("carrier_", "sweep_")
+"""The readings VOICE takes off a qualifying carrier; their absence means no carrier qualified."""
+
+TRACKS_ABSENT_MEASUREMENTS = ("phonation_extent", "sweep_extent")
+"""The measurements VOICE writes, valued ``NOT_SEPARABLE_BY_THIS_DESIGN``, when its tracks never arrived."""
+
+CARRIER_PRESENCE_READING = "carrier_duration_s"
+"""The reading VOICE writes for every carrier it measured over: its absence means none qualified."""
+
+SPEAKER_SHARE_READING = "extent_dominant_speaker_share"
+"""The reading the speaker gate is answered with."""
+
+
+def reading_absences(store: ProvStore, names: Sequence[str], *, flag: bool = False) -> dict[str, tuple[str, str]]:
+    """Why each gate reading nothing live carries is absent, and what the gate should answer.
+
+    Args:
+        store: The provenance store.
+        names: The gates whose readings to explain.
+        flag: Whether these are flag gates, for which a production that does not exist has no
+            quality to be asked about, so an absent carrier reading is not applicable rather than a
+            failure.
+
+    Returns:
+        Reading name to ``(disposition, reason)``, only for readings with no live value.
+    """
+    out: dict[str, tuple[str, str]] = {}
+    lexical_n: int | None = None
+    for name in names:
+        reading = GATE_SPECS[name].reading
+        if reading is None or reading in out:
+            continue
+        values = [m.attributes.get("value") for m in find_measurements(store, reading)]
+        if any(value is not None for value in values):
+            continue
+        if values:
+            out[reading] = (UNDECIDED, NULL_NO_OVERLAP if reading == SPEAKER_SHARE_READING else NULL_VALUE)
+            continue
+        if reading.startswith(CARRIER_READING_PREFIXES):
+            if any(find_measurement(store, absent) is not None for absent in TRACKS_ABSENT_MEASUREMENTS):
+                out[reading] = (UNDECIDED, INSTRUMENT_ABSENT)
+            elif find_measurement(store, CARRIER_PRESENCE_READING) is not None:
+                # A carrier qualified and this one reading of it is missing: a defect, not an absence.
+                out[reading] = (UNDECIDED, NOT_COMPUTED)
+            else:
+                out[reading] = (INAPPLICABLE if flag else FAIL, NO_CARRIER)
+        elif reading == SPEAKER_SHARE_READING:
+            if lexical_n is None:
+                lexical_n = len(lexical_words(store))
+            out[reading] = (INAPPLICABLE, NO_SPEECH) if lexical_n == 0 else (UNDECIDED, NOT_COMPUTED)
+        elif find_measurement(store, AIRWAY_INSTRUMENT_ABSENT) is not None and reading.startswith("airway_"):
+            out[reading] = (UNDECIDED, INSTRUMENT_ABSENT)
+        else:
+            out[reading] = (UNDECIDED, NOT_COMPUTED)
+    return out
+
+
 def _gate_path(gate: AppliedGate) -> str:
     """Where a gate's bound was configured, as a dotted config path.
 
@@ -496,6 +565,8 @@ class GateOutcome:
         applied: One record per conformance gate applied, in the order the group declares them.
         flagging: One record per :data:`FLAG_GATES` gate applied. These decide no conformance;
             each one that did not pass is a flag ground of its own.
+        reason: Why no conformance gate was applied, where none was: :data:`NO_OWNER_REPORT`.
+        exempt: The flag gates the declared family's instruction exempts, which were not applied.
     """
 
     node: str | None
@@ -503,6 +574,8 @@ class GateOutcome:
     bounds: GateBounds | None
     applied: tuple[AppliedGate, ...]
     flagging: tuple[AppliedGate, ...] = ()
+    reason: str | None = None
+    exempt: tuple[str, ...] = ()
 
     @property
     def unmeasured(self) -> tuple[str, ...]:
@@ -531,6 +604,8 @@ class GateOutcome:
             **self.bounds.record(),
             "applied": [gate.record() for gate in self.applied],
             "flagging": [gate.record() for gate in self.flagging],
+            **({"reason": self.reason} if self.reason is not None else {}),
+            **({"exempt": list(self.exempt)} if self.exempt else {}),
         }
 
 
@@ -557,15 +632,47 @@ def gate_conformance(
         return GateOutcome(None, UNDETERMINED, None, ())
     branch, expectation = owner
     bounds = load_gate_bounds(config, expectation.pattern, declared_family)
+    exempt = flag_gate_exemptions(config, declared_family)
     # The flag gates ask about the recording's circumstances, not about the instruction, so they
     # are applied whether or not the owning branch evaluated the task in family.
-    flagging = apply_flag_gates(bounds, flag_gate_readings(store, tuple(FLAG_GATES)))
+    flag_names = tuple(name for name in FLAG_GATES if name not in exempt)
+    flagging = apply_flag_gates(
+        bounds,
+        flag_gate_readings(store, flag_names),
+        reading_absences(store, flag_names, flag=True),
+        exempt=exempt,
+    )
     reported = next((report for report in reports if report.node == branch and report.in_family), None)
     if reported is None:
-        return GateOutcome(branch, UNDETERMINED, bounds, (), tuple(flagging))
+        return GateOutcome(branch, UNDETERMINED, bounds, (), tuple(flagging), NO_OWNER_REPORT, exempt)
     names = conformance_gate_names(expectation.pattern)
-    conformance, applied = apply_gates(names, bounds, gate_readings(store, names))
-    return GateOutcome(branch, conformance, bounds, tuple(applied), tuple(flagging))
+    conformance, applied = apply_gates(names, bounds, gate_readings(store, names), reading_absences(store, names))
+    return GateOutcome(branch, conformance, bounds, tuple(applied), tuple(flagging), None, exempt)
+
+
+FLAG_GATE_EXEMPTIONS = "verdict.flag_gate_exemptions"
+"""Declared family to the flag gates its own instruction makes inapplicable."""
+
+
+def flag_gate_exemptions(config: TriageConfig, declared_family: str | None) -> tuple[str, ...]:
+    """The flag gates the declared family's instruction exempts.
+
+    Args:
+        config: The resolved triage configuration.
+        declared_family: The declared family, or None.
+
+    Returns:
+        The exempt gate names, sorted; empty for a family the table does not name.
+
+    Raises:
+        ValueError: If the table names a gate that is not a flag gate.
+    """
+    table = config.get(FLAG_GATE_EXEMPTIONS) or {}
+    names = tuple(sorted(str(name) for name in (table.get(declared_family) or ()))) if declared_family else ()
+    unknown = sorted(set(names) - set(FLAG_GATES))
+    if unknown:
+        raise ValueError(f"{FLAG_GATE_EXEMPTIONS}.{declared_family} names {unknown}, which are not flag gates")
+    return names
 
 
 def _derived_ran(

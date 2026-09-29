@@ -23,6 +23,7 @@ from senselab.audio.workflows.triage.vocabulary import (
     LLM_REDACTION_RESIDUE,
     NO_LEXICAL_WORD,
     NOTHING_BEYOND_STIMULUS,
+    NOTHING_READ,
     REDACTION_LLM_ANNOTATION,
     REDACTION_OWED,
     REVIEWER_CLEARED_RESCAN,
@@ -34,6 +35,8 @@ from senselab.audio.workflows.triage.vocabulary import (
     REVIEWER_UNMASKED_SOME,
     SCAN_FOUND_NOTHING,
     TASK,
+    TASK_NOT_CONFORMED,
+    UNCOMPUTED_READING,
     UNDETERMINED,
     UNREAD_DECLARATION,
     Conformance,
@@ -1583,6 +1586,67 @@ class TestTheGatesDecideTheDeclaredTask:
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
         assert result.file_verdict.conformance["VOICE"] == UNDETERMINED
 
+    def test_a_voice_task_with_no_qualifying_carrier_fails_rather_than_goes_unanswered(
+        self, config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """VOICE looked for a production and found none: nothing was produced, which is a failure."""
+        store = self._gated_store(
+            tmp_path, family="maximum-phonation-time", branch="VOICE", readings={"carrier_rejected": "no_voicing"}
+        )
+        result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
+        assert result.file_verdict.conformance["VOICE"] is False
+        applied = {gate["gate"]: gate for gate in result.file_verdict.gates["applied"]}
+        assert applied["production_min_s"]["passed"] is False
+        assert applied["production_min_s"]["reason"] == "no_carrier"
+
+    def test_a_voice_task_whose_tracks_never_arrived_is_undetermined_and_flags_for_review(
+        self, config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """No tracks is an instrument that never reached the store: not a failure, and not silent either."""
+        store = self._gated_store(
+            tmp_path,
+            family="maximum-phonation-time",
+            branch="VOICE",
+            readings={"phonation_extent": "NOT_SEPARABLE_BY_THIS_DESIGN"},
+        )
+        result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
+        assert result.file_verdict.conformance["VOICE"] == UNDETERMINED
+        reasons = [str(reason["why"]) for reason in result.file_verdict.record()["reasons"]]
+        assert any(UNCOMPUTED_READING in why and "instrument_absent" in why for why in reasons)
+
+    def test_a_read_aloud_task_nothing_was_read_of_says_so(self, config: TriageConfig, tmp_path: Path) -> None:
+        """Zero expected tokens realised is its own ground, not an omission count."""
+        store = self._gated_store(
+            tmp_path,
+            family="harvard-sentences-list",
+            branch="SPEECH",
+            readings={"expected_tokens_matched": 0, "expected_tokens_omitted": 8},
+        )
+        result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
+        reasons = [str(reason["why"]) for reason in result.file_verdict.record()["reasons"]]
+        assert any(NOTHING_READ in why for why in reasons)
+        assert not any(TASK_NOT_CONFORMED in why for why in reasons)
+
+    def test_a_sentence_task_is_not_asked_who_spoke(self, config: TriageConfig, tmp_path: Path) -> None:
+        """Its session instruction permits someone else to say the sentence first."""
+        store = self._gated_store(
+            tmp_path,
+            family="harvard-sentences-list",
+            branch="SPEECH",
+            readings={"expected_tokens_matched": 6, "expected_tokens_omitted": 0, "extent_dominant_speaker_share": 0.5},
+        )
+        result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
+        assert "dominant_speaker_share_min" not in {gate["gate"] for gate in result.file_verdict.gates["flagging"]}
+        assert result.file_verdict.gates["exempt"] == ["dominant_speaker_share_min"]
+
+    def test_no_in_family_report_records_why_nothing_was_gated(self, config: TriageConfig, tmp_path: Path) -> None:
+        """The owner left no in-family report: the gate record says so rather than leaving it to inference."""
+        store = self._gated_store(
+            tmp_path, family="maximum-phonation-time", branch="VOICE", readings={}, in_family=False
+        )
+        result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
+        assert result.file_verdict.gates["reason"] == "no_owner_report"
+
     def test_a_glide_is_not_bound_by_the_held_vowels_spread(self, config: TriageConfig, tmp_path: Path) -> None:
         """The same spread that fails a sustained vowel leaves a sweep conformant: no gate reads it."""
         readings = {
@@ -1827,12 +1891,31 @@ class TestAnotherSpeakerInsideTheTaskExtentIsAFlag:
         assert applied["dominant_speaker_share_min"]["reading"] == self.READING
         assert applied["dominant_speaker_share_min"]["passed"] is True
 
-    def test_an_absent_reading_is_undetermined_and_never_a_flag(self, config: TriageConfig, tmp_path: Path) -> None:
-        """No diarization derivative is not a claim that one voice held the task."""
+    def test_an_absent_reading_with_nothing_spoken_is_not_applicable(
+        self, config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """No lexical word at all: there is no speaker to ask about, so the gate is not applicable."""
         store = self._store({self.READING: None, "response_duration_s": 8.0})
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
         applied = {entry["gate"]: entry for entry in result.file_verdict.gates["flagging"]}
+        assert applied["dominant_speaker_share_min"]["passed"] == "NOT_APPLICABLE"
+        assert applied["dominant_speaker_share_min"]["reason"] == "no_speech"
+        assert not any(EXTRA_SPEAKER_IN_EXTENT in why for why in self._flagged(result))
+
+    def test_an_absent_reading_over_spoken_words_is_undetermined_and_never_a_flag(
+        self, config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """Words were spoken and no share was written: a reading nobody computed, never a claim about voices."""
+        store = self._store({self.READING: None, "response_duration_s": 8.0})
+        activity = store.activity(node="SPEECH", step="words-seed", parameters={})
+        for index, text in enumerate(("hello", "there")):
+            extent = (float(index), float(index) + 0.5)
+            word = store.entity(prov_type="word", extent=extent, attributes=word_attributes(text, extent, index=index))
+            store.was_generated_by(word, activity)
+        result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
+        applied = {entry["gate"]: entry for entry in result.file_verdict.gates["flagging"]}
         assert applied["dominant_speaker_share_min"]["passed"] == UNDETERMINED
+        assert applied["dominant_speaker_share_min"]["reason"] == "absent_not_computed"
         assert not any(EXTRA_SPEAKER_IN_EXTENT in why for why in self._flagged(result))
 
     def test_the_speaker_gate_is_not_a_term_in_the_tasks_conformance(
