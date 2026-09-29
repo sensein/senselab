@@ -1105,8 +1105,9 @@ families:
         units: semitones
         description: How far the pitch travelled across the selected glide.
         computation: >-
-          VOICE takes the longest monotone pitch run (within `monotone_tolerance_semitones`) of the
-          longest qualifying sweep and writes |pitch(last) − pitch(first)| in semitones, rounded to 2 places.
+          VOICE takes the longest monotone run of the median-filtered pitch (within
+          `branch.sweep_reversal_tolerance_semitones`) of the longest qualifying sweep and writes
+          |pitch(last) − pitch(first)| in semitones, rounded to 2 places.
         source: nodes/voice.py:_voice_glide
       interruptions:
         kind: scalar
@@ -1339,7 +1340,7 @@ families:
         reading: carrier_voiced_fraction
         op: at_least
         units: fraction
-        reader: gate_readings
+        reader: flag_gate_readings
         reading_description: the fraction of the carrier's pitch-track frames that are voiced.
         reading_computation: VOICE writes the voiced frames over all frames of the carrier's track, rounded to 4 places, from the sustained or the glide arm.
         reading_source: nodes/voice.py:carrier_readings, nodes/voice.py:_voice_glide
@@ -1348,7 +1349,7 @@ families:
         reading: carrier_f0_spread_semitones
         op: at_most
         units: semitones
-        reader: gate_readings
+        reader: flag_gate_readings
         reading_description: the representative local F0 spread over the carrier.
         reading_computation: VOICE writes the carrier's F0 spread in semitones, rounded to 3 places; None when the window cannot resolve it.
         reading_source: nodes/voice.py:carrier_readings
@@ -1357,7 +1358,7 @@ families:
         reading: carrier_continuity
         op: at_least
         units: ratio
-        reader: gate_readings
+        reader: flag_gate_readings
         reading_description: the median spectral continuity over the carrier.
         reading_computation: >-
           VOICE writes the carrier's median spectral-stationarity value, rounded to 4 places, and 0.0
@@ -1371,22 +1372,34 @@ families:
         reader: gate_readings
         reading_description: the share of the carrier the dominant monotone pitch run holds.
         reading_computation: >-
-          VOICE writes the duration of the longest monotone run (longest by frame-index span, its end
-          one hop past the last frame) over the carrier's, rounded to 4 places; it can exceed 1 by up
-          to one hop (corpus maximum 1.0016).
-        reading_source: nodes/voice.py:_voice_glide, nodes/branches.py:longest_monotone_run
-      monotone_tolerance_semitones:
+          VOICE writes the duration of the longest monotone run of the median-filtered pitch (longest
+          by frame-index span, its end one hop past the last frame) over the carrier's voiced extent
+          (first to last voiced frame), rounded to 4 places; it can exceed 1 by up to one hop.
+        reading_source: nodes/voice.py:_voice_glide, nodes/branches.py:longest_monotone_run, nodes/branches.py:smoothed_pitch
+      glide_extent_min_semitones:
         kind: applied
-        reading: sweep_monotone_reversal_semitones
-        op: at_most
+        reading: glide_extent_semitones
+        op: at_least
         units: semitones
         reader: gate_readings
-        reading_description: the largest retreat the dominant monotone run makes from its running extreme.
+        reading_description: how far the dominant monotone pitch run travelled.
         reading_computation: >-
-          VOICE writes `monotone_reversal` over the run, rounded to 3 places. The run is segmented with
-          this gate's own bound as its tolerance, so the value cannot exceed the bound and `_passed` is
-          only ever true or undetermined.
-        reading_source: nodes/voice.py:_voice_glide, nodes/branches.py:monotone_reversal
+          VOICE median-filters the voiced pitch frames (`branch.sweep_smoothing_frames`), takes the
+          longest run that never falls back more than `branch.sweep_reversal_tolerance_semitones`
+          from its running extreme, and writes |pitch(last) − pitch(first)| over it, rounded to 2 places.
+        reading_source: nodes/voice.py:_voice_glide, nodes/branches.py:smoothed_pitch, nodes/branches.py:longest_monotone_run
+      declared_duration_min_fraction:
+        kind: applied
+        reading: production_declared_fraction
+        op: at_least
+        units: fraction
+        reader: gate_readings
+        reading_description: the qualifying carrier's duration over the hold the instruction declares.
+        reading_computation: >-
+          VOICE writes the selected carrier's duration (after the count-in is split off, for a task
+          that prescribes one) over the row's `declared_duration_s`, rounded to 4 places; written only
+          where the row declares a duration (`prolonged-vowel`, 12 s).
+        reading_source: nodes/voice.py:_voice_sustained
       expected_tokens_matched_min:
         kind: applied
         reading: expected_tokens_matched

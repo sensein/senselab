@@ -44,7 +44,7 @@ from senselab.audio.workflows.triage.nodes.voice import (
     voice,
 )
 from senselab.utils.prov_store import ProvStore
-from tests.audio.workflows.triage.nodes.conftest import gated_conformance, readings_of
+from tests.audio.workflows.triage.nodes.conftest import gated_conformance, gated_flags, readings_of
 
 HOP_S = 0.01
 """PREPROCESS's own phonation-track hop, which the fixtures build their frame grid on."""
@@ -61,7 +61,12 @@ LOUDNESS_STEM = "sub-abc_ses-1_task-loudness"
 CAPEV_STEM = "sub-abc_ses-1_task-cape-v-sentences"
 HARVARD_STEM = "sub-abc_ses-1_task-harvard-sentences-list"
 
-SETTINGS = {"voiced_strength_min": 0.5, "f0_spread_window_s": 1.0}
+SETTINGS = {
+    "voiced_strength_min": 0.5,
+    "f0_spread_window_s": 1.0,
+    "sweep_smoothing_frames": 1,
+    "sweep_reversal_tolerance_semitones": 1.0,
+}
 """Instrument settings supplied by the fixture, overriding the packaged ones for the test signals."""
 
 GATES = {
@@ -69,8 +74,8 @@ GATES = {
     "voiced_fraction_min": 0.6,
     "f0_spread_max_semitones": 4.0,
     "continuity_min": 0.8,
-    "monotone_tolerance_semitones": 1.0,
     "dominant_segment_min_fraction": 0.5,
+    "glide_extent_min_semitones": 1.0,
 }
 """Gate bounds supplied by the fixture. Each group takes the ones its own body reads."""
 
@@ -79,8 +84,8 @@ GROUP_GATES = {
     Pattern.GLIDE: (
         "production_min_s",
         "voiced_fraction_min",
-        "monotone_tolerance_semitones",
         "dominant_segment_min_fraction",
+        "glide_extent_min_semitones",
     ),
 }
 """Which of :data:`GATES` each group names, mirroring the packaged table's shape."""
@@ -771,6 +776,21 @@ class TestTheCountInIsItsOwnSpan:
         result = align_voice("prolonged-vowel", store, None, params(), run_dir=tmp_path)
         assert [proposal.role for proposal in result.components] == [COUNT_IN]
 
+    def test_a_vowel_sharing_one_span_with_the_count_in_is_split_off_it(self, tmp_path: Path) -> None:
+        """``1, 2, 3 aah`` with no silence before the vowel: the vowel is the span after ``three``."""
+        store, _ = seed(
+            tmp_path,
+            stem=PROLONGED_STEM,
+            amplitude=((1.0, 12.0),),
+            tracks=_tracks(20.0, [(1.0, 12.0)]),
+            words=(("one", 1.0, 1.4), ("two", 1.6, 2.0), ("three", 2.2, 2.8)),
+        )
+        result = align_voice("prolonged-vowel", store, None, params(), run_dir=tmp_path)
+        assert [proposal.role for proposal in result.components] == [COUNT_IN, TASK_EXTENT]
+        readings = readings_of(result)
+        assert readings["carrier_duration_s"] == pytest.approx(9.2, abs=0.05)
+        assert readings["production_declared_fraction"] == pytest.approx(9.2 / 12.0, abs=0.01)
+
     def test_a_missing_count_in_token_is_an_omission(self, tmp_path: Path) -> None:
         """The instruction prescribes three; two realised leaves one omitted."""
         store, _ = seed(
@@ -1330,7 +1350,8 @@ class TestAQualityGateDoesNotDecideThatTheProductionNeverHappened:
         )
         result = align_voice("maximum-phonation-time", store, None, params(), run_dir=tmp_path)
         assert readings_of(result)["carrier_f0_spread_semitones"] > MEASURED["f0_spread_max_semitones"]
-        assert gated_conformance(result, Pattern.SUSTAINED, settings=config()) is False
+        assert gated_conformance(result, Pattern.SUSTAINED, settings=config()) is True, "the vowel was held"
+        assert gated_flags(result, Pattern.SUSTAINED, settings=config())["f0_spread_max_semitones"] is False
 
     def test_an_unsteady_production_is_not_recorded_as_a_rejected_carrier(self, tmp_path: Path) -> None:
         """It was not rejected; it was measured. A reader must not see both."""
@@ -1412,7 +1433,8 @@ class TestAQualityGateDoesNotDecideThatTheProductionNeverHappened:
         result = align_voice("maximum-phonation-time", store, None, params(), run_dir=tmp_path)
         assert len(result.components) == 1
         assert readings_of(result)["carrier_duration_s"] == pytest.approx(8.152, abs=0.05)
-        assert gated_conformance(result, Pattern.SUSTAINED, settings=config()) is False
+        assert gated_conformance(result, Pattern.SUSTAINED, settings=config()) is True, "the task asks for duration"
+        assert gated_flags(result, Pattern.SUSTAINED, settings=config())["f0_spread_max_semitones"] is False
 
     def test_the_glide_case_carrier_profile_yields_its_sweep(self, tmp_path: Path) -> None:
         """``sub-7d51b647``: six carriers, four sub-minimum, one silent, one 5.447 s and wobbly."""

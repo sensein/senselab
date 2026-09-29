@@ -105,3 +105,52 @@ omissions (62), mostly real.
    what the instruction asks to be said: over 400 r8 Stroop recordings the realised fraction has
    median 0.73 and 49% at or above 0.8, which could not happen if the text were the printed words
    (about half of which differ from the ink). The expectation already matched; only the bound changed.
+
+## C. The voice tasks
+
+### Glides
+
+`dominant_segment_min_fraction` failed 54% of both glide families (861/1,596 and 813/1,554), and
+`monotone_tolerance_semitones` could never fail: the run was segmented with that gate's own bound as
+its tolerance, so the reading could not exceed it (r8: 0 false). A probe over 391 r8 glides
+(`glide_probe.py`, 200 per family, seed 7) measured the sweep five ways:
+
+| variant | pitch | tolerance | denominator | median held | held ≥ 0.5 | direction as declared |
+|---|---|---|---|---|---|---|
+| r8 (v0) | raw | 1 st | amplitude span | 0.43 | 42.5% | 83.6% |
+| v1 | raw | 1 st | voiced extent | 0.51 | 52.4% | — |
+| v2 | 7-frame median | 1 st | voiced extent | 0.67 | 66.0% | 84.9% |
+| **v3** | 7-frame median | **2 st** | voiced extent | **0.76** | **77.2%** | **90.5%** |
+| v4 | 7-frame median | 3 st | voiced extent | 0.78 | 81.3% | — |
+
+93% of the sample travels at least 6 semitones (p10 8.2 st, median 17.0 st), so these are glides and
+the r8 reading was mismeasuring them: single mistracked frames and 1–2 st vibrato broke the run, and
+the amplitude span's unvoiced edges sat in the denominator. v3 is shipped (`branch.sweep_smoothing_frames:
+7`, `branch.sweep_reversal_tolerance_semitones: 2.0`, the voiced extent as denominator); it also picks
+the declared direction more often, which is independent evidence the run it finds is the sweep.
+
+The fraction held does not separate a glide from a held note (recordings travelling under 6 st passed
+v3 at 96%). Pitch travel does, so `monotone_tolerance_semitones` is replaced outright by
+**`glide_extent_min_semitones`** over `glide_extent_semitones` (the dominant run's travel):
+**UNFITTED, proposed 6.0 st**, the value that the measured distribution puts below its p10. The tolerance
+became an instrument setting, as it always was in effect.
+
+### Sustained vowels
+
+- **Quality is a flag, not the task.** `voiced_fraction_min`, `f0_spread_max_semitones` and
+  `continuity_min` are now flag gates (their own grounds), not conformance terms. Neither instruction
+  asks for a steady or fully voiced vowel: maximum phonation time asks for "as long as possible",
+  the prolonged vowel for the vowel held until the timer runs out. On r8 these three failed 507 + 183
+  (spread) and 405 + 118 (voicing) MPT recordings as "the task did not happen"; they are now visible as
+  what they are. A missing carrier makes them not applicable (there is no production to judge); it
+  fails `production_min_s`, the conformance term.
+- **Sustained conformance** is `production_min_s` (a floor: 0.5 s) and, where the family configures
+  it, **`declared_duration_min_fraction`** over `production_declared_fraction` (the carrier's duration
+  over the row's `declared_duration_s`). Only `prolonged-vowel` declares a duration (12 s): **UNFITTED,
+  proposed 0.5**. MPT declares none and reports its duration (`phonation_onset_to_offset_s`,
+  `carrier_duration_s`) without a ceiling, as "as long as possible" asks.
+- **The count-in no longer rejects the vowel.** `prolonged-vowel` ("1, 2, 3 aah") had 482 of 1,603
+  undetermined: the vowel shares one amplitude span with "three", and a span overlapping any lexical
+  word was rejected as `lexical_separator`. The carrier is now the longest part of the span no lexical
+  word touches (`branches.longest_free_interval`), rejected only if that part is shorter than
+  `production_min_s`.

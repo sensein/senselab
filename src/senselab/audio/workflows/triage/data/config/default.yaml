@@ -277,6 +277,8 @@ branch:
   event_min_s: 0.05                    # shortest extent the event walk reports
   voiced_strength_min: 0.45            # pitch strength at or above which a frame counts as voiced
   f0_spread_window_s: 0.5              # window the worst local F0 spread is taken over
+  sweep_smoothing_frames: 7            # median filter over voiced pitch frames before the sweep's monotone run is found
+  sweep_reversal_tolerance_semitones: 2.0  # how far the smoothed pitch may go back on itself inside one sweep
   pause_min_s: 0.25                    # gap between words that is a pause rather than coarticulation
   run_gap_max_s: 0.5                   # largest gap two lexical words may straddle and stay one run
   echo_ngram_n: 3                      # n of the n-gram the prompt-echo overlap is measured over
@@ -364,16 +366,16 @@ verdict:
     default: {}
     # Gate bounds per task group, keyed by the `Pattern` each expectation row declares.
     by_group:
-      SUSTAINED:                         # a held vowel
+      SUSTAINED:                         # a held vowel; its quality bounds are flag grounds, not the task
         production_min_s: 0.5            # shortest carrier a production may be found in
-        voiced_fraction_min: 0.5         # fraction of voiced frames the carrier must reach
-        f0_spread_max_semitones: 2.0     # largest spread the typical window may show
-        continuity_min: 0.5              # median spectral continuity the production must hold
+        voiced_fraction_min: 0.5         # flag: fraction of voiced frames the carrier should reach
+        f0_spread_max_semitones: 2.0     # flag: largest spread the typical window should show
+        continuity_min: 0.5              # flag: median spectral continuity the production should hold
       GLIDE:                             # a pitch sweep, whose purpose is that pitch moves
         production_min_s: 0.5            # shortest carrier a production may be found in
-        voiced_fraction_min: 0.5         # fraction of voiced frames the carrier must reach
-        monotone_tolerance_semitones: 1.0  # reversal the sweep may contain and still count as monotone
-        dominant_segment_min_fraction: 0.5  # fraction of the carrier one direction must hold
+        voiced_fraction_min: 0.5         # flag: fraction of voiced frames the carrier should reach
+        dominant_segment_min_fraction: 0.5  # fraction of the voiced extent one direction must hold
+        glide_extent_min_semitones: 6.0  # UNFITTED. pitch the dominant run must travel to be a glide
       ORDERED_TOKENS:                    # a prescribed token sequence
         expected_tokens_matched_min: 1   # prescribed tokens the recording must realise
         content_omission_fraction_max: 0.0  # a sentence: any content word unread fails; function-word drops do not
@@ -428,6 +430,10 @@ verdict:
         content_omission_fraction_max: 0.1
       word-color-stroop:
         content_omission_fraction_max: 0.2
+      # UNFITTED: the fraction of the declared hold the carrier must reach ("hold until the timer
+      # runs out"), proposed from the r8 distribution; § C of the spec.
+      prolonged-vowel:
+        declared_duration_min_fraction: 0.5
 
 # The label consolidation. TAXONOMY runs no models: it consolidates PREPROCESS's stored scores.
 taxonomy:

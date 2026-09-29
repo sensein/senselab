@@ -17,6 +17,7 @@ from senselab.audio.workflows.triage.nodes import preprocess as preprocess_modul
 from senselab.audio.workflows.triage.nodes.admit import admit
 from senselab.audio.workflows.triage.nodes.gates import (
     Pattern,
+    apply_flag_gates,
     apply_gates,
     conformance_gate_names,
     load_gate_bounds,
@@ -246,6 +247,26 @@ def gated_conformance(
     bounds = load_gate_bounds(settings or load_triage_config(), group)
     names = conformance_gate_names(group)
     return apply_gates(names, bounds, readings_of(result))[0]
+
+
+def gated_flags(
+    result: Any,  # noqa: ANN401 — branches.Result, not imported here
+    group: Pattern,
+    *,
+    settings: TriageConfig | None = None,
+) -> dict[str, Any]:
+    """What VERDICT's flag gates make of what a branch reported.
+
+    Args:
+        result: What a branch entry point returned.
+        group: The task group whose flag gates apply.
+        settings: The configuration the bounds come from; None is the packaged one.
+
+    Returns:
+        Flag gate name to True, False, ``UNDETERMINED`` or ``NOT_APPLICABLE``.
+    """
+    bounds = load_gate_bounds(settings or load_triage_config(), group)
+    return {gate.name: gate.passed for gate in apply_flag_gates(bounds, readings_of(result))}
 
 
 @pytest.fixture
