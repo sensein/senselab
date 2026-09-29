@@ -490,11 +490,14 @@ def test_paragraph_carries_the_facets_onto_the_mark() -> None:
     assert 'data-nt="1"' in rendered
 
 
-def test_paragraph_labels_a_mark_carrying_two_categories_with_its_own() -> None:
-    """Two categories on one mark: the text shows the first, the attribute carries both."""
-    rendered = page.paragraph([["Acme", 0, 0]], [_mark("k1", ["PERSON", "ORG"], [], 0, 1)])
-    assert '<span class="cat">PERSON</span>' in rendered
-    assert 'data-c="PERSON+ORG"' in rendered
+def test_paragraph_renders_a_second_category_as_its_own_nested_mark() -> None:
+    """Owner, 2026-09-28: a mark carries one category; another category on its words is its own mark."""
+    overlay = {"k": "k2", "c": "ORG", "s": "detected", "hr": 0, "kd": "", "dx": "", "d": []}
+    rendered = page.paragraph([["Acme", 0, 0]], [_mark("k1", ["PERSON"], [], 0, 1, o=[overlay])])
+    assert rendered.count("<mark") == 2
+    assert re.findall(r'data-c="([^"]*)"', rendered) == ["PERSON", "ORG"]
+    assert re.findall(r'<span class="cat">([^<]*)</span>', rendered) == ["PERSON", "ORG"]
+    assert "+" not in rendered
 
 
 def test_paragraph_with_an_unattributed_mark_says_so() -> None:
@@ -640,15 +643,11 @@ def test_write_pages_single_file_is_private(tmp_path: Path) -> None:
     assert out.stat().st_mode & 0o777 == 0o600
 
 
-def test_the_category_facet_reaches_a_compound_mark() -> None:
-    """A mark labelled PERSON+NAME must match a PERSON selection, not fall through it.
-
-    The page writes the category set into one ``data-c`` attribute joined with ``+``, so the
-    filter has to split it. Matching the whole attribute against the checkbox values silently
-    dropped every compound mark from every category facet.
-    """
-    assert "m.dataset.c.split('+').some(c=>cats.has(c))" in page._SCRIPT
-    assert 'data-c="PERSON+ORG"' in page.paragraph([["Acme", 0, 0]], [_mark("k1", ["PERSON", "ORG"], [], 0, 1)])
+def test_the_category_facet_matches_each_marks_single_category() -> None:
+    """Every mark carries one category, so the facet matches ``data-c`` whole; a nested mark matches its own."""
+    assert "if(!cats.has(m.dataset.c))return false;" in page._SCRIPT
+    assert "split('+')" not in page._SCRIPT
+    assert "e.stopPropagation();open(m);" in page._SCRIPT, "a click on a nested mark opens that mark only"
 
 
 def test_a_recording_note_refreshes_the_progress_line() -> None:
@@ -1708,6 +1707,66 @@ def test_the_marks_are_the_ledgers_spans_each_with_its_state(tmp_path: Path) -> 
     assert '<span class="cat">CONDITION</span>' in text
 
 
+def test_a_reviewer_condition_over_a_detector_mask_is_two_single_category_marks(tmp_path: Path) -> None:
+    """r7: a PERSON mask with a reviewer CONDITION proposal on its words is two marks, not "PERSON+CONDITION"."""
+    records = [
+        _word(0, "Parkinson"),
+        _word(1, "disease"),
+        _pii("pii-1", "PERSON", "gliner", 0, 1),
+        *_label("assertion-1", "PERSON", "word-0"),
+        _ledger(
+            masks=[
+                {
+                    "category": "PERSON",
+                    "words": [
+                        {"id": "word-0", "text": "Parkinson", "state": "masked", "named": False, "content": True}
+                    ],
+                }
+            ],
+            proposals=[
+                {
+                    "category": "CONDITION",
+                    "word_ids": ["word-0", "word-1"],
+                    "human_review": True,
+                    "condition_kind": "cohort",
+                    "cohort_diagnosis": "parkinsons_disease",
+                }
+            ],
+            counts={"masked_n": 1, "proposed_by_reviewer_n": 2},
+        ),
+        _verdict("withheld"),
+    ]
+    row = page.recording_record(_store(tmp_path, _FAMILY_STEM, records), page.free_response_families())
+    assert row is not None
+    assert [(mark["c"], mark["s"], [o["c"] for o in mark["o"]]) for mark in row["f"]] == [
+        (["PERSON"], "masked", ["CONDITION"]),
+        (["CONDITION"], "proposed_by_reviewer", []),
+    ]
+    card = page.recording_html(row)
+    text = card[card.index('<p class="text">') : card.index("</p>", card.index('<p class="text">'))]
+    assert re.findall(r'data-c="([^"]*)"', text) == ["PERSON", "CONDITION", "CONDITION"]
+    assert all("+" not in value for value in re.findall(r'data-c="([^"]*)"', text))
+    assert all("+" not in value for value in re.findall(r'<span class="cat">([^<]*)</span>', text))
+    inner = text[text.index('data-c="PERSON"') :]
+    assert 'data-s="proposed_by_reviewer"' in inner[: inner.index("</mark>")], "the proposal nests inside the mask"
+    assert 'data-kd="cohort"' in text and 'data-dx="parkinsons_disease"' in text
+
+
+def test_a_word_two_detectors_mark_differently_is_two_single_category_marks(tmp_path: Path) -> None:
+    """A word only detectors marked, as PERSON and as ORG, renders as a PERSON mark with an ORG mark inside."""
+    records = [
+        _word(0, "Acme"),
+        *_label("assertion-1", "PERSON", "word-0"),
+        *_label("assertion-2", "ORG", "word-0"),
+        _verdict("release_without_redaction"),
+    ]
+    row = page.recording_record(_store(tmp_path, _FAMILY_STEM, records), page.free_response_families())
+    assert row is not None
+    rendered = page.recording_html(row)
+    assert "PERSON+ORG" not in rendered
+    assert re.findall(r'<mark class="pii[^"]*"[^>]*data-c="([^"]*)"', rendered) == ["PERSON", "ORG"]
+
+
 def test_a_store_without_a_ledger_says_so_and_keeps_the_detectors_marks(tmp_path: Path) -> None:
     """A store folded before the ledger existed shows what the detectors marked, labelled as such."""
     records = [_word(0, "Tuesday"), *_label("assertion-1", "DATE_TIME", "word-0"), _verdict("withheld")]
@@ -1844,8 +1903,8 @@ def test_the_theme_boot_script_is_valid_javascript() -> None:
     assert result.returncode == 0, result.stderr
 
 
-def test_a_mark_shows_one_category_and_keeps_every_one_for_the_popup() -> None:
-    """Owner, 2026-09-27: a span never reads "PERSON+DATE_TIME+MISC"; the popup still has the list."""
+def test_a_mark_shows_one_category_on_its_label_and_on_data_c() -> None:
+    """Owner, 2026-09-27/28: a span never reads "PERSON+DATE_TIME+MISC", neither visibly nor on ``data-c``."""
     mark = {
         "k": "k",
         "c": ["DATE_TIME", "PERSON"],
@@ -1856,6 +1915,8 @@ def test_a_mark_shows_one_category_and_keeps_every_one_for_the_popup() -> None:
         "nt": 1,
         "stim": -1,
     }
+    mark["c"] = ["DATE_TIME"]
     rendered = page._mark(mark, [["Alan's", 0, 0]])
     assert '<span class="cat">DATE_TIME</span>' in rendered
-    assert 'data-c="DATE_TIME+PERSON"' in rendered
+    assert 'data-c="DATE_TIME"' in rendered
+    assert "+" not in rendered
