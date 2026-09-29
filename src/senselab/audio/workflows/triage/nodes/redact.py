@@ -1797,13 +1797,13 @@ def mask_plan(
         group = [by_id[word_id] for word_id in member_ids]
         if all(category_family(finding.category) in name_kinds for finding in members):
             if any(proper(word) for word in group):
-                low, high = 0, len(group) - 1
-                while low <= high and not proper(group[low]) and common_word(group[low]):
-                    name_only.add(group[low].id)
-                    low += 1
-                while high > low and not proper(group[high]) and common_word(group[high]):
-                    name_only.add(group[high].id)
-                    high -= 1
+                first, last = 0, len(group) - 1
+                while first <= last and not proper(group[first]) and common_word(group[first]):
+                    name_only.add(group[first].id)
+                    first += 1
+                while last > first and not proper(group[last]) and common_word(group[last]):
+                    name_only.add(group[last].id)
+                    last -= 1
         else:
             elsewhere.update(member_ids)
     kind_cut = name_only - elsewhere
