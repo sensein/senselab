@@ -1622,6 +1622,8 @@ class TestAgreementUnplacedFindingsAndASecondSpeaker:
         assert on.triage is Triage.FLAG and REVIEWER_NAMED_NO_WORDS in [reason.why for reason in on.reasons]
         assert on.release is Release.WITH_REDACTION, "a flag for review, not a release decision"
         assert self._fold(reading).triage is Triage.PASS
+        agreeing = {"status": "flagged", "original": "carries_pii", "redaction": "complete", "proposal": []}
+        assert self._fold(agreeing, policy=FoldPolicy(llm_contradiction_flags=True)).triage is Triage.PASS
         named = {**reading, "proposal": [{"action": "release", "text": "alice", "category": "PERSON"}]}
         assert REVIEWER_NAMED_NO_WORDS not in [
             r.why for r in self._fold(named, policy=FoldPolicy(llm_contradiction_flags=True)).reasons

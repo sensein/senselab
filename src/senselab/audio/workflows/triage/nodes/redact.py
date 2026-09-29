@@ -79,6 +79,7 @@ from senselab.audio.workflows.triage.vocabulary import (
     UNPLACED_UNREAD,
     Outcome,
     Release,
+    reviewer_named_no_words,
 )
 from senselab.text.tasks.pii_detection.api import scan_for_pii
 from senselab.text.tasks.pii_detection.redaction_review import safe_harbor_codes
@@ -1139,8 +1140,9 @@ class MaskWord:
             (:func:`~senselab.audio.workflows.triage.residue.is_proper_form`).
         propagated: Whether a reviewer ``release`` entry named the same term elsewhere in the recording
             -- the same surface under the same family -- and unmasked this occurrence with it.
-        kind_cut: Whether the name kind cut released it: a word not in proper form under a mask
-            whose findings are all of :func:`name_families` and which holds a proper noun.
+        kind_cut: Whether the name kind cut released it: at an edge of a mask whose findings are all
+            of :func:`name_families` and which holds a proper noun, a word written all lower-case that
+            the transcript also uses outside every finding.
     """
 
     word_id: str
@@ -1778,13 +1780,30 @@ def mask_plan(
     applied = reviewer_applies and bool(named)
     released = (named | propagated) if applied else set()
     name_kinds = name_families()
+    covered_ids = {word_id for member_ids in groups for word_id in member_ids}
+    ordinary = {
+        _match_token(str(word.attributes.get("text") or ""))
+        for word in words
+        if word.id not in covered_ids and word.id not in finding_word_ids
+    }
+
+    def common_word(word: Entity) -> bool:
+        text = str(word.attributes.get("text") or "")
+        return text == text.lower() and _match_token(text) in ordinary
+
     name_only: set[str] = set()
     elsewhere: set[str] = set()
     for member_ids, members in groups.items():
         group = [by_id[word_id] for word_id in member_ids]
         if all(category_family(finding.category) in name_kinds for finding in members):
             if any(proper(word) for word in group):
-                name_only.update(word.id for word in group if not proper(word))
+                low, high = 0, len(group) - 1
+                while low <= high and not proper(group[low]) and common_word(group[low]):
+                    name_only.add(group[low].id)
+                    low += 1
+                while high > low and not proper(group[high]) and common_word(group[high]):
+                    name_only.add(group[high].id)
+                    high -= 1
         else:
             elsewhere.update(member_ids)
     kind_cut = name_only - elsewhere
@@ -1991,7 +2010,7 @@ def mask_plan(
         unplaced=unplaced,
         redact_planned=tuple(redact_planned),
         task_lexicon_ids=tuple(sorted(declared_ids & finding_word_ids)),
-        named_no_words=bool(read and reading.get("status") == "flagged" and not entries),
+        named_no_words=reviewer_named_no_words(reading),
         releases=tuple(releases),
     )
 
