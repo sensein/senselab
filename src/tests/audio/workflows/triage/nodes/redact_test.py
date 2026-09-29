@@ -1000,6 +1000,29 @@ class TestTheWordLevelMaskRule:
         assert placed["brooklyn tod"] == (PLACED_SUBSTRING, ("brooklyn", "today"), True, False)
         assert placed["nowhere"] == ("", (), False, False)
 
+    def test_a_condition_the_task_itself_names_is_held_for_no_one(
+        self, store: ProvStore, redact_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A health condition every word of which is the task's own vocabulary is task content, not a review."""
+        from senselab.audio.workflows.triage.nodes.redact import NEW, TASK_CONTENT
+        from senselab.audio.workflows.triage.task_lexicon import TaskLexicon
+
+        self._passed(store, redact_config, tmp_path, monkeypatch)
+        _annotate(
+            store, [_redact_entry("met", "CONDITION"), _redact_entry("Alice", "CONDITION")], original="carries_pii"
+        )
+        plan = mask_plan(
+            store,
+            reviewer_applies=True,
+            padding_ms=50,
+            human_review_categories=("CONDITION",),
+            lexicon=TaskLexicon(None, (("met",),)),
+        )
+        by_text = {span.text: (span.agreement, span.human_review) for span in plan.proposals}
+        assert by_text["met"] == (TASK_CONTENT, False)
+        assert by_text["Alice"][0] != TASK_CONTENT
+        assert not any(span.human_review and span.agreement == NEW and span.text == "met" for span in plan.proposals)
+
     def test_the_ledger_record_counts_every_state(
         self, store: ProvStore, redact_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

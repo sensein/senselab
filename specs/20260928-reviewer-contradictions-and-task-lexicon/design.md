@@ -198,3 +198,28 @@ batch's final code (job 24252618):
 GPU re-review: all ~15,200 reviewed recordings, about 42 A100 slices, as r7. The prompt changes every
 reading, so there is no smaller correct set. The SPEECH replay is all 62,550 on CPU; for
 cinderella-story it removes the 78 lexicon entries before the detectors, which r7's residue did not.
+
+## Health conditions are their own required part (r8 regression)
+
+**What happened.** r8's prompt made HIPAA Safe Harbor the reviewer's whole rule and listed CONDITION
+among the PROPOSAL categories "when it could identify the speaker". The model read Safe Harbor as the
+test for that too, and since a condition is none of the 18 identifiers, it stopped naming them: readings
+flagging CONDITION fell from 889 (r7) to 31 (r8), and condition spans held for human review from 383 to
+15. The owner's policy is the opposite: every condition a speaker attributes to themselves goes to a
+person, who judges rarity against what else is released.
+
+**Change.** The answer gains a sixth, required part, `CONDITIONS`, placed before `PROPOSAL`: a JSON
+array of every diagnosis, disease, symptom-as-condition, treatment, medication or procedure the speaker
+attributes to themselves, `[]` when none, independent of Safe Harbor. CONDITION is removed from the
+PROPOSAL categories. The parser appends each listed condition to the proposal as a `redact` entry of
+category `CONDITION` (one representation in the store; a condition named in both parts is kept once), so
+the fold, ledger, parquet, page and evaluations read conditions exactly as before and route them to
+cohort/other human review. An answer without the part is fed back ("your answer had no CONDITIONS
+part…") and read again, bounded by `max_iterations`; `conditions_answered` is recorded per round.
+
+**Task content.** A condition entry every word of which is the task's own content — task-lexicon words,
+or stimulus words outside the residue — carries agreement `task_content` and is held for no one.
+
+**Page.** Only a `redact` entry with agreement `new` draws red on a word no mask hides; an entry agreeing
+with the masks (or naming task content) leaves such a word unmarked, as the release leaves it visible
+(r8 card sub-004d42e9… open-response: "A … or so … that" were drawn red while released).

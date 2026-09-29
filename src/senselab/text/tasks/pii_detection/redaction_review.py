@@ -66,6 +66,7 @@ _PROPOSAL_HEADING = "PROPOSAL:"
 _REDACTION_HEADING = "REDACTION:"
 _ORIGINAL_HEADING = "ORIGINAL:"
 _SPEAKERS_HEADING = "SPEAKERS:"
+_CONDITIONS_HEADING = "CONDITIONS:"
 
 REDACTION_STATES = ("complete", "incomplete", "not_applicable")
 """Whether the redaction, where one was applied, removed the identifying content."""
@@ -128,27 +129,35 @@ _PROMPT = (
     "the RELEASED text it produced, in which every [CATEGORY] token marks removed text. Where no "
     "redaction was applied the RELEASED section says so, and nothing has been removed.\n\n"
     + _safe_harbor_rule()
-    + "\n\nJudge four things independently.\n"
+    + "\n\nJudge five things independently.\n"
     "1. Whether the redaction, where one was applied, actually removed what identifies the "
     "speaker under that standard.\n"
     "2. Whether the ORIGINAL words carry anything identifying at all, which is a separate "
     "question and the one no automatic detector here has asked.\n"
     "3. Whether the redaction removed more than the standard requires. A time expression with no "
     "calendar anchor -- a duration, a bare time-of-day noun, a relative reference -- usually "
-    "identifies nobody. A specific diagnosis, a rare condition or a named procedure is no Safe "
-    "Harbor identifier by itself, but name it as CONDITION when it could identify the speaker.\n"
+    "identifies nobody.\n"
     "4. Whether more than one person is speaking in this recording, judged from the words alone: "
-    "turn-taking, instructions given, questions asked and answered.\n\n"
-    "Answer in exactly five parts, each on its own line or block.\n"
+    "turn-taking, instructions given, questions asked and answered.\n"
+    "5. Separately from the standard, every health condition the speaker attributes to themselves: a "
+    "diagnosis, a disease, a symptom described as a condition, a treatment, a medication or a "
+    "procedure. None of these is a Safe Harbor identifier by itself, and none goes in the PROPOSAL; "
+    "they are listed so that a person can judge whether, with the rest of what is released, one could "
+    "single the speaker out. List a condition whatever you judge about it; leave out only a condition "
+    "that is part of the task's own stimulus.\n\n"
+    "Answer in exactly six parts, each on its own line or block, in this order.\n"
     "REASONING: your full reasoning, in prose, including what you considered and rejected.\n"
     "REDACTION: one of complete, incomplete, not_applicable (use not_applicable when no "
     "redaction was applied).\n"
     "ORIGINAL: one of clean, carries_pii.\n"
     "SPEAKERS: one of one, more_than_one, unclear.\n"
+    "CONDITIONS: a JSON array of every health condition under point 5. Each element is an object with "
+    'keys "text" (the exact words, quoted from the ORIGINAL) and "why" (one sentence: what it is). '
+    "Return [] when the speaker mentions none; the part is required either way.\n"
     "PROPOSAL: a JSON array giving the redaction you would apply instead. Each element is an "
     'object with keys "text" (the exact substring, quoted from the ORIGINAL), "action" (redact to '
     "remove it, release to stop removing text the current redaction removes unnecessarily), "
-    '"category" (one of PERSON, LOCATION, DATE_TIME, ORGANIZATION, ID, CONTACT, CONDITION, OTHER), '
+    '"category" (one of PERSON, LOCATION, DATE_TIME, ORGANIZATION, ID, CONTACT, OTHER), '
     '"safe_harbor" (the letter of the Safe Harbor identifier it falls under, or "" for none) and '
     '"why" (one sentence; for a release, why the standard lets it through here, weighed against the '
     "rest of the transcript). Return [] to leave the current redaction exactly as it is.\n"
@@ -245,7 +254,11 @@ class ReviewResult:
         speakers: One of :data:`SPEAKER_STATES`, or the empty string. How many people the words
             show speaking in the recording. A reading about the recording's content, never about
             the processing run.
-        proposal: The redaction it would apply instead, as text spans.
+        proposal: The redaction it would apply instead, as text spans, with every health condition the
+            answer's CONDITIONS part listed as a ``redact`` entry of category :data:`CONDITION`.
+        conditions_answered: Whether the answer carried its CONDITIONS part, an empty list included.
+            :func:`parse_completion` decides it for every answer the model gave; a result built any
+            other way is taken as answered, and a failure is never read for it.
         failure: ``None`` on success; otherwise why the reviewer did not run.
         model_id: The repo the review was asked of.
         revision: The resolved 40-hex commit it loaded, or ``None``.
@@ -269,6 +282,7 @@ class ReviewResult:
     original: str = ""
     speakers: str = ""
     proposal: list[ReviewProposal] = field(default_factory=list)
+    conditions_answered: bool = True
     failure: Optional[str] = None
     model_id: str = ""
     revision: Optional[str] = None
@@ -423,14 +437,18 @@ def _staged_snapshot(repo_id: str, revision: str) -> Optional[str]:
 
 @dataclass(frozen=True)
 class ParsedCompletion:
-    """The model's answer, split into its five parts.
+    """The model's answer, split into its six parts.
 
     Attributes:
         reasoning: The chain of thought, verbatim.
         redaction: One of :data:`REDACTION_STATES`, or the empty string where none was stated.
         original: One of :data:`ORIGINAL_STATES`, or the empty string.
         speakers: One of :data:`SPEAKER_STATES`, or the empty string.
-        proposal: The parsed proposal array; empty where it was missing or malformed.
+        proposal: The parsed proposal array, with every health condition the CONDITIONS part listed
+            appended as a ``redact`` entry of category :data:`CONDITION`; empty where both were
+            missing or malformed.
+        conditions_answered: Whether the answer carried a CONDITIONS part whose array parsed, an
+            empty one included.
     """
 
     reasoning: str
@@ -438,6 +456,11 @@ class ParsedCompletion:
     original: str = ""
     speakers: str = ""
     proposal: list[ReviewProposal] = field(default_factory=list)
+    conditions_answered: bool = False
+
+
+CONDITION = "CONDITION"
+"""The category a listed health condition carries as a proposal entry."""
 
 
 def _labelled(completion: str, heading: str, allowed: Sequence[str]) -> str:
@@ -461,63 +484,69 @@ def _labelled(completion: str, heading: str, allowed: Sequence[str]) -> str:
     return word if word in allowed else ""
 
 
-def parse_completion(completion: str) -> ParsedCompletion:
-    """Split the model's answer into its reasoning, its three judgments and its proposal.
+def _array(segment: str) -> list[Any] | None:
+    """The JSON array a segment of the answer holds, or None where it holds none that parses.
 
-    The proposal array is looked for after the last ``PROPOSAL:`` heading rather than at the first
-    ``[`` in the whole completion, because the reasoning routinely quotes the transcript's own
-    ``[CATEGORY]`` placeholders and splitting on those would truncate it at the first quotation.
-    The reasoning ends at the first judgment heading, so a one-word answer never reads as prose.
+    Args:
+        segment: The text after one heading and before the next.
+
+    Returns:
+        The parsed list, or None.
+    """
+    start, end = segment.find("["), segment.rfind("]")
+    if start == -1 or end < start:
+        return None
+    try:
+        parsed = json.loads(segment[start : end + 1])
+    except ValueError:
+        return None
+    return parsed if isinstance(parsed, list) else None
+
+
+def parse_completion(completion: str) -> ParsedCompletion:
+    """Split the model's answer into its reasoning, its three judgments, its conditions and its proposal.
+
+    The two arrays are looked for after the last ``PROPOSAL:`` and ``CONDITIONS:`` headings, each up to
+    the other heading where that one follows it, rather than at the first ``[`` in the completion,
+    because the reasoning routinely quotes the transcript's own ``[CATEGORY]`` placeholders. The
+    reasoning ends at the first judgment heading, so a one-word answer never reads as prose.
 
     Args:
         completion: The model's raw text.
 
     Returns:
-        The five parts. The reasoning is returned even when everything else is missing or
-        unparsable, because the reasoning is what the step exists to capture. A malformed array
-        yields no proposal rather than raising — a caller reads ``available`` to tell that from a
-        reviewer that read the text and would change nothing.
+        The parts. The reasoning is returned even when everything else is missing or unparsable,
+        because the reasoning is what the step exists to capture. A malformed array yields no entries
+        rather than raising -- a caller reads ``available`` to tell that from a reviewer that read the
+        text and would change nothing, and ``conditions_answered`` to tell a missing CONDITIONS part
+        from one that listed none.
     """
-    marker = completion.rfind(_PROPOSAL_HEADING)
-    head = completion if marker == -1 else completion[:marker]
-    tail = completion if marker == -1 else completion[marker + len(_PROPOSAL_HEADING) :]
-    start, end = tail.find("["), tail.rfind("]")
-    if marker == -1 and start != -1:
-        head = completion[:start]
-    cuts = [head.find(heading) for heading in (_REDACTION_HEADING, _ORIGINAL_HEADING, _SPEAKERS_HEADING)]
+    proposal_at = completion.rfind(_PROPOSAL_HEADING)
+    conditions_at = completion.rfind(_CONDITIONS_HEADING)
+
+    def segment(at: int, heading: str, other: int) -> str:
+        end = other if other > at else len(completion)
+        return completion[at + len(heading) : end]
+
+    if proposal_at != -1:
+        proposal_text = segment(proposal_at, _PROPOSAL_HEADING, conditions_at)
+        head = completion[:proposal_at]
+    else:
+        start = completion.find("[")
+        proposal_text = completion if conditions_at == -1 else completion[: max(conditions_at, 0)]
+        head = completion if start == -1 else completion[:start]
+    conditions_parsed = (
+        _array(segment(conditions_at, _CONDITIONS_HEADING, proposal_at)) if conditions_at != -1 else None
+    )
+    cuts = [
+        head.find(heading)
+        for heading in (_REDACTION_HEADING, _ORIGINAL_HEADING, _SPEAKERS_HEADING, _CONDITIONS_HEADING)
+    ]
     first = min((cut for cut in cuts if cut != -1), default=-1)
     reasoning = (head if first == -1 else head[:first]).replace(_REASONING_HEADING, " ")
-    redaction = _labelled(completion, _REDACTION_HEADING, REDACTION_STATES)
-    original = _labelled(completion, _ORIGINAL_HEADING, ORIGINAL_STATES)
-    speakers = _labelled(completion, _SPEAKERS_HEADING, SPEAKER_STATES)
 
-    def _answered(proposal: list[ReviewProposal]) -> ParsedCompletion:
-        """The three judgments and this proposal, as one parsed answer.
-
-        Args:
-            proposal: The parsed proposal array, empty where there was none.
-
-        Returns:
-            The answer.
-        """
-        return ParsedCompletion(
-            reasoning=reasoning.strip(),
-            redaction=redaction,
-            original=original,
-            speakers=speakers,
-            proposal=proposal,
-        )
-
-    if start == -1 or end < start:
-        return _answered([])
-    try:
-        parsed = json.loads(tail[start : end + 1])
-    except ValueError:
-        return _answered([])
-    if not isinstance(parsed, list):
-        return _answered([])
-    proposal = []
-    for item in parsed:
+    proposal: list[ReviewProposal] = []
+    for item in _array(proposal_text) or ():
         if not isinstance(item, dict):
             continue
         text = item.get("text")
@@ -533,7 +562,22 @@ def parse_completion(completion: str) -> ParsedCompletion:
                 safe_harbor=str(item.get("safe_harbor") or "").strip().upper()[:1],
             )
         )
-    return _answered(proposal)
+    listed = {_normalised(entry.text) for entry in proposal if entry.action == REDACT and entry.category == CONDITION}
+    for item in conditions_parsed or ():
+        text = item.get("text") if isinstance(item, dict) else item
+        if not isinstance(text, str) or not text.strip() or _normalised(text) in listed:
+            continue
+        listed.add(_normalised(text))
+        why = str(item.get("why") or "") if isinstance(item, dict) else ""
+        proposal.append(ReviewProposal(text=text, action=REDACT, category=CONDITION, why=why))
+    return ParsedCompletion(
+        reasoning=reasoning.strip(),
+        redaction=_labelled(completion, _REDACTION_HEADING, REDACTION_STATES),
+        original=_labelled(completion, _ORIGINAL_HEADING, ORIGINAL_STATES),
+        speakers=_labelled(completion, _SPEAKERS_HEADING, SPEAKER_STATES),
+        proposal=proposal,
+        conditions_answered=conditions_parsed is not None,
+    )
 
 
 _PLACEHOLDER = re.compile(r"\[[A-Z][A-Z_+]*\]")
@@ -557,10 +601,16 @@ def answer_problem(result: "ReviewResult", original: str, redacted: str | None) 
         asks for the redaction to change (incomplete, clean original over removed words, or words
         that carry something identifying where no complete redaction covers them) with an empty
         proposal, a place released without a reason, or proposal quotes that do not occur in the
-        ORIGINAL.
+        ORIGINAL, or an answer without its CONDITIONS part.
     """
     if not result.available:
         return None
+    if not result.conditions_answered:
+        return (
+            "your answer had no CONDITIONS part; add it as a JSON array listing every health condition, "
+            "diagnosis, treatment or procedure the speaker attributes to themselves, quoted exactly from the "
+            "ORIGINAL, or [] when there is none"
+        )
     masked = redacted is not None and bool(_PLACEHOLDER.search(redacted))
     judged = []
     if result.redaction == "incomplete":
@@ -921,6 +971,7 @@ def review_transcript(
         original=parsed.original,
         speakers=parsed.speakers,
         proposal=parsed.proposal,
+        conditions_answered=parsed.conditions_answered,
         model_id=model_id,
         revision=loaded_revision or revision,
         raw="" if parsed.reasoning else completion,
@@ -961,6 +1012,7 @@ def review_payload(result: ReviewResult) -> dict[str, Any]:
             }
             for entry in result.proposal
         ],
+        "conditions_answered": result.conditions_answered,
         "failure": result.failure,
         "model_id": result.model_id,
         "revision": result.revision,

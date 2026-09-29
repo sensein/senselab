@@ -1065,6 +1065,14 @@ NEW = "new"
 """A reviewer ``redact`` entry naming a content word no mask hides, or one its quote cannot be placed on:
 the reviewer proposing to hide more."""
 
+TASK_CONTENT = "task_content"
+"""A reviewer ``redact`` entry in a human-review category (a health condition) every word of which is the
+task's own content -- its stimulus, or its task lexicon: the task said it, so it identifies nobody and is
+held for no one."""
+
+AGREEMENTS = (AGREED_MASKED, AGREED_PLACED, NEW, TASK_CONTENT)
+"""Every agreement a reviewer ``redact`` entry can carry."""
+
 
 @lru_cache(maxsize=1)
 def _families() -> dict[str, str]:
@@ -1201,7 +1209,7 @@ class ReviewerSpan:
         condition_kind: For a human-review entry, :data:`~senselab.audio.workflows.triage.cohort.COHORT`
             or :data:`~senselab.audio.workflows.triage.cohort.OTHER`; empty otherwise.
         cohort_diagnosis: The cohort diagnosis its text matches; empty where none does.
-        agreement: :data:`AGREED_MASKED`, :data:`AGREED_PLACED` or :data:`NEW`.
+        agreement: One of :data:`AGREEMENTS`.
         entry_index: Its position in the reading's ``proposal``.
     """
 
@@ -1435,7 +1443,7 @@ class MaskPlan:
                 "unplaced_n": len(self.unplaced),
                 **{
                     f"proposals_{agreement}_n": sum(1 for span in self.proposals if span.agreement == agreement)
-                    for agreement in (AGREED_MASKED, AGREED_PLACED, NEW)
+                    for agreement in AGREEMENTS
                 },
                 **{
                     f"{kind}_condition_n": sum(
@@ -1821,13 +1829,25 @@ def mask_plan(
     placed_families: set[str] = set()
     review_set = {category.upper() for category in human_review_categories}
     profile = load_cohort_profile(cohort_conditions) if cohort_conditions else None
+    every_token = _tokens(words)
+
+    def task_content(quote: str, hits: Sequence[Entity]) -> bool:
+        if hits:
+            return all(word.id in declared_ids for word in hits)
+        whole = _place(quote, every_token)
+        return bool(whole) and all(
+            (bool(residue_ids) and word.id not in residue_ids) or word.id in declared_ids for word in whole
+        )
+
     for index, (hits, placed) in redact_placed.items():
         entry = entries[index]
         quote = str(entry.get("text") or "")
         category = str(entry.get("category") or "OTHER").upper()
         family = category_family(category)
         uncovered = [word for word in hits if word.id not in kept_ids and content(word)]
-        if hits and not uncovered:
+        if category in review_set and task_content(quote, hits):
+            agreement = TASK_CONTENT
+        elif hits and not uncovered:
             agreement = AGREED_MASKED
             if family in unplaced_families:
                 placed_families.add(family)
@@ -1838,7 +1858,7 @@ def mask_plan(
             kept_ids |= {word.id for word in uncovered}
         else:
             agreement = NEW
-        held = category in review_set
+        held = category in review_set and agreement != TASK_CONTENT
         diagnosis = (profile.diagnosis(quote) if profile is not None else None) if held else None
         proposals.append(
             ReviewerSpan(
