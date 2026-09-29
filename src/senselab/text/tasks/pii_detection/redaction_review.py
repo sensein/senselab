@@ -32,12 +32,17 @@ import atexit
 import json
 import logging
 import queue
+import re
 import subprocess
 import threading
 import time
 from collections import deque
 from dataclasses import dataclass, field
+from functools import lru_cache
+from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence
+
+import yaml
 
 from senselab.utils.dependencies import hf_subprocess_env
 from senselab.utils.subprocess_venv import _clean_subprocess_env, ensure_venv, venv_python
@@ -76,20 +81,62 @@ RELEASE = "release"
 PROPOSAL_ACTIONS = (REDACT, RELEASE)
 """What a proposal entry asks for: remove this text, or stop removing text already removed."""
 
+SAFE_HARBOR_PATH = Path(__file__).parent / "data" / "safe_harbor.yaml"
+"""The HIPAA Safe Harbor identifiers the reviewer applies, with their citation."""
+
+
+@lru_cache(maxsize=1)
+def safe_harbor() -> dict[str, Any]:
+    """The Safe Harbor standard as packaged: identifiers, residual clause, examples, category map.
+
+    Returns:
+        The parsed ``data/safe_harbor.yaml``.
+    """
+    return dict(yaml.safe_load(SAFE_HARBOR_PATH.read_text()) or {})
+
+
+def safe_harbor_codes(category: str) -> tuple[str, ...]:
+    """The Safe Harbor identifiers a reviewer category falls under.
+
+    Args:
+        category: A reviewer category (``PERSON``, ``LOCATION`` ...), upper-cased or not.
+
+    Returns:
+        Their codes (``A`` .. ``R``); empty where the category is no identifier by itself.
+    """
+    return tuple(str(code) for code in (safe_harbor().get("categories") or {}).get(str(category).upper(), ()) or ())
+
+
+def _safe_harbor_rule() -> str:
+    """The standard as the prompt states it, rendered from the packaged data."""
+    standard = safe_harbor()
+    lines = [
+        f"Apply the HIPAA Safe Harbor standard ({standard['citation']}). These must stay removed:",
+    ]
+    for identifier in standard["identifiers"]:
+        release = f" May be released: {identifier['release']}" if identifier.get("release") else ""
+        lines.append(f"  ({identifier['code']}) {identifier['text']}{release}")
+    lines.append(str(standard["residual"]))
+    lines.append("For example:")
+    lines.extend(f"  - {example}" for example in standard.get("examples") or ())
+    return "\n".join(lines)
+
+
 _PROMPT = (
     "You are auditing one recording's transcript before it is released. You are given the "
     "ORIGINAL words as transcribed, and where an automatic redaction has already been applied, "
     "the RELEASED text it produced, in which every [CATEGORY] token marks removed text. Where no "
     "redaction was applied the RELEASED section says so, and nothing has been removed.\n\n"
-    "Judge four things independently.\n"
+    + _safe_harbor_rule()
+    + "\n\nJudge four things independently.\n"
     "1. Whether the redaction, where one was applied, actually removed what identifies the "
-    "speaker.\n"
+    "speaker under that standard.\n"
     "2. Whether the ORIGINAL words carry anything identifying at all, which is a separate "
     "question and the one no automatic detector here has asked.\n"
-    "3. Whether the redaction removed more than it needed to. A time expression with no calendar "
-    "anchor -- a duration, a bare time-of-day noun, a relative reference -- usually identifies "
-    "nobody. A specific diagnosis, a rare condition or a named procedure often does, and "
-    "detectors here do not look for one.\n"
+    "3. Whether the redaction removed more than the standard requires. A time expression with no "
+    "calendar anchor -- a duration, a bare time-of-day noun, a relative reference -- usually "
+    "identifies nobody. A specific diagnosis, a rare condition or a named procedure is no Safe "
+    "Harbor identifier by itself, but name it as CONDITION when it could identify the speaker.\n"
     "4. Whether more than one person is speaking in this recording, judged from the words alone: "
     "turn-taking, instructions given, questions asked and answered.\n\n"
     "Answer in exactly five parts, each on its own line or block.\n"
@@ -101,20 +148,32 @@ _PROMPT = (
     "PROPOSAL: a JSON array giving the redaction you would apply instead. Each element is an "
     'object with keys "text" (the exact substring, quoted from the ORIGINAL), "action" (redact to '
     "remove it, release to stop removing text the current redaction removes unnecessarily), "
-    '"category" (one of PERSON, LOCATION, DATE_TIME, ORGANIZATION, ID, CONTACT, CONDITION, OTHER) '
-    'and "why" (one sentence). Return [] to leave the current redaction exactly as it is.\n\n'
+    '"category" (one of PERSON, LOCATION, DATE_TIME, ORGANIZATION, ID, CONTACT, CONDITION, OTHER), '
+    '"safe_harbor" (the letter of the Safe Harbor identifier it falls under, or "" for none) and '
+    '"why" (one sentence; for a release, why the standard lets it through here, weighed against the '
+    "rest of the transcript). Return [] to leave the current redaction exactly as it is.\n"
+    "Whenever you judge the redaction incomplete, or judge the ORIGINAL clean while the RELEASED text "
+    "still removes words, or judge the ORIGINAL to carry something identifying, the PROPOSAL must name "
+    "every word or phrase concerned, one entry each, quoted exactly as it appears in the ORIGINAL: "
+    "release for removed words that identify nobody, redact for words that must go. A judgment of that "
+    "kind with an empty PROPOSAL is not an answer, and a place released without a reason is not one "
+    "either.\n\n"
 )
 
 
-def _compose(original: str, redacted: str | None, context: Mapping[str, Any] | None = None) -> str:
+def _compose(
+    original: str, redacted: str | None, context: Mapping[str, Any] | None = None, feedback: str | None = None
+) -> str:
     """The task's own facts and the two transcripts, as one request body.
 
     Args:
         original: The transcript as the recording's words were read.
         redacted: The text an applied redaction produced, or None where none was applied.
         context: What the recording declares about itself -- ``task``, ``speech_type``,
-            ``instructions``, ``asked_to_say`` and ``declared_names``. Any key absent or empty is
+            ``instructions``, ``asked_to_say``, ``declared_names`` and ``task_words``. Any key absent or empty is
             omitted rather than sent empty.
+        feedback: What was wrong with the previous round's answer, which this round must correct; None
+            on a first round.
 
     Returns:
         The body the prompt is prefixed to.
@@ -132,6 +191,9 @@ def _compose(original: str, redacted: str | None, context: Mapping[str, Any] | N
     names = facts.get("declared_names") or ()
     if names:
         lines.append(f"NAMES THE TASK'S OWN MATERIALS CONTAIN: {', '.join(str(name) for name in names)}")
+    words = facts.get("task_words") or ()
+    if words:
+        lines.append(f"WORDS AND PHRASES THE TASK ITSELF IS MADE OF: {', '.join(str(word) for word in words)}")
     if lines:
         lines.append(
             "Those lines are the task. Words that are the task's own stimulus, or that the instructions "
@@ -142,7 +204,10 @@ def _compose(original: str, redacted: str | None, context: Mapping[str, Any] | N
         )
         lines.append("")
     released = redacted if redacted is not None else "(no redaction was applied to this recording)"
-    return "\n".join(lines) + f"ORIGINAL:\n{original}\n\nRELEASED:\n{released}\n"
+    body = "\n".join(lines) + f"ORIGINAL:\n{original}\n\nRELEASED:\n{released}\n"
+    if feedback:
+        body += f"\nYOUR PREVIOUS ANSWER HAD A PROBLEM TO CORRECT: {feedback}\n"
+    return body
 
 
 @dataclass
@@ -154,12 +219,14 @@ class ReviewProposal:
         action: :data:`REDACT` to remove it, :data:`RELEASE` to stop removing it.
         category: Its category, uppercased.
         why: Its one-sentence reason.
+        safe_harbor: The Safe Harbor identifier letter the model named for it, or the empty string.
     """
 
     text: str
     action: str
     category: str
     why: str
+    safe_harbor: str = ""
 
 
 @dataclass
@@ -463,9 +530,66 @@ def parse_completion(completion: str) -> ParsedCompletion:
                 action=action,
                 category=str(item.get("category") or "OTHER").upper(),
                 why=str(item.get("why") or ""),
+                safe_harbor=str(item.get("safe_harbor") or "").strip().upper()[:1],
             )
         )
     return _answered(proposal)
+
+
+_PLACEHOLDER = re.compile(r"\[[A-Z][A-Z_+]*\]")
+_SPACES = re.compile(r"\s+")
+
+
+def _normalised(text: str) -> str:
+    return _SPACES.sub(" ", text.replace("\u2019", "'")).strip().casefold()
+
+
+def answer_problem(result: "ReviewResult", original: str, redacted: str | None) -> str | None:
+    """What makes an answer unusable under the prompt's own rule, as feedback for another round.
+
+    Args:
+        result: One round's result.
+        original: The ORIGINAL the round read.
+        redacted: The RELEASED text it read, or None where no redaction was applied.
+
+    Returns:
+        None where the answer is usable. Otherwise one sentence naming the problem: a judgment that
+        asks for the redaction to change (incomplete, clean original over removed words, or words
+        that carry something identifying) with an empty proposal, or proposal quotes that do not
+        occur in the ORIGINAL.
+    """
+    if not result.available:
+        return None
+    masked = redacted is not None and bool(_PLACEHOLDER.search(redacted))
+    judged = []
+    if result.redaction == "incomplete":
+        judged.append("the redaction incomplete")
+    if result.original == "carries_pii":
+        judged.append("the ORIGINAL to carry something identifying")
+    if result.original == "clean" and masked:
+        judged.append("the ORIGINAL clean while the RELEASED text still removes words")
+    if judged and not result.proposal:
+        return (
+            f"you judged {' and '.join(judged)} but the PROPOSAL listed no words; list each word or phrase "
+            "to release (unmask) or redact (mask), quoted exactly from the ORIGINAL"
+        )
+    unreasoned = [
+        entry.text
+        for entry in result.proposal
+        if entry.action == RELEASE and entry.category == "LOCATION" and not entry.why.strip()
+    ]
+    if unreasoned:
+        quoted = ", ".join(json.dumps(text) for text in unreasoned)
+        return (
+            f"these place releases give no reason: {quoted}; say why Safe Harbor lets each through here, "
+            "given the rest of the transcript, or keep it masked"
+        )
+    haystack = _normalised(original)
+    missing = [entry.text for entry in result.proposal if _normalised(entry.text) not in haystack]
+    if missing:
+        quoted = ", ".join(json.dumps(text) for text in missing)
+        return f"these PROPOSAL quotes do not occur in the ORIGINAL: {quoted}; quote the exact words from the ORIGINAL"
+    return None
 
 
 class ReviewWorkerError(RuntimeError):
@@ -729,6 +853,7 @@ def review_transcript(
     ref: str = DEFAULT_REF,
     max_new_tokens: int = 1024,
     timeout_s: int = 1800,
+    feedback: str | None = None,
 ) -> ReviewResult:
     """Ask the reviewer to read one recording's transcript, reporting failure rather than raising.
 
@@ -749,6 +874,8 @@ def review_transcript(
         ref: The ref to resolve. Never passed to a load.
         max_new_tokens: Generation ceiling. The reasoning is the product, so this is not small.
         timeout_s: Wall-clock ceiling, applied to the load and to the generation separately.
+        feedback: The problem with the previous round's answer (:func:`answer_problem`), sent with the
+            texts so this round corrects it; None on a first round.
 
     Returns:
         The review. ``available`` is ``True`` only when the worker answered; every other path —
@@ -773,7 +900,7 @@ def review_transcript(
     with _WORKER_LOCK:
         try:
             worker, load_s = _worker_for(model_id, revision, timeout_s)
-            output = worker.review(_compose(original, redacted, context), max_new_tokens, timeout_s)
+            output = worker.review(_compose(original, redacted, context, feedback), max_new_tokens, timeout_s)
         except Exception as exc:  # noqa: BLE001 — every failure mode becomes a recorded absence
             return ReviewResult(
                 available=False,
@@ -824,7 +951,13 @@ def review_payload(result: ReviewResult) -> dict[str, Any]:
         "original": result.original,
         "speakers": result.speakers,
         "proposal": [
-            {"text": entry.text, "action": entry.action, "category": entry.category, "why": entry.why}
+            {
+                "text": entry.text,
+                "action": entry.action,
+                "category": entry.category,
+                "why": entry.why,
+                "safe_harbor": entry.safe_harbor,
+            }
             for entry in result.proposal
         ],
         "failure": result.failure,

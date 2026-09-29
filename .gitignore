@@ -193,6 +193,9 @@ data/
 # `data/` pattern would hide it from both git and hatchling's VCS-aware file selection.
 !src/senselab/audio/workflows/triage/data/
 !src/senselab/audio/workflows/triage/data/**
+# ...and the PII task's own packaged data (the Safe Harbor identifiers the redaction reviewer applies).
+!src/senselab/text/tasks/pii_detection/data/
+!src/senselab/text/tasks/pii_detection/data/**
 # pdoc documentation
 docs/
 
