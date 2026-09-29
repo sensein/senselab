@@ -1,35 +1,38 @@
 # Resuming the review pass
 
-## Settled, 2026-09-27 — read this first; everything below is history
+## Settled, 2026-09-28 — read this first; everything below is history
 
-The corpus is r6, folded at `e0eadb37`. r5 is superseded and was left half re-folded: do not evaluate it.
+The corpus is **r7**, replayed, fully re-reviewed and folded at `77e9273e`. r6 and r5 are superseded.
+The cache commits (`7089b05f`..`e4301967`) sit on top and are merged; r7 predates them.
 
 | | path |
 |---|---|
-| corpus (r6, 62,550 = every in-scope BIDS WAV) | `/orcd/scratch/bcs/002/satra/triage_r6_20260926/out` |
-| checkout, pinned | `/orcd/scratch/bcs/002/satra/senselab-r5` @ `e0eadb37` |
-| job ids and submit order | `triage_r6_20260926/jobs.txt`, `RUN.md` |
-| review manifest (15,210) / readings | `triage_r6_20260926/review/` |
-| parquet, schema 9 | `recording_vectors_r6_v9b/`; laptop `~/Downloads/recording_vectors_20260927_r6_v9b/` |
-| evaluations / page | `evaluations_r6_20260927_v4/`, `free_speech_page_20260927_v4/` (laptop `~/Downloads/…_v4/`) |
+| corpus (r7, 62,550 = every in-scope BIDS WAV) | `/orcd/scratch/bcs/002/satra/triage_r7_20260927/out` |
+| checkout, pinned | `/orcd/scratch/bcs/002/satra/senselab-r5` @ `77e9273e` |
+| job ids, submit order | `triage_r7_20260927/jobs.txt`, `RUN.md` |
+| review manifest (15,193) / readings | `triage_r7_20260927/review/` |
+| parquet, schema 11, dictionary embedded | `recording_vectors_r7/`; laptop `~/Downloads/recording_vectors_20260928_r7/` |
+| page / evaluations | `free_speech_page_20260928_r7/`, `evaluations_r7_20260928/` (laptop `~/Downloads/…`) |
 
-What r6 carries beyond r5: REDACT no longer counts its own placeholders as re-scan survivors; a reviewer's
-release entries unmask exactly the words they name; masks keep content words only, and never task words
-or marked proper nouns (PERSON/NAME/LOCATION); a `pii_ledger` per recording records every span's state;
-a condition-only reviewer proposal is withheld for human review, split cohort / other against the
-release's own `phenotype/diagnosis/`; a copy that would mask nothing releases the original.
+What r7 carries beyond r6: SPEECH places each finding on its own words (no whole-transcript or bridged
+spans; unplaced findings stored with their text); one mask per finding; a reviewer redact entry on words
+already masked is agreement, not hiding more; a released term is released at every occurrence; a
+`speakers: more_than_one` reading flags for review; the reviewer is given the task's instructions,
+stimulus and speech type (sidecar, with b2aiprep's curated registry vendored at 8c43256); recall tasks
+subtract their story as task content; located gates are bound-only (schema 10→11); a data dictionary
+for every parquet column, verified against the code by three independent passes.
 
-Outcome: 60,217 released without redaction, 1,407 with, 892 withheld (623 reviewer, 124 cohort
-condition, 76 other condition, 69 REDACT), 34 not assessed; 0 released with a reviewer redact proposal.
+Outcome: triage pass 52,830 / flag 9,691 / discard 29. Release: 60,578 without redaction, 1,422 with,
+515 withheld (196 cohort-condition review, 151 other-condition review, 114 new reviewer redaction,
+54 REDACT), 35 not assessed. 0 released with a new redact proposal; 0 with-redaction copies masking nothing.
 
-Open for the owner: SPEECH still places a finding it cannot locate over the whole transcript (the fold
-confines it; fixing SPEECH retires every REVIEW reading, so it waits for the next corpus run); the two
-fill recordings have one ASR hypothesis and read `not_assessed`; human-review lists in the evaluations.
+Open for the owner: second-speaker flags on non-lexical tasks (~60); the other-condition review list
+(164 recordings, many one-off phrases, some not conditions); the two fill recordings (one ASR hypothesis,
+`not_assessed`); subprocess-venv dependency versions are not in any cache key.
 
-Cluster traps met this run: node2621 ran two replay slices past 6 h (exclude it); node2119 threw a CUDA
-illegal-memory-access that failed every later reading in its slice (exclude it; the driver now logs a
-crashed reading as an error and a resubmission re-reads it); `afterok` on an already-finished job is
-rejected ("Job dependency problem"); `grep -c` with no match exits 1 under `set -e`.
+Cluster traps met this run: node2119 (CUDA fault), node2621 and node3002 (slices hang to the time
+limit) — exclude all three; the replay's wall time is dominated by hung nodes and by recomputation,
+which the result cache (`SENSELAB_CACHE/results/`) now removes for the next run.
 
 ## In flight right now
 
