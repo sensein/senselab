@@ -31,3 +31,10 @@ families:
     - PHOTOGRAPHIC_IMAGE
   CONTACT: [EMAIL_ADDRESS, PHONE_NUMBER, FAX_NUMBER, URL]
   OTHER: [MISC, NRP]
+
+# The families whose findings name something by a proper noun. A finding of one of them carries only
+# its proper nouns: SPEECH's placement cuts a longer span to them, and the fold's mask plan drops a
+# word that is not in proper form from a mask whose findings are all of these families, where that
+# mask holds at least one proper noun (a name the recognizer wrote lower-case keeps its whole mask).
+# Owner, 2026-09-28, on an r7 free-speech-v2 card where LOC "Florida Like" kept "like" masked.
+name_families: [PERSON, LOCATION, ORGANIZATION]

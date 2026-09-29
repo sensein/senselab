@@ -31,6 +31,7 @@ from senselab.audio.workflows.triage.vocabulary import (
     REVIEWER_CLEARED_RESCAN,
     REVIEWER_CLEARED_UNMASKED,
     REVIEWER_HEARD_SECOND_SPEAKER,
+    REVIEWER_NAMED_NO_WORDS,
     REVIEWER_NEEDS_HUMAN_REVIEW_COHORT,
     REVIEWER_NEEDS_HUMAN_REVIEW_OTHER,
     REVIEWER_PROPOSED_REDACTION,
@@ -1613,6 +1614,24 @@ class TestAgreementUnplacedFindingsAndASecondSpeaker:
         gate = {"gate": DOMINANT_SPEAKER_GATE, "passed": False, "ground": "another speaker", "reading": "share"}
         diarized = self._fold(reading, flag_gates=[gate])
         assert REVIEWER_HEARD_SECOND_SPEAKER not in [reason.why for reason in diarized.reasons]
+
+    def test_a_flagged_reading_that_names_no_words_flags_for_review(self) -> None:
+        """Owner, 2026-09-28: a judgment with no entries moves no mask and goes to a person."""
+        reading = {"status": "flagged", "original": "clean", "redaction": "incomplete", "proposal": []}
+        on = self._fold(reading, policy=FoldPolicy(llm_redaction_withholds=True, llm_contradiction_flags=True))
+        assert on.triage is Triage.FLAG and REVIEWER_NAMED_NO_WORDS in [reason.why for reason in on.reasons]
+        assert on.release is Release.WITH_REDACTION, "a flag for review, not a release decision"
+        assert self._fold(reading).triage is Triage.PASS
+        named = {**reading, "proposal": [{"action": "release", "text": "alice", "category": "PERSON"}]}
+        assert REVIEWER_NAMED_NO_WORDS not in [
+            r.why for r in self._fold(named, policy=FoldPolicy(llm_contradiction_flags=True)).reasons
+        ]
+
+    def test_the_packaged_config_turns_the_contradiction_flag_on(self) -> None:
+        """Owner, 2026-09-28."""
+        from senselab.audio.workflows.triage.config import load_triage_config
+
+        assert FoldPolicy.from_config(load_triage_config()).llm_contradiction_flags is True
 
     def test_the_packaged_config_turns_the_second_speaker_flag_on(self) -> None:
         """Owner, 2026-09-27."""

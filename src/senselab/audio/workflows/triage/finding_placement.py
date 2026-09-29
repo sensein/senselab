@@ -19,7 +19,7 @@ from typing import Sequence
 
 import yaml
 
-from senselab.audio.workflows.triage.nodes.redact import category_family
+from senselab.audio.workflows.triage.nodes.redact import category_family, name_families
 from senselab.audio.workflows.triage.residue import is_content_word, is_proper_form
 
 TEMPORAL_PATH = Path(__file__).parent / "data" / "temporal_words.yaml"
@@ -27,8 +27,6 @@ TEMPORAL_PATH = Path(__file__).parent / "data" / "temporal_words.yaml"
 TEMPORAL_FAMILIES = frozenset({"DATE_TIME"})
 """The families whose findings are cut to their temporal words."""
 
-NAME_FAMILIES = frozenset({"PERSON", "LOCATION", "ORGANIZATION"})
-"""The families whose over-long findings are cut to their proper nouns."""
 
 _EDGE = "\"'`.,;:!?()[]{}<>«»“”‘’…-–—"
 _APOSTROPHES = str.maketrans({"’": "'", "‘": "'", "ʼ": "'"})
@@ -186,7 +184,7 @@ def cut(
             and any(m < index for m in marked)
             and any(m > index for m in marked)
         ]
-    elif family in NAME_FAMILIES and len(span) > name_words_max:
+    elif family in name_families() and len(span) > name_words_max:
         kept = [index for index in span if is_proper_form(tokens[index], tokens[index - 1] if index > 0 else None)]
         if not kept:
             return [run], False

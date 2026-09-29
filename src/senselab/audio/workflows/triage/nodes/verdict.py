@@ -33,7 +33,12 @@ from typing import Any, Callable, Mapping, Sequence
 from senselab.audio.data_structures import AudioHints
 from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.live_evidence import declared_task, recording_stem
-from senselab.audio.workflows.triage.nodes.branches import BRANCH_FAMILY, EXPECTATIONS, Expectation
+from senselab.audio.workflows.triage.nodes.branches import (
+    BRANCH_FAMILY,
+    EXPECTATIONS,
+    Expectation,
+    declared_task_family,
+)
 from senselab.audio.workflows.triage.nodes.common import (
     NodeResult,
     find_measurement,
@@ -63,6 +68,7 @@ from senselab.audio.workflows.triage.nodes.redact import (
     padding_ms,
     planned_extents,
 )
+from senselab.audio.workflows.triage.task_lexicon import task_lexicon
 from senselab.audio.workflows.triage.vocabulary import (
     GRAPH_ORDER,
     PII_SCAN,
@@ -655,6 +661,7 @@ def verdict(
         human_review_categories=policy.llm_human_review_categories,
         protected_categories=policy.trim_protected_categories,
         cohort_conditions=policy.cohort_conditions,
+        lexicon=task_lexicon(config, declared_task_family(store)),
     )
     file_verdict = fold_file_verdict(
         node_verdicts,

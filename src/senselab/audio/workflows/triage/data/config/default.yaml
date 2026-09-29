@@ -151,6 +151,7 @@ stimulus:
     variant_similarity_min: 0.66       # least 1 - edits/longer length at which a word is a reading of a stimulus word
     insertion_window: 3                # stimulus words either side an inserted word may repeat, restart or split
     train_repetitions_min: 3           # recurrences that make a token a syllable train in a syllable task
+  task_lexicons: [cinderella-story]    # owner, 2026-09-28: families whose data/task_lexicon/<family>.yaml is task content
 
 # The declared task ALWAYS adds a route to its own branch. That route needs no key here: the task is
 # read off the recording's own BIDS stem and resolved through `taxonomy.ruleset.reference_family_set`
@@ -323,6 +324,7 @@ verdict:
   cohort_conditions: bridge2ai_voice_adult_2026-09-04  # data/cohort_conditions profile: which human-review conditions the study recruits for
   trim_protected_categories: [PERSON, NAME, LOCATION, LOC]  # owner, 2026-09-27: a marked word written as a proper noun is never trimmed
   llm_second_speaker_flags: true       # owner, 2026-09-27: a reading that heard more than one speaker flags the recording for review
+  llm_contradiction_flags: true        # owner, 2026-09-28: a flagged reading that names no words flags the recording for review
   # The branches for which finding the subject IS evaluating the task, so an out-of-family result
   # is a covariate on the detector rather than a reading of the recording. DDK only: a rapid
   # alternating train does not occur incidentally, where breath, phonation and lexical content all do.
@@ -515,7 +517,7 @@ disruptions:
 # The detector set a PII scan is required to have run.
 pii:
   required_detectors: [gliner, presidio, rules]   # the pii_detection module's own detector set
-  name_words_max: 3                    # a name, place or organisation finding longer than this keeps only its proper nouns
+  name_words_max: 1                    # owner, 2026-09-28: a name, place or organisation finding of two or more words keeps only its proper nouns
 
 # What a released transcript replaces, and by how much padding.
 redaction:

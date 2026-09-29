@@ -26,6 +26,7 @@ from senselab.audio.workflows.triage.vocabulary import (
     REDACTION_LLM_ANNOTATION,
     REDACTION_OWED,
     REVIEWER_CLEARED_RESCAN,
+    REVIEWER_NAMED_NO_WORDS,
     REVIEWER_NEEDS_HUMAN_REVIEW_COHORT,
     REVIEWER_NEEDS_HUMAN_REVIEW_OTHER,
     REVIEWER_PROPOSED_REDACTION,
@@ -1174,7 +1175,13 @@ class TestTheRedactionReviewerAnnotatesAndThisNodeDecides:
         )
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
         assert not [reason for reason in result.file_verdict.reasons if LLM_REDACTION_RESIDUE in reason.why]
-        assert result.file_verdict.triage is Triage.PASS
+        grounds = [reason.why for reason in result.file_verdict.reasons if reason.node == "VERDICT"]
+        if proposal:
+            assert result.file_verdict.triage is Triage.PASS
+        else:
+            # Owner, 2026-09-28: a flagged reading that names no words moves no mask and goes to a person.
+            assert grounds == [REVIEWER_NAMED_NO_WORDS]
+            assert result.file_verdict.triage is Triage.FLAG
 
     def test_the_key_flipped_off_leaves_the_triage_axis_alone(
         self, make_verdict_store: Callable[..., ProvStore], tmp_path: Path
