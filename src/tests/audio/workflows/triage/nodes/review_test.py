@@ -121,14 +121,15 @@ def _stub(monkeypatch: pytest.MonkeyPatch, rounds: Sequence[ReviewResult]) -> li
     return seen
 
 
-def _clean(redaction: str = "not_applicable") -> ReviewResult:
-    """A round that read both texts and would change nothing."""
+def _clean(redaction: str = "not_applicable", proposal: Sequence[ReviewProposal] = ()) -> ReviewResult:
+    """A round that read both texts and would change nothing, or would only release ``proposal``."""
     return ReviewResult(
         available=True,
         reasoning="Nothing here identifies the speaker.",
         redaction=redaction,
         original="clean",
         speakers="one",
+        proposal=list(proposal),
         model_id="s/m",
         revision="a" * 40,
     )
@@ -221,7 +222,8 @@ class TestTheReviewerReadsTheResidue:
         """Where REDACT ran, the reviewer reads what would be released, never the findings in the clear."""
         store = ProvStore(run_id="review-test")
         _seed(store, words=["hello", "alice"], scan="ran", findings_n=1, redacted=[(1.0, 1.5)])
-        seen = _stub(monkeypatch, [_clean()])
+        release = ReviewProposal(text="alice", action="release", category="PERSON", why="a common word here")
+        seen = _stub(monkeypatch, [_clean(proposal=[release])])
         review(store, _config(tmp_path))
         assert seen == ["hello [PERSON]"]
 
@@ -467,8 +469,10 @@ class TestTheLoopStopsWhenAnotherRoundCannotDiffer:
     recording gained nothing after round one. Those re-reads were 39% of the pass's GPU time.
     """
 
-    def test_a_flag_with_no_removal_stops_at_one_round(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """The 86% case: flagged on the redaction judgment alone, nothing proposed, nothing to mask."""
+    def test_a_judgment_with_no_words_is_fed_back_until_the_ceiling(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Owner, 2026-09-28: "incomplete" with no entries is not an answer; each round names the problem."""
         store = ProvStore(run_id="r")
         _seed(store, words=["hello", "alicia"])
         bare = ReviewResult(
@@ -480,12 +484,39 @@ class TestTheLoopStopsWhenAnotherRoundCannotDiffer:
             model_id="s/m",
             revision="a" * 40,
         )
-        seen = _stub(monkeypatch, [bare])
+        seen = _stub(monkeypatch, [bare, bare, bare])
         review(store, _config(tmp_path, LLM_ON + "    max_iterations: 3\n"))
-        assert len(seen) == 1, "a second round would have read the same string"
+        assert len(seen) == 3, "the same text, asked again with feedback"
         annotation = _annotation(store)
-        assert annotation["status"] == "flagged"
-        assert annotation["iterations"] == 1
+        assert (annotation["status"], annotation["iterations"], annotation["converged"]) == ("flagged", 3, False)
+        assert "listed no words" in annotation["problem"]
+        rounds = _rounds_in(store)
+        assert rounds[0]["feedback"] is None
+        assert all("listed no words" in entry["feedback"] for entry in rounds[1:])
+
+    def test_a_judgment_corrected_by_feedback_converges(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The second round names the word, and the reading records that it converged."""
+        store = ProvStore(run_id="r")
+        _seed(store, words=["hello", "alicia"])
+        bare = _flags()
+        named = _flags(ReviewProposal(text="alicia", action="redact", category="PERSON", why="a name"))
+        seen = _stub(monkeypatch, [bare, named, _clean()])
+        review(store, _config(tmp_path, LLM_ON + "    max_iterations: 3\n"))
+        assert len(seen) == 3
+        annotation = _annotation(store)
+        assert annotation["converged"] is True and annotation["problem"] is None
+
+    def test_a_quote_not_in_the_text_is_fed_back(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A proposal quoting words that are not there cannot be applied, so the reviewer is told which."""
+        store = ProvStore(run_id="r")
+        _seed(store, words=["hello", "alicia"])
+        wrong = _flags(ReviewProposal(text="[PERSON]", action="redact", category="PERSON", why="a name"))
+        right = _flags(ReviewProposal(text="alicia", action="redact", category="PERSON", why="a name"))
+        _stub(monkeypatch, [wrong, right, _clean()])
+        review(store, _config(tmp_path, LLM_ON + "    max_iterations: 3\n"))
+        rounds = _rounds_in(store)
+        assert "do not occur in the ORIGINAL" in rounds[1]["feedback"] and '"[PERSON]"' in rounds[1]["feedback"]
+        assert _annotation(store)["converged"] is True
 
     def test_a_flag_that_proposes_a_removal_still_iterates(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
