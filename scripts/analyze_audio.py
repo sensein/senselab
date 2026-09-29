@@ -264,7 +264,7 @@ def _diarize_counts_for_probe(cfg: RunConfig) -> Callable[[Any, int], dict[str, 
     """
 
     def run(waveform: np.ndarray, sampling_rate: int) -> dict[str, int]:
-        from senselab.audio.workflows.audio_analysis.stages import model_for_task
+        from senselab.audio.workflows.audio_analysis.stages import model_for_task as stage_model_for_task
 
         audio = Audio(
             waveform=torch.tensor(np.asarray(waveform, dtype=np.float32)).unsqueeze(0),
@@ -275,7 +275,7 @@ def _diarize_counts_for_probe(cfg: RunConfig) -> Callable[[Any, int], dict[str, 
             try:
                 result = diarize_audios(
                     audios=[audio],
-                    model=model_for_task(model_id, task="diarization"),
+                    model=stage_model_for_task(model_id, task="diarization"),
                     device=pick_device(cfg.device),
                 )
             except Exception:  # noqa: BLE001 — a model that cannot run yields no evidence

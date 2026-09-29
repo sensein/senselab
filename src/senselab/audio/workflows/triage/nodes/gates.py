@@ -13,7 +13,8 @@ recording was judged by a special case or by an inherited one.
 
 VERDICT applies the conformance gates :data:`CONFORMANCE_GATES` names for the group; the remaining
 gates are applied where the finding they produce is located, which is inside the reporting node.
-A gate whose reading is absent yields :data:`UNDETERMINED`.
+A gate whose reading is absent answers by the reason the caller gives: a failure where nothing was
+produced, :data:`NOT_APPLICABLE` where nothing could be asked, else :data:`UNDETERMINED`.
 
 See ``specs/20260921-gates-in-verdict/design.md``.
 """
@@ -27,7 +28,58 @@ from typing import Any, Callable, Literal, Mapping, Sequence
 from senselab.audio.workflows.triage.config import TriageConfig, UnknownConfigKey
 
 UNDETERMINED: Literal["UNDETERMINED"] = "UNDETERMINED"
-"""What a gate answers when its reading is absent, and what a branch answers about a task."""
+"""What a gate answers when it cannot be decided, and what a branch answers about a task."""
+
+NOT_APPLICABLE: Literal["NOT_APPLICABLE"] = "NOT_APPLICABLE"
+"""What a gate answers when the recording holds nothing it could be asked of: no speech for a speaker gate."""
+
+NO_CARRIER = "no_carrier"
+"""The owning branch looked for a production and found none: nothing was produced, which fails the gate."""
+
+NO_SPEECH = "no_speech"
+"""The recording carries no lexical word, so a gate about who spoke has nothing to read."""
+
+NOT_COMPUTED = "absent_not_computed"
+"""The branch had what it needed and wrote no reading: a defect, never a pass or a fail."""
+
+INSTRUMENT_ABSENT = "instrument_absent"
+"""A derivative the reading is taken off never reached the store."""
+
+NULL_NO_OVERLAP = "null_no_overlap"
+"""The reading was written as null because no diarized segment intersects the task extent."""
+
+NULL_VALUE = "null_value"
+"""The reading was written as null for a reason the branch did not name."""
+
+BOUND_UNMEASURED = "bound_unmeasured"
+"""The winning layer names the gate's bound as null: nobody has measured it."""
+
+NO_OWNER_REPORT = "no_owner_report"
+"""The branch owning the declared family left no in-family report, so no conformance gate was applied."""
+
+GATE_REASONS = (
+    NO_CARRIER,
+    NO_SPEECH,
+    NOT_COMPUTED,
+    INSTRUMENT_ABSENT,
+    NULL_NO_OVERLAP,
+    NULL_VALUE,
+    BOUND_UNMEASURED,
+    NO_OWNER_REPORT,
+)
+"""Why a gate answered something other than a comparison of its reading with its bound."""
+
+UNCOMPUTED_REASONS = frozenset({NOT_COMPUTED, INSTRUMENT_ABSENT})
+"""The reasons that say a reading the task is judged on should exist and does not."""
+
+FAIL = "fail"
+"""A disposition: the absence is itself the answer, and the gate fails."""
+
+UNDECIDED = "undetermined"
+"""A disposition: the absence leaves the gate undecided."""
+
+INAPPLICABLE = "not_applicable"
+"""A disposition: the gate has nothing to be asked of."""
 
 _ABSENT = object()
 """Sentinel separating a layer the packaged file does not spell from one it spells empty."""
@@ -392,7 +444,10 @@ class AppliedGate:
         keyed_under: The key that layer configured it under — the group's name, the family, or
             the empty string for the default layer, which is keyed by nothing.
         op: :data:`AT_LEAST` or :data:`AT_MOST`.
-        passed: True, False, or :data:`UNDETERMINED` where either side was absent.
+        passed: True, False, :data:`UNDETERMINED` where it could not be decided, or
+            :data:`NOT_APPLICABLE` where the recording holds nothing it could be asked of.
+        reason: One of :data:`GATE_REASONS` wherever ``passed`` is not a comparison of a reading
+            with a bound, else None.
     """
 
     name: str
@@ -403,7 +458,8 @@ class AppliedGate:
     layer: str
     keyed_under: str
     op: str
-    passed: bool | Literal["UNDETERMINED"]
+    passed: bool | Literal["UNDETERMINED", "NOT_APPLICABLE"]
+    reason: str | None = None
 
     @property
     def ground(self) -> str | None:
@@ -430,6 +486,7 @@ class AppliedGate:
             "keyed_under": self.keyed_under,
             "op": self.op,
             "passed": self.passed,
+            **({"reason": self.reason} if self.reason is not None else {}),
             **({"ground": self.ground} if self.ground is not None else {}),
         }
 
@@ -448,8 +505,41 @@ def _passes(value: Any, bound: Any, op: str) -> bool:  # noqa: ANN401 — each g
     return float(value) >= float(bound) if op == AT_LEAST else float(value) <= float(bound)
 
 
+def _answer(
+    value: Any,  # noqa: ANN401 — each gate's own type
+    bound: Any,  # noqa: ANN401 — each gate's own type
+    op: str,
+    absence: tuple[str, str] | None,
+) -> tuple[bool | Literal["UNDETERMINED", "NOT_APPLICABLE"], str | None]:
+    """One gate's answer and, where it is not a plain comparison, why.
+
+    Args:
+        value: The reading, or None when nothing carried one.
+        bound: The bound, or None when nobody has measured it.
+        op: :data:`AT_LEAST` or :data:`AT_MOST`.
+        absence: ``(disposition, reason)`` for an absent reading, from the caller, which alone can
+            say why the reading is absent. None reads as :data:`NOT_COMPUTED`.
+
+    Returns:
+        The answer and its reason.
+    """
+    if value is not None:
+        if bound is None:
+            return UNDETERMINED, BOUND_UNMEASURED
+        return _passes(value, bound, op), None
+    disposition, reason = absence if absence is not None else (UNDECIDED, NOT_COMPUTED)
+    if disposition == INAPPLICABLE:
+        return NOT_APPLICABLE, reason
+    if disposition == FAIL:
+        return False, reason
+    return UNDETERMINED, reason
+
+
 def apply_gates(
-    names: Sequence[str], bounds: GateBounds, readings: Mapping[str, Any]
+    names: Sequence[str],
+    bounds: GateBounds,
+    readings: Mapping[str, Any],
+    absences: Mapping[str, tuple[str, str]] | None = None,
 ) -> tuple[bool | Literal["UNDETERMINED"], list[AppliedGate]]:
     """Apply a group's conformance gates to what the reporting node read.
 
@@ -457,11 +547,14 @@ def apply_gates(
         names: The gates to apply, from :func:`conformance_gate_names`.
         bounds: The group's configured bounds.
         readings: Reading name to the value the reporting node wrote, absent where it wrote none.
+        absences: Reading name to ``(disposition, reason)`` for a reading that is absent, one of
+            :data:`FAIL`, :data:`UNDECIDED` or :data:`INAPPLICABLE` with one of
+            :data:`GATE_REASONS`.
 
     Returns:
-        The conformance and one record per gate applied. :data:`UNDETERMINED` when no gate was
-        applied at all, and whenever any applied gate could not be answered — a reading nobody
-        took, or a bound nobody has measured, is never a failure.
+        The conformance and one record per gate applied. A gate that is not applicable takes no
+        part. Any failed gate decides it False; otherwise any undecided gate leaves it
+        :data:`UNDETERMINED`, as does a group with no applicable gate at all.
     """
     applied: list[AppliedGate] = []
     for name in names:
@@ -472,9 +565,7 @@ def apply_gates(
             raise ValueError(f"gate {name!r} carries no reading and cannot decide a conformance")
         bound = bounds.bound(name)
         value = readings.get(spec.reading)
-        passed: bool | Literal["UNDETERMINED"] = (
-            UNDETERMINED if value is None or bound is None else _passes(value, bound, spec.op)
-        )
+        passed, reason = _answer(value, bound, spec.op, (absences or {}).get(spec.reading))
         applied.append(
             AppliedGate(
                 name=name,
@@ -486,23 +577,36 @@ def apply_gates(
                 keyed_under=bounds.keyed_under(name),
                 op=spec.op,
                 passed=passed,
+                reason=reason,
             )
         )
-    if not applied or any(gate.passed == UNDETERMINED for gate in applied):
+    answered = [gate for gate in applied if gate.passed != NOT_APPLICABLE]
+    if any(gate.passed is False for gate in answered):
+        return False, applied
+    if not answered or any(gate.passed == UNDETERMINED for gate in answered):
         return UNDETERMINED, applied
-    return all(gate.passed is True for gate in applied), applied
+    return True, applied
 
 
-def apply_flag_gates(bounds: GateBounds, readings: Mapping[str, Any]) -> list[AppliedGate]:
+def apply_flag_gates(
+    bounds: GateBounds,
+    readings: Mapping[str, Any],
+    absences: Mapping[str, tuple[str, str]] | None = None,
+    exempt: Sequence[str] = (),
+) -> list[AppliedGate]:
     """Apply the flag gates this group configures, which decide no conformance.
 
     Args:
         bounds: The group's configured bounds.
         readings: Reading name to the value the reporting node wrote.
+        absences: As :func:`apply_gates`.
+        exempt: Flag gates the declared family's own instruction makes inapplicable; they are not
+            applied at all.
 
     Returns:
         One record per flag gate applied, in :data:`FLAG_GATES` order. Empty when the group names
         none.
     """
-    _, applied = apply_gates(tuple(FLAG_GATES), bounds, readings)
+    names = tuple(name for name in FLAG_GATES if name not in set(exempt))
+    _, applied = apply_gates(names, bounds, readings, absences)
     return applied

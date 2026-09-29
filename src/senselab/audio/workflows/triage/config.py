@@ -35,6 +35,7 @@ DATA_MAP_PATHS = frozenset(
         "branch.phoneme_vowel_classes",
         "routing.hint_branch_map",
         "verdict.conformance_flags_by_family",
+        "verdict.flag_gate_exemptions",
         "verdict.gates.default",
         "verdict.gates.by_family",
         "verdict.gates.by_group.EFFORT",
