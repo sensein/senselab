@@ -57,3 +57,13 @@ def test_a_hyphen_piece_places_and_a_run_ends_on_a_date_word() -> None:
     tokens = "last year that I also have PVCs AFib started probably ten years ago".split()
     runs, _ = cut((0, len(tokens) - 1), tokens, "DATE", 3)
     assert [" ".join(tokens[a : b + 1]) for a, b in runs] == ["last year", "ten years ago"]
+
+
+def test_a_two_word_place_keeps_its_proper_noun_at_the_packaged_threshold() -> None:
+    """Owner, 2026-09-28: LOC "Florida Like" keeps "Florida"; one word is left alone."""
+    from senselab.audio.workflows.triage.config import load_triage_config
+
+    threshold = int(load_triage_config().require("pii.name_words_max"))
+    tokens = "we moved to Florida like everyone".split()
+    assert cut((3, 4), tokens, "LOC", threshold) == ([(3, 3)], True)
+    assert cut((3, 3), tokens, "LOC", threshold) == ([(3, 3)], False)

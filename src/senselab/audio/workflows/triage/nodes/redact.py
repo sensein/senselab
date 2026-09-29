@@ -40,7 +40,7 @@ from collections import Counter
 from dataclasses import dataclass, replace
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Callable, Mapping, Sequence
+from typing import Any, Callable, Collection, Mapping, Sequence
 
 import yaml
 
@@ -48,7 +48,12 @@ from senselab.audio.data_structures import Audio, AudioHints
 from senselab.audio.tasks.redaction.api import RedactionExtent, apply_redactions, plan_redactions
 from senselab.audio.workflows.triage.cohort import COHORT, CONDITION_KINDS, OTHER, load_cohort_profile
 from senselab.audio.workflows.triage.config import TriageConfig
-from senselab.audio.workflows.triage.nodes.branches import branch_params, declared_carrier, expected_names
+from senselab.audio.workflows.triage.nodes.branches import (
+    branch_params,
+    declared_carrier,
+    declared_task_family,
+    expected_names,
+)
 from senselab.audio.workflows.triage.nodes.common import (
     NodeResult,
     cache_attributes,
@@ -65,6 +70,7 @@ from senselab.audio.workflows.triage.nodes.common import (
 )
 from senselab.audio.workflows.triage.residue import is_content_word, is_proper_form
 from senselab.audio.workflows.triage.stimulus import NearMatch, near_match, split_prompts
+from senselab.audio.workflows.triage.task_lexicon import TaskLexicon, declared_names_lexicon, task_lexicon
 from senselab.audio.workflows.triage.vocabulary import (
     REDACTION_LLM_ANNOTATION,
     UNPLACED_CLEARED,
@@ -75,6 +81,7 @@ from senselab.audio.workflows.triage.vocabulary import (
     Release,
 )
 from senselab.text.tasks.pii_detection.api import scan_for_pii
+from senselab.text.tasks.pii_detection.redaction_review import safe_harbor_codes
 from senselab.utils.prov_store import Entity, ProvStore
 from senselab.utils.tasks.cached_inference import annotate_result_origin
 
@@ -96,7 +103,6 @@ _TERMINATORS_KEY = "stimulus.sentence_terminators"
 _EXEMPT_VERB = "exempt"  # the store's assertion verb for a redaction not made
 _EXPECTED_LABEL = "expected_speech"  # what accounted for it: the stimulus the participant was asked to read
 _EXEMPTION_MEASUREMENT = "redaction_exemptions"
-_COVERAGE_TOLERANCE_S = 1e-9  # float slack on an equality
 
 
 @dataclass(frozen=True)
@@ -498,7 +504,11 @@ class _Exemption:
 
 
 def _expected_units(
-    hint: AudioHints | None, task_family: str | None, *, terminators: str
+    hint: AudioHints | None,
+    task_family: str | None,
+    *,
+    terminators: str,
+    lexicon: TaskLexicon | None = None,
 ) -> list[tuple[int, str, list[str]]]:
     """Everything the task declared, as the structure units a covered run is placed inside.
 
@@ -511,6 +521,7 @@ def _expected_units(
         hint: What the recording was declared to contain, or None.
         task_family: The declared family, a key of ``SPEECH_EXPECTATIONS``, or None.
         terminators: The characters that close a unit inside one prompt.
+        lexicon: The family's task lexicon; each phrase not already a declared name is its own unit.
 
     Returns:
         ``(prompt index, unit text, tokens)`` per unit. Empty when the task declared nothing. A
@@ -523,23 +534,11 @@ def _expected_units(
     carrier = declared_carrier(task_family)
     declared = (*((carrier,) if carrier else ()), *expected_names(task_family))
     units.extend((-1, name, name.split()) for name in declared)
+    named = {name.casefold() for name in declared}
+    for phrase in lexicon.texts() if lexicon is not None else ():
+        if phrase not in named:
+            units.append((-1, phrase, phrase.split()))
     return units
-
-
-def _covered_words(finding: Entity, words: Sequence[Entity]) -> list[Entity]:
-    """The consensus words a finding's own extent reaches, by the hull of their source timings.
-
-    Args:
-        finding: A live ``pii`` entity.
-        words: PREPROCESS's consensus words, in stream order.
-
-    Returns:
-        The covered words, in stream order. Empty when the finding carries no extent.
-    """
-    if finding.extent is None:
-        return []
-    bounds = (float(finding.extent[0]), float(finding.extent[1]))
-    return [word for word in words if word.extent is not None and _overlaps(word_hull(word), bounds)]
 
 
 def _expected_exemptions(
@@ -551,10 +550,10 @@ def _expected_exemptions(
 ) -> list[_Exemption]:
     """Which findings the declared stimulus accounts for.
 
-    A candidate is exempt only when every word its extent reaches carries a non-empty normalised
-    key, those words' own hulls span the whole of the extent, and their keys occur in order and
-    contiguously inside one declared unit, each within ``near`` of the unit's own token. A finding
-    that reaches every consensus word is never exempt.
+    A candidate is exempt only when every word SPEECH placed it on (its ``word_ids``) carries a
+    non-empty normalised key and those keys occur in order and contiguously inside one declared unit,
+    each within ``near`` of the unit's own token. A finding without placed words, or one on every
+    consensus word, is never exempt.
 
     Args:
         findings: The live ``pii`` entities.
@@ -571,19 +570,14 @@ def _expected_exemptions(
         return []
     keyed = [(prompt, text, [normalise(token) for token in tokens]) for prompt, text, tokens in units]
     exemptions: list[_Exemption] = []
+    by_id = {word.id: word for word in words}
     for finding in findings:
-        covered = _covered_words(finding, words)
-        if not covered or len(covered) == len(words):
+        ids = [str(i) for i in (finding.attributes.get("word_ids") or ())]
+        covered = [by_id[i] for i in ids if i in by_id]
+        if finding.extent is None or not covered or len(covered) != len(ids) or len(covered) == len(words):
             continue
         keys = [normalise(str(word.attributes.get("text") or "")) for word in covered]
         if not all(keys):
-            continue
-        hulls = [word_hull(word) for word in covered]
-        assert finding.extent is not None  # _covered_words returns nothing without one
-        if (
-            min(start for start, _ in hulls) > float(finding.extent[0]) + _COVERAGE_TOLERANCE_S
-            or max(end for _, end in hulls) < float(finding.extent[1]) - _COVERAGE_TOLERANCE_S
-        ):
             continue
         for unit_index, (prompt_index, unit_text, unit_keys) in enumerate(keyed):
             offset = near.run_offset(unit_keys, keys)
@@ -786,7 +780,12 @@ def redact(
     findings = _findings(store)
     words = consensus_words(store)
     residue = residue_words(store)
-    units = _expected_units(hint, task_family, terminators=str(config.require(_TERMINATORS_KEY)))
+    units = _expected_units(
+        hint,
+        task_family,
+        terminators=str(config.require(_TERMINATORS_KEY)),
+        lexicon=task_lexicon(config, task_family),
+    )
     exemptions = _expected_exemptions(findings, words, units, branch_params(config).p_normalise, near_match(config))
     exempt_findings = {exemption.finding_id for exemption in exemptions}
     exempt_word_ids = frozenset(word_id for exemption in exemptions for word_id in exemption.word_ids)
@@ -1094,6 +1093,17 @@ def same_extents(one: Sequence[RedactionExtent], other: Sequence[RedactionExtent
     return [(float(e.start), float(e.end)) for e in one] == [(float(e.start), float(e.end)) for e in other]
 
 
+@lru_cache(maxsize=1)
+def name_families() -> frozenset[str]:
+    """The families whose findings name something by a proper noun.
+
+    Returns:
+        ``name_families`` from ``data/pii_category_families.yaml``, upper-cased.
+    """
+    raw = yaml.safe_load(FAMILIES_PATH.read_text()) or {}
+    return frozenset(str(family).upper() for family in raw.get("name_families") or ())
+
+
 def category_family(category: str) -> str:
     """The family a detector or reviewer category belongs to, in the reviewer's own terms.
 
@@ -1129,6 +1139,8 @@ class MaskWord:
             (:func:`~senselab.audio.workflows.triage.residue.is_proper_form`).
         propagated: Whether a reviewer ``release`` entry named the same term elsewhere in the recording
             -- the same surface under the same family -- and unmasked this occurrence with it.
+        kind_cut: Whether the name kind cut released it: a word not in proper form under a mask
+            whose findings are all of :func:`name_families` and which holds a proper noun.
     """
 
     word_id: str
@@ -1140,6 +1152,7 @@ class MaskWord:
     categories: tuple[str, ...] = ()
     proper: bool = False
     propagated: bool = False
+    kind_cut: bool = False
 
 
 @dataclass(frozen=True)
@@ -1235,6 +1248,12 @@ class MaskPlan:
         unplaced: The detector findings SPEECH could not place on words, and what became of each.
         redact_planned: REDACT's own padded, merged extents, which the released copy replaces
             wherever the final masks differ from them.
+        task_lexicon_ids: The words a finding covered that are the task's own vocabulary
+            (:mod:`~senselab.audio.workflows.triage.task_lexicon`), which no mask covers.
+        named_no_words: Whether the reading reported ``flagged`` with no proposal entry, so it moved
+            no mask.
+        releases: The reviewer's ``release`` entries as it wrote them -- text, category, the Safe
+            Harbor identifier it named and its reason -- and whether each placed on words.
     """
 
     masks: tuple[MaskOutcome, ...]
@@ -1245,6 +1264,9 @@ class MaskPlan:
     padding_ms: int
     unplaced: tuple[UnplacedFinding, ...] = ()
     redact_planned: tuple[RedactionExtent, ...] = ()
+    task_lexicon_ids: tuple[str, ...] = ()
+    named_no_words: bool = False
+    releases: tuple[Mapping[str, Any], ...] = ()
 
     @property
     def planned(self) -> list[RedactionExtent]:
@@ -1341,6 +1363,7 @@ class MaskPlan:
                     "outcome": mask.outcome,
                     "source": mask.source,
                     "categories": list(mask.categories),
+                    "safe_harbor": list(safe_harbor_codes(mask.planned.category)),
                     "task_words_n": mask.task_words_n,
                     "words": [
                         {
@@ -1353,6 +1376,7 @@ class MaskPlan:
                             "categories": list(word.categories),
                             "proper": word.proper,
                             "propagated": word.propagated,
+                            "kind_cut": word.kind_cut,
                         }
                         for word in mask.words
                     ],
@@ -1381,25 +1405,31 @@ class MaskPlan:
                     "cohort_diagnosis": span.cohort_diagnosis,
                     "agreement": span.agreement,
                     "entry_index": span.entry_index,
+                    "safe_harbor": list(safe_harbor_codes(span.category)),
                 }
                 for span in self.proposals
             ],
+            "releases": [dict(entry) for entry in self.releases],
             "unplaced_findings": [
                 {"category": finding.category, "family": finding.family, "state": finding.state, "text": finding.text}
                 for finding in self.unplaced
             ],
             "release_unplaced": list(self.release_unplaced),
             "release_off_mask": list(self.release_off_mask),
+            "task_lexicon_ids": list(self.task_lexicon_ids),
+            "reviewer_named_no_words": self.named_no_words,
             "counts": {
                 "masks_n": len(self.masks),
                 "final_masks_n": len(self.final),
                 "task_words_n": sum(mask.task_words_n for mask in self.masks),
+                "task_lexicon_words_n": len(self.task_lexicon_ids),
                 **{
                     f"{outcome}_n": sum(1 for mask in self.masks if mask.outcome == outcome)
                     for outcome in MASK_OUTCOMES
                 },
                 **{f"{state}_n": self.count(state) for state in WORD_STATES},
                 "propagated_n": len({w.word_id for mask in self.masks for w in mask.words if w.propagated}),
+                "kind_cut_n": len({w.word_id for mask in self.masks for w in mask.words if w.kind_cut}),
                 "unplaced_n": len(self.unplaced),
                 **{
                     f"proposals_{agreement}_n": sum(1 for span in self.proposals if span.agreement == agreement)
@@ -1554,12 +1584,16 @@ class _Finding:
     task_words_n: int
 
 
-def _located_findings(store: ProvStore, residue_ids: set[str]) -> tuple[list[_Finding], list[dict[str, str]]]:
+def _located_findings(
+    store: ProvStore, residue_ids: set[str], task_ids: Collection[str] = frozenset()
+) -> tuple[list[_Finding], list[dict[str, str]]]:
     """The findings on the words SPEECH placed them on, and those it could not place.
 
     Args:
         store: The provenance store.
         residue_ids: The residue's word ids; empty where the scan read none, which admits every word.
+        task_ids: Words that are the task's own content though inside the residue (its task
+            lexicon); a finding never masks them, and they count as its task words.
 
     Returns:
         ``(located, unplaced)``: located in stream order, each covering the residue words of its
@@ -1583,8 +1617,8 @@ def _located_findings(store: ProvStore, residue_ids: set[str]) -> tuple[list[_Fi
         ids = finding.attributes.get("word_ids")
         if ids is None:
             raise ValueError("a pii finding names no word_ids; the store predates SPEECH's placement, replay it")
-        members = tuple(str(i) for i in ids if not residue_ids or str(i) in residue_ids)
-        task = sum(1 for i in ids if residue_ids and str(i) not in residue_ids)
+        members = tuple(str(i) for i in ids if (not residue_ids or str(i) in residue_ids) and str(i) not in task_ids)
+        task = sum(1 for i in ids if (residue_ids and str(i) not in residue_ids) or str(i) in task_ids)
         located.append(
             _Finding(
                 finding.id,
@@ -1608,6 +1642,7 @@ def mask_plan(
     human_review_categories: Sequence[str] = (),
     protected_categories: Sequence[str] = (),
     cohort_conditions: str | None = None,
+    lexicon: TaskLexicon | None = None,
 ) -> MaskPlan:
     """Which words stay masked: one mask per detector finding, the reviewer's unmasks, and the trim.
 
@@ -1635,6 +1670,8 @@ def mask_plan(
             ``release`` entry naming it does.
         cohort_conditions: The cohort profile a human-review proposal's text is read against, as
             ``verdict.cohort_conditions``; every such proposal is ``other`` where None.
+        lexicon: The declared family's task lexicon; a word inside one of its phrases is task content
+            no mask covers. Where None, the family's declared names, compared exactly.
 
     Returns:
         The plan.
@@ -1651,7 +1688,12 @@ def mask_plan(
     tokens = _tokens(residue)
     words = [word for word in consensus_words(store) if word.extent is not None]
     by_id = {word.id: word for word in words}
-    located, unplaced_records = _located_findings(store, residue_ids)
+    vocabulary = lexicon if lexicon is not None else declared_names_lexicon(declared_task_family(store))
+    declared_ids = {words[i].id for i in vocabulary.positions([str(w.attributes.get("text") or "") for w in words])}
+    located, unplaced_records = _located_findings(store, residue_ids, declared_ids)
+    finding_word_ids = {
+        str(i) for finding in live_entities(store, "pii") for i in (finding.attributes.get("word_ids") or ())
+    }
     unplaced_categories = [str(record.get("category") or "") for record in unplaced_records]
     redact_ran = find_verdict(store, NODE) is not None
 
@@ -1697,10 +1739,21 @@ def mask_plan(
 
     named: set[str] = set()
     unplaced_quotes: list[str] = []
+    releases: list[dict[str, Any]] = []
     for entry in entries:
         if str(entry.get("action")) != "release":
             continue
         hits = _place(str(entry.get("text") or ""), tokens)
+        category = str(entry.get("category") or "OTHER").upper()
+        releases.append(
+            {
+                "text": str(entry.get("text") or ""),
+                "category": category,
+                "safe_harbor": str(entry.get("safe_harbor") or "") or "".join(safe_harbor_codes(category)[:1]),
+                "why": str(entry.get("why") or ""),
+                "placed": bool(hits),
+            }
+        )
         if not hits:
             unplaced_quotes.append(str(entry.get("text") or ""))
             continue
@@ -1724,7 +1777,23 @@ def mask_plan(
     }
     applied = reviewer_applies and bool(named)
     released = (named | propagated) if applied else set()
-    keepable = {word_id for member_ids in groups for word_id in member_ids if content(by_id[word_id])}
+    name_kinds = name_families()
+    name_only: set[str] = set()
+    elsewhere: set[str] = set()
+    for member_ids, members in groups.items():
+        group = [by_id[word_id] for word_id in member_ids]
+        if all(category_family(finding.category) in name_kinds for finding in members):
+            if any(proper(word) for word in group):
+                name_only.update(word.id for word in group if not proper(word))
+        else:
+            elsewhere.update(member_ids)
+    kind_cut = name_only - elsewhere
+    keepable = {
+        word_id
+        for member_ids in groups
+        for word_id in member_ids
+        if content(by_id[word_id]) and word_id not in kind_cut
+    }
     kept_ids = keepable - released
 
     proposals: list[ReviewerSpan] = []
@@ -1821,6 +1890,7 @@ def mask_plan(
                 categories=tuple(sorted(found.get(word.id, set()))),
                 proper=proper(word),
                 propagated=word.id in propagated,
+                kind_cut=word.id in kind_cut,
             )
             for word in group
         )
@@ -1920,6 +1990,9 @@ def mask_plan(
         padding_ms=int(padding_ms),
         unplaced=unplaced,
         redact_planned=tuple(redact_planned),
+        task_lexicon_ids=tuple(sorted(declared_ids & finding_word_ids)),
+        named_no_words=bool(read and reading.get("status") == "flagged" and not entries),
+        releases=tuple(releases),
     )
 
 

@@ -1,0 +1,30 @@
+# Task content for cinderella-story: the words and phrases a retelling of the story is made of, so the
+# residue never hands them to the PII detectors and no mask ever covers them. Lower-case; a phrase
+# matches as a whole run of transcript words; each word is compared after the residue's own
+# normalisation, a trailing possessive or plural, and (five letters or more) the stimulus near-match.
+# The derivation, sources and exclusions are in
+# specs/20260928-reviewer-contradictions-and-task-lexicon/design.md.
+family: cinderella-story
+stimulus: >-
+  The wordless 25-picture Cinderella sequence of the DementiaBank/AphasiaBank discourse protocol,
+  from Walt Disney's Cinderella (ISBN 0-7364-1296-4):
+  https://talkbank.org/dementia/protocol/participant/sequences/Cinderella/index.html
+sources:
+  core_lexicon: >-
+    Dalton & Richardson (2015), AJSLP 24(4) S923-S938; Dalton, Kim, Richardson & Wright (2020),
+    Semin Speech Lang 41(1) 45-60 -- the 95-lemma Cinderella checklist as shipped in
+    github.com/rbcavanaugh/coreLexicon R/sysdata.rda (commit 5f025c75fbf1), story-content lemmas only.
+  cast: The storybook's named characters (senselab nodes/branches.py CINDERELLA_CAST).
+  time_phrases: >-
+    The DATE_TIME-family detector texts on the 258 r7 cinderella-story recordings that are story
+    events (midnight, one day, the next day, twelve o'clock, one night, ...).
+  owner: Owner, 2026-09-28 -- the common Cinderella themes approved as task content.
+characters: [cinderella, prince, prince charming, charming, princess, fairy godmother, godmother, fairy,
+  king, queen, duke, grand duke, stepmother, stepsister, sister, mother, father, daughter, lady tremaine,
+  tremaine, anastasia, drizella, lucifer, gus, jaq, bruno, mouse, mice, horse, footman, coachman, lizard]
+objects: [pumpkin, carriage, coach, glass slipper, slipper, glass shoe, shoe, ball, gown, dress, ballgown,
+  wand, magic, spell, clock, invitation, castle, palace, kingdom, staircase, stairs, steps]
+events: [dance, dancing, marry, married, wedding, happily ever after, once upon a time]
+time: [midnight, stroke of midnight, twelve o'clock, twelve am, before midnight, almost midnight,
+  one day, next day, the next day, one night, that night, the night, all night, next morning,
+  the next morning, one evening, that evening]

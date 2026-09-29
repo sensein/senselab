@@ -322,6 +322,13 @@ UNPLACED_FINDING_OPEN = (
 Controlled vocabulary, with the families of the unplaced findings appended.
 """
 
+REVIEWER_NAMED_NO_WORDS = "the redaction reviewer judged the redaction wrong but named no words"
+"""The flag ground a flagged reading with no proposal entries contributes, under
+``verdict.llm_contradiction_flags``.
+
+A reading may only move a mask by naming the words it moves, so such a reading moves none: REDACT's
+masks stand, and the recording goes to a person."""
+
 REVIEWER_HEARD_SECOND_SPEAKER = "the redaction reviewer read more than one speaker in the transcript"
 """The flag ground a reading's ``speakers: more_than_one`` contributes, under ``verdict.llm_second_speaker_flags``,
 where diarization's own gate has not already flagged another speaker in the task extent."""
@@ -462,6 +469,8 @@ class FoldPolicy:
             in which case every such proposal is an ``other`` condition.
         llm_second_speaker_flags: Whether a reading that heard more than one speaker is a flag ground
             on the triage axis.
+        llm_contradiction_flags: Whether a flagged reading that names no words is a flag ground on
+            the triage axis.
     """
 
     conformance_flags: bool = True
@@ -476,6 +485,7 @@ class FoldPolicy:
     trim_protected_categories: tuple[str, ...] = ()
     cohort_conditions: str | None = None
     llm_second_speaker_flags: bool = False
+    llm_contradiction_flags: bool = False
     conformance_flags_by_family: dict[str, bool] = field(default_factory=dict)
 
     @classmethod
@@ -507,6 +517,7 @@ class FoldPolicy:
             ),
             cohort_conditions=str(config.get(f"{_SECTION}.cohort_conditions") or "") or None,
             llm_second_speaker_flags=bool(config.get(f"{_SECTION}.llm_second_speaker_flags", False)),
+            llm_contradiction_flags=bool(config.get(f"{_SECTION}.llm_contradiction_flags", False)),
             conformance_flags_by_family={
                 str(family): bool(flags)
                 for family, flags in (config.get(f"{_SECTION}.conformance_flags_by_family") or {}).items()
@@ -663,6 +674,20 @@ def _silence(state: RunState | None) -> str:
     if state is RunState.COMPLETED:
         return "completed without a verdict"
     return "never ran"
+
+
+def reviewer_named_no_words(llm_redaction: Mapping[str, Any] | None) -> bool:
+    """Whether a reading flagged the recording and named no words to move.
+
+    Args:
+        llm_redaction: REVIEW's annotation, or None where it wrote none.
+
+    Returns:
+        True where the reviewer read the text, reported it ``flagged``, and its proposal carries no
+        entry at all.
+    """
+    annotation = dict(llm_redaction or {})
+    return annotation.get("status") == "flagged" and not list(annotation.get("proposal") or ())
 
 
 def _reviewer_found_residue(llm_redaction: Mapping[str, Any] | None) -> bool:
@@ -1089,6 +1114,8 @@ def fold_file_verdict(
     )
     if rules.llm_second_speaker_flags and annotation.get("speakers") == "more_than_one" and not diarized_other:
         reasons.append(NodeVerdict(_VERDICT, Outcome.FLAG, None, REVIEWER_HEARD_SECOND_SPEAKER))
+    if rules.llm_contradiction_flags and reviewer_named_no_words(annotation):
+        reasons.append(NodeVerdict(_VERDICT, Outcome.FLAG, None, REVIEWER_NAMED_NO_WORDS))
     open_families = sorted({family for family, state in unplaced if state in (UNPLACED_OPEN, UNPLACED_UNREAD)})
     if open_families:
         ground_text = (

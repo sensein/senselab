@@ -122,6 +122,7 @@ from senselab.audio.workflows.triage.stimulus import (
     align_stimulus,
     near_match,
 )
+from senselab.audio.workflows.triage.task_lexicon import task_lexicon
 from senselab.audio.workflows.triage.vocabulary import TASK
 from senselab.text.tasks.pii_detection.api import PiiScan, scan_for_pii
 from senselab.utils.data_structures import HFModel, SpeechBrainModel
@@ -2301,6 +2302,7 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
         prompt_tokens(hint),
         residue_rule(config),
         speech_type=hint.speech_type if hint is not None else None,
+        lexicon=task_lexicon(config, declared_family),
     )
     residue_positions = {lexical_index[position] for position in residue.positions}
     haystacks: list[tuple[str, str, list[int], list[str]]] = []

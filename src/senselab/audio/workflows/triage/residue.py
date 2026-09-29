@@ -25,6 +25,7 @@ from senselab.audio.workflows.triage.nodes.branches import (
 )
 from senselab.audio.workflows.triage.nodes.gates import Pattern
 from senselab.audio.workflows.triage.stimulus import NearMatch, near_match
+from senselab.audio.workflows.triage.task_lexicon import TaskLexicon
 
 if TYPE_CHECKING:  # pragma: no cover
     from senselab.audio.workflows.triage.config import TriageConfig
@@ -475,6 +476,7 @@ def task_residue(
     stimulus: Sequence[str],
     rule: ResidueRule,
     speech_type: str | None = None,
+    lexicon: TaskLexicon | None = None,
 ) -> Residue:
     """Which transcript words are neither non-lexical nor what the task asked for.
 
@@ -485,6 +487,8 @@ def task_residue(
         rule: The residue rule.
         speech_type: The declared speech type; ``recall`` reads a free-response family that declares
             a stimulus as :data:`RECALL`.
+        lexicon: The family's task lexicon (:mod:`~senselab.audio.workflows.triage.task_lexicon`); a
+            word inside a whole-run match of any of its phrases is task content, whatever the method.
 
     Returns:
         The residue over ``texts``.
@@ -528,6 +532,8 @@ def task_residue(
         expected = _declared_sequence(task_family, stimulus)
         flagged = _aligned_residue(keys, expected, rule) if expected else set(range(len(keys)))
         task = {index for index in range(len(keys)) if index not in flagged or index in in_vocabulary}
+    if lexicon is not None and lexicon.phrases:
+        task |= lexicon.positions([texts[position] for position in lexical])
     kept = tuple(position for index, position in enumerate(lexical) if index not in task)
     content = any(is_content_word(texts[position]) for position in kept)
     return Residue(kept, method, non_lexical_n, len(task), content)

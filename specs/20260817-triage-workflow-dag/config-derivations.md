@@ -1713,13 +1713,24 @@ verdict.llm_second_speaker_flags: true
   `dominant_speaker_share_min` gate already failed. 379 flags on the reviewed r6 corpus. Measurement in
   `specs/20260927-mask-placement-and-second-speaker/design.md` §4.
 
-pii.name_words_max: 3
+verdict.llm_contradiction_flags: true
+  Whether a REVIEW reading reported `flagged` with no proposal entry at all is a triage flag ground
+  (`REVIEWER_NAMED_NO_WORDS`). Owner, 2026-09-28, on an r7 Cinderella card: the reviewer read the
+  original as clean and the redaction as incomplete and named nothing, so every mask stood. A reading
+  moves a mask only by naming its words, so such a reading moves none; the flag sends the recording to
+  a person and never moves the release. 75 such readings on r7 (41 cinderella-story). Measurement in
+  `specs/20260928-reviewer-contradictions-and-task-lexicon/design.md`.
+
+pii.name_words_max: 1
   A PERSON, LOCATION or ORGANIZATION finding placed on more words than this is cut to its proper
-  nouns. Owner, 2026-09-27: a detector span that overruns its words must be cut to the words that
-  carry it. On the r6 placement replay (8,516 recordings, 61,301 findings) the cut dropped content
-  words from 226 PERSON and 115 LOCATION spans of four or more words; no span of three or fewer is
-  touched, which keeps "my brother Alan" and two-word place names whole. Measurement in
-  `specs/20260927-mask-placement-and-second-speaker/design.md` §9.
+  nouns (the family set is `name_families` in `data/pii_category_families.yaml`). Was 3 (owner,
+  2026-09-27: cut an overrunning span to the words that carry it; on the r6 placement replay the cut
+  dropped content words from 226 PERSON and 115 LOCATION spans of four or more words). Lowered to 1 by
+  the owner, 2026-09-28, on an r7 free-speech-v2 card where the two-word LOC "Florida Like" kept "like"
+  masked: a name is its proper nouns at any length, so "my brother Alan" keeps "Alan". A span with no
+  proper noun (a name the recognizer wrote lower-case) keeps its run. The fold applies the same cut to
+  stores written before this (`kind_cut` on the ledger). Measurement in
+  `specs/20260928-reviewer-contradictions-and-task-lexicon/design.md`.
 
 verdict.conformance_flags_by_family: {}
   Declared task family -> whether a non-conformance on it flags, overriding `conformance_flags`.
