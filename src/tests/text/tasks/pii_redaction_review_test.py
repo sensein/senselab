@@ -375,6 +375,8 @@ def test_a_place_released_without_a_reason_is_fed_back() -> None:
     assert answer_problem(result(reasoned), "i grew up in Florida", "i grew up in [LOCATION]") is None
     empty = ReviewResult(available=True, redaction="incomplete", original="clean")
     assert "listed no words" in (answer_problem(empty, "hello alice", "hello [PERSON]") or "")
+    agreeing = ReviewResult(available=True, redaction="complete", original="carries_pii")
+    assert answer_problem(agreeing, "hello alice", "hello [PERSON]") is None
 
 
 def test_the_parser_keeps_the_safe_harbor_letter() -> None:

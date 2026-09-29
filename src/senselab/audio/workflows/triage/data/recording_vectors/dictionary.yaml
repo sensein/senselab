@@ -318,7 +318,9 @@ columns:
 
   task_words_n:
     units: count
-    description: Task words (outside the residue) among the words a mask's findings name; no mask covers them.
+    description: >-
+      Task words among the words a mask's findings name -- outside the residue, or in the task lexicon
+      (`stimulus.task_lexicons`, the declared names) -- which no mask covers.
     computation: The ledger's `counts.task_words_n`, summed over masks.
     source: [recording_vectors.py:_ledger_columns, nodes/redact.py:MaskPlan.record, nodes/redact.py:mask_plan]
     null_means: No `pii_ledger`.
@@ -343,9 +345,10 @@ columns:
   unmasked_by_trim_n:
     units: count
     description: >-
-      A finding's own words the trim released because they are not content words. A word written as a
-      proper noun under a located finding in a `verdict.trim_protected_categories` category counts as
-      content and is never trimmed.
+      A finding's own words the trim released because they are not content words, or because the name kind
+      cut released them (a word not in proper form under a mask whose findings are all name families and
+      which holds a proper noun; ledger word `kind_cut`). A word written as a proper noun under a located
+      finding in a `verdict.trim_protected_categories` category counts as content and is never trimmed.
     computation: The ledger's `counts.unmasked_by_trim_n`, distinct word ids in that state.
     source: [recording_vectors.py:_ledger_columns, nodes/redact.py:MaskPlan.count, nodes/redact.py:mask_plan]
     null_means: No `pii_ledger`.

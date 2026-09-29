@@ -683,11 +683,16 @@ def reviewer_named_no_words(llm_redaction: Mapping[str, Any] | None) -> bool:
         llm_redaction: REVIEW's annotation, or None where it wrote none.
 
     Returns:
-        True where the reviewer read the text, reported it ``flagged``, and its proposal carries no
-        entry at all.
+        True where the reviewer read the text, reported it ``flagged``, judged the redaction
+        ``incomplete``, and its proposal carries no entry at all. A reading that the original carries
+        identifying content and the redaction is complete agrees with the masks; it needs no words.
     """
     annotation = dict(llm_redaction or {})
-    return annotation.get("status") == "flagged" and not list(annotation.get("proposal") or ())
+    return (
+        annotation.get("status") == "flagged"
+        and annotation.get("redaction") == "incomplete"
+        and not list(annotation.get("proposal") or ())
+    )
 
 
 def _reviewer_found_residue(llm_redaction: Mapping[str, Any] | None) -> bool:

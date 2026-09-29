@@ -619,7 +619,9 @@ _RESET_WORDS = ("i", "met", "alice", "in", "brooklyn", "today")
 _RESET_FINDINGS = [("PERSON", _word_extent(2)), ("LOCATION", _word_extent(4))]
 
 
-def _annotate(store: ProvStore, proposal: Sequence[dict[str, str]], *, original: str = "clean") -> None:
+def _annotate(
+    store: ProvStore, proposal: Sequence[dict[str, str]], *, original: str = "clean", redaction: str = ""
+) -> None:
     """REVIEW's annotation, carrying one proposal."""
     agent = store.agent(agent_type="software", version="senselab test-review")
     activity = store.activity(node="REVIEW", step="read", parameters={})
@@ -631,6 +633,7 @@ def _annotate(store: ProvStore, proposal: Sequence[dict[str, str]], *, original:
             "name": REDACTION_LLM_ANNOTATION,
             "status": "flagged",
             "original": original,
+            "redaction": redaction,
             "proposal": [dict(entry) for entry in proposal],
         },
     )
@@ -2612,7 +2615,7 @@ class TestTaskWordsKindCutAndAReadingThatNamesNothing:
         self, store: ProvStore, redact_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """r7's free-speech-v2 card: LOC "Florida Like"; the reviewer releases "in Florida"; nothing stays."""
-        words = ["i", "went", "in", "Florida", "like", "every", "summer"]
+        words = ["i", "went", "in", "Florida", "like", "every", "summer", "i", "like", "it"]
         _seed_redact_store(
             store,
             tmp_path,
@@ -2630,6 +2633,19 @@ class TestTaskWordsKindCutAndAReadingThatNamesNothing:
         assert words_of["Florida"].state == UNMASKED_BY_REVIEWER
         assert (words_of["like"].state, words_of["like"].kind_cut) == (UNMASKED_BY_TRIM, True)
         assert plan.final == []
+
+    def test_a_name_part_the_transcript_uses_nowhere_else_is_not_cut(
+        self, store: ProvStore, redact_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """r7 replay: "ben Fletcher" -- a lower-case first name is still a name, so the cut leaves it."""
+        words = ["my", "friend", "ben", "Fletcher", "called"]
+        _seed_redact_store(
+            store, tmp_path, words=words, findings=[("PERSON", (_word_extent(2)[0], _word_extent(3)[1]))]
+        )
+        _stub_pii(monkeypatch, findings=[])
+        redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
+        plan = _plan(store, applies=False)
+        assert _states(plan) == {"ben": MASKED, "Fletcher": MASKED}
 
     def test_a_lower_case_name_keeps_its_mask(
         self, store: ProvStore, redact_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -2652,7 +2668,7 @@ class TestTaskWordsKindCutAndAReadingThatNamesNothing:
         _seed_redact_store(store, tmp_path, words=["hello", "alice"], findings=[("PERSON", _word_extent(1))])
         _stub_pii(monkeypatch, findings=[])
         redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
-        _annotate(store, [], original="clean")
+        _annotate(store, [], original="clean", redaction="incomplete")
         plan = _plan(store)
         assert plan.named_no_words is True
         assert _states(plan) == {"alice": MASKED}

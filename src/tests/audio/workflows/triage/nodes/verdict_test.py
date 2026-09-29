@@ -1169,6 +1169,7 @@ class TestTheRedactionReviewerAnnotatesAndThisNodeDecides:
             status="flagged",
             iterations=1,
             flagged=["PERSON"],
+            redaction="incomplete",
             proposal=proposal,
             model_id="stub/model",
             revision="a" * 40,

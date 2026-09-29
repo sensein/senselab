@@ -555,7 +555,7 @@ def answer_problem(result: "ReviewResult", original: str, redacted: str | None) 
     Returns:
         None where the answer is usable. Otherwise one sentence naming the problem: a judgment that
         asks for the redaction to change (incomplete, clean original over removed words, or words
-        that carry something identifying) with an empty proposal, or proposal quotes that do not
+        that carry something identifying where no complete redaction covers them) with an empty proposal, or proposal quotes that do not
         occur in the ORIGINAL.
     """
     if not result.available:
@@ -564,7 +564,7 @@ def answer_problem(result: "ReviewResult", original: str, redacted: str | None) 
     judged = []
     if result.redaction == "incomplete":
         judged.append("the redaction incomplete")
-    if result.original == "carries_pii":
+    if result.original == "carries_pii" and result.redaction != "complete":
         judged.append("the ORIGINAL to carry something identifying")
     if result.original == "clean" and masked:
         judged.append("the ORIGINAL clean while the RELEASED text still removes words")
