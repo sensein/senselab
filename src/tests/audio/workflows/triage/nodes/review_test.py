@@ -506,6 +506,45 @@ class TestTheLoopStopsWhenAnotherRoundCannotDiffer:
         annotation = _annotation(store)
         assert annotation["converged"] is True and annotation["problem"] is None
 
+    def test_an_answer_without_its_conditions_part_is_read_again(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A reading that leaves out CONDITIONS is fed back; the next round's condition is recorded."""
+        store = ProvStore(run_id="r")
+        _seed(store, words=["i", "have", "essential", "tremors"])
+        silent = ReviewResult(
+            available=True,
+            reasoning="Nothing identifies the speaker.",
+            redaction="not_applicable",
+            original="clean",
+            speakers="one",
+            conditions_answered=False,
+            model_id="s/m",
+            revision="a" * 40,
+        )
+        listed = ReviewResult(
+            available=True,
+            reasoning="A diagnosis is named.",
+            redaction="not_applicable",
+            original="clean",
+            speakers="one",
+            proposal=[
+                ReviewProposal(text="essential tremors", action="redact", category="CONDITION", why="a diagnosis")
+            ],
+            model_id="s/m",
+            revision="a" * 40,
+        )
+        seen = _stub(monkeypatch, [silent, listed, _clean()])
+        review(store, _config(tmp_path, LLM_ON + "    max_iterations: 3\n"))
+        rounds = _rounds_in(store)
+        assert len(seen) >= 2
+        assert "no CONDITIONS part" in rounds[1]["feedback"]
+        assert any(
+            entry["category"] == "CONDITION" and entry["text"] == "essential tremors"
+            for round_ in rounds
+            for entry in round_["proposal"]
+        )
+
     def test_a_quote_not_in_the_text_is_fed_back(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """A proposal quoting words that are not there cannot be applied, so the reviewer is told which."""
         store = ProvStore(run_id="r")

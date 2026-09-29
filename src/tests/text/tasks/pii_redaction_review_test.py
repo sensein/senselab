@@ -388,3 +388,68 @@ def test_the_parser_keeps_the_safe_harbor_letter() -> None:
         '[{"text": "Florida", "action": "release", "category": "LOCATION", "safe_harbor": "b", "why": "a state"}]'
     )
     assert [(entry.safe_harbor, entry.why) for entry in parsed.proposal] == [("B", "a state")]
+
+
+def test_the_conditions_part_is_parsed_into_condition_entries() -> None:
+    """Every listed health condition becomes a ``redact`` entry of category CONDITION, beside the proposal."""
+    from senselab.text.tasks.pii_detection.redaction_review import CONDITION, REDACT, parse_completion
+
+    parsed = parse_completion(
+        "REASONING: the speaker names two conditions and a city\nREDACTION: incomplete\nORIGINAL: carries_pii\n"
+        'SPEAKERS: one\nCONDITIONS: [{"text": "essential tremors", "why": "a diagnosis"}, '
+        '{"text": "synovial joint cyst", "why": "a diagnosis"}]\n'
+        'PROPOSAL: [{"text": "St. Petersburg", "action": "redact", "category": "LOCATION", "safe_harbor": "B", '
+        '"why": "a city"}]'
+    )
+    assert parsed.conditions_answered
+    assert [(entry.text, entry.action, entry.category) for entry in parsed.proposal] == [
+        ("St. Petersburg", REDACT, "LOCATION"),
+        ("essential tremors", REDACT, CONDITION),
+        ("synovial joint cyst", REDACT, CONDITION),
+    ]
+    assert parsed.reasoning == "the speaker names two conditions and a city"
+
+
+def test_a_condition_listed_twice_is_one_entry_and_order_of_parts_does_not_matter() -> None:
+    """A condition in both PROPOSAL and CONDITIONS is kept once; CONDITIONS may follow PROPOSAL."""
+    from senselab.text.tasks.pii_detection.redaction_review import parse_completion
+
+    parsed = parse_completion(
+        "REASONING: x\nREDACTION: complete\nORIGINAL: carries_pii\nSPEAKERS: one\n"
+        'PROPOSAL: [{"text": "Parkinson\'s", "action": "redact", "category": "CONDITION", "why": "x"}]\n'
+        'CONDITIONS: [{"text": "parkinson\'s", "why": "a diagnosis"}, {"text": "tremor", "why": "a symptom"}]'
+    )
+    assert [entry.text for entry in parsed.proposal] == ["Parkinson's", "tremor"]
+    assert parsed.conditions_answered
+
+
+def test_an_answer_without_its_conditions_part_is_fed_back() -> None:
+    """A missing CONDITIONS part is an unusable answer; an empty list is an answer."""
+    from senselab.text.tasks.pii_detection.redaction_review import (
+        ParsedCompletion,
+        ReviewResult,
+        answer_problem,
+        parse_completion,
+    )
+
+    missing = parse_completion("REASONING: x\nREDACTION: complete\nORIGINAL: clean\nSPEAKERS: one\nPROPOSAL: []")
+    assert not missing.conditions_answered and missing.proposal == []
+    none = parse_completion(
+        "REASONING: x\nREDACTION: complete\nORIGINAL: clean\nSPEAKERS: one\nCONDITIONS: []\nPROPOSAL: []"
+    )
+    assert none.conditions_answered
+
+    def result(parsed: ParsedCompletion) -> ReviewResult:
+        return ReviewResult(
+            available=True, redaction="complete", original="clean", conditions_answered=parsed.conditions_answered
+        )
+
+    assert "no CONDITIONS part" in (answer_problem(result(missing), "hello", None) or "")
+    assert answer_problem(result(none), "hello", None) is None
+
+
+def test_the_prompt_asks_for_conditions_apart_from_safe_harbor() -> None:
+    """Conditions are a required part of their own, and no longer a PROPOSAL category."""
+    assert "CONDITIONS: a JSON array" in redaction_review._PROMPT
+    assert "exactly six parts" in redaction_review._PROMPT
+    assert "CONTACT, CONDITION, OTHER" not in redaction_review._PROMPT
