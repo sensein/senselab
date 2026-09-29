@@ -38,7 +38,7 @@ What each bump added:
 | **9** | `task_words_n`, `condition_review_kind`, `cohort_condition_n`, `other_condition_n`, `cohort_diagnoses` |
 | **10** | the eight located gates lose their reading and `_passed` columns, which could never carry a value; their `_bound` columns now carry the fold's resolved `gates.bounds` (§6) |
 | **11** | `propagated_n`, `unplaced_n`, `unplaced_open`, `redact_agreed_n`, `redact_new_n`; the ledger columns now count per-finding masks, and the state columns count only new reviewer proposals. See `specs/20260927-mask-placement-and-second-speaker/design.md` |
-| **12** | `gate_<name>_reason` per applied gate, `gate_reason`, `gate_exempt`, `gate_not_applicable_n`; `gate_<name>_passed` gains `not_applicable`. See `specs/20260929-task-check-alignment/design.md` |
+| **12** | `gate_<name>_reason` per applied gate, `gate_reason`, `gate_exempt`, `gate_not_applicable_n`; `gate_<name>_passed` gains `not_applicable`; `omissions_max` replaced by `content_omission_fraction_max`, `monotone_tolerance_semitones` replaced by `glide_extent_min_semitones`, and `declared_duration_min_fraction` added. See `specs/20260929-task-check-alignment/design.md` |
 
 The data dictionary in the file's metadata was added without a bump: it adds no column, changes no
 layout and no vocabulary, and a reader that ignores the key reads the file exactly as before.
@@ -346,7 +346,7 @@ why the bound is stored per row rather than looked up from the config at read ti
 by a test, so a gate added to the registry fails that test until this schema is bumped with it.
 The design is `specs/20260921-gates-in-verdict/design.md`.
 
-Four columns for each of the 13 gates the fold applies, and one for each of the 8 located gates — 60 columns:
+Four columns for each of the 14 gates the fold applies, and one for each of the 8 located gates — 64 columns:
 
 | column | type | what it carries |
 | --- | --- | --- |

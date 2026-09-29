@@ -1274,6 +1274,8 @@ POINT_TYPES: dict[str, Callable[[Any], Any]] = {
     "event_min_s": float,
     "voiced_strength_min": float,
     "f0_spread_window_s": float,
+    "sweep_smoothing_frames": int,
+    "sweep_reversal_tolerance_semitones": float,
     "pause_min_s": float,
     "run_gap_max_s": float,
     "echo_ngram_n": int,
@@ -1436,6 +1438,8 @@ PARAM_KEYS = (
     "event_min_s",
     "voiced_strength_min",
     "f0_spread_window_s",
+    "sweep_smoothing_frames",
+    "sweep_reversal_tolerance_semitones",
     "pause_min_s",
     "run_gap_max_s",
     "echo_ngram_n",
@@ -2124,6 +2128,52 @@ def longest_monotone_run(values: np.ndarray, tolerance: float) -> tuple[int, int
         for candidate in candidates:
             if best is None or (candidate[1] - candidate[0]) > (best[1] - best[0]):
                 best = candidate
+    return best
+
+
+def smoothed_pitch(values: np.ndarray, frames: int) -> np.ndarray:
+    """The pitch series with its finite frames median-filtered, so one mistracked frame breaks no run.
+
+    Args:
+        values: The pitch series, in semitones, with unvoiced frames non-finite.
+        frames: The median filter's width in finite frames; 1 or less leaves the series as it is.
+
+    Returns:
+        A copy with every finite value replaced by the median of the ``frames`` finite values
+        centred on it; non-finite values are kept where they were.
+    """
+    series = np.asarray(values, dtype=float).copy()
+    finite = np.flatnonzero(np.isfinite(series))
+    if frames <= 1 or finite.size == 0:
+        return series
+    half = frames // 2
+    kept = series[finite]
+    padded = np.concatenate([np.repeat(kept[:1], half), kept, np.repeat(kept[-1:], half)])
+    series[finite] = np.array([float(np.median(padded[i : i + 2 * half + 1])) for i in range(kept.size)])
+    return series
+
+
+def longest_free_interval(
+    extent: tuple[float, float], covered: Sequence[tuple[float, float]]
+) -> tuple[float, float] | None:
+    """The longest part of an extent that no covering interval touches.
+
+    Args:
+        extent: The ``(start, end)`` to search.
+        covered: The intervals to leave out, in any order; those outside ``extent`` are ignored.
+
+    Returns:
+        The longest free ``(start, end)``, or None when the covering intervals leave nothing.
+    """
+    start, end = extent
+    cursor = start
+    best: tuple[float, float] | None = None
+    for lo, hi in sorted((max(lo, start), min(hi, end)) for lo, hi in covered if hi > start and lo < end):
+        if lo > cursor and (best is None or lo - cursor > best[1] - best[0]):
+            best = (cursor, lo)
+        cursor = max(cursor, hi)
+    if end > cursor and (best is None or end - cursor > best[1] - best[0]):
+        best = (cursor, end)
     return best
 
 

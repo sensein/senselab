@@ -1558,10 +1558,10 @@ class TestTheGatesDecideTheDeclaredTask:
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
         assert result.file_verdict.conformance["VOICE"] is True
 
-    def test_a_reading_the_group_bounds_and_the_carrier_misses_does_not_conform(
+    def test_a_held_vowel_whose_pitch_spreads_conforms_and_is_flagged_on_its_quality(
         self, config: TriageConfig, tmp_path: Path
     ) -> None:
-        """One gate failing is the whole conformance failing; the others passing does not rescue it."""
+        """The task asks for the vowel held; its steadiness is a quality flag, not the task undone."""
         store = self._gated_store(
             tmp_path,
             family="maximum-phonation-time",
@@ -1574,7 +1574,10 @@ class TestTheGatesDecideTheDeclaredTask:
             },
         )
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
-        assert result.file_verdict.conformance["VOICE"] is False
+        assert result.file_verdict.conformance["VOICE"] is True
+        flags = {gate["gate"]: gate for gate in result.file_verdict.gates["flagging"]}
+        assert flags["f0_spread_max_semitones"]["passed"] is False
+        assert result.file_verdict.triage is Triage.FLAG
 
     def test_an_absent_reading_is_undetermined_rather_than_a_non_conformance(
         self, config: TriageConfig, tmp_path: Path
@@ -1584,7 +1587,10 @@ class TestTheGatesDecideTheDeclaredTask:
             tmp_path, family="maximum-phonation-time", branch="VOICE", readings={"carrier_duration_s": 8.0}
         )
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
-        assert result.file_verdict.conformance["VOICE"] == UNDETERMINED
+        assert result.file_verdict.conformance["VOICE"] is True, "the held duration is the task"
+        flags = {gate["gate"]: gate for gate in result.file_verdict.gates["flagging"]}
+        assert flags["continuity_min"]["passed"] == UNDETERMINED
+        assert flags["continuity_min"]["reason"] == "absent_not_computed"
 
     def test_a_voice_task_with_no_qualifying_carrier_fails_rather_than_goes_unanswered(
         self, config: TriageConfig, tmp_path: Path
@@ -1654,14 +1660,52 @@ class TestTheGatesDecideTheDeclaredTask:
             "carrier_voiced_fraction": 0.9,
             "carrier_f0_spread_semitones": 9.0,
             "sweep_dominant_fraction": 0.8,
-            "sweep_monotone_reversal_semitones": 0.4,
+            "glide_extent_semitones": 12.0,
         }
         sweep = self._gated_store(tmp_path, family="glides-low-to-high", branch="VOICE", readings=readings)
         vowel = self._gated_store(
             tmp_path, family="maximum-phonation-time", branch="VOICE", readings={**readings, "carrier_continuity": 0.8}
         )
-        assert verdict_module.verdict(sweep, None, config, run_dir=tmp_path).file_verdict.conformance["VOICE"] is True
-        assert verdict_module.verdict(vowel, None, config, run_dir=tmp_path).file_verdict.conformance["VOICE"] is False
+        swept = verdict_module.verdict(sweep, None, config, run_dir=tmp_path).file_verdict
+        held = verdict_module.verdict(vowel, None, config, run_dir=tmp_path).file_verdict
+        assert swept.conformance["VOICE"] is True
+        assert "f0_spread_max_semitones" not in {gate["gate"] for gate in swept.gates["flagging"]}
+        assert {gate["gate"]: gate["passed"] for gate in held.gates["flagging"]}["f0_spread_max_semitones"] is False
+
+    def test_a_glide_that_travels_too_little_does_not_conform(self, config: TriageConfig, tmp_path: Path) -> None:
+        """A sweep is pitch moving: a run that travels a semitone is a held note, however long it runs."""
+        store = self._gated_store(
+            tmp_path,
+            family="glides-low-to-high",
+            branch="VOICE",
+            readings={
+                "carrier_duration_s": 3.0,
+                "carrier_voiced_fraction": 0.9,
+                "sweep_dominant_fraction": 0.9,
+                "glide_extent_semitones": 1.0,
+            },
+        )
+        result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
+        assert result.file_verdict.conformance["VOICE"] is False
+
+    def test_a_prolonged_vowel_is_held_against_its_declared_duration(
+        self, config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """``hold until the timer runs out``: a carrier a fraction of the hold does not conform."""
+        short = self._gated_store(
+            tmp_path,
+            family="prolonged-vowel",
+            branch="VOICE",
+            readings={"carrier_duration_s": 2.0, "production_declared_fraction": 0.17},
+        )
+        held = self._gated_store(
+            tmp_path,
+            family="prolonged-vowel",
+            branch="VOICE",
+            readings={"carrier_duration_s": 9.0, "production_declared_fraction": 0.75},
+        )
+        assert verdict_module.verdict(short, None, config, run_dir=tmp_path).file_verdict.conformance["VOICE"] is False
+        assert verdict_module.verdict(held, None, config, run_dir=tmp_path).file_verdict.conformance["VOICE"] is True
 
     def test_an_out_of_family_report_is_never_gated(self, config: TriageConfig, tmp_path: Path) -> None:
         """``detect_*`` evaluated no task, so the group's gates say nothing about what it reported."""
@@ -1721,8 +1765,8 @@ class TestTheGatesDecideTheDeclaredTask:
         assert gates["group"] == "sustained"
         assert gates["bounds"]["f0_spread_max_semitones"] == 2.0
         applied = {entry["gate"]: entry for entry in gates["applied"]}
-        assert set(applied) == {
-            "production_min_s",
+        assert set(applied) == {"production_min_s"}
+        assert {entry["gate"] for entry in gates["flagging"]} == {
             "voiced_fraction_min",
             "f0_spread_max_semitones",
             "continuity_min",
@@ -1760,9 +1804,8 @@ class TestTheGatesDecideTheDeclaredTask:
         applied = {
             stem: {
                 entry["gate"]: entry
-                for entry in verdict_module.verdict(store, None, settings, run_dir=tmp_path).file_verdict.gates[
-                    "applied"
-                ]
+                for kind in ("applied", "flagging")
+                for entry in verdict_module.verdict(store, None, settings, run_dir=tmp_path).file_verdict.gates[kind]
             }
             for stem, store in (("special", special), ("sibling", sibling))
         }
@@ -1952,5 +1995,5 @@ class TestAnotherSpeakerInsideTheTaskExtentIsAFlag:
         """Source separation separates voices; a held vowel's group names no such gate."""
         store = self._store({self.READING: 0.1}, family="maximum-phonation-time")
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
-        assert result.file_verdict.gates["flagging"] == []
+        assert "dominant_speaker_share_min" not in {gate["gate"] for gate in result.file_verdict.gates["flagging"]}
         assert not any(EXTRA_SPEAKER_IN_EXTENT in why for why in self._flagged(result))

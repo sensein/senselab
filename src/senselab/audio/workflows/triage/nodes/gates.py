@@ -181,7 +181,8 @@ GATE_SPECS: dict[str, GateSpec] = _gate_specs(
         "f0_spread_max_semitones": GateSpec("carrier_f0_spread_semitones", AT_MOST, float),
         "continuity_min": GateSpec("carrier_continuity", AT_LEAST, float),
         "dominant_segment_min_fraction": GateSpec("sweep_dominant_fraction", AT_LEAST, float),
-        "monotone_tolerance_semitones": GateSpec("sweep_monotone_reversal_semitones", AT_MOST, float),
+        "glide_extent_min_semitones": GateSpec("glide_extent_semitones", AT_LEAST, float),
+        "declared_duration_min_fraction": GateSpec("production_declared_fraction", AT_LEAST, float),
         "expected_tokens_matched_min": GateSpec("expected_tokens_matched", AT_LEAST, int),
         "content_omission_fraction_max": GateSpec("expected_content_omitted_fraction", AT_MOST, float),
         "response_min_s": GateSpec("response_duration_s", AT_LEAST, float),
@@ -210,13 +211,8 @@ GATE_KEYS = tuple(GATE_SPECS)
 """The gate names, in declaration order. ``config_test`` pins them against the packaged section."""
 
 CONFORMANCE_GATES: dict[Pattern, tuple[str, ...]] = {
-    Pattern.SUSTAINED: ("production_min_s", "voiced_fraction_min", "f0_spread_max_semitones", "continuity_min"),
-    Pattern.GLIDE: (
-        "production_min_s",
-        "voiced_fraction_min",
-        "monotone_tolerance_semitones",
-        "dominant_segment_min_fraction",
-    ),
+    Pattern.SUSTAINED: ("production_min_s", "declared_duration_min_fraction"),
+    Pattern.GLIDE: ("production_min_s", "dominant_segment_min_fraction", "glide_extent_min_semitones"),
     Pattern.ORDERED_TOKENS: ("expected_tokens_matched_min", "content_omission_fraction_max"),
     Pattern.FREE_RESPONSE: ("response_min_s",),
     Pattern.ITEM_LIST: ("items_min",),
@@ -236,6 +232,9 @@ conformable expectation should answer.
 
 FLAG_GATES: dict[str, str] = {
     "dominant_speaker_share_min": "another speaker holds part of the task extent",
+    "voiced_fraction_min": "the production is voiced for too little of its carrier",
+    "f0_spread_max_semitones": "the held production's pitch spreads more than the bound",
+    "continuity_min": "the held production's spectrum is not continuous",
 }
 """Gates whose failure is a flag ground of its own, and the ground each one names.
 

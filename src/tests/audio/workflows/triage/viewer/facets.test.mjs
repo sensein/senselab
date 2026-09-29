@@ -76,9 +76,9 @@ test('every categorical and set column is offered, and the two unusable ones are
   for (const f of F.CATALOGUE) assert.ok(['categorical', 'set'].includes(f.col.kind), f.col.name)
 })
 
-test('the outcomes of the 13 applied gates are facets, and the set columns face by membership', () => {
+test('the outcomes of the 14 applied gates are facets, and the set columns face by membership', () => {
   const passed = F.CATALOGUE.filter(f => /^gate_.*_passed$/.test(f.col.name))
-  assert.equal(passed.length, 13)
+  assert.equal(passed.length, 14)
   assert.equal(F.BY_NAME.gate_failed_names.mode, 'set')
   assert.equal(F.BY_NAME.flag_nodes.mode, 'set')
   assert.equal(F.BY_NAME.verdict.mode, 'scalar')

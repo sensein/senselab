@@ -66,7 +66,6 @@ MOVED = (
     "f0_spread_max_semitones",
     "gap_off_task_min_s",
     "interval_max_s",
-    "monotone_tolerance_semitones",
     "production_min_s",
     "rate_prominence_min",
     "repeat_overlap_min",
@@ -95,10 +94,12 @@ STAYED = (
     "phoneme_vowel_classes",
     "run_gap_max_s",
     "smoothing_window_s",
+    "sweep_reversal_tolerance_semitones",
+    "sweep_smoothing_frames",
     "trough_return_db",
     "voiced_strength_min",
 )
-"""The fifteen instrument settings the same table keeps in ``branch:``."""
+"""The fifteen instrument settings the same table keeps in ``branch:``, and the two the sweep gained."""
 
 
 def _bounds(group: Pattern, **gates: object) -> GateBounds:
@@ -157,6 +158,7 @@ class TestTheSplitIsTheDesignsTable:
         spelled |= {
             name for group in Pattern for name in (config.get(f"{GATE_SECTION}.{GROUP_LAYER}.{group.name}") or {})
         }
+        spelled |= {name for entry in (config.get(f"{GATE_SECTION}.{FAMILY_LAYER}") or {}).values() for name in entry}
         assert spelled <= set(GATE_SPECS)
         assert spelled == set(GATE_SPECS), sorted(set(GATE_SPECS) - spelled)
 
@@ -397,8 +399,11 @@ class TestAGateResolvesFamilyThenGroupThenDefault:
     def test_the_family_layer_names_only_the_passages_and_stroop(self, config: TriageConfig) -> None:
         """Owner, 2026-09-29: a passage and a timed list tolerate a fraction unread; a sentence does not."""
         layer = config.get(f"{GATE_SECTION}.{FAMILY_LAYER}")
-        assert set(layer) == {"rainbow-passage", "caterpillar-passage", "word-color-stroop"}
-        assert all(set(entry) == {"content_omission_fraction_max"} for entry in layer.values())
+        assert set(layer) == {"rainbow-passage", "caterpillar-passage", "word-color-stroop", "prolonged-vowel"}
+        assert {name for entry in layer.values() for name in entry} == {
+            "content_omission_fraction_max",
+            "declared_duration_min_fraction",
+        }
 
     def test_the_default_layer_ships_empty_because_nothing_is_universal(self, config: TriageConfig) -> None:
         """``gap_off_task_min_s`` reaches six groups of twelve; no gate reaches all of them."""

@@ -50,6 +50,7 @@ from senselab.audio.workflows.triage.nodes.branches import (
     dispatch,
     duration,
     lexical,
+    longest_free_interval,
     longest_monotone_run,
     measured,
     mode_of,
@@ -60,6 +61,7 @@ from senselab.audio.workflows.triage.nodes.branches import (
     read_continuity_track,
     read_phonation_tracks,
     semitones,
+    smoothed_pitch,
     stream_entity,
     touches_edge,
     trace_slice,
@@ -341,7 +343,13 @@ NO_VOICING = "no_voicing"
 """The existence criterion no bound configures: the tracker voiced not one frame of the carrier."""
 
 SWEEP_REVERSAL = "sweep_monotone_reversal_semitones"
-"""The reading ``monotone_tolerance_semitones`` is read against."""
+"""The largest distance the dominant run falls back from its running extreme; recorded, not gated."""
+
+GLIDE_EXTENT = "glide_extent_semitones"
+"""The reading ``glide_extent_min_semitones`` is read against: how far the dominant run's pitch travelled."""
+
+PRODUCTION_DECLARED_FRACTION = "production_declared_fraction"
+"""The reading ``declared_duration_min_fraction`` is read against: the carrier's duration over the declared hold."""
 
 
 def carrier_readings(carrier: Carrier, *derived_from: str) -> list[Finding]:
@@ -401,10 +409,15 @@ def qualifying_phonation(evidence: Evidence, expectation: Expectation, params: B
         if span.extent is None or duration(span.extent) < minimum_s:
             rejected.append(Rejection(span, "production_min_s", round(duration(span.extent), 3), minimum_s, {}))
             continue
-        if expectation.lexical_separator and any(overlaps(word_extent(word), span.extent) for word in words):
-            rejected.append(Rejection(span, "lexical_separator", None, None, {}))
-            continue
-        track = track_slice(evidence.tracks, span.extent, strength_min)
+        carrier_extent: tuple[float, float] = span.extent
+        if expectation.lexical_separator and any(overlaps(word_extent(word), carrier_extent) for word in words):
+            free = longest_free_interval(carrier_extent, [word_extent(word) for word in words])
+            if free is None or duration(free) < minimum_s:
+                rejected.append(Rejection(span, "lexical_separator", None, None, {}))
+                continue
+            carrier_extent = free
+            span = replace(span, extent=free)
+        track = track_slice(evidence.tracks, carrier_extent, strength_min)
         if track.strength.size == 0:
             rejected.append(Rejection(span, "no_track_over_carrier", None, None, {}))
             continue
@@ -417,7 +430,9 @@ def qualifying_phonation(evidence: Evidence, expectation: Expectation, params: B
             float("nan") if spread_window_s is None else typical_windowed_spread(pitch, track.hop_s, spread_window_s)
         )
         trace = (
-            np.empty(0, dtype=float) if evidence.continuity is None else trace_slice(evidence.continuity, span.extent)
+            np.empty(0, dtype=float)
+            if evidence.continuity is None
+            else trace_slice(evidence.continuity, carrier_extent)
         )
         stationarity = float(np.median(trace)) if trace.size else 0.0
         carrier = Carrier(span, track, voiced_fraction, spread, stationarity)
@@ -601,6 +616,16 @@ def _voice_sustained(
                 *evidence.derivations(evidence.file_id),
             )
         )
+        findings.append(
+            measured(
+                PRODUCTION_DECLARED_FRACTION,
+                extent[0],
+                extent[1],
+                round(duration(carrier.span.extent) / expectation.declared_duration_s, 4),
+                *read_off,
+                declared_duration_s=expectation.declared_duration_s,
+            )
+        )
     return Result(components, findings)
 
 
@@ -737,8 +762,9 @@ def _voice_glide(expectation: Expectation, evidence: Evidence, params: BranchPar
 
     minimum_s = params.gate("production_min_s")
     strength_min = params.point("voiced_strength_min")
-    tolerance = params.gate("monotone_tolerance_semitones")
-    if minimum_s is None or strength_min is None or tolerance is None:
+    tolerance = params.point("sweep_reversal_tolerance_semitones")
+    smoothing = params.point("sweep_smoothing_frames")
+    if minimum_s is None or strength_min is None or tolerance is None or smoothing is None:
         return Result([], params.record())
 
     found: list[Sweep] = []
@@ -757,8 +783,9 @@ def _voice_glide(expectation: Expectation, evidence: Evidence, params: BranchPar
         if voiced_fraction <= 0.0:
             discarded.append(Rejection(span, NO_VOICING, 0.0, None, {}).finding())
             continue
-        pitch = semitones(np.where(track.voiced, track.f0_hz, np.nan))
+        pitch = smoothed_pitch(semitones(np.where(track.voiced, track.f0_hz, np.nan)), int(smoothing))
         run = longest_monotone_run(pitch, tolerance)
+        voiced = voiced_extent(span.extent, track)
         if run is None:
             discarded.append(Rejection(span, "no_monotone_run", None, tolerance, {}).finding())
             continue
@@ -772,7 +799,7 @@ def _voice_glide(expectation: Expectation, evidence: Evidence, params: BranchPar
                 abs(float(pitch[last] - pitch[first])),
                 extent,
                 voiced_fraction,
-                duration(extent) / max(duration(span.extent), 1e-9),
+                duration(extent) / max(duration(voiced), 1e-9),
                 monotone_reversal(pitch, first, last, sign),
             )
         )
@@ -807,7 +834,7 @@ def _voice_glide(expectation: Expectation, evidence: Evidence, params: BranchPar
         measured(SWEEP_DOMINANT_FRACTION, sweep[0], sweep[1], round(best.held, 4), *read_off),
         measured(SWEEP_REVERSAL, sweep[0], sweep[1], round(best.reversal, 3), *read_off),
         measured(
-            "glide_extent_semitones",
+            GLIDE_EXTENT,
             sweep[0],
             sweep[1],
             round(best.extent_semitones, 2),
