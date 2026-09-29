@@ -344,6 +344,27 @@ class TestAFullySpecifiedFamilyAlignsAgainstTheDerivative:
         assert mismatch.evidence["read"] == "canoes"
         assert (mismatch.start, mismatch.end) == (3.0, 3.5)
 
+    def test_a_compound_read_as_two_words_is_realised(self, tmp_path: Path) -> None:
+        """``desk top`` against ``desktop``: the same word with and without the space, not an omission."""
+        stimulus = "The desktop is clean."
+        store = _store(family="harvard-sentences-list")
+        _transcript(
+            store, [(word, 1.0 + index, 1.5 + index) for index, word in enumerate("The desk top is clean".split())]
+        )
+        _stimulus_measurement(store)
+        result = align_speech("harvard-sentences-list", store, _hint(stimulus), branch_params(_config(tmp_path)))
+        assert _of_kind(result, "deviation", "omission") == []
+        assert _gated(result, "harvard-sentences-list", _config(tmp_path)) is True
+
+    def test_a_dropped_function_word_does_not_fail_the_sentence(self, tmp_path: Path) -> None:
+        """One ``the`` unread is an omission recorded, and not the sentence going unread."""
+        spoken = HARVARD.split()
+        spoken.remove(next(word for word in spoken if word.lower() == "the"))
+        store, hint = self._read(spoken)
+        result = align_speech("harvard-sentences-list", store, hint, branch_params(_config(tmp_path)))
+        assert len(_of_kind(result, "deviation", "omission")) == 1
+        assert _gated(result, "harvard-sentences-list", _config(tmp_path)) is True
+
     def test_an_omission_is_placed_where_it_should_have_been(self, tmp_path: Path) -> None:
         """A skipped word has no extent of its own, so it is anchored at the last realised token."""
         spoken = [word for word in HARVARD.split() if word != "smooth"]

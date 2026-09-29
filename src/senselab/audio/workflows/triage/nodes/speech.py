@@ -113,7 +113,7 @@ from senselab.audio.workflows.triage.nodes.ddk import (
     syllable_detail,
 )
 from senselab.audio.workflows.triage.nodes.redact import category_family
-from senselab.audio.workflows.triage.residue import residue_rule, task_residue
+from senselab.audio.workflows.triage.residue import is_content_word, residue_rule, task_residue
 from senselab.audio.workflows.triage.routing_analysis.families import SYLLABLE_REPETITION
 from senselab.audio.workflows.triage.stimulus import (
     LexicalWord,
@@ -864,7 +864,11 @@ EXPECTED_TOKENS_MATCHED = "expected_tokens_matched"
 """The reading ``expected_tokens_matched_min`` is read against: prescribed tokens the recording realised."""
 
 EXPECTED_TOKENS_OMITTED = "expected_tokens_omitted"
-"""The reading ``omissions_max`` is read against: prescribed tokens nothing realised."""
+"""Prescribed tokens nothing realised: recorded beside the fraction the gate reads."""
+
+EXPECTED_CONTENT_OMITTED_FRACTION = "expected_content_omitted_fraction"
+"""The reading ``content_omission_fraction_max`` is read against: of the expected tokens that carry
+content, the fraction nothing realised; over every expected token where none carries content."""
 
 RESPONSE_DURATION = "response_duration_s"
 """The reading ``response_min_s`` is read against: how long the consensus's lexical words span."""
@@ -1082,6 +1086,31 @@ def _anchor(alignment: StimulusAlignment, index: int) -> float | None:
     return max(ends) if ends else None
 
 
+def _content_omitted_fraction(expected: Sequence[str], omitted: Sequence[str]) -> float | None:
+    """Of the expected tokens that carry content, the fraction nothing realised.
+
+    Function words are left out of both counts: a dropped "the" in an eight-word sentence is not the
+    sentence going unread. A stimulus with no content token at all is counted over every token.
+
+    Args:
+        expected: Every expected token, verbatim.
+        omitted: The expected tokens nothing realised, verbatim.
+
+    Returns:
+        The fraction, rounded to 4 places, or None when nothing was expected.
+    """
+    content = [token for token in expected if is_content_word(token)]
+    if not content:
+        return round(len(omitted) / len(expected), 4) if expected else None
+    remaining = list(omitted)
+    missing = 0
+    for token in content:
+        if token in remaining:
+            remaining.remove(token)
+            missing += 1
+    return round(missing / len(content), 4)
+
+
 def _repeat_fraction(expected: Sequence[str], produced: Sequence[str]) -> float:
     """What fraction of the expected keys the production realised more than once.
 
@@ -1187,6 +1216,7 @@ def _speech_ordered(  # noqa: C901 — the two token sources and the five depart
     repeat_fraction: float | None = None
     evidence: list[str] = [consensus_id]
     alignment: StimulusAlignment | None = None
+    expected_texts: list[str] = list(expectation.tokens or ())
     if expectation.tokens is not None:
         matched, omitted = ordered_run(list(expectation.tokens), words, params.p_normalise)
         omissions = [(index, token, None) for index, token in enumerate(omitted)]
@@ -1206,6 +1236,7 @@ def _speech_ordered(  # noqa: C901 — the two token sources and the five depart
             )
         stimulus_id, alignment = read
         evidence = [stimulus_id, consensus_id]
+        expected_texts = [token.text for token in alignment.expected]
         by_index = {int(word.attributes["index"]): word for word in words}
         matched = [
             (token.text, by_index[token.word_index])
@@ -1323,6 +1354,15 @@ def _speech_ordered(  # noqa: C901 — the two token sources and the five depart
         )
     findings.append(measured(EXPECTED_TOKENS_MATCHED, None, None, len(matched), *evidence))
     findings.append(measured(EXPECTED_TOKENS_OMITTED, None, None, len(omissions), *evidence))
+    findings.append(
+        measured(
+            EXPECTED_CONTENT_OMITTED_FRACTION,
+            None,
+            None,
+            _content_omitted_fraction(expected_texts, [token for _, token, _ in omissions]),
+            *evidence,
+        )
+    )
     findings.extend(unviable_findings(expectation))
     findings.extend(declared_duration_count(store, expectation.declared_duration_s))
     findings.extend(_off_task(components, store, points))

@@ -297,15 +297,15 @@ class TestTheComparisonRunsTheWayTheGateDeclares:
             ("production_min_s", "carrier_duration_s", 0.49, 0.5, False),
             ("f0_spread_max_semitones", "carrier_f0_spread_semitones", 2.0, 2.0, True),
             ("f0_spread_max_semitones", "carrier_f0_spread_semitones", 2.01, 2.0, False),
-            ("omissions_max", "expected_tokens_omitted", 0, 0, True),
-            ("omissions_max", "expected_tokens_omitted", 1, 0, False),
+            ("content_omission_fraction_max", "expected_content_omitted_fraction", 0.25, 0.25, True),
+            ("content_omission_fraction_max", "expected_content_omitted_fraction", 0.26, 0.25, False),
         ],
     )
     def test_the_boundary_is_inclusive_on_both_sides(
         self, gate: str, reading: str, value: float, bound: float, expected: bool
     ) -> None:
         """At the bound passes, whichever direction the gate reads."""
-        group = Pattern.SUSTAINED if gate != "omissions_max" else Pattern.ORDERED_TOKENS
+        group = Pattern.SUSTAINED if gate != "content_omission_fraction_max" else Pattern.ORDERED_TOKENS
         conformance, _ = apply_gates((gate,), _bounds(group, **{gate: bound}), {reading: value})
         assert conformance is expected
 
@@ -394,9 +394,11 @@ class TestTheBoundsAreReadFromOnePlace:
 class TestAGateResolvesFamilyThenGroupThenDefault:
     """A task group alone is too coarse; the layers are how a family says so."""
 
-    def test_the_family_layer_ships_empty(self, config: TriageConfig) -> None:
-        """Every value moved at its current setting; an empty layer says no difference is derived."""
-        assert config.get(f"{GATE_SECTION}.{FAMILY_LAYER}") in (None, {})
+    def test_the_family_layer_names_only_the_passages_and_stroop(self, config: TriageConfig) -> None:
+        """Owner, 2026-09-29: a passage and a timed list tolerate a fraction unread; a sentence does not."""
+        layer = config.get(f"{GATE_SECTION}.{FAMILY_LAYER}")
+        assert set(layer) == {"rainbow-passage", "caterpillar-passage", "word-color-stroop"}
+        assert all(set(entry) == {"content_omission_fraction_max"} for entry in layer.values())
 
     def test_the_default_layer_ships_empty_because_nothing_is_universal(self, config: TriageConfig) -> None:
         """``gap_off_task_min_s`` reaches six groups of twelve; no gate reaches all of them."""
