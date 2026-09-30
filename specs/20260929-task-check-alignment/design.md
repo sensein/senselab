@@ -219,3 +219,24 @@ cough a burst of several, so the found count runs about twice the asked one and 
   first and you just repeat it after them".
 - `verdict.hint_mismatch_exempt_families: [respiration-and-cough-breath, respiration-and-cough-v2-breath]`:
   quiet breathing the classifier does not hear is not "declared and did not find it".
+
+## H. The reviewer's speaker judgment weighs the instructions
+
+r8's reviewer answered `speakers: more_than_one` on recordings whose second voice was the task:
+sub-9488c55d… animal-fluency (the participant asking "Is that enough?"), story-recall examiners, and
+the model speaker Harvard/CAPE-V instructions allow. The judgment was one word, so the fold could only
+flag every one of them.
+
+- **Prompt** (point 4): judged "weighed against the task's instructions"; the participant addressing
+  the examiner is one speaker; an examiner giving instructions, or someone saying a sentence first
+  where the instructions allow repeating after them, is a voice the task expects. A seventh part,
+  `OTHER_SPEAKERS`, quotes each other person's words exactly with `expected` and `why`.
+- **Parse**: `OtherSpeaker(text, expected, why)` on the result and the per-round payload. The
+  `SPEAKERS:` label no longer matches inside `OTHER_SPEAKERS:`.
+- **Iteration**: `more_than_one` with no quote is an `answer_problem`, fed back like a proposal-less
+  judgment; a quote that does not occur in the ORIGINAL is too.
+- **Fold**: `REVIEWER_HEARD_SECOND_SPEAKER` ("…an unexpected second speaker…") is raised only where
+  some quoted voice is `expected: false`, or where none was quoted after the loop; the ground names the
+  unexpected quotes. The annotation (the ledger) records `other_speakers` and `prompt_version`.
+- **`PROMPT_VERSION = 2`** (`redaction_review.py`): the prompt and its parse as one number. It is the
+  reviewer result cache's version term (E); every r8 reading is a miss for that reason alone.

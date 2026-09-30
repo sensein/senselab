@@ -51,6 +51,7 @@ from senselab.audio.workflows.triage.nodes.redact import STREAM_NAME as REDACTED
 from senselab.audio.workflows.triage.task_lexicon import TaskLexicon, task_lexicon
 from senselab.audio.workflows.triage.vocabulary import PII_SCAN, REDACTION_LLM_ANNOTATION, SCANNED
 from senselab.text.tasks.pii_detection.redaction_review import (
+    PROMPT_VERSION,
     REDACT,
     ReviewProposal,
     answer_problem,
@@ -115,6 +116,8 @@ class _Reading:
             (:func:`~senselab.text.tasks.pii_detection.redaction_review.answer_problem`); False where
             the loop ran out of rounds on an answer it had fed back.
         problem: The final round's unresolved problem, or None.
+        other_speakers: The words the last answering round attributed to anyone but the participant,
+            each with ``text``, ``expected`` and ``why``.
     """
 
     status: str
@@ -129,6 +132,7 @@ class _Reading:
     failure: str | None
     converged: bool = True
     problem: str | None = None
+    other_speakers: tuple[dict[str, Any], ...] = ()
 
 
 def _stamp() -> str:
@@ -493,6 +497,9 @@ def review(store: ProvStore, config: TriageConfig, hint: AudioHints | None = Non
         )
     else:
         reading, reviews = _read(original, redacted, settings, context)
+        answered = [review for review in reviews if review.get("available")]
+        if answered:
+            reading = replace(reading, other_speakers=tuple(dict(o) for o in answered[-1].get("other_speakers") or ()))
 
     software = software_agent(store)
     view: list[str] = []
@@ -505,6 +512,7 @@ def review(store: ProvStore, config: TriageConfig, hint: AudioHints | None = Non
             "enabled": bool(settings["enabled"]),
             "read_redacted": redacted is not None,
             "context_keys": sorted(context),
+            "prompt_version": PROMPT_VERSION,
         },
         started=started,
         ended=_stamp(),
@@ -551,6 +559,8 @@ def review(store: ProvStore, config: TriageConfig, hint: AudioHints | None = Non
             "redaction": reading.redaction,
             "original": reading.original,
             "speakers": reading.speakers,
+            "other_speakers": [dict(entry) for entry in reading.other_speakers],
+            "prompt_version": PROMPT_VERSION,
             "proposal": [dict(entry) for entry in reading.proposal],
             "proposal_redact_n": sum(1 for entry in reading.proposal if entry["action"] == REDACT),
             "proposal_release_n": sum(1 for entry in reading.proposal if entry["action"] != REDACT),

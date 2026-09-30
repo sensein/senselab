@@ -2371,9 +2371,15 @@ function buildWhy(stem,card){
   /* Speakers is a third question, answered independently of the two about pii. It used to be
      rendered only inside the flagged branch, so a clean reading that had noticed a second voice
      said nothing about it — which is the one case the note exists for. */
-  if(llm.speakers==='more_than_one')
+  if(llm.speakers==='more_than_one'){
     out.push('<p class="note"><b>It reads the words as showing more than one person speaking</b> in '
       +'this recording. A reading of the transcript, not of the audio.</p>');
+    const others=llm.other_speakers||[];
+    if(others.length)
+      out.push('<ul class="note">'+others.map(o=>'<li>'+(o.expected?'expected by the task':'<b>not expected</b>')
+        +': &ldquo;'+esc(o.text)+'&rdquo;'+(o.why?' &mdash; '+esc(o.why):'')+'</li>').join('')+'</ul>');
+    else out.push('<p class="note">It quoted no words for the other voice.</p>');
+  }
   else if(llm.speakers==='unclear')
     out.push('<p class="note">It could not tell from the words whether more than one person '
       +'speaks here.</p>');

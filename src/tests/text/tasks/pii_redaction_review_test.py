@@ -451,5 +451,38 @@ def test_an_answer_without_its_conditions_part_is_fed_back() -> None:
 def test_the_prompt_asks_for_conditions_apart_from_safe_harbor() -> None:
     """Conditions are a required part of their own, and no longer a PROPOSAL category."""
     assert "CONDITIONS: a JSON array" in redaction_review._PROMPT
-    assert "exactly six parts" in redaction_review._PROMPT
+    assert "exactly seven parts" in redaction_review._PROMPT
     assert "CONTACT, CONDITION, OTHER" not in redaction_review._PROMPT
+
+
+def test_the_other_speakers_part_is_parsed_and_does_not_shadow_the_speakers_label() -> None:
+    """``OTHER_SPEAKERS:`` ends in ``SPEAKERS:``; the one-word label is still the SPEAKERS line's."""
+    parsed = redaction_review.parse_completion(
+        "REASONING: two voices.\nREDACTION: not_applicable\nORIGINAL: clean\nSPEAKERS: more_than_one\n"
+        'OTHER_SPEAKERS: [{"text": "who is that", "expected": false, "why": "an interjection"}]\n'
+        "CONDITIONS: []\nPROPOSAL: []"
+    )
+    assert parsed.speakers == "more_than_one"
+    assert [(o.text, o.expected) for o in parsed.other_speakers] == [("who is that", False)]
+    assert parsed.conditions_answered and parsed.proposal == []
+    assert "OTHER_SPEAKERS" not in parsed.reasoning
+
+
+def test_more_than_one_with_no_quote_is_a_problem_to_feed_back() -> None:
+    """The fold can only weigh a second voice against the task if the reading quotes it."""
+    unquoted = redaction_review.ReviewResult(available=True, speakers="more_than_one", original="clean")
+    assert "OTHER_SPEAKERS quoted no words" in str(redaction_review.answer_problem(unquoted, "who is that", None))
+    quoted = redaction_review.ReviewResult(
+        available=True,
+        speakers="more_than_one",
+        original="clean",
+        other_speakers=[redaction_review.OtherSpeaker("who is that", False)],
+    )
+    assert redaction_review.answer_problem(quoted, "pa pa who is that", None) is None
+    elsewhere = redaction_review.ReviewResult(
+        available=True,
+        speakers="more_than_one",
+        original="clean",
+        other_speakers=[redaction_review.OtherSpeaker("never said", False)],
+    )
+    assert "do not occur in the ORIGINAL" in str(redaction_review.answer_problem(elsewhere, "pa pa", None))
