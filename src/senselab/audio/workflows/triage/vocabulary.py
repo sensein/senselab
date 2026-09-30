@@ -337,10 +337,15 @@ REVIEWER_NAMED_NO_WORDS = "the redaction reviewer judged the redaction wrong but
 A reading may only move a mask by naming the words it moves, so such a reading moves none: REDACT's
 masks stand, and the recording goes to a person."""
 
-REVIEWER_HEARD_SECOND_SPEAKER = "the redaction reviewer read an unexpected second speaker in the transcript"
+REVIEWER_HEARD_SECOND_SPEAKER = "the redaction reviewer read another speaker in the transcript"
 """The flag ground a reading's ``speakers: more_than_one`` contributes, under ``verdict.llm_second_speaker_flags``,
-where diarization's own gate has not already flagged another speaker in the task extent, and where the
-reading quoted a voice the task's instructions do not expect or quoted none. The ground names the quotes."""
+where diarization's own gate has not already flagged another speaker in the task extent. Any other voice
+flags, whether or not the task's instructions expect it; the ground names each quote and whether the
+instructions expect that voice, or says no words were quoted."""
+
+MODEL_SPEAKER_PERMITTED = "the task's instructions permit a model speaker"
+"""Appended to the speaker gate's flag ground for a family in ``verdict.model_speaker_families``: the
+instructions let someone say the sentence first, which explains the other voice without excusing it."""
 
 LLM_REDACTION_RESIDUE = "the redaction reviewer flagged residue on the redacted transcript"
 """The flag ground a reviewer reading that proposes hiding more contributes to the triage axis.
@@ -482,6 +487,8 @@ class FoldPolicy:
             the triage axis.
         uncomputed_reading_flags: Whether a conformance gate left undecided because a reading the
             task is judged on was never computed is a flag ground of its own.
+        model_speaker_families: Declared families whose instructions permit someone to say the sentence
+            first; the speaker gate still flags them, and its ground says so.
         hint_mismatch_exempt_families: Declared families whose branch not finding the declared sound is
             no flag ground.
     """
@@ -501,6 +508,7 @@ class FoldPolicy:
     llm_contradiction_flags: bool = False
     uncomputed_reading_flags: bool = False
     hint_mismatch_exempt_families: tuple[str, ...] = ()
+    model_speaker_families: tuple[str, ...] = ()
     conformance_flags_by_family: dict[str, bool] = field(default_factory=dict)
 
     @classmethod
@@ -536,6 +544,9 @@ class FoldPolicy:
             uncomputed_reading_flags=bool(config.get(f"{_SECTION}.uncomputed_reading_flags", False)),
             hint_mismatch_exempt_families=tuple(
                 str(family) for family in (config.get(f"{_SECTION}.hint_mismatch_exempt_families") or ())
+            ),
+            model_speaker_families=tuple(
+                str(family) for family in (config.get(f"{_SECTION}.model_speaker_families") or ())
             ),
             conformance_flags_by_family={
                 str(family): bool(flags)
@@ -1138,10 +1149,12 @@ def fold_file_verdict(
     )
     if rules.llm_second_speaker_flags and annotation.get("speakers") == "more_than_one" and not diarized_other:
         others = [dict(other) for other in annotation.get("other_speakers") or () if isinstance(other, Mapping)]
-        unexpected = [str(other.get("text")) for other in others if other.get("expected") is not True]
-        if unexpected or not others:
-            quoted = "; ".join(json.dumps(text) for text in unexpected) if unexpected else "no words quoted"
-            reasons.append(NodeVerdict(_VERDICT, Outcome.FLAG, None, f"{REVIEWER_HEARD_SECOND_SPEAKER}: {quoted}"))
+        described = [
+            f"{json.dumps(str(other.get('text')))} ({'expected' if other.get('expected') is True else 'unexpected'})"
+            for other in others
+        ]
+        quoted = "; ".join(described) if described else "no words quoted"
+        reasons.append(NodeVerdict(_VERDICT, Outcome.FLAG, None, f"{REVIEWER_HEARD_SECOND_SPEAKER}: {quoted}"))
     if rules.llm_contradiction_flags and reviewer_named_no_words(annotation):
         reasons.append(NodeVerdict(_VERDICT, Outcome.FLAG, None, REVIEWER_NAMED_NO_WORDS))
     open_families = sorted({family for family, state in unplaced if state in (UNPLACED_OPEN, UNPLACED_UNREAD)})
@@ -1159,7 +1172,12 @@ def fold_file_verdict(
                 Outcome.FLAG,
                 None,
                 f"{record.get('ground', record.get('gate'))}: "
-                f"{record.get('reading')} read {record.get('value')} against {record.get('bound')}",
+                f"{record.get('reading')} read {record.get('value')} against {record.get('bound')}"
+                + (
+                    f"; {MODEL_SPEAKER_PERMITTED}"
+                    if record.get("gate") == DOMINANT_SPEAKER_GATE and declared_family in rules.model_speaker_families
+                    else ""
+                ),
             )
         )
     gate_record = dict(gates or {})

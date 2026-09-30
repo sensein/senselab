@@ -313,3 +313,22 @@ a copy, compared against r8's final summaries with every reviewer ground left ou
   [0.08, 0.28, 0.36, 0.43, 0.46, 0.62, 0.66, 0.70, 0.70, 0.72]; glide travel (st) median 18.2, 3 of 23
   under 6; content omission — Harvard all 0 but one nothing-read, Caterpillar 0.01/0.01/0.11/1.0 above
   zero, Rainbow 0.03/0.09, Stroop 0.07/0.07/0.13; instructed fraction — DDK 0.4–4.1, airway 0.0–4.3.
+
+## I. Any other voice is flagged (owner, 2026-09-30) — supersedes H's "unexpected only" and D(3)'s exemption
+
+The story-recall card sub-00053adb… opens with the examiner's instructions ("You were given the text …
+up to five minutes"); pyannote diarized one speaker over 50.5 s, and under H an examiner the instructions
+provide for was "expected" and did not flag. The owner's rule: any speech attributed to someone other than
+the participant is flagged for review, whether or not the instructions expect it — an expected voice is
+still another voice. The instructions only keep the reviewer from mistaking the participant addressing the
+examiner ("Is that enough?") for a second voice.
+
+- Prompt (`PROMPT_VERSION` 3, which changes the reviewer cache key): an examiner or a model speaker is
+  `more_than_one`, quoted, with `expected` recorded as information.
+- Fold: `REVIEWER_HEARD_SECOND_SPEAKER` ("the redaction reviewer read another speaker in the transcript")
+  flags on any quoted other voice, the ground naming each quote as expected or unexpected; an unquoted
+  `more_than_one` is still fed back through the loop, and flags with "no words quoted" if it survives.
+- The `verdict.flag_gate_exemptions` table is now empty: Harvard and CAPE-V are again held to
+  `dominant_speaker_share_min`. `verdict.model_speaker_families` names them, and the speaker gate's flag
+  ground appends "the task's instructions permit a model speaker" — information, not exemption. The
+  `gate_exempt` parquet column stays and reads `[]`.
