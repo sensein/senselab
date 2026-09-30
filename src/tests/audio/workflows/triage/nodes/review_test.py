@@ -15,7 +15,16 @@ import pytest
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.nodes import review as review_module
 from senselab.audio.workflows.triage.nodes.redact import transcript_texts
-from senselab.audio.workflows.triage.nodes.review import NODE, refine_plan, review
+from senselab.audio.workflows.triage.nodes.review import (
+    BACKFILL_HELD,
+    BACKFILL_SKIPPED,
+    BACKFILL_STORED,
+    NODE,
+    backfill_from_store,
+    refine_plan,
+    review,
+    review_cache_key,
+)
 from senselab.audio.workflows.triage.vocabulary import PII_SCAN, REDACTION_LLM_ANNOTATION, SCANNED, Outcome
 from senselab.text.tasks.pii_detection.redaction_review import (
     PROMPT_VERSION,
@@ -771,3 +780,78 @@ class TestTheSpeakerJudgmentWeighsTheInstructions:
         assert "OTHER_SPEAKERS quoted no words" in str(rounds[1]["feedback"])
         annotation = _annotation(store)
         assert annotation["iterations"] == 2 and annotation["other_speakers"] == [intruder]
+
+
+class TestAReadingIsKeptInTheResultCache:
+    """E: the bounded loop's final reading is a result-cache entry keyed on exactly what it read."""
+
+    @pytest.fixture(autouse=True)
+    def _resolves(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(review_module, "_resolved", lambda settings: "a" * 40)
+
+    def _reviewed(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, rounds: Sequence[ReviewResult]) -> ProvStore:
+        store = ProvStore(run_id="review-cache-test")
+        _seed(store, words=["my", "name", "is", "alice"], scan="ran")
+        _stub(monkeypatch, rounds)
+        review(store, _config(tmp_path))
+        return store
+
+    def test_the_same_text_is_read_once(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The second recording with the same words, context and settings takes the first's reading."""
+        first = self._reviewed(tmp_path, monkeypatch, [_clean()])
+        miss = _annotation(first)["result_cache"]
+        assert miss["hit"] is False and miss["stored"] is True
+        second = self._reviewed(tmp_path, monkeypatch, [])
+        hit = _annotation(second)
+        assert hit["result_cache"] == {"key": miss["key"], "hit": True}
+        assert (hit["status"], hit["speakers"], hit["iterations"]) == ("clean", "one", 1)
+        assert len(_rounds_in(second)) == len(_rounds_in(first)) == 1
+
+    def test_a_prompt_version_bump_misses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The prompt and its parse are in the key, so a new prompt reads the text again."""
+        first = self._reviewed(tmp_path, monkeypatch, [_clean()])
+        monkeypatch.setattr(review_module, "PROMPT_VERSION", PROMPT_VERSION + 1)
+        second = self._reviewed(tmp_path, monkeypatch, [_clean()])
+        assert _annotation(second)["result_cache"]["hit"] is False
+        assert _annotation(second)["result_cache"]["key"] != _annotation(first)["result_cache"]["key"]
+
+    def test_the_settings_and_the_context_are_in_the_key(self) -> None:
+        """A different iteration bound, generation ceiling, commit or task context is a different reading."""
+        settings = {"model_id": "s/m", "max_new_tokens": 1024, "max_iterations": 3}
+        base = review_cache_key("a b", None, {"task": "x"}, settings, "a" * 40)
+        assert base == review_cache_key("a b", None, {"task": "x"}, dict(settings), "a" * 40)
+        assert base != review_cache_key("a b", None, {"task": "x"}, {**settings, "max_iterations": 2}, "a" * 40)
+        assert base != review_cache_key("a b", None, {"task": "x"}, {**settings, "max_new_tokens": 512}, "a" * 40)
+        assert base != review_cache_key("a b", None, {"task": "y"}, settings, "a" * 40)
+        assert base != review_cache_key("a b", "[PERSON] b", {"task": "x"}, settings, "a" * 40)
+        assert base != review_cache_key("a b", None, {"task": "x"}, settings, "b" * 40)
+
+    def test_an_absent_reading_is_not_kept(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A reviewer that did not load is recorded, and asked again next time."""
+        failed = ReviewResult(available=False, failure="no GPU", model_id="s/m")
+        first = self._reviewed(tmp_path, monkeypatch, [failed])
+        assert _annotation(first)["result_cache"]["stored"] is False
+        second = self._reviewed(tmp_path, monkeypatch, [_clean()])
+        assert _annotation(second)["result_cache"]["hit"] is False
+
+    def test_a_finished_store_backfills_the_key_review_would_ask_for(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Seeding from a store under an empty cache, then reviewing the same text, is a hit."""
+        first = self._reviewed(tmp_path, monkeypatch, [_clean()])
+        monkeypatch.setenv("SENSELAB_RESULT_CACHE", str(tmp_path / "fresh-cache"))
+        state, key = backfill_from_store(first, _config(tmp_path))
+        assert (state, key) == (BACKFILL_STORED, _annotation(first)["result_cache"]["key"])
+        assert backfill_from_store(first, _config(tmp_path))[0] == BACKFILL_HELD
+        second = self._reviewed(tmp_path, monkeypatch, [])
+        assert _annotation(second)["result_cache"]["hit"] is True
+
+    def test_a_reading_from_another_prompt_version_is_not_backfilled(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """r8's readings carry no prompt version, so no key they could fill will ever be asked for."""
+        store = ProvStore(run_id="review-cache-test")
+        _seed(store, scan="ran")
+        _annotate(store, [])
+        state, why = backfill_from_store(store, _config(tmp_path))
+        assert state == BACKFILL_SKIPPED and "prompt version" in why
