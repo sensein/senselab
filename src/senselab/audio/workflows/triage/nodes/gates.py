@@ -57,6 +57,9 @@ BOUND_UNMEASURED = "bound_unmeasured"
 NO_OWNER_REPORT = "no_owner_report"
 """The branch owning the declared family left no in-family report, so no conformance gate was applied."""
 
+NO_INSTRUCTED_COUNT = "no_instructed_count"
+"""The family's instruction speaks no count, or no instrument counted what was produced."""
+
 GATE_REASONS = (
     NO_CARRIER,
     NO_SPEECH,
@@ -66,6 +69,7 @@ GATE_REASONS = (
     NULL_VALUE,
     BOUND_UNMEASURED,
     NO_OWNER_REPORT,
+    NO_INSTRUCTED_COUNT,
 )
 """Why a gate answered something other than a comparison of its reading with its bound."""
 
@@ -143,6 +147,9 @@ class GateSpec:
 REQUIRED_COUNT = "required_count"
 """The count finding a row's ``RequiredCount`` writes. Gateable once a tolerance is derived."""
 
+INSTRUCTED_COUNT_FRACTION = "instructed_count_fraction"
+"""The reading ``instructed_count_min_fraction`` is read against: what was produced over what was asked."""
+
 TYPICAL_COUNT = "typical_count"
 """The count finding a row's ``TypicalCount`` writes. Never gateable."""
 
@@ -190,6 +197,7 @@ GATE_SPECS: dict[str, GateSpec] = _gate_specs(
         "items_min": GateSpec("items_produced", AT_LEAST, int),
         "events_min": GateSpec("airway_events_found", AT_LEAST, int),
         "repetitions_min": GateSpec("ddk_repetitions_found", AT_LEAST, int),
+        "instructed_count_min_fraction": GateSpec(INSTRUCTED_COUNT_FRACTION, AT_LEAST, float),
         "repeat_overlap_min": GateSpec(None, AT_LEAST, float),
         "echo_overlap_max": GateSpec(None, AT_MOST, float),
         "verbatim_overlap_max": GateSpec(None, AT_MOST, float),
@@ -216,11 +224,11 @@ CONFORMANCE_GATES: dict[Pattern, tuple[str, ...]] = {
     Pattern.ORDERED_TOKENS: ("expected_tokens_matched_min", "content_omission_fraction_max"),
     Pattern.FREE_RESPONSE: ("response_min_s",),
     Pattern.ITEM_LIST: ("items_min",),
-    Pattern.EVENT_SERIES: ("events_min",),
-    Pattern.EVENT_ALTERNATION: ("events_min",),
+    Pattern.EVENT_SERIES: ("events_min", "instructed_count_min_fraction"),
+    Pattern.EVENT_ALTERNATION: ("events_min", "instructed_count_min_fraction"),
     Pattern.SOUND_COVERAGE: (),
-    Pattern.SYLLABLE_TRAIN: ("repetitions_min",),
-    Pattern.SYLLABLE_SEQUENCE: ("repetitions_min",),
+    Pattern.SYLLABLE_TRAIN: ("repetitions_min", "instructed_count_min_fraction"),
+    Pattern.SYLLABLE_SEQUENCE: ("repetitions_min", "instructed_count_min_fraction"),
     Pattern.PER_SENTENCE: (),
     Pattern.EFFORT: (),
 }

@@ -3188,8 +3188,8 @@ class TestADeclaredSyllableTaskIsEvaluatedBySpeech:
         result = speech(store, "plain", syllable_config, self._declared("diadochokinesis-buttercup"), run_dir=tmp_path)
         detail = _report_entity(store, "SPEECH").attributes
         assert detail["expectation"]["task_family"] == "diadochokinesis-buttercup"
-        assert SPEECH_EXPECTATIONS["diadochokinesis-buttercup"].typical_count is not None
-        assert SPEECH_EXPECTATIONS["diadochokinesis-buttercup"].typical_count.unit is CountUnit.REPETITIONS
+        assert SPEECH_EXPECTATIONS["diadochokinesis-buttercup"].required_count is not None
+        assert SPEECH_EXPECTATIONS["diadochokinesis-buttercup"].required_count.unit is CountUnit.REPETITIONS
         assert detail["trains_n"] == 0
         assert detail["modulation_unit"] == "cycles_or_syllables_per_s"
         assert not [entity for entity in live_entities(store, "span") if entity.attributes.get("role") == "task_extent"]

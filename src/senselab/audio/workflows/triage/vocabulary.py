@@ -480,6 +480,8 @@ class FoldPolicy:
             the triage axis.
         uncomputed_reading_flags: Whether a conformance gate left undecided because a reading the
             task is judged on was never computed is a flag ground of its own.
+        hint_mismatch_exempt_families: Declared families whose branch not finding the declared sound is
+            no flag ground.
     """
 
     conformance_flags: bool = True
@@ -496,6 +498,7 @@ class FoldPolicy:
     llm_second_speaker_flags: bool = False
     llm_contradiction_flags: bool = False
     uncomputed_reading_flags: bool = False
+    hint_mismatch_exempt_families: tuple[str, ...] = ()
     conformance_flags_by_family: dict[str, bool] = field(default_factory=dict)
 
     @classmethod
@@ -529,6 +532,9 @@ class FoldPolicy:
             llm_second_speaker_flags=bool(config.get(f"{_SECTION}.llm_second_speaker_flags", False)),
             llm_contradiction_flags=bool(config.get(f"{_SECTION}.llm_contradiction_flags", False)),
             uncomputed_reading_flags=bool(config.get(f"{_SECTION}.uncomputed_reading_flags", False)),
+            hint_mismatch_exempt_families=tuple(
+                str(family) for family in (config.get(f"{_SECTION}.hint_mismatch_exempt_families") or ())
+            ),
             conformance_flags_by_family={
                 str(family): bool(flags)
                 for family, flags in (config.get(f"{_SECTION}.conformance_flags_by_family") or {}).items()
@@ -1198,7 +1204,7 @@ def fold_file_verdict(
             reasons.append(
                 NodeVerdict(branch, Outcome.FLAG, kind, f"{branch} was asked to run and {_silence(ran.get(branch))}")
             )
-        if hints.get(branch) == CLAIMED_NOT_FOUND:
+        if hints.get(branch) == CLAIMED_NOT_FOUND and declared_family not in rules.hint_mismatch_exempt_families:
             reasons.append(
                 NodeVerdict(branch, Outcome.FLAG, kind, f"hint mismatch: {branch} was declared and did not find it")
             )

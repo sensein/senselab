@@ -27,17 +27,18 @@ from senselab.audio.workflows.triage.nodes.branches import (
     Finding,
     Pattern,
     Proposal,
+    RequiredCount,
     Result,
-    TypicalCount,
     acquisition_covariates,
     amplitude_spans,
     branch_params,
     count,
-    count_beside_typical,
+    count_against_instruction,
     declared_duration_count,
     derivative_arrays,
     deviation,
     duration,
+    instructed_fraction,
     measured,
     mode_of,
     overlaps,
@@ -753,20 +754,19 @@ def decode_evidence(
     reads: DdkReads,
     params: BranchParams,
     decode: Decode | None,
-    typical: TypicalCount | None = None,
+    required: RequiredCount | None = None,
 ) -> list[Finding]:
     """Everything the posteriorgram instrument has to say about one recording.
 
-    The decoded repetition count and the corpus median are written beside each other and nothing
-    folds them: no conformance term, no score and no gate reads the pair.
+    The decoded repetition count is written against the count the instruction spoke, as the count
+    finding and the fraction ``instructed_count_min_fraction`` is gated on.
 
     Args:
         store: The provenance store, for the acquisition covariates the rate is read against.
         reads: The derivatives, for the posteriorgram's entity id.
         params: The operating points, for the burst window the chain length is derived from.
         decode: What the decode read, or None when the posteriorgram is absent.
-        typical: The corpus median for this family, or None where none is measured. Nobody asked
-            the participant for it, so nothing folds it.
+        required: The count the instruction spoke, or None where it spoke none.
 
     Returns:
         The findings; an absent posteriorgram yields one measurement with no value, and a decode
@@ -789,7 +789,7 @@ def decode_evidence(
             end,
             decode.count,
             *evidence,
-            typical_repetitions=None if typical is None else typical.median,
+            required_repetitions=None if required is None else required.value,
             repetition_start_s=decode.starts_s,
             filler_fraction=decode.filler_fraction,
             score_per_frame=decode.score_per_frame,
@@ -810,8 +810,8 @@ def decode_evidence(
             emission_floor=floor,
         ),
     ]
-    if typical is not None:
-        findings.append(count_beside_typical(typical, decode.count, *evidence))
+    if required is not None:
+        findings.append(count_against_instruction(required, decode.count, *evidence))
     if extent is None:
         findings.append(measured(PPG_RATE, None, None, None, *evidence, unit=SYLLABLES_PER_S, reason=NO_REPETITIONS))
         return findings
@@ -875,7 +875,9 @@ REPETITIONS_FOUND = "ddk_repetitions_found"
 """The reading ``repetitions_min`` is read against: repetitions either instrument read."""
 
 
-def repetitions_found(carrier_found: bool, readable_carrier: bool, decode: Decode | None) -> list[Finding]:
+def repetitions_found(
+    carrier_found: bool, readable_carrier: bool, decode: Decode | None, required: RequiredCount | None = None
+) -> list[Finding]:
     """How many repetitions the branch read, over both instruments, as VERDICT's reading.
 
     Args:
@@ -883,16 +885,22 @@ def repetitions_found(carrier_found: bool, readable_carrier: bool, decode: Decod
         readable_carrier: Whether the envelope instrument could look at all — the envelope reached
             the store and the carrier's length gate is measured.
         decode: What the posteriorgram decode read, or None when it is absent.
+        required: The count the instruction spoke, or None.
 
     Returns:
         One :data:`REPETITIONS_FOUND` measurement, and nothing at all when neither instrument could
-        look — which is the only case in which the branch took no reading of the recording.
+        look — which is the only case in which the branch took no reading of the recording. Where the
+        instruction speaks a count and the decode counted (it read a repetition, or the envelope found
+        no carrier either), the fraction of it produced is written beside.
     """
     readable_decode = decode is not None and decode.readable
     if not readable_carrier and not readable_decode:
         return []
     decoded = decode.count if readable_decode and decode is not None else 0
+    counted = readable_decode and (decoded > 0 or not carrier_found)
+    fraction = [instructed_fraction(required, decoded)] if required is not None and counted else []
     return [
+        *fraction,
         measured(
             REPETITIONS_FOUND,
             None,
@@ -900,7 +908,7 @@ def repetitions_found(carrier_found: bool, readable_carrier: bool, decode: Decod
             max(decoded, 1 if carrier_found else 0),
             from_envelope_carrier=carrier_found,
             from_decode=decoded if readable_decode else None,
-        )
+        ),
     ]
 
 
@@ -931,7 +939,7 @@ def align_ddk(
         Whether the expected patterns were found, the one task extent, and the findings.
     """
     decode = decode_template(reads.ppg, params, expectation.sequence)
-    ppg_findings = decode_evidence(store, reads, params, decode, expectation.typical_count)
+    ppg_findings = decode_evidence(store, reads, params, decode, expectation.required_count)
     declared = declared_duration_count(store, expectation.declared_duration_s)
     ppg_ids = _evidence(reads.ppg_id)
     sequence = expectation.pattern is Pattern.SYLLABLE_SEQUENCE
@@ -986,7 +994,7 @@ def align_ddk(
         if recording_extent is not None and touches_edge(extent, recording_extent):
             findings.append(deviation("truncation", extent[0], extent[1], *span.derived_from, *stream_ids(store)))
 
-    reading = repetitions_found(carrier_found, readable_carrier, decode)
+    reading = repetitions_found(carrier_found, readable_carrier, decode, expectation.required_count)
     return Result(components, [*findings, *ppg_findings, *declared, *reading])
 
 
@@ -1046,7 +1054,7 @@ def syllable_detail(result: Result) -> dict[str, Any]:
         "ppg_syllable_rate_hz": _value(result.deviations, PPG_RATE),
         "ppg_cycle_rate_hz": _covariate(result.deviations, PPG_RATE, "cycle_rate_hz"),
         "ppg_repetitions": _value(result.deviations, PPG_REPETITIONS),
-        "ppg_typical_repetitions": _covariate(result.deviations, PPG_REPETITIONS, "typical_repetitions"),
+        "ppg_required_repetitions": _covariate(result.deviations, PPG_REPETITIONS, "required_repetitions"),
         "ppg_period_s": _covariate(result.deviations, PPG_RATE, "period_s"),
         "ppg_period_cv": _value(result.deviations, PPG_DISPERSION),
         "ppg_period_trend_s_per_step": _covariate(result.deviations, PPG_DISPERSION, "trend_s_per_step"),

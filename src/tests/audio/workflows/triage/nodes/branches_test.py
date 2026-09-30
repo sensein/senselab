@@ -536,7 +536,7 @@ class TestTheExpectationTableIsData:
         free = difference(SPEECH_EXPECTATIONS["free-speech"], SPEECH_EXPECTATIONS["free-speech-v2"])
         assert "anti_pattern" in free
         ddk = difference(SPEECH_EXPECTATIONS["diadochokinesis-pa"], SPEECH_EXPECTATIONS["diadochokinesis-v2-puh"])
-        assert ddk == {"typical_count", "declared_duration_s", "sequence"}
+        assert ddk == {"required_count", "declared_duration_s", "sequence"}
         assert SPEECH_EXPECTATIONS["diadochokinesis-pa"].sequence == ("p", "aa")
         assert SPEECH_EXPECTATIONS["diadochokinesis-v2-puh"].sequence == ("p", "ah")
 
@@ -585,24 +585,23 @@ REQUIRED_ROWS = {
     ("AIRWAY", "breath-sounds"): (3, CountUnit.EVENTS),
     ("SPEECH", "loudness"): (3, CountUnit.TOKENS),
     ("SPEECH", "loudness-v2"): (2, CountUnit.TOKENS),
+    ("SPEECH", "diadochokinesis-pa"): (10, CountUnit.REPETITIONS),
+    ("SPEECH", "diadochokinesis-ta"): (10, CountUnit.REPETITIONS),
+    ("SPEECH", "diadochokinesis-ka"): (10, CountUnit.REPETITIONS),
+    ("SPEECH", "diadochokinesis-pataka"): (10, CountUnit.REPETITIONS),
+    ("SPEECH", "diadochokinesis-buttercup"): (10, CountUnit.REPETITIONS),
 }
 """Every in-family row whose instruction speaks a number, and what that number counts."""
 
-TYPICAL_ROWS = {
-    "diadochokinesis-pa": 11,
-    "diadochokinesis-ta": 11,
-    "diadochokinesis-ka": 10,
-    "diadochokinesis-pataka": 10,
-    "diadochokinesis-buttercup": 10,
-}
-"""Every in-family row carrying a measured median, in repetitions. The p50 column of the scan."""
+TYPICAL_ROWS: dict[str, int] = {}
+"""Every in-family row carrying a measured median: none, since the v1 syllable rows read "10 times"."""
 
 
 class TestARowSaysWhoGaveItsCountAndWhatItCounts:
     """One field held a number the instruction gave and a number nobody gave. Two fields now do."""
 
     def test_the_rows_carrying_a_required_count_are_the_ones_the_instruction_counts(self) -> None:
-        """Five breaths is in the task's own name; ten `/pa/` was never spoken to anyone."""
+        """Five breaths is in the task's own name; the v1 syllable instructions say ``10 times``."""
         found = {
             (branch, family): (row.required_count.value, row.required_count.unit)
             for branch, table in EXPECTATIONS.items()
@@ -638,9 +637,8 @@ class TestARowSaysWhoGaveItsCountAndWhatItCounts:
         for family in ("diadochokinesis-pataka", "diadochokinesis-buttercup"):
             row = SPEECH_EXPECTATIONS[family]
             assert row.sequence is not None and len(row.sequence) > 2
-            assert row.typical_count is not None
-            assert row.typical_count.unit is CountUnit.REPETITIONS
-            assert row.typical_count.median == SPEECH_EXPECTATIONS["diadochokinesis-ka"].typical_count.median  # type: ignore[union-attr]
+            assert row.required_count == SPEECH_EXPECTATIONS["diadochokinesis-ka"].required_count
+            assert row.required_count is not None and row.required_count.unit is CountUnit.REPETITIONS
 
     def test_the_voice_effort_rows_carry_the_count_their_tokens_enumerate(self) -> None:
         """Out of family for VOICE today, and the declaration travels with the row regardless."""

@@ -785,7 +785,7 @@ def redact(
         hint,
         task_family,
         terminators=str(config.require(_TERMINATORS_KEY)),
-        lexicon=task_lexicon(config, task_family),
+        lexicon=task_lexicon(config, task_family, hint),
     )
     exemptions = _expected_exemptions(findings, words, units, branch_params(config).p_normalise, near_match(config))
     exempt_findings = {exemption.finding_id for exemption in exemptions}

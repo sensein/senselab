@@ -24,6 +24,7 @@ from senselab.audio.workflows.triage.nodes.branches import (
     CountUnit,
     Finding,
     Proposal,
+    RequiredCount,
     Result,
     TypicalCount,
     branch_params,
@@ -641,11 +642,25 @@ class TestTheItemListAndTheCategoryItsRuleDependsOn:
         assert repeated.evidence["first_at"] == 1.0
         assert _roles(result) == ["task_extent"]
 
-    def test_category_membership_is_recorded_as_unviable_rather_than_guessed(self, tmp_path: Path) -> None:
-        """Scoring an item as belonging to the category needs a lexicon nothing in the graph has."""
-        store = self._listed("animal-fluency", ["cat", "dog"])
+    def test_the_items_of_the_category_are_counted(self, tmp_path: Path) -> None:
+        """Animal fluency's category is declared; its lexicon admits ``cat`` and ``dogs`` and not ``chair``."""
+        store = self._listed("animal-fluency", ["cat", "dogs", "chair"])
         result = align_speech("animal-fluency", store, None, branch_params(_config(tmp_path)))
-        assert _of_kind(result, "measure", "category_membership")
+        [category] = _of_kind(result, "count", "item_category")
+        [members] = _of_kind(result, "count", "category_items")
+        assert category.evidence["found"] == "Animals"
+        assert members.evidence["found"] == 2
+
+    def test_a_rule_category_admits_its_members_without_a_list(self, tmp_path: Path) -> None:
+        """``Numbers`` admits digits and spelled numbers; ``words starting with 't'`` admits by initial."""
+        numbers = self._listed("random-item-generation", ["7", "twelve", "apple"])
+        hint = AudioHints(instructions="List as many as possible. Category: Numbers.")
+        result = align_speech("random-item-generation", numbers, hint, branch_params(_config(tmp_path)))
+        assert _of_kind(result, "count", "category_items")[0].evidence["found"] == 2
+        words = self._listed("random-item-generation", ["table", "time", "apple"])
+        hint = AudioHints(instructions="Category: English words starting with 't'.")
+        result = align_speech("random-item-generation", words, hint, branch_params(_config(tmp_path)))
+        assert _of_kind(result, "count", "category_items")[0].evidence["found"] == 2
 
     def test_an_unreadable_category_concludes_nothing(self, tmp_path: Path) -> None:
         """Two of ten categories allow repetition, so a family-scoped rule would invert those."""
@@ -658,7 +673,7 @@ class TestTheItemListAndTheCategoryItsRuleDependsOn:
     def test_the_category_that_allows_repetition_reports_none(self, tmp_path: Path) -> None:
         """`Letters` says repetition is allowed, so a repeat is not a departure."""
         store = self._listed("random-item-generation", ["a", "a"])
-        hint = AudioHints(metadata={"category": "Letters"})
+        hint = AudioHints(instructions="The selection will appear when you start recording. Category: Letters.")
         result = align_speech("random-item-generation", store, hint, branch_params(_config(tmp_path)))
         assert _of_kind(result, "deviation", "repeated_item") == []
         [allowed] = _of_kind(result, "count", "repetition_allowed")
@@ -667,7 +682,7 @@ class TestTheItemListAndTheCategoryItsRuleDependsOn:
     def test_a_category_that_forbids_it_reports_the_repeat(self, tmp_path: Path) -> None:
         """The discriminator: eight of the ten categories say do not repeat any item."""
         store = self._listed("random-item-generation", ["a", "a"])
-        hint = AudioHints(metadata={"category": "Animals"})
+        hint = AudioHints(instructions="The selection will appear when you start recording. Category: Animals.")
         result = align_speech("random-item-generation", store, hint, branch_params(_config(tmp_path)))
         assert len(_of_kind(result, "deviation", "repeated_item")) == 1
 
@@ -691,10 +706,8 @@ class TestASyllableFamilyIsEvaluatedAsTheTrainItsInstructionAsksFor:
     def test_the_row_carries_the_instructions_own_expectation(self) -> None:
         """A syllable family's row says what it asks for; ``no lexical content`` is not a task."""
         assert SPEECH_EXPECTATIONS["diadochokinesis-pa"].sequence == ("p", "aa")
-        assert SPEECH_EXPECTATIONS["diadochokinesis-pa"].required_count is None
-        assert SPEECH_EXPECTATIONS["diadochokinesis-pa"].typical_count == TypicalCount(
-            11, CountUnit.REPETITIONS, DDK_MEDIANS
-        )
+        assert SPEECH_EXPECTATIONS["diadochokinesis-pa"].required_count == RequiredCount(10, CountUnit.REPETITIONS)
+        assert SPEECH_EXPECTATIONS["diadochokinesis-pa"].typical_count is None
         assert SPEECH_EXPECTATIONS["diadochokinesis-pataka"].sequence == ("p", "aa", "t", "aa", "k", "aa")
         assert SPEECH_EXPECTATIONS["diadochokinesis-buttercup"].sequence == ("b", "ah", "t", "er", "k", "ah", "p")
 

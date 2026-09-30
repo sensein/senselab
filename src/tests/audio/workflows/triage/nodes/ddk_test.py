@@ -37,6 +37,7 @@ from senselab.audio.workflows.triage.nodes.branches import (
     UNMEASURED_POINTS,
     BranchParams,
     CountUnit,
+    RequiredCount,
     Result,
     TypicalCount,
     branch_params,
@@ -84,7 +85,7 @@ from senselab.audio.workflows.triage.nodes.ddk import (
     trend,
     visits,
 )
-from senselab.audio.workflows.triage.nodes.gates import TYPICAL_COUNT
+from senselab.audio.workflows.triage.nodes.gates import INSTRUCTED_COUNT_FRACTION, REQUIRED_COUNT
 from senselab.audio.workflows.triage.nodes.speech import align_speech, detect_speech
 from senselab.audio.workflows.triage.vocabulary import (
     BRANCHES,
@@ -681,11 +682,11 @@ class TestButtercupHasSevenPositionsIncludingItsCoda:
         assert set(places["alveolar"]) == {"t", "d", "r"}
         assert "r" not in BUTTERCUP
 
-    def test_it_declares_the_same_typical_repetition_count_pataka_does(self) -> None:
-        """Both medians are ten repetitions of a multi-syllable carrier, in repetitions."""
-        buttercup = SPEECH_EXPECTATIONS["diadochokinesis-buttercup"].typical_count
-        pataka = SPEECH_EXPECTATIONS["diadochokinesis-pataka"].typical_count
-        assert buttercup == pataka == TypicalCount(10, CountUnit.REPETITIONS, DDK_MEDIANS)
+    def test_it_declares_the_same_instructed_repetition_count_pataka_does(self) -> None:
+        """Both instructions ask for ten repetitions of a multi-syllable carrier, in repetitions."""
+        buttercup = SPEECH_EXPECTATIONS["diadochokinesis-buttercup"].required_count
+        pataka = SPEECH_EXPECTATIONS["diadochokinesis-pataka"].required_count
+        assert buttercup == pataka == RequiredCount(10, CountUnit.REPETITIONS)
         assert SPEECH_EXPECTATIONS["diadochokinesis-v2-buttercup"].declared_duration_s == 5.0
 
 
@@ -725,13 +726,13 @@ class TestEveryFamilysTemplateIsItsStimulusText:
         assert type(row).from_mapping(row.as_mapping()).sequence == BUTTERCUP
 
 
-class TestTheCountsAreHeuristicsAndNothingFoldsThem:
-    """The owner's governing constraint: a typical count is not a target, it is a heuristic."""
+class TestTheInstructedCountIsGated:
+    """The v1 syllable instructions say ``as fast as possible 10 times``: a count the participant was given."""
 
-    def test_the_typical_count_and_the_decoded_one_are_written_beside_each_other(
+    def test_the_decoded_count_is_written_against_the_instructed_one(
         self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
     ) -> None:
-        """Found beside the measured median, in the unit the declaration names."""
+        """Found against required, in the unit the declaration names, and the fraction beside it."""
         seed_ddk_store(
             store,
             stem="sub-a_ses-1_task-diadochokinesis-pa",
@@ -739,67 +740,44 @@ class TestTheCountsAreHeuristicsAndNothingFoldsThem:
         )
         _run(store, ddk_config, tmp_path, AudioHints(metadata={"task_token": "diadochokinesis-pa"}))
         [counts] = _measurements(store, "counts")
-        entry = counts.attributes["entries"][TYPICAL_COUNT]
-        assert entry == {"found": 8, "typical": 11, "unit": "repetitions", "derivation": DDK_MEDIANS}
-        assert "required" not in entry
+        assert counts.attributes["entries"][REQUIRED_COUNT] == {"found": 8, "required": 10, "unit": "repetitions"}
+        [fraction] = _measurements(store, INSTRUCTED_COUNT_FRACTION)
+        assert fraction.attributes["value"] == pytest.approx(0.8)
 
     def test_the_found_count_is_in_repetitions_because_the_declaration_is(
         self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
     ) -> None:
-        """Six repetitions of a three-syllable carrier is six, against a measured median of ten.
-
-        The retired field declared 30 here and 10 for `/pa/` — the same quantity in two units. Both
-        rows now declare repetitions, so the two numbers are comparable.
-        """
+        """Six repetitions of a three-syllable carrier is six of the ten asked for, and passes."""
         seed_ddk_store(
             store,
             stem="sub-a_ses-1_task-diadochokinesis-buttercup",
             posteriorgram=_buttercup_raster(6),
         )
         _run(store, ddk_config, tmp_path, AudioHints(metadata={"task_token": "diadochokinesis-buttercup"}))
-        [counts] = _measurements(store, "counts")
-        entry = counts.attributes["entries"][TYPICAL_COUNT]
-        assert entry == {"found": 6, "typical": 10, "unit": "repetitions", "derivation": DDK_MEDIANS}
         [repetitions] = _measurements(store, PPG_REPETITIONS)
         assert repetitions.attributes["value"] == 6
-        assert repetitions.attributes["typical_repetitions"] == 10
+        assert repetitions.attributes["required_repetitions"] == 10
+        assert _gated(store, ddk_config, "diadochokinesis-buttercup") is True
 
-    def test_a_count_short_of_its_declaration_is_not_a_deviation_and_not_a_non_conformance(
+    def test_a_count_well_short_of_the_instruction_fails_and_is_no_deviation(
         self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
     ) -> None:
-        """Every extractor is imperfect, so a shortfall is not evidence about the participant."""
+        """Two of ten is under the fraction; the shortfall decides conformance, not a deviation."""
         seed_ddk_store(
             store,
             stem="sub-a_ses-1_task-diadochokinesis-buttercup",
             posteriorgram=_buttercup_raster(2),
         )
         result = _run(store, ddk_config, tmp_path, AudioHints(metadata={"task_token": "diadochokinesis-buttercup"}))
-        assert _gated(store, ddk_config, "diadochokinesis-buttercup") is True
+        assert _gated(store, ddk_config, "diadochokinesis-buttercup") is False
         assert deviation_names(result.deviations) == ()
 
-    def test_no_finding_compares_the_two_counts(
-        self, store: ProvStore, ddk_config: TriageConfig, tmp_path: Path, seed_ddk_store: Callable[..., Any]
-    ) -> None:
-        """No conformance term, no score and no gate reads the pair — only the pair itself ships."""
-        seed_ddk_store(
-            store,
-            stem="sub-a_ses-1_task-diadochokinesis-buttercup",
-            posteriorgram=_buttercup_raster(2),
-        )
-        result = _run(store, ddk_config, tmp_path, AudioHints(metadata={"task_token": "diadochokinesis-buttercup"}))
-        scores = [
-            finding
-            for finding in result.deviations
-            if finding.kind == "measure" and "typical_repetitions" in finding.evidence
-        ]
-        assert [finding.name for finding in scores] == [PPG_REPETITIONS]
-        assert set(scores[0].evidence) & {"conformance", "agreement", "shortfall", "ratio"} == set()
-
     def test_the_row_says_which_kind_of_count_it_carries(self) -> None:
-        """A syllable-repetition row has no required count: the instruction speaks no number."""
+        """A v1 syllable-repetition row carries the instruction's count; the timed v2 rows carry none."""
         row = SPEECH_EXPECTATIONS["diadochokinesis-pataka"]
-        assert row.required_count is None
-        assert row.typical_count == TypicalCount(10, CountUnit.REPETITIONS, DDK_MEDIANS)
+        assert row.required_count == RequiredCount(10, CountUnit.REPETITIONS)
+        assert row.typical_count is None
+        assert SPEECH_EXPECTATIONS["diadochokinesis-v2-puhtuhkuh"].required_count is None
         assert not hasattr(row, "expected_event_count")
 
     def test_a_typical_count_cannot_be_declared_without_citing_its_measurement(self) -> None:

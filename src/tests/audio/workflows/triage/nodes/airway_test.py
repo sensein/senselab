@@ -43,7 +43,7 @@ from senselab.audio.workflows.triage.nodes.verdict import verdict
 from senselab.audio.workflows.triage.routing_analysis.ruleset import GateOutcome, RouteEvaluation, RouteState
 from senselab.audio.workflows.triage.vocabulary import Outcome, Triage
 from senselab.utils.prov_store import Entity, ProvStore
-from tests.audio.workflows.triage.nodes.conftest import gated_from_store, word_attributes
+from tests.audio.workflows.triage.nodes.conftest import gated_from_store, store_readings, word_attributes
 
 PROV_ASSERTION: Literal["assertion"] = "assertion"
 PROV_MEASUREMENT: Literal["measurement"] = "measurement"
@@ -1196,7 +1196,9 @@ class TestBothClassifiersAreOneEvidenceSet:
         result = airway(store, "plain", airway_config, run_dir=tmp_path)
         assert len(_events(store)) == 1
         assert result.report.conformance == UNDETERMINED
-        assert gated_from_store(store, Pattern.EVENT_SERIES, settings=airway_config) is True
+        readings = store_readings(store)
+        assert readings["airway_events_found"] == 1
+        assert readings["instructed_count_fraction"] < 0.5  # one of the instruction's count: the count gate decides
 
     def test_the_rest_of_the_profiles_breath_closure_is_read_too(
         self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path
@@ -1267,7 +1269,9 @@ class TestBothClassifiersAreOneEvidenceSet:
         result = airway(store, "plain", airway_config, run_dir=tmp_path)
         assert len(_events(store)) == 1
         assert result.report.conformance == UNDETERMINED
-        assert gated_from_store(store, Pattern.EVENT_SERIES, settings=airway_config) is True
+        readings = store_readings(store)
+        assert readings["airway_events_found"] == 1
+        assert readings["instructed_count_fraction"] < 0.5  # one of the instruction's count: the count gate decides
 
     def test_a_score_under_the_minimum_from_both_is_not_evidence(
         self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path
@@ -1862,6 +1866,20 @@ class TestTheFoldNamesTheHintMismatchThisBranchDoesNot:
         assert not any("what the instruction asked for did not happen" in reason.why for reason in folded.reasons), [
             reason.why for reason in folded.reasons
         ]
+
+    def test_quiet_breathing_the_classifier_does_not_hear_is_no_hint_mismatch(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``verdict.hint_mismatch_exempt_families``: quiet breathing is often below the classifier."""
+        hint_config = _override(tmp_path, "routing:\n  hint_branch_map:\n    breath: AIRWAY\n")
+        hint = AudioHints(may_contain=["breath"])
+        _seed(store, tmp_path, task="respiration-and-cough-breath", no_contrast=True, envelope=bump(500, (250,)))
+        self._empty_reading(monkeypatch)
+        routing(store, "plain", hint_config, hint, run_dir=tmp_path)
+        airway(store, "plain", hint_config, hint, run_dir=tmp_path)
+        folded = verdict(store, None, hint_config, hint, run_dir=tmp_path).file_verdict
+        assert folded.hints["AIRWAY"] == "claimed_not_found"
+        assert not any(reason.why.startswith("hint mismatch") for reason in folded.reasons)
 
     def test_the_same_file_with_no_declaration_discards_as_acoustically_empty(
         self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

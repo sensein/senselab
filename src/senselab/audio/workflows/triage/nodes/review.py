@@ -477,7 +477,7 @@ def review(store: ProvStore, config: TriageConfig, hint: AudioHints | None = Non
             before any model is contacted.
     """
     settings = _llm_settings(config)
-    context = task_context(store, hint, task_lexicon(config, declared_task_family(store, hint)))
+    context = task_context(store, hint, task_lexicon(config, declared_task_family(store, hint), hint))
     original, redacted = transcript_texts(store)
     state = detector_state(store)
     findings_n = _findings_n(store)

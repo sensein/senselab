@@ -688,7 +688,7 @@ BRANCH_MEASURES: dict[str, tuple[str, ...]] = {
         "ppg_syllable_rate_hz",
         "ppg_cycle_rate_hz",
         "ppg_repetitions",
-        "ppg_typical_repetitions",
+        "ppg_required_repetitions",
         "ppg_period_s",
         "ppg_period_cv",
         "ppg_period_trend_s_per_step",

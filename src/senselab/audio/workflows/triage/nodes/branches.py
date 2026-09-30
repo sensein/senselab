@@ -11,6 +11,7 @@ See ``specs/20260817-triage-workflow-dag/expected-patterns.md`` and ``branch-fou
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field, fields, replace
 from enum import Enum
 from pathlib import Path
@@ -27,6 +28,7 @@ from senselab.audio.workflows.triage.nodes.gates import (
     FAMILY_LAYER,
     GATE_SECTION,
     GATE_SPECS,
+    INSTRUCTED_COUNT_FRACTION,
     REQUIRED_COUNT,
     TYPICAL_COUNT,
     GateBounds,
@@ -300,6 +302,29 @@ def count_against_instruction(required: "RequiredCount", found: int, *derived_fr
     """
     evidence = {"found": found, "required": required.value, "unit": required.unit.value}
     return Finding("count", REQUIRED_COUNT, None, None, evidence, tuple(derived_from))
+
+
+def instructed_fraction(required: "RequiredCount", found: int, *derived_from: str) -> Finding:
+    """What was produced over the number the instruction spoke, the reading an instructed count is gated on.
+
+    Args:
+        required: The row's required count.
+        found: How many were produced, in the declaration's own unit.
+        *derived_from: The entity ids counted over.
+
+    Returns:
+        The measurement, named :data:`~...nodes.gates.INSTRUCTED_COUNT_FRACTION`.
+    """
+    return measured(
+        INSTRUCTED_COUNT_FRACTION,
+        None,
+        None,
+        round(found / required.value, 4),
+        *derived_from,
+        found=found,
+        required=required.value,
+        unit=required.unit.value,
+    )
 
 
 def count_beside_typical(typical: "TypicalCount", found: int, *derived_from: str) -> Finding:
@@ -642,6 +667,8 @@ class Expectation:
         relax_s: Leading interval the instruction gives to settling rather than to the task.
         repetition_allowed: Whether repeating an item is permitted.
         repetition_from_category: Whether the repetition rule follows from the recording's category.
+        item_category: The category the instruction names for every recording of the family, where it
+            names one; a family whose category is per recording reads it off the instructions.
         lexical_separator: Whether a lexical count-in precedes the production.
         forbid_lexical: Whether any lexical content is a deviation.
         emit_filler: Whether a filler token is reported as a deviation.
@@ -674,6 +701,7 @@ class Expectation:
     relax_s: float | None = None
     repetition_allowed: bool | None = None
     repetition_from_category: bool = False
+    item_category: str | None = None
     lexical_separator: bool = False
     forbid_lexical: bool = False
     emit_filler: bool = True
@@ -898,32 +926,30 @@ SPEECH_EXPECTATIONS: dict[str, Expectation] = {
         pattern=Pattern.ITEM_LIST,
         declared_duration_s=60.0,
         repetition_allowed=False,
-        unviable=(("category_membership", "a lexicon or a text embedding, one consumer, no waveform"),),
+        item_category="Animals",
     ),
     "random-item-generation": Expectation(
         pattern=Pattern.ITEM_LIST,
         repetition_from_category=True,
-        unviable=(("category_membership", "a lexicon or a text embedding, one consumer, no waveform"),),
     ),
     "random-item-generation-v2": Expectation(
         pattern=Pattern.ITEM_LIST,
         repetition_from_category=True,
-        unviable=(("category_membership", "a lexicon or a text embedding, one consumer, no waveform"),),
     ),
     "diadochokinesis-pa": Expectation(
         pattern=Pattern.SYLLABLE_TRAIN,
         sequence=PA,
-        typical_count=TypicalCount(11, CountUnit.REPETITIONS, DDK_MEDIANS),
+        required_count=RequiredCount(10, CountUnit.REPETITIONS),
     ),
     "diadochokinesis-ta": Expectation(
         pattern=Pattern.SYLLABLE_TRAIN,
         sequence=TA,
-        typical_count=TypicalCount(11, CountUnit.REPETITIONS, DDK_MEDIANS),
+        required_count=RequiredCount(10, CountUnit.REPETITIONS),
     ),
     "diadochokinesis-ka": Expectation(
         pattern=Pattern.SYLLABLE_TRAIN,
         sequence=KA,
-        typical_count=TypicalCount(10, CountUnit.REPETITIONS, DDK_MEDIANS),
+        required_count=RequiredCount(10, CountUnit.REPETITIONS),
     ),
     "diadochokinesis-v2-puh": Expectation(pattern=Pattern.SYLLABLE_TRAIN, sequence=PUH, declared_duration_s=5.0),
     "diadochokinesis-v2-tuh": Expectation(pattern=Pattern.SYLLABLE_TRAIN, sequence=TUH, declared_duration_s=5.0),
@@ -931,7 +957,7 @@ SPEECH_EXPECTATIONS: dict[str, Expectation] = {
     "diadochokinesis-pataka": Expectation(
         pattern=Pattern.SYLLABLE_SEQUENCE,
         sequence=PATAKA,
-        typical_count=TypicalCount(10, CountUnit.REPETITIONS, DDK_MEDIANS),
+        required_count=RequiredCount(10, CountUnit.REPETITIONS),
     ),
     "diadochokinesis-v2-puhtuhkuh": Expectation(
         pattern=Pattern.SYLLABLE_SEQUENCE, sequence=PUHTUHKUH, declared_duration_s=5.0
@@ -939,7 +965,7 @@ SPEECH_EXPECTATIONS: dict[str, Expectation] = {
     "diadochokinesis-buttercup": Expectation(
         pattern=Pattern.SYLLABLE_SEQUENCE,
         sequence=BUTTERCUP,
-        typical_count=TypicalCount(10, CountUnit.REPETITIONS, DDK_MEDIANS),
+        required_count=RequiredCount(10, CountUnit.REPETITIONS),
     ),
     "diadochokinesis-v2-buttercup": Expectation(
         pattern=Pattern.SYLLABLE_SEQUENCE, sequence=BUTTERCUP, declared_duration_s=5.0
@@ -1214,6 +1240,32 @@ def expected_names(task_family: str | None) -> tuple[str, ...]:
     """
     expectation = SPEECH_EXPECTATIONS.get(str(task_family))
     return () if expectation is None else expectation.expected_names
+
+
+CATEGORY_LINE = re.compile(r"Category:\s*([^.\n]+)")
+"""Where a per-recording category is spoken in the instructions: ``Category: Country names.``"""
+
+
+def item_category(task_family: str | None, hint: AudioHints | None) -> str | None:
+    """The category a list task asks items of, for this recording.
+
+    Args:
+        task_family: The declared family, a key of :data:`SPEECH_EXPECTATIONS`, or None.
+        hint: What the recording was declared to contain; its instructions carry a per-recording category.
+
+    Returns:
+        The family's declared category, else the one its instructions name where the family reads it off
+        them, else None.
+    """
+    expectation = SPEECH_EXPECTATIONS.get(str(task_family))
+    if expectation is None:
+        return None
+    if expectation.item_category is not None:
+        return expectation.item_category
+    if not expectation.repetition_from_category or hint is None or not hint.instructions:
+        return None
+    found = CATEGORY_LINE.search(str(hint.instructions))
+    return found.group(1).strip() if found else None
 
 
 def mode_of(branch: str, store: ProvStore, hint: AudioHints | None = None) -> tuple[str, str | None]:
