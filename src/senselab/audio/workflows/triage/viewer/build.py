@@ -19,6 +19,8 @@ INLINE_PATTERN = re.compile(r"/\*@INLINE:(?P<path>[^@]+)@\*/")
 PARTS = (
     "styles.css",
     "vendor/hyparquet-1.31.1-fzstd-0.1.1.bundle.js",
+    "theme.js",
+    "keys.js",
     "decode.js",
     "axes.js",
     "facets.js",

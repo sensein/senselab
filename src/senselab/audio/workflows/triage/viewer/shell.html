@@ -6,6 +6,13 @@
 <meta name="robots" content="noindex, nofollow, noarchive">
 <title>recording vectors — corpus and recording</title>
 <!--@BUILD@-->
+<script>
+/* The chosen theme, set before first paint so the page never flashes the other one. */
+try {
+  var chosen = window.localStorage.getItem('recording-vectors-theme');
+  if (chosen === 'light' || chosen === 'dark') document.documentElement.setAttribute('data-theme', chosen);
+} catch (e) { /* storage unavailable: the system preference stands */ }
+</script>
 <style>
 /*@INLINE:styles.css@*/
 </style>
@@ -22,6 +29,7 @@
     from your own disk; nothing is uploaded, fetched or stored. Open it from <code>file://</code>,
     for your own viewing, and do not host it.
   </div>
+  <p><button id="theme-toggle-landing" type="button">theme: system</button></p>
   <label class="pick">choose recording_vectors.parquet…<input id="picker" type="file" accept=".parquet"></label>
   <p style="font-size:11px">…or drop the file anywhere on this page.</p>
   <p style="font-size:11px">
@@ -39,6 +47,7 @@
     <span id="file-info"></span>
     <button id="dict-open" class="dict-open" type="button" disabled>data dictionary</button>
     <span class="grow"></span>
+    <button id="theme-toggle" type="button">theme: system</button>
     <span id="status-2" class="status"></span>
   </div>
 
@@ -102,6 +111,8 @@
         <span id="selcount"></span>
         <span id="hoverinfo"></span>
         <span class="grow"></span>
+        <span id="navpos" aria-live="polite"></span>
+        <span id="keys-help" class="keys-help"></span>
         <span id="warm" hidden></span>
       </div>
     </div>
@@ -153,6 +164,12 @@
 
 <script>
 /*@INLINE:vendor/hyparquet-1.31.1-fzstd-0.1.1.bundle.js@*/
+</script>
+<script>
+/*@INLINE:theme.js@*/
+</script>
+<script>
+/*@INLINE:keys.js@*/
 </script>
 <script>
 /*@INLINE:decode.js@*/

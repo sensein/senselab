@@ -6,16 +6,18 @@
 'use strict';
 
 var RecordingView = (function () {
+  var T = typeof Theme !== 'undefined' ? Theme : require('./theme.js');
   var LEFT = 104;
   var RIGHT = 16;
   var GAP = 10;
 
-  var LANE_COLOURS = {
-    E: '#6ea8ff', C: '#4fd1c5', A: '#ffb454', S: '#8ce99a', G: '#5a6373',
-    AIRWAY: '#ff8fa3', SPEECH: '#ffb454', VOICE: '#c4a7ff', REDACT: '#e8c07d',
+  var LANE_TOKENS = {
+    E: 'accent', C: 'teal', A: 'orange', S: 'good', G: 'muted',
+    AIRWAY: 'bad', SPEECH: 'orange', VOICE: 'violet', REDACT: 'warn',
   };
-  var OUTCOME_COLOURS = { agreement: '#8ce99a', variant: '#ffb454', insertion: '#ff8fa3' };
-  var UNKNOWN_COLOUR = '#7a8291';
+  var OUTCOME_TOKENS = { agreement: 'good', variant: 'orange', insertion: 'bad' };
+  function laneColour(name) { return T.color(LANE_TOKENS[name]); }
+  function outcomeColour(name) { return T.color(OUTCOME_TOKENS[name]); }
 
   function RecordingView(canvas) {
     this.canvas = canvas;
@@ -79,16 +81,16 @@ var RecordingView = (function () {
     ctx.font = '10px ui-monospace, SFMono-Regular, Menlo, monospace';
     ctx.textBaseline = 'middle';
     plan.lanes.forEach(function (lane) {
-      ctx.fillStyle = '#9aa3b2';
+      ctx.fillStyle = T.color('ink-2');
       ctx.textAlign = 'right';
       ctx.fillText(lane.label, LEFT - 8, lane.y + 9);
-      ctx.fillStyle = '#161a22';
+      ctx.fillStyle = T.color('panel-2');
       ctx.fillRect(x0, lane.y, x1 - x0, lane.height);
       if (lane.absentNote) {
         // An absent producer is said, never drawn as an empty result.
-        ctx.fillStyle = '#2a2018';
+        ctx.fillStyle = T.color('warn-bg');
         ctx.fillRect(x0, lane.y, x1 - x0, lane.height);
-        ctx.fillStyle = '#e8c07d';
+        ctx.fillStyle = T.color('warn');
         ctx.textAlign = 'left';
         ctx.fillText('absent — ' + lane.absentNote, x0 + 8, lane.y + lane.height / 2);
         return;
@@ -101,8 +103,8 @@ var RecordingView = (function () {
   RecordingView.prototype.paintTimeAxis = function (ctx, plan, x0, x1, ts) {
     ctx.save();
     ctx.font = '10px ui-monospace, SFMono-Regular, Menlo, monospace';
-    ctx.fillStyle = '#6b7280';
-    ctx.strokeStyle = '#2a3140';
+    ctx.fillStyle = T.color('ink-3');
+    ctx.strokeStyle = T.color('grid');
     ctx.textAlign = 'center';
     ctx.textBaseline = 'top';
     var span = ts || 1;
@@ -113,7 +115,7 @@ var RecordingView = (function () {
       ctx.fillText(t.toFixed(step < 1 ? 1 : 0) + 's', x, plan.height - 18);
     }
     ctx.textAlign = 'left';
-    ctx.fillStyle = '#9aa3b2';
+    ctx.fillStyle = T.color('ink-2');
     ctx.fillText('time_scale_s = ' + (ts == null ? '—' : ts.toFixed(4) + ' s'), x0, 12);
     ctx.restore();
   };
@@ -123,9 +125,9 @@ var RecordingView = (function () {
     var peak = this.row.wave_peak;
     var mid = lane.y + lane.height / 2;
     var half = lane.height / 2 - 3;
-    ctx.strokeStyle = '#2a3140';
+    ctx.strokeStyle = T.color('grid');
     ctx.beginPath(); ctx.moveTo(this.plot.x0, mid); ctx.lineTo(this.plot.x1, mid); ctx.stroke();
-    ctx.fillStyle = LANE_COLOURS.E;
+    ctx.fillStyle = laneColour('E');
     var n = wave.points;
     for (var i = 0; i < n; i++) {
       var xa = X((i / n) * this.plot.ts), xb = X(((i + 1) / n) * this.plot.ts);
@@ -141,7 +143,7 @@ var RecordingView = (function () {
     var lo = SchemaDecode.ENVELOPE_DBFS_RANGE[0], hi = SchemaDecode.ENVELOPE_DBFS_RANGE[1];
     var self = this;
     function Y(v) { return lane.y + lane.height - ((v - lo) / (hi - lo)) * lane.height; }
-    ctx.strokeStyle = LANE_COLOURS.C;
+    ctx.strokeStyle = laneColour('C');
     ctx.lineWidth = 1;
     ctx.beginPath();
     for (var i = 0; i < env.length; i++) {
@@ -151,16 +153,16 @@ var RecordingView = (function () {
     ctx.stroke();
     var floor = this.row.floor_dbfs;
     if (floor != null) {
-      ctx.strokeStyle = '#e8c07d';
+      ctx.strokeStyle = T.color('warn');
       ctx.setLineDash([4, 3]);
       ctx.beginPath(); ctx.moveTo(this.plot.x0, Y(floor)); ctx.lineTo(this.plot.x1, Y(floor)); ctx.stroke();
       ctx.setLineDash([]);
-      ctx.fillStyle = '#e8c07d';
+      ctx.fillStyle = T.color('warn');
       ctx.textAlign = 'left';
       ctx.fillText('floor ' + floor.toFixed(1) + ' dBFS', this.plot.x0 + 6, Y(floor) - 7);
     }
     this.axisLabels(ctx, lane, [[1, '0'], [0.5, '-50'], [0, '-100']]);
-    ctx.fillStyle = '#5a6373';
+    ctx.fillStyle = T.color('muted');
     ctx.textAlign = 'left';
     ctx.fillText('256 buckets, max per bucket', this.plot.x0 + 6, lane.y + 8);
   };
@@ -169,7 +171,7 @@ var RecordingView = (function () {
     var c = this.blocks.continuity;
     var lo = SchemaDecode.CONTINUITY_RANGE[0], hi = SchemaDecode.CONTINUITY_RANGE[1];
     function Y(v) { return lane.y + lane.height - ((v - lo) / (hi - lo)) * lane.height; }
-    ctx.strokeStyle = '#8ce99a';
+    ctx.strokeStyle = T.color('good');
     ctx.beginPath();
     for (var i = 0; i < c.length; i++) {
       var x = X(((i + 0.5) / c.length) * this.plot.ts);
@@ -177,7 +179,7 @@ var RecordingView = (function () {
     }
     ctx.stroke();
     this.axisLabels(ctx, lane, [[1, '1.05'], [0, '0']]);
-    ctx.fillStyle = '#5a6373';
+    ctx.fillStyle = T.color('muted');
     ctx.textAlign = 'left';
     ctx.fillText('256 buckets, mean per bucket', this.plot.x0 + 6, lane.y + 8);
   };
@@ -188,16 +190,16 @@ var RecordingView = (function () {
     var h = 15;
     rows.forEach(function (code, i) {
       var y = lane.y + 3 + i * h;
-      ctx.fillStyle = '#9aa3b2';
+      ctx.fillStyle = T.color('ink-2');
       ctx.textAlign = 'right';
       ctx.fillText(code, LEFT - 2, y + h / 2);
-      ctx.strokeStyle = '#212734';
+      ctx.strokeStyle = T.color('rule');
       ctx.beginPath(); ctx.moveTo(self.plot.x0, y + h - 0.5); ctx.lineTo(self.plot.x1, y + h - 0.5); ctx.stroke();
     });
     this.blocks.spans.forEach(function (s) {
       var y = lane.y + 3 + s.rowIndex * h;
       var xa = X(s.t0), xb = X(s.t1);
-      ctx.fillStyle = LANE_COLOURS[s.row];
+      ctx.fillStyle = laneColour(s.row);
       ctx.globalAlpha = 0.75;
       ctx.fillRect(xa, y + 2, Math.max(1.5, xb - xa), h - 5);
       ctx.globalAlpha = 1;
@@ -208,7 +210,7 @@ var RecordingView = (function () {
       });
     });
     if (this.row.spans_unrowed_n) {
-      ctx.fillStyle = '#e8c07d';
+      ctx.fillStyle = T.color('warn');
       ctx.textAlign = 'left';
       ctx.fillText(this.row.spans_unrowed_n + ' span(s) carry no row code and are drawn nowhere',
         this.plot.x0 + 6, lane.y + lane.height - 6);
@@ -221,7 +223,7 @@ var RecordingView = (function () {
     var h = 17;
     SchemaDecode.CLASSIFIERS.forEach(function (name, i) {
       var y = lane.y + 3 + i * h;
-      ctx.fillStyle = '#9aa3b2';
+      ctx.fillStyle = T.color('ink-2');
       ctx.textAlign = 'right';
       ctx.fillText(name, LEFT - 2, y + h / 2);
     });
@@ -232,13 +234,13 @@ var RecordingView = (function () {
       var y = lane.y + 3 + (ci < 0 ? SchemaDecode.CLASSIFIERS.length - 1 : ci) * h;
       var xa = X(span.t0), xb = X(span.t1);
       ctx.globalAlpha = 0.25 + 0.7 * l.score;
-      ctx.fillStyle = l.classifier == null ? UNKNOWN_COLOUR : '#6ea8ff';
+      ctx.fillStyle = l.classifier == null ? T.color('unknown') : T.color('accent');
       ctx.fillRect(xa, y + 2, Math.max(1.5, xb - xa), h - 5);
       ctx.globalAlpha = 1;
       if (xb - xa > 46) {
         ctx.save();
         ctx.beginPath(); ctx.rect(xa, y, xb - xa, h); ctx.clip();
-        ctx.fillStyle = '#0d1016';
+        ctx.fillStyle = T.color('ground');
         ctx.textAlign = 'left';
         ctx.fillText(l.name, xa + 3, y + h / 2);
         ctx.restore();
@@ -259,13 +261,13 @@ var RecordingView = (function () {
     metrics.forEach(function (m, i) {
       var y = lane.y + 3 + i * h;
       var range = SchemaDecode.SQUIM_RANGES[m[0]];
-      ctx.fillStyle = '#9aa3b2';
+      ctx.fillStyle = T.color('ink-2');
       ctx.textAlign = 'right';
       ctx.fillText(m[1], LEFT - 2, y + h / 2);
-      ctx.fillStyle = '#5a6373';
+      ctx.fillStyle = T.color('muted');
       ctx.textAlign = 'left';
       ctx.fillText(range[0] + '–' + range[1], self.plot.x1 + 2, y + h / 2);
-      ctx.strokeStyle = '#212734';
+      ctx.strokeStyle = T.color('rule');
       ctx.beginPath(); ctx.moveTo(self.plot.x0, y + h - 0.5); ctx.lineTo(self.plot.x1, y + h - 0.5); ctx.stroke();
     });
     this.blocks.spanSquim.forEach(function (s) {
@@ -277,7 +279,7 @@ var RecordingView = (function () {
         var range = SchemaDecode.SQUIM_RANGES[m[0]];
         var frac = (s[m[0]] - range[0]) / (range[1] - range[0]);
         var barH = Math.max(1, frac * (h - 5));
-        ctx.fillStyle = ['#4fd1c5', '#c4a7ff', '#8ce99a'][i];
+        ctx.fillStyle = T.color(['teal', 'violet', 'good'][i]);
         ctx.globalAlpha = 0.8;
         ctx.fillRect(xa, y + h - 3 - barH, Math.max(1.5, xb - xa), barH);
         ctx.globalAlpha = 1;
@@ -295,7 +297,7 @@ var RecordingView = (function () {
     // Bars are acoustic extents. Word text lives in the transcript panel, not fitted to a bar.
     this.blocks.asrWords.forEach(function (word) {
       var xa = X(word.t0), xb = X(word.t1);
-      ctx.fillStyle = word.outcome == null ? UNKNOWN_COLOUR : OUTCOME_COLOURS[word.outcome];
+      ctx.fillStyle = word.outcome == null ? T.color('unknown') : outcomeColour(word.outcome);
       ctx.globalAlpha = 0.85;
       ctx.fillRect(xa, lane.y + 5, Math.max(1.2, xb - xa - 0.6), lane.height - 12);
       ctx.globalAlpha = 1;
@@ -307,7 +309,7 @@ var RecordingView = (function () {
       });
     });
     if (!this.blocks.asrWords.length) {
-      ctx.fillStyle = '#6b7280';
+      ctx.fillStyle = T.color('ink-3');
       ctx.textAlign = 'left';
       ctx.fillText('present and empty — a consensus transcript with no words', this.plot.x0 + 6, lane.y + lane.height / 2);
     }
@@ -317,7 +319,7 @@ var RecordingView = (function () {
     var self = this;
     var marks = this.blocks.piiMarks;
     if (!marks.length) {
-      ctx.fillStyle = '#8ce99a';
+      ctx.fillStyle = T.color('good');
       ctx.textAlign = 'left';
       ctx.fillText('scanned, nothing found (pii_findings_n = ' + this.row.pii_findings_n + ')',
         this.plot.x0 + 6, lane.y + lane.height / 2);
@@ -325,16 +327,16 @@ var RecordingView = (function () {
     }
     marks.forEach(function (m) {
       var xa = X(m.t0), xb = X(m.t1);
-      ctx.fillStyle = '#ff8fa3';
+      ctx.fillStyle = T.color('bad');
       ctx.globalAlpha = 0.6;
       ctx.fillRect(xa, lane.y + 4, Math.max(2, xb - xa), lane.height - 8);
       ctx.globalAlpha = 1;
-      ctx.strokeStyle = '#ff8fa3';
+      ctx.strokeStyle = T.color('bad');
       ctx.strokeRect(xa + 0.5, lane.y + 4.5, Math.max(2, xb - xa) - 1, lane.height - 9);
       if (xb - xa > 40) {
         ctx.save();
         ctx.beginPath(); ctx.rect(xa, lane.y, xb - xa, lane.height); ctx.clip();
-        ctx.fillStyle = '#12151c';
+        ctx.fillStyle = T.color('label-bg');
         ctx.textAlign = 'left';
         ctx.fillText(m.category, xa + 3, lane.y + lane.height / 2);
         ctx.restore();
@@ -351,23 +353,23 @@ var RecordingView = (function () {
     var h = 17;
     SchemaDecode.LANES.forEach(function (name, i) {
       var y = lane.y + 3 + i * h;
-      ctx.fillStyle = '#9aa3b2';
+      ctx.fillStyle = T.color('ink-2');
       ctx.textAlign = 'right';
       ctx.fillText(name, LEFT - 2, y + h / 2);
-      ctx.strokeStyle = '#212734';
+      ctx.strokeStyle = T.color('rule');
       ctx.beginPath(); ctx.moveTo(self.plot.x0, y + h - 0.5); ctx.lineTo(self.plot.x1, y + h - 0.5); ctx.stroke();
     });
     this.blocks.branchLanes.forEach(function (l) {
       var y = lane.y + 3 + l.laneIndex * h;
       var xa = X(l.t0), xb = X(l.t1);
-      ctx.fillStyle = LANE_COLOURS[l.lane];
+      ctx.fillStyle = laneColour(l.lane);
       ctx.globalAlpha = 0.7;
       ctx.fillRect(xa, y + 2, Math.max(1.5, xb - xa), h - 5);
       ctx.globalAlpha = 1;
       if (xb - xa > 44) {
         ctx.save();
         ctx.beginPath(); ctx.rect(xa, y, xb - xa, h); ctx.clip();
-        ctx.fillStyle = '#12151c';
+        ctx.fillStyle = T.color('label-bg');
         ctx.textAlign = 'left';
         ctx.fillText(l.role, xa + 3, y + h / 2);
         ctx.restore();
@@ -381,7 +383,7 @@ var RecordingView = (function () {
 
   RecordingView.prototype.axisLabels = function (ctx, lane, marks) {
     ctx.save();
-    ctx.fillStyle = '#5a6373';
+    ctx.fillStyle = T.color('muted');
     ctx.textAlign = 'right';
     marks.forEach(function (m) {
       ctx.fillText(m[1], LEFT - 8, lane.y + lane.height - m[0] * lane.height + (m[0] === 1 ? 5 : m[0] === 0 ? -5 : 0));
@@ -398,11 +400,11 @@ var RecordingView = (function () {
     var tw = ctx.measureText(hit.text).width;
     var bx = Math.min(hit.x0, this.canvas.clientWidth - tw - 2 * pad - 4);
     var by = Math.max(2, hit.y0 - 20);
-    ctx.fillStyle = 'rgba(8,10,14,0.94)';
-    ctx.strokeStyle = '#4b5361';
+    ctx.fillStyle = T.color('tip-bg');
+    ctx.strokeStyle = T.color('tip-line');
     ctx.fillRect(bx, by, tw + 2 * pad, 18);
     ctx.strokeRect(bx + 0.5, by + 0.5, tw + 2 * pad - 1, 17);
-    ctx.fillStyle = '#e6e9ef';
+    ctx.fillStyle = T.color('ink');
     ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';
     ctx.fillText(hit.text, bx + pad, by + 9);
@@ -425,8 +427,8 @@ var RecordingView = (function () {
     return m * pow;
   }
 
-  RecordingView.LANE_COLOURS = LANE_COLOURS;
-  RecordingView.OUTCOME_COLOURS = OUTCOME_COLOURS;
+  RecordingView.LANE_TOKENS = LANE_TOKENS;
+  RecordingView.OUTCOME_TOKENS = OUTCOME_TOKENS;
   RecordingView.niceStep = niceStep;
   return RecordingView;
 })();
