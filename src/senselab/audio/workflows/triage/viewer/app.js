@@ -37,6 +37,7 @@
     facetQuery: '',
     facetTiming: null,
     facetBusy: false,
+    stepping: false,
   };
 
   function $(id) { return document.getElementById(id); }
@@ -334,7 +335,7 @@
     var cm = state.view.colourMap;
     if (!cm) return;
     if (cm.kind === 'categorical') {
-      cm.summary.categories.slice(0, CorpusView.PALETTE.length).forEach(function (c) {
+      cm.summary.categories.slice(0, CorpusView.palette().length).forEach(function (c) {
         var s = el('span', 'swatch');
         s.style.background = cm.map[c];
         var w = el('span', 'legend-item');
@@ -343,17 +344,17 @@
         w.title = String(c);
         box.appendChild(w);
       });
-      if (cm.summary.categories.length > CorpusView.PALETTE.length) {
+      if (cm.summary.categories.length > CorpusView.palette().length) {
         box.appendChild(el('span', 'legend-item', '+' +
-          (cm.summary.categories.length - CorpusView.PALETTE.length) + ' more in grey'));
+          (cm.summary.categories.length - CorpusView.palette().length) + ' more in grey'));
       }
     } else {
       var w2 = el('span', 'legend-item', CorpusView.formatNumber(cm.summary.min) + ' → ' + CorpusView.formatNumber(cm.summary.max));
       box.appendChild(w2);
-      CorpusView.PALETTE.forEach(function (p) { var s = el('span', 'swatch'); s.style.background = p; box.appendChild(s); });
+      CorpusView.palette().forEach(function (p) { var s = el('span', 'swatch'); s.style.background = p; box.appendChild(s); });
     }
     var g = el('span', 'legend-item');
-    var gs = el('span', 'swatch'); gs.style.background = CorpusView.GREY;
+    var gs = el('span', 'swatch'); gs.style.background = CorpusView.grey();
     g.appendChild(gs); g.appendChild(document.createTextNode('absent on the colour column'));
     box.appendChild(g);
   }
@@ -382,8 +383,8 @@
         var g = view.geom;
         var ctx = view.octx;
         ctx.save();
-        ctx.fillStyle = 'rgba(110,168,255,0.18)';
-        ctx.strokeStyle = '#6ea8ff';
+        ctx.fillStyle = Theme.color('brush-fill');
+        ctx.strokeStyle = Theme.color('accent');
         var x = g.xs[drag.axis];
         var top = Math.min(drag.y0, drag.y1), bot = Math.max(drag.y0, drag.y1);
         ctx.fillRect(x - 16, top, 32, bot - top);
@@ -462,6 +463,7 @@
 
   async function selectRecording(index) {
     state.current = index;
+    if (!state.stepping) $('navpos').textContent = SelectionKeys.describe(SelectionKeys.locate(state.view.selected, index));
     state.view.focus = index;
     state.view.paintOverlay();
     renderList();
@@ -1017,9 +1019,45 @@
     });
   }
 
+  // ---------------------------------------------------------------- theme and keys
+
+  function repaint() {
+    if (state.view) { state.view.buildColourMap(); state.view.draw(); renderLegend(); }
+    if (state.recView && state.recView.row && !$('rec-canvas').hidden) state.recView.paint();
+  }
+
+  function stepSelection(action) {
+    if (!state.view) return;
+    var move = SelectionKeys.step(state.view.selected, state.current, action);
+    if (move.index >= 0 && move.index !== state.current) {
+      state.stepping = true;
+      selectRecording(move.index);
+      state.stepping = false;
+    }
+    $('navpos').textContent = SelectionKeys.describe(move);
+  }
+
+  function wireKeys() {
+    document.addEventListener('keydown', function (e) {
+      var action = SelectionKeys.actionFor(e);
+      if (!action || !state.view) return;
+      e.preventDefault();
+      stepSelection(action);
+    });
+  }
+
   // ---------------------------------------------------------------- landing
 
   function wireLanding() {
+    Theme.onChange(repaint);
+    ['theme-toggle', 'theme-toggle-landing'].forEach(function (id) { if ($(id)) Theme.wire($(id)); });
+    Theme.onChange(function () {
+      ['theme-toggle', 'theme-toggle-landing'].forEach(function (id) {
+        if ($(id)) $(id).textContent = 'theme: ' + Theme.mode();
+      });
+    });
+    $('keys-help').textContent = SelectionKeys.HELP;
+    wireKeys();
     var input = $('picker');
     input.onchange = function () { if (input.files[0]) openFile(input.files[0]).catch(fail); };
     var drop = document.body;

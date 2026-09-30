@@ -7,17 +7,13 @@
 'use strict';
 
 var CorpusView = (function () {
+  var T = typeof Theme !== 'undefined' ? Theme : require('./theme.js');
   var PAD = { top: 74, bottom: 58, left: 118, right: 40 };
   var RAIL_GAP = 26;
   var RAIL_HEIGHT = 16;
   var STUB = 22;
   var CHUNK = 6000;
 
-  var PALETTE = [
-    '#6ea8ff', '#ffb454', '#8ce99a', '#ff8fa3', '#c4a7ff',
-    '#4fd1c5', '#f6e05e', '#fc8181', '#9ae6b4', '#b794f4',
-  ];
-  var GREY = '#7a8291';
 
   function CorpusView(canvas, overlay) {
     this.canvas = canvas;
@@ -88,7 +84,8 @@ var CorpusView = (function () {
     this.colourSummary = s;
     if (s.kind === 'categorical') {
       var map = {};
-      s.categories.slice(0, PALETTE.length).forEach(function (c, i) { map[c] = PALETTE[i]; });
+      var palette = T.series();
+      s.categories.slice(0, palette.length).forEach(function (c, i) { map[c] = palette[i]; });
       this.colourMap = { kind: 'categorical', map: map, summary: s };
     } else {
       this.colourMap = { kind: 'numeric', summary: s };
@@ -96,14 +93,15 @@ var CorpusView = (function () {
   };
 
   CorpusView.prototype.colourOf = function (row) {
-    if (!this.colourMap) return PALETTE[0];
+    if (!this.colourMap) return T.color('series-0');
     var v = SchemaAxes.readValue(this.colourMap.summary.col, row);
-    if (v == null) return GREY;
-    if (this.colourMap.kind === 'categorical') return this.colourMap.map[v] || GREY;
+    if (v == null) return T.color('unknown');
+    if (this.colourMap.kind === 'categorical') return this.colourMap.map[v] || T.color('unknown');
     var p = SchemaAxes.position(this.colourMap.summary, v);
-    if (p == null) return GREY;
-    var i = Math.min(PALETTE.length - 1, Math.max(0, Math.round(p * (PALETTE.length - 1))));
-    return PALETTE[i];
+    if (p == null) return T.color('unknown');
+    var palette = T.series();
+    var i = Math.min(palette.length - 1, Math.max(0, Math.round(p * (palette.length - 1))));
+    return palette[i];
   };
 
   // ------------------------------------------------------------------ geometry
@@ -343,9 +341,9 @@ var CorpusView = (function () {
     }
     ctx.lineWidth = 1;
     ctx.lineJoin = 'round';
-    if (anyDim) { ctx.globalAlpha = Math.min(0.05, alpha * 0.4); ctx.strokeStyle = '#3a4150'; ctx.stroke(dimPath); }
+    if (anyDim) { ctx.globalAlpha = Math.min(0.05, alpha * 0.4); ctx.strokeStyle = T.color('dim'); ctx.stroke(dimPath); }
     ctx.globalAlpha = Math.min(0.12, alpha * 0.5);
-    ctx.strokeStyle = '#6b7280';
+    ctx.strokeStyle = T.color('ink-3');
     ctx.setLineDash([2, 3]);
     ctx.stroke(stubPath);
     ctx.setLineDash([]);
@@ -362,11 +360,11 @@ var CorpusView = (function () {
     for (var a = 0; a < this.summaries.length; a++) {
       var s = this.summaries[a];
       var x = g.xs[a];
-      ctx.strokeStyle = '#4b5361';
+      ctx.strokeStyle = T.color('tip-line');
       ctx.lineWidth = 1;
       ctx.beginPath(); ctx.moveTo(x, g.bandTop); ctx.lineTo(x, g.bandBottom); ctx.stroke();
       // the break between the value band and the absent rail
-      ctx.strokeStyle = '#6b7280';
+      ctx.strokeStyle = T.color('ink-3');
       ctx.beginPath();
       ctx.moveTo(x - 5, g.bandBottom + 7); ctx.lineTo(x + 5, g.bandBottom + 3);
       ctx.moveTo(x - 5, g.bandBottom + 13); ctx.lineTo(x + 5, g.bandBottom + 9);
@@ -387,26 +385,26 @@ var CorpusView = (function () {
       // the absent rail: a bar whose width is the share of the drawn set that has no value here
       var share = this.selectedCount ? brushed.absent / this.selectedCount : 0;
       var full = 74;
-      ctx.fillStyle = '#242a35';
+      ctx.fillStyle = T.color('rail-bg');
       ctx.fillRect(x - full / 2, g.railY - RAIL_HEIGHT, full, RAIL_HEIGHT);
-      ctx.fillStyle = brushed.absent ? '#8a6d3b' : '#2f3542';
+      ctx.fillStyle = brushed.absent ? T.color('absent-fill') : T.color('rail');
       ctx.fillRect(x - full / 2, g.railY - RAIL_HEIGHT, full * share, RAIL_HEIGHT);
-      ctx.strokeStyle = '#5a6373';
+      ctx.strokeStyle = T.color('muted');
       ctx.strokeRect(x - full / 2 + 0.5, g.railY - RAIL_HEIGHT + 0.5, full - 1, RAIL_HEIGHT - 1);
-      ctx.fillStyle = brushed.absent ? '#e8c07d' : '#6b7280';
+      ctx.fillStyle = brushed.absent ? T.color('warn') : T.color('ink-3');
       ctx.textAlign = 'center';
       ctx.fillText('absent ' + brushed.absent.toLocaleString(), x, g.railY - RAIL_HEIGHT / 2);
 
       // scale ticks
       ctx.textAlign = 'right';
-      ctx.fillStyle = '#9aa3b2';
+      ctx.fillStyle = T.color('ink-2');
       if (s.kind === 'numeric') {
         for (var t = 0; t <= 4; t++) {
           var frac = t / 4;
           var y = g.bandBottom - frac * (g.bandBottom - g.bandTop);
           var val = SchemaAxes.valueOf(s, frac);
           ctx.fillText(formatNumber(val), x - 6, y);
-          ctx.strokeStyle = '#3a4150';
+          ctx.strokeStyle = T.color('dim');
           ctx.beginPath(); ctx.moveTo(x - 4, y); ctx.lineTo(x, y); ctx.stroke();
         }
         this.paintBounds(ctx, a, g);
@@ -418,11 +416,11 @@ var CorpusView = (function () {
         for (var ci = 0; ci < cats.length; ci += every) {
           var yy = g.bandTop + ci * step;
           ctx.fillText(truncate(SchemaAxes.categoryLabel(s.col, cats[ci]), 16), x - 6, yy);
-          ctx.strokeStyle = '#3a4150';
+          ctx.strokeStyle = T.color('dim');
           ctx.beginPath(); ctx.moveTo(x - 4, yy); ctx.lineTo(x, yy); ctx.stroke();
         }
         if (cats.length > 1 && every > 1) {
-          ctx.fillStyle = '#6b7280';
+          ctx.fillStyle = T.color('ink-3');
           ctx.textAlign = 'center';
           ctx.fillText(cats.length.toLocaleString() + ' categories', x, g.bandTop - 10);
         }
@@ -467,15 +465,15 @@ var CorpusView = (function () {
       // the failing side: below the line for at_least, above it for at_most
       var failTop = s.col.op === 'at_least' ? y : g.bandTop;
       var failBottom = s.col.op === 'at_least' ? g.bandBottom : y;
-      ctx.fillStyle = 'rgba(200, 80, 80, 0.10)';
+      ctx.fillStyle = T.color('brush-bad-fill');
       ctx.fillRect(x - half, failTop, half * 2, Math.max(0, failBottom - failTop));
-      ctx.strokeStyle = '#d06060';
+      ctx.strokeStyle = T.color('brush-bad-line');
       ctx.setLineDash([5, 3]);
       ctx.lineWidth = 1.5;
       ctx.beginPath(); ctx.moveTo(x - half, y); ctx.lineTo(x + half, y); ctx.stroke();
       ctx.setLineDash([]);
       ctx.lineWidth = 1;
-      ctx.fillStyle = '#e08a8a';
+      ctx.fillStyle = T.color('brush-bad-ink');
       ctx.textAlign = 'left';
       ctx.fillText(formatNumber(bounds[b].bound), x + half + 4, y);
     }
@@ -503,8 +501,8 @@ var CorpusView = (function () {
     var ctx = this.octx;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, this.overlay.width / dpr, this.overlay.height / dpr);
-    if (this.focus >= 0) this.paintOne(ctx, this.focus, '#ffffff', 2.2);
-    if (this.hover >= 0 && this.hover !== this.focus) this.paintOne(ctx, this.hover, '#ffd166', 1.6);
+    if (this.focus >= 0) this.paintOne(ctx, this.focus, T.color('focus'), 2.2);
+    if (this.hover >= 0 && this.hover !== this.focus) this.paintOne(ctx, this.hover, T.color('hover'), 1.6);
   };
 
   /**
@@ -599,8 +597,8 @@ var CorpusView = (function () {
     return s.length <= n ? s : s.slice(0, n - 1) + '…';
   }
 
-  CorpusView.PALETTE = PALETTE;
-  CorpusView.GREY = GREY;
+  CorpusView.palette = function () { return T.series(); };
+  CorpusView.grey = function () { return T.color('unknown'); };
   CorpusView.formatNumber = formatNumber;
   CorpusView.truncate = truncate;
   CorpusView.RAIL_HEIGHT = RAIL_HEIGHT;

@@ -263,3 +263,32 @@ changes no other process's key).
   prompt version: every r8 reading predates `PROMPT_VERSION` (H bumps it to 2), so r9 misses on every
   reviewed recording, for that reason alone, and r10 hits wherever the residue is unchanged. Run it
   over r9's tree only if r9's stores were written by a checkout without this cache.
+
+## F. The viewer's theme
+
+`theme.js`: a `theme: <mode>` button on the landing and in the top bar cycles system → light → dark.
+The choice is kept in `localStorage` (every access in try/catch; unavailable storage reads as
+system), and a script in `<head>` sets `data-theme` before first paint. `styles.css` defines the light
+tokens on `:root`, the dark ones under `@media (prefers-color-scheme: dark)` for
+`:root:not([data-theme="light"])` and again under `:root[data-theme="dark"]`. Every colour the two
+canvases and the brush overlay draw (the 59 literals in `corpus.js`, `recording.js` and `app.js`, and
+the 16 in the stylesheet) is a token; the canvases read `--c-<name>` through `Theme.color`, and a theme
+change (or a system change while in system mode) rebuilds the colour map and repaints both views.
+`theme.test.mjs` checks both themes define every canvas token, the two dark blocks agree, no JS
+colour literal remains, and contrast: text (`ink`, `ink-2`) at least 4.5:1 on `ground`, `panel` and
+`panel-2`, marks (accent, the status colours, the ten series) at least 3:1 on `ground`, in both themes.
+
+## G. Stepping through the selection
+
+`keys.js`: `j`/`↓` next, `k`/`↑` previous, `Home`/`End` first/last, over the rows the current brushes and
+facets select, in row order (the list's order). Each step opens that recording (detail panel,
+highlighted line, scroll) and the under-bar reads `n of N`; a step past an end stays and says "first/last
+in the selection". Keys typed in an input, select, textarea or editable element, or with a modifier,
+are not steps. From a recording outside the selection a step enters it at the nearest selected row.
+The key help is in the under-bar. `keys.test.mjs` and two browser specs cover it.
+
+The browser suite (`npx playwright test`, fixture regenerated for schema 12) passes 16 of 20; the four
+failures (`gate_repetitions_min` axis bound, zero-on-band, outcome axis, facet gate count) fail
+identically at the commit before F and G: the fixture script still generates the pre-schema-10 gate
+set (`train_min_s`, `coverage_min`, `items_min`, `dominant_speaker_share_min`), and the facet spec
+counts located gates that carry no `_passed` column since schema 10. Not fixed here.
