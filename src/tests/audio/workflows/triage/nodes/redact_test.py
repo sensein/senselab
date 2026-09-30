@@ -36,6 +36,7 @@ from senselab.audio.workflows.triage.nodes.redact import (
     PII_LEDGER,
     PLACED_SUBSTRING,
     PLACED_WORDS,
+    PROPOSED_BY_REVIEWER,
     RELEASED_FILES,
     REVIEWER,
     STREAM_NAME,
@@ -2512,6 +2513,19 @@ class TestAMaskIsAFindingsOwnWords:
         plan = _plan(store)
         assert [span.agreement for span in plan.proposals] == [AGREED_MASKED, NEW]
         assert plan.agreed == frozenset({0})
+
+    def test_a_proposals_function_words_are_not_proposed(
+        self, store: ProvStore, redact_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A redact quote's function words are neither its ``content_ids`` nor counted as proposed."""
+        words = ["i", "had", "a", "cyst", "in", "my", "neck"]
+        self._seed(store, redact_config, tmp_path, monkeypatch, words, [])
+        _annotate(store, [_redact_entry("a cyst in my neck", "CONDITION")])
+        plan = _plan(store)
+        (span,) = plan.proposals
+        texts = dict(zip(span.word_ids, span.texts))
+        assert sorted(texts[i] for i in span.content_ids) == ["cyst", "neck"]
+        assert plan.count(PROPOSED_BY_REVIEWER) == 2
 
     def test_identical_findings_are_one_mask_labelled_by_family(
         self, store: ProvStore, redact_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

@@ -176,6 +176,25 @@ var SchemaFacets = (function () {
   };
 
   /**
+   * Choose every value of one facet, the absent value included where the column has it.
+   *
+   * @param {string} name the column.
+   * @returns {Array<string>} what is chosen afterwards.
+   */
+  FacetModel.prototype.selectAll = function (name) {
+    var enc = this.encode(name);
+    var terms = enc.terms.slice();
+    var absent = enc.mode === 'scalar'
+      ? Array.prototype.some.call(enc.codes, function (c) { return c < 0; })
+      : enc.absentRows.length > 0;
+    if (absent) terms.push(ABSENT);
+    if (terms.length) this.selection[name] = terms;
+    else delete this.selection[name];
+    this._masks = null;
+    return this.chosen(name);
+  };
+
+  /**
    * Drop one facet's choices, or every facet's.
    *
    * @param {string|null} name the column, or null for all of them.

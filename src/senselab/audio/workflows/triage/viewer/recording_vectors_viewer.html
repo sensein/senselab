@@ -458,6 +458,10 @@ table.measures tr.absent-row { background: var(--absent-row); }
 }
 .facet-group .fg-mode { color: var(--ink-3); font-size: 10px; }
 .facet-values { padding: 2px 6px 8px; }
+.facet-bulk { display: flex; gap: 4px; padding: 0 4px 5px; }
+.facet-bulk button { font-size: 10px; padding: 1px 6px; border: 1px solid var(--line); background: transparent;
+  color: var(--ink-2); border-radius: 3px; cursor: pointer; }
+.facet-bulk button:hover, .facet-bulk button:focus-visible { color: var(--ink); border-color: var(--ink-3); }
 .facet-null { color: var(--ink-3); font-size: 10px; padding: 0 4px 5px; }
 
 .facet-value {
@@ -2043,6 +2047,25 @@ var SchemaFacets = (function () {
     var at = sel.indexOf(term);
     sel = at < 0 ? sel.concat([term]) : sel.slice(0, at).concat(sel.slice(at + 1));
     if (sel.length) this.selection[name] = sel;
+    else delete this.selection[name];
+    this._masks = null;
+    return this.chosen(name);
+  };
+
+  /**
+   * Choose every value of one facet, the absent value included where the column has it.
+   *
+   * @param {string} name the column.
+   * @returns {Array<string>} what is chosen afterwards.
+   */
+  FacetModel.prototype.selectAll = function (name) {
+    var enc = this.encode(name);
+    var terms = enc.terms.slice();
+    var absent = enc.mode === 'scalar'
+      ? Array.prototype.some.call(enc.codes, function (c) { return c < 0; })
+      : enc.absentRows.length > 0;
+    if (absent) terms.push(ABSENT);
+    if (terms.length) this.selection[name] = terms;
     else delete this.selection[name];
     this._masks = null;
     return this.chosen(name);
@@ -4167,6 +4190,18 @@ if (typeof module !== 'undefined' && module.exports) module.exports = RecordingV
     var name = f.col.name;
     var v = state.facets.values(name);
     var box = el('div', 'facet-values');
+    var bulk = el('div', 'facet-bulk');
+    var all = el('button', 'facet-all', 'all');
+    all.type = 'button';
+    all.title = 'choose every value of ' + name;
+    all.onclick = function () { state.facets.selectAll(name); applyFacets(); };
+    var none = el('button', 'facet-none', 'none');
+    none.type = 'button';
+    none.title = 'choose no value of ' + name + ' (the facet stops narrowing)';
+    none.onclick = function () { state.facets.clear(name); applyFacets(); };
+    bulk.appendChild(all);
+    bulk.appendChild(none);
+    box.appendChild(bulk);
     if (v.nullMeans) box.appendChild(el('div', 'facet-null', 'absent means: ' + v.nullMeans));
     var q = state.facetQuery;
     var shown = v.values.filter(function (x) {

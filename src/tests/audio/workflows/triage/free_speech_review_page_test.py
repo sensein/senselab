@@ -1944,3 +1944,57 @@ def test_an_agreeing_redact_entry_draws_no_red_on_words_the_release_shows() -> N
     assert {word_id for word_id, state in states.items() if state["s"] == page.PROPOSED_BY_REVIEWER} == {"w-wisconsin"}
     assert states["w-week"]["s"] == page.MASKED and states["w-week"]["pr"] == 1
     assert not {"w-a", "w-or", "w-so", "w-that"} & set(states)
+
+
+def test_a_proposal_marks_only_its_content_words() -> None:
+    """r9's free-speech-2 card: a condition quote's function words get no mark; a trimmed "to" stays orange."""
+    ledger = {
+        "masks": [
+            {
+                "category": "DATE_TIME",
+                "words": [{"id": "w-to", "state": "unmasked_by_trim", "content": False, "named": True}],
+            }
+        ],
+        "proposals": [
+            {
+                "category": "CONDITION",
+                "agreement": "new",
+                "human_review": True,
+                "word_ids": ["w-syn", "w-joint", "w-cyst", "w-between", "w-cone", "w-one", "w-and", "w-ctwo"],
+                "texts": ["synovial", "joint", "cyst", "between", "Cone", "one", "and", "Ctwo"],
+            },
+            {
+                "category": "CONDITION",
+                "agreement": "new",
+                "human_review": True,
+                "word_ids": ["w-pron", "w-change", "w-in", "w-my", "w-voice"],
+                "texts": ["pronounced", "change", "in", "my", "voice"],
+            },
+        ],
+    }
+    states = page.word_states(ledger)
+    proposed = {word_id for word_id, state in states.items() if state["s"] == page.PROPOSED_BY_REVIEWER}
+    assert not {"w-and", "w-in", "w-my"} & proposed
+    assert {"w-syn", "w-joint", "w-cyst", "w-voice"} <= proposed
+    assert ("w-between" in proposed) == page.is_content_word("between"), "follows the one definition"
+    assert states["w-to"]["s"] == page.UNMASKED_BY_TRIM
+    assert page.MARK_COLOURS[states["w-to"]["s"]] == "orange"
+
+
+def test_the_ledgers_content_ids_decide_which_proposal_words_mark() -> None:
+    """Where the fold recorded ``content_ids``, those and only those words are proposed."""
+    proposal = {"word_ids": ["a", "b", "c"], "texts": ["in", "my", "voice"], "content_ids": ["c"]}
+    assert page.proposal_content_ids(proposal) == ["c"]
+    assert page.proposal_content_ids({"word_ids": ["a", "b", "c"], "texts": ["in", "my", "voice"]}) == ["c"]
+
+
+def test_every_checkbox_facet_has_all_and_none(tmp_path: Path) -> None:
+    """Each checkbox facet group in the rail carries an all and a none control wired to its class."""
+    corpus = page.Corpus()
+    corpus.add(_row("sub-a", f=[_mark("k1", ["PERSON"], ["presidio"], 0, 1)]))
+    document = page.render(corpus, "Review")
+    classes = {"fam-f", "rel-f", "cat-f", "det-f"}
+    for cls in classes:
+        assert f"','{cls}']" in document, cls
+    for button in ("allrel", "norel", "allfam", "nofam", "allcat", "nocat", "alldet", "nodet"):
+        assert f'<button id="{button}" type="button">' in document

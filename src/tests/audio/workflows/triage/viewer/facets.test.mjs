@@ -287,3 +287,31 @@ function stubCanvas () {
   })
   return { clientWidth: 1200, clientHeight: 700, width: 1200, height: 700, getContext: () => ctx }
 }
+
+// ------------------------------------------------------------------ all / none
+
+test('all chooses every value, absence included, and admits every row', () => {
+  const m = new F.FacetModel(ROWS)
+  const chosen = m.selectAll('conformance_speech')
+  assert.ok(chosen.includes(ABSENT), 'the absent value is chosen too')
+  assert.deepEqual(new Set(chosen), new Set(m.values('conformance_speech').values.map(x => x.term)))
+  assert.equal(m.after(), 33)
+  // then clicking one value off excludes exactly that value
+  m.toggle('conformance_speech', ABSENT)
+  assert.equal(m.after(), 33 - 8)
+})
+
+test('none drops the facet, so it stops narrowing', () => {
+  const m = new F.FacetModel(ROWS)
+  m.toggle('task', 'cough')
+  assert.equal(m.after(), 3)
+  m.clear('task')
+  assert.deepEqual(m.chosen('task'), [])
+  assert.equal(m.after(), 33)
+})
+
+test('all on a set column chooses every member', () => {
+  const m = new F.FacetModel(ROWS)
+  const chosen = m.selectAll('gate_failed_names')
+  assert.ok(chosen.includes('response_min_s') && chosen.includes('items_min'))
+})
