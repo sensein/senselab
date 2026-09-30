@@ -22,7 +22,7 @@ See ``specs/20260924-reviewer-over-every-transcript/design.md``.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -60,6 +60,13 @@ from senselab.text.tasks.pii_detection.redaction_review import (
     shutdown_review_worker,
 )
 from senselab.utils.prov_store import ProvStore
+from senselab.utils.tasks.cached_inference import (
+    canonical_params,
+    result_cache_key,
+    result_lookup,
+    result_store,
+    transcript_signature,
+)
 
 NODE = "REVIEW"
 
@@ -440,6 +447,153 @@ def _loop(
     )
 
 
+REVIEW_PROCESS = "redaction_review"
+"""The result cache's name for one bounded reviewer loop over one recording."""
+
+READ_STATES = (CLEAN, FLAGGED)
+"""The readings worth keeping: the model answered. An absent reading is never cached."""
+
+
+def review_cache_key(
+    original: str,
+    redacted: str | None,
+    context: Mapping[str, Any],
+    settings: Mapping[str, Any],
+    revision: str,
+) -> str:
+    """The result-cache key of one reading: exactly what the loop reads, and everything that shapes it.
+
+    Args:
+        original: The recording's words, as the loop reads them.
+        redacted: The released text, or None.
+        context: :func:`task_context`'s mapping.
+        settings: :func:`_llm_settings`' mapping.
+        revision: The 40-hex commit the reviewer's ref resolved to.
+
+    Returns:
+        The key: the texts and context, the prompt and parse version, the model and its commit, and the
+        generation ceiling and iteration bound.
+    """
+    request = canonical_params({"original": original, "redacted": redacted, "context": dict(context)})
+    return result_cache_key(
+        input_signature=transcript_signature(request),
+        process=REVIEW_PROCESS,
+        model_id=str(settings["model_id"]),
+        commit_sha=revision,
+        params={
+            "prompt_version": PROMPT_VERSION,
+            "max_new_tokens": int(settings["max_new_tokens"]),
+            "max_iterations": int(settings["max_iterations"]),
+        },
+    )
+
+
+def reading_from_cache(payload: Mapping[str, Any]) -> tuple[_Reading, list[dict[str, Any]]]:
+    """A cached reading and its rounds, as the loop would have returned them.
+
+    Args:
+        payload: The stored result: ``{"reading": ..., "reviews": [...]}``.
+
+    Returns:
+        :func:`_rounds`' pair.
+    """
+    fields_ = dict(payload["reading"])
+    fields_["flagged"] = tuple(fields_.get("flagged") or ())
+    fields_["proposal"] = tuple(dict(entry) for entry in fields_.get("proposal") or ())
+    fields_["other_speakers"] = tuple(dict(entry) for entry in fields_.get("other_speakers") or ())
+    return _Reading(**fields_), [dict(review) for review in payload.get("reviews") or ()]
+
+
+def cache_reading(key: str, reading: _Reading, reviews: Sequence[Mapping[str, Any]]) -> bool:
+    """Keep one answered reading under its key; an absent one is never kept.
+
+    Args:
+        key: From :func:`review_cache_key`.
+        reading: The loop's summary.
+        reviews: Its per-round payloads.
+
+    Returns:
+        True when this call wrote the entry.
+    """
+    if reading.status not in READ_STATES or reading.revision is None:
+        return False
+    return result_store(
+        key,
+        {"reading": asdict(reading), "reviews": [dict(review) for review in reviews]},
+        process=REVIEW_PROCESS,
+        model_id=reading.model_id,
+        commit_sha=reading.revision,
+    )
+
+
+BACKFILL_STORED = "stored"
+BACKFILL_HELD = "held"
+BACKFILL_SKIPPED = "skipped"
+
+
+def backfill_from_store(store: ProvStore, config: TriageConfig) -> tuple[str, str]:
+    """Seed the result cache with the reading a finished store already holds.
+
+    The key is rebuilt from what the store says the loop read -- its transcript texts, the annotation's
+    task context, the model and commit the reading loaded -- under the configuration's generation
+    settings, which must be the ones the run used.
+
+    Args:
+        store: A finished run's store.
+        config: The run's triage configuration.
+
+    Returns:
+        ``(state, why)``: :data:`BACKFILL_STORED`, :data:`BACKFILL_HELD` (the key was already held) or
+        :data:`BACKFILL_SKIPPED` with the reason.
+    """
+    annotation = find_measurement(store, REDACTION_LLM_ANNOTATION)
+    if annotation is None:
+        return BACKFILL_SKIPPED, "no annotation"
+    held = dict(annotation.attributes)
+    if held.get("prompt_version") != PROMPT_VERSION:
+        return BACKFILL_SKIPPED, f"prompt version {held.get('prompt_version')!r} is not {PROMPT_VERSION}"
+    if held.get("status") not in READ_STATES or not held.get("revision"):
+        return BACKFILL_SKIPPED, f"status {held.get('status')!r}"
+    settings = _llm_settings(config)
+    if str(held.get("model_id")) != str(settings["model_id"]):
+        return BACKFILL_SKIPPED, f"model {held.get('model_id')!r} is not the configured one"
+    original, redacted = transcript_texts(store)
+    if bool(held.get("read_redacted")) != (redacted is not None):
+        return BACKFILL_SKIPPED, "the store's redaction differs from the one the reading read"
+    reading = _Reading(
+        status=str(held["status"]),
+        iterations=int(held.get("iterations") or 0),
+        flagged=tuple(held.get("flagged") or ()),
+        redaction=str(held.get("redaction") or ""),
+        original=str(held.get("original") or ""),
+        speakers=str(held.get("speakers") or ""),
+        proposal=tuple(dict(entry) for entry in held.get("proposal") or ()),
+        model_id=str(held["model_id"]),
+        revision=str(held["revision"]),
+        failure=held.get("failure"),
+        converged=bool(held.get("converged", True)),
+        problem=held.get("problem"),
+        other_speakers=tuple(dict(entry) for entry in held.get("other_speakers") or ()),
+    )
+    reviews = [
+        {key: value for key, value in entity.attributes.items() if key not in ("name", "signal")}
+        for entity in store.entities("measurement")
+        if entity.attributes.get("name") == _LLM_REVIEW_MEASUREMENT and not store.is_invalidated(entity.id)
+    ]
+    key = review_cache_key(original, redacted, dict(held.get("task_context") or {}), settings, reading.revision or "")
+    return (BACKFILL_STORED, key) if cache_reading(key, reading, reviews) else (BACKFILL_HELD, key)
+
+
+def _resolved(settings: Mapping[str, Any]) -> str | None:
+    """The commit the reviewer's ref resolves to, or None where it cannot be resolved here."""
+    try:
+        from senselab.utils.model_revision import resolve_revision
+
+        return str(resolve_revision(str(settings["model_id"]), str(settings["ref"])))
+    except Exception:  # noqa: BLE001 — no commit, no key; the loop records why
+        return None
+
+
 def _read(
     original: str, redacted: str | None, settings: Mapping[str, Any], context: Mapping[str, Any]
 ) -> tuple[_Reading, list[dict[str, Any]]]:
@@ -489,6 +643,7 @@ def review(store: ProvStore, config: TriageConfig, hint: AudioHints | None = Non
 
     started = _stamp()
     reviews: list[dict[str, Any]] = []
+    cache: dict[str, Any] = {"key": None, "hit": False}
     if not settings["enabled"]:
         reading = _Reading(DISABLED, 0, (), "", "", "", (), "", None, None)
     elif not original.strip():
@@ -496,10 +651,20 @@ def review(store: ProvStore, config: TriageConfig, hint: AudioHints | None = Non
             NOTHING_TO_READ, 0, (), "", "", "", (), "", None, "the transcript is empty; there was no text to read"
         )
     else:
-        reading, reviews = _read(original, redacted, settings, context)
-        answered = [review for review in reviews if review.get("available")]
-        if answered:
-            reading = replace(reading, other_speakers=tuple(dict(o) for o in answered[-1].get("other_speakers") or ()))
+        revision = _resolved(settings)
+        key = None if revision is None else review_cache_key(original, redacted, context, settings, revision)
+        held = None if key is None else result_lookup(key)
+        if held is not None:
+            reading, reviews = reading_from_cache(held["result"])
+            cache = {"key": key, "hit": True}
+        else:
+            reading, reviews = _read(original, redacted, settings, context)
+            answered = [review for review in reviews if review.get("available")]
+            if answered:
+                others = tuple(dict(other) for other in answered[-1].get("other_speakers") or ())
+                reading = replace(reading, other_speakers=others)
+            stored = key is not None and reading.revision == revision and cache_reading(key, reading, reviews)
+            cache = {"key": key, "hit": False, "stored": stored}
 
     software = software_agent(store)
     view: list[str] = []
@@ -572,6 +737,7 @@ def review(store: ProvStore, config: TriageConfig, hint: AudioHints | None = Non
             "detector_outcome": outcome,
             "read_redacted": redacted is not None,
             "task_context": dict(context),
+            "result_cache": cache,
         },
     )
     store.was_generated_by(annotation_id, activity)

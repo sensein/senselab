@@ -240,3 +240,26 @@ flag every one of them.
   unexpected quotes. The annotation (the ledger) records `other_speakers` and `prompt_version`.
 - **`PROMPT_VERSION = 2`** (`redaction_review.py`): the prompt and its parse as one number. It is the
   reviewer result cache's version term (E); every r8 reading is a miss for that reason alone.
+
+## E. The reviewer's result cache
+
+REVIEW's loop is the one GPU step no cache served: every run re-read every residue, although most
+recordings' residue, context and prompt are unchanged between runs. It now goes through the triage
+result cache (`SENSELAB_CACHE/results/schema-24/`) as process `redaction_review` (version 1; adding it
+changes no other process's key).
+
+- **Key** (`review.review_cache_key`): `transcript_signature` of the canonical JSON of exactly what the
+  loop reads — the ORIGINAL, the RELEASED text (or null) and the task context — plus
+  `prompt_version` (`redaction_review.PROMPT_VERSION`), the model id and the 40-hex commit its ref
+  resolved to, `max_new_tokens` and `max_iterations`. `timeout_s` and `keep_worker_resident` shape no
+  answer and are not in it.
+- **Value**: the loop's final reading (the annotation's fields) and every round's payload, so a hit
+  writes the same per-round records and annotation a miss would. Only an answered reading
+  (`clean`/`flagged`) whose loaded commit is the resolved one is kept; an absent one is asked again.
+- **Record**: the annotation's `result_cache` says `{key, hit, stored}`.
+- **Backfill**: `scripts/triage_review_cache_backfill.py RUN_ROOT… [--manifest] [--config]` rebuilds the
+  key from a finished store (its transcript texts, the annotation's task context, model and commit,
+  the configured settings) and stores the reading. It seeds only readings made with the current
+  prompt version: every r8 reading predates `PROMPT_VERSION` (H bumps it to 2), so r9 misses on every
+  reviewed recording, for that reason alone, and r10 hits wherever the residue is unchanged. Run it
+  over r9's tree only if r9's stores were written by a checkout without this cache.
