@@ -835,6 +835,18 @@
     var name = f.col.name;
     var v = state.facets.values(name);
     var box = el('div', 'facet-values');
+    var bulk = el('div', 'facet-bulk');
+    var all = el('button', 'facet-all', 'all');
+    all.type = 'button';
+    all.title = 'choose every value of ' + name;
+    all.onclick = function () { state.facets.selectAll(name); applyFacets(); };
+    var none = el('button', 'facet-none', 'none');
+    none.type = 'button';
+    none.title = 'choose no value of ' + name + ' (the facet stops narrowing)';
+    none.onclick = function () { state.facets.clear(name); applyFacets(); };
+    bulk.appendChild(all);
+    bulk.appendChild(none);
+    box.appendChild(bulk);
     if (v.nullMeans) box.appendChild(el('div', 'facet-null', 'absent means: ' + v.nullMeans));
     var q = state.facetQuery;
     var shown = v.values.filter(function (x) {
