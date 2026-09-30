@@ -52,9 +52,11 @@ from senselab.audio.workflows.triage.extend import (
     OK,
     RUN_SUBDIR,
     SLICES_SUBDIR,
+    SliceLog,
     attempt_derivation,
     export_prov,
     load_hint_builder,
+    logged,
     read_manifest,
     read_store,
     refold_verdict,
@@ -180,6 +182,7 @@ def process(
     *,
     build_hint: Callable[[Path], Any],
     commit: str | None = None,
+    log: SliceLog | None = None,
 ) -> list[dict[str, Any]]:
     """Decide every run named by these rows again, one at a time.
 
@@ -188,24 +191,24 @@ def process(
         config: The triage configuration.
         build_hint: The hint populator.
         commit: The code revision to record on each marker.
+        log: Where each row's record is appended as it lands, or None.
 
     Returns:
         One outcome record per input row, in order.
     """
-    out: list[dict[str, Any]] = []
-    for row in rows:
+
+    def one(row: dict[str, Any]) -> dict[str, Any]:
         try:
             run_root = run_root_of(Path(row["enhanced"]))
         except ValueError as error:
-            out.append({**row, "status": ERROR, NODE: describe_exception(error)})
-            continue
+            return {**row, "status": ERROR, NODE: describe_exception(error)}
         try:
             source = Path(str(row["source"])) if row.get("source") else source_of(run_root)
         except (OSError, ValueError, KeyError) as error:
-            out.append({**row, "status": ERROR, NODE: f"source: {describe_exception(error)}"})
-            continue
-        out.append({**row, **refold_one(run_root, config, build_hint=build_hint, source=source, commit=commit)})
-    return out
+            return {**row, "status": ERROR, NODE: f"source: {describe_exception(error)}"}
+        return {**row, **refold_one(run_root, config, build_hint=build_hint, source=source, commit=commit)}
+
+    return logged(rows, one, log)
 
 
 def run_slice(
@@ -236,19 +239,20 @@ def run_slice(
     mine = take_slice(read_manifest(manifest, required=("stem", "enhanced")), slice_index, slice_count)
     print(f"[slice {slice_index}/{slice_count}] {len(mine)} rows", flush=True)
 
-    log = process(mine, config, build_hint=load_hint_builder(hints), commit=commit)
+    slices_dir = log_dir / SLICES_SUBDIR
+    label = f"refold-slice-{slice_index}-of-{slice_count}"
+    log_path = slices_dir / f"{label}.jsonl"
+    rows_log = SliceLog(log_path, slice_index=slice_index, slice_count=slice_count, total=len(mine))
+    try:
+        log = process(mine, config, build_hint=load_hint_builder(hints), commit=commit, log=rows_log)
+    finally:
+        rows_log.close()
 
     counts: dict[str, int] = {}
     decided: dict[str, int] = {}
     for record in log:
         counts[str(record["status"])] = counts.get(str(record["status"]), 0) + 1
         decided[str(record[NODE])] = decided.get(str(record[NODE]), 0) + 1
-
-    slices_dir = log_dir / SLICES_SUBDIR
-    slices_dir.mkdir(parents=True, exist_ok=True)
-    label = f"refold-slice-{slice_index}-of-{slice_count}"
-    log_path = slices_dir / f"{label}.jsonl"
-    log_path.write_text("".join(json.dumps(record, sort_keys=True) + "\n" for record in log), encoding="utf-8")
 
     summary = {
         "manifest": str(manifest),

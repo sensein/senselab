@@ -53,9 +53,11 @@ from senselab.audio.workflows.triage.extend import (
     SKIPPED,
     SLICES_SUBDIR,
     ReplayOutcome,
+    SliceLog,
     export_prov,
     find_replay_marker,
     load_hint_builder,
+    logged,
     read_manifest,
     read_store,
     replay_decisions,
@@ -222,6 +224,7 @@ def process(
     build_hint: Callable[[Path], Any] | None,
     out_root: Path | None,
     commit: str | None,
+    log: SliceLog | None = None,
 ) -> list[dict[str, Any]]:
     """Replay every run named by these rows, one at a time.
 
@@ -234,17 +237,17 @@ def process(
         build_hint: The hint populator, or None.
         out_root: Where to write replayed runs, or None to replay in place.
         commit: The code revision to record on each marker.
+        log: Where each row's record is appended as it lands, or None.
 
     Returns:
         One outcome record per input row, in order.
     """
-    out: list[dict[str, Any]] = []
-    for row in rows:
+
+    def one(row: dict[str, Any]) -> dict[str, Any]:
         try:
             run_root = run_root_of(Path(row["enhanced"]))
         except ValueError as error:
-            out.append({**row, "status": ERROR, DERIVATION: describe_exception(error)})
-            continue
+            return {**row, "status": ERROR, DERIVATION: describe_exception(error)}
         replayed = replay_one(
             run_root,
             config,
@@ -253,8 +256,9 @@ def process(
             stem=str(row["stem"]),
             commit=commit,
         )
-        out.append({**row, **replayed})
-    return out
+        return {**row, **replayed}
+
+    return logged(rows, one, log)
 
 
 def run_slice(
@@ -288,7 +292,14 @@ def run_slice(
     mine = take_slice(read_manifest(manifest, required=("stem", "enhanced")), slice_index, slice_count)
     print(f"[slice {slice_index}/{slice_count}] {len(mine)} rows", flush=True)
 
-    log = process(mine, config, build_hint=build_hint, out_root=out_root, commit=commit)
+    slices_dir = log_dir / SLICES_SUBDIR
+    label = f"replay-decisions-slice-{slice_index}-of-{slice_count}"
+    log_path = slices_dir / f"{label}.jsonl"
+    rows_log = SliceLog(log_path, slice_index=slice_index, slice_count=slice_count, total=len(mine))
+    try:
+        log = process(mine, config, build_hint=build_hint, out_root=out_root, commit=commit, log=rows_log)
+    finally:
+        rows_log.close()
 
     counts: dict[str, int] = {}
     node_errors: dict[str, int] = {}
@@ -298,12 +309,6 @@ def run_slice(
         retired += int(record.get("retired") or 0)
         for node in record.get("errors") or {}:
             node_errors[node] = node_errors.get(node, 0) + 1
-
-    slices_dir = log_dir / SLICES_SUBDIR
-    slices_dir.mkdir(parents=True, exist_ok=True)
-    label = f"replay-decisions-slice-{slice_index}-of-{slice_count}"
-    log_path = slices_dir / f"{label}.jsonl"
-    log_path.write_text("".join(json.dumps(record, sort_keys=True) + "\n" for record in log), encoding="utf-8")
 
     summary = {
         "manifest": str(manifest),

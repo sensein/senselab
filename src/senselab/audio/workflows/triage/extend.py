@@ -23,6 +23,9 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
+import statistics
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterator, Sequence
@@ -254,6 +257,89 @@ def take_slice(rows: Sequence[dict[str, Any]], index: int, count: int) -> list[d
     if not 0 <= index < count:
         raise ValueError(f"--slice-index must be in [0, {count}), got {index}")
     return list(rows[index::count])
+
+
+def _duration(seconds: float) -> str:
+    """A short human duration: ``45s``, ``12m``, ``3h05m``."""
+    if seconds < 60:
+        return f"{seconds:.0f}s"
+    if seconds < 3600:
+        return f"{seconds / 60:.0f}m"
+    hours, rest = divmod(int(seconds), 3600)
+    return f"{hours}h{rest // 60:02d}m"
+
+
+class SliceLog:
+    """One array task's row log, written a row at a time, with a progress line per row.
+
+    The file is opened for writing when the slice starts, so a resubmitted slice begins an empty
+    log: every row it owns is processed again, a finished one coming back ``present``, and the log
+    ends as one record per row of this run. Each record is flushed and fsynced as it lands, so a
+    running or crashed slice's finished rows are on disk.
+    """
+
+    def __init__(self, path: Path, *, slice_index: int, slice_count: int, total: int) -> None:
+        """Open the log and truncate it.
+
+        Args:
+            path: The ``.jsonl`` row log.
+            slice_index: This task's 0-based index, for the progress line.
+            slice_count: How many tasks the array has.
+            total: How many rows this task owns.
+        """
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self.path = path
+        self._prefix = f"[slice {slice_index}/{slice_count}]"
+        self._total = total
+        self._seconds: list[float] = []
+        self._handle = path.open("w", encoding="utf-8")
+
+    def add(self, record: dict[str, Any], seconds: float) -> None:
+        """Append one row's record and print where the slice stands.
+
+        Args:
+            record: The row's outcome record.
+            seconds: How long the row took.
+        """
+        self._handle.write(json.dumps(record, sort_keys=True) + "\n")
+        self._handle.flush()
+        os.fsync(self._handle.fileno())
+        self._seconds.append(seconds)
+        done = len(self._seconds)
+        median = statistics.median(self._seconds)
+        eta = _duration(median * (self._total - done))
+        print(
+            f"{self._prefix} {done}/{self._total} {record.get('status')} {seconds:.1f}s "
+            f"(median {median:.1f}s, eta {eta})",
+            flush=True,
+        )
+
+    def close(self) -> None:
+        """Close the file."""
+        self._handle.close()
+
+
+def logged(
+    rows: Sequence[dict[str, Any]], one: Callable[[dict[str, Any]], dict[str, Any]], log: SliceLog | None
+) -> list[dict[str, Any]]:
+    """Run ``one`` over each row in order, appending each outcome to ``log`` as it lands.
+
+    Args:
+        rows: The rows this task owns.
+        one: Produces one row's outcome record.
+        log: Where each record is appended, or None to only collect them.
+
+    Returns:
+        One outcome record per row, in order.
+    """
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        started = time.monotonic()
+        record = one(row)
+        out.append(record)
+        if log is not None:
+            log.add(record, time.monotonic() - started)
+    return out
 
 
 def batches(rows: Sequence[dict[str, Any]], size: int) -> Iterator[list[dict[str, Any]]]:

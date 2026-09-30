@@ -384,3 +384,28 @@ def test_a_row_whose_enhanced_path_is_not_in_a_run_tree_is_an_error_not_a_crash(
 
     assert out[0]["status"] == cli.ERROR
     assert out[1]["status"] != cli.ERROR or "run_root" not in out[0]
+
+
+def test_each_replayed_row_lands_in_the_row_log_as_it_completes(tmp_path: Path) -> None:
+    """The slice log holds a record per finished row, in order, before the slice ends."""
+    from senselab.audio.workflows.triage.extend import SliceLog
+
+    rows = [{"stem": f"nowhere-{n}", "enhanced": str(tmp_path / f"loose-{n}.flac")} for n in range(3)]
+    path = tmp_path / "slices" / "replay-decisions-slice-0-of-1.jsonl"
+    log = SliceLog(path, slice_index=0, slice_count=1, total=len(rows))
+    seen: list[int] = []
+    original = log.add
+
+    def _watch(record: dict, seconds: float) -> None:
+        original(record, seconds)
+        seen.append(len(path.read_text(encoding="utf-8").splitlines()))
+
+    log.add = _watch  # type: ignore[method-assign]
+    try:
+        out = cli.process(rows, load_triage_config(), build_hint=None, out_root=None, commit=None, log=log)
+    finally:
+        log.close()
+    assert seen == [1, 2, 3], "a row was not on disk when the next one started"
+    assert [json.loads(line)["stem"] for line in path.read_text(encoding="utf-8").splitlines()] == [
+        row["stem"] for row in out
+    ]

@@ -90,9 +90,7 @@ def _finished_run(root: Path, *, words: Sequence[str] = ("hello", "alicia")) -> 
         store.was_associated_with(act, software)
         write_verdict(store, act, software, node=node, outcome=outcome, kind=None, why="seeded", detail={})
     store.write_jsonl(run_root / "run" / "store.jsonl")
-    (run_root / "run" / LOG_FILE).write_text(
-        json.dumps({"source": str(streams / "recording.flac")}), encoding="utf-8"
-    )
+    (run_root / "run" / LOG_FILE).write_text(json.dumps({"source": str(streams / "recording.flac")}), encoding="utf-8")
     return run_root
 
 
@@ -119,9 +117,7 @@ def _hints(tmp_path: Path) -> Path:
 def _live_verdicts(run_root: Path) -> list[dict[str, Any]]:
     """Every live verdict entity in the store, by node."""
     store = ProvStore.read_jsonl(run_root / "run" / "store.jsonl", run_id=run_root.name)
-    return [
-        dict(entity.attributes) for entity in store.entities("verdict") if not store.is_invalidated(entity.id)
-    ]
+    return [dict(entity.attributes) for entity in store.entities("verdict") if not store.is_invalidated(entity.id)]
 
 
 class TestItDecidesAgainWithoutReadingAnything:
@@ -277,9 +273,89 @@ class TestTheMarkerSaysWhatFoldedIt:
             commit="c0ffee",
         )
         store = ProvStore.read_jsonl(run_root / "run" / "store.jsonl", run_id=run_root.name)
-        markers = [
-            a for a in store.activities() if a.node == REFOLD_NODE and a.step == REFOLD_MARKER_STEP
-        ]
+        markers = [a for a in store.activities() if a.node == REFOLD_NODE and a.step == REFOLD_MARKER_STEP]
         assert len(markers) == 1
         assert markers[0].parameters["commit"] == "c0ffee"
         assert markers[0].parameters["config_hash"] == config.config_hash
+
+
+def _rows_manifest(tmp_path: Path, rows: Sequence[dict[str, Any]]) -> Path:
+    """A manifest over the given rows, in order."""
+    path = tmp_path / "manifest.jsonl"
+    path.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+    return path
+
+
+def _row_log(tmp_path: Path) -> list[dict[str, Any]]:
+    """The slice's row log as written so far."""
+    path = tmp_path / "slices" / "refold-slice-0-of-1.jsonl"
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+
+
+class TestTheRowLogGrowsAsTheSliceRuns:
+    """A running or crashed slice shows the rows it finished; a resubmission starts its log afresh."""
+
+    def test_finished_rows_are_on_disk_when_a_later_row_crashes(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The first row lands before the second one raises."""
+        run_root = _finished_run(tmp_path / "corpus")
+        good = {"stem": run_root.name, "enhanced": str(run_root / "run" / "streams" / "enhanced.flac")}
+        bad = {"stem": "not-a-run", "enhanced": str(tmp_path / "loose.flac")}
+
+        def _crash(*args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
+            raise RuntimeError("the node died mid-slice")
+
+        monkeypatch.setattr(cli, "refold_one", _crash)
+        with pytest.raises(RuntimeError, match="mid-slice"):
+            cli.run_slice(
+                _rows_manifest(tmp_path, [bad, good]),
+                slice_index=0,
+                slice_count=1,
+                config=_config(tmp_path),
+                log_dir=tmp_path,
+                hints=_hints(tmp_path),
+            )
+        records = _row_log(tmp_path)
+        assert [record["stem"] for record in records] == ["not-a-run"]
+        assert records[0]["status"] == "error"
+
+    def test_a_resubmitted_slice_does_not_repeat_rows(self, tmp_path: Path) -> None:
+        """Twice over the same stride, the log holds one record per row."""
+        run_root = _finished_run(tmp_path / "corpus")
+        good = {"stem": run_root.name, "enhanced": str(run_root / "run" / "streams" / "enhanced.flac")}
+        bad = {"stem": "not-a-run", "enhanced": str(tmp_path / "loose.flac")}
+        args: dict[str, Any] = {
+            "slice_index": 0,
+            "slice_count": 1,
+            "config": _config(tmp_path),
+            "log_dir": tmp_path,
+            "hints": _hints(tmp_path),
+        }
+        manifest = _rows_manifest(tmp_path, [good, bad])
+        cli.run_slice(manifest, **args)
+        summary = cli.run_slice(manifest, **args)
+        records = _row_log(tmp_path)
+        assert [record["stem"] for record in records] == [run_root.name, "not-a-run"]
+        counts: dict[str, int] = {}
+        for record in records:
+            counts[record["status"]] = counts.get(record["status"], 0) + 1
+        assert summary["counts"] == counts
+        assert summary["rows"] == 2 and summary["log"].endswith("refold-slice-0-of-1.jsonl")
+
+    def test_each_row_prints_where_the_slice_stands(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+        """One flushed line per row: position, status, the row's time, the running median and an ETA."""
+        rows = [{"stem": f"loose-{n}", "enhanced": str(tmp_path / f"loose-{n}.flac")} for n in range(2)]
+        cli.run_slice(
+            _rows_manifest(tmp_path, rows),
+            slice_index=0,
+            slice_count=1,
+            config=_config(tmp_path),
+            log_dir=tmp_path,
+            hints=_hints(tmp_path),
+        )
+        lines = [
+            line for line in capsys.readouterr().out.splitlines() if line.startswith("[slice 0/1] ") and "/2 " in line
+        ]
+        assert [line.split()[2] for line in lines] == ["1/2", "2/2"]
+        assert all(" error " in line and "median" in line and "eta" in line for line in lines)
