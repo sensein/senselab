@@ -17,6 +17,7 @@ from senselab.audio.workflows.triage.residue import (
     SYLLABLE,
     VOCAL,
     ResidueRule,
+    is_content_word,
     is_non_lexical,
     residue_method,
     residue_rule,
@@ -215,6 +216,16 @@ class TestTheContentTest:
         residue = task_residue("A the big wet stain".split(), "harvard-sentences-list", "A big wet stain".split(), rule)
         assert residue.positions
         assert not residue.content
+
+    @pytest.mark.parametrize("word", ["between", "Between", "among", "during", "through", "because", "themselves"])
+    def test_a_closed_class_word_is_not_content(self, word: str) -> None:
+        """Prepositions, conjunctions and reflexives are closed-class, whatever their case."""
+        assert not is_content_word(word)
+
+    @pytest.mark.parametrize("word", ["cyst", "Cone", "Ctwo", "ninety", "Florida"])
+    def test_an_open_class_word_is_content(self, word: str) -> None:
+        """Nouns, names and numbers stay content."""
+        assert is_content_word(word)
 
     def test_a_number_is_content(self, rule: ResidueRule) -> None:
         """A number can identify: an age, a date, a phone digit."""

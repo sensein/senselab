@@ -90,6 +90,15 @@ FUNCTION_WORDS = frozenset(
     too very what which who whom whose when where why how all any some each every both
     let's that's there's what's i'm i'll i've i'd you're you'll he's she's we're they're don't doesn't
     didn't can't won't isn't aren't wasn't weren't
+    across against along amid among amongst around behind below beneath beside besides between beyond
+    despite down during except inside near outside past per since through throughout till toward towards
+    underneath unlike until via within
+    because although though unless whereas whether while nor
+    another either neither few many much more most several such other
+    myself yourself himself herself itself ourselves yourselves themselves yours hers ours theirs
+    someone something anyone anything everyone everything nobody nothing whatever whoever
+    hasn't haven't hadn't wouldn't couldn't shouldn't mustn't shan't
+    we've they've you've we'll they'll it'll he'll she'll he'd she'd we'd they'd you'd it'd
     el la los las un una unos unas y o de del al en con por para que se lo le es no si mi tu su
     """.split()
 )
