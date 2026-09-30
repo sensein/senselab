@@ -37,6 +37,7 @@ from senselab.audio.workflows.triage.recording_vectors import (
     recording_dirs,
     stem_of,
 )
+from senselab.audio.workflows.triage.residue import is_content_word
 from senselab.audio.workflows.triage.routing_analysis.families import task_family, task_id_of
 
 PII_LABEL = "pii"
@@ -241,6 +242,25 @@ def ledger_of(view: StoreView) -> dict[str, Any] | None:
     return found
 
 
+def proposal_content_ids(proposal: Mapping[str, Any]) -> list[str]:
+    """The words of one reviewer ``redact`` entry that are content words, the only ones it marks.
+
+    Args:
+        proposal: One ledger proposal.
+
+    Returns:
+        Its ``content_ids`` where the fold recorded them; otherwise its ``word_ids`` whose surface in
+        ``texts`` is a content word under :func:`~senselab.audio.workflows.triage.residue.is_content_word`.
+    """
+    if "content_ids" in proposal:
+        return [str(word_id) for word_id in proposal.get("content_ids") or ()]
+    word_ids = [str(word_id) for word_id in proposal.get("word_ids") or ()]
+    texts = [str(text) for text in proposal.get("texts") or ()]
+    if len(texts) != len(word_ids):
+        return word_ids
+    return [word_id for word_id, text in zip(word_ids, texts) if is_content_word(text)]
+
+
 def word_states(ledger: Mapping[str, Any] | None) -> dict[str, dict[str, Any]]:
     """Each word the ledger names, with its state, its categories and what the reviewer said of it.
 
@@ -255,7 +275,8 @@ def word_states(ledger: Mapping[str, Any] | None) -> dict[str, dict[str, Any]]:
         different category on the same word, each ``{c, s, hr, k, dx}``, rendered as their own marks.
         A word two masks cover takes the tighter state, masked first. Only a ``redact`` entry proposing
         to hide more (agreement ``new``) marks a word no mask hides; an entry agreeing with the masks, or
-        naming the task's own words, leaves such a word unmarked, as the release leaves it visible.
+        naming the task's own words, leaves such a word unmarked, as the release leaves it visible. A
+        proposal marks only its content words (:func:`proposal_content_ids`).
     """
     states: dict[str, dict[str, Any]] = {}
     for mask in (ledger or {}).get("masks") or ():
@@ -285,7 +306,7 @@ def word_states(ledger: Mapping[str, Any] | None) -> dict[str, dict[str, Any]]:
         kind = str(proposal.get("condition_kind") or "")
         diagnosis = str(proposal.get("cohort_diagnosis") or "")
         new = str(proposal.get("agreement") or "new") == "new"
-        for word_id in proposal.get("word_ids") or ():
+        for word_id in proposal_content_ids(proposal):
             held = states.get(str(word_id))
             if held is None or held["s"] != MASKED:
                 if not new:
@@ -1558,7 +1579,7 @@ mark.pii,mark.swatch{background:transparent;color:var(--fg);border-bottom:3px so
 border-radius:0;padding:0 1px}
 mark.pii.u-red,mark.swatch.u-red{border-bottom-color:var(--ured)}
 mark.pii.u-green,mark.swatch.u-green{border-bottom-color:var(--ugreen)}
-mark.pii.u-orange,mark.swatch.u-orange{border-bottom-color:var(--uorange)}
+mark.pii.u-orange,mark.swatch.u-orange{border-bottom-color:var(--uorange);border-bottom-style:dashed}
 .themebtn{font:inherit;font-size:11px;padding:1px 7px;border:1px solid var(--line);border-radius:9px;
 background:var(--card);color:var(--mut);cursor:pointer}
 mark.pii .cat,mark.swatch .cat{font-size:9.5px;letter-spacing:.06em;color:var(--catfg);background:var(--catbg);
@@ -2004,6 +2025,9 @@ function outline(){
 }
 
 /* ---- facets ---- */
+const FACET_TOGGLES=[['allrel','rel-f'],['norel','rel-f'],['allfam','fam-f'],['nofam','fam-f'],
+  ['allcat','cat-f'],['nocat','cat-f'],['alldet','det-f'],['nodet','det-f']];
+function setFacet(cls,on){for(const el of document.querySelectorAll('.'+cls))el.checked=on;}
 function checked(cls){
   return new Set([...document.querySelectorAll('.'+cls)].filter(i=>i.checked).map(i=>i.value));}
 function allChecked(cls){
@@ -2260,7 +2284,7 @@ function cardAccount(a,card){
     const words=markWords(m);
     const bits=[STATE_WHY[m.dataset.s]||m.dataset.s];
     if(m.dataset.tr)bits.push(TRIM_WHY[m.dataset.tr]||m.dataset.tr);
-    if(m.dataset.nm==='1'&&m.dataset.s!=='unmasked_by_reviewer')bits.push('a reviewer release entry named it');
+    if(m.dataset.nm==='1'&&m.dataset.s!=='unmasked_by_reviewer')bits.push(m.dataset.s==='unmasked_by_trim'?'a reviewer release entry quoted it, but it is shown because the trim released it':'a reviewer release entry quoted it');
     if(m.dataset.pr==='1'&&m.dataset.s==='masked')bits.push('the reviewer also proposes masking it');
     if(m.dataset.kd)bits.push((KIND_WHY[m.dataset.kd]||m.dataset.kd)+(m.dataset.dx?' ('+m.dataset.dx+')':''));
     if(m.dataset.hr==='1')bits.push('held for human review');
@@ -2504,10 +2528,8 @@ for(const el of document.querySelectorAll('.fam-f,.rel-f,.cat-f,.det-f'))
 for(const el of [firedSel,brkSel,txSel,revSel,flagSel,decSel,llmSel,hkSel,minNf,minNt,maxNt])
   el.addEventListener('change',apply);
 let timer;q.addEventListener('input',()=>{clearTimeout(timer);timer=setTimeout(apply,140);});
-for(const [id,cls] of [['allcat','cat-f'],['nocat','cat-f'],['alldet','det-f'],['nodet','det-f']])
-  document.getElementById(id).addEventListener('click',()=>{
-    for(const el of document.querySelectorAll('.'+cls))el.checked=id.startsWith('all');
-    apply();});
+for(const [id,cls] of FACET_TOGGLES)
+  document.getElementById(id).addEventListener('click',()=>{setFacet(cls,id.startsWith('all'));apply();});
 document.getElementById('all').addEventListener('click',e=>{
   e.preventDefault();
   for(const el of document.querySelectorAll('.fam-f,.rel-f,.cat-f,.det-f'))el.checked=true;
@@ -2558,10 +2580,14 @@ flag keys act on.</p></details>
 <div class="row">at least <input class="num" type="number" id="minnf" min="0" step="1">
 findings</div>
 </fieldset>
-<fieldset><legend>release</legend>{releases}</fieldset>
+<fieldset><legend>release
+<button id="allrel" type="button">all</button><button id="norel" type="button">none</button></legend>
+<div class="facets">{releases}</div></fieldset>
 <fieldset><legend>condition review</legend>
 <select id="hkf"><option value="any">any recording</option>{conditions}</select></fieldset>
-<fieldset><legend>family</legend>{families}</fieldset>
+<fieldset><legend>family
+<button id="allfam" type="button">all</button><button id="nofam" type="button">none</button></legend>
+<div class="facets">{families}</div></fieldset>
 <fieldset><legend>finding &mdash; category
 <button id="allcat" type="button">all</button><button id="nocat" type="button">none</button></legend>
 <div class="facets">{categories}</div></fieldset>
