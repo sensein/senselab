@@ -1642,6 +1642,20 @@ class TestAgreementUnplacedFindingsAndASecondSpeaker:
             '"Who are you talking to?" (unexpected)'
         ]
 
+    def test_an_unclear_reading_that_quotes_another_voice_flags(self) -> None:
+        """r9 story recall: examiner instructions the reviewer cannot attribute still flag for a person to check."""
+        examiner = {"text": "I said you have up to five minutes", "expected": True, "why": "possibly the examiner"}
+        reading = {"status": "clean", "original": "clean", "speakers": "unclear", "proposal": []}
+        heard = self._fold({**reading, "other_speakers": [examiner]})
+        assert heard.triage is Triage.FLAG
+        assert heard.release is Release.WITH_REDACTION, "a flag for review, not a release decision"
+        assert [reason.why for reason in heard.reasons if reason.node == "VERDICT"] == [
+            f'{REVIEWER_HEARD_SECOND_SPEAKER}: "I said you have up to five minutes" (expected)'
+        ]
+        assert self._fold({**reading, "other_speakers": []}).triage is Triage.PASS, (
+            "unclear with no quote flags nothing"
+        )
+
     def test_a_model_speaker_on_harvard_flags_from_both_readers(self) -> None:
         """Harvard permits a model speaker: the reviewer's quote and the diarization gate each flag, and say so."""
         model = {"text": "The birch canoe slid on the smooth planks.", "expected": True, "why": "the model reading"}

@@ -494,4 +494,22 @@ def test_the_prompt_counts_an_expected_voice_as_another_voice() -> None:
     assert "an expected voice is still another voice" in prompt
     assert '"Is that enough?"' in prompt and "is still one speaker" in prompt
     assert "You were given the text" in prompt and "repeat after them" in prompt
-    assert redaction_review.PROMPT_VERSION == 3
+    assert redaction_review.PROMPT_VERSION == 4
+
+
+def test_the_prompt_lists_only_specific_diagnoses() -> None:
+    """Owner, 2026-09-30: CONDITIONS are named diagnoses, not symptoms, moods, events or bare treatments."""
+    prompt = redaction_review._PROMPT
+    assert "every specific medical diagnosis the speaker attributes to themselves" in prompt
+    assert "Do not list symptoms or sensations" in prompt and "feelings or moods" in prompt
+    assert "surgery, a fall, an accident" in prompt
+    assert "lists Parkinson's disease" in prompt
+    assert "every diagnosis under point 5" in prompt
+
+
+def test_the_prompt_attributes_instructions_addressed_to_the_participant_to_another_voice() -> None:
+    """r9 story recall: 'I said you have up to five minutes' was read as the participant repeating the instructions."""
+    prompt = redaction_review._PROMPT
+    assert "do not assume the participant is repeating the instructions" in prompt
+    assert '"I said you have up to five minutes"' in prompt
+    assert "answer unclear and still quote those words in OTHER_SPEAKERS" in prompt
