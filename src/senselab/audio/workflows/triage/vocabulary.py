@@ -1147,8 +1147,9 @@ def fold_file_verdict(
     diarized_other = any(
         record.get("passed") is False and record.get("gate") == DOMINANT_SPEAKER_GATE for record in flag_gates or ()
     )
-    if rules.llm_second_speaker_flags and annotation.get("speakers") == "more_than_one" and not diarized_other:
-        others = [dict(other) for other in annotation.get("other_speakers") or () if isinstance(other, Mapping)]
+    others = [dict(other) for other in annotation.get("other_speakers") or () if isinstance(other, Mapping)]
+    heard_other = annotation.get("speakers") == "more_than_one" or (annotation.get("speakers") == "unclear" and others)
+    if rules.llm_second_speaker_flags and heard_other and not diarized_other:
         described = [
             f"{json.dumps(str(other.get('text')))} ({'expected' if other.get('expected') is True else 'unexpected'})"
             for other in others

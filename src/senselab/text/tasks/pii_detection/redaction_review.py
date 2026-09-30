@@ -69,7 +69,7 @@ _SPEAKERS_HEADING = "SPEAKERS:"
 _CONDITIONS_HEADING = "CONDITIONS:"
 _OTHER_SPEAKERS_HEADING = "OTHER_SPEAKERS:"
 
-PROMPT_VERSION = 3
+PROMPT_VERSION = 4
 """The prompt and its parse, as one number: it changes whenever either changes what a reading holds."""
 
 REDACTION_STATES = ("complete", "incomplete", "not_applicable")
@@ -149,13 +149,23 @@ _PROMPT = (
     '("You were given the text... you have up to five minutes") in a story recall or an interview, or '
     "someone saying a sentence first where the instructions allow the participant to repeat after them. "
     "Whenever you answer more_than_one, quote the words you attribute to each other person and say "
-    "whether the task's instructions expect that voice; an expected voice is still another voice.\n"
-    "5. Separately from the standard, every health condition the speaker attributes to themselves: a "
-    "diagnosis, a disease, a symptom described as a condition, a treatment, a medication or a "
-    "procedure. None of these is a Safe Harbor identifier by itself, and none goes in the PROPOSAL; "
-    "they are listed so that a person can judge whether, with the rest of what is released, one could "
-    "single the speaker out. List a condition whatever you judge about it; leave out only a condition "
-    "that is part of the task's own stimulus.\n\n"
+    "whether the task's instructions expect that voice; an expected voice is still another voice. Words "
+    "addressed to the participant that give, restate or enforce the task's instructions (\"You were given "
+    'the text", "I said you have up to five minutes", "Go ahead and start") are another person\'s '
+    "voice unless the words themselves show the participant reading them aloud; do not assume the "
+    "participant is repeating the instructions. When you cannot tell, answer unclear and still quote "
+    "those words in OTHER_SPEAKERS.\n"
+    "5. Separately from the standard, every specific medical diagnosis the speaker attributes to "
+    "themselves: a named disease, disorder or syndrome (Parkinson's disease, spasmodic dysphonia, "
+    "multiple sclerosis, thyroid cancer, a synovial joint cyst, sleep apnea, asthma). Do not list "
+    "symptoms or sensations (a change in my voice, coughing, tiredness, pain, a sore throat), feelings "
+    "or moods (anxious, stressed, sad), everyday events or procedures (surgery, a fall, an accident, an "
+    "allergy shot) or a medication or treatment on its own; list a treatment only through the "
+    "diagnosis it names (\"levodopa for my Parkinson's\" lists Parkinson's disease). None of these is "
+    "a Safe Harbor identifier by itself, and none goes in the PROPOSAL; they are listed so that a "
+    "person can judge whether, with the rest of what is released, one could single the speaker out. "
+    "List a diagnosis whatever you judge about it; leave out only one that is part of the task's own "
+    "stimulus.\n\n"
     "Answer in exactly seven parts, each on its own line or block, in this order.\n"
     "REASONING: your full reasoning, in prose, including what you considered and rejected.\n"
     "REDACTION: one of complete, incomplete, not_applicable (use not_applicable when no "
@@ -165,9 +175,10 @@ _PROMPT = (
     "OTHER_SPEAKERS: a JSON array, one element per other person you heard under point 4. Each element is an "
     'object with keys "text" (their exact words, quoted from the ORIGINAL), "expected" (true where the '
     'task\'s instructions expect that voice, false where they do not) and "why" (one sentence). Return [] '
-    "when SPEAKERS is one or unclear; when it is more_than_one the array must quote at least one person.\n"
-    "CONDITIONS: a JSON array of every health condition under point 5. Each element is an object with "
-    'keys "text" (the exact words, quoted from the ORIGINAL) and "why" (one sentence: what it is). '
+    "when SPEAKERS is one; when it is more_than_one the array must quote at least one person, and when it is "
+    "unclear it quotes the words you could not attribute to the participant.\n"
+    "CONDITIONS: a JSON array of every diagnosis under point 5. Each element is an object with "
+    'keys "text" (the exact words, quoted from the ORIGINAL) and "why" (one sentence: which diagnosis it is). '
     "Return [] when the speaker mentions none; the part is required either way.\n"
     "PROPOSAL: a JSON array giving the redaction you would apply instead. Each element is an "
     'object with keys "text" (the exact substring, quoted from the ORIGINAL), "action" (redact to '
@@ -662,9 +673,9 @@ def answer_problem(result: "ReviewResult", original: str, redacted: str | None) 
         return None
     if not result.conditions_answered:
         return (
-            "your answer had no CONDITIONS part; add it as a JSON array listing every health condition, "
-            "diagnosis, treatment or procedure the speaker attributes to themselves, quoted exactly from the "
-            "ORIGINAL, or [] when there is none"
+            "your answer had no CONDITIONS part; add it as a JSON array listing every specific medical "
+            "diagnosis the speaker attributes to themselves, quoted exactly from the ORIGINAL, or [] when "
+            "there is none"
         )
     if result.speakers == "more_than_one" and not result.other_speakers:
         return (

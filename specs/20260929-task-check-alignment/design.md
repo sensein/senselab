@@ -332,3 +332,27 @@ examiner ("Is that enough?") for a second voice.
   `dominant_speaker_share_min`. `verdict.model_speaker_families` names them, and the speaker gate's flag
   ground appends "the task's instructions permit a model speaker" — information, not exemption. The
   `gate_exempt` parquet column stays and reads `[]`.
+
+## J. Diagnoses only, and instructions addressed to the participant (prompt v4)
+
+Owner, 2026-09-30: "conditions should be specific medical diagnosis not just 'change in my voice' or
+coughed." r9 (prompt v3) listed a condition in 2,256 readings and held 1,831 recordings for "other"
+condition review; the top phrases were surgery 42, anxious 36, stress 26, allergies 24, covid 22,
+tired 21, sadness 21, and only about 355 of the 1,831 named a diagnosis (a keyword heuristic over
+`evaluations_r9_20260930/other_condition_phrases_r9.csv`). v4's CONDITIONS part lists only named
+diseases, disorders and syndromes the speaker attributes to themselves. Symptoms and sensations,
+feelings and moods, everyday events and procedures, and a medication or treatment on its own are not
+listed; a treatment reaches the list only through the diagnosis it names.
+
+The same pass exposed a missed second voice. r9's story-recall reading for sub-00053adb… read the
+examiner's "You were given the test… I said you have up to five minutes" and reasoned that "the
+participant [is] repeating the instructions", so it answered `speakers: one`; diarization had heard one
+speaker too. The recall residue did not hide those words (99 residue words, 49 story words subtracted).
+v4 tells the reviewer that words addressed to the participant which give, restate or enforce the
+instructions are another person's voice unless the words themselves show the participant reading them,
+and to answer `unclear` with those words quoted when it cannot tell. The fold now flags an `unclear`
+reading that quotes words, under the same second-speaker ground, so a potential second person reaches a
+person; `unclear` with nothing quoted flags nothing.
+
+`PROMPT_VERSION = 4`. Owner's scope: re-review now only the r9 readings that listed a condition (plus
+the story-recall card); a full re-review of every reading on v4 is scheduled (see `triage_r9_20260929/RUN.md`).
