@@ -79,9 +79,11 @@ from senselab.audio.workflows.triage.extend import (
     RUN_SUBDIR,
     SLICES_SUBDIR,
     VERDICT_NODE,
+    SliceLog,
     attempt_derivation,
     export_prov,
     load_hint_builder,
+    logged,
     read_manifest,
     read_store,
     refold_verdict,
@@ -429,6 +431,7 @@ def process(
     force: bool,
     build_hint: Callable[[Path], Any] | None = None,
     commit: str | None = None,
+    log: SliceLog | None = None,
 ) -> list[dict[str, Any]]:
     """Read back every run named by these rows, one at a time.
 
@@ -440,36 +443,34 @@ def process(
         force: Whether to retire a standing annotation and read again.
         build_hint: The hint populator, or None to leave each recorded verdict as it stands.
         commit: The code revision to record on each re-fold marker.
+        log: Where each row's record is appended as it lands, or None.
 
     A row's own ``source`` wins over the run's log, because a mirrored run root carries no log.
 
     Returns:
         One outcome record per input row, in order.
     """
-    out: list[dict[str, Any]] = []
-    for row in rows:
+
+    def one(row: dict[str, Any]) -> dict[str, Any]:
         try:
             finished = run_root_of(Path(row["enhanced"]))
         except ValueError as error:
-            out.append({**row, "status": ERROR, NODE: describe_exception(error)})
-            continue
+            return {**row, "status": ERROR, NODE: describe_exception(error)}
         source: Path | None = None
         if build_hint is not None:
             try:
                 source = Path(str(row["source"])) if row.get("source") else source_of(finished)
             except (OSError, ValueError, KeyError) as error:
-                out.append({**row, "status": ERROR, NODE: f"source: {describe_exception(error)}"})
-                continue
+                return {**row, "status": ERROR, NODE: f"source: {describe_exception(error)}"}
         run_root = mirror_run_root(finished, out_root) if out_root is not None else finished
-        out.append(
-            {
-                **row,
-                **extend_one(
-                    run_root, config, apply=apply, force=force, build_hint=build_hint, source=source, commit=commit
-                ),
-            }
-        )
-    return out
+        return {
+            **row,
+            **extend_one(
+                run_root, config, apply=apply, force=force, build_hint=build_hint, source=source, commit=commit
+            ),
+        }
+
+    return logged(rows, one, log)
 
 
 def run_slice(
@@ -507,7 +508,23 @@ def run_slice(
     print(f"[slice {slice_index}/{slice_count}] {len(mine)} rows", flush=True)
 
     build_hint = load_hint_builder(hints) if hints is not None else None
-    log = process(mine, config, out_root=out_root, apply=apply, force=force, build_hint=build_hint, commit=commit)
+    slices_dir = log_dir / SLICES_SUBDIR
+    label = f"llm-review-slice-{slice_index}-of-{slice_count}"
+    log_path = slices_dir / f"{label}.jsonl"
+    rows_log = SliceLog(log_path, slice_index=slice_index, slice_count=slice_count, total=len(mine))
+    try:
+        log = process(
+            mine,
+            config,
+            out_root=out_root,
+            apply=apply,
+            force=force,
+            build_hint=build_hint,
+            commit=commit,
+            log=rows_log,
+        )
+    finally:
+        rows_log.close()
 
     counts: dict[str, int] = {}
     readings: dict[str, int] = {}
@@ -517,12 +534,6 @@ def run_slice(
         readings[str(record[NODE])] = readings.get(str(record[NODE]), 0) + 1
         if REFOLD in record:
             refolds[str(record[REFOLD])] = refolds.get(str(record[REFOLD]), 0) + 1
-
-    slices_dir = log_dir / SLICES_SUBDIR
-    slices_dir.mkdir(parents=True, exist_ok=True)
-    label = f"llm-review-slice-{slice_index}-of-{slice_count}"
-    log_path = slices_dir / f"{label}.jsonl"
-    log_path.write_text("".join(json.dumps(record, sort_keys=True) + "\n" for record in log), encoding="utf-8")
 
     summary = {
         "manifest": str(manifest),

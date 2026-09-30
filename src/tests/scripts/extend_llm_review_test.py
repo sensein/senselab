@@ -505,6 +505,8 @@ class TestItIsResumableTheWayTheFamilyIs:
         assert second["counts"] == {"present": 1}
         assert len(calls) == 1, "the second pass contacted the model again"
         assert len(_annotations(run_root)) == 1
+        rows = (tmp_path / "slices" / "llm-review-slice-0-of-1.jsonl").read_text(encoding="utf-8").splitlines()
+        assert [json.loads(row)["status"] for row in rows] == ["present"], "the resubmission repeated a row"
 
     def test_a_failed_reading_is_an_error_and_a_resubmission_reads_again(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
