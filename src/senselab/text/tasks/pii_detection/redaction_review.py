@@ -69,7 +69,7 @@ _SPEAKERS_HEADING = "SPEAKERS:"
 _CONDITIONS_HEADING = "CONDITIONS:"
 _OTHER_SPEAKERS_HEADING = "OTHER_SPEAKERS:"
 
-PROMPT_VERSION = 2
+PROMPT_VERSION = 3
 """The prompt and its parse, as one number: it changes whenever either changes what a reading holds."""
 
 REDACTION_STATES = ("complete", "incomplete", "not_applicable")
@@ -144,11 +144,12 @@ _PROMPT = (
     "4. Whether more than one person is speaking in this recording, judged from the words alone "
     "(turn-taking, instructions given, questions asked and answered) and weighed against the task's "
     'instructions. The participant talking to the examiner ("Is that enough?", "Should I keep '
-    'going?") is still one speaker. Some tasks expect another voice: an examiner giving or repeating '
-    "instructions in a story recall or an interview, or someone saying a sentence first where the "
-    "instructions allow the participant to repeat after them. Whenever you answer more_than_one, quote "
-    "the words you attribute to each other person and say whether the task's instructions expect that "
-    "voice.\n"
+    'going?") is still one speaker. Any words spoken by someone other than the participant make '
+    "more_than_one, including a voice the task expects: an examiner giving or repeating instructions "
+    '("You were given the text... you have up to five minutes") in a story recall or an interview, or '
+    "someone saying a sentence first where the instructions allow the participant to repeat after them. "
+    "Whenever you answer more_than_one, quote the words you attribute to each other person and say "
+    "whether the task's instructions expect that voice; an expected voice is still another voice.\n"
     "5. Separately from the standard, every health condition the speaker attributes to themselves: a "
     "diagnosis, a disease, a symptom described as a condition, a treatment, a medication or a "
     "procedure. None of these is a Safe Harbor identifier by itself, and none goes in the PROPOSAL; "

@@ -329,12 +329,12 @@ verdict:
   llm_contradiction_flags: true        # owner, 2026-09-28: a flagged reading that names no words flags the recording for review
   uncomputed_reading_flags: true       # owner, 2026-09-29: a conformance reading that should exist and does not flags for review
   hint_mismatch_exempt_families: [respiration-and-cough-breath, respiration-and-cough-v2-breath]  # owner, 2026-09-29: quiet breathing the classifier does not hear is no flag
-  # declared task family -> flag gates its own instruction makes inapplicable. Owner, 2026-09-29:
-  # the read-aloud sentence tasks' session instructions permit someone else to say the sentence first.
-  flag_gate_exemptions:
-    harvard-sentences-list: [dominant_speaker_share_min]
-    cape-v-sentences: [dominant_speaker_share_min]
-    cape-v-sentences-v2: [dominant_speaker_share_min]
+  # declared task family -> flag gates its own instruction makes inapplicable. Empty: owner, 2026-09-30,
+  # any voice other than the participant's is flagged, whether or not the instructions expect it.
+  flag_gate_exemptions: {}
+  # families whose session instructions permit someone to say the sentence first ("you can have someone
+  # else say the sentence first and you just repeat it after them"); the speaker gate's ground says so.
+  model_speaker_families: [harvard-sentences-list, cape-v-sentences, cape-v-sentences-v2]
   # The branches for which finding the subject IS evaluating the task, so an out-of-family result
   # is a covariate on the detector rather than a reading of the recording. DDK only: a rapid
   # alternating train does not occur incidentally, where breath, phonation and lexical content all do.

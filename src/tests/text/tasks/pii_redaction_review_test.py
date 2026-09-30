@@ -486,3 +486,12 @@ def test_more_than_one_with_no_quote_is_a_problem_to_feed_back() -> None:
         other_speakers=[redaction_review.OtherSpeaker("never said", False)],
     )
     assert "do not occur in the ORIGINAL" in str(redaction_review.answer_problem(elsewhere, "pa pa", None))
+
+
+def test_the_prompt_counts_an_expected_voice_as_another_voice() -> None:
+    """Owner, 2026-09-30: an examiner or a model speaker is still more_than_one; the participant asking is not."""
+    prompt = redaction_review._PROMPT
+    assert "an expected voice is still another voice" in prompt
+    assert '"Is that enough?"' in prompt and "is still one speaker" in prompt
+    assert "You were given the text" in prompt and "repeat after them" in prompt
+    assert redaction_review.PROMPT_VERSION == 3

@@ -1633,8 +1633,8 @@ class TestTheGatesDecideTheDeclaredTask:
         assert any(NOTHING_READ in why for why in reasons)
         assert not any(TASK_NOT_CONFORMED in why for why in reasons)
 
-    def test_a_sentence_task_is_not_asked_who_spoke(self, config: TriageConfig, tmp_path: Path) -> None:
-        """Its session instruction permits someone else to say the sentence first."""
+    def test_a_sentence_task_is_still_asked_who_spoke(self, config: TriageConfig, tmp_path: Path) -> None:
+        """Owner, 2026-09-30: a permitted model speaker is still another voice; the ground says it was permitted."""
         store = self._gated_store(
             tmp_path,
             family="harvard-sentences-list",
@@ -1642,8 +1642,12 @@ class TestTheGatesDecideTheDeclaredTask:
             readings={"expected_tokens_matched": 6, "expected_tokens_omitted": 0, "extent_dominant_speaker_share": 0.5},
         )
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
-        assert "dominant_speaker_share_min" not in {gate["gate"] for gate in result.file_verdict.gates["flagging"]}
-        assert result.file_verdict.gates["exempt"] == ["dominant_speaker_share_min"]
+        flagging = {gate["gate"]: gate for gate in result.file_verdict.gates["flagging"]}
+        assert flagging["dominant_speaker_share_min"]["passed"] is False
+        assert "exempt" not in result.file_verdict.gates
+        assert any(
+            "the task's instructions permit a model speaker" in reason.why for reason in result.file_verdict.reasons
+        )
 
     def test_no_in_family_report_records_why_nothing_was_gated(self, config: TriageConfig, tmp_path: Path) -> None:
         """The owner left no in-family report: the gate record says so rather than leaving it to inference."""

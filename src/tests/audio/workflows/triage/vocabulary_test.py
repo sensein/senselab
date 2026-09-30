@@ -18,6 +18,7 @@ from senselab.audio.workflows.triage.vocabulary import (
     DOMINANT_SPEAKER_GATE,
     FINDINGS_ARE_TASK_CONTENT,
     MASKS_TRIMMED_TO_CONTENT,
+    MODEL_SPEAKER_PERMITTED,
     NO_CONTENT_MASKED,
     NO_LEXICAL_ITEM_PRODUCED,
     NO_LEXICAL_WORD,
@@ -1558,6 +1559,7 @@ class TestAgreementUnplacedFindingsAndASecondSpeaker:
         unplaced: Sequence[tuple[str, str]] = (),
         flag_gates: Sequence[Mapping[str, Any]] = (),
         policy: FoldPolicy | None = None,
+        declared_family: str | None = None,
     ) -> FileVerdict:
         """A REDACT pass with one mask standing, and one reading."""
         return fold_file_verdict(
@@ -1572,6 +1574,7 @@ class TestAgreementUnplacedFindingsAndASecondSpeaker:
             policy=policy or self.POLICY,
             agreed_redactions=agreed,
             unplaced=list(unplaced),
+            declared_family=declared_family,
         )
 
     READING = {
@@ -1618,23 +1621,62 @@ class TestAgreementUnplacedFindingsAndASecondSpeaker:
         assert not any(reason.why.startswith(REVIEWER_HEARD_SECOND_SPEAKER) for reason in diarized.reasons)
 
     def test_a_participant_addressing_the_examiner_is_no_second_speaker(self) -> None:
-        """Animal fluency, "Is that enough?": a reading of one speaker, or of an expected voice, flags nothing."""
+        """Animal fluency, "Is that enough?": the reviewer reads one speaker, and one speaker flags nothing."""
         one = {"status": "clean", "original": "clean", "speakers": "one", "proposal": [], "other_speakers": []}
         assert self._fold(one).triage is Triage.PASS
-        asked = {"text": "Is that enough?", "expected": True, "why": "the participant asking the examiner"}
-        assert self._fold({**one, "speakers": "more_than_one", "other_speakers": [asked]}).triage is Triage.PASS
 
-    def test_a_second_speaker_the_task_expects_does_not_flag(self) -> None:
-        """Owner, 2026-09-29: an examiner the instructions provide for is the task, not an intruder."""
-        expected = {"text": "Tell me the story again.", "expected": True, "why": "the examiner's prompt"}
+    def test_a_second_speaker_the_task_expects_still_flags(self) -> None:
+        """Owner, 2026-09-30: an examiner reading the story-recall instructions is another voice, and flags."""
+        expected = {"text": "You were given the text.", "expected": True, "why": "the examiner's instruction"}
         reading = {"status": "clean", "original": "clean", "speakers": "more_than_one", "proposal": []}
-        assert self._fold({**reading, "other_speakers": [expected]}).triage is Triage.PASS
-        intruder = {"text": "Who are you talking to?", "expected": False, "why": "nobody the task asks for"}
-        heard = self._fold({**reading, "other_speakers": [expected, intruder]})
+        heard = self._fold({**reading, "other_speakers": [expected]})
         assert heard.triage is Triage.FLAG
+        assert heard.release is Release.WITH_REDACTION, "a flag for review, not a release decision"
         assert [reason.why for reason in heard.reasons if reason.node == "VERDICT"] == [
-            f'{REVIEWER_HEARD_SECOND_SPEAKER}: "Who are you talking to?"'
+            f'{REVIEWER_HEARD_SECOND_SPEAKER}: "You were given the text." (expected)'
         ]
+        intruder = {"text": "Who are you talking to?", "expected": False, "why": "nobody the task asks for"}
+        both = self._fold({**reading, "other_speakers": [expected, intruder]})
+        assert [reason.why for reason in both.reasons if reason.node == "VERDICT"] == [
+            f'{REVIEWER_HEARD_SECOND_SPEAKER}: "You were given the text." (expected); '
+            '"Who are you talking to?" (unexpected)'
+        ]
+
+    def test_a_model_speaker_on_harvard_flags_from_both_readers(self) -> None:
+        """Harvard permits a model speaker: the reviewer's quote and the diarization gate each flag, and say so."""
+        model = {"text": "The birch canoe slid on the smooth planks.", "expected": True, "why": "the model reading"}
+        reading = {"status": "clean", "original": "clean", "speakers": "more_than_one", "proposal": []}
+        heard = self._fold({**reading, "other_speakers": [model]}, declared_family="harvard-sentences-list")
+        assert heard.triage is Triage.FLAG
+        gate = {
+            "gate": DOMINANT_SPEAKER_GATE,
+            "passed": False,
+            "ground": "another speaker holds part of the task extent",
+            "reading": "extent_dominant_speaker_share",
+            "value": 0.88,
+            "bound": 0.9,
+        }
+        policy = replace(self.POLICY, model_speaker_families=("harvard-sentences-list",))
+        diarized = self._fold(
+            {**reading, "speakers": "one", "other_speakers": []},
+            flag_gates=[gate],
+            policy=policy,
+            declared_family="harvard-sentences-list",
+        )
+        assert diarized.triage is Triage.FLAG
+        assert [reason.why for reason in diarized.reasons if reason.node == "VERDICT"] == [
+            "another speaker holds part of the task extent: extent_dominant_speaker_share read 0.88 against 0.9; "
+            f"{MODEL_SPEAKER_PERMITTED}"
+        ]
+
+    def test_the_packaged_config_exempts_no_family_from_the_speaker_gate(self) -> None:
+        """Owner, 2026-09-30: no exemption; the model-speaker families are named for the ground only."""
+        from senselab.audio.workflows.triage.config import load_triage_config
+        from senselab.audio.workflows.triage.nodes.verdict import flag_gate_exemptions
+
+        config = load_triage_config()
+        assert flag_gate_exemptions(config, "harvard-sentences-list") == ()
+        assert "harvard-sentences-list" in FoldPolicy.from_config(config).model_speaker_families
 
     def test_a_flagged_reading_that_names_no_words_flags_for_review(self) -> None:
         """Owner, 2026-09-28: a judgment with no entries moves no mask and goes to a person."""
