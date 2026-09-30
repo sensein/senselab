@@ -1998,3 +1998,11 @@ def test_every_checkbox_facet_has_all_and_none(tmp_path: Path) -> None:
         assert f"','{cls}']" in document, cls
     for button in ("allrel", "norel", "allfam", "nofam", "allcat", "nocat", "alldet", "nodet"):
         assert f'<button id="{button}" type="button">' in document
+
+
+def test_a_trim_released_word_is_dashed_and_a_mask_or_proposal_is_solid() -> None:
+    """Orange (released by the trim) is dashed in both themes; red and green stay solid."""
+    rules = {m.group(1): m.group(2) for m in re.finditer(r"mark\.pii\.(u-\w+)[^{]*\{([^}]*)\}", page._STYLE)}
+    assert "dashed" in rules["u-orange"]
+    assert "dashed" not in rules["u-red"] and "dashed" not in rules["u-green"]
+    assert "mark.swatch.u-orange" in page._STYLE, "the legend swatch shares the dashed rule"

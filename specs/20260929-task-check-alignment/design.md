@@ -356,3 +356,31 @@ person; `unclear` with nothing quoted flags nothing.
 
 `PROMPT_VERSION = 4`. Owner's scope: re-review now only the r9 readings that listed a condition (plus
 the story-recall card); a full re-review of every reading on v4 is scheduled (see `triage_r9_20260929/RUN.md`).
+
+## K. The closed-class inventory (owner, 2026-09-30: "between should not be flagged")
+
+`residue.FUNCTION_WORDS` is the one definition behind `is_content_word`: the residue's content test,
+the mask trim, and which words of a reviewer proposal carry a mark. It lacked common prepositions, so
+"between" in "synovial joint cyst between Cone one and Ctwo" was drawn red.
+
+The list was audited against the closed-class inventory of the *Cambridge Grammar of the English
+Language* (Huddleston & Pullum 2002, ch. 7 prepositions, ch. 5 determinatives, ch. 5 pronouns,
+ch. 3 auxiliaries, ch. 15 subordinators) and 96 closed-class words were added: prepositions (across,
+against, along, amid, among, amongst, around, behind, below, beneath, beside, besides, between, beyond,
+despite, down, during, except, inside, near, outside, past, per, since, through, throughout, till,
+toward, towards, underneath, unlike, until, via, within); subordinators (because, although, though,
+unless, whereas, whether, while); determinatives (another, either, neither, few, many, much, more, most,
+several, such, other); reflexive, possessive and compound pronouns (myself … themselves, yours, hers,
+ours, theirs, someone, something, anyone, anything, everyone, everything, nobody, nothing, whatever,
+whoever); and negated and cliticised auxiliaries (hasn't … shan't, we've … it'd). Numbers stay content
+(an age, a date, a phone digit can identify), and no noun or lexical verb was added.
+
+Measured on the r9 stores (62,550): 32 currently masked words and 43 red proposal words become
+non-content — past 14, few 10, down 5, couldn't 4, more 4, something 4 — and 0 residues change their
+content flag. The residue string itself does not change (function words stay in it; only the content
+test reads the list), so the PII result cache is unaffected. Masks and proposal marks follow at the next
+re-fold; the scan's content flag would change only on a replay, which here changes nothing.
+
+The free-speech page's trim-released words (orange) are drawn with a dashed underline in both themes,
+legend included, since 2a4340de; red (masked or proposed) and green (unmasked by the reviewer) stay
+solid. A page test pins it. The recording-vectors viewer draws no word states.
