@@ -1297,7 +1297,7 @@ families:
           null_means: The fold did not apply `{name}`.
         gate_{name}_reason:
           units: none
-          values: [no_carrier, no_speech, absent_not_computed, instrument_absent, null_no_overlap, null_value, bound_unmeasured, no_owner_report]
+          values: [no_carrier, no_speech, absent_not_computed, instrument_absent, null_no_overlap, null_value, bound_unmeasured, no_owner_report, no_instructed_count]
           description: Why `{name}` answered something other than a comparison of its reading with its bound.
           computation: >-
             The record's `reason`, from `reading_absences` for an absent reading: `no_carrier` (no
@@ -1474,6 +1474,19 @@ families:
         reading_description: how many DDK repetitions either instrument found.
         reading_computation: The DDK instrument writes the larger of the decode's repetition count and 1 where the envelope carrier was found.
         reading_source: nodes/ddk.py:repetitions_found
+      instructed_count_min_fraction:
+        kind: applied
+        reading: instructed_count_fraction
+        op: at_least
+        units: fraction
+        reader: gate_readings
+        reading_description: what was produced over the count the instruction spoke (breaths, coughs, v1 DDK repetitions).
+        reading_computation: >-
+          AIRWAY writes the events found over the row's required count; SPEECH's syllable body writes the
+          decoded repetitions over it, only where the decode counted (it read a repetition, or the envelope
+          found no carrier either). Not written, so not applicable (`no_instructed_count`), where the
+          instruction speaks no count or no instrument counted.
+        reading_source: nodes/airway.py:events_found, nodes/ddk.py:repetitions_found, nodes/branches.py:instructed_fraction
       repeat_overlap_min:
         kind: located
         op: at_least

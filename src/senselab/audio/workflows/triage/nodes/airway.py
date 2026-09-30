@@ -31,6 +31,7 @@ from senselab.audio.workflows.triage.nodes.branches import (
     Finding,
     Pattern,
     Proposal,
+    RequiredCount,
     Result,
     SpectrogramBlock,
     acquisition_covariates,
@@ -47,6 +48,7 @@ from senselab.audio.workflows.triage.nodes.branches import (
     duration,
     events_in_span,
     hull,
+    instructed_fraction,
     measured,
     merge,
     mode_of,
@@ -646,20 +648,24 @@ def route_findings(
 # --------------------------------------------------------------------- the three in-family patterns
 
 
-def events_found(events: Sequence[Event], params: BranchParams) -> list[Finding]:
+def events_found(events: Sequence[Event], params: BranchParams, required: RequiredCount | None = None) -> list[Finding]:
     """How many events of the instruction's own kind the walk reported, as VERDICT's reading.
 
     Args:
         events: The events the walk reported.
         params: The operating points, read for whether the label cut was measurable.
+        required: The count the instruction spoke, or None.
 
     Returns:
-        One :data:`EVENTS_FOUND` measurement, and nothing at all where the label cut is
-        unmeasured — the walk then looked for nothing and its count reads no recording.
+        One :data:`EVENTS_FOUND` measurement, and beside it the fraction of an instructed count it
+        is; nothing at all where the label cut is unmeasured — the walk then looked for nothing and
+        its count reads no recording.
     """
     if params.gate("score_min") is None:
         return []
-    return [measured(EVENTS_FOUND, None, None, len(events), *sorted({event.span_id for event in events}))]
+    carriers = sorted({event.span_id for event in events})
+    fraction = [] if required is None else [instructed_fraction(required, len(events), *carriers)]
+    return [measured(EVENTS_FOUND, None, None, len(events), *carriers), *fraction]
 
 
 def instrument_absent(*names: str) -> Result:
@@ -817,7 +823,7 @@ def _airway_event_series(
     findings.extend(lexical_intrusions(store))
     findings.extend(unviable_findings(expectation))
     findings.extend(declared_duration_count(store, expectation.declared_duration_s))
-    findings.extend(events_found(events, params))
+    findings.extend(events_found(events, params, expectation.required_count))
     findings.extend(off_task_findings(components, spans, params))
     return Result(components, findings)
 
@@ -904,7 +910,7 @@ def _airway_alternation(expectation: Expectation, store: ProvStore, params: Bran
         )
     findings.extend(lexical_intrusions(store))
     findings.extend(unviable_findings(expectation))
-    findings.extend(events_found(coughs, params))
+    findings.extend(events_found(coughs, params, expectation.required_count))
     findings.extend(off_task_findings(components, spans, params))
     return Result(components, findings)
 

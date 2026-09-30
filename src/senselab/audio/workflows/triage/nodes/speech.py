@@ -69,6 +69,7 @@ from senselab.audio.workflows.triage.nodes.branches import (
     group_by_breaks,
     hull,
     inter_word_gaps,
+    item_category,
     lexical_runs,
     measured,
     merge,
@@ -122,7 +123,7 @@ from senselab.audio.workflows.triage.stimulus import (
     align_stimulus,
     near_match,
 )
-from senselab.audio.workflows.triage.task_lexicon import task_lexicon
+from senselab.audio.workflows.triage.task_lexicon import category_members, task_lexicon
 from senselab.audio.workflows.triage.vocabulary import TASK
 from senselab.text.tasks.pii_detection.api import PiiScan, scan_for_pii
 from senselab.utils.data_structures import HFModel, SpeechBrainModel
@@ -873,6 +874,9 @@ content, the fraction nothing realised; over every expected token where none car
 RESPONSE_DURATION = "response_duration_s"
 """The reading ``response_min_s`` is read against: how long the consensus's lexical words span."""
 
+CATEGORY_ITEMS = "category_items"
+"""The count of listed words that are members of the recording's category."""
+
 ITEMS_PRODUCED = "items_produced"
 """The reading ``items_min`` is read against: how many items the list carried."""
 
@@ -1480,7 +1484,7 @@ def _speech_free_response(  # noqa: C901 — the response, the connected measure
 
 
 def _speech_item_list(
-    expectation: Expectation, store: ProvStore, hint: AudioHints | None, params: BranchParams
+    task_family: str, expectation: Expectation, store: ProvStore, hint: AudioHints | None, params: BranchParams
 ) -> Result:
     """A task asking for a list of items: how many, and was one repeated where none may be?
 
@@ -1488,6 +1492,7 @@ def _speech_item_list(
     own extent.
 
     Args:
+        task_family: The declared family.
         expectation: The row for this family.
         store: The provenance store.
         hint: What the recording was declared to contain.
@@ -1497,22 +1502,14 @@ def _speech_item_list(
         Whether any item was produced, the span, and the findings.
     """
     points = params
+    category = item_category(task_family, hint)
     if expectation.repetition_from_category:
-        # The rule follows the category, which lives only in `instructions`.
-        category = (hint.metadata or {}).get("category") if hint is not None else None
         if category is None:
-            return Result(
-                [],
-                [
-                    unviable(
-                        "repetition_rule",
-                        "the category lives only in `instructions`; no grain above the recording carries it",
-                    )
-                ],
-            )
-        repetition_allowed = str(category) in REPETITION_ALLOWED_CATEGORIES
+            return Result([], [unviable("repetition_rule", "the instructions name no category")])
+        repetition_allowed = category in REPETITION_ALLOWED_CATEGORIES
     else:
         repetition_allowed = bool(expectation.repetition_allowed)
+    members = category_members(category, [word_text(word) for word in lexical_words(store)])
 
     items = lexical_words(store)
     consensus_id = _consensus_id(store)
@@ -1542,6 +1539,9 @@ def _speech_item_list(
         )
     findings.append(count("items", len(items), None, *(word.id for word in items)))
     findings.append(count("repetition_allowed", repetition_allowed, None))
+    findings.append(count("item_category", category, None))
+    member_ids = [word.id for index, word in enumerate(items) if index in members]
+    findings.append(count(CATEGORY_ITEMS, len(member_ids) if category is not None else None, None, *member_ids))
     findings.append(measured(ITEMS_PRODUCED, None, None, len(items), *(word.id for word in items)))
     findings.extend(unviable_findings(expectation))
     findings.extend(declared_duration_count(store, expectation.declared_duration_s))
@@ -1585,7 +1585,7 @@ def align_speech(
     if expectation.pattern is Pattern.FREE_RESPONSE:
         return _speech_free_response(expectation, store, hint, params)
     if expectation.pattern is Pattern.ITEM_LIST:
-        return _speech_item_list(expectation, store, hint, params)
+        return _speech_item_list(task_family, expectation, store, hint, params)
     raise NotImplementedError(f"{task_family}: SPEECH serves no body for {expectation.pattern}")
 
 
@@ -2342,7 +2342,7 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
         prompt_tokens(hint),
         residue_rule(config),
         speech_type=hint.speech_type if hint is not None else None,
-        lexicon=task_lexicon(config, declared_family),
+        lexicon=task_lexicon(config, declared_family, hint),
     )
     residue_positions = {lexical_index[position] for position in residue.positions}
     haystacks: list[tuple[str, str, list[int], list[str]]] = []

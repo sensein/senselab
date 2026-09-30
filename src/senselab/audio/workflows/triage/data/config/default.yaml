@@ -151,7 +151,7 @@ stimulus:
     variant_similarity_min: 0.66       # least 1 - edits/longer length at which a word is a reading of a stimulus word
     insertion_window: 3                # stimulus words either side an inserted word may repeat, restart or split
     train_repetitions_min: 3           # recurrences that make a token a syllable train in a syllable task
-  task_lexicons: [cinderella-story]    # owner, 2026-09-28: families whose data/task_lexicon/<family>.yaml is task content
+  task_lexicons: [cinderella-story, animal-fluency, random-item-generation, random-item-generation-v2]    # families whose packaged lexicon, and item category's, is task content
 
 # The declared task ALWAYS adds a route to its own branch. That route needs no key here: the task is
 # read off the recording's own BIDS stem and resolved through `taxonomy.ruleset.reference_family_set`
@@ -328,6 +328,7 @@ verdict:
   llm_second_speaker_flags: true       # owner, 2026-09-27: a reading that heard more than one speaker flags the recording for review
   llm_contradiction_flags: true        # owner, 2026-09-28: a flagged reading that names no words flags the recording for review
   uncomputed_reading_flags: true       # owner, 2026-09-29: a conformance reading that should exist and does not flags for review
+  hint_mismatch_exempt_families: [respiration-and-cough-breath, respiration-and-cough-v2-breath]  # owner, 2026-09-29: quiet breathing the classifier does not hear is no flag
   # declared task family -> flag gates its own instruction makes inapplicable. Owner, 2026-09-29:
   # the read-aloud sentence tasks' session instructions permit someone else to say the sentence first.
   flag_gate_exemptions:
@@ -395,11 +396,13 @@ verdict:
       EVENT_SERIES:                      # a counted series of airway events
         score_min: 0.2                   # classifier raw score at or above which a label is present
         events_min: 1                    # events of the instruction's own kind the walk must find
+        instructed_count_min_fraction: 0.5  # UNFITTED: events found over the count the instruction spoke
         interval_max_s: 2.0              # largest inter-onset interval a series called quick may show
         gap_off_task_min_s: 1.0          # shortest gap reported as off-task extent
       EVENT_ALTERNATION:                 # coughs alternating with breath
         score_min: 0.2                   # classifier raw score at or above which a label is present
         events_min: 1                    # events of the instruction's own kind the walk must find
+        instructed_count_min_fraction: 0.5  # UNFITTED: events found over the count the instruction spoke
         gap_off_task_min_s: 1.0          # shortest gap reported as off-task extent
       SOUND_COVERAGE:                    # a sound held over a declared extent; no conformance term
         score_min: 0.2                   # classifier raw score at or above which a label is present
@@ -408,11 +411,13 @@ verdict:
         train_min_s: 1.0                 # shortest carrier that can hold a train
         rate_prominence_min: 2.0         # modulation peak over its band mean that makes a rate readable
         repetitions_min: 1               # repetitions either instrument must read
+        instructed_count_min_fraction: 0.5  # UNFITTED: repetitions decoded over the count the instruction spoke
         dominant_speaker_share_min: 0.9  # share of the task extent's attributed seconds one voice must hold
       SYLLABLE_SEQUENCE:                 # a syllable sequence repeated
         train_min_s: 1.0                 # shortest carrier that can hold a train
         rate_prominence_min: 2.0         # modulation peak over its band mean that makes a rate readable
         repetitions_min: 1               # repetitions either instrument must read
+        instructed_count_min_fraction: 0.5  # UNFITTED: repetitions decoded over the count the instruction spoke
         dominant_speaker_share_min: 0.9  # share of the task extent's attributed seconds one voice must hold
       PER_SENTENCE: {}                   # no row reaches this group; no gate is configured for it
       EFFORT: {}                         # no row reaches this group; no gate is configured for it

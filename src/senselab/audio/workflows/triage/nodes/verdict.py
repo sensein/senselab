@@ -58,8 +58,10 @@ from senselab.audio.workflows.triage.nodes.gates import (
     GATE_SECTION,
     GATE_SPECS,
     INAPPLICABLE,
+    INSTRUCTED_COUNT_FRACTION,
     INSTRUMENT_ABSENT,
     NO_CARRIER,
+    NO_INSTRUCTED_COUNT,
     NO_OWNER_REPORT,
     NO_SPEECH,
     NOT_COMPUTED,
@@ -529,6 +531,8 @@ def reading_absences(store: ProvStore, names: Sequence[str], *, flag: bool = Fal
                 out[reading] = (UNDECIDED, NOT_COMPUTED)
             else:
                 out[reading] = (INAPPLICABLE if flag else FAIL, NO_CARRIER)
+        elif reading == INSTRUCTED_COUNT_FRACTION:
+            out[reading] = (INAPPLICABLE, NO_INSTRUCTED_COUNT)
         elif reading == SPEAKER_SHARE_READING:
             if lexical_n is None:
                 lexical_n = len(lexical_words(store))
@@ -768,7 +772,7 @@ def verdict(
         human_review_categories=policy.llm_human_review_categories,
         protected_categories=policy.trim_protected_categories,
         cohort_conditions=policy.cohort_conditions,
-        lexicon=task_lexicon(config, declared_task_family(store)),
+        lexicon=task_lexicon(config, declared_task_family(store), hint),
     )
     file_verdict = fold_file_verdict(
         node_verdicts,

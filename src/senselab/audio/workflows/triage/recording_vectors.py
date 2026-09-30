@@ -123,6 +123,7 @@ GATE_NAMES = (
     "items_min",
     "events_min",
     "repetitions_min",
+    "instructed_count_min_fraction",
     "repeat_overlap_min",
     "echo_overlap_max",
     "verbatim_overlap_max",

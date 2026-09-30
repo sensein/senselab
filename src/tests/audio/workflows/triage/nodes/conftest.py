@@ -16,6 +16,9 @@ from senselab.audio.workflows.triage.consensus import ALGORITHM, NORMALISATION, 
 from senselab.audio.workflows.triage.nodes import preprocess as preprocess_module
 from senselab.audio.workflows.triage.nodes.admit import admit
 from senselab.audio.workflows.triage.nodes.gates import (
+    INAPPLICABLE,
+    INSTRUCTED_COUNT_FRACTION,
+    NO_INSTRUCTED_COUNT,
     Pattern,
     apply_flag_gates,
     apply_gates,
@@ -23,6 +26,7 @@ from senselab.audio.workflows.triage.nodes.gates import (
     load_gate_bounds,
 )
 from senselab.audio.workflows.triage.nodes.preprocess import CRISPERWHISPER_ID, QWEN_ID
+from senselab.audio.workflows.triage.nodes.verdict import reading_absences
 from senselab.utils.data_structures import ScriptLine
 from senselab.utils.prov_store import ProvStore
 
@@ -204,6 +208,10 @@ def store_readings(store: ProvStore) -> dict[str, Any]:
     }
 
 
+NO_COUNT_ABSENCE = {INSTRUCTED_COUNT_FRACTION: (INAPPLICABLE, NO_INSTRUCTED_COUNT)}
+"""An instructed-count fraction a branch did not write: its family's instruction speaks no count."""
+
+
 def gated_from_store(
     store: ProvStore,
     group: Pattern,
@@ -222,7 +230,7 @@ def gated_from_store(
     """
     bounds = load_gate_bounds(settings or load_triage_config(), group)
     names = conformance_gate_names(group)
-    return apply_gates(names, bounds, store_readings(store))[0]
+    return apply_gates(names, bounds, store_readings(store), reading_absences(store, names))[0]
 
 
 def gated_conformance(
@@ -246,7 +254,7 @@ def gated_conformance(
     """
     bounds = load_gate_bounds(settings or load_triage_config(), group)
     names = conformance_gate_names(group)
-    return apply_gates(names, bounds, readings_of(result))[0]
+    return apply_gates(names, bounds, readings_of(result), NO_COUNT_ABSENCE)[0]
 
 
 def gated_flags(

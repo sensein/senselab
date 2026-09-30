@@ -59,7 +59,7 @@ about the recording.
 
 ### Where it is visible
 
-Parquet schema 12: `gate_<name>_reason` for each of the 13 applied gates, `gate_reason`,
+Parquet schema 12: `gate_<name>_reason` for each of the applied gates, `gate_reason`,
 `gate_exempt`, `gate_not_applicable_n`, and `not_applicable` as a `gate_<name>_passed` value. The
 data dictionary describes each; the viewer offers the reasons as categorical axes; the review page
 shows "not applicable" and the reason beside each gate.
@@ -154,3 +154,68 @@ became an instrument setting, as it always was in effect.
   word was rejected as `lexical_separator`. The carrier is now the longest part of the span no lexical
   word touches (`branches.longest_free_interval`), rejected only if that part is shorter than
   `production_min_s`.
+
+## D. Items, counts and speakers
+
+### Item categories
+
+`random-item-generation` (both versions) had 472 recordings undetermined because the repetition rule
+read `hint.metadata["category"]`, which nothing writes. The category is in each recording's own
+instructions ("… The recording will automatically stop at the end. Category: Animals."). Over 300
+sampled r8 recordings (`counts_probe.py`, seed 7) it parses on 297 (99%): City names 39, Numbers 38,
+Letters 35, First names 33, English words starting with 't' 32, Jobs 29, Fruits 26, Country names
+23, Drinks 22, Animals 20. `branches.item_category` reads it (`Category: <name>.`); `animal-fluency`
+declares `item_category: Animals` on its row. The repetition rule then follows (Letters and Numbers
+allow repeats), `items_min` is judged, and the list's `category_items` count (listed words that are
+members) and `item_category` are recorded.
+
+**The category's items are task content.** `stimulus.task_lexicons` now enables `animal-fluency` and
+both `random-item-generation` families; `task_lexicon(config, family, hint)` adds the category's
+packaged list (`data/task_lexicon/categories/<slug>.yaml`: animals, fruits, drinks, jobs,
+country-names, city-names, first-names) or its rule (a single letter for Letters, a digit or spelled
+number for Numbers, the named initial for "words starting with 't'"). The residue, REDACT's exemption,
+the reviewer's context and the fold's mask plan read it, so a listed first name, city or digit run is
+not handed to the PII detectors. The lists are starting lists, not exhaustive: a missing item is
+scanned as before. This changes the residue for at most 668 recordings (r8: animal-fluency 195, RIG 265, RIG-v2 208), so their
+PII scans are expected result-cache misses; no other family's residue changes.
+
+### Instructed counts
+
+The v1 syllable instructions say "as fast as possible 10 times" (`task_instructions_curated.json`, all
+five of pa/ta/ka/pataka/buttercup). The earlier ruling that no number was spoken
+(`specs/20260921-required-and-typical-counts/`) read the v2 demo template the harvest carried; the
+five rows now carry `RequiredCount(10, repetitions)` and no typical count. `ppg_typical_repetitions`
+is replaced by `ppg_required_repetitions`.
+
+A new conformance gate, **`instructed_count_min_fraction`** over `instructed_count_fraction` (produced
+over asked), applies to EVENT_SERIES, EVENT_ALTERNATION, SYLLABLE_TRAIN and SYLLABLE_SEQUENCE. AIRWAY
+writes it beside `airway_events_found`; the syllable body beside `ddk_repetitions_found`, only where the
+decode counted (a weak decode beside an envelope carrier is not a count of zero). A family whose
+instruction speaks no count writes none, and the gate is not applicable (`no_instructed_count`).
+
+**UNFITTED, proposed 0.5 for all four groups.** Measured over r8 (120 per family, seed 7):
+
+| family | asked | found p5 / p10 / p25 / p50 / p75 |
+|---|---|---|
+| diadochokinesis-pa | 10 | 5 / 8 / 10 / 12 / 15 |
+| diadochokinesis-ta | 10 | 5 / 7 / 10 / 11 / 14 |
+| diadochokinesis-ka | 10 | 3 / 6 / 9 / 10 / 12 |
+| diadochokinesis-pataka | 10 | 5 / 8 / 9 / 10 / 11 |
+| diadochokinesis-buttercup | 10 | 7 / 8 / 9 / 10 / 10 |
+| voluntary-cough | 3 | 1 / 2 / 5 / 8 / 11 |
+| respiration-and-cough-v2-threebreaths | 3 | 2 / 3 / 4 / 6 / 7 |
+| respiration-and-cough-v2-threebreathsnose | 3 | 0 / 1 / 3 / 5 / 6 |
+| respiration-and-cough-v2-threebreathsmouth | 3 | 0 / 2 / 4 / 6 / 7 |
+| breath-sounds | 3 | 0 / 1 / 4 / 6 / 7 |
+
+AIRWAY's events are not the instructed unit: one breath is often an inhale and an exhale event, and a
+cough a burst of several, so the found count runs about twice the asked one and 0.5 is lenient there
+(it fails the 0-and-1-event recordings). For DDK 0.5 fails about 5% (fewer than five of ten).
+
+### Speaker share for model-speaker families, quiet breathing
+
+- `dominant_speaker_share_min` is exempt for `harvard-sentences-list`, `cape-v-sentences` and
+  `cape-v-sentences-v2` (done in A): their session instructions allow "someone else say the sentence
+  first and you just repeat it after them".
+- `verdict.hint_mismatch_exempt_families: [respiration-and-cough-breath, respiration-and-cough-v2-breath]`:
+  quiet breathing the classifier does not hear is not "declared and did not find it".

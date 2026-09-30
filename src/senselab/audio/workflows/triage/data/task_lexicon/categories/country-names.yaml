@@ -1,0 +1,128 @@
+# Task content for a list task whose category is "Country names": a listed word matching an item is the task's own
+# content, so the residue never hands it to the PII detectors and no mask covers it. A starting list,
+# not an exhaustive one: an item missing here is scanned as before. Derivation and counts are in
+# specs/20260929-task-check-alignment/design.md (section D).
+category: Country names
+items:
+  - afghanistan
+  - albania
+  - algeria
+  - argentina
+  - armenia
+  - australia
+  - austria
+  - bangladesh
+  - belgium
+  - bolivia
+  - brazil
+  - bulgaria
+  - cambodia
+  - cameroon
+  - canada
+  - chile
+  - china
+  - colombia
+  - costa rica
+  - croatia
+  - cuba
+  - cyprus
+  - czech republic
+  - denmark
+  - ecuador
+  - egypt
+  - england
+  - estonia
+  - ethiopia
+  - fiji
+  - finland
+  - france
+  - germany
+  - ghana
+  - greece
+  - guatemala
+  - guyana
+  - haiti
+  - honduras
+  - hungary
+  - iceland
+  - india
+  - indonesia
+  - iran
+  - iraq
+  - ireland
+  - israel
+  - italy
+  - jamaica
+  - japan
+  - jordan
+  - kazakhstan
+  - kenya
+  - korea
+  - kuwait
+  - laos
+  - latvia
+  - lebanon
+  - libya
+  - lithuania
+  - luxembourg
+  - madagascar
+  - malaysia
+  - mali
+  - malta
+  - mexico
+  - monaco
+  - mongolia
+  - morocco
+  - nepal
+  - netherlands
+  - holland
+  - new zealand
+  - nicaragua
+  - nigeria
+  - north korea
+  - norway
+  - pakistan
+  - panama
+  - paraguay
+  - peru
+  - philippines
+  - poland
+  - portugal
+  - puerto rico
+  - qatar
+  - romania
+  - russia
+  - rwanda
+  - saudi arabia
+  - scotland
+  - senegal
+  - serbia
+  - singapore
+  - slovakia
+  - slovenia
+  - somalia
+  - south africa
+  - south korea
+  - spain
+  - sri lanka
+  - sudan
+  - sweden
+  - switzerland
+  - syria
+  - taiwan
+  - tanzania
+  - thailand
+  - tunisia
+  - turkey
+  - uganda
+  - ukraine
+  - united kingdom
+  - united states
+  - uruguay
+  - usa
+  - venezuela
+  - vietnam
+  - wales
+  - yemen
+  - zambia
+  - zimbabwe
