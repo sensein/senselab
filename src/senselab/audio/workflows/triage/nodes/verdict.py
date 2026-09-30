@@ -485,7 +485,7 @@ def flag_gate_readings(store: ProvStore, names: Sequence[str]) -> dict[str, Any]
     return readings
 
 
-CARRIER_READING_PREFIXES = ("carrier_", "sweep_")
+CARRIER_READING_PREFIXES = ("carrier_", "sweep_", "glide_extent_", "production_declared_")
 """The readings VOICE takes off a qualifying carrier; their absence means no carrier qualified."""
 
 TRACKS_ABSENT_MEASUREMENTS = ("phonation_extent", "sweep_extent")

@@ -776,6 +776,18 @@ class TestTheCountInIsItsOwnSpan:
         result = align_voice("prolonged-vowel", store, None, params(), run_dir=tmp_path)
         assert [proposal.role for proposal in result.components] == [COUNT_IN]
 
+    def test_the_vowel_transcribed_as_a_word_is_not_a_separator(self, tmp_path: Path) -> None:
+        """Only the count-in's own words split a span: an ASR ``Ah`` over the held vowel is the vowel."""
+        store, _ = seed(
+            tmp_path,
+            stem=PROLONGED_STEM,
+            amplitude=((1.0, 12.0),),
+            tracks=_tracks(20.0, [(1.0, 12.0)]),
+            words=(("one", 1.0, 1.4), ("two", 1.6, 2.0), ("three", 2.2, 2.8), ("Ah.", 2.9, 12.0)),
+        )
+        result = align_voice("prolonged-vowel", store, None, params(), run_dir=tmp_path)
+        assert readings_of(result)["carrier_duration_s"] == pytest.approx(9.2, abs=0.05)
+
     def test_a_vowel_sharing_one_span_with_the_count_in_is_split_off_it(self, tmp_path: Path) -> None:
         """``1, 2, 3 aah`` with no silence before the vowel: the vowel is the span after ``three``."""
         store, _ = seed(

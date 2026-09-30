@@ -386,7 +386,8 @@ def qualifying_phonation(evidence: Evidence, expectation: Expectation, params: B
 
     Args:
         evidence: The derivatives and store reads.
-        expectation: The row, whose ``lexical_separator`` excludes a count-in from the carriers.
+        expectation: The row, whose ``lexical_separator`` excludes a count-in from the carriers: the words
+            its ``tokens`` match where it prescribes them, else every lexical word.
         params: The operating points.
 
     Returns:
@@ -403,6 +404,10 @@ def qualifying_phonation(evidence: Evidence, expectation: Expectation, params: B
     spread_max = params.gate("f0_spread_max_semitones")
     continuity_min = params.gate("continuity_min")
     words = lexical(evidence.words)
+    separators = words
+    if expectation.lexical_separator and expectation.tokens:
+        matched, _ = ordered_run(expectation.tokens, words, params.p_normalise)
+        separators = [word for _, word in matched]
     out: list[Carrier] = []
     rejected: list[Rejection] = []
     for span in amplitude_spans(evidence.spans):
@@ -410,8 +415,8 @@ def qualifying_phonation(evidence: Evidence, expectation: Expectation, params: B
             rejected.append(Rejection(span, "production_min_s", round(duration(span.extent), 3), minimum_s, {}))
             continue
         carrier_extent: tuple[float, float] = span.extent
-        if expectation.lexical_separator and any(overlaps(word_extent(word), carrier_extent) for word in words):
-            free = longest_free_interval(carrier_extent, [word_extent(word) for word in words])
+        if expectation.lexical_separator and any(overlaps(word_extent(word), carrier_extent) for word in separators):
+            free = longest_free_interval(carrier_extent, [word_extent(word) for word in separators])
             if free is None or duration(free) < minimum_s:
                 rejected.append(Rejection(span, "lexical_separator", None, None, {}))
                 continue
