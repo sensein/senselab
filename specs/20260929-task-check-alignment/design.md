@@ -292,3 +292,24 @@ failures (`gate_repetitions_min` axis bound, zero-on-band, outcome axis, facet g
 identically at the commit before F and G: the fixture script still generates the pre-schema-10 gate
 set (`train_min_s`, `coverage_min`, `items_min`, `dominant_speaker_share_min`), and the facet spec
 counts located gates that carry no `_passed` column since schema 10. Not fixed here.
+
+## Offline replay (288 recordings, `tmp_taskfix/replay200b`, at 832935a5)
+
+Three per family over all 67 families plus seven more in fourteen, and the owner's two cases; CPU, into
+a copy, compared against r8's final summaries with every reviewer ground left out of both.
+
+- Flagged (non-reviewer grounds): r8 61 → 45 of 288. Caterpillar 7 → 2, Rainbow 3 → 0, Stroop 4 → 1,
+  Harvard 2 → 1 (the one left: nothing read), glides-low-to-high 6 → 3, quiet breathing 5 → 0.
+  New flags: MPT/prolonged-vowel quality flags (voicing 8, spread 5), prolonged-vowel short of half its
+  12 s (4), and single cases of an instructed count short of half (cough, five breaths, /pa/).
+- Undetermined applied gates: only `instructed_count_min_fraction` not applicable (`no_instructed_count`,
+  18). The first pass also showed 3 prolonged-vowel `declared_duration_min_fraction` absent_not_computed
+  and 3 no-carrier rejections caused by an ASR "Ah." covering the vowel; both fixed in 832935a5.
+- RIG: all 20 were undetermined in r8; all now carry `items_min` (6–147 items) and pass.
+- The owner's cases: sub-f2876e24… harvard-sentences-list-13-1 now passes (6 matched, content omission
+  0.0, the dominant-speaker gate exempt); sub-9488c55d… animal-fluency passes on the replay (its r8 flag
+  was a reviewer ground, re-read in r9 under H).
+- Measured distributions for the UNFITTED bounds: prolonged-vowel declared fraction
+  [0.08, 0.28, 0.36, 0.43, 0.46, 0.62, 0.66, 0.70, 0.70, 0.72]; glide travel (st) median 18.2, 3 of 23
+  under 6; content omission — Harvard all 0 but one nothing-read, Caterpillar 0.01/0.01/0.11/1.0 above
+  zero, Rainbow 0.03/0.09, Stroop 0.07/0.07/0.13; instructed fraction — DDK 0.4–4.1, airway 0.0–4.3.
