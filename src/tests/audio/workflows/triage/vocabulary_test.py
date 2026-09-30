@@ -1608,12 +1608,33 @@ class TestAgreementUnplacedFindingsAndASecondSpeaker:
         reading = {"status": "clean", "original": "clean", "speakers": "more_than_one", "proposal": []}
         heard = self._fold(reading)
         assert heard.triage is Triage.FLAG
-        assert [reason.why for reason in heard.reasons if reason.node == "VERDICT"] == [REVIEWER_HEARD_SECOND_SPEAKER]
+        assert [reason.why for reason in heard.reasons if reason.node == "VERDICT"] == [
+            f"{REVIEWER_HEARD_SECOND_SPEAKER}: no words quoted"
+        ]
         assert heard.release is Release.WITH_REDACTION, "a flag for review, not a release decision"
         assert self._fold(reading, policy=FoldPolicy()).triage is Triage.PASS
         gate = {"gate": DOMINANT_SPEAKER_GATE, "passed": False, "ground": "another speaker", "reading": "share"}
         diarized = self._fold(reading, flag_gates=[gate])
-        assert REVIEWER_HEARD_SECOND_SPEAKER not in [reason.why for reason in diarized.reasons]
+        assert not any(reason.why.startswith(REVIEWER_HEARD_SECOND_SPEAKER) for reason in diarized.reasons)
+
+    def test_a_participant_addressing_the_examiner_is_no_second_speaker(self) -> None:
+        """Animal fluency, "Is that enough?": a reading of one speaker, or of an expected voice, flags nothing."""
+        one = {"status": "clean", "original": "clean", "speakers": "one", "proposal": [], "other_speakers": []}
+        assert self._fold(one).triage is Triage.PASS
+        asked = {"text": "Is that enough?", "expected": True, "why": "the participant asking the examiner"}
+        assert self._fold({**one, "speakers": "more_than_one", "other_speakers": [asked]}).triage is Triage.PASS
+
+    def test_a_second_speaker_the_task_expects_does_not_flag(self) -> None:
+        """Owner, 2026-09-29: an examiner the instructions provide for is the task, not an intruder."""
+        expected = {"text": "Tell me the story again.", "expected": True, "why": "the examiner's prompt"}
+        reading = {"status": "clean", "original": "clean", "speakers": "more_than_one", "proposal": []}
+        assert self._fold({**reading, "other_speakers": [expected]}).triage is Triage.PASS
+        intruder = {"text": "Who are you talking to?", "expected": False, "why": "nobody the task asks for"}
+        heard = self._fold({**reading, "other_speakers": [expected, intruder]})
+        assert heard.triage is Triage.FLAG
+        assert [reason.why for reason in heard.reasons if reason.node == "VERDICT"] == [
+            f'{REVIEWER_HEARD_SECOND_SPEAKER}: "Who are you talking to?"'
+        ]
 
     def test_a_flagged_reading_that_names_no_words_flags_for_review(self) -> None:
         """Owner, 2026-09-28: a judgment with no entries moves no mask and goes to a person."""

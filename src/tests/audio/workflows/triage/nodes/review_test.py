@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import inspect
+import json
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -16,7 +17,12 @@ from senselab.audio.workflows.triage.nodes import review as review_module
 from senselab.audio.workflows.triage.nodes.redact import transcript_texts
 from senselab.audio.workflows.triage.nodes.review import NODE, refine_plan, review
 from senselab.audio.workflows.triage.vocabulary import PII_SCAN, REDACTION_LLM_ANNOTATION, SCANNED, Outcome
-from senselab.text.tasks.pii_detection.redaction_review import ReviewProposal, ReviewResult
+from senselab.text.tasks.pii_detection.redaction_review import (
+    PROMPT_VERSION,
+    ReviewProposal,
+    ReviewResult,
+    parse_completion,
+)
 from senselab.utils.prov_store import ProvStore
 from tests.audio.workflows.triage.nodes.conftest import word_attributes
 
@@ -693,3 +699,75 @@ class TestTheBracketedTokensAreNotSpeech:
         # audio under a breath between two redacted words takes nothing away.
         assert plan.extents[0].start == pytest.approx(0.0)
         assert plan.extents[0].end == pytest.approx(2.5)
+
+
+def _answered(completion: str) -> ReviewResult:
+    """A fake backend's round: the completion parsed exactly as the shipped reviewer parses it."""
+    parsed = parse_completion(completion)
+    return ReviewResult(
+        available=True,
+        reasoning=parsed.reasoning,
+        redaction=parsed.redaction,
+        original=parsed.original,
+        speakers=parsed.speakers,
+        proposal=parsed.proposal,
+        other_speakers=parsed.other_speakers,
+        conditions_answered=parsed.conditions_answered,
+        model_id="s/m",
+        revision="a" * 40,
+    )
+
+
+def _speakers_answer(speakers: str, others: list[dict[str, Any]]) -> str:
+    return (
+        "REASONING: read it.\nREDACTION: not_applicable\nORIGINAL: clean\n"
+        f"SPEAKERS: {speakers}\nOTHER_SPEAKERS: {json.dumps(others)}\nCONDITIONS: []\nPROPOSAL: []"
+    )
+
+
+class TestTheSpeakerJudgmentWeighsTheInstructions:
+    """Owner, 2026-09-29: a second voice is quoted and judged against what the task expects."""
+
+    def test_a_participant_asking_the_examiner_is_one_speaker(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Animal fluency: "Is that enough?" is the participant talking, and nothing is quoted."""
+        store = ProvStore(run_id="review-test")
+        _seed(store, words=["cat", "dog", "horse", "is", "that", "enough"], scan="ran")
+        _stub(monkeypatch, [_answered(_speakers_answer("one", []))])
+        review(store, _config(tmp_path))
+        annotation = _annotation(store)
+        assert (annotation["speakers"], annotation["other_speakers"]) == ("one", [])
+        assert annotation["prompt_version"] == PROMPT_VERSION
+
+    def test_an_expected_examiner_is_recorded_as_expected(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Story recall: the examiner's instruction is quoted and marked as a voice the task expects."""
+        store = ProvStore(run_id="review-test")
+        _seed(store, words=["tell", "me", "the", "story", "once", "a", "fox"], scan="ran")
+        examiner = {"text": "tell me the story", "expected": True, "why": "the examiner's instruction"}
+        _stub(monkeypatch, [_answered(_speakers_answer("more_than_one", [examiner]))])
+        review(store, _config(tmp_path))
+        assert _annotation(store)["other_speakers"] == [examiner]
+
+    def test_more_than_one_without_a_quote_is_asked_again(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A second voice named without its words is fed back; the next round quotes the interjection."""
+        store = ProvStore(run_id="review-test")
+        _seed(store, words=["pa", "pa", "who", "is", "that", "pa"], scan="ran")
+        intruder = {"text": "who is that", "expected": False, "why": "nobody the task provides for"}
+        _stub(
+            monkeypatch,
+            [
+                _answered(_speakers_answer("more_than_one", [])),
+                _answered(_speakers_answer("more_than_one", [intruder])),
+            ],
+        )
+        review(store, _config(tmp_path))
+        rounds = _rounds_in(store)
+        assert [bool(r["problem"]) for r in rounds] == [True, False]
+        assert "OTHER_SPEAKERS quoted no words" in str(rounds[1]["feedback"])
+        annotation = _annotation(store)
+        assert annotation["iterations"] == 2 and annotation["other_speakers"] == [intruder]

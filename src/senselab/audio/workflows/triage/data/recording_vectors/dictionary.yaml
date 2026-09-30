@@ -616,7 +616,10 @@ columns:
     units: none
     values: [one, more_than_one, unclear]
     description: How many people the reviewer judged the words show speaking.
-    computation: The annotation's `speakers`, from the last round's answer.
+    computation: >-
+      The annotation's `speakers`, from the last round's answer. From reviewer prompt version 2 a
+      `more_than_one` carries `other_speakers` (quoted words, and whether the task's instructions expect
+      that voice) in the annotation; the fold flags only an unexpected or unquoted one.
     source: [recording_vectors.py:_reviewer_columns, nodes/review.py:_rounds]
     null_means: As `llm_redaction_judgment`.
 

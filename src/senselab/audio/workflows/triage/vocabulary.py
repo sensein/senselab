@@ -9,6 +9,7 @@ agreement and hint tables and what each input contributes are in
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Literal, Mapping, Sequence
@@ -336,9 +337,10 @@ REVIEWER_NAMED_NO_WORDS = "the redaction reviewer judged the redaction wrong but
 A reading may only move a mask by naming the words it moves, so such a reading moves none: REDACT's
 masks stand, and the recording goes to a person."""
 
-REVIEWER_HEARD_SECOND_SPEAKER = "the redaction reviewer read more than one speaker in the transcript"
+REVIEWER_HEARD_SECOND_SPEAKER = "the redaction reviewer read an unexpected second speaker in the transcript"
 """The flag ground a reading's ``speakers: more_than_one`` contributes, under ``verdict.llm_second_speaker_flags``,
-where diarization's own gate has not already flagged another speaker in the task extent."""
+where diarization's own gate has not already flagged another speaker in the task extent, and where the
+reading quoted a voice the task's instructions do not expect or quoted none. The ground names the quotes."""
 
 LLM_REDACTION_RESIDUE = "the redaction reviewer flagged residue on the redacted transcript"
 """The flag ground a reviewer reading that proposes hiding more contributes to the triage axis.
@@ -1135,7 +1137,11 @@ def fold_file_verdict(
         record.get("passed") is False and record.get("gate") == DOMINANT_SPEAKER_GATE for record in flag_gates or ()
     )
     if rules.llm_second_speaker_flags and annotation.get("speakers") == "more_than_one" and not diarized_other:
-        reasons.append(NodeVerdict(_VERDICT, Outcome.FLAG, None, REVIEWER_HEARD_SECOND_SPEAKER))
+        others = [dict(other) for other in annotation.get("other_speakers") or () if isinstance(other, Mapping)]
+        unexpected = [str(other.get("text")) for other in others if other.get("expected") is not True]
+        if unexpected or not others:
+            quoted = "; ".join(json.dumps(text) for text in unexpected) if unexpected else "no words quoted"
+            reasons.append(NodeVerdict(_VERDICT, Outcome.FLAG, None, f"{REVIEWER_HEARD_SECOND_SPEAKER}: {quoted}"))
     if rules.llm_contradiction_flags and reviewer_named_no_words(annotation):
         reasons.append(NodeVerdict(_VERDICT, Outcome.FLAG, None, REVIEWER_NAMED_NO_WORDS))
     open_families = sorted({family for family, state in unplaced if state in (UNPLACED_OPEN, UNPLACED_UNREAD)})

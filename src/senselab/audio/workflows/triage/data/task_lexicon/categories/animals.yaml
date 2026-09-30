@@ -4,198 +4,198 @@
 # specs/20260929-task-check-alignment/design.md (section D).
 category: Animals
 items:
-  - aardvark
-  - alligator
-  - alpaca
-  - anteater
-  - antelope
-  - ape
-  - armadillo
-  - baboon
-  - badger
-  - bat
-  - bear
-  - beaver
-  - bee
-  - beetle
-  - bird
-  - bison
-  - boar
-  - buffalo
-  - bull
-  - butterfly
-  - camel
-  - canary
-  - caribou
-  - cat
-  - caterpillar
-  - cheetah
-  - chicken
-  - chimpanzee
-  - chinchilla
-  - chipmunk
-  - cobra
-  - cockroach
-  - cougar
-  - cow
-  - coyote
-  - crab
-  - crane
-  - cricket
-  - crocodile
-  - crow
-  - deer
-  - dingo
-  - dinosaur
-  - dog
-  - dolphin
-  - donkey
-  - dove
-  - dragonfly
-  - duck
-  - eagle
-  - eel
-  - elephant
-  - elk
-  - emu
-  - falcon
-  - ferret
-  - finch
-  - fish
-  - flamingo
-  - fly
-  - fox
-  - frog
-  - gazelle
-  - gecko
-  - gerbil
-  - gibbon
-  - giraffe
-  - goat
-  - goose
-  - gopher
-  - gorilla
-  - grasshopper
-  - groundhog
-  - guinea pig
-  - gull
-  - hamster
-  - hare
-  - hawk
-  - hedgehog
-  - heron
-  - hippo
-  - hippopotamus
-  - hog
-  - horse
-  - hummingbird
-  - hyena
-  - iguana
-  - jackal
-  - jaguar
-  - jellyfish
-  - kangaroo
-  - kitten
-  - koala
-  - ladybug
-  - lamb
-  - lemur
-  - leopard
-  - lion
-  - lizard
-  - llama
-  - lobster
-  - lynx
-  - macaw
-  - magpie
-  - manatee
-  - meerkat
-  - mink
-  - mole
-  - mongoose
-  - monkey
-  - moose
-  - mosquito
-  - moth
-  - mouse
-  - mice
-  - mule
-  - octopus
-  - opossum
-  - orangutan
-  - ostrich
-  - otter
-  - owl
-  - ox
-  - oyster
-  - panda
-  - panther
-  - parakeet
-  - parrot
-  - peacock
-  - pelican
-  - penguin
-  - pheasant
-  - pig
-  - pigeon
-  - piglet
-  - platypus
-  - polar bear
-  - pony
-  - porcupine
-  - possum
-  - puppy
-  - puma
-  - python
-  - quail
-  - rabbit
-  - raccoon
-  - ram
-  - rat
-  - raven
-  - reindeer
-  - rhino
-  - rhinoceros
-  - robin
-  - salamander
-  - salmon
-  - scorpion
-  - seagull
-  - seal
-  - shark
-  - sheep
-  - shrimp
-  - skunk
-  - sloth
-  - slug
-  - snail
-  - snake
-  - sparrow
-  - spider
-  - squid
-  - squirrel
-  - starfish
-  - stingray
-  - stork
-  - swan
-  - tarantula
-  - tiger
-  - toad
-  - tortoise
-  - toucan
-  - trout
-  - turkey
-  - turtle
-  - vulture
-  - walrus
-  - warthog
-  - wasp
-  - weasel
-  - whale
-  - wolf
-  - wolverine
-  - wombat
-  - woodpecker
-  - worm
-  - yak
-  - zebra
+- aardvark
+- alligator
+- alpaca
+- anteater
+- antelope
+- ape
+- armadillo
+- baboon
+- badger
+- bat
+- bear
+- beaver
+- bee
+- beetle
+- bird
+- bison
+- boar
+- buffalo
+- bull
+- butterfly
+- camel
+- canary
+- caribou
+- cat
+- caterpillar
+- cheetah
+- chicken
+- chimpanzee
+- chinchilla
+- chipmunk
+- cobra
+- cockroach
+- cougar
+- cow
+- coyote
+- crab
+- crane
+- cricket
+- crocodile
+- crow
+- deer
+- dingo
+- dinosaur
+- dog
+- dolphin
+- donkey
+- dove
+- dragonfly
+- duck
+- eagle
+- eel
+- elephant
+- elk
+- emu
+- falcon
+- ferret
+- finch
+- fish
+- flamingo
+- fly
+- fox
+- frog
+- gazelle
+- gecko
+- gerbil
+- gibbon
+- giraffe
+- goat
+- goose
+- gopher
+- gorilla
+- grasshopper
+- groundhog
+- guinea pig
+- gull
+- hamster
+- hare
+- hawk
+- hedgehog
+- heron
+- hippo
+- hippopotamus
+- hog
+- horse
+- hummingbird
+- hyena
+- iguana
+- jackal
+- jaguar
+- jellyfish
+- kangaroo
+- kitten
+- koala
+- ladybug
+- lamb
+- lemur
+- leopard
+- lion
+- lizard
+- llama
+- lobster
+- lynx
+- macaw
+- magpie
+- manatee
+- meerkat
+- mink
+- mole
+- mongoose
+- monkey
+- moose
+- mosquito
+- moth
+- mouse
+- mice
+- mule
+- octopus
+- opossum
+- orangutan
+- ostrich
+- otter
+- owl
+- ox
+- oyster
+- panda
+- panther
+- parakeet
+- parrot
+- peacock
+- pelican
+- penguin
+- pheasant
+- pig
+- pigeon
+- piglet
+- platypus
+- polar bear
+- pony
+- porcupine
+- possum
+- puppy
+- puma
+- python
+- quail
+- rabbit
+- raccoon
+- ram
+- rat
+- raven
+- reindeer
+- rhino
+- rhinoceros
+- robin
+- salamander
+- salmon
+- scorpion
+- seagull
+- seal
+- shark
+- sheep
+- shrimp
+- skunk
+- sloth
+- slug
+- snail
+- snake
+- sparrow
+- spider
+- squid
+- squirrel
+- starfish
+- stingray
+- stork
+- swan
+- tarantula
+- tiger
+- toad
+- tortoise
+- toucan
+- trout
+- turkey
+- turtle
+- vulture
+- walrus
+- warthog
+- wasp
+- weasel
+- whale
+- wolf
+- wolverine
+- wombat
+- woodpecker
+- worm
+- yak
+- zebra

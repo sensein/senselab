@@ -67,6 +67,10 @@ _REDACTION_HEADING = "REDACTION:"
 _ORIGINAL_HEADING = "ORIGINAL:"
 _SPEAKERS_HEADING = "SPEAKERS:"
 _CONDITIONS_HEADING = "CONDITIONS:"
+_OTHER_SPEAKERS_HEADING = "OTHER_SPEAKERS:"
+
+PROMPT_VERSION = 2
+"""The prompt and its parse, as one number: it changes whenever either changes what a reading holds."""
 
 REDACTION_STATES = ("complete", "incomplete", "not_applicable")
 """Whether the redaction, where one was applied, removed the identifying content."""
@@ -137,20 +141,30 @@ _PROMPT = (
     "3. Whether the redaction removed more than the standard requires. A time expression with no "
     "calendar anchor -- a duration, a bare time-of-day noun, a relative reference -- usually "
     "identifies nobody.\n"
-    "4. Whether more than one person is speaking in this recording, judged from the words alone: "
-    "turn-taking, instructions given, questions asked and answered.\n"
+    "4. Whether more than one person is speaking in this recording, judged from the words alone "
+    "(turn-taking, instructions given, questions asked and answered) and weighed against the task's "
+    'instructions. The participant talking to the examiner ("Is that enough?", "Should I keep '
+    'going?") is still one speaker. Some tasks expect another voice: an examiner giving or repeating '
+    "instructions in a story recall or an interview, or someone saying a sentence first where the "
+    "instructions allow the participant to repeat after them. Whenever you answer more_than_one, quote "
+    "the words you attribute to each other person and say whether the task's instructions expect that "
+    "voice.\n"
     "5. Separately from the standard, every health condition the speaker attributes to themselves: a "
     "diagnosis, a disease, a symptom described as a condition, a treatment, a medication or a "
     "procedure. None of these is a Safe Harbor identifier by itself, and none goes in the PROPOSAL; "
     "they are listed so that a person can judge whether, with the rest of what is released, one could "
     "single the speaker out. List a condition whatever you judge about it; leave out only a condition "
     "that is part of the task's own stimulus.\n\n"
-    "Answer in exactly six parts, each on its own line or block, in this order.\n"
+    "Answer in exactly seven parts, each on its own line or block, in this order.\n"
     "REASONING: your full reasoning, in prose, including what you considered and rejected.\n"
     "REDACTION: one of complete, incomplete, not_applicable (use not_applicable when no "
     "redaction was applied).\n"
     "ORIGINAL: one of clean, carries_pii.\n"
     "SPEAKERS: one of one, more_than_one, unclear.\n"
+    "OTHER_SPEAKERS: a JSON array, one element per other person you heard under point 4. Each element is an "
+    'object with keys "text" (their exact words, quoted from the ORIGINAL), "expected" (true where the '
+    'task\'s instructions expect that voice, false where they do not) and "why" (one sentence). Return [] '
+    "when SPEAKERS is one or unclear; when it is more_than_one the array must quote at least one person.\n"
     "CONDITIONS: a JSON array of every health condition under point 5. Each element is an object with "
     'keys "text" (the exact words, quoted from the ORIGINAL) and "why" (one sentence: what it is). '
     "Return [] when the speaker mentions none; the part is required either way.\n"
@@ -239,6 +253,21 @@ class ReviewProposal:
 
 
 @dataclass
+class OtherSpeaker:
+    """Words the reviewer attributes to someone other than the participant.
+
+    Attributes:
+        text: The words, quoted from the original.
+        expected: Whether the task's instructions expect that voice.
+        why: Its one-sentence reason.
+    """
+
+    text: str
+    expected: bool
+    why: str = ""
+
+
+@dataclass
 class ReviewResult:
     """One pass of the reviewer over one text.
 
@@ -256,6 +285,8 @@ class ReviewResult:
             the processing run.
         proposal: The redaction it would apply instead, as text spans, with every health condition the
             answer's CONDITIONS part listed as a ``redact`` entry of category :data:`CONDITION`.
+        other_speakers: The words it attributes to anyone other than the participant, each with whether
+            the task expects that voice.
         conditions_answered: Whether the answer carried its CONDITIONS part, an empty list included.
             :func:`parse_completion` decides it for every answer the model gave; a result built any
             other way is taken as answered, and a failure is never read for it.
@@ -282,6 +313,7 @@ class ReviewResult:
     original: str = ""
     speakers: str = ""
     proposal: list[ReviewProposal] = field(default_factory=list)
+    other_speakers: list[OtherSpeaker] = field(default_factory=list)
     conditions_answered: bool = True
     failure: Optional[str] = None
     model_id: str = ""
@@ -449,6 +481,7 @@ class ParsedCompletion:
             missing or malformed.
         conditions_answered: Whether the answer carried a CONDITIONS part whose array parsed, an
             empty one included.
+        other_speakers: The OTHER_SPEAKERS part's entries that quote words.
     """
 
     reasoning: str
@@ -457,6 +490,7 @@ class ParsedCompletion:
     speakers: str = ""
     proposal: list[ReviewProposal] = field(default_factory=list)
     conditions_answered: bool = False
+    other_speakers: list[OtherSpeaker] = field(default_factory=list)
 
 
 CONDITION = "CONDITION"
@@ -476,7 +510,10 @@ def _labelled(completion: str, heading: str, allowed: Sequence[str]) -> str:
         one of ``allowed``. An unrecognised word is not guessed at: the empty string says the model
         did not answer this question, which is different from any of the answers it could give.
     """
-    marker = completion.rfind(heading)
+    marker = -1
+    for found in re.finditer(re.escape(heading), completion):
+        if found.start() == 0 or not completion[found.start() - 1].isalnum() and completion[found.start() - 1] != "_":
+            marker = found.start()
     if marker == -1:
         return ""
     line = completion[marker + len(heading) :].splitlines()[0] if completion[marker:].splitlines() else ""
@@ -523,24 +560,35 @@ def parse_completion(completion: str) -> ParsedCompletion:
     """
     proposal_at = completion.rfind(_PROPOSAL_HEADING)
     conditions_at = completion.rfind(_CONDITIONS_HEADING)
+    others_at = completion.rfind(_OTHER_SPEAKERS_HEADING)
 
-    def segment(at: int, heading: str, other: int) -> str:
-        end = other if other > at else len(completion)
+    def segment(at: int, heading: str, *others: int) -> str:
+        end = min((other for other in others if other > at), default=len(completion))
         return completion[at + len(heading) : end]
 
     if proposal_at != -1:
-        proposal_text = segment(proposal_at, _PROPOSAL_HEADING, conditions_at)
+        proposal_text = segment(proposal_at, _PROPOSAL_HEADING, conditions_at, others_at)
         head = completion[:proposal_at]
     else:
         start = completion.find("[")
-        proposal_text = completion if conditions_at == -1 else completion[: max(conditions_at, 0)]
+        cut = min((at for at in (conditions_at, others_at) if at != -1), default=-1)
+        proposal_text = completion if cut == -1 else completion[:cut]
         head = completion if start == -1 else completion[:start]
     conditions_parsed = (
-        _array(segment(conditions_at, _CONDITIONS_HEADING, proposal_at)) if conditions_at != -1 else None
+        _array(segment(conditions_at, _CONDITIONS_HEADING, proposal_at, others_at)) if conditions_at != -1 else None
+    )
+    others_parsed = (
+        _array(segment(others_at, _OTHER_SPEAKERS_HEADING, proposal_at, conditions_at)) if others_at != -1 else None
     )
     cuts = [
         head.find(heading)
-        for heading in (_REDACTION_HEADING, _ORIGINAL_HEADING, _SPEAKERS_HEADING, _CONDITIONS_HEADING)
+        for heading in (
+            _REDACTION_HEADING,
+            _ORIGINAL_HEADING,
+            _SPEAKERS_HEADING,
+            _OTHER_SPEAKERS_HEADING,
+            _CONDITIONS_HEADING,
+        )
     ]
     first = min((cut for cut in cuts if cut != -1), default=-1)
     reasoning = (head if first == -1 else head[:first]).replace(_REASONING_HEADING, " ")
@@ -570,6 +618,11 @@ def parse_completion(completion: str) -> ParsedCompletion:
         listed.add(_normalised(text))
         why = str(item.get("why") or "") if isinstance(item, dict) else ""
         proposal.append(ReviewProposal(text=text, action=REDACT, category=CONDITION, why=why))
+    other_speakers = [
+        OtherSpeaker(text=str(item["text"]), expected=item.get("expected") is True, why=str(item.get("why") or ""))
+        for item in others_parsed or ()
+        if isinstance(item, dict) and isinstance(item.get("text"), str) and str(item["text"]).strip()
+    ]
     return ParsedCompletion(
         reasoning=reasoning.strip(),
         redaction=_labelled(completion, _REDACTION_HEADING, REDACTION_STATES),
@@ -577,6 +630,7 @@ def parse_completion(completion: str) -> ParsedCompletion:
         speakers=_labelled(completion, _SPEAKERS_HEADING, SPEAKER_STATES),
         proposal=proposal,
         conditions_answered=conditions_parsed is not None,
+        other_speakers=other_speakers,
     )
 
 
@@ -611,6 +665,12 @@ def answer_problem(result: "ReviewResult", original: str, redacted: str | None) 
             "diagnosis, treatment or procedure the speaker attributes to themselves, quoted exactly from the "
             "ORIGINAL, or [] when there is none"
         )
+    if result.speakers == "more_than_one" and not result.other_speakers:
+        return (
+            "you judged more_than_one speaker but OTHER_SPEAKERS quoted no words; quote, exactly from the "
+            "ORIGINAL, the words you attribute to each other person and say whether the task's instructions "
+            "expect that voice"
+        )
     masked = redacted is not None and bool(_PLACEHOLDER.search(redacted))
     judged = []
     if result.redaction == "incomplete":
@@ -636,10 +696,11 @@ def answer_problem(result: "ReviewResult", original: str, redacted: str | None) 
             "given the rest of the transcript, or keep it masked"
         )
     haystack = _normalised(original)
-    missing = [entry.text for entry in result.proposal if _normalised(entry.text) not in haystack]
+    quotes = [entry.text for entry in result.proposal] + [entry.text for entry in result.other_speakers]
+    missing = [text for text in quotes if _normalised(text) not in haystack]
     if missing:
         quoted = ", ".join(json.dumps(text) for text in missing)
-        return f"these PROPOSAL quotes do not occur in the ORIGINAL: {quoted}; quote the exact words from the ORIGINAL"
+        return f"these quotes do not occur in the ORIGINAL: {quoted}; quote the exact words from the ORIGINAL"
     return None
 
 
@@ -971,6 +1032,7 @@ def review_transcript(
         original=parsed.original,
         speakers=parsed.speakers,
         proposal=parsed.proposal,
+        other_speakers=parsed.other_speakers,
         conditions_answered=parsed.conditions_answered,
         model_id=model_id,
         revision=loaded_revision or revision,
@@ -1012,7 +1074,11 @@ def review_payload(result: ReviewResult) -> dict[str, Any]:
             }
             for entry in result.proposal
         ],
+        "other_speakers": [
+            {"text": entry.text, "expected": entry.expected, "why": entry.why} for entry in result.other_speakers
+        ],
         "conditions_answered": result.conditions_answered,
+        "prompt_version": PROMPT_VERSION,
         "failure": result.failure,
         "model_id": result.model_id,
         "revision": result.revision,
