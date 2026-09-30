@@ -1205,6 +1205,7 @@ class ReviewerSpan:
         word_ids: Every word it names, over every place it occurs.
         texts: Their surfaces.
         masked_ids: Those of them a final mask already hides.
+        content_ids: Those of them that are content words; only these are proposed to be hidden.
         human_review: Whether its category is one the fold routes to human review.
         condition_kind: For a human-review entry, :data:`~senselab.audio.workflows.triage.cohort.COHORT`
             or :data:`~senselab.audio.workflows.triage.cohort.OTHER`; empty otherwise.
@@ -1220,6 +1221,7 @@ class ReviewerSpan:
     texts: tuple[str, ...]
     masked_ids: tuple[str, ...]
     human_review: bool
+    content_ids: tuple[str, ...] = ()
     condition_kind: str = ""
     cohort_diagnosis: str = ""
     agreement: str = NEW
@@ -1321,7 +1323,7 @@ class MaskPlan:
                     i
                     for span in self.proposals
                     if span.agreement == NEW
-                    for i in span.word_ids
+                    for i in span.content_ids
                     if i not in span.masked_ids
                 }
             )
@@ -1334,7 +1336,7 @@ class MaskPlan:
                 {
                     span.category
                     for span in self.proposals
-                    if span.agreement == NEW and set(span.word_ids) - set(span.masked_ids)
+                    if span.agreement == NEW and set(span.content_ids) - set(span.masked_ids)
                 }
             )
         return sorted({mask.planned.category for mask in self.masks if any(word.state == state for word in mask.words)})
@@ -1410,6 +1412,7 @@ class MaskPlan:
                     "word_ids": list(span.word_ids),
                     "texts": list(span.texts),
                     "masked_ids": list(span.masked_ids),
+                    "content_ids": list(span.content_ids),
                     "human_review": span.human_review,
                     "condition_kind": span.condition_kind,
                     "cohort_diagnosis": span.cohort_diagnosis,
@@ -1868,6 +1871,7 @@ def mask_plan(
                 word_ids=tuple(word.id for word in hits),
                 texts=tuple(str(word.attributes.get("text") or "") for word in hits),
                 masked_ids=tuple(word.id for word in hits if word.id in kept_ids),
+                content_ids=tuple(word.id for word in hits if content(word)),
                 human_review=held,
                 condition_kind=(COHORT if diagnosis else OTHER) if held else "",
                 cohort_diagnosis=diagnosis or "",

@@ -413,3 +413,26 @@ verdict agree on release and ground in every store; no `release_with_redaction` 
 mask; the released transcript equals the ledger's rendering on all 1,407 masked releases; the
 release directory is empty for every other release. Moves: 539 to `FINDINGS_ARE_TASK_CONTENT`, and
 the three stale stores from "trimmed" to REDACT's plan unchanged, which is what their ledgers said.
+
+## A proposal marks only its content words (2026-09-30)
+
+Owner: a function word must never be drawn red or counted as proposed to hide. r9's free-speech-2
+card (sub-00053adb) showed CONDITION quotes "synovial joint cyst between Cone one and Ctwo" and
+"pronounced change in my voice" red over every word, "and", "in" and "my" included, because a
+proposal's `word_ids` were drawn whole. The mask trim already released such words from masks; the
+proposal side had no equivalent.
+
+- The fold records `content_ids` per proposal: its words that pass the same `content()` test the
+  masks use (residue words, `residue.is_content_word`, marked proper nouns protected).
+  `count(PROPOSED_BY_REVIEWER)` and the per-state categories read `content_ids`.
+- The page marks a proposal's `content_ids`. For stores folded before this, it filters the stored
+  `texts` with `is_content_word`, so r9 renders correctly without a re-fold.
+- Release decisions are unchanged: agreement, human review and withholding key on the entry, not on
+  its words.
+- "between" is a content word under `FUNCTION_WORDS` as it stands (a preposition missing from the
+  list); adding it changes the residue and the trim corpus-wide, so it is left for a separate change.
+
+The "to" the owner reported was orange (`unmasked_by_trim`, not content) on the r9 page; its popup
+said "a reviewer release entry named it", which read as the reviewer marking it. The popup now says
+the entry quoted it and the trim released it, and orange is drawn dashed so it cannot pass for red
+at a thin underline.
