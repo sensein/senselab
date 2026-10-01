@@ -27,7 +27,7 @@ symlinks. A stream a replayed node writes -- REDACT's ``redacted``, SPEECH's ``s
 never linked, so that write lands in the new root. Use it when the finished tree must not be
 modified.
 
-A store already carrying this configuration's replay marker is skipped and not rewritten.
+A store already carrying this configuration's and revision's replay marker is skipped and not rewritten.
 
 The design is in ``specs/20260922-replay-decisions-over-a-finished-corpus/design.md``.
 
@@ -162,7 +162,7 @@ def replay_one(
     """Replay one finished run, writing its store only once every replayed node has run.
 
     The store is read under :func:`replay_run_id`, so what the replay writes takes ids distinct
-    from the decisions it retires. A run already carrying this configuration's marker is skipped
+    from the decisions it retires. A run already carrying this configuration's and revision's marker is skipped
     and nothing is written; a run that raises before the write keeps the store it had, so a
     preempted task redoes that recording from the beginning and cannot stack two retirements.
 
@@ -181,11 +181,11 @@ def replay_one(
     target = mirror_run_root(run_root, out_root, stem) if out_root is not None else run_root
     read_from = target if (target / RUN_SUBDIR / "store.jsonl").is_file() else run_root
     try:
-        store = read_store(read_from, run_id=replay_run_id(run_root, config.config_hash))
+        store = read_store(read_from, run_id=replay_run_id(run_root, config.config_hash, commit))
     except (OSError, ValueError) as error:
         return {"status": ERROR, DERIVATION: describe_exception(error)}
-    if find_replay_marker(store, config.config_hash) is not None:
-        return {"status": PRESENT, DERIVATION: "this configuration has already replayed this run"}
+    if find_replay_marker(store, config.config_hash, commit) is not None:
+        return {"status": PRESENT, DERIVATION: "this configuration and revision have already replayed this run"}
     try:
         hint = build_hint(source_of(run_root))[0] if build_hint is not None else None
     except (OSError, ValueError, LookupError, KeyError, IndexError) as error:
