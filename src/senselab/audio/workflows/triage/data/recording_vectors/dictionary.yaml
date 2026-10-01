@@ -775,6 +775,270 @@ columns:
     source: [recording_vectors.py:_residual_levels, nodes/preprocess.py:_residual]
     null_means: As `enhanced_over_residual_rms_db`, or `gain_db` is absent or non-finite (−inf when the fitted gain is exactly 0).
 
+  task_extent_n:
+    units: count
+    description: How many live task-extent spans the owning branch wrote.
+    computation: Count of live spans whose `role` is `task_extent` (SPEECH, VOICE or AIRWAY).
+    source: [recording_vectors.py:_extent_columns]
+    null_means: No branch wrote a task extent.
+
+  task_extent_start_s:
+    units: s
+    description: Where the task begins in the recording.
+    computation: The earliest start over the live `task_extent` spans.
+    source: [recording_vectors.py:_extent_columns]
+    null_means: No task extent.
+
+  task_extent_end_s:
+    units: s
+    description: Where the task ends in the recording.
+    computation: The latest end over the live `task_extent` spans.
+    source: [recording_vectors.py:_extent_columns]
+    null_means: No task extent.
+
+  lead_s:
+    units: s
+    description: Recording time before the task begins.
+    computation: '`task_extent_start_s`, floored at 0.'
+    source: [recording_vectors.py:_extent_columns]
+    null_means: No task extent, or no recording duration.
+
+  tail_s:
+    units: s
+    description: Recording time after the task ends.
+    computation: '`duration_s` minus `task_extent_end_s`, floored at 0.'
+    source: [recording_vectors.py:_extent_columns]
+    null_means: No task extent, or no recording duration.
+
+  trim_s:
+    units: s
+    description: Non-task seconds a trim to the task extent would remove.
+    computation: '`lead_s` + `tail_s`.'
+    source: [recording_vectors.py:_extent_columns]
+    null_means: No task extent, or no recording duration.
+
+  trim_fraction:
+    units: ratio
+    description: The share of the recording a trim to the task extent would remove.
+    computation: '`trim_s` / `duration_s`.'
+    source: [recording_vectors.py:_extent_columns]
+    null_means: No task extent, or no recording duration.
+
+  trimmable:
+    units: none
+    description: Whether enough non-task audio surrounds the task to be worth trimming.
+    computation: '`trim_s` ≥ `trim.min_s` and `trim_fraction` ≥ `trim.min_fraction`, both from `data/recording_vectors/evaluation.yaml`.'
+    source: [recording_vectors.py:_extent_columns, recording_vectors.py:evaluation_bounds]
+    null_means: No task extent, or no recording duration.
+
+  clip_spans_n:
+    units: count
+    description: How many clip spans survived the detector's own re-assessment.
+    computation: Count of live spans whose `family` is `clip` (PREPROCESS, after withdrawing candidates an unclipped sample contradicts).
+    source: [recording_vectors.py:_clip_columns, nodes/preprocess.py:reject_contradicted_clips]
+    null_means: Never; 0 when nothing was kept.
+
+  clip_s:
+    units: s
+    description: Total seconds inside the kept clip spans.
+    computation: Sum of the live clip spans' durations.
+    source: [recording_vectors.py:_clip_columns]
+    null_means: Never; 0.0 when no span was kept.
+
+  clip_level_max:
+    units: ratio
+    description: The highest clip level among the kept spans, as an absolute amplitude.
+    computation: The maximum of the `clip_amplitude` measurement's per-span `clip_levels` over live clip spans.
+    source: [recording_vectors.py:_clip_columns, nodes/preprocess.py:clip_amplitudes]
+    null_means: No kept clip span carries a level.
+
+  clip_unclipped_peak:
+    units: ratio
+    description: The loudest sample outside every kept clip span (and its guard samples).
+    computation: The `clip_amplitude` measurement's `unclipped_peak`.
+    source: [recording_vectors.py:_clip_columns, nodes/preprocess.py:clip_amplitudes]
+    null_means: PREPROCESS wrote no clip-amplitude measurement.
+
+  clip_unclipped_louder_n:
+    units: count
+    description: Unclipped samples louder than a kept span's own clip level, summed over kept spans.
+    computation: Sum of the `clip_amplitude` measurement's `unclipped_louder_n` over live clip spans.
+    source: [recording_vectors.py:_clip_columns]
+    null_means: No clip span was kept.
+
+  clip_withdrawn_n:
+    units: count
+    description: Clip candidates the re-assessment withdrew because a sample elsewhere was louder than the candidate's ceiling.
+    computation: Count of live `assertion`s with `claim` `clip` and `verb` `withdraw`.
+    source: [recording_vectors.py:_clip_columns, nodes/preprocess.py:write_withdrawn_clips]
+    null_means: Never; 0 when nothing was withdrawn.
+
+  clip_contested_n:
+    units: count
+    description: Kept clip spans QUALITY later contested because an unclipped sample was louder.
+    computation: Count of live `assertion`s with `claim` `clip` and `verb` `contest`.
+    source: [recording_vectors.py:_clip_columns, nodes/quality.py:quality]
+    null_means: Never; 0 when nothing was contested.
+
+  clip_consistent:
+    units: none
+    description: Whether the kept clip spans agree with the rest of the recording (no louder sample outside them, nothing contested).
+    computation: '`clip_contested_n` = 0 and `clip_unclipped_louder_n` = 0.'
+    source: [recording_vectors.py:_clip_columns]
+    null_means: No clip candidate was proposed, so there was nothing to re-assess.
+
+  clip_state:
+    units: none
+    description: The clip detector's outcome after its re-assessment, as one class.
+    computation: '`none` when no clip candidate was proposed; `withdrawn_only` when every candidate was withdrawn because a louder unclipped sample exists elsewhere; `kept_consistent` when spans were kept and nothing contradicts them; `kept_inconsistent` when a kept span has louder unclipped samples or QUALITY contested it.'
+    source: [recording_vectors.py:_clip_columns]
+    null_means: Never.
+    values: [none, withdrawn_only, kept_consistent, kept_inconsistent]
+
+  raw_clipped_runs:
+    units: count
+    description: Clipped runs the raw-recording disruption reading found (an independent detector from the clip spans).
+    computation: The `disruptions_file` measurement's `clipped_runs`, read on the `recording` stream.
+    source: [recording_vectors.py:_clip_columns]
+    null_means: PREPROCESS wrote no file-level disruption reading.
+
+  raw_clipped_s:
+    units: s
+    description: Seconds the raw-recording disruption reading counted as clipped.
+    computation: The `disruptions_file` measurement's `clipped_s`.
+    source: [recording_vectors.py:_clip_columns]
+    null_means: PREPROCESS wrote no file-level disruption reading.
+
+  raw_dropout_s:
+    units: s
+    description: Seconds of dropout (digital silence) the raw-recording disruption reading found.
+    computation: The `disruptions_file` measurement's `dropout_s`.
+    source: [recording_vectors.py:_clip_columns]
+    null_means: PREPROCESS wrote no file-level disruption reading.
+
+  q_plain_floor_dbfs:
+    units: dBFS
+    description: The plain (raw, conditioned) stream's noise floor.
+    computation: The `frame.floor_percentile` percentile of frame RMS over the `plain` stream, at `frame.window_s` / `frame.hop_s`, read from `streams/plain.flac` at parquet build.
+    source: [recording_vectors.py:_quality_columns, recording_vectors.py:_stream_frames_dbfs]
+    null_means: The plain stream is absent, does not decode, or is shorter than one frame.
+
+  q_plain_snr_db:
+    units: dB
+    description: The plain stream's active level above its noise floor.
+    computation: The `frame.level_percentile` percentile of frame RMS minus `q_plain_floor_dbfs`.
+    source: [recording_vectors.py:_quality_columns, recording_vectors.py:_stream_noise]
+    null_means: As `q_plain_floor_dbfs`.
+
+  q_enhanced_floor_dbfs:
+    units: dBFS
+    description: The enhanced stream's noise floor, by the same rule as the plain stream's.
+    computation: As `q_plain_floor_dbfs`, read from the `enhanced` stream.
+    source: [recording_vectors.py:_quality_columns]
+    null_means: The enhanced stream is absent or does not decode.
+
+  q_enhanced_snr_db:
+    units: dB
+    description: The enhanced stream's active level above its noise floor.
+    computation: As `q_plain_snr_db`, on the `enhanced` stream.
+    source: [recording_vectors.py:_quality_columns]
+    null_means: As `q_enhanced_floor_dbfs`.
+
+  q_plain_squim_pesq:
+    units: none
+    description: Median SQUIM PESQ estimate over the plain stream's spans.
+    computation: Median of the live `squim` assertions' `pesq`.
+    source: [recording_vectors.py:_quality_columns]
+    null_means: No span carries a SQUIM reading.
+
+  q_plain_squim_stoi:
+    units: ratio
+    description: Median SQUIM STOI estimate over the plain stream's spans.
+    computation: Median of the live `squim` assertions' `stoi`.
+    source: [recording_vectors.py:_quality_columns]
+    null_means: No span carries a SQUIM reading.
+
+  q_plain_squim_si_sdr:
+    units: dB
+    description: Median SQUIM SI-SDR estimate over the plain stream's spans.
+    computation: Median of the live `squim` assertions' `si_sdr`.
+    source: [recording_vectors.py:_quality_columns]
+    null_means: No span carries a SQUIM reading.
+
+  q_raw_issues:
+    units: none
+    description: The raw quality checks this recording fails.
+    computation: '`noise_floor` when `q_plain_floor_dbfs` > `quality.floor_max_dbfs`; `low_snr` when `q_plain_snr_db` < `quality.snr_min_db`; `clipping` when clip spans were kept or `raw_clipped_s` > 0; `dropout` when `raw_dropout_s` > 0.'
+    source: [recording_vectors.py:_quality_columns]
+    null_means: The plain stream could not be read.
+    values: [noise_floor, low_snr, clipping, dropout]
+
+  q_resolved_by_enhanced:
+    units: none
+    description: The raw noise checks the enhanced stream passes by the same bound.
+    computation: Each of `noise_floor` / `low_snr` in `q_raw_issues` whose enhanced reading passes the same bound. Clipping and dropout are sample damage enhancement does not repair and are never listed.
+    source: [recording_vectors.py:_quality_columns]
+    null_means: As `q_raw_issues`.
+    values: [noise_floor, low_snr]
+
+  q_unresolved:
+    units: none
+    description: The raw checks the enhanced stream does not resolve.
+    computation: '`q_raw_issues` minus `q_resolved_by_enhanced`.'
+    source: [recording_vectors.py:_quality_columns]
+    null_means: As `q_raw_issues`.
+    values: [noise_floor, low_snr, clipping, dropout]
+
+  ms_diarization_speakers_max:
+    units: count
+    description: The most speakers diarization attributed within any task extent.
+    computation: Maximum `value` over the live `extent_speaker_count` measurements (diarization on the enhanced stream).
+    source: [recording_vectors.py:_multi_speaker_columns]
+    null_means: No extent speaker count was measured.
+
+  ms_diarization_secondary_s:
+    units: s
+    description: Diarized seconds within a task extent held by speakers other than the dominant one.
+    computation: Maximum `secondary_s` over the live `extent_speaker_count` measurements.
+    source: [recording_vectors.py:_multi_speaker_columns]
+    null_means: No extent speaker count was measured.
+
+  ms_reviewer_other_n:
+    units: count
+    description: Passages the reviewer attributed to someone other than the participant.
+    computation: Length of the fold's `llm_redaction.other_speakers`.
+    source: [recording_vectors.py:_multi_speaker_columns]
+    null_means: No reviewer reading.
+
+  ms_reviewer_expected_n:
+    units: count
+    description: Of those, the passages the task's instructions expect (e.g. an examiner).
+    computation: Entries of `llm_redaction.other_speakers` with `expected` true.
+    source: [recording_vectors.py:_multi_speaker_columns]
+    null_means: No reviewer reading.
+
+  ms_reviewer_unexpected_n:
+    units: count
+    description: Of those, the passages the instructions do not expect.
+    computation: '`ms_reviewer_other_n` − `ms_reviewer_expected_n`.'
+    source: [recording_vectors.py:_multi_speaker_columns]
+    null_means: No reviewer reading.
+
+  ms_signals:
+    units: none
+    description: The instruments that say another speaker is inside the task extent.
+    computation: '`diarization` when `ms_diarization_speakers_max` > 1 and `ms_diarization_secondary_s` ≥ `multi_speaker.diarization_secondary_min_s`; `separation` when `secondary_extent_s` ≥ `multi_speaker.separation_secondary_min_s`; `reviewer` when the reviewer heard more than one speaker or quoted another voice (`ms_reviewer_other_n` > 0).'
+    source: [recording_vectors.py:_multi_speaker_columns]
+    null_means: Neither a speaker count nor a reviewer reading exists.
+    values: [diarization, separation, reviewer]
+
+  ms_agreement:
+    units: none
+    description: How the multi-speaker instruments agree.
+    computation: '`none` when no signal fires; `<signal>_only` when one does; the firing signals joined by `+` when several do (e.g. `diarization+reviewer`).'
+    source: [recording_vectors.py:_multi_speaker_columns]
+    null_means: As `ms_signals`.
+
   wave_minmax:
     units: bytes
     description: The conditioned waveform as 256 (min, max) uint8 pairs over `[-wave_peak, +wave_peak]`.

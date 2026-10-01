@@ -9,7 +9,7 @@
 > stay counts and categories only.
 
 Produced by `senselab.audio.workflows.triage.recording_vectors` and
-`scripts/triage_recording_vectors.py`. **One row per recording.** `schema_version` is `13`; any
+`scripts/triage_recording_vectors.py`. **One row per recording.** `schema_version` is `14`; any
 change to a column, a byte layout or a categorical column's controlled vocabulary bumps it and
 changes this file with it. The same number is in
 the parquet's own key-value metadata, under `senselab.recording_vectors.schema_version`, so a
@@ -110,7 +110,7 @@ Owner-directed: `participant`, `task`, `verdict` are the first three columns, in
 | `duration_conditioned_s` | double | seconds, the conditioned stream | PREPROCESS wrote no stream |
 | `time_scale_s` | double | seconds — **the denominator for every `uint16` time** | neither duration is known |
 | `sampling_rate` | int32 | Hz, of the conditioned stream | no conditioned stream |
-| `schema_version` | int32 | `13` | never |
+| `schema_version` | int32 | `14` | never |
 | `malformed_store_lines` | int32 | lines of `store.jsonl` that did not parse; `0` is the normal value | never |
 | `flags_n` | int32 | how many node verdicts in the fold carry outcome `flag`, `fail` or `discard` — the same filter `report.py` calls a flag | never |
 | `flag_nodes` | list\<string\> | which nodes those were, e.g. `["SPEECH"]` | never; `[]` when none |
@@ -508,6 +508,32 @@ yields null for the fitted column alone.
 one sample, an energy fraction is a sum over all of them, and no ratio of sums recovers an
 extremum — a column would have to be either a second stored measurement or a guess, and a guess
 about a clipping headroom is worse than an absent column.
+
+---
+
+## 8a. Evaluating triage (schema 14)
+
+Four groups that let a reader check what triage did against what it could have done. None feeds a
+triage decision; their bounds are `data/recording_vectors/evaluation.yaml`, and the measured
+distributions behind them are `specs/20261001-triage-evaluation-columns/design.md`. Every column is
+derived at parquet build from the store and the stored streams, so a rebuild of the parquet alone
+produces them — no re-fold, no replay.
+
+| group | columns | null when |
+| --- | --- | --- |
+| task extent | `task_extent_n`, `task_extent_start_s`, `task_extent_end_s`, `lead_s`, `tail_s`, `trim_s`, `trim_fraction`, `trimmable` (bool) | no live span carries role `task_extent` |
+| clipping | `clip_spans_n`, `clip_s`, `clip_level_max`, `clip_unclipped_peak`, `clip_unclipped_louder_n`, `clip_withdrawn_n`, `clip_contested_n`, `clip_consistent` (bool), `clip_state` ∈ {`none`, `withdrawn_only`, `kept_consistent`, `kept_inconsistent`}, `raw_clipped_runs`, `raw_clipped_s`, `raw_dropout_s` | per column; `clip_state` is never null |
+| raw vs enhanced | `q_plain_floor_dbfs`, `q_plain_snr_db`, `q_enhanced_floor_dbfs`, `q_enhanced_snr_db`, `q_plain_squim_pesq`, `q_plain_squim_stoi`, `q_plain_squim_si_sdr`, `q_raw_issues`, `q_resolved_by_enhanced`, `q_unresolved` (list<string> ⊂ {`noise_floor`, `low_snr`, `clipping`, `dropout`}) | the plain stream is absent or does not decode |
+| other speakers in the task extent | `ms_diarization_speakers_max`, `ms_diarization_secondary_s`, `ms_reviewer_other_n`, `ms_reviewer_expected_n`, `ms_reviewer_unexpected_n`, `ms_signals` (list<string> ⊂ {`diarization`, `separation`, `reviewer`}), `ms_agreement` | neither an `extent_speaker_count` nor a reviewer reading exists |
+
+**Clip re-assessment is PREPROCESS's and QUALITY's, not this file's.** PREPROCESS withdraws a clip
+candidate when an unclipped sample elsewhere exceeds its level (`clip_withdrawn_n`); QUALITY
+contests a kept span the same test still contradicts (`clip_contested_n`). `kept_inconsistent`
+names a recording that kept a clip span while a louder unclipped sample exists — the case the
+re-assessment was meant to remove.
+
+**Only noise checks can be resolved.** `noise_floor` and `low_snr` are re-read on the enhanced
+stream; `clipping` and `dropout` are sample damage and stay in `q_unresolved` whenever raised.
 
 ---
 
