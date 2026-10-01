@@ -52,6 +52,12 @@ PII_SCAN = "pii_scan"
 SCANNED = "scanned"
 """The :data:`PII_SCAN` key a declined scan carries, and a scan that ran does not."""
 
+NIMBLE_OPINION = "nimble_opinion"
+"""The measurement SECOND_OPINION writes a decision model's probabilities into.
+
+``specs/20261001-nimble-second-opinion/design.md`` holds its attributes.
+"""
+
 REDACTION_LLM_ANNOTATION = "redaction_llm_annotation"
 """The measurement REDACT writes its optional LLM re-read's summary into.
 
@@ -347,6 +353,14 @@ where diarization's own gate has not already flagged another speaker in the task
 flags, whether or not the task's instructions expect it; the ground names each quote and whether the
 instructions expect that voice, or says no words were quoted."""
 
+SECOND_OPINION_DISAGREES = "the second-opinion model confidently disagrees with the redaction reviewer"
+"""The flag ground a decision model's confident disagreement with the reviewer contributes, under
+``verdict.nimble_disagreement_flags``. Controlled vocabulary, with each disagreeing question, the
+model's probability and the reviewer's answer appended; the release is unchanged."""
+
+SECOND_OPINION_QUESTIONS = ("other_voice", "instructions_spoken", "named_diagnosis")
+"""The questions whose disagreement with the reviewer can flag a recording."""
+
 MODEL_SPEAKER_PERMITTED = "the task's instructions permit a model speaker"
 """Appended to the speaker gate's flag ground for a family in ``verdict.model_speaker_families``: the
 instructions let someone say the sentence first, which explains the other voice without excusing it."""
@@ -491,6 +505,12 @@ class FoldPolicy:
             the recording is a flag ground (:data:`INSTRUCTIONS_SPOKEN`); the release is unchanged.
         llm_contradiction_flags: Whether a flagged reading that names no words is a flag ground on
             the triage axis.
+        nimble_disagreement_flags: Whether a confident disagreement between the second-opinion
+            model and the reviewer is a flag ground (:data:`SECOND_OPINION_DISAGREES`).
+        nimble_confident_yes: The probability at or above which the second opinion is a confident
+            "yes"; None leaves the comparison unmeasured.
+        nimble_confident_no: The probability at or below which it is a confident "no"; None leaves
+            the comparison unmeasured.
         uncomputed_reading_flags: Whether a conformance gate left undecided because a reading the
             task is judged on was never computed is a flag ground of its own.
         model_speaker_families: Declared families whose instructions permit someone to say the sentence
@@ -514,6 +534,9 @@ class FoldPolicy:
     llm_contradiction_flags: bool = False
     llm_instructions_spoken_flags: bool = False
     uncomputed_reading_flags: bool = False
+    nimble_disagreement_flags: bool = False
+    nimble_confident_yes: float | None = None
+    nimble_confident_no: float | None = None
     hint_mismatch_exempt_families: tuple[str, ...] = ()
     model_speaker_families: tuple[str, ...] = ()
     conformance_flags_by_family: dict[str, bool] = field(default_factory=dict)
@@ -550,6 +573,9 @@ class FoldPolicy:
             llm_contradiction_flags=bool(config.get(f"{_SECTION}.llm_contradiction_flags", False)),
             llm_instructions_spoken_flags=bool(config.get(f"{_SECTION}.llm_instructions_spoken_flags", False)),
             uncomputed_reading_flags=bool(config.get(f"{_SECTION}.uncomputed_reading_flags", False)),
+            nimble_disagreement_flags=bool(config.get(f"{_SECTION}.nimble_disagreement_flags", False)),
+            nimble_confident_yes=_optional_float(config.get(f"{_SECTION}.nimble_confident_yes")),
+            nimble_confident_no=_optional_float(config.get(f"{_SECTION}.nimble_confident_no")),
             hint_mismatch_exempt_families=tuple(
                 str(family) for family in (config.get(f"{_SECTION}.hint_mismatch_exempt_families") or ())
             ),
@@ -617,6 +643,8 @@ class FileVerdict:
         bad_map_values: ``routing.hint_branch_map`` entries whose value is not a branch.
         llm_redaction: REDACT's LLM re-read annotation — status, iterations, flagged categories,
             model id, resolved commit, failure. Empty when REDACT wrote none.
+        second_opinion: SECOND_OPINION's reading as the fold compared it -- status, probabilities,
+            the disagreements found, model id and blob digest. Empty when none was written.
         critical_absences: Per branch not one of whose gates could be read, each gate and the
             recorded absence. Non-empty means no branch was run.
         gates: The task group's gates and every one this fold applied — the gate, its reading, the
@@ -643,6 +671,7 @@ class FileVerdict:
     branches: dict[str, dict[str, Any]] = field(default_factory=dict)
     bad_map_values: dict[str, str] = field(default_factory=dict)
     llm_redaction: dict[str, Any] = field(default_factory=dict)
+    second_opinion: dict[str, Any] = field(default_factory=dict)
     critical_absences: dict[str, dict[str, str]] = field(default_factory=dict)
     gates: dict[str, Any] = field(default_factory=dict)
 
@@ -673,6 +702,7 @@ class FileVerdict:
             "branches": dict(self.branches),
             "bad_map_values": dict(self.bad_map_values),
             "llm_redaction": dict(self.llm_redaction),
+            "second_opinion": dict(self.second_opinion),
             "critical_absences": {branch: dict(gates) for branch, gates in self.critical_absences.items()},
             "gates": dict(self.gates),
             "ran": {node: state.value for node, state in self.ran.items()},
@@ -712,6 +742,64 @@ def _silence(state: RunState | None) -> str:
     if state is RunState.COMPLETED:
         return "completed without a verdict"
     return "never ran"
+
+
+def _optional_float(value: Any) -> float | None:  # noqa: ANN401 — a config leaf of any type
+    """A config value as a float, or None where it is unmeasured."""
+    return None if value is None else float(value)
+
+
+def second_opinion_disagreements(
+    opinion: Mapping[str, Any] | None,
+    llm_redaction: Mapping[str, Any] | None,
+    *,
+    confident_yes: float | None,
+    confident_no: float | None,
+) -> list[str]:
+    """Where the second-opinion model confidently disagrees with the reviewer.
+
+    Compared only where both answered: the opinion's status is ``ok`` and the reviewer read the
+    transcript (``clean`` or ``flagged``). ``instructions_spoken`` is compared only for a reading
+    that carries the part, so a reading from before the prompt asked it is never a disagreement.
+
+    Args:
+        opinion: The ``nimble_opinion`` measurement's attributes, or None.
+        llm_redaction: REVIEW's annotation, or None.
+        confident_yes: The probability at or above which the opinion is a confident yes.
+        confident_no: The probability at or below which it is a confident no.
+
+    Returns:
+        One description per disagreeing question, ``<question> p=<p> reviewer=<yes|no>``, in
+        :data:`SECOND_OPINION_QUESTIONS` order; empty where either threshold is unmeasured.
+    """
+    held = dict(opinion or {})
+    annotation = dict(llm_redaction or {})
+    if confident_yes is None or confident_no is None:
+        return []
+    if held.get("status") != "ok" or annotation.get("status") not in ("clean", "flagged"):
+        return []
+    probabilities = held.get("probabilities") or {}
+    others = [entry for entry in annotation.get("other_speakers") or () if isinstance(entry, Mapping)]
+    reviewer: dict[str, bool] = {
+        "other_voice": annotation.get("speakers") == "more_than_one"
+        or (annotation.get("speakers") == "unclear" and bool(others)),
+        "named_diagnosis": any(
+            str(entry.get("category") or "").upper() == "CONDITION" and str(entry.get("action")) == "redact"
+            for entry in annotation.get("proposal") or ()
+            if isinstance(entry, Mapping)
+        ),
+    }
+    if "instructions_spoken" in annotation:
+        reviewer["instructions_spoken"] = any(str(text).strip() for text in annotation.get("instructions_spoken") or ())
+    found = []
+    for question in SECOND_OPINION_QUESTIONS:
+        if question not in reviewer or probabilities.get(question) is None:
+            continue
+        p = float(probabilities[question])
+        said = reviewer[question]
+        if (p >= confident_yes and not said) or (p <= confident_no and said):
+            found.append(f"{question} p={p:.2f} reviewer={'yes' if said else 'no'}")
+    return found
 
 
 def reviewer_named_no_words(llm_redaction: Mapping[str, Any] | None) -> bool:
@@ -1018,6 +1106,7 @@ def fold_file_verdict(
     policy: FoldPolicy | None = None,
     agreed_redactions: frozenset[int] = frozenset(),
     unplaced: Sequence[tuple[str, str]] = (),
+    second_opinion: Mapping[str, Any] | None = None,
 ) -> FileVerdict:
     """Decide the file, from the deciding nodes' verdicts and the reporting nodes' reports.
 
@@ -1058,6 +1147,9 @@ def fold_file_verdict(
             the packaged policy.
         agreed_redactions: The ``proposal`` positions of reviewer ``redact`` entries that agree with
             the masks; they propose nothing more (:func:`deciding_reading`).
+        second_opinion: The ``nimble_opinion`` measurement's attributes, or None. A confident
+            disagreement with the reviewer is a flag ground under ``policy.nimble_disagreement_flags``
+            (:func:`second_opinion_disagreements`); the release is unchanged.
         unplaced: ``(family, state)`` for every detector finding SPEECH could not place on words, as
             :class:`~senselab.audio.workflows.triage.nodes.redact.UnplacedFinding` records them. An
             ``open`` one flags; an ``unread`` one flags and withholds.
@@ -1170,6 +1262,13 @@ def fold_file_verdict(
     if rules.llm_instructions_spoken_flags and spoken:
         quoted = "; ".join(json.dumps(text) for text in spoken)
         reasons.append(NodeVerdict(_VERDICT, Outcome.FLAG, None, f"{INSTRUCTIONS_SPOKEN}: {quoted}"))
+    disagreements = second_opinion_disagreements(
+        second_opinion, annotation, confident_yes=rules.nimble_confident_yes, confident_no=rules.nimble_confident_no
+    )
+    if rules.nimble_disagreement_flags and disagreements:
+        reasons.append(
+            NodeVerdict(_VERDICT, Outcome.FLAG, None, f"{SECOND_OPINION_DISAGREES}: {'; '.join(disagreements)}")
+        )
     open_families = sorted({family for family, state in unplaced if state in (UNPLACED_OPEN, UNPLACED_UNREAD)})
     if open_families:
         ground_text = (
@@ -1310,6 +1409,17 @@ def fold_file_verdict(
         branches=branch_view,
         bad_map_values=bad_map_values,
         llm_redaction=annotation,
+        second_opinion=(
+            {
+                "status": second_opinion.get("status"),
+                "probabilities": dict(second_opinion.get("probabilities") or {}),
+                "disagreements": list(disagreements),
+                "model_id": second_opinion.get("model_id"),
+                "blob_digest": second_opinion.get("blob_digest"),
+            }
+            if second_opinion
+            else {}
+        ),
         critical_absences=absences,
         gates=dict(gates or {}),
     )
