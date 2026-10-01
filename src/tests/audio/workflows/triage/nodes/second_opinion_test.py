@@ -116,7 +116,7 @@ class TestItAsksAndRecords:
         second_opinion(store, config, None, _Ask(_answers()))
         models = [agent for agent in store.agents("model")]
         assert len(models) == 1
-        assert models[0].model_id.endswith(pin_of(config).blob_digest)
+        assert str(models[0].model_id).endswith(pin_of(config).blob_digest)
         assert models[0].version == pin_of(config).blob_digest
 
     def test_a_second_ask_is_served_from_the_cache(self, tmp_path: Path) -> None:
