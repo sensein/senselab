@@ -9,7 +9,7 @@
 > stay counts and categories only.
 
 Produced by `senselab.audio.workflows.triage.recording_vectors` and
-`scripts/triage_recording_vectors.py`. **One row per recording.** `schema_version` is `12`; any
+`scripts/triage_recording_vectors.py`. **One row per recording.** `schema_version` is `13`; any
 change to a column, a byte layout or a categorical column's controlled vocabulary bumps it and
 changes this file with it. The same number is in
 the parquet's own key-value metadata, under `senselab.recording_vectors.schema_version`, so a
@@ -39,6 +39,7 @@ What each bump added:
 | **10** | the eight located gates lose their reading and `_passed` columns, which could never carry a value; their `_bound` columns now carry the fold's resolved `gates.bounds` (§6) |
 | **11** | `propagated_n`, `unplaced_n`, `unplaced_open`, `redact_agreed_n`, `redact_new_n`; the ledger columns now count per-finding masks, and the state columns count only new reviewer proposals. See `specs/20260927-mask-placement-and-second-speaker/design.md` |
 | **12** | `gate_<name>_reason` per applied gate, `gate_reason`, `gate_exempt`, `gate_not_applicable_n`; `gate_<name>_passed` gains `not_applicable`; `omissions_max` replaced by `content_omission_fraction_max`, `monotone_tolerance_semitones` replaced by `glide_extent_min_semitones`, and `declared_duration_min_fraction` and `instructed_count_min_fraction` added. See `specs/20260929-task-check-alignment/design.md` |
+| **13** | `llm_instructions_spoken_n`: passages the reviewer (prompt v5) quoted where the task's instructions are spoken. See `specs/20260929-task-check-alignment/design.md` §L |
 
 The data dictionary in the file's metadata was added without a bump: it adds no column, changes no
 layout and no vocabulary, and a reader that ignores the key reads the file exactly as before.
@@ -109,7 +110,7 @@ Owner-directed: `participant`, `task`, `verdict` are the first three columns, in
 | `duration_conditioned_s` | double | seconds, the conditioned stream | PREPROCESS wrote no stream |
 | `time_scale_s` | double | seconds — **the denominator for every `uint16` time** | neither duration is known |
 | `sampling_rate` | int32 | Hz, of the conditioned stream | no conditioned stream |
-| `schema_version` | int32 | `12` | never |
+| `schema_version` | int32 | `13` | never |
 | `malformed_store_lines` | int32 | lines of `store.jsonl` that did not parse; `0` is the normal value | never |
 | `flags_n` | int32 | how many node verdicts in the fold carry outcome `flag`, `fail` or `discard` — the same filter `report.py` calls a flag | never |
 | `flag_nodes` | list\<string\> | which nodes those were, e.g. `["SPEECH"]` | never; `[]` when none |
@@ -623,6 +624,7 @@ so nothing new is read from the store:
 | `llm_detector_outcome` | what REDACT concluded, as the reading was taken against it |
 | `llm_iterations` | how many review / mask / re-review rounds ran |
 | `llm_flagged_categories`, `llm_flagged_n` | the categories the reader would remove |
+| `llm_instructions_spoken_n` | passages quoting the task's instructions spoken in the recording |
 | `llm_proposal_redact_n`, `llm_proposal_release_n` | the proposal's two directions |
 | `llm_read_redacted` | whether a redacted text existed to be read beside the original |
 | `llm_failed` | whether the reading carries a failure |

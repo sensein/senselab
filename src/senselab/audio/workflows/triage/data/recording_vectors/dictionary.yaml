@@ -637,6 +637,13 @@ columns:
     source: [recording_vectors.py:_reviewer_columns]
     null_means: Never; `0` where there is no annotation.
 
+  llm_instructions_spoken_n:
+    units: count
+    description: Passages the reviewer quoted where the task's own instructions are spoken in the recording, verbatim or paraphrased, by the examiner or the participant.
+    computation: The length of the annotation's `instructions_spoken` list (prompt v5's INSTRUCTIONS_SPOKEN part, taken from the last round that answered). A non-zero count raises the `INSTRUCTIONS_SPOKEN` flag ground under `verdict.llm_instructions_spoken_flags`.
+    source: [recording_vectors.py:_reviewer_columns, nodes/review.py:review]
+    null_means: REVIEW wrote no annotation; `0` where it read the recording and quoted none (or ran a prompt before v5).
+
   llm_proposal_redact_n:
     units: count
     description: Entries of the reviewer's final proposal asking for text to be removed.

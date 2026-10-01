@@ -31,7 +31,7 @@ import yaml  # type: ignore[import-untyped]
 from senselab.audio.workflows.triage.cohort import CONDITION_KINDS
 from senselab.audio.workflows.triage.vocabulary import UNPLACED_OPEN, UNPLACED_UNREAD
 
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 """Bumped whenever a column is added, removed or retyped, a binary layout changes, or a categorical
 column's controlled vocabulary changes."""
 
@@ -817,6 +817,9 @@ def _reviewer_columns(decision: Mapping[str, Any]) -> dict[str, Any]:
         "llm_speakers": annotation.get("speakers") or None,
         "llm_flagged_categories": [str(name) for name in flagged],
         "llm_flagged_n": len(flagged),
+        "llm_instructions_spoken_n": (
+            len(annotation.get("instructions_spoken") or ()) if annotation.get("status") is not None else None
+        ),
         "llm_proposal_redact_n": annotation.get("proposal_redact_n"),
         "llm_proposal_release_n": annotation.get("proposal_release_n"),
         "llm_read_redacted": annotation.get("read_redacted"),
@@ -1220,6 +1223,7 @@ def _fields() -> list[pa.Field]:
         pa.field("llm_speakers", pa.string()),
         pa.field("llm_flagged_categories", pa.list_(pa.string())),
         pa.field("llm_flagged_n", pa.int32()),
+        pa.field("llm_instructions_spoken_n", pa.int32()),
         pa.field("llm_proposal_redact_n", pa.int32()),
         pa.field("llm_proposal_release_n", pa.int32()),
         pa.field("llm_read_redacted", pa.bool_()),
