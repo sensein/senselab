@@ -138,7 +138,7 @@ The tests check stronger properties on synthetic stores:
   every cut is present, the store is not touched at all, so its fingerprint and the files' mtimes are
   unchanged. The cache is per run rather than the global result cache because the cut is a slice. A
   global entry would duplicate the audio and save nothing.
-- **Parquet (schema 15).** `task_audio_start_s`, `task_audio_end_s`, `task_audio_duration_s` and
+- **Parquet (schema 16).** `task_audio_start_s`, `task_audio_end_s`, `task_audio_duration_s` and
   `task_audio_cuts`.
 
 ## 6. Measurement on r9 (2026-10-01)
