@@ -70,6 +70,21 @@ output tokens: the probabilities are read off the logits, not sampled. So `optio
 has no effect. Determinism comes from the pinned weights, prompt layers and input. Cold load plus
 the first answer took 8.7 s; warm answers took 0.9–1.9 s.
 
+### End to end, measured
+
+On 2026-10-01 `extend_second_opinion.py` at dcedb091 ran on an H100 (node3209) over scratch copies
+of five r9 run roots: story-recall, free-speech-1, free-speech-2, word-color-stroop and
+productive-vocabulary-1. The model was served from the pilot store.
+
+- **First pass.** All five came back `ok`, and each store was re-folded. The first row took 20.7 s
+  (pin hash plus server start plus load); the rest took 4.7–8.3 s each, re-fold and REPORT included.
+- **Second pass.** All five were `present`. `server_started` was false; the slice took 1.4 s.
+- **Story-recall.** other_voice was 0.91 against the reviewer's `one`, so it flagged under the new
+  ground. Its instructions_spoken was 0.83, not compared, because that store's annotation is
+  prompt v4.
+- **The other four.** No disagreement. Free-speech named_diagnosis read 0.77 and 0.98, beside
+  reviewer readings that were `flagged`.
+
 ## The questions (QUESTION_SET_VERSION 1)
 
 Four questions, over the same original transcript (`transcript_texts`) and the same task context
