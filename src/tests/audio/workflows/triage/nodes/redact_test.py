@@ -819,7 +819,7 @@ class TestTheWordLevelMaskRule:
     def test_an_abbreviated_place_in_capitals_stays_masked(
         self, store: ProvStore, redact_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """The token "LA" is the Spanish article in lower case, but in capitals a detector's place is an abbreviation."""
+        """The token "LA" is the Spanish article in lower case; in capitals a detector's place is an abbreviation."""
         _seed_redact_store(
             store, tmp_path, words=["we", "moved", "to", "LA,"], findings=[("LOCATION", _word_extent(3))]
         )
