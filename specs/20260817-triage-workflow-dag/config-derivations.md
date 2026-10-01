@@ -2314,6 +2314,19 @@ the `residual` measurement carry no config key of their own: `speech_present` is
 `n_consensus_words > 0`, an identity rather than a fitted threshold, matching the "no new threshold"
 rule the `speech_overlap == 0.0` windows split already follows.
 
+## task_audio
+
+The task-extent cut (`task_audio.py`): the plain, enhanced and released redacted streams cut to the
+hull of the live `task_extent` spans. See `specs/20261002-task-extent-audio/design.md`.
+
+task_audio.padding_s 0.25. CONVENTIONAL, not fitted. The hull's ends are word or event boundaries a
+recognizer or a span walk placed, and an aligner's boundary error and the release of a final
+plosive or breath both run to tens of milliseconds past them; 250 ms on each side is wider than
+either, and is the same pad `redaction.padding_ms` puts on a mask, so a mask padded at a task's edge
+does not reach past the cut. What it costs is measured in the design note: on the r9 sample the pad
+adds at most 0.5 s to a cut whose median saving is several seconds. Clamped to the recording, so a
+task that starts at 0 s gets no lead-in pad and the clamp is recorded on the measurement.
+
 ## report
 
 The presentation form the summary is written in.

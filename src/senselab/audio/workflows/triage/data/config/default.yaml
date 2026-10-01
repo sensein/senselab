@@ -568,6 +568,10 @@ residual:
   max_lag_ms: 200.0                    # cross-correlation search half-window against the enhanced output
   bands_hz: [[0, 200], [200, 1000], [1000, 4000], [4000, 8000]]  # band split the residual is reported over
 
+# Task-extent audio: plain, enhanced and the released redacted copy cut to the task's hull.
+task_audio:
+  padding_s: 0.25                      # outward pad on each side of the task-extent hull; CONVENTIONAL, not fitted
+
 # The presentation form the summary is written in.
 report:
   format: pdf                          # pdf or png
