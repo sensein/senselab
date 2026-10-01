@@ -451,7 +451,7 @@ def test_an_answer_without_its_conditions_part_is_fed_back() -> None:
 def test_the_prompt_asks_for_conditions_apart_from_safe_harbor() -> None:
     """Conditions are a required part of their own, and no longer a PROPOSAL category."""
     assert "CONDITIONS: a JSON array" in redaction_review._PROMPT
-    assert "exactly seven parts" in redaction_review._PROMPT
+    assert "exactly eight parts" in redaction_review._PROMPT
     assert "CONTACT, CONDITION, OTHER" not in redaction_review._PROMPT
 
 
@@ -494,7 +494,7 @@ def test_the_prompt_counts_an_expected_voice_as_another_voice() -> None:
     assert "an expected voice is still another voice" in prompt
     assert '"Is that enough?"' in prompt and "is still one speaker" in prompt
     assert "You were given the text" in prompt and "repeat after them" in prompt
-    assert redaction_review.PROMPT_VERSION == 4
+    assert redaction_review.PROMPT_VERSION == 5
 
 
 def test_the_prompt_lists_only_specific_diagnoses() -> None:
@@ -513,3 +513,58 @@ def test_the_prompt_attributes_instructions_addressed_to_the_participant_to_anot
     assert "do not assume the participant is repeating the instructions" in prompt
     assert '"I said you have up to five minutes"' in prompt
     assert "answer unclear and still quote those words in OTHER_SPEAKERS" in prompt
+
+
+STORY_RECALL_CARD = (
+    "Okay. So what about it? You were given the test, read the text, have you familiarized? I said you have up "
+    "to five minutes to read it as many times as you want. Okay. So am I supposed to be recalling the story now?"
+)
+
+
+def test_the_instructions_spoken_part_is_parsed_into_quotes() -> None:
+    """Owner, 2026-10-01: the reviewer quotes where the task's instructions are spoken; the story-recall card."""
+    from senselab.text.tasks.pii_detection.redaction_review import parse_completion
+
+    quote = "I said you have up to five minutes to read it as many times as you want"
+    parsed = parse_completion(
+        "REASONING: the examiner restates the instructions\nREDACTION: not_applicable\nORIGINAL: clean\n"
+        "SPEAKERS: one\nOTHER_SPEAKERS: []\nCONDITIONS: []\n"
+        f'INSTRUCTIONS_SPOKEN: [{{"text": "{quote}", "why": "the five-minute reading instruction"}}]\nPROPOSAL: []'
+    )
+    assert parsed.instructions_answered
+    assert parsed.instructions_spoken == [quote]
+    assert parsed.proposal == [] and "INSTRUCTIONS_SPOKEN" not in parsed.reasoning
+
+
+def test_an_answer_without_its_instructions_spoken_part_is_fed_back() -> None:
+    """A missing INSTRUCTIONS_SPOKEN part is unusable; [] is an answer; a quote must occur in the ORIGINAL."""
+    from senselab.text.tasks.pii_detection.redaction_review import ReviewResult, answer_problem, parse_completion
+
+    head = "REASONING: x\nREDACTION: not_applicable\nORIGINAL: clean\nSPEAKERS: one\nCONDITIONS: []\n"
+    missing = parse_completion(head + "PROPOSAL: []")
+    empty = parse_completion(head + "INSTRUCTIONS_SPOKEN: []\nPROPOSAL: []")
+    invented = parse_completion(head + 'INSTRUCTIONS_SPOKEN: [{"text": "read it ten times", "why": "x"}]\nPROPOSAL: []')
+
+    def result(parsed: object) -> ReviewResult:
+        return ReviewResult(
+            available=True,
+            redaction="not_applicable",
+            original="clean",
+            instructions_spoken=list(parsed.instructions_spoken),  # type: ignore[attr-defined]
+            instructions_answered=parsed.instructions_answered,  # type: ignore[attr-defined]
+        )
+
+    assert not missing.instructions_answered
+    assert "no INSTRUCTIONS_SPOKEN part" in (answer_problem(result(missing), STORY_RECALL_CARD, None) or "")
+    assert answer_problem(result(empty), STORY_RECALL_CARD, None) is None
+    assert "do not occur in the ORIGINAL" in (answer_problem(result(invented), STORY_RECALL_CARD, None) or "")
+
+
+def test_the_prompt_asks_whether_the_instructions_are_spoken() -> None:
+    """Point 6 counts paraphrase, names the story-recall example and keeps the stimulus out."""
+    from senselab.text.tasks.pii_detection import redaction_review
+
+    prompt = redaction_review._PROMPT
+    assert "INSTRUCTIONS_SPOKEN: a JSON array" in prompt
+    assert "paraphrase" in prompt and "have you familiarized" in prompt
+    assert "stimulus" in prompt and "is never instructions" in prompt

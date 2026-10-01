@@ -17,6 +17,7 @@ from senselab.audio.workflows.triage.vocabulary import (
     DECLINED,
     DOMINANT_SPEAKER_GATE,
     FINDINGS_ARE_TASK_CONTENT,
+    INSTRUCTIONS_SPOKEN,
     MASKS_TRIMMED_TO_CONTENT,
     MODEL_SPEAKER_PERMITTED,
     NO_CONTENT_MASKED,
@@ -1717,3 +1718,54 @@ class TestAgreementUnplacedFindingsAndASecondSpeaker:
         from senselab.audio.workflows.triage.config import load_triage_config
 
         assert FoldPolicy.from_config(load_triage_config()).llm_second_speaker_flags is True
+
+
+class TestSpokenInstructionsFlagForReview:
+    """Owner, 2026-10-01: a reading quoting the task's instructions spoken in the recording flags for review."""
+
+    _PASSED = [NodeVerdict("REDACT", Outcome.PASS, None, "every finding redacted")]
+    _QUOTE = "I said you have up to five minutes to read it as many times as you want"
+
+    def _fold(self, spoken: list[str], policy: FoldPolicy) -> FileVerdict:
+        reading = {
+            "status": "clean",
+            "original": "clean",
+            "speakers": "one",
+            "proposal": [],
+            "instructions_spoken": spoken,
+        }
+        return fold_file_verdict(
+            self._PASSED,
+            branch_decisions=_decisions(AIRWAY=DECLINED, SPEECH=ROUTED, VOICE=DECLINED),
+            ran={"SPEECH": RunState.COMPLETED, "REDACT": RunState.COMPLETED, "REVIEW": RunState.COMPLETED},
+            hint_claims={},
+            route_state=ROUTED,
+            redaction=RedactionEvidence(lexical_words_n=40, scanned=True, findings_n=0),
+            llm_redaction=reading,
+            policy=policy,
+        )
+
+    def test_a_quoted_passage_flags_and_names_it(self) -> None:
+        """The story-recall card's quote is a flag ground carrying the words."""
+        folded = self._fold([self._QUOTE], FoldPolicy(llm_instructions_spoken_flags=True))
+        grounds = [str(reason.why) for reason in folded.reasons]
+        assert folded.triage is Triage.FLAG
+        assert any(why.startswith(INSTRUCTIONS_SPOKEN) and "five minutes" in why for why in grounds)
+
+    def test_an_empty_part_or_the_policy_off_does_not_flag(self) -> None:
+        """[] never flags, and the key off turns the ground off."""
+        for spoken, policy in (([], FoldPolicy(llm_instructions_spoken_flags=True)), ([self._QUOTE], FoldPolicy())):
+            grounds = [str(reason.why) for reason in self._fold(spoken, policy).reasons]
+            assert not any(why.startswith(INSTRUCTIONS_SPOKEN) for why in grounds)
+
+    def test_the_release_is_unchanged(self) -> None:
+        """The flag is triage only."""
+        on = self._fold([self._QUOTE], FoldPolicy(llm_instructions_spoken_flags=True))
+        off = self._fold([self._QUOTE], FoldPolicy())
+        assert on.release is off.release
+
+    def test_the_packaged_policy_flags(self) -> None:
+        """The packaged config turns the ground on."""
+        from senselab.audio.workflows.triage.config import load_triage_config
+
+        assert FoldPolicy.from_config(load_triage_config()).llm_instructions_spoken_flags is True

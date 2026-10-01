@@ -199,6 +199,10 @@ var SchemaAxes = (function () {
     column({ name: 'llm_detector_outcome', kind: 'categorical', group: 'review', nullMeans: 'REDACT wrote no verdict' }),
     column({ name: 'llm_iterations', kind: 'count', group: 'review', nullMeans: 'REVIEW left no annotation' }),
     column({ name: 'llm_flagged_n', kind: 'count', group: 'review', nullMeans: 'never null' }),
+    column({
+      name: 'llm_instructions_spoken_n', kind: 'count', group: 'review',
+      label: "llm · instructions spoken", nullMeans: 'REVIEW left no annotation',
+    }),
     column({ name: 'llm_proposal_redact_n', kind: 'count', group: 'review', nullMeans: 'the reader proposed none' }),
     column({ name: 'llm_proposal_release_n', kind: 'count', group: 'review', nullMeans: 'the reader proposed none' }),
     column({ name: 'llm_read_redacted', kind: 'categorical', group: 'review', nullMeans: 'REVIEW left no annotation' }),

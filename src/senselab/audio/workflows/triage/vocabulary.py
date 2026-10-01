@@ -337,6 +337,10 @@ REVIEWER_NAMED_NO_WORDS = "the redaction reviewer judged the redaction wrong but
 A reading may only move a mask by naming the words it moves, so such a reading moves none: REDACT's
 masks stand, and the recording goes to a person."""
 
+INSTRUCTIONS_SPOKEN = "the task's instructions are spoken in the recording, by the examiner or the participant"
+"""The flag ground where the reviewer quoted passages in which the task's own instructions are spoken,
+verbatim or paraphrased; who spoke them is left to a person. ``verdict.llm_instructions_spoken_flags``."""
+
 REVIEWER_HEARD_SECOND_SPEAKER = "the redaction reviewer read another speaker in the transcript"
 """The flag ground a reading's ``speakers: more_than_one`` contributes, under ``verdict.llm_second_speaker_flags``,
 where diarization's own gate has not already flagged another speaker in the task extent. Any other voice
@@ -483,6 +487,8 @@ class FoldPolicy:
             in which case every such proposal is an ``other`` condition.
         llm_second_speaker_flags: Whether a reading that heard more than one speaker is a flag ground
             on the triage axis.
+        llm_instructions_spoken_flags: Whether a reading that quotes the task's instructions spoken in
+            the recording is a flag ground (:data:`INSTRUCTIONS_SPOKEN`); the release is unchanged.
         llm_contradiction_flags: Whether a flagged reading that names no words is a flag ground on
             the triage axis.
         uncomputed_reading_flags: Whether a conformance gate left undecided because a reading the
@@ -506,6 +512,7 @@ class FoldPolicy:
     cohort_conditions: str | None = None
     llm_second_speaker_flags: bool = False
     llm_contradiction_flags: bool = False
+    llm_instructions_spoken_flags: bool = False
     uncomputed_reading_flags: bool = False
     hint_mismatch_exempt_families: tuple[str, ...] = ()
     model_speaker_families: tuple[str, ...] = ()
@@ -541,6 +548,7 @@ class FoldPolicy:
             cohort_conditions=str(config.get(f"{_SECTION}.cohort_conditions") or "") or None,
             llm_second_speaker_flags=bool(config.get(f"{_SECTION}.llm_second_speaker_flags", False)),
             llm_contradiction_flags=bool(config.get(f"{_SECTION}.llm_contradiction_flags", False)),
+            llm_instructions_spoken_flags=bool(config.get(f"{_SECTION}.llm_instructions_spoken_flags", False)),
             uncomputed_reading_flags=bool(config.get(f"{_SECTION}.uncomputed_reading_flags", False)),
             hint_mismatch_exempt_families=tuple(
                 str(family) for family in (config.get(f"{_SECTION}.hint_mismatch_exempt_families") or ())
@@ -1158,6 +1166,10 @@ def fold_file_verdict(
         reasons.append(NodeVerdict(_VERDICT, Outcome.FLAG, None, f"{REVIEWER_HEARD_SECOND_SPEAKER}: {quoted}"))
     if rules.llm_contradiction_flags and reviewer_named_no_words(annotation):
         reasons.append(NodeVerdict(_VERDICT, Outcome.FLAG, None, REVIEWER_NAMED_NO_WORDS))
+    spoken = [str(text) for text in annotation.get("instructions_spoken") or () if str(text).strip()]
+    if rules.llm_instructions_spoken_flags and spoken:
+        quoted = "; ".join(json.dumps(text) for text in spoken)
+        reasons.append(NodeVerdict(_VERDICT, Outcome.FLAG, None, f"{INSTRUCTIONS_SPOKEN}: {quoted}"))
     open_families = sorted({family for family, state in unplaced if state in (UNPLACED_OPEN, UNPLACED_UNREAD)})
     if open_families:
         ground_text = (

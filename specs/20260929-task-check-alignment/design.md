@@ -384,3 +384,27 @@ re-fold; the scan's content flag would change only on a replay, which here chang
 The free-speech page's trim-released words (orange) are drawn with a dashed underline in both themes,
 legend included, since 2a4340de; red (masked or proposed) and green (unmasked by the reviewer) stay
 solid. A page test pins it. The recording-vectors viewer draws no word states.
+
+## L. The task's instructions spoken in the recording
+
+Owner, 2026-09-30/10-01: a recording whose transcript contains the task's own instructions is flagged
+for review, whoever spoke them. The case: a story-recall recording that opens with the examiner's "You
+were given the test, read the text, have you familiarized? I said you have up to five minutes to read
+it as many times as you want". Diarization heard one speaker and the v4 reviewer read the words as the
+participant repeating the instructions, so neither caught it.
+
+**Rejected: a deterministic match.** A lexical rule — the longest in-order run of content words the
+transcript shares with the sidecar instructions — was measured on r9 (all 62,550). The run was 0 for
+52,085 recordings, 1 for 8,944, 2 for 285, 3 for 1,228 (1,207 the prolonged-vowel count-in "one two
+three", which the instructions ask for) and ≥ 4 for only 8, every one instruction text. Examiners
+paraphrase ("You were given the test, read the text" against "You are given a text. Read the text"),
+so an exact run finds a handful and misses the rest; an embedding similarity would need a fitted
+threshold and labels. Owner: ask the reviewer, which already reads the instructions in its context.
+
+**Rule (prompt v5).** Point 6 asks whether the instructions are spoken, verbatim or paraphrased, by
+anyone, judged apart from SPEAKERS; the stimulus is never instructions. A required
+`INSTRUCTIONS_SPOKEN` part quotes each passage exactly from the ORIGINAL, or `[]`. A missing part is fed
+back for another round, and a quote absent from the ORIGINAL is rejected (`answer_problem`). The fold
+flags a non-empty part under `INSTRUCTIONS_SPOKEN`, naming the quotes; the release is unchanged
+(`verdict.llm_instructions_spoken_flags: true`). Parquet schema 13 adds `llm_instructions_spoken_n`.
+Readings before v5 carry no part and never flag; the scheduled full re-review on v5 applies it.

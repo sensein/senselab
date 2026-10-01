@@ -327,6 +327,7 @@ verdict:
   trim_protected_categories: [PERSON, NAME, LOCATION, LOC]  # owner, 2026-09-27: a marked word written as a proper noun is never trimmed
   llm_second_speaker_flags: true       # owner, 2026-09-27: a reading that heard more than one speaker flags the recording for review
   llm_contradiction_flags: true        # owner, 2026-09-28: a flagged reading that names no words flags the recording for review
+  llm_instructions_spoken_flags: true  # owner, 2026-10-01: a reading quoting the task's instructions spoken in the recording flags for review
   uncomputed_reading_flags: true       # owner, 2026-09-29: a conformance reading that should exist and does not flags for review
   hint_mismatch_exempt_families: [respiration-and-cough-breath, respiration-and-cough-v2-breath]  # owner, 2026-09-29: quiet breathing the classifier does not hear is no flag
   # declared task family -> flag gates its own instruction makes inapplicable. Empty: owner, 2026-09-30,

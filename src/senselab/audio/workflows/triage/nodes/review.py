@@ -125,6 +125,8 @@ class _Reading:
         problem: The final round's unresolved problem, or None.
         other_speakers: The words the last answering round attributed to anyone but the participant,
             each with ``text``, ``expected`` and ``why``.
+        instructions_spoken: The passages the last answering round quoted where the task's own
+            instructions are spoken in the recording.
     """
 
     status: str
@@ -140,6 +142,7 @@ class _Reading:
     converged: bool = True
     problem: str | None = None
     other_speakers: tuple[dict[str, Any], ...] = ()
+    instructions_spoken: tuple[str, ...] = ()
 
 
 def _stamp() -> str:
@@ -501,6 +504,7 @@ def reading_from_cache(payload: Mapping[str, Any]) -> tuple[_Reading, list[dict[
     fields_["flagged"] = tuple(fields_.get("flagged") or ())
     fields_["proposal"] = tuple(dict(entry) for entry in fields_.get("proposal") or ())
     fields_["other_speakers"] = tuple(dict(entry) for entry in fields_.get("other_speakers") or ())
+    fields_["instructions_spoken"] = tuple(str(text) for text in fields_.get("instructions_spoken") or ())
     return _Reading(**fields_), [dict(review) for review in payload.get("reviews") or ()]
 
 
@@ -574,6 +578,7 @@ def backfill_from_store(store: ProvStore, config: TriageConfig) -> tuple[str, st
         converged=bool(held.get("converged", True)),
         problem=held.get("problem"),
         other_speakers=tuple(dict(entry) for entry in held.get("other_speakers") or ()),
+        instructions_spoken=tuple(str(text) for text in held.get("instructions_spoken") or ()),
     )
     reviews = [
         {key: value for key, value in entity.attributes.items() if key not in ("name", "signal")}
@@ -662,7 +667,8 @@ def review(store: ProvStore, config: TriageConfig, hint: AudioHints | None = Non
             answered = [review for review in reviews if review.get("available")]
             if answered:
                 others = tuple(dict(other) for other in answered[-1].get("other_speakers") or ())
-                reading = replace(reading, other_speakers=others)
+                spoken = tuple(str(text) for text in answered[-1].get("instructions_spoken") or ())
+                reading = replace(reading, other_speakers=others, instructions_spoken=spoken)
             stored = key is not None and reading.revision == revision and cache_reading(key, reading, reviews)
             cache = {"key": key, "hit": False, "stored": stored}
 
@@ -725,6 +731,7 @@ def review(store: ProvStore, config: TriageConfig, hint: AudioHints | None = Non
             "original": reading.original,
             "speakers": reading.speakers,
             "other_speakers": [dict(entry) for entry in reading.other_speakers],
+            "instructions_spoken": list(reading.instructions_spoken),
             "prompt_version": PROMPT_VERSION,
             "proposal": [dict(entry) for entry in reading.proposal],
             "proposal_redact_n": sum(1 for entry in reading.proposal if entry["action"] == REDACT),
