@@ -23,7 +23,9 @@ from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.nodes.branches import (
     AIRWAY_EXPECTATIONS,
     DETECT_GROUP,
+    NO_TASK_ACTIVITY,
     NOT_SEPARABLE_BY_THIS_DESIGN,
+    TASK_EXTENT_ABSENT,
     UNDETERMINED,
     BranchParams,
     EnvelopeTrack,
@@ -62,6 +64,7 @@ from senselab.audio.workflows.triage.nodes.branches import (
     spectral_balance_db,
     stream_extent,
     stream_ids,
+    task_extent_absent,
     touches_edge,
     unviable_findings,
     write_findings,
@@ -102,6 +105,9 @@ WINDOW_RUN_BOUNDARIES = "hear_window_run"
 
 TASK_EXTENT = "task_extent"
 """The role of the one span covering the part of the recording that serves the task."""
+
+ACTIVITY_ENVELOPE = "activity_envelope"
+"""``extent_from`` on a ``task_extent`` taken over the amplitude spans because no event was placed."""
 
 ROUTE_INDEX_KEY = "airway.route_by_task_index"
 """The config key mapping a task's trailing index to the route its instruction prescribes."""
@@ -1036,12 +1042,46 @@ def align_airway(
     expectation = AIRWAY_EXPECTATIONS[task_family]
     params.bind(expectation.pattern, task_family)
     if expectation.pattern is Pattern.EVENT_SERIES:
-        return _airway_event_series(expectation, store, hint, params, run_dir)
-    if expectation.pattern is Pattern.EVENT_ALTERNATION:
-        return _airway_alternation(expectation, store, params, run_dir)
-    if expectation.pattern is Pattern.SOUND_COVERAGE:
-        return _airway_coverage(expectation, store, hint, params, run_dir)
-    raise ValueError(f"{task_family} carries {expectation.pattern}, which align_airway has no matcher for")
+        result = _airway_event_series(expectation, store, hint, params, run_dir)
+    elif expectation.pattern is Pattern.EVENT_ALTERNATION:
+        result = _airway_alternation(expectation, store, params, run_dir)
+    elif expectation.pattern is Pattern.SOUND_COVERAGE:
+        result = _airway_coverage(expectation, store, hint, params, run_dir)
+    else:
+        raise ValueError(f"{task_family} carries {expectation.pattern}, which align_airway has no matcher for")
+    return with_task_extent(result, store, expectation.label_set or KIND)
+
+
+def with_task_extent(result: Result, store: ProvStore, label: str) -> Result:
+    """The result with a ``task_extent`` placed, or the finding that says why none could be.
+
+    A result already carrying one is returned unchanged. Otherwise the extent is the hull of the
+    amplitude spans, and where there are none the result gains a :data:`NO_TASK_ACTIVITY` finding.
+
+    Args:
+        result: What the pattern's matcher returned.
+        store: The provenance store.
+        label: The label set the task asked for.
+
+    Returns:
+        The result, with exactly one of a ``task_extent`` proposal or a ``task_extent_absent`` finding.
+    """
+    if any(proposal.role == TASK_EXTENT for proposal in result.components):
+        return result
+    carriers = [span for span in amplitude_spans(candidate_spans(store)) if span.extent is not None]
+    task = hull([span.extent for span in carriers if span.extent is not None])
+    if task is None or task[1] <= task[0]:
+        stream = stream_ids(store)
+        return Result(result.components, [*result.deviations, task_extent_absent(NO_TASK_ACTIVITY, *stream)])
+    proposal = airway_span(
+        TASK_EXTENT,
+        task,
+        *(span.id for span in carriers),
+        label=label,
+        extent_from=ACTIVITY_ENVELOPE,
+        carriers_n=len(carriers),
+    )
+    return Result([*result.components, proposal], result.deviations)
 
 
 def detect_airway(store: ProvStore, params: BranchParams, *, run_dir: Path | None = None) -> Result:
@@ -1201,6 +1241,11 @@ def _detail(result: Result, spans: Sequence[Entity], params: BranchParams) -> di
     notes = [absence_note(finding.evidence.get("absent") or ()) for finding in absent]
     if params.missing:
         notes.append(f"branch.* unmeasured: {', '.join(params.missing)}")
+    notes.extend(
+        str(finding.evidence.get("reason"))
+        for finding in result.deviations
+        if finding.kind == "measure" and finding.name == TASK_EXTENT_ABSENT
+    )
     coverage = next(
         (finding for finding in result.deviations if finding.kind == "measure" and finding.name == COVERAGE_FRACTION),
         None,

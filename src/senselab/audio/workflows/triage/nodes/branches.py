@@ -397,6 +397,29 @@ def unviable(name: str, why: str) -> Finding:
     return Finding("measure", name, None, None, {"value": NOT_SEPARABLE_BY_THIS_DESIGN, "why": why})
 
 
+TASK_EXTENT_ABSENT = "task_extent_absent"
+"""The measurement an align mode writes in place of a ``task_extent`` span it could not place."""
+
+NO_TASK_ACTIVITY = "no_task_activity_located"
+"""``reason`` on :data:`TASK_EXTENT_ABSENT` when the recording holds no activity to place it over."""
+
+NO_TASK_ITEMS = "no_task_items_located"
+"""``reason`` on :data:`TASK_EXTENT_ABSENT` when the recording holds no item the task asked for."""
+
+
+def task_extent_absent(reason: str, *derived_from: str) -> Finding:
+    """The finding an align mode writes when it proposes no ``task_extent``.
+
+    Args:
+        reason: :data:`NO_TASK_ACTIVITY` or :data:`NO_TASK_ITEMS`.
+        *derived_from: The entity ids the absence was read off.
+
+    Returns:
+        The finding, whose value is None.
+    """
+    return Finding("measure", TASK_EXTENT_ABSENT, None, None, {"value": None, "reason": reason}, tuple(derived_from))
+
+
 # --------------------------------------------------------------------- the write path
 
 
