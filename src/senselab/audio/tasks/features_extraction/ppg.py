@@ -91,6 +91,7 @@ _PPGS_REQUIREMENTS = [
     "torchaudio>=2.8,<2.9",
     "numpy",
     "soundfile",
+    "huggingface-hub<2",  # see specs/20261002-ppgs-venv-resolution/design.md
 ]
 _PPGS_PYTHON = "3.11"
 
