@@ -1209,6 +1209,33 @@ def test_no_task_extent_leaves_every_trim_column_null(one_row: dict[str, Any]) -
     assert one_row["task_extent_n"] is None
 
 
+def test_the_task_audio_cut_reports_its_bounds_and_which_streams_it_cut(tmp_path: Path) -> None:
+    """The live task_audio measurement's bounds, and the task_* streams standing beside it."""
+    extra = [
+        _entity(
+            "measurement-task-audio",
+            "measurement",
+            [1.25, 3.25],
+            name="task_audio",
+            start_s=1.25,
+            end_s=3.25,
+            duration_s=2.0,
+        ),
+        _entity("stream-task-plain", "stream", [0.0, 2.0], name="task_plain"),
+        _entity("stream-task-enhanced", "stream", [0.0, 2.0], name="task_enhanced"),
+    ]
+    row = rv.extract(_evaluation_recording(tmp_path, extra=tuple(extra)), tmp_path)
+    assert row is not None
+    assert (row["task_audio_start_s"], row["task_audio_end_s"], row["task_audio_duration_s"]) == (1.25, 3.25, 2.0)
+    assert row["task_audio_cuts"] == ["plain", "enhanced"]
+
+
+def test_no_task_audio_cut_leaves_its_columns_null(one_row: dict[str, Any]) -> None:
+    """A recording the cut never ran over carries no task_audio columns."""
+    for key in ("task_audio_start_s", "task_audio_end_s", "task_audio_duration_s", "task_audio_cuts"):
+        assert one_row[key] is None
+
+
 def test_a_kept_clip_an_unclipped_sample_exceeds_reads_as_inconsistent(tmp_path: Path) -> None:
     """A kept clip an unclipped sample exceeds reads as inconsistent."""
     row = rv.extract(_evaluation_recording(tmp_path), tmp_path)

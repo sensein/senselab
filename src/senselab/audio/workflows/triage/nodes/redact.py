@@ -2146,7 +2146,7 @@ def _has_stream(store: ProvStore, name: str) -> bool:
     return any(entity.attributes.get("name") == name for entity in live_entities(store, "stream"))
 
 
-def _masked_source(store: ProvStore, run_dir: Path) -> Audio:
+def _masked_source(store: ProvStore, run_dir: Path) -> tuple[str, Audio]:
     """The stream REDACT's ``redacted`` copy was masked from, loaded from its sidecar.
 
     Args:
@@ -2154,7 +2154,7 @@ def _masked_source(store: ProvStore, run_dir: Path) -> Audio:
         run_dir: The run directory sidecar paths are relative to.
 
     Returns:
-        The source audio.
+        The source stream's id and its audio.
 
     Raises:
         LookupError: If the store holds no ``redacted`` stream or does not say what it came from.
@@ -2164,8 +2164,57 @@ def _masked_source(store: ProvStore, run_dir: Path) -> Audio:
         source = store.get_entity(source_id)
         if source.prov_type == "stream":
             path = Path(source.attributes["path"])
-            return Audio(filepath=str(path if path.is_absolute() else run_dir / path))
+            return source_id, Audio(filepath=str(path if path.is_absolute() else run_dir / path))
     raise LookupError("the redacted stream records no source stream")
+
+
+@dataclass(frozen=True)
+class ReleasedAudio:
+    """The audio of the redacted copy the fold releases, and what it was made from.
+
+    Attributes:
+        audio: The masked audio, at the masked source's own rate and channels.
+        derived_from: The store ids it was made from: REDACT's ``redacted`` stream where the final
+            masks are REDACT's own, else the masked source stream and the PII ledger.
+        masks: The final masks, in seconds on the recording's time base.
+        fill: What each mask was filled with.
+        remasked: Whether the source was masked again with the final masks.
+    """
+
+    audio: Audio
+    derived_from: tuple[str, ...]
+    masks: tuple[RedactionExtent, ...]
+    fill: str
+    remasked: bool
+
+
+def released_audio(store: ProvStore, run_dir: Path, *, bleep_hz: float | None) -> ReleasedAudio:
+    """The audio of the redacted copy, as :func:`settle_release` writes it under ``release_with_redaction``.
+
+    Args:
+        store: The provenance store, after VERDICT.
+        run_dir: The run directory sidecar paths are relative to.
+        bleep_hz: ``redaction.bleep_hz``, for a re-masked copy under a bleep fill.
+
+    Returns:
+        The masked audio and its provenance.
+
+    Raises:
+        LookupError: If REDACT concluded nothing, or wrote no ``redacted`` stream.
+    """
+    verdict = find_verdict(store, NODE)
+    if verdict is None:
+        raise LookupError("REDACT concluded nothing; there is no redacted copy")
+    final, _ = released_masks(store)
+    fill = str(verdict.attributes.get("fill") or "")
+    if same_extents(final, planned_extents(store)):
+        stream_id, redacted = resolve_stream(store, run_dir, STREAM_NAME)
+        return ReleasedAudio(redacted, (stream_id,), tuple(final), fill, remasked=False)
+    source_id, source = _masked_source(store, run_dir)
+    ledger = find_measurement(store, PII_LEDGER)
+    sources = (source_id,) if ledger is None else (source_id, ledger.id)
+    masked = apply_redactions(source, final, fill=fill, bleep_hz=bleep_hz)
+    return ReleasedAudio(masked, sources, tuple(final), fill, remasked=True)
 
 
 def settle_release(
@@ -2215,11 +2264,7 @@ def settle_release(
             _holds_copy(artifacts_dir, records) or not _has_stream(store, STREAM_NAME)
         ):
             return {}
-        _, redacted = resolve_stream(store, run_dir, STREAM_NAME)
-        return _write_artifacts(redacted, text, records, artifacts_dir)
-    fill = str(verdict.attributes.get("fill") or "")
-    masked = apply_redactions(_masked_source(store, run_dir), final, fill=fill, bleep_hz=bleep_hz)
-    return _write_artifacts(masked, text, records, artifacts_dir)
+    return _write_artifacts(released_audio(store, run_dir, bleep_hz=bleep_hz).audio, text, records, artifacts_dir)
 
 
 REDACTION_SPAN = "redaction"
