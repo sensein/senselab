@@ -1,14 +1,15 @@
 # Resuming the review pass
 
-## Scheduled — full re-review on reviewer prompt v4
+## Scheduled — full re-review on reviewer prompt v5
 
-Prompt v4 (`1f4b54d9`) lists only named diagnoses under CONDITIONS and treats instructions addressed to
-the participant as another voice. r9's readings are v3; only the 2,257 that listed a condition (plus the
-story-recall card sub-00053adb…) are re-read now, under "Diagnosis re-review (v4)" in
-`/orcd/scratch/bcs/002/satra/triage_r9_20260929/RUN.md`. A full re-review of all ~15,165 readings on v4
-is scheduled so the corpus comes from one prompt; its exact commands are that file's "Scheduled: full
-re-review of all ~15,165 on prompt v4" section (review_v4all a100 + h100 arrays over the full review
-manifest with --force, then the full re-fold and a parquet rebuild into `recording_vectors_r9b`).
+Prompt v5 (`d9d50561`) keeps v4's rules (CONDITIONS are named diagnoses; instructions addressed to the
+participant are another voice) and adds a required INSTRUCTIONS_SPOKEN part: the task's instructions
+spoken in the recording, by anyone, flag for review. r9's readings are v3, with the 2,257 that listed a
+condition re-read on v4. A full re-review of all ~15,165 readings on v5 is scheduled so the corpus comes
+from one prompt; its exact commands are the "Scheduled: full re-review of all ~15,165 on prompt v5"
+section of `/orcd/scratch/bcs/002/satra/triage_r9_20260929/RUN.md` (review_v5all a100 + h100 arrays over
+the full review manifest with --force, then the full re-fold and a schema-13 parquet into
+`recording_vectors_r9d`). No replay.
 
 ## Settled, 2026-09-28 — read this first; everything below is history
 
