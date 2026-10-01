@@ -151,6 +151,7 @@ stimulus:
     variant_similarity_min: 0.66       # least 1 - edits/longer length at which a word is a reading of a stimulus word
     insertion_window: 3                # stimulus words either side an inserted word may repeat, restart or split
     train_repetitions_min: 3           # recurrences that make a token a syllable train in a syllable task
+    cue_families: [productive-vocabulary]    # free-response families whose stimulus is a cue word the participant defines; a reading of it is task content
   task_lexicons: [cinderella-story, animal-fluency, random-item-generation, random-item-generation-v2]    # families whose packaged lexicon, and item category's, is task content
 
 # The declared task ALWAYS adds a route to its own branch. That route needs no key here: the task is

@@ -285,3 +285,22 @@ class TestARecallSubtractsItsStory:
         said = "grandfather is ninetythree".split()
         residue = task_residue(said, "story-recall", self.STORY, rule)
         assert residue.method == FREE and len(residue.positions) == len(said)
+
+
+def test_a_cue_family_reads_its_target_word_as_task_content() -> None:
+    """Productive vocabulary: the stimulus "gladiator" (and its plural) is task content; its definition is residue."""
+    import dataclasses
+
+    from senselab.audio.workflows.triage.config import load_triage_config
+    from senselab.audio.workflows.triage.residue import residue_rule, task_residue
+
+    rule = residue_rule(load_triage_config())
+    assert "productive-vocabulary" in rule.cue_families
+    texts = ["a", "gladiator", "is", "a", "roman", "fighter", "gladiators", "fought"]
+    residue = task_residue(texts, "productive-vocabulary", ["gladiator"], rule)
+    kept = {texts[i] for i in residue.positions}
+    assert "gladiator" not in kept and "gladiators" not in kept and "fighter" in kept
+    plain = task_residue(
+        texts, "productive-vocabulary", ["gladiator"], dataclasses.replace(rule, cue_families=frozenset())
+    )
+    assert "gladiator" in {texts[i] for i in plain.positions}

@@ -494,7 +494,7 @@ def test_the_prompt_counts_an_expected_voice_as_another_voice() -> None:
     assert "an expected voice is still another voice" in prompt
     assert '"Is that enough?"' in prompt and "is still one speaker" in prompt
     assert "You were given the text" in prompt and "repeat after them" in prompt
-    assert redaction_review.PROMPT_VERSION == 5
+    assert redaction_review.PROMPT_VERSION >= 5
 
 
 def test_the_prompt_lists_only_specific_diagnoses() -> None:
@@ -568,3 +568,50 @@ def test_the_prompt_asks_whether_the_instructions_are_spoken() -> None:
     assert "INSTRUCTIONS_SPOKEN: a JSON array" in prompt
     assert "paraphrase" in prompt and "have you familiarized" in prompt
     assert "stimulus" in prompt and "is never instructions" in prompt
+
+
+def test_quotes_match_across_case_punctuation_and_a_transcription_spelling() -> None:
+    """A quote that differs from the ORIGINAL only in case, punctuation, apostrophes or one ASR spelling places."""
+    from senselab.text.tasks.pii_detection.redaction_review import quote_occurs
+
+    original = "Well, I've been to Sandals in Grenada for a week -- last two years, maybe."
+    assert quote_occurs("sandals in grenada", original)
+    assert quote_occurs("Ive been", original)
+    assert quote_occurs("last two years", original)
+    assert quote_occurs("Grenadda", original)
+    assert not quote_occurs("Sandals in Jamaica", original)
+    assert not quote_occurs("two years ago", original)
+
+
+def test_a_venue_the_reasoning_names_without_a_proposal_entry_is_fed_back() -> None:
+    """Owner card sub-005bd146: the reviewer called "Sandals" a hotel chain and proposed nothing for it."""
+    from senselab.text.tasks.pii_detection.redaction_review import ReviewProposal, ReviewResult, answer_problem
+
+    original = "we spent a week at Sandals in Grenada"
+    reasoning = 'The speaker mentions "Sandals", a hotel chain (Organization), and "Grenada", a country.'
+    bare = ReviewResult(available=True, redaction="complete", original="clean", reasoning=reasoning)
+    assert "names" in (answer_problem(bare, original, None) or "")
+    with_entry = ReviewResult(
+        available=True,
+        redaction="complete",
+        original="clean",
+        reasoning=reasoning,
+        proposal=[ReviewProposal(text="Sandals", action="redact", category="ORGANIZATION", why="a resort")],
+    )
+    assert answer_problem(with_entry, original, None) is None
+    ordinary = ReviewResult(
+        available=True,
+        redaction="complete",
+        original="clean",
+        reasoning='The word "summer" is a season; no school or employer is named.',
+    )
+    assert answer_problem(ordinary, "i love the summer", None) is None
+
+
+def test_the_prompt_states_the_time_expression_rule_and_the_cue_word_rule() -> None:
+    """v6: durations and relative times are not date elements; a definition of the cue word is task content."""
+    from senselab.text.tasks.pii_detection import redaction_review as r
+
+    assert r.PROMPT_VERSION == 6
+    assert "the last two years" in r._PROMPT and "this morning" in r._PROMPT and "Christmas 2019" in r._PROMPT
+    assert "gladiator" in r._PROMPT and "hotel" in r._PROMPT

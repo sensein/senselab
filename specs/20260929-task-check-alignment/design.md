@@ -408,3 +408,35 @@ back for another round, and a quote absent from the ORIGINAL is rejected (`answe
 flags a non-empty part under `INSTRUCTIONS_SPOKEN`, naming the quotes; the release is unchanged
 (`verdict.llm_instructions_spoken_flags: true`). Parquet schema 13 adds `llm_instructions_spoken_n`.
 Readings before v5 carry no part and never flag; the scheduled full re-review on v5 applies it.
+
+## L. Prompt v6: time expressions, named identifiers, the vocabulary cue, tolerant quotes (2026-10-01)
+
+Measured on r9 before the change (`/orcd/scratch/bcs/002/satra/tmp_consist/`): decoding is greedy and
+ten v4 recordings re-read twice gave ten identical readings, so the variation is not sampling. It is
+missing rules: 122 of 1,089 DATE_TIME phrases and 68 of 1,170 LOCATION phrases were released in some
+recordings and kept in others ("today" 87/47, "last two weeks" 147/11, Florida 107/5), about equally
+under v3 and v4.
+
+1. **Time expressions.** Point 3 of the prompt now states that only a calendar-anchored date element
+   is a Safe Harbor date -- a day of the month, a month, a specific date, a holiday tied to a year; a
+   bare year may be released -- and that a duration or relative reference ("the last two years", "a
+   week", "this morning", "today", "days") is not one and is released.
+2. **A named identifier must be proposed.** Owner card sub-005bd146: the reviewer's reasoning called
+   "Sandals" a hotel chain and proposed nothing, so it was released unmasked. The prompt now requires
+   a PROPOSAL entry for anything finer than a state the reasoning names, and `answer_problem` feeds
+   back a quoted, capitalised name that the reasoning calls a venue, resort, hotel, clinic, employer,
+   school, church or street (the cue within 30 characters of the quote) with no entry quoting it.
+3. **The vocabulary cue.** Productive vocabulary declares its target word as `stimulus_text`.
+   `stimulus.residue.cue_families: [productive-vocabulary]` makes a reading of that word task content
+   in the residue (it lands on replay: the residue is SPEECH's), the prompt says a definition of the
+   cue identifies nobody, and the fold releases a lower-case word inside a name-kind finding whose
+   capitalised word the reviewer released ("Gladiator fighter": `with_head` in the ledger), unless a
+   redact entry quotes it.
+4. **Tolerant quotes.** The check that every quote occurs in the ORIGINAL compares words with case,
+   punctuation, apostrophes, hyphens and spacing folded, and lets a word of five letters or more
+   differ by one transcription spelling (similarity 0.8). Measured on the r9 stores: of 3,205 v4
+   rounds, 15 carried this problem and the tolerant check accepts 3 of them. The earlier estimate that
+   most v4 second rounds were quote failures came from a 20-round sample and does not hold; v4's
+   second rounds are mostly the mask-and-reread loop.
+
+`PROMPT_VERSION = 6`.

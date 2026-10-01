@@ -29,6 +29,7 @@ leave weights resident. See ``specs/20260817-triage-workflow-dag/llm-check-amort
 from __future__ import annotations
 
 import atexit
+import difflib
 import json
 import logging
 import queue
@@ -36,6 +37,7 @@ import re
 import subprocess
 import threading
 import time
+import unicodedata
 from collections import deque
 from dataclasses import dataclass, field
 from functools import lru_cache
@@ -70,7 +72,7 @@ _CONDITIONS_HEADING = "CONDITIONS:"
 _OTHER_SPEAKERS_HEADING = "OTHER_SPEAKERS:"
 _INSTRUCTIONS_SPOKEN_HEADING = "INSTRUCTIONS_SPOKEN:"
 
-PROMPT_VERSION = 5
+PROMPT_VERSION = 6
 """The prompt and its parse, as one number: it changes whenever either changes what a reading holds."""
 
 REDACTION_STATES = ("complete", "incomplete", "not_applicable")
@@ -139,8 +141,14 @@ _PROMPT = (
     "speaker under that standard.\n"
     "2. Whether the ORIGINAL words carry anything identifying at all, which is a separate "
     "question and the one no automatic detector here has asked.\n"
-    "3. Whether the redaction removed more than the standard requires. A time expression with no "
-    "calendar anchor -- a duration, a bare time-of-day noun, a relative reference -- usually "
+    "3. Whether the redaction removed more than the standard requires. Only a calendar-anchored date "
+    'element is a Safe Harbor date: a day of the month, a month, a specific date ("March 3rd", '
+    '"the 14th"), or a holiday tied to a year ("Christmas 2019"); a bare year may be released. A '
+    'duration or a relative reference is not a date element and identifies nobody: "the last two '
+    'years", "the past two weeks", "a week", "a couple of days", "this morning", '
+    '"today", "yesterday", "days", "summer", "at night" -- release these. A word or '
+    "phrase that is the task's own stimulus, or a definition or description of it (in a vocabulary "
+    'task, saying what a "gladiator" is: "a Roman fighter"), is not about the speaker and '
     "identifies nobody.\n"
     "4. Whether more than one person is speaking in this recording, judged from the words alone "
     "(turn-taking, instructions given, questions asked and answered) and weighed against the task's "
@@ -205,7 +213,9 @@ _PROMPT = (
     "every word or phrase concerned, one entry each, quoted exactly as it appears in the ORIGINAL: "
     "release for removed words that identify nobody, redact for words that must go. A judgment of that "
     "kind with an empty PROPOSAL is not an answer, and a place released without a reason is not one "
-    "either.\n\n"
+    "either. If your REASONING names a venue, resort, hotel, clinic, hospital, employer, company, "
+    "school, church or street -- anything finer than a state -- the PROPOSAL must carry an entry quoting "
+    "it: redact, or release with the reason the standard lets it through.\n\n"
 )
 
 
@@ -696,6 +706,78 @@ def _normalised(text: str) -> str:
     return _SPACES.sub(" ", text.replace("\u2019", "'")).strip().casefold()
 
 
+_TOKEN = re.compile(r"[a-z0-9]+")
+
+
+def _quote_tokens(text: str) -> list[str]:
+    """A quote's words as compared: lower-cased, apostrophes dropped, other punctuation and hyphens as breaks."""
+    folded = unicodedata.normalize("NFKD", _normalised(text)).encode("ascii", "ignore").decode()
+    return _TOKEN.findall(folded.replace("'", ""))
+
+
+def _token_close(a: str, b: str) -> bool:
+    if a == b:
+        return True
+    if min(len(a), len(b)) < 5:
+        return False
+    return difflib.SequenceMatcher(None, a, b).ratio() >= 0.8
+
+
+def quote_occurs(quote: str, original: str) -> bool:
+    """Whether a quote occurs in the ORIGINAL, allowing case, punctuation, apostrophe, hyphen and spacing.
+
+    A word of five letters or more may also differ by a transcription spelling (similarity 0.8).
+
+    Args:
+        quote: The quoted words.
+        original: The ORIGINAL text.
+
+    Returns:
+        True where the quote's words occur, in order and contiguously, in the ORIGINAL's words.
+    """
+    wanted = _quote_tokens(quote)
+    if not wanted:
+        return True
+    words = _quote_tokens(original)
+    span = len(wanted)
+    return any(
+        all(_token_close(word, want) for word, want in zip(words[start : start + span], wanted))
+        for start in range(len(words) - span + 1)
+    )
+
+
+_IDENTIFIER_CUE = re.compile(
+    r"\b(venue|resort|hotel|hotel chain|motel|clinic|hospital|employer|company|workplace|school|"
+    r"university|college|church|street|avenue|road|restaurant)\b",
+    re.IGNORECASE,
+)
+_QUOTED = re.compile(r"[\"\u201c]([^\"\u201d]{2,60})[\"\u201d]")
+
+
+def _named_unproposed(reasoning: str, proposal: Sequence[ReviewProposal], original: str) -> list[str]:
+    """Quoted names the reasoning calls a venue, employer, school or street with no PROPOSAL entry quoting them."""
+    proposed = [_quote_tokens(entry.text) for entry in proposal]
+    missing: list[str] = []
+    for sentence in re.split(r"(?<=[.;])\s+", reasoning):
+        for match in _QUOTED.finditer(sentence):
+            following = sentence[match.end() : match.end() + 30].split('"')[0].split("\u201c")[0]
+            preceding = sentence[max(0, match.start() - 30) : match.start()].split('"')[-1]
+            if not (_IDENTIFIER_CUE.search(following) or _IDENTIFIER_CUE.search(preceding)):
+                continue
+            name = match.group(1).strip()
+            tokens = _quote_tokens(name)
+            if not tokens or not any(ch.isupper() for ch in name[:1]) or not quote_occurs(name, original):
+                continue
+            covered = any(
+                len(entry) >= len(tokens)
+                and any(entry[i : i + len(tokens)] == tokens for i in range(len(entry) - len(tokens) + 1))
+                for entry in proposed
+            )
+            if not covered and name not in missing:
+                missing.append(name)
+    return missing
+
+
 def answer_problem(result: "ReviewResult", original: str, redacted: str | None) -> str | None:
     """What makes an answer unusable under the prompt's own rule, as feedback for another round.
 
@@ -755,16 +837,22 @@ def answer_problem(result: "ReviewResult", original: str, redacted: str | None) 
             f"these place releases give no reason: {quoted}; say why Safe Harbor lets each through here, "
             "given the rest of the transcript, or keep it masked"
         )
-    haystack = _normalised(original)
     quotes = (
         [entry.text for entry in result.proposal]
         + [entry.text for entry in result.other_speakers]
         + list(result.instructions_spoken)
     )
-    missing = [text for text in quotes if _normalised(text) not in haystack]
+    missing = [text for text in quotes if not quote_occurs(text, original)]
     if missing:
         quoted = ", ".join(json.dumps(text) for text in missing)
         return f"these quotes do not occur in the ORIGINAL: {quoted}; quote the exact words from the ORIGINAL"
+    unproposed = _named_unproposed(result.reasoning, result.proposal, original)
+    if unproposed:
+        quoted = ", ".join(json.dumps(text) for text in unproposed)
+        return (
+            f"your REASONING names {quoted} as a venue, employer, school or street but the PROPOSAL has no "
+            "entry quoting it; add a redact entry, or a release entry saying why the standard lets it through"
+        )
     return None
 
 

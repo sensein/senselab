@@ -705,6 +705,38 @@ class TestTheWordLevelMaskRule:
         _annotate(store, [])
         assert [mask.outcome for mask in _plan(store).masks] == [MASK_UNCHANGED, MASK_UNCHANGED]
 
+    def test_a_released_name_takes_its_lower_case_words_with_it(
+        self, store: ProvStore, redact_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Productive vocabulary: "Gladiator fighter" tagged PERSON with "Gladiator" released frees "fighter"."""
+        span = (_word_extent(1)[0], _word_extent(2)[1])
+        _seed_redact_store(
+            store, tmp_path, words=["a", "Gladiator", "fighter", "from", "rome"], findings=[("PERSON", span)]
+        )
+        _stub_pii(monkeypatch, findings=[])
+        result = redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
+        assert result.verdict.outcome is Outcome.PASS
+        _annotate(store, [_release_entry("Gladiator", "PERSON")])
+        plan = _plan(store)
+        words = {word.text: word for mask in plan.masks for word in mask.words}
+        assert words["Gladiator"].state == UNMASKED_BY_REVIEWER
+        assert words["fighter"].state == UNMASKED_BY_REVIEWER and words["fighter"].with_head
+        assert not words["Gladiator"].with_head
+
+    def test_a_lower_case_word_a_redact_entry_quotes_stays_with_its_mask(
+        self, store: ProvStore, redact_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The head release never frees a word the same reading asks to hide."""
+        span = (_word_extent(1)[0], _word_extent(2)[1])
+        _seed_redact_store(
+            store, tmp_path, words=["a", "Gladiator", "fighter", "from", "rome"], findings=[("PERSON", span)]
+        )
+        _stub_pii(monkeypatch, findings=[])
+        redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
+        _annotate(store, [_release_entry("Gladiator", "PERSON"), _redact_entry("fighter", "PERSON")])
+        words = {word.text: word for mask in _plan(store).masks for word in mask.words}
+        assert not words["fighter"].with_head and words["fighter"].state != UNMASKED_BY_REVIEWER
+
     def test_a_named_word_is_unmasked_and_the_copy_keeps_the_rest(
         self, store: ProvStore, redact_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

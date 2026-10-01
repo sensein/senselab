@@ -1151,6 +1151,9 @@ class MaskWord:
         kind_cut: Whether the name kind cut released it: at an edge of a mask whose findings are all
             of :func:`name_families` and which holds a proper noun, a word written all lower-case that
             the transcript also uses outside every finding.
+        with_head: Whether it was released with its name's head: a word written all lower-case inside
+            a finding of :func:`name_families` whose capitalised word a reviewer ``release`` entry
+            named, and which no ``redact`` entry quotes.
     """
 
     word_id: str
@@ -1163,6 +1166,7 @@ class MaskWord:
     proper: bool = False
     propagated: bool = False
     kind_cut: bool = False
+    with_head: bool = False
 
 
 @dataclass(frozen=True)
@@ -1389,6 +1393,7 @@ class MaskPlan:
                             "proper": word.proper,
                             "propagated": word.propagated,
                             "kind_cut": word.kind_cut,
+                            "with_head": word.with_head,
                         }
                         for word in mask.words
                     ],
@@ -1812,6 +1817,25 @@ def mask_plan(
     applied = reviewer_applies and bool(named)
     released = (named | propagated) if applied else set()
     name_kinds = name_families()
+    # A name the reviewer released takes its lower-case words with it: "Gladiator fighter" tagged
+    # PERSON, with "Gladiator" released, does not leave "fighter" masked.
+    with_head: set[str] = set()
+    if applied:
+        for member_ids, members in groups.items():
+            if not all(category_family(finding.category) in name_kinds for finding in members):
+                continue
+            group = [by_id[word_id] for word_id in member_ids if word_id in by_id]
+            heads = [word for word in group if text_of(word)[:1].isupper() and word.id in released]
+            if not heads:
+                continue
+            with_head.update(
+                word.id
+                for word in group
+                if word.id not in released
+                and text_of(word) == text_of(word).lower()
+                and _match_token(text_of(word)) not in blocked_tokens
+            )
+        released |= with_head
     covered_ids = {word_id for member_ids in groups for word_id in member_ids}
     ordinary = {
         _match_token(str(word.attributes.get("text") or ""))
@@ -1955,6 +1979,7 @@ def mask_plan(
                 proper=proper(word),
                 propagated=word.id in propagated,
                 kind_cut=word.id in kind_cut,
+                with_head=word.id in with_head,
             )
             for word in group
         )
