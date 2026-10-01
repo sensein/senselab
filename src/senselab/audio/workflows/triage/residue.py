@@ -159,12 +159,16 @@ class ResidueRule:
             repetition, restart, split or variant of.
         train_repetitions_min: How many times one token must recur in a syllable task's transcript
             to be read as the train whatever its spelling or script.
+        cue_families: Free-response families whose declared stimulus is a cue the participant is
+            asked to talk about -- productive vocabulary's target word -- so a word reading as the
+            cue is task content.
     """
 
     near: NearMatch
     variant_similarity_min: float
     insertion_window: int
     train_repetitions_min: int
+    cue_families: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -204,6 +208,7 @@ def residue_rule(config: "TriageConfig") -> ResidueRule:
         variant_similarity_min=float(config.require(f"{_SECTION}.variant_similarity_min")),
         insertion_window=int(config.require(f"{_SECTION}.insertion_window")),
         train_repetitions_min=int(config.require(f"{_SECTION}.train_repetitions_min")),
+        cue_families=frozenset(str(family) for family in (config.get(f"{_SECTION}.cue_families") or ())),
     )
 
 
@@ -554,6 +559,16 @@ def task_residue(
         expected = _declared_sequence(task_family, stimulus)
         flagged = _aligned_residue(keys, expected, rule) if expected else set(range(len(keys)))
         task = {index for index in range(len(keys)) if index not in flagged or index in in_vocabulary}
+    if str(task_family) in rule.cue_families and declares:
+        cues = [_key(token) for token in stimulus if _key(token)]
+        task |= {
+            index
+            for index, position in enumerate(lexical)
+            if any(
+                rule.near.matches(_key(texts[position]), cue) or _base(_key(texts[position])) == _base(cue)
+                for cue in cues
+            )
+        }
     if lexicon is not None and lexicon.phrases:
         task |= lexicon.positions([texts[position] for position in lexical])
     kept = tuple(position for index, position in enumerate(lexical) if index not in task)
