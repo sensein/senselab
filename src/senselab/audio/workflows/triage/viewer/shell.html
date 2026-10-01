@@ -21,7 +21,7 @@ try {
 
 <div id="landing">
   <h1>recording vectors</h1>
-  <p>Two views over <code>recording_vectors.parquet</code>, schema_version 13: a parallel-coordinate
+  <p>Two views over <code>recording_vectors.parquet</code>, schema_version 14: a parallel-coordinate
   view of the corpus where each line is one recording, and a recording view drawn from that
   recording's compact vectors.</p>
   <div class="caution">
@@ -46,6 +46,7 @@ try {
     <h1>recording vectors</h1>
     <span id="file-info"></span>
     <button id="dict-open" class="dict-open" type="button" disabled>data dictionary</button>
+    <button id="eval-open" class="dict-open" type="button" disabled>evaluate triage</button>
     <span class="grow"></span>
     <button id="theme-toggle" type="button">theme: system</button>
     <span id="status-2" class="status"></span>
@@ -61,6 +62,17 @@ try {
     <button id="clear-brushes">clear brushes</button>
     <button id="reset-axes">reset axes</button>
     <span id="legend"></span>
+  </div>
+
+  <div id="eval-panel" hidden>
+    <div class="dict-bar">
+      <h2>evaluate triage</h2>
+      <span class="grow"></span>
+      <button id="eval-close" class="icon-btn" type="button" title="close">✕</button>
+    </div>
+    <p class="dict-note">Counts over every recording in the file. A count selects its recordings as a
+    facet; <b>j</b>/<b>k</b> then step through them.</p>
+    <div id="eval-list"></div>
   </div>
 
   <div id="dict-panel" hidden>
@@ -179,6 +191,9 @@ try {
 </script>
 <script>
 /*@INLINE:facets.js@*/
+</script>
+<script>
+/*@INLINE:evaluation.js@*/
 </script>
 <script>
 /*@INLINE:corpus.js@*/

@@ -466,6 +466,26 @@ table.measures tr.absent-row { background: var(--absent-row); }
 }
 .facet-note b { color: var(--ink-2); }
 
+/* the evaluate-triage panel */
+#eval-panel {
+  border-bottom: 1px solid var(--line); background: var(--panel); padding: 10px 16px 14px;
+  max-height: 55vh; overflow: auto;
+}
+#eval-list { display: flex; flex-wrap: wrap; gap: 18px; }
+.eval-section { min-width: 240px; }
+.eval-section h3 { margin: 0 0 4px; font-size: 12px; color: var(--ink-2); font-weight: 600; }
+.eval-section table { border-collapse: collapse; font-size: 12px; }
+.eval-section td, .eval-section th { padding: 2px 8px 2px 0; text-align: left; }
+.eval-section th { color: var(--ink-3); font-weight: 500; }
+.eval-count {
+  background: transparent; color: var(--accent); border: 1px solid var(--line); border-radius: 3px;
+  padding: 0 6px; cursor: pointer; font: inherit; min-width: 3em; text-align: right;
+}
+.eval-count:hover:not(:disabled) { border-color: var(--accent); }
+.eval-count:disabled { color: var(--ink-3); cursor: default; }
+.eval-count.on { background: var(--accent); color: var(--panel); }
+.eval-seconds { color: var(--ink-3); font-size: 11px; }
+
 /* the data dictionary */
 .dict-open {
   background: var(--panel-2); color: var(--accent); border: 1px solid var(--accent);

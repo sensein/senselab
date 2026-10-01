@@ -396,7 +396,47 @@ var SchemaAxes = (function () {
     }),
   ];
 
-  var CATALOGUE = IDENTITY.concat(GATE_SUMMARY, SPEAKER_AND_LEVEL, gateColumns(), measurementColumns());
+  var EVALUATION = [
+    column({ name: 'task_extent_n', kind: 'count', group: 'evaluate: extent', nullMeans: 'never null; 0 means no task extent' }),
+    column({ name: 'task_extent_start_s', kind: 'numeric', group: 'evaluate: extent', unit: 's', nullMeans: 'no task extent' }),
+    column({ name: 'task_extent_end_s', kind: 'numeric', group: 'evaluate: extent', unit: 's', nullMeans: 'no task extent' }),
+    column({ name: 'lead_s', kind: 'numeric', group: 'evaluate: extent', unit: 's', nullMeans: 'no task extent' }),
+    column({ name: 'tail_s', kind: 'numeric', group: 'evaluate: extent', unit: 's', nullMeans: 'no task extent' }),
+    column({ name: 'trim_s', kind: 'numeric', group: 'evaluate: extent', unit: 's', nullMeans: 'no task extent' }),
+    column({ name: 'trim_fraction', kind: 'numeric', group: 'evaluate: extent', nullMeans: 'no task extent' }),
+    column({ name: 'trimmable', kind: 'categorical', group: 'evaluate: extent', nullMeans: 'no task extent' }),
+    column({ name: 'clip_spans_n', kind: 'count', group: 'evaluate: clipping', nullMeans: 'never null' }),
+    column({ name: 'clip_s', kind: 'numeric', group: 'evaluate: clipping', unit: 's', nullMeans: 'never null' }),
+    column({ name: 'clip_level_max', kind: 'numeric', group: 'evaluate: clipping', nullMeans: 'no clip_amplitude measurement' }),
+    column({ name: 'clip_unclipped_peak', kind: 'numeric', group: 'evaluate: clipping', nullMeans: 'no clip_amplitude measurement' }),
+    column({ name: 'clip_unclipped_louder_n', kind: 'count', group: 'evaluate: clipping', nullMeans: 'no clip_amplitude measurement' }),
+    column({ name: 'clip_withdrawn_n', kind: 'count', group: 'evaluate: clipping', nullMeans: 'never null' }),
+    column({ name: 'clip_contested_n', kind: 'count', group: 'evaluate: clipping', nullMeans: 'never null' }),
+    column({ name: 'clip_consistent', kind: 'categorical', group: 'evaluate: clipping', nullMeans: 'no clip span kept' }),
+    column({ name: 'clip_state', kind: 'categorical', group: 'evaluate: clipping', nullMeans: 'never null' }),
+    column({ name: 'raw_clipped_runs', kind: 'count', group: 'evaluate: clipping', nullMeans: 'no raw disruptions reading' }),
+    column({ name: 'raw_clipped_s', kind: 'numeric', group: 'evaluate: clipping', unit: 's', nullMeans: 'no raw disruptions reading' }),
+    column({ name: 'raw_dropout_s', kind: 'numeric', group: 'evaluate: quality', unit: 's', nullMeans: 'no raw disruptions reading' }),
+    column({ name: 'q_plain_floor_dbfs', kind: 'numeric', group: 'evaluate: quality', unit: 'dBFS', nullMeans: 'no plain stream stored' }),
+    column({ name: 'q_plain_snr_db', kind: 'numeric', group: 'evaluate: quality', unit: 'dB', nullMeans: 'no plain stream stored' }),
+    column({ name: 'q_enhanced_floor_dbfs', kind: 'numeric', group: 'evaluate: quality', unit: 'dBFS', nullMeans: 'no enhanced stream stored' }),
+    column({ name: 'q_enhanced_snr_db', kind: 'numeric', group: 'evaluate: quality', unit: 'dB', nullMeans: 'no enhanced stream stored' }),
+    column({ name: 'q_plain_squim_pesq', kind: 'numeric', group: 'evaluate: quality', nullMeans: 'no SQUIM measurement' }),
+    column({ name: 'q_plain_squim_stoi', kind: 'numeric', group: 'evaluate: quality', nullMeans: 'no SQUIM measurement' }),
+    column({ name: 'q_plain_squim_si_sdr', kind: 'numeric', group: 'evaluate: quality', unit: 'dB', nullMeans: 'no SQUIM measurement' }),
+    column({ name: 'q_raw_issues', kind: 'set', group: 'evaluate: quality', nullMeans: 'empty means no raw issue' }),
+    column({ name: 'q_resolved_by_enhanced', kind: 'set', group: 'evaluate: quality', nullMeans: 'empty means nothing resolved' }),
+    column({ name: 'q_unresolved', kind: 'set', group: 'evaluate: quality', nullMeans: 'empty means nothing still flagged' }),
+    column({ name: 'ms_diarization_speakers_max', kind: 'count', group: 'evaluate: speakers', nullMeans: 'no extent_speaker_count measurement' }),
+    column({ name: 'ms_diarization_secondary_s', kind: 'numeric', group: 'evaluate: speakers', unit: 's', nullMeans: 'no extent_speaker_count measurement' }),
+    column({ name: 'ms_reviewer_other_n', kind: 'count', group: 'evaluate: speakers', nullMeans: 'no reviewer reading' }),
+    column({ name: 'ms_reviewer_expected_n', kind: 'count', group: 'evaluate: speakers', nullMeans: 'no reviewer reading' }),
+    column({ name: 'ms_reviewer_unexpected_n', kind: 'count', group: 'evaluate: speakers', nullMeans: 'no reviewer reading' }),
+    column({ name: 'ms_signals', kind: 'set', group: 'evaluate: speakers', nullMeans: 'neither the diarizer nor the reviewer read this recording; empty means no signal fired' }),
+    column({ name: 'ms_agreement', kind: 'categorical', group: 'evaluate: speakers', nullMeans: 'neither the diarizer nor the reviewer read this recording' }),
+  ];
+
+  var CATALOGUE = IDENTITY.concat(GATE_SUMMARY, SPEAKER_AND_LEVEL, EVALUATION, gateColumns(), measurementColumns());
   var BY_NAME = {};
   CATALOGUE.forEach(function (c) { BY_NAME[c.name] = c; });
 
