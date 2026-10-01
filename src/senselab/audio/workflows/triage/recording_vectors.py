@@ -31,7 +31,7 @@ import yaml  # type: ignore[import-untyped]
 from senselab.audio.workflows.triage.cohort import CONDITION_KINDS
 from senselab.audio.workflows.triage.vocabulary import UNPLACED_OPEN, UNPLACED_UNREAD
 
-SCHEMA_VERSION = 14
+SCHEMA_VERSION = 15
 """Bumped whenever a column is added, removed or retyped, a binary layout changes, or a categorical
 column's controlled vocabulary changes."""
 
@@ -1023,6 +1023,38 @@ def _extent_columns(view: StoreView, duration_s: float | None) -> dict[str, Any]
     return out
 
 
+TASK_AUDIO_MEASUREMENT = "task_audio"
+TASK_AUDIO_STREAMS = ("plain", "enhanced", "redacted")
+
+
+def _task_audio_columns(view: StoreView) -> dict[str, Any]:
+    """The task-extent cut: its bounds, its duration, and which streams were cut to it.
+
+    Args:
+        view: The store.
+
+    Returns:
+        The live ``task_audio`` measurement's start, end and duration, and the names of the live
+        ``task_*`` streams. All null where the cut has not run or found no task extent.
+    """
+    out: dict[str, Any] = dict.fromkeys(
+        ("task_audio_start_s", "task_audio_end_s", "task_audio_duration_s", "task_audio_cuts")
+    )
+    measurement = view.last("measurement", name=TASK_AUDIO_MEASUREMENT)
+    if measurement is None:
+        return out
+    names = {str(e.attributes.get("name")) for e in view.live("stream")}
+    out.update(
+        {
+            "task_audio_start_s": measurement.attributes.get("start_s"),
+            "task_audio_end_s": measurement.attributes.get("end_s"),
+            "task_audio_duration_s": measurement.attributes.get("duration_s"),
+            "task_audio_cuts": [name for name in TASK_AUDIO_STREAMS if f"task_{name}" in names],
+        }
+    )
+    return out
+
+
 def _clip_columns(view: StoreView) -> dict[str, Any]:
     """What the clip detector kept, what its re-assessment withdrew, and what QUALITY contested.
 
@@ -1301,6 +1333,7 @@ def extract(run_root: Path, root: Path, anomalies: dict[str, int] | None = None)
     readings = _measurement_readings(view)
     row.update(_speaker_columns(view, readings))
     row.update(_extent_columns(view, duration_s))
+    row.update(_task_audio_columns(view))
     clip = _clip_columns(view)
     row.update(clip)
     row.update(_quality_columns(run_dir, view, clip))
@@ -1545,6 +1578,10 @@ def _fields() -> list[pa.Field]:
         pa.field("trim_s", pa.float64()),
         pa.field("trim_fraction", pa.float64()),
         pa.field("trimmable", pa.bool_()),
+        pa.field("task_audio_start_s", pa.float64()),
+        pa.field("task_audio_end_s", pa.float64()),
+        pa.field("task_audio_duration_s", pa.float64()),
+        pa.field("task_audio_cuts", pa.list_(pa.string())),
         pa.field("clip_spans_n", pa.int32()),
         pa.field("clip_s", pa.float64()),
         pa.field("clip_level_max", pa.float64()),

@@ -526,6 +526,13 @@ produces them — no re-fold, no replay.
 | raw vs enhanced | `q_plain_floor_dbfs`, `q_plain_snr_db`, `q_enhanced_floor_dbfs`, `q_enhanced_snr_db`, `q_plain_squim_pesq`, `q_plain_squim_stoi`, `q_plain_squim_si_sdr`, `q_raw_issues`, `q_resolved_by_enhanced`, `q_unresolved` (list<string> ⊂ {`noise_floor`, `low_snr`, `clipping`, `dropout`}) | the plain stream is absent or does not decode |
 | other speakers in the task extent | `ms_diarization_speakers_max`, `ms_diarization_secondary_s`, `ms_reviewer_other_n`, `ms_reviewer_expected_n`, `ms_reviewer_unexpected_n`, `ms_signals` (list<string> ⊂ {`diarization`, `separation`, `reviewer`}), `ms_agreement` | neither an `extent_speaker_count` nor a reviewer reading exists |
 
+**Schema 15 adds the task-extent cut** to the task-extent group: `task_audio_start_s`,
+`task_audio_end_s`, `task_audio_duration_s` and `task_audio_cuts` (list<string> ⊂ {`plain`,
+`enhanced`, `redacted`}), read off the live `task_audio` measurement and the live `task_*` streams
+`scripts/extend_task_audio.py` writes. Null until that driver has run over the recording, or where it
+found no task extent. Unlike the rest of the group they are not derivable at parquet build alone:
+they report a cut, so the cut must exist. `specs/20261002-task-extent-audio/design.md`.
+
 **Clip re-assessment is PREPROCESS's and QUALITY's, not this file's.** PREPROCESS withdraws a clip
 candidate when an unclipped sample elsewhere exceeds its level (`clip_withdrawn_n`); QUALITY
 contests a kept span the same test still contradicts (`clip_contested_n`). `kept_inconsistent`
