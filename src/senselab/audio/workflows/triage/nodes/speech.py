@@ -43,6 +43,7 @@ from senselab.audio.workflows.triage.finding_placement import locate, match_key
 from senselab.audio.workflows.triage.nodes.branches import (
     BRANCH_FAMILY,
     DETECT_GROUP,
+    NO_TASK_ITEMS,
     PARAM_SECTION,
     PROPOSERS,
     SPEECH_EXPECTATIONS,
@@ -81,6 +82,7 @@ from senselab.audio.workflows.triage.nodes.branches import (
     propose_span,
     propose_spans,
     stream_extent,
+    task_extent_absent,
     touches_edge,
     unviable,
     unviable_findings,
@@ -1505,14 +1507,17 @@ def _speech_item_list(
     category = item_category(task_family, hint)
     if expectation.repetition_from_category:
         if category is None:
-            return Result([], [unviable("repetition_rule", "the instructions name no category")])
+            placed = _item_list_extent(store, repetition_allowed=None)
+            return Result(
+                placed.components,
+                [unviable("repetition_rule", "the instructions name no category"), *placed.deviations],
+            )
         repetition_allowed = category in REPETITION_ALLOWED_CATEGORIES
     else:
         repetition_allowed = bool(expectation.repetition_allowed)
     members = category_members(category, [word_text(word) for word in lexical_words(store)])
 
     items = lexical_words(store)
-    consensus_id = _consensus_id(store)
     components: list[Proposal] = []
     findings: list[Finding] = []
     first_seen: dict[str, float] = {}
@@ -1525,18 +1530,9 @@ def _speech_item_list(
             )
         first_seen.setdefault(key, start)
 
-    extent = hull([word_extent(word) for word in items])
-    if extent is not None and extent[1] > extent[0] and consensus_id is not None:
-        components.append(
-            MINT(
-                TASK_EXTENT_ROLE,
-                extent,
-                consensus_id,
-                *(word.id for word in items),
-                items_n=len(items),
-                repetition_allowed=repetition_allowed,
-            )
-        )
+    placed = _item_list_extent(store, repetition_allowed=repetition_allowed)
+    components.extend(placed.components)
+    findings.extend(placed.deviations)
     findings.append(count("items", len(items), None, *(word.id for word in items)))
     findings.append(count("repetition_allowed", repetition_allowed, None))
     findings.append(count("item_category", category, None))
@@ -1548,6 +1544,32 @@ def _speech_item_list(
     findings.extend(_off_task(components, store, points))
     findings.extend(points.record())
     return Result(components, findings)
+
+
+def _item_list_extent(store: ProvStore, *, repetition_allowed: bool | None) -> Result:
+    """The item list's ``task_extent`` over its lexical words, or the finding that says why none.
+
+    Args:
+        store: The provenance store.
+        repetition_allowed: The rule the category gives, or None where no category was read.
+
+    Returns:
+        One ``task_extent`` proposal, or one :data:`NO_TASK_ITEMS` finding.
+    """
+    items = lexical_words(store)
+    consensus_id = _consensus_id(store)
+    extent = hull([word_extent(word) for word in items])
+    if extent is None or extent[1] <= extent[0] or consensus_id is None:
+        return Result([], [task_extent_absent(NO_TASK_ITEMS, *([] if consensus_id is None else [consensus_id]))])
+    proposal = MINT(
+        TASK_EXTENT_ROLE,
+        extent,
+        consensus_id,
+        *(word.id for word in items),
+        items_n=len(items),
+        repetition_allowed=repetition_allowed,
+    )
+    return Result([proposal], [])
 
 
 def align_speech(

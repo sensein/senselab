@@ -18,7 +18,9 @@ from senselab.audio.data_structures import AudioHints, ExpectedSpeech
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.nodes.branches import (
     DDK_MEDIANS,
+    NO_TASK_ITEMS,
     SPEECH_EXPECTATIONS,
+    TASK_EXTENT_ABSENT,
     UNDETERMINED,
     UNMEASURED_POINTS,
     CountUnit,
@@ -668,7 +670,27 @@ class TestTheItemListAndTheCategoryItsRuleDependsOn:
         result = align_speech("random-item-generation", store, None, branch_params(_config(tmp_path)))
         assert _gated(result, "random-item-generation", _config(tmp_path)) == UNDETERMINED
         assert _of_kind(result, "measure", "repetition_rule")
+        assert _of_kind(result, "deviation", "repeated_item") == []
+        assert _roles(result) == ["task_extent"]
+
+    def test_an_unreadable_category_still_places_the_task_extent(self, tmp_path: Path) -> None:
+        """The repetition rule is unknown; where the items were said is not."""
+        store = self._listed("random-item-generation", ["seven", "eight", "nine"])
+        result = align_speech("random-item-generation", store, None, branch_params(_config(tmp_path)))
+        assert _roles(result) == ["task_extent"]
+        [task] = result.components
+        assert (task.start, task.end) == (1.0, 3.5)
+        assert task.attributes["repetition_allowed"] is None
+        assert _of_kind(result, "measure", TASK_EXTENT_ABSENT) == []
+
+    def test_no_item_is_written_as_an_absence_with_its_reason(self, tmp_path: Path) -> None:
+        """No word to hull, so the record says so rather than staying silent."""
+        store = self._listed("random-item-generation", [])
+        hint = AudioHints(instructions="Category: Animals.")
+        result = align_speech("random-item-generation", store, hint, branch_params(_config(tmp_path)))
         assert result.components == []
+        [absence] = _of_kind(result, "measure", TASK_EXTENT_ABSENT)
+        assert absence.evidence["reason"] == NO_TASK_ITEMS
 
     def test_the_category_that_allows_repetition_reports_none(self, tmp_path: Path) -> None:
         """`Letters` says repetition is allowed, so a repeat is not a departure."""

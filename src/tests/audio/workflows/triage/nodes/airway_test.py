@@ -21,6 +21,7 @@ from senselab.audio.data_structures import AudioHints
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.nodes import routing as routing_module
 from senselab.audio.workflows.triage.nodes.airway import (
+    ACTIVITY_ENVELOPE,
     CARRIER_BOUNDARIES,
     ENVELOPE_BOUNDARIES,
     KIND,
@@ -31,7 +32,9 @@ from senselab.audio.workflows.triage.nodes.airway import (
     detect_airway,
 )
 from senselab.audio.workflows.triage.nodes.branches import (
+    NO_TASK_ACTIVITY,
     NOT_SEPARABLE_BY_THIS_DESIGN,
+    TASK_EXTENT_ABSENT,
     UNDETERMINED,
     Pattern,
     branch_params,
@@ -1603,6 +1606,90 @@ class TestTheOtherFindingsEachModeOwes:
         )
         airway(store, "plain", airway_config, run_dir=tmp_path)
         assert [a for a in _assertions(store, "deviate") if a.attributes.get("measure") == "gap"] == []
+
+
+class TestEveryAlignedRecordingPlacesItsTaskExtent:
+    """An align-mode run writes exactly one ``task_extent`` span or one ``task_extent_absent`` finding."""
+
+    def test_events_place_it_and_no_absence_is_written(
+        self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """The event hull is the extent, unmarked by the fallback."""
+        _five_coughs(store, tmp_path)
+        airway(store, "plain", airway_config, run_dir=tmp_path)
+        [task] = _proposed(store, TASK_EXTENT)
+        assert "extent_from" not in task.attributes
+        assert find_measurements(store, TASK_EXTENT_ABSENT) == []
+
+    def test_no_event_falls_back_to_the_amplitude_spans_hull(
+        self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """Spans that score no cough still bound where the participant was active."""
+        ids = _seed(
+            store,
+            tmp_path,
+            task="respiration-and-cough-cough",
+            spans=[(0.5, 1.5), (2.0, 3.25)],
+            scores=[{"Cough": 0.1}, {"Cough": 0.1}],
+            envelope=bump(500, (100, 260)),
+        )
+        airway(store, "plain", airway_config, run_dir=tmp_path)
+        assert _events(store) == []
+        [task] = _proposed(store, TASK_EXTENT)
+        assert task.extent == (0.5, 3.25)
+        assert task.attributes["extent_from"] == ACTIVITY_ENVELOPE
+        assert task.attributes["carriers_n"] == 2
+        assert set(store.derived_from(task.id)) == set(ids["spans"])
+        assert find_measurements(store, TASK_EXTENT_ABSENT) == []
+
+    def test_an_absent_instrument_still_places_it_over_the_amplitude_spans(
+        self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """The event walk did not run, but PREPROCESS's spans did."""
+        _seed(store, tmp_path, task="respiration-and-cough-cough", spans=[(1.0, 4.0)], scores=[{"Cough": 0.9}])
+        airway(store, "plain", airway_config, run_dir=tmp_path)
+        [task] = _proposed(store, TASK_EXTENT)
+        assert task.extent == (1.0, 4.0)
+        assert task.attributes["extent_from"] == ACTIVITY_ENVELOPE
+        [absence] = find_measurements(store, "event_instrument")
+        assert absence.attributes["absent"] == ["energy_envelope"]
+
+    def test_a_coverage_family_with_no_scoring_window_falls_back_too(
+        self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """The coverage pattern's hull is over breath runs; with none, the activity bounds it."""
+        _seed(
+            store,
+            tmp_path,
+            task="respiration-and-cough-breath",
+            spans=[(2.0, 6.0)],
+            hear_scores=[((0.0, 2.0), {"Breathe": 0.0})],
+            duration_s=10.0,
+        )
+        airway(store, "plain", airway_config, run_dir=tmp_path)
+        [task] = _proposed(store, TASK_EXTENT)
+        assert (task.extent, task.attributes["extent_from"]) == ((2.0, 6.0), ACTIVITY_ENVELOPE)
+
+    def test_no_activity_at_all_is_written_as_an_absence_with_its_reason(
+        self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """No span to hull, so the record says so rather than staying silent."""
+        ids = _seed(store, tmp_path, task="respiration-and-cough-fivebreaths", envelope=bump(500, (250,)))
+        airway(store, "plain", airway_config, run_dir=tmp_path)
+        assert _proposed(store, TASK_EXTENT) == []
+        [absence] = find_measurements(store, TASK_EXTENT_ABSENT)
+        assert absence.attributes["reason"] == NO_TASK_ACTIVITY
+        assert set(store.derived_from(absence.id)) >= {ids["recording"]}
+        assert NO_TASK_ACTIVITY in _report_entity(store, "AIRWAY").attributes["notes"]
+
+    def test_the_out_of_family_mode_places_none(
+        self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """Detect mode evaluates no task, so it has no extent to place and no absence to report."""
+        _seed(store, tmp_path, task="harvard-sentences-list", spans=[(1.0, 4.0)], scores=[{"Cough": 0.1}])
+        airway(store, "plain", airway_config, run_dir=tmp_path)
+        assert _proposed(store, TASK_EXTENT) == []
+        assert find_measurements(store, TASK_EXTENT_ABSENT) == []
 
 
 class TestAnAbsentInstrumentIsAnAbsence:
