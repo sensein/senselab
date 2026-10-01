@@ -107,6 +107,7 @@
     $('landing').hidden = true;
     $('main').hidden = false;
     wireDictionary();
+    wireEvaluation();
     buildCorpus();
   }
 
@@ -738,6 +739,7 @@
     var t1 = performance.now();
     state.facets.setBase(state.view.brushMask);
     renderFacets();
+    renderEvaluation();
     var t2 = performance.now();
     state.facetBusy = false;
     state.facetTiming = { mask_ms: t1 - t0, panel_ms: t2 - t1, open: Object.keys(state.facetOpen).length };
@@ -1029,6 +1031,86 @@
       var pop = $('dict-pop');
       if (pop && !pop.hidden && !pop.contains(e.target)) hideEntry();
     });
+  }
+
+  // ---------------------------------------------------------------- evaluate triage
+
+  var evaluationWired = false;
+
+  /** A count that selects its recordings: it replaces that facet's choice with its one term. */
+  function evaluationCount(it) {
+    var model = state.facets;
+    var on = model && model.chosen(it.facet).length === 1 && model.chosen(it.facet)[0] === it.term;
+    var b = el('button', 'eval-count' + (on ? ' on' : ''), it.count.toLocaleString());
+    b.type = 'button';
+    b.dataset.facet = it.facet;
+    b.dataset.term = it.term;
+    b.disabled = !it.count || !SchemaFacets.BY_NAME[it.facet];
+    b.title = on ? 'drop this selection' : 'select these ' + it.count + ' recordings (' + it.facet + ' = ' + it.term + ')';
+    b.onclick = function () {
+      state.facets.clear(it.facet);
+      if (!on) state.facets.toggle(it.facet, it.term);
+      applyFacets();
+    };
+    return b;
+  }
+
+  function evaluationItemRow(it) {
+    var tr = el('tr');
+    var td = el('td');
+    td.appendChild(evaluationCount(it));
+    tr.appendChild(td);
+    tr.appendChild(el('td', null, it.label));
+    tr.appendChild(el('td', 'eval-seconds', it.seconds == null ? '' : formatScalar(it.seconds) + ' s'));
+    return tr;
+  }
+
+  function renderEvaluation() {
+    var list = $('eval-list');
+    if (!list || $('eval-panel').hidden) return;
+    list.innerHTML = '';
+    TriageEvaluation.summarise(state.rows).forEach(function (section) {
+      var box = el('div', 'eval-section');
+      box.appendChild(el('h3', null, section.title));
+      var table = el('table');
+      if (section.header) {
+        var head = el('tr');
+        section.header.forEach(function (h) { head.appendChild(el('th', null, h)); });
+        table.appendChild(head);
+        section.rows.forEach(function (r) {
+          var tr = el('tr');
+          tr.appendChild(el('td', null, r.check));
+          [r.raw, r.resolved, r.unresolved].forEach(function (it) {
+            var td = el('td');
+            td.appendChild(evaluationCount(it));
+            tr.appendChild(td);
+          });
+          table.appendChild(tr);
+        });
+      } else {
+        section.items.forEach(function (it) { table.appendChild(evaluationItemRow(it)); });
+      }
+      box.appendChild(table);
+      list.appendChild(box);
+    });
+  }
+
+  function wireEvaluation() {
+    var open = $('eval-open');
+    var present = SchemaFacets.BY_NAME.trimmable && state.rows.length && 'trimmable' in state.rows[0];
+    open.disabled = !present;
+    open.title = present
+      ? 'trimmable task extents, raw quality against enhanced, clipping, other speakers'
+      : 'this file carries no evaluation columns; it was written before schema_version 14';
+    $('eval-panel').hidden = true;
+    if (evaluationWired) return;
+    evaluationWired = true;
+    open.onclick = function () {
+      var panel = $('eval-panel');
+      panel.hidden = !panel.hidden;
+      renderEvaluation();
+    };
+    $('eval-close').onclick = function () { $('eval-panel').hidden = true; };
   }
 
   // ---------------------------------------------------------------- theme and keys
