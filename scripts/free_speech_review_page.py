@@ -26,6 +26,8 @@ from multiprocessing import Pool
 from pathlib import Path
 from typing import Any, Iterable, Iterator, Mapping, Sequence
 
+from senselab.audio.workflows.triage.b2ai_hints import read_sidecars
+from senselab.audio.workflows.triage.extend import source_of
 from senselab.audio.workflows.triage.nodes.branches import EXPECTATIONS, expected_names
 from senselab.audio.workflows.triage.nodes.gates import Pattern
 from senselab.audio.workflows.triage.recording_vectors import (
@@ -37,8 +39,6 @@ from senselab.audio.workflows.triage.recording_vectors import (
     recording_dirs,
     stem_of,
 )
-from senselab.audio.workflows.triage.b2ai_hints import read_sidecars
-from senselab.audio.workflows.triage.extend import source_of
 from senselab.audio.workflows.triage.residue import is_content_word
 from senselab.audio.workflows.triage.routing_analysis.families import task_family, task_id_of
 

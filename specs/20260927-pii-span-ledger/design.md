@@ -436,3 +436,15 @@ The "to" the owner reported was orange (`unmasked_by_trim`, not content) on the 
 said "a reviewer release entry named it", which read as the reviewer marking it. The popup now says
 the entry quoted it and the trim released it, and orange is drawn dashed so it cannot pass for red
 at a thin underline.
+
+## A lone capitalised function word is not a name
+
+Owner, 2026-10-01: on the r9c page 32 red marks fell on function words, all REDACT masks. About half
+sit inside multi-word names ("The Green Mile", "Los Angeles"); the rest are lone words a detector tagged
+PERSON or LOCATION ("She", "My", "He's", "Okay.") and kept masked by the trim's proper-noun protection
+(`is_proper_form`: capitalised mid-sentence). The protection now holds for a capitalised function word
+only where a protected-category finding spanning it also covers a proper-form content word, the name
+itself; the name homographs (May, Will, Can) and an all-capitals abbreviation ("LA", the Spanish article
+in lower case) stand alone. Measured on the r9 stores (1,602 with masked words): 19 masked words
+released in 17 recordings — "He's" ×6, "My", "And" and "So" ×2, "She", "Okay.", "How", "That's", "All",
+"A.", "El" — 9 of which then mask nothing. It takes effect at the next re-fold.

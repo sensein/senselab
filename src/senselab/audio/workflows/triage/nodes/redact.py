@@ -68,7 +68,7 @@ from senselab.audio.workflows.triage.nodes.common import (
     write_stream,
     write_verdict,
 )
-from senselab.audio.workflows.triage.residue import is_content_word, is_proper_form
+from senselab.audio.workflows.triage.residue import is_content_word, is_name_homograph, is_proper_form
 from senselab.audio.workflows.triage.stimulus import NearMatch, near_match, split_prompts
 from senselab.audio.workflows.triage.task_lexicon import TaskLexicon, declared_names_lexicon, task_lexicon
 from senselab.audio.workflows.triage.vocabulary import (
@@ -1728,12 +1728,33 @@ def mask_plan(
     def proper(word: Entity) -> bool:
         return is_proper_form(str(word.attributes.get("text") or ""), previous.get(word.id))
 
+    def text_of(word: Entity) -> str:
+        return str(word.attributes.get("text") or "")
+
+    # A capitalised function word is part of a name only beside the name's own words: "The" in "The
+    # Green Mile" is, a lone "She" a detector tagged PERSON is not. The name homographs stand alone.
+    in_name: set[str] = set()
+    for finding in located:
+        if finding.category.upper() not in protected:
+            continue
+        spanned = [by_id[word_id] for word_id in finding.word_ids if word_id in by_id]
+        if any(proper(word) and is_content_word(text_of(word)) for word in spanned):
+            in_name.update(word.id for word in spanned)
+
+    def protected_name(word: Entity) -> bool:
+        if not (protected & {category.upper() for category in found.get(word.id, set())} and proper(word)):
+            return False
+        if is_content_word(text_of(word)) or word.id in in_name:
+            return True
+        letters = "".join(ch for ch in text_of(word) if ch.isalpha())
+        return is_name_homograph(text_of(word)) or (len(letters) >= 2 and letters.isupper())
+
     def content(word: Entity) -> bool:
         if residue_ids and word.id not in residue_ids:
             return False
-        if protected & {category.upper() for category in found.get(word.id, set())} and proper(word):
+        if protected_name(word):
             return True
-        return is_content_word(str(word.attributes.get("text") or ""))
+        return is_content_word(text_of(word))
 
     family_of_word: dict[str, str] = {}
     for member_ids, members in groups.items():

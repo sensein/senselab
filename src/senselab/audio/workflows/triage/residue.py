@@ -40,6 +40,7 @@ __all__ = [
     "Residue",
     "ResidueRule",
     "is_content_word",
+    "is_name_homograph",
     "is_proper_form",
     "is_non_lexical",
     "residue_method",
@@ -306,6 +307,18 @@ def is_proper_form(text: str, previous: str | None) -> bool:
     if key in NAME_HOMOGRAPHS:
         return True
     return previous is not None and not str(previous).strip().endswith(_SENTENCE_END)
+
+
+def is_name_homograph(text: str) -> bool:
+    """Whether a token is one of the closed-class words that is also a name or a month.
+
+    Args:
+        text: The token as the recognizer wrote it.
+
+    Returns:
+        True for ``May``, ``Will`` and ``Can`` (:data:`NAME_HOMOGRAPHS`) in any case or punctuation.
+    """
+    return _base(_key(text)) in NAME_HOMOGRAPHS
 
 
 def is_content_word(text: str) -> bool:

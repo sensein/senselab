@@ -793,6 +793,54 @@ class TestTheWordLevelMaskRule:
         assert _states(plan)["and"] == UNMASKED_BY_TRIM and _states(plan)["the"] == UNMASKED_BY_TRIM
         assert _states(plan)["alice"] == MASKED
 
+    def test_a_lone_capitalised_function_word_tagged_person_is_trimmed(
+        self, store: ProvStore, redact_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Owner, 2026-10-01: a lone "She" a detector tagged PERSON is no name; the trim releases it."""
+        _seed_redact_store(store, tmp_path, words=["and", "She", "said", "so"], findings=[("PERSON", _word_extent(1))])
+        _stub_pii(monkeypatch, findings=[])
+        redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
+        plan = mask_plan(store, reviewer_applies=False, padding_ms=50, protected_categories=("PERSON", "NAME"))
+        assert _states(plan)["She"] == UNMASKED_BY_TRIM
+
+    def test_a_function_word_inside_a_multi_word_name_stays_masked(
+        self, store: ProvStore, redact_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The word "The" in "The Green Mile" is part of the name beside "Green" and "Mile"; it stays masked."""
+        _seed_redact_store(
+            store, tmp_path, words=["i", "watched", "The", "Green", "Mile"], findings=[("PERSON", (2.0, 5.0))]
+        )
+        _stub_pii(monkeypatch, findings=[])
+        redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
+        plan = mask_plan(store, reviewer_applies=False, padding_ms=50, protected_categories=("PERSON", "NAME"))
+        states = _states(plan)
+        assert states["The"] == MASKED and states["Green"] == MASKED and states["Mile"] == MASKED
+
+    def test_an_abbreviated_place_in_capitals_stays_masked(
+        self, store: ProvStore, redact_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The token "LA" is the Spanish article in lower case, but in capitals a detector's place is an abbreviation."""
+        _seed_redact_store(
+            store, tmp_path, words=["we", "moved", "to", "LA,"], findings=[("LOCATION", _word_extent(3))]
+        )
+        _stub_pii(monkeypatch, findings=[])
+        redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
+        plan = mask_plan(store, reviewer_applies=False, padding_ms=50, protected_categories=("LOCATION", "LOC"))
+        assert _states(plan)["LA,"] == MASKED
+
+    def test_los_angeles_stays_masked_as_a_place(
+        self, store: ProvStore, redact_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A two-word place keeps both words under the place protection."""
+        _seed_redact_store(
+            store, tmp_path, words=["we", "lived", "in", "Los", "Angeles"], findings=[("LOCATION", (3.0, 5.0))]
+        )
+        _stub_pii(monkeypatch, findings=[])
+        redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
+        plan = mask_plan(store, reviewer_applies=False, padding_ms=50, protected_categories=("LOCATION", "LOC"))
+        states = _states(plan)
+        assert states["Los"] == MASKED and states["Angeles"] == MASKED
+
     def test_the_packaged_config_protects_person_and_name(self) -> None:
         """The shipped key names the person and the place categories."""
         from senselab.audio.workflows.triage.vocabulary import FoldPolicy
