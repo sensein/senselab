@@ -607,31 +607,37 @@ def rebracket_words(store: ProvStore, config: TriageConfig) -> str | None:
     return written
 
 
-def replay_run_id(run_root: Path, config_hash: str) -> str:
-    """The run id a replay of this run under this configuration writes its own records under.
+def replay_run_id(run_root: Path, config_hash: str, commit: str | None = None) -> str:
+    """The run id a replay of this run under this configuration and code writes its own records under.
 
     Args:
         run_root: The finished run root.
         config_hash: The replaying configuration's hash.
+        commit: The replaying code revision, or None where none is recorded.
 
     Returns:
-        The run id, distinct from the run root's own name and from any other configuration's.
+        The run id, distinct from the run root's own name and from any other configuration's or
+        revision's.
     """
-    return f"{run_root.name}+replay-{config_hash}"
+    suffix = "" if commit is None else f"-{commit[:12]}"
+    return f"{run_root.name}+replay-{config_hash}{suffix}"
 
 
-def find_replay_marker(store: ProvStore, config_hash: str) -> str | None:
-    """The marker a replay under this configuration already wrote into this store, if any.
+def find_replay_marker(store: ProvStore, config_hash: str, commit: str | None = None) -> str | None:
+    """The marker a replay under this configuration and code already wrote into this store, if any.
 
     Args:
         store: The run's store.
         config_hash: The replaying configuration's hash.
+        commit: The replaying code revision. None matches a marker of any revision.
 
     Returns:
-        The marker activity's id, or None when this store has not been replayed under it.
+        The marker activity's id, or None when this store has not been replayed under both.
     """
     for activity in store.activities(REPLAY_NODE):
-        if activity.step == REPLAY_MARKER_STEP and activity.parameters.get("config_hash") == config_hash:
+        if activity.step != REPLAY_MARKER_STEP or activity.parameters.get("config_hash") != config_hash:
+            continue
+        if commit is None or activity.parameters.get("commit") == commit:
             return activity.id
     return None
 

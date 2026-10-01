@@ -143,6 +143,7 @@ def test_replay_run_id_separates_the_replay_from_the_run_and_from_another_config
     assert replay_run_id(root, "aaaa") != root.name
     assert replay_run_id(root, "aaaa") != replay_run_id(root, "bbbb")
     assert replay_run_id(root, "aaaa") == replay_run_id(root, "aaaa")
+    assert replay_run_id(root, "aaaa", "c" * 40) != replay_run_id(root, "aaaa", "d" * 40)
 
 
 def test_reading_under_the_replay_id_gives_new_content_a_new_id(tmp_path: Path) -> None:
@@ -242,6 +243,19 @@ def test_the_marker_is_absent_before_and_idempotent_after(tmp_path: Path) -> Non
     assert store.fingerprint() == after_first
     assert find_replay_marker(store, "aaaa") == first
     assert find_replay_marker(store, "bbbb") is None
+
+
+def test_the_marker_is_absent_for_another_revision_under_the_same_configuration(tmp_path: Path) -> None:
+    """A code change under an unchanged configuration replays again rather than reading as done."""
+    root = tmp_path / "sub-01_ses-01_task-x_20260920-030808"
+    _seed_run(root)
+    store = read_store(root, run_id=replay_run_id(root, "aaaa", "c" * 40))
+    marker = store.activity(
+        node=REPLAY_NODE, step=REPLAY_MARKER_STEP, parameters={"config_hash": "aaaa", "commit": "c" * 40, "retired": 1}
+    )
+    assert find_replay_marker(store, "aaaa", "c" * 40) == marker
+    assert find_replay_marker(store, "aaaa", "d" * 40) is None
+    assert find_replay_marker(store, "aaaa") == marker
 
 
 def test_mirror_run_root_is_writable_and_reads_through_to_the_finished_run(tmp_path: Path) -> None:
