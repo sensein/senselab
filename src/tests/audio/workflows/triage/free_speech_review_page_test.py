@@ -1993,10 +1993,10 @@ def test_every_checkbox_facet_has_all_and_none(tmp_path: Path) -> None:
     corpus = page.Corpus()
     corpus.add(_row("sub-a", f=[_mark("k1", ["PERSON"], ["presidio"], 0, 1)]))
     document = page.render(corpus, "Review")
-    classes = {"fam-f", "rel-f", "cat-f", "det-f"}
+    classes = {"fam-f", "rel-f", "lang-f", "cat-f", "det-f"}
     for cls in classes:
         assert f"','{cls}']" in document, cls
-    for button in ("allrel", "norel", "allfam", "nofam", "allcat", "nocat", "alldet", "nodet"):
+    for button in ("allrel", "norel", "allfam", "nofam", "alllang", "nolang", "allcat", "nocat", "alldet", "nodet"):
         assert f'<button id="{button}" type="button">' in document
 
 
@@ -2006,3 +2006,39 @@ def test_a_trim_released_word_is_dashed_and_a_mask_or_proposal_is_solid() -> Non
     assert "dashed" in rules["u-orange"]
     assert "dashed" not in rules["u-red"] and "dashed" not in rules["u-green"]
     assert "mark.swatch.u-orange" in page._STYLE, "the legend swatch shares the dashed rule"
+
+
+def test_a_language_code_falls_under_english_spanish_or_itself() -> None:
+    """Owner, 2026-10-01: es-419 is Spanish; regional English is English; an empty code is unknown."""
+    assert page.language_name("en") == "English"
+    assert page.language_name("en-US") == "English"
+    assert page.language_name("es") == "Spanish"
+    assert page.language_name("es-419") == "Spanish"
+    assert page.language_name("") == "unknown"
+    assert page.language_name("fr") == "fr"
+
+
+def test_the_language_facet_filters_cards_and_the_card_shows_the_code(tmp_path: Path) -> None:
+    """Each language present is a checkbox; a card carries its facet name and keeps the code as a title."""
+    corpus = page.Corpus()
+    corpus.add(_row("sub-a", lang="en"))
+    corpus.add(_row("sub-b", lang="es-419"))
+    document = page.render(corpus, "Review")
+    assert '<input type="checkbox" class="lang-f" value="English" checked>' in document
+    assert '<input type="checkbox" class="lang-f" value="Spanish" checked>' in document
+    assert 'data-lang="Spanish"' in document and 'title="es-419">Spanish</span>' in document
+    assert "langs.has(r.dataset.lang)" in document
+
+
+def test_the_language_comes_from_the_recording_sidecar(tmp_path: Path) -> None:
+    """The run's run.json names the recording; its acoustic-task sidecar carries the language."""
+    audio = tmp_path / "bids" / "sub-a" / "ses-b" / "audio"
+    audio.mkdir(parents=True)
+    wav = audio / "sub-a_ses-b_task-free-speech-1.wav"
+    wav.write_bytes(b"")
+    (audio / "sub-a_ses-b_task-free-speech-1_acoustictask-metadata.json").write_text(json.dumps({"language": "es-419"}))
+    run_root = tmp_path / "out" / "run-a"
+    (run_root / "run").mkdir(parents=True)
+    (run_root / "run" / "run.json").write_text(json.dumps({"source": str(wav)}))
+    assert page.recording_language(run_root) == "es-419"
+    assert page.recording_language(tmp_path / "missing") == ""
