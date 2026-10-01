@@ -330,6 +330,9 @@ verdict:
   llm_contradiction_flags: true        # owner, 2026-09-28: a flagged reading that names no words flags the recording for review
   llm_instructions_spoken_flags: true  # owner, 2026-10-01: a reading quoting the task's instructions spoken in the recording flags for review
   uncomputed_reading_flags: true       # owner, 2026-09-29: a conformance reading that should exist and does not flags for review
+  nimble_disagreement_flags: true      # owner, 2026-10-01: a confident second-opinion disagreement with the reviewer flags for review
+  nimble_confident_yes: 0.8            # UNFITTED: the 20-recording pilot; see config-derivations.md, verdict
+  nimble_confident_no: 0.2             # UNFITTED: the 20-recording pilot; see config-derivations.md, verdict
   hint_mismatch_exempt_families: [respiration-and-cough-breath, respiration-and-cough-v2-breath]  # owner, 2026-09-29: quiet breathing the classifier does not hear is no flag
   # declared task family -> flag gates its own instruction makes inapplicable. Empty: owner, 2026-09-30,
   # any voice other than the participant's is flagged, whether or not the instructions expect it.
@@ -560,6 +563,17 @@ redaction:
     max_new_tokens: 1024               # generation ceiling; the reasoning is the product, not the verdict
     timeout_s: 1800                    # wall clock per review, model load included
     keep_worker_resident: false        # hold the loaded weights across recordings; needs a GPU to itself
+
+# A decision model's second opinion over the text the reviewer reads (SECOND_OPINION).
+second_opinion:
+  enabled: false                       # off; a run with the pinned server turns it on
+  name: nimble                         # the Ollama library model
+  tag: latest                          # the tag its manifest is filed under; never the pin itself
+  blob_digest: sha256:bbf1d6fc03bb0ed24d88f4c214ed7b5d1768aeb43d5cf433fb69eff0c8578013  # the weights
+  config_digest: sha256:2c26ca580a1a2f29728af87c30258cfc12c0fe010ad4dc8fc5db5afcdfb406c3  # the image config
+  manifest_digest: sha256:24e550a16a7081881be2f1f0d91e8cc13a597472735c04119f035a0a85c67e0c  # every layer
+  seed: 7                              # sampling seed; temperature is 0
+  timeout_s: 300                       # per request, model load included
 
 # Background residual: FRCRN_SE_16K's enhancement, lag-aligned and gain-fitted, subtracted from
 # `plain`. Both the enhancement and the residual are written and classified; no energy-fraction

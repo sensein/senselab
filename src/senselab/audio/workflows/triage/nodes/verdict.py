@@ -85,6 +85,7 @@ from senselab.audio.workflows.triage.nodes.redact import (
 from senselab.audio.workflows.triage.task_lexicon import task_lexicon
 from senselab.audio.workflows.triage.vocabulary import (
     GRAPH_ORDER,
+    NIMBLE_OPINION,
     PII_SCAN,
     REDACTION_LLM_ANNOTATION,
     RULESET_ROUTING,
@@ -321,6 +322,23 @@ def _llm_redaction(store: ProvStore) -> tuple[dict[str, object] | None, list[str
         and ``signal`` are dropped; every other attribute is carried through unread.
     """
     measurement = find_measurement(store, REDACTION_LLM_ANNOTATION)
+    if measurement is None:
+        return None, []
+    return {key: value for key, value in measurement.attributes.items() if key not in ("name", "signal")}, [
+        measurement.id
+    ]
+
+
+def _second_opinion(store: ProvStore) -> tuple[dict[str, object] | None, list[str]]:
+    """SECOND_OPINION's measurement, as it recorded it.
+
+    Args:
+        store: The provenance store.
+
+    Returns:
+        The attributes and the id they came from, or ``(None, [])`` where none was written.
+    """
+    measurement = find_measurement(store, NIMBLE_OPINION)
     if measurement is None:
         return None, []
     return {key: value for key, value in measurement.attributes.items() if key not in ("name", "signal")}, [
@@ -763,6 +781,7 @@ def verdict(
     route_state, route_ids = _route_state(store)
     decisions, decision_ids = _branch_decisions(store)
     annotation, annotation_ids = _llm_redaction(store)
+    opinion, opinion_ids = _second_opinion(store)
     resolved_ran = {**_derived_ran(store, node_verdicts, reports), **(ran or {})}
     policy = FoldPolicy.from_config(config)
     plan = mask_plan(
@@ -791,6 +810,7 @@ def verdict(
         policy=policy,
         agreed_redactions=plan.agreed,
         unplaced=[(finding.family, finding.state) for finding in plan.unplaced],
+        second_opinion=opinion,
     )
 
     software = software_agent(store)
@@ -802,6 +822,7 @@ def verdict(
         + route_ids
         + decision_ids
         + annotation_ids
+        + opinion_ids
     )
     for folded_id in folded_ids:
         store.used(activity, folded_id)
