@@ -31,7 +31,7 @@ import yaml  # type: ignore[import-untyped]
 from senselab.audio.workflows.triage.cohort import CONDITION_KINDS
 from senselab.audio.workflows.triage.vocabulary import UNPLACED_OPEN, UNPLACED_UNREAD
 
-SCHEMA_VERSION = 14
+SCHEMA_VERSION = 15
 """Bumped whenever a column is added, removed or retyped, a binary layout changes, or a categorical
 column's controlled vocabulary changes."""
 
@@ -830,6 +830,32 @@ def _reviewer_columns(decision: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+NIMBLE_QUESTIONS = ("other_voice", "instructions_spoken", "named_diagnosis", "safe_harbor_identifier_present")
+"""The second-opinion questions with a probability column each, ``nimble_<question>_p``."""
+
+
+def _second_opinion_columns(decision: Mapping[str, Any]) -> dict[str, Any]:
+    """SECOND_OPINION's reading as the fold compared it.
+
+    Args:
+        decision: The fold's record.
+
+    Returns:
+        The ``nimble_*`` columns. Where the fold carries no opinion each is None, except
+        ``nimble_disagrees`` and ``nimble_disagrees_n``, which are ``[]`` and ``0``.
+    """
+    opinion = decision.get("second_opinion") or {}
+    probabilities = opinion.get("probabilities") or {}
+    disagreements = [str(entry).split(" ", 1)[0] for entry in opinion.get("disagreements") or ()]
+    return {
+        "nimble_status": opinion.get("status"),
+        **{f"nimble_{name}_p": _number(probabilities.get(name)) for name in NIMBLE_QUESTIONS},
+        "nimble_disagrees": disagreements,
+        "nimble_disagrees_n": len(disagreements),
+        "nimble_blob_digest": opinion.get("blob_digest") or None,
+    }
+
+
 def _gate_columns(decision: dict[str, Any]) -> dict[str, Any]:
     """Every gate VERDICT resolved, as one column group per gate plus the fold's own summary.
 
@@ -1289,6 +1315,7 @@ def extract(run_root: Path, root: Path, anomalies: dict[str, int] | None = None)
         row[f"route_{branch.lower()}"] = routes.get(branch)
     row.update(_gate_columns(decision))
     row.update(_reviewer_columns(decision))
+    row.update(_second_opinion_columns(decision))
     row.update(_residual_levels(view))
 
     residue = _residue_columns(view)
@@ -1513,6 +1540,11 @@ def _fields() -> list[pa.Field]:
         pa.field("llm_model_id", pa.string()),
         pa.field("llm_revision", pa.string()),
         pa.field("llm_failed", pa.bool_()),
+        pa.field("nimble_status", pa.string()),
+        *[pa.field(f"nimble_{name}_p", pa.float64()) for name in NIMBLE_QUESTIONS],
+        pa.field("nimble_disagrees", pa.list_(pa.string())),
+        pa.field("nimble_disagrees_n", pa.int32()),
+        pa.field("nimble_blob_digest", pa.string()),
         *[
             field
             for name in GATE_NAMES

@@ -41,6 +41,7 @@ from senselab.audio.workflows.triage.vocabulary import (
     REVIEWER_UNMASKED_SOME,
     ROUTED,
     SCAN_UNRECORDED,
+    SECOND_OPINION_DISAGREES,
     SPEECH_UNREAD,
     TASK,
     UNAVAILABLE,
@@ -1718,6 +1719,104 @@ class TestAgreementUnplacedFindingsAndASecondSpeaker:
         from senselab.audio.workflows.triage.config import load_triage_config
 
         assert FoldPolicy.from_config(load_triage_config()).llm_second_speaker_flags is True
+
+
+class TestSecondOpinionDisagreementFlagsForReview:
+    """Owner, 2026-10-01: a confident second-opinion disagreement with the reviewer flags for review."""
+
+    _PASSED = [NodeVerdict("REDACT", Outcome.PASS, None, "every finding redacted")]
+    _ON = FoldPolicy(nimble_disagreement_flags=True, nimble_confident_yes=0.8, nimble_confident_no=0.2)
+
+    @staticmethod
+    def _opinion(**probabilities: float) -> dict[str, Any]:
+        held = {"other_voice": 0.02, "instructions_spoken": 0.02, "named_diagnosis": 0.02}
+        held.update(probabilities)
+        return {"status": "ok", "probabilities": held, "model_id": "ollama:nimble:9b", "blob_digest": "sha256:ab"}
+
+    @staticmethod
+    def _reading(**fields: Any) -> dict[str, Any]:  # noqa: ANN401
+        reading: dict[str, Any] = {"status": "clean", "original": "clean", "speakers": "one", "proposal": []}
+        reading.update(fields)
+        return reading
+
+    def _fold(self, opinion: Mapping[str, Any] | None, reading: Mapping[str, Any], policy: FoldPolicy) -> FileVerdict:
+        return fold_file_verdict(
+            self._PASSED,
+            branch_decisions=_decisions(AIRWAY=DECLINED, SPEECH=ROUTED, VOICE=DECLINED),
+            ran={"SPEECH": RunState.COMPLETED, "REDACT": RunState.COMPLETED, "REVIEW": RunState.COMPLETED},
+            hint_claims={},
+            route_state=ROUTED,
+            redaction=RedactionEvidence(lexical_words_n=40, scanned=True, findings_n=0),
+            llm_redaction=dict(reading),
+            policy=policy,
+            second_opinion=opinion,
+        )
+
+    def _grounds(self, folded: FileVerdict) -> list[str]:
+        return [str(reason.why) for reason in folded.reasons if str(reason.why).startswith(SECOND_OPINION_DISAGREES)]
+
+    def test_a_confident_yes_against_the_reviewers_no_flags_and_names_it(self) -> None:
+        """The story-recall pilot case: p=0.85 another voice, the reviewer heard one."""
+        folded = self._fold(self._opinion(other_voice=0.85), self._reading(), self._ON)
+        assert folded.triage is Triage.FLAG
+        assert self._grounds(folded) == [f"{SECOND_OPINION_DISAGREES}: other_voice p=0.85 reviewer=no"]
+        assert folded.record()["second_opinion"]["disagreements"] == ["other_voice p=0.85 reviewer=no"]
+
+    def test_a_confident_no_against_the_reviewers_yes_flags(self) -> None:
+        """The reviewer proposed a CONDITION redaction the model is sure is absent."""
+        reading = self._reading(
+            status="flagged", proposal=[{"text": "asthma", "action": "redact", "category": "CONDITION", "why": "x"}]
+        )
+        folded = self._fold(self._opinion(named_diagnosis=0.05), reading, self._ON)
+        assert self._grounds(folded) == [f"{SECOND_OPINION_DISAGREES}: named_diagnosis p=0.05 reviewer=yes"]
+
+    def test_the_middle_band_and_agreement_do_not_flag(self) -> None:
+        """0.5 is not confident; a confident yes the reviewer shares is agreement."""
+        assert not self._grounds(self._fold(self._opinion(other_voice=0.5), self._reading(), self._ON))
+        agreed = self._reading(speakers="more_than_one")
+        assert not self._grounds(self._fold(self._opinion(other_voice=0.95), agreed, self._ON))
+
+    def test_instructions_are_compared_only_where_the_reading_carries_the_part(self) -> None:
+        """A pre-v5 reading never answered the question, so it cannot disagree."""
+        opinion = self._opinion(instructions_spoken=0.95)
+        assert not self._grounds(self._fold(opinion, self._reading(), self._ON))
+        carried = self._reading(instructions_spoken=[])
+        assert self._grounds(self._fold(opinion, carried, self._ON))
+
+    def test_nothing_is_compared_without_both_readings(self) -> None:
+        """An absent opinion, or a reviewer that read nothing, contributes nothing."""
+        absent = {"status": "absent", "probabilities": {}}
+        assert not self._grounds(self._fold(absent, self._reading(), self._ON))
+        unread = self._reading(status="absent")
+        assert not self._grounds(self._fold(self._opinion(other_voice=0.99), unread, self._ON))
+        assert self._fold(None, self._reading(), self._ON).record()["second_opinion"] == {}
+
+    def test_the_switch_off_or_unmeasured_thresholds_do_not_flag(self) -> None:
+        """Off, or either threshold null, leaves the ground silent."""
+        opinion = self._opinion(other_voice=0.99)
+        for policy in (
+            FoldPolicy(nimble_confident_yes=0.8, nimble_confident_no=0.2),
+            FoldPolicy(nimble_disagreement_flags=True, nimble_confident_yes=None, nimble_confident_no=0.2),
+        ):
+            assert not self._grounds(self._fold(opinion, self._reading(), policy))
+
+    def test_the_release_is_unchanged(self) -> None:
+        """The flag is triage only."""
+        opinion = self._opinion(other_voice=0.99)
+        on = self._fold(opinion, self._reading(), self._ON)
+        off = self._fold(opinion, self._reading(), FoldPolicy())
+        assert on.release is off.release
+
+    def test_the_packaged_policy_flags_at_the_proposed_thresholds(self) -> None:
+        """Owner's switch on; thresholds 0.8 and 0.2, unfitted."""
+        from senselab.audio.workflows.triage.config import load_triage_config
+
+        policy = FoldPolicy.from_config(load_triage_config())
+        assert (policy.nimble_disagreement_flags, policy.nimble_confident_yes, policy.nimble_confident_no) == (
+            True,
+            0.8,
+            0.2,
+        )
 
 
 class TestSpokenInstructionsFlagForReview:
