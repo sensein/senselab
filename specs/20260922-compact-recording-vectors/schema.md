@@ -9,7 +9,7 @@
 > stay counts and categories only.
 
 Produced by `senselab.audio.workflows.triage.recording_vectors` and
-`scripts/triage_recording_vectors.py`. **One row per recording.** `schema_version` is `14`; any
+`scripts/triage_recording_vectors.py`. **One row per recording.** `schema_version` is `15`; any
 change to a column, a byte layout or a categorical column's controlled vocabulary bumps it and
 changes this file with it. The same number is in
 the parquet's own key-value metadata, under `senselab.recording_vectors.schema_version`, so a
@@ -40,6 +40,8 @@ What each bump added:
 | **11** | `propagated_n`, `unplaced_n`, `unplaced_open`, `redact_agreed_n`, `redact_new_n`; the ledger columns now count per-finding masks, and the state columns count only new reviewer proposals. See `specs/20260927-mask-placement-and-second-speaker/design.md` |
 | **12** | `gate_<name>_reason` per applied gate, `gate_reason`, `gate_exempt`, `gate_not_applicable_n`; `gate_<name>_passed` gains `not_applicable`; `omissions_max` replaced by `content_omission_fraction_max`, `monotone_tolerance_semitones` replaced by `glide_extent_min_semitones`, and `declared_duration_min_fraction` and `instructed_count_min_fraction` added. See `specs/20260929-task-check-alignment/design.md` |
 | **13** | `llm_instructions_spoken_n`: passages the reviewer (prompt v5) quoted where the task's instructions are spoken. See `specs/20260929-task-check-alignment/design.md` §L |
+| **14** | the evaluation columns: task-extent trim, clip re-assessment, raw vs enhanced, other speakers in the task extent (§8a). See `specs/20261001-triage-evaluation-columns/design.md` |
+| **15** | the nine `nimble_*` columns: SECOND_OPINION's probabilities and where they confidently disagree with the reviewer (the section at the end). See `specs/20261001-nimble-second-opinion/design.md` |
 
 The data dictionary in the file's metadata was added without a bump: it adds no column, changes no
 layout and no vocabulary, and a reader that ignores the key reads the file exactly as before.
@@ -110,7 +112,7 @@ Owner-directed: `participant`, `task`, `verdict` are the first three columns, in
 | `duration_conditioned_s` | double | seconds, the conditioned stream | PREPROCESS wrote no stream |
 | `time_scale_s` | double | seconds — **the denominator for every `uint16` time** | neither duration is known |
 | `sampling_rate` | int32 | Hz, of the conditioned stream | no conditioned stream |
-| `schema_version` | int32 | `14` | never |
+| `schema_version` | int32 | `15` | never |
 | `malformed_store_lines` | int32 | lines of `store.jsonl` that did not parse; `0` is the normal value | never |
 | `flags_n` | int32 | how many node verdicts in the fold carry outcome `flag`, `fail` or `discard` — the same filter `report.py` calls a flag | never |
 | `flag_nodes` | list\<string\> | which nodes those were, e.g. `["SPEECH"]` | never; `[]` when none |
@@ -662,3 +664,23 @@ transcript, and the transcript has one home in this file already.
 `llm_model_id` and `llm_revision` are marked unassignable for the same reason `participant` is —
 a column with one value over the corpus separates nothing, and an axis that cannot separate is a
 wasted slot. They stay readable on the recording panel.
+
+## Schema 15: the second opinion
+
+Added 2026-10-01, with SECOND_OPINION. A decision model (Nimble 9B, pinned by blob digest) answers
+four typed questions over the text REVIEW reads. The fold compares three of them with the
+reviewer's reading. Every column is read off `verdict.second_opinion`, which the fold writes, so
+nothing new is read from the store:
+
+| column | what it is |
+|---|---|
+| `nimble_status` | `ok` / `disabled` / `nothing_to_read` / `absent` |
+| `nimble_other_voice_p` | P(someone besides the participant speaks) |
+| `nimble_instructions_spoken_p` | P(the task's instructions are spoken) |
+| `nimble_named_diagnosis_p` | P(the speaker names a diagnosis of their own) |
+| `nimble_safe_harbor_identifier_present_p` | P(a Safe Harbor identifier is present); recorded, not compared |
+| `nimble_disagrees`, `nimble_disagrees_n` | the questions confidently disagreeing with the reviewer under `verdict.nimble_confident_*` |
+| `nimble_blob_digest` | provenance; one value over the corpus, not assignable to an axis |
+
+The probabilities are continuous on [0, 1], so they facet as numeric axes. `nimble_disagrees`
+facets as a list, like `llm_flagged_categories`.

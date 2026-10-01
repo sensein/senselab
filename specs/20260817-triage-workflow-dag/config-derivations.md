@@ -1796,6 +1796,34 @@ verdict.level_min_dbfs: null
   all" is a whole-recording judgement, and the live reading of it is the ruleset's own
   `emptiness.peak_floor`, which the fold already consumes as the `empty` route state. Left unset
   rather than defaulted so that the two do not become two answers to one question. Read by no code.
+
+verdict.nimble_disagreement_flags: true
+  Whether a confident disagreement between the second-opinion model (SECOND_OPINION's
+  `nimble_opinion`) and the redaction reviewer is a flag ground. Owner, 2026-10-01: true. A switch,
+  not a threshold. It reads only when both readings are present -- the opinion `ok`, the annotation
+  `clean` or `flagged` -- so a recording the second opinion never reached contributes nothing. Three
+  questions are compared: other_voice, instructions_spoken and named_diagnosis. Safe-harbor is asked
+  and recorded but not compared, because the reviewer's identifier reading is per span and the
+  model's is per transcript. Release is unchanged; this only routes a file to a human.
+
+verdict.nimble_confident_yes: 0.8
+verdict.nimble_confident_no: 0.2
+  UNFITTED. A disagreement is p >= yes with the reviewer saying no, or p <= no with the reviewer
+  saying yes. The proposal comes from the 20-recording pilot (2026-09-30, nimble:9b blob
+  bbf1d6fc..., /orcd/scratch/bcs/002/satra/tmp_nimble/pilot_out.json). Its probabilities are
+  bimodal: of the 60 compared answers (three questions x 20), 50 are <= 0.10, six are >= 0.84, and
+  the other four are 0.103, 0.34, 0.36 and 0.75. Both cuts fall in gaps, so a shift of +/-0.04
+  moves no pilot recording. Under 0.8/0.2 three pilot recordings flag:
+    story-recall           other_voice p=0.85, reviewer one
+    word-color-stroop      other_voice p=0.05, reviewer more_than_one
+    free-speech            named_diagnosis p=0.103, reviewer True
+  "Reviewer" there is the Gemma REVIEW annotation already in the stores the pilot read, which used a
+  pre-v6 prompt. The pilot's state also carried only task, instructions and transcript, while the
+  node adds speech_type and stimulus. So three in 20 (15%) indicates the rate. It does not measure it.
+  The ambiguous middle (0.36 prolonged-vowel and 0.75 productive-vocabulary for other_voice, 0.34
+  for instructions) does not flag, which is the point of a confidence band. To fit it: the r9
+  second-opinion run, then a human verdict on every disagreement at 0.6/0.4. The cut is where
+  "model right" stops outnumbering "reviewer right".
 ```
 
 ### The gates, and what each was reasoned from
@@ -2266,6 +2294,45 @@ the gaussian-noise fixture the node's own tests use (a review probe on speech re
 consistent with the closed form, but no fixture in this tree reproduces it). That is a
 presentation choice too, and equally unfitted -- matching the extent's RMS instead would change
 how loud a released artifact's redactions are without anyone having measured which is preferable.
+
+## second_opinion
+
+The SECOND_OPINION node: a decision model asked four typed questions over the text and task context
+REVIEW reads. Design: `specs/20261001-nimble-second-opinion/design.md`.
+
+```
+second_opinion.enabled: false
+  Off in the packaged config, because the node needs a GPU and an Ollama store that a default run
+  does not hold. A campaign turns it on through `scripts/extend_second_opinion.py`'s `--config`.
+
+second_opinion.name: nimble
+second_opinion.tag: latest
+  Bespoke Labs' Nimble 9B (Q8_0 GGUF), the model the 2026-09-30 pilot measured. `latest` is the tag
+  the pilot's pull filed the manifest under. The tag only locates the manifest. It does not identify
+  the model.
+
+second_opinion.blob_digest: sha256:bbf1d6fc...8013
+second_opinion.config_digest: sha256:2c26ca58...06c3
+second_opinion.manifest_digest: sha256:24e550a1...7e0c
+  The identity, as the pilot's pulled store recorded it: the weights layer, the image config and the
+  manifest file. The manifest also names the system prompt layer and the parameters layer
+  (`{"num_ctx":8194}`), and `verify_pin` hashes every layer it names. Under the same weights, a
+  changed system prompt or context length is a different model. `verify_pin` refuses a store that
+  differs in any of these. A new release is a deliberate edit of all three values, and that edit
+  changes the result-cache key.
+
+second_opinion.seed: 7
+  Arbitrary and fixed, sent with temperature 0. Measured inert (2026-10-01, H100 srun, one
+  free-speech transcript): no options, seed 7 twice, seed 99, temperature 1.0 and an unknown option
+  key all returned byte-identical probabilities. The endpoint reads the probabilities off the logits
+  of a 3-token answer, so sampling never enters. It stays in the request and in the cache key as a
+  guard against a server release that starts honouring it. The pilot's twice-asked recordings
+  were identical 20/20.
+
+second_opinion.timeout_s: 300
+  Per request. The first request loads the weights: 74.5 s in the pilot. Warm requests took
+  0.71-1.39 s. 300 s covers a cold load on a slow filesystem by 4x.
+```
 
 ## residual
 

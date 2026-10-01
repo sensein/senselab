@@ -224,6 +224,36 @@ var SchemaAxes = (function () {
       name: 'llm_flagged_categories.size', kind: 'count', group: 'review',
       label: 'llm_flagged_categories · size', sizeOf: 'llm_flagged_categories',
     }),
+
+    // SECOND_OPINION: a decision model's probabilities over the same text, and where they
+    // confidently disagree with the reviewer.
+    column({ name: 'nimble_status', kind: 'categorical', group: 'review', nullMeans: 'SECOND_OPINION wrote nothing' }),
+    column({
+      name: 'nimble_other_voice_p', kind: 'numeric', group: 'review',
+      label: 'nimble · P(other voice)', nullMeans: 'no ok opinion',
+    }),
+    column({
+      name: 'nimble_instructions_spoken_p', kind: 'numeric', group: 'review',
+      label: 'nimble · P(instructions spoken)', nullMeans: 'no ok opinion',
+    }),
+    column({
+      name: 'nimble_named_diagnosis_p', kind: 'numeric', group: 'review',
+      label: 'nimble · P(named diagnosis)', nullMeans: 'no ok opinion',
+    }),
+    column({
+      name: 'nimble_safe_harbor_identifier_present_p', kind: 'numeric', group: 'review',
+      label: 'nimble · P(safe-harbor identifier)', nullMeans: 'no ok opinion',
+    }),
+    column({ name: 'nimble_disagrees_n', kind: 'count', group: 'review', nullMeans: 'never null' }),
+    column({
+      name: 'nimble_disagrees', kind: 'set', group: 'review', assignable: false,
+      reason: 'a set of question names, not a value — put nimble_disagrees_n on the axis, or filter by a term',
+      sizeOf: 'nimble_disagrees',
+    }),
+    column({
+      name: 'nimble_blob_digest', kind: 'categorical', group: 'review', assignable: false,
+      reason: 'one value over the corpus — provenance, not a separation',
+    }),
   ];
 
   function measurementColumns() {
