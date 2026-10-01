@@ -31,7 +31,7 @@ import yaml  # type: ignore[import-untyped]
 from senselab.audio.workflows.triage.cohort import CONDITION_KINDS
 from senselab.audio.workflows.triage.vocabulary import UNPLACED_OPEN, UNPLACED_UNREAD
 
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 14
 """Bumped whenever a column is added, removed or retyped, a binary layout changes, or a categorical
 column's controlled vocabulary changes."""
 
@@ -949,6 +949,283 @@ def _speaker_columns(view: StoreView, readings: dict[str, list[Any]]) -> dict[st
     }
 
 
+TASK_EXTENT_ROLE = "task_extent"
+CLIP_SPAN_FAMILY = "clip"
+CLIP_AMPLITUDE_MEASUREMENT = "clip_amplitude"
+CLIP_CLAIM = "clip"
+WITHDRAW_VERB = "withdraw"
+CONTEST_VERB = "contest"
+RAW_DISRUPTIONS_MEASUREMENT = "disruptions_file"
+SQUIM_MEASUREMENT = "squim"
+QUALITY_CHECKS = ("noise_floor", "low_snr", "clipping", "dropout")
+"""The raw quality checks, in report order. The first two are noise, which enhancement can resolve;
+clipping and dropout are sample damage, which it cannot, so they are never counted as resolved."""
+
+ENHANCEMENT_RESOLVABLE = ("noise_floor", "low_snr")
+
+
+@lru_cache(maxsize=1)
+def evaluation_bounds() -> dict[str, Any]:
+    """The packaged bounds for the triage-evaluation columns.
+
+    Returns:
+        The parsed ``data/recording_vectors/evaluation.yaml``.
+    """
+    path = Path(__file__).parent / "data" / "recording_vectors" / "evaluation.yaml"
+    return dict(yaml.safe_load(path.read_text(encoding="utf-8")))
+
+
+def _extent_columns(view: StoreView, duration_s: float | None) -> dict[str, Any]:
+    """Where the task sits in the recording, and how much could be trimmed around it.
+
+    Args:
+        view: The store.
+        duration_s: The recording's duration.
+
+    Returns:
+        The hull of the live ``task_extent`` spans, the lead-in and tail outside it, their sum, and
+        whether that sum clears the trim bounds. All null where no branch wrote a task extent.
+    """
+    keys = (
+        "task_extent_n",
+        "task_extent_start_s",
+        "task_extent_end_s",
+        "lead_s",
+        "tail_s",
+        "trim_s",
+        "trim_fraction",
+        "trimmable",
+    )
+    out: dict[str, Any] = dict.fromkeys(keys)
+    extents = [e.extent for e in view.live("span") if e.attributes.get("role") == TASK_EXTENT_ROLE and e.extent]
+    if not extents:
+        return out
+    start = min(float(extent[0]) for extent in extents)
+    end = max(float(extent[1]) for extent in extents)
+    out["task_extent_n"] = len(extents)
+    out["task_extent_start_s"] = start
+    out["task_extent_end_s"] = end
+    if not duration_s:
+        return out
+    lead = max(0.0, start)
+    tail = max(0.0, float(duration_s) - end)
+    trim = lead + tail
+    bounds = evaluation_bounds()["trim"]
+    out.update(
+        {
+            "lead_s": lead,
+            "tail_s": tail,
+            "trim_s": trim,
+            "trim_fraction": trim / float(duration_s),
+            "trimmable": trim >= float(bounds["min_s"]) and trim / float(duration_s) >= float(bounds["min_fraction"]),
+        }
+    )
+    return out
+
+
+def _clip_columns(view: StoreView) -> dict[str, Any]:
+    """What the clip detector kept, what its re-assessment withdrew, and what QUALITY contested.
+
+    Args:
+        view: The store.
+
+    Returns:
+        The live clip spans' count and seconds, the highest clip level and the loudest unclipped
+        sample, the candidates withdrawn because an unclipped sample was louder, the spans QUALITY
+        contested, whether the clip reading is self-consistent, and the raw-recording disruption
+        reading's own clipped runs and seconds beside it.
+    """
+    spans = [e for e in view.live("span") if e.attributes.get("family") == CLIP_SPAN_FAMILY and e.extent]
+    assertions = [e for e in view.live("assertion") if e.attributes.get("claim") == CLIP_CLAIM]
+    withdrawn = [e for e in assertions if e.attributes.get("verb") == WITHDRAW_VERB]
+    contested = [e for e in assertions if e.attributes.get("verb") == CONTEST_VERB]
+    amplitude = view.last("measurement", name=CLIP_AMPLITUDE_MEASUREMENT)
+    levels = (amplitude.attributes.get("clip_levels") or {}) if amplitude is not None else {}
+    louder = (amplitude.attributes.get("unclipped_louder_n") or {}) if amplitude is not None else {}
+    live_ids = {e.id for e in spans}
+    live_levels = [v for v in (_number(levels.get(i)) for i in live_ids) if v is not None]
+    louder_n = sum(int(louder.get(i) or 0) for i in live_ids)
+    raw = view.last("measurement", name=RAW_DISRUPTIONS_MEASUREMENT)
+    assessed = bool(spans or withdrawn)
+    return {
+        "clip_spans_n": len(spans),
+        "clip_s": sum(e.extent[1] - e.extent[0] for e in spans if e.extent) if spans else 0.0,
+        "clip_level_max": max(live_levels) if live_levels else None,
+        "clip_unclipped_peak": _number(amplitude.attributes.get("unclipped_peak")) if amplitude is not None else None,
+        "clip_unclipped_louder_n": louder_n if spans else None,
+        "clip_withdrawn_n": len(withdrawn),
+        "clip_contested_n": len(contested),
+        "clip_consistent": (not contested and louder_n == 0) if assessed else None,
+        "clip_state": (
+            "none"
+            if not assessed
+            else (
+                "withdrawn_only"
+                if not spans
+                else ("kept_consistent" if not contested and louder_n == 0 else "kept_inconsistent")
+            )
+        ),
+        "raw_clipped_runs": int(raw.attributes["clipped_runs"])
+        if raw and raw.attributes.get("clipped_runs") is not None
+        else None,
+        "raw_clipped_s": _number(raw.attributes.get("clipped_s")) if raw is not None else None,
+        "raw_dropout_s": _number(raw.attributes.get("dropout_s")) if raw is not None else None,
+    }
+
+
+def _stream_frames_dbfs(run_dir: Path, view: StoreView, name: str) -> np.ndarray | None:
+    """Frame RMS levels, in dBFS, of one stored stream.
+
+    Args:
+        run_dir: The ``run/`` directory.
+        view: The store.
+        name: The stream name, e.g. ``plain`` or ``enhanced``.
+
+    Returns:
+        One level per frame at the evaluation window and hop, or None when the stream is absent or
+        does not decode.
+    """
+    import soundfile
+
+    stream = view.last("stream", name=name)
+    if stream is None or not stream.attributes.get("path"):
+        return None
+    try:
+        samples, rate = soundfile.read(run_dir / str(stream.attributes["path"]), dtype="float32", always_2d=True)
+    except (OSError, RuntimeError):
+        return None
+    x = np.asarray(samples, dtype=np.float64).mean(axis=1)
+    frame = evaluation_bounds()["frame"]
+    window = max(1, int(round(float(frame["window_s"]) * rate)))
+    hop = max(1, int(round(float(frame["hop_s"]) * rate)))
+    if x.size < window:
+        return None
+    starts = np.arange(0, x.size - window + 1, hop)
+    energy = np.concatenate(([0.0], np.cumsum(x**2)))
+    power = (energy[starts + window] - energy[starts]) / window
+    return 10.0 * np.log10(np.maximum(power, 1e-12))
+
+
+def _stream_noise(levels: np.ndarray | None) -> tuple[float | None, float | None]:
+    """A stream's noise floor and SNR estimate from its frame levels.
+
+    Args:
+        levels: Frame levels in dBFS, or None.
+
+    Returns:
+        ``(floor_dbfs, snr_db)``, both None when there are no frames.
+    """
+    if levels is None or not levels.size:
+        return None, None
+    frame = evaluation_bounds()["frame"]
+    floor = float(np.percentile(levels, float(frame["floor_percentile"])))
+    active = float(np.percentile(levels, float(frame["level_percentile"])))
+    return floor, active - floor
+
+
+def _quality_columns(run_dir: Path, view: StoreView, clip: Mapping[str, Any]) -> dict[str, Any]:
+    """The raw stream's quality checks, and which of them the enhanced stream resolves.
+
+    Args:
+        run_dir: The ``run/`` directory.
+        view: The store.
+        clip: The row's clip columns, for the raw disruption reading.
+
+    Returns:
+        The plain and enhanced noise floor and SNR estimate, the plain spans' median SQUIM, the
+        raw checks that fail, those the enhanced stream passes, and those it does not.
+    """
+    plain_floor, plain_snr = _stream_noise(_stream_frames_dbfs(run_dir, view, "plain"))
+    enhanced_floor, enhanced_snr = _stream_noise(_stream_frames_dbfs(run_dir, view, "enhanced"))
+    bounds = evaluation_bounds()["quality"]
+    floor_max, snr_min = float(bounds["floor_max_dbfs"]), float(bounds["snr_min_db"])
+    squim = [
+        e.attributes
+        for e in view.live("assertion")
+        if e.attributes.get("name") == SQUIM_MEASUREMENT and "stoi" in e.attributes
+    ]
+
+    def median(key: str) -> float | None:
+        values = [v for v in (_number(a.get(key)) for a in squim) if v is not None]
+        return float(np.median(values)) if values else None
+
+    raw: list[str] = []
+    resolved: list[str] = []
+    if plain_floor is not None and plain_floor > floor_max:
+        raw.append("noise_floor")
+        if enhanced_floor is not None and enhanced_floor <= floor_max:
+            resolved.append("noise_floor")
+    if plain_snr is not None and plain_snr < snr_min:
+        raw.append("low_snr")
+        if enhanced_snr is not None and enhanced_snr >= snr_min:
+            resolved.append("low_snr")
+    if (clip.get("raw_clipped_s") or 0.0) > 0.0 or clip.get("clip_spans_n"):
+        raw.append("clipping")
+    if (clip.get("raw_dropout_s") or 0.0) > 0.0:
+        raw.append("dropout")
+    assessed = plain_floor is not None
+    return {
+        "q_plain_floor_dbfs": plain_floor,
+        "q_plain_snr_db": plain_snr,
+        "q_enhanced_floor_dbfs": enhanced_floor,
+        "q_enhanced_snr_db": enhanced_snr,
+        "q_plain_squim_pesq": median("pesq"),
+        "q_plain_squim_stoi": median("stoi"),
+        "q_plain_squim_si_sdr": median("si_sdr"),
+        "q_raw_issues": raw if assessed else None,
+        "q_resolved_by_enhanced": resolved if assessed else None,
+        "q_unresolved": [check for check in raw if check not in resolved] if assessed else None,
+    }
+
+
+SPEAKER_COUNT_MEASUREMENT = "extent_speaker_count"
+MULTI_SPEAKER_SIGNALS = ("diarization", "separation", "reviewer")
+
+
+def _multi_speaker_columns(view: StoreView, decision: Mapping[str, Any], separation_s: float | None) -> dict[str, Any]:
+    """Which of the three instruments says another speaker is inside the task extent, and whether they agree.
+
+    Args:
+        view: The store.
+        decision: The fold's record, for the reviewer's speaker reading.
+        separation_s: The row's ``secondary_extent_s``.
+
+    Returns:
+        The diarizer's largest speaker count and non-dominant seconds over the task extents, the
+        reviewer's quoted other voices split by whether the instructions expect them, the signals
+        that clear their bounds, and the agreement class across them.
+    """
+    bounds = evaluation_bounds()["multi_speaker"]
+    counts = [e.attributes for e in view.live("measurement") if e.attributes.get("name") == SPEAKER_COUNT_MEASUREMENT]
+    speakers = [int(a["value"]) for a in counts if isinstance(a.get("value"), (int, float))]
+    secondary = [v for v in (_number(a.get("secondary_s")) for a in counts) if v is not None]
+    annotation = decision.get("llm_redaction") or {}
+    others = [dict(o) for o in annotation.get("other_speakers") or () if isinstance(o, Mapping)]
+    expected = sum(1 for o in others if o.get("expected") is True)
+    diarization_s = max(secondary) if secondary else None
+    fired = {
+        "diarization": bool(
+            speakers and max(speakers) > 1 and (diarization_s or 0.0) >= float(bounds["diarization_secondary_min_s"])
+        ),
+        "separation": (separation_s or 0.0) >= float(bounds["separation_secondary_min_s"]),
+        "reviewer": annotation.get("speakers") == "more_than_one" or bool(others),
+    }
+    signals = [name for name in MULTI_SPEAKER_SIGNALS if fired[name]]
+    read = bool(counts) or annotation.get("status") is not None
+    agreement = None
+    if read:
+        agreement = "none" if not signals else (f"{signals[0]}_only" if len(signals) == 1 else "+".join(signals))
+    return {
+        "ms_diarization_speakers_max": max(speakers) if speakers else None,
+        "ms_diarization_secondary_s": diarization_s,
+        "ms_reviewer_other_n": len(others) if annotation.get("status") is not None else None,
+        "ms_reviewer_expected_n": expected if annotation.get("status") is not None else None,
+        "ms_reviewer_unexpected_n": len(others) - expected if annotation.get("status") is not None else None,
+        "ms_signals": signals if read else None,
+        "ms_agreement": agreement,
+    }
+
+
 def extract(run_root: Path, root: Path, anomalies: dict[str, int] | None = None) -> dict[str, Any] | None:
     """One recording's row.
 
@@ -1023,6 +1300,11 @@ def extract(run_root: Path, root: Path, anomalies: dict[str, int] | None = None)
 
     readings = _measurement_readings(view)
     row.update(_speaker_columns(view, readings))
+    row.update(_extent_columns(view, duration_s))
+    clip = _clip_columns(view)
+    row.update(clip)
+    row.update(_quality_columns(run_dir, view, clip))
+    row.update(_multi_speaker_columns(view, decision, row.get("secondary_extent_s")))
     if anomalies is not None:
         for name in readings:
             if name not in MEASUREMENTS:
@@ -1255,6 +1537,43 @@ def _fields() -> list[pa.Field]:
         pa.field("enhanced_rms_dbfs", pa.float64()),
         pa.field("enhanced_over_residual_rms_db", pa.float64()),
         pa.field("enhanced_over_residual_rms_fitted_db", pa.float64()),
+        pa.field("task_extent_n", pa.int32()),
+        pa.field("task_extent_start_s", pa.float64()),
+        pa.field("task_extent_end_s", pa.float64()),
+        pa.field("lead_s", pa.float64()),
+        pa.field("tail_s", pa.float64()),
+        pa.field("trim_s", pa.float64()),
+        pa.field("trim_fraction", pa.float64()),
+        pa.field("trimmable", pa.bool_()),
+        pa.field("clip_spans_n", pa.int32()),
+        pa.field("clip_s", pa.float64()),
+        pa.field("clip_level_max", pa.float64()),
+        pa.field("clip_unclipped_peak", pa.float64()),
+        pa.field("clip_unclipped_louder_n", pa.int32()),
+        pa.field("clip_withdrawn_n", pa.int32()),
+        pa.field("clip_contested_n", pa.int32()),
+        pa.field("clip_consistent", pa.bool_()),
+        pa.field("clip_state", pa.string()),
+        pa.field("raw_clipped_runs", pa.int32()),
+        pa.field("raw_clipped_s", pa.float64()),
+        pa.field("raw_dropout_s", pa.float64()),
+        pa.field("q_plain_floor_dbfs", pa.float64()),
+        pa.field("q_plain_snr_db", pa.float64()),
+        pa.field("q_enhanced_floor_dbfs", pa.float64()),
+        pa.field("q_enhanced_snr_db", pa.float64()),
+        pa.field("q_plain_squim_pesq", pa.float64()),
+        pa.field("q_plain_squim_stoi", pa.float64()),
+        pa.field("q_plain_squim_si_sdr", pa.float64()),
+        pa.field("q_raw_issues", pa.list_(pa.string())),
+        pa.field("q_resolved_by_enhanced", pa.list_(pa.string())),
+        pa.field("q_unresolved", pa.list_(pa.string())),
+        pa.field("ms_diarization_speakers_max", pa.int32()),
+        pa.field("ms_diarization_secondary_s", pa.float64()),
+        pa.field("ms_reviewer_other_n", pa.int32()),
+        pa.field("ms_reviewer_expected_n", pa.int32()),
+        pa.field("ms_reviewer_unexpected_n", pa.int32()),
+        pa.field("ms_signals", pa.list_(pa.string())),
+        pa.field("ms_agreement", pa.string()),
     ]
     for name in MEASUREMENTS:
         if name in SCALAR_MEASUREMENTS:

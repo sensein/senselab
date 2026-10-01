@@ -1129,3 +1129,150 @@ def test_no_ledger_leaves_every_ledger_column_null(tmp_path: Path) -> None:
         "cohort_diagnoses",
     ):
         assert row[column] is None
+
+
+def _write_stream(run_dir: Path, name: str, samples: np.ndarray, sampling_rate: int = 16000) -> str:
+    soundfile.write(run_dir / "streams" / f"{name}.flac", samples.astype("float32"), sampling_rate)
+    return _entity(
+        f"stream-{name}", "stream", [0.0, samples.size / sampling_rate], name=name, path=f"streams/{name}.flac"
+    )
+
+
+def _evaluation_recording(root: Path, *, extra: tuple[str, ...] = ()) -> Path:
+    """A 4 s recording whose task sits at 1.5–3.0 s, with one clip span an unclipped sample contradicts.
+
+    The plain stream is noise at -40 dBFS throughout; the enhanced stream is a tone over the second
+    half above a floor near -80 dBFS, so both raw noise checks fail and the enhanced stream passes them.
+    """
+    run_root = build_recording(root, duration_s=4.0)
+    run_dir = run_root / "run"
+    rng = np.random.default_rng(0)
+    n = 4 * 16000
+    plain = rng.normal(0.0, 10 ** (-40 / 20), n)
+    enhanced = rng.normal(0.0, 10 ** (-80 / 20), n)
+    enhanced[n // 2 :] += 0.3 * np.sin(2 * np.pi * 220 * np.arange(n - n // 2) / 16000)
+    lines = [
+        _write_stream(run_dir, "plain", plain),
+        _write_stream(run_dir, "enhanced", enhanced),
+        _entity("span-task", "span", [1.5, 3.0], family="speech", role="task_extent"),
+        _entity("span-clip0", "span", [2.0, 2.1], family="clip", signal="recording"),
+        _entity(
+            "measurement-clip",
+            "measurement",
+            None,
+            name="clip_amplitude",
+            clip_levels={"span-clip0": 0.99},
+            unclipped_louder_n={"span-clip0": 3},
+            unclipped_peak=1.0,
+        ),
+        _entity("assertion-wd", "assertion", [0.2, 0.25], verb="withdraw", claim="clip", reason="x"),
+        _entity("assertion-ct", "assertion", [2.0, 2.1], verb="contest", claim="clip", reason="x"),
+        _entity(
+            "measurement-disr",
+            "measurement",
+            None,
+            name="disruptions_file",
+            clipped_runs=2,
+            clipped_s=0.01,
+            dropout_s=0.0,
+        ),
+        _entity(
+            "measurement-esc",
+            "measurement",
+            [1.5, 3.0],
+            name="extent_speaker_count",
+            value=2,
+            secondary_s=1.25,
+            extent_s=1.5,
+        ),
+        *extra,
+    ]
+    store = run_dir / "store.jsonl"
+    store.write_text(store.read_text() + "\n".join(lines) + "\n")
+    return run_root
+
+
+def test_the_task_extent_reports_what_could_be_trimmed_around_it(tmp_path: Path) -> None:
+    """The task extent reports what could be trimmed around it."""
+    row = rv.extract(_evaluation_recording(tmp_path), tmp_path)
+    assert row is not None
+    assert (row["task_extent_start_s"], row["task_extent_end_s"]) == (1.5, 3.0)
+    assert (row["lead_s"], row["tail_s"], row["trim_s"]) == (1.5, 1.0, 2.5)
+    assert row["trim_fraction"] == pytest.approx(0.625)
+    assert row["trimmable"] is True
+
+
+def test_no_task_extent_leaves_every_trim_column_null(one_row: dict[str, Any]) -> None:
+    """No task extent leaves every trim column null."""
+    for key in ("task_extent_start_s", "trim_s", "trim_fraction", "trimmable"):
+        assert one_row[key] is None
+    assert one_row["task_extent_n"] is None
+
+
+def test_a_kept_clip_an_unclipped_sample_exceeds_reads_as_inconsistent(tmp_path: Path) -> None:
+    """A kept clip an unclipped sample exceeds reads as inconsistent."""
+    row = rv.extract(_evaluation_recording(tmp_path), tmp_path)
+    assert row is not None
+    assert row["clip_spans_n"] == 1
+    assert row["clip_s"] == pytest.approx(0.1)
+    assert row["clip_level_max"] == 0.99
+    assert row["clip_unclipped_louder_n"] == 3
+    assert (row["clip_withdrawn_n"], row["clip_contested_n"]) == (1, 1)
+    assert row["clip_consistent"] is False
+    assert row["clip_state"] == "kept_inconsistent"
+    assert (row["raw_clipped_runs"], row["raw_clipped_s"]) == (2, 0.01)
+
+
+def test_a_recording_the_clip_detector_found_nothing_in_is_state_none(one_row: dict[str, Any]) -> None:
+    """A recording the clip detector found nothing in is state none."""
+    assert one_row["clip_state"] == "none"
+    assert one_row["clip_consistent"] is None
+    assert one_row["clip_spans_n"] == 0
+
+
+def test_noise_the_enhanced_stream_removes_is_resolved_and_clipping_never_is(tmp_path: Path) -> None:
+    """Noise the enhanced stream removes is resolved and clipping never is."""
+    row = rv.extract(_evaluation_recording(tmp_path), tmp_path)
+    assert row is not None
+    assert row["q_plain_floor_dbfs"] == pytest.approx(-40.0, abs=1.0)
+    assert row["q_enhanced_floor_dbfs"] < -70.0
+    assert row["q_raw_issues"] == ["noise_floor", "low_snr", "clipping"]
+    assert row["q_resolved_by_enhanced"] == ["noise_floor", "low_snr"]
+    assert row["q_unresolved"] == ["clipping"]
+    assert row["q_plain_squim_pesq"] == 2.75
+
+
+def test_no_plain_stream_leaves_the_quality_checks_null(one_row: dict[str, Any]) -> None:
+    """No plain stream leaves the quality checks null."""
+    assert one_row["q_raw_issues"] is None
+    assert one_row["q_unresolved"] is None
+
+
+def test_the_diarizer_and_the_reviewer_agreeing_is_named_as_both(tmp_path: Path) -> None:
+    """The diarizer and the reviewer agreeing is named as both."""
+    run_root = _evaluation_recording(tmp_path)
+    view = rv.read_store(run_root / "run" / "store.jsonl")
+    decision = {"llm_redaction": {"status": "ok", "other_speakers": [{"text": "go on", "expected": True}]}}
+    row = rv._multi_speaker_columns(view, decision, None)
+    assert (row["ms_diarization_speakers_max"], row["ms_diarization_secondary_s"]) == (2, 1.25)
+    assert (row["ms_reviewer_other_n"], row["ms_reviewer_expected_n"], row["ms_reviewer_unexpected_n"]) == (1, 1, 0)
+    assert row["ms_signals"] == ["diarization", "reviewer"]
+    assert row["ms_agreement"] == "diarization+reviewer"
+
+
+def test_one_signal_alone_is_named_as_only_that_signal(tmp_path: Path) -> None:
+    """One signal alone is named as only that signal."""
+    run_root = _evaluation_recording(tmp_path)
+    view = rv.read_store(run_root / "run" / "store.jsonl")
+    row = rv._multi_speaker_columns(view, {}, 2.0)
+    assert row["ms_signals"] == ["diarization", "separation"]
+    assert row["ms_agreement"] == "diarization+separation"
+    assert row["ms_reviewer_other_n"] is None
+    lone = rv._multi_speaker_columns(view, {"llm_redaction": {"status": "ok", "speakers": "one"}}, None)
+    assert lone["ms_agreement"] == "diarization_only"
+
+
+def test_no_speaker_reading_leaves_the_agreement_null(one_row: dict[str, Any]) -> None:
+    """No speaker reading leaves the agreement null."""
+    assert one_row["ms_agreement"] is None
+    assert one_row["ms_signals"] is None
