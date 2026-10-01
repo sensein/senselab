@@ -37,6 +37,8 @@ from senselab.audio.workflows.triage.recording_vectors import (
     recording_dirs,
     stem_of,
 )
+from senselab.audio.workflows.triage.b2ai_hints import read_sidecars
+from senselab.audio.workflows.triage.extend import source_of
 from senselab.audio.workflows.triage.residue import is_content_word
 from senselab.audio.workflows.triage.routing_analysis.families import task_family, task_id_of
 
@@ -69,7 +71,7 @@ RELEASE_ORDER = (
 """The graph's own release axis, most permissive first, plus the page's own ``unrecorded``."""
 
 EXTRACT_SCHEMA = "senselab.fsreview.extract"
-EXTRACT_VERSION = 8
+EXTRACT_VERSION = 9
 """7 carries each span's trim reason and condition kind, and a single ASR stream where the consensus is empty.
 
 6 was the first version whose marks are the fold's PII ledger: every span and each word's state.
@@ -606,6 +608,43 @@ def task_extent(view: StoreView) -> tuple[float, float] | None:
     return (float(span.extent[0]), float(span.extent[1]))
 
 
+def recording_language(run_root: Path) -> str:
+    """The language the recording's BIDS sidecar declares, or the empty string.
+
+    The store does not carry it; the sidecar does. The recording is found through the run's own
+    ``run.json``, either in this run root or, for a mirrored tree, in the finished run its
+    ``run/derivatives`` link points into.
+
+    Args:
+        run_root: The directory holding ``run/store.jsonl``.
+
+    Returns:
+        The sidecar's ``language`` value as written (``en``, ``es``, ``es-419``), or ``""``.
+    """
+    candidates = [run_root, (run_root / RUN_SUBDIR / "derivatives").resolve().parent.parent]
+    for root in candidates:
+        try:
+            fields = read_sidecars(source_of(root))
+        except (OSError, ValueError):
+            continue
+        return str(fields.get("language") or "")
+    return ""
+
+
+def language_name(code: str) -> str:
+    """The facet a language code falls under: English, Spanish, the code itself, or ``unknown``.
+
+    Args:
+        code: A sidecar ``language`` value.
+
+    Returns:
+        ``English`` for ``en`` and its regional forms, ``Spanish`` for ``es`` and its regional forms
+        (``es-419``), the code itself for anything else, and ``unknown`` for an empty code.
+    """
+    base = code.strip().lower().replace("_", "-").split("-")[0]
+    return {"en": "English", "es": "Spanish"}.get(base, code.strip() or "unknown")
+
+
 def recording_record(run_root: Path, families: frozenset[str]) -> dict[str, Any] | None:
     """One recording's row, or None when it is not a free-response recording.
 
@@ -670,6 +709,7 @@ def recording_record(run_root: Path, families: frozenset[str]) -> dict[str, Any]
         "task": task,
         "stem": stem,
         "fam": declared,
+        "lang": recording_language(run_root),
         "rel": str(attributes.get("release") or ""),
         "rg": attributes.get("release_ground"),
         "tri": str(attributes.get("triage") or attributes.get("outcome") or ""),
@@ -1043,6 +1083,7 @@ def card_account(row: Mapping[str, Any]) -> dict[str, Any]:
         "hk": row.get("hk") or "",
         "cd": list(row.get("cd") or ()),
         "ss": row.get("ss"),
+        "lang": row.get("lang") or "",
     }
 
 
@@ -1068,6 +1109,7 @@ class Corpus:
 
     participants: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     families: Counter[str] = field(default_factory=Counter)
+    languages: Counter[str] = field(default_factory=Counter)
     releases: Counter[str] = field(default_factory=Counter)
     categories: Counter[str] = field(default_factory=Counter)
     detectors: Counter[str] = field(default_factory=Counter)
@@ -1092,6 +1134,7 @@ class Corpus:
         if row.get("ss"):
             self.single_streams[str(row["ss"]["src"])] += 1
         self.families[str(row["fam"])] += 1
+        self.languages[language_name(str(row.get("lang") or ""))] += 1
         self.releases[str(row["rel"]) or "unrecorded"] += 1
         for mark in row.get("f") or []:
             self.marks += 1
@@ -1266,11 +1309,14 @@ def recording_html(row: dict[str, Any]) -> str:
     return (
         f'<article class="rec" data-rel="{html.escape(str(row["rel"]) or "unrecorded")}" '
         f'data-fam="{html.escape(str(row["fam"]))}" data-fired="{fired}" '
+        f'data-lang="{html.escape(language_name(str(row.get("lang") or "")))}" '
         f'data-stem="{html.escape(stem)}" data-nf="{len(marks)}" '
         f'data-hk="{html.escape(str(row.get("hk") or "none"))}" '
         f'data-llm="{html.escape(_llm_status(row))}">'
         f'<header><span class="task">{html.escape(str(row["task"]))}</span>'
-        f'<span class="fam">{html.escape(str(row["fam"]))}</span>{_chip(str(row["rel"]))}{tag}</header>'
+        f'<span class="fam">{html.escape(str(row["fam"]))}</span>'
+        f'<span class="lang" title="{html.escape(str(row.get("lang") or "no language declared"))}">'
+        f"{html.escape(language_name(str(row.get('lang') or '')))}</span>{_chip(str(row['rel']))}{tag}</header>"
         f'<p class="text">{body}</p>'
         f'<div class="whyrow">{_release_controls(stem)}{_flag_control(stem)}'
         f'<button type="button" class="whybtn" data-stem="{html.escape(stem)}">'
@@ -1409,6 +1455,11 @@ def render(corpus: Corpus, title: str) -> str:
         f"{html.escape(name)} <em>{count}</em></label>"
         for name, count in sorted(corpus.families.items())
     )
+    languages = "".join(
+        f'<label><input type="checkbox" class="lang-f" value="{html.escape(name)}" checked> '
+        f"{html.escape(name)} <em>{count}</em></label>"
+        for name, count in sorted(corpus.languages.items(), key=lambda item: (-item[1], item[0]))
+    )
     releases = "".join(
         f'<label><input type="checkbox" class="rel-f" value="{html.escape(name)}" checked> '
         f"{html.escape(name.replace('_', ' '))} <em>{corpus.releases[name]}</em></label>"
@@ -1461,6 +1512,7 @@ def render(corpus: Corpus, title: str) -> str:
         characters=f"{corpus.characters:,}",
         marks=corpus.marks,
         families=families,
+        languages=languages,
         releases=releases,
         categories=categories,
         detectors=detectors,
@@ -1569,6 +1621,7 @@ margin:0 0 10px;max-width:76ch;scroll-margin-top:12px;scroll-margin-bottom:96px}
 margin-bottom:6px}
 .task{font-family:ui-monospace,Menlo,monospace;font-size:12px;color:var(--acc)}
 .fam{color:var(--mut)}
+.lang{color:var(--mut);font-size:.85em;border:1px solid currentColor;border-radius:3px;padding:0 3px;margin-left:4px}
 .ss{font-family:ui-monospace,Menlo,monospace;font-size:10.5px;color:var(--mut);border:1px solid var(--line);
 border-radius:3px;padding:0 4px}
 .text{margin:0;font-size:16px}
@@ -2026,6 +2079,7 @@ function outline(){
 
 /* ---- facets ---- */
 const FACET_TOGGLES=[['allrel','rel-f'],['norel','rel-f'],['allfam','fam-f'],['nofam','fam-f'],
+  ['alllang','lang-f'],['nolang','lang-f'],
   ['allcat','cat-f'],['nocat','cat-f'],['alldet','det-f'],['nodet','det-f']];
 function setFacet(cls,on){for(const el of document.querySelectorAll('.'+cls))el.checked=on;}
 function checked(cls){
@@ -2050,7 +2104,7 @@ function markMatches(m,cats,dets,brk,tx,rev,lo,hi){
 }
 function apply(){
   const needle=q.value.trim().toLowerCase();
-  const fams=checked('fam-f'), rels=checked('rel-f');
+  const fams=checked('fam-f'), rels=checked('rel-f'), langs=checked('lang-f');
   const cats=checked('cat-f'), dets=checked('det-f');
   const fired=firedSel.value, brk=brkSel.value, tx=txSel.value, rev=revSel.value;
   const flg=flagSel.value, llmWant=llmSel.value, dec=decSel.value, hk=hkSel.value;
@@ -2062,7 +2116,7 @@ function apply(){
   for(const s of sections){
     let any=false;
     for(const r of s.querySelectorAll('.rec')){
-      let ok=fams.has(r.dataset.fam)&&rels.has(r.dataset.rel);
+      let ok=fams.has(r.dataset.fam)&&rels.has(r.dataset.rel)&&langs.has(r.dataset.lang);
       if(ok&&flg!=='any'){
         const on=r.dataset.flag==='1';
         ok=flg==='flagged'?on:!on;
@@ -2252,6 +2306,7 @@ const KIND_WHY={cohort:'a condition the study recruits for',other:'a condition o
 function cardAccount(a,card){
   const out=['<h4>on this card</h4>'];
   if(a.why)out.push('<p class="note">deciding reason: '+esc(a.why)+'</p>');
+  out.push('<p>language: '+(a.lang?esc(a.lang):'none declared in the sidecar')+'</p>');
   if(a.ss){
     out.push('<p><b>'+esc(a.ss.src)+' only.</b> The consensus transcript carries no words, so the card '
       +'shows this recogniser\\'s own transcript ('+esc(a.ss.n)+' recogniser(s) left words; the '
@@ -2523,7 +2578,7 @@ for(const b of document.querySelectorAll('.whybtn')){
 }
 document.addEventListener('keydown',e=>{if(e.key==='Escape'&&!whyBox.hidden)closeWhy();});
 
-for(const el of document.querySelectorAll('.fam-f,.rel-f,.cat-f,.det-f'))
+for(const el of document.querySelectorAll('.fam-f,.rel-f,.lang-f,.cat-f,.det-f'))
   el.addEventListener('change',apply);
 for(const el of [firedSel,brkSel,txSel,revSel,flagSel,decSel,llmSel,hkSel,minNf,minNt,maxNt])
   el.addEventListener('change',apply);
@@ -2532,7 +2587,7 @@ for(const [id,cls] of FACET_TOGGLES)
   document.getElementById(id).addEventListener('click',()=>{setFacet(cls,id.startsWith('all'));apply();});
 document.getElementById('all').addEventListener('click',e=>{
   e.preventDefault();
-  for(const el of document.querySelectorAll('.fam-f,.rel-f,.cat-f,.det-f'))el.checked=true;
+  for(const el of document.querySelectorAll('.fam-f,.rel-f,.lang-f,.cat-f,.det-f'))el.checked=true;
   firedSel.value='any';brkSel.value='any';txSel.value='any';revSel.value='any';flagSel.value='any';
   decSel.value='any';llmSel.value='any';hkSel.value='any';
   minNf.value='';minNt.value='';maxNt.value='';q.value='';apply();});
@@ -2588,6 +2643,9 @@ findings</div>
 <fieldset><legend>family
 <button id="allfam" type="button">all</button><button id="nofam" type="button">none</button></legend>
 <div class="facets">{families}</div></fieldset>
+<fieldset><legend>language
+<button id="alllang" type="button">all</button><button id="nolang" type="button">none</button></legend>
+<div class="facets">{languages}</div></fieldset>
 <fieldset><legend>finding &mdash; category
 <button id="allcat" type="button">all</button><button id="nocat" type="button">none</button></legend>
 <div class="facets">{categories}</div></fieldset>
