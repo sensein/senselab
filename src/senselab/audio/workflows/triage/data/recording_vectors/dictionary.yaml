@@ -889,6 +889,35 @@ columns:
     source: [recording_vectors.py:_extent_columns, recording_vectors.py:evaluation_bounds]
     null_means: No task extent, or no recording duration.
 
+  task_audio_start_s:
+    units: s
+    description: Where the task-extent cut begins in the recording.
+    computation: The live `task_audio` measurement's `start_s`, the task-extent hull's start less `task_audio.padding_s`, floored at 0.
+    source: [recording_vectors.py:_task_audio_columns, task_audio.py:task_extent]
+    null_means: The cut has not run, or the recording has no task extent.
+
+  task_audio_end_s:
+    units: s
+    description: Where the task-extent cut ends in the recording.
+    computation: The live `task_audio` measurement's `end_s`, the hull's end plus `task_audio.padding_s`, capped at the recording's duration.
+    source: [recording_vectors.py:_task_audio_columns, task_audio.py:task_extent]
+    null_means: The cut has not run, or the recording has no task extent.
+
+  task_audio_duration_s:
+    units: s
+    description: How long the task-extent cut is.
+    computation: '`task_audio_end_s` minus `task_audio_start_s`.'
+    source: [recording_vectors.py:_task_audio_columns, task_audio.py:TaskExtent]
+    null_means: The cut has not run, or the recording has no task extent.
+
+  task_audio_cuts:
+    units: none
+    description: Which streams were cut to the task extent.
+    computation: The live `task_plain`, `task_enhanced` and `task_redacted` streams, by source name; `redacted` only under `release_with_redaction`.
+    source: [recording_vectors.py:_task_audio_columns, task_audio.py:cut_task_audio]
+    null_means: The cut has not run, or the recording has no task extent.
+    values: [plain, enhanced, redacted]
+
   clip_spans_n:
     units: count
     description: How many clip spans survived the detector's own re-assessment.
