@@ -1028,10 +1028,14 @@ UNMASKED_BY_TRIM = "unmasked_by_trim"
 """A word a mask covered and does not keep: not a residue content word (a closed-class word, a filler,
 a marker, task content), or a content word no detector marked, which only the padding reached."""
 
+RELEASED_BY_KIND = "released_by_kind"
+"""A content word of a DATE_TIME-family finding that names a time of day or a duration
+(:func:`time_by_kind`): shown whatever the reviewer said."""
+
 PROPOSED_BY_REVIEWER = "proposed_by_reviewer"
 """A word a reviewer ``redact`` entry named that no mask hides."""
 
-WORD_STATES = (MASKED, UNMASKED_BY_REVIEWER, UNMASKED_BY_TRIM, PROPOSED_BY_REVIEWER)
+WORD_STATES = (MASKED, UNMASKED_BY_REVIEWER, UNMASKED_BY_TRIM, RELEASED_BY_KIND, PROPOSED_BY_REVIEWER)
 
 MASK_UNCHANGED = "unchanged"
 MASK_TRIMMED = "trimmed"
@@ -1070,7 +1074,11 @@ TASK_CONTENT = "task_content"
 task's own content -- its stimulus, or its task lexicon: the task said it, so it identifies nobody and is
 held for no one."""
 
-AGREEMENTS = (AGREED_MASKED, AGREED_PLACED, NEW, TASK_CONTENT)
+TIME_BY_KIND = "time_by_kind"
+"""A reviewer ``redact`` entry of the DATE_TIME family every content word of which names a time of day or
+a duration (:func:`time_by_kind`): released by kind, so it proposes hiding nothing."""
+
+AGREEMENTS = (AGREED_MASKED, AGREED_PLACED, NEW, TASK_CONTENT, TIME_BY_KIND)
 """Every agreement a reviewer ``redact`` entry can carry."""
 
 
@@ -1127,6 +1135,85 @@ def category_family(category: str) -> str:
     return _families().get(key, key)
 
 
+TIME_RELEASE_PATH = Path(__file__).parents[1] / "data" / "time_release.yaml"
+"""The words of a DATE_TIME-family finding released by kind: times of day and durations."""
+
+DATE_TIME_FAMILY = "DATE_TIME"
+
+_ORDINAL_DIGITS = re.compile(r"^\d+(st|nd|rd|th)$")
+_YEAR_DIGITS = re.compile(r"^\d{4}s?$")
+
+
+@lru_cache(maxsize=1)
+def _time_release() -> dict[str, frozenset[str]]:
+    """The lists of ``data/time_release.yaml``, each as a set.
+
+    Returns:
+        ``{list name: words}``.
+    """
+    raw = yaml.safe_load(TIME_RELEASE_PATH.read_text()) or {}
+    return {str(key): frozenset(str(word).lower() for word in value or ()) for key, value in raw.items()}
+
+
+def _time_token(text: str) -> str:
+    """One word as :func:`time_by_kind` compares it.
+
+    Args:
+        text: A word's surface.
+
+    Returns:
+        The token lower-cased, edge punctuation, a possessive, apostrophes, dots and hyphens dropped.
+    """
+    token = _match_token(text)
+    token = token[:-2] if token.endswith("'s") else token
+    return token.replace("'", "").replace(".", "").replace("-", "")
+
+
+def time_by_kind(texts: Sequence[str]) -> set[int]:
+    """Which words of one DATE_TIME-family span name a time of day or a duration.
+
+    A time-of-day word, a clock marker after a number, a plural unit, or a singular unit beside a
+    quantity is released, and with any of them the span's quantities, numbers and modifiers. A span
+    holding a ``blockers`` word, a four-digit number or an ordinal releases nothing.
+
+    Args:
+        texts: The span's word surfaces, in order.
+
+    Returns:
+        The positions released.
+    """
+    lists = _time_release()
+    tokens = [_time_token(text) for text in texts]
+    if any(
+        token in lists["blockers"]
+        or token in lists["ordinal_words"]
+        or _ORDINAL_DIGITS.match(token)
+        or _YEAR_DIGITS.match(token)
+        for token in tokens
+    ):
+        return set()
+
+    def number(token: str) -> bool:
+        return token.isdigit() or token in lists["quantities"]
+
+    quantified = any(number(token) for token in tokens)
+    core: set[int] = set()
+    for position, token in enumerate(tokens):
+        if token in lists["time_of_day"] or token in lists["plural_units"]:
+            core.add(position)
+        elif token in lists["units"] and quantified:
+            core.add(position)
+        elif token in lists["clock_markers"] and position and number(tokens[position - 1]):
+            core.add(position)
+        elif token[:-2].isdigit() and token[-2:] in ("am", "pm"):
+            core.add(position)
+    if not core:
+        return set()
+    return core | {
+        position for position, token in enumerate(tokens) if number(token) or token in lists["modifiers"] or not token
+    }
+
+
 PLACED_WORDS = "words"
 PLACED_SUBSTRING = "substring"
 
@@ -1138,7 +1225,8 @@ class MaskWord:
     Attributes:
         word_id: The consensus word's entity id.
         text: Its surface.
-        state: :data:`MASKED`, :data:`UNMASKED_BY_REVIEWER` or :data:`UNMASKED_BY_TRIM`.
+        state: :data:`MASKED`, :data:`UNMASKED_BY_REVIEWER`, :data:`UNMASKED_BY_TRIM` or
+            :data:`RELEASED_BY_KIND`.
         named: Whether a reviewer ``release`` entry named it, whether or not the fold applied it.
         content: Whether it counts as content for the trim: a residue content word, or one a
             detector marked in a protected category.
@@ -1671,8 +1759,10 @@ def mask_plan(
     quotes. A word leaves its mask when a reviewer ``release`` entry names it -- whole-token runs, at
     every place the quote occurs -- or names the same term (surface and family) elsewhere, unless a
     ``redact`` entry places on that term; or when it is not a residue content word
-    (:func:`~senselab.audio.workflows.triage.residue.is_content_word`). A ``redact`` entry whose content
-    words a mask already hides agrees with the masks. The kept words are cut into one extent per
+    (:func:`~senselab.audio.workflows.triage.residue.is_content_word`); or when it names a time of day
+    or a duration in a DATE_TIME-family finding (:func:`time_by_kind`), whatever the reviewer said. A
+    ``redact`` entry whose content words a mask already hides agrees with the masks; one naming only a
+    time of day or a duration proposes nothing. The kept words are cut into one extent per
     adjacent run, padded up to the nearest unmasked word. The rule and its derivation are in
     ``specs/20260927-mask-placement-and-second-speaker/design.md``.
 
@@ -1863,11 +1953,21 @@ def mask_plan(
         else:
             elsewhere.update(member_ids)
     kind_cut = name_only - elsewhere
+    by_kind: set[str] = set()
+    for member_ids, members in groups.items():
+        if not all(category_family(finding.category) == DATE_TIME_FAMILY for finding in members):
+            continue
+        group = [by_id[word_id] for word_id in member_ids if word_id in by_id]
+        by_kind.update(
+            group[position].id
+            for position in time_by_kind([text_of(word) for word in group])
+            if all(category_family(category) == DATE_TIME_FAMILY for category in found.get(group[position].id, ()))
+        )
     keepable = {
         word_id
         for member_ids in groups
         for word_id in member_ids
-        if content(by_id[word_id]) and word_id not in kind_cut
+        if content(by_id[word_id]) and word_id not in kind_cut and word_id not in by_kind
     }
     kept_ids = keepable - released
 
@@ -1893,8 +1993,13 @@ def mask_plan(
         category = str(entry.get("category") or "OTHER").upper()
         family = category_family(category)
         uncovered = [word for word in hits if word.id not in kept_ids and content(word)]
+        timed = time_by_kind([text_of(word) for word in hits]) if family == DATE_TIME_FAMILY else set()
         if category in review_set and task_content(quote, hits):
             agreement = TASK_CONTENT
+        elif timed and all(position in timed or not content(word) for position, word in enumerate(hits)):
+            agreement = TIME_BY_KIND
+            if family in unplaced_families:
+                placed_families.add(family)
         elif hits and not uncovered:
             agreement = AGREED_MASKED
             if family in unplaced_families:
@@ -1928,6 +2033,8 @@ def mask_plan(
     def state_of(word: Entity) -> str:
         if word.id in kept_ids:
             return MASKED
+        if word.id in by_kind and content(word):
+            return RELEASED_BY_KIND
         if word.id in released and word.id in keepable:
             return UNMASKED_BY_REVIEWER
         return UNMASKED_BY_TRIM

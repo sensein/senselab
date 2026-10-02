@@ -845,8 +845,17 @@ class TestTheRedactionReviewerAnnotatesAndThisNodeDecides:
         assert FoldPolicy.from_config(load_triage_config()).llm_reset_redactions is True
 
     @staticmethod
-    def _mask(store: ProvStore, words: Sequence[str], masked: Sequence[int]) -> None:
-        """Consensus words, SPEECH's residue, and a located finding and a REDACT mask per ``masked`` word."""
+    def _mask(
+        store: ProvStore,
+        words: Sequence[str],
+        masked: Sequence[int | Sequence[int]],
+        categories: Sequence[str] | None = None,
+    ) -> None:
+        """Consensus words, SPEECH's residue, and a located finding and a REDACT mask per ``masked`` span.
+
+        An entry of ``masked`` is a word index or a run of them; ``categories`` labels each entry, PERSON
+        where omitted.
+        """
         agent = software_agent(store)
         activity = store.activity(node="SPEECH", step="residue-seed", parameters={})
         store.was_associated_with(activity, agent)
@@ -864,30 +873,34 @@ class TestTheRedactionReviewerAnnotatesAndThisNodeDecides:
             attributes={"name": "pii_scan", "scanned_by": ["rules"], "failed": [], "residue_word_ids": word_ids},
         )
         store.was_generated_by(scan, activity)
-        for index in masked:
+        for number, entry in enumerate(masked):
+            indices = [entry] if isinstance(entry, int) else list(entry)
+            category = categories[number] if categories else "PERSON"
+            low, high = float(indices[0]), float(indices[-1]) + 0.5
             finding = store.entity(
                 prov_type="pii",
-                extent=(float(index), float(index) + 0.5),
+                extent=(low, high),
                 attributes={
-                    "category": "PERSON",
+                    "category": category,
                     "source": "rules",
                     "occurrence": 0,
                     "occurrences_n": 1,
-                    "word_ids": [word_ids[index]],
+                    "word_ids": [word_ids[index] for index in indices],
                 },
             )
             store.was_generated_by(finding, activity)
             mark = store.entity(
                 prov_type="assertion",
-                extent=(float(index), float(index) + 0.5),
-                attributes={"verb": "label", "label": "pii", "category": "PERSON"},
+                extent=(low, high),
+                attributes={"verb": "label", "label": "pii", "category": category},
             )
             store.was_generated_by(mark, activity)
-            store.was_derived_from(mark, word_ids[index])
+            for index in indices:
+                store.was_derived_from(mark, word_ids[index])
             span = store.entity(
                 prov_type="span",
-                extent=(float(index) - 0.05, float(index) + 0.55),
-                attributes={"name": "redaction", "category": "PERSON"},
+                extent=(low - 0.05, high + 0.05),
+                attributes={"name": "redaction", "category": category},
             )
             store.was_generated_by(span, activity)
 
@@ -938,6 +951,111 @@ class TestTheRedactionReviewerAnnotatesAndThisNodeDecides:
         states = {word["text"]: word["state"] for mask in ledger.attributes["masks"] for word in mask["words"]}
         assert states == {"alice": "masked", "brooklyn": "unmasked_by_reviewer"}
         assert [len(entry["word_ids"]) for entry in ledger.attributes["final_masks"]] == [1]
+
+    def _states(self, store: ProvStore) -> dict[str, str]:
+        ledger = find_measurement(store, PII_LEDGER)
+        assert ledger is not None
+        return {word["text"]: word["state"] for mask in ledger.attributes["masks"] for word in mask["words"]}
+
+    @pytest.mark.parametrize(
+        ("words", "span", "expected"),
+        [
+            (
+                ["i", "woke", "this", "morning"],
+                (2, 3),
+                {"this": "unmasked_by_trim", "morning": "released_by_kind"},
+            ),
+            (
+                ["the", "past", "couple", "of", "weeks", "were", "hard"],
+                (1, 2, 3, 4),
+                {
+                    "past": "unmasked_by_trim",
+                    "couple": "released_by_kind",
+                    "of": "unmasked_by_trim",
+                    "weeks": "released_by_kind",
+                },
+            ),
+            (
+                ["for", "two", "years", "now"],
+                (1, 2),
+                {"two": "released_by_kind", "years": "released_by_kind"},
+            ),
+        ],
+    )
+    def test_a_time_of_day_or_a_duration_is_released_by_kind(
+        self,
+        make_verdict_store: Callable[..., ProvStore],
+        tmp_path: Path,
+        words: list[str],
+        span: tuple[int, ...],
+        expected: dict[str, str],
+    ) -> None:
+        """No reviewer release entry names it, and it is shown: a time of day or a length of time dates nothing."""
+        config = _policy_config(tmp_path, "verdict:\n  llm_redaction_withholds: true\n")
+        store = make_verdict_store(concluded=[*BASE, ("REDACT", Outcome.PASS, None)], routed=ROUTED_PAIR, pii_n=1)
+        self._mask(store, words, [span], ["DATE_TIME"])
+        _annotate(store, status="clean", redaction="complete", original="clean", proposal=[])
+        result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
+        assert self._states(store) == expected
+        assert result.file_verdict.release == Release.WITHOUT_REDACTION
+
+    @pytest.mark.parametrize(
+        ("words", "span"),
+        [(["on", "March", "3rd", "we", "left"], (1, 2)), (["last", "Tuesday", "we", "left"], (0, 1))],
+    )
+    def test_a_calendar_date_stays_masked(
+        self, make_verdict_store: Callable[..., ProvStore], tmp_path: Path, words: list[str], span: tuple[int, ...]
+    ) -> None:
+        """A month with a day, or a named weekday, is a date element: nothing is released by kind."""
+        config = _policy_config(tmp_path, "verdict:\n  llm_redaction_withholds: true\n")
+        store = make_verdict_store(concluded=[*BASE, ("REDACT", Outcome.PASS, None)], routed=ROUTED_PAIR, pii_n=1)
+        self._mask(store, words, [span], ["DATE_TIME"])
+        _annotate(store, status="clean", redaction="complete", original="clean", proposal=[])
+        result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
+        states = self._states(store)
+        assert "released_by_kind" not in states.values()
+        assert states[words[span[1]]] == "masked"
+        assert result.file_verdict.release == Release.WITH_REDACTION
+
+    def test_a_duration_beside_a_name_keeps_the_name(
+        self, make_verdict_store: Callable[..., ProvStore], tmp_path: Path
+    ) -> None:
+        """One DATE_TIME span over "two years in Boston", and a LOCATION finding on "Boston": only the name stays."""
+        config = _policy_config(tmp_path, "verdict:\n  llm_redaction_withholds: true\n")
+        store = make_verdict_store(concluded=[*BASE, ("REDACT", Outcome.PASS, None)], routed=ROUTED_PAIR, pii_n=2)
+        self._mask(store, ["two", "years", "in", "Boston", "and", "Kent"], [(0, 1, 2, 3), 5], ["DATE_TIME", "LOCATION"])
+        _annotate(store, status="clean", redaction="complete", original="clean", proposal=[])
+        result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
+        states = self._states(store)
+        assert (states["two"], states["years"], states["Boston"], states["Kent"]) == (
+            "released_by_kind",
+            "released_by_kind",
+            "masked",
+            "masked",
+        )
+        assert result.file_verdict.release == Release.WITH_REDACTION
+
+    def test_a_reviewer_asking_to_hide_a_duration_proposes_nothing(
+        self, make_verdict_store: Callable[..., ProvStore], tmp_path: Path
+    ) -> None:
+        """The reviewer's ``redact`` entry on "two years" is released by kind, so it withholds nothing."""
+        config = _policy_config(tmp_path, "verdict:\n  llm_redaction_withholds: true\n")
+        store = make_verdict_store(concluded=[*BASE, ("REDACT", Outcome.PASS, None)], routed=ROUTED_PAIR, pii_n=1)
+        self._mask(store, ["for", "two", "years", "now"], [(1, 2)], ["DATE_TIME"])
+        _annotate(
+            store,
+            status="flagged",
+            redaction="incomplete",
+            original="carries_pii",
+            flagged=["DATE_TIME"],
+            proposal=[{"text": "two years", "action": "redact", "category": "DATE_TIME"}],
+        )
+        result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
+        ledger = find_measurement(store, PII_LEDGER)
+        assert ledger is not None
+        (proposal,) = ledger.attributes["proposals"]
+        assert proposal["agreement"] == "time_by_kind"
+        assert result.file_verdict.release == Release.WITHOUT_REDACTION
 
     def test_a_condition_only_reading_is_held_for_human_review(
         self, make_verdict_store: Callable[..., ProvStore], tmp_path: Path

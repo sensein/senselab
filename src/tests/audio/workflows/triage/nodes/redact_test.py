@@ -46,6 +46,7 @@ from senselab.audio.workflows.triage.nodes.redact import (
     mask_plan,
     redact,
     settle_release,
+    time_by_kind,
 )
 from senselab.audio.workflows.triage.vocabulary import (
     FINDINGS_ARE_TASK_CONTENT,
@@ -2813,3 +2814,28 @@ class TestTaskWordsKindCutAndAReadingThatNamesNothing:
                 "placed": True,
             }
         ]
+
+
+@pytest.mark.parametrize(
+    ("texts", "released"),
+    [
+        (["this", "morning"], {0, 1}),
+        (["the", "past", "couple", "of", "weeks"], {0, 1, 2, 3, 4}),
+        (["two", "years"], {0, 1}),
+        (["a", "week"], {0, 1}),
+        (["years"], {0}),
+        (["3", "o'clock"], {0, 1}),
+        (["3pm"], {0}),
+        (["last", "year"], set()),
+        (["the", "week"], set()),
+        (["March", "3rd"], set()),
+        (["last", "Tuesday"], set()),
+        (["Tuesday", "morning"], set()),
+        (["93", "years", "old"], set()),
+        (["yesterday", "evening"], set()),
+        (["two", "years", "in", "Boston"], {0, 1}),
+    ],
+)
+def test_time_by_kind_releases_times_of_day_and_durations_only(texts: list[str], released: set[int]) -> None:
+    """A time of day or a quantified length of time is released; a date, a weekday or an age is not."""
+    assert time_by_kind(texts) == released
