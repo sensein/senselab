@@ -155,6 +155,7 @@ class OllamaServer:
         log_path: Where the server's output goes; None discards it.
         startup_timeout_s: How long to wait for the server to answer.
         keep_alive: ``OLLAMA_KEEP_ALIVE``, how long the weights stay loaded between requests.
+        num_parallel: ``OLLAMA_NUM_PARALLEL``, how many requests the loaded model answers at once.
     """
 
     def __init__(
@@ -167,6 +168,7 @@ class OllamaServer:
         log_path: Path | None = None,
         startup_timeout_s: float = 120.0,
         keep_alive: str = "60m",
+        num_parallel: int = 1,
     ) -> None:
         """Hold the settings; nothing starts until ``__enter__``."""
         self.binary = Path(binary)
@@ -176,6 +178,7 @@ class OllamaServer:
         self.log_path = log_path
         self.startup_timeout_s = startup_timeout_s
         self.keep_alive = keep_alive
+        self.num_parallel = int(num_parallel)
         self.host = ""
         self._process: subprocess.Popen[bytes] | None = None
         self._log: Any = None
@@ -189,6 +192,7 @@ class OllamaServer:
             "OLLAMA_MODELS": str(self.models_dir),
             "OLLAMA_HOST": self.host,
             "OLLAMA_KEEP_ALIVE": self.keep_alive,
+            "OLLAMA_NUM_PARALLEL": str(self.num_parallel),
             "OLLAMA_NOPRUNE": "1",
         }
         self._log = self.log_path.open("ab") if self.log_path is not None else subprocess.DEVNULL

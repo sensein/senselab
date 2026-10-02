@@ -250,3 +250,41 @@ def test_a_request_is_deterministic_by_construction(recorder: str) -> None:
     assert body["path"] == "/v1/systemone"
     assert body["model"] == "nimble:9b"
     assert body["options"] == {"temperature": 0, "seed": 7}
+
+
+class _FakeProcess:
+    """Stands in for ``ollama serve``: records the environment it was started with."""
+
+    started: list[dict[str, str]] = []
+
+    def __init__(self, args: list[str], *, env: dict[str, str], **kw: Any) -> None:  # noqa: ANN401
+        type(self).started.append(dict(env))
+        self.returncode: int | None = None
+
+    def poll(self) -> int | None:
+        return self.returncode
+
+    def terminate(self) -> None:
+        self.returncode = 0
+
+    def wait(self, timeout: float | None = None) -> int:
+        return 0
+
+
+@pytest.mark.parametrize("num_parallel", [1, 4])
+def test_the_server_answers_as_many_requests_as_it_is_given(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, num_parallel: int
+) -> None:
+    """``num_parallel`` reaches the server as OLLAMA_NUM_PARALLEL."""
+    from contextlib import nullcontext
+
+    from senselab.text.tasks.decision_model import ollama
+
+    _FakeProcess.started = []
+    monkeypatch.setattr(ollama, "verify_pin", lambda *a, **kw: tmp_path)
+    monkeypatch.setattr(ollama.subprocess, "Popen", _FakeProcess)
+    monkeypatch.setattr(ollama.urllib.request, "urlopen", lambda *a, **kw: nullcontext())
+    pin = OllamaPin(name="nimble", tag="9b", blob_digest="b", config_digest="c", manifest_digest="m")
+    with ollama.OllamaServer(tmp_path / "ollama", tmp_path, pin, num_parallel=num_parallel):
+        pass
+    assert _FakeProcess.started[0]["OLLAMA_NUM_PARALLEL"] == str(num_parallel)

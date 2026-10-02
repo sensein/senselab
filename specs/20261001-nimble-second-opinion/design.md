@@ -192,6 +192,30 @@ weights: 74.5 s in the pilot, 8.7 s on the 2026-10-01 test. Over the ~15,165-rec
 load per task. At ~370 rows a slice, a task runs about 7–8 minutes. The model is 9.5 GB, so a
 smaller GPU would serve it; the array asks for a typed H100 per the owner's preference.
 
+### Measured on r9, and what changed (2026-10-02)
+
+The r9 run (`extend_second_opinion.py` at d95b0b2a, one row at a time) took 43–61 minutes a slice,
+not 7–8. The server log of slice 22 put the model call's median at 1.35 s over 79 requests, while
+the slice log put the per-row wall at a median of 4.6 s, and 5.8–9.7 s on other slices. The
+difference was the store read, a per-row VERDICT re-fold plus REPORT, and the store write, all on
+scratch, with the GPU idle meanwhile. OLLAMA_NUM_PARALLEL was 1.
+
+Two changes, owner-approved:
+
+- **The driver no longer re-folds.** It writes the `nimble_opinion` and nothing else. The run is
+  followed by `scripts/extend_refold.py` over the same corpus, which re-decides every VERDICT under
+  the second-opinion config; the r9 plan ran that whole-corpus re-fold anyway, so the per-row
+  re-fold was done twice. `--no-refold` and `--commit` are gone with it, and `--hints` is required,
+  because the task context the questions are asked over comes from the declaration.
+- **Rows run `second_opinion.workers` at a time (4)**, and the server answers as many requests in
+  parallel. Each store is read and written by one worker. The opinion records `num_parallel`, and
+  the activity carries it as a parameter. It is not in the result-cache key: batched decoding can
+  move the floating-point reduction order the way a different GPU model can, and neither is
+  identity.
+
+Store writes are atomic since the same change (`ProvStore.write_jsonl` renames a fsynced temporary
+file), so a preempted slice cannot leave a truncated `store.jsonl`.
+
 ## Not done
 
 - The context window is the manifest's `num_ctx: 8194` tokens. That holds a transcript of roughly
