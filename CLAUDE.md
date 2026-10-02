@@ -155,6 +155,14 @@ auto-detects the host CUDA via `nvidia-smi` / `nvcc` and routes the install
 through the matching PyTorch wheel index (`cu128` / `cu126` / `cu124` /
 `cu121` / `cpu`). No per-backend configuration needed.
 
+**Every subprocess venv installs from a committed lock** in `src/senselab/utils/data/venv_locks/`.
+Editing a backend's `_REQUIREMENTS`, Python version or CUDA cap makes `ensure_venv` refuse to build
+(`VenvLockError`) until the lock is regenerated with
+`uv run python scripts/lock_subprocess_venvs.py <name>` and committed;
+`src/tests/utils/venv_lock_test.py` fails first. The lock fixes exact `torch`/`torchaudio` pins,
+which are still installed from the host's CUDA index. See
+`specs/20261002-subprocess-venv-locks/design.md`.
+
 Operator override for internal mirrors or unsupported CUDA versions:
 
 ```bash
