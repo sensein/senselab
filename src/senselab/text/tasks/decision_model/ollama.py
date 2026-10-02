@@ -7,7 +7,8 @@ The blob is hashed in full once per host and the result remembered beside the ca
 not re-read 9.5 GB to learn what an earlier job on the same file already established.
 
 :class:`OllamaServer` starts ``ollama serve`` on a free loopback port with the pinned model store,
-offline (it never pulls), and stops it on exit.
+offline (it never pulls), and stops it on exit. With ``require_gpu`` it loads the model before the
+first question and refuses to serve one that is not wholly resident on the GPU.
 """
 
 from __future__ import annotations
@@ -32,6 +33,10 @@ _CHUNK = 1 << 24
 
 class PinMismatchError(RuntimeError):
     """The local model store does not hold the pinned model."""
+
+
+class ServerUnusableError(RuntimeError):
+    """The server answers but cannot serve the pinned model as required."""
 
 
 @dataclass(frozen=True)
@@ -156,6 +161,9 @@ class OllamaServer:
         startup_timeout_s: How long to wait for the server to answer.
         keep_alive: ``OLLAMA_KEEP_ALIVE``, how long the weights stay loaded between requests.
         num_parallel: ``OLLAMA_NUM_PARALLEL``, how many requests the loaded model answers at once.
+        require_gpu: Load the model on entry and raise :class:`ServerUnusableError` unless it is
+            wholly resident on the GPU.
+        load_timeout_s: How long the load on entry may take.
     """
 
     def __init__(
@@ -169,6 +177,8 @@ class OllamaServer:
         startup_timeout_s: float = 120.0,
         keep_alive: str = "60m",
         num_parallel: int = 1,
+        require_gpu: bool = True,
+        load_timeout_s: float = 300.0,
     ) -> None:
         """Hold the settings; nothing starts until ``__enter__``."""
         self.binary = Path(binary)
@@ -179,15 +189,23 @@ class OllamaServer:
         self.startup_timeout_s = startup_timeout_s
         self.keep_alive = keep_alive
         self.num_parallel = int(num_parallel)
+        self.require_gpu = require_gpu
+        self.load_timeout_s = load_timeout_s
         self.host = ""
         self._process: subprocess.Popen[bytes] | None = None
         self._log: Any = None
 
+    @property
+    def model(self) -> str:
+        """The name the server knows the pinned model by, ``<name>:<tag>``."""
+        return f"{self.pin.name}:{self.pin.tag}"
+
     def __enter__(self) -> "OllamaServer":
-        """Verify the pin, start the server and wait until it answers."""
+        """Verify the pin, start the server, wait until it answers and, with ``require_gpu``, load the model."""
         verify_pin(self.models_dir, self.pin, verified_dir=self.verified_dir)
         self.host = f"127.0.0.1:{_free_port()}"
         env = {
+            "OLLAMA_VULKAN": "0",
             **os.environ,
             "OLLAMA_MODELS": str(self.models_dir),
             "OLLAMA_HOST": self.host,
@@ -205,11 +223,70 @@ class OllamaServer:
                 raise RuntimeError(f"ollama serve exited with {self._process.returncode} before answering")
             try:
                 with urllib.request.urlopen(f"http://{self.host}/api/version", timeout=5):  # noqa: S310
-                    return self
+                    break
             except (urllib.error.URLError, OSError):
                 time.sleep(1.0)
-        self.__exit__(None, None, None)
-        raise RuntimeError(f"ollama serve did not answer within {self.startup_timeout_s} s")
+        else:
+            self.__exit__(None, None, None)
+            raise RuntimeError(f"ollama serve did not answer within {self.startup_timeout_s} s")
+        if self.require_gpu:
+            try:
+                self.load()
+            except BaseException:
+                self.__exit__(None, None, None)
+                raise
+        return self
+
+    def log_tail(self) -> str:
+        """The last non-empty line of the server's log, or an empty string."""
+        if self.log_path is None or not self.log_path.exists():
+            return ""
+        if self._log not in (None, subprocess.DEVNULL):
+            self._log.flush()
+        with self.log_path.open("rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            handle.seek(max(0, handle.tell() - 8192))
+            lines = [line.strip() for line in handle.read().decode("utf-8", "replace").splitlines() if line.strip()]
+        return lines[-1] if lines else ""
+
+    def _unusable(self, reason: str) -> ServerUnusableError:
+        tail = self.log_tail()
+        return ServerUnusableError(f"{reason}; server log: {tail}" if tail else reason)
+
+    def load(self) -> None:
+        """Load the pinned model and require it wholly on the GPU.
+
+        Raises:
+            ServerUnusableError: If the load fails or any of the model is held outside GPU memory.
+        """
+        body = json.dumps({"model": self.model, "prompt": "", "keep_alive": self.keep_alive}).encode("utf-8")
+        request = urllib.request.Request(  # noqa: S310 — loopback only
+            f"http://{self.host}/api/generate", data=body, headers={"Content-Type": "application/json"}
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=self.load_timeout_s):  # noqa: S310
+                pass
+        except (urllib.error.URLError, OSError) as error:
+            raise self._unusable(f"{self.model} did not load: {type(error).__name__}: {error}") from error
+        self.require_resident()
+
+    def require_resident(self) -> None:
+        """Require the pinned model loaded and wholly in GPU memory, by the server's ``/api/ps``.
+
+        Raises:
+            ServerUnusableError: If it is not loaded, or ``size_vram`` is below ``size``.
+        """
+        try:
+            with urllib.request.urlopen(f"http://{self.host}/api/ps", timeout=30) as response:  # noqa: S310
+                loaded = json.loads(response.read()).get("models") or []
+        except (urllib.error.URLError, OSError, ValueError) as error:
+            raise self._unusable(f"/api/ps did not answer: {type(error).__name__}: {error}") from error
+        held = [entry for entry in loaded if self.model in (entry.get("name"), entry.get("model"))]
+        if not held:
+            raise self._unusable(f"{self.model} is not loaded")
+        size, vram = int(held[0].get("size") or 0), int(held[0].get("size_vram") or 0)
+        if size <= 0 or vram < size:
+            raise self._unusable(f"{self.model} is not wholly on the GPU: size_vram {vram} of size {size}")
 
     def __exit__(
         self,
