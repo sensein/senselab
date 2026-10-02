@@ -448,3 +448,29 @@ itself; the name homographs (May, Will, Can) and an all-capitals abbreviation ("
 in lower case) stand alone. Measured on the r9 stores (1,602 with masked words): 19 masked words
 released in 17 recordings — "He's" ×6, "My", "And" and "So" ×2, "She", "Okay.", "How", "That's", "All",
 "A.", "El" — 9 of which then mask nothing. It takes effect at the next re-fold.
+
+## Released by kind: a time of day or a duration (2026-10-02)
+
+Owner, on the v6 review over r9: "yes time of day can be released as well as duration". The v6
+count over the 15,113 review-manifest recordings found 29 time-of-day and 92 duration DATE_TIME
+findings the reviewer left in the `masked` state (22 and 57 of them in a copy released with
+redaction, in 21 and 71 recordings), plus 11 and 212 in `detected`. The commonest were "week",
+"day", "morning", "evening" and "past couple of weeks". Neither a time of day nor a length of time
+is a Safe Harbor date element (45 CFR 164.514(b)(2)(i)(C)), so the fold no longer waits for the
+reviewer to name each one.
+
+The rule (`nodes/redact.py:time_by_kind`, lists in `data/time_release.yaml`): in a mask whose
+findings are all DATE_TIME-family, a word is released when it is a time-of-day word, a clock marker
+after a number (or `3pm`), a plural unit, or a singular unit with a quantity in the same span
+("a week", "two years"); with any of these, the span's quantities, numbers and modifiers go too. A
+word another family also marks keeps that mask. A span holding a month, a weekday, a holiday, an age
+word (old, aged, birthday, born), today/yesterday/tomorrow, a four-digit number or an ordinal
+releases nothing this way: those name a date, a specific day, or an age. An unquantified singular
+unit ("last year", "the week") is left to the reviewer, as before.
+
+The ledger records such a word as `released_by_kind`, distinct from `unmasked_by_reviewer` and
+`unmasked_by_trim`; the page draws it green with its category. A reviewer `redact` entry of the
+DATE_TIME family every content word of which is released by kind carries agreement `time_by_kind`:
+it proposes nothing, so it neither withholds nor routes to review. The fold change reaches a
+finished store by a plain re-fold (`scripts/extend_refold.py`); no model re-runs. The parquet gains
+`released_by_kind_n` and `released_by_kind_categories` (schema 17).

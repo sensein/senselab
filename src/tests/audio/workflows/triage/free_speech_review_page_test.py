@@ -1708,6 +1708,37 @@ def test_the_marks_are_the_ledgers_spans_each_with_its_state(tmp_path: Path) -> 
     assert '<span class="cat">CONDITION</span>' in text
 
 
+def test_a_word_released_by_kind_is_a_green_labelled_mark(tmp_path: Path) -> None:
+    """A duration the fold released by kind is shown green with its category, like a reviewer unmask."""
+    records = [
+        _word(0, "two"),
+        _word(1, "years"),
+        _pii("pii-1", "DATE_TIME", "presidio", 0, 2),
+        *_label("assertion-1", "DATE_TIME", "word-0"),
+        _ledger(
+            masks=[
+                {
+                    "category": "DATE_TIME",
+                    "words": [
+                        {"id": "word-0", "text": "two", "state": "released_by_kind", "named": False, "content": True},
+                        {"id": "word-1", "text": "years", "state": "released_by_kind", "named": False, "content": True},
+                    ],
+                }
+            ],
+            proposals=[],
+            counts={"released_by_kind_n": 2},
+        ),
+        _verdict("release_without_redaction"),
+    ]
+    row = page.recording_record(_store(tmp_path, _FAMILY_STEM, records), page.free_response_families())
+    assert row is not None
+    assert [(mark["c"], mark["s"], mark["i"]) for mark in row["f"]] == [(["DATE_TIME"], "released_by_kind", [0, 2])]
+    card = page.recording_html(row)
+    text = card[card.index('<p class="text">') : card.index("</p>", card.index('<p class="text">'))]
+    assert 'class="pii u-green"' in text and 'data-s="released_by_kind"' in text
+    assert '<span class="cat">DATE_TIME</span>' in text
+
+
 def test_a_reviewer_condition_over_a_detector_mask_is_two_single_category_marks(tmp_path: Path) -> None:
     """r7: a PERSON mask with a reviewer CONDITION proposal on its words is two marks, not "PERSON+CONDITION"."""
     records = [

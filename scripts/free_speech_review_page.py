@@ -199,15 +199,17 @@ def scan_state(scan: Mapping[str, Any] | None) -> bool | None:
 MASKED = "masked"
 UNMASKED_BY_REVIEWER = "unmasked_by_reviewer"
 UNMASKED_BY_TRIM = "unmasked_by_trim"
+RELEASED_BY_KIND = "released_by_kind"
 PROPOSED_BY_REVIEWER = "proposed_by_reviewer"
 DETECTED = "detected"
-MARK_STATES = (MASKED, UNMASKED_BY_REVIEWER, PROPOSED_BY_REVIEWER, UNMASKED_BY_TRIM, DETECTED)
-"""Every state a mark can carry: the ledger's four, and a detector finding no mask covers."""
+MARK_STATES = (MASKED, UNMASKED_BY_REVIEWER, RELEASED_BY_KIND, PROPOSED_BY_REVIEWER, UNMASKED_BY_TRIM, DETECTED)
+"""Every state a mark can carry: the ledger's five, and a detector finding no mask covers."""
 
 MARK_COLOURS = {
     MASKED: "red",
     PROPOSED_BY_REVIEWER: "red",
     UNMASKED_BY_REVIEWER: "green",
+    RELEASED_BY_KIND: "green",
     DETECTED: "green",
     UNMASKED_BY_TRIM: "orange",
 }
@@ -225,7 +227,9 @@ TRIM_PADDING = "p"
 TRIM_NOT_CONTENT = "n"
 """Why the trim unmasked a word: only the padding reached it, or it is not a content word."""
 
-_STATE_PRIORITY = {state: rank for rank, state in enumerate((MASKED, UNMASKED_BY_REVIEWER, UNMASKED_BY_TRIM))}
+_STATE_PRIORITY = {
+    state: rank for rank, state in enumerate((MASKED, UNMASKED_BY_REVIEWER, RELEASED_BY_KIND, UNMASKED_BY_TRIM))
+}
 
 
 def ledger_of(view: StoreView) -> dict[str, Any] | None:
@@ -2300,6 +2304,7 @@ const STATE_WHY={masked:'masked in the released copy',
   proposed_by_reviewer:'the reviewer proposes masking it; no mask hides it',
   unmasked_by_reviewer:'REDACT masked it and a reviewer release entry named it, so it is shown',
   unmasked_by_trim:'a mask covered it and it is shown',
+  released_by_kind:'a time of day or a duration, shown whatever the reviewer said',
   detected:'a detector marked it and no mask covers it, so it is shown'};
 const TRIM_WHY={p:'only the padding reached it',n:'it is not a content word'};
 const KIND_WHY={cohort:'a condition the study recruits for',other:'a condition outside the study\\'s cohorts'};
@@ -2325,6 +2330,7 @@ function cardAccount(a,card){
     const n=k=>esc(a.led[k+'_n']||0);
     out.push('<p class="note">words masked '+n('masked')+' \\u00b7 unmasked by the reviewer '
       +n('unmasked_by_reviewer')+' \\u00b7 unmasked by the trim '+n('unmasked_by_trim')
+      +' \\u00b7 released by kind '+n('released_by_kind')
       +' \\u00b7 proposed by the reviewer '+n('proposed_by_reviewer')
       +(a.led.task_words_n?' \\u00b7 task words REDACT\\'s plan reached, never masked '+esc(a.led.task_words_n):'')
       +'</p>');
