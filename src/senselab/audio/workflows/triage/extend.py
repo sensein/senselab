@@ -76,6 +76,13 @@ from senselab.audio.workflows.triage.nodes.quality import (
 )
 from senselab.audio.workflows.triage.nodes.redact import settle_release
 from senselab.audio.workflows.triage.nodes.report import report
+from senselab.audio.workflows.triage.nodes.review import (
+    LLM_REVIEW_MEASUREMENT,
+    PROMPT_VERSION,
+    READ_STATES,
+    reading_key,
+)
+from senselab.audio.workflows.triage.nodes.review import NODE as REVIEW_NODE
 from senselab.audio.workflows.triage.nodes.taxonomy import NODE as TAXONOMY_NODE
 from senselab.audio.workflows.triage.nodes.taxonomy import _write_consensus_taxonomy
 from senselab.audio.workflows.triage.nodes.verdict import NODE as VERDICT_NODE
@@ -88,9 +95,9 @@ from senselab.audio.workflows.triage.run import (
     _attempt_artifacts,
     drive_decisions,
 )
-from senselab.audio.workflows.triage.vocabulary import GRAPH_ORDER, QUALITY
+from senselab.audio.workflows.triage.vocabulary import GRAPH_ORDER, QUALITY, REDACTION_LLM_ANNOTATION
 from senselab.utils.prov_bep028 import to_bep028_graph, write_bep028_files
-from senselab.utils.prov_store import ProvStore
+from senselab.utils.prov_store import Entity, ProvStore
 from senselab.utils.subprocess_venv import record_venv_use
 
 RUN_SUBDIR = "run"
@@ -129,10 +136,31 @@ REFOLD_MARKER_STEP = "verdict_refolded"
 DECISION_SUPERSEDED = "decision_superseded"
 """The step of the activity retiring one decision a replay is about to make again."""
 
+READING_CARRIED_STEP = "reading_carried_forward"
+"""The step of the REVIEW activity that re-attaches a reading a replay retired to the replayed store."""
+
+READING_SUPERSEDED_STEP = "reading_superseded"
+"""The step retiring the replay's own unread annotation once a carried reading stands in its place."""
+
+REVIEW_NONE = "none"
+"""No answered reading stood before the replay, so there was nothing to keep."""
+
+REVIEW_READ = "read"
+"""The replay's own REVIEW answered, so the earlier reading was replaced by a new one."""
+
+REVIEW_CARRIED = "carried"
+"""The earlier reading read exactly what the replayed store holds, and was carried forward."""
+
+REVIEW_NEEDS_REREAD = "needs_reread"
+"""The earlier reading read something the replay changed, and the replay did not read it again."""
+
+REVIEW_STATES = (REVIEW_NONE, REVIEW_READ, REVIEW_CARRIED, REVIEW_NEEDS_REREAD)
+
 REPLAYED_NODES: tuple[str, ...] = GRAPH_ORDER[GRAPH_ORDER.index(TAXONOMY_NODE) :]
 """The nodes a replay re-runs: the graph from TAXONOMY on, PREPROCESS and ADMIT read off disk."""
 
 _DECISION_REASON = "the decision was replayed over this run's stored PREPROCESS output"
+_READING_SUPERSEDED_REASON = "the reading carried forward from before the replay stands in its place"
 
 _CLIP_SPAN_REASON = f"{CONTRADICTED_CLIP}: an unclipped sample is louder than this span's own level"
 _CLIP_AMPLITUDE_REASON = "its per-span levels name clip spans withdrawn as contradicted"
@@ -738,6 +766,8 @@ class ReplayOutcome:
         released: REDACT's released pair, empty unless it cleared one.
         summary: REPORT's products, empty when REPORT itself raised.
         marker: The marker activity's id.
+        review: What became of the reading REVIEW held before the replay, one of :data:`REVIEW_STATES`.
+        review_why: Why a reading could not be carried forward, or None.
     """
 
     retired: int
@@ -746,6 +776,8 @@ class ReplayOutcome:
     released: dict[str, Path]
     summary: dict[str, Path]
     marker: str
+    review: str = REVIEW_NONE
+    review_why: str | None = None
 
 
 def load_hint_builder(directory: Path) -> Callable[[Path], Any]:
@@ -900,6 +932,123 @@ def refold_verdict(
     )
 
 
+@dataclass(frozen=True)
+class HeldReading:
+    """An answered REVIEW reading as it stood before a replay retired it.
+
+    Attributes:
+        annotation: The ``redaction_llm_annotation`` measurement.
+        rounds: The per-round ``redaction_llm_review`` measurements its activity wrote.
+    """
+
+    annotation: Entity
+    rounds: tuple[Entity, ...]
+
+
+def held_reading(store: ProvStore) -> HeldReading | None:
+    """The live answered REVIEW reading, with the rounds that produced it.
+
+    Args:
+        store: The run's store.
+
+    Returns:
+        The reading, or None where the live annotation is absent or recorded no answer.
+    """
+    annotation = find_measurement(store, REDACTION_LLM_ANNOTATION)
+    if annotation is None or annotation.attributes.get("status") not in READ_STATES:
+        return None
+    activity = store.generated_by(annotation.id)
+    rounds = tuple(
+        entity
+        for entity in store.entities("measurement")
+        if entity.attributes.get("name") == LLM_REVIEW_MEASUREMENT
+        and not store.is_invalidated(entity.id)
+        and store.generated_by(entity.id) == activity
+    )
+    return HeldReading(annotation=annotation, rounds=rounds)
+
+
+def carry_reading_forward(
+    store: ProvStore,
+    config: TriageConfig,
+    hint: AudioHints | None,
+    held: HeldReading | None,
+    *,
+    software: str,
+) -> tuple[str, str | None]:
+    """Re-attach a reading a replay retired, where the replayed store holds exactly what it read.
+
+    The comparison is the reading's own result-cache key against the key the replayed store's texts
+    and task context give under the same commit. A match writes a REVIEW activity that used the held
+    annotation, copies of its rounds and of the annotation derived from them, and retires the
+    replay's own unanswered annotation. Anything else leaves the replay's annotation standing.
+
+    Args:
+        store: The replayed store, after REVIEW ran and before VERDICT.
+        config: The replaying configuration.
+        hint: What the recording was declared to contain.
+        held: :func:`held_reading` as it was before the replay retired anything.
+        software: The software agent's id.
+
+    Returns:
+        ``(state, why)``: one of :data:`REVIEW_STATES`, and the reason where it is
+        :data:`REVIEW_NEEDS_REREAD`.
+    """
+    if held is None:
+        return REVIEW_NONE, None
+    fresh = find_measurement(store, REDACTION_LLM_ANNOTATION)
+    if fresh is not None and fresh.id != held.annotation.id and fresh.attributes.get("status") in READ_STATES:
+        return REVIEW_READ, None
+    attributes = dict(held.annotation.attributes)
+    held_key = (attributes.get("result_cache") or {}).get("key")
+    revision = attributes.get("revision")
+    if attributes.get("prompt_version") != PROMPT_VERSION:
+        return REVIEW_NEEDS_REREAD, f"the reading is prompt version {attributes.get('prompt_version')!r}"
+    if not held_key or not revision:
+        return REVIEW_NEEDS_REREAD, "the reading records no cache key, so what it read cannot be compared"
+    try:
+        key = reading_key(store, config, hint, str(revision))
+    except ValueError as error:
+        return REVIEW_NEEDS_REREAD, describe_exception(error)
+    if key != held_key:
+        return REVIEW_NEEDS_REREAD, "the transcript texts or task context the reading read have changed"
+    activity = store.activity(
+        node=REVIEW_NODE,
+        step=READING_CARRIED_STEP,
+        parameters={"carried_from": held.annotation.id, "key": key, "prompt_version": PROMPT_VERSION},
+    )
+    store.was_associated_with(activity, software)
+    store.was_associated_with(
+        activity, store.agent(agent_type="model", model_id=str(attributes.get("model_id")), commit_sha=str(revision))
+    )
+    store.used(activity, held.annotation.id)
+    for round_ in held.rounds:
+        copied = store.entity(
+            prov_type="measurement", extent=None, attributes={**round_.attributes, "carried_from": round_.id}
+        )
+        store.was_generated_by(copied, activity)
+        store.was_attributed_to(copied, software)
+        store.was_derived_from(copied, round_.id)
+    carried = store.entity(
+        prov_type="measurement",
+        extent=None,
+        attributes={**attributes, "result_cache": {"key": key, "hit": False, "carried_from": held.annotation.id}},
+    )
+    store.was_generated_by(carried, activity)
+    store.was_attributed_to(carried, software)
+    store.was_derived_from(carried, held.annotation.id)
+    if fresh is not None and fresh.id != held.annotation.id:
+        supersede(
+            store,
+            fresh.id,
+            node=REVIEW_NODE,
+            step=READING_SUPERSEDED_STEP,
+            reason=_READING_SUPERSEDED_REASON,
+            software=software,
+        )
+    return REVIEW_CARRIED, None
+
+
 def replay_decisions(
     store: ProvStore,
     config: TriageConfig,
@@ -914,9 +1063,12 @@ def replay_decisions(
     """Re-decide a finished run from TAXONOMY, over the PREPROCESS output its store already holds.
 
     Retires every live decision a replayed node made, then runs TAXONOMY through REDACT, VERDICT and
-    REPORT against the store and the sidecars under ``run_dir``. The store must have been read under
-    :func:`replay_run_id`, so what the replay writes takes ids distinct from what it retires. The
-    caller persists the result with :func:`write_store` and :func:`export_prov`.
+    REPORT against the store and the sidecars under ``run_dir``. An answered REVIEW reading the
+    replay's own REVIEW did not answer again is carried forward by :func:`carry_reading_forward`
+    where its inputs are unchanged, and reported as :data:`REVIEW_NEEDS_REREAD` where they are not.
+    The store must have been read under :func:`replay_run_id`, so what the replay writes takes ids
+    distinct from what it retires. The caller persists the result with :func:`write_store` and
+    :func:`export_prov`.
 
     See ``specs/20260922-replay-decisions-over-a-finished-corpus/design.md``.
 
@@ -935,6 +1087,7 @@ def replay_decisions(
         What the replay did, including the marker it wrote last.
     """
     software = software_agent(store)
+    held = held_reading(store)
     retired = retire_decisions(store, live_decisions(store), software=software)
     outcomes: dict[str, NodeOutcome] = {}
     with record_venv_use() as used_venvs:
@@ -947,6 +1100,7 @@ def replay_decisions(
             outcomes=outcomes,
             enrollment=enrollment,
         )
+        review_state, review_why = carry_reading_forward(store, config, hint, held, software=software)
         ran = {node: outcome.state for node, outcome in outcomes.items()}
         _attempt(outcomes, "VERDICT", lambda: verdict(store, None, config, hint, run_dir=run_dir, ran=ran))
     _settle(store, config, run_dir=run_dir, artifacts_dir=artifacts_dir)
@@ -965,6 +1119,8 @@ def replay_decisions(
         released=dict(released),
         summary=dict(summary),
         marker=marker,
+        review=review_state,
+        review_why=review_why,
     )
 
 

@@ -311,6 +311,37 @@ own before-and-after over the corpus rather than arriving inside a pass whose qu
 gates did. Running it second also lets it read the replayed stores, so it starts from the PII
 findings the widened-haystack SPEECH actually produced rather than the corpus run's.
 
+### A replay after the LLM pass must not drop its reading (2026-10-02)
+
+Running the check second leaves a hazard. REVIEW is in `GRAPH_ORDER` after REDACT, so a replay
+retires its reading with every other decision and then re-runs REVIEW under the replaying
+configuration. With the check off, that writes a `disabled` annotation, and the GPU reading is gone.
+This happened on r9. The AIRWAY/RIG task-extent replay at `d95b0b2a` covered 1,614 recordings, 105
+of them in the v6 review manifest, and left those 105 at `llm_status = disabled`. 15 moved from
+without to with redaction and 1 to withheld, because the reviewer's unmasks no longer stood. The
+overlap was checked before submission and reported 0, but that check compared stems against run
+names carrying a timestamp, so it could never match.
+
+The replay now keeps a reading it did not read again. Before retiring anything it takes the live
+answered annotation and the rounds its activity wrote (`held_reading`). After REVIEW has run it
+calls `carry_reading_forward`:
+
+- **The replay's REVIEW answered** (`read`): its new reading stands.
+- **Nothing answered stood before** (`none`): there is nothing to keep.
+- **Same inputs** (`carried`): the held reading's own result-cache key matches the key the replayed
+  store's texts and task context give under the held commit (`reading_key`). It is re-attached
+  through a REVIEW activity `reading_carried_forward` that used it. The annotation and rounds are
+  copied and derived from the originals, and the replay's unanswered annotation is retired.
+- **Different inputs** (`needs_reread`): the redacted text, the transcript or the task context
+  changed, the reading has no key, or the prompt version moved. The replay's annotation stands,
+  the row records `review = needs_reread` with the reason, and the slice summary lists the stems
+  under `needs_reread`. The driver exits 3, so a dependent re-fold does not run on past it.
+
+The key is the comparison because it is already defined as exactly what the reading read and
+everything that shapes it, so "unchanged" here means the same thing a cache hit means.
+SECOND_OPINION is not in `GRAPH_ORDER`, so a replay never retires it; VERDICT reads it as it stands.
+`extend_refold.py` retires only VERDICT's own entities and runs no REVIEW, so it has no such hole.
+
 ## Cost
 
 275 task-hours for the replay against 2,877 for a resubmission. The components, from the corpus-wide
