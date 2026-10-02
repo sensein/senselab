@@ -575,6 +575,7 @@ second_opinion:
   seed: 7                              # sampling seed; temperature is 0
   timeout_s: 300                       # per request, model load included
   workers: 4                           # rows asked at once per slice; the server answers as many (OLLAMA_NUM_PARALLEL)
+  max_consecutive_errors: 5            # failed asks in a row that end the slice; 0 never ends it
 
 # Background residual: FRCRN_SE_16K's enhancement, lag-aligned and gain-fitted, subtracted from
 # `plain`. Both the enhancement and the residual are written and classified; no energy-fraction

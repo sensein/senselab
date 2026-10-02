@@ -109,9 +109,8 @@ def test_force_asks_again_and_keeps_one_live_opinion(tmp_path: Path, monkeypatch
     assert len(live) == 1 and live[0]["probabilities"]["other_voice"] == 0.6
 
 
-def test_a_server_that_will_not_start_is_an_error_on_every_row_and_starts_once(tmp_path: Path) -> None:
-    """Nothing is written, and the failed start is not retried row after row."""
-    roots = [_finished_run(tmp_path / f"corpus{index}") for index in range(2)]
+def _two_run_manifest(tmp_path: Path, count: int = 2) -> tuple[Path, list[Path]]:
+    roots = [_finished_run(tmp_path / f"corpus{index}") for index in range(count)]
     manifest = tmp_path / "manifest.jsonl"
     manifest.write_text(
         "".join(
@@ -120,12 +119,137 @@ def test_a_server_that_will_not_start_is_an_error_on_every_row_and_starts_once(t
         ),
         encoding="utf-8",
     )
+    return manifest, roots
+
+
+def test_a_server_that_will_not_start_ends_the_slice_and_starts_once(tmp_path: Path) -> None:
+    """Nothing is written, the failed start is not retried, and no row is asked after it."""
+    manifest, roots = _two_run_manifest(tmp_path)
     opener = _Opener(fail=True)
-    summary = cli.run_slice(
-        manifest, slice_index=0, slice_count=1, config=_config(tmp_path), log_dir=tmp_path, open_ask=opener
-    )
-    assert summary["counts"] == {"error": 2} and opener.opened == 1
+    with pytest.raises(cli.SliceAbortedError, match="did not start"):
+        cli.run_slice(
+            manifest, slice_index=0, slice_count=1, config=_config(tmp_path), log_dir=tmp_path, open_ask=opener
+        )
+    assert opener.opened == 1
     assert not any(_opinions(root) for root in roots)
+
+
+class _FailingAsk:
+    """An :data:`Ask` whose first ``failures`` calls raise as an unanswering server does."""
+
+    def __init__(self, failures: int) -> None:
+        self.failures = failures
+        self.asked = 0
+
+    def __call__(self, state: Any, questions: Any) -> dict[str, Any]:  # noqa: ANN401
+        self.asked += 1
+        if self.asked <= self.failures:
+            raise OSError("HTTP Error 500: Internal Server Error")
+        return _answers(0.02)
+
+
+def _lazy(ask: _FailingAsk, limit: int) -> Any:  # noqa: ANN401 — LazyAsk
+    @contextlib.contextmanager
+    def opener() -> Iterator[Any]:
+        yield ask
+
+    return cli.LazyAsk(opener, max_consecutive_errors=limit)
+
+
+def test_failures_in_a_row_reaching_the_limit_end_the_slice() -> None:
+    """The limit-th failure in a row, and every call after it, raises SliceAbortedError."""
+    lazy = _lazy(_FailingAsk(failures=10), limit=3)
+    for _ in range(2):
+        with pytest.raises(OSError):
+            lazy({}, {})
+    with pytest.raises(cli.SliceAbortedError, match="3 decision-model requests failed in a row"):
+        lazy({}, {})
+    with pytest.raises(cli.SliceAbortedError):
+        lazy({}, {})
+
+
+def test_an_answer_resets_the_run_of_failures() -> None:
+    """Failures broken by an answer never reach the limit."""
+    ask = _FailingAsk(failures=2)
+    lazy = _lazy(ask, limit=3)
+    for _ in range(2):
+        with pytest.raises(OSError):
+            lazy({}, {})
+    assert lazy({}, {}) == _answers(0.02)
+    ask.failures, ask.asked = 2, 0
+    for _ in range(2):
+        with pytest.raises(OSError):
+            lazy({}, {})
+    assert lazy({}, {}) == _answers(0.02)
+
+
+def test_a_limit_of_zero_never_ends_the_slice() -> None:
+    """0 turns the stop off."""
+    lazy = _lazy(_FailingAsk(failures=20), limit=0)
+    for _ in range(20):
+        with pytest.raises(OSError):
+            lazy({}, {})
+
+
+def test_a_server_failing_every_request_stops_the_slice_before_its_last_row(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Rows already asked are logged; rows not reached are not asked."""
+    monkeypatch.setenv("SENSELAB_RESULT_CACHE", str(tmp_path / "fresh-cache"))
+    manifest, roots = _two_run_manifest(tmp_path, count=6)
+    ask = _FailingAsk(failures=100)
+
+    @contextlib.contextmanager
+    def opener() -> Iterator[Any]:
+        yield ask
+
+    override = tmp_path / "override.yaml"
+    override.write_text(ON + "  max_consecutive_errors: 2\n", encoding="utf-8")
+    with pytest.raises(cli.SliceAbortedError):
+        cli.run_slice(
+            manifest,
+            slice_index=0,
+            slice_count=1,
+            config=load_triage_config(override),
+            log_dir=tmp_path,
+            open_ask=opener,
+        )
+    assert ask.asked == 2
+    assert not any(_opinions(root) for root in roots)
+    log = tmp_path / "slices" / "second-opinion-slice-0-of-1.jsonl"
+    assert [json.loads(line)["status"] for line in log.read_text().splitlines()] == ["error"]
+
+
+def test_the_cli_exits_3_when_the_slice_is_aborted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """An aborted slice is a distinct exit code, so the array task fails."""
+
+    def aborted(*args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
+        raise cli.SliceAbortedError("the decision-model server did not start: boom")
+
+    manifest = tmp_path / "manifest.jsonl"
+    manifest.write_text("", encoding="utf-8")
+    override = tmp_path / "override.yaml"
+    override.write_text(ON, encoding="utf-8")
+    monkeypatch.setattr(cli, "verify_pin", lambda *a, **kw: tmp_path)
+    monkeypatch.setattr(cli, "run_slice", aborted)
+    code = cli.main(
+        [
+            str(manifest),
+            "--slice-index",
+            "0",
+            "--slice-count",
+            "1",
+            "--config",
+            str(override),
+            "--hints",
+            str(tmp_path),
+            "--ollama-binary",
+            str(tmp_path / "ollama"),
+            "--ollama-models",
+            str(tmp_path),
+        ]
+    )
+    assert code == 3
 
 
 def _live_verdicts(run_root: Path) -> list[Any]:

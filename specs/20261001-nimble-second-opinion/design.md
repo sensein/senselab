@@ -216,6 +216,28 @@ Two changes, owner-approved:
 Store writes are atomic since the same change (`ProvStore.write_jsonl` renames a fsynced temporary
 file), so a preempted slice cannot leave a truncated `store.jsonl`.
 
+### Incident: a model that never loaded (r9 slice 29, 2026-10-02)
+
+On node3804 (A100 80GB PCIe) Ollama 0.35's CUDA discovery watchdog timed out (30 s) for both
+`cuda_v12` and `cuda_v13`. The server fell back to its Vulkan backend, `llama-server` segfaulted
+loading the model (`vk::PhysicalDevice::createDevice: ErrorInitializationFailed`), and every request
+after that returned HTTP 500 after ~18 s. The server had answered `/api/version`, so the driver
+counted it as started, and the slice logged 288 error rows before exiting 1. Another slice on the
+same node ran normally, so the watchdog timeout is load-dependent rather than a property of the node.
+
+Three changes:
+
+- `OllamaServer` sets `OLLAMA_VULKAN=0` unless the caller's environment sets it. A CUDA discovery
+  failure then leaves no GPU backend instead of a broken one.
+- With `require_gpu` (the default) the server loads the pinned model on entry (`/api/generate`, empty
+  prompt) and requires `/api/ps` to report `size_vram == size`. A failed load, or a model partly or
+  wholly in CPU memory, raises `ServerUnusableError` naming the server log's last line. This also
+  closes the "falls back to CPU shows up only as latency" gap noted below.
+- The driver ends the slice with exit 3 when the server does not start or verify, or after
+  `second_opinion.max_consecutive_errors` (5) failed asks in a row, instead of erroring every
+  remaining row. Rows not yet started are cancelled; the rows already logged stand, and a rerun
+  resumes from the store.
+
 ## Not done
 
 - The context window is the manifest's `num_ctx: 8194` tokens. That holds a transcript of roughly
@@ -224,5 +246,5 @@ file), so a preempted slice cannot leave a truncated `store.jsonl`.
   so check the r9 distribution of `transcript_chars` before reading a probability from the far
   tail. A cap would be a new config key, with its own derivation.
 - Thresholds are unfitted, as above.
-- `ollama serve` stdout goes to a per-task log beside the slice log. It is not parsed, so a server
-  that falls back to CPU shows up only as latency.
+- `ollama serve` stdout goes to a per-task log beside the slice log. It is read only for its last
+  line, quoted in a `ServerUnusableError`; nothing else in it is parsed.

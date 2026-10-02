@@ -148,25 +148,37 @@ def ollama_asker(
     return open_ask
 
 
+class SliceAbortedError(Exception):
+    """The slice cannot go on asking: the server did not start, or kept failing."""
+
+
 class LazyAsk:
     """Opens the asker on its first call and holds it until :meth:`close`; safe to call from threads.
 
+    A failed start, or ``max_consecutive_errors`` failed asks in a row, raises
+    :class:`SliceAbortedError` from that call and every later one.
+
     Args:
         open_ask: The opener.
+        max_consecutive_errors: Failed asks in a row that end the slice; 0 never ends it.
     """
 
-    def __init__(self, open_ask: OpenAsk) -> None:
+    def __init__(self, open_ask: OpenAsk, *, max_consecutive_errors: int = 0) -> None:
         """Hold the opener; nothing starts until the first call."""
         self._open_ask = open_ask
+        self._max_errors = int(max_consecutive_errors)
+        self._errors = 0
         self._stack = contextlib.ExitStack()
         self._ask: Ask | None = None
-        self._failure: RuntimeError | None = None
+        self._failure: SliceAbortedError | None = None
         self._lock = threading.Lock()
 
     def __call__(self, state: Any, questions: Any) -> Any:  # noqa: ANN401 — the Ask signature
         """Ask, starting the server first if this is the first question.
 
-        A server that failed to start is not started again: every later call raises the same error.
+        Raises:
+            SliceAbortedError: If the server did not start, or this ask makes the run of failures
+                reach ``max_consecutive_errors``.
         """
         with self._lock:
             if self._failure is not None:
@@ -175,10 +187,25 @@ class LazyAsk:
                 try:
                     self._ask = self._stack.enter_context(self._open_ask())
                 except (OSError, RuntimeError) as error:
-                    self._failure = RuntimeError(f"the decision-model server did not start: {error}")
+                    self._failure = SliceAbortedError(f"the decision-model server did not start: {error}")
                     raise self._failure from error
             ask = self._ask
-        return ask(state, questions)
+        try:
+            answer = ask(state, questions)
+        except Exception as error:
+            with self._lock:
+                self._errors += 1
+                if self._failure is None and self._max_errors and self._errors >= self._max_errors:
+                    self._failure = SliceAbortedError(
+                        f"{self._errors} decision-model requests failed in a row; the last: "
+                        f"{type(error).__name__}: {error}"
+                    )
+                if self._failure is not None:
+                    raise self._failure from error
+            raise
+        with self._lock:
+            self._errors = 0
+        return answer
 
     @property
     def opened(self) -> bool:
@@ -366,6 +393,9 @@ def run_slice(
 
     Returns:
         The task's summary: its counts, its parameters, and where its log went.
+
+    Raises:
+        SliceAbortedError: If the server did not start or kept failing; the rows logged so far stand.
     """
     started = time.time()
     mine = take_slice(read_manifest(manifest, required=("stem", "enhanced")), slice_index, slice_count)
@@ -375,7 +405,7 @@ def run_slice(
     label = f"second-opinion-slice-{slice_index}-of-{slice_count}"
     log_path = slices_dir / f"{label}.jsonl"
     rows_log = SliceLog(log_path, slice_index=slice_index, slice_count=slice_count, total=len(mine), workers=workers)
-    ask = LazyAsk(open_ask)
+    ask = LazyAsk(open_ask, max_consecutive_errors=int(settings(config)["max_consecutive_errors"]))
     try:
         log = process(mine, config, ask, force=force, build_hint=build_hint, workers=workers, log=rows_log)
     finally:
@@ -419,7 +449,8 @@ def main(argv: list[str] | None = None) -> int:
 
     Returns:
         0 where every row landed or already stood, 1 where any row is ``error``, 2 where the
-        arguments could not be resolved and nothing was asked.
+        arguments could not be resolved and nothing was asked, 3 where the slice stopped because
+        the server did not start or kept failing.
     """
     args = build_parser().parse_args(argv)
     if not args.manifest.exists():
@@ -473,6 +504,9 @@ def main(argv: list[str] | None = None) -> int:
             hints=args.hints,
             workers=workers,
         )
+    except SliceAbortedError as error:
+        print(f"ABORTED: {error}", file=sys.stderr)
+        return 3
     except (OSError, ValueError, RuntimeError) as error:
         print(f"ERROR: {error}", file=sys.stderr)
         return 2
