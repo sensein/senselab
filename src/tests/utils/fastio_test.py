@@ -165,3 +165,16 @@ def test_ordered_map_reraises_and_leaves_no_thread() -> None:
     with pytest.raises(KeyError):
         list(ordered_map(fail_on_three, range(10), threads=4))
     assert threading.active_count() == before
+
+
+def test_links_as_files_hands_an_unfollowed_directory_symlink_to_fn(tmp_path: Path) -> None:
+    """With links_as_files, the directory symlink reaches fn and is not descended into."""
+    top = _tree(tmp_path)
+    linked = str(top / "sub-b" / "linked")
+    plain = set(map_files(top, str, threads=3))
+    assert linked not in plain
+    seen = set(map_files(top, str, threads=3, links_as_files=True))
+    assert linked in seen
+    assert str(top / "sub-b" / "linked" / "deep" / "store.jsonl") not in seen
+    followed = set(map_files(top, str, threads=3, follow_symlinks=True, links_as_files=True))
+    assert linked not in followed

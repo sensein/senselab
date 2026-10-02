@@ -79,6 +79,7 @@ def _pool(
     follow_symlinks: bool,
     keep: Callable[[str], bool] | None,
     on_error: Callable[[str, OSError], None] | None,
+    links_as_files: bool = False,
 ) -> Iterator[object]:
     """Run the threaded walk, yielding whatever ``emit`` returns for each directory.
 
@@ -90,6 +91,8 @@ def _pool(
         follow_symlinks: Whether a symlink to a directory is descended into.
         keep: When given, a predicate on the names directly under ``top``; the others are skipped.
         on_error: Receives each listing error; None collects them and raises at the end.
+        links_as_files: When ``follow_symlinks`` is False, hand a symlink to a directory to ``emit``
+            among the file entries instead of listing it among ``dirs``.
 
     Yields:
         The items ``emit`` returned, in no particular order.
@@ -139,7 +142,9 @@ def _pool(
                             is_dir = entry.is_dir(follow_symlinks=True)
                         except OSError:
                             is_dir = False
-                        if is_dir:
+                        if is_dir and links_as_files and not follow_symlinks and entry.is_symlink():
+                            files.append(entry)
+                        elif is_dir:
                             dirs.append(entry.name)
                             if follow_symlinks or not entry.is_symlink():
                                 with lock:
@@ -235,6 +240,7 @@ def map_files(
     follow_symlinks: bool = False,
     keep: Callable[[str], bool] | None = None,
     on_error: Callable[[str, OSError], None] | None = None,
+    links_as_files: bool = False,
 ) -> Iterator[R]:
     """Apply a function to every matching file under a tree, inside the walk's threads.
 
@@ -247,6 +253,8 @@ def map_files(
         follow_symlinks: Whether a symlink to a directory is descended into.
         keep: When given, a predicate on the names directly under ``top``; the others are skipped.
         on_error: As in :func:`walk`.
+        links_as_files: When ``follow_symlinks`` is False, pass a symlink to a directory to ``fn``
+            as though it were a file, so every symlink in the tree reaches ``fn``.
 
     Yields:
         ``fn``'s result for each matching file, in no particular order.
@@ -258,7 +266,15 @@ def map_files(
     def emit(path: str, dirs: list[str], files: list[os.DirEntry[str]]) -> list[object]:
         return [fn(entry.path) for entry in files if pattern is None or fnmatch.fnmatchcase(entry.name, pattern)]
 
-    for item in _pool(top, emit, threads=threads, follow_symlinks=follow_symlinks, keep=keep, on_error=on_error):
+    for item in _pool(
+        top,
+        emit,
+        threads=threads,
+        follow_symlinks=follow_symlinks,
+        keep=keep,
+        on_error=on_error,
+        links_as_files=links_as_files,
+    ):
         yield item  # type: ignore[misc]
 
 

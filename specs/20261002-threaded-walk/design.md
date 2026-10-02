@@ -62,3 +62,15 @@ threaded `recording_dirs` returned the same run directories in the same order.
 At those rates a full serial walk of the 2.2 M-file tree takes about 12 minutes per pass and a
 threaded one under 2. The three-hour finalize was six such passes plus a full read of every store,
 so the walk alone is not all of it; reading the stores is the rest.
+
+## Derivatives-copy verification
+
+`scripts/verify_derivatives_copy.py` replaces the serial `find -L` / `find -printf` / `find -type l` /
+`grep -rl` passes of the derivatives finalize job with one `fastio.map_files` pass per tree, the stat and
+the store read done in the workers. `map_files(..., links_as_files=True)` hands an unfollowed directory
+symlink to the function, so a symlinked directory left in the copy is counted rather than skipped.
+
+Measured once on 2026-10-02 (job 24662424, 16 CPUs, 64 threads) with the staged version of the same
+walk, over the r9 tree and its copy: source 2,221,738 files and 1,404,319,166,145 bytes followed in
+77 s, copy the same counts in 388 s, 0 symlinks, 0 of 62,550 stores mentioning `/orcd/scratch`. The
+serial passes it replaced had run for over three hours without finishing.
