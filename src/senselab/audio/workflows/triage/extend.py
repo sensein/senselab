@@ -25,7 +25,9 @@ import importlib.util
 import json
 import os
 import statistics
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterator, Sequence
@@ -278,7 +280,7 @@ class SliceLog:
     running or crashed slice's finished rows are on disk.
     """
 
-    def __init__(self, path: Path, *, slice_index: int, slice_count: int, total: int) -> None:
+    def __init__(self, path: Path, *, slice_index: int, slice_count: int, total: int, workers: int = 1) -> None:
         """Open the log and truncate it.
 
         Args:
@@ -286,12 +288,15 @@ class SliceLog:
             slice_index: This task's 0-based index, for the progress line.
             slice_count: How many tasks the array has.
             total: How many rows this task owns.
+            workers: How many rows run at once, for the remaining-time estimate.
         """
         path.parent.mkdir(parents=True, exist_ok=True)
         self.path = path
         self._prefix = f"[slice {slice_index}/{slice_count}]"
         self._total = total
+        self._workers = max(1, workers)
         self._seconds: list[float] = []
+        self._lock = threading.Lock()
         self._handle = path.open("w", encoding="utf-8")
 
     def add(self, record: dict[str, Any], seconds: float) -> None:
@@ -301,18 +306,19 @@ class SliceLog:
             record: The row's outcome record.
             seconds: How long the row took.
         """
-        self._handle.write(json.dumps(record, sort_keys=True) + "\n")
-        self._handle.flush()
-        os.fsync(self._handle.fileno())
-        self._seconds.append(seconds)
-        done = len(self._seconds)
-        median = statistics.median(self._seconds)
-        eta = _duration(median * (self._total - done))
-        print(
-            f"{self._prefix} {done}/{self._total} {record.get('status')} {seconds:.1f}s "
-            f"(median {median:.1f}s, eta {eta})",
-            flush=True,
-        )
+        with self._lock:
+            self._handle.write(json.dumps(record, sort_keys=True) + "\n")
+            self._handle.flush()
+            os.fsync(self._handle.fileno())
+            self._seconds.append(seconds)
+            done = len(self._seconds)
+            median = statistics.median(self._seconds)
+            eta = _duration(median * (self._total - done) / self._workers)
+            print(
+                f"{self._prefix} {done}/{self._total} {record.get('status')} {seconds:.1f}s "
+                f"(median {median:.1f}s, eta {eta})",
+                flush=True,
+            )
 
     def close(self) -> None:
         """Close the file."""
@@ -320,26 +326,46 @@ class SliceLog:
 
 
 def logged(
-    rows: Sequence[dict[str, Any]], one: Callable[[dict[str, Any]], dict[str, Any]], log: SliceLog | None
+    rows: Sequence[dict[str, Any]],
+    one: Callable[[dict[str, Any]], dict[str, Any]],
+    log: SliceLog | None,
+    *,
+    workers: int = 1,
 ) -> list[dict[str, Any]]:
-    """Run ``one`` over each row in order, appending each outcome to ``log`` as it lands.
+    """Run ``one`` over each row, appending each outcome to ``log`` as it lands.
 
     Args:
-        rows: The rows this task owns.
-        one: Produces one row's outcome record.
-        log: Where each record is appended, or None to only collect them.
+        rows: The rows this task owns. Each row is handed to exactly one call of ``one``.
+        one: Produces one row's outcome record; called from ``workers`` threads at once when
+            ``workers`` is above 1.
+        log: Where each record is appended, in the order rows finish, or None to only collect them.
+        workers: How many rows run at once.
 
     Returns:
-        One outcome record per row, in order.
+        One outcome record per row, in the order of ``rows``.
     """
-    out: list[dict[str, Any]] = []
-    for row in rows:
+
+    def timed(row: dict[str, Any]) -> tuple[dict[str, Any], float]:
         started = time.monotonic()
-        record = one(row)
-        out.append(record)
-        if log is not None:
-            log.add(record, time.monotonic() - started)
-    return out
+        return one(row), time.monotonic() - started
+
+    if workers <= 1:
+        out: list[dict[str, Any]] = []
+        for row in rows:
+            record, seconds = timed(row)
+            out.append(record)
+            if log is not None:
+                log.add(record, seconds)
+        return out
+    held: list[dict[str, Any] | None] = [None] * len(rows)
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {pool.submit(timed, row): index for index, row in enumerate(rows)}
+        for future in as_completed(futures):
+            record, seconds = future.result()
+            held[futures[future]] = record
+            if log is not None:
+                log.add(record, seconds)
+    return [record for record in held if record is not None]
 
 
 def batches(rows: Sequence[dict[str, Any]], size: int) -> Iterator[list[dict[str, Any]]]:
