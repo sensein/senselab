@@ -1,5 +1,5 @@
 # senselab subprocess-venv lock: crisperwhisper
-# requirements-sha256: c0ec4be6bbf947799e26287fa6b82e9367e146e0bed856b3cfebe43409ff07d8
+# requirements-sha256: e0ffebc3a6c7944a8e5ca3ef627801460c0f99cccf4c7e700599f1c1ecfc29a6
 # python: 3.12
 # torch: torch==2.11.0 torchaudio==2.11.0
 # torch-index: cu128
@@ -144,8 +144,8 @@ colorama==0.4.6 ; sys_platform == 'win32' \
 crisperwhisper==2.0.1 \
     --hash=sha256:0796e7c2209fbb456e7489eefe4f93cc71ad689f1e7ffc932e66a75e53504cb8 \
     --hash=sha256:c3beac0b1a00585b69d4bc7576417a2084ee9a60d0317272c8200cf7223e806d
-    # via -r /var/folders/jv/83w66lm11dz99vstyvjz63h80000gn/T/venv-lock-crisperwhisper-pnhmpi71/requirements.in
-ctranslate2==4.8.2 \
+    # via -r /var/folders/jv/83w66lm11dz99vstyvjz63h80000gn/T/venv-lock-crisperwhisper-446vrfed/requirements.in
+ctranslate2==4.8.2 ; platform_machine != 'x86_64' or sys_platform != 'linux' \
     --hash=sha256:00bc9f44172d05bd2becefe757d2397ab3292fad1695169f9ebb9c16eb497ce2 \
     --hash=sha256:077e96d0c9c7308b989538b6f9955e9c42e87b65cb4c7005817f938ba497b6d4 \
     --hash=sha256:0e55a43e68762bcac3529aa469ea6d2af0d35b84f9187212a8a1079acc9b00f5 \
@@ -181,7 +181,16 @@ ctranslate2==4.8.2 \
     --hash=sha256:e563497eafeebb6417678d4fc948edb7995d02cb8d1ef479bdabc4496edd7558 \
     --hash=sha256:f6f0b576c247984d3fc299a372ccc9319b668d6d25b0539f3c861beba15d0504 \
     --hash=sha256:fedda669421a57f8164568ee86ea265727016988d310fcc2e24ca30e9ec457cd
-    # via -r /var/folders/jv/83w66lm11dz99vstyvjz63h80000gn/T/venv-lock-crisperwhisper-pnhmpi71/requirements.in
+    # via -r /var/folders/jv/83w66lm11dz99vstyvjz63h80000gn/T/venv-lock-crisperwhisper-446vrfed/requirements.in
+ctranslate2-crisperwhisper==4.7.1.post3 ; platform_machine == 'x86_64' and sys_platform == 'linux' \
+    --hash=sha256:271e3271fbc58c9b6b1a1d78412f58506809ffa4cfce667ed90879e061c4eeb4 \
+    --hash=sha256:2b45cd5244f515b4ccf0c125f26ae679ef6f71031cbce78523b3875947217750 \
+    --hash=sha256:3b2dde2b07e0749e5bfc91e78b4fbff4f8a2fa55ced893134b034bbe385ed65f \
+    --hash=sha256:4f4efab86642a1055852461cda141218e3cbae7447ae86ecea13286475056022 \
+    --hash=sha256:b996b0b00ef045718ed8680e0590b537b10e9dd331f328884ec41d667d7719c2 \
+    --hash=sha256:bed20ef640c45158ace6b579da94fc7001929fa2d4c69c765e0aa29711dcc82a \
+    --hash=sha256:d3af10da8cbabb603d363d8a96f1329baba838820dde7fbdf486bd6e86713e12
+    # via crisperwhisper
 filelock==4.0.9 \
     --hash=sha256:635e7d67fa92654eed444e75e9ca18426d34e77ad9c469bf4373f75a932f7b22 \
     --hash=sha256:9287fd61b99a806e5202be29a83034c0808a1b9830e820537c2f5773981f7eeb
@@ -418,13 +427,24 @@ numpy==2.5.3 \
     --hash=sha256:fc36dc566135b5eceec4cf89758fcb719266a019ef07dae1754ae7c9f617ef3e \
     --hash=sha256:ffdc76bfcae6b255dff75202c5e7feaf95b40246bc0a17944facc1fecf9f79ab
     # via
-    #   -r /var/folders/jv/83w66lm11dz99vstyvjz63h80000gn/T/venv-lock-crisperwhisper-pnhmpi71/requirements.in
+    #   -r /var/folders/jv/83w66lm11dz99vstyvjz63h80000gn/T/venv-lock-crisperwhisper-446vrfed/requirements.in
     #   accelerate
     #   crisperwhisper
     #   ctranslate2
+    #   ctranslate2-crisperwhisper
     #   soundfile
     #   soxr
     #   transformers
+nvidia-cublas-cu12==12.9.2.10 ; platform_machine == 'x86_64' and sys_platform == 'linux' \
+    --hash=sha256:5572131a59c3eebeeb1c4c8144f772d49372c20124916e072a0e3fc30df421d5 \
+    --hash=sha256:623f43027d40d44ceadf0043f002bd25cf353e8f13ce90b9a87057019f560661 \
+    --hash=sha256:e4f53a8ca8c5d6e8c492d0d0a3d565ecb59a751b19cfdaa4f6da0ab2104c1702
+    # via crisperwhisper
+nvidia-cuda-nvrtc-cu12==12.9.86 ; platform_machine == 'x86_64' and sys_platform == 'linux' \
+    --hash=sha256:096d4de6bda726415dfaf3198d4f5c522b8e70139c97feef5cd2ca6d4cd9cead \
+    --hash=sha256:210cf05005a447e29214e9ce50851e83fc5f4358df8b453155d5e1918094dcb4 \
+    --hash=sha256:72972ebdcf504d69462d3bcd67e7b81edd25d0fb85a2c46d3ea3517666636349
+    # via nvidia-cublas-cu12
 packaging==26.3 \
     --hash=sha256:94edc256424af38762eb31306eed28beb9f0efc50a8837492c9d6fd6004aed79 \
     --hash=sha256:d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c
@@ -540,6 +560,7 @@ pyyaml==6.0.3 \
     # via
     #   accelerate
     #   ctranslate2
+    #   ctranslate2-crisperwhisper
     #   huggingface-hub
     #   transformers
 regex==2026.9.29 \
@@ -697,13 +718,15 @@ safetensors==0.8.0 \
     --hash=sha256:fcdd41ec4628fee5799f807c73c353629130fbd942aa23d83c623dd6c9d52d78 \
     --hash=sha256:fd6f3f93c9a0a7cc2788ee63fb763353d4bd2e89b0751bc78fcf7dda00bea774
     # via
-    #   -r /var/folders/jv/83w66lm11dz99vstyvjz63h80000gn/T/venv-lock-crisperwhisper-pnhmpi71/requirements.in
+    #   -r /var/folders/jv/83w66lm11dz99vstyvjz63h80000gn/T/venv-lock-crisperwhisper-446vrfed/requirements.in
     #   accelerate
     #   transformers
 setuptools==81.0.0 \
     --hash=sha256:487b53915f52501f0a79ccfd0c02c165ffe06631443a886740b91af4b7a5845a \
     --hash=sha256:fdd925d5c5d9f62e4b74b30d6dd7828ce236fd6ed998a08d81de62ce5a6310d6
-    # via torch
+    # via
+    #   ctranslate2-crisperwhisper
+    #   torch
 shellingham==1.5.4 \
     --hash=sha256:7ecfff8f2fd72616f7481040475a65b2bf8af90a56c89140852d1120324e8686 \
     --hash=sha256:8dbca0739d487e5bd35ab3ca4b36e11c4078f3a234bfce294b0a0291363404de
