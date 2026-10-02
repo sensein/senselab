@@ -13,6 +13,7 @@ import os
 import re
 import stat
 import subprocess
+import threading
 from collections.abc import Callable
 from pathlib import Path
 from typing import Optional
@@ -91,7 +92,8 @@ def _write_fake_lock(
         pins = [f"{p}=={v}" for p, v in _FAKE_TORCH.items() if any(_spec_name(r) == p for r in requirements)]
     body = [r for r in requirements if _spec_name(r) not in _FAKE_TORCH] + list(IPC_REQUIREMENTS)
     path = lock_dir / f"{name}.txt"
-    path.write_text(
+    staged = lock_dir / f".{name}.{os.getpid()}.{threading.get_ident()}.tmp"
+    staged.write_text(
         "\n".join(
             [
                 f"# senselab subprocess-venv lock: {name}",
@@ -103,6 +105,7 @@ def _write_fake_lock(
         )
         + "\n"
     )
+    os.replace(staged, path)
     return parse_lock(path, name)
 
 
