@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import re
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -22,6 +25,7 @@ from senselab.utils.venv_lock import (
 
 _LOCKS = sorted(LOCK_DIR.glob("*.txt"))
 _PIN = re.compile(r"^([A-Za-z0-9._-]+)(\[[^\]]*\])?\s*==\s*([^\s;\\]+)")
+_ENTRY = re.compile(r"^([A-Za-z0-9._-]+)(\[[^\]]*\])?\s*(==|@)")
 
 
 @pytest.fixture(scope="module")
@@ -39,6 +43,52 @@ def test_every_venv_the_code_builds_has_a_current_lock(backends: dict[str, venv_
     assert backends, "no ensure_venv calls were found"
     for name, backend in backends.items():
         load_lock(name, backend.requirements, backend.python, backend.max_cuda_version)
+
+
+_DIGESTS_ON_HOST = """
+import json, platform, sys, types
+from senselab.utils.venv_lock import discover_backends, requirements_sha256
+modules = sorted({m for b in discover_backends().values() for m in b.modules})
+sys.platform, machine = sys.argv[1], sys.argv[2]
+platform.machine = lambda: machine
+platform.system = lambda: {"linux": "Linux", "darwin": "Darwin"}[sys.platform]
+for name in modules:
+    real = sys.modules[name]
+    fresh = types.ModuleType(name)
+    fresh.__dict__.update(__file__=real.__file__, __package__=real.__package__, __spec__=real.__spec__)
+    sys.modules[name] = fresh
+    exec(compile(open(real.__file__).read(), real.__file__, "exec"), fresh.__dict__)
+print(json.dumps({n: requirements_sha256(b.requirements, b.python, b.max_cuda_version)
+                  for n, b in discover_backends().items()}))
+"""
+
+
+@pytest.mark.parametrize("host", [("linux", "x86_64"), ("darwin", "arm64")])
+def test_every_lock_digest_is_the_same_on_every_host(
+    host: tuple[str, str], backends: dict[str, venv_lock.Backend]
+) -> None:
+    """A requirement list chosen by platform at import time breaks the lock on the other platform."""
+    result = subprocess.run(
+        [sys.executable, "-c", _DIGESTS_ON_HOST, *host], capture_output=True, text=True, check=True, timeout=600
+    )
+    there = json.loads(result.stdout.strip().splitlines()[-1])
+    here = {n: requirements_sha256(b.requirements, b.python, b.max_cuda_version) for n, b in backends.items()}
+    assert {n for n in here if there.get(n) != here[n]} == set()
+
+
+def test_every_declared_requirement_is_in_its_lock_body(backends: dict[str, venv_lock.Backend]) -> None:
+    """Stage 2 installs the body with --no-deps, so a requirement missing from it is never installed."""
+    from packaging.requirements import Requirement
+
+    missing: dict[str, list[str]] = {}
+    for name, backend in backends.items():
+        lines = _body(venv_lock.lock_path(name))
+        body = {venv_lock.normalize_name(m.group(1)) for line in lines if (m := _ENTRY.match(line))}
+        for spec in backend.requirements:
+            wanted = venv_lock.normalize_name(Requirement(spec).name)
+            if wanted not in venv_lock.TORCH_PACKAGES and wanted not in body:
+                missing.setdefault(name, []).append(wanted)
+    assert missing == {}
 
 
 def test_no_lock_is_left_over_from_a_removed_venv(backends: dict[str, venv_lock.Backend]) -> None:
