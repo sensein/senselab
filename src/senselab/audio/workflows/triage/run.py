@@ -57,6 +57,9 @@ NO_NODE = "no node implements this branch"
 WITHHELD_CRITICAL = "withheld: a critical measurement was absent and the run went straight to VERDICT"
 """The note every branch carries when ROUTING short-circuited the run."""
 
+ADMIT_REFUSED = "ADMIT refused the recording, so no branch ran"
+"""The note on a declared family's ``task_extent_absent`` when ADMIT failed the recording."""
+
 STORE_FILE = "store.jsonl"
 LOG_FILE = "run.json"
 RUN_SUBDIR = "run"
@@ -472,6 +475,10 @@ def run_triage(
         else:
             for node in GRAPH_ORDER[1:-1]:
                 outcomes[node] = NodeOutcome(node=node, state=RunState.SKIPPED)
+            if admitted is not None:
+                family = declared_task_family(store, hint)
+                for branch in BRANCHES:
+                    record_unrun_owner(store, branch, family, ADMIT_REFUSED, signal=_CONDITIONED_STREAM)
 
         ran = {node: outcome.state for node, outcome in outcomes.items()}
         folded = _attempt(

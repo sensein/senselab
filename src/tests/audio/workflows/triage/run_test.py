@@ -202,6 +202,7 @@ def _fakes(
         _record("ADMIT")
         entity_id, verdict = _conclude(store, "ADMIT", admit_outcome, None)
         if admit_outcome is Outcome.FAIL:
+            store.activity(node="ADMIT", step=None, parameters={"audio_file": str(source)})
             return AdmitResult(verdict=verdict, view=(entity_id,), verdict_entity_id=entity_id, audio=None)
         audio = _tone()
         audio.save_to_file(str(source))
@@ -880,6 +881,33 @@ class TestAdmitFailShortCircuits:
         assert result.file_verdict.release_ground == NO_TRANSCRIPT
         assert result.released == {}
         assert result.store_path.is_file()
+
+    def test_a_refused_recording_of_a_branch_family_records_why_it_has_no_extent(
+        self, graph: Callable[..., list[str]], config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """A breath task ADMIT refused carries ``task_extent_absent`` naming AIRWAY, not nothing."""
+        graph(admit_outcome=Outcome.FAIL)
+        result = run_triage(
+            tmp_path / "sub-a_ses-1_task-respiration-and-cough-fivebreaths-3.wav", tmp_path / "out", config
+        )
+        store = ProvStore.read_jsonl(result.store_path)
+        absent = [
+            e.attributes
+            for e in store.entities("measurement")
+            if e.attributes.get("name") == "task_extent_absent" and not store.is_invalidated(e.id)
+        ]
+        assert [(a["reason"], a["branch"], a["why"]) for a in absent] == [
+            ("owning_branch_not_run", "AIRWAY", run_module.ADMIT_REFUSED)
+        ]
+
+    def test_a_refused_recording_with_no_declared_family_records_no_absence(
+        self, graph: Callable[..., list[str]], config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """A path naming no task is not a missing extent."""
+        graph(admit_outcome=Outcome.FAIL)
+        result = run_triage(tmp_path / "recording.wav", tmp_path / "out", config)
+        store = ProvStore.read_jsonl(result.store_path)
+        assert not [e for e in store.entities("measurement") if e.attributes.get("name") == "task_extent_absent"]
 
 
 class TestFreshArtifactsDir:
