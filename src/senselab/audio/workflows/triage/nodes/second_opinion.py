@@ -18,7 +18,7 @@ from typing import Any, Callable, Mapping
 from senselab.audio.data_structures import AudioHints
 from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.nodes.branches import declared_task_family
-from senselab.audio.workflows.triage.nodes.common import find_measurement, software_agent
+from senselab.audio.workflows.triage.nodes.common import find_measurement, mint_live, software_agent
 from senselab.audio.workflows.triage.nodes.redact import transcript_texts
 from senselab.audio.workflows.triage.nodes.review import task_context
 from senselab.audio.workflows.triage.task_lexicon import task_lexicon
@@ -227,7 +227,8 @@ def second_opinion(
         consensus = find_measurement(store, "consensus_transcript")
         if consensus is not None:
             store.used(activity, consensus.id)
-    measurement_id = store.entity(
+    measurement_id = mint_live(
+        store,
         prov_type="measurement",
         extent=None,
         attributes={

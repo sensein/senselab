@@ -35,6 +35,7 @@ from senselab.audio.workflows.triage.nodes.common import (
     consensus_words,
     find_measurement,
     find_verdict,
+    mint_live,
     path_attributes,
     resolve_stream,
     software_agent,
@@ -727,7 +728,8 @@ def review(store: ProvStore, config: TriageConfig, hint: AudioHints | None = Non
         if consensus is not None:
             store.used(activity, consensus.id)
         for review_payload_ in reviews:
-            review_id = store.entity(
+            review_id = mint_live(
+                store,
                 prov_type="measurement",
                 extent=None,
                 attributes={"name": LLM_REVIEW_MEASUREMENT, "signal": "consensus_transcript", **review_payload_},
@@ -736,7 +738,8 @@ def review(store: ProvStore, config: TriageConfig, hint: AudioHints | None = Non
             store.was_attributed_to(review_id, software)
             view.append(review_id)
 
-    annotation_id = store.entity(
+    annotation_id = mint_live(
+        store,
         prov_type="measurement",
         extent=None,
         attributes={
@@ -945,7 +948,8 @@ def apply_proposal(store: ProvStore, config: TriageConfig, *, run_dir: Path, sou
 
     span_ids: list[str] = []
     for extent in refined.extents:
-        span_id = store.entity(
+        span_id = mint_live(
+            store,
             prov_type="span",
             extent=(extent.start, extent.end),
             attributes={
@@ -963,7 +967,8 @@ def apply_proposal(store: ProvStore, config: TriageConfig, *, run_dir: Path, sou
     redacted = apply_redactions(recording, refined.extents, fill=fill, bleep_hz=config.get("redaction.bleep_hz"))
     (run_dir / "streams").mkdir(parents=True, exist_ok=True)
     relative, report = write_stream(redacted, run_dir, REDACTED_STREAM)
-    written = store.entity(
+    written = mint_live(
+        store,
         prov_type="stream",
         extent=(0.0, float(redacted.waveform.shape[-1]) / float(redacted.sampling_rate)),
         attributes={

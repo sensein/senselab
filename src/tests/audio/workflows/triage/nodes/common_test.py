@@ -23,6 +23,7 @@ from senselab.audio.workflows.triage.nodes.common import (
     path_attributes,
     resolve_stream,
     software_agent,
+    write_measurement,
     write_stream,
     write_verdict,
 )
@@ -94,6 +95,17 @@ class TestMintLive:
         store.was_invalidated_by(again, activity_id)
         third = mint_live(store, prov_type="verdict", extent=None, attributes={"node": "TEST", "why": "a"})
         assert store.get_entity(third).attributes["remint"] == 2
+
+    def test_a_measurement_equal_to_a_retired_one_is_written_live(self, store: ProvStore) -> None:
+        """A driver that retires a measurement and writes the same one back gets a live entity."""
+        activity_id = store.activity(node="TEST", step=None, parameters={})
+        agent_id = software_agent(store)
+        first = write_measurement(store, activity_id, agent_id, name="hnr", signal="plain", attributes={"value": 1.0})
+        store.was_invalidated_by(first, activity_id)
+        again = write_measurement(store, activity_id, agent_id, name="hnr", signal="plain", attributes={"value": 1.0})
+        assert again != first and not store.is_invalidated(again)
+        found = find_measurement(store, "hnr")
+        assert found is not None and found.id == again
 
     def test_the_reserved_key_is_refused(self, store: ProvStore) -> None:
         """A caller cannot pass ``remint`` itself."""

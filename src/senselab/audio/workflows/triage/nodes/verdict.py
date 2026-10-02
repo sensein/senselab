@@ -41,6 +41,7 @@ from senselab.audio.workflows.triage.nodes.branches import (
     declared_task_family,
 )
 from senselab.audio.workflows.triage.nodes.common import (
+    REMINT,
     NodeResult,
     find_measurement,
     find_measurements,
@@ -318,13 +319,13 @@ def _llm_redaction(store: ProvStore) -> tuple[dict[str, object] | None, list[str
         store: The provenance store.
 
     Returns:
-        The annotation and the id it came from, or ``(None, [])`` when REDACT wrote none. ``name``
-        and ``signal`` are dropped; every other attribute is carried through unread.
+        The annotation and the id it came from, or ``(None, [])`` when REDACT wrote none. ``name``,
+        ``signal`` and ``remint`` are dropped; every other attribute is carried through unread.
     """
     measurement = find_measurement(store, REDACTION_LLM_ANNOTATION)
     if measurement is None:
         return None, []
-    return {key: value for key, value in measurement.attributes.items() if key not in ("name", "signal")}, [
+    return {key: value for key, value in measurement.attributes.items() if key not in ("name", "signal", REMINT)}, [
         measurement.id
     ]
 
@@ -341,7 +342,7 @@ def _second_opinion(store: ProvStore) -> tuple[dict[str, object] | None, list[st
     measurement = find_measurement(store, NIMBLE_OPINION)
     if measurement is None:
         return None, []
-    return {key: value for key, value in measurement.attributes.items() if key not in ("name", "signal")}, [
+    return {key: value for key, value in measurement.attributes.items() if key not in ("name", "signal", REMINT)}, [
         measurement.id
     ]
 

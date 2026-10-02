@@ -328,10 +328,10 @@ def write_measurement(
         extent: The ``(start, end)`` it covers, in seconds, or None for a whole-file measurement.
 
     Returns:
-        The measurement entity's id.
+        The measurement entity's id, minted live by :func:`mint_live`.
     """
-    entity_id = store.entity(
-        prov_type="measurement", extent=extent, attributes={"name": name, "signal": signal, **attributes}
+    entity_id = mint_live(
+        store, prov_type="measurement", extent=extent, attributes={"name": name, "signal": signal, **attributes}
     )
     store.was_generated_by(entity_id, activity_id)
     store.was_attributed_to(entity_id, agent_id)
