@@ -20,7 +20,7 @@ import soundfile as sf
 import torch
 
 from senselab.audio.data_structures import Audio
-from senselab.audio.tasks.features_extraction import PHONEME_LABELS, PPGS_SAMPLE_RATE, PpgsPosteriorgramUnavailable
+from senselab.audio.tasks.features_extraction import PHONEME_LABELS, PPGS_SAMPLE_RATE, PpgsPosteriorgramUnavailable, ppg
 from senselab.audio.workflows.triage.consensus import ConsensusWord, word_attributes
 from senselab.audio.workflows.triage.extend import CONSENSUS_TRANSCRIPT
 from senselab.audio.workflows.triage.nodes.common import (
@@ -356,7 +356,7 @@ class TestTheExtendPass:
 
         def _through_the_venv(audios: List[Audio], device: Optional[DeviceType] = None) -> List[Any]:
             """Resolve the venv the way the real call does, then return the fake's tensors."""
-            subprocess_venv.ensure_venv("ppgs", ["ppgs"], python_version="3.11")
+            subprocess_venv.ensure_venv(ppg._PPGS_VENV, ppg._PPGS_REQUIREMENTS, python_version=ppg._PPGS_PYTHON)
             return _fake_ppgs(audios, device)
 
         monkeypatch.setattr(cli, "extract_ppgs_from_audios", _through_the_venv)
