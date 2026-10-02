@@ -9,7 +9,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
+import stat
+import threading
+import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Literal, Sequence, cast, get_args
@@ -60,6 +64,34 @@ _PROV_TYPES = frozenset(get_args(PROV_TYPE))
 _AGENT_TYPES = frozenset(get_args(AGENT_TYPE))
 _ENVIRONMENT_KINDS = frozenset(get_args(ENVIRONMENT_KIND))
 _RELATIONS = frozenset(get_args(RELATION))
+
+
+def _write_atomically(target: Path, data: bytes) -> None:
+    """Replace ``target`` with ``data`` through a fsynced temporary file in the same directory.
+
+    Args:
+        target: The file to write.
+        data: Its new content.
+    """
+    try:
+        mode: int | None = stat.S_IMODE(target.stat().st_mode)
+    except FileNotFoundError:
+        mode = None
+    temporary = target.with_name(f".{target.name}.{os.getpid()}.{threading.get_ident()}.{uuid.uuid4().hex}.tmp")
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        if mode is not None:
+            os.chmod(temporary, mode)
+        os.replace(temporary, target)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
+
+
 _RECORD_KEYS: dict[str, frozenset[str]] = {
     "entity": frozenset({"id", "prov_type", "extent", "attributes"}),
     "activity": frozenset({"id", "node", "step", "started", "ended", "parameters"}),
@@ -547,7 +579,12 @@ class ProvStore:
         return bool(self._targets("wasInvalidatedBy", entity_id))
 
     def write_jsonl(self, path: str | Path) -> None:
-        """Write the store as one PROV-JSON-shaped record per line."""
+        """Write the store as one PROV-JSON-shaped record per line, atomically.
+
+        The records go to a temporary file in the target's directory, which is flushed, fsynced and
+        renamed onto the target, so the file at ``path`` is always either the previous store or the
+        new one whole. An existing target's permission bits are kept.
+        """
         lines = [
             json.dumps({"record": "entity", **asdict(e)}, sort_keys=True, default=str) for e in self._entities.values()
         ]
@@ -566,7 +603,7 @@ class ProvStore:
             json.dumps({"record": "relation", "relation": r, "source": s, "target": t}, sort_keys=True)
             for r, s, t in self._relations
         ]
-        Path(path).write_text("\n".join(lines) + "\n")
+        _write_atomically(Path(path), ("\n".join(lines) + "\n").encode("utf-8"))
 
     @classmethod
     def read_jsonl(cls, path: str | Path, run_id: str = "read") -> "ProvStore":
