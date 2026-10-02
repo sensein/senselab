@@ -98,11 +98,28 @@ uv run python scripts/lock_subprocess_venvs.py ppgs s3prl # some
 uv run python scripts/lock_subprocess_venvs.py --check    # report missing or stale locks
 ```
 
+## What the locks surfaced
+
+- **`s3prl` could not build on a CUDA ≥ 12.8 host.** The index check found it: `torch<2.5`
+  has no wheel on `cu128`. The venv now declares a CUDA cap, described under the design.
+- **The huggingface-hub 2.x trap, three more times.**
+  - `nemo-canary-qwen`, `nemo-diarization` and `sparc` resolved `huggingface-hub` 2.1.1. That
+    drove `transformers` back to 4.12.2 and `tokenizers` to 0.10.3, which has no wheel and
+    needs a Rust build. It is the failure `ppgs` hit in CI.
+  - The canary lock failed to build on macOS for this reason. A fresh unlocked build today
+    would have failed the same way.
+  - All three now carry `huggingface-hub<2`.
+  - `src/tests/utils/venv_lock_test.py` rejects any lock with `tokenizers` below 0.13.
+
 ## Measured
 
-- **ppgs on macOS arm64** (CPU index), built from its lock into an empty cache: 17 s.
-  - `torch` 2.8.0, `torchaudio` 2.8.0, `ppgs` and `huggingface_hub` 1.33.0 import.
-  - `uv pip check` reports all 120 packages compatible.
-  - The second `ensure_venv` call reused the venv in 0.02 s.
-- **Not yet built:** none of the CUDA-index installs (cu121/cu124/cu128) has been built from a
-  lock yet. That needs a GPU node.
+Builds from locks on macOS arm64, all through the CPU index:
+
+| Venv | Where | Result |
+|---|---|---|
+| `ppgs` | empty cache | 17 s. `torch`/`torchaudio` 2.8.0, `ppgs` and `huggingface_hub` 1.33.0 import; `uv pip check` passes, 120 packages. A second call reused it in 0.02 s. |
+| `nemo-canary-qwen` (fixed lock) | empty cache | 49 s. `nemo.collections.speechlm2.models.SALM` imports with `transformers` 5.18.0, `tokenizers` 0.23.2 and `lightning` 2.4.0; `uv pip check` passes, 153 packages. |
+| `child-adult-diarization` (Python 3.10, torch 2.3.0), `driftse` (torch 2.11), `crisperwhisper`, `qwen-asr`, `hear` (TensorFlow) | the developer's cache, rebuilt by the test run because their markers predate locks | All built. |
+
+None of the CUDA-index installs (cu121/cu124/cu128) has been built from a lock yet. That
+needs a GPU node.
