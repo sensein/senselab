@@ -12,7 +12,7 @@ import torch
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.redaction.api import RedactionExtent, apply_redactions
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
-from senselab.audio.workflows.triage.nodes.common import path_attributes, write_stream
+from senselab.audio.workflows.triage.nodes.common import find_measurement, path_attributes, write_stream
 from senselab.audio.workflows.triage.task_audio import (
     DEFINITION,
     MEASUREMENT,
@@ -316,6 +316,19 @@ class TestRerun:
         (run_dir / "streams/task_plain.flac").write_bytes(b"not audio")
         outcome = cut_task_audio(store, config, run_dir=run_dir)
         assert outcome.cuts["plain"] == WRITTEN and outcome.cuts["enhanced"] == PRESENT
+
+    def test_a_recut_over_the_same_extent_keeps_a_live_measurement(self, tmp_path: Path, config: TriageConfig) -> None:
+        """The recut retires the standing measurement and writes an identical one, which must be live."""
+        store, run_dir = _seed(tmp_path)
+        cut_task_audio(store, config, run_dir=run_dir)
+        before = find_measurement(store, MEASUREMENT)
+        assert before is not None
+        (run_dir / "streams/task_redacted.flac").write_bytes(b"not audio")
+        outcome = cut_task_audio(store, config, run_dir=run_dir)
+        assert outcome.cuts["redacted"] == WRITTEN
+        after = find_measurement(store, MEASUREMENT)
+        assert after is not None and after.id != before.id
+        assert after.attributes["cuts"] == before.attributes["cuts"]
 
 
 class TestARemaskedRelease:

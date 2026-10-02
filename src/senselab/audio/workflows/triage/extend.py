@@ -49,6 +49,7 @@ from senselab.audio.workflows.triage.consensus import (
 )
 from senselab.audio.workflows.triage.enrollment import Enrollment
 from senselab.audio.workflows.triage.nodes.common import (
+    REMINT,
     BranchResult,
     capture_environments,
     describe_exception,
@@ -999,7 +1000,7 @@ def carry_reading_forward(
     fresh = find_measurement(store, REDACTION_LLM_ANNOTATION)
     if fresh is not None and fresh.id != held.annotation.id and fresh.attributes.get("status") in READ_STATES:
         return REVIEW_READ, None
-    attributes = dict(held.annotation.attributes)
+    attributes = {key: value for key, value in held.annotation.attributes.items() if key != REMINT}
     held_key = (attributes.get("result_cache") or {}).get("key")
     revision = attributes.get("revision")
     if attributes.get("prompt_version") != PROMPT_VERSION:
@@ -1024,7 +1025,9 @@ def carry_reading_forward(
     store.used(activity, held.annotation.id)
     for round_ in held.rounds:
         copied = store.entity(
-            prov_type="measurement", extent=None, attributes={**round_.attributes, "carried_from": round_.id}
+            prov_type="measurement",
+            extent=None,
+            attributes={**{k: v for k, v in round_.attributes.items() if k != REMINT}, "carried_from": round_.id},
         )
         store.was_generated_by(copied, activity)
         store.was_attributed_to(copied, software)

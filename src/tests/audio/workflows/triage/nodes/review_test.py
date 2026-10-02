@@ -819,6 +819,22 @@ class TestAReadingIsKeptInTheResultCache:
         assert (hit["status"], hit["speakers"], hit["iterations"]) == ("clean", "one", 1)
         assert len(_rounds_in(second)) == len(_rounds_in(first)) == 1
 
+    def test_a_reading_equal_to_a_retired_one_comes_back_live(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A cache hit identical to a reading a replay retired is minted live, not born retired."""
+        self._reviewed(tmp_path, monkeypatch, [_clean()])
+        store = self._reviewed(tmp_path, monkeypatch, [])
+        held = find_measurement(store, REDACTION_LLM_ANNOTATION)
+        assert held is not None
+        retire = store.activity(node="REPLAY", step="decision_superseded", parameters={"superseded": held.id})
+        store.was_invalidated_by(held.id, retire)
+        _stub(monkeypatch, [])
+        review(store, _config(tmp_path))
+        again = find_measurement(store, REDACTION_LLM_ANNOTATION)
+        assert again is not None and again.id != held.id
+        assert again.attributes["result_cache"] == held.attributes["result_cache"]
+
     def test_a_prompt_version_bump_misses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """The prompt and its parse are in the key, so a new prompt reads the text again."""
         first = self._reviewed(tmp_path, monkeypatch, [_clean()])

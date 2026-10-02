@@ -28,6 +28,7 @@ from senselab.audio.workflows.triage.nodes.common import (
     find_measurement,
     find_verdict,
     live_entities,
+    mint_live,
     path_attributes,
     software_agent,
     write_measurement,
@@ -455,7 +456,7 @@ def cut_task_audio(store: ProvStore, config: TriageConfig, *, run_dir: Path) -> 
             attributes.update(
                 {"fill": source.fill, "remasked": source.remasked, "masks": inside, "masks_verified": True}
             )
-        stream_id = store.entity(prov_type="stream", extent=(0.0, (hi - lo) / sr), attributes=attributes)
+        stream_id = mint_live(store, prov_type="stream", extent=(0.0, (hi - lo) / sr), attributes=attributes)
         store.was_generated_by(stream_id, activity)
         store.was_attributed_to(stream_id, software)
         store.used(activity, source.entity_id)
