@@ -119,6 +119,18 @@ class TestItAsksAndRecords:
         assert str(models[0].model_id).endswith(pin_of(config).blob_digest)
         assert models[0].version == pin_of(config).blob_digest
 
+    def test_the_server_parallelism_is_recorded_on_the_opinion_and_its_activity(self, tmp_path: Path) -> None:
+        """``num_parallel`` defaults to ``second_opinion.workers`` and is provenance on both records."""
+        config = _config(tmp_path)
+        store = _store()
+        outcome = second_opinion(store, config, None, _Ask(_answers()))
+        assert _opinion(store, outcome.measurement_id)["num_parallel"] == config.require("second_opinion.workers")
+        store = _store()
+        outcome = second_opinion(store, config, None, _Ask(_answers()), num_parallel=3)
+        activity = store.get_activity(store.generated_by(outcome.measurement_id) or "")
+        assert _opinion(store, outcome.measurement_id)["num_parallel"] == 3
+        assert activity.parameters["num_parallel"] == 3
+
     def test_a_second_ask_is_served_from_the_cache(self, tmp_path: Path) -> None:
         """Same text, same context, same pin: the model is not asked again."""
         config = _config(tmp_path)

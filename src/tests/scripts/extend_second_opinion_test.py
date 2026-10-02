@@ -1,4 +1,4 @@
-"""The second-opinion driver: SECOND_OPINION over a finished corpus, resumable, re-folding what it changes.
+"""The second-opinion driver: SECOND_OPINION over a finished corpus, resumable, concurrent, folding nothing.
 
 ``specs/20261001-nimble-second-opinion/design.md`` is the design.
 """
@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import contextlib
 import importlib.util
+import json
 import sys
 from pathlib import Path
 from typing import Any, Iterator
@@ -127,21 +128,97 @@ def test_a_server_that_will_not_start_is_an_error_on_every_row_and_starts_once(t
     assert not any(_opinions(root) for root in roots)
 
 
-def test_a_landed_opinion_is_folded_into_the_verdict(tmp_path: Path) -> None:
-    """With hints, VERDICT is decided again and carries the opinion it compared."""
-    run_root = _finished_run(tmp_path / "corpus")
-    _seed_verdicts(run_root)
-    summary = _run(tmp_path, run_root, _Opener(other=0.95), hints=_hints(tmp_path, run_root))
-    assert summary["counts"] == {"ok": 1}
-    assert list(summary["refolds"])[0].startswith(("flag/", "pass/", "discard/"))
+def _live_verdicts(run_root: Path) -> list[Any]:
     store = ProvStore.read_jsonl(run_root / "run" / "store.jsonl", run_id=run_root.name)
-    folded = [
+    return [
         entity
         for entity in store.entities("verdict")
         if entity.attributes.get("node") == "VERDICT" and not store.is_invalidated(entity.id)
     ]
-    assert folded, "the re-fold wrote no live VERDICT"
+
+
+def test_the_driver_writes_the_opinion_and_leaves_the_verdict_to_the_refold(tmp_path: Path) -> None:
+    """No VERDICT is decided here; extend_refold.py then folds the opinion that landed."""
+    run_root = _finished_run(tmp_path / "corpus")
+    _seed_verdicts(run_root)
+    seeded = [entity.id for entity in _live_verdicts(run_root)]
+    hints = _hints(tmp_path, run_root)
+    summary = _run(tmp_path, run_root, _Opener(other=0.95), hints=hints)
+    assert summary["counts"] == {"ok": 1} and "refolds" not in summary
+    assert [entity.id for entity in _live_verdicts(run_root)] == seeded
+
+    refold = _load_refold()
+    refold.run_slice(
+        _manifest(tmp_path, run_root),
+        slice_index=0,
+        slice_count=1,
+        config=_config(tmp_path),
+        log_dir=tmp_path / "refold",
+        hints=hints,
+    )
+    folded = _live_verdicts(run_root)
+    assert folded and folded[-1].id not in seeded
     assert folded[-1].attributes["second_opinion"]["status"] == "ok"
+
+
+def _load_refold() -> Any:  # noqa: ANN401 — a module
+    path = _REPO_ROOT / "scripts" / "extend_refold.py"
+    spec = importlib.util.spec_from_file_location("extend_refold_for_second_opinion_test", path)
+    assert spec is not None and spec.loader is not None  # noqa: S101
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["extend_refold_for_second_opinion_test"] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _corpus(tmp_path: Path, count: int) -> tuple[list[Path], Path]:
+    roots = [_finished_run(tmp_path / f"corpus{index}", words=("hello", f"row{index}")) for index in range(count)]
+    manifest = tmp_path / "manifest.jsonl"
+    manifest.write_text(
+        "".join(
+            f'{{"stem": "{root.name}{index}", "enhanced": "{root / "run" / "streams" / "enhanced.flac"}"}}\n'
+            for index, root in enumerate(roots)
+        ),
+        encoding="utf-8",
+    )
+    return roots, manifest
+
+
+def test_workers_ask_every_row_once_and_keep_the_record_order(tmp_path: Path) -> None:
+    """Rows run concurrently; each store is asked once, the summary keeps manifest order, the server starts once."""
+    roots, manifest = _corpus(tmp_path, 6)
+    opener = _Opener()
+    summary = cli.run_slice(
+        manifest, slice_index=0, slice_count=1, config=_config(tmp_path), log_dir=tmp_path, open_ask=opener, workers=3
+    )
+    assert summary["counts"] == {"ok": 6} and summary["workers"] == 3
+    assert opener.opened == 1 and opener.asked == 6
+    for root in roots:
+        opinions = _opinions(root)
+        assert len(opinions) == 1 and opinions[0]["num_parallel"] == 3
+    rows = (tmp_path / "slices" / "second-opinion-slice-0-of-1.jsonl").read_text(encoding="utf-8").splitlines()
+    assert len(rows) == 6
+
+
+def test_process_returns_records_in_row_order_under_workers(tmp_path: Path) -> None:
+    """Out-of-order completion still returns one record per row, in the rows' order."""
+    roots, manifest = _corpus(tmp_path, 5)
+    rows = [json.loads(line) for line in manifest.read_text(encoding="utf-8").splitlines()]
+    records = cli.process(rows, _config(tmp_path), cli.LazyAsk(_Opener()), force=False, workers=4)
+    assert [record["stem"] for record in records] == [row["stem"] for row in rows]
+
+
+def test_the_opinion_records_its_parallelism_but_the_cache_key_does_not(tmp_path: Path) -> None:
+    """A serial ask after a parallel one is served from the cache: parallelism is provenance, not identity."""
+    roots, manifest = _corpus(tmp_path, 2)
+    parallel = _Opener()
+    cli.run_slice(
+        manifest, slice_index=0, slice_count=1, config=_config(tmp_path), log_dir=tmp_path, open_ask=parallel, workers=2
+    )
+    serial = _Opener()
+    _run(tmp_path, roots[0], serial, force=True)
+    assert serial.asked == 0
+    assert _opinions(roots[0])[0]["num_parallel"] == 1
 
 
 def test_the_cli_refuses_a_config_that_leaves_it_off(tmp_path: Path) -> None:
@@ -154,7 +231,8 @@ def test_the_cli_refuses_a_config_that_leaves_it_off(tmp_path: Path) -> None:
             "0",
             "--slice-count",
             "1",
-            "--no-refold",
+            "--hints",
+            str(_hints(tmp_path, run_root)),
             "--ollama-binary",
             str(tmp_path / "ollama"),
             "--ollama-models",

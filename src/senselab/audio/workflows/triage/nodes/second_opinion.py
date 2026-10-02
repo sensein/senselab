@@ -60,7 +60,17 @@ def settings(config: TriageConfig) -> dict[str, Any]:
     Returns:
         The settings.
     """
-    names = ("enabled", "name", "tag", "blob_digest", "config_digest", "manifest_digest", "seed", "timeout_s")
+    names = (
+        "enabled",
+        "name",
+        "tag",
+        "blob_digest",
+        "config_digest",
+        "manifest_digest",
+        "seed",
+        "timeout_s",
+        "workers",
+    )
     return {name: config.require(f"{_SECTION}.{name}") for name in names}
 
 
@@ -123,7 +133,14 @@ class OpinionOutcome:
     measurement_id: str
 
 
-def second_opinion(store: ProvStore, config: TriageConfig, hint: AudioHints | None, ask: Ask | None) -> OpinionOutcome:
+def second_opinion(
+    store: ProvStore,
+    config: TriageConfig,
+    hint: AudioHints | None,
+    ask: Ask | None,
+    *,
+    num_parallel: int | None = None,
+) -> OpinionOutcome:
     """Ask the question set over the reviewer's text and record the answers.
 
     Args:
@@ -132,6 +149,8 @@ def second_opinion(store: ProvStore, config: TriageConfig, hint: AudioHints | No
         hint: The caller's declaration, the source of the task context.
         ask: Sends a state and questions to the pinned model; None when no server is held, which
             records ``absent`` unless the answer is already cached.
+        num_parallel: How many requests the server answers at once; None reads
+            ``second_opinion.workers``.
 
     Returns:
         The outcome; a measurement is written on every path.
@@ -139,6 +158,7 @@ def second_opinion(store: ProvStore, config: TriageConfig, hint: AudioHints | No
     held = settings(config)
     pin = pin_of(config)
     seed = int(held["seed"])
+    parallel = int(held["workers"] if num_parallel is None else num_parallel)
     context = task_context(store, hint, task_lexicon(config, declared_task_family(store, hint), hint))
     original, _ = transcript_texts(store)
     opinion: SecondOpinion | None = None
@@ -185,7 +205,12 @@ def second_opinion(store: ProvStore, config: TriageConfig, hint: AudioHints | No
     activity = store.activity(
         node=NODE,
         step="decide",
-        parameters={"model_id": pin.model_id, "question_set_version": QUESTION_SET_VERSION, "seed": seed},
+        parameters={
+            "model_id": pin.model_id,
+            "question_set_version": QUESTION_SET_VERSION,
+            "seed": seed,
+            "num_parallel": parallel,
+        },
     )
     store.was_associated_with(activity, software)
     if status in (OK, ABSENT):
@@ -217,6 +242,7 @@ def second_opinion(store: ProvStore, config: TriageConfig, hint: AudioHints | No
             "manifest_digest": pin.manifest_digest,
             "transcript_chars": len(original),
             "seed": seed,
+            "num_parallel": parallel,
             "failure": failure,
             "context_keys": sorted(context),
             "result_cache": cache,

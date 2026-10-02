@@ -2331,7 +2331,18 @@ second_opinion.seed: 7
 
 second_opinion.timeout_s: 300
   Per request. The first request loads the weights: 74.5 s in the pilot. Warm requests took
-  0.71-1.39 s. 300 s covers a cold load on a slow filesystem by 4x.
+  0.71-1.39 s. 300 s covers a cold load on a slow filesystem by 4x. Under `workers` concurrent
+  requests a request may wait behind the others; 300 s still covers four warm answers by 50x.
+
+second_opinion.workers: 4
+  Rows `extend_second_opinion.py` asks at once, and the server's OLLAMA_NUM_PARALLEL. Measured on
+  the r9 run (2026-10-01, H100, one row at a time): the model call's median was 1.35 s against a
+  per-row wall of 4.6-10 s, the rest being store read, a per-row re-fold (since removed) and store
+  write on scratch, so the GPU sat idle most of each row. Four keeps the GPU busy while other rows
+  read and write; the model's `num_ctx` is 8194, so four slots hold 4 x 8194 tokens of KV cache,
+  well inside an 80 GB H100 or A100 beside 9.5 GB of weights. Not in the result-cache key: like the
+  GPU model, batching can move the floating-point reduction order, so it is recorded on the
+  opinion (`num_parallel`) as provenance, not identity.
 ```
 
 ## residual

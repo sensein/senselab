@@ -3,7 +3,7 @@ r"""Run SECOND_OPINION over a finished triage corpus, in place, without replayin
 
     uv run python scripts/extend_second_opinion.py MANIFEST --slice-index I --slice-count N \
         --config ENABLE.yaml --ollama-binary BIN --ollama-models DIR --hints DIR \
-        [--log-dir DIR] [--verified-dir DIR] [--force] [--commit SHA] [--no-refold]
+        [--log-dir DIR] [--verified-dir DIR] [--force] [--workers N]
 
 ``MANIFEST`` is the JSONL every ``extend_*`` driver takes: one object per line carrying ``stem``
 and ``enhanced``, the absolute path of that recording's ``run/streams/enhanced.flac``. A row may
@@ -12,15 +12,18 @@ also carry ``source``, the recording the hint is built from.
 ``--slice-index`` / ``--slice-count`` shard the manifest for a Slurm array: task *i* of *n* takes
 ``rows[i::n]``.
 
-The node reads the store and nothing else. One pinned ``ollama serve`` is started per task, the
-first time a row needs it, and stopped when the task ends. ``--config`` must set
-``second_opinion.enabled: true``; the driver refuses to run otherwise rather than writing
-``disabled`` into every store.
+The node reads the store and the recording's declaration (``--hints``), which supplies the task
+context. One pinned ``ollama serve`` is started per task, the first time a row needs it, and stopped
+when the task ends. ``--workers`` rows are asked at once (default ``second_opinion.workers``), the
+server answering as many requests in parallel; each store is read and written by one worker.
+``--config`` must set ``second_opinion.enabled: true``; the driver refuses to run otherwise rather
+than writing ``disabled`` into every store.
 
-Every recording whose opinion lands is decided again, because VERDICT reads it; ``--hints`` is
-required for that unless ``--no-refold``. A store already holding a live ``ok`` ``nimble_opinion``
-that a SECOND_OPINION activity generated is ``present`` and not asked again, so a preempted task is
-resumed by resubmitting it. ``--force`` asks again and retires the opinion it replaces.
+The driver writes the ``nimble_opinion`` and nothing else: no verdict is decided again here. Follow
+the run with ``scripts/extend_refold.py`` over the same corpus, which re-decides every VERDICT over
+the opinions it finds. A store already holding a live ``ok`` ``nimble_opinion`` that a
+SECOND_OPINION activity generated is ``present`` and not asked again, so a preempted task is resumed
+by resubmitting it. ``--force`` asks again and retires the opinion it replaces.
 
 The design is in ``specs/20261001-nimble-second-opinion/design.md``.
 
@@ -35,6 +38,7 @@ import contextlib
 import json
 import os
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Any, Callable, ContextManager, Iterator, Sequence
@@ -45,16 +49,13 @@ from senselab.audio.workflows.triage.extend import (
     ERROR,
     OK,
     PRESENT,
-    RUN_SUBDIR,
     SLICES_SUBDIR,
-    VERDICT_NODE,
     SliceLog,
     export_prov,
     load_hint_builder,
     logged,
     read_manifest,
     read_store,
-    refold_verdict,
     run_root_of,
     source_of,
     supersede,
@@ -63,15 +64,12 @@ from senselab.audio.workflows.triage.extend import (
 )
 from senselab.audio.workflows.triage.nodes.common import describe_exception, find_measurement, software_agent
 from senselab.audio.workflows.triage.nodes.second_opinion import ABSENT, NODE, Ask, pin_of, second_opinion, settings
-from senselab.audio.workflows.triage.run import RELEASE_SUBDIR, REPORT_NODE, SUMMARY_SUBDIR
 from senselab.audio.workflows.triage.vocabulary import NIMBLE_OPINION
 from senselab.text.tasks.decision_model.ollama import OllamaServer, PinMismatchError, ask_decisions, verify_pin
 from senselab.utils.prov_store import Entity, ProvStore
 
 OPINION_SUPERSEDED = "opinion_superseded"
 _SUPERSEDED_REASON = "asked again under a later configuration"
-REFOLD = "refold"
-SKIPPED = "skipped"
 _DEFAULT_VERIFIED = Path.home() / ".cache" / "senselab" / "ollama-verified"
 
 OpenAsk = Callable[[], ContextManager[Ask]]
@@ -100,15 +98,22 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--force", action="store_true", help="Ask again where an opinion already stands")
     parser.add_argument(
-        "--hints", type=Path, default=None, help="Directory holding hints.py; required unless --no-refold"
+        "--hints", type=Path, required=True, help="Directory holding hints.py; the task context comes from it"
     )
-    parser.add_argument("--no-refold", action="store_true", help="Leave the recorded verdict as it stands")
-    parser.add_argument("--commit", default=None, help="The code revision to record on the re-fold marker")
+    parser.add_argument(
+        "--workers", type=int, default=None, help="Rows asked at once (default: second_opinion.workers)"
+    )
     return parser
 
 
 def ollama_asker(
-    config: TriageConfig, *, binary: Path, models_dir: Path, verified_dir: Path | None, log_path: Path | None
+    config: TriageConfig,
+    *,
+    binary: Path,
+    models_dir: Path,
+    verified_dir: Path | None,
+    log_path: Path | None,
+    num_parallel: int = 1,
 ) -> OpenAsk:
     """An :data:`OpenAsk` that serves the configured pin and asks it over HTTP.
 
@@ -118,6 +123,7 @@ def ollama_asker(
         models_dir: The model store.
         verified_dir: Where a completed blob hash is remembered.
         log_path: Where the server's output goes.
+        num_parallel: How many requests the server answers at once.
 
     Returns:
         The opener.
@@ -127,7 +133,9 @@ def ollama_asker(
 
     @contextlib.contextmanager
     def open_ask() -> Iterator[Ask]:
-        with OllamaServer(binary, models_dir, pin, verified_dir=verified_dir, log_path=log_path) as server:
+        with OllamaServer(
+            binary, models_dir, pin, verified_dir=verified_dir, log_path=log_path, num_parallel=num_parallel
+        ) as server:
             yield lambda state, questions: ask_decisions(
                 server.host,
                 f"{pin.name}:{pin.tag}",
@@ -141,7 +149,7 @@ def ollama_asker(
 
 
 class LazyAsk:
-    """Opens the asker on its first call and holds it until :meth:`close`.
+    """Opens the asker on its first call and holds it until :meth:`close`; safe to call from threads.
 
     Args:
         open_ask: The opener.
@@ -153,21 +161,24 @@ class LazyAsk:
         self._stack = contextlib.ExitStack()
         self._ask: Ask | None = None
         self._failure: RuntimeError | None = None
+        self._lock = threading.Lock()
 
     def __call__(self, state: Any, questions: Any) -> Any:  # noqa: ANN401 — the Ask signature
         """Ask, starting the server first if this is the first question.
 
         A server that failed to start is not started again: every later call raises the same error.
         """
-        if self._failure is not None:
-            raise self._failure
-        if self._ask is None:
-            try:
-                self._ask = self._stack.enter_context(self._open_ask())
-            except (OSError, RuntimeError) as error:
-                self._failure = RuntimeError(f"the decision-model server did not start: {error}")
-                raise self._failure from error
-        return self._ask(state, questions)
+        with self._lock:
+            if self._failure is not None:
+                raise self._failure
+            if self._ask is None:
+                try:
+                    self._ask = self._stack.enter_context(self._open_ask())
+                except (OSError, RuntimeError) as error:
+                    self._failure = RuntimeError(f"the decision-model server did not start: {error}")
+                    raise self._failure from error
+            ask = self._ask
+        return ask(state, questions)
 
     @property
     def opened(self) -> bool:
@@ -225,23 +236,23 @@ def extend_one(
     force: bool,
     build_hint: Callable[[Path], Any] | None,
     source: Path | None,
-    commit: str | None = None,
+    num_parallel: int = 1,
 ) -> dict[str, str]:
-    """Ask about one finished run, re-fold its verdict over the answer, and write the store once.
+    """Ask about one finished run and write the opinion into its store.
 
     Args:
         run_root: The run root.
         config: The triage configuration.
         ask: Sends a state and questions to the model.
         force: Whether to ask again where an opinion stands.
-        build_hint: The hint populator, or None to leave the recorded verdict as it stands.
+        build_hint: The hint populator, or None to ask without the declaration's task context.
         source: The recording the run was over, for the hint.
-        commit: The code revision to record on the re-fold marker.
+        num_parallel: How many requests the server answers at once, recorded on the opinion.
 
     Returns:
         ``{status, SECOND_OPINION}`` -- ``ok`` when an opinion landed, ``present`` when one already
         stood or the store came out unchanged, ``error`` when the store would not open or the model
-        was asked and did not answer. An unanswered ask is not written. A re-fold adds ``refold``.
+        was asked and did not answer. An unanswered ask is not written.
     """
     try:
         store = read_store(run_root)
@@ -259,7 +270,7 @@ def extend_one(
             return {"status": ERROR, NODE: f"hint: {describe_exception(error)}"}
     before = store.fingerprint()
     try:
-        outcome = second_opinion(store, config, hint, ask)
+        outcome = second_opinion(store, config, hint, ask, num_parallel=num_parallel)
     except (OSError, ValueError, LookupError, RuntimeError) as error:
         return {"status": ERROR, NODE: describe_exception(error)}
     if outcome.status == ABSENT:
@@ -277,46 +288,9 @@ def extend_one(
             )
     if store.fingerprint() == before:
         return {"status": PRESENT, NODE: outcome.status}
-    refolded = _refold(store, config, run_root=run_root, hint=hint, commit=commit) if build_hint else SKIPPED
     write_store(store, run_root)
     export_prov(store, run_root)
-    return {"status": OK, NODE: outcome.status, REFOLD: refolded}
-
-
-def _refold(
-    store: ProvStore, config: TriageConfig, *, run_root: Path, hint: AudioHints | None, commit: str | None
-) -> str:
-    """Decide the file again over the opinion just written.
-
-    Args:
-        store: The run's store.
-        config: The triage configuration.
-        run_root: The run root.
-        hint: The recording's declaration; None skips the re-fold.
-        commit: The code revision to record on the marker.
-
-    Returns:
-        The two axes the re-fold reached, or why it did not run.
-    """
-    if hint is None:
-        return SKIPPED
-    try:
-        outcome = refold_verdict(
-            store,
-            config,
-            hint,
-            run_dir=run_root / RUN_SUBDIR,
-            artifacts_dir=run_root / RELEASE_SUBDIR,
-            summary_dir=run_root / SUMMARY_SUBDIR,
-            commit=commit,
-        )
-    except (OSError, ValueError, LookupError) as error:
-        return f"{ERROR}: {describe_exception(error)}"
-    if VERDICT_NODE in outcome.errors:
-        return f"{ERROR}: {outcome.errors[VERDICT_NODE]}"
-    decided = f"{outcome.triage}/{outcome.release}"
-    rendered = outcome.errors.get(REPORT_NODE)
-    return decided if rendered is None else f"{decided} (report: {rendered})"
+    return {"status": OK, NODE: outcome.status}
 
 
 def process(
@@ -326,18 +300,18 @@ def process(
     *,
     force: bool,
     build_hint: Callable[[Path], Any] | None = None,
-    commit: str | None = None,
+    workers: int = 1,
     log: SliceLog | None = None,
 ) -> list[dict[str, Any]]:
-    """Ask about every run named by these rows, one at a time.
+    """Ask about every run named by these rows, ``workers`` at a time.
 
     Args:
         rows: The manifest rows this task owns.
         config: The triage configuration.
-        ask: Sends a state and questions to the model.
+        ask: Sends a state and questions to the model; called from ``workers`` threads at once.
         force: Whether to ask again where an opinion stands.
-        build_hint: The hint populator, or None to leave each recorded verdict as it stands.
-        commit: The code revision to record on each re-fold marker.
+        build_hint: The hint populator, or None to ask without the declaration's task context.
+        workers: How many rows are asked at once, which is also the server's parallelism.
         log: Where each row's record is appended as it lands, or None.
 
     Returns:
@@ -357,10 +331,12 @@ def process(
                 return {**row, "status": ERROR, NODE: f"source: {describe_exception(error)}"}
         return {
             **row,
-            **extend_one(run_root, config, ask, force=force, build_hint=build_hint, source=source, commit=commit),
+            **extend_one(
+                run_root, config, ask, force=force, build_hint=build_hint, source=source, num_parallel=workers
+            ),
         }
 
-    return logged(rows, one, log)
+    return logged(rows, one, log, workers=workers)
 
 
 def run_slice(
@@ -373,7 +349,7 @@ def run_slice(
     open_ask: OpenAsk,
     force: bool = False,
     hints: Path | None = None,
-    commit: str | None = None,
+    workers: int = 1,
 ) -> dict[str, Any]:
     """Ask about every run in one array task's stride of the manifest.
 
@@ -385,23 +361,23 @@ def run_slice(
         log_dir: Where this task's ``slices/`` log goes.
         open_ask: Opens the asker; called at most once, on the first row that needs it.
         force: Whether to ask again where an opinion stands.
-        hints: The directory holding ``hints.py``, or None to leave each recorded verdict alone.
-        commit: The code revision to record on each re-fold marker.
+        hints: The directory holding ``hints.py``, or None to ask without the declaration's task context.
+        workers: How many rows are asked at once; the asker must answer as many in parallel.
 
     Returns:
         The task's summary: its counts, its parameters, and where its log went.
     """
     started = time.time()
     mine = take_slice(read_manifest(manifest, required=("stem", "enhanced")), slice_index, slice_count)
-    print(f"[slice {slice_index}/{slice_count}] {len(mine)} rows", flush=True)
+    print(f"[slice {slice_index}/{slice_count}] {len(mine)} rows, {workers} at once", flush=True)
     build_hint = load_hint_builder(hints) if hints is not None else None
     slices_dir = log_dir / SLICES_SUBDIR
     label = f"second-opinion-slice-{slice_index}-of-{slice_count}"
     log_path = slices_dir / f"{label}.jsonl"
-    rows_log = SliceLog(log_path, slice_index=slice_index, slice_count=slice_count, total=len(mine))
+    rows_log = SliceLog(log_path, slice_index=slice_index, slice_count=slice_count, total=len(mine), workers=workers)
     ask = LazyAsk(open_ask)
     try:
-        log = process(mine, config, ask, force=force, build_hint=build_hint, commit=commit, log=rows_log)
+        log = process(mine, config, ask, force=force, build_hint=build_hint, workers=workers, log=rows_log)
     finally:
         rows_log.close()
         server_started = ask.opened
@@ -409,12 +385,9 @@ def run_slice(
 
     counts: dict[str, int] = {}
     readings: dict[str, int] = {}
-    refolds: dict[str, int] = {}
     for record in log:
         counts[str(record["status"])] = counts.get(str(record["status"]), 0) + 1
         readings[str(record[NODE])] = readings.get(str(record[NODE]), 0) + 1
-        if REFOLD in record:
-            refolds[str(record[REFOLD])] = refolds.get(str(record[REFOLD]), 0) + 1
     pin = pin_of(config)
     summary = {
         "manifest": str(manifest),
@@ -427,10 +400,9 @@ def run_slice(
         "rows": len(mine),
         "counts": counts,
         "readings": readings,
-        "refolds": refolds,
         "force": force,
         "hints": str(hints) if hints is not None else None,
-        "commit": commit,
+        "workers": workers,
         "host": os.uname().nodename,
         "elapsed_s": time.time() - started,
         "log": str(log_path),
@@ -453,9 +425,6 @@ def main(argv: list[str] | None = None) -> int:
     if not args.manifest.exists():
         print(f"ERROR: manifest not found: {args.manifest}", file=sys.stderr)
         return 2
-    if args.hints is None and not args.no_refold:
-        print("ERROR: --hints is required unless --no-refold; VERDICT reads the declaration.", file=sys.stderr)
-        return 2
     binary = args.ollama_binary or (Path(os.environ["OLLAMA_BINARY"]) if os.environ.get("OLLAMA_BINARY") else None)
     models = args.ollama_models or (Path(os.environ["OLLAMA_MODELS"]) if os.environ.get("OLLAMA_MODELS") else None)
     if binary is None or models is None:
@@ -469,8 +438,13 @@ def main(argv: list[str] | None = None) -> int:
     except (OSError, ValueError) as error:
         print(f"ERROR: {error}", file=sys.stderr)
         return 2
-    if not settings(config)["enabled"]:
+    held = settings(config)
+    if not held["enabled"]:
         print("ERROR: second_opinion.enabled is false; pass a --config that enables it.", file=sys.stderr)
+        return 2
+    workers = int(args.workers if args.workers is not None else held["workers"])
+    if workers < 1:
+        print(f"ERROR: --workers must be at least 1, got {workers}.", file=sys.stderr)
         return 2
     try:
         verify_pin(models, pin_of(config), verified_dir=args.verified_dir)
@@ -488,11 +462,16 @@ def main(argv: list[str] | None = None) -> int:
             config=config,
             log_dir=log_dir,
             open_ask=ollama_asker(
-                config, binary=binary, models_dir=models, verified_dir=args.verified_dir, log_path=server_log
+                config,
+                binary=binary,
+                models_dir=models,
+                verified_dir=args.verified_dir,
+                log_path=server_log,
+                num_parallel=workers,
             ),
             force=args.force,
-            hints=None if args.no_refold else args.hints,
-            commit=args.commit,
+            hints=args.hints,
+            workers=workers,
         )
     except (OSError, ValueError, RuntimeError) as error:
         print(f"ERROR: {error}", file=sys.stderr)
@@ -503,8 +482,6 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  {status:<9} {number}")
     for reading, number in sorted(summary["readings"].items()):
         print(f"  read {reading:<16} {number}")
-    for refold, number in sorted(summary["refolds"].items()):
-        print(f"  refold {refold:<14} {number}")
     return 1 if summary["counts"].get(ERROR) else 0
 
 
