@@ -1,0 +1,21 @@
+# Which words of a DATE_TIME-family finding the fold releases by kind: a time of day or a duration,
+# none of which is a HIPAA Safe Harbor date element. Lower-case, apostrophes and dots dropped
+# ("o'clock" -> "oclock", "a.m." -> "am").
+#
+# derivation: owner, 2026-10-02, on the v6 review over r9 ("yes time of day can be released as well
+# as duration"), after a corpus count over the 15,113 review-manifest recordings found 29 time-of-day
+# and 92 duration findings still masked, 22 and 57 of them in a copy released with redaction. Safe
+# Harbor (45 CFR 164.514(b)(2)(i)(C)) removes the elements of a date directly related to an
+# individual and ages over 89; a time of day and a length of time are neither. A finding holding any
+# `blockers` word, a four-digit number or an ordinal keeps every word as before: it names a date, a
+# specific day or an age. Relative day references (today, yesterday, tomorrow) and an unquantified
+# singular unit ("last year", "the week") are left to the reviewer, as before. The rule is in
+# specs/20260927-pii-span-ledger/design.md, "Released by kind".
+time_of_day: [morning, mornings, afternoon, afternoons, evening, evenings, night, nights, tonight, noon, midnight, midday, dawn, dusk, sunrise, sunset, daytime, nighttime, overnight, bedtime, lunchtime, dinnertime]
+clock_markers: [oclock, am, pm]
+units: [second, minute, hour, day, week, weekend, fortnight, month, year, decade, century, semester]
+plural_units: [seconds, minutes, hours, days, weeks, weekends, fortnights, months, years, decades, centuries, semesters]
+quantities: [a, an, couple, few, several, many, some, dozen, dozens, hundreds, thousands, half, one, two, three, four, five, six, seven, eight, nine, ten, eleven, twelve, thirteen, fourteen, fifteen, sixteen, seventeen, eighteen, nineteen, twenty, thirty, forty, fifty, sixty, seventy, eighty, ninety, hundred, thousand]
+modifiers: [past, last, next, for, over, about, around, almost, nearly, roughly, approximately, maybe, or, so, more, than, less, ago, whole, entire, of, the, this, that, these, those, every, each, other, couple, few, and, plus, within, after, before, like, just, only, already, all, long, longer]
+ordinal_words: [first, second, third, fourth, fifth, sixth, seventh, eighth, ninth, tenth, eleventh, twelfth, thirteenth, fourteenth, fifteenth, sixteenth, seventeenth, eighteenth, nineteenth, twentieth, thirtieth, thirtyfirst]
+blockers: [january, february, march, april, may, june, july, august, september, october, november, december, jan, feb, mar, apr, jun, jul, aug, sep, sept, oct, nov, dec, monday, tuesday, wednesday, thursday, friday, saturday, sunday, mondays, tuesdays, wednesdays, thursdays, fridays, saturdays, sundays, christmas, thanksgiving, easter, halloween, hanukkah, ramadan, eid, diwali, passover, newyear, newyears, today, tomorrow, yesterday, old, aged, age, ages, birthday, born, anniversary, year-old, yearold, yearsold]
