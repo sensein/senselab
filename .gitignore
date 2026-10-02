@@ -177,6 +177,9 @@ data/
 # below, and load_fsd_class_map_document() would fail on any clone that isn't this host.
 !src/senselab/audio/tasks/source_separation/data/
 !src/senselab/audio/tasks/source_separation/data/**
+# ...and the subprocess-venv locks ensure_venv installs from.
+!src/senselab/utils/data/
+!src/senselab/utils/data/**
 # ...and the same for checked-in *test* data. `level_verdicts_baseline.json` is a measured artifact —
 # the level-probe verdicts the guards in `level_probe_test.py` assert properties of — so a clone
 # without it cannot run those six tests at all. They passed only on the machine that generated the
