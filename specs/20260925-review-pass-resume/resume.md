@@ -1,17 +1,73 @@
 # Resuming the review pass
 
-## Scheduled — full re-review on reviewer prompt v5
+## Settled, 2026-10-02 — r10; read this first, everything below is history
 
-Prompt v5 (`d9d50561`) keeps v4's rules (CONDITIONS are named diagnoses; instructions addressed to the
-participant are another voice) and adds a required INSTRUCTIONS_SPOKEN part: the task's instructions
-spoken in the recording, by anyone, flag for review. r9's readings are v3, with the 2,257 that listed a
-condition re-read on v4. A full re-review of all ~15,165 readings on v5 is scheduled so the corpus comes
-from one prompt; its exact commands are the "Scheduled: full re-review of all ~15,165 on prompt v5"
-section of `/orcd/scratch/bcs/002/satra/triage_r9_20260929/RUN.md` (review_v5all a100 + h100 arrays over
-the full review manifest with --force, then the full re-fold and a schema-13 parquet into
-`recording_vectors_r9d`). No replay.
+The corpus is the r9 tree, re-read on reviewer prompt v6, second-opinioned by Nimble, re-folded in full
+and cut to task extents. r9c and r9d are superseded.
 
-## Settled, 2026-09-28 — read this first; everything below is history
+| | path |
+|---|---|
+| corpus (62,550 = every in-scope BIDS WAV) | `/orcd/scratch/bcs/002/satra/triage_r9_20260929/out` |
+| checkouts, pinned | `senselab-r5` @ `29357489` (v6 review); `senselab-r10` @ `ac0bd3ba` (r10 chain, parquet, page); `senselab-r11` @ `b013e274` (fix17); `senselab-r12` @ `9095b81a` (fix20) |
+| job ids, submit order | `triage_r9_20260929/jobs.txt`, `RUN.md` |
+| review manifest (15,113) / v6 readings | `triage_r9_20260929/review/`, `rows_v6/` |
+| Nimble readings | `triage_r9_20260929/second_opinion/rows/` |
+| parquet, schema 17, dictionary embedded | `recording_vectors_r10/`; laptop `~/Downloads/recording_vectors_20261002_r10/` |
+| page / evaluations | `free_speech_page_20261002_r10/`, `evaluations_r10_20261002/README.md`; laptop `~/Downloads/free_speech_review_20261002_r10/` |
+| derivatives (inside the release) | `/orcd/data/satra/002/datasets/b2aivoice/4.0-release/adult/bids_adult_2026_09_04/derivatives/senselab-triage/` |
+
+Code since r9c, on `design/triage-workflow-dag`:
+
+| commit | what |
+|---|---|
+| `29357489` | reviewer prompt v6: time expressions, a named identifier must be proposed, productive-vocabulary target word is task content, tolerant quotes |
+| `d95b0b2a` | merge of `design/nimble` (schema 15), `design/task-extent-audio` (renumbered to 16), `design/airway-extent`: AIRWAY and RIG place a `task_extent` or record why not |
+| `e1d9b203` | time-of-day and duration findings released by kind (`data/time_release.yaml`), schema 17 |
+| `ac0bd3ba` | Nimble driver: no per-recording re-fold (the full re-fold follows), 4 parallel requests; atomic `ProvStore.write_jsonl` |
+| `284a493c` | Ollama server: Vulkan off, model must be fully GPU-resident, a slice aborts on a dead server |
+| `b013e274` | a replay carries an unchanged REVIEW reading forward, or reports `needs_reread` and exits 3; an unrun owning branch records `owning_branch_not_run` |
+| `9095b81a` | `mint_live` in every writer (a retire-then-rewrite reused the retired id); ADMIT-refused recordings record their owner reason |
+
+Runs, in order:
+
+1. v6 full re-review of the 15,113 (`--force`), re-fold, parquet `r9d`.
+2. r10 chain at `ac0bd3ba`: AIRWAY/RIG extent replay of 1,614; Nimble over the review manifest
+   (15,111 ok, 2 nothing to read; one sweep array after slice 29 fell back to Vulkan and crashed); full
+   re-fold under `second_opinion_on.yaml`; task-audio cuts; parquet `r10`.
+3. `fix105/`: the extent replay had retired the v6 REVIEW of 105 recordings (an overlap check matched
+   `stem` across manifests that disagree on the run timestamp, and reported 0). Re-reviewed, re-folded,
+   recut.
+4. `fix25/` at `b013e274`: 17 recordings with neither an extent nor a reason, replayed.
+5. `fix20/` at `9095b81a`: 7 born-retired reviews re-minted, 5 born-retired cuts recut, 8 ADMIT-refused
+   recordings given their reason.
+
+Outcome: flagged 9,419. Release: 60,297 without redaction, 1,140 with, 1,081 withheld (cohort-condition
+review 580, other-condition review 267, reviewer proposed hiding more 169, REDACT 65), 32 not assessed.
+`llm_status` disabled 47,437 (exactly the recordings outside the review manifest), null 0. Nimble
+disagrees confidently with the reviewer (0.8 / 0.2, `UNFITTED`) on 315. Every AIRWAY and RIG recording
+carries an extent or a reason. Task-audio cuts: plain 60,560, enhanced 60,559, redacted 1,125; the 1,990
+without a cut are exactly those without an extent.
+
+Derivatives: every run root copied with symlinks followed — 2,221,746 files and 1,404,320,415,233 bytes
+on both sides, 0 symlinks. The earlier ~200 MB gap was `du` counting directory sizes; the check now sums
+file bytes. `tmp_deriv/finalize_r10.sbatch` rewrites the top level (parquet, summary, dictionary, viewer,
+review page, evaluations with `--delete`) and `dataset_description.json`. Stores still naming
+`/orcd/scratch`: pending the finalize run (`PathMap` translates them).
+
+Open for the owner:
+
+- A lone "El" (Spanish article, or a place-name fragment) is released; unanswered.
+- The future full run over all tasks, scheduled earlier.
+- Nimble thresholds are unfitted: hand-label the disagreements per question, then fit.
+- Subprocess-venv dependency versions are not locked and not in any cache key.
+- The evaluate-triage panel has no r9c baseline; those parquets lack the columns.
+
+Cluster traps met this round: `squeue -j <id>` errors once a finished job is purged, so a watcher read
+that as an unreachable cluster — list `squeue -u satra -h -r -o '%F %R'` and filter by id instead;
+`afterok` on an array with one failed task never runs, so put a resumable sweep array between; an
+agent holding a Slurm wait stalls — submit from the agent, hold the wait in the main session.
+
+## r7, 2026-09-28 — history
 
 The corpus is **r7**, replayed, fully re-reviewed and folded at `77e9273e`. r6 and r5 are superseded.
 The cache commits (`7089b05f`..`e4301967`) sit on top and are merged; r7 predates them.
