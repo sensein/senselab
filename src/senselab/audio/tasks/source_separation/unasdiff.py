@@ -47,21 +47,10 @@ would collide with unrelated names on the host ``sys.path``), so it clones into 
 isolated venv at a pinned commit rather than merging its dependency set (or its
 module names) into senselab core.
 
-flash-attn is deliberately absent from ``_UNASDIFF_REQUIREMENTS`` by default:
-``models/atten_unet.py`` sets ``use_flash = False`` up front and only flips it to
-``True`` inside a ``try: from flash_attn import flash_attn_func`` that falls back
-to manual softmax attention on ``ImportError`` -- verified against the pinned
-commit, not assumed (see this task's report). The fallback materializes a
-``[b, h, t, t]`` attention matrix and is therefore slower and heavier, an
-acceptable trade against building flash-attn 2.5.8 unconditionally in every
-user's cache: this branch already watched a far milder case (``av==14.4.0``, no
-wheel available) fall back to a source build and take an *entire* venv install
-down with it, and flash-attn is considerably more build-fragile than that -- it
-needs a matching CUDA toolkit, ``--no-build-isolation``, and 10-30 minutes with
-``MAX_JOBS`` tuning to avoid OOM. Setting ``SENSELAB_UNASDIFF_FLASH_ATTN``
-truthy opts in for a host with a working ``nvcc`` (see :func:`_unasdiff_requirements`);
-because ``ensure_venv`` keys venv reuse on a marker containing the requirements
-list, toggling this env var forces a full rebuild.
+flash-attn is not in the venv's lock: upstream falls back to manual softmax attention without it.
+Setting ``SENSELAB_UNASDIFF_FLASH_ATTN`` truthy builds ``flash-attn==2.5.8`` into the locked venv
+after it is installed (see :func:`_ensure_flash_attn`); that needs a working ``nvcc``. See
+``specs/20261002-subprocess-venv-locks/design.md``.
 
 Licensing
 ---------
@@ -122,6 +111,7 @@ from senselab.utils.data_structures.device import DeviceType
 from senselab.utils.data_structures.logging import logger
 from senselab.utils.subprocess_venv import (
     _clean_subprocess_env,
+    _find_uv,
     ensure_venv,
     parse_subprocess_result,
     stage_portable_audio_io,
@@ -143,14 +133,7 @@ _UNASDIFF_MAX_CUDA_VERSION = (12, 4)
 # Python 3.10; the version pins are reproduced without the +cu124 local tag, and the CUDA
 # build comes from the Stage-1 index -- capped by _UNASDIFF_MAX_CUDA_VERSION above, because
 # host-CUDA routing alone picks an index this torch pin has no wheels on.
-#
-# flash-attn is absent by default: atten_unet.py sets use_flash=False on
-# ImportError and branches to a manual softmax attention, so it is optional in
-# fact and not merely in the README. The fallback materialises a [b, h, t, t]
-# attention matrix, so it is slower and heavier -- but installing flash-attn
-# unconditionally trades a slow-but-working default for a build that can take
-# the whole venv down on a host without a matching CUDA toolkit (see
-# _unasdiff_requirements and SENSELAB_UNASDIFF_FLASH_ATTN below). Opt-in only.
+
 _UNASDIFF_REQUIREMENTS = [
     "torch==2.6.0",
     "torchaudio==2.6.0",
@@ -174,43 +157,40 @@ _UNASDIFF_REQUIREMENTS = [
     "soundfile",
 ]
 
-# Operator override, same style as SENSELAB_TORCH_INDEX_URL (subprocess_venv.py) and
-# SENSELAB_UNASDIFF_CHECKPOINTS above: absent by default, read once at venv-build time via
-# _unasdiff_requirements(). Not read in the worker -- flash-attn's own presence in the venv
-# (or absence of it) is what the worker's `from flash_attn import flash_attn_func` observes.
 _UNASDIFF_FLASH_ATTN_ENV = "SENSELAB_UNASDIFF_FLASH_ATTN"
+_FLASH_ATTN_SPEC = "flash-attn==2.5.8"
+_FLASH_ATTN_BUILD_REQUIREMENTS = ["ninja", "packaging", "psutil", "wheel", "setuptools"]
+_FLASH_ATTN_MARKER = ".flash-attn-installed"
 
 
-def _unasdiff_requirements() -> List[str]:
-    """Return this venv's pip requirements, with flash-attn appended only if opted in.
+def _flash_attn_requested() -> bool:
+    """Whether ``SENSELAB_UNASDIFF_FLASH_ATTN`` is set truthy."""
+    return os.environ.get(_UNASDIFF_FLASH_ATTN_ENV, "").strip().lower() in ("1", "true", "yes", "on")
 
-    flash-attn stays out of ``_UNASDIFF_REQUIREMENTS`` unconditionally (see the module
-    docstring and the comment above that list) because installing it is considerably more
-    build-fragile than the one dependency (``av``) that has already taken a venv build down in
-    this repository: flash-attn needs a matching CUDA toolkit, ``--no-build-isolation``, and
-    10-30 minutes with ``MAX_JOBS`` tuning to avoid OOM. Upstream's own code tolerates a
-    *missing* flash-attn gracefully (``atten_unet.py`` falls back to manual softmax attention on
-    ``ImportError``), but nothing tolerates the *install* failing -- so making it unconditional
-    would convert that graceful runtime fallback into a hard venv-creation failure on any host
-    without a working ``nvcc``.
 
-    Setting ``SENSELAB_UNASDIFF_FLASH_ATTN`` truthy (``1``/``true``/``yes``/``on``, case
-    insensitive) opts in for a host that has a working CUDA toolchain and wants the speedup.
-    ``ensure_venv`` keys venv reuse on a marker containing the requirements list
-    (``subprocess_venv.py``), so toggling this env var changes the requirements and therefore
-    forces a full rebuild -- flipping the flag costs a 10-30 minute reinstall, not a quick
-    incremental change. A failed opt-in build fails loudly, which is the point: the person who
-    asked for flash-attn is the person who can supply a working ``nvcc`` or turn the flag back
-    off.
+def _ensure_flash_attn(venv_dir: Path) -> None:
+    """Build ``flash-attn`` into an installed unasdiff venv, once, when opted in.
 
-    Returns:
-        ``_UNASDIFF_REQUIREMENTS`` with ``"flash-attn==2.5.8"`` appended when the env var is
-        set truthy, unchanged otherwise.
+    Runs after the locked install, with ``--no-build-isolation`` against the venv's own ``torch``.
+    A marker in the venv records the build; a rebuilt venv (a changed lock) has none.
+
+    Args:
+        venv_dir: The installed unasdiff venv.
+
+    Raises:
+        subprocess.CalledProcessError: When the build fails.
     """
-    requirements = list(_UNASDIFF_REQUIREMENTS)
-    if os.environ.get(_UNASDIFF_FLASH_ATTN_ENV, "").strip().lower() in ("1", "true", "yes", "on"):
-        requirements.append("flash-attn==2.5.8")
-    return requirements
+    marker = venv_dir / _FLASH_ATTN_MARKER
+    if not _flash_attn_requested() or marker.is_file():
+        return
+    uv = _find_uv()
+    python = venv_python(venv_dir)
+    subprocess.run([uv, "pip", "install", "--python", python, *_FLASH_ATTN_BUILD_REQUIREMENTS], check=True)
+    subprocess.run(
+        [uv, "pip", "install", "--python", python, "--no-build-isolation", "--no-deps", _FLASH_ATTN_SPEC],
+        check=True,
+    )
+    marker.write_text(_FLASH_ATTN_SPEC + "\n")
 
 
 _UNASDIFF_REPO_URL = "https://github.com/RunwuShi/unasdiff.git"
@@ -912,10 +892,11 @@ def separate_with_unasdiff(
 
     venv_dir = ensure_venv(
         _UNASDIFF_VENV,
-        _unasdiff_requirements(),
+        _UNASDIFF_REQUIREMENTS,
         python_version=_UNASDIFF_PYTHON,
         max_cuda_version=_UNASDIFF_MAX_CUDA_VERSION,
     )
+    _ensure_flash_attn(Path(venv_dir))
     python = venv_python(venv_dir)
     # Cached alongside the venv rather than per-tempdir, so the pinned-commit clone in the
     # worker script happens once per host, not once per call.

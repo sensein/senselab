@@ -117,41 +117,28 @@ def test_torch_is_pinned_for_cuda_routing() -> None:
     assert "torch" in named and "torchaudio" in named
 
 
-def test_flash_attn_env_var_is_unset_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
-    """With the env var unset, the effective requirements match the base list exactly."""
+def test_flash_attn_is_off_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    """With the env var unset, no flash-attn build runs."""
     monkeypatch.delenv(unasdiff._UNASDIFF_FLASH_ATTN_ENV, raising=False)
-    assert unasdiff._unasdiff_requirements() == unasdiff._UNASDIFF_REQUIREMENTS
+    assert not unasdiff._flash_attn_requested()
 
 
-def test_flash_attn_env_var_opts_flash_attn_into_the_requirements(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Setting SENSELAB_UNASDIFF_FLASH_ATTN truthy appends flash-attn to the venv's requirements.
+def test_flash_attn_opt_in_builds_into_the_locked_venv_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Opted in, flash-attn is built with --no-build-isolation after the locked install, then marked."""
 
-    Opt-in, not unconditional: this branch already watched av==14.4.0 (no wheel) fall back to a
-    source build and take an entire venv install down with it, and flash-attn is considerably
-    more build-fragile than that (matching CUDA toolkit, --no-build-isolation, 10-30 minutes of
-    MAX_JOBS-tuned compilation). Installing it unconditionally would convert upstream's graceful
-    ImportError fallback into a hard venv-creation failure on any host without a working nvcc.
-    """
     monkeypatch.setenv(unasdiff._UNASDIFF_FLASH_ATTN_ENV, "1")
-    assert "flash-attn==2.5.8" in unasdiff._unasdiff_requirements()
+    monkeypatch.setattr(unasdiff, "_find_uv", lambda: "/fake/uv")
+    calls: list[list[str]] = []
+    monkeypatch.setattr(subprocess, "run", lambda argv, **_: calls.append(list(argv)))
+    (tmp_path / "bin").mkdir()
 
+    unasdiff._ensure_flash_attn(tmp_path)
+    assert len(calls) == 2
+    assert "--no-build-isolation" in calls[1] and unasdiff._FLASH_ATTN_SPEC in calls[1]
+    assert (tmp_path / unasdiff._FLASH_ATTN_MARKER).is_file()
 
-def test_flash_attn_env_var_changes_venv_identity(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Toggling the env var changes the requirements list that ensure_venv keys reuse on.
-
-    ensure_venv's marker comparison is `stored["requirements"] == sorted(requirements)`
-    (subprocess_venv.py), so a set-vs-unset environment must resolve to two different
-    requirements lists -- otherwise flipping the flag would silently reuse whichever venv
-    happened to be cached instead of forcing the rebuild the new dependency needs.
-    """
-    monkeypatch.delenv(unasdiff._UNASDIFF_FLASH_ATTN_ENV, raising=False)
-    unset_requirements = unasdiff._unasdiff_requirements()
-
-    monkeypatch.setenv(unasdiff._UNASDIFF_FLASH_ATTN_ENV, "true")
-    set_requirements = unasdiff._unasdiff_requirements()
-
-    assert set_requirements != unset_requirements
-    assert sorted(set_requirements) != sorted(unset_requirements)
+    unasdiff._ensure_flash_attn(tmp_path)
+    assert len(calls) == 2, "a venv already carrying flash-attn is not rebuilt"
 
 
 def test_worker_script_compiles_standalone() -> None:
