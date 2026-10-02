@@ -56,6 +56,16 @@ def test_no_lock_resolves_a_quarantined_release(path: Path) -> None:
 
 
 @pytest.mark.parametrize("path", _LOCKS, ids=lambda p: p.stem)
+def test_no_lock_falls_back_to_a_tokenizers_that_needs_a_rust_build(path: Path) -> None:
+    """A tokenizers below 0.13 has no wheel for current Pythons; it marks a resolution gone back years."""
+    for line in _body(path):
+        match = _PIN.match(line)
+        if match and venv_lock.normalize_name(match.group(1)) == "tokenizers":
+            major, minor = (int(part) for part in match.group(3).split(".")[:2])
+            assert (major, minor) >= (0, 13), line
+
+
+@pytest.mark.parametrize("path", _LOCKS, ids=lambda p: p.stem)
 def test_every_body_entry_is_pinned_and_hashed(path: Path) -> None:
     """Each body requirement is an exact pin with hashes, a hashed archive URL, or a VCS URL at a commit."""
     lines = path.read_text().splitlines()
