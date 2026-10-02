@@ -648,6 +648,31 @@ class TestConditionalExecution:
         assert sorted(node for node in reported if node in BRANCHES) == ["SPEECH"]
         assert not any("never ran" in reason.why for reason in result.file_verdict.reasons)
 
+    def test_a_declared_family_whose_branch_did_not_run_records_why_it_has_no_extent(
+        self, graph: Callable[..., list[str]], config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """A breath task AIRWAY never ran on carries ``task_extent_absent`` naming the branch, not nothing."""
+        graph(routed=("SPEECH",), routing_outcome="none")
+        result = run_triage(tmp_path / "sub-a_ses-1_task-breath-sounds.wav", tmp_path / "out", config)
+        assert result.ran["AIRWAY"] is RunState.SKIPPED
+        store = ProvStore.read_jsonl(result.store_path)
+        absent = [
+            e.attributes
+            for e in store.entities("measurement")
+            if e.attributes.get("name") == "task_extent_absent" and not store.is_invalidated(e.id)
+        ]
+        assert [(a["reason"], a["branch"]) for a in absent] == [("owning_branch_not_run", "AIRWAY")]
+
+    def test_a_branch_that_does_not_own_the_family_records_no_absence(
+        self, graph: Callable[..., list[str]], config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """AIRWAY skipped on a speaking task is not a missing airway extent."""
+        graph(routed=(), declared=("SPEECH",), family="diadochokinesis-pa")
+        result = run_triage(tmp_path / "sub-a_ses-1_task-diadochokinesis-pa.wav", tmp_path / "out", config)
+        assert result.ran["AIRWAY"] is RunState.SKIPPED
+        store = ProvStore.read_jsonl(result.store_path)
+        assert not [e for e in store.entities("measurement") if e.attributes.get("name") == "task_extent_absent"]
+
     def test_a_branch_with_no_node_is_still_recorded_rather_than_crashing(
         self,
         graph: Callable[..., list[str]],

@@ -18,7 +18,7 @@ from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.enrollment import Enrollment
 from senselab.audio.workflows.triage.nodes.admit import admit
 from senselab.audio.workflows.triage.nodes.airway import airway
-from senselab.audio.workflows.triage.nodes.branches import declared_task_family
+from senselab.audio.workflows.triage.nodes.branches import declared_task_family, record_unrun_owner
 from senselab.audio.workflows.triage.nodes.common import (
     BranchResult,
     NodeResult,
@@ -307,7 +307,9 @@ def drive_decisions(
     Every input is the store and the sidecars under ``run_dir``, so the caller may be a graph pass
     that has just run PREPROCESS or a driver replaying over a finished run. A branch routing
     declined, one no node implements (noted :data:`NO_NODE`) and one withheld by a critical failure
-    (noted :data:`WITHHELD_CRITICAL`) are all recorded ``SKIPPED`` and never called. QUALITY is
+    (noted :data:`WITHHELD_CRITICAL`) are all recorded ``SKIPPED`` and never called. A branch that
+    did not complete and owns the declared family gets a ``task_extent_absent`` finding from
+    :func:`~senselab.audio.workflows.triage.nodes.branches.record_unrun_owner`. QUALITY is
     called after the branch loop over the source recording; REDACT only when SPEECH ran and its scan
     found PII. See ``specs/20260817-triage-workflow-dag/dag.md``.
 
@@ -340,6 +342,13 @@ def drive_decisions(
             _attempt(outcomes, branch, call)
         else:
             outcomes[branch] = NodeOutcome(node=branch, state=RunState.SKIPPED, note=withheld)
+    family = declared_task_family(store, hint)
+    for branch in BRANCHES:
+        outcome = outcomes[branch]
+        if outcome.state is not RunState.COMPLETED:
+            record_unrun_owner(
+                store, branch, family, outcome.note or outcome.error or outcome.state.value, signal=_CONDITIONED_STREAM
+            )
     _attempt(outcomes, QUALITY, lambda: quality(store, _SOURCE_STREAM, config, hint, run_dir=run_dir))
     if "SPEECH" in selected and _speech_found_pii(store):
         redacted = _attempt(

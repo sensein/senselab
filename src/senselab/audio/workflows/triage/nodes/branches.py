@@ -22,7 +22,7 @@ import numpy as np
 from senselab.audio.data_structures import AudioHints
 from senselab.audio.workflows.triage.config import TriageConfig, UnmeasuredConfigKey
 from senselab.audio.workflows.triage.consensus import vocabulary_key
-from senselab.audio.workflows.triage.nodes.common import find_measurement, live_entities
+from senselab.audio.workflows.triage.nodes.common import find_measurement, live_entities, software_agent
 from senselab.audio.workflows.triage.nodes.gates import (
     DEFAULT_LAYER,
     FAMILY_LAYER,
@@ -406,6 +406,12 @@ NO_TASK_ACTIVITY = "no_task_activity_located"
 NO_TASK_ITEMS = "no_task_items_located"
 """``reason`` on :data:`TASK_EXTENT_ABSENT` when the recording holds no item the task asked for."""
 
+OWNING_BRANCH_NOT_RUN = "owning_branch_not_run"
+"""``reason`` on :data:`TASK_EXTENT_ABSENT` when the branch whose family was declared did not run."""
+
+UNPLACED_STEP = "task_extent_unplaced"
+"""The routing step that records a declared family's extent as unplaced because its branch did not run."""
+
 
 def task_extent_absent(reason: str, *derived_from: str) -> Finding:
     """The finding an align mode writes when it proposes no ``task_extent``.
@@ -418,6 +424,39 @@ def task_extent_absent(reason: str, *derived_from: str) -> Finding:
         The finding, whose value is None.
     """
     return Finding("measure", TASK_EXTENT_ABSENT, None, None, {"value": None, "reason": reason}, tuple(derived_from))
+
+
+def record_unrun_owner(
+    store: ProvStore, branch: str, family: str | None, why: str | None, *, signal: str
+) -> str | None:
+    """Write :data:`TASK_EXTENT_ABSENT` for a declared family whose owning branch did not run.
+
+    Args:
+        store: The provenance store.
+        branch: The branch that did not run.
+        family: The declared task family, or None.
+        why: The branch's skip note or error, or None.
+        signal: The stream the finding is taken over.
+
+    Returns:
+        The measurement's id, or None where the family is not one this branch owns.
+    """
+    if family is None or family not in EXPECTATIONS.get(branch, {}):
+        return None
+    software = software_agent(store)
+    activity = store.activity(
+        node="routing", step=UNPLACED_STEP, parameters={"branch": branch, "task_family": family, "why": why}
+    )
+    store.was_associated_with(activity, software)
+    finding = Finding(
+        "measure",
+        TASK_EXTENT_ABSENT,
+        None,
+        None,
+        {"value": None, "reason": OWNING_BRANCH_NOT_RUN, "branch": branch, "why": why},
+        (),
+    )
+    return write_findings(store, activity, software, [finding], signal=signal)[0]
 
 
 # --------------------------------------------------------------------- the write path

@@ -37,6 +37,28 @@ rejected for two reasons:
 If the owner wants owner-only extents, that is a second definition name beside this one, not a
 change to this one.
 
+**Where there is no extent, the store says why (2026-10-02).** An align mode always writes either a
+`task_extent` span or a `task_extent_absent` measurement:
+
+- AIRWAY writes `no_task_activity_located`.
+- SPEECH's RIG writes `no_task_items_located`.
+
+The r10 evaluation still found recordings with neither. They had two causes:
+
+- **16 `breath-sounds` recordings.** AIRWAY ran in align mode, but it had last been replayed at
+  `d8180356`, before `with_task_extent` existed. The scope scan that built the task-extent replay
+  manifest listed none of them: 0 of its 1,603 AIRWAY rows are `breath-sounds`. So they were never
+  replayed at `d95b0b2a`. That is an operational miss, not a node defect. A replay at the current
+  code places their extent or the reason.
+- **1 `random-item-generation-v2` recording** from a fill run. Routing ran no branch at all, so no
+  node that writes extents was called.
+
+For the second cause, `drive_decisions` now calls `record_unrun_owner` for each branch that did not
+complete. Where the declared family is one that branch owns (`EXPECTATIONS[branch]`), it writes
+`task_extent_absent` with reason `owning_branch_not_run`, the branch, and the skip note or error,
+under a `routing` activity (step `task_extent_unplaced`). A branch skipped on a family it does not
+own writes nothing.
+
 **`padding_s` = 0.25 s, CONVENTIONAL.** See `config-derivations.md#task_audio`. It is the same width
 as the mask pad, so a mask padded at the task's edge lies inside the cut. The pad costs at most 0.5 s
 per recording; §5 sets that against the savings measured on r9.
