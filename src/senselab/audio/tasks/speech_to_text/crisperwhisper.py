@@ -32,37 +32,18 @@ from senselab.utils.dependencies import hf_subprocess_env, resolve_model
 from senselab.utils.subprocess_venv import _clean_subprocess_env, ensure_venv, parse_subprocess_result, venv_python
 
 _CRISPER_VENV = "crisperwhisper"
-# Backend is platform-selected. ``ctranslate2-crisperwhisper`` only publishes
-# Linux x86_64 wheels, so the fast CT2 path is used there (the GPU / CI target);
-# everywhere else (e.g. macOS arm64 dev) falls back to the transformers backend,
-# which loads the same model's safetensors weights. Both extras expose the same
-# ``CrisperWhisperModel`` API, so the worker is backend-agnostic.
+# The CT2 backend on Linux x86_64, the transformers backend elsewhere. One requirement list with
+# environment markers, so the venv lock and its digest are the same on every host; see
+# specs/20261002-subprocess-venv-locks/design.md.
 _IS_LINUX_X86 = sys.platform.startswith("linux") and platform.machine().lower() in ("x86_64", "amd64")
-if _IS_LINUX_X86:
-    # CT2 *inference* is torch-free, but the first-run HF->CT2 *conversion* goes through
-    # ``ctranslate2.converters.transformers``, whose ``try: import huggingface_hub, torch,
-    # transformers`` block leaves those names unbound when absent; ``_load()`` then calls
-    # ``torch.no_grad()`` + the transformers loader -> ``NameError: name 'torch' /
-    # 'transformers' is not defined``. The venv "builds" but transcription fails on every
-    # clip. So the ct2 venv also needs the conversion stack: use the ``[transformers]``
-    # extra (== [all] with ct2: transformers + torch + accelerate) and pin torch/torchaudio
-    # explicitly so ensure_venv routes them through the CUDA index. None of this is loaded
-    # at CT2 inference time — only for the one-time, cached HF->CT2 conversion.
-    _CRISPER_REQUIREMENTS = ["crisperwhisper[ct2,transformers]==2.0.1", "torch>=2.4", "torchaudio>=2.4"]
-else:
-    _CRISPER_REQUIREMENTS = [
-        "crisperwhisper[transformers]==2.0.1",
-        # The library imports `ctranslate2` at module top (engine/hallucination)
-        # even on the transformers path, but the [transformers] extra doesn't
-        # install it and the CT2 *fork* is Linux-x86-only. Standard ctranslate2
-        # has macOS-arm64 wheels and satisfies those imports (the transformers
-        # backend doesn't actually run CT2 inference).
-        "ctranslate2>=4.0",
-        # Pin torch/torchaudio explicitly so ensure_venv routes them through the
-        # CUDA-aware PyTorch index (the [transformers] extra pulls torch>=2.4).
-        "torch>=2.4",
-        "torchaudio>=2.4",
-    ]
+_LINUX_X86_MARKER = "sys_platform == 'linux' and platform_machine == 'x86_64'"
+_CRISPER_REQUIREMENTS = [
+    "crisperwhisper[transformers]==2.0.1",
+    f"crisperwhisper[ct2]==2.0.1; {_LINUX_X86_MARKER}",
+    "ctranslate2>=4.0; sys_platform != 'linux' or platform_machine != 'x86_64'",
+    "torch>=2.4",
+    "torchaudio>=2.4",
+]
 _CRISPER_PYTHON = "3.12"
 
 # Backend token passed to CrisperWhisperModel(..., backend=...). "auto" would try
