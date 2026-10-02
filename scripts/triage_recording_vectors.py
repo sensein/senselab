@@ -23,6 +23,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from senselab.audio.workflows.triage.recording_vectors import DICTIONARY_KEY, SCHEMA_VERSION, scan, schema, to_table
+from senselab.utils import fastio
 
 SHARD_GLOB = "recording_vectors.*.parquet"
 MERGED_NAME = "recording_vectors.parquet"
@@ -107,6 +108,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--slice", type=int, default=0, help="This worker's index.")
     parser.add_argument("--slices", type=int, default=1, help="How many workers share the tree.")
     parser.add_argument("--merge", type=Path, default=None, help="Concatenate the shards in this directory.")
+    parser.add_argument(
+        "--walk-threads", type=int, default=fastio.DEFAULT_THREADS, help="Directory listings in flight while scanning."
+    )
     args = parser.parse_args(argv)
 
     if args.merge is not None:
@@ -114,7 +118,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.run_root is None:
         parser.error("run_root is required unless --merge is given")
 
-    rows, report = scan(args.run_root, args.slice, args.slices)
+    rows, report = scan(args.run_root, args.slice, args.slices, walk_threads=args.walk_threads)
     args.out.mkdir(parents=True, exist_ok=True)
     suffix = f".{args.slice:03d}"
     table = to_table(rows) if rows else schema().empty_table()

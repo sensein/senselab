@@ -41,6 +41,7 @@ from senselab.audio.workflows.triage.recording_vectors import (
 )
 from senselab.audio.workflows.triage.residue import is_content_word
 from senselab.audio.workflows.triage.routing_analysis.families import task_family, task_id_of
+from senselab.utils import fastio
 
 PII_LABEL = "pii"
 LABEL_VERB = "label"
@@ -872,17 +873,24 @@ def _worker(payload: tuple[str, list[str]]) -> dict[str, Any] | None:
         return {"error": f"{type(error).__name__}: {error}", "run_dir": run_root}
 
 
-def candidates_under(corpus: Path, families: frozenset[str]) -> list[Path]:
+def candidates_under(
+    corpus: Path, families: frozenset[str], *, walk_threads: int = fastio.DEFAULT_THREADS
+) -> list[Path]:
     """The run directories whose stem names a free-response family.
 
     Args:
         corpus: The run tree.
         families: The family names to keep.
+        walk_threads: How many participants are listed at once.
 
     Returns:
         The directories, in walk order.
     """
-    return [run_root for run_root in recording_dirs(corpus) if task_family(task_id_of(stem_of(run_root))) in families]
+    return [
+        run_root
+        for run_root in recording_dirs(corpus, threads=walk_threads)
+        if task_family(task_id_of(stem_of(run_root))) in families
+    ]
 
 
 def _rows(payloads: Sequence[tuple[str, list[str]]], workers: int) -> Iterator[dict[str, Any] | None]:
@@ -902,19 +910,20 @@ def _rows(payloads: Sequence[tuple[str, list[str]]], workers: int) -> Iterator[d
         yield from pool.imap_unordered(_worker, list(payloads), chunksize=8)
 
 
-def extract(corpus: Path, out: Path, workers: int) -> dict[str, Any]:
+def extract(corpus: Path, out: Path, workers: int, *, walk_threads: int = fastio.DEFAULT_THREADS) -> dict[str, Any]:
     """Walk a corpus and write one JSON line per free-response recording.
 
     Args:
         corpus: The run tree, ``<root>/sub-*/ses-*/<stem>_<timestamp>/``.
         out: The JSONL to write.
         workers: How many processes to read stores with.
+        walk_threads: How many participants are listed at once while finding run directories.
 
     Returns:
         The sweep's counts.
     """
     families = free_response_families()
-    candidates = candidates_under(corpus, families)
+    candidates = candidates_under(corpus, families, walk_threads=walk_threads)
     counts: Counter[str] = Counter()
     characters = 0
     participants: set[str] = set()
@@ -2882,6 +2891,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     extractor.add_argument("corpus", type=Path)
     extractor.add_argument("--out", type=Path, required=True)
     extractor.add_argument("--workers", type=int, default=8)
+    extractor.add_argument("--walk-threads", type=int, default=fastio.DEFAULT_THREADS)
 
     renderer = sub.add_parser("render", help="turn an extract into a self-contained HTML page")
     renderer.add_argument("data", type=Path)
@@ -2904,7 +2914,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(name)
         return 0
     if arguments.command == "extract":
-        print(json.dumps(extract(arguments.corpus, arguments.out, arguments.workers), indent=2))
+        print(
+            json.dumps(
+                extract(arguments.corpus, arguments.out, arguments.workers, walk_threads=arguments.walk_threads),
+                indent=2,
+            )
+        )
         return 0
     if arguments.command == "census":
         print(json.dumps(census(arguments.data), indent=2))

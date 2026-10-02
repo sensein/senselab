@@ -30,6 +30,7 @@ import yaml  # type: ignore[import-untyped]
 
 from senselab.audio.workflows.triage.cohort import CONDITION_KINDS
 from senselab.audio.workflows.triage.vocabulary import UNPLACED_OPEN, UNPLACED_UNREAD
+from senselab.utils import fastio
 
 SCHEMA_VERSION = 17
 """Bumped whenever a column is added, removed or retyped, a binary layout changes, or a categorical
@@ -1886,20 +1887,35 @@ def shard_of(stem: str, slices: int) -> int:
     return int(hashlib.sha1(stem.encode(), usedforsecurity=False).hexdigest()[:8], 16) % slices
 
 
-def recording_dirs(root: Path) -> Iterator[Path]:
+def recording_dirs(root: Path, *, threads: int = fastio.DEFAULT_THREADS) -> Iterator[Path]:
     """Every run directory under a tree, tolerating one that is still being written.
 
     Args:
         root: The tree of ``sub-*/ses-*/<stem>_<timestamp>/`` directories.
+        threads: How many participants are listed at once.
 
     Yields:
-        Each directory holding a ``run/store.jsonl``.
+        Each directory holding a ``run/store.jsonl``, in sorted participant, session, recording order.
     """
-    for participant in _listdir(root):
-        for session in _listdir(participant):
-            for recording in _listdir(session):
-                if (recording / RUN_SUBDIR / STORE_NAME).exists():
-                    yield recording
+    for recordings in fastio.ordered_map(_recordings_of, _listdir(root), threads=threads):
+        yield from recordings
+
+
+def _recordings_of(participant: Path) -> list[Path]:
+    """The run directories under one participant, sorted.
+
+    Args:
+        participant: A ``sub-*`` directory.
+
+    Returns:
+        Each ``ses-*/<stem>_<timestamp>/`` directory holding a ``run/store.jsonl``.
+    """
+    return [
+        recording
+        for session in _listdir(participant)
+        for recording in _listdir(session)
+        if (recording / RUN_SUBDIR / STORE_NAME).exists()
+    ]
 
 
 def _listdir(path: Path) -> list[Path]:
@@ -1938,20 +1954,23 @@ class ScanReport:
     anomalies: dict[str, int] = field(default_factory=dict)
 
 
-def scan(root: Path, slice_index: int = 0, slices: int = 1) -> tuple[list[dict[str, Any]], ScanReport]:
+def scan(
+    root: Path, slice_index: int = 0, slices: int = 1, *, walk_threads: int = fastio.DEFAULT_THREADS
+) -> tuple[list[dict[str, Any]], ScanReport]:
     """Extract every row this shard owns.
 
     Args:
         root: The tree of finished run directories.
         slice_index: This shard's index.
         slices: How many shards share the tree.
+        walk_threads: How many participants are listed at once while finding run directories.
 
     Returns:
         The rows and what the shard met.
     """
     report = ScanReport()
     latest: dict[str, Path] = {}
-    for recording in recording_dirs(root):
+    for recording in recording_dirs(root, threads=walk_threads):
         stem = stem_of(recording)
         if shard_of(stem, slices) != slice_index:
             continue

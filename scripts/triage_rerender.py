@@ -19,6 +19,7 @@ from pathlib import Path
 
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.nodes.report import SUMMARY_STEM, report
+from senselab.utils import fastio
 from senselab.utils.prov_store import ProvStore
 
 STORE_NAME = "store.jsonl"
@@ -33,7 +34,7 @@ def run_dirs(root: Path) -> list[Path]:
     Returns:
         The run directories, in path order.
     """
-    return sorted(path.parent for path in root.rglob(STORE_NAME))
+    return sorted(path.parent for path in fastio.find(root, STORE_NAME))
 
 
 def rerender(run_dir: Path, config: TriageConfig) -> dict[str, Path]:

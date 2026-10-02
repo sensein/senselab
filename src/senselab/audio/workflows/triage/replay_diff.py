@@ -31,6 +31,7 @@ from senselab.audio.workflows.triage.extend import (
     STORE_FILE,
 )
 from senselab.audio.workflows.triage.vocabulary import PII_SCAN, SCANNED
+from senselab.utils import fastio
 from senselab.utils.prov_store import Entity, ProvStore
 
 VERDICT_NODE = "VERDICT"
@@ -650,7 +651,7 @@ def read_rows(root: Path) -> Iterator[dict[str, Any]]:
     Yields:
         Each row, in file then line order. A line that will not parse is skipped.
     """
-    for path in sorted(root.rglob("*.jsonl")):
+    for path in fastio.find(root, "*.jsonl"):
         for line in path.read_text(encoding="utf-8").splitlines():
             if not line.strip():
                 continue

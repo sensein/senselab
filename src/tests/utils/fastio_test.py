@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from senselab.utils import fastio
-from senselab.utils.fastio import WalkError, find, map_files, walk
+from senselab.utils.fastio import WalkError, find, map_files, ordered_map, walk
 
 
 def _tree(root: Path) -> Path:
@@ -140,3 +140,28 @@ def test_threads_must_be_positive(tmp_path: Path) -> None:
     """A pool of zero threads is refused."""
     with pytest.raises(ValueError, match="at least 1"):
         list(walk(tmp_path, threads=0))
+
+
+def test_ordered_map_keeps_input_order() -> None:
+    """Results come back in the order of the inputs whatever order the threads finish in."""
+    import time
+
+    def slow_for_small(n: int) -> int:
+        time.sleep(0.001 * (20 - n))
+        return n * n
+
+    assert list(ordered_map(slow_for_small, range(20), threads=8)) == [n * n for n in range(20)]
+
+
+def test_ordered_map_reraises_and_leaves_no_thread() -> None:
+    """An exception from fn reaches the caller and the pool is shut down."""
+    before = threading.active_count()
+
+    def fail_on_three(n: int) -> int:
+        if n == 3:
+            raise KeyError(n)
+        return n
+
+    with pytest.raises(KeyError):
+        list(ordered_map(fail_on_three, range(10), threads=4))
+    assert threading.active_count() == before

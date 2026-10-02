@@ -19,6 +19,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterator, Mapping
 
+from senselab.utils import fastio
+
 STORE_NAME = "store.jsonl"
 QUANTILES = (0.05, 0.25, 0.50, 0.75, 0.95)
 """Where a bound is usually argued about: the tails, the quartiles and the middle."""
@@ -84,7 +86,7 @@ def readings(root: Path) -> Iterator[tuple[str, str, Any]]:
     Yields:
         The declared family, the measurement's name, and its value.
     """
-    for store in sorted(root.rglob(STORE_NAME)):
+    for store in fastio.find(root, STORE_NAME):
         family, found = "", []
         try:
             lines = store.read_text().splitlines()
