@@ -31,7 +31,7 @@ import yaml  # type: ignore[import-untyped]
 from senselab.audio.workflows.triage.cohort import CONDITION_KINDS
 from senselab.audio.workflows.triage.vocabulary import UNPLACED_OPEN, UNPLACED_UNREAD
 
-SCHEMA_VERSION = 16
+SCHEMA_VERSION = 17
 """Bumped whenever a column is added, removed or retyped, a binary layout changes, or a categorical
 column's controlled vocabulary changes."""
 
@@ -728,11 +728,11 @@ def _residue_columns(view: StoreView) -> dict[str, Any]:
     }
 
 
-LEDGER_STATES = ("masked", "unmasked_by_reviewer", "unmasked_by_trim", "proposed_by_reviewer")
+LEDGER_STATES = ("masked", "unmasked_by_reviewer", "unmasked_by_trim", "released_by_kind", "proposed_by_reviewer")
+"""The word states the fold's ``pii_ledger`` counts, each a ``<state>_n`` and a ``<state>_categories`` column."""
 
 UNPLACED_SETTLES_NOTHING = (UNPLACED_OPEN, UNPLACED_UNREAD)
 """The states of an unplaced finding that no reading placed or cleared."""
-"""The word states the fold's ``pii_ledger`` counts, each a ``<state>_n`` and a ``<state>_categories`` column."""
 
 
 def _ledger_columns(view: StoreView) -> dict[str, Any]:
