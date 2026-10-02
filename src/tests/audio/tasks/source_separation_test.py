@@ -125,7 +125,6 @@ def test_flash_attn_is_off_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_flash_attn_opt_in_builds_into_the_locked_venv_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Opted in, flash-attn is built with --no-build-isolation after the locked install, then marked."""
-
     monkeypatch.setenv(unasdiff._UNASDIFF_FLASH_ATTN_ENV, "1")
     monkeypatch.setattr(unasdiff, "_find_uv", lambda: "/fake/uv")
     calls: list[list[str]] = []
