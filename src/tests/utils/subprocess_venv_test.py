@@ -7,8 +7,10 @@ not-found errors, pass-through of unrelated failures, and the same
 behavior across the three real subprocess-venv backends.
 """
 
+import functools
 import json
 import os
+import re
 import stat
 import subprocess
 from collections.abc import Callable
@@ -28,8 +30,18 @@ from senselab.utils.subprocess_venv import (
     record_venv_use,
     venv_environment,
 )
+from senselab.utils.venv_lock import (
+    IPC_REQUIREMENTS,
+    VenvLock,
+    VenvLockError,
+    load_lock,
+    parse_lock,
+    requirements_sha256,
+)
 
 # ── Fixtures + helpers ─────────────────────────────────────────────
+
+_REAL_RESOLVE_LOCK = subprocess_venv._resolve_lock
 
 
 @pytest.fixture
@@ -61,6 +73,65 @@ def force_cu128(monkeypatch: pytest.MonkeyPatch) -> TorchIndex:
         subprocess_venv, "pick_torch_index", lambda host_cuda, env_override=None, max_cuda_version=None: idx
     )
     return idx
+
+
+_FAKE_TORCH = {"torch": "2.8.0", "torchaudio": "2.8.0"}
+
+
+def _spec_name(spec: str) -> str:
+    match = re.match(r"\s*([A-Za-z0-9._-]+)", spec)
+    return match.group(1).lower() if match else ""
+
+
+def _write_fake_lock(
+    lock_dir: Path, name: str, requirements: list[str], python_version: str, pins: Optional[list[str]] = None
+) -> VenvLock:
+    """Write a lock shaped like a compiled one: torch pins in the header, everything else in the body."""
+    if pins is None:
+        pins = [f"{p}=={v}" for p, v in _FAKE_TORCH.items() if any(_spec_name(r) == p for r in requirements)]
+    body = [r for r in requirements if _spec_name(r) not in _FAKE_TORCH] + list(IPC_REQUIREMENTS)
+    path = lock_dir / f"{name}.txt"
+    path.write_text(
+        "\n".join(
+            [
+                f"# senselab subprocess-venv lock: {name}",
+                f"# requirements-sha256: {requirements_sha256(requirements, python_version)}",
+                f"# python: {python_version}",
+                f"# torch: {' '.join(pins) if pins else 'none'}",
+                *body,
+            ]
+        )
+        + "\n"
+    )
+    return parse_lock(path, name)
+
+
+@pytest.fixture(autouse=True)
+def fake_locks(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Give every venv name a lock compiled from exactly the requirements it is called with."""
+    lock_dir = tmp_path_factory.mktemp("locks")
+
+    def resolve(
+        name: str,
+        requirements: list[str],
+        python_version: Optional[str],
+        max_cuda_version: Optional[tuple[int, int]],
+        compile_lock: bool,
+    ) -> VenvLock:
+        return _write_fake_lock(lock_dir, name, requirements, python_version or "3.12")
+
+    monkeypatch.setattr(subprocess_venv, "_resolve_lock", resolve)
+    return lock_dir
+
+
+def _installed_marker(venv_dir: Path, name: str, requirements: list[str], index: Optional[TorchIndex] = None) -> None:
+    """Write the completion marker a finished build of this lock leaves behind."""
+    lock = subprocess_venv._resolve_lock(name, requirements, "3.12", None, False)
+    data: dict[str, object] = {"lock": lock.path.name, "lock_sha256": lock.sha256, "python_version": "3.12"}
+    if index is not None:
+        data["torch_index"] = {"tag": index.tag, "url": index.url, "source": index.source}
+    venv_dir.mkdir(parents=True, exist_ok=True)
+    (venv_dir / ".senselab-installed").write_text(json.dumps(data))
 
 
 class _SubprocessRecorder:
@@ -211,13 +282,13 @@ def test_group_readable_runs_before_the_marker_write(
 # ── Marker mismatch + rebuild paths ────────────────────────────────
 
 
-def test_marker_without_torch_index_triggers_rebuild(
+def test_marker_from_a_requirements_list_build_triggers_rebuild(
     fake_cache_dir: Path,
     fake_uv: str,
     force_cu128: TorchIndex,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """An existing marker from the pre-fix code (no ``torch_index`` key) must rebuild."""
+    """A marker written before venvs were installed from locks (no ``lock_sha256``) must rebuild."""
     name = "t-no-index"
     venv_dir = fake_cache_dir / f"{name}-cu128"
     venv_dir.mkdir(parents=True)
@@ -246,23 +317,10 @@ def test_marker_with_matching_torch_index_is_cache_hit(
     force_cu128: TorchIndex,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A marker whose requirements + ``torch_index.url`` match → no install, no rebuild."""
+    """A marker whose lock digest + ``torch_index.url`` match → no install, no rebuild."""
     name = "t-cache-hit"
     venv_dir = fake_cache_dir / f"{name}-cu128"
-    venv_dir.mkdir(parents=True)
-    (venv_dir / ".senselab-installed").write_text(
-        json.dumps(
-            {
-                "requirements": ["torch>=2.8,<2.9"],
-                "python_version": "3.12",
-                "torch_index": {
-                    "tag": force_cu128.tag,
-                    "url": force_cu128.url,
-                    "source": force_cu128.source,
-                },
-            }
-        )
-    )
+    _installed_marker(venv_dir, name, ["torch>=2.8,<2.9"], force_cu128)
 
     recorder = _SubprocessRecorder()
     monkeypatch.setattr(subprocess, "run", recorder)
@@ -291,20 +349,10 @@ def test_marker_with_different_torch_index_triggers_rebuild(
     """
     name = "t-different-index"
     venv_dir = fake_cache_dir / f"{name}-cu128"
-    venv_dir.mkdir(parents=True)
-    (venv_dir / ".senselab-installed").write_text(
-        json.dumps(
-            {
-                "requirements": ["torch>=2.8,<2.9"],
-                "python_version": "3.12",
-                "torch_index": {
-                    "tag": "cu121",
-                    "url": "https://download.pytorch.org/whl/cu121",
-                    "source": "static-map",
-                },
-            }
-        )
+    cu121 = TorchIndex(
+        url="https://download.pytorch.org/whl/cu121", tag="cu121", cuda_version=(12, 1), source="static-map"
     )
+    _installed_marker(venv_dir, name, ["torch>=2.8,<2.9"], cu121)
 
     recorder = _SubprocessRecorder()
     monkeypatch.setattr(subprocess, "run", recorder)
@@ -315,6 +363,29 @@ def test_marker_with_different_torch_index_triggers_rebuild(
     assert len(recorder.calls) == 3  # uv venv + Stage-1 torch + Stage-2 backend install
     written = json.loads((venv_dir / ".senselab-installed").read_text())
     assert written["torch_index"]["url"] == force_cu128.url
+
+
+def test_a_changed_lock_rebuilds_the_venv(
+    fake_cache_dir: Path,
+    fake_uv: str,
+    force_cu128: TorchIndex,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A venv built from an earlier lock (same name, same index) is rebuilt when the lock changes."""
+    name = "t-changed-lock"
+    venv_dir = fake_cache_dir / f"{name}-cu128"
+    _installed_marker(venv_dir, name, ["torch>=2.8,<2.9"], force_cu128)
+    stored = json.loads((venv_dir / ".senselab-installed").read_text())
+    stored["lock_sha256"] = "0" * 64
+    (venv_dir / ".senselab-installed").write_text(json.dumps(stored))
+
+    recorder = _SubprocessRecorder()
+    monkeypatch.setattr(subprocess, "run", recorder)
+    ensure_venv(name, ["torch>=2.8,<2.9"], python_version="3.12")
+
+    assert len(recorder.calls) == 3
+    written = json.loads((venv_dir / ".senselab-installed").read_text())
+    assert written["lock_sha256"] != "0" * 64
 
 
 def test_a_takeover_during_build_refuses_to_certify_the_venv(
@@ -538,17 +609,16 @@ def test_dir_name_carries_every_tag_pick_torch_index_can_produce(
 # ── Install argv routing ───────────────────────────────────────────
 
 
-def test_stage_one_pins_torch_and_torchaudio_to_chosen_index(
+def test_stage_one_installs_the_locks_torch_pins_from_the_chosen_index_alone(
     fake_cache_dir: Path,
     fake_uv: str,
     force_cu128: TorchIndex,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Stage-1 install names ONLY the chosen CUDA index and only torch + torchaudio.
+    """Stage 1 names ONLY the chosen CUDA index and only the lock's exact torch pins.
 
-    No ``--extra-index-url`` is allowed in Stage 1: uv treats it as having
-    higher priority than ``--index-url``, so a PyPI fallback would let
-    PyPI's mismatched-tag torch / torchaudio win for these two packages.
+    No ``--extra-index-url`` is allowed in Stage 1: uv ranks it above ``--index-url``, so a PyPI
+    fallback would let PyPI's differently-tagged torch / torchaudio win for these two packages.
     """
     name = "t-stage-one"
     recorder = _SubprocessRecorder()
@@ -562,100 +632,117 @@ def test_stage_one_pins_torch_and_torchaudio_to_chosen_index(
     idx_pos = stage_one.index("--index-url")
     assert stage_one[idx_pos + 1] == force_cu128.url
     assert "--extra-index-url" not in stage_one
-    # Pinned specs from requirements flow through verbatim.
-    assert "torch>=2.8,<2.9" in stage_one
-    assert "torchaudio>=2.8,<2.9" in stage_one
+    assert stage_one[-2:] == ["torch==2.8.0", "torchaudio==2.8.0"]
 
 
-def test_stage_two_uses_default_pypi_and_includes_ipc_deps(
+def test_stage_one_takes_the_pins_from_the_lock_not_the_requirements(
+    fake_cache_dir: Path,
+    fake_uv: str,
+    force_cu128: TorchIndex,
+    fake_locks: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Whatever ``torch`` the lock fixed is what Stage 1 installs, whatever range the backend gave."""
+    name = "t-lock-pins"
+    monkeypatch.setattr(
+        subprocess_venv,
+        "_resolve_lock",
+        lambda name, requirements, python_version, max_cuda_version, compile_lock: _write_fake_lock(
+            fake_locks, name, requirements, "3.12", pins=["torch==2.7.1"]
+        ),
+    )
+    recorder = _SubprocessRecorder()
+    monkeypatch.setattr(subprocess, "run", recorder)
+
+    ensure_venv(name, ["torch>=2.4"], python_version="3.12")
+
+    assert recorder.calls[1][-1] == "torch==2.7.1"
+
+
+def test_stage_two_installs_the_lock_body_with_no_deps_from_default_pypi(
     fake_cache_dir: Path,
     fake_uv: str,
     force_cu128: TorchIndex,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Stage-2 install carries no index flags and includes the IPC serialization deps.
-
-    No ``--index-url`` or ``--extra-index-url`` on Stage 2 — by then torch
-    and torchaudio are already installed, so the rest of the resolution
-    happens against default PyPI (where setuptools, NeMo, etc. live at
-    current versions instead of stale CUDA-index mirrors).
-    """
+    """Stage 2 installs exactly the lock body: ``--no-deps``, no index flags, no torch spec."""
     name = "t-stage-two"
     recorder = _SubprocessRecorder()
     monkeypatch.setattr(subprocess, "run", recorder)
 
-    # Includes a torch pin so Stage 1 runs and we have a Stage 2 to assert against.
     ensure_venv(name, ["coqui-tts~=0.27", "torch>=2.8,<2.9", "torchaudio>=2.8,<2.9"], python_version="3.12")
 
     stage_two = recorder.calls[2]
     assert stage_two[0:3] == [fake_uv, "pip", "install"]
     assert "--index-url" not in stage_two
     assert "--extra-index-url" not in stage_two
-    # IPC deps appended after the backend's own requirements.
-    assert "safetensors" in stage_two
-    assert "numpy" in stage_two
-    # torchaudio was installed in Stage 1 and intentionally NOT re-listed
-    # here — if it were, uv would consider re-resolving it from PyPI.
-    assert "torchaudio" not in stage_two
-    # Backend's own non-torch requirements still flow through.
-    assert "coqui-tts~=0.27" in stage_two
+    assert "--no-deps" in stage_two
+    lock_file = Path(stage_two[stage_two.index("--requirement") + 1])
+    assert lock_file.name == f"{name}.txt"
+    assert not any(arg.startswith("torch") for arg in stage_two)
+    body = lock_file.read_text()
+    assert "coqui-tts~=0.27" in body and "safetensors" in body and "numpy" in body
 
 
-def test_stage_two_filters_torch_specs_from_caller_requirements(
+def test_a_missing_lock_is_refused_before_anything_is_built(
     fake_cache_dir: Path,
     fake_uv: str,
-    force_cu128: TorchIndex,
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Backend-pinned torch / torchaudio specs are stripped from Stage 2.
-
-    If ``requirements`` contains e.g. ``torch>=2.8,<2.9``, that spec must
-    NOT appear in the Stage-2 argv. Re-listing it without an index flag
-    would let uv consider replacing the matched ``+cu128`` wheel installed
-    in Stage 1 with whatever PyPI happens to ship at the same public
-    version (currently a ``+cu129`` tag) — exactly the split this fix is
-    meant to prevent.
-    """
-    name = "t-stage-two-filter"
+    """With no committed lock, ``ensure_venv`` raises and runs nothing."""
+    monkeypatch.setattr(subprocess_venv, "_resolve_lock", _REAL_RESOLVE_LOCK)
+    monkeypatch.setattr(subprocess_venv, "load_lock", functools.partial(load_lock, lock_dir=tmp_path))
     recorder = _SubprocessRecorder()
     monkeypatch.setattr(subprocess, "run", recorder)
 
-    ensure_venv(
-        name,
-        ["torch>=2.8,<2.9", "torchaudio>=2.8,<2.9", "pyarrow<18"],
-        python_version="3.12",
-    )
-
-    stage_two = recorder.calls[2]
-    assert "torch>=2.8,<2.9" not in stage_two
-    assert "torchaudio>=2.8,<2.9" not in stage_two
-    # Non-torch requirements still flow through.
-    assert "pyarrow<18" in stage_two
+    with pytest.raises(VenvLockError, match="No lock"):
+        ensure_venv("t-unlocked", ["some-pure-python-pkg==1.0"], python_version="3.12")
+    assert recorder.calls == []
 
 
-def test_torch_install_specs_preserves_multiple_constraints_for_same_package(
+def test_a_lock_from_other_requirements_is_refused(
     fake_cache_dir: Path,
     fake_uv: str,
-    force_cu128: TorchIndex,
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A backend passing ``torch>=2.8`` AND ``torch<2.9`` as two specs forwards both.
-
-    The earlier dict-based implementation kept only the last spec it saw
-    for a given package name; a caller relying on multiple constraints
-    would have ended up with Stage 1 enforcing only one of them, and uv
-    could have resolved a version that violated the other. The list-based
-    form keeps every matching spec.
-    """
-    name = "t-multi-constraint"
+    """A lock compiled from a different requirement list is stale; the venv is not built from it."""
+    _write_fake_lock(tmp_path, "t-stale", ["some-pure-python-pkg==1.0"], "3.12")
+    monkeypatch.setattr(subprocess_venv, "_resolve_lock", _REAL_RESOLVE_LOCK)
+    monkeypatch.setattr(subprocess_venv, "load_lock", functools.partial(load_lock, lock_dir=tmp_path))
     recorder = _SubprocessRecorder()
     monkeypatch.setattr(subprocess, "run", recorder)
 
-    ensure_venv(name, ["torch>=2.8", "torch<2.9"], python_version="3.12")
+    with pytest.raises(VenvLockError, match="different requirements"):
+        ensure_venv("t-stale", ["some-pure-python-pkg==2.0"], python_version="3.12")
+    with pytest.raises(VenvLockError, match="Python 3.12"):
+        ensure_venv("t-stale", ["some-pure-python-pkg==1.0"], python_version="3.11")
+    assert recorder.calls == []
 
-    stage_one = recorder.calls[1]
-    assert "torch>=2.8" in stage_one
-    assert "torch<2.9" in stage_one
+
+def test_compile_lock_builds_a_probe_venv_from_a_lock_compiled_now(
+    fake_cache_dir: Path,
+    fake_uv: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``compile_lock=True`` compiles into the cache and installs from that, for compatibility probes."""
+    monkeypatch.setattr(subprocess_venv, "_resolve_lock", _REAL_RESOLVE_LOCK)
+    seen: dict[str, object] = {}
+
+    def fake_compile(name: str, requirements: list[str], python: str, cap: object, **kwargs: object) -> str:
+        seen.update(name=name, kwargs=kwargs)
+        return f"# requirements-sha256: x\n# python: {python}\n# torch: none\nsome-pure-python-pkg==1.0\n"
+
+    monkeypatch.setattr(subprocess_venv.venv_lock, "compile_lock", fake_compile)
+    recorder = _SubprocessRecorder()
+    monkeypatch.setattr(subprocess, "run", recorder)
+
+    ensure_venv("t-probe", ["some-pure-python-pkg>=1"], python_version="3.12", compile_lock=True)
+
+    assert seen == {"name": "t-probe", "kwargs": {"check_torch_index": False}}
+    install = recorder.calls[1]
+    assert Path(install[install.index("--requirement") + 1]) == fake_cache_dir / ".locks" / "t-probe.txt"
 
 
 # ── Auto-detection: torch-free venvs skip the probe and Stage 1 ────
@@ -695,13 +782,10 @@ def test_no_torch_in_requirements_skips_probe_and_stage_one(
     assert install_argv[0:3] == [fake_uv, "pip", "install"]
     assert "--index-url" not in install_argv
     assert "--extra-index-url" not in install_argv
-    # No torch routing → no Stage 1 → torchaudio is NOT force-appended.
-    assert "torchaudio" not in install_argv
-    assert "torch" not in install_argv
-    # Caller's requirements + safetensors + numpy still install.
-    assert "some-pure-python-pkg==1.0" in install_argv
-    assert "safetensors" in install_argv
-    assert "numpy" in install_argv
+    assert "--no-deps" in install_argv
+    assert not any(arg.startswith("torch") for arg in install_argv)
+    body = Path(install_argv[install_argv.index("--requirement") + 1]).read_text()
+    assert "some-pure-python-pkg==1.0" in body and "safetensors" in body and "numpy" in body
 
     # Marker carries no ``torch_index`` field, so a later call whose
     # requirements grow a torch spec will correctly invalidate + rebuild.
@@ -780,11 +864,10 @@ def test_yamnet_style_requirements_omit_torchaudio_from_install(
     )
 
     install_argv = recorder.calls[1]
-    assert "torch" not in install_argv
-    assert "torchaudio" not in install_argv
-    # tensorflow / tensorflow-hub still flow through.
-    assert "tensorflow" in install_argv
-    assert "tensorflow-hub" in install_argv
+    assert len(recorder.calls) == 2
+    assert not any(arg.startswith("torch") for arg in install_argv)
+    body = Path(install_argv[install_argv.index("--requirement") + 1]).read_text()
+    assert "tensorflow" in body and "tensorflow-hub" in body
 
 
 # ── env override ───────────────────────────────────────────────────
@@ -957,46 +1040,31 @@ def test_all_three_subprocess_backends_route_through_same_torch_index(
     force_cu128: TorchIndex,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Walk the three real backend requirement lists; each must route Stage 1 through cu128.
+    """The three ASR backends, from their committed locks, each route Stage 1 through cu128.
 
-    Guards against any future backend bypassing ``ensure_venv`` with its own
-    install shellout — every subprocess venv in the project must share the
-    CUDA-aware resolution.
+    Stage 1 carries only exact ``torch``/``torchaudio`` pins and the CUDA index; Stage 2 is the lock
+    body with no index flag and no torch spec.
     """
-    from senselab.audio.tasks.speech_to_text.canary_qwen import _CANARY_REQUIREMENTS
-    from senselab.audio.tasks.speech_to_text.nemo import _NEMO_REQUIREMENTS
-    from senselab.audio.tasks.speech_to_text.qwen import _QWEN_REQUIREMENTS
+    from senselab.audio.tasks.speech_to_text import canary_qwen, nemo, qwen
 
-    for label, reqs in (("canary", _CANARY_REQUIREMENTS), ("nemo", _NEMO_REQUIREMENTS), ("qwen", _QWEN_REQUIREMENTS)):
+    monkeypatch.setattr(subprocess_venv, "_resolve_lock", _REAL_RESOLVE_LOCK)
+    for module, venv, reqs, python in (
+        (canary_qwen, "_CANARY_VENV", "_CANARY_REQUIREMENTS", "_CANARY_PYTHON"),
+        (nemo, "_NEMO_VENV", "_NEMO_REQUIREMENTS", "_NEMO_PYTHON"),
+        (qwen, "_QWEN_VENV", "_QWEN_REQUIREMENTS", "_QWEN_PYTHON"),
+    ):
+        label = getattr(module, venv)
         recorder = _SubprocessRecorder()
         monkeypatch.setattr(subprocess, "run", recorder)
-        ensure_venv(f"t-{label}", list(reqs), python_version="3.12")
-        # Stage 1 = recorder.calls[1] = torch + torchaudio via the chosen CUDA index.
+        ensure_venv(label, list(getattr(module, reqs)), python_version=getattr(module, python))
         stage_one = recorder.calls[1]
-        idx_pos = stage_one.index("--index-url")
-        assert stage_one[idx_pos + 1] == force_cu128.url, f"{label} backend did not use cu128 index"
-        # No --extra-index-url on Stage 1: the precedence quirk would let PyPI win otherwise.
-        assert "--extra-index-url" not in stage_one, f"{label} backend leaked --extra-index-url into Stage 1"
-        # Every backend must install both torch and torchaudio from the same index.
-        assert any(s == "torch" or s.startswith("torch>") or s.startswith("torch=") for s in stage_one), (
-            f"{label} backend missing torch in Stage 1"
-        )
-        assert any(
-            s == "torchaudio" or s.startswith("torchaudio>") or s.startswith("torchaudio=") for s in stage_one
-        ), f"{label} backend missing torchaudio in Stage 1"
-        # Stage 2 must NOT carry the CUDA index — that's the whole point.
+        assert stage_one[stage_one.index("--index-url") + 1] == force_cu128.url, label
+        assert "--extra-index-url" not in stage_one, label
+        assert any(arg.startswith("torch==") for arg in stage_one), label
+        assert any(arg.startswith("torchaudio==") for arg in stage_one), label
         stage_two = recorder.calls[2]
-        assert "--index-url" not in stage_two, f"{label} backend leaked --index-url into Stage 2"
-        assert "--extra-index-url" not in stage_two, f"{label} backend leaked --extra-index-url into Stage 2"
-        # And no torch / torchaudio specs in Stage 2 either: listing them
-        # without an index flag would let uv consider replacing the
-        # matched wheel from Stage 1 with PyPI's tagless one.
-        assert not any(s == "torch" or s.startswith("torch>") or s.startswith("torch=") for s in stage_two), (
-            f"{label} backend leaked a torch spec into Stage 2"
-        )
-        assert not any(
-            s == "torchaudio" or s.startswith("torchaudio>") or s.startswith("torchaudio=") for s in stage_two
-        ), f"{label} backend leaked a torchaudio spec into Stage 2"
+        assert "--index-url" not in stage_two and "--extra-index-url" not in stage_two, label
+        assert not any(arg.startswith("torch") for arg in stage_two), label
 
 
 # ── TLS trust for the isolated venvs ────────────────────────────────────────
@@ -1216,16 +1284,7 @@ class TestRecordVenvUse:
         """The fast cache-hit path (zero subprocess calls) still notes what it returned."""
         name = "t-record"
         venv_dir = fake_cache_dir / f"{name}-cu128"
-        venv_dir.mkdir(parents=True)
-        (venv_dir / ".senselab-installed").write_text(
-            json.dumps(
-                {
-                    "requirements": ["torch>=2.8,<2.9"],
-                    "python_version": "3.12",
-                    "torch_index": {"tag": force_cu128.tag, "url": force_cu128.url, "source": force_cu128.source},
-                }
-            )
-        )
+        _installed_marker(venv_dir, name, ["torch>=2.8,<2.9"], force_cu128)
         monkeypatch.setattr(subprocess, "run", _SubprocessRecorder())
 
         with record_venv_use() as used:
@@ -1240,16 +1299,7 @@ class TestRecordVenvUse:
         """A caller that never opens ``record_venv_use`` pays nothing and gets no dict back."""
         name = "t-unrecorded"
         venv_dir = fake_cache_dir / f"{name}-cu128"
-        venv_dir.mkdir(parents=True)
-        (venv_dir / ".senselab-installed").write_text(
-            json.dumps(
-                {
-                    "requirements": ["torch>=2.8,<2.9"],
-                    "python_version": "3.12",
-                    "torch_index": {"tag": force_cu128.tag, "url": force_cu128.url, "source": force_cu128.source},
-                }
-            )
-        )
+        _installed_marker(venv_dir, name, ["torch>=2.8,<2.9"], force_cu128)
         monkeypatch.setattr(subprocess, "run", _SubprocessRecorder())
 
         # No error, and the module-level recorder stays unset.
@@ -1261,9 +1311,7 @@ class TestRecordVenvUse:
     ) -> None:
         """A run that reaches several backends collects one entry per backend name."""
         for name in ("yamnet", "hear"):
-            venv_dir = fake_cache_dir / name
-            venv_dir.mkdir(parents=True)
-            (venv_dir / ".senselab-installed").write_text(json.dumps({"requirements": [], "python_version": "3.12"}))
+            _installed_marker(fake_cache_dir / name, name, [])
         monkeypatch.setattr(subprocess, "run", _SubprocessRecorder())
 
         with record_venv_use() as used:
