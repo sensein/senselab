@@ -516,3 +516,45 @@ class TestActivityReads:
         assert {a.id for a in s.activities()} == {first, second, third}
         assert {a.id for a in s.activities("AIRWAY")} == {first, second}
         assert s.activities("VOICE") == []
+
+
+class TestAtomicWrite:
+    """``write_jsonl`` leaves the previous store or the new one whole, never a truncated file."""
+
+    def _two_versions(self, tmp_path: Path) -> tuple[ProvStore, Path, bytes]:
+        s = _store()
+        s.entity(prov_type="measurement", extent=None, attributes={"name": "first"})
+        target = tmp_path / "store.jsonl"
+        s.write_jsonl(target)
+        s.entity(prov_type="measurement", extent=None, attributes={"name": "second"})
+        return s, target, target.read_bytes()
+
+    def test_a_write_interrupted_before_the_rename_keeps_the_previous_store(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An fsync that dies (a preempted job) leaves the old file byte-identical and no temporary behind."""
+        s, target, before = self._two_versions(tmp_path)
+
+        def _killed(descriptor: int) -> None:
+            raise KeyboardInterrupt("SIGTERM during the write")
+
+        monkeypatch.setattr("senselab.utils.prov_store.os.fsync", _killed)
+        with pytest.raises(KeyboardInterrupt):
+            s.write_jsonl(target)
+        assert target.read_bytes() == before
+        assert [p.name for p in tmp_path.iterdir()] == ["store.jsonl"]
+
+    def test_a_completed_write_replaces_the_store_and_leaves_nothing_else(self, tmp_path: Path) -> None:
+        """The new store reads back whole; no temporary file stays in the directory."""
+        s, target, _ = self._two_versions(tmp_path)
+        s.write_jsonl(target)
+        names = {e.attributes["name"] for e in ProvStore.read_jsonl(target).entities("measurement")}
+        assert names == {"first", "second"}
+        assert [p.name for p in tmp_path.iterdir()] == ["store.jsonl"]
+
+    def test_an_existing_store_keeps_its_permission_bits(self, tmp_path: Path) -> None:
+        """A group-readable store stays group-readable after it is rewritten."""
+        s, target, _ = self._two_versions(tmp_path)
+        target.chmod(0o640)
+        s.write_jsonl(target)
+        assert target.stat().st_mode & 0o777 == 0o640
