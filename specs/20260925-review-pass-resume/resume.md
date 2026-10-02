@@ -48,19 +48,27 @@ disagrees confidently with the reviewer (0.8 / 0.2, `UNFITTED`) on 315. Every AI
 carries an extent or a reason. Task-audio cuts: plain 60,560, enhanced 60,559, redacted 1,125; the 1,990
 without a cut are exactly those without an extent.
 
-Derivatives: every run root copied with symlinks followed — 2,221,746 files and 1,404,320,415,233 bytes
-on both sides, 0 symlinks. The earlier ~200 MB gap was `du` counting directory sizes; the check now sums
-file bytes. `tmp_deriv/finalize_r10.sbatch` rewrites the top level (parquet, summary, dictionary, viewer,
-review page, evaluations with `--delete`) and `dataset_description.json`. Stores still naming
-`/orcd/scratch`: pending the finalize run (`PathMap` translates them).
+Derivatives: every run root copied with symlinks followed — 2,221,738 files and 1,404,319,166,145 bytes
+on both sides, 0 symlinks, 0 of 62,550 stores naming `/orcd/scratch`, checked by
+`scripts/verify_derivatives_copy.py` (threaded walk, `senselab.utils.fastio`; ~8 min where serial `find`
+and `grep -r` passes ran over 3 h). The earlier ~200 MB gap was `du` counting directory sizes.
+`tmp_deriv/finalize_r10.sbatch` rewrites the top level (parquet, summary, dictionary, viewer, review page,
+evaluations with `--delete`) and `dataset_description.json`, sets group `orcd_rg_hstor004_pi_satra`
+2775/664 on them, and runs the verifier from the `senselab-verify` checkout.
+
+Subprocess venvs install from committed hashed locks (`src/senselab/utils/data/venv_locks/`, 601f7670,
+crisperwhisper fixed at be8220e4); all 22 built and imported on an H100 against their CUDA index. Model
+loads under the new pins are not yet exercised.
 
 Open for the owner:
 
 - A lone "El" (Spanish article, or a place-name fragment) is released; unanswered.
-- The future full run over all tasks, scheduled earlier.
-- Nimble thresholds are unfitted: hand-label the disagreements per question, then fit.
-- Subprocess-venv dependency versions are not locked and not in any cache key.
+- Nimble thresholds are unfitted (left as is, 2026-10-02): hand-label the disagreements per question, then fit.
+- Second-speaker signals (separation, diarization) are noisy; the owner wants better models, not gate tweaks.
 - The evaluate-triage panel has no r9c baseline; those parquets lack the columns.
+
+The "future run for all" scheduled on 2026-09-30 (re-read every review-manifest recording on one prompt)
+is done: the v6 full re-review covered all 15,113.
 
 Cluster traps met this round: `squeue -j <id>` errors once a finished job is purged, so a watcher read
 that as an unreachable cluster — list `squeue -u satra -h -r -o '%F %R'` and filter by id instead;
