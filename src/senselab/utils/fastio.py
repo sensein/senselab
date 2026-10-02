@@ -42,7 +42,7 @@ import queue
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Callable, Iterable, Iterator, TypeVar
+from typing import Callable, Generator, Iterable, TypeVar
 
 R = TypeVar("R")
 T = TypeVar("T")
@@ -80,7 +80,7 @@ def _pool(
     keep: Callable[[str], bool] | None,
     on_error: Callable[[str, OSError], None] | None,
     links_as_files: bool = False,
-) -> Iterator[object]:
+) -> Generator[object, None, None]:
     """Run the threaded walk, yielding whatever ``emit`` returns for each directory.
 
     Args:
@@ -205,7 +205,7 @@ def walk(
     follow_symlinks: bool = False,
     keep: Callable[[str], bool] | None = None,
     on_error: Callable[[str, OSError], None] | None = None,
-) -> Iterator[tuple[str, list[str], list[str]]]:
+) -> Generator[tuple[str, list[str], list[str]], None, None]:
     """Walk a tree with a pool of threads, like :func:`os.walk` but in no particular order.
 
     Args:
@@ -241,7 +241,7 @@ def map_files(
     keep: Callable[[str], bool] | None = None,
     on_error: Callable[[str, OSError], None] | None = None,
     links_as_files: bool = False,
-) -> Iterator[R]:
+) -> Generator[R, None, None]:
     """Apply a function to every matching file under a tree, inside the walk's threads.
 
     Args:
@@ -278,7 +278,9 @@ def map_files(
         yield item  # type: ignore[misc]
 
 
-def ordered_map(fn: Callable[[T], R], items: Iterable[T], *, threads: int = DEFAULT_THREADS) -> Iterator[R]:
+def ordered_map(
+    fn: Callable[[T], R], items: Iterable[T], *, threads: int = DEFAULT_THREADS
+) -> Generator[R, None, None]:
     """Apply a function to each item in a pool of threads, yielding results in input order.
 
     Args:
