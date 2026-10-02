@@ -1090,12 +1090,14 @@ def test_the_ledger_columns_count_every_state(tmp_path: Path) -> None:
                     "masked_n": 1,
                     "unmasked_by_reviewer_n": 1,
                     "unmasked_by_trim_n": 2,
+                    "released_by_kind_n": 3,
                     "proposed_by_reviewer_n": 2,
                 },
                 categories={
                     "masked": ["PERSON"],
                     "unmasked_by_reviewer": ["DATE_TIME"],
                     "unmasked_by_trim": ["DATE_TIME", "PERSON"],
+                    "released_by_kind": ["DATE_TIME"],
                     "proposed_by_reviewer": ["CONDITION"],
                 },
                 human_review=True,
@@ -1111,6 +1113,7 @@ def test_the_ledger_columns_count_every_state(tmp_path: Path) -> None:
     assert row["cohort_diagnoses"] == ["parkinsons_disease"]
     assert (row["masked_n"], row["unmasked_by_reviewer_n"], row["unmasked_by_trim_n"]) == (1, 1, 2)
     assert row["proposed_by_reviewer_n"] == 2
+    assert (row["released_by_kind_n"], row["released_by_kind_categories"]) == (3, ["DATE_TIME"])
     assert row["proposed_by_reviewer_categories"] == ["CONDITION"]
     assert row["condition_review"] is True
     rv.to_table([row])

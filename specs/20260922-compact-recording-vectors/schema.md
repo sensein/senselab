@@ -130,8 +130,9 @@ Owner-directed: `participant`, `task`, `verdict` are the first three columns, in
 | `masked_n` | int32 | words a standing mask hides | no `pii_ledger` |
 | `unmasked_by_reviewer_n` | int32 | words a mask hid that a reviewer `release` entry named, or that share a content-word term (surface and family) with one it named elsewhere | no `pii_ledger` |
 | `unmasked_by_trim_n` | int32 | a finding's own words that are not residue content words | no `pii_ledger` |
+| `released_by_kind_n` | int32 | content words of a DATE_TIME-family finding naming a time of day or a duration | no `pii_ledger` |
 | `proposed_by_reviewer_n` | int32 | words a new reviewer `redact` entry names that no standing mask hides | no `pii_ledger` |
-| `masked_categories`, `unmasked_by_reviewer_categories`, `unmasked_by_trim_categories`, `proposed_by_reviewer_categories` | list\<string\> | the mask families (reviewer categories, for `proposed_by_reviewer`) carrying at least one word in that state | no `pii_ledger` |
+| `masked_categories`, `unmasked_by_reviewer_categories`, `unmasked_by_trim_categories`, `released_by_kind_categories`, `proposed_by_reviewer_categories` | list\<string\> | the mask families (reviewer categories, for `proposed_by_reviewer`) carrying at least one word in that state | no `pii_ledger` |
 | `propagated_n` | int32 | words unmasked because a `release` entry named the same content-word term elsewhere in the recording | no `pii_ledger` |
 | `unplaced_n` | int32 | detector findings SPEECH could not place on words; none masks anything | no `pii_ledger` |
 | `unplaced_open` | bool | whether an unplaced finding is `open` (flags) or `unread` (withholds and flags) | no `pii_ledger` |
@@ -534,6 +535,11 @@ produces them — no re-fold, no replay.
 `scripts/extend_task_audio.py` writes. Null until that driver has run over the recording, or where it
 found no task extent. Unlike the rest of the group they are not derivable at parquet build alone:
 they report a cut, so the cut must exist. `specs/20261002-task-extent-audio/design.md`.
+
+**Schema 17 adds `released_by_kind_n` and `released_by_kind_categories`**, the ledger's fifth word
+state: a content word of a DATE_TIME-family finding naming a time of day or a duration, released
+whatever the reviewer said (`data/time_release.yaml`; `specs/20260927-pii-span-ledger/design.md`,
+"Released by kind").
 
 **Clip re-assessment is PREPROCESS's and QUALITY's, not this file's.** PREPROCESS withdraws a clip
 candidate when an unclipped sample elsewhere exceeds its level (`clip_withdrawn_n`); QUALITY

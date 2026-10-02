@@ -353,6 +353,17 @@ columns:
     source: [recording_vectors.py:_ledger_columns, nodes/redact.py:MaskPlan.count, nodes/redact.py:mask_plan]
     null_means: No `pii_ledger`.
 
+  released_by_kind_n:
+    units: count
+    description: >-
+      Content words of a DATE_TIME-family finding that name a time of day or a duration
+      (`data/time_release.yaml`), shown whatever the reviewer said. A finding holding a calendar word, a
+      weekday, a holiday, an age word, today/yesterday/tomorrow, a four-digit number or an ordinal
+      releases nothing this way.
+    computation: The ledger's `counts.released_by_kind_n`, distinct word ids in that state.
+    source: [recording_vectors.py:_ledger_columns, nodes/redact.py:MaskPlan.count, nodes/redact.py:time_by_kind]
+    null_means: No `pii_ledger`.
+
   proposed_by_reviewer_n:
     units: count
     description: Words the reviewer's new `redact` entries name that no standing mask hides.
@@ -380,6 +391,13 @@ columns:
     units: none
     description: Families of the masks with at least one word released by the trim.
     computation: The ledger's `categories.unmasked_by_trim`, sorted.
+    source: [recording_vectors.py:_ledger_columns, nodes/redact.py:MaskPlan.categories]
+    null_means: No `pii_ledger`.
+
+  released_by_kind_categories:
+    units: none
+    description: Families of the masks with at least one word released by kind (a time of day or a duration).
+    computation: The ledger's `categories.released_by_kind`, sorted.
     source: [recording_vectors.py:_ledger_columns, nodes/redact.py:MaskPlan.categories]
     null_means: No `pii_ledger`.
 
