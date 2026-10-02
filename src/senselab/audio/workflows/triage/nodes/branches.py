@@ -22,6 +22,7 @@ import numpy as np
 from senselab.audio.data_structures import AudioHints
 from senselab.audio.workflows.triage.config import TriageConfig, UnmeasuredConfigKey
 from senselab.audio.workflows.triage.consensus import vocabulary_key
+from senselab.audio.workflows.triage.nodes.admit import NODE as ADMIT_NODE
 from senselab.audio.workflows.triage.nodes.common import find_measurement, live_entities, software_agent
 from senselab.audio.workflows.triage.nodes.gates import (
     DEFAULT_LAYER,
@@ -1154,17 +1155,18 @@ The packaged config names the same three sets by key under
 def declared_task_family(store: ProvStore, hint: AudioHints | None = None) -> str | None:
     """The declared task family, from whichever carrier the graph has.
 
-    Two carriers are read, in order: the hint's ``task_token`` metadata, then the ``path`` ADMIT
-    writes onto the ``recording`` stream entity.
+    Three carriers are read, in order: the hint's ``task_token`` metadata, the ``path`` ADMIT writes
+    onto the ``recording`` stream entity, and, where ADMIT refused the recording and wrote no stream,
+    the ``audio_file`` its activity was run with.
 
     Args:
         store: The provenance store.
         hint: What the recording was declared to contain, when the caller supplied one.
 
     Returns:
-        The family, or None when no carrier names one — an absent ``recording`` entity, a path that
-        is not a BIDS stem, or a stem whose task id is ``"unknown"``. None takes the out-of-family
-        mode.
+        The family, or None when no carrier names one — neither a ``recording`` entity nor an ADMIT
+        activity, a path that is not a BIDS stem, or a stem whose task id is ``"unknown"``. None
+        takes the out-of-family mode.
     """
     for task_id in _declared_task_ids(store, hint):
         family = task_family(task_id)
@@ -1194,6 +1196,10 @@ def _declared_task_ids(store: ProvStore, hint: AudioHints | None) -> list[str]:
     ]
     if recording:
         found.append(task_id_of(Path(str(recording[-1].attributes["path"])).stem))
+    else:
+        admitted = [a for a in store.activities(ADMIT_NODE) if a.parameters.get("audio_file")]
+        if admitted:
+            found.append(task_id_of(Path(str(admitted[-1].parameters["audio_file"])).stem))
     return found
 
 

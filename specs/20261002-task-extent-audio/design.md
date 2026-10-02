@@ -59,6 +59,16 @@ complete. Where the declared family is one that branch owns (`EXPECTATIONS[branc
 under a `routing` activity (step `task_extent_unplaced`). A branch skipped on a family it does not
 own writes nothing.
 
+**A refused recording (2026-10-02).** After the 17 were replayed, 8 AIRWAY recordings still carried
+neither: 4 `fivebreaths`, 2 `v2-breath`, 1 `cough`, 1 `threequickbreaths`, all discarded by ADMIT
+with "every sample is zero". ADMIT writes no `recording` stream for such a file, and the hint
+carries `task_name`, not `task_token`, so `declared_task_family` found no carrier and
+`record_unrun_owner` wrote nothing. ADMIT's activity always records the `audio_file` it was run on,
+so that is now the third carrier, read only where no `recording` stream exists. `run_triage` also
+calls `record_unrun_owner` for every branch when ADMIT refuses a recording, with the note
+`ADMIT refused the recording, so no branch ran`, so a fresh run and a replay agree. A replay of the
+8 at the commit before this change wrote no absence (checked with `--out-root` into a scratch tree).
+
 **`padding_s` = 0.25 s, CONVENTIONAL.** See `config-derivations.md#task_audio`. It is the same width
 as the mask pad, so a mask padded at the task's edge lies inside the cut. The pad costs at most 0.5 s
 per recording; §5 sets that against the savings measured on r9.

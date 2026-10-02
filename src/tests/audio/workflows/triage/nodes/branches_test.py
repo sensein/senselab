@@ -707,6 +707,13 @@ class TestTheDeclaredFamilyIsDerivedInOnePlace:
         """A branch reached before ADMIT wrote, or on a store read back without it, concludes nothing."""
         assert declared_task_family(_store(path=None)) is None
 
+    def test_a_refused_recording_is_named_by_the_file_admit_was_run_on(self) -> None:
+        """ADMIT wrote no stream for an all-zero recording; its activity's ``audio_file`` still names the task."""
+        store = _store(path=None)
+        audio_file = "/data/sub-a_ses-1_task-respiration-and-cough-fivebreaths-3.wav"
+        store.activity(node="ADMIT", step=None, parameters={"audio_file": audio_file})
+        assert declared_task_family(store) == "respiration-and-cough-fivebreaths"
+
     def test_a_recording_entity_with_no_path_names_no_family(self) -> None:
         """The attribute may be absent; that is not an error either."""
         store = ProvStore(run_id="no-path")
