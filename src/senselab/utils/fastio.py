@@ -21,6 +21,8 @@
 :func:`walk` is :func:`os.walk` run by a fixed pool of threads, so many directory listings are in
 flight at once; results arrive in no particular order. :func:`map_files` applies a function to every
 matching file inside those threads, and :func:`find` returns the matching paths sorted.
+:func:`ordered_map` runs a function over a list in a thread pool and keeps the list's order, for a
+fixed-depth scan split by top-level directory.
 
 Errors listing a directory are not printed and dropped. By default the walk finishes and then raises
 :class:`WalkError` carrying every ``(path, error)`` pair; pass ``on_error`` to receive each pair as it
@@ -38,10 +40,12 @@ import fnmatch
 import os
 import queue
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Callable, Iterator, TypeVar
+from typing import Callable, Iterable, Iterator, TypeVar
 
 R = TypeVar("R")
+T = TypeVar("T")
 
 DEFAULT_THREADS = 32
 """Pool size when the caller names none."""
@@ -256,6 +260,32 @@ def map_files(
 
     for item in _pool(top, emit, threads=threads, follow_symlinks=follow_symlinks, keep=keep, on_error=on_error):
         yield item  # type: ignore[misc]
+
+
+def ordered_map(fn: Callable[[T], R], items: Iterable[T], *, threads: int = DEFAULT_THREADS) -> Iterator[R]:
+    """Apply a function to each item in a pool of threads, yielding results in input order.
+
+    Args:
+        fn: Called once per item, in a worker thread. An exception it raises is re-raised here, and
+            the items not yet started are cancelled.
+        items: The inputs.
+        threads: Size of the pool.
+
+    Yields:
+        ``fn(item)`` for each item, in the order of ``items``.
+
+    Raises:
+        ValueError: When ``threads`` is below 1.
+    """
+    if threads < 1:
+        raise ValueError(f"threads must be at least 1, got {threads}")
+    pool = ThreadPoolExecutor(max_workers=threads, thread_name_prefix="fastio.ordered_map")
+    try:
+        futures = [pool.submit(fn, item) for item in items]
+        for future in futures:
+            yield future.result()
+    finally:
+        pool.shutdown(wait=True, cancel_futures=True)
 
 
 def find(

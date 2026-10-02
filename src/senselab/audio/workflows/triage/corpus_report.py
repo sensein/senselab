@@ -16,6 +16,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Iterator, Mapping
 
+from senselab.utils import fastio
+
 ROW_GLOB = "*.row.json"
 """What a corpus driver names its per-recording row."""
 
@@ -149,7 +151,7 @@ def decisions(root: Path) -> Iterator[tuple[str, dict[str, Any] | None, dict[str
     """
     seen: set[str] = set()
     # Rows first and logs second: a row carries the driver's own fields, which a log does not.
-    for path in list(sorted(root.rglob(ROW_GLOB))) + list(sorted(root.rglob(LOG_GLOB))):
+    for path in fastio.find(root, ROW_GLOB) + fastio.find(root, LOG_GLOB):
         try:
             record = json.loads(path.read_text())
         except (OSError, ValueError):
