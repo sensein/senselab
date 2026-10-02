@@ -70,6 +70,7 @@ def settings(config: TriageConfig) -> dict[str, Any]:
         "seed",
         "timeout_s",
         "workers",
+        "max_consecutive_errors",
     )
     return {name: config.require(f"{_SECTION}.{name}") for name in names}
 

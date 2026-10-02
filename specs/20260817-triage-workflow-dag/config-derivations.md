@@ -2343,6 +2343,13 @@ second_opinion.workers: 4
   well inside an 80 GB H100 or A100 beside 9.5 GB of weights. Not in the result-cache key: like the
   GPU model, batching can move the floating-point reduction order, so it is recorded on the
   opinion (`num_parallel`) as provenance, not identity.
+
+second_opinion.max_consecutive_errors: 5
+  Failed asks in a row after which `extend_second_opinion.py` ends the slice with exit 3. On r9
+  slice 29 (2026-10-02, node3804, A100 PCIe) the model never loaded and 288 rows failed in a row at
+  ~18 s each, about 86 minutes of a GPU for nothing; five in a row stops such a slice in ~90 s. A
+  healthy server's failures are isolated (a malformed answer is read after the ask returns and does
+  not count), so five consecutive is past any transient. 0 turns the stop off.
 ```
 
 ## residual
