@@ -342,6 +342,20 @@ everything that shapes it, so "unchanged" here means the same thing a cache hit 
 SECOND_OPINION is not in `GRAPH_ORDER`, so a replay never retires it; VERDICT reads it as it stands.
 `extend_refold.py` retires only VERDICT's own entities and runs no REVIEW, so it has no such hole.
 
+### A record written again after a retirement must be minted live (2026-10-02)
+
+Entity ids are content-addressed over the store's `run_id`, and every driver except the replay reads
+a store under its run root's name. A driver that retires a record and writes one with identical
+attributes therefore gets back the retired entity, and the new record is born invalidated. Two r10
+groups came from this. Seven of the 105 re-reviewed recordings had a v6 reading served from the
+result cache, so the re-review wrote the same annotation the extent replay had retired, and the
+store was left with no live reading (`llm_status` null). Five with-redaction recordings had their
+`task_audio` measurement retired by a recut and rewritten identical, so the measurement was dead
+while the new `task_redacted` stream stood (`task_audio_cuts` null). VERDICT already avoided this
+through `mint_live`. `write_measurement`, REVIEW's annotation, rounds, spans and redacted stream,
+the task-audio cuts and SECOND_OPINION's measurement now go through it too. VERDICT's passthrough of
+the annotation and the opinion, and `carry_reading_forward`, drop the `remint` key.
+
 ## Cost
 
 275 task-hours for the replay against 2,877 for a resubmission. The components, from the corpus-wide
