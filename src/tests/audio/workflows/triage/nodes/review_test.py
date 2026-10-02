@@ -13,12 +13,24 @@ from typing import Any, Sequence
 import pytest
 
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
+from senselab.audio.workflows.triage.extend import (
+    REVIEW_CARRIED,
+    REVIEW_NEEDS_REREAD,
+    REVIEW_NONE,
+    REVIEW_READ,
+    carry_reading_forward,
+    held_reading,
+    live_decisions,
+    retire_decisions,
+)
 from senselab.audio.workflows.triage.nodes import review as review_module
+from senselab.audio.workflows.triage.nodes.common import find_measurement, software_agent
 from senselab.audio.workflows.triage.nodes.redact import transcript_texts
 from senselab.audio.workflows.triage.nodes.review import (
     BACKFILL_HELD,
     BACKFILL_SKIPPED,
     BACKFILL_STORED,
+    LLM_REVIEW_MEASUREMENT,
     NODE,
     backfill_from_store,
     refine_plan,
@@ -855,3 +867,79 @@ class TestAReadingIsKeptInTheResultCache:
         _annotate(store, [])
         state, why = backfill_from_store(store, _config(tmp_path))
         assert state == BACKFILL_SKIPPED and "prompt version" in why
+
+
+class TestAReplayKeepsTheReadingItDidNotReadAgain:
+    """A replay under a configuration that does not read keeps an answered reading whose inputs stand."""
+
+    @pytest.fixture(autouse=True)
+    def _resolves(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(review_module, "_resolved", lambda settings: "a" * 40)
+
+    def _read_then_retire(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[ProvStore, Any, str]:
+        """Read with the LLM on, re-open the store under a replay's own run id, and retire as a replay does."""
+        finished = ProvStore(run_id="replay-review-test")
+        _seed(finished, words=["my", "name", "is", "alice"], scan="ran")
+        _stub(monkeypatch, [_clean()])
+        review(finished, _config(tmp_path))
+        finished.write_jsonl(tmp_path / "store.jsonl")
+        store = ProvStore.read_jsonl(tmp_path / "store.jsonl", run_id="replay-review-test+replay")
+        held = held_reading(store)
+        assert held is not None and len(held.rounds) == 1
+        software = software_agent(store)
+        retire_decisions(store, live_decisions(store), software=software)
+        return store, held, software
+
+    def test_unchanged_inputs_keep_an_equivalent_live_reading(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The live annotation is the earlier reading, derived from it, and the replay's own is retired."""
+        store, held, software = self._read_then_retire(tmp_path, monkeypatch)
+        off = load_triage_config()
+        review(store, off)
+        assert carry_reading_forward(store, off, None, held, software=software) == (REVIEW_CARRIED, None)
+        live = find_measurement(store, REDACTION_LLM_ANNOTATION)
+        assert live is not None
+        assert (live.attributes["status"], live.attributes["speakers"]) == ("clean", "one")
+        assert store.derived_from(live.id) == [held.annotation.id]
+        unread = [
+            e
+            for e in store.entities("measurement")
+            if e.attributes.get("name") == REDACTION_LLM_ANNOTATION and e.attributes.get("status") == "disabled"
+        ]
+        assert len(unread) == 1 and store.is_invalidated(unread[0].id)
+        rounds = [e for e in store.entities("measurement") if e.attributes.get("name") == LLM_REVIEW_MEASUREMENT]
+        assert sum(1 for e in rounds if not store.is_invalidated(e.id)) == 1
+
+    def test_changed_inputs_are_reported_and_nothing_is_carried(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A redaction the earlier reading never saw leaves the replay's own annotation and says why."""
+        store, held, software = self._read_then_retire(tmp_path, monkeypatch)
+        plan = store.activity(node="REDACT", step="plan-again", parameters={})
+        span = store.entity(prov_type="span", extent=_extent(3), attributes={"name": "redaction", "category": "PERSON"})
+        store.was_generated_by(span, plan)
+        off = load_triage_config()
+        review(store, off)
+        state, why = carry_reading_forward(store, off, None, held, software=software)
+        assert state == REVIEW_NEEDS_REREAD and why is not None and "changed" in why
+        live = find_measurement(store, REDACTION_LLM_ANNOTATION)
+        assert live is not None and live.attributes["status"] == "disabled"
+
+    def test_a_replay_that_reads_again_keeps_its_own_reading(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Where the replay's REVIEW answered, the earlier reading is not re-attached."""
+        store, held, software = self._read_then_retire(tmp_path, monkeypatch)
+        _stub(monkeypatch, [_clean()])
+        monkeypatch.setenv("SENSELAB_RESULT_CACHE", str(tmp_path / "fresh-cache"))
+        review(store, _config(tmp_path))
+        assert carry_reading_forward(store, _config(tmp_path), None, held, software=software) == (REVIEW_READ, None)
+
+    def test_no_answered_reading_is_nothing_to_keep(self) -> None:
+        """A store whose REVIEW never answered holds nothing a replay could lose."""
+        store = ProvStore(run_id="replay-review-test")
+        _seed(store, scan="ran")
+        review(store, load_triage_config())
+        assert held_reading(store) is None
+        assert carry_reading_forward(store, load_triage_config(), None, None, software="s") == (REVIEW_NONE, None)

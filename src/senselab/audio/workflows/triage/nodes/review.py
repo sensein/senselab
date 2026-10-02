@@ -71,7 +71,7 @@ from senselab.utils.tasks.cached_inference import (
 NODE = "REVIEW"
 
 _LLM_SECTION = "redaction.llm_check"
-_LLM_REVIEW_MEASUREMENT = "redaction_llm_review"
+LLM_REVIEW_MEASUREMENT = "redaction_llm_review"
 _LLM_PLACEHOLDER = "[LLM_{category}]"  # what a proposed redaction is masked with inside the loop
 
 SCANNED_STATE = "scanned"
@@ -491,6 +491,26 @@ def review_cache_key(
     )
 
 
+def reading_key(store: ProvStore, config: TriageConfig, hint: AudioHints | None, revision: str) -> str:
+    """The :func:`review_cache_key` a reading of this store would carry, from the texts and context it holds now.
+
+    Args:
+        store: The provenance store.
+        config: The triage configuration, read for the generation settings.
+        hint: The caller's declaration, which the task context is built from.
+        revision: The 40-hex commit the reading loaded.
+
+    Returns:
+        The key.
+
+    Raises:
+        ValueError: If any ``redaction.llm_check`` key is unmeasured.
+    """
+    context = task_context(store, hint, task_lexicon(config, declared_task_family(store, hint), hint))
+    original, redacted = transcript_texts(store)
+    return review_cache_key(original, redacted, context, _llm_settings(config), revision)
+
+
 def reading_from_cache(payload: Mapping[str, Any]) -> tuple[_Reading, list[dict[str, Any]]]:
     """A cached reading and its rounds, as the loop would have returned them.
 
@@ -583,7 +603,7 @@ def backfill_from_store(store: ProvStore, config: TriageConfig) -> tuple[str, st
     reviews = [
         {key: value for key, value in entity.attributes.items() if key not in ("name", "signal")}
         for entity in store.entities("measurement")
-        if entity.attributes.get("name") == _LLM_REVIEW_MEASUREMENT and not store.is_invalidated(entity.id)
+        if entity.attributes.get("name") == LLM_REVIEW_MEASUREMENT and not store.is_invalidated(entity.id)
     ]
     key = review_cache_key(original, redacted, dict(held.get("task_context") or {}), settings, reading.revision or "")
     return (BACKFILL_STORED, key) if cache_reading(key, reading, reviews) else (BACKFILL_HELD, key)
@@ -710,7 +730,7 @@ def review(store: ProvStore, config: TriageConfig, hint: AudioHints | None = Non
             review_id = store.entity(
                 prov_type="measurement",
                 extent=None,
-                attributes={"name": _LLM_REVIEW_MEASUREMENT, "signal": "consensus_transcript", **review_payload_},
+                attributes={"name": LLM_REVIEW_MEASUREMENT, "signal": "consensus_transcript", **review_payload_},
             )
             store.was_generated_by(review_id, activity)
             store.was_attributed_to(review_id, software)

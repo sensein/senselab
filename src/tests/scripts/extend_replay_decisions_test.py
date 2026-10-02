@@ -423,3 +423,44 @@ def test_each_replayed_row_lands_in_the_row_log_as_it_completes(tmp_path: Path) 
     assert [json.loads(line)["stem"] for line in path.read_text(encoding="utf-8").splitlines()] == [
         row["stem"] for row in out
     ]
+
+
+def test_a_reading_that_must_be_read_again_is_named_and_fails_the_slice(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A row whose REVIEW could not be carried forward is counted, listed by stem, and exits 3."""
+    roots = [_seed_run(tmp_path / f"run{n}") for n in range(2)]
+    manifest = _manifest(tmp_path / "manifest.jsonl", roots)
+    states = iter(["carried", "needs_reread"])
+
+    def _fake(run_root: Path, config: object, **kwargs: object) -> dict:
+        return {"status": "ok", "retired": 0, "review": next(states), "review_why": None}
+
+    monkeypatch.setattr(cli, "replay_one", _fake)
+    summary = cli.run_slice(
+        manifest,
+        slice_index=0,
+        slice_count=1,
+        config=load_triage_config(),
+        log_dir=tmp_path / "logs",
+        hints=None,
+        out_root=None,
+        commit=None,
+    )
+    stems = [json.loads(line)["stem"] for line in manifest.read_text(encoding="utf-8").splitlines()]
+    assert summary["reviews"] == {"carried": 1, "needs_reread": 1}
+    assert summary["needs_reread"] == [stems[1]]
+
+
+def test_the_driver_exits_3_when_any_reading_must_be_read_again(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The exit code says a GPU node's result was lost, so a pipeline cannot run on past it."""
+    roots = [_seed_run(tmp_path / "run0")]
+    manifest = _manifest(tmp_path / "manifest.jsonl", roots)
+    monkeypatch.setattr(
+        cli,
+        "replay_one",
+        lambda run_root, config, **kwargs: {"status": "ok", "retired": 0, "review": "needs_reread", "review_why": "x"},
+    )
+    assert cli.main([str(manifest), "--slice-index", "0", "--slice-count", "1", "--log-dir", str(tmp_path)]) == 3

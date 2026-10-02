@@ -29,6 +29,12 @@ modified.
 
 A store already carrying this configuration's and revision's replay marker is skipped and not rewritten.
 
+REVIEW is replayed too, under the replaying configuration. Where that configuration does not read
+(the LLM check off), an answered reading from before the replay is carried forward when the replayed
+store's texts and task context give the same result-cache key; otherwise the row's ``review`` is
+``needs_reread``, the summary lists the stems, and the driver exits 3. Follow such a run with
+``scripts/extend_llm_review.py`` over those stems and ``scripts/extend_refold.py``.
+
 The design is in ``specs/20260922-replay-decisions-over-a-finished-corpus/design.md``.
 
 Install:
@@ -49,6 +55,7 @@ from senselab.audio.workflows.triage.extend import (
     ERROR,
     OK,
     PRESENT,
+    REVIEW_NEEDS_REREAD,
     RUN_SUBDIR,
     SKIPPED,
     SLICES_SUBDIR,
@@ -214,6 +221,8 @@ def replay_one(
         "errors": outcome.errors,
         "released": sorted(outcome.released),
         "summary": sorted(outcome.summary),
+        "review": outcome.review,
+        "review_why": outcome.review_why,
     }
 
 
@@ -303,10 +312,16 @@ def run_slice(
 
     counts: dict[str, int] = {}
     node_errors: dict[str, int] = {}
+    reviews: dict[str, int] = {}
+    needs_reread: list[str] = []
     retired = 0
     for record in log:
         counts[str(record["status"])] = counts.get(str(record["status"]), 0) + 1
         retired += int(record.get("retired") or 0)
+        if record.get("review"):
+            reviews[str(record["review"])] = reviews.get(str(record["review"]), 0) + 1
+        if record.get("review") == REVIEW_NEEDS_REREAD:
+            needs_reread.append(str(record["stem"]))
         for node in record.get("errors") or {}:
             node_errors[node] = node_errors.get(node, 0) + 1
 
@@ -322,6 +337,8 @@ def run_slice(
         "counts": counts,
         "retired": retired,
         "node_errors": node_errors,
+        "reviews": reviews,
+        "needs_reread": needs_reread,
         "elapsed_s": time.time() - started,
         "log": str(log_path),
     }
@@ -337,8 +354,9 @@ def main(argv: list[str] | None = None) -> int:
 
     Returns:
         0 when every recording in the shard was replayed or already had been, 1 when any row is
-        ``error`` — the other stores are written either way — and 2 when the arguments could not be
-        resolved and nothing was read.
+        ``error`` — the other stores are written either way — 2 when the arguments could not be
+        resolved and nothing was read, and 3 when any replayed recording's REVIEW reading could not
+        be carried forward and must be read again (the summary's ``needs_reread`` names them).
     """
     args = build_parser().parse_args(argv)
 
@@ -367,6 +385,11 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  {status:<9} {number}")
     for node, number in sorted(summary["node_errors"].items()):
         print(f"  node error {node:<10} {number}")
+    for state, number in sorted(summary["reviews"].items()):
+        print(f"  review {state:<12} {number}")
+    if summary["needs_reread"]:
+        print(f"REVIEW: {len(summary['needs_reread'])} recordings need the reviewer again", file=sys.stderr)
+        return 3
     return 1 if summary["counts"].get(ERROR) else 0
 
 
