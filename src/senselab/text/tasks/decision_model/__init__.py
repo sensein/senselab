@@ -9,6 +9,7 @@ from senselab.text.tasks.decision_model.ollama import (
     OllamaPin,
     OllamaServer,
     PinMismatchError,
+    ServerUnusableError,
     ask_decisions,
     verify_pin,
 )
@@ -26,6 +27,7 @@ __all__ = [
     "OllamaPin",
     "OllamaServer",
     "PinMismatchError",
+    "ServerUnusableError",
     "SecondOpinion",
     "ask_decisions",
     "ask_second_opinion",

@@ -285,6 +285,132 @@ def test_the_server_answers_as_many_requests_as_it_is_given(
     monkeypatch.setattr(ollama.subprocess, "Popen", _FakeProcess)
     monkeypatch.setattr(ollama.urllib.request, "urlopen", lambda *a, **kw: nullcontext())
     pin = OllamaPin(name="nimble", tag="9b", blob_digest="b", config_digest="c", manifest_digest="m")
-    with ollama.OllamaServer(tmp_path / "ollama", tmp_path, pin, num_parallel=num_parallel):
+    with ollama.OllamaServer(tmp_path / "ollama", tmp_path, pin, num_parallel=num_parallel, require_gpu=False):
         pass
     assert _FakeProcess.started[0]["OLLAMA_NUM_PARALLEL"] == str(num_parallel)
+
+
+def test_the_server_refuses_vulkan_unless_the_caller_asks_for_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """OLLAMA_VULKAN is 0 by default; a value in the caller's environment wins."""
+    from contextlib import nullcontext
+
+    from senselab.text.tasks.decision_model import ollama
+
+    _FakeProcess.started = []
+    monkeypatch.setattr(ollama, "verify_pin", lambda *a, **kw: tmp_path)
+    monkeypatch.setattr(ollama.subprocess, "Popen", _FakeProcess)
+    monkeypatch.setattr(ollama.urllib.request, "urlopen", lambda *a, **kw: nullcontext())
+    pin = OllamaPin(name="nimble", tag="9b", blob_digest="b", config_digest="c", manifest_digest="m")
+    monkeypatch.delenv("OLLAMA_VULKAN", raising=False)
+    with ollama.OllamaServer(tmp_path / "ollama", tmp_path, pin, require_gpu=False):
+        pass
+    monkeypatch.setenv("OLLAMA_VULKAN", "1")
+    with ollama.OllamaServer(tmp_path / "ollama", tmp_path, pin, require_gpu=False):
+        pass
+    assert [env["OLLAMA_VULKAN"] for env in _FakeProcess.started] == ["0", "1"]
+
+
+class _FakeOllama(BaseHTTPRequestHandler):
+    """``ollama serve``'s version, load and process-list routes, answering as the test sets them."""
+
+    load_status = 200
+    loaded: list[dict[str, Any]] = []
+    loads: list[dict[str, Any]] = []
+
+    def log_message(self, format: str, *args: Any) -> None:  # noqa: A002, ANN401
+        pass
+
+    def _send(self, status: int, payload: Any) -> None:  # noqa: ANN401
+        body = json.dumps(payload).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self) -> None:  # noqa: N802
+        if self.path == "/api/version":
+            self._send(200, {"version": "0.35.0"})
+        elif self.path == "/api/ps":
+            self._send(200, {"models": type(self).loaded})
+        else:
+            self._send(404, {})
+
+    def do_POST(self) -> None:  # noqa: N802
+        length = int(self.headers.get("Content-Length") or 0)
+        type(self).loads.append(json.loads(self.rfile.read(length)))
+        status = type(self).load_status
+        self._send(status, {} if status == 200 else {"error": "llama-server process has terminated"})
+
+
+@pytest.fixture
+def fake_ollama(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Any]:
+    """A served fake, with the server's process, port and pin check stood in for."""
+    from senselab.text.tasks.decision_model import ollama
+
+    _FakeOllama.load_status, _FakeOllama.loaded, _FakeOllama.loads = 200, [], []
+    server = HTTPServer(("127.0.0.1", 0), _FakeOllama)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    monkeypatch.setattr(ollama, "verify_pin", lambda *a, **kw: tmp_path)
+    monkeypatch.setattr(ollama.subprocess, "Popen", _FakeProcess)
+    monkeypatch.setattr(ollama, "_free_port", lambda: server.server_address[1])
+    try:
+        yield ollama
+    finally:
+        server.shutdown()
+
+
+def _resident(size: int, vram: int) -> list[dict[str, Any]]:
+    return [{"name": "nimble:9b", "model": "nimble:9b", "size": size, "size_vram": vram}]
+
+
+def _served_pin() -> OllamaPin:
+    return OllamaPin(name="nimble", tag="9b", blob_digest="b", config_digest="c", manifest_digest="m")
+
+
+def test_a_model_wholly_on_the_gpu_is_served(fake_ollama: Any, tmp_path: Path) -> None:  # noqa: ANN401
+    """The model is loaded on entry, with an empty prompt and the server's keep-alive."""
+    _FakeOllama.loaded = _resident(10, 10)
+    with fake_ollama.OllamaServer(tmp_path / "ollama", tmp_path, _served_pin()) as server:
+        assert server.model == "nimble:9b"
+    assert _FakeOllama.loads == [{"model": "nimble:9b", "prompt": "", "keep_alive": "60m"}]
+
+
+def test_a_model_that_does_not_load_is_refused_with_the_log_tail(
+    fake_ollama: Any,  # noqa: ANN401
+    tmp_path: Path,
+) -> None:
+    """A failed load names the server log's last line."""
+    _FakeOllama.load_status = 500
+    log = tmp_path / "ollama.log"
+    log.write_text("starting\nerror loading model: vk::PhysicalDevice::createDevice: ErrorInitializationFailed\n")
+    with pytest.raises(fake_ollama.ServerUnusableError, match="ErrorInitializationFailed"):
+        with fake_ollama.OllamaServer(tmp_path / "ollama", tmp_path, _served_pin(), log_path=log):
+            pass
+
+
+@pytest.mark.parametrize(
+    "loaded, reason",
+    [([], "is not loaded"), (_resident(10, 6), "size_vram 6 of size 10"), (_resident(0, 0), "size_vram 0 of size 0")],
+)
+def test_a_model_not_wholly_on_the_gpu_is_refused(
+    fake_ollama: Any,  # noqa: ANN401
+    tmp_path: Path,
+    loaded: list[dict[str, Any]],
+    reason: str,
+) -> None:
+    """Partly offloaded to the CPU, or absent from the process list: not served."""
+    _FakeOllama.loaded = loaded
+    with pytest.raises(fake_ollama.ServerUnusableError, match=reason):
+        with fake_ollama.OllamaServer(tmp_path / "ollama", tmp_path, _served_pin()):
+            pass
+
+
+def test_without_require_gpu_nothing_is_loaded_on_entry(fake_ollama: Any, tmp_path: Path) -> None:  # noqa: ANN401
+    """The check is the caller's to waive."""
+    with fake_ollama.OllamaServer(tmp_path / "ollama", tmp_path, _served_pin(), require_gpu=False):
+        pass
+    assert _FakeOllama.loads == []
