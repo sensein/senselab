@@ -123,3 +123,34 @@ Builds from locks on macOS arm64, all through the CPU index:
 
 None of the CUDA-index installs (cu121/cu124/cu128) has been built from a lock yet. That
 needs a GPU node.
+
+## CUDA check on ORCD (2026-10-02)
+
+One H100 job (24680612, node2803, 11 min 45 s) built all 22 venvs from the locks at 601f7670
+into an isolated cache (`SENSELAB_VENV_CACHE`). 21 built. Each recorded its torch index, whether
+CUDA is visible inside the venv, `uv pip check` and an import of up to three top-level
+requirements.
+
+- Every torch venv saw CUDA:
+  - cu121: brouhaha, child-adult-diarization.
+  - cu124: s3prl, unasdiff.
+  - cu128: the rest.
+- `uv pip check` passed on all 21.
+- **crisperwhisper did not build.** Its requirement list was chosen at import time by
+  `sys.platform` and `platform.machine()`: the CT2 extra on Linux x86_64, the transformers extra
+  plus stock `ctranslate2` elsewhere. The lock compiled on macOS therefore had a digest that
+  Linux rejected (`VenvLockError: … compiled from different requirements`). Fixed with one list
+  that uses environment markers. The universal lock now carries `ctranslate2-crisperwhisper`
+  and `nvidia-cublas-cu12` under the Linux x86_64 marker and stock `ctranslate2` under its
+  negation. The backend token is still chosen per platform at runtime.
+- **pyarrow (both NeMo venvs) and coqui-tts were driver artefacts.** The driver mapped a
+  distribution to its first `top_level.txt` entry. For pyarrow 17 that entry is `__dummy__`, and
+  coqui-tts ships no `top_level.txt` (its module is `TTS`). Both import inside the built venvs:
+  pyarrow 17.0.0 in both NeMo venvs, TTS 0.27.5 in coqui.
+
+Two tests were added to `src/tests/utils/venv_lock_test.py`:
+- Every backend module is re-executed with `sys.platform`, `platform.machine()` and
+  `platform.system()` faked as Linux x86_64 and as macOS arm64, and every lock digest must be
+  unchanged. Against 601f7670 it fails on crisperwhisper.
+- Every top-level requirement except torch and torchaudio must name an entry in its lock body,
+  `==` pins and `@` URL entries alike.
