@@ -59,3 +59,26 @@ def test_workers_run_rows_concurrently() -> None:
 
     logged(_rows(8), one, None, workers=4)
     assert peak == 4
+
+
+class _Stop(Exception):
+    pass
+
+
+@pytest.mark.parametrize("workers", [1, 4])
+def test_a_raising_row_stops_the_rows_not_yet_started(workers: int) -> None:
+    """The exception reaches the caller, and queued rows are cancelled rather than run."""
+    ran: list[str] = []
+    lock = threading.Lock()
+
+    def one(row: dict[str, Any]) -> dict[str, Any]:
+        with lock:
+            ran.append(row["stem"])
+        if row["stem"] == "row0":
+            raise _Stop("server gone")
+        time.sleep(0.05)
+        return {**row, "status": "ok"}
+
+    with pytest.raises(_Stop):
+        logged(_rows(40), one, None, workers=workers)
+    assert len(ran) <= 2 * workers < 40

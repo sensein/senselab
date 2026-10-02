@@ -343,6 +343,9 @@ def logged(
 
     Returns:
         One outcome record per row, in the order of ``rows``.
+
+    Raises:
+        Exception: Whatever ``one`` raised; rows not yet started are not run.
     """
 
     def timed(row: dict[str, Any]) -> tuple[dict[str, Any], float]:
@@ -358,13 +361,18 @@ def logged(
                 log.add(record, seconds)
         return out
     held: list[dict[str, Any] | None] = [None] * len(rows)
-    with ThreadPoolExecutor(max_workers=workers) as pool:
+    pool = ThreadPoolExecutor(max_workers=workers)
+    try:
         futures = {pool.submit(timed, row): index for index, row in enumerate(rows)}
         for future in as_completed(futures):
             record, seconds = future.result()
             held[futures[future]] = record
             if log is not None:
                 log.add(record, seconds)
+    except BaseException:
+        pool.shutdown(wait=True, cancel_futures=True)
+        raise
+    pool.shutdown(wait=True)
     return [record for record in held if record is not None]
 
 
