@@ -143,6 +143,20 @@ def verify_pin(models_dir: Path, pin: OllamaPin, *, verified_dir: Path | None = 
     return blob
 
 
+WARM_UP: dict[str, Any] = {
+    "state": {"text": "warm-up"},
+    "questions": {
+        "warm_up": {
+            "type": "choice",
+            "instructions": "Is this text empty?",
+            "criteria": {"yes": "It is empty", "no": "It is not empty"},
+        }
+    },
+    "options": {"temperature": 0, "seed": 0},
+}
+"""The one decision request :meth:`OllamaServer.load` sends to bring the model into memory."""
+
+
 def _free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
         probe.bind(("127.0.0.1", 0))
@@ -259,9 +273,9 @@ class OllamaServer:
         Raises:
             ServerUnusableError: If the load fails or any of the model is held outside GPU memory.
         """
-        body = json.dumps({"model": self.model, "prompt": "", "keep_alive": self.keep_alive}).encode("utf-8")
+        body = json.dumps({"model": self.model, **WARM_UP, "keep_alive": self.keep_alive}).encode("utf-8")
         request = urllib.request.Request(  # noqa: S310 — loopback only
-            f"http://{self.host}/api/generate", data=body, headers={"Content-Type": "application/json"}
+            f"http://{self.host}/v1/systemone", data=body, headers={"Content-Type": "application/json"}
         )
         try:
             with urllib.request.urlopen(request, timeout=self.load_timeout_s):  # noqa: S310

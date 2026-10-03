@@ -340,7 +340,7 @@ class _FakeOllama(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802
         length = int(self.headers.get("Content-Length") or 0)
-        type(self).loads.append(json.loads(self.rfile.read(length)))
+        type(self).loads.append({"path": self.path, **json.loads(self.rfile.read(length))})
         status = type(self).load_status
         self._send(status, {} if status == 200 else {"error": "llama-server process has terminated"})
 
@@ -372,11 +372,13 @@ def _served_pin() -> OllamaPin:
 
 
 def test_a_model_wholly_on_the_gpu_is_served(fake_ollama: Any, tmp_path: Path) -> None:  # noqa: ANN401
-    """The model is loaded on entry, with an empty prompt and the server's keep-alive."""
+    """The model is loaded on entry by one decision request, with the server's keep-alive."""
     _FakeOllama.loaded = _resident(10, 10)
     with fake_ollama.OllamaServer(tmp_path / "ollama", tmp_path, _served_pin()) as server:
         assert server.model == "clef:27b"
-    assert _FakeOllama.loads == [{"model": "clef:27b", "prompt": "", "keep_alive": "60m"}]
+    assert _FakeOllama.loads == [
+        {"path": "/v1/systemone", "model": "clef:27b", **fake_ollama.WARM_UP, "keep_alive": "60m"}
+    ]
 
 
 def test_a_model_that_does_not_load_is_refused_with_the_log_tail(
