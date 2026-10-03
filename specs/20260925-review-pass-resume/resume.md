@@ -1,6 +1,25 @@
 # Resuming the review pass
 
-## Settled, 2026-10-02 — r10; read this first, everything below is history
+## Settled, 2026-10-03 — r11: the second opinion is Clef 27B
+
+r11 is r10 with Nimble replaced by Clef 27B (`ollama clef:27b`, Ollama 0.35.1, weights
+`sha256:6c02216a…`, pinned in config; `clef-flash` fails on `/v1/systemone`, ollama#18769). Code:
+model-neutral `second_opinion_*` columns, parquet schema 18 (`4266c2db`); load the model by a decision
+request, not `/api/generate` (`af416ba0`); `second_opinion.load_timeout_s` 1200 (`72a45e6e`). Run:
+Clef over the 15,113 review recordings from `senselab-r13`/`senselab-r14`, then a full re-fold and
+`recording_vectors_r11` (local `~/Downloads/recording_vectors_20261003_r11/`). 13 slices first failed
+on the 300 s model load, with weights read from the /orcd/data capacity tier by several slices per
+node; the store is now copied to flash at `/orcd/scratch/bcs/002/satra/ollama-models-flash/`.
+
+Result: 15,111 answered, 2 nothing to read. Release unchanged (60,297 / 1,140 / 1,081 / 32); flagged
+9,315 (−104), all from the second-opinion ground, 315 → 147 recordings (named diagnosis 70, another
+voice 67, instructions spoken 11). Clef vs Nimble: agreement at 0.5 is 91.6–99.4% per question; Clef
+is confident "yes" far less often on another voice (112 vs 228) and Safe Harbor (318 vs 1,286).
+Evaluations: `evaluations_r11_20261003/README.md`. Derivatives synced and finalized
+(`tmp_deriv/finalize_r11.sbatch`): 2,221,738 files and 1,404,927,276,966 bytes on both sides, 0
+symlinks, 0 stores naming scratch. Thresholds stay 0.8/0.2, unfitted.
+
+## Settled, 2026-10-02 — r10; history from here
 
 The corpus is the r9 tree, re-read on reviewer prompt v6, second-opinioned by Nimble, re-folded in full
 and cut to task extents. r9c and r9d are superseded.
