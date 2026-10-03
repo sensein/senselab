@@ -11,7 +11,7 @@
 'use strict';
 
 var SchemaDecode = (function () {
-  var SCHEMA_VERSION = 18;
+  var SCHEMA_VERSION = 19;
   var DICTIONARY_KEY = 'senselab.recording_vectors.dictionary';
   var TIME_SCALE = 65535;
   var TRACE_POINTS = 256;

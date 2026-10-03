@@ -300,7 +300,8 @@ columns:
     description: >-
       Masks the fold placed: one per detector finding on the residue words it was placed on (findings
       covering the same words are one), one per reviewer `redact` entry that places a finding SPEECH
-      could not place, and one per REDACT extent that reaches no transcript word.
+      could not place or names a country, one per run of words the redaction policy always masks that no
+      finding covered (`policy_masks_n`), and one per REDACT extent that reaches no transcript word.
     computation: '`counts.masks_n` of the latest live `pii_ledger` measurement, which VERDICT writes from `mask_plan`.'
     source: [recording_vectors.py:_ledger_columns, nodes/redact.py:MaskPlan.record, nodes/redact.py:mask_plan]
     null_means: No `pii_ledger`.
@@ -356,12 +357,28 @@ columns:
   released_by_kind_n:
     units: count
     description: >-
-      Content words of a DATE_TIME-family finding that name a time of day or a duration
-      (`data/time_release.yaml`), shown whatever the reviewer said. A finding holding a calendar word, a
-      weekday, a holiday, an age word, today/yesterday/tomorrow, a four-digit number or an ordinal
-      releases nothing this way.
+      Content words the redaction policy releases by kind whatever the reviewer said: a time of day, a
+      weekday, a relative reference or a length of time in a DATE_TIME-family finding
+      (`data/time_release.yaml`), a kinship word, or a country that is the whole of a place name.
+      `released_time_n`, `released_kinship_n` and `released_country_n` split it.
     computation: The ledger's `counts.released_by_kind_n`, distinct word ids in that state.
     source: [recording_vectors.py:_ledger_columns, nodes/redact.py:MaskPlan.count, nodes/redact.py:time_by_kind]
+    null_means: No `pii_ledger`.
+
+  released_condition_n:
+    units: count
+    description: >-
+      Words a mask covered that a health condition the reviewer listed names. Policy v7: a condition is
+      never masked and never withholds.
+    computation: The ledger's `counts.released_condition_n`, distinct word ids in that state.
+    source: [recording_vectors.py:_ledger_columns, nodes/redact.py:MaskPlan.count, nodes/redact.py:mask_plan]
+    null_means: No `pii_ledger`.
+
+  unmasked_by_approval_n:
+    units: count
+    description: Words of a person's name a human approved for release (`redaction.name_approvals`).
+    computation: The ledger's `counts.unmasked_by_approval_n`, distinct word ids in that state.
+    source: [recording_vectors.py:_ledger_columns, nodes/redact.py:MaskPlan.count, nodes/redact.py:name_approvals]
     null_means: No `pii_ledger`.
 
   proposed_by_reviewer_n:
@@ -396,8 +413,22 @@ columns:
 
   released_by_kind_categories:
     units: none
-    description: Families of the masks with at least one word released by kind (a time of day or a duration).
+    description: Families of the masks with at least one word released by kind.
     computation: The ledger's `categories.released_by_kind`, sorted.
+    source: [recording_vectors.py:_ledger_columns, nodes/redact.py:MaskPlan.categories]
+    null_means: No `pii_ledger`.
+
+  released_condition_categories:
+    units: none
+    description: Families of the masks with at least one word a listed health condition released.
+    computation: The ledger's `categories.released_condition`, sorted.
+    source: [recording_vectors.py:_ledger_columns, nodes/redact.py:MaskPlan.categories]
+    null_means: No `pii_ledger`.
+
+  unmasked_by_approval_categories:
+    units: none
+    description: Families of the masks with at least one word a human approved for release.
+    computation: The ledger's `categories.unmasked_by_approval`, sorted.
     source: [recording_vectors.py:_ledger_columns, nodes/redact.py:MaskPlan.categories]
     null_means: No `pii_ledger`.
 
@@ -442,7 +473,10 @@ columns:
       Reviewer `redact` entries that agree with the masks: every content word they name is already
       masked, or they place a finding SPEECH could not place. They propose nothing more and withhold
       nothing.
-    computation: The ledger's `counts.proposals_masked_n` plus `counts.proposals_placed_unplaced_n`.
+    computation: >-
+      The ledger's `counts.proposals_masked_n` plus `counts.proposals_placed_unplaced_n` plus
+      `counts.proposals_country_masked_n` (an entry naming a country, which the policy otherwise releases:
+      the country is masked).
     source: [recording_vectors.py:_ledger_columns, nodes/redact.py:mask_plan, vocabulary.py:deciding_reading]
     null_means: No `pii_ledger`.
 
@@ -450,49 +484,151 @@ columns:
     units: count
     description: >-
       Reviewer `redact` entries that propose hiding more: a content word no mask hides, or a quote the
-      fold cannot place. These withhold the recording, or route it to human review where every one is
-      in a human-review category.
+      fold cannot place. These withhold the recording under `verdict.llm_redaction_withholds`.
     computation: The ledger's `counts.proposals_new_n`.
     source: [recording_vectors.py:_ledger_columns, nodes/redact.py:mask_plan, vocabulary.py:fold_file_verdict]
     null_means: No `pii_ledger`.
 
-  condition_review:
-    units: bool
+  redact_by_kind_n:
+    units: count
     description: >-
-      Whether any new reviewer `redact` entry is in a category the fold routes to human review
-      (`verdict.llm_human_review_categories`, CONDITION by default); `release_ground` says whether
-      that decided the release.
-    computation: The ledger's `human_review`.
-    source: [recording_vectors.py:_ledger_columns, nodes/redact.py:MaskPlan.record]
+      Reviewer `redact` entries every content word of which the redaction policy releases by kind (a time
+      of day, a weekday, a relative or length-of-time expression, a kinship word): they propose nothing.
+    computation: The ledger's `counts.proposals_by_kind_n`.
+    source: [recording_vectors.py:_ledger_columns, nodes/redact.py:MaskPlan.record, nodes/redact.py:mask_plan]
     null_means: No `pii_ledger`.
 
-  condition_review_kind:
-    units: none
-    values: [cohort, other]
+  conditions_n:
+    units: count
     description: >-
-      `cohort` where every human-review proposal names a condition the study recruits for
-      (`verdict.cohort_conditions`), `other` where any does not.
-    computation: The ledger's `human_review_kind`.
-    source: [recording_vectors.py:_ledger_columns, nodes/redact.py:MaskPlan.human_review_kind]
-    null_means: No `pii_ledger`, or no human-review proposal.
+      Health conditions the reviewer listed for the record (prompt v7's CONDITIONS part, or a prompt-v6
+      entry in a `verdict.condition_categories` category). Policy v7: none is masked or withholds.
+    computation: The length of the ledger's `conditions`.
+    source: [recording_vectors.py:_ledger_columns, nodes/redact.py:MaskPlan.record, nodes/redact.py:mask_plan]
+    null_means: No `pii_ledger`.
 
   cohort_condition_n:
     units: count
-    description: New human-review proposals naming a study-cohort condition.
+    description: Listed conditions naming a study-cohort condition (`verdict.cohort_conditions`).
     computation: The ledger's `counts.cohort_condition_n`.
     source: [recording_vectors.py:_ledger_columns, nodes/redact.py:MaskPlan.record]
     null_means: No `pii_ledger`.
 
   other_condition_n:
     units: count
-    description: New human-review proposals naming a condition outside the study's cohorts.
+    description: Listed conditions naming a condition outside the study's cohorts.
     computation: The ledger's `counts.other_condition_n`.
     source: [recording_vectors.py:_ledger_columns, nodes/redact.py:MaskPlan.record]
     null_means: No `pii_ledger`.
 
+  policy_version:
+    units: none
+    description: The redaction policy version the fold applied (7 from 2026-10-03).
+    computation: The ledger's `policy_version`.
+    source: [recording_vectors.py:_ledger_columns, nodes/redact.py:MaskPlan.record, nodes/redact.py:mask_plan]
+    null_means: No `pii_ledger`, or one written before the policy carried a version.
+
+  language:
+    units: none
+    description: >-
+      The language the recording's BIDS sidecar declares (`en`, `es`, ...). In a recording not in
+      English, a word of a name-family mask not written as a proper noun is released.
+    computation: The ledger's `language`, from the hint's `metadata.language`.
+    source: [recording_vectors.py:_ledger_columns, nodes/verdict.py:verdict, nodes/redact.py:mask_plan]
+    null_means: No `pii_ledger`, or no language declared.
+
+  policy_masks_n:
+    units: count
+    description: >-
+      Masks the redaction policy placed itself, over words it always masks -- a year, a month, a season, a
+      holiday, an age, a state -- that no detector finding covered.
+    computation: The ledger's `counts.policy_masks_n`.
+    source: [recording_vectors.py:_ledger_columns, nodes/redact.py:MaskPlan.record, nodes/redact.py:mask_plan]
+    null_means: No `pii_ledger`.
+
+  released_time_n:
+    units: count
+    description: >-
+      Words released by kind as a time of day, a weekday, a relative reference or a length of time in a DATE_TIME-family finding.
+    computation: >-
+      The ledger's `counts.released_time_n`, distinct word ids in state `released_by_kind` with kind `time`.
+    source: [recording_vectors.py:_ledger_columns, nodes/redact.py:MaskPlan.record, nodes/redact.py:mask_plan]
+    null_means: No `pii_ledger`.
+
+  released_kinship_n:
+    units: count
+    description: >-
+      Words released by kind as a kinship word (`kinship` in `redaction_policy.yaml`: mom, brother, abuela).
+    computation: >-
+      The ledger's `counts.released_kinship_n`, distinct word ids in state `released_by_kind` with kind `kinship`.
+    source: [recording_vectors.py:_ledger_columns, nodes/redact.py:MaskPlan.record, nodes/redact.py:mask_plan]
+    null_means: No `pii_ledger`.
+
+  released_country_n:
+    units: count
+    description: >-
+      Words released by kind as a country that is the whole of a place name, which no reviewer `redact` entry names.
+    computation: >-
+      The ledger's `counts.released_country_n`, distinct word ids in state `released_by_kind` with kind `country`.
+    source: [recording_vectors.py:_ledger_columns, nodes/redact.py:MaskPlan.record, nodes/redact.py:mask_plan]
+    null_means: No `pii_ledger`.
+
+  locked_date_n:
+    units: count
+    description: >-
+      Masked words the redaction policy keeps masked whatever the reviewer said, as a year, a month, a season, a holiday or a day of the month (`redaction_policy.date_positions`).
+    computation: >-
+      The ledger's `counts.locked_date_n`, distinct word ids in state `masked` with lock `date`.
+    source: [recording_vectors.py:_ledger_columns, nodes/redact.py:MaskPlan.record, nodes/redact.py:mask_plan]
+    null_means: No `pii_ledger`.
+
+  locked_age_n:
+    units: count
+    description: >-
+      Masked words the redaction policy keeps masked whatever the reviewer said, as an age: a policy age pattern, or a word of a finding a detector labelled AGE.
+    computation: >-
+      The ledger's `counts.locked_age_n`, distinct word ids in state `masked` with lock `age`.
+    source: [recording_vectors.py:_ledger_columns, nodes/redact.py:MaskPlan.record, nodes/redact.py:mask_plan]
+    null_means: No `pii_ledger`.
+
+  locked_place_n:
+    units: count
+    description: >-
+      Masked words the redaction policy keeps masked whatever the reviewer said, as a place below a country: a state, or a capitalised word of a LOCATION-family finding.
+    computation: >-
+      The ledger's `counts.locked_place_n`, distinct word ids in state `masked` with lock `place`.
+    source: [recording_vectors.py:_ledger_columns, nodes/redact.py:MaskPlan.record, nodes/redact.py:mask_plan]
+    null_means: No `pii_ledger`.
+
+  locked_person_n:
+    units: count
+    description: >-
+      Masked words the redaction policy keeps masked whatever the reviewer said, as a person's name: a capitalised word of a PERSON-family finding no human approved.
+    computation: >-
+      The ledger's `counts.locked_person_n`, distinct word ids in state `masked` with lock `person`.
+    source: [recording_vectors.py:_ledger_columns, nodes/redact.py:MaskPlan.record, nodes/redact.py:mask_plan]
+    null_means: No `pii_ledger`.
+
+  person_name_masked_n:
+    units: count
+    description: >-
+      Words of a person's name that stay masked: written as a proper noun under a PERSON-family finding
+      and not approved in `redaction.name_approvals`. Non-zero flags the recording for a human's review of
+      name tags (`verdict.person_name_review_flags`).
+    computation: The ledger's `counts.person_name_masked_n`.
+    source: [recording_vectors.py:_ledger_columns, nodes/redact.py:MaskPlan.record, nodes/redact.py:mask_plan]
+    null_means: No `pii_ledger`.
+
+  name_release_proposed_n:
+    units: count
+    description: Reviewer `release` entries naming a person's name the policy keeps masked until a human approves it.
+    computation: The length of the ledger's `name_release_proposed`.
+    source: [recording_vectors.py:_ledger_columns, nodes/redact.py:MaskPlan.record, nodes/redact.py:mask_plan]
+    null_means: No `pii_ledger`.
+
   cohort_diagnoses:
     units: none
-    description: The cohort diagnoses the human-review proposals name, by the release's `phenotype/diagnosis/` file stem.
+    description: The cohort diagnoses the listed conditions name, by the release's `phenotype/diagnosis/` file stem.
     computation: The ledger's `cohort_diagnoses`, sorted and distinct.
     source: [recording_vectors.py:_ledger_columns, nodes/redact.py:MaskPlan.record, cohort.py:load_cohort_profile]
     null_means: No `pii_ledger`.
