@@ -1,6 +1,6 @@
 """The decision-model runner: a pinned store or nothing, and answers read back as probabilities.
 
-``specs/20261001-nimble-second-opinion/design.md`` is the design.
+``specs/20261003-clef-second-opinion/design.md`` is the design.
 """
 
 from __future__ import annotations
@@ -36,7 +36,7 @@ def _digest(data: bytes) -> str:
 
 
 def _store(root: Path, *, weights: bytes = WEIGHTS, size: int | None = None, layer: str | None = None) -> Path:
-    """An Ollama model store holding one manifest, ``nimble:9b``, its weights blob and a system layer."""
+    """An Ollama model store holding one manifest, ``clef:27b``, its weights blob and a system layer."""
     blobs = root / "blobs"
     blobs.mkdir(parents=True)
     (blobs / _digest(weights).replace(":", "-")).write_bytes(weights)
@@ -53,14 +53,14 @@ def _store(root: Path, *, weights: bytes = WEIGHTS, size: int | None = None, lay
             {"mediaType": "application/vnd.ollama.image.system", "digest": _digest(SYSTEM), "size": len(SYSTEM)},
         ],
     }
-    path = root / "manifests" / "registry.ollama.ai" / "library" / "nimble" / "9b"
+    path = root / "manifests" / "registry.ollama.ai" / "library" / "clef" / "27b"
     path.parent.mkdir(parents=True)
     path.write_text(json.dumps(manifest), encoding="utf-8")
     return root
 
 
 def _manifest(root: Path) -> Path:
-    return root / "manifests" / "registry.ollama.ai" / "library" / "nimble" / "9b"
+    return root / "manifests" / "registry.ollama.ai" / "library" / "clef" / "27b"
 
 
 def _pin(root: Path, **overrides: str) -> OllamaPin:
@@ -71,7 +71,7 @@ def _pin(root: Path, **overrides: str) -> OllamaPin:
         "manifest_digest": _digest(_manifest(root).read_bytes()),
         **overrides,
     }
-    return OllamaPin(name="nimble", tag="9b", **held)
+    return OllamaPin(name="clef", tag="27b", **held)
 
 
 PIN_DIGEST = _digest(WEIGHTS)
@@ -130,7 +130,7 @@ class TestThePin:
         """No pull was ever made into this store."""
         (tmp_path / "models").mkdir()
         with pytest.raises(PinMismatchError, match="no readable manifest"):
-            verify_pin(tmp_path / "models", OllamaPin("nimble", "9b", PIN_DIGEST, PIN_DIGEST, PIN_DIGEST))
+            verify_pin(tmp_path / "models", OllamaPin("clef", "27b", PIN_DIGEST, PIN_DIGEST, PIN_DIGEST))
 
     def test_a_completed_hash_is_remembered_and_a_changed_file_is_hashed_again(self, tmp_path: Path) -> None:
         """The marker is keyed on size and mtime, so rewriting the blob invalidates it."""
@@ -244,11 +244,11 @@ def recorder() -> Iterator[str]:
 
 def test_a_request_is_deterministic_by_construction(recorder: str) -> None:
     """Temperature 0 and the seed travel with every request, to the decision endpoint."""
-    answers = ask_decisions(recorder, "nimble:9b", {"transcript": "hi"}, QUESTIONS, seed=7)
+    answers = ask_decisions(recorder, "clef:27b", {"transcript": "hi"}, QUESTIONS, seed=7)
     assert set(answers) == set(QUESTIONS)
     body = _Recorder.bodies[0]
     assert body["path"] == "/v1/systemone"
-    assert body["model"] == "nimble:9b"
+    assert body["model"] == "clef:27b"
     assert body["options"] == {"temperature": 0, "seed": 7}
 
 
@@ -284,7 +284,7 @@ def test_the_server_answers_as_many_requests_as_it_is_given(
     monkeypatch.setattr(ollama, "verify_pin", lambda *a, **kw: tmp_path)
     monkeypatch.setattr(ollama.subprocess, "Popen", _FakeProcess)
     monkeypatch.setattr(ollama.urllib.request, "urlopen", lambda *a, **kw: nullcontext())
-    pin = OllamaPin(name="nimble", tag="9b", blob_digest="b", config_digest="c", manifest_digest="m")
+    pin = OllamaPin(name="clef", tag="27b", blob_digest="b", config_digest="c", manifest_digest="m")
     with ollama.OllamaServer(tmp_path / "ollama", tmp_path, pin, num_parallel=num_parallel, require_gpu=False):
         pass
     assert _FakeProcess.started[0]["OLLAMA_NUM_PARALLEL"] == str(num_parallel)
@@ -302,7 +302,7 @@ def test_the_server_refuses_vulkan_unless_the_caller_asks_for_it(
     monkeypatch.setattr(ollama, "verify_pin", lambda *a, **kw: tmp_path)
     monkeypatch.setattr(ollama.subprocess, "Popen", _FakeProcess)
     monkeypatch.setattr(ollama.urllib.request, "urlopen", lambda *a, **kw: nullcontext())
-    pin = OllamaPin(name="nimble", tag="9b", blob_digest="b", config_digest="c", manifest_digest="m")
+    pin = OllamaPin(name="clef", tag="27b", blob_digest="b", config_digest="c", manifest_digest="m")
     monkeypatch.delenv("OLLAMA_VULKAN", raising=False)
     with ollama.OllamaServer(tmp_path / "ollama", tmp_path, pin, require_gpu=False):
         pass
@@ -364,19 +364,19 @@ def fake_ollama(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Any
 
 
 def _resident(size: int, vram: int) -> list[dict[str, Any]]:
-    return [{"name": "nimble:9b", "model": "nimble:9b", "size": size, "size_vram": vram}]
+    return [{"name": "clef:27b", "model": "clef:27b", "size": size, "size_vram": vram}]
 
 
 def _served_pin() -> OllamaPin:
-    return OllamaPin(name="nimble", tag="9b", blob_digest="b", config_digest="c", manifest_digest="m")
+    return OllamaPin(name="clef", tag="27b", blob_digest="b", config_digest="c", manifest_digest="m")
 
 
 def test_a_model_wholly_on_the_gpu_is_served(fake_ollama: Any, tmp_path: Path) -> None:  # noqa: ANN401
     """The model is loaded on entry, with an empty prompt and the server's keep-alive."""
     _FakeOllama.loaded = _resident(10, 10)
     with fake_ollama.OllamaServer(tmp_path / "ollama", tmp_path, _served_pin()) as server:
-        assert server.model == "nimble:9b"
-    assert _FakeOllama.loads == [{"model": "nimble:9b", "prompt": "", "keep_alive": "60m"}]
+        assert server.model == "clef:27b"
+    assert _FakeOllama.loads == [{"model": "clef:27b", "prompt": "", "keep_alive": "60m"}]
 
 
 def test_a_model_that_does_not_load_is_refused_with_the_log_tail(

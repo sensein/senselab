@@ -86,11 +86,11 @@ from senselab.audio.workflows.triage.nodes.redact import (
 from senselab.audio.workflows.triage.task_lexicon import task_lexicon
 from senselab.audio.workflows.triage.vocabulary import (
     GRAPH_ORDER,
-    NIMBLE_OPINION,
     PII_SCAN,
     REDACTION_LLM_ANNOTATION,
     RULESET_ROUTING,
     SCANNED,
+    SECOND_OPINION_ANSWERS,
     TASK,
     UNDETERMINED,
     BranchDecision,
@@ -339,7 +339,7 @@ def _second_opinion(store: ProvStore) -> tuple[dict[str, object] | None, list[st
     Returns:
         The attributes and the id they came from, or ``(None, [])`` where none was written.
     """
-    measurement = find_measurement(store, NIMBLE_OPINION)
+    measurement = find_measurement(store, SECOND_OPINION_ANSWERS)
     if measurement is None:
         return None, []
     return {key: value for key, value in measurement.attributes.items() if key not in ("name", "signal", REMINT)}, [

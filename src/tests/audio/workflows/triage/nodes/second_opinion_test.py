@@ -1,6 +1,6 @@
 """SECOND_OPINION: the decision model reads what the reviewer reads, and its answer is a measurement.
 
-``specs/20261001-nimble-second-opinion/design.md`` is the design.
+``specs/20261003-clef-second-opinion/design.md`` is the design.
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ from senselab.audio.workflows.triage.nodes.second_opinion import (
     pin_of,
     second_opinion,
 )
-from senselab.audio.workflows.triage.vocabulary import NIMBLE_OPINION, PII_SCAN
+from senselab.audio.workflows.triage.vocabulary import PII_SCAN, SECOND_OPINION_ANSWERS
 from senselab.utils.prov_store import ProvStore
 from tests.audio.workflows.triage.nodes.conftest import word_attributes
 
@@ -102,7 +102,7 @@ class TestItAsksAndRecords:
         config = _config(tmp_path)
         outcome = second_opinion(store, config, AudioHints(task="free-speech"), ask)
         held = _opinion(store, outcome.measurement_id)
-        assert outcome.status == OK and held["name"] == NIMBLE_OPINION
+        assert outcome.status == OK and held["name"] == SECOND_OPINION_ANSWERS
         assert held["probabilities"]["other_voice"] == 0.9
         assert held["probabilities"]["safe_harbor_identifier_present"] == 0.97
         assert held["blob_digest"] == pin_of(config).blob_digest

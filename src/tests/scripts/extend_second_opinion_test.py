@@ -1,6 +1,6 @@
 """The second-opinion driver: SECOND_OPINION over a finished corpus, resumable, concurrent, folding nothing.
 
-``specs/20261001-nimble-second-opinion/design.md`` is the design.
+``specs/20261003-clef-second-opinion/design.md`` is the design.
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ from typing import Any, Iterator
 import pytest
 
 from senselab.audio.workflows.triage.config import load_triage_config
-from senselab.audio.workflows.triage.vocabulary import NIMBLE_OPINION, SECOND_OPINION_DISAGREES
+from senselab.audio.workflows.triage.vocabulary import SECOND_OPINION_ANSWERS, SECOND_OPINION_DISAGREES
 from senselab.utils.prov_store import ProvStore
 from tests.scripts.extend_llm_review_test import _finished_run, _hints, _manifest, _seed_verdicts
 
@@ -84,7 +84,7 @@ def _opinions(run_root: Path) -> list[dict[str, Any]]:
     return [
         dict(entity.attributes)
         for entity in store.entities("measurement")
-        if entity.attributes.get("name") == NIMBLE_OPINION and not store.is_invalidated(entity.id)
+        if entity.attributes.get("name") == SECOND_OPINION_ANSWERS and not store.is_invalidated(entity.id)
     ]
 
 

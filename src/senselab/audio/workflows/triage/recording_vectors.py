@@ -32,7 +32,7 @@ from senselab.audio.workflows.triage.cohort import CONDITION_KINDS
 from senselab.audio.workflows.triage.vocabulary import UNPLACED_OPEN, UNPLACED_UNREAD
 from senselab.utils import fastio
 
-SCHEMA_VERSION = 17
+SCHEMA_VERSION = 18
 """Bumped whenever a column is added, removed or retyped, a binary layout changes, or a categorical
 column's controlled vocabulary changes."""
 
@@ -831,8 +831,13 @@ def _reviewer_columns(decision: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-NIMBLE_QUESTIONS = ("other_voice", "instructions_spoken", "named_diagnosis", "safe_harbor_identifier_present")
-"""The second-opinion questions with a probability column each, ``nimble_<question>_p``."""
+SECOND_OPINION_PROBABILITIES = (
+    "other_voice",
+    "instructions_spoken",
+    "named_diagnosis",
+    "safe_harbor_identifier_present",
+)
+"""The second-opinion questions with a probability column each, ``second_opinion_<question>_p``."""
 
 
 def _second_opinion_columns(decision: Mapping[str, Any]) -> dict[str, Any]:
@@ -842,18 +847,19 @@ def _second_opinion_columns(decision: Mapping[str, Any]) -> dict[str, Any]:
         decision: The fold's record.
 
     Returns:
-        The ``nimble_*`` columns. Where the fold carries no opinion each is None, except
-        ``nimble_disagrees`` and ``nimble_disagrees_n``, which are ``[]`` and ``0``.
+        The ``second_opinion_*`` columns. Where the fold carries no opinion each is None, except
+        ``second_opinion_disagrees`` and ``second_opinion_disagrees_n``, which are ``[]`` and ``0``.
     """
     opinion = decision.get("second_opinion") or {}
     probabilities = opinion.get("probabilities") or {}
     disagreements = [str(entry).split(" ", 1)[0] for entry in opinion.get("disagreements") or ()]
     return {
-        "nimble_status": opinion.get("status"),
-        **{f"nimble_{name}_p": _number(probabilities.get(name)) for name in NIMBLE_QUESTIONS},
-        "nimble_disagrees": disagreements,
-        "nimble_disagrees_n": len(disagreements),
-        "nimble_blob_digest": opinion.get("blob_digest") or None,
+        "second_opinion_status": opinion.get("status"),
+        **{f"second_opinion_{name}_p": _number(probabilities.get(name)) for name in SECOND_OPINION_PROBABILITIES},
+        "second_opinion_disagrees": disagreements,
+        "second_opinion_disagrees_n": len(disagreements),
+        "second_opinion_model_id": opinion.get("model_id") or None,
+        "second_opinion_blob_digest": opinion.get("blob_digest") or None,
     }
 
 
@@ -1574,11 +1580,12 @@ def _fields() -> list[pa.Field]:
         pa.field("llm_model_id", pa.string()),
         pa.field("llm_revision", pa.string()),
         pa.field("llm_failed", pa.bool_()),
-        pa.field("nimble_status", pa.string()),
-        *[pa.field(f"nimble_{name}_p", pa.float64()) for name in NIMBLE_QUESTIONS],
-        pa.field("nimble_disagrees", pa.list_(pa.string())),
-        pa.field("nimble_disagrees_n", pa.int32()),
-        pa.field("nimble_blob_digest", pa.string()),
+        pa.field("second_opinion_status", pa.string()),
+        *[pa.field(f"second_opinion_{name}_p", pa.float64()) for name in SECOND_OPINION_PROBABILITIES],
+        pa.field("second_opinion_disagrees", pa.list_(pa.string())),
+        pa.field("second_opinion_disagrees_n", pa.int32()),
+        pa.field("second_opinion_model_id", pa.string()),
+        pa.field("second_opinion_blob_digest", pa.string()),
         *[
             field
             for name in GATE_NAMES
