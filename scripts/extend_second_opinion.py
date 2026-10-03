@@ -134,7 +134,13 @@ def ollama_asker(
     @contextlib.contextmanager
     def open_ask() -> Iterator[Ask]:
         with OllamaServer(
-            binary, models_dir, pin, verified_dir=verified_dir, log_path=log_path, num_parallel=num_parallel
+            binary,
+            models_dir,
+            pin,
+            verified_dir=verified_dir,
+            log_path=log_path,
+            num_parallel=num_parallel,
+            load_timeout_s=float(held["load_timeout_s"]),
         ) as server:
             yield lambda state, questions: ask_decisions(
                 server.host,

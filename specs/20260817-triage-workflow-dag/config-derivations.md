@@ -2341,6 +2341,12 @@ second_opinion.timeout_s: 300
   0.71-1.39 s. 300 s covers a cold load on a slow filesystem by 4x. Under `workers` concurrent
   requests a request may wait behind the others; 300 s still covers four warm answers by 50x.
 
+second_opinion.load_timeout_s: 1200
+  The load on server start, before the first request. Clef 27B's pilot load (one job, weights on the
+  /orcd/data capacity tier) took 129 s. In the 2026-10-03 full run, 13 slices exceeded the earlier
+  fixed 300 s, among them four started together on one A100 node reading the same 17 GB; 1200 s
+  covers that contention with margin, and a server that cannot load in 20 minutes ends its slice.
+
 second_opinion.workers: 4
   Rows `extend_second_opinion.py` asks at once, and the server's OLLAMA_NUM_PARALLEL. Measured on
   the r9 run (2026-10-01, H100, one row at a time): the model call's median was 1.35 s against a

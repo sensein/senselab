@@ -574,6 +574,7 @@ second_opinion:
   manifest_digest: sha256:2bb11a61d1fb5d7a51f136ad9f569f970727377cf7b96037a06285d81fa25b73  # every layer
   seed: 7                              # sampling seed; temperature is 0
   timeout_s: 300                       # per request, model load included
+  load_timeout_s: 1200                 # the model load on server start, before the first request
   workers: 4                           # rows asked at once per slice; the server answers as many (OLLAMA_NUM_PARALLEL)
   max_consecutive_errors: 5            # failed asks in a row that end the slice; 0 never ends it
 
