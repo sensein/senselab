@@ -11,7 +11,6 @@ import pyarrow.parquet as pq
 import pytest
 
 from senselab.audio.workflows.triage import recording_vectors as rv
-from senselab.audio.workflows.triage.cohort import CONDITION_KINDS
 from senselab.audio.workflows.triage.nodes import review
 from senselab.audio.workflows.triage.nodes.gates import CONFORMANCE_GATES, FLAG_GATES, GATE_SPECS
 from senselab.audio.workflows.triage.residue import ALIGNED, FREE, SYLLABLE, VOCAL
@@ -199,7 +198,6 @@ def test_carrier_rejected_lists_every_name_voice_can_write() -> None:
         ("route_speech", list(BRANCH_ROUTE_STATES)),
         ("route_voice", list(BRANCH_ROUTE_STATES)),
         ("residue_method", [SYLLABLE, VOCAL, ALIGNED, FREE]),
-        ("condition_review_kind", list(CONDITION_KINDS)),
         (
             "llm_status",
             [review.CLEAN, review.FLAGGED, review.ABSENT, review.DISABLED, review.NOTHING_TO_READ],

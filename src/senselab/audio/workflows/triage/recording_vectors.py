@@ -32,7 +32,7 @@ from senselab.audio.workflows.triage.cohort import CONDITION_KINDS
 from senselab.audio.workflows.triage.vocabulary import UNPLACED_OPEN, UNPLACED_UNREAD
 from senselab.utils import fastio
 
-SCHEMA_VERSION = 18
+SCHEMA_VERSION = 19
 """Bumped whenever a column is added, removed or retyped, a binary layout changes, or a categorical
 column's controlled vocabulary changes."""
 
@@ -729,8 +729,22 @@ def _residue_columns(view: StoreView) -> dict[str, Any]:
     }
 
 
-LEDGER_STATES = ("masked", "unmasked_by_reviewer", "unmasked_by_trim", "released_by_kind", "proposed_by_reviewer")
+LEDGER_STATES = (
+    "masked",
+    "unmasked_by_reviewer",
+    "unmasked_by_trim",
+    "released_by_kind",
+    "released_condition",
+    "unmasked_by_approval",
+    "proposed_by_reviewer",
+)
 """The word states the fold's ``pii_ledger`` counts, each a ``<state>_n`` and a ``<state>_categories`` column."""
+
+LEDGER_RELEASE_KINDS = ("time", "kinship", "country")
+"""Why the policy released a word by kind; each a ``released_<kind>_n`` column."""
+
+LEDGER_LOCKS = ("date", "age", "place", "person")
+"""Why the policy kept a word masked whatever the reviewer said; each a ``locked_<lock>_n`` column."""
 
 UNPLACED_SETTLES_NOTHING = (UNPLACED_OPEN, UNPLACED_UNREAD)
 """The states of an unplaced finding that no reading placed or cleared."""
@@ -743,28 +757,37 @@ def _ledger_columns(view: StoreView) -> dict[str, Any]:
         view: The store.
 
     Returns:
-        ``masks_n``, ``masks_final_n``, ``task_words_n``, a count and a category list per
-        :data:`LEDGER_STATES`, ``propagated_n``, ``unplaced_n``, ``unplaced_open``,
-        ``redact_agreed_n``, ``redact_new_n``, ``condition_review``, ``condition_review_kind``, a count
-        per condition kind and ``cohort_diagnoses``. All null where the store carries no ledger.
+        ``policy_version``, ``language``, ``masks_n``, ``masks_final_n``, ``policy_masks_n``,
+        ``task_words_n``, a count and a category list per :data:`LEDGER_STATES`, a count per
+        :data:`LEDGER_RELEASE_KINDS` and :data:`LEDGER_LOCKS`, ``person_name_masked_n``,
+        ``name_release_proposed_n``, ``propagated_n``, ``unplaced_n``, ``unplaced_open``,
+        ``redact_agreed_n``, ``redact_by_kind_n``, ``redact_new_n``, ``conditions_n``, a count per
+        condition kind and ``cohort_diagnoses``. All null where the store carries no ledger.
     """
     ledger: Mapping[str, Any] | None = None
     for entity in view.live("measurement"):
         if entity.attributes.get("name") == "pii_ledger":
             ledger = entity.attributes
     names = [
+        "policy_version",
+        "language",
         "masks_n",
         "masks_final_n",
+        "policy_masks_n",
         "task_words_n",
         *(f"{state}_n" for state in LEDGER_STATES),
         *(f"{state}_categories" for state in LEDGER_STATES),
+        *(f"released_{kind}_n" for kind in LEDGER_RELEASE_KINDS),
+        *(f"locked_{lock}_n" for lock in LEDGER_LOCKS),
+        "person_name_masked_n",
+        "name_release_proposed_n",
         "propagated_n",
         "unplaced_n",
         "unplaced_open",
         "redact_agreed_n",
+        "redact_by_kind_n",
         "redact_new_n",
-        "condition_review",
-        "condition_review_kind",
+        "conditions_n",
         *(f"{kind}_condition_n" for kind in CONDITION_KINDS),
         "cohort_diagnoses",
     ]
@@ -772,22 +795,31 @@ def _ledger_columns(view: StoreView) -> dict[str, Any]:
         return dict.fromkeys(names)
     counts = ledger.get("counts") or {}
     categories = ledger.get("categories") or {}
+    version = ledger.get("policy_version")
     return {
+        "policy_version": None if version is None else int(version),
+        "language": str(ledger.get("language") or "") or None,
         "masks_n": int(counts.get("masks_n") or 0),
         "masks_final_n": int(counts.get("final_masks_n") or 0),
+        "policy_masks_n": int(counts.get("policy_masks_n") or 0),
         "task_words_n": int(counts.get("task_words_n") or 0),
         **{f"{state}_n": int(counts.get(f"{state}_n") or 0) for state in LEDGER_STATES},
         **{f"{state}_categories": [str(name) for name in categories.get(state) or ()] for state in LEDGER_STATES},
+        **{f"released_{kind}_n": int(counts.get(f"released_{kind}_n") or 0) for kind in LEDGER_RELEASE_KINDS},
+        **{f"locked_{lock}_n": int(counts.get(f"locked_{lock}_n") or 0) for lock in LEDGER_LOCKS},
+        "person_name_masked_n": int(counts.get("person_name_masked_n") or 0),
+        "name_release_proposed_n": int(counts.get("name_release_proposed_n") or 0),
         "propagated_n": int(counts.get("propagated_n") or 0),
         "unplaced_n": int(counts.get("unplaced_n") or 0),
         "unplaced_open": any(
             str(finding.get("state")) in UNPLACED_SETTLES_NOTHING for finding in ledger.get("unplaced_findings") or ()
         ),
         "redact_agreed_n": int(counts.get("proposals_masked_n") or 0)
-        + int(counts.get("proposals_placed_unplaced_n") or 0),
+        + int(counts.get("proposals_placed_unplaced_n") or 0)
+        + int(counts.get("proposals_country_masked_n") or 0),
+        "redact_by_kind_n": int(counts.get("proposals_by_kind_n") or 0),
         "redact_new_n": int(counts.get("proposals_new_n") or 0),
-        "condition_review": bool(ledger.get("human_review")),
-        "condition_review_kind": ledger.get("human_review_kind") or None,
+        "conditions_n": int(counts.get("conditions_n") or 0),
         **{f"{kind}_condition_n": int(counts.get(f"{kind}_condition_n") or 0) for kind in CONDITION_KINDS},
         "cohort_diagnoses": [str(name) for name in ledger.get("cohort_diagnoses") or ()],
     }
@@ -1539,18 +1571,25 @@ def _fields() -> list[pa.Field]:
         pa.field("residue_content", pa.bool_()),
         pa.field("scan_ran", pa.bool_()),
         pa.field("scanned_by", pa.list_(pa.string())),
+        pa.field("policy_version", pa.int32()),
+        pa.field("language", pa.string()),
         pa.field("masks_n", pa.int32()),
         pa.field("masks_final_n", pa.int32()),
+        pa.field("policy_masks_n", pa.int32()),
         pa.field("task_words_n", pa.int32()),
         *[pa.field(f"{state}_n", pa.int32()) for state in LEDGER_STATES],
         *[pa.field(f"{state}_categories", pa.list_(pa.string())) for state in LEDGER_STATES],
+        *[pa.field(f"released_{kind}_n", pa.int32()) for kind in LEDGER_RELEASE_KINDS],
+        *[pa.field(f"locked_{lock}_n", pa.int32()) for lock in LEDGER_LOCKS],
+        pa.field("person_name_masked_n", pa.int32()),
+        pa.field("name_release_proposed_n", pa.int32()),
         pa.field("propagated_n", pa.int32()),
         pa.field("unplaced_n", pa.int32()),
         pa.field("unplaced_open", pa.bool_()),
         pa.field("redact_agreed_n", pa.int32()),
+        pa.field("redact_by_kind_n", pa.int32()),
         pa.field("redact_new_n", pa.int32()),
-        pa.field("condition_review", pa.bool_()),
-        pa.field("condition_review_kind", pa.string()),
+        pa.field("conditions_n", pa.int32()),
         *[pa.field(f"{kind}_condition_n", pa.int32()) for kind in CONDITION_KINDS],
         pa.field("cohort_diagnoses", pa.list_(pa.string())),
         pa.field("gate_node", pa.string()),

@@ -1091,6 +1091,13 @@ def test_the_ledger_columns_count_every_state(tmp_path: Path) -> None:
                     "unmasked_by_reviewer_n": 1,
                     "unmasked_by_trim_n": 2,
                     "released_by_kind_n": 3,
+                    "released_condition_n": 1,
+                    "released_kinship_n": 2,
+                    "locked_person_n": 1,
+                    "person_name_masked_n": 1,
+                    "policy_masks_n": 1,
+                    "conditions_n": 1,
+                    "proposals_by_kind_n": 1,
                     "proposed_by_reviewer_n": 2,
                 },
                 categories={
@@ -1100,8 +1107,8 @@ def test_the_ledger_columns_count_every_state(tmp_path: Path) -> None:
                     "released_by_kind": ["DATE_TIME"],
                     "proposed_by_reviewer": ["CONDITION"],
                 },
-                human_review=True,
-                human_review_kind="cohort",
+                policy_version=7,
+                language="es",
                 cohort_diagnoses=["parkinsons_disease"],
             )
             + "\n"
@@ -1109,13 +1116,15 @@ def test_the_ledger_columns_count_every_state(tmp_path: Path) -> None:
     row = rv.extract(run_root, tmp_path)
     assert row is not None
     assert (row["masks_n"], row["masks_final_n"], row["task_words_n"]) == (2, 1, 7)
-    assert (row["condition_review_kind"], row["cohort_condition_n"], row["other_condition_n"]) == ("cohort", 1, 0)
+    assert (row["conditions_n"], row["cohort_condition_n"], row["other_condition_n"]) == (1, 1, 0)
+    assert (row["policy_version"], row["language"], row["policy_masks_n"]) == (7, "es", 1)
+    assert (row["released_condition_n"], row["released_kinship_n"], row["locked_person_n"]) == (1, 2, 1)
+    assert (row["person_name_masked_n"], row["redact_by_kind_n"]) == (1, 1)
     assert row["cohort_diagnoses"] == ["parkinsons_disease"]
     assert (row["masked_n"], row["unmasked_by_reviewer_n"], row["unmasked_by_trim_n"]) == (1, 1, 2)
     assert row["proposed_by_reviewer_n"] == 2
     assert (row["released_by_kind_n"], row["released_by_kind_categories"]) == (3, ["DATE_TIME"])
     assert row["proposed_by_reviewer_categories"] == ["CONDITION"]
-    assert row["condition_review"] is True
     rv.to_table([row])
 
 
@@ -1127,8 +1136,9 @@ def test_no_ledger_leaves_every_ledger_column_null(tmp_path: Path) -> None:
         "masks_n",
         "masked_n",
         "proposed_by_reviewer_categories",
-        "condition_review",
-        "condition_review_kind",
+        "conditions_n",
+        "policy_version",
+        "person_name_masked_n",
         "cohort_diagnoses",
     ):
         assert row[column] is None
