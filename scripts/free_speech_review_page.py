@@ -72,8 +72,10 @@ RELEASE_ORDER = (
 """The graph's own release axis, most permissive first, plus the page's own ``unrecorded``."""
 
 EXTRACT_SCHEMA = "senselab.fsreview.extract"
-EXTRACT_VERSION = 9
-"""7 carries each span's trim reason and condition kind, and a single ASR stream where the consensus is empty.
+EXTRACT_VERSION = 10
+"""10 carries each span's policy lock or release kind, the listed conditions, and the names awaiting
+review (redaction policy v7). 7 carries each span's trim reason and condition kind, and a single ASR
+stream where the consensus is empty.
 
 6 was the first version whose marks are the fold's PII ledger: every span and each word's state.
 ``specs/20260927-pii-span-ledger/design.md``. An older extract's marks are the detectors' labels alone.
@@ -201,15 +203,28 @@ MASKED = "masked"
 UNMASKED_BY_REVIEWER = "unmasked_by_reviewer"
 UNMASKED_BY_TRIM = "unmasked_by_trim"
 RELEASED_BY_KIND = "released_by_kind"
+RELEASED_CONDITION = "released_condition"
+UNMASKED_BY_APPROVAL = "unmasked_by_approval"
 PROPOSED_BY_REVIEWER = "proposed_by_reviewer"
 DETECTED = "detected"
-MARK_STATES = (MASKED, UNMASKED_BY_REVIEWER, RELEASED_BY_KIND, PROPOSED_BY_REVIEWER, UNMASKED_BY_TRIM, DETECTED)
-"""Every state a mark can carry: the ledger's five, and a detector finding no mask covers."""
+MARK_STATES = (
+    MASKED,
+    UNMASKED_BY_REVIEWER,
+    UNMASKED_BY_APPROVAL,
+    RELEASED_CONDITION,
+    RELEASED_BY_KIND,
+    PROPOSED_BY_REVIEWER,
+    UNMASKED_BY_TRIM,
+    DETECTED,
+)
+"""Every state a mark can carry: the ledger's seven, and a detector finding no mask covers."""
 
 MARK_COLOURS = {
     MASKED: "red",
     PROPOSED_BY_REVIEWER: "red",
     UNMASKED_BY_REVIEWER: "green",
+    UNMASKED_BY_APPROVAL: "green",
+    RELEASED_CONDITION: "green",
     RELEASED_BY_KIND: "green",
     DETECTED: "green",
     UNMASKED_BY_TRIM: "orange",
@@ -229,8 +244,12 @@ TRIM_NOT_CONTENT = "n"
 """Why the trim unmasked a word: only the padding reached it, or it is not a content word."""
 
 _STATE_PRIORITY = {
-    state: rank for rank, state in enumerate((MASKED, UNMASKED_BY_REVIEWER, RELEASED_BY_KIND, UNMASKED_BY_TRIM))
+    state: rank
+    for rank, state in enumerate(
+        (MASKED, UNMASKED_BY_REVIEWER, UNMASKED_BY_APPROVAL, RELEASED_CONDITION, RELEASED_BY_KIND, UNMASKED_BY_TRIM)
+    )
 }
+CONDITION = "CONDITION"
 
 
 def ledger_of(view: StoreView) -> dict[str, Any] | None:
@@ -275,15 +294,16 @@ def word_states(ledger: Mapping[str, Any] | None) -> dict[str, dict[str, Any]]:
         ledger: The ``pii_ledger`` attributes, or None.
 
     Returns:
-        Word id to ``{s, c, nm, pr, hr, tr, k, dx, o}``: the state, the one category, whether a
-        ``release`` entry named it, whether a ``redact`` entry named it, whether that entry routes to
-        human review, why the trim unmasked it (:data:`TRIM_PADDING`, :data:`TRIM_NOT_CONTENT` or empty),
-        a human-review entry's condition kind and cohort diagnosis, and ``o``: the other spans of a
+        Word id to ``{s, c, nm, pr, hr, tr, pk, k, dx, o}``: the state, the one category, whether a
+        ``release`` entry named it, whether a ``redact`` entry named it, ``hr`` (always 0 since policy v7,
+        which routes no condition to human review), why the trim unmasked it (:data:`TRIM_PADDING`,
+        :data:`TRIM_NOT_CONTENT` or empty), the policy's lock on a masked word or its release kind on a
+        released one, a listed condition's kind and cohort diagnosis, and ``o``: the other spans of a
         different category on the same word, each ``{c, s, hr, k, dx}``, rendered as their own marks.
         A word two masks cover takes the tighter state, masked first. Only a ``redact`` entry proposing
-        to hide more (agreement ``new``) marks a word no mask hides; an entry agreeing with the masks, or
-        naming the task's own words, leaves such a word unmarked, as the release leaves it visible. A
-        proposal marks only its content words (:func:`proposal_content_ids`).
+        to hide more (agreement ``new``) marks a word no mask hides; an entry agreeing with the masks
+        leaves such a word unmarked, as the release leaves it visible. A proposal marks only its content
+        words (:func:`proposal_content_ids`). A listed condition marks its words :data:`RELEASED_CONDITION`.
     """
     states: dict[str, dict[str, Any]] = {}
     for mask in (ledger or {}).get("masks") or ():
@@ -303,15 +323,36 @@ def word_states(ledger: Mapping[str, Any] | None) -> dict[str, dict[str, Any]]:
                 "pr": 0,
                 "hr": 0,
                 "tr": trim,
+                "pk": str(word.get("locked") or word.get("kind") or ""),
                 "k": "",
                 "dx": "",
                 "o": [],
             }
+    for condition in (ledger or {}).get("conditions") or ():
+        kind = str(condition.get("condition_kind") or "")
+        diagnosis = str(condition.get("cohort_diagnosis") or "")
+        for word_id in condition.get("word_ids") or ():
+            held = states.get(str(word_id))
+            if held is None:
+                states[str(word_id)] = {
+                    "s": RELEASED_CONDITION,
+                    "c": [CONDITION],
+                    "nm": 0,
+                    "pr": 0,
+                    "hr": 0,
+                    "tr": "",
+                    "pk": "",
+                    "k": kind,
+                    "dx": diagnosis,
+                    "o": [],
+                }
+            else:
+                held["k"], held["dx"] = held["k"] or kind, held["dx"] or diagnosis
     for proposal in (ledger or {}).get("proposals") or ():
         category = str(proposal.get("category") or "")
-        review = int(bool(proposal.get("human_review")))
-        kind = str(proposal.get("condition_kind") or "")
-        diagnosis = str(proposal.get("cohort_diagnosis") or "")
+        review = 0
+        kind = ""
+        diagnosis = ""
         new = str(proposal.get("agreement") or "new") == "new"
         for word_id in proposal_content_ids(proposal):
             held = states.get(str(word_id))
@@ -325,6 +366,7 @@ def word_states(ledger: Mapping[str, Any] | None) -> dict[str, dict[str, Any]]:
                     "pr": 1,
                     "hr": review,
                     "tr": "",
+                    "pk": "",
                     "k": kind,
                     "dx": diagnosis,
                     "o": [],
@@ -455,6 +497,7 @@ def _detected_label(categories: Sequence[str]) -> dict[str, Any]:
         "pr": 0,
         "hr": 0,
         "tr": "",
+        "pk": "",
         "k": "",
         "dx": "",
         "o": [{"c": category, "s": DETECTED, "hr": 0, "k": "", "dx": ""} for category in rest],
@@ -525,6 +568,7 @@ def marks_of(
                 "pr": int(label.get("pr") or 0),
                 "hr": int(label.get("hr") or 0),
                 "tr": str(label.get("tr") or ""),
+                "pk": str(label.get("pk") or ""),
                 "kd": str(label.get("k") or ""),
                 "dx": str(label.get("dx") or ""),
                 "d": [str(finding.attributes.get("source") or "") for finding in contributing],
@@ -723,8 +767,10 @@ def recording_record(run_root: Path, families: frozenset[str]) -> dict[str, Any]
         "scan": scan_state(scan),
         "res": residue,
         "led": None if ledger is None else dict((ledger.get("counts") or {})),
-        "hk": None if ledger is None else ledger.get("human_review_kind"),
+        "hk": condition_kind(ledger),
         "cd": [] if ledger is None else [str(name) for name in ledger.get("cohort_diagnoses") or ()],
+        "nq": int(bool(((ledger or {}).get("counts") or {}).get("person_name_masked_n"))),
+        "np": [] if ledger is None else [str(text) for text in ledger.get("name_release_proposed") or ()],
         "ss": None if stream is None else {"src": stream["src"], "n": stream["n"]},
         "w": words,
         "f": marks,
@@ -743,6 +789,21 @@ def recording_record(run_root: Path, families: frozenset[str]) -> dict[str, Any]
         "nl": lexical,
         "ch": characters,
     }
+
+
+def condition_kind(ledger: Mapping[str, Any] | None) -> str | None:
+    """Which kind of condition the reviewer listed: ``other`` where any is outside the cohorts, else ``cohort``.
+
+    Args:
+        ledger: The ``pii_ledger`` attributes, or None.
+
+    Returns:
+        ``other``, ``cohort``, or None where the ledger lists no condition.
+    """
+    kinds = {str(condition.get("condition_kind") or "") for condition in (ledger or {}).get("conditions") or ()}
+    if not kinds:
+        return None
+    return "other" if "other" in kinds else "cohort"
 
 
 def tristate(value: Any) -> int:  # noqa: ANN401 -- a store attribute is any type
@@ -1079,8 +1140,9 @@ def card_account(row: Mapping[str, Any]) -> dict[str, Any]:
 
     Returns:
         The release ground and the deciding reason, the scan state, the residue and the words it
-        holds, the ledger's counts, the condition-review kind and diagnoses, and the single stream
-        read where the consensus carries no words.
+        holds, the ledger's counts, the listed conditions' kind and diagnoses, the names awaiting a
+        human's review and any whose release the reviewer proposed, and the single stream read where
+        the consensus carries no words.
     """
     residue = row.get("res")
     words = row.get("w") or []
@@ -1095,6 +1157,8 @@ def card_account(row: Mapping[str, Any]) -> dict[str, Any]:
         "led": row.get("led"),
         "hk": row.get("hk") or "",
         "cd": list(row.get("cd") or ()),
+        "nq": int(row.get("nq") or 0),
+        "np": list(row.get("np") or ()),
         "ss": row.get("ss"),
         "lang": row.get("lang") or "",
     }
@@ -1111,7 +1175,8 @@ class Corpus:
         categories: PII category to how many marks carry it.
         detectors: Detector name to how many marks it contributed to.
         reviewer: Reviewer state to how many recordings carry it.
-        review_kinds: Condition-review kind (``cohort``, ``other`` or ``none``) to how many recordings.
+        review_kinds: Listed-condition kind (``cohort``, ``other`` or ``none``) to how many recordings.
+        name_queue: ``awaiting`` (a person's name stays masked) or ``none`` to how many recordings.
         single_streams: The recogniser read where the consensus is empty, to how many recordings.
         recordings: How many recordings in total.
         characters: How many transcript characters in total.
@@ -1128,6 +1193,7 @@ class Corpus:
     detectors: Counter[str] = field(default_factory=Counter)
     reviewer: Counter[str] = field(default_factory=Counter)
     review_kinds: Counter[str] = field(default_factory=Counter)
+    name_queue: Counter[str] = field(default_factory=Counter)
     single_streams: Counter[str] = field(default_factory=Counter)
     recordings: int = 0
     characters: int = 0
@@ -1144,6 +1210,7 @@ class Corpus:
         self.participants.setdefault(str(row["p"]), []).append(row)
         self.reviewer[_llm_status(row)] += 1
         self.review_kinds[str(row.get("hk") or "none")] += 1
+        self.name_queue["awaiting" if row.get("nq") else "none"] += 1
         if row.get("ss"):
             self.single_streams[str(row["ss"]["src"])] += 1
         self.families[str(row["fam"])] += 1
@@ -1243,6 +1310,7 @@ def _mark(mark: dict[str, Any], run: Sequence[Sequence[Any]]) -> str:
         f'<mark class="pii u-{colour}" data-k="{html.escape(str(mark["k"]))}" data-c="{shown}" '
         f'data-s="{html.escape(state)}" data-nm="{int(mark.get("nm") or 0)}" data-pr="{int(mark.get("pr") or 0)}" '
         f'data-hr="{int(mark.get("hr") or 0)}" data-tr="{html.escape(str(mark.get("tr") or ""))}" '
+        f'data-pk="{html.escape(str(mark.get("pk") or ""))}" '
         f'data-kd="{html.escape(str(mark.get("kd") or ""))}" data-dx="{html.escape(str(mark.get("dx") or ""))}" '
         f'data-d="{detectors}" data-brk="{mark["brk"]}" data-tx="{mark["tx"]}" '
         f'data-nt="{mark["nt"]}" data-stim="{mark["stim"]}" tabindex="0">{category}{inner}</mark>'
@@ -1325,6 +1393,7 @@ def recording_html(row: dict[str, Any]) -> str:
         f'data-lang="{html.escape(language_name(str(row.get("lang") or "")))}" '
         f'data-stem="{html.escape(stem)}" data-nf="{len(marks)}" '
         f'data-hk="{html.escape(str(row.get("hk") or "none"))}" '
+        f'data-nq="{"awaiting" if row.get("nq") else "none"}" '
         f'data-llm="{html.escape(_llm_status(row))}">'
         f'<header><span class="task">{html.escape(str(row["task"]))}</span>'
         f'<span class="fam">{html.escape(str(row["fam"]))}</span>'
@@ -1536,6 +1605,10 @@ def render(corpus: Corpus, title: str) -> str:
             f'<option value="{value}">{html.escape(label)} ({corpus.review_kinds.get(value, 0)})</option>'
             for value, label in CONDITION_SECTIONS
         ),
+        names="".join(
+            f'<option value="{value}">{html.escape(label)} ({corpus.name_queue.get(value, 0)})</option>'
+            for value, label in NAME_SECTIONS
+        ),
         jump=jump,
         sections=sections,
         errors=errors,
@@ -1551,11 +1624,17 @@ LEGEND_HTML = "\n".join(
 """The legend: three colours."""
 
 CONDITION_SECTIONS = (
-    ("cohort", "study cohort condition"),
-    ("other", "other condition"),
-    ("none", "no condition held for review"),
+    ("cohort", "lists a study cohort condition"),
+    ("other", "lists another condition"),
+    ("none", "lists no condition"),
 )
-"""The condition-review filter: the study's own conditions apart from every other."""
+"""The listed-condition filter: the study's own conditions apart from every other. None is masked."""
+
+NAME_SECTIONS = (
+    ("awaiting", "a person's name awaits review"),
+    ("none", "no name masked"),
+)
+"""The names-review queue: recordings keeping a person's name masked until a human approves its release."""
 
 
 VERDICTS = (
@@ -1886,6 +1965,7 @@ const txSel=document.getElementById('tx');
 const revSel=document.getElementById('rev');
 const llmSel=document.getElementById('llm');
 const hkSel=document.getElementById('hkf');
+const nqSel=document.getElementById('nqf');
 const minNf=document.getElementById('minnf');
 const minNt=document.getElementById('minnt');
 const maxNt=document.getElementById('maxnt');
@@ -2120,7 +2200,7 @@ function apply(){
   const fams=checked('fam-f'), rels=checked('rel-f'), langs=checked('lang-f');
   const cats=checked('cat-f'), dets=checked('det-f');
   const fired=firedSel.value, brk=brkSel.value, tx=txSel.value, rev=revSel.value;
-  const flg=flagSel.value, llmWant=llmSel.value, dec=decSel.value, hk=hkSel.value;
+  const flg=flagSel.value, llmWant=llmSel.value, dec=decSel.value, hk=hkSel.value, nq=nqSel.value;
   const nf=+minNf.value||0;
   const lo=+minNt.value||1, hi=+maxNt.value||9999;
   const narrowed=!allChecked('cat-f')||!allChecked('det-f')||brk!=='any'||tx!=='any'
@@ -2143,6 +2223,7 @@ function apply(){
         ok=llmWant==='ran'?(st==='absent'||st==='clean'||st==='flagged'):st===llmWant;
       }
       if(ok&&hk!=='any') ok=r.dataset.hk===hk;
+      if(ok&&nq!=='any') ok=r.dataset.nq===nq;
       if(ok&&fired!=='any') ok=r.dataset.fired===fired;
       if(ok&&nf) ok=+r.dataset.nf>=nf;
       if(ok&&needle) ok=haystack.get(r).includes(needle);
@@ -2313,10 +2394,17 @@ const STATE_WHY={masked:'masked in the released copy',
   proposed_by_reviewer:'the reviewer proposes masking it; no mask hides it',
   unmasked_by_reviewer:'REDACT masked it and a reviewer release entry named it, so it is shown',
   unmasked_by_trim:'a mask covered it and it is shown',
-  released_by_kind:'a time of day or a duration, shown whatever the reviewer said',
+  released_by_kind:'released by kind, whatever the reviewer said',
+  released_condition:'a health condition the reviewer listed; conditions are never masked',
+  unmasked_by_approval:'a person\\'s name a human approved for release',
   detected:'a detector marked it and no mask covers it, so it is shown'};
 const TRIM_WHY={p:'only the padding reached it',n:'it is not a content word'};
 const KIND_WHY={cohort:'a condition the study recruits for',other:'a condition outside the study\\'s cohorts'};
+const POLICY_WHY={date:'a date element the policy always masks',age:'an age the policy always masks',
+  place:'a place below a country the policy always masks',
+  person:'a person\\'s name, masked until a human approves its release',
+  time:'a time of day, weekday, relative or length of time',kinship:'a relationship word',
+  country:'a country, released unless the reviewer asks to mask it'};
 function cardAccount(a,card){
   const out=['<h4>on this card</h4>'];
   if(a.why)out.push('<p class="note">deciding reason: '+esc(a.why)+'</p>');
@@ -2347,13 +2435,17 @@ function cardAccount(a,card){
     out.push('<p class="note">no PII ledger: the fold that wrote this store predates it.</p>');
   }
   if(a.hk&&a.hk!=='none')
-    out.push('<p>condition review: <b>'+esc(KIND_WHY[a.hk]||a.hk)+'</b>'
+    out.push('<p>conditions listed, never masked: <b>'+esc(KIND_WHY[a.hk]||a.hk)+'</b>'
       +(a.cd&&a.cd.length?' ('+esc(a.cd.join(', '))+')':'')+'.</p>');
+  if(a.nq)
+    out.push('<p>names review: <b>a person\\'s name stays masked until a human approves it</b>'
+      +(a.np&&a.np.length?'; the reviewer proposes releasing '+esc(a.np.join(', ')):'')+'.</p>');
   const rows=[];
   for(const m of card.querySelectorAll('mark.pii')){
     const words=markWords(m);
     const bits=[STATE_WHY[m.dataset.s]||m.dataset.s];
     if(m.dataset.tr)bits.push(TRIM_WHY[m.dataset.tr]||m.dataset.tr);
+    if(m.dataset.pk)bits.push(POLICY_WHY[m.dataset.pk]||m.dataset.pk);
     if(m.dataset.nm==='1'&&m.dataset.s!=='unmasked_by_reviewer')bits.push(m.dataset.s==='unmasked_by_trim'?'a reviewer release entry quoted it, but it is shown because the trim released it':'a reviewer release entry quoted it');
     if(m.dataset.pr==='1'&&m.dataset.s==='masked')bits.push('the reviewer also proposes masking it');
     if(m.dataset.kd)bits.push((KIND_WHY[m.dataset.kd]||m.dataset.kd)+(m.dataset.dx?' ('+m.dataset.dx+')':''));
@@ -2595,7 +2687,7 @@ document.addEventListener('keydown',e=>{if(e.key==='Escape'&&!whyBox.hidden)clos
 
 for(const el of document.querySelectorAll('.fam-f,.rel-f,.lang-f,.cat-f,.det-f'))
   el.addEventListener('change',apply);
-for(const el of [firedSel,brkSel,txSel,revSel,flagSel,decSel,llmSel,hkSel,minNf,minNt,maxNt])
+for(const el of [firedSel,brkSel,txSel,revSel,flagSel,decSel,llmSel,hkSel,nqSel,minNf,minNt,maxNt])
   el.addEventListener('change',apply);
 let timer;q.addEventListener('input',()=>{clearTimeout(timer);timer=setTimeout(apply,140);});
 for(const [id,cls] of FACET_TOGGLES)
@@ -2604,7 +2696,7 @@ document.getElementById('all').addEventListener('click',e=>{
   e.preventDefault();
   for(const el of document.querySelectorAll('.fam-f,.rel-f,.lang-f,.cat-f,.det-f'))el.checked=true;
   firedSel.value='any';brkSel.value='any';txSel.value='any';revSel.value='any';flagSel.value='any';
-  decSel.value='any';llmSel.value='any';hkSel.value='any';
+  decSel.value='any';llmSel.value='any';hkSel.value='any';nqSel.value='any';
   minNf.value='';minNt.value='';maxNt.value='';q.value='';apply();});
 const rail=document.getElementById('rail');
 const railToggle=document.getElementById('railtoggle');
@@ -2653,7 +2745,9 @@ findings</div>
 <fieldset><legend>release
 <button id="allrel" type="button">all</button><button id="norel" type="button">none</button></legend>
 <div class="facets">{releases}</div></fieldset>
-<fieldset><legend>condition review</legend>
+<fieldset><legend>names review</legend>
+<select id="nqf"><option value="any">any recording</option>{names}</select></fieldset>
+<fieldset><legend>conditions listed (never masked)</legend>
 <select id="hkf"><option value="any">any recording</option>{conditions}</select></fieldset>
 <fieldset><legend>family
 <button id="allfam" type="button">all</button><button id="nofam" type="button">none</button></legend>

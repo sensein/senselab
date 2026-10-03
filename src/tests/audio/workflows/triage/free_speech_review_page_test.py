@@ -1641,13 +1641,19 @@ def test_the_speaker_reading_is_rendered_outside_the_pii_ladder() -> None:
     assert speakers > ladder_ends, "the speaker reading must not sit inside a pii-status branch"
 
 
-def _ledger(masks: list[dict[str, Any]], proposals: list[dict[str, Any]], counts: dict[str, int]) -> dict[str, Any]:
+def _ledger(
+    masks: list[dict[str, Any]],
+    proposals: list[dict[str, Any]],
+    counts: dict[str, int],
+    **extra: Any,  # noqa: ANN401 -- further ledger fields, as VERDICT writes them
+) -> dict[str, Any]:
     """The fold's ``pii_ledger`` measurement.
 
     Args:
         masks: The ledger's masks, each carrying its words and their states.
         proposals: The reviewer's placed ``redact`` entries.
         counts: The per-state counts.
+        **extra: Further ledger fields: ``conditions``, ``name_release_proposed``.
 
     Returns:
         The JSONL record.
@@ -1655,7 +1661,7 @@ def _ledger(masks: list[dict[str, Any]], proposals: list[dict[str, Any]], counts
     return _entity(
         "measurement-ledger",
         "measurement",
-        {"name": "pii_ledger", "masks": masks, "proposals": proposals, "counts": counts},
+        {"name": "pii_ledger", "masks": masks, "proposals": proposals, "counts": counts, **extra},
     )
 
 
@@ -1680,10 +1686,14 @@ def test_the_marks_are_the_ledgers_spans_each_with_its_state(tmp_path: Path) -> 
                     ],
                 }
             ],
-            proposals=[{"category": "CONDITION", "word_ids": ["word-2", "word-3"], "human_review": True}],
-            counts={"masked_n": 1, "unmasked_by_trim_n": 1, "proposed_by_reviewer_n": 2},
+            proposals=[],
+            counts={"masked_n": 1, "unmasked_by_trim_n": 1, "person_name_masked_n": 1},
+            conditions=[
+                {"word_ids": ["word-2", "word-3"], "condition_kind": "cohort", "cohort_diagnosis": "essential_tremor"}
+            ],
+            name_release_proposed=["Alice"],
         ),
-        _verdict("withheld"),
+        _verdict("release_with_redaction"),
     ]
     row = page.recording_record(_store(tmp_path, _FAMILY_STEM, records), page.free_response_families())
     assert row is not None
@@ -1691,14 +1701,16 @@ def test_the_marks_are_the_ledgers_spans_each_with_its_state(tmp_path: Path) -> 
     assert states == [
         (["DATE_TIME"], "unmasked_by_trim", [0, 1]),
         (["DATE_TIME"], "masked", [1, 2]),
-        (["CONDITION"], "proposed_by_reviewer", [2, 4]),
+        (["CONDITION"], "released_condition", [2, 4]),
         (["DATE_TIME"], "detected", [4, 5]),
     ]
     assert row["f"][1]["nm"] == 1
-    assert row["f"][2]["hr"] == 1
+    assert (row["f"][2]["kd"], row["f"][2]["dx"]) == ("cohort", "essential_tremor")
+    assert (row["hk"], row["nq"], row["np"]) == ("cohort", 1, ["Alice"])
     card = page.recording_html(row)
+    assert 'data-nq="awaiting"' in card
     text = card[card.index('<p class="text">') : card.index("</p>", card.index('<p class="text">'))]
-    assert 'class="pii u-red"' in text and 'data-s="proposed_by_reviewer"' in text
+    assert 'class="pii u-red"' in text and 'data-s="released_condition"' in text
     assert 'class="pii u-orange"' in text and 'class="pii u-green"' in text
     visible = re.sub(r"<[^>]+>", " ", text)
     for inline in ("reviewer would unmask", "human review", "proposes", "masked", "padding", "trim"):
@@ -1739,8 +1751,8 @@ def test_a_word_released_by_kind_is_a_green_labelled_mark(tmp_path: Path) -> Non
     assert '<span class="cat">DATE_TIME</span>' in text
 
 
-def test_a_reviewer_condition_over_a_detector_mask_is_two_single_category_marks(tmp_path: Path) -> None:
-    """r7: a PERSON mask with a reviewer CONDITION proposal on its words is two marks, not "PERSON+CONDITION"."""
+def test_a_condition_over_a_detector_mask_is_released(tmp_path: Path) -> None:
+    """Policy v7: a PERSON mask on "Parkinson" the reviewer listed as a condition is shown, with its kind."""
     records = [
         _word(0, "Parkinson"),
         _word(1, "disease"),
@@ -1751,36 +1763,37 @@ def test_a_reviewer_condition_over_a_detector_mask_is_two_single_category_marks(
                 {
                     "category": "PERSON",
                     "words": [
-                        {"id": "word-0", "text": "Parkinson", "state": "masked", "named": False, "content": True}
+                        {
+                            "id": "word-0",
+                            "text": "Parkinson",
+                            "state": "released_condition",
+                            "named": False,
+                            "content": True,
+                        }
                     ],
                 }
             ],
-            proposals=[
+            proposals=[],
+            counts={"released_condition_n": 1},
+            conditions=[
                 {
-                    "category": "CONDITION",
                     "word_ids": ["word-0", "word-1"],
-                    "human_review": True,
                     "condition_kind": "cohort",
                     "cohort_diagnosis": "parkinsons_disease",
                 }
             ],
-            counts={"masked_n": 1, "proposed_by_reviewer_n": 2},
         ),
-        _verdict("withheld"),
+        _verdict("release_without_redaction"),
     ]
     row = page.recording_record(_store(tmp_path, _FAMILY_STEM, records), page.free_response_families())
     assert row is not None
-    assert [(mark["c"], mark["s"], [o["c"] for o in mark["o"]]) for mark in row["f"]] == [
-        (["PERSON"], "masked", ["CONDITION"]),
-        (["CONDITION"], "proposed_by_reviewer", []),
+    assert [(mark["c"], mark["s"]) for mark in row["f"]] == [
+        (["PERSON"], "released_condition"),
+        (["CONDITION"], "released_condition"),
     ]
     card = page.recording_html(row)
     text = card[card.index('<p class="text">') : card.index("</p>", card.index('<p class="text">'))]
-    assert re.findall(r'data-c="([^"]*)"', text) == ["PERSON", "CONDITION", "CONDITION"]
-    assert all("+" not in value for value in re.findall(r'data-c="([^"]*)"', text))
-    assert all("+" not in value for value in re.findall(r'<span class="cat">([^<]*)</span>', text))
-    inner = text[text.index('data-c="PERSON"') :]
-    assert 'data-s="proposed_by_reviewer"' in inner[: inner.index("</mark>")], "the proposal nests inside the mask"
+    assert 'class="pii u-red"' not in text
     assert 'data-kd="cohort"' in text and 'data-dx="parkinsons_disease"' in text
 
 
