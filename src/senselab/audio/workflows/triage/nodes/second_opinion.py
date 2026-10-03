@@ -69,6 +69,7 @@ def settings(config: TriageConfig) -> dict[str, Any]:
         "manifest_digest",
         "seed",
         "timeout_s",
+        "load_timeout_s",
         "workers",
         "max_consecutive_errors",
     )
