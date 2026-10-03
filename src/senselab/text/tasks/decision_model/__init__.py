@@ -1,7 +1,7 @@
 """Decision models: small local models that answer typed questions about a text with probabilities.
 
-The first is Bespoke Labs' Nimble, served by Ollama, which triage uses as a second opinion beside its
-instruction-tuned reviewer. :mod:`.ollama` runs a pinned model; :mod:`.second_opinion` holds the
+Triage uses Cloudflare's Clef, served by Ollama, as a second opinion beside its instruction-tuned
+reviewer. :mod:`.ollama` runs a pinned model; :mod:`.second_opinion` holds the
 questions triage asks and reads the answers back.
 """
 

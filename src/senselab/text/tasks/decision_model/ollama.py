@@ -1,10 +1,10 @@
 """A pinned Ollama model, served for the length of one job.
 
-An Ollama tag is mutable: ``nimble:latest`` names whatever the registry last pushed under it. A load
+An Ollama tag is mutable: ``clef:27b`` names whatever the registry last pushed under it. A load
 is therefore pinned by digest -- the manifest file, the image config and the model layer's blob --
 and :func:`verify_pin` refuses to serve a store whose manifest or any layer does not carry them.
 The blob is hashed in full once per host and the result remembered beside the cache, so a job does
-not re-read 9.5 GB to learn what an earlier job on the same file already established.
+not re-read the weights to learn what an earlier job on the same file already established.
 
 :class:`OllamaServer` starts ``ollama serve`` on a free loopback port with the pinned model store,
 offline (it never pulls), and stops it on exit. With ``require_gpu`` it loads the model before the
@@ -44,7 +44,7 @@ class OllamaPin:
     """Which model to serve, and the digests that make it that model.
 
     Attributes:
-        name: The library model name, e.g. ``nimble``.
+        name: The library model name, e.g. ``clef``.
         tag: The tag the manifest is filed under, e.g. ``9b``.
         blob_digest: ``sha256:<64 hex>`` of the model-weights layer.
         config_digest: ``sha256:<64 hex>`` of the manifest's image config.
