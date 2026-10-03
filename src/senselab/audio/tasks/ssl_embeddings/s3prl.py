@@ -29,6 +29,8 @@ _S3PRL_REQUIREMENTS = [
     "soundfile",
 ]
 _S3PRL_PYTHON = "3.11"
+# torch<2.5 has no wheel on the cu126/cu128 indexes; cu124 carries 2.4.1.
+_S3PRL_MAX_CUDA_VERSION = (12, 4)
 
 # Worker script for S3PRL embedding extraction — runs inside the isolated venv
 _S3PRL_WORKER_SCRIPT = r"""
@@ -149,7 +151,9 @@ class S3PRLEmbeddingExtractor:
                     "Resample with resample_audios() first."
                 )
 
-        venv_dir = ensure_venv(_S3PRL_VENV, _S3PRL_REQUIREMENTS, python_version=_S3PRL_PYTHON)
+        venv_dir = ensure_venv(
+            _S3PRL_VENV, _S3PRL_REQUIREMENTS, python_version=_S3PRL_PYTHON, max_cuda_version=_S3PRL_MAX_CUDA_VERSION
+        )
         python = venv_python(venv_dir)
 
         with tempfile.TemporaryDirectory(prefix="senselab-s3prl-") as tmpdir:

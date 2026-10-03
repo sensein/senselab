@@ -1,0 +1,21 @@
+# Bounds the recording-vectors parquet uses to describe a recording for triage evaluation. None
+# feeds a triage decision. Derivations and the measured distributions behind each value:
+# specs/20261001-triage-evaluation-columns/design.md (all UNFITTED proposals).
+
+trim:
+  min_s: 1.0                 # non-task seconds (lead + tail outside the task extent) to count as trimmable
+  min_fraction: 0.2          # and at least this fraction of the recording
+
+frame:
+  window_s: 0.05             # frame RMS window
+  hop_s: 0.025               # frame hop
+  floor_percentile: 10       # frame-level percentile read as the noise floor
+  level_percentile: 95       # frame-level percentile read as the active level
+
+quality:
+  floor_max_dbfs: -50.0      # a plain-stream floor above this is a raw noise issue
+  snr_min_db: 25.0           # a plain-stream active-minus-floor below this is a raw low-SNR issue
+
+multi_speaker:
+  diarization_secondary_min_s: 1.0   # non-dominant diarized seconds inside the task extent to count as another speaker
+  separation_secondary_min_s: 1.0    # separated secondary-source seconds inside the task extent to count

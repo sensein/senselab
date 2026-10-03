@@ -1,0 +1,60 @@
+# Task content for a list task whose category is "Fruits": a listed word matching an item is the task's own
+# content, so the residue never hands it to the PII detectors and no mask covers it. A starting list,
+# not an exhaustive one: an item missing here is scanned as before. Derivation and counts are in
+# specs/20260929-task-check-alignment/design.md (section D).
+category: Fruits
+items:
+- apple
+- apricot
+- avocado
+- banana
+- blackberry
+- blueberry
+- breadfruit
+- cantaloupe
+- cherry
+- clementine
+- coconut
+- cranberry
+- currant
+- date
+- dragonfruit
+- durian
+- elderberry
+- fig
+- gooseberry
+- grape
+- grapefruit
+- guava
+- honeydew
+- jackfruit
+- kiwi
+- kumquat
+- lemon
+- lime
+- lychee
+- mandarin
+- mango
+- melon
+- mulberry
+- nectarine
+- olive
+- orange
+- papaya
+- passion fruit
+- peach
+- pear
+- persimmon
+- pineapple
+- plantain
+- plum
+- pomegranate
+- pomelo
+- quince
+- raisin
+- raspberry
+- starfruit
+- strawberry
+- tangerine
+- tomato
+- watermelon

@@ -53,6 +53,11 @@ def extract_health_measurements(
         that may be used for health monitoring.
             Metrics include:
 
+            - pitch_floor
+            - pitch_ceiling
+            - pitch_frames
+            - pitch_failed
+            - pitch_range_fell_back
             - speaking_rate
             - articulation_rate
             - phonation_ratio
@@ -69,6 +74,7 @@ def extract_health_measurements(
             - spectral_tilt
             - cepstral_peak_prominence_mean
             - cepstral_peak_prominence_std
+            - cepstral_peak_prominence_frames
             - mean_f1_loc
             - std_f1_loc
             - mean_b1_loc
@@ -101,6 +107,7 @@ def extract_health_measurements(
         'spectral_tilt': -0.004414961849917737,
         'cepstral_peak_prominence_mean': 7.0388038514346825,
         'cepstral_peak_prominence_std': 1.5672438573255245,
+        'cepstral_peak_prominence_frames': 2411.0,
         'mean_f1_loc': 613.4664268420964,
         'std_f1_loc': 303.98235579059883,
         'mean_b1_loc': 401.96960219300837,

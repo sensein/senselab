@@ -1,0 +1,51 @@
+# Task content for a list task whose category is "Drinks": a listed word matching an item is the task's own
+# content, so the residue never hands it to the PII detectors and no mask covers it. A starting list,
+# not an exhaustive one: an item missing here is scanned as before. Derivation and counts are in
+# specs/20260929-task-check-alignment/design.md (section D).
+category: Drinks
+items:
+- ale
+- beer
+- brandy
+- champagne
+- cider
+- cocktail
+- coffee
+- coke
+- cola
+- espresso
+- gin
+- hot chocolate
+- iced tea
+- juice
+- kombucha
+- latte
+- lemonade
+- liquor
+- martini
+- milk
+- milkshake
+- mocha
+- pepsi
+- port
+- punch
+- rum
+- sake
+- scotch
+- seltzer
+- smoothie
+- soda
+- sprite
+- tea
+- tequila
+- tonic
+- vodka
+- water
+- whiskey
+- whisky
+- wine
+- cappuccino
+- ginger ale
+- root beer
+- orange juice
+- apple juice

@@ -1,0 +1,13 @@
+# Vendored verbatim from the b2aiprep repository; senselab does not depend on b2aiprep at runtime.
+# Replace the files wholesale from a newer commit and update the commit below; never hand-edit them.
+repository: https://github.com/sensein/b2aiprep
+commit: 8c43256899fbceb776e5bc536ec3b12c0d044cfa
+files:
+  audio_task_descriptions.json: src/b2aiprep/prepare/resources/audio_task_descriptions.json
+  registry.json: src/b2aiprep/prepare/resources/task_registry/registry.json
+  task_instructions_curated.json: src/b2aiprep/prepare/resources/task_registry/task_instructions_curated.json
+  static_stimulus_es_419.json: src/b2aiprep/prepare/resources/task_registry/static_stimulus_es_419.json
+# What they are: audio_task_descriptions.json is the flat per-recording {instructions, prompts} the
+# BIDS sidecars were built from; registry.json maps task names to registry tasks (alias_index) with
+# their versions and speech types; task_instructions_curated.json corrects instructions the flat
+# file got wrong, per registry task and sometimes per recording.

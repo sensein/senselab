@@ -59,17 +59,9 @@ avoids flash-attn's multi-minute ``--no-build-isolation`` compile in every user'
 
 Requirements pinning
 ---------------------
-``qwen-tts==0.1.1`` is pinned exactly (the only version on PyPI at the time this
-backend was written; bump intentionally as Alibaba publishes new releases, same
-convention as ``qwen-asr==0.0.6`` in ``speech_to_text/qwen.py``). ``torch``/
-``torchaudio`` carry a **floor**, not an exact pin: ``unasdiff``'s
-``torch==2.6.0`` has no ``cu128`` wheel and failed outright on an H100 this session,
-which is exactly the failure a floor avoids — ``ensure_venv``'s CUDA-aware routing
-picks whichever compatible wheel actually exists on the host's index. Both are named
-explicitly (rather than left to ``qwen-tts``'s own unpinned ``torchaudio`` /
-transformers-transitive ``torch`` requirement) so Stage 1 of ``ensure_venv`` routes
-them through the matched CUDA index — see ``subprocess_venv.py``'s
-``_torch_install_specs`` docstring for why an implicit transitive pull is not enough.
+``qwen-tts==0.1.1`` is pinned exactly; ``torch``/``torchaudio`` carry a floor. The venv is
+installed from its committed lock (``utils/data/venv_locks/qwen-tts.txt``), which fixes every
+version; see ``specs/20261002-subprocess-venv-locks/design.md``.
 
 A partial-pin gap in the third-party wrapper (documented, not patched)
 -------------------------------------------------------------------------
