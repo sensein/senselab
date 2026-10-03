@@ -864,6 +864,7 @@ def _settle(store: ProvStore, config: TriageConfig, *, run_dir: Path, artifacts_
             run_dir=run_dir,
             artifacts_dir=artifacts_dir,
             bleep_hz=config.get("redaction.bleep_hz"),
+            fill=str(config.require("redaction.fill")),
         )
 
 

@@ -496,6 +496,7 @@ def run_triage(
                     run_dir=layout.run_dir,
                     artifacts_dir=layout.artifacts_dir,
                     bleep_hz=config.get("redaction.bleep_hz"),
+                    fill=str(config.require("redaction.fill")),
                 ),
             }
 

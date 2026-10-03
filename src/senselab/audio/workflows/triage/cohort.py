@@ -1,8 +1,8 @@
 """The health conditions a study recruits for, read from a packaged profile.
 
-A reviewer ``redact`` entry in a human-review category (``verdict.llm_human_review_categories``) is
-a **cohort** condition where its text matches one of the profile's patterns, and an **other**
-condition where it does not. The profile is named by ``verdict.cohort_conditions`` and lives in
+A health condition the reviewer lists is a **cohort** condition where its text matches one of the
+profile's patterns, and an **other** condition where it does not; under redaction policy v7 the kind
+is recorded on the ledger and moves neither axis. The profile is named by ``verdict.cohort_conditions`` and lives in
 ``data/cohort_conditions/<name>.yaml``; its derivation is in
 ``specs/20260927-pii-span-ledger/design.md``, section 10.
 """

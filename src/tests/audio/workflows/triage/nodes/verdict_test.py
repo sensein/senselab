@@ -24,12 +24,12 @@ from senselab.audio.workflows.triage.vocabulary import (
     NO_LEXICAL_WORD,
     NOTHING_BEYOND_STIMULUS,
     NOTHING_READ,
+    PERSON_NAME_AWAITS_REVIEW,
+    POLICY_MASKS_ONLY,
     REDACTION_LLM_ANNOTATION,
     REDACTION_OWED,
     REVIEWER_CLEARED_RESCAN,
     REVIEWER_NAMED_NO_WORDS,
-    REVIEWER_NEEDS_HUMAN_REVIEW_COHORT,
-    REVIEWER_NEEDS_HUMAN_REVIEW_OTHER,
     REVIEWER_PROPOSED_REDACTION,
     REVIEWER_UNMASKED_ALL,
     REVIEWER_UNMASKED_SOME,
@@ -1001,12 +1001,12 @@ class TestTheRedactionReviewerAnnotatesAndThisNodeDecides:
 
     @pytest.mark.parametrize(
         ("words", "span"),
-        [(["on", "March", "3rd", "we", "left"], (1, 2)), (["last", "Tuesday", "we", "left"], (0, 1))],
+        [(["on", "March", "3rd", "we", "left"], (1, 2)), (["in", "2021", "we", "left"], (1,))],
     )
     def test_a_calendar_date_stays_masked(
         self, make_verdict_store: Callable[..., ProvStore], tmp_path: Path, words: list[str], span: tuple[int, ...]
     ) -> None:
-        """A month with a day, or a named weekday, is a date element: nothing is released by kind."""
+        """A month with a day, or a year, is a date element: nothing is released by kind."""
         config = _policy_config(tmp_path, "verdict:\n  llm_redaction_withholds: true\n")
         store = make_verdict_store(concluded=[*BASE, ("REDACT", Outcome.PASS, None)], routed=ROUTED_PAIR, pii_n=1)
         self._mask(store, words, [span], ["DATE_TIME"])
@@ -1014,7 +1014,7 @@ class TestTheRedactionReviewerAnnotatesAndThisNodeDecides:
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
         states = self._states(store)
         assert "released_by_kind" not in states.values()
-        assert states[words[span[1]]] == "masked"
+        assert states[words[span[-1]]] == "masked"
         assert result.file_verdict.release == Release.WITH_REDACTION
 
     def test_a_duration_beside_a_name_keeps_the_name(
@@ -1054,13 +1054,13 @@ class TestTheRedactionReviewerAnnotatesAndThisNodeDecides:
         ledger = find_measurement(store, PII_LEDGER)
         assert ledger is not None
         (proposal,) = ledger.attributes["proposals"]
-        assert proposal["agreement"] == "time_by_kind"
+        assert proposal["agreement"] == "by_kind"
         assert result.file_verdict.release == Release.WITHOUT_REDACTION
 
-    def test_a_condition_only_reading_is_held_for_human_review(
+    def test_a_condition_is_released_and_never_withholds(
         self, make_verdict_store: Callable[..., ProvStore], tmp_path: Path
     ) -> None:
-        """r6's free-speech-1 case: a date released, two conditions proposed; review, not a plain withholding."""
+        """Policy v7: a listed condition is recorded and released; a v6 reading's CONDITION entry proposes nothing."""
         config = _policy_config(tmp_path, "verdict:\n  llm_redaction_withholds: true\n")
         store = make_verdict_store(concluded=[*BASE, ("REDACT", Outcome.PASS, None)], routed=ROUTED_PAIR, pii_n=1)
         self._mask(store, ["i", "woke", "this", "morning", "with", "essential", "tremors"], [3])
@@ -1076,49 +1076,79 @@ class TestTheRedactionReviewerAnnotatesAndThisNodeDecides:
             ],
         )
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
-        assert (result.file_verdict.release, result.file_verdict.release_ground) == (
-            Release.WITHHELD,
-            REVIEWER_NEEDS_HUMAN_REVIEW_COHORT,
-        )
+        assert result.file_verdict.release == Release.WITHOUT_REDACTION
         ledger = find_measurement(store, PII_LEDGER)
         assert ledger is not None
-        (proposal,) = ledger.attributes["proposals"]
-        assert (proposal["category"], proposal["texts"], proposal["human_review"]) == (
-            "CONDITION",
+        assert ledger.attributes["proposals"] == []
+        (condition,) = ledger.attributes["conditions"]
+        assert (condition["texts"], condition["state"], condition["condition_kind"]) == (
             ["essential", "tremors"],
-            True,
-        )
-        assert (proposal["condition_kind"], proposal["cohort_diagnosis"]) == ("cohort", "essential_tremor")
-        assert (ledger.attributes["human_review_kind"], ledger.attributes["cohort_diagnoses"]) == (
+            "released_condition",
             "cohort",
-            ["essential_tremor"],
         )
-        morning = next(
-            word for mask in ledger.attributes["masks"] for word in mask["words"] if word["text"] == "morning"
-        )
-        assert (morning["state"], morning["named"]) == ("unmasked_by_reviewer", True)
+        assert ledger.attributes["cohort_diagnoses"] == ["essential_tremor"]
 
-    def test_a_condition_outside_the_cohorts_is_held_as_other(
+    def test_a_condition_inside_a_detector_mask_is_released(
         self, make_verdict_store: Callable[..., ProvStore], tmp_path: Path
     ) -> None:
-        """r6's other half of that card: a joint cyst is not a condition the study recruits for."""
+        """A detector tagged "Parkinson's" PERSON; the reviewer listed it as a condition: it is never masked."""
         config = _policy_config(tmp_path, "verdict:\n  llm_redaction_withholds: true\n")
         store = make_verdict_store(concluded=[*BASE, ("REDACT", Outcome.PASS, None)], routed=ROUTED_PAIR, pii_n=1)
-        self._mask(store, ["a", "synovial", "joint", "cyst", "this", "morning"], [5])
+        self._mask(store, ["i", "have", "Parkinson's", "disease", "now"], [(2, 3)], ["PERSON"])
+        _annotate(
+            store,
+            status="clean",
+            redaction="complete",
+            original="clean",
+            proposal=[],
+            conditions=[{"text": "Parkinson's disease", "why": "a named disease"}],
+        )
+        result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
+        assert self._states(store) == {"Parkinson's": "released_condition", "disease": "released_condition"}
+        assert result.file_verdict.release == Release.WITHOUT_REDACTION
+        assert "awaits" not in " ".join(reason.why for reason in result.file_verdict.reasons)
+
+    def test_a_word_the_policy_always_masks_releases_a_copy_where_redact_never_ran(
+        self, make_verdict_store: Callable[..., ProvStore], tmp_path: Path
+    ) -> None:
+        """Policy v7: no detector found anything, but "summer" is a season; the copy masks it, REDACT or not."""
+        config = _policy_config(tmp_path, "verdict:\n  llm_redaction_withholds: true\n")
+        store = make_verdict_store(concluded=BASE, routed=ROUTED_PAIR, words_n=5, scanned=True)
+        self._mask(store, ["i", "go", "every", "summer", "home"], [])
+        result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
+        assert (result.file_verdict.release, result.file_verdict.release_ground) == (
+            Release.WITH_REDACTION,
+            POLICY_MASKS_ONLY,
+        )
+        assert self._states(store) == {"summer": "masked"}
+
+    def test_a_masked_person_name_flags_for_review_and_releases_as_before(
+        self, make_verdict_store: Callable[..., ProvStore], tmp_path: Path
+    ) -> None:
+        """A name stays masked until a human approves it; the recording flags, the release is unchanged."""
+        config = _policy_config(tmp_path, "verdict:\n  llm_redaction_withholds: true\n")
+        store = make_verdict_store(
+            concluded=[*BASE, ("REDACT", Outcome.PASS, None)], routed=ROUTED_PAIR, pii_n=1, recording_path="REC.wav"
+        )
+        self._mask(store, ["i", "met", "Alice", "there"], [2])
         _annotate(
             store,
             status="flagged",
             redaction="complete",
             original="carries_pii",
-            flagged=["CONDITION"],
-            proposal=[{"text": "synovial joint cyst", "action": "redact", "category": "CONDITION"}],
+            proposal=[{"text": "Alice", "action": "release", "category": "PERSON", "why": "a public figure"}],
         )
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
-        assert result.file_verdict.release_ground == REVIEWER_NEEDS_HUMAN_REVIEW_OTHER
-        ledger = find_measurement(store, PII_LEDGER)
-        assert ledger is not None
-        assert ledger.attributes["human_review_kind"] == "other"
-        assert ledger.attributes["counts"]["other_condition_n"] == 1
+        assert self._states(store) == {"Alice": "masked"}
+        assert result.file_verdict.release == Release.WITH_REDACTION
+        named = [
+            reason.why for reason in result.file_verdict.reasons if reason.why.startswith(PERSON_NAME_AWAITS_REVIEW)
+        ]
+        assert named == [f'{PERSON_NAME_AWAITS_REVIEW}: 1 name word(s) masked; release proposed for "Alice"']
+        approved = _policy_config(tmp_path, "redaction:\n  name_approvals:\n    REC: [Alice]\n")
+        again = verdict_module.verdict(store, None, approved, run_dir=tmp_path)
+        assert self._states(store) == {"Alice": "unmasked_by_approval"}
+        assert not any(reason.why.startswith(PERSON_NAME_AWAITS_REVIEW) for reason in again.file_verdict.reasons)
 
     def test_the_clearing_key_ships_on(self) -> None:
         """Owner, 2026-09-26: the reviewer, which already read these, decides a re-scan fail."""

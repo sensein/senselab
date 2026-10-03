@@ -37,9 +37,11 @@ from senselab.audio.workflows.triage.nodes.redact import (
     PLACED_SUBSTRING,
     PLACED_WORDS,
     PROPOSED_BY_REVIEWER,
+    RELEASED_BY_KIND,
     RELEASED_FILES,
     REVIEWER,
     STREAM_NAME,
+    UNMASKED_BY_APPROVAL,
     UNMASKED_BY_REVIEWER,
     UNMASKED_BY_TRIM,
     MaskPlan,
@@ -544,7 +546,9 @@ class TestAPlaceholderIsNotASurvivor:
 
 def _settle(store: ProvStore, release: str, ground: str | None, tmp_path: Path) -> dict[str, Path]:
     """Settle the release directory the way every driver does, under a silence fill."""
-    return settle_release(store, release, ground, run_dir=tmp_path, artifacts_dir=_release(tmp_path), bleep_hz=None)
+    return settle_release(
+        store, release, ground, run_dir=tmp_path, artifacts_dir=_release(tmp_path), bleep_hz=None, fill="silence"
+    )
 
 
 class TestTheFoldSettlesTheReleaseOfAFail:
@@ -652,9 +656,9 @@ def _redact_entry(text: str, category: str = "PERSON") -> dict[str, str]:
     return {"text": text, "action": "redact", "category": category, "why": ""}
 
 
-def _plan(store: ProvStore, *, applies: bool = True, review: Sequence[str] = ()) -> MaskPlan:
+def _plan(store: ProvStore, *, applies: bool = True, approvals: Sequence[str] = ()) -> MaskPlan:
     """The word-level plan under a 50 ms margin, as VERDICT computes it."""
-    return mask_plan(store, reviewer_applies=applies, padding_ms=50, human_review_categories=review)
+    return mask_plan(store, reviewer_applies=applies, padding_ms=50, name_approvals=approvals)
 
 
 def _write_ledger(store: ProvStore, plan: MaskPlan, release: str, ground: str | None) -> None:
@@ -718,9 +722,11 @@ class TestTheWordLevelMaskRule:
         result = redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
         assert result.verdict.outcome is Outcome.PASS
         _annotate(store, [_release_entry("Gladiator", "PERSON")])
-        plan = _plan(store)
+        proposed = {word.text: word for mask in _plan(store).masks for word in mask.words}
+        assert (proposed["Gladiator"].state, proposed["fighter"].state) == (MASKED, MASKED)
+        plan = _plan(store, approvals=("Gladiator",))
         words = {word.text: word for mask in plan.masks for word in mask.words}
-        assert words["Gladiator"].state == UNMASKED_BY_REVIEWER
+        assert words["Gladiator"].state == UNMASKED_BY_APPROVAL
         assert words["fighter"].state == UNMASKED_BY_REVIEWER and words["fighter"].with_head
         assert not words["Gladiator"].with_head
 
@@ -801,19 +807,28 @@ class TestTheWordLevelMaskRule:
     def test_a_name_spelled_as_a_function_word_is_never_trimmed(
         self, store: ProvStore, redact_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A "May" marked PERSON keeps its mask through the trim; only a reviewer quote naming it unmasks it."""
-        _seed_redact_store(store, tmp_path, words=["i", "met", "May", "today"], findings=[("PERSON", _word_extent(2))])
+        """A "Will" marked PERSON keeps its mask through the trim; only a human's approval unmasks it."""
+        _seed_redact_store(store, tmp_path, words=["i", "met", "Will", "today"], findings=[("PERSON", _word_extent(2))])
         _stub_pii(monkeypatch, findings=[])
         redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
         unprotected = mask_plan(store, reviewer_applies=False, padding_ms=50)
-        assert _states(unprotected)["May"] == UNMASKED_BY_TRIM
+        assert _states(unprotected)["Will"] == UNMASKED_BY_TRIM
         protected = mask_plan(store, reviewer_applies=False, padding_ms=50, protected_categories=("PERSON", "NAME"))
-        assert _states(protected)["May"] == MASKED
-        (word,) = [word for mask in protected.masks for word in mask.words if word.text == "May"]
-        assert (word.categories, word.proper) == (("PERSON",), True)
-        _annotate(store, [_release_entry("may")])
-        released = mask_plan(store, reviewer_applies=True, padding_ms=50, protected_categories=("PERSON", "NAME"))
-        assert _states(released)["May"] == UNMASKED_BY_REVIEWER
+        assert _states(protected)["Will"] == MASKED
+        (word,) = [word for mask in protected.masks for word in mask.words if word.text == "Will"]
+        assert (word.categories, word.proper, word.locked) == (("PERSON",), True, "person")
+        _annotate(store, [_release_entry("will", "PERSON")])
+        proposed = mask_plan(store, reviewer_applies=True, padding_ms=50, protected_categories=("PERSON", "NAME"))
+        assert _states(proposed)["Will"] == MASKED
+        assert proposed.name_release_proposed == ("will",)
+        approved = mask_plan(
+            store,
+            reviewer_applies=True,
+            padding_ms=50,
+            protected_categories=("PERSON", "NAME"),
+            name_approvals=("Will",),
+        )
+        assert _states(approved)["Will"] == UNMASKED_BY_APPROVAL
 
     def test_a_function_word_a_name_finding_spans_is_still_trimmed(
         self, store: ProvStore, redact_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1058,10 +1073,10 @@ class TestTheWordLevelMaskRule:
         assert plan.final == []
         assert set(_states(plan).values()) == {UNMASKED_BY_REVIEWER}
 
-    def test_redact_entries_are_placed_on_words_and_marked_for_review(
+    def test_redact_entries_are_placed_on_words_and_a_condition_is_recorded_apart(
         self, store: ProvStore, redact_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Each proposal lists the words it names; one already masked says so; a condition is marked."""
+        """Each proposal lists the words it names; one already masked says so; a condition is no proposal."""
         self._passed(store, redact_config, tmp_path, monkeypatch)
         _annotate(
             store,
@@ -1073,37 +1088,16 @@ class TestTheWordLevelMaskRule:
             ],
             original="carries_pii",
         )
-        plan = _plan(store, applies=False, review=("CONDITION",))
-        placed = {
-            span.text: (span.placed, span.texts, bool(span.masked_ids), span.human_review) for span in plan.proposals
+        plan = _plan(store, applies=False)
+        placed = {span.text: (span.placed, span.texts, bool(span.masked_ids)) for span in plan.proposals}
+        assert placed == {
+            "Alice": (PLACED_WORDS, ("alice",), True),
+            "brooklyn tod": (PLACED_SUBSTRING, ("brooklyn", "today"), True),
+            "nowhere": ("", (), False),
         }
-        assert placed["met"] == (PLACED_WORDS, ("met",), False, True)
-        assert placed["Alice"] == (PLACED_WORDS, ("alice",), True, False)
-        assert placed["brooklyn tod"] == (PLACED_SUBSTRING, ("brooklyn", "today"), True, False)
-        assert placed["nowhere"] == ("", (), False, False)
-
-    def test_a_condition_the_task_itself_names_is_held_for_no_one(
-        self, store: ProvStore, redact_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """A health condition every word of which is the task's own vocabulary is task content, not a review."""
-        from senselab.audio.workflows.triage.nodes.redact import NEW, TASK_CONTENT
-        from senselab.audio.workflows.triage.task_lexicon import TaskLexicon
-
-        self._passed(store, redact_config, tmp_path, monkeypatch)
-        _annotate(
-            store, [_redact_entry("met", "CONDITION"), _redact_entry("Alice", "CONDITION")], original="carries_pii"
-        )
-        plan = mask_plan(
-            store,
-            reviewer_applies=True,
-            padding_ms=50,
-            human_review_categories=("CONDITION",),
-            lexicon=TaskLexicon(None, (("met",),)),
-        )
-        by_text = {span.text: (span.agreement, span.human_review) for span in plan.proposals}
-        assert by_text["met"] == (TASK_CONTENT, False)
-        assert by_text["Alice"][0] != TASK_CONTENT
-        assert not any(span.human_review and span.agreement == NEW and span.text == "met" for span in plan.proposals)
+        (condition,) = plan.conditions
+        assert (condition.text, condition.texts, condition.condition_kind) == ("met", ("met",), "other")
+        assert plan.condition_indices == (0,) and 0 in plan.agreed
 
     def test_the_ledger_record_counts_every_state(
         self, store: ProvStore, redact_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -2601,7 +2595,7 @@ class TestAMaskIsAFindingsOwnWords:
         """A redact quote's function words are neither its ``content_ids`` nor counted as proposed."""
         words = ["i", "had", "a", "cyst", "in", "my", "neck"]
         self._seed(store, redact_config, tmp_path, monkeypatch, words, [])
-        _annotate(store, [_redact_entry("a cyst in my neck", "CONDITION")])
+        _annotate(store, [_redact_entry("a cyst in my neck", "OTHER")])
         plan = _plan(store)
         (span,) = plan.proposals
         texts = dict(zip(span.word_ids, span.texts))
@@ -2732,7 +2726,7 @@ class TestTaskWordsKindCutAndAReadingThatNamesNothing:
     def test_a_word_not_in_proper_form_under_a_place_is_cut(
         self, store: ProvStore, redact_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """r7's free-speech-v2 card: LOC "Florida Like"; the reviewer releases "in Florida"; nothing stays."""
+        """r7's free-speech-v2 card: LOC "Florida Like"; "like" is cut, and policy v7 keeps the state masked."""
         words = ["i", "went", "in", "Florida", "like", "every", "summer", "i", "like", "it"]
         _seed_redact_store(
             store,
@@ -2748,9 +2742,13 @@ class TestTaskWordsKindCutAndAReadingThatNamesNothing:
         _annotate(store, [_release_entry("in Florida", "LOCATION")])
         plan = _plan(store)
         words_of = {word.text: word for mask in plan.masks for word in mask.words}
-        assert words_of["Florida"].state == UNMASKED_BY_REVIEWER
+        assert (words_of["Florida"].state, words_of["Florida"].locked) == (MASKED, "place")
         assert (words_of["like"].state, words_of["like"].kind_cut) == (UNMASKED_BY_TRIM, True)
-        assert plan.final == []
+        assert (words_of["summer"].state, words_of["summer"].locked) == (MASKED, "date")
+        assert [(mask.source, mask.planned.category) for mask in plan.masks if mask.final] == [
+            (DETECTOR, "LOCATION"),
+            ("policy", "DATE_TIME"),
+        ]
 
     def test_a_name_part_the_transcript_uses_nowhere_else_is_not_cut(
         self, store: ProvStore, redact_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -2826,16 +2824,238 @@ class TestTaskWordsKindCutAndAReadingThatNamesNothing:
         (["years"], {0}),
         (["3", "o'clock"], {0, 1}),
         (["3pm"], {0}),
-        (["last", "year"], set()),
+        (["last", "year"], {0, 1}),
         (["the", "week"], set()),
         (["March", "3rd"], set()),
-        (["last", "Tuesday"], set()),
-        (["Tuesday", "morning"], set()),
+        (["last", "Tuesday"], {0, 1}),
+        (["Tuesday", "morning"], {0, 1}),
         (["93", "years", "old"], set()),
-        (["yesterday", "evening"], set()),
-        (["two", "years", "in", "Boston"], {0, 1}),
+        (["yesterday", "evening"], {0, 1}),
+        (["two", "years", "in", "Boston"], {0, 1, 2}),
+        (["2-3", "weeks", "ago"], {0, 1, 2}),
+        (["this", "summer"], set()),
+        (["in", "2021"], set()),
+        (["hace", "dos", "semanas"], {0, 1, 2}),
     ],
 )
 def test_time_by_kind_releases_times_of_day_and_durations_only(texts: list[str], released: set[int]) -> None:
-    """A time of day or a quantified length of time is released; a date, a weekday or an age is not."""
+    """A time of day, a weekday, a relative or a length of time is released; a date, a season or an age is not."""
     assert time_by_kind(texts) == released
+
+
+class TestRedactionPolicyV7:
+    """Owner, 2026-10-03: the fold masks and releases by the redaction policy's rules, whatever the reviewer says."""
+
+    def _plan(
+        self,
+        store: ProvStore,
+        tmp_path: Path,
+        words: Sequence[str],
+        located: Sequence[tuple[str, Sequence[int]]] = (),
+        *,
+        proposal: Sequence[dict[str, str]] = (),
+        approvals: Sequence[str] = (),
+        language: str | None = None,
+        protected: Sequence[str] = ("PERSON", "NAME", "LOCATION", "LOC"),
+    ) -> MaskPlan:
+        """The plan over ``words``, a finding per ``(category, word indices)``, and a reading proposing ``proposal``."""
+        findings = [
+            (category, (_word_extent(indices[0])[0], _word_extent(indices[-1])[1])) for category, indices in located
+        ]
+        _seed_redact_store(store, tmp_path, words=list(words), findings=findings)
+        if proposal:
+            _annotate(store, proposal)
+        return mask_plan(
+            store,
+            reviewer_applies=True,
+            padding_ms=50,
+            protected_categories=protected,
+            name_approvals=approvals,
+            language=language,
+        )
+
+    def test_a_year_is_masked_whatever_the_reviewer_says(self, store: ProvStore, tmp_path: Path) -> None:
+        """Case: "I had COVID in 2021": the year goes, and a release does not free it."""
+        plan = self._plan(
+            store,
+            tmp_path,
+            ["i", "had", "covid", "in", "2021", "and"],
+            [("DATE_TIME", [4])],
+            proposal=[_release_entry("in 2021", "DATE_TIME")],
+        )
+        (word,) = [word for mask in plan.masks for word in mask.words if word.text == "2021"]
+        assert (word.state, word.locked, word.named) == (MASKED, "date", True)
+
+    def test_seasons_holidays_and_months_no_detector_found_are_masked_by_the_policy(
+        self, store: ProvStore, tmp_path: Path
+    ) -> None:
+        """Case: "summer", "Halloween" and "October" get a policy mask each; nothing else does."""
+        plan = self._plan(store, tmp_path, ["every", "summer", "and", "on", "Halloween", "in", "October", "we", "go"])
+        policy = [mask for mask in plan.masks if mask.source == "policy"]
+        assert [[word.text for word in mask.words] for mask in policy] == [["summer"], ["Halloween"], ["October"]]
+        assert all(word.state == MASKED and word.locked == "date" for mask in policy for word in mask.words)
+        assert plan.policy_masks_n == 3
+
+    def test_a_weekday_and_relative_times_are_released_by_kind(self, store: ProvStore, tmp_path: Path) -> None:
+        """Case: "on Monday", "2-3 weeks ago" and "last year" are shown whatever the reviewer said."""
+        words = ["on", "Monday", "and", "2-3", "weeks", "ago", "and", "last", "year"]
+        plan = self._plan(store, tmp_path, words, [("DATE_TIME", [1]), ("DATE_TIME", [3, 4, 5]), ("DATE_TIME", [7, 8])])
+        states = _states(plan)
+        shown = ("Monday", "2-3", "weeks", "ago", "last", "year")
+        assert {text: states[text] for text in shown} == dict.fromkeys(shown, RELEASED_BY_KIND)
+        assert plan.final == []
+
+    def test_an_age_is_masked(self, store: ProvStore, tmp_path: Path) -> None:
+        """Case: "I'm 73." with no finding, and "thirty-six years old" released by the reviewer: both stay masked."""
+        plan = self._plan(
+            store,
+            tmp_path,
+            ["i'm", "73.", "i", "was", "thirty-six", "years", "old", "then"],
+            [("DATE_TIME", [4, 5, 6])],
+            proposal=[_release_entry("thirty-six years old", "DATE_TIME")],
+        )
+        states = _states(plan)
+        assert (states["73."], states["thirty-six"], states["years"], states["old"]) == (MASKED,) * 4
+        locks = {word.text: word.locked for mask in plan.masks for word in mask.words}
+        assert (locks["73."], locks["thirty-six"], locks["old"]) == ("age", "age", "age")
+
+    def test_a_person_name_needs_a_humans_approval(self, store: ProvStore, tmp_path: Path) -> None:
+        """Case: "Ray Bradbury": the reviewer's release is recorded and does not unmask; an approval does."""
+        words = ["i", "read", "Ray", "Bradbury", "books"]
+        proposal = [{**_release_entry("Ray Bradbury", "PERSON"), "why": "an author"}]
+        plan = self._plan(store, tmp_path, words, [("PERSON", [2, 3])], proposal=proposal)
+        assert _states(plan) == {"Ray": MASKED, "Bradbury": MASKED}
+        assert plan.name_release_proposed == ("Ray Bradbury",) and plan.person_names_masked == 2
+        approved = mask_plan(
+            store,
+            reviewer_applies=True,
+            padding_ms=50,
+            protected_categories=("PERSON",),
+            name_approvals=("Ray Bradbury",),
+        )
+        assert _states(approved) == {"Ray": UNMASKED_BY_APPROVAL, "Bradbury": UNMASKED_BY_APPROVAL}
+        assert approved.person_names_masked == 0
+
+    def test_a_kinship_word_is_never_masked(self, store: ProvStore, tmp_path: Path) -> None:
+        """Case: "my brother John": the relationship is shown, the name is not; "Mom" too."""
+        plan = self._plan(
+            store, tmp_path, ["my", "brother", "John", "and", "Mom", "came"], [("PERSON", [1, 2]), ("PERSON", [4])]
+        )
+        states = _states(plan)
+        assert (states["brother"], states["John"], states["Mom"]) == (RELEASED_BY_KIND, MASKED, RELEASED_BY_KIND)
+        assert plan.record(release="x", release_ground=None)["counts"]["released_kinship_n"] == 2
+
+    def test_a_state_is_masked_and_a_country_is_released(self, store: ProvStore, tmp_path: Path) -> None:
+        """Case: "Florida" stays masked though the reviewer releases it; "Mexico" is released by kind."""
+        plan = self._plan(
+            store,
+            tmp_path,
+            ["we", "moved", "from", "Mexico", "to", "Florida", "then"],
+            [("LOCATION", [3]), ("LOCATION", [5])],
+            proposal=[{**_release_entry("Florida", "LOCATION"), "why": "a state"}],
+        )
+        words_of = {word.text: word for mask in plan.masks for word in mask.words}
+        assert (words_of["Florida"].state, words_of["Florida"].locked) == (MASKED, "place")
+        assert (words_of["Mexico"].state, words_of["Mexico"].kind) == (RELEASED_BY_KIND, "country")
+
+    def test_a_country_the_reviewer_asks_to_hide_is_masked_without_withholding(
+        self, store: ProvStore, tmp_path: Path
+    ) -> None:
+        """A triangulating country: the reviewer's ``redact`` entry masks it and proposes nothing further."""
+        from senselab.audio.workflows.triage.nodes.redact import COUNTRY_MASKED
+
+        plan = self._plan(
+            store,
+            tmp_path,
+            ["the", "only", "doctor", "from", "Mexico", "here"],
+            [("LOCATION", [4])],
+            proposal=[_redact_entry("Mexico", "LOCATION")],
+        )
+        assert _states(plan)["Mexico"] == MASKED
+        assert [span.agreement for span in plan.proposals] == [COUNTRY_MASKED] and plan.agreed == {0}
+
+    def test_a_country_inside_an_organisations_name_stays_masked(self, store: ProvStore, tmp_path: Path) -> None:
+        """sub-09f16959: "United States Marine Corps" tagged LOCATION is not a country; the reviewer cannot free it."""
+        plan = self._plan(
+            store,
+            tmp_path,
+            ["he", "is", "in", "the", "United", "States", "Marine", "Corps", "now"],
+            [("LOCATION", [4, 5, 6, 7])],
+            proposal=[{**_release_entry("United States Marine Corps", "LOCATION"), "why": "a country"}],
+        )
+        states = _states(plan)
+        assert [states[text] for text in ("United", "States", "Marine", "Corps")] == [MASKED] * 4
+
+    def test_a_specific_organisation_is_masked_and_a_generic_one_released(
+        self, store: ProvStore, tmp_path: Path
+    ) -> None:
+        """Case: "USF voice center": the reviewer releases the generic words, the proper name stays."""
+        plan = self._plan(
+            store,
+            tmp_path,
+            ["at", "the", "USF", "voice", "center", "today"],
+            [("ORGANIZATION", [2, 3, 4])],
+            proposal=[{**_release_entry("voice center", "ORGANIZATION"), "why": "a generic description"}],
+            protected=("PERSON", "NAME", "LOCATION", "LOC", "ORGANIZATION"),
+        )
+        states = _states(plan)
+        assert (states["USF"], states["voice"], states["center"]) == (
+            MASKED,
+            UNMASKED_BY_REVIEWER,
+            UNMASKED_BY_REVIEWER,
+        )
+
+    def test_spanish_words_an_english_model_mistook_for_names_are_released(
+        self, store: ProvStore, tmp_path: Path
+    ) -> None:
+        """The r10 Spanish card: "mi estado de ánimo" tagged PERSON; a month and a name stay masked."""
+        words = ["Pensando", "en", "mi", "estado", "de", "ánimo,", "mi", "familia", "y", "María", "en", "octubre."]
+        plan = self._plan(
+            store,
+            tmp_path,
+            words,
+            [("PERSON", [0]), ("PERSON", [3, 4, 5]), ("PERSON", [7]), ("PERSON", [9])],
+            language="es",
+        )
+        states = _states(plan)
+        assert states["estado"] == UNMASKED_BY_TRIM and states["ánimo,"] == UNMASKED_BY_TRIM
+        assert states["Pensando"] == UNMASKED_BY_TRIM and states["de"] == UNMASKED_BY_TRIM
+        assert states["familia"] == RELEASED_BY_KIND
+        assert states["María"] == MASKED
+        assert states["octubre."] == MASKED and plan.language == "es"
+
+    def test_the_same_tags_in_english_keep_their_masks(self, store: ProvStore, tmp_path: Path) -> None:
+        """Without a declared non-English language, a lower-case PERSON tag stays masked as before."""
+        plan = self._plan(store, tmp_path, ["my", "friend", "joan", "didion", "called"], [("PERSON", [2, 3])])
+        assert _states(plan) == {"joan": MASKED, "didion": MASKED}
+
+    def test_a_policy_mask_is_released_where_redact_never_ran(self, store: ProvStore, tmp_path: Path) -> None:
+        """No finding, no REDACT: the fold's policy mask still makes the released copy, audio and text."""
+        plan = self._plan(store, tmp_path, ["we", "go", "every", "summer", "home"])
+        assert plan.policy_masks_n == 1
+        _write_ledger(store, plan, "release_with_redaction", None)
+        written = settle_release(
+            store,
+            "release_with_redaction",
+            None,
+            run_dir=tmp_path,
+            artifacts_dir=_release(tmp_path),
+            bleep_hz=None,
+            fill="silence",
+        )
+        assert set(written)
+        released = _release(tmp_path)
+        assert (released / "transcript.txt").read_text() == "we go every [DATE_TIME] home\n"
+        assert _silent(released / "audio.wav", 3.1, 3.4)
+        assert not _silent(released / "audio.wav", 4.1, 4.4)
+
+    def test_a_weekday_or_relative_day_tagged_as_a_name_is_released(self, store: ProvStore, tmp_path: Path) -> None:
+        """An English model tagging "Hoy" or "Monday" PERSON names nobody: released by kind, in any family."""
+        plan = self._plan(
+            store,
+            tmp_path,
+            ["y", "Hoy", "fui", "y", "el", "Monday", "también"],
+            [("PERSON", [1]), ("PERSON", [5])],
+            language="es",
+        )
+        assert _states(plan) == {"Hoy": RELEASED_BY_KIND, "Monday": RELEASED_BY_KIND}
