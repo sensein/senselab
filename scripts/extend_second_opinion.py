@@ -19,13 +19,13 @@ server answering as many requests in parallel; each store is read and written by
 ``--config`` must set ``second_opinion.enabled: true``; the driver refuses to run otherwise rather
 than writing ``disabled`` into every store.
 
-The driver writes the ``nimble_opinion`` and nothing else: no verdict is decided again here. Follow
+The driver writes the ``second_opinion_answers`` and nothing else: no verdict is decided again here. Follow
 the run with ``scripts/extend_refold.py`` over the same corpus, which re-decides every VERDICT over
-the opinions it finds. A store already holding a live ``ok`` ``nimble_opinion`` that a
+the opinions it finds. A store already holding a live ``ok`` ``second_opinion_answers`` that a
 SECOND_OPINION activity generated is ``present`` and not asked again, so a preempted task is resumed
 by resubmitting it. ``--force`` asks again and retires the opinion it replaces.
 
-The design is in ``specs/20261001-nimble-second-opinion/design.md``.
+The design is in ``specs/20261003-clef-second-opinion/design.md``.
 
 Install:
     uv sync --all-extras --group dev
@@ -64,7 +64,7 @@ from senselab.audio.workflows.triage.extend import (
 )
 from senselab.audio.workflows.triage.nodes.common import describe_exception, find_measurement, software_agent
 from senselab.audio.workflows.triage.nodes.second_opinion import ABSENT, NODE, Ask, pin_of, second_opinion, settings
-from senselab.audio.workflows.triage.vocabulary import NIMBLE_OPINION
+from senselab.audio.workflows.triage.vocabulary import SECOND_OPINION_ANSWERS
 from senselab.text.tasks.decision_model.ollama import OllamaServer, PinMismatchError, ask_decisions, verify_pin
 from senselab.utils.prov_store import Entity, ProvStore
 
@@ -225,9 +225,9 @@ def standing(store: ProvStore) -> Entity | None:
         store: The run's store.
 
     Returns:
-        The live ``ok`` ``nimble_opinion`` a SECOND_OPINION activity generated, or None.
+        The live ``ok`` ``second_opinion_answers`` a SECOND_OPINION activity generated, or None.
     """
-    opinion = find_measurement(store, NIMBLE_OPINION)
+    opinion = find_measurement(store, SECOND_OPINION_ANSWERS)
     if opinion is None or opinion.attributes.get("status") != "ok":
         return None
     activity_id = store.generated_by(opinion.id)
@@ -240,7 +240,7 @@ def standing(store: ProvStore) -> Entity | None:
 
 
 def live_opinions(store: ProvStore) -> list[str]:
-    """Every live ``nimble_opinion`` in the store.
+    """Every live ``second_opinion_answers`` in the store.
 
     Args:
         store: The run's store.
@@ -251,7 +251,7 @@ def live_opinions(store: ProvStore) -> list[str]:
     return [
         entity.id
         for entity in store.entities("measurement")
-        if entity.attributes.get("name") == NIMBLE_OPINION and not store.is_invalidated(entity.id)
+        if entity.attributes.get("name") == SECOND_OPINION_ANSWERS and not store.is_invalidated(entity.id)
     ]
 
 

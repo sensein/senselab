@@ -52,10 +52,10 @@ PII_SCAN = "pii_scan"
 SCANNED = "scanned"
 """The :data:`PII_SCAN` key a declined scan carries, and a scan that ran does not."""
 
-NIMBLE_OPINION = "nimble_opinion"
+SECOND_OPINION_ANSWERS = "second_opinion_answers"
 """The measurement SECOND_OPINION writes a decision model's probabilities into.
 
-``specs/20261001-nimble-second-opinion/design.md`` holds its attributes.
+``specs/20261003-clef-second-opinion/design.md`` holds its attributes.
 """
 
 REDACTION_LLM_ANNOTATION = "redaction_llm_annotation"
@@ -355,7 +355,7 @@ instructions expect that voice, or says no words were quoted."""
 
 SECOND_OPINION_DISAGREES = "the second-opinion model confidently disagrees with the redaction reviewer"
 """The flag ground a decision model's confident disagreement with the reviewer contributes, under
-``verdict.nimble_disagreement_flags``. Controlled vocabulary, with each disagreeing question, the
+``verdict.second_opinion_disagreement_flags``. Controlled vocabulary, with each disagreeing question, the
 model's probability and the reviewer's answer appended; the release is unchanged."""
 
 SECOND_OPINION_QUESTIONS = ("other_voice", "instructions_spoken", "named_diagnosis")
@@ -505,11 +505,11 @@ class FoldPolicy:
             the recording is a flag ground (:data:`INSTRUCTIONS_SPOKEN`); the release is unchanged.
         llm_contradiction_flags: Whether a flagged reading that names no words is a flag ground on
             the triage axis.
-        nimble_disagreement_flags: Whether a confident disagreement between the second-opinion
+        second_opinion_disagreement_flags: Whether a confident disagreement between the second-opinion
             model and the reviewer is a flag ground (:data:`SECOND_OPINION_DISAGREES`).
-        nimble_confident_yes: The probability at or above which the second opinion is a confident
+        second_opinion_confident_yes: The probability at or above which the second opinion is a confident
             "yes"; None leaves the comparison unmeasured.
-        nimble_confident_no: The probability at or below which it is a confident "no"; None leaves
+        second_opinion_confident_no: The probability at or below which it is a confident "no"; None leaves
             the comparison unmeasured.
         uncomputed_reading_flags: Whether a conformance gate left undecided because a reading the
             task is judged on was never computed is a flag ground of its own.
@@ -534,9 +534,9 @@ class FoldPolicy:
     llm_contradiction_flags: bool = False
     llm_instructions_spoken_flags: bool = False
     uncomputed_reading_flags: bool = False
-    nimble_disagreement_flags: bool = False
-    nimble_confident_yes: float | None = None
-    nimble_confident_no: float | None = None
+    second_opinion_disagreement_flags: bool = False
+    second_opinion_confident_yes: float | None = None
+    second_opinion_confident_no: float | None = None
     hint_mismatch_exempt_families: tuple[str, ...] = ()
     model_speaker_families: tuple[str, ...] = ()
     conformance_flags_by_family: dict[str, bool] = field(default_factory=dict)
@@ -573,9 +573,9 @@ class FoldPolicy:
             llm_contradiction_flags=bool(config.get(f"{_SECTION}.llm_contradiction_flags", False)),
             llm_instructions_spoken_flags=bool(config.get(f"{_SECTION}.llm_instructions_spoken_flags", False)),
             uncomputed_reading_flags=bool(config.get(f"{_SECTION}.uncomputed_reading_flags", False)),
-            nimble_disagreement_flags=bool(config.get(f"{_SECTION}.nimble_disagreement_flags", False)),
-            nimble_confident_yes=_optional_float(config.get(f"{_SECTION}.nimble_confident_yes")),
-            nimble_confident_no=_optional_float(config.get(f"{_SECTION}.nimble_confident_no")),
+            second_opinion_disagreement_flags=bool(config.get(f"{_SECTION}.second_opinion_disagreement_flags", False)),
+            second_opinion_confident_yes=_optional_float(config.get(f"{_SECTION}.second_opinion_confident_yes")),
+            second_opinion_confident_no=_optional_float(config.get(f"{_SECTION}.second_opinion_confident_no")),
             hint_mismatch_exempt_families=tuple(
                 str(family) for family in (config.get(f"{_SECTION}.hint_mismatch_exempt_families") or ())
             ),
@@ -763,7 +763,7 @@ def second_opinion_disagreements(
     that carries the part, so a reading from before the prompt asked it is never a disagreement.
 
     Args:
-        opinion: The ``nimble_opinion`` measurement's attributes, or None.
+        opinion: The ``second_opinion_answers`` measurement's attributes, or None.
         llm_redaction: REVIEW's annotation, or None.
         confident_yes: The probability at or above which the opinion is a confident yes.
         confident_no: The probability at or below which it is a confident no.
@@ -1147,8 +1147,8 @@ def fold_file_verdict(
             the packaged policy.
         agreed_redactions: The ``proposal`` positions of reviewer ``redact`` entries that agree with
             the masks; they propose nothing more (:func:`deciding_reading`).
-        second_opinion: The ``nimble_opinion`` measurement's attributes, or None. A confident
-            disagreement with the reviewer is a flag ground under ``policy.nimble_disagreement_flags``
+        second_opinion: The ``second_opinion_answers`` measurement's attributes, or None. A confident
+            disagreement with the reviewer is a flag ground under ``policy.second_opinion_disagreement_flags``
             (:func:`second_opinion_disagreements`); the release is unchanged.
         unplaced: ``(family, state)`` for every detector finding SPEECH could not place on words, as
             :class:`~senselab.audio.workflows.triage.nodes.redact.UnplacedFinding` records them. An
@@ -1263,9 +1263,12 @@ def fold_file_verdict(
         quoted = "; ".join(json.dumps(text) for text in spoken)
         reasons.append(NodeVerdict(_VERDICT, Outcome.FLAG, None, f"{INSTRUCTIONS_SPOKEN}: {quoted}"))
     disagreements = second_opinion_disagreements(
-        second_opinion, annotation, confident_yes=rules.nimble_confident_yes, confident_no=rules.nimble_confident_no
+        second_opinion,
+        annotation,
+        confident_yes=rules.second_opinion_confident_yes,
+        confident_no=rules.second_opinion_confident_no,
     )
-    if rules.nimble_disagreement_flags and disagreements:
+    if rules.second_opinion_disagreement_flags and disagreements:
         reasons.append(
             NodeVerdict(_VERDICT, Outcome.FLAG, None, f"{SECOND_OPINION_DISAGREES}: {'; '.join(disagreements)}")
         )

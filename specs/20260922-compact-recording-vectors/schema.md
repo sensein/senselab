@@ -42,6 +42,9 @@ What each bump added:
 | **13** | `llm_instructions_spoken_n`: passages the reviewer (prompt v5) quoted where the task's instructions are spoken. See `specs/20260929-task-check-alignment/design.md` §L |
 | **14** | the evaluation columns: task-extent trim, clip re-assessment, raw vs enhanced, other speakers in the task extent (§8a). See `specs/20261001-triage-evaluation-columns/design.md` |
 | **15** | the nine `nimble_*` columns: SECOND_OPINION's probabilities and where they confidently disagree with the reviewer (the section at the end). See `specs/20261001-nimble-second-opinion/design.md` |
+| **16** | the task-extent cut (§8a) |
+| **17** | `released_by_kind_n`, `released_by_kind_categories` (§8a) |
+| **18** | the second-opinion columns renamed `nimble_*` → `second_opinion_*` when Clef replaced Nimble, plus `second_opinion_model_id`. See `specs/20261003-clef-second-opinion/design.md` |
 
 The data dictionary in the file's metadata was added without a bump: it adds no column, changes no
 layout and no vocabulary, and a reader that ignores the key reads the file exactly as before.
@@ -697,3 +700,14 @@ nothing new is read from the store:
 
 The probabilities are continuous on [0, 1], so they facet as numeric axes. `nimble_disagrees`
 facets as a list, like `llm_flagged_categories`.
+
+## Schema 18: the second opinion, model-neutral
+
+2026-10-03. Clef 27B replaced Nimble 9B (`specs/20261003-clef-second-opinion/design.md`). The
+columns are renamed so that a further swap renames nothing: each `nimble_<x>` above is now
+`second_opinion_<x>`, with the same meaning and the same source, and `verdict.nimble_confident_*` is
+`verdict.second_opinion_confident_*`. One column is added:
+
+| column | what it is |
+|---|---|
+| `second_opinion_model_id` | `ollama:<name>:<tag>` of the model that answered; provenance, not assignable to an axis |

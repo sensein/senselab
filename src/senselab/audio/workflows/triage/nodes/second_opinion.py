@@ -1,12 +1,12 @@
 """The SECOND_OPINION node: a decision model's answers about the text the reviewer reads.
 
 It asks :data:`~senselab.text.tasks.decision_model.second_opinion.QUESTIONS` over the same original
-transcript and task context REVIEW reads, and writes the probabilities as one ``nimble_opinion``
+transcript and task context REVIEW reads, and writes the probabilities as one ``second_opinion_answers``
 measurement. It writes no verdict; VERDICT compares the probabilities with the reviewer's reading
-under ``verdict.nimble_*``.
+under ``verdict.second_opinion_*``.
 
 The model is reached through a caller-supplied ``ask``, so a driver can hold one pinned server for a
-whole slice. See ``specs/20261001-nimble-second-opinion/design.md``.
+whole slice. See ``specs/20261003-clef-second-opinion/design.md``.
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ from senselab.audio.workflows.triage.nodes.common import find_measurement, mint_
 from senselab.audio.workflows.triage.nodes.redact import transcript_texts
 from senselab.audio.workflows.triage.nodes.review import task_context
 from senselab.audio.workflows.triage.task_lexicon import task_lexicon
-from senselab.audio.workflows.triage.vocabulary import NIMBLE_OPINION
+from senselab.audio.workflows.triage.vocabulary import SECOND_OPINION_ANSWERS
 from senselab.text.tasks.decision_model.ollama import OllamaPin
 from senselab.text.tasks.decision_model.second_opinion import (
     QUESTION_SET_VERSION,
@@ -38,14 +38,14 @@ from senselab.utils.tasks.cached_inference import (
 )
 
 NODE = "SECOND_OPINION"
-PROCESS = "nimble_opinion"
+PROCESS = "second_opinion_answers"
 
 OK = "ok"
 DISABLED = "disabled"
 NOTHING_TO_READ = "nothing_to_read"
 ABSENT = "absent"
 STATUSES = (OK, DISABLED, NOTHING_TO_READ, ABSENT)
-"""``nimble_opinion.status``: answered, switched off, no text, or asked and not answered."""
+"""``second_opinion_answers.status``: answered, switched off, no text, or asked and not answered."""
 
 _SECTION = "second_opinion"
 Ask = Callable[[Mapping[str, Any], Mapping[str, Mapping[str, Any]]], Mapping[str, Any]]
@@ -127,7 +127,7 @@ class OpinionOutcome:
 
     Attributes:
         status: One of :data:`STATUSES`.
-        measurement_id: The ``nimble_opinion`` entity.
+        measurement_id: The ``second_opinion_answers`` entity.
     """
 
     status: str
@@ -232,7 +232,7 @@ def second_opinion(
         prov_type="measurement",
         extent=None,
         attributes={
-            "name": NIMBLE_OPINION,
+            "name": SECOND_OPINION_ANSWERS,
             "signal": "consensus_transcript",
             "status": status,
             "probabilities": dict(opinion.probabilities) if opinion is not None else {},

@@ -714,61 +714,68 @@ columns:
     source: [recording_vectors.py:_reviewer_columns, nodes/review.py:review, nodes/review.py:_rounds]
     null_means: REVIEW wrote no annotation.
 
-  nimble_status:
+  second_opinion_status:
     units: none
     values: [ok, disabled, nothing_to_read, absent]
     description: What SECOND_OPINION recorded for the recording.
-    computation: The `nimble_opinion` measurement's `status`, as the fold carried it in its `second_opinion` record. `ok` answered; `disabled` the packaged config left it off; `nothing_to_read` the transcript was empty; `absent` it was asked and did not answer.
+    computation: The `second_opinion_answers` measurement's `status`, as the fold carried it in its `second_opinion` record. `ok` answered; `disabled` the packaged config left it off; `nothing_to_read` the transcript was empty; `absent` it was asked and did not answer.
     source: [recording_vectors.py:_second_opinion_columns, nodes/second_opinion.py:second_opinion, vocabulary.py:fold_file_verdict]
     null_means: SECOND_OPINION wrote no measurement, or the fold that decided the recording predates it.
 
-  nimble_other_voice_p:
+  second_opinion_other_voice_p:
     units: probability
     description: The second-opinion model's probability that someone besides the participant speaks.
     computation: The `more_than_one` class probability of the `other_voice` choice question. Asked at temperature 0 with a fixed seed, of the pinned model `second_opinion.blob_digest`, over the original transcript and the reviewer's task context.
     source: [recording_vectors.py:_second_opinion_columns, nodes/second_opinion.py:second_opinion]
     null_means: No `ok` opinion.
 
-  nimble_instructions_spoken_p:
+  second_opinion_instructions_spoken_p:
     units: probability
     description: The second-opinion model's probability that the task's instructions are spoken in the transcript.
     computation: The `noul` probability of the `instructions_spoken` question. Asked at temperature 0 with a fixed seed, of the pinned model `second_opinion.blob_digest`, over the original transcript and the reviewer's task context.
     source: [recording_vectors.py:_second_opinion_columns, nodes/second_opinion.py:second_opinion]
     null_means: No `ok` opinion.
 
-  nimble_named_diagnosis_p:
+  second_opinion_named_diagnosis_p:
     units: probability
     description: The second-opinion model's probability that the speaker names a specific medical diagnosis of their own.
     computation: The `noul` probability of the `named_diagnosis` question. Asked at temperature 0 with a fixed seed, of the pinned model `second_opinion.blob_digest`, over the original transcript and the reviewer's task context.
     source: [recording_vectors.py:_second_opinion_columns, nodes/second_opinion.py:second_opinion]
     null_means: No `ok` opinion.
 
-  nimble_safe_harbor_identifier_present_p:
+  second_opinion_safe_harbor_identifier_present_p:
     units: probability
     description: The second-opinion model's probability that the transcript carries a HIPAA Safe Harbor identifier. Recorded, never compared with the reviewer.
     computation: The `noul` probability of the `safe_harbor_identifier_present` question. Asked at temperature 0 with a fixed seed, of the pinned model `second_opinion.blob_digest`, over the original transcript and the reviewer's task context.
     source: [recording_vectors.py:_second_opinion_columns, nodes/second_opinion.py:second_opinion]
     null_means: No `ok` opinion.
 
-  nimble_disagrees:
+  second_opinion_disagrees:
     units: none
     values: [other_voice, instructions_spoken, named_diagnosis]
     description: The questions on which the second opinion confidently disagrees with the redaction reviewer.
-    computation: A question is listed when p >= `verdict.nimble_confident_yes` and the reviewer said no, or p <= `verdict.nimble_confident_no` and the reviewer said yes. The reviewer's other_voice is `speakers` = `more_than_one` (or `unclear` with quoted other speakers). Its named_diagnosis is a CONDITION `redact` proposal entry. Its instructions_spoken is a non-empty `instructions_spoken`, compared only for readings that carry it. Both readings must be present. Under `verdict.nimble_disagreement_flags` a non-empty list is a flag ground.
+    computation: A question is listed when p >= `verdict.second_opinion_confident_yes` and the reviewer said no, or p <= `verdict.second_opinion_confident_no` and the reviewer said yes. The reviewer's other_voice is `speakers` = `more_than_one` (or `unclear` with quoted other speakers). Its named_diagnosis is a CONDITION `redact` proposal entry. Its instructions_spoken is a non-empty `instructions_spoken`, compared only for readings that carry it. Both readings must be present. Under `verdict.second_opinion_disagreement_flags` a non-empty list is a flag ground.
     source: [recording_vectors.py:_second_opinion_columns, vocabulary.py:second_opinion_disagreements]
     null_means: Never null; `[]` where nothing disagrees or nothing was compared.
 
-  nimble_disagrees_n:
+  second_opinion_disagrees_n:
     units: count
     description: How many questions disagree.
-    computation: The length of `nimble_disagrees`.
+    computation: The length of `second_opinion_disagrees`.
     source: [recording_vectors.py:_second_opinion_columns, vocabulary.py:second_opinion_disagreements]
     null_means: Never null.
 
-  nimble_blob_digest:
+  second_opinion_model_id:
+    units: none
+    description: The second-opinion decision model, as `ollama:<name>:<tag>`.
+    computation: The `second_opinion_answers` measurement's `model_id`, from `second_opinion.name` and `second_opinion.tag`; the digests in the same measurement pin what the tag named.
+    source: [recording_vectors.py:_second_opinion_columns, nodes/second_opinion.py:second_opinion]
+    null_means: No opinion was recorded.
+
+  second_opinion_blob_digest:
     units: none
     description: The sha256 digest of the second-opinion model's weights blob, the model's identity.
-    computation: The `nimble_opinion` measurement's `blob_digest`, which `verify_pin` checked against the served store before the first question.
+    computation: The `second_opinion_answers` measurement's `blob_digest`, which `verify_pin` checked against the served store before the first question.
     source: [recording_vectors.py:_second_opinion_columns, nodes/second_opinion.py:second_opinion]
     null_means: No opinion was recorded.
 

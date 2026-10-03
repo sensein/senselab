@@ -1725,13 +1725,15 @@ class TestSecondOpinionDisagreementFlagsForReview:
     """Owner, 2026-10-01: a confident second-opinion disagreement with the reviewer flags for review."""
 
     _PASSED = [NodeVerdict("REDACT", Outcome.PASS, None, "every finding redacted")]
-    _ON = FoldPolicy(nimble_disagreement_flags=True, nimble_confident_yes=0.8, nimble_confident_no=0.2)
+    _ON = FoldPolicy(
+        second_opinion_disagreement_flags=True, second_opinion_confident_yes=0.8, second_opinion_confident_no=0.2
+    )
 
     @staticmethod
     def _opinion(**probabilities: float) -> dict[str, Any]:
         held = {"other_voice": 0.02, "instructions_spoken": 0.02, "named_diagnosis": 0.02}
         held.update(probabilities)
-        return {"status": "ok", "probabilities": held, "model_id": "ollama:nimble:9b", "blob_digest": "sha256:ab"}
+        return {"status": "ok", "probabilities": held, "model_id": "ollama:clef:27b", "blob_digest": "sha256:ab"}
 
     @staticmethod
     def _reading(**fields: Any) -> dict[str, Any]:  # noqa: ANN401
@@ -1795,8 +1797,12 @@ class TestSecondOpinionDisagreementFlagsForReview:
         """Off, or either threshold null, leaves the ground silent."""
         opinion = self._opinion(other_voice=0.99)
         for policy in (
-            FoldPolicy(nimble_confident_yes=0.8, nimble_confident_no=0.2),
-            FoldPolicy(nimble_disagreement_flags=True, nimble_confident_yes=None, nimble_confident_no=0.2),
+            FoldPolicy(second_opinion_confident_yes=0.8, second_opinion_confident_no=0.2),
+            FoldPolicy(
+                second_opinion_disagreement_flags=True,
+                second_opinion_confident_yes=None,
+                second_opinion_confident_no=0.2,
+            ),
         ):
             assert not self._grounds(self._fold(opinion, self._reading(), policy))
 
@@ -1812,7 +1818,11 @@ class TestSecondOpinionDisagreementFlagsForReview:
         from senselab.audio.workflows.triage.config import load_triage_config
 
         policy = FoldPolicy.from_config(load_triage_config())
-        assert (policy.nimble_disagreement_flags, policy.nimble_confident_yes, policy.nimble_confident_no) == (
+        assert (
+            policy.second_opinion_disagreement_flags,
+            policy.second_opinion_confident_yes,
+            policy.second_opinion_confident_no,
+        ) == (
             True,
             0.8,
             0.2,

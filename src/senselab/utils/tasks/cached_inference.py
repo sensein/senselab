@@ -753,7 +753,7 @@ def run_alignment_cached(
 RESULT_PROCESS_VERSIONS: Final[Mapping[str, int]] = MappingProxyType(
     {
         "clearvoice": 1,
-        "nimble_opinion": 1,
+        "second_opinion_answers": 1,
         "pii_detection": 1,
         "redaction_review": 1,
     }
