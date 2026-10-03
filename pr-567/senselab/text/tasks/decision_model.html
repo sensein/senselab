@@ -178,8 +178,8 @@
 
                         <div class="docstring"><p>Decision models: small local models that answer typed questions about a text with probabilities.</p>
 
-<p>The first is Bespoke Labs' Nimble, served by Ollama, which triage uses as a second opinion beside its
-instruction-tuned reviewer. <code>.ollama</code> runs a pinned model; <code>.second_opinion</code> holds the
+<p>Triage uses Cloudflare's Clef, served by Ollama, as a second opinion beside its instruction-tuned
+reviewer. <code>.ollama</code> runs a pinned model; <code>.second_opinion</code> holds the
 questions triage asks and reads the answers back.</p>
 </div>
 
@@ -189,8 +189,8 @@ questions triage asks and reads the answers back.</p>
 
                         <div class="pdoc-code codehilite"><pre><span></span><span id="L-1"><a href="#L-1"><span class="linenos"> 1</span></a><span class="sd">&quot;&quot;&quot;Decision models: small local models that answer typed questions about a text with probabilities.</span>
 </span><span id="L-2"><a href="#L-2"><span class="linenos"> 2</span></a>
-</span><span id="L-3"><a href="#L-3"><span class="linenos"> 3</span></a><span class="sd">The first is Bespoke Labs&#39; Nimble, served by Ollama, which triage uses as a second opinion beside its</span>
-</span><span id="L-4"><a href="#L-4"><span class="linenos"> 4</span></a><span class="sd">instruction-tuned reviewer. :mod:`.ollama` runs a pinned model; :mod:`.second_opinion` holds the</span>
+</span><span id="L-3"><a href="#L-3"><span class="linenos"> 3</span></a><span class="sd">Triage uses Cloudflare&#39;s Clef, served by Ollama, as a second opinion beside its instruction-tuned</span>
+</span><span id="L-4"><a href="#L-4"><span class="linenos"> 4</span></a><span class="sd">reviewer. :mod:`.ollama` runs a pinned model; :mod:`.second_opinion` holds the</span>
 </span><span id="L-5"><a href="#L-5"><span class="linenos"> 5</span></a><span class="sd">questions triage asks and reads the answers back.</span>
 </span><span id="L-6"><a href="#L-6"><span class="linenos"> 6</span></a><span class="sd">&quot;&quot;&quot;</span>
 </span><span id="L-7"><a href="#L-7"><span class="linenos"> 7</span></a>
@@ -269,7 +269,7 @@ questions triage asks and reads the answers back.</p>
 </span><span id="OllamaPin-45"><a href="#OllamaPin-45"><span class="linenos">45</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Which model to serve, and the digests that make it that model.</span>
 </span><span id="OllamaPin-46"><a href="#OllamaPin-46"><span class="linenos">46</span></a>
 </span><span id="OllamaPin-47"><a href="#OllamaPin-47"><span class="linenos">47</span></a><span class="sd">    Attributes:</span>
-</span><span id="OllamaPin-48"><a href="#OllamaPin-48"><span class="linenos">48</span></a><span class="sd">        name: The library model name, e.g. ``nimble``.</span>
+</span><span id="OllamaPin-48"><a href="#OllamaPin-48"><span class="linenos">48</span></a><span class="sd">        name: The library model name, e.g. ``clef``.</span>
 </span><span id="OllamaPin-49"><a href="#OllamaPin-49"><span class="linenos">49</span></a><span class="sd">        tag: The tag the manifest is filed under, e.g. ``9b``.</span>
 </span><span id="OllamaPin-50"><a href="#OllamaPin-50"><span class="linenos">50</span></a><span class="sd">        blob_digest: ``sha256:&lt;64 hex&gt;`` of the model-weights layer.</span>
 </span><span id="OllamaPin-51"><a href="#OllamaPin-51"><span class="linenos">51</span></a><span class="sd">        config_digest: ``sha256:&lt;64 hex&gt;`` of the manifest&#39;s image config.</span>
@@ -295,7 +295,7 @@ questions triage asks and reads the answers back.</p>
 <h6 id="attributes">Attributes:</h6>
 
 <ul>
-<li><strong>name:</strong>  The library model name, e.g. <code>nimble</code>.</li>
+<li><strong>name:</strong>  The library model name, e.g. <code>clef</code>.</li>
 <li><strong>tag:</strong>  The tag the manifest is filed under, e.g. <code>9b</code>.</li>
 <li><strong>blob_digest:</strong>  <code>sha256:&lt;64 hex&gt;</code> of the model-weights layer.</li>
 <li><strong>config_digest:</strong>  <code>sha256:&lt;64 hex&gt;</code> of the manifest's image config.</li>
