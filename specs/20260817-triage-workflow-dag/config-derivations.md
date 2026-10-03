@@ -1797,18 +1797,20 @@ verdict.level_min_dbfs: null
   `emptiness.peak_floor`, which the fold already consumes as the `empty` route state. Left unset
   rather than defaulted so that the two do not become two answers to one question. Read by no code.
 
-verdict.nimble_disagreement_flags: true
+verdict.second_opinion_disagreement_flags: true
   Whether a confident disagreement between the second-opinion model (SECOND_OPINION's
-  `nimble_opinion`) and the redaction reviewer is a flag ground. Owner, 2026-10-01: true. A switch,
+  `second_opinion_answers`) and the redaction reviewer is a flag ground. Owner, 2026-10-01: true. A switch,
   not a threshold. It reads only when both readings are present -- the opinion `ok`, the annotation
   `clean` or `flagged` -- so a recording the second opinion never reached contributes nothing. Three
   questions are compared: other_voice, instructions_spoken and named_diagnosis. Safe-harbor is asked
   and recorded but not compared, because the reviewer's identifier reading is per span and the
   model's is per transcript. Release is unchanged; this only routes a file to a human.
 
-verdict.nimble_confident_yes: 0.8
-verdict.nimble_confident_no: 0.2
-  UNFITTED. A disagreement is p >= yes with the reviewer saying no, or p <= no with the reviewer
+verdict.second_opinion_confident_yes: 0.8
+verdict.second_opinion_confident_no: 0.2
+  UNFITTED, and fitted to no model now in use: the cuts below were proposed from a Nimble 9B pilot
+  and kept unchanged when Clef 27B replaced Nimble (owner, 2026-10-02: leave the thresholds). Clef's
+  probability distribution is unmeasured, so nothing below says where its answers fall. A disagreement is p >= yes with the reviewer saying no, or p <= no with the reviewer
   saying yes. The proposal comes from the 20-recording pilot (2026-09-30, nimble:9b blob
   bbf1d6fc..., /orcd/scratch/bcs/002/satra/tmp_nimble/pilot_out.json). Its probabilities are
   bimodal: of the 60 compared answers (three questions x 20), 50 are <= 0.10, six are >= 0.84, and
@@ -2298,31 +2300,35 @@ how loud a released artifact's redactions are without anyone having measured whi
 ## second_opinion
 
 The SECOND_OPINION node: a decision model asked four typed questions over the text and task context
-REVIEW reads. Design: `specs/20261001-nimble-second-opinion/design.md`.
+REVIEW reads. Design: `specs/20261003-clef-second-opinion/design.md` (Clef); the Nimble design it
+replaced is `specs/20261001-nimble-second-opinion/design.md`.
 
 ```
 second_opinion.enabled: false
   Off in the packaged config, because the node needs a GPU and an Ollama store that a default run
   does not hold. A campaign turns it on through `scripts/extend_second_opinion.py`'s `--config`.
 
-second_opinion.name: nimble
-second_opinion.tag: latest
-  Bespoke Labs' Nimble 9B (Q8_0 GGUF), the model the 2026-09-30 pilot measured. `latest` is the tag
-  the pilot's pull filed the manifest under. The tag only locates the manifest. It does not identify
-  the model.
+second_opinion.name: clef
+second_opinion.tag: 27b
+  Cloudflare's Clef, the 27B flagship (Qwen 3.8-27B backbone, Q4_K_M GGUF, Apache-2.0), released
+  2026-10-01; owner, 2026-10-03: replace Nimble with Clef. `27b` and `latest` name the same manifest.
+  Not `clef-flash`: ollama/ollama#18769 reports it failing on /v1/systemone ("Clef: non-finite logit"
+  on CUDA) while `clef:27b` answers. Needs Ollama 0.35.1 or later (the image config's `requires`).
+  The tag only locates the manifest. It does not identify the model.
 
-second_opinion.blob_digest: sha256:bbf1d6fc...8013
-second_opinion.config_digest: sha256:2c26ca58...06c3
-second_opinion.manifest_digest: sha256:24e550a1...7e0c
-  The identity, as the pilot's pulled store recorded it: the weights layer, the image config and the
-  manifest file. The manifest also names the system prompt layer and the parameters layer
-  (`{"num_ctx":8194}`), and `verify_pin` hashes every layer it names. Under the same weights, a
-  changed system prompt or context length is a different model. `verify_pin` refuses a store that
-  differs in any of these. A new release is a deliberate edit of all three values, and that edit
-  changes the result-cache key.
+second_opinion.blob_digest: sha256:6c02216a...3da9
+second_opinion.config_digest: sha256:7b967ed6...8ab2
+second_opinion.manifest_digest: sha256:2bb11a61...5b73
+  The identity, read from registry.ollama.ai on 2026-10-03: the weights layer (17,059,634,656
+  bytes), the image config, and the manifest file. The manifest also names a vision projector
+  (927,607,360 bytes, unused here), the licence and a parameters layer, `{"num_ctx":16384}`, so the
+  context per request is part of the pinned identity rather than a config value. `verify_pin`
+  hashes every layer the manifest names and refuses a store that differs in any. A new release is a
+  deliberate edit of all three values, and that edit changes the result-cache key.
 
 second_opinion.seed: 7
-  Arbitrary and fixed, sent with temperature 0. Measured inert (2026-10-01, H100 srun, one
+  Arbitrary and fixed, sent with temperature 0. Clef scores with a non-autoregressive head, so no
+  sampling enters by construction; unmeasured on Clef. On Nimble it was measured inert (2026-10-01, H100 srun, one
   free-speech transcript): no options, seed 7 twice, seed 99, temperature 1.0 and an unknown option
   key all returned byte-identical probabilities. The endpoint reads the probabilities off the logits
   of a 3-token answer, so sampling never enters. It stays in the request and in the cache key as a
@@ -2330,7 +2336,8 @@ second_opinion.seed: 7
   were identical 20/20.
 
 second_opinion.timeout_s: 300
-  Per request. The first request loads the weights: 74.5 s in the pilot. Warm requests took
+  Per request. The first request loads the weights: 74.5 s for Nimble's 9.5 GB in its pilot; Clef's
+  18 GB is unmeasured. Warm requests took
   0.71-1.39 s. 300 s covers a cold load on a slow filesystem by 4x. Under `workers` concurrent
   requests a request may wait behind the others; 300 s still covers four warm answers by 50x.
 
@@ -2339,8 +2346,9 @@ second_opinion.workers: 4
   the r9 run (2026-10-01, H100, one row at a time): the model call's median was 1.35 s against a
   per-row wall of 4.6-10 s, the rest being store read, a per-row re-fold (since removed) and store
   write on scratch, so the GPU sat idle most of each row. Four keeps the GPU busy while other rows
-  read and write; the model's `num_ctx` is 8194, so four slots hold 4 x 8194 tokens of KV cache,
-  well inside an 80 GB H100 or A100 beside 9.5 GB of weights. Not in the result-cache key: like the
+  read and write. Those figures are Nimble's; Clef's manifest pins `num_ctx` 16384, so four slots
+  hold 4 x 16384 tokens of KV cache beside 18 GB of weights, which `require_gpu` refuses to serve
+  unless wholly resident. Unmeasured on Clef until its pilot. Not in the result-cache key: like the
   GPU model, batching can move the floating-point reduction order, so it is recorded on the
   opinion (`num_parallel`) as provenance, not identity.
 
