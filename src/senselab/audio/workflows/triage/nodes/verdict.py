@@ -80,8 +80,8 @@ from senselab.audio.workflows.triage.nodes.redact import (
     UNMASKED_BY_REVIEWER,
     MaskPlan,
     mask_plan,
+    name_approvals,
     padding_ms,
-    planned_extents,
 )
 from senselab.audio.workflows.triage.task_lexicon import task_lexicon
 from senselab.audio.workflows.triage.vocabulary import (
@@ -376,6 +376,9 @@ def _redaction_evidence(
         masks_final_n=len(plan.final),
         masks_changed=plan.changed,
         reviewer_unmasked_n=plan.count(UNMASKED_BY_REVIEWER),
+        policy_masks_n=plan.policy_masks_n,
+        person_names_masked_n=plan.person_names_masked,
+        name_release_proposed=plan.name_release_proposed,
     )
 
 
@@ -788,11 +791,13 @@ def verdict(
     plan = mask_plan(
         store,
         reviewer_applies=policy.llm_reset_redactions and reviewer_may_unmask(annotation),
-        padding_ms=padding_ms(config) if planned_extents(store) else 0,
-        human_review_categories=policy.llm_human_review_categories,
+        padding_ms=padding_ms(config),
+        condition_categories=policy.condition_categories,
         protected_categories=policy.trim_protected_categories,
         cohort_conditions=policy.cohort_conditions,
         lexicon=task_lexicon(config, declared_task_family(store), hint),
+        language=None if hint is None else str(hint.metadata.get("language") or "") or None,
+        name_approvals=name_approvals(config, recording_stem(store)),
     )
     file_verdict = fold_file_verdict(
         node_verdicts,

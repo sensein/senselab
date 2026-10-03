@@ -13,7 +13,10 @@ from __future__ import annotations
 import re
 import unicodedata
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Sequence
+
+import yaml
 
 from senselab.audio.workflows.audio_analysis.harmonize import align_pair, normalise_token
 from senselab.audio.workflows.triage.nodes.branches import (
@@ -82,6 +85,9 @@ _BRACKETED = re.compile(r"[\[(<][^\])>]*[\])>]")
 _VOCAL_RUN = re.compile(r"h*([aeiou])\1*h*|h*m+h*")
 """A vocal task's own sound: one vowel letter repeated, or a hum, with optional ``h`` (``aaah``, ``hee``, ``mmm``)."""
 
+SPANISH_FUNCTION_WORDS_PATH = Path(__file__).parent / "data" / "function_words_es.yaml"
+"""Spanish closed-class words, merged into :data:`FUNCTION_WORDS`."""
+
 FUNCTION_WORDS = frozenset(
     """
     a an the this that these those it its it's i me my mine we us our you your he him his she her they them
@@ -100,10 +106,11 @@ FUNCTION_WORDS = frozenset(
     someone something anyone anything everyone everything nobody nothing whatever whoever
     hasn't haven't hadn't wouldn't couldn't shouldn't mustn't shan't
     we've they've you've we'll they'll it'll he'll she'll he'd she'd we'd they'd you'd it'd
-    el la los las un una unos unas y o de del al en con por para que se lo le es no si mi tu su
     """.split()
+) | frozenset(
+    str(word).casefold() for word in (yaml.safe_load(SPANISH_FUNCTION_WORDS_PATH.read_text()) or {}).get("words") or ()
 )
-"""Closed-class words: a residue made of nothing else carries no content a detector could find."""
+"""Closed-class words, English and Spanish: a residue made of nothing else carries no content a detector could find."""
 
 _NUMERALS = {
     "0": "zero",

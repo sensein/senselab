@@ -33,6 +33,7 @@ DATA_MAP_PATHS = frozenset(
         "branch.label_sets",
         "branch.phoneme_place_classes",
         "branch.phoneme_vowel_classes",
+        "redaction.name_approvals",
         "routing.hint_branch_map",
         "verdict.conformance_flags_by_family",
         "verdict.flag_gate_exemptions",

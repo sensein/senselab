@@ -323,8 +323,9 @@ verdict:
   llm_redaction_withholds: false       # UNFITTED. a reading of residue withholds a recording REDACT passed
   llm_rescan_clears: true              # a clean reading releases the redacted copy of a REDACT re-scan fail
   llm_reset_redactions: true           # owner, 2026-09-27: a reading's release entries unmask exactly the words they name
-  llm_human_review_categories: [CONDITION]  # owner, 2026-09-27: a reading proposing only these is routed to human review
-  cohort_conditions: bridge2ai_voice_adult_2026-09-04  # data/cohort_conditions profile: which human-review conditions the study recruits for
+  condition_categories: [CONDITION]    # owner, 2026-10-03 (policy v7): a listed health condition is never masked and never withholds
+  cohort_conditions: bridge2ai_voice_adult_2026-09-04  # data/cohort_conditions profile: which listed conditions the study recruits for
+  person_name_review_flags: true       # owner, 2026-10-03 (policy v7): a masked person's name flags for a human's review of name tags
   trim_protected_categories: [PERSON, NAME, LOCATION, LOC]  # owner, 2026-09-27: a marked word written as a proper noun is never trimmed
   llm_second_speaker_flags: true       # owner, 2026-09-27: a reading that heard more than one speaker flags the recording for review
   llm_contradiction_flags: true        # owner, 2026-09-28: a flagged reading that names no words flags the recording for review
@@ -553,6 +554,7 @@ pii:
 # What a released transcript replaces, and by how much padding.
 redaction:
   padding_ms: 250                      # outward pad on a redacted extent; a convention, not a fit
+  name_approvals: {}                   # owner, 2026-10-03 (policy v7): recording file stem -> person names a human approved for release
   fill: silence                        # what replaces redacted audio: silence, noise or bleep
   bleep_hz: 1000.0                     # tone frequency when fill is bleep
   llm_check:                           # an instruction-tuned LLM reads the redacted transcript back

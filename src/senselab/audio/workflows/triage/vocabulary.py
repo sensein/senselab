@@ -14,8 +14,6 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Literal, Mapping, Sequence
 
-from senselab.audio.workflows.triage.cohort import COHORT, OTHER, load_cohort_profile
-
 GRAPH_ORDER = (
     "ADMIT",
     "PREPROCESS",
@@ -171,20 +169,6 @@ RELEASE_UNKNOWN_GROUNDS = (NO_TRANSCRIPT, SPEECH_UNREAD, REDACTION_OWED, SCAN_UN
 
 REVIEWER_PROPOSED_REDACTION = "the redaction reviewer proposed hiding more and the policy lets that withhold"
 
-REVIEWER_NEEDS_HUMAN_REVIEW_COHORT = (
-    "the redaction reviewer proposed hiding only health conditions the study itself recruits for; whether naming "
-    "one identifies someone depends on what else is released, so the recording needs human review"
-)
-
-REVIEWER_NEEDS_HUMAN_REVIEW_OTHER = (
-    "the redaction reviewer proposed hiding only health conditions, at least one outside the study's own cohorts; "
-    "whether it identifies someone depends on its rarity and on what else is released, so the recording needs "
-    "human review"
-)
-
-HUMAN_REVIEW_GROUNDS = {COHORT: REVIEWER_NEEDS_HUMAN_REVIEW_COHORT, OTHER: REVIEWER_NEEDS_HUMAN_REVIEW_OTHER}
-"""The human-review ground for each kind of condition the reading proposed."""
-
 UNPLACED_PLACED = "placed"
 """A detector finding the fold could not place, placed by a reviewer ``redact`` entry of its family."""
 
@@ -204,12 +188,7 @@ UNPLACED_FINDING_UNREAD = (
     "a detector finding could not be placed on the transcript's words and no reviewer read the recording"
 )
 
-RELEASE_WITHHELD_GROUNDS = (
-    REVIEWER_PROPOSED_REDACTION,
-    REVIEWER_NEEDS_HUMAN_REVIEW_COHORT,
-    REVIEWER_NEEDS_HUMAN_REVIEW_OTHER,
-    UNPLACED_FINDING_UNREAD,
-)
+RELEASE_WITHHELD_GROUNDS = (REVIEWER_PROPOSED_REDACTION, UNPLACED_FINDING_UNREAD)
 """Why a recording is withheld where REDACT itself did not withhold it."""
 
 REVIEWER_CLEARED_RESCAN = (
@@ -222,7 +201,23 @@ REVIEWER_UNMASKED_SOME = (
 
 MASKS_TRIMMED_TO_CONTENT = "REDACT's masks were trimmed to the content words they hide; the copy keeps those"
 
-RELEASE_WITH_REDACTION_GROUNDS = (REVIEWER_CLEARED_RESCAN, REVIEWER_UNMASKED_SOME, MASKS_TRIMMED_TO_CONTENT)
+POLICY_MASKS_ADDED = (
+    "the redaction policy masked words it always masks -- a date element, an age, a state -- beside REDACT's "
+    "masks; the copy keeps those"
+)
+
+POLICY_MASKS_ONLY = (
+    "the scan found nothing to redact, and the redaction policy masked words it always masks -- a date element, "
+    "an age, a state; the copy keeps those"
+)
+
+RELEASE_WITH_REDACTION_GROUNDS = (
+    REVIEWER_CLEARED_RESCAN,
+    REVIEWER_UNMASKED_SOME,
+    MASKS_TRIMMED_TO_CONTENT,
+    POLICY_MASKS_ADDED,
+    POLICY_MASKS_ONLY,
+)
 """Why a redacted copy is released other than as REDACT itself planned and passed it."""
 
 
@@ -243,6 +238,11 @@ class RedactionEvidence:
             are applied; see :func:`~senselab.audio.workflows.triage.nodes.redact.mask_plan`.
         masks_changed: Whether any planned mask lost a word.
         reviewer_unmasked_n: How many words the reviewer's ``release`` entries unmasked.
+        policy_masks_n: How many masks the redaction policy itself placed, over words no detector
+            finding covered.
+        person_names_masked_n: How many words of a person's name stay masked.
+        name_release_proposed: The reviewer's ``release`` quotes naming a person's name it may not
+            release on its own.
     """
 
     lexical_words_n: int | None = None
@@ -253,6 +253,9 @@ class RedactionEvidence:
     masks_final_n: int = 0
     masks_changed: bool = False
     reviewer_unmasked_n: int = 0
+    policy_masks_n: int = 0
+    person_names_masked_n: int = 0
+    name_release_proposed: tuple[str, ...] = ()
 
 
 UNMEASURABLE = "unmeasurable"
@@ -352,6 +355,12 @@ REVIEWER_HEARD_SECOND_SPEAKER = "the redaction reviewer read another speaker in 
 where diarization's own gate has not already flagged another speaker in the task extent. Any other voice
 flags, whether or not the task's instructions expect it; the ground names each quote and whether the
 instructions expect that voice, or says no words were quoted."""
+
+PERSON_NAME_AWAITS_REVIEW = "a person's name stays masked until a person approves its release"
+"""The flag ground a masked person's name contributes, under ``verdict.person_name_review_flags``: the reviewer
+may propose releasing a public figure's name, and only a human's approval (``redaction.name_approvals``)
+releases it. Controlled vocabulary, with the number of masked name words and any proposed release appended;
+the release is unchanged."""
 
 SECOND_OPINION_DISAGREES = "the second-opinion model confidently disagrees with the redaction reviewer"
 """The flag ground a decision model's confident disagreement with the reviewer contributes, under
@@ -491,14 +500,16 @@ class FoldPolicy:
             releases the redacted copy of a recording REDACT withheld only because its re-scan still
             read a finding. An incomplete scan or re-scan is never cleared.
         llm_reset_redactions: Whether a reading's ``release`` entries unmask the words they name.
-        llm_human_review_categories: Upper-cased reviewer categories whose ``redact`` entries route
-            the recording to human review rather than to a plain withholding, where every ``redact``
-            entry of the reading is in one of them.
+        condition_categories: Upper-cased reviewer categories whose ``proposal`` entries are health
+            conditions, as a reading written before conditions had their own part carries them. A
+            condition is never masked and never withholds.
         trim_protected_categories: Upper-cased detector categories under which a marked word
             written as a proper noun is never unmasked by the content-word trim.
-        cohort_conditions: The packaged cohort profile a human-review proposal is read against
+        cohort_conditions: The packaged cohort profile a listed condition is read against
             (:mod:`senselab.audio.workflows.triage.cohort`), or None where the study declares none,
-            in which case every such proposal is an ``other`` condition.
+            in which case every condition is an ``other`` one.
+        person_name_review_flags: Whether a masked person's name is a flag ground
+            (:data:`PERSON_NAME_AWAITS_REVIEW`); the release is unchanged.
         llm_second_speaker_flags: Whether a reading that heard more than one speaker is a flag ground
             on the triage axis.
         llm_instructions_spoken_flags: Whether a reading that quotes the task's instructions spoken in
@@ -527,9 +538,10 @@ class FoldPolicy:
     llm_redaction_withholds: bool = False
     llm_rescan_clears: bool = False
     llm_reset_redactions: bool = False
-    llm_human_review_categories: tuple[str, ...] = ()
+    condition_categories: tuple[str, ...] = ("CONDITION",)
     trim_protected_categories: tuple[str, ...] = ()
     cohort_conditions: str | None = None
+    person_name_review_flags: bool = False
     llm_second_speaker_flags: bool = False
     llm_contradiction_flags: bool = False
     llm_instructions_spoken_flags: bool = False
@@ -562,9 +574,10 @@ class FoldPolicy:
             llm_redaction_withholds=bool(config.get(f"{_SECTION}.llm_redaction_withholds", False)),
             llm_rescan_clears=bool(config.get(f"{_SECTION}.llm_rescan_clears", False)),
             llm_reset_redactions=bool(config.get(f"{_SECTION}.llm_reset_redactions", False)),
-            llm_human_review_categories=tuple(
-                str(category).upper() for category in (config.get(f"{_SECTION}.llm_human_review_categories") or ())
+            condition_categories=tuple(
+                str(category).upper() for category in (config.get(f"{_SECTION}.condition_categories") or ())
             ),
+            person_name_review_flags=bool(config.get(f"{_SECTION}.person_name_review_flags", False)),
             trim_protected_categories=tuple(
                 str(category).upper() for category in (config.get(f"{_SECTION}.trim_protected_categories") or ())
             ),
@@ -839,27 +852,35 @@ def _reviewer_found_residue(llm_redaction: Mapping[str, Any] | None) -> bool:
     return any(str(entry.get("action")) == "redact" for entry in annotation.get("proposal") or ())
 
 
-def deciding_reading(llm_redaction: Mapping[str, Any] | None, agreed: frozenset[int]) -> dict[str, Any]:
-    """The reading with the ``redact`` entries that agree with the masks set aside.
+def deciding_reading(
+    llm_redaction: Mapping[str, Any] | None,
+    agreed: frozenset[int],
+    condition_categories: Sequence[str] = ("CONDITION",),
+) -> dict[str, Any]:
+    """The reading with the ``redact`` entries that agree with the masks, and the listed conditions, set aside.
 
     Args:
         llm_redaction: REVIEW's annotation, or None where it wrote none.
         agreed: The ``proposal`` positions of ``redact`` entries whose words a mask already hides or
             that place a finding the fold could not place
             (:attr:`~senselab.audio.workflows.triage.nodes.redact.MaskPlan.agreed`).
+        condition_categories: Upper-cased categories whose entries are health conditions, which a
+            prompt-v6 reading carries as ``redact`` entries; never a proposal to hide.
 
     Returns:
         The annotation, its ``proposal`` without those entries. An agreeing entry is not the reviewer
-        proposing to hide more, so no test of residue or human review reads it.
+        proposing to hide more, and a condition is never hidden, so no test of residue reads either.
     """
     annotation = dict(llm_redaction or {})
-    if not agreed:
-        return annotation
+    conditions = {category.upper() for category in condition_categories}
     proposal = [
         entry
         for index, entry in enumerate(annotation.get("proposal") or ())
-        if str(entry.get("action")) == "release" or index not in agreed
+        if str(entry.get("action")) == "release"
+        or (index not in agreed and str(entry.get("category") or "").upper() not in conditions)
     ]
+    if len(proposal) == len(annotation.get("proposal") or ()):
+        return annotation
     return {**annotation, "proposal": proposal}
 
 
@@ -893,55 +914,6 @@ def reviewer_may_unmask(llm_redaction: Mapping[str, Any] | None) -> bool:
         ``release`` entries from saying which masked words are not identifying.
     """
     return dict(llm_redaction or {}).get("status") in ("clean", "flagged")
-
-
-def needs_human_review(llm_redaction: Mapping[str, Any] | None, categories: Sequence[str]) -> bool:
-    """Whether every ``redact`` entry of a reading is in a category routed to human review.
-
-    Args:
-        llm_redaction: REVIEW's annotation, or None where it wrote none.
-        categories: Upper-cased categories, as ``verdict.llm_human_review_categories``.
-
-    Returns:
-        True only where the reading proposes hiding more (:func:`_reviewer_found_residue`) and each
-        of its ``redact`` entries carries one of ``categories``.
-    """
-    if not categories or not _reviewer_found_residue(llm_redaction):
-        return False
-    wanted = set(categories)
-    return all(
-        str(entry.get("category") or "").upper() in wanted
-        for entry in dict(llm_redaction or {}).get("proposal") or ()
-        if str(entry.get("action")) == "redact"
-    )
-
-
-def human_review_kind(
-    llm_redaction: Mapping[str, Any] | None, categories: Sequence[str], cohort_conditions: str | None
-) -> str | None:
-    """Which kind of condition a reading held for human review names.
-
-    Args:
-        llm_redaction: REVIEW's annotation, or None where it wrote none.
-        categories: Upper-cased categories, as ``verdict.llm_human_review_categories``.
-        cohort_conditions: The cohort profile's name, as ``verdict.cohort_conditions``.
-
-    Returns:
-        None where the reading is not held for human review (:func:`needs_human_review`);
-        :data:`~senselab.audio.workflows.triage.cohort.COHORT` where every ``redact`` entry names a
-        cohort condition; :data:`~senselab.audio.workflows.triage.cohort.OTHER` otherwise.
-    """
-    if not needs_human_review(llm_redaction, categories):
-        return None
-    if cohort_conditions is None:
-        return OTHER
-    profile = load_cohort_profile(cohort_conditions)
-    kinds = {
-        profile.kind(str(entry.get("text") or ""))
-        for entry in dict(llm_redaction or {}).get("proposal") or ()
-        if str(entry.get("action")) == "redact"
-    }
-    return COHORT if kinds == {COHORT} else OTHER
 
 
 def _release_from(
@@ -992,6 +964,14 @@ def _release_from(
         and evidence.rescan_survivors
     ):
         release, ground = Release.WITH_REDACTION, REVIEWER_CLEARED_RESCAN
+    if (
+        release is Release.WITHOUT_REDACTION
+        and ground == SCAN_FOUND_NOTHING
+        and redact is None
+        and evidence.masks_final_n > 0
+        and evidence.policy_masks_n > 0
+    ):
+        return Release.WITH_REDACTION, POLICY_MASKS_ONLY
     if release is not Release.WITH_REDACTION:
         return release, ground
     reviewer = evidence.reviewer_unmasked_n > 0
@@ -1003,7 +983,9 @@ def _release_from(
         if ground == REVIEWER_CLEARED_RESCAN:
             return Release.WITHOUT_REDACTION, REVIEWER_CLEARED_UNMASKED
     if evidence.masks_changed:
-        return Release.WITH_REDACTION, REVIEWER_UNMASKED_SOME if reviewer else MASKS_TRIMMED_TO_CONTENT
+        if reviewer:
+            return Release.WITH_REDACTION, REVIEWER_UNMASKED_SOME
+        return Release.WITH_REDACTION, POLICY_MASKS_ADDED if evidence.policy_masks_n else MASKS_TRIMMED_TO_CONTENT
     return release, ground
 
 
@@ -1230,8 +1212,7 @@ def fold_file_verdict(
     ):
         reasons.append(NodeVerdict(_SPEECH, Outcome.FLAG, None, NO_LEXICAL_ITEM_PRODUCED))
     annotation = dict(llm_redaction or {})
-    deciding = deciding_reading(annotation, agreed_redactions)
-    human_review = human_review_kind(deciding, rules.llm_human_review_categories, rules.cohort_conditions)
+    deciding = deciding_reading(annotation, agreed_redactions, rules.condition_categories)
     if rules.llm_redaction_flags and _reviewer_found_residue(deciding):
         named = ", ".join(
             sorted(
@@ -1242,8 +1223,14 @@ def fold_file_verdict(
                 }
             )
         )
-        ground_text = HUMAN_REVIEW_GROUNDS[human_review] if human_review else LLM_REDACTION_RESIDUE
+        ground_text = LLM_REDACTION_RESIDUE
         reasons.append(NodeVerdict(_VERDICT, Outcome.FLAG, None, f"{ground_text}: {named}" if named else ground_text))
+    evidence = redaction or RedactionEvidence()
+    if rules.person_name_review_flags and evidence.person_names_masked_n > 0:
+        proposed = "; ".join(json.dumps(text) for text in evidence.name_release_proposed)
+        named_n = f"{evidence.person_names_masked_n} name word(s) masked"
+        why = f"{PERSON_NAME_AWAITS_REVIEW}: {named_n}" + (f"; release proposed for {proposed}" if proposed else "")
+        reasons.append(NodeVerdict(_VERDICT, Outcome.FLAG, None, why))
     diarized_other = any(
         record.get("passed") is False and record.get("gate") == DOMINANT_SPEAKER_GATE for record in flag_gates or ()
     )
@@ -1376,13 +1363,7 @@ def fold_file_verdict(
     withholds = rules.llm_redaction_withholds and _reviewer_found_residue(deciding)
     clears = rules.llm_rescan_clears and _reviewer_cleared(deciding)
     unread = any(state == UNPLACED_UNREAD for _, state in unplaced)
-    withholding = (
-        (HUMAN_REVIEW_GROUNDS[human_review] if human_review else REVIEWER_PROPOSED_REDACTION)
-        if withholds
-        else UNPLACED_FINDING_UNREAD
-        if unread
-        else None
-    )
+    withholding = REVIEWER_PROPOSED_REDACTION if withholds else UNPLACED_FINDING_UNREAD if unread else None
     release, release_ground = _release_from(
         node_verdicts,
         redaction or RedactionEvidence(),

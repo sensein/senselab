@@ -550,7 +550,9 @@ def _source(store: ProvStore, run_dir: Path, name: str, config: TriageConfig) ->
     release = None if folded is None else str(folded.attributes.get("release") or "")
     if release != Release.WITH_REDACTION.value:
         raise LookupError(f"release is {release or 'unfolded'}, so no redacted copy is released")
-    released = released_audio(store, run_dir, bleep_hz=config.get("redaction.bleep_hz"))
+    released = released_audio(
+        store, run_dir, bleep_hz=config.get("redaction.bleep_hz"), fill=str(config.require("redaction.fill"))
+    )
     first = store.get_entity(released.derived_from[0])
     return Source(
         entity_id=first.id,

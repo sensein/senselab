@@ -1668,29 +1668,31 @@ verdict.llm_reset_redactions: true
   stand. It never moves `withheld` or `not_assessed`, and has no effect while the reviewer is off. The content-word trim is not governed by this key: no mask ever keeps a
   non-content word. The rule is in `specs/20260927-pii-span-ledger/design.md`.
 
-verdict.llm_human_review_categories: [CONDITION]
-  The reviewer categories whose `redact` entries route a recording to human review under
-  `REVIEWER_NEEDS_HUMAN_REVIEW_COHORT` or `REVIEWER_NEEDS_HUMAN_REVIEW_OTHER` (by
-  `verdict.cohort_conditions`), where every `redact` entry of the reading is in one of them; a
-  reading also proposing another category keeps the plain proposed-redaction ground. Owner,
-  2026-09-27, on a named health condition: "this depends on uniqueness of condition, especially when
-  coupled with other information being released. so should be flagged for review". CONDITION only,
-  on that instruction: it is the one category whose identifying power the owner named as depending
-  on rarity and context rather than on the words alone. The release stays withheld pending that
-  review, and the triage axis flags on the same ground. 190 of r6's 823 reviewer withholdings carry
-  CONDITION as their only category.
+verdict.condition_categories: [CONDITION]
+  The reviewer categories whose `proposal` entries are health conditions, as a reading written under
+  prompt v6 or earlier carries them (prompt v7 lists conditions in their own `conditions` part). Policy
+  v7, owner 2026-10-03: "conditions: we should not withhold anything based on condition", and the
+  owner chose to release them unmasked. A listed condition is placed on its words and recorded on the
+  ledger as `released_condition`; it masks nothing, withholds nothing and flags nothing. This replaces
+  `verdict.llm_human_review_categories`, which routed a recording proposing only conditions to human
+  review and withheld it (1,081 withholdings at r11 were 580 cohort and 267 other conditions). The
+  rule is in `specs/20261003-redaction-policy-v7/design.md`.
 
 verdict.cohort_conditions: bridge2ai_voice_adult_2026-09-04
   The packaged profile under `data/cohort_conditions/` naming the conditions the study itself
-  recruits for. A reading held for human review whose every `redact` entry matches one is withheld
-  under `REVIEWER_NEEDS_HUMAN_REVIEW_COHORT`; one naming any condition outside the profile, under
-  `REVIEWER_NEEDS_HUMAN_REVIEW_OTHER`. Both stay withheld pending that review: only the ground and the
-  page section differ. Owner, 2026-09-27: "put study's conditions in a separate section", after the
-  r6 human-review list turned out to be led by the cohort's own recruitment diagnoses (Parkinson's in
-  50 recordings, idiopathic subglottic stenosis 13, spasmodic dysphonia 11), which say little about who
-  someone is within this corpus. The profile is read from the release's `phenotype/diagnosis/` files,
-  not recalled; its derivation is in `specs/20260927-pii-span-ledger/design.md`, section 10. Unset,
-  every held condition is an `other` one.
+  recruits for. A listed condition matching one is recorded `cohort` on the ledger, any other
+  `other`; under policy v7 the kind is information only and moves neither axis. Owner, 2026-09-27:
+  "put study's conditions in a separate section". The profile is read from the release's
+  `phenotype/diagnosis/` files; its derivation is in `specs/20260927-pii-span-ledger/design.md`,
+  section 10. Unset, every condition is an `other` one.
+
+verdict.person_name_review_flags: true
+  A recording keeping any word of a person's name masked flags for review on the triage axis
+  (`PERSON_NAME_AWAITS_REVIEW`); the release is unchanged. Policy v7, owner 2026-10-03: "do not
+  redact celebrity names like "Ray Bradbury". Only names for people related to the patient. We'd
+  probably have to manually review name tags to do this, which is fine, I think it would be very
+  quick"; asked how, the owner chose: mask every name, let the reviewer propose a public figure's
+  release, and release it only on a human's approval (`redaction.name_approvals`).
 
 verdict.trim_protected_categories: [PERSON, NAME, LOCATION, LOC]
   Detector categories under which a marked word written as a proper noun counts as content for the
@@ -2199,6 +2201,12 @@ pii.required_detectors rule the planning scan is, and a re-scan that skipped a r
 a flag. A consensus word the store places nowhere overlaps no planned extent, so it is released as
 [UNPLACED] rather than verbatim and counted in unplaced_words_n -- text of unknown location cannot
 be shown to be safe.
+
+redaction.name_approvals {} -- the person names a human approved for release, keyed by the
+recording's file stem, each quoted as the transcript writes it. Policy v7 (owner, 2026-10-03): a person's
+name stays masked until a human approves it, whatever the reviewer proposes. It sits in the config so the
+approvals are hashed into the fold's identity: a re-fold under a changed list is a different fold. Empty
+ships no approval.
 
 redaction.padding_ms 250 -- a CONVENTION, not a fit. No word-boundary error distribution has been
 measured for this workflow's recognizer set, so nothing here is a fitted quantile and the number is
