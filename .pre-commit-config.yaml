@@ -92,8 +92,9 @@ repos:
     # generated CSS already is; the parts they are built from are checked normally. The vendored
     # b2aiprep registry is upstream data (Spanish stimuli among it) and is skipped for the same
     # reason. oclock is temporal_words.yaml's normalised key for "o'clock"; meu is Portuguese,
-    # quoted from a transcript in a spec.
-    args: [--skip=*.ipynb, --skip=src/senselab/audio/workflows/triage/viewer/vendor/*.js, --skip=src/senselab/audio/workflows/triage/viewer/recording_vectors_viewer.html, --skip=src/senselab/audio/workflows/triage/data/b2ai_task_registry/*, --ignore-words-list, 'oclock,meu,AER,FPR,PASE,preemptable,caf,als,UNDET,UNX,NotIn,FigureStyle,allk,empt,empted,disjointness,declaring,meaned,retuned,re-declaring,pre-empt,pre-empted,unparseable,probablistic']
+    # quoted from a transcript in a spec. mis, ser, vas, hace and varios are Spanish words in the
+    # redaction policy's Spanish lexicons.
+    args: [--skip=*.ipynb, --skip=src/senselab/audio/workflows/triage/viewer/vendor/*.js, --skip=src/senselab/audio/workflows/triage/viewer/recording_vectors_viewer.html, --skip=src/senselab/audio/workflows/triage/data/b2ai_task_registry/*, --ignore-words-list, 'oclock,meu,AER,FPR,PASE,preemptable,caf,als,UNDET,UNX,NotIn,FigureStyle,allk,empt,empted,disjointness,declaring,meaned,retuned,re-declaring,pre-empt,pre-empted,unparseable,probablistic,mis,ser,vas,hace,varios']
     additional_dependencies:
     - tomli
 - repo: local

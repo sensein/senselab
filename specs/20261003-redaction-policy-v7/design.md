@@ -129,4 +129,3 @@ sub-09f16959: free-speech-3 keeps "United States Marine Corps" and "Tennessee Hi
 both masked (v6 released the first: one red, one green); free-speech-2 masks "thirty-six years old" (age)
 while "thirty-three years ago" stays shown; the picture description shows "mom" (kinship); free-speech-1
 shows "today".
-
