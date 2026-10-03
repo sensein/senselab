@@ -46,6 +46,7 @@ from typing import Any, Mapping, Optional, Sequence
 
 import yaml
 
+from senselab.text.tasks.pii_detection.redaction_policy import date_positions, state_positions
 from senselab.utils.dependencies import hf_subprocess_env
 from senselab.utils.subprocess_venv import _clean_subprocess_env, ensure_venv, venv_python
 
@@ -72,7 +73,7 @@ _CONDITIONS_HEADING = "CONDITIONS:"
 _OTHER_SPEAKERS_HEADING = "OTHER_SPEAKERS:"
 _INSTRUCTIONS_SPOKEN_HEADING = "INSTRUCTIONS_SPOKEN:"
 
-PROMPT_VERSION = 6
+PROMPT_VERSION = 7
 """The prompt and its parse, as one number: it changes whenever either changes what a reading holds."""
 
 REDACTION_STATES = ("complete", "incomplete", "not_applicable")
@@ -90,7 +91,8 @@ PROPOSAL_ACTIONS = (REDACT, RELEASE)
 """What a proposal entry asks for: remove this text, or stop removing text already removed."""
 
 SAFE_HARBOR_PATH = Path(__file__).parent / "data" / "safe_harbor.yaml"
-"""The HIPAA Safe Harbor identifiers the reviewer applies, with their citation."""
+"""The HIPAA Safe Harbor identifiers, with their citation; the reviewer applies (D)-(R) as written and the
+redaction policy (:mod:`~senselab.text.tasks.pii_detection.redaction_policy`) in place of (A)-(C)."""
 
 
 @lru_cache(maxsize=1)
@@ -115,19 +117,48 @@ def safe_harbor_codes(category: str) -> tuple[str, ...]:
     return tuple(str(code) for code in (safe_harbor().get("categories") or {}).get(str(category).upper(), ()) or ())
 
 
-def _safe_harbor_rule() -> str:
-    """The standard as the prompt states it, rendered from the packaged data."""
+def _identifier_rule() -> str:
+    """The Safe Harbor number, contact and code identifiers (D-R), as the prompt lists them."""
     standard = safe_harbor()
-    lines = [
-        f"Apply the HIPAA Safe Harbor standard ({standard['citation']}). These must stay removed:",
-    ]
+    lines = [f"Also remove every one of these HIPAA Safe Harbor identifiers ({standard['citation']}):"]
     for identifier in standard["identifiers"]:
-        release = f" May be released: {identifier['release']}" if identifier.get("release") else ""
-        lines.append(f"  ({identifier['code']}) {identifier['text']}{release}")
-    lines.append(str(standard["residual"]))
-    lines.append("For example:")
-    lines.extend(f"  - {example}" for example in standard.get("examples") or ())
+        if str(identifier["code"]) in ("A", "B", "C"):
+            continue
+        lines.append(f"  ({identifier['code']}) {identifier['text']}")
     return "\n".join(lines)
+
+
+_POLICY = (
+    "REDACTION POLICY. Apply these rules; they are stricter than HIPAA Safe Harbor in places.\n"
+    "- NAMES. Remove the name of the participant and of every person they know: family, friends, "
+    "neighbours, doctors, coworkers, anyone in their life. A public figure -- a celebrity, an author, an "
+    'artist, a politician, a historical figure, a fictional character ("Ray Bradbury", "Taylor Swift", '
+    '"Cinderella") -- may be proposed for release with the reason; a person will confirm it before it is '
+    'released. Relationship words are never removed: release "mom", "my brother", "grandpa", '
+    '"my wife", "my son", "aunt", "cousin", "mamá", "mi hermano", "abuela".\n'
+    '- DATES. Remove every absolute date element, the year included: a year ("2021", "\'98", "two '
+    'thousand twenty-one"), a month ("October"), a season ("summer"), a holiday ("Halloween", '
+    '"Christmas"), a day of the month ("the 14th"). These are never released: in "I had COVID in 2021" '
+    'remove "2021". Keep a day of the week ("Monday"), a time of day ("this morning"), and every '
+    'relative or length-of-time expression ("2-3 weeks ago", "last year", "a few months", '
+    '"yesterday", "for two years") -- release these.\n'
+    '- AGES. Remove every age ("I\'m 73", "seventy-three years old", "in my sixties", "my 50th '
+    'birthday"); never release one.\n'
+    "- PLACES. Remove every place smaller than a country: a street, a neighbourhood, a city, a county, a "
+    "state or province, a region, a named venue. These are never released. A country may stay "
+    '("we moved from Mexico") unless, together with other details left in the text, it would help '
+    "single the speaker out; then propose redacting it.\n"
+    "- ORGANIZATIONS. Remove a specific named organization: an employer, a company, a school or "
+    "university, a military unit, a hospital or clinic with a proper name, a church "
+    '("USF voice center", "the United States Marine Corps", "Vanderbilt"). Keep a generic description '
+    '("the voice center", "the hospital", "my school", "work") -- release it.\n'
+    "- HEALTH CONDITIONS. Never remove a health condition and never propose one: conditions are released "
+    "and never hold a recording back. List diagnoses under CONDITIONS for the record only.\n"
+    "- LANGUAGE. The transcript may be in Spanish or another language; judge it in that language. The "
+    'automatic detectors were built for English and often mark ordinary Spanish words ("pero", '
+    '"estado", "familia") as names; release every removed word that is not a name, a place, a date, '
+    "an age, an organization or an identifier.\n\n"
+)
 
 
 _PROMPT = (
@@ -135,21 +166,17 @@ _PROMPT = (
     "ORIGINAL words as transcribed, and where an automatic redaction has already been applied, "
     "the RELEASED text it produced, in which every [CATEGORY] token marks removed text. Where no "
     "redaction was applied the RELEASED section says so, and nothing has been removed.\n\n"
-    + _safe_harbor_rule()
+    + _POLICY
+    + _identifier_rule()
     + "\n\nJudge six things independently.\n"
-    "1. Whether the redaction, where one was applied, actually removed what identifies the "
-    "speaker under that standard.\n"
-    "2. Whether the ORIGINAL words carry anything identifying at all, which is a separate "
+    "1. Whether the redaction, where one was applied, actually removed everything the policy removes.\n"
+    "2. Whether the ORIGINAL words carry anything the policy removes at all, which is a separate "
     "question and the one no automatic detector here has asked.\n"
-    "3. Whether the redaction removed more than the standard requires. Only a calendar-anchored date "
-    'element is a Safe Harbor date: a day of the month, a month, a specific date ("March 3rd", '
-    '"the 14th"), or a holiday tied to a year ("Christmas 2019"); a bare year may be released. A '
-    'duration or a relative reference is not a date element and identifies nobody: "the last two '
-    'years", "the past two weeks", "a week", "a couple of days", "this morning", '
-    '"today", "yesterday", "days", "summer", "at night" -- release these. A word or '
-    "phrase that is the task's own stimulus, or a definition or description of it (in a vocabulary "
-    'task, saying what a "gladiator" is: "a Roman fighter"), is not about the speaker and '
-    "identifies nobody.\n"
+    "3. Whether the redaction removed more than the policy requires: a relationship word, a weekday, a "
+    "relative or length-of-time expression, a country, a generic description, a public figure, a "
+    "health condition, or an ordinary word a detector mistook for a name. A word or phrase that is the "
+    "task's own stimulus, or a definition or description of it (in a vocabulary task, saying what a "
+    '"gladiator" is: "a Roman fighter"), is not about the speaker and identifies nobody.\n'
     "4. Whether more than one person is speaking in this recording, judged from the words alone "
     "(turn-taking, instructions given, questions asked and answered) and weighed against the task's "
     'instructions. The participant talking to the examiner ("Is that enough?", "Should I keep '
@@ -164,17 +191,14 @@ _PROMPT = (
     "voice unless the words themselves show the participant reading them aloud; do not assume the "
     "participant is repeating the instructions. When you cannot tell, answer unclear and still quote "
     "those words in OTHER_SPEAKERS.\n"
-    "5. Separately from the standard, every specific medical diagnosis the speaker attributes to "
-    "themselves: a named disease, disorder or syndrome (Parkinson's disease, spasmodic dysphonia, "
-    "multiple sclerosis, thyroid cancer, a synovial joint cyst, sleep apnea, asthma). Do not list "
-    "symptoms or sensations (a change in my voice, coughing, tiredness, pain, a sore throat), feelings "
-    "or moods (anxious, stressed, sad), everyday events or procedures (surgery, a fall, an accident, an "
-    "allergy shot) or a medication or treatment on its own; list a treatment only through the "
-    "diagnosis it names (\"levodopa for my Parkinson's\" lists Parkinson's disease). None of these is "
-    "a Safe Harbor identifier by itself, and none goes in the PROPOSAL; they are listed so that a "
-    "person can judge whether, with the rest of what is released, one could single the speaker out. "
-    "List a diagnosis whatever you judge about it; leave out only one that is part of the task's own "
-    "stimulus.\n"
+    "5. For the record only, every specific medical diagnosis the speaker attributes to themselves: a "
+    "named disease, disorder or syndrome (Parkinson's disease, spasmodic dysphonia, multiple sclerosis, "
+    "thyroid cancer, a synovial joint cyst, sleep apnea, asthma). Do not list symptoms or sensations (a "
+    "change in my voice, coughing, tiredness, pain, a sore throat), feelings or moods (anxious, stressed, "
+    "sad), everyday events or procedures (surgery, a fall, an accident, an allergy shot) or a medication "
+    'or treatment on its own; list a treatment only through the diagnosis it names ("levodopa for my '
+    "Parkinson's\" lists Parkinson's disease). A diagnosis is never removed and never goes in the "
+    "PROPOSAL. Leave out one that is part of the task's own stimulus.\n"
     "6. Whether the task's instructions -- the INSTRUCTIONS GIVEN TO THE PARTICIPANT above -- are spoken "
     "in the recording, by anyone: an examiner giving or repeating them, or the participant reading them "
     'aloud or saying them back. Count a paraphrase as well as a verbatim reading: "You were given the '
@@ -204,18 +228,21 @@ _PROMPT = (
     "PROPOSAL: a JSON array giving the redaction you would apply instead. Each element is an "
     'object with keys "text" (the exact substring, quoted from the ORIGINAL), "action" (redact to '
     "remove it, release to stop removing text the current redaction removes unnecessarily), "
-    '"category" (one of PERSON, LOCATION, DATE_TIME, ORGANIZATION, ID, CONTACT, OTHER), '
-    '"safe_harbor" (the letter of the Safe Harbor identifier it falls under, or "" for none) and '
-    '"why" (one sentence; for a release, why the standard lets it through here, weighed against the '
-    "rest of the transcript). Return [] to leave the current redaction exactly as it is.\n"
+    '"category" (one of PERSON, LOCATION, DATE_TIME, ORGANIZATION, ID, CONTACT, OTHER; an age is '
+    'DATE_TIME), "safe_harbor" (the letter of the Safe Harbor identifier it falls under, or "" for none) '
+    'and "why" (one sentence; for a release, why the policy lets it through: a public figure, a '
+    "relationship word, a weekday or relative time, a country that singles nobody out, a generic "
+    "description, or an ordinary word mistaken for a name). Return [] to leave the current redaction "
+    "exactly as it is.\n"
     "Whenever you judge the redaction incomplete, or judge the ORIGINAL clean while the RELEASED text "
     "still removes words, or judge the ORIGINAL to carry something identifying, the PROPOSAL must name "
     "every word or phrase concerned, one entry each, quoted exactly as it appears in the ORIGINAL: "
-    "release for removed words that identify nobody, redact for words that must go. A judgment of that "
-    "kind with an empty PROPOSAL is not an answer, and a place released without a reason is not one "
-    "either. If your REASONING names a venue, resort, hotel, clinic, hospital, employer, company, "
-    "school, church or street -- anything finer than a state -- the PROPOSAL must carry an entry quoting "
-    "it: redact, or release with the reason the standard lets it through.\n\n"
+    "release for removed words the policy lets through, redact for words that must go. A judgment of "
+    "that kind with an empty PROPOSAL is not an answer. Never propose releasing a year, a month, a "
+    "season, a holiday, an age, or a place smaller than a country; those always stay removed. If your "
+    "REASONING names a venue, resort, hotel, clinic, hospital, employer, company, school, church or "
+    "street, the PROPOSAL must carry an entry quoting it: redact a specific named one, or release a "
+    "generic description with the reason.\n\n"
 )
 
 
@@ -227,7 +254,7 @@ def _compose(
     Args:
         original: The transcript as the recording's words were read.
         redacted: The text an applied redaction produced, or None where none was applied.
-        context: What the recording declares about itself -- ``task``, ``speech_type``,
+        context: What the recording declares about itself -- ``task``, ``speech_type``, ``language``,
             ``instructions``, ``asked_to_say``, ``declared_names`` and ``task_words``. Any key absent or empty is
             omitted rather than sent empty.
         feedback: What was wrong with the previous round's answer, which this round must correct; None
@@ -242,6 +269,8 @@ def _compose(
         lines.append(f"TASK: {facts['task']}")
     if facts.get("speech_type"):
         lines.append(f"SPEECH TYPE: {facts['speech_type']}")
+    if facts.get("language"):
+        lines.append(f"LANGUAGE THE RECORDING DECLARES: {facts['language']}")
     if facts.get("instructions"):
         lines.append(f"INSTRUCTIONS GIVEN TO THE PARTICIPANT: {facts['instructions']}")
     if facts.get("asked_to_say"):
@@ -288,6 +317,19 @@ class ReviewProposal:
 
 
 @dataclass
+class ReviewCondition:
+    """A health condition the reviewer lists for the record. Never masked.
+
+    Attributes:
+        text: The words, quoted from the original.
+        why: Which diagnosis it is, in one sentence.
+    """
+
+    text: str
+    why: str = ""
+
+
+@dataclass
 class OtherSpeaker:
     """Words the reviewer attributes to someone other than the participant.
 
@@ -318,8 +360,8 @@ class ReviewResult:
         speakers: One of :data:`SPEAKER_STATES`, or the empty string. How many people the words
             show speaking in the recording. A reading about the recording's content, never about
             the processing run.
-        proposal: The redaction it would apply instead, as text spans, with every health condition the
-            answer's CONDITIONS part listed as a ``redact`` entry of category :data:`CONDITION`.
+        proposal: The redaction it would apply instead, as text spans.
+        conditions: The health conditions the answer's CONDITIONS part listed, for the record.
         other_speakers: The words it attributes to anyone other than the participant, each with whether
             the task expects that voice.
         instructions_spoken: The passages the INSTRUCTIONS_SPOKEN part quotes, where the task's own
@@ -352,6 +394,7 @@ class ReviewResult:
     original: str = ""
     speakers: str = ""
     proposal: list[ReviewProposal] = field(default_factory=list)
+    conditions: list[ReviewCondition] = field(default_factory=list)
     other_speakers: list[OtherSpeaker] = field(default_factory=list)
     conditions_answered: bool = True
     instructions_spoken: list[str] = field(default_factory=list)
@@ -517,9 +560,8 @@ class ParsedCompletion:
         redaction: One of :data:`REDACTION_STATES`, or the empty string where none was stated.
         original: One of :data:`ORIGINAL_STATES`, or the empty string.
         speakers: One of :data:`SPEAKER_STATES`, or the empty string.
-        proposal: The parsed proposal array, with every health condition the CONDITIONS part listed
-            appended as a ``redact`` entry of category :data:`CONDITION`; empty where both were
-            missing or malformed.
+        proposal: The parsed proposal array; empty where it was missing or malformed.
+        conditions: The CONDITIONS part's entries that quote words.
         conditions_answered: Whether the answer carried a CONDITIONS part whose array parsed, an
             empty one included.
         other_speakers: The OTHER_SPEAKERS part's entries that quote words.
@@ -532,6 +574,7 @@ class ParsedCompletion:
     original: str = ""
     speakers: str = ""
     proposal: list[ReviewProposal] = field(default_factory=list)
+    conditions: list[ReviewCondition] = field(default_factory=list)
     conditions_answered: bool = False
     other_speakers: list[OtherSpeaker] = field(default_factory=list)
     instructions_spoken: list[str] = field(default_factory=list)
@@ -539,7 +582,7 @@ class ParsedCompletion:
 
 
 CONDITION = "CONDITION"
-"""The category a listed health condition carries as a proposal entry."""
+"""The category a health condition carried as a proposal entry under prompt version 6 and earlier."""
 
 
 def _labelled(completion: str, heading: str, allowed: Sequence[str]) -> str:
@@ -586,7 +629,7 @@ def _array(segment: str) -> list[Any] | None:
 
 
 def parse_completion(completion: str) -> ParsedCompletion:
-    """Split the model's answer into its reasoning, its three judgments, its conditions and its proposal.
+    """Split the model's answer into its reasoning, its judgments, its conditions and its proposal.
 
     The two arrays are looked for after the last ``PROPOSAL:`` and ``CONDITIONS:`` headings, each up to
     the other heading where that one follows it, rather than at the first ``[`` in the completion,
@@ -666,14 +709,14 @@ def parse_completion(completion: str) -> ParsedCompletion:
                 safe_harbor=str(item.get("safe_harbor") or "").strip().upper()[:1],
             )
         )
-    listed = {_normalised(entry.text) for entry in proposal if entry.action == REDACT and entry.category == CONDITION}
+    conditions: list[ReviewCondition] = []
+    listed: set[str] = set()
     for item in conditions_parsed or ():
         text = item.get("text") if isinstance(item, dict) else item
         if not isinstance(text, str) or not text.strip() or _normalised(text) in listed:
             continue
         listed.add(_normalised(text))
-        why = str(item.get("why") or "") if isinstance(item, dict) else ""
-        proposal.append(ReviewProposal(text=text, action=REDACT, category=CONDITION, why=why))
+        conditions.append(ReviewCondition(text=text, why=str(item.get("why") or "") if isinstance(item, dict) else ""))
     other_speakers = [
         OtherSpeaker(text=str(item["text"]), expected=item.get("expected") is True, why=str(item.get("why") or ""))
         for item in others_parsed or ()
@@ -691,6 +734,7 @@ def parse_completion(completion: str) -> ParsedCompletion:
         original=_labelled(completion, _ORIGINAL_HEADING, ORIGINAL_STATES),
         speakers=_labelled(completion, _SPEAKERS_HEADING, SPEAKER_STATES),
         proposal=proposal,
+        conditions=conditions,
         conditions_answered=conditions_parsed is not None,
         other_speakers=other_speakers,
         instructions_spoken=spoken,
@@ -790,8 +834,9 @@ def answer_problem(result: "ReviewResult", original: str, redacted: str | None) 
         None where the answer is usable. Otherwise one sentence naming the problem: a judgment that
         asks for the redaction to change (incomplete, clean original over removed words, or words
         that carry something identifying where no complete redaction covers them) with an empty
-        proposal, a place released without a reason, or proposal quotes that do not occur in the
-        ORIGINAL, or an answer without its CONDITIONS or INSTRUCTIONS_SPOKEN part.
+        proposal, a release of something the policy always removes (:func:`never_released`), a name or
+        a place released without a reason, proposal quotes that do not occur in the ORIGINAL, or an
+        answer without its CONDITIONS or INSTRUCTIONS_SPOKEN part.
     """
     if not result.available:
         return None
@@ -826,16 +871,24 @@ def answer_problem(result: "ReviewResult", original: str, redacted: str | None) 
             f"you judged {' and '.join(judged)} but the PROPOSAL listed no words; list each word or phrase "
             "to release (unmask) or redact (mask), quoted exactly from the ORIGINAL"
         )
+    forbidden = [entry.text for entry in result.proposal if entry.action == RELEASE and never_released(entry.text)]
+    if forbidden:
+        quoted = ", ".join(json.dumps(text) for text in forbidden)
+        return (
+            f"these releases name a year, a month, a season, a holiday, an age or a place smaller than a "
+            f"country: {quoted}; the policy always removes those, so drop each release or narrow it to the "
+            "words the policy lets through"
+        )
     unreasoned = [
         entry.text
         for entry in result.proposal
-        if entry.action == RELEASE and entry.category == "LOCATION" and not entry.why.strip()
+        if entry.action == RELEASE and entry.category in ("PERSON", "LOCATION") and not entry.why.strip()
     ]
     if unreasoned:
         quoted = ", ".join(json.dumps(text) for text in unreasoned)
         return (
-            f"these place releases give no reason: {quoted}; say why Safe Harbor lets each through here, "
-            "given the rest of the transcript, or keep it masked"
+            f"these releases give no reason: {quoted}; say which public figure each name is, or why the "
+            "country singles nobody out given the rest of the transcript, or keep it masked"
         )
     quotes = (
         [entry.text for entry in result.proposal]
@@ -854,6 +907,21 @@ def answer_problem(result: "ReviewResult", original: str, redacted: str | None) 
             "entry quoting it; add a redact entry, or a release entry saying why the standard lets it through"
         )
     return None
+
+
+def never_released(quote: str) -> bool:
+    """Whether a quote names something the redaction policy always removes.
+
+    Args:
+        quote: The words a ``release`` entry quotes.
+
+    Returns:
+        True where it writes a year, a month, a season, a holiday or an age
+        (:func:`~senselab.text.tasks.pii_detection.redaction_policy.date_positions`), or a state
+        (:func:`~senselab.text.tasks.pii_detection.redaction_policy.state_positions`).
+    """
+    words = quote.split()
+    return bool(date_positions(words) or state_positions(words))
 
 
 class ReviewWorkerError(RuntimeError):
@@ -1184,6 +1252,7 @@ def review_transcript(
         original=parsed.original,
         speakers=parsed.speakers,
         proposal=parsed.proposal,
+        conditions=parsed.conditions,
         other_speakers=parsed.other_speakers,
         conditions_answered=parsed.conditions_answered,
         instructions_spoken=parsed.instructions_spoken,
@@ -1228,6 +1297,7 @@ def review_payload(result: ReviewResult) -> dict[str, Any]:
             }
             for entry in result.proposal
         ],
+        "conditions": [{"text": entry.text, "why": entry.why} for entry in result.conditions],
         "other_speakers": [
             {"text": entry.text, "expected": entry.expected, "why": entry.why} for entry in result.other_speakers
         ],

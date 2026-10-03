@@ -128,6 +128,8 @@ class _Reading:
             each with ``text``, ``expected`` and ``why``.
         instructions_spoken: The passages the last answering round quoted where the task's own
             instructions are spoken in the recording.
+        conditions: The health conditions the last answering round listed, each with ``text`` and
+            ``why``; recorded, never masked.
     """
 
     status: str
@@ -144,6 +146,7 @@ class _Reading:
     problem: str | None = None
     other_speakers: tuple[dict[str, Any], ...] = ()
     instructions_spoken: tuple[str, ...] = ()
+    conditions: tuple[dict[str, str], ...] = ()
 
 
 def _stamp() -> str:
@@ -189,7 +192,8 @@ def task_context(store: ProvStore, hint: AudioHints | None, lexicon: TaskLexicon
             ``task_words``.
 
     Returns:
-        ``task``, ``speech_type``, ``instructions``, ``asked_to_say``, ``declared_names`` and ``task_words``, each
+        ``task``, ``speech_type``, ``language``, ``instructions``, ``asked_to_say``, ``declared_names`` and
+        ``task_words``, each
         omitted where the recording declares none, and ``instructions_from`` and ``stimulus_from``
         naming where those texts came from.
     """
@@ -202,6 +206,8 @@ def task_context(store: ProvStore, hint: AudioHints | None, lexicon: TaskLexicon
         context["task"] = str(family)
     if hint is not None and hint.speech_type:
         context["speech_type"] = str(hint.speech_type)
+    if hint is not None and hint.metadata.get("language"):
+        context["language"] = str(hint.metadata["language"])
     if hint is not None and hint.instructions:
         context["instructions"] = str(hint.instructions)
     if prompts:
@@ -526,6 +532,7 @@ def reading_from_cache(payload: Mapping[str, Any]) -> tuple[_Reading, list[dict[
     fields_["proposal"] = tuple(dict(entry) for entry in fields_.get("proposal") or ())
     fields_["other_speakers"] = tuple(dict(entry) for entry in fields_.get("other_speakers") or ())
     fields_["instructions_spoken"] = tuple(str(text) for text in fields_.get("instructions_spoken") or ())
+    fields_["conditions"] = tuple(dict(entry) for entry in fields_.get("conditions") or ())
     return _Reading(**fields_), [dict(review) for review in payload.get("reviews") or ()]
 
 
@@ -689,7 +696,8 @@ def review(store: ProvStore, config: TriageConfig, hint: AudioHints | None = Non
             if answered:
                 others = tuple(dict(other) for other in answered[-1].get("other_speakers") or ())
                 spoken = tuple(str(text) for text in answered[-1].get("instructions_spoken") or ())
-                reading = replace(reading, other_speakers=others, instructions_spoken=spoken)
+                conditions = tuple(dict(entry) for entry in answered[-1].get("conditions") or ())
+                reading = replace(reading, other_speakers=others, instructions_spoken=spoken, conditions=conditions)
             stored = key is not None and reading.revision == revision and cache_reading(key, reading, reviews)
             cache = {"key": key, "hit": False, "stored": stored}
 
@@ -755,6 +763,7 @@ def review(store: ProvStore, config: TriageConfig, hint: AudioHints | None = Non
             "speakers": reading.speakers,
             "other_speakers": [dict(entry) for entry in reading.other_speakers],
             "instructions_spoken": list(reading.instructions_spoken),
+            "conditions": [dict(entry) for entry in reading.conditions],
             "prompt_version": PROMPT_VERSION,
             "proposal": [dict(entry) for entry in reading.proposal],
             "proposal_redact_n": sum(1 for entry in reading.proposal if entry["action"] == REDACT),

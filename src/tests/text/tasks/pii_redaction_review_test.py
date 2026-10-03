@@ -344,22 +344,24 @@ def test_a_request_with_no_task_facts_carries_no_task_lines() -> None:
     assert "INSTRUCTIONS" not in body and "not identifying for being said" not in body
 
 
-def test_the_prompt_states_every_safe_harbor_identifier_and_the_residual_clause() -> None:
-    """Owner, 2026-09-28: the reviewer applies Safe Harbor, rendered from the packaged data."""
+def test_the_prompt_states_the_policy_and_the_remaining_safe_harbor_identifiers() -> None:
+    """Policy v7 replaces Safe Harbor (A)-(C); the identifiers (D)-(R) are listed as written."""
     from senselab.text.tasks.pii_detection import redaction_review
 
     standard = redaction_review.safe_harbor()
     codes = [identifier["code"] for identifier in standard["identifiers"]]
     assert codes == [chr(ord("A") + i) for i in range(18)]
     assert standard["citation"] in redaction_review._PROMPT
-    assert all(f"({code})" in redaction_review._PROMPT for code in codes)
-    assert "Actual knowledge" in redaction_review._PROMPT and "St. Petersburg" in redaction_review._PROMPT
+    assert all(f"({code})" in redaction_review._PROMPT for code in codes[3:])
+    assert not any(f"  ({code})" in redaction_review._PROMPT for code in codes[:3])
+    for rule in ("Ray Bradbury", "I had COVID in 2021", "Halloween", "USF voice center", "never hold a recording back"):
+        assert rule in redaction_review._PROMPT
     assert redaction_review.safe_harbor_codes("location") == ("B",)
     assert redaction_review.safe_harbor_codes("CONDITION") == ()
 
 
-def test_a_place_released_without_a_reason_is_fed_back() -> None:
-    """A place may be released under Safe Harbor only with a reason weighed against the transcript."""
+def test_a_release_the_policy_never_allows_is_fed_back() -> None:
+    """A year, a season, an age or a state is never released; a name or a country needs its reason."""
     from senselab.text.tasks.pii_detection.redaction_review import (
         ReviewProposal,
         ReviewResult,
@@ -369,10 +371,17 @@ def test_a_place_released_without_a_reason_is_fed_back() -> None:
     def result(*proposal: ReviewProposal) -> ReviewResult:
         return ReviewResult(available=True, redaction="complete", original="clean", proposal=list(proposal))
 
-    bare = ReviewProposal(text="Florida", action="release", category="LOCATION", why="")
-    reasoned = ReviewProposal(text="Florida", action="release", category="LOCATION", why="a state, nothing else")
-    assert "give no reason" in (answer_problem(result(bare), "i grew up in Florida", "i grew up in [LOCATION]") or "")
-    assert answer_problem(result(reasoned), "i grew up in Florida", "i grew up in [LOCATION]") is None
+    for text in ("Florida", "2021", "last summer", "73 years old", "Halloween"):
+        forbidden = ReviewProposal(text=text, action="release", category="LOCATION", why="looks fine")
+        assert "always removes" in (answer_problem(result(forbidden), f"i said {text}", None) or ""), text
+    bare = ReviewProposal(text="Mexico", action="release", category="LOCATION", why="")
+    reasoned = ReviewProposal(text="Mexico", action="release", category="LOCATION", why="a country, nothing else")
+    assert "give no reason" in (answer_problem(result(bare), "we moved from Mexico", "we moved from [LOCATION]") or "")
+    assert answer_problem(result(reasoned), "we moved from Mexico", "we moved from [LOCATION]") is None
+    unnamed = ReviewProposal(text="Ray Bradbury", action="release", category="PERSON", why="")
+    assert "public figure" in (answer_problem(result(unnamed), "i read Ray Bradbury", None) or "")
+    weekday = ReviewProposal(text="on Monday", action="release", category="DATE_TIME", why="a weekday")
+    assert answer_problem(result(weekday), "i went on Monday", "i went [DATE_TIME]") is None
     empty = ReviewResult(available=True, redaction="incomplete", original="clean")
     assert "listed no words" in (answer_problem(empty, "hello alice", "hello [PERSON]") or "")
     agreeing = ReviewResult(available=True, redaction="complete", original="carries_pii")
@@ -390,9 +399,9 @@ def test_the_parser_keeps_the_safe_harbor_letter() -> None:
     assert [(entry.safe_harbor, entry.why) for entry in parsed.proposal] == [("B", "a state")]
 
 
-def test_the_conditions_part_is_parsed_into_condition_entries() -> None:
-    """Every listed health condition becomes a ``redact`` entry of category CONDITION, beside the proposal."""
-    from senselab.text.tasks.pii_detection.redaction_review import CONDITION, REDACT, parse_completion
+def test_the_conditions_part_is_parsed_apart_from_the_proposal() -> None:
+    """Every listed health condition is a condition for the record, never a ``redact`` entry."""
+    from senselab.text.tasks.pii_detection.redaction_review import REDACT, parse_completion
 
     parsed = parse_completion(
         "REASONING: the speaker names two conditions and a city\nREDACTION: incomplete\nORIGINAL: carries_pii\n"
@@ -404,23 +413,26 @@ def test_the_conditions_part_is_parsed_into_condition_entries() -> None:
     assert parsed.conditions_answered
     assert [(entry.text, entry.action, entry.category) for entry in parsed.proposal] == [
         ("St. Petersburg", REDACT, "LOCATION"),
-        ("essential tremors", REDACT, CONDITION),
-        ("synovial joint cyst", REDACT, CONDITION),
+    ]
+    assert [(entry.text, entry.why) for entry in parsed.conditions] == [
+        ("essential tremors", "a diagnosis"),
+        ("synovial joint cyst", "a diagnosis"),
     ]
     assert parsed.reasoning == "the speaker names two conditions and a city"
 
 
 def test_a_condition_listed_twice_is_one_entry_and_order_of_parts_does_not_matter() -> None:
-    """A condition in both PROPOSAL and CONDITIONS is kept once; CONDITIONS may follow PROPOSAL."""
+    """A condition listed twice is kept once; CONDITIONS may follow PROPOSAL."""
     from senselab.text.tasks.pii_detection.redaction_review import parse_completion
 
     parsed = parse_completion(
         "REASONING: x\nREDACTION: complete\nORIGINAL: carries_pii\nSPEAKERS: one\n"
-        'PROPOSAL: [{"text": "Parkinson\'s", "action": "redact", "category": "CONDITION", "why": "x"}]\n'
-        'CONDITIONS: [{"text": "parkinson\'s", "why": "a diagnosis"}, {"text": "tremor", "why": "a symptom"}]'
+        "PROPOSAL: []\n"
+        'CONDITIONS: [{"text": "Parkinson\'s", "why": "a diagnosis"}, {"text": "parkinson\'s", "why": "again"}, '
+        '{"text": "tremor", "why": "a symptom"}]'
     )
-    assert [entry.text for entry in parsed.proposal] == ["Parkinson's", "tremor"]
-    assert parsed.conditions_answered
+    assert [entry.text for entry in parsed.conditions] == ["Parkinson's", "tremor"]
+    assert parsed.proposal == [] and parsed.conditions_answered
 
 
 def test_an_answer_without_its_conditions_part_is_fed_back() -> None:
@@ -609,9 +621,9 @@ def test_a_venue_the_reasoning_names_without_a_proposal_entry_is_fed_back() -> N
 
 
 def test_the_prompt_states_the_time_expression_rule_and_the_cue_word_rule() -> None:
-    """v6: durations and relative times are not date elements; a definition of the cue word is task content."""
+    """v7: weekdays and relative times are released, absolute dates are not; a cue word's definition is task content."""
     from senselab.text.tasks.pii_detection import redaction_review as r
 
-    assert r.PROMPT_VERSION == 6
-    assert "the last two years" in r._PROMPT and "this morning" in r._PROMPT and "Christmas 2019" in r._PROMPT
+    assert r.PROMPT_VERSION == 7
+    assert "2-3 weeks ago" in r._PROMPT and "this morning" in r._PROMPT and '"Monday"' in r._PROMPT
     assert "gladiator" in r._PROMPT and "hotel" in r._PROMPT
