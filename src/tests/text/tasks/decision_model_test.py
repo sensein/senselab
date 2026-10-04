@@ -148,15 +148,14 @@ class TestThePin:
             verify_pin(store, pin, verified_dir=verified)
 
 
-def _answers(other: float = 0.02, instructions: float = 0.03, diagnosis: float = 0.01, harbor: float = 0.05) -> dict:
+def _answers(other: float = 0.02, instructions: float = 0.03, identifier: float = 0.05) -> dict:
     return {
         "other_voice": {
             "choice": MORE_THAN_ONE if other > 0.5 else "one",
             "probabilities": {"one": 1 - other, MORE_THAN_ONE: other, "unclear": 0.0},
         },
         "instructions_spoken": {"noul": instructions},
-        "named_diagnosis": {"noul": diagnosis},
-        "safe_harbor_identifier_present": {"noul": harbor},
+        "policy_identifier_present": {"noul": identifier},
     }
 
 
@@ -164,21 +163,20 @@ class TestTheAnswers:
     """Each answer is a probability of yes; other_voice is the probability of more_than_one."""
 
     def test_every_question_is_read_as_a_probability(self) -> None:
-        """The four probabilities, keyed by question."""
-        opinion = read_answers(_answers(other=0.85, diagnosis=0.99))
+        """The three probabilities, keyed by question."""
+        opinion = read_answers(_answers(other=0.85, identifier=0.99))
         assert opinion.probabilities == {
             "other_voice": 0.85,
             "instructions_spoken": 0.03,
-            "named_diagnosis": 0.99,
-            "safe_harbor_identifier_present": 0.05,
+            "policy_identifier_present": 0.99,
         }
         assert opinion.other_voice_choice == MORE_THAN_ONE
 
     def test_an_unanswered_question_is_an_error_not_a_zero(self) -> None:
         """A missing answer must not read as a confident no."""
         answers = _answers()
-        del answers["named_diagnosis"]
-        with pytest.raises(ValueError, match="named_diagnosis"):
+        del answers["policy_identifier_present"]
+        with pytest.raises(ValueError, match="policy_identifier_present"):
             read_answers(answers)
 
     def test_a_choice_without_class_probabilities_is_an_error(self) -> None:
@@ -199,6 +197,7 @@ class TestTheAnswers:
             "speech_type": "",
             "instructions": "Read aloud.",
             "stimulus": "When the sunlight",
+            "task_content": "",
             "transcript": "the rainbow passage",
         }
 

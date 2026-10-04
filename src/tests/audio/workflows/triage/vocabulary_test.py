@@ -1727,7 +1727,7 @@ class TestSecondOpinionDisagreementFlagsForReview:
 
     @staticmethod
     def _opinion(**probabilities: float) -> dict[str, Any]:
-        held = {"other_voice": 0.02, "instructions_spoken": 0.02, "named_diagnosis": 0.02}
+        held = {"other_voice": 0.02, "instructions_spoken": 0.02, "policy_identifier_present": 0.02}
         held.update(probabilities)
         return {"status": "ok", "probabilities": held, "model_id": "ollama:clef:27b", "blob_digest": "sha256:ab"}
 
@@ -1737,14 +1737,30 @@ class TestSecondOpinionDisagreementFlagsForReview:
         reading.update(fields)
         return reading
 
-    def _fold(self, opinion: Mapping[str, Any] | None, reading: Mapping[str, Any], policy: FoldPolicy) -> FileVerdict:
+    def _fold(
+        self,
+        opinion: Mapping[str, Any] | None,
+        reading: Mapping[str, Any],
+        policy: FoldPolicy,
+        *,
+        masks_final_n: int = 0,
+        reviewer_requested_n: int = 0,
+    ) -> FileVerdict:
+        evidence = RedactionEvidence(
+            lexical_words_n=40,
+            scanned=True,
+            findings_n=masks_final_n,
+            masks_n=masks_final_n,
+            masks_final_n=masks_final_n,
+            reviewer_requested_n=reviewer_requested_n,
+        )
         return fold_file_verdict(
             self._PASSED,
             branch_decisions=_decisions(AIRWAY=DECLINED, SPEECH=ROUTED, VOICE=DECLINED),
             ran={"SPEECH": RunState.COMPLETED, "REDACT": RunState.COMPLETED, "REVIEW": RunState.COMPLETED},
             hint_claims={},
             route_state=ROUTED,
-            redaction=RedactionEvidence(lexical_words_n=40, scanned=True, findings_n=0),
+            redaction=evidence,
             llm_redaction=dict(reading),
             policy=policy,
             second_opinion=opinion,
@@ -1761,12 +1777,32 @@ class TestSecondOpinionDisagreementFlagsForReview:
         assert folded.record()["second_opinion"]["disagreements"] == ["other_voice p=0.85 reviewer=no"]
 
     def test_a_confident_no_against_the_reviewers_yes_flags(self) -> None:
-        """The reviewer proposed a CONDITION redaction the model is sure is absent."""
+        """The reviewer's reading leaves a mask standing; the model is sure nothing the policy removes is there."""
+        folded = self._fold(self._opinion(policy_identifier_present=0.05), self._reading(), self._ON, masks_final_n=1)
+        assert self._grounds(folded) == [f"{SECOND_OPINION_DISAGREES}: policy_identifier_present p=0.05 reviewer=yes"]
+
+    def test_an_identifier_the_reviewer_cleared_flags_when_the_model_is_sure(self) -> None:
+        """No mask stands and the reviewer asks for none; the model is sure an identifier is there."""
+        folded = self._fold(self._opinion(policy_identifier_present=0.93), self._reading(), self._ON)
+        assert self._grounds(folded) == [f"{SECOND_OPINION_DISAGREES}: policy_identifier_present p=0.93 reviewer=no"]
+        requested = self._fold(
+            self._opinion(policy_identifier_present=0.93), self._reading(), self._ON, reviewer_requested_n=1
+        )
+        assert not self._grounds(requested)
+
+    def test_a_listed_condition_is_never_a_disagreement(self) -> None:
+        """r12, sub-00053adb free-speech-2: conditions listed, an old named_diagnosis p=0.96; no flag."""
         reading = self._reading(
+            status="flagged",
+            conditions=[{"text": "essential tremors", "why": "x"}, {"text": "synovial joint cyst", "why": "y"}],
+        )
+        opinion = self._opinion()
+        opinion["probabilities"]["named_diagnosis"] = 0.96
+        assert not self._grounds(self._fold(opinion, reading, self._ON))
+        v6 = self._reading(
             status="flagged", proposal=[{"text": "asthma", "action": "redact", "category": "CONDITION", "why": "x"}]
         )
-        folded = self._fold(self._opinion(named_diagnosis=0.05), reading, self._ON)
-        assert self._grounds(folded) == [f"{SECOND_OPINION_DISAGREES}: named_diagnosis p=0.05 reviewer=yes"]
+        assert not self._grounds(self._fold(opinion, v6, self._ON))
 
     def test_the_middle_band_and_agreement_do_not_flag(self) -> None:
         """0.5 is not confident; a confident yes the reviewer shares is agreement."""

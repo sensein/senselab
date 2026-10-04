@@ -77,6 +77,7 @@ from senselab.audio.workflows.triage.nodes.gates import (
     load_gate_bounds,
 )
 from senselab.audio.workflows.triage.nodes.redact import (
+    NEW,
     UNMASKED_BY_REVIEWER,
     MaskPlan,
     mask_plan,
@@ -380,6 +381,7 @@ def _redaction_evidence(
         policy_masks_n=plan.policy_masks_n,
         person_names_masked_n=plan.person_names_masked,
         name_release_proposed=plan.name_release_proposed,
+        reviewer_requested_n=sum(1 for span in plan.proposals if span.agreement == NEW),
     )
 
 
