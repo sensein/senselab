@@ -192,7 +192,7 @@ def test_carrier_rejected_lists_every_name_voice_can_write() -> None:
     [
         ("verdict", [member.value for member in Triage]),
         ("release", [member.value for member in Release]),
-        ("grounds", [UNMEASURABLE, ACOUSTICALLY_EMPTY]),
+        ("discard_ground", [UNMEASURABLE, ACOUSTICALLY_EMPTY]),
         ("route_state", list(FILE_ROUTE_STATES)),
         ("route_airway", list(BRANCH_ROUTE_STATES)),
         ("route_speech", list(BRANCH_ROUTE_STATES)),

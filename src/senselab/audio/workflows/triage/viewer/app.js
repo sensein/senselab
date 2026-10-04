@@ -563,7 +563,9 @@
     field(dl, 'verdict', row.verdict, 'verdict ' + row.verdict);
     field(dl, 'release', row.release);
     field(dl, 'release_ground', row.release_ground);
-    field(dl, 'grounds', row.grounds);
+    field(dl, 'release_ground_key', row.release_ground_key);
+    field(dl, 'discard_ground', row.discard_ground);
+    field(dl, 'ground_keys', row.ground_keys && row.ground_keys.length ? row.ground_keys.join(', ') : (row.ground_keys ? '[] none' : null));
     field(dl, 'route_state', row.route_state);
     field(dl, 'flags_n', row.flags_n);
     field(dl, 'flag_nodes', row.flag_nodes && row.flag_nodes.length ? row.flag_nodes.join(', ') : (row.flag_nodes ? '[] none' : null));

@@ -84,7 +84,7 @@ var SchemaAxes = (function () {
 
   // Orders for the closed vocabularies. Anything not listed orders by frequency.
   var ORDERINGS = {
-    verdict: ['pass', 'flag', 'discard'],
+    verdict: ['pass', 'flag', 'rerun', 'discard'],
     release: ['release_without_redaction', 'release_with_redaction', 'withheld', 'not_assessed'],
     conformance_airway: ['true', 'undetermined', 'false'],
     conformance_speech: ['true', 'undetermined', 'false'],
@@ -148,7 +148,17 @@ var SchemaAxes = (function () {
     column({ name: 'declared_family', kind: 'categorical', group: 'identity', nullMeans: 'nothing was declared' }),
     column({ name: 'release', kind: 'categorical', group: 'decision', nullMeans: 'the fold wrote none' }),
     column({ name: 'release_ground', kind: 'categorical', group: 'decision', nullMeans: 'REDACT itself decided' }),
-    column({ name: 'grounds', kind: 'categorical', group: 'decision', nullMeans: 'nothing was discarded' }),
+    column({
+      name: 'release_ground_key', kind: 'categorical', group: 'decision',
+      nullMeans: 'folded before ground keys existed',
+    }),
+    column({ name: 'discard_ground', kind: 'categorical', group: 'decision', nullMeans: 'nothing was discarded' }),
+    column({
+      name: 'ground_keys', kind: 'set', group: 'decision', assignable: false,
+      reason: 'a set of ground keys, not a value — put its size on the axis, or filter by a term',
+      sizeOf: 'ground_keys',
+    }),
+    column({ name: 'ground_keys.size', kind: 'count', group: 'decision', label: 'ground_keys · size', sizeOf: 'ground_keys' }),
     column({ name: 'route_state', kind: 'categorical', group: 'decision', nullMeans: 'the fold wrote none' }),
     column({ name: 'conformance_airway', kind: 'categorical', group: 'branch', nullMeans: 'AIRWAY wrote no branch report' }),
     column({ name: 'conformance_speech', kind: 'categorical', group: 'branch', nullMeans: 'SPEECH wrote no branch report' }),

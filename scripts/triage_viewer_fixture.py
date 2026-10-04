@@ -126,7 +126,7 @@ def rows(seed: int = SEED, participants: int = PARTICIPANTS) -> list[dict[str, o
                 "verdict": verdict,
                 "release": _pick(rng, RELEASES),
                 "release_ground": _pick(rng, RELEASE_GROUNDS),
-                "grounds": "content_absent" if verdict == "discard" else None,
+                "discard_ground": "acoustically_empty" if verdict == "discard" else None,
                 "route_state": _pick(rng, ROUTE_STATES),
                 "route_airway": _pick(rng, [("routed", 40), ("declined", 55), ("unavailable", 5)]),
                 "route_speech": _pick(rng, [("routed", 70), ("declined", 26), ("unavailable", 4)]),

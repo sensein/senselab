@@ -333,7 +333,7 @@ var SchemaFacets = (function () {
   /**
    * One facet's values, each with both counts and whether it is chosen.
    *
-   * Sorted by the column's declared ordering where it has one, so `pass < flag < discard` reads as
+   * Sorted by the column's declared ordering where it has one, so `pass < flag < rerun < discard` reads as
    * severity; by `available` otherwise. The absent bucket is always last and always present, so a
    * null can be selected rather than silently carried.
    *
