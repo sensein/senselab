@@ -129,3 +129,13 @@ sub-09f16959: free-speech-3 keeps "United States Marine Corps" and "Tennessee Hi
 both masked (v6 released the first: one red, one green); free-speech-2 masks "thirty-six years old" (age)
 while "thirty-three years ago" stays shown; the picture description shows "mom" (kinship); free-speech-1
 shows "today".
+
+## Every withholding names its ground (2026-10-04)
+
+The r12 parquet held 106 withheld recordings with a null `release_ground`. Every one was a REDACT
+`fail` whose verification re-scan of the redacted transcript still read a finding (`unremediable`:
+PERSON 90, DATE_TIME 9, NAME 8, LOCATION 7, MISC 4, DATE 1, LOC 1) that no reviewer reading cleared;
+`_release_from` returned ground None wherever REDACT itself decided. The release stays withheld (a
+name surviving the redacted copy is what v7 masks by default); the fold now records
+`REDACT_VERIFY_FOUND` for a re-scan fail and `REDACT_UNRESOLVED` for any other REDACT fail or flag,
+both in `RELEASE_WITHHELD_GROUNDS`. Only a REDACT pass with a standing mask still carries no ground.
