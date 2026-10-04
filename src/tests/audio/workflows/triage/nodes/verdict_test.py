@@ -1119,16 +1119,16 @@ class TestTheRedactionReviewerAnnotatesAndThisNodeDecides:
     def test_a_word_the_policy_always_masks_releases_a_copy_where_redact_never_ran(
         self, make_verdict_store: Callable[..., ProvStore], tmp_path: Path
     ) -> None:
-        """Policy v7: no detector found anything, but "summer" is a season; the copy masks it, REDACT or not."""
+        """No detector found anything, but "October" is a month; the copy masks it, REDACT or not."""
         config = _policy_config(tmp_path, "verdict:\n  llm_redaction_withholds: true\n")
         store = make_verdict_store(concluded=BASE, routed=ROUTED_PAIR, words_n=5, scanned=True)
-        self._mask(store, ["i", "go", "every", "summer", "home"], [])
+        self._mask(store, ["i", "go", "every", "October", "home"], [])
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
         assert (result.file_verdict.release, result.file_verdict.release_ground) == (
             Release.WITH_REDACTION,
             POLICY_MASKS_ONLY,
         )
-        assert self._states(store) == {"summer": "masked"}
+        assert self._states(store) == {"October": "masked"}
 
     def test_a_masked_person_name_flags_for_review_and_releases_as_before(
         self, make_verdict_store: Callable[..., ProvStore], tmp_path: Path

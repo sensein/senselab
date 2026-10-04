@@ -611,7 +611,7 @@ class TestABranchNeverRefuses:
             spans={},
         )
         assert folded.unmeasured["AIRWAY"] == ["verdict.gates.by_group.EVENT_SERIES.score_min"]
-        assert folded.triage is Triage.FLAG
+        assert folded.triage is Triage.RERUN
         quiet = _fold(
             [_report("AIRWAY", conformance=UNDETERMINED, unmeasured=["verdict.gates.by_group.EVENT_SERIES.score_min"])],
             spans={},
@@ -682,7 +682,7 @@ class TestTheReportSurvivesTheStore:
         )
         assert report.unmeasured == ("branch.target_match_cosine",)
         folded = _fold([report], spans={"SPEECH": 0}, routes={"SPEECH": ROUTED})
-        assert folded.triage is Triage.FLAG
+        assert folded.triage is Triage.RERUN
         assert folded.unmeasured["SPEECH"] == ["branch.target_match_cosine"]
 
     def test_in_family_reaches_the_fold(self) -> None:
