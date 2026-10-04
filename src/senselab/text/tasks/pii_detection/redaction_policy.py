@@ -327,6 +327,19 @@ def state_positions(texts: Sequence[str]) -> set[int]:
     return found
 
 
+def is_state_word(text: str) -> bool:
+    """Whether one word, in any case, is a one-word state or province name.
+
+    Args:
+        text: A word's surface.
+
+    Returns:
+        True for ``wisconsin`` or ``Florida``.
+    """
+    key = fold(text)
+    return bool(key) and key in policy()["states"]
+
+
 def country_runs(texts: Sequence[str]) -> list[tuple[int, int]]:
     """Every run of words that names a country, written as a proper noun, and not part of a state's name.
 

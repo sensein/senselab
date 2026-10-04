@@ -388,6 +388,67 @@ def test_a_release_the_policy_never_allows_is_fed_back() -> None:
     assert answer_problem(agreeing, "hello alice", "hello [PERSON]") is None
 
 
+def test_v8_places_need_a_reason_and_relabels_come_from_the_set() -> None:
+    """A place smaller than a country goes only with a place reason; a state only as historical; relabels are closed."""
+    from senselab.text.tasks.pii_detection.redaction_review import ReviewProposal, ReviewResult, answer_problem
+
+    def result(*proposal: ReviewProposal) -> ReviewResult:
+        return ReviewResult(available=True, redaction="complete", original="clean", proposal=list(proposal))
+
+    original = "a fighter in the Roman Empire, and the Civil War in Virginia, and Star Wars"
+    bare = ReviewProposal(text="Roman Empire", action="release", category="LOCATION", why="history")
+    assert "without a place_reason" in (answer_problem(result(bare), original, None) or "")
+    reasoned = ReviewProposal(
+        text="Roman Empire", action="release", category="LOCATION", why="history", place_reason="historical"
+    )
+    assert answer_problem(result(reasoned), original, None) is None
+    state = ReviewProposal(text="Virginia", action="release", category="LOCATION", why="war", place_reason="fictional")
+    assert "always removes" in (answer_problem(result(state), original, None) or "")
+    historical = ReviewProposal(
+        text="Virginia", action="release", category="LOCATION", why="war", place_reason="historical"
+    )
+    assert answer_problem(result(historical), original, None) is None
+    unknown = ReviewProposal(text="Star Wars", action="release", category="PERSON", why="a film", relabel="movie")
+    assert "outside the allowed values" in (answer_problem(result(unknown), original, None) or "")
+    titled = ReviewProposal(text="Star Wars", action="release", category="PERSON", why="a film", relabel="work_title")
+    assert answer_problem(result(titled), original, None) is None
+    as_place = ReviewProposal(text="Star Wars", action="release", category="PERSON", why="a planet", relabel="place")
+    assert "without a place_reason" in (answer_problem(result(as_place), original, None) or "")
+
+
+def test_v8_the_parser_and_the_payload_keep_the_relabel_and_the_place_reason() -> None:
+    """Both keys survive the parse and the stored payload, lower-cased."""
+    from senselab.text.tasks.pii_detection.redaction_review import ReviewResult, parse_completion, review_payload
+
+    completion = (
+        "REASONING: a film and an empire.\nREDACTION: complete\nORIGINAL: clean\nSPEAKERS: one\n"
+        "OTHER_SPEAKERS: []\nCONDITIONS: []\nINSTRUCTIONS_SPOKEN: []\nPROPOSAL: "
+        '[{"text": "Star Wars", "action": "release", "category": "PERSON", "why": "a film", "relabel": "Work_Title"},'
+        ' {"text": "Roman Empire", "action": "release", "category": "LOCATION", "why": "history",'
+        ' "place_reason": "historical"}]'
+    )
+    parsed = parse_completion(completion)
+    assert [(entry.relabel, entry.place_reason) for entry in parsed.proposal] == [
+        ("work_title", ""),
+        ("", "historical"),
+    ]
+    payload = review_payload(ReviewResult(available=True, proposal=parsed.proposal))
+    assert payload["proposal"][0]["relabel"] == "work_title" and payload["proposal"][1]["place_reason"] == "historical"
+
+
+def test_v8_each_task_family_gets_its_task_content_guidance() -> None:
+    """Productive vocabulary is told its definitions are task content; a family with no entry gets none."""
+    from senselab.text.tasks.pii_detection.redaction_review import _compose, task_guidance, task_guidance_digest
+
+    assert "definition task" in task_guidance("productive-vocabulary")
+    assert "picture" in task_guidance("picture-description-option1")
+    assert "reads a given text" in task_guidance("harvard-sentences-list")
+    assert task_guidance("free-speech") == "" and task_guidance(None) == ""
+    body = _compose("Roman fighter", None, {"task": "productive-vocabulary", "asked_to_say": "gladiator"})
+    assert "WHAT IS TASK CONTENT IN THIS TASK:" in body and "Roman Empire" in body
+    assert len(task_guidance_digest()) == 64
+
+
 def test_the_parser_keeps_the_safe_harbor_letter() -> None:
     """Each entry carries the identifier the model named, one letter, upper-cased."""
     from senselab.text.tasks.pii_detection.redaction_review import parse_completion
@@ -624,6 +685,6 @@ def test_the_prompt_states_the_time_expression_rule_and_the_cue_word_rule() -> N
     """v7: weekdays and relative times are released, absolute dates are not; a cue word's definition is task content."""
     from senselab.text.tasks.pii_detection import redaction_review as r
 
-    assert r.PROMPT_VERSION == 7
+    assert r.PROMPT_VERSION == 8
     assert "2-3 weeks ago" in r._PROMPT and "this morning" in r._PROMPT and '"Monday"' in r._PROMPT
     assert "gladiator" in r._PROMPT and "hotel" in r._PROMPT

@@ -910,20 +910,23 @@ class TestTheRedactionReviewerAnnotatesAndThisNodeDecides:
         """The masks and the quotes are read off the store; some reset is partial, every one is the original."""
         config = _policy_config(tmp_path, "verdict:\n  llm_redaction_withholds: true\n  llm_reset_redactions: true\n")
         for released, expected in (
-            (["alice"], (Release.WITH_REDACTION, REVIEWER_UNMASKED_SOME)),
-            (["alice", "brooklyn"], (Release.WITHOUT_REDACTION, REVIEWER_UNMASKED_ALL)),
+            (["Alice"], (Release.WITH_REDACTION, REVIEWER_UNMASKED_SOME)),
+            (["Alice", "Brooklyn"], (Release.WITHOUT_REDACTION, REVIEWER_UNMASKED_ALL)),
             ([], (Release.WITH_REDACTION, None)),
         ):
             store = make_verdict_store(
                 concluded=[*BASE, ("REDACT", Outcome.PASS, None)], routed=ROUTED_PAIR, pii_n=2, planned_mask=False
             )
-            self._mask(store, ["i", "met", "alice", "in", "brooklyn"], [2, 4])
+            self._mask(store, ["i", "met", "Alice", "in", "Brooklyn"], [2, 4])
             _annotate(
                 store,
                 status="flagged",
                 redaction="incomplete",
                 original="clean",
-                proposal=[{"text": text, "action": "release", "category": "PERSON"} for text in released],
+                proposal=[
+                    {"text": text, "action": "release", "category": "PERSON", "relabel": "other_non_person"}
+                    for text in released
+                ],
             )
             result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
             assert (result.file_verdict.release, result.file_verdict.release_ground) == expected
@@ -936,20 +939,20 @@ class TestTheRedactionReviewerAnnotatesAndThisNodeDecides:
         store = make_verdict_store(
             concluded=[*BASE, ("REDACT", Outcome.PASS, None)], routed=ROUTED_PAIR, pii_n=2, planned_mask=False
         )
-        self._mask(store, ["i", "met", "alice", "in", "brooklyn"], [2, 4])
+        self._mask(store, ["i", "met", "Alice", "in", "Brooklyn"], [2, 4])
         _annotate(
             store,
             status="flagged",
             redaction="incomplete",
             original="clean",
-            proposal=[{"text": "brooklyn", "action": "release", "category": "LOCATION"}],
+            proposal=[{"text": "Brooklyn", "action": "release", "category": "PERSON", "relabel": "work_title"}],
         )
         verdict_module.verdict(store, None, config, run_dir=tmp_path)
         ledger = find_measurement(store, PII_LEDGER)
         assert ledger is not None
         assert ledger.attributes["release_ground"] == REVIEWER_UNMASKED_SOME
         states = {word["text"]: word["state"] for mask in ledger.attributes["masks"] for word in mask["words"]}
-        assert states == {"alice": "masked", "brooklyn": "unmasked_by_reviewer"}
+        assert states == {"Alice": "masked", "Brooklyn": "unmasked_by_reviewer"}
         assert [len(entry["word_ids"]) for entry in ledger.attributes["final_masks"]] == [1]
 
     def _states(self, store: ProvStore) -> dict[str, str]:
