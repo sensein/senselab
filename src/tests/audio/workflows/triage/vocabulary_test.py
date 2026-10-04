@@ -21,6 +21,7 @@ from senselab.audio.workflows.triage.vocabulary import (
     GROUND_KEY_PREFIXES,
     GROUND_KEYS,
     INSTRUCTIONS_SPOKEN,
+    KEY_OWNING_BRANCH_INPUT_ABSENT,
     LLM_REDACTION_RESIDUE,
     MASKS_TRIMMED_TO_CONTENT,
     MODEL_SPEAKER_PERMITTED,
@@ -2315,3 +2316,49 @@ class TestTheDeclaredTaskDecides:
         )
         assert folded.triage is Triage.RERUN
         assert folded.discard_ground is None
+
+    def _breath(self, *, route_state: str, duration_s: float, absent: tuple[str, ...]) -> FileVerdict:
+        return fold_file_verdict(
+            self._ADMIT_OK,
+            branch_reports=[_report("AIRWAY", "airway", conformance=UNDETERMINED)],
+            spans_by_node={},
+            branch_decisions=(
+                _all_declined(forced=("AIRWAY",))
+                if route_state == "empty"
+                else _decisions(AIRWAY=ROUTED, SPEECH=DECLINED, VOICE=DECLINED)
+            ),
+            ran={"AIRWAY": RunState.COMPLETED},
+            hint_claims={"AIRWAY": True},
+            route_state=route_state,
+            declared_family="respiration-and-cough-breath",
+            task=TaskEvidence(
+                owning_branches=("AIRWAY",),
+                duration_s=duration_s,
+                minimum_duration_s=1.0,
+                owner_absent_inputs=absent,
+            ),
+        )
+
+    def test_an_owner_without_its_instrument_reruns_rather_than_calling_the_task_absent(self) -> None:
+        """AIRWAY had no hear_scores to look with and found nothing: owed a rerun, not a discard."""
+        folded = self._breath(route_state="routed", duration_s=1.98, absent=("AIRWAY:hear_scores",))
+        assert folded.triage is Triage.RERUN
+        assert folded.discard_ground is None
+        assert KEY_OWNING_BRANCH_INPUT_ABSENT in folded.ground_keys
+
+    def test_an_owner_with_its_instruments_finding_nothing_is_still_task_absent(self) -> None:
+        """The same recording with every input present: the declared task is absent."""
+        folded = self._breath(route_state="routed", duration_s=1.98, absent=())
+        assert folded.triage is Triage.DISCARD
+        assert folded.discard_ground == DECLARED_TASK_ABSENT
+
+    def test_an_empty_route_whose_owner_lacked_an_input_reruns(self) -> None:
+        """An empty route is not called empty while the owning branch could not look."""
+        folded = self._breath(route_state="empty", duration_s=3.0, absent=("AIRWAY:hear_scores",))
+        assert folded.triage is Triage.RERUN
+        assert folded.discard_ground is None
+
+    def test_a_too_short_recording_discards_whatever_its_owner_lacked(self) -> None:
+        """A duration needs no instrument: too short stays a discard."""
+        folded = self._breath(route_state="routed", duration_s=0.3, absent=("AIRWAY:hear_scores",))
+        assert folded.discard_ground == TOO_SHORT_FOR_TASK

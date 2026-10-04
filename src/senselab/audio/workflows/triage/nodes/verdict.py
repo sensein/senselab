@@ -72,6 +72,7 @@ from senselab.audio.workflows.triage.nodes.gates import (
     NOT_COMPUTED,
     NULL_NO_OVERLAP,
     NULL_VALUE,
+    UNCOMPUTED_REASONS,
     UNDECIDED,
     AppliedGate,
     GateBounds,
@@ -342,12 +343,49 @@ def event_tokens_n(store: ProvStore, declared_family: str | None) -> int:
     )
 
 
-def _task_evidence(store: ProvStore, declared_family: str | None) -> TaskEvidence:
+def _owner_absent_inputs(
+    store: ProvStore, owners: Sequence[str], gate_record: Mapping[str, Any] | None
+) -> tuple[str, ...]:
+    """What an owning branch needed to look for its task and did not have.
+
+    Args:
+        store: The provenance store, read for AIRWAY's instrument-absent measurement and ROUTING's
+            critical absences.
+        owners: The branches owning the declared family.
+        gate_record: The gate outcome record, read for the owning node's uncomputed readings.
+
+    Returns:
+        The absent inputs, each named as its branch, gate or derivative, in a stable order.
+    """
+    absent: list[str] = []
+    if "AIRWAY" in owners:
+        measurement = find_measurement(store, AIRWAY_INSTRUMENT_ABSENT)
+        if measurement is not None:
+            absent.extend(f"AIRWAY:{name}" for name in measurement.attributes.get("absent") or ())
+    absences = _critical_absences(store)
+    for branch in owners:
+        absent.extend(f"{branch}:{gate}" for gate in sorted(absences.get(branch, {})))
+    record = dict(gate_record or {})
+    if record.get("node") in owners:
+        absent.extend(
+            f"{record['node']}:{gate.get('gate')}"
+            for gate in record.get("applied") or ()
+            if isinstance(gate, Mapping)
+            and gate.get("passed") == UNDETERMINED
+            and gate.get("reason") in UNCOMPUTED_REASONS
+        )
+    return tuple(dict.fromkeys(absent))
+
+
+def _task_evidence(
+    store: ProvStore, declared_family: str | None, gate_record: Mapping[str, Any] | None = None
+) -> TaskEvidence:
     """Whether the declared task was performed at all: its owner, the duration and its event tokens.
 
     Args:
         store: The provenance store, read for ADMIT's ``recording`` stream and the consensus words.
         declared_family: The task family the recording declares.
+        gate_record: The gate outcome record, read for the owning node's uncomputed readings.
 
     Returns:
         The evidence :func:`~senselab.audio.workflows.triage.vocabulary.fold_file_verdict` reads.
@@ -367,6 +405,7 @@ def _task_evidence(store: ProvStore, declared_family: str | None) -> TaskEvidenc
         duration_s=duration,
         minimum_duration_s=minimum_duration_s(declared_family) if owners else None,
         event_tokens_n=event_tokens_n(store, declared_family),
+        owner_absent_inputs=_owner_absent_inputs(store, owners, gate_record),
     )
 
 
@@ -915,7 +954,7 @@ def verdict(
         agreed_redactions=plan.agreed,
         unplaced=[(finding.family, finding.state) for finding in plan.unplaced],
         second_opinion=opinion,
-        task=_task_evidence(store, declared_family or None),
+        task=_task_evidence(store, declared_family or None, outcome.record()),
     )
 
     software = software_agent(store)

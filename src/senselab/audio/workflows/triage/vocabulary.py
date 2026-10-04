@@ -288,12 +288,15 @@ class TaskEvidence:
         minimum_duration_s: The shortest recording the declared family can occupy, or None.
         event_tokens_n: How many bracketed ASR event tokens name the declared airway family's own
             event (``[cough]`` in a cough task); 0 for every other family.
+        owner_absent_inputs: The instruments, derivatives or gate readings an owning branch needed to
+            look for the task and did not have; empty where every owner could look.
     """
 
     owning_branches: tuple[str, ...] = ()
     duration_s: float | None = None
     minimum_duration_s: float | None = None
     event_tokens_n: int = 0
+    owner_absent_inputs: tuple[str, ...] = ()
 
 
 UNMEASURABLE = "unmeasurable"
@@ -370,6 +373,10 @@ UNREAD_DECLARATION = (
 )
 
 CRITICAL_ABSENCE = "a critical measurement is absent, so no gate of at least one branch could be read"
+OWNING_BRANCH_INPUT_ABSENT = (
+    "the branch owning the declared task lacked an input it needs to look for the task, "
+    "so whether the task was performed is unknown"
+)
 NO_LEXICAL_ITEM_PRODUCED = "SPEECH ran over a task that asks for words and read no lexical item"
 """The flag ground a critical failure contributes, with the branch, gate and recorded absence appended.
 
@@ -453,6 +460,7 @@ KEY_CRITICAL_ABSENCE = "critical_absence"
 KEY_TAXONOMY_NO_CLASSIFIER = "taxonomy_no_classifier"
 KEY_REDACT_RESCAN_INCOMPLETE = "redact_rescan_incomplete"
 KEY_UNCOMPUTED_READING = "uncomputed_reading"
+KEY_OWNING_BRANCH_INPUT_ABSENT = "owning_branch_input_absent"
 KEY_NODE_OUTCOME_UNREADABLE = "node_outcome_unreadable"
 KEY_NO_LEXICAL_ITEM = "speech_no_lexical_item"
 KEY_REVIEWER_RESIDUE = "reviewer_residue"
@@ -479,6 +487,7 @@ GROUND_KEYS = (
     KEY_TAXONOMY_NO_CLASSIFIER,
     KEY_REDACT_RESCAN_INCOMPLETE,
     KEY_UNCOMPUTED_READING,
+    KEY_OWNING_BRANCH_INPUT_ABSENT,
     KEY_NODE_OUTCOME_UNREADABLE,
     KEY_NO_LEXICAL_ITEM,
     KEY_REVIEWER_RESIDUE,
@@ -531,6 +540,7 @@ OPERATIONAL_GROUND_KEYS = frozenset(
         KEY_TAXONOMY_NO_CLASSIFIER,
         KEY_REDACT_RESCAN_INCOMPLETE,
         KEY_UNCOMPUTED_READING,
+        KEY_OWNING_BRANCH_INPUT_ABSENT,
         KEY_NODE_OUTCOME_UNREADABLE,
     }
 )
@@ -1715,9 +1725,16 @@ def fold_file_verdict(
         for name, decision in branch_decisions.items()
     }
 
+    performed = declared_task_performed(by_branch, findings, task_evidence)
+    owner_unable = bool(task_evidence.owner_absent_inputs) and not performed
+    if owner_unable:
+        flag(
+            task_evidence.owning_branches[0] if task_evidence.owning_branches else _VERDICT,
+            f"{OWNING_BRANCH_INPUT_ABSENT}: {', '.join(task_evidence.owner_absent_inputs)}",
+            KEY_OWNING_BRANCH_INPUT_ABSENT,
+        )
     admit = next((reason for reason in reasons if reason.node == _ADMIT), None)
     flags = [reason for reason in reasons if reason.outcome is Outcome.FLAG]
-    performed = declared_task_performed(by_branch, findings, task_evidence)
     ground: str | None = None
     if admit is not None and admit.outcome is Outcome.FAIL:
         triage = Triage.DISCARD
@@ -1730,7 +1747,7 @@ def fold_file_verdict(
     ):
         triage = Triage.DISCARD
         ground = TOO_SHORT_FOR_TASK
-    elif route_state == EMPTY and not performed:
+    elif route_state == EMPTY and not performed and not owner_unable:
         triage = Triage.DISCARD
         ground = ACOUSTICALLY_EMPTY
     elif any(is_operational(reason.key) for reason in flags):
