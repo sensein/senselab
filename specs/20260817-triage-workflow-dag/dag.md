@@ -402,6 +402,7 @@ table; no span count is a flag by itself. Deviations are recorded and folded int
 | a detector finding SPEECH could not place on words (`open` / `unread`) | VERDICT | — |
 | a flag gate that did not pass (`dominant_speaker_share_min`, and per group `voiced_fraction_min`, `f0_spread_max_semitones`) | VERDICT | `verdict.gates` |
 | a conformance reading that should exist and was not computed | the gate's node | `uncomputed_reading_flags` |
+| the branch owning the declared task lacked an input it needs to look (`owning_branch_input_absent`; operational, so `rerun`) | the owning branch | — |
 | a reported non-conformance (`TASK` or `STORE_ASSERTIONS`) | the reporting node | `conformance_flags`, `conformance_flags_by_family` |
 | an unanswered conformance | the reporting node | `undetermined_flags` (off) |
 | a reported deviation | the reporting node | `deviation_flags` (off) |
