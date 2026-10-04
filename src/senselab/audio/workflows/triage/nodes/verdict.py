@@ -82,6 +82,7 @@ from senselab.audio.workflows.triage.nodes.redact import (
     mask_plan,
     name_approvals,
     padding_ms,
+    task_texts,
 )
 from senselab.audio.workflows.triage.task_lexicon import task_lexicon
 from senselab.audio.workflows.triage.vocabulary import (
@@ -798,6 +799,7 @@ def verdict(
         lexicon=task_lexicon(config, declared_task_family(store), hint),
         language=None if hint is None else str(hint.metadata.get("language") or "") or None,
         name_approvals=name_approvals(config, recording_stem(store)),
+        task_text=task_texts(hint),
     )
     file_verdict = fold_file_verdict(
         node_verdicts,

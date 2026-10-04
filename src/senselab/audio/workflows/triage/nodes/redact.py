@@ -86,11 +86,19 @@ from senselab.text.tasks.pii_detection.redaction_policy import (
     age_positions,
     country_runs,
     date_positions,
+    is_number,
+    is_state_word,
     kinship_positions,
     state_positions,
 )
 from senselab.text.tasks.pii_detection.redaction_policy import fold as policy_fold
-from senselab.text.tasks.pii_detection.redaction_review import safe_harbor_codes
+from senselab.text.tasks.pii_detection.redaction_review import (
+    PLACE_HISTORICAL,
+    PLACE_REASONS,
+    RELABEL_PLACE,
+    RELABELS,
+    safe_harbor_codes,
+)
 from senselab.utils.prov_store import Entity, ProvStore
 from senselab.utils.tasks.cached_inference import annotate_result_origin
 
@@ -1064,6 +1072,10 @@ word, or a country that is the whole of a place name. :attr:`MaskWord.kind` says
 RELEASED_CONDITION = "released_condition"
 """A word a mask covered that a health condition the reviewer listed names: never masked."""
 
+RELEASED_NOT_PROPER = "released_not_proper"
+"""A word a detector finding covered that is written with no capital letter, is no number, and no reviewer
+``redact`` entry and no date, age or state rule keeps: never masked, in any language."""
+
 UNMASKED_BY_APPROVAL = "unmasked_by_approval"
 """A person's name a human approved for release (``redaction.name_approvals``)."""
 
@@ -1076,6 +1088,7 @@ WORD_STATES = (
     UNMASKED_BY_TRIM,
     RELEASED_BY_KIND,
     RELEASED_CONDITION,
+    RELEASED_NOT_PROPER,
     UNMASKED_BY_APPROVAL,
     PROPOSED_BY_REVIEWER,
 )
@@ -1094,7 +1107,7 @@ LOCKS = (LOCK_DATE, LOCK_AGE, LOCK_PLACE, LOCK_PERSON)
 """Why the policy keeps a word masked whatever the reviewer said: a date element, an age, a place below a
 country, or a person's name awaiting a human's approval."""
 
-POLICY_VERSION = 7
+POLICY_VERSION = 8
 """The redaction policy the fold applies; recorded on the ledger."""
 
 MASK_UNCHANGED = "unchanged"
@@ -1457,6 +1470,8 @@ class MaskPlan:
         name_approvals: The person names a human approved for release in this recording.
         name_release_proposed: The reviewer ``release`` quotes naming a person's name the policy keeps
             masked until a human approves it.
+        task_text_ids: The words of the task's own texts (:func:`task_text_positions`) that a finding
+            covered or a date, age or state rule would have masked, which no mask covers.
     """
 
     masks: tuple[MaskOutcome, ...]
@@ -1475,6 +1490,7 @@ class MaskPlan:
     language: str = ""
     name_approvals: tuple[str, ...] = ()
     name_release_proposed: tuple[str, ...] = ()
+    task_text_ids: tuple[str, ...] = ()
 
     @property
     def planned(self) -> list[RedactionExtent]:
@@ -1654,6 +1670,7 @@ class MaskPlan:
             "release_unplaced": list(self.release_unplaced),
             "release_off_mask": list(self.release_off_mask),
             "task_lexicon_ids": list(self.task_lexicon_ids),
+            "task_text_ids": list(self.task_text_ids),
             "reviewer_named_no_words": self.named_no_words,
             "counts": {
                 "masks_n": len(self.masks),
@@ -1661,6 +1678,15 @@ class MaskPlan:
                 "policy_masks_n": self.policy_masks_n,
                 "task_words_n": sum(mask.task_words_n for mask in self.masks),
                 "task_lexicon_words_n": len(self.task_lexicon_ids),
+                "task_text_words_n": len(self.task_text_ids),
+                **{
+                    f"relabel_{relabel}_n": sum(1 for entry in self.releases if entry.get("relabel") == relabel)
+                    for relabel in RELABELS
+                },
+                **{
+                    f"place_reason_{reason}_n": sum(1 for entry in self.releases if entry.get("place_reason") == reason)
+                    for reason in PLACE_REASONS
+                },
                 **{
                     f"{outcome}_n": sum(1 for mask in self.masks if mask.outcome == outcome)
                     for outcome in MASK_OUTCOMES
@@ -1891,6 +1917,100 @@ def _approved(approvals: Sequence[str], tokens: Sequence[tuple[str, Entity]]) ->
     return {word.id for approval in approvals for word in _place(str(approval), tokens)}
 
 
+_SUFFIXES = ("ing", "es", "ed", "s")
+
+
+def _stem(key: str) -> str:
+    """A folded token with one inflectional suffix dropped, where at least four letters stay."""
+    for suffix in _SUFFIXES:
+        if key.endswith(suffix) and len(key) - len(suffix) >= 4:
+            return key[: -len(suffix)]
+    return key
+
+
+def _stems(text: str) -> set[str]:
+    """The stems one word of text matches by: the word whole, its hyphen joints dropped, and each piece."""
+    key = policy_fold(text)
+    if not key:
+        return set()
+    pieces = [piece for piece in key.split("-") if piece]
+    return {_stem(key), _stem(key.replace("-", "")), *(_stem(piece) for piece in pieces)}
+
+
+def task_text_keys(task_text: Sequence[str]) -> frozenset[str]:
+    """The stems of every word of the task's own texts: its stimulus, its target words, its instructions.
+
+    Args:
+        task_text: The texts, as the recording declares them.
+
+    Returns:
+        :func:`_stems` of every whitespace-separated word, and of each run of hyphen-joined words written
+        apart ("ninety-three" also as "ninetythree").
+    """
+    keys: set[str] = set()
+    for text in task_text:
+        for word in str(text or "").split():
+            keys |= _stems(word)
+    return frozenset(keys)
+
+
+def task_texts(hint: Any) -> tuple[str, ...]:  # noqa: ANN401 — an AudioHints or None
+    """The task's own texts a recording declares: what it was asked to say or define, and its instructions.
+
+    Args:
+        hint: The recording's declaration (``AudioHints``), or None.
+
+    Returns:
+        Each expected prompt's text, then the instructions; empty where the recording declares none.
+    """
+    if hint is None:
+        return ()
+    prompts = [
+        str(expected.text)
+        for expected in (getattr(hint, "expected_speech", None) or [])
+        if getattr(expected, "text", None)
+    ]
+    instructions = getattr(hint, "instructions", None)
+    return tuple(prompts + ([str(instructions)] if instructions else []))
+
+
+def task_text_positions(texts: Sequence[str], task_text: Sequence[str]) -> set[int]:
+    """Which transcript words are the task's own text, inflections included.
+
+    Args:
+        texts: The transcript's word surfaces, in order.
+        task_text: The task's stimulus, target words and instructions.
+
+    Returns:
+        The positions of content words whose whole stem, or every hyphen piece's stem, is a word of the
+        task's texts.
+    """
+    keys = task_text_keys(task_text)
+    if not keys:
+        return set()
+    found: set[int] = set()
+    for position, text in enumerate(texts):
+        if not is_content_word(text):
+            continue
+        key = policy_fold(text)
+        pieces = [piece for piece in key.split("-") if piece]
+        if (
+            _stem(key) in keys
+            or _stem(key.replace("-", "")) in keys
+            or (pieces and all(_stem(p) in keys for p in pieces))
+        ):
+            found.add(position)
+    return found
+
+
+def _identifier_shaped(text: str) -> bool:
+    """Whether a word could be part of a number or a contact: a digit, an ``@``, or a number word."""
+    if any(ch.isdigit() for ch in text) or "@" in text:
+        return True
+    key = policy_fold(text)
+    return bool(key) and is_number(key)
+
+
 def mask_plan(
     store: ProvStore,
     *,
@@ -1902,6 +2022,7 @@ def mask_plan(
     lexicon: TaskLexicon | None = None,
     language: str | None = None,
     name_approvals: Sequence[str] = (),
+    task_text: Sequence[str] = (),
 ) -> MaskPlan:
     """Which words stay masked under redaction policy v7, the reviewer's unmasks and the content-word trim.
 
@@ -1938,6 +2059,8 @@ def mask_plan(
             no mask covers. Where None, the family's declared names, compared exactly.
         language: The language the recording declares (its sidecar's ``language``), or None.
         name_approvals: The person names a human approved for release in this recording.
+        task_text: The task's own texts -- its stimulus or target words and its instructions; a word of
+            them, inflections included (:func:`task_text_positions`), is task content no mask covers.
 
     Returns:
         The plan.
@@ -1960,7 +2083,10 @@ def mask_plan(
     by_id = {word.id: word for word in words}
     order = {word.id: position for position, word in enumerate(words)}
     vocabulary = lexicon if lexicon is not None else declared_names_lexicon(declared_task_family(store))
-    declared_ids = {words[i].id for i in vocabulary.positions([str(w.attributes.get("text") or "") for w in words])}
+    word_texts = [str(w.attributes.get("text") or "") for w in words]
+    declared_ids = {words[i].id for i in vocabulary.positions(word_texts)}
+    task_text_ids = {words[i].id for i in task_text_positions(word_texts, task_text)}
+    declared_ids |= task_text_ids
     located, unplaced_records = _located_findings(store, residue_ids, declared_ids)
     finding_word_ids = {
         str(i) for finding in live_entities(store, "pii") for i in (finding.attributes.get("word_ids") or ())
@@ -2029,6 +2155,16 @@ def mask_plan(
         if word.extent is not None and not word.attributes.get("bracketed") and word.id not in declared_ids
     ]
     scan_texts = [text_of(word) for word in scan]
+    with_task = [
+        word
+        for word in (residue or words)
+        if word.extent is not None and not word.attributes.get("bracketed") and word.id in task_text_ids
+    ]
+    task_policy_ids = {
+        with_task[i].id
+        for i in date_positions([text_of(word) for word in with_task])
+        | state_positions([text_of(word) for word in with_task])
+    }
     date_ids = {scan[i].id for i in date_positions(scan_texts)}
     age_ids = {scan[i].id for i in age_positions(scan_texts)}
     state_ids = {scan[i].id for i in state_positions(scan_texts)}
@@ -2077,17 +2213,27 @@ def mask_plan(
     named: set[str] = set()
     unplaced_quotes: list[str] = []
     releases: list[dict[str, Any]] = []
+    not_person_ids: set[str] = set()
+    relabelled_place_ids: set[str] = set()
+    place_reason_ids: set[str] = set()
+    historical_ids: set[str] = set()
     for index, entry in enumerate(entries):
         if str(entry.get("action")) != "release" or index in condition_indices:
             continue
         hits = _place(str(entry.get("text") or ""), tokens)
         category = str(entry.get("category") or "OTHER").upper()
+        relabel = str(entry.get("relabel") or "").strip().lower()
+        place_reason = str(entry.get("place_reason") or "").strip().lower()
+        relabel = relabel if relabel in RELABELS else ""
+        place_reason = place_reason if place_reason in PLACE_REASONS else ""
         releases.append(
             {
                 "text": str(entry.get("text") or ""),
                 "category": category,
                 "safe_harbor": str(entry.get("safe_harbor") or "") or "".join(safe_harbor_codes(category)[:1]),
                 "why": str(entry.get("why") or ""),
+                "relabel": relabel,
+                "place_reason": place_reason,
                 "placed": bool(hits),
             }
         )
@@ -2095,6 +2241,16 @@ def mask_plan(
             unplaced_quotes.append(str(entry.get("text") or ""))
             continue
         named.update(word.id for word in hits)
+        hit_ids = {word.id for word in hits}
+        if relabel == RELABEL_PLACE:
+            relabelled_place_ids |= hit_ids
+        elif relabel:
+            not_person_ids |= hit_ids
+        if place_reason:
+            place_reason_ids |= hit_ids
+        if place_reason == PLACE_HISTORICAL:
+            historical_ids |= hit_ids
+    always_ids -= historical_ids & state_ids
     redact_placed = {
         index: placed_words(str(entry.get("text") or ""))
         for index, entry in enumerate(entries)
@@ -2159,6 +2315,29 @@ def mask_plan(
     for word_id in always_ids:
         kind_of.pop(word_id, None)
 
+    # A reviewer release that says a name is no person, or a place identifies nobody, lifts that lock,
+    # for every occurrence of the same term the reviewer does not also ask to hide.
+    def same_term(ids: set[str]) -> set[str]:
+        terms = {term(word_id) for word_id in ids if word_id in family_of_word}
+        return ids | {
+            word_id for word_id in family_of_word if term(word_id) in terms and term(word_id)[0] not in blocked_tokens
+        }
+
+    not_person_ids = same_term(not_person_ids)
+    relabelled_place_ids = same_term(relabelled_place_ids)
+    place_reason_ids = same_term(place_reason_ids)
+    historical_ids = same_term(historical_ids)
+    always_ids -= historical_ids & state_ids
+    for word_id in not_person_ids:
+        if locked.get(word_id) == LOCK_PERSON:
+            locked.pop(word_id)
+    for word_id in relabelled_place_ids:
+        if locked.get(word_id) == LOCK_PERSON:
+            locked[word_id] = LOCK_PLACE
+    for word_id in place_reason_ids:
+        if locked.get(word_id) == LOCK_PLACE and (word_id not in state_ids or word_id in historical_ids):
+            locked.pop(word_id)
+
     named_terms = {term(word_id) for word_id in named if word_id in family_of_word}
     propagated = {
         word_id
@@ -2220,6 +2399,30 @@ def mask_plan(
         else:
             elsewhere.update(member_ids)
     kind_cut = name_only - elsewhere - always_ids - set(locked)
+    redact_hit_ids = {word.id for hits, _ in redact_placed.values() for word in hits}
+    # A name finding that holds a capitalised word keeps its lower-case words for the name trim above.
+    named_groups = {
+        word_id
+        for member_ids, members in groups.items()
+        if {category_family(finding.category) for finding in members} <= name_kinds
+        and any(capitalised(by_id[word_id]) for word_id in member_ids if word_id in by_id)
+        for word_id in member_ids
+    }
+    not_proper = {
+        word_id
+        for word_id in covered_ids - named_groups
+        if word_id in by_id
+        and not any(ch.isupper() for ch in text_of(by_id[word_id]))
+        and word_id not in always_ids
+        and word_id not in age_ids
+        and locked.get(word_id) != LOCK_AGE
+        and word_id not in redact_hit_ids
+        and word_id not in kind_of
+        and word_id not in kind_cut
+        and word_id not in condition_ids
+        and not _identifier_shaped(text_of(by_id[word_id]))
+        and not is_state_word(text_of(by_id[word_id]))
+    }
     keepable = {
         word_id
         for member_ids in groups
@@ -2227,13 +2430,17 @@ def mask_plan(
         if content(by_id[word_id])
         and word_id not in kind_cut
         and word_id not in kind_of
+        and word_id not in not_proper
         and (word_id not in condition_ids or word_id in always_ids)
     } | (always_ids & covered_ids)
     kept_ids = (keepable - released - approved_release) | (always_ids & covered_ids)
 
     # The policy's own masks: words it always masks that no finding covered.
     policy_masks: list[tuple[str, list[Entity]]] = []
-    for word_ids, family in ((date_ids - covered_ids, DATE_TIME_FAMILY), (state_ids - covered_ids, "LOCATION")):
+    for word_ids, family in (
+        (date_ids - covered_ids, DATE_TIME_FAMILY),
+        ((state_ids & always_ids) - covered_ids, "LOCATION"),
+    ):
         for run in _runs(sorted(word_ids & set(order)), order):
             policy_masks.append((family, [by_id[word_id] for word_id in run]))
             kept_ids |= set(run)
@@ -2300,6 +2507,8 @@ def mask_plan(
             return RELEASED_CONDITION
         if word.id in kind_of and content(word):
             return RELEASED_BY_KIND
+        if word.id in not_proper and content(word):
+            return RELEASED_NOT_PROPER
         if word.id in approved_release and word.id in keepable:
             return UNMASKED_BY_APPROVAL
         if word.id in released and word.id in keepable:
@@ -2465,6 +2674,7 @@ def mask_plan(
         unplaced=unplaced,
         redact_planned=tuple(redact_planned),
         task_lexicon_ids=tuple(sorted(declared_ids & finding_word_ids)),
+        task_text_ids=tuple(sorted(task_text_ids & (finding_word_ids | task_policy_ids))),
         named_no_words=reviewer_named_no_words(reading),
         releases=tuple(releases),
         conditions=tuple(conditions),

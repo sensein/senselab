@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import atexit
 import difflib
+import hashlib
 import json
 import logging
 import queue
@@ -46,7 +47,7 @@ from typing import Any, Mapping, Optional, Sequence
 
 import yaml
 
-from senselab.text.tasks.pii_detection.redaction_policy import date_positions, state_positions
+from senselab.text.tasks.pii_detection.redaction_policy import country_runs, date_positions, state_positions
 from senselab.utils.dependencies import hf_subprocess_env
 from senselab.utils.subprocess_venv import _clean_subprocess_env, ensure_venv, venv_python
 
@@ -73,7 +74,7 @@ _CONDITIONS_HEADING = "CONDITIONS:"
 _OTHER_SPEAKERS_HEADING = "OTHER_SPEAKERS:"
 _INSTRUCTIONS_SPOKEN_HEADING = "INSTRUCTIONS_SPOKEN:"
 
-PROMPT_VERSION = 7
+PROMPT_VERSION = 8
 """The prompt and its parse, as one number: it changes whenever either changes what a reading holds."""
 
 REDACTION_STATES = ("complete", "incomplete", "not_applicable")
@@ -90,9 +91,61 @@ RELEASE = "release"
 PROPOSAL_ACTIONS = (REDACT, RELEASE)
 """What a proposal entry asks for: remove this text, or stop removing text already removed."""
 
+RELABEL_WORK_TITLE = "work_title"
+RELABEL_BRAND = "brand_or_product"
+RELABEL_ORGANIZATION = "organization"
+RELABEL_PLACE = "place"
+RELABEL_OTHER = "other_non_person"
+RELABELS = (RELABEL_WORK_TITLE, RELABEL_BRAND, RELABEL_ORGANIZATION, RELABEL_PLACE, RELABEL_OTHER)
+"""What a ``release`` entry may say a removed name is instead of a person (its ``relabel`` key)."""
+
+PLACE_HISTORICAL = "historical"
+PLACE_FICTIONAL = "fictional"
+PLACE_GENERAL = "public_landmark_or_general_knowledge"
+PLACE_TASK = "task_content"
+PLACE_REASONS = (PLACE_HISTORICAL, PLACE_FICTIONAL, PLACE_GENERAL, PLACE_TASK)
+"""Why a ``release`` entry may let a place smaller than a country through (its ``place_reason`` key)."""
+
 SAFE_HARBOR_PATH = Path(__file__).parent / "data" / "safe_harbor.yaml"
 """The HIPAA Safe Harbor identifiers, with their citation; the reviewer applies (D)-(R) as written and the
 redaction policy (:mod:`~senselab.text.tasks.pii_detection.redaction_policy`) in place of (A)-(C)."""
+
+
+TASK_GUIDANCE_PATH = Path(__file__).parent / "data" / "task_guidance.yaml"
+"""What counts as the task's own content in each task family, as the reviewer is told it."""
+
+
+@lru_cache(maxsize=1)
+def _task_guidance() -> tuple[tuple[tuple[str, ...], str], ...]:
+    """The packaged guidance, as ``(family names, guidance)`` pairs in file order."""
+    raw = yaml.safe_load(TASK_GUIDANCE_PATH.read_text()) or {}
+    return tuple(
+        (tuple(str(name) for name in entry.get("names") or ()), " ".join(str(entry.get("guidance") or "").split()))
+        for entry in raw.get("families") or ()
+    )
+
+
+def task_guidance(family: str | None) -> str:
+    """The guidance on task content for one declared task family.
+
+    Args:
+        family: The declared family (``productive-vocabulary``, ``picture-description-option1`` ...), or None.
+
+    Returns:
+        The first entry whose names include the family, or a prefix of it followed by ``-``; the empty
+        string where none does.
+    """
+    key = str(family or "").strip().lower()
+    for names, guidance in _task_guidance():
+        if any(key == name or key.startswith(f"{name}-") for name in names):
+            return guidance
+    return ""
+
+
+@lru_cache(maxsize=1)
+def task_guidance_digest() -> str:
+    """The sha256 of the packaged guidance file, which a reading's cache identity carries."""
+    return hashlib.sha256(TASK_GUIDANCE_PATH.read_bytes()).hexdigest()
 
 
 @lru_cache(maxsize=1)
@@ -134,8 +187,13 @@ _POLICY = (
     "neighbours, doctors, coworkers, anyone in their life. A public figure -- a celebrity, an author, an "
     'artist, a politician, a historical figure, a fictional character ("Ray Bradbury", "Taylor Swift", '
     '"Cinderella") -- may be proposed for release with the reason; a person will confirm it before it is '
-    'released. Relationship words are never removed: release "mom", "my brother", "grandpa", '
-    '"my wife", "my son", "aunt", "cousin", "mamá", "mi hermano", "abuela".\n'
+    'released. When a removed name is not a person at all, release it with the key "relabel" saying what '
+    'it is: work_title (a film, book, song, show or game: "Star Wars", "Harry Potter", "The Green Mile"), '
+    'brand_or_product ("Botox", "M&M"), organization, place, or other_non_person (an ordinary word, or a '
+    "character in the task's picture or story, that a detector mistook for a name). A relabelled "
+    "organization then follows the organization rule and a relabelled place the place rule. Relationship "
+    'words are never removed: release "mom", "my brother", "grandpa", "my wife", "my son", "aunt", '
+    '"cousin", "mamá", "mi hermano", "abuela".\n'
     '- DATES. Remove every absolute date element, the year included: a year ("2021", "\'98", "two '
     'thousand twenty-one"), a month ("October"), a season ("summer"), a holiday ("Halloween", '
     '"Christmas"), a day of the month ("the 14th"). These are never released: in "I had COVID in 2021" '
@@ -144,10 +202,16 @@ _POLICY = (
     '"yesterday", "for two years") -- release these.\n'
     '- AGES. Remove every age ("I\'m 73", "seventy-three years old", "in my sixties", "my 50th '
     'birthday"); never release one.\n'
-    "- PLACES. Remove every place smaller than a country: a street, a neighbourhood, a city, a county, a "
-    "state or province, a region, a named venue. These are never released. A country may stay "
-    '("we moved from Mexico") unless, together with other details left in the text, it would help '
-    "single the speaker out; then propose redacting it.\n"
+    "- PLACES. Remove every place smaller than a country that the speaker connects to themselves or to "
+    "people they know -- where they live, lived, work, travel, are treated or were born: a street, a "
+    "neighbourhood, a city, a county, a state or province, a region, a named venue. A place that "
+    'identifies nobody may be released with the key "place_reason" set to one of: historical ("the '
+    'Roman Empire", "the Civil War in Virginia"), fictional (a setting in a book or film), '
+    'public_landmark_or_general_knowledge ("the Colosseum", "a New York winter", "California poppies"), '
+    "task_content (the task's own stimulus, or a description of it). A state or province is released "
+    "only as historical. A place the speaker connects to themselves or their people stays removed, "
+    'whatever else it is. A country may stay ("we moved from Mexico") unless, together with other details '
+    "left in the text, it would help single the speaker out; then propose redacting it.\n"
     "- ORGANIZATIONS. Remove a specific named organization: an employer, a company, a school or "
     "university, a military unit, a hospital or clinic with a proper name, a church "
     '("USF voice center", "the United States Marine Corps", "Vanderbilt"). Keep a generic description '
@@ -229,17 +293,22 @@ _PROMPT = (
     'object with keys "text" (the exact substring, quoted from the ORIGINAL), "action" (redact to '
     "remove it, release to stop removing text the current redaction removes unnecessarily), "
     '"category" (one of PERSON, LOCATION, DATE_TIME, ORGANIZATION, ID, CONTACT, OTHER; an age is '
-    'DATE_TIME), "safe_harbor" (the letter of the Safe Harbor identifier it falls under, or "" for none) '
-    'and "why" (one sentence; for a release, why the policy lets it through: a public figure, a '
+    'DATE_TIME), "safe_harbor" (the letter of the Safe Harbor identifier it falls under, or "" for none), '
+    '"why" (one sentence; for a release, why the policy lets it through: a public figure, a '
     "relationship word, a weekday or relative time, a country that singles nobody out, a generic "
-    "description, or an ordinary word mistaken for a name). Return [] to leave the current redaction "
-    "exactly as it is.\n"
+    "description, a place that identifies nobody, task content, or an ordinary word mistaken for a name), "
+    'and, on a release only, "relabel" (one of work_title, brand_or_product, organization, place, '
+    'other_non_person, where a removed name is not a person; otherwise "") and "place_reason" (one of '
+    "historical, fictional, public_landmark_or_general_knowledge, task_content, where it releases a place "
+    'smaller than a country or anything that is the task\'s own content; otherwise ""). Return [] to leave '
+    "the current redaction exactly as it is.\n"
     "Whenever you judge the redaction incomplete, or judge the ORIGINAL clean while the RELEASED text "
     "still removes words, or judge the ORIGINAL to carry something identifying, the PROPOSAL must name "
     "every word or phrase concerned, one entry each, quoted exactly as it appears in the ORIGINAL: "
     "release for removed words the policy lets through, redact for words that must go. A judgment of "
     "that kind with an empty PROPOSAL is not an answer. Never propose releasing a year, a month, a "
-    "season, a holiday, an age, or a place smaller than a country; those always stay removed. If your "
+    "season, a holiday or an age; those always stay removed (the task's own stimulus is never removed "
+    "in the first place). A place smaller than a country is released only with its place_reason. If your "
     "REASONING names a venue, resort, hotel, clinic, hospital, employer, company, school, church or "
     "street, the PROPOSAL must carry an entry quoting it: redact a specific named one, or release a "
     "generic description with the reason.\n\n"
@@ -281,6 +350,9 @@ def _compose(
     words = facts.get("task_words") or ()
     if words:
         lines.append(f"WORDS AND PHRASES THE TASK ITSELF IS MADE OF: {', '.join(str(word) for word in words)}")
+    guidance = task_guidance(facts.get("task"))
+    if guidance:
+        lines.append(f"WHAT IS TASK CONTENT IN THIS TASK: {guidance}")
     if lines:
         lines.append(
             "Those lines are the task. Words that are the task's own stimulus, or that the instructions "
@@ -307,6 +379,11 @@ class ReviewProposal:
         category: Its category, uppercased.
         why: Its one-sentence reason.
         safe_harbor: The Safe Harbor identifier letter the model named for it, or the empty string.
+        relabel: On a release, what a removed name is instead of a person, lower-cased as written; one
+            of :data:`RELABELS` when valid, the empty string where none was given.
+        place_reason: On a release, why a place smaller than a country, or the task's own content,
+            identifies nobody, lower-cased as written; one of :data:`PLACE_REASONS` when valid, the
+            empty string where none was given.
     """
 
     text: str
@@ -314,6 +391,8 @@ class ReviewProposal:
     category: str
     why: str
     safe_harbor: str = ""
+    relabel: str = ""
+    place_reason: str = ""
 
 
 @dataclass
@@ -707,6 +786,8 @@ def parse_completion(completion: str) -> ParsedCompletion:
                 category=str(item.get("category") or "OTHER").upper(),
                 why=str(item.get("why") or ""),
                 safe_harbor=str(item.get("safe_harbor") or "").strip().upper()[:1],
+                relabel=str(item.get("relabel") or "").strip().lower(),
+                place_reason=str(item.get("place_reason") or "").strip().lower(),
             )
         )
     conditions: list[ReviewCondition] = []
@@ -834,9 +915,10 @@ def answer_problem(result: "ReviewResult", original: str, redacted: str | None) 
         None where the answer is usable. Otherwise one sentence naming the problem: a judgment that
         asks for the redaction to change (incomplete, clean original over removed words, or words
         that carry something identifying where no complete redaction covers them) with an empty
-        proposal, a release of something the policy always removes (:func:`never_released`), a name or
-        a place released without a reason, proposal quotes that do not occur in the ORIGINAL, or an
-        answer without its CONDITIONS or INSTRUCTIONS_SPOKEN part.
+        proposal, a release of something the policy always removes (:func:`dated`, :func:`stated`), a
+        relabel or place reason outside the allowed values, a place released without a place reason, a
+        name or a place released without a reason, proposal quotes that do not occur in the ORIGINAL, or
+        an answer without its CONDITIONS or INSTRUCTIONS_SPOKEN part.
     """
     if not result.available:
         return None
@@ -871,13 +953,44 @@ def answer_problem(result: "ReviewResult", original: str, redacted: str | None) 
             f"you judged {' and '.join(judged)} but the PROPOSAL listed no words; list each word or phrase "
             "to release (unmask) or redact (mask), quoted exactly from the ORIGINAL"
         )
-    forbidden = [entry.text for entry in result.proposal if entry.action == RELEASE and never_released(entry.text)]
+    releases = [entry for entry in result.proposal if entry.action == RELEASE]
+    unknown = [
+        entry.text
+        for entry in releases
+        if (entry.relabel and entry.relabel not in RELABELS)
+        or (entry.place_reason and entry.place_reason not in PLACE_REASONS)
+    ]
+    if unknown:
+        quoted = ", ".join(json.dumps(text) for text in unknown)
+        return (
+            f"these releases give a relabel or place_reason outside the allowed values: {quoted}; relabel is one "
+            f"of {', '.join(RELABELS)}, and place_reason one of {', '.join(PLACE_REASONS)}"
+        )
+    forbidden = [
+        entry.text
+        for entry in releases
+        if dated(entry.text) or (stated(entry.text) and entry.place_reason != PLACE_HISTORICAL)
+    ]
     if forbidden:
         quoted = ", ".join(json.dumps(text) for text in forbidden)
         return (
-            f"these releases name a year, a month, a season, a holiday, an age or a place smaller than a "
-            f"country: {quoted}; the policy always removes those, so drop each release or narrow it to the "
-            "words the policy lets through"
+            f"these releases name a year, a month, a season, a holiday, an age, or a state or province not "
+            f"released as historical: {quoted}; the policy always removes those, so drop each release or narrow "
+            "it to the words the policy lets through"
+        )
+    placeless = [
+        entry.text
+        for entry in releases
+        if (entry.category == "LOCATION" or entry.relabel == RELABEL_PLACE)
+        and entry.place_reason not in PLACE_REASONS
+        and not only_countries(entry.text)
+    ]
+    if placeless:
+        quoted = ", ".join(json.dumps(text) for text in placeless)
+        return (
+            f"these releases let a place smaller than a country through without a place_reason: {quoted}; give "
+            f"one of {', '.join(PLACE_REASONS)}, or keep it removed when the speaker connects it to themselves "
+            "or their people"
         )
     unreasoned = [
         entry.text
@@ -909,19 +1022,43 @@ def answer_problem(result: "ReviewResult", original: str, redacted: str | None) 
     return None
 
 
-def never_released(quote: str) -> bool:
-    """Whether a quote names something the redaction policy always removes.
+def dated(quote: str) -> bool:
+    """Whether a quote writes a year, a month, a season, a holiday or an age.
 
     Args:
         quote: The words a ``release`` entry quotes.
 
     Returns:
-        True where it writes a year, a month, a season, a holiday or an age
-        (:func:`~senselab.text.tasks.pii_detection.redaction_policy.date_positions`), or a state
-        (:func:`~senselab.text.tasks.pii_detection.redaction_policy.state_positions`).
+        True where :func:`~senselab.text.tasks.pii_detection.redaction_policy.date_positions` finds one.
+    """
+    return bool(date_positions(quote.split()))
+
+
+def stated(quote: str) -> bool:
+    """Whether a quote names a state or a province.
+
+    Args:
+        quote: The words a ``release`` entry quotes.
+
+    Returns:
+        True where :func:`~senselab.text.tasks.pii_detection.redaction_policy.state_positions` finds one.
+    """
+    return bool(state_positions(quote.split()))
+
+
+def only_countries(quote: str) -> bool:
+    """Whether every capitalised word of a quote belongs to a country's name.
+
+    Args:
+        quote: The words a ``release`` entry quotes.
+
+    Returns:
+        True where the quote holds a country and no other capitalised word.
     """
     words = quote.split()
-    return bool(date_positions(words) or state_positions(words))
+    inside = {position for start, end in country_runs(words) for position in range(start, end)}
+    capitals = [position for position, word in enumerate(words) if word.strip("\"'([{")[:1].isupper()]
+    return bool(inside) and all(position in inside for position in capitals)
 
 
 class ReviewWorkerError(RuntimeError):
@@ -1294,6 +1431,8 @@ def review_payload(result: ReviewResult) -> dict[str, Any]:
                 "category": entry.category,
                 "why": entry.why,
                 "safe_harbor": entry.safe_harbor,
+                "relabel": entry.relabel,
+                "place_reason": entry.place_reason,
             }
             for entry in result.proposal
         ],
