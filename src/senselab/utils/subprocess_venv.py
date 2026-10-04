@@ -1,7 +1,8 @@
 """Runtime subprocess venv manager for isolated backend dependencies.
 
 Uses uv to create and manage isolated virtual environments for backends
-that conflict with the core senselab installation. IPC uses a temp
+that conflict with the core senselab installation. Each venv is installed
+from its committed lock (:mod:`senselab.utils.venv_lock`). IPC uses a temp
 directory with:
 - manifest.json: call spec + JSON-serializable args + file metadata
 - *.safetensors: tensor data (via safetensors, already a dep)
@@ -22,6 +23,8 @@ Safety features are configurable via ``safe_mode`` to minimize
 overhead for simple single-process workflows.
 """
 
+import contextvars
+import glob
 import hashlib
 import json
 import logging
@@ -33,10 +36,12 @@ import subprocess
 import sys
 import tempfile
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Any, Iterator, Optional
 
+from senselab.utils import venv_lock
 from senselab.utils.cuda_probe import (
     HostCuda,
     SenselabCudaCompatibilityError,
@@ -45,6 +50,7 @@ from senselab.utils.cuda_probe import (
     pick_torch_index,
 )
 from senselab.utils.file_lock import SharedFileLock
+from senselab.utils.venv_lock import VenvLock, load_lock
 
 logger = logging.getLogger("senselab")
 
@@ -123,6 +129,143 @@ def _cache_dir_path() -> Path:
     return Path(os.environ.get("SENSELAB_VENV_CACHE", str(_DEFAULT_CACHE_DIR)))
 
 
+def provisioned_venv_dirs(name: str) -> list[Path]:
+    """Every completed venv for one backend, across whatever device keys exist.
+
+    A backend whose install depends on the device lives at ``<name>-<tag>``, so a caller asking
+    whether it is provisioned cannot name the directory in advance. Only directories carrying the
+    completion marker count; a half-built tree is not provisioned.
+
+    Args:
+        name: The backend's venv name, as passed to :func:`ensure_venv`.
+
+    Returns:
+        The matching directories, sorted, empty when the backend has never been built here.
+    """
+    cache = _cache_dir_path()
+    if not cache.is_dir():
+        return []
+    candidates = [cache / name, *sorted(cache.glob(f"{name}-*"))]
+    return [directory for directory in candidates if (directory / ".senselab-installed").is_file()]
+
+
+_VENV_USE_RECORDER: "contextvars.ContextVar[Optional[dict[str, Path]]]" = contextvars.ContextVar(
+    "_VENV_USE_RECORDER", default=None
+)
+
+
+@contextmanager
+def record_venv_use() -> Iterator[dict[str, Path]]:
+    """Record which subprocess venvs :func:`ensure_venv` resolves to within this context.
+
+    Nesting is not supported: an inner call replaces the outer recorder for its duration.
+
+    Yields:
+        The dict, updated in place as :func:`ensure_venv` calls occur inside the block.
+    """
+    used: dict[str, Path] = {}
+    token = _VENV_USE_RECORDER.set(used)
+    try:
+        yield used
+    finally:
+        _VENV_USE_RECORDER.reset(token)
+
+
+def _note_venv_use(name: str, venv_dir: Path) -> None:
+    """Record a resolved venv directory, when :func:`record_venv_use` is active."""
+    recorder = _VENV_USE_RECORDER.get()
+    if recorder is not None:
+        recorder[name] = venv_dir
+
+
+_DECLARED_ENV_PACKAGES = frozenset(
+    {
+        "torch",
+        "torchaudio",
+        "torchcodec",
+        "transformers",
+        "tensorflow",
+        "tensorflow-hub",
+        "keras",
+        "numpy",
+        "crisperwhisper",
+        "qwen-asr",
+        "clearvoice",
+    }
+)
+"""The packages a venv's environment record names in full: the ones that decide its numerical
+results, plus each backend's own library."""
+
+
+def _normalize_package_name(name: str) -> str:
+    """A dist-info package name, folded to compare across ``-``/``_`` spelling variants."""
+    return name.lower().replace("_", "-")
+
+
+def _venv_python_version(venv_dir: Path) -> str:
+    """The interpreter version a venv was built with, from ``pyvenv.cfg``.
+
+    Returns:
+        The value of ``pyvenv.cfg``'s ``version_info`` (falling back to ``version``) key, or
+        ``"unknown"`` when neither is present.
+    """
+    cfg = venv_dir / "pyvenv.cfg"
+    try:
+        text = cfg.read_text()
+    except OSError:
+        return "unknown"
+    match = re.search(r"^version(?:_info)?\s*=\s*(\S+)", text, re.MULTILINE)
+    return match.group(1) if match else "unknown"
+
+
+def _venv_dist_info(venv_dir: Path) -> dict[str, str]:
+    """Every installed distribution's name and version, read from ``*.dist-info`` directory names.
+
+    Pure filesystem work: no interpreter start, no ``uv pip freeze``.
+
+    Args:
+        venv_dir: The venv's directory.
+
+    Returns:
+        Package name to version, for every ``*.dist-info`` directory found.
+    """
+    pattern = str(venv_dir / "lib" / "python*" / "site-packages" / "*.dist-info")
+    if sys.platform == "win32":
+        pattern = str(venv_dir / "Lib" / "site-packages" / "*.dist-info")
+    out: dict[str, str] = {}
+    for entry in glob.glob(pattern):
+        base = os.path.basename(entry)[: -len(".dist-info")]
+        name, _, version = base.rpartition("-")
+        if name:
+            out[name] = version
+    return out
+
+
+def venv_environment(name: str, venv_dir: Path) -> dict[str, Any]:
+    """The environment record for one resolved subprocess venv.
+
+    Args:
+        name: The venv's backend name, as passed to :func:`ensure_venv`.
+        venv_dir: Its resolved directory, from :func:`ensure_venv` or :func:`record_venv_use`.
+
+    Returns:
+        Keyword arguments for :meth:`~senselab.utils.prov_store.ProvStore.environment`: ``label``
+        (the resolved directory's own name, which encodes its device key), ``python_version``,
+        ``dependencies`` (the declared subset actually installed — see
+        :data:`_DECLARED_ENV_PACKAGES`) and ``dependencies_digest`` (a SHA-256 over the full
+        listing, so a mismatch against a fresh scan is detectable without storing every package).
+    """
+    full = _venv_dist_info(venv_dir)
+    declared = {pkg: version for pkg, version in full.items() if _normalize_package_name(pkg) in _DECLARED_ENV_PACKAGES}
+    digest = hashlib.sha256(json.dumps(sorted(full.items()), separators=(",", ":")).encode()).hexdigest()
+    return {
+        "label": venv_dir.name,
+        "python_version": _venv_python_version(venv_dir),
+        "dependencies": declared,
+        "dependencies_digest": digest,
+    }
+
+
 def _cache_dir() -> Path:
     """Return the directory for cached subprocess venvs, creating it if missing."""
     cache = _cache_dir_path()
@@ -164,109 +307,169 @@ def _find_uv() -> str:
 
 # ── Venv management ──────────────────────────────────────────────────
 
+# Overrides the build-lock timeout below; see
+# specs/20260907-shared-lock-heartbeat-inf/stampede-timeout-and-identity-file.md for the
+# derivation of the packaged default from measured cold-build times.
+_VENV_LOCK_TIMEOUT_ENV = "SENSELAB_VENV_LOCK_TIMEOUT"
+_DEFAULT_VENV_LOCK_TIMEOUT = 1200.0
+
+# Bounded retries for the rare case where a completed build finds it no longer owns the lock
+# (see `_VenvLockLost`) -- not a threshold fitted to data, just a small ceiling so a genuine
+# takeover gets a few chances to reuse whoever won before giving up.
+_MAX_LOCK_LOST_RETRIES = 3
+
+
+def _venv_lock_timeout() -> float:
+    """Return the configured venv-build lock timeout, in seconds."""
+    return float(os.environ.get(_VENV_LOCK_TIMEOUT_ENV, str(_DEFAULT_VENV_LOCK_TIMEOUT)))
+
+
+class _VenvLockLost(RuntimeError):
+    """A just-completed build found it no longer owns the lock it built under.
+
+    Raised by :func:`_ensure_venv_once` and retried a bounded number of times by
+    :func:`ensure_venv`. See
+    specs/20260907-shared-lock-heartbeat-inf/stampede-timeout-and-identity-file.md.
+    """
+
+
+def _resolve_lock(
+    name: str,
+    requirements: list[str],
+    python_version: Optional[str],
+    max_cuda_version: Optional[tuple[int, int]],
+    compile_lock: bool,
+) -> VenvLock:
+    """The lock a venv is installed from: the committed one, or one compiled now for a probe."""
+    if not compile_lock:
+        return load_lock(name, requirements, python_version, max_cuda_version)
+    python = python_version or f"{sys.version_info.major}.{sys.version_info.minor}"
+    text = venv_lock.compile_lock(name, requirements, python, max_cuda_version, check_torch_index=False)
+    path = _cache_dir() / ".locks" / f"{name}.txt"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
+    return venv_lock.parse_lock(path, name)
+
 
 def ensure_venv(
     name: str,
     requirements: list[str],
     python_version: Optional[str] = None,
     max_cuda_version: Optional[tuple[int, int]] = None,
+    *,
+    compile_lock: bool = False,
 ) -> Path:
-    """Create or reuse an isolated virtual environment.
+    """Create or reuse an isolated virtual environment from its pinned lock.
 
-    Whether the CUDA-aware two-stage install fires is decided by the
-    contents of ``requirements`` itself: any ``torch`` or ``torchaudio``
-    spec triggers the probe + Stage-1 install via the chosen PyTorch
-    wheel index. Backends that declare neither — including the genuinely
-    torch-free case (e.g. a venv that only consumes a pure-Python GitHub
-    repo) — skip the probe and the CUDA index entirely and do a single
-    install pass against default PyPI. Backends that need ``torch`` /
-    ``torchaudio`` (including via a transitive dep) MUST pin them in
-    their own ``_REQUIREMENTS`` so the CUDA routing applies — otherwise
-    Stage 2's transitive resolution against PyPI can split them across
-    mismatched local-version tags.
+    The venv is installed from ``data/venv_locks/<name>.txt`` (see :mod:`senselab.utils.venv_lock`),
+    which must have been compiled from exactly these ``requirements``, ``python_version`` and
+    ``max_cuda_version``. Delegates to :func:`_ensure_venv_once` for one attempt; a build that finds
+    another process took over the lock (:class:`_VenvLockLost`) is retried up to
+    ``_MAX_LOCK_LOST_RETRIES`` times, each retry re-checking the completion marker first.
 
     Args:
-        name: Unique identifier for this venv (e.g., "coqui", "ppgs").
-        requirements: List of pip install specs (e.g., ["coqui-tts~=0.27"]).
-        python_version: Python version (e.g., "3.11"). Defaults to current.
-        max_cuda_version: Optional ceiling on the CUDA wheel index for this
-            venv, forwarded to ``pick_torch_index``. Declare it when the venv
-            pins a ``torch`` version that has no wheel on the newest index the
-            host would otherwise select (e.g. brouhaha's ``torch<2.3`` needs
-            ``(12, 1)`` → ``cu121``). ``None`` applies no cap.
+        name: Unique identifier for this venv (e.g., "coqui", "ppgs"); also the lock's name.
+        requirements: The requirement specs the lock was compiled from.
+        python_version: Python version (e.g., "3.11"). None takes the lock's.
+        max_cuda_version: Optional ceiling on the CUDA wheel index for this venv, forwarded to
+            ``pick_torch_index``. ``None`` applies no cap.
+        compile_lock: Compile a lock now instead of reading the committed one. For compatibility
+            probes over version ranges only; such a venv is not reproducible.
+
+    Returns:
+        Path to the venv directory.
+
+    Raises:
+        VenvLockError: When the committed lock is missing or was compiled from other inputs.
+    """
+    lock = _resolve_lock(name, requirements, python_version, max_cuda_version, compile_lock)
+    last_error: Optional[_VenvLockLost] = None
+    for attempt in range(1, _MAX_LOCK_LOST_RETRIES + 1):
+        try:
+            venv_dir = _ensure_venv_once(name, lock, max_cuda_version)
+            _note_venv_use(name, venv_dir)
+            return venv_dir
+        except _VenvLockLost as exc:
+            last_error = exc
+            logger.warning(
+                "ensure_venv('%s'): lost the lock during build (attempt %d/%d); re-acquiring and "
+                "checking for a completed venv before rebuilding: %s",
+                name,
+                attempt,
+                _MAX_LOCK_LOST_RETRIES,
+                exc,
+            )
+    assert last_error is not None  # the loop above always sets this before falling through
+    raise last_error
+
+
+def _ensure_venv_once(
+    name: str,
+    lock: VenvLock,
+    max_cuda_version: Optional[tuple[int, int]] = None,
+) -> Path:
+    """Create or reuse an isolated virtual environment from ``lock``.
+
+    A lock with ``torch:`` pins is installed in two stages: the exact pins from the host's
+    CUDA-matched PyTorch index alone, then the lock body with ``--no-deps``. A torch-free lock is
+    one ``--no-deps`` install of its body. The venv directory is ``name`` for a torch-free venv and
+    ``f"{name}-{tag}"`` (e.g. ``"crisperwhisper-cu128"``) otherwise, ``tag`` being the resolved
+    ``TorchIndex.tag``. The completion marker records the lock's digest, so a changed lock rebuilds.
+
+    Args:
+        name: The venv name.
+        lock: The lock to install.
+        max_cuda_version: Optional ceiling on the CUDA wheel index, forwarded to
+            ``pick_torch_index``.
 
     Returns:
         Path to the venv directory.
     """
-    venv_dir = _cache_dir() / name
+    torch_specs = list(lock.torch_pins)
+    host_cuda: Optional[HostCuda] = None
+    torch_index: Optional[TorchIndex] = None
+    if torch_specs:
+        env_override = os.getenv("SENSELAB_TORCH_INDEX_URL") or None
+        probed = detect_host_cuda()
+        host_cuda = probed
+        torch_index = pick_torch_index(probed, env_override=env_override, max_cuda_version=max_cuda_version)
+
+    dir_name = f"{name}-{torch_index.tag}" if torch_index is not None else name
+    venv_dir = _cache_dir() / dir_name
     marker = venv_dir / ".senselab-installed"
 
-    # SharedFileLock derives its own ".lock" / ".heartbeat" paths from venv_dir by
-    # appending (never Path.with_suffix, which would collide two venv names differing
-    # only after a dot -- see file_lock.py's class docstring). timeout=600 matches this
-    # module's original FileLock timeout and is in fact the case SharedFileLock's own
-    # default was derived from: a venv install can legitimately take minutes. Unlike the
-    # plain FileLock this replaces, a holder that dies mid-install is detected on the
-    # next uncontended acquire (stale heartbeat) rather than blocking every waiter for
-    # the full 600s and then raising.
-    #
-    # Reaching `except TimeoutError` below proves the opposite: SharedFileLock's contract
-    # is that a timeout means the flock was held *continuously* for the whole window, which
-    # a crashed process cannot do (its flock is kernel-released the instant it exits) -- so
-    # this is always a live holder, however stale its heartbeat looks. These venvs install
-    # torch + torchaudio (~2.5 GB) from the PyTorch wheel index, which can legitimately
-    # exceed 600s on a congested shared filesystem or a slow mirror. Failing here instead of
-    # retrying would turn "someone else is still installing" into a hard error for every
-    # waiter -- functionally the same failure this task removed, just with a better
-    # diagnostic. SharedFileLock deliberately never retries this internally (see
-    # file_lock.py), so the unbounded wait lives here, mirroring ensure_hf_model's pattern
-    # in dependencies.py: a proven-live holder means wait longer, never take over.
-    lock = SharedFileLock(venv_dir, timeout=600)
+    # A lock timeout only proves a live holder, so waiting retries unboundedly; see
+    # specs/20260907-shared-lock-heartbeat-inf/stampede-timeout-and-identity-file.md.
+    lock_timeout = _venv_lock_timeout()
+    build_lock = SharedFileLock(venv_dir, timeout=lock_timeout)
     while True:
         try:
-            lock.__enter__()
+            build_lock.__enter__()
             break
         except TimeoutError:
             logger.info(
                 "Still waiting for another process to build venv '%s' (lock held for the last %.0fs)",
                 name,
-                600.0,
+                lock_timeout,
             )
             continue
     try:
-        # Auto-detect whether this venv routes torch through the CUDA
-        # index: any caller-declared torch / torchaudio spec triggers the
-        # probe + Stage-1 install. A backend that pins neither (yamnet,
-        # continuous-ser, or future torch-free venvs) skips the probe
-        # entirely — no ``nvidia-smi`` shellout, no ``torchaudio`` forced
-        # into the install. The probe still runs (when triggered) even
-        # with ``SENSELAB_TORCH_INDEX_URL`` set so its result can be
-        # surfaced in the diagnostic when an install failure wraps into
-        # ``SenselabCudaCompatibilityError``.
-        torch_specs = _torch_install_specs(requirements)
-        host_cuda: Optional[HostCuda] = None
-        torch_index: Optional[TorchIndex] = None
-        if torch_specs:
-            env_override = os.getenv("SENSELAB_TORCH_INDEX_URL") or None
-            probed = detect_host_cuda()
-            host_cuda = probed
-            torch_index = pick_torch_index(probed, env_override=env_override, max_cuda_version=max_cuda_version)
-
         expected_index_url = torch_index.url if torch_index is not None else None
         if marker.is_file():
             stored = json.loads(marker.read_text())
             stored_index_url = (stored.get("torch_index") or {}).get("url")
-            if stored.get("requirements") == sorted(requirements) and stored_index_url == expected_index_url:
+            if stored.get("lock_sha256") == lock.sha256 and stored_index_url == expected_index_url:
                 logger.debug("Reusing existing venv: %s", venv_dir)
                 return venv_dir
 
         uv = _find_uv()
-        py_ver = python_version or f"{sys.version_info.major}.{sys.version_info.minor}"
+        py_ver = lock.python
         index_label = torch_index.tag if torch_index is not None else "n/a (torch-free)"
         logger.info(
-            "Creating isolated venv '%s' with Python %s (torch index: %s)",
+            "Creating isolated venv '%s' with Python %s from %s (torch index: %s)",
             name,
             py_ver,
+            lock.path.name,
             index_label,
         )
 
@@ -282,42 +485,14 @@ def ensure_venv(
             )
         except subprocess.CalledProcessError as exc:
             logger.error("Failed to create venv '%s': %s", name, exc.stderr)
-            # uv venv may have partially populated the directory; wipe it
-            # so the next run starts from a clean baseline (mirrors the
-            # install-failure cleanup below).
             shutil.rmtree(venv_dir, ignore_errors=True)
             raise
 
         if torch_index is not None:
             assert host_cuda is not None  # narrows the Optional for type-checkers
-            # Two-stage install — works around uv's flag-precedence quirk.
-            #
-            # uv treats ``--extra-index-url`` as having higher priority
-            # than ``--index-url`` (opposite of pip). So the obvious one-
-            # shot form ``--index-url <cuda> --extra-index-url pypi`` lets
-            # PyPI win for every package, including ``torch`` and
-            # ``torchaudio``. On hosts where PyPI ships those two with
-            # mismatched ``+cu`` local-version tags (currently
-            # ``torch==X+cu129`` vs ``torchaudio==X`` with no tag), the
-            # resulting venv hits the ABI mismatch this routing was meant
-            # to prevent (``RuntimeError: PyTorch has CUDA version 12.9
-            # whereas TorchAudio has CUDA version 12.8``).
-            #
-            # Stage 1: install caller-declared torch / torchaudio specs
-            # with ONLY the chosen CUDA index named (no ``--extra-index-
-            # url``), so the index is unambiguously primary and both
-            # wheels — plus their ``nvidia-cuda-runtime-cu12`` transitives
-            # — come from it with matched toolchains.
-            #
-            # Stage 2: install the remaining requirements (with torch +
-            # torchaudio specs filtered out so uv can't re-resolve them
-            # against PyPI) + the IPC serialization deps via default
-            # PyPI. uv sees torch / torchaudio already installed and
-            # satisfying any pin in ``requirements``, so it doesn't
-            # re-resolve them. The PyTorch index governs only the two
-            # packages it's designed for, and stale wheels on the CUDA
-            # index for utilities like setuptools or pyarrow stay out
-            # of the picture.
+            # Stage 1 names only the CUDA index: uv ranks --extra-index-url above --index-url, so a
+            # PyPI fallback here would let PyPI's differently-tagged torch win. See
+            # specs/20260512-204619-fix-canary-cuda-conflict/.
             try:
                 subprocess.run(
                     [
@@ -335,59 +510,17 @@ def ensure_venv(
                     text=True,
                 )
             except subprocess.CalledProcessError as exc:
-                # Wipe the half-built venv before raising so the next run starts clean.
                 shutil.rmtree(venv_dir, ignore_errors=True)
                 failing = _classify_uv_failure(exc.stderr or "")
                 if failing is not None:
-                    # Compat-error path: the wrapped exception's message already
-                    # carries the diagnostic fields (host CUDA, attempted index,
-                    # failing packages, recommended action). Logging the full uv
-                    # stderr would just duplicate that.
                     logger.debug("Wheel not found installing torch in venv '%s': %s", name, exc.stderr)
                     raise SenselabCudaCompatibilityError(
                         host_cuda=host_cuda,
                         attempted_index=torch_index,
                         failing_packages=failing,
                     ) from exc
-                # Pass-through path: log the stderr so the user can see what
-                # really went wrong (network, permission, syntax, ...).
                 logger.error("Failed to install torch in venv '%s': %s", name, exc.stderr)
                 raise
-
-            # Stage 2: backend requirements (minus any torch / torchaudio
-            # specs — those are already installed and listing them here
-            # without an index flag could let uv consider replacing the
-            # matched wheels with PyPI's tagless versions) plus the IPC
-            # serialization deps (safetensors + numpy). ``torchaudio``
-            # was installed in Stage 1; both safetensors and numpy are
-            # pure-Python and pull cleanly from PyPI everywhere.
-            stage_two_reqs = [r for r in requirements if _spec_pkg_name(r) not in _TORCH_PKG_NAMES] + [
-                "safetensors",
-                "numpy",
-            ]
-            # Filtering the torch specs out of the install list is not enough on its own: it also
-            # removes the only thing constraining torch during Stage 2's resolution. Measured on an
-            # H100 -- unasdiff pins torch==2.6.0 and the cu124 index was correctly selected, yet the
-            # finished venv held 2.13.0+cu130, because timm depends on torch with no upper bound and
-            # uv was free to upgrade the CUDA-matched wheel to PyPI's newest. The comment above
-            # assumed uv would leave an already-satisfying install alone; it does not.
-            #
-            # Pass the pins as *constraints* instead. They bound the resolution without becoming
-            # install targets, so the Stage-1 wheels stay exactly as the PyTorch index built them
-            # while a transitive dependent can no longer drag torch forward.
-            torch_constraints = [r for r in requirements if _spec_pkg_name(r) in _TORCH_PKG_NAMES]
-        else:
-            # Torch-free path: single install pass straight from default
-            # PyPI. No probe, no CUDA-index routing, no ``torchaudio``
-            # forced into the install — backends that don't declare
-            # torch / torchaudio don't pay for them.
-            stage_two_reqs = [*requirements, "safetensors", "numpy"]
-            torch_constraints = []
-
-        constraint_file: Optional[Path] = None
-        if torch_constraints:
-            constraint_file = venv_dir / ".torch-constraints.txt"
-            constraint_file.write_text("\n".join(torch_constraints) + "\n")
 
         try:
             subprocess.run(
@@ -397,8 +530,10 @@ def ensure_venv(
                     "install",
                     "--python",
                     venv_python(venv_dir),
-                    *(["--constraint", str(constraint_file)] if constraint_file else []),
-                    *stage_two_reqs,
+                    "--no-deps",
+                    "--no-sources",
+                    "--requirement",
+                    str(lock.path),
                 ],
                 check=True,
                 capture_output=True,
@@ -410,36 +545,36 @@ def ensure_venv(
             raise
 
         marker_data: dict[str, object] = {
-            "requirements": sorted(requirements),
+            "lock": lock.path.name,
+            "lock_sha256": lock.sha256,
             "python_version": py_ver,
         }
         if torch_index is not None:
-            # Only stamp the index field on torch-using venvs; the marker
-            # comparison treats its absence as "no torch routing in use",
-            # so a future call against the same name whose ``requirements``
-            # have grown a torch / torchaudio spec correctly invalidates
-            # and rebuilds.
             marker_data["torch_index"] = {
                 "tag": torch_index.tag,
                 "url": torch_index.url,
                 "source": torch_index.source,
             }
-        # Strictly before the marker write: a hard kill (OOM, CI timeout) between chmod and
-        # the marker would otherwise leave `.senselab-installed` present with the chmod pass
-        # incomplete. Every later ensure_venv call takes the reuse fast path on seeing the
-        # marker and returns immediately -- but that path never calls _make_group_readable,
-        # so a half-permissioned venv would never be repaired. Marker-after means an
-        # interrupted chmod instead leaves no marker: the next call's marker check fails,
-        # `shutil.rmtree` fires, and the rebuild reruns chmod to completion.
+        # A takeover elsewhere may already be mutating venv_dir; certifying it would mark a
+        # half-built venv complete. Refuse and rebuild instead.
+        if not build_lock.owns():
+            logger.error(
+                "Lock for venv '%s' was taken over by another process during this build; "
+                "declining to mark %s complete and removing it for a clean rebuild.",
+                name,
+                venv_dir,
+            )
+            shutil.rmtree(venv_dir, ignore_errors=True)
+            raise _VenvLockLost(f"Venv '{name}' lost its lock to a concurrent process during build; retry.")
+
+        # Before the marker: a kill between the two must leave no marker, or the reuse fast path
+        # would keep a half-permissioned venv forever.
         _make_group_readable(venv_dir)
         marker.write_text(json.dumps(marker_data))
         logger.info("Venv '%s' ready at %s", name, venv_dir)
         return venv_dir
     finally:
-        # __exit__ ignores its exc_info arguments (it never suppresses an exception), so
-        # passing None here is equivalent to the (exc_type, exc, tb) a `with` block would
-        # supply -- see ensure_hf_model's identical finally in dependencies.py.
-        lock.__exit__(None, None, None)
+        build_lock.__exit__(None, None, None)
 
 
 def _make_group_readable(venv_dir: Path) -> None:
@@ -528,58 +663,6 @@ def _classify_uv_failure(stderr: str) -> Optional[list[str]]:
             seen.add(m)
             out.append(m)
     return out
-
-
-# Packages whose install must be routed through the chosen CUDA-tagged
-# PyTorch wheel index. We don't include downstream torch-ecosystem names
-# like ``torchvision``/``torchtext`` because senselab's subprocess venvs
-# don't currently use them; add here if that changes.
-_TORCH_PKG_NAMES = frozenset({"torch", "torchaudio"})
-
-# Capture the package name at the start of a uv pip install spec, stopping
-# at the first character that isn't part of a PEP 508 distribution name —
-# extras start with ``[``, versions with one of ``<>=!~``, URL/git refs
-# with whitespace or ``@``. Matches ``torch``, ``torch>=2.8,<2.9``,
-# ``torch[gpu]==2.8``, and ``nemo_toolkit[asr,tts] @ git+https://...``.
-_PKG_NAME_RE = re.compile(r"^\s*([A-Za-z0-9._-]+)")
-
-
-def _spec_pkg_name(spec: str) -> str:
-    """Return the lowercased package name from a uv pip install spec.
-
-    Returns ``""`` for specs that don't begin with a recognizable package
-    name (e.g. a stray empty string). The match is loose by design — we
-    only need it to identify torch + torchaudio entries inside
-    ``requirements`` lists.
-    """
-    m = _PKG_NAME_RE.match(spec)
-    return m.group(1).lower() if m else ""
-
-
-def _torch_install_specs(requirements: list[str]) -> list[str]:
-    """Return the ``torch`` / ``torchaudio`` specs explicitly named in ``requirements``.
-
-    Forwards EVERY torch / torchaudio entry verbatim — so a backend
-    pinning ``["torch>=2.8", "torch<2.9"]`` as two separate constraints
-    gets both passed to uv, which combines them at resolve time. A single
-    combined spec like ``"torch>=2.8,<2.9"`` still flows through
-    unchanged.
-
-    Returns an empty list when neither package is in ``requirements``,
-    which ``ensure_venv`` treats as "skip Stage 1, skip the probe". The
-    earlier version of this helper padded the return with bare ``torch``
-    / ``torchaudio`` names so every venv routed both packages through
-    the CUDA index regardless of declared needs — that meant
-    ``torchaudio`` got force-installed in venvs (``yamnet``,
-    ``continuous-ser``) that never imported it, adding ~200 MB of wheels
-    for no reason. Backends that genuinely need ``torch`` or
-    ``torchaudio`` — including via a transitive dep like ``qwen-asr`` —
-    MUST pin them in their own ``_REQUIREMENTS`` so this helper picks
-    them up and Stage 1 routes them through the matched CUDA index.
-    Otherwise Stage 2's transitive resolution against PyPI can split
-    them across mismatched local-version tags.
-    """
-    return [spec for spec in requirements if _spec_pkg_name(spec) in _TORCH_PKG_NAMES]
 
 
 def venv_python(venv_dir: Path) -> str:

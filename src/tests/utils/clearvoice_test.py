@@ -1,4 +1,4 @@
-"""ClearVoice's shared machinery: the model table, the pin, the device, the ceiling, the worker."""
+"""ClearerVoice's shared machinery: the model table, the pin, the device, the ceiling, the worker."""
 
 from __future__ import annotations
 
@@ -471,6 +471,16 @@ def test_the_worker_never_names_a_bare_cuda_device() -> None:
     """An index is always chosen, so a CUDA_VISIBLE_DEVICES mask selects the allocated card."""
     assert 'torch.device("cuda")' not in cv._WORKER_SCRIPT
     assert '"cuda:%d" % torch.cuda.current_device()' in cv._WORKER_SCRIPT
+
+
+def test_the_worker_imports_the_class_the_package_actually_exports() -> None:
+    """The pip distribution is ``clearvoice`` and its class is ``ClearVoice``, not ``ClearerVoice``.
+
+    ClearerVoice-Studio is the project; only prose carries that spelling. A sweep that renamed the
+    prose once reached this import too, and every enhancement and separation checkpoint died at it.
+    """
+    assert "from clearvoice import ClearVoice" in cv._WORKER_SCRIPT
+    assert "ClearerVoice" not in cv._WORKER_SCRIPT, "ClearerVoice is the project's name, never an identifier"
 
 
 # ── The venv spec ─────────────────────────────────────────────────────

@@ -8,8 +8,9 @@ by the senselab community.
 import inspect
 import os
 import traceback
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 import numpy as np
 from joblib import Memory, Parallel, delayed
@@ -45,6 +46,74 @@ except ModuleNotFoundError:
                 pass
 
     parselmouth = DummyParselmouth()
+
+
+PITCH_FLOOR_PERCENTILE = 5.0  # feeds only the floor's ratio term
+PITCH_CEILING_QUARTILE = 75.0  # feeds only the ceiling's first ratio term
+
+# Library defaults for the five narrowing coefficients. The triage path passes
+# `praat_features.pitch_*` instead; see specs/20260817-triage-workflow-dag/config-derivations.md.
+DEFAULT_PITCH_FLOOR_DIVISOR = 1.5  # a ratio, not an octave span
+DEFAULT_PITCH_CEILING_QUARTILE_MULTIPLIER = 2.5  # a ratio, not an octave span
+DEFAULT_PITCH_PINNED_PERCENTILE = 95.0  # the branch predicate's statistic and the excursion term's
+DEFAULT_PITCH_EXCURSION_MULTIPLIER = 1.5  # a ratio, not an octave span
+DEFAULT_PITCH_PINNED_OCTAVE_RATIO = 2.0  # one octave above the search floor
+
+# Structural conventions of the cepstrogram, not coefficients that scale it. They name how the
+# analysis window and the robust fit are *shaped*; the values that move a CPPS are `CppsSettings`.
+CPPS_WINDOW_PERIODS = 3.0  # effective analysis width, in periods of the cepstrogram pitch floor
+CPPS_GAUSSIAN_WIDTH_FACTOR = 2.0  # physical Gaussian duration, as a multiple of that width
+CPPS_HUBER_K = 1.345  # Huber's tuning constant, 95% efficiency at the Gaussian
+CPPS_MAX_ROBUST_ITERATIONS = 50  # iteration cap for the reweighting, independent of the tolerance
+CPPS_QUEFRENCY_FLOOR = 1e-300  # guards log10 of an exactly-zero cepstral bin
+
+
+@dataclass(frozen=True)
+class CppsSettings:
+    """Every setting a smoothed cepstral peak prominence is computed under.
+
+    In triage each field is read from the ``praat_features.cpps`` config section; the defaults here
+    are the library's. Their derivations are in
+    ``specs/20260817-triage-workflow-dag/config-derivations.md``.
+
+    Attributes:
+        pitch_floor_hz: Sets the cepstrogram's analysis window, whose effective width is
+            ``CPPS_WINDOW_PERIODS / pitch_floor_hz``.
+        time_step_s: Hop between cepstrogram frames.
+        max_frequency_hz: Upper edge of the analysed band; the signal is resampled to twice it.
+        preemphasis_from_hz: Pre-emphasis corner applied before framing.
+        time_averaging_s: First smoothing window, across frames.
+        quefrency_averaging_s: Second smoothing window, across quefrency within a frame.
+        peak_search_floor_hz: Lowest F0 the peak is searched for.
+        peak_search_ceiling_hz: Highest F0 the peak is searched for.
+        trend_start_s: Lowest quefrency the trend line is fitted over.
+        trend_end_s: Highest quefrency it is fitted over; ``0.0`` means the end of the axis.
+        robust_tolerance: Relative slope change below which the reweighting has converged.
+        subtract_tilt_before_smoothing: Whether the trend is removed before smoothing. Only
+            ``False`` is implemented.
+        tilt_line_type: Shape of the trend line. Only ``"straight"`` is implemented.
+        peak_interpolation: How the peak is refined between bins. Only ``"parabolic"`` is
+            implemented.
+    """
+
+    pitch_floor_hz: float = 60.0
+    time_step_s: float = 0.002
+    max_frequency_hz: float = 5000.0
+    preemphasis_from_hz: float = 50.0
+    time_averaging_s: float = 0.01
+    quefrency_averaging_s: float = 0.001
+    peak_search_floor_hz: float = 60.0
+    peak_search_ceiling_hz: float = 700.0
+    trend_start_s: float = 0.001
+    trend_end_s: float = 0.0
+    robust_tolerance: float = 0.05
+    subtract_tilt_before_smoothing: bool = False
+    tilt_line_type: str = "straight"
+    peak_interpolation: str = "parabolic"
+
+
+DEFAULT_CPPS_SETTINGS = CppsSettings()
+"""The library defaults; the triage path passes ``praat_features.cpps`` instead."""
 
 
 def get_sound(audio: Union[Path, Audio], sampling_rate: int = 16000) -> parselmouth.Sound:
@@ -355,26 +424,73 @@ def extract_speech_rate(snd: Union[parselmouth.Sound, Path, Audio]) -> Dict[str,
         }
 
 
-def extract_pitch_values(snd: Union[parselmouth.Sound, Path, Audio]) -> Dict[str, float]:
-    """Estimate Pitch Range.
+def _no_pitch_range(*, failed: float = 0.0) -> Dict[str, float]:
+    """The five-key shape every ``extract_pitch_values`` path returns when no range was derived."""
+    return {
+        "pitch_floor": np.nan,
+        "pitch_ceiling": np.nan,
+        "pitch_frames": 0.0,
+        "pitch_failed": failed,
+        "pitch_range_fell_back": 0.0,
+    }
 
-    Calculates the mean pitch using a wide range and uses this to shorten the range for future pitch extraction
-    algorithms.
+
+def extract_pitch_values(
+    snd: Union[parselmouth.Sound, Path, Audio],
+    search_floor_hz: float = 50.0,
+    search_ceiling_hz: float = 600.0,
+    *,
+    pitch_floor_divisor: float = DEFAULT_PITCH_FLOOR_DIVISOR,
+    pitch_ceiling_quartile_multiplier: float = DEFAULT_PITCH_CEILING_QUARTILE_MULTIPLIER,
+    pitch_pinned_percentile: float = DEFAULT_PITCH_PINNED_PERCENTILE,
+    pitch_excursion_multiplier: float = DEFAULT_PITCH_EXCURSION_MULTIPLIER,
+    pitch_pinned_octave_ratio: float = DEFAULT_PITCH_PINNED_OCTAVE_RATIO,
+) -> Dict[str, float]:
+    """Derive this recording's own pitch range by narrowing a wide autocorrelation search.
+
+    Runs one wide pass over ``[search_floor_hz, search_ceiling_hz]``, then narrows the floor to
+    ``max(search_floor_hz, p5 / pitch_floor_divisor)`` and the ceiling to ``min(search_ceiling_hz,
+    max(q3 * pitch_ceiling_quartile_multiplier, pinned * pitch_excursion_multiplier))``, off the
+    linear-Hz percentiles of the voiced contour, where ``pinned`` is the
+    ``pitch_pinned_percentile``-th. When ``pinned`` falls below ``pitch_pinned_octave_ratio`` times
+    the search floor the unnarrowed search range is returned instead.
 
     Args:
         snd (Union[parselmouth.Sound, Path, Audio]): A Parselmouth Sound object or a file path or an Audio object.
+        search_floor_hz (float): Lowest pitch of the wide search the narrow range is derived from.
+        search_ceiling_hz (float): Highest pitch of that wide search.
+        pitch_floor_divisor (float): Divides the 5th percentile to give the floor. In triage, read it
+            from ``praat_features.pitch_floor_divisor``.
+        pitch_ceiling_quartile_multiplier (float): Multiplies the upper quartile in the ceiling's
+            first term. In triage, read it from ``praat_features.pitch_ceiling_quartile_multiplier``.
+        pitch_pinned_percentile (float): The percentile the branch predicate tests and the ceiling's
+            second term multiplies — one statistic serving both. In triage, read it from
+            ``praat_features.pitch_pinned_percentile``.
+        pitch_excursion_multiplier (float): Multiplies that percentile in the ceiling's second term.
+            In triage, read it from ``praat_features.pitch_excursion_multiplier``.
+        pitch_pinned_octave_ratio (float): Multiple of the search floor that percentile must clear
+            for the narrowing to be used at all. In triage, read it from
+            ``praat_features.pitch_pinned_octave_ratio``.
 
     Returns:
-        dict: A dictionary containing the following keys:
+        dict: Five float keys, on all three return paths:
 
             - pitch_floor (float): The lowest pitch value to use in future pitch extraction algorithms.
             - pitch_ceiling (float): The highest pitch value to use in future pitch extraction algorithms.
+            - pitch_frames (float): Voiced frames the range rests on; 0.0 when none were placed.
+            - pitch_failed (float): 1.0 when the analysis itself raised, 0.0 otherwise.
+            - pitch_range_fell_back (float): 1.0 when the unnarrowed search range was returned.
+
+        ``pitch_floor`` and ``pitch_ceiling`` are NaN when no range could be derived — either because
+        the wide search placed no pitch, or because the analysis failed. ``pitch_failed`` separates
+        those two.
 
     Notes:
-        Values are taken from: [Standardization of pitch-range settings in voice acoustic analysis](https://doi.org/10.3758/BRM.41.2.318)
-
-        The problem observed with doing a really broad pitch search was the occasional error if F1 was low.
-        So crude outlier detection is used to help with this.
+        The two-pass structure and the quartile ceiling term follow Hirst 2011, "The analysis by
+        synthesis of speech melody". The percentile floor, the excursion term and the pinned-contour
+        fallback are senselab's own. Every coefficient's derivation is in
+        ``specs/20260817-triage-workflow-dag/config-derivations.md`` under ``praat_features``, and the
+        rule's own record is in ``praat-instrument-audit.md`` under step 2.
 
         Important: These values are used within other functions, they are not outputs of the full code.
 
@@ -389,8 +505,9 @@ def extract_pitch_values(snd: Union[parselmouth.Sound, Path, Audio]) -> Dict[str
     Examples:
         ```python
         >>> snd = parselmouth.Sound("path_to_audio.wav")
-        >>> pitch_values(snd)
-        {'pitch_floor': 60, 'pitch_ceiling': 250}
+        >>> extract_pitch_values(snd)
+        {'pitch_floor': 80.0, 'pitch_ceiling': 300.0, 'pitch_frames': 188.0, 'pitch_failed': 0.0,
+         'pitch_range_fell_back': 0.0}
         ```
     """
     if not PARSELMOUTH_AVAILABLE:
@@ -402,36 +519,46 @@ def extract_pitch_values(snd: Union[parselmouth.Sound, Path, Audio]) -> Dict[str
         if not isinstance(snd, parselmouth.Sound):
             snd = get_sound(snd)
 
-        pitch_wide = snd.to_pitch_ac(time_step=0.005, pitch_floor=50, pitch_ceiling=600)
+        pitch_wide = snd.to_pitch_ac(time_step=0.005, pitch_floor=search_floor_hz, pitch_ceiling=search_ceiling_hz)
         # Other than values above, I'm using default hyperparamters
         # Details: https://www.fon.hum.uva.nl/praat/manual/Sound__To_Pitch__ac____.html
 
-        # remove outliers from wide pitch search
+        # the voiced frames of the wide pass; unvoiced frames come back as 0
         pitch_values = pitch_wide.selected_array["frequency"]
         pitch_values = pitch_values[pitch_values != 0]
-        pitch_values_Z = (pitch_values - np.mean(pitch_values)) / np.std(pitch_values)
-        pitch_values_filtered = pitch_values[abs(pitch_values_Z) <= 2]
+        if pitch_values.size == 0:
+            return _no_pitch_range()
 
-        mean_pitch = np.mean(pitch_values_filtered)
-
-        # Here there is an interesting alternative solution to discuss: https://praatscripting.lingphon.net/conditionals-1.html
-        if mean_pitch < 170:
-            # 'male' settings
-            pitch_floor = 60.0
-            pitch_ceiling = 250.0
+        low, upper_quartile, high = np.percentile(
+            pitch_values, [PITCH_FLOOR_PERCENTILE, PITCH_CEILING_QUARTILE, pitch_pinned_percentile]
+        )
+        if float(high) < pitch_pinned_octave_ratio * float(search_floor_hz):
+            floor, ceiling, fell_back = float(search_floor_hz), float(search_ceiling_hz), 1.0
         else:
-            # 'female' and 'child' settings
-            pitch_floor = 100.0
-            pitch_ceiling = 500.0
+            floor = max(float(search_floor_hz), float(low) / pitch_floor_divisor)
+            ceiling = min(
+                float(search_ceiling_hz),
+                max(
+                    float(upper_quartile) * pitch_ceiling_quartile_multiplier,
+                    float(high) * pitch_excursion_multiplier,
+                ),
+            )
+            fell_back = 0.0
 
-        return {"pitch_floor": pitch_floor, "pitch_ceiling": pitch_ceiling}
+        return {
+            "pitch_floor": floor,
+            "pitch_ceiling": ceiling,
+            "pitch_frames": float(pitch_values.size),
+            "pitch_failed": 0.0,
+            "pitch_range_fell_back": fell_back,
+        }
     except Exception as e:
         current_frame = inspect.currentframe()
         if current_frame is not None:
             current_function_name = current_frame.f_code.co_name
             logger.error(f'Error in "{current_function_name}": \n' + str(e))
             logger.error(f"Traceback: {traceback.format_exc()}")
-        return {"pitch_floor": np.nan, "pitch_ceiling": np.nan}
+        return _no_pitch_range(failed=1.0)
 
 
 def extract_pitch_descriptors(
@@ -692,114 +819,224 @@ def extract_slope_tilt(snd: Union[parselmouth.Sound, Path, Audio], floor: float,
         return {"spectral_slope": np.nan, "spectral_tilt": np.nan}
 
 
-def extract_cpp_descriptors(
-    snd: Union[parselmouth.Sound, Path, Audio], floor: float, ceiling: float, frame_shift: float
-) -> Dict[str, float]:
-    """Extract Cepstral Peak Prominence (CPP).
+def _gaussian_window(length: int) -> np.ndarray:
+    """Praat's Gaussian analysis window.
 
-    Function to calculate the Cepstral Peak Prominence (CPP) from a given sound object.
-    This function is adapted from default Praat code to work with Parselmouth.
+    Args:
+        length (int): Window length in samples.
+
+    Returns:
+        np.ndarray: The window, normalised so its edges sit at zero.
+    """
+    edge = np.exp(-12.0)
+    phase = (np.arange(1, length + 1) - 0.5 * (length + 1)) / length
+    return (np.exp(-48.0 * phase * phase) - edge) / (1.0 - edge)
+
+
+def _box_average(values: np.ndarray, width: int, axis: int) -> np.ndarray:
+    """Centred moving average, normalised by the taps that exist rather than padded.
+
+    Args:
+        values (np.ndarray): The array to smooth.
+        width (int): Window width in samples; ``<= 1`` returns the input unchanged.
+        axis (int): Axis to smooth along.
+
+    Returns:
+        np.ndarray: The smoothed array, same shape as the input.
+    """
+    if width <= 1:
+        return values
+    moved = np.moveaxis(values, axis, -1)
+    length = moved.shape[-1]
+    low = np.clip(np.arange(length) - (width - 1) // 2, 0, length)
+    high = np.clip(low + width, 0, length)
+    cumulative = np.concatenate([np.zeros(moved.shape[:-1] + (1,)), np.cumsum(moved, axis=-1)], axis=-1)
+    averaged = (cumulative[..., high] - cumulative[..., low]) / (high - low)
+    return np.moveaxis(averaged, -1, axis)
+
+
+def _robust_line_fit(x: np.ndarray, y: np.ndarray, tolerance: float) -> Tuple[np.ndarray, np.ndarray]:
+    """Fit one straight line per row of ``y`` by iteratively reweighted least squares.
+
+    The weights are Huber's, with tuning constant :data:`CPPS_HUBER_K` and a median-absolute-
+    deviation scale. The first pass is unweighted, so a row with no outliers is the least-squares
+    line.
+
+    Args:
+        x (np.ndarray): The abscissa, shared by every row, shape ``(n,)``.
+        y (np.ndarray): The ordinates, shape ``(rows, n)``.
+        tolerance (float): Relative slope change below which every row has converged.
+
+    Returns:
+        tuple: The per-row slope and intercept, each shape ``(rows,)``.
+    """
+    weights = np.ones_like(y)
+    slope = np.zeros(y.shape[0])
+    intercept = np.zeros(y.shape[0])
+    for _ in range(CPPS_MAX_ROBUST_ITERATIONS):
+        sum_w = weights.sum(axis=1)
+        sum_x = (weights * x).sum(axis=1)
+        sum_y = (weights * y).sum(axis=1)
+        sum_xx = (weights * x * x).sum(axis=1)
+        sum_xy = (weights * x * y).sum(axis=1)
+        determinant = sum_w * sum_xx - sum_x * sum_x
+        determinant = np.where(determinant == 0.0, np.nan, determinant)
+        next_slope = (sum_w * sum_xy - sum_x * sum_y) / determinant
+        next_intercept = (sum_y - next_slope * sum_x) / sum_w
+        converged = np.abs(next_slope - slope) <= tolerance * np.abs(next_slope)
+        slope, intercept = next_slope, next_intercept
+        if np.all(converged | ~np.isfinite(slope)):
+            break
+        residual = y - (intercept[:, None] + slope[:, None] * x)
+        deviation = np.abs(residual - np.median(residual, axis=1, keepdims=True))
+        scale = 1.4826 * np.median(deviation, axis=1, keepdims=True)
+        scale = np.where(scale > 0.0, scale, 1.0)
+        standardised = np.abs(residual) / (CPPS_HUBER_K * scale)
+        weights = np.where(standardised <= 1.0, 1.0, 1.0 / np.where(standardised > 0.0, standardised, 1.0))
+    return slope, intercept
+
+
+def _smoothed_power_cepstrogram(snd: parselmouth.Sound, settings: CppsSettings) -> Tuple[np.ndarray, float]:
+    """Frame the sound and return its smoothed power cepstrogram in dB.
+
+    Args:
+        snd (parselmouth.Sound): The sound to analyse.
+        settings (CppsSettings): The settings the cepstrogram is computed under.
+
+    Returns:
+        tuple: The cepstrogram, shape ``(frames, quefrency bins)``, and the quefrency step in
+        seconds. The cepstrogram is empty when the sound is shorter than one analysis window.
+    """
+    sampling_rate = 2.0 * settings.max_frequency_hz
+    resampled = snd.resample(new_frequency=sampling_rate, precision=50)
+    resampled.pre_emphasize(from_frequency=settings.preemphasis_from_hz)
+    samples = np.asarray(resampled.values[0], dtype=float)
+    samples = samples - samples.mean()
+
+    window_s = CPPS_GAUSSIAN_WIDTH_FACTOR * CPPS_WINDOW_PERIODS / settings.pitch_floor_hz
+    frame_length = 2 * int(round(window_s * sampling_rate / 2.0))
+    hop = max(1, int(round(settings.time_step_s * sampling_rate)))
+    if frame_length < 2 or samples.size < frame_length:
+        return np.zeros((0, 0)), 1.0 / sampling_rate
+
+    n_frames = 1 + (samples.size - frame_length) // hop
+    n_fft = 1 << (frame_length - 1).bit_length()
+    starts = np.arange(n_frames)[:, None] * hop + np.arange(frame_length)[None, :]
+    frames = samples[starts] * _gaussian_window(frame_length)
+    power = np.abs(np.fft.rfft(frames, n=n_fft, axis=1)) ** 2
+    log_power = np.log(np.maximum(power, CPPS_QUEFRENCY_FLOOR))
+    cepstrum = np.fft.irfft(log_power, n=n_fft, axis=1)[:, : n_fft // 2 + 1] ** 2
+
+    across_time = max(1, int(round(settings.time_averaging_s / settings.time_step_s)))
+    across_quefrency = max(1, int(round(settings.quefrency_averaging_s * sampling_rate)))
+    smoothed = _box_average(_box_average(cepstrum, across_time, axis=0), across_quefrency, axis=1)
+    return 10.0 * np.log10(np.maximum(smoothed, CPPS_QUEFRENCY_FLOOR)), 1.0 / sampling_rate
+
+
+def extract_cpp_descriptors(
+    snd: Union[parselmouth.Sound, Path, Audio],
+    settings: CppsSettings = DEFAULT_CPPS_SETTINGS,
+) -> Dict[str, float]:
+    """Extract smoothed Cepstral Peak Prominence (CPPS), frame by frame.
+
+    Each frame of the sound is taken to a log-power spectrum, inverse-transformed to a power
+    cepstrum, smoothed across time and then across quefrency, and converted to dB; a straight
+    trend line is fitted robustly over ``settings.trend_start_s`` to ``settings.trend_end_s``, and
+    the frame's prominence is the height of the largest peak inside the quefrency band
+    ``[1 / peak_search_ceiling_hz, 1 / peak_search_floor_hz]`` above that line. The three scalars
+    pool every frame of the recording: no voicing gate selects frames, and no value is dropped.
 
     Args:
         snd (Union[parselmouth.Sound, Path, Audio]): A Parselmouth Sound object or a file path or an Audio object.
-        floor (float): Minimum expected pitch value, set using value found in `pitch_values` function.
-        ceiling (float): Maximum expected pitch value, set using value found in `pitch_values` function.
-        frame_shift (float): Time rate at which to extract a new pitch value, typically set to 5 ms.
+        settings (CppsSettings): Every setting the measure is computed under. In triage, build it
+            from the ``praat_features.cpps`` config section.
 
     Returns:
-        dict: A dictionary containing the following key:
+        dict: A dictionary containing the following keys:
 
-            - mean_cpp (float): Mean Cepstral Peak Prominence.
-            - std_dev_cpp (float): Standard deviation in Cepstral Peak Prominence.
+            - mean_cpp (float): Mean smoothed Cepstral Peak Prominence over the frames, in dB.
+            - std_dev_cpp (float): Standard deviation of that prominence across frames, in dB.
+            - cpp_frames (float): Frames the two scalars rest on; 0.0 when none were placed.
+
+        ``mean_cpp`` and ``std_dev_cpp`` are NaN when ``cpp_frames`` is 0.0 — the recording is
+        shorter than one analysis window, or the analysis itself raised.
+
+    Raises:
+        ModuleNotFoundError: If parselmouth is not installed.
+        ValueError: If ``settings`` asks for a tilt line, an interpolation or a tilt-subtraction
+            order this function does not implement.
 
     Examples:
         ```python
         >>> snd = parselmouth.Sound("path_to_audio.wav")
-        >>> extract_CPP(snd, 75, 500, 0.01)
-        {'mean_cpp': 20.3, 'std_dev_cpp': 0.5}
+        >>> extract_cpp_descriptors(snd)
+        {'mean_cpp': 20.3, 'std_dev_cpp': 0.5, 'cpp_frames': 2411.0}
         ```
 
     Notes:
-        - Cepstral Peak Prominence: The height (i.e., “prominence”) of that peak relative to a regression line
-        through the overall cepstrum.
-        - Adapted from: https://osf.io/ctwgr and http://phonetics.linguistics.ucla.edu/facilities/acoustic/voiced_extract_auto.txt
+        - Cepstral Peak Prominence: the height of the cepstral peak relative to a regression line
+          through the cepstrum. The *S* is the pair of smoothing windows.
+        - The window is Gaussian, its effective width ``CPPS_WINDOW_PERIODS`` periods of
+          ``settings.pitch_floor_hz`` and its physical duration ``CPPS_GAUSSIAN_WIDTH_FACTOR``
+          times that, following Praat. The robust fit is a Huber M-estimator, which is not
+          Praat's own, so values are close to but not identical with ``Get CPPS...``.
+        - Every setting's derivation is in
+          ``specs/20260817-triage-workflow-dag/config-derivations.md`` under ``praat_features``,
+          and the rule's own record is in ``praat-instrument-audit.md`` under step 4.
     """
     if not PARSELMOUTH_AVAILABLE:
         raise ModuleNotFoundError(
             "`parselmouth` is not installed. Please install senselab audio dependencies using `pip install senselab`."
         )
+    if settings.tilt_line_type != "straight":
+        raise ValueError(f"only a straight tilt line is implemented, not {settings.tilt_line_type!r}")
+    if settings.peak_interpolation != "parabolic":
+        raise ValueError(f"only parabolic peak interpolation is implemented, not {settings.peak_interpolation!r}")
+    if settings.subtract_tilt_before_smoothing:
+        raise ValueError("subtracting the tilt before smoothing is not implemented")
 
     try:
         if not isinstance(snd, parselmouth.Sound):
             snd = get_sound(snd)
 
-        # Extract pitch object for voiced checking
-        pitch = snd.to_pitch_ac(time_step=frame_shift, pitch_floor=floor, pitch_ceiling=ceiling, voicing_threshold=0.3)
+        decibels, quefrency_step = _smoothed_power_cepstrogram(snd, settings)
+        if decibels.size == 0:
+            return {"mean_cpp": np.nan, "std_dev_cpp": np.nan, "cpp_frames": 0.0}
 
-        pulses = parselmouth.praat.call([snd, pitch], "To PointProcess (cc)")
+        quefrency = np.arange(decibels.shape[1]) * quefrency_step
+        trend_end = settings.trend_end_s if settings.trend_end_s > 0.0 else quefrency[-1]
+        fitted = np.flatnonzero((quefrency >= settings.trend_start_s) & (quefrency <= trend_end))
+        searched = np.flatnonzero(
+            (quefrency >= 1.0 / settings.peak_search_ceiling_hz) & (quefrency <= 1.0 / settings.peak_search_floor_hz)
+        )
+        if fitted.size < 2 or searched.size == 0:
+            return {"mean_cpp": np.nan, "std_dev_cpp": np.nan, "cpp_frames": 0.0}
 
-        textgrid = parselmouth.praat.call(pulses, "To TextGrid (vuv)", 0.02, 0.1)
+        rows = np.arange(decibels.shape[0])
+        peak = searched[decibels[:, searched].argmax(axis=1)]
+        before = decibels[rows, np.maximum(peak - 1, 0)]
+        at = decibels[rows, peak]
+        after = decibels[rows, np.minimum(peak + 1, decibels.shape[1] - 1)]
+        curvature = before - 2.0 * at + after
+        offset = np.clip(
+            np.where(curvature < 0.0, 0.5 * (before - after) / np.where(curvature < 0.0, curvature, 1.0), 0.0),
+            -0.5,
+            0.5,
+        )
+        peak_db = at - 0.25 * (before - after) * offset
+        peak_quefrency = (peak + offset) * quefrency_step
 
-        vuv_table = parselmouth.praat.call(textgrid, "Down to Table", "no", 6, "yes", "no")
-        # Variables - include line number, Time decimals, include tier names, include empty intervals
+        slope, intercept = _robust_line_fit(quefrency[fitted], decibels[:, fitted], settings.robust_tolerance)
+        prominence = peak_db - (intercept + slope * peak_quefrency)
 
-        cpp_list = []
-
-        n_intervals = parselmouth.praat.call(vuv_table, "Get number of rows")
-        for i in range(n_intervals):
-            label = parselmouth.praat.call(vuv_table, "Get value", i + 1, "text")
-            if label == "V":
-                tmin = parselmouth.praat.call(vuv_table, "Get value", i + 1, "tmin")
-                tmax = parselmouth.praat.call(vuv_table, "Get value", i + 1, "tmax")
-                snd_segment = snd.extract_part(float(tmin), float(tmax))
-
-                PowerCepstrogram = parselmouth.praat.call(snd_segment, "To PowerCepstrogram", 60, 0.002, 5000, 50)
-                # PowerCepstrogram (60-Hz pitch floor, 2-ms time step, 5-kHz maximum frequency,
-                # and pre-emphasis from 50 Hz)
-
-                try:
-                    CPP_Value = parselmouth.praat.call(
-                        PowerCepstrogram,
-                        "Get CPPS...",
-                        "no",
-                        0.01,
-                        0.001,
-                        60,
-                        330,
-                        0.05,
-                        "parabolic",
-                        0.001,
-                        0,
-                        "Straight",
-                        "Robust",
-                    )
-                    # Subtract tilt before smoothing = “no”; time averaging window = 0.01 s;
-                    # quefrency averaging window = 0.001 s;
-                    # Peak search pitch range = 60–330 Hz; tolerance = 0.05; interpolation = “Parabolic”;
-                    # tilt line frequency range = 0.001–0 s (no upper bound);
-                    # Line type = “Straight”; fit method = “Robust.”
-                except Exception as e:
-                    current_frame = inspect.currentframe()
-                    if current_frame is not None:
-                        current_function_name = current_frame.f_code.co_name
-                        logger.error(f'Error in "{current_function_name}": \n' + str(e))
-                        logger.error(f"Traceback: {traceback.format_exc()}")
-                    CPP_Value = np.nan
-
-                if not np.isnan(CPP_Value) and CPP_Value > 4:
-                    cpp_list.append(CPP_Value)
-
-        # Calculate Final Features
-        if cpp_list:
-            CPP_array = np.array(cpp_list)
-            CPP_mean = np.mean(CPP_array)
-            CPP_std = np.std(CPP_array)
-        else:
-            CPP_mean = np.nan
-            CPP_std = np.nan
-
-        # Return Result
-        return {"mean_cpp": CPP_mean, "std_dev_cpp": CPP_std}
+        finite = prominence[np.isfinite(prominence)]
+        if finite.size == 0:
+            return {"mean_cpp": np.nan, "std_dev_cpp": np.nan, "cpp_frames": 0.0}
+        return {
+            "mean_cpp": float(np.mean(finite)),
+            "std_dev_cpp": float(np.std(finite)),
+            "cpp_frames": float(finite.size),
+        }
 
     except Exception as e:
         current_frame = inspect.currentframe()
@@ -807,7 +1044,7 @@ def extract_cpp_descriptors(
             current_function_name = current_frame.f_code.co_name
             logger.error(f'Error in "{current_function_name}": \n' + str(e))
             logger.error(f"Traceback: {traceback.format_exc()}")
-        return {"mean_cpp": np.nan, "std_dev_cpp": np.nan}
+        return {"mean_cpp": np.nan, "std_dev_cpp": np.nan, "cpp_frames": 0.0}
 
 
 def measure_f1f2_formants_bandwidths(
@@ -1218,6 +1455,14 @@ def extract_praat_parselmouth_features_from_audios(
     time_step: float = 0.005,
     window_length: float = 0.025,
     pitch_unit: str = "Hertz",
+    search_floor_hz: float = 50.0,
+    search_ceiling_hz: float = 600.0,
+    pitch_floor_divisor: float = DEFAULT_PITCH_FLOOR_DIVISOR,
+    pitch_ceiling_quartile_multiplier: float = DEFAULT_PITCH_CEILING_QUARTILE_MULTIPLIER,
+    pitch_pinned_percentile: float = DEFAULT_PITCH_PINNED_PERCENTILE,
+    pitch_excursion_multiplier: float = DEFAULT_PITCH_EXCURSION_MULTIPLIER,
+    pitch_pinned_octave_ratio: float = DEFAULT_PITCH_PINNED_OCTAVE_RATIO,
+    cpps: CppsSettings = DEFAULT_CPPS_SETTINGS,
     speech_rate: bool = True,
     intensity_descriptors: bool = True,
     harmonicity_descriptors: bool = True,
@@ -1244,6 +1489,14 @@ def extract_praat_parselmouth_features_from_audios(
         time_step (float): Time rate at which to extract features. Defaults to 0.005.
         window_length (float): Window length in seconds for spectral features. Defaults to 0.025.
         pitch_unit (str): Unit for pitch measurements. Defaults to "Hertz".
+        search_floor_hz (float): Lowest pitch of the wide search each recording's range is narrowed from.
+        search_ceiling_hz (float): Highest pitch of that wide search.
+        pitch_floor_divisor (float): Forwarded to :func:`extract_pitch_values`.
+        pitch_ceiling_quartile_multiplier (float): Forwarded to :func:`extract_pitch_values`.
+        pitch_pinned_percentile (float): Forwarded to :func:`extract_pitch_values`.
+        pitch_excursion_multiplier (float): Forwarded to :func:`extract_pitch_values`.
+        pitch_pinned_octave_ratio (float): Forwarded to :func:`extract_pitch_values`.
+        cpps (CppsSettings): Forwarded to :func:`extract_cpp_descriptors`.
         speech_rate (bool): Whether to extract speech rate. Defaults to True.
         intensity_descriptors (bool): Whether to extract intensity descriptors. Defaults to True.
         harmonicity_descriptors (bool): Whether to extract harmonic descriptors. Defaults to True.
@@ -1281,14 +1534,26 @@ def extract_praat_parselmouth_features_from_audios(
 
     Returns:
         list[dict[str, Any]]: A list of JSON-like dictionaries with extracted features
-            structured under "praat_parselmouth".
+            structured under "praat_parselmouth". Each carries the five keys
+            :func:`extract_pitch_values` returned — ``pitch_floor``, ``pitch_ceiling``,
+            ``pitch_frames``, ``pitch_failed`` and ``pitch_range_fell_back`` — under those
+            names, alongside the scalars they conditioned.
 
     """
 
     # Utility function to extract features per-audio worker
     def _extract_one(snd: Audio) -> Dict[str, Any]:
         # Shared precomputations
-        pitch_values_out = extract_pitch_values(snd=snd)
+        pitch_values_out = extract_pitch_values(
+            snd=snd,
+            search_floor_hz=search_floor_hz,
+            search_ceiling_hz=search_ceiling_hz,
+            pitch_floor_divisor=pitch_floor_divisor,
+            pitch_ceiling_quartile_multiplier=pitch_ceiling_quartile_multiplier,
+            pitch_pinned_percentile=pitch_pinned_percentile,
+            pitch_excursion_multiplier=pitch_excursion_multiplier,
+            pitch_pinned_octave_ratio=pitch_pinned_octave_ratio,
+        )
         pitch_floor = pitch_values_out["pitch_floor"]
         pitch_ceiling = pitch_values_out["pitch_ceiling"]
 
@@ -1360,16 +1625,7 @@ def extract_praat_parselmouth_features_from_audios(
             else None
         )
 
-        cpp_out = (
-            extract_cpp_descriptors(
-                snd=snd,
-                floor=pitch_floor,
-                ceiling=pitch_ceiling,
-                frame_shift=time_step,
-            )
-            if cpp_descriptors
-            else None
-        )
+        cpp_out = extract_cpp_descriptors(snd=snd, settings=cpps) if cpp_descriptors else None
 
         audio_duration_out = extract_audio_duration(snd=snd) if duration else None
 
@@ -1395,7 +1651,7 @@ def extract_praat_parselmouth_features_from_audios(
 
         # collect outputs
         unit_l = pitch_unit.lower()
-        feature_data: Dict[str, Any] = {}
+        feature_data: Dict[str, Any] = dict(pitch_values_out)
 
         if duration and audio_duration_out is not None:
             feature_data["duration"] = audio_duration_out["duration"]
@@ -1427,6 +1683,7 @@ def extract_praat_parselmouth_features_from_audios(
         if cpp_descriptors and cpp_out is not None:
             feature_data["cepstral_peak_prominence_mean"] = cpp_out["mean_cpp"]
             feature_data["cepstral_peak_prominence_std"] = cpp_out["std_dev_cpp"]
+            feature_data["cepstral_peak_prominence_frames"] = cpp_out["cpp_frames"]
 
         if formants and formants_out is not None:
             feature_data["mean_f1_loc"] = formants_out["f1_mean"]

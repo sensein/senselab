@@ -14,11 +14,15 @@ signal via ``ScriptLine.score`` (line-level) and each word chunk's ``score``.
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import platform
+import shutil
 import subprocess
 import sys
 import tempfile
+import uuid
 from pathlib import Path
 from typing import List, Optional
 
@@ -28,48 +32,98 @@ from senselab.utils.dependencies import hf_subprocess_env, resolve_model
 from senselab.utils.subprocess_venv import _clean_subprocess_env, ensure_venv, parse_subprocess_result, venv_python
 
 _CRISPER_VENV = "crisperwhisper"
-# Backend is platform-selected. ``ctranslate2-crisperwhisper`` only publishes
-# Linux x86_64 wheels, so the fast CT2 path is used there (the GPU / CI target);
-# everywhere else (e.g. macOS arm64 dev) falls back to the transformers backend,
-# which loads the same model's safetensors weights. Both extras expose the same
-# ``CrisperWhisperModel`` API, so the worker is backend-agnostic.
+# The CT2 backend on Linux x86_64, the transformers backend elsewhere. One requirement list with
+# environment markers, so the venv lock and its digest are the same on every host; see
+# specs/20261002-subprocess-venv-locks/design.md.
 _IS_LINUX_X86 = sys.platform.startswith("linux") and platform.machine().lower() in ("x86_64", "amd64")
-if _IS_LINUX_X86:
-    # CT2 *inference* is torch-free, but the first-run HF->CT2 *conversion* goes through
-    # ``ctranslate2.converters.transformers``, whose ``try: import huggingface_hub, torch,
-    # transformers`` block leaves those names unbound when absent; ``_load()`` then calls
-    # ``torch.no_grad()`` + the transformers loader -> ``NameError: name 'torch' /
-    # 'transformers' is not defined``. The venv "builds" but transcription fails on every
-    # clip. So the ct2 venv also needs the conversion stack: use the ``[transformers]``
-    # extra (== [all] with ct2: transformers + torch + accelerate) and pin torch/torchaudio
-    # explicitly so ensure_venv routes them through the CUDA index. None of this is loaded
-    # at CT2 inference time — only for the one-time, cached HF->CT2 conversion.
-    _CRISPER_REQUIREMENTS = ["crisperwhisper[ct2,transformers]==2.0.1", "torch>=2.4", "torchaudio>=2.4"]
-else:
-    _CRISPER_REQUIREMENTS = [
-        "crisperwhisper[transformers]==2.0.1",
-        # The library imports `ctranslate2` at module top (engine/hallucination)
-        # even on the transformers path, but the [transformers] extra doesn't
-        # install it and the CT2 *fork* is Linux-x86-only. Standard ctranslate2
-        # has macOS-arm64 wheels and satisfies those imports (the transformers
-        # backend doesn't actually run CT2 inference).
-        "ctranslate2>=4.0",
-        # Pin torch/torchaudio explicitly so ensure_venv routes them through the
-        # CUDA-aware PyTorch index (the [transformers] extra pulls torch>=2.4).
-        "torch>=2.4",
-        "torchaudio>=2.4",
-    ]
+_LINUX_X86_MARKER = "sys_platform == 'linux' and platform_machine == 'x86_64'"
+_CRISPER_REQUIREMENTS = [
+    "crisperwhisper[transformers]==2.0.1",
+    f"crisperwhisper[ct2]==2.0.1; {_LINUX_X86_MARKER}",
+    "ctranslate2>=4.0; sys_platform != 'linux' or platform_machine != 'x86_64'",
+    "torch>=2.4",
+    "torchaudio>=2.4",
+]
 _CRISPER_PYTHON = "3.12"
 
 # Backend token passed to CrisperWhisperModel(..., backend=...). "auto" would try
 # ct2 first (and fail off Linux x86_64), so we pin it explicitly per platform.
 _CRISPER_BACKEND = "ct2" if _IS_LINUX_X86 else "transformers"
 
+# The library's HF->CT2 conversion cache: one directory per (model, quantization),
+# holding ``model.bin`` and stamped with ``.conversion_complete`` when written.
+_CT2_WEIGHTS = "model.bin"
+_CT2_MARKER = ".conversion_complete"
+
+# CTranslate2's C++ message when a decode step indexes past Whisper's 448 position
+# encodings; see specs/20260910-crisperwhisper-decoder-positions/.
+_CT2_POSITION_LIMIT = "No position encodings are defined for positions >="
+
+
+class CrisperWhisperDecoderPositionsExceeded(ValueError):
+    """A chunk's prompt plus its token budget overran Whisper's 448 decoder positions; record it as an absence."""
+
+
+def _ct2_cache_root() -> Path:
+    """Return the conversion-cache root ``crisperwhisper.converter`` reads."""
+    env = os.environ.get("CRISPERWHISPER_CACHE")
+    return Path(env) if env else Path.home() / ".cache" / "crisperwhisper"
+
+
+def _ct2_cache_key(model_id: str, quantization: str) -> str:
+    """Return the conversion-cache directory name for one model and quantization.
+
+    Args:
+        model_id: The path or repo id handed to ``CrisperWhisperModel``.
+        quantization: The CT2 compute type (``float16``, ``float32``, ...).
+
+    Returns:
+        The directory name ``crisperwhisper.converter._cache_key`` would build.
+    """
+    slug = model_id.replace("/", "--").replace("\\", "--")
+    digest = hashlib.sha256(model_id.encode()).hexdigest()[:12]
+    return f"{slug}_{quantization}_{digest}"
+
+
+def _ct2_entry_is_torn(entry: Path) -> bool:
+    """Return whether a conversion-cache entry is stamped complete but has no weights.
+
+    Args:
+        entry: A conversion-cache directory.
+
+    Returns:
+        True when ``.conversion_complete`` exists and ``model.bin`` does not.
+    """
+    return (entry / _CT2_MARKER).exists() and not (entry / _CT2_WEIGHTS).exists()
+
+
+def _discard_torn_ct2_entry(entry: Path) -> bool:
+    """Detach and delete a conversion-cache entry that carries no weights.
+
+    Args:
+        entry: A conversion-cache directory.
+
+    Returns:
+        True when a torn entry was detached and deleted, False otherwise.
+    """
+    if not _ct2_entry_is_torn(entry):
+        return False
+    detached = entry.with_name(f"{entry.name}.torn-{uuid.uuid4().hex}")
+    try:
+        os.rename(entry, detached)
+    except OSError:
+        return False
+    shutil.rmtree(detached, ignore_errors=True)
+    return True
+
 
 # Worker — runs inside the isolated venv.
 _CRISPER_WORKER_SCRIPT = r"""
 import json
+import os
+import shutil
 import sys
+from pathlib import Path
 
 try:
     from crisperwhisper import CrisperWhisperModel
@@ -81,6 +135,27 @@ try:
     device = args.get("device", "auto")
     compute_type = args.get("compute_type", "float32")
     language = args.get("language") or "en"
+
+    # The CT2 backend converts the HF snapshot into a shared cache directory whose
+    # writer is neither atomic nor locked. Convert into a private staging directory
+    # and publish it with one rename, so a concurrent converter can neither be read
+    # half-written nor delete what this process just wrote.
+    if backend == "ct2":
+        entry = Path(args["ct2_entry"])
+        if not (entry / "model.bin").exists():
+            from crisperwhisper.converter import ensure_ct2_model
+
+            staging = Path(args["ct2_staging"])
+            converted = Path(ensure_ct2_model(model_id, quantization=compute_type, cache_dir=str(staging)))
+            entry.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                os.rename(str(converted), str(entry))
+            except OSError:
+                if not (entry / "model.bin").exists():
+                    shutil.rmtree(str(entry), ignore_errors=True)
+                    os.rename(str(converted), str(entry))
+            shutil.rmtree(str(staging), ignore_errors=True)
+        model_id = str(entry)
 
     # CrisperWhisperModel's __init__ (and both backends it dispatches to -- CT2's
     # ensure_ct2_model/_resolve_hf_or_local, and the transformers backend's
@@ -159,6 +234,10 @@ class CrisperWhisperASR:
             One ``ScriptLine`` per input with verbatim ``text``, word-level
             ``chunks`` carrying timestamps + ``score`` (native word confidence
             when exposed), and a line-level ``score``.
+
+        Raises:
+            CrisperWhisperDecoderPositionsExceeded: A chunk's decoder prompt plus its
+                token budget overran Whisper's 448 position encodings.
         """
         if model is None:
             model = HFModel(path_or_uri="nyralabs/CrisperWhisper2.0_turbo")
@@ -188,6 +267,10 @@ class CrisperWhisperASR:
                 audio.save_to_file(path)
                 audio_paths.append(path)
 
+            cache_root = _ct2_cache_root()
+            ct2_entry = cache_root / _ct2_cache_key(str(snapshot_path), compute_type)
+            if _CRISPER_BACKEND == "ct2":
+                _discard_torn_ct2_entry(ct2_entry)
             input_json = json.dumps(
                 {
                     "audio_paths": audio_paths,
@@ -196,6 +279,8 @@ class CrisperWhisperASR:
                     "device": device_str,
                     "compute_type": compute_type,
                     "language": language or "en",
+                    "ct2_entry": str(ct2_entry),
+                    "ct2_staging": str(cache_root / f".staging-{uuid.uuid4().hex}"),
                 }
             )
             # Stage the model once (cross-process heartbeat lock) + run the worker
@@ -211,7 +296,12 @@ class CrisperWhisperASR:
                 timeout=1800,
                 env=env,
             )
-            output = parse_subprocess_result(result, "CrisperWhisper 2.0")
+            try:
+                output = parse_subprocess_result(result, "CrisperWhisper 2.0")
+            except RuntimeError as err:
+                if _CT2_POSITION_LIMIT in str(err):
+                    raise CrisperWhisperDecoderPositionsExceeded(str(err)) from err
+                raise
 
             results: List[ScriptLine] = []
             for entry in output.get("results", []):

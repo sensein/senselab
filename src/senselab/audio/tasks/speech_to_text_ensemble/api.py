@@ -58,6 +58,19 @@ def _normalize_word(text: str) -> str:
     return _WHITESPACE_PATTERN.sub(" ", cleaned).strip()
 
 
+def _is_bracketed_token(text: str) -> bool:
+    """Whether ``text`` is a bracketed non-lexical marker, e.g. ``"[COUGH]"``.
+
+    A recognizer that brackets non-lexical events and one that transcribes them as a plain word
+    normalize to the same vote key (``_normalize_word`` strips ``[``/``]`` as punctuation), so they
+    already tally as one winning reading. Which raw form is *displayed*, though, is not decided by
+    the vote — it is whichever member the winning bucket happened to see first, which is iteration
+    order, not a choice.
+    """
+    stripped = text.strip()
+    return stripped.startswith("[") and stripped.endswith("]")
+
+
 def _temporal_agreement(
     members: Sequence[Mapping[str, Any]],
 ) -> tuple[float | None, float | None, int]:
@@ -387,6 +400,11 @@ def fuse_word_streams(
                     "corr_den": 0.0,
                 },
             )
+            if _is_bracketed_token(m["text"]) and not _is_bracketed_token(t["display"]):
+                # A bracketed non-lexical marker is strictly more informative than the same event
+                # transcribed as a plain word, so it wins the display text regardless of which
+                # member the tally visited first.
+                t["display"] = m["text"]
             t["weight"] += wt
             t["weight_uncorroborated"] += base
             t["models"].append(m["model"])

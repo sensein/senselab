@@ -1,0 +1,329 @@
+"""QUALITY — the terminal node, reading the store's own records for internal contradiction.
+
+Runs after every branch, on every path PREPROCESS completed, and before REDACT and VERDICT;
+``run._drive_branches`` places the call. It reads stored outputs only — entities and their
+attributes — decoding no audio and opening no sidecar.
+
+Its one check is clip consistency. A clip span asserts that the signal reached its ceiling over its
+extent; a sample outside every clip span, louder than that ceiling, contradicts the assertion.
+QUALITY reads PREPROCESS's ``clip`` spans for their extents and its
+:data:`CLIP_AMPLITUDE_MEASUREMENT` for the amplitudes, and records each contradiction as an
+``assertion`` derived from the span it contests. It withdraws no span: the store is append-only.
+Clip spans with no clip-amplitude measurement beside them raise, and the runner records the node
+``ERRORED``; a contradiction QUALITY can measure is always a finding and never a raise.
+
+``preceded_by`` lists the nodes whose records were live in the store when QUALITY read it, which on
+a fresh run is routing and the branches and on the ``scripts/extend_quality.py`` pass is whatever
+that run actually ran.
+
+The design is in ``specs/20260912-quality-clip-consistency/design.md``.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+from senselab.audio.data_structures import AudioHints
+from senselab.audio.workflows.triage.config import TriageConfig, UnmeasuredConfigKey
+from senselab.audio.workflows.triage.nodes.common import (
+    BranchResult,
+    find_measurement,
+    live_entities,
+    software_agent,
+    write_report,
+)
+from senselab.audio.workflows.triage.vocabulary import STORE_ASSERTIONS, UNDETERMINED, Conformance
+from senselab.utils.prov_store import Entity, ProvStore
+
+NODE = "QUALITY"
+KIND: str | None = None
+CLIP_FAMILY = "clip"
+CONTRADICTED_CLIP = "clip_above_unclipped_sample"
+"""The vocabulary token for a clip span an unclipped sample is louder than."""
+
+CONTEST_VERB = "contest"
+"""The assertion verb for a clip span this node answers but does not withdraw."""
+
+CLIP_AMPLITUDE_MEASUREMENT = "clip_amplitude"
+"""PREPROCESS's amplitude reading of the signal its clip spans were detected on.
+
+It carries the whole-file values and, keyed by span id, the per-span ones.
+"""
+
+CLIP_LEVELS = "clip_levels"
+"""The measurement key mapping each clip span's id to the peak absolute amplitude inside it."""
+
+UNCLIPPED_LOUDER_N = "unclipped_louder_n"
+"""The measurement key mapping each clip span's id to how many unclipped samples exceed its level."""
+
+
+@dataclass(frozen=True)
+class _Contradiction:
+    """One clip span an unclipped sample contradicts.
+
+    Attributes:
+        span_id: The clip span's entity id.
+        extent: The span's extent, in seconds.
+        clip_level: The peak absolute amplitude inside the span.
+        louder_amplitude: The loudest unclipped sample's absolute amplitude.
+        louder_time_s: Where that sample sits, in seconds.
+        louder_samples_n: How many unclipped samples exceed ``clip_level``.
+    """
+
+    span_id: str
+    extent: tuple[float, float]
+    clip_level: float
+    louder_amplitude: float
+    louder_time_s: float
+    louder_samples_n: int
+
+    def as_detail(self) -> dict[str, Any]:
+        """The row this contradiction contributes to the report and to its assertion.
+
+        Returns:
+            The fields, without the span id, which the assertion carries as a derivation edge.
+        """
+        return {
+            "extent": list(self.extent),
+            "clip_level": self.clip_level,
+            "louder_amplitude": self.louder_amplitude,
+            "louder_time_s": self.louder_time_s,
+            "louder_samples_n": self.louder_samples_n,
+        }
+
+
+def preceded_by(store: ProvStore) -> list[str]:
+    """The nodes that had concluded, in this store, by the time QUALITY read it.
+
+    Args:
+        store: The provenance store.
+
+    Returns:
+        The ``node`` of every live verdict and every live branch report other than QUALITY's own,
+        sorted and deduplicated.
+    """
+    return sorted(
+        {
+            str(entity.attributes["node"])
+            for entity in (*live_entities(store, "verdict"), *live_entities(store, "branch_report"))
+            if entity.attributes.get("node") != NODE
+        }
+    )
+
+
+def _stream_id(store: ProvStore, name: str) -> str:
+    """The live stream entity's id, by name, without decoding it.
+
+    Invalidated entities are never returned and the latest write wins.
+
+    Args:
+        store: The provenance store.
+        name: The stream entity's ``name`` attribute.
+
+    Returns:
+        The stream entity's id.
+
+    Raises:
+        LookupError: If no live stream entity carries that name.
+    """
+    found = [entity for entity in live_entities(store, "stream") if entity.attributes.get("name") == name]
+    if not found:
+        raise LookupError(f"no stream named {name!r} in the store; the node that writes it has not run")
+    return found[-1].id
+
+
+def clip_spans(store: ProvStore, signal: str) -> list[Entity]:
+    """Every live clip span PREPROCESS proposed over this signal, in time order.
+
+    Public: the extend pass that appends a missing :data:`CLIP_AMPLITUDE_MEASUREMENT` to a finished
+    run selects the same spans.
+
+    Args:
+        store: The provenance store.
+        signal: The stream name the spans were detected on.
+
+    Returns:
+        The ``span`` entities whose ``family`` is ``clip`` and whose ``signal`` is ``signal``,
+        sorted by extent.
+    """
+    spans = [
+        entity
+        for entity in live_entities(store, "span")
+        if entity.attributes.get("family") == CLIP_FAMILY
+        and entity.attributes.get("signal") == signal
+        and entity.extent is not None
+    ]
+    return sorted(spans, key=lambda entity: entity.extent or (0.0, 0.0))
+
+
+def _clip_amplitudes(store: ProvStore, signal: str) -> Entity:
+    """PREPROCESS's clip-amplitude measurement over this signal.
+
+    Args:
+        store: The provenance store.
+        signal: The stream name the clip spans were detected on.
+
+    Returns:
+        The live :data:`CLIP_AMPLITUDE_MEASUREMENT` measurement entity.
+
+    Raises:
+        LookupError: If nothing live carries that name over ``signal``.
+    """
+    found = find_measurement(store, CLIP_AMPLITUDE_MEASUREMENT)
+    if found is None or found.attributes.get("signal") != signal:
+        raise LookupError(
+            f"no live {CLIP_AMPLITUDE_MEASUREMENT!r} measurement over {signal!r}, but the store carries "
+            "clip spans over it; QUALITY reads no audio of its own. A fresh run writes the two together; "
+            "a finished run gains the measurement from scripts/extend_clip_amplitudes.py"
+        )
+    return found
+
+
+def quality(
+    store: ProvStore,
+    source: str,
+    config: TriageConfig,
+    hint: AudioHints | None = None,
+    *,
+    run_dir: Path,
+) -> BranchResult:
+    """Read PREPROCESS's clip spans against its own amplitude reading, and contest the denied ones.
+
+    A clip span's level is the peak absolute amplitude of the samples it covers, which PREPROCESS
+    stored in the clip-amplitude measurement under the span's id. An unclipped sample contradicts
+    that span when its own absolute amplitude exceeds the level by more than
+    ``quality.clip_contradiction_margin`` of the level. What counts as unclipped, the edge guard
+    included, was decided by PREPROCESS and is recorded on the measurement.
+
+    Args:
+        store: The provenance store, holding ADMIT's recording stream, PREPROCESS's clip spans and
+            the clip-amplitude measurement they are read against.
+        source: The store-held stream the clip spans were detected on, ``"recording"``.
+        config: The triage configuration.
+        hint: Accepted for the shared node shape; not read.
+        run_dir: Accepted for the shared node shape; not read.
+
+    Returns:
+        The branch report, the view over the assertions written, and the ``branch_report``
+        entity's id.
+
+    Raises:
+        UnknownConfigKey: If ``quality.clip_contradiction_margin`` is not a packaged key. A key
+            that is packaged but null is reported instead, in ``unmeasured``.
+        LookupError: If the ``source`` stream is absent, or if clip spans over it carry no
+            clip-amplitude measurement to read them against.
+    """
+    del hint, run_dir
+    # An unmeasured margin is reported, not raised on; a misspelled key still raises.
+    margin: float | None
+    try:
+        margin = float(config.require("quality.clip_contradiction_margin"))
+    except UnmeasuredConfigKey:
+        margin = None
+    stream_id = _stream_id(store, source)
+    preceded = preceded_by(store)
+    software = software_agent(store)
+
+    spans = clip_spans(store, source)
+    amplitudes = _clip_amplitudes(store, source).attributes if spans else {}
+    guard = int(amplitudes.get("edge_guard_samples", 0))
+    peak = amplitudes.get("unclipped_peak")
+    peak_time_s = amplitudes.get("unclipped_peak_time_s")
+    unclipped_samples_n = int(amplitudes.get("unclipped_samples_n", 0))
+
+    activity = store.activity(
+        node=NODE,
+        step="clip_consistency",
+        parameters={
+            "signal": source,
+            "clip_contradiction_margin": margin,
+            "clip_edge_guard_samples": guard,
+            "clip_spans_n": len(spans),
+        },
+    )
+    store.was_associated_with(activity, software)
+    store.used(activity, stream_id)
+    for span in spans:
+        store.used(activity, span.id)
+
+    levels = amplitudes.get(CLIP_LEVELS) or {}
+    louder_counts = amplitudes.get(UNCLIPPED_LOUDER_N) or {}
+    # The comparison IS the margin, so an unmeasured margin leaves the checked set empty.
+    measured = (
+        [] if margin is None else [(span, float(levels[span.id])) for span in spans if levels.get(span.id) is not None]
+    )
+    contradictions: list[_Contradiction] = []
+    for span, clip_level in measured:
+        if peak is None or peak_time_s is None or margin is None or float(peak) <= clip_level * (1.0 + margin):
+            continue
+        start_s, end_s = span.extent or (0.0, 0.0)
+        contradictions.append(
+            _Contradiction(
+                span_id=span.id,
+                extent=(float(start_s), float(end_s)),
+                clip_level=clip_level,
+                louder_amplitude=float(peak),
+                louder_time_s=float(peak_time_s),
+                louder_samples_n=int(louder_counts.get(span.id, 0)),
+            )
+        )
+
+    assertion_ids: list[str] = []
+    for contradiction in contradictions:
+        assertion_id = store.entity(
+            prov_type="assertion",
+            extent=contradiction.extent,
+            attributes={
+                "verb": CONTEST_VERB,
+                "claim": CLIP_FAMILY,
+                "reason": CONTRADICTED_CLIP,
+                "signal": source,
+                "margin": margin,
+                **contradiction.as_detail(),
+            },
+        )
+        store.was_generated_by(assertion_id, activity)
+        store.was_attributed_to(assertion_id, software)
+        store.was_derived_from(assertion_id, contradiction.span_id)
+        assertion_ids.append(assertion_id)
+
+    notes: list[str] = []
+    if contradictions:
+        loudest = max(contradictions, key=lambda found: found.louder_amplitude)
+        notes.append(
+            f"{CONTRADICTED_CLIP}: {len(contradictions)} of {len(measured)} clip spans sit below the "
+            f"unclipped sample of amplitude {loudest.louder_amplitude:.4f} at {loudest.louder_time_s:.3f}s"
+        )
+
+    # The referent is STORE_ASSERTIONS, not TASK: QUALITY has no route and no declared task.
+    conformance: Conformance = UNDETERMINED if not measured else not contradictions
+
+    report_id, report = write_report(
+        store,
+        activity,
+        software,
+        node=NODE,
+        kind=KIND,
+        conformance=conformance,
+        conformance_of=STORE_ASSERTIONS,
+        deviations=(CONTRADICTED_CLIP,) if contradictions else (),
+        unmeasured=() if margin is not None else ("quality.clip_contradiction_margin",),
+        detail={
+            "signal": source,
+            "preceded_by": preceded,
+            "clip_spans_n": len(spans),
+            "checked_n": len(measured),
+            "unmeasurable_n": len(spans) - len(measured),
+            "contradicted_n": len(contradictions),
+            "unclipped_samples_n": unclipped_samples_n,
+            "unclipped_peak": None if peak is None else float(peak),
+            "unclipped_peak_time_s": None if peak_time_s is None else float(peak_time_s),
+            "clip_contradiction_margin": margin,
+            "clip_edge_guard_samples": guard,
+            "contradictions": [contradiction.as_detail() for contradiction in contradictions],
+            "notes": notes,
+        },
+    )
+    return BranchResult(report=report, view=(*assertion_ids, report_id), report_entity_id=report_id)

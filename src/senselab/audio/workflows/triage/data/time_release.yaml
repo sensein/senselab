@@ -1,0 +1,23 @@
+# Which words of a DATE_TIME-family finding the fold releases by kind: a time of day, a weekday, a
+# relative reference or a length of time, none of which is an absolute date element. Compared after
+# the redaction policy's own folding (lower case, accents and apostrophes dropped) with dots and
+# hyphens dropped too ("o'clock" -> "oclock", "a.m." -> "am", "2-3" -> "23").
+#
+# derivation: owner, 2026-10-02, on the v6 review over r9 ("yes time of day can be released as well
+# as duration"); widened by policy v7, owner 2026-10-03: "2-3 weeks ago -> keep", "last year -> keep",
+# and weekdays released (the owner chose release when asked). A finding holding any `blockers` word, a
+# four-digit number or an ordinal keeps every word: it names an absolute date, a season, a holiday or
+# an age, which policy v7 always masks (src/senselab/text/tasks/pii_detection/data/redaction_policy.yaml).
+# An unquantified singular unit releases only after a relative modifier ("last year", not "the year").
+# The rule is in specs/20261003-redaction-policy-v7/design.md.
+time_of_day: [morning, mornings, afternoon, afternoons, evening, evenings, night, nights, tonight, noon, midnight, midday, dawn, dusk, sunrise, sunset, daytime, nighttime, overnight, bedtime, lunchtime, dinnertime, madrugada, mediodia, noche, noches, tarde, tardes]
+weekdays: [monday, tuesday, wednesday, thursday, friday, saturday, sunday, mondays, tuesdays, wednesdays, thursdays, fridays, saturdays, sundays, weekday, weekdays, lunes, martes, miercoles, jueves, viernes, sabado, sabados, domingo, domingos]
+relative_days: [today, tomorrow, yesterday, hoy, ayer, manana, anoche, anteayer]
+relative_modifiers: [last, next, this, past, previous, coming, ultimo, ultima, ultimos, ultimas, proximo, proxima, pasado, pasada, este, esta]
+clock_markers: [oclock, am, pm]
+units: [second, minute, hour, day, week, weekend, fortnight, month, year, decade, century, semester, segundo, minuto, hora, dia, semana, mes, ano, decada, siglo]
+plural_units: [seconds, minutes, hours, days, weeks, weekends, fortnights, months, years, decades, centuries, semesters, segundos, minutos, horas, dias, semanas, meses, anos, decadas, siglos]
+quantities: [a, an, couple, few, several, many, some, dozen, dozens, hundreds, thousands, half, one, two, three, four, five, six, seven, eight, nine, ten, eleven, twelve, thirteen, fourteen, fifteen, sixteen, seventeen, eighteen, nineteen, twenty, thirty, forty, fifty, sixty, seventy, eighty, ninety, hundred, thousand, un, una, unos, unas, dos, tres, cuatro, cinco, seis, siete, ocho, nueve, diez, quince, veinte, treinta, par, varios, varias, pocos, pocas, algunos, algunas, muchos, muchas, medio, media]
+modifiers: [past, last, next, for, over, about, around, almost, nearly, roughly, approximately, maybe, or, so, more, than, less, ago, whole, entire, of, the, this, that, these, those, every, each, other, couple, few, and, plus, within, after, before, like, just, only, already, all, long, longer, on, in, hace, por, durante, como, de, del, el, la, los, las, mas, casi, cerca, y, o, en, ultimos, ultimas, pasados, pasadas, este, esta, estos, estas, todo, toda, todos, todas, cada]
+ordinal_words: [first, second, third, fourth, fifth, sixth, seventh, eighth, ninth, tenth, eleventh, twelfth, thirteenth, fourteenth, fifteenth, sixteenth, seventeenth, eighteenth, nineteenth, twentieth, thirtieth, thirtyfirst, primero, primera]
+blockers: [january, february, march, april, may, june, july, august, september, october, november, december, jan, feb, mar, apr, jun, jul, aug, sep, sept, oct, nov, dec, enero, febrero, marzo, abril, mayo, junio, julio, agosto, septiembre, setiembre, octubre, noviembre, diciembre, spring, summer, summers, summertime, autumn, fall, winter, winters, wintertime, springtime, verano, invierno, primavera, otono, christmas, xmas, thanksgiving, easter, halloween, hanukkah, ramadan, eid, diwali, passover, kwanzaa, newyear, newyears, navidad, nochebuena, pascua, old, aged, age, ages, birthday, born, anniversary, yearold, yearsold, edad, cumpleanos]

@@ -4,10 +4,13 @@ Lifted out of ``scripts/analyze_audio.py`` so the cache contract is importable,
 unit-testable, and reusable by the adaptive loop rather than living in a 2500-line
 CLI script.
 
-A cache entry is keyed on everything that can change the result:
+A cache entry is keyed on what the process reads and what the process is:
 
-    (schema version, audio signature, task, model id, params,
-     code version, senselab version)
+    (schema version, audio signature, task, model id, resolved commit, params, code version)
+
+The installed senselab version is recorded on each entry as provenance and is not keyed: under
+hatch-vcs it is the distance from the last tag, so it changes with every commit of the repository
+whether or not the stage changed, and a key containing it missed on every run at a new commit.
 
 ``code_version`` is a caller-supplied string identifying the *behavior* that
 produced an entry. It deliberately replaced an earlier ``wrapper_hash`` that was
@@ -19,13 +22,10 @@ shared one file. Callers now pass a coarse, hand-managed identifier (see
 counterpart obligation is explicit: bump a stage's version when the stored shape
 of its outcome changes.
 
-``senselab_version`` still participates, and covers the larger surface — most
-stages are thin pass-throughs to a ``tasks/`` API, so library-side changes are
-what usually matter.
-
-Cache keys are NOT stable across senselab versions and are not intended to be:
-:data:`CACHE_SCHEMA_VERSION` is the deliberate global invalidation lever, and
-:func:`sync_cache_with_schema_version` wipes stale entries automatically on every
+The counterpart obligation of leaving the senselab version out: a change to a ``tasks/`` API that
+changes what a stage returns for the same input must bump that stage's code version (or
+:data:`CACHE_SCHEMA_VERSION` for a change reaching every stage). :data:`CACHE_SCHEMA_VERSION` is the
+global lever, and :func:`sync_cache_with_schema_version` wipes stale entries automatically on every
 host rather than requiring anyone to delete a directory by hand.
 """
 
@@ -34,12 +34,16 @@ from __future__ import annotations
 import hashlib
 import importlib.metadata
 import json
+import os
 import shutil
+import socket
 import sys
 import time
 import traceback
+import uuid
 from pathlib import Path
-from typing import Any, Protocol, runtime_checkable
+from types import MappingProxyType
+from typing import Any, Final, Mapping, Protocol, runtime_checkable
 
 __all__ = [
     "CACHE_SCHEMA_VERSION",
@@ -56,12 +60,18 @@ __all__ = [
     "senselab_version",
     "serialize",
     "prune_unreachable_entries",
+    "RESULT_PROCESS_VERSIONS",
+    "annotate_result_origin",
+    "result_cache_dir",
+    "result_cache_key",
+    "result_lookup",
+    "result_store",
     "sync_cache_with_schema_version",
     "transcript_signature",
     "write_json",
 ]
 
-CACHE_SCHEMA_VERSION = 23
+CACHE_SCHEMA_VERSION = 24
 """Bump to invalidate every on-disk entry (see :func:`sync_cache_with_schema_version`).
 
 Bumped 1 → 2 when ``wrapper_hash`` became ``code_version``: the key payload
@@ -254,6 +264,10 @@ branch) made every load pick up the new weights while the key stayed byte-identi
 result computed from the old commit was served as current with no signal that anything had moved.
 Every pre-existing entry predates commit-awareness and cannot be retroactively attributed to a
 commit, so none may be reused — the first run after this change recomputes everything.
+
+Bumped 23 → 24 when the senselab version left the key. Its hatch-vcs value changes with every commit,
+so the old key missed on every run at a new commit; the new key omits it and is a different payload,
+so no pre-24 entry is readable under it.
 """
 
 
@@ -357,7 +371,6 @@ def cache_key(
     model_id: str | None,
     params: dict[str, Any],
     code_version: str,
-    senselab_ver: str,
     commit_sha: str | None,
 ) -> str:
     """Compute the deterministic cache key for one (audio, task, model, params, commit) combo.
@@ -372,8 +385,7 @@ def cache_key(
         task: The stage name, e.g. ``"asr"``.
         model_id: The Hub id or backend name, or ``None`` for a model-less stage.
         params: The call's other keyword arguments, canonicalized.
-        code_version: Caller-supplied wrapper-behavior version (see module docstring).
-        senselab_ver: Installed senselab version.
+        code_version: Caller-supplied stage-behaviour version (see module docstring).
         commit_sha: The immutable 40-hex commit this call resolved ``model_id`` to, or ``None``
             when ``model_id`` names no Hub repo (a local backend name, or no model at all).
 
@@ -387,7 +399,6 @@ def cache_key(
         "model": model_id,
         "params": params,
         "code_version": code_version,
-        "senselab_version": senselab_ver,
         # Without this, an upstream push to a tracked ref loads new weights under
         # an unchanged key and a stale result is served as current.
         "commit_sha": commit_sha,
@@ -403,7 +414,6 @@ def align_cache_key(
     aligner_model_id: str,
     aligner_params: dict[str, Any],
     code_version: str,
-    senselab_ver: str,
     aligner_commit_sha: str | None,
 ) -> str:
     """Cache key for one (audio, transcript, language, aligner, commit) alignment call.
@@ -424,8 +434,7 @@ def align_cache_key(
         language: ISO language code passed to the aligner, or ``None``.
         aligner_model_id: The aligner's Hub id or backend name.
         aligner_params: The aligner's other keyword arguments, canonicalized.
-        code_version: Caller-supplied wrapper-behavior version.
-        senselab_ver: Installed senselab version.
+        code_version: Caller-supplied stage-behaviour version.
         aligner_commit_sha: The immutable 40-hex commit ``aligner_model_id`` resolved to, or
             ``None`` when it names no Hub repo.
 
@@ -441,7 +450,6 @@ def align_cache_key(
         "aligner_model": aligner_model_id,
         "aligner_params": aligner_params,
         "code_version": code_version,
-        "senselab_version": senselab_ver,
         # Same reasoning as cache_key's commit_sha: without it, an upstream push to the
         # aligner repo serves timestamps from the old commit under an unchanged key.
         "aligner_commit_sha": aligner_commit_sha,
@@ -480,24 +488,22 @@ def cache_store(cache_dir: Path, key: str, payload: dict[str, Any]) -> None:
     (cache_dir / f"{key}.json").write_text(json.dumps(serialize(payload), indent=2, default=str), encoding="utf-8")
 
 
-def prune_unreachable_entries(cache_dir: Path, *, senselab_ver: str) -> int:
+def prune_unreachable_entries(cache_dir: Path) -> int:
     """Delete cache entries no current key can ever hit; return how many were removed.
 
-    ``senselab_version`` and ``code_version`` are *inside* the cache key, so a
-    senselab release orphans every entry and a ``STAGE_VERSIONS`` bump orphans that
-    stage's. Nothing previously reclaimed them: ``CACHE_SCHEMA_VERSION`` only wipes
-    on a schema change, so the directory grew monotonically across releases and a
-    cache that looked healthy could be entirely dead weight.
+    ``code_version`` is inside the cache key, so a ``STAGE_VERSIONS`` bump orphans that stage's
+    entries, and nothing else reclaims them: ``CACHE_SCHEMA_VERSION`` only wipes on a schema change.
+    An entry is unreachable when its recorded ``provenance.code_version`` no longer matches the
+    declared version for its task, or its task no longer declares one. The recorded senselab version
+    is not a criterion: it is not in the key, so an entry from another version is still reachable.
 
-    An entry is unreachable when its recorded ``provenance.senselab_version``
-    differs from the running one, or its ``provenance.code_version`` no longer
-    matches the declared version for that task. Entries without provenance are
-    kept — absence of evidence isn't evidence of staleness, and a hit on them is
-    still correct.
+    Only this cache's own entries are considered — ``*.json`` files directly under ``cache_dir``, the
+    only thing :func:`cache_store` writes. Anything else in the directory (another tool's cache, the
+    result cache's per-key directories) is never touched. Entries without provenance are kept:
+    absence of evidence isn't evidence of staleness, and a hit on them is still correct.
 
     Args:
         cache_dir: The cache directory.
-        senselab_ver: The running senselab version.
 
     Returns:
         Number of entries removed.
@@ -509,22 +515,22 @@ def prune_unreachable_entries(cache_dir: Path, *, senselab_ver: str) -> int:
 
     removed = 0
     for entry in cache_dir.glob("*.json"):
+        if not entry.is_file():
+            continue
         try:
             prov = (json.loads(entry.read_text(encoding="utf-8")) or {}).get("provenance") or {}
         except (json.JSONDecodeError, OSError):
             continue  # corrupt entries already read as a miss; leave them to be overwritten
         if not prov:
             continue
-        recorded_ver = prov.get("senselab_version")
-        stale = recorded_ver is not None and recorded_ver != senselab_ver
-        if not stale:
-            task = prov.get("task")
-            recorded_code = prov.get("code_version")
-            if task and recorded_code is not None:
-                try:
-                    stale = recorded_code != stage_code_version(str(task))
-                except KeyError:
-                    stale = True  # task no longer declares a version → unreachable
+        task = prov.get("task")
+        recorded_code = prov.get("code_version")
+        if not task or recorded_code is None:
+            continue
+        try:
+            stale = recorded_code != stage_code_version(str(task))
+        except KeyError:
+            stale = True  # task no longer declares a version → unreachable
         if stale:
             try:
                 entry.unlink()
@@ -534,10 +540,15 @@ def prune_unreachable_entries(cache_dir: Path, *, senselab_ver: str) -> int:
     if removed:
         print(
             f"Cache: pruned {removed} unreachable entr{'y' if removed == 1 else 'ies'} "
-            f"(senselab/stage version drift) in {cache_dir}",
+            f"(stage version drift) in {cache_dir}",
             file=sys.stderr,
         )
     return removed
+
+
+def _is_own_entry(path: Path) -> bool:
+    """Whether ``path`` is one of this cache's entries: a ``*.json`` file :func:`cache_store` wrote."""
+    return path.suffix == ".json" and path.is_file()
 
 
 def sync_cache_with_schema_version(cache_dir: Path) -> None:
@@ -550,7 +561,8 @@ def sync_cache_with_schema_version(cache_dir: Path) -> None:
       data wipe is needed because there's nothing to wipe.
     - If the marker exists and matches the current code version → keep cache.
     - If the marker exists but doesn't match → the code has bumped the
-      schema since the cache was populated. Wipe all cache entries and
+      schema since the cache was populated. Wipe this cache's entries (the
+      top-level ``*.json`` files; nothing else in the directory) and
       rewrite the marker with the current version.
 
     Bidirectional invariant: clearing the cache resets the version to current
@@ -568,11 +580,12 @@ def sync_cache_with_schema_version(cache_dir: Path) -> None:
         except (ValueError, OSError):
             on_disk_version = None
 
-    # Has the cache been populated with non-marker entries?
-    has_entries = any(p.name != ".schema_version" for p in cache_dir.iterdir())
+    # Has the cache been populated with entries of its own? Only top-level ``*.json`` files are this
+    # cache's; anything else sharing the directory is left alone by the check and by the wipe.
+    has_entries = any(_is_own_entry(p) for p in cache_dir.iterdir())
 
     if on_disk_version == CACHE_SCHEMA_VERSION:
-        prune_unreachable_entries(cache_dir, senselab_ver=senselab_version())
+        prune_unreachable_entries(cache_dir)
         return
 
     if on_disk_version is None and not has_entries:
@@ -587,13 +600,10 @@ def sync_cache_with_schema_version(cache_dir: Path) -> None:
     # Mismatch — wipe and rewrite the marker.
     n_removed = 0
     for p in cache_dir.iterdir():
-        if p.name == ".schema_version":
+        if not _is_own_entry(p):
             continue
         try:
-            if p.is_dir():
-                shutil.rmtree(p)
-            else:
-                p.unlink()
+            p.unlink()
             n_removed += 1
         except OSError:
             continue
@@ -735,3 +745,230 @@ def run_alignment_cached(
         hit_label="alignment cache",
         **kwargs,
     )
+
+
+# ── Result cache: one entry per (input content, process) ──────────────
+
+
+RESULT_PROCESS_VERSIONS: Final[Mapping[str, int]] = MappingProxyType(
+    {
+        "clearvoice": 1,
+        "second_opinion_answers": 1,
+        "pii_detection": 1,
+        "redaction_review": 1,
+    }
+)
+"""The behaviour version of each process the result cache serves.
+
+Bump a process's number when what it returns for the same input changes — its output shape, the
+parameters it forwards, the post-processing around the model. The model's own weights are keyed by
+their resolved commit, not by this number.
+"""
+
+_RESULT_CACHE_ENV = "SENSELAB_RESULT_CACHE"
+_RESULT_CACHE_OFF = frozenset({"0", "off", "false", "no", "none", "disabled"})
+_RESULT_FILE = "result.json"
+_ORIGIN_FILE = "origin.json"
+
+
+def result_cache_dir() -> Path | None:
+    """The directory the result cache reads and writes, or ``None`` when it is switched off.
+
+    ``SENSELAB_RESULT_CACHE`` names the root, or switches the cache off with ``off``/``0``/``false``.
+    Unset, the root is ``<SENSELAB_CACHE>/results``. Entries live under ``schema-<N>/`` for the
+    current :data:`CACHE_SCHEMA_VERSION`, so a schema bump starts an empty directory rather than
+    deleting one that concurrent jobs are reading.
+
+    Returns:
+        The schema-scoped cache directory, or ``None``.
+    """
+    raw = os.environ.get(_RESULT_CACHE_ENV)
+    if raw is not None and raw.strip().lower() in _RESULT_CACHE_OFF:
+        return None
+    if raw:
+        root = Path(raw)
+    else:
+        from senselab.utils.model_revision import cache_root
+
+        root = cache_root() / "results"
+    return root / f"schema-{CACHE_SCHEMA_VERSION}"
+
+
+def result_cache_key(
+    *,
+    input_signature: str,
+    process: str,
+    model_id: str | None,
+    commit_sha: str | None,
+    params: Mapping[str, Any],
+) -> str:
+    """The key of one process applied to one input.
+
+    Everything that can change the result is in the key: the input's content, the process and its
+    behaviour version, the model and the commit its weights resolved to, and the parameters. The
+    installed senselab version is not: it changes with every commit of the repository whether or not
+    the process did, which would make every entry miss after any unrelated change.
+
+    Args:
+        input_signature: A digest of exactly what the process reads — :func:`audio_signature` of the
+            prepared audio, :func:`transcript_signature` of the text.
+        process: A key of :data:`RESULT_PROCESS_VERSIONS`.
+        model_id: The model the process runs, or ``None``.
+        commit_sha: The 40-hex commit the model resolved to, or ``None`` for no Hub model.
+        params: Every other input to the process, JSON-serialisable.
+
+    Returns:
+        A 64-character hex sha256 digest.
+
+    Raises:
+        KeyError: If ``process`` declares no version.
+    """
+    payload = {
+        "schema": CACHE_SCHEMA_VERSION,
+        "input": input_signature,
+        "process": process,
+        "process_version": RESULT_PROCESS_VERSIONS[process],
+        "model": model_id,
+        "commit_sha": commit_sha,
+        "params": dict(params),
+    }
+    return hashlib.sha256(canonical_params(payload).encode()).hexdigest()
+
+
+def _entry_dir(cache_dir: Path, key: str) -> Path:
+    return cache_dir / key[:2] / key
+
+
+def result_lookup(key: str) -> dict[str, Any] | None:
+    """Return a stored result and its arrays, or ``None`` on a miss or with the cache off.
+
+    Args:
+        key: From :func:`result_cache_key`.
+
+    Returns:
+        The stored payload, with ``"arrays"`` mapping each stored array's name to a NumPy array and
+        ``"origin"`` holding what :func:`annotate_result_origin` recorded, or ``None``. A corrupt or
+        partly readable entry is a miss.
+    """
+    cache_dir = result_cache_dir()
+    if cache_dir is None:
+        return None
+    entry = _entry_dir(cache_dir, key)
+    try:
+        payload = json.loads((entry / _RESULT_FILE).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    arrays: dict[str, Any] = {}
+    names = payload.get("array_names") or []
+    if names:
+        import numpy as np
+
+        try:
+            for name in names:
+                arrays[name] = np.load(entry / f"{name}.npy", allow_pickle=False)
+        except (OSError, ValueError):
+            return None
+    payload["arrays"] = arrays
+    try:
+        payload["origin"] = json.loads((entry / _ORIGIN_FILE).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        payload["origin"] = None
+    return payload
+
+
+def result_store(
+    key: str,
+    result: Mapping[str, Any],
+    *,
+    process: str,
+    model_id: str | None,
+    commit_sha: str | None,
+    arrays: Mapping[str, Any] | None = None,
+) -> bool:
+    """Store one result, atomically; the first writer of a key wins.
+
+    The entry is assembled in a private directory and renamed into place, so a concurrent reader
+    never sees half an entry and two jobs computing the same key cannot interleave their files.
+
+    Args:
+        key: From :func:`result_cache_key`.
+        result: The JSON-serialisable result.
+        process: The process that produced it, recorded as provenance.
+        model_id: The model it ran, recorded as provenance.
+        commit_sha: The commit that model resolved to, recorded as provenance.
+        arrays: Named NumPy arrays stored losslessly beside the result.
+
+    Returns:
+        True when this call wrote the entry, False when the cache is off or the key was already held.
+    """
+    cache_dir = result_cache_dir()
+    if cache_dir is None:
+        return False
+    final = _entry_dir(cache_dir, key)
+    if (final / _RESULT_FILE).exists():
+        return False
+    final.parent.mkdir(parents=True, exist_ok=True)
+    staging = final.parent / f".{key}.{os.getpid()}.{uuid.uuid4().hex[:8]}"
+    staging.mkdir()
+    try:
+        names = sorted(arrays or {})
+        if names:
+            import numpy as np
+
+            for name in names:
+                np.save(staging / f"{name}.npy", np.asarray((arrays or {})[name]), allow_pickle=False)
+        payload = {
+            "result": serialize(dict(result)),
+            "array_names": names,
+            "provenance": {
+                "process": process,
+                "process_version": RESULT_PROCESS_VERSIONS[process],
+                "model": model_id,
+                "commit_sha": commit_sha,
+                "senselab_version": senselab_version(),
+                "computed_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+                "host": socket.gethostname(),
+                "senselab_run_id": os.environ.get("SENSELAB_RUN_ID"),
+            },
+        }
+        (staging / _RESULT_FILE).write_text(json.dumps(payload, default=str), encoding="utf-8")
+        try:
+            os.rename(staging, final)
+        except OSError:
+            shutil.rmtree(staging, ignore_errors=True)
+            return False
+        return True
+    except BaseException:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+
+
+def annotate_result_origin(key: str, origin: Mapping[str, Any]) -> bool:
+    """Record, once, which caller-side activity computed an entry.
+
+    A library call does not know the provenance graph it runs inside; the caller that does (a triage
+    node that wrote the result as an entity) names its run and activity here, so a later hit can say
+    where the reused result was first computed. The first annotation stands.
+
+    Args:
+        key: The entry's key.
+        origin: JSON-serialisable description, e.g. ``{"run": ..., "activity": ..., "node": ...}``.
+
+    Returns:
+        True when this call wrote the origin.
+    """
+    cache_dir = result_cache_dir()
+    if cache_dir is None:
+        return False
+    entry = _entry_dir(cache_dir, key)
+    if not (entry / _RESULT_FILE).exists():
+        return False
+    try:
+        fd = os.open(entry / _ORIGIN_FILE, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o664)
+    except FileExistsError:
+        return False
+    except OSError:
+        return False
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        json.dump(serialize(dict(origin)), handle, default=str)
+    return True

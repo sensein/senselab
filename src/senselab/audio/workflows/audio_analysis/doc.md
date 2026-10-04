@@ -312,9 +312,10 @@ summary = run_pass(audio, StageContext(perturbation="raw", audio_signature=sig),
 
 Cache invalidation is coarse and deliberate. `STAGE_VERSIONS` in
 `stage_context.py` holds a per-stage integer surfaced in keys and provenance as
-`"asr@1"`; **bump a stage's number when the stored shape of its outcome changes.**
-This replaced a sha256 of the CLI script's source, which rotated on every comment
-edit or reformat and invalidated every cached model result for nothing.
+`"asr@1"`; **bump a stage's number when what it returns for the same input changes**,
+including a change in the `tasks/` API it wraps. The key is the audio signature, the stage and its
+number, the model id and its resolved commit, and the parameters; the senselab version is recorded as
+provenance and not keyed, because it changes with every commit.
 `CACHE_SCHEMA_VERSION` remains the global lever — bumping it makes
 `sync_cache_with_schema_version` wipe stale entries automatically on every host.
 

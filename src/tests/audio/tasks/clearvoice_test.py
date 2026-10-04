@@ -1,4 +1,4 @@
-"""ClearVoice through the three audio task APIs: dispatch, output contracts, provenance, WAV subtype.
+"""ClearerVoice through the three audio task APIs: dispatch, output contracts, provenance, WAV subtype.
 
 The worker itself is never launched. What is exercised is everything on the host side of it — the
 ``Audio`` round trip, the files handed over, the device and ceiling in the payload, and the contracts
@@ -95,7 +95,7 @@ def _model(name: str) -> HFModel:
 def test_enhance_audios_dispatches_to_clearvoice_by_model_id(
     offline_hub: None, worker: Dict[str, Any], mono_audio_sample: Audio
 ) -> None:
-    """Naming a ClearVoice enhancement checkpoint must reach ClearVoice, not SpeechBrain."""
+    """Naming a ClearerVoice enhancement checkpoint must reach ClearerVoice, not SpeechBrain."""
     enhanced = enhance_audios([mono_audio_sample], model=_model("FRCRN_SE_16K"))
     assert len(enhanced) == 1
     assert worker["payload"]["model_name"] == "FRCRN_SE_16K"
@@ -184,7 +184,7 @@ def test_mps_is_refused_at_the_task_boundary(
 def test_a_backend_parameter_reaches_the_worker(
     offline_hub: None, worker: Dict[str, Any], mono_audio_sample: Audio
 ) -> None:
-    """timeout_s is ClearVoice's one tunable, and it must actually arrive."""
+    """timeout_s is ClearerVoice's one tunable, and it must actually arrive."""
     enhance_audios([mono_audio_sample], model=_model("FRCRN_SE_16K"), parameters={"timeout_s": 123.0})
     assert worker["timeout"] == 123.0
 
@@ -212,7 +212,7 @@ def test_a_misspelled_parameter_raises_instead_of_running_the_default(
 def test_a_parameter_belonging_to_another_backend_raises(
     offline_hub: None, worker: Dict[str, Any], mono_audio_sample: Audio
 ) -> None:
-    """DriftSE's ``variant`` means nothing to ClearVoice and must not be quietly dropped."""
+    """DriftSE's ``variant`` means nothing to ClearerVoice and must not be quietly dropped."""
     with pytest.raises(ValueError, match="Unknown parameter"):
         enhance_audios([mono_audio_sample], model=_model("FRCRN_SE_16K"), parameters={"variant": "x"})
 
@@ -385,3 +385,76 @@ def test_no_audio_means_no_worker(
     """An empty list must not provision a venv or stage 670 MB of weights."""
     assert entry([], model=_model(model_name)) == []
     assert "payload" not in worker
+
+
+# ── Result cache ──────────────────────────────────────────────────────
+
+
+def _counting(monkeypatch: pytest.MonkeyPatch) -> List[int]:
+    """Count calls to the stubbed worker, keeping its behaviour."""
+    calls: List[int] = []
+    inner: Callable[..., Any] = cv.subprocess.run
+
+    def counted(cmd: list, **kwargs: object) -> types.SimpleNamespace:
+        calls.append(len(json.loads(str(kwargs["input"]))["in_paths"]))
+        return inner(cmd, **kwargs)
+
+    monkeypatch.setattr(cv.subprocess, "run", counted)
+    return calls
+
+
+def test_the_same_input_through_the_same_checkpoint_is_served_from_the_cache(
+    offline_hub: None, worker: Dict[str, Any], mono_audio_sample: Audio, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A second separation of identical audio at the same commit does not start the worker."""
+    worker["n_sources"] = 2
+    calls = _counting(monkeypatch)
+    first = separate_audios([mono_audio_sample], model=_model("MossFormer2_SS_16K"))
+    second = separate_audios([mono_audio_sample], model=_model("MossFormer2_SS_16K"))
+    assert calls == [1]
+    for fresh, reused in zip(first[0], second[0]):
+        assert np.array_equal(fresh.waveform.numpy(), reused.waveform.numpy())
+        assert fresh.sampling_rate == reused.sampling_rate
+    assert first[0][0].metadata["clearvoice"]["cache"]["hit"] is False
+    assert second[0][0].metadata["clearvoice"]["cache"]["hit"] is True
+    assert second[0][0].metadata["clearvoice"]["cache"]["key"] == first[0][0].metadata["clearvoice"]["cache"]["key"]
+    assert second[0][1].metadata["clearvoice"]["input_norm_scalar"] == 2.5
+
+
+def test_a_changed_input_misses_and_only_the_missing_input_reaches_the_worker(
+    offline_hub: None, worker: Dict[str, Any], mono_audio_sample: Audio, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Changing one sample is a different input; a batch sends the worker only what it lacks."""
+    worker["n_sources"] = 2
+    calls = _counting(monkeypatch)
+    separate_audios([mono_audio_sample], model=_model("MossFormer2_SS_16K"))
+    changed = mono_audio_sample.waveform.clone()
+    changed[0, 0] += 0.01
+    other = Audio(waveform=changed, sampling_rate=mono_audio_sample.sampling_rate)
+    results = separate_audios([mono_audio_sample, other], model=_model("MossFormer2_SS_16K"))
+    assert calls == [1, 1]
+    assert [sources[0].metadata["clearvoice"]["cache"]["hit"] for sources in results] == [True, False]
+
+
+def test_a_different_commit_of_the_checkpoint_misses(
+    offline_hub: None, worker: Dict[str, Any], mono_audio_sample: Audio, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The resolved commit is part of the key: new weights never serve an old result."""
+    worker["n_sources"] = 2
+    calls = _counting(monkeypatch)
+    separate_audios([mono_audio_sample], model=_model("MossFormer2_SS_16K"))
+    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: "e" * 40)
+    separate_audios([mono_audio_sample], model=_model("MossFormer2_SS_16K"))
+    assert calls == [1, 1]
+
+
+def test_the_cache_switched_off_always_runs_the_worker(
+    offline_hub: None, worker: Dict[str, Any], mono_audio_sample: Audio, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``SENSELAB_RESULT_CACHE=off`` computes every time."""
+    worker["n_sources"] = 2
+    monkeypatch.setenv("SENSELAB_RESULT_CACHE", "off")
+    calls = _counting(monkeypatch)
+    separate_audios([mono_audio_sample], model=_model("MossFormer2_SS_16K"))
+    separate_audios([mono_audio_sample], model=_model("MossFormer2_SS_16K"))
+    assert calls == [1, 1]
