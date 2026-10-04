@@ -74,7 +74,7 @@ _CONDITIONS_HEADING = "CONDITIONS:"
 _OTHER_SPEAKERS_HEADING = "OTHER_SPEAKERS:"
 _INSTRUCTIONS_SPOKEN_HEADING = "INSTRUCTIONS_SPOKEN:"
 
-PROMPT_VERSION = 8
+PROMPT_VERSION = 9
 """The prompt and its parse, as one number: it changes whenever either changes what a reading holds."""
 
 REDACTION_STATES = ("complete", "incomplete", "not_applicable")
@@ -195,9 +195,9 @@ _POLICY = (
     'words are never removed: release "mom", "my brother", "grandpa", "my wife", "my son", "aunt", '
     '"cousin", "mamá", "mi hermano", "abuela".\n'
     '- DATES. Remove every absolute date element, the year included: a year ("2021", "\'98", "two '
-    'thousand twenty-one"), a month ("October"), a season ("summer"), a holiday ("Halloween", '
-    '"Christmas"), a day of the month ("the 14th"). These are never released: in "I had COVID in 2021" '
-    'remove "2021". Keep a day of the week ("Monday"), a time of day ("this morning"), and every '
+    'thousand twenty-one"), a month ("October"), a holiday ("Halloween", "Christmas"), a day of the '
+    'month ("the 14th"). These are never released: in "I had COVID in 2021" remove "2021". Keep a '
+    'season ("summer", "invierno"), a day of the week ("Monday"), a time of day ("this morning"), and every '
     'relative or length-of-time expression ("2-3 weeks ago", "last year", "a few months", '
     '"yesterday", "for two years") -- release these.\n'
     '- AGES. Remove every age ("I\'m 73", "seventy-three years old", "in my sixties", "my 50th '
@@ -307,7 +307,7 @@ _PROMPT = (
     "every word or phrase concerned, one entry each, quoted exactly as it appears in the ORIGINAL: "
     "release for removed words the policy lets through, redact for words that must go. A judgment of "
     "that kind with an empty PROPOSAL is not an answer. Never propose releasing a year, a month, a "
-    "season, a holiday or an age; those always stay removed (the task's own stimulus is never removed "
+    "holiday or an age; those always stay removed (the task's own stimulus is never removed "
     "in the first place). A place smaller than a country is released only with its place_reason. If your "
     "REASONING names a venue, resort, hotel, clinic, hospital, employer, company, school, church or "
     "street, the PROPOSAL must carry an entry quoting it: redact a specific named one, or release a "
@@ -974,7 +974,7 @@ def answer_problem(result: "ReviewResult", original: str, redacted: str | None) 
     if forbidden:
         quoted = ", ".join(json.dumps(text) for text in forbidden)
         return (
-            f"these releases name a year, a month, a season, a holiday, an age, or a state or province not "
+            f"these releases name a year, a month, a holiday, an age, or a state or province not "
             f"released as historical: {quoted}; the policy always removes those, so drop each release or narrow "
             "it to the words the policy lets through"
         )
@@ -1023,7 +1023,7 @@ def answer_problem(result: "ReviewResult", original: str, redacted: str | None) 
 
 
 def dated(quote: str) -> bool:
-    """Whether a quote writes a year, a month, a season, a holiday or an age.
+    """Whether a quote writes a year, a month, a holiday or an age.
 
     Args:
         quote: The words a ``release`` entry quotes.
