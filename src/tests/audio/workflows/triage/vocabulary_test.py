@@ -26,6 +26,8 @@ from senselab.audio.workflows.triage.vocabulary import (
     NO_LEXICAL_WORD,
     NO_TRANSCRIPT,
     NON_LEXICAL_TASK,
+    REDACT_UNRESOLVED,
+    REDACT_VERIFY_FOUND,
     REDACTION_OWED,
     RELEASE_UNKNOWN_GROUNDS,
     RELEASE_WITH_REDACTION_GROUNDS,
@@ -966,6 +968,22 @@ class TestTheReleaseAxisNamesWhichArtefactMayBeHandedOn:
             _release_from(failed, evidence, ran, reviewer_withholds=REVIEWER_PROPOSED_REDACTION)[0] is Release.WITHHELD
         )
 
+    def test_every_withholding_carries_its_ground(self) -> None:
+        """A REDACT fail or flag that nothing clears names why it withholds."""
+        evidence = RedactionEvidence(rescan_survivors=("PERSON",), masks_n=1, masks_final_n=1)
+        ran: dict[str, RunState] = {}
+        failed = [NodeVerdict("REDACT", Outcome.FAIL, None, "verification found pii")]
+        flagged = [NodeVerdict("REDACT", Outcome.FLAG, None, "unresolved")]
+        assert _release_from(failed, evidence, ran) == (Release.WITHHELD, REDACT_VERIFY_FOUND)
+        assert _release_from(flagged, evidence, ran) == (Release.WITHHELD, REDACT_UNRESOLVED)
+        assert _release_from(failed, RedactionEvidence(masks_n=1, masks_final_n=1), ran) == (
+            Release.WITHHELD,
+            REDACT_UNRESOLVED,
+        )
+        assert {REDACT_VERIFY_FOUND, REDACT_UNRESOLVED} <= set(RELEASE_WITHHELD_GROUNDS)
+        assert _with_redact(Outcome.FAIL).release_ground is not None
+        assert _with_redact(Outcome.FLAG).release_ground is not None
+
     def test_the_reviewer_withholds_where_redact_never_ran(self) -> None:
         """Every path that would release is tightened, not only the one through a REDACT pass."""
         ran = {"SPEECH": RunState.COMPLETED}
@@ -994,7 +1012,10 @@ class TestTheReleaseAxisNamesWhichArtefactMayBeHandedOn:
             _release_from(passed, RedactionEvidence(), {}, reviewer_withholds=REVIEWER_PROPOSED_REDACTION)[1]
             == REVIEWER_PROPOSED_REDACTION
         )
-        assert _release_from(failed, RedactionEvidence(), {}, reviewer_withholds=REVIEWER_PROPOSED_REDACTION)[1] is None
+        assert (
+            _release_from(failed, RedactionEvidence(), {}, reviewer_withholds=REVIEWER_PROPOSED_REDACTION)[1]
+            == REDACT_UNRESOLVED
+        )
 
     def test_a_reviewer_withholding_leaves_a_discard_a_discard(self) -> None:
         """The release axis tightens; the triage axis is not the reviewer's to move."""
@@ -1050,12 +1071,12 @@ class TestAReviewerReadingClearsAReScanFail:
             Release.WITH_REDACTION,
             REVIEWER_CLEARED_RESCAN,
         )
-        assert _release_from(self._FAILED, evidence, {}) == (Release.WITHHELD, None)
+        assert _release_from(self._FAILED, evidence, {}) == (Release.WITHHELD, REDACT_VERIFY_FOUND)
 
     def test_an_incomplete_scan_is_never_cleared(self) -> None:
         """A fail with no re-scan survivor is an unchecked recording, which no reading clears."""
         evidence = RedactionEvidence(lexical_words_n=40, scanned=True, findings_n=1)
-        assert _release_from(self._FAILED, evidence, {}, reviewer_clears=True) == (Release.WITHHELD, None)
+        assert _release_from(self._FAILED, evidence, {}, reviewer_clears=True) == (Release.WITHHELD, REDACT_UNRESOLVED)
 
     def test_clearing_moves_nothing_but_a_redact_fail(self) -> None:
         """A pass, a recording REDACT never read, and an unassessed one are untouched."""
@@ -1175,7 +1196,7 @@ class TestTheMasksThatStandDecideTheRelease:
             Release.WITHOUT_REDACTION,
             REVIEWER_UNMASKED_ALL,
         )
-        assert _release_from(self._FAILED, evidence, {}) == (Release.WITHHELD, None)
+        assert _release_from(self._FAILED, evidence, {}) == (Release.WITHHELD, REDACT_VERIFY_FOUND)
 
     def test_a_pass_that_planned_no_mask_releases_the_original(self) -> None:
         """REDACT exempted every finding as declared task content: no copy masks anything.
@@ -1208,7 +1229,7 @@ class TestTheMasksThatStandDecideTheRelease:
 
     def test_standing_masks_never_move_a_withholding_or_an_unassessed_recording(self) -> None:
         """The word-level rule only thins a released copy; it releases nothing the evidence withheld."""
-        assert _release_from(self._FAILED, self._evidence(0, unmasked_n=2), {}) == (Release.WITHHELD, None)
+        assert _release_from(self._FAILED, self._evidence(0, unmasked_n=2), {}) == (Release.WITHHELD, REDACT_UNRESOLVED)
         assert _release_from(self._PASSED, self._evidence(0, unmasked_n=2), {}, REVIEWER_PROPOSED_REDACTION) == (
             Release.WITHHELD,
             REVIEWER_PROPOSED_REDACTION,

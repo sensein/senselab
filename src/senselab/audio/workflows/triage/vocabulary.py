@@ -188,8 +188,19 @@ UNPLACED_FINDING_UNREAD = (
     "a detector finding could not be placed on the transcript's words and no reviewer read the recording"
 )
 
-RELEASE_WITHHELD_GROUNDS = (REVIEWER_PROPOSED_REDACTION, UNPLACED_FINDING_UNREAD)
-"""Why a recording is withheld where REDACT itself did not withhold it."""
+REDACT_VERIFY_FOUND = (
+    "REDACT's re-scan of its redacted transcript still read identifying content and no reading cleared it"
+)
+
+REDACT_UNRESOLVED = "REDACT did not resolve its redaction, so neither copy may be handed on"
+
+RELEASE_WITHHELD_GROUNDS = (
+    REVIEWER_PROPOSED_REDACTION,
+    UNPLACED_FINDING_UNREAD,
+    REDACT_VERIFY_FOUND,
+    REDACT_UNRESOLVED,
+)
+"""Why a recording is withheld. One stands behind every :attr:`Release.WITHHELD`."""
 
 REVIEWER_CLEARED_RESCAN = (
     "REDACT's re-scan still read a finding, and the reviewer read the original as clean and proposed nothing to hide"
@@ -947,8 +958,10 @@ def _release_from(
 
     Returns:
         Which artefact may be handed on, never anything about the store, and the ground behind it.
-        A REDACT ``pass`` clears the redacted copy and not the original; the ground is None wherever
-        REDACT itself decided and a planned mask stands, and one of the controlled grounds otherwise.
+        A REDACT ``pass`` clears the redacted copy and not the original; the ground is None only where
+        that pass decided and a planned mask stands, and one of the controlled grounds otherwise. A
+        REDACT ``fail`` or ``flag`` that nothing clears withholds on :data:`REDACT_VERIFY_FOUND` or
+        :data:`REDACT_UNRESOLVED`.
         A copy that would mask nothing is never released as a redacted copy: the original is.
     """
     release, ground = _release_from_evidence(node_verdicts, evidence, ran, speech_declined)
@@ -972,6 +985,9 @@ def _release_from(
         and evidence.policy_masks_n > 0
     ):
         return Release.WITH_REDACTION, POLICY_MASKS_ONLY
+    if release is Release.WITHHELD and ground is None:
+        verify_found = redact is not None and redact.outcome is Outcome.FAIL and bool(evidence.rescan_survivors)
+        ground = REDACT_VERIFY_FOUND if verify_found else REDACT_UNRESOLVED
     if release is not Release.WITH_REDACTION:
         return release, ground
     reviewer = evidence.reviewer_unmasked_n > 0

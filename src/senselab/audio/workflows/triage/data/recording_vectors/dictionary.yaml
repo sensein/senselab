@@ -92,7 +92,7 @@ columns:
       RELEASE_WITHHELD_GROUNDS and RELEASE_WITH_REDACTION_GROUNDS.
     computation: The fold's `release_ground` attribute.
     source: [recording_vectors.py:extract, vocabulary.py:FileVerdict.record, vocabulary.py:_release_from]
-    null_means: REDACT's own verdict decided the release, which then needs no further ground.
+    null_means: REDACT passed and its planned masks stand, so the redacted copy releases on REDACT's own verdict; never null for a withheld recording.
 
   grounds:
     units: none
