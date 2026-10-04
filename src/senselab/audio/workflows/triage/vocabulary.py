@@ -277,8 +277,34 @@ class RedactionEvidence:
     reviewer_requested_n: int = 0
 
 
+@dataclass(frozen=True)
+class TaskEvidence:
+    """What the store says about whether the declared task was performed at all.
+
+    Attributes:
+        owning_branches: The branches whose expectations own the declared family; empty where the
+            recording declares no family, or one no branch owns.
+        duration_s: The recording's duration, or None where ADMIT recorded none.
+        minimum_duration_s: The shortest recording the declared family can occupy, or None.
+        event_tokens_n: How many bracketed ASR event tokens name the declared airway family's own
+            event (``[cough]`` in a cough task); 0 for every other family.
+    """
+
+    owning_branches: tuple[str, ...] = ()
+    duration_s: float | None = None
+    minimum_duration_s: float | None = None
+    event_tokens_n: int = 0
+
+
 UNMEASURABLE = "unmeasurable"
 ACOUSTICALLY_EMPTY = "acoustically_empty"
+TOO_SHORT_FOR_TASK = "too_short_for_task"
+"""Discard ground: the recording is far shorter than its declared task can take, a truncated or aborted capture."""
+DECLARED_TASK_ABSENT = "declared_task_absent"
+"""Discard ground: the branch owning the declared task ran and found none of it, whatever another branch found."""
+DISCARD_GROUNDS = (UNMEASURABLE, TOO_SHORT_FOR_TASK, ACOUSTICALLY_EMPTY, DECLARED_TASK_ABSENT)
+"""Every ground a file discards on, in the order the fold tries them; an operational flag (``rerun``) is
+tried between the third and the fourth, since a missing derivative may be why the task was not found."""
 
 AGREE = "agree"
 MISMATCH = "mismatch"
@@ -324,6 +350,7 @@ _ADMIT = "ADMIT"
 _PREPROCESS = "PREPROCESS"
 _REDACT = "REDACT"
 _SPEECH = "SPEECH"
+_AIRWAY = "AIRWAY"
 _VERDICT = "VERDICT"
 _ROUTING = "routing"
 
@@ -414,6 +441,8 @@ grounds and imports no gate table.
 # Ground keys: one stable, machine-readable key per ground, beside the human-readable ``why``.
 KEY_UNMEASURABLE = UNMEASURABLE
 KEY_ACOUSTICALLY_EMPTY = ACOUSTICALLY_EMPTY
+KEY_TOO_SHORT_FOR_TASK = TOO_SHORT_FOR_TASK
+KEY_DECLARED_TASK_ABSENT = DECLARED_TASK_ABSENT
 KEY_PREPROCESS_ERRORED = "preprocess_errored"
 KEY_ROUTING_ERRORED = "routing_errored"
 KEY_BAD_HINT_MAP = "config_bad_hint_map"
@@ -438,6 +467,8 @@ KEY_UNPLACED_UNREAD = "unplaced_finding_unread"
 GROUND_KEYS = (
     KEY_UNMEASURABLE,
     KEY_ACOUSTICALLY_EMPTY,
+    KEY_TOO_SHORT_FOR_TASK,
+    KEY_DECLARED_TASK_ABSENT,
     KEY_PREPROCESS_ERRORED,
     KEY_ROUTING_ERRORED,
     KEY_BAD_HINT_MAP,
@@ -838,7 +869,8 @@ class FileVerdict:
             REDACT did not decide it — one of :data:`RELEASE_WITHOUT_REDACTION_GROUNDS`,
             :data:`RELEASE_UNKNOWN_GROUNDS`, :data:`RELEASE_WITHHELD_GROUNDS` or
             :data:`RELEASE_WITH_REDACTION_GROUNDS`. None wherever REDACT itself decided.
-        discard_ground: ``"unmeasurable"``, ``"acoustically_empty"`` or None.
+        discard_ground: ``"unmeasurable"``, ``"too_short_for_task"``, ``"acoustically_empty"``,
+            ``"declared_task_absent"`` or None.
         ground_keys: The stable key of every ground behind the triage state -- the discard ground and
             every flag, sorted and deduplicated. Empty on a pass.
         findings: What each branch found, as a :class:`KindState` value, read off the spans it
@@ -1288,6 +1320,96 @@ def _hint_reading(claimed: bool, found: bool) -> str:
     return FOUND_UNCLAIMED if found else NO_CLAIM
 
 
+def _owner_performed(
+    branch: str, by_branch: Mapping[str, BranchReport], findings: Mapping[str, str], evidence: TaskEvidence
+) -> bool:
+    """Whether one owning branch says the declared task was performed.
+
+    Args:
+        branch: An owning branch of the declared family.
+        by_branch: The branch reports, keyed by branch.
+        findings: What each branch found, from :func:`_found`.
+        evidence: The task evidence; its event tokens corroborate an AIRWAY that could not decide.
+
+    Returns:
+        True where the branch's task conformance is True, or where it is AIRWAY, it found its kind,
+        could not decide its conformance, and the transcript carries an event token naming the
+        declared family's own event. A span alone, or a conformance of False, is never enough.
+    """
+    report = by_branch.get(branch)
+    if report is None or report.conformance_of != TASK:
+        return False
+    if report.conformance is True:
+        return True
+    return (
+        branch == _AIRWAY
+        and report.conformance == UNDETERMINED
+        and findings.get(branch) == KindState.PRESENT.value
+        and evidence.event_tokens_n > 0
+    )
+
+
+def declared_task_performed(
+    by_branch: Mapping[str, BranchReport], findings: Mapping[str, str], evidence: TaskEvidence
+) -> bool:
+    """Whether the declared task was performed, by the declared task's own branch.
+
+    A branch's span, a speaker turn, a speech run or an activity-envelope extent is no evidence of
+    the task; another branch's finding is never evidence of it. Where the recording declares no
+    family a branch owns, any branch's finding stands, as before.
+
+    Args:
+        by_branch: The branch reports, keyed by branch.
+        findings: What each branch found, from :func:`_found`.
+        evidence: The task evidence.
+
+    Returns:
+        Whether any owning branch says so (:func:`_owner_performed`); with no owning branch named,
+        whether any branch found its kind.
+    """
+    if not evidence.owning_branches:
+        return any(state == KindState.PRESENT.value for state in findings.values())
+    return any(_owner_performed(branch, by_branch, findings, evidence) for branch in evidence.owning_branches)
+
+
+def declared_task_absent(
+    by_branch: Mapping[str, BranchReport],
+    findings: Mapping[str, str],
+    evidence: TaskEvidence,
+    lexical_words_n: int | None,
+) -> bool:
+    """Whether the declared task's own branch ran and found none of the task at all.
+
+    Every owning branch must have reported and answered its task conformance without a True. A
+    branch found none of the task where it proposed no span into its own family; a SPEECH-owned task
+    also found none where the consensus transcript holds no lexical word -- a bracketed token, a
+    filler or nothing at all matches no speech task. What another branch found does not count.
+
+    Args:
+        by_branch: The branch reports, keyed by branch.
+        findings: What each branch found, from :func:`_found`.
+        evidence: The task evidence.
+        lexical_words_n: How many lexical words SPEECH read off the consensus, or None where it
+            left no report to say.
+
+    Returns:
+        True where the declared task is absent; False where no owning branch is named, an owner did
+        not report, or an owner says the task was performed.
+    """
+    owners = evidence.owning_branches
+    if not owners or any(branch not in by_branch for branch in owners):
+        return False
+    if declared_task_performed(by_branch, findings, evidence):
+        return False
+
+    def found_none(branch: str) -> bool:
+        if findings.get(branch) == KindState.ABSENT.value:
+            return True
+        return branch == _SPEECH and lexical_words_n == 0
+
+    return all(found_none(branch) for branch in owners)
+
+
 def fold_file_verdict(
     node_verdicts: Sequence[NodeVerdict],
     *,
@@ -1307,11 +1429,17 @@ def fold_file_verdict(
     agreed_redactions: frozenset[int] = frozenset(),
     unplaced: Sequence[tuple[str, str]] = (),
     second_opinion: Mapping[str, Any] | None = None,
+    task: TaskEvidence | None = None,
 ) -> FileVerdict:
     """Decide the file, from the deciding nodes' verdicts and the reporting nodes' reports.
 
-    Flags on every ground it finds and discards on two: ``unmeasurable``, which is ADMIT's own fail,
-    and ``acoustically_empty``, which is the ruleset's :data:`EMPTY` state. The grounds, the two
+    Flags on every ground it finds and discards on four: ``unmeasurable``, which is ADMIT's own fail;
+    ``too_short_for_task``, a recording shorter than its family's minimum; ``acoustically_empty``,
+    the ruleset's :data:`EMPTY` state where the declared task was not performed; and
+    ``declared_task_absent``, where the branch owning the declared task ran and found none of it --
+    tried after the operational grounds, which make the file ``rerun`` instead.
+    Only the declared task's own branch can say the task was performed, and only by its task
+    conformance, never by a span alone (:func:`declared_task_performed`). The grounds, the two
     axes and the agreement and hint tables are in
     ``specs/20260817-triage-workflow-dag/verdict.md``.
 
@@ -1350,6 +1478,9 @@ def fold_file_verdict(
         second_opinion: The ``second_opinion_answers`` measurement's attributes, or None. A confident
             disagreement with the reviewer is a flag ground under ``policy.second_opinion_disagreement_flags``
             (:func:`second_opinion_disagreements`); the release is unchanged.
+        task: Whether the declared task was performed at all: its owning branches, the recording's
+            duration against the family's minimum, and the ASR event tokens naming its event. None
+            is :class:`TaskEvidence` with nothing in it, under which the owning branch is unknown.
         unplaced: ``(family, state)`` for every detector finding SPEECH could not place on words, as
             :class:`~senselab.audio.workflows.triage.nodes.redact.UnplacedFinding` records them. An
             ``open`` one flags; an ``unread`` one flags and withholds.
@@ -1359,6 +1490,7 @@ def fold_file_verdict(
         deciding one.
     """
     rules = policy or FoldPolicy()
+    task_evidence = task or TaskEvidence()
     claims = hint_claims or {}
     spans = dict(spans_by_node or {})
     reports = {report.node: report for report in branch_reports}
@@ -1538,8 +1670,19 @@ def fold_file_verdict(
         decision = branch_decisions.get(branch)
         reported = by_branch.get(branch)
         kind = reported.kind if reported is not None else None
-        # Only MISMATCH-and-PRESENT is a flag ground; both directions stay in ``agreement``.
-        if agreement[branch] == MISMATCH and findings[branch] == KindState.PRESENT.value:
+        # Only MISMATCH-and-PRESENT is a flag ground, and where the declared task names its owning
+        # branches only that branch's task-conformant finding; both directions stay in ``agreement``.
+        if (
+            agreement[branch] == MISMATCH
+            and findings[branch] == KindState.PRESENT.value
+            and (
+                not task_evidence.owning_branches
+                or (
+                    branch in task_evidence.owning_branches
+                    and _owner_performed(branch, by_branch, findings, task_evidence)
+                )
+            )
+        ):
             flag(
                 branch,
                 f"mismatch: routing {routes[branch]} {branch}, it found it",
@@ -1574,17 +1717,27 @@ def fold_file_verdict(
 
     admit = next((reason for reason in reasons if reason.node == _ADMIT), None)
     flags = [reason for reason in reasons if reason.outcome is Outcome.FLAG]
-    found_anything = any(state == KindState.PRESENT.value for state in findings.values())
+    performed = declared_task_performed(by_branch, findings, task_evidence)
     ground: str | None = None
     if admit is not None and admit.outcome is Outcome.FAIL:
         triage = Triage.DISCARD
         ground = UNMEASURABLE
         reasons = [admit, *(reason for reason in reasons if reason is not admit)]
-    elif route_state == EMPTY and not found_anything:
+    elif (
+        task_evidence.duration_s is not None
+        and task_evidence.minimum_duration_s is not None
+        and task_evidence.duration_s < task_evidence.minimum_duration_s
+    ):
+        triage = Triage.DISCARD
+        ground = TOO_SHORT_FOR_TASK
+    elif route_state == EMPTY and not performed:
         triage = Triage.DISCARD
         ground = ACOUSTICALLY_EMPTY
     elif any(is_operational(reason.key) for reason in flags):
         triage = Triage.RERUN
+    elif declared_task_absent(by_branch, findings, task_evidence, (redaction or RedactionEvidence()).lexical_words_n):
+        triage = Triage.DISCARD
+        ground = DECLARED_TASK_ABSENT
     elif flags:
         triage = Triage.FLAG
     else:

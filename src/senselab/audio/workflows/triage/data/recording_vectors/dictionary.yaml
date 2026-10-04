@@ -108,8 +108,13 @@ columns:
 
   discard_ground:
     units: none
-    values: [unmeasurable, acoustically_empty]
-    description: Why the recording was discarded.
+    values: [unmeasurable, too_short_for_task, acoustically_empty, declared_task_absent]
+    description: >-
+      Why the recording was discarded: ADMIT could not measure it (`unmeasurable`); it is shorter than
+      its declared family's minimum in data/task_minimum_duration.yaml (`too_short_for_task`); the
+      ruleset found it empty and the declared task's own branch did not say the task was performed
+      (`acoustically_empty`); or that branch ran and found none of the task, a SPEECH task holding no
+      lexical word (`declared_task_absent`).
     computation: The fold's `discard_ground` attribute.
     source: [recording_vectors.py:extract, vocabulary.py:FileVerdict.record]
     null_means: The recording was not discarded.

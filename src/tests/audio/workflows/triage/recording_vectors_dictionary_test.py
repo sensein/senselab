@@ -15,10 +15,9 @@ from senselab.audio.workflows.triage.nodes import review
 from senselab.audio.workflows.triage.nodes.gates import CONFORMANCE_GATES, FLAG_GATES, GATE_SPECS
 from senselab.audio.workflows.triage.residue import ALIGNED, FREE, SYLLABLE, VOCAL
 from senselab.audio.workflows.triage.vocabulary import (
-    ACOUSTICALLY_EMPTY,
     BRANCH_ROUTE_STATES,
+    DISCARD_GROUNDS,
     FILE_ROUTE_STATES,
-    UNMEASURABLE,
     Release,
     Triage,
 )
@@ -192,7 +191,7 @@ def test_carrier_rejected_lists_every_name_voice_can_write() -> None:
     [
         ("verdict", [member.value for member in Triage]),
         ("release", [member.value for member in Release]),
-        ("discard_ground", [UNMEASURABLE, ACOUSTICALLY_EMPTY]),
+        ("discard_ground", list(DISCARD_GROUNDS)),
         ("route_state", list(FILE_ROUTE_STATES)),
         ("route_airway", list(BRANCH_ROUTE_STATES)),
         ("route_speech", list(BRANCH_ROUTE_STATES)),

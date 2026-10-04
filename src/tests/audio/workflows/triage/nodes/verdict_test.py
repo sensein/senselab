@@ -2159,3 +2159,21 @@ class TestAnotherSpeakerInsideTheTaskExtentIsAFlag:
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
         assert "dominant_speaker_share_min" not in {gate["gate"] for gate in result.file_verdict.gates["flagging"]}
         assert not any(EXTRA_SPEAKER_IN_EXTENT in why for why in self._flagged(result))
+
+
+class TestTheTaskEvidenceProfiles:
+    """The two data profiles VERDICT reads for whether the declared task was performed at all."""
+
+    def test_every_family_has_a_minimum_and_the_single_cough_ones_are_shorter(self) -> None:
+        """The default minimum covers every family; a single cough can be shorter."""
+        assert verdict_module.minimum_duration_s("harvard-sentences-list") == 1.0
+        assert verdict_module.minimum_duration_s("voluntary-cough") == 0.5
+        assert verdict_module.minimum_duration_s(None) is None
+
+    def test_a_cough_family_reads_its_own_event_tokens_and_no_filler(self) -> None:
+        """[cough] and the Chinese [咳] name a cough task's event; [um] names none; a speech task has none."""
+        tokens = verdict_module._airway_event_tokens()
+        assert {"cough", "咳"} <= tokens["respiration-and-cough-cough"]
+        assert "um" not in tokens["respiration-and-cough-cough"]
+        assert "breath" in tokens["respiration-and-cough-fivebreaths"]
+        assert "harvard-sentences-list" not in tokens
