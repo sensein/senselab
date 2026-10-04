@@ -26,9 +26,12 @@ The two axes this node keeps apart — triage and release — and the tables it 
 
 from __future__ import annotations
 
+import functools
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
+
+import yaml
 
 from senselab.audio.data_structures import AudioHints
 from senselab.audio.workflows.triage.config import TriageConfig
@@ -43,6 +46,7 @@ from senselab.audio.workflows.triage.nodes.branches import (
 from senselab.audio.workflows.triage.nodes.common import (
     REMINT,
     NodeResult,
+    consensus_words,
     find_measurement,
     find_measurements,
     find_verdict,
@@ -105,6 +109,7 @@ from senselab.audio.workflows.triage.vocabulary import (
     Outcome,
     RedactionEvidence,
     RunState,
+    TaskEvidence,
     fold_file_verdict,
     reviewer_may_unmask,
 )
@@ -276,6 +281,93 @@ def _spans_by_node(store: ProvStore) -> dict[str, int]:
             continue
         counts[node] = counts.get(node, 0) + 1
     return counts
+
+
+TASK_MINIMUM_DURATION_PATH = Path(__file__).parents[1] / "data" / "task_minimum_duration.yaml"
+AIRWAY_EVENT_TOKENS_PATH = Path(__file__).parents[1] / "data" / "airway_event_tokens.yaml"
+
+
+@functools.cache
+def _task_minimum_durations() -> tuple[float, dict[str, float]]:
+    """``data/task_minimum_duration.yaml``: the default minimum and the per-family ones, in seconds."""
+    document = yaml.safe_load(TASK_MINIMUM_DURATION_PATH.read_text()) or {}
+    families = {str(name): float(value) for name, value in (document.get("families") or {}).items()}
+    return float(document["default_s"]), families
+
+
+def minimum_duration_s(declared_family: str | None) -> float | None:
+    """The shortest recording a declared family can occupy, or None where nothing is declared.
+
+    Args:
+        declared_family: The task family the recording declares.
+
+    Returns:
+        The family's own minimum, else the profile's default; None where no family is declared.
+    """
+    if not declared_family:
+        return None
+    default, families = _task_minimum_durations()
+    return families.get(declared_family, default)
+
+
+@functools.cache
+def _airway_event_tokens() -> dict[str, frozenset[str]]:
+    """``data/airway_event_tokens.yaml``: per declared airway family, the event tokens naming its event."""
+    document = yaml.safe_load(AIRWAY_EVENT_TOKENS_PATH.read_text()) or {}
+    return {
+        str(family): frozenset(str(token).casefold() for token in document.get(kind) or ())
+        for family, kind in (document.get("families") or {}).items()
+    }
+
+
+def event_tokens_n(store: ProvStore, declared_family: str | None) -> int:
+    """How many bracketed consensus tokens name the declared airway family's own event.
+
+    Args:
+        store: The provenance store, read for its consensus words.
+        declared_family: The task family the recording declares.
+
+    Returns:
+        The count of ``[cough]``-like tokens for a cough family, ``[breath]``-like for a breath
+        family, and 0 for every other family or where no consensus exists.
+    """
+    tokens = _airway_event_tokens().get(declared_family or "")
+    if not tokens:
+        return 0
+    return sum(
+        1
+        for word in consensus_words(store)
+        if word.attributes.get("bracketed")
+        and str(word.attributes.get("text") or "").strip().strip("[]()<>").strip().casefold() in tokens
+    )
+
+
+def _task_evidence(store: ProvStore, declared_family: str | None) -> TaskEvidence:
+    """Whether the declared task was performed at all: its owner, the duration and its event tokens.
+
+    Args:
+        store: The provenance store, read for ADMIT's ``recording`` stream and the consensus words.
+        declared_family: The task family the recording declares.
+
+    Returns:
+        The evidence :func:`~senselab.audio.workflows.triage.vocabulary.fold_file_verdict` reads.
+    """
+    owners = tuple(branch for branch, rows in EXPECTATIONS.items() if declared_family and declared_family in rows)
+    recording = next(
+        (
+            stream
+            for stream in store.entities("stream")
+            if stream.attributes.get("name") == "recording" and not store.is_invalidated(stream.id)
+        ),
+        None,
+    )
+    duration = recording.extent[1] - recording.extent[0] if recording is not None and recording.extent else None
+    return TaskEvidence(
+        owning_branches=owners,
+        duration_s=duration,
+        minimum_duration_s=minimum_duration_s(declared_family) if owners else None,
+        event_tokens_n=event_tokens_n(store, declared_family),
+    )
 
 
 def _route_state(store: ProvStore) -> tuple[str | None, list[str]]:
@@ -823,6 +915,7 @@ def verdict(
         agreed_redactions=plan.agreed,
         unplaced=[(finding.family, finding.state) for finding in plan.unplaced],
         second_opinion=opinion,
+        task=_task_evidence(store, declared_family or None),
     )
 
     software = software_agent(store)

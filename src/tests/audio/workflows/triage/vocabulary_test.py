@@ -14,6 +14,7 @@ from typing import Any, Mapping, Sequence
 from senselab.audio.workflows.triage.vocabulary import (
     BAD_MAP_VALUES,
     CRITICAL_ABSENCE,
+    DECLARED_TASK_ABSENT,
     DECLINED,
     DOMINANT_SPEAKER_GATE,
     FINDINGS_ARE_TASK_CONTENT,
@@ -48,6 +49,7 @@ from senselab.audio.workflows.triage.vocabulary import (
     SECOND_OPINION_DISAGREES,
     SPEECH_UNREAD,
     TASK,
+    TOO_SHORT_FOR_TASK,
     UNAVAILABLE,
     UNDETERMINED,
     UNEXPLAINED_CONTENT,
@@ -69,6 +71,7 @@ from senselab.audio.workflows.triage.vocabulary import (
     RedactionEvidence,
     Release,
     RunState,
+    TaskEvidence,
     Triage,
     _release_from,
     fold_file_verdict,
@@ -2155,3 +2158,160 @@ class TestAnEmptyRecordingDiscards:
         assert folded.triage is Triage.DISCARD
         assert folded.discard_ground == "acoustically_empty"
         assert "conformance:SPEECH" in folded.ground_keys
+
+
+class TestTheDeclaredTaskDecides:
+    """Owner, 2026-10-05: a fragment is not the task, and only the declared task's branch can say it was done."""
+
+    _ADMIT_OK = [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")]
+
+    def test_a_short_filler_only_sentence_discards_as_too_short(self) -> None:
+        """A 0.3 s "[UM]" Harvard sentence, SPEECH holding a speaker turn: too short for the task."""
+        folded = fold_file_verdict(
+            self._ADMIT_OK,
+            branch_reports=[_report("SPEECH", "speech", conformance=False)],
+            spans_by_node=_found("SPEECH"),
+            branch_decisions=_all_declined(forced=("SPEECH",)),
+            ran={"SPEECH": RunState.COMPLETED},
+            hint_claims={"SPEECH": True},
+            route_state="empty",
+            declared_family="harvard-sentences-list",
+            redaction=RedactionEvidence(lexical_words_n=0, scanned=True),
+            task=TaskEvidence(owning_branches=("SPEECH",), duration_s=0.3, minimum_duration_s=1.0),
+        )
+        assert folded.triage is Triage.DISCARD
+        assert folded.discard_ground == TOO_SHORT_FOR_TASK
+        assert TOO_SHORT_FOR_TASK in folded.ground_keys
+
+    def test_a_single_breath_extent_does_not_perform_a_five_breath_task(self) -> None:
+        """AIRWAY's activity-envelope extent on an empty route is a span, not the task: it discards."""
+        folded = fold_file_verdict(
+            self._ADMIT_OK,
+            branch_reports=[_report("AIRWAY", "airway", conformance=UNDETERMINED)],
+            spans_by_node=_found("AIRWAY"),
+            branch_decisions=_all_declined(forced=("AIRWAY",)),
+            ran={"AIRWAY": RunState.COMPLETED},
+            hint_claims={"AIRWAY": True},
+            route_state="empty",
+            declared_family="respiration-and-cough-fivebreaths",
+            task=TaskEvidence(owning_branches=("AIRWAY",), duration_s=1.2, minimum_duration_s=1.0),
+        )
+        assert folded.triage is Triage.DISCARD
+        assert folded.discard_ground == "acoustically_empty"
+        assert not any(key.startswith("route_mismatch") for key in folded.ground_keys)
+
+    def test_a_short_single_breath_recording_discards_as_too_short(self) -> None:
+        """A 0.16 s single-breath fivebreaths recording: far shorter than the task can take."""
+        folded = fold_file_verdict(
+            self._ADMIT_OK,
+            branch_reports=[_report("AIRWAY", "airway", conformance=UNDETERMINED)],
+            spans_by_node=_found("AIRWAY"),
+            branch_decisions=_all_declined(forced=("AIRWAY",)),
+            ran={"AIRWAY": RunState.COMPLETED},
+            hint_claims={"AIRWAY": True},
+            route_state="empty",
+            declared_family="respiration-and-cough-fivebreaths",
+            task=TaskEvidence(owning_branches=("AIRWAY",), duration_s=0.16, minimum_duration_s=1.0),
+        )
+        assert folded.discard_ground == TOO_SHORT_FOR_TASK
+
+    def test_a_cough_token_corroborates_an_undecided_cough_task(self) -> None:
+        """[cough] in a cough task, AIRWAY undecided but finding its kind: the task stands."""
+        folded = fold_file_verdict(
+            self._ADMIT_OK,
+            branch_reports=[_report("AIRWAY", "airway", conformance=UNDETERMINED)],
+            spans_by_node=_found("AIRWAY"),
+            branch_decisions=_all_declined(forced=("AIRWAY",)),
+            ran={"AIRWAY": RunState.COMPLETED},
+            hint_claims={"AIRWAY": True},
+            route_state="empty",
+            declared_family="respiration-and-cough-cough",
+            task=TaskEvidence(owning_branches=("AIRWAY",), duration_s=4.0, minimum_duration_s=1.0, event_tokens_n=2),
+        )
+        assert folded.triage is not Triage.DISCARD
+        assert "route_mismatch:AIRWAY" in folded.ground_keys
+
+    def test_a_filler_token_corroborates_no_cough_task(self) -> None:
+        """No [cough] token (an [UM] is not one): the same recording discards."""
+        folded = fold_file_verdict(
+            self._ADMIT_OK,
+            branch_reports=[_report("AIRWAY", "airway", conformance=UNDETERMINED)],
+            spans_by_node=_found("AIRWAY"),
+            branch_decisions=_all_declined(forced=("AIRWAY",)),
+            ran={"AIRWAY": RunState.COMPLETED},
+            hint_claims={"AIRWAY": True},
+            route_state="empty",
+            declared_family="respiration-and-cough-cough",
+            task=TaskEvidence(owning_branches=("AIRWAY",), duration_s=4.0, minimum_duration_s=1.0, event_tokens_n=0),
+        )
+        assert folded.discard_ground == "acoustically_empty"
+
+    def test_an_airway_task_with_only_speech_found_discards_for_lack_of_the_task(self) -> None:
+        """SPEECH read words, AIRWAY ran and found nothing: the declared airway task is absent."""
+        folded = fold_file_verdict(
+            self._ADMIT_OK,
+            branch_reports=[
+                _report("AIRWAY", "airway", conformance=False),
+                BranchReport(node="SPEECH", kind="speech", conformance=UNDETERMINED, conformance_of=TASK),
+            ],
+            spans_by_node=_found("SPEECH"),
+            branch_decisions=_decisions(forced=("AIRWAY",), AIRWAY=DECLINED, SPEECH=ROUTED, VOICE=DECLINED),
+            ran={"AIRWAY": RunState.COMPLETED, "SPEECH": RunState.COMPLETED},
+            hint_claims={"AIRWAY": True},
+            route_state="routed",
+            declared_family="respiration-and-cough-cough",
+            redaction=RedactionEvidence(lexical_words_n=6, scanned=True),
+            task=TaskEvidence(owning_branches=("AIRWAY",), duration_s=6.0, minimum_duration_s=1.0),
+        )
+        assert folded.triage is Triage.DISCARD
+        assert folded.discard_ground == DECLARED_TASK_ABSENT
+
+    def test_a_speech_task_holding_no_lexical_word_has_no_task_match(self) -> None:
+        """Only bracketed tokens on a reading task: the declared speech task is absent."""
+        folded = fold_file_verdict(
+            self._ADMIT_OK,
+            branch_reports=[_report("SPEECH", "speech", conformance=False)],
+            spans_by_node=_found("SPEECH"),
+            branch_decisions=_decisions(SPEECH=ROUTED, AIRWAY=DECLINED, VOICE=DECLINED),
+            ran={"SPEECH": RunState.COMPLETED},
+            hint_claims={"SPEECH": True},
+            route_state="routed",
+            declared_family="harvard-sentences-list",
+            redaction=RedactionEvidence(lexical_words_n=0, scanned=True),
+            task=TaskEvidence(owning_branches=("SPEECH",), duration_s=3.0, minimum_duration_s=1.0),
+        )
+        assert folded.discard_ground == DECLARED_TASK_ABSENT
+
+    def test_a_performed_task_is_unaffected(self) -> None:
+        """A normal Harvard sentence: conformant, long enough, words read -- it passes."""
+        folded = fold_file_verdict(
+            self._ADMIT_OK,
+            branch_reports=[_report("SPEECH", "speech", conformance=True)],
+            spans_by_node=_found("SPEECH"),
+            branch_decisions=_decisions(SPEECH=ROUTED, AIRWAY=DECLINED, VOICE=DECLINED),
+            ran={"SPEECH": RunState.COMPLETED},
+            hint_claims={"SPEECH": True},
+            route_state="routed",
+            declared_family="harvard-sentences-list",
+            redaction=RedactionEvidence(lexical_words_n=8, scanned=True),
+            task=TaskEvidence(owning_branches=("SPEECH",), duration_s=3.5, minimum_duration_s=1.0),
+        )
+        assert folded.triage is Triage.PASS
+        assert folded.discard_ground is None
+
+    def test_a_missing_derivative_reruns_before_the_task_is_called_absent(self) -> None:
+        """A route the ruleset could not explain is owed a rerun; the empty task waits for it."""
+        folded = fold_file_verdict(
+            self._ADMIT_OK,
+            branch_reports=[_report("SPEECH", "speech", conformance=False)],
+            spans_by_node={},
+            branch_decisions=_decisions(SPEECH=ROUTED, AIRWAY=DECLINED, VOICE=DECLINED),
+            ran={"SPEECH": RunState.COMPLETED},
+            hint_claims={"SPEECH": True},
+            route_state="unexplained",
+            declared_family="diadochokinesis-ka",
+            redaction=RedactionEvidence(lexical_words_n=0, scanned=True),
+            task=TaskEvidence(owning_branches=("SPEECH",), duration_s=3.9, minimum_duration_s=1.0),
+        )
+        assert folded.triage is Triage.RERUN
+        assert folded.discard_ground is None

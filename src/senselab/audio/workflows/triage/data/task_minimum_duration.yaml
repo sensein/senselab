@@ -1,0 +1,19 @@
+# The shortest recording a declared task can occupy. A recording shorter than its family's minimum
+# discards with the ground `too_short_for_task`: a truncated or aborted capture, whatever a branch
+# reports from it.
+#
+# derivation: owner, 2026-10-05, after listening to 16 empty-route recordings (0.12-0.45 s, gain-lifted
+# copies in ~/Downloads/empty_route_check_20261005/): "all of the ones brought in can be discarded.
+# they are all too short relative to the task, and none of them contain the task." Measured on the r12
+# parquet (62,550 recordings, schema 19) excluding the 114 empty-route recordings: 1,475 recordings last
+# under 0.5 s (1,405 of them already flagged), 1,644 under 1.0 s and 1,734 under 1.5 s, so 1.0-1.5 s
+# holds only 90 -- the gap between a cluster of fragments and the performances. Of the 1,644 under
+# 1.0 s, 98 carry two or more lexical words and they are fragments ("Of it.", "Sorry for.", "Good job.")
+# of an aborted capture. No protocol task is performed in under 1 s except a single cough, so the two
+# single-cough families sit at 0.5 s, just above the longest cough fragment the owner listened to
+# (0.45 s). The per-family counts and examples are in specs/20261005-truncated-capture-discard/design.md.
+version: 1
+default_s: 1.0
+families:
+  voluntary-cough: 0.5
+  respiration-and-cough-v2-hardcough: 0.5

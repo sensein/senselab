@@ -1,0 +1,26 @@
+# Bracketed ASR event tokens that name a declared airway task's own event. Such a token is never a
+# word (not for SPEECH, residue or PII); in a recording declaring one of these families it corroborates
+# AIRWAY's own event detection where AIRWAY could not decide its task conformance.
+#
+# derivation: owner, 2026-10-05: bracketed tokens never count as words "unless the bracketed token is
+# a [cough] in an airway cough task". Tokens are the ones the ASR backends actually wrote on the r12
+# consensus transcripts (62,550 recordings), compared lower-cased without brackets: in the cough
+# families [cough] 3,157 and [咳] (Chinese "cough") 2,196; corpus-wide [coughing] 55 and [coughs] 2; in
+# the breath families [breath] 8,898. No [inhale], [exhale] or [breathing] occurs; they are listed
+# because the owner named [inhale]. [throatclearing], [ahem], [sniff], [yawn], [laughter], [um] and
+# [uh] name no family's own event and corroborate nothing.
+version: 1
+cough: [cough, coughing, coughs, 咳]
+breath: [breath, breathing, inhale, exhale]
+families:
+  respiration-and-cough-cough: cough
+  respiration-and-cough-v2-hardcough: cough
+  voluntary-cough: cough
+  breath-sounds: breath
+  respiration-and-cough-breath: breath
+  respiration-and-cough-fivebreaths: breath
+  respiration-and-cough-threequickbreaths: breath
+  respiration-and-cough-v2-breath: breath
+  respiration-and-cough-v2-threebreaths: breath
+  respiration-and-cough-v2-threebreathsmouth: breath
+  respiration-and-cough-v2-threebreathsnose: breath
