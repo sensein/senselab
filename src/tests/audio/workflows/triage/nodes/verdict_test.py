@@ -339,7 +339,8 @@ class TestAnUnreadableNodeVerdictDoesNotKillTheFold:
         store.was_generated_by(alien, activity)
 
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
-        assert result.file_verdict.triage is Triage.FLAG
+        assert result.file_verdict.triage is Triage.RERUN
+        assert "node_outcome_unreadable" in result.file_verdict.ground_keys
         assert any("SPEECH" in reason.why and "'discard'" in reason.why for reason in result.file_verdict.reasons), (
             "the offending node and the value it wrote are both named"
         )
@@ -365,7 +366,7 @@ class TestAnUnreadableNodeVerdictDoesNotKillTheFold:
         assert result.file_verdict.findings["AIRWAY"] == "present"
         assert result.file_verdict.findings["SPEECH"] == "uncertain", "no branch answered for it"
         assert result.file_verdict.agreement["SPEECH"] == "not_run"
-        assert _file_verdict_entity(store).attributes["triage"] == "flag"
+        assert _file_verdict_entity(store).attributes["triage"] == "rerun"
 
 
 class TestTheBranchDecisionsAreRead:
@@ -383,7 +384,7 @@ class TestTheBranchDecisionsAreRead:
         assert result.file_verdict.agreement["SPEECH"] == "not_run"
         assert result.file_verdict.triage is Triage.PASS
 
-    def test_an_asked_branch_that_left_no_verdict_flags(
+    def test_an_asked_branch_that_left_no_verdict_reruns(
         self, make_verdict_store: Callable[..., ProvStore], config: TriageConfig, tmp_path: Path
     ) -> None:
         """ROUTING selected SPEECH and nothing came back; the reason names which silence it was."""
@@ -392,7 +393,8 @@ class TestTheBranchDecisionsAreRead:
             routed=ROUTED_PAIR,
         )
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path, ran={"SPEECH": RunState.ERRORED})
-        assert result.file_verdict.triage is Triage.FLAG
+        assert result.file_verdict.triage is Triage.RERUN
+        assert result.file_verdict.ground_keys == ["branch_silent:SPEECH"]
         assert any("errored without a verdict" in reason.why for reason in result.file_verdict.reasons)
 
     def test_the_branches_map_joins_the_decision_to_the_reported_conformance(
@@ -428,7 +430,7 @@ class TestTheBranchDecisionsAreRead:
         assert result.file_verdict.branches == {}
         assert result.file_verdict.triage is Triage.PASS
 
-    def test_a_routing_error_without_decisions_flags_instead_of_discarding(
+    def test_a_routing_error_without_decisions_reruns_instead_of_discarding(
         self, make_verdict_store: Callable[..., ProvStore], config: TriageConfig, tmp_path: Path
     ) -> None:
         """An execution failure cannot be mistaken for ROUTING deliberately declining every branch."""
@@ -439,7 +441,7 @@ class TestTheBranchDecisionsAreRead:
             route=False,
         )
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path, ran={"routing": RunState.ERRORED})
-        assert result.file_verdict.triage is Triage.FLAG
+        assert result.file_verdict.triage is Triage.RERUN
         assert result.file_verdict.discard_ground is None
         assert any(
             "routing failed; branch execution was withheld" in reason.why for reason in result.file_verdict.reasons
@@ -449,10 +451,10 @@ class TestTheBranchDecisionsAreRead:
 class TestHintsAreReadThroughRoutingsMap:
     """The tag that forces a branch is the tag that can name a mismatch; one map, not two."""
 
-    def test_a_declared_kind_no_branch_found_flags(
+    def test_a_declared_kind_no_branch_found_in_an_empty_recording_is_detail(
         self, make_verdict_store: Callable[..., ProvStore], tmp_path: Path
     ) -> None:
-        """The declaration claimed a cough and AIRWAY found no labelled span."""
+        """The declaration claimed a cough, AIRWAY found no labelled span, and the recording is empty."""
         hint = AudioHints(may_contain=["cough"])
         hint_config = _hint_config(tmp_path)
         store = make_verdict_store(
@@ -464,7 +466,8 @@ class TestHintsAreReadThroughRoutingsMap:
         )
         result = verdict_module.verdict(store, None, hint_config, hint, run_dir=tmp_path)
         assert result.file_verdict.hints["AIRWAY"] == "claimed_not_found"
-        assert result.file_verdict.triage is Triage.FLAG
+        assert result.file_verdict.triage is Triage.DISCARD
+        assert "hint_mismatch:AIRWAY" in result.file_verdict.ground_keys
 
     def test_a_speech_type_value_is_a_claim_like_any_tag(
         self, make_verdict_store: Callable[..., ProvStore], tmp_path: Path
@@ -513,7 +516,7 @@ class TestHintsAreReadThroughRoutingsMap:
         )
         result = verdict_module.verdict(store, None, config, hint, run_dir=tmp_path)
         assert result.file_verdict.hints["AIRWAY"] == "claimed_not_found"
-        assert result.file_verdict.triage is Triage.FLAG
+        assert result.file_verdict.triage is Triage.DISCARD
 
     def test_a_declaration_no_decision_survived_to_read_is_named_not_dropped(
         self, make_verdict_store: Callable[..., ProvStore], config: TriageConfig, tmp_path: Path
@@ -529,7 +532,8 @@ class TestHintsAreReadThroughRoutingsMap:
         )
         result = verdict_module.verdict(store, None, config, hint, run_dir=tmp_path)
         assert result.file_verdict.hints == {}
-        assert result.file_verdict.triage is Triage.FLAG
+        assert result.file_verdict.triage is Triage.RERUN
+        assert "declaration_unread" in result.file_verdict.ground_keys
         assert any(reason.why == UNREAD_DECLARATION for reason in result.file_verdict.reasons)
         assert _file_verdict_entity(store).attributes["hints"] == {}
 
@@ -597,10 +601,10 @@ class TestHintsAreReadThroughRoutingsMap:
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
         assert not any(reason.why == UNREAD_DECLARATION for reason in result.file_verdict.reasons)
 
-    def test_a_map_typo_flags_the_file_it_would_otherwise_have_discarded(
+    def test_a_map_typo_is_named_on_a_file_that_still_discards_as_empty(
         self, make_verdict_store: Callable[..., ProvStore], tmp_path: Path
     ) -> None:
-        """ROUTING recorded the typo on every decision; the fold must not discard over it."""
+        """ROUTING recorded the typo on every decision; the fold names it beside the empty discard."""
         path = tmp_path / "typo.yaml"
         path.write_text("routing:\n  hint_branch_map:\n    cough: AIRWY\n")
         typo_config = load_triage_config(path)
@@ -613,16 +617,17 @@ class TestHintsAreReadThroughRoutingsMap:
             hint=hint,
         )
         result = verdict_module.verdict(store, None, typo_config, hint, run_dir=tmp_path)
-        assert result.file_verdict.triage is Triage.FLAG
-        assert result.file_verdict.discard_ground is None
+        assert result.file_verdict.triage is Triage.DISCARD
+        assert result.file_verdict.discard_ground == "acoustically_empty"
+        assert "config_bad_hint_map" in result.file_verdict.ground_keys
         assert result.file_verdict.bad_map_values == {"cough": "AIRWY"}
         assert any("AIRWY" in reason.why for reason in result.file_verdict.reasons)
         assert _file_verdict_entity(store).attributes["bad_map_values"] == {"cough": "AIRWY"}
 
-    def test_a_declaration_prevents_the_empty_discard(
+    def test_a_declaration_no_longer_prevents_the_empty_discard(
         self, make_verdict_store: Callable[..., ProvStore], tmp_path: Path
     ) -> None:
-        """Discarding a file the declaration says had a cough would delete the graph's own error."""
+        """DAG review proposal 3: an empty recording discards; the unmet declaration is detail."""
         hint = AudioHints(may_contain=["cough"])
         hint_config = _hint_config(tmp_path)
         store = make_verdict_store(
@@ -633,8 +638,8 @@ class TestHintsAreReadThroughRoutingsMap:
             hint=hint,
         )
         result = verdict_module.verdict(store, None, hint_config, hint, run_dir=tmp_path)
-        assert result.file_verdict.triage is Triage.FLAG
-        assert result.file_verdict.discard_ground is None
+        assert result.file_verdict.triage is Triage.DISCARD
+        assert result.file_verdict.discard_ground == "acoustically_empty"
 
 
 class TestTheReleaseAxis:
@@ -1147,7 +1152,7 @@ class TestTheRedactionReviewerAnnotatesAndThisNodeDecides:
         named = [
             reason.why for reason in result.file_verdict.reasons if reason.why.startswith(PERSON_NAME_AWAITS_REVIEW)
         ]
-        assert named == [f'{PERSON_NAME_AWAITS_REVIEW}: 1 name word(s) masked; release proposed for "Alice"']
+        assert named == [f"{PERSON_NAME_AWAITS_REVIEW}: 1 name word(s) masked; release proposed for 1 name(s)"]
         approved = _policy_config(tmp_path, "redaction:\n  name_approvals:\n    REC: [Alice]\n")
         again = verdict_module.verdict(store, None, approved, run_dir=tmp_path)
         assert self._states(store) == {"Alice": "unmasked_by_approval"}
@@ -1511,7 +1516,7 @@ class TestWhatTheStoreRecords:
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
         assert "SPEECH" not in result.file_verdict.conformance
         assert result.file_verdict.findings["SPEECH"] == "uncertain"
-        assert result.file_verdict.triage is Triage.FLAG
+        assert result.file_verdict.triage is Triage.RERUN
         assert speech.id not in result.view
 
     def test_a_superseded_report_is_replaced_not_added(
@@ -1728,7 +1733,8 @@ class TestTheGatesDecideTheDeclaredTask:
         assert result.file_verdict.conformance["VOICE"] is True
         flags = {gate["gate"]: gate for gate in result.file_verdict.gates["flagging"]}
         assert flags["f0_spread_max_semitones"]["passed"] is False
-        assert result.file_verdict.triage is Triage.FLAG
+        assert "gate:f0_spread_max_semitones" in result.file_verdict.ground_keys
+        assert result.file_verdict.triage is not Triage.PASS
 
     def test_an_absent_reading_is_undetermined_rather_than_a_non_conformance(
         self, config: TriageConfig, tmp_path: Path
@@ -2070,7 +2076,8 @@ class TestAnotherSpeakerInsideTheTaskExtentIsAFlag:
         """An interjection in the middle of the task: the gate's whole purpose."""
         store = self._store({self.READING: 0.6, "response_duration_s": 8.0})
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
-        assert result.file_verdict.triage is Triage.FLAG
+        assert "gate:dominant_speaker_share_min" in result.file_verdict.ground_keys
+        assert result.file_verdict.triage is not Triage.PASS
         assert any(EXTRA_SPEAKER_IN_EXTENT in why for why in self._flagged(result))
 
     def test_a_speaker_only_outside_the_task_extent_does_not_flag(self, config: TriageConfig, tmp_path: Path) -> None:

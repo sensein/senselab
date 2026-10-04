@@ -10,7 +10,7 @@ agreement and hint tables and what each input contributes are in
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import Any, Literal, Mapping, Sequence
 
@@ -91,10 +91,16 @@ class Outcome(Enum):
 
 
 class Triage(Enum):
-    """What should happen to this recording. The file axis; a node's ``Outcome`` is not one of these."""
+    """What should happen to this recording. The file axis; a node's ``Outcome`` is not one of these.
+
+    ``rerun`` is a recording the pipeline still owes something -- a missing derivative, a node that did
+    not finish, a configuration the fold cannot read -- before anything about the participant can be
+    concluded; :data:`OPERATIONAL_GROUND_KEYS` names those grounds.
+    """
 
     PASS = "pass"
     FLAG = "flag"
+    RERUN = "rerun"
     DISCARD = "discard"
 
 
@@ -405,6 +411,188 @@ grounds and imports no gate table.
 """
 
 
+# Ground keys: one stable, machine-readable key per ground, beside the human-readable ``why``.
+KEY_UNMEASURABLE = UNMEASURABLE
+KEY_ACOUSTICALLY_EMPTY = ACOUSTICALLY_EMPTY
+KEY_PREPROCESS_ERRORED = "preprocess_errored"
+KEY_ROUTING_ERRORED = "routing_errored"
+KEY_BAD_HINT_MAP = "config_bad_hint_map"
+KEY_DECLARATION_UNREAD = "declaration_unread"
+KEY_ROUTE_UNEXPLAINED = "route_unexplained"
+KEY_ROUTE_UNREADABLE = "route_unreadable"
+KEY_CRITICAL_ABSENCE = "critical_absence"
+KEY_TAXONOMY_NO_CLASSIFIER = "taxonomy_no_classifier"
+KEY_REDACT_RESCAN_INCOMPLETE = "redact_rescan_incomplete"
+KEY_UNCOMPUTED_READING = "uncomputed_reading"
+KEY_NODE_OUTCOME_UNREADABLE = "node_outcome_unreadable"
+KEY_NO_LEXICAL_ITEM = "speech_no_lexical_item"
+KEY_REVIEWER_RESIDUE = "reviewer_residue"
+KEY_PERSON_NAME_REVIEW = "person_name_review"
+KEY_REVIEWER_SECOND_SPEAKER = "reviewer_second_speaker"
+KEY_REVIEWER_NAMED_NO_WORDS = "reviewer_named_no_words"
+KEY_INSTRUCTIONS_SPOKEN = "instructions_spoken"
+KEY_SECOND_OPINION_DISAGREES = "second_opinion_disagreement"
+KEY_UNPLACED_OPEN = "unplaced_finding_open"
+KEY_UNPLACED_UNREAD = "unplaced_finding_unread"
+
+GROUND_KEYS = (
+    KEY_UNMEASURABLE,
+    KEY_ACOUSTICALLY_EMPTY,
+    KEY_PREPROCESS_ERRORED,
+    KEY_ROUTING_ERRORED,
+    KEY_BAD_HINT_MAP,
+    KEY_DECLARATION_UNREAD,
+    KEY_ROUTE_UNEXPLAINED,
+    KEY_ROUTE_UNREADABLE,
+    KEY_CRITICAL_ABSENCE,
+    KEY_TAXONOMY_NO_CLASSIFIER,
+    KEY_REDACT_RESCAN_INCOMPLETE,
+    KEY_UNCOMPUTED_READING,
+    KEY_NODE_OUTCOME_UNREADABLE,
+    KEY_NO_LEXICAL_ITEM,
+    KEY_REVIEWER_RESIDUE,
+    KEY_PERSON_NAME_REVIEW,
+    KEY_REVIEWER_SECOND_SPEAKER,
+    KEY_REVIEWER_NAMED_NO_WORDS,
+    KEY_INSTRUCTIONS_SPOKEN,
+    KEY_SECOND_OPINION_DISAGREES,
+    KEY_UNPLACED_OPEN,
+    KEY_UNPLACED_UNREAD,
+)
+"""Every ground key that names no node, gate or branch of its own."""
+
+PREFIX_GATE = "gate"
+PREFIX_CONFORMANCE = "conformance"
+PREFIX_NOTHING_READ = "nothing_read"
+PREFIX_STORE_ASSERTION = "store_assertion_contradicted"
+PREFIX_CONFORMANCE_UNANSWERED = "conformance_unanswered"
+PREFIX_DEVIATION = "deviation"
+PREFIX_UNMEASURED = "unmeasured_operating_point"
+PREFIX_ROUTE_MISMATCH = "route_mismatch"
+PREFIX_BRANCH_SILENT = "branch_silent"
+PREFIX_HINT_MISMATCH = "hint_mismatch"
+PREFIX_NODE = "node"
+
+GROUND_KEY_PREFIXES = (
+    PREFIX_GATE,
+    PREFIX_CONFORMANCE,
+    PREFIX_NOTHING_READ,
+    PREFIX_STORE_ASSERTION,
+    PREFIX_CONFORMANCE_UNANSWERED,
+    PREFIX_DEVIATION,
+    PREFIX_UNMEASURED,
+    PREFIX_ROUTE_MISMATCH,
+    PREFIX_BRANCH_SILENT,
+    PREFIX_HINT_MISMATCH,
+    PREFIX_NODE,
+)
+"""Ground keys written ``<prefix>:<name>``, the name being a gate, a reporting node or a branch."""
+
+OPERATIONAL_GROUND_KEYS = frozenset(
+    {
+        KEY_PREPROCESS_ERRORED,
+        KEY_ROUTING_ERRORED,
+        KEY_BAD_HINT_MAP,
+        KEY_DECLARATION_UNREAD,
+        KEY_ROUTE_UNEXPLAINED,
+        KEY_ROUTE_UNREADABLE,
+        KEY_CRITICAL_ABSENCE,
+        KEY_TAXONOMY_NO_CLASSIFIER,
+        KEY_REDACT_RESCAN_INCOMPLETE,
+        KEY_UNCOMPUTED_READING,
+        KEY_NODE_OUTCOME_UNREADABLE,
+    }
+)
+"""Grounds that say the pipeline owes the recording something, not that the participant did anything.
+A flag on one of these makes the file ``rerun`` (:attr:`Triage.RERUN`)."""
+
+OPERATIONAL_GROUND_PREFIXES = frozenset({PREFIX_UNMEASURED, PREFIX_BRANCH_SILENT})
+"""Prefixed grounds that are operational in the same sense."""
+
+RELEASE_GROUND_KEYS: dict[str, str] = {
+    NO_LEXICAL_WORD: "no_lexical_word",
+    NOTHING_BEYOND_STIMULUS: "nothing_beyond_stimulus",
+    SCAN_FOUND_NOTHING: "scan_found_nothing",
+    NON_LEXICAL_TASK: "non_lexical_task",
+    REVIEWER_UNMASKED_ALL: "reviewer_unmasked_all",
+    NO_CONTENT_MASKED: "no_content_masked",
+    FINDINGS_ARE_TASK_CONTENT: "findings_are_task_content",
+    REVIEWER_CLEARED_UNMASKED: "reviewer_cleared_unmasked",
+    NO_TRANSCRIPT: "no_transcript",
+    SPEECH_UNREAD: "speech_unread",
+    REDACTION_OWED: "redaction_owed",
+    SCAN_UNRECORDED: "scan_unrecorded",
+    REVIEWER_PROPOSED_REDACTION: "reviewer_proposed_redaction",
+    UNPLACED_FINDING_UNREAD: "unplaced_finding_unread",
+    REDACT_VERIFY_FOUND: "redact_verify_found",
+    REDACT_UNRESOLVED: "redact_unresolved",
+    REVIEWER_CLEARED_RESCAN: "reviewer_cleared_rescan",
+    REVIEWER_UNMASKED_SOME: "reviewer_unmasked_some",
+    MASKS_TRIMMED_TO_CONTENT: "masks_trimmed_to_content",
+    POLICY_MASKS_ADDED: "policy_masks_added",
+    POLICY_MASKS_ONLY: "policy_masks_only",
+}
+"""The stable key of every release ground. A release REDACT itself decided carries
+:data:`RELEASE_DECIDED_BY_REDACT`."""
+
+RELEASE_DECIDED_BY_REDACT = "redact_decided"
+
+
+def is_operational(key: str | None) -> bool:
+    """Whether a ground key says the pipeline, not the participant, is what the flag is about.
+
+    Args:
+        key: A ground key, or None.
+
+    Returns:
+        True for a key in :data:`OPERATIONAL_GROUND_KEYS` or under a prefix in
+        :data:`OPERATIONAL_GROUND_PREFIXES`.
+    """
+    if not key:
+        return False
+    return key in OPERATIONAL_GROUND_KEYS or key.split(":", 1)[0] in OPERATIONAL_GROUND_PREFIXES
+
+
+def ground_key(verdict: "NodeVerdict") -> str:
+    """The stable key of a verdict's ground, its own where it carries one.
+
+    A deciding node writes no key, and stores written before keys existed carry none, so the key of
+    such a verdict is derived from the node and its outcome.
+
+    Args:
+        verdict: A contributing verdict.
+
+    Returns:
+        The key.
+    """
+    if verdict.key:
+        return verdict.key
+    if verdict.node == _ADMIT and verdict.outcome is Outcome.FAIL:
+        return KEY_UNMEASURABLE
+    if verdict.node == "TAXONOMY" and verdict.outcome is Outcome.FLAG:
+        return KEY_TAXONOMY_NO_CLASSIFIER
+    if verdict.node == _REDACT and verdict.outcome is Outcome.FLAG:
+        return KEY_REDACT_RESCAN_INCOMPLETE
+    if "which is not a node outcome" in verdict.why:
+        return KEY_NODE_OUTCOME_UNREADABLE
+    return f"{PREFIX_NODE}:{verdict.node}:{verdict.outcome.value}"
+
+
+def release_ground_key(release_ground: str | None) -> str:
+    """The stable key of a release ground.
+
+    Args:
+        release_ground: The release ground, or None where REDACT itself decided the release.
+
+    Returns:
+        Its key; :data:`RELEASE_DECIDED_BY_REDACT` for None, and the text itself for a ground this
+        vocabulary does not hold, so an unknown ground stays visible rather than collapsing.
+    """
+    if release_ground is None:
+        return RELEASE_DECIDED_BY_REDACT
+    return RELEASE_GROUND_KEYS.get(release_ground, release_ground)
+
+
 @dataclass(frozen=True)
 class NodeVerdict:
     """One conclusion about the recording.
@@ -419,12 +607,16 @@ class NodeVerdict:
             fold.
         kind: The kind the conclusion is about, or None.
         why: The reason, in controlled vocabulary — never transcript text.
+        key: The ground's stable key, one of :data:`GROUND_KEYS` or ``<prefix>:<name>`` for a prefix in
+            :data:`GROUND_KEY_PREFIXES`; None on a verdict a deciding node wrote, which
+            :func:`ground_key` derives.
     """
 
     node: str
     outcome: Outcome | Triage
     kind: str | None
     why: str
+    key: str | None = None
 
 
 @dataclass(frozen=True)
@@ -647,6 +839,8 @@ class FileVerdict:
             :data:`RELEASE_UNKNOWN_GROUNDS`, :data:`RELEASE_WITHHELD_GROUNDS` or
             :data:`RELEASE_WITH_REDACTION_GROUNDS`. None wherever REDACT itself decided.
         discard_ground: ``"unmeasurable"``, ``"acoustically_empty"`` or None.
+        ground_keys: The stable key of every ground behind the triage state -- the discard ground and
+            every flag, sorted and deduplicated. Empty on a pass.
         findings: What each branch found, as a :class:`KindState` value, read off the spans it
             proposed in its own family. ``uncertain`` where it left no report at all.
         conformance: Each reporting node's conformance, keyed by node — True, False or
@@ -682,6 +876,7 @@ class FileVerdict:
     release: Release
     discard_ground: str | None = None
     release_ground: str | None = None
+    ground_keys: list[str] = field(default_factory=list)
     findings: dict[str, str] = field(default_factory=dict)
     conformance: dict[str, Conformance] = field(default_factory=dict)
     conformance_of: dict[str, str] = field(default_factory=dict)
@@ -715,6 +910,8 @@ class FileVerdict:
             "release": self.release.value,
             "discard_ground": self.discard_ground,
             "release_ground": self.release_ground,
+            "release_ground_key": release_ground_key(self.release_ground),
+            "ground_keys": list(self.ground_keys),
             "declared_family": self.declared_family,
             "findings": dict(self.findings),
             "conformance": dict(self.conformance),
@@ -733,7 +930,8 @@ class FileVerdict:
             "gates": dict(self.gates),
             "ran": {node: state.value for node, state in self.ran.items()},
             "reasons": [
-                {"node": r.node, "outcome": r.outcome.value, "kind": r.kind, "why": r.why} for r in self.reasons
+                {"node": r.node, "outcome": r.outcome.value, "kind": r.kind, "why": r.why, "key": ground_key(r)}
+                for r in self.reasons
             ],
         }
 
@@ -1186,51 +1384,45 @@ def fold_file_verdict(
     for recorded in branch_decisions.values():
         bad_map_values.update(recorded.bad_map_values)
 
-    reasons = list(node_verdicts)
+    reasons = [replace(verdict, key=ground_key(verdict)) for verdict in node_verdicts]
+
+    def flag(node: str, why: str, key: str, kind: str | None = None) -> None:
+        reasons.append(NodeVerdict(node, Outcome.FLAG, kind, why, key))
+
     if ran.get(_PREPROCESS) is RunState.ERRORED:
-        reasons.append(
-            NodeVerdict(
-                _PREPROCESS,
-                Outcome.FLAG,
-                None,
-                "preprocess failed; no derivative was measured because conditioning itself did not complete",
-            )
+        flag(
+            _PREPROCESS,
+            "preprocess failed; no derivative was measured because conditioning itself did not complete",
+            KEY_PREPROCESS_ERRORED,
         )
     if ran.get(_ROUTING) is RunState.ERRORED:
-        reasons.append(
-            NodeVerdict(
-                _ROUTING,
-                Outcome.FLAG,
-                None,
-                "routing failed; branch execution was withheld because no complete routing result was available",
-            )
+        flag(
+            _ROUTING,
+            "routing failed; branch execution was withheld because no complete routing result was available",
+            KEY_ROUTING_ERRORED,
         )
     if bad_map_values:
         named = ", ".join(f"{tag}: {value}" for tag, value in sorted(bad_map_values.items()))
-        reasons.append(NodeVerdict(_ROUTING, Outcome.FLAG, None, f"{BAD_MAP_VALUES}: {named}"))
+        flag(_ROUTING, f"{BAD_MAP_VALUES}: {named}", KEY_BAD_HINT_MAP)
     if hint_claims is None:
-        reasons.append(NodeVerdict(_VERDICT, Outcome.FLAG, None, UNREAD_DECLARATION))
+        flag(_VERDICT, UNREAD_DECLARATION, KEY_DECLARATION_UNREAD)
     if route_state == UNEXPLAINED:
-        reasons.append(NodeVerdict(_ROUTING, Outcome.FLAG, None, UNEXPLAINED_CONTENT))
+        flag(_ROUTING, UNEXPLAINED_CONTENT, KEY_ROUTE_UNEXPLAINED)
     if route_state == UNREADABLE:
-        reasons.append(NodeVerdict(_ROUTING, Outcome.FLAG, None, UNREADABLE_EMPTINESS))
+        flag(_ROUTING, UNREADABLE_EMPTINESS, KEY_ROUTE_UNREADABLE)
     absences = {branch: dict(gates) for branch, gates in (critical_absences or {}).items()}
     if absences:
         named = "; ".join(
             f"{branch}: " + ", ".join(f"{gate} ({why})" for gate, why in sorted(gates.items()))
             for branch, gates in sorted(absences.items())
         )
-        reasons.append(NodeVerdict(_ROUTING, Outcome.FLAG, None, f"{CRITICAL_ABSENCE}: {named}"))
-    # A task the ruleset routed to SPEECH is a task that asks for words. SPEECH running over it and
-    # reading none is the task not having happened, and it must be visible as that rather than as a
-    # quiet clearance: the release axis calls it releasable, which is true and is not the whole of
-    # it. Owner, 2026-09-25.
+        flag(_ROUTING, f"{CRITICAL_ABSENCE}: {named}", KEY_CRITICAL_ABSENCE)
     if (
         (redaction or RedactionEvidence()).lexical_words_n == 0
         and ran.get(_SPEECH) is RunState.COMPLETED
         and routes.get(_SPEECH) == ROUTED
     ):
-        reasons.append(NodeVerdict(_SPEECH, Outcome.FLAG, None, NO_LEXICAL_ITEM_PRODUCED))
+        flag(_SPEECH, NO_LEXICAL_ITEM_PRODUCED, KEY_NO_LEXICAL_ITEM)
     annotation = dict(llm_redaction or {})
     deciding = deciding_reading(annotation, agreed_redactions, rules.condition_categories)
     if rules.llm_redaction_flags and _reviewer_found_residue(deciding):
@@ -1243,32 +1435,37 @@ def fold_file_verdict(
                 }
             )
         )
-        ground_text = LLM_REDACTION_RESIDUE
-        reasons.append(NodeVerdict(_VERDICT, Outcome.FLAG, None, f"{ground_text}: {named}" if named else ground_text))
+        flag(
+            _VERDICT,
+            f"{LLM_REDACTION_RESIDUE}: {named}" if named else LLM_REDACTION_RESIDUE,
+            KEY_REVIEWER_RESIDUE,
+        )
     evidence = redaction or RedactionEvidence()
     if rules.person_name_review_flags and evidence.person_names_masked_n > 0:
-        proposed = "; ".join(json.dumps(text) for text in evidence.name_release_proposed)
-        named_n = f"{evidence.person_names_masked_n} name word(s) masked"
-        why = f"{PERSON_NAME_AWAITS_REVIEW}: {named_n}" + (f"; release proposed for {proposed}" if proposed else "")
-        reasons.append(NodeVerdict(_VERDICT, Outcome.FLAG, None, why))
+        proposed_n = len(evidence.name_release_proposed)
+        why = f"{PERSON_NAME_AWAITS_REVIEW}: {evidence.person_names_masked_n} name word(s) masked" + (
+            f"; release proposed for {proposed_n} name(s)" if proposed_n else ""
+        )
+        flag(_VERDICT, why, KEY_PERSON_NAME_REVIEW)
     diarized_other = any(
         record.get("passed") is False and record.get("gate") == DOMINANT_SPEAKER_GATE for record in flag_gates or ()
     )
     others = [dict(other) for other in annotation.get("other_speakers") or () if isinstance(other, Mapping)]
     heard_other = annotation.get("speakers") == "more_than_one" or (annotation.get("speakers") == "unclear" and others)
     if rules.llm_second_speaker_flags and heard_other and not diarized_other:
-        described = [
-            f"{json.dumps(str(other.get('text')))} ({'expected' if other.get('expected') is True else 'unexpected'})"
-            for other in others
-        ]
-        quoted = "; ".join(described) if described else "no words quoted"
-        reasons.append(NodeVerdict(_VERDICT, Outcome.FLAG, None, f"{REVIEWER_HEARD_SECOND_SPEAKER}: {quoted}"))
+        expected_n = sum(1 for other in others if other.get("expected") is True)
+        counted = (
+            f"{len(others)} passage(s) quoted, {expected_n} expected by the instructions, "
+            f"{len(others) - expected_n} not"
+            if others
+            else "no words quoted"
+        )
+        flag(_VERDICT, f"{REVIEWER_HEARD_SECOND_SPEAKER}: {counted}", KEY_REVIEWER_SECOND_SPEAKER)
     if rules.llm_contradiction_flags and reviewer_named_no_words(annotation):
-        reasons.append(NodeVerdict(_VERDICT, Outcome.FLAG, None, REVIEWER_NAMED_NO_WORDS))
+        flag(_VERDICT, REVIEWER_NAMED_NO_WORDS, KEY_REVIEWER_NAMED_NO_WORDS)
     spoken = [str(text) for text in annotation.get("instructions_spoken") or () if str(text).strip()]
     if rules.llm_instructions_spoken_flags and spoken:
-        quoted = "; ".join(json.dumps(text) for text in spoken)
-        reasons.append(NodeVerdict(_VERDICT, Outcome.FLAG, None, f"{INSTRUCTIONS_SPOKEN}: {quoted}"))
+        flag(_VERDICT, f"{INSTRUCTIONS_SPOKEN}: {len(spoken)} passage(s) quoted", KEY_INSTRUCTIONS_SPOKEN)
     disagreements = second_opinion_disagreements(
         second_opinion,
         annotation,
@@ -1277,31 +1474,28 @@ def fold_file_verdict(
         identifier_masked=evidence.masks_final_n > 0 or evidence.reviewer_requested_n > 0,
     )
     if rules.second_opinion_disagreement_flags and disagreements:
-        reasons.append(
-            NodeVerdict(_VERDICT, Outcome.FLAG, None, f"{SECOND_OPINION_DISAGREES}: {'; '.join(disagreements)}")
-        )
+        flag(_VERDICT, f"{SECOND_OPINION_DISAGREES}: {'; '.join(disagreements)}", KEY_SECOND_OPINION_DISAGREES)
     open_families = sorted({family for family, state in unplaced if state in (UNPLACED_OPEN, UNPLACED_UNREAD)})
     if open_families:
-        ground_text = (
-            UNPLACED_FINDING_UNREAD if any(state == UNPLACED_UNREAD for _, state in unplaced) else UNPLACED_FINDING_OPEN
+        unread_any = any(state == UNPLACED_UNREAD for _, state in unplaced)
+        flag(
+            _VERDICT,
+            f"{UNPLACED_FINDING_UNREAD if unread_any else UNPLACED_FINDING_OPEN}: {', '.join(open_families)}",
+            KEY_UNPLACED_UNREAD if unread_any else KEY_UNPLACED_OPEN,
         )
-        reasons.append(NodeVerdict(_VERDICT, Outcome.FLAG, None, f"{ground_text}: {', '.join(open_families)}"))
     for record in flag_gates or ():
         if record.get("passed") is not False:
             continue
-        reasons.append(
-            NodeVerdict(
-                _VERDICT,
-                Outcome.FLAG,
-                None,
-                f"{record.get('ground', record.get('gate'))}: "
-                f"{record.get('reading')} read {record.get('value')} against {record.get('bound')}"
-                + (
-                    f"; {MODEL_SPEAKER_PERMITTED}"
-                    if record.get("gate") == DOMINANT_SPEAKER_GATE and declared_family in rules.model_speaker_families
-                    else ""
-                ),
-            )
+        flag(
+            _VERDICT,
+            f"{record.get('ground', record.get('gate'))}: "
+            f"{record.get('reading')} read {record.get('value')} against {record.get('bound')}"
+            + (
+                f"; {MODEL_SPEAKER_PERMITTED}"
+                if record.get("gate") == DOMINANT_SPEAKER_GATE and declared_family in rules.model_speaker_families
+                else ""
+            ),
+            f"{PREFIX_GATE}:{record.get('gate')}",
         )
     gate_record = dict(gates or {})
     applied_gates = [g for g in (gate_record.get("applied") or ()) if isinstance(g, Mapping)]
@@ -1315,45 +1509,56 @@ def fold_file_verdict(
         if g.get("passed") == "UNDETERMINED" and g.get("reason") in ("absent_not_computed", "instrument_absent")
     )
     if uncomputed and rules.uncomputed_reading_flags:
-        reasons.append(
-            NodeVerdict(
-                str(gate_record.get("node") or _VERDICT),
-                Outcome.FLAG,
-                None,
-                f"{UNCOMPUTED_READING}: {', '.join(uncomputed)}",
-            )
+        flag(
+            str(gate_record.get("node") or _VERDICT),
+            f"{UNCOMPUTED_READING}: {', '.join(uncomputed)}",
+            KEY_UNCOMPUTED_READING,
         )
     for name, report in reports.items():
         if report.conformance is False and rules.flags_conformance(report.conformance_of, declared_family):
             why = TASK_NOT_CONFORMED if report.conformance_of == TASK else STORE_ASSERTION_CONTRADICTED
+            prefix = PREFIX_CONFORMANCE if report.conformance_of == TASK else PREFIX_STORE_ASSERTION
             if report.conformance_of == TASK and nothing_read and name == gate_record.get("node"):
                 why = NOTHING_READ
+                prefix = PREFIX_NOTHING_READ
             named = f" on {declared_family}" if report.conformance_of == TASK and declared_family else ""
-            reasons.append(NodeVerdict(name, Outcome.FLAG, report.kind, f"{name} {why}{named}"))
+            flag(name, f"{name} {why}{named}", f"{prefix}:{name}", report.kind)
         if report.conformance == UNDETERMINED and rules.undetermined_flags:
-            reasons.append(NodeVerdict(name, Outcome.FLAG, report.kind, f"{name} {CONFORMANCE_UNANSWERED}"))
+            flag(name, f"{name} {CONFORMANCE_UNANSWERED}", f"{PREFIX_CONFORMANCE_UNANSWERED}:{name}", report.kind)
         if report.deviations and rules.deviation_flags:
-            named = ", ".join(report.deviations)
-            reasons.append(NodeVerdict(name, Outcome.FLAG, report.kind, f"{name} reported {named}"))
+            flag(name, f"{name} reported {', '.join(report.deviations)}", f"{PREFIX_DEVIATION}:{name}", report.kind)
         if report.unmeasured and rules.unmeasured_points_flag:
-            named = ", ".join(report.unmeasured)
-            reasons.append(NodeVerdict(name, Outcome.FLAG, report.kind, f"{name} {UNMEASURED_ASKED}: {named}"))
+            flag(
+                name,
+                f"{name} {UNMEASURED_ASKED}: {', '.join(report.unmeasured)}",
+                f"{PREFIX_UNMEASURED}:{name}",
+                report.kind,
+            )
     for branch in branches_seen:
         decision = branch_decisions.get(branch)
         reported = by_branch.get(branch)
         kind = reported.kind if reported is not None else None
         # Only MISMATCH-and-PRESENT is a flag ground; both directions stay in ``agreement``.
         if agreement[branch] == MISMATCH and findings[branch] == KindState.PRESENT.value:
-            reasons.append(
-                NodeVerdict(branch, Outcome.FLAG, kind, f"mismatch: routing {routes[branch]} {branch}, it found it")
+            flag(
+                branch,
+                f"mismatch: routing {routes[branch]} {branch}, it found it",
+                f"{PREFIX_ROUTE_MISMATCH}:{branch}",
+                kind,
             )
         if decision is not None and decision.will_run and reported is None:
-            reasons.append(
-                NodeVerdict(branch, Outcome.FLAG, kind, f"{branch} was asked to run and {_silence(ran.get(branch))}")
+            flag(
+                branch,
+                f"{branch} was asked to run and {_silence(ran.get(branch))}",
+                f"{PREFIX_BRANCH_SILENT}:{branch}",
+                kind,
             )
         if hints.get(branch) == CLAIMED_NOT_FOUND and declared_family not in rules.hint_mismatch_exempt_families:
-            reasons.append(
-                NodeVerdict(branch, Outcome.FLAG, kind, f"hint mismatch: {branch} was declared and did not find it")
+            flag(
+                branch,
+                f"hint mismatch: {branch} was declared and did not find it",
+                f"{PREFIX_HINT_MISMATCH}:{branch}",
+                kind,
             )
 
     branch_view = {
@@ -1367,17 +1572,21 @@ def fold_file_verdict(
         for name, decision in branch_decisions.items()
     }
 
-    admit = next((verdict for verdict in node_verdicts if verdict.node == _ADMIT), None)
+    admit = next((reason for reason in reasons if reason.node == _ADMIT), None)
+    flags = [reason for reason in reasons if reason.outcome is Outcome.FLAG]
+    found_anything = any(state == KindState.PRESENT.value for state in findings.values())
     ground: str | None = None
     if admit is not None and admit.outcome is Outcome.FAIL:
         triage = Triage.DISCARD
         ground = UNMEASURABLE
         reasons = [admit, *(reason for reason in reasons if reason is not admit)]
-    elif any(reason.outcome is Outcome.FLAG for reason in reasons):
-        triage = Triage.FLAG
-    elif route_state == EMPTY:
+    elif route_state == EMPTY and not found_anything:
         triage = Triage.DISCARD
         ground = ACOUSTICALLY_EMPTY
+    elif any(is_operational(reason.key) for reason in flags):
+        triage = Triage.RERUN
+    elif flags:
+        triage = Triage.FLAG
     else:
         triage = Triage.PASS
 
@@ -1399,6 +1608,7 @@ def fold_file_verdict(
         release=release,
         discard_ground=ground,
         release_ground=release_ground,
+        ground_keys=sorted({*([ground] if ground else []), *(ground_key(reason) for reason in flags)}),
         findings=findings,
         conformance={name: report.conformance for name, report in reports.items()},
         conformance_of={name: report.conformance_of for name, report in reports.items()},

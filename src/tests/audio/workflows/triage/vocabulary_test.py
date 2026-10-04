@@ -17,6 +17,8 @@ from senselab.audio.workflows.triage.vocabulary import (
     DECLINED,
     DOMINANT_SPEAKER_GATE,
     FINDINGS_ARE_TASK_CONTENT,
+    GROUND_KEY_PREFIXES,
+    GROUND_KEYS,
     INSTRUCTIONS_SPOKEN,
     LLM_REDACTION_RESIDUE,
     MASKS_TRIMMED_TO_CONTENT,
@@ -26,6 +28,7 @@ from senselab.audio.workflows.triage.vocabulary import (
     NO_LEXICAL_WORD,
     NO_TRANSCRIPT,
     NON_LEXICAL_TASK,
+    OPERATIONAL_GROUND_KEYS,
     REDACT_UNRESOLVED,
     REDACT_VERIFY_FOUND,
     REDACTION_OWED,
@@ -69,6 +72,9 @@ from senselab.audio.workflows.triage.vocabulary import (
     Triage,
     _release_from,
     fold_file_verdict,
+    ground_key,
+    is_operational,
+    release_ground_key,
     reviewer_may_unmask,
 )
 
@@ -183,11 +189,11 @@ def _without_redact(evidence: RedactionEvidence, *, speech: RunState, speech_rou
 
 
 class TestTheTriageVocabulary:
-    """pass, flag, discard — three values, and fail is not one of them."""
+    """pass, flag, rerun, discard — four values, and fail is not one of them."""
 
-    def test_the_members_are_exactly_three(self) -> None:
+    def test_the_members_are_exactly_four(self) -> None:
         """verdict.md's triage axis; a branch's ``fail`` has no counterpart here."""
-        assert {member.value for member in Triage} == {"pass", "flag", "discard"}
+        assert {member.value for member in Triage} == {"pass", "flag", "rerun", "discard"}
 
     def test_a_node_outcome_is_not_a_triage(self) -> None:
         """Outcome stays the node-level vocabulary; the file axis is its own type."""
@@ -221,7 +227,7 @@ class TestDiscardIsNarrow:
         assert folded.triage is Triage.DISCARD
         assert folded.discard_ground == "acoustically_empty"
 
-    def test_nothing_routed_but_not_empty_flags_rather_than_discarding(self) -> None:
+    def test_nothing_routed_but_not_empty_reruns_rather_than_discarding(self) -> None:
         """Content no gate could account for is a charge against the ruleset, never against the file."""
         folded = fold_file_verdict(
             [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
@@ -230,12 +236,13 @@ class TestDiscardIsNarrow:
             hint_claims={},
             route_state="unexplained",
         )
-        assert folded.triage is Triage.FLAG
+        assert folded.triage is Triage.RERUN
+        assert folded.ground_keys == ["route_unexplained"]
         assert folded.discard_ground is None
         assert any(reason.why == UNEXPLAINED_CONTENT for reason in folded.reasons)
 
-    def test_an_unreadable_bypass_flags_under_its_own_ground(self) -> None:
-        """Nothing routed and no bypass to read still flags, and says which of the two it was.
+    def test_an_unreadable_bypass_reruns_under_its_own_ground(self) -> None:
+        """Nothing routed and no bypass to read is owed a rerun, and says which of the two it was.
 
         It is not a discard: neither discard ground is a claim about a measurement that was never
         taken. It is not ``unexplained`` either, which would charge the ruleset for evidence the
@@ -248,7 +255,8 @@ class TestDiscardIsNarrow:
             hint_claims={},
             route_state="unreadable",
         )
-        assert folded.triage is Triage.FLAG
+        assert folded.triage is Triage.RERUN
+        assert folded.ground_keys == ["route_unreadable"]
         assert folded.discard_ground is None
         assert any(reason.why == UNREADABLE_EMPTINESS for reason in folded.reasons)
         assert not any(reason.why == UNEXPLAINED_CONTENT for reason in folded.reasons)
@@ -313,8 +321,8 @@ class TestDiscardIsNarrow:
         )
         assert folded.triage is not Triage.DISCARD
 
-    def test_a_hint_turns_the_empty_ground_into_a_flag(self) -> None:
-        """Discarding would delete the evidence that the graph was wrong."""
+    def test_an_empty_recording_discards_and_keeps_the_hint_mismatch_as_detail(self) -> None:
+        """A declared kind no branch found in an empty recording is detail, not a reason to review it."""
         folded = fold_file_verdict(
             [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
             branch_decisions=_all_declined(),
@@ -322,7 +330,23 @@ class TestDiscardIsNarrow:
             hint_claims={"SPEECH": True},
             route_state="empty",
         )
+        assert folded.triage is Triage.DISCARD
+        assert folded.discard_ground == "acoustically_empty"
+        assert folded.ground_keys == ["acoustically_empty", "hint_mismatch:SPEECH"]
+
+    def test_an_empty_route_where_a_branch_found_its_kind_is_not_discarded(self) -> None:
+        """A forced branch that found what it looks for contradicts the emptiness; that one flags."""
+        folded = fold_file_verdict(
+            [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
+            branch_reports=[_report("SPEECH", "speech", conformance=True)],
+            spans_by_node=_found("SPEECH"),
+            branch_decisions=_decisions(SPEECH=DECLINED, AIRWAY=DECLINED, VOICE=DECLINED),
+            ran={},
+            hint_claims={},
+            route_state="empty",
+        )
         assert folded.triage is Triage.FLAG
+        assert "route_mismatch:SPEECH" in folded.ground_keys
 
     def test_the_empty_execution_set_discards_rather_than_flagging_on_its_own(self) -> None:
         """ROUTING records the empty set on its decisions; a ``pass`` verdict beside them does not preempt.
@@ -591,8 +615,8 @@ class TestABranchThatNeverRanIsNotOneThatFailed:
         assert folded.agreement["SPEECH"] == "not_run"
         assert folded.triage is Triage.PASS
 
-    def test_asked_but_silent_flags(self) -> None:
-        """will_run true with no verdict is a branch that left no answer."""
+    def test_asked_but_silent_reruns(self) -> None:
+        """will_run true with no verdict is a branch that left no answer: the pipeline owes it one."""
         folded = fold_file_verdict(
             [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
             branch_decisions=_decisions(AIRWAY=DECLINED, SPEECH=ROUTED, VOICE=DECLINED),
@@ -600,7 +624,8 @@ class TestABranchThatNeverRanIsNotOneThatFailed:
             hint_claims={},
             route_state=ROUTED,
         )
-        assert folded.triage is Triage.FLAG
+        assert folded.triage is Triage.RERUN
+        assert folded.ground_keys == ["branch_silent:SPEECH"]
         assert any("errored without a verdict" in reason.why for reason in folded.reasons)
 
     def test_the_three_silent_reasons_are_distinguished(self) -> None:
@@ -631,7 +656,7 @@ class TestABranchThatNeverRanIsNotOneThatFailed:
         assert any(reason.node == "SPEECH" for reason in folded.reasons)
 
     def test_a_routed_branch_with_no_node_is_reported_rather_than_ignored(self) -> None:
-        """A routed branch that left no verdict flags the file, whatever silenced it.
+        """A routed branch that left no verdict reruns the file, whatever silenced it.
 
         The state the fold is handed is the general one: the branch was asked to run and concluded
         nothing — skipped, errored, or completed without a verdict. The fold must say so rather
@@ -644,7 +669,7 @@ class TestABranchThatNeverRanIsNotOneThatFailed:
             hint_claims={},
             route_state=ROUTED,
         )
-        assert folded.triage is Triage.FLAG
+        assert folded.triage is Triage.RERUN
         assert any(reason.node == "SPEECH" and "never ran" in reason.why for reason in folded.reasons)
 
     def test_the_branches_map_joins_the_decision_to_the_reported_conformance(self) -> None:
@@ -679,7 +704,8 @@ class TestHintsForMismatchOnly:
             hint_claims={"AIRWAY": True},
             route_state=ROUTED,
         )
-        assert folded.triage is Triage.FLAG
+        assert "hint_mismatch:AIRWAY" in folded.ground_keys
+        assert folded.triage in (Triage.FLAG, Triage.RERUN)
         assert folded.hints["AIRWAY"] == "claimed_not_found"
 
     def test_a_hinted_branch_that_found_its_subject_is_an_agreement(self) -> None:
@@ -736,7 +762,7 @@ class TestHintsForMismatchOnly:
             hint_claims={"SPEECH": True},
             route_state=ROUTED,
         )
-        assert folded.triage is Triage.FLAG
+        assert folded.triage is not Triage.PASS
 
     def test_a_hint_never_resolves_a_subject(self) -> None:
         """A claim is an expectation; only a branch resolves, and here none concluded."""
@@ -749,7 +775,7 @@ class TestHintsForMismatchOnly:
         )
         assert folded.findings["SPEECH"] == "uncertain"
 
-    def test_a_declaration_nothing_could_read_empties_the_hints_and_flags(self) -> None:
+    def test_a_declaration_nothing_could_read_empties_the_hints_and_reruns(self) -> None:
         """Unknown claims are not no claims: reporting them as ``no_claim`` would clear the file quietly."""
         folded = fold_file_verdict(
             [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
@@ -759,15 +785,16 @@ class TestHintsForMismatchOnly:
             route_state=ROUTED,
         )
         assert folded.hints == {}
-        assert folded.triage is Triage.FLAG
+        assert folded.triage is Triage.RERUN
+        assert folded.ground_keys == ["declaration_unread"]
         assert any(reason.why == UNREAD_DECLARATION for reason in folded.reasons)
 
 
 class TestAConfigTypoIsNamedNotSwallowed:
-    """A map value that is not a branch under-claims every file in the run; it must not discard one."""
+    """A map value that is not a branch under-claims every file in the run; it is named, never swallowed."""
 
-    def test_a_bad_map_value_flags_where_the_file_would_otherwise_discard(self) -> None:
-        """One character in the map turns a declared cough into a silent discard of the evidence."""
+    def test_a_bad_map_value_is_named_on_an_empty_recording_that_still_discards(self) -> None:
+        """The recording is measurably empty whatever the map says; the typo stays visible beside it."""
         decisions = _all_declined()
         decisions["AIRWAY"] = replace(decisions["AIRWAY"], bad_map_values={"cough": "AIRWY"})
         folded = fold_file_verdict(
@@ -777,8 +804,9 @@ class TestAConfigTypoIsNamedNotSwallowed:
             hint_claims={},
             route_state="empty",
         )
-        assert folded.triage is Triage.FLAG
-        assert folded.discard_ground is None
+        assert folded.triage is Triage.DISCARD
+        assert folded.discard_ground == "acoustically_empty"
+        assert "config_bad_hint_map" in folded.ground_keys
         assert folded.bad_map_values == {"cough": "AIRWY"}
         assert any(BAD_MAP_VALUES in reason.why and "AIRWY" in reason.why for reason in folded.reasons)
 
@@ -1369,7 +1397,7 @@ class TestASpeechTaskThatProducedNoWordIsFlagged:
     def test_a_routed_speech_task_with_no_lexical_item_flags(self) -> None:
         """What the owner asked to see: the task asked for words and none came."""
         folded = _without_redact(RedactionEvidence(lexical_words_n=0), speech=RunState.COMPLETED)
-        assert folded.triage is Triage.FLAG
+        assert "speech_no_lexical_item" in folded.ground_keys and folded.triage is not Triage.PASS
         assert any(NO_LEXICAL_ITEM_PRODUCED in reason.why for reason in folded.reasons)
 
     def test_it_is_still_releasable(self) -> None:
@@ -1403,10 +1431,11 @@ class TestARedactNonPassIsVisibleWithoutFlippingTriage:
         folded = _with_redact(Outcome.FAIL, speech=True, speech_route=ROUTED)
         assert any(reason.node == "REDACT" for reason in folded.reasons)
 
-    def test_an_incomplete_verification_still_flags(self) -> None:
-        """REDACT's ``flag`` is a node flag like any other: verification that did not finish."""
+    def test_an_incomplete_verification_reruns(self) -> None:
+        """REDACT's ``flag`` is verification that did not finish: the pipeline owes the recording a re-scan."""
         folded = _with_redact(Outcome.FLAG, speech=True, speech_route=ROUTED)
-        assert folded.triage is Triage.FLAG
+        assert folded.triage is Triage.RERUN
+        assert "redact_rescan_incomplete" in folded.ground_keys
         assert folded.release is Release.WITHHELD
 
 
@@ -1470,7 +1499,7 @@ class TestACriticalAbsenceFlagsAndNamesItself:
         assert "consensus_transcript" in why
         assert "both asr blocks failed" in why
 
-    def test_it_flags_rather_than_discarding(self) -> None:
+    def test_it_reruns_rather_than_discarding(self) -> None:
         """Neither discard ground is a claim about a measurement that failed to be taken."""
         folded = fold_file_verdict(
             [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
@@ -1480,7 +1509,8 @@ class TestACriticalAbsenceFlagsAndNamesItself:
             route_state="unexplained",
             critical_absences=_CONSENSUS_GONE,
         )
-        assert folded.triage is Triage.FLAG
+        assert folded.triage is Triage.RERUN
+        assert "critical_absence" in folded.ground_keys
         assert folded.discard_ground is None
         assert folded.critical_absences == _CONSENSUS_GONE
 
@@ -1631,14 +1661,14 @@ class TestAgreementUnplacedFindingsAndASecondSpeaker:
         assert heard.triage is Triage.FLAG
         assert heard.release is Release.WITH_REDACTION, "a flag for review, not a release decision"
         assert [reason.why for reason in heard.reasons if reason.node == "VERDICT"] == [
-            f'{REVIEWER_HEARD_SECOND_SPEAKER}: "You were given the text." (expected)'
+            f"{REVIEWER_HEARD_SECOND_SPEAKER}: 1 passage(s) quoted, 1 expected by the instructions, 0 not"
         ]
         intruder = {"text": "Who are you talking to?", "expected": False, "why": "nobody the task asks for"}
         both = self._fold({**reading, "other_speakers": [expected, intruder]})
         assert [reason.why for reason in both.reasons if reason.node == "VERDICT"] == [
-            f'{REVIEWER_HEARD_SECOND_SPEAKER}: "You were given the text." (expected); '
-            '"Who are you talking to?" (unexpected)'
+            f"{REVIEWER_HEARD_SECOND_SPEAKER}: 2 passage(s) quoted, 1 expected by the instructions, 1 not"
         ]
+        assert not any("talking to" in reason.why for reason in both.reasons), "no transcript in a verdict"
 
     def test_an_unclear_reading_that_quotes_another_voice_flags(self) -> None:
         """r9 story recall: examiner instructions the reviewer cannot attribute still flag for a person to check."""
@@ -1648,7 +1678,7 @@ class TestAgreementUnplacedFindingsAndASecondSpeaker:
         assert heard.triage is Triage.FLAG
         assert heard.release is Release.WITH_REDACTION, "a flag for review, not a release decision"
         assert [reason.why for reason in heard.reasons if reason.node == "VERDICT"] == [
-            f'{REVIEWER_HEARD_SECOND_SPEAKER}: "I said you have up to five minutes" (expected)'
+            f"{REVIEWER_HEARD_SECOND_SPEAKER}: 1 passage(s) quoted, 1 expected by the instructions, 0 not"
         ]
         assert self._fold({**reading, "other_speakers": []}).triage is Triage.PASS, (
             "unclear with no quote flags nothing"
@@ -1772,7 +1802,7 @@ class TestSecondOpinionDisagreementFlagsForReview:
     def test_a_confident_yes_against_the_reviewers_no_flags_and_names_it(self) -> None:
         """The story-recall pilot case: p=0.85 another voice, the reviewer heard one."""
         folded = self._fold(self._opinion(other_voice=0.85), self._reading(), self._ON)
-        assert folded.triage is Triage.FLAG
+        assert "second_opinion_disagreement" in folded.ground_keys and folded.triage is not Triage.PASS
         assert self._grounds(folded) == [f"{SECOND_OPINION_DISAGREES}: other_voice p=0.85 reviewer=no"]
         assert folded.record()["second_opinion"]["disagreements"] == ["other_voice p=0.85 reviewer=no"]
 
@@ -1890,8 +1920,9 @@ class TestSpokenInstructionsFlagForReview:
         """The story-recall card's quote is a flag ground carrying the words."""
         folded = self._fold([self._QUOTE], FoldPolicy(llm_instructions_spoken_flags=True))
         grounds = [str(reason.why) for reason in folded.reasons]
-        assert folded.triage is Triage.FLAG
-        assert any(why.startswith(INSTRUCTIONS_SPOKEN) and "five minutes" in why for why in grounds)
+        assert "instructions_spoken" in folded.ground_keys and folded.triage is not Triage.PASS
+        assert any(why == f"{INSTRUCTIONS_SPOKEN}: 1 passage(s) quoted" for why in grounds)
+        assert not any("five minutes" in why for why in grounds), "no transcript in a verdict"
 
     def test_an_empty_part_or_the_policy_off_does_not_flag(self) -> None:
         """[] never flags, and the key off turns the ground off."""
@@ -1910,3 +1941,216 @@ class TestSpokenInstructionsFlagForReview:
         from senselab.audio.workflows.triage.config import load_triage_config
 
         assert FoldPolicy.from_config(load_triage_config()).llm_instructions_spoken_flags is True
+
+
+_SENTINEL = "Zebulon Quimby of Kalamazoo"
+"""A string that stands for transcript text; no verdict ground may carry it."""
+
+
+def _every_ground_fold(**overrides: Any) -> FileVerdict:  # noqa: ANN401 — fold keyword arguments of every type
+    """One fold that raises every participant ground the fold builds, each fed transcript-like text.
+
+    Args:
+        **overrides: Keyword arguments replacing the defaults below.
+
+    Returns:
+        The folded file verdict.
+    """
+    policy = FoldPolicy(
+        llm_redaction_flags=True,
+        person_name_review_flags=True,
+        llm_second_speaker_flags=True,
+        llm_contradiction_flags=True,
+        llm_instructions_spoken_flags=True,
+        second_opinion_disagreement_flags=True,
+        second_opinion_confident_yes=0.8,
+        second_opinion_confident_no=0.2,
+        uncomputed_reading_flags=True,
+    )
+    annotation = {
+        "status": "flagged",
+        "original": "carries_pii",
+        "redaction": "incomplete",
+        "speakers": "more_than_one",
+        "other_speakers": [{"text": _SENTINEL, "expected": False, "why": _SENTINEL}],
+        "instructions_spoken": [_SENTINEL],
+        "conditions": [{"text": _SENTINEL, "why": _SENTINEL}],
+        "proposal": [{"action": "redact", "category": "PERSON", "text": _SENTINEL, "why": _SENTINEL}],
+    }
+    kwargs: dict[str, Any] = {
+        "branch_reports": [_report("SPEECH", "speech", conformance=False)],
+        "spans_by_node": _found("SPEECH"),
+        "branch_decisions": _decisions(AIRWAY=DECLINED, SPEECH=ROUTED, VOICE=DECLINED),
+        "ran": {"SPEECH": RunState.COMPLETED},
+        "hint_claims": {},
+        "route_state": ROUTED,
+        "declared_family": "free-speech",
+        "redaction": RedactionEvidence(
+            lexical_words_n=12,
+            scanned=True,
+            findings_n=1,
+            masks_n=1,
+            masks_final_n=1,
+            person_names_masked_n=2,
+            name_release_proposed=(_SENTINEL,),
+            reviewer_requested_n=1,
+        ),
+        "llm_redaction": annotation,
+        "second_opinion": {
+            "status": "ok",
+            "probabilities": {"other_voice": 0.01, "instructions_spoken": 0.01, "policy_identifier_present": 0.01},
+        },
+        "flag_gates": [
+            {
+                "gate": DOMINANT_SPEAKER_GATE,
+                "passed": False,
+                "ground": "another speaker",
+                "reading": "share",
+                "value": 0.5,
+            }
+        ],
+        "unplaced": [("PERSON", UNPLACED_OPEN)],
+        "policy": policy,
+    }
+    kwargs.update(overrides)
+    return fold_file_verdict([NodeVerdict("ADMIT", Outcome.PASS, None, "ok")], **kwargs)
+
+
+class TestEveryGroundHasAKeyAndNoTranscript:
+    """DAG review proposal 1: a flag is countable from its key, and no transcript text reaches a verdict."""
+
+    def test_every_flag_carries_a_key_from_the_vocabulary(self) -> None:
+        """Each key is a named ground or ``<prefix>:<name>`` under a declared prefix."""
+        folded = _every_ground_fold()
+        flags = [reason for reason in folded.reasons if reason.outcome is Outcome.FLAG]
+        assert len(flags) >= 7
+        for reason in flags:
+            key = ground_key(reason)
+            assert key in GROUND_KEYS or key.split(":", 1)[0] in GROUND_KEY_PREFIXES, key
+        assert folded.ground_keys == sorted({ground_key(reason) for reason in flags})
+
+    def test_the_sweep_raises_the_participant_grounds_it_is_meant_to(self) -> None:
+        """The sweep below is only as good as the grounds it reaches."""
+        keys = set(_every_ground_fold().ground_keys)
+        assert {
+            "reviewer_residue",
+            "person_name_review",
+            "instructions_spoken",
+            "second_opinion_disagreement",
+            "unplaced_finding_open",
+            "gate:dominant_speaker_share_min",
+            "conformance:SPEECH",
+        } <= keys
+
+    def test_no_ground_quotes_transcript_text(self) -> None:
+        """Invariant 6: quoted words and proposed names stay in REVIEW's annotation, never in a reason."""
+        folded = _every_ground_fold()
+        assert not any(_SENTINEL in reason.why for reason in folded.reasons)
+        heard = _every_ground_fold(flag_gates=[])
+        assert "reviewer_second_speaker" in heard.ground_keys
+        assert not any(_SENTINEL in reason.why for reason in heard.reasons)
+        record = folded.record()
+        assert not any(_SENTINEL in str(reason["why"]) for reason in record["reasons"])
+
+    def test_the_record_carries_the_keys(self) -> None:
+        """What the parquet reads: the ground keys, a key per reason, and the release ground's key."""
+        record = _every_ground_fold().record()
+        assert record["ground_keys"] == _every_ground_fold().ground_keys
+        assert all(reason["key"] for reason in record["reasons"])
+        assert record["release_ground_key"] == release_ground_key(record["release_ground"])
+
+    def test_every_release_ground_has_a_key(self) -> None:
+        """The release axis is keyed the same way; REDACT's own decision has its key too."""
+        for ground in (
+            *RELEASE_WITHOUT_REDACTION_GROUNDS,
+            *RELEASE_UNKNOWN_GROUNDS,
+            *RELEASE_WITHHELD_GROUNDS,
+            *RELEASE_WITH_REDACTION_GROUNDS,
+        ):
+            assert release_ground_key(ground) != ground
+        assert release_ground_key(None) == "redact_decided"
+
+
+class TestOperationalGroundsRerun:
+    """DAG review proposal 4: a missing derivative is the pipeline's to fix, not the participant's."""
+
+    def test_a_participant_ground_alone_flags(self) -> None:
+        """The control: nothing operational, so the file goes to a person."""
+        folded = fold_file_verdict(
+            [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
+            branch_reports=[_report("SPEECH", "speech", conformance=False)],
+            spans_by_node=_found("SPEECH"),
+            branch_decisions=_decisions(AIRWAY=DECLINED, SPEECH=ROUTED, VOICE=DECLINED),
+            ran={},
+            hint_claims={},
+            route_state=ROUTED,
+        )
+        assert folded.triage is Triage.FLAG
+        assert folded.ground_keys == ["conformance:SPEECH"]
+
+    def test_no_classifier_output_reruns_and_keeps_the_participant_ground(self) -> None:
+        """TAXONOMY with nothing to consolidate outranks the review flag; both keys stay."""
+        folded = fold_file_verdict(
+            [
+                NodeVerdict("ADMIT", Outcome.PASS, None, "ok"),
+                NodeVerdict("TAXONOMY", Outcome.FLAG, None, "no per-span classifier produced scores"),
+            ],
+            branch_reports=[_report("SPEECH", "speech", conformance=False)],
+            spans_by_node=_found("SPEECH"),
+            branch_decisions=_decisions(AIRWAY=DECLINED, SPEECH=ROUTED, VOICE=DECLINED),
+            ran={},
+            hint_claims={},
+            route_state=ROUTED,
+        )
+        assert folded.triage is Triage.RERUN
+        assert folded.ground_keys == ["conformance:SPEECH", "taxonomy_no_classifier"]
+
+    def test_every_operational_key_reads_as_operational(self) -> None:
+        """The classification is one function, so the parquet and the fold cannot disagree."""
+        for key in OPERATIONAL_GROUND_KEYS:
+            assert is_operational(key)
+        assert is_operational("branch_silent:SPEECH")
+        assert is_operational("unmeasured_operating_point:VOICE")
+        for key in ("conformance:SPEECH", "gate:events_min", "person_name_review", "acoustically_empty", None):
+            assert not is_operational(key)
+
+    def test_a_rerun_leaves_the_release_axis_alone(self) -> None:
+        """The release is read from the evidence as before; a rerun state changes no artefact."""
+        common: dict[str, Any] = {
+            "branch_decisions": _decisions(AIRWAY=DECLINED, SPEECH=ROUTED, VOICE=DECLINED),
+            "ran": {"SPEECH": RunState.COMPLETED},
+            "hint_claims": {},
+            "route_state": ROUTED,
+            "redaction": RedactionEvidence(lexical_words_n=5, scanned=True),
+            "branch_reports": [_report("SPEECH", "speech", conformance=True)],
+            "spans_by_node": _found("SPEECH"),
+        }
+        clean = fold_file_verdict([NodeVerdict("ADMIT", Outcome.PASS, None, "ok")], **common)
+        owed = fold_file_verdict(
+            [
+                NodeVerdict("ADMIT", Outcome.PASS, None, "ok"),
+                NodeVerdict("TAXONOMY", Outcome.FLAG, None, "no per-span classifier produced scores"),
+            ],
+            **common,
+        )
+        assert owed.triage is Triage.RERUN
+        assert (owed.release, owed.release_ground) == (clean.release, clean.release_ground)
+
+
+class TestAnEmptyRecordingDiscards:
+    """DAG review proposal 3: emptiness is folded before the conformance grounds."""
+
+    def test_a_forced_branch_reporting_non_conformance_does_not_save_an_empty_recording(self) -> None:
+        """The r12 shape: a declared branch forced to run on an empty file reports non-conformance."""
+        folded = fold_file_verdict(
+            [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
+            branch_reports=[_report("SPEECH", "speech", conformance=False)],
+            branch_decisions=_all_declined(forced=("SPEECH",)),
+            ran={"SPEECH": RunState.COMPLETED},
+            hint_claims={"SPEECH": True},
+            route_state="empty",
+            declared_family="harvard-sentences",
+        )
+        assert folded.triage is Triage.DISCARD
+        assert folded.discard_ground == "acoustically_empty"
+        assert "conformance:SPEECH" in folded.ground_keys

@@ -88,6 +88,7 @@ from senselab.audio.workflows.triage.nodes.redact import (
 from senselab.audio.workflows.triage.task_lexicon import task_lexicon
 from senselab.audio.workflows.triage.vocabulary import (
     GRAPH_ORDER,
+    KEY_NODE_OUTCOME_UNREADABLE,
     PII_SCAN,
     REDACTION_LLM_ANNOTATION,
     RULESET_ROUTING,
@@ -154,6 +155,7 @@ def _node_verdict_from_entity(entity: Entity) -> NodeVerdict:
             outcome=Outcome.FLAG,
             kind=None,
             why=f"{node} wrote outcome {raw!r}, which is not a node outcome; its verdict was not folded",
+            key=KEY_NODE_OUTCOME_UNREADABLE,
         )
     return NodeVerdict(node=node, outcome=outcome, kind=attributes.get("kind"), why=attributes["why"])
 
