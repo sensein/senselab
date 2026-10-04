@@ -1925,14 +1925,15 @@ class TestTheFoldNamesTheHintMismatchThisBranchDoesNot:
         )
         monkeypatch.setattr(routing_module, "evaluate_live_routes", lambda *a, **k: reading)
 
-    def test_a_declared_branch_that_found_nothing_flags_the_file(
+    def test_a_declared_branch_that_found_nothing_on_an_empty_recording_discards_with_the_mismatch(
         self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """AIRWAY proposed nothing, ROUTING recorded the claim, and the fold flags on the mismatch.
+        """AIRWAY proposed nothing, ROUTING recorded the claim, and the empty recording discards.
 
         The two flag families are separable and this pins the separation: with no span there is no
         classifier window, so conformance is UNDETERMINED and contributes no ground, while the hint
-        mismatch — which reads the proposed spans, not the conformance — still reaches the file.
+        mismatch — which reads the proposed spans, not the conformance — still reaches the file's
+        ground keys. The route is empty, so the file discards (DAG review proposal 3).
         """
         hint_config = _override(tmp_path, "routing:\n  hint_branch_map:\n    cough: AIRWAY\n")
         hint = AudioHints(may_contain=["cough"])
@@ -1943,10 +1944,11 @@ class TestTheFoldNamesTheHintMismatchThisBranchDoesNot:
         assert branch.report.conformance == UNDETERMINED
 
         folded = verdict(store, None, hint_config, hint, run_dir=tmp_path).file_verdict
-        assert folded.triage is Triage.FLAG
+        assert folded.triage is Triage.DISCARD
         assert folded.findings["AIRWAY"] == "absent"
         assert folded.hints["AIRWAY"] == "claimed_not_found"
-        assert folded.discard_ground is None
+        assert folded.discard_ground == "acoustically_empty"
+        assert "hint_mismatch:AIRWAY" in folded.ground_keys
         assert any(
             reason.why == "hint mismatch: AIRWAY was declared and did not find it" for reason in folded.reasons
         ), [reason.why for reason in folded.reasons]
