@@ -75,3 +75,24 @@ lexical word (Harvard sentences 2, productive vocabulary 2, free-speech-v2 2, DD
 whose branch proposed no span (glides 2, prolonged vowel 1, MPT-v2 1), and two breath recordings that
 had passed (2.0 s and 19.7 s) in which AIRWAY found no activity at all. A DDK-ka recording owed a rerun
 (`route_unexplained`) stays `rerun`. `route_mismatch` keys fall from 25 to 16.
+
+## 2026-10-05: an owner that could not look is owed a rerun
+
+The two breath recordings above were pulled and listened to (`~/Downloads/breath_absent_check_20261005/`).
+The 1.98 s breath-2 recording is real audio at a normal level. AIRWAY found nothing because the
+`hear_scores` derivative its event search needs never reached the store (`event_instrument` records
+`absent: [hear_scores]`); it never looked. `declared_task_absent` read only that the owning branch's
+finding was ABSENT, and so discarded a recording the pipeline still owed a measurement.
+
+`declared_task_absent` and `acoustically_empty` now apply only when every owning branch had what it
+needs to look. VERDICT collects each owner's absent inputs (`TaskEvidence.owner_absent_inputs`):
+AIRWAY's `event_instrument` absences, ROUTING's critical absences for the owner, and the owning node's
+gates left undetermined for an uncomputed reading (`absent_not_computed`, `instrument_absent`). With any
+of them and the task not performed, the fold raises the operational ground `owning_branch_input_absent`
+and the file is `rerun`. `too_short_for_task` is unchanged: a duration needs no instrument. The 19.7 s
+v2-breath recording, near-silent with every input present, still discards as `declared_task_absent`.
+
+Measured on the same sample, both codes re-folded over the same stores at the same moment (the v9
+review was writing to them): of the 2,114 rows exactly one changes, the 1.98 s breath-2 recording,
+from `discard`/`declared_task_absent` to `rerun` with `owning_branch_input_absent`. The 114
+empty-route recordings are unchanged (all still discard; none had an owner lacking an input).
