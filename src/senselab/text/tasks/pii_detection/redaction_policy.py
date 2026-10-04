@@ -292,16 +292,10 @@ def date_positions(texts: Sequence[str]) -> set[int]:
         texts: The words, in order.
 
     Returns:
-        :func:`year_positions`, :func:`month_positions`, :func:`season_positions`,
-        :func:`holiday_positions` and :func:`age_positions`, together.
+        :func:`year_positions`, :func:`month_positions`, :func:`holiday_positions` and
+        :func:`age_positions`, together. A season is not among them: it is released by kind.
     """
-    return (
-        year_positions(texts)
-        | month_positions(texts)
-        | season_positions(texts)
-        | holiday_positions(texts)
-        | age_positions(texts)
-    )
+    return year_positions(texts) | month_positions(texts) | holiday_positions(texts) | age_positions(texts)
 
 
 def state_positions(texts: Sequence[str]) -> set[int]:

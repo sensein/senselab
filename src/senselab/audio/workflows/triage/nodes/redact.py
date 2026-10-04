@@ -1246,9 +1246,9 @@ def _time_token(text: str) -> str:
 
 
 def time_by_kind(texts: Sequence[str]) -> set[int]:
-    """Which words of one DATE_TIME-family span name a time of day, a weekday, a relative reference or a length of time.
+    """Which words of one DATE_TIME-family span name a time, a weekday, a season, a relative reference or a duration.
 
-    A time-of-day word, a weekday, a relative day ("yesterday"), a clock marker after a number, a
+    A time-of-day word, a weekday, a season, a relative day ("yesterday"), a clock marker after a number, a
     plural unit, or a singular unit beside a quantity or after a relative modifier ("last year") is
     released, and with any of them the span's quantities, numbers and modifiers. A span holding a
     ``blockers`` word, a four-digit number or an ordinal releases nothing.
@@ -1282,6 +1282,7 @@ def time_by_kind(texts: Sequence[str]) -> set[int]:
             or token in lists["plural_units"]
             or token in lists["weekdays"]
             or token in lists["relative_days"]
+            or token in lists["seasons"]
         ):
             core.add(position)
         elif token in lists["units"] and (quantified or relative):
@@ -2037,16 +2038,16 @@ def mask_plan(
     name_approvals: Sequence[str] = (),
     task_text: Sequence[str] = (),
 ) -> MaskPlan:
-    """Which words stay masked under redaction policy v7, the reviewer's unmasks and the content-word trim.
+    """Which words stay masked under the redaction policy, the reviewer's unmasks and the content-word trim.
 
     A mask stands for one detector finding, or several covering exactly the same words, and covers the
     residue words that finding was placed on -- never a neighbour its padding or timing reaches, never a
     task word, never the whole transcript. The policy then masks, whatever a detector or the reviewer
-    said, every residue word that writes a date element (a year, a month, a season, a holiday), an age
+    said, every residue word that writes a date element (a year, a month, a holiday), an age
     or a state (:mod:`~senselab.text.tasks.pii_detection.redaction_policy`), placing a :data:`POLICY`
     mask where no finding covers it; it keeps a person's name, written as a proper noun, masked until a
     human approves it (``name_approvals``), and a place below a country masked. It releases by kind a
-    time of day, a weekday, a relative reference or a length of time (:func:`time_by_kind`), a kinship
+    time of day, a weekday, a season, a relative reference or a length of time (:func:`time_by_kind`), a kinship
     word, and a country that is the whole of a place name unless a reviewer ``redact`` entry names it.
     A health condition the reviewer lists is never masked. A word otherwise leaves its mask when a
     reviewer ``release`` entry names it -- whole-token runs, at every place the quote occurs -- or
@@ -2309,7 +2310,7 @@ def mask_plan(
                 if capitalised(word) and word.id not in approved_ids:
                     locked.setdefault(word.id, LOCK_PERSON)
     lists = _time_release()
-    standalone_time = lists["time_of_day"] | lists["weekdays"] | lists["relative_days"]
+    standalone_time = lists["time_of_day"] | lists["weekdays"] | lists["relative_days"] | lists["seasons"]
     standalone_ids = {word.id for word in scan if _time_token(text_of(word)) in standalone_time} - always_ids
     for word_id in standalone_ids & covered_ids:
         kind_of.setdefault(word_id, KIND_TIME)

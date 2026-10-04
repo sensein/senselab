@@ -16,7 +16,7 @@ from typing import Any, Callable, Mapping
 
 from senselab.text.tasks.pii_detection.redaction_review import task_guidance
 
-QUESTION_SET_VERSION = 2
+QUESTION_SET_VERSION = 3
 """Bump on any change to :data:`QUESTIONS` or to the state :func:`ask_second_opinion` sends."""
 
 OTHER_VOICE = "other_voice"
@@ -51,11 +51,11 @@ QUESTIONS: Mapping[str, Mapping[str, Any]] = {
         "instructions": (
             "Does the transcript contain anything that must be removed before release: the name of a "
             "person connected to the participant (not a public figure, a fictional character or a work "
-            "title); an absolute date element (a year, a month, a season, a holiday, a day of the month); "
+            "title); an absolute date element (a year, a month, a holiday, a day of the month); "
             "a place smaller than a country connected to the participant (where they or their people "
             "live, work, travel or are treated); a specific named organization (an employer, a school, a "
-            "hospital, a military unit); an age; or a contact or ID number? Relationship words, weekdays, "
-            "relative times, countries, health conditions, and anything that is the task's own content "
+            "hospital, a military unit); an age; or a contact or ID number? Relationship words, seasons, "
+            "weekdays, relative times, countries, health conditions, and anything that is the task's own content "
             "(state.stimulus, state.task_content) do not count."
         ),
     },

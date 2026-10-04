@@ -1,22 +1,23 @@
-# Redaction policy v7: the words the triage fold masks or releases by kind, whatever a detector or
+# Redaction policy v9: the words the triage fold masks or releases by kind, whatever a detector or
 # the redaction reviewer said. Tokens are compared lower-case, accents folded, edge punctuation and a
 # possessive dropped; a phrase is a list of such tokens matched as a contiguous run.
 #
 # derivation: owner, 2026-10-03 (rules quoted verbatim in specs/20261003-redaction-policy-v7/design.md).
-# Dates: every absolute date element is masked, the year included -- years, months, seasons,
-# holidays; weekdays and relative or length-of-time expressions are released (owner chose to release
-# weekdays). Ages: masked by default. Places: everything below a country is masked; a country is
+# Dates: every absolute date element is masked, the year included -- years, months, holidays, a
+# day of the month; seasons, weekdays and relative or length-of-time expressions are released (owner,
+# 2026-10-04: "redact absolute years and months etc and leave seasons and days of the week"). Ages: masked by default. Places: everything below a country is masked; a country is
 # released unless the reviewer judges it triangulates (owner: "countries can be kept, unless there is
 # the possibility of triangulation from other unredacted information"). Kinship words are never
 # masked. The lists are the English and Spanish forms present in the Bridge2AI-Voice adult release
 # (sidecar language en / es); a word this file does not list is left to the detectors and the reviewer.
-version: 7
+version: 9
 
 months: [january, february, march, april, may, june, july, august, september, october, november, december, sept]
 # Spanish month names are written lower-case, so they are matched in any case.
 months_es: [enero, febrero, marzo, abril, mayo, junio, julio, agosto, septiembre, setiembre, octubre, noviembre, diciembre]
-# Seasons matched in any case; `seasons_in_context` only beside a context word, since "spring" and
-# "fall" are also a verb and an injury.
+# Seasons are released, not masked (v9); the lists name them for `season_positions`.
+# `seasons_in_context` only beside a context word, since "spring" and "fall" are also a verb and an
+# injury.
 seasons: [summer, summers, summertime, winter, winters, wintertime, autumn, autumns, springtime, verano, invierno, primavera, otono]
 seasons_in_context: [spring, fall]
 season_context_before: [the, this, last, next, every, early, late, past, during, in, that, each]

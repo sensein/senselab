@@ -2786,10 +2786,9 @@ class TestTaskWordsKindCutAndAReadingThatNamesNothing:
         words_of = {word.text: word for mask in plan.masks for word in mask.words}
         assert (words_of["Florida"].state, words_of["Florida"].locked) == (MASKED, "place")
         assert (words_of["like"].state, words_of["like"].kind_cut) == (UNMASKED_BY_TRIM, True)
-        assert (words_of["summer"].state, words_of["summer"].locked) == (MASKED, "date")
+        assert "summer" not in words_of, "a season is released, so the policy places no mask on it"
         assert [(mask.source, mask.planned.category) for mask in plan.masks if mask.final] == [
             (DETECTOR, "LOCATION"),
-            ("policy", "DATE_TIME"),
         ]
 
     def test_a_name_part_the_transcript_uses_nowhere_else_is_not_cut(
@@ -2877,13 +2876,14 @@ class TestTaskWordsKindCutAndAReadingThatNamesNothing:
         (["yesterday", "evening"], {0, 1}),
         (["two", "years", "in", "Boston"], {0, 1, 2}),
         (["2-3", "weeks", "ago"], {0, 1, 2}),
-        (["this", "summer"], set()),
+        (["this", "summer"], {0, 1}),
+        (["en", "invierno"], {0, 1}),
         (["in", "2021"], set()),
         (["hace", "dos", "semanas"], {0, 1, 2}),
     ],
 )
 def test_time_by_kind_releases_times_of_day_and_durations_only(texts: list[str], released: set[int]) -> None:
-    """A time of day, a weekday, a relative or a length of time is released; a date, a season or an age is not."""
+    """A time of day, a weekday, a season, a relative or a length of time is released; a date or an age is not."""
     assert time_by_kind(texts) == released
 
 
@@ -2930,15 +2930,32 @@ class TestRedactionPolicyV7:
         (word,) = [word for mask in plan.masks for word in mask.words if word.text == "2021"]
         assert (word.state, word.locked, word.named) == (MASKED, "date", True)
 
-    def test_seasons_holidays_and_months_no_detector_found_are_masked_by_the_policy(
+    def test_holidays_and_months_no_detector_found_are_masked_by_the_policy(
         self, store: ProvStore, tmp_path: Path
     ) -> None:
-        """Case: "summer", "Halloween" and "October" get a policy mask each; nothing else does."""
+        """Case: "Halloween" and "October" get a policy mask each; the season beside them gets none (v9)."""
         plan = self._plan(store, tmp_path, ["every", "summer", "and", "on", "Halloween", "in", "October", "we", "go"])
         policy = [mask for mask in plan.masks if mask.source == "policy"]
-        assert [[word.text for word in mask.words] for mask in policy] == [["summer"], ["Halloween"], ["October"]]
+        assert [[word.text for word in mask.words] for mask in policy] == [["Halloween"], ["October"]]
         assert all(word.state == MASKED and word.locked == "date" for mask in policy for word in mask.words)
-        assert plan.policy_masks_n == 3
+        assert plan.policy_masks_n == 2
+
+    def test_a_season_a_detector_tagged_is_released_and_a_month_year_or_holiday_is_not(
+        self, store: ProvStore, tmp_path: Path
+    ) -> None:
+        """Owner, 2026-10-04: "redact absolute years and months etc and leave seasons and days of the week"."""
+        words = ["last", "summer", "en", "invierno", "on", "Monday", "in", "October", "2021", "for", "Halloween"]
+        plan = self._plan(
+            store,
+            tmp_path,
+            words,
+            [("DATE_TIME", [0, 1]), ("DATE_TIME", [3]), ("DATE_TIME", [5]), ("DATE_TIME", [7, 8]), ("DATE_TIME", [10])],
+            proposal=[_release_entry("October 2021", "DATE_TIME"), _release_entry("Halloween", "DATE_TIME")],
+        )
+        states = _states(plan)
+        assert states["summer"] == RELEASED_BY_KIND and states["invierno"] == RELEASED_BY_KIND
+        assert states["Monday"] == RELEASED_BY_KIND
+        assert states["October"] == MASKED and states["2021"] == MASKED and states["Halloween"] == MASKED
 
     def test_a_weekday_and_relative_times_are_released_by_kind(self, store: ProvStore, tmp_path: Path) -> None:
         """Case: "on Monday", "2-3 weeks ago" and "last year" are shown whatever the reviewer said."""
@@ -3075,7 +3092,7 @@ class TestRedactionPolicyV7:
 
     def test_a_policy_mask_is_released_where_redact_never_ran(self, store: ProvStore, tmp_path: Path) -> None:
         """No finding, no REDACT: the fold's policy mask still makes the released copy, audio and text."""
-        plan = self._plan(store, tmp_path, ["we", "go", "every", "summer", "home"])
+        plan = self._plan(store, tmp_path, ["we", "go", "every", "October", "home"])
         assert plan.policy_masks_n == 1
         _write_ledger(store, plan, "release_with_redaction", None)
         written = settle_release(

@@ -116,3 +116,21 @@ nothing was written, and there were 0 errors.
 - **5 words newly masked:** number words a v7 trim had let through.
 - **Productive vocabulary:** 441 masked words in 347 recordings became 395 in 317. What stays masked is mostly capitalised: misheard or garbled words written as names ("Kean", "Battle", "Denis", "Stratter", "Darly"), places ("Africa", "Middle East"), and names ("Trump", "Larry"). Those wait on the v8 reviewer's relabels and place reasons. A cut-off attempt at the target ("Gladie-" for "gladiator") is not matched as task text.
 - **Rules 2 and 3** (the reviewer's place reasons and relabels) take effect only after the v8 re-review.
+
+## v9, 2026-10-04: seasons are released
+
+The owner, on the v8 page: "redact absolute years and months etc and leave seasons and days of the
+week". Policy v9 moves seasons (summer, winter, fall/autumn, spring, and the Spanish verano, invierno,
+otoño, primavera) from always-masked to released by kind, like weekdays, which stay released. Still
+locked, and the reviewer cannot release them: years in any form, months, holidays (they name an
+absolute date, e.g. Halloween), a day of the month beside a month, and ages.
+
+- `redaction_policy.yaml` is version 9; `date_positions` no longer includes `season_positions`.
+- `time_release.yaml` lists `seasons`, and drops them from `blockers`; the fold releases a season by
+  kind inside a DATE_TIME span and as a standalone word under any family, as it does a weekday.
+- The reviewer prompt is version 9, so no v8 reading is reused; it lists seasons among what to keep,
+  and `answer_problem` no longer rejects a season release.
+- Clef question set 3: `policy_identifier_present` no longer counts a season as a date element, and a
+  question-set-2 answer is not reused.
+
+The v8 GPU re-review was cancelled for this; the re-review runs on prompt v9.

@@ -371,7 +371,7 @@ def test_a_release_the_policy_never_allows_is_fed_back() -> None:
     def result(*proposal: ReviewProposal) -> ReviewResult:
         return ReviewResult(available=True, redaction="complete", original="clean", proposal=list(proposal))
 
-    for text in ("Florida", "2021", "last summer", "73 years old", "Halloween"):
+    for text in ("Florida", "2021", "October", "73 years old", "Halloween"):
         forbidden = ReviewProposal(text=text, action="release", category="LOCATION", why="looks fine")
         assert "always removes" in (answer_problem(result(forbidden), f"i said {text}", None) or ""), text
     bare = ReviewProposal(text="Mexico", action="release", category="LOCATION", why="")
@@ -685,6 +685,6 @@ def test_the_prompt_states_the_time_expression_rule_and_the_cue_word_rule() -> N
     """v7: weekdays and relative times are released, absolute dates are not; a cue word's definition is task content."""
     from senselab.text.tasks.pii_detection import redaction_review as r
 
-    assert r.PROMPT_VERSION == 8
+    assert r.PROMPT_VERSION == 9
     assert "2-3 weeks ago" in r._PROMPT and "this morning" in r._PROMPT and '"Monday"' in r._PROMPT
     assert "gladiator" in r._PROMPT and "hotel" in r._PROMPT

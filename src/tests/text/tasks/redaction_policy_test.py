@@ -20,10 +20,11 @@ def _hits(sentence: str, finder) -> list[str]:  # noqa: ANN001 -- one of the mod
         ("in two thousand twenty one", ["two", "thousand", "twenty", "one"]),
         ("since the '98 season", ["'98"]),
         ("walked two thousand steps", []),
-        ("every summer we go to Halloween parties in October", ["summer", "Halloween", "October"]),
+        ("every summer we go to Halloween parties in October", ["Halloween", "October"]),
+        ("en invierno y en verano", []),
         ("the 14th of March", ["14th", "March"]),
         ("el 3 de marzo", ["3", "marzo"]),
-        ("this spring and in the fall", ["spring", "fall"]),
+        ("this spring and in the fall", []),
         ("I had a fall and may spring up", []),
         ("on Monday last year two-three weeks ago", []),
         ("I am seventy-three years old and", ["seventy-three", "years", "old"]),
@@ -36,7 +37,7 @@ def _hits(sentence: str, finder) -> list[str]:  # noqa: ANN001 -- one of the mod
     ],
 )
 def test_date_positions_mask_every_absolute_date_element_and_every_age(sentence: str, masked: list[str]) -> None:
-    """Owner, 2026-10-03: 2021, October, summer and Halloween are redacted; a duration or a weekday is not."""
+    """2021, October and Halloween are redacted; a season, a duration or a weekday is not (v9, 2026-10-04)."""
     assert _hits(sentence, policy.date_positions) == masked
 
 
