@@ -3165,6 +3165,16 @@ class TestRedactionPolicyV8:
         plan = self._plan(store, tmp_path, ["call", "five", "five", "5", "now"], [("PHONE_NUMBER", [1, 2, 3])])
         assert set(_states(plan).values()) == {MASKED}
 
+    def test_a_decade_or_an_ordinal_a_detector_marked_keeps_its_mask(self, store: ProvStore, tmp_path: Path) -> None:
+        """r12 page: "fifties" and "twenty-second" are no proper nouns, but they write an age or a date."""
+        plan = self._plan(
+            store,
+            tmp_path,
+            ["back", "then", "fifties", "and", "the", "twenty-second", "too"],
+            [("DATE_TIME", [2]), ("DATE_TIME", [5])],
+        )
+        assert _states(plan) == {"fifties": MASKED, "twenty-second": MASKED}
+
     def test_a_historical_place_is_released_with_its_reason(self, store: ProvStore, tmp_path: Path) -> None:
         """Case: "Roman Empire" released as historical leaves its mask, and the ledger counts the reason."""
         plan = self._plan(

@@ -16,6 +16,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import socket
 import subprocess
 import time
@@ -37,6 +38,10 @@ class PinMismatchError(RuntimeError):
 
 class ServerUnusableError(RuntimeError):
     """The server answers but cannot serve the pinned model as required."""
+
+
+_INFERENCE_COMPUTE = re.compile(r'msg="?inference compute"?.*?\blibrary=("?)([^"\s]+)\1')
+"""An ``ollama serve`` log line naming one compute device its discovery settled on, and that device's library."""
 
 
 @dataclass(frozen=True)
@@ -176,8 +181,11 @@ class OllamaServer:
         keep_alive: ``OLLAMA_KEEP_ALIVE``, how long the weights stay loaded between requests.
         num_parallel: ``OLLAMA_NUM_PARALLEL``, how many requests the loaded model answers at once.
         require_gpu: Load the model on entry and raise :class:`ServerUnusableError` unless it is
-            wholly resident on the GPU.
+            wholly resident on the GPU; before the load, raise at once where the server's device
+            discovery settled on the CPU alone.
         load_timeout_s: How long the load on entry may take.
+        discovery_wait_s: How long, after the server answers, its log is read for the devices discovery
+            settled on.
     """
 
     def __init__(
@@ -193,6 +201,7 @@ class OllamaServer:
         num_parallel: int = 1,
         require_gpu: bool = True,
         load_timeout_s: float = 300.0,
+        discovery_wait_s: float = 90.0,
     ) -> None:
         """Hold the settings; nothing starts until ``__enter__``."""
         self.binary = Path(binary)
@@ -205,9 +214,11 @@ class OllamaServer:
         self.num_parallel = int(num_parallel)
         self.require_gpu = require_gpu
         self.load_timeout_s = load_timeout_s
+        self.discovery_wait_s = discovery_wait_s
         self.host = ""
         self._process: subprocess.Popen[bytes] | None = None
         self._log: Any = None
+        self._log_start = 0
 
     @property
     def model(self) -> str:
@@ -227,6 +238,7 @@ class OllamaServer:
             "OLLAMA_NUM_PARALLEL": str(self.num_parallel),
             "OLLAMA_NOPRUNE": "1",
         }
+        self._log_start = self.log_path.stat().st_size if self.log_path is not None and self.log_path.exists() else 0
         self._log = self.log_path.open("ab") if self.log_path is not None else subprocess.DEVNULL
         self._process = subprocess.Popen(  # noqa: S603 — a fixed binary with fixed arguments
             [str(self.binary), "serve"], env=env, stdout=self._log, stderr=subprocess.STDOUT
@@ -245,11 +257,49 @@ class OllamaServer:
             raise RuntimeError(f"ollama serve did not answer within {self.startup_timeout_s} s")
         if self.require_gpu:
             try:
+                self.require_gpu_discovered()
                 self.load()
             except BaseException:
                 self.__exit__(None, None, None)
                 raise
         return self
+
+    def discovered_libraries(self) -> list[str]:
+        """The library of every compute device this run's server logged discovering, lower-cased, in order.
+
+        Returns:
+            ``cuda``, ``cpu`` ... per ``inference compute`` line written since this server started; empty
+            where there is no log or discovery has not reported yet.
+        """
+        if self.log_path is None or not self.log_path.exists():
+            return []
+        if self._log not in (None, subprocess.DEVNULL):
+            self._log.flush()
+        with self.log_path.open("rb") as handle:
+            handle.seek(self._log_start)
+            text = handle.read().decode("utf-8", "replace")
+        return [match.group(2).lower() for match in _INFERENCE_COMPUTE.finditer(text)]
+
+    def require_gpu_discovered(self) -> None:
+        """Wait up to ``discovery_wait_s`` for the server's device discovery, and refuse a CPU-only one.
+
+        Raises:
+            ServerUnusableError: If every device discovery reported is the CPU. Where discovery reports
+                nothing in the wait, or the server keeps no log, nothing is raised and the load's
+                residency check decides.
+        """
+        if self.log_path is None:
+            return
+        deadline = time.monotonic() + self.discovery_wait_s
+        while True:
+            libraries = self.discovered_libraries()
+            if libraries:
+                if all(library == "cpu" for library in libraries):
+                    raise self._unusable("GPU discovery fell back to the CPU (inference compute library=cpu)")
+                return
+            if time.monotonic() >= deadline:
+                return
+            time.sleep(1.0)
 
     def log_tail(self) -> str:
         """The last non-empty line of the server's log, or an empty string."""

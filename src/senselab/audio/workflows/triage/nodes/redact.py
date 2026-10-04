@@ -92,6 +92,7 @@ from senselab.text.tasks.pii_detection.redaction_policy import (
     state_positions,
 )
 from senselab.text.tasks.pii_detection.redaction_policy import fold as policy_fold
+from senselab.text.tasks.pii_detection.redaction_policy import policy as policy_tables
 from senselab.text.tasks.pii_detection.redaction_review import (
     PLACE_HISTORICAL,
     PLACE_REASONS,
@@ -2004,11 +2005,23 @@ def task_text_positions(texts: Sequence[str], task_text: Sequence[str]) -> set[i
 
 
 def _identifier_shaped(text: str) -> bool:
-    """Whether a word could be part of a number or a contact: a digit, an ``@``, or a number word."""
+    """Whether a word could be part of a number, a date or an age.
+
+    Args:
+        text: A word's surface.
+
+    Returns:
+        True for a digit, an ``@``, or a number, ordinal or decade word, whole or as a hyphenated piece
+        ("twenty-second", "fifties").
+    """
     if any(ch.isdigit() for ch in text) or "@" in text:
         return True
     key = policy_fold(text)
-    return bool(key) and is_number(key)
+    if not key:
+        return False
+    tables = policy_tables()
+    words = {"thousand"} | set(tables["ordinal_words"]) | set(tables["age_decades"])
+    return is_number(key) or key in words or any(is_number(piece) or piece in words for piece in key.split("-"))
 
 
 def mask_plan(
@@ -2156,15 +2169,12 @@ def mask_plan(
     ]
     scan_texts = [text_of(word) for word in scan]
     with_task = [
-        word
-        for word in (residue or words)
-        if word.extent is not None and not word.attributes.get("bracketed") and word.id in task_text_ids
+        word for word in (residue or words) if word.extent is not None and not word.attributes.get("bracketed")
     ]
+    with_task_texts = [text_of(word) for word in with_task]
     task_policy_ids = {
-        with_task[i].id
-        for i in date_positions([text_of(word) for word in with_task])
-        | state_positions([text_of(word) for word in with_task])
-    }
+        with_task[i].id for i in date_positions(with_task_texts) | state_positions(with_task_texts)
+    } & task_text_ids
     date_ids = {scan[i].id for i in date_positions(scan_texts)}
     age_ids = {scan[i].id for i in age_positions(scan_texts)}
     state_ids = {scan[i].id for i in state_positions(scan_texts)}
