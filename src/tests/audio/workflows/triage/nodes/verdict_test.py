@@ -2177,3 +2177,48 @@ class TestTheTaskEvidenceProfiles:
         assert "um" not in tokens["respiration-and-cough-cough"]
         assert "breath" in tokens["respiration-and-cough-fivebreaths"]
         assert "harvard-sentences-list" not in tokens
+
+
+class TestTheOwnerCouldLook:
+    """An owning branch that lacked an input cannot say its task is absent."""
+
+    @staticmethod
+    def _store(*, absent: Sequence[str] = ()) -> ProvStore:
+        store = ProvStore(run_id="owner-input-test")
+        agent = software_agent(store)
+        activity = store.activity(node="AIRWAY", step="seed", parameters={})
+        store.was_associated_with(activity, agent)
+        if absent:
+            entity = store.entity(
+                prov_type="measurement",
+                extent=None,
+                attributes={"name": "event_instrument", "absent": list(absent), "value": None, "signal": "plain"},
+            )
+            store.was_generated_by(entity, activity)
+        return store
+
+    def test_an_absent_airway_instrument_is_named(self) -> None:
+        """AIRWAY's event_instrument measurement names what it lacked."""
+        absent = verdict_module._owner_absent_inputs(self._store(absent=["hear_scores"]), ("AIRWAY",), None)
+        assert absent == ("AIRWAY:hear_scores",)
+
+    def test_nothing_is_absent_where_every_input_arrived(self) -> None:
+        """No instrument-absent measurement, no critical absence, no uncomputed gate: nothing lacked."""
+        assert verdict_module._owner_absent_inputs(self._store(), ("AIRWAY",), None) == ()
+
+    def test_an_airway_instrument_does_not_count_against_another_owner(self) -> None:
+        """AIRWAY's absence is not a SPEECH-owned task's."""
+        absent = verdict_module._owner_absent_inputs(self._store(absent=["hear_scores"]), ("SPEECH",), None)
+        assert absent == ()
+
+    def test_an_owning_node_gate_left_uncomputed_is_named(self) -> None:
+        """A gate of the owning node left undetermined for want of its reading is an absent input."""
+        record = {
+            "node": "VOICE",
+            "applied": [
+                {"gate": "voiced_fraction_min", "passed": UNDETERMINED, "reason": "instrument_absent"},
+                {"gate": "production_min_s", "passed": True},
+            ],
+        }
+        absent = verdict_module._owner_absent_inputs(self._store(), ("VOICE",), record)
+        assert absent == ("VOICE:voiced_fraction_min",)
