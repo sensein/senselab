@@ -35,8 +35,11 @@ columns:
 
   verdict:
     units: none
-    values: [pass, flag, discard]
-    description: The file-level triage outcome.
+    values: [pass, flag, rerun, discard]
+    description: >-
+      The file-level triage outcome. `rerun` is a recording the pipeline still owes something -- a
+      missing derivative, a node that did not finish, a configuration the fold cannot read -- before
+      anything about the participant is concluded; `ground_keys` names which.
     computation: >-
       The `triage` attribute of the latest live `verdict` entity with `node = VERDICT` (the fold);
       the fold's `FileVerdict.triage`.
@@ -94,13 +97,38 @@ columns:
     source: [recording_vectors.py:extract, vocabulary.py:FileVerdict.record, vocabulary.py:_release_from]
     null_means: REDACT passed and its planned masks stand, so the redacted copy releases on REDACT's own verdict; never null for a withheld recording.
 
-  grounds:
+  release_ground_key:
+    units: none
+    description: >-
+      The stable key of `release_ground` (vocabulary.py `RELEASE_GROUND_KEYS`), or `redact_decided`
+      where REDACT's own verdict decided the release.
+    computation: The fold's `release_ground_key` attribute (`vocabulary.release_ground_key`).
+    source: [recording_vectors.py:extract, vocabulary.py:FileVerdict.record, vocabulary.py:release_ground_key]
+    null_means: The fold was written before the ground keys existed; a re-fold fills it.
+
+  discard_ground:
     units: none
     values: [unmeasurable, acoustically_empty]
     description: Why the recording was discarded.
     computation: The fold's `discard_ground` attribute.
     source: [recording_vectors.py:extract, vocabulary.py:FileVerdict.record]
     null_means: The recording was not discarded.
+
+  ground_keys:
+    units: none
+    description: >-
+      The stable key of every ground behind the triage state -- the discard ground and every flag,
+      sorted and deduplicated. A key is one of vocabulary.py `GROUND_KEYS` (e.g.
+      `person_name_review`, `taxonomy_no_classifier`, `acoustically_empty`) or `<prefix>:<name>`
+      for a prefix in `GROUND_KEY_PREFIXES` (`gate:<gate>`, `conformance:<branch>`,
+      `branch_silent:<branch>`, `hint_mismatch:<branch>`, `node:<node>:<outcome>` …). Keys in
+      `OPERATIONAL_GROUND_KEYS` or under `branch_silent` / `unmeasured_operating_point` are the
+      operational ones that make the file `rerun`. The human-readable reason stays in the store.
+    computation: The fold's `ground_keys` attribute (`FileVerdict.ground_keys`).
+    source: [recording_vectors.py:extract, vocabulary.py:FileVerdict.record, vocabulary.py:ground_key]
+    null_means: >-
+      The fold was written before the ground keys existed; a re-fold fills it. An empty list is a
+      pass.
 
   route_state:
     units: none
