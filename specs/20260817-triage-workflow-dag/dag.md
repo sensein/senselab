@@ -67,6 +67,8 @@ measurement it mints is written by `speech()` into the `speech` family. See
 
 ## The graph
 
+Verified against `run.py` and `vocabulary.GRAPH_ORDER` at `89abf051` (2026-10-04).
+
 ```mermaid
 graph TD
   ADMIT -->|"audio, recording stream"| PREPROCESS
@@ -76,18 +78,61 @@ graph TD
   ROUTING ==>|"ruleset_routing -> branch_decision"| AIRWAY
   ROUTING ==> SPEECH
   ROUTING ==> VOICE
+  AIRWAY -.->|"unrun owner: task_extent_absent"| OWNER[record_unrun_owner]
+  SPEECH -.-> OWNER
+  VOICE -.-> OWNER
   PREPROCESS -->|"clip spans, clip_amplitude"| QUALITY
-  SPEECH -->|"a pii finding exists"| REDACT
+  SPEECH -->|"a live pii finding"| REDACT
+  PREPROCESS -->|"consensus words"| REVIEW
+  REDACT -->|"redacted transcript, masks"| REVIEW
   AIRWAY --> VERDICT
   SPEECH --> VERDICT
   VOICE --> VERDICT
   QUALITY --> VERDICT
   REDACT --> VERDICT
+  REVIEW -->|"redaction_llm_annotation"| VERDICT
+  VERDICT -->|"release, release_ground"| SETTLE[settle_release]
   VERDICT --> REPORT
+  subgraph after["after a finished pass: scripts/extend_*.py"]
+    SO[SECOND_OPINION<br/>extend_second_opinion] -->|"second_opinion_answers"| REFOLD[VERDICT again<br/>extend_refold]
+    LLM[REVIEW, GPU<br/>extend_llm_review] --> REFOLD
+    REPLAY[TAXONOMY..REPORT again<br/>extend_replay_decisions] --> REFOLD
+    REFOLD --> TA[task-extent cuts<br/>extend_task_audio]
+    TA --> RV[recording_vectors parquet<br/>triage_recording_vectors]
+  end
 ```
 
 `vocabulary.GRAPH_ORDER` is the runner's order: ADMIT, PREPROCESS, TAXONOMY, routing, AIRWAY,
-SPEECH, VOICE, QUALITY, REDACT, VERDICT. REPORT runs after VERDICT and is outside that tuple.
+SPEECH, VOICE, QUALITY, REDACT, **REVIEW**, VERDICT. REPORT runs after VERDICT and is outside that
+tuple. Two calls sit between the named nodes and are not in the tuple:
+
+- **`branches.record_unrun_owner`**, after the branch loop and on ADMIT's refusal, writes a
+  `task_extent_absent` measurement (`owning_branch_not_run`) for the branch that owns the declared
+  family when that branch did not complete. It is how "no extent because nothing ran" differs from
+  "no extent because the branch looked and found no task".
+- **`redact.settle_release`**, after VERDICT, writes the released pair the fold's release decided
+  (the original, or the redacted copy built from the final masks) into `released/`.
+
+SECOND_OPINION is not in the runner. It runs only through `scripts/extend_second_opinion.py` over a
+finished store, and VERDICT reads its `second_opinion_answers` measurement on the next fold.
+
+### Node table
+
+| node | reads | writes | models (pinned by resolved commit) | config | concludes |
+| --- | --- | --- | --- | --- | --- |
+| ADMIT | file bytes | `recording` stream, verdict | — | — | PASS / FAIL (6 named reasons) |
+| PREPROCESS | `recording` | 5 streams, ~40 derivative measurements and sidecars | CrisperWhisper 2.0 turbo, Qwen3-ASR-1.7B + Qwen3-ForcedAligner-0.6B, AST (AudioSet), YAMNet (TF Hub URI, not commit-pinned), HeAR, FRCRN_SE_16K, ppgs, pyannote speaker-diarization-community-1, SQUIM, Praat | `resample` … `diarization`, `praat_features`, `phonation*`, `words`, `stimulus` | PASS always; raises as a dependency gate |
+| TAXONOMY | classifier scores, `span_*` | `{classifier}_label_summary`, `consensus_taxonomy` | — | `taxonomy` | PASS; FLAG when no classifier contributed |
+| routing | TAXONOMY's store, declared family | `ruleset_routing`, `branch_decision` ×3 | — | `taxonomy.ruleset`, `routing` | PASS on every path |
+| AIRWAY | spans, HeAR/YAMNet per span, envelope | `airway` spans incl. `task_extent` or `task_extent_absent`, counts, report | — | `airway`, `branch`, `verdict.gates` | report (conformance) |
+| SPEECH | consensus words, diarization, YAMNet, streams | `speech` spans, DDK decode, separated streams, `pii` findings, `pii_scan`, report | MossFormer2_SS_16K (ClearVoice), speechbrain ECAPA (enrollment), GLiNER / presidio / rules (PII) | `speech`, `stimulus`, `pii`, `verdict.gates` | report |
+| VOICE | amplitude spans, phonation tracks, continuity | `voice` spans, `carrier_rejected`, report | — | `voice`, `phonation`, `verdict.gates` | report (never `False`) |
+| QUALITY | stored clip spans and `clip_amplitude` | `assertion` entities | — | `quality` | report on `STORE_ASSERTIONS` |
+| REDACT | `pii` findings, `pii_scan`, words | `redaction` spans, `redacted` stream, ledger | GLiNER / presidio / rules (re-scan) | `redaction`, `pii` | PASS / FLAG / FAIL |
+| REVIEW | consensus words, REDACT's text and masks, task context | `redaction_llm_review` ×iterations, `redaction_llm_annotation`; may rewrite the `redacted` stream | Gemma-4-31B-it QAT w4a16 (enabled only by an override; packaged off) | `redaction.llm_check` | writes no verdict |
+| VERDICT | every verdict, report, decision, annotation, `second_opinion_answers`, gates | one verdict entity (`FileVerdict.record()`) | — | `verdict.*` | triage + release axes |
+| REPORT | the store | `summary/summary.json` (`triage-summary/v9`), figure | — | `report` | no verdict |
+| SECOND_OPINION (driver) | transcript + task context | `second_opinion_answers` | Clef 27B via Ollama 0.35.1, pinned by blob/config/manifest digest | `second_opinion` | no verdict |
 
 ### What the runner does with a failure
 
@@ -267,13 +312,27 @@ that is operational and not a finding. Detail: [`branch-quality.md`](branch-qual
 Runs only when SPEECH ran and left a live `pii` finding. Reads those findings, the `pii_scan`
 measurement (absent ⇒ raise), the consensus transcript and words, and `hint.expected_speech` for
 exemptions. Writes `redaction` spans, `exempt` assertions, a `redaction_exemptions` measurement, the
-`redacted` stream, and — when the optional re-read runs — `redaction_llm_review` measurements and one
-`redaction_llm_annotation`.
+`redacted` stream and the PII span ledger.
 
 Concludes `FAIL` (the scan was incomplete, or findings survived), `FLAG` (the re-scan was incomplete)
-or `PASS`. **Its outcome is the sole input to the release axis**; the LLM re-read only annotates.
-Released artifacts — `audio.wav`, `transcript.txt`, `consensus.json` — go to `released/` on `PASS`
-alone. Detail: [`redact.md`](redact.md), [`llm-check.md`](llm-check.md).
+or `PASS`. **It is no longer the sole input to the release axis** (corrected 2026-10-04): the fold
+also reads REVIEW's reading (release entries unmask the words they name, residue withholds or
+clears under `verdict.llm_*`), the redaction policy's locks and by-kind releases (policy v7,
+`redaction_policy.yaml`), the unplaced findings, and the person-name approvals. The released pair is
+written by `settle_release` after VERDICT, not by REDACT. Detail: [`redact.md`](redact.md),
+[`../20261003-redaction-policy-v7/design.md`](../20261003-redaction-policy-v7/design.md).
+
+### REVIEW — the language-model reader over every transcript that could be released
+
+Runs wherever PREPROCESS left consensus words, whatever SPEECH's scan did; its own config
+(`redaction.llm_check.enabled`) is off in the packaged config and on in the review override, so in a
+default run it writes a `disabled` annotation. Reads the words, REDACT's redacted text and masks,
+and the task context (sidecar and registry instructions, stimulus, language). Writes one
+`redaction_llm_review` per iteration (at most `max_iterations`, feedback between rounds) and the
+`redaction_llm_annotation` VERDICT reads: speakers and other-speaker quotes, instructions spoken,
+conditions, and a proposal of words to release or hide. It writes no verdict; a proposal is applied
+by the fold, not by REVIEW. Detail:
+[`../20260924-reviewer-over-every-transcript/design.md`](../20260924-reviewer-over-every-transcript/design.md).
 
 ### VERDICT — the file-level fold
 
@@ -300,13 +359,38 @@ either — `detect_*` evaluates no task and answers `UNDETERMINED` by constructi
 would flag the corpus. The spans are what the branch *found* and are the branch side of the agreement
 table; no span count is a flag by itself. Deviations are recorded and folded into nothing.
 
-**Flag grounds.** PREPROCESS or routing errored; `routing.hint_branch_map` naming a non-branch; a
-declaration supplied that no branch decision survived to read; file route state `unexplained` or
-`unreadable`; a critical absence (a branch not one of whose gates could be read); an LLM redaction
-re-read reporting residue; a reported non-conformance, under `conformance_flags` as overridden per
-family by `conformance_flags_by_family`; an unmeasured operating point a body asked for, under
-`unmeasured_points_flag`; a branch asked to run that left no report; a declared branch that did not
-find its kind (`claimed_not_found`).
+**Flag grounds**, in the order `fold_file_verdict` appends them (verified 2026-10-04):
+
+| ground | node named | switch |
+| --- | --- | --- |
+| a deciding node's own `FLAG` (TAXONOMY with no classifier; REDACT's incomplete re-scan) | that node | — |
+| PREPROCESS errored; routing errored | PREPROCESS / routing | — |
+| `hint_branch_map` value naming no branch | routing | — |
+| a declaration no decision survived to read | VERDICT | — |
+| file route state `unexplained` / `unreadable` | routing | — |
+| critical absence: a branch none of whose gates could be read | routing | — |
+| SPEECH routed and read no lexical word | SPEECH | — |
+| the reviewer proposes hiding more (residue) | VERDICT | `llm_redaction_flags` |
+| a masked person's name awaits a human's approval | VERDICT | `person_name_review_flags` |
+| the reviewer read another speaker (unless the speaker gate already failed) | VERDICT | `llm_second_speaker_flags` |
+| the reviewer judged the redaction wrong and named no words | VERDICT | `llm_contradiction_flags` |
+| the task's instructions spoken in the recording | VERDICT | `llm_instructions_spoken_flags` |
+| the second-opinion model confidently disagrees with the reviewer | VERDICT | `second_opinion_disagreement_flags` + the two cuts |
+| a detector finding SPEECH could not place on words (`open` / `unread`) | VERDICT | — |
+| a flag gate that did not pass (`dominant_speaker_share_min`, and per group `voiced_fraction_min`, `f0_spread_max_semitones`) | VERDICT | `verdict.gates` |
+| a conformance reading that should exist and was not computed | the gate's node | `uncomputed_reading_flags` |
+| a reported non-conformance (`TASK` or `STORE_ASSERTIONS`) | the reporting node | `conformance_flags`, `conformance_flags_by_family` |
+| an unanswered conformance | the reporting node | `undetermined_flags` (off) |
+| a reported deviation | the reporting node | `deviation_flags` (off) |
+| an unmeasured operating point asked for | the reporting node | `unmeasured_points_flag` |
+| route mismatch: declined, and the branch found its kind | the branch | — |
+| a branch asked to run that left no report | the branch | — |
+| hint mismatch: declared and not found (exempt families listed) | the branch | `hint_mismatch_exempt_families` |
+
+The acoustic quality checks — noise floor, SNR, clipping duration, dropout — are **not** flag
+grounds. QUALITY reports clip consistency only, and the `q_raw_issues` / `q_unresolved` columns are
+computed by the parquet extractor (`recording_vectors.py`), outside the graph, so no quality issue
+moves a recording's triage state.
 
 **One direction of a route mismatch flags, not both.** A branch routed to a recording holding none of
 its kind found nothing because there was nothing — routing is lenient by design and the branch is
@@ -327,6 +411,40 @@ Writes two products into `summary/` and no store elements: `summary.json` (schem
 complete product. It writes no verdict — a rendering is not evidence — and its own failure changes no
 decision, because the store was already persisted. Detail: [`report.md`](report.md),
 [`summary-is-the-figure.md`](summary-is-the-figure.md), [`branch-figure.md`](branch-figure.md).
+
+## What the triage state means, for a reader of the parquet
+
+- **`verdict = discard`**: the recording cannot be used. `grounds` says why: `unmeasurable` (ADMIT
+  could not decode it, or every sample is zero or constant) or `acoustically_empty` (nothing above
+  the emptiness floor on any tracked stream). 29 in r12, all `unmeasurable`.
+- **`verdict = flag`**: at least one ground in the table above applies and a person should look.
+  `flags_n` counts the grounds and `flag_nodes` names the nodes that raised them; the ground texts
+  themselves are only in the store's verdict `reasons` (the parquet's `grounds` column carries the
+  discard ground only). `gate_failed_names` / `gate_flagged_names` name the gates behind a
+  conformance or flag-gate ground; `second_opinion_disagrees`, `person_name_masked_n`,
+  `llm_speakers` and `llm_instructions_spoken_n` stand behind the VERDICT-level grounds.
+- **`verdict = pass`**: no ground applied. It does **not** mean the audio is clean (quality issues
+  are not grounds) or that the task was confirmed (`UNDETERMINED` conformance never flags).
+- **Conformance `undetermined`** is not a triage state: it is a branch that could not answer its
+  task question, and it is folded into nothing.
+- **`release`** is a separate axis about the transcript and audio leaving the store; it never moves
+  `verdict`, and `verdict` never moves it.
+
+## Where this document and the code disagreed (corrected 2026-10-04)
+
+1. REVIEW was missing from the graph and from `GRAPH_ORDER`'s description; the text attributed the
+   `redaction_llm_review` measurements to REDACT.
+2. "REDACT's outcome is the sole input to the release axis; the LLM re-read only annotates" — no
+   longer true since the reviewer proposals, policy v7 locks and by-kind releases, approvals and
+   unplaced findings reach the release.
+3. `released/` is written by `settle_release` after VERDICT, not by REDACT on `PASS`.
+4. `record_unrun_owner` and SECOND_OPINION (driver-only, read by the fold) were undocumented.
+5. The flag-ground list omitted eleven grounds (person-name review, reviewer second speaker,
+   instructions spoken, reviewer contradiction, second-opinion disagreement, unplaced findings, the
+   three flag gates, uncomputed readings, no lexical item produced).
+6. **Invariant 6 is violated by the code**, not the text: the grounds for instructions spoken, the
+   reviewer's second speaker and the person-name review quote transcript words and proposed names
+   into the verdict's `reasons`. Left as a code proposal (`specs/20261004-dag-review/proposals.md`).
 
 ## Invariants
 
@@ -350,7 +468,18 @@ The rules a change to this package must not break. Each is enforced in code or i
 **Extending a finished run.** Drivers under `scripts/extend_*.py` append to — or retire from — a
 completed store what the pass that produced it could not, over one shared module (`extend.py`) and
 one typed-absence rule that separates a derivation which *cannot apply* to a recording from one that
-*failed*. Not a graph step. Detail:
+*failed*. In the campaign they are de-facto stages, run in this order:
+
+| stage | driver | GPU | writes | then |
+| --- | --- | --- | --- | --- |
+| replay decisions | `extend_replay_decisions.py` | no | TAXONOMY..REPORT again over stored PREPROCESS output; carries an unchanged REVIEW reading forward, reports `needs_reread` otherwise | refold |
+| reviewer | `extend_llm_review.py` | yes (Gemma) | REVIEW over the review manifest (`--force` for a new prompt version) | refold |
+| second opinion | `extend_second_opinion.py` | yes (Clef) | `second_opinion_answers` only; no re-fold of its own | refold |
+| re-fold | `extend_refold.py` | no | VERDICT again over every store | task audio |
+| task-extent cuts | `extend_task_audio.py` | no | `task_plain`, `task_enhanced`, `task_redacted` streams | parquet |
+| parquet | `triage_recording_vectors.py` | no | one row per recording (schema in `recording_vectors.py`) | page, viewer, evaluations |
+
+Every driver writes stores atomically and resumes off the store. Detail:
 [`../20260912-extend-reprocessed-outputs/design.md`](../20260912-extend-reprocessed-outputs/design.md).
 
 **Folding a corpus.** `corpus_report.py` reads a tree of `FileVerdict.record()` rows and counts them
