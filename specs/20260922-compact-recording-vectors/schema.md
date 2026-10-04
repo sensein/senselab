@@ -711,3 +711,20 @@ columns are renamed so that a further swap renames nothing: each `nimble_<x>` ab
 | column | what it is |
 |---|---|
 | `second_opinion_model_id` | `ollama:<name>:<tag>` of the model that answered; provenance, not assignable to an axis |
+
+## Schema 20: redaction policy v8 and question set 2
+
+2026-10-04 (`specs/20261004-redaction-policy-v8/design.md`). Schema 19 carried policy v7's ledger
+columns; schema 20 adds what v8 records and changes the second opinion's questions.
+
+| column | what it is |
+|---|---|
+| `released_not_proper_n`, `released_not_proper_categories` | words a detector marked that are written with no capital letter, released in every language |
+| `relabel_<kind>_n` | reviewer releases saying a removed name is a `work_title`, `brand_or_product`, `organization`, `place` or `other_non_person` |
+| `place_reason_<reason>_n` | reviewer releases letting a place through as `historical`, `fictional`, `public_landmark_or_general_knowledge` or `task_content` |
+| `task_text_words_n` | words of the task's own texts (stimulus, target word, instructions) a finding or a policy rule reached; never masked |
+| `second_opinion_policy_identifier_present_p` | question set 2's identifier question, defined by the policy |
+
+Removed: `second_opinion_named_diagnosis_p` and `second_opinion_safe_harbor_identifier_present_p`.
+`second_opinion_disagrees` now ranges over `other_voice`, `instructions_spoken` and
+`policy_identifier_present`.

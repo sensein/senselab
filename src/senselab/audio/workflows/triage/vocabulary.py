@@ -254,6 +254,7 @@ class RedactionEvidence:
         person_names_masked_n: How many words of a person's name stay masked.
         name_release_proposed: The reviewer's ``release`` quotes naming a person's name it may not
             release on its own.
+        reviewer_requested_n: How many reviewer ``redact`` entries propose hiding more than the masks hide.
     """
 
     lexical_words_n: int | None = None
@@ -267,6 +268,7 @@ class RedactionEvidence:
     policy_masks_n: int = 0
     person_names_masked_n: int = 0
     name_release_proposed: tuple[str, ...] = ()
+    reviewer_requested_n: int = 0
 
 
 UNMEASURABLE = "unmeasurable"
@@ -378,7 +380,7 @@ SECOND_OPINION_DISAGREES = "the second-opinion model confidently disagrees with 
 ``verdict.second_opinion_disagreement_flags``. Controlled vocabulary, with each disagreeing question, the
 model's probability and the reviewer's answer appended; the release is unchanged."""
 
-SECOND_OPINION_QUESTIONS = ("other_voice", "instructions_spoken", "named_diagnosis")
+SECOND_OPINION_QUESTIONS = ("other_voice", "instructions_spoken", "policy_identifier_present")
 """The questions whose disagreement with the reviewer can flag a recording."""
 
 MODEL_SPEAKER_PERMITTED = "the task's instructions permit a model speaker"
@@ -779,18 +781,23 @@ def second_opinion_disagreements(
     *,
     confident_yes: float | None,
     confident_no: float | None,
+    identifier_masked: bool | None = None,
 ) -> list[str]:
     """Where the second-opinion model confidently disagrees with the reviewer.
 
     Compared only where both answered: the opinion's status is ``ok`` and the reviewer read the
     transcript (``clean`` or ``flagged``). ``instructions_spoken`` is compared only for a reading
-    that carries the part, so a reading from before the prompt asked it is never a disagreement.
+    that carries the part, so a reading from before the prompt asked it is never a disagreement;
+    ``policy_identifier_present`` only where ``identifier_masked`` is given.
 
     Args:
         opinion: The ``second_opinion_answers`` measurement's attributes, or None.
         llm_redaction: REVIEW's annotation, or None.
         confident_yes: The probability at or above which the opinion is a confident yes.
         confident_no: The probability at or below which it is a confident no.
+        identifier_masked: Whether, once the reviewer's reading is folded, any mask stands or the
+            reviewer asks to hide more -- the reviewer's answer to ``policy_identifier_present``; None
+            where the fold has no plan to say.
 
     Returns:
         One description per disagreeing question, ``<question> p=<p> reviewer=<yes|no>``, in
@@ -807,12 +814,9 @@ def second_opinion_disagreements(
     reviewer: dict[str, bool] = {
         "other_voice": annotation.get("speakers") == "more_than_one"
         or (annotation.get("speakers") == "unclear" and bool(others)),
-        "named_diagnosis": any(
-            str(entry.get("category") or "").upper() == "CONDITION" and str(entry.get("action")) == "redact"
-            for entry in annotation.get("proposal") or ()
-            if isinstance(entry, Mapping)
-        ),
     }
+    if identifier_masked is not None:
+        reviewer["policy_identifier_present"] = identifier_masked
     if "instructions_spoken" in annotation:
         reviewer["instructions_spoken"] = any(str(text).strip() for text in annotation.get("instructions_spoken") or ())
     found = []
@@ -1270,6 +1274,7 @@ def fold_file_verdict(
         annotation,
         confident_yes=rules.second_opinion_confident_yes,
         confident_no=rules.second_opinion_confident_no,
+        identifier_masked=evidence.masks_final_n > 0 or evidence.reviewer_requested_n > 0,
     )
     if rules.second_opinion_disagreement_flags and disagreements:
         reasons.append(

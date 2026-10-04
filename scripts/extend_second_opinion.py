@@ -66,6 +66,7 @@ from senselab.audio.workflows.triage.nodes.common import describe_exception, fin
 from senselab.audio.workflows.triage.nodes.second_opinion import ABSENT, NODE, Ask, pin_of, second_opinion, settings
 from senselab.audio.workflows.triage.vocabulary import SECOND_OPINION_ANSWERS
 from senselab.text.tasks.decision_model.ollama import OllamaServer, PinMismatchError, ask_decisions, verify_pin
+from senselab.text.tasks.decision_model.second_opinion import QUESTION_SET_VERSION
 from senselab.utils.prov_store import Entity, ProvStore
 
 OPINION_SUPERSEDED = "opinion_superseded"
@@ -224,17 +225,25 @@ class LazyAsk:
         self._ask = None
 
 
-def standing(store: ProvStore) -> Entity | None:
-    """The opinion SECOND_OPINION has already left here, if any.
+def standing(store: ProvStore, config: TriageConfig | None = None) -> Entity | None:
+    """The opinion SECOND_OPINION has already left here, if any, to the current questions.
 
     Args:
         store: The run's store.
+        config: The triage configuration whose pinned model the opinion must come from; any model
+            where None.
 
     Returns:
-        The live ``ok`` ``second_opinion_answers`` a SECOND_OPINION activity generated, or None.
+        The live ``ok`` ``second_opinion_answers`` a SECOND_OPINION activity generated under the current
+        :data:`~senselab.text.tasks.decision_model.second_opinion.QUESTION_SET_VERSION` (and, with
+        ``config``, from its pinned weights), or None.
     """
     opinion = find_measurement(store, SECOND_OPINION_ANSWERS)
     if opinion is None or opinion.attributes.get("status") != "ok":
+        return None
+    if opinion.attributes.get("question_set_version") != QUESTION_SET_VERSION:
+        return None
+    if config is not None and opinion.attributes.get("blob_digest") != pin_of(config).blob_digest:
         return None
     activity_id = store.generated_by(opinion.id)
     if activity_id is None:
@@ -291,7 +300,7 @@ def extend_one(
         store = read_store(run_root)
     except (OSError, ValueError) as error:
         return {"status": ERROR, NODE: describe_exception(error)}
-    held = standing(store)
+    held = standing(store, config)
     if held is not None and not force:
         return {"status": PRESENT, NODE: str(held.attributes.get("status") or "")}
     replaced = live_opinions(store)

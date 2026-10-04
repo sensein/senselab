@@ -237,12 +237,8 @@ var SchemaAxes = (function () {
       label: 'second opinion · P(instructions spoken)', nullMeans: 'no ok opinion',
     }),
     column({
-      name: 'second_opinion_named_diagnosis_p', kind: 'numeric', group: 'review',
-      label: 'second opinion · P(named diagnosis)', nullMeans: 'no ok opinion',
-    }),
-    column({
-      name: 'second_opinion_safe_harbor_identifier_present_p', kind: 'numeric', group: 'review',
-      label: 'second opinion · P(safe-harbor identifier)', nullMeans: 'no ok opinion',
+      name: 'second_opinion_policy_identifier_present_p', kind: 'numeric', group: 'review',
+      label: 'second opinion · P(policy identifier)', nullMeans: 'no ok opinion',
     }),
     column({ name: 'second_opinion_disagrees_n', kind: 'count', group: 'review', nullMeans: 'never null' }),
     column({
