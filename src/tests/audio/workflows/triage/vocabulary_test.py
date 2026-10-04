@@ -2111,8 +2111,9 @@ class TestOperationalGroundsRerun:
             assert is_operational(key)
         assert is_operational("branch_silent:SPEECH")
         assert is_operational("unmeasured_operating_point:VOICE")
-        for key in ("conformance:SPEECH", "gate:events_min", "person_name_review", "acoustically_empty", None):
-            assert not is_operational(key)
+        for participant in ("conformance:SPEECH", "gate:events_min", "person_name_review", "acoustically_empty"):
+            assert not is_operational(participant)
+        assert not is_operational(None)
 
     def test_a_rerun_leaves_the_release_axis_alone(self) -> None:
         """The release is read from the evidence as before; a rerun state changes no artefact."""
