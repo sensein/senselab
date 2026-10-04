@@ -31,7 +31,10 @@ repos:
 - repo: https://github.com/macisamuele/language-formatters-pre-commit-hooks
   rev: v2.15.0
   hooks:
+  # The cohort-condition profiles hold regular expressions; the formatter strips their quotes, and an
+  # unquoted `\btremors?\b` inside a flow list is not valid YAML, so it would break the file it formats.
   - id: pretty-format-yaml
+    exclude: ^src/senselab/audio/workflows/triage/data/cohort_conditions/
     args:
     - --autofix
     - --indent=2
@@ -48,12 +51,14 @@ repos:
   - id: check-added-large-files
     args: [--maxkb=15000]
   - id: check-case-conflict
+  # The b2aiprep task registry is vendored verbatim from upstream (data/b2ai_task_registry/PROVENANCE.yaml:
+  # "never hand-edit them"), so the formatters and codespell leave it byte-identical to its source commit.
   - id: end-of-file-fixer
-    exclude: ^specs/.*/raw/
+    exclude: ^(specs/.*/raw/|src/senselab/audio/workflows/triage/data/b2ai_task_registry/)
   - id: trailing-whitespace
     exclude: ^specs/.*/raw/
   - id: pretty-format-json
-    exclude: ^specs/.*/raw/
+    exclude: ^(specs/.*/raw/|src/senselab/audio/workflows/triage/data/b2ai_task_registry/)
     args:
     - --autofix
     - --indent=4
@@ -77,7 +82,19 @@ repos:
     # another word. Raw captured output is excluded rather than corrected: it is a verbatim
     # record, and a truncated word in a printed table is part of what was printed.
     exclude: ^specs/.*/raw/
-    args: [--skip=*.ipynb, --ignore-words-list, 'AER,FPR,PASE,preemptable,caf,als']
+    # The second group are this workflow's own vocabulary and its verbatim records:
+    # UNDET/UNDETERMINED and NotIn are value names; FigureStyle is a class; allk, empt and
+    # empted are fragments of identifiers codespell splits; disjointness, declaring, meaned,
+    # retuned and unparseable are ordinary words it reads as misspellings; probablistic appears
+    # only inside a quoted instruction, where correcting it would misquote the speaker.
+    # The vendored parquet reader and the page that inlines it are minified JavaScript, whose
+    # short identifiers codespell reads as misspelt words. Skipped whole, as the pdoc theme's
+    # generated CSS already is; the parts they are built from are checked normally. The vendored
+    # b2aiprep registry is upstream data (Spanish stimuli among it) and is skipped for the same
+    # reason. oclock is temporal_words.yaml's normalised key for "o'clock"; meu is Portuguese,
+    # quoted from a transcript in a spec. mis, ser, vas, hace and varios are Spanish words in the
+    # redaction policy's Spanish lexicons.
+    args: [--skip=*.ipynb, --skip=src/senselab/audio/workflows/triage/viewer/vendor/*.js, --skip=src/senselab/audio/workflows/triage/viewer/recording_vectors_viewer.html, --skip=src/senselab/audio/workflows/triage/data/b2ai_task_registry/*, --ignore-words-list, 'oclock,meu,AER,FPR,PASE,preemptable,caf,als,UNDET,UNX,NotIn,FigureStyle,allk,empt,empted,disjointness,declaring,meaned,retuned,re-declaring,pre-empt,pre-empted,unparseable,probablistic,mis,ser,vas,hace,varios']
     additional_dependencies:
     - tomli
 - repo: local

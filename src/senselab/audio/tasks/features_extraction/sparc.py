@@ -39,7 +39,7 @@ _SPARC_REQUIREMENTS = [
     "transformers",
     "torchcrepe==0.0.23",
     "penn==0.0.14",
-    "huggingface-hub",
+    "huggingface-hub<2",
 ]
 _SPARC_PYTHON = "3.11"
 

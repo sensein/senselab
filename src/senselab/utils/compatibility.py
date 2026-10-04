@@ -100,7 +100,7 @@ COMPATIBILITY_MATRIX: dict[str, CompatibilityEntry] = {
     ),
     # ── Audio: Speech Enhancement ──
     # NOTE: documents the default in-process backend (SpeechBrain) only. enhance_audios also
-    # dispatches by model id to DriftSE and to ClearVoice, both ISOLATED subprocess venvs
+    # dispatches by model id to DriftSE and to ClearerVoice, both ISOLATED subprocess venvs
     # (venv_name="driftse" / "clearvoice"). Same flat-schema limitation as the diarization entry.
     "audio.tasks.speech_enhancement.enhance_audios": CompatibilityEntry(
         required_deps=["speechbrain", "torchaudio"],
@@ -232,8 +232,8 @@ COMPATIBILITY_MATRIX: dict[str, CompatibilityEntry] = {
         venv_python=CLEARVOICE_PYTHON,
         install_hint="Automatically provisioned in isolated environment",
     ),
-    # ── Audio: Target Speaker Extraction (ISOLATED — clearvoice; needs ffmpeg on PATH) ──
-    "audio.tasks.target_speaker_extraction.extract_target_speakers_from_videos": CompatibilityEntry(
+    # ── Video: Target Speaker Extraction (ISOLATED — clearvoice; needs ffmpeg on PATH) ──
+    "video.tasks.target_speaker_extraction.extract_target_speakers_from_videos": CompatibilityEntry(
         required_deps=[],
         isolated=True,
         venv_name=CLEARVOICE_VENV,
@@ -340,9 +340,31 @@ def requires_compatibility(function_key: str):  # noqa: ANN201
         @requires_compatibility("audio.tasks.speech_to_text.transcribe_audios")
         def transcribe_audios(...):
             ...
+
+    Args:
+        function_key: Key in :data:`COMPATIBILITY_MATRIX`. Refused at decoration time -- i.e. at
+            import -- when the matrix does not hold it.
+
+    Returns:
+        The decorator.
+
+    Raises:
+        KeyError: If ``function_key`` is absent from the matrix.
     """
     import functools
     from typing import Callable, TypeVar
+
+    if function_key not in COMPATIBILITY_MATRIX:
+        import difflib
+
+        near = difflib.get_close_matches(function_key, COMPATIBILITY_MATRIX, n=3, cutoff=0.6)
+        suggestion = f" Did you mean: {', '.join(near)}?" if near else ""
+        raise KeyError(
+            f"{function_key!r} is not in COMPATIBILITY_MATRIX. A decorated task whose key is absent "
+            f"would silently skip its dependency check and its isolated-venv provisioning, because "
+            f"check_compatibility returns True for a key it does not know. Add the entry, or fix the "
+            f"key.{suggestion}"
+        )
 
     F = TypeVar("F", bound=Callable)
 

@@ -1,0 +1,20 @@
+{
+    "cap": 4,
+    "parse_errors": {},
+    "root": "/orcd/scratch/bcs/002/satra/triage_design_20260919/run/out",
+    "tally": {
+        "SPEECH_recordings_with_none_visible": 8281,
+        "SPEECH_recordings_with_one_visible": 9296,
+        "SPEECH_recordings_with_typed": 17577,
+        "SPEECH_typed_total": 137317,
+        "SPEECH_typed_visible": 12603,
+        "VOICE_recordings_with_none_visible": 379,
+        "VOICE_recordings_with_one_visible": 902,
+        "VOICE_recordings_with_typed": 1281,
+        "VOICE_typed_total": 3211,
+        "VOICE_typed_visible": 1688,
+        "recordings_with_none_visible": 8660,
+        "recordings_with_one_visible": 10198,
+        "recordings_with_typed": 18858
+    }
+}

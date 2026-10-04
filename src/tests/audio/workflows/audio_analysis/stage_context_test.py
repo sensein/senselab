@@ -407,3 +407,38 @@ def test_stage_context_import_stays_light() -> None:
     transformers_loaded, torch_loaded = out.stdout.strip().split()
     assert transformers_loaded == "False", "computing a cache key pulled in transformers"
     assert torch_loaded == "False", "computing a cache key pulled in torch"
+
+
+def test_a_stage_key_survives_a_senselab_version_change() -> None:
+    """An unchanged stage hits after an unrelated commit: the senselab version is provenance only."""
+    params = {"device": "cpu"}
+    assert _ctx(senselab_ver="1.2.3").cache_key_for("asr", "openai/whisper-tiny", params) == _ctx(
+        senselab_ver="1.3.1a45.dev1283"
+    ).cache_key_for("asr", "openai/whisper-tiny", params)
+
+
+def test_the_senselab_version_is_still_recorded_in_provenance() -> None:
+    """Leaving it out of the key does not lose it: a fresh outcome still says which version made it."""
+    assert _ctx(senselab_ver="1.3.1a45.dev1283").provenance_for("features", None, {})["senselab_version"] == (
+        "1.3.1a45.dev1283"
+    )
+
+
+def test_a_stage_version_bump_misses(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Bumping a stage's number changes its keys, and only its keys."""
+    from types import MappingProxyType
+
+    from senselab.audio.workflows.audio_analysis import stage_context
+
+    ctx = _ctx()
+    asr_before = ctx.cache_key_for("asr", None, {})
+    features_before = ctx.cache_key_for("features", None, {})
+    monkeypatch.setattr(stage_context, "STAGE_VERSIONS", MappingProxyType({**stage_context.STAGE_VERSIONS, "asr": 2}))
+    assert ctx.cache_key_for("asr", None, {}) != asr_before
+    assert ctx.cache_key_for("features", None, {}) == features_before
+
+
+def test_a_changed_stage_parameter_misses() -> None:
+    """A result-shaping parameter is in the key."""
+    ctx = _ctx()
+    assert ctx.cache_key_for("ast", None, {"win_length": 1.0}) != ctx.cache_key_for("ast", None, {"win_length": 2.0})
