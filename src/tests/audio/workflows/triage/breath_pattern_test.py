@@ -101,3 +101,12 @@ def test_silence_has_no_breathing_cycles() -> None:
 def test_a_recording_shorter_than_the_reading_needs_has_none() -> None:
     """Under min_duration_s the modulation spectrum is not read."""
     assert _modulation(_spectrogram(2.0, [(0.5, 1.0)])) is None
+
+
+def test_an_odd_peak_count_rounds_up_to_the_unpaired_breath() -> None:
+    """Nine peaks are an unpaired burst beside four full breaths: five breaths."""
+    bursts = [(2 + k * 5.5 + offset, length) for k in range(5) for offset, length in ((0.5, 1.0), (2.0, 1.4))][:9]
+    reading = _modulation(_spectrogram(30.0, bursts))
+    assert reading is not None
+    assert reading.modulation_peaks == 9
+    assert reading.estimated_breaths == 5
