@@ -34,7 +34,8 @@ repos:
   # The cohort-condition profiles hold regular expressions; the formatter strips their quotes, and an
   # unquoted `\btremors?\b` inside a flow list is not valid YAML, so it would break the file it formats.
   - id: pretty-format-yaml
-    exclude: ^src/senselab/audio/workflows/triage/data/cohort_conditions/
+    # task_guidance.yaml is hashed by bytes into the reviewer and second-opinion cache identity
+    exclude: ^(src/senselab/audio/workflows/triage/data/cohort_conditions/|src/senselab/text/tasks/pii_detection/data/task_guidance\.yaml$)
     args:
     - --autofix
     - --indent=2

@@ -401,6 +401,7 @@ class _DiscoveringProcess(_FakeProcess):
     def __init__(self, args: list[str], *, env: dict[str, str], **kw: Any) -> None:  # noqa: ANN401
         super().__init__(args, env=env, **kw)
         handle = kw.get("stdout")
+        assert handle is not None
         for line in type(self).lines:
             handle.write((line + "\n").encode("utf-8"))
 
