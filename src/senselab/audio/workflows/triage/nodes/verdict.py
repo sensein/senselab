@@ -480,13 +480,13 @@ def _task_evidence(
         breath_mode=breath_mode,
         breath_pattern=reading.pattern if reading is not None else None,
         breath_events_n=reading.events_n if reading is not None else None,
-        breath_heard=bool(reading is not None and reading.evidence is not None and reading.evidence.heard),
+        breath_vetoed_by=reading.veto.vetoed_by if reading is not None and reading.veto is not None else None,
         breath_cycles_n=reading.modulation.estimated_breaths
         if reading is not None
         and reading.modulation is not None
         and (
             reading.modulation.breathing
-            or (reading.evidence is not None and reading.evidence.heard and reading.modulation.active_span_s > 0)
+            or (reading.veto is not None and reading.veto.vetoed_by is None and reading.modulation.active_span_s > 0)
         )
         else None,
         breath_reading={"mode": breath_mode, **reading.record()} if reading is not None else {},
