@@ -480,6 +480,12 @@ def _task_evidence(
         breath_mode=breath_mode,
         breath_pattern=reading.pattern if reading is not None else None,
         breath_events_n=reading.events_n if reading is not None else None,
+        breath_speech_like=bool(
+            reading is not None and reading.modulation is not None and reading.modulation.speech_like
+        ),
+        breath_cycles_n=reading.modulation.estimated_breaths
+        if reading is not None and reading.modulation is not None and reading.modulation.breathing
+        else None,
         breath_reading={"mode": breath_mode, **reading.record()} if reading is not None else {},
     )
 

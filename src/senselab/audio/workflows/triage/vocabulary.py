@@ -301,6 +301,9 @@ class TaskEvidence:
         breath_pattern: The measure's pattern, one of ``breath_pattern.PATTERNS``, or None where it
             could not be read.
         breath_events_n: How many breath events the measure found, or None.
+        breath_speech_like: The modulation reading put the recording below the speech guard.
+        breath_cycles_n: The breaths the modulation reading estimates where it shows breathing, or
+            None where it does not or was not read.
         breath_reading: The measure's full reading, for the verdict record; empty where none.
     """
 
@@ -316,6 +319,8 @@ class TaskEvidence:
     breath_mode: str | None = None
     breath_pattern: str | None = None
     breath_events_n: int | None = None
+    breath_speech_like: bool = False
+    breath_cycles_n: int | None = None
     breath_reading: dict[str, Any] = field(default_factory=dict)
 
 
@@ -338,9 +343,10 @@ def breath_present(evidence: TaskEvidence) -> bool:
 
     Returns:
         For a sustained family, an alternating breathing pattern; for a counted family, at least one
-        breath event. False where the measure was not read.
+        breath event. False where the measure was not read, or the modulation reading puts the
+        recording below the speech guard.
     """
-    if evidence.breath_pattern is None:
+    if evidence.breath_pattern is None or evidence.breath_speech_like:
         return False
     if evidence.breath_mode == BREATH_SUSTAINED:
         return evidence.breath_pattern == _ALTERNATING_BREATHS
@@ -354,13 +360,18 @@ def breath_conforms(evidence: TaskEvidence) -> bool:
         evidence: The task evidence.
 
     Returns:
-        :func:`breath_present`, and for a counted family at least the instructed number of events.
+        :func:`breath_present`, and for a counted family at least the instructed number of events, or
+        of breaths the modulation reading estimates.
     """
     if not breath_present(evidence):
         return False
     if evidence.breath_mode == BREATH_COUNTED and evidence.instructed_count is not None:
-        return (evidence.breath_events_n or 0) >= evidence.instructed_count
+        return _counted_breaths(evidence) >= evidence.instructed_count
     return True
+
+
+def _counted_breaths(evidence: TaskEvidence) -> int:
+    return max(evidence.breath_events_n or 0, evidence.breath_cycles_n or 0)
 
 
 def breath_shortfall(evidence: TaskEvidence) -> str | None:
@@ -370,18 +381,22 @@ def breath_shortfall(evidence: TaskEvidence) -> str | None:
         evidence: The task evidence.
 
     Returns:
-        ``"detected N breath events where M were instructed"`` where some but fewer than the
-        instructed number were found; None otherwise.
+        ``"detected N breath events (C breathing cycles) where M were instructed"`` where breaths were
+        present but neither the events nor the modulation reading's cycles reach the instructed
+        number; None otherwise.
     """
     found = evidence.breath_events_n or 0
     if (
         evidence.breath_mode != BREATH_COUNTED
-        or evidence.breath_pattern is None
         or evidence.instructed_count is None
-        or not 0 < found < evidence.instructed_count
+        or not breath_present(evidence)
+        or _counted_breaths(evidence) >= evidence.instructed_count
     ):
         return None
-    return f"detected {found} breath events where {evidence.instructed_count} were instructed"
+    cycles = (
+        f"{evidence.breath_cycles_n} breathing cycles" if evidence.breath_cycles_n is not None else "no cycles read"
+    )
+    return f"detected {found} breath events ({cycles}) where {evidence.instructed_count} were instructed"
 
 
 DECLARED_TASK_ABSENT = "declared_task_absent"
@@ -1662,7 +1677,9 @@ def fold_file_verdict(
     breath_decides = task_evidence.breath_mode is not None and task_evidence.breath_pattern is not None
     if breath_decides and _AIRWAY in findings:
         findings[_AIRWAY] = (
-            KindState.PRESENT.value if (task_evidence.breath_events_n or 0) > 0 else KindState.ABSENT.value
+            KindState.PRESENT.value
+            if (task_evidence.breath_events_n or 0) > 0 and not task_evidence.breath_speech_like
+            else KindState.ABSENT.value
         )
     agreement = {branch: _agreement(routes[branch], branch in by_branch, findings[branch]) for branch in branches_seen}
     hints = (

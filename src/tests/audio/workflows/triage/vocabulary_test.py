@@ -2487,6 +2487,8 @@ class TestABreathTaskIsDecidedOnTheBreathingPattern:
         detector_events: int | None = 1,
         conformance: Any = True,  # noqa: ANN401
         absent: tuple[str, ...] = (),
+        speech_like: bool = False,
+        cycles: int | None = None,
     ) -> FileVerdict:
         family = "respiration-and-cough-breath" if mode == BREATH_SUSTAINED else "respiration-and-cough-fivebreaths"
         return fold_file_verdict(
@@ -2510,6 +2512,8 @@ class TestABreathTaskIsDecidedOnTheBreathingPattern:
                 breath_mode=mode,
                 breath_pattern=pattern,
                 breath_events_n=events,
+                breath_speech_like=speech_like,
+                breath_cycles_n=cycles,
                 breath_reading={"pattern": pattern} if pattern else {},
             ),
         )
@@ -2544,7 +2548,7 @@ class TestABreathTaskIsDecidedOnTheBreathingPattern:
         assert KEY_TASK_MISMATCH in folded.ground_keys
         assert "conformance:AIRWAY" not in folded.ground_keys
         [reason] = [reason for reason in folded.reasons if reason.key == KEY_TASK_MISMATCH]
-        assert "detected 1 breath events where 3 were instructed" in reason.why
+        assert "detected 1 breath events (no cycles read) where 3 were instructed" in reason.why
 
     def test_the_instructed_count_passes_a_counted_task(self) -> None:
         """Five breaths for five asked pass, even where AIRWAY's detector read fewer."""
@@ -2565,3 +2569,33 @@ class TestABreathTaskIsDecidedOnTheBreathingPattern:
         assert folded.triage is Triage.RERUN
         assert folded.discard_ground is None
         assert KEY_OWNING_BRANCH_INPUT_ABSENT in folded.ground_keys
+
+    def test_merged_events_pass_on_the_modulation_cycle_count(self) -> None:
+        """1ba3214d: five clean cycles merged into one event; ten modulation peaks are five breaths."""
+        folded = self._fold(
+            mode=BREATH_COUNTED, pattern="single_breath", events=1, instructed=5, conformance=False, cycles=5
+        )
+        assert folded.triage is Triage.PASS
+        assert KEY_TASK_MISMATCH not in folded.ground_keys
+
+    def test_too_few_cycles_keep_the_task_mismatch_and_name_them(self) -> None:
+        """Cycles that fall short of the instruction leave the flag, with both counts in its text."""
+        folded = self._fold(
+            mode=BREATH_COUNTED, pattern="alternating_breaths", events=2, instructed=5, conformance=False, cycles=3
+        )
+        assert folded.triage is Triage.FLAG
+        [reason] = [reason for reason in folded.reasons if reason.key == KEY_TASK_MISMATCH]
+        assert "detected 2 breath events (3 breathing cycles) where 5 were instructed" in reason.why
+
+    def test_the_speech_guard_discards_a_sustained_task(self) -> None:
+        """517381e9: a burst inside speech is no breath, whatever the events read."""
+        folded = self._fold(mode=BREATH_SUSTAINED, pattern="alternating_breaths", events=3, speech_like=True)
+        assert folded.triage is Triage.DISCARD
+        assert folded.discard_ground == NO_BREATH_CAPTURED
+
+    def test_the_speech_guard_discards_a_counted_task(self) -> None:
+        """Speech in a counted breath task holds no breath, so it discards rather than flags."""
+        folded = self._fold(
+            mode=BREATH_COUNTED, pattern="alternating_breaths", events=5, instructed=5, speech_like=True
+        )
+        assert folded.discard_ground == NO_BREATH_CAPTURED
