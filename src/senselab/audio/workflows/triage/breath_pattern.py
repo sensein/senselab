@@ -178,7 +178,7 @@ class ModulationReading:
         breath_vs_syllabic_db: Breathing-band over syllabic-band modulation energy, in dB.
         active_span_s: The span the broadband envelope stays above its floor by the active rise.
         modulation_peaks: Peaks of the breathing-band component inside that span.
-        estimated_breaths: ``modulation_peaks`` over the peaks one breath makes, rounded.
+        estimated_breaths: ``modulation_peaks`` over the peaks one breath makes, rounded half up.
         speech_like: The ratio is below the speech guard: the recording is not breathing.
         breathing: The ratio reaches the breathing minimum over a non-zero active span, so the
             estimated breaths count.
@@ -409,7 +409,7 @@ def measure_modulation(
         breath_vs_syllabic_db=round(ratio_db, 2),
         active_span_s=round(span_s, 2),
         modulation_peaks=counted,
-        estimated_breaths=int(round(counted / p.peaks_per_breath)),
+        estimated_breaths=int(np.floor(counted / p.peaks_per_breath + 0.5)),
         speech_like=ratio_db < p.speech_guard_db,
         breathing=ratio_db >= p.breathing_min_db and span_s > 0,
     )
