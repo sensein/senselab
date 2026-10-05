@@ -34,6 +34,7 @@ from typing import Any, Callable, Mapping, Sequence
 import yaml
 
 from senselab.audio.data_structures import AudioHints
+from senselab.audio.workflows.triage.breath_pattern import BreathPattern, breath_pattern_of
 from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.live_evidence import declared_task, recording_stem
 from senselab.audio.workflows.triage.nodes.airway import EVENTS_FOUND as AIRWAY_EVENTS_FOUND
@@ -42,6 +43,7 @@ from senselab.audio.workflows.triage.nodes.branches import (
     BRANCH_FAMILY,
     EXPECTATIONS,
     Expectation,
+    Pattern,
     declared_task_family,
 )
 from senselab.audio.workflows.triage.nodes.common import (
@@ -93,6 +95,8 @@ from senselab.audio.workflows.triage.nodes.redact import (
 )
 from senselab.audio.workflows.triage.task_lexicon import task_lexicon
 from senselab.audio.workflows.triage.vocabulary import (
+    BREATH_COUNTED,
+    BREATH_SUSTAINED,
     GRAPH_ORDER,
     KEY_NODE_OUTCOME_UNREADABLE,
     PII_SCAN,
@@ -417,7 +421,12 @@ def _owner_absent_inputs(
 
 
 def _task_evidence(
-    store: ProvStore, declared_family: str | None, gate_record: Mapping[str, Any] | None = None
+    store: ProvStore,
+    declared_family: str | None,
+    gate_record: Mapping[str, Any] | None = None,
+    *,
+    run_dir: Path | None = None,
+    sampling_hz: float | None = None,
 ) -> TaskEvidence:
     """Whether the declared task was performed at all: its owner, the duration and its event tokens.
 
@@ -425,9 +434,14 @@ def _task_evidence(
         store: The provenance store, read for ADMIT's ``recording`` stream and the consensus words.
         declared_family: The task family the recording declares.
         gate_record: The gate outcome record, read for the owning node's uncomputed readings.
+        run_dir: The run directory the derivatives' sidecar paths are relative to; None reads no
+            breathing pattern.
+        sampling_hz: The conditioned stream's sampling rate; None reads no breathing pattern.
 
     Returns:
-        The evidence :func:`~senselab.audio.workflows.triage.vocabulary.fold_file_verdict` reads.
+        The evidence :func:`~senselab.audio.workflows.triage.vocabulary.fold_file_verdict` reads. A
+        breath family of ``data/airway_event_requirements.yaml`` is read by the breathing-pattern
+        measure, whose absent inputs then stand for the owner's.
     """
     owners = tuple(branch for branch, rows in EXPECTATIONS.items() if declared_family and declared_family in rows)
     recording = next(
@@ -440,18 +454,33 @@ def _task_evidence(
     )
     duration = recording.extent[1] - recording.extent[0] if recording is not None and recording.extent else None
     airway = EXPECTATIONS["AIRWAY"].get(declared_family or "") if "AIRWAY" in owners else None
+    needed = required_event(declared_family) if "AIRWAY" in owners else None
+    absent = _owner_absent_inputs(store, owners, gate_record)
+    breath_mode: str | None = None
+    reading: BreathPattern | None = None
+    if needed == "breath" and airway is not None and run_dir is not None and sampling_hz:
+        breath_mode = BREATH_SUSTAINED if airway.pattern == Pattern.SOUND_COVERAGE else BREATH_COUNTED
+        read = breath_pattern_of(store, run_dir, sampling_hz=sampling_hz)
+        if isinstance(read, BreathPattern):
+            reading, absent = read, ()
+        else:
+            absent = read
     return TaskEvidence(
         owning_branches=owners,
         duration_s=duration,
         minimum_duration_s=minimum_duration_s(declared_family) if owners else None,
         event_tokens_n=event_tokens_n(store, declared_family),
-        owner_absent_inputs=_owner_absent_inputs(store, owners, gate_record),
+        owner_absent_inputs=absent,
         required_event=required_event(declared_family) if "AIRWAY" in owners else None,
         events_found_n=_airway_events_found(store) if "AIRWAY" in owners else None,
         event_kind=airway.label_set if airway is not None else None,
         instructed_count=airway.required_count.value
         if airway is not None and airway.required_count is not None
         else None,
+        breath_mode=breath_mode,
+        breath_pattern=reading.pattern if reading is not None else None,
+        breath_events_n=reading.events_n if reading is not None else None,
+        breath_reading={"mode": breath_mode, **reading.record()} if reading is not None else {},
     )
 
 
@@ -1000,7 +1029,13 @@ def verdict(
         agreed_redactions=plan.agreed,
         unplaced=[(finding.family, finding.state) for finding in plan.unplaced],
         second_opinion=opinion,
-        task=_task_evidence(store, declared_family or None, outcome.record()),
+        task=_task_evidence(
+            store,
+            declared_family or None,
+            outcome.record(),
+            run_dir=run_dir,
+            sampling_hz=float(config.require("resample.target_hz")),
+        ),
     )
 
     software = software_agent(store)

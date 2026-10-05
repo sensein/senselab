@@ -17,6 +17,8 @@ from senselab.audio.workflows.triage.vocabulary import (
     DECLARED_TASK_ABSENT,
     DECLINED,
     DOMINANT_SPEAKER_GATE,
+    BREATH_COUNTED,
+    BREATH_SUSTAINED,
     FINDINGS_ARE_TASK_CONTENT,
     GROUND_KEY_PREFIXES,
     GROUND_KEYS,
@@ -2468,3 +2470,98 @@ class TestABreathTaskIsDecidedOnDetectedBreaths:
         folded = self._fold(family="respiration-and-cough-breath", conformance=UNDETERMINED, events=0, tokens=3)
         assert folded.triage is Triage.DISCARD
         assert folded.discard_ground == NO_BREATH_CAPTURED
+
+
+class TestABreathTaskIsDecidedOnTheBreathingPattern:
+    """Owner, 2026-10-05: the breathing-pattern measure decides a breath task, whatever AIRWAY's detector said."""
+
+    _ADMIT_OK = [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")]
+
+    def _fold(
+        self,
+        *,
+        mode: str,
+        pattern: str | None,
+        events: int | None,
+        instructed: int | None = None,
+        detector_events: int | None = 1,
+        conformance: Any = True,  # noqa: ANN401
+        absent: tuple[str, ...] = (),
+    ) -> FileVerdict:
+        family = "respiration-and-cough-breath" if mode == BREATH_SUSTAINED else "respiration-and-cough-fivebreaths"
+        return fold_file_verdict(
+            self._ADMIT_OK,
+            branch_reports=[_report("AIRWAY", "airway", conformance=conformance)],
+            spans_by_node=_found("AIRWAY"),
+            branch_decisions=_decisions(AIRWAY=ROUTED, SPEECH=DECLINED, VOICE=DECLINED),
+            ran={"AIRWAY": RunState.COMPLETED},
+            hint_claims={"AIRWAY": True},
+            route_state="routed",
+            declared_family=family,
+            task=TaskEvidence(
+                owning_branches=("AIRWAY",),
+                duration_s=30.0,
+                minimum_duration_s=1.0,
+                owner_absent_inputs=absent,
+                required_event="breath",
+                events_found_n=detector_events,
+                event_kind="breath",
+                instructed_count=instructed,
+                breath_mode=mode,
+                breath_pattern=pattern,
+                breath_events_n=events,
+                breath_reading={"pattern": pattern} if pattern else {},
+            ),
+        )
+
+    def test_alternating_breaths_perform_a_sustained_task(self) -> None:
+        """The ten confirmed breathing recordings: alternating breaths pass."""
+        folded = self._fold(mode=BREATH_SUSTAINED, pattern="alternating_breaths", events=6)
+        assert folded.triage is Triage.PASS
+        assert folded.breath_pattern == {"pattern": "alternating_breaths"}
+
+    def test_a_single_burst_does_not_perform_a_sustained_task(self) -> None:
+        """517381e9: AIRWAY's detector counted one event in speech; the measure reads one, not a pattern."""
+        folded = self._fold(mode=BREATH_SUSTAINED, pattern="single_breath", events=1, detector_events=1)
+        assert folded.triage is Triage.DISCARD
+        assert folded.discard_ground == NO_BREATH_CAPTURED
+
+    def test_no_breathing_discards_whatever_the_detector_said(self) -> None:
+        """A silent recording discards even where AIRWAY's own conformance read True."""
+        folded = self._fold(mode=BREATH_SUSTAINED, pattern="no_breathing", events=0, conformance=True)
+        assert folded.discard_ground == NO_BREATH_CAPTURED
+
+    def test_a_quiet_counted_recording_discards(self) -> None:
+        """9d16c147: breaths too quiet for the measure are no breath captured."""
+        folded = self._fold(mode=BREATH_COUNTED, pattern="no_breathing", events=0, instructed=5, conformance=False)
+        assert folded.discard_ground == NO_BREATH_CAPTURED
+
+    def test_too_few_breaths_flag_a_task_mismatch(self) -> None:
+        """7c169ccc: one long breath where three were asked flags task_mismatch, never discards."""
+        folded = self._fold(mode=BREATH_COUNTED, pattern="single_breath", events=1, instructed=3, conformance=False)
+        assert folded.triage is Triage.FLAG
+        assert folded.discard_ground is None
+        assert KEY_TASK_MISMATCH in folded.ground_keys
+        assert "conformance:AIRWAY" not in folded.ground_keys
+        [reason] = [reason for reason in folded.reasons if reason.key == KEY_TASK_MISMATCH]
+        assert "detected 1 breath events where 3 were instructed" in reason.why
+
+    def test_the_instructed_count_passes_a_counted_task(self) -> None:
+        """Five breaths for five asked pass, even where AIRWAY's detector read fewer."""
+        folded = self._fold(
+            mode=BREATH_COUNTED, pattern="alternating_breaths", events=5, instructed=5, conformance=False
+        )
+        assert folded.triage is Triage.PASS
+
+    def test_an_absent_derivative_reruns(self) -> None:
+        """No stored spectrogram: the measure could not look, so the recording is owed a rerun."""
+        folded = self._fold(
+            mode=BREATH_SUSTAINED,
+            pattern=None,
+            events=None,
+            absent=("spectrogram_narrowband",),
+            conformance=UNDETERMINED,
+        )
+        assert folded.triage is Triage.RERUN
+        assert folded.discard_ground is None
+        assert KEY_OWNING_BRANCH_INPUT_ABSENT in folded.ground_keys
