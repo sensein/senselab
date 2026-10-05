@@ -96,3 +96,59 @@ Measured on the same sample, both codes re-folded over the same stores at the sa
 review was writing to them): of the 2,114 rows exactly one changes, the 1.98 s breath-2 recording,
 from `discard`/`declared_task_absent` to `rerun` with `owning_branch_input_absent`. The 114
 empty-route recordings are unchanged (all still discard; none had an owner lacking an input).
+
+## 2026-10-05: a breath task is decided on detected breaths
+
+The owner listened to ten breath recordings, with gain-lifted copies and HeAR/YAMNet readings
+(`~/Downloads/contrast_check_20261005/index.csv`). Only one held a breath: `7c169ccc`
+threequickbreaths-2, one long breath where three quick ones were asked. `9d16c147` v2-threebreathsmouth
+may hold breaths too quiet to hear. The other eight held none, yet six of them passed. AIRWAY's
+breath-event walk was the one reading that matched every listen (one event in 7c169ccc, none in the
+rest). HeAR Breathe at `score_min` 0.2 scored three silent recordings above it (254e47be 0.47,
+517381e9 0.25, 0b8dcad5 0.23), and `[breath]` was written on three (254e47be, 29be45ea, 0b8dcad5).
+
+The two sustained-breath families (`respiration-and-cough-breath`, `respiration-and-cough-v2-breath`,
+2,487 recordings) ran a HeAR coverage matcher with no conformance term and so passed by default; AIRWAY
+never ran the breath-event walk on them (no breath event lane on any of the 2,485 in r12).
+
+Owner: "yes do fix 1", "wrong pattern should be flagged as a task mismatch", "discard quiet ones".
+
+- The SOUND_COVERAGE matcher (`nodes/airway.py:_airway_coverage`) runs the same walk as the counted
+  families and writes `airway_events_found`; the group gains `events_min: 1`, so the task is decided on
+  detected breaths. The HeAR coverage fraction is still written, as context. An absent envelope,
+  classifier windows or `hear_scores` gives `event_instrument` and so a rerun, as before.
+- A breath family listed in `data/airway_event_requirements.yaml` (every breath family; no cough family)
+  whose AIRWAY branch, holding every input, detected no breath event discards as
+  `no_breath_captured`, tried after the rerun grounds and before `declared_task_absent`. The detection
+  floors are not lowered: a breath too quiet to detect is no breath captured.
+- Breath events detected but fewer than the instruction asked (`events_min` passed,
+  `instructed_count_min_fraction` failed) flag `task_mismatch`, naming the detected and instructed
+  counts, in place of `conformance:AIRWAY`. Never a discard.
+- `[breath]` tokens are removed from `data/airway_event_tokens.yaml`, and a family decided on detected
+  events takes no event-token corroboration in the fold. `[cough]` stays.
+
+The sustained families need AIRWAY to run again, not only a re-fold:
+`triage_r9_20260929/fix_breath/replay.sbatch` (2,487 rows, eight slices, in place, REVIEW readings
+carried forward), followed by the full re-fold.
+
+Measured by replaying a sample at this code into a scratch out-root seeded with copies of the r9 stores
+(r9 untouched): the ten listened recordings plus a seeded 200 sustained-breath recordings, 0 errors.
+
+| listened | owner's ears | events | r12 | now |
+|---|---|---|---|---|
+| 7c169ccc threequickbreaths-2 | one long breath, three asked | 1 | flag | flag `task_mismatch` |
+| 8c42135a breath-2 (0.38 s) | none | - | flag | discard `too_short_for_task` |
+| 254e47be breath-1 | none | 0 | pass | discard `no_breath_captured` |
+| 05bf77bd breath-2 | none | 0 | pass | discard `no_breath_captured` |
+| 7869a54a breath-2 (0.35 s) | none | - | pass | discard `too_short_for_task` |
+| 9d16c147 v2-threebreathsmouth | maybe very quiet (discard) | 0 | flag | discard `no_breath_captured` |
+| 517381e9 v2-breath | none | 1 | pass | **pass** |
+| 29be45ea breath-1 | none | 0 | pass | discard `no_breath_captured` |
+| 0b8dcad5 breath-1 | none | 0 | pass | discard `no_breath_captured` |
+| 531b6b20 breath-2 | none | 0 | pass | discard `no_breath_captured` |
+
+Nine of ten match the owner's ears. `517381e9` still passes: the walk found one event inside a carrier
+that scored breath (YAMNet hears speech there at 0.98). Over all 210, events detected: 0 in 63, 1 in 19,
+2 in 18, 3 or more in 97, none reported in 13 (too short, or an input absent). Moves: pass to discard
+66, flag to discard 9, pass to rerun 1, pass kept 131, flag kept 3. Discards: `no_breath_captured` 63
+(57 of the 200 sampled, about 28%), `too_short_for_task` 12.
