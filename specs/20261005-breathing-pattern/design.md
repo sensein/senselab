@@ -129,4 +129,6 @@ A breath task now holds a breath only where the measure finds one and a classifi
 classifier's windows are stored, the recording reruns as `owning_branch_input_absent`.
 
 The parameters are in `data/breath_pattern.yaml` (`evidence`). The modulation reading still records its
-ratio, and still counts cycles for counted tasks.
+ratio and still counts cycles for counted tasks. Its cycles count where the ratio reaches 7 dB, and also
+wherever a classifier hears breath over a non-zero active span, because the ratio misreads heard breathing
+too: b16acf04 has 1 event, 5 peaks, 3 breaths and +1.8 dB, against 3 instructed.
