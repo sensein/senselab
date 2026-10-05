@@ -99,3 +99,34 @@ passed before, with 4-6 events at -1.2 to +2.7 dB). Those eight are unlabelled a
 
 Open: 1ba3214d is five clean cycles the event measure merged into one event. The event measure's
 0.25 s `merge_gap_s` or its +8 dB `rise_db` wants revisiting with labels; it is unchanged here.
+
+## Breath evidence (2026-10-05), replacing the speech guard
+
+The owner listened to the 11 recordings the 3 dB speech guard discarded
+(`~/Downloads/speech_guard_check_20261005/`) and heard breathing in 5 of them: 01 3d889bf8, 02 dac345e2,
+06 0bcffa40, 08 b16acf04, 09 b451fe70. The other 6 "either don't have it or masked by other sounds or very
+soft". The breathing-over-syllabic ratio overlapped across the two (heard: −2.1 to +2.7 dB; not heard:
+−1.0 to +2.9 dB), so it cannot be the guard, and it is removed.
+
+On all 32 listened breath recordings (the 22 earlier labels and these 11, with 0b8dcad5 in both sets),
+the stored classifier windows separate them:
+
+| Feature | Heard (16): lowest | Not heard (16): highest |
+|---|---|---|
+| YAMNet `Breathing`, mean over the file's windows | 0.020 | 0.023 |
+| HeAR `Breathe`, highest window | 0.214 | 0.728 |
+
+Neither feature separates alone, but together they do. "Breath heard" means YAMNet's mean is at least
+0.03, or HeAR's highest window is at least 0.8. That reproduces all 32 labels, and leave-one-out
+refitting of both cut-offs agrees on 29 of 32.
+
+- **0.8 on HeAR:** the heard recordings that rest on HeAR alone score 0.82–0.99; the not-heard recordings
+  reach at most 0.73.
+- **0.03 on YAMNet:** the heard recordings with HeAR below 0.8 (dac345e2 0.045, 0bcffa40 0.244, 39ba8784
+  0.323) are above it; every not-heard recording is at or below 0.023.
+
+A breath task now holds a breath only where the measure finds one and a classifier hears one. If neither
+classifier's windows are stored, the recording reruns as `owning_branch_input_absent`.
+
+The parameters are in `data/breath_pattern.yaml` (`evidence`). The modulation reading still records its
+ratio, and still counts cycles for counted tasks.
