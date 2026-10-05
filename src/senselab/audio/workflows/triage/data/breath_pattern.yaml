@@ -46,3 +46,19 @@ measure:
   autocorr_min: 0.25
   interval_s: [0.4, 8.0]
   interval_share_min: 0.5
+# Breathing cycles from the modulation spectra of subband envelopes of the same spectrogram; the
+# derivation is in specs/20261005-breathing-pattern/design.md ("Modulation cycles").
+modulation:
+  band_edges_hz: [150.0, 300.0, 500.0, 800.0, 1300.0, 2000.0, 3000.0, 4000.0]
+  fs_mod: 20.0                 # envelope rate, Hz
+  breath_band_hz: [0.1, 1.2]   # breathing-rate modulation
+  syllabic_band_hz: [2.0, 8.0] # syllabic-rate modulation (speech)
+  reference_band_hz: [0.05, 8.0]
+  floor_percentile: 10.0
+  active_rise_db: 8.0
+  peak_min_distance_s: 0.6
+  peak_prominence_std: 0.8
+  min_duration_s: 4.0          # shortest recording read
+  peaks_per_breath: 2.0        # an inhale and an exhale each make a peak
+  speech_guard_db: 3.0         # below: not breathing
+  breathing_min_db: 7.0        # at or above, with an active span: cycles count
