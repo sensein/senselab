@@ -194,9 +194,9 @@ class TestAGroupThatNamesNoValueDoesNotApplyTheGate:
         assert conformance == UNDETERMINED
         assert applied == []
 
-    def test_sound_coverage_declares_no_conformance_gate(self) -> None:
-        """Its instruction states no conformable expectation, so it answers nothing."""
-        assert CONFORMANCE_GATES[Pattern.SOUND_COVERAGE] == ()
+    def test_sound_coverage_is_decided_on_detected_events(self) -> None:
+        """A breath held over a declared extent is decided on breath events, not on the HeAR coverage."""
+        assert CONFORMANCE_GATES[Pattern.SOUND_COVERAGE] == ("events_min",)
 
 
 class TestAnAbsentReadingIsUndeterminedAndNeverFalse:

@@ -410,8 +410,9 @@ verdict:
         events_min: 1                    # events of the instruction's own kind the walk must find
         instructed_count_min_fraction: 0.5  # UNFITTED: events found over the count the instruction spoke
         gap_off_task_min_s: 1.0          # shortest gap reported as off-task extent
-      SOUND_COVERAGE:                    # a sound held over a declared extent; no conformance term
+      SOUND_COVERAGE:                    # a breath held over a declared extent, decided on detected breath events
         score_min: 0.2                   # classifier raw score at or above which a label is present
+        events_min: 1                    # breath events the walk must find; the HeAR coverage is context only
         gap_off_task_min_s: 1.0          # shortest gap reported as off-task extent
       SYLLABLE_TRAIN:                    # one syllable repeated
         train_min_s: 1.0                 # shortest carrier that can hold a train

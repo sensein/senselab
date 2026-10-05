@@ -226,7 +226,7 @@ CONFORMANCE_GATES: dict[Pattern, tuple[str, ...]] = {
     Pattern.ITEM_LIST: ("items_min",),
     Pattern.EVENT_SERIES: ("events_min", "instructed_count_min_fraction"),
     Pattern.EVENT_ALTERNATION: ("events_min", "instructed_count_min_fraction"),
-    Pattern.SOUND_COVERAGE: (),
+    Pattern.SOUND_COVERAGE: ("events_min",),
     Pattern.SYLLABLE_TRAIN: ("repetitions_min", "instructed_count_min_fraction"),
     Pattern.SYLLABLE_SEQUENCE: ("repetitions_min", "instructed_count_min_fraction"),
     Pattern.PER_SENTENCE: (),
