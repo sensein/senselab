@@ -60,5 +60,12 @@ modulation:
   peak_prominence_std: 0.8
   min_duration_s: 4.0          # shortest recording read
   peaks_per_breath: 2.0        # an inhale and an exhale each make a peak
-  speech_guard_db: 3.0         # below: not breathing
   breathing_min_db: 7.0        # at or above, with an active span: cycles count
+# Breath evidence from the stored classifier windows: a breath task holds a breath only where either
+# classifier hears one. Fitted on the owner's 32 listened breath recordings (2026-10-05); the
+# derivation is in specs/20261005-breathing-pattern/design.md ("Breath evidence").
+evidence:
+  yamnet_label: Breathing
+  yamnet_mean_min: 0.03        # mean over the file's YAMNet windows
+  hear_label: Breathe
+  hear_max_min: 0.8            # highest HeAR window

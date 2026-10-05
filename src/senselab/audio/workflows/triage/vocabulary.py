@@ -301,7 +301,7 @@ class TaskEvidence:
         breath_pattern: The measure's pattern, one of ``breath_pattern.PATTERNS``, or None where it
             could not be read.
         breath_events_n: How many breath events the measure found, or None.
-        breath_speech_like: The modulation reading put the recording below the speech guard.
+        breath_heard: The stored YAMNet or HeAR windows hear a breath (``breath_pattern.breath_evidence_of``).
         breath_cycles_n: The breaths the modulation reading estimates where it shows breathing, or
             None where it does not or was not read.
         breath_reading: The measure's full reading, for the verdict record; empty where none.
@@ -319,7 +319,7 @@ class TaskEvidence:
     breath_mode: str | None = None
     breath_pattern: str | None = None
     breath_events_n: int | None = None
-    breath_speech_like: bool = False
+    breath_heard: bool = False
     breath_cycles_n: int | None = None
     breath_reading: dict[str, Any] = field(default_factory=dict)
 
@@ -343,10 +343,10 @@ def breath_present(evidence: TaskEvidence) -> bool:
 
     Returns:
         For a sustained family, an alternating breathing pattern; for a counted family, at least one
-        breath event. False where the measure was not read, or the modulation reading puts the
-        recording below the speech guard.
+        breath event, where the classifier windows also hear a breath. False where the measure was not
+        read.
     """
-    if evidence.breath_pattern is None or evidence.breath_speech_like:
+    if evidence.breath_pattern is None or not evidence.breath_heard:
         return False
     if evidence.breath_mode == BREATH_SUSTAINED:
         return evidence.breath_pattern == _ALTERNATING_BREATHS
@@ -1678,7 +1678,7 @@ def fold_file_verdict(
     if breath_decides and _AIRWAY in findings:
         findings[_AIRWAY] = (
             KindState.PRESENT.value
-            if (task_evidence.breath_events_n or 0) > 0 and not task_evidence.breath_speech_like
+            if (task_evidence.breath_events_n or 0) > 0 and task_evidence.breath_heard
             else KindState.ABSENT.value
         )
     agreement = {branch: _agreement(routes[branch], branch in by_branch, findings[branch]) for branch in branches_seen}

@@ -13,7 +13,8 @@ Every parameter is in ``data/breath_pattern.yaml``. See
 from __future__ import annotations
 
 import functools
-from dataclasses import dataclass, field
+import json
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -21,6 +22,7 @@ import numpy as np
 import yaml
 from scipy.signal import butter, find_peaks, sosfiltfilt
 
+from senselab.audio.tasks.classification.label_scores import label_scores
 from senselab.audio.workflows.triage.nodes.common import find_measurement
 from senselab.utils.prov_store import ProvStore
 
@@ -28,6 +30,8 @@ BREATH_PATTERN_PATH = Path(__file__).parent / "data" / "breath_pattern.yaml"
 
 SPECTROGRAM = "spectrogram_narrowband"
 PHONATION_TRACKS = "phonation_tracks"
+YAMNET_SCORES = "yamnet_scores"
+HEAR_SCORES = "hear_scores"
 
 NO_BREATHING = "no_breathing"
 SINGLE_BREATH = "single_breath"
@@ -90,7 +94,6 @@ class ModulationParameters:
         peak_prominence_std: The prominence a peak needs, in standard deviations of the component.
         min_duration_s: The shortest recording the reading is taken over.
         peaks_per_breath: Modulation peaks one breath makes (an inhale and an exhale).
-        speech_guard_db: Below this breathing-over-syllabic ratio the recording is not breathing.
         breathing_min_db: At or above this ratio, with an active span, the cycles count.
     """
 
@@ -105,7 +108,6 @@ class ModulationParameters:
     peak_prominence_std: float
     min_duration_s: float
     peaks_per_breath: float
-    speech_guard_db: float
     breathing_min_db: float
 
 
@@ -134,7 +136,6 @@ def modulation_parameters() -> ModulationParameters:
         peak_prominence_std=float(held["peak_prominence_std"]),
         min_duration_s=float(held["min_duration_s"]),
         peaks_per_breath=float(held["peaks_per_breath"]),
-        speech_guard_db=float(held["speech_guard_db"]),
         breathing_min_db=float(held["breathing_min_db"]),
     )
 
@@ -179,7 +180,6 @@ class ModulationReading:
         active_span_s: The span the broadband envelope stays above its floor by the active rise.
         modulation_peaks: Peaks of the breathing-band component inside that span.
         estimated_breaths: ``modulation_peaks`` over the peaks one breath makes, rounded half up.
-        speech_like: The ratio is below the speech guard: the recording is not breathing.
         breathing: The ratio reaches the breathing minimum over a non-zero active span, so the
             estimated breaths count.
     """
@@ -188,7 +188,6 @@ class ModulationReading:
     active_span_s: float
     modulation_peaks: int
     estimated_breaths: int
-    speech_like: bool
     breathing: bool
 
     def record(self) -> dict[str, Any]:
@@ -202,9 +201,66 @@ class ModulationReading:
             "active_span_s": self.active_span_s,
             "modulation_peaks": self.modulation_peaks,
             "estimated_breaths": self.estimated_breaths,
-            "speech_like": self.speech_like,
             "breathing": self.breathing,
         }
+
+
+@dataclass(frozen=True)
+class EvidenceParameters:
+    """The ``evidence`` section of ``data/breath_pattern.yaml``.
+
+    Attributes:
+        yamnet_label: The YAMNet label a breath is heard as.
+        yamnet_mean_min: The mean of that label over the file's YAMNet windows that is evidence.
+        hear_label: The HeAR label a breath is heard as.
+        hear_max_min: The highest HeAR window score of that label that is evidence.
+    """
+
+    yamnet_label: str
+    yamnet_mean_min: float
+    hear_label: str
+    hear_max_min: float
+
+
+@functools.cache
+def evidence_parameters() -> EvidenceParameters:
+    """The ``evidence`` parameters of ``data/breath_pattern.yaml``.
+
+    Returns:
+        The parameters.
+    """
+    held = (yaml.safe_load(BREATH_PATTERN_PATH.read_text()) or {})["evidence"]
+    return EvidenceParameters(
+        yamnet_label=str(held["yamnet_label"]),
+        yamnet_mean_min=float(held["yamnet_mean_min"]),
+        hear_label=str(held["hear_label"]),
+        hear_max_min=float(held["hear_max_min"]),
+    )
+
+
+@dataclass(frozen=True)
+class BreathEvidence:
+    """Whether the stored classifier windows hear a breath anywhere in the recording.
+
+    Attributes:
+        yamnet_mean: The mean YAMNet score of the breath label over the file's windows, or None where
+            YAMNet's windows are absent.
+        hear_max: The highest HeAR window score of the breath label, or None where HeAR's windows
+            are absent.
+        heard: Either score reaches its minimum.
+    """
+
+    yamnet_mean: float | None
+    hear_max: float | None
+    heard: bool
+
+    def record(self) -> dict[str, Any]:
+        """The reading, as JSON-ready values.
+
+        Returns:
+            The fields, keyed by name.
+        """
+        return {"yamnet_mean": self.yamnet_mean, "hear_max": self.hear_max, "heard": self.heard}
 
 
 @dataclass(frozen=True)
@@ -220,6 +276,7 @@ class BreathPattern:
             where the recording is shorter than that range.
         rhythm: Whether the events repeat at a breathing rhythm.
         modulation: The modulation reading, or None where the recording is shorter than it needs.
+        evidence: What the stored classifier windows hear, or None where it was not read.
     """
 
     pattern: str
@@ -229,6 +286,7 @@ class BreathPattern:
     autocorr_peak: float | None = None
     rhythm: bool = False
     modulation: ModulationReading | None = None
+    evidence: BreathEvidence | None = None
 
     def record(self) -> dict[str, Any]:
         """The reading, as JSON-ready values.
@@ -244,6 +302,7 @@ class BreathPattern:
             "autocorr_peak": self.autocorr_peak,
             "rhythm": self.rhythm,
             "modulation": self.modulation.record() if self.modulation is not None else None,
+            "evidence": self.evidence.record() if self.evidence is not None else None,
         }
 
 
@@ -410,7 +469,6 @@ def measure_modulation(
         active_span_s=round(span_s, 2),
         modulation_peaks=counted,
         estimated_breaths=int(np.floor(counted / p.peaks_per_breath + 0.5)),
-        speech_like=ratio_db < p.speech_guard_db,
         breathing=ratio_db >= p.breathing_min_db and span_s > 0,
     )
 
@@ -424,6 +482,43 @@ def _sidecar(store: ProvStore, run_dir: Path, name: str) -> tuple[Mapping[str, A
         return None
     path = run_dir / str(relative)
     return (measurement.attributes, path) if path.is_file() else None
+
+
+def _label_series(store: ProvStore, run_dir: Path, name: str, label: str) -> list[float] | None:
+    held = _sidecar(store, run_dir, name)
+    if held is None:
+        return None
+    values = []
+    for window in json.loads(held[1].read_text()):
+        scores = {key: score for pair in label_scores(window) for key, score in pair.items()}
+        values.append(float(scores.get(label, 0.0)))
+    return values
+
+
+def breath_evidence_of(
+    store: ProvStore, run_dir: Path, parameters: EvidenceParameters | None = None
+) -> BreathEvidence | tuple[str, ...]:
+    """Whether the stored YAMNet or HeAR windows hear a breath, or the inputs it could not be read without.
+
+    Args:
+        store: The provenance store, read for the ``yamnet_scores`` and ``hear_scores`` measurements.
+        run_dir: The run directory their sidecar paths are relative to.
+        parameters: The evidence parameters; ``data/breath_pattern.yaml`` when None.
+
+    Returns:
+        The evidence, read from whichever of the two is present; the names of both where neither is.
+    """
+    p = parameters or evidence_parameters()
+    yamnet = _label_series(store, run_dir, YAMNET_SCORES, p.yamnet_label)
+    hear = _label_series(store, run_dir, HEAR_SCORES, p.hear_label)
+    if yamnet is None and hear is None:
+        return (YAMNET_SCORES, HEAR_SCORES)
+    yamnet_mean = round(float(np.mean(yamnet)), 3) if yamnet else None
+    hear_max = round(float(np.max(hear)), 3) if hear else None
+    heard = (yamnet_mean is not None and yamnet_mean >= p.yamnet_mean_min) or (
+        hear_max is not None and hear_max >= p.hear_max_min
+    )
+    return BreathEvidence(yamnet_mean=yamnet_mean, hear_max=hear_max, heard=bool(heard))
 
 
 def breath_pattern_of(
@@ -446,8 +541,8 @@ def breath_pattern_of(
         modulation: The modulation reading's parameters; ``data/breath_pattern.yaml`` when None.
 
     Returns:
-        The pattern; or the names of the absent inputs, where either derivative or its sidecar is
-        missing.
+        The pattern with its classifier evidence (:func:`breath_evidence_of`); or the names of the
+        absent inputs, where either derivative or its sidecar is missing, or both classifiers' windows.
     """
     spectrogram = _sidecar(store, run_dir, SPECTROGRAM)
     tracks = _sidecar(store, run_dir, PHONATION_TRACKS)
@@ -471,7 +566,10 @@ def breath_pattern_of(
     if len(track_times):
         frame_voiced = (np.nan_to_num(f0) > 0) & (np.nan_to_num(strength) >= p.voicing_strength_min)
         voiced = frame_voiced[np.clip(np.searchsorted(track_times, times), 0, len(track_times) - 1)]
-    return measure_breath_pattern(
+    evidence = breath_evidence_of(store, run_dir)
+    if not isinstance(evidence, BreathEvidence):
+        return evidence
+    pattern = measure_breath_pattern(
         power,
         hop_s=hop_s,
         bin_hz=sampling_hz / n_fft,
@@ -479,3 +577,4 @@ def breath_pattern_of(
         parameters=p,
         modulation=modulation or modulation_parameters(),
     )
+    return replace(pattern, evidence=evidence)
