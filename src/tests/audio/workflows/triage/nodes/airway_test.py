@@ -872,8 +872,12 @@ class TestTheRouteIsNotSeparableByThisDesign:
         assert find_measurements(store, "measured_route") == []
 
 
-class TestTheCoverageFamiliesReadRawHearWindows:
-    """``respiration-and-cough-breath`` asks for breathing over a declared duration."""
+class TestTheCoverageFamiliesAreDecidedOnDetectedBreathEvents:
+    """``respiration-and-cough-breath`` asks for breathing over a declared duration.
+
+    The task is decided on breath events the envelope walk detects inside breath-scoring carriers,
+    as in the counted families; the HeAR coverage is reported beside them as context only.
+    """
 
     @staticmethod
     def _windows(scoring: Sequence[int]) -> list[tuple[tuple[float, float], dict[str, float]]]:
@@ -887,76 +891,91 @@ class TestTheCoverageFamiliesReadRawHearWindows:
         """
         return [((index * 2.0, index * 2.0 + 2.0), {"Breathe": 0.9 if index in scoring else 0.1}) for index in range(5)]
 
-    def test_a_merged_run_of_scoring_windows_becomes_one_span(
+    def test_detected_breaths_are_counted_and_carry_the_extent(
         self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path
     ) -> None:
-        """Touching windows coalesce, so two adjacent windows are one run rather than two."""
+        """Two breaths inside a breath-scoring carrier: two events counted, the extent their hull."""
         _seed(
             store,
             tmp_path,
             task="respiration-and-cough-breath",
+            spans=[(0.0, 10.0)],
+            scores=[{"Breathe": 0.9}],
+            envelope=bump(1000, (250, 650)),
+            hear_scores=self._windows((1, 3)),
+            duration_s=10.0,
+        )
+        result = airway(store, "plain", airway_config, run_dir=tmp_path)
+        assert len(_proposed(store, "breath_event")) == 2
+        [found] = find_measurements(store, "airway_events_found")
+        assert found.attributes["value"] == 2
+        assert result.report.conformance == UNDETERMINED, "the branch reports; VERDICT decides on events_min"
+        [extent] = _proposed(store, "task_extent")
+        assert extent.extent == pytest.approx((2.46, 6.54), abs=0.05)
+
+    def test_no_detected_breath_counts_zero_whatever_hear_scored(
+        self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """Every HeAR window scores Breathe but no carrier sounds like breath: zero events counted."""
+        _seed(
+            store,
+            tmp_path,
+            task="respiration-and-cough-breath",
+            spans=[(0.0, 10.0)],
+            scores=[{"Breathe": 0.1}],
+            envelope=bump(1000, (250, 650)),
+            hear_scores=self._windows((0, 1, 2, 3, 4)),
+            duration_s=10.0,
+        )
+        result = airway(store, "plain", airway_config, run_dir=tmp_path)
+        assert _proposed(store, "breath_event") == []
+        [found] = find_measurements(store, "airway_events_found")
+        assert found.attributes["value"] == 0
+        assert result.report.conformance == UNDETERMINED, "the branch reports; VERDICT decides on events_min"
+
+    def test_the_covered_fraction_is_reported_as_context(
+        self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """Six seconds carry breath evidence and the row asks for thirty: six thirtieths, on the report too."""
+        _seed(
+            store,
+            tmp_path,
+            task="respiration-and-cough-breath",
+            spans=[(0.0, 10.0)],
+            scores=[{"Breathe": 0.9}],
+            envelope=bump(1000, (250,)),
             hear_scores=self._windows((0, 1, 3)),
             duration_s=10.0,
         )
         airway(store, "plain", airway_config, run_dir=tmp_path)
-        runs = _proposed(store, "breath_run")
-        assert [span.extent for span in runs] == [(0.0, 4.0), (6.0, 8.0)]
-
-    def test_the_covered_fraction_is_measured_against_the_extent_the_instruction_asked_for(
-        self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path
-    ) -> None:
-        """Six seconds carry breath evidence and the row asks for thirty, so six thirtieths."""
-        _seed(
-            store,
-            tmp_path,
-            task="respiration-and-cough-breath",
-            hear_scores=self._windows((0, 1, 3)),
-            duration_s=10.0,
-        )
-        result = airway(store, "plain", airway_config, run_dir=tmp_path)
         [coverage] = find_measurements(store, "breath_coverage_fraction")
         assert coverage.attributes["covered_s"] == pytest.approx(6.0)
         assert coverage.attributes["asked_s"] == pytest.approx(30.0)
         assert coverage.attributes["asked_from"] == "declared_duration_s"
         assert coverage.attributes["value"] == pytest.approx(0.2)
-        assert result.report.conformance == UNDETERMINED
-
-    def test_the_fraction_reaches_the_report_so_a_reader_sees_what_was_measured(
-        self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path
-    ) -> None:
-        """The store measurement alone is not visibility: the branch report carries it too."""
-        _seed(
-            store,
-            tmp_path,
-            task="respiration-and-cough-breath",
-            hear_scores=self._windows((0, 1, 3)),
-            duration_s=10.0,
-        )
-        airway(store, "plain", airway_config, run_dir=tmp_path)
         recorded = _report_entity(store, "AIRWAY").attributes
         assert recorded["breath_coverage_fraction"] == pytest.approx(0.2)
         assert recorded["coverage_asked_s"] == pytest.approx(30.0)
         assert recorded["coverage_asked_from"] == "declared_duration_s"
+        assert _proposed(store, "breath_run") == []
 
-    def test_a_recording_covered_end_to_end_is_undetermined_too(
+    def test_absent_hear_scores_leave_the_task_undetermined(
         self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path
     ) -> None:
-        """No fraction decides. The gate is gone in both directions, not relaxed in one.
-
-        Every second of this recording carries breath evidence and it is still a third of the
-        thirty the instruction asked for, which is the shape the retired bound was placed on.
-        """
+        """An instrument the matcher reads is absent, so it looks for nothing and says so."""
         _seed(
             store,
             tmp_path,
             task="respiration-and-cough-breath",
-            hear_scores=self._windows((0, 1, 2, 3, 4)),
+            spans=[(0.0, 10.0)],
+            scores=[{"Breathe": 0.9}],
+            envelope=bump(1000, (250,)),
             duration_s=10.0,
         )
         result = airway(store, "plain", airway_config, run_dir=tmp_path)
-        [coverage] = find_measurements(store, "breath_coverage_fraction")
-        assert coverage.attributes["covered_s"] == pytest.approx(10.0)
-        assert coverage.attributes["value"] == pytest.approx(10.0 / 30.0, abs=5e-4)
+        [absent] = find_measurements(store, "event_instrument")
+        assert absent.attributes["absent"] == ["hear_scores"]
+        assert find_measurements(store, "airway_events_found") == []
         assert result.report.conformance == UNDETERMINED
 
     def test_the_declared_duration_is_counted_beside_the_measured_one(
@@ -967,28 +986,14 @@ class TestTheCoverageFamiliesReadRawHearWindows:
             store,
             tmp_path,
             task="respiration-and-cough-breath",
+            spans=[(0.0, 10.0)],
+            scores=[{"Breathe": 0.9}],
+            envelope=bump(1000, (250,)),
             hear_scores=self._windows((0,)),
             duration_s=10.0,
         )
         airway(store, "plain", airway_config, run_dir=tmp_path)
         assert _counts(store)["declared_duration_s"] == {"found": 10.0, "declared": 30.0}
-
-    def test_no_window_scoring_the_label_proposes_nothing_and_reports_a_zero_fraction(
-        self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path
-    ) -> None:
-        """Nothing is proposed and the zero is reported as a zero, not folded into a verdict."""
-        _seed(
-            store,
-            tmp_path,
-            task="respiration-and-cough-breath",
-            hear_scores=self._windows(()),
-            duration_s=10.0,
-        )
-        result = airway(store, "plain", airway_config, run_dir=tmp_path)
-        assert _proposed(store) == []
-        [coverage] = find_measurements(store, "breath_coverage_fraction")
-        assert coverage.attributes["value"] == pytest.approx(0.0)
-        assert result.report.conformance == UNDETERMINED
 
 
 class TestTheAlternationFamilyMatchesBreathBetweenCoughs:
