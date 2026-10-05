@@ -23,7 +23,7 @@ import yaml
 from scipy.signal import butter, find_peaks, sosfiltfilt
 
 from senselab.audio.tasks.classification.label_scores import label_scores
-from senselab.audio.workflows.triage.nodes.common import find_measurement
+from senselab.audio.workflows.triage.nodes.common import find_measurement, lexical_words
 from senselab.utils.prov_store import ProvStore
 
 BREATH_PATTERN_PATH = Path(__file__).parent / "data" / "breath_pattern.yaml"
@@ -206,53 +206,81 @@ class ModulationReading:
 
 
 @dataclass(frozen=True)
-class EvidenceParameters:
-    """The ``evidence`` section of ``data/breath_pattern.yaml``.
+class VetoParameters:
+    """The ``veto`` section of ``data/breath_pattern.yaml``.
 
     Attributes:
-        yamnet_label: The YAMNet label a breath is heard as.
-        yamnet_mean_min: The mean of that label over the file's YAMNet windows that is evidence.
-        hear_label: The HeAR label a breath is heard as.
-        hear_max_min: The highest HeAR window score of that label that is evidence.
+        speech_words_min: Consensus lexical words at or above which the recording is speech.
+        noise_labels: The YAMNet labels read as background noise.
+        noise_mean_min: The mean, over YAMNet windows, of the highest noise label at or above which
+            the recording is noise.
+        active_fraction_min: The modulation reading's active span over the duration below which there
+            is too little active sound.
+        silence_label: The YAMNet label read as silence.
+        silence_mean_min: The silence label's mean at or above which, with ``silence_ratio_max_db``,
+            the recording is silence-dominant.
+        silence_ratio_max_db: The breath-vs-syllabic dB below which a silence-dominant recording is
+            vetoed.
     """
 
-    yamnet_label: str
-    yamnet_mean_min: float
-    hear_label: str
-    hear_max_min: float
+    speech_words_min: int
+    noise_labels: tuple[str, ...]
+    noise_mean_min: float
+    active_fraction_min: float
+    silence_label: str
+    silence_mean_min: float
+    silence_ratio_max_db: float
 
 
 @functools.cache
-def evidence_parameters() -> EvidenceParameters:
-    """The ``evidence`` parameters of ``data/breath_pattern.yaml``.
+def veto_parameters() -> VetoParameters:
+    """The ``veto`` parameters of ``data/breath_pattern.yaml``.
 
     Returns:
         The parameters.
     """
-    held = (yaml.safe_load(BREATH_PATTERN_PATH.read_text()) or {})["evidence"]
-    return EvidenceParameters(
-        yamnet_label=str(held["yamnet_label"]),
-        yamnet_mean_min=float(held["yamnet_mean_min"]),
-        hear_label=str(held["hear_label"]),
-        hear_max_min=float(held["hear_max_min"]),
+    held = (yaml.safe_load(BREATH_PATTERN_PATH.read_text()) or {})["veto"]
+    return VetoParameters(
+        speech_words_min=int(held["speech_words_min"]),
+        noise_labels=tuple(str(label) for label in held["noise_labels"]),
+        noise_mean_min=float(held["noise_mean_min"]),
+        active_fraction_min=float(held["active_fraction_min"]),
+        silence_label=str(held["silence_label"]),
+        silence_mean_min=float(held["silence_mean_min"]),
+        silence_ratio_max_db=float(held["silence_ratio_max_db"]),
     )
 
 
+VETO_SPEECH = "speech"
+VETO_NOISE = "noise"
+VETO_LITTLE_ACTIVITY = "little_activity"
+VETO_SILENCE = "silence"
+
+
 @dataclass(frozen=True)
-class BreathEvidence:
-    """Whether the stored classifier windows hear a breath anywhere in the recording.
+class BreathVeto:
+    """What says a breath the measure found is not breathing, and the readings it was decided on.
 
     Attributes:
-        yamnet_mean: The mean YAMNet score of the breath label over the file's windows, or None where
-            YAMNet's windows are absent.
-        hear_max: The highest HeAR window score of the breath label, or None where HeAR's windows
-            are absent.
-        heard: Either score reaches its minimum.
+        lexical_words_n: The consensus lexical (non-bracketed) word count.
+        speech_mean: The mean YAMNet Speech score over the file's windows.
+        silence_mean: The mean YAMNet score of the silence label.
+        noise_mean: The mean, over windows, of the highest noise-label score.
+        active_fraction: The modulation reading's active span over the duration, or None where the
+            modulation reading was not read.
+        breathing_mean: The mean YAMNet Breathing score, for context only.
+        hear_breathe_max: The highest HeAR Breathe window, for context only; None where absent.
+        vetoed_by: The first veto that fired, one of ``VETO_*``, or None.
     """
 
-    yamnet_mean: float | None
-    hear_max: float | None
-    heard: bool
+    lexical_words_n: int
+    speech_mean: float
+    silence_mean: float
+    noise_mean: float
+    active_fraction: float | None
+    breathing_mean: float
+    hear_breathe_max: float | None
+    vetoed_by: str | None
 
     def record(self) -> dict[str, Any]:
         """The reading, as JSON-ready values.
@@ -260,7 +288,16 @@ class BreathEvidence:
         Returns:
             The fields, keyed by name.
         """
-        return {"yamnet_mean": self.yamnet_mean, "hear_max": self.hear_max, "heard": self.heard}
+        return {
+            "lexical_words_n": self.lexical_words_n,
+            "speech_mean": self.speech_mean,
+            "silence_mean": self.silence_mean,
+            "noise_mean": self.noise_mean,
+            "active_fraction": self.active_fraction,
+            "breathing_mean": self.breathing_mean,
+            "hear_breathe_max": self.hear_breathe_max,
+            "vetoed_by": self.vetoed_by,
+        }
 
 
 @dataclass(frozen=True)
@@ -276,7 +313,8 @@ class BreathPattern:
             where the recording is shorter than that range.
         rhythm: Whether the events repeat at a breathing rhythm.
         modulation: The modulation reading, or None where the recording is shorter than it needs.
-        evidence: What the stored classifier windows hear, or None where it was not read.
+        veto: What the stored classifier windows and transcript say against breathing, or None where it
+            was not read.
     """
 
     pattern: str
@@ -286,7 +324,7 @@ class BreathPattern:
     autocorr_peak: float | None = None
     rhythm: bool = False
     modulation: ModulationReading | None = None
-    evidence: BreathEvidence | None = None
+    veto: BreathVeto | None = None
 
     def record(self) -> dict[str, Any]:
         """The reading, as JSON-ready values.
@@ -302,7 +340,7 @@ class BreathPattern:
             "autocorr_peak": self.autocorr_peak,
             "rhythm": self.rhythm,
             "modulation": self.modulation.record() if self.modulation is not None else None,
-            "evidence": self.evidence.record() if self.evidence is not None else None,
+            "veto": self.veto.record() if self.veto is not None else None,
         }
 
 
@@ -484,41 +522,77 @@ def _sidecar(store: ProvStore, run_dir: Path, name: str) -> tuple[Mapping[str, A
     return (measurement.attributes, path) if path.is_file() else None
 
 
-def _label_series(store: ProvStore, run_dir: Path, name: str, label: str) -> list[float] | None:
+def _window_scores(store: ProvStore, run_dir: Path, name: str) -> list[dict[str, float]] | None:
     held = _sidecar(store, run_dir, name)
     if held is None:
         return None
-    values = []
-    for window in json.loads(held[1].read_text()):
-        scores = {key: score for pair in label_scores(window) for key, score in pair.items()}
-        values.append(float(scores.get(label, 0.0)))
-    return values
+    return [
+        {key: float(score) for pair in label_scores(window) for key, score in pair.items()}
+        for window in json.loads(held[1].read_text())
+    ]
 
 
-def breath_evidence_of(
-    store: ProvStore, run_dir: Path, parameters: EvidenceParameters | None = None
-) -> BreathEvidence | tuple[str, ...]:
-    """Whether the stored YAMNet or HeAR windows hear a breath, or the inputs it could not be read without.
+def _mean(rows: list[dict[str, float]], label: str) -> float:
+    return round(float(np.mean([row.get(label, 0.0) for row in rows])), 4) if rows else 0.0
+
+
+def breath_veto_of(
+    store: ProvStore,
+    run_dir: Path,
+    *,
+    modulation: ModulationReading | None,
+    duration_s: float,
+    parameters: VetoParameters | None = None,
+) -> BreathVeto | tuple[str, ...]:
+    """Whether the recording shows positive evidence that what the measure found is not breathing.
 
     Args:
-        store: The provenance store, read for the ``yamnet_scores`` and ``hear_scores`` measurements.
+        store: The provenance store, read for the consensus words and the ``yamnet_scores`` and
+            ``hear_scores`` measurements.
         run_dir: The run directory their sidecar paths are relative to.
-        parameters: The evidence parameters; ``data/breath_pattern.yaml`` when None.
+        modulation: The modulation reading, or None where the recording was too short for one.
+        duration_s: The recording's duration.
+        parameters: The veto parameters; ``data/breath_pattern.yaml`` when None.
 
     Returns:
-        The evidence, read from whichever of the two is present; the names of both where neither is.
+        The veto reading; ``("yamnet_scores",)`` where YAMNet's windows are absent.
     """
-    p = parameters or evidence_parameters()
-    yamnet = _label_series(store, run_dir, YAMNET_SCORES, p.yamnet_label)
-    hear = _label_series(store, run_dir, HEAR_SCORES, p.hear_label)
-    if yamnet is None and hear is None:
-        return (YAMNET_SCORES, HEAR_SCORES)
-    yamnet_mean = round(float(np.mean(yamnet)), 3) if yamnet else None
-    hear_max = round(float(np.max(hear)), 3) if hear else None
-    heard = (yamnet_mean is not None and yamnet_mean >= p.yamnet_mean_min) or (
-        hear_max is not None and hear_max >= p.hear_max_min
+    p = parameters or veto_parameters()
+    yamnet = _window_scores(store, run_dir, YAMNET_SCORES)
+    if yamnet is None:
+        return (YAMNET_SCORES,)
+    hear = _window_scores(store, run_dir, HEAR_SCORES)
+    words = len(lexical_words(store))
+    noise = (
+        round(float(np.mean([max(row.get(label, 0.0) for label in p.noise_labels) for row in yamnet])), 4)
+        if yamnet
+        else 0.0
     )
-    return BreathEvidence(yamnet_mean=yamnet_mean, hear_max=hear_max, heard=bool(heard))
+    silence = _mean(yamnet, p.silence_label)
+    fraction = round(modulation.active_span_s / duration_s, 3) if modulation is not None and duration_s > 0 else None
+    vetoed_by: str | None = None
+    if words >= p.speech_words_min:
+        vetoed_by = VETO_SPEECH
+    elif noise >= p.noise_mean_min:
+        vetoed_by = VETO_NOISE
+    elif fraction is not None and fraction < p.active_fraction_min:
+        vetoed_by = VETO_LITTLE_ACTIVITY
+    elif (
+        modulation is not None
+        and silence >= p.silence_mean_min
+        and modulation.breath_vs_syllabic_db < p.silence_ratio_max_db
+    ):
+        vetoed_by = VETO_SILENCE
+    return BreathVeto(
+        lexical_words_n=words,
+        speech_mean=_mean(yamnet, "Speech"),
+        silence_mean=silence,
+        noise_mean=noise,
+        active_fraction=fraction,
+        breathing_mean=_mean(yamnet, "Breathing"),
+        hear_breathe_max=round(max(row.get("Breathe", 0.0) for row in hear), 4) if hear else None,
+        vetoed_by=vetoed_by,
+    )
 
 
 def breath_pattern_of(
@@ -541,8 +615,8 @@ def breath_pattern_of(
         modulation: The modulation reading's parameters; ``data/breath_pattern.yaml`` when None.
 
     Returns:
-        The pattern with its classifier evidence (:func:`breath_evidence_of`); or the names of the
-        absent inputs, where either derivative or its sidecar is missing, or both classifiers' windows.
+        The pattern with its veto reading (:func:`breath_veto_of`); or the names of the absent inputs,
+        where either derivative or its sidecar is missing, or YAMNet's windows.
     """
     spectrogram = _sidecar(store, run_dir, SPECTROGRAM)
     tracks = _sidecar(store, run_dir, PHONATION_TRACKS)
@@ -566,9 +640,6 @@ def breath_pattern_of(
     if len(track_times):
         frame_voiced = (np.nan_to_num(f0) > 0) & (np.nan_to_num(strength) >= p.voicing_strength_min)
         voiced = frame_voiced[np.clip(np.searchsorted(track_times, times), 0, len(track_times) - 1)]
-    evidence = breath_evidence_of(store, run_dir)
-    if not isinstance(evidence, BreathEvidence):
-        return evidence
     pattern = measure_breath_pattern(
         power,
         hop_s=hop_s,
@@ -577,4 +648,7 @@ def breath_pattern_of(
         parameters=p,
         modulation=modulation or modulation_parameters(),
     )
-    return replace(pattern, evidence=evidence)
+    veto = breath_veto_of(store, run_dir, modulation=pattern.modulation, duration_s=power.shape[1] * hop_s)
+    if not isinstance(veto, BreathVeto):
+        return veto
+    return replace(pattern, veto=veto)

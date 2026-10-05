@@ -301,7 +301,8 @@ class TaskEvidence:
         breath_pattern: The measure's pattern, one of ``breath_pattern.PATTERNS``, or None where it
             could not be read.
         breath_events_n: How many breath events the measure found, or None.
-        breath_heard: The stored YAMNet or HeAR windows hear a breath (``breath_pattern.breath_evidence_of``).
+        breath_vetoed_by: The veto that says what the measure found is not breathing, one of
+            ``breath_pattern.VETO_*`` (``breath_pattern.breath_veto_of``), or None.
         breath_cycles_n: The breaths the modulation reading estimates where it shows breathing, or
             None where it does not or was not read.
         breath_reading: The measure's full reading, for the verdict record; empty where none.
@@ -319,7 +320,7 @@ class TaskEvidence:
     breath_mode: str | None = None
     breath_pattern: str | None = None
     breath_events_n: int | None = None
-    breath_heard: bool = False
+    breath_vetoed_by: str | None = None
     breath_cycles_n: int | None = None
     breath_reading: dict[str, Any] = field(default_factory=dict)
 
@@ -343,10 +344,9 @@ def breath_present(evidence: TaskEvidence) -> bool:
 
     Returns:
         For a sustained family, an alternating breathing pattern; for a counted family, at least one
-        breath event, where the classifier windows also hear a breath. False where the measure was not
-        read.
+        breath event, where no veto fires. False where the measure was not read.
     """
-    if evidence.breath_pattern is None or not evidence.breath_heard:
+    if evidence.breath_pattern is None or evidence.breath_vetoed_by is not None:
         return False
     if evidence.breath_mode == BREATH_SUSTAINED:
         return evidence.breath_pattern == _ALTERNATING_BREATHS
