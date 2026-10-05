@@ -63,3 +63,39 @@ In-memory re-fold (VERDICT only, r9 stores, nothing written; /orcd/scratch/bcs/0
 The measure reads stored derivatives, so it applies on a plain re-fold. The breath-event replay
 staged for the sustained families (`triage_r9_20260929/fix_breath/replay.sbatch`) only existed to make
 AIRWAY run its detector on them; with the measure deciding, it is not needed.
+
+## Modulation cycles (2026-10-05)
+
+Owner, asking for it: "perhaps also consider how detecting cycles over subband envelopes using a
+modulation spectrum could help detect multiple breathing cycles". After listening to the six
+`task_mismatch` recordings with the largest gap between modulation peaks and events
+(~/Downloads/breath_modspec_check_20261005/): "seems like a rough doubling between instructed and
+modulation peaks". Five-breath tasks gave 10, 11 and 11 peaks; three-breath tasks gave 7, 6 and 7. An
+inhale and an exhale each make a burst, so `peaks_per_breath` is 2, and an odd count rounds half up
+(the unpaired burst is still a breath; 39ba8784 has 9 peaks for five breaths).
+
+The reading (`measure_modulation`) takes the same stored pre-emphasised `spectrogram_narrowband`:
+seven subbands over 150-4000 Hz, log envelopes at 20 Hz, their modulation spectra, and the energy in
+the breathing band (0.1-1.2 Hz) against the syllabic band (2-8 Hz) speech occupies. It counts peaks of
+the breathing-band component inside the span where the broadband envelope stays 8 dB above its floor.
+Prototype and its evaluation: /orcd/scratch/bcs/002/satra/breath_modspec/.
+
+What it decides:
+
+- Speech guard: below 3 dB breathing-over-syllabic the recording is not breathing, whatever the
+  events say. On the labels 517381e9 (the burst in speech) reads +2.8 dB; the confirmed breathing
+  recordings read +8.6 to +16.0 dB and the silent ones -4.3 to -1.4 dB.
+- Counted tasks with fewer events than instructed pass when the reading shows breathing (at least
+  7 dB over a non-zero active span) and its estimated breaths reach the instruction. Otherwise
+  `task_mismatch` stays, naming both counts.
+- Presence stays with the event measure, which handles single and quiet breaths. The cross-band
+  coherence and surrogate tests of the prototype decide nothing: silent recordings passed them.
+
+Effect, in memory on the 22 labelled and the 300-sample rows against 8f229ee0
+(/orcd/scratch/bcs/002/satra/tmp_modest/): every labelled recording as heard, 39ba8784 now passing on
+its cycles; `task_mismatch` 46 → 34 rows, 9 cleared on cycles (1ba3214d, 3c6a97e9, 670e8db6 among
+them) and 3 discarded by the speech guard; 8 more recordings discard by the speech guard (7 of them
+passed before, with 4-6 events at -1.2 to +2.7 dB). Those eight are unlabelled and want listening.
+
+Open: 1ba3214d is five clean cycles the event measure merged into one event. The event measure's
+0.25 s `merge_gap_s` or its +8 dB `rise_db` wants revisiting with labels; it is unchanged here.
