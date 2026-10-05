@@ -13,12 +13,12 @@ from typing import Any, Mapping, Sequence
 
 from senselab.audio.workflows.triage.vocabulary import (
     BAD_MAP_VALUES,
+    BREATH_COUNTED,
+    BREATH_SUSTAINED,
     CRITICAL_ABSENCE,
     DECLARED_TASK_ABSENT,
     DECLINED,
     DOMINANT_SPEAKER_GATE,
-    BREATH_COUNTED,
-    BREATH_SUSTAINED,
     FINDINGS_ARE_TASK_CONTENT,
     GROUND_KEY_PREFIXES,
     GROUND_KEYS,

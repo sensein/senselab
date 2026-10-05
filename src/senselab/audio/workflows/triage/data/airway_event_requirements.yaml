@@ -13,6 +13,9 @@
 # task mismatch", "discard quiet ones" (breaths too quiet for the detector to find are no breath
 # captured; the detection floors are not lowered). The cough families are not listed: no cough
 # recording has been listened to under this rule.
+#
+# 2026-10-05, later: the breath families listed here are decided on the breathing-pattern measure
+# (breath_pattern.yaml), not on AIRWAY's event count; see specs/20261005-breathing-pattern/design.md.
 version: 1
 breath:
 - breath-sounds

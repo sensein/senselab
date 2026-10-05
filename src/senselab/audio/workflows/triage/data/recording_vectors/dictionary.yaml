@@ -113,8 +113,9 @@ columns:
       Why the recording was discarded: ADMIT could not measure it (`unmeasurable`); it is shorter than
       its declared family's minimum in data/task_minimum_duration.yaml (`too_short_for_task`); the
       ruleset found it empty and the declared task's own branch did not say the task was performed
-      (`acoustically_empty`); a breath family of data/airway_event_requirements.yaml whose AIRWAY
-      branch, holding every input, detected no breath event (`no_breath_captured`); or that branch ran
+      (`acoustically_empty`); a breath family of data/airway_event_requirements.yaml whose
+      breathing-pattern measure (data/breath_pattern.yaml), reading every input, found no breath
+      (counted families) or no alternating pattern (sustained families) (`no_breath_captured`); or that branch ran
       and found none of the task, a SPEECH task holding no lexical word (`declared_task_absent`).
     computation: The fold's `discard_ground` attribute.
     source: [recording_vectors.py:extract, vocabulary.py:FileVerdict.record]
