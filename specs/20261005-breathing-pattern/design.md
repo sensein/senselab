@@ -132,3 +132,31 @@ The parameters are in `data/breath_pattern.yaml` (`evidence`). The modulation re
 ratio and still counts cycles for counted tasks. Its cycles count where the ratio reaches 7 dB, and also
 wherever a classifier hears breath over a non-zero active span, because the ratio misreads heard breathing
 too: b16acf04 has 1 event, 5 peaks, 3 breaths and +1.8 dB, against 3 instructed.
+
+## Breath vetoes (2026-10-05), replacing the breath evidence
+
+The breath-evidence rule moved 537 recordings from pass to discard. The owner listened to 12 of them
+(`~/Downloads/breath_evidence_check_20261005/`): "except for this [v2-breath 4d596bce] all the other
+ones have respiratory events". 2337c1e6 (YAMNet Breathing 0.001, HeAR 0.026) and 324cd5d0 (0.000, 0.035)
+breathe; 4d596bce (0.000, 0.014) does not. Classifier breath scores cannot decide presence, so they are
+context only.
+
+The measure decides presence (sustained: an alternating pattern; counted: at least one event), and a
+breath it finds stands unless the recording shows positive evidence it is not breathing. On all 44
+listened breath recordings (27 breath, 17 none), the measure alone agrees on 37; the seven it keeps
+wrongly are each vetoed by one of four readings, and no breath recording is:
+
+| Veto | Fires at | No-breath recordings it catches | Nearest breath recording |
+|---|---|---|---|
+| speech | consensus lexical words ≥ 5 | a03b5325 (10), 517381e9 (48) | ba1d1459 (3 words) |
+| noise | mean highest of Vehicle/Car/Engine/Mechanical fan/White noise ≥ 0.4 | ae2a7223 (0.48) | 772aa876 (0.35) |
+| little activity | active span / duration < 0.4 | 4d596bce (0.12), c7c405c7 (0.02), 430950c2 (0.02) | fac74f45 (0.71) |
+| silence | YAMNet Silence mean ≥ 0.7 and breath-vs-syllabic < 3 dB | 5cc93330 (0.76, 1.2 dB), d5a327c7 (0.74, 1.8 dB) | 324cd5d0 (0.998, 3.7 dB) |
+
+The rule reproduces all 44 labels; refitting the five cut-offs on 43 and predicting the held-out one
+agrees on 44 of 44. No clear breathing is discarded. The thinnest margins are the noise cut (0.35
+against 0.48) and the silence ratio (3.7 dB against 1.8 dB, with 324cd5d0 the only quiet breather above
+0.7 silence); without the silence veto the rule still discards no breathing but keeps 5cc93330 and
+d5a327c7, which the owner heard as "masked by other sounds or very soft". The parameters are in
+`data/breath_pattern.yaml` (`veto`); a recording without YAMNet's windows reruns as
+`owning_branch_input_absent`.
