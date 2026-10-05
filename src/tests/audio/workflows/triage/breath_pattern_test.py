@@ -1,16 +1,22 @@
 """Tests for the breathing-pattern measure."""
 
+import json
+from pathlib import Path
+
 import numpy as np
 
 from senselab.audio.workflows.triage.breath_pattern import (
     ALTERNATING_BREATHS,
     NO_BREATHING,
     SINGLE_BREATH,
+    BreathEvidence,
+    breath_evidence_of,
     breath_pattern_parameters,
     measure_breath_pattern,
     measure_modulation,
     modulation_parameters,
 )
+from senselab.utils.prov_store import ProvStore
 
 HOP_S = 0.005
 BIN_HZ = 50.0
@@ -79,16 +85,16 @@ def test_five_breath_cycles_read_as_five_breaths() -> None:
     bursts = [(2 + k * 5.5 + offset, length) for k in range(5) for offset, length in ((0.5, 1.0), (2.0, 1.4))]
     reading = _modulation(_spectrogram(30.0, bursts))
     assert reading is not None
-    assert reading.breathing and not reading.speech_like
+    assert reading.breathing
     assert reading.estimated_breaths == 5
 
 
-def test_syllabic_bursts_trip_the_speech_guard() -> None:
-    """Bursts at a syllabic rate are speech, not breathing."""
+def test_syllabic_bursts_are_not_breathing_cycles() -> None:
+    """Bursts at a syllabic rate put the energy in the syllabic band, so no cycles count."""
     bursts = [(2 + k * 0.25, 0.12) for k in range(100)]
     reading = _modulation(_spectrogram(30.0, bursts))
     assert reading is not None
-    assert reading.speech_like and not reading.breathing
+    assert not reading.breathing
 
 
 def test_silence_has_no_breathing_cycles() -> None:
@@ -110,3 +116,37 @@ def test_an_odd_peak_count_rounds_up_to_the_unpaired_breath() -> None:
     assert reading is not None
     assert reading.modulation_peaks == 9
     assert reading.estimated_breaths == 5
+
+
+def _scored_store(tmp_path: Path, yamnet: list[float] | None, hear: list[float] | None) -> ProvStore:
+    store = ProvStore(run_id="t")
+    for name, label, values in (("yamnet_scores", "Breathing", yamnet), ("hear_scores", "Breathe", hear)):
+        if values is None:
+            continue
+        windows = [{"start": k, "end": k + 1, "label_scores": [{label: v}]} for k, v in enumerate(values)]
+        (tmp_path / f"{name}.json").write_text(json.dumps(windows))
+        store.entity(prov_type="measurement", extent=None, attributes={"name": name, "path": f"{name}.json"})
+    return store
+
+
+def test_hear_alone_hears_a_breath(tmp_path: Path) -> None:
+    """3d889bf8-like: a breath HeAR scores 0.98 is heard, whatever YAMNet's mean."""
+    evidence = breath_evidence_of(_scored_store(tmp_path, [0.0, 0.01], [0.2, 0.98]), tmp_path)
+    assert isinstance(evidence, BreathEvidence) and evidence.heard
+
+
+def test_yamnet_breathing_alone_hears_a_breath(tmp_path: Path) -> None:
+    """A recording YAMNet keeps hearing breathing in is heard, with HeAR below its minimum."""
+    evidence = breath_evidence_of(_scored_store(tmp_path, [0.04, 0.06], [0.3]), tmp_path)
+    assert isinstance(evidence, BreathEvidence) and evidence.heard
+
+
+def test_neither_classifier_hearing_a_breath_is_no_breath(tmp_path: Path) -> None:
+    """c7c405c7-like: HeAR 0.73 and YAMNet breathing 0.015 are below both minimums."""
+    evidence = breath_evidence_of(_scored_store(tmp_path, [0.015, 0.015], [0.73]), tmp_path)
+    assert isinstance(evidence, BreathEvidence) and not evidence.heard
+
+
+def test_both_classifiers_absent_name_their_inputs(tmp_path: Path) -> None:
+    """With neither window file, the reading names both as absent inputs."""
+    assert breath_evidence_of(_scored_store(tmp_path, None, None), tmp_path) == ("yamnet_scores", "hear_scores")
