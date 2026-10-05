@@ -1678,7 +1678,7 @@ def fold_file_verdict(
     if breath_decides and _AIRWAY in findings:
         findings[_AIRWAY] = (
             KindState.PRESENT.value
-            if (task_evidence.breath_events_n or 0) > 0 and task_evidence.breath_heard
+            if (task_evidence.breath_events_n or 0) > 0 and task_evidence.breath_vetoed_by is None
             else KindState.ABSENT.value
         )
     agreement = {branch: _agreement(routes[branch], branch in by_branch, findings[branch]) for branch in branches_seen}
