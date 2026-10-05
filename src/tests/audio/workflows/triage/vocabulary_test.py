@@ -2487,7 +2487,7 @@ class TestABreathTaskIsDecidedOnTheBreathingPattern:
         detector_events: int | None = 1,
         conformance: Any = True,  # noqa: ANN401
         absent: tuple[str, ...] = (),
-        heard: bool = True,
+        vetoed_by: str | None = None,
         cycles: int | None = None,
     ) -> FileVerdict:
         family = "respiration-and-cough-breath" if mode == BREATH_SUSTAINED else "respiration-and-cough-fivebreaths"
@@ -2512,7 +2512,7 @@ class TestABreathTaskIsDecidedOnTheBreathingPattern:
                 breath_mode=mode,
                 breath_pattern=pattern,
                 breath_events_n=events,
-                breath_heard=heard,
+                breath_vetoed_by=vetoed_by,
                 breath_cycles_n=cycles,
                 breath_reading={"pattern": pattern} if pattern else {},
             ),
@@ -2587,18 +2587,20 @@ class TestABreathTaskIsDecidedOnTheBreathingPattern:
         [reason] = [reason for reason in folded.reasons if reason.key == KEY_TASK_MISMATCH]
         assert "detected 2 breath events (3 breathing cycles) where 5 were instructed" in reason.why
 
-    def test_events_no_classifier_hears_discard_a_sustained_task(self) -> None:
-        """5cc93330: seven events, but neither YAMNet nor HeAR hears a breath, so none was captured."""
-        folded = self._fold(mode=BREATH_SUSTAINED, pattern="alternating_breaths", events=7, heard=False)
+    def test_a_silence_vetoed_pattern_discards_a_sustained_task(self) -> None:
+        """5cc93330: seven events, but YAMNet hears silence and the cycles are weak, so none was captured."""
+        folded = self._fold(mode=BREATH_SUSTAINED, pattern="alternating_breaths", events=7, vetoed_by="silence")
         assert folded.triage is Triage.DISCARD
         assert folded.discard_ground == NO_BREATH_CAPTURED
 
-    def test_events_no_classifier_hears_discard_a_counted_task(self) -> None:
-        """d5a327c7: events under room noise no classifier hears as breath discard, not flag."""
-        folded = self._fold(mode=BREATH_COUNTED, pattern="alternating_breaths", events=5, instructed=3, heard=False)
+    def test_a_vetoed_counted_task_discards_rather_than_flags(self) -> None:
+        """a03b5325: events in a recording that is speech discard as no breath, not as a mismatch."""
+        folded = self._fold(
+            mode=BREATH_COUNTED, pattern="alternating_breaths", events=5, instructed=3, vetoed_by="speech"
+        )
         assert folded.discard_ground == NO_BREATH_CAPTURED
 
-    def test_a_breath_the_classifiers_hear_passes_whatever_the_modulation_ratio(self) -> None:
-        """3d889bf8 / dac345e2: heard breaths count, though their modulation ratio was below 3 dB."""
-        folded = self._fold(mode=BREATH_COUNTED, pattern="alternating_breaths", events=5, instructed=3, heard=True)
+    def test_an_unvetoed_breath_passes_whatever_the_classifier_scores(self) -> None:
+        """2337c1e6 / 324cd5d0: breaths the measure finds count, though neither classifier scores them."""
+        folded = self._fold(mode=BREATH_COUNTED, pattern="alternating_breaths", events=5, instructed=3)
         assert folded.triage is Triage.PASS

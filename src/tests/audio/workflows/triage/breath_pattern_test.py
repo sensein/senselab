@@ -9,8 +9,13 @@ from senselab.audio.workflows.triage.breath_pattern import (
     ALTERNATING_BREATHS,
     NO_BREATHING,
     SINGLE_BREATH,
-    BreathEvidence,
-    breath_evidence_of,
+    VETO_LITTLE_ACTIVITY,
+    VETO_NOISE,
+    VETO_SILENCE,
+    VETO_SPEECH,
+    BreathVeto,
+    ModulationReading,
+    breath_veto_of,
     breath_pattern_parameters,
     measure_breath_pattern,
     measure_modulation,
@@ -118,35 +123,65 @@ def test_an_odd_peak_count_rounds_up_to_the_unpaired_breath() -> None:
     assert reading.estimated_breaths == 5
 
 
-def _scored_store(tmp_path: Path, yamnet: list[float] | None, hear: list[float] | None) -> ProvStore:
+def _scored_store(tmp_path: Path, yamnet: list[dict[str, float]] | None, words: int = 0) -> ProvStore:
     store = ProvStore(run_id="t")
-    for name, label, values in (("yamnet_scores", "Breathing", yamnet), ("hear_scores", "Breathe", hear)):
-        if values is None:
-            continue
-        windows = [{"start": k, "end": k + 1, "label_scores": [{label: v}]} for k, v in enumerate(values)]
-        (tmp_path / f"{name}.json").write_text(json.dumps(windows))
-        store.entity(prov_type="measurement", extent=None, attributes={"name": name, "path": f"{name}.json"})
+    if yamnet is not None:
+        windows = [
+            {"start": k, "end": k + 1, "label_scores": [{label: v} for label, v in scores.items()]}
+            for k, scores in enumerate(yamnet)
+        ]
+        (tmp_path / "yamnet_scores.json").write_text(json.dumps(windows))
+        store.entity(
+            prov_type="measurement", extent=None, attributes={"name": "yamnet_scores", "path": "yamnet_scores.json"}
+        )
+    for k in range(words):
+        store.entity(prov_type="word", extent=(k, k + 0.5), attributes={"index": k, "text": "word", "bracketed": False})
     return store
 
 
-def test_hear_alone_hears_a_breath(tmp_path: Path) -> None:
-    """3d889bf8-like: a breath HeAR scores 0.98 is heard, whatever YAMNet's mean."""
-    evidence = breath_evidence_of(_scored_store(tmp_path, [0.0, 0.01], [0.2, 0.98]), tmp_path)
-    assert isinstance(evidence, BreathEvidence) and evidence.heard
+def _cycles(ratio_db: float = 10.0, span_s: float = 25.0) -> ModulationReading:
+    return ModulationReading(
+        breath_vs_syllabic_db=ratio_db, active_span_s=span_s, modulation_peaks=8, estimated_breaths=4, breathing=True
+    )
 
 
-def test_yamnet_breathing_alone_hears_a_breath(tmp_path: Path) -> None:
-    """A recording YAMNet keeps hearing breathing in is heard, with HeAR below its minimum."""
-    evidence = breath_evidence_of(_scored_store(tmp_path, [0.04, 0.06], [0.3]), tmp_path)
-    assert isinstance(evidence, BreathEvidence) and evidence.heard
+def _veto(tmp_path: Path, yamnet: list[dict[str, float]] | None, *, words: int = 0, **kw: float) -> object:
+    reading = _cycles(**kw)
+    return breath_veto_of(_scored_store(tmp_path, yamnet, words), tmp_path, modulation=reading, duration_s=30.0)
 
 
-def test_neither_classifier_hearing_a_breath_is_no_breath(tmp_path: Path) -> None:
-    """c7c405c7-like: HeAR 0.73 and YAMNet breathing 0.015 are below both minimums."""
-    evidence = breath_evidence_of(_scored_store(tmp_path, [0.015, 0.015], [0.73]), tmp_path)
-    assert isinstance(evidence, BreathEvidence) and not evidence.heard
+def test_a_breath_neither_classifier_scores_is_not_vetoed(tmp_path: Path) -> None:
+    """324cd5d0 / 2337c1e6: no YAMNet or HeAR breath score, and nothing says it is not breathing."""
+    veto = _veto(tmp_path, [{"Breathing": 0.0, "Silence": 0.2}] * 4)
+    assert isinstance(veto, BreathVeto) and veto.vetoed_by is None
 
 
-def test_both_classifiers_absent_name_their_inputs(tmp_path: Path) -> None:
-    """With neither window file, the reading names both as absent inputs."""
-    assert breath_evidence_of(_scored_store(tmp_path, None, None), tmp_path) == ("yamnet_scores", "hear_scores")
+def test_lexical_words_veto_as_speech(tmp_path: Path) -> None:
+    """a03b5325: ten consensus words ("Just hit record again...") are speech, not breathing."""
+    veto = _veto(tmp_path, [{"Speech": 0.9}] * 4, words=10)
+    assert isinstance(veto, BreathVeto) and veto.vetoed_by == VETO_SPEECH
+
+
+def test_vehicle_noise_vetoes(tmp_path: Path) -> None:
+    """ae2a7223: YAMNet hears a vehicle throughout."""
+    veto = _veto(tmp_path, [{"Vehicle": 0.5}] * 4)
+    assert isinstance(veto, BreathVeto) and veto.vetoed_by == VETO_NOISE
+
+
+def test_too_little_activity_vetoes(tmp_path: Path) -> None:
+    """4d596bce: a 2.4 s active span in a 20-30 s recording is too little sound to be breathing."""
+    veto = _veto(tmp_path, [{"Silence": 1.0}] * 4, span_s=2.4)
+    assert isinstance(veto, BreathVeto) and veto.vetoed_by == VETO_LITTLE_ACTIVITY
+
+
+def test_silence_with_weak_cycles_vetoes_but_quiet_breathing_does_not(tmp_path: Path) -> None:
+    """5cc93330 (silence 0.76, 1.2 dB) is vetoed; 324cd5d0 (silence 0.998, 3.7 dB) has breathing."""
+    weak = _veto(tmp_path, [{"Silence": 0.76}] * 4, ratio_db=1.2)
+    quiet = _veto(tmp_path, [{"Silence": 0.998}] * 4, ratio_db=3.7)
+    assert isinstance(weak, BreathVeto) and weak.vetoed_by == VETO_SILENCE
+    assert isinstance(quiet, BreathVeto) and quiet.vetoed_by is None
+
+
+def test_absent_yamnet_windows_name_their_input(tmp_path: Path) -> None:
+    """Without YAMNet's windows the vetoes cannot be read: the reading names the absent input."""
+    assert _veto(tmp_path, None) == ("yamnet_scores",)
