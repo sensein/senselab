@@ -19,6 +19,7 @@ from typing import Any, Mapping
 
 import numpy as np
 import yaml
+from scipy.signal import butter, find_peaks, sosfiltfilt
 
 from senselab.audio.workflows.triage.nodes.common import find_measurement
 from senselab.utils.prov_store import ProvStore
@@ -73,6 +74,71 @@ class BreathPatternParameters:
     interval_share_min: float
 
 
+@dataclass(frozen=True)
+class ModulationParameters:
+    """The modulation reading's parameters, ``data/breath_pattern.yaml``'s ``modulation`` section.
+
+    Attributes:
+        band_edges_hz: Edges of the subbands whose envelopes are read.
+        fs_mod: The rate the envelopes are resampled to, in Hz.
+        breath_band_hz: The breathing-rate modulation band.
+        syllabic_band_hz: The syllabic-rate modulation band speech occupies.
+        reference_band_hz: The modulation band each subband spectrum is normalised over.
+        floor_percentile: The percentile of the broadband envelope taken as the floor.
+        active_rise_db: How far above that floor the active span starts and ends.
+        peak_min_distance_s: The shortest spacing between two counted peaks.
+        peak_prominence_std: The prominence a peak needs, in standard deviations of the component.
+        min_duration_s: The shortest recording the reading is taken over.
+        peaks_per_breath: Modulation peaks one breath makes (an inhale and an exhale).
+        speech_guard_db: Below this breathing-over-syllabic ratio the recording is not breathing.
+        breathing_min_db: At or above this ratio, with an active span, the cycles count.
+    """
+
+    band_edges_hz: tuple[float, ...]
+    fs_mod: float
+    breath_band_hz: tuple[float, float]
+    syllabic_band_hz: tuple[float, float]
+    reference_band_hz: tuple[float, float]
+    floor_percentile: float
+    active_rise_db: float
+    peak_min_distance_s: float
+    peak_prominence_std: float
+    min_duration_s: float
+    peaks_per_breath: float
+    speech_guard_db: float
+    breathing_min_db: float
+
+
+@functools.cache
+def modulation_parameters() -> ModulationParameters:
+    """The ``modulation`` parameters of ``data/breath_pattern.yaml``.
+
+    Returns:
+        The parameters.
+    """
+    held = (yaml.safe_load(BREATH_PATTERN_PATH.read_text()) or {})["modulation"]
+
+    def pair(key: str) -> tuple[float, float]:
+        low, high = held[key]
+        return float(low), float(high)
+
+    return ModulationParameters(
+        band_edges_hz=tuple(float(edge) for edge in held["band_edges_hz"]),
+        fs_mod=float(held["fs_mod"]),
+        breath_band_hz=pair("breath_band_hz"),
+        syllabic_band_hz=pair("syllabic_band_hz"),
+        reference_band_hz=pair("reference_band_hz"),
+        floor_percentile=float(held["floor_percentile"]),
+        active_rise_db=float(held["active_rise_db"]),
+        peak_min_distance_s=float(held["peak_min_distance_s"]),
+        peak_prominence_std=float(held["peak_prominence_std"]),
+        min_duration_s=float(held["min_duration_s"]),
+        peaks_per_breath=float(held["peaks_per_breath"]),
+        speech_guard_db=float(held["speech_guard_db"]),
+        breathing_min_db=float(held["breathing_min_db"]),
+    )
+
+
 @functools.cache
 def breath_pattern_parameters() -> BreathPatternParameters:
     """The parameters of ``data/breath_pattern.yaml``.
@@ -105,6 +171,43 @@ def breath_pattern_parameters() -> BreathPatternParameters:
 
 
 @dataclass(frozen=True)
+class ModulationReading:
+    """What :func:`measure_modulation` read off the subband envelopes' modulation spectra.
+
+    Attributes:
+        breath_vs_syllabic_db: Breathing-band over syllabic-band modulation energy, in dB.
+        active_span_s: The span the broadband envelope stays above its floor by the active rise.
+        modulation_peaks: Peaks of the breathing-band component inside that span.
+        estimated_breaths: ``modulation_peaks`` over the peaks one breath makes, rounded.
+        speech_like: The ratio is below the speech guard: the recording is not breathing.
+        breathing: The ratio reaches the breathing minimum over a non-zero active span, so the
+            estimated breaths count.
+    """
+
+    breath_vs_syllabic_db: float
+    active_span_s: float
+    modulation_peaks: int
+    estimated_breaths: int
+    speech_like: bool
+    breathing: bool
+
+    def record(self) -> dict[str, Any]:
+        """The reading, as JSON-ready values.
+
+        Returns:
+            The fields, keyed by name.
+        """
+        return {
+            "breath_vs_syllabic_db": self.breath_vs_syllabic_db,
+            "active_span_s": self.active_span_s,
+            "modulation_peaks": self.modulation_peaks,
+            "estimated_breaths": self.estimated_breaths,
+            "speech_like": self.speech_like,
+            "breathing": self.breathing,
+        }
+
+
+@dataclass(frozen=True)
 class BreathPattern:
     """What :func:`measure_breath_pattern` read.
 
@@ -116,6 +219,7 @@ class BreathPattern:
         autocorr_peak: The envelope's autocorrelation peak over the breathing-period range, or None
             where the recording is shorter than that range.
         rhythm: Whether the events repeat at a breathing rhythm.
+        modulation: The modulation reading, or None where the recording is shorter than it needs.
     """
 
     pattern: str
@@ -124,6 +228,7 @@ class BreathPattern:
     intervals_s: tuple[float, ...] = field(default_factory=tuple)
     autocorr_peak: float | None = None
     rhythm: bool = False
+    modulation: ModulationReading | None = None
 
     def record(self) -> dict[str, Any]:
         """The reading, as JSON-ready values.
@@ -138,6 +243,7 @@ class BreathPattern:
             "intervals_s": list(self.intervals_s),
             "autocorr_peak": self.autocorr_peak,
             "rhythm": self.rhythm,
+            "modulation": self.modulation.record() if self.modulation is not None else None,
         }
 
 
@@ -165,6 +271,7 @@ def measure_breath_pattern(
     bin_hz: float,
     voiced: np.ndarray,
     parameters: BreathPatternParameters,
+    modulation: ModulationParameters | None = None,
 ) -> BreathPattern:
     """Read the breathing pattern off a power spectrogram and a per-frame voicing mask.
 
@@ -174,6 +281,7 @@ def measure_breath_pattern(
         bin_hz: Hertz between frequency bins.
         voiced: Whether each frame is voiced, one per frame.
         parameters: The measure's parameters.
+        modulation: The modulation reading's parameters; None skips that reading.
 
     Returns:
         The pattern and what it was read from.
@@ -233,6 +341,77 @@ def measure_breath_pattern(
         intervals_s=tuple(round(float(value), 2) for value in intervals),
         autocorr_peak=autocorr_peak,
         rhythm=bool(rhythm),
+        modulation=measure_modulation(power, hop_s=hop_s, bin_hz=bin_hz, smooth_s=p.smooth_s, parameters=modulation)
+        if modulation is not None
+        else None,
+    )
+
+
+def _modulation_psd(values: np.ndarray, fs: float) -> tuple[np.ndarray, np.ndarray]:
+    index = np.arange(len(values))
+    detrended = values - np.polyval(np.polyfit(index, values, 1), index)
+    nfft = 1 << int(np.ceil(np.log2(max(len(values) * 8, 256))))
+    spectrum = np.abs(np.fft.rfft(detrended * np.hanning(len(values)), nfft)) ** 2
+    return np.fft.rfftfreq(nfft, 1 / fs), spectrum
+
+
+def measure_modulation(
+    power: np.ndarray, *, hop_s: float, bin_hz: float, smooth_s: float, parameters: ModulationParameters
+) -> ModulationReading | None:
+    """Read breathing cycles off the modulation spectra of subband envelopes.
+
+    Args:
+        power: Power spectrogram, frequency bins by frames, bin 0 at 0 Hz.
+        hop_s: Seconds between frames.
+        bin_hz: Hertz between frequency bins.
+        smooth_s: The moving-median window on each subband envelope.
+        parameters: The reading's parameters.
+
+    Returns:
+        The reading, or None where the recording is shorter than ``min_duration_s``.
+    """
+    p = parameters
+    step = max(1, int(round(1 / (p.fs_mod * hop_s))))
+    frames = power.shape[1] // step
+    if frames * step * hop_s < p.min_duration_s:
+        return None
+    tiny = 1e-12
+    width = max(1, int(round(smooth_s / hop_s))) | 1
+    envelopes = []
+    for low, high in zip(p.band_edges_hz[:-1], p.band_edges_hz[1:]):
+        level = 10 * np.log10(power[_band_rows(bin_hz, (low, high))].sum(axis=0) + tiny)
+        level = _moving_median(level, width)
+        envelopes.append(level[: frames * step].reshape(frames, step).mean(axis=1))
+    bands = np.array(envelopes)
+    spectra = []
+    for envelope in bands:
+        freqs, spectrum = _modulation_psd(envelope, p.fs_mod)
+        reference = (freqs >= p.reference_band_hz[0]) & (freqs <= p.reference_band_hz[1])
+        spectra.append(spectrum / (spectrum[reference].sum() + tiny))
+    mean_spectrum = np.mean(spectra, axis=0)
+    breath = (freqs >= p.breath_band_hz[0]) & (freqs <= p.breath_band_hz[1])
+    syllabic = (freqs >= p.syllabic_band_hz[0]) & (freqs <= p.syllabic_band_hz[1])
+    ratio_db = float(10 * np.log10((mean_spectrum[breath].sum() + tiny) / (mean_spectrum[syllabic].sum() + tiny)))
+
+    broadband = 10 * np.log10(np.sum(10 ** (bands / 10), axis=0))
+    floor = float(np.percentile(broadband, p.floor_percentile))
+    active = np.flatnonzero(broadband >= floor + p.active_rise_db)
+    span_s = float((active[-1] - active[0] + 1) / p.fs_mod) if len(active) else 0.0
+    sos = butter(2, p.breath_band_hz, btype="band", fs=p.fs_mod, output="sos")
+    component = np.mean([sosfiltfilt(sos, envelope - envelope.mean()) for envelope in bands], axis=0)
+    peaks, _ = find_peaks(
+        component,
+        distance=max(1, int(p.peak_min_distance_s * p.fs_mod)),
+        prominence=p.peak_prominence_std * (float(np.std(component)) + tiny),
+    )
+    counted = int(sum(1 for peak in peaks if broadband[peak] >= floor + p.active_rise_db / 2))
+    return ModulationReading(
+        breath_vs_syllabic_db=round(ratio_db, 2),
+        active_span_s=round(span_s, 2),
+        modulation_peaks=counted,
+        estimated_breaths=int(round(counted / p.peaks_per_breath)),
+        speech_like=ratio_db < p.speech_guard_db,
+        breathing=ratio_db >= p.breathing_min_db and span_s > 0,
     )
 
 
@@ -248,7 +427,12 @@ def _sidecar(store: ProvStore, run_dir: Path, name: str) -> tuple[Mapping[str, A
 
 
 def breath_pattern_of(
-    store: ProvStore, run_dir: Path, *, sampling_hz: float, parameters: BreathPatternParameters | None = None
+    store: ProvStore,
+    run_dir: Path,
+    *,
+    sampling_hz: float,
+    parameters: BreathPatternParameters | None = None,
+    modulation: ModulationParameters | None = None,
 ) -> BreathPattern | tuple[str, ...]:
     """The recording's breathing pattern, or the stored inputs it could not be read without.
 
@@ -259,6 +443,7 @@ def breath_pattern_of(
         sampling_hz: The conditioned stream's sampling rate, which with the spectrogram's own
             ``n_fft`` and ``hop_length`` fixes its bin width and hop.
         parameters: The measure's parameters; ``data/breath_pattern.yaml`` when None.
+        modulation: The modulation reading's parameters; ``data/breath_pattern.yaml`` when None.
 
     Returns:
         The pattern; or the names of the absent inputs, where either derivative or its sidecar is
@@ -286,4 +471,11 @@ def breath_pattern_of(
     if len(track_times):
         frame_voiced = (np.nan_to_num(f0) > 0) & (np.nan_to_num(strength) >= p.voicing_strength_min)
         voiced = frame_voiced[np.clip(np.searchsorted(track_times, times), 0, len(track_times) - 1)]
-    return measure_breath_pattern(power, hop_s=hop_s, bin_hz=sampling_hz / n_fft, voiced=voiced, parameters=p)
+    return measure_breath_pattern(
+        power,
+        hop_s=hop_s,
+        bin_hz=sampling_hz / n_fft,
+        voiced=voiced,
+        parameters=p,
+        modulation=modulation or modulation_parameters(),
+    )
