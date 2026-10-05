@@ -15,11 +15,11 @@
 # recording has been listened to under this rule.
 version: 1
 breath:
-  - breath-sounds
-  - respiration-and-cough-breath
-  - respiration-and-cough-fivebreaths
-  - respiration-and-cough-threequickbreaths
-  - respiration-and-cough-v2-breath
-  - respiration-and-cough-v2-threebreaths
-  - respiration-and-cough-v2-threebreathsmouth
-  - respiration-and-cough-v2-threebreathsnose
+- breath-sounds
+- respiration-and-cough-breath
+- respiration-and-cough-fivebreaths
+- respiration-and-cough-threequickbreaths
+- respiration-and-cough-v2-breath
+- respiration-and-cough-v2-threebreaths
+- respiration-and-cough-v2-threebreathsmouth
+- respiration-and-cough-v2-threebreathsnose
