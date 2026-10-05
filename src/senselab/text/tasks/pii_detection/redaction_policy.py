@@ -50,6 +50,15 @@ def policy() -> dict[str, Any]:
     return table
 
 
+def version() -> int:
+    """The packaged policy's ``version``, recorded on every redaction ledger.
+
+    Returns:
+        The version number.
+    """
+    return int(policy()["version"])
+
+
 def fold(text: str) -> str:
     """One token as the policy compares it.
 

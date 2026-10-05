@@ -66,3 +66,13 @@ def test_kinship_words_in_english_and_spanish() -> None:
         "brother",
         "abuela",
     ]
+
+
+def test_the_ledger_records_the_packaged_policy_version() -> None:
+    """The version on every ledger is the policy file's own, not a literal that can fall behind it."""
+    import yaml
+
+    from senselab.audio.workflows.triage.nodes import redact
+
+    packaged = yaml.safe_load(policy.POLICY_PATH.read_text())["version"]
+    assert policy.version() == packaged == redact.POLICY_VERSION

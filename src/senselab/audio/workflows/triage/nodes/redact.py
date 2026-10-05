@@ -93,6 +93,7 @@ from senselab.text.tasks.pii_detection.redaction_policy import (
 )
 from senselab.text.tasks.pii_detection.redaction_policy import fold as policy_fold
 from senselab.text.tasks.pii_detection.redaction_policy import policy as policy_tables
+from senselab.text.tasks.pii_detection.redaction_policy import version as policy_version
 from senselab.text.tasks.pii_detection.redaction_review import (
     PLACE_HISTORICAL,
     PLACE_REASONS,
@@ -1108,8 +1109,8 @@ LOCKS = (LOCK_DATE, LOCK_AGE, LOCK_PLACE, LOCK_PERSON)
 """Why the policy keeps a word masked whatever the reviewer said: a date element, an age, a place below a
 country, or a person's name awaiting a human's approval."""
 
-POLICY_VERSION = 8
-"""The redaction policy the fold applies; recorded on the ledger."""
+POLICY_VERSION = policy_version()
+"""The redaction policy the fold applies (``version`` of ``data/redaction_policy.yaml``); recorded on the ledger."""
 
 MASK_UNCHANGED = "unchanged"
 MASK_TRIMMED = "trimmed"
