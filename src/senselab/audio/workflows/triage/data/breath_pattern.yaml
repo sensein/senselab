@@ -1,0 +1,48 @@
+# The breathing-pattern measure (breath_pattern.py) and the breath families it decides.
+#
+# A breath family of airway_event_requirements.yaml is decided on this reading of PREPROCESS's
+# stored spectrogram_narrowband (pre-emphasised stream) and phonation_tracks, not on AIRWAY's
+# HeAR-scored event detector. Sustained families (SOUND_COVERAGE in branches.EXPECTATIONS) need
+# `alternating_breaths`; counted families (a required count) need at least one breath event, and
+# fewer events than the instruction asked flag task_mismatch. Either input absent reruns.
+#
+# derivation: owner, 2026-10-05. The owner listened to 23 breath recordings with gain-lifted copies
+# (~/Downloads/contrast_check_20261005/, ~/Downloads/breath_absent_check_20261005/,
+# ~/Downloads/breath_pattern_check_20261005/): ten confirmed breathing ("they all have breathing"),
+# one with a single long breath where three quick breaths were asked (7c169ccc), ten with no breath
+# (including 517381e9, a 0.48 s burst inside speech the HeAR-scored detector counted as one breath
+# event, and 9d16c147, breaths too quiet to hear clearly, which the owner said to discard). With these
+# parameters the measure read every one as heard: alternating_breaths on the ten, single_breath on
+# 7c169ccc and 517381e9, no_breathing on the silent ones. AIRWAY's detector passed 517381e9; HeAR
+# Breathe at 0.2 passed three silent recordings and Clef 27B on plain spectrograms called six of the
+# ten silent ones alternating_breaths. On 100 random breath-family recordings the measure read 71
+# alternating, 16 none, 11 single, 2 irregular (pilot: /orcd/scratch/bcs/002/satra/breath_pattern/).
+# The values are the pilot's, chosen from the anatomy of a breath and not fitted to the labels:
+#   - breath_band_hz: inhale/exhale turbulence energy sits below ~2.5 kHz; above 150 Hz leaves out
+#     mains hum and handling rumble.
+#   - flatness: breath is noise-like, voice harmonic; 0.08 separated them on the labelled set.
+#   - floor_percentile/rise_db: a frame is active 8 dB above the recording's own 10th-percentile
+#     envelope, a relative level with no absolute dBFS.
+#   - event_s: one inhale or exhale (or one combined breath) lasts 0.3-4 s.
+#   - voiced_fraction_max: a turbulent breath trips the pitch tracker on 20-80% of frames, so only an
+#     event voiced over half its length is speech; a per-frame cut split 7c169ccc's breath apart.
+#   - period_s/interval_s: a breathing cycle of 2-8 s (8-30 breaths per minute); inhale-to-exhale
+#     onsets can be 0.4 s apart.
+#   - autocorr_min: rhythm alone is not evidence (silent recordings reached 0.56-0.86), so it is read
+#     only once events are found.
+version: 1
+measure:
+  breath_band_hz: [150.0, 2500.0]
+  flatness_band_hz: [150.0, 4000.0]
+  smooth_s: 0.05
+  floor_percentile: 10.0
+  rise_db: 8.0
+  flatness_min: 0.08
+  voicing_strength_min: 0.45
+  merge_gap_s: 0.25
+  event_s: [0.3, 4.0]
+  voiced_fraction_max: 0.5
+  period_s: [2.0, 8.0]
+  autocorr_min: 0.25
+  interval_s: [0.4, 8.0]
+  interval_share_min: 0.5

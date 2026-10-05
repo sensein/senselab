@@ -296,6 +296,12 @@ class TaskEvidence:
             or None where it reported no count.
         event_kind: The declared airway family's own event kind, or None.
         instructed_count: The count the declared airway family's instruction spoke, or None.
+        breath_mode: ``sustained`` or ``counted`` for a breath family decided on the breathing-pattern
+            measure (``data/breath_pattern.yaml``); None for every other family.
+        breath_pattern: The measure's pattern, one of ``breath_pattern.PATTERNS``, or None where it
+            could not be read.
+        breath_events_n: How many breath events the measure found, or None.
+        breath_reading: The measure's full reading, for the verdict record; empty where none.
     """
 
     owning_branches: tuple[str, ...] = ()
@@ -307,6 +313,10 @@ class TaskEvidence:
     events_found_n: int | None = None
     event_kind: str | None = None
     instructed_count: int | None = None
+    breath_mode: str | None = None
+    breath_pattern: str | None = None
+    breath_events_n: int | None = None
+    breath_reading: dict[str, Any] = field(default_factory=dict)
 
 
 UNMEASURABLE = "unmeasurable"
@@ -314,7 +324,64 @@ ACOUSTICALLY_EMPTY = "acoustically_empty"
 TOO_SHORT_FOR_TASK = "too_short_for_task"
 """Discard ground: the recording is far shorter than its declared task can take, a truncated or aborted capture."""
 NO_BREATH_CAPTURED = "no_breath_captured"
-"""Discard ground: a breath task's owning AIRWAY branch, holding every input it needs, detected no breath."""
+"""Discard ground: a breath task holds no breath (counted) or no breathing pattern (sustained)."""
+BREATH_SUSTAINED = "sustained"
+BREATH_COUNTED = "counted"
+_ALTERNATING_BREATHS = "alternating_breaths"
+
+
+def breath_present(evidence: TaskEvidence) -> bool:
+    """Whether a breath family's measure found what the family needs at the least.
+
+    Args:
+        evidence: The task evidence.
+
+    Returns:
+        For a sustained family, an alternating breathing pattern; for a counted family, at least one
+        breath event. False where the measure was not read.
+    """
+    if evidence.breath_pattern is None:
+        return False
+    if evidence.breath_mode == BREATH_SUSTAINED:
+        return evidence.breath_pattern == _ALTERNATING_BREATHS
+    return (evidence.breath_events_n or 0) > 0
+
+
+def breath_conforms(evidence: TaskEvidence) -> bool:
+    """Whether a breath family's measure says the task was performed as instructed.
+
+    Args:
+        evidence: The task evidence.
+
+    Returns:
+        :func:`breath_present`, and for a counted family at least the instructed number of events.
+    """
+    if not breath_present(evidence):
+        return False
+    if evidence.breath_mode == BREATH_COUNTED and evidence.instructed_count is not None:
+        return (evidence.breath_events_n or 0) >= evidence.instructed_count
+    return True
+
+
+def breath_shortfall(evidence: TaskEvidence) -> str | None:
+    """The detected-against-instructed count where a counted breath family found too few breaths.
+
+    Args:
+        evidence: The task evidence.
+
+    Returns:
+        ``"detected N breath events where M were instructed"`` where some but fewer than the
+        instructed number were found; None otherwise.
+    """
+    found = evidence.breath_events_n or 0
+    if (
+        evidence.breath_mode != BREATH_COUNTED
+        or evidence.breath_pattern is None
+        or evidence.instructed_count is None
+        or not 0 < found < evidence.instructed_count
+    ):
+        return None
+    return f"detected {found} breath events where {evidence.instructed_count} were instructed"
 DECLARED_TASK_ABSENT = "declared_task_absent"
 """Discard ground: the branch owning the declared task ran and found none of it, whatever another branch found."""
 DISCARD_GROUNDS = (UNMEASURABLE, TOO_SHORT_FOR_TASK, ACOUSTICALLY_EMPTY, NO_BREATH_CAPTURED, DECLARED_TASK_ABSENT)
@@ -900,7 +967,7 @@ class FileVerdict:
             :data:`RELEASE_UNKNOWN_GROUNDS`, :data:`RELEASE_WITHHELD_GROUNDS` or
             :data:`RELEASE_WITH_REDACTION_GROUNDS`. None wherever REDACT itself decided.
         discard_ground: ``"unmeasurable"``, ``"too_short_for_task"``, ``"acoustically_empty"``,
-            ``"declared_task_absent"`` or None.
+            ``"no_breath_captured"``, ``"declared_task_absent"`` or None.
         ground_keys: The stable key of every ground behind the triage state -- the discard ground and
             every flag, sorted and deduplicated. Empty on a pass.
         findings: What each branch found, as a :class:`KindState` value, read off the spans it
@@ -932,6 +999,8 @@ class FileVerdict:
         gates: The task group's gates and every one this fold applied — the gate, its reading, the
             bound and the group — so the conformance can be read backwards. Empty where the
             recording declares no task this graph holds a row for.
+        breath_pattern: The breathing-pattern measure's reading for a breath family -- pattern, event
+            count, durations, intervals and rhythm. Empty for every other family.
     """
 
     triage: Triage
@@ -957,6 +1026,7 @@ class FileVerdict:
     second_opinion: dict[str, Any] = field(default_factory=dict)
     critical_absences: dict[str, dict[str, str]] = field(default_factory=dict)
     gates: dict[str, Any] = field(default_factory=dict)
+    breath_pattern: dict[str, Any] = field(default_factory=dict)
 
     def record(self) -> dict[str, Any]:
         """Every decision point of this fold, as JSON-ready values.
@@ -990,6 +1060,7 @@ class FileVerdict:
             "second_opinion": dict(self.second_opinion),
             "critical_absences": {branch: dict(gates) for branch, gates in self.critical_absences.items()},
             "gates": dict(self.gates),
+            "breath_pattern": dict(self.breath_pattern),
             "ran": {node: state.value for node, state in self.ran.items()},
             "reasons": [
                 {"node": r.node, "outcome": r.outcome.value, "kind": r.kind, "why": r.why, "key": ground_key(r)}
@@ -1367,6 +1438,8 @@ def _owner_performed(
         transcript carries an event token naming the declared family's own event. A span alone, or
         a conformance of False, is never enough.
     """
+    if branch == _AIRWAY and evidence.breath_mode is not None:
+        return breath_conforms(evidence)
     report = by_branch.get(branch)
     if report is None or report.conformance_of != TASK:
         return False
@@ -1450,9 +1523,13 @@ def no_required_event(evidence: TaskEvidence, performed: bool) -> bool:
         performed: Whether the declared task's own branch says the task was performed.
 
     Returns:
-        True where the family names a required event kind and the owning AIRWAY branch reported a
-        count of zero; False where it names none, reported no count, or the task was performed.
+        For a breath family read by the breathing-pattern measure, True where it read the inputs and
+        found no breath (counted) or no alternating pattern (sustained). Otherwise True where the
+        family names a required event kind and the owning AIRWAY branch reported a count of zero;
+        False where it names none, reported no count, or the task was performed.
     """
+    if evidence.breath_mode is not None:
+        return evidence.breath_pattern is not None and not evidence.owner_absent_inputs and not breath_present(evidence)
     return (
         evidence.required_event in EVENT_ABSENT_GROUNDS
         and evidence.events_found_n == 0
@@ -1580,6 +1657,11 @@ def fold_file_verdict(
         for branch in branches_seen
     }
     findings = {branch: _found(branch in by_branch, spans.get(branch, 0)) for branch in branches_seen}
+    breath_decides = task_evidence.breath_mode is not None and task_evidence.breath_pattern is not None
+    if breath_decides and _AIRWAY in findings:
+        findings[_AIRWAY] = (
+            KindState.PRESENT.value if (task_evidence.breath_events_n or 0) > 0 else KindState.ABSENT.value
+        )
     agreement = {branch: _agreement(routes[branch], branch in by_branch, findings[branch]) for branch in branches_seen}
     hints = (
         {}
@@ -1718,13 +1800,21 @@ def fold_file_verdict(
         for g in applied_gates
         if g.get("passed") == "UNDETERMINED" and g.get("reason") in ("absent_not_computed", "instrument_absent")
     )
-    if uncomputed and rules.uncomputed_reading_flags:
+    measure_decides_gate_node = task_evidence.breath_mode is not None and gate_record.get("node") == _AIRWAY
+    if uncomputed and rules.uncomputed_reading_flags and not measure_decides_gate_node:
         flag(
             str(gate_record.get("node") or _VERDICT),
             f"{UNCOMPUTED_READING}: {', '.join(uncomputed)}",
             KEY_UNCOMPUTED_READING,
         )
     for name, report in reports.items():
+        measure_decides = (
+            task_evidence.breath_mode is not None and name == _AIRWAY and report.conformance_of == TASK
+        )
+        if measure_decides:
+            if report.deviations and rules.deviation_flags:
+                flag(name, f"{name} reported {', '.join(report.deviations)}", f"{PREFIX_DEVIATION}:{name}", report.kind)
+            continue
         if report.conformance is False and rules.flags_conformance(report.conformance_of, declared_family):
             why = TASK_NOT_CONFORMED if report.conformance_of == TASK else STORE_ASSERTION_CONTRADICTED
             prefix = PREFIX_CONFORMANCE if report.conformance_of == TASK else PREFIX_STORE_ASSERTION
@@ -1752,6 +1842,9 @@ def fold_file_verdict(
                 f"{PREFIX_UNMEASURED}:{name}",
                 report.kind,
             )
+    shortfall = breath_shortfall(task_evidence)
+    if shortfall is not None:
+        flag(_AIRWAY, f"{TASK_MISMATCH}: {shortfall}", KEY_TASK_MISMATCH, by_branch[_AIRWAY].kind if _AIRWAY in by_branch else None)
     for branch in branches_seen:
         decision = branch_decisions.get(branch)
         reported = by_branch.get(branch)
@@ -1886,4 +1979,5 @@ def fold_file_verdict(
         ),
         critical_absences=absences,
         gates=dict(gates or {}),
+        breath_pattern=dict(task_evidence.breath_reading),
     )
