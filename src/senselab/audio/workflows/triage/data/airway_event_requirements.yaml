@@ -1,0 +1,25 @@
+# The airway families whose task is decided on detected events of their own kind: a recording of one
+# of these families in which the owning AIRWAY branch, holding every input it needs, detected none
+# discards with the kind's own ground (`no_breath_captured` for breath). An AIRWAY branch that lacked
+# an input still reruns (`owning_branch_input_absent`), and HeAR scores and bracketed ASR tokens are
+# never the detection.
+#
+# derivation: owner, 2026-10-05, after listening to ten breath recordings with gain-lifted copies and
+# HeAR/YAMNet readings (~/Downloads/contrast_check_20261005/index.csv). AIRWAY's breath-event detector
+# was the one reading that matched every listen: one event in the one recording that held a breath
+# (7c169ccc), none in the nine others. HeAR Breathe at score_min 0.2 passed three silent recordings
+# (254e47be 0.47, 517381e9 0.25, 0b8dcad5 0.23) and [breath] was written on three. The owner: "yes do
+# fix 1" (a real breath-event check for the sustained families), "wrong pattern should be flagged as a
+# task mismatch", "discard quiet ones" (breaths too quiet for the detector to find are no breath
+# captured; the detection floors are not lowered). The cough families are not listed: no cough
+# recording has been listened to under this rule.
+version: 1
+breath:
+  - breath-sounds
+  - respiration-and-cough-breath
+  - respiration-and-cough-fivebreaths
+  - respiration-and-cough-threequickbreaths
+  - respiration-and-cough-v2-breath
+  - respiration-and-cough-v2-threebreaths
+  - respiration-and-cough-v2-threebreathsmouth
+  - respiration-and-cough-v2-threebreathsnose

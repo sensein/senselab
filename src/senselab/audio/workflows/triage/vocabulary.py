@@ -290,6 +290,12 @@ class TaskEvidence:
             event (``[cough]`` in a cough task); 0 for every other family.
         owner_absent_inputs: The instruments, derivatives or gate readings an owning branch needed to
             look for the task and did not have; empty where every owner could look.
+        required_event: The event kind the declared airway family is decided on (``breath``), from
+            ``data/airway_event_requirements.yaml``; None for every other family.
+        events_found_n: How many events of the family's own kind the owning AIRWAY branch detected,
+            or None where it reported no count.
+        event_kind: The declared airway family's own event kind, or None.
+        instructed_count: The count the declared airway family's instruction spoke, or None.
     """
 
     owning_branches: tuple[str, ...] = ()
@@ -297,17 +303,27 @@ class TaskEvidence:
     minimum_duration_s: float | None = None
     event_tokens_n: int = 0
     owner_absent_inputs: tuple[str, ...] = ()
+    required_event: str | None = None
+    events_found_n: int | None = None
+    event_kind: str | None = None
+    instructed_count: int | None = None
 
 
 UNMEASURABLE = "unmeasurable"
 ACOUSTICALLY_EMPTY = "acoustically_empty"
 TOO_SHORT_FOR_TASK = "too_short_for_task"
 """Discard ground: the recording is far shorter than its declared task can take, a truncated or aborted capture."""
+NO_BREATH_CAPTURED = "no_breath_captured"
+"""Discard ground: a breath task's owning AIRWAY branch, holding every input it needs, detected no breath."""
 DECLARED_TASK_ABSENT = "declared_task_absent"
 """Discard ground: the branch owning the declared task ran and found none of it, whatever another branch found."""
-DISCARD_GROUNDS = (UNMEASURABLE, TOO_SHORT_FOR_TASK, ACOUSTICALLY_EMPTY, DECLARED_TASK_ABSENT)
+DISCARD_GROUNDS = (UNMEASURABLE, TOO_SHORT_FOR_TASK, ACOUSTICALLY_EMPTY, NO_BREATH_CAPTURED, DECLARED_TASK_ABSENT)
 """Every ground a file discards on, in the order the fold tries them; an operational flag (``rerun``) is
 tried between the third and the fourth, since a missing derivative may be why the task was not found."""
+EVENT_ABSENT_GROUNDS = {"breath": NO_BREATH_CAPTURED}
+"""The discard ground for each required event kind of ``data/airway_event_requirements.yaml``."""
+TASK_MISMATCH = "task_mismatch"
+"""Flag ground: the declared airway task's own events were detected, but not in the pattern it asked for."""
 
 AGREE = "agree"
 MISMATCH = "mismatch"
@@ -450,6 +466,8 @@ KEY_UNMEASURABLE = UNMEASURABLE
 KEY_ACOUSTICALLY_EMPTY = ACOUSTICALLY_EMPTY
 KEY_TOO_SHORT_FOR_TASK = TOO_SHORT_FOR_TASK
 KEY_DECLARED_TASK_ABSENT = DECLARED_TASK_ABSENT
+KEY_NO_BREATH_CAPTURED = NO_BREATH_CAPTURED
+KEY_TASK_MISMATCH = TASK_MISMATCH
 KEY_PREPROCESS_ERRORED = "preprocess_errored"
 KEY_ROUTING_ERRORED = "routing_errored"
 KEY_BAD_HINT_MAP = "config_bad_hint_map"
@@ -477,6 +495,8 @@ GROUND_KEYS = (
     KEY_ACOUSTICALLY_EMPTY,
     KEY_TOO_SHORT_FOR_TASK,
     KEY_DECLARED_TASK_ABSENT,
+    KEY_NO_BREATH_CAPTURED,
+    KEY_TASK_MISMATCH,
     KEY_PREPROCESS_ERRORED,
     KEY_ROUTING_ERRORED,
     KEY_BAD_HINT_MAP,
@@ -1343,8 +1363,9 @@ def _owner_performed(
 
     Returns:
         True where the branch's task conformance is True, or where it is AIRWAY, it found its kind,
-        could not decide its conformance, and the transcript carries an event token naming the
-        declared family's own event. A span alone, or a conformance of False, is never enough.
+        could not decide its conformance, the family is not one decided on detected events, and the
+        transcript carries an event token naming the declared family's own event. A span alone, or
+        a conformance of False, is never enough.
     """
     report = by_branch.get(branch)
     if report is None or report.conformance_of != TASK:
@@ -1355,6 +1376,7 @@ def _owner_performed(
         branch == _AIRWAY
         and report.conformance == UNDETERMINED
         and findings.get(branch) == KindState.PRESENT.value
+        and evidence.required_event is None
         and evidence.event_tokens_n > 0
     )
 
@@ -1418,6 +1440,52 @@ def declared_task_absent(
         return branch == _SPEECH and lexical_words_n == 0
 
     return all(found_none(branch) for branch in owners)
+
+
+def no_required_event(evidence: TaskEvidence, performed: bool) -> bool:
+    """Whether a family decided on detected events had none of its own kind detected.
+
+    Args:
+        evidence: The task evidence.
+        performed: Whether the declared task's own branch says the task was performed.
+
+    Returns:
+        True where the family names a required event kind and the owning AIRWAY branch reported a
+        count of zero; False where it names none, reported no count, or the task was performed.
+    """
+    return (
+        evidence.required_event in EVENT_ABSENT_GROUNDS
+        and evidence.events_found_n == 0
+        and not evidence.owner_absent_inputs
+        and not performed
+    )
+
+
+def _count_mismatch(applied_gates: Sequence[Mapping[str, Any]], evidence: TaskEvidence) -> str | None:
+    """The detected-against-instructed count where an airway task's own events fell short of it.
+
+    Args:
+        applied_gates: The declared task's applied gate records.
+        evidence: The task evidence, read for the event kind and the instructed count.
+
+    Returns:
+        ``"detected N <kind> events where M were instructed"`` where ``events_min`` passed and
+        ``instructed_count_min_fraction`` failed; None otherwise.
+    """
+    by_name = {str(gate.get("gate")): gate for gate in applied_gates}
+    found = by_name.get("events_min")
+    fraction = by_name.get("instructed_count_min_fraction")
+    if (
+        evidence.event_kind is None
+        or evidence.instructed_count is None
+        or found is None
+        or fraction is None
+        or found.get("passed") is not True
+        or fraction.get("passed") is not False
+    ):
+        return None
+    detected = found.get("value")
+    return f"detected {detected} {evidence.event_kind} events where {evidence.instructed_count} were instructed"
 
 
 def fold_file_verdict(
@@ -1663,8 +1731,16 @@ def fold_file_verdict(
             if report.conformance_of == TASK and nothing_read and name == gate_record.get("node"):
                 why = NOTHING_READ
                 prefix = PREFIX_NOTHING_READ
+            mismatch = (
+                _count_mismatch(applied_gates, task_evidence)
+                if report.conformance_of == TASK and name == gate_record.get("node")
+                else None
+            )
             named = f" on {declared_family}" if report.conformance_of == TASK and declared_family else ""
-            flag(name, f"{name} {why}{named}", f"{prefix}:{name}", report.kind)
+            if mismatch is not None:
+                flag(name, f"{TASK_MISMATCH}: {mismatch}", KEY_TASK_MISMATCH, report.kind)
+            else:
+                flag(name, f"{name} {why}{named}", f"{prefix}:{name}", report.kind)
         if report.conformance == UNDETERMINED and rules.undetermined_flags:
             flag(name, f"{name} {CONFORMANCE_UNANSWERED}", f"{PREFIX_CONFORMANCE_UNANSWERED}:{name}", report.kind)
         if report.deviations and rules.deviation_flags:
@@ -1752,6 +1828,9 @@ def fold_file_verdict(
         ground = ACOUSTICALLY_EMPTY
     elif any(is_operational(reason.key) for reason in flags):
         triage = Triage.RERUN
+    elif no_required_event(task_evidence, performed):
+        triage = Triage.DISCARD
+        ground = EVENT_ABSENT_GROUNDS[str(task_evidence.required_event)]
     elif declared_task_absent(by_branch, findings, task_evidence, (redaction or RedactionEvidence()).lexical_words_n):
         triage = Triage.DISCARD
         ground = DECLARED_TASK_ABSENT

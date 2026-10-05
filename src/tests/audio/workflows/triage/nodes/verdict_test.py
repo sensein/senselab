@@ -2175,8 +2175,65 @@ class TestTheTaskEvidenceProfiles:
         tokens = verdict_module._airway_event_tokens()
         assert {"cough", "咳"} <= tokens["respiration-and-cough-cough"]
         assert "um" not in tokens["respiration-and-cough-cough"]
-        assert "breath" in tokens["respiration-and-cough-fivebreaths"]
+        assert "respiration-and-cough-fivebreaths" not in tokens, "a [breath] token is context, never evidence"
         assert "harvard-sentences-list" not in tokens
+
+    def test_every_breath_family_is_decided_on_a_detected_breath_and_no_other_family_is(self) -> None:
+        """``data/airway_event_requirements.yaml`` names the breath families and only them."""
+        breath = {
+            "breath-sounds",
+            "respiration-and-cough-breath",
+            "respiration-and-cough-fivebreaths",
+            "respiration-and-cough-threequickbreaths",
+            "respiration-and-cough-v2-breath",
+            "respiration-and-cough-v2-threebreaths",
+            "respiration-and-cough-v2-threebreathsmouth",
+            "respiration-and-cough-v2-threebreathsnose",
+        }
+        assert {family for family in breath if verdict_module.required_event(family) == "breath"} == breath
+        assert verdict_module.required_event("respiration-and-cough-cough") is None
+        assert verdict_module.required_event("harvard-sentences-list") is None
+        assert verdict_module.required_event(None) is None
+
+
+class TestTheEventsFoundReading:
+    """The owning AIRWAY branch's own count of events of its kind reaches the fold."""
+
+    @staticmethod
+    def _store(value: object | None) -> ProvStore:
+        store = ProvStore(run_id="events-found-test")
+        agent = software_agent(store)
+        activity = store.activity(node="AIRWAY", step="seed", parameters={})
+        store.was_associated_with(activity, agent)
+        if value is not None:
+            entity = store.entity(
+                prov_type="measurement",
+                extent=None,
+                attributes={"name": "airway_events_found", "value": value, "signal": "plain"},
+            )
+            store.was_generated_by(entity, activity)
+        return store
+
+    def test_a_zero_count_reads_as_zero_and_no_count_as_none(self) -> None:
+        """Zero is a reading; an absent measurement is no reading at all."""
+        assert verdict_module._airway_events_found(self._store(0)) == 0
+        assert verdict_module._airway_events_found(self._store(3)) == 3
+        assert verdict_module._airway_events_found(self._store(None)) is None
+
+    def test_the_task_evidence_carries_the_kind_the_count_and_the_instruction(self) -> None:
+        """A three-quick-breaths recording: breath, the detected count, three instructed."""
+        evidence = verdict_module._task_evidence(self._store(1), "respiration-and-cough-threequickbreaths")
+        assert evidence.required_event == "breath"
+        assert evidence.events_found_n == 1
+        assert evidence.event_kind == "breath"
+        assert evidence.instructed_count == 3
+
+    def test_a_speech_family_carries_none_of_it(self) -> None:
+        """No airway owner, no airway evidence."""
+        evidence = verdict_module._task_evidence(self._store(2), "harvard-sentences-list")
+        assert evidence.required_event is None
+        assert evidence.events_found_n is None
+        assert evidence.instructed_count is None
 
 
 class TestTheOwnerCouldLook:

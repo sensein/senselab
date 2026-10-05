@@ -36,6 +36,7 @@ import yaml
 from senselab.audio.data_structures import AudioHints
 from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.live_evidence import declared_task, recording_stem
+from senselab.audio.workflows.triage.nodes.airway import EVENTS_FOUND as AIRWAY_EVENTS_FOUND
 from senselab.audio.workflows.triage.nodes.airway import INSTRUMENT_ABSENT as AIRWAY_INSTRUMENT_ABSENT
 from senselab.audio.workflows.triage.nodes.branches import (
     BRANCH_FAMILY,
@@ -286,6 +287,7 @@ def _spans_by_node(store: ProvStore) -> dict[str, int]:
 
 TASK_MINIMUM_DURATION_PATH = Path(__file__).parents[1] / "data" / "task_minimum_duration.yaml"
 AIRWAY_EVENT_TOKENS_PATH = Path(__file__).parents[1] / "data" / "airway_event_tokens.yaml"
+AIRWAY_EVENT_REQUIREMENTS_PATH = Path(__file__).parents[1] / "data" / "airway_event_requirements.yaml"
 
 
 @functools.cache
@@ -341,6 +343,43 @@ def event_tokens_n(store: ProvStore, declared_family: str | None) -> int:
         if word.attributes.get("bracketed")
         and str(word.attributes.get("text") or "").strip().strip("[]()<>").strip().casefold() in tokens
     )
+
+
+@functools.cache
+def _airway_event_requirements() -> dict[str, str]:
+    """``data/airway_event_requirements.yaml``: per declared airway family, the event kind it is decided on."""
+    document = yaml.safe_load(AIRWAY_EVENT_REQUIREMENTS_PATH.read_text()) or {}
+    return {
+        str(family): str(kind) for kind, families in document.items() if kind != "version" for family in families or ()
+    }
+
+
+def required_event(declared_family: str | None) -> str | None:
+    """The event kind a declared airway family is decided on, or None.
+
+    Args:
+        declared_family: The task family the recording declares.
+
+    Returns:
+        ``breath`` for a family ``data/airway_event_requirements.yaml`` lists under it; None otherwise.
+    """
+    return _airway_event_requirements().get(declared_family or "")
+
+
+def _airway_events_found(store: ProvStore) -> int | None:
+    """How many events of its own kind the owning AIRWAY branch detected, or None where it reported no count.
+
+    Args:
+        store: The provenance store, read for AIRWAY's events-found measurement.
+
+    Returns:
+        The count, or None.
+    """
+    measurement = find_measurement(store, AIRWAY_EVENTS_FOUND)
+    if measurement is None:
+        return None
+    value = measurement.attributes.get("value")
+    return int(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
 
 
 def _owner_absent_inputs(
@@ -400,12 +439,19 @@ def _task_evidence(
         None,
     )
     duration = recording.extent[1] - recording.extent[0] if recording is not None and recording.extent else None
+    airway = EXPECTATIONS["AIRWAY"].get(declared_family or "") if "AIRWAY" in owners else None
     return TaskEvidence(
         owning_branches=owners,
         duration_s=duration,
         minimum_duration_s=minimum_duration_s(declared_family) if owners else None,
         event_tokens_n=event_tokens_n(store, declared_family),
         owner_absent_inputs=_owner_absent_inputs(store, owners, gate_record),
+        required_event=required_event(declared_family) if "AIRWAY" in owners else None,
+        events_found_n=_airway_events_found(store) if "AIRWAY" in owners else None,
+        event_kind=airway.label_set if airway is not None else None,
+        instructed_count=airway.required_count.value
+        if airway is not None and airway.required_count is not None
+        else None,
     )
 
 
