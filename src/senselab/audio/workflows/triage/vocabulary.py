@@ -382,6 +382,8 @@ def breath_shortfall(evidence: TaskEvidence) -> str | None:
     ):
         return None
     return f"detected {found} breath events where {evidence.instructed_count} were instructed"
+
+
 DECLARED_TASK_ABSENT = "declared_task_absent"
 """Discard ground: the branch owning the declared task ran and found none of it, whatever another branch found."""
 DISCARD_GROUNDS = (UNMEASURABLE, TOO_SHORT_FOR_TASK, ACOUSTICALLY_EMPTY, NO_BREATH_CAPTURED, DECLARED_TASK_ABSENT)
@@ -1808,9 +1810,7 @@ def fold_file_verdict(
             KEY_UNCOMPUTED_READING,
         )
     for name, report in reports.items():
-        measure_decides = (
-            task_evidence.breath_mode is not None and name == _AIRWAY and report.conformance_of == TASK
-        )
+        measure_decides = task_evidence.breath_mode is not None and name == _AIRWAY and report.conformance_of == TASK
         if measure_decides:
             if report.deviations and rules.deviation_flags:
                 flag(name, f"{name} reported {', '.join(report.deviations)}", f"{PREFIX_DEVIATION}:{name}", report.kind)
@@ -1844,7 +1844,12 @@ def fold_file_verdict(
             )
     shortfall = breath_shortfall(task_evidence)
     if shortfall is not None:
-        flag(_AIRWAY, f"{TASK_MISMATCH}: {shortfall}", KEY_TASK_MISMATCH, by_branch[_AIRWAY].kind if _AIRWAY in by_branch else None)
+        flag(
+            _AIRWAY,
+            f"{TASK_MISMATCH}: {shortfall}",
+            KEY_TASK_MISMATCH,
+            by_branch[_AIRWAY].kind if _AIRWAY in by_branch else None,
+        )
     for branch in branches_seen:
         decision = branch_decisions.get(branch)
         reported = by_branch.get(branch)
