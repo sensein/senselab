@@ -7,14 +7,14 @@ import numpy as np
 
 from senselab.audio.workflows.triage.breath_pattern import (
     ALTERNATING_BREATHS,
+    EXTENT_AIRWAY_EVENTS,
+    EXTENT_MEASURE_EVENTS,
+    EXTENT_MODULATION,
     NO_BREATHING,
     OVER_TASK_EXTENT,
     SINGLE_BREATH,
     VETO_LITTLE_ACTIVITY,
     VETO_SPEECH,
-    EXTENT_AIRWAY_EVENTS,
-    EXTENT_MEASURE_EVENTS,
-    EXTENT_MODULATION,
     BreathVeto,
     breath_extent_fallback,
     breath_pattern_parameters,
