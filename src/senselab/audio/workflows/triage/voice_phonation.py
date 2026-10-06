@@ -13,6 +13,7 @@ Every parameter is in ``data/voice_phonation.yaml``. The design is
 from __future__ import annotations
 
 import functools
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Sequence
@@ -116,20 +117,27 @@ def shutoff_runs(frames: Frames, p: dict[str, Any]) -> list[Run]:
     q = p["shutoff"]
     hop = p["hop_s"]
     level = frames.level_db
-    candidate = level <= np.min(level) + q["flat_db"]
+    digital = level < p["digital_floor_dbfs"]
+    width = max(2, int(round(q["flat_window_s"] / hop)))
+    flat = np.zeros(len(level), dtype=bool)
+    if len(level) >= width:
+        windows = np.lib.stride_tricks.sliding_window_view(level, width)
+        spread = np.percentile(windows, 90, axis=1) - np.percentile(windows, 10, axis=1)
+        for k in np.flatnonzero(spread <= q["flat_db"]):
+            flat[k : k + width] = True
+    live = floor_db(level, ~(flat | digital), p)
+    dead = digital | (flat & (level <= live - q["below_floor_db"]))
+    active = np.flatnonzero(level >= live + p["phonation_db"])
+    if active.size == 0:
+        return []
     drop_n = max(1, int(round(q["drop_s"] / hop)))
     found: list[Run] = []
-    for first, end in runs_of(candidate):
-        if (end - first) * hop < q["min_s"] or first < drop_n:
+    for first, end in bridge(runs_of(dead), int(round(q["bridge_s"] / hop)) + 1):
+        if (end - first) * hop < q["min_s"] or first <= active[0]:
             continue
-        inside = level[first:end]
-        if level[first - drop_n] - np.median(inside) < q["drop_db"]:
-            continue
-        rest = np.ones(len(level), dtype=bool)
-        rest[first:end] = False
-        if np.median(inside) > floor_db(level, rest, p) - q["below_floor_db"]:
-            continue
-        found.append((first, end))
+        before = level[max(0, first - drop_n) : first]
+        if before.size and before.max() - np.median(level[first:end]) >= q["drop_db"]:
+            found.append((first, end))
     return found
 
 
@@ -145,7 +153,7 @@ def floor_db(level: np.ndarray, valid: np.ndarray, p: dict[str, Any]) -> float:
         The floor, in dB.
     """
     width = max(1, int(round(p["floor_smooth_s"] / p["hop_s"])))
-    values = np.where(valid, level, np.nan)
+    values = np.where(valid & (level >= p["digital_floor_dbfs"]), level, np.nan)
     if np.isfinite(values).sum() < width:
         finite = values[np.isfinite(values)]
         return float(np.min(finite)) if finite.size else float(np.min(level))
@@ -338,10 +346,23 @@ class Extent:
     outside: tuple[Run, ...]
 
 
-def _speech_cover(run: Run, times: np.ndarray, words: Sequence[Word], hop: float) -> float:
-    start, end = times[run[0]] - hop / 2, times[run[1] - 1] + hop / 2
-    covered = sum(max(0.0, min(end, b) - max(start, a)) for a, b, _ in words)
-    return covered / max(end - start, 1e-9)
+def speech_words(words: Sequence[Word], p: dict[str, Any]) -> list[Word]:
+    """The lexical words that are speech rather than the vowel itself transcribed."""
+    vowel = re.compile(str(p["vowel_word_pattern"]))
+    out: list[Word] = []
+    for a, b, text in words:
+        letters = re.sub(r"[^a-z]", "", text.lower())
+        if letters and not vowel.match(letters) and b - a <= p["speech_word_max_s"]:
+            out.append((a, b, text))
+    return out
+
+
+def speech_mask(times: np.ndarray, words: Sequence[Word], p: dict[str, Any]) -> np.ndarray:
+    """Which frames a speech word covers."""
+    mask = np.zeros(times.shape, dtype=bool)
+    for a, b, _ in speech_words(words, p):
+        mask |= (times >= a) & (times <= b)
+    return mask
 
 
 def extent_of(
@@ -354,7 +375,7 @@ def extent_of(
     *,
     phonation_db: float | None = None,
 ) -> Extent | None:
-    """The phonation extent: the longest non-speech run, merged with the further holds around it.
+    """The phonation extent: the longest run off speech words, merged with the further holds around it.
 
     Args:
         frames: The plain stream's frames.
@@ -370,28 +391,30 @@ def extent_of(
     """
     hop = p["hop_s"]
     margin = p["phonation_db"] if phonation_db is None else phonation_db
-    phonation = ((frames.level_db >= floor + margin) | voiced) & ~blocked
+    level = frames.level_db
+    spoken = speech_mask(frames.times_s, words, p)
+    phonation = ((level >= floor + margin) | voiced) & ~blocked & ~spoken
     runs = bridge(runs_of(phonation), int(round(p["break_min_s"] / hop)))
-    speech = [_speech_cover(run, frames.times_s, words, hop) >= p["speech_cover_min"] for run in runs]
     candidates = [i for i, run in enumerate(runs) if (run[1] - run[0]) * hop >= p["extent_min_s"]]
     if not candidates:
         return None
-    pool = [i for i in candidates if not speech[i]] or candidates
-    core = max(pool, key=lambda i: runs[i][1] - runs[i][0])
+    core = max(candidates, key=lambda i: runs[i][1] - runs[i][0])
     first = last = core
     gap = int(round(p["merge_gap_max_s"] / hop))
     segment = int(round(p["segment_min_s"] / hop))
 
     def mergeable(i: int) -> bool:
-        return not speech[i] and runs[i][1] - runs[i][0] >= segment
+        a, b = runs[i]
+        held = voiced[a:b].mean() >= p["merge_voiced_fraction_min"] or np.median(level[a:b]) >= floor + p["merge_db"]
+        return b - a >= segment and bool(held)
 
     grown = True
     while grown:
         grown = False
-        if first > 0 and mergeable(first - 1) and runs[first][0] - runs[first - 1][1] <= gap:
+        if first > 0 and mergeable(first - 1) and _joins(runs[first - 1], runs[first], gap, spoken):
             first -= 1
             grown = True
-        if last < len(runs) - 1 and mergeable(last + 1) and runs[last + 1][0] - runs[last][1] <= gap:
+        if last < len(runs) - 1 and mergeable(last + 1) and _joins(runs[last], runs[last + 1], gap, spoken):
             last += 1
             grown = True
     onset, offset = runs[first][0], runs[last][1]
@@ -399,6 +422,11 @@ def extent_of(
     holds = tuple(runs[first : last + 1])
     outside = tuple(run for i, run in enumerate(runs) if i < first or i > last)
     return Extent(onset, offset, start, holds, outside)
+
+
+def _joins(before: Run, after: Run, gap: int, spoken: np.ndarray) -> bool:
+    """Whether two runs merge: the gap between them is short and holds no speech word."""
+    return after[0] - before[1] <= gap and not spoken[before[1] : after[0]].any()
 
 
 def _inhale_start(
@@ -521,6 +549,7 @@ class PhonationReading:
         breaks: Each break, ``(start, end)`` seconds.
         floor_db: The noise floor.
         voiced_fraction: The voiced share of the phonation frames inside the extent.
+        voiced_s: The voiced time inside the extent.
         f0_median_hz: The median checked F0 inside the extent.
         f0_spread_semitones: The typical windowed F0 spread inside the extent.
         glide: The glide reading for a glide family; empty otherwise.
@@ -539,6 +568,7 @@ class PhonationReading:
     breaks: tuple[tuple[float, float], ...] = ()
     floor_db: float = float("nan")
     voiced_fraction: float = 0.0
+    voiced_s: float = 0.0
     f0_median_hz: float | None = None
     f0_spread_semitones: float | None = None
     glide: dict[str, Any] = field(default_factory=dict)
@@ -573,6 +603,7 @@ class PhonationReading:
             "longest_hold_s": max(holds, default=0.0),
             "floor_db": round(self.floor_db, 2),
             "voiced_fraction": round(self.voiced_fraction, 4),
+            "voiced_s": round(self.voiced_s, 3),
             "f0_median_hz": None if self.f0_median_hz is None else round(self.f0_median_hz, 1),
             "f0_spread_semitones": None if self.f0_spread_semitones is None else round(self.f0_spread_semitones, 3),
             "glide": dict(self.glide),
@@ -637,7 +668,7 @@ def measure_phonation(
     hum = hum_of(residual, f0_raw, p)
     if hum.fired:
         f0_raw = np.where(_near_mains(f0_raw, hum.mains_hz, p["hum"]), np.nan, f0_raw)
-    voiced = np.isfinite(f0_raw)
+    voiced = np.isfinite(f0_raw) & (frames.level_db >= floor + p["voiced_rise_db"])
     f0 = octave_checked(f0_raw, frames, p)
     enhanced_drop = (
         float(np.mean(frames_of(enhanced, p).level_db) - np.mean(frames.level_db)) if enhanced is not None else None
@@ -723,13 +754,14 @@ def measure_phonation(
             or max(abs(enhanced_extent[0] - start_s), abs(enhanced_extent[1] - end_s)) > p["hum"]["disagreement_s"]
         ):
             review.append("hum_stream_disagreement")
-    outside = _outside_speech(frames, voiced, extent, words, p)
+    outside = _outside_speech(frames, voiced, floor, extent, words, p)
     return PhonationReading(
         record_extent,
         holds=tuple(_seconds(frames, run, hop) for run in holds),
         breaks=tuple(_seconds(frames, run, hop) for run in breaks),
         floor_db=floor,
         voiced_fraction=voiced_fraction,
+        voiced_s=float(voiced_inside.sum()) * hop,
         f0_median_hz=f0_median,
         f0_spread_semitones=spread,
         glide=glide,
@@ -771,12 +803,14 @@ def _review_existence(
 
 
 def _outside_speech(
-    frames: Frames, voiced: np.ndarray, extent: Extent, words: Sequence[Word], p: dict[str, Any]
+    frames: Frames, voiced: np.ndarray, floor: float, extent: Extent, words: Sequence[Word], p: dict[str, Any]
 ) -> tuple[dict[str, Any], ...]:
     hop = p["hop_s"]
     q = p["speech"]
     out: list[dict[str, Any]] = []
-    for run in extent.outside:
+    sound = (frames.level_db >= floor + p["phonation_db"]) | voiced
+    sound[extent.start : extent.offset] = False
+    for run in bridge(runs_of(sound), int(round(p["break_min_s"] / hop))):
         if (run[1] - run[0]) * hop < q["run_min_s"] or voiced[run[0] : run[1]].mean() < q["voiced_fraction_min"]:
             continue
         start, end = _seconds(frames, run, hop)
