@@ -126,3 +126,9 @@ for a classifier that never scored the recording. r16's 460 reruns carry `route_
 detector should resolve in the replay, since the measures read only the narrowband spectrogram and
 the phonation tracks; `route_unexplained` is a reading of the routing ruleset and is unchanged by
 it.
+
+## Clef stays out of airway decisions
+
+Owner, 2026-10-06: "clef can be left out of airway decisions". A confident second-opinion
+disagreement (`second_opinion_disagreement`) is no flag ground where AIRWAY owns the declared
+family; the answers are still recorded on the verdict.

@@ -1957,7 +1957,7 @@ def fold_file_verdict(
         confident_no=rules.second_opinion_confident_no,
         identifier_masked=evidence.masks_final_n > 0 or evidence.reviewer_requested_n > 0,
     )
-    if rules.second_opinion_disagreement_flags and disagreements:
+    if rules.second_opinion_disagreement_flags and disagreements and _AIRWAY not in task_evidence.owning_branches:
         flag(_VERDICT, f"{SECOND_OPINION_DISAGREES}: {'; '.join(disagreements)}", KEY_SECOND_OPINION_DISAGREES)
     open_families = sorted({family for family, state in unplaced if state in (UNPLACED_OPEN, UNPLACED_UNREAD)})
     if open_families:

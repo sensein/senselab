@@ -1784,6 +1784,7 @@ class TestSecondOpinionDisagreementFlagsForReview:
         *,
         masks_final_n: int = 0,
         reviewer_requested_n: int = 0,
+        owners: tuple[str, ...] = (),
     ) -> FileVerdict:
         evidence = RedactionEvidence(
             lexical_words_n=40,
@@ -1803,6 +1804,7 @@ class TestSecondOpinionDisagreementFlagsForReview:
             llm_redaction=dict(reading),
             policy=policy,
             second_opinion=opinion,
+            task=TaskEvidence(owning_branches=owners),
         )
 
     def _grounds(self, folded: FileVerdict) -> list[str]:
@@ -1814,6 +1816,12 @@ class TestSecondOpinionDisagreementFlagsForReview:
         assert "second_opinion_disagreement" in folded.ground_keys and folded.triage is not Triage.PASS
         assert self._grounds(folded) == [f"{SECOND_OPINION_DISAGREES}: other_voice p=0.85 reviewer=no"]
         assert folded.record()["second_opinion"]["disagreements"] == ["other_voice p=0.85 reviewer=no"]
+
+    def test_an_airway_task_is_never_flagged_on_the_second_opinion(self) -> None:
+        """Clef is left out of airway decisions: the same disagreement on an AIRWAY-owned task flags nothing."""
+        folded = self._fold(self._opinion(other_voice=0.85), self._reading(), self._ON, owners=("AIRWAY",))
+        assert "second_opinion_disagreement" not in folded.ground_keys
+        assert not self._grounds(folded)
 
     def test_a_confident_no_against_the_reviewers_yes_flags(self) -> None:
         """The reviewer's reading leaves a mask standing; the model is sure nothing the policy removes is there."""
