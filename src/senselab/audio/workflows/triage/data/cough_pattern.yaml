@@ -23,6 +23,11 @@ measure:
   attach_s: 0.3                # a weaker rise this soon after an onset is that cough's second phase or tail
   train_drop_db: 12.0          # onsets more than this below the median onset peak are not part of the train
   word_pad_s: 0.15             # an onset this close to a speech word is speech
+  inhale_gap_s: 0.5            # a preparatory inhale ending this close before an onset is part of that cough
+  inhale_bridge_s: 0.1         # quiet inside one inhale
+  inhale_max_s: 1.5            # an inhale starts no further back than this
+  inhale_min_s: 0.1
+  inhale_db: 15.0             # an inhale holds this far above the floor; stationary background does not
 # The cough-task extent: from pre_s before the first onset to the end of the last event, never across a
 # speech word.
 extent:
