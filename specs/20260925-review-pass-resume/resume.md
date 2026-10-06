@@ -79,11 +79,11 @@ Read this section first. Everything below it is history.
 
 ### Open and deferred
 
-- The lone "El" (Spanish article or a place-name fragment) is released; still unanswered.
-- Multi-speaker signals in speech tasks are noisy; the owner wants better models, not gate tweaks.
-- The 0dc15213 breath miss (active span 0); the 6ca9935e breath extent stops at 16.65 s, short of the speech onset.
-- Background speech is enabled for cough and breath tasks only. Extending it to all non-speech families is undecided.
-- Clef can't read breath from spectrograms (no specificity on plain or pre-emphasised); left out of breath and cough decisions.
+- Lone "El": released; owner, 2026-10-06: it "does not matter". Closed.
+- Multi-speaker in speech tasks: deferred again (owner, 2026-10-06). Signals are noisy; better models later, not gate tweaks.
+- Clef: left out of all airway (breath and cough) decisions (owner, 2026-10-06). It stays the second opinion on lexical review only.
+- The 0dc15213 breath miss (active span 0), and 6ca9935e's breath extent stopping at 16.65 s short of the speech onset: open.
+- Background speech beyond cough and breath (sustained vowels, glides, DDK…): open.
 
 ### Working rules learnt this round
 
