@@ -331,3 +331,42 @@ rounding in the template window.
 
 Known shortfall: 6ca9935e's extent ends at 16.65 s, not the ~20.8 s the owner expected; the level
 after 17 s is only 0.3–0.5 dB over the floor, under the 3 dB continuation rule.
+
+## Vocalised exhales, speech segments and edge phases (2026-10-06)
+
+Three of the owner's readings of the train figures, each a change to `find_bursts` / `voice_segments`
+(`train` keys `steady_*`, `voice_gap_s`, `speech_link_s`, `edge_min_s`):
+
+- **A vocalised exhale is a phase.** 988c1609 (v2-threebreaths) exhales on an "aah": "it should
+  count as it is a single behavior for this individual". A sustained vocalisation — a voiced run of
+  at least 0.2 s with pitch strength ≥ 0.8 on half its frames and F0 varying by ≤ 15% — splits a
+  burst at its voicing boundary, so the unvoiced inhale and the voiced exhale beside it are two
+  phases. A vocalised phase skips the flatness and voiced-share filters (it is voiced by
+  definition), stands without the template, and is left out of the template's mean. Its pieces
+  inherit the parent burst's coherent rise. Overlapping phases are split at the combined
+  envelope's valley between their peaks. 7c169ccc is unchanged: its voicing is scattered short
+  runs, never a sustained one, so steadiness rather than voiced share still decides it.
+- **Speech is acoustic, corroborated by a word.** ba1d1459 (fivebreaths-4): "doesn't this have
+  speech at the end?" — syllable-rate voicing from ~16.4 s that the 5-word rule missed (three
+  words). A speech segment is a chain of lexical words and voiced runs each within 0.6 s of the
+  last that holds at least one lexical word. No burst under it is a phase, and it trims the extent
+  like a word run. A word is required: an uncorroborated rule (≥ 3 short voiced runs at syllable
+  rate) read breath turbulence as speech on 30db5329, 78e40278, 39ba8784 and dac345e2 and cut
+  their trains to 1–3 phases; with the word required none of those moved.
+- **A file that opens or closes mid-phase counts that phase.** ecc63817 (threequickbreaths-2):
+  "this seems to miss the inhale at the beginning" — the file opens ~21 dB over its floor. Where the
+  first (last) frame is already ≥ 5 dB over the floor, the span from the file edge to the
+  envelope's valley before the next phase's peak (≥ 0.12 s) is a phase if it matches one of the
+  recording's strong phases (spectral correlation ≥ 0.6 with any one of them; ecc63817's opening
+  correlates 0.91 with its next inhale but only 0.45 with the mean of inhales and exhales).
+  42442f80's filter-edge opening sits 31 dB under the floor and adds nothing.
+
+**Measured** on the 56 labelled recordings plus 1ba3214d (in-memory re-fold, `tmp_qb/est2.py`,
+`out_ov.txt` before, `out_ov2e.txt` after): label agreement 53 of 56, the same three misses; no
+decision changed. 988c1609 6 → 7 phases (3 → 4 breaths), ba1d1459 13 → 10 (7 → 5; extent ends at
+16.36 s), ecc63817 7 → 8 (4, extent from 0.0 s), 42442f80 and 7c169ccc unchanged. Edge phases
+were added on e02a3f8b, c9b77a28, 772aa876, b451fe70, 943a8bbc, 78e40278, dac345e2 and 09f16959
+(each +1 phase, none crossing an instructed count); 517381e9 (no breathing, discarded either way)
+drops 5 → 1 phase under its "Yeah" chain. Figures: `~/Downloads/breath_extent_check_20261006/fixed2/`,
+the stored pre-emphasised spectrogram at a fixed 80 dB display range (no dynamic gain), with the
+`_dyngain.wav` audio beside each.
