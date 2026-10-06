@@ -416,6 +416,19 @@ def measure_cough_pattern(
     )
 
 
+def in_cough_review_band(reading: CoughPattern, needed: int) -> bool:
+    """Whether the decision on a cough reading differs inside its review band.
+
+    Args:
+        reading: The cough reading.
+        needed: The coughs the task needs: its instructed count, else one.
+
+    Returns:
+        True where the strict and the lenient counts fall on opposite sides of ``needed``.
+    """
+    return (reading.onsets_strict_n >= needed) != (reading.onsets_lenient_n >= needed)
+
+
 def speech_word_spans(store: ProvStore, language: str | None) -> list[tuple[float, float]]:
     """The consensus words that are speech, as ``(start, end)``.
 

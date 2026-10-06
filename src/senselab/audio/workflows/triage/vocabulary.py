@@ -308,6 +308,12 @@ class TaskEvidence:
         breath_review: Whether the breath train is weak or irregular enough to leave for review
             (``breath_pattern.in_review_band``).
         breath_reading: The measure's full reading, for the verdict record; empty where none.
+        cough_mode: ``counted`` or ``performed`` for a cough family decided on the cough-onset measure
+            (``data/cough_pattern.yaml``), by whether its instruction speaks a count; None otherwise.
+        cough_onsets_n: How many coughs the measure found, or None where it could not be read.
+        cough_review: Whether the decision differs inside the measure's review band
+            (``data/cough_pattern.yaml``, ``review``).
+        cough_reading: The measure's full reading, for the verdict record; empty where none.
     """
 
     owning_branches: tuple[str, ...] = ()
@@ -326,6 +332,10 @@ class TaskEvidence:
     breath_train_breaths: int | None = None
     breath_review: bool = False
     breath_reading: dict[str, Any] = field(default_factory=dict)
+    cough_mode: str | None = None
+    cough_onsets_n: int | None = None
+    cough_review: bool = False
+    cough_reading: dict[str, Any] = field(default_factory=dict)
 
 
 UNMEASURABLE = "unmeasurable"
@@ -418,17 +428,91 @@ def breath_review_reading(evidence: TaskEvidence) -> str:
     )
 
 
+COUGH_COUNTED = "counted"
+COUGH_PERFORMED = "performed"
+
+
+def cough_present(evidence: TaskEvidence) -> bool:
+    """Whether a cough family's measure found at least one cough.
+
+    Args:
+        evidence: The task evidence.
+
+    Returns:
+        True where the measure was read and found a cough onset.
+    """
+    return evidence.cough_mode is not None and (evidence.cough_onsets_n or 0) > 0
+
+
+def cough_conforms(evidence: TaskEvidence) -> bool:
+    """Whether a cough family's measure says the task was performed as instructed.
+
+    Args:
+        evidence: The task evidence.
+
+    Returns:
+        :func:`cough_present`, and for a counted family at least the instructed number of coughs.
+    """
+    if not cough_present(evidence):
+        return False
+    if evidence.cough_mode == COUGH_COUNTED and evidence.instructed_count is not None:
+        return (evidence.cough_onsets_n or 0) >= evidence.instructed_count
+    return True
+
+
+def cough_shortfall(evidence: TaskEvidence) -> str | None:
+    """The detected-against-instructed count where a counted cough family found too few coughs.
+
+    Args:
+        evidence: The task evidence.
+
+    Returns:
+        ``"detected N coughs where M were instructed"`` where coughs were found but fewer than the
+        instruction asked; None otherwise.
+    """
+    if evidence.cough_mode != COUGH_COUNTED or not cough_present(evidence) or cough_conforms(evidence):
+        return None
+    return f"detected {evidence.cough_onsets_n} coughs where {evidence.instructed_count} were instructed"
+
+
+def cough_review_reading(evidence: TaskEvidence) -> str:
+    """The cough readings a low-confidence review flag carries.
+
+    Args:
+        evidence: The task evidence.
+
+    Returns:
+        ``"N coughs (S strict, L lenient)"``.
+    """
+    reading = evidence.cough_reading
+    return (
+        f"{evidence.cough_onsets_n} coughs ({reading.get('onsets_strict_n', 'none')} strict, "
+        f"{reading.get('onsets_lenient_n', 'none')} lenient)"
+    )
+
+
 DECLARED_TASK_ABSENT = "declared_task_absent"
 """Discard ground: the branch owning the declared task ran and found none of it, whatever another branch found."""
-DISCARD_GROUNDS = (UNMEASURABLE, TOO_SHORT_FOR_TASK, ACOUSTICALLY_EMPTY, NO_BREATH_CAPTURED, DECLARED_TASK_ABSENT)
+NO_COUGH_CAPTURED = "no_cough_captured"
+"""Discard ground: a cough task holds no cough onset."""
+DISCARD_GROUNDS = (
+    UNMEASURABLE,
+    TOO_SHORT_FOR_TASK,
+    ACOUSTICALLY_EMPTY,
+    NO_BREATH_CAPTURED,
+    NO_COUGH_CAPTURED,
+    DECLARED_TASK_ABSENT,
+)
 """Every ground a file discards on, in the order the fold tries them; an operational flag (``rerun``) is
 tried between the third and the fourth, since a missing derivative may be why the task was not found."""
-EVENT_ABSENT_GROUNDS = {"breath": NO_BREATH_CAPTURED}
+EVENT_ABSENT_GROUNDS = {"breath": NO_BREATH_CAPTURED, "cough": NO_COUGH_CAPTURED}
 """The discard ground for each required event kind of ``data/airway_event_requirements.yaml``."""
 TASK_MISMATCH = "task_mismatch"
+"""Flag ground: the declared airway task's own events were detected, but not in the pattern it asked for."""
 BREATH_REVIEW_LOW_CONFIDENCE = "breath_review_low_confidence"
 """Flag ground: a breath task's breathing was kept, on a breath train weak or irregular enough to review."""
-"""Flag ground: the declared airway task's own events were detected, but not in the pattern it asked for."""
+COUGH_REVIEW_LOW_CONFIDENCE = "cough_review_low_confidence"
+"""Flag ground: a cough task's coughs were kept, on a count whose decision differs inside the review band."""
 
 AGREE = "agree"
 MISMATCH = "mismatch"
@@ -574,6 +658,8 @@ KEY_DECLARED_TASK_ABSENT = DECLARED_TASK_ABSENT
 KEY_NO_BREATH_CAPTURED = NO_BREATH_CAPTURED
 KEY_TASK_MISMATCH = TASK_MISMATCH
 KEY_BREATH_REVIEW_LOW_CONFIDENCE = BREATH_REVIEW_LOW_CONFIDENCE
+KEY_NO_COUGH_CAPTURED = NO_COUGH_CAPTURED
+KEY_COUGH_REVIEW_LOW_CONFIDENCE = COUGH_REVIEW_LOW_CONFIDENCE
 KEY_PREPROCESS_ERRORED = "preprocess_errored"
 KEY_ROUTING_ERRORED = "routing_errored"
 KEY_BAD_HINT_MAP = "config_bad_hint_map"
@@ -604,6 +690,8 @@ GROUND_KEYS = (
     KEY_NO_BREATH_CAPTURED,
     KEY_TASK_MISMATCH,
     KEY_BREATH_REVIEW_LOW_CONFIDENCE,
+    KEY_NO_COUGH_CAPTURED,
+    KEY_COUGH_REVIEW_LOW_CONFIDENCE,
     KEY_PREPROCESS_ERRORED,
     KEY_ROUTING_ERRORED,
     KEY_BAD_HINT_MAP,
@@ -1041,6 +1129,8 @@ class FileVerdict:
             recording declares no task this graph holds a row for.
         breath_pattern: The breathing-pattern measure's reading for a breath family -- pattern, event
             count, durations, intervals and rhythm. Empty for every other family.
+        cough_pattern: The cough-onset measure's reading for a cough family -- onsets, events, review
+            counts and extent. Empty for every other family.
     """
 
     triage: Triage
@@ -1067,6 +1157,7 @@ class FileVerdict:
     critical_absences: dict[str, dict[str, str]] = field(default_factory=dict)
     gates: dict[str, Any] = field(default_factory=dict)
     breath_pattern: dict[str, Any] = field(default_factory=dict)
+    cough_pattern: dict[str, Any] = field(default_factory=dict)
 
     def record(self) -> dict[str, Any]:
         """Every decision point of this fold, as JSON-ready values.
@@ -1101,6 +1192,7 @@ class FileVerdict:
             "critical_absences": {branch: dict(gates) for branch, gates in self.critical_absences.items()},
             "gates": dict(self.gates),
             "breath_pattern": dict(self.breath_pattern),
+            "cough_pattern": dict(self.cough_pattern),
             "ran": {node: state.value for node, state in self.ran.items()},
             "reasons": [
                 {"node": r.node, "outcome": r.outcome.value, "kind": r.kind, "why": r.why, "key": ground_key(r)}
@@ -1480,6 +1572,8 @@ def _owner_performed(
     """
     if branch == _AIRWAY and evidence.breath_mode is not None:
         return breath_conforms(evidence)
+    if branch == _AIRWAY and evidence.cough_mode is not None:
+        return cough_conforms(evidence)
     report = by_branch.get(branch)
     if report is None or report.conformance_of != TASK:
         return False
@@ -1564,12 +1658,15 @@ def no_required_event(evidence: TaskEvidence, performed: bool) -> bool:
 
     Returns:
         For a breath family read by the breathing-pattern measure, True where it read the inputs and
-        found no breath (counted) or no alternating pattern (sustained). Otherwise True where the
+        found no breath (counted) or no alternating pattern (sustained); for a cough family read by the
+        cough-onset measure, True where it read the inputs and found no cough onset. Otherwise True where the
         family names a required event kind and the owning AIRWAY branch reported a count of zero;
         False where it names none, reported no count, or the task was performed.
     """
     if evidence.breath_mode is not None:
         return evidence.breath_pattern is not None and not evidence.owner_absent_inputs and not breath_present(evidence)
+    if evidence.cough_mode is not None:
+        return evidence.cough_onsets_n == 0 and not evidence.owner_absent_inputs
     return (
         evidence.required_event in EVENT_ABSENT_GROUNDS
         and evidence.events_found_n == 0
@@ -1704,6 +1801,9 @@ def fold_file_verdict(
             if (task_evidence.breath_events_n or 0) > 0 and task_evidence.breath_vetoed_by is None
             else KindState.ABSENT.value
         )
+    cough_decides = task_evidence.cough_mode is not None and task_evidence.cough_onsets_n is not None
+    if cough_decides and _AIRWAY in findings:
+        findings[_AIRWAY] = KindState.PRESENT.value if cough_present(task_evidence) else KindState.ABSENT.value
     agreement = {branch: _agreement(routes[branch], branch in by_branch, findings[branch]) for branch in branches_seen}
     hints = (
         {}
@@ -1740,7 +1840,7 @@ def fold_file_verdict(
         flag(_ROUTING, f"{BAD_MAP_VALUES}: {named}", KEY_BAD_HINT_MAP)
     if hint_claims is None:
         flag(_VERDICT, UNREAD_DECLARATION, KEY_DECLARATION_UNREAD)
-    if route_state == UNEXPLAINED:
+    if route_state == UNEXPLAINED and not (cough_decides and cough_present(task_evidence)):
         flag(_ROUTING, UNEXPLAINED_CONTENT, KEY_ROUTE_UNEXPLAINED)
     if route_state == UNREADABLE:
         flag(_ROUTING, UNREADABLE_EMPTINESS, KEY_ROUTE_UNREADABLE)
@@ -1842,7 +1942,8 @@ def fold_file_verdict(
         for g in applied_gates
         if g.get("passed") == "UNDETERMINED" and g.get("reason") in ("absent_not_computed", "instrument_absent")
     )
-    measure_decides_gate_node = task_evidence.breath_mode is not None and gate_record.get("node") == _AIRWAY
+    measure_mode = task_evidence.breath_mode or task_evidence.cough_mode
+    measure_decides_gate_node = measure_mode is not None and gate_record.get("node") == _AIRWAY
     if uncomputed and rules.uncomputed_reading_flags and not measure_decides_gate_node:
         flag(
             str(gate_record.get("node") or _VERDICT),
@@ -1850,7 +1951,7 @@ def fold_file_verdict(
             KEY_UNCOMPUTED_READING,
         )
     for name, report in reports.items():
-        measure_decides = task_evidence.breath_mode is not None and name == _AIRWAY and report.conformance_of == TASK
+        measure_decides = measure_mode is not None and name == _AIRWAY and report.conformance_of == TASK
         if measure_decides:
             if report.deviations and rules.deviation_flags:
                 flag(name, f"{name} reported {', '.join(report.deviations)}", f"{PREFIX_DEVIATION}:{name}", report.kind)
@@ -1897,6 +1998,21 @@ def fold_file_verdict(
             KEY_BREATH_REVIEW_LOW_CONFIDENCE,
             by_branch[_AIRWAY].kind if _AIRWAY in by_branch else None,
         )
+    cough_short = cough_shortfall(task_evidence)
+    if cough_short is not None:
+        flag(
+            _AIRWAY,
+            f"{TASK_MISMATCH}: {cough_short}",
+            KEY_TASK_MISMATCH,
+            by_branch[_AIRWAY].kind if _AIRWAY in by_branch else None,
+        )
+    if task_evidence.cough_review and cough_present(task_evidence):
+        flag(
+            _AIRWAY,
+            f"{COUGH_REVIEW_LOW_CONFIDENCE}: {cough_review_reading(task_evidence)}",
+            KEY_COUGH_REVIEW_LOW_CONFIDENCE,
+            by_branch[_AIRWAY].kind if _AIRWAY in by_branch else None,
+        )
     for branch in branches_seen:
         decision = branch_decisions.get(branch)
         reported = by_branch.get(branch)
@@ -1906,6 +2022,7 @@ def fold_file_verdict(
         if (
             agreement[branch] == MISMATCH
             and findings[branch] == KindState.PRESENT.value
+            and not (cough_decides and branch == _AIRWAY)
             and (
                 not task_evidence.owning_branches
                 or (
@@ -2032,6 +2149,7 @@ def fold_file_verdict(
         critical_absences=absences,
         gates=dict(gates or {}),
         breath_pattern=dict(task_evidence.breath_reading),
+        cough_pattern=dict(task_evidence.cough_reading),
     )
 
 

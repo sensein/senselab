@@ -36,6 +36,7 @@ import yaml
 from senselab.audio.data_structures import AudioHints
 from senselab.audio.workflows.triage.breath_pattern import BreathPattern, breath_pattern_of, in_review_band
 from senselab.audio.workflows.triage.config import TriageConfig
+from senselab.audio.workflows.triage.cough_pattern import CoughPattern, cough_pattern_of, in_cough_review_band
 from senselab.audio.workflows.triage.live_evidence import declared_task, recording_stem
 from senselab.audio.workflows.triage.nodes.airway import EVENTS_FOUND as AIRWAY_EVENTS_FOUND
 from senselab.audio.workflows.triage.nodes.airway import INSTRUMENT_ABSENT as AIRWAY_INSTRUMENT_ABSENT
@@ -97,6 +98,8 @@ from senselab.audio.workflows.triage.task_lexicon import task_lexicon
 from senselab.audio.workflows.triage.vocabulary import (
     BREATH_COUNTED,
     BREATH_SUSTAINED,
+    COUGH_COUNTED,
+    COUGH_PERFORMED,
     GRAPH_ORDER,
     KEY_NODE_OUTCOME_UNREADABLE,
     PII_SCAN,
@@ -438,15 +441,16 @@ def _task_evidence(
         declared_family: The task family the recording declares.
         gate_record: The gate outcome record, read for the owning node's uncomputed readings.
         run_dir: The run directory the derivatives' sidecar paths are relative to; None reads no
-            breathing pattern.
-        sampling_hz: The conditioned stream's sampling rate; None reads no breathing pattern.
+            breathing pattern or coughs.
+        sampling_hz: The conditioned stream's sampling rate; None reads no breathing pattern or coughs.
         language: The recording's declared language, which fixes the script the breath veto reads
             speech words in; None reads any script.
 
     Returns:
         The evidence :func:`~senselab.audio.workflows.triage.vocabulary.fold_file_verdict` reads. A
         breath family of ``data/airway_event_requirements.yaml`` is read by the breathing-pattern
-        measure, whose absent inputs then stand for the owner's.
+        measure and a cough family by the cough-onset measure; the measure's absent inputs then stand
+        for the owner's. A cough family whose measure was not read names no required event.
     """
     owners = tuple(branch for branch, rows in EXPECTATIONS.items() if declared_family and declared_family in rows)
     recording = next(
@@ -470,13 +474,23 @@ def _task_evidence(
             reading, absent = read, ()
         else:
             absent = read
+    cough_mode: str | None = None
+    cough: CoughPattern | None = None
+    if needed == "cough" and airway is not None and run_dir is not None and sampling_hz:
+        cough_mode = COUGH_PERFORMED if airway.required_count is None else COUGH_COUNTED
+        held = cough_pattern_of(store, run_dir, sampling_hz=sampling_hz, language=language)
+        if isinstance(held, CoughPattern):
+            cough, absent = held, ()
+        else:
+            absent = held
+    instructed = airway.required_count.value if airway is not None and airway.required_count is not None else None
     return TaskEvidence(
         owning_branches=owners,
         duration_s=duration,
         minimum_duration_s=minimum_duration_s(declared_family) if owners else None,
         event_tokens_n=event_tokens_n(store, declared_family),
         owner_absent_inputs=absent,
-        required_event=required_event(declared_family) if "AIRWAY" in owners else None,
+        required_event=needed if needed != "cough" or cough_mode is not None else None,
         events_found_n=_airway_events_found(store) if "AIRWAY" in owners else None,
         event_kind=airway.label_set if airway is not None else None,
         instructed_count=airway.required_count.value
@@ -489,6 +503,10 @@ def _task_evidence(
         breath_train_breaths=reading.train.breaths if reading is not None and reading.train is not None else None,
         breath_review=in_review_band(reading.train) if reading is not None else False,
         breath_reading={"mode": breath_mode, **reading.record()} if reading is not None else {},
+        cough_mode=cough_mode,
+        cough_onsets_n=cough.onsets_n if cough is not None else None,
+        cough_review=cough is not None and in_cough_review_band(cough, instructed or 1),
+        cough_reading={"mode": cough_mode, **cough.record()} if cough is not None else {},
     )
 
 
@@ -1133,6 +1151,8 @@ def verdict(
     store.was_derived_from(ledger_id, verdict_id)
     if task_evidence.breath_mode is not None:
         _settle_breath_extent(store, activity, software, task_evidence.breath_reading.get("extent"))
+    if task_evidence.cough_mode is not None:
+        _settle_breath_extent(store, activity, software, task_evidence.cough_reading.get("extent"))
     return VerdictResult(
         verdict=node_verdict,
         view=(verdict_id, *folded_ids),
