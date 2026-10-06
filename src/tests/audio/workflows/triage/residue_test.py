@@ -197,7 +197,7 @@ class TestAReadTaskIsAlignedToItsStimulus:
 class TestWhatIsNeverLexical:
     """Markers, fillers and fragments are not words anyone could be identified by."""
 
-    @pytest.mark.parametrize("token", ["um", "Uh,", "hmm", "Mm-hmm", "ahh", "[throatclearing].", "[UH]", "wa-", "啊"])
+    @pytest.mark.parametrize("token", ["um", "Uh,", "hmm", "Mm-hmm", "ahh", "[throatclearing].", "[UH]", "wa-", "啊", "呜", "嘶", "嗬"])
     def test_the_token_is_non_lexical(self, token: str) -> None:
         """Every shape the corpus's scanned-for-nothing residue carried."""
         assert is_non_lexical(token)
