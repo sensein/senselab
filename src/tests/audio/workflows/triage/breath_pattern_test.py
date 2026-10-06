@@ -25,6 +25,7 @@ from senselab.audio.workflows.triage.breath_pattern import (
     measure_breath_train,
     measure_modulation,
     modulation_parameters,
+    placed_word,
     review_parameters,
     speech_runs,
     train_extent,
@@ -428,3 +429,41 @@ def test_a_quiet_opening_is_no_edge_phase() -> None:
     power[:, : int(0.4 / HOP_S)] *= 1e-3
     train = _train(power, family=QUICK)
     assert train.phases == 5
+
+
+def test_an_opening_click_on_the_floor_is_no_edge_phase() -> None:
+    """11ec42cc: one raised frame at the file start, then the floor, is no edge phase."""
+    phases = [(1.65 + 0.8 * k, 0.4) for k in range(6)]
+    power = _shaped(_spectrogram(7.5, phases), phases)
+    power[:, : int(0.05 / HOP_S)] *= 10.0
+    train = _train(power, family=QUICK)
+    assert (train.phases, train.breaths) == (6, 3)
+    assert train.extent_s is not None and train.extent_s[0] > 1.0
+
+
+def test_a_short_utterance_inside_steady_breathing_does_not_split_the_train() -> None:
+    """5201d61d: speech between breaths at the breathing cadence leaves one train; only its own phase is lost."""
+    power = _spectrogram(20.0, [(0.8 + 2.0 * k, 1.0) for k in range(9)])
+    train = measure_breath_train(
+        power, hop_s=HOP_S, bin_hz=BIN_HZ, voiced=np.zeros(power.shape[1], dtype=bool), speech=((12.7, 13.9),)
+    )
+    assert train.phases == 8 and train.extent_s is not None
+    assert train.extent_s[0] < 1.0 and train.extent_s[1] > 17.0
+
+
+def test_a_word_its_recognizers_disagree_on_stands_at_its_consensus_extent() -> None:
+    """5201d61d: a word placed 4.9 s apart by two recognizers is read where the consensus put it, not the hull."""
+    store = ProvStore(run_id="t")
+    loose = store.entity(
+        prov_type="word",
+        extent=(10.94, 10.98),
+        attributes={"timings": {"a": (8.24, 8.4), "b": (12.9, 13.1)}, "temporal_uncertainty_s": 4.86},
+    )
+    tight = store.entity(
+        prov_type="word",
+        extent=(13.11, 13.31),
+        attributes={"timings": {"a": (13.11, 13.31), "b": (13.05, 13.3)}, "temporal_uncertainty_s": 0.26},
+    )
+    spread = train_parameters().word_spread_max_s
+    assert placed_word(store.get_entity(loose), spread_max_s=spread) == (10.94, 10.98)
+    assert placed_word(store.get_entity(tight), spread_max_s=spread) == (13.05, 13.31)
