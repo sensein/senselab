@@ -370,3 +370,56 @@ more, from an edge phase or an overlap split, on e02a3f8b, c9b77a28, 772aa876, b
 drops 5 → 1 phase under its "Yeah" chain. Figures: `~/Downloads/breath_extent_check_20261006/fixed2/`,
 the stored pre-emphasised spectrogram at a fixed 80 dB display range (no dynamic gain), with the
 `_dyngain.wav` audio beside each.
+
+## Speech at the breathing cadence, word placement and edge phases off the floor (2026-10-06)
+
+Two of the owner's notes on the contested-discard sample (`~/Downloads/discard_contested_check_20261006/`):
+
+- **5201d61d** (breath-sounds): "the modulation part shows clear spans that are not being picked up
+  as events". Ten regular bursts from 0.8 to 19.3 s, a sharp 0.42 Hz breathing-band modulation peak in
+  every subband; the train kept only the last three (13.0–18.85 s). Cause, traced on the stored
+  inputs: two lexical words the recognizers agree on in text but place 2.6 s and 4.9 s apart
+  ("mouth", "I'm"; `temporal_uncertainty_s` 2.63 and 4.86) were read over the hull of their
+  placements (`word_hull`), 5.61–8.24 s and 8.24–13.10 s. With three tightly timed words after them
+  ("gonna fall asleep", 13.1–14.1 s) that made a five-word speech run and a 5.61–14.12 s speech
+  segment, which removed the bursts under it (`find_bursts`) and split the train
+  (`breath_train`); the larger run that survived was the last three bursts.
+- **11ec42cc** (threequickbreaths): "this one doesn't have an extent, and the first event is
+  incorrect". The file opens on one raised frame (7.9 dB over the floor, then ~2 dB); the edge rule
+  read only the first frame (≥ 5 dB), so the floor before the task became a phase (0–0.9 s), and a
+  0.25 s tail at the file end (median 4.5 dB) another: 8 phases, 4 breaths, extent 0–8.36 s. The
+  missing extent bar in the figure was the listening script's (`start_s and …` on 0.0), not the
+  measure's.
+
+Three changes (`train` keys `word_spread_max_s`, `speech_bridge_cycles`):
+
+- **A word stands where its recognizers place it.** A lexical word whose `temporal_uncertainty_s`
+  exceeds 1.0 s is read as speech at its consensus extent, not over the hull of every
+  recognizer's placement. On 5201d61d the speech segment shrinks to the words themselves.
+- **Speech splits the train only where it breaks the breathing cadence.** The cadence is the median
+  cycle over the gaps no speech crosses; speech between two bursts splits the run only where the gap
+  across it exceeds 2 cycles. With fewer than two clear gaps there is no cadence and speech splits as
+  before (517381e9, two bursts around a "Yeah" chain, is unchanged). A burst peaking inside speech —
+  a lexical run or an acoustic segment — is still no phase, so speech is removed only where it
+  occurs. On 5201d61d the train is 9 phases, 5 breaths, 0.6–18.85 s; the burst under "gonna fall
+  asleep" stays out.
+- **An edge phase must sit off the floor.** A phase from the file edge to the first valley stands only
+  where its median level is at least `rise_floor_db` (5 dB) over the floor. ecc63817's opening inhale
+  (median ~29 dB) still counts; 11ec42cc's opening (1.3 dB) and closing tail (4.5 dB) do not: 6
+  phases, 3 breaths, 1.4–8.1 s, matching the instruction.
+
+**Measured** (`breath_pattern_of` before at fix/policy-v8 36c3cf23 and after, on stored inputs;
+scripts in the job's `tmp/bt/`, the ORCD sample in `/orcd/scratch/bcs/002/satra/breathmod_20261006/`):
+
+| Set | n | Kept / label agreement | Review band | Readings changed |
+|---|---|---|---|---|
+| Owner-labelled breath (airway_move_eval stores) | 55 | 52 → 52 (no decision moved) | 19 → 19 | 4: an edge phase dropped (772aa876, dac345e2, 5cc93330, 167ac3f5) |
+| Contested sample | 16 | kept 0 → 0 | 0 → 0 | 3: 5201d61d 3 → 9 phases, 11ec42cc 8 → 6, 6a5fb092 7 → 6 |
+| Random kept breath recordings (r16) | 183 | kept unchanged on all | 6 → 6 (3.3%) | 21: 19 lose an edge phase, 2 gain bridged phases |
+
+Every dropped edge phase sat at a median of 0.4–4.5 dB over its floor against kept-phase peaks of
+14–50 dB (one exception, d708e7f9, whose whole train is faint and already in the review band). No
+instructed-count conformance changed in any set. The breath reading's kept decision still reads the
+breathing measure's events and pattern, not the train, so the train's phases do not by themselves
+keep a recording: all 16 contested recordings stay discarded at this commit (15 have no measure
+event; 5201d61d's five measure events are vetoed by the five lexical words inside AIRWAY's extent).
