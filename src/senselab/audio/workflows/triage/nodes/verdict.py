@@ -27,6 +27,7 @@ The two axes this node keeps apart — triage and release — and the tables it 
 from __future__ import annotations
 
 import functools
+import math
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
@@ -300,6 +301,7 @@ def _spans_by_node(store: ProvStore) -> dict[str, int]:
 
 TASK_MINIMUM_DURATION_PATH = Path(__file__).parents[1] / "data" / "task_minimum_duration.yaml"
 AIRWAY_EVENT_TOKENS_PATH = Path(__file__).parents[1] / "data" / "airway_event_tokens.yaml"
+DISCARD_CONTESTED_PATH = Path(__file__).parents[1] / "data" / "discard_contested.yaml"
 
 
 @functools.cache
@@ -308,6 +310,27 @@ def _task_minimum_durations() -> tuple[float, dict[str, float]]:
     document = yaml.safe_load(TASK_MINIMUM_DURATION_PATH.read_text()) or {}
     families = {str(name): float(value) for name, value in (document.get("families") or {}).items()}
     return float(document["default_s"]), families
+
+
+@functools.cache
+def _discard_contested() -> tuple[float, int]:
+    """``data/discard_contested.yaml``: the fraction of the instructed count, and the uncounted minimum."""
+    document = yaml.safe_load(DISCARD_CONTESTED_PATH.read_text()) or {}
+    return float(document["instructed_fraction"]), int(document["uncounted_events_min"])
+
+
+def contest_events_min(instructed: int | None) -> int:
+    """The detector events that contest a measure's no-event discard of a family.
+
+    Args:
+        instructed: The family's instructed count, or None where its instruction names none.
+
+    Returns:
+        The instructed count times ``instructed_fraction``, rounded up; ``uncounted_events_min``
+        where no count is instructed.
+    """
+    fraction, uncounted = _discard_contested()
+    return math.ceil(instructed * fraction) if instructed is not None else uncounted
 
 
 def minimum_duration_s(declared_family: str | None) -> float | None:
@@ -471,6 +494,7 @@ def _task_evidence(
         cough_mode = COUGH_PERFORMED if airway.required_count is None else COUGH_COUNTED
         cough, missing = _airway_reading(store, COUGH_READING)
         absent = missing if cough is not None or missing else absent
+    instructed = airway.required_count.value if airway is not None and airway.required_count is not None else None
     heard = find_measurement(store, BACKGROUND_SPEECH) if reading is not None or cough is not None else None
     background = {k: v for k, v in heard.attributes.items() if k not in ("name", "signal")} if heard else {}
     return TaskEvidence(
@@ -485,6 +509,7 @@ def _task_evidence(
         instructed_count=airway.required_count.value
         if airway is not None and airway.required_count is not None
         else None,
+        contest_events_min=contest_events_min(instructed) if needed in ("breath", "cough") else None,
         breath_mode=breath_mode,
         breath_pattern=reading["pattern"] if reading is not None else None,
         breath_events_n=reading["events_n"] if reading is not None else None,

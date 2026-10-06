@@ -83,3 +83,10 @@ def test_no_reading_without_an_airway_report_is_no_absent_input() -> None:
     evidence = verdict_module._task_evidence(ProvStore(run_id="unmeasured"), "respiration-and-cough-fivebreaths")
     assert evidence.breath_pattern is None
     assert evidence.owner_absent_inputs == ()
+
+
+def test_the_contest_threshold_is_the_instructed_count_else_one() -> None:
+    """``data/discard_contested.yaml``: the whole instructed count, or one event for an uncounted task."""
+    assert verdict_module.contest_events_min(5) == 5
+    assert verdict_module.contest_events_min(3) == 3
+    assert verdict_module.contest_events_min(None) == 1

@@ -58,3 +58,51 @@ A store AIRWAY reported on but whose reading is missing (every store written bef
 names `AIRWAY:airway_breath_reading` or `AIRWAY:airway_cough_reading` as an owner absent input, so
 a re-fold without the replay reruns those recordings rather than deciding them on nothing. Where
 AIRWAY did not report at all, nothing of AIRWAY's is absent.
+
+## A discard is not released
+
+Owner, 2026-10-06: "yes, discard should not be released". A triage discard now releases
+`withheld` on the ground `discarded` (`vocabulary.DISCARDED`, key `discarded`), whatever the
+redaction evidence would have said, so `settle_release` empties the release directory; and
+`task_audio.cut_task_audio` cuts no stream of a discarded recording and retires any earlier cut
+(`absent: discarded`). In r16, 3,880 discarded recordings carried a release value and 2,111 had
+task-audio cuts.
+
+## task_mismatch on a cough task
+
+Too few coughs for the instructed count was still a flag after `8864ed00` made `task_mismatch` an
+annotation for breath. It is now an annotation for cough too, as the owner decided for every
+airway family.
+
+## discard_contested
+
+Owner, 2026-10-06: "if discard is in verdict, there is nothing downstream to un discard it, so
+seems fine" — a discard VERDICT should not make is caught in VERDICT. The rule: a measure's
+no-event discard (`no_breath_captured`, `no_cough_captured`) is flagged `discard_contested`
+instead where AIRWAY's own HeAR-gated event detector (`airway_events_found`) found at least the
+family's instructed count of its events, or one event for a family whose instruction names no
+count (`data/discard_contested.yaml`: `instructed_fraction` 1.0, `uncounted_events_min` 1). It is
+the only independent reading the owner's listens supported: the 2026-10-05 contrast listens found
+AIRWAY's detector the one reading that matched all ten (one event in the one recording holding a
+breath, none in the nine silent ones; `data/airway_event_requirements.yaml`), where HeAR Breathe
+scores and `[breath]` tokens each passed three silent recordings. An earlier ground (unmeasurable,
+too short, acoustically empty) is not contested, and a contested recording does not fall through
+to `declared_task_absent`.
+
+Agreement on the owner labels (`~/Downloads/triage_listening_labels_20261006.csv`, airway rows,
+joined to the r16 parquet): twelve labelled recordings carry an event-ground discard in r16, all
+breath. Nine were heard without breath (8 `no_breath`, 1 not judged); three were heard with breath
+too soft or little (9d16c147 very soft, 167ac3f5 little, 0dc15213, which the owner accepted as
+"ok if flagged or discarded"). The rule contests none of the twelve: the counted ones read 0
+detector events and the sustained families (`respiration-and-cough-breath`, `-v2-breath`) carry no
+count. So it agrees with the outcome the owner accepted on 12/12, and the labels do not test it
+where it would fire.
+
+Where it would fire: over the r16 parquet, 351 of the 1,641 event-ground discards have
+`gate_events_min` at or above the threshold (all on counted breath families: threequickbreaths
+159, fivebreaths 97, v2-threebreathsmouth 32, v2-threebreaths 26, v2-threebreathsnose 25,
+breath-sounds 12); at 1.5×, 2× and 3× the instructed count, 286, 237 and 49. Those r16 discards
+come from the breath measure as it stood at r16, before the vocalised-exhale and edge-phase work,
+so the replay's count will differ. 351 is not a narrow band: listen to a sample of the contested
+recordings from the replay before the corpus is settled, and raise `instructed_fraction` if the
+detector is wrong on them.
