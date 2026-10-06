@@ -15,6 +15,8 @@ from senselab.audio.workflows.triage.vocabulary import (
     BAD_MAP_VALUES,
     BREATH_COUNTED,
     BREATH_SUSTAINED,
+    CAPTURE_CUT_AFTER_TASK,
+    CAPTURE_CUT_DURING_TASK,
     CRITICAL_ABSENCE,
     DECLARED_TASK_ABSENT,
     DECLINED,
@@ -33,6 +35,7 @@ from senselab.audio.workflows.triage.vocabulary import (
     NO_CONTENT_MASKED,
     NO_LEXICAL_ITEM_PRODUCED,
     NO_LEXICAL_WORD,
+    NO_PHONATION_CAPTURED,
     NO_TRANSCRIPT,
     NON_LEXICAL_TASK,
     OPERATIONAL_GROUND_KEYS,
@@ -53,8 +56,10 @@ from senselab.audio.workflows.triage.vocabulary import (
     ROUTED,
     SCAN_UNRECORDED,
     SECOND_OPINION_DISAGREES,
+    SPEECH_OUTSIDE_TASK,
     SPEECH_UNREAD,
     TASK,
+    TASK_MISMATCH,
     TOO_SHORT_FOR_TASK,
     UNAVAILABLE,
     UNDETERMINED,
@@ -67,6 +72,7 @@ from senselab.audio.workflows.triage.vocabulary import (
     UNPLACED_UNREAD,
     UNREAD_DECLARATION,
     UNREADABLE_EMPTINESS,
+    VOICE_REVIEW_LOW_CONFIDENCE,
     BranchDecision,
     BranchReport,
     Conformance,
@@ -2638,3 +2644,91 @@ class TestABreathTaskIsDecidedOnTheBreathingPattern:
         """2337c1e6 / 324cd5d0: breaths the measure finds count, though neither classifier scores them."""
         folded = self._fold(mode=BREATH_COUNTED, pattern="alternating_breaths", events=5, instructed=3)
         assert folded.triage is Triage.PASS
+
+
+class TestAVoiceTaskIsDecidedOnItsPhonationAttempt:
+    """Owner, 2026-10-06: a voice task stands on the phonation attempt, and disordered voicing is data."""
+
+    _ADMIT_OK = [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")]
+
+    def _fold(
+        self,
+        *,
+        found: bool,
+        route: str = ROUTED,
+        mismatch: str | None = None,
+        review: tuple[str, ...] = (),
+        cut: bool = False,
+        after: bool = False,
+        outside: tuple[dict[str, Any], ...] = (),
+        conformance: Any = True,  # noqa: ANN401
+    ) -> FileVerdict:
+        return fold_file_verdict(
+            self._ADMIT_OK,
+            branch_reports=[_report("VOICE", "voice", conformance=conformance)],
+            spans_by_node=_found("VOICE") if found else {},
+            branch_decisions=_decisions(AIRWAY=DECLINED, SPEECH=DECLINED, VOICE=route),
+            ran={"VOICE": RunState.COMPLETED},
+            hint_claims={"VOICE": True},
+            route_state="routed",
+            declared_family="glides-low-to-high",
+            task=TaskEvidence(
+                owning_branches=("VOICE",),
+                duration_s=8.0,
+                minimum_duration_s=1.0,
+                required_event="phonation",
+                voice_mode="glide",
+                voice_found=found,
+                voice_mismatch=mismatch,
+                voice_review=review,
+                voice_capture_cut=cut,
+                voice_shutoff_after=after,
+                voice_outside_speech=outside,
+            ),
+        )
+
+    def test_a_found_attempt_passes(self) -> None:
+        """A glide in its declared direction passes."""
+        assert self._fold(found=True).triage is Triage.PASS
+
+    def test_nothing_over_the_floor_is_no_phonation_captured(self) -> None:
+        """No attempt with every input present discards on its own ground."""
+        folded = self._fold(found=False, conformance=UNDETERMINED)
+        assert folded.triage is Triage.DISCARD
+        assert folded.discard_ground == NO_PHONATION_CAPTURED
+
+    def test_a_held_vowel_in_a_glide_task_is_an_annotation(self) -> None:
+        """The attempt is kept; the shape it took is recorded, not flagged."""
+        folded = self._fold(found=True, mismatch="held near 190 Hz for 6.1 s, 0.4 st up")
+        assert folded.triage is Triage.PASS
+        assert TASK_MISMATCH in folded.annotation_keys
+
+    def test_the_review_band_flags(self) -> None:
+        """A reading that differs between strict and lenient settings is left for review."""
+        folded = self._fold(found=True, review=("glide_bound",))
+        assert folded.triage is Triage.FLAG
+        assert VOICE_REVIEW_LOW_CONFIDENCE in folded.ground_keys
+
+    def test_a_shutoff_during_phonation_flags(self) -> None:
+        """Owner: a shutoff that cut the phonation flags."""
+        folded = self._fold(found=True, cut=True)
+        assert CAPTURE_CUT_DURING_TASK in folded.ground_keys
+
+    def test_a_shutoff_after_the_task_is_an_annotation(self) -> None:
+        """A shutoff after the phonation ended moves no triage state."""
+        folded = self._fold(found=True, after=True)
+        assert folded.triage is Triage.PASS
+        assert CAPTURE_CUT_AFTER_TASK in folded.annotation_keys
+
+    def test_leading_speech_is_an_annotation(self) -> None:
+        """A count-in before the vowel is recorded with its words."""
+        folded = self._fold(found=True, outside=({"start_s": 0.5, "end_s": 1.2, "words": ["one"]},))
+        assert folded.triage is Triage.PASS
+        assert SPEECH_OUTSIDE_TASK in folded.annotation_keys
+
+    def test_a_declined_route_the_owner_found_is_an_annotation(self) -> None:
+        """Owner, 2026-10-06: the router declining a voice task VOICE found is not a flag."""
+        folded = self._fold(found=True, route=DECLINED)
+        assert folded.triage is Triage.PASS
+        assert "route_mismatch:VOICE" in folded.annotation_keys
+        assert "route_mismatch:VOICE" not in folded.ground_keys

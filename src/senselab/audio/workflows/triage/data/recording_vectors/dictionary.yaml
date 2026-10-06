@@ -108,7 +108,7 @@ columns:
 
   discard_ground:
     units: none
-    values: [unmeasurable, too_short_for_task, acoustically_empty, no_breath_captured, no_cough_captured, declared_task_absent]
+    values: [unmeasurable, too_short_for_task, acoustically_empty, no_breath_captured, no_cough_captured, no_phonation_captured, declared_task_absent]
     description: >-
       Why the recording was discarded: ADMIT could not measure it (`unmeasurable`); it is shorter than
       its declared family's minimum in data/task_minimum_duration.yaml (`too_short_for_task`); the
@@ -117,7 +117,8 @@ columns:
       breathing-pattern measure (data/breath_pattern.yaml), reading every input, found no breath
       (counted families) or no alternating pattern (sustained families) (`no_breath_captured`); a cough
       family whose cough-onset measure (data/cough_pattern.yaml), reading every input, found no cough
-      onset (`no_cough_captured`); or that branch ran
+      onset (`no_cough_captured`); a voice family whose phonation measure (data/voice_phonation.yaml)
+      found nothing over the noise floor (`no_phonation_captured`); or that branch ran
       and found none of the task, a SPEECH task holding no lexical word (`declared_task_absent`).
     computation: The fold's `discard_ground` attribute.
     source: [recording_vectors.py:extract, vocabulary.py:FileVerdict.record]
@@ -1765,22 +1766,28 @@ families:
       glide_extent_semitones:
         kind: scalar
         units: semitones
-        description: How far the pitch travelled across the selected glide.
+        description: How far the pitch travelled in the declared direction over the glide's phonation extent.
         computation: >-
-          VOICE takes the longest monotone run of the median-filtered pitch (within
-          `branch.sweep_reversal_tolerance_semitones`) of the longest qualifying sweep and writes
-          |pitch(last) − pitch(first)| in semitones, rounded to 2 places.
-        source: nodes/voice.py:_voice_glide
+          VOICE octave-checks the plain-stream F0 over the extent, median-filters it, treats frame-to-frame
+          jumps over `glide.jump_max_semitones` as discontinuities, and writes the largest net travel in
+          the declared direction, rounded to 2 places.
+        source: nodes/voice.py:align_voice, voice_phonation.py:glide_of
       interruptions:
         kind: scalar
         units: count
-        description: Unvoiced intervals inside a voiced production.
+        description: Unvoiced intervals inside a detected phonation.
         computation: >-
-          The number of unvoiced runs between the first and last voiced frame of a carrier's pitch
-          track. The sustained arm writes one reading, over the longest qualifying carrier; the
-          detect arm writes one per detected phonation that passes every quality gate (up to 55 in
-          the corpus).
-        source: nodes/voice.py:_interruptions, nodes/voice.py:_voice_sustained, nodes/voice.py:detect_voice
+          The number of unvoiced runs between the first and last voiced frame of a carrier's pitch track,
+          one per detected phonation that passes every quality gate; the detect arm only.
+        source: nodes/voice.py:_interruptions, nodes/voice.py:detect_voice
+      longest_hold_s:
+        kind: scalar
+        units: s
+        description: The longest hold inside a declared voice task's phonation extent.
+        computation: >-
+          The longest run between breaks (falls below phonation of at least `break_min_s`), rounded to 3
+          places; the holds themselves travel on the finding.
+        source: nodes/voice.py:align_voice, voice_phonation.py:holds_and_breaks
       pause_fraction_of_response:
         kind: scalar
         units: fraction
@@ -1792,12 +1799,11 @@ families:
       phonation_onset_to_offset_s:
         kind: scalar
         units: s
-        description: Duration of a voiced production from its first to its last voiced frame.
+        description: Duration of a voiced production from its onset to its offset.
         computation: >-
-          The voiced extent of a carrier (first voiced frame to last voiced frame plus one hop),
-          rounded to 3 places: one reading from the sustained arm's selected carrier, or one per
-          detected phonation from the detect arm.
-        source: nodes/voice.py:_voice_sustained, nodes/voice.py:detect_voice
+          For a declared voice task, the phonation extent's offset less its onset (the inhale excluded),
+          rounded to 3 places; for the detect arm, one per detected phonation's voiced extent.
+        source: nodes/voice.py:align_voice, nodes/voice.py:detect_voice
       source_content_coverage:
         kind: scalar
         units: fraction
@@ -1832,9 +1838,9 @@ families:
       voiced_duration_s:
         kind: scalar
         units: s
-        description: Voiced time inside a sustained production.
-        computation: The number of voiced pitch-track frames in the selected carrier times the hop, rounded to 3 places.
-        source: nodes/voice.py:_voice_sustained
+        description: Voiced time inside a declared voice task's phonation extent.
+        computation: The plain-stream voiced frames inside the phonation extent times the hop, rounded to 3 places.
+        source: nodes/voice.py:align_voice, voice_phonation.py:measure_phonation
       ddk_position_realised_mass:
         kind: vector
         units: fraction
@@ -1854,12 +1860,11 @@ families:
         source: nodes/ddk.py:instrument_authority
       carrier_rejected:
         kind: categorical
-        values: [production_min_s, lexical_separator, no_track_over_carrier, no_voicing, no_monotone_run, voiced_fraction_min, f0_spread_max_semitones, continuity_min]
+        values: [production_min_s, lexical_separator, no_track_over_carrier, no_voicing, voiced_fraction_min, f0_spread_max_semitones, continuity_min]
         description: The gates or existence criteria that discarded a candidate carrier span.
         computation: >-
-          VOICE writes one reading per discarded amplitude span, whose value names what discarded it.
-          The quality-gate names (`voiced_fraction_min`, `f0_spread_max_semitones`, `continuity_min`)
-          come only from the detect arm; the existence criteria from every arm.
+          VOICE's detect arm writes one reading per discarded amplitude span, whose value names what
+          discarded it.
         source: nodes/voice.py:Rejection.finding, nodes/voice.py:qualifying_phonation, nodes/voice.py:Qualification.quality_findings
       category_membership:
         kind: categorical
@@ -1883,9 +1888,11 @@ families:
         source: nodes/airway.py:route_findings
       phonation_extent:
         kind: categorical
-        description: VOICE's phonation extent where the pitch tracks are absent; the value is the sentinel.
-        computation: Written by `unviable` when PREPROCESS left no pitch tracks, from the sustained arm or the detect arm.
-        source: nodes/voice.py:_voice_sustained, nodes/voice.py:detect_voice
+        description: VOICE's phonation extent where its input is absent; the value is the sentinel.
+        computation: >-
+          Written by `unviable` when the plain stream is absent (a declared voice task) or PREPROCESS left
+          no pitch tracks (the detect arm).
+        source: nodes/voice.py:align_voice, nodes/voice.py:detect_voice
       repetition_rule:
         kind: categorical
         description: An item-list task's repetition rule where the category is undeclared; the value is the sentinel.
@@ -1903,9 +1910,9 @@ families:
         source: nodes/branches.py:unviable_findings
       sweep_extent:
         kind: categorical
-        description: VOICE's glide extent where the pitch tracks are absent; the value is the sentinel.
-        computation: Written by `unviable` when PREPROCESS left no pitch tracks.
-        source: nodes/voice.py:_voice_glide
+        description: VOICE's glide extent where the plain stream is absent; the value is the sentinel.
+        computation: Written by `unviable` for a declared glide task when the plain stream is absent.
+        source: nodes/voice.py:align_voice
 
   gate:
     about: >-
@@ -1994,27 +2001,27 @@ families:
         op: at_least
         units: s
         reader: gate_readings
-        reading_description: how long the qualifying carrier span ran.
-        reading_computation: VOICE writes the carrier span's duration, rounded to 3 places, from the sustained or the glide arm.
-        reading_source: nodes/voice.py:carrier_readings, nodes/voice.py:_voice_glide
+        reading_description: how long the phonation extent ran.
+        reading_computation: VOICE writes the extent's duration, inhale included, rounded to 3 places.
+        reading_source: nodes/voice.py:align_voice
       voiced_fraction_min:
         kind: applied
         reading: carrier_voiced_fraction
         op: at_least
         units: fraction
         reader: flag_gate_readings
-        reading_description: the fraction of the carrier's pitch-track frames that are voiced.
-        reading_computation: VOICE writes the voiced frames over all frames of the carrier's track, rounded to 4 places, from the sustained or the glide arm.
-        reading_source: nodes/voice.py:carrier_readings, nodes/voice.py:_voice_glide
+        reading_description: the voiced share of the phonation frames inside the extent.
+        reading_computation: VOICE writes the plain-stream voiced frames over the phonation frames inside the extent, rounded to 4 places.
+        reading_source: nodes/voice.py:align_voice, voice_phonation.py:measure_phonation
       f0_spread_max_semitones:
         kind: applied
         reading: carrier_f0_spread_semitones
         op: at_most
         units: semitones
         reader: flag_gate_readings
-        reading_description: the representative local F0 spread over the carrier.
-        reading_computation: VOICE writes the carrier's F0 spread in semitones, rounded to 3 places; None when the window cannot resolve it.
-        reading_source: nodes/voice.py:carrier_readings
+        reading_description: the representative local F0 spread inside the extent.
+        reading_computation: VOICE writes the median windowed p5-p95 spread of the checked F0, rounded to 3 places; None when no window resolves it.
+        reading_source: nodes/voice.py:align_voice, voice_phonation.py:measure_phonation
       continuity_min:
         kind: applied
         reading: carrier_continuity
@@ -2023,45 +2030,18 @@ families:
         reader: flag_gate_readings
         reading_description: the median spectral continuity over the carrier.
         reading_computation: >-
-          VOICE writes the carrier's median spectral-stationarity value, rounded to 4 places, and 0.0
-          when no continuity trace covers the carrier, which is then judged false, not undetermined.
-        reading_source: nodes/voice.py:carrier_readings, nodes/voice.py:qualifying_phonation
-      dominant_segment_min_fraction:
-        kind: applied
-        reading: sweep_dominant_fraction
-        op: at_least
-        units: fraction
-        reader: gate_readings
-        reading_description: the share of the carrier the dominant monotone pitch run holds.
-        reading_computation: >-
-          VOICE writes the duration of the longest monotone run of the median-filtered pitch (longest
-          by frame-index span, its end one hop past the last frame) over the carrier's voiced extent
-          (first to last voiced frame), rounded to 4 places; it can exceed 1 by up to one hop.
-        reading_source: nodes/voice.py:_voice_glide, nodes/branches.py:longest_monotone_run, nodes/branches.py:smoothed_pitch
+          The detect arm reads the carrier's median spectral-stationarity value inside its qualifier; no
+          reading is written for a declared voice task.
+        reading_source: nodes/voice.py:qualifying_phonation
       glide_extent_min_semitones:
         kind: applied
         reading: glide_extent_semitones
         op: at_least
         units: semitones
         reader: gate_readings
-        reading_description: how far the dominant monotone pitch run travelled.
-        reading_computation: >-
-          VOICE median-filters the voiced pitch frames (`branch.sweep_smoothing_frames`), takes the
-          longest run that never falls back more than `branch.sweep_reversal_tolerance_semitones`
-          from its running extreme, and writes |pitch(last) − pitch(first)| over it, rounded to 2 places.
-        reading_source: nodes/voice.py:_voice_glide, nodes/branches.py:smoothed_pitch, nodes/branches.py:longest_monotone_run
-      declared_duration_min_fraction:
-        kind: applied
-        reading: production_declared_fraction
-        op: at_least
-        units: fraction
-        reader: gate_readings
-        reading_description: the qualifying carrier's duration over the hold the instruction declares.
-        reading_computation: >-
-          VOICE writes the selected carrier's duration (after the count-in is split off, for a task
-          that prescribes one) over the row's `declared_duration_s`, rounded to 4 places; written only
-          where the row declares a duration (`prolonged-vowel`, 12 s).
-        reading_source: nodes/voice.py:_voice_sustained
+        reading_description: how far the glide travelled in its declared direction.
+        reading_computation: As the `glide_extent_semitones` measurement.
+        reading_source: nodes/voice.py:align_voice, voice_phonation.py:glide_of
       expected_tokens_matched_min:
         kind: applied
         reading: expected_tokens_matched

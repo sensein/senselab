@@ -320,6 +320,15 @@ class TaskEvidence:
         contest_events_min: The events AIRWAY's own detector must have found for a measure's
             no-event discard to be contested instead (``data/discard_contested.yaml``); None where
             no discard of this family is contested.
+        voice_mode: ``sustained`` or ``glide`` for a declared voice family decided on VOICE's
+            phonation reading; None for every other family.
+        voice_found: Whether the reading found a phonation attempt, or None where it was not read.
+        voice_mismatch: The glide's ``task_mismatch`` description, or None.
+        voice_review: Why the reading is left for review; empty where it is not.
+        voice_capture_cut: Whether a microphone shutoff cut the phonation.
+        voice_shutoff_after: Whether a shutoff was read after the task ended.
+        voice_outside_speech: The speech-like runs read outside the extent.
+        voice_reading: The reading's record, for the verdict record; empty where none.
     """
 
     owning_branches: tuple[str, ...] = ()
@@ -344,6 +353,14 @@ class TaskEvidence:
     cough_reading: dict[str, Any] = field(default_factory=dict)
     background_speech: dict[str, Any] = field(default_factory=dict)
     contest_events_min: int | None = None
+    voice_mode: str | None = None
+    voice_found: bool | None = None
+    voice_mismatch: str | None = None
+    voice_review: tuple[str, ...] = ()
+    voice_capture_cut: bool = False
+    voice_shutoff_after: bool = False
+    voice_outside_speech: tuple[dict[str, Any], ...] = ()
+    voice_reading: dict[str, Any] = field(default_factory=dict)
 
 
 UNMEASURABLE = "unmeasurable"
@@ -503,17 +520,20 @@ DECLARED_TASK_ABSENT = "declared_task_absent"
 """Discard ground: the branch owning the declared task ran and found none of it, whatever another branch found."""
 NO_COUGH_CAPTURED = "no_cough_captured"
 """Discard ground: a cough task holds no cough onset."""
+NO_PHONATION_CAPTURED = "no_phonation_captured"
+"""Discard ground: a voice task holds nothing over the noise floor."""
 DISCARD_GROUNDS = (
     UNMEASURABLE,
     TOO_SHORT_FOR_TASK,
     ACOUSTICALLY_EMPTY,
     NO_BREATH_CAPTURED,
     NO_COUGH_CAPTURED,
+    NO_PHONATION_CAPTURED,
     DECLARED_TASK_ABSENT,
 )
 """Every ground a file discards on, in the order the fold tries them; an operational flag (``rerun``) is
 tried between the third and the fourth, since a missing derivative may be why the task was not found."""
-EVENT_ABSENT_GROUNDS = {"breath": NO_BREATH_CAPTURED, "cough": NO_COUGH_CAPTURED}
+EVENT_ABSENT_GROUNDS = {"breath": NO_BREATH_CAPTURED, "cough": NO_COUGH_CAPTURED, "phonation": NO_PHONATION_CAPTURED}
 """The discard ground for each required event kind of ``data/airway_event_requirements.yaml``."""
 TASK_MISMATCH = "task_mismatch"
 """Flag ground: the declared airway task's own events were detected, but not in the pattern it asked for."""
@@ -523,6 +543,14 @@ COUGH_REVIEW_LOW_CONFIDENCE = "cough_review_low_confidence"
 """Flag ground: a cough task's coughs were kept, on a count whose decision differs inside the review band."""
 BACKGROUND_SPEECH_IN_TASK = "background_speech_in_task"
 """Flag ground: speech enhancement removed speech from inside an airway task's extent -- another voice."""
+VOICE_REVIEW_LOW_CONFIDENCE = "voice_review_low_confidence"
+"""Flag ground: a voice task's phonation reading differs inside its review band."""
+CAPTURE_CUT_DURING_TASK = "capture_cut_during_task"
+"""Flag ground: a microphone shutoff cut a voice task's phonation; its duration is a lower bound."""
+CAPTURE_CUT_AFTER_TASK = "capture_cut_after_task"
+"""Annotation: a microphone shutoff after a voice task's phonation ended."""
+SPEECH_OUTSIDE_TASK = "speech_outside_task"
+"""Annotation: speech-like runs outside a voice task's phonation extent, with the words over them."""
 DISCARD_CONTESTED = "discard_contested"
 """Flag ground: an airway measure found none of its event, and AIRWAY's own event detector found the task's."""
 
@@ -571,6 +599,7 @@ _PREPROCESS = "PREPROCESS"
 _REDACT = "REDACT"
 _SPEECH = "SPEECH"
 _AIRWAY = "AIRWAY"
+_VOICE = "VOICE"
 _VERDICT = "VERDICT"
 _ROUTING = "routing"
 
@@ -674,6 +703,11 @@ KEY_NO_COUGH_CAPTURED = NO_COUGH_CAPTURED
 KEY_COUGH_REVIEW_LOW_CONFIDENCE = COUGH_REVIEW_LOW_CONFIDENCE
 KEY_BACKGROUND_SPEECH_IN_TASK = BACKGROUND_SPEECH_IN_TASK
 KEY_DISCARD_CONTESTED = DISCARD_CONTESTED
+KEY_NO_PHONATION_CAPTURED = NO_PHONATION_CAPTURED
+KEY_VOICE_REVIEW_LOW_CONFIDENCE = VOICE_REVIEW_LOW_CONFIDENCE
+KEY_CAPTURE_CUT_DURING_TASK = CAPTURE_CUT_DURING_TASK
+KEY_CAPTURE_CUT_AFTER_TASK = CAPTURE_CUT_AFTER_TASK
+KEY_SPEECH_OUTSIDE_TASK = SPEECH_OUTSIDE_TASK
 KEY_PREPROCESS_ERRORED = "preprocess_errored"
 KEY_ROUTING_ERRORED = "routing_errored"
 KEY_BAD_HINT_MAP = "config_bad_hint_map"
@@ -708,6 +742,11 @@ GROUND_KEYS = (
     KEY_COUGH_REVIEW_LOW_CONFIDENCE,
     KEY_BACKGROUND_SPEECH_IN_TASK,
     KEY_DISCARD_CONTESTED,
+    KEY_NO_PHONATION_CAPTURED,
+    KEY_VOICE_REVIEW_LOW_CONFIDENCE,
+    KEY_CAPTURE_CUT_DURING_TASK,
+    KEY_CAPTURE_CUT_AFTER_TASK,
+    KEY_SPEECH_OUTSIDE_TASK,
     KEY_PREPROCESS_ERRORED,
     KEY_ROUTING_ERRORED,
     KEY_BAD_HINT_MAP,
@@ -1183,6 +1222,7 @@ class FileVerdict:
     breath_pattern: dict[str, Any] = field(default_factory=dict)
     cough_pattern: dict[str, Any] = field(default_factory=dict)
     background_speech: dict[str, Any] = field(default_factory=dict)
+    voice_phonation: dict[str, Any] = field(default_factory=dict)
 
     def record(self) -> dict[str, Any]:
         """Every decision point of this fold, as JSON-ready values.
@@ -1221,6 +1261,7 @@ class FileVerdict:
             "breath_pattern": dict(self.breath_pattern),
             "cough_pattern": dict(self.cough_pattern),
             "background_speech": dict(self.background_speech),
+            "voice_phonation": dict(self.voice_phonation),
             "ran": {node: state.value for node, state in self.ran.items()},
             "reasons": [
                 {"node": r.node, "outcome": r.outcome.value, "kind": r.kind, "why": r.why, "key": ground_key(r)}
@@ -1602,6 +1643,8 @@ def _owner_performed(
         return breath_conforms(evidence)
     if branch == _AIRWAY and evidence.cough_mode is not None:
         return cough_conforms(evidence)
+    if branch == _VOICE and evidence.voice_mode is not None:
+        return bool(evidence.voice_found) and evidence.voice_mismatch is None
     report = by_branch.get(branch)
     if report is None or report.conformance_of != TASK:
         return False
@@ -1695,6 +1738,8 @@ def no_required_event(evidence: TaskEvidence, performed: bool) -> bool:
         return evidence.breath_pattern is not None and not evidence.owner_absent_inputs and not breath_present(evidence)
     if evidence.cough_mode is not None:
         return evidence.cough_onsets_n == 0 and not evidence.owner_absent_inputs
+    if evidence.voice_mode is not None:
+        return evidence.voice_found is False and not evidence.owner_absent_inputs
     return (
         evidence.required_event in EVENT_ABSENT_GROUNDS
         and evidence.events_found_n == 0
@@ -1849,6 +1894,9 @@ def fold_file_verdict(
     cough_decides = task_evidence.cough_mode is not None and task_evidence.cough_onsets_n is not None
     if cough_decides and _AIRWAY in findings:
         findings[_AIRWAY] = KindState.PRESENT.value if cough_present(task_evidence) else KindState.ABSENT.value
+    voice_decides = task_evidence.voice_mode is not None and task_evidence.voice_found is not None
+    if voice_decides and _VOICE in findings:
+        findings[_VOICE] = KindState.PRESENT.value if task_evidence.voice_found else KindState.ABSENT.value
     agreement = {branch: _agreement(routes[branch], branch in by_branch, findings[branch]) for branch in branches_seen}
     hints = (
         {}
@@ -1957,7 +2005,8 @@ def fold_file_verdict(
         confident_no=rules.second_opinion_confident_no,
         identifier_masked=evidence.masks_final_n > 0 or evidence.reviewer_requested_n > 0,
     )
-    if rules.second_opinion_disagreement_flags and disagreements and _AIRWAY not in task_evidence.owning_branches:
+    clef_decides = not {_AIRWAY, _VOICE} & set(task_evidence.owning_branches)
+    if rules.second_opinion_disagreement_flags and disagreements and clef_decides:
         flag(_VERDICT, f"{SECOND_OPINION_DISAGREES}: {'; '.join(disagreements)}", KEY_SECOND_OPINION_DISAGREES)
     open_families = sorted({family for family, state in unplaced if state in (UNPLACED_OPEN, UNPLACED_UNREAD)})
     if open_families:
@@ -1968,7 +2017,7 @@ def fold_file_verdict(
             KEY_UNPLACED_UNREAD if unread_any else KEY_UNPLACED_OPEN,
         )
     for record in flag_gates or ():
-        if record.get("passed") is not False:
+        if record.get("passed") is not False or task_evidence.voice_mode is not None:
             continue
         flag(
             _VERDICT,
@@ -1993,7 +2042,9 @@ def fold_file_verdict(
         if g.get("passed") == "UNDETERMINED" and g.get("reason") in ("absent_not_computed", "instrument_absent")
     )
     measure_mode = task_evidence.breath_mode or task_evidence.cough_mode
-    measure_decides_gate_node = measure_mode is not None and gate_record.get("node") == _AIRWAY
+    measure_decides_gate_node = (measure_mode is not None and gate_record.get("node") == _AIRWAY) or (
+        task_evidence.voice_mode is not None and gate_record.get("node") == _VOICE
+    )
     if uncomputed and rules.uncomputed_reading_flags and not measure_decides_gate_node:
         flag(
             str(gate_record.get("node") or _VERDICT),
@@ -2001,7 +2052,9 @@ def fold_file_verdict(
             KEY_UNCOMPUTED_READING,
         )
     for name, report in reports.items():
-        measure_decides = measure_mode is not None and name == _AIRWAY and report.conformance_of == TASK
+        measure_decides = (
+            (measure_mode is not None and name == _AIRWAY) or (task_evidence.voice_mode is not None and name == _VOICE)
+        ) and report.conformance_of == TASK
         if measure_decides:
             if report.deviations and rules.deviation_flags:
                 flag(name, f"{name} reported {', '.join(report.deviations)}", f"{PREFIX_DEVIATION}:{name}", report.kind)
@@ -2063,6 +2116,34 @@ def fold_file_verdict(
             KEY_COUGH_REVIEW_LOW_CONFIDENCE,
             by_branch[_AIRWAY].kind if _AIRWAY in by_branch else None,
         )
+    voice_kind = by_branch[_VOICE].kind if _VOICE in by_branch else None
+    if task_evidence.voice_mismatch is not None and task_evidence.voice_found:
+        annotate(_VOICE, f"{TASK_MISMATCH}: {task_evidence.voice_mismatch}", KEY_TASK_MISMATCH, voice_kind)
+    if task_evidence.voice_review and task_evidence.voice_found:
+        flag(
+            _VOICE,
+            f"{VOICE_REVIEW_LOW_CONFIDENCE}: {', '.join(task_evidence.voice_review)}",
+            KEY_VOICE_REVIEW_LOW_CONFIDENCE,
+            voice_kind,
+        )
+    if task_evidence.voice_capture_cut and task_evidence.voice_found:
+        flag(
+            _VOICE,
+            f"{CAPTURE_CUT_DURING_TASK}: the phonation's duration is a lower bound",
+            KEY_CAPTURE_CUT_DURING_TASK,
+            voice_kind,
+        )
+    elif task_evidence.voice_shutoff_after:
+        annotate(_VOICE, CAPTURE_CUT_AFTER_TASK, KEY_CAPTURE_CUT_AFTER_TASK, voice_kind)
+    if task_evidence.voice_outside_speech:
+        said = [word for run in task_evidence.voice_outside_speech for word in run.get("words") or ()]
+        annotate(
+            _VOICE,
+            f"{SPEECH_OUTSIDE_TASK}: {len(task_evidence.voice_outside_speech)} run(s)"
+            + (f", {len(said)} word(s)" if said else ""),
+            KEY_SPEECH_OUTSIDE_TASK,
+            voice_kind,
+        )
     if task_evidence.background_speech.get("heard"):
         windows = task_evidence.background_speech.get("speech_windows") or []
         runs = task_evidence.background_speech.get("voice_runs") or []
@@ -2092,7 +2173,8 @@ def fold_file_verdict(
                 )
             )
         ):
-            flag(
+            note = annotate if voice_decides and branch == _VOICE else flag
+            note(
                 branch,
                 f"mismatch: routing {routes[branch]} {branch}, it found it",
                 f"{PREFIX_ROUTE_MISMATCH}:{branch}",
@@ -2231,6 +2313,7 @@ def fold_file_verdict(
         breath_pattern=dict(task_evidence.breath_reading),
         cough_pattern=dict(task_evidence.cough_reading),
         background_speech=dict(task_evidence.background_speech),
+        voice_phonation=dict(task_evidence.voice_reading),
     )
 
 

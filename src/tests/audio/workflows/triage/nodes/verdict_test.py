@@ -1714,27 +1714,28 @@ class TestTheGatesDecideTheDeclaredTask:
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
         assert result.file_verdict.conformance["VOICE"] is True
 
-    def test_a_held_vowel_whose_pitch_spreads_conforms_and_is_flagged_on_its_quality(
+    def test_a_held_vowel_whose_pitch_spreads_is_not_flagged_on_its_quality(
         self, config: TriageConfig, tmp_path: Path
     ) -> None:
-        """The task asks for the vowel held; its steadiness is a quality flag, not the task undone."""
+        """Owner, 2026-10-06: disordered voicing is data; its spread is recorded and flags nothing."""
         store = self._gated_store(
             tmp_path,
             family="maximum-phonation-time",
             branch="VOICE",
             readings={
                 "carrier_duration_s": 8.0,
-                "carrier_voiced_fraction": 0.9,
+                "carrier_voiced_fraction": 0.4,
                 "carrier_f0_spread_semitones": 9.0,
-                "carrier_continuity": 0.8,
             },
         )
+        store.entity(
+            prov_type="measurement",
+            extent=None,
+            attributes={"name": "voice_phonation_reading", "signal": "plain", "absent": [], "found": True},
+        )
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
+        assert not any(key.startswith("gate:") for key in result.file_verdict.ground_keys)
         assert result.file_verdict.conformance["VOICE"] is True
-        flags = {gate["gate"]: gate for gate in result.file_verdict.gates["flagging"]}
-        assert flags["f0_spread_max_semitones"]["passed"] is False
-        assert "gate:f0_spread_max_semitones" in result.file_verdict.ground_keys
-        assert result.file_verdict.triage is not Triage.PASS
 
     def test_an_absent_reading_is_undetermined_rather_than_a_non_conformance(
         self, config: TriageConfig, tmp_path: Path
@@ -1762,20 +1763,17 @@ class TestTheGatesDecideTheDeclaredTask:
         assert applied["production_min_s"]["passed"] is False
         assert applied["production_min_s"]["reason"] == "no_carrier"
 
-    def test_a_voice_task_whose_tracks_never_arrived_is_undetermined_and_flags_for_review(
-        self, config: TriageConfig, tmp_path: Path
-    ) -> None:
-        """No tracks is an instrument that never reached the store: not a failure, and not silent either."""
-        store = self._gated_store(
-            tmp_path,
-            family="maximum-phonation-time",
-            branch="VOICE",
-            readings={"phonation_extent": "NOT_SEPARABLE_BY_THIS_DESIGN"},
+    def test_a_voice_task_whose_plain_stream_never_arrived_reruns(self, config: TriageConfig, tmp_path: Path) -> None:
+        """No plain stream is an input that never reached VOICE: not a failure, and not silent either."""
+        store = self._gated_store(tmp_path, family="maximum-phonation-time", branch="VOICE", readings={})
+        store.entity(
+            prov_type="measurement",
+            extent=None,
+            attributes={"name": "voice_phonation_reading", "signal": "plain", "absent": ["plain"]},
         )
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
-        assert result.file_verdict.conformance["VOICE"] == UNDETERMINED
-        reasons = [str(reason["why"]) for reason in result.file_verdict.record()["reasons"]]
-        assert any(UNCOMPUTED_READING in why and "instrument_absent" in why for why in reasons)
+        assert "owning_branch_input_absent" in result.file_verdict.ground_keys
+        assert result.file_verdict.triage is Triage.RERUN
 
     def test_a_read_aloud_task_nothing_was_read_of_says_so(self, config: TriageConfig, tmp_path: Path) -> None:
         """Zero expected tokens realised is its own ground, not an omission count."""
@@ -1849,24 +1847,12 @@ class TestTheGatesDecideTheDeclaredTask:
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
         assert result.file_verdict.conformance["VOICE"] is False
 
-    def test_a_prolonged_vowel_is_held_against_its_declared_duration(
-        self, config: TriageConfig, tmp_path: Path
-    ) -> None:
-        """``hold until the timer runs out``: a carrier a fraction of the hold does not conform."""
+    def test_a_prolonged_vowel_has_no_minimum_hold(self, config: TriageConfig, tmp_path: Path) -> None:
+        """Owner, 2026-10-06: there is no good minimum, so a short hold still conforms."""
         short = self._gated_store(
-            tmp_path,
-            family="prolonged-vowel",
-            branch="VOICE",
-            readings={"carrier_duration_s": 2.0, "production_declared_fraction": 0.17},
+            tmp_path, family="prolonged-vowel", branch="VOICE", readings={"carrier_duration_s": 2.0}
         )
-        held = self._gated_store(
-            tmp_path,
-            family="prolonged-vowel",
-            branch="VOICE",
-            readings={"carrier_duration_s": 9.0, "production_declared_fraction": 0.75},
-        )
-        assert verdict_module.verdict(short, None, config, run_dir=tmp_path).file_verdict.conformance["VOICE"] is False
-        assert verdict_module.verdict(held, None, config, run_dir=tmp_path).file_verdict.conformance["VOICE"] is True
+        assert verdict_module.verdict(short, None, config, run_dir=tmp_path).file_verdict.conformance["VOICE"] is True
 
     def test_an_out_of_family_report_is_never_gated(self, config: TriageConfig, tmp_path: Path) -> None:
         """``detect_*`` evaluated no task, so the group's gates say nothing about what it reported."""

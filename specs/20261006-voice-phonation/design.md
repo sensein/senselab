@@ -4,8 +4,8 @@
 `prolonged-vowel`, `glides-low-to-high`, `glides-high-to-low` and `high-to-low`. There are 8,305
 recordings in r16. The owner asked for "equivalent checks and evaluations for the voice branch
 including how clef performed", then listened to 41 recordings (34 sampled across flag keys plus 7
-discards traced to a cause). Nothing in this document is implemented yet. It is the design the VOICE
-change will build, and the labels it will be fitted against.
+discards traced to a cause). The design below is implemented; what the implementation does where it
+differs from the design, and how it reads on the labels, is in "Implementation" at the end.
 
 ## What r16 does and why it fails
 
@@ -288,3 +288,135 @@ empty. Five recordings were heard as "ok" with no further note.
 - **The empty count on energy.** 36 of the 130 `declared_task_absent` discards had under 1 s voiced
   on plain, but voicing is the wrong test (3c6a97e9 and dbd096ea are weakly voiced attempts). The
   count is redone on the item 1 energy extent before any discard is confirmed.
+
+## Implementation (2026-10-06)
+
+`voice_phonation.py` is the measure, `data/voice_phonation.yaml` its parameters. VOICE's align arm
+(`nodes/voice.py:align_voice`) takes the reading, proposes the extent as its `task_extent` span,
+writes the gate readings over it (`carrier_duration_s`, `carrier_voiced_fraction`,
+`carrier_f0_spread_semitones`, `glide_extent_semitones`, `phonation_onset_to_offset_s`,
+`voiced_duration_s`, `longest_hold_s`) and the whole reading as the `voice_phonation_reading`
+measurement. VERDICT reads that measurement and nothing else of the measure
+(`nodes/verdict.py:_voice_reading`), the same pattern as the AIRWAY move. The detect arm is
+unchanged.
+
+### Where it differs from the design above
+
+- **F0 on plain is computed inside VOICE, from the stored `plain` stream, not as a new PREPROCESS
+  derivative.** The replay re-decides from TAXONOMY on and runs no PREPROCESS stage; reading the
+  stored stream in the branch lets the replay land the change without a reprocess. Praat cc over
+  50–1600 Hz, strength 0.45, then the octave check (odd against even harmonic level on the frame
+  spectrum, then a fold toward the running median).
+- **The floor is the quietest 100 ms of the recording's own non-digital frames**, not a session
+  floor. Cause A was the 5th percentile: a vowel filling all but 0.2 s of the file left that 0.2 s
+  as the only quiet, and a percentile never sees it; the minimum of a 100 ms running mean does.
+  Frames under −90 dBFS (digital silence, as in 3856c95a's opening) are excluded, or every frame
+  would sit 10 dB over a −120 dB floor. The session-group floor stays a fallback to build if a
+  recording with no quiet at all turns up.
+- **A plain-stream voiced frame counts as phonation only 6 dB over the floor** (`voiced_rise_db`):
+  Praat voices room noise at strength ≥ 0.45 (889afc08, heard as no audio, read 34 % voiced at
+  2.5 dB over its floor).
+- **Speech is told apart by its ASR words.** A lexical consensus word that is not spelled like the
+  vowel (`^[aeiouhym]+$` after dropping non-letters: "Ah", "E", "Eeeeee"), carries Latin letters and
+  lasts at most 1.5 s is speech. Its frames are taken out of the phonation mask, and no hold merges
+  across one. This is what separates the count-in (one, two, three) from the vowel in every
+  prolonged-vowel label, and it keeps the vowel transcribed as a word (2558e9da "E.", e421c733
+  "Ah.") or in another script (68de3829 "一") as the vowel.
+- **A further hold merges only if it is voiced** (≥ 0.3 of its frames) or 20 dB over the floor, so a
+  soft inhale 1 s before the vowel is not a hold (63779be0).
+- **The shutoff is a dead stretch, not a single drop.** A frame is dead where it is digital silence
+  or sits in a 0.3 s window whose p10–p90 spread is ≤ 1 dB and 8 dB under the floor of the live
+  frames; dead runs join across 0.15 s, must last 0.3 s, start after the first phonation, and be
+  entered by a 30 dB fall within 0.1 s. f47eeda7's shutoff is a click, a decay through digital
+  silence, then a −82 dB plateau flat to ±0.5 dB, 20 dB under its room noise; no single-drop rule
+  read it.
+- **`extent_min_s` is 0.3 s.** 889afc08 holds one 0.22 s bracketed "[UM]" and nothing else.
+- **The review band** flags `voice_review_low_confidence` where the extent's existence differs at
+  `phonation_db` ± 2 dB, where the glide's shape differs at the bound ± 1.5 st, or where the hum
+  guard fired and the enhanced-stream extent's edges differ from raw's by more than 1 s.
+
+### Gates and grounds
+
+- `dominant_segment_min_fraction` and `declared_duration_min_fraction` are removed (gate table,
+  config, recording-vectors columns, viewer); recording-vectors schema 23.
+- For a declared voice family VERDICT applies no flag gate (`voiced_fraction_min`,
+  `f0_spread_max_semitones`, `continuity_min`), reads no VOICE conformance or uncomputed-gate ground,
+  and does not flag a Clef disagreement. The readings are still recorded in the `gate_*` columns.
+- New grounds: `no_phonation_captured` (discard), `voice_review_low_confidence` and
+  `capture_cut_during_task` (flags). New annotations: `task_mismatch` for a glide, `capture_cut_after_task`,
+  `speech_outside_task`, and `route_mismatch:VOICE` when VOICE owns the family and found it.
+- A store VOICE reported on without a `voice_phonation_reading` (every pre-change store) names
+  `VOICE:voice_phonation_reading` as an absent owner input, so it reruns until it is replayed.
+
+### Labels, before and after
+
+"After" is the VOICE-owned part of the verdict read off the measure on the r9 stores (the replay's
+other grounds — a second speaker, redaction — are not re-read here). The extent is the reading's.
+
+| Subject | Family | r16 | Owner label | After | Extent (s) |
+|---|---|---|---|---|---|
+| 028943cf | glides-low-to-high | pass | task_present_extent_short | pass | 0.345–4.025 |
+| 0581355f | maximum-phonation-time | discard | task_present_hoarse_voice | pass | 0.665–16.565 |
+| 164584f3 | prolonged-vowel | pass | ok | pass | 0.705–12.095 |
+| 1c139a67 | glides-high-to-low | flag | task_present_irregular_glide_extent_wrong | pass | 0.075–4.595 |
+| 2558e9da | glides-high-to-low | flag | task_present_extent_wrong | pass | 1.425–3.755 |
+| 2f122abe | glides-high-to-low | discard | task_present_whole_file | pass + task_mismatch:held | 0.015–8.965 |
+| 3856c95a-g | high-to-low | flag | task_present_disordered_voice_extent_short | pass | 0.895–7.185 |
+| 3856c95a-pv | prolonged-vowel | flag | task_present_leading_speech | pass + speech_outside_task | 3.965–11.165 |
+| 3b06709b | high-to-low | flag | task_present_extent_short_f0_tracks_off | pass | 0.405–4.945 |
+| 3bbc69ef | glides-low-to-high | flag | task_short_background_hum | flag (voice_review_low_confidence) | 3.925–4.625 |
+| 3c6a97e9 | glides-low-to-high | discard | task_present_weakly_voiced_include | pass | 0.805–8.895 |
+| 445c8cdf | glides-low-to-high | flag | task_present_register_shift_extent_wrong | pass | 1.455–12.275 |
+| 4464b02f | prolonged-vowel | flag | task_present_broken_hold_leading_speech | pass + speech_outside_task | 1.885–12.105 |
+| 5b4817c2 | glides-high-to-low | flag | task_present_extent_wrong | pass | 0.355–3.355 |
+| 5e68a500 | maximum-phonation-time | flag | task_present_extent_short_rough_voice | pass | 0.505–10.875 |
+| 6112f3a9 | prolonged-vowel | flag | ok | pass | 5.045–10.655 |
+| 63779be0 | maximum-phonation-time | flag | task_present_route_mismatch | pass | 2.105–3.685 |
+| 685fb824 | maximum-phonation-time-v2 | discard | task_present_whole_file | pass | 0.045–21.305 |
+| 68d62b1e | maximum-phonation-time-v2 | discard | task_present_whole_file | pass | 0.605–38.045 |
+| 68de3829 | glides-low-to-high | discard | task_present_no_extent | pass + task_mismatch:opposite | 1.125–8.215 |
+| 6b0c36f0 | maximum-phonation-time-v2 | flag | task_present_breaks | pass | 1.625–19.725 |
+| 6b7bd347 | prolonged-vowel | flag | task_present_duration_good_leading_speech | pass + speech_outside_task | 3.425–9.455 |
+| 709b34e1 | glides-high-to-low | flag | task_present_disordered_voice_extent_short | pass | 0.015–5.905 |
+| 74a221d7 | prolonged-vowel | flag | task_present_broken_hold_leading_speech | pass + speech_outside_task | 1.425–11.255 |
+| 7ae91a65 | glides-low-to-high | flag | task_present_extent_wrong | pass | 0.555–12.285 |
+| 840041f9 | prolonged-vowel | flag | task_present_duration_good_leading_speech | pass + speech_outside_task | 4.025–9.775 |
+| 85a22592 | maximum-phonation-time-v2 | flag | ok | pass | 0.025–6.745 |
+| 889afc08 | maximum-phonation-time-v2 | discard | no_task_no_audio | discard (no_phonation_captured) | – |
+| 8cec2c76 | glides-low-to-high | pass | task_present_inhale_uncaptured | flag (voice_review_low_confidence) | 1.405–9.125 |
+| a9500875 | maximum-phonation-time-v2 | flag | task_present_inhale_uncaptured_rough_voice | pass | 0.065–19.985 |
+| ad6bfe11 | maximum-phonation-time-v2 | flag | task_present_inhale_uncaptured | pass | 1.585–16.195 |
+| b442b86a | glides-high-to-low | flag | task_present_glottalized_tail_extent_wrong | pass | 0.765–10.275 |
+| b7990104 | prolonged-vowel | flag | ok | pass + speech_outside_task | 1.225–5.315 |
+| c35284b1 | maximum-phonation-time | discard | task_present_no_extent | pass | 1.555–5.855 |
+| dbd096ea | glides-high-to-low | discard | task_present_weakly_voiced_include | pass + speech_outside_task | 1.325–7.525 |
+| e0b4d428 | glides-high-to-low | flag | held_not_glide_extent_wrong | pass + task_mismatch:held | 0.225–6.435 |
+| e421c733 | maximum-phonation-time-v2 | pass | task_present_inhale_uncaptured | pass + speech_outside_task | 2.575–12.975 |
+| eaa742f4 | maximum-phonation-time | discard | task_present_whole_file | pass | 0.175–41.455 |
+| ebd757bf | maximum-phonation-time | pass | ok | pass | 0.405–14.355 |
+| f47eeda7 | maximum-phonation-time-v2 | discard | task_present_mic_shutoff | flag (capture_cut_during_task) | 0.085–13.015 |
+| fa6befa4 | prolonged-vowel | flag | task_present_extent_short | pass + speech_outside_task | 3.375–11.165 |
+
+Of the 41: the owner heard a performed task on 40 and no audio on one. After the change all 40 are
+kept (37 pass, 3 flag) and 889afc08 is the one discard; r16 discarded 11, 10 of them performed. The
+three flags are review-band or shutoff cases the design asks to leave for review: 3bbc69ef (mains hum,
+a 0.4 s glide), 8cec2c76 (a 6.75 st rise against the 6 st bound) and f47eeda7 (shutoff during
+phonation). Where the extent can be compared with the owner's times it starts within about 0.3 s,
+or earlier where an inhale or breath noise before the onset joined it (1c139a67, 709b34e1,
+a9500875 start near 0.0).
+
+Over the 158 random, 30 clean and 35 hum-locked recordings in the eval set: no shutoff was read on a
+random or clean recording; the four hum-only recordings (6e17edae, a28e5022, 1ec7ddad, 9de82d6f)
+read no extent, as their r16 discard has it; 14 of 35 hum-locked recordings go to review on the
+raw/enhanced disagreement.
+
+### Left unfitted, or wrong on a label
+
+- **The break minimum** stays 0.25 s and **the glide bound** 6 st (both marked UNFITTED in data/).
+- **68de3829** ("task done", a rising glide) reads 3.7 st up and 6.6 st down: an `opposite`
+  mismatch annotation the owner's label does not support; the F0 track there still needs a look.
+- **2f122abe** ("fine") reads as a held vowel in a falling-glide task (2.0 st): annotation only.
+- **5b4817c2**'s extent runs to 3.36 s, taking in the noise after the glide (owner: glide to 2.35 s).
+- **The hum guard fires on 8 of 158 random recordings**, against about 36 of 8,305 found hum-locked;
+  on a clean recording it only drops mains-near F0 frames, but its false-fire rate needs a look on
+  the replay.
