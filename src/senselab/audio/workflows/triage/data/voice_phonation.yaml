@@ -5,12 +5,17 @@ frame_s: 0.04                     # analysis window of the level and spectrum fr
 hop_s: 0.01                       # hop of every per-frame series
 band_hz: [80.0, 4000.0]           # band the frame level is read in
 floor_smooth_s: 0.1               # moving-average window whose quietest value is the floor
+digital_floor_dbfs: -90.0         # frames under this are digital silence, never the noise floor
 phonation_db: 10.0                # level over the floor at which a frame is phonation
+voiced_rise_db: 6.0               # level over the floor a voiced frame needs to count as phonation
+vowel_word_pattern: ^[aeiouhym]+$    # a consensus word spelled like this is the vowel itself, not speech
+speech_word_max_s: 1.5            # a word held longer than this is the vowel transcribed, not speech
 break_min_s: 0.25                 # UNFITTED within 0.15-0.4: shortest fall below phonation that is a break
 segment_min_s: 0.8                # shortest run that merges into the extent as a further hold
 merge_gap_max_s: 2.0              # longest gap a further hold merges across
-extent_min_s: 0.2                 # an extent shorter than this is no phonation
-speech_cover_min: 0.5             # fraction of a run lexical words cover for it to be speech
+merge_voiced_fraction_min: 0.3    # voiced share at which a further run is a hold
+merge_db: 20.0                    # or the level over the floor at which it is
+extent_min_s: 0.3                 # an extent shorter than this is no phonation
 inhale:
   rise_db: 8.0                    # level over the floor an inhale reaches, as in the cough measure
   max_s: 1.5                      # how far before the onset an inhale may start
@@ -40,10 +45,12 @@ hum:
   disagreement_s: 1.0             # raw-against-enhanced extent edge difference that goes to review
   enhanced_drop_db: 20.0          # enhanced under raw by this supports nothing captured
 shutoff:
-  below_floor_db: 15.0            # a shutoff frame sits this far under the floor of the rest
+  below_floor_db: 8.0             # a dead frame sits this far under the floor of the live frames
   drop_db: 30.0                   # level fall within drop_s that makes it abrupt
-  drop_s: 0.05                    # how quickly the fall happens
-  flat_db: 2.0                    # largest level spread over a shutoff run
+  drop_s: 0.1                     # how quickly the fall happens
+  flat_window_s: 0.3              # window a dead stretch's flatness is read over
+  flat_db: 1.0                    # largest p10-p90 level spread of a dead stretch
+  bridge_s: 0.15                  # gaps a dead run is joined across
   min_s: 0.3                      # shortest shutoff run
   gap_s: 0.5                      # a shutoff this soon after the extent ends cut the task
 speech:
