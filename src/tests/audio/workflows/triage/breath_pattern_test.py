@@ -275,4 +275,3 @@ def test_a_modulation_extent_narrows_to_the_breath_events_inside_it() -> None:
     assert narrowed.bounds == (11.0, 17.5)
     assert narrowed.source == EXTENT_MODULATION
     assert tighten_to_events(wide, (), duration_s=20.0, pad_s=1.0) == wide
-
