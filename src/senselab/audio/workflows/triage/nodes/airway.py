@@ -20,6 +20,7 @@ from senselab.audio.data_structures import AudioHints
 from senselab.audio.tasks.classification.label_scores import label_scores
 from senselab.audio.workflows.triage.classifier_ontology import PROFILE_PATH_KEY, corroboration_sets
 from senselab.audio.workflows.triage.config import TriageConfig
+from senselab.audio.workflows.triage.nodes.airway_task import measure_airway_task
 from senselab.audio.workflows.triage.nodes.branches import (
     AIRWAY_EXPECTATIONS,
     DETECT_GROUP,
@@ -1200,6 +1201,19 @@ def airway(
     findings = [*result.deviations, *params.record()]
     span_ids = propose_spans(store, activity, software, result.components)
     finding_ids = write_findings(store, activity, software, findings, signal=source)
+    if mode == "align" and family in AIRWAY_EXPECTATIONS:
+        finding_ids.extend(
+            measure_airway_task(
+                store,
+                activity,
+                software,
+                family=family,
+                expectation=AIRWAY_EXPECTATIONS[family],
+                sampling_hz=float(config.require("resample.target_hz")),
+                language=None if hint is None else str(hint.metadata.get("language") or "") or None,
+                run_dir=run_dir,
+            )
+        )
 
     report_id, report = write_report(
         store,

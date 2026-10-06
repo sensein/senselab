@@ -34,18 +34,16 @@ from typing import Any, Callable, Mapping, Sequence
 import yaml
 
 from senselab.audio.data_structures import AudioHints
-from senselab.audio.workflows.triage.background_speech import background_speech_of
-from senselab.audio.workflows.triage.breath_pattern import (
-    BreathPattern,
-    breath_pattern_of,
-    in_review_band,
-    task_extent_bounds,
-)
 from senselab.audio.workflows.triage.config import TriageConfig
-from senselab.audio.workflows.triage.cough_pattern import CoughPattern, cough_pattern_of, in_cough_review_band
 from senselab.audio.workflows.triage.live_evidence import declared_task, recording_stem
 from senselab.audio.workflows.triage.nodes.airway import EVENTS_FOUND as AIRWAY_EVENTS_FOUND
 from senselab.audio.workflows.triage.nodes.airway import INSTRUMENT_ABSENT as AIRWAY_INSTRUMENT_ABSENT
+from senselab.audio.workflows.triage.nodes.airway_task import (
+    BACKGROUND_SPEECH,
+    BREATH_READING,
+    COUGH_READING,
+    required_event,
+)
 from senselab.audio.workflows.triage.nodes.branches import (
     BRANCH_FAMILY,
     EXPECTATIONS,
@@ -302,7 +300,6 @@ def _spans_by_node(store: ProvStore) -> dict[str, int]:
 
 TASK_MINIMUM_DURATION_PATH = Path(__file__).parents[1] / "data" / "task_minimum_duration.yaml"
 AIRWAY_EVENT_TOKENS_PATH = Path(__file__).parents[1] / "data" / "airway_event_tokens.yaml"
-AIRWAY_EVENT_REQUIREMENTS_PATH = Path(__file__).parents[1] / "data" / "airway_event_requirements.yaml"
 
 
 @functools.cache
@@ -360,27 +357,6 @@ def event_tokens_n(store: ProvStore, declared_family: str | None) -> int:
     )
 
 
-@functools.cache
-def _airway_event_requirements() -> dict[str, str]:
-    """``data/airway_event_requirements.yaml``: per declared airway family, the event kind it is decided on."""
-    document = yaml.safe_load(AIRWAY_EVENT_REQUIREMENTS_PATH.read_text()) or {}
-    return {
-        str(family): str(kind) for kind, families in document.items() if kind != "version" for family in families or ()
-    }
-
-
-def required_event(declared_family: str | None) -> str | None:
-    """The event kind a declared airway family is decided on, or None.
-
-    Args:
-        declared_family: The task family the recording declares.
-
-    Returns:
-        ``breath`` for a family ``data/airway_event_requirements.yaml`` lists under it; None otherwise.
-    """
-    return _airway_event_requirements().get(declared_family or "")
-
-
 def _airway_events_found(store: ProvStore) -> int | None:
     """How many events of its own kind the owning AIRWAY branch detected, or None where it reported no count.
 
@@ -431,32 +407,44 @@ def _owner_absent_inputs(
     return tuple(dict.fromkeys(absent))
 
 
+def _airway_reading(store: ProvStore, name: str) -> tuple[dict[str, Any] | None, tuple[str, ...]]:
+    """AIRWAY's task reading and the inputs it lacked, as AIRWAY wrote them.
+
+    Args:
+        store: The provenance store.
+        name: The reading's measurement name.
+
+    Returns:
+        The measurement's attributes and ``()``; ``None`` and the absent inputs where AIRWAY lacked
+        them; ``None`` and the measurement's own name where AIRWAY reported and wrote no reading;
+        ``None`` and ``()`` where AIRWAY did not report at all.
+    """
+    measurement = find_measurement(store, name)
+    if measurement is None:
+        reported = any(report.node == "AIRWAY" for _, report in _branch_reports(store))
+        return None, ((f"AIRWAY:{name}",) if reported else ())
+    absent = tuple(str(each) for each in measurement.attributes.get("absent") or ())
+    return (None, absent) if absent else (dict(measurement.attributes), ())
+
+
 def _task_evidence(
     store: ProvStore,
     declared_family: str | None,
     gate_record: Mapping[str, Any] | None = None,
-    *,
-    run_dir: Path | None = None,
-    sampling_hz: float | None = None,
-    language: str | None = None,
 ) -> TaskEvidence:
     """Whether the declared task was performed at all: its owner, the duration and its event tokens.
 
     Args:
-        store: The provenance store, read for ADMIT's ``recording`` stream and the consensus words.
+        store: The provenance store, read for ADMIT's ``recording`` stream, the consensus words and
+            AIRWAY's task readings.
         declared_family: The task family the recording declares.
         gate_record: The gate outcome record, read for the owning node's uncomputed readings.
-        run_dir: The run directory the derivatives' sidecar paths are relative to; None reads no
-            breathing pattern or coughs.
-        sampling_hz: The conditioned stream's sampling rate; None reads no breathing pattern or coughs.
-        language: The recording's declared language, which fixes the script the breath veto reads
-            speech words in; None reads any script.
 
     Returns:
         The evidence :func:`~senselab.audio.workflows.triage.vocabulary.fold_file_verdict` reads. A
-        breath family of ``data/airway_event_requirements.yaml`` is read by the breathing-pattern
-        measure and a cough family by the cough-onset measure; the measure's absent inputs then stand
-        for the owner's. A cough family whose measure was not read names no required event.
+        breath family of ``data/airway_event_requirements.yaml`` is decided on AIRWAY's breathing-
+        pattern reading and a cough family on its cough-onset reading; the reading's absent inputs
+        then stand for the owner's, and a reading AIRWAY never wrote is itself an absent input.
     """
     owners = tuple(branch for branch, rows in EXPECTATIONS.items() if declared_family and declared_family in rows)
     recording = next(
@@ -472,35 +460,19 @@ def _task_evidence(
     needed = required_event(declared_family) if "AIRWAY" in owners else None
     absent = _owner_absent_inputs(store, owners, gate_record)
     breath_mode: str | None = None
-    reading: BreathPattern | None = None
-    if needed == "breath" and airway is not None and run_dir is not None and sampling_hz:
+    reading: dict[str, Any] | None = None
+    if needed == "breath" and airway is not None:
         breath_mode = BREATH_SUSTAINED if airway.pattern == Pattern.SOUND_COVERAGE else BREATH_COUNTED
-        read = breath_pattern_of(store, run_dir, sampling_hz=sampling_hz, language=language, family=declared_family)
-        if isinstance(read, BreathPattern):
-            reading, absent = read, ()
-        else:
-            absent = read
+        reading, missing = _airway_reading(store, BREATH_READING)
+        absent = missing if reading is not None or missing else absent
     cough_mode: str | None = None
-    cough: CoughPattern | None = None
-    if needed == "cough" and airway is not None and run_dir is not None and sampling_hz:
+    cough: dict[str, Any] | None = None
+    if needed == "cough" and airway is not None:
         cough_mode = COUGH_PERFORMED if airway.required_count is None else COUGH_COUNTED
-        held = cough_pattern_of(store, run_dir, sampling_hz=sampling_hz, language=language)
-        if isinstance(held, CoughPattern):
-            cough, absent = held, ()
-        else:
-            absent = held
-    instructed = airway.required_count.value if airway is not None and airway.required_count is not None else None
-    background: dict[str, Any] = {}
-    if (reading is not None or cough is not None) and run_dir is not None:
-        held_extent = (reading.extent.bounds if reading is not None and reading.extent is not None else None) or (
-            (cough.extent.start_s, cough.extent.end_s) if cough is not None and cough.extent is not None else None
-        )
-        over = held_extent or task_extent_bounds(store)
-        events = (reading.event_spans_s if reading is not None else ()) + (
-            cough.event_spans_s if cough is not None else ()
-        )
-        heard = background_speech_of(store, run_dir, over, events) if over is not None else None
-        background = heard.record() if heard is not None else {}
+        cough, missing = _airway_reading(store, COUGH_READING)
+        absent = missing if cough is not None or missing else absent
+    heard = find_measurement(store, BACKGROUND_SPEECH) if reading is not None or cough is not None else None
+    background = {k: v for k, v in heard.attributes.items() if k not in ("name", "signal")} if heard else {}
     return TaskEvidence(
         owning_branches=owners,
         duration_s=duration,
@@ -514,16 +486,16 @@ def _task_evidence(
         if airway is not None and airway.required_count is not None
         else None,
         breath_mode=breath_mode,
-        breath_pattern=reading.pattern if reading is not None else None,
-        breath_events_n=reading.events_n if reading is not None else None,
-        breath_vetoed_by=reading.veto.vetoed_by if reading is not None and reading.veto is not None else None,
-        breath_train_breaths=reading.train.breaths if reading is not None and reading.train is not None else None,
-        breath_review=in_review_band(reading.train) if reading is not None else False,
-        breath_reading={"mode": breath_mode, **reading.record()} if reading is not None else {},
+        breath_pattern=reading["pattern"] if reading is not None else None,
+        breath_events_n=reading["events_n"] if reading is not None else None,
+        breath_vetoed_by=reading.get("vetoed_by") if reading is not None else None,
+        breath_train_breaths=reading.get("train_breaths") if reading is not None else None,
+        breath_review=bool(reading.get("review")) if reading is not None else False,
+        breath_reading={"mode": breath_mode, **reading["reading"]} if reading is not None else {},
         cough_mode=cough_mode,
-        cough_onsets_n=cough.onsets_n if cough is not None else None,
-        cough_review=cough is not None and in_cough_review_band(cough, instructed or 1),
-        cough_reading={"mode": cough_mode, **cough.record()} if cough is not None else {},
+        cough_onsets_n=cough["onsets_n"] if cough is not None else None,
+        cough_review=bool(cough.get("review")) if cough is not None else False,
+        cough_reading={"mode": cough_mode, **cough["reading"]} if cough is not None else {},
         background_speech=background,
     )
 
@@ -993,53 +965,6 @@ def _derived_ran(
     }
 
 
-def _settle_breath_extent(store: ProvStore, activity: str, software: str, extent: Mapping[str, Any] | None) -> None:
-    """Write the breath-task extent as the task-extent span that stands, retiring VERDICT's earlier one.
-
-    The span carries ``supersedes``, naming the branches' live task-extent spans, which stay live; the
-    readers take it in their place (:func:`~senselab.audio.workflows.triage.vocabulary.standing_task_extents`).
-    With no extent, an earlier VERDICT span is retired and the branches' spans stand again.
-
-    Args:
-        store: The provenance store.
-        activity: VERDICT's activity.
-        software: The software agent.
-        extent: The breath reading's ``extent`` record, or None.
-    """
-    spans = [
-        span
-        for span in store.entities("span")
-        if span.attributes.get("role") == TASK_EXTENT_SPAN_ROLE
-        and span.extent is not None
-        and not store.is_invalidated(span.id)
-    ]
-    ours = [span for span in spans if span.attributes.get(SUPERSEDES) is not None]
-    branches = sorted(span.id for span in spans if span.attributes.get(SUPERSEDES) is None)
-    kept: str | None = None
-    if extent is not None:
-        kept = mint_live(
-            store,
-            prov_type="span",
-            extent=(float(extent["start_s"]), float(extent["end_s"])),
-            attributes={
-                "family": "airway",
-                "role": TASK_EXTENT_SPAN_ROLE,
-                "extent_from": str(extent["source"]),
-                "phases": extent.get("phases"),
-                "breaths": extent.get("breaths"),
-                SUPERSEDES: branches,
-            },
-        )
-        if kept not in {span.id for span in ours}:
-            store.was_generated_by(kept, activity)
-            store.was_attributed_to(kept, software)
-            for branch_id in branches:
-                store.was_derived_from(kept, branch_id)
-    for span in ours:
-        if span.id != kept:
-            store.was_invalidated_by(span.id, activity)
-
-
 def verdict(
     store: ProvStore,
     source: None,
@@ -1106,9 +1031,6 @@ def verdict(
         store,
         declared_family or None,
         outcome.record(),
-        run_dir=run_dir,
-        sampling_hz=float(config.require("resample.target_hz")),
-        language=None if hint is None else str(hint.metadata.get("language") or "") or None,
     )
     file_verdict = fold_file_verdict(
         node_verdicts,
@@ -1167,10 +1089,6 @@ def verdict(
     store.was_generated_by(ledger_id, activity)
     store.was_attributed_to(ledger_id, software)
     store.was_derived_from(ledger_id, verdict_id)
-    if task_evidence.breath_mode is not None:
-        _settle_breath_extent(store, activity, software, task_evidence.breath_reading.get("extent"))
-    if task_evidence.cough_mode is not None:
-        _settle_breath_extent(store, activity, software, task_evidence.cough_reading.get("extent"))
     return VerdictResult(
         verdict=node_verdict,
         view=(verdict_id, *folded_ids),
