@@ -1,7 +1,7 @@
 # Background speech inside an airway task (background_speech.py), read off what speech enhancement
 # removed. Owner, 2026-10-06, on 6ca9935e; the derivation is in specs/20261006-cough-pattern/design.md
 # ("Background speech in the task").
-speech_labels: [Speech, Conversation, "Narration, monologue", "Male speech, man speaking", "Female speech, woman speaking", "Child speech, kid speaking", Television, Radio]
+speech_labels: [Speech, Conversation, 'Narration, monologue', 'Male speech, man speaking', 'Female speech, woman speaking', 'Child speech, kid speaking', Television, Radio]
 speech_min: 0.5            # a residual window's highest speech-label score at or above: speech heard
 keep_db: 6.0               # enhanced over residual in the window at or above: the enhancer kept the foreground
 residual_rise_db: 15.0     # residual over its own floor at or above: the enhancer removed something
