@@ -427,6 +427,7 @@ def _task_evidence(
     *,
     run_dir: Path | None = None,
     sampling_hz: float | None = None,
+    language: str | None = None,
 ) -> TaskEvidence:
     """Whether the declared task was performed at all: its owner, the duration and its event tokens.
 
@@ -437,6 +438,8 @@ def _task_evidence(
         run_dir: The run directory the derivatives' sidecar paths are relative to; None reads no
             breathing pattern.
         sampling_hz: The conditioned stream's sampling rate; None reads no breathing pattern.
+        language: The recording's declared language, which fixes the script the breath veto reads
+            speech words in; None reads any script.
 
     Returns:
         The evidence :func:`~senselab.audio.workflows.triage.vocabulary.fold_file_verdict` reads. A
@@ -460,7 +463,7 @@ def _task_evidence(
     reading: BreathPattern | None = None
     if needed == "breath" and airway is not None and run_dir is not None and sampling_hz:
         breath_mode = BREATH_SUSTAINED if airway.pattern == Pattern.SOUND_COVERAGE else BREATH_COUNTED
-        read = breath_pattern_of(store, run_dir, sampling_hz=sampling_hz)
+        read = breath_pattern_of(store, run_dir, sampling_hz=sampling_hz, language=language)
         if isinstance(read, BreathPattern):
             reading, absent = read, ()
         else:
@@ -1044,6 +1047,7 @@ def verdict(
             outcome.record(),
             run_dir=run_dir,
             sampling_hz=float(config.require("resample.target_hz")),
+            language=None if hint is None else str(hint.metadata.get("language") or "") or None,
         ),
     )
 

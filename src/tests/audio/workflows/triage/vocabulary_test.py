@@ -2587,9 +2587,9 @@ class TestABreathTaskIsDecidedOnTheBreathingPattern:
         [reason] = [reason for reason in folded.reasons if reason.key == KEY_TASK_MISMATCH]
         assert "detected 2 breath events (3 breathing cycles) where 5 were instructed" in reason.why
 
-    def test_a_silence_vetoed_pattern_discards_a_sustained_task(self) -> None:
-        """5cc93330: seven events, but YAMNet hears silence and the cycles are weak, so none was captured."""
-        folded = self._fold(mode=BREATH_SUSTAINED, pattern="alternating_breaths", events=7, vetoed_by="silence")
+    def test_a_little_activity_vetoed_pattern_discards_a_sustained_task(self) -> None:
+        """167ac3f5: two events, but the task extent is mostly quiet ("has little breath")."""
+        folded = self._fold(mode=BREATH_SUSTAINED, pattern="alternating_breaths", events=2, vetoed_by="little_activity")
         assert folded.triage is Triage.DISCARD
         assert folded.discard_ground == NO_BREATH_CAPTURED
 
