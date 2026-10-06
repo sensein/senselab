@@ -1,0 +1,35 @@
+# The cough-onset measure (cough_pattern.py) and the cough families it decides.
+# Read off PREPROCESS's stored spectrogram_narrowband (pre-emphasised stream); AIRWAY's events, HeAR and
+# YAMNet are context. Fitted on the owner's 15 listened cough recordings (2026-10-06); the derivation,
+# with the owner's words, is in specs/20261006-cough-pattern/design.md.
+version: 1
+measure:
+  band_edges_hz: [150.0, 300.0, 500.0, 800.0, 1300.0, 2000.0, 3000.0, 4000.0, 5500.0, 7800.0]
+  smooth_s: 0.015              # per-band moving median
+  floor_percentile: 10.0       # recording's own floor, over frames that are not digital silence
+  digital_silence_db: -100.0   # summed band power at or below: digital silence
+  rise_s: 0.1                  # window the rise is read over
+  rise_db: 12.0                # broadband rise at or above: a candidate onset
+  band_rise_db: 8.0            # a band rising this far counts towards coherence
+  coherence_min: 0.6           # share of bands rising together at or above: broadband
+  min_gap_s: 0.15              # nearest two candidates
+  gap_lookback_s: 0.3          # window the pre-onset level is read over
+  gap_db: 6.0                  # pre-onset level above floor at or below: a new cough, else a continuation
+  restart_rise_fraction: 0.75  # a rise at least this share of the previous onset's starts a new cough out of any level
+  peak_db: 18.0                # peak above floor within 0.15 s of the onset at or above
+  peak_window_s: 0.15
+  tail_db: 8.0                 # an event lasts while above floor by this
+  min_event_s: 0.08
+  attach_s: 0.3                # a weaker rise this soon after an onset is that cough's second phase or tail
+  train_drop_db: 12.0          # onsets more than this below the median onset peak are not part of the train
+  word_pad_s: 0.15             # an onset this close to a speech word is speech
+# The cough-task extent: from pre_s before the first onset to the end of the last event, never across a
+# speech word.
+extent:
+  pre_s: 0.1
+  post_s: 0.1
+# The review band: the reading is low-confidence where the decision differs between the measure with
+# its rise and coherence thresholds raised by these margins and with them lowered by the same margins.
+review:
+  rise_margin_db: 4.0
+  coherence_margin: 0.1
