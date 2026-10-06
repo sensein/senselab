@@ -701,6 +701,28 @@ def measure_breath_extent(
     )
 
 
+def tighten_to_events(
+    extent: BreathExtent, events: tuple[tuple[float, float], ...], *, duration_s: float, pad_s: float
+) -> BreathExtent:
+    """A modulation extent narrowed to the hull of the measure's breath events inside it, padded.
+
+    Args:
+        extent: The modulation extent.
+        events: The breathing measure's event spans.
+        duration_s: The recording's duration.
+        pad_s: Padding added on each side of the events' hull.
+
+    Returns:
+        The narrowed extent, or ``extent`` unchanged where no event falls inside it.
+    """
+    inside = [e for e in events if e[1] > extent.start_s and e[0] < extent.end_s]
+    if not inside:
+        return extent
+    start = max(extent.start_s, min(e[0] for e in inside) - pad_s, 0.0)
+    end = min(extent.end_s, max(e[1] for e in inside) + pad_s, duration_s)
+    return replace(extent, start_s=round(start, 3), end_s=round(end, 3))
+
+
 def breath_extent_fallback(
     events: tuple[tuple[float, float], ...], airway: tuple[float, float] | None, *, duration_s: float, pad_s: float
 ) -> BreathExtent | None:
@@ -875,9 +897,11 @@ def breath_pattern_of(
     """The recording's breathing pattern, or the stored inputs it could not be read without.
 
     The pattern is read over the whole file. The breath-task extent is read off the windowed
-    modulation (:func:`measure_breath_extent`), else the measure's events, else AIRWAY's own hull
-    (:func:`breath_extent_fallback`); the veto reads speech, activity and the classifiers over it, the
-    active fraction over the file where the extent is shorter than a modulation reading.
+    modulation (:func:`measure_breath_extent`, narrowed to the measure's events inside it by
+    :func:`tighten_to_events`), else the measure's events, else AIRWAY's own hull
+    (:func:`breath_extent_fallback`). It is the recording's standing task extent; the veto's readings
+    (speech, the classifiers, and the active fraction, the file where the hull is shorter than a
+    modulation reading) stay over AIRWAY's own hull, as they were fitted.
 
     Args:
         store: The provenance store, read for the ``spectrogram_narrowband`` and
@@ -920,14 +944,19 @@ def breath_pattern_of(
     pattern = measure_breath_pattern(power, hop_s=hop_s, bin_hz=bin_hz, voiced=voiced, parameters=p, modulation=m)
     duration_s = power.shape[1] * hop_s
     x = extent_parameters()
-    breath_extent = measure_breath_extent(
+    airway = task_extent_bounds(store)
+    modulated = measure_breath_extent(
         power, hop_s=hop_s, bin_hz=bin_hz, smooth_s=p.smooth_s, modulation=m, parameters=x
-    ) or breath_extent_fallback(pattern.event_spans_s, task_extent_bounds(store), duration_s=duration_s, pad_s=x.pad_s)
-    extent = breath_extent.bounds if breath_extent is not None else None
+    )
+    breath_extent = (
+        tighten_to_events(modulated, pattern.event_spans_s, duration_s=duration_s, pad_s=x.pad_s)
+        if modulated is not None
+        else breath_extent_fallback(pattern.event_spans_s, airway, duration_s=duration_s, pad_s=x.pad_s)
+    )
     active_fraction: float | None = None
     active_over: str | None = None
-    if extent is not None:
-        first, last = int(np.floor(extent[0] / hop_s)), int(np.ceil(extent[1] / hop_s))
+    if airway is not None:
+        first, last = int(np.floor(airway[0] / hop_s)), int(np.ceil(airway[1] / hop_s))
         inside = measure_modulation(power[:, first:last], hop_s=hop_s, bin_hz=bin_hz, smooth_s=p.smooth_s, parameters=m)
         span = (min(last, power.shape[1]) - max(first, 0)) * hop_s
         if inside is not None and span > 0:
@@ -935,6 +964,6 @@ def breath_pattern_of(
     if active_fraction is None and pattern.modulation is not None and duration_s > 0:
         active_fraction, active_over = round(pattern.modulation.active_span_s / duration_s, 3), OVER_FILE
     veto = breath_veto_of(
-        store, run_dir, active_fraction=active_fraction, active_over=active_over, extent=extent, language=language
+        store, run_dir, active_fraction=active_fraction, active_over=active_over, extent=airway, language=language
     )
     return replace(pattern, veto=veto, extent=breath_extent)

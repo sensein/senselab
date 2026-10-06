@@ -15,6 +15,7 @@ from senselab.audio.workflows.triage.breath_pattern import (
     SINGLE_BREATH,
     VETO_LITTLE_ACTIVITY,
     VETO_SPEECH,
+    BreathExtent,
     BreathVeto,
     breath_extent_fallback,
     breath_pattern_parameters,
@@ -24,6 +25,7 @@ from senselab.audio.workflows.triage.breath_pattern import (
     measure_breath_pattern,
     measure_modulation,
     modulation_parameters,
+    tighten_to_events,
 )
 from senselab.utils.prov_store import ProvStore
 
@@ -264,3 +266,13 @@ def test_the_fallback_is_the_measures_events_then_airways_hull() -> None:
     airway = breath_extent_fallback((), (1.0, 4.0), duration_s=10.0, pad_s=pad)
     assert airway is not None and airway.source == EXTENT_AIRWAY_EVENTS and airway.bounds == (1.0, 4.0)
     assert breath_extent_fallback((), None, duration_s=10.0, pad_s=pad) is None
+
+
+def test_a_modulation_extent_narrows_to_the_breath_events_inside_it() -> None:
+    """Talk at a window's edge is left outside: the extent runs from the first to the last event, padded."""
+    wide = BreathExtent(start_s=0.0, end_s=20.0, source=EXTENT_MODULATION, estimated_breaths=3)
+    narrowed = tighten_to_events(wide, ((12.0, 13.0), (15.0, 16.5)), duration_s=20.0, pad_s=1.0)
+    assert narrowed.bounds == (11.0, 17.5)
+    assert narrowed.source == EXTENT_MODULATION
+    assert tighten_to_events(wide, (), duration_s=20.0, pad_s=1.0) == wide
+
