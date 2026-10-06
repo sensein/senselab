@@ -77,7 +77,7 @@ _VOCALISATION = re.compile(
 )
 """A vocalisation or filler, whole-token: ``uh``, ``umm``, ``hmm``, ``ahh``, ``aaaah``, ``oh``, ``ooh``."""
 
-_INTERJECTIONS = frozenset("啊哦嗯呃哈呼诶哎嘿咦耶唉哼噢喔呀嘻呵")
+_INTERJECTIONS = frozenset("啊哦嗯呃哈呼诶哎嘿咦耶唉哼噢喔呀嘻呵嘶嗬呜")
 """Single-character interjections a recognizer writes for a vocalisation in Chinese script."""
 
 _BRACKETED = re.compile(r"[\[(<][^\])>]*[\])>]")
