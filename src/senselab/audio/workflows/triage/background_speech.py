@@ -170,7 +170,7 @@ class BackgroundSpeech:
         }
 
 
-def _windows(store: ProvStore, run_dir: Path, name: str) -> list[dict[str, Any]] | None:
+def _classifier_windows(store: ProvStore, run_dir: Path, name: str) -> list[dict[str, Any]] | None:
     measurement = find_measurement(store, name)
     path = run_dir / str(measurement.attributes.get("path") or "") if measurement is not None else None
     if path is None or not path.is_file():
@@ -183,7 +183,7 @@ def _speech(window: dict[str, Any], labels: Sequence[str]) -> float:
     return max((scores.get(label, 0.0) for label in labels), default=0.0)
 
 
-def _stream(store: ProvStore, run_dir: Path, name: str) -> Signal | None:
+def _named_stream(store: ProvStore, run_dir: Path, name: str) -> Signal | None:
     import soundfile  # noqa: PLC0415 -- decoding is only needed where a reading runs
 
     stream = next(
@@ -346,8 +346,8 @@ def background_speech_of(
     Returns:
         The reading, or None where the residual's windows or any of the three streams is not stored.
     """
-    windows = _windows(store, run_dir, RESIDUAL_YAMNET)
-    streams = [_stream(store, run_dir, name) for name in (PLAIN_STREAM, ENHANCED_STREAM, RESIDUAL_STREAM)]
+    windows = _classifier_windows(store, run_dir, RESIDUAL_YAMNET)
+    streams = [_named_stream(store, run_dir, name) for name in (PLAIN_STREAM, ENHANCED_STREAM, RESIDUAL_STREAM)]
     plain, enhanced, residual = streams
     if windows is None or plain is None or enhanced is None or residual is None:
         return None
@@ -359,6 +359,6 @@ def background_speech_of(
         residual=residual,
         extent=extent,
         events=events,
-        plain_windows=_windows(store, run_dir, PLAIN_YAMNET),
+        plain_windows=_classifier_windows(store, run_dir, PLAIN_YAMNET),
         parameters=p,
     )
