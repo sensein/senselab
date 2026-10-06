@@ -28,6 +28,7 @@ measure:
   inhale_max_s: 1.5            # an inhale starts no further back than this
   inhale_min_s: 0.1
   inhale_db: 15.0             # an inhale holds this far above the floor; stationary background does not
+  inhale_extend_db: 8.0       # once found, an inhale's start runs back while this far above the floor
 # The cough-task extent: from pre_s before the first onset to the end of the last event, never across a
 # speech word.
 extent:

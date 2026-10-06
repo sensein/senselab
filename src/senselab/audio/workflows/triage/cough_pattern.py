@@ -58,7 +58,8 @@ class CoughParameters:
         inhale_bridge_s: The longest quiet inside an inhale.
         inhale_max_s: How far before its onset an inhale may start.
         inhale_min_s: The shortest inhale.
-        inhale_db: The level above the floor an inhale holds.
+        inhale_db: The level above the floor an inhale reaches.
+        inhale_extend_db: The level above the floor an inhale's start runs back over.
     """
 
     band_edges_hz: tuple[float, ...]
@@ -85,6 +86,7 @@ class CoughParameters:
     inhale_max_s: float
     inhale_min_s: float
     inhale_db: float
+    inhale_extend_db: float
 
 
 @dataclass(frozen=True)
@@ -310,18 +312,25 @@ def _detect(bands_db: np.ndarray, hop_s: float, p: CoughParameters, words: Seque
     starts: list[int] = []
     ends: list[int] = []
     inhaling = broad >= floor + p.inhale_db
+    breathing = broad >= floor + p.inhale_extend_db
     for i, o in enumerate(onsets):
         bound = onsets[i + 1] if i + 1 < len(onsets) else frames
         j = o + int(np.argmax(broad[o : min(bound, o + peak_w)]))
         while j < bound - 1 and broad[j] >= floor + p.tail_db:
             j += 1
         ends.append(min(max(j, tails[i]), bound - 1))
-        starts.append(_inhale_start(inhaling, o, ends[-2] if i else 0, hop_s, p))
+        starts.append(_inhale_start(inhaling, breathing, o, ends[-2] if i else -1, hop_s, p))
     return _Onsets(onsets=onsets, starts=starts, ends=ends, rises=rises, peaks=peaks, floor=floor)
 
 
-def _inhale_start(active: np.ndarray, onset: int, bound: int, hop_s: float, p: CoughParameters) -> int:
-    """The start of a preparatory inhale ending just before ``onset``, else ``onset`` itself."""
+def _inhale_start(
+    active: np.ndarray, around: np.ndarray, onset: int, bound: int, hop_s: float, p: CoughParameters
+) -> int:
+    """The start of a preparatory inhale ending just before ``onset``, else ``onset`` itself.
+
+    The inhale is found on ``active`` frames and runs back over ``around`` frames, to the file's start
+    where it is already under way there.
+    """
     lead, bridge = int(p.inhale_gap_s / hop_s), int(p.inhale_bridge_s / hop_s)
     earliest = max(bound + 1, onset - int(p.inhale_max_s / hop_s))
     t = onset - 1
@@ -331,7 +340,7 @@ def _inhale_start(active: np.ndarray, onset: int, bound: int, hop_s: float, p: C
         return onset
     start, quiet = t, 0
     while t >= earliest and quiet <= bridge:
-        if active[t]:
+        if around[t]:
             start, quiet = t, 0
         else:
             quiet += 1
