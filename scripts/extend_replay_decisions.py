@@ -27,7 +27,9 @@ symlinks. A stream a replayed node writes -- REDACT's ``redacted``, SPEECH's ``s
 never linked, so that write lands in the new root. Use it when the finished tree must not be
 modified.
 
-A store already carrying this configuration's and revision's replay marker is skipped and not rewritten.
+A store already carrying this configuration's and revision's replay marker is skipped and not rewritten,
+unless ``--force`` is given. A row whose store landed although a replayed node raised is ``errored``,
+not ``ok``, and names those nodes.
 
 REVIEW is replayed too, under the replaying configuration. Where that configuration does not read
 (the LLM check off), an answered reading from before the replay is carried forward when the replayed
@@ -53,6 +55,7 @@ from typing import Any, Callable, Sequence
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.extend import (
     ERROR,
+    ERRORED,
     OK,
     PRESENT,
     REVIEW_NEEDS_REREAD,
@@ -116,6 +119,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--out-root", type=Path, default=None, help="Write replayed runs here instead of in place")
     parser.add_argument("--commit", default=None, help="The code revision to record on each replay marker")
     parser.add_argument(
+        "--force", action="store_true", help="Replay runs that already carry this configuration's and revision's marker"
+    )
+    parser.add_argument(
         "--log-dir",
         type=Path,
         default=None,
@@ -165,6 +171,7 @@ def replay_one(
     out_root: Path | None,
     stem: str,
     commit: str | None,
+    force: bool = False,
 ) -> dict[str, Any]:
     """Replay one finished run, writing its store only once every replayed node has run.
 
@@ -180,10 +187,12 @@ def replay_one(
         out_root: Where to write the replayed run, or None to replay in place.
         stem: The recording's file stem.
         commit: The code revision to record on the marker.
+        force: Replay even when this configuration's and revision's marker is already present.
 
     Returns:
-        ``{status, replay, ...}`` — ``ok`` when the replay landed, ``present`` when this
-        configuration had already replayed the run, ``error`` when it could not.
+        ``{status, replay, ...}`` — ``ok`` when the replay landed, ``errored`` when it landed but a
+        replayed node raised (``errored_nodes`` names them), ``present`` when this configuration had
+        already replayed the run, ``error`` when it could not.
     """
     target = mirror_run_root(run_root, out_root, stem) if out_root is not None else run_root
     read_from = target if (target / RUN_SUBDIR / "store.jsonl").is_file() else run_root
@@ -191,7 +200,7 @@ def replay_one(
         store = read_store(read_from, run_id=replay_run_id(run_root, config.config_hash, commit))
     except (OSError, ValueError) as error:
         return {"status": ERROR, DERIVATION: describe_exception(error)}
-    if find_replay_marker(store, config.config_hash, commit) is not None:
+    if not force and find_replay_marker(store, config.config_hash, commit) is not None:
         return {"status": PRESENT, DERIVATION: "this configuration and revision have already replayed this run"}
     try:
         hint = build_hint(source_of(run_root))[0] if build_hint is not None else None
@@ -212,8 +221,9 @@ def replay_one(
     write_store(store, target)
     export_prov(store, target)
     return {
-        "status": OK,
+        "status": ERRORED if outcome.errors else OK,
         DERIVATION: "replayed",
+        "errored_nodes": sorted(outcome.errors),
         "run_root": str(target),
         "retired": outcome.retired,
         "hint": "built" if build_hint is not None else "none",
@@ -234,6 +244,7 @@ def process(
     out_root: Path | None,
     commit: str | None,
     log: SliceLog | None = None,
+    force: bool = False,
 ) -> list[dict[str, Any]]:
     """Replay every run named by these rows, one at a time.
 
@@ -247,6 +258,7 @@ def process(
         out_root: Where to write replayed runs, or None to replay in place.
         commit: The code revision to record on each marker.
         log: Where each row's record is appended as it lands, or None.
+        force: Replay runs that already carry this configuration's and revision's marker.
 
     Returns:
         One outcome record per input row, in order.
@@ -264,6 +276,7 @@ def process(
             out_root=out_root,
             stem=str(row["stem"]),
             commit=commit,
+            force=force,
         )
         return {**row, **replayed}
 
@@ -280,6 +293,7 @@ def run_slice(
     hints: Path | None,
     out_root: Path | None,
     commit: str | None,
+    force: bool = False,
 ) -> dict[str, Any]:
     """Replay every run in one array task's stride of the manifest.
 
@@ -292,6 +306,7 @@ def run_slice(
         hints: The directory holding ``hints.py``, or None to replay with no hint.
         out_root: Where to write replayed runs, or None to replay in place.
         commit: The code revision to record on each marker.
+        force: Replay runs that already carry this configuration's and revision's marker.
 
     Returns:
         The task's summary: its counts, its parameters, and where its log went.
@@ -306,7 +321,7 @@ def run_slice(
     log_path = slices_dir / f"{label}.jsonl"
     rows_log = SliceLog(log_path, slice_index=slice_index, slice_count=slice_count, total=len(mine))
     try:
-        log = process(mine, config, build_hint=build_hint, out_root=out_root, commit=commit, log=rows_log)
+        log = process(mine, config, build_hint=build_hint, out_root=out_root, commit=commit, log=rows_log, force=force)
     finally:
         rows_log.close()
 
@@ -354,7 +369,7 @@ def main(argv: list[str] | None = None) -> int:
 
     Returns:
         0 when every recording in the shard was replayed or already had been, 1 when any row is
-        ``error`` — the other stores are written either way — 2 when the arguments could not be
+        ``error`` or ``errored`` — the other stores are written either way — 2 when the arguments could not be
         resolved and nothing was read, and 3 when any replayed recording's REVIEW reading could not
         be carried forward and must be read again (the summary's ``needs_reread`` names them).
     """
@@ -373,6 +388,7 @@ def main(argv: list[str] | None = None) -> int:
             hints=args.hints,
             out_root=args.out_root,
             commit=args.commit,
+            force=args.force,
         )
     except (OSError, ValueError) as error:
         print(f"ERROR: {error}", file=sys.stderr)
@@ -390,7 +406,7 @@ def main(argv: list[str] | None = None) -> int:
     if summary["needs_reread"]:
         print(f"REVIEW: {len(summary['needs_reread'])} recordings need the reviewer again", file=sys.stderr)
         return 3
-    return 1 if summary["counts"].get(ERROR) else 0
+    return 1 if summary["counts"].get(ERROR) or summary["counts"].get(ERRORED) else 0
 
 
 if __name__ == "__main__":

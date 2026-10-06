@@ -174,7 +174,10 @@ OK = "ok"
 """A derivation that ran and wrote what it derives."""
 
 ERROR = "error"
-"""A row on which something failed. The only status that makes an array task exit nonzero."""
+"""A row on which something failed before anything was written."""
+
+ERRORED = "errored"
+"""A row whose store was written although at least one node raised; the row names those nodes."""
 
 SKIPPED = "skipped"
 """A row whose store was left exactly as it was found, every derivation having landed."""
