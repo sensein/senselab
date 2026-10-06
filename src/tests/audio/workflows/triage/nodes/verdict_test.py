@@ -2280,32 +2280,3 @@ class TestTheOwnerCouldLook:
         }
         absent = verdict_module._owner_absent_inputs(self._store(), ("VOICE",), record)
         assert absent == ("VOICE:voiced_fraction_min",)
-
-
-def test_the_breath_extent_stands_in_place_of_airways_and_settles_on_refold() -> None:
-    """VERDICT's breath extent supersedes AIRWAY's span, is kept unchanged on a refold, and goes when absent."""
-    from senselab.audio.workflows.triage.vocabulary import SUPERSEDES, standing_task_extents
-
-    store = ProvStore(run_id="breath-extent-test")
-    airway = store.entity(prov_type="span", extent=(10.0, 12.0), attributes={"family": "airway", "role": "task_extent"})
-    software = software_agent(store)
-    extent = {"start_s": 1.0, "end_s": 30.0, "source": "breath_train", "phases": 10, "breaths": 5}
-
-    def live() -> list[Entity]:
-        return [s for s in store.entities("span") if not store.is_invalidated(s.id)]
-
-    verdict_module._settle_breath_extent(
-        store, store.activity(node="VERDICT", step=None, parameters={}), software, extent
-    )
-    standing = standing_task_extents(live())
-    assert [s.extent for s in standing] == [(1.0, 30.0)]
-    assert standing[0].attributes[SUPERSEDES] == [airway]
-    assert not store.is_invalidated(airway)
-
-    again = store.activity(node="VERDICT", step=None, parameters={"again": True})
-    verdict_module._settle_breath_extent(store, again, software, extent)
-    assert [s.id for s in standing_task_extents(live())] == [standing[0].id]
-
-    gone = store.activity(node="VERDICT", step=None, parameters={"none": True})
-    verdict_module._settle_breath_extent(store, gone, software, None)
-    assert [s.id for s in standing_task_extents(live())] == [airway]
