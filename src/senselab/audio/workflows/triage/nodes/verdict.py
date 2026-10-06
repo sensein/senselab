@@ -99,6 +99,7 @@ from senselab.audio.workflows.triage.nodes.redact import (
     padding_ms,
     task_texts,
 )
+from senselab.audio.workflows.triage.nodes.voice import PHONATION_READING
 from senselab.audio.workflows.triage.task_lexicon import task_lexicon
 from senselab.audio.workflows.triage.vocabulary import (
     BREATH_COUNTED,
@@ -450,6 +451,25 @@ def _airway_reading(store: ProvStore, name: str) -> tuple[dict[str, Any] | None,
     return (None, absent) if absent else (dict(measurement.attributes), ())
 
 
+def _voice_reading(store: ProvStore) -> tuple[dict[str, Any] | None, tuple[str, ...]]:
+    """VOICE's phonation reading and the inputs it lacked, as VOICE wrote them.
+
+    Args:
+        store: The provenance store.
+
+    Returns:
+        The measurement's attributes and ``()``; ``None`` and the absent inputs where VOICE lacked
+        them; ``None`` and the measurement's own name where VOICE reported and wrote no reading;
+        ``None`` and ``()`` where VOICE did not report at all.
+    """
+    measurement = find_measurement(store, PHONATION_READING)
+    if measurement is None:
+        reported = any(report.node == "VOICE" for _, report in _branch_reports(store))
+        return None, ((f"VOICE:{PHONATION_READING}",) if reported else ())
+    absent = tuple(f"VOICE:{each}" for each in measurement.attributes.get("absent") or ())
+    return (None, absent) if absent else (dict(measurement.attributes), ())
+
+
 def _task_evidence(
     store: ProvStore,
     declared_family: str | None,
@@ -494,6 +514,13 @@ def _task_evidence(
         cough_mode = COUGH_PERFORMED if airway.required_count is None else COUGH_COUNTED
         cough, missing = _airway_reading(store, COUGH_READING)
         absent = missing if cough is not None or missing else absent
+    voice = EXPECTATIONS["VOICE"].get(declared_family or "") if "VOICE" in owners else None
+    voice_mode: str | None = None
+    phonation: dict[str, Any] | None = None
+    if voice is not None:
+        voice_mode = "glide" if voice.pattern == Pattern.GLIDE else "sustained"
+        phonation, missing = _voice_reading(store)
+        absent = missing if phonation is not None or missing else absent
     instructed = airway.required_count.value if airway is not None and airway.required_count is not None else None
     heard = find_measurement(store, BACKGROUND_SPEECH) if reading is not None or cough is not None else None
     background = {k: v for k, v in heard.attributes.items() if k not in ("name", "signal")} if heard else {}
@@ -503,7 +530,8 @@ def _task_evidence(
         minimum_duration_s=minimum_duration_s(declared_family) if owners else None,
         event_tokens_n=event_tokens_n(store, declared_family),
         owner_absent_inputs=absent,
-        required_event=needed if needed != "cough" or cough_mode is not None else None,
+        required_event=(needed if needed != "cough" or cough_mode is not None else None)
+        or ("phonation" if voice_mode is not None else None),
         events_found_n=_airway_events_found(store) if "AIRWAY" in owners else None,
         event_kind=airway.label_set if airway is not None else None,
         instructed_count=airway.required_count.value
@@ -522,6 +550,20 @@ def _task_evidence(
         cough_review=bool(cough.get("review")) if cough is not None else False,
         cough_reading={"mode": cough_mode, **cough["reading"]} if cough is not None else {},
         background_speech=background,
+        voice_mode=voice_mode,
+        voice_found=bool(phonation["found"]) if phonation is not None else None,
+        voice_mismatch=phonation.get("mismatch") if phonation is not None else None,
+        voice_review=tuple(phonation.get("review") or ()) if phonation is not None else (),
+        voice_capture_cut=bool((phonation or {}).get("shutoff", {}).get("during_task")),
+        voice_shutoff_after=bool((phonation or {}).get("shutoff"))
+        and not (phonation or {}).get("shutoff", {}).get("during_task"),
+        voice_outside_speech=tuple((phonation or {}).get("outside_speech") or ()),
+        voice_reading={
+            "mode": voice_mode,
+            **{k: v for k, v in phonation.items() if k not in ("name", "signal", "absent")},
+        }
+        if phonation is not None
+        else {},
     )
 
 

@@ -925,7 +925,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = SelectionK
 'use strict';
 
 var SchemaDecode = (function () {
-  var SCHEMA_VERSION = 22;
+  var SCHEMA_VERSION = 23;
   var DICTIONARY_KEY = 'senselab.recording_vectors.dictionary';
   var TIME_SCALE = 65535;
   var TRACE_POINTS = 256;
@@ -1329,6 +1329,7 @@ var SchemaAxes = (function () {
     'extent_speaker_count',
     'glide_extent_semitones',
     'interruptions',
+    'longest_hold_s',
     'pause_fraction_of_response',
     'phonation_onset_to_offset_s',
     'source_content_coverage',
@@ -1365,9 +1366,7 @@ var SchemaAxes = (function () {
     ['voiced_fraction_min', 'carrier_voiced_fraction', 'at_least', null],
     ['f0_spread_max_semitones', 'carrier_f0_spread_semitones', 'at_most', 'semitones'],
     ['continuity_min', 'carrier_continuity', 'at_least', null],
-    ['dominant_segment_min_fraction', 'sweep_dominant_fraction', 'at_least', null],
     ['glide_extent_min_semitones', 'glide_extent_semitones', 'at_least', 'semitones'],
-    ['declared_duration_min_fraction', 'production_declared_fraction', 'at_least', null],
     ['expected_tokens_matched_min', 'expected_tokens_matched', 'at_least', null],
     ['content_omission_fraction_max', 'expected_content_omitted_fraction', 'at_most', null],
     ['response_min_s', 'response_duration_s', 'at_least', 's'],

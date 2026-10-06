@@ -15,6 +15,7 @@ from typing import Any
 
 import numpy as np
 import pytest
+import soundfile
 
 from senselab.audio.data_structures import AudioHints
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
@@ -31,7 +32,7 @@ from senselab.audio.workflows.triage.nodes.branches import (
     track_slice,
     windowed_spreads,
 )
-from senselab.audio.workflows.triage.nodes.common import find_branch_report, live_entities
+from senselab.audio.workflows.triage.nodes.common import find_branch_report, find_measurement, live_entities
 from senselab.audio.workflows.triage.nodes.gates import GROUP_LAYER
 from senselab.audio.workflows.triage.nodes.voice import (
     COUNT_IN,
@@ -51,6 +52,9 @@ HOP_S = 0.01
 
 CONTINUITY_RATE = 100.0
 """The continuity trace's sampling rate in the fixtures, in Hz."""
+
+RATE = 16000
+"""The ``plain`` stream's sampling rate in the fixtures, in Hz."""
 
 MPT_STEM = "sub-abc_ses-1_task-maximum-phonation-time"
 PROLONGED_STEM = "sub-abc_ses-1_task-prolonged-vowel"
@@ -74,7 +78,6 @@ GATES = {
     "voiced_fraction_min": 0.6,
     "f0_spread_max_semitones": 4.0,
     "continuity_min": 0.8,
-    "dominant_segment_min_fraction": 0.5,
     "glide_extent_min_semitones": 1.0,
 }
 """Gate bounds supplied by the fixture. Each group takes the ones its own body reads."""
@@ -84,7 +87,6 @@ GROUP_GATES = {
     Pattern.GLIDE: (
         "production_min_s",
         "voiced_fraction_min",
-        "dominant_segment_min_fraction",
         "glide_extent_min_semitones",
     ),
 }
@@ -132,20 +134,6 @@ def config(**overrides: Any) -> TriageConfig:  # noqa: ANN401
         },
     }
     return TriageConfig(packaged.name, packaged.version, packaged.config_hash, merged)
-
-
-def _node_readings(store: ProvStore) -> dict[str, Any]:
-    """Every measurement the node wrote, keyed by name, as VERDICT reads them.
-
-    Args:
-        store: The provenance store the node wrote into.
-
-    Returns:
-        Measurement name to its value.
-    """
-    return {
-        str(entity.attributes["name"]): entity.attributes.get("value") for entity in live_entities(store, "measurement")
-    }
 
 
 def _tracks(
@@ -203,28 +191,6 @@ def _glide_tracks(
     return times, f0, power
 
 
-def _sweep_tracks(
-    duration_s: float, sweeps: tuple[tuple[tuple[float, float], float, float], ...]
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """One monotone F0 sweep per entry, so a recording can carry more than one attempt.
-
-    Args:
-        duration_s: How long the grid runs.
-        sweeps: ``(extent, low_hz, high_hz)`` per sweep; the F0 runs low to high across each.
-
-    Returns:
-        ``(times_s, f0_hz, strength)``.
-    """
-    times = np.arange(0.0, duration_s, HOP_S)
-    f0 = np.zeros(times.size)
-    power = np.zeros(times.size)
-    for extent, low_hz, high_hz in sweeps:
-        inside = (times >= extent[0]) & (times < extent[1])
-        power[inside] = 0.9
-        f0[inside] = np.linspace(low_hz, high_hz, int(inside.sum()))
-    return times, f0, power
-
-
 def _octave_error_tracks(
     duration_s: float,
     extent: tuple[float, float],
@@ -257,34 +223,6 @@ def _octave_error_tracks(
     for step in range(bursts):
         first = inside[int(len(inside) * (step + 1) / (bursts + 1))]
         f0[first : first + burst_frames] = centre_hz * 2.0
-    return times, f0, power
-
-
-def _zigzag_tracks(
-    duration_s: float, extent: tuple[float, float], low_hz: float, high_hz: float, legs: int = 3
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """A fully voiced carrier whose pitch reverses, so no one monotone run dominates it.
-
-    Args:
-        duration_s: How long the grid runs.
-        extent: The interval the phonation occupies.
-        low_hz: F0 at the bottom of each leg.
-        high_hz: F0 at the top of each leg.
-        legs: How many monotone legs to divide the extent into.
-
-    Returns:
-        ``(times_s, f0_hz, strength)``.
-    """
-    times = np.arange(0.0, duration_s, HOP_S)
-    f0 = np.zeros(times.size)
-    power = np.zeros(times.size)
-    inside = np.flatnonzero((times >= extent[0]) & (times < extent[1]))
-    power[inside] = 0.9
-    edges = np.linspace(0, inside.size, legs + 1).astype(int)
-    for leg in range(legs):
-        first, last = edges[leg], edges[leg + 1]
-        ends = (low_hz, high_hz) if leg % 2 == 0 else (high_hz, low_hz)
-        f0[inside[first:last]] = np.linspace(ends[0], ends[1], last - first)
     return times, f0, power
 
 
@@ -327,6 +265,7 @@ def seed(
     tracks_path: bool = False,
     words: tuple[tuple[str, float, float], ...] = (),
     span_labels: tuple[tuple[float, float, str], ...] = (),
+    plain: np.ndarray | None = None,
 ) -> tuple[ProvStore, dict[str, Any]]:
     """A store carrying exactly the surface the two VOICE modes read.
 
@@ -341,6 +280,7 @@ def seed(
         tracks_path: Whether that measurement carries a ``path`` attribute of its own.
         words: The consensus words, as ``(text, start, end)``.
         span_labels: Extra spans carrying a ruleset ``label``, as ``(start, end, label)``.
+        plain: The ``plain`` stream's samples at 16 kHz, or None to omit the stream.
 
     Returns:
         The store and the ids it wrote.
@@ -348,6 +288,14 @@ def seed(
     store = ProvStore(run_id="voice-test")
     (tmp_path / "derivatives").mkdir(parents=True, exist_ok=True)
     ids: dict[str, Any] = {"amplitude": [], "labelled": []}
+    if plain is not None:
+        (tmp_path / "streams").mkdir(parents=True, exist_ok=True)
+        soundfile.write(tmp_path / "streams" / "plain.flac", plain, RATE)
+        ids["plain"] = store.entity(
+            prov_type="stream",
+            extent=(0.0, len(plain) / RATE),
+            attributes={"name": "plain", "path": "streams/plain.flac", "sampling_rate": RATE},
+        )
     if stem is not None:
         ids["recording"] = store.entity(
             prov_type="stream",
@@ -415,95 +363,6 @@ def voice_spans(store: ProvStore) -> list[Any]:
     """
     found = [span for span in live_entities(store, "span") if span.attributes.get("family") == "voice"]
     return sorted(found, key=lambda span: span.extent or (0.0, 0.0))
-
-
-def measurements(store: ProvStore, name: str) -> list[Any]:
-    """Every live measurement of one name.
-
-    Args:
-        store: The provenance store.
-        name: The measurement's name.
-
-    Returns:
-        The entities, in write order.
-    """
-    return [entity for entity in live_entities(store, "measurement") if entity.attributes.get("name") == name]
-
-
-def assertions(store: ProvStore, verb: str) -> list[Any]:
-    """Every live assertion of one verb.
-
-    Args:
-        store: The provenance store.
-        verb: ``deviate`` or ``contest``.
-
-    Returns:
-        The entities, in write order.
-    """
-    return [entity for entity in live_entities(store, "assertion") if entity.attributes.get("verb") == verb]
-
-
-class TestASustainedVowelYieldsTheHeldVowelSpan:
-    """The branch's foundational capability, and the thing it failed to do on every recording."""
-
-    def test_a_held_vowel_is_proposed_as_a_task_extent_of_family_voice(self, tmp_path: Path) -> None:
-        """Sixteen seconds of held phonation becomes one span, in VOICE's own family."""
-        store, _ = seed(tmp_path)
-        result = align_voice("maximum-phonation-time", store, None, params(), run_dir=tmp_path)
-        assert [proposal.role for proposal in result.components] == [TASK_EXTENT]
-        assert {proposal.family for proposal in result.components} == {"voice"}
-
-    def test_the_extent_is_the_productions_own_voiced_boundaries(self, tmp_path: Path) -> None:
-        """Not the carrier span's: the first and last voiced frame inside it."""
-        store, _ = seed(tmp_path, amplitude=((2.0, 18.0),), tracks=_tracks(20.0, [(4.0, 15.0)]))
-        result = align_voice("maximum-phonation-time", store, None, params(), run_dir=tmp_path)
-        start, end = result.components[0].start, result.components[0].end
-        assert start == pytest.approx(4.0, abs=0.02)
-        assert end == pytest.approx(15.0, abs=0.02)
-
-    def test_the_carriers_own_extent_travels_on_the_span(self, tmp_path: Path) -> None:
-        """A reader needs the region the span was cut from, not only the cut."""
-        store, _ = seed(tmp_path, amplitude=((2.0, 18.0),), tracks=_tracks(20.0, [(4.0, 15.0)]))
-        result = align_voice("maximum-phonation-time", store, None, params(), run_dir=tmp_path)
-        assert result.components[0].attributes["carrier_extent"] == [2.0, 18.0]
-
-    def test_the_onset_to_offset_duration_is_measured_under_a_qualified_name(self, tmp_path: Path) -> None:
-        """Never ``maximum_phonation_time``: that name is read against published norms."""
-        store, _ = seed(tmp_path)
-        result = align_voice("maximum-phonation-time", store, None, params(), run_dir=tmp_path)
-        names = {finding.name for finding in result.deviations if finding.kind == "measure"}
-        assert "phonation_onset_to_offset_s" in names
-        assert "maximum_phonation_time" not in names
-
-    def test_the_voiced_duration_is_reported_beside_the_extent(self, tmp_path: Path) -> None:
-        """The extent is an upper bound; the voiced total is the other half of V2's triple."""
-        store, _ = seed(tmp_path)
-        result = align_voice("maximum-phonation-time", store, None, params(), run_dir=tmp_path)
-        names = {finding.name for finding in result.deviations if finding.kind == "measure"}
-        assert {"phonation_onset_to_offset_s", "voiced_duration_s", "interruptions"} <= names
-
-    def test_the_three_qualifiers_travel_on_the_span(self, tmp_path: Path) -> None:
-        """A type-3 voice is a finding about the voice, so the qualifiers are always carried."""
-        store, _ = seed(tmp_path)
-        result = align_voice("maximum-phonation-time", store, None, params(), run_dir=tmp_path)
-        attributes = result.components[0].attributes
-        assert {"voiced_fraction", "f0_spread_semitones", "stationarity", "support_frames"} <= set(attributes)
-
-    def test_an_interruption_is_located_rather_than_only_counted(self, tmp_path: Path) -> None:
-        """V2's third item: the number, the locations and the total duration."""
-        store, _ = seed(tmp_path, amplitude=((2.0, 18.0),), tracks=_tracks(20.0, [(3.0, 8.0), (11.0, 17.0)]))
-        result = align_voice("maximum-phonation-time", store, None, params(), run_dir=tmp_path)
-        found = [finding for finding in result.deviations if finding.name == "interruptions"]
-        assert found and found[0].evidence["value"] == 1
-        assert found[0].evidence["locations"][0][0] == pytest.approx(8.0, abs=0.05)
-
-    def test_a_carrier_shorter_than_the_minimum_is_not_a_production(self, tmp_path: Path) -> None:
-        """``production_min_s`` is the shortest carrier a production may be found in."""
-        store, _ = seed(tmp_path, amplitude=((2.0, 2.2),), duration_s=5.0)
-        result = align_voice("maximum-phonation-time", store, None, params(), run_dir=tmp_path)
-        assert result.components == []
-        assert readings_of(result).get("carrier_duration_s") is None
-        assert gated_conformance(result, Pattern.SUSTAINED, settings=config()) == UNDETERMINED
 
 
 class TestTheQualifierSeparatesAHeldVowelFromConnectedSpeech:
@@ -689,13 +548,6 @@ class TestAnAbsentInstrumentIsUndetermined:
 class TestEveryProposalNamesItsEvidence:
     """Under propose-only the derivation is the whole record of where an extent came from."""
 
-    def test_the_task_extent_is_derived_from_its_carrier_and_the_tracks(self, tmp_path: Path) -> None:
-        """The carrier is the region; the tracks are what placed the boundary inside it."""
-        store, ids = seed(tmp_path)
-        voice(store, "plain", config(), None, run_dir=tmp_path)
-        span = voice_spans(store)[0]
-        assert set(store.derived_from(span.id)) == {ids["amplitude"][0], ids["tracks"], ids["continuity"]}
-
     def test_the_detect_arms_span_is_derived_from_the_same_evidence(self, tmp_path: Path) -> None:
         """The two modes share the qualifier, so they share the derivation."""
         store, ids = seed(tmp_path, stem=COUGH_STEM)
@@ -716,41 +568,9 @@ class TestEveryProposalNamesItsEvidence:
         count_in = [span for span in voice_spans(store) if span.attributes["role"] == COUNT_IN]
         assert count_in and len(store.derived_from(count_in[0].id)) == 3
 
-    def test_the_declared_duration_count_names_the_recording_stream(self, tmp_path: Path) -> None:
-        """The count is read off the recording's extent, so the stream it came from is its evidence."""
-        store, ids = seed(
-            tmp_path,
-            stem=PROLONGED_STEM,
-            duration_s=20.0,
-            amplitude=((6.0, 18.0),),
-            tracks=_tracks(20.0, [(6.0, 18.0)]),
-            words=(("one", 1.0, 1.4), ("two", 1.6, 2.0), ("three", 2.2, 2.8)),
-        )
-        result = align_voice("prolonged-vowel", store, None, params(), run_dir=tmp_path)
-        declared = [finding for finding in result.deviations if finding.name == "declared_duration_s"]
-        assert [finding.derived_from for finding in declared] == [(ids["recording"],)]
-
-    def test_no_proposal_is_written_without_a_derivation(self, tmp_path: Path) -> None:
-        """``propose_span`` is the only writer and it refuses one; this pins the branch's side."""
-        store, _ = seed(tmp_path)
-        result = align_voice("maximum-phonation-time", store, None, params(), run_dir=tmp_path)
-        assert all(proposal.derived_from for proposal in result.components)
-
 
 class TestTheCountInIsItsOwnSpan:
     """It gets one precisely because it must be excluded from the vowel's measurement window."""
-
-    def test_the_count_in_and_the_vowel_are_two_spans(self, tmp_path: Path) -> None:
-        """``prolonged-vowel`` prescribes a lexical count-in; MPT forbids lexical content."""
-        store, _ = seed(
-            tmp_path,
-            stem=PROLONGED_STEM,
-            amplitude=((6.0, 18.0),),
-            tracks=_tracks(20.0, [(6.0, 18.0)]),
-            words=(("one", 1.0, 1.4), ("two", 1.6, 2.0), ("three", 2.2, 2.8)),
-        )
-        result = align_voice("prolonged-vowel", store, None, params(), run_dir=tmp_path)
-        assert [proposal.role for proposal in result.components] == [COUNT_IN, TASK_EXTENT]
 
     def test_the_count_in_is_marked_excluded_from_measurement(self, tmp_path: Path) -> None:
         """Every Praat scalar today is taken over count-in plus silence plus vowel."""
@@ -764,45 +584,6 @@ class TestTheCountInIsItsOwnSpan:
         result = align_voice("prolonged-vowel", store, None, params(), run_dir=tmp_path)
         assert result.components[0].attributes["excluded_from_measurement"] is True
 
-    def test_a_carrier_holding_the_count_in_is_not_the_vowel(self, tmp_path: Path) -> None:
-        """``lexical_separator`` excludes a carrier the count-in overlaps."""
-        store, _ = seed(
-            tmp_path,
-            stem=PROLONGED_STEM,
-            amplitude=((1.0, 3.0),),
-            tracks=_tracks(20.0, [(1.0, 3.0)]),
-            words=(("one", 1.0, 1.4), ("two", 1.6, 2.0), ("three", 2.2, 2.8)),
-        )
-        result = align_voice("prolonged-vowel", store, None, params(), run_dir=tmp_path)
-        assert [proposal.role for proposal in result.components] == [COUNT_IN]
-
-    def test_the_vowel_transcribed_as_a_word_is_not_a_separator(self, tmp_path: Path) -> None:
-        """Only the count-in's own words split a span: an ASR ``Ah`` over the held vowel is the vowel."""
-        store, _ = seed(
-            tmp_path,
-            stem=PROLONGED_STEM,
-            amplitude=((1.0, 12.0),),
-            tracks=_tracks(20.0, [(1.0, 12.0)]),
-            words=(("one", 1.0, 1.4), ("two", 1.6, 2.0), ("three", 2.2, 2.8), ("Ah.", 2.9, 12.0)),
-        )
-        result = align_voice("prolonged-vowel", store, None, params(), run_dir=tmp_path)
-        assert readings_of(result)["carrier_duration_s"] == pytest.approx(9.2, abs=0.05)
-
-    def test_a_vowel_sharing_one_span_with_the_count_in_is_split_off_it(self, tmp_path: Path) -> None:
-        """``1, 2, 3 aah`` with no silence before the vowel: the vowel is the span after ``three``."""
-        store, _ = seed(
-            tmp_path,
-            stem=PROLONGED_STEM,
-            amplitude=((1.0, 12.0),),
-            tracks=_tracks(20.0, [(1.0, 12.0)]),
-            words=(("one", 1.0, 1.4), ("two", 1.6, 2.0), ("three", 2.2, 2.8)),
-        )
-        result = align_voice("prolonged-vowel", store, None, params(), run_dir=tmp_path)
-        assert [proposal.role for proposal in result.components] == [COUNT_IN, TASK_EXTENT]
-        readings = readings_of(result)
-        assert readings["carrier_duration_s"] == pytest.approx(9.2, abs=0.05)
-        assert readings["production_declared_fraction"] == pytest.approx(9.2 / 12.0, abs=0.01)
-
     def test_a_missing_count_in_token_is_an_omission(self, tmp_path: Path) -> None:
         """The instruction prescribes three; two realised leaves one omitted."""
         store, _ = seed(
@@ -815,234 +596,6 @@ class TestTheCountInIsItsOwnSpan:
         result = align_voice("prolonged-vowel", store, None, params(), run_dir=tmp_path)
         omissions = [finding for finding in result.deviations if finding.name == "omission"]
         assert [finding.evidence["expected"] for finding in omissions] == ["three"]
-
-    def test_no_count_in_at_all_does_not_decide_the_vowel(self, tmp_path: Path) -> None:
-        """A held vowel carries no lexical content by design; the count-in cannot be its verdict.
-
-        The transcript of a sustained vowel has no words in it, so keying ``done`` to an ordered
-        run of ``one``/``two``/``three`` made the task's own definition guarantee a ``False``.
-        """
-        store, _ = seed(tmp_path, stem=PROLONGED_STEM, amplitude=((6.0, 18.0),), tracks=_tracks(20.0, [(6.0, 18.0)]))
-        result = align_voice("prolonged-vowel", store, None, params(), run_dir=tmp_path)
-        assert gated_conformance(result, Pattern.SUSTAINED, settings=config()) is True
-        assert [proposal.role for proposal in result.components] == ["task_extent"]
-        assert [finding.evidence["expected"] for finding in result.deviations if finding.name == "omission"] == [
-            "one",
-            "two",
-            "three",
-        ]
-
-    def test_a_family_prescribing_no_count_in_is_done_on_the_vowel_alone(self, tmp_path: Path) -> None:
-        """MPT declares no tokens, so nothing lexical is owed."""
-        store, _ = seed(tmp_path)
-        result = align_voice("maximum-phonation-time", store, None, params(), run_dir=tmp_path)
-        assert gated_conformance(result, Pattern.SUSTAINED, settings=config()) is True
-
-
-class TestTheGlideReadsTheSweepAgainstItsDeclaredDirection:
-    """V3: direction is measured, and the declaration is what it is read against."""
-
-    def test_an_upward_sweep_is_proposed_with_its_direction(self, tmp_path: Path) -> None:
-        """The dominant monotone segment, and which way it ran."""
-        store, _ = seed(tmp_path, stem=GLIDE_UP_STEM, tracks=_glide_tracks(20.0, (2.0, 18.0), 100.0, 300.0))
-        result = align_voice("glides-low-to-high", store, None, params(), run_dir=tmp_path)
-        assert result.components[0].attributes["direction"] == "up"
-        assert result.components[0].attributes["production"] == "glide"
-
-    def test_a_sweep_running_the_wrong_way_is_a_deviation(self, tmp_path: Path) -> None:
-        """``sweep_direction_mismatch``, with both directions named."""
-        store, _ = seed(tmp_path, stem=GLIDE_UP_STEM, tracks=_glide_tracks(20.0, (2.0, 18.0), 300.0, 100.0))
-        result = align_voice("glides-low-to-high", store, None, params(), run_dir=tmp_path)
-        found = [finding for finding in result.deviations if finding.name == "sweep_direction_mismatch"]
-        assert found and found[0].evidence == {
-            "declared": "up",
-            "measured": "down",
-            "extent_semitones": found[0].evidence["extent_semitones"],
-        }
-
-    def test_a_downward_declaration_matched_by_a_downward_sweep_deviates_not_at_all(self, tmp_path: Path) -> None:
-        """The same recording against the other declaration."""
-        store, _ = seed(tmp_path, stem=GLIDE_DOWN_STEM, tracks=_glide_tracks(20.0, (2.0, 18.0), 300.0, 100.0))
-        result = align_voice("glides-high-to-low", store, None, params(), run_dir=tmp_path)
-        assert [finding.name for finding in result.deviations if finding.kind == "deviation"] == []
-
-    def test_the_semitone_extent_is_measured(self, tmp_path: Path) -> None:
-        """An octave and a half in Hz is a semitone count, which is what a reader compares."""
-        store, _ = seed(tmp_path, stem=GLIDE_UP_STEM, tracks=_glide_tracks(20.0, (2.0, 18.0), 100.0, 200.0))
-        result = align_voice("glides-low-to-high", store, None, params(), run_dir=tmp_path)
-        found = [finding for finding in result.deviations if finding.name == "glide_extent_semitones"]
-        assert found and found[0].evidence["value"] == pytest.approx(12.0, abs=0.5)
-
-    def test_no_monotone_segment_leaves_the_sweep_undetermined(self, tmp_path: Path) -> None:
-        """One voiced frame is not a contour, and no sweep found is not the task not performed."""
-        store, _ = seed(tmp_path, stem=GLIDE_UP_STEM, amplitude=((2.0, 3.0),), tracks=_tracks(20.0, [(2.0, 2.01)]))
-        result = align_voice("glides-low-to-high", store, None, params(), run_dir=tmp_path)
-        assert gated_conformance(result, Pattern.GLIDE, settings=config()) == UNDETERMINED
-        assert result.components == []
-        assert [finding.evidence["value"] for finding in result.deviations if finding.name == "carrier_rejected"] == [
-            "no_monotone_run"
-        ]
-
-    def test_a_sweep_that_travelled_nowhere_has_no_direction_to_read(self, tmp_path: Path) -> None:
-        """A flat contour's sign is the sign of a zero difference; reporting it invents a reading."""
-        store, _ = seed(
-            tmp_path,
-            stem=GLIDE_DOWN_STEM,
-            amplitude=((2.0, 18.0),),
-            tracks=_glide_tracks(20.0, (2.0, 18.0), 120.0, 120.0),
-        )
-        result = align_voice("glides-high-to-low", store, None, params(), run_dir=tmp_path)
-        assert [finding for finding in result.deviations if finding.name == "sweep_direction_mismatch"] == []
-        assert readings_of(result)["glide_extent_semitones"] == pytest.approx(0.0, abs=0.01)
-
-
-class TestASecondGlideAttemptIsReportedRatherThanDiscarded:
-    """The glide proposes one sweep. Every other attempt is an observation, not a loser."""
-
-    TWO_UP = (((2.0, 8.0), 100.0, 300.0), ((11.0, 19.0), 100.0, 300.0))
-    """Two upward attempts, the later one longer, so the earlier is the repeat."""
-
-    AMPLITUDE = ((2.0, 8.0), (11.0, 19.0))
-    """The carriers the two attempts sit inside."""
-
-    def test_a_second_sweep_is_a_repeat_attempt(self, tmp_path: Path) -> None:
-        """Performing the glide twice is the observation SUSTAINED already reports."""
-        store, _ = seed(
-            tmp_path,
-            stem=GLIDE_UP_STEM,
-            amplitude=self.AMPLITUDE,
-            tracks=_sweep_tracks(20.0, self.TWO_UP),
-        )
-        result = align_voice("glides-low-to-high", store, None, params(), run_dir=tmp_path)
-        repeats = [finding for finding in result.deviations if finding.name == "repeat_attempt"]
-        assert len(repeats) == 1
-        assert repeats[0].start == pytest.approx(2.0, abs=0.05)
-        assert repeats[0].derived_from
-
-    def test_one_sweep_alone_is_no_repeat(self, tmp_path: Path) -> None:
-        """The discriminating half: the same code on a single attempt."""
-        store, _ = seed(tmp_path, stem=GLIDE_UP_STEM, tracks=_glide_tracks(20.0, (2.0, 18.0), 100.0, 300.0))
-        result = align_voice("glides-low-to-high", store, None, params(), run_dir=tmp_path)
-        assert [finding for finding in result.deviations if finding.name == "repeat_attempt"] == []
-
-    def test_the_glide_attempt_count_is_reported_rather_than_only_the_longest(self, tmp_path: Path) -> None:
-        """``attempt_count``, the same counts entry SUSTAINED writes."""
-        store, _ = seed(
-            tmp_path,
-            stem=GLIDE_UP_STEM,
-            amplitude=self.AMPLITUDE,
-            tracks=_sweep_tracks(20.0, self.TWO_UP),
-        )
-        result = align_voice("glides-low-to-high", store, None, params(), run_dir=tmp_path)
-        found = [finding for finding in result.deviations if finding.name == "attempt_count"]
-        assert found and found[0].evidence["found"] == 2
-
-    def test_the_longest_sweep_is_still_the_only_one_proposed(self, tmp_path: Path) -> None:
-        """A repeat is a deviation, not a competing task extent."""
-        store, _ = seed(
-            tmp_path,
-            stem=GLIDE_UP_STEM,
-            amplitude=self.AMPLITUDE,
-            tracks=_sweep_tracks(20.0, self.TWO_UP),
-        )
-        result = align_voice("glides-low-to-high", store, None, params(), run_dir=tmp_path)
-        assert len(result.components) == 1
-        assert result.components[0].start == pytest.approx(11.0, abs=0.05)
-
-    def test_a_repeat_running_against_the_declaration_is_a_direction_mismatch(self, tmp_path: Path) -> None:
-        """The winner runs the declared way; the second attempt does not, and that is reported."""
-        store, _ = seed(
-            tmp_path,
-            stem=GLIDE_UP_STEM,
-            amplitude=self.AMPLITUDE,
-            tracks=_sweep_tracks(20.0, (((2.0, 8.0), 300.0, 100.0), ((11.0, 19.0), 100.0, 300.0))),
-        )
-        result = align_voice("glides-low-to-high", store, None, params(), run_dir=tmp_path)
-        mismatch = [finding for finding in result.deviations if finding.name == "sweep_direction_mismatch"]
-        assert len(mismatch) == 1
-        assert mismatch[0].start == pytest.approx(2.0, abs=0.05)
-        assert mismatch[0].evidence["declared"] == "up"
-        assert mismatch[0].evidence["measured"] == "down"
-
-    def test_two_sweeps_both_running_the_declared_way_mismatch_not_at_all(self, tmp_path: Path) -> None:
-        """The discriminating half: reading every carrier must not invent a mismatch."""
-        store, _ = seed(
-            tmp_path,
-            stem=GLIDE_UP_STEM,
-            amplitude=self.AMPLITUDE,
-            tracks=_sweep_tracks(20.0, self.TWO_UP),
-        )
-        result = align_voice("glides-low-to-high", store, None, params(), run_dir=tmp_path)
-        assert [finding for finding in result.deviations if finding.name == "sweep_direction_mismatch"] == []
-
-
-class TestTheDeviationsAreTheOnesTheDesignNames:
-    """Three types, and a deviation is not evidence of a bad recording."""
-
-    def test_an_attempt_running_to_the_boundary_is_truncated(self, tmp_path: Path) -> None:
-        """A truncated trial is right-censored and must never pool with complete ones."""
-        store, _ = seed(tmp_path, amplitude=((0.0, 20.0),), tracks=_tracks(20.0, [(0.0, 20.0)]))
-        result = align_voice("maximum-phonation-time", store, None, params(), run_dir=tmp_path)
-        found = [finding for finding in result.deviations if finding.name == "truncation"]
-        assert found and found[0].evidence["reading"] == "right_censored"
-
-    def test_an_attempt_inside_the_recording_is_not_truncated(self, tmp_path: Path) -> None:
-        """The discriminating half: the same code on a complete trial."""
-        store, _ = seed(tmp_path)
-        result = align_voice("maximum-phonation-time", store, None, params(), run_dir=tmp_path)
-        assert [finding.name for finding in result.deviations if finding.name == "truncation"] == []
-
-    def test_a_second_attempt_is_a_repeat_attempt(self, tmp_path: Path) -> None:
-        """Taking a maximum silently discards false starts, so each is reported."""
-        store, _ = seed(
-            tmp_path,
-            amplitude=((2.0, 8.0), (11.0, 19.0)),
-            tracks=_tracks(20.0, [(2.0, 8.0), (11.0, 19.0)]),
-        )
-        result = align_voice("maximum-phonation-time", store, None, params(), run_dir=tmp_path)
-        assert len([finding for finding in result.deviations if finding.name == "repeat_attempt"]) == 1
-
-    def test_the_attempt_count_is_reported_rather_than_only_the_longest(self, tmp_path: Path) -> None:
-        """``attempt_count`` is a counts entry."""
-        store, _ = seed(
-            tmp_path,
-            amplitude=((2.0, 8.0), (11.0, 19.0)),
-            tracks=_tracks(20.0, [(2.0, 8.0), (11.0, 19.0)]),
-        )
-        result = align_voice("maximum-phonation-time", store, None, params(), run_dir=tmp_path)
-        found = [finding for finding in result.deviations if finding.name == "attempt_count"]
-        assert found and found[0].evidence["found"] == 2
-
-    def test_the_longest_attempt_is_the_one_proposed(self, tmp_path: Path) -> None:
-        """The others are deviations, not competing task extents."""
-        store, _ = seed(
-            tmp_path,
-            amplitude=((2.0, 8.0), (11.0, 19.0)),
-            tracks=_tracks(20.0, [(2.0, 8.0), (11.0, 19.0)]),
-        )
-        result = align_voice("maximum-phonation-time", store, None, params(), run_dir=tmp_path)
-        assert len(result.components) == 1
-        assert result.components[0].start == pytest.approx(11.0, abs=0.02)
-
-    def test_lexical_content_in_a_no_lexical_task_is_a_deviation(self, tmp_path: Path) -> None:
-        """MPT forbids lexical content; the deviation keys on positively identified words."""
-        store, _ = seed(tmp_path, words=(("hello", 1.0, 1.5),))
-        result = align_voice("maximum-phonation-time", store, None, params(), run_dir=tmp_path)
-        found = [finding for finding in result.deviations if finding.name == "lexical_content"]
-        assert found and found[0].evidence["text"] == "hello"
-
-    def test_the_inhale_is_counted_and_never_proposed(self, tmp_path: Path) -> None:
-        """An inhale is airway evidence; a branch mints only in its own family."""
-        store, _ = seed(tmp_path)
-        result = align_voice("maximum-phonation-time", store, None, params(), run_dir=tmp_path)
-        assert [finding.name for finding in result.deviations if finding.name == "inhale_expected_in_file"]
-        assert {proposal.family for proposal in result.components} == {"voice"}
-
-    def test_the_v2_row_expects_no_inhale(self, tmp_path: Path) -> None:
-        """The discriminating half: v1 places the inhale before the record tap, v2 does not."""
-        store, _ = seed(tmp_path)
-        result = align_voice("maximum-phonation-time-v2", store, None, params(), run_dir=tmp_path)
-        assert [finding.name for finding in result.deviations if finding.name == "inhale_expected_in_file"] == []
 
 
 class TestTheAperiodicCaseNoLongerErrorsTheNode:
@@ -1098,34 +651,6 @@ class TestTheTracksAreFoundByEitherCarrier:
 class TestTheNodeWritesWhatItFound:
     """The store side: spans, findings, the activity's reads and the verdict's own record."""
 
-    def test_the_proposed_span_reaches_the_store_with_its_family_and_role(self, tmp_path: Path) -> None:
-        """``propose_spans`` stamps both; a reader has only the store to go on."""
-        store, _ = seed(tmp_path)
-        voice(store, "plain", config(), None, run_dir=tmp_path)
-        span = voice_spans(store)[0]
-        assert span.attributes["family"] == "voice"
-        assert span.attributes["role"] == TASK_EXTENT
-
-    def test_the_measurements_reach_the_store(self, tmp_path: Path) -> None:
-        """A measure finding becomes its own measurement entity over its extent."""
-        store, _ = seed(tmp_path)
-        voice(store, "plain", config(), None, run_dir=tmp_path)
-        assert measurements(store, "phonation_onset_to_offset_s")
-
-    def test_the_counts_fold_into_one_measurement(self, tmp_path: Path) -> None:
-        """Every count becomes one ``counts`` entry carrying found beside declared."""
-        store, _ = seed(tmp_path)
-        voice(store, "plain", config(), None, run_dir=tmp_path)
-        counts = measurements(store, "counts")
-        assert len(counts) == 1
-        assert "attempt_count" in counts[0].attributes["entries"]
-
-    def test_a_deviation_becomes_an_assertion_beside_the_span(self, tmp_path: Path) -> None:
-        """Never an edit to one: the store is append-only and VOICE proposes only."""
-        store, _ = seed(tmp_path, amplitude=((0.0, 20.0),), tracks=_tracks(20.0, [(0.0, 20.0)]))
-        voice(store, "plain", config(), None, run_dir=tmp_path)
-        assert [entity.attributes["deviation_type"] for entity in assertions(store, "deviate")] == ["truncation"]
-
     def test_the_activity_records_which_mode_ran_and_on_what(self, tmp_path: Path) -> None:
         """A run has to be able to say which arm it took without re-deriving the family."""
         store, _ = seed(tmp_path)
@@ -1158,24 +683,6 @@ class TestTheNodeWritesWhatItFound:
         assert report.attributes["mode"] == "detect"
         assert report.attributes["conformance"] == UNDETERMINED
 
-    def test_a_found_attempt_reads_as_the_kind_being_present(self, tmp_path: Path) -> None:
-        """The branch answers nothing; it reports the readings the SUSTAINED gates then clear."""
-        store, _ = seed(tmp_path)
-        result = voice(store, "plain", config(), None, run_dir=tmp_path)
-        assert result.report.conformance == UNDETERMINED
-        assert result.report.kind == "voice"
-        readings = _node_readings(store)
-        assert readings["carrier_duration_s"] >= GATES["production_min_s"]
-        assert readings["carrier_voiced_fraction"] >= GATES["voiced_fraction_min"]
-
-    def test_a_deviation_is_recorded_rather_than_read_as_a_non_conformance(self, tmp_path: Path) -> None:
-        """A truncated attempt is still an attempt; ``conformance is False`` is reserved for none."""
-        store, _ = seed(tmp_path, amplitude=((0.0, 20.0),), tracks=_tracks(20.0, [(0.0, 20.0)]))
-        result = voice(store, "plain", config(), None, run_dir=tmp_path)
-        assert result.report.conformance == UNDETERMINED
-        assert _node_readings(store)["carrier_duration_s"] >= GATES["production_min_s"]
-        assert "truncation" in result.report.deviations
-
 
 class TestARulesetLabelledSpanIsContestedNotRewritten:
     """Contesting is an assertion beside a span, so propose-only does not touch that path."""
@@ -1204,31 +711,6 @@ class TestARulesetLabelledSpanIsContestedNotRewritten:
         )
         result = detect_voice(store, params(), run_dir=tmp_path)
         assert [finding for finding in result.deviations if finding.kind == "contest"] == []
-
-
-class TestAnUnmeasuredOperatingPointIsRecordedRatherThanRaised:
-    """No number in code: every ``branch.*`` key is read, never a literal — and none is refused.
-
-    The packaged file now ships a reasoned value for every key VOICE reads, so the packaged config
-    alone no longer raises. What is still pinned is that clearing a key by override does not raise
-    either: the qualifier it gated is skipped, the key is named in the report's ``unmeasured``, and
-    the dependent conformance is ``False`` here because an unqualified carrier search finds none.
-    """
-
-    def test_an_unmeasured_operating_point_is_recorded_rather_than_raised(self, tmp_path: Path) -> None:
-        """``production_min_s`` cleared by override: no carrier ever qualifies, and the ask is named."""
-        store, _ = seed(tmp_path)
-        result = voice(store, "plain", config(production_min_s=None), None, run_dir=tmp_path)
-        # UNDETERMINED, not False: an unmeasured qualifier could neither admit nor reject, so
-        # claiming the instruction was not met would rest on a number nobody chose.
-        assert result.report.conformance == UNDETERMINED
-        assert "verdict.gates.by_group.SUSTAINED.production_min_s" in result.report.unmeasured
-
-    def test_one_null_key_does_not_fail_a_body_that_needs_another(self, tmp_path: Path) -> None:
-        """``BranchParams`` reads lazily; the glide arm never reads the sustained arm's keys."""
-        store, _ = seed(tmp_path, stem=GLIDE_UP_STEM, tracks=_glide_tracks(20.0, (2.0, 18.0), 100.0, 300.0))
-        result = align_voice("glides-low-to-high", store, None, params(f0_spread_max_semitones=None), run_dir=tmp_path)
-        assert result.components[0].attributes["direction"] == "up"
 
 
 class TestTheSpreadQualifierJudgesATypicalWindowNotTheWorstOne:
@@ -1315,151 +797,9 @@ class TestADiscardedCarrierIsReportedRatherThanVanishing:
         assert {finding.kind for finding in rejected} == {"measure"}
         assert "carrier_rejected" not in deviation_names(result.deviations)
 
-    def test_the_report_carries_the_rejections_for_a_reader_who_opens_no_findings(self, tmp_path: Path) -> None:
-        """The summary a corpus reader sees must not have to be rebuilt from the derivatives."""
-        store, _ = seed(tmp_path, amplitude=((2.0, 2.2), (5.0, 5.1)), duration_s=10.0)
-        result = voice(store, "plain", config(), None, run_dir=tmp_path)
-        report = find_branch_report(store, "VOICE")
-        assert report is not None
-        assert report.attributes["carriers_rejected_n"] >= 1
-        assert report.attributes["carriers_rejected"][0]["gate"] == "production_min_s"
-        assert result.report.conformance == UNDETERMINED
-
-    def test_the_glide_reports_the_sweep_it_located_rather_than_discarding_it(self, tmp_path: Path) -> None:
-        """``sweep_found: False`` about a sweep the branch found states more than it measured."""
-        store, _ = seed(
-            tmp_path,
-            stem=GLIDE_UP_STEM,
-            amplitude=((2.0, 18.0),),
-            tracks=_zigzag_tracks(20.0, (2.0, 18.0), 100.0, 300.0),
-        )
-        result = align_voice("glides-low-to-high", store, None, params(), run_dir=tmp_path)
-        assert [finding for finding in result.deviations if finding.name == "carrier_rejected"] == []
-        assert [finding for finding in result.deviations if finding.name == "sweep_found"] == []
-        assert result.components and readings_of(result)["sweep_dominant_fraction"] > 0.0
-
 
 class TestAQualityGateDoesNotDecideThatTheProductionNeverHappened:
     """In the align arm the instruction says what was asked for, so a poor attempt is still one."""
-
-    def test_an_unsteady_eight_second_phonation_is_still_a_task_extent(self, tmp_path: Path) -> None:
-        """MPT measures duration. A wobbly 8 s vowel is an 8 s MPT with an unsteady pitch."""
-        store, _ = seed(
-            tmp_path,
-            amplitude=((2.0, 10.15),),
-            tracks=_wobble_tracks(20.0, (2.0, 10.15), 120.0, 6.0),
-        )
-        result = align_voice("maximum-phonation-time", store, None, params(), run_dir=tmp_path)
-        assert len(result.components) == 1
-        assert result.components[0].end - result.components[0].start == pytest.approx(8.15, abs=0.1)
-
-    def test_its_spread_is_reported_for_the_verdict_to_gate(self, tmp_path: Path) -> None:
-        """The branch hands VERDICT the reading rather than deciding on it."""
-        store, _ = seed(
-            tmp_path,
-            amplitude=((2.0, 10.15),),
-            tracks=_wobble_tracks(20.0, (2.0, 10.15), 120.0, 6.0),
-        )
-        result = align_voice("maximum-phonation-time", store, None, params(), run_dir=tmp_path)
-        assert readings_of(result)["carrier_f0_spread_semitones"] > MEASURED["f0_spread_max_semitones"]
-        assert gated_conformance(result, Pattern.SUSTAINED, settings=config()) is True, "the vowel was held"
-        assert gated_flags(result, Pattern.SUSTAINED, settings=config())["f0_spread_max_semitones"] is False
-
-    def test_an_unsteady_production_is_not_recorded_as_a_rejected_carrier(self, tmp_path: Path) -> None:
-        """It was not rejected; it was measured. A reader must not see both."""
-        store, _ = seed(
-            tmp_path,
-            amplitude=((2.0, 10.15),),
-            tracks=_wobble_tracks(20.0, (2.0, 10.15), 120.0, 6.0),
-        )
-        result = align_voice("maximum-phonation-time", store, None, params(), run_dir=tmp_path)
-        assert [finding for finding in result.deviations if finding.name == "carrier_rejected"] == []
-
-    def test_the_reading_reaches_the_store_where_the_verdict_reads_it(self, tmp_path: Path) -> None:
-        """The whole point: the gate had no value to read, so the file passed triage clean."""
-        store, _ = seed(
-            tmp_path,
-            amplitude=((2.0, 10.15),),
-            tracks=_wobble_tracks(20.0, (2.0, 10.15), 120.0, 6.0),
-        )
-        voice(store, "plain", config(), None, run_dir=tmp_path)
-        assert _node_readings(store)["carrier_f0_spread_semitones"] > MEASURED["f0_spread_max_semitones"]
-        assert _node_readings(store)["carrier_duration_s"] == pytest.approx(8.15, abs=0.1)
-
-    def test_a_low_continuity_production_is_still_a_task_extent(self, tmp_path: Path) -> None:
-        """``continuity_min`` is the other SUSTAINED quality reading."""
-        store, _ = seed(tmp_path, continuity=0.1)
-        result = align_voice("maximum-phonation-time", store, None, params(), run_dir=tmp_path)
-        assert len(result.components) == 1
-        assert readings_of(result)["carrier_continuity"] == pytest.approx(0.1, abs=0.01)
-
-    def test_a_wobbly_glide_is_still_a_sweep(self, tmp_path: Path) -> None:
-        """``dominant_segment_min_fraction`` asks how clean the sweep was, not whether there was one."""
-        store, _ = seed(
-            tmp_path,
-            stem=GLIDE_UP_STEM,
-            amplitude=((2.0, 18.0),),
-            tracks=_zigzag_tracks(20.0, (2.0, 18.0), 100.0, 300.0),
-        )
-        result = align_voice("glides-low-to-high", store, None, params(), run_dir=tmp_path)
-        assert len(result.components) == 1
-        assert readings_of(result)["sweep_dominant_fraction"] < MEASURED["dominant_segment_min_fraction"]
-        assert gated_conformance(result, Pattern.GLIDE, settings=config()) is False
-
-    def test_the_glide_span_carries_the_carrier_the_sweep_was_read_off(self, tmp_path: Path) -> None:
-        """The production is the carrier; a reader must not have to infer its length from the sweep."""
-        store, _ = seed(
-            tmp_path,
-            stem=GLIDE_UP_STEM,
-            amplitude=((2.0, 18.0),),
-            tracks=_zigzag_tracks(20.0, (2.0, 18.0), 100.0, 300.0),
-        )
-        result = align_voice("glides-low-to-high", store, None, params(), run_dir=tmp_path)
-        assert result.components[0].attributes["carrier_extent"] == [pytest.approx(2.0), pytest.approx(18.0)]
-
-    def test_a_carrier_shorter_than_the_minimum_is_still_no_production(self, tmp_path: Path) -> None:
-        """The discriminating half: ``production_min_s`` is an existence criterion and still filters."""
-        store, _ = seed(tmp_path, amplitude=((2.0, 2.2),), duration_s=5.0)
-        result = align_voice("maximum-phonation-time", store, None, params(), run_dir=tmp_path)
-        assert result.components == []
-        assert [finding.evidence["value"] for finding in result.deviations if finding.name == "carrier_rejected"] == [
-            "production_min_s"
-        ]
-
-    def test_a_carrier_with_no_voicing_at_all_is_still_no_production(self, tmp_path: Path) -> None:
-        """The other existence criterion: nothing was voiced, so there is nothing to measure."""
-        store, _ = seed(tmp_path, amplitude=((2.0, 18.0),), tracks=_tracks(20.0, []))
-        result = align_voice("maximum-phonation-time", store, None, params(), run_dir=tmp_path)
-        assert result.components == []
-        assert [finding.evidence["value"] for finding in result.deviations if finding.name == "carrier_rejected"] == [
-            "no_voicing"
-        ]
-
-    def test_the_mpt_case_carrier_profile_yields_its_duration(self, tmp_path: Path) -> None:
-        """``sub-652def69``: five carriers, three sub-minimum, one silent, one 8.152 s and unsteady."""
-        store, _ = seed(
-            tmp_path,
-            amplitude=((0.5, 1.301), (2.0, 10.152), (12.0, 12.11), (13.0, 13.142), (14.0, 14.063)),
-            tracks=_wobble_tracks(20.0, (2.0, 10.152), 120.0, 6.0),
-        )
-        result = align_voice("maximum-phonation-time", store, None, params(), run_dir=tmp_path)
-        assert len(result.components) == 1
-        assert readings_of(result)["carrier_duration_s"] == pytest.approx(8.152, abs=0.05)
-        assert gated_conformance(result, Pattern.SUSTAINED, settings=config()) is True, "the task asks for duration"
-        assert gated_flags(result, Pattern.SUSTAINED, settings=config())["f0_spread_max_semitones"] is False
-
-    def test_the_glide_case_carrier_profile_yields_its_sweep(self, tmp_path: Path) -> None:
-        """``sub-7d51b647``: six carriers, four sub-minimum, one silent, one 5.447 s and wobbly."""
-        store, _ = seed(
-            tmp_path,
-            stem=GLIDE_UP_STEM,
-            amplitude=((0.2, 0.251), (1.0, 2.134), (3.0, 8.447), (9.0, 9.349), (10.0, 10.115), (11.0, 11.169)),
-            tracks=_zigzag_tracks(20.0, (3.0, 8.447), 100.0, 300.0),
-        )
-        result = align_voice("glides-low-to-high", store, None, params(), run_dir=tmp_path)
-        assert len(result.components) == 1
-        assert readings_of(result)["carrier_duration_s"] == pytest.approx(5.447, abs=0.05)
-        assert gated_conformance(result, Pattern.GLIDE, settings=config()) is False
 
     def test_the_detect_arm_still_applies_the_quality_qualifier(self, tmp_path: Path) -> None:
         """Nothing declared this recording to hold a held vowel, so steadiness is what separates one."""
@@ -1494,3 +834,77 @@ class TestConformanceIsNeverFalse:
         store, _ = seed(tmp_path, amplitude=())
         result = voice(store, "plain", config(), None, run_dir=tmp_path)
         assert result.report.conformance == UNDETERMINED
+
+
+def _held(pieces: tuple[tuple[float, float, float], ...], total_s: float) -> np.ndarray:
+    """Held harmonic tones over room noise, as the ``plain`` stream.
+
+    Args:
+        pieces: ``(start, end, f0_hz)`` per tone.
+        total_s: The stream's duration.
+
+    Returns:
+        The samples.
+    """
+    rng = np.random.default_rng(0)
+    x = 1e-3 * rng.standard_normal(int(total_s * RATE))
+    for start, end, hz in pieces:
+        a, b = int(start * RATE), int(end * RATE)
+        phase = 2 * np.pi * hz * np.arange(b - a) / RATE
+        x[a:b] += 0.2 * np.sum([np.sin(k * phase) / k for k in range(1, 8)], axis=0)
+    return x.astype(np.float32)
+
+
+class TestTheAlignArmReadsThePhonationAttempt:
+    """The declared voice task's extent is the phonation attempt on the plain stream."""
+
+    def test_a_held_vowel_is_the_task_extent(self, tmp_path: Path) -> None:
+        """The extent runs from the vowel's onset to its offset, whatever the tracks say."""
+        store, _ = seed(
+            tmp_path, duration_s=8.0, amplitude=(), write_tracks=False, plain=_held(((1.0, 6.0, 140.0),), 8.0)
+        )
+        voice(store, "plain", config(), run_dir=tmp_path)
+        [span] = [span for span in voice_spans(store) if span.attributes.get("role") == TASK_EXTENT]
+        assert span.extent is not None
+        assert span.extent[0] == pytest.approx(1.0, abs=0.1)
+        assert span.extent[1] == pytest.approx(6.0, abs=0.1)
+
+    def test_the_reading_reaches_the_store(self, tmp_path: Path) -> None:
+        """VOICE writes the reading VERDICT decides on."""
+        store, _ = seed(
+            tmp_path, duration_s=8.0, amplitude=(), write_tracks=False, plain=_held(((1.0, 6.0, 140.0),), 8.0)
+        )
+        voice(store, "plain", config(), run_dir=tmp_path)
+        reading = find_measurement(store, voice_module.PHONATION_READING)
+        assert reading is not None
+        assert reading.attributes["found"] is True
+        assert reading.attributes["absent"] == []
+
+    def test_silence_proposes_no_extent(self, tmp_path: Path) -> None:
+        """Nothing over the floor is no attempt, and no span."""
+        store, _ = seed(tmp_path, duration_s=5.0, amplitude=(), write_tracks=False, plain=_held((), 5.0))
+        voice(store, "plain", config(), run_dir=tmp_path)
+        assert not [span for span in voice_spans(store) if span.attributes.get("role") == TASK_EXTENT]
+        reading = find_measurement(store, voice_module.PHONATION_READING)
+        assert reading is not None and reading.attributes["found"] is False
+
+    def test_an_absent_plain_stream_is_an_absent_input(self, tmp_path: Path) -> None:
+        """Without the plain stream the reading names it as absent."""
+        store, _ = seed(tmp_path, duration_s=8.0)
+        voice(store, "plain", config(), run_dir=tmp_path)
+        reading = find_measurement(store, voice_module.PHONATION_READING)
+        assert reading is not None and reading.attributes["absent"] == ["plain"]
+
+    def test_a_glide_reports_its_travel(self, tmp_path: Path) -> None:
+        """A held vowel in a rising-glide task travels nowhere and reads as held."""
+        store, _ = seed(
+            tmp_path,
+            stem=GLIDE_UP_STEM,
+            duration_s=6.0,
+            amplitude=(),
+            write_tracks=False,
+            plain=_held(((1.0, 5.0, 190.0),), 6.0),
+        )
+        voice(store, "plain", config(), run_dir=tmp_path)
+        reading = find_measurement(store, voice_module.PHONATION_READING)
+        assert reading is not None and reading.attributes["shape"] == "held"

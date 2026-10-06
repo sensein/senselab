@@ -32,7 +32,7 @@ from senselab.audio.workflows.triage.cohort import CONDITION_KINDS
 from senselab.audio.workflows.triage.vocabulary import UNPLACED_OPEN, UNPLACED_UNREAD, standing_task_extents
 from senselab.utils import fastio
 
-SCHEMA_VERSION = 22
+SCHEMA_VERSION = 23
 """Bumped whenever a column is added, removed or retyped, a binary layout changes, or a categorical
 column's controlled vocabulary changes."""
 
@@ -81,6 +81,7 @@ SCALAR_MEASUREMENTS = (
     "extent_speaker_count",
     "glide_extent_semitones",
     "interruptions",
+    "longest_hold_s",
     "pause_fraction_of_response",
     "phonation_onset_to_offset_s",
     "source_content_coverage",
@@ -114,9 +115,7 @@ GATE_NAMES = (
     "voiced_fraction_min",
     "f0_spread_max_semitones",
     "continuity_min",
-    "dominant_segment_min_fraction",
     "glide_extent_min_semitones",
-    "declared_duration_min_fraction",
     "expected_tokens_matched_min",
     "content_omission_fraction_max",
     "response_min_s",

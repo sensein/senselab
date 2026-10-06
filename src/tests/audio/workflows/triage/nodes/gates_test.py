@@ -61,7 +61,6 @@ from senselab.audio.workflows.triage.recording_vectors import SCALAR_MEASUREMENT
 
 MOVED = (
     "continuity_min",
-    "dominant_segment_min_fraction",
     "echo_overlap_max",
     "f0_spread_max_semitones",
     "gap_off_task_min_s",
@@ -399,11 +398,8 @@ class TestAGateResolvesFamilyThenGroupThenDefault:
     def test_the_family_layer_names_only_the_passages_and_stroop(self, config: TriageConfig) -> None:
         """Owner, 2026-09-29: a passage and a timed list tolerate a fraction unread; a sentence does not."""
         layer = config.get(f"{GATE_SECTION}.{FAMILY_LAYER}")
-        assert set(layer) == {"rainbow-passage", "caterpillar-passage", "word-color-stroop", "prolonged-vowel"}
-        assert {name for entry in layer.values() for name in entry} == {
-            "content_omission_fraction_max",
-            "declared_duration_min_fraction",
-        }
+        assert set(layer) == {"rainbow-passage", "caterpillar-passage", "word-color-stroop"}
+        assert {name for entry in layer.values() for name in entry} == {"content_omission_fraction_max"}
 
     def test_the_default_layer_ships_empty_because_nothing_is_universal(self, config: TriageConfig) -> None:
         """``gap_off_task_min_s`` reaches six groups of twelve; no gate reaches all of them."""

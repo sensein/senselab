@@ -381,8 +381,7 @@ verdict:
       GLIDE:                             # a pitch sweep, whose purpose is that pitch moves
         production_min_s: 0.5            # shortest carrier a production may be found in
         voiced_fraction_min: 0.5         # flag: fraction of voiced frames the carrier should reach
-        dominant_segment_min_fraction: 0.5  # fraction of the voiced extent one direction must hold
-        glide_extent_min_semitones: 6.0  # UNFITTED. pitch the dominant run must travel to be a glide
+        glide_extent_min_semitones: 6.0  # UNFITTED. pitch the glide must travel in its declared direction
       ORDERED_TOKENS:                    # a prescribed token sequence
         expected_tokens_matched_min: 1   # prescribed tokens the recording must realise
         content_omission_fraction_max: 0.0  # a sentence: any content word unread fails; function-word drops do not
@@ -442,10 +441,6 @@ verdict:
         content_omission_fraction_max: 0.1
       word-color-stroop:
         content_omission_fraction_max: 0.2
-      # UNFITTED: the fraction of the declared hold the carrier must reach ("hold until the timer
-      # runs out"), proposed from the r8 distribution; § C of the spec.
-      prolonged-vowel:
-        declared_duration_min_fraction: 0.5
 
 # The label consolidation. TAXONOMY runs no models: it consolidates PREPROCESS's stored scores.
 taxonomy:
