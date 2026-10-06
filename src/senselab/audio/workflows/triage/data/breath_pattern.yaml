@@ -61,14 +61,11 @@ modulation:
   min_duration_s: 4.0          # shortest recording read
   peaks_per_breath: 2.0        # an inhale and an exhale each make a peak
   breathing_min_db: 7.0        # at or above, with an active span: cycles count
-# Vetoes on the measure: a breath the measure finds stands unless the recording shows positive evidence
-# it is not breathing. Fitted on the owner's 44 listened breath recordings (2026-10-05); the derivation
-# is in specs/20261005-breathing-pattern/design.md ("Breath vetoes").
+# Vetoes on the measure: a breath the measure finds stands unless the task extent holds speech or too
+# little active sound. Fitted on the owner's 56 listened breath recordings (2026-10-06); the derivation,
+# with the owner's words, is in specs/20261005-breathing-pattern/design.md ("Breath vetoes over the task
+# extent"). Noise and silence no longer veto; the classifier scores are recorded for context only.
 veto:
-  speech_words_min: 5          # consensus lexical words at or above: speech
-  noise_labels: [Vehicle, Car, Engine, Mechanical fan, White noise]
-  noise_mean_min: 0.4          # mean over YAMNet windows of the highest noise label, at or above: noise
-  active_fraction_min: 0.4     # active span over duration below: too little active sound
-  silence_label: Silence
-  silence_mean_min: 0.7        # YAMNet Silence mean at or above, with ...
-  silence_ratio_max_db: 3.0    # ... breath-vs-syllabic dB below: silence-dominant
+  speech_words_min: 5          # speech words inside the task extent at or above: speech
+  active_fraction_min: 0.36    # active span over the task extent (the file where the extent is under min_duration_s) below: too little
+  noise_labels: [Vehicle, Car, Engine, Mechanical fan, White noise]   # recorded as context

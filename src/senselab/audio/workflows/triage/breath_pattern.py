@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import functools
 import json
+import unicodedata
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Mapping
@@ -23,7 +24,8 @@ import yaml
 from scipy.signal import butter, find_peaks, sosfiltfilt
 
 from senselab.audio.tasks.classification.label_scores import label_scores
-from senselab.audio.workflows.triage.nodes.common import find_measurement, lexical_words
+from senselab.audio.workflows.triage.nodes.common import find_measurement, lexical_words, live_entities, word_hull
+from senselab.audio.workflows.triage.residue import is_non_lexical
 from senselab.utils.prov_store import ProvStore
 
 BREATH_PATTERN_PATH = Path(__file__).parent / "data" / "breath_pattern.yaml"
@@ -32,6 +34,9 @@ SPECTROGRAM = "spectrogram_narrowband"
 PHONATION_TRACKS = "phonation_tracks"
 YAMNET_SCORES = "yamnet_scores"
 HEAR_SCORES = "hear_scores"
+TASK_EXTENT_ROLE = "task_extent"
+LATIN_LANGUAGES = ("en", "es", "fr", "pt", "de", "it")
+"""Declared languages written in Latin script, whose speech words must carry a Latin letter."""
 
 NO_BREATHING = "no_breathing"
 SINGLE_BREATH = "single_breath"
@@ -210,26 +215,17 @@ class VetoParameters:
     """The ``veto`` section of ``data/breath_pattern.yaml``.
 
     Attributes:
-        speech_words_min: Consensus lexical words at or above which the recording is speech.
-        noise_labels: The YAMNet labels read as background noise.
-        noise_mean_min: The mean, over YAMNet windows, of the highest noise label at or above which
-            the recording is noise.
-        active_fraction_min: The modulation reading's active span over the duration below which there
-            is too little active sound.
-        silence_label: The YAMNet label read as silence.
-        silence_mean_min: The silence label's mean at or above which, with ``silence_ratio_max_db``,
-            the recording is silence-dominant.
-        silence_ratio_max_db: The breath-vs-syllabic dB below which a silence-dominant recording is
-            vetoed.
+        speech_words_min: Lexical words inside the task extent at or above which the recording is
+            speech (:func:`speech_words`).
+        active_fraction_min: The active span over the span it was read on, below which there is too
+            little active sound.
+        noise_labels: The YAMNet labels whose highest score is recorded as background noise, for
+            context only.
     """
 
     speech_words_min: int
-    noise_labels: tuple[str, ...]
-    noise_mean_min: float
     active_fraction_min: float
-    silence_label: str
-    silence_mean_min: float
-    silence_ratio_max_db: float
+    noise_labels: tuple[str, ...]
 
 
 @functools.cache
@@ -242,19 +238,17 @@ def veto_parameters() -> VetoParameters:
     held = (yaml.safe_load(BREATH_PATTERN_PATH.read_text()) or {})["veto"]
     return VetoParameters(
         speech_words_min=int(held["speech_words_min"]),
-        noise_labels=tuple(str(label) for label in held["noise_labels"]),
-        noise_mean_min=float(held["noise_mean_min"]),
         active_fraction_min=float(held["active_fraction_min"]),
-        silence_label=str(held["silence_label"]),
-        silence_mean_min=float(held["silence_mean_min"]),
-        silence_ratio_max_db=float(held["silence_ratio_max_db"]),
+        noise_labels=tuple(str(label) for label in held["noise_labels"]),
     )
 
 
 VETO_SPEECH = "speech"
-VETO_NOISE = "noise"
 VETO_LITTLE_ACTIVITY = "little_activity"
-VETO_SILENCE = "silence"
+OVER_TASK_EXTENT = "task_extent"
+OVER_FILE = "file"
+"""What the active fraction was read over: the task extent, or the whole file where the extent is too
+short for the modulation reading or there is none."""
 
 
 @dataclass(frozen=True)
@@ -262,23 +256,27 @@ class BreathVeto:
     """What says a breath the measure found is not breathing, and the readings it was decided on.
 
     Attributes:
-        lexical_words_n: The consensus lexical (non-bracketed) word count.
-        speech_mean: The mean YAMNet Speech score over the file's windows.
-        silence_mean: The mean YAMNet score of the silence label.
-        noise_mean: The mean, over windows, of the highest noise-label score.
-        active_fraction: The modulation reading's active span over the duration, or None where the
-            modulation reading was not read.
-        breathing_mean: The mean YAMNet Breathing score, for context only.
-        hear_breathe_max: The highest HeAR Breathe window, for context only; None where absent.
+        lexical_words_n: Lexical words inside the task extent (:func:`speech_words`).
+        active_fraction: The modulation reading's active span over the span it was read on, or None
+            where no modulation reading could be read.
+        active_over: :data:`OVER_TASK_EXTENT` or :data:`OVER_FILE`, or None with no active fraction.
+        task_extent_s: The task extent, ``(start, end)``, or None where the store holds none.
+        speech_mean: The mean YAMNet Speech score over the task extent's windows, for context only.
+        silence_mean: The mean YAMNet Silence score there, for context only.
+        noise_mean: The mean of the highest noise-label score there, for context only.
+        breathing_mean: The mean YAMNet Breathing score there, for context only.
+        hear_breathe_max: The highest HeAR Breathe window there, for context only.
         vetoed_by: The first veto that fired, one of ``VETO_*``, or None.
     """
 
     lexical_words_n: int
-    speech_mean: float
-    silence_mean: float
-    noise_mean: float
     active_fraction: float | None
-    breathing_mean: float
+    active_over: str | None
+    task_extent_s: tuple[float, float] | None
+    speech_mean: float | None
+    silence_mean: float | None
+    noise_mean: float | None
+    breathing_mean: float | None
     hear_breathe_max: float | None
     vetoed_by: str | None
 
@@ -290,10 +288,12 @@ class BreathVeto:
         """
         return {
             "lexical_words_n": self.lexical_words_n,
+            "active_fraction": self.active_fraction,
+            "active_over": self.active_over,
+            "task_extent_s": list(self.task_extent_s) if self.task_extent_s is not None else None,
             "speech_mean": self.speech_mean,
             "silence_mean": self.silence_mean,
             "noise_mean": self.noise_mean,
-            "active_fraction": self.active_fraction,
             "breathing_mean": self.breathing_mean,
             "hear_breathe_max": self.hear_breathe_max,
             "vetoed_by": self.vetoed_by,
@@ -522,73 +522,121 @@ def _sidecar(store: ProvStore, run_dir: Path, name: str) -> tuple[Mapping[str, A
     return (measurement.attributes, path) if path.is_file() else None
 
 
-def _window_scores(store: ProvStore, run_dir: Path, name: str) -> list[dict[str, float]] | None:
+def _window_scores(
+    store: ProvStore, run_dir: Path, name: str, extent: tuple[float, float] | None = None
+) -> list[dict[str, float]] | None:
     held = _sidecar(store, run_dir, name)
     if held is None:
         return None
     return [
         {key: float(score) for pair in label_scores(window) for key, score in pair.items()}
         for window in json.loads(held[1].read_text())
+        if extent is None or (float(window.get("end", 0.0)) > extent[0] and float(window.get("start", 0.0)) < extent[1])
     ]
 
 
-def _mean(rows: list[dict[str, float]], label: str) -> float:
-    return round(float(np.mean([row.get(label, 0.0) for row in rows])), 4) if rows else 0.0
+def _mean(rows: list[dict[str, float]] | None, label: str) -> float | None:
+    return round(float(np.mean([row.get(label, 0.0) for row in rows])), 4) if rows else None
+
+
+def task_extent_bounds(store: ProvStore) -> tuple[float, float] | None:
+    """The hull of the store's live task-extent spans.
+
+    Args:
+        store: The provenance store.
+
+    Returns:
+        ``(start, end)`` in seconds, or None where no live span carries the task-extent role.
+    """
+    spans = [
+        span.extent
+        for span in live_entities(store, "span")
+        if span.attributes.get("role") == TASK_EXTENT_ROLE and span.extent is not None
+    ]
+    if not spans:
+        return None
+    return min(float(span[0]) for span in spans), max(float(span[1]) for span in spans)
+
+
+def _in_script(text: str, language: str | None) -> bool:
+    if language is None or not any(language.lower().startswith(code) for code in LATIN_LANGUAGES):
+        return any(ch.isalpha() for ch in text)
+    return any(ch.isalpha() and "LATIN" in unicodedata.name(ch, "") for ch in text)
+
+
+def speech_words(store: ProvStore, extent: tuple[float, float] | None, language: str | None) -> int:
+    """The consensus words that are speech, inside the task extent.
+
+    Args:
+        store: The provenance store.
+        extent: The task extent; None counts the whole file.
+        language: The recording's declared language, or None.
+
+    Returns:
+        The words that are not bracketed, not a vocalisation or interjection
+        (:func:`~senselab.audio.workflows.triage.residue.is_non_lexical`), written in the declared
+        language's script, and timed inside the extent.
+    """
+    count = 0
+    for word in lexical_words(store):
+        text = str(word.attributes.get("text") or "")
+        if is_non_lexical(text) or not _in_script(text, language):
+            continue
+        start, end = word_hull(word)
+        if extent is None or (end > extent[0] and start < extent[1]):
+            count += 1
+    return count
 
 
 def breath_veto_of(
     store: ProvStore,
     run_dir: Path,
     *,
-    modulation: ModulationReading | None,
-    duration_s: float,
+    active_fraction: float | None,
+    active_over: str | None,
+    extent: tuple[float, float] | None,
+    language: str | None = None,
     parameters: VetoParameters | None = None,
-) -> BreathVeto | tuple[str, ...]:
+) -> BreathVeto:
     """Whether the recording shows positive evidence that what the measure found is not breathing.
 
     Args:
         store: The provenance store, read for the consensus words and the ``yamnet_scores`` and
             ``hear_scores`` measurements.
         run_dir: The run directory their sidecar paths are relative to.
-        modulation: The modulation reading, or None where the recording was too short for one.
-        duration_s: The recording's duration.
+        active_fraction: The active span over the span it was read on, or None where none was read.
+        active_over: What ``active_fraction`` was read over, :data:`OVER_TASK_EXTENT` or
+            :data:`OVER_FILE`.
+        extent: The task extent, or None.
+        language: The recording's declared language, or None.
         parameters: The veto parameters; ``data/breath_pattern.yaml`` when None.
 
     Returns:
-        The veto reading; ``("yamnet_scores",)`` where YAMNet's windows are absent.
+        The veto reading. Speech words inside the extent, then too little activity, are the vetoes;
+        the classifier scores over the extent are recorded for context and decide nothing.
     """
     p = parameters or veto_parameters()
-    yamnet = _window_scores(store, run_dir, YAMNET_SCORES)
-    if yamnet is None:
-        return (YAMNET_SCORES,)
-    hear = _window_scores(store, run_dir, HEAR_SCORES)
-    words = len(lexical_words(store))
-    noise = (
-        round(float(np.mean([max(row.get(label, 0.0) for label in p.noise_labels) for row in yamnet])), 4)
-        if yamnet
-        else 0.0
-    )
-    silence = _mean(yamnet, p.silence_label)
-    fraction = round(modulation.active_span_s / duration_s, 3) if modulation is not None and duration_s > 0 else None
+    yamnet = _window_scores(store, run_dir, YAMNET_SCORES, extent)
+    hear = _window_scores(store, run_dir, HEAR_SCORES, extent)
+    words = speech_words(store, extent, language)
     vetoed_by: str | None = None
     if words >= p.speech_words_min:
         vetoed_by = VETO_SPEECH
-    elif noise >= p.noise_mean_min:
-        vetoed_by = VETO_NOISE
-    elif fraction is not None and fraction < p.active_fraction_min:
+    elif active_fraction is not None and active_fraction < p.active_fraction_min:
         vetoed_by = VETO_LITTLE_ACTIVITY
-    elif (
-        modulation is not None
-        and silence >= p.silence_mean_min
-        and modulation.breath_vs_syllabic_db < p.silence_ratio_max_db
-    ):
-        vetoed_by = VETO_SILENCE
+    noise = (
+        round(float(np.mean([max(row.get(label, 0.0) for label in p.noise_labels) for row in yamnet])), 4)
+        if yamnet
+        else None
+    )
     return BreathVeto(
         lexical_words_n=words,
+        active_fraction=active_fraction,
+        active_over=active_over if active_fraction is not None else None,
+        task_extent_s=extent,
         speech_mean=_mean(yamnet, "Speech"),
-        silence_mean=silence,
+        silence_mean=_mean(yamnet, "Silence"),
         noise_mean=noise,
-        active_fraction=fraction,
         breathing_mean=_mean(yamnet, "Breathing"),
         hear_breathe_max=round(max(row.get("Breathe", 0.0) for row in hear), 4) if hear else None,
         vetoed_by=vetoed_by,
@@ -602,21 +650,26 @@ def breath_pattern_of(
     sampling_hz: float,
     parameters: BreathPatternParameters | None = None,
     modulation: ModulationParameters | None = None,
+    language: str | None = None,
 ) -> BreathPattern | tuple[str, ...]:
     """The recording's breathing pattern, or the stored inputs it could not be read without.
 
+    The pattern is read over the whole file; the active fraction the veto reads is taken over the task
+    extent where the extent is long enough for a modulation reading, and over the file otherwise.
+
     Args:
         store: The provenance store, read for the ``spectrogram_narrowband`` and
-            ``phonation_tracks`` measurements.
+            ``phonation_tracks`` measurements and the task-extent spans.
         run_dir: The run directory their sidecar paths are relative to.
         sampling_hz: The conditioned stream's sampling rate, which with the spectrogram's own
             ``n_fft`` and ``hop_length`` fixes its bin width and hop.
         parameters: The measure's parameters; ``data/breath_pattern.yaml`` when None.
         modulation: The modulation reading's parameters; ``data/breath_pattern.yaml`` when None.
+        language: The recording's declared language, which fixes the script speech words are read in.
 
     Returns:
         The pattern with its veto reading (:func:`breath_veto_of`); or the names of the absent inputs,
-        where either derivative or its sidecar is missing, or YAMNet's windows.
+        where either derivative or its sidecar is missing.
     """
     spectrogram = _sidecar(store, run_dir, SPECTROGRAM)
     tracks = _sidecar(store, run_dir, PHONATION_TRACKS)
@@ -640,15 +693,22 @@ def breath_pattern_of(
     if len(track_times):
         frame_voiced = (np.nan_to_num(f0) > 0) & (np.nan_to_num(strength) >= p.voicing_strength_min)
         voiced = frame_voiced[np.clip(np.searchsorted(track_times, times), 0, len(track_times) - 1)]
-    pattern = measure_breath_pattern(
-        power,
-        hop_s=hop_s,
-        bin_hz=sampling_hz / n_fft,
-        voiced=voiced,
-        parameters=p,
-        modulation=modulation or modulation_parameters(),
+    m = modulation or modulation_parameters()
+    bin_hz = sampling_hz / n_fft
+    pattern = measure_breath_pattern(power, hop_s=hop_s, bin_hz=bin_hz, voiced=voiced, parameters=p, modulation=m)
+    duration_s = power.shape[1] * hop_s
+    extent = task_extent_bounds(store)
+    active_fraction: float | None = None
+    active_over: str | None = None
+    if extent is not None:
+        first, last = int(np.floor(extent[0] / hop_s)), int(np.ceil(extent[1] / hop_s))
+        inside = measure_modulation(power[:, first:last], hop_s=hop_s, bin_hz=bin_hz, smooth_s=p.smooth_s, parameters=m)
+        span = (min(last, power.shape[1]) - max(first, 0)) * hop_s
+        if inside is not None and span > 0:
+            active_fraction, active_over = round(inside.active_span_s / span, 3), OVER_TASK_EXTENT
+    if active_fraction is None and pattern.modulation is not None and duration_s > 0:
+        active_fraction, active_over = round(pattern.modulation.active_span_s / duration_s, 3), OVER_FILE
+    veto = breath_veto_of(
+        store, run_dir, active_fraction=active_fraction, active_over=active_over, extent=extent, language=language
     )
-    veto = breath_veto_of(store, run_dir, modulation=pattern.modulation, duration_s=power.shape[1] * hop_s)
-    if not isinstance(veto, BreathVeto):
-        return veto
     return replace(pattern, veto=veto)
