@@ -5,7 +5,7 @@
 # HeAR-scored event detector. Sustained families (SOUND_COVERAGE in branches.EXPECTATIONS) need
 # `alternating_breaths`; counted families (a required count) need at least one breath event, and
 # fewer breaths than the instruction asked (the larger of events / 2 and the breath train's phases / 2,
-# rounded half up) flag task_mismatch. Either input absent reruns.
+# rounded half up) are a task_mismatch annotation, which moves no triage state. Either input absent reruns.
 #
 # derivation: owner, 2026-10-05. The owner listened to 23 breath recordings with gain-lifted copies
 # (~/Downloads/contrast_check_20261005/, ~/Downloads/breath_absent_check_20261005/,

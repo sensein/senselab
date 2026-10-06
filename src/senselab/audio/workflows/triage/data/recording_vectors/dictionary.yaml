@@ -128,8 +128,7 @@ columns:
     description: >-
       The stable key of every ground behind the triage state -- the discard ground and every flag,
       sorted and deduplicated. A key is one of vocabulary.py `GROUND_KEYS` (e.g.
-      `person_name_review`, `taxonomy_no_classifier`, `acoustically_empty`, `task_mismatch` -- an
-      airway task's own events detected but fewer than its instruction asked) or `<prefix>:<name>`
+      `person_name_review`, `taxonomy_no_classifier`, `acoustically_empty`) or `<prefix>:<name>`
       for a prefix in `GROUND_KEY_PREFIXES` (`gate:<gate>`, `conformance:<branch>`,
       `branch_silent:<branch>`, `hint_mismatch:<branch>`, `node:<node>:<outcome>` …). Keys in
       `OPERATIONAL_GROUND_KEYS` or under `branch_silent` / `unmeasured_operating_point` are the
@@ -139,6 +138,17 @@ columns:
     null_means: >-
       The fold was written before the ground keys existed; a re-fold fills it. An empty list is a
       pass.
+
+  annotation_keys:
+    units: none
+    description: >-
+      The stable key of every annotation on the recording, sorted and deduplicated: a reading kept
+      for filtering that moves no triage state. `task_mismatch` here is an airway task (breath or
+      cough) whose detected count fell short of its instruction; the recording passes on it alone.
+      Kept apart from `ground_keys`, which holds only what decides the triage state.
+    computation: The fold's `annotation_keys` attribute (`FileVerdict.annotation_keys`).
+    source: [recording_vectors.py:extract, vocabulary.py:FileVerdict.record]
+    null_means: The fold was written before annotations existed; a re-fold fills it. An empty list is none.
 
   route_state:
     units: none

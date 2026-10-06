@@ -1105,6 +1105,9 @@ class FileVerdict:
             ``"no_breath_captured"``, ``"declared_task_absent"`` or None.
         ground_keys: The stable key of every ground behind the triage state -- the discard ground and
             every flag, sorted and deduplicated. Empty on a pass.
+        annotation_keys: The stable key of every annotation, sorted and deduplicated: a reading recorded
+            on the recording that moves no triage state (an airway task's ``task_mismatch``).
+        annotations: Each annotation, with its node, kind, reason and key.
         findings: What each branch found, as a :class:`KindState` value, read off the spans it
             proposed in its own family. ``uncertain`` where it left no report at all.
         conformance: Each reporting node's conformance, keyed by node — True, False or
@@ -1147,6 +1150,8 @@ class FileVerdict:
     discard_ground: str | None = None
     release_ground: str | None = None
     ground_keys: list[str] = field(default_factory=list)
+    annotation_keys: list[str] = field(default_factory=list)
+    annotations: list[NodeVerdict] = field(default_factory=list)
     findings: dict[str, str] = field(default_factory=dict)
     conformance: dict[str, Conformance] = field(default_factory=dict)
     conformance_of: dict[str, str] = field(default_factory=dict)
@@ -1185,6 +1190,8 @@ class FileVerdict:
             "release_ground": self.release_ground,
             "release_ground_key": release_ground_key(self.release_ground),
             "ground_keys": list(self.ground_keys),
+            "annotation_keys": list(self.annotation_keys),
+            "annotations": [{"node": a.node, "kind": a.kind, "why": a.why, "key": a.key} for a in self.annotations],
             "declared_family": self.declared_family,
             "findings": dict(self.findings),
             "conformance": dict(self.conformance),
@@ -1834,6 +1841,11 @@ def fold_file_verdict(
     def flag(node: str, why: str, key: str, kind: str | None = None) -> None:
         reasons.append(NodeVerdict(node, Outcome.FLAG, kind, why, key))
 
+    annotations: list[NodeVerdict] = []
+
+    def annotate(node: str, why: str, key: str, kind: str | None = None) -> None:
+        annotations.append(NodeVerdict(node, Outcome.PASS, kind, why, key))
+
     if ran.get(_PREPROCESS) is RunState.ERRORED:
         flag(
             _PREPROCESS,
@@ -1980,7 +1992,7 @@ def fold_file_verdict(
             )
             named = f" on {declared_family}" if report.conformance_of == TASK and declared_family else ""
             if mismatch is not None:
-                flag(name, f"{TASK_MISMATCH}: {mismatch}", KEY_TASK_MISMATCH, report.kind)
+                annotate(name, f"{TASK_MISMATCH}: {mismatch}", KEY_TASK_MISMATCH, report.kind)
             else:
                 flag(name, f"{name} {why}{named}", f"{prefix}:{name}", report.kind)
         if report.conformance == UNDETERMINED and rules.undetermined_flags:
@@ -1996,7 +2008,7 @@ def fold_file_verdict(
             )
     shortfall = breath_shortfall(task_evidence)
     if shortfall is not None:
-        flag(
+        annotate(
             _AIRWAY,
             f"{TASK_MISMATCH}: {shortfall}",
             KEY_TASK_MISMATCH,
@@ -2142,6 +2154,8 @@ def fold_file_verdict(
         discard_ground=ground,
         release_ground=release_ground,
         ground_keys=sorted({*([ground] if ground else []), *(ground_key(reason) for reason in flags)}),
+        annotation_keys=sorted({str(annotation.key) for annotation in annotations}),
+        annotations=annotations,
         findings=findings,
         conformance={name: report.conformance for name, report in reports.items()},
         conformance_of={name: report.conformance_of for name, report in reports.items()},

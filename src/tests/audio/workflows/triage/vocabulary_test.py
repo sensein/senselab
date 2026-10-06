@@ -2439,8 +2439,8 @@ class TestABreathTaskIsDecidedOnDetectedBreaths:
         assert folded.triage is Triage.RERUN
         assert folded.discard_ground is None
 
-    def test_one_long_breath_for_three_quick_ones_flags_a_task_mismatch(self) -> None:
-        """A breath was detected, but one where three were instructed: flagged, never discarded."""
+    def test_one_long_breath_for_three_quick_ones_annotates_a_task_mismatch(self) -> None:
+        """A breath was detected, but one where three were instructed: annotated, and it passes."""
         folded = self._fold(
             family="respiration-and-cough-threequickbreaths",
             conformance=False,
@@ -2459,12 +2459,12 @@ class TestABreathTaskIsDecidedOnDetectedBreaths:
                 ],
             },
         )
-        assert folded.triage is Triage.FLAG
+        assert folded.triage is Triage.PASS
         assert folded.discard_ground is None
-        assert KEY_TASK_MISMATCH in folded.ground_keys
-        assert "conformance:AIRWAY" not in folded.ground_keys
-        [reason] = [reason for reason in folded.reasons if reason.key == KEY_TASK_MISMATCH]
-        assert "detected 1 breath events where 3 were instructed" in reason.why
+        assert folded.ground_keys == [] and folded.annotation_keys == [KEY_TASK_MISMATCH]
+        [annotation] = folded.annotations
+        assert "detected 1 breath events where 3 were instructed" in annotation.why
+        assert folded.record()["annotation_keys"] == [KEY_TASK_MISMATCH]
 
     def test_a_breath_token_alone_supports_nothing(self) -> None:
         """[breath] on a recording with no detected breath does not stand in for one."""
@@ -2545,16 +2545,17 @@ class TestABreathTaskIsDecidedOnTheBreathingPattern:
         folded = self._fold(mode=BREATH_COUNTED, pattern="no_breathing", events=0, instructed=5, conformance=False)
         assert folded.discard_ground == NO_BREATH_CAPTURED
 
-    def test_too_few_breaths_flag_a_task_mismatch(self) -> None:
-        """7c169ccc: one long breath where three were asked flags task_mismatch, never discards."""
+    def test_too_few_breaths_annotate_a_task_mismatch(self) -> None:
+        """7c169ccc: one long breath where three were asked is a task_mismatch annotation, and passes."""
         folded = self._fold(mode=BREATH_COUNTED, pattern="single_breath", events=1, instructed=3, conformance=False)
-        assert folded.triage is Triage.FLAG
+        assert folded.triage is Triage.PASS
         assert folded.discard_ground is None
-        assert KEY_TASK_MISMATCH in folded.ground_keys
-        assert "conformance:AIRWAY" not in folded.ground_keys
-        [reason] = [reason for reason in folded.reasons if reason.key == KEY_TASK_MISMATCH]
+        assert KEY_TASK_MISMATCH not in folded.ground_keys and folded.annotation_keys == [KEY_TASK_MISMATCH]
+        assert all(reason.key != KEY_TASK_MISMATCH for reason in folded.reasons)
+        [annotation] = folded.annotations
         assert (
-            "detected 1 breaths (0 phases in the breath train, 1 breath events) where 3 were instructed" in reason.why
+            "detected 1 breaths (0 phases in the breath train, 1 breath events) where 3 were instructed"
+            in annotation.why
         )
 
     def test_the_instructed_count_passes_a_counted_task(self) -> None:
@@ -2583,17 +2584,18 @@ class TestABreathTaskIsDecidedOnTheBreathingPattern:
             mode=BREATH_COUNTED, pattern="single_breath", events=1, instructed=5, conformance=False, phases=10
         )
         assert folded.triage is Triage.PASS
-        assert KEY_TASK_MISMATCH not in folded.ground_keys
+        assert KEY_TASK_MISMATCH not in folded.ground_keys and folded.annotation_keys == []
 
     def test_too_few_breaths_keep_the_task_mismatch_and_name_both_counts(self) -> None:
-        """Phases that fall short of the instruction leave the flag, with both measures in its text."""
+        """Phases that fall short of the instruction leave the annotation, with both measures in its text."""
         folded = self._fold(
             mode=BREATH_COUNTED, pattern="alternating_breaths", events=2, instructed=5, conformance=False, phases=6
         )
-        assert folded.triage is Triage.FLAG
-        [reason] = [reason for reason in folded.reasons if reason.key == KEY_TASK_MISMATCH]
+        assert folded.triage is Triage.PASS
+        [annotation] = folded.annotations
         assert (
-            "detected 3 breaths (6 phases in the breath train, 2 breath events) where 5 were instructed" in reason.why
+            "detected 3 breaths (6 phases in the breath train, 2 breath events) where 5 were instructed"
+            in annotation.why
         )
 
     def test_a_low_confidence_train_is_flagged_for_review(self) -> None:
