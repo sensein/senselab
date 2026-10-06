@@ -32,7 +32,7 @@ from senselab.audio.workflows.triage.cohort import CONDITION_KINDS
 from senselab.audio.workflows.triage.vocabulary import UNPLACED_OPEN, UNPLACED_UNREAD, standing_task_extents
 from senselab.utils import fastio
 
-SCHEMA_VERSION = 21
+SCHEMA_VERSION = 22
 """Bumped whenever a column is added, removed or retyped, a binary layout changes, or a categorical
 column's controlled vocabulary changes."""
 
@@ -1383,6 +1383,11 @@ def extract(run_root: Path, root: Path, anomalies: dict[str, int] | None = None)
         "ground_keys": (
             [str(key) for key in decision["ground_keys"]] if isinstance(decision.get("ground_keys"), list) else None
         ),
+        "annotation_keys": (
+            [str(key) for key in decision["annotation_keys"]]
+            if isinstance(decision.get("annotation_keys"), list)
+            else None
+        ),
         "route_state": decision.get("route_state"),
         "duration_s": duration_s,
         "duration_conditioned_s": conditioned_s,
@@ -1576,6 +1581,7 @@ def _fields() -> list[pa.Field]:
         pa.field("release_ground_key", pa.string()),
         pa.field("discard_ground", pa.string()),
         pa.field("ground_keys", pa.list_(pa.string())),
+        pa.field("annotation_keys", pa.list_(pa.string())),
         pa.field("route_state", pa.string()),
         pa.field("duration_s", pa.float64()),
         pa.field("duration_conditioned_s", pa.float64()),
