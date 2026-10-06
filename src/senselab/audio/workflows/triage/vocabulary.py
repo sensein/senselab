@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field, replace
 from enum import Enum
-from typing import Any, Literal, Mapping, Sequence
+from typing import Any, Literal, Mapping, Sequence, TypeVar
 
 GRAPH_ORDER = (
     "ADMIT",
@@ -2003,3 +2003,26 @@ def fold_file_verdict(
         gates=dict(gates or {}),
         breath_pattern=dict(task_evidence.breath_reading),
     )
+
+
+TASK_EXTENT_SPAN_ROLE = "task_extent"
+SUPERSEDES = "supersedes"
+
+
+_Span = TypeVar("_Span")
+
+
+def standing_task_extents(spans: Sequence[_Span]) -> list[_Span]:
+    """The task-extent spans that stand: those marked as superseding the rest, where any are.
+
+    Args:
+        spans: Live spans of any role.
+
+    Returns:
+        The live ``task_extent`` spans carrying ``supersedes`` where any does, else every live
+        ``task_extent`` span.
+    """
+    held: list[Any] = list(spans)
+    extents = [s for s in held if s.attributes.get("role") == TASK_EXTENT_SPAN_ROLE and s.extent is not None]
+    superseding = [s for s in extents if s.attributes.get(SUPERSEDES) is not None]
+    return superseding or extents
