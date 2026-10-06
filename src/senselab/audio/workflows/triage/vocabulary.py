@@ -314,6 +314,8 @@ class TaskEvidence:
         cough_review: Whether the decision differs inside the measure's review band
             (``data/cough_pattern.yaml``, ``review``).
         cough_reading: The measure's full reading, for the verdict record; empty where none.
+        background_speech: The background-speech reading over the task extent
+            (``background_speech.background_speech_of``), for an airway family; empty where none.
     """
 
     owning_branches: tuple[str, ...] = ()
@@ -336,6 +338,7 @@ class TaskEvidence:
     cough_onsets_n: int | None = None
     cough_review: bool = False
     cough_reading: dict[str, Any] = field(default_factory=dict)
+    background_speech: dict[str, Any] = field(default_factory=dict)
 
 
 UNMEASURABLE = "unmeasurable"
@@ -513,6 +516,8 @@ BREATH_REVIEW_LOW_CONFIDENCE = "breath_review_low_confidence"
 """Flag ground: a breath task's breathing was kept, on a breath train weak or irregular enough to review."""
 COUGH_REVIEW_LOW_CONFIDENCE = "cough_review_low_confidence"
 """Flag ground: a cough task's coughs were kept, on a count whose decision differs inside the review band."""
+BACKGROUND_SPEECH_IN_TASK = "background_speech_in_task"
+"""Flag ground: speech enhancement removed speech from inside an airway task's extent -- another voice."""
 
 AGREE = "agree"
 MISMATCH = "mismatch"
@@ -660,6 +665,7 @@ KEY_TASK_MISMATCH = TASK_MISMATCH
 KEY_BREATH_REVIEW_LOW_CONFIDENCE = BREATH_REVIEW_LOW_CONFIDENCE
 KEY_NO_COUGH_CAPTURED = NO_COUGH_CAPTURED
 KEY_COUGH_REVIEW_LOW_CONFIDENCE = COUGH_REVIEW_LOW_CONFIDENCE
+KEY_BACKGROUND_SPEECH_IN_TASK = BACKGROUND_SPEECH_IN_TASK
 KEY_PREPROCESS_ERRORED = "preprocess_errored"
 KEY_ROUTING_ERRORED = "routing_errored"
 KEY_BAD_HINT_MAP = "config_bad_hint_map"
@@ -692,6 +698,7 @@ GROUND_KEYS = (
     KEY_BREATH_REVIEW_LOW_CONFIDENCE,
     KEY_NO_COUGH_CAPTURED,
     KEY_COUGH_REVIEW_LOW_CONFIDENCE,
+    KEY_BACKGROUND_SPEECH_IN_TASK,
     KEY_PREPROCESS_ERRORED,
     KEY_ROUTING_ERRORED,
     KEY_BAD_HINT_MAP,
@@ -1131,6 +1138,8 @@ class FileVerdict:
             count, durations, intervals and rhythm. Empty for every other family.
         cough_pattern: The cough-onset measure's reading for a cough family -- onsets, events, review
             counts and extent. Empty for every other family.
+        background_speech: The background-speech reading over an airway task's extent. Empty for every
+            other family, or where the residual was not stored.
     """
 
     triage: Triage
@@ -1158,6 +1167,7 @@ class FileVerdict:
     gates: dict[str, Any] = field(default_factory=dict)
     breath_pattern: dict[str, Any] = field(default_factory=dict)
     cough_pattern: dict[str, Any] = field(default_factory=dict)
+    background_speech: dict[str, Any] = field(default_factory=dict)
 
     def record(self) -> dict[str, Any]:
         """Every decision point of this fold, as JSON-ready values.
@@ -1193,6 +1203,7 @@ class FileVerdict:
             "gates": dict(self.gates),
             "breath_pattern": dict(self.breath_pattern),
             "cough_pattern": dict(self.cough_pattern),
+            "background_speech": dict(self.background_speech),
             "ran": {node: state.value for node, state in self.ran.items()},
             "reasons": [
                 {"node": r.node, "outcome": r.outcome.value, "kind": r.kind, "why": r.why, "key": ground_key(r)}
@@ -2013,6 +2024,17 @@ def fold_file_verdict(
             KEY_COUGH_REVIEW_LOW_CONFIDENCE,
             by_branch[_AIRWAY].kind if _AIRWAY in by_branch else None,
         )
+    if task_evidence.background_speech.get("heard"):
+        windows = task_evidence.background_speech.get("speech_windows") or []
+        runs = task_evidence.background_speech.get("thinned_runs") or []
+        first = min([row[0] for row in (*windows, *runs)], default=None)
+        flag(
+            _AIRWAY,
+            f"{BACKGROUND_SPEECH_IN_TASK}: {len(windows)} residual window(s) heard as speech and {len(runs)} "
+            f"voiced run(s) the enhancer thinned, first at {first} s",
+            KEY_BACKGROUND_SPEECH_IN_TASK,
+            by_branch[_AIRWAY].kind if _AIRWAY in by_branch else None,
+        )
     for branch in branches_seen:
         decision = branch_decisions.get(branch)
         reported = by_branch.get(branch)
@@ -2150,6 +2172,7 @@ def fold_file_verdict(
         gates=dict(gates or {}),
         breath_pattern=dict(task_evidence.breath_reading),
         cough_pattern=dict(task_evidence.cough_reading),
+        background_speech=dict(task_evidence.background_speech),
     )
 
 

@@ -34,7 +34,13 @@ from typing import Any, Callable, Mapping, Sequence
 import yaml
 
 from senselab.audio.data_structures import AudioHints
-from senselab.audio.workflows.triage.breath_pattern import BreathPattern, breath_pattern_of, in_review_band
+from senselab.audio.workflows.triage.background_speech import background_speech_of
+from senselab.audio.workflows.triage.breath_pattern import (
+    BreathPattern,
+    breath_pattern_of,
+    in_review_band,
+    task_extent_bounds,
+)
 from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.cough_pattern import CoughPattern, cough_pattern_of, in_cough_review_band
 from senselab.audio.workflows.triage.live_evidence import declared_task, recording_stem
@@ -484,6 +490,17 @@ def _task_evidence(
         else:
             absent = held
     instructed = airway.required_count.value if airway is not None and airway.required_count is not None else None
+    background: dict[str, Any] = {}
+    if (reading is not None or cough is not None) and run_dir is not None:
+        held_extent = (reading.extent.bounds if reading is not None and reading.extent is not None else None) or (
+            (cough.extent.start_s, cough.extent.end_s) if cough is not None and cough.extent is not None else None
+        )
+        over = held_extent or task_extent_bounds(store)
+        events = (reading.event_spans_s if reading is not None else ()) + (
+            cough.event_spans_s if cough is not None else ()
+        )
+        heard = background_speech_of(store, run_dir, over, events) if over is not None else None
+        background = heard.record() if heard is not None else {}
     return TaskEvidence(
         owning_branches=owners,
         duration_s=duration,
@@ -507,6 +524,7 @@ def _task_evidence(
         cough_onsets_n=cough.onsets_n if cough is not None else None,
         cough_review=cough is not None and in_cough_review_band(cough, instructed or 1),
         cough_reading={"mode": cough_mode, **cough.record()} if cough is not None else {},
+        background_speech=background,
     )
 
 
