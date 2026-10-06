@@ -7,8 +7,9 @@ stream) and classifies it with YAMNet. Two readings find another voice inside th
   stream well over the residual), the residual stands well over its own floor, and the residual's
   envelope does not follow the enhanced one (a residual that tracks the foreground is the enhancer's
   leakage of the participant's own sound, not another source);
-- a voiced run away from the participant's own events that the enhancer thinned (the plain stream
-  over the enhanced one there), for a voice too faint or band-limited for YAMNet to name.
+- a harmonic run in the residual away from the participant's own events, for a voice too faint or
+  band-limited for YAMNet to name: what the enhancer removed is periodic there, as a voice is and
+  breath turbulence or room noise is not.
 
 The plain stream's own speech score is recorded beside them, as context only.
 
@@ -36,7 +37,6 @@ RESIDUAL_STREAM = "residual"
 ENHANCED_STREAM = "enhanced"
 RESIDUAL_YAMNET = "residual_yamnet_scores"
 PLAIN_YAMNET = "yamnet_scores"
-PHONATION_TRACKS = "phonation_tracks"
 
 Signal = tuple[np.ndarray, int]
 
@@ -54,12 +54,16 @@ class BackgroundSpeechParameters:
         envelope_frame_s: The frame the residual and enhanced envelopes are read in.
         leakage_corr_min: The envelope correlation at or above which a residual window is leakage.
         windows_min: The residual windows that must read as background speech.
-        voicing_strength_min: The pitch tracker's strength a voiced frame reaches.
-        event_pad_s: How far either side of the participant's own events voicing is set aside.
-        run_gap_s: The longest unvoiced gap inside one voiced run.
-        run_min_s: The shortest voiced run.
-        run_voiced_min_s: The voiced frames a run holds.
-        thinned_db: How far the plain stream stands over the enhanced one over a run the enhancer thinned.
+        harmonic_band_hz: The band the residual's harmonicity is read in.
+        f0_range_hz: The fundamental-frequency range its autocorrelation peak is searched over.
+        frame_s: The harmonicity frame.
+        frame_hop_s: Its hop.
+        harmonicity_min: The normalised autocorrelation peak a harmonic frame reaches.
+        harmonic_rise_db: How far over the residual's own frame floor a harmonic frame stands.
+        event_pad_s: How far either side of the participant's own events harmonic frames are set aside.
+        run_gap_s: The longest gap inside one harmonic run.
+        run_min_s: The shortest harmonic run.
+        run_voiced_min_s: The harmonic frames a run holds, in seconds.
         pad_s: How far either side of the task extent is read.
     """
 
@@ -71,12 +75,16 @@ class BackgroundSpeechParameters:
     envelope_frame_s: float
     leakage_corr_min: float
     windows_min: int
-    voicing_strength_min: float
+    harmonic_band_hz: tuple[float, float]
+    f0_range_hz: tuple[float, float]
+    frame_s: float
+    frame_hop_s: float
+    harmonicity_min: float
+    harmonic_rise_db: float
     event_pad_s: float
     run_gap_s: float
     run_min_s: float
     run_voiced_min_s: float
-    thinned_db: float
     pad_s: float
 
 
@@ -89,9 +97,12 @@ def background_speech_parameters() -> BackgroundSpeechParameters:
     """
     held = dict(yaml.safe_load(BACKGROUND_SPEECH_PATH.read_text()) or {})
     labels = tuple(str(label) for label in held.pop("speech_labels"))
+    band, f0 = held.pop("harmonic_band_hz"), held.pop("f0_range_hz")
     return BackgroundSpeechParameters(
         speech_labels=labels,
         windows_min=int(held.pop("windows_min")),
+        harmonic_band_hz=(float(band[0]), float(band[1])),
+        f0_range_hz=(float(f0[0]), float(f0[1])),
         **{key: float(value) for key, value in held.items()},
     )
 
@@ -104,8 +115,8 @@ class BackgroundSpeech:
         windows: Each residual window YAMNet hears as speech where the enhancer kept the foreground:
             ``(start, end, speech score, residual dB over its floor, enhanced dB over the residual,
             envelope correlation)``.
-        runs: Each voiced run off the participant's events: ``(start, end, voiced seconds, plain dB
-            over enhanced)``.
+        runs: Each harmonic run in the residual off the participant's events: ``(start, end, harmonic
+            seconds, plain dB over enhanced)``.
         residual_floor_db: The residual's floor, in dB.
         plain_speech_max: The highest speech-label score on the plain stream inside the extent, or None.
         extent: The extent read, padded.
@@ -126,16 +137,10 @@ class BackgroundSpeech:
         return tuple(w for w in self.windows if w[5] < p.leakage_corr_min)
 
     @property
-    def thinned_runs(self) -> tuple[tuple[float, ...], ...]:
-        """The voiced runs the enhancer thinned."""
-        p = self.parameters or background_speech_parameters()
-        return tuple(r for r in self.runs if r[3] >= p.thinned_db)
-
-    @property
     def heard(self) -> bool:
         """Whether another voice was read inside the extent."""
         p = self.parameters or background_speech_parameters()
-        return len(self.speech_windows) >= p.windows_min or bool(self.thinned_runs)
+        return len(self.speech_windows) >= p.windows_min or bool(self.runs)
 
     def record(self) -> dict[str, Any]:
         """The reading, as JSON-ready values.
@@ -146,7 +151,6 @@ class BackgroundSpeech:
         return {
             "heard": self.heard,
             "speech_windows": [list(window) for window in self.speech_windows],
-            "thinned_runs": [list(run) for run in self.thinned_runs],
             "windows": [list(window) for window in self.windows],
             "runs": [list(run) for run in self.runs],
             "residual_floor_db": self.residual_floor_db,
@@ -205,6 +209,35 @@ def _envelope_corr(a: Signal, b: Signal, start: float, end: float, frame_s: floa
     return float(np.corrcoef(ex, ey)[0, 1])
 
 
+def residual_harmonicity(residual: Signal, p: BackgroundSpeechParameters) -> tuple[np.ndarray, np.ndarray]:
+    """Which residual frames are harmonic: periodic in the fundamental range and over the residual's floor.
+
+    Args:
+        residual: The residual samples and their rate.
+        p: The parameters.
+
+    Returns:
+        Each frame's start time, and whether it is harmonic.
+    """
+    from scipy.signal import butter, sosfiltfilt  # noqa: PLC0415
+
+    samples, rate = residual
+    frame, hop = int(p.frame_s * rate), int(p.frame_hop_s * rate)
+    if len(samples) < max(frame, 32):
+        return np.zeros(0), np.zeros(0, dtype=bool)
+    high = min(p.harmonic_band_hz[1], 0.45 * rate)
+    sos = butter(4, (p.harmonic_band_hz[0], high), btype="band", fs=rate, output="sos")
+    x = sosfiltfilt(sos, samples.astype(np.float64))
+    frames = np.lib.stride_tricks.sliding_window_view(x, frame)[::hop] * np.hanning(frame)
+    spectrum = np.fft.rfft(frames, n=2 * frame, axis=1)
+    ac = np.fft.irfft(np.abs(spectrum) ** 2, axis=1)[:, :frame]
+    lo, hi = int(rate / p.f0_range_hz[1]), int(rate / p.f0_range_hz[0])
+    peak = ac[:, lo:hi].max(axis=1) / (ac[:, 0] + 1e-12)
+    level = 10 * np.log10(np.mean(frames**2, axis=1) + 1e-12)
+    floor = float(np.percentile(level, 10))
+    return np.arange(len(frames)) * hop / rate, (peak >= p.harmonicity_min) & (level >= floor + p.harmonic_rise_db)
+
+
 def _voiced_runs(
     times: np.ndarray,
     voiced: np.ndarray,
@@ -235,7 +268,6 @@ def measure_background_speech(
     residual: Signal,
     extent: tuple[float, float],
     events: Sequence[tuple[float, float]] = (),
-    voicing: tuple[np.ndarray, np.ndarray] | None = None,
     plain_windows: Sequence[dict[str, Any]] | None = None,
     parameters: BackgroundSpeechParameters | None = None,
 ) -> BackgroundSpeech:
@@ -247,8 +279,7 @@ def measure_background_speech(
         enhanced: The enhanced samples and their rate.
         residual: The residual samples and their rate.
         extent: The task extent.
-        events: The participant's own events (coughs, breaths), whose voicing is set aside.
-        voicing: The pitch tracker's frame times and whether each is voiced; None reads no voiced runs.
+        events: The participant's own events (coughs, breaths), whose harmonic frames are set aside.
         plain_windows: The plain stream's YAMNet windows, read for context; None reads none.
         parameters: The parameters; ``data/background_speech.yaml`` when None.
 
@@ -271,10 +302,9 @@ def measure_background_speech(
                 (round(a, 3), round(b, 3), round(score, 3), round(level - floor, 2), round(kept, 2), round(corr, 3))
             )
     runs = []
-    if voicing is not None:
-        for a, b, voiced_s in _voiced_runs(*voicing, low=low, high=high, events=events, p=p):
-            thinned = _level_db(plain, a, b) - _level_db(enhanced, a, b)
-            runs.append((round(a, 3), round(b, 3), round(voiced_s, 3), round(thinned, 2)))
+    for a, b, voiced_s in _voiced_runs(*residual_harmonicity(residual, p), low=low, high=high, events=events, p=p):
+        thinned = _level_db(plain, a, b) - _level_db(enhanced, a, b)
+        runs.append((round(a, 3), round(b, 3), round(voiced_s, 3), round(thinned, 2)))
     inside = [
         _speech(w, p.speech_labels)
         for w in plain_windows or ()
@@ -290,16 +320,6 @@ def measure_background_speech(
     )
 
 
-def _voicing(store: ProvStore, run_dir: Path, strength_min: float) -> tuple[np.ndarray, np.ndarray] | None:
-    measurement = find_measurement(store, PHONATION_TRACKS)
-    path = run_dir / str(measurement.attributes.get("path") or "") if measurement is not None else None
-    if path is None or not path.is_file():
-        return None
-    with np.load(path) as held:
-        times, f0, strength = held["times_s"], held["f0_hz"], held["strength"]
-    return np.asarray(times, dtype=float), (np.nan_to_num(f0) > 0) & (np.nan_to_num(strength) >= strength_min)
-
-
 def background_speech_of(
     store: ProvStore, run_dir: Path, extent: tuple[float, float], events: Sequence[tuple[float, float]] = ()
 ) -> BackgroundSpeech | None:
@@ -307,7 +327,7 @@ def background_speech_of(
 
     Args:
         store: The provenance store, read for the plain, enhanced and residual streams, the residual
-            and plain YAMNet windows and ``phonation_tracks``.
+            and plain YAMNet windows.
         run_dir: The run directory their paths are relative to.
         extent: The task extent.
         events: The participant's own events inside it.
@@ -328,7 +348,6 @@ def background_speech_of(
         residual=residual,
         extent=extent,
         events=events,
-        voicing=_voicing(store, run_dir, p.voicing_strength_min),
         plain_windows=_windows(store, run_dir, PLAIN_YAMNET),
         parameters=p,
     )

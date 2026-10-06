@@ -90,38 +90,42 @@ def test_a_cough_the_enhancer_removed_whole_is_not_background_speech() -> None:
     assert not reading.heard
 
 
-def test_a_thinned_voiced_run_away_from_the_coughs_is_heard() -> None:
-    """6ca9935e: a faint band-limited voice YAMNet does not name, voiced and thinned by the enhancer."""
-    plain = _signal([(5.0, 7.0, -40.0)], -80.0, 6)
-    enhanced = plain * 0.5
-    times = np.arange(0.0, DURATION, 0.01)
-    voiced = (times >= 5.0) & (times <= 7.0)
+def _harmonic_residual(seed: int) -> np.ndarray:
+    """Low noise with a 150 Hz harmonic tone from 5 to 7 s, sampled at 16 kHz."""
+    rate = 16000
+    rng = np.random.default_rng(seed)
+    t = np.arange(int(DURATION * rate)) / rate
+    x = rng.normal(0.0, 1e-4, len(t))
+    on = (t >= 5.0) & (t < 7.0)
+    x[on] += 0.01 * sum(np.sin(2 * np.pi * 150 * k * t[on]) / k for k in range(1, 6))
+    return x
+
+
+def test_a_harmonic_residual_run_away_from_the_coughs_is_heard() -> None:
+    """6ca9935e: a faint voice YAMNet does not name is periodic in what the enhancer removed."""
+    residual = _harmonic_residual(6)
     reading = measure_background_speech(
-        _windows([0.0] * 19),
-        plain=(plain, RATE),
-        enhanced=(enhanced, RATE),
-        residual=(plain - enhanced, RATE),
+        [],
+        plain=(residual * 2, 16000),
+        enhanced=(residual, 16000),
+        residual=(residual, 16000),
         extent=(1.0, 9.0),
         events=[(2.0, 2.5)],
-        voicing=(times, voiced),
     )
     assert reading.heard
-    assert reading.thinned_runs[0][0] >= 5.0
+    assert reading.runs[0][0] >= 4.9
 
 
-def test_voicing_inside_a_cough_is_the_cough() -> None:
+def test_harmonicity_inside_a_cough_is_the_cough() -> None:
     """A voiced cough is the participant's own event, not another voice."""
-    plain = _signal([(5.0, 7.0, -40.0)], -80.0, 7)
-    times = np.arange(0.0, DURATION, 0.01)
-    voiced = (times >= 5.0) & (times <= 7.0)
+    residual = _harmonic_residual(7)
     reading = measure_background_speech(
-        _windows([0.0] * 19),
-        plain=(plain, RATE),
-        enhanced=(plain * 0.5, RATE),
-        residual=(plain * 0.5, RATE),
+        [],
+        plain=(residual * 2, 16000),
+        enhanced=(residual, 16000),
+        residual=(residual, 16000),
         extent=(1.0, 9.0),
         events=[(4.9, 7.1)],
-        voicing=(times, voiced),
     )
     assert not reading.heard
 
