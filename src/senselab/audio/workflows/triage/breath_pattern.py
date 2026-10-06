@@ -316,12 +316,14 @@ class ReviewParameters:
             ``irregular_rise_db_max``, the train is in the band.
         irregular_rise_db_max: That rise.
         weak_rise_db_max: A median burst rise under this puts the train in the band.
+        veto_reviews: The measure's vetoes that put a train in the band.
     """
 
     min_phases: int
     cycle_cv_min: float
     irregular_rise_db_max: float
     weak_rise_db_max: float
+    veto_reviews: tuple[str, ...] = ()
 
 
 @functools.cache
@@ -337,6 +339,7 @@ def review_parameters() -> ReviewParameters:
         cycle_cv_min=float(held["cycle_cv_min"]),
         irregular_rise_db_max=float(held["irregular_rise_db_max"]),
         weak_rise_db_max=float(held["weak_rise_db_max"]),
+        veto_reviews=tuple(str(v) for v in held.get("veto_reviews") or ()),
     )
 
 
@@ -610,6 +613,21 @@ class BreathPattern:
             "extent": self.extent.record() if self.extent is not None else None,
             "train": self.train.record() if self.train is not None else None,
         }
+
+
+def breath_in_review(read: BreathPattern, parameters: ReviewParameters | None = None) -> bool:
+    """Whether a breath reading is left for review: its train is in the band, or a reviewing veto fired.
+
+    Args:
+        read: The breath reading.
+        parameters: The band; ``data/breath_pattern.yaml`` when None.
+
+    Returns:
+        :func:`in_review_band` of the train, or a veto in ``veto_reviews``.
+    """
+    p = parameters or review_parameters()
+    vetoed = read.veto.vetoed_by if read.veto is not None else None
+    return in_review_band(read.train, p) or (vetoed is not None and vetoed in p.veto_reviews)
 
 
 def _band_rows(bin_hz: float, band: tuple[float, float]) -> slice:
