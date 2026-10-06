@@ -69,3 +69,15 @@ veto:
   speech_words_min: 5          # speech words inside the task extent at or above: speech
   active_fraction_min: 0.36    # active span over the task extent (the file where the extent is under min_duration_s) below: too little
   noise_labels: [Vehicle, Car, Engine, Mechanical fan, White noise]   # recorded as context
+# The breath-task extent from windowed modulation (measure_breath_extent): the longest run of windows
+# whose breathing-over-syllabic ratio and active share clear these, tightened to its active frames and
+# padded. Fallbacks: the measure's events, padded; then AIRWAY's own hull. Derivation in
+# specs/20261005-breathing-pattern/design.md ("Breath-task extent from modulation").
+extent:
+  window_s: 8.0                # a few breathing cycles
+  hop_s: 2.0
+  window_breathing_min_db: 5.0 # window ratio at or above: the window breathes
+  window_active_min: 0.15      # share of window frames above the active rise
+  max_gap_windows: 1           # non-breathing windows a run bridges
+  pad_s: 1.0                   # each side
+  min_cycles: 2                # fewest estimated breaths a modulation extent holds

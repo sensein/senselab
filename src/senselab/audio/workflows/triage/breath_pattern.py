@@ -26,6 +26,7 @@ from scipy.signal import butter, find_peaks, sosfiltfilt
 from senselab.audio.tasks.classification.label_scores import label_scores
 from senselab.audio.workflows.triage.nodes.common import find_measurement, lexical_words, live_entities, word_hull
 from senselab.audio.workflows.triage.residue import is_non_lexical
+from senselab.audio.workflows.triage.vocabulary import SUPERSEDES
 from senselab.utils.prov_store import ProvStore
 
 BREATH_PATTERN_PATH = Path(__file__).parent / "data" / "breath_pattern.yaml"
@@ -210,6 +211,95 @@ class ModulationReading:
         }
 
 
+EXTENT_MODULATION = "modulation"
+EXTENT_MEASURE_EVENTS = "measure_events"
+EXTENT_AIRWAY_EVENTS = "airway_events"
+EXTENT_SOURCES = (EXTENT_MODULATION, EXTENT_MEASURE_EVENTS, EXTENT_AIRWAY_EVENTS)
+
+
+@dataclass(frozen=True)
+class ExtentParameters:
+    """The ``extent`` section of ``data/breath_pattern.yaml``.
+
+    Attributes:
+        window_s: The sliding window the breathing-rate modulation is read over.
+        hop_s: The step between windows.
+        window_breathing_min_db: A window's breathing-over-syllabic ratio at or above which it breathes.
+        window_active_min: The share of a window's frames above the active rise it needs to breathe.
+        max_gap_windows: Non-breathing windows a run of breathing windows may bridge.
+        pad_s: Padding added on each side of the extent.
+        min_cycles: The fewest estimated breaths a modulation extent must hold to stand.
+    """
+
+    window_s: float
+    hop_s: float
+    window_breathing_min_db: float
+    window_active_min: float
+    max_gap_windows: int
+    pad_s: float
+    min_cycles: int
+
+
+@functools.cache
+def extent_parameters() -> ExtentParameters:
+    """The ``extent`` parameters of ``data/breath_pattern.yaml``.
+
+    Returns:
+        The parameters.
+    """
+    held = (yaml.safe_load(BREATH_PATTERN_PATH.read_text()) or {})["extent"]
+    return ExtentParameters(
+        window_s=float(held["window_s"]),
+        hop_s=float(held["hop_s"]),
+        window_breathing_min_db=float(held["window_breathing_min_db"]),
+        window_active_min=float(held["window_active_min"]),
+        max_gap_windows=int(held["max_gap_windows"]),
+        pad_s=float(held["pad_s"]),
+        min_cycles=int(held["min_cycles"]),
+    )
+
+
+@dataclass(frozen=True)
+class BreathExtent:
+    """Where in the recording the breathing task was performed.
+
+    Attributes:
+        start_s: The extent's start, in seconds.
+        end_s: Its end, in seconds.
+        source: Where it was read from, one of :data:`EXTENT_SOURCES`.
+        breathing_windows_n: Windows whose modulation breathes inside the extent; 0 for a fallback.
+        windows_n: Windows read; 0 for a fallback.
+        estimated_breaths: The breaths the modulation peaks inside the extent estimate, or None.
+    """
+
+    start_s: float
+    end_s: float
+    source: str
+    breathing_windows_n: int = 0
+    windows_n: int = 0
+    estimated_breaths: int | None = None
+
+    @property
+    def bounds(self) -> tuple[float, float]:
+        """``(start_s, end_s)``."""
+        return self.start_s, self.end_s
+
+    def record(self) -> dict[str, Any]:
+        """The extent, as JSON-ready values.
+
+        Returns:
+            The fields, keyed by name.
+        """
+        return {
+            "start_s": self.start_s,
+            "end_s": self.end_s,
+            "source": self.source,
+            "breathing_windows_n": self.breathing_windows_n,
+            "windows_n": self.windows_n,
+            "estimated_breaths": self.estimated_breaths,
+        }
+
+
 @dataclass(frozen=True)
 class VetoParameters:
     """The ``veto`` section of ``data/breath_pattern.yaml``.
@@ -315,6 +405,8 @@ class BreathPattern:
         modulation: The modulation reading, or None where the recording is shorter than it needs.
         veto: What the stored classifier windows and transcript say against breathing, or None where it
             was not read.
+        event_spans_s: Each event's ``(start, end)`` in seconds.
+        extent: The breath-task extent, or None where it was not read.
     """
 
     pattern: str
@@ -325,6 +417,8 @@ class BreathPattern:
     rhythm: bool = False
     modulation: ModulationReading | None = None
     veto: BreathVeto | None = None
+    event_spans_s: tuple[tuple[float, float], ...] = field(default_factory=tuple)
+    extent: BreathExtent | None = None
 
     def record(self) -> dict[str, Any]:
         """The reading, as JSON-ready values.
@@ -341,6 +435,7 @@ class BreathPattern:
             "rhythm": self.rhythm,
             "modulation": self.modulation.record() if self.modulation is not None else None,
             "veto": self.veto.record() if self.veto is not None else None,
+            "extent": self.extent.record() if self.extent is not None else None,
         }
 
 
@@ -403,11 +498,13 @@ def measure_breath_pattern(
         else:
             merged.append([start, stop])
     events: list[tuple[int, float]] = []
+    spans: list[tuple[float, float]] = []
     for start, stop in merged:
         duration = (stop - start) * hop_s
         voiced_share = float(voiced[start:stop].mean()) if stop > start else 0.0
         if p.event_s[0] <= duration <= p.event_s[1] and voiced_share <= p.voiced_fraction_max:
             events.append((start, round(duration, 3)))
+            spans.append((round(start * hop_s, 3), round(stop * hop_s, 3)))
 
     onsets = np.array([start * hop_s for start, _ in events])
     intervals = np.diff(onsets) if len(onsets) > 1 else np.array([])
@@ -438,6 +535,7 @@ def measure_breath_pattern(
         intervals_s=tuple(round(float(value), 2) for value in intervals),
         autocorr_peak=autocorr_peak,
         rhythm=bool(rhythm),
+        event_spans_s=tuple(spans),
         modulation=measure_modulation(power, hop_s=hop_s, bin_hz=bin_hz, smooth_s=p.smooth_s, parameters=modulation)
         if modulation is not None
         else None,
@@ -450,6 +548,37 @@ def _modulation_psd(values: np.ndarray, fs: float) -> tuple[np.ndarray, np.ndarr
     nfft = 1 << int(np.ceil(np.log2(max(len(values) * 8, 256))))
     spectrum = np.abs(np.fft.rfft(detrended * np.hanning(len(values)), nfft)) ** 2
     return np.fft.rfftfreq(nfft, 1 / fs), spectrum
+
+
+def _subband_envelopes(
+    power: np.ndarray, *, hop_s: float, bin_hz: float, smooth_s: float, parameters: ModulationParameters
+) -> np.ndarray:
+    """Each subband's dB envelope, smoothed and resampled to ``fs_mod``: bands by envelope frames."""
+    p = parameters
+    step = max(1, int(round(1 / (p.fs_mod * hop_s))))
+    frames = power.shape[1] // step
+    width = max(1, int(round(smooth_s / hop_s))) | 1
+    envelopes = []
+    for low, high in zip(p.band_edges_hz[:-1], p.band_edges_hz[1:]):
+        level = 10 * np.log10(power[_band_rows(bin_hz, (low, high))].sum(axis=0) + 1e-12)
+        level = _moving_median(level, width)
+        envelopes.append(level[: frames * step].reshape(frames, step).mean(axis=1))
+    return np.array(envelopes).reshape(len(envelopes), frames)
+
+
+def _breath_ratio_db(bands: np.ndarray, parameters: ModulationParameters) -> float:
+    """Breathing-band over syllabic-band modulation energy, in dB, averaged over the subbands."""
+    p = parameters
+    tiny = 1e-12
+    spectra = []
+    for envelope in bands:
+        freqs, spectrum = _modulation_psd(envelope, p.fs_mod)
+        reference = (freqs >= p.reference_band_hz[0]) & (freqs <= p.reference_band_hz[1])
+        spectra.append(spectrum / (spectrum[reference].sum() + tiny))
+    mean_spectrum = np.mean(spectra, axis=0)
+    breath = (freqs >= p.breath_band_hz[0]) & (freqs <= p.breath_band_hz[1])
+    syllabic = (freqs >= p.syllabic_band_hz[0]) & (freqs <= p.syllabic_band_hz[1])
+    return float(10 * np.log10((mean_spectrum[breath].sum() + tiny) / (mean_spectrum[syllabic].sum() + tiny)))
 
 
 def measure_modulation(
@@ -468,27 +597,11 @@ def measure_modulation(
         The reading, or None where the recording is shorter than ``min_duration_s``.
     """
     p = parameters
-    step = max(1, int(round(1 / (p.fs_mod * hop_s))))
-    frames = power.shape[1] // step
-    if frames * step * hop_s < p.min_duration_s:
+    bands = _subband_envelopes(power, hop_s=hop_s, bin_hz=bin_hz, smooth_s=smooth_s, parameters=p)
+    if bands.shape[1] / p.fs_mod < p.min_duration_s:
         return None
     tiny = 1e-12
-    width = max(1, int(round(smooth_s / hop_s))) | 1
-    envelopes = []
-    for low, high in zip(p.band_edges_hz[:-1], p.band_edges_hz[1:]):
-        level = 10 * np.log10(power[_band_rows(bin_hz, (low, high))].sum(axis=0) + tiny)
-        level = _moving_median(level, width)
-        envelopes.append(level[: frames * step].reshape(frames, step).mean(axis=1))
-    bands = np.array(envelopes)
-    spectra = []
-    for envelope in bands:
-        freqs, spectrum = _modulation_psd(envelope, p.fs_mod)
-        reference = (freqs >= p.reference_band_hz[0]) & (freqs <= p.reference_band_hz[1])
-        spectra.append(spectrum / (spectrum[reference].sum() + tiny))
-    mean_spectrum = np.mean(spectra, axis=0)
-    breath = (freqs >= p.breath_band_hz[0]) & (freqs <= p.breath_band_hz[1])
-    syllabic = (freqs >= p.syllabic_band_hz[0]) & (freqs <= p.syllabic_band_hz[1])
-    ratio_db = float(10 * np.log10((mean_spectrum[breath].sum() + tiny) / (mean_spectrum[syllabic].sum() + tiny)))
+    ratio_db = _breath_ratio_db(bands, p)
 
     broadband = 10 * np.log10(np.sum(10 ** (bands / 10), axis=0))
     floor = float(np.percentile(broadband, p.floor_percentile))
@@ -509,6 +622,109 @@ def measure_modulation(
         estimated_breaths=int(np.floor(counted / p.peaks_per_breath + 0.5)),
         breathing=ratio_db >= p.breathing_min_db and span_s > 0,
     )
+
+
+def measure_breath_extent(
+    power: np.ndarray,
+    *,
+    hop_s: float,
+    bin_hz: float,
+    smooth_s: float,
+    modulation: ModulationParameters,
+    parameters: ExtentParameters,
+) -> BreathExtent | None:
+    """Where breathing-rate modulation runs, read over sliding windows of the subband envelopes.
+
+    Args:
+        power: Power spectrogram, frequency bins by frames, bin 0 at 0 Hz.
+        hop_s: Seconds between frames.
+        bin_hz: Hertz between frequency bins.
+        smooth_s: The moving-median window on each subband envelope.
+        modulation: The modulation reading's parameters.
+        parameters: The extent's parameters.
+
+    Returns:
+        The longest run of breathing windows, tightened to its active frames and padded; None where
+        the recording is shorter than one window, no window breathes, or the run holds fewer than
+        ``min_cycles`` estimated breaths.
+    """
+    m, x = modulation, parameters
+    bands = _subband_envelopes(power, hop_s=hop_s, bin_hz=bin_hz, smooth_s=smooth_s, parameters=m)
+    frames = bands.shape[1]
+    width, step = int(round(x.window_s * m.fs_mod)), max(1, int(round(x.hop_s * m.fs_mod)))
+    if frames < width or width <= 1:
+        return None
+    broadband = 10 * np.log10(np.sum(10 ** (bands / 10), axis=0))
+    floor = float(np.percentile(broadband, m.floor_percentile))
+    active = broadband >= floor + m.active_rise_db
+    starts = list(range(0, frames - width + 1, step))
+    if starts[-1] != frames - width:
+        starts.append(frames - width)
+    breathes = [
+        _breath_ratio_db(bands[:, i : i + width], m) >= x.window_breathing_min_db
+        and float(active[i : i + width].mean()) >= x.window_active_min
+        for i in starts
+    ]
+    runs: list[list[int]] = []
+    for index, breathing in enumerate(breathes):
+        if not breathing:
+            continue
+        if runs and index - runs[-1][-1] - 1 <= x.max_gap_windows:
+            runs[-1].append(index)
+        else:
+            runs.append([index])
+    if not runs:
+        return None
+    run = max(runs, key=len)
+    first, last = starts[run[0]], starts[run[-1]] + width
+    inside = np.flatnonzero(active[first:last])
+    if len(inside):
+        first, last = first + int(inside[0]), first + int(inside[-1]) + 1
+    sos = butter(2, m.breath_band_hz, btype="band", fs=m.fs_mod, output="sos")
+    component = np.mean([sosfiltfilt(sos, envelope - envelope.mean()) for envelope in bands], axis=0)
+    peaks, _ = find_peaks(
+        component[first:last],
+        distance=max(1, int(m.peak_min_distance_s * m.fs_mod)),
+        prominence=m.peak_prominence_std * (float(np.std(component)) + 1e-12),
+    )
+    breaths = int(np.floor(len(peaks) / m.peaks_per_breath + 0.5))
+    if breaths < x.min_cycles:
+        return None
+    duration_s = frames / m.fs_mod
+    return BreathExtent(
+        start_s=round(max(0.0, first / m.fs_mod - x.pad_s), 3),
+        end_s=round(min(duration_s, last / m.fs_mod + x.pad_s), 3),
+        source=EXTENT_MODULATION,
+        breathing_windows_n=len(run),
+        windows_n=len(starts),
+        estimated_breaths=breaths,
+    )
+
+
+def breath_extent_fallback(
+    events: tuple[tuple[float, float], ...], airway: tuple[float, float] | None, *, duration_s: float, pad_s: float
+) -> BreathExtent | None:
+    """The extent where modulation gives none: the measure's events, padded, else AIRWAY's hull.
+
+    Args:
+        events: The breathing measure's event spans.
+        airway: The hull of AIRWAY's own task-extent spans, or None.
+        duration_s: The recording's duration.
+        pad_s: Padding added on each side of the events' hull.
+
+    Returns:
+        The extent, or None where neither gives one.
+    """
+    if events:
+        start, end = min(e[0] for e in events), max(e[1] for e in events)
+        return BreathExtent(
+            start_s=round(max(0.0, start - pad_s), 3),
+            end_s=round(min(duration_s, end + pad_s), 3),
+            source=EXTENT_MEASURE_EVENTS,
+        )
+    if airway is not None and airway[1] > airway[0]:
+        return BreathExtent(start_s=airway[0], end_s=airway[1], source=EXTENT_AIRWAY_EVENTS)
+    return None
 
 
 def _sidecar(store: ProvStore, run_dir: Path, name: str) -> tuple[Mapping[str, Any], Path] | None:
@@ -540,18 +756,22 @@ def _mean(rows: list[dict[str, float]] | None, label: str) -> float | None:
 
 
 def task_extent_bounds(store: ProvStore) -> tuple[float, float] | None:
-    """The hull of the store's live task-extent spans.
+    """The hull of the store's live task-extent spans that the branches wrote.
+
+    A span VERDICT wrote to supersede them (it carries ``supersedes``) is left out.
 
     Args:
         store: The provenance store.
 
     Returns:
-        ``(start, end)`` in seconds, or None where no live span carries the task-extent role.
+        ``(start, end)`` in seconds, or None where no such live span carries the task-extent role.
     """
     spans = [
         span.extent
         for span in live_entities(store, "span")
-        if span.attributes.get("role") == TASK_EXTENT_ROLE and span.extent is not None
+        if span.attributes.get("role") == TASK_EXTENT_ROLE
+        and span.extent is not None
+        and span.attributes.get(SUPERSEDES) is None
     ]
     if not spans:
         return None
@@ -654,8 +874,10 @@ def breath_pattern_of(
 ) -> BreathPattern | tuple[str, ...]:
     """The recording's breathing pattern, or the stored inputs it could not be read without.
 
-    The pattern is read over the whole file; the active fraction the veto reads is taken over the task
-    extent where the extent is long enough for a modulation reading, and over the file otherwise.
+    The pattern is read over the whole file. The breath-task extent is read off the windowed
+    modulation (:func:`measure_breath_extent`), else the measure's events, else AIRWAY's own hull
+    (:func:`breath_extent_fallback`); the veto reads speech, activity and the classifiers over it, the
+    active fraction over the file where the extent is shorter than a modulation reading.
 
     Args:
         store: The provenance store, read for the ``spectrogram_narrowband`` and
@@ -697,7 +919,11 @@ def breath_pattern_of(
     bin_hz = sampling_hz / n_fft
     pattern = measure_breath_pattern(power, hop_s=hop_s, bin_hz=bin_hz, voiced=voiced, parameters=p, modulation=m)
     duration_s = power.shape[1] * hop_s
-    extent = task_extent_bounds(store)
+    x = extent_parameters()
+    breath_extent = measure_breath_extent(
+        power, hop_s=hop_s, bin_hz=bin_hz, smooth_s=p.smooth_s, modulation=m, parameters=x
+    ) or breath_extent_fallback(pattern.event_spans_s, task_extent_bounds(store), duration_s=duration_s, pad_s=x.pad_s)
+    extent = breath_extent.bounds if breath_extent is not None else None
     active_fraction: float | None = None
     active_over: str | None = None
     if extent is not None:
@@ -711,4 +937,4 @@ def breath_pattern_of(
     veto = breath_veto_of(
         store, run_dir, active_fraction=active_fraction, active_over=active_over, extent=extent, language=language
     )
-    return replace(pattern, veto=veto)
+    return replace(pattern, veto=veto, extent=breath_extent)
