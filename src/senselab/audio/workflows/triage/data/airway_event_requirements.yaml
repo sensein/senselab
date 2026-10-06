@@ -16,6 +16,9 @@
 #
 # 2026-10-05, later: the breath families listed here are decided on the breathing-pattern measure
 # (breath_pattern.yaml), not on AIRWAY's event count; see specs/20261005-breathing-pattern/design.md.
+#
+# 2026-10-06: the cough families are decided on the cough-onset measure (cough_pattern.yaml); see
+# specs/20261006-cough-pattern/design.md.
 version: 1
 breath:
 - breath-sounds
@@ -26,3 +29,7 @@ breath:
 - respiration-and-cough-v2-threebreaths
 - respiration-and-cough-v2-threebreathsmouth
 - respiration-and-cough-v2-threebreathsnose
+cough:
+- respiration-and-cough-cough
+- respiration-and-cough-v2-hardcough
+- voluntary-cough
