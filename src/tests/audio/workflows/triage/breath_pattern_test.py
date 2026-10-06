@@ -15,9 +15,11 @@ from senselab.audio.workflows.triage.breath_pattern import (
     SINGLE_BREATH,
     VETO_LITTLE_ACTIVITY,
     VETO_SPEECH,
+    BreathPattern,
     BreathTrain,
     BreathVeto,
     breath_extent_fallback,
+    breath_in_review,
     breath_pattern_parameters,
     breath_veto_of,
     in_review_band,
@@ -311,6 +313,19 @@ def test_the_review_band_holds_weak_irregular_and_short_trains() -> None:
     assert in_review_band(BreathTrain(phases=10, breaths=5, cycle_cv=0.1, rise_db=p.weak_rise_db_max - 1), p)
     assert in_review_band(BreathTrain(phases=1, breaths=1, rise_db=20.0), p)
     assert in_review_band(None, p)
+
+
+def test_a_reviewing_veto_puts_a_clean_train_in_the_band() -> None:
+    """167ac3f5 / a03b5325: a little-activity veto leaves even a clean train to the measure's finding."""
+    p = review_parameters()
+    clean = BreathTrain(phases=10, breaths=5, cycle_cv=0.1, rise_db=20.0)
+
+    def veto(vetoed_by: str | None) -> BreathVeto:
+        return BreathVeto(0, 0.2, OVER_TASK_EXTENT, (0.0, 10.0), None, None, None, None, None, vetoed_by)
+
+    assert not breath_in_review(BreathPattern(ALTERNATING_BREATHS, 6, veto=veto(None), train=clean), p)
+    assert not breath_in_review(BreathPattern(ALTERNATING_BREATHS, 6, veto=veto(VETO_SPEECH), train=clean), p)
+    assert breath_in_review(BreathPattern(ALTERNATING_BREATHS, 6, veto=veto(VETO_LITTLE_ACTIVITY), train=clean), p)
 
 
 TRACK_HOP_S = 0.01

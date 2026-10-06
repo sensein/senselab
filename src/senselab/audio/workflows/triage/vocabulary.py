@@ -368,23 +368,30 @@ ACOUSTICALLY_EMPTY = "acoustically_empty"
 TOO_SHORT_FOR_TASK = "too_short_for_task"
 """Discard ground: the recording is far shorter than its declared task can take, a truncated or aborted capture."""
 NO_BREATH_CAPTURED = "no_breath_captured"
-"""Discard ground: a breath task holds no breath (counted) or no breathing pattern (sustained)."""
+"""Discard ground: the breath train of a breath task counted no breath."""
 BREATH_SUSTAINED = "sustained"
 BREATH_COUNTED = "counted"
 _ALTERNATING_BREATHS = "alternating_breaths"
 
 
 def breath_present(evidence: TaskEvidence) -> bool:
-    """Whether a breath family's measure found what the family needs at the least.
+    """Whether a breath family's breath train found breathing.
 
     Args:
         evidence: The task evidence.
 
     Returns:
-        For a sustained family, an alternating breathing pattern; for a counted family, at least one
-        breath event, where no veto fires. False where the measure was not read.
+        True where the breath train counted at least one breath (one phase) outside the review band;
+        inside the band (``breath_review``), only where the measure's own events also found breathing.
+        False where the train counted none or the measure was not read.
     """
-    if evidence.breath_pattern is None or evidence.breath_vetoed_by is not None:
+    if evidence.breath_pattern is None or (evidence.breath_train_breaths or 0) == 0:
+        return False
+    return not evidence.breath_review or _measure_found(evidence)
+
+
+def _measure_found(evidence: TaskEvidence) -> bool:
+    if evidence.breath_vetoed_by is not None:
         return False
     if evidence.breath_mode == BREATH_SUSTAINED:
         return evidence.breath_pattern == _ALTERNATING_BREATHS
@@ -398,18 +405,14 @@ def breath_conforms(evidence: TaskEvidence) -> bool:
         evidence: The task evidence.
 
     Returns:
-        :func:`breath_present`, and for a counted family at least the instructed number of breaths,
-        counted as the larger of the measure's events (phases) over two and the breath train's breaths.
+        :func:`breath_present`, and for a counted family at least the instructed number of breath-train
+        breaths.
     """
     if not breath_present(evidence):
         return False
     if evidence.breath_mode == BREATH_COUNTED and evidence.instructed_count is not None:
-        return _counted_breaths(evidence) >= evidence.instructed_count
+        return (evidence.breath_train_breaths or 0) >= evidence.instructed_count
     return True
-
-
-def _counted_breaths(evidence: TaskEvidence) -> int:
-    return max(((evidence.breath_events_n or 0) + 1) // 2, evidence.breath_train_breaths or 0)
 
 
 def breath_shortfall(evidence: TaskEvidence) -> str | None:
@@ -419,21 +422,21 @@ def breath_shortfall(evidence: TaskEvidence) -> str | None:
         evidence: The task evidence.
 
     Returns:
-        ``"detected B breaths (P phases in the breath train, N breath events) where M were instructed"``
-        where breaths were present but too few were counted (:func:`breath_conforms`); None otherwise.
+        ``"detected B breaths (P phases in the breath train) where M were instructed"`` where breaths
+        were present but too few were counted (:func:`breath_conforms`); None otherwise.
     """
-    found = evidence.breath_events_n or 0
+    breaths = evidence.breath_train_breaths or 0
     if (
         evidence.breath_mode != BREATH_COUNTED
         or evidence.instructed_count is None
         or not breath_present(evidence)
-        or _counted_breaths(evidence) >= evidence.instructed_count
+        or breaths >= evidence.instructed_count
     ):
         return None
     phases = evidence.breath_reading.get("train") or {}
     return (
-        f"detected {_counted_breaths(evidence)} breaths ({phases.get('phases', 0)} phases in the breath train, "
-        f"{found} breath events) where {evidence.instructed_count} were instructed"
+        f"detected {breaths} breaths ({phases.get('phases', 0)} phases in the breath train) "
+        f"where {evidence.instructed_count} were instructed"
     )
 
 
@@ -1886,11 +1889,7 @@ def fold_file_verdict(
     findings = {branch: _found(branch in by_branch, spans.get(branch, 0)) for branch in branches_seen}
     breath_decides = task_evidence.breath_mode is not None and task_evidence.breath_pattern is not None
     if breath_decides and _AIRWAY in findings:
-        findings[_AIRWAY] = (
-            KindState.PRESENT.value
-            if (task_evidence.breath_events_n or 0) > 0 and task_evidence.breath_vetoed_by is None
-            else KindState.ABSENT.value
-        )
+        findings[_AIRWAY] = KindState.PRESENT.value if breath_present(task_evidence) else KindState.ABSENT.value
     cough_decides = task_evidence.cough_mode is not None and task_evidence.cough_onsets_n is not None
     if cough_decides and _AIRWAY in findings:
         findings[_AIRWAY] = KindState.PRESENT.value if cough_present(task_evidence) else KindState.ABSENT.value

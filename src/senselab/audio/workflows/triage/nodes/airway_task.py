@@ -16,8 +16,8 @@ import yaml
 from senselab.audio.workflows.triage.background_speech import background_speech_of
 from senselab.audio.workflows.triage.breath_pattern import (
     BreathPattern,
+    breath_in_review,
     breath_pattern_of,
-    in_review_band,
     task_extent_bounds,
 )
 from senselab.audio.workflows.triage.cough_pattern import CoughPattern, cough_pattern_of, in_cough_review_band
@@ -78,7 +78,7 @@ def breath_attributes(read: BreathPattern | tuple[str, ...]) -> dict[str, Any]:
         "events_n": read.events_n,
         "vetoed_by": read.veto.vetoed_by if read.veto is not None else None,
         "train_breaths": read.train.breaths if read.train is not None else None,
-        "review": in_review_band(read.train),
+        "review": breath_in_review(read),
         "reading": read.record(),
     }
 

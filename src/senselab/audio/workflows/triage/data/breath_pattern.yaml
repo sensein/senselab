@@ -2,10 +2,11 @@
 #
 # A breath family of airway_event_requirements.yaml is decided on this reading of PREPROCESS's
 # stored spectrogram_narrowband (pre-emphasised stream) and phonation_tracks, not on AIRWAY's
-# HeAR-scored event detector. Sustained families (SOUND_COVERAGE in branches.EXPECTATIONS) need
-# `alternating_breaths`; counted families (a required count) need at least one breath event, and
-# fewer breaths than the instruction asked (the larger of events / 2 and the breath train's phases / 2,
-# rounded half up) are a task_mismatch annotation, which moves no triage state. Either input absent reruns.
+# HeAR-scored event detector. Breathing is present where the breath train counts a phase outside the
+# review band; inside the band the measure's own events (sustained: `alternating_breaths`; counted: an
+# event, no veto) decide between review and no breath. Fewer train breaths (phases / 2, rounded half up)
+# than the instruction asked are a task_mismatch annotation, which moves no triage state. Either input
+# absent reruns.
 #
 # derivation: owner, 2026-10-05. The owner listened to 23 breath recordings with gain-lifted copies
 # (~/Downloads/contrast_check_20261005/, ~/Downloads/breath_absent_check_20261005/,
@@ -112,9 +113,12 @@ train:
   speech_link_s: 0.6           # lexical words and voiced runs this close chain into one speech segment
   edge_min_s: 0.12             # an edge phase (already raised at the file's start, or still at its end) lasts at least this
 # The narrow band of kept breath recordings flagged breath_review_low_confidence (flag, not discard):
-# a train of fewer than min_phases phases, an irregular cycle with a modest rise, or a weak rise.
+# a train of fewer than min_phases phases, an irregular cycle with a modest rise, a weak rise, or a
+# measure veto named in veto_reviews. Presence is the breath train's (one phase or more); derivation in
+# specs/20261005-breathing-pattern/design.md ("The train decides presence").
 review:
   min_phases: 2
   cycle_cv_min: 0.45
   irregular_rise_db_max: 12.5
   weak_rise_db_max: 8.0
+  veto_reviews: [little_activity]
