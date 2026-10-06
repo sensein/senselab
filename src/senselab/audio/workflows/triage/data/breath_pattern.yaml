@@ -39,15 +39,17 @@ measure:
   rise_db: 8.0
   flatness_min: 0.08
   voicing_strength_min: 0.45
-  merge_gap_s: 0.25
+  merge_gap_s: 0.08
   event_s: [0.3, 4.0]
+  event_trim_db: 10.0         # an event's span is the frames within this of its own peak
   voiced_fraction_max: 0.5
   period_s: [2.0, 8.0]
   autocorr_min: 0.25
   interval_s: [0.4, 8.0]
   interval_share_min: 0.5
-# Breathing cycles from the modulation spectra of subband envelopes of the same spectrogram; the
-# derivation is in specs/20261005-breathing-pattern/design.md ("Modulation cycles").
+# The breathing-over-syllabic modulation ratio and the active span of the same spectrogram's subband
+# envelopes; the active span feeds the little-activity veto. Derivation in
+# specs/20261005-breathing-pattern/design.md ("Modulation cycles").
 modulation:
   band_edges_hz: [150.0, 300.0, 500.0, 800.0, 1300.0, 2000.0, 3000.0, 4000.0]
   fs_mod: 20.0                 # envelope rate, Hz
@@ -56,11 +58,7 @@ modulation:
   reference_band_hz: [0.05, 8.0]
   floor_percentile: 10.0
   active_rise_db: 8.0
-  peak_min_distance_s: 0.6
-  peak_prominence_std: 0.8
   min_duration_s: 4.0          # shortest recording read
-  peaks_per_breath: 2.0        # an inhale and an exhale each make a peak
-  breathing_min_db: 7.0        # at or above, with an active span: cycles count
 # Vetoes on the measure: a breath the measure finds stands unless the task extent holds speech or too
 # little active sound. Fitted on the owner's 56 listened breath recordings (2026-10-06); the derivation,
 # with the owner's words, is in specs/20261005-breathing-pattern/design.md ("Breath vetoes over the task
@@ -69,15 +67,45 @@ veto:
   speech_words_min: 5          # speech words inside the task extent at or above: speech
   active_fraction_min: 0.36    # active span over the task extent (the file where the extent is under min_duration_s) below: too little
   noise_labels: [Vehicle, Car, Engine, Mechanical fan, White noise]   # recorded as context
-# The breath-task extent from windowed modulation (measure_breath_extent): the longest run of windows
-# whose breathing-over-syllabic ratio and active share clear these, tightened to its active frames and
-# padded. Fallbacks: the measure's events, padded; then AIRWAY's own hull. Derivation in
-# specs/20261005-breathing-pattern/design.md ("Breath-task extent from modulation").
-extent:
-  window_s: 8.0                # a few breathing cycles
-  hop_s: 2.0
-  window_breathing_min_db: 5.0 # window ratio at or above: the window breathes
-  window_active_min: 0.15      # share of window frames above the active rise
-  max_gap_windows: 1           # non-breathing windows a run bridges
-  pad_s: 1.0                   # each side
-  min_cycles: 2                # fewest estimated breaths a modulation extent holds
+# The breath train (measure_breath_train): bursts of coherent broadband rise over denoised subband
+# envelopes, grouped into the run that is the task; its hull is the breath-task extent and its bursts
+# are the counted phases (breaths = phases / 2, rounded half up). Fallbacks: the measure's events,
+# padded; then AIRWAY's own hull. Fitted on the owner's 56 annotated figures (2026-10-06); derivation,
+# with the owner's words, in specs/20261005-breathing-pattern/design.md ("The breath train").
+train:
+  band_edges_hz: [150.0, 300.0, 500.0, 800.0, 1300.0, 2000.0, 3000.0, 4000.0, 5500.0, 7500.0]
+  fs_mod: 20.0                 # envelope rate, Hz
+  smooth_s: 0.05               # moving median on each subband level
+  noise_percentile: 10.0       # per-bin stationary noise estimate
+  noise_subtract: 0.9          # share of that estimate subtracted
+  tonal_db: 10.0               # a bin this far over its neighbours' noise is a tonal line, left out
+  tonal_halfwidth_bins: 5
+  envelope_smooth_s: 0.15      # moving mean on the combined robust-z envelope
+  prominence_min: 0.6          # robust-z units
+  prominence_range_frac: 0.12  # or this share of the envelope's p95-p5 range, whichever is larger
+  weak_prominence_frac: 0.3    # a weaker burst down to this share stands if it fits the template
+  template_corr_min: 0.6
+  distance_quick_s: 0.25       # between bursts, for the quick-breath families
+  distance_s: 0.4              # for every other family
+  quick_families: [respiration-and-cough-threequickbreaths, respiration-and-cough-v2-threebreaths]
+  burst_s: [0.12, 4.0]
+  flatness_min: 0.03
+  voiced_max: 0.95             # share of a burst's frames
+  coherence_min: 0.6           # share of subbands rising together
+  coherence_window_s: 0.2
+  rise_z: 0.5                  # a subband rises this far within the window
+  floor_percentile: 10.0       # of the raw broadband level
+  rise_floor_db: 5.0           # a burst's peak over that floor
+  gap_min_s: 12.0              # bursts further apart start a new run
+  gap_cycles: 3.0              # or this many half-cycles, whichever is larger
+  speech_words_min: 5          # lexical words in a run (gaps under speech_gap_s) that split the train
+  speech_gap_s: 1.0
+  pad_s: 0.25                  # each side of the train's hull
+  continue_db: 3.0             # the extent runs on to a following speech onset over the floor by this
+# The narrow band of kept breath recordings flagged breath_review_low_confidence (flag, not discard):
+# a train of fewer than min_phases phases, an irregular cycle with a modest rise, or a weak rise.
+review:
+  min_phases: 2
+  cycle_cv_min: 0.45
+  irregular_rise_db_max: 12.5
+  weak_rise_db_max: 8.0

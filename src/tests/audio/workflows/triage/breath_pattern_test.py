@@ -8,24 +8,27 @@ import numpy as np
 from senselab.audio.workflows.triage.breath_pattern import (
     ALTERNATING_BREATHS,
     EXTENT_AIRWAY_EVENTS,
+    EXTENT_BREATH_TRAIN,
     EXTENT_MEASURE_EVENTS,
-    EXTENT_MODULATION,
     NO_BREATHING,
     OVER_TASK_EXTENT,
     SINGLE_BREATH,
     VETO_LITTLE_ACTIVITY,
     VETO_SPEECH,
-    BreathExtent,
+    BreathTrain,
     BreathVeto,
     breath_extent_fallback,
     breath_pattern_parameters,
     breath_veto_of,
-    extent_parameters,
-    measure_breath_extent,
+    in_review_band,
     measure_breath_pattern,
+    measure_breath_train,
     measure_modulation,
     modulation_parameters,
-    tighten_to_events,
+    review_parameters,
+    speech_runs,
+    train_extent,
+    train_parameters,
 )
 from senselab.utils.prov_store import ProvStore
 
@@ -91,42 +94,24 @@ def _modulation(power: np.ndarray):  # noqa: ANN202
     )
 
 
-def test_five_breath_cycles_read_as_five_breaths() -> None:
-    """An inhale and an exhale per breath make two peaks each; ten peaks are five breaths."""
-    bursts = [(2 + k * 5.5 + offset, length) for k in range(5) for offset, length in ((0.5, 1.0), (2.0, 1.4))]
-    reading = _modulation(_spectrogram(30.0, bursts))
-    assert reading is not None
-    assert reading.breathing
-    assert reading.estimated_breaths == 5
+def test_syllabic_bursts_put_the_modulation_in_the_syllabic_band() -> None:
+    """Bursts at a syllabic rate read a breathing-over-syllabic ratio well under breathing's."""
+    syllabic = _modulation(_spectrogram(30.0, [(2 + k * 0.25, 0.12) for k in range(100)]))
+    breathing = _modulation(_spectrogram(30.0, _cycles(2.0, 5)))
+    assert syllabic is not None and breathing is not None
+    assert syllabic.breath_vs_syllabic_db < breathing.breath_vs_syllabic_db - 10
 
 
-def test_syllabic_bursts_are_not_breathing_cycles() -> None:
-    """Bursts at a syllabic rate put the energy in the syllabic band, so no cycles count."""
-    bursts = [(2 + k * 0.25, 0.12) for k in range(100)]
-    reading = _modulation(_spectrogram(30.0, bursts))
-    assert reading is not None
-    assert not reading.breathing
-
-
-def test_silence_has_no_breathing_cycles() -> None:
-    """A floor with no burst has no active span, so no cycles count."""
+def test_silence_has_no_active_span() -> None:
+    """A floor with no burst has no active span."""
     reading = _modulation(_spectrogram(30.0, []))
     assert reading is not None
-    assert not reading.breathing and reading.active_span_s == 0
+    assert reading.active_span_s == 0
 
 
 def test_a_recording_shorter_than_the_reading_needs_has_none() -> None:
     """Under min_duration_s the modulation spectrum is not read."""
     assert _modulation(_spectrogram(2.0, [(0.5, 1.0)])) is None
-
-
-def test_an_odd_peak_count_rounds_up_to_the_unpaired_breath() -> None:
-    """Nine peaks are an unpaired burst beside four full breaths: five breaths."""
-    bursts = [(2 + k * 5.5 + offset, length) for k in range(5) for offset, length in ((0.5, 1.0), (2.0, 1.4))][:9]
-    reading = _modulation(_spectrogram(30.0, bursts))
-    assert reading is not None
-    assert reading.modulation_peaks == 9
-    assert reading.estimated_breaths == 5
 
 
 EXTENT = (2.0, 12.0)
@@ -215,51 +200,98 @@ def test_absent_classifier_windows_do_not_stop_the_veto(tmp_path: Path) -> None:
     assert veto.vetoed_by is None and veto.speech_mean is None
 
 
-def _extent(power: np.ndarray):  # noqa: ANN202
-    return measure_breath_extent(
-        power,
-        hop_s=HOP_S,
-        bin_hz=BIN_HZ,
-        smooth_s=breath_pattern_parameters().smooth_s,
-        modulation=modulation_parameters(),
-        parameters=extent_parameters(),
-    )
-
-
 def _cycles(start: float, n: int) -> list[tuple[float, float]]:
     return [(start + k * 5.5 + offset, length) for k in range(n) for offset, length in ((0.5, 1.0), (2.0, 1.4))]
 
 
+def _train(power: np.ndarray, words: tuple[tuple[float, float], ...] = (), family: str | None = None) -> BreathTrain:
+    return measure_breath_train(
+        power, hop_s=HOP_S, bin_hz=BIN_HZ, voiced=np.zeros(power.shape[1], dtype=bool), words=words, family=family
+    )
+
+
+QUICK = "respiration-and-cough-threequickbreaths"
+
+
+def test_quick_breaths_are_counted_phase_by_phase() -> None:
+    """3d889bf8: three quick breaths are six short bursts in four seconds, so three breaths."""
+    train = _train(_spectrogram(6.0, [(0.3 + 0.6 * k, 0.35) for k in range(6)]), family=QUICK)
+    assert (train.phases, train.breaths) == (6, 3)
+
+
+def test_five_breath_cycles_count_ten_phases() -> None:
+    """An inhale and an exhale per breath: ten phases are five breaths."""
+    train = _train(_spectrogram(30.0, _cycles(2.0, 5)))
+    assert (train.phases, train.breaths) == (10, 5)
+    assert train.rate_cpm is not None and abs(train.rate_cpm - 60 / 5.5) < 1.0
+
+
+def test_an_odd_phase_count_rounds_up_to_the_unpaired_breath() -> None:
+    """Nine phases are an unpaired burst beside four full breaths: five breaths."""
+    train = _train(_spectrogram(30.0, _cycles(2.0, 5)[:9]))
+    assert (train.phases, train.breaths) == (9, 5)
+
+
+def test_one_long_breath_stays_a_single_breath() -> None:
+    """7c169ccc: one 1.6 s breath where three quick ones were asked is one phase, one breath."""
+    train = _train(_spectrogram(8.5, [(3.0, 1.6)]), family=QUICK)
+    assert (train.phases, train.breaths) == (1, 1)
+
+
+def test_silence_has_no_breath_train() -> None:
+    """The noise floor alone holds no burst, so no train and no extent."""
+    train = _train(_spectrogram(30.0, []))
+    assert train.phases == 0 and train.extent_s is None
+
+
 def test_breathing_in_the_first_half_bounds_the_extent_there() -> None:
-    """6f73b8d2: the breathing sits in the first half; the extent ends before the silent second half."""
-    extent = _extent(_spectrogram(60.0, _cycles(1.0, 5)))
-    assert extent is not None
-    assert extent.source == EXTENT_MODULATION
-    assert extent.start_s < 3.0
-    assert 25.0 < extent.end_s < 35.0
+    """6f73b8d2: the breathing sits in the first half; the extent ends at the last breath, padded."""
+    train = _train(_spectrogram(60.0, _cycles(1.0, 5)))
+    assert train.extent_s is not None
+    last = _cycles(1.0, 5)[-1]
+    assert train.extent_s[0] < 1.5
+    assert last[0] + last[1] <= train.extent_s[1] < last[0] + last[1] + 1.0
 
 
-def test_the_extent_stops_where_speech_takes_over() -> None:
-    """6ca9935e: breathing followed by speech; syllabic bursts after the breaths are left outside."""
-    speech = [(32.0 + k * 0.25, 0.12) for k in range(100)]
-    extent = _extent(_spectrogram(60.0, _cycles(1.0, 5) + speech))
-    assert extent is not None
-    assert extent.end_s < 36.0
+def test_every_counted_peak_and_overlapping_event_lies_inside_the_extent() -> None:
+    """The invariant the owner's figures were checked on: no counted burst or train event falls outside."""
+    power = _spectrogram(30.0, _cycles(2.0, 5))
+    train = _train(power)
+    events = measure_breath_pattern(
+        power,
+        hop_s=HOP_S,
+        bin_hz=BIN_HZ,
+        voiced=np.zeros(power.shape[1], dtype=bool),
+        parameters=breath_pattern_parameters(),
+    ).event_spans_s
+    extent = train_extent(train, events + ((train.bursts[-1].end_s, train.bursts[-1].end_s + 2.0),))
+    assert extent.source == EXTENT_BREATH_TRAIN and extent.breaths == 5
+    assert all(extent.start_s <= burst.start_s and burst.end_s <= extent.end_s for burst in train.bursts)
+    assert all(extent.start_s <= e[0] and e[1] <= extent.end_s for e in events if e[1] > extent.start_s)
+    assert extent.end_s == train.bursts[-1].end_s + 2.0
 
 
-def test_silence_has_no_modulation_extent() -> None:
-    """No window breathes, so the modulation gives no extent."""
-    assert _extent(_spectrogram(30.0, [])) is None
+def _words(start: float, n: int) -> tuple[tuple[float, float], ...]:
+    return tuple((start + 0.4 * k, start + 0.4 * k + 0.3) for k in range(n))
 
 
-def test_a_recording_shorter_than_a_window_has_no_modulation_extent() -> None:
-    """Shorter than one window: the fallbacks decide."""
-    assert _extent(_spectrogram(3.0, [(0.5, 1.0)])) is None
+def test_speech_runs_need_enough_words() -> None:
+    """A run of five words is speech; two stray words are not."""
+    assert speech_runs(_words(10.0, 5) + _words(20.0, 2), words_min=5, gap_s=1.0) == [(10.0, 10.0 + 0.4 * 4 + 0.3)]
+
+
+def test_speech_after_the_breaths_ends_the_extent() -> None:
+    """6ca9935e: breathing then reading aloud; the extent stops at the speech, and bursts in it are left out."""
+    words = _words(24.0, 10)
+    power = _spectrogram(30.0, _cycles(1.0, 4) + [(25.0, 0.5), (27.0, 0.5)])
+    train = _train(power, words=words)
+    assert train.extent_s is not None and train.extent_s[1] <= 24.0
+    assert train.phases == 8
 
 
 def test_the_fallback_is_the_measures_events_then_airways_hull() -> None:
-    """Without a modulation extent, the measure's events (padded) stand, then AIRWAY's own hull."""
-    pad = extent_parameters().pad_s
+    """Without a breath train, the measure's events (padded) stand, then AIRWAY's own hull."""
+    pad = train_parameters().pad_s
     events = breath_extent_fallback(((2.0, 3.0), (5.0, 6.0)), (0.0, 1.0), duration_s=10.0, pad_s=pad)
     assert events is not None and events.source == EXTENT_MEASURE_EVENTS
     assert events.bounds == (2.0 - pad, 6.0 + pad)
@@ -268,10 +300,12 @@ def test_the_fallback_is_the_measures_events_then_airways_hull() -> None:
     assert breath_extent_fallback((), None, duration_s=10.0, pad_s=pad) is None
 
 
-def test_a_modulation_extent_narrows_to_the_breath_events_inside_it() -> None:
-    """Talk at a window's edge is left outside: the extent runs from the first to the last event, padded."""
-    wide = BreathExtent(start_s=0.0, end_s=20.0, source=EXTENT_MODULATION, estimated_breaths=3)
-    narrowed = tighten_to_events(wide, ((12.0, 13.0), (15.0, 16.5)), duration_s=20.0, pad_s=1.0)
-    assert narrowed.bounds == (11.0, 17.5)
-    assert narrowed.source == EXTENT_MODULATION
-    assert tighten_to_events(wide, (), duration_s=20.0, pad_s=1.0) == wide
+def test_the_review_band_holds_weak_irregular_and_short_trains() -> None:
+    """fac74f45 and 81873ca0 the owner was fine to see flagged; a clean train stays out."""
+    p = review_parameters()
+    clean = BreathTrain(phases=10, breaths=5, cycle_cv=0.1, rise_db=20.0)
+    assert not in_review_band(clean, p)
+    assert in_review_band(BreathTrain(phases=10, breaths=5, cycle_cv=0.6, rise_db=p.irregular_rise_db_max - 1), p)
+    assert in_review_band(BreathTrain(phases=10, breaths=5, cycle_cv=0.1, rise_db=p.weak_rise_db_max - 1), p)
+    assert in_review_band(BreathTrain(phases=1, breaths=1, rise_db=20.0), p)
+    assert in_review_band(None, p)

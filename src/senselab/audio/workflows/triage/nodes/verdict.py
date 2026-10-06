@@ -34,7 +34,7 @@ from typing import Any, Callable, Mapping, Sequence
 import yaml
 
 from senselab.audio.data_structures import AudioHints
-from senselab.audio.workflows.triage.breath_pattern import BreathPattern, breath_pattern_of
+from senselab.audio.workflows.triage.breath_pattern import BreathPattern, breath_pattern_of, in_review_band
 from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.live_evidence import declared_task, recording_stem
 from senselab.audio.workflows.triage.nodes.airway import EVENTS_FOUND as AIRWAY_EVENTS_FOUND
@@ -465,7 +465,7 @@ def _task_evidence(
     reading: BreathPattern | None = None
     if needed == "breath" and airway is not None and run_dir is not None and sampling_hz:
         breath_mode = BREATH_SUSTAINED if airway.pattern == Pattern.SOUND_COVERAGE else BREATH_COUNTED
-        read = breath_pattern_of(store, run_dir, sampling_hz=sampling_hz, language=language)
+        read = breath_pattern_of(store, run_dir, sampling_hz=sampling_hz, language=language, family=declared_family)
         if isinstance(read, BreathPattern):
             reading, absent = read, ()
         else:
@@ -486,14 +486,8 @@ def _task_evidence(
         breath_pattern=reading.pattern if reading is not None else None,
         breath_events_n=reading.events_n if reading is not None else None,
         breath_vetoed_by=reading.veto.vetoed_by if reading is not None and reading.veto is not None else None,
-        breath_cycles_n=reading.modulation.estimated_breaths
-        if reading is not None
-        and reading.modulation is not None
-        and (
-            reading.modulation.breathing
-            or (reading.veto is not None and reading.veto.vetoed_by is None and reading.modulation.active_span_s > 0)
-        )
-        else None,
+        breath_train_breaths=reading.train.breaths if reading is not None and reading.train is not None else None,
+        breath_review=in_review_band(reading.train) if reading is not None else False,
         breath_reading={"mode": breath_mode, **reading.record()} if reading is not None else {},
     )
 
@@ -995,7 +989,8 @@ def _settle_breath_extent(store: ProvStore, activity: str, software: str, extent
                 "family": "airway",
                 "role": TASK_EXTENT_SPAN_ROLE,
                 "extent_from": str(extent["source"]),
-                "estimated_breaths": extent.get("estimated_breaths"),
+                "phases": extent.get("phases"),
+                "breaths": extent.get("breaths"),
                 SUPERSEDES: branches,
             },
         )
