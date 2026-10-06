@@ -160,3 +160,51 @@ against 0.48) and the silence ratio (3.7 dB against 1.8 dB, with 324cd5d0 the on
 d5a327c7, which the owner heard as "masked by other sounds or very soft". The parameters are in
 `data/breath_pattern.yaml` (`veto`); a recording without YAMNet's windows reruns as
 `owning_branch_input_absent`.
+
+## Breath vetoes over the task extent (2026-10-06), replacing the four vetoes
+
+The four vetoes moved 181 recordings from pass to discard. The owner listened to 12
+(`~/Downloads/breath_veto_check_20261006/`) and heard breathing in 11. Each reason the owner gave
+became a structural rule:
+
+- 6ca9935e, discarded as speech: "breath followed by speech. does not overlap in task extent". Speech
+  is now counted only inside the task extent.
+- c9b77a28 and 988c1609, discarded as speech on repeated 唉 / 啊 / 呜: these are a recognizer's
+  rendering of a sigh. A speech word must not be bracketed, a vocalisation or an interjection
+  (`residue.is_non_lexical`), and must be written in the declared language's script.
+- 6f73b8d2, discarded as little activity at 0.382 of the file: "task extent is in the first half".
+  The active fraction is now read over the task extent (0.841 there).
+- b26208dd, discarded as silence: "silence is quiet but breathing is there". The four noise vetoes
+  (0b9b68cf, both 01f52a78, 42442f80) also held breathing. Noise and silence no longer veto.
+- 167ac3f5, discarded as little activity: "has little breath". Discarding it is acceptable.
+
+The breathing pattern itself stays a whole-file reading. Twelve of the 56 labelled breath
+recordings have a task extent of 4 s or less (the AIRWAY event hull). Read over the extent, the measure
+turns 25351e19, 772aa876, 80e179b4, 42442f80 and dac345e2 from alternating to single or none, and
+7c169ccc from single to none.
+
+On the 56 listened recordings (38 breath, 18 none), the rule is: the measure finds the task's breath
+(whole file); fewer than 5 speech words lie inside the task extent; and the active fraction is at least
+0.36. The fraction is read over the task extent where that extent is long enough for a modulation
+reading (`min_duration_s`, 4 s), and over the file otherwise. The rule agrees on 53 of 56. Refitting
+the activity cut on 55 and predicting the held-out recording agrees on 51 of 56.
+
+- **Real breathing discarded:** one, 0dc15213. It has no active span at all (0.0), so no activity
+  rule keeps it.
+- **No breath kept:** two, 5cc93330 and d5a327c7. The owner heard them as "masked by other sounds or
+  very soft", which is the error the owner accepts.
+- **The activity cut is narrow:** the nearest breathing recording is 81873ca0 at 0.39, the nearest
+  vetoed no-breath recording is ae2a7223 at 0.325, and 0.36 is the midpoint of the zero-error range
+  0.34–0.38.
+- **Speech:** every breathing recording has 0 speech words inside its extent. The only no-breath
+  recording with any is 517381e9, with 8.
+
+YAMNet and HeAR scores over the extent are recorded on the veto for context and decide nothing. Their
+absence no longer sends a breath recording to rerun. The parameters are in `data/breath_pattern.yaml`
+(`veto`).
+
+Estimated against r15, as an in-memory VERDICT re-fold with each recording's hint:
+- **The 181 the four vetoes discarded:** 118 pass, and 63 stay discarded (44 for little activity, 19
+  for speech).
+- **The 537 the breath-evidence rule moved:** 471 pass, and 66 are discarded (16 of them pass in r15).
+- **300 random:** 7 discard → pass, 2 discard → flag, 1 flag → discard.
