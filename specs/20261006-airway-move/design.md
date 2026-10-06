@@ -132,3 +132,22 @@ it.
 Owner, 2026-10-06: "clef can be left out of airway decisions". A confident second-opinion
 disagreement (`second_opinion_disagreement`) is no flag ground where AIRWAY owns the declared
 family; the answers are still recorded on the verdict.
+
+## Before and after on the owner labels
+
+Measured locally, in memory, over the 80 owner-labelled airway stores copied from the r9 tree
+(`~/Downloads/airway_move_eval_20261006/`: 56 breath from `tmp_bxt/labels.jsonl`, 24 cough from
+`tmp_bxt/eval_labelled_cough.jsonl` with the owner labels of
+`triage_listening_labels_20261006.csv`). "Before" reads each measure over the store as VERDICT saw
+it, every branch's task-extent span live; "after" retires the SPEECH and VOICE task-extent spans
+first, as at AIRWAY time in a replay. The decision compared is the measure's: breath present
+(`breath_present`) or a cough found (`cough_present`).
+
+| | labelled | agree before | agree after | decisions moved | extents moved |
+|---|---|---|---|---|---|
+| breath | 56 | 53 | 53 | 0 | 0 |
+| cough | 24 | 24 | 24 | 0 | 0 |
+
+The three breath disagreements are the ones the breathing-pattern design already names:
+5cc93330 and d5a327c7 (heard as no breath or masked, read as alternating breaths) and 0dc15213
+(heard with breath, discarded; the owner accepted either outcome).
