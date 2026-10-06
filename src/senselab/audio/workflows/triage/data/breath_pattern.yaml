@@ -103,6 +103,12 @@ train:
   speech_gap_s: 1.0
   pad_s: 0.25                  # each side of the train's hull
   continue_db: 3.0             # the extent runs on to a following speech onset over the floor by this
+  steady_strength_min: 0.8     # pitch strength of a frame in a sustained vocalisation
+  steady_min_s: 0.2            # a sustained vocalisation lasts at least this
+  steady_f0_cv_max: 0.15       # and its F0 varies by at most this share
+  voice_gap_s: 0.04            # voiced runs this close are one run
+  speech_link_s: 0.6           # lexical words and voiced runs this close chain into one speech segment
+  edge_min_s: 0.12             # an edge phase (already raised at the file's start, or still at its end) lasts at least this
 # The narrow band of kept breath recordings flagged breath_review_low_confidence (flag, not discard):
 # a train of fewer than min_phases phases, an irregular cycle with a modest rise, or a weak rise.
 review:

@@ -232,6 +232,13 @@ class TrainParameters:
         speech_gap_s: The longest gap between words of one speech run.
         pad_s: Padding on each side of the train's hull.
         continue_db: The median level over the floor the extent runs on through to a speech onset.
+        steady_strength_min: The pitch strength of a frame in a sustained vocalisation.
+        steady_min_s: The least duration of a sustained vocalisation.
+        steady_f0_cv_max: The largest coefficient of variation of its F0.
+        voice_gap_s: Voiced runs this close are one run.
+        speech_link_s: The longest gap between a lexical word and the voiced runs it chains into one speech
+            segment.
+        edge_min_s: The least duration of an edge phase, raised at the file's start or end.
     """
 
     band_edges_hz: tuple[float, ...]
@@ -263,6 +270,12 @@ class TrainParameters:
     speech_gap_s: float
     pad_s: float
     continue_db: float
+    steady_strength_min: float
+    steady_min_s: float
+    steady_f0_cv_max: float
+    voice_gap_s: float
+    speech_link_s: float
+    edge_min_s: float
 
 
 @functools.cache
@@ -334,6 +347,7 @@ class Burst:
         rise_db: Its peak's raw broadband level over the recording's floor.
         template_corr: Its spectrum's correlation with the strong bursts' mean spectrum.
         weak: Whether it stood only on the template.
+        voiced: Whether it is a sustained vocalisation, which stands without the template.
     """
 
     peak_s: float
@@ -344,6 +358,7 @@ class Burst:
     rise_db: float
     template_corr: float | None = None
     weak: bool = False
+    voiced: bool = False
 
 
 @dataclass(frozen=True)
@@ -801,6 +816,74 @@ def _robust_z(levels: np.ndarray) -> np.ndarray:
     return (levels - median) / mad
 
 
+def _bridged_runs(mask: np.ndarray, times: np.ndarray, gap_s: float) -> list[tuple[int, int]]:
+    """Index runs of True in ``mask``, bridging gaps of up to ``gap_s``; ends exclusive."""
+    runs: list[list[int]] = []
+    for index in map(int, np.flatnonzero(mask)):
+        if runs and times[index] - times[runs[-1][1] - 1] <= gap_s + 1e-9:
+            runs[-1][1] = index + 1
+        else:
+            runs.append([index, index + 1])
+    return [(start, end) for start, end in runs]
+
+
+def voice_segments(
+    times: np.ndarray,
+    f0: np.ndarray,
+    strength: np.ndarray,
+    words: tuple[tuple[float, float], ...],
+    *,
+    voicing_strength_min: float,
+    parameters: TrainParameters,
+) -> tuple[tuple[tuple[float, float], ...], tuple[tuple[float, float], ...]]:
+    """Sustained vocalisations and speech segments, from the phonation track.
+
+    A speech segment is a chain of lexical words and voiced runs, each within ``speech_link_s`` of the
+    one before, that holds at least one lexical word. A sustained vocalisation is a steady voiced run (strong
+    pitch, stable F0, at least ``steady_min_s``) outside every speech segment.
+
+    Args:
+        times: The track's frame times, in seconds.
+        f0: Its F0 per frame, 0 or NaN where unvoiced.
+        strength: Its pitch strength per frame.
+        words: Each lexical word's ``(start, end)``.
+        voicing_strength_min: The pitch strength at or above which a frame with an F0 is voiced.
+        parameters: The train's parameters.
+
+    Returns:
+        The sustained vocalisations and the speech segments, each as ``(start, end)`` in seconds.
+    """
+    p = parameters
+    if len(times) < 2:
+        return (), ()
+    hop = float(np.median(np.diff(times)))
+    pitch = np.nan_to_num(np.asarray(f0, dtype=np.float64))
+    power = np.nan_to_num(np.asarray(strength, dtype=np.float64))
+    voiced = _bridged_runs((pitch > 0) & (power >= voicing_strength_min), times, p.voice_gap_s)
+    spans = [(float(times[a]), float(times[b - 1]) + hop) for a, b in voiced]
+    pieces = sorted([(s, e, False) for s, e in spans] + [(s, e, True) for s, e in words])
+    speech: list[tuple[float, float]] = []
+    chain: list[tuple[float, float, bool]] = []
+    for piece in [*pieces, None]:
+        if piece is not None and (not chain or piece[0] - max(e for _, e, _ in chain) <= p.speech_link_s):
+            chain.append(piece)
+            continue
+        if any(lexical for _, _, lexical in chain):
+            speech.append((chain[0][0], max(e for _, e, _ in chain)))
+        chain = [piece] if piece is not None else []
+    sustained = []
+    for (a, b), (s, e) in zip(voiced, spans):
+        if e - s < p.steady_min_s or any(ss < e and se > s for ss, se in speech):
+            continue
+        strong = (pitch[a:b] > 0) & (power[a:b] >= p.steady_strength_min)
+        if strong.mean() < 0.5:
+            continue
+        held = pitch[a:b][strong]
+        if float(np.std(held) / np.mean(held)) <= p.steady_f0_cv_max:
+            sustained.append((s, e))
+    return tuple(sustained), tuple(speech)
+
+
 def find_bursts(
     power: np.ndarray,
     *,
@@ -809,8 +892,15 @@ def find_bursts(
     voiced: np.ndarray,
     family: str | None,
     parameters: TrainParameters,
+    sustained: tuple[tuple[float, float], ...] = (),
+    speech: tuple[tuple[float, float], ...] = (),
 ) -> tuple[list[Burst], np.ndarray, float]:
     """Find breath phases: coherent broadband rises on the denoised subband envelopes.
+
+    A burst holding a sustained vocalisation is split at its edges into a voiced and an unvoiced
+    phase, and the voiced one stands without the flatness and voicing tests. Bursts never overlap;
+    no phase peaks inside a speech segment. A raised edge phase opening or closing the file stands
+    when its spectrum fits the bursts' template.
 
     Args:
         power: Power spectrogram, frequency bins by frames, bin 0 at 0 Hz.
@@ -819,6 +909,8 @@ def find_bursts(
         voiced: Whether each frame is voiced, one per frame.
         family: The declared task family, which fixes the least spacing between bursts.
         parameters: The train's parameters.
+        sustained: The sustained vocalisations, ``(start, end)`` in seconds (:func:`voice_segments`).
+        speech: The speech segments, likewise.
 
     Returns:
         The bursts in time order, the raw broadband level at ``fs_mod``, and its floor.
@@ -849,34 +941,76 @@ def find_bursts(
     voicing = held.reshape(frames, step).mean(axis=1) if len(held) == frames * step else np.zeros(frames)
     spectrum = 10 * np.log10(band.reshape(band.shape[0], frames, step).mean(axis=2))
     half = int(round(p.coherence_window_s * fs))
-    found: list[Burst] = []
-    for index, peak in enumerate(peaks):
-        low, high = int(props["left_ips"][index]), int(np.ceil(props["right_ips"][index]))
-        if not p.burst_s[0] <= (high - low) / fs <= p.burst_s[1]:
-            continue
-        if (
+    in_speech = np.zeros(frames, dtype=bool)
+    for start, end in speech:
+        in_speech[int(start * fs) : int(np.ceil(end * fs)) + 1] = True
+    steady = np.zeros(frames, dtype=bool)
+    for start, end in sustained:
+        steady[int(round(start * fs)) : int(round(end * fs)) + 1] = True
+
+    def burst_at(low: int, high: int, held: bool, *, edge: bool = False, onset: int | None = None) -> Burst | None:
+        high = min(high, frames - 1)
+        if high <= low or not p.burst_s[0] <= (high - low) / fs <= p.burst_s[1]:
+            return None
+        peak = low + int(np.argmax(combined[low : high + 1]))
+        if in_speech[peak]:
+            return None
+        if not held and (
             float(flatness[low : high + 1].mean()) < p.flatness_min
             or float(voicing[low : high + 1].mean()) > p.voiced_max
         ):
-            continue
-        near, before = slice(max(0, peak - half), min(frames, peak + half + 1)), slice(max(0, low - half), low + 1)
+            return None
+        rise_from = low if onset is None else onset
+        near = slice(max(0, peak - half), min(frames, peak + half + 1))
+        before = slice(max(0, rise_from - half), rise_from + 1)
         coherence = float(np.mean([(row[near].max() - row[before].min()) >= p.rise_z for row in z]))
         rise = float(broadband[peak] - floor)
-        if coherence < p.coherence_min or rise < p.rise_floor_db:
-            continue
-        prominence = float(props["prominences"][index])
-        found.append(
-            Burst(
-                peak_s=round(peak / fs, 3),
-                start_s=round(low / fs, 3),
-                end_s=round(high / fs, 3),
-                prominence=round(prominence, 3),
-                coherence=round(coherence, 3),
-                rise_db=round(rise, 2),
-                weak=prominence < full,
-            )
+        if (coherence < p.coherence_min and not edge) or rise < p.rise_floor_db:
+            return None
+        prominence = float(combined[peak] - combined[low : high + 1].min())
+        return Burst(
+            peak_s=round(peak / fs, 3),
+            start_s=round(low / fs, 3),
+            end_s=round(high / fs, 3),
+            prominence=round(prominence, 3),
+            coherence=round(coherence, 3),
+            rise_db=round(rise, 2),
+            weak=not held and (edge or prominence < full),
+            voiced=held,
         )
-    strong = [burst for burst in found if not burst.weak]
+
+    found: list[Burst] = []
+    for index, peak in enumerate(peaks):
+        low, high = int(props["left_ips"][index]), int(np.ceil(props["right_ips"][index]))
+        cuts = [low] + [i for i in range(low + 1, high + 1) if steady[i] != steady[i - 1]] + [high + 1]
+        if len(cuts) == 2:
+            burst = burst_at(low, high, bool(steady[low : high + 1].mean() >= 0.5))
+            if burst is not None and not in_speech[peak]:
+                found.append(
+                    replace(
+                        burst,
+                        prominence=round(float(props["prominences"][index]), 3),
+                        weak=not burst.voiced and float(props["prominences"][index]) < full,
+                    )
+                )
+            continue
+        for start, stop in zip(cuts, cuts[1:]):
+            burst = burst_at(start, stop - 1, bool(steady[start]), onset=low)
+            if burst is not None:
+                found.append(burst)
+    found.sort(key=lambda b: b.peak_s)
+    resolved: list[Burst] = []
+    for burst in found:
+        if resolved and burst.peak_s <= resolved[-1].peak_s:
+            continue
+        if resolved and burst.start_s < resolved[-1].end_s:
+            a, b = int(round(resolved[-1].peak_s * fs)), int(round(burst.peak_s * fs))
+            valley = round((a + int(np.argmin(combined[a : b + 1]))) / fs, 3)
+            resolved[-1] = replace(resolved[-1], end_s=valley)
+            burst = replace(burst, start_s=valley)
+        resolved.append(burst)
+    found = resolved
+    strong = [burst for burst in found if not burst.weak and not burst.voiced]
     if not strong:
         return [], broadband, floor
 
@@ -885,6 +1019,27 @@ def find_bursts(
         return (mean - mean.mean()) / (mean.std() + 1e-9)
 
     template = np.mean([shape(burst) for burst in strong], axis=0)
+
+    def fits(burst: Burst | None) -> bool:
+        if burst is None:
+            return False
+        own = shape(burst)
+        return max(float(np.mean(own * shape(other))) for other in strong) >= p.template_corr_min
+
+    margin = int(round(p.edge_min_s * fs))
+    inner = [burst for burst in found if burst.start_s * fs >= margin]
+    if inner and float(broadband[0] - floor) >= p.rise_floor_db:
+        valley = int(np.argmin(combined[: int(round(inner[0].peak_s * fs)) + 1]))
+        edge = burst_at(0, valley, False, edge=True) if valley >= margin else None
+        if edge is not None and fits(edge):
+            found = [replace(edge, weak=False)] + [burst for burst in found if burst.start_s >= edge.end_s]
+    inner = [burst for burst in found if burst.end_s * fs <= frames - 1 - margin]
+    if inner and float(broadband[-1] - floor) >= p.rise_floor_db:
+        start = int(round(inner[-1].peak_s * fs))
+        valley = start + int(np.argmin(combined[start:]))
+        edge = burst_at(valley, frames - 1, False, edge=True) if frames - 1 - valley >= margin else None
+        if edge is not None and fits(edge):
+            found = [burst for burst in found if burst.end_s <= edge.start_s] + [replace(edge, weak=False)]
     scored = [replace(burst, template_corr=round(float(np.mean(shape(burst) * template)), 3)) for burst in found]
     kept = [b for b in scored if not b.weak or (b.template_corr or 0.0) >= p.template_corr_min]
     return kept, broadband, floor
@@ -922,6 +1077,7 @@ def breath_train(
     broadband: np.ndarray,
     floor: float,
     parameters: TrainParameters,
+    speech_segments: tuple[tuple[float, float], ...] = (),
 ) -> BreathTrain:
     """Group bursts into runs split at long gaps or speech, and take the largest as the task.
 
@@ -932,6 +1088,7 @@ def breath_train(
         broadband: The raw broadband level at ``fs_mod``.
         floor: Its floor.
         parameters: The train's parameters.
+        speech_segments: Acoustic speech segments (:func:`voice_segments`), read as speech runs.
 
     Returns:
         The train; an empty one with no burst.
@@ -939,7 +1096,7 @@ def breath_train(
     p = parameters
     if not bursts:
         return BreathTrain()
-    speech = speech_runs(words, words_min=p.speech_words_min, gap_s=p.speech_gap_s)
+    speech = sorted(speech_runs(words, words_min=p.speech_words_min, gap_s=p.speech_gap_s) + list(speech_segments))
     gaps = np.diff([b.peak_s for b in bursts])
     cycle = float(np.median(gaps[:-1] + gaps[1:])) if len(gaps) >= 2 else (2 * float(gaps[0]) if len(gaps) else 4.0)
     gap_max = max(p.gap_min_s, p.gap_cycles * cycle / 2)
@@ -986,6 +1143,8 @@ def measure_breath_train(
     words: tuple[tuple[float, float], ...] = (),
     family: str | None = None,
     parameters: TrainParameters | None = None,
+    sustained: tuple[tuple[float, float], ...] = (),
+    speech: tuple[tuple[float, float], ...] = (),
 ) -> BreathTrain:
     """The breath train of a power spectrogram (:func:`find_bursts`, then :func:`breath_train`).
 
@@ -997,16 +1156,31 @@ def measure_breath_train(
         words: Each lexical word's ``(start, end)``.
         family: The declared task family.
         parameters: The train's parameters; ``data/breath_pattern.yaml`` when None.
+        sustained: The sustained vocalisations (:func:`voice_segments`).
+        speech: The acoustic speech segments (:func:`voice_segments`).
 
     Returns:
         The train.
     """
     p = parameters or train_parameters()
     bursts, broadband, floor = find_bursts(
-        power, hop_s=hop_s, bin_hz=bin_hz, voiced=voiced, family=family, parameters=p
+        power,
+        hop_s=hop_s,
+        bin_hz=bin_hz,
+        voiced=voiced,
+        family=family,
+        parameters=p,
+        sustained=sustained,
+        speech=speech,
     )
     return breath_train(
-        bursts, words, duration_s=power.shape[1] * hop_s, broadband=broadband, floor=floor, parameters=p
+        bursts,
+        words,
+        duration_s=power.shape[1] * hop_s,
+        broadband=broadband,
+        floor=floor,
+        parameters=p,
+        speech_segments=speech,
     )
 
 
@@ -1259,8 +1433,19 @@ def breath_pattern_of(
     words = tuple(
         word_hull(word) for word in lexical_words(store) if not is_non_lexical(str(word.attributes.get("text") or ""))
     )
+    sustained, speech = voice_segments(
+        track_times, f0, strength, words, voicing_strength_min=p.voicing_strength_min, parameters=t
+    )
     train = measure_breath_train(
-        power, hop_s=hop_s, bin_hz=bin_hz, voiced=voiced, words=words, family=family, parameters=t
+        power,
+        hop_s=hop_s,
+        bin_hz=bin_hz,
+        voiced=voiced,
+        words=words,
+        family=family,
+        parameters=t,
+        sustained=sustained,
+        speech=speech,
     )
     breath_extent = (
         train_extent(train, pattern.event_spans_s)
