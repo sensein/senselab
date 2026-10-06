@@ -279,6 +279,27 @@ class TestWhatIsMissing:
         assert live == []
         assert not (run_dir / "streams/task_redacted.flac").exists()
 
+    def test_a_discard_cuts_nothing_and_retires_every_earlier_cut(self, tmp_path: Path, config: TriageConfig) -> None:
+        """A re-fold to discard leaves no cut standing, in the store or on disk."""
+        store, run_dir = _seed(tmp_path)
+        cut_task_audio(store, config, run_dir=run_dir)
+        store.entity(
+            prov_type="verdict",
+            extent=None,
+            attributes={"node": "VERDICT", "triage": "discard", "release": Release.WITHHELD.value},
+        )
+        outcome = cut_task_audio(store, config, run_dir=run_dir)
+        assert outcome.extent is None and outcome.changed
+        assert all(value == "absent: discarded" for value in outcome.cuts.values())
+        live = [
+            e
+            for e in store.entities("stream")
+            if str(e.attributes.get("name") or "").startswith("task_") and not store.is_invalidated(e.id)
+        ]
+        assert live == []
+        assert not list((run_dir / "streams").glob("task_*.flac"))
+        assert not (run_dir / SIDECAR).exists()
+
 
 class TestRerun:
     """A rerun over the same inputs is a cache hit."""
