@@ -364,9 +364,9 @@ Three of the owner's readings of the train figures, each a change to `find_burst
 **Measured** on the 56 labelled recordings plus 1ba3214d (in-memory re-fold, `tmp_qb/est2.py`,
 `out_ov.txt` before, `out_ov2e.txt` after): label agreement 53 of 56, the same three misses; no
 decision changed. 988c1609 6 → 7 phases (3 → 4 breaths), ba1d1459 13 → 10 (7 → 5; extent ends at
-16.36 s), ecc63817 7 → 8 (4, extent from 0.0 s), 42442f80 and 7c169ccc unchanged. Edge phases
-were added on e02a3f8b, c9b77a28, 772aa876, b451fe70, 943a8bbc, 78e40278, dac345e2 and 09f16959
-(each +1 phase, none crossing an instructed count); 517381e9 (no breathing, discarded either way)
+16.36 s), ecc63817 7 → 8 (4, extent from 0.0 s), 42442f80 and 7c169ccc unchanged. One phase
+more, from an edge phase or an overlap split, on e02a3f8b, c9b77a28, 772aa876, b451fe70, 943a8bbc,
+78e40278, dac345e2 and 09f16959 (none crossing an instructed count); 517381e9 (no breathing, discarded either way)
 drops 5 → 1 phase under its "Yeah" chain. Figures: `~/Downloads/breath_extent_check_20261006/fixed2/`,
 the stored pre-emphasised spectrogram at a fixed 80 dB display range (no dynamic gain), with the
 `_dyngain.wav` audio beside each.
