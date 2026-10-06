@@ -39,7 +39,7 @@ measure:
   rise_db: 8.0
   flatness_min: 0.08
   voicing_strength_min: 0.45
-  merge_gap_s: 0.08
+  merge_gap_s: 0.25
   event_s: [0.3, 4.0]
   event_trim_db: 10.0         # an event's span is the frames within this of its own peak
   voiced_fraction_max: 0.5

@@ -966,7 +966,7 @@ def breath_train(
     cycles = gaps[:-1] + gaps[1:] if len(gaps) >= 2 else np.array([])
     return BreathTrain(
         bursts=tuple(run),
-        extent_s=(round(start, 3), round(end, 3)),
+        extent_s=(round(float(start), 3), round(float(end), 3)),
         phases=len(run),
         breaths=_rhu(len(run) / 2),
         rate_cpm=round(60.0 / float(np.median(cycles)), 1) if len(cycles) else None,
@@ -1024,8 +1024,8 @@ def train_extent(train: BreathTrain, events: tuple[tuple[float, float], ...]) ->
     start, end = train.extent_s
     overlapping = [e for e in events if e[1] > start and e[0] < end]
     return BreathExtent(
-        start_s=round(min([start, *(e[0] for e in overlapping)]), 3),
-        end_s=round(max([end, *(e[1] for e in overlapping)]), 3),
+        start_s=round(float(min([start, *(e[0] for e in overlapping)])), 3),
+        end_s=round(float(max([end, *(e[1] for e in overlapping)])), 3),
         source=EXTENT_BREATH_TRAIN,
         phases=train.phases,
         breaths=train.breaths,
