@@ -29,6 +29,7 @@ from senselab.audio.workflows.triage.breath_pattern import (
     speech_runs,
     train_extent,
     train_parameters,
+    voice_segments,
 )
 from senselab.utils.prov_store import ProvStore
 
@@ -309,3 +310,121 @@ def test_the_review_band_holds_weak_irregular_and_short_trains() -> None:
     assert in_review_band(BreathTrain(phases=10, breaths=5, cycle_cv=0.1, rise_db=p.weak_rise_db_max - 1), p)
     assert in_review_band(BreathTrain(phases=1, breaths=1, rise_db=20.0), p)
     assert in_review_band(None, p)
+
+
+TRACK_HOP_S = 0.01
+
+
+def _track(duration_s: float, runs: list[tuple[float, float, float, float]]) -> tuple[np.ndarray, ...]:
+    """A phonation track voiced over each (start, length, f0, strength); unvoiced elsewhere."""
+    times = np.arange(0.0, duration_s, TRACK_HOP_S)
+    f0, strength = np.zeros_like(times), np.zeros_like(times)
+    for start, length, hz, power in runs:
+        held = (times >= start) & (times < start + length)
+        f0[held], strength[held] = hz, power
+    return times, f0, strength
+
+
+def _segments(
+    track: tuple[np.ndarray, ...], words: tuple[tuple[float, float], ...] = ()
+) -> tuple[tuple[tuple[float, float], ...], tuple[tuple[float, float], ...]]:
+    return voice_segments(
+        *track,
+        words,
+        voicing_strength_min=breath_pattern_parameters().voicing_strength_min,
+        parameters=train_parameters(),
+    )
+
+
+def test_a_steady_vocalisation_is_sustained_and_not_speech() -> None:
+    """988c1609: a held 0.5 s "aah" at steady pitch is a sustained vocalisation."""
+    sustained, speech = _segments(_track(4.0, [(1.0, 0.5, 150.0, 0.9)]))
+    assert speech == () and len(sustained) == 1
+    assert abs(sustained[0][0] - 1.0) < 0.02 and abs(sustained[0][1] - 1.5) < 0.02
+
+
+def test_voicing_flickers_on_breath_noise_are_neither_speech_nor_sustained() -> None:
+    """78e40278: turbulence trips the pitch tracker in short runs; with no word they are not speech."""
+    flickers = [(0.5 + 0.15 * k, 0.04, 140.0, 0.6) for k in range(12)]
+    assert _segments(_track(4.0, flickers)) == ((), ())
+
+
+def test_a_word_chains_the_voiced_runs_beside_it_into_one_speech_segment() -> None:
+    """ba1d1459: two words then voiced syllables under half a second apart are one speech segment."""
+    track = _track(20.0, [(16.4, 0.2, 180.0, 0.6), (17.5, 0.13, 160.0, 0.6), (18.15, 0.11, 125.0, 0.6)])
+    sustained, speech = _segments(track, words=((16.36, 16.68), (16.64, 16.92), (18.08, 18.48)))
+    assert sustained == ()
+    assert len(speech) == 1 and abs(speech[0][0] - 16.36) < 0.02 and abs(speech[0][1] - 18.48) < 0.02
+
+
+def _voiced_frames(power: np.ndarray, spans: list[tuple[float, float]]) -> np.ndarray:
+    mask = np.zeros(power.shape[1], dtype=bool)
+    for start, length in spans:
+        mask[int(start / HOP_S) : int((start + length) / HOP_S)] = True
+    return mask
+
+
+def test_a_vocalised_exhale_and_the_inhale_beside_it_are_two_phases() -> None:
+    """988c1609: an unvoiced inhale running straight into a held "aah" exhale counts as both phases."""
+    inhales = [(1.0 + 3.0 * k, 0.6) for k in range(3)]
+    exhales = [(1.6 + 3.0 * k, 0.6) for k in range(3)]
+    power = _spectrogram(11.0, [(1.0 + 3.0 * k, 1.2) for k in range(3)])
+    voiced = _voiced_frames(power, exhales)
+    sustained = tuple((start, start + length) for start, length in exhales)
+    plain = measure_breath_train(power, hop_s=HOP_S, bin_hz=BIN_HZ, voiced=voiced)
+    split = measure_breath_train(power, hop_s=HOP_S, bin_hz=BIN_HZ, voiced=voiced, sustained=sustained)
+    assert plain.phases == 3
+    assert (split.phases, split.breaths) == (6, 3)
+    assert sum(burst.voiced for burst in split.bursts) == 3
+    assert all(a.end_s <= b.start_s for a, b in zip(split.bursts, split.bursts[1:]))
+    assert all(inhale[0] - 0.2 <= burst.start_s for inhale, burst in zip(inhales, split.bursts[::2]))
+
+
+def test_scattered_voicing_inside_one_long_breath_leaves_it_one_phase() -> None:
+    """7c169ccc: voicing scattered through one long breath is no sustained run, so the breath stays whole."""
+    power = _spectrogram(8.5, [(3.0, 1.6)])
+    sustained, _ = _segments(_track(8.5, [(3.1 + 0.3 * k, 0.05, 140.0, 0.85) for k in range(5)]))
+    train = measure_breath_train(
+        power,
+        hop_s=HOP_S,
+        bin_hz=BIN_HZ,
+        voiced=np.zeros(power.shape[1], dtype=bool),
+        family=QUICK,
+        sustained=sustained,
+    )
+    assert sustained == () and (train.phases, train.breaths) == (1, 1)
+
+
+def test_speech_segments_hold_no_phase_and_end_the_extent() -> None:
+    """ba1d1459: bursts under an acoustic speech segment are not phases, and the extent stops at it."""
+    power = _spectrogram(30.0, _cycles(1.0, 4) + [(25.0, 0.5), (27.0, 0.5)])
+    train = measure_breath_train(
+        power, hop_s=HOP_S, bin_hz=BIN_HZ, voiced=np.zeros(power.shape[1], dtype=bool), speech=((24.0, 28.0),)
+    )
+    assert train.phases == 8
+    assert train.extent_s is not None and train.extent_s[1] <= 24.0
+
+
+def _shaped(power: np.ndarray, spans: list[tuple[float, float]]) -> np.ndarray:
+    """Give each burst the same falling spectral tilt, so the bursts share a template a phase can match."""
+    tilt = np.linspace(1.0, 0.1, power.shape[0])[:, None]
+    for start, length in spans:
+        power[:, int(start / HOP_S) : int((start + length) / HOP_S)] *= tilt
+    return power
+
+
+def test_a_recording_opening_mid_inhale_counts_that_phase_from_zero() -> None:
+    """ecc63817: the file opens on an inhale already raised over the floor; it counts, and the extent starts at 0."""
+    phases = [(0.0, 0.5)] + [(1.0 + 0.8 * k, 0.4) for k in range(5)]
+    train = _train(_shaped(_spectrogram(6.5, phases), phases), family=QUICK)
+    assert (train.phases, train.breaths) == (6, 3)
+    assert train.bursts[0].start_s == 0.0 and train.extent_s is not None and train.extent_s[0] == 0.0
+
+
+def test_a_quiet_opening_is_no_edge_phase() -> None:
+    """42442f80: an opening under the floor (a filter edge) adds no phase."""
+    phases = [(1.0 + 0.8 * k, 0.4) for k in range(5)]
+    power = _shaped(_spectrogram(6.5, phases), phases)
+    power[:, : int(0.4 / HOP_S)] *= 1e-3
+    train = _train(power, family=QUICK)
+    assert train.phases == 5
