@@ -2179,7 +2179,7 @@ class TestTheTaskEvidenceProfiles:
         assert "harvard-sentences-list" not in tokens
 
     def test_every_breath_family_is_decided_on_a_detected_breath_and_no_other_family_is(self) -> None:
-        """``data/airway_event_requirements.yaml`` names the breath families and only them."""
+        """``data/airway_event_requirements.yaml`` names the breath and the cough families and only them."""
         breath = {
             "breath-sounds",
             "respiration-and-cough-breath",
@@ -2191,7 +2191,8 @@ class TestTheTaskEvidenceProfiles:
             "respiration-and-cough-v2-threebreathsnose",
         }
         assert {family for family in breath if verdict_module.required_event(family) == "breath"} == breath
-        assert verdict_module.required_event("respiration-and-cough-cough") is None
+        cough = {"respiration-and-cough-cough", "respiration-and-cough-v2-hardcough", "voluntary-cough"}
+        assert {family for family in cough if verdict_module.required_event(family) == "cough"} == cough
         assert verdict_module.required_event("harvard-sentences-list") is None
         assert verdict_module.required_event(None) is None
 
