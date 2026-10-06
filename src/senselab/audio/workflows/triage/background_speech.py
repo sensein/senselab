@@ -64,6 +64,8 @@ class BackgroundSpeechParameters:
         run_gap_s: The longest gap inside one harmonic run.
         run_min_s: The shortest harmonic run.
         run_voiced_min_s: The harmonic frames a run holds, in seconds.
+        thinned_db: The range of plain over enhanced level over a run in which the enhancer removed part of
+            the sound and kept the foreground.
         pad_s: How far either side of the task extent is read.
     """
 
@@ -85,6 +87,7 @@ class BackgroundSpeechParameters:
     run_gap_s: float
     run_min_s: float
     run_voiced_min_s: float
+    thinned_db: tuple[float, float]
     pad_s: float
 
 
@@ -97,12 +100,13 @@ def background_speech_parameters() -> BackgroundSpeechParameters:
     """
     held = dict(yaml.safe_load(BACKGROUND_SPEECH_PATH.read_text()) or {})
     labels = tuple(str(label) for label in held.pop("speech_labels"))
-    band, f0 = held.pop("harmonic_band_hz"), held.pop("f0_range_hz")
+    band, f0, thinned = held.pop("harmonic_band_hz"), held.pop("f0_range_hz"), held.pop("thinned_db")
     return BackgroundSpeechParameters(
         speech_labels=labels,
         windows_min=int(held.pop("windows_min")),
         harmonic_band_hz=(float(band[0]), float(band[1])),
         f0_range_hz=(float(f0[0]), float(f0[1])),
+        thinned_db=(float(thinned[0]), float(thinned[1])),
         **{key: float(value) for key, value in held.items()},
     )
 
@@ -137,10 +141,16 @@ class BackgroundSpeech:
         return tuple(w for w in self.windows if w[5] < p.leakage_corr_min)
 
     @property
+    def voice_runs(self) -> tuple[tuple[float, ...], ...]:
+        """The harmonic residual runs over which the enhancer kept the foreground."""
+        p = self.parameters or background_speech_parameters()
+        return tuple(r for r in self.runs if p.thinned_db[0] <= r[3] <= p.thinned_db[1])
+
+    @property
     def heard(self) -> bool:
         """Whether another voice was read inside the extent."""
         p = self.parameters or background_speech_parameters()
-        return len(self.speech_windows) >= p.windows_min or bool(self.runs)
+        return len(self.speech_windows) >= p.windows_min or bool(self.voice_runs)
 
     def record(self) -> dict[str, Any]:
         """The reading, as JSON-ready values.
@@ -151,6 +161,7 @@ class BackgroundSpeech:
         return {
             "heard": self.heard,
             "speech_windows": [list(window) for window in self.speech_windows],
+            "voice_runs": [list(run) for run in self.voice_runs],
             "windows": [list(window) for window in self.windows],
             "runs": [list(run) for run in self.runs],
             "residual_floor_db": self.residual_floor_db,

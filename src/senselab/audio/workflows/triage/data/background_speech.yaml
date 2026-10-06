@@ -18,5 +18,6 @@ harmonic_rise_db: 10.0     # over the residual's own frame floor
 event_pad_s: 0.3           # harmonic frames this close to a participant's event are that event's
 run_gap_s: 0.3
 run_min_s: 1.0             # a harmonic residual run off the events this long ...
-run_voiced_min_s: 0.5      # ... holding this much harmonic time is another voice
+run_voiced_min_s: 0.5      # ... holding this much harmonic time ...
+thinned_db: [1.0, 10.0]    # ... with plain over enhanced in this range (part removed, foreground kept) is another voice
 pad_s: 1.0                 # read this far either side of the task extent
