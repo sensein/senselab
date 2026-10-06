@@ -423,3 +423,42 @@ instructed-count conformance changed in any set. The breath reading's kept decis
 breathing measure's events and pattern, not the train, so the train's phases do not by themselves
 keep a recording: all 16 contested recordings stay discarded at this commit (15 have no measure
 event; 5201d61d's five measure events are vetoed by the five lexical words inside AIRWAY's extent).
+
+## The train decides presence (2026-10-06)
+
+Until this change `breath_present` read the measure's events and pattern (`measure_breath_pattern`)
+and its veto, not the breath train, so a train the owner heard as breathing still discarded when the
+measure's envelope events found nothing. Of the 16 recordings in the discard_contested listening
+sample the owner heard 8 (ff532a57, 249a4469, 9227a6c1, fef8f989, 6087f14c, 0966e804, 5201d61d,
+11ec42cc) as performed breathing tasks ("ok and should not be discarded"); every one carries a clean
+train (6-14 phases, median rise 24-42 dB, outside the review band) and every one was a discard.
+
+**Rule.** A breath family's breathing is present where the train counts at least one phase outside
+the review band. Inside the band (`review`, now also entered by a measure veto named in
+`veto_reviews`, `[little_activity]`) the measure's own finding splits it: breathing it confirms is
+kept and flagged `breath_review_low_confidence`; breathing it does not confirm is
+`no_breath_captured`. No phase is `no_breath_captured`. The counted-family instruction check reads the
+train's breaths alone. A speech veto on the measure no longer decides: the train already removes
+bursts inside speech (previous section).
+
+**Candidates scored** (stored inputs, fix/policy-v8 at dd8635c9; owner labels from
+`airway_move_eval_20261006` (38 breath, 18 none), the 16 contested, the 200 random kept r16 breath
+recordings, and all 1,641 r16 `no_breath_captured` discards):
+
+| Rule | Labels breath (keep/review/discard) | Labels none (keep/review/discard) | Contested 16 kept | Random kept: review | r16 discards → pass / flag / discard |
+|---|---|---|---|---|---|
+| measure decides (before) | 34 / 3 / 1 | 1 / 1 / 16 | 0 | 7 (3.5%) | 0 / 315 contested / 1,326 |
+| train decides, band → review | 34 / 3 / 1 | 1 / 11 / 6 | 16 | 7 | 489 / 925 review + 1 contested / 226 |
+| train decides, band → measure (adopted) | 34 / 3 / 1 | 1 / 1 / 16 | 16 | 7 | 489 / 25 contested / 1,127 |
+
+A rise cut above the band's 8 dB (10, 12, 15 dB tried) doubles the random kept review rate (7.6%,
+8.6%, 18.2%) and moves only ambiguous labels. Sending the band to discard outright would discard
+three recordings the owner heard as breathing (42442f80, 81873ca0, fac74f45). The adopted rule leaves
+every owner label where it was, keeps all 8 owner "keep" contested recordings, and turns 489 r16
+discards with a clean train into passes. The breath label still kept that the owner heard as "either
+doesn't have it, or masked by other sounds, or very soft" (d5a327c7) was kept before too. 0dc15213
+(no train phase) stays a discard, which the owner accepted ("ok if flagged or discarded").
+
+**discard_contested** now fires only where the train found nothing or was too weak for the measure to
+confirm, and AIRWAY's detector found the instructed count: 25 of the 1,641 r16 breath discards
+(from 315 under the measure rule), to be heard after the replay.
