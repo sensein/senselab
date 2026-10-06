@@ -10,6 +10,7 @@ from senselab.audio.workflows.triage.vocabulary import (
     DECLINED,
     DISCARD_GROUNDS,
     GROUND_KEYS,
+    KEY_BACKGROUND_SPEECH_IN_TASK,
     KEY_COUGH_REVIEW_LOW_CONFIDENCE,
     KEY_NO_COUGH_CAPTURED,
     KEY_OWNING_BRANCH_INPUT_ABSENT,
@@ -67,6 +68,7 @@ def _fold(
     route_state: str = "routed",
     family: str | None = None,
     instructed: int | None = None,
+    background: dict[str, Any] | None = None,
 ) -> FileVerdict:
     declared, count = _FAMILIES[mode]
     return fold_file_verdict(
@@ -93,6 +95,7 @@ def _fold(
             cough_reading={"onsets_n": onsets, "onsets_strict_n": onsets, "onsets_lenient_n": onsets}
             if onsets is not None
             else {},
+            background_speech=background or {},
         ),
     )
 
@@ -158,3 +161,17 @@ def test_the_cough_grounds_are_named() -> None:
     assert KEY_NO_COUGH_CAPTURED in GROUND_KEYS and KEY_COUGH_REVIEW_LOW_CONFIDENCE in GROUND_KEYS
     assert NO_COUGH_CAPTURED in DISCARD_GROUNDS
     assert not {KEY_NO_COUGH_CAPTURED, KEY_COUGH_REVIEW_LOW_CONFIDENCE} & OPERATIONAL_GROUND_KEYS
+
+
+def test_background_speech_in_the_task_flags_and_never_discards() -> None:
+    """6ca9935e: an intercom voice the enhancer removed from inside the task flags the recording for quality."""
+    folded = _fold(
+        mode=COUGH_COUNTED,
+        onsets=9,
+        family="voluntary-cough",
+        instructed=3,
+        background={"heard": True, "speech_windows": [], "thinned_runs": [[16.0, 18.9, 1.4, 4.0]]},
+    )
+    assert folded.triage is Triage.FLAG
+    assert KEY_BACKGROUND_SPEECH_IN_TASK in folded.ground_keys
+    assert folded.background_speech["heard"] is True

@@ -1,0 +1,18 @@
+# Background speech inside an airway task (background_speech.py), read off what speech enhancement
+# removed. Owner, 2026-10-06, on 6ca9935e; the derivation is in specs/20261006-cough-pattern/design.md
+# ("Background speech in the task").
+speech_labels: [Speech, Conversation, "Narration, monologue", "Male speech, man speaking", "Female speech, woman speaking", "Child speech, kid speaking", Television, Radio]
+speech_min: 0.5            # a residual window's highest speech-label score at or above: speech heard
+keep_db: 6.0               # enhanced over residual in the window at or above: the enhancer kept the foreground
+residual_rise_db: 15.0     # residual over its own floor at or above: the enhancer removed something
+floor_percentile: 10.0
+envelope_frame_s: 0.02
+leakage_corr_min: 0.5      # residual-enhanced envelope correlation at or above: the participant's sound leaking
+windows_min: 1
+voicing_strength_min: 0.45 # as breath_pattern.yaml measure.voicing_strength_min
+event_pad_s: 0.3           # voicing this close to a participant's event is that event's
+run_gap_s: 0.3
+run_min_s: 1.0             # a voiced run off the events this long ...
+run_voiced_min_s: 0.5      # ... holding this much voicing ...
+thinned_db: 2.0            # ... that the enhancer thinned by this (plain over enhanced) is another voice
+pad_s: 1.0                 # read this far either side of the task extent
