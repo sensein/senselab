@@ -260,3 +260,74 @@ On the 14 labelled recordings whose hull was 4 s or less, the breathing ones wid
 7c169ccc 0.7 → 3.6 s); b16acf04 narrows (3.7 → 1.4 s, one measured event). 6ca9935e, breath then
 speech, ends at 10.8 s instead of 14.0 s. The images are in
 `~/Downloads/breath_extent_check_20261006/`.
+
+## The breath train (2026-10-06), replacing the extent from modulation
+
+The owner reviewed the modulation-extent figures (`~/Downloads/breath_extent_check_20261006/`) and
+named what they missed: "this suggests we are missing clear peaks in modulation" (3d889bf8, three
+quick breaths read as one event), "this one has a long inhale followed by a short exhale" (7c169ccc),
+"this misses some of the modulation" (42442f80), "seems to miss the beginning" (01f52a78
+threequickbreaths-2), "seems to miss many after band" (01f52a78 fivebreaths-2), "may have missed a
+few after the marked extent" (6ca9935e), "seems to skip the last breath event for some reason"
+(6f73b8d2), "misses at the beginning" (39ba8784, 78e40278), "event extents seem off" (cb69d304),
+"extent good, events off" (e02a3f8b), "where there are patterns we should exploit - this one shows
+some but not used properly" (b26208dd). Of the rest: "all others seemed good". The policy for what
+remains uncertain: "we want to automate as much as possible, with the hardest ones left for review"
+— and of 81873ca0/fac74f45-type trains, "ok with something like this flagged".
+
+**How it is read** (`find_bursts`, `breath_train`, `train_extent`, `in_review_band` in
+`breath_pattern.py`; parameters in `data/breath_pattern.yaml`, `train` and `review`):
+
+1. The narrowband spectrogram less its per-bin 10th-percentile noise (×0.9); bins whose noise sits
+   10 dB over their neighbours' are tonal lines and are left out of the subband sums.
+2. Nine subbands, 150 Hz to 7.5 kHz, as dB levels at 20 Hz, each as a robust z (median/MAD). Their
+   mean, smoothed 0.15 s, is the combined envelope. No band-pass: the 0.1–1.2 Hz filter of the
+   modulation reading rang at the file edges and merged quick breaths into one cycle.
+3. Bursts are its peaks with prominence at least max(0.6, 0.12 × the 5th–95th percentile range);
+   weaker peaks down to 0.3 of that stand when their spectrum correlates ≥ 0.6 with the strong
+   bursts' mean spectrum (the template). A burst lasts 0.12–4 s, has mean flatness ≥ 0.03, is voiced
+   on at most 95% of its frames, rises ≥ 0.5 z in at least 60% of subbands within ±0.2 s (cross-band
+   coherence, which removes clicks such as b26208dd's at ~17.6 s), and peaks ≥ 5 dB over the raw
+   broadband floor (which removes the robust-z peaks of near-silent files). Bursts are 0.25 s apart
+   at least in the quick-breath families, 0.4 s otherwise.
+4. The train: bursts split into runs at gaps over max(12 s, 3 half-cycles) or at a speech run (≥ 5
+   lexical words with gaps ≤ 1 s); the largest run is the task. Its hull, padded 0.25 s, is trimmed
+   at speech runs and runs on to a following speech onset where the level between stays ≥ 3 dB over
+   the floor. The extent is that hull widened to hold every measure event overlapping it, so every
+   counted phase and every train event lies inside it (the invariant the tests and figures check).
+5. **Units.** Both measures count phases (an inhale or an exhale). Breaths are phases / 2, rounded
+   half up; a counted task's breaths are the larger of the two measures'
+   (`vocabulary._counted_breaths`). Alternation and interval tests were tried to tell paired from
+   unpaired bursts (a sub-harmonic pairing cue for e02a3f8b) and could not separate 1ba3214d (paired,
+   evenly spaced, cycle CV 0.10) from single-burst breathing, so the pairing stays uniform; every
+   labelled count matches with it.
+6. **Review band** (`breath_review_low_confidence`, a flag): kept breathing whose train has fewer than
+   2 phases, or a cycle CV ≥ 0.45 with a median rise under 12.5 dB, or a median rise under 8 dB.
+
+**What was tried and dropped.** An event merge gap of 0.08 s (to make the events hug the bursts)
+left the label fit unchanged but split sustained breathing into fragments under the 0.3 s event
+minimum: 13 kept recordings on the r537 and random sets read `single_breath` and discarded. The gap
+stays 0.25 s; the events' spans are instead trimmed to the frames within 10 dB of each event's peak
+(`event_trim_db`), which is display and extent only and changes no count.
+
+**Measured** (in-memory re-fold of the r15 stores at the overlaid src, 1,074 rows, 0 errors;
+`/orcd/scratch/bcs/002/satra/tmp_qb/`), against the previous re-fold (`tmp_bxt/estimate.jsonl`):
+
+| Set | Label fit | Decisions to/from discard | task_mismatch cleared / new | Review band (of kept) |
+|---|---|---|---|---|
+| 56 labelled | 53 of 56 (same three) | 0 | 1 (3d889bf8) / 0 | 4 of 39: fac74f45, 81873ca0, 42442f80, 5cc93330 |
+| 300 random | — | 0 | 19 / 8 | 9 of 221 (4.1%) |
+| 181 (r14 disputes) | — | 0 | 0 / 9 | 13 of 118 (11.0%) |
+| 537 (r13 pass, r14 discard) | — | 0 | 0 / 28 | 118 of 471 (25.1%) |
+
+The two unlabelled dispute sets were chosen for being contested, so their band is wide by
+construction; the random set is the band's size. The new mismatches are mostly five-breath tasks
+reading 7–8 phases (4 breaths) where the old units counted those events as breaths; they flag, never
+discard.
+
+Prototype parity: the ported module and the prototype (`.qb/proto.py`) agree on phases, breaths and
+extent on 353 of 355 dumped recordings; the two (random, unlabelled) differ by one phase from frame
+rounding in the template window.
+
+Known shortfall: 6ca9935e's extent ends at 16.65 s, not the ~20.8 s the owner expected; the level
+after 17 s is only 0.3–0.5 dB over the floor, under the 3 dB continuation rule.
