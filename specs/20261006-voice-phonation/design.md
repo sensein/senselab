@@ -139,15 +139,22 @@ truncation readings.
   heard as one hold. 6b0c36f0 (≈ 0.5 s), 4464b02f (0.4–1 s) and 74a221d7 (≈ 1.3 s) are breaks.
 - **A microphone shutoff during phonation makes MPT a lower bound and flags for review.** In
   f47eeda7 every band drops ≈ 50 dB to a flat digital floor at 12.95 s while voicing continues.
+  The owner confirmed "flag". A shutoff after the task has ended is an annotation.
+- **Broken or restarted holds merge into one extent.** The extent runs from the first onset to the
+  last offset; a break or a restart is not a flag (4464b02f's five restarted holds, 74a221d7's
+  break). Owner: "broken/restarted should be seen as merging spans".
+- **There is no minimum hold.** Owner: "i don't think there is a good minimum." Hold duration is a
+  measurement, not a ground.
 
 ## Design
 
 All of this reads stored derivatives except where noted. Every threshold goes in `data/` with its
 derivation from the labels below; none is a code literal.
 
-1. **Phonation extent on plain.**
-   - Energy continuity is subband energy staying over the floor, plus harmonic structure where any
-     exists, as the breath train uses.
+1. **Phonation extent on plain (raw).**
+   - Energy continuity is subband energy at least 10 dB over the floor, plus harmonic structure
+     where any exists, as the breath train uses. Pitch-tracker strength alone is not voicing: it
+     counts mains hum as voiced (item 10).
    - The floor is estimated outside the phonation: from leading and trailing quiet when they exist,
      otherwise from the session group's floor, as in the group-relative dBFS work. It is never the
      recording's own 5th percentile.
@@ -165,13 +172,18 @@ derivation from the labels below; none is a code literal.
    - Range under the bound, or the wrong net direction: `task_mismatch`, with the shape named (for
      example "held 190 Hz for 6.1 s").
    - The 6 st bound is refitted on the labels.
-4. **Hold and break segmentation.**
+4. **Hold and break segmentation, merged into one extent.**
+   - Holds separated by breaks or restarts merge: the extent runs from the first onset to the last
+     offset. A break is never a flag.
    - A break is a fall to the floor longer than a minimum, fitted from the labels: between 0.15 s
-     (ad6bfe11's dips) and 0.4 s (4464b02f's shortest gap).
-   - Readings: holds, the longest hold, total voiced time, break durations.
-   - The prolonged-vowel minimum hold is fitted from a duration ladder: clean single holds of
-     2–5 s, labelled good or short. So far 4.55 s (6b7bd347) and 5.35 s (840041f9) are good.
-   - A file too short to reach the minimum after its count-in is recorded as such.
+     (ad6bfe11's dips) and 0.4 s (4464b02f's shortest gap). Brief dips under it are part of the
+     hold.
+   - Readings: number of holds, each hold's duration, the longest hold, total voiced time, break
+     durations. All are measurements.
+   - There is no minimum hold. The prolonged-vowel declared-duration conformance
+     (`declared_duration_min_fraction`, 0.5 of 12 s, 585 single-key flags in r16) is removed as a
+     ground; 4.55 s (6b7bd347) and 5.35 s (840041f9) holds were heard as good. No duration ladder is
+     needed.
 5. **Voice quality as annotations.** Voiced share, f0 spread, register shifts, roughness and creak
    are read inside the extent. `f0_spread_max_semitones` and `voiced_fraction_min` stop being flag
    gates.
@@ -187,11 +199,25 @@ derivation from the labels below; none is a code literal.
    settings (floor margin, break minimum, glide bound). Where the two disagree, the recording flags
    `voice_review_low_confidence`.
 9. **Route mismatch as an annotation for declared voice families.**
-10. **Hum guard: TBD.** 3bbc69ef has mains hum across the file. The plain track locks onto 60 Hz,
-    the stored track onto 120 Hz, voiced fraction reads 1.00, and the extent sits on hum. The
-    residual-against-enhanced comparison is running. It will decide between taking the extent from
-    the enhanced stream and keeping plain with a hum signature on the residual. About 18 VOICE
-    recordings show the hum lock.
+10. **Hum guard on the residual; the extent stays on raw.**
+    - 3bbc69ef has mains hum across the file: the plain track locks onto 60 Hz, the stored track
+      onto 120 Hz, voiced fraction reads 1.00, and the r16 extent sits on hum at 7.23–8.1 s. With
+      the item 1 energy condition the raw extent is 3.93–4.28 s, on the glide.
+    - Guard: at least 3 mains lines at multiples of 50 or 60 Hz in the residual, each 10 dB over
+      its 2–8 Hz neighbourhood. On 36 hum-locked and 30 clean VOICE recordings it caught 31/36 hum
+      and 0/30 clean. At 2 lines it catches 34/36 but also 1 clean. An f0-lock test (half the
+      voiced frames within 1 Hz of 50/60/100/120 Hz) catches 25/36 and 0/30 clean; line-level
+      stationarity does not separate the two groups.
+    - When the guard fires, f0 frames within 1 Hz of a mains multiple are dropped, and the extent
+      is compared with the enhanced-stream extent. A disagreement over 1 s flags
+      `voice_review_low_confidence` rather than choosing one.
+    - The enhanced stream is not the default. On 7cd07b02 its extent ends at 3.37 s against about
+      8.25 s on raw, because the enhancer moved the quieter later voice into the residual; on 1 of
+      30 clean recordings it shortened the extent from 10.2 s to 7.1 s. fa6befa4 (the control)
+      gives the same extent on both streams.
+    - An enhanced level 20–33 dB under raw is a supporting "nothing captured" signal. It held on
+      the 4 hum-only recordings (6e17edae, a28e5022, 1ec7ddad, 9de82d6f), whose r16 discard stands.
+    - The 36 hum-locked recordings come from about 15 participants who recur across tasks.
 
 Task-audio cuts follow the new extent, passes included. 028943cf passed with an extent missing the
 start and the return of its glide.
@@ -245,12 +271,20 @@ start and the return of its glide.
 The owner heard 11 `declared_task_absent` discards; 10 were performed tasks, and only 889afc08 was
 empty. Five recordings were heard as "ok" with no further note.
 
-## Open decisions
+## Decided (owner, 2026-10-06)
 
-- **The prolonged-vowel minimum hold.** Fit it from the duration ladder; the labels so far put it
-  under 4.55 s.
-- **Broken or restarted holds.** The proposal is to judge on the longest hold and flag a restart
-  (4464b02f). The alternative is to annotate it.
-- **A mic shutoff after long phonation.** The proposal is to flag for review (f47eeda7). The
-  alternative is to annotate it.
-- **The hum guard** (item 10).
+- **No minimum hold.** Hold duration is a measurement; the declared-duration conformance ground is
+  removed (item 4).
+- **Broken or restarted holds merge into one extent**, not flagged (item 4).
+- **A mic shutoff during phonation flags** (`capture_cut_during_task`); after the task it is an
+  annotation (item 7).
+- **Hum guard on the residual, extent on raw**, with the enhanced extent as a cross-check (item 10).
+
+## Still open
+
+- **Fitted values from the labels**: the break minimum (bracket 0.15–0.4 s) and the glide range
+  bound under which a glide becomes `task_mismatch` (6 st, unfitted). These are fits, not owner
+  decisions.
+- **The empty count on energy.** 36 of the 130 `declared_task_absent` discards had under 1 s voiced
+  on plain, but voicing is the wrong test (3c6a97e9 and dbd096ea are weakly voiced attempts). The
+  count is redone on the item 1 energy extent before any discard is confirmed.
