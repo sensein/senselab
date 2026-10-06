@@ -170,7 +170,7 @@ def test_background_speech_in_the_task_flags_and_never_discards() -> None:
         onsets=9,
         family="voluntary-cough",
         instructed=3,
-        background={"heard": True, "speech_windows": [], "thinned_runs": [[16.0, 18.9, 1.4, 4.0]]},
+        background={"heard": True, "speech_windows": [], "runs": [[16.0, 18.9, 1.4, 4.0]]},
     )
     assert folded.triage is Triage.FLAG
     assert KEY_BACKGROUND_SPEECH_IN_TASK in folded.ground_keys

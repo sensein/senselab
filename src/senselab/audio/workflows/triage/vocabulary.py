@@ -2026,12 +2026,12 @@ def fold_file_verdict(
         )
     if task_evidence.background_speech.get("heard"):
         windows = task_evidence.background_speech.get("speech_windows") or []
-        runs = task_evidence.background_speech.get("thinned_runs") or []
+        runs = task_evidence.background_speech.get("runs") or []
         first = min([row[0] for row in (*windows, *runs)], default=None)
         flag(
             _AIRWAY,
             f"{BACKGROUND_SPEECH_IN_TASK}: {len(windows)} residual window(s) heard as speech and {len(runs)} "
-            f"voiced run(s) the enhancer thinned, first at {first} s",
+            f"harmonic residual run(s), first at {first} s",
             KEY_BACKGROUND_SPEECH_IN_TASK,
             by_branch[_AIRWAY].kind if _AIRWAY in by_branch else None,
         )
