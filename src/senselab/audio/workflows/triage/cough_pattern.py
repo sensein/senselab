@@ -54,6 +54,11 @@ class CoughParameters:
         attach_s: How soon after an onset a weaker rise is that cough's second phase or tail.
         train_drop_db: How far below the median onset peak an onset may fall and stay in the train.
         word_pad_s: How close to a speech word an onset is speech.
+        inhale_gap_s: The longest quiet between a preparatory inhale's end and its cough's onset.
+        inhale_bridge_s: The longest quiet inside an inhale.
+        inhale_max_s: How far before its onset an inhale may start.
+        inhale_min_s: The shortest inhale.
+        inhale_db: The level above the floor an inhale holds.
     """
 
     band_edges_hz: tuple[float, ...]
@@ -75,6 +80,11 @@ class CoughParameters:
     attach_s: float
     train_drop_db: float
     word_pad_s: float
+    inhale_gap_s: float
+    inhale_bridge_s: float
+    inhale_max_s: float
+    inhale_min_s: float
+    inhale_db: float
 
 
 @dataclass(frozen=True)
@@ -171,7 +181,7 @@ class CoughPattern:
 
     Attributes:
         onsets_s: Each cough's onset, in seconds.
-        event_spans_s: Each cough's ``(onset, end)``, its second phase and tail attached.
+        event_spans_s: Each cough's ``(start, end)``: its preparatory inhale, onset, second phase and tail.
         rises_db: Each onset's broadband rise.
         peaks_db: Each onset's peak above the recording's floor.
         intervals_s: Onset-to-onset intervals.
@@ -242,6 +252,7 @@ def _trailing_min(values: np.ndarray, width: int) -> np.ndarray:
 @dataclass(frozen=True)
 class _Onsets:
     onsets: list[int]
+    starts: list[int]
     ends: list[int]
     rises: list[float]
     peaks: list[float]
@@ -296,14 +307,36 @@ def _detect(bands_db: np.ndarray, hop_s: float, p: CoughParameters, words: Seque
         keep = [i for i, peak in enumerate(peaks) if peak >= top - p.train_drop_db]
         onsets, tails = [onsets[i] for i in keep], [tails[i] for i in keep]
         rises, peaks = [rises[i] for i in keep], [peaks[i] for i in keep]
+    starts: list[int] = []
     ends: list[int] = []
+    inhaling = broad >= floor + p.inhale_db
     for i, o in enumerate(onsets):
         bound = onsets[i + 1] if i + 1 < len(onsets) else frames
         j = o + int(np.argmax(broad[o : min(bound, o + peak_w)]))
         while j < bound - 1 and broad[j] >= floor + p.tail_db:
             j += 1
         ends.append(min(max(j, tails[i]), bound - 1))
-    return _Onsets(onsets=onsets, ends=ends, rises=rises, peaks=peaks, floor=floor)
+        starts.append(_inhale_start(inhaling, o, ends[-2] if i else 0, hop_s, p))
+    return _Onsets(onsets=onsets, starts=starts, ends=ends, rises=rises, peaks=peaks, floor=floor)
+
+
+def _inhale_start(active: np.ndarray, onset: int, bound: int, hop_s: float, p: CoughParameters) -> int:
+    """The start of a preparatory inhale ending just before ``onset``, else ``onset`` itself."""
+    lead, bridge = int(p.inhale_gap_s / hop_s), int(p.inhale_bridge_s / hop_s)
+    earliest = max(bound + 1, onset - int(p.inhale_max_s / hop_s))
+    t = onset - 1
+    while t >= earliest and onset - t <= lead and not active[t]:
+        t -= 1
+    if t < earliest or not active[t]:
+        return onset
+    start, quiet = t, 0
+    while t >= earliest and quiet <= bridge:
+        if active[t]:
+            start, quiet = t, 0
+        else:
+            quiet += 1
+        t -= 1
+    return start if (onset - start) * hop_s >= p.inhale_min_s else onset
 
 
 def cough_extent(
@@ -366,8 +399,8 @@ def measure_cough_pattern(
     found = _detect(bands_db, hop_s, p, words)
     strict = replace(p, rise_db=p.rise_db + r.rise_margin_db, coherence_min=p.coherence_min + r.coherence_margin)
     lenient = replace(p, rise_db=p.rise_db - r.rise_margin_db, coherence_min=p.coherence_min - r.coherence_margin)
-    spans = tuple((round(o * hop_s, 3), round(e * hop_s, 3)) for o, e in zip(found.onsets, found.ends))
-    onsets = tuple(span[0] for span in spans)
+    spans = tuple((round(float(s * hop_s), 3), round(float(e * hop_s), 3)) for s, e in zip(found.starts, found.ends))
+    onsets = tuple(round(float(o * hop_s), 3) for o in found.onsets)
     return CoughPattern(
         onsets_s=onsets,
         event_spans_s=spans,
