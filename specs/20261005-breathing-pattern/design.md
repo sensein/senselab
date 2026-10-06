@@ -208,3 +208,55 @@ Estimated against r15, as an in-memory VERDICT re-fold with each recording's hin
   for speech).
 - **The 537 the breath-evidence rule moved:** 471 pass, and 66 are discarded (16 of them pass in r15).
 - **300 random:** 7 discard → pass, 2 discard → flag, 1 flag → discard.
+
+## Breath-task extent from modulation (2026-10-06)
+
+The owner: "wouldn't task extent for breathing be better from the modulation calculation?" The
+breath-task extent was AIRWAY's event hull; on 14 of the 56 labelled breath recordings it was 4 s or
+less and understated where the breathing was.
+
+**How it is read** (`measure_breath_extent`, `tighten_to_events`, `breath_extent_fallback` in
+`breath_pattern.py`; parameters in `data/breath_pattern.yaml`, `extent`):
+
+1. Sliding 8 s windows, 2 s apart, over the same subband envelopes the modulation reading uses. A
+   window breathes when its breathing-over-syllabic ratio is at least 5 dB and at least 15% of its
+   frames are 8 dB above the recording's floor.
+2. The longest run of breathing windows, bridging one non-breathing window, tightened to its active
+   frames. It must hold at least two estimated breaths.
+3. Narrowed to the hull of the breathing measure's events inside it, padded by 1 s. The windows place
+   the edges coarsely, and without this the extent took in talk just before or after the breathing.
+4. Fallbacks, in order: the measure's events, padded by 1 s (`measure_events`); then AIRWAY's own
+   hull (`airway_events`). The source is recorded on the span.
+
+**Where it lives.** VERDICT writes it, for breath families, as a `task_extent` span carrying
+`supersedes`, which names the branches' live task-extent spans. Those stay live; the readers
+(`task_audio.task_extent`, the recording vectors) take the superseding span in their place through
+`vocabulary.standing_task_extents`. A re-fold that reads the same extent keeps the span; one that
+reads none retires it, and the branches' spans stand again. It applies on a plain re-fold; no replay
+is needed. Task audio and the parquet pick it up when they next run.
+
+**The decision is unchanged.** The veto's readings (speech, the classifiers, the active fraction)
+stay over AIRWAY's own hull, as they were fitted. Two attempts to read them over the new extent were
+measured and dropped:
+
+- **Activity over the new extent** lost three labels (fit 53 → 50 of 56): the extent is tightened to
+  its active frames, so a fraction over it is always high, and the little-activity veto no longer
+  caught 4d596bce, ae2a7223 or 167ac3f5.
+- **Speech over the new extent** discarded 27 more unlabelled recordings than the hull does (29
+  decisions moved; 2 rescued), from 5–28 words at the extent's edges. Stricter window thresholds
+  (5/7/9 dB, 0.15/0.3 active) left about 25 of them speech-vetoed. Without labels on those, keeping
+  breathing is the safer error.
+
+**Measured** (in-memory re-fold of the r15 stores, 1,074 rows, 0 errors; `/orcd/scratch/bcs/002/satra/tmp_bxt/`):
+the label fit is 53 of 56, the same three as before, with 0 decisions changed against `1a73d8d0`.
+
+| Set | Source | Median extent, old → new |
+|---|---|---|
+| 54 labelled with an extent | modulation 26, measure events 21, AIRWAY 7 | 13.2 → 10.6 s |
+| 284 random breath recordings with an extent | modulation 171, measure events 75, AIRWAY 38 | 10.6 → 11.9 s |
+
+On the 14 labelled recordings whose hull was 4 s or less, the breathing ones widen (25351e19 2.0 →
+30.0 s, 80e179b4 3.7 → 19.7 s, 475ff714 3.7 → 12.1 s, 42442f80 2.4 → 9.0 s, cb69d304 3.6 → 8.4 s,
+7c169ccc 0.7 → 3.6 s); b16acf04 narrows (3.7 → 1.4 s, one measured event). 6ca9935e, breath then
+speech, ends at 10.8 s instead of 14.0 s. The images are in
+`~/Downloads/breath_extent_check_20261006/`.
