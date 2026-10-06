@@ -1987,6 +1987,17 @@ class TestTheFoldNamesTheHintMismatchThisBranchDoesNot:
         is. Running it anyway would flag the file on that ground alone, whatever the route state.
         """
         _seed(store, tmp_path, task="respiration-and-cough-cough", no_contrast=True, envelope=bump(500, (250,)))
+        np.savez(tmp_path / "silent_spectrogram.npz", spectrogram=np.full((161, 400), 1e-9))
+        store.entity(
+            prov_type="measurement",
+            extent=None,
+            attributes={
+                "name": "spectrogram_narrowband",
+                "path": "silent_spectrogram.npz",
+                "n_fft": 320,
+                "hop_length": 80,
+            },
+        )
         self._empty_reading(monkeypatch)
         routing(store, "plain", airway_config, None, run_dir=tmp_path)
 
