@@ -464,3 +464,71 @@ def test_the_driver_exits_3_when_any_reading_must_be_read_again(
         lambda run_root, config, **kwargs: {"status": "ok", "retired": 0, "review": "needs_reread", "review_why": "x"},
     )
     assert cli.main([str(manifest), "--slice-index", "0", "--slice-count", "1", "--log-dir", str(tmp_path)]) == 3
+
+
+def _stub_replay(errors: dict[str, str]):  # type: ignore[no-untyped-def]  # noqa: ANN202
+    """A replay_decisions stand-in that writes nothing and reports these node errors."""
+    from senselab.audio.workflows.triage.extend import ReplayOutcome
+
+    def _replay(store: object, config: object, hint: object, **kwargs: object) -> ReplayOutcome:
+        return ReplayOutcome(retired=0, states={}, errors=dict(errors), released={}, summary={}, marker="m")
+
+    return _replay
+
+
+def test_a_replay_whose_node_raised_is_errored_and_names_the_node(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A store that landed with a node error is not ``ok``: the row says which node failed."""
+    root = tmp_path / "sub-01_ses-01_task-x_20260920-030808"
+    _seed_run(root)
+    monkeypatch.setattr(cli, "replay_decisions", _stub_replay({"SPEECH": "RuntimeError: no libtorchcodec"}))
+
+    record = cli.replay_one(root, load_triage_config(), build_hint=None, out_root=None, stem=root.name, commit=None)
+
+    assert record["status"] == cli.ERRORED
+    assert record["errored_nodes"] == ["SPEECH"]
+
+
+def test_a_replay_with_no_node_error_is_ok(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The errored status is only for a raised node; a clean replay stays ``ok``."""
+    root = tmp_path / "sub-01_ses-01_task-x_20260920-030808"
+    _seed_run(root)
+    monkeypatch.setattr(cli, "replay_decisions", _stub_replay({}))
+
+    record = cli.replay_one(root, load_triage_config(), build_hint=None, out_root=None, stem=root.name, commit=None)
+
+    assert record["status"] == cli.OK
+    assert record["errored_nodes"] == []
+
+
+def test_the_driver_exits_1_when_any_row_is_errored(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A node error fails the array task, so a chain cannot run on past it."""
+    manifest = _manifest(tmp_path / "manifest.jsonl", [_seed_run(tmp_path / "run0")])
+    monkeypatch.setattr(
+        cli,
+        "replay_one",
+        lambda run_root, config, **kwargs: {"status": cli.ERRORED, "retired": 0, "errored_nodes": ["SPEECH"]},
+    )
+    assert cli.main([str(manifest), "--slice-index", "0", "--slice-count", "1", "--log-dir", str(tmp_path)]) == 1
+
+
+def test_force_replays_a_run_that_already_carries_the_marker(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """``--force`` bypasses the resume predicate; without it the same run is ``present``."""
+    root = tmp_path / "sub-01_ses-01_task-x_20260920-030808"
+    _seed_run(root)
+    config = load_triage_config()
+    store = read_store(root, run_id=replay_run_id(root, config.config_hash))
+    store.activity(
+        node=REPLAY_NODE,
+        step=REPLAY_MARKER_STEP,
+        parameters={"config_hash": config.config_hash, "commit": None, "retired": 0},
+    )
+    store.write_jsonl(root / "run" / "store.jsonl")
+    monkeypatch.setattr(cli, "replay_decisions", _stub_replay({}))
+
+    skipped = cli.replay_one(root, config, build_hint=None, out_root=None, stem=root.name, commit=None)
+    forced = cli.replay_one(root, config, build_hint=None, out_root=None, stem=root.name, commit=None, force=True)
+
+    assert skipped["status"] == cli.PRESENT
+    assert forced["status"] == cli.OK
