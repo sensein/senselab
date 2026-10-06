@@ -36,7 +36,7 @@ from senselab.audio.workflows.triage.nodes.common import (
 )
 from senselab.audio.workflows.triage.nodes.redact import released_audio
 from senselab.audio.workflows.triage.nodes.verdict import NODE as VERDICT_NODE
-from senselab.audio.workflows.triage.vocabulary import Release
+from senselab.audio.workflows.triage.vocabulary import Release, standing_task_extents
 from senselab.utils.prov_store import Entity, ProvStore, file_digest
 
 NODE = "TASK_AUDIO"
@@ -151,11 +151,7 @@ def task_extent(store: ProvStore, *, padding_s: float) -> TaskExtent | None:
     """
     if padding_s < 0.0:
         raise ValueError(f"task_audio.padding_s must be at least 0, got {padding_s}")
-    spans = [
-        span
-        for span in live_entities(store, "span")
-        if span.attributes.get("role") == TASK_EXTENT_ROLE and span.extent is not None
-    ]
+    spans = standing_task_extents(live_entities(store, "span"))
     recording = _recording_extent(store)
     if not spans or recording is None:
         return None

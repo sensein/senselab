@@ -29,7 +29,7 @@ import pyarrow as pa
 import yaml  # type: ignore[import-untyped]
 
 from senselab.audio.workflows.triage.cohort import CONDITION_KINDS
-from senselab.audio.workflows.triage.vocabulary import UNPLACED_OPEN, UNPLACED_UNREAD
+from senselab.audio.workflows.triage.vocabulary import UNPLACED_OPEN, UNPLACED_UNREAD, standing_task_extents
 from senselab.utils import fastio
 
 SCHEMA_VERSION = 21
@@ -1078,7 +1078,7 @@ def _extent_columns(view: StoreView, duration_s: float | None) -> dict[str, Any]
         "trimmable",
     )
     out: dict[str, Any] = dict.fromkeys(keys)
-    extents = [e.extent for e in view.live("span") if e.attributes.get("role") == TASK_EXTENT_ROLE and e.extent]
+    extents = [e.extent for e in standing_task_extents(list(view.live("span"))) if e.extent]
     if not extents:
         return out
     start = min(float(extent[0]) for extent in extents)
