@@ -2288,7 +2288,7 @@ def test_the_breath_extent_stands_in_place_of_airways_and_settles_on_refold() ->
     store = ProvStore(run_id="breath-extent-test")
     airway = store.entity(prov_type="span", extent=(10.0, 12.0), attributes={"family": "airway", "role": "task_extent"})
     software = software_agent(store)
-    extent = {"start_s": 1.0, "end_s": 30.0, "source": "modulation", "estimated_breaths": 5}
+    extent = {"start_s": 1.0, "end_s": 30.0, "source": "breath_train", "phases": 10, "breaths": 5}
 
     def live() -> list[Entity]:
         return [s for s in store.entities("span") if not store.is_invalidated(s.id)]

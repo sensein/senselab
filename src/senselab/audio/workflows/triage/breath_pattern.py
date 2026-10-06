@@ -21,7 +21,7 @@ from typing import Any, Mapping
 
 import numpy as np
 import yaml
-from scipy.signal import butter, find_peaks, sosfiltfilt
+from scipy.signal import find_peaks
 
 from senselab.audio.tasks.classification.label_scores import label_scores
 from senselab.audio.workflows.triage.nodes.common import find_measurement, lexical_words, live_entities, word_hull
@@ -61,6 +61,7 @@ class BreathPatternParameters:
         voicing_strength_min: The pitch strength at or above which a frame with an F0 is voiced.
         merge_gap_s: Active runs closer than this merge into one event.
         event_s: The duration range of one breath event.
+        event_trim_db: An event's span is the frames within this of its own envelope peak.
         voiced_fraction_max: The share of an event's frames that may be voiced.
         period_s: The breathing-cycle range the envelope's autocorrelation is searched over.
         autocorr_min: The autocorrelation peak in that range that counts as a rhythm.
@@ -77,6 +78,7 @@ class BreathPatternParameters:
     voicing_strength_min: float
     merge_gap_s: float
     event_s: tuple[float, float]
+    event_trim_db: float
     voiced_fraction_max: float
     period_s: tuple[float, float]
     autocorr_min: float
@@ -96,11 +98,7 @@ class ModulationParameters:
         reference_band_hz: The modulation band each subband spectrum is normalised over.
         floor_percentile: The percentile of the broadband envelope taken as the floor.
         active_rise_db: How far above that floor the active span starts and ends.
-        peak_min_distance_s: The shortest spacing between two counted peaks.
-        peak_prominence_std: The prominence a peak needs, in standard deviations of the component.
         min_duration_s: The shortest recording the reading is taken over.
-        peaks_per_breath: Modulation peaks one breath makes (an inhale and an exhale).
-        breathing_min_db: At or above this ratio, with an active span, the cycles count.
     """
 
     band_edges_hz: tuple[float, ...]
@@ -110,11 +108,7 @@ class ModulationParameters:
     reference_band_hz: tuple[float, float]
     floor_percentile: float
     active_rise_db: float
-    peak_min_distance_s: float
-    peak_prominence_std: float
     min_duration_s: float
-    peaks_per_breath: float
-    breathing_min_db: float
 
 
 @functools.cache
@@ -138,11 +132,7 @@ def modulation_parameters() -> ModulationParameters:
         reference_band_hz=pair("reference_band_hz"),
         floor_percentile=float(held["floor_percentile"]),
         active_rise_db=float(held["active_rise_db"]),
-        peak_min_distance_s=float(held["peak_min_distance_s"]),
-        peak_prominence_std=float(held["peak_prominence_std"]),
         min_duration_s=float(held["min_duration_s"]),
-        peaks_per_breath=float(held["peaks_per_breath"]),
-        breathing_min_db=float(held["breathing_min_db"]),
     )
 
 
@@ -169,6 +159,7 @@ def breath_pattern_parameters() -> BreathPatternParameters:
         voicing_strength_min=float(held["voicing_strength_min"]),
         merge_gap_s=float(held["merge_gap_s"]),
         event_s=pair("event_s"),
+        event_trim_db=float(held["event_trim_db"]),
         voiced_fraction_max=float(held["voiced_fraction_max"]),
         period_s=pair("period_s"),
         autocorr_min=float(held["autocorr_min"]),
@@ -184,17 +175,10 @@ class ModulationReading:
     Attributes:
         breath_vs_syllabic_db: Breathing-band over syllabic-band modulation energy, in dB.
         active_span_s: The span the broadband envelope stays above its floor by the active rise.
-        modulation_peaks: Peaks of the breathing-band component inside that span.
-        estimated_breaths: ``modulation_peaks`` over the peaks one breath makes, rounded half up.
-        breathing: The ratio reaches the breathing minimum over a non-zero active span, so the
-            estimated breaths count.
     """
 
     breath_vs_syllabic_db: float
     active_span_s: float
-    modulation_peaks: int
-    estimated_breaths: int
-    breathing: bool
 
     def record(self) -> dict[str, Any]:
         """The reading, as JSON-ready values.
@@ -205,58 +189,226 @@ class ModulationReading:
         return {
             "breath_vs_syllabic_db": self.breath_vs_syllabic_db,
             "active_span_s": self.active_span_s,
-            "modulation_peaks": self.modulation_peaks,
-            "estimated_breaths": self.estimated_breaths,
-            "breathing": self.breathing,
         }
 
 
-EXTENT_MODULATION = "modulation"
+EXTENT_BREATH_TRAIN = "breath_train"
 EXTENT_MEASURE_EVENTS = "measure_events"
 EXTENT_AIRWAY_EVENTS = "airway_events"
-EXTENT_SOURCES = (EXTENT_MODULATION, EXTENT_MEASURE_EVENTS, EXTENT_AIRWAY_EVENTS)
+EXTENT_SOURCES = (EXTENT_BREATH_TRAIN, EXTENT_MEASURE_EVENTS, EXTENT_AIRWAY_EVENTS)
 
 
 @dataclass(frozen=True)
-class ExtentParameters:
-    """The ``extent`` section of ``data/breath_pattern.yaml``.
+class TrainParameters:
+    """The ``train`` section of ``data/breath_pattern.yaml``.
 
     Attributes:
-        window_s: The sliding window the breathing-rate modulation is read over.
-        hop_s: The step between windows.
-        window_breathing_min_db: A window's breathing-over-syllabic ratio at or above which it breathes.
-        window_active_min: The share of a window's frames above the active rise it needs to breathe.
-        max_gap_windows: Non-breathing windows a run of breathing windows may bridge.
-        pad_s: Padding added on each side of the extent.
-        min_cycles: The fewest estimated breaths a modulation extent must hold to stand.
+        band_edges_hz: Edges of the subbands whose envelopes are read.
+        fs_mod: The rate the envelopes are resampled to, in Hz.
+        smooth_s: The moving-median window on each subband level.
+        noise_percentile: The per-bin percentile taken as stationary noise.
+        noise_subtract: The share of that noise subtracted from each bin.
+        tonal_db: How far a bin's noise sits over its neighbours' for the bin to be a tonal line.
+        tonal_halfwidth_bins: The neighbours on each side that comparison reads.
+        envelope_smooth_s: The moving-mean window on the combined robust-z envelope.
+        prominence_min: The least prominence a burst needs, in robust-z units.
+        prominence_range_frac: Or this share of the envelope's 5th-95th percentile range, if larger.
+        weak_prominence_frac: The share of that prominence a weak burst needs.
+        template_corr_min: The correlation with the strong bursts' spectrum a weak burst needs.
+        distance_quick_s: The least spacing between bursts for a quick-breath family.
+        distance_s: The least spacing for every other family.
+        quick_families: The quick-breath families.
+        burst_s: The duration range of one burst.
+        flatness_min: The mean spectral flatness a burst needs.
+        voiced_max: The share of a burst's frames that may be voiced.
+        coherence_min: The share of subbands that must rise with the burst.
+        coherence_window_s: The window either side of the peak a subband's rise is read in.
+        rise_z: The rise, in robust-z units, that counts a subband as rising.
+        floor_percentile: The percentile of the raw broadband level taken as the floor.
+        rise_floor_db: How far over that floor a burst's peak must be.
+        gap_min_s: Bursts further apart than this, or ``gap_cycles`` half-cycles, start a new run.
+        gap_cycles: The half-cycles a gap may span.
+        speech_words_min: The lexical words a speech run holds; a speech run splits the train.
+        speech_gap_s: The longest gap between words of one speech run.
+        pad_s: Padding on each side of the train's hull.
+        continue_db: The median level over the floor the extent runs on through to a speech onset.
     """
 
-    window_s: float
-    hop_s: float
-    window_breathing_min_db: float
-    window_active_min: float
-    max_gap_windows: int
+    band_edges_hz: tuple[float, ...]
+    fs_mod: float
+    smooth_s: float
+    noise_percentile: float
+    noise_subtract: float
+    tonal_db: float
+    tonal_halfwidth_bins: int
+    envelope_smooth_s: float
+    prominence_min: float
+    prominence_range_frac: float
+    weak_prominence_frac: float
+    template_corr_min: float
+    distance_quick_s: float
+    distance_s: float
+    quick_families: tuple[str, ...]
+    burst_s: tuple[float, float]
+    flatness_min: float
+    voiced_max: float
+    coherence_min: float
+    coherence_window_s: float
+    rise_z: float
+    floor_percentile: float
+    rise_floor_db: float
+    gap_min_s: float
+    gap_cycles: float
+    speech_words_min: int
+    speech_gap_s: float
     pad_s: float
-    min_cycles: int
+    continue_db: float
 
 
 @functools.cache
-def extent_parameters() -> ExtentParameters:
-    """The ``extent`` parameters of ``data/breath_pattern.yaml``.
+def train_parameters() -> TrainParameters:
+    """The ``train`` parameters of ``data/breath_pattern.yaml``.
 
     Returns:
         The parameters.
     """
-    held = (yaml.safe_load(BREATH_PATTERN_PATH.read_text()) or {})["extent"]
-    return ExtentParameters(
-        window_s=float(held["window_s"]),
-        hop_s=float(held["hop_s"]),
-        window_breathing_min_db=float(held["window_breathing_min_db"]),
-        window_active_min=float(held["window_active_min"]),
-        max_gap_windows=int(held["max_gap_windows"]),
-        pad_s=float(held["pad_s"]),
-        min_cycles=int(held["min_cycles"]),
+    held = (yaml.safe_load(BREATH_PATTERN_PATH.read_text()) or {})["train"]
+    ints = {"tonal_halfwidth_bins", "speech_words_min"}
+    values: dict[str, Any] = {}
+    for name, value in held.items():
+        if name == "band_edges_hz":
+            values[name] = tuple(float(edge) for edge in value)
+        elif name == "quick_families":
+            values[name] = tuple(str(family) for family in value)
+        elif name == "burst_s":
+            values[name] = (float(value[0]), float(value[1]))
+        else:
+            values[name] = int(value) if name in ints else float(value)
+    return TrainParameters(**values)
+
+
+@dataclass(frozen=True)
+class ReviewParameters:
+    """The ``review`` section of ``data/breath_pattern.yaml``.
+
+    Attributes:
+        min_phases: A train of fewer phases is in the review band.
+        cycle_cv_min: A cycle coefficient of variation at or above which, with a median rise under
+            ``irregular_rise_db_max``, the train is in the band.
+        irregular_rise_db_max: That rise.
+        weak_rise_db_max: A median burst rise under this puts the train in the band.
+    """
+
+    min_phases: int
+    cycle_cv_min: float
+    irregular_rise_db_max: float
+    weak_rise_db_max: float
+
+
+@functools.cache
+def review_parameters() -> ReviewParameters:
+    """The ``review`` parameters of ``data/breath_pattern.yaml``.
+
+    Returns:
+        The parameters.
+    """
+    held = (yaml.safe_load(BREATH_PATTERN_PATH.read_text()) or {})["review"]
+    return ReviewParameters(
+        min_phases=int(held["min_phases"]),
+        cycle_cv_min=float(held["cycle_cv_min"]),
+        irregular_rise_db_max=float(held["irregular_rise_db_max"]),
+        weak_rise_db_max=float(held["weak_rise_db_max"]),
     )
+
+
+@dataclass(frozen=True)
+class Burst:
+    """One breath phase (an inhale or an exhale) the breath train found.
+
+    Attributes:
+        peak_s: Its envelope peak, in seconds.
+        start_s: Its start.
+        end_s: Its end.
+        prominence: Its prominence on the combined envelope, in robust-z units.
+        coherence: The share of subbands that rose with it.
+        rise_db: Its peak's raw broadband level over the recording's floor.
+        template_corr: Its spectrum's correlation with the strong bursts' mean spectrum.
+        weak: Whether it stood only on the template.
+    """
+
+    peak_s: float
+    start_s: float
+    end_s: float
+    prominence: float
+    coherence: float
+    rise_db: float
+    template_corr: float | None = None
+    weak: bool = False
+
+
+@dataclass(frozen=True)
+class BreathTrain:
+    """The run of bursts that is the breathing task.
+
+    Attributes:
+        bursts: The run's bursts, in time order.
+        extent_s: The run's hull, padded, trimmed at speech and run on to a following speech onset;
+            None with no burst.
+        phases: The bursts counted.
+        breaths: ``phases`` over two, rounded half up.
+        rate_cpm: Breathing cycles per minute, from the median two-phase interval; None under three
+            phases.
+        cycle_cv: The two-phase intervals' coefficient of variation; None under four phases.
+        coherence: The bursts' mean coherence.
+        rise_db: The bursts' median rise over the floor.
+        bursts_found_n: Every burst found in the file, inside the run or not.
+    """
+
+    bursts: tuple[Burst, ...] = ()
+    extent_s: tuple[float, float] | None = None
+    phases: int = 0
+    breaths: int = 0
+    rate_cpm: float | None = None
+    cycle_cv: float | None = None
+    coherence: float | None = None
+    rise_db: float | None = None
+    bursts_found_n: int = 0
+
+    def record(self) -> dict[str, Any]:
+        """The train, as JSON-ready values.
+
+        Returns:
+            The fields, keyed by name, with each burst's peak, start and end.
+        """
+        return {
+            "extent_s": list(self.extent_s) if self.extent_s is not None else None,
+            "phases": self.phases,
+            "breaths": self.breaths,
+            "rate_cpm": self.rate_cpm,
+            "cycle_cv": self.cycle_cv,
+            "coherence": self.coherence,
+            "rise_db": self.rise_db,
+            "bursts_found_n": self.bursts_found_n,
+            "bursts_s": [[b.peak_s, b.start_s, b.end_s] for b in self.bursts],
+        }
+
+
+def in_review_band(train: BreathTrain | None, parameters: ReviewParameters | None = None) -> bool:
+    """Whether a breath train is weak or irregular enough to be left for review.
+
+    Args:
+        train: The breath train, or None where none was read.
+        parameters: The band; ``data/breath_pattern.yaml`` when None.
+
+    Returns:
+        True for no train, fewer than ``min_phases`` phases, an irregular cycle with a modest rise, or a
+        weak rise.
+    """
+    p = parameters or review_parameters()
+    if train is None or train.rise_db is None or train.phases < p.min_phases:
+        return True
+    irregular = train.cycle_cv is not None and train.cycle_cv >= p.cycle_cv_min
+    return (irregular and train.rise_db < p.irregular_rise_db_max) or train.rise_db < p.weak_rise_db_max
 
 
 @dataclass(frozen=True)
@@ -267,17 +419,15 @@ class BreathExtent:
         start_s: The extent's start, in seconds.
         end_s: Its end, in seconds.
         source: Where it was read from, one of :data:`EXTENT_SOURCES`.
-        breathing_windows_n: Windows whose modulation breathes inside the extent; 0 for a fallback.
-        windows_n: Windows read; 0 for a fallback.
-        estimated_breaths: The breaths the modulation peaks inside the extent estimate, or None.
+        phases: The breath train's phases inside the extent; None for a fallback.
+        breaths: Those phases over two, rounded half up; None for a fallback.
     """
 
     start_s: float
     end_s: float
     source: str
-    breathing_windows_n: int = 0
-    windows_n: int = 0
-    estimated_breaths: int | None = None
+    phases: int | None = None
+    breaths: int | None = None
 
     @property
     def bounds(self) -> tuple[float, float]:
@@ -294,9 +444,8 @@ class BreathExtent:
             "start_s": self.start_s,
             "end_s": self.end_s,
             "source": self.source,
-            "breathing_windows_n": self.breathing_windows_n,
-            "windows_n": self.windows_n,
-            "estimated_breaths": self.estimated_breaths,
+            "phases": self.phases,
+            "breaths": self.breaths,
         }
 
 
@@ -405,8 +554,9 @@ class BreathPattern:
         modulation: The modulation reading, or None where the recording is shorter than it needs.
         veto: What the stored classifier windows and transcript say against breathing, or None where it
             was not read.
-        event_spans_s: Each event's ``(start, end)`` in seconds.
+        event_spans_s: Each event's ``(start, end)`` in seconds, trimmed to the frames near its peak.
         extent: The breath-task extent, or None where it was not read.
+        train: The breath train, or None where it was not read.
     """
 
     pattern: str
@@ -419,6 +569,7 @@ class BreathPattern:
     veto: BreathVeto | None = None
     event_spans_s: tuple[tuple[float, float], ...] = field(default_factory=tuple)
     extent: BreathExtent | None = None
+    train: BreathTrain | None = None
 
     def record(self) -> dict[str, Any]:
         """The reading, as JSON-ready values.
@@ -436,6 +587,7 @@ class BreathPattern:
             "modulation": self.modulation.record() if self.modulation is not None else None,
             "veto": self.veto.record() if self.veto is not None else None,
             "extent": self.extent.record() if self.extent is not None else None,
+            "train": self.train.record() if self.train is not None else None,
         }
 
 
@@ -504,7 +656,8 @@ def measure_breath_pattern(
         voiced_share = float(voiced[start:stop].mean()) if stop > start else 0.0
         if p.event_s[0] <= duration <= p.event_s[1] and voiced_share <= p.voiced_fraction_max:
             events.append((start, round(duration, 3)))
-            spans.append((round(start * hop_s, 3), round(stop * hop_s, 3)))
+            near = np.flatnonzero(envelope[start:stop] >= envelope[start:stop].max() - p.event_trim_db)
+            spans.append((round((start + near[0]) * hop_s, 3), round((start + near[-1] + 1) * hop_s, 3)))
 
     onsets = np.array([start * hop_s for start, _ in events])
     intervals = np.diff(onsets) if len(onsets) > 1 else np.array([])
@@ -584,7 +737,7 @@ def _breath_ratio_db(bands: np.ndarray, parameters: ModulationParameters) -> flo
 def measure_modulation(
     power: np.ndarray, *, hop_s: float, bin_hz: float, smooth_s: float, parameters: ModulationParameters
 ) -> ModulationReading | None:
-    """Read breathing cycles off the modulation spectra of subband envelopes.
+    """Read the breathing-over-syllabic modulation ratio and the active span off subband envelopes.
 
     Args:
         power: Power spectrogram, frequency bins by frames, bin 0 at 0 Hz.
@@ -600,133 +753,289 @@ def measure_modulation(
     bands = _subband_envelopes(power, hop_s=hop_s, bin_hz=bin_hz, smooth_s=smooth_s, parameters=p)
     if bands.shape[1] / p.fs_mod < p.min_duration_s:
         return None
-    tiny = 1e-12
     ratio_db = _breath_ratio_db(bands, p)
 
     broadband = 10 * np.log10(np.sum(10 ** (bands / 10), axis=0))
     floor = float(np.percentile(broadband, p.floor_percentile))
     active = np.flatnonzero(broadband >= floor + p.active_rise_db)
     span_s = float((active[-1] - active[0] + 1) / p.fs_mod) if len(active) else 0.0
-    sos = butter(2, p.breath_band_hz, btype="band", fs=p.fs_mod, output="sos")
-    component = np.mean([sosfiltfilt(sos, envelope - envelope.mean()) for envelope in bands], axis=0)
-    peaks, _ = find_peaks(
-        component,
-        distance=max(1, int(p.peak_min_distance_s * p.fs_mod)),
-        prominence=p.peak_prominence_std * (float(np.std(component)) + tiny),
-    )
-    counted = int(sum(1 for peak in peaks if broadband[peak] >= floor + p.active_rise_db / 2))
     return ModulationReading(
         breath_vs_syllabic_db=round(ratio_db, 2),
         active_span_s=round(span_s, 2),
-        modulation_peaks=counted,
-        estimated_breaths=int(np.floor(counted / p.peaks_per_breath + 0.5)),
-        breathing=ratio_db >= p.breathing_min_db and span_s > 0,
     )
 
 
-def measure_breath_extent(
+def _denoise(power: np.ndarray, p: TrainParameters) -> tuple[np.ndarray, np.ndarray]:
+    """The spectrogram less its per-bin stationary noise, and which bins are tonal lines."""
+    noise = np.percentile(power, p.noise_percentile, axis=1)
+    noise_db = 10 * np.log10(noise + 1e-12)
+    half = p.tonal_halfwidth_bins
+    padded = np.pad(noise_db, half, mode="edge")
+    neighbours = np.median(np.lib.stride_tricks.sliding_window_view(padded, 2 * half + 1), axis=1)
+    tonal = noise_db - neighbours > p.tonal_db
+    clean = np.maximum(power - p.noise_subtract * noise[:, None], 1e-3 * noise[:, None] + 1e-12)
+    return clean, tonal
+
+
+def _subband_levels(
+    power: np.ndarray, tonal: np.ndarray, *, hop_s: float, bin_hz: float, p: TrainParameters
+) -> np.ndarray:
+    """Each subband's dB level less its tonal bins, smoothed and resampled to ``fs_mod``."""
+    step = max(1, int(round(1 / (p.fs_mod * hop_s))))
+    frames = power.shape[1] // step
+    width = max(1, int(round(p.smooth_s / hop_s))) | 1
+    levels = []
+    for low, high in zip(p.band_edges_hz[:-1], p.band_edges_hz[1:]):
+        rows = np.arange(int(np.ceil(low / bin_hz)), min(power.shape[0], int(np.floor(high / bin_hz)) + 1))
+        if len(rows) == 0:
+            continue
+        rows = rows[~tonal[rows]] if (~tonal[rows]).any() else rows
+        level = _moving_median(10 * np.log10(power[rows].sum(axis=0) + 1e-12), width)
+        levels.append(level[: frames * step].reshape(frames, step).mean(axis=1))
+    return np.array(levels).reshape(len(levels), frames)
+
+
+def _robust_z(levels: np.ndarray) -> np.ndarray:
+    median = np.median(levels, axis=1, keepdims=True)
+    mad = np.median(np.abs(levels - median), axis=1, keepdims=True) * 1.4826 + 1e-6
+    return (levels - median) / mad
+
+
+def find_bursts(
     power: np.ndarray,
     *,
     hop_s: float,
     bin_hz: float,
-    smooth_s: float,
-    modulation: ModulationParameters,
-    parameters: ExtentParameters,
-) -> BreathExtent | None:
-    """Where breathing-rate modulation runs, read over sliding windows of the subband envelopes.
+    voiced: np.ndarray,
+    family: str | None,
+    parameters: TrainParameters,
+) -> tuple[list[Burst], np.ndarray, float]:
+    """Find breath phases: coherent broadband rises on the denoised subband envelopes.
 
     Args:
         power: Power spectrogram, frequency bins by frames, bin 0 at 0 Hz.
         hop_s: Seconds between frames.
         bin_hz: Hertz between frequency bins.
-        smooth_s: The moving-median window on each subband envelope.
-        modulation: The modulation reading's parameters.
-        parameters: The extent's parameters.
+        voiced: Whether each frame is voiced, one per frame.
+        family: The declared task family, which fixes the least spacing between bursts.
+        parameters: The train's parameters.
 
     Returns:
-        The longest run of breathing windows, tightened to its active frames and padded; None where
-        the recording is shorter than one window, no window breathes, or the run holds fewer than
-        ``min_cycles`` estimated breaths.
+        The bursts in time order, the raw broadband level at ``fs_mod``, and its floor.
     """
-    m, x = modulation, parameters
-    bands = _subband_envelopes(power, hop_s=hop_s, bin_hz=bin_hz, smooth_s=smooth_s, parameters=m)
-    frames = bands.shape[1]
-    width, step = int(round(x.window_s * m.fs_mod)), max(1, int(round(x.hop_s * m.fs_mod)))
-    if frames < width or width <= 1:
-        return None
-    broadband = 10 * np.log10(np.sum(10 ** (bands / 10), axis=0))
-    floor = float(np.percentile(broadband, m.floor_percentile))
-    active = broadband >= floor + m.active_rise_db
-    starts = list(range(0, frames - width + 1, step))
-    if starts[-1] != frames - width:
-        starts.append(frames - width)
-    breathes = [
-        _breath_ratio_db(bands[:, i : i + width], m) >= x.window_breathing_min_db
-        and float(active[i : i + width].mean()) >= x.window_active_min
-        for i in starts
-    ]
-    runs: list[list[int]] = []
-    for index, breathing in enumerate(breathes):
-        if not breathing:
+    p = parameters
+    fs = p.fs_mod
+    clean, tonal = _denoise(power, p)
+    z = _robust_z(_subband_levels(clean, tonal, hop_s=hop_s, bin_hz=bin_hz, p=p))
+    raw = _subband_levels(power, np.zeros(power.shape[0], dtype=bool), hop_s=hop_s, bin_hz=bin_hz, p=p)
+    frames = z.shape[1]
+    if frames < 3 or z.shape[0] == 0:
+        return [], np.zeros(frames), 0.0
+    broadband = 10 * np.log10(np.sum(10 ** (raw / 10), axis=0))
+    floor = float(np.percentile(broadband, p.floor_percentile))
+    k = max(1, int(round(p.envelope_smooth_s * fs)))
+    combined = np.convolve(np.pad(z.mean(axis=0), k, mode="reflect"), np.ones(k) / k, mode="same")[k:-k]
+    full = max(
+        p.prominence_min, p.prominence_range_frac * float(np.percentile(combined, 95) - np.percentile(combined, 5))
+    )
+    distance = p.distance_quick_s if family in p.quick_families else p.distance_s
+    peaks, props = find_peaks(
+        combined, distance=max(1, int(distance * fs)), prominence=full * p.weak_prominence_frac, width=1
+    )
+    step = max(1, int(round(1 / (fs * hop_s))))
+    band = clean[_band_rows(bin_hz, (p.band_edges_hz[0], p.band_edges_hz[-1]))][:, : frames * step] + 1e-12
+    flatness = (np.exp(np.mean(np.log(band), axis=0)) / np.mean(band, axis=0)).reshape(frames, step).mean(axis=1)
+    held = voiced[: frames * step]
+    voicing = held.reshape(frames, step).mean(axis=1) if len(held) == frames * step else np.zeros(frames)
+    spectrum = 10 * np.log10(band.reshape(band.shape[0], frames, step).mean(axis=2))
+    half = int(round(p.coherence_window_s * fs))
+    found: list[Burst] = []
+    for index, peak in enumerate(peaks):
+        low, high = int(props["left_ips"][index]), int(np.ceil(props["right_ips"][index]))
+        if not p.burst_s[0] <= (high - low) / fs <= p.burst_s[1]:
             continue
-        if runs and index - runs[-1][-1] - 1 <= x.max_gap_windows:
-            runs[-1].append(index)
-        else:
-            runs.append([index])
-    if not runs:
-        return None
-    run = max(runs, key=len)
-    first, last = starts[run[0]], starts[run[-1]] + width
-    inside = np.flatnonzero(active[first:last])
-    if len(inside):
-        first, last = first + int(inside[0]), first + int(inside[-1]) + 1
-    sos = butter(2, m.breath_band_hz, btype="band", fs=m.fs_mod, output="sos")
-    component = np.mean([sosfiltfilt(sos, envelope - envelope.mean()) for envelope in bands], axis=0)
-    peaks, _ = find_peaks(
-        component[first:last],
-        distance=max(1, int(m.peak_min_distance_s * m.fs_mod)),
-        prominence=m.peak_prominence_std * (float(np.std(component)) + 1e-12),
-    )
-    breaths = int(np.floor(len(peaks) / m.peaks_per_breath + 0.5))
-    if breaths < x.min_cycles:
-        return None
-    duration_s = frames / m.fs_mod
-    return BreathExtent(
-        start_s=round(max(0.0, first / m.fs_mod - x.pad_s), 3),
-        end_s=round(min(duration_s, last / m.fs_mod + x.pad_s), 3),
-        source=EXTENT_MODULATION,
-        breathing_windows_n=len(run),
-        windows_n=len(starts),
-        estimated_breaths=breaths,
-    )
+        if (
+            float(flatness[low : high + 1].mean()) < p.flatness_min
+            or float(voicing[low : high + 1].mean()) > p.voiced_max
+        ):
+            continue
+        near, before = slice(max(0, peak - half), min(frames, peak + half + 1)), slice(max(0, low - half), low + 1)
+        coherence = float(np.mean([(row[near].max() - row[before].min()) >= p.rise_z for row in z]))
+        rise = float(broadband[peak] - floor)
+        if coherence < p.coherence_min or rise < p.rise_floor_db:
+            continue
+        prominence = float(props["prominences"][index])
+        found.append(
+            Burst(
+                peak_s=round(peak / fs, 3),
+                start_s=round(low / fs, 3),
+                end_s=round(high / fs, 3),
+                prominence=round(prominence, 3),
+                coherence=round(coherence, 3),
+                rise_db=round(rise, 2),
+                weak=prominence < full,
+            )
+        )
+    strong = [burst for burst in found if not burst.weak]
+    if not strong:
+        return [], broadband, floor
+
+    def shape(burst: Burst) -> np.ndarray:
+        mean = spectrum[:, int(round(burst.start_s * fs)) : int(round(burst.end_s * fs)) + 1].mean(axis=1)
+        return (mean - mean.mean()) / (mean.std() + 1e-9)
+
+    template = np.mean([shape(burst) for burst in strong], axis=0)
+    scored = [replace(burst, template_corr=round(float(np.mean(shape(burst) * template)), 3)) for burst in found]
+    kept = [b for b in scored if not b.weak or (b.template_corr or 0.0) >= p.template_corr_min]
+    return kept, broadband, floor
 
 
-def tighten_to_events(
-    extent: BreathExtent, events: tuple[tuple[float, float], ...], *, duration_s: float, pad_s: float
-) -> BreathExtent:
-    """A modulation extent narrowed to the hull of the measure's breath events inside it, padded.
+def speech_runs(words: tuple[tuple[float, float], ...], *, words_min: int, gap_s: float) -> list[tuple[float, float]]:
+    """Runs of lexical words, split at gaps over ``gap_s``, that hold at least ``words_min`` words.
 
     Args:
-        extent: The modulation extent.
-        events: The breathing measure's event spans.
-        duration_s: The recording's duration.
-        pad_s: Padding added on each side of the events' hull.
+        words: Each lexical word's ``(start, end)``.
+        words_min: The fewest words a run holds.
+        gap_s: The longest gap inside a run.
 
     Returns:
-        The narrowed extent, or ``extent`` unchanged where no event falls inside it.
+        Each run's ``(start, end)``, in time order.
     """
-    inside = [e for e in events if e[1] > extent.start_s and e[0] < extent.end_s]
-    if not inside:
-        return extent
-    start = max(extent.start_s, min(e[0] for e in inside) - pad_s, 0.0)
-    end = min(extent.end_s, max(e[1] for e in inside) + pad_s, duration_s)
-    return replace(extent, start_s=round(start, 3), end_s=round(end, 3))
+    runs: list[list[tuple[float, float]]] = []
+    for word in sorted(words):
+        if runs and word[0] - runs[-1][-1][1] <= gap_s:
+            runs[-1].append(word)
+        else:
+            runs.append([word])
+    return [(run[0][0], max(end for _, end in run)) for run in runs if len(run) >= words_min]
+
+
+def _rhu(value: float) -> int:
+    return int(np.floor(value + 0.5))
+
+
+def breath_train(
+    bursts: list[Burst],
+    words: tuple[tuple[float, float], ...],
+    *,
+    duration_s: float,
+    broadband: np.ndarray,
+    floor: float,
+    parameters: TrainParameters,
+) -> BreathTrain:
+    """Group bursts into runs split at long gaps or speech, and take the largest as the task.
+
+    Args:
+        bursts: The bursts, in time order (:func:`find_bursts`).
+        words: Each lexical word's ``(start, end)``.
+        duration_s: The recording's duration.
+        broadband: The raw broadband level at ``fs_mod``.
+        floor: Its floor.
+        parameters: The train's parameters.
+
+    Returns:
+        The train; an empty one with no burst.
+    """
+    p = parameters
+    if not bursts:
+        return BreathTrain()
+    speech = speech_runs(words, words_min=p.speech_words_min, gap_s=p.speech_gap_s)
+    gaps = np.diff([b.peak_s for b in bursts])
+    cycle = float(np.median(gaps[:-1] + gaps[1:])) if len(gaps) >= 2 else (2 * float(gaps[0]) if len(gaps) else 4.0)
+    gap_max = max(p.gap_min_s, p.gap_cycles * cycle / 2)
+    runs = [[bursts[0]]]
+    for previous, burst in zip(bursts, bursts[1:]):
+        split = any(s < burst.start_s and e > previous.end_s for s, e in speech)
+        if split or burst.peak_s - previous.peak_s > gap_max:
+            runs.append([burst])
+        else:
+            runs[-1].append(burst)
+    run = max(runs, key=lambda r: (len(r), -r[0].start_s))
+    start, end = max(0.0, run[0].start_s - p.pad_s), min(duration_s, run[-1].end_s + p.pad_s)
+    for s, e in speech:
+        if start < s < end and s >= run[-1].peak_s:
+            end = s
+        if start < e < end and e <= run[0].peak_s:
+            start = e
+    following = [s for s, _ in speech if s >= end]
+    if following and following[0] - end <= gap_max:
+        stretch = broadband[int(end * p.fs_mod) : int(following[0] * p.fs_mod)]
+        if len(stretch) and float(np.median(stretch)) >= floor + p.continue_db:
+            end = following[0]
+    gaps = np.diff([b.peak_s for b in run])
+    cycles = gaps[:-1] + gaps[1:] if len(gaps) >= 2 else np.array([])
+    return BreathTrain(
+        bursts=tuple(run),
+        extent_s=(round(start, 3), round(end, 3)),
+        phases=len(run),
+        breaths=_rhu(len(run) / 2),
+        rate_cpm=round(60.0 / float(np.median(cycles)), 1) if len(cycles) else None,
+        cycle_cv=round(float(np.std(cycles) / np.mean(cycles)), 2) if len(cycles) >= 2 else None,
+        coherence=round(float(np.mean([b.coherence for b in run])), 2),
+        rise_db=round(float(np.median([b.rise_db for b in run])), 1),
+        bursts_found_n=len(bursts),
+    )
+
+
+def measure_breath_train(
+    power: np.ndarray,
+    *,
+    hop_s: float,
+    bin_hz: float,
+    voiced: np.ndarray,
+    words: tuple[tuple[float, float], ...] = (),
+    family: str | None = None,
+    parameters: TrainParameters | None = None,
+) -> BreathTrain:
+    """The breath train of a power spectrogram (:func:`find_bursts`, then :func:`breath_train`).
+
+    Args:
+        power: Power spectrogram, frequency bins by frames, bin 0 at 0 Hz.
+        hop_s: Seconds between frames.
+        bin_hz: Hertz between frequency bins.
+        voiced: Whether each frame is voiced, one per frame.
+        words: Each lexical word's ``(start, end)``.
+        family: The declared task family.
+        parameters: The train's parameters; ``data/breath_pattern.yaml`` when None.
+
+    Returns:
+        The train.
+    """
+    p = parameters or train_parameters()
+    bursts, broadband, floor = find_bursts(
+        power, hop_s=hop_s, bin_hz=bin_hz, voiced=voiced, family=family, parameters=p
+    )
+    return breath_train(
+        bursts, words, duration_s=power.shape[1] * hop_s, broadband=broadband, floor=floor, parameters=p
+    )
+
+
+def train_extent(train: BreathTrain, events: tuple[tuple[float, float], ...]) -> BreathExtent:
+    """The breath train's extent, widened to hold every measure event that overlaps it.
+
+    Args:
+        train: The breath train; its ``extent_s`` is set.
+        events: The breathing measure's event spans.
+
+    Returns:
+        The extent, sourced :data:`EXTENT_BREATH_TRAIN`.
+    """
+    assert train.extent_s is not None
+    start, end = train.extent_s
+    overlapping = [e for e in events if e[1] > start and e[0] < end]
+    return BreathExtent(
+        start_s=round(min([start, *(e[0] for e in overlapping)]), 3),
+        end_s=round(max([end, *(e[1] for e in overlapping)]), 3),
+        source=EXTENT_BREATH_TRAIN,
+        phases=train.phases,
+        breaths=train.breaths,
+    )
 
 
 def breath_extent_fallback(
     events: tuple[tuple[float, float], ...], airway: tuple[float, float] | None, *, duration_s: float, pad_s: float
 ) -> BreathExtent | None:
-    """The extent where modulation gives none: the measure's events, padded, else AIRWAY's hull.
+    """The extent where the breath train gives none: the measure's events, padded, else AIRWAY's hull.
 
     Args:
         events: The breathing measure's event spans.
@@ -893,13 +1202,14 @@ def breath_pattern_of(
     parameters: BreathPatternParameters | None = None,
     modulation: ModulationParameters | None = None,
     language: str | None = None,
+    family: str | None = None,
 ) -> BreathPattern | tuple[str, ...]:
     """The recording's breathing pattern, or the stored inputs it could not be read without.
 
-    The pattern is read over the whole file. The breath-task extent is read off the windowed
-    modulation (:func:`measure_breath_extent`, narrowed to the measure's events inside it by
-    :func:`tighten_to_events`), else the measure's events, else AIRWAY's own hull
-    (:func:`breath_extent_fallback`). It is the recording's standing task extent; the veto's readings
+    The pattern and the breath train (:func:`measure_breath_train`) are read over the whole file. The
+    breath-task extent is the train's, widened to hold any of the measure's events that overlap it;
+    else the measure's events, else AIRWAY's own hull (:func:`breath_extent_fallback`). It is the
+    recording's standing task extent; the veto's readings
     (speech, the classifiers, and the active fraction, the file where the hull is shorter than a
     modulation reading) stay over AIRWAY's own hull, as they were fitted.
 
@@ -912,6 +1222,7 @@ def breath_pattern_of(
         parameters: The measure's parameters; ``data/breath_pattern.yaml`` when None.
         modulation: The modulation reading's parameters; ``data/breath_pattern.yaml`` when None.
         language: The recording's declared language, which fixes the script speech words are read in.
+        family: The declared task family, which fixes the breath train's least burst spacing.
 
     Returns:
         The pattern with its veto reading (:func:`breath_veto_of`); or the names of the absent inputs,
@@ -943,15 +1254,18 @@ def breath_pattern_of(
     bin_hz = sampling_hz / n_fft
     pattern = measure_breath_pattern(power, hop_s=hop_s, bin_hz=bin_hz, voiced=voiced, parameters=p, modulation=m)
     duration_s = power.shape[1] * hop_s
-    x = extent_parameters()
+    t = train_parameters()
     airway = task_extent_bounds(store)
-    modulated = measure_breath_extent(
-        power, hop_s=hop_s, bin_hz=bin_hz, smooth_s=p.smooth_s, modulation=m, parameters=x
+    words = tuple(
+        word_hull(word) for word in lexical_words(store) if not is_non_lexical(str(word.attributes.get("text") or ""))
+    )
+    train = measure_breath_train(
+        power, hop_s=hop_s, bin_hz=bin_hz, voiced=voiced, words=words, family=family, parameters=t
     )
     breath_extent = (
-        tighten_to_events(modulated, pattern.event_spans_s, duration_s=duration_s, pad_s=x.pad_s)
-        if modulated is not None
-        else breath_extent_fallback(pattern.event_spans_s, airway, duration_s=duration_s, pad_s=x.pad_s)
+        train_extent(train, pattern.event_spans_s)
+        if train.extent_s is not None
+        else breath_extent_fallback(pattern.event_spans_s, airway, duration_s=duration_s, pad_s=t.pad_s)
     )
     active_fraction: float | None = None
     active_over: str | None = None
@@ -966,4 +1280,4 @@ def breath_pattern_of(
     veto = breath_veto_of(
         store, run_dir, active_fraction=active_fraction, active_over=active_over, extent=airway, language=language
     )
-    return replace(pattern, veto=veto, extent=breath_extent)
+    return replace(pattern, veto=veto, extent=breath_extent, train=train)

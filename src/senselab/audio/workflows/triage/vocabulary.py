@@ -303,8 +303,10 @@ class TaskEvidence:
         breath_events_n: How many breath events the measure found, or None.
         breath_vetoed_by: The veto that says what the measure found is not breathing, one of
             ``breath_pattern.VETO_*`` (``breath_pattern.breath_veto_of``), or None.
-        breath_cycles_n: The breaths the modulation reading estimates where it shows breathing, or
-            None where it does not or was not read.
+        breath_train_breaths: The breaths the breath train counts (its phases over two, rounded half
+            up), or None where it was not read.
+        breath_review: Whether the breath train is weak or irregular enough to leave for review
+            (``breath_pattern.in_review_band``).
         breath_reading: The measure's full reading, for the verdict record; empty where none.
     """
 
@@ -321,7 +323,8 @@ class TaskEvidence:
     breath_pattern: str | None = None
     breath_events_n: int | None = None
     breath_vetoed_by: str | None = None
-    breath_cycles_n: int | None = None
+    breath_train_breaths: int | None = None
+    breath_review: bool = False
     breath_reading: dict[str, Any] = field(default_factory=dict)
 
 
@@ -360,8 +363,8 @@ def breath_conforms(evidence: TaskEvidence) -> bool:
         evidence: The task evidence.
 
     Returns:
-        :func:`breath_present`, and for a counted family at least the instructed number of events, or
-        of breaths the modulation reading estimates.
+        :func:`breath_present`, and for a counted family at least the instructed number of breaths,
+        counted as the larger of the measure's events (phases) over two and the breath train's breaths.
     """
     if not breath_present(evidence):
         return False
@@ -371,7 +374,7 @@ def breath_conforms(evidence: TaskEvidence) -> bool:
 
 
 def _counted_breaths(evidence: TaskEvidence) -> int:
-    return max(evidence.breath_events_n or 0, evidence.breath_cycles_n or 0)
+    return max(((evidence.breath_events_n or 0) + 1) // 2, evidence.breath_train_breaths or 0)
 
 
 def breath_shortfall(evidence: TaskEvidence) -> str | None:
@@ -381,9 +384,8 @@ def breath_shortfall(evidence: TaskEvidence) -> str | None:
         evidence: The task evidence.
 
     Returns:
-        ``"detected N breath events (C breathing cycles) where M were instructed"`` where breaths were
-        present but neither the events nor the modulation reading's cycles reach the instructed
-        number; None otherwise.
+        ``"detected B breaths (P phases in the breath train, N breath events) where M were instructed"``
+        where breaths were present but too few were counted (:func:`breath_conforms`); None otherwise.
     """
     found = evidence.breath_events_n or 0
     if (
@@ -393,10 +395,27 @@ def breath_shortfall(evidence: TaskEvidence) -> str | None:
         or _counted_breaths(evidence) >= evidence.instructed_count
     ):
         return None
-    cycles = (
-        f"{evidence.breath_cycles_n} breathing cycles" if evidence.breath_cycles_n is not None else "no cycles read"
+    phases = evidence.breath_reading.get("train") or {}
+    return (
+        f"detected {_counted_breaths(evidence)} breaths ({phases.get('phases', 0)} phases in the breath train, "
+        f"{found} breath events) where {evidence.instructed_count} were instructed"
     )
-    return f"detected {found} breath events ({cycles}) where {evidence.instructed_count} were instructed"
+
+
+def breath_review_reading(evidence: TaskEvidence) -> str:
+    """The breath train's readings a low-confidence review flag carries.
+
+    Args:
+        evidence: The task evidence.
+
+    Returns:
+        ``"P phases, cycle CV c, rise r dB"``, with ``none`` for a reading absent.
+    """
+    train = evidence.breath_reading.get("train") or {}
+    return (
+        f"{train.get('phases', 0)} phases, cycle CV {train.get('cycle_cv', 'none')}, "
+        f"rise {train.get('rise_db', 'none')} dB"
+    )
 
 
 DECLARED_TASK_ABSENT = "declared_task_absent"
@@ -407,6 +426,8 @@ tried between the third and the fourth, since a missing derivative may be why th
 EVENT_ABSENT_GROUNDS = {"breath": NO_BREATH_CAPTURED}
 """The discard ground for each required event kind of ``data/airway_event_requirements.yaml``."""
 TASK_MISMATCH = "task_mismatch"
+BREATH_REVIEW_LOW_CONFIDENCE = "breath_review_low_confidence"
+"""Flag ground: a breath task's breathing was kept, on a breath train weak or irregular enough to review."""
 """Flag ground: the declared airway task's own events were detected, but not in the pattern it asked for."""
 
 AGREE = "agree"
@@ -552,6 +573,7 @@ KEY_TOO_SHORT_FOR_TASK = TOO_SHORT_FOR_TASK
 KEY_DECLARED_TASK_ABSENT = DECLARED_TASK_ABSENT
 KEY_NO_BREATH_CAPTURED = NO_BREATH_CAPTURED
 KEY_TASK_MISMATCH = TASK_MISMATCH
+KEY_BREATH_REVIEW_LOW_CONFIDENCE = BREATH_REVIEW_LOW_CONFIDENCE
 KEY_PREPROCESS_ERRORED = "preprocess_errored"
 KEY_ROUTING_ERRORED = "routing_errored"
 KEY_BAD_HINT_MAP = "config_bad_hint_map"
@@ -581,6 +603,7 @@ GROUND_KEYS = (
     KEY_DECLARED_TASK_ABSENT,
     KEY_NO_BREATH_CAPTURED,
     KEY_TASK_MISMATCH,
+    KEY_BREATH_REVIEW_LOW_CONFIDENCE,
     KEY_PREPROCESS_ERRORED,
     KEY_ROUTING_ERRORED,
     KEY_BAD_HINT_MAP,
@@ -1865,6 +1888,13 @@ def fold_file_verdict(
             _AIRWAY,
             f"{TASK_MISMATCH}: {shortfall}",
             KEY_TASK_MISMATCH,
+            by_branch[_AIRWAY].kind if _AIRWAY in by_branch else None,
+        )
+    if task_evidence.breath_review and breath_present(task_evidence):
+        flag(
+            _AIRWAY,
+            f"{BREATH_REVIEW_LOW_CONFIDENCE}: {breath_review_reading(task_evidence)}",
+            KEY_BREATH_REVIEW_LOW_CONFIDENCE,
             by_branch[_AIRWAY].kind if _AIRWAY in by_branch else None,
         )
     for branch in branches_seen:

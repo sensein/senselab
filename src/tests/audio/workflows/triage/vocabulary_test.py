@@ -23,6 +23,7 @@ from senselab.audio.workflows.triage.vocabulary import (
     GROUND_KEY_PREFIXES,
     GROUND_KEYS,
     INSTRUCTIONS_SPOKEN,
+    KEY_BREATH_REVIEW_LOW_CONFIDENCE,
     KEY_OWNING_BRANCH_INPUT_ABSENT,
     KEY_TASK_MISMATCH,
     LLM_REDACTION_RESIDUE,
@@ -2488,7 +2489,8 @@ class TestABreathTaskIsDecidedOnTheBreathingPattern:
         conformance: Any = True,  # noqa: ANN401
         absent: tuple[str, ...] = (),
         vetoed_by: str | None = None,
-        cycles: int | None = None,
+        phases: int | None = None,
+        review: bool = False,
     ) -> FileVerdict:
         family = "respiration-and-cough-breath" if mode == BREATH_SUSTAINED else "respiration-and-cough-fivebreaths"
         return fold_file_verdict(
@@ -2513,8 +2515,11 @@ class TestABreathTaskIsDecidedOnTheBreathingPattern:
                 breath_pattern=pattern,
                 breath_events_n=events,
                 breath_vetoed_by=vetoed_by,
-                breath_cycles_n=cycles,
-                breath_reading={"pattern": pattern} if pattern else {},
+                breath_train_breaths=(phases + 1) // 2 if phases is not None else None,
+                breath_review=review,
+                breath_reading=({"pattern": pattern} | ({"train": {"phases": phases}} if phases is not None else {}))
+                if pattern
+                else {},
             ),
         )
 
@@ -2548,12 +2553,14 @@ class TestABreathTaskIsDecidedOnTheBreathingPattern:
         assert KEY_TASK_MISMATCH in folded.ground_keys
         assert "conformance:AIRWAY" not in folded.ground_keys
         [reason] = [reason for reason in folded.reasons if reason.key == KEY_TASK_MISMATCH]
-        assert "detected 1 breath events (no cycles read) where 3 were instructed" in reason.why
+        assert (
+            "detected 1 breaths (0 phases in the breath train, 1 breath events) where 3 were instructed" in reason.why
+        )
 
     def test_the_instructed_count_passes_a_counted_task(self) -> None:
-        """Five breaths for five asked pass, even where AIRWAY's detector read fewer."""
+        """Ten events (five inhales, five exhales) for five breaths asked pass, whatever AIRWAY's detector read."""
         folded = self._fold(
-            mode=BREATH_COUNTED, pattern="alternating_breaths", events=5, instructed=5, conformance=False
+            mode=BREATH_COUNTED, pattern="alternating_breaths", events=10, instructed=5, conformance=False
         )
         assert folded.triage is Triage.PASS
 
@@ -2570,22 +2577,39 @@ class TestABreathTaskIsDecidedOnTheBreathingPattern:
         assert folded.discard_ground is None
         assert KEY_OWNING_BRANCH_INPUT_ABSENT in folded.ground_keys
 
-    def test_merged_events_pass_on_the_modulation_cycle_count(self) -> None:
-        """1ba3214d: five clean cycles merged into one event; ten modulation peaks are five breaths."""
+    def test_merged_events_pass_on_the_breath_train(self) -> None:
+        """1ba3214d: five clean cycles merged into one event; the train's ten phases are five breaths."""
         folded = self._fold(
-            mode=BREATH_COUNTED, pattern="single_breath", events=1, instructed=5, conformance=False, cycles=5
+            mode=BREATH_COUNTED, pattern="single_breath", events=1, instructed=5, conformance=False, phases=10
         )
         assert folded.triage is Triage.PASS
         assert KEY_TASK_MISMATCH not in folded.ground_keys
 
-    def test_too_few_cycles_keep_the_task_mismatch_and_name_them(self) -> None:
-        """Cycles that fall short of the instruction leave the flag, with both counts in its text."""
+    def test_too_few_breaths_keep_the_task_mismatch_and_name_both_counts(self) -> None:
+        """Phases that fall short of the instruction leave the flag, with both measures in its text."""
         folded = self._fold(
-            mode=BREATH_COUNTED, pattern="alternating_breaths", events=2, instructed=5, conformance=False, cycles=3
+            mode=BREATH_COUNTED, pattern="alternating_breaths", events=2, instructed=5, conformance=False, phases=6
         )
         assert folded.triage is Triage.FLAG
         [reason] = [reason for reason in folded.reasons if reason.key == KEY_TASK_MISMATCH]
-        assert "detected 2 breath events (3 breathing cycles) where 5 were instructed" in reason.why
+        assert (
+            "detected 3 breaths (6 phases in the breath train, 2 breath events) where 5 were instructed" in reason.why
+        )
+
+    def test_a_low_confidence_train_is_flagged_for_review(self) -> None:
+        """81873ca0 / fac74f45: kept breathing on a weak or irregular train is flagged, never discarded."""
+        folded = self._fold(mode=BREATH_SUSTAINED, pattern="alternating_breaths", events=6, phases=6, review=True)
+        assert folded.triage is Triage.FLAG
+        assert folded.discard_ground is None
+        assert KEY_BREATH_REVIEW_LOW_CONFIDENCE in folded.ground_keys
+
+    def test_the_review_band_does_not_flag_a_discarded_recording(self) -> None:
+        """A vetoed recording discards; the review band only reaches breathing that was kept."""
+        folded = self._fold(
+            mode=BREATH_SUSTAINED, pattern="alternating_breaths", events=2, vetoed_by="little_activity", review=True
+        )
+        assert folded.discard_ground == NO_BREATH_CAPTURED
+        assert KEY_BREATH_REVIEW_LOW_CONFIDENCE not in folded.ground_keys
 
     def test_a_little_activity_vetoed_pattern_discards_a_sustained_task(self) -> None:
         """167ac3f5: two events, but the task extent is mostly quiet ("has little breath")."""
