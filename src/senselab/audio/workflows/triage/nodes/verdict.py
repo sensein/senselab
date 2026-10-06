@@ -104,7 +104,9 @@ from senselab.audio.workflows.triage.vocabulary import (
     RULESET_ROUTING,
     SCANNED,
     SECOND_OPINION_ANSWERS,
+    SUPERSEDES,
     TASK,
+    TASK_EXTENT_SPAN_ROLE,
     UNDETERMINED,
     BranchDecision,
     BranchReport,
@@ -961,6 +963,52 @@ def _derived_ran(
     }
 
 
+def _settle_breath_extent(store: ProvStore, activity: str, software: str, extent: Mapping[str, Any] | None) -> None:
+    """Write the breath-task extent as the task-extent span that stands, retiring VERDICT's earlier one.
+
+    The span carries ``supersedes``, naming the branches' live task-extent spans, which stay live; the
+    readers take it in their place (:func:`~senselab.audio.workflows.triage.vocabulary.standing_task_extents`).
+    With no extent, an earlier VERDICT span is retired and the branches' spans stand again.
+
+    Args:
+        store: The provenance store.
+        activity: VERDICT's activity.
+        software: The software agent.
+        extent: The breath reading's ``extent`` record, or None.
+    """
+    spans = [
+        span
+        for span in store.entities("span")
+        if span.attributes.get("role") == TASK_EXTENT_SPAN_ROLE
+        and span.extent is not None
+        and not store.is_invalidated(span.id)
+    ]
+    ours = [span for span in spans if span.attributes.get(SUPERSEDES) is not None]
+    branches = sorted(span.id for span in spans if span.attributes.get(SUPERSEDES) is None)
+    kept: str | None = None
+    if extent is not None:
+        kept = mint_live(
+            store,
+            prov_type="span",
+            extent=(float(extent["start_s"]), float(extent["end_s"])),
+            attributes={
+                "family": "airway",
+                "role": TASK_EXTENT_SPAN_ROLE,
+                "extent_from": str(extent["source"]),
+                "estimated_breaths": extent.get("estimated_breaths"),
+                SUPERSEDES: branches,
+            },
+        )
+        if kept not in {span.id for span in ours}:
+            store.was_generated_by(kept, activity)
+            store.was_attributed_to(kept, software)
+            for branch_id in branches:
+                store.was_derived_from(kept, branch_id)
+    for span in ours:
+        if span.id != kept:
+            store.was_invalidated_by(span.id, activity)
+
+
 def verdict(
     store: ProvStore,
     source: None,
@@ -1023,6 +1071,14 @@ def verdict(
         name_approvals=name_approvals(config, recording_stem(store)),
         task_text=task_texts(hint),
     )
+    task_evidence = _task_evidence(
+        store,
+        declared_family or None,
+        outcome.record(),
+        run_dir=run_dir,
+        sampling_hz=float(config.require("resample.target_hz")),
+        language=None if hint is None else str(hint.metadata.get("language") or "") or None,
+    )
     file_verdict = fold_file_verdict(
         node_verdicts,
         branch_reports=reports,
@@ -1041,14 +1097,7 @@ def verdict(
         agreed_redactions=plan.agreed,
         unplaced=[(finding.family, finding.state) for finding in plan.unplaced],
         second_opinion=opinion,
-        task=_task_evidence(
-            store,
-            declared_family or None,
-            outcome.record(),
-            run_dir=run_dir,
-            sampling_hz=float(config.require("resample.target_hz")),
-            language=None if hint is None else str(hint.metadata.get("language") or "") or None,
-        ),
+        task=task_evidence,
     )
 
     software = software_agent(store)
@@ -1087,6 +1136,8 @@ def verdict(
     store.was_generated_by(ledger_id, activity)
     store.was_attributed_to(ledger_id, software)
     store.was_derived_from(ledger_id, verdict_id)
+    if task_evidence.breath_mode is not None:
+        _settle_breath_extent(store, activity, software, task_evidence.breath_reading.get("extent"))
     return VerdictResult(
         verdict=node_verdict,
         view=(verdict_id, *folded_ids),
