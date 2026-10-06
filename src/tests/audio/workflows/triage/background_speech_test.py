@@ -113,7 +113,7 @@ def test_a_harmonic_residual_run_away_from_the_coughs_is_heard() -> None:
         events=[(2.0, 2.5)],
     )
     assert reading.heard
-    assert reading.runs[0][0] >= 4.9
+    assert reading.voice_runs[0][0] >= 4.9
 
 
 def test_harmonicity_inside_a_cough_is_the_cough() -> None:

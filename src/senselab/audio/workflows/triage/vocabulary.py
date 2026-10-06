@@ -2026,7 +2026,7 @@ def fold_file_verdict(
         )
     if task_evidence.background_speech.get("heard"):
         windows = task_evidence.background_speech.get("speech_windows") or []
-        runs = task_evidence.background_speech.get("runs") or []
+        runs = task_evidence.background_speech.get("voice_runs") or []
         first = min([row[0] for row in (*windows, *runs)], default=None)
         flag(
             _AIRWAY,
