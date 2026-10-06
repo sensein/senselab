@@ -101,6 +101,8 @@ train:
   gap_cycles: 3.0              # or this many half-cycles, whichever is larger
   speech_words_min: 5          # lexical words in a run (gaps under speech_gap_s) that split the train
   speech_gap_s: 1.0
+  speech_bridge_cycles: 2.0    # speech splits the train only where the gap across it exceeds this many breathing cycles
+  word_spread_max_s: 1.0       # a word placed further apart than this by its recognizers stands at its consensus extent
   pad_s: 0.25                  # each side of the train's hull
   continue_db: 3.0             # the extent runs on to a following speech onset over the floor by this
   steady_strength_min: 0.8     # pitch strength of a frame in a sustained vocalisation

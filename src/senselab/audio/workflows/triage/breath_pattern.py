@@ -27,7 +27,7 @@ from senselab.audio.tasks.classification.label_scores import label_scores
 from senselab.audio.workflows.triage.nodes.common import find_measurement, lexical_words, live_entities, word_hull
 from senselab.audio.workflows.triage.residue import is_non_lexical
 from senselab.audio.workflows.triage.vocabulary import SUPERSEDES
-from senselab.utils.prov_store import ProvStore
+from senselab.utils.prov_store import Entity, ProvStore
 
 BREATH_PATTERN_PATH = Path(__file__).parent / "data" / "breath_pattern.yaml"
 
@@ -230,6 +230,10 @@ class TrainParameters:
         gap_cycles: The half-cycles a gap may span.
         speech_words_min: The lexical words a speech run holds; a speech run splits the train.
         speech_gap_s: The longest gap between words of one speech run.
+        speech_bridge_cycles: Speech splits the train only where the gap across it exceeds this many of
+            the train's breathing cycles.
+        word_spread_max_s: A word whose recognizers place it further apart than this is placed at its
+            consensus extent, not the hull of their placements.
         pad_s: Padding on each side of the train's hull.
         continue_db: The median level over the floor the extent runs on through to a speech onset.
         steady_strength_min: The pitch strength of a frame in a sustained vocalisation.
@@ -268,6 +272,8 @@ class TrainParameters:
     gap_cycles: float
     speech_words_min: int
     speech_gap_s: float
+    speech_bridge_cycles: float
+    word_spread_max_s: float
     pad_s: float
     continue_db: float
     steady_strength_min: float
@@ -900,7 +906,7 @@ def find_bursts(
     A burst holding a sustained vocalisation is split at its edges into a voiced and an unvoiced
     phase, and the voiced one stands without the flatness and voicing tests. Bursts never overlap;
     no phase peaks inside a speech segment. A raised edge phase opening or closing the file stands
-    when its spectrum fits the bursts' template.
+    when its spectrum fits the bursts' template and its median level holds ``rise_floor_db`` over the floor.
 
     Args:
         power: Power spectrogram, frequency bins by frames, bin 0 at 0 Hz.
@@ -966,6 +972,8 @@ def find_bursts(
         coherence = float(np.mean([(row[near].max() - row[before].min()) >= p.rise_z for row in z]))
         rise = float(broadband[peak] - floor)
         if (coherence < p.coherence_min and not edge) or rise < p.rise_floor_db:
+            return None
+        if edge and float(np.median(broadband[low : high + 1]) - floor) < p.rise_floor_db:
             return None
         prominence = float(combined[peak] - combined[low : high + 1].min())
         return Burst(
@@ -1045,6 +1053,23 @@ def find_bursts(
     return kept, broadband, floor
 
 
+def placed_word(word: Entity, *, spread_max_s: float) -> tuple[float, float]:
+    """Where a lexical word is read as speech.
+
+    Args:
+        word: A consensus ``word`` entity.
+        spread_max_s: The ``temporal_uncertainty_s`` above which the word stands at its consensus extent.
+
+    Returns:
+        The word's consensus extent where its recognizers disagree by more than ``spread_max_s``, else the
+        hull of their placements (:func:`~senselab.audio.workflows.triage.nodes.common.word_hull`).
+    """
+    spread = float(word.attributes.get("temporal_uncertainty_s") or 0.0)
+    if spread > spread_max_s and word.extent is not None:
+        return float(word.extent[0]), float(word.extent[1])
+    return word_hull(word)
+
+
 def speech_runs(words: tuple[tuple[float, float], ...], *, words_min: int, gap_s: float) -> list[tuple[float, float]]:
     """Runs of lexical words, split at gaps over ``gap_s``, that hold at least ``words_min`` words.
 
@@ -1081,6 +1106,10 @@ def breath_train(
 ) -> BreathTrain:
     """Group bursts into runs split at long gaps or speech, and take the largest as the task.
 
+    A burst peaking inside speech is no phase. Speech between two bursts splits the run only where
+    the gap across it is over ``speech_bridge_cycles`` of the breathing cycle measured on the gaps no
+    speech crosses; with fewer than two such gaps there is no cadence, and speech always splits.
+
     Args:
         bursts: The bursts, in time order (:func:`find_bursts`).
         words: Each lexical word's ``(start, end)``.
@@ -1094,16 +1123,23 @@ def breath_train(
         The train; an empty one with no burst.
     """
     p = parameters
+    found_n = len(bursts)
+    speech = sorted(speech_runs(words, words_min=p.speech_words_min, gap_s=p.speech_gap_s) + list(speech_segments))
+    bursts = [b for b in bursts if not any(s <= b.peak_s <= e for s, e in speech)]
     if not bursts:
         return BreathTrain()
-    speech = sorted(speech_runs(words, words_min=p.speech_words_min, gap_s=p.speech_gap_s) + list(speech_segments))
     gaps = np.diff([b.peak_s for b in bursts])
     cycle = float(np.median(gaps[:-1] + gaps[1:])) if len(gaps) >= 2 else (2 * float(gaps[0]) if len(gaps) else 4.0)
     gap_max = max(p.gap_min_s, p.gap_cycles * cycle / 2)
+    across = [any(s < b.start_s and e > a.end_s for s, e in speech) for a, b in zip(bursts, bursts[1:])]
+    clear = np.array([g for g, crossed in zip(gaps, across) if not crossed])
+    cadence = float(np.median(clear[:-1] + clear[1:])) if len(clear) >= 2 else None
+    bridge = p.speech_bridge_cycles * cadence if cadence is not None else 0.0
     runs = [[bursts[0]]]
-    for previous, burst in zip(bursts, bursts[1:]):
-        split = any(s < burst.start_s and e > previous.end_s for s, e in speech)
-        if split or burst.peak_s - previous.peak_s > gap_max:
+    for previous, burst, crossed in zip(bursts, bursts[1:], across):
+        gap = burst.peak_s - previous.peak_s
+        split = crossed and gap > bridge
+        if split or gap > gap_max:
             runs.append([burst])
         else:
             runs[-1].append(burst)
@@ -1130,7 +1166,7 @@ def breath_train(
         cycle_cv=round(float(np.std(cycles) / np.mean(cycles)), 2) if len(cycles) >= 2 else None,
         coherence=round(float(np.mean([b.coherence for b in run])), 2),
         rise_db=round(float(np.median([b.rise_db for b in run])), 1),
-        bursts_found_n=len(bursts),
+        bursts_found_n=found_n,
     )
 
 
@@ -1431,7 +1467,9 @@ def breath_pattern_of(
     t = train_parameters()
     airway = task_extent_bounds(store)
     words = tuple(
-        word_hull(word) for word in lexical_words(store) if not is_non_lexical(str(word.attributes.get("text") or ""))
+        placed_word(word, spread_max_s=t.word_spread_max_s)
+        for word in lexical_words(store)
+        if not is_non_lexical(str(word.attributes.get("text") or ""))
     )
     sustained, speech = voice_segments(
         track_times, f0, strength, words, voicing_strength_min=p.voicing_strength_min, parameters=t
