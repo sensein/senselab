@@ -82,8 +82,8 @@ Read this section first. Everything below it is history.
 - Lone "El": released; owner, 2026-10-06: it "does not matter". Closed.
 - Multi-speaker in speech tasks: deferred again (owner, 2026-10-06). Signals are noisy; better models later, not gate tweaks.
 - Clef: left out of all airway (breath and cough) decisions (owner, 2026-10-06). It stays the second opinion on lexical review only.
-- The 0dc15213 breath miss (active span 0), and 6ca9935e's breath extent stopping at 16.65 s short of the speech onset: open.
-- Background speech beyond cough and breath (sustained vowels, glides, DDK…): open.
+- 6ca9935e breath extent: fixed in `fixed2/` (owner, 2026-10-06: "looks good"). 0dc15213: some modulation but no clean signal; flagged or discarded is acceptable (owner). Closed.
+- Background speech: cough and breath tasks now; the voiced non-speech families (sustained vowels, glides, DDK…) are tested on a labelled sample later, since residual speech evidence there is unproven (owner agreed, 2026-10-06).
 
 ### Working rules learnt this round
 
