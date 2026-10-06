@@ -26,6 +26,7 @@ from senselab.audio.workflows.triage.vocabulary import (
     FileVerdict,
     NodeVerdict,
     Outcome,
+    Release,
     RunState,
     TaskEvidence,
     Triage,
@@ -113,12 +114,14 @@ def test_one_onset_performs_a_hard_cough() -> None:
     assert folded.triage is Triage.PASS
 
 
-def test_too_few_coughs_flag_a_task_mismatch() -> None:
-    """22c5f400: one voluntary cough act where three were asked flags task_mismatch."""
+def test_too_few_coughs_annotate_a_task_mismatch() -> None:
+    """22c5f400: one voluntary cough act where three were asked passes, annotated task_mismatch."""
     folded = _fold(mode=COUGH_COUNTED, onsets=1, family="voluntary-cough", instructed=3)
-    assert folded.triage is Triage.FLAG
-    [reason] = [reason for reason in folded.reasons if reason.key == KEY_TASK_MISMATCH]
-    assert "detected 1 coughs where 3 were instructed" in reason.why
+    assert folded.triage is Triage.PASS
+    assert KEY_TASK_MISMATCH in folded.annotation_keys
+    assert KEY_TASK_MISMATCH not in folded.ground_keys
+    [annotation] = [each for each in folded.annotations if each.key == KEY_TASK_MISMATCH]
+    assert "detected 1 coughs where 3 were instructed" in annotation.why
 
 
 def test_no_onset_discards_as_no_cough_captured() -> None:
@@ -126,6 +129,13 @@ def test_no_onset_discards_as_no_cough_captured() -> None:
     folded = _fold(mode=COUGH_PERFORMED, onsets=0, conformance=True)
     assert folded.triage is Triage.DISCARD
     assert folded.discard_ground == NO_COUGH_CAPTURED
+
+
+def test_a_discard_releases_nothing() -> None:
+    """A discarded recording is withheld on the ``discarded`` ground, whatever redaction would say."""
+    folded = _fold(mode=COUGH_PERFORMED, onsets=0, conformance=True)
+    assert folded.release is Release.WITHHELD
+    assert folded.record()["release_ground_key"] == "discarded"
 
 
 def test_an_absent_spectrogram_reruns() -> None:

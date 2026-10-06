@@ -227,6 +227,7 @@ POLICY_MASKS_ONLY = (
     "the scan found nothing to redact, and the redaction policy masked words it always masks -- a date element, "
     "an age, a state; the copy keeps those"
 )
+DISCARDED = "the recording was discarded, so no artefact of it is released"
 
 RELEASE_WITH_REDACTION_GROUNDS = (
     REVIEWER_CLEARED_RESCAN,
@@ -794,6 +795,7 @@ RELEASE_GROUND_KEYS: dict[str, str] = {
     MASKS_TRIMMED_TO_CONTENT: "masks_trimmed_to_content",
     POLICY_MASKS_ADDED: "policy_masks_added",
     POLICY_MASKS_ONLY: "policy_masks_only",
+    DISCARDED: "discarded",
 }
 """The stable key of every release ground. A release REDACT itself decided carries
 :data:`RELEASE_DECIDED_BY_REDACT`."""
@@ -2023,7 +2025,7 @@ def fold_file_verdict(
         )
     cough_short = cough_shortfall(task_evidence)
     if cough_short is not None:
-        flag(
+        annotate(
             _AIRWAY,
             f"{TASK_MISMATCH}: {cough_short}",
             KEY_TASK_MISMATCH,
@@ -2147,6 +2149,8 @@ def fold_file_verdict(
         speech_declined=routes.get(_SPEECH) == DECLINED,
         reviewer_clears=clears,
     )
+    if triage is Triage.DISCARD:
+        release, release_ground = Release.WITHHELD, DISCARDED
 
     return FileVerdict(
         triage=triage,
