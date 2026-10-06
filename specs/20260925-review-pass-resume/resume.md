@@ -55,7 +55,7 @@ Read this section first. Everything below it is history.
 
 1. **`task_mismatch` is an annotation, not a flag, for every airway family.** It goes in a separate `annotation_keys` list; a recording with only that key passes. The breath agent is implementing it; the cough code reuses its constant.
 2. **`rerun` should be rerun.** The 460 r16 rerun recordings get their missing derivatives recomputed (HeAR, TAXONOMY) in the airway replay, and are held until then.
-3. **Discard is not released** (proposed 2026-10-06; owner not opposed). Today 3,880 discarded recordings carry a release value and 2,111 have task-audio cuts. Planned: release `discarded` for a triage discard, and no task-audio cuts.
+3. **Discard is not released** (owner, 2026-10-06: "yes, discard should not be released"). Today 3,880 discarded recordings carry a release value and 2,111 have task-audio cuts. Planned: release `discarded` for a triage discard, and no task-audio cuts.
 4. **Move breath, cough and background-speech measurement into the AIRWAY branch** (owner: "yes"). VERDICT then only decides, restoring branches-measure / VERDICT-decides. This replaces AIRWAY's HeAR-gated detector outright, and needs a targeted CPU replay of the airway families (~13,000 recordings).
 5. **Figures use the fixed-gain pre-emphasised spectrogram only.** Dynamic gain inverted loudness on 988c1609; keep `_dyngain.wav` for listening.
 
