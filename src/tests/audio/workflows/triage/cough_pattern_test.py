@@ -156,3 +156,14 @@ def test_a_stored_spectrogram_is_read(tmp_path: Path) -> None:
     assert isinstance(reading, CoughPattern)
     assert reading.onsets_n == 1
     assert p.band_edges_hz[-1] <= 8000.0
+
+
+def test_an_inhale_under_way_at_the_file_start_belongs_to_the_first_cough() -> None:
+    """aad9e6c6 / 4164d528: the opening inhale's start runs back to where it rises off the floor."""
+    levels = _levels(2.5)
+    _ramp(levels, 0.0, 1.2, 12.0)
+    _ramp(levels, 0.6, 1.1, 20.0)
+    _cough(levels, 1.3)
+    reading = measure_cough_pattern(levels, hop_s=HOP)
+    assert reading.onsets_n == 1
+    assert reading.event_spans_s[0][0] < 0.4
