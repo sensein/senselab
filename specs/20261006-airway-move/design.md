@@ -106,3 +106,23 @@ come from the breath measure as it stood at r16, before the vocalised-exhale and
 so the replay's count will differ. 351 is not a narrow band: listen to a sample of the contested
 recordings from the replay before the corpus is settled, and raise `instructed_fraction` if the
 detector is wrong on them.
+
+## The replay that lands this
+
+Owner, 2026-10-06: "yes, rerun should be rerun". `scripts/select_replay_manifest.py` writes the
+manifest for `scripts/extend_replay_decisions.py` from a recording-vectors table: every recording
+whose declared family is an AIRWAY family, plus every recording whose verdict is `rerun`, each row
+saying why it was selected. On the r16 table that is 13,292 recordings: 12,832 by family, 177 by
+family and rerun, 283 reruns of other branches' families.
+
+The replay re-decides from TAXONOMY on, so AIRWAY writes its readings and VERDICT folds them. It
+recomputes TAXONOMY's consolidation from the stored classifier scores; it does not run a model. A
+rerun whose missing input is a PREPROCESS derivative that was never computed (a classifier's raw
+scores, the phonation tracks) is still a rerun after the replay, and needs that derivative first:
+`scripts/extend_reprocessed_outputs.py` for the phonation tracks and consolidation, or a fresh run
+for a classifier that never scored the recording. r16's 460 reruns carry `route_unexplained` (318),
+`owning_branch_input_absent` (140), `uncomputed_reading` (23), `preprocess_errored` (3) and
+`critical_absence` (2) among their keys. The airway ones whose absence was AIRWAY's HeAR-gated
+detector should resolve in the replay, since the measures read only the narrowband spectrogram and
+the phonation tracks; `route_unexplained` is a reading of the routing ruleset and is unchanged by
+it.
