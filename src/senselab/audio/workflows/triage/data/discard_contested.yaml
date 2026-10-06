@@ -1,0 +1,7 @@
+# When a breath or cough measure's no-event discard (no_breath_captured, no_cough_captured) is
+# flagged discard_contested instead: AIRWAY's own event detector (airway_events_found) found at least
+# this many events of the family's kind. Derivation and the owner-label agreement are in
+# specs/20261006-airway-move/design.md, "discard_contested".
+version: 1
+instructed_fraction: 1.0   # of the family's instructed count, rounded up
+uncounted_events_min: 1    # a family whose instruction names no count

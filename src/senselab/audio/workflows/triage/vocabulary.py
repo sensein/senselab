@@ -317,6 +317,9 @@ class TaskEvidence:
         cough_reading: The measure's full reading, for the verdict record; empty where none.
         background_speech: The background-speech reading over the task extent
             (``background_speech.background_speech_of``), for an airway family; empty where none.
+        contest_events_min: The events AIRWAY's own detector must have found for a measure's
+            no-event discard to be contested instead (``data/discard_contested.yaml``); None where
+            no discard of this family is contested.
     """
 
     owning_branches: tuple[str, ...] = ()
@@ -340,6 +343,7 @@ class TaskEvidence:
     cough_review: bool = False
     cough_reading: dict[str, Any] = field(default_factory=dict)
     background_speech: dict[str, Any] = field(default_factory=dict)
+    contest_events_min: int | None = None
 
 
 UNMEASURABLE = "unmeasurable"
@@ -519,6 +523,8 @@ COUGH_REVIEW_LOW_CONFIDENCE = "cough_review_low_confidence"
 """Flag ground: a cough task's coughs were kept, on a count whose decision differs inside the review band."""
 BACKGROUND_SPEECH_IN_TASK = "background_speech_in_task"
 """Flag ground: speech enhancement removed speech from inside an airway task's extent -- another voice."""
+DISCARD_CONTESTED = "discard_contested"
+"""Flag ground: an airway measure found none of its event, and AIRWAY's own event detector found the task's."""
 
 AGREE = "agree"
 MISMATCH = "mismatch"
@@ -667,6 +673,7 @@ KEY_BREATH_REVIEW_LOW_CONFIDENCE = BREATH_REVIEW_LOW_CONFIDENCE
 KEY_NO_COUGH_CAPTURED = NO_COUGH_CAPTURED
 KEY_COUGH_REVIEW_LOW_CONFIDENCE = COUGH_REVIEW_LOW_CONFIDENCE
 KEY_BACKGROUND_SPEECH_IN_TASK = BACKGROUND_SPEECH_IN_TASK
+KEY_DISCARD_CONTESTED = DISCARD_CONTESTED
 KEY_PREPROCESS_ERRORED = "preprocess_errored"
 KEY_ROUTING_ERRORED = "routing_errored"
 KEY_BAD_HINT_MAP = "config_bad_hint_map"
@@ -700,6 +707,7 @@ GROUND_KEYS = (
     KEY_NO_COUGH_CAPTURED,
     KEY_COUGH_REVIEW_LOW_CONFIDENCE,
     KEY_BACKGROUND_SPEECH_IN_TASK,
+    KEY_DISCARD_CONTESTED,
     KEY_PREPROCESS_ERRORED,
     KEY_ROUTING_ERRORED,
     KEY_BAD_HINT_MAP,
@@ -1695,6 +1703,23 @@ def no_required_event(evidence: TaskEvidence, performed: bool) -> bool:
     )
 
 
+def discard_contested(evidence: TaskEvidence) -> bool:
+    """Whether AIRWAY's own event detector contradicts a measure's no-event discard.
+
+    Args:
+        evidence: The task evidence.
+
+    Returns:
+        True where the family names a contest threshold and the detector found at least that many
+        events of the family's own kind; False otherwise.
+    """
+    return (
+        evidence.contest_events_min is not None
+        and evidence.events_found_n is not None
+        and evidence.events_found_n >= evidence.contest_events_min
+    )
+
+
 def _count_mismatch(applied_gates: Sequence[Mapping[str, Any]], evidence: TaskEvidence) -> str | None:
     """The detected-against-instructed count where an airway task's own events fell short of it.
 
@@ -2108,28 +2133,43 @@ def fold_file_verdict(
             KEY_OWNING_BRANCH_INPUT_ABSENT,
         )
     admit = next((reason for reason in reasons if reason.node == _ADMIT), None)
-    flags = [reason for reason in reasons if reason.outcome is Outcome.FLAG]
-    ground: str | None = None
-    if admit is not None and admit.outcome is Outcome.FAIL:
-        triage = Triage.DISCARD
-        ground = UNMEASURABLE
-        reasons = [admit, *(reason for reason in reasons if reason is not admit)]
-    elif (
+    unmeasurable = admit is not None and admit.outcome is Outcome.FAIL
+    too_short = (
         task_evidence.duration_s is not None
         and task_evidence.minimum_duration_s is not None
         and task_evidence.duration_s < task_evidence.minimum_duration_s
-    ):
+    )
+    empty = route_state == EMPTY and not performed and not owner_unable
+    no_event = no_required_event(task_evidence, performed)
+    contested = no_event and not (unmeasurable or too_short or empty) and discard_contested(task_evidence)
+    if contested:
+        flag(
+            _AIRWAY,
+            f"{DISCARD_CONTESTED}: the measure found no {task_evidence.required_event}, AIRWAY's detector found "
+            f"{task_evidence.events_found_n}",
+            KEY_DISCARD_CONTESTED,
+            by_branch[_AIRWAY].kind if _AIRWAY in by_branch else None,
+        )
+    flags = [reason for reason in reasons if reason.outcome is Outcome.FLAG]
+    ground: str | None = None
+    if unmeasurable and admit is not None:
+        triage = Triage.DISCARD
+        ground = UNMEASURABLE
+        reasons = [admit, *(reason for reason in reasons if reason is not admit)]
+    elif too_short:
         triage = Triage.DISCARD
         ground = TOO_SHORT_FOR_TASK
-    elif route_state == EMPTY and not performed and not owner_unable:
+    elif empty:
         triage = Triage.DISCARD
         ground = ACOUSTICALLY_EMPTY
     elif any(is_operational(reason.key) for reason in flags):
         triage = Triage.RERUN
-    elif no_required_event(task_evidence, performed):
+    elif no_event and not contested:
         triage = Triage.DISCARD
         ground = EVENT_ABSENT_GROUNDS[str(task_evidence.required_event)]
-    elif declared_task_absent(by_branch, findings, task_evidence, (redaction or RedactionEvidence()).lexical_words_n):
+    elif not contested and declared_task_absent(
+        by_branch, findings, task_evidence, (redaction or RedactionEvidence()).lexical_words_n
+    ):
         triage = Triage.DISCARD
         ground = DECLARED_TASK_ABSENT
     elif flags:

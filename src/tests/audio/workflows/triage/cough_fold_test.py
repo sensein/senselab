@@ -12,6 +12,7 @@ from senselab.audio.workflows.triage.vocabulary import (
     GROUND_KEYS,
     KEY_BACKGROUND_SPEECH_IN_TASK,
     KEY_COUGH_REVIEW_LOW_CONFIDENCE,
+    KEY_DISCARD_CONTESTED,
     KEY_NO_COUGH_CAPTURED,
     KEY_OWNING_BRANCH_INPUT_ABSENT,
     KEY_ROUTE_UNEXPLAINED,
@@ -70,6 +71,8 @@ def _fold(
     family: str | None = None,
     instructed: int | None = None,
     background: dict[str, Any] | None = None,
+    detected: int = 0,
+    contest_min: int | None = None,
 ) -> FileVerdict:
     declared, count = _FAMILIES[mode]
     return fold_file_verdict(
@@ -87,7 +90,7 @@ def _fold(
             minimum_duration_s=0.5,
             owner_absent_inputs=absent,
             required_event="cough",
-            events_found_n=0,
+            events_found_n=detected,
             event_kind="cough",
             instructed_count=instructed if instructed is not None else count,
             cough_mode=mode,
@@ -97,6 +100,7 @@ def _fold(
             if onsets is not None
             else {},
             background_speech=background or {},
+            contest_events_min=contest_min,
         ),
     )
 
@@ -127,6 +131,21 @@ def test_too_few_coughs_annotate_a_task_mismatch() -> None:
 def test_no_onset_discards_as_no_cough_captured() -> None:
     """cdfa7e4e / a28e5022: nothing there, or a hum, discards rather than flags."""
     folded = _fold(mode=COUGH_PERFORMED, onsets=0, conformance=True)
+    assert folded.triage is Triage.DISCARD
+    assert folded.discard_ground == NO_COUGH_CAPTURED
+
+
+def test_the_detector_finding_the_instructed_count_contests_a_no_cough_discard() -> None:
+    """The measure found no onset; AIRWAY's own detector found the five asked: flag for review."""
+    folded = _fold(mode=COUGH_COUNTED, onsets=0, conformance=True, detected=5, contest_min=5)
+    assert folded.triage is Triage.FLAG
+    assert KEY_DISCARD_CONTESTED in folded.ground_keys
+    assert folded.discard_ground is None
+
+
+def test_a_detector_short_of_the_threshold_leaves_the_discard() -> None:
+    """Fewer detector events than the threshold contest nothing."""
+    folded = _fold(mode=COUGH_COUNTED, onsets=0, conformance=True, detected=4, contest_min=5)
     assert folded.triage is Triage.DISCARD
     assert folded.discard_ground == NO_COUGH_CAPTURED
 
