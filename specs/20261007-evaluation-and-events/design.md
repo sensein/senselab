@@ -100,14 +100,16 @@ References:
 
 ## Split methods
 
-`grouped_splits` is the one entry point. Its methods:
+`grouped_splits` is the one entry point for making splits; `check_split` checks a split made
+elsewhere. The methods:
 
 - stratified group k-fold
 - the same with combined strata (for example label × timepoint), still grouped by the individual
-- group-aware iterative multi-label stratification
+- group-aware multi-label stratification
 - leave-one-subject-out
 - grouped shuffle
-- nested cross-validation, with inner splits drawn from the outer training partition only
+- nested cross-validation (`nested_grouped_splits`), with inner splits drawn from the outer
+  training partition only
 - seen-subject k-fold and seen-subject holdout
 
 **Grouping is by the individual, never by individual × timepoint.** The counter-example is a fold
@@ -115,35 +117,79 @@ assignment grouped by (subject, timepoint): one visit of a person is tested whil
 the same person is trained on. A check keyed on (subject, timepoint) passes it; the unseen-subject
 invariant, keyed on the subject, rejects it.
 
-Every method returns a split report: `protocol`, `unit`, `stratify`, and per fold and partition the
-row, group and unit counts and the prevalence (with per-stratum prevalence when strata are given),
-plus the largest absolute deviation of any fold's prevalence from the overall prevalence and the
-invariant that was checked. The invariant is checked when the report is built, so a report that
-exists is a report that passed. `SplitReport.to_reproduce()` reduces it to the flat shape a
-reproduction driver records: each fold's test-partition group count and prevalence.
+**Split report.** Every method returns `protocol`, `unit`, `stratify`, and per fold and partition
+the row, group and unit counts and the prevalence (each label's share of the partition's rows, or
+each column's positive rate for a multi-label matrix; per-stratum joint shares when strata are
+given), plus the largest absolute deviation of any partition's prevalence from the overall
+prevalence and the invariant that was checked. The invariant is checked when the report is built,
+so a report that exists is a report that passed.
+
+- `unit` is `subject` under `unseen_subject` and the caller's `unit_name` under `seen_subject`
+  (default `recording`).
+- `stratify` is `none` (leave-one-subject-out, grouped shuffle), `class`, or `class_<strata_name>`
+  when strata are given; the caller names the strata.
+- `SplitReport.to_reproduce()` reduces the report to the flat shape a reproduction driver records:
+  each fold's test-partition group count and prevalence. That schema has fixed vocabularies for
+  `unit` (`subject`, `family`, `session`, `video`, `clip`, `recording`, `row`) and `stratify`
+  (`none`, `class`, `class_timepoint`, `class_site`, `class_age`, `timepoint`). A report whose unit
+  or stratify falls outside them raises instead of emitting an unknown token.
+
+**Validation partitions.** `val_inner_splits=k` carves a validation partition from each fold's
+training pool as the first of `k` inner folds, seeded with `seed + 10000·(fold + 1)`: the convention
+of the lab's earlier grouped k-fold (`provenance.md`, row `grouped_splits`).
 
 **Library choice.** scikit-learn, already a core dependency, supplies `StratifiedGroupKFold`,
-`LeaveOneGroupOut` and `GroupShuffleSplit`; they are used unchanged. Two pieces are reimplemented,
+`LeaveOneGroupOut` and `GroupShuffleSplit`; they are used unchanged. Two pieces are written here,
 because no maintained library provides them:
 
-1. **Group-aware multi-label iterative stratification.** The iterative algorithm of Sechidis et al.
-   (2011) applied to per-group label-count vectors. The `iterative-stratification` package
-   implements the algorithm on rows and has no groups option.
+1. **Group-aware multi-label stratification.** The `iterative-stratification` package stratifies
+   rows and has no groups option. The first implementation applied the iterative algorithm of
+   Sechidis et al. (2011) to per-subject label-count vectors (rarest label first, each subject to
+   the fold that most wants that label). On the test cohort it left the common label (rate ≈ 0.5)
+   0.147 from its overall rate in one test fold, outside the 0.05 tolerance fixed beforehand: it
+   commits large subjects early on account of rare labels, and later small subjects cannot even
+   the folds out. It was replaced by a greedy placement in the spirit of scikit-learn's own
+   `StratifiedGroupKFold`: subjects largest first, each into the fold that minimises the summed
+   squared difference between the fold's share of every label's positives and its share of rows,
+   plus its row share's distance from `1/k`. On the cohort, over seeds 0–19, the worst test-fold
+   deviation was 0.031 (rate ≈ 0.5), 0.014 (rate ≈ 0.2) and 0.004 (rate ≈ 0.05), and the rare label
+   reached every test fold. The tolerances were not changed.
 2. **The seen-subject splitters.** No scikit-learn splitter stratifies within each subject while
    grouping by unit.
 
-No dependency is added. The full justification and the measurements that fix the test tolerances
-are recorded with the splitters' implementation.
+No dependency is added.
 
-**Why the seen-subject k-fold keeps every subject in train.** Each subject's units are dealt
-round-robin over the n folds, so a fold holds at most ⌈u/n⌉ of a subject's u units. For u ≥ 2 and
-n ≥ 2, ⌈u/n⌉ ≤ ⌈u/2⌉ ≤ (u + 1)/2 < u, so at least one unit is left for training in every fold.
+**Seen-subject k-fold.** Each subject's units are ordered by majority label (then majority stratum),
+shuffled within ties with the seed, and dealt round-robin over the n folds from a seeded offset.
+**Why every subject stays in train:** a fold holds at most ⌈u/n⌉ of a subject's u units, and for
+u ≥ 2 and n ≥ 2, ⌈u/n⌉ ≤ ⌈u/2⌉ ≤ (u + 1)/2 < u, so at least one unit is left for training in every
+fold. With `val_inner_splits=k`, a subject's remaining r units are dealt over k slots the same way
+and slot 0 becomes validation, but only when r ≥ 2, which keeps at least one unit in train by the
+same argument.
 
-**Seen-subject holdout.** Within each subject (and stratum, when given) units go to train,
-validation and test by stratified proportional allocation, with at least one unit kept in train.
-With clips as the unit and fractions 0.6/0.2/0.2, this reproduces a seen-subject clip-level
-protocol used in the lab's own audio work. Declaring the unit as `clip` is what makes that split
-pass the seen-subject invariant, and the report records it.
+**Seen-subject holdout.** Each subject's units, in the same order, are split by fractions
+(default 0.6/0.2/0.2): the counts come from largest-remainder rounding of `u·fraction`, every
+partition with a positive fraction gets at least one unit when the subject has as many units as
+there are such partitions, and train always keeps at least one. The units are then interleaved
+proportionally over the ordered list, so each partition draws from every label (and stratum) in
+proportion; strata therefore shape the order within a subject rather than forming separate cells,
+which keeps each subject's counts within one unit of `u·fraction`. With clips as the unit this is
+the shape of a seen-subject clip-level holdout used in the lab's own audio work; declaring the unit
+as `clip` is what makes such a split pass the seen-subject invariant, and the report records it.
+
+**Test cohort and tolerances.** The tests use a seeded synthetic cohort (`imbalanced_cohort`): 60
+subjects with 4–64 clips each in 2–4 recordings, binary label rate about 0.10 (per-subject rates
+0, 0.05, 0.10 or 0.30), timepoints alternating by recording, and three multi-label columns around
+0.5, 0.2 and 0.05. Before any splitter existed, with scikit-learn only, cohort seed 0 gave:
+
+| Check | Required | Measured |
+|---|---|---|
+| (a) `StratifiedKFold(5, shuffle=True, random_state=0)` on rows shares subjects across partitions | ≥ 1 subject | all 60 subjects, in 5 of 5 folds |
+| (b) `GroupKFold(5)` max test-fold prevalence deviation | > 0.04 | 0.0591 |
+| (c) `StratifiedGroupKFold(5, shuffle=True, random_state=0)` max deviation | ≤ 0.02 | 0.0023 |
+| (d) a 60/20/20 clip-level holdout per (subject, timepoint) puts clips of a recording in two partitions | ≥ 1 recording | 148 of 182 recordings |
+
+All four held at the first seed tried, so the cohort seed is 0.
 
 Sechidis, K., Tsoumakas, G., & Vlahavas, I. (2011). On the stratification of multi-label data.
 *ECML PKDD 2011*, LNCS 6913, 145–158.
