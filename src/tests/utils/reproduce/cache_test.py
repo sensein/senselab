@@ -19,8 +19,10 @@ from senselab.utils.reproduce import cache
 from senselab.utils.reproduce.cache import (
     CacheError,
     claim,
+    driver_env_sha256,
     is_done,
     link_run,
+    native_digests,
     reset_result_dir,
     result_dir,
     run_dir,
@@ -28,6 +30,7 @@ from senselab.utils.reproduce.cache import (
     step_key_payload,
     write_summary,
 )
+from senselab.utils.reproduce.digest import DigestError
 from senselab.utils.reproduce.sandbox import build_env
 from senselab.utils.reproduce.spec import Profile, StepSpec
 
@@ -91,9 +94,10 @@ def _r_step_data(**over: Any) -> dict[str, Any]:  # noqa: ANN401
     return data
 
 
-def _profile(tmp_path: Path, **env: str) -> Profile:
+def _profile(tmp_path: Path, native: dict[str, Any] | None = None, **env: str) -> Profile:
     return Profile.model_validate(
         {
+            "native": native or {},
             "roots": {"data": str(tmp_path / "data")},
             "results_root": str(tmp_path / "reruns" / "results"),
             "runs_root": str(tmp_path / "reruns" / "runs"),
@@ -112,7 +116,9 @@ def _kwargs(**over: Any) -> dict[str, Any]:  # noqa: ANN401
         "upstream": {"prep": UP},
         "submodules": {"third_party/lib": SUB},
         "adapter_sha256": SHA,
+        "adapter_env_sha256": SHA,
         "input_digests": [SHA, SHA],
+        "native": {},
     }
     kwargs.update(over)
     return kwargs
@@ -157,6 +163,7 @@ SPEC_CHANGES: dict[str, Callable[[dict[str, Any]], None]] = {
     "stage": lambda d: d.update(stage=[{"root": "checkout", "patterns": ["c/*.yaml"], "dest": "c"}]),
     "outputs": lambda d: d.update(outputs=["r/*.json"]),
     "metrics-schema": lambda d: d.update(metrics_schema={"kind": "statistic", "headline": ["f_stat"], "counts": ["n"]}),
+    "gpu-arch": lambda d: d["resources"].update(gpu_arch=["sm_80"]),
     "notebook-overlay": lambda d: d["env"].update(notebook_tools={"lock": "n.lock", "lock_sha256": SHA}),
 }
 
@@ -172,6 +179,7 @@ def test_key_changes_with_each_manifest_input(tmp_path: Path, change: str) -> No
 ARG_CHANGES: dict[str, dict[str, Any]] = {
     "upstream-key": {"upstream": {"prep": OTHER}},
     "adapter-sha": {"adapter_sha256": OTHER},
+    "adapter-env-sha": {"adapter_env_sha256": OTHER},
     "input-digest": {"input_digests": [SHA, OTHER]},
     "submodule-sha": {"submodules": {"third_party/lib": "e" * 40}},
 }
@@ -213,6 +221,102 @@ def test_key_ignores_volatile_inputs(tmp_path: Path, monkeypatch: pytest.MonkeyP
         update={"partitions": {"cpu": {"partition": "q", "cpus": 4, "mem": "8G", "time": "1:00:00"}}}
     )
     assert _key(tmp_path, profile=profile) == base
+    assert _key(tmp_path, _step_data(resources={"profile": "cpu", "min_driver": "550"})) == base
+
+
+def test_key_ignores_order_of_set_like_lists(tmp_path: Path) -> None:
+    """Pattern, GPU arch, HF repository and HF file order do not move the key; -0.0 keys as 0.0."""
+    files = [{"path": "a.bin", "sha256": SHA}, {"path": "b.bin", "sha256": OTHER}]
+    one = {"repo": "org/one", "revision": REV, "files": files}
+    two = {"repo": "org/two", "revision": REV, "files": files[::-1]}
+    a = _step_data(hf_weights=[one, two], resources={"profile": "cpu", "gpu_arch": ["sm_80", "sm_90"]})
+    b = _step_data(
+        hf_weights=[{**two, "files": files}, {**one, "files": files[::-1]}],
+        resources={"profile": "cpu", "gpu_arch": ["sm_90", "sm_80"]},
+    )
+    a["inputs"][0]["patterns"] = ["x/*.csv", "x/*.tsv"]
+    b["inputs"][0]["patterns"] = ["x/*.tsv", "x/*.csv"]
+    assert _key(tmp_path, a) == _key(tmp_path, b)
+    zero = _step_data(expect=[{"metric": "f_stat", "value": 0.0, "tolerance": 0.0, "kind": "abs"}])
+    negative = _step_data(expect=[{"metric": "f_stat", "value": -0.0, "tolerance": -0.0, "kind": "abs"}])
+    assert _key(tmp_path, zero) == _key(tmp_path, negative)
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
+def test_expect_numbers_must_be_finite(bad: float) -> None:
+    """NaN and infinite targets or tolerances are refused, so they never reach a key."""
+    for expect in (
+        {"metric": "f_stat", "value": bad, "tolerance": 0.1, "kind": "abs"},
+        {"metric": "f_stat", "value": 1.0, "tolerance": bad, "kind": "abs"},
+    ):
+        with pytest.raises(ValueError):
+            StepSpec.model_validate(_step_data(expect=[expect]))
+
+
+def test_staged_data_root_content_is_keyed(tmp_path: Path) -> None:
+    """A data-root stage repeats an input entry, so a change to the staged files moves the key."""
+    stage = [{"root": "data", "patterns": ["x/*.csv"], "dest": "x"}]
+    data = _step_data(stage=stage)
+    assert _key(tmp_path, data, input_digests=[OTHER, SHA]) != _key(tmp_path, data)
+
+
+def test_data_root_stage_without_input_is_refused() -> None:
+    """A data-root stage with no inputs entry of the same root and patterns is refused with a fixed code."""
+    for stage in (
+        {"root": "data", "patterns": ["z/*.csv"], "dest": "z"},
+        {"root": "other", "patterns": ["x/*.csv"], "dest": "x"},
+        {"root": "data", "patterns": ["x/*.csv", "x/*.tsv"], "dest": "x"},
+    ):
+        with pytest.raises(ValueError, match="E_SPEC_STAGE_UNDIGESTED"):
+            StepSpec.model_validate(_step_data(stage=[stage]))
+    reordered = _step_data(stage=[{"root": "data", "patterns": ["x/*.csv"], "dest": "x"}])
+    reordered["inputs"][0]["patterns"] = ["x/*.tsv", "x/*.csv"]
+    reordered["stage"][0]["patterns"] = ["x/*.csv", "x/*.tsv"]
+    StepSpec.model_validate(reordered)
+    for root in ("checkout", "up:prep"):
+        StepSpec.model_validate(_step_data(stage=[{"root": root, "patterns": ["q/*"], "dest": "q"}]))
+
+
+def _native_profile(tmp_path: Path) -> tuple[Profile, Path]:
+    lib = tmp_path / "ff" / "lib"
+    lib.mkdir(parents=True)
+    (lib / "libav.so.60").write_bytes(b"one")
+    bin_dir = tmp_path / "ff" / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "ffmpeg").write_bytes(b"exe")
+    native = {"ffmpeg": {"bin_dirs": [str(bin_dir)], "lib_dirs": [str(lib)]}}
+    return _profile(tmp_path, native=native), lib
+
+
+def test_native_dir_content_is_keyed(tmp_path: Path) -> None:
+    """Each selected native dir's content digest is keyed; changing a library moves the key."""
+    profile, lib = _native_profile(tmp_path)
+    step = StepSpec.model_validate(_step_data(resources={"profile": "cpu", "native": ["ffmpeg"]}))
+    first = native_digests(step, profile)
+    assert list(first) == ["ffmpeg"] and len(first["ffmpeg"]) == 2
+    base = step_key(step, profile, **_kwargs(native=first))
+    (lib / "libav.so.60").write_bytes(b"two")
+    second = native_digests(step, profile)
+    assert second["ffmpeg"][0] == first["ffmpeg"][0] and second["ffmpeg"][1] != first["ffmpeg"][1]
+    assert step_key(step, profile, **_kwargs(native=second)) != base
+    for bad in ({}, {"ffmpeg": first["ffmpeg"][:1]}, {"ffmpeg": [SHA, "x"]}, {"ffmpeg": first["ffmpeg"], "q": []}):
+        with pytest.raises(CacheError) as info:
+            step_key(step, profile, **_kwargs(native=bad))
+        assert info.value.code == "E_KEY_NATIVE"
+    (lib / "libav.so.60").unlink()
+    with pytest.raises(DigestError) as digest_info:
+        native_digests(step, profile)
+    assert digest_info.value.code == "E_DIGEST_EMPTY"
+
+
+def test_driver_semantics_and_driver_env_identity(tmp_path: Path) -> None:
+    """The payload carries the driver-semantics number; the driver env identity is stable and hex."""
+    step = StepSpec.model_validate(_step_data())
+    payload = step_key_payload(step, _profile(tmp_path), **_kwargs())
+    assert payload["driver_semantics"] == cache.DRIVER_SEMANTICS
+    identity = driver_env_sha256()
+    assert identity == driver_env_sha256() and len(identity) == 64
+    assert _key(tmp_path, adapter_env_sha256=identity) != _key(tmp_path)
 
 
 def test_keyed_env_is_the_sandbox_keyed_set(tmp_path: Path) -> None:
@@ -248,6 +352,7 @@ REFUSALS: dict[str, tuple[dict[str, Any] | None, dict[str, Any], str]] = {
     "inputs-count": (None, {"input_digests": [SHA]}, "E_KEY_INPUTS"),
     "inputs-not-hex": (None, {"input_digests": [SHA, "zz"]}, "E_KEY_INPUTS"),
     "adapter-not-hex": (None, {"adapter_sha256": "abc"}, "E_KEY_ADAPTER"),
+    "adapter-env-not-hex": (None, {"adapter_env_sha256": "abc"}, "E_KEY_ADAPTER"),
     "submodule-not-hex": (None, {"submodules": {"lib": "abc"}}, "E_KEY_SUBMODULES"),
     "submodules-when-disabled": (_step_data(submodules=False), {}, "E_KEY_SUBMODULES"),
     "r-session-on-python": (None, {"r_session_sha256": SHA, "r_module_env_sha256": SHA}, "E_KEY_R_SESSION"),
@@ -369,17 +474,43 @@ def test_write_summary_refuses_non_json(tmp_path: Path) -> None:
 def test_reset_result_dir_clears_an_incomplete_run_and_keeps_a_done_one(tmp_path: Path) -> None:
     """An incomplete or failed result dir is emptied; a done one is refused."""
     out = result_dir(tmp_path, SHA)
-    assert reset_result_dir(out) == out and list(out.iterdir()) == []
+    assert reset_result_dir(tmp_path, SHA) == out and list(out.iterdir()) == []
     (out / "logs").mkdir()
     (out / "logs" / "x.log").write_text("x")
     write_summary(out, {"exit": 2})
-    reset_result_dir(out)
+    reset_result_dir(tmp_path, SHA)
     assert out.is_dir() and list(out.iterdir()) == []
     write_summary(out, {"exit": 0})
     with pytest.raises(CacheError) as info:
-        reset_result_dir(out)
+        reset_result_dir(tmp_path, SHA)
     assert info.value.code == "E_RESULT_DONE"
     assert is_done(out)
+
+
+def test_reset_result_dir_refusals(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A bad key, a symlink or a file at the path, and a failed removal give fixed codes and no path."""
+    with pytest.raises(CacheError) as info:
+        reset_result_dir(tmp_path, "../x")
+    assert info.value.code == "E_KEY_BAD"
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (tmp_path / SHA).symlink_to(elsewhere)
+    (tmp_path / OTHER).write_text("x")
+    for key in (SHA, OTHER):
+        with pytest.raises(CacheError) as info:
+            reset_result_dir(tmp_path, key)
+        assert info.value.code == "E_RESULT_NOT_DIR"
+    assert elsewhere.is_dir() and (tmp_path / OTHER).is_file()
+    (tmp_path / UP).mkdir()
+
+    def boom(*_: object, **__: object) -> None:
+        raise OSError(13, "denied", str(tmp_path))
+
+    monkeypatch.setattr(cache.shutil, "rmtree", boom)
+    with pytest.raises(CacheError) as info:
+        reset_result_dir(tmp_path, UP)
+    assert info.value.code == "E_RESULT_RESET"
+    assert str(tmp_path) not in str(info.value) and info.value.__suppress_context__
 
 
 # --- claims ----------------------------------------------------------------------------------------
