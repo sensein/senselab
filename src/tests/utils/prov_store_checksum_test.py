@@ -3,6 +3,7 @@
 import hashlib
 import os
 from pathlib import Path
+from typing import get_args
 
 import pytest
 
@@ -10,6 +11,7 @@ from senselab.utils.prov_store import (
     CHECKSUM_KEY,
     CHECKSUM_UNRESOLVED_KEY,
     MTIME_KEY,
+    PROV_TYPE,
     SIZE_KEY,
     ProvStore,
     file_attributes,
@@ -81,6 +83,26 @@ def test_entity_refuses_a_dishonest_checksum(attributes: dict[str, object], matc
     store = ProvStore(run_id="r")
     with pytest.raises(ValueError, match=match):
         store.entity(prov_type="stream", extent=None, attributes=attributes)
+
+
+@pytest.mark.parametrize(
+    "attributes", [{CHECKSUM_KEY: "0" * 64}, {CHECKSUM_UNRESOLVED_KEY: "input set is empty"}], ids=["digest", "reason"]
+)
+def test_an_artifact_checksum_needs_no_path(tmp_path: Path, attributes: dict[str, object]) -> None:
+    """An artifact is named by its content alone, and reads back unchanged."""
+    store = ProvStore(run_id="r")
+    eid = store.entity(prov_type="artifact", extent=None, attributes={"role": "input", **attributes})
+    path = tmp_path / "store.jsonl"
+    store.write_jsonl(path)
+    assert ProvStore.read_jsonl(path).get_entity(eid).attributes == {"role": "input", **attributes}
+
+
+@pytest.mark.parametrize("prov_type", sorted(set(get_args(PROV_TYPE)) - {"artifact"}))
+def test_every_other_type_still_needs_a_path_for_its_checksum(prov_type: PROV_TYPE) -> None:
+    """Only an artifact is exempt; any other entity's checksum must still say which file it describes."""
+    store = ProvStore(run_id="r")
+    with pytest.raises(ValueError, match="naming the file"):
+        store.entity(prov_type=prov_type, extent=None, attributes={CHECKSUM_KEY: "0" * 64})
 
 
 def test_read_back_holds_a_written_store_to_the_same_checksum_invariants(tmp_path: Path) -> None:
