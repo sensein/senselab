@@ -846,6 +846,12 @@ def checkout(
             if (co.repo, co.commit, co.patch_set_sha256) != (repo, commit, patch_set):
                 raise ReproduceSourceError(WORKTREE_MISMATCH, f"{marker.name} records another checkout")
             verify_checkout(co)
+            if co.submodule_notebooks_with_outputs and not allow_submodule_notebook_outputs:
+                raise ReproduceSourceError(
+                    SUBMODULE_NOTEBOOK_OUTPUTS,
+                    f"{len(co.submodule_notebooks_with_outputs)} submodule notebook(s) carry outputs",
+                    "\n".join(co.submodule_notebooks_with_outputs),
+                )
             return co
         _remove_worktree(git, cache, mirror_path, worktree)
         try:
