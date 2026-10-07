@@ -76,6 +76,21 @@ def test_a_shutoff_soon_after_the_task_cut_it() -> None:
     assert record["faults"]["dropout"]["out"] == [[9.0, 9.2]]
 
 
+def test_a_shutoff_decides_only_for_a_held_task() -> None:
+    """A recorder gating after a cough is not a cut: the shutoff reviews only where phonation is held."""
+    common = {
+        "task_spans": [(1.0, 6.0)],
+        "faults": {"shutoff": [[5.9, 7.5]]},
+        "other_voice": [],
+        "streams": None,
+        "plain_active_s": 5.0,
+        "enhanced_active_s": 5.0,
+        "level_rel_db": 0.0,
+    }
+    assert join_record(**common, event_kind="phonation")["faults_in_task"] == ["shutoff"]
+    assert join_record(**common, event_kind="cough")["faults_in_task"] == []
+
+
 def test_another_voice_inside_the_task_decides_and_one_outside_does_not() -> None:
     """Interference reviews only where it touches a task span (owner, 2026-10-07)."""
     inside = join_record(
