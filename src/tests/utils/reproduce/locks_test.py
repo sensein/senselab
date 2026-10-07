@@ -582,6 +582,36 @@ def test_overlay_torch_rule_uses_the_uv_lock_closure(tmp_path: Path, torch_needs
         check_integrity(env, tmp_path, uv_lock=uv_lock)
 
 
+TRITON_LINE = "triton==3.4.0 --hash=sha256:7b70f5e6a41e52e48cfc087436c8a28c17ff98db369447bcaff3b887a3ab4467\n"
+CUBLAS_LINE = f"nvidia-cublas-cu12==12.8.4.1 --hash=sha256:{CUBLAS_SHA}\n"
+CUDA_BINDINGS_LINE = (
+    "cuda-bindings==13.3.1 --hash=sha256:04436a9364059c84b8f9636f359eccda1cf814341f5b670c71d80d2f79dbc708\n"
+)
+
+
+@pytest.mark.parametrize("line", [TRITON_LINE, CUBLAS_LINE])
+def test_body_may_not_pin_torch_names(tmp_path: Path, line: str) -> None:
+    """A body entry named in torch.lock, or torch-family by name against a first resolve, is refused."""
+    raw = _build(tmp_path)
+    _append(tmp_path / raw["body"]["lock"], line)
+    with pytest.raises(ReproduceLockError, match="pins torch.lock or torch-family names"):
+        check_integrity(_rehash(tmp_path, raw), tmp_path)
+
+
+@pytest.mark.parametrize("line, refused", [(TRITON_LINE, True), (CUDA_BINDINGS_LINE, False)])
+def test_uv_export_body_torch_rule_uses_the_uv_lock_closure(tmp_path: Path, line: str, refused: bool) -> None:
+    """Against ``uv.lock`` a body may carry a CUDA name outside the torch closure, never one inside it."""
+    raw = _build(tmp_path, "uv-export")
+    uv_lock = _closure_uv_lock(tmp_path)
+    _append(tmp_path / raw["body"]["lock"], line)
+    env = _rehash(tmp_path, raw)
+    if refused:
+        with pytest.raises(ReproduceLockError, match=r"pins torch.lock or torch-family names: \['triton'\]"):
+            check_integrity(env, tmp_path, uv_lock=uv_lock)
+    else:
+        check_integrity(env, tmp_path, uv_lock=uv_lock)
+
+
 def test_uv_export_torch_env_needs_the_repository_lock(tmp_path: Path) -> None:
     """Without the repository ``uv.lock`` the torch check cannot run, so it refuses."""
     with pytest.raises(ReproduceLockError, match=r"needs the repository uv\.lock"):
