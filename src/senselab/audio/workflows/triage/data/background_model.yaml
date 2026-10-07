@@ -3,7 +3,7 @@
 # the residual, impulses, regions of activity, and the acquisition faults. The derivation of every
 # value is in specs/20261007-task-events-in-background/design.md ("Unit A: the generic layer");
 # values marked UNFITTED are to be fitted jointly on the owner's labels.
-version: 1
+version: 2
 frame_s: 0.04                     # analysis window of the band frames, as voice_phonation.yaml
 hop_s: 0.01                       # hop of every per-frame series
 band_edges_hz: [150.0, 300.0, 500.0, 800.0, 1300.0, 2000.0, 3000.0, 4000.0, 5500.0, 7500.0]   # the breath train's subbands
@@ -51,3 +51,8 @@ disruptions:                      # dropout and discontinuity extents on the ori
   discontinuity_local_factor: 10.0
   discontinuity_window_ms: 20.0
   merge_s: 0.01                   # discontinuities this close are one span
+session:                          # the BIDS session floor (specs/.../design.md, "Unit C step 1")
+  statistic: median               # per band, over the members whose own floor was read over quiet frames
+  members_min: 3                  # UNFITTED: fewer usable members and the recording keeps its own floor
+  gap_db: 25.0                    # UNFITTED: own floor this far over the session's (median over bands) takes the session's; as floor.residual_gap_db
+  level_percentile: 95.0          # a recording's active level: this percentile of its broadband level over live frames
