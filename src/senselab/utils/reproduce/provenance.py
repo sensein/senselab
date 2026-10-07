@@ -45,6 +45,7 @@ _HEX64 = re.compile(r"^[0-9a-f]{64}$")
 _COMMIT = re.compile(r"^[0-9a-f]{40}$")
 _STEP_KEY = re.compile(r"^[0-9a-f]{16,64}$")
 _NAME = re.compile(r"^[A-Za-z0-9_-][A-Za-z0-9_.-]{0,127}$")
+_VENV_NAME = re.compile(r"^[A-Za-z0-9_-][A-Za-z0-9_.-]{0,127}(\+[0-9a-f]{8})?$")
 _ROOT = re.compile(r"^(up:)?[A-Za-z0-9_-][A-Za-z0-9_.-]{0,127}$")
 _CODE = re.compile(r"^[EW]_[A-Z0-9_]{1,64}$")
 _ENV_KEY = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
@@ -127,8 +128,34 @@ def _check_host(host: Mapping[str, Any]) -> None:
         _check(value is None or (_matches(value, pattern) and len(value) <= _HOST_STRING_MAX), f"host {key}")
 
 
+def drop_unrecordable_host_values(host: Mapping[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    """Set every host value `record_step` would refuse to None, so an odd host never costs a step its record.
+
+    Args:
+        host: `host.host_record`'s result.
+
+    Returns:
+        ``(host, dropped)``: a copy holding exactly `HOST_KEYS`, with each value outside its closed form
+        (a string off its pattern or too long, a count that is not a non-negative integer) set to None,
+        and the sorted names of the keys so dropped. The dropped values are never returned.
+    """
+    clean: dict[str, Any] = {key: host.get(key) for key in HOST_KEYS}
+    dropped = sorted(set(host) - set(HOST_KEYS))
+    for key in _HOST_INTS:
+        value = clean[key]
+        if value is not None and not (_is_int(value) and value >= 0):
+            clean[key] = None
+            dropped.append(key)
+    for key, pattern in _HOST_STRINGS.items():
+        value = clean[key]
+        if value is not None and not (_matches(value, pattern) and len(value) <= _HOST_STRING_MAX):
+            clean[key] = None
+            dropped.append(key)
+    return clean, sorted(set(dropped))
+
+
 def _check_venv(venv: VenvResult) -> str:
-    _check(_is_name(venv.path.name), "venv name")
+    _check(_is_name(venv.path.name, _VENV_NAME), "venv name")
     _check(_matches(venv.env_key, _HEX64), "venv env_key")
     _check(venv.overlay_sha256 is None or _matches(venv.overlay_sha256, _HEX64), "venv overlay_sha256")
     _check(
@@ -195,7 +222,8 @@ def record_step(
 
     Raises:
         ValueError: If any value is outside its closed form, if the venv's ``installed.json`` does not
-            match its marker, or if the graph fails `check_graph`. Nothing is written then.
+            match its marker, if the graph fails `check_graph`, or if ``prov_dir`` is a symlink. Nothing is
+            written then.
     """
     _check(_matches(step_key, _STEP_KEY), "step_key")
     _check(_is_name(step), "step")
@@ -267,7 +295,9 @@ def record_step(
     _check(not problems, "graph")
 
     target = Path(prov_dir)
+    _check(not target.is_symlink(), "prov_dir")
     target.mkdir(parents=True, exist_ok=True)
+    _check(not target.is_symlink() and target.is_dir(), "prov_dir")
     store_path = target / STORE_FILE
     store.write_jsonl(store_path)
     written = write_bep028_files(graph, target, label=LABEL)

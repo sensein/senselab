@@ -597,6 +597,28 @@ def test_checks_recorded_only_with_a_profile(
     assert len(ran) == 8
 
 
+def test_load_venv_reads_the_prefetched_venv_and_never_builds(
+    tmp_path: Path, fake: tuple[FakeUv, FakeWheels], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``load_venv`` describes a prefetched venv from its marker; a missing or tampered one is None."""
+    monkeypatch.setattr(envmod, "check_pip", lambda venv, env: None)
+    monkeypatch.setattr(envmod, "smoke", lambda venv, modules, profile: [])
+    raw = _env(tmp_path / "manifests", torch=False, sdist=False)
+    raw.pop("notebook_tools")
+    env = EnvSpec.model_validate(raw)
+    path = envmod.venv_dir(tmp_path / "cache", "demo", env)
+    assert envmod.load_venv(path, env) is None
+    built = _prefetch(tmp_path, env, profile=_profile(tmp_path)).base
+    loaded = envmod.load_venv(path, env)
+    assert loaded is not None and loaded.checked and loaded.reused
+    assert (loaded.env_key, loaded.overlay_sha256, loaded.packages) == (built.env_key, None, built.packages)
+    stricter = env.model_copy(update={"smoke_imports": ["numpy"]})
+    unchecked = envmod.load_venv(path, stricter)
+    assert unchecked is not None and not unchecked.checked
+    (path / envmod.INSTALLED).write_text("{}")
+    assert envmod.load_venv(path, env) is None
+
+
 def test_failed_check_leaves_venv_unchecked(
     tmp_path: Path, fake: tuple[FakeUv, FakeWheels], monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -691,7 +713,7 @@ def test_smoke_runs_each_import_in_the_sandbox(tmp_path: Path) -> None:
     for (argv, env), module in zip(calls, ["numpy", "broken"]):
         assert argv[: len(sandbox.UNSHARE)] == sandbox.UNSHARE
         assert argv[-3:] == [str(venv / "bin" / "python"), "-c", f"import {module}"]
-        assert f"remount,bind,ro {venv}" in argv[len(sandbox.UNSHARE) + 2]
+        assert f"--bind {venv} {venv}" in argv[len(sandbox.UNSHARE) + 2]
         assert env["PATH"].startswith(f"{venv}/bin:") and env["HF_HUB_OFFLINE"] == "1"
         assert env["https_proxy"] == sandbox.PROXY and "PYTHONPATH" not in env
     with pytest.raises(ValueError):
@@ -785,6 +807,7 @@ class FakeR:
         assert "Rscript" in script and Path(r_script).is_file() and repo.startswith(envmod.PPM_CRAN + "/")
         out = Path(out_dir)
         (out / "installed.tsv").write_text("".join(f"{k}\t{v}\n" for k, v in self.installed.items()))
+        (out / "namespaces.tsv").write_text("".join(f"{k}\t{v}\n" for k, v in self.installed.items()))
         user = r_lib if 'R_LIBS_USER="$2"' in script else f"{env['HOME']}/R/x86_64-pc-linux-gnu-library/4.5"
         paths = list(dict.fromkeys([r_lib, user, "/mod/r/lib64/R/library"]))
         (out / "lib_paths.txt").write_text("".join(f"{p}\n" for p in paths))
@@ -826,7 +849,7 @@ def test_prefetch_r_writes_session_and_module_env(tmp_path: Path) -> None:
     for argv, run_env in runner.calls:
         assert argv[:4] == ["bash", "--noprofile", "--norc", "-c"] and argv[5:7] == ["bash", "R/4.5.2"]
         assert argv[4].startswith('. /etc/profile.d/modules.sh && module load "$1"')
-        assert set(run_env) <= {"PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "SSL_CERT_FILE"}
+        assert set(run_env) <= {"PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "TZ", "SSL_CERT_FILE"}
     install = next(a for a, _ in runner.calls if "Rscript" in a[4])
     assert 'R_LIBS="$2" R_LIBS_USER="$2" R_LIBS_SITE=' in install[4] and "--vanilla" in install[4]
     assert session["lib_paths"] == [str(r_lib), "/mod/r/lib64/R/library"]
@@ -1068,3 +1091,26 @@ def test_real_prefetch_on_nfs(nfs_dir: Path) -> None:
     assert envmod.pip_check(result.base.path) == []
     with envmod._flock(nfs_dir / "x.lock"):
         pass
+
+
+def test_r_session_script_and_reader_share_prefetch_form(tmp_path: Path) -> None:
+    """The run-time script records what ``r_script`` records; the reader drops the namespace block."""
+    packages = _r_env().r_packages
+    session, install = envmod.r_session_script(packages), envmod.r_script(packages)
+    tail = session.split("pkgs <- c(", 1)[1].split("\n", 1)[1]
+    assert install.endswith(tail) and "install.packages" not in session
+    (tmp_path / "installed.tsv").write_text("lme4\t1.1-37\n")
+    (tmp_path / "lib_paths.txt").write_text("/lib/a\n/r/lib\n")
+    (tmp_path / "namespaces.tsv").write_text("Matrix\t1.7-3\nlme4\t1.1-37\n")
+    (tmp_path / "session_info.txt").write_text(
+        "R version 4.5.2\n\nother attached packages:\n[1] lme4_1.1-37\n\nloaded via a namespace:\n[1] tools\n"
+    )
+    (tmp_path / "r_version.txt").write_text("R version 4.5.2 (2025-10-31)\n")
+    assert envmod.read_r_session(tmp_path) == {
+        "installed": {"lme4": "1.1-37"},
+        "namespaces": {"Matrix": "1.7-3", "lme4": "1.1-37"},
+        "lib_paths": ["/lib/a", "/r/lib"],
+        "r_version": "R version 4.5.2 (2025-10-31)",
+        "session_info": ["R version 4.5.2", "other attached packages:", "[1] lme4_1.1-37"],
+    }
+    assert set(envmod.R_SESSION_FIELDS) == set(envmod.read_r_session(tmp_path))

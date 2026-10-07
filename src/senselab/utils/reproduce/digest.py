@@ -17,15 +17,17 @@ import hashlib
 import os
 import re
 import stat
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from functools import lru_cache
 from pathlib import PurePosixPath
+from typing import TypeVar
 
 from senselab.utils import fastio
 
 _HEADER = b"senselab-reproduce-input-digest-v1\n"
 _CHUNK = 1 << 20
 _WILD = re.compile(r"[*?\[]")
+T = TypeVar("T")
 
 
 class DigestError(Exception):
@@ -124,6 +126,87 @@ def _hash_file(path: str) -> tuple[str, int]:
     return digest.hexdigest(), size
 
 
+def _select(
+    root: str | os.PathLike[str],
+    patterns: Iterable[str],
+    exclude: Iterable[str],
+    exclude_patterns: Iterable[str],
+    fn: Callable[[str, str], T],
+) -> dict[str, T]:
+    """``fn(path, rel)`` for every file under ``root`` matching a pattern, keyed by ``rel``; the shared walk."""
+    patterns = list(patterns)
+    skip = tuple(e.strip("/") for e in exclude)
+    skip_patterns = list(exclude_patterns)
+    for pattern in (*patterns, *skip, *skip_patterns):
+        _check_pattern(pattern)
+    top = os.fspath(root)
+    if not os.path.isdir(top):
+        raise DigestError("E_DIGEST_NO_ROOT")
+    literal = [p for p in patterns if not _WILD.search(p)]
+    bases = sorted({_base(p) for p in patterns if _WILD.search(p)})
+    bases = [b for b in bases if not any(o != b and (o == "" or b.startswith(o + "/")) for o in bases)]
+
+    def visit(path: str) -> tuple[str, T] | None:
+        rel = os.path.relpath(path, top).replace(os.sep, "/")
+        if (
+            _excluded(rel, skip)
+            or any(pattern_matches(rel, p) for p in skip_patterns)
+            or not any(pattern_matches(rel, p) for p in patterns)
+        ):
+            return None
+        return rel, fn(path, rel)
+
+    found: dict[str, T] = {}
+    try:
+        for pattern in literal:
+            path = os.path.join(top, pattern)
+            if os.path.lexists(path) and not os.path.isdir(path) and (item := visit(path)) is not None:
+                found[item[0]] = item[1]
+        for base in bases:
+            start = os.path.join(top, base) if base else top
+            if not os.path.isdir(start):
+                continue
+            for item in fastio.map_files(start, visit):
+                if item is not None:
+                    found[item[0]] = item[1]
+    except (OSError, fastio.WalkError):
+        raise DigestError("E_DIGEST_UNREADABLE") from None
+    return found
+
+
+def matching_files(
+    root: str | os.PathLike[str],
+    patterns: Iterable[str],
+    *,
+    exclude: Iterable[str] = (),
+    require_nonempty: bool = False,
+) -> list[str]:
+    """The files under a root that match any pattern, chosen exactly as `input_set_digest` chooses them.
+
+    Args:
+        root: The directory the patterns are relative to.
+        patterns: Relative globs.
+        exclude: Relative subpaths left out, matched by whole path components.
+        require_nonempty: Raise ``E_DIGEST_EMPTY`` when no file matches.
+
+    Returns:
+        The sorted relative POSIX paths.
+
+    Raises:
+        DigestError: As `input_set_digest`; a matching file that is not a regular file (or a dangling
+            symlink) gives ``E_DIGEST_UNREADABLE``.
+    """
+
+    def regular(path: str, rel: str) -> None:
+        if not stat.S_ISREG(os.stat(path).st_mode):
+            raise DigestError("E_DIGEST_UNREADABLE")
+
+    found = _select(root, patterns, exclude, (), regular)
+    if require_nonempty and not found:
+        raise DigestError("E_DIGEST_EMPTY")
+    return sorted(found)
+
+
 def input_set_digest(
     root: str | os.PathLike[str],
     patterns: Iterable[str],
@@ -153,44 +236,12 @@ def input_set_digest(
             ``E_DIGEST_EMPTY`` when ``require_nonempty`` and nothing matches. Patterns and exclusions
             with an empty, ``.`` or ``..`` component are refused.
     """
-    patterns = list(patterns)
-    skip = tuple(e.strip("/") for e in exclude)
-    skip_patterns = list(exclude_patterns)
-    for pattern in (*patterns, *skip, *skip_patterns):
-        _check_pattern(pattern)
-    top = os.fspath(root)
-    if not os.path.isdir(top):
-        raise DigestError("E_DIGEST_NO_ROOT")
-    literal = [p for p in patterns if not _WILD.search(p)]
-    bases = sorted({_base(p) for p in patterns if _WILD.search(p)})
-    bases = [b for b in bases if not any(o != b and (o == "" or b.startswith(o + "/")) for o in bases)]
 
-    def visit(path: str) -> tuple[str, str, int] | None:
-        rel = os.path.relpath(path, top).replace(os.sep, "/")
-        if (
-            _excluded(rel, skip)
-            or any(pattern_matches(rel, p) for p in skip_patterns)
-            or not any(pattern_matches(rel, p) for p in patterns)
-        ):
-            return None
+    def entry(path: str, rel: str) -> tuple[str, str, int]:
         content, size = _hash_file(path)
         return hashlib.sha256(rel.encode()).hexdigest(), content, size
 
-    found: dict[str, tuple[str, str, int]] = {}
-    try:
-        for pattern in literal:
-            path = os.path.join(top, pattern)
-            if os.path.lexists(path) and not os.path.isdir(path) and (item := visit(path)) is not None:
-                found[item[0]] = item
-        for base in bases:
-            start = os.path.join(top, base) if base else top
-            if not os.path.isdir(start):
-                continue
-            for item in fastio.map_files(start, visit):
-                if item is not None:
-                    found[item[0]] = item
-    except (OSError, fastio.WalkError):
-        raise DigestError("E_DIGEST_UNREADABLE") from None
+    found = _select(root, patterns, exclude, exclude_patterns, entry)
     if require_nonempty and not found:
         raise DigestError("E_DIGEST_EMPTY")
     digest = hashlib.sha256(_HEADER)
