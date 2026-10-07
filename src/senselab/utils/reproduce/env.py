@@ -426,6 +426,21 @@ def _installed_ok(path: Path, marker: Mapping[str, Any]) -> dict[str, Any] | Non
     return installed
 
 
+def installed_sha256(path: Path) -> str | None:
+    """The sha256 of a venv's ``installed.json``, as its marker records it.
+
+    Args:
+        path: The venv.
+
+    Returns:
+        The marker's ``installed_sha256`` when ``installed.json`` still hashes to it, else None.
+    """
+    marker = _read_marker(path)
+    if marker is None or _installed_ok(path, marker) is None:
+        return None
+    return str(marker["installed_sha256"])
+
+
 def venv_checked(path: Path, env: EnvSpec, overlay: LockRef | None = None) -> bool:
     """Whether a venv is complete for ``env``: installed for its key and overlay, and both checks passed.
 

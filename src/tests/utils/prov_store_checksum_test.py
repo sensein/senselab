@@ -1,6 +1,7 @@
 """The store's file checksums: what they record, and what they say when they cannot."""
 
 import hashlib
+import json
 import os
 from pathlib import Path
 from typing import get_args
@@ -113,6 +114,20 @@ def test_read_back_holds_a_written_store_to_the_same_checksum_invariants(tmp_pat
     store.write_jsonl(path)
     path.write_text(path.read_text().replace("0" * 64, "0" * 63))
     with pytest.raises(ValueError, match="64 lowercase hex"):
+        ProvStore.read_jsonl(path)
+
+
+def test_read_back_refuses_a_non_artifact_whose_path_was_removed(tmp_path: Path) -> None:
+    """A hand-edited store.jsonl cannot turn a located file into a pathless checksum; only an artifact may be one."""
+    store = ProvStore(run_id="r")
+    store.entity(prov_type="stream", extent=None, attributes={"path": "a.flac", CHECKSUM_KEY: "0" * 64})
+    path = tmp_path / "store.jsonl"
+    store.write_jsonl(path)
+    [line] = path.read_text().splitlines()
+    record = json.loads(line)
+    del record["attributes"]["path"]
+    path.write_text(json.dumps(record) + "\n")
+    with pytest.raises(ValueError, match="naming the file"):
         ProvStore.read_jsonl(path)
 
 
