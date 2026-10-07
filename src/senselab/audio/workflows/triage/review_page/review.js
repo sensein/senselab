@@ -16,6 +16,8 @@ var ReviewPage = (function () {
     'evidence_items', 'decisive_items', 'reasons'];
   var MAX_EVIDENCE_AXES = 8;
   var LIST_PAGE = 200;
+  // The LLM reviewer's bookkeeping, left out of the line the page shows.
+  var LLM_HIDDEN = ['task_context', 'result_cache', 'prompt_version', 'model_id', 'revision', 'original'];
 
   // ---------------------------------------------------------------- pure: index to rows
 
@@ -641,7 +643,9 @@ var ReviewPage = (function () {
     if (sp.condition_kind) lines.push('held condition: ' + sp.condition_kind);
     if (sp.names_proposed && sp.names_proposed.length) lines.push('names proposed for release: ' + sp.names_proposed.join(', '));
     var llm = sp.llm || {};
-    if (Object.keys(llm).length) lines.push('LLM reviewer: ' + JSON.stringify(llm));
+    var shown = Object.keys(llm).filter(function (k) { return LLM_HIDDEN.indexOf(k) < 0; })
+      .map(function (k) { return k + ' ' + JSON.stringify(llm[k]); });
+    if (shown.length) lines.push('LLM reviewer: ' + shown.join(' · '));
     lines.forEach(function (l) { sec.appendChild(el('div', 'rv-note', l)); });
     if (sp.pii && sp.pii.length) {
       var t = el('table', 'rv-ev');
