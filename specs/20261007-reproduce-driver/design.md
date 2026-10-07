@@ -117,10 +117,14 @@ How `locks.check_integrity` reads those rules:
   where the wheel says `2.8.0+cu128`); when both carry one, `cu126` is not `cu128`. Against a
   repository `uv.lock` each torch-lock entry needs hashes, and they must be among that version's
   wheel hashes: the same version on another index can be a different file. The check runs both
-  ways: a torch-family name in the reference that `torch.lock` lacks is refused. Torch-family names
-  are `torch`, `torchvision`, `torchaudio` and the `nvidia-`, `triton`, `pytorch-triton` and `cuda-`
-  prefixes, so an unrelated `nvidia-` package in a repository lock is refused too, which errs
-  closed.
+  ways: a torch-family name in the reference that `torch.lock` lacks is refused. Against a
+  repository `uv.lock` the family is `torch`/`torchvision`/`torchaudio` from `torch.lock` plus the
+  `nvidia-`, `triton`, `pytorch-triton` and `cuda-` named packages in the transitive closure of their
+  `uv.lock` dependencies, over every marker. A name rule alone would demand packages that an optional
+  extra pulls in for another reason (a repository lock carried `cuda-bindings` and
+  `cuda-pathfinder` from a toolkit extra, which the correct torch lock lacks). The same closure
+  decides which names an overlay may not pin. Against a first resolve, which holds only selected
+  packages, the name rule is used.
 - The repository `uv.lock` lives in the checkout, not the manifest repository, so the caller passes
   its path.
 - `check_integrity` returns the sha256 of each file it read. The bytes can change after the check,
