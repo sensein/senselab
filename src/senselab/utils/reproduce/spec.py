@@ -431,10 +431,22 @@ class NativeSpec(_Model):
 
 
 class RModule(_Model):
-    """The site R module and the version it provides."""
+    """The site R module, the version it provides, and modules loaded before it (e.g. a compiler).
 
-    module: str
+    ``build_modules`` are loaded, in order, before ``module`` for the R prefetch and the captured module
+    env, so packages with C++ sources (e.g. lme4) build with that compiler and find its runtime libraries.
+    """
+
+    module: ModuleName
     version: str
+    build_modules: list[ModuleName] = []
+
+    @field_validator("build_modules")
+    @classmethod
+    def _unique_modules(cls, value: list[str]) -> list[str]:
+        if len(set(value)) != len(value):
+            raise ValueError("r.build_modules has duplicates")
+        return value
 
 
 def _norm(path: Path) -> PurePosixPath:
