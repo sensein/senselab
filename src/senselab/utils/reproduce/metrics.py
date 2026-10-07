@@ -7,6 +7,7 @@ The shape is::
     {
       "headline": [{"name", "label"?, "value", "ci_low"?, "ci_high"?, "numdf"?, "dendf"?, "n"?,
                     "n_folds"?, "floor"?, "lift"?, "unit"?}],
+      "secondary": [entries of the same shape],
       "per_class": {label: {"recall"?, "precision"?, "f1"?, "prevalence"?}},
       "confusion": {"tp"?, "fp"?, "fn"?, "tn"?},
       "counts": {declared name: int},
@@ -16,7 +17,12 @@ The shape is::
       "n"?, "n_folds"?
     }
 
-Each kind allows its own headline names (`KIND_HEADLINES`); ``per_class`` belongs only to
+Each kind allows its own headline names (`HEADLINES_BY_KIND`) and secondary names
+(`SECONDARY_BY_KIND`). A classification step's only headline is ``balanced_accuracy``: raw accuracy
+means little without its null rate, so accuracy, top-1, macro F1, AUROC, PR-AUC, MCC and F1 are
+secondary metrics, each validated like a headline entry and carrying its floor (for accuracy and
+top-1, the majority-class prevalence) and lift. Detection, statistic and count steps take no
+secondary metrics. ``headline_labels`` label secondary entries too. ``per_class`` belongs only to
 classification and detection, and ``confusion`` only to classification (otherwise
 ``E_METRICS_KIND_KEY``). Headline values are range-checked: rates in [0, 1] (or [0, 100] for
 ``unit: pp``), ``mcc`` in [-1, 1] (likewise scaled), ``f_stat`` at least 0, and ``ci_low <= value <=
@@ -31,7 +37,7 @@ headline entry or in a ``per_class`` entry.
 
 - ``prevalence`` in [0, 1] for every declared class (classification: also ``recall`` and
   ``precision``, and prevalences summing to 1)
-- ``floor`` and ``lift`` on every headline entry; standard floors are checked (`expected_floor`),
+- ``floor`` and ``lift`` on every headline and secondary entry; standard floors are checked (`expected_floor`),
   with k the number of declared classes present (prevalence above 0); a declared class with
   prevalence 0 gives the warning ``W_CLASS_ABSENT``
 - ``threshold_tuning``; ``test`` is accepted and returned as the warning ``W_TUNED_ON_TEST``
@@ -44,8 +50,9 @@ by ``"<{min_cell}"``.
 
 Results are fixed codes only; nothing from the rejected content is echoed.
 
-A **metric address** names one value: ``<headline>``, ``<headline>@<label>``, ``counts.<name>``,
-``per_class.<label>.<field>`` or ``confusion.<cell>``.
+A **metric address** names one value: ``<name>``, ``<name>@<label>`` (a headline or secondary entry;
+the two name sets are disjoint), ``counts.<name>``, ``per_class.<label>.<field>`` or
+``confusion.<cell>``.
 """
 
 from __future__ import annotations
@@ -58,9 +65,8 @@ from typing import TYPE_CHECKING, Any, Literal, TypeGuard, get_args
 if TYPE_CHECKING:
     from senselab.utils.reproduce.spec import MetricsSchema
 
-HeadlineName = Literal[
+MetricName = Literal[
     "balanced_accuracy",
-    "macro_recall",
     "macro_f1",
     "auroc",
     "f1",
@@ -75,19 +81,25 @@ HeadlineName = Literal[
 ]
 MetricsKind = Literal["classification", "detection", "statistic", "count"]
 SplitOptOutReason = Literal["whole_dataset"]
-HEADLINE_NAMES: tuple[str, ...] = get_args(HeadlineName)
+METRIC_NAMES: tuple[str, ...] = get_args(MetricName)
 METRICS_KINDS: tuple[str, ...] = get_args(MetricsKind)
-KIND_HEADLINES: dict[str, frozenset[str]] = {
-    "classification": frozenset(
-        {"balanced_accuracy", "macro_recall", "macro_f1", "auroc", "f1", "accuracy", "top1", "pr_auc", "mcc"}
-    ),
+CLASSIFICATION_HEADLINE = "balanced_accuracy"
+HEADLINES_BY_KIND: dict[str, frozenset[str]] = {
+    "classification": frozenset({CLASSIFICATION_HEADLINE}),
     "detection": frozenset({"avg_map", "map_at"}),
     "statistic": frozenset({"f_stat"}),
     "count": frozenset({"count"}),
 }
+SECONDARY_BY_KIND: dict[str, frozenset[str]] = {
+    "classification": frozenset({"accuracy", "top1", "macro_f1", "auroc", "pr_auc", "mcc", "f1"}),
+    "detection": frozenset(),
+    "statistic": frozenset(),
+    "count": frozenset(),
+}
 CLASSIFICATION_KINDS = frozenset({"classification", "detection"})
-CHANCE_HEADLINES = frozenset({"balanced_accuracy", "macro_recall"})
-RATE_HEADLINES = (KIND_HEADLINES["classification"] | KIND_HEADLINES["detection"]) - {"mcc"}
+RATE_METRICS = (
+    HEADLINES_BY_KIND["classification"] | SECONDARY_BY_KIND["classification"] | HEADLINES_BY_KIND["detection"]
+) - {"mcc"}
 PRESENCE_ONLY_FLOORS = frozenset({"macro_f1", "avg_map", "map_at"})
 ENTRY_NUMBERS = ("value", "ci_low", "ci_high", "numdf", "dendf", "floor", "lift")
 ENTRY_INTS = ("n", "n_folds")
@@ -102,7 +114,7 @@ FOLD_KEYS = ("n_groups", "prevalence")
 TUNING_SPLITS = ("validation", "none", "test")
 DRIVER_KEYS = frozenset({"delta", "target", "tolerance", "pass"})
 TOP_KEYS = frozenset(
-    {"headline", "per_class", "confusion", "counts", "split_report", "threshold_tuning", "n", "n_folds"}
+    {"headline", "secondary", "per_class", "confusion", "counts", "split_report", "threshold_tuning", "n", "n_folds"}
 )
 SPLIT_KEYS = frozenset({"protocol", "unit", "stratify", "folds", "invariant_ok"})
 ENTRY_KEYS = frozenset({"name", "label", "unit", *ENTRY_NUMBERS, *ENTRY_INTS})
@@ -120,9 +132,11 @@ CODES = frozenset(
         "E_METRICS_NEGATIVE",
         "E_METRICS_BAD_TOKEN",
         "E_METRICS_UNDECLARED_HEADLINE",
+        "E_METRICS_UNDECLARED_SECONDARY",
         "E_METRICS_UNDECLARED_LABEL",
         "E_METRICS_UNDECLARED_COUNT",
         "E_METRICS_MISSING_HEADLINE",
+        "E_METRICS_MISSING_SECONDARY",
         "E_METRICS_MISSING_COUNT",
         "E_METRICS_NO_PREVALENCE",
         "E_METRICS_NO_CLASS_RATES",
@@ -179,21 +193,21 @@ def _is_number(value: object) -> TypeGuard[int | float]:
 
 
 def expected_floor(name: str, prevalence: Mapping[str, float], *, k: int, positive: str | None) -> float | None:
-    """The trivial-classifier value of a headline metric, as a fraction.
+    """The trivial-classifier value of a headline or secondary metric, as a fraction.
 
     Args:
-        name: The headline name.
+        name: The metric name.
         prevalence: Class label to prevalence on the scored split, for every declared class.
         k: The number of declared classes present on the scored split (prevalence above 0); an absent
             class does not count, as in scikit-learn's balanced accuracy.
         positive: The declared positive class of a binary step, or None.
 
     Returns:
-        ``1/k`` for balanced accuracy and macro recall, 0.5 for AUROC, 0 for MCC, the largest
+        ``1/k`` for balanced accuracy, 0.5 for AUROC, 0 for MCC, the largest
         prevalence for accuracy and top-1, ``p`` for PR-AUC and ``2p/(1+p)`` for F1 when a positive
         class ``p`` is declared; None when the floor is checked for presence only.
     """
-    if name in CHANCE_HEADLINES:
+    if name == CLASSIFICATION_HEADLINE:
         return 1.0 / k
     if name == "auroc":
         return 0.5
@@ -280,17 +294,18 @@ class _Check:
             return None
         return {c: float(v) for c, v in found.items()}
 
-    def headline(self, entries: object, prevalence: dict[str, float] | None) -> None:
+    def entries(self, entries: object, prevalence: dict[str, float] | None, *, secondary: bool) -> None:
         if not isinstance(entries, list):
             self.codes.add("E_METRICS_BAD_SHAPE")
             return
+        declared = self.schema.secondary if secondary else self.schema.headline
         for entry in entries:
             if not self.mapping(entry):
                 continue
             self.keys(entry, ENTRY_KEYS, driver=True)
             name = entry.get("name")
-            if name not in self.schema.headline:
-                self.codes.add("E_METRICS_UNDECLARED_HEADLINE")
+            if name not in declared:
+                self.codes.add("E_METRICS_UNDECLARED_SECONDARY" if secondary else "E_METRICS_UNDECLARED_HEADLINE")
             if "label" in entry and entry["label"] not in self.schema.headline_labels:
                 self.codes.add("E_METRICS_UNDECLARED_LABEL")
             if "value" not in entry:
@@ -313,7 +328,7 @@ class _Check:
         scale = 100.0 if entry.get("unit") == "pp" else 1.0
         if name == "mcc":
             low, high = -scale, scale
-        elif name in RATE_HEADLINES:
+        elif name in RATE_METRICS:
             low, high = 0.0, scale
         elif name == "f_stat":
             low, high = 0.0, math.inf
@@ -459,12 +474,17 @@ class _Check:
             self.codes.add("E_METRICS_KIND_KEY")
         elif "per_class" in obj:
             self.per_class(obj["per_class"], obj.get("n"))
-        entries = obj.get("headline", [])
-        self.headline(entries, self.scored_prevalence(obj.get("per_class")))
-        if isinstance(entries, list):
-            names = {e.get("name") for e in entries if isinstance(e, dict) and isinstance(e.get("name"), str)}
-            if set(self.schema.headline) - names:
-                self.codes.add("E_METRICS_MISSING_HEADLINE")
+        prevalence = self.scored_prevalence(obj.get("per_class"))
+        for key, declared, missing in (
+            ("headline", self.schema.headline, "E_METRICS_MISSING_HEADLINE"),
+            ("secondary", self.schema.secondary, "E_METRICS_MISSING_SECONDARY"),
+        ):
+            entries = obj.get(key, [])
+            self.entries(entries, prevalence, secondary=key == "secondary")
+            if isinstance(entries, list):
+                names = {e.get("name") for e in entries if isinstance(e, dict) and isinstance(e.get("name"), str)}
+                if set(declared) - names:
+                    self.codes.add(missing)
         if "confusion" in obj and not self.classification:
             self.codes.add("E_METRICS_KIND_KEY")
         elif "confusion" in obj:
@@ -539,18 +559,19 @@ def metric_address_error(address: str, schema: MetricsSchema) -> str | None:
     """Check that a metric address names a value the schema allows.
 
     Args:
-        address: ``<headline>``, ``<headline>@<label>``, ``counts.<name>``, ``per_class.<label>.<field>``
-            or ``confusion.<cell>``.
+        address: ``<name>``, ``<name>@<label>`` (a headline or secondary metric), ``counts.<name>``,
+            ``per_class.<label>.<field>`` or ``confusion.<cell>``.
         schema: The step's ``metrics_schema``.
 
     Returns:
-        None when the address is valid, otherwise a fixed code from `ADDRESS_CODES`.
+        None when the address is valid, otherwise a fixed code from `ADDRESS_CODES`
+        (``E_METRICS_UNDECLARED_HEADLINE`` for a name in neither ``headline`` nor ``secondary``).
     """
     parsed = _parse_address(address)
     if parsed is None:
         return "E_METRICS_BAD_ADDRESS"
     if parsed[0] == "headline":
-        if parsed[1] not in schema.headline:
+        if parsed[1] not in (*schema.headline, *schema.secondary):
             return "E_METRICS_UNDECLARED_HEADLINE"
         if parsed[2] and parsed[2] not in schema.headline_labels:
             return "E_METRICS_UNDECLARED_LABEL"
@@ -561,13 +582,47 @@ def metric_address_error(address: str, schema: MetricsSchema) -> str | None:
     return None
 
 
+Quantity = Literal["rate", "mcc", "statistic", "count"]
+SCALED_QUANTITIES = frozenset({"rate", "mcc"})
+
+
+def metric_quantity(address: str) -> Quantity | None:
+    """The kind of number a metric address names, which fixes its range and whether it takes a unit.
+
+    Args:
+        address: A metric address (see `metric_address_error`).
+
+    Returns:
+        ``rate`` (a headline or secondary rate, or a per-class field, in [0, 1] or percentage points), ``mcc`` (in
+        [-1, 1], likewise scaled), ``statistic`` (``f_stat``) or ``count`` (a ``count`` headline,
+        ``counts.*`` or ``confusion.*``); None for a malformed address or an unknown headline name.
+    """
+    parsed = _parse_address(address)
+    if parsed is None:
+        return None
+    if parsed[0] == "per_class":
+        return "rate"
+    if parsed[0] in ("counts", "confusion"):
+        return "count"
+    name = parsed[1]
+    if name == "mcc":
+        return "mcc"
+    if name in RATE_METRICS:
+        return "rate"
+    if name == "f_stat":
+        return "statistic"
+    if name == "count":
+        return "count"
+    return None
+
+
 def metric_value(obj: Mapping[str, Any], address: str) -> float:
     """Read one value from a validated ``metrics.json`` object.
 
     Args:
         obj: A clean object returned by `validate_metrics`.
-        address: A metric address (see `metric_address_error`). A bare headline name must match one
-            entry; ``<name>@<label>`` selects the entry with that label.
+        address: A metric address (see `metric_address_error`). A bare name must match one headline or
+            secondary entry; ``<name>@<label>`` selects the entry with that label.
 
     Returns:
         The number.
@@ -584,7 +639,7 @@ def metric_value(obj: Mapping[str, Any], address: str) -> float:
         _, name, label = parsed
         found = [
             e
-            for e in obj.get("headline", [])
+            for e in (*obj.get("headline", []), *obj.get("secondary", []))
             if e.get("name") == name and (e.get("label") == label if label else True) and "value" in e
         ]
         if len(found) > 1:
