@@ -81,6 +81,27 @@ Hinkley 1997, ch. 3.8). Rows from one subject are correlated, so a row bootstrap
 interval width. **Model comparison** uses a paired cluster bootstrap of the difference, or DeLong's
 test for two correlated ROC-AUCs (DeLong et al. 1988) with the midrank algorithm of Sun & Xu (2014).
 
+**Bootstrap details.** `bootstrap.py`; B = 2000 by default; percentile intervals (`np.percentile`,
+linear), 2.5 and 97.5 for 95 %.
+
+- Groups are ordered by first appearance and keep their rows in input order; each resample is one
+  `Generator.integers(0, n_groups, n_groups)` call, so a seed fixes every resample. The resampling is
+  not stratified: the groups carry the label mix, and the convention ported here does not stratify.
+- Predictions are fixed before resampling (a tuned threshold is applied once, with `>=`); nothing is
+  re-tuned inside a resample. Balanced accuracy in a resample is `classification.balanced_accuracy`,
+  the headline function, so a resample that drops one of several classes averages over the classes
+  it holds and is not biased low.
+- A resample whose truth holds one class is skipped and counted (`n_skipped`, reported on every
+  interval); a metric undefined on a kept resample is left out for that metric (`n_used`).
+- `score_classification(groups=...)` adds intervals for balanced accuracy, macro-F1, MCC, and ROC-AUC
+  and average precision when scores exist, each computed exactly as the report computes the metric.
+  With B = 2000 this costs seconds per report, because the per-class metrics run per resample.
+- `legacy_cluster_bootstrap` reproduces the lab's earlier binary bootstrap (`provenance.md`, row
+  `cluster_bootstrap_ci`): fixed threshold, F1, balanced accuracy, ROC-AUC and average precision.
+  A test reimplements that algorithm and requires identical interval bounds.
+- `paired_cluster_bootstrap_delta` resamples groups once per draw and scores both models on the
+  same rows.
+
 **Balanced accuracy's formula.** Recall averaged over the labels present in `y_true`, with invalid
 outputs counted as misses (`balanced_accuracy`): the same as scikit-learn's
 `balanced_accuracy_score`, and the definition whose trivial value is the `1/k` floor a reproduction

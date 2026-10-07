@@ -12,7 +12,7 @@ investigator. Each row names the senselab symbol, the origin it was ported from,
 | senselab symbol | Origin | Authors |
 |---|---|---|
 | `delong_test` | `private sensein repository @ c2b11516b305799544ee6b4c6af52360f80c3b1d:evaluation/delong_and_effect_sizes.py` | sensein lab member |
-| `cluster_bootstrap_ci` | `private sensein repository @ c2b11516b305799544ee6b4c6af52360f80c3b1d:evaluation/bootstrap_ci_groupstrat.py` | sensein lab member |
+| `cluster_bootstrap_ci`, `legacy_cluster_bootstrap` | `private sensein repository @ c2b11516b305799544ee6b4c6af52360f80c3b1d:evaluation/bootstrap_ci_groupstrat.py` | sensein lab member |
 | `tune_threshold` | `private sensein repository @ c2b11516b305799544ee6b4c6af52360f80c3b1d:mil/mil_utils.py` | sensein lab member |
 | `grouped_splits` (stratified group k-fold wrapper) | `private sensein repository @ c95b727c2ee06d226cdd2c168afddf731923e9e4:evaluation/group_stratified_kfold.py` | sensein lab member |
 | `event_f1` | `private sensein repository @ c95b727c2ee06d226cdd2c168afddf731923e9e4:evaluation/onset_tolerance_f1.py` | sensein lab member |

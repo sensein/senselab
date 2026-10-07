@@ -33,7 +33,7 @@ import math
 from collections import Counter
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import Any, Dict, List, Literal, Mapping, Optional, Sequence, Tuple, Union
+from typing import Any, Callable, Dict, List, Literal, Mapping, Optional, Sequence, Tuple, Union
 from typing import Protocol as TypingProtocol
 
 import numpy as np
@@ -45,6 +45,7 @@ from sklearn.metrics import (
     roc_auc_score,
 )
 
+from senselab.utils.evaluation.bootstrap import DEFAULT_RESAMPLES, BootstrapCI, _bootstrap, _validate
 from senselab.utils.evaluation.protocol import PROTOCOLS, Protocol
 from senselab.utils.evaluation.splits import SplitReport
 
@@ -193,6 +194,9 @@ class ClassificationReport:
         threshold: `{value, objective, split_name}` of the decision threshold, if one was applied here.
         threshold_tuning: `validation` (a threshold tuned on another split) or `none`.
         split_report: The split report of the splits this split came from, if given.
+        ci: With `groups`, cluster-bootstrap intervals for `balanced_accuracy`, `f1_macro`, `mcc`, and
+            `roc_auc` and `average_precision` when scores exist; each records its method, resamples,
+            seed, groups and skipped resamples. `None` without groups.
         headline: Always `balanced_accuracy`.
     """
 
@@ -217,6 +221,7 @@ class ClassificationReport:
     threshold: Optional[Mapping[str, Any]]
     threshold_tuning: Literal["validation", "none"]
     split_report: Optional[SplitReport]
+    ci: Optional[Mapping[str, BootstrapCI]] = None
     headline: str = field(default=HEADLINE, init=False)
 
     def _metrics(self) -> Dict[str, MetricValue]:
@@ -297,6 +302,40 @@ def _scores_and_floors(
     return _metric(float(np.mean(aucs)), 0.5), _metric(float(np.mean(aps)), 1.0 / present)
 
 
+def _mcc(truth: np.ndarray, pred: np.ndarray) -> float:
+    """MCC; 0 when truth and predictions hold a single value between them (scikit-learn's convention)."""
+    y_t, y_p = truth.tolist(), pred.tolist()
+    return 0.0 if len(set(y_t) | set(y_p)) < 2 else float(matthews_corrcoef(y_t, y_p))
+
+
+def _resample_statistics(
+    truth: np.ndarray, pred: np.ndarray, scores: Optional[np.ndarray], labels: List[str], positive: Optional[str]
+) -> Dict[str, Callable[[np.ndarray], Optional[float]]]:
+    """Row-index statistics for the bootstrap, computed exactly as the report computes them."""
+
+    def macro_f1(rows: np.ndarray) -> float:
+        """Macro-F1 over the labels present in the resample."""
+        prevalence = {lab: float(np.mean(truth[rows] == lab)) for lab in labels}
+        return float(np.mean(_per_class(truth[rows], pred[rows], labels, prevalence)[1]))
+
+    statistics: Dict[str, Callable[[np.ndarray], Optional[float]]] = {
+        HEADLINE: lambda rows: balanced_accuracy(truth[rows], pred[rows]),
+        "f1_macro": macro_f1,
+        "mcc": lambda rows: _mcc(truth[rows], pred[rows]),
+    }
+    if scores is not None:
+
+        def ranking(rows: np.ndarray, which: int) -> Optional[float]:
+            """ROC-AUC (0) or average precision (1) on the resample, `None` where undefined."""
+            prevalence = {lab: float(np.mean(truth[rows] == lab)) for lab in labels}
+            value = _scores_and_floors(truth[rows], scores[rows], labels, positive, prevalence)[which]
+            return None if value is None else value.value
+
+        statistics["roc_auc"] = lambda rows: ranking(rows, 0)
+        statistics["average_precision"] = lambda rows: ranking(rows, 1)
+    return statistics
+
+
 def _same_split(a: str, b: str) -> bool:
     """Split names compared without case or surrounding whitespace."""
     return a.strip().casefold() == b.strip().casefold()
@@ -357,6 +396,9 @@ def score_classification(
     threshold: Optional[ThresholdLike] = None,
     threshold_tuning: Optional[ThresholdTuning] = None,
     reference_prevalence: Optional[Mapping[str, float]] = None,
+    groups: Optional[Union[np.ndarray, Sequence[Any]]] = None,
+    n_resamples: int = DEFAULT_RESAMPLES,
+    seed: int = 0,
 ) -> ClassificationReport:
     """Score one split.
 
@@ -386,6 +428,10 @@ def score_classification(
             refused. With `threshold`, it may only be `validation` or omitted.
         reference_prevalence: Optional reference label distribution (for example the training set's):
             declared labels, values in [0, 1] summing to 1.
+        groups: Optional group id per row (for example the subject); when given, intervals come from a
+            cluster bootstrap over groups, scoring the same fixed predictions in every resample.
+        n_resamples: Bootstrap resamples (default 2000).
+        seed: Bootstrap seed (default 0).
 
     Returns:
         The report.
@@ -474,12 +520,10 @@ def score_classification(
             "counts": tuple(tuple(pairs[(r, c)] for c in columns) for r in label_list),
         }
     )
-    y_t, y_p = truth.tolist(), pred.tolist()
     secondary = {
         "accuracy": _metric(float(np.mean(truth == pred)), max(prevalence.values())),
         "f1_macro": _metric(float(np.mean(present_f1)), floor_k),
-        # One value across truth and predictions leaves MCC undefined; scikit-learn's convention is 0.
-        "mcc": _metric(0.0 if len(set(y_t) | set(y_p)) < 2 else float(matthews_corrcoef(y_t, y_p)), 0.0),
+        "mcc": _metric(_mcc(truth, pred), 0.0),
     }
     f1_positive = None if positive is None else per_class[positive]["f1"]
     if positive is not None and f1_positive is not None:
@@ -487,6 +531,19 @@ def score_classification(
         secondary["f1"] = _metric(f1_positive, 2 * p / (1 + p))
     roc, ap = (None, None) if scores is None else _scores_and_floors(truth, scores, label_list, positive, prevalence)
     balanced = _metric(balanced_accuracy(truth, pred), floor_k)
+    ci = None
+    if groups is not None:
+        group_arr = _validate(n, groups, n_resamples, 0.95)
+        ci = MappingProxyType(
+            _bootstrap(
+                _resample_statistics(truth, pred, scores, label_list, positive),
+                truth,
+                group_arr,
+                n_resamples=n_resamples,
+                seed=seed,
+                confidence=0.95,
+            )
+        )
     return ClassificationReport(
         protocol=protocol,
         split_name=split_name,
@@ -509,6 +566,7 @@ def score_classification(
         threshold=threshold_record,
         threshold_tuning=tuning,
         split_report=split_report,
+        ci=ci,
     )
 
 
