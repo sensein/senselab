@@ -2,7 +2,8 @@
 
 `step_key` is the sha256 of `canonical_json` over `step_key_payload`: everything that decides a
 step's result, and nothing volatile (job ids, visible GPUs, ``TMPDIR``, ``HOME``, the date, where the
-data roots or results live, the partition, the step's name or repository URL). A step's outputs live
+data roots or results live, the partition and limits, ``min_driver``, the step's own name or its
+repository URL). `native_digests` and `driver_env_sha256` compute two of its run-time inputs. A step's outputs live
 in `result_dir` = ``<results_root>/<step_key>``. The dir is complete (`is_done`) once its
 ``summary.json`` exists with ``"exit": 0``; `write_summary` writes that file whole or not at all,
 and is the last write of a run. `claim` holds a `SharedFileLock` on
@@ -20,19 +21,28 @@ import json
 import os
 import re
 import shutil
+import sys
 import uuid
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
+from importlib.metadata import distributions
 from pathlib import Path
 from typing import Any
 
 from senselab.utils.file_lock import SharedFileLock
+from senselab.utils.reproduce.digest import input_set_digest
 from senselab.utils.reproduce.env import env_key
 from senselab.utils.reproduce.sandbox import keyed_templates
 from senselab.utils.reproduce.source import patch_set_sha256
 from senselab.utils.reproduce.spec import Profile, StepSpec
 
-STEP_KEY_SCHEMA = "reproduce-step-key-1"
+STEP_KEY_SCHEMA = "reproduce-step-key-2"
+# Bump DRIVER_SEMANTICS whenever driver-side code changes what a step's result dir holds or whether it
+# passes: metrics validation (`metrics.validate_metrics`), min-cell suppression, expectation
+# evaluation (targets, tolerances, delta, pass), the GPU and canary guards, the child preamble, and
+# the sandbox script (`sandbox.sandbox_script`, `sandbox.build_env`).
+DRIVER_SEMANTICS = 1
+DRIVER_PACKAGE = "senselab"
 SUMMARY = "summary.json"
 CLAIMS = ".claims"
 R_KINDS = frozenset({"r", "ir_notebook"})
@@ -43,10 +53,13 @@ CODES = frozenset(
         "E_KEY_UPSTREAM",
         "E_KEY_INPUTS",
         "E_KEY_ADAPTER",
+        "E_KEY_NATIVE",
         "E_KEY_SUBMODULES",
         "E_KEY_R_SESSION",
         "E_KEY_NO_WHEELS",
         "E_RESULT_DONE",
+        "E_RESULT_NOT_DIR",
+        "E_RESULT_RESET",
         "E_RESULT_MISSING",
         "E_CLAIM_HELD",
         "E_RUN_BAD_NAME",
@@ -92,6 +105,51 @@ def canonical_json(obj: object) -> bytes:
     return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False).encode()
 
 
+def _native_dirs(profile: Profile, name: str) -> list[Path]:
+    spec = profile.native[name]
+    return [*spec.bin_dirs, *spec.lib_dirs]
+
+
+def native_digests(step: StepSpec, profile: Profile) -> dict[str, list[str]]:
+    """Digest the content of every native dir a step selects, for `step_key`'s ``native``.
+
+    Args:
+        step: The step.
+        profile: The caller's profile.
+
+    Returns:
+        Each name in ``step.resources.native`` mapped to one `digest.input_set_digest` hex per dir
+        (``bin_dirs`` then ``lib_dirs``), taken over every file below it.
+
+    Raises:
+        CacheError: ``E_KEY_NATIVE`` if the step selects a native entry the profile lacks.
+        DigestError: As `digest.input_set_digest` with ``require_nonempty``, e.g. ``E_DIGEST_EMPTY``.
+    """
+    if not set(step.resources.native) <= set(profile.native):
+        raise CacheError("E_KEY_NATIVE")
+    return {
+        name: [input_set_digest(d, ["**"], require_nonempty=True)[0] for d in _native_dirs(profile, name)]
+        for name in step.resources.native
+    }
+
+
+def driver_env_sha256() -> str:
+    """The identity of the driver's own interpreter env, for an adapter that runs in it.
+
+    Returns:
+        A hex sha256 over ``sys.version`` and the sorted ``name==version`` of every installed
+        distribution except `DRIVER_PACKAGE` itself, whose driver-side behaviour is `DRIVER_SEMANTICS`.
+    """
+    names = sorted(
+        {
+            f"{d.metadata['Name'].lower().replace('_', '-')}=={d.version}"
+            for d in distributions()
+            if d.metadata["Name"] and d.metadata["Name"].lower() != DRIVER_PACKAGE
+        }
+    )
+    return hashlib.sha256(canonical_json({"python": sys.version, "distributions": names})).hexdigest()
+
+
 def step_key_payload(
     step: StepSpec,
     profile: Profile,
@@ -99,7 +157,9 @@ def step_key_payload(
     upstream: Mapping[str, str],
     submodules: Mapping[str, str],
     adapter_sha256: str,
+    adapter_env_sha256: str,
     input_digests: Sequence[str],
+    native: Mapping[str, Sequence[str]],
     r_session_sha256: str | None = None,
     r_module_env_sha256: str | None = None,
 ) -> dict[str, Any]:
@@ -113,7 +173,11 @@ def step_key_payload(
         submodules: Submodule path to 40-hex commit, as the checkout records it; empty when the step
             does not use submodules.
         adapter_sha256: The sha256 of the step's adapter script.
+        adapter_env_sha256: The identity of the interpreter env that runs the adapter: the step venv's
+            ``installed_sha256``, or `driver_env_sha256` when the adapter runs in the driver's env.
         input_digests: One `digest.input_set_digest` hex per ``step.inputs`` entry, in manifest order.
+        native: Each name in ``step.resources.native`` mapped to `native_digests`' digests for it (one per
+            ``bin_dirs`` then ``lib_dirs`` entry of the profile's `NativeSpec`), and nothing else.
         r_session_sha256: The sha256 of the prefetch ``SESSION.json``; required for ``r`` and
             ``ir_notebook`` steps and refused for others.
         r_module_env_sha256: The sha256 of the captured R module env; required and refused likewise.
@@ -124,7 +188,8 @@ def step_key_payload(
     Raises:
         CacheError: ``E_KEY_UPSTREAM`` if ``upstream`` is not exactly the needs with hex keys,
             ``E_KEY_INPUTS`` if the input digests do not match ``step.inputs`` one to one,
-            ``E_KEY_ADAPTER`` for an adapter sha256 that is not hex, ``E_KEY_SUBMODULES`` for a commit
+            ``E_KEY_ADAPTER`` for an adapter or adapter-env sha256 that is not hex, ``E_KEY_NATIVE`` if
+            ``native`` does not give one hex digest per selected native dir, ``E_KEY_SUBMODULES`` for a commit
             that is not 40-hex or submodules on a step that disables them, ``E_KEY_R_SESSION`` for R
             digests missing on an R step or given on another, ``E_KEY_NO_WHEELS`` for an env with
             sdist builds and no recorded ``wheels.lock``.
@@ -134,8 +199,16 @@ def step_key_payload(
         raise CacheError("E_KEY_UPSTREAM")
     if len(input_digests) != len(step.inputs) or not all(_is_sha256(d) for d in input_digests):
         raise CacheError("E_KEY_INPUTS")
-    if not _is_sha256(adapter_sha256):
+    if not (_is_sha256(adapter_sha256) and _is_sha256(adapter_env_sha256)):
         raise CacheError("E_KEY_ADAPTER")
+    selected = step.resources.native
+    if set(native) != set(selected) or not all(
+        name in profile.native
+        and len(native[name]) == len(_native_dirs(profile, name))
+        and all(_is_sha256(d) for d in native[name])
+        for name in selected
+    ):
+        raise CacheError("E_KEY_NATIVE")
     if (submodules and not step.submodules) or not all(
         isinstance(p, str) and p and isinstance(c, str) and _COMMIT.match(c) for p, c in submodules.items()
     ):
@@ -151,6 +224,7 @@ def step_key_payload(
         raise CacheError("E_KEY_NO_WHEELS")
     return {
         "schema": STEP_KEY_SCHEMA,
+        "driver_semantics": DRIVER_SEMANTICS,
         "commit": step.commit,
         "submodules": dict(sorted(submodules.items())),
         "patch_set_sha256": patch_set_sha256(step.patches),
@@ -164,12 +238,23 @@ def step_key_payload(
         "kind": step.kind,
         "argv": list(step.argv),
         "cwd": step.cwd,
-        "inputs": [i.model_dump(mode="json") for i in step.inputs],
+        "inputs": [{"root": i.root, "patterns": sorted(set(i.patterns))} for i in step.inputs],
         "input_digests": list(input_digests),
-        "stage": [s.model_dump(mode="json") for s in step.stage],
+        "stage": [{"root": s.root, "patterns": sorted(set(s.patterns)), "dest": s.dest} for s in step.stage],
         "outputs": list(step.outputs),
+        "native": {name: list(native[name]) for name in sorted(selected)},
+        "gpu_arch": None if step.resources.gpu_arch is None else sorted(set(step.resources.gpu_arch)),
         "adapter_sha256": adapter_sha256,
-        "hf_weights": [w.model_dump(mode="json") for w in step.hf_weights],
+        "adapter_env_sha256": adapter_env_sha256,
+        "hf_weights": [
+            {
+                "repo": w.repo,
+                "repo_type": w.repo_type,
+                "revision": w.revision,
+                "files": sorted(([f.path, f.sha256] for f in w.files)),
+            }
+            for w in sorted(step.hf_weights, key=lambda w: (w.repo, w.repo_type))
+        ],
         "r_session_sha256": r_session_sha256,
         "r_module_env_sha256": r_module_env_sha256,
         "metrics_schema": step.metrics_schema.model_dump(mode="json"),
@@ -186,7 +271,9 @@ def step_key(
     upstream: Mapping[str, str],
     submodules: Mapping[str, str],
     adapter_sha256: str,
+    adapter_env_sha256: str,
     input_digests: Sequence[str],
+    native: Mapping[str, Sequence[str]],
     r_session_sha256: str | None = None,
     r_module_env_sha256: str | None = None,
 ) -> str:
@@ -198,7 +285,9 @@ def step_key(
         upstream: Each need's step key.
         submodules: Submodule path to commit.
         adapter_sha256: The adapter script's sha256.
+        adapter_env_sha256: The identity of the env that runs the adapter.
         input_digests: One input-set digest per ``step.inputs`` entry.
+        native: Each selected native entry's dir digests.
         r_session_sha256: The prefetch ``SESSION.json`` sha256 (R steps only).
         r_module_env_sha256: The captured R module env sha256 (R steps only).
 
@@ -215,7 +304,9 @@ def step_key(
         upstream=upstream,
         submodules=submodules,
         adapter_sha256=adapter_sha256,
+        adapter_env_sha256=adapter_env_sha256,
         input_digests=input_digests,
+        native=native,
         r_session_sha256=r_session_sha256,
         r_module_env_sha256=r_module_env_sha256,
     )
@@ -284,7 +375,7 @@ def write_summary(out: Path, summary: Mapping[str, Any]) -> Path:
     text = json.dumps(dict(summary), indent=2, sort_keys=True, allow_nan=False) + "\n"
     target = out / SUMMARY
     tmp = out / f".{SUMMARY}.{uuid.uuid4().hex}.tmp"
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o660)
     try:
         try:
             os.write(fd, text.encode())
@@ -299,23 +390,32 @@ def write_summary(out: Path, summary: Mapping[str, Any]) -> Path:
     return target
 
 
-def reset_result_dir(out: Path) -> Path:
+def reset_result_dir(results_root: Path, key: str) -> Path:
     """Give a step an empty result dir, removing what an incomplete or failed run left; call under `claim`.
 
     Args:
-        out: The step's result dir.
+        results_root: The profile's results root.
+        key: The step key.
 
     Returns:
-        ``out``, now an empty directory.
+        The step's result dir (`result_dir`), now an empty directory.
 
     Raises:
-        CacheError: ``E_RESULT_DONE`` if ``out`` is complete; it is left untouched.
+        CacheError: ``E_KEY_BAD`` for a malformed key, ``E_RESULT_NOT_DIR`` if a symlink or non-directory
+            holds the path, ``E_RESULT_DONE`` if the dir is complete (it is left untouched),
+            ``E_RESULT_RESET`` if removing or creating it fails.
     """
+    out = result_dir(results_root, key)
+    if out.is_symlink() or (os.path.lexists(out) and not out.is_dir()):
+        raise CacheError("E_RESULT_NOT_DIR")
     if is_done(out):
         raise CacheError("E_RESULT_DONE")
-    if out.exists() or out.is_symlink():
-        shutil.rmtree(out)
-    out.mkdir(parents=True)
+    try:
+        if out.exists():
+            shutil.rmtree(out)
+        out.mkdir(parents=True)
+    except OSError:
+        raise CacheError("E_RESULT_RESET") from None
     return out
 
 
@@ -398,7 +498,7 @@ def link_run(run: Path, step: str, out: Path) -> Path:
         raise CacheError("E_RESULT_MISSING")
     run.mkdir(parents=True, exist_ok=True)
     link = run / step
-    if link.exists(follow_symlinks=False) and not link.is_symlink():
+    if os.path.lexists(link) and not link.is_symlink():
         raise CacheError("E_LINK_NOT_SYMLINK")
     target = os.path.relpath(os.path.realpath(out), os.path.realpath(run))
     if link.is_symlink() and os.readlink(link) == target:

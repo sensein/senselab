@@ -95,7 +95,7 @@ def _expecting(target: str, metric: str, from_metric: str, **expect: Any) -> Ste
     )
 
 
-ACCEPTED = {
+ACCEPTED: dict[str, tuple[str, str, dict[str, Any]]] = {
     "same-headline": ("top1", "top1", {}),
     "labelled-headline": ("macro_recall", "top1@sys_a", {}),
     "rate-from-per-class": ("top1", "per_class.walk.recall", {}),
@@ -113,7 +113,7 @@ def test_from_step_metric_accepted(case: str) -> None:
     assert _names(toposort(steps)) == ["target", "score"]
 
 
-REFUSED = {
+REFUSED: dict[str, tuple[str, str, dict[str, Any], str]] = {
     "undeclared-headline": ("top1", "auroc", {}, "E_DAG_FROM_STEP_METRIC"),
     "undeclared-label": ("top1", "top1@sys_b", {}, "E_DAG_FROM_STEP_METRIC"),
     "undeclared-count": ("counts.n_clips", "counts.n_rows", {}, "E_DAG_FROM_STEP_METRIC"),
@@ -122,7 +122,6 @@ REFUSED = {
     "rate-from-count": ("top1", "counts.n_clips", {}, "E_DAG_FROM_STEP_UNIT"),
     "count-from-rate": ("counts.n_clips", "top1", {}, "E_DAG_FROM_STEP_UNIT"),
     "rate-from-mcc": ("top1", "mcc", {}, "E_DAG_FROM_STEP_UNIT"),
-    "unit-on-a-count": ("counts.n_clips", "counts.n_clips", {"unit": "pp"}, "E_DAG_FROM_STEP_UNIT"),
 }
 
 
@@ -154,6 +153,23 @@ def test_from_step_metric_against_a_statistic_step() -> None:
     with pytest.raises(DagError) as info:
         check_expect_sources([target, _expecting("target", "top1", "top1")])
     assert info.value.code == "E_DAG_FROM_STEP_METRIC"
+
+
+def test_unit_only_on_a_rate_or_mcc() -> None:
+    """Any expectation with a unit on a count or statistic is refused, from_step or not."""
+    count_schema = {"kind": "count", "headline": ["count"]}
+    with pytest.raises(ValueError, match="E_SPEC_EXPECT_UNIT"):
+        _step(
+            "c",
+            metrics_schema=count_schema,
+            expect=[{"metric": "count", "value": 5, "tolerance": 1, "unit": "pp", "kind": "abs"}],
+        )
+    with pytest.raises(ValueError, match="E_SPEC_EXPECT_UNIT"):
+        _step("c", expect=[{"metric": "counts.n_clips", "value": 5, "unit": "fraction", "kind": "exact"}])
+    with pytest.raises(ValueError, match="E_SPEC_EXPECT_UNIT"):
+        _expecting("target", "counts.n_clips", "counts.n_clips", unit="pp")
+    _step("c", metrics_schema=count_schema, expect=[{"metric": "count", "value": 5, "tolerance": 1, "kind": "abs"}])
+    _step("c", expect=[{"metric": "mcc", "value": 50, "tolerance": 1, "unit": "pp", "kind": "abs"}])
 
 
 def test_tolerance_from_steps_must_declare_the_metric() -> None:

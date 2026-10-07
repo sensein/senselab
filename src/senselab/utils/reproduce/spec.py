@@ -34,10 +34,12 @@ from senselab.utils.reproduce.metrics import (
     CHANCE_HEADLINES,
     CLASSIFICATION_KINDS,
     KIND_HEADLINES,
+    SCALED_QUANTITIES,
     HeadlineName,
     MetricsKind,
     SplitOptOutReason,
     metric_address_error,
+    metric_quantity,
 )
 
 Commit = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{40}$")]
@@ -308,8 +310,8 @@ class ToleranceFrom(_Model):
 
     steps: list[str] = Field(min_length=2)
     rule: Literal["max(a, k*sd)"]
-    a: Annotated[float, Field(ge=0)]
-    k: Annotated[float, Field(ge=0)]
+    a: Annotated[float, Field(ge=0, allow_inf_nan=False)]
+    k: Annotated[float, Field(ge=0, allow_inf_nan=False)]
 
     @field_validator("steps")
     @classmethod
@@ -328,12 +330,17 @@ class Expect(_Model):
     """
 
     metric: str
-    value: float | None = None
+    value: Annotated[float, Field(allow_inf_nan=False)] | None = None
     from_step: FromStep | None = None
-    tolerance: Annotated[float, Field(ge=0)] | None = None
+    tolerance: Annotated[float, Field(ge=0, allow_inf_nan=False)] | None = None
     tolerance_from: ToleranceFrom | None = None
     unit: Literal["fraction", "pp"] | None = None
     kind: Literal["abs", "exact", "none"]
+
+    @field_validator("value", "tolerance")
+    @classmethod
+    def _no_negative_zero(cls, value: float | None) -> float | None:
+        return 0.0 if value == 0 else value
 
     @model_validator(mode="after")
     def _shape(self) -> "Expect":
@@ -441,6 +448,10 @@ class StepSpec(_Model):
     """One step: a repository commit, an env, an argv template, its inputs, outputs and expectations.
 
     ``hf_weights`` has no default: a manifest states ``[]`` for a step that loads no Hugging Face weights.
+    Every ``stage`` entry drawn from a data root must repeat an ``inputs`` entry (same root, same
+    patterns in any order), so its content is digested and keyed; ``checkout`` and ``up:`` stages are
+    keyed by the commit, patches and upstream keys. An expectation ``unit`` is allowed only on a rate
+    or ``mcc`` metric (`metrics.metric_quantity`).
     """
 
     name: Name
@@ -489,6 +500,18 @@ class StepSpec(_Model):
             code = metric_address_error(expect.metric, self.metrics_schema)
             if code is not None:
                 raise ValueError(f"step {self.name!r} expect metric {expect.metric!r} is not in metrics_schema: {code}")
+            if expect.unit is not None and metric_quantity(expect.metric) not in SCALED_QUANTITIES:
+                raise ValueError(
+                    f"E_SPEC_EXPECT_UNIT: step {self.name!r} expect metric {expect.metric!r} takes no unit"
+                )
+        digested = {(i.root, frozenset(i.patterns)) for i in self.inputs}
+        for index, stage in enumerate(self.stage):
+            data_root = stage.root not in RESERVED_ROOT_NAMES and not stage.root.startswith("up:")
+            if data_root and (stage.root, frozenset(stage.patterns)) not in digested:
+                raise ValueError(
+                    f"E_SPEC_STAGE_UNDIGESTED: step {self.name!r} stage[{index}] has no inputs entry "
+                    "with the same root and patterns"
+                )
         if self.kind in ("notebook", "ir_notebook") and self.env.notebook_tools is None:
             raise ValueError(f"kind {self.kind} needs env.notebook_tools")
         if self.kind in ("r", "ir_notebook") and (
