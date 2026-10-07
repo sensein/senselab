@@ -104,13 +104,11 @@ class Emptiness:
     """The bypass that decides a recording nothing routed carried nothing to route.
 
     Attributes:
-        peak_streams: The ``<stream>|<classifier>`` summaries whose highest tracked-label score
-            must all fall below the floor.
-        peak_floor: The score every named stream must stay under.
+        active_s_max: The seconds of activity BACKGROUND may read over the floor in a recording that
+            carried nothing.
     """
 
-    peak_streams: tuple[str, ...]
-    peak_floor: float
+    active_s_max: float
 
 
 @dataclass(frozen=True)
@@ -299,10 +297,7 @@ def load_ruleset(config: TriageConfig) -> Ruleset:
         )
         for name, row in config.require(f"{RULESET_PATH}.gates").items()
     }
-    emptiness = Emptiness(
-        peak_streams=tuple(str(stream) for stream in config.require(f"{RULESET_PATH}.emptiness.peak_streams")),
-        peak_floor=float(config.require(f"{RULESET_PATH}.emptiness.peak_floor")),
-    )
+    emptiness = Emptiness(active_s_max=float(config.require(f"{RULESET_PATH}.emptiness.active_s_max")))
 
     for branch, set_name in reference.items():
         if set_name not in FAMILY_SETS:
@@ -347,21 +342,13 @@ def evaluate_emptiness(features: RecordingFeatures, emptiness: Emptiness) -> Gat
         emptiness: The precondition.
 
     Returns:
-        ``FIRED`` when every named stream's highest tracked-label score is under the floor,
-        ``SILENT`` when at least one is at or over it, and ``UNAVAILABLE`` when a named stream's
-        summary is not in the store at all.
+        ``FIRED`` where BACKGROUND read at most ``active_s_max`` seconds of activity over the floor,
+        ``SILENT`` where it read more, and ``UNAVAILABLE`` where it wrote no reading.
     """
-    for stream in emptiness.peak_streams:
-        name, _, classifier = stream.partition("|")
-        value = detector_value(
-            features,
-            Detector(name="emptiness", kind="", reader=("stream_peak_max", name, classifier), unit="", thresholds=()),
-        )
-        if value is None:
-            return GateOutcome.UNAVAILABLE
-        if value >= emptiness.peak_floor:
-            return GateOutcome.SILENT
-    return GateOutcome.FIRED
+    active = features.activity.get("active_s")
+    if active is None:
+        return GateOutcome.UNAVAILABLE
+    return GateOutcome.FIRED if active <= emptiness.active_s_max else GateOutcome.SILENT
 
 
 def gate_value(features: RecordingFeatures, gate: Gate) -> float | None:

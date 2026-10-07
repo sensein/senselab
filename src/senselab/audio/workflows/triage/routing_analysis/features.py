@@ -219,6 +219,8 @@ class RecordingFeatures:
         squim: ``{"<population>.<metric>.<statistic>": value}`` over the per-span SQUIM
             assertions, plus ``<population>.n`` and ``<population>.unmeasured``.
         level: The whole-file ``level`` measurement's scalars.
+        activity: ``active_s``, the seconds of activity BACKGROUND read over the floor; empty where
+            it wrote no reading.
         disruptions: The whole-file ``disruptions_file`` measurement's scalars.
         silence: ``threshold``, ``n_windows``, ``n_silence`` and ``fraction`` from the YAMNet
             ``Silence`` projection.
@@ -260,6 +262,7 @@ class RecordingFeatures:
     span_coverage: dict[str, float] = field(default_factory=dict)
     squim: dict[str, float] = field(default_factory=dict)
     level: dict[str, float] = field(default_factory=dict)
+    activity: dict[str, float] = field(default_factory=dict)
     disruptions: dict[str, float] = field(default_factory=dict)
     silence: dict[str, float] = field(default_factory=dict)
     praat: dict[str, float] = field(default_factory=dict)
@@ -719,6 +722,10 @@ def _absorb_measurement(
         return
     if name == "level":
         features.level = {key: float(attributes[key]) for key in LEVEL_KEYS if key in attributes}
+        return
+    if name == "background_model":
+        active = attributes.get("active_s")
+        features.activity = {} if attributes.get("missing") or active is None else {"active_s": float(active)}
         return
     if name == "disruptions_file":
         features.disruptions = {key: float(attributes[key]) for key in DISRUPTION_KEYS if key in attributes}
