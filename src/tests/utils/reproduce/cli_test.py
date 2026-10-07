@@ -20,7 +20,7 @@ import pytest
 import yaml
 
 from senselab.utils.reproduce import build, cache, cli, env, lockgen, run, sandbox, slurm, source
-from senselab.utils.reproduce.spec import load_manifest
+from senselab.utils.reproduce.spec import load_manifest, load_profile
 from tests.utils.reproduce.run_test import ADAPTER, World
 from tests.utils.reproduce.slurm_test import FakeSbatch, _step
 
@@ -731,6 +731,8 @@ def test_manual_settle_cancels_pending_jobs_and_records_why(
         calls.append(argv)
         if argv[0] == "sacct":
             return subprocess.CompletedProcess(argv, 0, "TIMEOUT\n", "")
+        if argv[0] == "squeue":
+            return subprocess.CompletedProcess(argv, 0, "11 s1\n13 s1\n14 other\n", "")
         return subprocess.CompletedProcess(argv, 1 if argv[0] == "scancel" and scancel_fails["now"] else 0)
 
     monkeypatch.setattr(slurm, "default_runner", fake)
@@ -744,7 +746,7 @@ def test_manual_settle_cancels_pending_jobs_and_records_why(
     run.update_run_record(runs, day, "demo", rows, order=["a", "b", "c"])
     argv = ["run", str(path), *site.common(), "--date", DATE, "--finalize", "--submission", "s1"]
     assert site.main(*argv) == cli.EXIT_OK
-    assert calls[0] == ["scancel", "11", "12"]
+    assert [c for c in calls if c[0] == "scancel"][0] == ["scancel", "11", "12", "13"]
     got = {r["step"]: r for r in json.loads((runs / DATE / "demo" / run.RUN_JSON).read_text())["steps"]}
     assert got["a"]["codes"] == ["E_JOB_ENDED_WITHOUT_RECORD"] and got["a"]["slurm_state"] == "TIMEOUT"
     assert got["b"]["codes"] == ["E_UPSTREAM_NOT_DONE"] and "slurm_state" not in got["b"]
@@ -753,7 +755,7 @@ def test_manual_settle_cancels_pending_jobs_and_records_why(
     run.update_run_record(runs, day, "demo", rows[:2], order=["a", "b", "c"])
     scancel_fails["now"] = True
     assert site.main(*argv) == cli.EXIT_OK
-    assert "E_SCANCEL_FAILED: job(s) 11,12 may still be queued" in capsys.readouterr().err
+    assert "E_SCANCEL_FAILED: job(s) 11,12,13 may still be queued" in capsys.readouterr().err
 
 
 def test_a_changed_manifest_marks_dependents_and_keeps_row_order(
@@ -775,3 +777,114 @@ def test_a_changed_manifest_marks_dependents_and_keeps_row_order(
         ("a", "failed", ["E_MANIFEST_CHANGED"]),
         ("b", "never-ran", ["E_MANIFEST_CHANGED"]),
     ]
+
+
+def test_a_local_run_refuses_a_live_submission(site: Site, capsys: pytest.CaptureFixture[str]) -> None:
+    """A local run, full or ``--step``, exits 1 with E_SUBMIT_OVERLAP while a submission has pending rows."""
+    path = site.manifest("demo", _step("a"))
+    row: dict[str, Any] = {
+        "step": "a",
+        "key": None,
+        "status": "pending",
+        "exit": None,
+        "codes": [],
+        "job": "9",
+        "submission": "s1",
+    }
+    run.update_run_record(site.tmp / "runs", datetime.date.fromisoformat(DATE), "demo", [row], order=["a"])
+    for extra in ([], ["--step", "a"]):
+        assert site.main("run", str(path), *site.common(), "--date", DATE, *extra) == cli.EXIT_FAILED
+        assert "E_SUBMIT_OVERLAP" in capsys.readouterr().err
+    rows = json.loads((site.tmp / "runs" / DATE / "demo" / run.RUN_JSON).read_text())["steps"]
+    assert rows == [row]
+
+
+@needs_userns
+def test_a_full_local_run_keeps_a_submissions_rows(world: World) -> None:
+    """A full local run writes its rows only where no submission tagged one; tagged rows stay as they were."""
+    manifest = world.dag()
+    world.prefetch(manifest)
+    config = world.config()
+    tagged = {"step": "prep", "key": "e" * 64, "status": "executed", "exit": 0, "codes": [], "submission": "s1"}
+    run.update_run_record(config.profile.runs_root, config.date, "demo", [tagged], order=["prep", "score"])
+    outcomes = {o.step: o for o in run.run_steps([manifest], config)}
+    assert outcomes["prep"].ok and outcomes["score"].ok
+    record = world.tmp / "runs" / config.date.isoformat() / "demo" / run.RUN_JSON
+    rows = {r["step"]: r for r in json.loads(record.read_text())["steps"]}
+    assert rows["prep"] == tagged and rows["score"]["status"] == "executed"
+
+
+def test_a_placeholder_row_settles_as_aborted(site: Site) -> None:
+    """A pending row with no job id was never submitted: finalize writes E_SUBMIT_ABORTED."""
+    path = site.manifest("demo", _step("a"))
+    row: dict[str, Any] = {
+        "step": "a",
+        "key": None,
+        "status": "pending",
+        "exit": None,
+        "codes": [],
+        "job": None,
+        "submission": "s1",
+    }
+    run.update_run_record(site.tmp / "runs", datetime.date.fromisoformat(DATE), "demo", [row], order=["a"])
+    config = run.RunConfig(profile=load_profile(site.profile_path), cache=site.cache, base_dir=site.base)
+    config.date = datetime.date.fromisoformat(DATE)
+    run.finalize_run_records([load_manifest(path)], config, submission="s1")
+    (got,) = json.loads((site.tmp / "runs" / DATE / "demo" / run.RUN_JSON).read_text())["steps"]
+    assert got["status"] == "never-ran" and got["codes"] == ["E_SUBMIT_ABORTED"]
+
+
+FAKE_SLURM = {
+    "sbatch": """#!/bin/bash
+cat >/dev/null
+echo "sbatch $*" >> "$CALL_LOG"
+sleep 1
+n=$(( $(cat "$COUNTER" 2>/dev/null || echo 100) + 1 )); echo $n > "$COUNTER"; echo $n
+""",
+    "scontrol": '#!/bin/bash\necho "scontrol $*" >> "$CALL_LOG"\n',
+    "scancel": '#!/bin/bash\necho "scancel $*" >> "$CALL_LOG"\n',
+    "squeue": "#!/bin/bash\n",
+}
+
+
+@pytest.mark.slow
+def test_two_cli_submits_on_nfs_have_exactly_one_winner(site: Site, request: pytest.FixtureRequest) -> None:
+    """Two real ``submit`` processes against one run dir on NFS: one submits, the other refuses with no sbatch."""
+    from tests.utils.reproduce.conftest import _filesystem_type
+
+    kind = _filesystem_type(site.tmp) or ""
+    base = site.tmp if kind.startswith("nfs") else Path(request.getfixturevalue("nfs_dir"))
+    site.write_profile(runs_root=str(base / "runs"), slurm_logs_root=str(base / "slurm"))
+    fake = site.tmp / "fakebin"
+    fake.mkdir()
+    for name, text in FAKE_SLURM.items():
+        (fake / name).write_text(text)
+        (fake / name).chmod(0o750)
+    path = site.manifest("demo", _step("a"), _step("b", needs=["a"]))
+    src = Path(__file__).resolve().parents[3]
+    argv = [sys.executable, "-m", "senselab.utils.reproduce", "submit", str(path), *site.common(), "--date", DATE]
+    procs = []
+    for label in ("A", "B"):
+        env_vars = {
+            "PATH": f"{fake}:/usr/bin:/bin",
+            "PYTHONPATH": str(src),
+            "HOME": str(site.tmp),
+            "UV_CACHE_DIR": "/c/uv",
+            "UV_PYTHON_INSTALL_DIR": "/c/py",
+            "CALL_LOG": str(site.tmp / f"calls-{label}"),
+            "COUNTER": str(site.tmp / f"counter-{label}"),
+        }
+        if "LD_LIBRARY_PATH" in os.environ:
+            env_vars["LD_LIBRARY_PATH"] = os.environ["LD_LIBRARY_PATH"]
+        procs.append(
+            (label, subprocess.Popen(argv, env=env_vars, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True))
+        )
+    results = {label: (p.wait(timeout=300), p.stderr.read() if p.stderr else "") for label, p in procs}
+    codes = sorted(code for code, _ in results.values())
+    assert codes == [cli.EXIT_OK, cli.EXIT_FAILED], results
+    loser = next(label for label, (code, _) in results.items() if code != cli.EXIT_OK)
+    assert "E_SUBMIT_OVERLAP" in results[loser][1]
+    loser_calls = site.tmp / f"calls-{loser}"
+    assert not loser_calls.exists() or "sbatch" not in loser_calls.read_text()
+    rows = json.loads((base / "runs" / DATE / "demo" / run.RUN_JSON).read_text())["steps"]
+    assert len({r["submission"] for r in rows}) == 1 and all(r["job"] for r in rows)
