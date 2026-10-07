@@ -355,6 +355,52 @@ There is no review-rate target; parameters are never tuned to move the review ra
 - The session-group floor needs a session index over the corpus. The r17 parquet has
   session-level fields; the group floor is computed once per session and stored.
 
+## Unit A: the generic layer (built)
+
+Code: `background_model.py`, parameters `data/background_model.yaml`, written by QUALITY as the
+`background_model` measurement (signal `plain`) on every recording; nothing decides on it yet.
+QUALITY runs whatever routing selected (`run.py`, after the branch loop), so unrouted recordings get
+it too. Where the `plain` stream is absent the measurement records `missing: ["plain"]`.
+
+**Floor.** Per band (the breath train's nine subbands, 150–7500 Hz), a first pass takes the 10th
+percentile of live frames; active frames (C2 test), widened by 0.1 s, are removed and the floor is
+re-read as the median of what is left, up to four times. Two cases cannot be read off the
+recording's own quiet frames:
+- under 0.5 s of quiet frames;
+- the "quiet" frames are the task itself (685fb824, 68d62b1e: a vowel filling the file). The
+  residual tells: there the residual's 20th percentile sits ≥10 dB under the own floor in at least
+  half the bands, because the residual (`plain − g·enhanced`, same scale) carries the background
+  but not the voice.
+
+In either case the floor is the residual's. Both floors are recorded with the source
+(`quiet_frames`, `residual`, `digital`). The session-group floor is not built yet.
+
+**Impulses.** On a 2 ms envelope of the pre-emphasised samples, read against its 200 ms running
+median: a peak ≥15 dB over its background, rising within 5 ms, back within 3 dB of its background
+within 80 ms, and with no other candidate within 30 ms. Attack and duration together keep a quick
+breath (≈0.25 s noise body, slow onset; 2bb59c22) out. The isolation rule is what keeps a voiced
+vowel out: a glottal pulse train is a run of sharp peaks a few ms apart, each of which passes the
+attack and duration tests on its own (found on the synthetic sawtooth vowel).
+
+**Activity.** A frame is active where at least 30% of bands stand 6 dB over their floor
+(the C2 `q` and `m`, both unfitted); runs are bridged across 0.1 s, kept from 0.1 s, and an
+impulse's own frames never make a region. Each region carries its peak over the broadband floor,
+the largest band share, and its onset and offset times (to within 3 dB of its peak).
+
+**Hum.** Residual mains lines, as VOICE's guard: ≥3 multiples of 50 or 60 Hz standing 10 dB over
+their 2–8 Hz neighbourhood (31/36 hum, 0/30 clean, 2026-10-06). VOICE's f0-lock criterion stays in
+VOICE: it needs a pitch track the generic layer does not compute.
+
+**Faults.**
+- Shutoff: VOICE's detector, moved here and read on every recording (VOICE now imports it).
+- Dropouts and discontinuities: their extents on the original recording
+  (`disruption_extents`, same parameters as `disruptions.*`), discontinuities closer than 10 ms
+  joined.
+- Clipping: one reading, PREPROCESS's clip spans that no unclipped sample contradicts. They carry
+  extents (the join needs them) and are audited by the clip self-check; the whole-file
+  `|x| ≥ 0.999` count has no extents and is retired from QUALITY's reading. Retiring the
+  parquet's `raw_clipped_s` column follows with the parquet change in unit C.
+
 ## Decided (owner, 2026-10-07)
 
 1. **Review-acceptable labels.** "OK if flagged or discarded" and "leave as contested" score review
