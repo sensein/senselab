@@ -531,3 +531,59 @@ breathing-band rhythm of 17 and 27 dB. They are not labelled. A rhythm is not al
 8. **SQUIM is reported only**, deciding nothing until a labelled test shows it separates.
 9. **A dropout or clip inside a task span flags**, with its minimum duration fitted from labels;
    outside the span it is an annotation.
+10. **Decision vocabulary** (owner: "rename and use these in the decision table"). Verdict is
+    `pass` · `review` · `discard`; `flag` is renamed `review` and `rerun` stops being a verdict.
+    Release is `as_is` · `redacted` · `withheld` (redaction-policy holds only) and is empty on a
+    discard. Pre-alpha: the old values are replaced outright, with no aliases.
+11. **Evidence is row and task specific** (owner: "evidence should be row/task specific and can be
+    different for different rows"). The decision table carries the items that produced each row's
+    decision; a long table carries every item read.
+
+## Decision table
+
+The fold writes, beside the verdict, everything a reviewer needs to read the decision back.
+
+**Run status.** A recording the pipeline still owes something (a missing derivative, a node that did
+not finish, a configuration the fold cannot read, or a release it could not assess) has
+`run_status = incomplete`, `missing` naming the operational grounds, verdict `review` and reason
+`not_measured`. The replay manifest selects on `run_status`, not on a verdict value. At r17 the 460
+`rerun` recordings and the 3 `not_assessed` releases are these.
+
+**Reasons.** `data/decision_reasons.yaml` maps every ground key the fold writes to one of fourteen
+reasons and orders them: the discard reasons (`unmeasurable`, `task_too_short`, `no_task_captured`,
+`task_not_found`) before the review reasons (`not_measured`, `fault_in_task`,
+`interference_in_task`, `other_speaker`, `weak_events`, `streams_disagree`, `task_not_conforming`,
+`identifying_content`, `second_opinion_disagrees`), then the release axis (`redaction_hold`).
+`reason` is the first of a recording's reasons; `reasons` is all of them. A release ground maps
+through its own section, because `unplaced_finding_unread` names both a review ground and a
+withholding release ground. A ground key the vocabulary does not map is logged at fold time and
+fails `decision_test.py`.
+
+**Evidence items.** The fold emits one item per reading it weighed, at the point it weighed it: name,
+value, unit, comparison, threshold and effect (`pass`, `review`, `discard`, `withhold` on the
+release axis, or `annotation`), and whether it was decisive. On a discard the item behind the discard
+ground is decisive; on a review every item whose effect is review; on a pass the task and gate items
+that passed; a withholding release item always. Instruction comparisons (breaths, coughs and glide
+travel against the instruction) are annotations and never decide a pass. The breath items read the
+task layer's own decision inputs (`task_events.decision_inputs`), so the table repeats the
+comparison `decide` made rather than reconstructing it. `data/decision_evidence.yaml` names every
+item by family group with the unit that produces it; an item a later unit produces (unit C's
+stream agreement, in-span interference and faults, nothing captured, the session floor) is absent
+until then rather than a null column. `withhold` extends the owner's effect list
+(pass / review / discard / annotation) for release-axis items, which move no verdict.
+
+**Tables.** `scripts/triage_recording_vectors.py` writes, beside each recording-vectors shard,
+`triage_decisions.NNN.parquet` and `triage_evidence.NNN.parquet` from the same run directories, and
+the merge writes `triage_decisions.parquet`, `triage_decisions.tsv` and `triage_evidence.parquet`.
+
+| `triage_decisions` | |
+| --- | --- |
+| identity | `participant`, `session`, `task`, `declared_family`, `stem`, `run_dir` |
+| decision | `verdict`, `release`, `reason`, `reasons`, `run_status`, `missing` |
+| task | `extent_start_s`, `extent_end_s`, `extent_duration_s`, `annotations` |
+| evidence | `evidence`: the decisive items, `list<struct{name, value, unit, comparison, threshold, effect}>`; value and threshold as JSON |
+| review | `figure_path` (`summary/summary.pdf`), `audio_paths` (the task cuts, else the recording) |
+| provenance | `commit` (the last replay or refold marker's), `config_hash` (VERDICT's), `schema_version` |
+
+`triage_evidence` holds one row per (recording, item) with `group`, the item's fields and
+`decisive`. In the TSV, list and struct columns are compact JSON.
