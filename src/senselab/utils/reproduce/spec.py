@@ -49,7 +49,7 @@ from senselab.utils.reproduce.metrics import (
 
 Commit = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{40}$")]
 Sha256 = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
-Name = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9_.-]+$")]
+Name = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9_][A-Za-z0-9_.-]*$")]
 Label = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9][A-Za-z0-9_+-]{0,63}$")]
 CountName = Annotated[str, StringConstraints(pattern=r"^[a-z][a-z0-9_]{0,63}$")]
 SourceRoot = Annotated[str, StringConstraints(pattern=r"^(up:)?[A-Za-z0-9_.-]+$")]
@@ -552,9 +552,13 @@ def _unique_names(steps: list[StepSpec]) -> list[StepSpec]:
 
 
 class Manifest(_Model):
-    """One analysis: a name and its steps."""
+    """One analysis: a name and its steps.
 
-    name: str
+    The analysis and step names name directories and appear in batch job names (``reproduce-<step>``),
+    which every user of the cluster can list, so they must not carry anything sensitive.
+    """
+
+    name: Name
     steps: list[StepSpec] = Field(min_length=1)
 
     _unique = field_validator("steps")(_unique_names)
@@ -693,6 +697,21 @@ def _read(path: Path) -> Any:  # noqa: ANN401
     if path.suffix in (".yaml", ".yml"):
         return yaml.safe_load(text)
     raise ValueError(f"expected a .yaml, .yml or .json file: {path}")
+
+
+def parse_manifest(data: bytes, suffix: str) -> Manifest:
+    """Validate a manifest from bytes already read (so they can be hashed first).
+
+    Args:
+        data: The file's bytes.
+        suffix: ``.json``, ``.yaml`` or ``.yml``.
+
+    Returns:
+        The validated manifest.
+    """
+    if suffix not in (".json", ".yaml", ".yml"):
+        raise ValueError(f"expected a .yaml, .yml or .json file, not {suffix!r}")
+    return Manifest.model_validate(_parse(data.decode(), suffix))
 
 
 def load_manifest(path: str | os.PathLike[str]) -> Manifest:

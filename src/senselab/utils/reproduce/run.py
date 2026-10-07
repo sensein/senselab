@@ -603,7 +603,7 @@ def run_step(
     upstream = upstream or {}
     if any(name not in upstream or not upstream[name].ok for name in step.needs):
         _unlink_run(config, analysis, step.name)
-        return StepOutcome(step.name, None, "never-ran", None, (), None)
+        return StepOutcome(step.name, None, "never-ran", None, upstream_codes(step, upstream), None)
     seen: dict[str, Path] = {}
     with _quiet_log():
         try:
@@ -1455,7 +1455,7 @@ def resolve_step(
     """
     upstream = upstream or {}
     if any(name not in upstream or not upstream[name].ok for name in step.needs):
-        return StepOutcome(step.name, None, "never-ran", None, (), None)
+        return StepOutcome(step.name, None, "never-ran", None, upstream_codes(step, upstream), None)
     with _quiet_log():
         try:
             keyed = _key(step, analysis, config, upstream)
@@ -1478,9 +1478,15 @@ def _row(outcome: StepOutcome) -> dict[str, Any]:
     }
 
 
-def never_ran_row(step: str) -> dict[str, Any]:
-    """The ``run.json`` row of a step that did not run and will not: no key, no exit, no codes."""
-    return {"step": step, "key": None, "status": "never-ran", "exit": None, "codes": []}
+def upstream_codes(step: StepSpec, upstream: Mapping[str, StepOutcome]) -> tuple[str, ...]:
+    """Why a step never ran: the codes of its needs that did not succeed, else ``E_UPSTREAM_NOT_DONE``."""
+    codes = {c for name in step.needs if name in upstream and not upstream[name].ok for c in upstream[name].codes}
+    return tuple(sorted(codes)) or ("E_UPSTREAM_NOT_DONE",)
+
+
+def never_ran_row(step: str, codes: Sequence[str] = ()) -> dict[str, Any]:
+    """The ``run.json`` row of a step that did not run and will not: no key, no exit."""
+    return {"step": step, "key": None, "status": "never-ran", "exit": None, "codes": list(codes)}
 
 
 def read_run_record(path: Path) -> list[dict[str, Any]]:
@@ -1514,6 +1520,7 @@ def update_run_record(
     *,
     order: Sequence[str],
     pending_only: bool = False,
+    submission: str | None = None,
 ) -> None:
     """Merge rows into ``<runs_root>/<date>/<analysis>/run.json`` under an exclusive lock.
 
@@ -1527,6 +1534,7 @@ def update_run_record(
         rows: Rows with at least ``step``.
         order: Step names in DAG order.
         pending_only: Change only rows that exist and are still ``pending``; others are left as they are.
+        submission: Change only rows tagged with this submission id.
 
     Raises:
         OSError: If the run dir, the lock or the file cannot be written.
@@ -1540,6 +1548,8 @@ def update_run_record(
         for row in rows:
             old = current.get(row["step"])
             if pending_only and (old is None or old.get("status") != PENDING):
+                continue
+            if submission is not None and (old is None or old.get("submission") != submission):
                 continue
             current[row["step"]] = {**(old or {}), **row}
         position = {name: index for index, name in enumerate(order)}
@@ -1559,26 +1569,39 @@ def _descendants(specs: Mapping[str, StepSpec], roots: set[str]) -> set[str]:
     return found
 
 
-def finalize_run_records(manifests: Sequence[Manifest], config: RunConfig) -> None:
+def finalize_run_records(manifests: Sequence[Manifest], config: RunConfig, submission: str | None = None) -> None:
     """Mark every row still ``pending`` as ``never-ran``, once every job of a submission has ended.
 
     A job Slurm cancelled (``--kill-on-invalid-dep``) or killed before it wrote its row leaves it
-    ``pending``; after the last job ends nothing can still write it.
+    ``pending``; after the last job ends nothing of that submission can still write it, except a requeued
+    job, whose later row replaces this one.
 
     Args:
         manifests: The manifests of the submission.
         config: The run configuration (its ``date`` is the submission's run date).
+        submission: Only rows tagged with this submission id are touched; None touches every pending row.
     """
     ordered = toposort([s for m in manifests for s in m.steps])
     for manifest in manifests:
         names = {s.name for s in manifest.steps}
         order = [s.name for s in ordered if s.name in names]
-        rows = [never_ran_row(name) for name in order]
-        update_run_record(config.profile.runs_root, config.date, manifest.name, rows, order=order, pending_only=True)
+        rows = [never_ran_row(name, ("E_UPSTREAM_NOT_DONE",)) for name in order]
+        update_run_record(
+            config.profile.runs_root,
+            config.date,
+            manifest.name,
+            rows,
+            order=order,
+            pending_only=True,
+            submission=submission,
+        )
 
 
 def run_steps(
-    manifests: Sequence[Manifest], config: RunConfig, only: Collection[str] | None = None
+    manifests: Sequence[Manifest],
+    config: RunConfig,
+    only: Collection[str] | None = None,
+    submission: str | None = None,
 ) -> list[StepOutcome]:
     """Run every step of a set of manifests in DAG order (`dag.toposort`), or only the named ones.
 
@@ -1589,13 +1612,14 @@ def run_steps(
 
     With ``only``, the named steps run and every step they depend on, directly or not, is resolved with
     `resolve_step` (keyed, never run). Only the named steps' rows are written, merged into ``run.json``
-    (`update_run_record`); a named step that did not succeed also turns its dependants' ``pending`` rows
+    (`update_run_record`); a named step that did not succeed also turns its dependents' ``pending`` rows
     into ``never-ran``.
 
     Args:
         manifests: The manifests; step names are unique across them.
         config: The run configuration.
         only: Step names to run; None runs every step.
+        submission: With ``only``, the submission id whose ``pending`` dependent rows a failure may settle.
 
     Returns:
         One outcome per step run, in run order (with ``only``, the named steps only).
@@ -1607,7 +1631,7 @@ def run_steps(
     specs = {s.name: s for m in manifests for s in m.steps}
     ordered = toposort(list(specs.values()))
     if only is not None:
-        return _run_only(config, analysis, specs, ordered, set(only))
+        return _run_only(config, analysis, specs, ordered, set(only), submission)
     outcomes: dict[str, StepOutcome] = {}
     for step in ordered:
         upstream = {name: outcomes[name] for name in step.needs}
@@ -1633,6 +1657,7 @@ def _run_only(
     specs: Mapping[str, StepSpec],
     ordered: Sequence[StepSpec],
     only: set[str],
+    submission: str | None,
 ) -> list[StepOutcome]:
     unknown = sorted(only - set(specs))
     if unknown:
@@ -1654,16 +1679,26 @@ def _run_only(
         else:
             outcomes[step.name] = resolve_step(step, analysis[step.name], config, upstream)
     selected = [outcomes[s.name] for s in ordered if s.name in only]
-    dependants = _descendants(specs, {o.step for o in selected if not o.ok}) - only
-    for name in sorted({analysis[o.step] for o in selected} | {analysis[d] for d in dependants}):
+    failed = [o for o in selected if not o.ok]
+    dependents = _descendants(specs, {o.step for o in failed}) - only
+    why = tuple(sorted({c for o in failed for c in o.codes})) or ("E_UPSTREAM_NOT_DONE",)
+    for name in sorted({analysis[o.step] for o in selected} | {analysis[d] for d in dependents}):
         order = [s.name for s in ordered if analysis[s.name] == name]
         own = [_row(o) for o in selected if analysis[o.step] == name]
-        gone = [never_ran_row(d) for d in order if d in dependants]
+        gone = [never_ran_row(d, why) for d in order if d in dependents]
         try:
             if own:
                 update_run_record(config.profile.runs_root, config.date, name, own, order=order)
             if gone:
-                update_run_record(config.profile.runs_root, config.date, name, gone, order=order, pending_only=True)
+                update_run_record(
+                    config.profile.runs_root,
+                    config.date,
+                    name,
+                    gone,
+                    order=order,
+                    pending_only=True,
+                    submission=submission,
+                )
         except (OSError, TypeError, ValueError, RunError, cache.CacheError):
             for o in selected:
                 if analysis[o.step] == name:
