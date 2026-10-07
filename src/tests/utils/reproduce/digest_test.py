@@ -12,6 +12,7 @@ from senselab.utils.reproduce.digest import (
     DigestError,
     digest_unchanged,
     input_set_digest,
+    matching_files,
     pattern_matches,
 )
 
@@ -210,3 +211,24 @@ def test_symlinked_directories_followed_only_in_fixed_leading_components(tmp_pat
     assert input_set_digest(root, ["*/one.csv"])[1] == 1
     assert input_set_digest(root, ["via/one.csv"])[1] == 1
     assert input_set_digest(root, ["via/**/*.csv"])[1] == 2
+
+
+def test_matching_files_selects_what_the_digest_hashes(tmp_path: Path) -> None:
+    """The stage selection is the digest's: same files, same count, no symlinked dir under a wildcard."""
+    root = _tree(tmp_path / "r")
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "three.csv").write_text("z\n")
+    (root / "a" / "linked").symlink_to(elsewhere, target_is_directory=True)
+    files = matching_files(root, PATTERNS)
+    assert files == ["a/deep/two.csv", "a/one.csv", "top.json"]
+    assert len(files) == input_set_digest(root, PATTERNS)[1]
+    assert matching_files(root, ["a/linked/*.csv"]) == ["a/linked/three.csv"]
+    assert matching_files(root, ["a/**/*.csv"], exclude=["a/deep"]) == ["a/one.csv"]
+    with pytest.raises(DigestError) as info:
+        matching_files(root, ["none/*.csv"], require_nonempty=True)
+    assert info.value.code == "E_DIGEST_EMPTY"
+    (root / "a" / "dangling.csv").symlink_to(tmp_path / "missing")
+    with pytest.raises(DigestError) as info:
+        matching_files(root, PATTERNS)
+    assert info.value.code == "E_DIGEST_UNREADABLE"

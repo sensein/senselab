@@ -1,0 +1,701 @@
+"""Tests for the step runner: keys and skips, the sandboxed run, expectations, adapters and provenance.
+
+Every repository, venv, data root and result tree here is built in ``tmp_path`` from synthetic files.
+Venvs are stdlib venvs of the test interpreter with a hand-written marker, so nothing is installed.
+"""
+
+from __future__ import annotations
+
+import contextlib
+import hashlib
+import json
+import logging
+import os
+import subprocess
+import venv
+from collections.abc import Iterator, Sequence
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from senselab.utils.reproduce import cache, digest, env, host, run, sandbox, source
+from senselab.utils.reproduce.digest import input_set_digest
+from senselab.utils.reproduce.run import RunConfig, StepOutcome, evaluate_expect, run_step, run_steps
+from senselab.utils.reproduce.spec import Manifest, Profile, StepSpec
+
+SHA = "ab" * 32
+MARKER = "MARKER-STDOUT-7731"
+OFFLINE_CANARY = "192.0.2.1:9"
+REFUSED_CANARY = "127.0.0.1:9"
+needs_userns = pytest.mark.skipif(not sandbox.userns_available(), reason="unprivileged user namespaces are unavailable")
+
+FIXTURE_ENV = {
+    "PATH": "/usr/bin:/bin",
+    "LANG": "C.UTF-8",
+    "GIT_CONFIG_NOSYSTEM": "1",
+    "GIT_CONFIG_GLOBAL": os.devnull,
+    "GIT_AUTHOR_NAME": "fixture",
+    "GIT_AUTHOR_EMAIL": "fixture@example.invalid",
+    "GIT_COMMITTER_NAME": "fixture",
+    "GIT_COMMITTER_EMAIL": "fixture@example.invalid",
+    "GIT_AUTHOR_DATE": "@1000000000 +0000",
+    "GIT_COMMITTER_DATE": "@1000000000 +0000",
+}
+
+STEP_SCRIPT = """\
+# v0
+import json, os, pathlib, sys
+mode, out, src = sys.argv[1], pathlib.Path(sys.argv[2]), pathlib.Path(sys.argv[3])
+print("MARKER-STDOUT-7731")
+if mode == "write-root":
+    (src.parent / "evil.txt").write_text("x")
+if mode == "write-cwd":
+    pathlib.Path("written-in-cwd.txt").write_text("x")
+if mode == "prep":
+    value = float(src.read_text().strip())
+elif mode == "stage":
+    value = float((out / "stage" / "data" / "in" / "a.txt").read_text()) + len(list((out / "stage").rglob("*.txt")))
+else:
+    value = 2 * json.loads(src.read_text())["value"]
+(out / "result.json").write_text(json.dumps({"value": value}))
+"""
+
+ADAPTER = """\
+import json, pathlib, sys
+from senselab.utils.reproduce.metrics import METRIC_NAMES
+assert "f_stat" in METRIC_NAMES
+out, dest = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
+value = json.loads((out / "result.json").read_text())["value"]
+dest.write_text(json.dumps({"headline": [{"name": "f_stat", "value": value, "numdf": 1, "dendf": 10}]}))
+"""
+
+
+def _git(cwd: Path, *args: str) -> str:
+    argv = ["git", "-c", "init.defaultBranch=main", "-C", str(cwd), *args]
+    env_vars = {**FIXTURE_ENV, "HOME": str(cwd)}
+    return subprocess.run(argv, env=env_vars, check=True, capture_output=True, text=True).stdout
+
+
+def _sha(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+class World:
+    """A synthetic site: one repository, a manifest repository, a data root, a profile and a cache."""
+
+    def __init__(self, tmp: Path) -> None:
+        """Build the site under ``tmp``."""
+        self.tmp = tmp
+        self.repo = tmp / "upstream" / "analysis"
+        self.repo.mkdir(parents=True)
+        _git(self.repo, "init", "-q")
+        (self.repo / "step.py").write_text(STEP_SCRIPT)
+        _git(self.repo, "add", "-A")
+        _git(self.repo, "commit", "-q", "-m", "analysis")
+        self.commit = _git(self.repo, "rev-parse", "HEAD").strip()
+        self.base = tmp / "manifests"
+        (self.base / "patches").mkdir(parents=True)
+        (self.base / "adapter.py").write_text(ADAPTER)
+        (self.base / "adapter_prep.py").write_text(ADAPTER)
+        self.write_patch("# v1")
+        self.data = tmp / "data"
+        (self.data / "in").mkdir(parents=True)
+        (self.data / "in" / "a.txt").write_text("2\n")
+        self.cache = tmp / "cache"
+        self.env_map = {"MODE": "a"}
+        self.canary = OFFLINE_CANARY
+        self.wheels_sha: str | None = None
+
+    def write_patch(self, line: str) -> None:
+        """Write the patch that changes the step script's first line to ``line``."""
+        context = "".join(f" {c}\n" for c in STEP_SCRIPT.splitlines()[1:4])
+        text = f"--- a/step.py\n+++ b/step.py\n@@ -1,4 +1,4 @@\n-# v0\n+{line}\n{context}"
+        (self.base / "patches" / "p.patch").write_text(text)
+
+    def profile(self) -> Profile:
+        """The profile, rebuilt from the current env map and canary host."""
+        return Profile.model_validate(
+            {
+                "roots": {"data": str(self.data)},
+                "results_root": str(self.tmp / "results"),
+                "runs_root": str(self.tmp / "runs"),
+                "slurm_logs_root": str(self.tmp / "slurm"),
+                "env": dict(self.env_map),
+                "partitions": {"cpu": {"partition": "p", "cpus": 1, "mem": "1G", "time": "0:10:00"}},
+                "build": "cpu",
+                "deny_patterns_file": str(self.tmp / "deny.txt"),
+                "canary_host": self.canary,
+            }
+        )
+
+    def config(self, **change: Any) -> RunConfig:  # noqa: ANN401
+        """A run configuration for this world."""
+        return RunConfig(profile=self.profile(), cache=self.cache, base_dir=self.base, **change)
+
+    def step(self, name: str, mode: str, src: str, **change: Any) -> dict[str, Any]:  # noqa: ANN401
+        """A step running ``step.py <mode> {out} <src>``."""
+        data: dict[str, Any] = {
+            "name": name,
+            "repo": str(self.repo),
+            "commit": self.commit,
+            "kind": "python",
+            "env": {
+                "python": "3.12",
+                "python_exact": "3.12.11",
+                "torch": None,
+                "body": {"lock": "b.lock", "lock_sha256": SHA, "source": "uv-export", "export_cmd": ["uv"]},
+                "exclude_newer": "2026-01-01",
+            },
+            "argv": ["{venv}/bin/python", "{checkout}/step.py", mode, "{out}", src],
+            "inputs": [{"root": "data", "patterns": ["in/a.txt"]}],
+            "outputs": ["result.json"],
+            "resources": {"profile": "cpu"},
+            "adapter": "adapter.py",
+            "hf_weights": [],
+            "metrics_schema": {"kind": "statistic", "headline": ["f_stat"]},
+        }
+        if self.wheels_sha is not None:
+            data["env"]["wheels"] = {"lock": "wheels.lock", "lock_sha256": self.wheels_sha}
+        data.update(change)
+        return data
+
+    def manifest(self, *steps: dict[str, Any]) -> Manifest:
+        """A manifest named ``demo``."""
+        return Manifest.model_validate({"name": "demo", "steps": list(steps)})
+
+    def dag(self, prep_expect: Sequence[dict[str, Any]] = ()) -> Manifest:
+        """Two steps: ``prep`` reads the data root, ``score`` reads ``prep``'s result dir through ``{up:prep}``."""
+        prep = self.step(
+            "prep",
+            "prep",
+            "{root:data}/in/a.txt",
+            patches=[{"file": "patches/p.patch", "sha256": _sha(self.base / "patches" / "p.patch")}],
+            adapter="adapter_prep.py",
+            expect=list(prep_expect),
+        )
+        score = self.step(
+            "score",
+            "score",
+            "{up:prep}/result.json",
+            needs=["prep"],
+            inputs=[{"root": "up:prep", "patterns": ["result.json"]}],
+            expect=[{"metric": "f_stat", "value": 4.0, "tolerance": 0.5, "kind": "abs"}],
+        )
+        return self.manifest(prep, score)
+
+    def prefetch(self, manifest: Manifest, *, checked: bool = True) -> None:
+        """Check out every step and give it a stdlib venv with a marker, as `env.prefetch_env` would."""
+        for step in manifest.steps:
+            source.checkout_step(step, cache=self.cache, base_dir=self.base)
+            path = env.venv_dir(self.cache, manifest.name, step.env)
+            if not (path / "bin" / "python").exists():
+                venv.EnvBuilder(symlinks=True, with_pip=False).create(path)
+            data = json.dumps({"packages": {}, "freeze": []}).encode()
+            (path / env.INSTALLED).write_bytes(data)
+            marker = {
+                "env_key": env.env_key(step.env),
+                "overlay_sha256": None,
+                "wheels": {},
+                "installed_sha256": hashlib.sha256(data).hexdigest(),
+                "checks": {"digest": env.checks_digest(step.env), "pip_check_ok": checked, "smoke_ok": checked},
+            }
+            (path / env.MARKER).write_text(json.dumps(marker))
+
+    def run(self, manifest: Manifest, **change: Any) -> dict[str, StepOutcome]:  # noqa: ANN401
+        """Run the manifest and return the outcomes by step name."""
+        return {o.step: o for o in run_steps([manifest], self.config(**change))}
+
+
+@pytest.fixture
+def world(tmp_path: Path) -> World:
+    """A fresh synthetic site."""
+    return World(tmp_path)
+
+
+def _executed(outcomes: dict[str, StepOutcome]) -> list[str]:
+    return sorted(name for name, o in outcomes.items() if o.status == "executed")
+
+
+def _summary(outcome: StepOutcome) -> dict[str, Any]:
+    assert outcome.out is not None
+    data: dict[str, Any] = json.loads((outcome.out / cache.SUMMARY).read_text())
+    return data
+
+
+# --- the DAG and the cache ----------------------------------------------------------------------
+
+
+@needs_userns
+def test_two_step_dag_runs_then_skips_and_reruns_on_each_keyed_change(world: World) -> None:
+    """The hand-off works; a rerun executes nothing; a patch, wheels.lock, adapter or env-map change reruns both."""
+    manifest = world.dag()
+    world.prefetch(manifest)
+    first = world.run(manifest)
+    assert _executed(first) == ["prep", "score"], {n: o.codes for n, o in first.items()}
+    assert all(o.ok for o in first.values())
+    score_out = first["score"].out
+    assert score_out is not None
+    metrics_json = json.loads((score_out / run.METRICS).read_text())
+    assert metrics_json["headline"][0] | {"pass": True} == metrics_json["headline"][0]
+    assert metrics_json["headline"][0]["target"] == 4.0 and metrics_json["pass"] is True
+    summary = _summary(first["score"])
+    assert summary["exit"] == 0 and summary["executed"] is True and summary["pass"] is True
+    assert summary["canary_failed"] is True and summary["sys_prefix_ok"] is True
+    assert set(summary) == {
+        "exit",
+        "exc_class",
+        "frame",
+        "codes",
+        "pass",
+        "sys_prefix_ok",
+        "torch",
+        "torch_cuda",
+        "canary_failed",
+        "executed",
+    }
+    link = world.tmp / "runs" / world.config().date.strftime("%Y-%m-%d") / "demo" / "score"
+    assert link.is_symlink() and link.resolve() == score_out.resolve()
+    rows = json.loads((link.parent / run.RUN_JSON).read_text())["steps"]
+    assert [(r["step"], r["status"], r["exit"]) for r in rows] == [("prep", "executed", 0), ("score", "executed", 0)]
+
+    second = world.run(manifest)
+    assert _executed(second) == [] and {o.status for o in second.values()} == {"skipped"}
+    assert {n: o.key for n, o in second.items()} == {n: o.key for n, o in first.items()}
+
+    world.write_patch("# v2")
+    patched = world.dag()
+    world.prefetch(patched)
+    assert _executed(world.run(patched)) == ["prep", "score"]
+    assert _executed(world.run(patched)) == []
+
+    world.wheels_sha = "cd" * 32
+    wheeled = world.dag()
+    world.prefetch(wheeled)
+    assert _executed(world.run(wheeled)) == ["prep", "score"]
+
+    (world.base / "adapter_prep.py").write_text(ADAPTER + "# edited\n")
+    assert _executed(world.run(wheeled)) == ["prep", "score"]
+
+    world.env_map = {"MODE": "b"}
+    assert _executed(world.run(wheeled)) == ["prep", "score"]
+    assert _executed(world.run(wheeled)) == []
+
+
+@needs_userns
+def test_a_failed_expectation_exits_non_zero_and_its_dependent_never_runs(world: World) -> None:
+    """``E_EXPECT`` gives a non-zero exit and an undone result dir; the afterok dependent is ``never-ran``."""
+    manifest = world.dag(prep_expect=[{"metric": "f_stat", "value": 99.0, "tolerance": 0.5, "kind": "abs"}])
+    world.prefetch(manifest)
+    outcomes = world.run(manifest)
+    prep = outcomes["prep"]
+    assert prep.status == "executed" and prep.exit != 0 and "E_EXPECT" in prep.codes
+    assert prep.out is not None and not cache.is_done(prep.out)
+    summary = _summary(prep)
+    assert summary["pass"] is False and summary["exit"] != 0
+    entry = json.loads((prep.out / run.METRICS).read_text())["headline"][0]
+    assert entry["pass"] is False and entry["delta"] == pytest.approx(2.0 - 99.0)
+    assert outcomes["score"].status == "never-ran" and outcomes["score"].exit is None
+    again = world.run(manifest)
+    assert again["prep"].status == "executed" and again["score"].status == "never-ran"
+
+
+@needs_userns
+def test_step_stdout_reaches_only_the_log(world: World, capfd: pytest.CaptureFixture[str]) -> None:
+    """A marker the step prints is absent from the caller's stdout and stderr and present in ``{out}/logs``."""
+    manifest = world.manifest(world.step("prep", "prep", "{root:data}/in/a.txt"))
+    world.prefetch(manifest)
+    capfd.readouterr()
+    outcome = world.run(manifest)["prep"]
+    captured = capfd.readouterr()
+    assert outcome.ok, outcome.codes
+    assert MARKER not in captured.out and MARKER not in captured.err
+    assert outcome.out is not None
+    assert MARKER in (outcome.out / run.LOGS / "step.stdout.log").read_text()
+
+
+@needs_userns
+def test_a_step_writing_into_a_read_only_root_fails_and_leaves_its_inputs(world: World) -> None:
+    """The write fails with EROFS, the step exits non-zero, and the input digest is unchanged."""
+    manifest = world.manifest(world.step("prep", "write-root", "{root:data}/in/a.txt"))
+    world.prefetch(manifest)
+    before = input_set_digest(world.data, ["**"])
+    outcome = world.run(manifest)["prep"]
+    assert outcome.status == "executed" and outcome.exit != 0
+    assert "E_STEP_FAILED" in outcome.codes and "E_INPUT_MUTATED" not in outcome.codes
+    assert input_set_digest(world.data, ["**"]) == before
+    assert not (world.data / "in" / "evil.txt").exists()
+    summary = _summary(outcome)
+    assert summary["exc_class"] == "OSError" and summary["frame"].startswith("step.py:")
+
+
+@needs_userns
+def test_the_step_cwd_is_the_read_only_checkout(world: World) -> None:
+    """The step starts in the checkout (``cwd: .``) on its read-only bind, so a relative write fails."""
+    manifest = world.manifest(world.step("prep", "write-cwd", "{root:data}/in/a.txt"))
+    world.prefetch(manifest)
+    outcome = world.run(manifest)["prep"]
+    assert outcome.exit != 0 and "E_STEP_FAILED" in outcome.codes
+    co = source.prefetched_checkout(manifest.steps[0], cache=world.cache)
+    assert not (co.worktree / "written-in-cwd.txt").exists()
+    assert "E_SRC_MUTATED" not in outcome.codes
+
+
+@needs_userns
+def test_stage_copies_selected_files_without_entering_symlinked_dirs(world: World) -> None:
+    """Data-root and checkout stages are copied under ``{out}/stage``; a wildcard never enters a symlinked dir."""
+    elsewhere = world.tmp / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "hidden.txt").write_text("x")
+    (world.data / "in" / "linked").symlink_to(elsewhere, target_is_directory=True)
+    step = world.step(
+        "prep",
+        "stage",
+        "{root:data}/in/a.txt",
+        inputs=[{"root": "data", "patterns": ["in/**/*.txt"]}],
+        stage=[
+            {"root": "data", "patterns": ["in/**/*.txt"], "dest": "data"},
+            {"root": "checkout", "patterns": ["*.py"], "dest": "code"},
+        ],
+    )
+    manifest = world.manifest(step)
+    world.prefetch(manifest)
+    outcome = world.run(manifest)["prep"]
+    assert outcome.ok, outcome.codes
+    assert outcome.out is not None
+    stage = outcome.out / run.STAGE
+    assert sorted(p.relative_to(stage).as_posix() for p in stage.rglob("*") if p.is_file()) == [
+        "code/step.py",
+        "data/in/a.txt",
+    ]
+    assert json.loads((outcome.out / "result.json").read_text())["value"] == 3.0
+
+
+@needs_userns
+def test_a_no_netns_run_is_never_reportable_or_done(world: World) -> None:
+    """Without the network namespace a run carries ``E_NOT_REPORTABLE`` and a non-zero exit, so it never skips."""
+    world.canary = REFUSED_CANARY
+    manifest = world.manifest(world.step("prep", "prep", "{root:data}/in/a.txt"))
+    world.prefetch(manifest)
+    outcome = world.run(manifest, no_netns=True)["prep"]
+    assert outcome.status == "executed" and outcome.exit != 0
+    assert outcome.codes == ("E_NOT_REPORTABLE",)
+    assert outcome.out is not None and not cache.is_done(outcome.out)
+    assert world.run(manifest, no_netns=True)["prep"].status == "executed"
+
+
+@needs_userns
+@pytest.mark.network
+def test_no_netns_with_a_reachable_canary_aborts_with_e_canary(world: World) -> None:
+    """On a node with network and no namespace the canary connects, so the step never runs (spec C3 negative)."""
+    world.canary = "pypi.org:443"
+    manifest = world.manifest(world.step("prep", "prep", "{root:data}/in/a.txt"))
+    world.prefetch(manifest)
+    outcome = world.run(manifest, no_netns=True)["prep"]
+    assert outcome.status == "failed" and "E_CANARY" in outcome.codes and outcome.exit != 0
+    assert outcome.out is not None
+    assert _summary(outcome)["canary_failed"] is False
+    assert not (outcome.out / "result.json").exists()
+    assert MARKER not in (outcome.out / run.LOGS / "step.stdout.log").read_text()
+
+
+# --- refusals -----------------------------------------------------------------------------------
+
+
+def test_a_step_without_a_prefetched_checkout_is_refused_before_any_key(world: World) -> None:
+    """No worktree: ``E_SRC_MISSING`` with no key and nothing written."""
+    manifest = world.manifest(world.step("prep", "prep", "{root:data}/in/a.txt"))
+    outcome = run_step(manifest.steps[0], "demo", world.config())
+    assert (outcome.status, outcome.key, outcome.codes) == ("failed", None, ("E_SRC_MISSING",))
+    assert not (world.tmp / "results").exists()
+
+
+def test_an_input_pattern_that_matches_nothing_is_refused(world: World) -> None:
+    """Declared inputs are digested with ``require_nonempty``."""
+    manifest = world.manifest(
+        world.step("prep", "prep", "{root:data}/in/a.txt", inputs=[{"root": "data", "patterns": ["in/none*.txt"]}])
+    )
+    world.prefetch(manifest)
+    assert run_step(manifest.steps[0], "demo", world.config()).codes == ("E_DIGEST_EMPTY",)
+
+
+def test_unchecked_and_missing_venvs_and_no_userns_are_refused(world: World, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A venv whose checks did not pass, a missing venv and a host without user namespaces never run."""
+    manifest = world.manifest(world.step("prep", "prep", "{root:data}/in/a.txt"))
+    world.prefetch(manifest, checked=False)
+    monkeypatch.setattr(sandbox, "userns_available", lambda: True)
+    outcome = run_step(manifest.steps[0], "demo", world.config())
+    assert (outcome.status, outcome.codes) == ("failed", ("E_ENV_UNCHECKED",))
+    assert _summary(outcome)["executed"] is False and _summary(outcome)["exit"] != 0
+    path = env.venv_dir(world.cache, "demo", manifest.steps[0].env)
+    (path / env.MARKER).unlink()
+    assert run_step(manifest.steps[0], "demo", world.config()).codes == ("E_ENV_MISSING",)
+    monkeypatch.setattr(sandbox, "userns_available", lambda: False)
+    assert run_step(manifest.steps[0], "demo", world.config()).codes == ("E_NO_USERNS",)
+
+
+def test_gpu_guard_and_driver_floor(world: World, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A GPU step on a host without a GPU, or below ``min_driver``, is refused before it runs."""
+    monkeypatch.setattr(sandbox, "userns_available", lambda: True)
+
+    def runner(gpu: str) -> host.Runner:
+        def probe(argv: Sequence[str]) -> tuple[int, str]:
+            return (0, gpu) if argv[0] == "nvidia-smi" else (1, "")
+
+        return probe
+
+    step = world.step("prep", "prep", "{root:data}/in/a.txt", resources={"profile": "cpu", "min_driver": "560"})
+    manifest = world.manifest(step)
+    world.prefetch(manifest)
+    no_gpu = run_step(manifest.steps[0], "demo", world.config(host_runner=runner("")))
+    assert no_gpu.codes == ("E_GPU_MISSING",)
+    old = run_step(manifest.steps[0], "demo", world.config(host_runner=runner("Test GPU, 550.54.15\n")))
+    assert old.codes == ("E_DRIVER_OLD",)
+
+
+# --- adapters, logs, host values ------------------------------------------------------------------
+
+
+@needs_userns
+@pytest.mark.parametrize(
+    "line",
+    [
+        "import senselab.utils.file_lock",
+        "from senselab.utils import fastio",
+        "import importlib; importlib.import_module('senselab.utils.fastio')",
+        "import senselab",
+    ],
+)
+def test_an_adapter_may_import_only_the_reproduce_package(world: World, line: str) -> None:
+    """Importing any senselab module outside ``senselab.utils.reproduce`` fails the step with ``E_ADAPTER_IMPORT``."""
+    (world.base / "adapter.py").write_text(f"{line}\n" + ADAPTER)
+    manifest = world.manifest(world.step("prep", "prep", "{root:data}/in/a.txt"))
+    world.prefetch(manifest)
+    outcome = world.run(manifest)["prep"]
+    assert outcome.codes == ("E_ADAPTER_IMPORT",) and outcome.exit != 0
+    assert outcome.out is not None and not (outcome.out / run.METRICS).exists()
+
+
+@needs_userns
+def test_adapter_output_is_validated_and_driver_keys_refused(world: World) -> None:
+    """An adapter writing a driver-only key fails the step with the metrics code."""
+    (world.base / "adapter.py").write_text(ADAPTER.replace('"dendf": 10', '"dendf": 10, "pass": True'))
+    manifest = world.manifest(world.step("prep", "prep", "{root:data}/in/a.txt"))
+    world.prefetch(manifest)
+    outcome = world.run(manifest)["prep"]
+    assert outcome.codes == ("E_METRICS_DRIVER_KEY",) and outcome.exit != 0
+
+
+@needs_userns
+def test_a_mutated_input_fails_the_step(world: World, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A changed input digest after the step gives ``E_INPUT_MUTATED`` and no metrics."""
+    manifest = world.manifest(world.step("prep", "prep", "{root:data}/in/a.txt"))
+    world.prefetch(manifest)
+    monkeypatch.setattr(digest, "digest_unchanged", lambda before, after: False)
+    outcome = world.run(manifest)["prep"]
+    assert outcome.codes == ("E_INPUT_MUTATED",) and outcome.exit != 0
+    assert outcome.out is not None and not (outcome.out / run.METRICS).exists()
+
+
+@needs_userns
+def test_the_senselab_logger_goes_to_the_driver_log_only(
+    world: World, monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str], caplog: pytest.LogCaptureFixture
+) -> None:
+    """A warning logged while the claim is taken (the stale-takeover case) lands only in ``driver.log``."""
+    real = cache.claim
+
+    @contextlib.contextmanager
+    def noisy(results_root: Path, key: str, **kwargs: Any) -> Iterator[Path]:  # noqa: ANN401
+        logging.getLogger("senselab").warning("stale takeover LOCKPATH-5512")
+        with real(results_root, key, **kwargs) as out:
+            yield out
+
+    monkeypatch.setattr(cache, "claim", noisy)
+    manifest = world.manifest(world.step("prep", "prep", "{root:data}/in/a.txt"))
+    world.prefetch(manifest)
+    capfd.readouterr()
+    outcome = world.run(manifest)["prep"]
+    captured = capfd.readouterr()
+    assert outcome.ok, outcome.codes
+    assert "LOCKPATH-5512" not in captured.out + captured.err
+    assert "LOCKPATH-5512" not in caplog.text
+    assert outcome.out is not None
+    assert "LOCKPATH-5512" in (outcome.out / run.LOGS / run.DRIVER_LOG).read_text()
+
+
+@needs_userns
+def test_off_pattern_host_values_are_dropped_with_a_warning(world: World) -> None:
+    """A host value provenance would refuse is recorded as null, with ``W_HOST_VALUE_DROPPED``; the step passes."""
+
+    def probe(argv: Sequence[str]) -> tuple[int, str]:
+        return (0, "GPU/with/slashes, 550.1\n") if argv[0] == "nvidia-smi" else host._run(argv)
+
+    manifest = world.manifest(world.step("prep", "prep", "{root:data}/in/a.txt"))
+    world.prefetch(manifest)
+    outcome = world.run(manifest, host_runner=probe)["prep"]
+    assert outcome.ok and outcome.codes == ("W_HOST_VALUE_DROPPED",)
+    assert outcome.out is not None and cache.is_done(outcome.out)
+    store = (outcome.out / "prov" / "store.jsonl").read_text()
+    assert "slashes" not in store and '"gpu_name": null' in store
+
+
+@needs_userns
+def test_provenance_records_the_lock_shas_and_no_path(world: World) -> None:
+    """The record carries the body lock sha and the input digest, and names no tmp path or data file."""
+    manifest = world.manifest(world.step("prep", "prep", "{root:data}/in/a.txt"))
+    world.prefetch(manifest)
+    outcome = world.run(manifest)["prep"]
+    assert outcome.out is not None
+    text = "".join(p.read_text() for p in (outcome.out / "prov").iterdir())
+    assert SHA in text and input_set_digest(world.data, ["in/a.txt"])[0] in text
+    assert str(world.tmp) not in text and "a.txt" not in text
+
+
+# --- pure parts -----------------------------------------------------------------------------------
+
+
+def _schema_step(**change: Any) -> StepSpec:  # noqa: ANN401
+    data: dict[str, Any] = {
+        "name": "s",
+        "repo": "r",
+        "commit": "0" * 40,
+        "kind": "python",
+        "env": {
+            "python": "3.12",
+            "python_exact": "3.12.11",
+            "torch": None,
+            "body": {"lock": "b.lock", "lock_sha256": SHA, "source": "uv-export", "export_cmd": ["uv"]},
+            "exclude_newer": "2026-01-01",
+        },
+        "argv": ["x"],
+        "resources": {"profile": "cpu"},
+        "adapter": "a.py",
+        "hf_weights": [],
+        "metrics_schema": {
+            "kind": "classification",
+            "headline": ["balanced_accuracy"],
+            "secondary": ["top1"],
+            "counts": ["n_clips"],
+            "per_class": ["a", "b"],
+        },
+    }
+    data.update(change)
+    return StepSpec.model_validate(data)
+
+
+def _metrics(ba: float, top1: float, unit: str = "fraction") -> dict[str, Any]:
+    scale = 100.0 if unit == "pp" else 1.0
+
+    def entry(name: str, value: float, floor: float) -> dict[str, Any]:
+        return {"name": name, "value": value, "floor": floor * scale, "lift": value - floor * scale, "unit": unit}
+
+    return {
+        "headline": [entry("balanced_accuracy", ba, 0.5)],
+        "secondary": [entry("top1", top1, 0.6)],
+        "per_class": {
+            "a": {"recall": 0.7, "precision": 0.7, "prevalence": 0.6},
+            "b": {"recall": 0.5, "precision": 0.5, "prevalence": 0.4},
+        },
+        "counts": {"n_clips": 40},
+    }
+
+
+def test_evaluate_expect_abs_exact_and_units() -> None:
+    """``abs`` uses the tolerance; ``exact`` equality; a ``pp`` expectation converts a fraction metric."""
+    step = _schema_step(
+        expect=[
+            {"metric": "balanced_accuracy", "value": 62.0, "tolerance": 0.5, "unit": "pp", "kind": "abs"},
+            {"metric": "top1", "value": 0.7, "kind": "exact"},
+            {"metric": "counts.n_clips", "value": 40, "kind": "exact"},
+        ],
+        needs=[],
+    )
+    final, passed, codes = evaluate_expect(step, _metrics(0.623, 0.7), {})
+    assert codes == [] and passed is True and final is not None
+    ba = final["headline"][0]
+    assert ba["target"] == 62.0 and ba["delta"] == pytest.approx(0.3) and ba["pass"] is True
+    assert final["secondary"][0]["pass"] is True and final["pass"] is True
+    assert final["target"] == 40 and final["delta"] == 0 and "tolerance" not in final
+    _, failed, _ = evaluate_expect(step, _metrics(0.63, 0.7), {})
+    assert failed is False
+
+
+def test_evaluate_expect_from_step_and_tolerance_from() -> None:
+    """A target from an upstream metric and a tolerance of ``max(a, k * sd)`` over calibration steps."""
+    step = _schema_step(
+        needs=["t", "c1", "c2", "c3"],
+        expect=[
+            {
+                "metric": "balanced_accuracy",
+                "from_step": {"step": "t", "metric": "balanced_accuracy"},
+                "tolerance_from": {"steps": ["c1", "c2", "c3"], "rule": "max(a, k*sd)", "a": 0.5, "k": 2},
+                "unit": "pp",
+                "kind": "abs",
+            }
+        ],
+    )
+    upstream = {
+        "t": _metrics(0.60, 0.7),
+        "c1": _metrics(58.0, 70.0, "pp"),
+        "c2": _metrics(60.0, 70.0, "pp"),
+        "c3": _metrics(62.0, 70.0, "pp"),
+    }
+    final, passed, codes = evaluate_expect(step, _metrics(0.635, 0.7), upstream)
+    assert codes == [] and final is not None
+    entry = final["headline"][0]
+    assert entry["target"] == pytest.approx(60.0) and entry["tolerance"] == pytest.approx(4.0)
+    assert entry["delta"] == pytest.approx(3.5) and passed is True
+    _, failed, _ = evaluate_expect(step, _metrics(0.645, 0.7), upstream)
+    assert failed is False
+
+
+def test_evaluate_expect_shared_place_gets_pass_only_and_bad_address_is_a_code() -> None:
+    """Two expectations on one class entry write only ``pass``; a suppressed source value is a fixed code."""
+    step = _schema_step(
+        expect=[
+            {"metric": "per_class.a.recall", "value": 0.7, "tolerance": 0.01, "kind": "abs"},
+            {"metric": "per_class.a.precision", "value": 0.1, "tolerance": 0.01, "kind": "abs"},
+        ]
+    )
+    final, passed, _ = evaluate_expect(step, _metrics(0.6, 0.7), {})
+    assert final is not None and passed is False
+    assert final["per_class"]["a"]["pass"] is False and "target" not in final["per_class"]["a"]
+    counted = _schema_step(expect=[{"metric": "counts.n_clips", "value": 40, "kind": "exact"}])
+    suppressed = _metrics(0.6, 0.7) | {"counts": {"n_clips": "<5"}}
+    assert evaluate_expect(counted, suppressed, {}) == (None, False, ["E_METRICS_SUPPRESSED"])
+
+
+def test_preamble_parsing_is_strict(tmp_path: Path) -> None:
+    """Only one JSON object line with exactly the four keys and the right types is accepted."""
+    path = tmp_path / "p.json"
+    good = {"sys_prefix": "/v", "torch": "2.5.1+cu128", "torch_cuda": "12.8", "canary_failed": True}
+    path.write_text(json.dumps(good) + "\n")
+    assert run._read_preamble(path) == good
+    for bad in (
+        json.dumps(good) + "\n" + json.dumps(good) + "\n",
+        json.dumps(good | {"extra": 1}),
+        json.dumps(good | {"canary_failed": "true"}),
+        json.dumps(good | {"torch": "2.5 /x"}),
+        "not json",
+        "",
+    ):
+        path.write_text(bad)
+        assert run._read_preamble(path) is None, bad
+    path.unlink()
+    assert run._read_preamble(path) is None
+
+
+def test_traceback_gives_class_and_checkout_relative_frame(tmp_path: Path) -> None:
+    """The last frame inside the checkout and the exception class; frames outside it are not reported."""
+    checkout = tmp_path / "wt"
+    (checkout / "pkg").mkdir(parents=True)
+    stderr = tmp_path / "err.log"
+    stderr.write_text(
+        "noise\nTraceback (most recent call last):\n"
+        f'  File "{checkout}/pkg/run.py", line 12, in <module>\n    main()\n'
+        '  File "/usr/lib/python3.12/json/__init__.py", line 346, in loads\n'
+        "json.decoder.JSONDecodeError: Expecting value: line 1 column 1 (subject X)\n"
+    )
+    assert run._traceback(stderr, checkout) == ("json.decoder.JSONDecodeError", "pkg/run.py:12")
+    stderr.write_text("no traceback here\n")
+    assert run._traceback(stderr, checkout) == (None, None)

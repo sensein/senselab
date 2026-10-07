@@ -597,6 +597,28 @@ def test_checks_recorded_only_with_a_profile(
     assert len(ran) == 8
 
 
+def test_load_venv_reads_the_prefetched_venv_and_never_builds(
+    tmp_path: Path, fake: tuple[FakeUv, FakeWheels], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``load_venv`` describes a prefetched venv from its marker; a missing or tampered one is None."""
+    monkeypatch.setattr(envmod, "check_pip", lambda venv, env: None)
+    monkeypatch.setattr(envmod, "smoke", lambda venv, modules, profile: [])
+    raw = _env(tmp_path / "manifests", torch=False, sdist=False)
+    raw.pop("notebook_tools")
+    env = EnvSpec.model_validate(raw)
+    path = envmod.venv_dir(tmp_path / "cache", "demo", env)
+    assert envmod.load_venv(path, env) is None
+    built = _prefetch(tmp_path, env, profile=_profile(tmp_path)).base
+    loaded = envmod.load_venv(path, env)
+    assert loaded is not None and loaded.checked and loaded.reused
+    assert (loaded.env_key, loaded.overlay_sha256, loaded.packages) == (built.env_key, None, built.packages)
+    stricter = env.model_copy(update={"smoke_imports": ["numpy"]})
+    unchecked = envmod.load_venv(path, stricter)
+    assert unchecked is not None and not unchecked.checked
+    (path / envmod.INSTALLED).write_text("{}")
+    assert envmod.load_venv(path, env) is None
+
+
 def test_failed_check_leaves_venv_unchecked(
     tmp_path: Path, fake: tuple[FakeUv, FakeWheels], monkeypatch: pytest.MonkeyPatch
 ) -> None:
