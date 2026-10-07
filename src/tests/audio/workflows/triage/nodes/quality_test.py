@@ -21,9 +21,10 @@ from typing import Callable
 import numpy as np
 import pytest
 
+from senselab.audio.workflows.triage.background_model import BACKGROUND_MODEL
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.nodes.admit import admit
-from senselab.audio.workflows.triage.nodes.common import live_entities
+from senselab.audio.workflows.triage.nodes.common import find_measurement, live_entities
 from senselab.audio.workflows.triage.nodes.preprocess import extend_clip_amplitudes, write_clip_spans
 from senselab.audio.workflows.triage.nodes.quality import (
     CLIP_AMPLITUDE_MEASUREMENT,
@@ -580,3 +581,31 @@ class TestAStoreTheMeasurementWasAppendedTo:
 
         with pytest.raises(ValueError, match="digests to"):
             extend_clip_amplitudes(store, config, run_dir=tmp_path)
+
+
+class TestTheBackgroundModel:
+    """QUALITY writes the recording-level background measurement on every recording."""
+
+    def test_a_store_without_a_plain_stream_records_what_it_lacked(
+        self, store: ProvStore, config: TriageConfig, tmp_path: Path, wav_writer: Callable[..., Path]
+    ) -> None:
+        """The measurement names the absent input rather than going unwritten."""
+        _seed(store, tmp_path, wav_writer, _bed(), [])
+        quality(store, "recording", config, run_dir=tmp_path)
+        found = find_measurement(store, BACKGROUND_MODEL)
+        assert found is not None
+        assert found.attributes["missing"] == ["plain"]
+
+    def test_a_plain_stream_gives_a_floor_and_the_clip_spans_kept(
+        self, store: ProvStore, config: TriageConfig, tmp_path: Path, wav_writer: Callable[..., Path]
+    ) -> None:
+        """The reading carries the floor and the clip spans no unclipped sample contradicts."""
+        samples = _bed()
+        clipped = _plateau(samples, 16000, 16400, 0.98)
+        path = _seed(store, tmp_path, wav_writer, samples, [clipped])
+        store.entity(prov_type="stream", extent=None, attributes={"name": "plain", "path": str(path)})
+        quality(store, "recording", config, run_dir=tmp_path)
+        found = find_measurement(store, BACKGROUND_MODEL)
+        assert found is not None
+        assert len(found.attributes["floor"]["band_db"]) == len(found.attributes["band_edges_hz"]) - 1
+        assert found.attributes["faults"]["clip"] == [[round(16000 / SR, 4), round(16400 / SR, 4)]]

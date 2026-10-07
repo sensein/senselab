@@ -186,7 +186,9 @@ def disruption_extents(
     padded = np.concatenate([[False], x == 0.0, [False]])
     edges = np.flatnonzero(np.diff(padded.astype(np.int8)))
     dropouts = [
-        (float(a) / sampling_rate, float(b) / sampling_rate) for a, b in zip(edges[::2], edges[1::2]) if b - a >= minimum
+        (float(a) / sampling_rate, float(b) / sampling_rate)
+        for a, b in zip(edges[::2], edges[1::2])
+        if b - a >= minimum
     ]
     reference = _local_variation(x, max(1, int(discontinuity_window_ms * sampling_rate / 1000)))
     jumps = np.flatnonzero(np.abs(np.diff(x)) > discontinuity_local_factor * reference)
