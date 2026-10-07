@@ -29,6 +29,8 @@ from senselab.audio.workflows.triage.decision import (
 GRAPH_ORDER = (
     "ADMIT",
     "PREPROCESS",
+    "SESSION",
+    "BACKGROUND",
     "TAXONOMY",
     "routing",
     "AIRWAY",
@@ -39,7 +41,10 @@ GRAPH_ORDER = (
     "REVIEW",
     "VERDICT",
 )
-"""The nodes the runner drives, in the order it drives them. VERDICT folds the ten before it."""
+"""The nodes the runner drives, in the order it drives them. VERDICT folds the twelve before it.
+
+SESSION reads every member of the recording's BIDS session after PREPROCESS has read each one's own
+floor, and BACKGROUND reads the recording against that floor before routing and the branches."""
 
 QUALITY = "QUALITY"
 """The terminal node every recording reaches, whatever routed. A graph edge, never a branch."""

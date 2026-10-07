@@ -35,6 +35,7 @@ from typing import Any, Callable, Mapping, Sequence
 import yaml
 
 from senselab.audio.data_structures import AudioHints
+from senselab.audio.workflows.triage.background_model import BACKGROUND_MODEL
 from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.live_evidence import declared_task, recording_stem
 from senselab.audio.workflows.triage.nodes.airway import EVENTS_FOUND as AIRWAY_EVENTS_FOUND
@@ -45,6 +46,7 @@ from senselab.audio.workflows.triage.nodes.airway_task import (
     COUGH_READING,
     required_event,
 )
+from senselab.audio.workflows.triage.nodes.background import BACKGROUND_NODE, SESSION_FLOOR, SESSION_NODE
 from senselab.audio.workflows.triage.nodes.branches import (
     BRANCH_FAMILY,
     EXPECTATIONS,
@@ -1064,12 +1066,16 @@ def _derived_ran(
         reports: Every branch report read from the store.
 
     Returns:
-        ``COMPLETED`` for a node carrying a verdict, a report or (REVIEW) an annotation, ``ERRORED``
+        ``COMPLETED`` for a node carrying a verdict, a report, (REVIEW) an annotation or (SESSION,
+        BACKGROUND) its measurement, ``ERRORED``
         for one carrying a live activity but none of those, and ``SKIPPED`` for one carrying none.
     """
     concluded = {v.node for v in verdicts} | {r.node for r in reports}
     if find_measurement(store, REDACTION_LLM_ANNOTATION) is not None:
         concluded.add(_REVIEW)
+    for node, name in ((SESSION_NODE, SESSION_FLOOR), (BACKGROUND_NODE, BACKGROUND_MODEL)):
+        if find_measurement(store, name) is not None:
+            concluded.add(node)
     outputs: dict[str, list[str]] = {}
     for entity in store.entities():
         activity_id = store.generated_by(entity.id)

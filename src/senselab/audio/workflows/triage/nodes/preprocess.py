@@ -101,6 +101,7 @@ from senselab.audio.workflows.triage.label_membership import (
     load_label_membership,
     optional_label_membership,
 )
+from senselab.audio.workflows.triage.nodes.background import OWN_FLOOR, write_own_floor
 from senselab.audio.workflows.triage.nodes.common import (
     NodeResult,
     cpps_settings,
@@ -3113,6 +3114,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         ("continuity_trace", _continuity_trace),
         ("spans", _spans),
         ("residual", _residual),
+        (OWN_FLOOR, lambda: view.append(write_own_floor(store, run_dir))),
         ("enhanced_yamnet", lambda: _stream_yamnet("enhanced")),
         ("enhanced_ast", lambda: _stream_ast("enhanced")),
         ("enhanced_hear", lambda: _stream_hear("enhanced")),

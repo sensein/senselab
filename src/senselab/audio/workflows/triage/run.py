@@ -16,8 +16,16 @@ from typing import Any, Callable, TypeVar
 from senselab.audio.data_structures import Audio, AudioHints
 from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.enrollment import Enrollment
+from senselab.audio.workflows.triage.live_evidence import recording_stem
 from senselab.audio.workflows.triage.nodes.admit import admit
 from senselab.audio.workflows.triage.nodes.airway import airway
+from senselab.audio.workflows.triage.nodes.background import (
+    BACKGROUND_NODE,
+    SESSION_NODE,
+    session_key,
+    write_background,
+    write_session_floor,
+)
 from senselab.audio.workflows.triage.nodes.branches import declared_task_family, record_unrun_owner
 from senselab.audio.workflows.triage.nodes.common import (
     BranchResult,
@@ -26,7 +34,7 @@ from senselab.audio.workflows.triage.nodes.common import (
     describe_exception,
 )
 from senselab.audio.workflows.triage.nodes.preprocess import preprocess
-from senselab.audio.workflows.triage.nodes.quality import quality
+from senselab.audio.workflows.triage.nodes.quality import clip_spans, quality
 from senselab.audio.workflows.triage.nodes.redact import redact, settle_release
 from senselab.audio.workflows.triage.nodes.report import report
 from senselab.audio.workflows.triage.nodes.review import NODE as REVIEW_NODE
@@ -73,7 +81,7 @@ _ENTITY_ORDER = ("sub-", "ses-")
 _CONDITIONED_STREAM = "plain"
 _SOURCE_STREAM = "recording"
 
-_R = TypeVar("_R", bound="NodeResult | BranchResult | ReviewOutcome")
+_R = TypeVar("_R", bound="NodeResult | BranchResult | ReviewOutcome | str")
 
 
 @dataclass(frozen=True)
@@ -262,7 +270,10 @@ def _drive_branches(
     outcomes: dict[str, NodeOutcome],
     enrollment: Enrollment | None,
 ) -> dict[str, Path]:
-    """Run PREPROCESS, then hand the rest of the graph to :func:`drive_decisions`.
+    """Run PREPROCESS and SESSION, then hand the rest of the graph to :func:`drive_decisions`.
+
+    A single-file run sees no siblings, so SESSION records the recording's own floor as the floor
+    it uses; a corpus run writes SESSION per BIDS session (``scripts/extend_session_floor.py``).
 
     A PREPROCESS that fails records every node between it and VERDICT ``SKIPPED`` and calls
     nothing further. See ``specs/20260817-triage-workflow-dag/dag.md``.
@@ -285,6 +296,11 @@ def _drive_branches(
         for node in GRAPH_ORDER[GRAPH_ORDER.index("PREPROCESS") + 1 : GRAPH_ORDER.index("VERDICT")]:
             outcomes[node] = NodeOutcome(node=node, state=RunState.SKIPPED)
         return {}
+    _attempt(
+        outcomes,
+        SESSION_NODE,
+        lambda: write_session_floor(store, (), session=session_key(recording_stem(store))),
+    )
     return drive_decisions(
         store,
         config,
@@ -306,7 +322,7 @@ def drive_decisions(
     outcomes: dict[str, NodeOutcome],
     enrollment: Enrollment | None,
 ) -> dict[str, Path]:
-    """Run TAXONOMY, routing, the branches routing selects, QUALITY and REDACT over a preprocessed store.
+    """Run BACKGROUND, TAXONOMY, routing, the routed branches, QUALITY and REDACT over a preprocessed store.
 
     Every input is the store and the sidecars under ``run_dir``, so the caller may be a graph pass
     that has just run PREPROCESS or a driver replaying over a finished run. A branch routing
@@ -329,6 +345,15 @@ def drive_decisions(
     Returns:
         REDACT's released pair, empty unless it cleared one.
     """
+    _attempt(
+        outcomes,
+        BACKGROUND_NODE,
+        lambda: write_background(
+            store,
+            run_dir,
+            clips=[span.extent for span in clip_spans(store, _SOURCE_STREAM) if span.extent is not None],
+        ),
+    )
     _attempt(outcomes, "TAXONOMY", lambda: taxonomy(store, _CONDITIONED_STREAM, config, hint, run_dir=run_dir))
     routed = _attempt(outcomes, "routing", lambda: routing(store, None, config, hint, run_dir=run_dir))
     selected = set(routed.runs) if routed is not None else set()
