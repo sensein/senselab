@@ -861,10 +861,10 @@ reported with the number, not a schema error.
 
 **Suppression and its residual risk.** `n`, `counts.*`, `confusion.*`, a `count` headline value and
 a fold's `n_groups` below the minimum cell become `"<k>"` rather than rejecting the file: a small
-cell is expected in a real result and is not an adapter bug. `n_groups` is suppressed only when the
-fold's unit is a person (`subject`, `family`) or no unit is given; groups of sessions, videos, clips,
-recordings or rows describe the design, not people. Degrees of freedom and `n_folds` are never
-suppressed.
+cell is expected in a real result and is not an adapter bug. `n_groups` is suppressed for every split
+unit, not only `subject`/`family`: an evaluation that splits by recording or clip (a seen-subject
+protocol) still reports `n_groups` as its number of subjects, so a fold of three children under unit
+`recording` would otherwise be emitted as is. Degrees of freedom and `n_folds` are never suppressed.
 
 Accepted residual risk: a prevalence multiplied by an unsuppressed `n` (or a recall times a
 class size) can reconstruct a small cell that was suppressed elsewhere. Closing that would mean
