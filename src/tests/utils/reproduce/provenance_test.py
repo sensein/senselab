@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -11,7 +12,7 @@ import pytest
 from senselab.utils.prov_bep028 import SHA256_ALGORITHM, check_graph, convert_store_file, store_id
 from senselab.utils.prov_store import CHECKSUM_KEY, PATH_KEY, ProvStore
 from senselab.utils.reproduce.digest import input_set_digest
-from senselab.utils.reproduce.env import VenvResult
+from senselab.utils.reproduce.env import INSTALLED, MARKER, VenvResult, installed_sha256
 from senselab.utils.reproduce.host import HOST_KEYS
 from senselab.utils.reproduce.provenance import (
     DRIVER_DESCRIPTION,
@@ -23,6 +24,10 @@ from senselab.utils.reproduce.provenance import (
 
 COMMIT = "c" * 40
 STEP_KEY = "a" * 64
+TORCH_LOCK = "4" * 64
+BODY_LOCK = "5" * 64
+PROBE = "/data/ROOT/subjPX9931/rec.wav"
+HOST_STRING_KEYS = ("hostname", "cpu_model", "gpu_name", "gpu_driver", "python", "torch", "torch_cuda", "slurm_job_id")
 # Distinctive names that stand for participant identifiers in data paths; none may reach provenance.
 SECRETS = (
     "ROOTqz7wx",
@@ -51,8 +56,12 @@ def _host() -> dict[str, Any]:
 
 
 def _venv(tmp_path: Path) -> VenvResult:
+    """A venv directory with an ``installed.json`` and the marker recording its sha256."""
     path = tmp_path / "cache" / "venvs" / "repro-demo-0123abcd"
-    path.mkdir(parents=True)
+    path.mkdir(parents=True, exist_ok=True)
+    data = json.dumps({"freeze": ["numpy==2.1.0", "torch==2.5.1+cu128"]}).encode()
+    (path / INSTALLED).write_bytes(data)
+    (path / MARKER).write_text(json.dumps({"installed_sha256": hashlib.sha256(data).hexdigest()}))
     return VenvResult(
         path=path,
         env_key="e" * 64,
@@ -61,6 +70,24 @@ def _venv(tmp_path: Path) -> VenvResult:
         packages={"numpy": "2.1.0", "torch": "2.5.1"},
         checked=True,
     )
+
+
+def _kwargs(tmp_path: Path, **change: object) -> dict[str, Any]:
+    """A minimal valid ``record_step`` call, with ``change`` applied."""
+    return {
+        "step_key": STEP_KEY,
+        "step": "classify",
+        "commit_sha": COMMIT,
+        "venv": _venv(tmp_path),
+        "torch_lock_sha256": TORCH_LOCK,
+        "body_lock_sha256": BODY_LOCK,
+        "host": _host(),
+        "inputs": [],
+        "outputs": [],
+        "started": "2026-10-07T10:00:00+00:00",
+        "ended": "2026-10-07T10:05:00+00:00",
+        "exit_code": 0,
+    } | change
 
 
 @pytest.fixture
@@ -81,20 +108,15 @@ def recorded(tmp_path: Path) -> dict[str, Any]:
     outputs = [Artifact(digest=out_digest, count=out_count)]
     written = record_step(
         out / "prov",
-        step_key=STEP_KEY,
-        step="classify",
-        commit_sha=COMMIT,
-        venv=_venv(tmp_path),
-        host=_host(),
-        inputs=inputs,
-        outputs=outputs,
-        started="2026-10-07T10:00:00+00:00",
-        ended="2026-10-07T10:05:00+00:00",
-        exit_code=0,
-        codes=["W_CLASS_ABSENT"],
-        env_keys=["HOME", "PATH", "TZ"],
-        env_sha256="1" * 64,
-        argv_sha256="2" * 64,
+        **_kwargs(
+            tmp_path,
+            inputs=inputs,
+            outputs=outputs,
+            codes=["W_CLASS_ABSENT"],
+            env_keys=["HOME", "PATH", "TZ"],
+            env_sha256="1" * 64,
+            argv_sha256="2" * 64,
+        ),
     )
     return {"tmp": tmp_path, "out": out, "written": written, "inputs": inputs, "outputs": outputs}
 
@@ -174,13 +196,13 @@ def test_the_code_commit_is_a_software_agent(recorded: dict[str, Any]) -> None:
 
 
 def test_the_venv_and_the_host_are_environments(recorded: dict[str, Any]) -> None:
-    """The venv carries its packages and their digest; the host carries the machine and the driver."""
+    """The venv carries its packages; the host carries the machine and the driver."""
     store = ProvStore.read_jsonl(recorded["out"] / "prov" / STORE_FILE)
     [venv] = store.environments("venv")
     assert venv.label == "repro-demo-0123abcd"
     assert venv.python_version == "3.12.11"
     assert venv.dependencies == {"numpy": "2.1.0", "torch": "2.5.1"}
-    assert venv.dependencies_digest is not None and len(venv.dependencies_digest) == 64
+    assert venv.dependencies_digest is None
     [host] = store.environments("host")
     assert host.label == "node042"
     assert host.operating_system
@@ -198,6 +220,12 @@ def test_the_activity_holds_the_run_and_withholds_the_command(recorded: dict[str
     parameters = activity["Parameters"]
     assert parameters["step_key"] == STEP_KEY
     assert parameters["env_key"] == "e" * 64
+    assert parameters["torch_lock_sha256"] == TORCH_LOCK
+    assert parameters["body_lock_sha256"] == BODY_LOCK
+    assert parameters["overlay_sha256"] is None
+    assert parameters["installed_sha256"] == installed_sha256(
+        recorded["tmp"] / "cache" / "venvs" / "repro-demo-0123abcd"
+    )
     assert parameters["exit_code"] == 0
     assert parameters["codes"] == ["W_CLASS_ABSENT"]
     assert parameters["env_keys"] == ["HOME", "PATH", "TZ"]
@@ -211,59 +239,99 @@ def test_the_activity_holds_the_run_and_withholds_the_command(recorded: dict[str
 
 def test_the_same_step_records_the_same_ids(tmp_path: Path) -> None:
     """Ids follow content, so rerunning a step with the same inputs records the same graph identities."""
-    kwargs: dict[str, Any] = {
-        "step_key": STEP_KEY,
-        "step": "classify",
-        "commit_sha": COMMIT,
-        "venv": _venv(tmp_path),
-        "host": _host(),
-        "inputs": [Artifact(digest="3" * 64, count=2, root="projects")],
-        "outputs": [],
-        "started": "2026-10-07T10:00:00+00:00",
-        "ended": "2026-10-07T10:05:00+00:00",
-        "exit_code": 0,
-    }
+    kwargs = _kwargs(tmp_path, inputs=[Artifact(digest="3" * 64, count=2, root="projects")])
     record_step(tmp_path / "a", **kwargs)
     record_step(tmp_path / "b", **kwargs)
     assert (tmp_path / "a" / STORE_FILE).read_text() == (tmp_path / "b" / STORE_FILE).read_text()
+
+
+def test_a_rerun_removes_files_the_new_record_does_not_write(tmp_path: Path) -> None:
+    """A rerun into the same prov dir leaves no stale BEP028 group from the earlier record."""
+    prov = tmp_path / "prov"
+    first = record_step(prov, **_kwargs(tmp_path, inputs=[Artifact(digest="3" * 64, count=2, root="projects")]))
+    assert prov / f"prov-{LABEL}_io.json" in first
+    (prov / "notes.txt").write_text("kept")
+    second = record_step(prov, **_kwargs(tmp_path))
+    assert prov / f"prov-{LABEL}_io.json" not in second
+    assert sorted(prov.iterdir()) == sorted([*second, prov / "notes.txt"])
+
+
+def test_the_installed_digest_is_the_markers(tmp_path: Path) -> None:
+    """The recorded ``installed_sha256`` is the venv marker's, and a venv whose file no longer matches is refused."""
+    kwargs = _kwargs(tmp_path)
+    venv_path = kwargs["venv"].path
+    record_step(tmp_path / "prov", **kwargs)
+    [activity] = ProvStore.read_jsonl(tmp_path / "prov" / STORE_FILE).activities()
+    marker = json.loads((venv_path / MARKER).read_text())
+    assert activity.parameters["installed_sha256"] == marker["installed_sha256"]
+    (venv_path / INSTALLED).write_text("{}")
+    with pytest.raises(ValueError, match="installed_sha256"):
+        record_step(tmp_path / "again", **kwargs)
+    assert not (tmp_path / "again").exists()
 
 
 @pytest.mark.parametrize(
     ("change", "match"),
     [
         ({"step": "sub/01"}, "step"),
+        ({"step": "."}, "step"),
+        ({"step": ".."}, "step"),
+        ({"step": ".hidden"}, "step"),
         ({"step_key": "../x"}, "step_key"),
+        ({"step_key": 7}, "step_key"),
         ({"commit_sha": "main"}, "commit"),
+        ({"torch_lock_sha256": PROBE}, "torch_lock_sha256"),
+        ({"body_lock_sha256": None}, "body_lock_sha256"),
         ({"inputs": [Artifact(digest="0" * 63, count=1, root="projects")]}, "digest"),
         ({"inputs": [Artifact(digest="0" * 64, count=-1, root="projects")]}, "count"),
+        ({"inputs": [Artifact(digest="0" * 64, count=True, root="projects")]}, "count"),
         ({"inputs": [Artifact(digest="0" * 64, count=1, root="data/subjPX9931")]}, "root"),
+        ({"inputs": [Artifact(digest="0" * 64, count=1, root="up:..")]}, "root"),
+        ({"inputs": [Artifact(digest="0" * 64, count=1, root="..")]}, "root"),
+        ({"inputs": [Artifact(digest="0" * 64, count=1, root=".data")]}, "root"),
         ({"inputs": [Artifact(digest="0" * 64, count=1)]}, "root"),
         ({"outputs": [Artifact(digest="0" * 64, count=1, root="projects")]}, "root"),
         ({"host": {"hostname": "n"}}, "host"),
         ({"host": _host() | {"log": "x"}}, "host"),
         ({"host": _host() | {"cpu_model": ["a"]}}, "host"),
+        ({"host": _host() | {"cpu_count": True}}, "host"),
+        ({"host": _host() | {"cpu_model": "x" * 129}}, "host"),
+        ({"host": _host() | {"cpu_model": "Test  CPU"}}, "host"),
+        *[({"host": _host() | {key: PROBE}}, f"host {key}") for key in sorted(HOST_STRING_KEYS)],
         ({"codes": ["see /tmp/x"]}, "code"),
         ({"env_keys": ["A=B"]}, "env"),
         ({"env_sha256": "x"}, "env_sha256"),
+        ({"env_sha256": 123}, "env_sha256"),
         ({"argv_sha256": "x"}, "argv_sha256"),
+        ({"exit_code": True}, "exit_code"),
         ({"started": "/data/x"}, "started"),
+        ({"started": "2026-10-07T10:00:00"}, "started"),
+        ({"ended": "2026-10-07"}, "ended"),
     ],
 )
 def test_refuses_values_that_could_carry_a_path(tmp_path: Path, change: dict[str, Any], match: str) -> None:
     """Every free value is checked against a closed form before anything is written."""
-    kwargs: dict[str, Any] = {
-        "step_key": STEP_KEY,
-        "step": "classify",
-        "commit_sha": COMMIT,
-        "venv": _venv(tmp_path),
-        "host": _host(),
-        "inputs": [],
-        "outputs": [],
-        "started": "2026-10-07T10:00:00+00:00",
-        "ended": "2026-10-07T10:05:00+00:00",
-        "exit_code": 0,
-    } | change
     with pytest.raises(ValueError, match=match):
+        record_step(tmp_path / "prov", **_kwargs(tmp_path, **change))
+    assert not (tmp_path / "prov").exists()
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"overlay_sha256": PROBE},
+        {"packages": {PROBE: "1.0"}},
+        {"packages": {"numpy": PROBE}},
+        {"packages": {"NumPy": "1.0"}},
+        {"packages": {"numpy": "1.0 rc"}},
+        {"env_key": PROBE},
+    ],
+)
+def test_refuses_venv_fields_that_could_carry_a_path(tmp_path: Path, change: dict[str, Any]) -> None:
+    """The venv's overlay, key and package names and versions are closed forms too."""
+    kwargs = _kwargs(tmp_path)
+    kwargs["venv"] = kwargs["venv"]._replace(**change)
+    with pytest.raises(ValueError, match="venv"):
         record_step(tmp_path / "prov", **kwargs)
     assert not (tmp_path / "prov").exists()
 

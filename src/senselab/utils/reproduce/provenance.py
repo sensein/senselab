@@ -9,15 +9,15 @@ interpreter), and one ``artifact`` entity per declared input and output, then ex
 Nothing in the record is a path. Artifacts carry the input-set digest, the file count, the role, the
 manifest position (``inputs[<i>]``, ``outputs[<i>]``) and, for an input, the data-root name. The
 command is withheld (``Command`` is null) and recorded as ``argv_sha256``; the step environment as
-its sorted key list and ``env_sha256``. Every value is checked against a closed form before anything
-is written, and step stdout and logs are never read.
+its sorted key list and ``env_sha256``. The activity's parameters carry the lock sha256s, the overlay
+sha256 and the venv's ``installed_sha256`` (the value in its marker), so the record can be checked
+against the venv. Every value is checked against a closed form, and the graph against
+`check_graph`, before anything is written; step stdout and logs are never read.
 """
 
 from __future__ import annotations
 
 import datetime
-import hashlib
-import json
 import os
 import platform
 import re
@@ -27,9 +27,9 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any
 
-from senselab.utils.prov_bep028 import to_bep028_graph, write_bep028_files
+from senselab.utils.prov_bep028 import check_graph, to_bep028_graph, write_bep028_files
 from senselab.utils.prov_store import CHECKSUM_KEY, ProvStore
-from senselab.utils.reproduce.env import VenvResult
+from senselab.utils.reproduce.env import VenvResult, installed_sha256
 from senselab.utils.reproduce.host import HOST_KEYS
 
 LABEL = "reproduce"
@@ -44,10 +44,27 @@ DRIVER_DESCRIPTION = (
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
 _COMMIT = re.compile(r"^[0-9a-f]{40}$")
 _STEP_KEY = re.compile(r"^[0-9a-f]{16,64}$")
-_NAME = re.compile(r"^[A-Za-z0-9_.-]+$")
-_ROOT = re.compile(r"^(up:)?[A-Za-z0-9_.-]+$")
-_CODE = re.compile(r"^[EW]_[A-Z0-9_]+$")
-_ENV_KEY = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_NAME = re.compile(r"^[A-Za-z0-9_-][A-Za-z0-9_.-]{0,127}$")
+_ROOT = re.compile(r"^(up:)?[A-Za-z0-9_-][A-Za-z0-9_.-]{0,127}$")
+_CODE = re.compile(r"^[EW]_[A-Z0-9_]{1,64}$")
+_ENV_KEY = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
+_PACKAGE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
+_VERSION = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.+!_-]{0,63}$")
+_WORDS = re.compile(r"^[A-Za-z0-9()@.,_+-]+( [A-Za-z0-9()@.,_+-]+)*$")
+_NUMERIC = re.compile(r"^[0-9]+(\.[0-9]+)*$")
+_HOST_STRINGS: dict[str, re.Pattern[str]] = {
+    "hostname": re.compile(r"^[A-Za-z0-9]([A-Za-z0-9.-]{0,252}[A-Za-z0-9])?$"),
+    "cpu_model": _WORDS,
+    "gpu_name": _WORDS,
+    "gpu_driver": _NUMERIC,
+    "python": _VERSION,
+    "torch": _VERSION,
+    "torch_cuda": _NUMERIC,
+    "slurm_job_id": re.compile(r"^[0-9]+(_[0-9]+)?$"),
+}
+_HOST_INTS = ("cpu_count", "cpus_allowed", "gpu_count")
+_HOST_STRING_MAX = 128
+_PREFIX = f"prov-{LABEL}_"
 
 
 @dataclass(frozen=True)
@@ -71,29 +88,56 @@ def _check(ok: bool, what: str) -> None:
         raise ValueError(f"record_step: {what} is not in its closed form")
 
 
-def _check_time(value: str, what: str) -> None:
+def _matches(value: object, pattern: re.Pattern[str]) -> bool:
+    return isinstance(value, str) and pattern.fullmatch(value) is not None
+
+
+def _is_int(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _is_name(value: object, pattern: re.Pattern[str] = _NAME) -> bool:
+    return _matches(value, pattern) and str(value).removeprefix("up:") not in (".", "..")
+
+
+def _check_time(value: object, what: str) -> None:
     try:
-        datetime.datetime.fromisoformat(value)
-    except (TypeError, ValueError):
-        _check(False, what)
+        parsed = datetime.datetime.fromisoformat(value) if isinstance(value, str) else None
+    except ValueError:
+        parsed = None
+    _check(parsed is not None and parsed.tzinfo is not None, what)
 
 
 def _check_artifacts(artifacts: Sequence[Artifact], role: str) -> None:
     for artifact in artifacts:
-        _check(isinstance(artifact.digest, str) and bool(_HEX64.fullmatch(artifact.digest)), f"{role} digest")
-        _check(isinstance(artifact.count, int) and artifact.count >= 0, f"{role} count")
+        _check(_matches(artifact.digest, _HEX64), f"{role} digest")
+        _check(_is_int(artifact.count) and artifact.count >= 0, f"{role} count")
         if role == "input":
-            _check(isinstance(artifact.root, str) and bool(_ROOT.fullmatch(artifact.root)), "input root")
+            _check(_is_name(artifact.root, _ROOT), "input root")
         else:
             _check(artifact.root is None, "output root")
 
 
 def _check_host(host: Mapping[str, Any]) -> None:
     _check(set(host) == set(HOST_KEYS), "host record")
+    for key in _HOST_INTS:
+        _check(host[key] is None or (_is_int(host[key]) and host[key] >= 0), f"host {key}")
+    for key, pattern in _HOST_STRINGS.items():
+        value = host[key]
+        _check(value is None or (_matches(value, pattern) and len(value) <= _HOST_STRING_MAX), f"host {key}")
+
+
+def _check_venv(venv: VenvResult) -> str:
+    _check(_is_name(venv.path.name), "venv name")
+    _check(_matches(venv.env_key, _HEX64), "venv env_key")
+    _check(venv.overlay_sha256 is None or _matches(venv.overlay_sha256, _HEX64), "venv overlay_sha256")
     _check(
-        all(value is None or isinstance(value, (str, int)) for value in host.values()),
-        "host record",
+        all(_matches(name, _PACKAGE) and _matches(ver, _VERSION) for name, ver in venv.packages.items()),
+        "venv packages",
     )
+    installed = installed_sha256(venv.path)
+    _check(_matches(installed, _HEX64), "venv installed_sha256")
+    return str(installed)
 
 
 def _senselab_version() -> str | None:
@@ -110,6 +154,8 @@ def record_step(
     step: str,
     commit_sha: str,
     venv: VenvResult,
+    torch_lock_sha256: str | None,
+    body_lock_sha256: str,
     host: Mapping[str, Any],
     inputs: Sequence[Artifact],
     outputs: Sequence[Artifact],
@@ -128,12 +174,15 @@ def record_step(
         step_key: The step's cache key (hex); also the store's run id.
         step: The step's manifest name.
         commit_sha: The resolved 40-hex commit of the step's code.
-        venv: The step's venv; only its directory name, key, packages and overlay are recorded.
+        venv: The step's venv; its directory name, key, overlay sha256 and packages are recorded, with
+            the ``installed_sha256`` its marker holds (`env.installed_sha256`).
+        torch_lock_sha256: The env's torch lock sha256, None for an env without one.
+        body_lock_sha256: The env's body lock sha256.
         host: `host.host_record`'s result.
         inputs: One artifact per declared input, in manifest order.
         outputs: One artifact per declared output pattern, in manifest order.
-        started: When the step began, ISO 8601.
-        ended: When it finished, ISO 8601.
+        started: When the step began, ISO 8601 with a timezone.
+        ended: When it finished, ISO 8601 with a timezone.
         exit_code: The step's exit code.
         codes: Fixed error and warning codes (``E_*``, ``W_*``).
         env_keys: The step environment's variable names.
@@ -141,35 +190,39 @@ def record_step(
         argv_sha256: The sha256 of the step's argv.
 
     Returns:
-        The files written: ``store.jsonl``, then the BEP028 files in `write_bep028_files` order.
+        The files written: ``store.jsonl``, then the BEP028 files in `write_bep028_files` order. Any
+        other ``prov-reproduce_*.json`` left in ``prov_dir`` by an earlier write is removed.
 
     Raises:
-        ValueError: If any value is outside its closed form (a non-hex key or digest, a step name or
-            root with a separator, an unknown host key, a malformed code, variable name or time).
-            Nothing is written then.
+        ValueError: If any value is outside its closed form, if the venv's ``installed.json`` does not
+            match its marker, or if the graph fails `check_graph`. Nothing is written then.
     """
-    _check(isinstance(step_key, str) and bool(_STEP_KEY.fullmatch(step_key)), "step_key")
-    _check(isinstance(step, str) and bool(_NAME.fullmatch(step)) and step not in (".", ".."), "step")
-    _check(isinstance(commit_sha, str) and bool(_COMMIT.fullmatch(commit_sha)), "commit_sha")
+    _check(_matches(step_key, _STEP_KEY), "step_key")
+    _check(_is_name(step), "step")
+    _check(_matches(commit_sha, _COMMIT), "commit_sha")
+    _check(torch_lock_sha256 is None or _matches(torch_lock_sha256, _HEX64), "torch_lock_sha256")
+    _check(_matches(body_lock_sha256, _HEX64), "body_lock_sha256")
     _check_artifacts(inputs, "input")
     _check_artifacts(outputs, "output")
     _check_host(host)
     _check_time(started, "started")
     _check_time(ended, "ended")
-    _check(isinstance(exit_code, int), "exit_code")
-    _check(all(isinstance(code, str) and _CODE.fullmatch(code) for code in codes), "code")
-    _check(all(isinstance(key, str) and _ENV_KEY.fullmatch(key) for key in env_keys), "env key")
+    _check(_is_int(exit_code), "exit_code")
+    _check(all(_matches(code, _CODE) for code in codes), "code")
+    _check(all(_matches(key, _ENV_KEY) for key in env_keys), "env key")
     for value, what in ((env_sha256, "env_sha256"), (argv_sha256, "argv_sha256")):
-        _check(value is None or bool(_HEX64.fullmatch(value)), what)
-    _check(bool(_NAME.fullmatch(venv.path.name)), "venv name")
-    _check(bool(_HEX64.fullmatch(venv.env_key)), "venv env_key")
+        _check(value is None or _matches(value, _HEX64), what)
+    installed = _check_venv(venv)
 
     store = ProvStore(run_id=step_key)
     agent = store.agent(agent_type="software", commit_sha=commit_sha, version=f"{step} {commit_sha}")
     parameters: dict[str, Any] = {
         "step_key": step_key,
         "env_key": venv.env_key,
+        "torch_lock_sha256": torch_lock_sha256,
+        "body_lock_sha256": body_lock_sha256,
         "overlay_sha256": venv.overlay_sha256,
+        "installed_sha256": installed,
         "exit_code": exit_code,
         "codes": sorted(codes),
         "env_keys": sorted(env_keys),
@@ -196,13 +249,11 @@ def record_step(
             "file_count": artifact.count,
         }
         store.was_generated_by(store.entity(prov_type="artifact", extent=None, attributes=attributes), activity)
-    packages = dict(sorted(venv.packages.items()))
     store.environment(
         kind="venv",
         label=venv.path.name,
         python_version=str(host["python"] or "unknown"),
-        dependencies=packages,
-        dependencies_digest=hashlib.sha256(json.dumps(packages, sort_keys=True).encode()).hexdigest(),
+        dependencies=dict(sorted(venv.packages.items())),
     )
     store.environment(
         kind="host",
@@ -211,10 +262,16 @@ def record_step(
         operating_system=platform.platform(),
         senselab_version=_senselab_version(),
     )
+    graph = to_bep028_graph(store, label=LABEL, description=DRIVER_DESCRIPTION)
+    problems = check_graph(graph)
+    _check(not problems, "graph")
 
     target = Path(prov_dir)
     target.mkdir(parents=True, exist_ok=True)
     store_path = target / STORE_FILE
     store.write_jsonl(store_path)
-    graph = to_bep028_graph(store, label=LABEL, description=DRIVER_DESCRIPTION)
-    return [store_path, *write_bep028_files(graph, target, label=LABEL)]
+    written = write_bep028_files(graph, target, label=LABEL)
+    for stale in target.glob(f"{_PREFIX}*.json"):
+        if stale not in written:
+            stale.unlink()
+    return [store_path, *written]
