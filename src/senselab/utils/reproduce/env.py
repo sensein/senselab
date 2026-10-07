@@ -804,7 +804,7 @@ def r_snapshot_url(date: datetime.date) -> str:
     return f"{PPM_CRAN}/{date.isoformat()}"
 
 
-R_SESSION_FIELDS = ("installed", "lib_paths", "r_version", "session_info")
+R_SESSION_FIELDS = ("installed", "namespaces", "lib_paths", "r_version", "session_info")
 """The fields of ``SESSION.json`` that describe the loaded R session, compared again at run time."""
 _R_SESSION_CUT = "loaded via a namespace"
 
@@ -822,6 +822,9 @@ def _r_session_lines() -> list[str]:
         'ip <- installed.packages(lib.loc = lib)[, c("Package", "Version"), drop = FALSE]',
         'write.table(ip, file.path(out, "installed.tsv"), sep = "\\t", quote = FALSE, row.names = FALSE,'
         " col.names = FALSE)",
+        "ns <- sort(loadedNamespaces())",
+        'nv <- vapply(ns, function(n) as.character(packageVersion(n)), "")',
+        'writeLines(paste(ns, nv, sep = "\\t"), file.path(out, "namespaces.tsv"))',
         'writeLines(.libPaths(), file.path(out, "lib_paths.txt"))',
         'writeLines(capture.output(sessionInfo()), file.path(out, "session_info.txt"))',
         'writeLines(R.version.string, file.path(out, "r_version.txt"))',
@@ -832,9 +835,10 @@ def _r_session_lines() -> list[str]:
 def r_session_script(packages: Sequence[RPackage]) -> str:
     """The R script that records a loaded session: ``Rscript --vanilla <script> <r_lib> <out dir>``.
 
-    It loads each package and writes ``installed.tsv``, ``lib_paths.txt``, ``session_info.txt`` and
-    ``r_version.txt`` to the out dir; `read_r_session` reads them back. `r_script` ends with the same
-    lines, so prefetch and run record a session the same way.
+    It loads each package and writes ``installed.tsv``, ``namespaces.tsv`` (every loaded namespace and its
+    ``packageVersion``), ``lib_paths.txt``, ``session_info.txt`` and ``r_version.txt`` to the out dir;
+    `read_r_session` reads them back. Prefetch runs it in a fresh ``Rscript`` after the install
+    (`r_install_script`) and the run in the step's sandbox, so both record the session the same way.
 
     Raises:
         ValueError: If a package name or version is not plain.
@@ -853,23 +857,26 @@ def r_session_script(packages: Sequence[RPackage]) -> str:
 def read_r_session(out: Path) -> dict[str, Any]:
     """Read the files `r_session_script` writes, in ``SESSION.json``'s form (`R_SESSION_FIELDS`).
 
-    ``session_info`` keeps the lines of ``sessionInfo()`` before ``loaded via a namespace``: that block
-    lists namespaces an install or a script happened to load, not the session the packages make.
+    ``session_info`` keeps the lines of ``sessionInfo()`` before ``loaded via a namespace``; the loaded
+    namespaces are compared by name and version through ``namespaces`` instead, which also covers a
+    namespace-only package (Matrix, MASS, nlme) updated in place in a site library.
 
     Args:
         out: The out dir the script wrote.
 
     Returns:
-        ``{"installed", "lib_paths", "r_version", "session_info"}``.
+        ``{"installed", "namespaces", "lib_paths", "r_version", "session_info"}``.
 
     Raises:
         OSError: If a file is missing or unreadable.
     """
     rows = [line.split("\t") for line in (out / "installed.tsv").read_text().splitlines() if line.strip()]
+    loaded = [line.split("\t") for line in (out / "namespaces.tsv").read_text().splitlines() if line.strip()]
     info = (out / "session_info.txt").read_text().splitlines()
     cut = next((i for i, line in enumerate(info) if line.startswith(_R_SESSION_CUT)), len(info))
     return {
         "installed": {row[0]: row[1] for row in rows if len(row) >= 2},
+        "namespaces": dict(sorted((row[0], row[1]) for row in loaded if len(row) >= 2)),
         "lib_paths": (out / "lib_paths.txt").read_text().splitlines(),
         "r_version": (out / "r_version.txt").read_text().strip(),
         "session_info": [line.rstrip() for line in info[:cut] if line.strip()],
@@ -945,14 +952,17 @@ def r_install_script(build_modules: Sequence[str] = ()) -> str:
     """The ``bash -c`` script that loads the modules and runs the generated R script.
 
     Positional arguments: ``$1`` R module, ``$2`` r_lib, ``$3`` script, ``$4`` out dir, ``$5`` repository,
-    ``$6`` kernel prefix (may be empty). ``R_LIBS`` and ``R_LIBS_USER`` are the library and
-    ``R_LIBS_SITE`` is empty, so ``.libPaths()`` is the library then R's own.
+    ``$6`` kernel prefix (may be empty), ``$7`` the `r_session_script`. ``R_LIBS`` and ``R_LIBS_USER`` are
+    the library and ``R_LIBS_SITE`` is empty, so ``.libPaths()`` is the library then R's own. After the
+    install, the session is recorded again by ``$7`` in a fresh ``Rscript`` (``TZ=UTC``), overwriting the
+    install process's own record, so prefetch and run record it from the same kind of process.
     """
     return (
         f'. {MODULES_INIT} && module load {_module_words(build_modules)}"$1" && '
         'export R_LIBS="$2" R_LIBS_USER="$2" R_LIBS_SITE= && '
         'if [ -n "$6" ]; then export PATH="$6/bin:$PATH"; fi && '
-        'exec Rscript --vanilla "$3" "$2" "$4" "$5" "$6"'
+        'Rscript --vanilla "$3" "$2" "$4" "$5" "$6" && '
+        'exec Rscript --vanilla "$7" "$2" "$4"'
     )
 
 
@@ -1068,11 +1078,15 @@ def prefetch_r(
             module_env["PATH"] = pairs.get("PATH", "")
             if "LD_LIBRARY_PATH" in pairs:
                 module_env["LD_LIBRARY_PATH"] = pairs["LD_LIBRARY_PATH"]
-            script, out = work / "install.R", work / "out"
+            script, session_script, out = work / "install.R", work / "session.R", work / "out"
             script.write_text(r_script(env.r_packages))
+            session_script.write_text(r_session_script(env.r_packages))
             out.mkdir()
             prefix = str(venv) if kind == "ir_notebook" and venv is not None else ""
-            argv = _in_bash(r_install_script(build_modules), module, str(r_lib), str(script), str(out), repo, prefix)
+            argv = _in_bash(
+                r_install_script(build_modules),
+                *(module, str(r_lib), str(script), str(out), repo, prefix, str(session_script)),
+            )
             _checked(run(argv, run_env, work), "Rscript install")
             recorded = read_r_session(out)
             installed, lib_paths = recorded["installed"], recorded["lib_paths"]
@@ -1081,6 +1095,7 @@ def prefetch_r(
                 "key": key,
                 **recorded,
                 "script_sha256": hashlib.sha256(script.read_bytes()).hexdigest(),
+                "session_script_sha256": hashlib.sha256(session_script.read_bytes()).hexdigest(),
             }
         if reported_version != f"R version {r_version}" and not reported_version.startswith(f"R version {r_version} "):
             raise ReproduceLockError(f"module {module} gave {reported_version!r}, the profile expects R {r_version}")

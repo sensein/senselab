@@ -13,6 +13,7 @@ import logging
 import os
 import socket
 import subprocess
+import sys
 import uuid
 import venv
 from collections.abc import Iterator, Sequence
@@ -903,6 +904,7 @@ FAKE_RSCRIPT = """#!/bin/sh
 # Rscript --vanilla <script> <r_lib> <out>
 out="$4"
 printf 'lme4\\t1.1-37\\n' > "$out/installed.tsv"
+printf 'Matrix\\t@MATRIX@\\nlme4\\t1.1-37\\n' > "$out/namespaces.tsv"
 printf '%s\\n' "$3" > "$out/lib_paths.txt"
 printf 'R version 4.5.2 (2025-10-31)\\nother attached packages: lme4_1.1-37\\nloaded via a namespace: x\\n' \\
   > "$out/session_info.txt"
@@ -910,11 +912,11 @@ printf 'R version 4.5.2 (2025-10-31)\\n' > "$out/r_version.txt"
 """
 
 
-def _r_step(world: World, session: dict[str, Any]) -> dict[str, Any]:
+def _r_step(world: World, session: dict[str, Any], matrix: str = "1.7-3") -> dict[str, Any]:
     r_lib = world.cache / "r" / "lme4"
     fake = world.tmp / "rbin"
     fake.mkdir(exist_ok=True)
-    (fake / "Rscript").write_text(FAKE_RSCRIPT)
+    (fake / "Rscript").write_text(FAKE_RSCRIPT.replace("@MATRIX@", matrix))
     (fake / "Rscript").chmod(0o755)
     r_lib.mkdir(parents=True, exist_ok=True)
     (r_lib / env.MODULE_ENV).write_text(json.dumps({"module": "R/4.5.2", "build_modules": [], "PATH": str(fake)}))
@@ -934,6 +936,7 @@ def _r_step(world: World, session: dict[str, Any]) -> dict[str, Any]:
 def _session(world: World, r_version: str = "R version 4.5.2 (2025-10-31)") -> dict[str, Any]:
     return {
         "installed": {"lme4": "1.1-37"},
+        "namespaces": {"Matrix": "1.7-3", "lme4": "1.1-37"},
         "lib_paths": [os.path.realpath(world.cache / "r" / "lme4")],
         "r_version": r_version,
         "session_info": ["R version 4.5.2 (2025-10-31)", "other attached packages: lme4_1.1-37"],
@@ -1121,3 +1124,57 @@ def test_stale_run_links_are_removed_for_steps_that_did_not_run(world: World) ->
     orphan = world.manifest(world.step("prep", "prep", "{root:data}/in/a.txt", commit="1" * 40))
     assert world.run(orphan)["prep"].codes == ("E_SRC_MISSING",)
     assert not os.path.lexists(run_dir / "prep")
+
+
+@needs_userns
+def test_a_namespace_updated_in_place_fails_the_r_session_check(world: World) -> None:
+    """A namespace-only package (Matrix) at another version than at prefetch is ``E_R_SESSION``."""
+    manifest = world.manifest(_r_step(world, _session(world), matrix="1.7-4"))
+    world.prefetch(manifest)
+    outcome = world.run(manifest)["prep"]
+    assert outcome.codes == ("E_R_SESSION",) and outcome.status == "failed" and outcome.exit != 0
+
+
+TERMINAL_PROBE = """
+import json, sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from tests.utils.reproduce.run_test import World
+world = World(Path(sys.argv[2]))
+manifest = world.manifest(world.step("prep", "prep", "{root:data}/in/a.txt"))
+world.prefetch(manifest)
+day = world.tmp / "runs" / world.config().date.strftime("%Y-%m-%d")
+day.mkdir(parents=True)
+day.chmod(0o500)
+try:
+    outcome = world.run(manifest)["prep"]
+finally:
+    day.chmod(0o700)
+log = (outcome.out / "logs" / "driver.log").read_text() if outcome.out else ""
+print(json.dumps({"codes": list(outcome.codes), "logged": "Traceback" in log}))
+"""
+
+
+@needs_userns
+@pytest.mark.skipif(os.geteuid() == 0, reason="root writes regardless of mode")
+def test_a_driver_error_prints_nothing_on_the_terminal(tmp_path: Path) -> None:
+    """With no logging plugin in the way, an unwritable runs dir gives ``E_DRIVER`` and an empty stderr.
+
+    Run in a subprocess, because pytest's logging plugin installs handlers that hide
+    `logging.lastResort`, which is what would print a stray traceback to stderr.
+    """
+    src = Path(__file__).resolve().parents[3]
+    env_vars = {"PATH": "/usr/bin:/bin", "HOME": str(tmp_path), "LANG": "C.UTF-8"}
+    if "LD_LIBRARY_PATH" in os.environ:
+        env_vars["LD_LIBRARY_PATH"] = os.environ["LD_LIBRARY_PATH"]
+    done = subprocess.run(
+        [sys.executable, "-c", TERMINAL_PROBE, str(src), str(tmp_path / "w")],
+        env=env_vars,
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    assert done.returncode == 0, done.stderr[-2000:]
+    result = json.loads(done.stdout.strip().splitlines()[-1])
+    assert "E_DRIVER" in result["codes"] and result["logged"] is True
+    assert "Traceback" not in done.stderr and str(tmp_path) not in done.stderr

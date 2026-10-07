@@ -115,8 +115,7 @@ mount that refuses is fatal unless its type is a kernel pseudo filesystem in `PS
 PSEUDO_FS = frozenset(
     {
         "autofs", "binfmt_misc", "bpf", "cgroup", "cgroup2", "configfs", "debugfs", "devpts", "efivarfs",
-        "fusectl", "hugetlbfs", "mqueue", "nsfs", "proc", "pstore", "rpc_pipefs", "securityfs", "sysfs",
-        "tracefs",
+        "fusectl", "nsfs", "proc", "pstore", "rpc_pipefs", "securityfs", "sysfs", "tracefs",
     }
 )  # fmt: skip
 SYSTEM_TMP = "/tmp"

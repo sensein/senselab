@@ -380,12 +380,23 @@ runs.
    the atime flags), which a user namespace may not clear. Skipped: the writable binds (by path) and
    the fresh `/proc`. A refusal is fatal (the script exits before the step) unless the mount is a
    kernel pseudo filesystem (`PSEUDO_FS`: sysfs, cgroup, tracefs, binfmt_misc, autofs, and the
-   like), which holds no data and whose writes need host privileges anyway. Measured on a compute
+   like), which holds no data and whose writes need host privileges anyway. `hugetlbfs` and `mqueue`
+   are not exempt (B12 re-review): both hold data a step could share with the host, both remount
+   read-only on this cluster, and if either refuses somewhere the step aborts. An IPC namespace that
+   would make `mqueue` private was the alternative; not exempting them is simpler and fails closed. Measured on a compute
    node with 733 mounts (438 NFS, 227 autofs): 0.07 s; the same loop as one `mount` process per entry
    took 11 s. Two mounts refuse there, tracefs and binfmt_misc. Taking only the topmost entry per path
    matters: remounting by path always reaches the topmost mount, and the flags of a lower entry
    (an autofs trigger under an NFS mount) would be refused.
 4. A fresh private tmpfs on `/dev/shm`, so multiprocessing works and nothing reaches the host's.
+
+A nested user namespace does not undo this. A step that calls `unshare(CLONE_NEWUSER|CLONE_NEWNS)`
+gets every capability in the new namespace, but the mounts it inherits are locked: remounting a
+read-only root read-write, or bind-mounting it and remounting the bind read-write, fails with
+`EPERM`, and writes keep failing with `EROFS`. Checked on the RHEL 8 (4.18) compute nodes, and kept
+as a regression test (`test_a_nested_user_namespace_cannot_make_a_read_only_root_writable`).
+`unshare -Urm` from the shell cannot even write its uid map, and a shell started with `-Um` loses its
+capabilities at exec; the test uses the syscall directly so it exercises the strongest case.
 
 So everything is read-only except the step's `work/` and `tmp/` dirs (and, for the R session check
 and the adapter, their own driver-made scratch dirs). That includes the cache with its R libraries,
@@ -1052,12 +1063,15 @@ It holds no messages, and no paths other than checkout-relative code frames.
   module's `PATH`, then the system and native dirs). Before the step, `Rscript --vanilla
   <env.r_session_script> <r_lib> <R/rsession>` runs in the same sandbox with the same env (its out dir
   is the only extra writable dir), `env.read_r_session` reads the result, and every field of
-  `env.R_SESSION_FIELDS` (installed versions, `.libPaths()`, R version, `sessionInfo()`) must equal
-  `SESSION.json`'s, or the step fails with `E_R_SESSION` and does not run. Prefetch writes those
-  fields through the same reader, from the same R lines at the end of `r_script`, and now runs R with
-  `TZ=UTC` as the step does. The reader keeps `sessionInfo()` up to `loaded via a namespace`: that
-  block lists whatever namespaces the install happened to load, which differs between prefetch and
-  run without saying anything about the session.
+  `env.R_SESSION_FIELDS` (installed versions, every loaded namespace with its `packageVersion`,
+  `.libPaths()`, R version, `sessionInfo()`) must equal `SESSION.json`'s, or the step fails with
+  `E_R_SESSION` and does not run. The namespace versions catch a namespace-only package (Matrix,
+  MASS, nlme) updated in place in the module's site library, which the installed versions of the
+  step's own library cannot see. Prefetch records the same fields with the same script
+  (`env.r_session_script`) in a fresh `Rscript` after the install, with `TZ=UTC` as the step has: the
+  install process itself has loaded namespaces of its own (tools, compiler and the like), so its
+  record would never match a run. The reader still drops `sessionInfo()`'s `loaded via a namespace`
+  text block, since the namespaces are compared through their name and version map.
 - **The sandboxed run.** A template naming a missing placeholder is `E_RENDER_PLACEHOLDER`, a
   malformed one `E_RENDER_BAD`; the cwd must lie in the checkout or `work/` (`E_CWD`). The sandbox
   execs `sh` which `cd`s into the cwd after the mounts (so it is on the read-only bind), then execs
@@ -1126,9 +1140,15 @@ It holds no messages, and no paths other than checkout-relative code frames.
   `OSError` or `TypeError`), nothing is recorded and the summary's exit becomes non-zero, so the two
   never disagree.
 - **Driver failures.** Any `OSError`, `TypeError` or `ValueError` anywhere in `run_step` (log setup,
-  staging, `write_summary`, provenance, scratch removal) becomes `E_DRIVER`, with the traceback in
-  `driver.log` only. After the reset, a summary is still written when possible (an `E_DRIVER` summary
-  if the first write failed).
+  staging, `write_summary`, provenance, scratch removal, run links) becomes `E_DRIVER`, with the
+  traceback in `driver.log` only. After the reset, a summary is still written when possible (an
+  `E_DRIVER` summary if the first write failed). For the whole of `run_step` the `senselab` logger has
+  a `NullHandler` and no propagation: without any handler, `logging.lastResort` would print a record
+  (and its traceback, which names paths under the runs and results roots) to stderr. A failure caught
+  outside the step's `_driver_log` (a run link, for example) is appended straight to `driver.log` when
+  the result dir has one, and dropped otherwise. The test runs in a subprocess, because pytest's
+  logging plugin installs handlers that hide `lastResort`. In `run_steps`, a `run.json` that cannot
+  be written adds `E_DRIVER` and a non-zero exit to every step of that analysis, instead of raising.
 - **Statuses and links.** `executed`, `skipped`, `failed` (refused, or the preamble did not hand over)
   and `never-ran` (a need is not executed-or-skipped with exit 0). `run_steps` writes `run.json` with
   each step's key, status, exit and codes and links each result dir. A `never-ran` step, or a failed
