@@ -26,23 +26,36 @@ The two axes this node keeps apart — triage and release — and the tables it 
 
 from __future__ import annotations
 
+import functools
+import math
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
+import yaml
+
 from senselab.audio.data_structures import AudioHints
 from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.live_evidence import declared_task, recording_stem
+from senselab.audio.workflows.triage.nodes.airway import EVENTS_FOUND as AIRWAY_EVENTS_FOUND
 from senselab.audio.workflows.triage.nodes.airway import INSTRUMENT_ABSENT as AIRWAY_INSTRUMENT_ABSENT
+from senselab.audio.workflows.triage.nodes.airway_task import (
+    BACKGROUND_SPEECH,
+    BREATH_READING,
+    COUGH_READING,
+    required_event,
+)
 from senselab.audio.workflows.triage.nodes.branches import (
     BRANCH_FAMILY,
     EXPECTATIONS,
     Expectation,
+    Pattern,
     declared_task_family,
 )
 from senselab.audio.workflows.triage.nodes.common import (
     REMINT,
     NodeResult,
+    consensus_words,
     find_measurement,
     find_measurements,
     find_verdict,
@@ -68,6 +81,7 @@ from senselab.audio.workflows.triage.nodes.gates import (
     NOT_COMPUTED,
     NULL_NO_OVERLAP,
     NULL_VALUE,
+    UNCOMPUTED_REASONS,
     UNDECIDED,
     AppliedGate,
     GateBounds,
@@ -77,21 +91,31 @@ from senselab.audio.workflows.triage.nodes.gates import (
     load_gate_bounds,
 )
 from senselab.audio.workflows.triage.nodes.redact import (
+    NEW,
     UNMASKED_BY_REVIEWER,
     MaskPlan,
     mask_plan,
     name_approvals,
     padding_ms,
+    task_texts,
 )
+from senselab.audio.workflows.triage.nodes.voice import PHONATION_READING
 from senselab.audio.workflows.triage.task_lexicon import task_lexicon
 from senselab.audio.workflows.triage.vocabulary import (
+    BREATH_COUNTED,
+    BREATH_SUSTAINED,
+    COUGH_COUNTED,
+    COUGH_PERFORMED,
     GRAPH_ORDER,
+    KEY_NODE_OUTCOME_UNREADABLE,
     PII_SCAN,
     REDACTION_LLM_ANNOTATION,
     RULESET_ROUTING,
     SCANNED,
     SECOND_OPINION_ANSWERS,
+    SUPERSEDES,
     TASK,
+    TASK_EXTENT_SPAN_ROLE,
     UNDETERMINED,
     BranchDecision,
     BranchReport,
@@ -102,6 +126,7 @@ from senselab.audio.workflows.triage.vocabulary import (
     Outcome,
     RedactionEvidence,
     RunState,
+    TaskEvidence,
     fold_file_verdict,
     reviewer_may_unmask,
 )
@@ -152,6 +177,7 @@ def _node_verdict_from_entity(entity: Entity) -> NodeVerdict:
             outcome=Outcome.FLAG,
             kind=None,
             why=f"{node} wrote outcome {raw!r}, which is not a node outcome; its verdict was not folded",
+            key=KEY_NODE_OUTCOME_UNREADABLE,
         )
     return NodeVerdict(node=node, outcome=outcome, kind=attributes.get("kind"), why=attributes["why"])
 
@@ -274,6 +300,300 @@ def _spans_by_node(store: ProvStore) -> dict[str, int]:
     return counts
 
 
+TASK_MINIMUM_DURATION_PATH = Path(__file__).parents[1] / "data" / "task_minimum_duration.yaml"
+AIRWAY_EVENT_TOKENS_PATH = Path(__file__).parents[1] / "data" / "airway_event_tokens.yaml"
+DISCARD_CONTESTED_PATH = Path(__file__).parents[1] / "data" / "discard_contested.yaml"
+
+
+@functools.cache
+def _task_minimum_durations() -> tuple[float, dict[str, float]]:
+    """``data/task_minimum_duration.yaml``: the default minimum and the per-family ones, in seconds."""
+    document = yaml.safe_load(TASK_MINIMUM_DURATION_PATH.read_text()) or {}
+    families = {str(name): float(value) for name, value in (document.get("families") or {}).items()}
+    return float(document["default_s"]), families
+
+
+@functools.cache
+def _discard_contested() -> dict[str, Any]:
+    """``data/discard_contested.yaml``, as written."""
+    return yaml.safe_load(DISCARD_CONTESTED_PATH.read_text()) or {}
+
+
+def contest_events_min(instructed: int | None, event: str = "cough") -> int:
+    """The detector events that contest a measure's no-event discard of a family.
+
+    Args:
+        instructed: The family's instructed count, or None where its instruction names none.
+        event: The family's required event, ``breath`` or ``cough``.
+
+    Returns:
+        The instructed count times ``instructed_fraction``, rounded up; where no count is
+        instructed, the breath section's ``uncounted_events_min`` for a breath family and the
+        top-level one otherwise.
+    """
+    document = _discard_contested()
+    if instructed is not None:
+        return math.ceil(instructed * float(document["instructed_fraction"]))
+    section = (document.get("breath") or {}) if event == "breath" else {}
+    return int(section.get("uncounted_events_min", document["uncounted_events_min"]))
+
+
+def contest_rise_db_min(event: str) -> float | None:
+    """The breath-train rise a breath family's contested discard needs, or None for any other event.
+
+    Args:
+        event: The family's required event.
+
+    Returns:
+        ``breath.train_rise_db_min`` for a breath family; None otherwise.
+    """
+    if event != "breath":
+        return None
+    return float((_discard_contested().get("breath") or {})["train_rise_db_min"])
+
+
+def minimum_duration_s(declared_family: str | None) -> float | None:
+    """The shortest recording a declared family can occupy, or None where nothing is declared.
+
+    Args:
+        declared_family: The task family the recording declares.
+
+    Returns:
+        The family's own minimum, else the profile's default; None where no family is declared.
+    """
+    if not declared_family:
+        return None
+    default, families = _task_minimum_durations()
+    return families.get(declared_family, default)
+
+
+@functools.cache
+def _airway_event_tokens() -> dict[str, frozenset[str]]:
+    """``data/airway_event_tokens.yaml``: per declared airway family, the event tokens naming its event."""
+    document = yaml.safe_load(AIRWAY_EVENT_TOKENS_PATH.read_text()) or {}
+    return {
+        str(family): frozenset(str(token).casefold() for token in document.get(kind) or ())
+        for family, kind in (document.get("families") or {}).items()
+    }
+
+
+def event_tokens_n(store: ProvStore, declared_family: str | None) -> int:
+    """How many bracketed consensus tokens name the declared airway family's own event.
+
+    Args:
+        store: The provenance store, read for its consensus words.
+        declared_family: The task family the recording declares.
+
+    Returns:
+        The count of ``[cough]``-like tokens for a cough family, ``[breath]``-like for a breath
+        family, and 0 for every other family or where no consensus exists.
+    """
+    tokens = _airway_event_tokens().get(declared_family or "")
+    if not tokens:
+        return 0
+    return sum(
+        1
+        for word in consensus_words(store)
+        if word.attributes.get("bracketed")
+        and str(word.attributes.get("text") or "").strip().strip("[]()<>").strip().casefold() in tokens
+    )
+
+
+def _airway_events_found(store: ProvStore) -> int | None:
+    """How many events of its own kind the owning AIRWAY branch detected, or None where it reported no count.
+
+    Args:
+        store: The provenance store, read for AIRWAY's events-found measurement.
+
+    Returns:
+        The count, or None.
+    """
+    measurement = find_measurement(store, AIRWAY_EVENTS_FOUND)
+    if measurement is None:
+        return None
+    value = measurement.attributes.get("value")
+    return int(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+
+def _owner_absent_inputs(
+    store: ProvStore, owners: Sequence[str], gate_record: Mapping[str, Any] | None
+) -> tuple[str, ...]:
+    """What an owning branch needed to look for its task and did not have.
+
+    Args:
+        store: The provenance store, read for AIRWAY's instrument-absent measurement and ROUTING's
+            critical absences.
+        owners: The branches owning the declared family.
+        gate_record: The gate outcome record, read for the owning node's uncomputed readings.
+
+    Returns:
+        The absent inputs, each named as its branch, gate or derivative, in a stable order.
+    """
+    absent: list[str] = []
+    if "AIRWAY" in owners:
+        measurement = find_measurement(store, AIRWAY_INSTRUMENT_ABSENT)
+        if measurement is not None:
+            absent.extend(f"AIRWAY:{name}" for name in measurement.attributes.get("absent") or ())
+    absences = _critical_absences(store)
+    for branch in owners:
+        absent.extend(f"{branch}:{gate}" for gate in sorted(absences.get(branch, {})))
+    record = dict(gate_record or {})
+    if record.get("node") in owners:
+        absent.extend(
+            f"{record['node']}:{gate.get('gate')}"
+            for gate in record.get("applied") or ()
+            if isinstance(gate, Mapping)
+            and gate.get("passed") == UNDETERMINED
+            and gate.get("reason") in UNCOMPUTED_REASONS
+        )
+    return tuple(dict.fromkeys(absent))
+
+
+def _airway_reading(store: ProvStore, name: str) -> tuple[dict[str, Any] | None, tuple[str, ...]]:
+    """AIRWAY's task reading and the inputs it lacked, as AIRWAY wrote them.
+
+    Args:
+        store: The provenance store.
+        name: The reading's measurement name.
+
+    Returns:
+        The measurement's attributes and ``()``; ``None`` and the absent inputs where AIRWAY lacked
+        them; ``None`` and the measurement's own name where AIRWAY reported and wrote no reading;
+        ``None`` and ``()`` where AIRWAY did not report at all.
+    """
+    measurement = find_measurement(store, name)
+    if measurement is None:
+        reported = any(report.node == "AIRWAY" for _, report in _branch_reports(store))
+        return None, ((f"AIRWAY:{name}",) if reported else ())
+    absent = tuple(str(each) for each in measurement.attributes.get("absent") or ())
+    return (None, absent) if absent else (dict(measurement.attributes), ())
+
+
+def _train_rise_db(reading: dict[str, Any] | None) -> float | None:
+    """The breath train's median burst rise from AIRWAY's breath reading, or None where none was read."""
+    train = ((reading or {}).get("reading") or {}).get("train") or {}
+    rise = train.get("rise_db")
+    return float(rise) if rise is not None else None
+
+
+def _voice_reading(store: ProvStore) -> tuple[dict[str, Any] | None, tuple[str, ...]]:
+    """VOICE's phonation reading and the inputs it lacked, as VOICE wrote them.
+
+    Args:
+        store: The provenance store.
+
+    Returns:
+        The measurement's attributes and ``()``; ``None`` and the absent inputs where VOICE lacked
+        them; ``None`` and the measurement's own name where VOICE reported and wrote no reading;
+        ``None`` and ``()`` where VOICE did not report at all.
+    """
+    measurement = find_measurement(store, PHONATION_READING)
+    if measurement is None:
+        reported = any(report.node == "VOICE" for _, report in _branch_reports(store))
+        return None, ((f"VOICE:{PHONATION_READING}",) if reported else ())
+    absent = tuple(f"VOICE:{each}" for each in measurement.attributes.get("absent") or ())
+    return (None, absent) if absent else (dict(measurement.attributes), ())
+
+
+def _task_evidence(
+    store: ProvStore,
+    declared_family: str | None,
+    gate_record: Mapping[str, Any] | None = None,
+) -> TaskEvidence:
+    """Whether the declared task was performed at all: its owner, the duration and its event tokens.
+
+    Args:
+        store: The provenance store, read for ADMIT's ``recording`` stream, the consensus words and
+            AIRWAY's task readings.
+        declared_family: The task family the recording declares.
+        gate_record: The gate outcome record, read for the owning node's uncomputed readings.
+
+    Returns:
+        The evidence :func:`~senselab.audio.workflows.triage.vocabulary.fold_file_verdict` reads. A
+        breath family of ``data/airway_event_requirements.yaml`` is decided on AIRWAY's breathing-
+        pattern reading and a cough family on its cough-onset reading; the reading's absent inputs
+        then stand for the owner's, and a reading AIRWAY never wrote is itself an absent input.
+    """
+    owners = tuple(branch for branch, rows in EXPECTATIONS.items() if declared_family and declared_family in rows)
+    recording = next(
+        (
+            stream
+            for stream in store.entities("stream")
+            if stream.attributes.get("name") == "recording" and not store.is_invalidated(stream.id)
+        ),
+        None,
+    )
+    duration = recording.extent[1] - recording.extent[0] if recording is not None and recording.extent else None
+    airway = EXPECTATIONS["AIRWAY"].get(declared_family or "") if "AIRWAY" in owners else None
+    needed = required_event(declared_family) if "AIRWAY" in owners else None
+    absent = _owner_absent_inputs(store, owners, gate_record)
+    breath_mode: str | None = None
+    reading: dict[str, Any] | None = None
+    if needed == "breath" and airway is not None:
+        breath_mode = BREATH_SUSTAINED if airway.pattern == Pattern.SOUND_COVERAGE else BREATH_COUNTED
+        reading, missing = _airway_reading(store, BREATH_READING)
+        absent = missing if reading is not None or missing else absent
+    cough_mode: str | None = None
+    cough: dict[str, Any] | None = None
+    if needed == "cough" and airway is not None:
+        cough_mode = COUGH_PERFORMED if airway.required_count is None else COUGH_COUNTED
+        cough, missing = _airway_reading(store, COUGH_READING)
+        absent = missing if cough is not None or missing else absent
+    voice = EXPECTATIONS["VOICE"].get(declared_family or "") if "VOICE" in owners else None
+    voice_mode: str | None = None
+    phonation: dict[str, Any] | None = None
+    if voice is not None:
+        voice_mode = "glide" if voice.pattern == Pattern.GLIDE else "sustained"
+        phonation, missing = _voice_reading(store)
+        absent = missing if phonation is not None or missing else absent
+    instructed = airway.required_count.value if airway is not None and airway.required_count is not None else None
+    heard = find_measurement(store, BACKGROUND_SPEECH) if reading is not None or cough is not None else None
+    background = {k: v for k, v in heard.attributes.items() if k not in ("name", "signal")} if heard else {}
+    return TaskEvidence(
+        owning_branches=owners,
+        duration_s=duration,
+        minimum_duration_s=minimum_duration_s(declared_family) if owners else None,
+        event_tokens_n=event_tokens_n(store, declared_family),
+        owner_absent_inputs=absent,
+        required_event=(needed if needed != "cough" or cough_mode is not None else None)
+        or ("phonation" if voice_mode is not None else None),
+        events_found_n=_airway_events_found(store) if "AIRWAY" in owners else None,
+        event_kind=airway.label_set if airway is not None else None,
+        instructed_count=airway.required_count.value
+        if airway is not None and airway.required_count is not None
+        else None,
+        contest_events_min=contest_events_min(instructed, needed) if needed in ("breath", "cough") else None,
+        contest_rise_db_min=contest_rise_db_min(needed) if needed in ("breath", "cough") else None,
+        breath_train_rise_db=_train_rise_db(reading),
+        breath_mode=breath_mode,
+        breath_pattern=reading["pattern"] if reading is not None else None,
+        breath_events_n=reading["events_n"] if reading is not None else None,
+        breath_vetoed_by=reading.get("vetoed_by") if reading is not None else None,
+        breath_train_breaths=reading.get("train_breaths") if reading is not None else None,
+        breath_review=bool(reading.get("review")) if reading is not None else False,
+        breath_reading={"mode": breath_mode, **reading["reading"]} if reading is not None else {},
+        cough_mode=cough_mode,
+        cough_onsets_n=cough["onsets_n"] if cough is not None else None,
+        cough_review=bool(cough.get("review")) if cough is not None else False,
+        cough_reading={"mode": cough_mode, **cough["reading"]} if cough is not None else {},
+        background_speech=background,
+        voice_mode=voice_mode,
+        voice_found=bool(phonation["found"]) if phonation is not None else None,
+        voice_mismatch=phonation.get("mismatch") if phonation is not None else None,
+        voice_review=tuple(phonation.get("review") or ()) if phonation is not None else (),
+        voice_capture_cut=bool((phonation or {}).get("shutoff", {}).get("during_task")),
+        voice_shutoff_after=bool((phonation or {}).get("shutoff"))
+        and not (phonation or {}).get("shutoff", {}).get("during_task"),
+        voice_outside_speech=tuple((phonation or {}).get("outside_speech") or ()),
+        voice_reading={
+            "mode": voice_mode,
+            **{k: v for k, v in phonation.items() if k not in ("name", "signal", "absent")},
+        }
+        if phonation is not None
+        else {},
+    )
+
+
 def _route_state(store: ProvStore) -> tuple[str | None, list[str]]:
     """What the ruleset made of the whole recording, as ROUTING recorded it.
 
@@ -379,6 +699,7 @@ def _redaction_evidence(
         policy_masks_n=plan.policy_masks_n,
         person_names_masked_n=plan.person_names_masked,
         name_release_proposed=plan.name_release_proposed,
+        reviewer_requested_n=sum(1 for span in plan.proposals if span.agreement == NEW),
     )
 
 
@@ -798,6 +1119,12 @@ def verdict(
         lexicon=task_lexicon(config, declared_task_family(store), hint),
         language=None if hint is None else str(hint.metadata.get("language") or "") or None,
         name_approvals=name_approvals(config, recording_stem(store)),
+        task_text=task_texts(hint),
+    )
+    task_evidence = _task_evidence(
+        store,
+        declared_family or None,
+        outcome.record(),
     )
     file_verdict = fold_file_verdict(
         node_verdicts,
@@ -817,6 +1144,7 @@ def verdict(
         agreed_redactions=plan.agreed,
         unplaced=[(finding.family, finding.state) for finding in plan.unplaced],
         second_opinion=opinion,
+        task=task_evidence,
     )
 
     software = software_agent(store)

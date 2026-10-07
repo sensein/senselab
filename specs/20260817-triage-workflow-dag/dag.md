@@ -345,13 +345,36 @@ carrying `FileVerdict.record()`. It is the graph's only decision about the recor
 
 | axis | values | decided from |
 | --- | --- | --- |
-| `triage` | `pass`, `flag`, `discard` | every contributing ground below |
+| `triage` | `pass`, `flag`, `rerun`, `discard` | every contributing ground below |
 | `release` | `release_without_redaction`, `release_with_redaction`, `withheld`, `not_assessed` | REDACT's outcome where it left one, the redaction evidence otherwise |
 
-Resolution order: ADMIT `FAIL` → `discard` on ground `unmeasurable`; else any flag ground → `flag`;
-else file route state `empty` → `discard` on ground `acoustically_empty`; else `pass`. The two
-discard grounds are kept apart because a consumer that cannot tell them apart treats an empty
-recording as a broken one.
+Resolution order (2026-10-04, DAG review proposals 3 and 4): ADMIT `FAIL` → `discard` on ground
+`unmeasurable`; else file route state `empty`, where no branch found its kind → `discard` on ground
+`acoustically_empty`, with every flag ground kept as detail; else any **operational** flag ground →
+`rerun`; else any other flag ground → `flag`; else `pass`. The two discard grounds are kept apart
+because a consumer that cannot tell them apart treats an empty recording as a broken one. Emptiness
+used to be tested after the flags, so a declared branch forced to run on an empty file reported
+non-conformance first and all 114 r12 `empty` recordings flagged; `acoustically_empty` never fired.
+
+**Operational grounds** say the pipeline owes the recording something, not that the participant did
+anything: PREPROCESS or routing errored, a `hint_branch_map` typo, an unread declaration, route state
+`unexplained` or `unreadable`, a critical absence, TAXONOMY with no classifier output, REDACT's
+incomplete re-scan, an uncomputed reading, a node outcome the fold cannot read, a branch asked to run
+that left no report, and an unmeasured operating point (`vocabulary.OPERATIONAL_GROUND_KEYS` and
+`OPERATIONAL_GROUND_PREFIXES`). A file with one is `rerun`, which outranks `flag`: a review flag
+beside a missing derivative may be an artefact of the gap, so the pipeline is fixed and re-run before
+a person looks. Its participant grounds stay in `ground_keys`. The release axis is computed exactly as
+for any other file; `rerun` changes no artefact.
+
+**Ground keys.** Every reason carries a stable key beside its human-readable `why`: a named key in
+`vocabulary.GROUND_KEYS` (`person_name_review`, `taxonomy_no_classifier`, `acoustically_empty` …) or
+`<prefix>:<name>` for a prefix in `GROUND_KEY_PREFIXES` (`gate:<gate>`, `conformance:<branch>`,
+`nothing_read:<branch>`, `store_assertion_contradicted:<node>`, `conformance_unanswered:<node>`,
+`deviation:<node>`, `unmeasured_operating_point:<node>`, `route_mismatch:<branch>`,
+`branch_silent:<branch>`, `hint_mismatch:<branch>`, `node:<node>:<outcome>`). A deciding node writes
+no key, and stores folded before keys existed carry none, so `vocabulary.ground_key` derives one from
+the node and its outcome. `FileVerdict.ground_keys` is the sorted set behind the triage state; the
+release ground has its own key, `release_ground_key` (`redact_decided` where REDACT decided).
 
 **What a branch contributes, and what it does not.** Conformance `False` is the one claim a reporting
 node makes that becomes a flag. `True` contributes nothing, and `UNDETERMINED` contributes nothing
@@ -379,6 +402,7 @@ table; no span count is a flag by itself. Deviations are recorded and folded int
 | a detector finding SPEECH could not place on words (`open` / `unread`) | VERDICT | — |
 | a flag gate that did not pass (`dominant_speaker_share_min`, and per group `voiced_fraction_min`, `f0_spread_max_semitones`) | VERDICT | `verdict.gates` |
 | a conformance reading that should exist and was not computed | the gate's node | `uncomputed_reading_flags` |
+| the branch owning the declared task lacked an input it needs to look (`owning_branch_input_absent`; operational, so `rerun`) | the owning branch | — |
 | a reported non-conformance (`TASK` or `STORE_ASSERTIONS`) | the reporting node | `conformance_flags`, `conformance_flags_by_family` |
 | an unanswered conformance | the reporting node | `undetermined_flags` (off) |
 | a reported deviation | the reporting node | `deviation_flags` (off) |
@@ -402,7 +426,10 @@ a missing conformance *means* is not the same question on a prolonged vowel as o
 
 `FileVerdict.record()` is categorical throughout — outcomes, states, type names and config paths,
 never transcript text or a detected string — so a corpus of these aggregates without reopening a
-store. Detail: [`verdict.md`](verdict.md), `config-derivations.md` § verdict.
+store. Since 2026-10-04 the reasons quote no transcript words or proposed names: the second-speaker,
+instructions-spoken and person-name grounds carry counts, and the words stay in REVIEW's
+annotation. `record()["llm_redaction"]` still copies that annotation, quotes included; the reasons
+and grounds are what invariant 6 now holds for. Detail: [`verdict.md`](verdict.md), `config-derivations.md` § verdict.
 
 ### REPORT — render only
 
@@ -414,15 +441,19 @@ decision, because the store was already persisted. Detail: [`report.md`](report.
 
 ## What the triage state means, for a reader of the parquet
 
-- **`verdict = discard`**: the recording cannot be used. `grounds` says why: `unmeasurable` (ADMIT
-  could not decode it, or every sample is zero or constant) or `acoustically_empty` (nothing above
-  the emptiness floor on any tracked stream). 29 in r12, all `unmeasurable`.
+- **`verdict = discard`**: the recording cannot be used. `discard_ground` says why: `unmeasurable`
+  (ADMIT could not decode it, or every sample is zero or constant) or `acoustically_empty` (nothing
+  above the emptiness floor on any tracked stream, and no branch found its kind). In r12, 29, all
+  `unmeasurable`; the 114 `empty` recordings flagged then and discard after a re-fold.
+- **`verdict = rerun`**: the pipeline owes the recording something — a missing derivative, a node that
+  did not finish, a configuration the fold cannot read. `ground_keys` names it (`taxonomy_no_classifier`,
+  `route_unexplained`, `branch_silent:SPEECH` …); any participant ground beside it is listed too.
 - **`verdict = flag`**: at least one ground in the table above applies and a person should look.
-  `flags_n` counts the grounds and `flag_nodes` names the nodes that raised them; the ground texts
-  themselves are only in the store's verdict `reasons` (the parquet's `grounds` column carries the
-  discard ground only). `gate_failed_names` / `gate_flagged_names` name the gates behind a
-  conformance or flag-gate ground; `second_opinion_disagrees`, `person_name_masked_n`,
-  `llm_speakers` and `llm_instructions_spoken_n` stand behind the VERDICT-level grounds.
+  `ground_keys` (schema 21) names every ground by its stable key; the human-readable reasons stay in
+  the store's verdict `reasons`. `flags_n` counts the grounds and `flag_nodes` names the nodes that
+  raised them. `gate_failed_names` / `gate_flagged_names` name the gates behind a conformance or
+  flag-gate ground; `second_opinion_disagrees`, `person_name_masked_n`, `llm_speakers` and
+  `llm_instructions_spoken_n` stand behind the VERDICT-level grounds.
 - **`verdict = pass`**: no ground applied. It does **not** mean the audio is clean (quality issues
   are not grounds) or that the task was confirmed (`UNDETERMINED` conformance never flags).
 - **Conformance `undetermined`** is not a triage state: it is a branch that could not answer its

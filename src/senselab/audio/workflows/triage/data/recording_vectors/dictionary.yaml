@@ -35,8 +35,11 @@ columns:
 
   verdict:
     units: none
-    values: [pass, flag, discard]
-    description: The file-level triage outcome.
+    values: [pass, flag, rerun, discard]
+    description: >-
+      The file-level triage outcome. `rerun` is a recording the pipeline still owes something -- a
+      missing derivative, a node that did not finish, a configuration the fold cannot read -- before
+      anything about the participant is concluded; `ground_keys` names which.
     computation: >-
       The `triage` attribute of the latest live `verdict` entity with `node = VERDICT` (the fold);
       the fold's `FileVerdict.triage`.
@@ -94,13 +97,59 @@ columns:
     source: [recording_vectors.py:extract, vocabulary.py:FileVerdict.record, vocabulary.py:_release_from]
     null_means: REDACT passed and its planned masks stand, so the redacted copy releases on REDACT's own verdict; never null for a withheld recording.
 
-  grounds:
+  release_ground_key:
     units: none
-    values: [unmeasurable, acoustically_empty]
-    description: Why the recording was discarded.
+    description: >-
+      The stable key of `release_ground` (vocabulary.py `RELEASE_GROUND_KEYS`), or `redact_decided`
+      where REDACT's own verdict decided the release.
+    computation: The fold's `release_ground_key` attribute (`vocabulary.release_ground_key`).
+    source: [recording_vectors.py:extract, vocabulary.py:FileVerdict.record, vocabulary.py:release_ground_key]
+    null_means: The fold was written before the ground keys existed; a re-fold fills it.
+
+  discard_ground:
+    units: none
+    values: [unmeasurable, too_short_for_task, acoustically_empty, no_breath_captured, no_cough_captured, no_phonation_captured, declared_task_absent]
+    description: >-
+      Why the recording was discarded: ADMIT could not measure it (`unmeasurable`); it is shorter than
+      its declared family's minimum in data/task_minimum_duration.yaml (`too_short_for_task`); the
+      ruleset found it empty and the declared task's own branch did not say the task was performed
+      (`acoustically_empty`); a breath family of data/airway_event_requirements.yaml whose
+      breathing-pattern measure (data/breath_pattern.yaml), reading every input, found no breath
+      (counted families) or no alternating pattern (sustained families) (`no_breath_captured`); a cough
+      family whose cough-onset measure (data/cough_pattern.yaml), reading every input, found no cough
+      onset (`no_cough_captured`); a voice family whose phonation measure (data/voice_phonation.yaml)
+      found nothing over the noise floor (`no_phonation_captured`); or that branch ran
+      and found none of the task, a SPEECH task holding no lexical word (`declared_task_absent`).
     computation: The fold's `discard_ground` attribute.
     source: [recording_vectors.py:extract, vocabulary.py:FileVerdict.record]
     null_means: The recording was not discarded.
+
+  ground_keys:
+    units: none
+    description: >-
+      The stable key of every ground behind the triage state -- the discard ground and every flag,
+      sorted and deduplicated. A key is one of vocabulary.py `GROUND_KEYS` (e.g.
+      `person_name_review`, `taxonomy_no_classifier`, `acoustically_empty`) or `<prefix>:<name>`
+      for a prefix in `GROUND_KEY_PREFIXES` (`gate:<gate>`, `conformance:<branch>`,
+      `branch_silent:<branch>`, `hint_mismatch:<branch>`, `node:<node>:<outcome>` …). Keys in
+      `OPERATIONAL_GROUND_KEYS` or under `branch_silent` / `unmeasured_operating_point` are the
+      operational ones that make the file `rerun`. The human-readable reason stays in the store.
+    computation: The fold's `ground_keys` attribute (`FileVerdict.ground_keys`).
+    source: [recording_vectors.py:extract, vocabulary.py:FileVerdict.record, vocabulary.py:ground_key]
+    null_means: >-
+      The fold was written before the ground keys existed; a re-fold fills it. An empty list is a
+      pass.
+
+  annotation_keys:
+    units: none
+    description: >-
+      The stable key of every annotation on the recording, sorted and deduplicated: a reading kept
+      for filtering that moves no triage state. `task_mismatch` here is an airway task (breath or
+      cough) whose detected count fell short of its instruction; the recording passes on it alone.
+      Kept apart from `ground_keys`, which holds only what decides the triage state.
+    computation: The fold's `annotation_keys` attribute (`FileVerdict.annotation_keys`).
+    source: [recording_vectors.py:extract, vocabulary.py:FileVerdict.record]
+    null_means: The fold was written before annotations existed; a re-fold fills it. An empty list is none.
 
   route_state:
     units: none
@@ -374,6 +423,17 @@ columns:
     source: [recording_vectors.py:_ledger_columns, nodes/redact.py:MaskPlan.count, nodes/redact.py:mask_plan]
     null_means: No `pii_ledger`.
 
+  released_not_proper_n:
+    units: count
+    description: >-
+      Words a detector finding covered that are written with no capital letter: policy v8 releases them
+      in every language. A number, a state, a word a date, age or place rule locks, a word a reviewer
+      `redact` entry names, and the lower-case words of a name finding that holds a capitalised word (the
+      name trim decides those) are kept.
+    computation: The ledger's `counts.released_not_proper_n`, distinct word ids in that state.
+    source: [recording_vectors.py:_ledger_columns, nodes/redact.py:MaskPlan.count, nodes/redact.py:mask_plan]
+    null_means: No `pii_ledger`.
+
   unmasked_by_approval_n:
     units: count
     description: Words of a person's name a human approved for release (`redaction.name_approvals`).
@@ -422,6 +482,13 @@ columns:
     units: none
     description: Families of the masks with at least one word a listed health condition released.
     computation: The ledger's `categories.released_condition`, sorted.
+    source: [recording_vectors.py:_ledger_columns, nodes/redact.py:MaskPlan.categories]
+    null_means: No `pii_ledger`.
+
+  released_not_proper_categories:
+    units: none
+    description: Families of the masks with at least one word released as written with no capital letter.
+    computation: The ledger's `categories.released_not_proper`, sorted.
     source: [recording_vectors.py:_ledger_columns, nodes/redact.py:MaskPlan.categories]
     null_means: No `pii_ledger`.
 
@@ -607,6 +674,79 @@ columns:
     computation: >-
       The ledger's `counts.locked_person_n`, distinct word ids in state `masked` with lock `person`.
     source: [recording_vectors.py:_ledger_columns, nodes/redact.py:MaskPlan.record, nodes/redact.py:mask_plan]
+    null_means: No `pii_ledger`.
+
+  relabel_work_title_n:
+    units: count
+    description: Reviewer `release` entries that say a removed name is a work title (a film, book, song, show or game), not a person.
+    computation: The ledger's `counts.relabel_work_title_n`, release entries whose `relabel` is `work_title`.
+    source: [recording_vectors.py:_ledger_columns, nodes/redact.py:MaskPlan.record, nodes/redact.py:mask_plan]
+    null_means: No `pii_ledger`.
+
+  relabel_brand_or_product_n:
+    units: count
+    description: Reviewer `release` entries that say a removed name is a brand or a product, not a person.
+    computation: The ledger's `counts.relabel_brand_or_product_n`, release entries whose `relabel` is `brand_or_product`.
+    source: [recording_vectors.py:_ledger_columns, nodes/redact.py:MaskPlan.record, nodes/redact.py:mask_plan]
+    null_means: No `pii_ledger`.
+
+  relabel_organization_n:
+    units: count
+    description: Reviewer `release` entries that say a removed name is an organization; it then follows the specific-versus-generic rule.
+    computation: The ledger's `counts.relabel_organization_n`, release entries whose `relabel` is `organization`.
+    source: [recording_vectors.py:_ledger_columns, nodes/redact.py:MaskPlan.record, nodes/redact.py:mask_plan]
+    null_means: No `pii_ledger`.
+
+  relabel_place_n:
+    units: count
+    description: Reviewer `release` entries that say a removed name is a place; it then stays masked unless the entry also gives a place reason.
+    computation: The ledger's `counts.relabel_place_n`, release entries whose `relabel` is `place`.
+    source: [recording_vectors.py:_ledger_columns, nodes/redact.py:MaskPlan.record, nodes/redact.py:mask_plan]
+    null_means: No `pii_ledger`.
+
+  relabel_other_non_person_n:
+    units: count
+    description: Reviewer `release` entries that say a removed name is no person at all -- an ordinary word, or a character in the task's picture or story.
+    computation: The ledger's `counts.relabel_other_non_person_n`, release entries whose `relabel` is `other_non_person`.
+    source: [recording_vectors.py:_ledger_columns, nodes/redact.py:MaskPlan.record, nodes/redact.py:mask_plan]
+    null_means: No `pii_ledger`.
+
+  place_reason_historical_n:
+    units: count
+    description: Reviewer `release` entries that let a place through as historical; the one reason that frees a state.
+    computation: The ledger's `counts.place_reason_historical_n`, release entries whose `place_reason` is `historical`.
+    source: [recording_vectors.py:_ledger_columns, nodes/redact.py:MaskPlan.record, nodes/redact.py:mask_plan]
+    null_means: No `pii_ledger`.
+
+  place_reason_fictional_n:
+    units: count
+    description: Reviewer `release` entries that let a place through as fictional, a setting in a book or film.
+    computation: The ledger's `counts.place_reason_fictional_n`, release entries whose `place_reason` is `fictional`.
+    source: [recording_vectors.py:_ledger_columns, nodes/redact.py:MaskPlan.record, nodes/redact.py:mask_plan]
+    null_means: No `pii_ledger`.
+
+  place_reason_public_landmark_or_general_knowledge_n:
+    units: count
+    description: Reviewer `release` entries that let a place through as a public landmark or general knowledge.
+    computation: The ledger's `counts.place_reason_public_landmark_or_general_knowledge_n`, release entries whose `place_reason` is `public_landmark_or_general_knowledge`.
+    source: [recording_vectors.py:_ledger_columns, nodes/redact.py:MaskPlan.record, nodes/redact.py:mask_plan]
+    null_means: No `pii_ledger`.
+
+  place_reason_task_content_n:
+    units: count
+    description: Reviewer `release` entries that let a place, or other words, through as the task's own content.
+    computation: The ledger's `counts.place_reason_task_content_n`, release entries whose `place_reason` is `task_content`.
+    source: [recording_vectors.py:_ledger_columns, nodes/redact.py:MaskPlan.record, nodes/redact.py:mask_plan]
+    null_means: No `pii_ledger`.
+
+  task_text_words_n:
+    units: count
+    description: >-
+      Words of the task's own texts -- its stimulus or target word and its instructions, inflections
+      included -- that a detector finding covered or a date, age or state rule would have masked; policy v8
+      masks none of them.
+    computation: The ledger's `counts.task_text_words_n`, the length of `task_text_ids` (`nodes/redact.py:task_text_positions`).
+    source: [recording_vectors.py:_ledger_columns, nodes/redact.py:mask_plan, nodes/redact.py:task_texts]
     null_means: No `pii_ledger`.
 
   person_name_masked_n:
@@ -872,25 +1012,23 @@ columns:
     source: [recording_vectors.py:_second_opinion_columns, nodes/second_opinion.py:second_opinion]
     null_means: No `ok` opinion.
 
-  second_opinion_named_diagnosis_p:
+  second_opinion_policy_identifier_present_p:
     units: probability
-    description: The second-opinion model's probability that the speaker names a specific medical diagnosis of their own.
-    computation: The `noul` probability of the `named_diagnosis` question. Asked at temperature 0 with a fixed seed, of the pinned model `second_opinion.blob_digest`, over the original transcript and the reviewer's task context.
+    description: >-
+      The second-opinion model's probability that the transcript holds something redaction policy v8
+      removes: a name of a person connected to the participant, an absolute date element, a place below a
+      country connected to the participant, a specific named organization, an age, or a contact or ID
+      number. Relationship words, weekdays, relative times, countries, conditions and task content do not
+      count.
+    computation: The `noul` probability of the `policy_identifier_present` question (question set 2). Asked at temperature 0 with a fixed seed, of the pinned model `second_opinion.blob_digest`, over the original transcript, the reviewer's task context and the family's task-content guidance (`data/task_guidance.yaml`).
     source: [recording_vectors.py:_second_opinion_columns, nodes/second_opinion.py:second_opinion]
-    null_means: No `ok` opinion.
-
-  second_opinion_safe_harbor_identifier_present_p:
-    units: probability
-    description: The second-opinion model's probability that the transcript carries a HIPAA Safe Harbor identifier. Recorded, never compared with the reviewer.
-    computation: The `noul` probability of the `safe_harbor_identifier_present` question. Asked at temperature 0 with a fixed seed, of the pinned model `second_opinion.blob_digest`, over the original transcript and the reviewer's task context.
-    source: [recording_vectors.py:_second_opinion_columns, nodes/second_opinion.py:second_opinion]
-    null_means: No `ok` opinion.
+    null_means: No `ok` opinion, or one asked under question set 1.
 
   second_opinion_disagrees:
     units: none
-    values: [other_voice, instructions_spoken, named_diagnosis]
+    values: [other_voice, instructions_spoken, policy_identifier_present]
     description: The questions on which the second opinion confidently disagrees with the redaction reviewer.
-    computation: A question is listed when p >= `verdict.second_opinion_confident_yes` and the reviewer said no, or p <= `verdict.second_opinion_confident_no` and the reviewer said yes. The reviewer's other_voice is `speakers` = `more_than_one` (or `unclear` with quoted other speakers). Its named_diagnosis is a CONDITION `redact` proposal entry. Its instructions_spoken is a non-empty `instructions_spoken`, compared only for readings that carry it. Both readings must be present. Under `verdict.second_opinion_disagreement_flags` a non-empty list is a flag ground.
+    computation: A question is listed when p >= `verdict.second_opinion_confident_yes` and the reviewer said no, or p <= `verdict.second_opinion_confident_no` and the reviewer said yes. The reviewer's other_voice is `speakers` = `more_than_one` (or `unclear` with quoted other speakers). Its instructions_spoken is a non-empty `instructions_spoken`, compared only for readings that carry it. Its policy_identifier_present is yes where, once its reading is folded, any mask stands or a `redact` entry proposes hiding more (`masks_final_n` > 0 or `redact_new_n` > 0). Both readings must be present. Under `verdict.second_opinion_disagreement_flags` a non-empty list is a flag ground.
     source: [recording_vectors.py:_second_opinion_columns, vocabulary.py:second_opinion_disagreements]
     null_means: Never null; `[]` where nothing disagrees or nothing was compared.
 
@@ -1509,7 +1647,10 @@ families:
       breath_coverage_fraction:
         kind: scalar
         units: fraction
-        description: Fraction of the asked duration covered by breath-scoring HeAR windows (AIRWAY sound coverage).
+        description: >-
+          Fraction of the asked duration covered by breath-scoring HeAR windows (AIRWAY sound coverage).
+          Context only: the sustained-breath families are decided on detected breath events
+          (`airway_events_found`, gate `events_min`), never on this fraction.
         computation: >-
           AIRWAY merges the HeAR windows scoring at least `score_min` on the task's label set and
           writes covered seconds over the asked seconds (the declared duration, else the recording's),
@@ -1625,22 +1766,28 @@ families:
       glide_extent_semitones:
         kind: scalar
         units: semitones
-        description: How far the pitch travelled across the selected glide.
+        description: How far the pitch travelled in the declared direction over the glide's phonation extent.
         computation: >-
-          VOICE takes the longest monotone run of the median-filtered pitch (within
-          `branch.sweep_reversal_tolerance_semitones`) of the longest qualifying sweep and writes
-          |pitch(last) − pitch(first)| in semitones, rounded to 2 places.
-        source: nodes/voice.py:_voice_glide
+          VOICE octave-checks the plain-stream F0 over the extent, median-filters it, treats frame-to-frame
+          jumps over `glide.jump_max_semitones` as discontinuities, and writes the largest net travel in
+          the declared direction, rounded to 2 places.
+        source: nodes/voice.py:align_voice, voice_phonation.py:glide_of
       interruptions:
         kind: scalar
         units: count
-        description: Unvoiced intervals inside a voiced production.
+        description: Unvoiced intervals inside a detected phonation.
         computation: >-
-          The number of unvoiced runs between the first and last voiced frame of a carrier's pitch
-          track. The sustained arm writes one reading, over the longest qualifying carrier; the
-          detect arm writes one per detected phonation that passes every quality gate (up to 55 in
-          the corpus).
-        source: nodes/voice.py:_interruptions, nodes/voice.py:_voice_sustained, nodes/voice.py:detect_voice
+          The number of unvoiced runs between the first and last voiced frame of a carrier's pitch track,
+          one per detected phonation that passes every quality gate; the detect arm only.
+        source: nodes/voice.py:_interruptions, nodes/voice.py:detect_voice
+      longest_hold_s:
+        kind: scalar
+        units: s
+        description: The longest hold inside a declared voice task's phonation extent.
+        computation: >-
+          The longest run between breaks (falls below phonation of at least `break_min_s`), rounded to 3
+          places; the holds themselves travel on the finding.
+        source: nodes/voice.py:align_voice, voice_phonation.py:holds_and_breaks
       pause_fraction_of_response:
         kind: scalar
         units: fraction
@@ -1652,12 +1799,11 @@ families:
       phonation_onset_to_offset_s:
         kind: scalar
         units: s
-        description: Duration of a voiced production from its first to its last voiced frame.
+        description: Duration of a voiced production from its onset to its offset.
         computation: >-
-          The voiced extent of a carrier (first voiced frame to last voiced frame plus one hop),
-          rounded to 3 places: one reading from the sustained arm's selected carrier, or one per
-          detected phonation from the detect arm.
-        source: nodes/voice.py:_voice_sustained, nodes/voice.py:detect_voice
+          For a declared voice task, the phonation extent's offset less its onset (the inhale excluded),
+          rounded to 3 places; for the detect arm, one per detected phonation's voiced extent.
+        source: nodes/voice.py:align_voice, nodes/voice.py:detect_voice
       source_content_coverage:
         kind: scalar
         units: fraction
@@ -1692,9 +1838,9 @@ families:
       voiced_duration_s:
         kind: scalar
         units: s
-        description: Voiced time inside a sustained production.
-        computation: The number of voiced pitch-track frames in the selected carrier times the hop, rounded to 3 places.
-        source: nodes/voice.py:_voice_sustained
+        description: Voiced time inside a declared voice task's phonation extent.
+        computation: The plain-stream voiced frames inside the phonation extent times the hop, rounded to 3 places.
+        source: nodes/voice.py:align_voice, voice_phonation.py:measure_phonation
       ddk_position_realised_mass:
         kind: vector
         units: fraction
@@ -1714,12 +1860,11 @@ families:
         source: nodes/ddk.py:instrument_authority
       carrier_rejected:
         kind: categorical
-        values: [production_min_s, lexical_separator, no_track_over_carrier, no_voicing, no_monotone_run, voiced_fraction_min, f0_spread_max_semitones, continuity_min]
+        values: [production_min_s, lexical_separator, no_track_over_carrier, no_voicing, voiced_fraction_min, f0_spread_max_semitones, continuity_min]
         description: The gates or existence criteria that discarded a candidate carrier span.
         computation: >-
-          VOICE writes one reading per discarded amplitude span, whose value names what discarded it.
-          The quality-gate names (`voiced_fraction_min`, `f0_spread_max_semitones`, `continuity_min`)
-          come only from the detect arm; the existence criteria from every arm.
+          VOICE's detect arm writes one reading per discarded amplitude span, whose value names what
+          discarded it.
         source: nodes/voice.py:Rejection.finding, nodes/voice.py:qualifying_phonation, nodes/voice.py:Qualification.quality_findings
       category_membership:
         kind: categorical
@@ -1743,9 +1888,11 @@ families:
         source: nodes/airway.py:route_findings
       phonation_extent:
         kind: categorical
-        description: VOICE's phonation extent where the pitch tracks are absent; the value is the sentinel.
-        computation: Written by `unviable` when PREPROCESS left no pitch tracks, from the sustained arm or the detect arm.
-        source: nodes/voice.py:_voice_sustained, nodes/voice.py:detect_voice
+        description: VOICE's phonation extent where its input is absent; the value is the sentinel.
+        computation: >-
+          Written by `unviable` when the plain stream is absent (a declared voice task) or PREPROCESS left
+          no pitch tracks (the detect arm).
+        source: nodes/voice.py:align_voice, nodes/voice.py:detect_voice
       repetition_rule:
         kind: categorical
         description: An item-list task's repetition rule where the category is undeclared; the value is the sentinel.
@@ -1763,9 +1910,9 @@ families:
         source: nodes/branches.py:unviable_findings
       sweep_extent:
         kind: categorical
-        description: VOICE's glide extent where the pitch tracks are absent; the value is the sentinel.
-        computation: Written by `unviable` when PREPROCESS left no pitch tracks.
-        source: nodes/voice.py:_voice_glide
+        description: VOICE's glide extent where the plain stream is absent; the value is the sentinel.
+        computation: Written by `unviable` for a declared glide task when the plain stream is absent.
+        source: nodes/voice.py:align_voice
 
   gate:
     about: >-
@@ -1854,27 +2001,27 @@ families:
         op: at_least
         units: s
         reader: gate_readings
-        reading_description: how long the qualifying carrier span ran.
-        reading_computation: VOICE writes the carrier span's duration, rounded to 3 places, from the sustained or the glide arm.
-        reading_source: nodes/voice.py:carrier_readings, nodes/voice.py:_voice_glide
+        reading_description: how long the phonation extent ran.
+        reading_computation: VOICE writes the extent's duration, inhale included, rounded to 3 places.
+        reading_source: nodes/voice.py:align_voice
       voiced_fraction_min:
         kind: applied
         reading: carrier_voiced_fraction
         op: at_least
         units: fraction
         reader: flag_gate_readings
-        reading_description: the fraction of the carrier's pitch-track frames that are voiced.
-        reading_computation: VOICE writes the voiced frames over all frames of the carrier's track, rounded to 4 places, from the sustained or the glide arm.
-        reading_source: nodes/voice.py:carrier_readings, nodes/voice.py:_voice_glide
+        reading_description: the voiced share of the phonation frames inside the extent.
+        reading_computation: VOICE writes the plain-stream voiced frames over the phonation frames inside the extent, rounded to 4 places.
+        reading_source: nodes/voice.py:align_voice, voice_phonation.py:measure_phonation
       f0_spread_max_semitones:
         kind: applied
         reading: carrier_f0_spread_semitones
         op: at_most
         units: semitones
         reader: flag_gate_readings
-        reading_description: the representative local F0 spread over the carrier.
-        reading_computation: VOICE writes the carrier's F0 spread in semitones, rounded to 3 places; None when the window cannot resolve it.
-        reading_source: nodes/voice.py:carrier_readings
+        reading_description: the representative local F0 spread inside the extent.
+        reading_computation: VOICE writes the median windowed p5-p95 spread of the checked F0, rounded to 3 places; None when no window resolves it.
+        reading_source: nodes/voice.py:align_voice, voice_phonation.py:measure_phonation
       continuity_min:
         kind: applied
         reading: carrier_continuity
@@ -1883,45 +2030,18 @@ families:
         reader: flag_gate_readings
         reading_description: the median spectral continuity over the carrier.
         reading_computation: >-
-          VOICE writes the carrier's median spectral-stationarity value, rounded to 4 places, and 0.0
-          when no continuity trace covers the carrier, which is then judged false, not undetermined.
-        reading_source: nodes/voice.py:carrier_readings, nodes/voice.py:qualifying_phonation
-      dominant_segment_min_fraction:
-        kind: applied
-        reading: sweep_dominant_fraction
-        op: at_least
-        units: fraction
-        reader: gate_readings
-        reading_description: the share of the carrier the dominant monotone pitch run holds.
-        reading_computation: >-
-          VOICE writes the duration of the longest monotone run of the median-filtered pitch (longest
-          by frame-index span, its end one hop past the last frame) over the carrier's voiced extent
-          (first to last voiced frame), rounded to 4 places; it can exceed 1 by up to one hop.
-        reading_source: nodes/voice.py:_voice_glide, nodes/branches.py:longest_monotone_run, nodes/branches.py:smoothed_pitch
+          The detect arm reads the carrier's median spectral-stationarity value inside its qualifier; no
+          reading is written for a declared voice task.
+        reading_source: nodes/voice.py:qualifying_phonation
       glide_extent_min_semitones:
         kind: applied
         reading: glide_extent_semitones
         op: at_least
         units: semitones
         reader: gate_readings
-        reading_description: how far the dominant monotone pitch run travelled.
-        reading_computation: >-
-          VOICE median-filters the voiced pitch frames (`branch.sweep_smoothing_frames`), takes the
-          longest run that never falls back more than `branch.sweep_reversal_tolerance_semitones`
-          from its running extreme, and writes |pitch(last) − pitch(first)| over it, rounded to 2 places.
-        reading_source: nodes/voice.py:_voice_glide, nodes/branches.py:smoothed_pitch, nodes/branches.py:longest_monotone_run
-      declared_duration_min_fraction:
-        kind: applied
-        reading: production_declared_fraction
-        op: at_least
-        units: fraction
-        reader: gate_readings
-        reading_description: the qualifying carrier's duration over the hold the instruction declares.
-        reading_computation: >-
-          VOICE writes the selected carrier's duration (after the count-in is split off, for a task
-          that prescribes one) over the row's `declared_duration_s`, rounded to 4 places; written only
-          where the row declares a duration (`prolonged-vowel`, 12 s).
-        reading_source: nodes/voice.py:_voice_sustained
+        reading_description: how far the glide travelled in its declared direction.
+        reading_computation: As the `glide_extent_semitones` measurement.
+        reading_source: nodes/voice.py:align_voice, voice_phonation.py:glide_of
       expected_tokens_matched_min:
         kind: applied
         reading: expected_tokens_matched

@@ -148,15 +148,14 @@ class TestThePin:
             verify_pin(store, pin, verified_dir=verified)
 
 
-def _answers(other: float = 0.02, instructions: float = 0.03, diagnosis: float = 0.01, harbor: float = 0.05) -> dict:
+def _answers(other: float = 0.02, instructions: float = 0.03, identifier: float = 0.05) -> dict:
     return {
         "other_voice": {
             "choice": MORE_THAN_ONE if other > 0.5 else "one",
             "probabilities": {"one": 1 - other, MORE_THAN_ONE: other, "unclear": 0.0},
         },
         "instructions_spoken": {"noul": instructions},
-        "named_diagnosis": {"noul": diagnosis},
-        "safe_harbor_identifier_present": {"noul": harbor},
+        "policy_identifier_present": {"noul": identifier},
     }
 
 
@@ -164,21 +163,20 @@ class TestTheAnswers:
     """Each answer is a probability of yes; other_voice is the probability of more_than_one."""
 
     def test_every_question_is_read_as_a_probability(self) -> None:
-        """The four probabilities, keyed by question."""
-        opinion = read_answers(_answers(other=0.85, diagnosis=0.99))
+        """The three probabilities, keyed by question."""
+        opinion = read_answers(_answers(other=0.85, identifier=0.99))
         assert opinion.probabilities == {
             "other_voice": 0.85,
             "instructions_spoken": 0.03,
-            "named_diagnosis": 0.99,
-            "safe_harbor_identifier_present": 0.05,
+            "policy_identifier_present": 0.99,
         }
         assert opinion.other_voice_choice == MORE_THAN_ONE
 
     def test_an_unanswered_question_is_an_error_not_a_zero(self) -> None:
         """A missing answer must not read as a confident no."""
         answers = _answers()
-        del answers["named_diagnosis"]
-        with pytest.raises(ValueError, match="named_diagnosis"):
+        del answers["policy_identifier_present"]
+        with pytest.raises(ValueError, match="policy_identifier_present"):
             read_answers(answers)
 
     def test_a_choice_without_class_probabilities_is_an_error(self) -> None:
@@ -199,6 +197,7 @@ class TestTheAnswers:
             "speech_type": "",
             "instructions": "Read aloud.",
             "stimulus": "When the sunlight",
+            "task_content": "",
             "transcript": "the rainbow passage",
         }
 
@@ -390,8 +389,58 @@ def test_a_model_that_does_not_load_is_refused_with_the_log_tail(
     log = tmp_path / "ollama.log"
     log.write_text("starting\nerror loading model: vk::PhysicalDevice::createDevice: ErrorInitializationFailed\n")
     with pytest.raises(fake_ollama.ServerUnusableError, match="ErrorInitializationFailed"):
-        with fake_ollama.OllamaServer(tmp_path / "ollama", tmp_path, _served_pin(), log_path=log):
+        with fake_ollama.OllamaServer(tmp_path / "ollama", tmp_path, _served_pin(), log_path=log, discovery_wait_s=0):
             pass
+
+
+class _DiscoveringProcess(_FakeProcess):
+    """A fake ``ollama serve`` whose log reports the devices its discovery settled on."""
+
+    lines: tuple[str, ...] = ()
+
+    def __init__(self, args: list[str], *, env: dict[str, str], **kw: Any) -> None:  # noqa: ANN401
+        super().__init__(args, env=env, **kw)
+        handle = kw.get("stdout")
+        assert handle is not None
+        for line in type(self).lines:
+            handle.write((line + "\n").encode("utf-8"))
+
+
+_CPU_FALLBACK = (
+    'time=2026-10-04T10:00:30 level=WARN source=runner.go:584 msg="llama-server GPU discovery watchdog timed out"',
+    'time=2026-10-04T10:00:31 level=INFO source=types.go:130 msg="inference compute" id=cpu library=cpu '
+    'compute="" name=cpu description=cpu total="1007.7 GiB" available="950.1 GiB"',
+)
+_CUDA_FOUND = (
+    'time=2026-10-04T10:00:02 level=INFO source=types.go:130 msg="inference compute" id=GPU-1a2b library=CUDA '
+    'compute=9.0 name=CUDA0 description="NVIDIA H100 80GB HBM3" total="79.2 GiB" available="78.6 GiB"',
+)
+
+
+@pytest.mark.parametrize(("lines", "refused"), [(_CPU_FALLBACK, True), (_CUDA_FOUND, False)])
+def test_a_discovery_that_fell_back_to_the_cpu_is_refused_before_the_load(
+    fake_ollama: Any,  # noqa: ANN401
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    lines: tuple[str, ...],
+    refused: bool,
+) -> None:
+    """2026-10-04, an H100 node: the watchdog timed out and discovery settled on the CPU; refuse at once."""
+    _DiscoveringProcess.lines = lines
+    monkeypatch.setattr(fake_ollama.subprocess, "Popen", _DiscoveringProcess)
+    _FakeOllama.loaded = _resident(10, 10)
+    log = tmp_path / "ollama.log"
+    log.write_text('msg="inference compute" id=GPU-old library=CUDA\n')
+    server = fake_ollama.OllamaServer(tmp_path / "ollama", tmp_path, _served_pin(), log_path=log, discovery_wait_s=5)
+    if refused:
+        with pytest.raises(fake_ollama.ServerUnusableError, match="fell back to the CPU"):
+            with server:
+                pass
+        assert _FakeOllama.loads == [], "no load is attempted"
+    else:
+        with server:
+            pass
+        assert server.discovered_libraries() == ["cuda"]
 
 
 @pytest.mark.parametrize(

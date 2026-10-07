@@ -10,9 +10,9 @@ agreement and hint tables and what each input contributes are in
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
-from typing import Any, Literal, Mapping, Sequence
+from typing import Any, Literal, Mapping, Sequence, TypeVar
 
 GRAPH_ORDER = (
     "ADMIT",
@@ -91,10 +91,16 @@ class Outcome(Enum):
 
 
 class Triage(Enum):
-    """What should happen to this recording. The file axis; a node's ``Outcome`` is not one of these."""
+    """What should happen to this recording. The file axis; a node's ``Outcome`` is not one of these.
+
+    ``rerun`` is a recording the pipeline still owes something -- a missing derivative, a node that did
+    not finish, a configuration the fold cannot read -- before anything about the participant can be
+    concluded; :data:`OPERATIONAL_GROUND_KEYS` names those grounds.
+    """
 
     PASS = "pass"
     FLAG = "flag"
+    RERUN = "rerun"
     DISCARD = "discard"
 
 
@@ -221,6 +227,7 @@ POLICY_MASKS_ONLY = (
     "the scan found nothing to redact, and the redaction policy masked words it always masks -- a date element, "
     "an age, a state; the copy keeps those"
 )
+DISCARDED = "the recording was discarded, so no artefact of it is released"
 
 RELEASE_WITH_REDACTION_GROUNDS = (
     REVIEWER_CLEARED_RESCAN,
@@ -254,6 +261,7 @@ class RedactionEvidence:
         person_names_masked_n: How many words of a person's name stay masked.
         name_release_proposed: The reviewer's ``release`` quotes naming a person's name it may not
             release on its own.
+        reviewer_requested_n: How many reviewer ``redact`` entries propose hiding more than the masks hide.
     """
 
     lexical_words_n: int | None = None
@@ -267,10 +275,292 @@ class RedactionEvidence:
     policy_masks_n: int = 0
     person_names_masked_n: int = 0
     name_release_proposed: tuple[str, ...] = ()
+    reviewer_requested_n: int = 0
+
+
+@dataclass(frozen=True)
+class TaskEvidence:
+    """What the store says about whether the declared task was performed at all.
+
+    Attributes:
+        owning_branches: The branches whose expectations own the declared family; empty where the
+            recording declares no family, or one no branch owns.
+        duration_s: The recording's duration, or None where ADMIT recorded none.
+        minimum_duration_s: The shortest recording the declared family can occupy, or None.
+        event_tokens_n: How many bracketed ASR event tokens name the declared airway family's own
+            event (``[cough]`` in a cough task); 0 for every other family.
+        owner_absent_inputs: The instruments, derivatives or gate readings an owning branch needed to
+            look for the task and did not have; empty where every owner could look.
+        required_event: The event kind the declared airway family is decided on (``breath``), from
+            ``data/airway_event_requirements.yaml``; None for every other family.
+        events_found_n: How many events of the family's own kind the owning AIRWAY branch detected,
+            or None where it reported no count.
+        event_kind: The declared airway family's own event kind, or None.
+        instructed_count: The count the declared airway family's instruction spoke, or None.
+        breath_mode: ``sustained`` or ``counted`` for a breath family decided on the breathing-pattern
+            measure (``data/breath_pattern.yaml``); None for every other family.
+        breath_pattern: The measure's pattern, one of ``breath_pattern.PATTERNS``, or None where it
+            could not be read.
+        breath_events_n: How many breath events the measure found, or None.
+        breath_vetoed_by: The veto that says what the measure found is not breathing, one of
+            ``breath_pattern.VETO_*`` (``breath_pattern.breath_veto_of``), or None.
+        breath_train_breaths: The breaths the breath train counts (its phases over two, rounded half
+            up), or None where it was not read.
+        breath_review: Whether the breath train is weak or irregular enough to leave for review
+            (``breath_pattern.in_review_band``).
+        breath_reading: The measure's full reading, for the verdict record; empty where none.
+        cough_mode: ``counted`` or ``performed`` for a cough family decided on the cough-onset measure
+            (``data/cough_pattern.yaml``), by whether its instruction speaks a count; None otherwise.
+        cough_onsets_n: How many coughs the measure found, or None where it could not be read.
+        cough_review: Whether the decision differs inside the measure's review band
+            (``data/cough_pattern.yaml``, ``review``).
+        cough_reading: The measure's full reading, for the verdict record; empty where none.
+        background_speech: The background-speech reading over the task extent
+            (``background_speech.background_speech_of``), for an airway family; empty where none.
+        contest_events_min: The events AIRWAY's own detector must have found for a measure's
+            no-event discard to be contested instead (``data/discard_contested.yaml``); None where
+            no discard of this family is contested.
+        contest_rise_db_min: The breath-train rise a breath family's no-event discard needs to be
+            contested (``data/discard_contested.yaml``, ``breath``); None for any other family.
+        breath_train_rise_db: The breath train's median burst rise over the floor, or None.
+        voice_mode: ``sustained`` or ``glide`` for a declared voice family decided on VOICE's
+            phonation reading; None for every other family.
+        voice_found: Whether the reading found a phonation attempt, or None where it was not read.
+        voice_mismatch: The glide's ``task_mismatch`` description, or None.
+        voice_review: Why the reading is left for review; empty where it is not.
+        voice_capture_cut: Whether a microphone shutoff cut the phonation.
+        voice_shutoff_after: Whether a shutoff was read after the task ended.
+        voice_outside_speech: The speech-like runs read outside the extent.
+        voice_reading: The reading's record, for the verdict record; empty where none.
+    """
+
+    owning_branches: tuple[str, ...] = ()
+    duration_s: float | None = None
+    minimum_duration_s: float | None = None
+    event_tokens_n: int = 0
+    owner_absent_inputs: tuple[str, ...] = ()
+    required_event: str | None = None
+    events_found_n: int | None = None
+    event_kind: str | None = None
+    instructed_count: int | None = None
+    breath_mode: str | None = None
+    breath_pattern: str | None = None
+    breath_events_n: int | None = None
+    breath_vetoed_by: str | None = None
+    breath_train_breaths: int | None = None
+    breath_review: bool = False
+    breath_reading: dict[str, Any] = field(default_factory=dict)
+    cough_mode: str | None = None
+    cough_onsets_n: int | None = None
+    cough_review: bool = False
+    cough_reading: dict[str, Any] = field(default_factory=dict)
+    background_speech: dict[str, Any] = field(default_factory=dict)
+    contest_events_min: int | None = None
+    contest_rise_db_min: float | None = None
+    breath_train_rise_db: float | None = None
+    voice_mode: str | None = None
+    voice_found: bool | None = None
+    voice_mismatch: str | None = None
+    voice_review: tuple[str, ...] = ()
+    voice_capture_cut: bool = False
+    voice_shutoff_after: bool = False
+    voice_outside_speech: tuple[dict[str, Any], ...] = ()
+    voice_reading: dict[str, Any] = field(default_factory=dict)
 
 
 UNMEASURABLE = "unmeasurable"
 ACOUSTICALLY_EMPTY = "acoustically_empty"
+TOO_SHORT_FOR_TASK = "too_short_for_task"
+"""Discard ground: the recording is far shorter than its declared task can take, a truncated or aborted capture."""
+NO_BREATH_CAPTURED = "no_breath_captured"
+"""Discard ground: the breath train of a breath task counted no breath."""
+BREATH_SUSTAINED = "sustained"
+BREATH_COUNTED = "counted"
+_ALTERNATING_BREATHS = "alternating_breaths"
+
+
+def breath_present(evidence: TaskEvidence) -> bool:
+    """Whether a breath family's breath train found breathing.
+
+    Args:
+        evidence: The task evidence.
+
+    Returns:
+        True where the breath train counted at least one breath (one phase) outside the review band;
+        inside the band (``breath_review``), only where the measure's own events also found breathing.
+        False where the train counted none or the measure was not read.
+    """
+    if evidence.breath_pattern is None or (evidence.breath_train_breaths or 0) == 0:
+        return False
+    return not evidence.breath_review or _measure_found(evidence)
+
+
+def _measure_found(evidence: TaskEvidence) -> bool:
+    if evidence.breath_vetoed_by is not None:
+        return False
+    if evidence.breath_mode == BREATH_SUSTAINED:
+        return evidence.breath_pattern == _ALTERNATING_BREATHS
+    return (evidence.breath_events_n or 0) > 0
+
+
+def breath_conforms(evidence: TaskEvidence) -> bool:
+    """Whether a breath family's measure says the task was performed as instructed.
+
+    Args:
+        evidence: The task evidence.
+
+    Returns:
+        :func:`breath_present`, and for a counted family at least the instructed number of breath-train
+        breaths.
+    """
+    if not breath_present(evidence):
+        return False
+    if evidence.breath_mode == BREATH_COUNTED and evidence.instructed_count is not None:
+        return (evidence.breath_train_breaths or 0) >= evidence.instructed_count
+    return True
+
+
+def breath_shortfall(evidence: TaskEvidence) -> str | None:
+    """The detected-against-instructed count where a counted breath family found too few breaths.
+
+    Args:
+        evidence: The task evidence.
+
+    Returns:
+        ``"detected B breaths (P phases in the breath train) where M were instructed"`` where breaths
+        were present but too few were counted (:func:`breath_conforms`); None otherwise.
+    """
+    breaths = evidence.breath_train_breaths or 0
+    if (
+        evidence.breath_mode != BREATH_COUNTED
+        or evidence.instructed_count is None
+        or not breath_present(evidence)
+        or breaths >= evidence.instructed_count
+    ):
+        return None
+    phases = evidence.breath_reading.get("train") or {}
+    return (
+        f"detected {breaths} breaths ({phases.get('phases', 0)} phases in the breath train) "
+        f"where {evidence.instructed_count} were instructed"
+    )
+
+
+def breath_review_reading(evidence: TaskEvidence) -> str:
+    """The breath train's readings a low-confidence review flag carries.
+
+    Args:
+        evidence: The task evidence.
+
+    Returns:
+        ``"P phases, cycle CV c, rise r dB"``, with ``none`` for a reading absent.
+    """
+    train = evidence.breath_reading.get("train") or {}
+    return (
+        f"{train.get('phases', 0)} phases, cycle CV {train.get('cycle_cv', 'none')}, "
+        f"rise {train.get('rise_db', 'none')} dB"
+    )
+
+
+COUGH_COUNTED = "counted"
+COUGH_PERFORMED = "performed"
+
+
+def cough_present(evidence: TaskEvidence) -> bool:
+    """Whether a cough family's measure found at least one cough.
+
+    Args:
+        evidence: The task evidence.
+
+    Returns:
+        True where the measure was read and found a cough onset.
+    """
+    return evidence.cough_mode is not None and (evidence.cough_onsets_n or 0) > 0
+
+
+def cough_conforms(evidence: TaskEvidence) -> bool:
+    """Whether a cough family's measure says the task was performed as instructed.
+
+    Args:
+        evidence: The task evidence.
+
+    Returns:
+        :func:`cough_present`, and for a counted family at least the instructed number of coughs.
+    """
+    if not cough_present(evidence):
+        return False
+    if evidence.cough_mode == COUGH_COUNTED and evidence.instructed_count is not None:
+        return (evidence.cough_onsets_n or 0) >= evidence.instructed_count
+    return True
+
+
+def cough_shortfall(evidence: TaskEvidence) -> str | None:
+    """The detected-against-instructed count where a counted cough family found too few coughs.
+
+    Args:
+        evidence: The task evidence.
+
+    Returns:
+        ``"detected N coughs where M were instructed"`` where coughs were found but fewer than the
+        instruction asked; None otherwise.
+    """
+    if evidence.cough_mode != COUGH_COUNTED or not cough_present(evidence) or cough_conforms(evidence):
+        return None
+    return f"detected {evidence.cough_onsets_n} coughs where {evidence.instructed_count} were instructed"
+
+
+def cough_review_reading(evidence: TaskEvidence) -> str:
+    """The cough readings a low-confidence review flag carries.
+
+    Args:
+        evidence: The task evidence.
+
+    Returns:
+        ``"N coughs (S strict, L lenient)"``.
+    """
+    reading = evidence.cough_reading
+    return (
+        f"{evidence.cough_onsets_n} coughs ({reading.get('onsets_strict_n', 'none')} strict, "
+        f"{reading.get('onsets_lenient_n', 'none')} lenient)"
+    )
+
+
+DECLARED_TASK_ABSENT = "declared_task_absent"
+"""Discard ground: the branch owning the declared task ran and found none of it, whatever another branch found."""
+NO_COUGH_CAPTURED = "no_cough_captured"
+"""Discard ground: a cough task holds no cough onset."""
+NO_PHONATION_CAPTURED = "no_phonation_captured"
+"""Discard ground: a voice task holds nothing over the noise floor."""
+DISCARD_GROUNDS = (
+    UNMEASURABLE,
+    TOO_SHORT_FOR_TASK,
+    ACOUSTICALLY_EMPTY,
+    NO_BREATH_CAPTURED,
+    NO_COUGH_CAPTURED,
+    NO_PHONATION_CAPTURED,
+    DECLARED_TASK_ABSENT,
+)
+"""Every ground a file discards on, in the order the fold tries them; an operational flag (``rerun``) is
+tried between the third and the fourth, since a missing derivative may be why the task was not found."""
+EVENT_ABSENT_GROUNDS = {"breath": NO_BREATH_CAPTURED, "cough": NO_COUGH_CAPTURED, "phonation": NO_PHONATION_CAPTURED}
+"""The discard ground for each required event kind of ``data/airway_event_requirements.yaml``."""
+TASK_MISMATCH = "task_mismatch"
+"""Flag ground: the declared airway task's own events were detected, but not in the pattern it asked for."""
+BREATH_REVIEW_LOW_CONFIDENCE = "breath_review_low_confidence"
+"""Flag ground: a breath task's breathing was kept, on a breath train weak or irregular enough to review."""
+COUGH_REVIEW_LOW_CONFIDENCE = "cough_review_low_confidence"
+"""Flag ground: a cough task's coughs were kept, on a count whose decision differs inside the review band."""
+BACKGROUND_SPEECH_IN_TASK = "background_speech_in_task"
+"""Flag ground: speech enhancement removed speech from inside an airway task's extent -- another voice."""
+VOICE_REVIEW_LOW_CONFIDENCE = "voice_review_low_confidence"
+"""Flag ground: a voice task's phonation reading differs inside its review band."""
+CAPTURE_CUT_DURING_TASK = "capture_cut_during_task"
+"""Flag ground: a microphone shutoff cut a voice task's phonation; its duration is a lower bound."""
+CAPTURE_CUT_AFTER_TASK = "capture_cut_after_task"
+"""Annotation: a microphone shutoff after a voice task's phonation ended."""
+SPEECH_OUTSIDE_TASK = "speech_outside_task"
+"""Annotation: speech-like runs outside a voice task's phonation extent, with the words over them."""
+DISCARD_CONTESTED = "discard_contested"
+"""Flag ground: an airway measure found none of its event, and AIRWAY's own event detector found the task's."""
 
 AGREE = "agree"
 MISMATCH = "mismatch"
@@ -316,6 +606,8 @@ _ADMIT = "ADMIT"
 _PREPROCESS = "PREPROCESS"
 _REDACT = "REDACT"
 _SPEECH = "SPEECH"
+_AIRWAY = "AIRWAY"
+_VOICE = "VOICE"
 _VERDICT = "VERDICT"
 _ROUTING = "routing"
 
@@ -335,6 +627,10 @@ UNREAD_DECLARATION = (
 )
 
 CRITICAL_ABSENCE = "a critical measurement is absent, so no gate of at least one branch could be read"
+OWNING_BRANCH_INPUT_ABSENT = (
+    "the branch owning the declared task lacked an input it needs to look for the task, "
+    "so whether the task was performed is unknown"
+)
 NO_LEXICAL_ITEM_PRODUCED = "SPEECH ran over a task that asks for words and read no lexical item"
 """The flag ground a critical failure contributes, with the branch, gate and recorded absence appended.
 
@@ -378,7 +674,7 @@ SECOND_OPINION_DISAGREES = "the second-opinion model confidently disagrees with 
 ``verdict.second_opinion_disagreement_flags``. Controlled vocabulary, with each disagreeing question, the
 model's probability and the reviewer's answer appended; the release is unchanged."""
 
-SECOND_OPINION_QUESTIONS = ("other_voice", "instructions_spoken", "named_diagnosis")
+SECOND_OPINION_QUESTIONS = ("other_voice", "instructions_spoken", "policy_identifier_present")
 """The questions whose disagreement with the reviewer can flag a recording."""
 
 MODEL_SPEAKER_PERMITTED = "the task's instructions permit a model speaker"
@@ -403,6 +699,220 @@ grounds and imports no gate table.
 """
 
 
+# Ground keys: one stable, machine-readable key per ground, beside the human-readable ``why``.
+KEY_UNMEASURABLE = UNMEASURABLE
+KEY_ACOUSTICALLY_EMPTY = ACOUSTICALLY_EMPTY
+KEY_TOO_SHORT_FOR_TASK = TOO_SHORT_FOR_TASK
+KEY_DECLARED_TASK_ABSENT = DECLARED_TASK_ABSENT
+KEY_NO_BREATH_CAPTURED = NO_BREATH_CAPTURED
+KEY_TASK_MISMATCH = TASK_MISMATCH
+KEY_BREATH_REVIEW_LOW_CONFIDENCE = BREATH_REVIEW_LOW_CONFIDENCE
+KEY_NO_COUGH_CAPTURED = NO_COUGH_CAPTURED
+KEY_COUGH_REVIEW_LOW_CONFIDENCE = COUGH_REVIEW_LOW_CONFIDENCE
+KEY_BACKGROUND_SPEECH_IN_TASK = BACKGROUND_SPEECH_IN_TASK
+KEY_DISCARD_CONTESTED = DISCARD_CONTESTED
+KEY_NO_PHONATION_CAPTURED = NO_PHONATION_CAPTURED
+KEY_VOICE_REVIEW_LOW_CONFIDENCE = VOICE_REVIEW_LOW_CONFIDENCE
+KEY_CAPTURE_CUT_DURING_TASK = CAPTURE_CUT_DURING_TASK
+KEY_CAPTURE_CUT_AFTER_TASK = CAPTURE_CUT_AFTER_TASK
+KEY_SPEECH_OUTSIDE_TASK = SPEECH_OUTSIDE_TASK
+KEY_PREPROCESS_ERRORED = "preprocess_errored"
+KEY_ROUTING_ERRORED = "routing_errored"
+KEY_BAD_HINT_MAP = "config_bad_hint_map"
+KEY_DECLARATION_UNREAD = "declaration_unread"
+KEY_ROUTE_UNEXPLAINED = "route_unexplained"
+KEY_ROUTE_UNREADABLE = "route_unreadable"
+KEY_CRITICAL_ABSENCE = "critical_absence"
+KEY_TAXONOMY_NO_CLASSIFIER = "taxonomy_no_classifier"
+KEY_REDACT_RESCAN_INCOMPLETE = "redact_rescan_incomplete"
+KEY_UNCOMPUTED_READING = "uncomputed_reading"
+KEY_OWNING_BRANCH_INPUT_ABSENT = "owning_branch_input_absent"
+KEY_NODE_OUTCOME_UNREADABLE = "node_outcome_unreadable"
+KEY_NO_LEXICAL_ITEM = "speech_no_lexical_item"
+KEY_REVIEWER_RESIDUE = "reviewer_residue"
+KEY_PERSON_NAME_REVIEW = "person_name_review"
+KEY_REVIEWER_SECOND_SPEAKER = "reviewer_second_speaker"
+KEY_REVIEWER_NAMED_NO_WORDS = "reviewer_named_no_words"
+KEY_INSTRUCTIONS_SPOKEN = "instructions_spoken"
+KEY_SECOND_OPINION_DISAGREES = "second_opinion_disagreement"
+KEY_UNPLACED_OPEN = "unplaced_finding_open"
+KEY_UNPLACED_UNREAD = "unplaced_finding_unread"
+
+GROUND_KEYS = (
+    KEY_UNMEASURABLE,
+    KEY_ACOUSTICALLY_EMPTY,
+    KEY_TOO_SHORT_FOR_TASK,
+    KEY_DECLARED_TASK_ABSENT,
+    KEY_NO_BREATH_CAPTURED,
+    KEY_TASK_MISMATCH,
+    KEY_BREATH_REVIEW_LOW_CONFIDENCE,
+    KEY_NO_COUGH_CAPTURED,
+    KEY_COUGH_REVIEW_LOW_CONFIDENCE,
+    KEY_BACKGROUND_SPEECH_IN_TASK,
+    KEY_DISCARD_CONTESTED,
+    KEY_NO_PHONATION_CAPTURED,
+    KEY_VOICE_REVIEW_LOW_CONFIDENCE,
+    KEY_CAPTURE_CUT_DURING_TASK,
+    KEY_CAPTURE_CUT_AFTER_TASK,
+    KEY_SPEECH_OUTSIDE_TASK,
+    KEY_PREPROCESS_ERRORED,
+    KEY_ROUTING_ERRORED,
+    KEY_BAD_HINT_MAP,
+    KEY_DECLARATION_UNREAD,
+    KEY_ROUTE_UNEXPLAINED,
+    KEY_ROUTE_UNREADABLE,
+    KEY_CRITICAL_ABSENCE,
+    KEY_TAXONOMY_NO_CLASSIFIER,
+    KEY_REDACT_RESCAN_INCOMPLETE,
+    KEY_UNCOMPUTED_READING,
+    KEY_OWNING_BRANCH_INPUT_ABSENT,
+    KEY_NODE_OUTCOME_UNREADABLE,
+    KEY_NO_LEXICAL_ITEM,
+    KEY_REVIEWER_RESIDUE,
+    KEY_PERSON_NAME_REVIEW,
+    KEY_REVIEWER_SECOND_SPEAKER,
+    KEY_REVIEWER_NAMED_NO_WORDS,
+    KEY_INSTRUCTIONS_SPOKEN,
+    KEY_SECOND_OPINION_DISAGREES,
+    KEY_UNPLACED_OPEN,
+    KEY_UNPLACED_UNREAD,
+)
+"""Every ground key that names no node, gate or branch of its own."""
+
+PREFIX_GATE = "gate"
+PREFIX_CONFORMANCE = "conformance"
+PREFIX_NOTHING_READ = "nothing_read"
+PREFIX_STORE_ASSERTION = "store_assertion_contradicted"
+PREFIX_CONFORMANCE_UNANSWERED = "conformance_unanswered"
+PREFIX_DEVIATION = "deviation"
+PREFIX_UNMEASURED = "unmeasured_operating_point"
+PREFIX_ROUTE_MISMATCH = "route_mismatch"
+PREFIX_BRANCH_SILENT = "branch_silent"
+PREFIX_HINT_MISMATCH = "hint_mismatch"
+PREFIX_NODE = "node"
+
+GROUND_KEY_PREFIXES = (
+    PREFIX_GATE,
+    PREFIX_CONFORMANCE,
+    PREFIX_NOTHING_READ,
+    PREFIX_STORE_ASSERTION,
+    PREFIX_CONFORMANCE_UNANSWERED,
+    PREFIX_DEVIATION,
+    PREFIX_UNMEASURED,
+    PREFIX_ROUTE_MISMATCH,
+    PREFIX_BRANCH_SILENT,
+    PREFIX_HINT_MISMATCH,
+    PREFIX_NODE,
+)
+"""Ground keys written ``<prefix>:<name>``, the name being a gate, a reporting node or a branch."""
+
+OPERATIONAL_GROUND_KEYS = frozenset(
+    {
+        KEY_PREPROCESS_ERRORED,
+        KEY_ROUTING_ERRORED,
+        KEY_BAD_HINT_MAP,
+        KEY_DECLARATION_UNREAD,
+        KEY_ROUTE_UNEXPLAINED,
+        KEY_ROUTE_UNREADABLE,
+        KEY_CRITICAL_ABSENCE,
+        KEY_TAXONOMY_NO_CLASSIFIER,
+        KEY_REDACT_RESCAN_INCOMPLETE,
+        KEY_UNCOMPUTED_READING,
+        KEY_OWNING_BRANCH_INPUT_ABSENT,
+        KEY_NODE_OUTCOME_UNREADABLE,
+    }
+)
+"""Grounds that say the pipeline owes the recording something, not that the participant did anything.
+A flag on one of these makes the file ``rerun`` (:attr:`Triage.RERUN`)."""
+
+OPERATIONAL_GROUND_PREFIXES = frozenset({PREFIX_UNMEASURED, PREFIX_BRANCH_SILENT})
+"""Prefixed grounds that are operational in the same sense."""
+
+RELEASE_GROUND_KEYS: dict[str, str] = {
+    NO_LEXICAL_WORD: "no_lexical_word",
+    NOTHING_BEYOND_STIMULUS: "nothing_beyond_stimulus",
+    SCAN_FOUND_NOTHING: "scan_found_nothing",
+    NON_LEXICAL_TASK: "non_lexical_task",
+    REVIEWER_UNMASKED_ALL: "reviewer_unmasked_all",
+    NO_CONTENT_MASKED: "no_content_masked",
+    FINDINGS_ARE_TASK_CONTENT: "findings_are_task_content",
+    REVIEWER_CLEARED_UNMASKED: "reviewer_cleared_unmasked",
+    NO_TRANSCRIPT: "no_transcript",
+    SPEECH_UNREAD: "speech_unread",
+    REDACTION_OWED: "redaction_owed",
+    SCAN_UNRECORDED: "scan_unrecorded",
+    REVIEWER_PROPOSED_REDACTION: "reviewer_proposed_redaction",
+    UNPLACED_FINDING_UNREAD: "unplaced_finding_unread",
+    REDACT_VERIFY_FOUND: "redact_verify_found",
+    REDACT_UNRESOLVED: "redact_unresolved",
+    REVIEWER_CLEARED_RESCAN: "reviewer_cleared_rescan",
+    REVIEWER_UNMASKED_SOME: "reviewer_unmasked_some",
+    MASKS_TRIMMED_TO_CONTENT: "masks_trimmed_to_content",
+    POLICY_MASKS_ADDED: "policy_masks_added",
+    POLICY_MASKS_ONLY: "policy_masks_only",
+    DISCARDED: "discarded",
+}
+"""The stable key of every release ground. A release REDACT itself decided carries
+:data:`RELEASE_DECIDED_BY_REDACT`."""
+
+RELEASE_DECIDED_BY_REDACT = "redact_decided"
+
+
+def is_operational(key: str | None) -> bool:
+    """Whether a ground key says the pipeline, not the participant, is what the flag is about.
+
+    Args:
+        key: A ground key, or None.
+
+    Returns:
+        True for a key in :data:`OPERATIONAL_GROUND_KEYS` or under a prefix in
+        :data:`OPERATIONAL_GROUND_PREFIXES`.
+    """
+    if not key:
+        return False
+    return key in OPERATIONAL_GROUND_KEYS or key.split(":", 1)[0] in OPERATIONAL_GROUND_PREFIXES
+
+
+def ground_key(verdict: "NodeVerdict") -> str:
+    """The stable key of a verdict's ground, its own where it carries one.
+
+    A deciding node writes no key, and stores written before keys existed carry none, so the key of
+    such a verdict is derived from the node and its outcome.
+
+    Args:
+        verdict: A contributing verdict.
+
+    Returns:
+        The key.
+    """
+    if verdict.key:
+        return verdict.key
+    if verdict.node == _ADMIT and verdict.outcome is Outcome.FAIL:
+        return KEY_UNMEASURABLE
+    if verdict.node == "TAXONOMY" and verdict.outcome is Outcome.FLAG:
+        return KEY_TAXONOMY_NO_CLASSIFIER
+    if verdict.node == _REDACT and verdict.outcome is Outcome.FLAG:
+        return KEY_REDACT_RESCAN_INCOMPLETE
+    if "which is not a node outcome" in verdict.why:
+        return KEY_NODE_OUTCOME_UNREADABLE
+    return f"{PREFIX_NODE}:{verdict.node}:{verdict.outcome.value}"
+
+
+def release_ground_key(release_ground: str | None) -> str:
+    """The stable key of a release ground.
+
+    Args:
+        release_ground: The release ground, or None where REDACT itself decided the release.
+
+    Returns:
+        Its key; :data:`RELEASE_DECIDED_BY_REDACT` for None, and the text itself for a ground this
+        vocabulary does not hold, so an unknown ground stays visible rather than collapsing.
+    """
+    if release_ground is None:
+        return RELEASE_DECIDED_BY_REDACT
+    return RELEASE_GROUND_KEYS.get(release_ground, release_ground)
+
+
 @dataclass(frozen=True)
 class NodeVerdict:
     """One conclusion about the recording.
@@ -417,12 +927,16 @@ class NodeVerdict:
             fold.
         kind: The kind the conclusion is about, or None.
         why: The reason, in controlled vocabulary — never transcript text.
+        key: The ground's stable key, one of :data:`GROUND_KEYS` or ``<prefix>:<name>`` for a prefix in
+            :data:`GROUND_KEY_PREFIXES`; None on a verdict a deciding node wrote, which
+            :func:`ground_key` derives.
     """
 
     node: str
     outcome: Outcome | Triage
     kind: str | None
     why: str
+    key: str | None = None
 
 
 @dataclass(frozen=True)
@@ -644,7 +1158,13 @@ class FileVerdict:
             REDACT did not decide it — one of :data:`RELEASE_WITHOUT_REDACTION_GROUNDS`,
             :data:`RELEASE_UNKNOWN_GROUNDS`, :data:`RELEASE_WITHHELD_GROUNDS` or
             :data:`RELEASE_WITH_REDACTION_GROUNDS`. None wherever REDACT itself decided.
-        discard_ground: ``"unmeasurable"``, ``"acoustically_empty"`` or None.
+        discard_ground: ``"unmeasurable"``, ``"too_short_for_task"``, ``"acoustically_empty"``,
+            ``"no_breath_captured"``, ``"declared_task_absent"`` or None.
+        ground_keys: The stable key of every ground behind the triage state -- the discard ground and
+            every flag, sorted and deduplicated. Empty on a pass.
+        annotation_keys: The stable key of every annotation, sorted and deduplicated: a reading recorded
+            on the recording that moves no triage state (an airway task's ``task_mismatch``).
+        annotations: Each annotation, with its node, kind, reason and key.
         findings: What each branch found, as a :class:`KindState` value, read off the spans it
             proposed in its own family. ``uncertain`` where it left no report at all.
         conformance: Each reporting node's conformance, keyed by node — True, False or
@@ -674,12 +1194,21 @@ class FileVerdict:
         gates: The task group's gates and every one this fold applied — the gate, its reading, the
             bound and the group — so the conformance can be read backwards. Empty where the
             recording declares no task this graph holds a row for.
+        breath_pattern: The breathing-pattern measure's reading for a breath family -- pattern, event
+            count, durations, intervals and rhythm. Empty for every other family.
+        cough_pattern: The cough-onset measure's reading for a cough family -- onsets, events, review
+            counts and extent. Empty for every other family.
+        background_speech: The background-speech reading over an airway task's extent. Empty for every
+            other family, or where the residual was not stored.
     """
 
     triage: Triage
     release: Release
     discard_ground: str | None = None
     release_ground: str | None = None
+    ground_keys: list[str] = field(default_factory=list)
+    annotation_keys: list[str] = field(default_factory=list)
+    annotations: list[NodeVerdict] = field(default_factory=list)
     findings: dict[str, str] = field(default_factory=dict)
     conformance: dict[str, Conformance] = field(default_factory=dict)
     conformance_of: dict[str, str] = field(default_factory=dict)
@@ -698,6 +1227,10 @@ class FileVerdict:
     second_opinion: dict[str, Any] = field(default_factory=dict)
     critical_absences: dict[str, dict[str, str]] = field(default_factory=dict)
     gates: dict[str, Any] = field(default_factory=dict)
+    breath_pattern: dict[str, Any] = field(default_factory=dict)
+    cough_pattern: dict[str, Any] = field(default_factory=dict)
+    background_speech: dict[str, Any] = field(default_factory=dict)
+    voice_phonation: dict[str, Any] = field(default_factory=dict)
 
     def record(self) -> dict[str, Any]:
         """Every decision point of this fold, as JSON-ready values.
@@ -713,6 +1246,10 @@ class FileVerdict:
             "release": self.release.value,
             "discard_ground": self.discard_ground,
             "release_ground": self.release_ground,
+            "release_ground_key": release_ground_key(self.release_ground),
+            "ground_keys": list(self.ground_keys),
+            "annotation_keys": list(self.annotation_keys),
+            "annotations": [{"node": a.node, "kind": a.kind, "why": a.why, "key": a.key} for a in self.annotations],
             "declared_family": self.declared_family,
             "findings": dict(self.findings),
             "conformance": dict(self.conformance),
@@ -729,9 +1266,14 @@ class FileVerdict:
             "second_opinion": dict(self.second_opinion),
             "critical_absences": {branch: dict(gates) for branch, gates in self.critical_absences.items()},
             "gates": dict(self.gates),
+            "breath_pattern": dict(self.breath_pattern),
+            "cough_pattern": dict(self.cough_pattern),
+            "background_speech": dict(self.background_speech),
+            "voice_phonation": dict(self.voice_phonation),
             "ran": {node: state.value for node, state in self.ran.items()},
             "reasons": [
-                {"node": r.node, "outcome": r.outcome.value, "kind": r.kind, "why": r.why} for r in self.reasons
+                {"node": r.node, "outcome": r.outcome.value, "kind": r.kind, "why": r.why, "key": ground_key(r)}
+                for r in self.reasons
             ],
         }
 
@@ -779,18 +1321,23 @@ def second_opinion_disagreements(
     *,
     confident_yes: float | None,
     confident_no: float | None,
+    identifier_masked: bool | None = None,
 ) -> list[str]:
     """Where the second-opinion model confidently disagrees with the reviewer.
 
     Compared only where both answered: the opinion's status is ``ok`` and the reviewer read the
     transcript (``clean`` or ``flagged``). ``instructions_spoken`` is compared only for a reading
-    that carries the part, so a reading from before the prompt asked it is never a disagreement.
+    that carries the part, so a reading from before the prompt asked it is never a disagreement;
+    ``policy_identifier_present`` only where ``identifier_masked`` is given.
 
     Args:
         opinion: The ``second_opinion_answers`` measurement's attributes, or None.
         llm_redaction: REVIEW's annotation, or None.
         confident_yes: The probability at or above which the opinion is a confident yes.
         confident_no: The probability at or below which it is a confident no.
+        identifier_masked: Whether, once the reviewer's reading is folded, any mask stands or the
+            reviewer asks to hide more -- the reviewer's answer to ``policy_identifier_present``; None
+            where the fold has no plan to say.
 
     Returns:
         One description per disagreeing question, ``<question> p=<p> reviewer=<yes|no>``, in
@@ -807,12 +1354,9 @@ def second_opinion_disagreements(
     reviewer: dict[str, bool] = {
         "other_voice": annotation.get("speakers") == "more_than_one"
         or (annotation.get("speakers") == "unclear" and bool(others)),
-        "named_diagnosis": any(
-            str(entry.get("category") or "").upper() == "CONDITION" and str(entry.get("action")) == "redact"
-            for entry in annotation.get("proposal") or ()
-            if isinstance(entry, Mapping)
-        ),
     }
+    if identifier_masked is not None:
+        reviewer["policy_identifier_present"] = identifier_masked
     if "instructions_spoken" in annotation:
         reviewer["instructions_spoken"] = any(str(text).strip() for text in annotation.get("instructions_spoken") or ())
     found = []
@@ -1086,6 +1630,181 @@ def _hint_reading(claimed: bool, found: bool) -> str:
     return FOUND_UNCLAIMED if found else NO_CLAIM
 
 
+def _owner_performed(
+    branch: str, by_branch: Mapping[str, BranchReport], findings: Mapping[str, str], evidence: TaskEvidence
+) -> bool:
+    """Whether one owning branch says the declared task was performed.
+
+    Args:
+        branch: An owning branch of the declared family.
+        by_branch: The branch reports, keyed by branch.
+        findings: What each branch found, from :func:`_found`.
+        evidence: The task evidence; its event tokens corroborate an AIRWAY that could not decide.
+
+    Returns:
+        True where the branch's task conformance is True, or where it is AIRWAY, it found its kind,
+        could not decide its conformance, the family is not one decided on detected events, and the
+        transcript carries an event token naming the declared family's own event. A span alone, or
+        a conformance of False, is never enough.
+    """
+    if branch == _AIRWAY and evidence.breath_mode is not None:
+        return breath_conforms(evidence)
+    if branch == _AIRWAY and evidence.cough_mode is not None:
+        return cough_conforms(evidence)
+    if branch == _VOICE and evidence.voice_mode is not None:
+        return bool(evidence.voice_found) and evidence.voice_mismatch is None
+    report = by_branch.get(branch)
+    if report is None or report.conformance_of != TASK:
+        return False
+    if report.conformance is True:
+        return True
+    return (
+        branch == _AIRWAY
+        and report.conformance == UNDETERMINED
+        and findings.get(branch) == KindState.PRESENT.value
+        and evidence.required_event is None
+        and evidence.event_tokens_n > 0
+    )
+
+
+def declared_task_performed(
+    by_branch: Mapping[str, BranchReport], findings: Mapping[str, str], evidence: TaskEvidence
+) -> bool:
+    """Whether the declared task was performed, by the declared task's own branch.
+
+    A branch's span, a speaker turn, a speech run or an activity-envelope extent is no evidence of
+    the task; another branch's finding is never evidence of it. Where the recording declares no
+    family a branch owns, any branch's finding stands, as before.
+
+    Args:
+        by_branch: The branch reports, keyed by branch.
+        findings: What each branch found, from :func:`_found`.
+        evidence: The task evidence.
+
+    Returns:
+        Whether any owning branch says so (:func:`_owner_performed`); with no owning branch named,
+        whether any branch found its kind.
+    """
+    if not evidence.owning_branches:
+        return any(state == KindState.PRESENT.value for state in findings.values())
+    return any(_owner_performed(branch, by_branch, findings, evidence) for branch in evidence.owning_branches)
+
+
+def declared_task_absent(
+    by_branch: Mapping[str, BranchReport],
+    findings: Mapping[str, str],
+    evidence: TaskEvidence,
+    lexical_words_n: int | None,
+) -> bool:
+    """Whether the declared task's own branch ran and found none of the task at all.
+
+    Every owning branch must have reported and answered its task conformance without a True. A
+    branch found none of the task where it proposed no span into its own family; a SPEECH-owned task
+    also found none where the consensus transcript holds no lexical word -- a bracketed token, a
+    filler or nothing at all matches no speech task. What another branch found does not count.
+
+    Args:
+        by_branch: The branch reports, keyed by branch.
+        findings: What each branch found, from :func:`_found`.
+        evidence: The task evidence.
+        lexical_words_n: How many lexical words SPEECH read off the consensus, or None where it
+            left no report to say.
+
+    Returns:
+        True where the declared task is absent; False where no owning branch is named, an owner did
+        not report, or an owner says the task was performed.
+    """
+    owners = evidence.owning_branches
+    if not owners or any(branch not in by_branch for branch in owners):
+        return False
+    if declared_task_performed(by_branch, findings, evidence):
+        return False
+
+    def found_none(branch: str) -> bool:
+        if findings.get(branch) == KindState.ABSENT.value:
+            return True
+        return branch == _SPEECH and lexical_words_n == 0
+
+    return all(found_none(branch) for branch in owners)
+
+
+def no_required_event(evidence: TaskEvidence, performed: bool) -> bool:
+    """Whether a family decided on detected events had none of its own kind detected.
+
+    Args:
+        evidence: The task evidence.
+        performed: Whether the declared task's own branch says the task was performed.
+
+    Returns:
+        For a breath family read by the breathing-pattern measure, True where it read the inputs and
+        found no breath (counted) or no alternating pattern (sustained); for a cough family read by the
+        cough-onset measure, True where it read the inputs and found no cough onset. Otherwise True where the
+        family names a required event kind and the owning AIRWAY branch reported a count of zero;
+        False where it names none, reported no count, or the task was performed.
+    """
+    if evidence.breath_mode is not None:
+        return evidence.breath_pattern is not None and not evidence.owner_absent_inputs and not breath_present(evidence)
+    if evidence.cough_mode is not None:
+        return evidence.cough_onsets_n == 0 and not evidence.owner_absent_inputs
+    if evidence.voice_mode is not None:
+        return evidence.voice_found is False and not evidence.owner_absent_inputs
+    return (
+        evidence.required_event in EVENT_ABSENT_GROUNDS
+        and evidence.events_found_n == 0
+        and not evidence.owner_absent_inputs
+        and not performed
+    )
+
+
+def discard_contested(evidence: TaskEvidence) -> bool:
+    """Whether AIRWAY's own event detector contradicts a measure's no-event discard.
+
+    Args:
+        evidence: The task evidence.
+
+    Returns:
+        True where the family names a contest threshold, the detector found at least that many
+        events of the family's own kind, and, where a rise is named, the breath train rose at least
+        that far; False otherwise.
+    """
+    rise_ok = evidence.contest_rise_db_min is None or (
+        evidence.breath_train_rise_db is not None and evidence.breath_train_rise_db >= evidence.contest_rise_db_min
+    )
+    return (
+        evidence.contest_events_min is not None
+        and evidence.events_found_n is not None
+        and evidence.events_found_n >= evidence.contest_events_min
+        and rise_ok
+    )
+
+
+def _count_mismatch(applied_gates: Sequence[Mapping[str, Any]], evidence: TaskEvidence) -> str | None:
+    """The detected-against-instructed count where an airway task's own events fell short of it.
+
+    Args:
+        applied_gates: The declared task's applied gate records.
+        evidence: The task evidence, read for the event kind and the instructed count.
+
+    Returns:
+        ``"detected N <kind> events where M were instructed"`` where ``events_min`` passed and
+        ``instructed_count_min_fraction`` failed; None otherwise.
+    """
+    by_name = {str(gate.get("gate")): gate for gate in applied_gates}
+    found = by_name.get("events_min")
+    fraction = by_name.get("instructed_count_min_fraction")
+    if (
+        evidence.event_kind is None
+        or evidence.instructed_count is None
+        or found is None
+        or fraction is None
+        or found.get("passed") is not True
+        or fraction.get("passed") is not False
+    ):
+        return None
+    detected = found.get("value")
+    return f"detected {detected} {evidence.event_kind} events where {evidence.instructed_count} were instructed"
+
+
 def fold_file_verdict(
     node_verdicts: Sequence[NodeVerdict],
     *,
@@ -1105,11 +1824,17 @@ def fold_file_verdict(
     agreed_redactions: frozenset[int] = frozenset(),
     unplaced: Sequence[tuple[str, str]] = (),
     second_opinion: Mapping[str, Any] | None = None,
+    task: TaskEvidence | None = None,
 ) -> FileVerdict:
     """Decide the file, from the deciding nodes' verdicts and the reporting nodes' reports.
 
-    Flags on every ground it finds and discards on two: ``unmeasurable``, which is ADMIT's own fail,
-    and ``acoustically_empty``, which is the ruleset's :data:`EMPTY` state. The grounds, the two
+    Flags on every ground it finds and discards on four: ``unmeasurable``, which is ADMIT's own fail;
+    ``too_short_for_task``, a recording shorter than its family's minimum; ``acoustically_empty``,
+    the ruleset's :data:`EMPTY` state where the declared task was not performed; and
+    ``declared_task_absent``, where the branch owning the declared task ran and found none of it --
+    tried after the operational grounds, which make the file ``rerun`` instead.
+    Only the declared task's own branch can say the task was performed, and only by its task
+    conformance, never by a span alone (:func:`declared_task_performed`). The grounds, the two
     axes and the agreement and hint tables are in
     ``specs/20260817-triage-workflow-dag/verdict.md``.
 
@@ -1148,6 +1873,9 @@ def fold_file_verdict(
         second_opinion: The ``second_opinion_answers`` measurement's attributes, or None. A confident
             disagreement with the reviewer is a flag ground under ``policy.second_opinion_disagreement_flags``
             (:func:`second_opinion_disagreements`); the release is unchanged.
+        task: Whether the declared task was performed at all: its owning branches, the recording's
+            duration against the family's minimum, and the ASR event tokens naming its event. None
+            is :class:`TaskEvidence` with nothing in it, under which the owning branch is unknown.
         unplaced: ``(family, state)`` for every detector finding SPEECH could not place on words, as
             :class:`~senselab.audio.workflows.triage.nodes.redact.UnplacedFinding` records them. An
             ``open`` one flags; an ``unread`` one flags and withholds.
@@ -1157,6 +1885,7 @@ def fold_file_verdict(
         deciding one.
     """
     rules = policy or FoldPolicy()
+    task_evidence = task or TaskEvidence()
     claims = hint_claims or {}
     spans = dict(spans_by_node or {})
     reports = {report.node: report for report in branch_reports}
@@ -1168,6 +1897,15 @@ def fold_file_verdict(
         for branch in branches_seen
     }
     findings = {branch: _found(branch in by_branch, spans.get(branch, 0)) for branch in branches_seen}
+    breath_decides = task_evidence.breath_mode is not None and task_evidence.breath_pattern is not None
+    if breath_decides and _AIRWAY in findings:
+        findings[_AIRWAY] = KindState.PRESENT.value if breath_present(task_evidence) else KindState.ABSENT.value
+    cough_decides = task_evidence.cough_mode is not None and task_evidence.cough_onsets_n is not None
+    if cough_decides and _AIRWAY in findings:
+        findings[_AIRWAY] = KindState.PRESENT.value if cough_present(task_evidence) else KindState.ABSENT.value
+    voice_decides = task_evidence.voice_mode is not None and task_evidence.voice_found is not None
+    if voice_decides and _VOICE in findings:
+        findings[_VOICE] = KindState.PRESENT.value if task_evidence.voice_found else KindState.ABSENT.value
     agreement = {branch: _agreement(routes[branch], branch in by_branch, findings[branch]) for branch in branches_seen}
     hints = (
         {}
@@ -1182,51 +1920,50 @@ def fold_file_verdict(
     for recorded in branch_decisions.values():
         bad_map_values.update(recorded.bad_map_values)
 
-    reasons = list(node_verdicts)
+    reasons = [replace(verdict, key=ground_key(verdict)) for verdict in node_verdicts]
+
+    def flag(node: str, why: str, key: str, kind: str | None = None) -> None:
+        reasons.append(NodeVerdict(node, Outcome.FLAG, kind, why, key))
+
+    annotations: list[NodeVerdict] = []
+
+    def annotate(node: str, why: str, key: str, kind: str | None = None) -> None:
+        annotations.append(NodeVerdict(node, Outcome.PASS, kind, why, key))
+
     if ran.get(_PREPROCESS) is RunState.ERRORED:
-        reasons.append(
-            NodeVerdict(
-                _PREPROCESS,
-                Outcome.FLAG,
-                None,
-                "preprocess failed; no derivative was measured because conditioning itself did not complete",
-            )
+        flag(
+            _PREPROCESS,
+            "preprocess failed; no derivative was measured because conditioning itself did not complete",
+            KEY_PREPROCESS_ERRORED,
         )
     if ran.get(_ROUTING) is RunState.ERRORED:
-        reasons.append(
-            NodeVerdict(
-                _ROUTING,
-                Outcome.FLAG,
-                None,
-                "routing failed; branch execution was withheld because no complete routing result was available",
-            )
+        flag(
+            _ROUTING,
+            "routing failed; branch execution was withheld because no complete routing result was available",
+            KEY_ROUTING_ERRORED,
         )
     if bad_map_values:
         named = ", ".join(f"{tag}: {value}" for tag, value in sorted(bad_map_values.items()))
-        reasons.append(NodeVerdict(_ROUTING, Outcome.FLAG, None, f"{BAD_MAP_VALUES}: {named}"))
+        flag(_ROUTING, f"{BAD_MAP_VALUES}: {named}", KEY_BAD_HINT_MAP)
     if hint_claims is None:
-        reasons.append(NodeVerdict(_VERDICT, Outcome.FLAG, None, UNREAD_DECLARATION))
-    if route_state == UNEXPLAINED:
-        reasons.append(NodeVerdict(_ROUTING, Outcome.FLAG, None, UNEXPLAINED_CONTENT))
+        flag(_VERDICT, UNREAD_DECLARATION, KEY_DECLARATION_UNREAD)
+    if route_state == UNEXPLAINED and not (cough_decides and cough_present(task_evidence)):
+        flag(_ROUTING, UNEXPLAINED_CONTENT, KEY_ROUTE_UNEXPLAINED)
     if route_state == UNREADABLE:
-        reasons.append(NodeVerdict(_ROUTING, Outcome.FLAG, None, UNREADABLE_EMPTINESS))
+        flag(_ROUTING, UNREADABLE_EMPTINESS, KEY_ROUTE_UNREADABLE)
     absences = {branch: dict(gates) for branch, gates in (critical_absences or {}).items()}
     if absences:
         named = "; ".join(
             f"{branch}: " + ", ".join(f"{gate} ({why})" for gate, why in sorted(gates.items()))
             for branch, gates in sorted(absences.items())
         )
-        reasons.append(NodeVerdict(_ROUTING, Outcome.FLAG, None, f"{CRITICAL_ABSENCE}: {named}"))
-    # A task the ruleset routed to SPEECH is a task that asks for words. SPEECH running over it and
-    # reading none is the task not having happened, and it must be visible as that rather than as a
-    # quiet clearance: the release axis calls it releasable, which is true and is not the whole of
-    # it. Owner, 2026-09-25.
+        flag(_ROUTING, f"{CRITICAL_ABSENCE}: {named}", KEY_CRITICAL_ABSENCE)
     if (
         (redaction or RedactionEvidence()).lexical_words_n == 0
         and ran.get(_SPEECH) is RunState.COMPLETED
         and routes.get(_SPEECH) == ROUTED
     ):
-        reasons.append(NodeVerdict(_SPEECH, Outcome.FLAG, None, NO_LEXICAL_ITEM_PRODUCED))
+        flag(_SPEECH, NO_LEXICAL_ITEM_PRODUCED, KEY_NO_LEXICAL_ITEM)
     annotation = dict(llm_redaction or {})
     deciding = deciding_reading(annotation, agreed_redactions, rules.condition_categories)
     if rules.llm_redaction_flags and _reviewer_found_residue(deciding):
@@ -1239,64 +1976,68 @@ def fold_file_verdict(
                 }
             )
         )
-        ground_text = LLM_REDACTION_RESIDUE
-        reasons.append(NodeVerdict(_VERDICT, Outcome.FLAG, None, f"{ground_text}: {named}" if named else ground_text))
+        flag(
+            _VERDICT,
+            f"{LLM_REDACTION_RESIDUE}: {named}" if named else LLM_REDACTION_RESIDUE,
+            KEY_REVIEWER_RESIDUE,
+        )
     evidence = redaction or RedactionEvidence()
     if rules.person_name_review_flags and evidence.person_names_masked_n > 0:
-        proposed = "; ".join(json.dumps(text) for text in evidence.name_release_proposed)
-        named_n = f"{evidence.person_names_masked_n} name word(s) masked"
-        why = f"{PERSON_NAME_AWAITS_REVIEW}: {named_n}" + (f"; release proposed for {proposed}" if proposed else "")
-        reasons.append(NodeVerdict(_VERDICT, Outcome.FLAG, None, why))
+        proposed_n = len(evidence.name_release_proposed)
+        why = f"{PERSON_NAME_AWAITS_REVIEW}: {evidence.person_names_masked_n} name word(s) masked" + (
+            f"; release proposed for {proposed_n} name(s)" if proposed_n else ""
+        )
+        flag(_VERDICT, why, KEY_PERSON_NAME_REVIEW)
     diarized_other = any(
         record.get("passed") is False and record.get("gate") == DOMINANT_SPEAKER_GATE for record in flag_gates or ()
     )
     others = [dict(other) for other in annotation.get("other_speakers") or () if isinstance(other, Mapping)]
     heard_other = annotation.get("speakers") == "more_than_one" or (annotation.get("speakers") == "unclear" and others)
     if rules.llm_second_speaker_flags and heard_other and not diarized_other:
-        described = [
-            f"{json.dumps(str(other.get('text')))} ({'expected' if other.get('expected') is True else 'unexpected'})"
-            for other in others
-        ]
-        quoted = "; ".join(described) if described else "no words quoted"
-        reasons.append(NodeVerdict(_VERDICT, Outcome.FLAG, None, f"{REVIEWER_HEARD_SECOND_SPEAKER}: {quoted}"))
+        expected_n = sum(1 for other in others if other.get("expected") is True)
+        counted = (
+            f"{len(others)} passage(s) quoted, {expected_n} expected by the instructions, "
+            f"{len(others) - expected_n} not"
+            if others
+            else "no words quoted"
+        )
+        flag(_VERDICT, f"{REVIEWER_HEARD_SECOND_SPEAKER}: {counted}", KEY_REVIEWER_SECOND_SPEAKER)
     if rules.llm_contradiction_flags and reviewer_named_no_words(annotation):
-        reasons.append(NodeVerdict(_VERDICT, Outcome.FLAG, None, REVIEWER_NAMED_NO_WORDS))
+        flag(_VERDICT, REVIEWER_NAMED_NO_WORDS, KEY_REVIEWER_NAMED_NO_WORDS)
     spoken = [str(text) for text in annotation.get("instructions_spoken") or () if str(text).strip()]
     if rules.llm_instructions_spoken_flags and spoken:
-        quoted = "; ".join(json.dumps(text) for text in spoken)
-        reasons.append(NodeVerdict(_VERDICT, Outcome.FLAG, None, f"{INSTRUCTIONS_SPOKEN}: {quoted}"))
+        flag(_VERDICT, f"{INSTRUCTIONS_SPOKEN}: {len(spoken)} passage(s) quoted", KEY_INSTRUCTIONS_SPOKEN)
     disagreements = second_opinion_disagreements(
         second_opinion,
         annotation,
         confident_yes=rules.second_opinion_confident_yes,
         confident_no=rules.second_opinion_confident_no,
+        identifier_masked=evidence.masks_final_n > 0 or evidence.reviewer_requested_n > 0,
     )
-    if rules.second_opinion_disagreement_flags and disagreements:
-        reasons.append(
-            NodeVerdict(_VERDICT, Outcome.FLAG, None, f"{SECOND_OPINION_DISAGREES}: {'; '.join(disagreements)}")
-        )
+    clef_decides = not {_AIRWAY, _VOICE} & set(task_evidence.owning_branches)
+    if rules.second_opinion_disagreement_flags and disagreements and clef_decides:
+        flag(_VERDICT, f"{SECOND_OPINION_DISAGREES}: {'; '.join(disagreements)}", KEY_SECOND_OPINION_DISAGREES)
     open_families = sorted({family for family, state in unplaced if state in (UNPLACED_OPEN, UNPLACED_UNREAD)})
     if open_families:
-        ground_text = (
-            UNPLACED_FINDING_UNREAD if any(state == UNPLACED_UNREAD for _, state in unplaced) else UNPLACED_FINDING_OPEN
+        unread_any = any(state == UNPLACED_UNREAD for _, state in unplaced)
+        flag(
+            _VERDICT,
+            f"{UNPLACED_FINDING_UNREAD if unread_any else UNPLACED_FINDING_OPEN}: {', '.join(open_families)}",
+            KEY_UNPLACED_UNREAD if unread_any else KEY_UNPLACED_OPEN,
         )
-        reasons.append(NodeVerdict(_VERDICT, Outcome.FLAG, None, f"{ground_text}: {', '.join(open_families)}"))
     for record in flag_gates or ():
-        if record.get("passed") is not False:
+        if record.get("passed") is not False or task_evidence.voice_mode is not None:
             continue
-        reasons.append(
-            NodeVerdict(
-                _VERDICT,
-                Outcome.FLAG,
-                None,
-                f"{record.get('ground', record.get('gate'))}: "
-                f"{record.get('reading')} read {record.get('value')} against {record.get('bound')}"
-                + (
-                    f"; {MODEL_SPEAKER_PERMITTED}"
-                    if record.get("gate") == DOMINANT_SPEAKER_GATE and declared_family in rules.model_speaker_families
-                    else ""
-                ),
-            )
+        flag(
+            _VERDICT,
+            f"{record.get('ground', record.get('gate'))}: "
+            f"{record.get('reading')} read {record.get('value')} against {record.get('bound')}"
+            + (
+                f"; {MODEL_SPEAKER_PERMITTED}"
+                if record.get("gate") == DOMINANT_SPEAKER_GATE and declared_family in rules.model_speaker_families
+                else ""
+            ),
+            f"{PREFIX_GATE}:{record.get('gate')}",
         )
     gate_record = dict(gates or {})
     applied_gates = [g for g in (gate_record.get("applied") or ()) if isinstance(g, Mapping)]
@@ -1309,46 +2050,158 @@ def fold_file_verdict(
         for g in applied_gates
         if g.get("passed") == "UNDETERMINED" and g.get("reason") in ("absent_not_computed", "instrument_absent")
     )
-    if uncomputed and rules.uncomputed_reading_flags:
-        reasons.append(
-            NodeVerdict(
-                str(gate_record.get("node") or _VERDICT),
-                Outcome.FLAG,
-                None,
-                f"{UNCOMPUTED_READING}: {', '.join(uncomputed)}",
-            )
+    measure_mode = task_evidence.breath_mode or task_evidence.cough_mode
+    measure_decides_gate_node = (measure_mode is not None and gate_record.get("node") == _AIRWAY) or (
+        task_evidence.voice_mode is not None and gate_record.get("node") == _VOICE
+    )
+    if uncomputed and rules.uncomputed_reading_flags and not measure_decides_gate_node:
+        flag(
+            str(gate_record.get("node") or _VERDICT),
+            f"{UNCOMPUTED_READING}: {', '.join(uncomputed)}",
+            KEY_UNCOMPUTED_READING,
         )
     for name, report in reports.items():
+        measure_decides = (
+            (measure_mode is not None and name == _AIRWAY) or (task_evidence.voice_mode is not None and name == _VOICE)
+        ) and report.conformance_of == TASK
+        if measure_decides:
+            if report.deviations and rules.deviation_flags:
+                flag(name, f"{name} reported {', '.join(report.deviations)}", f"{PREFIX_DEVIATION}:{name}", report.kind)
+            continue
         if report.conformance is False and rules.flags_conformance(report.conformance_of, declared_family):
             why = TASK_NOT_CONFORMED if report.conformance_of == TASK else STORE_ASSERTION_CONTRADICTED
+            prefix = PREFIX_CONFORMANCE if report.conformance_of == TASK else PREFIX_STORE_ASSERTION
             if report.conformance_of == TASK and nothing_read and name == gate_record.get("node"):
                 why = NOTHING_READ
+                prefix = PREFIX_NOTHING_READ
+            mismatch = (
+                _count_mismatch(applied_gates, task_evidence)
+                if report.conformance_of == TASK and name == gate_record.get("node")
+                else None
+            )
             named = f" on {declared_family}" if report.conformance_of == TASK and declared_family else ""
-            reasons.append(NodeVerdict(name, Outcome.FLAG, report.kind, f"{name} {why}{named}"))
+            if mismatch is not None:
+                annotate(name, f"{TASK_MISMATCH}: {mismatch}", KEY_TASK_MISMATCH, report.kind)
+            else:
+                flag(name, f"{name} {why}{named}", f"{prefix}:{name}", report.kind)
         if report.conformance == UNDETERMINED and rules.undetermined_flags:
-            reasons.append(NodeVerdict(name, Outcome.FLAG, report.kind, f"{name} {CONFORMANCE_UNANSWERED}"))
+            flag(name, f"{name} {CONFORMANCE_UNANSWERED}", f"{PREFIX_CONFORMANCE_UNANSWERED}:{name}", report.kind)
         if report.deviations and rules.deviation_flags:
-            named = ", ".join(report.deviations)
-            reasons.append(NodeVerdict(name, Outcome.FLAG, report.kind, f"{name} reported {named}"))
+            flag(name, f"{name} reported {', '.join(report.deviations)}", f"{PREFIX_DEVIATION}:{name}", report.kind)
         if report.unmeasured and rules.unmeasured_points_flag:
-            named = ", ".join(report.unmeasured)
-            reasons.append(NodeVerdict(name, Outcome.FLAG, report.kind, f"{name} {UNMEASURED_ASKED}: {named}"))
+            flag(
+                name,
+                f"{name} {UNMEASURED_ASKED}: {', '.join(report.unmeasured)}",
+                f"{PREFIX_UNMEASURED}:{name}",
+                report.kind,
+            )
+    shortfall = breath_shortfall(task_evidence)
+    if shortfall is not None:
+        annotate(
+            _AIRWAY,
+            f"{TASK_MISMATCH}: {shortfall}",
+            KEY_TASK_MISMATCH,
+            by_branch[_AIRWAY].kind if _AIRWAY in by_branch else None,
+        )
+    if task_evidence.breath_review and breath_present(task_evidence):
+        flag(
+            _AIRWAY,
+            f"{BREATH_REVIEW_LOW_CONFIDENCE}: {breath_review_reading(task_evidence)}",
+            KEY_BREATH_REVIEW_LOW_CONFIDENCE,
+            by_branch[_AIRWAY].kind if _AIRWAY in by_branch else None,
+        )
+    cough_short = cough_shortfall(task_evidence)
+    if cough_short is not None:
+        annotate(
+            _AIRWAY,
+            f"{TASK_MISMATCH}: {cough_short}",
+            KEY_TASK_MISMATCH,
+            by_branch[_AIRWAY].kind if _AIRWAY in by_branch else None,
+        )
+    if task_evidence.cough_review and cough_present(task_evidence):
+        flag(
+            _AIRWAY,
+            f"{COUGH_REVIEW_LOW_CONFIDENCE}: {cough_review_reading(task_evidence)}",
+            KEY_COUGH_REVIEW_LOW_CONFIDENCE,
+            by_branch[_AIRWAY].kind if _AIRWAY in by_branch else None,
+        )
+    voice_kind = by_branch[_VOICE].kind if _VOICE in by_branch else None
+    if task_evidence.voice_mismatch is not None and task_evidence.voice_found:
+        annotate(_VOICE, f"{TASK_MISMATCH}: {task_evidence.voice_mismatch}", KEY_TASK_MISMATCH, voice_kind)
+    if task_evidence.voice_review and task_evidence.voice_found:
+        flag(
+            _VOICE,
+            f"{VOICE_REVIEW_LOW_CONFIDENCE}: {', '.join(task_evidence.voice_review)}",
+            KEY_VOICE_REVIEW_LOW_CONFIDENCE,
+            voice_kind,
+        )
+    if task_evidence.voice_capture_cut and task_evidence.voice_found:
+        flag(
+            _VOICE,
+            f"{CAPTURE_CUT_DURING_TASK}: the phonation's duration is a lower bound",
+            KEY_CAPTURE_CUT_DURING_TASK,
+            voice_kind,
+        )
+    elif task_evidence.voice_shutoff_after:
+        annotate(_VOICE, CAPTURE_CUT_AFTER_TASK, KEY_CAPTURE_CUT_AFTER_TASK, voice_kind)
+    if task_evidence.voice_outside_speech:
+        said = [word for run in task_evidence.voice_outside_speech for word in run.get("words") or ()]
+        annotate(
+            _VOICE,
+            f"{SPEECH_OUTSIDE_TASK}: {len(task_evidence.voice_outside_speech)} run(s)"
+            + (f", {len(said)} word(s)" if said else ""),
+            KEY_SPEECH_OUTSIDE_TASK,
+            voice_kind,
+        )
+    if task_evidence.background_speech.get("heard"):
+        windows = task_evidence.background_speech.get("speech_windows") or []
+        runs = task_evidence.background_speech.get("voice_runs") or []
+        first = min([row[0] for row in (*windows, *runs)], default=None)
+        flag(
+            _AIRWAY,
+            f"{BACKGROUND_SPEECH_IN_TASK}: {len(windows)} residual window(s) heard as speech and {len(runs)} "
+            f"harmonic residual run(s), first at {first} s",
+            KEY_BACKGROUND_SPEECH_IN_TASK,
+            by_branch[_AIRWAY].kind if _AIRWAY in by_branch else None,
+        )
     for branch in branches_seen:
         decision = branch_decisions.get(branch)
         reported = by_branch.get(branch)
         kind = reported.kind if reported is not None else None
-        # Only MISMATCH-and-PRESENT is a flag ground; both directions stay in ``agreement``.
-        if agreement[branch] == MISMATCH and findings[branch] == KindState.PRESENT.value:
-            reasons.append(
-                NodeVerdict(branch, Outcome.FLAG, kind, f"mismatch: routing {routes[branch]} {branch}, it found it")
+        # Only MISMATCH-and-PRESENT is a flag ground, and where the declared task names its owning
+        # branches only that branch's task-conformant finding; both directions stay in ``agreement``.
+        if (
+            agreement[branch] == MISMATCH
+            and findings[branch] == KindState.PRESENT.value
+            and not (cough_decides and branch == _AIRWAY)
+            and (
+                not task_evidence.owning_branches
+                or (
+                    branch in task_evidence.owning_branches
+                    and _owner_performed(branch, by_branch, findings, task_evidence)
+                )
+            )
+        ):
+            note = annotate if voice_decides and branch == _VOICE else flag
+            note(
+                branch,
+                f"mismatch: routing {routes[branch]} {branch}, it found it",
+                f"{PREFIX_ROUTE_MISMATCH}:{branch}",
+                kind,
             )
         if decision is not None and decision.will_run and reported is None:
-            reasons.append(
-                NodeVerdict(branch, Outcome.FLAG, kind, f"{branch} was asked to run and {_silence(ran.get(branch))}")
+            flag(
+                branch,
+                f"{branch} was asked to run and {_silence(ran.get(branch))}",
+                f"{PREFIX_BRANCH_SILENT}:{branch}",
+                kind,
             )
         if hints.get(branch) == CLAIMED_NOT_FOUND and declared_family not in rules.hint_mismatch_exempt_families:
-            reasons.append(
-                NodeVerdict(branch, Outcome.FLAG, kind, f"hint mismatch: {branch} was declared and did not find it")
+            flag(
+                branch,
+                f"hint mismatch: {branch} was declared and did not find it",
+                f"{PREFIX_HINT_MISMATCH}:{branch}",
+                kind,
             )
 
     branch_view = {
@@ -1362,17 +2215,56 @@ def fold_file_verdict(
         for name, decision in branch_decisions.items()
     }
 
-    admit = next((verdict for verdict in node_verdicts if verdict.node == _ADMIT), None)
+    performed = declared_task_performed(by_branch, findings, task_evidence)
+    owner_unable = bool(task_evidence.owner_absent_inputs) and not performed
+    if owner_unable:
+        flag(
+            task_evidence.owning_branches[0] if task_evidence.owning_branches else _VERDICT,
+            f"{OWNING_BRANCH_INPUT_ABSENT}: {', '.join(task_evidence.owner_absent_inputs)}",
+            KEY_OWNING_BRANCH_INPUT_ABSENT,
+        )
+    admit = next((reason for reason in reasons if reason.node == _ADMIT), None)
+    unmeasurable = admit is not None and admit.outcome is Outcome.FAIL
+    too_short = (
+        task_evidence.duration_s is not None
+        and task_evidence.minimum_duration_s is not None
+        and task_evidence.duration_s < task_evidence.minimum_duration_s
+    )
+    empty = route_state == EMPTY and not performed and not owner_unable
+    no_event = no_required_event(task_evidence, performed)
+    contested = no_event and not (unmeasurable or too_short or empty) and discard_contested(task_evidence)
+    if contested:
+        flag(
+            _AIRWAY,
+            f"{DISCARD_CONTESTED}: the measure found no {task_evidence.required_event}, AIRWAY's detector found "
+            f"{task_evidence.events_found_n}",
+            KEY_DISCARD_CONTESTED,
+            by_branch[_AIRWAY].kind if _AIRWAY in by_branch else None,
+        )
+    flags = [reason for reason in reasons if reason.outcome is Outcome.FLAG]
     ground: str | None = None
-    if admit is not None and admit.outcome is Outcome.FAIL:
+    if unmeasurable and admit is not None:
         triage = Triage.DISCARD
         ground = UNMEASURABLE
         reasons = [admit, *(reason for reason in reasons if reason is not admit)]
-    elif any(reason.outcome is Outcome.FLAG for reason in reasons):
-        triage = Triage.FLAG
-    elif route_state == EMPTY:
+    elif too_short:
+        triage = Triage.DISCARD
+        ground = TOO_SHORT_FOR_TASK
+    elif empty:
         triage = Triage.DISCARD
         ground = ACOUSTICALLY_EMPTY
+    elif any(is_operational(reason.key) for reason in flags):
+        triage = Triage.RERUN
+    elif no_event and not contested:
+        triage = Triage.DISCARD
+        ground = EVENT_ABSENT_GROUNDS[str(task_evidence.required_event)]
+    elif not contested and declared_task_absent(
+        by_branch, findings, task_evidence, (redaction or RedactionEvidence()).lexical_words_n
+    ):
+        triage = Triage.DISCARD
+        ground = DECLARED_TASK_ABSENT
+    elif flags:
+        triage = Triage.FLAG
     else:
         triage = Triage.PASS
 
@@ -1388,12 +2280,17 @@ def fold_file_verdict(
         speech_declined=routes.get(_SPEECH) == DECLINED,
         reviewer_clears=clears,
     )
+    if triage is Triage.DISCARD:
+        release, release_ground = Release.WITHHELD, DISCARDED
 
     return FileVerdict(
         triage=triage,
         release=release,
         discard_ground=ground,
         release_ground=release_ground,
+        ground_keys=sorted({*([ground] if ground else []), *(ground_key(reason) for reason in flags)}),
+        annotation_keys=sorted({str(annotation.key) for annotation in annotations}),
+        annotations=annotations,
         findings=findings,
         conformance={name: report.conformance for name, report in reports.items()},
         conformance_of={name: report.conformance_of for name, report in reports.items()},
@@ -1422,4 +2319,31 @@ def fold_file_verdict(
         ),
         critical_absences=absences,
         gates=dict(gates or {}),
+        breath_pattern=dict(task_evidence.breath_reading),
+        cough_pattern=dict(task_evidence.cough_reading),
+        background_speech=dict(task_evidence.background_speech),
+        voice_phonation=dict(task_evidence.voice_reading),
     )
+
+
+TASK_EXTENT_SPAN_ROLE = "task_extent"
+SUPERSEDES = "supersedes"
+
+
+_Span = TypeVar("_Span")
+
+
+def standing_task_extents(spans: Sequence[_Span]) -> list[_Span]:
+    """The task-extent spans that stand: those marked as superseding the rest, where any are.
+
+    Args:
+        spans: Live spans of any role.
+
+    Returns:
+        The live ``task_extent`` spans carrying ``supersedes`` where any does, else every live
+        ``task_extent`` span.
+    """
+    held: list[Any] = list(spans)
+    extents = [s for s in held if s.attributes.get("role") == TASK_EXTENT_SPAN_ROLE and s.extent is not None]
+    superseding = [s for s in extents if s.attributes.get(SUPERSEDES) is not None]
+    return superseding or extents

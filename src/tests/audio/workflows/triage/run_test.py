@@ -43,7 +43,7 @@ from senselab.audio.workflows.triage.routing_analysis.ruleset import GateOutcome
 from senselab.audio.workflows.triage.run import entity_subdir, prepare_run_layout, run_triage
 from senselab.audio.workflows.triage.vocabulary import (
     BRANCHES,
-    NO_TRANSCRIPT,
+    DISCARDED,
     SCAN_FOUND_NOTHING,
     TASK,
     UNDETERMINED,
@@ -744,7 +744,7 @@ class TestConditionalExecution:
         assert result.file_verdict.discard_ground == "acoustically_empty"
 
     @pytest.mark.parametrize("routing_outcome", ["raise", "none"])
-    def test_a_failed_routing_skips_dependent_branches_and_flags_the_file(
+    def test_a_failed_routing_skips_dependent_branches_and_reruns_the_file(
         self, graph: Callable[..., list[str]], config: TriageConfig, tmp_path: Path, routing_outcome: str
     ) -> None:
         """Branches do not run without ROUTING's decisions; QUALITY, which reads none, still does."""
@@ -754,7 +754,7 @@ class TestConditionalExecution:
         assert result.ran["routing"] is RunState.ERRORED
         assert all(result.ran[branch] is RunState.SKIPPED for branch in ("AIRWAY", "SPEECH", "VOICE", "REDACT"))
         assert result.file_verdict is not None
-        assert result.file_verdict.triage is Triage.FLAG
+        assert result.file_verdict.triage is Triage.RERUN
         assert any(
             "routing failed; branch execution was withheld" in reason.why for reason in result.file_verdict.reasons
         )
@@ -832,7 +832,7 @@ class TestPreprocessFailShortCircuits:
         assert set(skipped).isdisjoint(calls)
         assert [result.ran[node] for node in skipped] == [RunState.SKIPPED] * len(skipped)
 
-    def test_verdict_still_runs_and_flags_the_file_with_a_reason(
+    def test_verdict_still_runs_and_reruns_the_file_with_a_reason(
         self, graph: Callable[..., list[str]], config: TriageConfig, tmp_path: Path
     ) -> None:
         """The file reaches VERDICT rather than reading as a silent, evidence-free pass."""
@@ -840,7 +840,7 @@ class TestPreprocessFailShortCircuits:
         result = run_triage(tmp_path / "recording.wav", tmp_path / "out", config)
         assert result.ran["VERDICT"] is RunState.COMPLETED
         assert result.file_verdict is not None
-        assert result.file_verdict.triage is Triage.FLAG
+        assert result.file_verdict.triage is Triage.RERUN
         assert any("preprocess failed" in reason.why for reason in result.file_verdict.reasons)
 
     def test_the_store_is_still_persisted_and_report_still_runs(
@@ -872,13 +872,13 @@ class TestAdmitFailShortCircuits:
     def test_the_file_verdict_discards_and_nothing_is_released(
         self, graph: Callable[..., list[str]], config: TriageConfig, tmp_path: Path
     ) -> None:
-        """An unmeasurable recording discards on triage; nothing read it, so nothing is released."""
+        """An unmeasurable recording discards on triage, and a discard releases nothing."""
         graph(admit_outcome=Outcome.FAIL)
         result = run_triage(tmp_path / "recording.wav", tmp_path / "out", config)
         assert result.file_verdict is not None
         assert result.file_verdict.triage is Triage.DISCARD
-        assert result.file_verdict.release is Release.NOT_ASSESSED
-        assert result.file_verdict.release_ground == NO_TRANSCRIPT
+        assert result.file_verdict.release is Release.WITHHELD
+        assert result.file_verdict.release_ground == DISCARDED
         assert result.released == {}
         assert result.store_path.is_file()
 

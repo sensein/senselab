@@ -29,6 +29,7 @@ from senselab.text.tasks.decision_model.second_opinion import (
     SecondOpinion,
     ask_second_opinion,
 )
+from senselab.text.tasks.pii_detection.redaction_review import task_guidance_digest
 from senselab.utils.prov_store import ProvStore
 from senselab.utils.tasks.cached_inference import (
     result_cache_key,
@@ -115,6 +116,7 @@ def opinion_cache_key(original: str, context: Mapping[str, Any], pin: OllamaPin,
         commit_sha=pin.blob_digest,
         params={
             "question_set_version": QUESTION_SET_VERSION,
+            "task_guidance": task_guidance_digest(),
             "seed": int(seed),
             "config": pin.config_digest,
             "manifest": pin.manifest_digest,

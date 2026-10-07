@@ -80,9 +80,11 @@ from senselab.audio.workflows.triage.nodes.common import (
     find_measurement,
     live_entities,
     software_agent,
+    write_measurement,
     write_report,
 )
 from senselab.audio.workflows.triage.vocabulary import TASK
+from senselab.audio.workflows.triage.voice_phonation import PhonationReading, phonation_reading_of
 from senselab.utils.prov_store import Entity, ProvStore
 
 NODE = "VOICE"
@@ -99,6 +101,9 @@ COUNT_IN = "count_in"
 
 TASK_EXTENT = "task_extent"
 """The role of the span the task's own production runs over."""
+
+PHONATION_READING = "voice_phonation_reading"
+"""The measurement holding VOICE's phonation reading of a declared voice task, or the inputs it lacked."""
 
 PHONATION_ROLE = "phonation"
 """The role :func:`detect_voice` mints under: sustained phonation, on nobody's declared task."""
@@ -336,41 +341,11 @@ CARRIER_SPREAD = "carrier_f0_spread_semitones"
 CARRIER_CONTINUITY = "carrier_continuity"
 """The reading ``continuity_min`` is read against."""
 
-SWEEP_DOMINANT_FRACTION = "sweep_dominant_fraction"
-"""The reading ``dominant_segment_min_fraction`` is read against."""
-
 NO_VOICING = "no_voicing"
 """The existence criterion no bound configures: the tracker voiced not one frame of the carrier."""
 
-SWEEP_REVERSAL = "sweep_monotone_reversal_semitones"
-"""The largest distance the dominant run falls back from its running extreme; recorded, not gated."""
-
 GLIDE_EXTENT = "glide_extent_semitones"
 """The reading ``glide_extent_min_semitones`` is read against: how far the dominant run's pitch travelled."""
-
-PRODUCTION_DECLARED_FRACTION = "production_declared_fraction"
-"""The reading ``declared_duration_min_fraction`` is read against: the carrier's duration over the declared hold."""
-
-
-def carrier_readings(carrier: Carrier, *derived_from: str) -> list[Finding]:
-    """What the qualifier read off the carrier this mode selected, one measurement per gate input.
-
-    Args:
-        carrier: The carrier the mode measured over.
-        *derived_from: The entity ids the readings were taken off.
-
-    Returns:
-        One measurement per reading VERDICT's ``SUSTAINED`` and ``GLIDE`` gates read. A spread that
-        the window could not resolve is written as None rather than omitted.
-    """
-    start, end = carrier.span.extent or (0.0, 0.0)
-    spread = carrier.f0_spread_semitones
-    return [
-        measured(CARRIER_DURATION, start, end, round(end - start, 3), *derived_from),
-        measured(CARRIER_VOICED_FRACTION, start, end, round(carrier.voiced_fraction, 4), *derived_from),
-        measured(CARRIER_SPREAD, start, end, round(spread, 3) if np.isfinite(spread) else None, *derived_from),
-        measured(CARRIER_CONTINUITY, start, end, round(carrier.stationarity, 4), *derived_from),
-    ]
 
 
 def qualifying_phonation(evidence: Evidence, expectation: Expectation, params: BranchParams) -> Qualification:
@@ -455,6 +430,52 @@ def qualifying_phonation(evidence: Evidence, expectation: Expectation, params: B
     return Qualification(out, rejected)
 
 
+def phonation_words(store: ProvStore) -> list[tuple[float, float, str]]:
+    """The lexical consensus words, as the phonation measure reads them.
+
+    Args:
+        store: The provenance store.
+
+    Returns:
+        ``(start, end, text)`` per lexical word that carries an extent.
+    """
+    return [
+        (float(word.extent[0]), float(word.extent[1]), word_text(word))
+        for word in lexical(consensus_words(store))
+        if word.extent is not None
+    ]
+
+
+def read_phonation(store: ProvStore, run_dir: Path, task_family: str) -> PhonationReading | tuple[str, ...]:
+    """The phonation measure over a declared voice task's streams.
+
+    Args:
+        store: The provenance store.
+        run_dir: The run directory the streams' paths are relative to.
+        task_family: The declared family, a key of :data:`VOICE_EXPECTATIONS`.
+
+    Returns:
+        The reading, or the inputs that were absent.
+    """
+    expectation = VOICE_EXPECTATIONS[task_family]
+    direction = expectation.declared_direction if expectation.pattern is Pattern.GLIDE else None
+    return phonation_reading_of(store, run_dir, words=phonation_words(store), glide_direction=direction)
+
+
+def phonation_attributes(read: PhonationReading | tuple[str, ...]) -> dict[str, Any]:
+    """The ``voice_phonation_reading`` measurement's attributes.
+
+    Args:
+        read: What :func:`read_phonation` returned.
+
+    Returns:
+        ``absent`` naming the missing inputs, or the reading's record beside an empty ``absent``.
+    """
+    if not isinstance(read, PhonationReading):
+        return {"absent": list(read)}
+    return {"absent": [], **read.record()}
+
+
 def align_voice(
     task_family: str,
     store: ProvStore,
@@ -462,8 +483,12 @@ def align_voice(
     params: BranchParams,
     *,
     run_dir: Path,
+    reading: PhonationReading | tuple[str, ...] | None = None,
 ) -> Result:
-    """Evaluate a voice-eliciting task against what its instruction asked for.
+    """Evaluate a voice-eliciting task on its phonation attempt.
+
+    The task extent is the attempt :func:`~senselab.audio.workflows.triage.voice_phonation.measure_phonation`
+    places; the readings VERDICT's gates read are taken over it.
 
     Args:
         task_family: The declared family, which is a key of :data:`VOICE_EXPECTATIONS`.
@@ -471,26 +496,79 @@ def align_voice(
         hint: What the recording was declared to contain.
         params: The operating points.
         run_dir: The run directory sidecar paths are relative to.
+        reading: The phonation reading, where the caller has already taken it; None takes it here.
 
     Returns:
-        Whether the expected patterns were found, the spans proposed, and the findings.
+        The count-in and task-extent spans, and the readings.
 
     Raises:
         KeyError: If ``task_family`` is not a key of :data:`VOICE_EXPECTATIONS`.
-        NotImplementedError: If a row carries a pattern no reachable matcher serves.
     """
     expectation = VOICE_EXPECTATIONS[task_family]
     params.bind(expectation.pattern, task_family)
     evidence = read_evidence(store, run_dir)
+    read = read_phonation(store, run_dir, task_family) if reading is None else reading
+    components: list[Proposal] = []
+    findings: list[Finding] = []
     if expectation.pattern is Pattern.SUSTAINED:
-        return _voice_sustained(expectation, evidence, hint, params)
-    if expectation.pattern is Pattern.GLIDE:
-        return _voice_glide(expectation, evidence, params)
-    raise NotImplementedError(
-        f"{task_family} carries pattern {expectation.pattern.value!r}; align_voice serves "
-        f"{Pattern.SUSTAINED.value!r} and {Pattern.GLIDE.value!r}, which is every pattern in "
-        "VOICE_EXPECTATIONS"
+        _, components, findings = _count_in(expectation, evidence, params)
+    if not isinstance(read, PhonationReading):
+        name = "sweep_extent" if expectation.pattern is Pattern.GLIDE else "phonation_extent"
+        findings.append(unviable(name, f"{', '.join(read)} is absent; no phonation can be read"))
+        return Result(components, findings)
+    if read.extent is None:
+        findings.append(count("attempt_count", 0, None))
+        return Result(components, findings)
+    extent = (float(read.extent["start_s"]), float(read.extent["end_s"]))
+    record = read.record()
+    plain = next(
+        (
+            s.id
+            for s in store.entities("stream")
+            if s.attributes.get("name") == "plain" and not store.is_invalidated(s.id)
+        ),
+        None,
     )
+    read_off = evidence.derivations(plain, evidence.file_id)
+    components.append(
+        voice_span(
+            TASK_EXTENT,
+            extent,
+            *read_off,
+            production="glide" if expectation.pattern is Pattern.GLIDE else "sustained",
+            extent_from="phonation",
+            onset_s=read.extent["onset_s"],
+            holds_n=record["holds_n"],
+            longest_hold_s=record["longest_hold_s"],
+            voiced_fraction=record["voiced_fraction"],
+        )
+    )
+    start, end = extent
+    phonation_s = end - float(read.extent["onset_s"])
+    findings.extend(
+        [
+            count("attempt_count", 1, None),
+            measured(CARRIER_DURATION, start, end, round(end - start, 3), *read_off),
+            measured(CARRIER_VOICED_FRACTION, start, end, record["voiced_fraction"], *read_off),
+            measured(CARRIER_SPREAD, start, end, record["f0_spread_semitones"], *read_off),
+            measured("phonation_onset_to_offset_s", start, end, round(phonation_s, 3), *read_off),
+            measured("voiced_duration_s", start, end, record["voiced_s"], *read_off),
+            measured("longest_hold_s", start, end, record["longest_hold_s"], *read_off, holds=record["holds"]),
+        ]
+    )
+    if expectation.pattern is Pattern.GLIDE:
+        findings.append(
+            measured(
+                GLIDE_EXTENT,
+                start,
+                end,
+                record["glide"].get("travel_declared_semitones"),
+                *read_off,
+                direction=expectation.declared_direction,
+                shape=record["shape"],
+            )
+        )
+    return Result(components, findings)
 
 
 def _count_in(
@@ -529,111 +607,6 @@ def _count_in(
     return True, proposals, findings
 
 
-def _voice_sustained(
-    expectation: Expectation, evidence: Evidence, hint: AudioHints | None, params: BranchParams
-) -> Result:
-    """The held vowel: a ``count_in`` where the instruction prescribes one, and a ``task_extent``.
-
-    The instruction declared a held vowel, so a carrier that missed a quality gate is a poor
-    production rather than no production: it is proposed, and its readings are what VERDICT gates.
-
-    Args:
-        expectation: The row.
-        evidence: The derivatives and store reads.
-        hint: What the recording was declared to contain.
-        params: The operating points.
-
-    Returns:
-        The result. :data:`UNDETERMINED` whenever no carrier qualified.
-    """
-    _, components, findings = _count_in(expectation, evidence, params)
-    if evidence.tracks is None:
-        findings.append(unviable("phonation_extent", TRACKS_ABSENT))
-        return Result(components, findings)
-
-    qualification = qualifying_phonation(evidence, expectation, params)
-    findings.extend(qualification.findings())
-    carriers = sorted(qualification.carriers, key=lambda carrier: duration(carrier.span.extent), reverse=True)
-    findings.append(count("attempt_count", len(carriers), None, *(each.span.id for each in carriers)))
-    if not carriers:
-        return Result(components, findings)
-
-    carrier = carriers[0]
-    assert carrier.span.extent is not None  # noqa: S101 — qualifying_phonation admits no other case
-    extent = voiced_extent(carrier.span.extent, carrier.track)
-    components.append(
-        voice_span(
-            TASK_EXTENT,
-            extent,
-            carrier.span.id,
-            *evidence.derivations(evidence.tracks_id, evidence.continuity_id),
-            production="sustained",
-            carrier_extent=list(carrier.span.extent),
-            **carrier.qualifiers(),
-        )
-    )
-    read_off = (carrier.span.id, *evidence.derivations(evidence.tracks_id))
-    findings.extend(carrier_readings(carrier, *read_off))
-    findings.append(
-        measured(
-            "phonation_onset_to_offset_s",
-            extent[0],
-            extent[1],
-            round(duration(extent), 3),
-            *read_off,
-            **carrier.qualifiers(),
-        )
-    )
-    findings.append(
-        measured(
-            "voiced_duration_s",
-            extent[0],
-            extent[1],
-            round(float(carrier.track.voiced.sum()) * carrier.track.hop_s, 3),
-            *read_off,
-            **carrier.qualifiers(),
-        )
-    )
-    findings.extend(_interruptions(carrier, *read_off))
-    if evidence.file_extent is not None and touches_edge(extent, evidence.file_extent):
-        findings.append(deviation("truncation", extent[0], extent[1], carrier.span.id, reading="right_censored"))
-    for extra in carriers[1:]:
-        assert extra.span.extent is not None  # noqa: S101 — as above
-        start, end = voiced_extent(extra.span.extent, extra.track)
-        findings.append(deviation("repeat_attempt", start, end, extra.span.id, **extra.qualifiers()))
-
-    if expectation.expect_inhale:
-        findings.append(count("inhale_expected_in_file", True, None))
-    if expectation.forbid_lexical:
-        for word in lexical(evidence.words):
-            start, end = word_extent(word)
-            findings.append(deviation("lexical_content", start, end, word.id, text=word_text(word)))
-    if hint is not None:
-        token = (hint.metadata or {}).get("task_token")
-        if token is not None:
-            findings.append(count("task_index", str(token).rsplit("-", 1)[-1], None))
-    if expectation.declared_duration_s is not None:
-        findings.append(
-            count(
-                "declared_duration_s",
-                round(duration(evidence.file_extent), 2),
-                expectation.declared_duration_s,
-                *evidence.derivations(evidence.file_id),
-            )
-        )
-        findings.append(
-            measured(
-                PRODUCTION_DECLARED_FRACTION,
-                extent[0],
-                extent[1],
-                round(duration(carrier.span.extent) / expectation.declared_duration_s, 4),
-                *read_off,
-                declared_duration_s=expectation.declared_duration_s,
-            )
-        )
-    return Result(components, findings)
-
-
 def _interruptions(carrier: Carrier, *derived_from: str) -> list[Finding]:
     """The unvoiced intervals inside one attempt: their number, locations and total duration.
 
@@ -667,196 +640,6 @@ def _interruptions(carrier: Carrier, *derived_from: str) -> list[Finding]:
             hop_s=round(hop, 4),
         )
     ]
-
-
-@dataclass(frozen=True)
-class Sweep:
-    """One carrier's longest monotone pitch run, and what was read over it.
-
-    Attributes:
-        span: The amplitude span the sweep was found inside.
-        track: The phonation tracks over that carrier.
-        sign: Which way the run went, positive for rising.
-        extent_semitones: How far the pitch travelled across the run.
-        extent: The run's own extent, in seconds.
-        voiced_fraction: How much of the carrier the tracker found F0 for.
-        held: What fraction of the carrier the run covers.
-        reversal: The largest against-the-run excursion inside it, in semitones.
-    """
-
-    span: Entity
-    track: TrackSlice
-    sign: int
-    extent_semitones: float
-    extent: tuple[float, float]
-    voiced_fraction: float
-    held: float
-    reversal: float
-
-    @property
-    def direction(self) -> str:
-        """Which way the sweep ran.
-
-        Returns:
-            ``"up"`` or ``"down"``.
-        """
-        return "up" if self.sign > 0 else "down"
-
-    def readings(self) -> dict[str, Any]:
-        """What was read over this sweep, for a finding that is not the proposed one.
-
-        Returns:
-            The readings, rounded for the store.
-        """
-        return {
-            "direction": self.direction,
-            "sweep_s": round(duration(self.extent), 3),
-            "extent_semitones": round(self.extent_semitones, 2),
-            "sweep_dominant_fraction": round(self.held, 4),
-            "voiced_fraction": round(self.voiced_fraction, 4),
-            "support_frames": int(self.track.voiced.sum()),
-        }
-
-
-def _direction_mismatch(sweep: Sweep, expectation: Expectation, *derived_from: str) -> list[Finding]:
-    """The declared-direction reading, for one sweep rather than only the proposed one.
-
-    Args:
-        sweep: The sweep whose direction is read.
-        expectation: The row, whose ``declared_direction`` it is read against.
-        *derived_from: The entity ids the reading was taken off.
-
-    Returns:
-        One ``sweep_direction_mismatch`` deviation; nothing when the sweep ran the declared way, and
-        nothing when it travelled no distance at all, whose sign is the sign of a zero difference.
-    """
-    if sweep.extent_semitones == 0.0 or sweep.direction == expectation.declared_direction:
-        return []
-    return [
-        deviation(
-            "sweep_direction_mismatch",
-            sweep.extent[0],
-            sweep.extent[1],
-            *derived_from,
-            declared=expectation.declared_direction,
-            measured=sweep.direction,
-            extent_semitones=round(sweep.extent_semitones, 2),
-        )
-    ]
-
-
-def _voice_glide(expectation: Expectation, evidence: Evidence, params: BranchParams) -> Result:
-    """The pitch sweep: one ``task_extent`` over the dominant monotone segment.
-
-    Every carrier holding a monotone run is an attempt. The longest run is proposed; each further
-    one is a ``repeat_attempt``, and the declared direction is read against every one of them, not
-    only the proposed one. How much of its carrier a run covers is a reading VERDICT gates, not a
-    criterion for the run having happened.
-
-    Args:
-        expectation: The row, whose ``declared_direction`` the measured ones are read against.
-        evidence: The derivatives and store reads.
-        params: The operating points.
-
-    Returns:
-        The result. :data:`UNDETERMINED` when the tracks are absent, and when no carrier held a
-        monotone run at all.
-    """
-    if evidence.tracks is None:
-        return Result([], [unviable("sweep_extent", TRACKS_ABSENT)])
-
-    minimum_s = params.gate("production_min_s")
-    strength_min = params.point("voiced_strength_min")
-    tolerance = params.point("sweep_reversal_tolerance_semitones")
-    smoothing = params.point("sweep_smoothing_frames")
-    if minimum_s is None or strength_min is None or tolerance is None or smoothing is None:
-        return Result([], params.record())
-
-    found: list[Sweep] = []
-    discarded: list[Finding] = []
-    for span in amplitude_spans(evidence.spans):
-        if span.extent is None or duration(span.extent) < minimum_s:
-            discarded.append(
-                Rejection(span, "production_min_s", round(duration(span.extent), 3), minimum_s, {}).finding()
-            )
-            continue
-        track = track_slice(evidence.tracks, span.extent, strength_min)
-        if track.strength.size == 0:
-            discarded.append(Rejection(span, "no_track_over_carrier", None, None, {}).finding())
-            continue
-        voiced_fraction = float(track.voiced.mean())
-        if voiced_fraction <= 0.0:
-            discarded.append(Rejection(span, NO_VOICING, 0.0, None, {}).finding())
-            continue
-        pitch = smoothed_pitch(semitones(np.where(track.voiced, track.f0_hz, np.nan)), int(smoothing))
-        run = longest_monotone_run(pitch, tolerance)
-        voiced = voiced_extent(span.extent, track)
-        if run is None:
-            discarded.append(Rejection(span, "no_monotone_run", None, tolerance, {}).finding())
-            continue
-        first, last, sign = run
-        extent = (float(track.times_s[first]), float(track.times_s[last]) + track.hop_s)
-        found.append(
-            Sweep(
-                span,
-                track,
-                sign,
-                abs(float(pitch[last] - pitch[first])),
-                extent,
-                voiced_fraction,
-                duration(extent) / max(duration(voiced), 1e-9),
-                monotone_reversal(pitch, first, last, sign),
-            )
-        )
-
-    if not found:
-        return Result([], [*discarded, count("sweep_found", False, True)])
-
-    found.sort(key=lambda each: duration(each.extent), reverse=True)
-    best = found[0]
-    span, track, sweep = best.span, best.track, best.extent
-    components = [
-        voice_span(
-            TASK_EXTENT,
-            sweep,
-            span.id,
-            *evidence.derivations(evidence.tracks_id),
-            production="glide",
-            direction=best.direction,
-            carrier_extent=list(span.extent or sweep),
-            support_frames=int(track.voiced.sum()),
-        )
-    ]
-    read_off = (span.id, *evidence.derivations(evidence.tracks_id))
-    carrier_extent = span.extent or sweep
-    findings: list[Finding] = [
-        *discarded,
-        count("attempt_count", len(found), None, *(each.span.id for each in found)),
-        measured(CARRIER_DURATION, carrier_extent[0], carrier_extent[1], round(duration(carrier_extent), 3), *read_off),
-        measured(
-            CARRIER_VOICED_FRACTION, carrier_extent[0], carrier_extent[1], round(best.voiced_fraction, 4), *read_off
-        ),
-        measured(SWEEP_DOMINANT_FRACTION, sweep[0], sweep[1], round(best.held, 4), *read_off),
-        measured(SWEEP_REVERSAL, sweep[0], sweep[1], round(best.reversal, 3), *read_off),
-        measured(
-            GLIDE_EXTENT,
-            sweep[0],
-            sweep[1],
-            round(best.extent_semitones, 2),
-            *read_off,
-            direction=best.direction,
-            support_frames=int(track.voiced.sum()),
-        ),
-        *_direction_mismatch(best, expectation, *read_off),
-    ]
-    for extra in found[1:]:
-        findings.append(
-            deviation("repeat_attempt", extra.extent[0], extra.extent[1], extra.span.id, **extra.readings())
-        )
-        findings.extend(_direction_mismatch(extra, expectation, extra.span.id))
-    if evidence.file_extent is not None and touches_edge(sweep, evidence.file_extent):
-        findings.append(deviation("truncation", sweep[0], sweep[1], span.id, reading="right_censored"))
-    return Result(components, findings)
 
 
 def detect_voice(store: ProvStore, params: BranchParams, *, run_dir: Path) -> Result:
@@ -955,10 +738,12 @@ def voice(
         ValueError: If a ``branch.*`` key a reached body needs is unmeasured.
     """
     params = branch_params(config)
+    readings: dict[str, PhonationReading | tuple[str, ...]] = {}
 
     def align(task_family: str, store: ProvStore, hint: AudioHints | None, params: BranchParams) -> Result:
         """Bind the run directory the mode contract does not carry. Names match ``AlignMode``."""
-        return align_voice(task_family, store, hint, params, run_dir=run_dir)
+        readings[task_family] = read_phonation(store, run_dir, task_family)
+        return align_voice(task_family, store, hint, params, run_dir=run_dir, reading=readings[task_family])
 
     def detect(store: ProvStore, params: BranchParams) -> Result:
         """Bind the run directory the mode contract does not carry. Names match ``DetectMode``."""
@@ -991,6 +776,12 @@ def voice(
     findings = [*result.deviations, *params.record()]
     span_ids = propose_spans(store, activity, software, result.components)
     finding_ids = write_findings(store, activity, software, findings, signal=source)
+    for read in readings.values():
+        finding_ids.append(
+            write_measurement(
+                store, activity, software, name=PHONATION_READING, signal="plain", attributes=phonation_attributes(read)
+            )
+        )
 
     extents = [(proposal.start, proposal.end) for proposal in result.components]
     phonation_s = sum(end - start for start, end in extents)

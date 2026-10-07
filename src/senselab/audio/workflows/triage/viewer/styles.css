@@ -326,6 +326,7 @@ button:disabled { opacity: .35; cursor: default; }
 .li-verdict { flex: 0 0 52px; font-size: 10px; }
 .li-verdict.pass { color: var(--good); }
 .li-verdict.flag { color: var(--warn); }
+.li-verdict.rerun { color: var(--ink-3); }
 .li-verdict.discard { color: var(--bad); }
 .list-more { font-size: 10px; color: var(--ink-3); padding: 6px 5px; }
 
@@ -345,6 +346,7 @@ dl.record dd { margin: 0; color: var(--ink); word-break: break-all; }
 dl.record dd.null { color: var(--warn); font-style: italic; }
 dl.record dd.verdict.pass { color: var(--good); }
 dl.record dd.verdict.flag { color: var(--warn); }
+dl.record dd.verdict.rerun { color: var(--ink-3); }
 dl.record dd.verdict.discard { color: var(--bad); }
 
 .note { font-size: 11px; color: var(--ink-3); margin-bottom: 6px; }

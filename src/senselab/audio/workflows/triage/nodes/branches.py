@@ -117,14 +117,11 @@ FINDING_KINDS = ("deviation", "count", "measure", "contest")
 
 DEVIATION_TYPES = {
     "filler": "a disfluency or non-speech token where the task expected lexical content",
-    "lexical_content": "a lexical word where the task expected none",
     "off_task_extent": "a region of the recording that does not serve the declared task",
     "omission": "an expected token the recording does not realise",
-    "repeat_attempt": "a further carrier where the task expected one production",
     "repeat_reading": "an alignment covering the expected sequence more than once",
     "repeated_item": "an item repeated where the task expected each once",
     "stimulus_mismatch": "a lexical word that is not the word the stimulus expected",
-    "sweep_direction_mismatch": "a pitch sweep running against its declared direction",
     "truncation": "a production the recording does not contain the end of",
 }
 """Every deviation type a branch may report, and what each observes.

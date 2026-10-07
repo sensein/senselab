@@ -1997,10 +1997,14 @@ verdict.gates.by_group.omissions_max: 0          [ORDERED_TOKENS]
 verdict.gates.by_group.items_min: 1          [ITEM_LIST]
   Was `len(items) > 0`. One item is a list attempted.
 
-verdict.gates.by_group.events_min: 1          [EVENT_SERIES, EVENT_ALTERNATION]
+verdict.gates.by_group.events_min: 1          [EVENT_SERIES, EVENT_ALTERNATION, SOUND_COVERAGE]
   Was `if events: return True` in `_events_reading`. One event of the instruction's own kind is
   the weakest reading of "the sound asked for was produced". The count asked for is reported
   beside it and does not gate: an extractor's shortfall is not evidence about the participant.
+  SOUND_COVERAGE gained it on 2026-10-05: the two sustained-breath families had no conformance
+  term and passed by default, and the owner's listening found six silent recordings passing that
+  way. They are now decided on detected breath events like the counted families; the HeAR coverage
+  fraction stays as context. See specs/20261005-truncated-capture-discard/design.md.
 
 verdict.gates.by_group.repetitions_min: 1          [SYLLABLE_TRAIN, SYLLABLE_SEQUENCE]
   Was `decode.count >= 1 or done is True` in `_with_decode`, over both instruments. The reading

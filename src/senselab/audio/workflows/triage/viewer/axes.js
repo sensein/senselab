@@ -25,6 +25,7 @@ var SchemaAxes = (function () {
     'extent_speaker_count',
     'glide_extent_semitones',
     'interruptions',
+    'longest_hold_s',
     'pause_fraction_of_response',
     'phonation_onset_to_offset_s',
     'source_content_coverage',
@@ -61,9 +62,7 @@ var SchemaAxes = (function () {
     ['voiced_fraction_min', 'carrier_voiced_fraction', 'at_least', null],
     ['f0_spread_max_semitones', 'carrier_f0_spread_semitones', 'at_most', 'semitones'],
     ['continuity_min', 'carrier_continuity', 'at_least', null],
-    ['dominant_segment_min_fraction', 'sweep_dominant_fraction', 'at_least', null],
     ['glide_extent_min_semitones', 'glide_extent_semitones', 'at_least', 'semitones'],
-    ['declared_duration_min_fraction', 'production_declared_fraction', 'at_least', null],
     ['expected_tokens_matched_min', 'expected_tokens_matched', 'at_least', null],
     ['content_omission_fraction_max', 'expected_content_omitted_fraction', 'at_most', null],
     ['response_min_s', 'response_duration_s', 'at_least', 's'],
@@ -84,7 +83,7 @@ var SchemaAxes = (function () {
 
   // Orders for the closed vocabularies. Anything not listed orders by frequency.
   var ORDERINGS = {
-    verdict: ['pass', 'flag', 'discard'],
+    verdict: ['pass', 'flag', 'rerun', 'discard'],
     release: ['release_without_redaction', 'release_with_redaction', 'withheld', 'not_assessed'],
     conformance_airway: ['true', 'undetermined', 'false'],
     conformance_speech: ['true', 'undetermined', 'false'],
@@ -148,7 +147,17 @@ var SchemaAxes = (function () {
     column({ name: 'declared_family', kind: 'categorical', group: 'identity', nullMeans: 'nothing was declared' }),
     column({ name: 'release', kind: 'categorical', group: 'decision', nullMeans: 'the fold wrote none' }),
     column({ name: 'release_ground', kind: 'categorical', group: 'decision', nullMeans: 'REDACT itself decided' }),
-    column({ name: 'grounds', kind: 'categorical', group: 'decision', nullMeans: 'nothing was discarded' }),
+    column({
+      name: 'release_ground_key', kind: 'categorical', group: 'decision',
+      nullMeans: 'folded before ground keys existed',
+    }),
+    column({ name: 'discard_ground', kind: 'categorical', group: 'decision', nullMeans: 'nothing was discarded' }),
+    column({
+      name: 'ground_keys', kind: 'set', group: 'decision', assignable: false,
+      reason: 'a set of ground keys, not a value — put its size on the axis, or filter by a term',
+      sizeOf: 'ground_keys',
+    }),
+    column({ name: 'ground_keys.size', kind: 'count', group: 'decision', label: 'ground_keys · size', sizeOf: 'ground_keys' }),
     column({ name: 'route_state', kind: 'categorical', group: 'decision', nullMeans: 'the fold wrote none' }),
     column({ name: 'conformance_airway', kind: 'categorical', group: 'branch', nullMeans: 'AIRWAY wrote no branch report' }),
     column({ name: 'conformance_speech', kind: 'categorical', group: 'branch', nullMeans: 'SPEECH wrote no branch report' }),
@@ -237,12 +246,8 @@ var SchemaAxes = (function () {
       label: 'second opinion · P(instructions spoken)', nullMeans: 'no ok opinion',
     }),
     column({
-      name: 'second_opinion_named_diagnosis_p', kind: 'numeric', group: 'review',
-      label: 'second opinion · P(named diagnosis)', nullMeans: 'no ok opinion',
-    }),
-    column({
-      name: 'second_opinion_safe_harbor_identifier_present_p', kind: 'numeric', group: 'review',
-      label: 'second opinion · P(safe-harbor identifier)', nullMeans: 'no ok opinion',
+      name: 'second_opinion_policy_identifier_present_p', kind: 'numeric', group: 'review',
+      label: 'second opinion · P(policy identifier)', nullMeans: 'no ok opinion',
     }),
     column({ name: 'second_opinion_disagrees_n', kind: 'count', group: 'review', nullMeans: 'never null' }),
     column({
