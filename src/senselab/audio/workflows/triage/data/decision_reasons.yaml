@@ -1,0 +1,95 @@
+# The decision table's reason vocabulary: every ground key the fold can write maps to one short reason.
+# `reason` is the first of a recording's reasons in `precedence`; `reasons` is all of them, in that order.
+# Owner, 2026-10-07: verdict pass/review/discard, release as_is/redacted/withheld, one reason per recording.
+# Derivation: specs/20261007-task-events-in-background/design.md ("Decision table").
+version: 1
+precedence:            # discard reasons first, then review, then the release axis
+- unmeasurable
+- task_too_short
+- no_task_captured
+- task_not_found
+- not_measured
+- fault_in_task
+- interference_in_task
+- other_speaker
+- weak_events
+- streams_disagree
+- task_not_conforming
+- identifying_content
+- second_opinion_disagrees
+- redaction_hold
+meaning:
+  unmeasurable: ADMIT could not read the recording, or it declares no task this graph holds
+  task_too_short: the recording is shorter than its task's minimum duration
+  no_task_captured: nothing the task asks for stands above the background
+  task_not_found: there is activity, but not the declared task
+  not_measured: the pipeline owes the recording a measurement, so it could not be decided
+  fault_in_task: a capture fault (shutoff, dropout, clip) falls inside the task
+  interference_in_task: another sound source overlaps the task
+  other_speaker: a second speaker is read in the recording
+  weak_events: the task's events stand too weakly over the background to decide
+  streams_disagree: the raw and enhanced streams disagree on the task's events
+  task_not_conforming: the task was performed, but not as instructed or not as the routing read it
+  identifying_content: words that may identify the participant need a reader
+  second_opinion_disagrees: the second-opinion model disagrees with the fold
+  redaction_hold: the redaction policy holds the recording back from release
+keys:                  # exact verdict ground key -> reason
+  unmeasurable: unmeasurable
+  too_short_for_task: task_too_short
+  acoustically_empty: no_task_captured
+  no_breath_captured: no_task_captured
+  no_cough_captured: no_task_captured
+  no_phonation_captured: no_task_captured
+  declared_task_absent: task_not_found
+  preprocess_errored: not_measured
+  routing_errored: not_measured
+  config_bad_hint_map: not_measured
+  declaration_unread: not_measured
+  route_unexplained: not_measured
+  route_unreadable: not_measured
+  critical_absence: not_measured
+  taxonomy_no_classifier: not_measured
+  redact_rescan_incomplete: not_measured
+  uncomputed_reading: not_measured
+  owning_branch_input_absent: not_measured
+  node_outcome_unreadable: not_measured
+  capture_cut_during_task: fault_in_task
+  background_speech_in_task: interference_in_task
+  reviewer_second_speaker: other_speaker
+  gate:dominant_speaker_share_min: other_speaker
+  breath_review_low_confidence: weak_events
+  cough_review_low_confidence: weak_events
+  voice_review_low_confidence: weak_events
+  discard_contested: weak_events
+  task_mismatch: task_not_conforming
+  instructions_spoken: task_not_conforming
+  speech_no_lexical_item: task_not_conforming
+  capture_cut_after_task: task_not_conforming
+  speech_outside_task: task_not_conforming
+  person_name_review: identifying_content
+  reviewer_residue: identifying_content
+  reviewer_named_no_words: identifying_content
+  unplaced_finding_open: identifying_content
+  unplaced_finding_unread: identifying_content
+  second_opinion_disagreement: second_opinion_disagrees
+release_keys:          # release ground key -> reason, for a release withheld or one the graph could not assess
+  reviewer_proposed_redaction: redaction_hold
+  unplaced_finding_unread: redaction_hold
+  redact_verify_found: redaction_hold
+  redact_unresolved: redaction_hold
+  no_transcript: not_measured
+  speech_unread: not_measured
+  redaction_owed: not_measured
+  scan_unrecorded: not_measured
+prefixes:              # `<prefix>:<name>` ground key -> reason, where no exact key above names it
+  gate: task_not_conforming
+  conformance: task_not_conforming
+  nothing_read: task_not_conforming
+  route_mismatch: task_not_conforming
+  hint_mismatch: task_not_conforming
+  deviation: task_not_conforming
+  conformance_unanswered: not_measured
+  unmeasured_operating_point: not_measured
+  branch_silent: not_measured
+  store_assertion_contradicted: not_measured
+  node: not_measured

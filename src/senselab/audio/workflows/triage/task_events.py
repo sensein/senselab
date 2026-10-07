@@ -12,7 +12,7 @@ parameter is in ``data/task_events.yaml``; the design is
 from __future__ import annotations
 
 import functools
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -396,6 +396,7 @@ class TaskEvidence:
         extent: The cluster's extent with its preparatory inhale, or None with no event.
         decision: ``present``, ``review`` or ``absent`` (:func:`decide`).
         why: The condition that decided it.
+        inputs: The readings and bounds :func:`decide` compared (:func:`decision_inputs`).
     """
 
     events: tuple[TaskEvent, ...]
@@ -404,6 +405,7 @@ class TaskEvidence:
     extent: Span | None
     decision: str
     why: str
+    inputs: dict[str, Any] = field(default_factory=dict)
 
     @property
     def events_found_n(self) -> int:
@@ -426,6 +428,7 @@ class TaskEvidence:
         return {
             "decision": self.decision,
             "why": self.why,
+            "inputs": dict(self.inputs),
             "events_n": len(self.events),
             "events_found_n": self.events_found_n,
             "recovered_n": sum(e.recovered for e in self.events),
@@ -459,6 +462,30 @@ def decide(events: Sequence[TaskEvent], p: dict[str, Any]) -> tuple[str, str]:
     if all(e.entangled for e in clear):
         return REVIEW, "entangled"
     return PRESENT, "clear"
+
+
+def decision_inputs(events: Sequence[TaskEvent], p: dict[str, Any]) -> dict[str, Any]:
+    """The readings and bounds :func:`decide` compares, for the decision table.
+
+    Args:
+        events: Every event the type test kept.
+        p: The ``decision`` section of ``data/task_events.yaml``.
+
+    Returns:
+        ``floor_db``, the strongest unrecovered event's level over the floor, against ``snr_low_db``;
+        ``local_db``, the strongest of those events' level over its local background, against
+        ``snr_high_db``; ``entangled``, whether an impulse touches every clear event; and the two bounds.
+    """
+    unrecovered = [e for e in events if not e.recovered]
+    standing = [e for e in unrecovered if e.snr_db >= p["snr_low_db"]]
+    clear = [e for e in standing if e.clear_db >= p["snr_high_db"]]
+    return {
+        "floor_db": round(max(e.snr_db for e in unrecovered), 2) if unrecovered else None,
+        "local_db": round(max(e.clear_db for e in standing), 2) if standing else None,
+        "entangled": bool(clear) and all(e.entangled for e in clear),
+        "snr_low_db": float(p["snr_low_db"]),
+        "snr_high_db": float(p["snr_high_db"]),
+    }
 
 
 def evidence_of(
@@ -504,4 +531,5 @@ def evidence_of(
         if inhale:
             start = inhale_start(view, start, float(p["inhale"]["margin_db"]), float(p["inhale"]["back_max_s"]))
         extent = (start, max(e.end_s for e in cluster))
-    return TaskEvidence(tuple(cluster), tuple(events), rhythm, extent, decision, why)
+    inputs = decision_inputs(events, p["decision"])
+    return TaskEvidence(tuple(cluster), tuple(events), rhythm, extent, decision, why, inputs)
