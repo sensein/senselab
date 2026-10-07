@@ -1,0 +1,70 @@
+# Owner listening labels -> evaluation target.
+#
+# targets:  target -> the verdict outcomes that count as agreement.
+#           Outcomes are pass, review (any flag) and discard; rerun never agrees.
+# labels:   owner_label -> {target, remark}. remark is an extent/event observation the owner made;
+#           it is counted, not scored.
+# notes:    applied in order to a row whose owner_label is empty or unmapped; first case-insensitive
+#           substring match wins.
+# Derivation: specs/20261007-task-events-in-background/evaluation-labels.md
+version: 1
+targets:
+  present: [pass]
+  present_flagged: [review]
+  present_or_review: [pass, review]
+  review_acceptable: [review, discard]
+  absent: [discard]
+  excluded: []
+labels:
+  breath_present: {target: present}
+  breath_pattern: {target: present}
+  cough_present: {target: present}
+  single_breath: {target: present, remark: task_mismatch}
+  ok: {target: present}
+  breath_review_ok: {target: review_acceptable}
+  breath_weak_contested_ok: {target: review_acceptable}
+  breath_present_swamped_by_background: {target: present_or_review}
+  breath_weak_present_events_off: {target: present_or_review, remark: events}
+  breath_present_events_off: {target: present, remark: events}
+  breath_pattern_events_missed: {target: present, remark: events}
+  breath_pattern_false_edge_phase_no_extent: {target: present, remark: extent}
+  breath_pattern_extent_wrong: {target: present, remark: extent}
+  cough_present_background_speech: {target: present_flagged}
+  no_breath: {target: absent}
+  no_cough: {target: absent}
+  no_task: {target: absent}
+  no_task_no_audio: {target: absent}
+  no_breath_or_masked: {target: review_acceptable}
+  very_soft: {target: review_acceptable}
+  little_breath: {target: review_acceptable}
+  background_noise: {target: review_acceptable}
+  background_noise_events: {target: review_acceptable}
+  not_judged: {target: excluded}
+  task_present_whole_file: {target: present, remark: extent}
+  task_present_inhale_uncaptured: {target: present, remark: extent}
+  task_present_inhale_uncaptured_rough_voice: {target: present, remark: extent}
+  task_present_extent_wrong: {target: present, remark: extent}
+  task_present_extent_short: {target: present, remark: extent}
+  task_present_extent_short_rough_voice: {target: present, remark: extent}
+  task_present_extent_short_f0_tracks_off: {target: present, remark: extent}
+  task_present_no_extent: {target: present, remark: extent}
+  task_present_disordered_voice_extent_short: {target: present, remark: extent}
+  task_present_register_shift_extent_wrong: {target: present, remark: extent}
+  task_present_irregular_glide_extent_wrong: {target: present, remark: extent}
+  task_present_glottalized_tail_extent_wrong: {target: present, remark: extent}
+  task_present_broken_hold_leading_speech: {target: present, remark: extent}
+  task_present_duration_good_leading_speech: {target: present}
+  task_present_leading_speech: {target: present}
+  task_present_breaks: {target: present}
+  task_present_weakly_voiced_include: {target: present, remark: extent}
+  task_present_route_mismatch: {target: present}
+  task_present_hoarse_voice: {target: present}
+  task_present_mic_shutoff: {target: present_flagged}
+  held_not_glide_extent_wrong: {target: present, remark: task_mismatch}
+  task_short_background_hum: {target: review_acceptable}
+notes:
+- {match: ok if flagged or discarded, target: review_acceptable}
+- {match: leave as contested, target: review_acceptable}
+- {match: should not be discarded, target: present}
+- {match: no breath, target: absent}
+- {match: no cough, target: absent}
