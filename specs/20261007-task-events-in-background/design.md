@@ -41,6 +41,54 @@ No single feature (rise, cycle CV or duration) separated present from absent acr
 example, among the contested discards a 14.8 dB train was noise (3d446af4) while a 14.3 dB one was
 a real breath (793732ff). The separation has to come from several pieces of evidence used together.
 
+## Three layers: generic, task, join
+
+Every detection falls into one of three layers. The components below (C1–C6) implement them; the
+later sections refer here rather than repeat it.
+
+**1. Generic layer: every recording, no task knowledge** (QUALITY recording level, plus what
+PREPROCESS and TAXONOMY already compute). Its output is activity regions and their properties plus
+faults and interference, labelled "something", never "a breath" or "speech".
+
+| What | How it is detected | Exists today? |
+|---|---|---|
+| Stationary floor | per band, iteratively from frames outside active regions; session-group floor alongside (C1) | per recording only; fails when the task fills the file |
+| Hum | stationary narrow lines at mains multiples (50/60 Hz) on the residual (C1) | VOICE only |
+| Impulses (clicks, knocks) | attack slope and short duration together, across bands (C1) | no |
+| Active regions | energy held above the floor across several bands, gradual onset and offset (C2) | partly: amplitude spans on a 5th-percentile floor |
+| Acquisition faults | shutoff (all-band drop to a flat digital floor), dropouts, clipping, discontinuities | measured, unused; shutoff VOICE only |
+| Level against the session | recording level relative to its BIDS session | no |
+| Streams | raw, enhanced, residual; residual activity; harmonic residual runs (another voice) | yes |
+| Labels and words | YAMNet per stream; ASR words and timings | yes |
+
+**2. Task layer: inside each branch.** The branch tests active regions for its own event type and
+outputs task events and the task extent (first to last task event plus the preparatory inhale, C4).
+
+| Branch | Task event test | Task-specific extras (annotations, C6) |
+|---|---|---|
+| Breath | broadband noise body, smooth envelope, ≥ a few hundred ms | modulation rate as a rhythm prior to group phases and recover missed ones (C3); instructed count |
+| Cough | sharp rise across most bands, then a tail; preparatory inhale attached | count against instruction |
+| Voice | continuous phonation with harmonic structure; f0 on plain with an octave check | glide direction and range; holds and breaks |
+| Speech | words aligned to the stimulus or prompt | stimulus conformance; PII |
+
+**3. Join: QUALITY per task span, after the branches, by time overlap.**
+
+| Situation | Rule |
+|---|---|
+| Interference (another voice, non-task sound, impulse) | flags only where it overlaps or abuts a task event or span; elsewhere an annotation |
+| Fault (dropout, clip, shutoff) | inside the span flags; outside, annotation |
+| Weak event | its SNR over the background in its own time window (C5); weak → review |
+| Streams disagree | raw and enhanced give different task events → review |
+| Nothing captured | no active region in any stream → discard; needs no branch, so it covers unrouted recordings |
+| Activity, but not the task | active regions exist, none of the declared type → the branch reports task absent or mismatch |
+
+VERDICT reads all three layers and decides with one rule (C5).
+
+**New versus reused.** New: impulse detection, active regions against a proper floor, session level,
+shutoff for every family, and the time-overlap join for interference. The task tests largely exist
+(breath train, cough onsets, voice phonation), but each carries its own floor and noise handling;
+those move into the generic layer.
+
 ## The components
 
 ### C1. Background model (shared)
@@ -176,6 +224,8 @@ They never change a verdict. This is already the rule for airway (`8864ed00`) an
 
 ## Shared versus task-specific
 
+By component; the per-branch event tests are in "Three layers".
+
 | Component | Shared | Task-specific layer |
 |---|---|---|
 | C1 floor, impulses, hum | all | none |
@@ -205,12 +255,10 @@ a speech type test. It reports into C5 as background entanglement where it overl
 - **The quality problems the owner raised live elsewhere:** background speech in AIRWAY, shutoff and
   hum in VOICE, and session-relative level nowhere.
 
-**Proposal.** QUALITY owns acquisition quality as measurements, and VERDICT decides:
-- **Recording level:** the C1 background model (stationary floor, hum, impulses); shutoff;
-  dropouts and clipping, as one reading; and level against the session group.
-- **Per task span:** in-span interference (background speech, generalised from
-  `background_speech.py` to every family) and the event SNR over the background, which is C5's
-  evidence.
+**Proposal.** QUALITY owns acquisition quality as measurements, and VERDICT decides. Its recording
+level is the generic layer and its per-span part is the join (see "Three layers"); in addition:
+- dropouts and clipping become one reading;
+- in-span interference generalises `background_speech.py` to every family.
 - **Moved in:** `background_speech_in_task`, shutoff detection (`voice_phonation.py`) and the residual
   hum guard. The branches read them from QUALITY.
 - **Retired or fixed:** the null tolerances, the wrong comment, `q_raw_issues` (recomputed from C1 or
@@ -228,7 +276,7 @@ a speech type test. It reports into C5 as background entanglement where it overl
 ## The DAG
 
 The owner's rule: every recording goes through QUALITY, and a recording a branch takes also gets
-that branch's outputs alongside.
+that branch's outputs alongside. The layers are in "Three layers"; this section places them.
 
 ```
 PREPROCESS → TAXONOMY → routing ─┬─ AIRWAY ─┐
