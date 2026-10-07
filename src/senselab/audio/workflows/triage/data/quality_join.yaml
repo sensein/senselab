@@ -13,15 +13,16 @@ faults:                           # a capture fault touching a task span reviews
     abut_s: 0.5                   # voice_phonation.yaml shutoff.gap_s: a shutoff this soon after the task cut it
     sounding_db: 10.0             # UNFITTED: the signal stood this far over the floor just before the drop, so the drop cut it
     before_s: 0.1                 # the window before the drop that is read
+    event_kinds: [phonation]      # fitted: a shutoff decides for a held task (f47eeda7 flagged; cough gates c60d8bb8, bffe3a4f heard present)
     decides: true
   gate:                           # a dead stretch the signal had already decayed into: a recorder's noise gate
     min_s: 0.0
     decides: false
   dropout:
-    min_s: 0.05                   # UNFITTED: a dropout this long inside a task span
+    min_s: 0.5                    # fitted: over the 0.42 s dropout inside 3b06709b's glide, heard present
     decides: true
   clip:
-    min_s: 0.01                   # UNFITTED: a clip run this long inside a task span
+    min_s: 0.02                   # fitted: over the 16 ms clip inside fac74f45's breathing, heard present
     decides: true
   discontinuity:
     min_s: 0.0
@@ -29,6 +30,6 @@ faults:                           # a capture fault touching a task span reviews
 streams:                          # the raw stream's task events re-read on the enhanced stream
   snr_low_db: 10.0                # task_events.yaml decision.snr_low_db: an event stands this far over its stream's floor
   lost_fraction: 0.5              # UNFITTED: the share of raw-standing events the enhanced stream loses that disagrees
-  decides: []                     # event kinds whose disagreement reviews (breath, cough, phonation); fitted
+  decides: []                     # fitted: every kind lost 2-10 fit agreements, so disagreement is reported only
 capture:                          # nothing captured: no activity, or only the room at the session's level
   level_rel_db_max: -30.0         # UNFITTED: this far under the session's active level with no task event

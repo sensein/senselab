@@ -141,17 +141,26 @@ def separate_gates(drops: Sequence[Sequence[Any]], p: dict[str, Any]) -> tuple[l
     return cut, gated
 
 
-def deciding_kinds(split: Mapping[str, Mapping[str, Sequence[Any]]], section: Mapping[str, Any]) -> list[str]:
+def deciding_kinds(
+    split: Mapping[str, Mapping[str, Sequence[Any]]], section: Mapping[str, Any], event_kind: str | None = None
+) -> list[str]:
     """The kinds whose findings fall in a task span and whose parameters let them decide.
 
     Args:
         split: Kind to ``{"in": ..., "out": ...}``.
         section: The parameters' section for those kinds.
+        event_kind: The task events' kind, read against a kind's ``event_kinds`` where it names any.
 
     Returns:
         The kinds, in the section's order.
     """
-    return [kind for kind, q in section.items() if q.get("decides") and (split.get(kind) or {}).get(INSIDE)]
+    return [
+        kind
+        for kind, q in section.items()
+        if q.get("decides")
+        and (split.get(kind) or {}).get(INSIDE)
+        and (q.get("event_kinds") is None or event_kind in q["event_kinds"])
+    ]
 
 
 def stream_agreement(
@@ -226,7 +235,7 @@ def join_record(
         "task_spans": [[round(a, 4), round(b, 4)] for a, b in task_spans],
         "event_kind": event_kind,
         "faults": fault_split,
-        "faults_in_task": deciding_kinds(fault_split, p["faults"]),
+        "faults_in_task": deciding_kinds(fault_split, p["faults"], event_kind),
         "interference": interference,
         "interference_in_task": deciding_kinds(interference, p["interference"]),
         "streams": agreement,
