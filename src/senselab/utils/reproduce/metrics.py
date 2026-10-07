@@ -45,7 +45,7 @@ headline entry or in a ``per_class`` entry.
   classification every fold's prevalence covers every declared class
 
 ``n``, ``counts.*``, ``confusion.*``, a ``count`` headline value and a fold's ``n_groups`` (whatever the
-split unit) below the minimum cell size are replaced by ``"<{min_cell}"``.
+split unit) below `MIN_CELL` are replaced by ``"<5"``.
 
 Results are fixed codes only; nothing from the rejected content is echoed.
 
@@ -108,6 +108,9 @@ PER_CLASS_FIELDS = ("recall", "precision", "f1", "prevalence")
 CONFUSION_CELLS = ("tp", "fp", "fn", "tn")
 SPLIT_PROTOCOLS = ("seen_subject", "unseen_subject", "none")
 SPLIT_UNITS = ("subject", "family", "session", "video", "clip", "recording", "row")
+MIN_CELL = 5
+"""The one minimum cell size: a suppressible count below it is written as ``"<5"``. Fixed, not a parameter, so
+it is keyed through ``reproduce_source_sha256`` (derivation in the design note)."""
 SPLIT_STRATIFY = ("none", "class", "class_timepoint", "class_site", "class_age", "timepoint")
 FOLD_KEYS = ("n_groups", "prevalence")
 TUNING_SPLITS = ("validation", "none", "test")
@@ -225,11 +228,10 @@ def expected_floor(name: str, prevalence: Mapping[str, float], *, k: int, positi
 class _Check:
     """One validation pass: collects codes and builds the suppressed copy in place."""
 
-    def __init__(self, schema: MetricsSchema, writer: Writer, min_cell: int) -> None:
+    def __init__(self, schema: MetricsSchema, writer: Writer) -> None:
         self.schema = schema
         self.writer = writer
-        self.min_cell = min_cell
-        self.token = f"<{min_cell}"
+        self.token = f"<{MIN_CELL}"
         self.codes: set[str] = set()
         self.classification = schema.kind == "classification"
         self.imbalance = schema.kind in CLASSIFICATION_KINDS
@@ -262,7 +264,7 @@ class _Check:
             self.codes.add("E_METRICS_NOT_INT")
         elif value < 0:
             self.codes.add("E_METRICS_NEGATIVE")
-        elif suppress and value < self.min_cell:
+        elif suppress and value < MIN_CELL:
             obj[key] = self.token
 
     def word(self, obj: Mapping[str, Any], key: str, allowed: tuple[str, ...]) -> None:
@@ -507,12 +509,12 @@ class _Check:
 
 
 def validate_metrics(
-    obj: object, schema: MetricsSchema, *, writer: Writer = "adapter", min_cell: int = 5
+    obj: object, schema: MetricsSchema, *, writer: Writer = "adapter"
 ) -> tuple[dict[str, Any] | None, list[str]]:
     """Check a ``metrics.json`` object against the vocabulary and a step's schema, and suppress small cells.
 
     The driver validates the adapter's output, then (after writing the ``expect`` results) the final
-    object with ``writer="driver"``; both passes must use the same ``min_cell``.
+    object with ``writer="driver"``. Cells below `MIN_CELL` are suppressed in both passes.
 
     Args:
         obj: The parsed ``metrics.json``.
@@ -520,7 +522,6 @@ def validate_metrics(
             the threshold-tuning split and a split report are required.
         writer: ``adapter`` for an adapter's output, which may not carry ``delta``, ``target``,
             ``tolerance`` or ``pass``; ``driver`` once the driver has evaluated ``expect``.
-        min_cell: Suppressed cells below this become ``"<{min_cell}"``.
 
     Returns:
         ``(clean, codes)``: ``codes`` is sorted and unique, drawn from `CODES` (errors) and `WARNINGS`.
@@ -530,7 +531,7 @@ def validate_metrics(
     if not isinstance(obj, dict):
         return None, ["E_METRICS_NOT_OBJECT"]
     clean = copy.deepcopy(obj)
-    check = _Check(schema, writer, min_cell)
+    check = _Check(schema, writer)
     check.run(clean)
     codes = sorted(check.codes)
     if any(c.startswith("E_") for c in codes):

@@ -562,7 +562,9 @@ class Manifest(_Model):
     """One analysis: a name and its steps.
 
     The analysis and step names name directories and appear in batch job names (``reproduce-<step>``),
-    which every user of the cluster can list, so they must not carry anything sensitive.
+    which every user of the cluster can list; class labels, count names and headline labels of each
+    ``metrics_schema`` are copied into the agent-readable ``metrics.json``. None of them may carry anything
+    sensitive.
     """
 
     name: Name
@@ -635,7 +637,13 @@ def _strictly_under(path: PurePosixPath, root: PurePosixPath) -> bool:
 
 
 class Profile(_Model):
-    """The caller's site: data roots, result roots, partitions, keyed env, R module, deny patterns."""
+    """The caller's site: data roots, result roots, partitions, keyed env, R module, deny patterns.
+
+    ``modules_init`` is the environment-modules init script sourced before ``module load`` (needed by any
+    sdist with ``build_modules`` and by R envs; without it those are refused with ``E_MODULES_INIT``).
+    ``job_tmp_root`` is where each batch job makes its private ``TMPDIR`` (removed on exit); without it a
+    job keeps the node's default temporary dir.
+    """
 
     roots: dict[Name, Path] = Field(min_length=1)
     results_root: Path
@@ -649,12 +657,15 @@ class Profile(_Model):
     r: RModule | None = None
     deny_patterns_file: Path
     canary_host: str
+    modules_init: Path | None = None
+    job_tmp_root: Path | None = None
 
     _no_secrets = field_validator("env")(_reject_secret_keys)
 
     @model_validator(mode="after")
     def _consistent(self) -> "Profile":
         paths = [*self.roots.values(), self.results_root, self.runs_root, self.slurm_logs_root, *self.rw_under_roots]
+        paths += [p for p in (self.modules_init, self.job_tmp_root) if p is not None]
         native = [d for n in self.native.values() for d in (*n.bin_dirs, *n.lib_dirs)]
         relative = sorted(str(p) for p in (*paths, *native) if not p.is_absolute())
         if relative:
