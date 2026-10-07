@@ -4,13 +4,13 @@ from __future__ import annotations
 
 from typing import Any
 
+from senselab.audio.workflows.triage.quality_join import join_record
 from senselab.audio.workflows.triage.vocabulary import (
     COUGH_COUNTED,
     COUGH_PERFORMED,
     DECLINED,
     DISCARD_GROUNDS,
     GROUND_KEYS,
-    KEY_BACKGROUND_SPEECH_IN_TASK,
     KEY_COUGH_REVIEW_LOW_CONFIDENCE,
     KEY_DISCARD_CONTESTED,
     KEY_NO_COUGH_CAPTURED,
@@ -100,7 +100,7 @@ def _fold(
             cough_reading={"onsets_n": onsets, "onsets_strict_n": onsets, "onsets_lenient_n": onsets}
             if onsets is not None
             else {},
-            background_speech=background or {},
+            quality=background or {},
             contest_events_min=contest_min,
         ),
     )
@@ -200,8 +200,17 @@ def test_background_speech_in_the_task_flags_and_never_discards() -> None:
         onsets=9,
         family="voluntary-cough",
         instructed=3,
-        background={"heard": True, "speech_windows": [], "voice_runs": [[16.0, 18.9, 1.4, 4.0]]},
+        background=join_record(
+            task_spans=[(2.0, 20.0)],
+            event_kind="cough",
+            faults={},
+            other_voice=[(16.0, 18.9)],
+            streams=None,
+            plain_active_s=12.0,
+            enhanced_active_s=12.0,
+            level_rel_db=0.0,
+        ),
     )
     assert folded.triage is Triage.REVIEW
-    assert KEY_BACKGROUND_SPEECH_IN_TASK in folded.ground_keys
-    assert folded.background_speech["heard"] is True
+    assert "interference_in_task:other_voice" in folded.ground_keys
+    assert folded.quality_join["interference_in_task"] == ["other_voice"]

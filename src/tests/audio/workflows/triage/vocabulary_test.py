@@ -11,12 +11,11 @@ import inspect
 from dataclasses import replace
 from typing import Any, Mapping, Sequence
 
+from senselab.audio.workflows.triage.quality_join import join_record
 from senselab.audio.workflows.triage.vocabulary import (
     BAD_MAP_VALUES,
     BREATH_COUNTED,
     BREATH_SUSTAINED,
-    CAPTURE_CUT_AFTER_TASK,
-    CAPTURE_CUT_DURING_TASK,
     CRITICAL_ABSENCE,
     DECLARED_TASK_ABSENT,
     DECLINED,
@@ -2641,8 +2640,16 @@ class TestAVoiceTaskIsDecidedOnItsPhonationAttempt:
                 voice_found=found,
                 voice_mismatch=mismatch,
                 voice_review=review,
-                voice_capture_cut=cut,
-                voice_shutoff_after=after,
+                quality=join_record(
+                    task_spans=[(1.0, 6.0)],
+                    event_kind="phonation",
+                    faults={"shutoff": [[6.2, 7.5]] if cut else [[7.0, 7.9]] if after else []},
+                    other_voice=[],
+                    streams=None,
+                    plain_active_s=5.0,
+                    enhanced_active_s=5.0,
+                    level_rel_db=0.0,
+                ),
                 voice_outside_speech=outside,
             ),
         )
@@ -2670,15 +2677,16 @@ class TestAVoiceTaskIsDecidedOnItsPhonationAttempt:
         assert VOICE_REVIEW_LOW_CONFIDENCE in folded.ground_keys
 
     def test_a_shutoff_during_phonation_flags(self) -> None:
-        """Owner: a shutoff that cut the phonation flags."""
+        """Owner: a shutoff that cut the phonation flags, through QUALITY's join as for every family."""
         folded = self._fold(found=True, cut=True)
-        assert CAPTURE_CUT_DURING_TASK in folded.ground_keys
+        assert folded.triage is Triage.REVIEW
+        assert "fault_in_task:shutoff" in folded.ground_keys
 
     def test_a_shutoff_after_the_task_is_an_annotation(self) -> None:
         """A shutoff after the phonation ended moves no triage state."""
         folded = self._fold(found=True, after=True)
         assert folded.triage is Triage.PASS
-        assert CAPTURE_CUT_AFTER_TASK in folded.annotation_keys
+        assert "fault_outside_task:shutoff" in folded.annotation_keys
 
     def test_leading_speech_is_an_annotation(self) -> None:
         """A count-in before the vowel is recorded with its words."""

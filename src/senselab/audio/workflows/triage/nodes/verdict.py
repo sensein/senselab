@@ -41,7 +41,6 @@ from senselab.audio.workflows.triage.live_evidence import declared_task, recordi
 from senselab.audio.workflows.triage.nodes.airway import EVENTS_FOUND as AIRWAY_EVENTS_FOUND
 from senselab.audio.workflows.triage.nodes.airway import INSTRUMENT_ABSENT as AIRWAY_INSTRUMENT_ABSENT
 from senselab.audio.workflows.triage.nodes.airway_task import (
-    BACKGROUND_SPEECH,
     BREATH_READING,
     COUGH_READING,
     required_event,
@@ -102,6 +101,7 @@ from senselab.audio.workflows.triage.nodes.redact import (
     task_texts,
 )
 from senselab.audio.workflows.triage.nodes.voice import PHONATION_READING
+from senselab.audio.workflows.triage.quality_join import QUALITY_JOIN
 from senselab.audio.workflows.triage.task_lexicon import task_lexicon
 from senselab.audio.workflows.triage.vocabulary import (
     BREATH_COUNTED,
@@ -575,8 +575,14 @@ def _task_evidence(
         phonation, missing = _voice_reading(store)
         absent = missing if phonation is not None or missing else absent
     instructed = airway.required_count.value if airway is not None and airway.required_count is not None else None
-    heard = find_measurement(store, BACKGROUND_SPEECH) if reading is not None or cough is not None else None
-    background = {k: v for k, v in heard.attributes.items() if k not in ("name", "signal")} if heard else {}
+    joined = find_measurement(store, QUALITY_JOIN)
+    quality = (
+        {k: v for k, v in joined.attributes.items() if k not in ("name", "signal")}
+        if joined is not None
+        else {"missing": [QUALITY_JOIN]}
+        if find_measurement(store, BACKGROUND_MODEL) is not None
+        else {}
+    )
     return TaskEvidence(
         owning_branches=owners,
         duration_s=duration,
@@ -605,14 +611,11 @@ def _task_evidence(
         cough_onsets_n=cough["onsets_n"] if cough is not None else None,
         cough_review=bool(cough.get("review")) if cough is not None else False,
         cough_reading={"mode": cough_mode, **cough["reading"]} if cough is not None else {},
-        background_speech=background,
+        quality=quality,
         voice_mode=voice_mode,
         voice_found=bool(phonation["found"]) if phonation is not None else None,
         voice_mismatch=phonation.get("mismatch") if phonation is not None else None,
         voice_review=tuple(phonation.get("review") or ()) if phonation is not None else (),
-        voice_capture_cut=bool((phonation or {}).get("shutoff", {}).get("during_task")),
-        voice_shutoff_after=bool((phonation or {}).get("shutoff"))
-        and not (phonation or {}).get("shutoff", {}).get("during_task"),
         voice_outside_speech=tuple((phonation or {}).get("outside_speech") or ()),
         voice_reading={
             "mode": voice_mode,

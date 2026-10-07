@@ -2,7 +2,7 @@
 # Each item records value, unit, comparison, threshold (from data/), effect and whether it decided.
 # `producer` names the unit of specs/20261007-task-events-in-background/design.md that emits it;
 # an item a later unit produces is absent from the tables until that unit lands.
-version: 1
+version: 2
 groups:
   acquisition:
     admit_outcome:
@@ -21,34 +21,18 @@ groups:
       unit:
       producer: fold
       meaning: whether the branch owning the declared task found it
-    background_speech_in_task:
-      unit: runs
-      producer: unit B
-      meaning: residual windows heard as speech and harmonic residual runs inside an airway task
-    capture_cut_in_task:
-      unit:
-      producer: unit B
-      meaning: a microphone shutoff inside the phonation, so its duration is a lower bound
-    interference_in_span:
+    streams_disagree:
       unit:
       producer: unit C
-      meaning: another source overlapping or abutting a task event
-    fault_in_span:
-      unit: s
-      producer: unit C
-      meaning: a dropout, clip or shutoff inside the task span
-    streams_agree:
-      unit:
-      producer: unit C
-      meaning: whether the raw and enhanced streams agree on the task's events
+      meaning: the share of the raw stream's standing task events the enhanced stream loses, against data/quality_join.yaml streams.lost_fraction
     nothing_captured:
       unit:
       producer: unit C
-      meaning: no active region above the background in any stream
-    session_floor_db:
+      meaning: the route state, the plain and enhanced streams' active seconds and the level against the session; no activity, or only the room, with no task event discards
+    level_rel_db:
       unit: dB
       producer: unit C
-      meaning: the BIDS session's background floor the events were read against
+      meaning: the recording's active level against its BIDS session's (SESSION)
   breath:
     breath_event_db_over_floor:
       unit: dB
@@ -116,6 +100,16 @@ prefixes:              # `<prefix>:<name>` items, named by what follows the colo
     unit:
     producer: fold
     meaning: a task-group or flag gate's reading against its bound
+  fault_in_task:
+    group: acquisition
+    unit: s
+    producer: unit C
+    meaning: a capture fault (shutoff, dropout, clip) touching a task span, against data/quality_join.yaml faults.<kind>.min_s
+  interference_in_task:
+    group: acquisition
+    unit: spans
+    producer: unit C
+    meaning: another source (another voice) overlapping or abutting a task span
   phonation_review:
     group: voice
     unit:

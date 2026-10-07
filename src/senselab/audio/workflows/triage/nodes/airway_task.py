@@ -1,4 +1,4 @@
-"""AIRWAY's task measures: the breath train, the cough onsets and background speech, written to the store.
+"""AIRWAY's task measures: the breath train and the cough onsets, written to the store.
 
 A declared airway family named in ``data/airway_event_requirements.yaml`` is measured here, inside
 the AIRWAY branch, and VERDICT reads only what this module writes. The design is in
@@ -15,12 +15,10 @@ import numpy as np
 import yaml
 
 from senselab.audio.workflows.triage.background_model import BACKGROUND_MODEL
-from senselab.audio.workflows.triage.background_speech import background_speech_of
 from senselab.audio.workflows.triage.breath_pattern import (
     BreathPattern,
     breath_in_review,
     breath_pattern_of,
-    task_extent_bounds,
 )
 from senselab.audio.workflows.triage.cough_pattern import CoughPattern, cough_pattern_of, in_cough_review_band
 from senselab.audio.workflows.triage.nodes.branches import Expectation
@@ -36,9 +34,6 @@ BREATH_READING = "airway_breath_reading"
 
 COUGH_READING = "airway_cough_reading"
 """The measurement holding AIRWAY's cough-onset reading, or the inputs it lacked."""
-
-BACKGROUND_SPEECH = "airway_background_speech"
-"""The measurement holding AIRWAY's background-speech reading over its task extent."""
 
 
 @functools.cache
@@ -174,7 +169,7 @@ def measure_airway_task(
     language: str | None,
     run_dir: Path,
 ) -> list[str]:
-    """Measure a declared airway task and write the readings, the standing extent and background speech.
+    """Measure a declared airway task and write the reading and the standing extent.
 
     Args:
         store: The provenance store.
@@ -187,8 +182,8 @@ def measure_airway_task(
         run_dir: The run directory the derivatives' sidecar paths are relative to.
 
     Returns:
-        The ids written: the reading measurement, the standing extent span where one was placed, and
-        the background-speech measurement where it was read. Empty for a family no measure decides.
+        The ids written: the reading measurement and the standing extent span where one was placed.
+        Empty for a family no measure decides.
     """
     needed = required_event(family)
     if needed not in ("breath", "cough"):
@@ -206,21 +201,4 @@ def measure_airway_task(
     kept = settle_task_extent(store, activity, software, reading.get("extent"))
     if kept is not None:
         written.append(kept)
-    if not reading:
-        return written
-    over: tuple[float, float] | None = None
-    events: tuple[tuple[float, float], ...] = ()
-    if isinstance(breath, BreathPattern):
-        over, events = (breath.extent.bounds if breath.extent is not None else None), breath.event_spans_s
-    elif isinstance(cough, CoughPattern):
-        over = (cough.extent.start_s, cough.extent.end_s) if cough.extent is not None else None
-        events = cough.event_spans_s
-    over = over or task_extent_bounds(store)
-    heard = background_speech_of(store, run_dir, over, events) if over is not None else None
-    if heard is not None:
-        written.append(
-            write_measurement(
-                store, activity, software, name=BACKGROUND_SPEECH, signal="plain", attributes=heard.record()
-            )
-        )
     return written
