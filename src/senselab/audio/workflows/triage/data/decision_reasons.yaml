@@ -2,7 +2,7 @@
 # `reason` is the first of a recording's reasons in `precedence`; `reasons` is all of them, in that order.
 # Owner, 2026-10-07: verdict pass/review/discard, release as_is/redacted/withheld, one reason per recording.
 # Derivation: specs/20261007-task-events-in-background/design.md ("Decision table").
-version: 1
+version: 2
 precedence:            # discard reasons first, then review, then the release axis
 - unmeasurable
 - task_too_short
@@ -53,8 +53,7 @@ keys:                  # exact verdict ground key -> reason
   uncomputed_reading: not_measured
   owning_branch_input_absent: not_measured
   node_outcome_unreadable: not_measured
-  capture_cut_during_task: fault_in_task
-  background_speech_in_task: interference_in_task
+  streams_disagree: streams_disagree
   reviewer_second_speaker: other_speaker
   gate:dominant_speaker_share_min: other_speaker
   breath_review_low_confidence: weak_events
@@ -64,7 +63,6 @@ keys:                  # exact verdict ground key -> reason
   task_mismatch: task_not_conforming
   instructions_spoken: task_not_conforming
   speech_no_lexical_item: task_not_conforming
-  capture_cut_after_task: task_not_conforming
   speech_outside_task: task_not_conforming
   person_name_review: identifying_content
   reviewer_residue: identifying_content
@@ -93,3 +91,7 @@ prefixes:              # `<prefix>:<name>` ground key -> reason, where no exact 
   branch_silent: not_measured
   store_assertion_contradicted: not_measured
   node: not_measured
+  fault_in_task: fault_in_task
+  interference_in_task: interference_in_task
+  fault_outside_task: fault_in_task              # an annotation; listed so every prefix names a reason
+  interference_outside_task: interference_in_task

@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field, replace
 from enum import Enum
-from typing import Any, Literal, Mapping, Sequence, TypeVar
+from typing import Any, Callable, Literal, Mapping, Sequence, TypeVar
 
 from senselab.audio.workflows.triage.decision import (
     ANNOTATION,
@@ -341,8 +341,8 @@ class TaskEvidence:
         cough_review: Whether the decision differs inside the measure's review band
             (``data/cough_pattern.yaml``, ``review``).
         cough_reading: The measure's full reading, for the verdict record; empty where none.
-        background_speech: The background-speech reading over the task extent
-            (``background_speech.background_speech_of``), for an airway family; empty where none.
+        quality: QUALITY's join of the background against the task spans
+            (``nodes.quality.measure_join``); empty where QUALITY wrote none.
         contest_events_min: The events AIRWAY's own detector must have found for a measure's
             no-event discard to be contested instead (``data/discard_contested.yaml``); None where
             no discard of this family is contested.
@@ -354,8 +354,6 @@ class TaskEvidence:
         voice_found: Whether the reading found a phonation attempt, or None where it was not read.
         voice_mismatch: The glide's ``task_mismatch`` description, or None.
         voice_review: Why the reading is left for review; empty where it is not.
-        voice_capture_cut: Whether a microphone shutoff cut the phonation.
-        voice_shutoff_after: Whether a shutoff was read after the task ended.
         voice_outside_speech: The speech-like runs read outside the extent.
         voice_reading: The reading's record, for the verdict record; empty where none.
     """
@@ -381,7 +379,7 @@ class TaskEvidence:
     cough_onsets_n: int | None = None
     cough_review: bool = False
     cough_reading: dict[str, Any] = field(default_factory=dict)
-    background_speech: dict[str, Any] = field(default_factory=dict)
+    quality: dict[str, Any] = field(default_factory=dict)
     contest_events_min: int | None = None
     contest_rise_db_min: float | None = None
     breath_train_rise_db: float | None = None
@@ -389,8 +387,6 @@ class TaskEvidence:
     voice_found: bool | None = None
     voice_mismatch: str | None = None
     voice_review: tuple[str, ...] = ()
-    voice_capture_cut: bool = False
-    voice_shutoff_after: bool = False
     voice_outside_speech: tuple[dict[str, Any], ...] = ()
     voice_reading: dict[str, Any] = field(default_factory=dict)
 
@@ -563,14 +559,10 @@ BREATH_REVIEW_LOW_CONFIDENCE = "breath_review_low_confidence"
 """Flag ground: a breath task's breathing was kept, on a breath train weak or irregular enough to review."""
 COUGH_REVIEW_LOW_CONFIDENCE = "cough_review_low_confidence"
 """Flag ground: a cough task's coughs were kept, on a count whose decision differs inside the review band."""
-BACKGROUND_SPEECH_IN_TASK = "background_speech_in_task"
-"""Flag ground: speech enhancement removed speech from inside an airway task's extent -- another voice."""
 VOICE_REVIEW_LOW_CONFIDENCE = "voice_review_low_confidence"
 """Flag ground: a voice task's phonation reading differs inside its review band."""
-CAPTURE_CUT_DURING_TASK = "capture_cut_during_task"
-"""Flag ground: a microphone shutoff cut a voice task's phonation; its duration is a lower bound."""
-CAPTURE_CUT_AFTER_TASK = "capture_cut_after_task"
-"""Annotation: a microphone shutoff after a voice task's phonation ended."""
+STREAMS_DISAGREE = "streams_disagree"
+"""Flag ground: the enhanced stream loses the task events the raw stream stands on."""
 SPEECH_OUTSIDE_TASK = "speech_outside_task"
 """Annotation: speech-like runs outside a voice task's phonation extent, with the words over them."""
 DISCARD_CONTESTED = "discard_contested"
@@ -723,12 +715,10 @@ KEY_TASK_MISMATCH = TASK_MISMATCH
 KEY_BREATH_REVIEW_LOW_CONFIDENCE = BREATH_REVIEW_LOW_CONFIDENCE
 KEY_NO_COUGH_CAPTURED = NO_COUGH_CAPTURED
 KEY_COUGH_REVIEW_LOW_CONFIDENCE = COUGH_REVIEW_LOW_CONFIDENCE
-KEY_BACKGROUND_SPEECH_IN_TASK = BACKGROUND_SPEECH_IN_TASK
 KEY_DISCARD_CONTESTED = DISCARD_CONTESTED
 KEY_NO_PHONATION_CAPTURED = NO_PHONATION_CAPTURED
 KEY_VOICE_REVIEW_LOW_CONFIDENCE = VOICE_REVIEW_LOW_CONFIDENCE
-KEY_CAPTURE_CUT_DURING_TASK = CAPTURE_CUT_DURING_TASK
-KEY_CAPTURE_CUT_AFTER_TASK = CAPTURE_CUT_AFTER_TASK
+KEY_STREAMS_DISAGREE = STREAMS_DISAGREE
 KEY_SPEECH_OUTSIDE_TASK = SPEECH_OUTSIDE_TASK
 KEY_PREPROCESS_ERRORED = "preprocess_errored"
 KEY_ROUTING_ERRORED = "routing_errored"
@@ -762,12 +752,10 @@ GROUND_KEYS = (
     KEY_BREATH_REVIEW_LOW_CONFIDENCE,
     KEY_NO_COUGH_CAPTURED,
     KEY_COUGH_REVIEW_LOW_CONFIDENCE,
-    KEY_BACKGROUND_SPEECH_IN_TASK,
     KEY_DISCARD_CONTESTED,
     KEY_NO_PHONATION_CAPTURED,
     KEY_VOICE_REVIEW_LOW_CONFIDENCE,
-    KEY_CAPTURE_CUT_DURING_TASK,
-    KEY_CAPTURE_CUT_AFTER_TASK,
+    KEY_STREAMS_DISAGREE,
     KEY_SPEECH_OUTSIDE_TASK,
     KEY_PREPROCESS_ERRORED,
     KEY_ROUTING_ERRORED,
@@ -804,6 +792,14 @@ PREFIX_ROUTE_MISMATCH = "route_mismatch"
 PREFIX_BRANCH_SILENT = "branch_silent"
 PREFIX_HINT_MISMATCH = "hint_mismatch"
 PREFIX_NODE = "node"
+PREFIX_FAULT_IN_TASK = "fault_in_task"
+"""A capture fault (``fault_in_task:<kind>``) touching a task span: a review ground."""
+PREFIX_FAULT_OUTSIDE_TASK = "fault_outside_task"
+"""A capture fault away from every task span, or one QUALITY's parameters do not let decide: an annotation."""
+PREFIX_INTERFERENCE_IN_TASK = "interference_in_task"
+"""Another source (``interference_in_task:<kind>``) touching a task span: a review ground."""
+PREFIX_INTERFERENCE_OUTSIDE_TASK = "interference_outside_task"
+"""Another source away from every task span: an annotation."""
 
 GROUND_KEY_PREFIXES = (
     PREFIX_GATE,
@@ -817,6 +813,10 @@ GROUND_KEY_PREFIXES = (
     PREFIX_BRANCH_SILENT,
     PREFIX_HINT_MISMATCH,
     PREFIX_NODE,
+    PREFIX_FAULT_IN_TASK,
+    PREFIX_FAULT_OUTSIDE_TASK,
+    PREFIX_INTERFERENCE_IN_TASK,
+    PREFIX_INTERFERENCE_OUTSIDE_TASK,
 )
 """Ground keys written ``<prefix>:<name>``, the name being a gate, a reporting node or a branch."""
 
@@ -1232,8 +1232,8 @@ class FileVerdict:
             count, durations, intervals and rhythm. Empty for every other family.
         cough_pattern: The cough-onset measure's reading for a cough family -- onsets, events, review
             counts and extent. Empty for every other family.
-        background_speech: The background-speech reading over an airway task's extent. Empty for every
-            other family, or where the residual was not stored.
+        quality_join: QUALITY's join of the background against the task spans. Empty where QUALITY
+            wrote none.
     """
 
     triage: Triage
@@ -1268,7 +1268,7 @@ class FileVerdict:
     gates: dict[str, Any] = field(default_factory=dict)
     breath_pattern: dict[str, Any] = field(default_factory=dict)
     cough_pattern: dict[str, Any] = field(default_factory=dict)
-    background_speech: dict[str, Any] = field(default_factory=dict)
+    quality_join: dict[str, Any] = field(default_factory=dict)
     voice_phonation: dict[str, Any] = field(default_factory=dict)
 
     def record(self) -> dict[str, Any]:
@@ -1312,7 +1312,7 @@ class FileVerdict:
             "gates": dict(self.gates),
             "breath_pattern": dict(self.breath_pattern),
             "cough_pattern": dict(self.cough_pattern),
-            "background_speech": dict(self.background_speech),
+            "quality_join": dict(self.quality_join),
             "voice_phonation": dict(self.voice_phonation),
             "ran": {node: state.value for node, state in self.ran.items()},
             "reasons": [
@@ -1825,6 +1825,91 @@ def discard_contested(evidence: TaskEvidence) -> bool:
     )
 
 
+JOIN_UNREAD = ("background_model", "quality_join")
+"""The inputs without which QUALITY's join could not be read: a recording missing one is not measured."""
+
+
+def nothing_captured(quality: Mapping[str, Any]) -> bool:
+    """Whether QUALITY's join says the recording captured nothing: no activity, or only the room.
+
+    Args:
+        quality: QUALITY's join record.
+
+    Returns:
+        True where no stream held activity over the floor, or the recording stands under its session's
+        level by the join's bound; False otherwise, and where the join was not read.
+    """
+    return bool(quality.get("no_activity")) or bool(quality.get("quiet_vs_session"))
+
+
+def task_event_heard(evidence: TaskEvidence, lexical_words_n: int | None) -> bool:
+    """Whether any branch heard an event of the task: a breath, a cough, phonation or a lexical word.
+
+    Args:
+        evidence: The task evidence.
+        lexical_words_n: The consensus transcript's lexical word count, or None where SPEECH read none.
+
+    Returns:
+        True where a task reading holds an event or the transcript holds a lexical word.
+    """
+    return breath_present(evidence) or cough_present(evidence) or bool(evidence.voice_found) or bool(lexical_words_n)
+
+
+def join_unread(quality: Mapping[str, Any]) -> list[str]:
+    """The inputs QUALITY's join lacked that leave the recording not measured.
+
+    Args:
+        quality: QUALITY's join record.
+
+    Returns:
+        The names of :data:`JOIN_UNREAD` the record lists as missing.
+    """
+    return [name for name in quality.get("missing") or () if name in JOIN_UNREAD]
+
+
+def _join_reasons(quality: Mapping[str, Any], flag: Callable[..., None], annotate: Callable[..., None]) -> None:
+    """Raise QUALITY's join as flags and annotations: what touches a task span reviews, the rest annotates.
+
+    Args:
+        quality: QUALITY's join record.
+        flag: The fold's flag.
+        annotate: The fold's annotate.
+    """
+    unread = join_unread(quality)
+    if unread:
+        flag(QUALITY, f"{UNCOMPUTED_READING}: {', '.join(unread)}", KEY_UNCOMPUTED_READING)
+        return
+    for section, deciding, inside, outside in (
+        ("faults", quality.get("faults_in_task") or (), PREFIX_FAULT_IN_TASK, PREFIX_FAULT_OUTSIDE_TASK),
+        (
+            "interference",
+            quality.get("interference_in_task") or (),
+            PREFIX_INTERFERENCE_IN_TASK,
+            PREFIX_INTERFERENCE_OUTSIDE_TASK,
+        ),
+    ):
+        for kind, split in (quality.get(section) or {}).items():
+            held = list(split.get("in") or ())
+            elsewhere = list(split.get("out") or ()) + ([] if kind in deciding else held)
+            if kind in deciding:
+                seconds = round(sum(b - a for a, b in held), 3)
+                flag(
+                    QUALITY,
+                    f"{inside}: {kind}, {len(held)} span(s), {seconds} s, first at {held[0][0]} s",
+                    f"{inside}:{kind}",
+                )
+            if elsewhere:
+                annotate(QUALITY, f"{outside}: {kind}, {len(elsewhere)} span(s)", f"{outside}:{kind}")
+    if quality.get("streams_disagree"):
+        streams = quality.get("streams") or {}
+        flag(
+            QUALITY,
+            f"{STREAMS_DISAGREE}: the enhanced stream loses {streams.get('lost_n')} of the "
+            f"{streams.get('standing_n')} {quality.get('event_kind')} events the raw stream stands on",
+            KEY_STREAMS_DISAGREE,
+        )
+
+
 def _count_mismatch(applied_gates: Sequence[Mapping[str, Any]], evidence: TaskEvidence) -> str | None:
     """The detected-against-instructed count where an airway task's own events fell short of it.
 
@@ -1856,7 +1941,7 @@ _COMPARISON = {"at_least": ">=", "at_most": "<="}
 _DISCARD_ITEMS = {
     UNMEASURABLE: "admit_outcome",
     TOO_SHORT_FOR_TASK: "task_duration_s",
-    ACOUSTICALLY_EMPTY: "route_state",
+    ACOUSTICALLY_EMPTY: "nothing_captured",
     NO_BREATH_CAPTURED: "breath_event_db_over_floor",
     NO_COUGH_CAPTURED: "cough_onsets",
     NO_PHONATION_CAPTURED: "phonation_found",
@@ -2003,8 +2088,6 @@ def _voice_items(task: TaskEvidence) -> list[EvidenceItem]:
             )
         )
     items.extend(_flag_item(f"phonation_review:{review}") for review in task.voice_review)
-    if task.voice_capture_cut:
-        items.append(_flag_item("capture_cut_in_task"))
     return items
 
 
@@ -2024,14 +2107,48 @@ def _task_items(task: TaskEvidence) -> list[EvidenceItem]:
         items.extend(_cough_items(task))
     if task.voice_mode is not None and task.voice_found is not None:
         items.extend(_voice_items(task))
-    if task.background_speech.get("heard"):
-        windows = task.background_speech.get("speech_windows") or []
-        runs = task.background_speech.get("voice_runs") or []
+    items.extend(_join_items(task.quality))
+    return items
+
+
+def _join_items(quality: Mapping[str, Any]) -> list[EvidenceItem]:
+    """QUALITY's join, as evidence items: what touches a task span, the streams' agreement and the level.
+
+    Args:
+        quality: QUALITY's join record.
+
+    Returns:
+        One item per fault or interference kind touching a task span, the stream agreement where it was
+        read, and the level against the session where it was read.
+    """
+    items: list[EvidenceItem] = []
+    minimum = dict(quality.get("fault_min_s") or {})
+    for kind in quality.get("faults_in_task") or ():
+        held = ((quality.get("faults") or {}).get(kind) or {}).get("in") or ()
+        seconds = round(sum(b - a for a, b in held), 3)
         items.append(
             item(
-                "background_speech_in_task", len(windows) + len(runs), REVIEW, unit="runs", comparison="==", threshold=0
+                f"{PREFIX_FAULT_IN_TASK}:{kind}", seconds, REVIEW, unit="s", comparison="<", threshold=minimum.get(kind)
             )
         )
+    for kind in quality.get("interference_in_task") or ():
+        held = ((quality.get("interference") or {}).get(kind) or {}).get("in") or ()
+        items.append(
+            item(f"{PREFIX_INTERFERENCE_IN_TASK}:{kind}", len(held), REVIEW, unit="spans", comparison="==", threshold=0)
+        )
+    streams = dict(quality.get("streams") or {})
+    if streams.get("lost_fraction") is not None:
+        items.append(
+            item(
+                STREAMS_DISAGREE,
+                streams.get("lost_fraction"),
+                REVIEW if quality.get("streams_disagree") else ANNOTATION,
+                comparison="<",
+                threshold=quality.get("lost_fraction_max"),
+            )
+        )
+    if quality.get("level_rel_db") is not None:
+        items.append(item("level_rel_db", quality.get("level_rel_db"), ANNOTATION, unit="dB"))
     return items
 
 
@@ -2086,14 +2203,20 @@ def _decision_evidence(
                 threshold=task.minimum_duration_s,
             )
         )
-    if route_state == EMPTY:
+    if route_state == EMPTY or task.quality.get("plain_active_s") is not None:
+        captured_nothing = route_state == EMPTY or nothing_captured(task.quality)
         items.append(
             item(
-                "route_state",
-                EMPTY,
-                DISCARD if ground == ACOUSTICALLY_EMPTY else PASS,
-                comparison="!=",
-                threshold=EMPTY,
+                "nothing_captured",
+                {
+                    "route_state": route_state,
+                    "plain_active_s": task.quality.get("plain_active_s"),
+                    "enhanced_active_s": task.quality.get("enhanced_active_s"),
+                    "level_rel_db": task.quality.get("level_rel_db"),
+                },
+                DISCARD if ground == ACOUSTICALLY_EMPTY else ANNOTATION if captured_nothing else PASS,
+                comparison="==",
+                threshold=False,
             )
         )
     if ground == DECLARED_TASK_ABSENT:
@@ -2467,15 +2590,6 @@ def fold_file_verdict(
             KEY_VOICE_REVIEW_LOW_CONFIDENCE,
             voice_kind,
         )
-    if task_evidence.voice_capture_cut and task_evidence.voice_found:
-        flag(
-            _VOICE,
-            f"{CAPTURE_CUT_DURING_TASK}: the phonation's duration is a lower bound",
-            KEY_CAPTURE_CUT_DURING_TASK,
-            voice_kind,
-        )
-    elif task_evidence.voice_shutoff_after:
-        annotate(_VOICE, CAPTURE_CUT_AFTER_TASK, KEY_CAPTURE_CUT_AFTER_TASK, voice_kind)
     if task_evidence.voice_outside_speech:
         said = [word for run in task_evidence.voice_outside_speech for word in run.get("words") or ()]
         annotate(
@@ -2485,17 +2599,7 @@ def fold_file_verdict(
             KEY_SPEECH_OUTSIDE_TASK,
             voice_kind,
         )
-    if task_evidence.background_speech.get("heard"):
-        windows = task_evidence.background_speech.get("speech_windows") or []
-        runs = task_evidence.background_speech.get("voice_runs") or []
-        first = min([row[0] for row in (*windows, *runs)], default=None)
-        flag(
-            _AIRWAY,
-            f"{BACKGROUND_SPEECH_IN_TASK}: {len(windows)} residual window(s) heard as speech and {len(runs)} "
-            f"harmonic residual run(s), first at {first} s",
-            KEY_BACKGROUND_SPEECH_IN_TASK,
-            by_branch[_AIRWAY].kind if _AIRWAY in by_branch else None,
-        )
+    _join_reasons(task_evidence.quality, flag, annotate)
     for branch in branches_seen:
         decision = branch_decisions.get(branch)
         reported = by_branch.get(branch)
@@ -2562,7 +2666,12 @@ def fold_file_verdict(
         and task_evidence.minimum_duration_s is not None
         and task_evidence.duration_s < task_evidence.minimum_duration_s
     )
-    empty = route_state == EMPTY and not performed and not owner_unable
+    empty = (
+        (route_state == EMPTY or nothing_captured(task_evidence.quality))
+        and not performed
+        and not owner_unable
+        and not task_event_heard(task_evidence, (redaction or RedactionEvidence()).lexical_words_n)
+    )
     no_event = no_required_event(task_evidence, performed)
     contested = no_event and not (unmeasurable or too_short or empty) and discard_contested(task_evidence)
     if contested:
@@ -2692,7 +2801,7 @@ def fold_file_verdict(
         gates=dict(gates or {}),
         breath_pattern=dict(task_evidence.breath_reading),
         cough_pattern=dict(task_evidence.cough_reading),
-        background_speech=dict(task_evidence.background_speech),
+        quality_join=dict(task_evidence.quality),
         voice_phonation=dict(task_evidence.voice_reading),
     )
 
