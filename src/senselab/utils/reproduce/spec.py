@@ -19,7 +19,7 @@ from pathlib import Path, PurePosixPath
 from typing import Annotated, Any, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationInfo, field_validator, model_validator
 
 Commit = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{40}$")]
 Sha256 = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
@@ -172,14 +172,14 @@ class EnvSpec(_Model):
     r_snapshot: datetime.date | None = None
     r_lib: str | None = None
 
-    @field_validator("r_snapshot", mode="before")
+    @field_validator("exclude_newer", "r_snapshot", mode="before")
     @classmethod
-    def _iso_date(cls, value: object) -> object:
+    def _iso_date(cls, value: object, info: ValidationInfo) -> object:
         if value is None or type(value) is datetime.date:
             return value
         if isinstance(value, str) and _ISO_DATE.match(value):
             return datetime.date.fromisoformat(value)
-        raise ValueError("r_snapshot must be a YYYY-MM-DD date")
+        raise ValueError(f"{info.field_name} must be a YYYY-MM-DD date")
 
     @field_validator("r_lib")
     @classmethod

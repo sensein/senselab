@@ -359,6 +359,9 @@ ENV_COUNTER_EXAMPLES: dict[str, tuple[dict[str, Any], str]] = {
     "r-snapshot-int": ({"r_snapshot": 20260101}, "YYYY-MM-DD"),
     "r-snapshot-datetime": ({"r_snapshot": datetime.datetime(2026, 1, 1)}, "YYYY-MM-DD"),
     "r-snapshot-short": ({"r_snapshot": "2026-1-1"}, "YYYY-MM-DD"),
+    "exclude-newer-int": ({"exclude_newer": 20260101}, "exclude_newer must be a YYYY-MM-DD"),
+    "exclude-newer-datetime": ({"exclude_newer": datetime.datetime(2026, 1, 1)}, "exclude_newer must be a YYYY-MM-DD"),
+    "exclude-newer-short": ({"exclude_newer": "2026-1-1"}, "exclude_newer must be a YYYY-MM-DD"),
 }
 
 
@@ -376,6 +379,8 @@ def test_uv_export_body_without_torch_needs_no_first_resolve() -> None:
     assert EnvSpec.model_validate(uv).body.export_cmd == ["uv", "export", "--frozen"]
     assert EnvSpec.model_validate(_env_with(torch=None, first_resolve=None)).torch is None
     assert EnvSpec.model_validate(_env_with(r_snapshot="2026-01-01")).r_snapshot == datetime.date(2026, 1, 1)
+    assert EnvSpec.model_validate(_env()).exclude_newer == datetime.date(2026, 1, 1)
+    assert EnvSpec.model_validate(_env_with(exclude_newer=datetime.date(2026, 1, 1))).exclude_newer.day == 1
 
 
 STEP_COUNTER_EXAMPLES: dict[str, tuple[dict[str, Any], str]] = {
