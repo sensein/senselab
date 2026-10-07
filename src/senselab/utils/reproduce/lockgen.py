@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import datetime
 import hashlib
+import os
 import shlex
 import shutil
 import subprocess
@@ -37,15 +38,21 @@ UPLOAD_TIMELESS_PREFIX = "nvidia-"
 
 
 def find_uv() -> str:
-    """Return the ``uv`` executable on ``PATH``.
+    """Return the absolute path of the ``uv`` executable: ``REPRO_UV`` when set, else ``uv`` on ``PATH``.
 
     Raises:
-        ReproduceLockError: If there is none.
+        ReproduceLockError: If ``REPRO_UV`` is not an absolute path to an executable file, or it is unset
+            and ``PATH`` has no ``uv``.
     """
+    pinned = os.environ.get("REPRO_UV")
+    if pinned:
+        if not os.path.isabs(pinned) or not os.path.isfile(pinned) or not os.access(pinned, os.X_OK):
+            raise ReproduceLockError(f"REPRO_UV={pinned!r} is not an absolute path to an executable")
+        return pinned
     uv = shutil.which("uv")
     if uv is None:
         raise ReproduceLockError("uv not found on PATH; lock generation needs uv")
-    return uv
+    return os.path.abspath(uv)
 
 
 def exclude_newer_timestamp(date: datetime.date) -> str:

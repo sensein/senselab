@@ -51,7 +51,7 @@ def _env() -> dict[str, Any]:
                 "patches": [{"file": "envs/a/pkg.diff", "sha256": SHA}],
                 "build_env": {"lock": "envs/a/build.lock", "lock_sha256": SHA},
                 "build_env_vars": {"FORCE_CUDA": "1"},
-                "cuda_module": "cuda/12.9",
+                "build_modules": ["gcc/12.2.0", "cuda/12.9"],
                 "torch_cuda_arch_list": "8.0;9.0",
             }
         ],
@@ -283,6 +283,17 @@ def test_secret_like_build_env_var_is_rejected() -> None:
     """The secret-key rule also covers an sdist's build environment map."""
     manifest = _manifest()
     manifest["steps"][0]["env"]["sdist_allow"][0]["build_env_vars"]["API_KEY"] = "x"
+    with pytest.raises(ValidationError):
+        Manifest.model_validate(manifest)
+
+
+@pytest.mark.parametrize(
+    "modules", [["cuda/12.9; rm -rf x"], ["gcc/12.2.0 cuda/12.9"], ["cuda/12.9", "cuda/12.9"], [""]]
+)
+def test_bad_build_modules_are_rejected(modules: list[str]) -> None:
+    """``build_modules`` entries are single module names without shell syntax, and unique."""
+    manifest = _manifest()
+    manifest["steps"][0]["env"]["sdist_allow"][0]["build_modules"] = modules
     with pytest.raises(ValidationError):
         Manifest.model_validate(manifest)
 
