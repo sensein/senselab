@@ -211,6 +211,37 @@ The literal `sh` is `$0`; without it the first word of argv is dropped.
 
 stdout and stderr always go to files under the step's output dir, never to the caller's terminal.
 
+How `sandbox` reads those rules:
+
+- Paths are resolved (`realpath`) before the script is written, so the nesting checks see what
+  `mount` will see. Two layouts are refused instead of mounted:
+  - a read-only path under (or equal to) a writable dir, because the non-recursive rw bind would
+    hide the read-only mount beneath it;
+  - a writable dir under the checkout or venv, because their read-only bind comes last and would
+    hide it.
+- A writable dir is bound only when it lies under a data root. Elsewhere it is writable already.
+- The checkout and venv are bound after the roots are remounted. A checkout under a data root is
+  then read-only either way.
+- `PATH` is `{venv}/bin:/usr/bin:/bin` plus the profile's native dirs. `mount`, `sh` and `unshare`
+  resolve through it, and `ip` is called by its full path.
+- Keyed templates: `PYTHONPATH` (the step's entries), `R_LIBS_USER` (`r_lib`), `JUPYTER_PATH`
+  (`{venv}/share/jupyter`), `JUPYTER_DATA_DIR`/`JUPYTER_CONFIG_DIR`/`XDG_CACHE_HOME` (under
+  `{tmp}`), `HF_HOME`/`TORCH_HOME` (under `{cache}`), `CUDA_CACHE_PATH` (`{out}/cuda-cache`, as spec
+  §15.6 says), `REPRO_OUT`/`REPRO_TMP`.
+- Keyed constants: `LANG=C.UTF-8`, `TZ=UTC`, the three HF offline variables, every proxy variable
+  (both cases) set to `http://127.0.0.1:9`, and `no_proxy`/`NO_PROXY` set empty.
+- Recorded only: `TMPDIR`, `HOME`, `IPYTHONDIR`, `JUPYTER_RUNTIME_DIR` (all under `{tmp}`, expanded),
+  plus `SLURM_*` and `CUDA_VISIBLE_DEVICES`. These last two are the only names read from the
+  caller's environment.
+- The keyed sha covers the profile map, the constants and the templates. The recorded sha covers
+  the full expanded env.
+- A profile map entry that names any of these, or a `SLURM_`, `REPRO_` or `JUPYTER_` name, is
+  refused. The driver's values cannot be overridden.
+- Templates expand with `spec.render`, the same grammar `spec.placeholders` validates (`{{`/`}}`
+  escape a brace). Native dirs are escaped before they enter the `PATH` template.
+- The canary is a `python -c` snippet. It prints `{"canary_failed": true|false}` and always exits 0,
+  so the caller decides what a connect means.
+
 ## Checkouts and patches
 
 **Mirrors:** each repository and its submodules are mirrored bare into the cache.

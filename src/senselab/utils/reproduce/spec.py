@@ -14,7 +14,7 @@ import json
 import os
 import re
 from collections import Counter
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from pathlib import Path, PurePosixPath
 from typing import Annotated, Any, Literal
 
@@ -78,6 +78,31 @@ def placeholders(template: str) -> list[str]:
             raise ValueError(f"unknown placeholder {{{name}}} in {template!r}")
         found.append(name)
     return found
+
+
+def render(template: str, values: Mapping[str, str | os.PathLike[str]]) -> str:
+    """Expand a template with the grammar of `placeholders`; ``{{`` and ``}}`` become literal braces.
+
+    Args:
+        template: A templated string.
+        values: Placeholder text to value, e.g. ``{"out": "/r/x", "root:data": "/d"}``.
+
+    Returns:
+        The expanded string.
+
+    Raises:
+        ValueError: If the template is malformed or names an unknown placeholder.
+        KeyError: If a placeholder has no value.
+    """
+    placeholders(template)
+
+    def expand(match: re.Match[str]) -> str:
+        text, name = match.group(0), match.group(1)
+        if text in ("{{", "}}"):
+            return text[0]
+        return os.fspath(values[name])
+
+    return _TOKEN.sub(expand, template)
 
 
 def _upstream(template: str) -> list[str]:
