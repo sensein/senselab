@@ -3,8 +3,10 @@
     uv run python scripts/triage_recording_vectors.py RUN_ROOT --out DIR [--slice N --slices M]
     uv run python scripts/triage_recording_vectors.py --merge DIR --out DIR
 
-The first form writes one shard, ``recording_vectors.NNN.parquet``, plus its scan report. The
-second concatenates every shard in a directory into ``recording_vectors.parquet``.
+The first form writes one shard, ``recording_vectors.NNN.parquet``, plus its scan report, and the
+same recordings' decision tables, ``triage_decisions.NNN.parquet`` and ``triage_evidence.NNN.parquet``.
+The second concatenates every shard in a directory into ``recording_vectors.parquet``,
+``triage_decisions.parquet`` (with ``triage_decisions.tsv``) and ``triage_evidence.parquet``.
 
 The output carries transcript text and marked PII extents. It is written mode 600 and must not be
 committed, published or copied to a shared location.
@@ -22,7 +24,16 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from senselab.audio.workflows.triage.recording_vectors import DICTIONARY_KEY, SCHEMA_VERSION, scan, schema, to_table
+from senselab.audio.workflows.triage import decision_tables
+from senselab.audio.workflows.triage.recording_vectors import (
+    DICTIONARY_KEY,
+    SCHEMA_VERSION,
+    ScanReport,
+    latest_recordings,
+    scan,
+    schema,
+    to_table,
+)
 from senselab.utils import fastio
 
 SHARD_GLOB = "recording_vectors.*.parquet"
@@ -90,7 +101,32 @@ def merge(shard_dir: Path, out: Path) -> int:
     }
     (out.parent / "recording_vectors.summary.json").write_text(json.dumps(summary, indent=1, sort_keys=True) + "\n")
     print(f"{table.num_rows} rows -> {out} ({size / 1e6:.1f} MB, {summary['bytes_per_row']} B/row)")
+    merge_decision_tables(shard_dir, out.parent)
     return table.num_rows
+
+
+def merge_decision_tables(shard_dir: Path, out_dir: Path) -> None:
+    """Concatenate the decision-table shards and write the merged tables, private.
+
+    Args:
+        shard_dir: Where the shards are.
+        out_dir: Where the merged tables go.
+    """
+    merged = {}
+    for name, empty in (
+        (decision_tables.DECISIONS_NAME, decision_tables.decisions_schema()),
+        (decision_tables.EVIDENCE_NAME, decision_tables.evidence_schema()),
+    ):
+        shards = sorted(shard_dir.glob(f"{name}.*.parquet"))
+        tables = [pq.read_table(shard) for shard in shards]
+        merged[name] = pa.concat_tables(tables).combine_chunks() if tables else empty.empty_table()
+    paths = decision_tables.write_tables(
+        merged[decision_tables.DECISIONS_NAME], merged[decision_tables.EVIDENCE_NAME], out_dir
+    )
+    for path in paths.values():
+        os.chmod(path, PRIVATE_FILE_MODE)
+    decided, items = merged[decision_tables.DECISIONS_NAME].num_rows, merged[decision_tables.EVIDENCE_NAME].num_rows
+    print(f"{decided} decisions, {items} evidence items -> {out_dir}")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -118,7 +154,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.run_root is None:
         parser.error("run_root is required unless --merge is given")
 
-    rows, report = scan(args.run_root, args.slice, args.slices, walk_threads=args.walk_threads)
+    report = ScanReport()
+    recordings = latest_recordings(args.run_root, args.slice, args.slices, report, walk_threads=args.walk_threads)
+    rows, report = scan(args.run_root, recordings=recordings, report=report)
     args.out.mkdir(parents=True, exist_ok=True)
     suffix = f".{args.slice:03d}"
     table = to_table(rows) if rows else schema().empty_table()
@@ -126,6 +164,9 @@ def main(argv: list[str] | None = None) -> int:
     (args.out / f"recording_vectors{suffix}.report.json").write_text(
         json.dumps(asdict(report), indent=1, sort_keys=True) + "\n"
     )
+    decisions, evidence = decision_tables.tables(recordings, args.run_root)
+    write_private(decisions, args.out / f"{decision_tables.DECISIONS_NAME}{suffix}.parquet")
+    write_private(evidence, args.out / f"{decision_tables.EVIDENCE_NAME}{suffix}.parquet")
     per_row = round(size / table.num_rows, 1) if table.num_rows else None
     print(f"shard {args.slice}/{args.slices}: {report.written} rows, {size} bytes, {per_row} B/row")
     return 0 if report.written else 1
