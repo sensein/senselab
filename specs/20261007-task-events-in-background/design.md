@@ -406,14 +406,36 @@ There is no review-rate target; parameters are never tuned to move the review ra
    - `triage_evidence`: a long table of every item read, with a `decisive` flag. Item names are
      defined per family in `data/`.
    - Items are emitted from VERDICT's decision path, never reconstructed afterwards.
-5. **Review page.** Only a subset is ever reviewed (chosen by reason, or sampled), never the full set.
-   - It is a static HTML page built for the chosen subset.
-   - Reviewer decisions (pass/review/discard plus a note) are kept in the browser and exported as a
-     local JSON file. There is no hosted state. The JSON keys match the owner label CSV's columns, so
-     reviews feed the evaluation harness.
-   - Display modes:
-     - (a) served from ORCD over an ssh tunnel (an http server on the cluster plus `ssh -L`): the
-       raw and enhanced audio play;
-     - (b) opened standalone without audio access: only a highly quantised spectrogram (coarse time
-       and frequency bins, a few levels) with events, extent and issues marked. No audio is embedded.
-   - Each entry shows the decision, the reason and the evidence items.
+5. **Review page.** A static HTML page over the **full set** (all 62,550 recordings). Only some
+   recordings are ever reviewed; the page is how the reviewer narrows to them.
+   - **Tabs over the same loaded data, with one shared selection and one shared set of decisions:**
+     - **Explore:** a parallel-coordinate plot over the decision table's columns plus the evidence
+       items. Evidence differs by family, so the axes are chosen per family or facet from the
+       evidence names defined in `data/`. Brushing the axes narrows the selection. Reuses the
+       recording-vectors viewer (`src/senselab/audio/workflows/triage/viewer/`:
+       `recording_vectors_viewer.html`, `axes.js`), which already draws parallel coordinates; there
+       is no second implementation.
+     - **Review:** faceted filters in the pattern of the free-speech page
+       (`scripts/free_speech_review_page.py`): verdict, release, reason, family/branch,
+       `run_status`, annotations, presence of each evidence item, session/participant, plus text
+       search over stem and transcript. The list shows whatever the brush and the facets select.
+       Each recording shows its decision, reason and evidence items, and the spectrogram (or audio,
+       below). **Speech tasks also show the ASR transcript, PII detections and redactions**
+       (masked tokens, release form, reviewer and LLM proposals where present), as the free-speech
+       page does, so the release decision is reviewable as well as the task verdict.
+     - **Decisions:** the reviewer's entries so far (verdict pass/review/discard plus a note), with
+       JSON export and import so a reviewing session can resume. Kept in the browser; no hosted
+       state. The JSON keys match the owner label CSV's columns, so reviews feed the evaluation
+       harness.
+   - **Display modes:**
+     - (a) **standalone:** each recording carries a compact quantised spectrogram, a coarse
+       time × frequency grid with a few levels stored as a small integer array and drawn on canvas
+       (not an image), with events, extent and issues drawn over it. Size estimate: 16 frequency
+       bins × 64 time bins × 2 bits is 256 B per recording, about 342 B base64, so about 21 MB for
+       62,550 recordings before the table and transcripts.
+     - (b) **served from ORCD over an ssh tunnel** (an http server on the cluster plus `ssh -L`):
+       additionally fetches, on demand, the raw, enhanced and (where it exists) released audio and
+       the full per-recording figure.
+   - No audio is ever embedded. If the single file would be too large, the per-recording data
+     (spectrogram grids, transcripts, evidence) is sharded into side files (for example per family
+     or session) loaded on demand.
