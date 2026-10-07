@@ -576,3 +576,6 @@ def test_submodule_notebook_outputs_fail_closed(
     assert not (cache / "wt" / f"outer-{commit[:8]}-{source.EMPTY_PATCH_SET_SHA256[:8]}").exists()
     co = source.checkout(url, commit, [], cache=cache, allow_submodule_notebook_outputs=True)
     assert co.submodule_notebooks_with_outputs == ["ext/nblib/inner/sub.ipynb"]
+    with pytest.raises(ReproduceSourceError) as reused:
+        source.checkout(url, commit, [], cache=cache)
+    assert reused.value.code == source.SUBMODULE_NOTEBOOK_OUTPUTS
