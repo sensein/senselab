@@ -30,9 +30,21 @@ from pydantic import (
     model_validator,
 )
 
+from senselab.utils.reproduce.metrics import (
+    CHANCE_HEADLINES,
+    CLASSIFICATION_KINDS,
+    KIND_HEADLINES,
+    HeadlineName,
+    MetricsKind,
+    SplitOptOutReason,
+    metric_address_error,
+)
+
 Commit = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{40}$")]
 Sha256 = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
 Name = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9_.-]+$")]
+Label = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9][A-Za-z0-9_+-]{0,63}$")]
+CountName = Annotated[str, StringConstraints(pattern=r"^[a-z][a-z0-9_]{0,63}$")]
 SourceRoot = Annotated[str, StringConstraints(pattern=r"^(up:)?[A-Za-z0-9_.-]+$")]
 
 
@@ -320,7 +332,7 @@ class Expect(_Model):
     from_step: FromStep | None = None
     tolerance: Annotated[float, Field(ge=0)] | None = None
     tolerance_from: ToleranceFrom | None = None
-    unit: str | None = None
+    unit: Literal["fraction", "pp"] | None = None
     kind: Literal["abs", "exact", "none"]
 
     @model_validator(mode="after")
@@ -335,6 +347,64 @@ class Expect(_Model):
             raise ValueError("kind exact needs a target and no tolerance")
         if self.kind == "none" and tolerances:
             raise ValueError("kind none takes no tolerance")
+        return self
+
+
+def _no_duplicates(value: list[str], info: ValidationInfo) -> list[str]:
+    if len(set(value)) != len(value):
+        raise ValueError(f"{info.field_name} has duplicates")
+    return value
+
+
+class SplitOptOut(_Model):
+    """A declared reason a classification or detection step has no split report."""
+
+    none: SplitOptOutReason
+
+
+class MetricsSchema(_Model):
+    """What a step's ``metrics.json`` may hold, within the fixed vocabulary of `metrics`.
+
+    ``headline`` names the headline metrics the adapter emits (each must appear, and each must belong
+    to ``kind``); ``headline_labels`` the labels that tell apart several entries of one name (e.g.
+    systems); ``counts`` the named counts (each must appear); ``per_class`` the class labels.
+    ``positive`` names the positive class of a binary classification step, which fixes the PR-AUC and
+    F1 floors. ``split`` opts a classification or detection step out of the split report. Only
+    classification and detection steps take ``per_class`` and ``positive``.
+
+    A classification step declares at least two classes and a balanced-accuracy or macro-recall
+    headline; a detection step declares at least one class.
+    """
+
+    kind: MetricsKind
+    headline: list[HeadlineName] = Field(min_length=1)
+    headline_labels: list[Label] = []
+    counts: list[CountName] = []
+    per_class: list[Label] = []
+    positive: Label | None = None
+    split: SplitOptOut | None = None
+
+    _unique = field_validator("headline", "headline_labels", "counts", "per_class")(_no_duplicates)
+
+    @model_validator(mode="after")
+    def _kind(self) -> "MetricsSchema":
+        names: set[str] = set(self.headline)
+        foreign = sorted(names - KIND_HEADLINES[self.kind])
+        if foreign:
+            raise ValueError(f"headline names {foreign} do not belong to kind {self.kind}")
+        if self.kind in CLASSIFICATION_KINDS and not self.per_class:
+            raise ValueError(f"kind {self.kind} needs per_class labels")
+        if self.kind == "classification":
+            if len(self.per_class) < 2:
+                raise ValueError("kind classification needs at least two per_class labels")
+            if not CHANCE_HEADLINES & names:
+                raise ValueError("kind classification needs a balanced_accuracy or macro_recall headline")
+        if self.kind not in CLASSIFICATION_KINDS and (self.per_class or self.positive is not None):
+            raise ValueError(f"kind {self.kind} takes no per_class labels or positive class")
+        if self.positive is not None and (
+            self.kind != "classification" or len(self.per_class) != 2 or self.positive not in self.per_class
+        ):
+            raise ValueError("positive must be one of exactly two per_class labels of a classification step")
         return self
 
 
@@ -358,6 +428,7 @@ class StepSpec(_Model):
     resources: Resources
     patches: list[FileRef] = []
     adapter: str
+    metrics_schema: MetricsSchema
     expect: list[Expect] = []
 
     @model_validator(mode="after")
@@ -378,6 +449,10 @@ class StepSpec(_Model):
         missing = sorted(set(referenced) - needs)
         if missing:
             raise ValueError(f"step {self.name!r} refers to steps outside its needs: {missing}")
+        for expect in self.expect:
+            code = metric_address_error(expect.metric, self.metrics_schema)
+            if code is not None:
+                raise ValueError(f"step {self.name!r} expect metric {expect.metric!r} is not in metrics_schema: {code}")
         if self.kind in ("notebook", "ir_notebook") and self.env.notebook_tools is None:
             raise ValueError(f"kind {self.kind} needs env.notebook_tools")
         if self.kind in ("r", "ir_notebook") and (
