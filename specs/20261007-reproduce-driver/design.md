@@ -80,7 +80,7 @@ There are up to four locks:
    into a separate *derived* venv. The base venv stays exactly its locks, and `uv pip check` sees
    the whole derived venv. It cannot see `--target` directories.
 
-The install runs four stages, each `--no-deps --require-hashes`:
+The install runs four stages, each `--no-deps`. Stages 1, 2 and 4 also use `--require-hashes`; stage 3 installs a wheel only after the driver has checked its sha256 against `wheels.lock`:
 
 1. torch
 2. body (`--only-binary :all:`)
@@ -95,11 +95,11 @@ The install runs four stages, each `--no-deps --require-hashes`:
 - Overlay pins must agree with the base pins.
 - The torch pins must agree with the resolve the body came from.
 
-**The venv name** is derived from inputs only:
+**The venv name** is `repro-<analysis>-<env_key8>`. `env_key` is derived from inputs only:
 
 - the lock sha256s
-- the torch index URL
 - the exact interpreter version
+- the declared maximum CUDA version
 - the sdist build inputs
 
 Wheel sha256s are outputs, so a rebuild never renames a venv.
@@ -109,12 +109,15 @@ Wheel sha256s are outputs, so a rebuild never renames a venv.
 - Packages are installed by `prefetch` from a dated CRAN snapshot into a step-private library,
   under a named module.
 - `sessionInfo()` is recorded, and its digest is part of the step key.
-- A run fails if the installed versions differ from the declared ones.
+- `prefetch` fails if the installed versions differ from the declared ones.
+- A run fails if its `sessionInfo()` differs from the one captured at prefetch.
+- The module's `PATH` and `LD_LIBRARY_PATH` are captured at prefetch and keyed.
 
 ## Sandbox
 
 Every step runs as
-`unshare -rnm --propagation private sh -c '<mounts>; /usr/sbin/ip link set lo up && exec "$@"' sh <argv>`.
+`unshare -rnm --propagation private sh -c 'set -e; <mounts>; /usr/sbin/ip link set lo up; exec "$@"' sh <argv>`.
+With `set -e`, any failed mount aborts the step before it runs, so read-only data cannot fail open.
 The literal `sh` is `$0`; without it the first word of argv is dropped.
 
 **Mounts:**
@@ -163,7 +166,7 @@ stdout and stderr always go to files under the step's output dir, never to the c
 **Step key:** sha256 over these fields, and nothing volatile:
 
 - code commit and submodule SHAs
-- venv name
+- `env_key`
 - `wheels.lock` and overlay sha256s
 - keyed env digest
 - argv template, cwd
@@ -173,7 +176,7 @@ stdout and stderr always go to files under the step's output dir, never to the c
 - upstream keys
 
 **Result dir:** each step writes to `<results_root>/<step_key>/`. A step whose result dir holds a
-completed summary is skipped, and its result dir is linked into the dated run. Downstream steps
+completed summary with exit 0 is skipped, and its result dir is linked into the dated run. Downstream steps
 therefore read the same files on any day.
 
 **Input-set digest:** sha256 over the sorted (sha256(relative path), sha256(content), size)
@@ -194,7 +197,8 @@ Unknown keys and non-numeric values are rejected. Count fields below a minimum c
 suppressed.
 
 **Expectations.** Only the driver writes `target`, `tolerance`, `delta` and `pass`, by evaluating the
-step's expectations against upstream steps. A failed expectation is a non-zero exit, so a
+step's expectations: a literal value, an upstream step's metric, or a number read from a
+file under a data root. A failed expectation is a non-zero exit, so a
 dependent job never starts.
 
 **`summary.json`** holds:
@@ -206,7 +210,7 @@ dependent job never starts.
 - the torch version
 - the canary result
 
-It never holds messages or paths.
+It holds no messages, and no paths other than checkout-relative code frames.
 
 **Provenance** is recorded with `prov_store` and exported as BIDS BEP028:
 
