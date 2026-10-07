@@ -2,9 +2,10 @@
 
 `sandbox_argv` wraps a step's argv so that it runs inside ``unshare -rnm --propagation private`` with
 the data roots, the checkout and the venv mounted read-only, the writable directories bound read-write
-and loopback raised. `build_env` builds the step's whole environment from the profile and the step;
-nothing is inherited from the caller except ``SLURM_*`` and ``CUDA_VISIBLE_DEVICES``, which are
-recorded but not keyed. `canary` is a Python snippet whose TCP connect must fail inside the sandbox.
+and loopback raised; the step itself runs with every capability dropped, so it cannot undo the mounts.
+`build_env` builds the step's whole environment from the profile and the step; nothing is inherited
+from the caller except a few ``SLURM_*`` job ids and ``CUDA_VISIBLE_DEVICES``, which are recorded but
+not keyed. `canary` is a Python snippet whose TCP connect must fail inside the sandbox.
 """
 
 from __future__ import annotations
@@ -20,22 +21,45 @@ from pathlib import Path
 from senselab.utils.reproduce.spec import Profile, StepSpec, render
 
 IP = "/usr/sbin/ip"
-UNSHARE = ["unshare", "-rnm", "--propagation", "private"]
+SH = "/bin/sh"
+MOUNT = "/usr/bin/mount"
+SETPRIV = "/usr/bin/setpriv"
+UNSHARE = ["/usr/bin/unshare", "-rnm", "--propagation", "private"]
+DROP = [SETPRIV, "--bounding-set=-all", "--inh-caps=-all", "--ambient-caps=-all", "--no-new-privs"]
 PROXY = "http://127.0.0.1:9"
 PROXY_VARS = ("http_proxy", "https_proxy", "ftp_proxy", "all_proxy")
 NO_PROXY_VARS = ("no_proxy", "NO_PROXY")
 OFFLINE = {"HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1", "HF_DATASETS_OFFLINE": "1"}
 FIXED_KEYED = {"LANG": "C.UTF-8", "TZ": "UTC"}
 SYSTEM_PATH = ("/usr/bin", "/bin")
-INHERITED = ("CUDA_VISIBLE_DEVICES",)
-INHERITED_PREFIXES = ("SLURM_",)
+INHERITED = ("CUDA_VISIBLE_DEVICES", "SLURM_JOB_ID", "SLURM_ARRAY_JOB_ID", "SLURM_ARRAY_TASK_ID", "SLURM_CPUS_PER_TASK")
 VOLATILE_TEMPLATES = {
     "TMPDIR": "{tmp}",
     "HOME": "{tmp}/home",
     "IPYTHONDIR": "{tmp}/ipython",
     "JUPYTER_RUNTIME_DIR": "{tmp}/jupyter/runtime",
 }
-RESERVED_PREFIXES = ("SLURM_", "REPRO_", "JUPYTER_")
+RESERVED_PREFIXES = ("SLURM_", "REPRO_", "JUPYTER_", "HF_", "XDG_", "R_LIBS")
+RESERVED = frozenset(
+    {
+        "PATH",
+        "PYTHONPATH",
+        "TORCH_HOME",
+        "CUDA_CACHE_PATH",
+        "TMPDIR",
+        "HOME",
+        "IPYTHONDIR",
+        "LD_LIBRARY_PATH",
+        "LD_PRELOAD",
+        "PYTHONHOME",
+        "PYTHONSTARTUP",
+        "PYTHONNOUSERSITE",
+        *FIXED_KEYED,
+        *OFFLINE,
+        *INHERITED,
+        *NO_PROXY_VARS,
+    }
+)
 FIXED_PATHS = ("out", "tmp", "checkout", "venv", "cache")
 
 
@@ -49,12 +73,16 @@ def _under(path: str, parent: str) -> bool:
     return path == parent or path.startswith(parent.rstrip("/") + "/")
 
 
+def _shallow_first(paths: Iterable[str | os.PathLike[str]]) -> list[str]:
+    return sorted({_abs(p) for p in paths}, key=lambda p: (p.rstrip("/").count("/"), p))
+
+
 def sandbox_script(
     ro_roots: Iterable[str | os.PathLike[str]],
     rw_dirs: Iterable[str | os.PathLike[str]],
     ro_extra: Iterable[str | os.PathLike[str]] = (),
 ) -> str:
-    """Return the ``sh`` script `sandbox_argv` runs inside the namespace before ``exec "$@"``.
+    """Return the ``sh`` script `sandbox_argv` runs inside the namespace; it ends by exec'ing the step.
 
     Args:
         ro_roots: Data roots, bound to themselves and remounted read-only.
@@ -63,13 +91,15 @@ def sandbox_script(
         ro_extra: Further directories (the checkout, the venv) bound and remounted read-only last.
 
     Returns:
-        The script. It starts with ``set -e``, so a failed mount ends it before the step runs.
+        The script. It starts with ``set -e``, so a failed mount ends it before the step runs, and it
+        execs the step through ``setpriv`` with every capability dropped. Each list of mounts is
+        written shallow-first, so a nested path is bound after its parent.
 
     Raises:
         ValueError: If a path is relative, a read-only path lies under (or is) a writable directory, or a
             writable directory lies under a ``ro_extra`` directory.
     """
-    roots, rw, extra = [_abs(p) for p in ro_roots], [_abs(p) for p in rw_dirs], [_abs(p) for p in ro_extra]
+    roots, rw, extra = _shallow_first(ro_roots), _shallow_first(rw_dirs), _shallow_first(ro_extra)
     for d in rw:
         hidden = [p for p in (*roots, *extra) if _under(p, d)]
         if hidden:
@@ -78,12 +108,12 @@ def sandbox_script(
             raise ValueError(f"writable directory under a read-only checkout or venv: {d}")
     q = shlex.quote
     lines = ["set -e"]
-    lines += [f"mount --bind {q(r)} {q(r)}" for r in roots]
-    lines += [f"mount --bind {q(d)} {q(d)}" for d in rw if any(_under(d, r) for r in roots)]
-    lines += [f"mount -o remount,bind,ro {q(r)}" for r in roots]
+    lines += [f"{MOUNT} --bind {q(r)} {q(r)}" for r in roots]
+    lines += [f"{MOUNT} --bind {q(d)} {q(d)}" for d in rw if any(_under(d, r) for r in roots)]
+    lines += [f"{MOUNT} -o remount,bind,ro {q(r)}" for r in roots]
     for e in extra:
-        lines += [f"mount --bind {q(e)} {q(e)}", f"mount -o remount,bind,ro {q(e)}"]
-    lines += [f"{IP} link set lo up", 'exec "$@"']
+        lines += [f"{MOUNT} --bind {q(e)} {q(e)}", f"{MOUNT} -o remount,bind,ro {q(e)}"]
+    lines += [f"{IP} link set lo up", f'exec {" ".join(DROP)} "$@"']
     return "\n".join(lines) + "\n"
 
 
@@ -102,21 +132,21 @@ def sandbox_argv(
         ro_extra: The checkout and the venv, mounted read-only.
 
     Returns:
-        ``["unshare", "-rnm", "--propagation", "private", "sh", "-c", SCRIPT, "sh", *argv]``.
+        ``["/usr/bin/unshare", "-rnm", "--propagation", "private", "/bin/sh", "-c", SCRIPT, "sh", *argv]``.
 
     Raises:
         ValueError: If argv is empty, or as `sandbox_script`.
     """
     if not argv:
         raise ValueError("empty argv")
-    return [*UNSHARE, "sh", "-c", sandbox_script(ro_roots, rw_dirs, ro_extra), "sh", *argv]
+    return [*UNSHARE, SH, "-c", sandbox_script(ro_roots, rw_dirs, ro_extra), "sh", *argv]
 
 
 def userns_available() -> bool:
     """Return whether an unprivileged namespace with loopback can be created here.
 
     Returns:
-        True if ``unshare -rnm`` plus raising loopback succeeds.
+        True if ``unshare -rnm``, raising loopback and the capability drop succeed.
     """
     try:
         done = subprocess.run(
@@ -134,14 +164,14 @@ def _escape(text: str) -> str:
     return text.replace("{", "{{").replace("}", "}}")
 
 
-def _reserved(key: str, driver: Iterable[str]) -> bool:
+def _reserved(key: str) -> bool:
     return (
-        key in driver
-        or key in INHERITED
-        or key.startswith(RESERVED_PREFIXES)
-        or key.lower() in PROXY_VARS
-        or key in NO_PROXY_VARS
+        key in RESERVED or key in VOLATILE_TEMPLATES or key.startswith(RESERVED_PREFIXES) or key.lower() in PROXY_VARS
     )
+
+
+def _native_lib_dirs(profile: Profile) -> list[str]:
+    return [_escape(os.fspath(Path(d).parent / "lib")) for d in profile.native_dirs if Path(d).name == "bin"]
 
 
 def _sha(env: Mapping[str, str]) -> str:
@@ -149,6 +179,12 @@ def _sha(env: Mapping[str, str]) -> str:
 
 
 def _keyed(step: StepSpec, profile: Profile) -> tuple[dict[str, str], dict[str, str]]:
+    bad = sorted(k for k in profile.env if _reserved(k))
+    if bad:
+        raise ValueError(f"profile env may not set driver-owned variables: {bad}")
+    colon = [p for p in step.pythonpath if ":" in p]
+    if colon:
+        raise ValueError(f"pythonpath entries may not contain ':': {colon}")
     templated = {
         "PATH": ":".join(["{venv}/bin", *SYSTEM_PATH, *(_escape(os.fspath(d)) for d in profile.native_dirs)]),
         "JUPYTER_PATH": "{venv}/share/jupyter",
@@ -163,14 +199,13 @@ def _keyed(step: StepSpec, profile: Profile) -> tuple[dict[str, str], dict[str, 
     }
     if step.pythonpath:
         templated["PYTHONPATH"] = ":".join(step.pythonpath)
-    if step.env.r_lib is not None:
-        templated["R_LIBS_USER"] = step.env.r_lib
+    if _native_lib_dirs(profile):
+        templated["LD_LIBRARY_PATH"] = ":".join(_native_lib_dirs(profile))
     literal = {**FIXED_KEYED, **OFFLINE}
     literal |= {v: PROXY for v in PROXY_VARS} | {v.upper(): PROXY for v in PROXY_VARS} | {v: "" for v in NO_PROXY_VARS}
-    driver = {*templated, *literal, *VOLATILE_TEMPLATES}
-    bad = sorted(k for k in profile.env if _reserved(k, driver))
-    if bad:
-        raise ValueError(f"profile env may not set driver-set, inherited or proxy variables: {bad}")
+    if step.env.r_lib is not None:
+        templated["R_LIBS"] = step.env.r_lib
+        literal["R_LIBS_SITE"] = ""
     return {**profile.env, **literal}, templated
 
 
@@ -185,7 +220,8 @@ def keyed_templates(step: StepSpec, profile: Profile) -> dict[str, str]:
         Name to value or template, e.g. ``{"PATH": "{venv}/bin:/usr/bin:/bin", "TZ": "UTC", ...}``.
 
     Raises:
-        ValueError: If the profile env map names a driver-set, inherited or proxy variable.
+        ValueError: If the profile env map names a driver-owned variable, or a ``pythonpath`` entry
+            contains ``:``.
     """
     literal, templated = _keyed(step, profile)
     return literal | templated
@@ -203,8 +239,9 @@ def build_env(
         step: The step.
         profile: The caller's profile; its ``roots`` fill the ``{root:<name>}`` placeholders.
         paths: Values for ``out``, ``tmp``, ``checkout``, ``venv`` and ``cache``, plus any ``up:<step>``.
-        parent: Where ``SLURM_*`` and ``CUDA_VISIBLE_DEVICES`` are read from; defaults to ``os.environ``.
-            Nothing else is read from it.
+        parent: Where the recorded-only job variables (``SLURM_JOB_ID``, ``SLURM_ARRAY_JOB_ID``,
+            ``SLURM_ARRAY_TASK_ID``, ``SLURM_CPUS_PER_TASK``, ``CUDA_VISIBLE_DEVICES``) are read from;
+            defaults to ``os.environ``. Nothing else is read from it.
 
     Returns:
         ``(env, keyed_sha, recorded_sha)``: the expanded env to run with; the sha256 of the keyed
@@ -223,7 +260,7 @@ def build_env(
     env = literal | {k: render(v, values) for k, v in templated.items()}
     env |= {k: render(v, values) for k, v in VOLATILE_TEMPLATES.items()}
     source = os.environ if parent is None else parent
-    env |= {k: v for k, v in source.items() if k in INHERITED or k.startswith(INHERITED_PREFIXES)}
+    env |= {k: v for k, v in source.items() if k in INHERITED}
     return env, _sha(literal | templated), _sha(env)
 
 

@@ -180,9 +180,18 @@ Wheel sha256s are outputs, so a rebuild never renames a venv.
 ## Sandbox
 
 Every step runs as
-`unshare -rnm --propagation private sh -c 'set -e; <mounts>; /usr/sbin/ip link set lo up; exec "$@"' sh <argv>`.
+`/usr/bin/unshare -rnm --propagation private /bin/sh -c 'set -e; <mounts>; /usr/sbin/ip link set lo up; exec /usr/bin/setpriv --bounding-set=-all --inh-caps=-all --ambient-caps=-all --no-new-privs "$@"' sh <argv>`.
 With `set -e`, any failed mount aborts the step before it runs, so read-only data cannot fail open.
 The literal `sh` is `$0`; without it the first word of argv is dropped.
+
+The step runs with every capability dropped. `unshare -r` makes the script root in its namespace,
+with full capabilities there, and a step that kept them could
+`mount -o remount,bind,rw` a data root, or `umount` the read-only binds, and then write to the
+data. The B5 review did exactly this on scratch NFS. `setpriv` clears the bounding, inheritable
+and ambient sets and sets `no_new_privs` before it execs the step, so remount and umount fail with
+"permission denied". The step is still uid 0 in the namespace (the caller's uid outside), so
+ordinary writes to `{out}` keep working. A missing `setpriv` fails the exec, and the step never
+runs.
 
 **Mounts:**
 
@@ -222,21 +231,40 @@ How `sandbox` reads those rules:
 - A writable dir is bound only when it lies under a data root. Elsewhere it is writable already.
 - The checkout and venv are bound after the roots are remounted. A checkout under a data root is
   then read-only either way.
-- `PATH` is `{venv}/bin:/usr/bin:/bin` plus the profile's native dirs. `mount`, `sh` and `unshare`
-  resolve through it, and `ip` is called by its full path.
-- Keyed templates: `PYTHONPATH` (the step's entries), `R_LIBS_USER` (`r_lib`), `JUPYTER_PATH`
+- Every tool the sandbox itself runs is called by absolute path: `/usr/bin/unshare`, `/bin/sh`,
+  `/usr/bin/mount`, `/usr/sbin/ip` and `/usr/bin/setpriv`. None is looked up through the step's
+  `PATH`, so a step's venv or native dirs cannot shadow them.
+- Mount lists (roots, writable dirs, checkout/venv) are written shallow-first. A nested root given
+  before its parent would otherwise be hidden by the parent's later bind, and its remount would fail
+  (exit 32).
+- `PATH` is `{venv}/bin:/usr/bin:/bin` plus the profile's native dirs.
+- `LD_LIBRARY_PATH` is never taken from the profile map. When a native dir is named `bin`, its
+  sibling `lib` goes into a keyed `LD_LIBRARY_PATH` template, e.g. a native FFmpeg prefix's
+  `.../bin` gives `.../lib`. The rule is purely by name, with no filesystem check, so the key does
+  not depend on the host. Without such dirs the variable is unset.
+- Keyed templates: `PYTHONPATH` (the step's entries; an entry containing `:` is refused, since it would split), `R_LIBS`
+  (`r_lib`, as the plan's B7 says, with `R_LIBS_SITE` keyed as an empty constant so no site library
+  is seen), `JUPYTER_PATH`
   (`{venv}/share/jupyter`), `JUPYTER_DATA_DIR`/`JUPYTER_CONFIG_DIR`/`XDG_CACHE_HOME` (under
   `{tmp}`), `HF_HOME`/`TORCH_HOME` (under `{cache}`), `CUDA_CACHE_PATH` (`{out}/cuda-cache`, as spec
   §15.6 says), `REPRO_OUT`/`REPRO_TMP`.
 - Keyed constants: `LANG=C.UTF-8`, `TZ=UTC`, the three HF offline variables, every proxy variable
   (both cases) set to `http://127.0.0.1:9`, and `no_proxy`/`NO_PROXY` set empty.
 - Recorded only: `TMPDIR`, `HOME`, `IPYTHONDIR`, `JUPYTER_RUNTIME_DIR` (all under `{tmp}`, expanded),
-  plus `SLURM_*` and `CUDA_VISIBLE_DEVICES`. These last two are the only names read from the
-  caller's environment.
+  plus `SLURM_JOB_ID`, `SLURM_ARRAY_JOB_ID`, `SLURM_ARRAY_TASK_ID`, `SLURM_CPUS_PER_TASK` and
+  `CUDA_VISIBLE_DEVICES`. These are the only names read from the caller's environment. The Slurm set
+  is narrow on purpose. Variables such as `SLURM_NTASKS` and `SLURM_PROCID` make launchers (Lightning,
+  mmcv/mmengine) assume a Slurm-managed distributed job and try to set it up, and inside the
+  namespace a step cannot call Slurm.
 - The keyed sha covers the profile map, the constants and the templates. The recorded sha covers
   the full expanded env.
-- A profile map entry that names any of these, or a `SLURM_`, `REPRO_` or `JUPYTER_` name, is
-  refused. The driver's values cannot be overridden.
+- The profile map may not name any driver-owned variable, whatever the step uses:
+  - the names above;
+  - anything starting with `SLURM_`, `REPRO_`, `JUPYTER_`, `HF_`, `XDG_` or `R_LIBS`;
+  - any proxy name, in either case;
+  - `LD_PRELOAD`, `LD_LIBRARY_PATH`, `PYTHONHOME`, `PYTHONSTARTUP` and `PYTHONNOUSERSITE`.
+
+  The driver's values cannot be overridden, and the refusal does not depend on the step.
 - Templates expand with `spec.render`, the same grammar `spec.placeholders` validates (`{{`/`}}`
   escape a brace). Native dirs are escaped before they enter the `PATH` template.
 - The canary is a `python -c` snippet. It prints `{"canary_failed": true|false}` and always exits 0,
