@@ -1,0 +1,2851 @@
+"""FIGURE — PREPROCESS's and TAXONOMY's own output, drawn from the store.
+
+Reads the two nodes' elements and their sidecars and writes one image per fixed-width page. It runs
+no model, reads no hint, decides nothing, and writes nothing back to the store, so it can be
+re-invoked over a completed run directory exactly as ``report()`` can.
+
+Every pipeline value comes from the packaged :class:`TriageConfig` and is only read; every value
+that governs the drawing itself lives in :class:`FigureStyle`.
+
+See ``specs/20260904-preprocess-taxonomy-figure/design.md`` for the per-page panels and
+``specs/20260817-triage-workflow-dag/branch-figure.md`` and ``summary-is-the-figure.md`` for the
+branch lanes and the span axis.
+"""
+
+from __future__ import annotations
+
+import json
+import textwrap
+from dataclasses import dataclass, field, replace
+from math import ceil
+from pathlib import Path
+from typing import Any, Iterator, Mapping, Sequence
+
+import numpy as np
+from matplotlib.axes import Axes
+from matplotlib.backend_bases import RendererBase
+from matplotlib.backends.backend_pdf import PdfPages
+from matplotlib.colors import Colormap
+from matplotlib.figure import Figure
+from matplotlib.layout_engine import ConstrainedLayoutEngine
+from matplotlib.text import Text
+
+from senselab.audio.workflows.triage.config import TriageConfig
+from senselab.audio.workflows.triage.nodes.branches import BRANCH_FAMILY
+from senselab.audio.workflows.triage.nodes.common import (
+    BRANCH_MEASURES,
+    consensus_words,
+    find_measurement,
+    find_measurements,
+    initial_span_label,
+    live_entities,
+    proposed_span_label,
+    report_entities,
+    resolve_stream,
+    span_role_kind,
+    span_sources,
+)
+from senselab.audio.workflows.triage.nodes.taxonomy import SUMMARISED_CLASSIFIERS
+from senselab.audio.workflows.triage.vocabulary import BRANCHES, RULESET_ROUTING
+from senselab.utils.prov_store import Entity, ProvStore
+
+NODE = "FIGURE"
+
+_STREAM = "preemphasised"
+_FALLBACK_STREAM = "plain"
+_SOURCE_STREAM = "recording"
+
+#: Characters per line of the cover title.
+_TITLE_COLUMNS = 95
+
+#: The classifiers TAXONOMY summarises, imported rather than restated.
+_SUMMARISED_CLASSIFIERS = SUMMARISED_CLASSIFIERS
+
+#: One title per stream section, keyed by the ``enhanced``/``residual`` prefix PREPROCESS writes.
+_STREAM_TITLES: dict[str, str] = {
+    "enhanced": "ENHANCED — SPEECH ISOLATED BY FRCRN",
+    "residual": "RESIDUAL — BACKGROUND AFTER SPEECH REMOVAL",
+}
+
+# E=envelope (primary amplitude), C=continuity, A=asr, S=normalization (supplementary
+# amplitude), G=gap (the complement of the proposed set).
+_MEASURE_CODE = {"amplitude": "E", "continuity": "C", "asr": "A", "gap": "G"}
+_SPAN_ROWS = ("E", "C", "A", "S", "G")
+
+#: Panels every page carries before the per-lane ones: spectrogram, waveform, spans, two rasters,
+#: SQUIM, the consensus-word lane. A lane's panel index is this plus its position in the lane list.
+_SHARED_PANELS = 7
+
+
+_SUMMARY_LABEL_WIDTH = 20
+"""Characters a label field takes in the whole-file summary."""
+
+_SUMMARY_COLUMN_WIDTH = 52
+"""Characters one classifier column takes when the summary is laid out across the page."""
+
+
+@dataclass(frozen=True)
+class FigureStyle:
+    """How the figure is drawn. Nothing here is read by the pipeline.
+
+    Attributes:
+        page_seconds: The width of every page, in recording seconds.
+        pad_short_pages: Whether a final page shorter than ``page_seconds`` is padded out to it.
+        figure_inches: ``(width, height)`` of one page.
+        cover_margin_in: The cover page's printed margin, in inches, on all four sides.
+        cover_title_fontsize: The cover title's point size.
+        cover_title_leading: The space one title line takes, as a multiple of
+            ``cover_title_fontsize``, including the gap to the body below.
+        dpi: Raster resolution.
+        height_ratios: One entry per panel, top first.
+        spectrogram_dynamic_range_db: Colour floor, in dB below the page's own peak bin.
+        word_extent_colour: The consensus onset-offset rule drawn under each word.
+        word_extent_linewidth: Width of that rule.
+        asr_extent_offset: How far below the row the consensus rule sits, in row units.
+        asr_legend_line: Vertical step between the lane's source legend entries.
+        top_labels: How many of its own highest-scoring labels each span contributes to a
+            per-span raster's row set.
+        raster_row_ratio: Height one raster row takes, as a share of the page's height ratios; a
+            raster grows past its declared height rather than compressing rows.
+        raster_rows_scope: Where a raster's row set is unioned. Only ``"file"`` is implemented.
+        summary_labels: How many labels the whole-file taxonomy panel lists per classifier.
+        speech_free_labels: How many labels the speech-free one-line summary lists per
+            stream/classifier.
+        colour_primary: Envelope and primary-amplitude spans.
+        colour_supplement: Normalization-derived spans.
+        colour_continuity: The continuity trace and its spans.
+        colour_asr: ASR-derived spans and the word lane.
+        colour_gap: Gap spans — the complement of the proposed set, drawn neutral.
+        colour_clip: Clip-event accents.
+        colour_padding: The shading that marks a padded tail.
+        cmap_spectrogram: Spectrogram colormap.
+        cmap_yamnet: YAMNet raster colormap.
+        cmap_hear: HeAR raster colormap.
+        cmap_squim: SQUIM raster colormap.
+        word_source_colours: One fill per ASR source, cycled in the consensus's source order.
+        word_span_alpha: The alpha of a source's own span.
+        word_text_colour: The consensus-word text colour and the derived-extent outline.
+        title_fontsize: Panel title size.
+        tick_fontsize: Axis tick-label size.
+        cell_fontsize: Score text drawn inside a raster cell.
+        marker_size: Raster cell area.
+        text_fontsize: The taxonomy panel's monospaced lines.
+        absent_fontsize: The note a panel prints when its element is absent.
+        cell_ramp: The span of a colormap a value is mapped onto.
+        raster_cell_height: A cell's height in row units, leaving a gap between rows.
+        raster_min_cell_s: The narrowest a cell is drawn, in seconds; otherwise it takes its
+            span's width.
+        also_write_pngs: Whether each page is additionally written as its own PNG.
+        colorbar_width_ratio: The colorbar column's width, as a fraction of the panel's. Every row
+            has the column; rows with nothing to scale leave their slot blank.
+        colorbar_tick_fontsize: The colorbar's tick labels.
+        colorbar_gap_axes: The gap between a panel's right edge and its colorbar, in axes fractions.
+        squim_ranges: The value range each SQUIM row is normalised over for colour, one per row.
+        cell_floor_fontsize: The smallest a raster cell's score text is shrunk to before it is
+            dropped. The cell itself is never dropped.
+        waveform_headroom: What the page's own peak amplitude is scaled by to set the waveform's
+            y-limits.
+        waveform_min_amplitude: A floor on those limits.
+        absent_height_ratio: The height an absent panel collapses to, its remaining share going to
+            the panels that have something to draw.
+        raster_paint_floor: A raster cell scoring below this is left unpainted; its row stays.
+        asr_rows: How many staggered rows the consensus-word lane uses.
+        asr_row_height: The bar height within one word-lane row, in row units.
+        span_axis_height_ratio: The span axis's declared height, appended to ``height_ratios``;
+            like a raster it grows past this with its row count.
+        colour_branch_initial: The fill of the shared initial row.
+        lane_colours: One fill per lane of :data:`SUMMARY_LANES`, cycled; a lane's bars and its
+            connectors take the same one.
+        branch_row_height: A bar's height within its row, in row units.
+        branch_link_linewidth: A connector's width.
+        branch_link_alpha: A connector's opacity.
+        branch_block_tint: How far a lane's colour is blended toward white for the band behind its
+            block of sub-rows, ``0`` leaving the lane's colour and ``1`` leaving white.
+        colour_branch_input_band: The band behind the initial row.
+        colour_span_axis_rule: The rule between two sub-rows of one block.
+        colour_span_axis_block_rule: The rule between two blocks, and under the input zone.
+        span_axis_rule_linewidth: The width of a rule inside a block.
+        span_axis_block_rule_linewidth: The width of a rule between blocks.
+    """
+
+    page_seconds: float = 20.0
+    pad_short_pages: bool = True
+    figure_inches: tuple[float, float] = (11.0, 8.5)
+    cover_margin_in: float = 0.5
+    cover_title_fontsize: float = 11.0
+    cover_title_leading: float = 1.8
+    dpi: int = 130
+    height_ratios: tuple[float, ...] = (0.66, 0.6, 0.1, 0.1, 0.1, 0.1, 0.34)
+    spectrogram_dynamic_range_db: float = 80.0
+    top_labels: int = 4
+    word_extent_colour: str = "#6a51a3"
+    word_extent_linewidth: float = 1.1
+    asr_extent_offset: float = 0.05
+    asr_legend_line: float = 0.30
+    raster_rows_scope: str = "file"
+    raster_row_ratio: float = 0.075
+    summary_labels: int = 6
+    speech_free_labels: int = 3
+    colour_primary: str = "steelblue"
+    colour_supplement: str = "darkorange"
+    colour_continuity: str = "mediumseagreen"
+    colour_asr: str = "mediumpurple"
+    colour_gap: str = "0.62"
+    colour_clip: str = "crimson"
+    colour_padding: str = "0.55"
+    cmap_spectrogram: str = "magma"
+    cmap_yamnet: str = "BuGn"
+    cmap_hear: str = "OrRd"
+    cmap_squim: str = "Purples"
+    word_source_colours: tuple[str, ...] = ("#fdae6b", "#6baed6")
+    word_span_alpha: float = 0.9
+    word_text_colour: str = "black"
+    title_fontsize: float = 9.0
+    tick_fontsize: float = 6.0
+    cell_fontsize: float = 5.0
+    asr_fontsize: float = 6.0
+    marker_size: float = 260.0
+    text_fontsize: float = 7.5
+    absent_fontsize: float = 7.0
+    cell_floor_fontsize: float = 4.0
+    cell_ramp: tuple[float, float] = (0.05, 0.95)
+    raster_cell_height: float = 0.72
+    raster_min_cell_s: float = 0.02
+    also_write_pngs: bool = False
+    colorbar_width_ratio: float = 0.014
+    colorbar_tick_fontsize: float = 5.0
+    colorbar_gap_axes: float = 0.006
+    squim_ranges: dict[str, tuple[float, float]] = field(
+        default_factory=lambda: {"stoi": (0.0, 1.0), "pesq": (1.0, 4.5), "si_sdr": (-10.0, 30.0)}
+    )
+    waveform_headroom: float = 1.15
+    waveform_min_amplitude: float = 0.02
+    absent_height_ratio: float = 0.08
+    raster_paint_floor: float = 0.0
+    asr_rows: int = 4
+    asr_row_height: float = 0.52
+    span_row_colours: dict[str, str] = field(default_factory=dict)
+    span_axis_height_ratio: float = 0.62
+    colour_branch_initial: str = "#dbeafe"
+    lane_colours: tuple[str, ...] = ("#fdae6b", "#74c476", "#9e9ac8", "#fc9272")
+    branch_row_height: float = 0.56
+    branch_link_linewidth: float = 0.7
+    branch_link_alpha: float = 0.75
+    branch_block_tint: float = 0.88
+    colour_branch_input_band: str = "#eef3fb"
+    colour_span_axis_rule: str = "0.92"
+    colour_span_axis_block_rule: str = "0.55"
+    span_axis_rule_linewidth: float = 0.4
+    span_axis_block_rule_linewidth: float = 0.9
+
+    def row_colour(self, code: str) -> str:
+        """The colour for one span-source row.
+
+        Args:
+            code: ``"E"``, ``"C"``, ``"A"``, ``"S"`` or ``"G"``.
+
+        Returns:
+            The configured colour.
+        """
+        default = {
+            "E": self.colour_primary,
+            "C": self.colour_continuity,
+            "A": self.colour_asr,
+            "S": self.colour_supplement,
+            "G": self.colour_gap,
+        }
+        return self.span_row_colours.get(code, default[code])
+
+
+def pages(duration_s: float, style: FigureStyle) -> list[tuple[float, float]]:
+    """The page windows covering a recording, every one the same width.
+
+    The final page keeps its full width even when the recording stops inside it; the uncovered tail
+    is padding, which :func:`_mark_padding` marks on the page.
+
+    Args:
+        duration_s: The recording's real duration.
+        style: The drawing configuration.
+
+    Returns:
+        ``[(start, end), ...]``, always at least one page.
+
+    Raises:
+        ValueError: If ``page_seconds`` is not positive.
+    """
+    if style.page_seconds <= 0:
+        raise ValueError(f"page_seconds must be positive, got {style.page_seconds}")
+    n_pages = max(1, ceil(duration_s / style.page_seconds))
+    if not style.pad_short_pages:
+        return [
+            (index * style.page_seconds, min((index + 1) * style.page_seconds, duration_s)) for index in range(n_pages)
+        ]
+    return [(index * style.page_seconds, (index + 1) * style.page_seconds) for index in range(n_pages)]
+
+
+def _mark_padding(axes: Sequence[Axes], duration_s: float, t1: float, style: FigureStyle) -> bool:
+    """Shade the part of a page that is past the end of the recording.
+
+    Args:
+        axes: Every panel on the page.
+        duration_s: The recording's real duration.
+        t1: The page's right edge.
+        style: The drawing configuration.
+
+    Returns:
+        Whether any padding was drawn.
+    """
+    if t1 <= duration_s:
+        return False
+    for axis in axes:
+        axis.axvspan(
+            duration_s,
+            t1,
+            facecolor=style.colour_padding,
+            alpha=0.18,
+            hatch="xx",
+            edgecolor=style.colour_padding,
+            linewidth=0.0,
+            zorder=5,
+        )
+        axis.axvline(duration_s, color=style.colour_padding, linewidth=1.0, linestyle="--", zorder=6)
+    # Rotated inside the band, which is often a fraction of a second wide.
+    axes[0].text(
+        (duration_s + t1) / 2,
+        0.5,
+        "padding — recording ended",
+        transform=axes[0].get_xaxis_transform(),
+        ha="center",
+        va="center",
+        rotation=90,
+        fontsize=style.tick_fontsize,
+        color="0.25",
+        zorder=7,
+    )
+    return True
+
+
+def _absent_reasons(store: ProvStore) -> dict[str, str]:
+    """Which PREPROCESS derivatives are absent, and the exception that made each one absent.
+
+    Args:
+        store: The provenance store.
+
+    Returns:
+        ``{derivative: reason}``, empty when PREPROCESS recorded no live verdict.
+    """
+    latest: Entity | None = None
+    for entity in store.entities("verdict"):
+        if store.is_invalidated(entity.id) or entity.attributes.get("node") != "PREPROCESS":
+            continue
+        latest = entity
+    if latest is None:
+        return {}
+    absent = latest.attributes.get("absent") or {}
+    return {str(name): str(reason) for name, reason in absent.items()}
+
+
+def _npz(run_dir: Path, store: ProvStore, name: str, key: str) -> np.ndarray | None:
+    """One array out of a persisted derivative, or None when the derivative never reached the store.
+
+    Args:
+        run_dir: The run directory.
+        store: The provenance store.
+        name: The measurement's name.
+        key: The array's key inside the ``.npz``.
+
+    Returns:
+        The array, or None.
+    """
+    measurement = find_measurement(store, name)
+    if measurement is None:
+        return None
+    path = measurement.attributes.get("path")
+    if not path:
+        return None
+    sidecar = run_dir / str(path)
+    if not sidecar.is_file():
+        return None
+    with np.load(sidecar) as loaded:
+        if key not in loaded:
+            return None
+        return np.asarray(loaded[key])
+
+
+def _span_code(signal_name: str, measure: str) -> str:
+    """The row code for one span's proposing source.
+
+    Args:
+        signal_name: The span's signal.
+        measure: The span's measure.
+
+    Returns:
+        ``"E"``, ``"C"``, ``"A"``, ``"S"``, ``"G"`` or ``"?"``.
+    """
+    if measure == "amplitude" and signal_name == "normalized":
+        return "S"
+    return _MEASURE_CODE.get(measure, "?")
+
+
+def _spans(store: ProvStore) -> list[dict[str, Any]]:
+    """Every live general span, with what the lane panel needs to draw it.
+
+    ``contains_clip`` is derived from the live clip extents, not read from the span's stored
+    attribute.
+
+    Args:
+        store: The provenance store.
+
+    Returns:
+        One dict per span.
+    """
+    clips = _clip_extents(store)
+    return [
+        {
+            "id": entity.id,
+            "extent": entity.extent,
+            "signal": entity.attributes.get("signal"),
+            "measure": entity.attributes.get("measure"),
+            "contains_clip": any(entity.extent[0] < end and entity.extent[1] > start for start, end in clips),
+            "corroborated_by": entity.attributes.get("corroborated_by") or [],
+        }
+        for entity in live_entities(store, "span")
+        if entity.attributes.get("family") is None and entity.extent is not None
+    ]
+
+
+def _clip_extents(store: ProvStore) -> list[tuple[float, float]]:
+    """Every live clip-event span's extent.
+
+    Args:
+        store: The provenance store.
+
+    Returns:
+        The extents.
+    """
+    return [
+        entity.extent
+        for entity in live_entities(store, "span")
+        if entity.attributes.get("family") == "clip" and entity.extent is not None
+    ]
+
+
+def _span_scores(store: ProvStore, measurement_name: str) -> dict[str, dict[str, float]]:
+    """Per-span classifier scores, keyed by span id and reduced to the best score per label.
+
+    Args:
+        store: The provenance store.
+        measurement_name: ``"span_yamnet"`` or ``"span_hear"``.
+
+    Returns:
+        ``{span_id: {label: score}}``, read from the span's ``raw_scores``.
+    """
+    by_span: dict[str, dict[str, float]] = {}
+    for measurement in find_measurements(store, measurement_name):
+        span_id = measurement.attributes.get("span_id")
+        if span_id is None:
+            continue
+        slot = by_span.setdefault(str(span_id), {})
+        for label, score in (measurement.attributes.get("raw_scores") or {}).items():
+            slot[str(label)] = max(slot.get(str(label), 0.0), float(score))
+    return by_span
+
+
+def _raster_rows(
+    per_span: dict[str, dict[str, float]], per_span_top_k: int, scope: str, floor: float | None = None
+) -> list[str]:
+    """The raster's row set: the union of each span's highest-scoring labels, over the whole file.
+
+    Args:
+        per_span: :func:`_span_scores`'s result, every span in the recording.
+        per_span_top_k: How many of its own labels each span contributes.
+        scope: Where the union is taken. Only ``"file"`` is implemented.
+        floor: A span contributes only those of its top ``per_span_top_k`` that reach this score,
+            or ``None`` to contribute all of them. Applied per span, before the union.
+
+    Returns:
+        The rows, highest file-wide peak first.
+
+    Raises:
+        ValueError: If ``scope`` is not ``"file"``.
+    """
+    if scope != "file":
+        raise ValueError(f"raster_rows_scope must be 'file', got {scope!r}")
+    rows: set[str] = set()
+    peaks: dict[str, float] = {}
+    for scores in per_span.values():
+        carried = sorted(
+            ((label, score) for label, score in scores.items() if float(score) > 0.0),
+            key=lambda pair: (-float(pair[1]), pair[0]),
+        )
+        top = carried[:per_span_top_k]
+        if floor is not None:
+            top = [(label, score) for label, score in top if float(score) >= floor]
+        rows.update(label for label, _ in top)
+        for label, score in scores.items():
+            peaks[label] = max(peaks.get(label, 0.0), float(score))
+    return [label for label in sorted(rows, key=lambda label: (-peaks.get(label, 0.0), label))]
+
+
+def _words(store: ProvStore) -> tuple[list[dict[str, Any]], list[str]]:
+    """The consensus stream in ``index`` order, and the consensus's source order.
+
+    Args:
+        store: The provenance store.
+
+    Returns:
+        One dict per word with an extent — ``index, extent, text, outcome, variants, readings,
+        timings, sources, bracketed`` — and the source names from the ``consensus_transcript``
+        measurement, in its order.
+    """
+    words = [
+        {
+            "index": int(entity.attributes["index"]),
+            "extent": entity.extent,
+            "text": str(entity.attributes.get("text") or ""),
+            "outcome": entity.attributes.get("outcome"),
+            "variants": list(entity.attributes.get("variants") or []),
+            "readings": dict(entity.attributes.get("readings") or {}),
+            "timings": {
+                str(source): (float(span[0]), float(span[1]))
+                for source, span in (entity.attributes.get("timings") or {}).items()
+            },
+            "sources": list(entity.attributes.get("sources") or []),
+            "bracketed": bool(entity.attributes.get("bracketed")),
+        }
+        for entity in consensus_words(store)
+        if entity.extent is not None
+    ]
+    consensus = find_measurement(store, "consensus_transcript")
+    sources = [str(row["name"]) for row in (consensus.attributes.get("sources") or [])] if consensus else []
+    return words, sources
+
+
+def _word_hull(word: dict[str, Any]) -> tuple[float, float]:
+    """The span every reading of a word and its derived extent fall inside.
+
+    Args:
+        word: One of :func:`_words`' dicts.
+
+    Returns:
+        ``(min start, max end)`` over the word's ``timings`` and ``extent``.
+    """
+    spans = [word["extent"], *word["timings"].values()]
+    return min(start for start, _ in spans), max(end for _, end in spans)
+
+
+def _consensus_word_stats(store: ProvStore) -> dict[str, float | int] | None:
+    """Read-only aggregates over the consensus word stream, for the cover's alignment block.
+
+    Args:
+        store: The provenance store.
+
+    Returns:
+        ``{n_words, uncertainty_sum_s, uncertainty_median_s, n_uncertain_over_1s, n_off_source}``,
+        or None when no consensus word reached the store.
+    """
+    words = consensus_words(store)
+    if not words:
+        return None
+    uncertainties = sorted(float(word.attributes["temporal_uncertainty_s"]) for word in words)
+    count = len(uncertainties)
+    median = (
+        uncertainties[count // 2] if count % 2 else (uncertainties[count // 2 - 1] + uncertainties[count // 2]) / 2.0
+    )
+    n_off_source = 0
+    for word in words:
+        if word.extent is None:
+            continue
+        onset, offset = word.extent
+        timings = list((word.attributes.get("timings") or {}).values())
+        if timings and not any(float(start) < offset and onset < float(end) for start, end in timings):
+            n_off_source += 1
+    return {
+        "n_words": count,
+        "uncertainty_sum_s": sum(uncertainties),
+        "uncertainty_median_s": median,
+        "n_uncertain_over_1s": sum(1 for value in uncertainties if value > 1.0),
+        "n_off_source": n_off_source,
+    }
+
+
+def _squim_by_span(store: ProvStore) -> dict[str, dict[str, float | None]]:
+    """SQUIM's three metrics per span.
+
+    Args:
+        store: The provenance store.
+
+    Returns:
+        ``{span_id: {stoi, pesq, si_sdr}}``.
+    """
+    by_span: dict[str, dict[str, float | None]] = {}
+    for entity in live_entities(store, "assertion"):
+        if entity.attributes.get("name") != "squim" or "stoi" not in entity.attributes:
+            continue
+        for span_id in store.derived_from(entity.id):
+            by_span[span_id] = {
+                "stoi": entity.attributes.get("stoi"),
+                "pesq": entity.attributes.get("pesq"),
+                "si_sdr": entity.attributes.get("si_sdr"),
+            }
+    return by_span
+
+
+def _route_decisions(store: ProvStore) -> list[Entity]:
+    """ROUTING's decision per branch, in branch order.
+
+    Args:
+        store: The provenance store.
+
+    Returns:
+        The live ``branch_decision`` entities, ordered by
+        :data:`~senselab.audio.workflows.triage.vocabulary.BRANCHES`.
+    """
+    decisions = {str(entity.attributes.get("branch")): entity for entity in live_entities(store, "branch_decision")}
+    return [decisions[branch] for branch in BRANCHES if branch in decisions]
+
+
+def _label_summaries(store: ProvStore) -> dict[str, Entity]:
+    """Each classifier's whole-file label-score summary.
+
+    Args:
+        store: The provenance store.
+
+    Returns:
+        ``{classifier: entity}`` over those TAXONOMY summarised.
+    """
+    found: dict[str, Entity] = {}
+    for classifier in _SUMMARISED_CLASSIFIERS:
+        summary = find_measurement(store, f"{classifier}_label_summary")
+        if summary is not None:
+            found[classifier] = summary
+    return found
+
+
+def _summary_sections(store: ProvStore, style: FigureStyle) -> tuple[list[list[str]], list[str]]:
+    """The whole-file readout as its parts: one block per classifier, then the routing block.
+
+    Args:
+        store: The provenance store.
+        style: The drawing configuration, for how many labels to list.
+
+    Returns:
+        ``(classifier_blocks, route_lines)``. Each classifier block leads with its own name, so a
+        block stands alone in a column.
+    """
+    absent = _absent_reasons(store)
+    summaries = _label_summaries(store)
+    blocks: list[list[str]] = []
+    for classifier in _SUMMARISED_CLASSIFIERS:
+        summary = summaries.get(classifier)
+        if summary is None:
+            reason = absent.get(f"{classifier}_scores")
+            blocks.append([f"{classifier}: absent", f"  {reason}" if reason else "  no reason recorded"])
+            continue
+        attributes = summary.attributes
+        labels: dict[str, dict[str, float]] = attributes.get("labels") or {}
+        block = [
+            f"{classifier}: {attributes.get('n_windows')} win "
+            f"@ {attributes.get('win_length_s')}/{attributes.get('hop_s')}s, {len(labels)} labels"
+        ]
+        ranked = sorted(
+            ((name, stats) for name, stats in labels.items() if float(stats["peak"]) > 0.0),
+            key=lambda item: (float(item[1]["peak"]), float(item[1]["median"])),
+            reverse=True,
+        )
+        if not ranked:
+            block.append("  every label scored 0.000")
+        for label, stats in ranked[: style.summary_labels]:
+            block.append(
+                f"  {label:<{_SUMMARY_LABEL_WIDTH}.{_SUMMARY_LABEL_WIDTH}} "
+                f"peak {float(stats['peak']):.2f} median {float(stats['median']):.2f} "
+                f"({int(stats['n_windows'])})"
+            )
+        blocks.append(block)
+
+    route_lines: list[str] = []
+    reading = find_measurement(store, RULESET_ROUTING)
+    decisions = _route_decisions(store)
+    if not decisions:
+        return blocks, ["  routing wrote no branch decision"]
+    if reading is not None:
+        route_lines.append(f"  recording: {reading.attributes.get('state')}")
+    gate_outcomes: dict[str, str] = {} if reading is None else dict(reading.attributes.get("gate_outcomes") or {})
+    for entity in decisions:
+        branch = str(entity.attributes.get("branch"))
+        state = str(entity.attributes.get("route_state"))
+        run = "runs" if entity.attributes.get("will_run") else "withheld"
+        forced = " (added by declaration)" if entity.attributes.get("forced_by_declaration") else ""
+        route_lines.append(f"  {branch:<8} {state:<12} {run}{forced}")
+        for name, reason in sorted((entity.attributes.get("unavailable_gates") or {}).items()):
+            route_lines.append(f"      {name:<28} unavailable: {reason}")
+        for name in sorted(entity.attributes.get("flag_gates") or ()):
+            route_lines.append(f"      {name:<28} flagged")
+    fired = sorted(name for name, outcome in gate_outcomes.items() if outcome == "fired")
+    route_lines.append("  gates fired: " + (", ".join(fired) or "none"))
+    return blocks, route_lines
+
+
+def _source_path(store: ProvStore) -> str | None:
+    """The recording's own file path, as ADMIT recorded it.
+
+    Read off the entity, never by loading the stream.
+
+    Args:
+        store: The provenance store.
+
+    Returns:
+        The path as recorded, or None when the store holds no live ``recording`` stream.
+    """
+    for entity in reversed(live_entities(store, "stream")):
+        if entity.attributes.get("name") == _SOURCE_STREAM:
+            path = entity.attributes.get("path")
+            return str(path) if path else None
+    return None
+
+
+def taxonomy_summary_lines(store: ProvStore, style: FigureStyle) -> list[str]:
+    """The whole-file taxonomy readout, one line under another, as the sidecar JSON records it.
+
+    Two aggregations, both file-scoped: each classifier's label-score distribution over every
+    window it produced, and what the routing ruleset made of each branch.
+
+    Args:
+        store: The provenance store.
+        style: The drawing configuration, for how many labels to list.
+
+    Returns:
+        The lines, in print order.
+    """
+    blocks, route_lines = _summary_sections(store, style)
+    lines: list[str] = ["WHOLE-FILE CLASSIFICATION SUMMARY"]
+    if not _label_summaries(store):
+        lines.append("  no classifier produced a label-score summary")
+    for block in blocks:
+        lines.append(f"  {block[0]}")
+        lines.extend(f"    {line.strip()}" for line in block[1:])
+    lines.append("")
+    lines.append("ROUTE STATES AND GATE OUTCOMES")
+    lines.extend(route_lines)
+    return lines
+
+
+def _columns(blocks: list[list[str]]) -> list[str]:
+    """Lay blocks side by side, one column per block, each padded to :data:`_SUMMARY_COLUMN_WIDTH`.
+
+    Args:
+        blocks: One line list per column.
+
+    Returns:
+        The laid-out lines, indented two spaces, with trailing padding stripped.
+    """
+    depth = max((len(block) for block in blocks), default=0)
+    lines: list[str] = []
+    for row in range(depth):
+        cells = [block[row] if row < len(block) else "" for block in blocks]
+        lines.append(
+            "  " + "".join(f"{cell:<{_SUMMARY_COLUMN_WIDTH}.{_SUMMARY_COLUMN_WIDTH}}" for cell in cells).rstrip()
+        )
+    return lines
+
+
+def _stream_header_line(store: ProvStore, prefix: str) -> tuple[str, bool]:
+    """One stream's own provenance line, read off the shared ``residual`` measurement.
+
+    ``enhanced`` and ``residual`` share one FRCRN measurement, so both stream sections read
+    gain / enhanced % / residual % / speech-present off it and differ only in title.
+
+    Args:
+        store: The provenance store.
+        prefix: ``"enhanced"`` or ``"residual"``.
+
+    Returns:
+        ``(line, present)``. ``present`` is False when the line states an absence, taken from
+        PREPROCESS's own recorded reason; no classifier block then follows it.
+    """
+    title = _STREAM_TITLES[prefix]
+    measurement = find_measurement(store, "residual")
+    if measurement is None:
+        reason = _absent_reasons(store).get("residual", "no reason recorded")
+        return f"{title}: absent — {reason}", False
+    attributes = measurement.attributes
+    gain_db = attributes.get("gain_db")
+    enhanced_fraction = attributes.get("enhanced_energy_fraction")
+    energy_fraction = attributes.get("energy_fraction")
+    gain_text = f"{float(gain_db):+.2f} dB" if gain_db is not None else "—"
+    enhanced_text = f"{float(enhanced_fraction) * 100.0:.1f}%" if enhanced_fraction is not None else "—"
+    energy_text = f"{float(energy_fraction) * 100.0:.1f}%" if energy_fraction is not None else "—"
+    speech_text = "speech present" if attributes.get("speech_present") else "no speech detected"
+    line = f"{title}   gain {gain_text} · enhanced {enhanced_text} · residual {energy_text} · {speech_text}"
+    return line, True
+
+
+def _stream_classifier_block(store: ProvStore, prefix: str, classifier: str, style: FigureStyle) -> list[str]:
+    """One classifier's label summary over one stream, read off ``{prefix}_{classifier}_summary_all``.
+
+    Args:
+        store: The provenance store.
+        prefix: ``"enhanced"`` or ``"residual"``.
+        classifier: ``"yamnet"``, ``"ast"`` or ``"hear"``.
+        style: The drawing configuration, for how many labels to list.
+
+    Returns:
+        The block's lines, headed by the classifier's own name. An absent summary states
+        PREPROCESS's own reason; a summary over zero windows says so.
+    """
+    summary = find_measurement(store, f"{prefix}_{classifier}_summary_all")
+    if summary is None:
+        reason = _absent_reasons(store).get(f"{prefix}_{classifier}")
+        return [f"{classifier}: absent", f"  {reason}" if reason else "  no reason recorded"]
+    attributes = summary.attributes
+    n_windows = int(attributes.get("n_windows") or 0)
+    if n_windows == 0:
+        return [f"{classifier}: 0 win", f"  {prefix} produced no windows to classify"]
+    labels: dict[str, dict[str, float]] = attributes.get("labels") or {}
+    block = [f"{classifier}: {n_windows} win, {len(labels)} labels"]
+    ranked = sorted(
+        ((name, stats) for name, stats in labels.items() if float(stats["max_score"]) > 0.0),
+        key=lambda item: (float(item[1]["max_score"]), float(item[1]["mean_score"])),
+        reverse=True,
+    )
+    if not ranked:
+        block.append("  every label scored 0.000")
+    for label, stats in ranked[: style.summary_labels]:
+        block.append(
+            f"  {label:<{_SUMMARY_LABEL_WIDTH}.{_SUMMARY_LABEL_WIDTH}} "
+            f"peak {float(stats['max_score']):.2f} mean {float(stats['mean_score']):.2f} "
+            f"({int(stats['n_windows'])})"
+        )
+    return block
+
+
+def _stream_speech_free_line(store: ProvStore, prefix: str, classifier: str, style: FigureStyle) -> str:
+    """One classifier's speech-free label summary, read off ``{prefix}_{classifier}_summary_speech_free``.
+
+    The speech-free subset is the windows PREPROCESS recorded with ``speech_overlap == 0.0``.
+
+    Args:
+        store: The provenance store.
+        prefix: ``"enhanced"`` or ``"residual"``.
+        classifier: ``"yamnet"``, ``"ast"`` or ``"hear"``.
+        style: The drawing configuration, for how many labels to list.
+
+    Returns:
+        One line: the classifier's own name, then its top speech-free labels. States the absence
+        reason when the summary never reached the store, or that no window was speech-free.
+    """
+    summary = find_measurement(store, f"{prefix}_{classifier}_summary_speech_free")
+    if summary is None:
+        reason = _absent_reasons(store).get(f"{prefix}_{classifier}")
+        return f"{classifier}: absent — {reason}" if reason else f"{classifier}: absent — no reason recorded"
+    attributes = summary.attributes
+    n_windows = int(attributes.get("n_windows") or 0)
+    n_total = int(attributes.get("n_windows_total") or 0)
+    if n_windows == 0:
+        return f"{classifier}: no window free of speech (0/{n_total})"
+    labels: dict[str, dict[str, float]] = attributes.get("labels") or {}
+    ranked = sorted(
+        ((name, stats) for name, stats in labels.items() if float(stats["max_score"]) > 0.0),
+        key=lambda item: (float(item[1]["max_score"]), float(item[1]["mean_score"])),
+        reverse=True,
+    )
+    if not ranked:
+        return f"{classifier}: every label scored 0.000 ({n_windows}/{n_total} win)"
+    top = ", ".join(f"{label} {float(stats['max_score']):.2f}" for label, stats in ranked[: style.speech_free_labels])
+    return f"{classifier}: {top} ({n_windows}/{n_total} win)"
+
+
+def _stream_summary_lines(store: ProvStore, prefix: str, style: FigureStyle) -> list[str]:
+    """One stream's whole-file classification summary: yamnet, ast and hear, over all windows.
+
+    Laid out with :func:`_columns`, followed by each classifier's speech-free top labels as one
+    line apiece.
+
+    Args:
+        store: The provenance store.
+        prefix: ``"enhanced"`` or ``"residual"``.
+        style: The drawing configuration.
+
+    Returns:
+        The lines, headed by the stream's own provenance line, alone when the block is absent.
+    """
+    header, present = _stream_header_line(store, prefix)
+    lines = [header]
+    if not present:
+        return lines
+    blocks = [_stream_classifier_block(store, prefix, classifier, style) for classifier in _SUMMARISED_CLASSIFIERS]
+    lines.extend(_columns(blocks))
+    lines.append("  speech-free (windows with no target speech):")
+    for classifier in _SUMMARISED_CLASSIFIERS:
+        lines.append(f"    {_stream_speech_free_line(store, prefix, classifier, style)}")
+    return lines
+
+
+def cover_margins(style: FigureStyle) -> tuple[float, float]:
+    """The cover's margin as a fraction of the page, horizontally and vertically.
+
+    Args:
+        style: The drawing configuration.
+
+    Returns:
+        ``(horizontal, vertical)``.
+    """
+    width_in, height_in = style.figure_inches
+    return style.cover_margin_in / width_in, style.cover_margin_in / height_in
+
+
+PAGE_TITLE_FONTSIZE = 10.0
+"""The point size a span page's heading is drawn at."""
+
+MONOSPACE_ADVANCE_EM = 0.6075
+"""One monospaced character's advance width, in em, for the face matplotlib resolves
+``monospace`` to."""
+
+
+def wrap_measured(figure: Figure, text: str, *, fontsize: float, drawable_in: float) -> str:
+    """Fold text so every line's drawn width fits, measuring rather than counting characters.
+
+    Lays each candidate line out with the figure's own renderer and breaks where it stops fitting,
+    splitting a single over-long word.
+
+    Args:
+        figure: The figure the text will be drawn on, used for its renderer and its dpi.
+        text: The text to fold.
+        fontsize: The point size it will be drawn at.
+        drawable_in: How many inches wide the text may be.
+
+    Returns:
+        The text with newlines inserted. A line still too wide is one unsplittable character.
+    """
+
+    def drawn_in(candidate: str) -> float:
+        artist = figure.text(0.0, 0.0, candidate, fontsize=fontsize)
+        width = artist.get_window_extent().width / figure.dpi
+        artist.remove()
+        return width
+
+    def split_word(word: str) -> list[str]:
+        pieces, piece = [], ""
+        for character in word:
+            if piece and drawn_in(piece + character) > drawable_in:
+                pieces.append(piece)
+                piece = character
+            else:
+                piece += character
+        return [*pieces, piece] if piece else pieces
+
+    lines: list[str] = []
+    current = ""
+    for word in text.split(" "):
+        for piece in [word] if drawn_in(word) <= drawable_in else split_word(word):
+            candidate = f"{current} {piece}" if current else piece
+            if current and drawn_in(candidate) > drawable_in:
+                lines.append(current)
+                current = piece
+            else:
+                current = candidate
+    if current:
+        lines.append(current)
+    return "\n".join(lines)
+
+
+TEXT_LEADING = 1.2
+"""Matplotlib's default line spacing for a multi-line text artist, as a multiple of the point size."""
+
+
+def cover_body_capacity(style: FigureStyle, title_lines: int) -> int:
+    """How many monospaced lines fit under the cover's title.
+
+    Args:
+        style: The drawing configuration, which carries the page size, the margin and the body's
+            point size.
+        title_lines: How many lines the title wrapped to; the body starts below them.
+
+    Returns:
+        The line count. A body longer than this is drawn from the top and clipped at the axis.
+    """
+    body_in = cover_body_rect(style, title_lines)[3] * style.figure_inches[1]
+    return max(1, int(body_in / (style.text_fontsize * TEXT_LEADING / 72.0)))
+
+
+def paginate_body(lines: Sequence[str], capacity: int) -> list[list[str]]:
+    """Split a cover body into pages, breaking at a blank line where one is available.
+
+    Args:
+        lines: The body, in print order.
+        capacity: The most lines one page holds.
+
+    Returns:
+        One list per page, never empty. Leading blanks are dropped from every page but the
+        first.
+    """
+    if not lines:
+        return [[]]
+    pages_out: list[list[str]] = []
+    remaining = list(lines)
+    while remaining:
+        stop = min(capacity, len(remaining))
+        if stop < len(remaining):
+            breaks = [index for index in range(1, stop) if not remaining[index].strip()]
+            if breaks:
+                stop = breaks[-1]
+        pages_out.append(remaining[:stop])
+        remaining = remaining[stop:]
+        while remaining and not remaining[0].strip():
+            remaining.pop(0)
+    return pages_out
+
+
+def monospace_columns(style: FigureStyle, fontsize: float) -> int:
+    """How many monospaced characters fit between the cover's margins.
+
+    Args:
+        style: The drawing configuration, which carries the page size and the printed margin.
+        fontsize: The point size the text is drawn at.
+
+    Returns:
+        The column count. Wrapping wider than this runs the text off the page, truncated
+        mid-word.
+    """
+    drawable_in = style.figure_inches[0] - 2.0 * style.cover_margin_in
+    advance_in = MONOSPACE_ADVANCE_EM * fontsize / 72.0
+    return max(1, int(drawable_in / advance_in))
+
+
+def cover_body_rect(style: FigureStyle, title_lines: int) -> tuple[float, float, float, float]:
+    """The cover's layout box for everything under the title, in figure fractions.
+
+    Args:
+        style: The drawing configuration.
+        title_lines: How many lines the title wrapped to.
+
+    Returns:
+        ``(left, bottom, width, height)`` for the layout engine.
+    """
+    horizontal, vertical = cover_margins(style)
+    band = title_lines * style.cover_title_fontsize * style.cover_title_leading / (style.figure_inches[1] * 72.0)
+    return horizontal, vertical, 1.0 - 2.0 * horizontal, 1.0 - 2.0 * vertical - band
+
+
+def unreadable_gate_lines(store: ProvStore) -> list[str]:
+    """Why each gate that could not be read could not be read, per branch.
+
+    Args:
+        store: The provenance store.
+
+    Returns:
+        The lines, in print order, or an empty list when every gate was readable.
+    """
+    lines: list[str] = []
+    for entity in _route_decisions(store):
+        branch = str(entity.attributes.get("branch"))
+        for name, reason in sorted((entity.attributes.get("unavailable_gates") or {}).items()):
+            lines.append(f"  {branch:<8} {name:<28} {reason}")
+    return ["GATES THAT COULD NOT BE READ", *lines] if lines else []
+
+
+def summary_panel_lines(store: ProvStore, style: FigureStyle, *, decision_record: bool = False) -> list[str]:
+    """The same readout laid out across the page: the classifier blocks side by side in columns.
+
+    Every column is padded to :data:`_SUMMARY_COLUMN_WIDTH`.
+
+    Args:
+        store: The provenance store.
+        style: The drawing configuration.
+        decision_record: Whether a decision record precedes this page. When it does, the route
+            states and gate outcomes are its, and this readout carries only the reason a gate
+            could not be read, which the decision record does not print.
+
+    Returns:
+        The lines, in print order.
+    """
+    blocks, route_lines = _summary_sections(store, style)
+    lines: list[str] = ["WHOLE-FILE CLASSIFICATION SUMMARY"]
+    lines.extend(_columns(blocks))
+    lines.append("")
+    lines.extend(_stream_summary_lines(store, "enhanced", style))
+    lines.append("")
+    lines.extend(_stream_summary_lines(store, "residual", style))
+    if decision_record:
+        unreadable = unreadable_gate_lines(store)
+        if unreadable:
+            lines.append("")
+            lines.extend(unreadable)
+        return lines
+    lines.append("")
+    lines.append("ROUTE STATES AND GATE OUTCOMES")
+    lines.extend(route_lines)
+    return lines
+
+
+def _spectrogram_panel(
+    axis: Axes,
+    power: np.ndarray | None,
+    hop_s: float,
+    sampling_rate: int,
+    window: tuple[float, float],
+    title: str,
+    style: FigureStyle,
+    absent_note: str,
+) -> None:
+    """Display a spectrogram the pipeline already wrote, never a fresh STFT of similar shape.
+
+    Args:
+        axis: The panel.
+        power: The persisted power array, or None when it is absent.
+        hop_s: The hop the STFT used.
+        sampling_rate: The stream's rate, fixing the bin axis.
+        window: The page's ``(start, end)``.
+        title: The panel title.
+        style: The drawing configuration.
+        absent_note: What to print when ``power`` is None.
+    """
+    t0, t1 = window
+    axis.set_xlim(t0, t1)
+    axis.set_title(title, fontsize=style.title_fontsize)
+    axis.set_ylabel("Hz")
+    if power is None:
+        _absent_panel(axis, window, absent_note, style)
+        return
+    axis.set_ylim(0, sampling_rate / 2)
+    frame_t = np.arange(power.shape[1]) * hop_s
+    lo = int(np.searchsorted(frame_t, t0, side="left"))
+    hi = int(np.searchsorted(frame_t, t1, side="right"))
+    if hi - lo < 1:
+        return
+    seg_db = 10.0 * np.log10(np.maximum(power[:, lo:hi], 1e-12))
+    vmax = float(seg_db.max())
+    axis.imshow(
+        seg_db,
+        origin="lower",
+        aspect="auto",
+        cmap=style.cmap_spectrogram,
+        interpolation="nearest",
+        extent=(float(frame_t[lo]), float(frame_t[hi - 1] + hop_s), 0.0, sampling_rate / 2.0),
+        vmin=vmax - style.spectrogram_dynamic_range_db,
+        vmax=vmax,
+        zorder=1,
+    )
+    axis.set_xlim(t0, t1)
+
+
+def _absent_panel(axis: Axes, window: tuple[float, float], note: str, style: FigureStyle) -> None:
+    """Say which element is missing and why, in the panel that would have drawn it.
+
+    Args:
+        axis: The panel.
+        window: The page's ``(start, end)``.
+        note: The reason, as recorded by the node that could not produce the element.
+        style: The drawing configuration.
+    """
+    t0, t1 = window
+    axis.set_xlim(t0, t1)
+    axis.set_yticks([])
+    # Axes fraction, not data coordinates, and above the padding hatch.
+    axis.text(
+        0.01,
+        0.5,
+        note,
+        transform=axis.transAxes,
+        ha="left",
+        va="center",
+        fontsize=style.absent_fontsize,
+        color="0.3",
+        style="italic",
+        zorder=8,
+    )
+    for spine in axis.spines.values():
+        spine.set_edgecolor("0.75")
+
+
+def _waveform_panel(
+    axis: Axes,
+    samples: np.ndarray,
+    sampling_rate: int,
+    envelope_db: np.ndarray | None,
+    floor_db: float | None,
+    continuity: np.ndarray | None,
+    window: tuple[float, float],
+    style: FigureStyle,
+    k_db: float | None,
+    cut_level: float | None,
+    cut_percentile: float | None,
+    continuity_absent: str,
+) -> None:
+    """The conditioned waveform, its envelope and floor, and the continuity trace on their own scales.
+
+    The scalar readings go in the panel title rather than a legend.
+
+    Args:
+        axis: The panel.
+        samples: The conditioned stream.
+        sampling_rate: Its rate.
+        envelope_db: PREPROCESS's persisted envelope, or None when absent.
+        floor_db: Its floor, or None.
+        continuity: PREPROCESS's persisted continuity trace, or None when absent.
+        window: The page's ``(start, end)``.
+        style: The drawing configuration.
+        k_db: Amplitude's detection threshold above the floor.
+        cut_level: The trace value the rank cut landed on, as PREPROCESS recorded it.
+        cut_percentile: The percentile that produced it.
+        continuity_absent: What to name when the trace is absent.
+    """
+    t0, t1 = window
+    times = np.arange(len(samples)) / sampling_rate
+    mask = (times >= t0) & (times < t1)
+    page = samples[mask[: len(samples)]] if len(samples) else samples
+    axis.plot(times[mask], samples[mask], linewidth=0.3, color="0.4", zorder=1)
+    peak = float(np.abs(page).max()) if len(page) else 0.0
+    limit = max(peak * style.waveform_headroom, style.waveform_min_amplitude)
+    axis.set_ylim(-limit, limit)
+    axis.set_xlim(t0, t1)
+    axis.set_ylabel("Amplitude")
+
+    readings = [f"waveform peak {peak:.3f}" if len(page) else "waveform absent"]
+    if floor_db is not None:
+        readings.append(f"floor {floor_db:.1f} dBFS (dashed)")
+        if k_db is not None:
+            readings.append(f"k_db {floor_db + k_db:.1f} dBFS (solid)")
+    if cut_level is not None and cut_percentile is not None:
+        readings.append(f"rank cut p{cut_percentile:g} {cut_level:.3f}")
+    axis.set_title(
+        "conditioned waveform + envelope + floor + continuity — " + "  ·  ".join(readings),
+        fontsize=style.title_fontsize,
+    )
+
+    if envelope_db is not None and floor_db is not None:
+        twin = axis.twinx()
+        window_env = envelope_db[: len(times)][mask[: len(envelope_db)]] if len(envelope_db) else envelope_db
+        twin.plot(
+            times[mask][: len(window_env)],
+            window_env,
+            color=style.colour_primary,
+            linewidth=0.9,
+            label="envelope dBFS",
+            zorder=2,
+        )
+        twin.axhline(floor_db, color="firebrick", linewidth=1.0, linestyle="--")
+        if k_db is not None:
+            twin.axhline(floor_db + k_db, color="firebrick", linewidth=1.2, alpha=0.9)
+        twin.set_ylabel("dBFS")
+        finite = window_env[np.isfinite(window_env)] if len(window_env) else window_env
+        if len(finite):
+            twin.set_ylim(min(floor_db, float(finite.min())) - 5, float(finite.max()) + 5)
+
+    if continuity is not None and len(continuity):
+        cont_axis = axis.twinx()
+        cont_axis.spines["right"].set_position(("outward", 55))
+        trace = continuity[: len(times)]
+        cont_axis.plot(
+            times[: len(trace)][mask[: len(trace)]],
+            trace[mask[: len(trace)]],
+            color=style.colour_continuity,
+            linewidth=0.8,
+            zorder=2,
+        )
+        if cut_level is not None:
+            cont_axis.axhline(
+                cut_level,
+                color="darkgreen",
+                linewidth=1.2,
+                alpha=0.9,
+            )
+        cont_axis.set_ylim(0.0, 1.05)
+        cont_axis.set_ylabel("continuity", color=style.colour_continuity)
+        cont_axis.tick_params(axis="y", colors=style.colour_continuity)
+    else:
+        axis.text(
+            0.006,
+            0.06,
+            continuity_absent,
+            transform=axis.transAxes,
+            ha="left",
+            va="bottom",
+            fontsize=style.absent_fontsize,
+            style="italic",
+            color="0.35",
+            zorder=7,
+        )
+
+
+def _span_row_cells(spans: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    """Per-source rows of every proposal, flagged by whether dedup kept it.
+
+    Args:
+        spans: :func:`_spans`' result.
+
+    Returns:
+        ``{code: [cell, ...]}``.
+    """
+    cells: dict[str, list[dict[str, Any]]] = {code: [] for code in _SPAN_ROWS}
+    for span in spans:
+        start, end = span["extent"]
+        code = _span_code(str(span["signal"] or ""), str(span["measure"] or ""))
+        if code in cells:
+            cells[code].append({"start": start, "end": end, "owned": True, "span": span})
+        for record in span["corroborated_by"]:
+            record_code = _span_code(str(record.get("signal") or ""), str(record.get("measure") or ""))
+            if record_code in cells:
+                cells[record_code].append(
+                    {
+                        "start": float(record["start"]),
+                        "end": float(record["end"]),
+                        "owned": False,
+                        "span": span,
+                    }
+                )
+    return cells
+
+
+def _span_lane_panel(
+    axis: Axes,
+    spans: list[dict[str, Any]],
+    clips: list[tuple[float, float]],
+    window: tuple[float, float],
+    style: FigureStyle,
+    row_absent: dict[str, str],
+) -> None:
+    """One compact row per proposing source, hatched where dedup kept the proposal.
+
+    A row that proposed nothing anywhere in the recording says why on the row itself.
+
+    Args:
+        axis: The panel.
+        spans: :func:`_spans`' result.
+        clips: Clip-event extents.
+        window: The page's ``(start, end)``.
+        style: The drawing configuration.
+        row_absent: ``{code: reason}`` for a source that contributed no span to the whole recording.
+    """
+    from matplotlib.patches import Rectangle
+
+    t0, t1 = window
+    axis.set_title(
+        "spans by source (E=envelope C=continuity A=asr S=normalization) — hatched=kept after dedup",
+        fontsize=style.title_fontsize,
+    )
+    axis.set_xlim(t0, t1)
+    n_rows = len(_SPAN_ROWS)
+    axis.set_yticks(range(n_rows))
+    axis.set_yticklabels(list(reversed(_SPAN_ROWS)), fontsize=style.tick_fontsize)
+    axis.set_ylim(-0.5, n_rows - 0.5)
+    axis.tick_params(axis="y", length=0)
+    for row in range(n_rows - 1):
+        axis.axhline(row + 0.5, color="0.85", linewidth=0.5, zorder=0)
+    for start, end in clips:
+        if end < t0 or start > t1:
+            continue
+        axis.axvspan(max(start, t0), min(end, t1), color=style.colour_clip, alpha=0.12, zorder=1)
+    cells = _span_row_cells(spans)
+    for index, code in enumerate(_SPAN_ROWS):
+        y = n_rows - 1 - index
+        for cell in cells[code]:
+            left, right = max(cell["start"], t0), min(cell["end"], t1)
+            if right <= left:
+                continue
+            kept = bool(cell["owned"])
+            edge = style.colour_clip if cell["span"]["contains_clip"] else "0.15"
+            axis.add_patch(
+                Rectangle(
+                    (left, y - 0.36),
+                    right - left,
+                    0.72,
+                    facecolor=style.row_colour(code),
+                    edgecolor=edge,
+                    linewidth=0.8 if kept else 0.4,
+                    hatch="///" if kept else None,
+                    alpha=0.9,
+                    zorder=3 if kept else 2,
+                )
+            )
+        if not cells[code] and code in row_absent:
+            axis.text(
+                t0 + (t1 - t0) * 0.004,
+                y,
+                row_absent[code],
+                ha="left",
+                va="center",
+                fontsize=style.absent_fontsize,
+                style="italic",
+                color="0.4",
+                zorder=4,
+            )
+
+
+def _ramped(cmap_name: str, style: FigureStyle) -> Colormap:
+    """The portion of a colormap scores are drawn on.
+
+    Args:
+        cmap_name: The full colormap's name.
+        style: The drawing configuration, for the ramp's bounds.
+
+    Returns:
+        A colormap spanning only ``style.cell_ramp`` of the original, so a cell and the colorbar
+        beside it are the same scale.
+    """
+    import matplotlib.pyplot as plt
+    from matplotlib.colors import LinearSegmentedColormap
+
+    low, high = style.cell_ramp
+    full = plt.get_cmap(cmap_name)
+    return LinearSegmentedColormap.from_list(
+        f"{cmap_name}-ramped", [full(low + (high - low) * step / 255.0) for step in range(256)]
+    )
+
+
+def _score_colorbar(axis: Axes, cmap_name: str, style: FigureStyle) -> None:
+    """Draw a panel's colour scale in an inset at the panel's right edge.
+
+    Carries ticks and no caption; darker means more of whatever the panel measures.
+
+    Args:
+        axis: The inset the scale is drawn in.
+        cmap_name: The colormap the panel drew with.
+        style: The drawing configuration.
+    """
+    import matplotlib.pyplot as plt
+    from matplotlib.cm import ScalarMappable
+    from matplotlib.colors import Normalize
+
+    axis.set_axis_on()
+    mappable = ScalarMappable(norm=Normalize(vmin=0.0, vmax=1.0), cmap=_ramped(cmap_name, style))
+    bar = axis.figure.colorbar(mappable, cax=axis)
+    bar.ax.tick_params(labelsize=style.colorbar_tick_fontsize, length=2, pad=1)
+
+
+def _raster_panel(
+    axis: Axes,
+    spans: list[dict[str, Any]],
+    per_span: dict[str, dict[str, float]],
+    labels: list[str],
+    cmap_name: str,
+    title: str,
+    window: tuple[float, float],
+    style: FigureStyle,
+    absent_note: str,
+    colorbar_axis: Axes,
+) -> None:
+    """One fixed row per label, each span's cell drawn at its span's width and coloured by its score.
+
+    Args:
+        axis: The panel.
+        spans: :func:`_spans`' result.
+        per_span: :func:`_span_scores`' result.
+        labels: The rows to draw.
+        cmap_name: Colormap.
+        title: Panel title.
+        window: The page's ``(start, end)``.
+        style: The drawing configuration.
+        absent_note: What to print when the measurement never ran.
+        colorbar_axis: The slot to the panel's right, where the score scale is drawn.
+    """
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import Rectangle
+
+    t0, t1 = window
+    axis.set_title(title, fontsize=style.title_fontsize)
+    axis.set_xlim(t0, t1)
+    if not labels:
+        _absent_panel(axis, window, absent_note, style)
+        colorbar_axis.set_axis_off()
+        return
+    axis.set_yticks(range(len(labels)))
+    axis.set_yticklabels(labels, fontsize=style.tick_fontsize)
+    axis.set_ylim(-0.5, len(labels) - 0.5)
+    cmap = _ramped(cmap_name, style)
+    for span in spans:
+        start, end = span["extent"]
+        if end < t0 or start > t1:
+            continue
+        left = max(start, t0)
+        width = min(end, t1) - left
+        scores = per_span.get(span["id"], {})
+        for row, label in enumerate(labels):
+            score = scores.get(label)
+            if score is None or score < style.raster_paint_floor:
+                continue
+            axis.add_patch(
+                Rectangle(
+                    (left, row - style.raster_cell_height / 2),
+                    max(width, style.raster_min_cell_s),
+                    style.raster_cell_height,
+                    facecolor=cmap(max(0.0, min(1.0, score))),
+                    edgecolor="none",
+                    linewidth=0.0,
+                    zorder=3,
+                )
+            )
+    _score_colorbar(colorbar_axis, cmap_name, style)
+
+
+def _readable_on(rgba: tuple[float, float, float, float]) -> str:
+    """Black or white, whichever reads on a cell of this colour.
+
+    Args:
+        rgba: The cell's fill.
+
+    Returns:
+        The text colour, chosen by Rec. 601 luminance rather than by colormap position.
+    """
+    red, green, blue = rgba[0], rgba[1], rgba[2]
+    return "black" if (0.299 * red + 0.587 * green + 0.114 * blue) > 0.55 else "white"
+
+
+def _squim_panel(
+    axis: Axes,
+    spans: list[dict[str, Any]],
+    squim: dict[str, dict[str, float | None]],
+    window: tuple[float, float],
+    style: FigureStyle,
+    colorbar_axis: Axes,
+) -> None:
+    """SQUIM's three metrics per span, each cell drawn at its span's width.
+
+    Low scores are drawn dark. Each row is normalised over its own range from
+    ``style.squim_ranges``, so the colorbar reads as a fraction rather than a value.
+
+    Args:
+        axis: The panel.
+        spans: :func:`_spans`' result.
+        squim: :func:`_squim_by_span`'s result.
+        window: The page's ``(start, end)``.
+        style: The drawing configuration.
+        colorbar_axis: The slot to the panel's right, where the scale is drawn.
+    """
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import Rectangle
+
+    t0, t1 = window
+    metrics = ("stoi", "pesq", "si_sdr")
+    axis.set_title("SQUIM per span (STOI / PESQ / SI-SDR)", fontsize=style.title_fontsize)
+    axis.set_xlim(t0, t1)
+    if not squim:
+        _absent_panel(axis, window, "no SQUIM assertion in the store", style)
+        colorbar_axis.set_axis_off()
+        return
+    axis.set_yticks(range(len(metrics)))
+    axis.set_yticklabels(list(metrics), fontsize=style.tick_fontsize)
+    axis.set_ylim(-0.5, len(metrics) - 0.5)
+    cmap = _ramped(style.cmap_squim, style)
+    for span in spans:
+        start, end = span["extent"]
+        scores = squim.get(span["id"])
+        if end < t0 or start > t1 or scores is None:
+            continue
+        left = max(start, t0)
+        width = max(min(end, t1) - left, style.raster_min_cell_s)
+        for row, metric in enumerate(metrics):
+            value = scores.get(metric)
+            if value is None:
+                continue
+            low, high = style.squim_ranges[metric]
+            frac = max(0.0, min(1.0, (float(value) - low) / (high - low)))
+            axis.add_patch(
+                Rectangle(
+                    (left, row - style.raster_cell_height / 2),
+                    width,
+                    style.raster_cell_height,
+                    facecolor=cmap(frac),
+                    edgecolor="none",
+                    linewidth=0.0,
+                    zorder=3,
+                )
+            )
+    _score_colorbar(colorbar_axis, style.cmap_squim, style)
+
+
+def _renderer(axis: Axes) -> RendererBase | None:
+    """The canvas renderer, for measuring a label before it is committed to the page.
+
+    Args:
+        axis: Any panel on the figure.
+
+    Returns:
+        The renderer, or None where the backend exposes none, in which case text extents fall
+        back to matplotlib's own cached renderer.
+    """
+    getter = getattr(axis.figure.canvas, "get_renderer", None)
+    renderer = getter() if callable(getter) else None
+    return renderer if isinstance(renderer, RendererBase) else None
+
+
+def _axis_points_per_second(axis: Axes, window: tuple[float, float], renderer: RendererBase | None) -> float:
+    """How many typographic points one second of the shared time axis occupies.
+
+    Args:
+        axis: The panel.
+        window: The page's ``(start, end)``.
+        renderer: :func:`_renderer`'s result.
+
+    Returns:
+        Points per second, using the axes' own drawn width rather than the figure's.
+    """
+    t0, t1 = window
+    width_px = axis.get_window_extent(renderer=renderer).width
+    return float(width_px) / float(axis.figure.dpi) * 72.0 / max(t1 - t0, 1e-9)
+
+
+def _fit_cell_text(
+    axis: Axes,
+    x: float,
+    y: float,
+    text: str,
+    cell_points: float,
+    style: FigureStyle,
+    renderer: RendererBase | None,
+) -> bool:
+    """Draw a raster cell's score text only at a size that fits the space the cell has.
+
+    Args:
+        axis: The panel.
+        x: The cell's centre on the time axis.
+        y: The cell's row.
+        text: The score, already formatted.
+        cell_points: The width available to this cell, in points.
+        style: The drawing configuration.
+        renderer: :func:`_renderer`'s result.
+
+    Returns:
+        Whether the text was drawn. The marker the caller already drew is never dropped.
+    """
+    sizes = (style.cell_fontsize, (style.cell_fontsize + style.cell_floor_fontsize) / 2, style.cell_floor_fontsize)
+    for size in sizes:
+        artist = axis.text(x, y, text, ha="center", va="center", fontsize=size, zorder=4)
+        width = artist.get_window_extent(renderer=renderer).width / float(axis.figure.dpi) * 72.0
+        if width <= cell_points:
+            return True
+        artist.remove()
+    return False
+
+
+def _asr_lane_panel(
+    axis: Axes,
+    words: list[dict[str, Any]],
+    sources: list[str],
+    window: tuple[float, float],
+    style: FigureStyle,
+    absent_note: str,
+) -> None:
+    """Each source's own span for every consensus word, one sub-band per source, under the derived extent.
+
+    A word draws on row ``index mod asr_rows``, source ``k`` filling band ``k`` at that source's
+    own ``[start, end]``; a rule under the row marks the consensus onset-offset and the text sits
+    at the derived onset, bold on an agreement.
+
+    Args:
+        axis: The panel.
+        words: :func:`_words`' words.
+        sources: :func:`_words`' source order.
+        window: The page's ``(start, end)``.
+        style: The drawing configuration.
+        absent_note: What to print when no consensus transcript reached the store.
+    """
+    from matplotlib.patches import Rectangle
+
+    t0, t1 = window
+    colours = {name: style.word_source_colours[k % len(style.word_source_colours)] for k, name in enumerate(sources)}
+    axis.set_title("consensus ASR", fontsize=style.title_fontsize)
+    for k, (name, colour) in enumerate(colours.items()):
+        axis.text(
+            1.0,
+            1.02 + k * style.asr_legend_line,
+            name,
+            transform=axis.transAxes,
+            ha="right",
+            va="bottom",
+            fontsize=style.title_fontsize,
+            color=colour,
+        )
+    axis.set_xlim(t0, t1)
+    if not words:
+        _absent_panel(axis, window, absent_note, style)
+        return
+    half = style.asr_row_height / 2.0
+    band = style.asr_row_height / max(len(sources), 1)
+    axis.set_ylim(-0.5, style.asr_rows - 0.5)
+    axis.set_yticks([])
+    here = [word for word in words if _word_hull(word)[1] >= t0 and _word_hull(word)[0] <= t1]
+    for word in here:
+        row = int(word["index"]) % style.asr_rows
+        anchors: list[float] = []
+        for k, name in enumerate(sources):
+            span = word["timings"].get(name)
+            if span is None or span[1] < t0 or span[0] > t1:
+                continue
+            start, end = max(span[0], t0), min(span[1], t1)
+            anchors.append(start)
+            axis.add_patch(
+                Rectangle(
+                    (start, row - half + k * band),
+                    max(end - start, 0.01),
+                    band,
+                    facecolor=colours[name],
+                    edgecolor="none",
+                    linewidth=0.0,
+                    alpha=style.word_span_alpha,
+                )
+            )
+        onset, offset = word["extent"]
+        if offset >= t0 and onset <= t1:
+            start, end = max(onset, t0), min(offset, t1)
+            anchors.insert(0, start)
+            axis.plot(
+                [start, max(end, start + 0.01)],
+                [row - half - style.asr_extent_offset] * 2,
+                color=style.word_extent_colour,
+                linewidth=style.word_extent_linewidth,
+                solid_capstyle="butt",
+            )
+        if not anchors:
+            continue
+        label = (
+            "/".join(str(variant["text"]) for variant in word["variants"])
+            if word["outcome"] == "variant"
+            else word["text"]
+        )
+        axis.text(
+            anchors[0],
+            row,
+            label,
+            fontsize=style.asr_fontsize,
+            fontweight="bold" if word["outcome"] == "agreement" else "normal",
+            ha="left",
+            va="center",
+            color=style.word_text_colour,
+        )
+
+
+def _plural(n: int, noun: str) -> str:
+    """Render a count with its noun, singular when the count is exactly one."""
+    return f"{n} {noun}" if n == 1 else f"{n} {noun}s"
+
+
+def consensus_alignment_lines(store: ProvStore) -> list[str]:
+    """How the consensus transcript was aligned, and how much to trust its timings.
+
+    Reads the ``consensus_transcript`` measurement and the word stream it produced; nothing is
+    computed beyond formatting. A single-recognizer run writes no consensus, and the lines say so.
+
+    Args:
+        store: The provenance store.
+
+    Returns:
+        The lines, in print order, headed by ``CONSENSUS ALIGNMENT``.
+    """
+    lines: list[str] = ["CONSENSUS ALIGNMENT"]
+    measurement = find_measurement(store, "consensus_transcript")
+    if measurement is None:
+        reason = _absent_reasons(store).get("consensus_transcript", "no reason recorded")
+        lines.append(f"  absent: {reason}")
+        return lines
+
+    attributes = measurement.attributes
+    lines.append(
+        f"  {attributes.get('algorithm')} · {_plural(int(attributes.get('n_sources') or 0), 'source')}"
+        f" · reference {attributes.get('reference_source')}"
+    )
+    for row in attributes.get("sources") or []:
+        model = row.get("timestamp_model")
+        timing = str(row.get("timestamp_source")) + (f" via {model}" if model else "")
+        lines.append(f"    {row.get('name')}: {_plural(int(row.get('n_words') or 0), 'word')} ({timing})")
+
+    outcomes: dict[str, Any] = attributes.get("outcomes") or {}
+    total = int(attributes.get("n_words") or 0)
+
+    def _count_and_pct(key: str) -> str:
+        n = int(outcomes.get(key, 0))
+        pct = f"{100.0 * n / total:.0f}%" if total else "—"
+        return f"{n} ({pct})"
+
+    lines.append(
+        f"  outcomes: agreement {_count_and_pct('agreement')}"
+        f"  variant {_count_and_pct('variant')}"
+        f"  insertion {_count_and_pct('insertion')}"
+        f"  of {total}"
+    )
+
+    shifted = attributes.get("n_words_time_shifted")
+    max_shift = attributes.get("max_time_shift_s")
+    shifted_text = "absent words" if shifted is None else _plural(int(shifted), "word")
+    shift_text = "absent" if max_shift is None else f"{float(max_shift):.2f}s"
+    lines.append(f"  time fit: {shifted_text} shifted, max shift {shift_text}")
+
+    stats = _consensus_word_stats(store)
+    if stats is None:
+        lines.append("  uncertainty: absent — no consensus word in the store")
+    else:
+        lines.append(
+            f"  uncertainty: sum {stats['uncertainty_sum_s']:.2f}s"
+            f" · median {stats['uncertainty_median_s']:.2f}s"
+            f" · >1s {_plural(int(stats['n_uncertain_over_1s']), 'word')}"
+            f" · off-source extent {stats['n_off_source']}/{stats['n_words']}"
+        )
+    return lines
+
+
+def cover_lines(store: ProvStore, panel_lines: list[str]) -> list[str]:
+    """The cover's lines: the source, the consensus's own alignment record, then the summary.
+
+    The path is wrapped no wider than the summary's own widest line.
+
+    Args:
+        store: The provenance store.
+        panel_lines: :func:`summary_panel_lines`' result.
+
+    Returns:
+        The lines, in print order.
+    """
+    lines: list[str] = []
+    source = _source_path(store)
+    if source:
+        width = max((len(line) for line in panel_lines), default=_SUMMARY_COLUMN_WIDTH)
+        wrapped = textwrap.wrap(source, width=max(width - 2, 40), break_on_hyphens=False, break_long_words=True)
+        lines.extend(["SOURCE", *(f"  {part}" for part in wrapped), ""])
+    lines.extend(consensus_alignment_lines(store))
+    lines.append("")
+    lines.extend(panel_lines)
+    return lines
+
+
+def _taxonomy_panel(axis: Axes, lines: list[str], style: FigureStyle) -> Text:
+    """The whole-file taxonomy readout, monospaced and off the shared time axis.
+
+    Args:
+        axis: The panel.
+        lines: :func:`summary_panel_lines`' result.
+        style: The drawing configuration.
+
+    Returns:
+        The artist, so a test can measure its extent against the axis.
+    """
+    axis.set_axis_off()
+    return axis.text(
+        0.0,
+        1.0,
+        "\n".join(lines),
+        transform=axis.transAxes,
+        ha="left",
+        va="top",
+        fontsize=style.text_fontsize,
+        family="monospace",
+    )
+
+
+def _continuity(store: ProvStore, run_dir: Path) -> tuple[np.ndarray | None, float | None, float | None]:
+    """PREPROCESS's persisted continuity trace, with the rank cut it recorded.
+
+    Read, never recomputed.
+
+    Args:
+        store: The provenance store.
+        run_dir: The run directory.
+
+    Returns:
+        ``(trace, cut_level, cut_percentile)``. Every element is None when the derivative is absent;
+        ``cut_level`` alone is None when the cut marked no sample.
+    """
+    measurement = find_measurement(store, "continuity_trace")
+    if measurement is None:
+        return None, None, None
+    trace = _npz(run_dir, store, "continuity_trace", "continuity")
+    level = measurement.attributes.get("cut_level")
+    percentile = measurement.attributes.get("cut_percentile")
+    return (
+        trace,
+        None if level is None else float(level),
+        None if percentile is None else float(percentile),
+    )
+
+
+def _span_row_absence(absent: dict[str, str], spans: list[dict[str, Any]]) -> dict[str, str]:
+    """Why a span-source row is empty over the whole recording.
+
+    A source contributes nothing either because its upstream derivative is absent or because every
+    candidate it proposed corroborated an earlier source's span, and the row says which.
+
+    Args:
+        absent: :func:`_absent_reasons`' result.
+        spans: :func:`_spans`' result.
+
+    Returns:
+        ``{code: reason}`` for each row that contributed nothing.
+    """
+    present = {_span_code(str(span["signal"] or ""), str(span["measure"] or "")) for span in spans}
+    reasons: dict[str, str] = {}
+    if "E" not in present:
+        reasons["E"] = absent.get("energy_envelope", "no amplitude span reached the store")
+    if "S" not in present:
+        reasons["S"] = absent.get("normalized_envelope", "no normalization-derived span was novel")
+    if "C" not in present:
+        reasons["C"] = absent.get("continuity_trace", "no continuity span was novel")
+    if "A" not in present:
+        reasons["A"] = absent.get("consensus_transcript", "no asr span was novel")
+    return reasons
+
+
+def _page_height_ratios(
+    style: FigureStyle, collapsed: Sequence[int], raster_rows: Mapping[int, int] | None = None
+) -> list[float]:
+    """The page's panel heights, with absent panels collapsed and their share redistributed.
+
+    The figure's total height is unchanged: an absent panel's share goes to the panels that have
+    something to draw, in proportion. A raster's own height grows with its row count.
+
+    Args:
+        style: The drawing configuration.
+        collapsed: Indices of the panels to collapse.
+        raster_rows: Row counts by panel index, for the panels whose height follows their rows.
+
+    Returns:
+        One height per panel, in panel order.
+    """
+    ratios = list(style.height_ratios)
+    for index, rows in (raster_rows or {}).items():
+        if index not in set(collapsed):
+            ratios[index] = max(ratios[index], rows * style.raster_row_ratio)
+    freed = 0.0
+    for index in collapsed:
+        # A lane whose declared height is already at or under the absent height keeps its own.
+        collapsed_to = min(ratios[index], style.absent_height_ratio)
+        freed += ratios[index] - collapsed_to
+        ratios[index] = collapsed_to
+    keep = [index for index in range(len(ratios)) if index not in set(collapsed)]
+    total = sum(ratios[index] for index in keep)
+    if freed > 0 and total > 0:
+        for index in keep:
+            ratios[index] += freed * ratios[index] / total
+    return ratios
+
+
+def summary_pages(
+    store: ProvStore,
+    config: TriageConfig,
+    *,
+    run_dir: Path,
+    style: FigureStyle | None = None,
+    stem: str | None = None,
+    decision_record: bool = False,
+) -> Iterator[tuple[str, Figure]]:
+    """Yield the summary's pages in order: the cover, then one page per ``page_seconds``.
+
+    The single page builder behind :func:`preprocess_figure` and ``report()``.
+
+    Each figure is yielded unsaved and unclosed; the caller closes it.
+
+    Args:
+        store: The provenance store, read and never written.
+        config: The run's configuration, read for the values the panels annotate.
+        run_dir: Where PREPROCESS wrote its streams and derivative sidecars.
+        style: How to draw. Defaults to :class:`FigureStyle`.
+        stem: The name the page titles carry, defaulting to the run id.
+        decision_record: Whether the caller has already written a decision record ahead of these
+            pages. When it has, the cover drops the blocks that record owns — the route states,
+            the gate outcomes, each branch's route state and conformance, and the branch measures.
+
+    Yields:
+        ``(name, figure)`` — ``"cover"``, then ``"page01"``, ``"page02"``, …
+
+    Raises:
+        LookupError: If the store holds no stream at all. The pre-emphasised stream is preferred,
+            then the plain one, then ADMIT's own source recording.
+    """
+    import matplotlib.pyplot as plt
+
+    style = style or FigureStyle()
+    audio = None
+    for name in (_STREAM, _FALLBACK_STREAM, _SOURCE_STREAM):
+        try:
+            _, audio = resolve_stream(store, run_dir, name)
+            break
+        except LookupError:
+            continue
+    if audio is None:
+        raise LookupError("no stream in the store; there is no time axis to draw the pages against")
+    sampling_rate = int(audio.sampling_rate)
+    samples = audio.waveform.detach().cpu().numpy().astype("float64")
+    if samples.ndim > 1:
+        samples = samples.mean(axis=0)
+    duration_s = len(samples) / float(sampling_rate)
+
+    absent = _absent_reasons(store)
+    envelope = _npz(run_dir, store, "energy_envelope", "envelope_dbfs")
+    floor_array = _npz(run_dir, store, "energy_envelope", "floor_dbfs")
+    floor_db = float(floor_array[0]) if floor_array is not None and len(floor_array) else None
+    wideband = _npz(run_dir, store, "spectrogram_wideband", "spectrogram")
+    hop_s = float(config.require("spectrogram.hop_ms")) / 1000.0
+    trace, cut_level, cut_percentile = _continuity(store, run_dir)
+
+    spans = _spans(store)
+    clips = _clip_extents(store)
+    yamnet = _span_scores(store, "span_yamnet")
+    hear = _span_scores(store, "span_hear")
+    words, word_sources = _words(store)
+    squim = _squim_by_span(store)
+    panel_lines = summary_panel_lines(store, style, decision_record=decision_record)
+    lanes = branch_lanes(store)
+
+    wideband_title = (
+        f"wideband spectrogram ({float(config.require('spectrogram.wideband_window_ms')):.0f} ms window, "
+        f"{float(config.require('spectrogram.hop_ms')):.0f} ms hop) — the speech-analysis view; "
+        "continuity runs on the narrowband array, not this one"
+    )
+
+    raw_floor = config.get("taxonomy.consolidation_floor")
+    floor = None if raw_floor is None else float(raw_floor)
+    yamnet_rows = _raster_rows(yamnet, style.top_labels, style.raster_rows_scope, floor)
+    hear_rows = _raster_rows(hear, style.top_labels, style.raster_rows_scope, floor)
+
+    row_absent = _span_row_absence(absent, spans)
+    # Panel indices, in the order they are unpacked below. The span axis is never collapsed.
+    collapsed = [
+        index
+        for index, empty in ((0, wideband is None), (3, not yamnet), (4, not hear), (5, not squim), (6, not words))
+        if empty
+    ]
+    axis_rows = len(span_axis_rows(lanes))
+    height_ratios = _page_height_ratios(
+        replace(style, height_ratios=(*style.height_ratios, style.span_axis_height_ratio)),
+        collapsed,
+        {
+            2: len(_SPAN_ROWS),
+            3: len(yamnet_rows),
+            4: len(hear_rows),
+            5: len(style.squim_ranges),
+            _SHARED_PANELS: axis_rows,
+        },
+    )
+
+    title_lines = textwrap.wrap(f"{stem or store.run_id} — summary", width=_TITLE_COLUMNS, break_long_words=True)
+    body = [*cover_lines(store, panel_lines), "", *branch_report_lines(lanes, decision_record=decision_record)]
+    body_pages = paginate_body(body, cover_body_capacity(style, len(title_lines)))
+    for cover_index, body_page in enumerate(body_pages, start=1):
+        continued = f" ({cover_index} of {len(body_pages)})" if len(body_pages) > 1 else ""
+        cover = plt.figure(
+            figsize=style.figure_inches,
+            layout=ConstrainedLayoutEngine(rect=cover_body_rect(style, len(title_lines))),
+        )
+        cover.suptitle(
+            "\n".join(title_lines) + continued,
+            fontsize=style.cover_title_fontsize,
+            y=1.0 - cover_margins(style)[1],
+            va="top",
+        )
+        _taxonomy_panel(cover.add_subplot(), body_page, style)
+        yield ("cover" if cover_index == 1 else f"cover{cover_index:02d}"), cover
+
+    for index, window in enumerate(pages(duration_s, style), start=1):
+        figure: Figure
+        figure, axes = plt.subplots(
+            len(height_ratios),
+            1,
+            figsize=style.figure_inches,
+            constrained_layout=True,
+            gridspec_kw={"height_ratios": height_ratios},
+        )
+        (
+            axis_wide,
+            axis_wave,
+            axis_spans,
+            axis_yamnet,
+            axis_hear,
+            axis_squim,
+            axis_asr,
+            axis_spans_by_branch,
+        ) = axes
+
+        # A colorbar is an inset anchored to its own panel's right edge, not a gridspec column.
+        def slot_for(panel: Axes) -> Axes:
+            """An inset just outside a panel's right edge, for that panel's colorbar.
+
+            Args:
+                panel: The panel the scale belongs to.
+
+            Returns:
+                The inset axes.
+            """
+            return panel.inset_axes(
+                (1.0 + style.colorbar_gap_axes, 0.0, style.colorbar_width_ratio, 1.0),
+                transform=panel.transAxes,
+            )
+
+        timed = list(axes)
+
+        _spectrogram_panel(
+            axis_wide,
+            wideband,
+            hop_s,
+            sampling_rate,
+            window,
+            wideband_title,
+            style,
+            absent.get("spectrogram_wideband", "spectrogram_wideband is absent from the store"),
+        )
+        _waveform_panel(
+            axis_wave,
+            samples,
+            sampling_rate,
+            envelope,
+            floor_db,
+            trace,
+            window,
+            style,
+            k_db=float(config.require("spans.k_db")),
+            cut_level=cut_level,
+            cut_percentile=cut_percentile,
+            continuity_absent=absent.get("continuity_trace", "continuity_trace is absent from the store"),
+        )
+        _span_lane_panel(axis_spans, spans, clips, window, style, row_absent)
+        _raster_panel(
+            axis_yamnet,
+            spans,
+            yamnet,
+            yamnet_rows,
+            style.cmap_yamnet,
+            f"YAMNet per-span scores — rows: union of each span's top-{style.top_labels} over the file",
+            window,
+            style,
+            absent.get("span_yamnet", "span_yamnet is absent from the store"),
+            slot_for(axis_yamnet),
+        )
+        _raster_panel(
+            axis_hear,
+            spans,
+            hear,
+            hear_rows,
+            style.cmap_hear,
+            f"HeAR per-span scores — rows: union of each span's top-{style.top_labels} over the file",
+            window,
+            style,
+            absent.get("span_hear", "span_hear is absent from the store"),
+            slot_for(axis_hear),
+        )
+        _squim_panel(axis_squim, spans, squim, window, style, slot_for(axis_squim))
+        _asr_lane_panel(
+            axis_asr,
+            words,
+            word_sources,
+            window,
+            style,
+            absent.get("consensus_transcript", "no consensus word in the store"),
+        )
+        _span_axis_panel(axis_spans_by_branch, lanes, window, style)
+
+        for axis in timed:
+            axis.set_xlim(*window)
+            axis.tick_params(axis="x", labelsize=style.tick_fontsize)
+        # Only the last timed panel carries the tick labels.
+        for axis in timed[:-1]:
+            axis.tick_params(axis="x", labelbottom=False)
+        padded = _mark_padding(timed, duration_s, window[1], style)
+        timed[-1].set_xlabel("Time (s)")
+        pad_note = "  ·  padded to a uniform page" if padded else ""
+        heading = (
+            f"{stem or store.run_id} — page {index}, {window[0]:.0f}-{window[1]:.0f}s of {duration_s:.2f}s{pad_note}"
+        )
+        figure.suptitle(
+            wrap_measured(
+                figure,
+                heading,
+                fontsize=PAGE_TITLE_FONTSIZE,
+                drawable_in=style.figure_inches[0] - 2.0 * style.cover_margin_in,
+            ),
+            fontsize=PAGE_TITLE_FONTSIZE,
+        )
+        yield f"page{index:02d}", figure
+
+
+def preprocess_figure(
+    store: ProvStore,
+    figure_dir: Path,
+    config: TriageConfig,
+    *,
+    run_dir: Path,
+    style: FigureStyle | None = None,
+    stem: str | None = None,
+) -> dict[str, Path]:
+    """Draw the summary from the store, one image per page, into a directory of its own.
+
+    Reads only what the graph left behind and writes nothing back. The pages are
+    :func:`summary_pages`' — the same ones ``report()`` puts in ``summary.pdf``.
+
+    Args:
+        store: The provenance store, after the graph has run.
+        figure_dir: Where the images are written; created if absent.
+        config: The run's configuration, read for the values the panels annotate.
+        run_dir: Where PREPROCESS wrote its streams and derivative sidecars.
+        style: How to draw. Defaults to :class:`FigureStyle`.
+        stem: The filename stem, defaulting to the run id.
+
+    Returns:
+        ``{"figure": pdf, "taxonomy_summary": json, "page01": png, ...}`` in page order.
+
+    Raises:
+        LookupError: If the store holds no stream at all.
+    """
+    import matplotlib.pyplot as plt
+
+    style = style or FigureStyle()
+    figure_dir.mkdir(parents=True, exist_ok=True)
+    written: dict[str, Path] = {}
+    name = stem or store.run_id
+    pdf_path = figure_dir / f"{name}.pdf"
+    with PdfPages(pdf_path) as pdf:
+        for page, figure in summary_pages(store, config, run_dir=run_dir, style=style, stem=stem):
+            pdf.savefig(figure, dpi=style.dpi)
+            if style.also_write_pngs and page != "cover":
+                page_path = figure_dir / f"{name}__{page}.png"
+                figure.savefig(page_path, dpi=style.dpi)
+                written[page] = page_path
+            plt.close(figure)
+    written["figure"] = pdf_path
+    summary_lines = taxonomy_summary_lines(store, style)
+    (figure_dir / "taxonomy_summary.json").write_text(json.dumps({"lines": summary_lines}, indent=1) + "\n")
+    written["taxonomy_summary"] = figure_dir / "taxonomy_summary.json"
+    return written
+
+
+#: A branch lane's two rows, initial over proposed.
+BRANCH_INITIAL_ROW = "initial"
+BRANCH_PROPOSED_ROW = "proposed"
+
+#: What the initial row holds.
+_INITIAL_ROW_GLOSS = "a span its branch minted from nothing upstream"
+_INITIAL_ROW_TICK = "initial spans\nwhat branches read"
+
+#: The panel's own account of its two zones.
+SPAN_AXIS_TITLE = (
+    "top band: the spans branches read, as their own producer captioned them"
+    "  ·  below: one band per branch, one line per span role\n"
+    "a connector is a wasDerivedFrom edge drawn in the branch's colour, never an overlap"
+)
+
+#: The branch wrote a report.
+LANE_RAN = "ran"
+#: ROUTING decided against the branch, so no node was called.
+LANE_WITHHELD = "withheld"
+#: ROUTING selected the branch and no report followed.
+LANE_NO_REPORT = "asked, no report"
+#: ROUTING never decided.
+LANE_UNDECIDED = "undecided"
+
+#: REDACT is a graph edge rather than a routed branch: it takes no ``branch_decision`` and
+#: writes a ``verdict``, not a ``branch_report``.
+REDACT_LANE = "REDACT"
+REDACTION_NAME = "redaction"
+
+#: REDACT's own verdict-detail keys the lane reports, the counterpart of ``BRANCH_MEASURES``.
+REDACT_MEASURES = ("redactions_n", "verified", "survived", "outstanding")
+
+#: The lanes the summary draws, in order.
+SUMMARY_LANES = (*BRANCHES, REDACT_LANE)
+
+_UNLABELLED = "unlabelled"
+
+#: The stem suffix this product's files take.
+_BRANCH_STEM_SUFFIX = "branches"
+
+
+@dataclass(frozen=True)
+class BranchRow:
+    """One bar of a branch lane.
+
+    Attributes:
+        key: The span entity's id, which is what a derivation names.
+        label: What the bar is captioned with.
+        short: The caption a bar too narrow for ``label`` falls back to, before it falls back to
+            none at all. A bar is never dropped.
+        start: The span's start, in recording seconds.
+        end: Its end.
+        row: :data:`BRANCH_PROPOSED_ROW` or :data:`BRANCH_INITIAL_ROW`.
+        role: What kind of span this is inside its branch — the sub-row it is drawn on. Empty on an
+            initial row, which belongs to no branch.
+        derived_from: The ids this span names in ``wasDerivedFrom``, empty on an initial row.
+    """
+
+    key: str
+    label: str
+    short: str
+    start: float
+    end: float
+    row: str
+    role: str = ""
+    derived_from: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class SpanAxisRow:
+    """One drawn line of the span axis.
+
+    Attributes:
+        block: The visual block the line belongs to — :data:`BRANCH_INITIAL_ROW`, or a lane's branch
+            name. Consecutive lines sharing a block are one branch's contribution.
+        role: The kind of span drawn on this line, empty on the initial row and on a lane that
+            proposed nothing.
+        lane_index: The lane's position in :data:`SUMMARY_LANES`, or ``-1`` on the initial row,
+            binding the line to its lane's colour and its connectors' departure point.
+        tick: The y-tick text.
+    """
+
+    block: str
+    role: str
+    lane_index: int
+    tick: str
+
+
+@dataclass(frozen=True)
+class BranchLane:
+    """One branch's whole contribution, before any page is cut.
+
+    Attributes:
+        branch: The branch's name.
+        family: The family it mints, as ``BRANCH_FAMILY`` binds it.
+        state: One of :data:`LANE_RAN`, :data:`LANE_WITHHELD`, :data:`LANE_NO_REPORT`,
+            :data:`LANE_UNDECIDED`.
+        route_state: ROUTING's own state for it, or None when ROUTING never decided.
+        why: ROUTING's own reason, or None.
+        conformance: What the branch reported, or None when it wrote no report.
+        conformance_of: What that conformance is about.
+        deviations: The deviation type names it reported.
+        unmeasured: The config points it asked for and nobody has measured.
+        measures: The ``BRANCH_MEASURES`` entries its report actually carries, in table order. A
+            key the report does not carry is absent here rather than present as None.
+        rows: Every bar, proposals and the initial spans they name, earliest first.
+    """
+
+    branch: str
+    family: str
+    state: str
+    route_state: str | None
+    why: str | None
+    conformance: Any
+    conformance_of: str | None
+    deviations: tuple[str, ...]
+    unmeasured: tuple[str, ...]
+    measures: tuple[tuple[str, Any], ...]
+    rows: tuple[BranchRow, ...]
+
+    @property
+    def proposed(self) -> tuple[BranchRow, ...]:
+        """The branch's own spans."""
+        return tuple(row for row in self.rows if row.row == BRANCH_PROPOSED_ROW)
+
+    @property
+    def initial(self) -> tuple[BranchRow, ...]:
+        """The spans those were derived from."""
+        return tuple(row for row in self.rows if row.row == BRANCH_INITIAL_ROW)
+
+
+def _lane_state(decision: Entity | None, report: Entity | None) -> str:
+    """Which of the four states the store puts a branch in.
+
+    Args:
+        decision: ROUTING's ``branch_decision`` for it, or None.
+        report: Its own ``branch_report``, or None.
+
+    Returns:
+        The state.
+    """
+    if report is not None:
+        return LANE_RAN
+    if decision is None:
+        return LANE_UNDECIDED
+    return LANE_NO_REPORT if decision.attributes.get("will_run") else LANE_WITHHELD
+
+
+def branch_lanes(store: ProvStore) -> list[BranchLane]:
+    """Every branch's lane, in ``BRANCHES`` order, read from what the branches themselves wrote.
+
+    The pairing follows each proposal's ``wasDerivedFrom`` edge, never an extent overlap, over
+    :func:`span_sources`' index.
+
+    Args:
+        store: The provenance store, after ROUTING and the branches have run.
+
+    Returns:
+        One lane per branch, whether or not it ran.
+    """
+    decisions = {str(entity.attributes.get("branch")): entity for entity in live_entities(store, "branch_decision")}
+    reports = report_entities(store)
+    sources = span_sources(store)
+    by_family: dict[str, list[Entity]] = {}
+    for span in live_entities(store, "span"):
+        family = span.attributes.get("family")
+        if family is None or span.extent is None:
+            continue
+        by_family.setdefault(str(family), []).append(span)
+
+    lanes: list[BranchLane] = []
+    for branch in BRANCHES:
+        family = BRANCH_FAMILY[branch]
+        decision, report = decisions.get(branch), reports.get(branch)
+        rows: list[BranchRow] = []
+        seen: set[str] = set()
+        for span in sorted(by_family.get(family, ()), key=lambda span: span.extent or (0.0, 0.0)):
+            extent = span.extent
+            if extent is None:
+                continue
+            parents = [parent for parent in sources.get(span.id, []) if parent.extent is not None]
+            label, short = proposed_span_label(span)
+            rows.append(
+                BranchRow(
+                    key=span.id,
+                    label=label,
+                    short=short,
+                    start=float(extent[0]),
+                    end=float(extent[1]),
+                    row=BRANCH_PROPOSED_ROW,
+                    role=span_role_kind(span),
+                    derived_from=tuple(parent.id for parent in parents),
+                )
+            )
+            for parent in parents:
+                parent_extent = parent.extent
+                if parent.id in seen or parent_extent is None:
+                    continue
+                seen.add(parent.id)
+                reading = initial_span_label(parent)
+                rows.append(
+                    BranchRow(
+                        key=parent.id,
+                        label=reading,
+                        short=reading,
+                        start=float(parent_extent[0]),
+                        end=float(parent_extent[1]),
+                        row=BRANCH_INITIAL_ROW,
+                    )
+                )
+        attributes: Mapping[str, Any] = {} if report is None else report.attributes
+        lanes.append(
+            BranchLane(
+                branch=branch,
+                family=family,
+                state=_lane_state(decision, report),
+                route_state=None if decision is None else str(decision.attributes.get("route_state")),
+                why=None if decision is None else str(decision.attributes.get("why")),
+                conformance=attributes.get("conformance"),
+                conformance_of=None if report is None else str(attributes.get("conformance_of")),
+                deviations=tuple(str(name) for name in attributes.get("deviations") or ()),
+                unmeasured=tuple(str(name) for name in attributes.get("unmeasured") or ()),
+                measures=tuple((key, attributes[key]) for key in BRANCH_MEASURES.get(branch, ()) if key in attributes),
+                rows=tuple(sorted(rows, key=lambda row: (row.start, row.end, row.key))),
+            )
+        )
+    lanes.append(_redact_lane(store, sources))
+    return lanes
+
+
+def _redact_lane(store: ProvStore, sources: dict[str, list[Entity]]) -> BranchLane:
+    """REDACT's own lane: the spans it planned, each paired to whatever it named as its reason.
+
+    REDACT writes a ``verdict`` rather than a ``branch_report`` and takes no ``branch_decision``,
+    so its two states are read from the verdict alone, and its spans carry ``name`` and
+    ``category`` rather than a family and a role.
+
+    Args:
+        store: The provenance store.
+        sources: :func:`span_sources`' index.
+
+    Returns:
+        The lane.
+    """
+    verdict: Entity | None = None
+    for entity in store.entities("verdict"):
+        if not store.is_invalidated(entity.id) and entity.attributes.get("node") == REDACT_LANE:
+            verdict = entity
+    spans = [
+        span
+        for span in live_entities(store, "span")
+        if span.attributes.get("name") == REDACTION_NAME and span.extent is not None
+    ]
+    rows: list[BranchRow] = []
+    seen: set[str] = set()
+    for span in sorted(spans, key=lambda span: span.extent or (0.0, 0.0)):
+        extent = span.extent
+        if extent is None:
+            continue
+        category = str(span.attributes.get("category") or "") or _UNLABELLED
+        parents = [parent for parent in sources.get(span.id, []) if parent.extent is not None]
+        rows.append(
+            BranchRow(
+                key=span.id,
+                label=f"{REDACTION_NAME}/{category}",
+                short=category,
+                start=float(extent[0]),
+                end=float(extent[1]),
+                row=BRANCH_PROPOSED_ROW,
+                role=REDACTION_NAME,
+                derived_from=tuple(parent.id for parent in parents),
+            )
+        )
+        for parent in parents:
+            parent_extent = parent.extent
+            if parent.id in seen or parent_extent is None:
+                continue
+            seen.add(parent.id)
+            reading = initial_span_label(parent)
+            rows.append(
+                BranchRow(
+                    key=parent.id,
+                    label=reading,
+                    short=reading,
+                    start=float(parent_extent[0]),
+                    end=float(parent_extent[1]),
+                    row=BRANCH_INITIAL_ROW,
+                )
+            )
+    attributes: Mapping[str, Any] = {} if verdict is None else verdict.attributes
+    return BranchLane(
+        branch=REDACT_LANE,
+        family=REDACTION_NAME,
+        state=LANE_RAN if verdict is not None else LANE_WITHHELD,
+        route_state=None,
+        why=None if verdict is None else str(attributes.get("why")),
+        conformance=attributes.get("outcome"),
+        conformance_of=None if verdict is None else "redaction plan",
+        deviations=(),
+        unmeasured=(),
+        measures=tuple((key, attributes[key]) for key in REDACT_MEASURES if key in attributes),
+        rows=tuple(sorted(rows, key=lambda row: (row.start, row.end, row.key))),
+    )
+
+
+def rows_on_window(rows: Sequence[BranchRow], window: tuple[float, float]) -> tuple[BranchRow, ...]:
+    """The bars that reach a page, whether or not they fit inside it.
+
+    A span crossing a page boundary reaches both pages and is drawn clipped to each.
+
+    Args:
+        rows: The bars to filter.
+        window: The page's ``(start, end)``.
+
+    Returns:
+        The bars, in the order given.
+    """
+    t0, t1 = window
+    return tuple(row for row in rows if row.end > t0 and row.start < t1)
+
+
+def rows_on_page(lane: BranchLane, window: tuple[float, float]) -> tuple[BranchRow, ...]:
+    """One lane's bars that reach a page.
+
+    Args:
+        lane: The lane.
+        window: The page's ``(start, end)``.
+
+    Returns:
+        The bars, in the lane's own order.
+    """
+    return rows_on_window(lane.rows, window)
+
+
+def lane_note(lane: BranchLane, on_page: int) -> str:
+    """What a lane says instead of bars, or ``""`` when it has bars to draw.
+
+    Args:
+        lane: The lane.
+        on_page: How many of its bars reach this page.
+
+    Returns:
+        The note, or an empty string.
+    """
+    if lane.state == LANE_UNDECIDED:
+        return f"ROUTING wrote no decision for {lane.branch}"
+    if lane.state == LANE_WITHHELD:
+        # REDACT takes no route; its verdict is the record.
+        if lane.route_state is None:
+            return f"{lane.branch} did not run — the graph never reached it"
+        return f"{lane.branch} did not run — route {lane.route_state}: {lane.why}"
+    if lane.state == LANE_NO_REPORT:
+        return f"{lane.branch} was selected to run and wrote no report"
+    if not lane.proposed:
+        return f"{lane.branch} ran and proposed no {lane.family} span"
+    if not on_page:
+        return f"{lane.branch} proposed {_plural(len(lane.proposed), f'{lane.family} span')}, none on this page"
+    return ""
+
+
+def initial_rows(lanes: Sequence[BranchLane]) -> tuple[BranchRow, ...]:
+    """The initial spans every lane draws from, as one deduplicated population.
+
+    The span axis draws them once: an initial span parenting proposals in two branches is one bar
+    with a connector to each.
+
+    Args:
+        lanes: :func:`branch_lanes`' result.
+
+    Returns:
+        The distinct initial rows, earliest first.
+    """
+    seen: dict[str, BranchRow] = {}
+    for lane in lanes:
+        for row in lane.initial:
+            seen.setdefault(row.key, row)
+    return tuple(sorted(seen.values(), key=lambda row: (row.start, row.end, row.key)))
+
+
+def lane_roles(lane: BranchLane) -> tuple[str, ...]:
+    """The kinds of span one lane proposed, in the order they first appear on the timeline.
+
+    Args:
+        lane: The lane.
+
+    Returns:
+        One entry per distinct role kind, and an empty tuple for a lane that proposed nothing.
+    """
+    return tuple(dict.fromkeys(row.role for row in lane.proposed))
+
+
+def initial_row_note(lanes: Sequence[BranchLane], on_page: int) -> str:
+    """What the initial row says about itself, whether or not it drew a bar on this page.
+
+    Args:
+        lanes: :func:`branch_lanes`' result.
+        on_page: How many initial bars reach this page.
+
+    Returns:
+        The note. The row is never silent.
+    """
+    total = len(initial_rows(lanes))
+    if not total:
+        return f"no branch named a span in wasDerivedFrom — every bar below is {_INITIAL_ROW_GLOSS}"
+    if not on_page:
+        return f"{_plural(total, 'span')} branches read, none on this page"
+    return ""
+
+
+def span_axis_rows(lanes: Sequence[BranchLane]) -> tuple[SpanAxisRow, ...]:
+    """The axis's rows, top first: the shared initial row, then one block per lane.
+
+    A lane is one block of sub-rows, one per kind of span it proposed. A lane that proposed one
+    kind, or none at all, is a single row.
+
+    Args:
+        lanes: :func:`branch_lanes`' result.
+
+    Returns:
+        The rows, in draw order.
+    """
+    rows = [SpanAxisRow(block=BRANCH_INITIAL_ROW, role="", lane_index=-1, tick=_INITIAL_ROW_TICK)]
+    for index, lane in enumerate(lanes):
+        roles = lane_roles(lane) or ("",)
+        for role in roles:
+            tick = lane.branch if len(roles) == 1 else f"{lane.branch} · {role}"
+            rows.append(SpanAxisRow(block=lane.branch, role=role, lane_index=index, tick=tick))
+    return tuple(rows)
+
+
+def parent_anchor(left: float, right: float, lane_index: int, lane_count: int) -> float:
+    """Where on a shared initial bar one lane's connectors leave it.
+
+    Each lane departs from its own fraction of the parent's width, so several lanes leaving one
+    parent fan out rather than lying collinear.
+
+    Args:
+        left: The parent bar's drawn left edge.
+        right: Its drawn right edge.
+        lane_index: The lane's position in :data:`SUMMARY_LANES`.
+        lane_count: How many lanes the axis carries.
+
+    Returns:
+        The departure point, strictly inside the bar.
+    """
+    return left + (right - left) * (lane_index + 1) / (lane_count + 1)
+
+
+def _lane_colour(index: int, style: FigureStyle) -> str:
+    """The fill one lane's bars and connectors share.
+
+    Args:
+        index: The lane's position in :data:`SUMMARY_LANES`.
+        style: The drawing configuration.
+
+    Returns:
+        The colour, cycled when there are more lanes than colours.
+    """
+    return style.lane_colours[index % len(style.lane_colours)]
+
+
+def _block_band_colour(index: int, style: FigureStyle) -> tuple[float, float, float]:
+    """The band drawn behind one lane's block of sub-rows.
+
+    Args:
+        index: The lane's position in :data:`SUMMARY_LANES`.
+        style: The drawing configuration.
+
+    Returns:
+        The lane's own colour blended toward white by ``style.branch_block_tint``, as RGB.
+    """
+    from matplotlib.colors import to_rgb
+
+    tint = style.branch_block_tint
+    return tuple(channel + (1.0 - channel) * tint for channel in to_rgb(_lane_colour(index, style)))  # type: ignore[return-value]
+
+
+def _span_axis_panel(axis: Axes, lanes: Sequence[BranchLane], window: tuple[float, float], style: FigureStyle) -> None:
+    """One axis: the initial spans on the top row, then one block of sub-rows per branch.
+
+    A branch's block carries one sub-row per kind of span it proposed, tinted in the branch's own
+    colour. A connector runs from a proposal to the initial span it names in ``wasDerivedFrom``,
+    never to the one it overlaps, and only where both ends are on the page.
+
+    Args:
+        axis: The panel.
+        lanes: :func:`branch_lanes`' result.
+        window: The page's ``(start, end)``.
+        style: The drawing configuration.
+    """
+    from matplotlib.patches import Rectangle
+
+    t0, t1 = window
+    axis_rows = span_axis_rows(lanes)
+    n_rows = len(axis_rows)
+    axis.set_title(SPAN_AXIS_TITLE, fontsize=style.title_fontsize)
+    axis.set_xlim(t0, t1)
+    axis.set_yticks(range(n_rows))
+    axis.set_yticklabels([line.tick for line in reversed(axis_rows)], fontsize=style.tick_fontsize)
+    axis.set_ylim(-0.5, n_rows - 0.5)
+    axis.tick_params(axis="y", length=0)
+
+    # Row 0 of the row list is drawn at the top, so its y is n_rows - 1.
+    y_of_index = [n_rows - 1 - index for index in range(n_rows)]
+    y_of_row = {(line.block, line.role): y_of_index[index] for index, line in enumerate(axis_rows)}
+    for index, line in enumerate(axis_rows):
+        y = y_of_index[index]
+        band = style.colour_branch_input_band if line.lane_index < 0 else _block_band_colour(line.lane_index, style)
+        axis.add_patch(Rectangle((t0, y - 0.5), t1 - t0, 1.0, facecolor=band, edgecolor="none", zorder=0.1))
+        if index + 1 == n_rows:
+            continue
+        crosses_block = axis_rows[index + 1].block != line.block
+        axis.axhline(
+            y - 0.5,
+            color=style.colour_span_axis_block_rule if crosses_block else style.colour_span_axis_rule,
+            linewidth=style.span_axis_block_rule_linewidth if crosses_block else style.span_axis_rule_linewidth,
+            zorder=0.2,
+        )
+
+    renderer = _renderer(axis)
+    points_per_second = _axis_points_per_second(axis, window, renderer)
+    placed: dict[str, tuple[float, float, float]] = {}
+
+    def _bar(row: BranchRow, y: float, colour: str, *, captions: tuple[str, ...]) -> None:
+        """Draw one span's bar, clipped to the page, and caption it if it fits."""
+        left, right = max(row.start, t0), min(row.end, t1)
+        if right <= left:
+            return
+        axis.add_patch(
+            Rectangle(
+                (left, y - style.branch_row_height / 2),
+                right - left,
+                style.branch_row_height,
+                facecolor=colour,
+                edgecolor="0.25",
+                linewidth=0.6,
+                zorder=3,
+            )
+        )
+        placed[row.key] = (y, left, right)
+        budget = (right - left) * points_per_second
+        for caption in dict.fromkeys(captions):
+            if _fit_cell_text(axis, (left + right) / 2, y, caption, budget, style, renderer):
+                break
+
+    def _note(y: float, text: str) -> None:
+        """Say in the row itself what the row holds, where it holds no bar to say it."""
+        axis.text(
+            t0 + (t1 - t0) * 0.004,
+            y,
+            text,
+            ha="left",
+            va="center",
+            fontsize=style.absent_fontsize,
+            style="italic",
+            color="0.4",
+            zorder=4,
+        )
+
+    initial_on_page = rows_on_window(initial_rows(lanes), window)
+    for row in initial_on_page:
+        _bar(row, y_of_row[(BRANCH_INITIAL_ROW, "")], style.colour_branch_initial, captions=(row.label, row.short))
+    initial_note = initial_row_note(lanes, len(initial_on_page))
+    if initial_note:
+        _note(y_of_row[(BRANCH_INITIAL_ROW, "")], initial_note)
+
+    for index, lane in enumerate(lanes):
+        roles = lane_roles(lane)
+        on_page = [row for row in rows_on_page(lane, window) if row.row == BRANCH_PROPOSED_ROW]
+        for row in on_page:
+            _bar(row, y_of_row[(lane.branch, row.role)], _lane_colour(index, style), captions=(row.short, row.label))
+        note = lane_note(lane, len(on_page))
+        if note:
+            _note(y_of_row[(lane.branch, roles[0] if roles else "")], note)
+
+    # Connectors last and behind the bars.
+    for index, lane in enumerate(lanes):
+        colour = _lane_colour(index, style)
+        for row in rows_on_page(lane, window):
+            child = placed.get(row.key)
+            if row.row != BRANCH_PROPOSED_ROW or child is None:
+                continue
+            for parent_key in row.derived_from:
+                parent = placed.get(parent_key)
+                if parent is None:
+                    continue
+                axis.plot(
+                    [(child[1] + child[2]) / 2, parent_anchor(parent[1], parent[2], index, len(lanes))],
+                    [child[0] + style.branch_row_height / 2, parent[0] - style.branch_row_height / 2],
+                    color=colour,
+                    linewidth=style.branch_link_linewidth,
+                    alpha=style.branch_link_alpha,
+                    zorder=2,
+                    solid_capstyle="butt",
+                )
+
+
+def _measure_text(value: Any) -> str:  # noqa: ANN401 — anything a report attribute can hold
+    """One measurement's value as the block prints it.
+
+    Args:
+        value: What the branch reported.
+
+    Returns:
+        The text, a float rounded to the branch's own reported precision.
+    """
+    if isinstance(value, bool) or not isinstance(value, float):
+        return str(value)
+    return f"{value:.3f}"
+
+
+def branch_report_lines(lanes: Sequence[BranchLane], *, decision_record: bool = False) -> list[str]:
+    """Each branch's own report, as the cover prints it.
+
+    Args:
+        lanes: :func:`branch_lanes`' result.
+        decision_record: Whether a decision record precedes this page. When it does, the header
+            keeps only whether the branch ran; its route state, conformance and measures are the
+            decision record's.
+
+    Returns:
+        The lines, in print order.
+    """
+    lines: list[str] = ["BRANCH REPORTS"]
+    for lane in lanes:
+        state = lane.state if lane.state != LANE_RAN else f"ran · conformance {lane.conformance}"
+        route = lane.route_state or ("no route" if lane.branch == REDACT_LANE else "no decision")
+        header = f"  {lane.branch:<8} {lane.state}" if decision_record else f"  {lane.branch:<8} {route:<12} {state}"
+        lines.append(header)
+        if lane.state != LANE_RAN:
+            if lane.why:
+                lines.append(f"      why          {lane.why}")
+            continue
+        lines.append(f"      of           {lane.conformance_of}")
+        if not decision_record:
+            measures = "  ".join(f"{key}={_measure_text(value)}" for key, value in lane.measures)
+            lines.append(f"      measures     {measures or 'none of its table reached the report'}")
+        lines.append(f"      deviations   {', '.join(lane.deviations) or 'none'}")
+        lines.append(f"      unmeasured   {', '.join(lane.unmeasured) or 'none'}")
+        paired = sum(1 for row in lane.proposed if row.derived_from)
+        lines.append(
+            f"      spans        {_plural(len(lane.proposed), f'{lane.family} span')} proposed, "
+            f"{paired} naming an initial span"
+        )
+    return lines

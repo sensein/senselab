@@ -49,7 +49,13 @@ This is a separate defect from the threshold-scale bug fixed in `a38d5292`. That
 |---|---|---|
 | `speaker_assignment` | normalised Shannon entropy of the diarizers' distribution over the answers they gave (their cluster ids, plus `SIL` as its own answer) | mean 0.049, 94% exactly 0 |
 | `target_activity` | the mask **region's** `uncertainty`, **only where its `state != "target_active"`** | 1.0 over the 25 indeterminate buckets (12% of the clip) |
-| *(gate)* `word_coverage` | fraction of the bucket a fused word occupies; `0.0` clears the bucket's votes so the axis reads `None` | 23 buckets nulled |
+| *(gate)* `word_coverage` | fraction of the bucket a fused word occupies; `0.0` clears the bucket's votes so the axis reads `None` — **unless the region `state` is `target_active` or `nontarget_active`**, where the mask has positively measured a voice and outranks the word proxy (F-165, `speaker._VOCAL_ACTIVITY`) | 23 buckets nulled |
+
+The gate's measured column above ("23 buckets nulled") is the pre-exemption figure, and it stands:
+the exemption changes nothing on a run today, because the mask's region table never reaches
+`harvest_speaker_votes` (F-187 in the analyze_audio audit register) — so `state` is always `None`,
+which is one of the states the gate still applies to. What the exemption specifies is the behaviour
+once that wiring exists.
 
 **No speaker is privileged.** This started as `max` over the speakers present of each one's *binary*
 entropy, on the argument that a confidently-placed speaker must not hide doubt about a contested one —
@@ -230,7 +236,8 @@ On this clip the gate never opens — SNR is 41–70 dB throughout — so the fo
 alone: **mean 0.0317, with 178 of 185 buckets at exactly zero.** The seven above 0.66 are genuine
 turn-boundary disagreements (three diarizers on `C1`, one on `C0`) at `speech_presence` confidence
 ~0.92, which is the right answer to leave standing. Four further ambiguous buckets are wordless and
-already nulled by the word gate.
+already nulled by the word gate — as they still are, the F-165 exemption being inert while F-187
+stands; how many of the four survive once the regions are wired has not been measured.
 
 Precedent this follows: the background mask runs only on the unmodified pass, and `signal_support` is
 likewise measured there, both on the argument that the property belongs to the recording rather than

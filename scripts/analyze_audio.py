@@ -36,8 +36,10 @@ Layout under ``--out/<stem>_<utc-timestamp>/``:
 
 Cache + provenance: every per-task outcome is stored under the config's ``cache.dir`` keyed by
 
-    sha256(audio_signature || task || model_id || params ||
-           stage_version || senselab_version || cache_schema_version)
+    sha256(audio_signature || task || model_id || model_commit || params ||
+           stage_version || cache_schema_version)
+
+The senselab version is recorded as provenance, not keyed: it changes with every commit.
 
 The audio signature is the sha256 of the post-resample, post-downmix PCM samples plus sampling rate,
 so two files with identical waveforms share cache entries regardless of container or filename. On a
@@ -262,7 +264,7 @@ def _diarize_counts_for_probe(cfg: RunConfig) -> Callable[[Any, int], dict[str, 
     """
 
     def run(waveform: np.ndarray, sampling_rate: int) -> dict[str, int]:
-        from senselab.audio.workflows.audio_analysis.stages import model_for_task
+        from senselab.audio.workflows.audio_analysis.stages import model_for_task as stage_model_for_task
 
         audio = Audio(
             waveform=torch.tensor(np.asarray(waveform, dtype=np.float32)).unsqueeze(0),
@@ -273,7 +275,7 @@ def _diarize_counts_for_probe(cfg: RunConfig) -> Callable[[Any, int], dict[str, 
             try:
                 result = diarize_audios(
                     audios=[audio],
-                    model=model_for_task(model_id, task="diarization"),
+                    model=stage_model_for_task(model_id, task="diarization"),
                     device=pick_device(cfg.device),
                 )
             except Exception:  # noqa: BLE001 — a model that cannot run yields no evidence

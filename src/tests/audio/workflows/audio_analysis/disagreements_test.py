@@ -173,3 +173,34 @@ def test_summary_reads_l1_measurements_not_a_second_fold(tmp_path: Path) -> None
     assert "snr=12.0dB" in summary
     assert "src=speech" in summary
     assert "raw::m" in summary
+
+
+def test_a_run_that_harvested_nothing_reports_an_unmeasured_rate(tmp_path: Path) -> None:
+    """F-150: no rows means no denominator, so the rate is ``None`` rather than a flattering 0.0.
+
+    ``0.0`` made a total harvest failure indistinguishable from a clean recording where nothing
+    crossed the threshold -- and it is the *better* of the two numbers, so the broken run presented
+    as the best possible outcome.
+    """
+    idx = build_disagreements_index(
+        fused_axes=_axes(asr=[], speaker=[]),
+        top_n=5,
+        run_dir=tmp_path,
+        config={},
+        incomparable_reasons={},
+    )
+    assert idx["totals"]["total_rows"] == 0
+    assert idx["totals"]["high_uncertainty_rate"] is None
+
+
+def test_a_measured_zero_rate_is_still_zero(tmp_path: Path) -> None:
+    """The counterpart to F-150: rows that exist and clear nothing must stay ``0.0``, not ``None``."""
+    idx = build_disagreements_index(
+        fused_axes=_axes(asr=[_row(0.0, 0.0), _row(0.5, 0.0)]),
+        top_n=5,
+        run_dir=tmp_path,
+        config={},
+        incomparable_reasons={},
+    )
+    assert idx["totals"]["total_rows"] == 2
+    assert idx["totals"]["high_uncertainty_rate"] == 0.0

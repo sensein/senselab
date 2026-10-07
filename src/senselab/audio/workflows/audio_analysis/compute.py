@@ -430,7 +430,13 @@ def harvest_pass(
         for m, b in asr_blocks.items()
         if isinstance(b, dict) and b.get("status") == "ok"
     }
-    consensus_fold = fuse_consensus_words(asr_resolved)
+    # ``policy=`` is not optional here even though it defaults to None: without it the fold silently
+    # falls back to ``fuse_consensus_words``'s own 0.3 / 0.15, and ``linking.asr_slot_overlap`` /
+    # ``asr_slot_mid_tol_s`` never reach the word-slot join on the only production path (F-162). The
+    # packaged defaults happen to equal the fallbacks, so the bug is inert today and shows up only
+    # when someone changes the config and nothing happens -- which is the worse failure, because the
+    # run's own provenance then records the value that ran and the config records a different one.
+    consensus_fold = fuse_consensus_words(asr_resolved, policy=speech_presence_policy)
 
     speaker_votes = harvest_speaker_votes(
         pass_summary=harvest_summary,
@@ -559,7 +565,7 @@ def compute_uncertainty_axes(
             ``"raw"`` and ``"enhanced"``.
         grid: The run's one bucket grid — every axis is harvested on it, so row *i* of one axis is
             row *i* of another and cross-axis coupling needs no projection. Defaults to
-            :data:`~.axes.DEFAULT_TIME_GRID`; there is deliberately no per-axis override.
+            :data:`~.grid.DEFAULT_TIME_GRID`; there is deliberately no per-axis override.
         params: Comparator-relevant CLI flags — recorded into each row's parquet
             provenance for reproducibility.
         audio: Per-pass ``Audio`` objects, used to slice waveforms for per-segment

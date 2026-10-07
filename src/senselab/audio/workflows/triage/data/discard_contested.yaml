@@ -1,0 +1,11 @@
+# When a breath or cough measure's no-event discard (no_breath_captured, no_cough_captured) is
+# flagged discard_contested instead: AIRWAY's own event detector (airway_events_found) found at least
+# this many events of the family's kind, and for a breath family the breath train itself rose at
+# least train_rise_db_min over the floor. Derivation and the owner-label agreement are in
+# specs/20261006-airway-move/design.md, "discard_contested".
+version: 2
+instructed_fraction: 1.0   # of the family's instructed count, rounded up
+uncounted_events_min: 1    # a cough family whose instruction names no count
+breath:
+  uncounted_events_min: 3  # a breath family whose instruction names no count (breath, v2-breath)
+  train_rise_db_min: 10.0  # the breath train's median burst rise over the floor

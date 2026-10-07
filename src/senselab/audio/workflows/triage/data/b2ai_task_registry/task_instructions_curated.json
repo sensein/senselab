@@ -1,0 +1,141 @@
+{
+  "description": "Curated per-recording instructions for tasks the flat audio_task_descriptions.json got wrong (bundled/concatenated multi-recording instructions, or the Respiration v2 name/instruction misalignment). Extracted verbatim from the bridge2ai-redcap description pages by review, then greeting-stripped (pure kid-session transitions removed; task-purpose/technique text kept). Authoritative instruction source for these tasks; the generator prefers this over the flat-file harvest.",
+  "source": {
+    "repo": "bridge2ai-redcap",
+    "git_tag": "v4.9.1",
+    "commit": "67e75fac084c2763c21cce064ebbbe8a93664046"
+  },
+  "tasks": {
+    "adult.breath-sounds": {
+      "note": "Correct instruction from Retired/Breath Sounds (relax 60s, three deep breaths in/out of the mouth); the flat file carried an unrelated '5-second auto-stop' protocol.",
+      "instructions": "You are being asked to record your breathing sounds. Please relax for 60 seconds until the task starts. Take three deep breaths in a row in and out of the mouth."
+    },
+    "adult.story-recall.v1": {
+      "note": "v1 (retired). Harvest carried the v2 (boy/frog) text; correct v1 instruction from Retired/Story Recall - v1. The v1 STIMULUS (grandfather/'Banana Oil' passage) is set in audio_task_descriptions.json, not here (registry does not carry recall stimulus text).",
+      "instructions": "You are given a text. Read the text so you familiarize yourself with it. You have up to 5 minutes to read it as many times as you want. When you are ready, you will be asked to recall the story. This can be in your own words."
+    },
+    "adult.maximum-phonation-time.v1": {
+      "note": "v1 (retired). Correct v1 instruction from Retired/Maximum Phonation Time - v1 (repeat 3 times; no 'progress bar').",
+      "instructions": "This task helps us analyze the way your breathing is connected to your voice. Take a very deep breath and hold out “ah” for as long as possible until you completely run out of air. We will repeat this task 3 times."
+    },
+    "adult.maximum-phonation-time.v2": {
+      "note": "Per-recording so recording 2 keeps its 'even longer' line (Current/Maximum Phonation Time - v2).",
+      "recordings": {
+        "1": "This task helps us analyze the way your breathing is connected to your voice. Take a very deep breath, tap on the record button, and hold out “ah” for as long as possible until you completely run out of air. Try to hold it until the progress bar reaches the end of the screen.",
+        "2": "This task helps us analyze the way your breathing is connected to your voice. Take a very deep breath, tap on the record button, and hold out “ah” for as long as possible until you completely run out of air. Try to hold it until the progress bar reaches the end of the screen. Now try to hold out “ah” for even longer."
+      }
+    },
+    "adult.diadochokinesis.v1": {
+      "note": "v1 (retired). Per-syllable from Retired/Diadochokinesis - v1 ('as fast as possible 10 times'); harvest carried the v2 demo/timer template.",
+      "recordings": {
+        "pa": "This task helps us analyze the ease and precision of speech sound productions. Record yourself repeating the syllable /PA/ as fast as possible 10 times.",
+        "ta": "This task helps us analyze the ease and precision of speech sound productions. Record yourself repeating the syllable /TA/ as fast as possible 10 times.",
+        "ka": "This task helps us analyze the ease and precision of speech sound productions. Record yourself repeating the syllable /KA/ as fast as possible 10 times.",
+        "pataka": "This task helps us analyze the ease and precision of speech sound productions. Now repeat the word /Pataka/ as fast as possible 10 times.",
+        "buttercup": "This task helps us analyze the ease and precision of speech sound productions. Now repeat the word /buttercup/ as fast as possible 10 times."
+      }
+    },
+    "adult.respiration-and-cough.v1": {
+      "note": "v1 (retired). Per-recording from Retired/Respiration and cough - v1 (10 recordings = 5 instructions repeated twice); harvest carried v2 text.",
+      "recordings": {
+        "breath-1": "First, let's hear you breathe comfortably for 30 seconds",
+        "breath-2": "First, let's hear you breathe comfortably for 30 seconds",
+        "fivebreaths-1": "After pressing on record, take 5 big breaths in and out through your nose with your mouth closed.",
+        "fivebreaths-3": "After pressing on record, take 5 big breaths in and out through your nose with your mouth closed.",
+        "fivebreaths-2": "After pressing on record, take 5 big breaths in and out through your mouth.",
+        "fivebreaths-4": "After pressing on record, take 5 big breaths in and out through your mouth.",
+        "threequickbreaths-1": "After pressing on record, exhale, then inhale quickly through your mouth, as if you are trying to catch your breath. Record 3 of these breaths in a single recording.",
+        "threequickbreaths-2": "After pressing on record, exhale, then inhale quickly through your mouth, as if you are trying to catch your breath. Record 3 of these breaths in a single recording.",
+        "cough-1": "After pressing record, cough 5 times",
+        "cough-2": "After pressing record, cough 5 times"
+      }
+    },
+    "adult.free-speech.v1": {
+      "note": "v1 (retired). Restore the trailing sentence dropped by the harvest (Retired/Free Speech - v1).",
+      "instructions": "This section is meant to hear you speak freely by answering an open-ended question. Please answer the following questions and record your answer. Keep talking until the time stops. Do not record yourself reading the prompt and avoid any information that could identify an individual."
+    },
+    "pediatric.identifying-pictures": {
+      "note": "Peds child-facing instruction (Current/Identifying Pictures, uniform across all 37 recordings); harvest returned an administrator note not present in the docs.",
+      "instructions": "That was great! Let's look at a few more pictures – if you know what it is, say it out loud so we can hear you! Remember, this time you're going to tell me the name of the picture, not the sound that it makes. If you're not sure, you can skip it and move on to the next picture. When you are ready, press \"record\"."
+    },
+    "pediatric.picture-description": {
+      "note": "Peds child-facing instruction (Current/Picture Description); harvest returned the ADULT picture-description text. NOTE: reaching this requires population-aware resolution since 'picture-description' exists in both populations.",
+      "instructions": "You're almost done! Now let's look at a picture that has a lot of details. Look at the picture and describe what you see – there are no right or wrong answers. Whatever you want to tell me about is perfect! When you are ready, press \"record\"."
+    },
+    "adult.respiration-and-cough.v2": {
+      "note": "Descriptions SWAPPED to match the (verified-correct) recording names; see eipm/bridge2ai-redcap#44.",
+      "recordings": {
+        "breath": "After pressing on record, breathe comfortably through your mouth for 20 seconds, until the timer runs out.",
+        "hardcough": "Please do not cover your mouth or place your hand between your mouth and the microphone during recording. Breathe normally, then when you are ready, tap the record button below and cough HARD as if something were stuck in your throat. Tap stop when finished.",
+        "threebreaths": "After pressing on record, exhale normally, then inhale quickly through your mouth, as if you are trying to catch your breath. Record 3 of these breaths in a single recording. Tap stop when finished.",
+        "threebreathsmouth": "After pressing on record, take 3 deep breaths in and out through your mouth. Tap stop when finished.",
+        "threebreathsnose": "After pressing on record, take 3 deep breaths in and out through your nose with your mouth closed. Tap stop when finished."
+      }
+    },
+    "pediatric.long-sounds": {
+      "recordings": {
+        "1": "First, let's start by saying 'ahhhhh' for around 5 seconds. We're going to repeat this three times during one recording. Try to have the child produce the sound at a habitual pitch – some tend to use a higher \"note\" or create vibrato if they have any singing background. The sound produced should be as steady/consistent as possible. Re-record if you perceive the child is using a higher pitch when sustaining the vowel (in comparison to speaking). When you are ready, press \"record\".",
+        "2": "Next, say the 'eeeeee' sound as steady as you can for about 5 seconds. We'll do this three times as well. When you are ready, press \"record\"."
+      }
+    },
+    "pediatric.noisy-sounds": {
+      "recordings": {
+        "1": "Here's a picture of an airplane – it makes an 'ah' sound – we're going to say that three times – 'ah ah ah'. When you are ready, press \"record\".",
+        "2": "Next is a little mouse – it makes an 'ee ee ee' sound - your turn! When you are ready, press \"record\".",
+        "3": "Here's a little ghost – he says 'oo oo oo' – your turn! When you are ready, press \"record\".",
+        "4": "The baby is sleeping, so we say 'sh sh sh'. Now you try! When you are ready, press \"record\".",
+        "5": "The snake makes a 'ss ss ss'. Can I hear you make that snake sound? When you are ready, press \"record\".",
+        "6": "Eating ice cream you might say \"muh muh muh\" – your turn! When you are ready, press \"record\".",
+        "7": "Uh oh! Looks like the baby has been colouring on the walls. We should tell him to stop – \"nuh nuh nuh\". You tell him too! When you are ready, press \"record\".",
+        "8": "The little bee makes a buzzing noise – 'zz zz zz'. Your turn! When you are ready, press \"record\".",
+        "9": "Bunnies hop around – 'hh hh hh' - now you do it! When you are ready, press \"record\".",
+        "10": "Have you ever seen a kangaroo jumping around? They go 'jj jj jj' – you try! When you are ready, press \"record\"."
+      }
+    },
+    "pediatric.silly-sounds": {
+      "recordings": {
+        "1": "First, we're going to say PUH PUH PUH over and over for about 5 seconds. Remember to take a breath if you need one! When you are ready, press \"record\".",
+        "2": "Next let's do the same thing, but this time say TUH TUH TUH. When you are ready, press \"record\".",
+        "3": "We've got one more to try. Tell me KUH KUH KUH... When you are ready, press \"record\".",
+        "4": "Let's try to put them together and say PUH TUH KUH over and over until the timer stops. If that word seems a little too tricky, you can say PAT-A-CAKE over and over instead. When you are ready, press \"record\"."
+      }
+    },
+    "pediatric.conversation-6-plus": {
+      "recordings": {
+        "ready-for-school": "Tell me about how you get ready for school in the morning.",
+        "favorite-show-movie-game": "Do you have a favourite movie? Video game? Show? I'd love to hear about it! When you're ready to share, press \"record\".",
+        "favorite-food": "Do you have a favourite food? Or a food you really don't like? When you're ready to share, press \"record\".",
+        "outside-of-school": "What do you like to do when you're not at school? Tell me about any activities you do like sports, dance, karate, art, etc. When you're ready to share, press \"record\"."
+      }
+    },
+    "pediatric.generative-naming-task": {
+      "recordings": {
+        "animals": "First, I want you to name as many animals you can think of. When you are ready, press \"record\".",
+        "food": "Next I want you to name as many food items you can think of. When you are ready, press \"record\"."
+      }
+    },
+    "pediatric.days-and-number-naming": {
+      "recordings": {
+        "numbers": "Let's see how high you can count? Let's start at 1... When you are ready, press \"record\".",
+        "days": "I bet you know the days of the week too. Let's start with Monday... When you are ready, press \"record\".",
+        "months": "How about months of the year? Can you name some for me? Start with January... When you are ready, press \"record\"."
+      }
+    },
+    "pediatric.role-naming-tasks-sounds": {
+      "recordings": {
+        "days": "What are the days in the week (starting with Sunday)?",
+        "months": "I bet you know the months of the year too. Let's start with January... When you are ready, press \"record\".",
+        "numbers": "Next can you count from 60 to 70? When you are ready, press \"record\"."
+      }
+    },
+    "pediatric.abcs-and-123s": {
+      "recordings": {
+        "abcs": "Let's sing our ABCs together! A,B... When you are ready, press \"record\".",
+        "123s": "I wonder how high you can count? Let's start at 1, 2... When you are ready, press \"record\"."
+      }
+    },
+    "pediatric.reading-passage": {
+      "instructions": "We're going to read a short story about a roller coaster ride called \"The Caterpillar\". A sentence or two will appear on the screen – read it aloud as if you were reading any regular story book. If you're not sure about a word, just skip it and keep going. When you are ready, press \"record\"."
+    }
+  }
+}

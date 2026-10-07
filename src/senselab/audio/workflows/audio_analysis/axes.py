@@ -27,7 +27,6 @@ from senselab.audio.workflows.audio_analysis.perturbations import IDENTITY_NAME
 __all__ = [
     "ATTENUATED_AXES",
     "AXIS_GRIDS",
-    "DEFAULT_TIME_GRID",
     "GridKind",
     "AXES",
     "AXIS_NAMES",
@@ -56,20 +55,6 @@ properties travel with the name; a caller that wants only the harvested ones ask
 
 GridKind = Literal["time", "word"]
 """What an axis's rows are indexed by: uniform time buckets, or one row per word."""
-
-DEFAULT_TIME_GRID: Final[tuple[float, float]] = (0.1, 0.1)
-"""``(win_length, hop_length)`` in seconds for every ``"time"``-gridded axis. **Configurable** — a
-downstream need for finer or coarser buckets changes this, or the run's params override it.
-
-**Window equals hop, so the buckets do not overlap**, and that is the point rather than a coincidence.
-The run that motivated this used a 0.1 s window at a 0.02 s hop: adjacent rows shared 80% of their
-audio, so 1070 rows were not 1070 independent measurements and nothing told a consumer so. A fine
-*resolution* is what the question justifies; reporting five near-duplicate rows per window is not the
-same thing, and the near-duplication was invisible in the output.
-
-100 ms is sufficient for the downstream needs known today — speech and target-activity onsets are
-resolved at it, and speaker turns and mask regions are much longer.
-"""
 
 
 @dataclass(frozen=True)
@@ -124,7 +109,7 @@ class Axis:
         calibrated: Does this axis's aggregator take a calibration temperature? Only the axes
             whose sub-signals are combined through a softmax-like fold have one to take.
         grid: What this axis's rows are indexed by (D-24). ``"time"`` for the axes whose evidence
-            resamples or projects onto uniform buckets — they share :data:`DEFAULT_TIME_GRID`, so
+            resamples or projects onto uniform buckets — they share :data:`~.grid.DEFAULT_TIME_GRID`, so
             joining them needs no projection, which the mask's derivation from presence requires.
             ``"word"`` for ``asr``, whose evidence is a transcript: it has no natural per-bucket
             value, so bucketing it is the ``REDUCE`` that :class:`~.shapes.GridRelation` names,
@@ -348,8 +333,15 @@ attribution is a live question, used instead as an answer to it. Word timing bec
 ``attribution.word_coverage``, a gate; these become nothing at all, because the gating work is
 already done — and done better — at harvest time:
 
-- ``attribution.word_coverage`` nulls a bucket no recognized word reaches.
+- ``attribution.word_coverage`` nulls a bucket no recognized word reaches, except where the mask
+  positively reports a voice there (``target_active``/``nontarget_active``): word absence is a proxy
+  for speech absence that holds for adult connected speech and not for a cry or a cough, so a
+  measured vocalization outranks it (F-165, ``speaker._VOCAL_ACTIVITY``).
 - ``attribution.target_activity_doubt`` nulls a bucket the mask confidently calls ``target_free``.
+
+Both mask-state readings are inert on a run today — the region table never reaches the harvester, so
+the state is always ``None`` (F-187) — which changes nothing here: the gating work these replace was
+already the wrong shape, and wiring the mask through is what makes them fire, not re-coupling.
 
 Both read a **claim** (a word is there; the mask's ``state``). What a coupled row carries is the
 other axis's *doubt*, which is not a presence claim at all: ``speech_presence`` doubt near zero means
@@ -426,7 +418,7 @@ def axis(name: str) -> Axis:
 AXIS_GRIDS: Final[dict[str, GridKind]] = {a.name: a.grid for a in AXES if a.active}
 """ ``{axis → what its rows are indexed by}``.
 
-Read this before joining two axes' rows. Three share ``"time"`` at :data:`DEFAULT_TIME_GRID` and join
+Read this before joining two axes' rows. Three share ``"time"`` at :data:`~.grid.DEFAULT_TIME_GRID` and join
 trivially — non-overlapping and identical, so row *i* of one is row *i* of another. ``asr`` is on
 ``word`` and joining it against them is a **projection**, which is a named derivative that records
 which direction it went and what it did with a word spanning two buckets. Today that join is implicit

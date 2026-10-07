@@ -1,0 +1,132 @@
+# Redaction policy v9: the words the triage fold masks or releases by kind, whatever a detector or
+# the redaction reviewer said. Tokens are compared lower-case, accents folded, edge punctuation and a
+# possessive dropped; a phrase is a list of such tokens matched as a contiguous run.
+#
+# derivation: owner, 2026-10-03 (rules quoted verbatim in specs/20261003-redaction-policy-v7/design.md).
+# Dates: every absolute date element is masked, the year included -- years, months, holidays, a
+# day of the month; seasons, weekdays and relative or length-of-time expressions are released (owner,
+# 2026-10-04: "redact absolute years and months etc and leave seasons and days of the week"). Ages: masked by default. Places: everything below a country is masked; a country is
+# released unless the reviewer judges it triangulates (owner: "countries can be kept, unless there is
+# the possibility of triangulation from other unredacted information"). Kinship words are never
+# masked. The lists are the English and Spanish forms present in the Bridge2AI-Voice adult release
+# (sidecar language en / es); a word this file does not list is left to the detectors and the reviewer.
+version: 9
+
+months: [january, february, march, april, may, june, july, august, september, october, november, december, sept]
+# Spanish month names are written lower-case, so they are matched in any case.
+months_es: [enero, febrero, marzo, abril, mayo, junio, julio, agosto, septiembre, setiembre, octubre, noviembre, diciembre]
+# Seasons are released, not masked (v9); the lists name them for `season_positions`.
+# `seasons_in_context` only beside a context word, since "spring" and "fall" are also a verb and an
+# injury.
+seasons: [summer, summers, summertime, winter, winters, wintertime, autumn, autumns, springtime, verano, invierno, primavera, otono]
+seasons_in_context: [spring, fall]
+season_context_before: [the, this, last, next, every, early, late, past, during, in, that, each]
+season_context_after: [break, semester, term, season, quarter, training, cleaning]
+holidays: [christmas, xmas, christmastime, thanksgiving, easter, halloween, hanukkah, chanukah, ramadan, eid, diwali, passover, kwanzaa, navidad, nochebuena, nochevieja, pascua, valentines]
+holiday_phrases:
+- [new, year]
+- [new, years]
+- [new, years, eve]
+- [valentines, day]
+- [independence, day]
+- [fourth, of, july]
+- [4th, of, july]
+- [memorial, day]
+- [labor, day]
+- [mothers, day]
+- [fathers, day]
+- [patricks, day]
+- [cinco, de, mayo]
+- [ano, nuevo]
+- [dia, de, muertos]
+- [dia, de, los, muertos]
+- [semana, santa]
+- [dia, de, accion, de, gracias]
+- [dia, de, la, madre]
+- [dia, del, padre]
+# Words that make a number beside them an age.
+age_after: [old, olds, yo]
+age_units: [year, years, yr, yrs, ano, anos]
+age_before: [age, aged, edad, turned, turning, cumpli, cumplo, cumple, tengo]
+age_decades: [teens, twenties, thirties, forties, fifties, sixties, seventies, eighties, nineties, 20s, 30s, 40s, 50s, 60s, 70s, 80s, 90s, veinte, treinta, cuarenta, cincuenta, sesenta, setenta, ochenta, noventa]
+age_decade_before: [my, his, her, their, our, your, mis, sus]
+birthday: [birthday, birthdays, cumpleanos]
+first_person_be: [i'm, im, i am]
+number_words: [zero, one, two, three, four, five, six, seven, eight, nine, ten, eleven, twelve, thirteen, fourteen, fifteen, sixteen, seventeen, eighteen, nineteen, twenty, thirty, forty, fifty, sixty, seventy, eighty, ninety, hundred, uno, una, dos, tres, cuatro, cinco, seis, siete, ocho, nueve, diez, once, doce, trece, catorce, quince, dieciseis, diecisiete, dieciocho, diecinueve, veinte, veintiuno, veintidos, veintitres, veinticuatro, veinticinco, veintiseis, veintisiete, veintiocho, veintinueve, treinta, cuarenta, cincuenta, sesenta, setenta, ochenta, noventa, cien, ciento, y]
+ordinal_words: [first, second, third, fourth, fifth, sixth, seventh, eighth, ninth, tenth, eleventh, twelfth, thirteenth, fourteenth, fifteenth, sixteenth, seventeenth, eighteenth, nineteenth, twentieth, thirtieth, fortieth, fiftieth, sixtieth, seventieth, eightieth, ninetieth, hundredth]
+# A spelled year: a century word followed by more number words ("nineteen ninety-eight", "twenty
+# twenty-one"), or "two thousand" / "dos mil" / "mil novecientos" and what follows.
+year_centuries: [seventeen, eighteen, nineteen]
+year_twenty_followers: [ten, eleven, twelve, thirteen, fourteen, fifteen, sixteen, seventeen, eighteen, nineteen, twenty]
+year_thousand_heads: [[two, thousand], [dos, mil], [mil, novecientos], [mil, ochocientos]]
+# A bare "two thousand" is a year only after one of these ("in two thousand"), not "two thousand steps".
+year_lead: [in, since, until, from, by, around, before, after, en, desde, hasta, antes, despues]
+kinship: [mom, moms, mommy, mum, mother, mothers, momma, mama, dad, dads, daddy, father, fathers, parent, parents, brother, brothers, sister, sisters, sibling, siblings, son, sons, daughter, daughters, child, children, kid, kids, husband, husbands, wife, wives, spouse, fiance, fiancee, boyfriend, girlfriend, grandma, grandmother, grandmothers, grandpa, grandfather, grandfathers, granny, nana, papa, grandparent, grandparents, grandson, grandsons, granddaughter, granddaughters, grandchild, grandchildren, grandkid, grandkids, aunt, aunts, auntie, uncle, uncles, cousin, cousins, niece, nieces, nephew, nephews, inlaw, inlaws, motherinlaw, fatherinlaw, brotherinlaw, sisterinlaw, soninlaw, daughterinlaw, stepmother, stepfather, stepmom, stepdad, stepson, stepdaughter, stepbrother, stepsister, family, families, relative, relatives, madre, padre, padres, papa, hermano, hermanos, hermana, hermanas, hijo, hijos, hija, hijas, esposo, esposa, marido, novio, novia, abuelo, abuelos, abuela, abuelas, nieto, nietos, nieta, nietas, tio, tios, tia, tias, primo, primos, prima, primas, sobrino, sobrinos, sobrina, sobrinas, suegro, suegra, suegros, cuñado, cunado, cunada, familia, familias, familiares]
+# Countries: released by kind where the country is the whole of a place name. A US territory or a
+# special region is not listed; it is masked as a place below a country.
+countries: [afghanistan, albania, algeria, andorra, angola, argentina, armenia, australia, austria, azerbaijan, bahamas, bahrain, bangladesh, barbados, belarus, belgium, belize, benin, bhutan, bolivia, botswana, brazil, brasil, brunei, bulgaria, burundi, cambodia, cameroon, canada, chad, chile, china, colombia, comoros, congo, croatia, cuba, cyprus, czechia, denmark, djibouti, dominica, ecuador, egypt, england, eritrea, estonia, eswatini, ethiopia, fiji, finland, france, gabon, gambia, germany, ghana, greece, grenada, guatemala, guinea, guyana, haiti, honduras, hungary, iceland, india, indonesia, iran, iraq, ireland, israel, italy, jamaica, japan, jordan, kazakhstan, kenya, kiribati, korea, kosovo, kuwait, kyrgyzstan, laos, latvia, lebanon, lesotho, liberia, libya, liechtenstein, lithuania, luxembourg, madagascar, malawi, malaysia, maldives, mali, malta, mauritania, mauritius, mexico, micronesia, moldova, monaco, mongolia, montenegro, morocco, mozambique, myanmar, burma, namibia, nauru, nepal, netherlands, holland, nicaragua, niger, nigeria, norway, oman, pakistan, palau, palestine, panama, paraguay, peru, philippines, poland, portugal, qatar, romania, russia, rwanda, samoa, scotland, senegal, serbia, seychelles, singapore, slovakia, slovenia, somalia, spain, sudan, suriname, sweden, switzerland, syria, taiwan, tajikistan, tanzania, thailand, togo, tonga, tunisia, turkey, turkmenistan, tuvalu, uganda, ukraine, uruguay, uzbekistan, vanuatu, venezuela, vietnam, wales, yemen, zambia, zimbabwe, america, mexico, espana, peru, panama, alemania, francia, italia, inglaterra, irlanda, japon, rusia, suiza, suecia, noruega, holanda, belgica, grecia, turquia, egipto, marruecos, argelia, canada, brasil, haiti, jamaica, cuba]
+country_phrases:
+- [united, states]
+- [united, states, of, america]
+- [united, kingdom]
+- [great, britain]
+- [dominican, republic]
+- [el, salvador]
+- [costa, rica]
+- [south, korea]
+- [north, korea]
+- [new, zealand]
+- [saudi, arabia]
+- [south, africa]
+- [sri, lanka]
+- [czech, republic]
+- [ivory, coast]
+- [sierra, leone]
+- [trinidad, and, tobago]
+- [papua, new, guinea]
+- [united, arab, emirates]
+- [bosnia, and, herzegovina]
+- [north, macedonia]
+- [east, timor]
+- [estados, unidos]
+- [reino, unido]
+- [republica, dominicana]
+- [nueva, zelanda]
+- [arabia, saudita]
+- [corea, del, sur]
+- [gran, bretana]
+# Written forms matched case-sensitively, so "US" the country is not "us" the pronoun.
+country_abbreviations: [US, U.S, U.S., USA, U.S.A, U.S.A., UK, U.K, U.K., UAE]
+# States, provinces and their equivalents, matched only written as a proper noun.
+states: [alabama, alaska, arizona, arkansas, california, colorado, connecticut, delaware, florida, georgia, hawaii, idaho, illinois, indiana, iowa, kansas, kentucky, louisiana, maine, maryland, massachusetts, michigan, minnesota, mississippi, missouri, montana, nebraska, nevada, ohio, oklahoma, oregon, pennsylvania, tennessee, texas, utah, vermont, virginia, washington, wisconsin, wyoming, guam, ontario, quebec, alberta, manitoba, saskatchewan, newfoundland, labrador, yukon, nunavut, aguascalientes, campeche, chiapas, chihuahua, coahuila, colima, durango, guanajuato, guerrero, hidalgo, jalisco, michoacan, morelos, nayarit, oaxaca, puebla, queretaro, sinaloa, sonora, tabasco, tamaulipas, tlaxcala, veracruz, yucatan, zacatecas, pensilvania, luisiana, misisipi, misuri, tejas, hawai]
+state_phrases:
+- [new, york]
+- [new, jersey]
+- [new, mexico]
+- [new, hampshire]
+- [north, carolina]
+- [south, carolina]
+- [north, dakota]
+- [south, dakota]
+- [west, virginia]
+- [rhode, island]
+- [puerto, rico]
+- [virgin, islands]
+- [district, of, columbia]
+- [british, columbia]
+- [new, brunswick]
+- [nova, scotia]
+- [prince, edward, island]
+- [northwest, territories]
+- [baja, california]
+- [baja, california, sur]
+- [nuevo, leon]
+- [quintana, roo]
+- [san, luis, potosi]
+- [estado, de, mexico]
+- [nueva, york]
+- [nuevo, mexico]
+- [nueva, jersey]
+- [carolina, del, norte]
+- [carolina, del, sur]
+state_abbreviations: [D.C., DC, NYC]

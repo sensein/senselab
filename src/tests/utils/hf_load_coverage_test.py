@@ -68,6 +68,7 @@ _SUBPROCESS_HELPER = "hf_subprocess_env"
 
 # In-process load sites that route through resolve_model / load_hf_resilient.
 REVIEWED_INPROCESS = {
+    "audio/tasks/audio_understanding/audio_flamingo.py",
     "audio/tasks/classification/huggingface.py",
     "audio/tasks/classification/speech_emotion_recognition/api.py",
     "audio/tasks/forced_alignment/forced_alignment.py",
@@ -79,11 +80,9 @@ REVIEWED_INPROCESS = {
     "audio/tasks/speech_to_text/huggingface.py",
     "audio/tasks/ssl_embeddings/self_supervised_features.py",
     "audio/tasks/text_to_speech/huggingface.py",
-    "audio/tasks/voice_activity_detection/pyannote_vad.py",
     "text/tasks/embeddings_extraction/huggingface.py",
     "text/tasks/embeddings_extraction/sentence_transformers.py",
     # scene-quality / adaptive workflow (branch-only, #536)
-    "audio/tasks/voice_activity_detection/frame_posteriors.py",
     "audio/workflows/audio_analysis/adaptive/audio_io.py",
     "audio/workflows/audio_analysis/adaptive/backends.py",
 }
@@ -101,6 +100,11 @@ REVIEWED_SUBPROCESS = {
     "audio/tasks/speech_to_text/qwen.py",
     "audio/tasks/text_to_speech/qwen_tts.py",
     "text/tasks/pii_detection/subprocess_backend.py",
+    # The redacted-transcript reviewer: the parent stages the checkpoint via
+    # hf_subprocess_env(model_id, revision) before spawning, and passes the staged snapshot
+    # directory as the worker's load target, so the worker runs under HF_HUB_OFFLINE with no
+    # per-call Hub version check. Checked the same way subprocess_backend.py's gliner branch was.
+    "text/tasks/pii_detection/redaction_review.py",
     # scene-quality / ASR (branch-only, #536)
     "audio/tasks/scene_quality/brouhaha.py",
     "audio/tasks/speech_to_text/crisperwhisper.py",
@@ -123,6 +127,18 @@ RAW_LOAD_EXCEPTIONS = {
     # the *entire* multi-GB checkpoint snapshot, which would defeat the point of this
     # function (enumerate named speakers without paying for the weights).
     "audio/tasks/text_to_speech/qwen_tts.py",
+    # ClearerVoice's loader takes no revision at all, so utils/clearvoice.py pre-stages the checkpoint
+    # itself: resolve_revision for the commit, then hf_hub_download(..., revision=<sha>) for the files
+    # that commit's own last_best_checkpoint manifest names, and the worker is handed the resulting
+    # local snapshot directory. resolve_model is not used because MossFormer2_SR_48K's repository holds
+    # a 1.74 GB optimizer state no inference run reads. See specs/20260819-clearvoice-integration.
+    "utils/clearvoice.py",
+    # DriftSE resolves the ref to a commit SHA via resolve_revision and then calls
+    # hf_hub_download(..., revision=<sha>) for the single checkpoint file it reads. Upstream's
+    # mirror is 2.4 GB -- two 1.14 GB checkpoint variants plus 1648 demo wavs -- so resolve_model
+    # would download 1.3 GB no run reads. Same pinning guarantee as above: a full commit hash takes
+    # huggingface_hub's commit-hash shortcut, so a cached file resolves with no network.
+    "audio/tasks/speech_enhancement/driftse.py",
 }
 
 

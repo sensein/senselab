@@ -1,0 +1,115 @@
+
+======================================================================================================================
+## B4. chunk == slice, EACH LIBRARY AGAINST ITS OWN FULL DECODE, alignment searched over +/-4000 samples
+======================================================================================================================
+   'off' = how far the returned chunk actually sits from where it was requested (samples).
+
+  --- wav PCM_16 (sr=22050)
+      torchcodec             full_n=132300 | start 0: n=2048 off=0 diff=0.00e+00 EXACT | odd 5001: n=2048 off=0 diff=0.00e+00 EXACT | mid: n=4096 off=0 diff=0.00e+00 EXACT
+      torchaudio(=tc)        full_n=132300 | start 0: n=2048 off=0 diff=0.00e+00 EXACT | odd 5001: n=2048 off=0 diff=0.00e+00 EXACT | mid: n=4096 off=0 diff=0.00e+00 EXACT
+      soundfile              full_n=132300 | start 0: n=2048 off=0 diff=0.00e+00 EXACT | odd 5001: n=2048 off=0 diff=0.00e+00 EXACT | mid: n=4096 off=0 diff=0.00e+00 EXACT
+      ffmpeg -ss BEFORE -i   full_n=132300 | start 0: n=2048 off=0 diff=0.00e+00 EXACT | odd 5001: n=2048 off=0 diff=0.00e+00 EXACT | mid: n=4096 off=0 diff=0.00e+00 EXACT
+      ffmpeg -ss AFTER -i    full_n=132300 | start 0: n=2048 off=0 diff=0.00e+00 EXACT | odd 5001: n=2048 off=0 diff=0.00e+00 EXACT | mid: n=4096 off=0 diff=0.00e+00 EXACT
+
+  --- wav FLOAT32 (sr=22050)
+      torchcodec             full_n=132300 | start 0: n=2048 off=0 diff=0.00e+00 EXACT | odd 5001: n=2048 off=0 diff=0.00e+00 EXACT | mid: n=4096 off=0 diff=0.00e+00 EXACT
+      torchaudio(=tc)        full_n=132300 | start 0: n=2048 off=0 diff=0.00e+00 EXACT | odd 5001: n=2048 off=0 diff=0.00e+00 EXACT | mid: n=4096 off=0 diff=0.00e+00 EXACT
+      soundfile              full_n=132300 | start 0: n=2048 off=0 diff=0.00e+00 EXACT | odd 5001: n=2048 off=0 diff=0.00e+00 EXACT | mid: n=4096 off=0 diff=0.00e+00 EXACT
+      ffmpeg -ss BEFORE -i   full_n=132300 | start 0: n=2048 off=0 diff=0.00e+00 EXACT | odd 5001: n=2048 off=0 diff=0.00e+00 EXACT | mid: n=4096 off=0 diff=0.00e+00 EXACT
+      ffmpeg -ss AFTER -i    full_n=132300 | start 0: n=2048 off=0 diff=0.00e+00 EXACT | odd 5001: n=2048 off=0 diff=0.00e+00 EXACT | mid: n=4096 off=0 diff=0.00e+00 EXACT
+
+  --- flac PCM_24 (sr=22050)
+      torchcodec             full_n=132300 | start 0: n=2048 off=0 diff=0.00e+00 EXACT | odd 5001: n=2048 off=0 diff=0.00e+00 EXACT | mid: n=4096 off=0 diff=0.00e+00 EXACT
+      torchaudio(=tc)        full_n=132300 | start 0: n=2048 off=0 diff=0.00e+00 EXACT | odd 5001: n=2048 off=0 diff=0.00e+00 EXACT | mid: n=4096 off=0 diff=0.00e+00 EXACT
+      soundfile              full_n=132300 | start 0: n=2048 off=0 diff=0.00e+00 EXACT | odd 5001: n=2048 off=0 diff=0.00e+00 EXACT | mid: n=4096 off=0 diff=0.00e+00 EXACT
+      ffmpeg -ss BEFORE -i   full_n=132300 | start 0: n=2048 off=0 diff=0.00e+00 EXACT | odd 5001: n=2048 off=0 diff=0.00e+00 EXACT | mid: n=4096 off=0 diff=0.00e+00 EXACT
+      ffmpeg -ss AFTER -i    full_n=132300 | start 0: n=2048 off=0 diff=0.00e+00 EXACT | odd 5001: n=2048 off=0 diff=0.00e+00 EXACT | mid: n=4096 off=0 diff=0.00e+00 EXACT
+
+  --- mp3 192k (sr=22050)
+      torchcodec             full_n=132300 | start 0: n=943 off=0 diff=0.00e+00 EXACT | odd 5001: n=2048 off=-1105 diff=0.00e+00 EXACT | mid: n=4096 off=-1105 diff=0.00e+00 EXACT
+      torchaudio(=tc)        full_n=132300 | start 0: n=2048 off=0 diff=0.00e+00 EXACT | odd 5001: n=2048 off=0 diff=0.00e+00 EXACT | mid: n=4096 off=0 diff=0.00e+00 EXACT
+      soundfile              full_n=132300 | start 0: n=2048 off=0 diff=0.00e+00 EXACT | odd 5001: n=2048 off=0 diff=1.19e-07 - | mid: n=4096 off=0 diff=1.79e-07 -
+      ffmpeg -ss BEFORE -i   full_n=132300 | start 0: n=2048 off=0 diff=1.21e+00 - | odd 5001: n=2048 off=0 diff=1.22e+00 - | mid: n=4096 off=0 diff=1.23e+00 -
+      ffmpeg -ss AFTER -i    full_n=132300 | start 0: n=2048 off=0 diff=0.00e+00 EXACT | odd 5001: n=2048 off=0 diff=0.00e+00 EXACT | mid: n=4096 off=0 diff=0.00e+00 EXACT
+
+  --- m4a aac (sr=22050)
+      torchcodec             full_n=133120 | start 0: n=2048 off=0 diff=0.00e+00 EXACT | odd 5001: n=2048 off=0 diff=0.00e+00 EXACT | mid: n=4096 off=0 diff=0.00e+00 EXACT
+      torchaudio(=tc)        full_n=133120 | start 0: n=2048 off=0 diff=0.00e+00 EXACT | odd 5001: n=2048 off=0 diff=0.00e+00 EXACT | mid: n=4096 off=0 diff=0.00e+00 EXACT
+      soundfile              full decode failed: LibsndfileError
+      ffmpeg -ss BEFORE -i   full_n=133120 | start 0: n=2048 off=0 diff=1.11e+00 - | odd 5001: n=2048 off=0 diff=4.06e-02 - | mid: n=4096 off=0 diff=9.31e-02 -
+      ffmpeg -ss AFTER -i    full_n=133120 | start 0: n=2048 off=0 diff=0.00e+00 EXACT | odd 5001: n=2048 off=0 diff=0.00e+00 EXACT | mid: n=4096 off=0 diff=0.00e+00 EXACT
+
+  --- opus 48k (sr=48000)
+      torchcodec             full_n=132300 | start 0: n=4458 off=0 diff=0.00e+00 EXACT | odd 5001: n=4458 off=0 diff=0.00e+00 EXACT | mid: n=8916 off=0 diff=0.00e+00 EXACT
+      torchaudio(=tc)        full_n=132300 | start 0: n=4458 off=0 diff=0.00e+00 EXACT | odd 5001: n=4458 off=0 diff=0.00e+00 EXACT | mid: n=8916 off=0 diff=0.00e+00 EXACT
+      soundfile              full_n=132300 | start 0: n=4458 off=0 diff=0.00e+00 EXACT | odd 5001: n=4458 off=0 diff=0.00e+00 EXACT | mid: n=8916 off=0 diff=0.00e+00 EXACT
+      ffmpeg -ss BEFORE -i   full_n=132300 | start 0: n=4458 off=0 diff=0.00e+00 EXACT | odd 5001: n=4458 off=0 diff=0.00e+00 EXACT | mid: n=8916 off=0 diff=0.00e+00 EXACT
+      ffmpeg -ss AFTER -i    full_n=132300 | start 0: n=4458 off=0 diff=0.00e+00 EXACT | odd 5001: n=4458 off=0 diff=0.00e+00 EXACT | mid: n=8916 off=0 diff=0.00e+00 EXACT
+
+======================================================================================================================
+## B5. Does AudioSamples.pts_seconds report the true start of the returned chunk?
+======================================================================================================================
+
+  --- wav PCM_16
+      start 0    requested_start=0       pts_seconds=0.000000000 (= sample 0.0)  n=2048  align_vs_requested off=0 diff=0.00e+00  align_vs_pts off=0 diff=0.00e+00 exact=True
+      odd 5001   requested_start=5001    pts_seconds=0.226802721 (= sample 5001.0)  n=2048  align_vs_requested off=0 diff=0.00e+00  align_vs_pts off=0 diff=0.00e+00 exact=True
+      mid        requested_start=44877   pts_seconds=2.035238095 (= sample 44877.0)  n=4096  align_vs_requested off=0 diff=0.00e+00  align_vs_pts off=0 diff=0.00e+00 exact=True
+
+  --- wav FLOAT32
+      start 0    requested_start=0       pts_seconds=0.000000000 (= sample 0.0)  n=2048  align_vs_requested off=0 diff=0.00e+00  align_vs_pts off=0 diff=0.00e+00 exact=True
+      odd 5001   requested_start=5001    pts_seconds=0.226802721 (= sample 5001.0)  n=2048  align_vs_requested off=0 diff=0.00e+00  align_vs_pts off=0 diff=0.00e+00 exact=True
+      mid        requested_start=44877   pts_seconds=2.035238095 (= sample 44877.0)  n=4096  align_vs_requested off=0 diff=0.00e+00  align_vs_pts off=0 diff=0.00e+00 exact=True
+
+  --- flac PCM_24
+      start 0    requested_start=0       pts_seconds=0.000000000 (= sample 0.0)  n=2048  align_vs_requested off=0 diff=0.00e+00  align_vs_pts off=0 diff=0.00e+00 exact=True
+      odd 5001   requested_start=5001    pts_seconds=0.226802721 (= sample 5001.0)  n=2048  align_vs_requested off=0 diff=0.00e+00  align_vs_pts off=0 diff=0.00e+00 exact=True
+      mid        requested_start=44877   pts_seconds=2.035238095 (= sample 44877.0)  n=4096  align_vs_requested off=0 diff=0.00e+00  align_vs_pts off=0 diff=0.00e+00 exact=True
+
+  --- mp3 192k
+      start 0    requested_start=0       pts_seconds=0.050113379 (= sample 1105.0)  n=943   align_vs_requested off=0 diff=0.00e+00  align_vs_pts off=-1105 diff=0.00e+00 exact=True
+      odd 5001   requested_start=5001    pts_seconds=0.226802721 (= sample 5001.0)  n=2048  align_vs_requested off=-1105 diff=0.00e+00  align_vs_pts off=-1105 diff=0.00e+00 exact=True
+      mid        requested_start=44877   pts_seconds=2.035238095 (= sample 44877.0)  n=4096  align_vs_requested off=-1105 diff=0.00e+00  align_vs_pts off=-1105 diff=0.00e+00 exact=True
+
+  --- m4a aac
+      start 0    requested_start=0       pts_seconds=0.000000000 (= sample 0.0)  n=2048  align_vs_requested off=0 diff=0.00e+00  align_vs_pts off=0 diff=0.00e+00 exact=True
+      odd 5001   requested_start=5001    pts_seconds=0.226802721 (= sample 5001.0)  n=2048  align_vs_requested off=0 diff=0.00e+00  align_vs_pts off=0 diff=0.00e+00 exact=True
+      mid        requested_start=44877   pts_seconds=2.035238095 (= sample 44877.0)  n=4096  align_vs_requested off=0 diff=0.00e+00  align_vs_pts off=0 diff=0.00e+00 exact=True
+
+  --- opus 48k
+      start 0    requested_start=0       pts_seconds=0.000000000 (= sample 0.0)  n=4458  align_vs_requested off=0 diff=0.00e+00  align_vs_pts off=0 diff=0.00e+00 exact=True
+      odd 5001   requested_start=10887   pts_seconds=0.226812500 (= sample 10887.0)  n=4458  align_vs_requested off=0 diff=0.00e+00  align_vs_pts off=0 diff=0.00e+00 exact=True
+      mid        requested_start=97691   pts_seconds=2.035229167 (= sample 97691.0)  n=8916  align_vs_requested off=0 diff=0.00e+00  align_vs_pts off=0 diff=0.00e+00 exact=True
+
+======================================================================================================================
+## B6. mp3: what exactly does the range API drop? sweep chunk starts, report returned length
+======================================================================================================================
+  full decode n=132300; input was 132300
+    request start=0       n_req=2048 -> n_got=943    pts=0.050113379 (sample 1105.0)  best_off_vs_requested=0 diff=0.00e+00 exact=True
+    request start=1       n_req=2048 -> n_got=944    pts=0.050113379 (sample 1105.0)  best_off_vs_requested=-1 diff=0.00e+00 exact=True
+    request start=100     n_req=2048 -> n_got=1043   pts=0.050113379 (sample 1105.0)  best_off_vs_requested=-100 diff=0.00e+00 exact=True
+    request start=576     n_req=2048 -> n_got=1519   pts=0.050113379 (sample 1105.0)  best_off_vs_requested=-576 diff=0.00e+00 exact=True
+    request start=1105    n_req=2048 -> n_got=2048   pts=0.050113379 (sample 1105.0)  best_off_vs_requested=-1105 diff=0.00e+00 exact=True
+    request start=1106    n_req=2048 -> n_got=2048   pts=0.050158730 (sample 1106.0)  best_off_vs_requested=-1105 diff=0.00e+00 exact=True
+    request start=2048    n_req=2048 -> n_got=2048   pts=0.092879819 (sample 2048.0)  best_off_vs_requested=-1105 diff=0.00e+00 exact=True
+    request start=5001    n_req=2048 -> n_got=2048   pts=0.226802721 (sample 5001.0)  best_off_vs_requested=-1105 diff=0.00e+00 exact=True
+    request start=22050   n_req=2048 -> n_got=2048   pts=1.000000000 (sample 22050.0)  best_off_vs_requested=-1105 diff=0.00e+00 exact=True
+
+======================================================================================================================
+## B7. Cross-library agreement on a FULL decode of the same file (decoder identity, not chunking)
+======================================================================================================================
+  wav PCM_16     torchcodec: n=132300 EXACT | torchaudio(=tc): n=132300 EXACT | soundfile: n=132300 EXACT | ffmpeg -ss BEFORE -i: n=132300 EXACT
+  wav FLOAT32    torchcodec: n=132300 EXACT | torchaudio(=tc): n=132300 EXACT | soundfile: n=132300 EXACT | ffmpeg -ss BEFORE -i: n=132300 EXACT
+  flac PCM_24    torchcodec: n=132300 EXACT | torchaudio(=tc): n=132300 EXACT | soundfile: n=132300 EXACT | ffmpeg -ss BEFORE -i: n=132300 EXACT
+  mp3 192k       torchcodec: n=132300 EXACT | torchaudio(=tc): n=132300 EXACT | soundfile: n=132300 diff=2.46e-06 | ffmpeg -ss BEFORE -i: n=132300 EXACT
+  m4a aac        torchcodec: n=133120 EXACT | torchaudio(=tc): n=133120 EXACT | soundfile=ERR | ffmpeg -ss BEFORE -i: n=133120 EXACT
+  opus 48k       torchcodec: n=132300 EXACT | torchaudio(=tc): n=132300 EXACT | soundfile: n=132300 diff=1.13e-06 | ffmpeg -ss BEFORE -i: n=132300 EXACT
+
+======================================================================================================================
+## B8. senselab Audio: does its offset/duration path inherit the mp3 defect? (uses torchcodec range)
+======================================================================================================================
+  wav PCM_16     full_n=132300   chunk_n=2048   off_from_requested=0 max|diff|=0.000e+00 bitexact=True
+  wav FLOAT32    full_n=132300   chunk_n=2048   off_from_requested=0 max|diff|=0.000e+00 bitexact=True
+  flac PCM_24    full_n=132300   chunk_n=2048   off_from_requested=0 max|diff|=0.000e+00 bitexact=True
+  mp3 192k       full_n=132300   chunk_n=2048   off_from_requested=-1105 max|diff|=0.000e+00 bitexact=True
+  m4a aac        full_n=133120   chunk_n=2048   off_from_requested=0 max|diff|=0.000e+00 bitexact=True
+  opus 48k       full_n=132300   chunk_n=4458   off_from_requested=0 max|diff|=0.000e+00 bitexact=True

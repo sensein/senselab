@@ -211,11 +211,11 @@ def test_model_for_task_routes_remaining_tasks(_offline_model_construction: None
 
 
 def test_model_for_task_routes_driftse_enhancement_by_prefix(_offline_model_construction: None) -> None:
-    """A ``sensein/driftse`` id is HF-hosted; every other enhancement id is SpeechBrain."""
+    """A ``LIANGXU123/DriftSE`` id is HF-hosted; every other enhancement id is SpeechBrain."""
     from senselab.utils.data_structures import model_for_task
     from senselab.utils.data_structures.model import HFModel, SpeechBrainModel
 
-    assert isinstance(model_for_task("sensein/driftse-distilhubert-three-layers", task="enhancement"), HFModel)
+    assert isinstance(model_for_task("LIANGXU123/DriftSE", task="enhancement"), HFModel)
     assert isinstance(model_for_task("speechbrain/sepformer-wham16k-enhancement", task="enhancement"), SpeechBrainModel)
 
 

@@ -371,7 +371,7 @@ def model_for_task(model_id: str, *, task: str) -> SenselabModel:
     Args:
         model_id: HuggingFace-style model identifier.
         task: One of ``"diarization"``, ``"asr"``, ``"embeddings"``, ``"enhancement"``,
-            ``"separation"``.
+            ``"separation"``, ``"super_resolution"``, ``"target_speaker_extraction"``.
 
     Returns:
         The provider-specific `SenselabModel` subclass instance.
@@ -387,7 +387,7 @@ def model_for_task(model_id: str, *, task: str) -> SenselabModel:
         ``speaker_diarization/api.py``'s ``elif`` chain. That duplication is
         pre-existing and worth collapsing into one source of truth eventually;
         the two tables must be kept in sync by hand until then. The enhancement
-        branch below duplicates ``enhance_audios``'s ``sensein/driftse`` prefix
+        branch below duplicates ``enhance_audios``'s ``LIANGXU123/DriftSE`` prefix
         check the same way, for the same reason: importing the literal from
         ``audio.tasks.speech_enhancement.api`` here would make ``utils`` depend
         on ``audio``, inverting the package layering. The separation branch has
@@ -414,10 +414,10 @@ def model_for_task(model_id: str, *, task: str) -> SenselabModel:
     if task == "embeddings":
         return SpeechBrainModel(path_or_uri=model_id)
     if task == "enhancement":
-        if model_id.startswith("sensein/driftse"):
+        if model_id.startswith("LIANGXU123/DriftSE") or model_id.startswith("alibabasglab/"):
             return HFModel(path_or_uri=model_id)
         return SpeechBrainModel(path_or_uri=model_id)
-    if task == "separation":
+    if task in ("separation", "super_resolution", "target_speaker_extraction"):
         return HFModel(path_or_uri=model_id)
     raise ValueError(f"unknown task: {task}")
 

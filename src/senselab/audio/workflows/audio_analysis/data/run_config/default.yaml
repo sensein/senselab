@@ -23,6 +23,11 @@
 version: 3
 name: senselab-audio-analysis/default
 
+# `derivation` below is a config *value*, not a comment: `load_run_config` hashes the merged mapping,
+# so editing a word of it changes `config_hash` and two behaviourally identical runs report
+# different config identities. Corrections to its prose go in `#` comments like this one instead.
+# One correction outstanding: the constant it names moved `axes.py` → `grid.py`, so read
+# `axes.DEFAULT_TIME_GRID` below as `grid.DEFAULT_TIME_GRID`.
 derivation: |
   Grid (0.1 s window, 0.1 s hop) — axes.DEFAULT_TIME_GRID, and the reason it is a single pair is
   measured: with a per-axis grid the four axes carried 242 / 242 / 19 / 8 rows on four different
@@ -97,8 +102,10 @@ output_dir: artifacts/analyze_audio
 # to CPU while Whisper and SepFormer can use it, so one global choice is wrong on Apple silicon.
 device: auto
 
-# The run's one bucket grid. Equals `axes.DEFAULT_TIME_GRID`; `run_config` asserts they agree at load
-# rather than trusting two copies of a pair of floats.
+# The run's one bucket grid. Equals `grid.DEFAULT_TIME_GRID`, which is `BucketGrid`'s own default.
+# The two copies are pinned together by
+# `src/tests/scripts/analyze_audio_test.py::test_every_axis_is_configured_on_one_grid`, not by a
+# load-time assertion — see F-189 in `specs/20260815-215106-analyze-audio-audit/register.md`.
 grid:
   win_length: 0.1
   hop_length: 0.1

@@ -1,28 +1,35 @@
 """Public API for the senselab source separation task.
 
-Exposes class-space resolution for unasdiff's sound prior (:func:`resolve_source_classes`) and
-the separation entry point itself, :func:`separate_audios`, which currently has one backend
-(unasdiff) reachable only by calling this function directly -- see
-``senselab.audio.tasks.source_separation.unasdiff``'s module docstring for the licensing reason
-it is not wired into any default model list or into ``audio_analysis``.
+Exposes class-space resolution for unasdiff's sound prior (:func:`resolve_source_classes`) and the
+separation entry point, :func:`separate_audios`. Two backends: unasdiff, reachable only by naming it
+and never wired into a default model list (see ``unasdiff``'s module docstring for the licensing
+reason), and ClearerVoice's ``MossFormer2_SS_16K``.
+
+``mode``, ``source_classes``, ``seed`` and ``diffusion_steps`` are unasdiff's own concepts and are
+rejected for any other backend rather than silently ignored. They pre-date the ``parameters`` pathway
+and should eventually move behind it: design.md §6.
 """
 
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import Any, List, Mapping, Optional
 
 from senselab.audio.data_structures import Audio
+from senselab.audio.tasks.source_separation.clearvoice import (
+    CLEARVOICE_SEPARATION_TASK,
+    separate_audios_with_clearvoice,
+)
 from senselab.audio.tasks.source_separation.unasdiff import (
     _DIFFUSION_STEPS,
     load_fsd_class_map_document,
     separate_with_unasdiff,
 )
+from senselab.utils.backend_parameters import DISPATCHER_OWNED, record_parameters_on, resolve_backend_parameters
+from senselab.utils.clearvoice import clearvoice_model_spec, is_clearvoice_model_id
 from senselab.utils.data_structures import DeviceType, HFModel, SenselabModel
 
-# unasdiff is the only backend this task has, so this is a containment check (reject anything
-# that isn't naming this backend) rather than a dispatch table like enhancement/api.py's -- see
-# senselab.utils.data_structures.model.model_for_task's "separation" branch, which duplicates
-# this literal by hand for the same layering reason its own Note documents for "enhancement".
+# Duplicated by hand in senselab.utils.data_structures.model.model_for_task's "separation" branch,
+# for the layering reason its own Note documents.
 _UNASDIFF_MODEL_PREFIX = "sensein/unasdiff"
 
 _MODE_SPEECH_SOUND = "speech_sound"
@@ -38,8 +45,10 @@ def separate_audios(
     mode: str = _MODE_SPEECH_SOUND,
     source_classes: Optional[List[str]] = None,
     device: Optional[DeviceType] = None,
+    parameters: Optional[Mapping[str, Any]] = None,
     seed: int = 17,
     diffusion_steps: int = _DIFFUSION_STEPS,
+    timeout_s: Optional[float] = None,
 ) -> List[List[Audio]]:
     """Separate each audio into ``n_sources`` sources with unasdiff.
 
@@ -76,14 +85,21 @@ def separate_audios(
             ``"speech_sound"``, ``n_sources`` for ``"sound_sound"``, unused for
             ``"speech_speech"``). Resolved to conditioning indices via
             :func:`resolve_source_classes`.
-        device: Accepted for signature parity with other separation/enhancement entry points.
+        device: Device the worker runs on -- CUDA or CPU. ``None`` leaves the choice to the
+            worker. Forwarded unchanged to
+            :func:`senselab.audio.tasks.source_separation.unasdiff.separate_with_unasdiff`.
         seed: RNG seed, recorded in the worker's log line.
-        diffusion_steps: Number of reverse-diffusion steps the sampler runs per window --
-            forwarded unchanged to :func:`senselab.audio.tasks.source_separation.unasdiff.separate_with_unasdiff`.
-            Defaults to ``200``, upstream's own quality setting and the only value with any
-            published basis; lower values trade quality for speed roughly proportionally but are
-            entirely unmeasured in this repository, so there is no recommended lower setting --
-            see that function's docstring for the full derivation.
+        diffusion_steps: Reverse-diffusion schedule length. The priors are trained at ``T=200``, so
+            this parameter accepts only its default value today -- see the ``ValueError`` below and
+            ``unasdiff.py``'s ``doc.md`` for why any other value re-specifies the schedule rather than
+            subsampling it. Kept as a parameter (rather than dropped) because a future retrained
+            prior may use a different ``T``.
+        timeout_s: Ceiling on the worker subprocess, in seconds; ``None`` derives one from the
+            work. Forwarded unchanged to whichever backend runs.
+        parameters: Backend-specific parameters, validated against the selected backend's own
+            signature — an unknown key raises rather than being ignored. ClearerVoice declares nothing
+            beyond ``timeout_s``, which is already an argument above, so today this is accepted only
+            to reject a key that would otherwise have been silently dropped.
 
     Returns:
         One list of ``n_sources`` ``Audio`` objects per input, in order.
@@ -92,14 +108,61 @@ def separate_audios(
         ValueError: If ``model`` is given and does not name the unasdiff mirror; if ``mode`` is
             not one of the three supported modes; if a mode using the sound prior is missing
             ``source_classes``; if ``source_classes`` does not have exactly the number of
-            entries that mode's sound slots require; or if ``diffusion_steps`` is not positive.
+            entries that mode's sound slots require; if ``diffusion_steps`` is not ``200``; if
+            ``n_sources`` exceeds ``3`` (the paper's own evaluated range); or if ``timeout_s`` is
+            not positive.
     """
+    if isinstance(model, HFModel) and is_clearvoice_model_id(str(model.path_or_uri)):
+        spec = clearvoice_model_spec(str(model.path_or_uri), expected_task=CLEARVOICE_SEPARATION_TASK)
+        unasdiff_only = {
+            "mode": (mode, _MODE_SPEECH_SOUND),
+            "source_classes": (source_classes, None),
+            "seed": (seed, 17),
+            "diffusion_steps": (diffusion_steps, _DIFFUSION_STEPS),
+        }
+        set_anyway = sorted(name for name, (given, default) in unasdiff_only.items() if given != default)
+        if set_anyway:
+            raise ValueError(
+                f"{', '.join(set_anyway)} describe unasdiff's diffusion priors and its FSD class "
+                f"space, and mean nothing to {spec.model_id}, which has no modes and no class "
+                "conditioning. Refusing rather than ignoring them."
+            )
+        if n_sources != spec.expected_outputs:
+            raise ValueError(
+                f"{spec.model_id} separates exactly {spec.expected_outputs} sources; n_sources="
+                f"{n_sources} cannot be honoured. The count is fixed by the checkpoint."
+            )
+        kwargs, record = resolve_backend_parameters(
+            separate_audios_with_clearvoice,
+            parameters,
+            backend_name="clearvoice",
+            owned=(*DISPATCHER_OWNED, "timeout_s"),
+        )
+        if timeout_s is not None:
+            kwargs["timeout_s"] = timeout_s
+        separated = separate_audios_with_clearvoice(audios=audios, model=model, device=device, **kwargs)
+        record_parameters_on(separated, record)
+        return separated
+
     if model is not None and not (
         isinstance(model, HFModel) and str(model.path_or_uri).startswith(_UNASDIFF_MODEL_PREFIX)
     ):
         raise ValueError(
-            "source separation currently has one backend (unasdiff); model must be None or an "
-            f"HFModel whose path_or_uri starts with {_UNASDIFF_MODEL_PREFIX!r}, got {model!r}"
+            "source separation has two backends: unasdiff, and ClearerVoice's MossFormer2_SS_16K. model "
+            f"must be None, an HFModel whose path_or_uri starts with {_UNASDIFF_MODEL_PREFIX!r}, or a "
+            f"ClearerVoice separation checkpoint under 'alibabasglab/', got {model!r}"
+        )
+    if parameters:
+        raise ValueError(
+            "unasdiff takes no parameters through this mapping: every parameter it declares is already "
+            f"a named argument of separate_audios ({', '.join(sorted(parameters))} included). Pass them "
+            "directly, so one value has one source."
+        )
+    if diffusion_steps != _DIFFUSION_STEPS:
+        raise ValueError(
+            f"diffusion_steps={diffusion_steps} is not supported: unasdiff's priors are trained at "
+            f"T={_DIFFUSION_STEPS}, and any other value re-specifies the reverse-diffusion schedule "
+            "rather than subsampling it. See unasdiff.py's module doc.md for the mechanism."
         )
     if mode not in _VALID_MODES:
         raise ValueError(f"Unknown mode {mode!r}. Valid modes are: {', '.join(_VALID_MODES)}")
@@ -131,6 +194,8 @@ def separate_audios(
         device=device,
         seed=seed,
         diffusion_steps=diffusion_steps,
+        timeout_s=timeout_s,
+        source_classes=source_classes,
     )
 
 
@@ -146,7 +211,7 @@ def resolve_source_classes(names: list[str]) -> list[int]:
 
     Raises:
         ValueError: If any name is not in the class map. The sound prior's
-            embedding has 50 slots but only 41 were trained (see
+            embedding has 51 slots but only 41 were trained (see
             ``data/fsd41_classes.json``'s derivation); silently mapping an
             unknown name to a fallback index would condition the prior on
             whatever class that fallback happens to name, while the caller's

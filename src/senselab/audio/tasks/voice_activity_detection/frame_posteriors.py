@@ -1,48 +1,28 @@
 """The continuous per-frame posterior container, and the chunk stitching Brouhaha uses.
 
-No longer loads ``pyannote/segmentation-3.0``: nothing consumes its per-speaker channels
-(D-19 moved the count to ``occupancy`` and the binding to ``identity_binding``), and
-Brouhaha's VAD head supplies the speech posterior at the same 16.9 ms hop.
+`FramePosterior` holds one recording's per-frame activations with the model's channels intact and
+pools them to P(speech) on demand; `stitch_frames` and `chunked_frame_inference` assemble one
+continuous timeline out of the overlapping chunks a frame-based model is run over.
 
-Unlike ``detect_human_voice_activity_in_audios`` (which runs the high-level
-``Pipeline`` and returns thresholded ``ScriptLine`` segments), this extractor
-uses the low-level ``Model`` + ``Inference`` path to obtain the **raw per-frame
-speech probability** (~16.9 ms/frame) without any segment thresholding or
-hangover smoothing — exactly what the speech_presence axis needs to resolve brief
-events and to compute a within-bucket temporal-instability signal.
-
-``segmentation-3.0`` is a powerset model (up to 3 speakers / chunk); P(speech)
-is derived as ``1 − P(no-speaker)``. The model is gated on HuggingFace; loading
-reuses ``ensure_hf_model`` + ``get_huggingface_token`` so cached runs skip the
-Hub (constitution VI). No new dependency.
+These are raw posteriors at the model's native hop (~16.9 ms for the frame models this workflow
+uses), not the thresholded ``ScriptLine`` segments ``detect_human_voice_activity_in_audios``
+returns: no segment thresholding and no hangover smoothing, which is what the speech_presence axis
+needs to resolve brief events and to compute a within-bucket temporal-instability signal. Brouhaha's
+VAD head supplies the speech posterior; this module itself loads no model. See
+``specs/20260818-093000-drop-pre-4x-pyannote/decision.md``.
 """
 
 from __future__ import annotations
 
-import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Optional
 
 import numpy as np
 
 from senselab.audio.data_structures import Audio
-from senselab.utils.data_structures import DeviceType, PyannoteAudioModel, _select_device_and_dtype
-from senselab.utils.data_structures.logging import logger
-from senselab.utils.data_structures.model import get_huggingface_token
-from senselab.utils.dependencies import ensure_hf_model, hf_local_files_only, retry_on_transient_error
 
 if TYPE_CHECKING:
     from pyannote.audio import Inference
-
-try:
-    from pyannote.audio import Inference, Model
-
-    PYANNOTEAUDIO_AVAILABLE = True
-except (ImportError, RuntimeError):
-    PYANNOTEAUDIO_AVAILABLE = False
-
-SEGMENTATION_MODEL_ID = "pyannote/segmentation-3.0"
-SEGMENTATION_REVISION = "main"
 
 
 ChannelFormat = str
@@ -60,13 +40,8 @@ def channel_format_for(*, n_columns: int, declared_classes: Optional[list[str]])
         ``"single"`` for one column, ``"per_speaker"`` when the width matches the declared class
         count, ``"powerset"`` when it matches the powerset size, else ``"per_speaker"``.
 
-    **Never inferred from row sums.** ``segmentation-3.0`` declares ``powerset=True``, but
-    pyannote 4.x converts to per-speaker activations before returning, so the output has one
-    column per speaker. With a single speaker fully active those rows sum to exactly 1.0 — so a
-    row-sum test concludes "powerset" and the caller then computes ``1 − data[:, 0]``, treating
-    *speaker#1* as the no-speaker class. Measured on real audio that read exactly 1.0000 in 100%
-    of frames, including 4 s of digital silence. Width against the declaration cannot make that
-    mistake: powerset over 3 speakers is 7 columns, per-speaker is 3.
+    The decision is made from the declaration and the output width, **never from row sums**; see
+    ``specs/20260728-221507-per-speaker-identity-scene/layered-architecture.md``.
     """
     if n_columns <= 1:
         return "single"
@@ -109,17 +84,15 @@ class FramePosterior:
     """Per-frame activations for one audio — the L1 measurement, channels intact.
 
     Attributes:
-        activations: ``(num_frames, num_channels)`` model output. For
-            ``segmentation-3.0`` one column per speaker; for a VAD head a single column.
+        activations: ``(num_frames, num_channels)`` model output — one column per speaker for a
+            speaker-segmentation model, a single column for a VAD head.
         frame_hop_s: seconds between consecutive frame starts.
         frame_win_s: analysis window per frame (seconds).
         channel_format: what the columns mean; see :func:`channel_format_for`.
         channel_labels: the model's own names for the columns, when it declares them.
 
-    The pooled P(speech) is deliberately **not** a field. Storing a collapse next to the matrix
-    it came from lets the two disagree, and consumers read the stored value — which is how a
-    reduction that returned exactly 1.0000 everywhere went unnoticed. :meth:`speech_prob`
-    computes it on demand from the channels.
+    The pooled P(speech) is deliberately **not** a field: :meth:`speech_prob` computes it on demand
+    from the channels, so a stored collapse cannot disagree with the matrix it came from.
     """
 
     activations: np.ndarray
@@ -194,10 +167,10 @@ def _frame_grid(inference: "Inference", num_frames: int, dur_s: float) -> tuple[
     return hop, hop
 
 
-# segmentation-3.0 (and Brouhaha) train on 10 s chunks. For recordings longer
-# than one chunk we slide a bounded window and stitch, so memory stays flat and
-# we avoid pyannote's "whole-file on a frame-based model" degradation, while
-# keeping native ~17 ms frame resolution.
+# Brouhaha trains on 10 s chunks. For recordings longer than one chunk we slide a
+# bounded window and stitch, so memory stays flat and we avoid pyannote's
+# "whole-file on a frame-based model" degradation, while keeping native ~17 ms
+# frame resolution.
 _CHUNK_S = 10.0
 _CHUNK_STEP_S = 8.0  # 2 s overlap → smooth stitching across chunk seams
 
@@ -348,51 +321,3 @@ def chunked_frame_inference(
     # timeline before averaging (see ``stitch_frames``). Single-column outputs are unaffected.
     data = stitch_frames(chunk_arrays, chunk_starts_s, hop, align_permutations=True)
     return data, hop, win
-
-
-_inference_cache: dict[str, "Inference"] = {}
-
-
-def _get_inference(model: PyannoteAudioModel, device: Optional[DeviceType]) -> "Inference":
-    """Load (and cache) a segmentation ``Inference`` for the requested model/device."""
-    import torch
-
-    device, _ = _select_device_and_dtype(user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.CPU])
-    key = f"{model.path_or_uri}-{model.revision}-{device}"
-    if key not in _inference_cache:
-        # ensure_hf_model stages once (cross-process heartbeat lock) AND returns the
-        # resolved immutable SHA; pin the load to it so a cached model makes no
-        # per-call Hub HEAD — the 429 source under parallel batch. (Previously it
-        # staged but then passed the mutable ref to from_pretrained, re-tripping HEAD.)
-        sha = ensure_hf_model(str(model.path_or_uri), revision=model.revision or "main", token=get_huggingface_token())
-        loaded = retry_on_transient_error(
-            Model.from_pretrained,
-            model.path_or_uri,
-            revision=sha,
-            token=get_huggingface_token(),
-        )
-        if loaded is None:
-            raise ValueError(f"segmentation model {model.path_or_uri} could not be loaded.")
-        # window="whole" returns the model's NATIVE per-frame posterior (~17 ms/frame)
-        # for the entire signal. The default (sliding) mode returns a coarse
-        # per-chunk aggregate (~1 s step) that would defeat the fine speech_presence grid.
-        # Trade-off: "whole" holds the whole signal in one forward pass — fine for
-        # the short clinical clips this workflow targets; very long recordings would
-        # need chunked stitching (future work).
-        _inference_cache[key] = Inference(loaded, window="whole", device=torch.device(device.value))
-    return _inference_cache[key]
-
-
-def _declared_classes(inference: "Inference") -> Optional[list[str]]:
-    """The model's own names for its output channels, or ``None`` when it declares none."""
-    try:
-        spec = inference.model.specifications
-        # Multi-task models (e.g. Brouhaha) declare a tuple of specifications, one per head. There
-        # is no single channel vocabulary in that case, so decline rather than pick a head — a
-        # wrong vocabulary would produce a confident and wrong channel-format decision.
-        if isinstance(spec, tuple):
-            return None
-        classes = spec.classes
-    except (AttributeError, TypeError):
-        return None
-    return [str(c) for c in classes] if classes else None

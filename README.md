@@ -118,7 +118,7 @@ round count, aggregator, per-run intervention budgets, ASR reserve/escalation po
 parameters — and it keeps its own `policy_hash` beside the config's `config_hash`, because a policy
 change and a model change are not the same event. `scripts/adaptive_loop.py` takes `--config` too.
 Runs are **deterministic**: identical inputs + config produce byte-identical decision logs. `HF_TOKEN` enables the gated
-`pyannote/segmentation-3.0` overlap detector; without it the loop degrades gracefully and records
+`pyannote/brouhaha` frame posteriors; without it the loop degrades gracefully and records
 the skipped intervention in `final/decisions.json → convergence.next_actions`.
 
 ---

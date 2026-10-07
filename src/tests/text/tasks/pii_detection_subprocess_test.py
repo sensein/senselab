@@ -13,8 +13,11 @@ Moved here from ``audio/workflows/audio_analysis/pii_subprocess_test.py``
 alongside the module under test (see plan-b Task 1).
 """
 
+import io
 import json
 import subprocess
+import sys
+import types
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -315,3 +318,267 @@ def test_presidio_only_does_not_pay_for_the_cascade_source(fake_venv: Path, monk
     detect_pii_via_subprocess({"whisper": "Sample."}, detectors=[DETECTOR_PRESIDIO])
 
     assert recorder.calls[0]["input"]["rules_source"] is None
+
+
+# ── GLiNER loads from the staged snapshot, never through the Hub ─────
+
+
+class _OfflineHubGliner:
+    """Stands in for the venv's ``GLiNER``, refusing a repo id the way offline mode does.
+
+    ``gliner``'s own ``from_pretrained`` reaches the Hub tree-listing API even when every file is
+    cached, and that call raises under ``HF_HUB_OFFLINE=1`` — which is what the parent sets for this
+    worker. So the stub raises on anything that is not an existing directory: a test that passes has
+    demonstrated the load needed no Hub call.
+    """
+
+    loaded_from: list[str] = []
+    loaded_kwargs: list[dict] = []
+
+    @classmethod
+    def from_pretrained(cls, model_id: object, **kwargs: object) -> "_OfflineHubGliner":
+        """Load from a local directory; anything else is a Hub call, which fails offline."""
+        if not Path(str(model_id)).is_dir():
+            raise RuntimeError(f"OfflineModeIsEnabled: cannot reach the Hub for {model_id!r}")
+        cls.loaded_from.append(str(model_id))
+        cls.loaded_kwargs.append(dict(kwargs))
+        return cls()
+
+    def predict_entities(self, text: str, labels: list, threshold: float = 0.5) -> list:
+        """No findings; these tests are about the load, not the detections."""
+        return []
+
+
+@pytest.fixture
+def worker_runner(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture) -> Callable[..., dict[str, Any]]:
+    """Run the worker script in-process with the venv-only imports stubbed.
+
+    The script under test is the same string the subprocess executes, reading its request from stdin
+    and answering on stdout, so what is exercised is the worker's own load path rather than a
+    paraphrase of it. ``gliner`` and ``torch`` are the two venv-only imports its GLiNER branch makes.
+    """
+
+    def _run(payload: dict[str, Any], **stubs: Any) -> dict[str, Any]:  # noqa: ANN401
+        monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(payload)))
+        saved = {name: sys.modules.get(name) for name in stubs}
+        sys.modules.update(stubs)
+        try:
+            exec(  # noqa: S102 — executing the worker string is the point of this harness
+                compile(pii_subprocess._PII_WORKER_SCRIPT, "<pii-worker>", "exec"), {"__name__": "__main__"}
+            )
+        finally:
+            for name, previous in saved.items():
+                if previous is None:
+                    sys.modules.pop(name, None)
+                else:
+                    sys.modules[name] = previous
+        return json.loads(capsys.readouterr().out)
+
+    return _run
+
+
+def _gliner_stub_modules() -> dict[str, Any]:
+    """A fake ``gliner`` (offline-strict) and a fake ``torch`` (no CUDA), as sys.modules entries."""
+    _OfflineHubGliner.loaded_from = []
+    _OfflineHubGliner.loaded_kwargs = []
+    gliner_module = types.ModuleType("gliner")
+    gliner_module.GLiNER = _OfflineHubGliner  # type: ignore[attr-defined]
+    torch_module = types.ModuleType("torch")
+    torch_module.cuda = types.SimpleNamespace(is_available=lambda: False)  # type: ignore[attr-defined]
+    return {"gliner": gliner_module, "torch": torch_module}
+
+
+def _gliner_worker_payload(load_path: Optional[str], sha: str = "b" * 40) -> dict[str, Any]:
+    """A GLiNER-only worker request, optionally carrying the staged snapshot path."""
+    return {
+        "transcripts": {"whisper": "Sample transcript."},
+        "detectors": [DETECTOR_GLINER],
+        "presidio_entities": [],
+        "presidio_score_threshold": 0.4,
+        "gliner_model": _DEFAULT_GLINER_MODEL,
+        "gliner_model_path": load_path,
+        "gliner_revision": sha,
+        "gliner_labels": ["person"],
+        "gliner_threshold": 0.5,
+        "gliner_label_map": {},
+        "rules_source": None,
+    }
+
+
+def test_the_worker_loads_gliner_from_the_staged_snapshot_directory(
+    worker_runner: Callable[..., dict[str, Any]], tmp_path: Path
+) -> None:
+    """GLiNER is loaded from the staged path, so offline mode needs no Hub call."""
+    snapshot = tmp_path / "snapshots" / ("b" * 40)
+    snapshot.mkdir(parents=True)
+    output = worker_runner(_gliner_worker_payload(str(snapshot)), **_gliner_stub_modules())
+    assert output["detectors_used"] == [DETECTOR_GLINER], f"gliner did not load: {output.get('failures')}"
+    assert output["failures"] == {}
+    assert _OfflineHubGliner.loaded_from == [str(snapshot)], "the loader must receive a local path, not a repo id"
+
+
+def test_the_worker_records_the_commit_it_loaded_from(
+    worker_runner: Callable[..., dict[str, Any]], tmp_path: Path
+) -> None:
+    """Loading from a path must not cost the provenance: the SHA is still recorded."""
+    snapshot = tmp_path / "snapshots" / ("b" * 40)
+    snapshot.mkdir(parents=True)
+    output = worker_runner(_gliner_worker_payload(str(snapshot)), **_gliner_stub_modules())
+    assert output["gliner_revision"] == "b" * 40
+
+
+def test_the_worker_falls_back_to_the_repo_id_when_nothing_was_staged(
+    worker_runner: Callable[..., dict[str, Any]],
+) -> None:
+    """A parent that could not stage leaves the child online, so the repo id is still the load path."""
+    output = worker_runner(_gliner_worker_payload(None), **_gliner_stub_modules())
+    assert output["failures"], "the stub refuses a repo id, which is what an offline Hub call does"
+    assert _OfflineHubGliner.loaded_from == []
+
+
+def test_the_parent_sends_the_staged_snapshot_path_for_gliner(
+    fake_venv: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The payload carries the staged directory, and still carries the resolved SHA."""
+    snapshot = tmp_path / "snapshots" / ("f" * 40)
+    snapshot.mkdir(parents=True)
+    monkeypatch.setattr("senselab.utils.dependencies.resolve_model", lambda *a, **k: ("f" * 40, snapshot))
+    recorder = _SubprocessRecorder({"spans_by_asr": {"whisper": []}, "failures": {}, "detectors_used": ["gliner"]})
+    monkeypatch.setattr(subprocess, "run", recorder)
+
+    detect_pii_via_subprocess({"whisper": "Sample."}, detectors=[DETECTOR_GLINER])
+
+    sent = recorder.calls[0]["input"]
+    assert sent["gliner_model_path"] == str(snapshot)
+    assert Path(sent["gliner_model_path"]).is_dir(), "the worker is given a directory it can open"
+    assert sent["gliner_revision"] == "f" * 40, "the resolved commit still travels, for the provenance"
+    assert sent["gliner_model"] == _DEFAULT_GLINER_MODEL, "the repo id is still named"
+
+
+def test_the_parent_sends_no_snapshot_path_when_staging_fails(fake_venv: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """An unstageable model leaves the child online rather than pointed at a path to nothing."""
+
+    def _fail(*_a: object, **_k: object) -> tuple[str, Path]:
+        raise RuntimeError("not cached and the Hub is unreachable")
+
+    monkeypatch.setattr("senselab.utils.dependencies.resolve_model", _fail)
+    recorder = _SubprocessRecorder({"spans_by_asr": {"whisper": []}, "failures": {}, "detectors_used": ["gliner"]})
+    monkeypatch.setattr(subprocess, "run", recorder)
+
+    detect_pii_via_subprocess({"whisper": "Sample."}, detectors=[DETECTOR_GLINER])
+
+    assert recorder.calls[0]["input"]["gliner_model_path"] is None
+
+
+def test_presidio_only_sends_no_gliner_snapshot_path(fake_venv: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Nothing is staged when GLiNER is not requested, so nothing is pointed at either."""
+    recorder = _SubprocessRecorder({"spans_by_asr": {"whisper": []}, "failures": {}, "detectors_used": ["presidio"]})
+    monkeypatch.setattr(subprocess, "run", recorder)
+
+    detect_pii_via_subprocess({"whisper": "Sample."}, detectors=[DETECTOR_PRESIDIO])
+
+    assert recorder.calls[0]["input"]["gliner_model_path"] is None
+
+
+# ── Result cache ──────────────────────────────────────────────────────
+
+
+_FULL = {"failures": {}, "detectors_used": ["gliner", "presidio", "rules"]}
+
+
+def _echo(parsed: dict[str, Any]) -> dict[str, Any]:
+    """One span per transcript, naming its text, so a reused result is recognisable."""
+    return {
+        "spans_by_asr": {
+            asr: [{"text": text, "category": "PERSON", "source": "presidio", "score": 0.9}]
+            for asr, text in parsed["transcripts"].items()
+        },
+        **_FULL,
+    }
+
+
+def test_a_transcript_scanned_once_is_not_scanned_again(fake_venv: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Identical text under an identical detector set is served without starting the worker."""
+    recorder = _SubprocessRecorder({})
+    recorder.input_hook = _echo
+    monkeypatch.setattr(subprocess, "run", recorder)
+    first = detect_pii_via_subprocess({"0": "Alice lives in Boston."})
+    second = detect_pii_via_subprocess({"0": "Alice lives in Boston."})
+    assert len(recorder.calls) == 1
+    assert second["spans_by_asr"] == first["spans_by_asr"]
+    assert second["detectors_used"] == first["detectors_used"]
+    assert first["cache"]["0"]["hit"] is False and second["cache"]["0"]["hit"] is True
+    assert first["cache"]["0"]["key"] == second["cache"]["0"]["key"]
+
+
+def test_only_the_unseen_transcripts_reach_the_worker(fake_venv: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A batch mixing held and new texts sends the worker the new ones alone."""
+    recorder = _SubprocessRecorder({})
+    recorder.input_hook = _echo
+    monkeypatch.setattr(subprocess, "run", recorder)
+    detect_pii_via_subprocess({"0": "Alice lives in Boston."})
+    result = detect_pii_via_subprocess({"0": "Alice lives in Boston.", "1": "Bob works at MIT."})
+    assert len(recorder.calls) == 2
+    assert list(recorder.calls[1]["input"]["transcripts"]) == ["1"]
+    assert result["spans_by_asr"]["0"][0]["text"] == "Alice lives in Boston."
+    assert result["spans_by_asr"]["1"][0]["text"] == "Bob works at MIT."
+    assert [result["cache"][k]["hit"] for k in ("0", "1")] == [True, False]
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"detectors": [DETECTOR_PRESIDIO, DETECTOR_RULES]},
+        {"presidio_score_threshold": 0.7},
+        {"gliner_threshold": 0.8},
+        {"gliner_labels": ["person"]},
+    ],
+)
+def test_a_changed_process_parameter_misses(
+    fake_venv: Path, monkeypatch: pytest.MonkeyPatch, change: dict[str, Any]
+) -> None:
+    """Every parameter that shapes the scan is in the key."""
+    recorder = _SubprocessRecorder({})
+    recorder.input_hook = lambda parsed: {**_echo(parsed), "detectors_used": sorted(parsed["detectors"])}
+    monkeypatch.setattr(subprocess, "run", recorder)
+    detect_pii_via_subprocess({"0": "Alice lives in Boston."})
+    detect_pii_via_subprocess({"0": "Alice lives in Boston."}, **change)
+    assert len(recorder.calls) == 2
+
+
+def test_a_different_gliner_commit_misses(fake_venv: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """New GLiNER weights never serve a scan made with the old ones."""
+    recorder = _SubprocessRecorder({})
+    recorder.input_hook = _echo
+    monkeypatch.setattr(subprocess, "run", recorder)
+    detect_pii_via_subprocess({"0": "Alice lives in Boston."})
+    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: "a" * 40)
+    detect_pii_via_subprocess({"0": "Alice lives in Boston."})
+    assert len(recorder.calls) == 2
+
+
+def test_an_incomplete_scan_is_not_stored(fake_venv: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A detector that failed to load leaves a result a retry could improve, so it is recomputed."""
+    recorder = _SubprocessRecorder(
+        {"spans_by_asr": {"0": []}, "failures": {"gliner": "boom"}, "detectors_used": ["presidio", "rules"]}
+    )
+    monkeypatch.setattr(subprocess, "run", recorder)
+    detect_pii_via_subprocess({"0": "Alice lives in Boston."})
+    detect_pii_via_subprocess({"0": "Alice lives in Boston."})
+    assert len(recorder.calls) == 2
+
+
+def test_a_fully_held_batch_builds_no_venv(fake_venv: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """When every transcript is held, neither the venv nor the model is touched."""
+    recorder = _SubprocessRecorder({})
+    recorder.input_hook = _echo
+    monkeypatch.setattr(subprocess, "run", recorder)
+    detect_pii_via_subprocess({"0": "Alice lives in Boston."})
+
+    def refuse(*_: object, **__: object) -> Path:
+        raise AssertionError("a fully cached batch must not build the venv")
+
+    monkeypatch.setattr(pii_subprocess, "ensure_venv", refuse)
+    monkeypatch.setattr(pii_subprocess, "_staged_snapshot", refuse)
+    detect_pii_via_subprocess({"0": "Alice lives in Boston."})
+    assert len(recorder.calls) == 1

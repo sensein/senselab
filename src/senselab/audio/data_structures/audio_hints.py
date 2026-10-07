@@ -103,7 +103,7 @@ class SpeakerEmbeddingProvenance(BaseModel):
         """
         if v is None:
             return v
-        if not _SHA_RE.match(v):
+        if not _SHA_RE.fullmatch(v):
             raise ValueError(f"model_commit_sha must be a resolved 40-hex commit, got {v!r}")
         return v
 
@@ -143,6 +143,9 @@ class AudioHints(BaseModel):
             concatenated string, because "which sentence was skipped" is a different question
             from "how close was the whole thing".
         target_speaker: The declared target speaker's embedding, with provenance.
+        instructions: What the participant was told to do, verbatim, or None.
+        speech_type: What kind of speech the task asks for, as the corpus names it (``read``,
+            ``recall``, ``free``, ``non-lexical`` ...), or None.
         metadata: Escape hatch for corpus-specific extras that do not deserve a typed field.
     """
 
@@ -151,4 +154,6 @@ class AudioHints(BaseModel):
     environment: Optional[str] = None
     expected_speech: list[ExpectedSpeech] = Field(default_factory=list)
     target_speaker: Optional[TargetSpeakerEmbedding] = None
+    instructions: Optional[str] = None
+    speech_type: Optional[str] = None
     metadata: dict[str, Any] = Field(default_factory=dict)

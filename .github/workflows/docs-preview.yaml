@@ -33,6 +33,7 @@ jobs:
       run: |
         APP_MODULE_NAME=$(ls -1 src | sort | head -1)
         uv run pdoc src/"$APP_MODULE_NAME" -o docs -t docs_style/pdoc-theme --docformat google --favicon https://readthedocs.org/favicon.ico
+        uv run python scripts/generate-compat-matrix.py
         touch docs/.nojekyll
     - name: Deploy preview
       uses: JamesIves/github-pages-deploy-action@v4

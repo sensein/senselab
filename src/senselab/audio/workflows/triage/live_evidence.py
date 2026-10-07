@@ -1,0 +1,210 @@
+"""The live provenance store read as routing evidence, so the ruleset can run inside the graph.
+
+``routing_analysis`` reduces a finished ``store.jsonl`` to a
+:class:`~senselab.audio.workflows.triage.routing_analysis.features.RecordingFeatures` and evaluates
+:mod:`~senselab.audio.workflows.triage.routing_analysis.ruleset` over it. ROUTING holds the same
+store in memory, mid-run, with no file yet, so this module serialises the live store and hands the
+result to that same analysis reader.
+
+The evaluation carries the recording's own declaration: a BIDS stem's ``task-`` id, which
+:func:`declared_task` reads off the stem ADMIT recorded. A stem carrying no ``task-`` entity
+declares nothing and leaves both :data:`UNDECLARED`.
+
+See ``specs/20260912-ruleset-in-pipeline/design.md`` and
+``specs/20260817-triage-workflow-dag/routing.md``.
+"""
+
+from __future__ import annotations
+
+import tempfile
+from pathlib import Path
+from typing import Any, Mapping
+
+from senselab.audio.workflows.triage.config import TriageConfig
+from senselab.audio.workflows.triage.label_membership import LabelMembership
+from senselab.audio.workflows.triage.routing_analysis.families import UNKNOWN_TASK, task_family, task_id_of
+from senselab.audio.workflows.triage.routing_analysis.features import (
+    RecordingFeatures,
+    extract_features,
+    onomatopoeic_vocabulary,
+    span_label_memberships,
+)
+from senselab.audio.workflows.triage.routing_analysis.ruleset import (
+    RouteEvaluation,
+    Ruleset,
+    critical_blocks,
+    evaluate_routes,
+    load_ruleset,
+    unreadable_branches,
+)
+from senselab.utils.prov_store import ProvStore
+
+EVIDENCE_PREFIX = "routing-evidence-"
+"""Prefix of the transient store serialisation, written beside the run's own store and removed."""
+
+EVIDENCE_SUFFIX = ".jsonl"
+"""Suffix of that serialisation, so the reader opens what it expects."""
+
+RECORDING_STREAM = "recording"
+"""The stream entity ADMIT writes, whose path names the recording."""
+
+UNDECLARED = ""
+"""The task id and family of a recording whose stem carries no ``task-`` entity."""
+
+EMPTINESS_SOURCE = "stream_peak_max"
+"""The feature source the emptiness bypass reads, which no gate names and every evaluation uses."""
+
+
+def required_sources(ruleset: Ruleset) -> tuple[str, ...]:
+    """Every feature source one ruleset reads, in sorted order.
+
+    Args:
+        ruleset: The loaded ruleset.
+
+    Returns:
+        The first element of every gate's feature path, plus :data:`EMPTINESS_SOURCE`, each once.
+    """
+    sources = {str(gate.feature[0]) for gate in ruleset.gates.values()}
+    sources.add(EMPTINESS_SOURCE)
+    return tuple(sorted(sources))
+
+
+def recording_stem(store: ProvStore) -> str:
+    """The recording's file stem, off the ``recording`` stream entity ADMIT wrote.
+
+    Args:
+        store: The provenance store.
+
+    Returns:
+        The stem of the path the latest live ``recording`` stream names, or ``""`` when no such
+        stream is in the store.
+    """
+    found = [
+        entity
+        for entity in store.entities("stream")
+        if entity.attributes.get("name") == RECORDING_STREAM and not store.is_invalidated(entity.id)
+    ]
+    if not found:
+        return ""
+    return Path(str(found[-1].attributes.get("path") or "")).stem
+
+
+def declared_task(stem: str) -> tuple[str, str]:
+    """The task a recording's own file stem declares, and the family it collapses into.
+
+    Args:
+        stem: The recording's file stem, from :func:`recording_stem`.
+
+    Returns:
+        ``(task_id, family)``, both :data:`UNDECLARED` when the stem carries no ``task-`` entity.
+        The one place the graph reads a declaration off the recording itself.
+    """
+    task_id = task_id_of(stem) if stem else UNKNOWN_TASK
+    if task_id == UNKNOWN_TASK:
+        return UNDECLARED, UNDECLARED
+    return task_id, task_family(task_id)
+
+
+def read_live_features(
+    store: ProvStore,
+    *,
+    run_dir: Path,
+    memberships: Mapping[str, LabelMembership],
+    onomatopoeic: frozenset[str],
+    stem: str,
+) -> RecordingFeatures:
+    """Reduce a live store to the routing evidence, through the analysis reader.
+
+    The serialisation is written under ``run_dir``, which the store's sidecar paths are relative to,
+    and is removed whether or not the reduction succeeded.
+
+    Args:
+        store: The provenance store, as the run holds it.
+        run_dir: The run directory the store's sidecar paths are relative to.
+        memberships: Which labels a span carries, per classifier, from
+            :func:`~senselab.audio.workflows.triage.routing_analysis.features.span_label_memberships`.
+        onomatopoeic: The token vocabulary a consensus word is matched against, from
+            :func:`~senselab.audio.workflows.triage.routing_analysis.features.onomatopoeic_vocabulary`.
+        stem: The recording's stem, for the record's own id and for the declaration
+            :func:`declared_task` reads off it.
+
+    Returns:
+        The evidence record, carrying the stem's own declaration in ``task_id`` and ``family``,
+        both :data:`UNDECLARED` when the stem declares nothing.
+    """
+    handle = tempfile.NamedTemporaryFile(  # noqa: SIM115 — closed below; the path outlives the handle
+        dir=run_dir, prefix=EVIDENCE_PREFIX, suffix=EVIDENCE_SUFFIX, delete=False
+    )
+    handle.close()
+    path = Path(handle.name)
+    task_id, family = declared_task(stem)
+    try:
+        store.write_jsonl(path)
+        return extract_features(
+            path,
+            stem=stem,
+            run_root=str(run_dir.parent),
+            task_id=task_id,
+            family=family,
+            memberships=memberships,
+            onomatopoeic=onomatopoeic,
+        )
+    finally:
+        path.unlink(missing_ok=True)
+
+
+def evaluate_live_routes(store: ProvStore, config: TriageConfig, *, run_dir: Path) -> RouteEvaluation:
+    """Route one recording from the store the graph is still writing.
+
+    Args:
+        store: The provenance store, holding PREPROCESS's derivatives and TAXONOMY's own
+            summaries. Callable once TAXONOMY has concluded and not before it.
+        config: The resolved triage configuration, read for ``taxonomy.ruleset`` and for the
+            ``windows.<classifier>`` membership rule.
+        run_dir: The run directory the store's sidecar paths are relative to.
+
+    Returns:
+        The evaluation.
+
+    Raises:
+        ValueError: When the ruleset or the membership rule cannot be loaded from the configuration.
+    """
+    ruleset = load_ruleset(config)
+    features = read_live_features(
+        store,
+        run_dir=run_dir,
+        memberships=span_label_memberships(config),
+        onomatopoeic=onomatopoeic_vocabulary(config),
+        stem=recording_stem(store),
+    )
+    return evaluate_routes(features, ruleset)
+
+
+def route_attributes(evaluation: RouteEvaluation, ruleset: Ruleset) -> dict[str, Any]:
+    """One evaluation as the attributes of the measurement that records it.
+
+    Args:
+        evaluation: What the ruleset made of the recording.
+        ruleset: The ruleset it was evaluated under, for the sources it reads and the branches it
+            configures no gate for.
+
+    Returns:
+        The attributes. ``ungated`` names the branches whose gate list is empty, ``unreadable`` the
+        branches not one of whose gates could be read, and ``critical_blocks`` the blocks this
+        ruleset needs for every branch to stay judgeable — see
+        ``specs/20260817-triage-workflow-dag/critical-failure.md``.
+    """
+    return {
+        "state": evaluation.state.value,
+        "routed": list(evaluation.routed),
+        "declared": list(evaluation.declared),
+        "family": evaluation.family,
+        "gate_outcomes": {name: outcome.value for name, outcome in evaluation.gate_outcomes.items()},
+        "unavailable": {branch: dict(reasons) for branch, reasons in evaluation.unavailable.items()},
+        "flags": {branch: list(names) for branch, names in evaluation.flags.items()},
+        "ungated": sorted(branch for branch, names in ruleset.branch_gates.items() if not names),
+        "unreadable": list(unreadable_branches(evaluation, ruleset)),
+        "critical_blocks": list(critical_blocks(ruleset)),
+        "sources": list(required_sources(ruleset)),
+        "stem": evaluation.stem,
+    }

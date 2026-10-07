@@ -1,0 +1,37 @@
+# What counts as the task's own content in each task family, as the reviewer is told it.
+#
+# Each entry names the declared families it applies to (a family matches an entry when it equals one
+# of the names or starts with one followed by "-") and the guidance sentence sent beside the task's
+# facts. The fold separately never masks a word of the task's stimulus or instructions; this guidance
+# is for content the reviewer has to judge. Owner, 2026-10-04: "redaction should take task into
+# account. in tasks like productive vocabulary, the target word should be considered." The rules are
+# in specs/20261004-redaction-policy-v8/design.md.
+families:
+  - names: [productive-vocabulary]
+    guidance: >-
+      This is a definition task: the participant is given a target word (the stimulus) and says what it
+      means. The target word, its inflections, and everything that explains its meaning are task content
+      and identify nobody: defining "gladiator" as "a fighter in the Roman Empire" makes "fighter" and
+      "Roman Empire" task content; defining "capitalization" through "writing" makes "writing" task
+      content. Release such words with place_reason task_content. An anecdote of the speaker's own inside
+      the answer ("my brother in Tampa was one") is judged as it would be anywhere.
+  - names: [picture-description]
+    guidance: >-
+      The participant describes a picture. People, animals and objects in the picture, and any name the
+      participant gives a figure in it ("Little Tommy", "Mother Alice"), are task content and identify
+      nobody: release a name given to a figure with relabel other_non_person. Anything the speaker says
+      about their own life is judged as usual.
+  - names: [cinderella-story, story-recall]
+    guidance: >-
+      The participant retells a story they were given. The story's characters, places, ages, dates and
+      events are task content and identify nobody, whether or not the participant tells them exactly as
+      written: release them, a character's name with relabel other_non_person and a place with
+      place_reason task_content. Anything the speaker adds about their own life is judged as usual.
+  - names: [rainbow-passage, caterpillar-passage, harvard-sentences, cape-v-sentences]
+    guidance: >-
+      The participant reads a given text aloud. Every word of that text, said correctly or not, is task
+      content and identifies nobody; only what the speaker adds of their own is judged.
+  - names: [open-response-questions]
+    guidance: >-
+      The participant answers an open question about their own life. The question's own words are task
+      content; the answer is about the speaker and is judged as usual, places, people and dates included.

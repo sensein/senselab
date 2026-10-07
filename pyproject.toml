@@ -7,15 +7,15 @@ name = "senselab"
 dynamic = ["version"]
 description = "senselab is a Python package that simplifies building pipelines for speech and voice analysis."
 authors = [
-  {name = "Fabio Catania", email = "fabiocat@mit.edu"},
-  {name = "Satra Ghosh", email = "satra@mit.edu"}
+  { name = "Fabio Catania", email = "fabiocat@mit.edu" },
+  { name = "Satra Ghosh", email = "satra@mit.edu" }
 ]
 maintainers = [
-  {name = "Fabio Catania", email = "fabiocat@mit.edu"},
-  {name = "Satra Ghosh", email = "satra@mit.edu"},
-  {name = "Jordan Wilke", email = "wilke18@mit.edu"}
+  { name = "Fabio Catania", email = "fabiocat@mit.edu" },
+  { name = "Satra Ghosh", email = "satra@mit.edu" },
+  { name = "Jordan Wilke", email = "wilke18@mit.edu" }
 ]
-license = {file = "LICENSE.md"}
+license = { file = "LICENSE.md" }
 readme = "README.md"
 requires-python = ">=3.11,<3.15"
 keywords = ["audio", "voice", "speech", "video", "pose", "face", "text", "nlp"]
@@ -52,7 +52,15 @@ dependencies = [
   # ITU-R BS.1770 gated loudness (numpy/scipy only, no transitive weight).
   "librosa>=0.11",
   "pyloudnorm>=0.1.1",
-  # Data / utilities
+  # soundfile was previously transitive through librosa; the triage recording-vector scan decodes
+  # conditioned streams directly with it, so it must be declared.
+  "soundfile>=0.12",
+  # PyYAML was previously transitive only; the triage workflow's config loader imports `yaml`
+  # directly, so it must be declared.
+  "pyyaml>=6.0",
+  # Data / utilities. pyarrow was previously transitive through `datasets`; the triage routing
+  # analysis writes and reads its generated tables as parquet, so it must be declared.
+  "pyarrow>=17",
   "pydantic>=2.11",
   "pycountry>=24.6",
   "iso639>=0.1",
@@ -133,6 +141,18 @@ profiling = [
 [tool.hatch.build.targets.wheel]
 packages = ["src/senselab"]
 
+# The wheel is scoped by `packages` above, but the sdist had no target config at all, so hatchling's
+# default swept in everything git tracks: `.claude/` (511 entries, including a whole abandoned
+# worktree), `.superpowers/`, `.specify/`, `.uv-cache/`, and 223 files of `specs/` design notes.
+# An 81 MB source distribution of a package whose importable code is a few MB, and every one of
+# those trees is working state for this repository rather than anything a consumer builds from.
+#
+# `only-include` rather than `exclude`: a new agent-tooling directory should be absent by default
+# and added deliberately, which is the opposite of what an exclude list does. `src` carries both
+# `senselab` and its tests, so a downstream rebuild can still run the suite.
+[tool.hatch.build.targets.sdist]
+only-include = ["src", "pyproject.toml", "README.md", "LICENSE.md", "SECURITY.md", "uv.lock"]
+
 [tool.hatch.version]
 source = "vcs"
 
@@ -191,7 +211,11 @@ exclude = [
   "dist",
   "node_modules",
   "venv",
-  "scripts"
+  "scripts",
+  # One-off reproduction scripts for the analyze_audio audit's findings, kept beside the register
+  # entry each reproduces. They are evidence, not source: each is meant to read as the code under
+  # audit reads, and re-styling one would change what it demonstrates.
+  "specs/20260815-215106-analyze-audio-audit/repro"
 ]
 line-length = 120
 indent-width = 4
@@ -223,6 +247,8 @@ line-ending = "auto"
 skip = [
   "uv.lock",
   "docs_style/pdoc-theme/syntax-highlighting.css",
+  "src/senselab/audio/workflows/triage/viewer/vendor/*.js",
+  "src/senselab/audio/workflows/triage/viewer/recording_vectors_viewer.html",
   "*.cha",
   "*.ipynb"
 ]

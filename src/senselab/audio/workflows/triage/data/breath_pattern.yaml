@@ -1,0 +1,124 @@
+# The breathing-pattern measure (breath_pattern.py) and the breath families it decides.
+#
+# A breath family of airway_event_requirements.yaml is decided on this reading of PREPROCESS's
+# stored spectrogram_narrowband (pre-emphasised stream) and phonation_tracks, not on AIRWAY's
+# HeAR-scored event detector. Breathing is present where the breath train counts a phase outside the
+# review band; inside the band the measure's own events (sustained: `alternating_breaths`; counted: an
+# event, no veto) decide between review and no breath. Fewer train breaths (phases / 2, rounded half up)
+# than the instruction asked are a task_mismatch annotation, which moves no triage state. Either input
+# absent reruns.
+#
+# derivation: owner, 2026-10-05. The owner listened to 23 breath recordings with gain-lifted copies
+# (~/Downloads/contrast_check_20261005/, ~/Downloads/breath_absent_check_20261005/,
+# ~/Downloads/breath_pattern_check_20261005/): ten confirmed breathing ("they all have breathing"),
+# one with a single long breath where three quick breaths were asked (7c169ccc), ten with no breath
+# (including 517381e9, a 0.48 s burst inside speech the HeAR-scored detector counted as one breath
+# event, and 9d16c147, breaths too quiet to hear clearly, which the owner said to discard). With these
+# parameters the measure read every one as heard: alternating_breaths on the ten, single_breath on
+# 7c169ccc and 517381e9, no_breathing on the silent ones. AIRWAY's detector passed 517381e9; HeAR
+# Breathe at 0.2 passed three silent recordings and Clef 27B on plain spectrograms called six of the
+# ten silent ones alternating_breaths. On 100 random breath-family recordings the measure read 71
+# alternating, 16 none, 11 single, 2 irregular (pilot: /orcd/scratch/bcs/002/satra/breath_pattern/).
+# The values are the pilot's, chosen from the anatomy of a breath and not fitted to the labels:
+#   - breath_band_hz: inhale/exhale turbulence energy sits below ~2.5 kHz; above 150 Hz leaves out
+#     mains hum and handling rumble.
+#   - flatness: breath is noise-like, voice harmonic; 0.08 separated them on the labelled set.
+#   - floor_percentile/rise_db: a frame is active 8 dB above the recording's own 10th-percentile
+#     envelope, a relative level with no absolute dBFS.
+#   - event_s: one inhale or exhale (or one combined breath) lasts 0.3-4 s.
+#   - voiced_fraction_max: a turbulent breath trips the pitch tracker on 20-80% of frames, so only an
+#     event voiced over half its length is speech; a per-frame cut split 7c169ccc's breath apart.
+#   - period_s/interval_s: a breathing cycle of 2-8 s (8-30 breaths per minute); inhale-to-exhale
+#     onsets can be 0.4 s apart.
+#   - autocorr_min: rhythm alone is not evidence (silent recordings reached 0.56-0.86), so it is read
+#     only once events are found.
+version: 1
+measure:
+  breath_band_hz: [150.0, 2500.0]
+  flatness_band_hz: [150.0, 4000.0]
+  smooth_s: 0.05
+  floor_percentile: 10.0
+  rise_db: 8.0
+  flatness_min: 0.08
+  voicing_strength_min: 0.45
+  merge_gap_s: 0.25
+  event_s: [0.3, 4.0]
+  event_trim_db: 10.0         # an event's span is the frames within this of its own peak
+  voiced_fraction_max: 0.5
+  period_s: [2.0, 8.0]
+  autocorr_min: 0.25
+  interval_s: [0.4, 8.0]
+  interval_share_min: 0.5
+# The breathing-over-syllabic modulation ratio and the active span of the same spectrogram's subband
+# envelopes; the active span feeds the little-activity veto. Derivation in
+# specs/20261005-breathing-pattern/design.md ("Modulation cycles").
+modulation:
+  band_edges_hz: [150.0, 300.0, 500.0, 800.0, 1300.0, 2000.0, 3000.0, 4000.0]
+  fs_mod: 20.0                 # envelope rate, Hz
+  breath_band_hz: [0.1, 1.2]   # breathing-rate modulation
+  syllabic_band_hz: [2.0, 8.0] # syllabic-rate modulation (speech)
+  reference_band_hz: [0.05, 8.0]
+  floor_percentile: 10.0
+  active_rise_db: 8.0
+  min_duration_s: 4.0          # shortest recording read
+# Vetoes on the measure: a breath the measure finds stands unless the task extent holds speech or too
+# little active sound. Fitted on the owner's 56 listened breath recordings (2026-10-06); the derivation,
+# with the owner's words, is in specs/20261005-breathing-pattern/design.md ("Breath vetoes over the task
+# extent"). Noise and silence no longer veto; the classifier scores are recorded for context only.
+veto:
+  speech_words_min: 5          # speech words inside the task extent at or above: speech
+  active_fraction_min: 0.36    # active span over the task extent (the file where the extent is under min_duration_s) below: too little
+  noise_labels: [Vehicle, Car, Engine, Mechanical fan, White noise]   # recorded as context
+# The breath train (measure_breath_train): bursts of coherent broadband rise over denoised subband
+# envelopes, grouped into the run that is the task; its hull is the breath-task extent and its bursts
+# are the counted phases (breaths = phases / 2, rounded half up). Fallbacks: the measure's events,
+# padded; then AIRWAY's own hull. Fitted on the owner's 56 annotated figures (2026-10-06); derivation,
+# with the owner's words, in specs/20261005-breathing-pattern/design.md ("The breath train").
+train:
+  band_edges_hz: [150.0, 300.0, 500.0, 800.0, 1300.0, 2000.0, 3000.0, 4000.0, 5500.0, 7500.0]
+  fs_mod: 20.0                 # envelope rate, Hz
+  smooth_s: 0.05               # moving median on each subband level
+  noise_percentile: 10.0       # per-bin stationary noise estimate
+  noise_subtract: 0.9          # share of that estimate subtracted
+  tonal_db: 10.0               # a bin this far over its neighbours' noise is a tonal line, left out
+  tonal_halfwidth_bins: 5
+  envelope_smooth_s: 0.15      # moving mean on the combined robust-z envelope
+  prominence_min: 0.6          # robust-z units
+  prominence_range_frac: 0.12  # or this share of the envelope's p95-p5 range, whichever is larger
+  weak_prominence_frac: 0.3    # a weaker burst down to this share stands if it fits the template
+  template_corr_min: 0.6
+  distance_quick_s: 0.25       # between bursts, for the quick-breath families
+  distance_s: 0.4              # for every other family
+  quick_families: [respiration-and-cough-threequickbreaths, respiration-and-cough-v2-threebreaths]
+  burst_s: [0.12, 4.0]
+  flatness_min: 0.03
+  voiced_max: 0.95             # share of a burst's frames
+  coherence_min: 0.6           # share of subbands rising together
+  coherence_window_s: 0.2
+  rise_z: 0.5                  # a subband rises this far within the window
+  floor_percentile: 10.0       # of the raw broadband level
+  rise_floor_db: 5.0           # a burst's peak over that floor
+  gap_min_s: 12.0              # bursts further apart start a new run
+  gap_cycles: 3.0              # or this many half-cycles, whichever is larger
+  speech_words_min: 5          # lexical words in a run (gaps under speech_gap_s) that split the train
+  speech_gap_s: 1.0
+  speech_bridge_cycles: 2.0    # speech splits the train only where the gap across it exceeds this many breathing cycles
+  word_spread_max_s: 1.0       # a word placed further apart than this by its recognizers stands at its consensus extent
+  pad_s: 0.25                  # each side of the train's hull
+  continue_db: 3.0             # the extent runs on to a following speech onset over the floor by this
+  steady_strength_min: 0.8     # pitch strength of a frame in a sustained vocalisation
+  steady_min_s: 0.2            # a sustained vocalisation lasts at least this
+  steady_f0_cv_max: 0.15       # and its F0 varies by at most this share
+  voice_gap_s: 0.04            # voiced runs this close are one run
+  speech_link_s: 0.6           # lexical words and voiced runs this close chain into one speech segment
+  edge_min_s: 0.12             # an edge phase (already raised at the file's start, or still at its end) lasts at least this
+# The narrow band of kept breath recordings flagged breath_review_low_confidence (flag, not discard):
+# a train of fewer than min_phases phases, an irregular cycle with a modest rise, a weak rise, or a
+# measure veto named in veto_reviews. Presence is the breath train's (one phase or more); derivation in
+# specs/20261005-breathing-pattern/design.md ("The train decides presence").
+review:
+  min_phases: 2
+  cycle_cv_min: 0.45
+  irregular_rise_db_max: 12.5
+  weak_rise_db_max: 8.0
+  veto_reviews: [little_activity]

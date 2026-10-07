@@ -88,10 +88,9 @@ CLI script rotated on every comment edit and reformat, invalidating every cached
 model result for no reason, and it would have gotten worse once six stages shared
 one module. Coarse and deliberate beats automatic and wrong.
 
-Library-side changes are already covered by ``senselab_version`` in the key, so
-these numbers only need to move for *wrapper-shaped* output changes — mainly
-``features`` (composes three backends into a row dict) and the classifiers (attach
-phoneme labels). The rest are thin pass-throughs to a ``tasks/`` API.
+The senselab version is not in the key (it changes with every commit), so these numbers also carry
+library-side changes: a ``tasks/`` API change that alters what a stage returns for the same input
+bumps that stage's number. A model's own weights are keyed by their resolved commit and need no bump.
 """
 
 
@@ -139,7 +138,7 @@ class StageContext:
             product is a *decision* rather than a measurement writes it under ``L2/`` and must
             not have to guess how many parents up the run root is.
         audio_source: Absolute source path, recorded in provenance only.
-        senselab_ver: Installed senselab version; participates in cache keys.
+        senselab_ver: Installed senselab version; recorded in provenance, not keyed.
         variant: Which audio variant this pass consumes — ``"unmodified"``,
             ``"speech_enhanced"``, or ``"foreground_suppressed"``. Recorded on every
             stage outcome so no result is unattributed (FR-012, SC-006).
@@ -195,7 +194,6 @@ class StageContext:
             model_id=model_id,
             params=dict(params),
             code_version=stage_code_version(task),
-            senselab_ver=self.senselab_ver,
             commit_sha=self._commit_sha_for(model_id),
         )
 
@@ -294,7 +292,6 @@ class StageContext:
             aligner_model_id=aligner_model_id,
             aligner_params=dict(aligner_params),
             code_version=stage_code_version("alignment"),
-            senselab_ver=self.senselab_ver,
             # Same resolution path as cache_key_for's model_id, not a second one: one aligner
             # id, one place that decides whether it's a Hub repo worth pinning.
             aligner_commit_sha=self._commit_sha_for(aligner_model_id),
@@ -364,15 +361,10 @@ class PassPlan:
     mask_grid: Any = None
     """The grid the background mask is cut on — ``speech_presence``'s, per D-24.
 
-    Defaulted to ``None`` (``BucketGrid()``'s 0.5 s) only so a caller that builds a plan without
-    grids still works. The run must pass the presence grid: the mask is *derived from* presence —
-    a region is target-free where presence has settled — so on different grids that derivation
-    needs a projection, and every projection is a place to lose localisation. On a shared grid
-    row *i* of one is row *i* of the other and the coupling is exact.
-
-    Measured cost of not sharing it: presence produced 1070 buckets at 100 ms and the mask 43 at
-    0.5 s, so five presence judgements were projected onto each mask bucket before the mask could
-    say anything.
+    ``None`` means ``BucketGrid()``, i.e. ``grid.DEFAULT_TIME_GRID``, so a caller that builds a plan
+    without grids still works; a run passes the presence grid. Why the two must be the same grid is
+    D-24 in ``specs/20260728-221507-per-speaker-identity-scene/layered-architecture.md``; what not
+    sharing it cost is in ``specs/20260816-143540-triage-graph/phase2-notes.md``.
     """
     features: bool = False
     features_win_length: float = 1.0

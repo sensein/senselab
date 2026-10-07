@@ -149,7 +149,12 @@ def build_disagreements_index(
             "total_rows": total_rows,
             "rows_by_axis": rows_by_axis,
             "high_uncertainty_rows": high_count,
-            "high_uncertainty_rate": (high_count / total_rows) if total_rows else 0.0,
+            # ``None``, not ``0.0``, when there are no rows: a rate needs a denominator, and the run
+            # that harvested nothing at all is exactly the run whose summary must not read as an
+            # improvement (F-150). ``0.0`` here was indistinguishable from a measured zero -- a clean
+            # recording where no row cleared the threshold -- so a total harvest failure presented as
+            # the best possible outcome. Consumers must treat ``None`` as "not measured".
+            "high_uncertainty_rate": (high_count / total_rows) if total_rows else None,
         },
         "entries": selected,
     }

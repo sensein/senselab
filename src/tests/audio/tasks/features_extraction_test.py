@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+import numpy as np
+import parselmouth
 import pytest
 import torch
 
@@ -9,6 +11,7 @@ from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.features_extraction import extract_features_from_audios
 from senselab.audio.tasks.features_extraction.opensmile import extract_opensmile_features_from_audios
 from senselab.audio.tasks.features_extraction.ppg import (
+    PPGS_SAMPLE_RATE,
     extract_mean_phoneme_durations,
     extract_ppg_segments,
     extract_ppgs_from_audios,
@@ -16,6 +19,14 @@ from senselab.audio.tasks.features_extraction.ppg import (
     to_frame_major_posteriorgram,
 )
 from senselab.audio.tasks.features_extraction.praat_parselmouth import (
+    DEFAULT_CPPS_SETTINGS,
+    DEFAULT_PITCH_CEILING_QUARTILE_MULTIPLIER,
+    DEFAULT_PITCH_EXCURSION_MULTIPLIER,
+    DEFAULT_PITCH_FLOOR_DIVISOR,
+    DEFAULT_PITCH_PINNED_OCTAVE_RATIO,
+    DEFAULT_PITCH_PINNED_PERCENTILE,
+    CppsSettings,
+    _robust_line_fit,
     extract_audio_duration,
     extract_cpp_descriptors,
     extract_harmonicity_descriptors,
@@ -44,6 +55,7 @@ from senselab.audio.tasks.features_extraction.torchaudio_squim import (
     extract_objective_quality_features_from_audios,
     extract_subjective_quality_features_from_audios,
 )
+from senselab.audio.tasks.phonation import derive_f0_range
 
 try:
     import ppgs
@@ -241,6 +253,171 @@ def test_extract_pitch_values(resampled_mono_audio_sample: Audio) -> None:
     assert isinstance(result["pitch_ceiling"], float)
 
 
+def _buzz(f0: float, seconds: float = 1.0) -> Audio:
+    """Return a harmonic buzz at the given F0."""
+    t = np.arange(int(seconds * 16000)) / 16000
+    wave = sum((0.3 / (h + 1) * np.sin(2 * np.pi * f0 * (h + 1) * t) for h in range(6)), np.zeros_like(t))
+    return Audio(waveform=wave.astype(np.float32)[None, :], sampling_rate=16000)
+
+
+class TestPitchRangeNarrowing:
+    """The range is this recording's own, narrowed off a wide search — never one of two sex-typed presets.
+
+    One case returns the search range unnarrowed: the pinned-contour fallback. That is the wide bracket
+    the narrowing starts from, not a preset, and ``pitch_range_fell_back`` says when it was taken.
+    """
+
+    def test_no_discontinuity_at_the_retired_170_hz_boundary(self) -> None:
+        """The retired rule stepped floor/ceiling from 60/250 to 100/500 across mean F0 = 170 Hz."""
+        below = extract_pitch_values(_buzz(165.0), search_floor_hz=50.0, search_ceiling_hz=600.0)
+        above = extract_pitch_values(_buzz(175.0), search_floor_hz=50.0, search_ceiling_hz=600.0)
+        assert below["pitch_ceiling"] == pytest.approx(above["pitch_ceiling"], rel=0.15)
+        assert below["pitch_floor"] == pytest.approx(above["pitch_floor"], rel=0.15)
+
+    def test_the_derived_range_rises_monotonically_with_source_f0(self) -> None:
+        """A preset bin is a step function of F0; a narrowing is monotone in it.
+
+        The F0 set avoids two traps: below 100 Hz the pinned-contour fallback fires and every ceiling is
+        the search ceiling, and above about 240 Hz the 2.5x q3 term clamps at 600 — either would make a
+        monotonicity assertion pass on a constant.
+        """
+        ceilings = [
+            extract_pitch_values(_buzz(f0), search_floor_hz=50.0, search_ceiling_hz=600.0)["pitch_ceiling"]
+            for f0 in (110.0, 130.0, 150.0, 180.0, 220.0)
+        ]
+        assert ceilings == pytest.approx([275.0, 325.0, 375.0, 450.0, 550.0], rel=0.02), (
+            f"measured ceilings for (110, 130, 150, 180, 220) Hz; a bin would give two values: {ceilings}"
+        )
+
+    def test_a_55_hz_source_yields_finite_perturbation(self) -> None:
+        """The retired 60 Hz floor placed zero pulses here, so jitter and shimmer were NaN.
+
+        Asserting the outcome, not the floor: ``pitch_floor < 60`` is satisfied by ``max(50.0, …)``
+        for any voice whose p5 is under 90 Hz, so it would pass without this source being tracked.
+        """
+        audio = _buzz(55.0)
+        floor, ceiling = derive_f0_range(
+            audio,
+            search_floor_hz=50.0,
+            search_ceiling_hz=600.0,
+            pitch_floor_divisor=DEFAULT_PITCH_FLOOR_DIVISOR,
+            pitch_ceiling_quartile_multiplier=DEFAULT_PITCH_CEILING_QUARTILE_MULTIPLIER,
+            pitch_pinned_percentile=DEFAULT_PITCH_PINNED_PERCENTILE,
+            pitch_excursion_multiplier=DEFAULT_PITCH_EXCURSION_MULTIPLIER,
+            pitch_pinned_octave_ratio=DEFAULT_PITCH_PINNED_OCTAVE_RATIO,
+        )
+        assert np.isfinite(extract_jitter(audio, floor=floor, ceiling=ceiling)["local_jitter"])
+        assert np.isfinite(extract_shimmer(audio, floor=floor, ceiling=ceiling)["local_shimmer"])
+
+    def test_a_45_hz_source_records_where_the_exclusion_moved_to(self) -> None:
+        """The exclusion moved from 60 Hz to the search floor; it did not go away.
+
+        45 Hz places no pitch at a 50 Hz search floor, so the range is an absence and VOICE reads
+        'no phonation found' for a voice that is plainly phonating. The binding constraint is now
+        ``voice.f0_search_range_hz[0]``, and this test is the record of that.
+        """
+        derived = extract_pitch_values(_buzz(45.0), search_floor_hz=50.0, search_ceiling_hz=600.0)
+        assert derived["pitch_frames"] == 0.0
+        assert derived["pitch_failed"] == 0.0, "an out-of-search-range voice is an absence, not a crash"
+
+    def test_a_420_hz_source_gets_a_floor_that_follows_it(self) -> None:
+        """Measured: 420 Hz gives [280.0, 600.0]; the retired bin gave this voice a fixed 100 Hz floor.
+
+        A 420 Hz mean picks the bin's high branch, ``(100, 500)`` -- so what the bin got wrong here is the
+        **floor**, nearly two octaves under the voice, and the ceiling assertion is the weaker half. Above
+        roughly 240 Hz the 2.5x q3 term reaches the search ceiling, so 600 is the clamp and not a narrowing,
+        which is why the monotonicity test above stops at 220.
+        """
+        derived = extract_pitch_values(_buzz(420.0), search_floor_hz=50.0, search_ceiling_hz=600.0)
+        assert derived["pitch_floor"] == pytest.approx(280.0, rel=0.02)
+        assert derived["pitch_ceiling"] == pytest.approx(600.0)
+
+    def test_a_clean_90_hz_voice_takes_the_fallback_and_that_is_expected(self) -> None:
+        """Measured: p95 = 90 is under 2 x 50, so an ordinary low male voice gets the wide range.
+
+        Recorded because it is a larger population than the hum case the fallback was designed for. It is
+        safe -- a wide range never excludes the voice -- but those recordings lose narrowing's
+        octave-error robustness, and the behaviour moves if the search floor moves.
+        """
+        derived = extract_pitch_values(_buzz(90.0), search_floor_hz=50.0, search_ceiling_hz=600.0)
+        assert derived["pitch_range_fell_back"] == 1.0
+        assert (derived["pitch_floor"], derived["pitch_ceiling"]) == (50.0, 600.0)
+
+    def test_a_hum_does_not_capture_the_range_away_from_the_voice(self) -> None:
+        """A one-pass narrowing returned [50, 90] for this source — a range the voice never enters.
+
+        The retired bin was accidentally robust here, so this is the one case where the replacement
+        would have been worse than what it replaced.
+        """
+        voice = _buzz(120.0, seconds=2.0).waveform.numpy()[0]
+        t = np.arange(voice.size) / 16000
+        hum = (10 ** (-22 / 20)) * np.sin(2 * np.pi * 60.0 * t)
+        audio = Audio(waveform=(voice + hum).astype(np.float32)[None, :], sampling_rate=16000)
+
+        derived = extract_pitch_values(audio, search_floor_hz=50.0, search_ceiling_hz=600.0)
+        assert derived["pitch_floor"] <= 120.0 <= derived["pitch_ceiling"], (
+            f"the speaker's F0 must lie inside its own derived range, got "
+            f"[{derived['pitch_floor']}, {derived['pitch_ceiling']}]"
+        )
+        assert derived["pitch_range_fell_back"] == 1.0, "the pinned-contour fallback is what caught it"
+
+    def test_a_noisy_source_does_not_capture_the_range(self) -> None:
+        """Measured at 0 dB broadband SNR: 389 frames, median 120.06, range [78.6, 302.9]."""
+        voice = _buzz(120.0, seconds=2.0).waveform.numpy()[0]
+        rng = np.random.default_rng(0)
+        noisy = voice + rng.standard_normal(voice.size).astype(np.float32) * float(np.sqrt((voice**2).mean()))
+        audio = Audio(waveform=noisy.astype(np.float32)[None, :], sampling_rate=16000)
+
+        derived = extract_pitch_values(audio, search_floor_hz=50.0, search_ceiling_hz=600.0)
+        assert derived["pitch_frames"] > 0.0, "measured 389 frames; a guard here would hide a real change"
+        assert derived["pitch_floor"] <= 120.0 <= derived["pitch_ceiling"]
+        assert derived["pitch_range_fell_back"] == 0.0, "p95 = 122 clears twice the floor, so no fallback"
+
+    def test_a_glide_is_bracketed_rather_than_clipped(self) -> None:
+        """An exponential 100 to 400 Hz sweep measured [72.8, 600.0] against produced extremes 102/392."""
+        t = np.arange(2 * 16000) / 16000
+        f0 = 100.0 * (4.0 ** (t / t[-1]))
+        wave = np.sin(2 * np.pi * np.cumsum(f0) / 16000).astype(np.float32)
+        audio = Audio(waveform=wave[None, :], sampling_rate=16000)
+
+        derived = extract_pitch_values(audio, search_floor_hz=50.0, search_ceiling_hz=600.0)
+        assert derived["pitch_floor"] < 100.0 and derived["pitch_ceiling"] > 400.0
+
+    def test_the_range_reports_the_frames_it_rests_on(self) -> None:
+        """A range derived from four voiced frames is not the same claim as one from four hundred."""
+        derived = extract_pitch_values(_buzz(150.0, seconds=2.0), search_floor_hz=50.0, search_ceiling_hz=600.0)
+        assert derived["pitch_frames"] > 0.0
+        assert derived["pitch_failed"] == 0.0
+
+    def test_silence_is_an_absence_and_not_a_failure(self) -> None:
+        """No pitch placed is a real answer about the recording; the analysis did not fail."""
+        silence = Audio(waveform=np.zeros((1, 16000), dtype=np.float32), sampling_rate=16000)
+        derived = extract_pitch_values(silence, search_floor_hz=50.0, search_ceiling_hz=600.0)
+        assert np.isnan(derived["pitch_floor"]) and np.isnan(derived["pitch_ceiling"])
+        assert derived["pitch_frames"] == 0.0
+        assert derived["pitch_failed"] == 0.0, "silence is an absence, not a crash"
+
+    def test_a_failed_analysis_is_reported_rather_than_returned_as_an_absence(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The crash return was byte-identical to the no-pitch return; a caller could not tell them apart."""
+
+        def _boom(*_args: object, **_kwargs: object) -> object:
+            raise RuntimeError("parselmouth exploded")
+
+        monkeypatch.setattr(parselmouth.Sound, "to_pitch_ac", _boom, raising=False)
+        derived = extract_pitch_values(_buzz(150.0), search_floor_hz=50.0, search_ceiling_hz=600.0)
+        assert derived["pitch_failed"] == 1.0
+        assert np.isnan(derived["pitch_floor"])
+
+    def test_the_forty_scalars_carry_the_range_they_were_measured_under(self) -> None:
+        """Per-recording ranges make two recordings' scalars incomparable; the range must travel."""
+        [features] = extract_praat_parselmouth_features_from_audios([_buzz(150.0, seconds=2.0)])
+        for key in ("pitch_floor", "pitch_ceiling", "pitch_frames", "pitch_failed", "pitch_range_fell_back"):
+            assert key in features, f"{key} must travel with the scalars it conditioned"
+        assert features["pitch_floor"] < 150.0 < features["pitch_ceiling"]
+
+
 def test_extract_pitch_descriptors(resampled_mono_audio_sample: Audio) -> None:
     """Test extraction of pitch features."""
     result = extract_pitch_descriptors(resampled_mono_audio_sample, floor=75.0, ceiling=500.0, frame_shift=0.01)
@@ -281,10 +458,141 @@ def test_extract_slope_tilt(resampled_mono_audio_sample: Audio) -> None:
 
 def test_extract_cpp_descriptors(resampled_mono_audio_sample: Audio) -> None:
     """Test extraction of cepstral peak prominence (CPP) features."""
-    result = extract_cpp_descriptors(resampled_mono_audio_sample, floor=75.0, ceiling=500.0, frame_shift=0.01)
+    result = extract_cpp_descriptors(resampled_mono_audio_sample)
     assert isinstance(result, dict)
-    assert "mean_cpp" in result
-    assert isinstance(result["mean_cpp"], float)
+    assert set(result) == {"mean_cpp", "std_dev_cpp", "cpp_frames"}
+    assert all(isinstance(value, float) for value in result.values())
+
+
+def _rough_buzz(f0: float, seconds: float, *, jitter: float = 0.0, noise: float = 0.0, seed: int = 7) -> np.ndarray:
+    """Return a harmonic buzz with frequency jitter and additive noise, as bare samples."""
+    generator = np.random.default_rng(seed)
+    t = np.arange(int(seconds * 16000)) / 16000
+    if jitter:
+        phase = 2 * np.pi * np.cumsum(f0 * (1.0 + jitter * generator.standard_normal(t.size))) / 16000
+    else:
+        phase = 2 * np.pi * f0 * t
+    wave = sum((0.3 / (h + 1) * np.sin((h + 1) * phase) for h in range(6)), np.zeros_like(t))
+    return wave + noise * generator.standard_normal(t.size) if noise else wave
+
+
+def _as_audio(samples: np.ndarray) -> Audio:
+    """Wrap bare samples as a 16 kHz mono Audio."""
+    return Audio(waveform=np.asarray(samples, dtype=np.float32)[None, :], sampling_rate=16000)
+
+
+class TestCppsIsMeasuredDirectly:
+    """CPPS is computed frame-wise over the whole recording, not per voiced interval.
+
+    What the incumbent did instead, and what each of these guards, is in
+    ``specs/20260817-triage-workflow-dag/praat-instrument-audit.md`` under step 4.
+    """
+
+    def test_a_dysphonic_value_below_4_db_is_reported(self) -> None:
+        """The retired ``> 4`` cut returned this recording as NaN, indistinguishable from a crash."""
+        measured = extract_cpp_descriptors(_as_audio(_rough_buzz(150.0, 2.0, jitter=0.02, noise=0.5)))
+        assert measured["cpp_frames"] > 0.0
+        assert 0.0 < measured["mean_cpp"] < 4.0, (
+            f"this source must land inside the band the cut deleted, not beside it: {measured['mean_cpp']}"
+        )
+
+    def test_an_aperiodic_source_is_measured_rather_than_skipped(self) -> None:
+        """No pitch is placed on noise, so the voicing gate found no interval and returned nothing."""
+        measured = extract_cpp_descriptors(_as_audio(0.3 * np.random.default_rng(3).standard_normal(2 * 16000)))
+        assert measured["cpp_frames"] > 0.0
+        assert np.isfinite(measured["mean_cpp"])
+
+    def test_the_mean_is_duration_weighted_across_unequal_stretches(self) -> None:
+        """A 1.6 s clean stretch and a 0.25 s rough one are not worth the same.
+
+        Asserts against the unweighted mean of the two stretches' own means, which is what averaging
+        per interval computes, and against the frame-weighted mean, which is what pooling frames does.
+        """
+        clean = _rough_buzz(150.0, 1.6, seed=11)
+        rough = _rough_buzz(150.0, 0.25, jitter=0.05, noise=0.45, seed=12)
+        whole = extract_cpp_descriptors(_as_audio(np.concatenate([clean, np.zeros(int(0.4 * 16000)), rough])))
+        parts = [extract_cpp_descriptors(_as_audio(part)) for part in (clean, rough)]
+        unweighted = float(np.mean([part["mean_cpp"] for part in parts]))
+        weighted = float(
+            np.average([part["mean_cpp"] for part in parts], weights=[part["cpp_frames"] for part in parts])
+        )
+        assert whole["mean_cpp"] == pytest.approx(weighted, abs=0.6), (
+            f"pooling frames must reproduce the frame-weighted combination: {whole['mean_cpp']} vs {weighted}"
+        )
+        assert abs(weighted - unweighted) > 4.0, "the two stretches must differ enough for the weighting to show"
+
+    def test_each_smoothing_window_smooths(self) -> None:
+        """Without the two windows this is CPP, a differently-named quantity.
+
+        The time window is asserted through the frame-to-frame spread it narrows, over three window
+        widths so a single noisy comparison cannot carry it; the quefrency window through the value
+        itself, which it moves by about 8 dB.
+        """
+        audio = _as_audio(_rough_buzz(150.0, 2.0, jitter=0.03, noise=0.3))
+        spreads = [
+            extract_cpp_descriptors(audio, CppsSettings(time_averaging_s=window))["std_dev_cpp"]
+            for window in (0.002, 0.01, 0.05)
+        ]
+        assert spreads[0] > spreads[1] > spreads[2], f"a wider time window must smooth strictly more: {spreads}"
+        unsmoothed = extract_cpp_descriptors(audio, CppsSettings(quefrency_averaging_s=0.0001))
+        assert abs(unsmoothed["mean_cpp"] - extract_cpp_descriptors(audio)["mean_cpp"]) > 1.0
+
+    def test_the_trend_fit_is_robust_to_an_outlying_stretch(self) -> None:
+        """A real cepstrum carries a low-quefrency excursion; least squares follows it and CPPS drops."""
+        quefrency = np.linspace(0.001, 0.05, 400)
+        decibels = (-300.0 * quefrency + 5.0)[None, :].copy()
+        decibels[0, :20] += 40.0
+        [slope], _ = _robust_line_fit(quefrency, decibels, 0.05)
+        least_squares = float(np.polyfit(quefrency, decibels[0], 1)[0])
+        assert abs(slope - (-300.0)) < 10.0, f"the robust fit must ignore the excursion: {slope}"
+        assert abs(least_squares - (-300.0)) > 100.0, "the comparison is only meaningful if least squares fails"
+
+    def test_the_frame_count_travels_with_the_two_scalars(self) -> None:
+        """Without it a reader cannot tell a mean over 2 frames from one over 900."""
+        short = extract_cpp_descriptors(_as_audio(_rough_buzz(150.0, 0.5)))
+        long = extract_cpp_descriptors(_as_audio(_rough_buzz(150.0, 2.0)))
+        assert short["cpp_frames"] > 0.0
+        assert long["cpp_frames"] > 3 * short["cpp_frames"]
+
+    def test_a_high_voice_is_not_truncated_by_the_retired_330_hz_ceiling(self) -> None:
+        """A 420 Hz source's peak sits at 2.4 ms, outside a band that stops at 330 Hz."""
+        audio = _as_audio(_rough_buzz(420.0, 2.0))
+        wide = extract_cpp_descriptors(audio)
+        narrow = extract_cpp_descriptors(audio, CppsSettings(peak_search_ceiling_hz=330.0))
+        assert wide["mean_cpp"] - narrow["mean_cpp"] > 2.0
+
+    def test_the_peak_band_is_fixed_rather_than_derived_from_this_recording(self) -> None:
+        """Two voices an octave apart must be scored against the same band, or neither is comparable."""
+        low = extract_cpp_descriptors(_as_audio(_rough_buzz(110.0, 2.0)))
+        high = extract_cpp_descriptors(_as_audio(_rough_buzz(220.0, 2.0)))
+        assert np.isfinite(low["mean_cpp"]) and np.isfinite(high["mean_cpp"])
+        assert DEFAULT_CPPS_SETTINGS.peak_search_floor_hz == 60.0
+        assert DEFAULT_CPPS_SETTINGS.peak_search_ceiling_hz == 700.0
+
+    def test_a_recording_shorter_than_one_window_is_an_absence_not_a_value(self) -> None:
+        """The window is 0.1 s; a 0.05 s recording places no frame, and no frame is not a zero."""
+        measured = extract_cpp_descriptors(_as_audio(_rough_buzz(150.0, 0.05)))
+        assert measured["cpp_frames"] == 0.0
+        assert np.isnan(measured["mean_cpp"])
+
+    @pytest.mark.parametrize(
+        "settings",
+        [
+            CppsSettings(tilt_line_type="exponential decay"),
+            CppsSettings(peak_interpolation="none"),
+            CppsSettings(subtract_tilt_before_smoothing=True),
+        ],
+    )
+    def test_a_setting_this_function_does_not_implement_is_refused(self, settings: CppsSettings) -> None:
+        """A silently ignored setting in a provenance record is worse than no setting."""
+        with pytest.raises(ValueError):
+            extract_cpp_descriptors(_as_audio(_rough_buzz(150.0, 1.0)), settings)
+
+    def test_the_wrapper_publishes_the_support_count_beside_the_scalars(self) -> None:
+        """One of thirteen Praat functions returned a count; this is the second."""
+        [features] = extract_praat_parselmouth_features_from_audios([_as_audio(_rough_buzz(150.0, 2.0))])
+        assert features["cepstral_peak_prominence_frames"] > 0.0
+        assert np.isfinite(features["cepstral_peak_prominence_mean"])
 
 
 def test_measure_f1f2_formants_bandwidths(resampled_mono_audio_sample: Audio) -> None:
@@ -351,6 +659,16 @@ def test_extract_ppgs_from_audios(resampled_mono_audio_sample: Audio) -> None:
     # Assert the result is a list of tensors
     assert isinstance(result, list)
     assert all(isinstance(features, torch.Tensor) for features in result)
+
+
+def test_extract_ppgs_refuses_an_off_rate_audio(mono_audio_sample: Audio) -> None:
+    """The worker reads every waveform at the model's rate, so an off-rate one is refused, not resampled.
+
+    Refused before the venv is touched, which is what lets this run without building one.
+    """
+    assert mono_audio_sample.sampling_rate != PPGS_SAMPLE_RATE
+    with pytest.raises(ValueError, match=str(PPGS_SAMPLE_RATE)):
+        extract_ppgs_from_audios([mono_audio_sample])
 
 
 @pytest.mark.skip(reason="sparc runs in subprocess venv; missing-dep path cannot be tested")
@@ -584,3 +902,25 @@ def test_extract_features_from_audios(resampled_mono_audio_sample: Audio) -> Non
     for feat in features:
         assert isinstance(feat, dict)
         assert feat, "The feature dictionary should not be empty."
+
+
+class TestTheWorkerTimeoutScalesWithTheBatch:
+    """A flat timeout loses a whole batch when one batch happens to hold the long recordings."""
+
+    def test_the_budget_grows_with_the_audio_in_the_batch(self) -> None:
+        """Two batches of the same count but different duration do not get the same budget."""
+        from senselab.audio.tasks.features_extraction.ppg import _worker_timeout_s
+
+        assert _worker_timeout_s(600.0) > _worker_timeout_s(60.0)
+
+    def test_an_empty_batch_still_allows_the_worker_to_start(self) -> None:
+        """The startup allowance stands on its own; a zero-length batch is not a zero budget."""
+        from senselab.audio.tasks.features_extraction.ppg import WORKER_STARTUP_S, _worker_timeout_s
+
+        assert _worker_timeout_s(0.0) == WORKER_STARTUP_S
+
+    def test_the_batch_that_timed_out_on_the_corpus_now_fits(self) -> None:
+        """471 recordings averaging 15 s exceeded the flat 600 s on four of the 128 array tasks."""
+        from senselab.audio.tasks.features_extraction.ppg import _worker_timeout_s
+
+        assert _worker_timeout_s(471 * 15.0) > 600.0
