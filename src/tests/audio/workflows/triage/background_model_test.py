@@ -76,6 +76,20 @@ def test_a_task_that_fills_the_file_reads_its_floor_off_the_residual() -> None:
     assert reading.impulses == ()
 
 
+def test_noise_the_enhancer_partly_kept_is_not_read_as_a_task_filling_the_file() -> None:
+    """A residual 15 dB under the plain noise is the enhancer's share, not a voice over the background."""
+    noise = _noise(5.0, -50.0)
+    reading = measure_background((noise, RATE), residual=(noise * 10 ** (-15 / 20.0), RATE), recording=None, clips=())
+    assert reading.floor.source == "quiet_frames"
+    assert reading.active_s < 0.5
+
+
+def test_a_recording_shorter_than_the_floor_padding_is_read() -> None:
+    """A 0.15 s file still gets a floor, with too little quiet to re-read it."""
+    reading = measure_background((_noise(0.15, -50.0), RATE), residual=None, recording=None, clips=())
+    assert reading.floor.source == "lowest"
+
+
 def test_silence_has_no_activity_and_a_digital_floor() -> None:
     """Digital silence has a digital floor, no activity and no impulses."""
     reading = measure_background((np.zeros(2 * RATE), RATE), residual=None, recording=None, clips=())

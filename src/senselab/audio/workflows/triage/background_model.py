@@ -178,9 +178,10 @@ class Floor:
 
     Attributes:
         band_db: The floor per band, dB.
-        source: ``quiet_frames`` (the recording's own), ``residual`` (the task fills the file), or
-            ``digital`` (nothing over digital silence).
-        quiet_s: Seconds of quiet frames the own floor was read over.
+        source: ``quiet_frames`` (the recording's own), ``residual`` (the task fills the file),
+            ``lowest`` (too little quiet to re-read: the first-pass percentile), or ``digital``
+            (nothing over digital silence).
+        quiet_s: Seconds of quiet frames the own floor was last re-read over; 0 where it never was.
         own_db: The recording's own quiet-frame floor, recorded alongside whatever was chosen.
         residual_db: The residual's floor, None where the residual is absent.
     """
@@ -212,26 +213,24 @@ def floor_of(frames: BandFrames, residual: BandFrames | None, p: dict[str, Any])
         return Floor(silent, "digital", 0.0, silent, None)
     own = np.percentile(frames.band_db[live], q["initial_percentile"], axis=0)
     pad = int(round(q["pad_s"] / hop))
-    quiet = live
+    quiet_s = 0.0
     for _ in range(int(q["iterations"])):
         active = active_mask(frames, own, p)
         if pad:
-            active = np.convolve(active.astype(float), np.ones(2 * pad + 1), mode="same") > 0
-        candidate = live & ~active
-        if candidate.sum() * hop < q["quiet_min_s"]:
+            active = np.convolve(active.astype(float), np.ones(2 * pad + 1), mode="full")[pad : pad + len(active)] > 0
+        quiet = live & ~active
+        if quiet.sum() * hop < q["quiet_min_s"]:
             break
-        quiet = candidate
+        quiet_s = float(quiet.sum() * hop)
         own = np.percentile(frames.band_db[quiet], q["quiet_percentile"], axis=0)
     residual_db = None
     if residual is not None:
         r_live = residual.level_db >= p["digital_floor_dbfs"]
         if r_live.any():
             residual_db = np.percentile(residual.band_db[r_live], q["residual_percentile"], axis=0)
-    quiet_s = float(quiet.sum() * hop)
-    fills = residual_db is not None and np.mean(own - residual_db >= q["residual_gap_db"]) >= 0.5
-    if residual_db is not None and (fills or quiet_s < q["quiet_min_s"]):
+    if residual_db is not None and float(np.median(own - residual_db)) >= q["residual_gap_db"]:
         return Floor(residual_db, "residual", quiet_s, own, residual_db)
-    return Floor(own, "quiet_frames", quiet_s, own, residual_db)
+    return Floor(own, "quiet_frames" if quiet_s else "lowest", quiet_s, own, residual_db)
 
 
 @dataclass(frozen=True)
