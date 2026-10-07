@@ -1,6 +1,6 @@
-"""The step sandbox: a user, network and mount namespace with read-only data, and an allowlisted env.
+"""The step sandbox: user, network, mount and PID namespaces with read-only data, and an allowlisted env.
 
-`sandbox_argv` wraps a step's argv so that it runs inside ``unshare -rnm --propagation private`` with
+`sandbox_argv` wraps a step's argv so that it runs inside a user, network, mount and PID namespace with
 the data roots, the checkout and the venv mounted read-only, the writable directories bound read-write
 and loopback raised; the step itself runs with every capability dropped, so it cannot undo the mounts.
 `build_env` builds the step's whole environment from the profile and the step; nothing is inherited
@@ -18,13 +18,13 @@ import subprocess
 from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 
-from senselab.utils.reproduce.spec import Profile, StepSpec, render
+from senselab.utils.reproduce.spec import Profile, StepSpec, check_step_profile, render
 
 IP = "/usr/sbin/ip"
 SH = "/bin/sh"
 MOUNT = "/usr/bin/mount"
 SETPRIV = "/usr/bin/setpriv"
-UNSHARE = ["/usr/bin/unshare", "-rnm", "--propagation", "private"]
+UNSHARE = ["/usr/bin/unshare", "-rnm", "--pid", "--fork", "--kill-child", "--mount-proc", "--propagation", "private"]
 DROP = [SETPRIV, "--bounding-set=-all", "--inh-caps=-all", "--ambient-caps=-all", "--no-new-privs"]
 PROXY = "http://127.0.0.1:9"
 PROXY_VARS = ("http_proxy", "https_proxy", "ftp_proxy", "all_proxy")
@@ -132,7 +132,8 @@ def sandbox_argv(
         ro_extra: The checkout and the venv, mounted read-only.
 
     Returns:
-        ``["/usr/bin/unshare", "-rnm", "--propagation", "private", "/bin/sh", "-c", SCRIPT, "sh", *argv]``.
+        ``[*UNSHARE, "/bin/sh", "-c", SCRIPT, "sh", *argv]``, where `UNSHARE` is ``/usr/bin/unshare -rnm
+        --pid --fork --kill-child --mount-proc --propagation private``.
 
     Raises:
         ValueError: If argv is empty, or as `sandbox_script`.
@@ -146,7 +147,7 @@ def userns_available() -> bool:
     """Return whether an unprivileged namespace with loopback can be created here.
 
     Returns:
-        True if ``unshare -rnm``, raising loopback and the capability drop succeed.
+        True if the namespaces, raising loopback and the capability drop succeed.
     """
     try:
         done = subprocess.run(
@@ -170,8 +171,9 @@ def _reserved(key: str) -> bool:
     )
 
 
-def _native_lib_dirs(profile: Profile) -> list[str]:
-    return [_escape(os.fspath(Path(d).parent / "lib")) for d in profile.native_dirs if Path(d).name == "bin"]
+def _native(step: StepSpec, profile: Profile, kind: str) -> list[str]:
+    selected = [profile.native[name] for name in step.resources.native]
+    return [_escape(os.fspath(d)) for n in selected for d in getattr(n, kind)]
 
 
 def _sha(env: Mapping[str, str]) -> str:
@@ -179,6 +181,7 @@ def _sha(env: Mapping[str, str]) -> str:
 
 
 def _keyed(step: StepSpec, profile: Profile) -> tuple[dict[str, str], dict[str, str]]:
+    check_step_profile(step, profile)
     bad = sorted(k for k in profile.env if _reserved(k))
     if bad:
         raise ValueError(f"profile env may not set driver-owned variables: {bad}")
@@ -186,7 +189,7 @@ def _keyed(step: StepSpec, profile: Profile) -> tuple[dict[str, str], dict[str, 
     if colon:
         raise ValueError(f"pythonpath entries may not contain ':': {colon}")
     templated = {
-        "PATH": ":".join(["{venv}/bin", *SYSTEM_PATH, *(_escape(os.fspath(d)) for d in profile.native_dirs)]),
+        "PATH": ":".join(["{venv}/bin", *SYSTEM_PATH, *_native(step, profile, "bin_dirs")]),
         "JUPYTER_PATH": "{venv}/share/jupyter",
         "JUPYTER_DATA_DIR": "{tmp}/jupyter/data",
         "JUPYTER_CONFIG_DIR": "{tmp}/jupyter/config",
@@ -199,8 +202,8 @@ def _keyed(step: StepSpec, profile: Profile) -> tuple[dict[str, str], dict[str, 
     }
     if step.pythonpath:
         templated["PYTHONPATH"] = ":".join(step.pythonpath)
-    if _native_lib_dirs(profile):
-        templated["LD_LIBRARY_PATH"] = ":".join(_native_lib_dirs(profile))
+    if _native(step, profile, "lib_dirs"):
+        templated["LD_LIBRARY_PATH"] = ":".join(_native(step, profile, "lib_dirs"))
     literal = {**FIXED_KEYED, **OFFLINE}
     literal |= {v: PROXY for v in PROXY_VARS} | {v.upper(): PROXY for v in PROXY_VARS} | {v: "" for v in NO_PROXY_VARS}
     if step.env.r_lib is not None:
@@ -220,8 +223,8 @@ def keyed_templates(step: StepSpec, profile: Profile) -> dict[str, str]:
         Name to value or template, e.g. ``{"PATH": "{venv}/bin:/usr/bin:/bin", "TZ": "UTC", ...}``.
 
     Raises:
-        ValueError: If the profile env map names a driver-owned variable, or a ``pythonpath`` entry
-            contains ``:``.
+        ValueError: If the profile env map names a driver-owned variable, a ``pythonpath`` entry
+            contains ``:``, or as `spec.check_step_profile`.
     """
     literal, templated = _keyed(step, profile)
     return literal | templated
@@ -268,13 +271,16 @@ def canary(host: str, port: int = 443, timeout: float = 5.0) -> str:
     """Return a Python snippet that tries a TCP connect and prints ``{"canary_failed": <bool>}``.
 
     Args:
-        host: The profile's canary host, a name or an address.
-        port: The TCP port.
+        host: The profile's canary host: a name or an address, optionally ``host:port``.
+        port: The TCP port when ``host`` carries none.
         timeout: Seconds before the connect counts as failed.
 
     Returns:
         Source for ``python -c``; it always exits 0. Inside the sandbox the connect must fail.
     """
+    name, sep, tail = host.rpartition(":")
+    if sep and tail.isdigit() and ":" not in name:
+        host, port = name, int(tail)
     return (
         "import json, socket\n"
         "try:\n"

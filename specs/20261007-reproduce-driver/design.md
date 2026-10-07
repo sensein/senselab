@@ -180,7 +180,7 @@ Wheel sha256s are outputs, so a rebuild never renames a venv.
 ## Sandbox
 
 Every step runs as
-`/usr/bin/unshare -rnm --propagation private /bin/sh -c 'set -e; <mounts>; /usr/sbin/ip link set lo up; exec /usr/bin/setpriv --bounding-set=-all --inh-caps=-all --ambient-caps=-all --no-new-privs "$@"' sh <argv>`.
+`/usr/bin/unshare -rnm --pid --fork --kill-child --mount-proc --propagation private /bin/sh -c 'set -e; <mounts>; /usr/sbin/ip link set lo up; exec /usr/bin/setpriv --bounding-set=-all --inh-caps=-all --ambient-caps=-all --no-new-privs "$@"' sh <argv>`.
 With `set -e`, any failed mount aborts the step before it runs, so read-only data cannot fail open.
 The literal `sh` is `$0`; without it the first word of argv is dropped.
 
@@ -192,6 +192,18 @@ and ambient sets and sets `no_new_privs` before it execs the step, so remount an
 "permission denied". The step is still uid 0 in the namespace (the caller's uid outside), so
 ordinary writes to `{out}` keep working. A missing `setpriv` fails the exec, and the step never
 runs.
+
+**Processes:** the step also gets its own PID namespace.
+
+- `--fork` makes the script, and then the step it execs, pid 1.
+- `--mount-proc` mounts a fresh `/proc` before the script runs, so `/proc` lists only the
+  sandbox's processes. It does not conflict with the bind mounts, which come after it in the same
+  mount namespace. After the capability drop the step cannot remount `/proc` either.
+- A host process is invisible to the step, so `kill <host pid>` finds no such process.
+- `--kill-child` SIGKILLs the step when `unshare` itself dies, e.g. on a driver timeout. Without it,
+  the namespace's pid 1 would outlive the killed `unshare`.
+- Verified 2026-10-07: pid 1, /proc shows only sandbox pids, a host `sleep` survives `kill`, and a
+  one-cell `python -m nbconvert --execute` notebook runs (kernel over loopback).
 
 **Mounts:**
 
@@ -214,7 +226,8 @@ runs.
 - **Keyed:** the profile map, the offline variables, `LANG`, `TZ`, and every path variable in
   *template* form (`PATH`, `PYTHONPATH`, the Jupyter dirs, `R_LIBS`, the cache dirs,
   `CUDA_CACHE_PATH`).
-- **Recorded only:** volatile values (job IDs, device lists, temp dirs, expanded paths).
+- **Recorded only:** volatile values (four Slurm job variables, the device list, temp dirs,
+  expanded paths).
 - **Always set:** `REPRO_OUT` and `REPRO_TMP`.
 - **Refused:** keys that look like secrets.
 
@@ -237,11 +250,26 @@ How `sandbox` reads those rules:
 - Mount lists (roots, writable dirs, checkout/venv) are written shallow-first. A nested root given
   before its parent would otherwise be hidden by the parent's later bind, and its remount would fail
   (exit 32).
-- `PATH` is `{venv}/bin:/usr/bin:/bin` plus the profile's native dirs.
-- `LD_LIBRARY_PATH` is never taken from the profile map. When a native dir is named `bin`, its
-  sibling `lib` goes into a keyed `LD_LIBRARY_PATH` template, e.g. a native FFmpeg prefix's
-  `.../bin` gives `.../lib`. The rule is purely by name, with no filesystem check, so the key does
-  not depend on the host. Without such dirs the variable is unset.
+- **Native tools are per step and opt-in.**
+  - The profile's `native` map names entries, each with explicit `bin_dirs` and `lib_dirs`
+    (absolute, no `:`).
+  - A step selects entries by name in `resources.native`. `spec.check_step_profile` refuses a name
+    the profile lacks, and `build_env` calls it.
+  - Only the selected entries' bin dirs go on `PATH`, after `{venv}/bin:/usr/bin:/bin`, in
+    selection order.
+  - Only their lib dirs go into a keyed `LD_LIBRARY_PATH`. A step that selects none gets
+    `PATH={venv}/bin:/usr/bin:/bin` and no `LD_LIBRARY_PATH`.
+  - `LD_LIBRARY_PATH` is never taken from the profile map.
+  - An earlier rule put every native `bin` dir's sibling `lib` on every step's `LD_LIBRARY_PATH`.
+    The B5 re-review found that a conda-installed FFmpeg prefix's `lib/` holds 961 libraries,
+    including `libstdc++`, `libgomp`, `libssl` and `libz`. They shadow the system copies for git,
+    curl and R.
+  - The intended way to expose FFmpeg is therefore a **curated lib dir**: a directory of symlinks to
+    only the needed `.so` files (`libav*`, `libsw*`, `libpostproc*`), named in that entry's
+    `lib_dirs`.
+- **For B7, R steps:** the R module's `LD_LIBRARY_PATH` is captured at prefetch. When a step has
+  both, the order is the module's entries first, then the selected native lib dirs. This module
+  merges nothing yet; B7 implements the merge.
 - Keyed templates: `PYTHONPATH` (the step's entries; an entry containing `:` is refused, since it would split), `R_LIBS`
   (`r_lib`, as the plan's B7 says, with `R_LIBS_SITE` keyed as an empty constant so no site library
   is seen), `JUPYTER_PATH`
@@ -266,8 +294,17 @@ How `sandbox` reads those rules:
 
   The driver's values cannot be overridden, and the refusal does not depend on the step.
 - Templates expand with `spec.render`, the same grammar `spec.placeholders` validates (`{{`/`}}`
-  escape a brace). Native dirs are escaped before they enter the `PATH` template.
-- The canary is a `python -c` snippet. It prints `{"canary_failed": true|false}` and always exits 0,
+  escape a brace). Native dirs are escaped before they enter the `PATH` and `LD_LIBRARY_PATH`
+  templates.
+- Departures from the approved spec's wording (spec §2.3.4), settled in the B5 reviews:
+  - The R library is keyed as `R_LIBS={r_lib}` with `R_LIBS_SITE=""`, per plan B7. It is not
+    `R_LIBS_USER`, which on its own leaves the site library on the search path.
+  - A narrow Slurm allowlist (`SLURM_JOB_ID`, `SLURM_ARRAY_JOB_ID`, `SLURM_ARRAY_TASK_ID`,
+    `SLURM_CPUS_PER_TASK`, recorded only) replaces "`SLURM_*` recorded only", for the launcher
+    reason above.
+  - The profile's `native_dirs` list became the `native` map, selected per step through
+    `resources.native`.
+- The canary is a `python -c` snippet; the host may be `name` or `name:port`. It prints `{"canary_failed": true|false}` and always exits 0,
   so the caller decides what a connect means.
 
 ## Checkouts and patches
