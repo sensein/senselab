@@ -10,6 +10,7 @@ location-independent. Lock sha256s in the env are not read; ``reproduce lock`` f
 from __future__ import annotations
 
 import datetime
+import hashlib
 import shlex
 import shutil
 import subprocess
@@ -32,6 +33,7 @@ from senselab.utils.reproduce.locks import (
 from senselab.utils.reproduce.spec import EnvSpec
 
 TORCH_PLATFORM = "x86_64-manylinux_2_28"
+UPLOAD_TIMELESS_PREFIX = "nvidia-"
 
 
 def find_uv() -> str:
@@ -76,6 +78,10 @@ def _no_emit(names: Iterable[str]) -> list[str]:
     for name in dict.fromkeys(normalize_name(n) for n in names):
         out += ["--no-emit-package", name]
     return out
+
+
+def _lock_names(base_dir: Path, rel: str) -> list[str]:
+    return sorted({e.name for e in lock_entries((base_dir / rel).read_text())})
 
 
 def _held_out(env: EnvSpec) -> list[str]:
@@ -138,7 +144,7 @@ def first_resolve(env: EnvSpec, base_dir: Path) -> list[str]:
 def torch_lock_from_index(env: EnvSpec, base_dir: Path) -> list[str]:
     """Write ``env.torch.lock`` compiled against ``env.torch.index_url`` from the first resolve's torch pins.
 
-    The pins are written to a ``.in`` file beside the lock. Every CUDA-variant name gets
+    The pins are written to a ``.in`` file beside the lock. Every ``nvidia-*`` name gets
     ``--exclude-newer-package <name>=false``, because the PyTorch index carries no upload times for them.
 
     Args:
@@ -162,7 +168,7 @@ def torch_lock_from_index(env: EnvSpec, base_dir: Path) -> list[str]:
     argv = [find_uv(), "pip", "compile", torch_in, "--no-deps", "--generate-hashes", "--emit-index-url", "--no-header"]
     argv += ["--python-version", env.python, "--exclude-newer", exclude_newer_timestamp(env.exclude_newer)]
     for name in pins:
-        if name not in TORCH_NAMES:
+        if name.startswith(UPLOAD_TIMELESS_PREFIX):
             argv += ["--exclude-newer-package", f"{name}=false"]
     argv += ["--python-platform", TORCH_PLATFORM, "--index-url", env.torch.index_url]
     return _emit(base_dir, env.torch.lock, argv, base_dir, {"source": "torch-index", "python": env.python})
@@ -209,7 +215,8 @@ def torch_lock_from_uvlock(env: EnvSpec, base_dir: Path, uv_lock: Path, roots: S
     """
     if env.torch is None:
         raise ReproduceLockError("env has no torch lock")
-    packages: list[dict[str, Any]] = tomllib.loads(uv_lock.read_text()).get("package", [])
+    raw = uv_lock.read_bytes()
+    packages: list[dict[str, Any]] = tomllib.loads(raw.decode()).get("package", [])
     by_name: dict[str, list[dict[str, Any]]] = {}
     for package in packages:
         by_name.setdefault(normalize_name(package["name"]), []).append(package)
@@ -220,7 +227,13 @@ def torch_lock_from_uvlock(env: EnvSpec, base_dir: Path, uv_lock: Path, roots: S
             raise ReproduceLockError(f"{name}: not in uv.lock")
         wheel = _linux_wheel(name, by_name[name], cp)
         lines.append(f"{name} @ {wheel['url']} \\\n    --hash={wheel['hash']}\n")
-    _write(base_dir, env.torch.lock, write_header("".join(lines), {"source": "uv.lock", "python": env.python}))
+    fields = {
+        "source": "uv.lock",
+        "python": env.python,
+        "roots": " ".join(sorted({normalize_name(r) for r in roots})),
+        "uv-lock-sha256": hashlib.sha256(raw).hexdigest(),
+    }
+    _write(base_dir, env.torch.lock, write_header("".join(lines), fields))
     return []
 
 
@@ -253,12 +266,12 @@ def body_lock_from_uvlock_export(
     *,
     extras: Sequence[str] = (),
     groups: Sequence[str] = (),
-    torch_roots: Sequence[str] = (),
 ) -> list[str]:
     """Write ``env.body.lock`` as a hashed ``uv export`` of the project's ``uv.lock``.
 
-    The ``uv.lock`` torch closure of ``torch_roots``, the ``sdist_allow`` names and ``extra_no_emit`` are
-    each left out with ``--no-emit-package``.
+    The ``uv.lock`` torch closure of the torch, torchvision and torchaudio names in ``env.torch.lock``
+    (written first), the ``sdist_allow`` names and ``extra_no_emit`` are each left out with
+    ``--no-emit-package``.
 
     Args:
         env: A uv-export env.
@@ -266,18 +279,20 @@ def body_lock_from_uvlock_export(
         project_dir: The checkout holding ``pyproject.toml`` and ``uv.lock``; the command's working directory.
         extras: Project extras to include.
         groups: Dependency groups to include.
-        torch_roots: The torch names that ``torch.lock`` holds; empty for a torch-free env.
 
     Returns:
         The argv run; record it as ``body.export_cmd``.
 
     Raises:
-        ReproduceLockError: If uv is missing or the export fails.
+        ReproduceLockError: If ``torch.lock`` holds no torch root, uv is missing or the export fails.
     """
     family: set[str] = set()
-    if torch_roots:
+    if env.torch is not None:
+        roots = sorted(TORCH_NAMES & set(_lock_names(base_dir, env.torch.lock)))
+        if not roots:
+            raise ReproduceLockError(f"{env.torch.lock} holds no torch, torchvision or torchaudio")
         packages = tomllib.loads((project_dir / "uv.lock").read_text()).get("package", [])
-        family = uv_lock_torch_family(packages, torch_roots)
+        family = uv_lock_torch_family(packages, roots)
     argv = [find_uv(), "export", "--frozen", "--no-emit-project", "--no-dev", "--no-header"]
     for extra in extras:
         argv += ["--extra", extra]
@@ -298,8 +313,9 @@ def overlay_lock(
 ) -> list[str]:
     """Write an overlay lock: the project's test group, or notebook tools constrained by the base locks.
 
-    Names ``torch.lock`` holds and names held out of the base (``sdist_allow``, ``extra_no_emit``) are
-    left out, since the base venv provides or deliberately lacks them.
+    Every name in ``torch.lock`` and ``body.lock`` and every name held out of the base (``sdist_allow``,
+    ``extra_no_emit``) is left out, so the overlay holds only names the base lacks. The base venv
+    provides or deliberately lacks the others; for notebook tools the constraints still bound them.
 
     Args:
         kind: ``test`` exports ``group`` from the project's ``uv.lock``; ``notebook_tools`` compiles
@@ -333,6 +349,6 @@ def overlay_lock(
         argv += ["--index-url", env.body.index_url]
         for base in ([env.torch.lock] if env.torch else []) + [env.body.lock]:
             argv += ["--constraints", base]
-    torch_names = [e.name for e in lock_entries((base_dir / env.torch.lock).read_text())] if env.torch else []
-    argv += _no_emit([*sorted(set(torch_names)), *_held_out(env)])
+    torch_names = _lock_names(base_dir, env.torch.lock) if env.torch else []
+    argv += _no_emit([*torch_names, *_lock_names(base_dir, env.body.lock), *_held_out(env)])
     return _emit(base_dir, ref.lock, argv, cwd, {"source": kind, "python": env.python})

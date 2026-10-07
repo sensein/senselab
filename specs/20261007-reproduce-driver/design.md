@@ -147,17 +147,24 @@ How `lockgen` produces the locks:
 - A manifest `exclude_newer` date becomes `<date>T23:59:59Z`. uv reads a bare date in the local time
   zone, which would make the lock depend on the host.
 - The torch pins for an index compile are the torch-family pins of the first resolve, written to a
-  `.in` file beside `torch.lock`, so the recorded command can be rerun. Every non-root family name
-  (`nvidia-*`, `triton`, …) gets `--exclude-newer-package <name>=false`, as the spec says; the spike
-  needed it for the `nvidia-*` names, and on exact pins it is harmless for `triton`.
+  `.in` file beside `torch.lock`, so the recorded command can be rerun. Only `nvidia-*` names get
+  `--exclude-newer-package <name>=false`: the spike found that the PyTorch index links those wheels
+  with no upload time, so `--exclude-newer` drops them all, while `torch`, `torchaudio` and `triton`
+  carry upload times and pass the date filter. Exempting more would only weaken the date bound.
 - A `uv.lock`-derived torch lock and a uv-export body both use the `uv.lock` torch closure of the
-  roots the env installs, the same set the integrity check uses, so the two cannot disagree. Each
-  name gets the single linux x86_64 manylinux wheel for the env's `cpXY` (or a `py3-none` wheel);
-  zero or several matches is an error.
-- Overlays leave out the names `torch.lock` holds and the `sdist_allow`/`extra_no_emit` names: the
-  base venv provides or deliberately lacks them, and the integrity check refuses an overlay that pins
-  them differently. Notebook tools compile with `torch.lock` and `body.lock` as `--constraints`;
-  their `--index-url` lines do not change the compile index.
+  same roots, the set the integrity check uses, so the two cannot disagree. The torch lock records
+  its `roots` and the `uv.lock` sha256 in its header; the export reads the roots back from
+  `torch.lock` and refuses one with none. Each name gets the single linux x86_64 manylinux wheel for
+  the env's `cpXY` (or a `py3-none` wheel); zero or several matches is an error.
+- The integrity check refuses a body entry that `torch.lock` names or that belongs to the torch
+  family (the `uv.lock` closure, or the name rule against a first resolve), so a package cannot come
+  from two install stages.
+- Overlays leave out every name in `torch.lock` and `body.lock` and the `sdist_allow`/`extra_no_emit`
+  names, so an overlay holds only names the base lacks. Keeping shared names failed the integrity
+  check on real data: a universal compile emits every wheel hash where the base holds a subset, and
+  its markers differ (`pycparser`, `cffi`, `markupsafe` against a uv-export body; `decorator` against
+  a requirements body). Notebook tools compile with `torch.lock` and `body.lock` as `--constraints`,
+  which still bound the versions of the names left out.
 
 **The venv name** is `repro-<analysis>-<env_key8>`. `env_key` is derived from inputs only:
 
