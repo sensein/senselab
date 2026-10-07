@@ -1672,6 +1672,26 @@ _VERDICT_CONTROLS = "".join(
 )
 
 
+MARK_STYLE = """
+.bracket{font-family:ui-monospace,Menlo,monospace;font-size:.82em;color:var(--brk);
+background:var(--brkbg);border-radius:3px;padding:0 3px;letter-spacing:.02em}
+mark.pii,mark.swatch{background:transparent;color:var(--fg);border-bottom:3px solid var(--line);
+border-radius:0;padding:0 1px}
+mark.pii.u-red,mark.swatch.u-red{border-bottom-color:var(--ured)}
+mark.pii.u-green,mark.swatch.u-green{border-bottom-color:var(--ugreen)}
+mark.pii.u-orange,mark.swatch.u-orange{border-bottom-color:var(--uorange);border-bottom-style:dashed}
+mark.pii .cat,mark.swatch .cat{font-size:9.5px;letter-spacing:.06em;color:var(--catfg);background:var(--catbg);
+border-radius:3px;padding:0 3px;margin-right:4px;vertical-align:.18em;
+font-family:ui-monospace,Menlo,monospace}
+.chip{font-size:10.5px;letter-spacing:.04em;padding:1px 7px;border-radius:9px;border:1px solid}
+.r-as_is{background:#e7f3e7;border-color:#8fbf8f;color:#2c5c2c}
+.r-withheld{background:#fbe6e4;border-color:#d08e86;color:#8a2f24}
+.r-redacted{background:#eaeef6;border-color:#8fa0c0;color:#2f4670}
+.r-unrecorded{background:#f1efe9;border-color:#bdb7a8;color:#6b6350}
+"""
+"""The rules a marked transcript needs: bracketed tokens, PII marks in their state colours, the category
+label and the release chips. The triage review page carries them too."""
+
 _STYLE = """
 :root{--bg:#fbfaf8;--fg:#1d1c1a;--mut:#6b6860;--line:#e2ded6;--card:#fff;--acc:#7a4b12;
 --pii:#fde8c8;--piib:#c98a2b;--brk:#8d8a83;--brkbg:#f0eeea;--catbg:#f7dcb0;--catfg:#7a4b12;
@@ -1738,24 +1758,9 @@ margin-bottom:6px}
 border-radius:3px;padding:0 4px}
 .text{margin:0;font-size:16px}
 .empty{color:var(--mut);font-style:italic}
-.bracket{font-family:ui-monospace,Menlo,monospace;font-size:.82em;color:var(--brk);
-background:var(--brkbg);border-radius:3px;padding:0 3px;letter-spacing:.02em}
-mark.pii,mark.swatch{background:transparent;color:var(--fg);border-bottom:3px solid var(--line);
-border-radius:0;padding:0 1px}
-mark.pii.u-red,mark.swatch.u-red{border-bottom-color:var(--ured)}
-mark.pii.u-green,mark.swatch.u-green{border-bottom-color:var(--ugreen)}
-mark.pii.u-orange,mark.swatch.u-orange{border-bottom-color:var(--uorange);border-bottom-style:dashed}
 .themebtn{font:inherit;font-size:11px;padding:1px 7px;border:1px solid var(--line);border-radius:9px;
 background:var(--card);color:var(--mut);cursor:pointer}
-mark.pii .cat,mark.swatch .cat{font-size:9.5px;letter-spacing:.06em;color:var(--catfg);background:var(--catbg);
-border-radius:3px;padding:0 3px;margin-right:4px;vertical-align:.18em;
-font-family:ui-monospace,Menlo,monospace}
-.chip{font-size:10.5px;letter-spacing:.04em;padding:1px 7px;border-radius:9px;border:1px solid}
-.r-as_is{background:#e7f3e7;border-color:#8fbf8f;color:#2c5c2c}
-.r-withheld{background:#fbe6e4;border-color:#d08e86;color:#8a2f24}
-.r-redacted{background:#eaeef6;border-color:#8fa0c0;color:#2f4670}
-.r-unrecorded{background:#f1efe9;border-color:#bdb7a8;color:#6b6350}
-.cat-chip{display:inline-block;font-size:11px;background:var(--card);border:1px solid var(--line);
+""" + MARK_STYLE + """.cat-chip{display:inline-block;font-size:11px;background:var(--card);border:1px solid var(--line);
 border-radius:9px;padding:1px 7px;margin:0 3px 3px 0}
 .errors{color:#8a2f24;font-size:12px}
 .noreview{font-size:11.5px;background:var(--pii);border-left:3px solid var(--piib);
