@@ -636,6 +636,14 @@ recall and a confusion matrix free of the prevalence, floor and split rules.
 **Value ranges.** Headline values are range-checked (`E_METRICS_RANGE`): classification and detection
 rates in [0, 1], or [0, 100] with `unit: pp`; `mcc` in [-1, 1], scaled likewise; `f_stat` at least 0;
 and `ci_low <= value <= ci_high` when given. This catches a percentage written without `unit: pp`.
+`floor` takes the value's bounds for every headline entry, presence-only floors included, and
+`lift` lies within plus or minus the range width under the same scaling. Per-class recall,
+precision and f1 lie in [0, 1], as prevalence already does.
+
+**Sub-sample prevalence.** When the top-level `n` is given, a class prevalence above 0 but below
+`1/n` stands for less than one example and is refused (`E_METRICS_PREVALENCE_SUBSAMPLE`); it would
+otherwise let an adapter dodge `W_CLASS_ABSENT` and the present-class floor rule with a tiny
+non-zero value.
 
 **Driver-only keys.** `delta`, `target`, `tolerance` and `pass` are refused anywhere in adapter
 output. Only the driver, evaluating `expect`, writes them; otherwise an adapter could report its own

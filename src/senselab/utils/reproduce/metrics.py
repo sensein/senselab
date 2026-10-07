@@ -20,9 +20,12 @@ Each kind allows its own headline names (`KIND_HEADLINES`); ``per_class`` belong
 classification and detection, and ``confusion`` only to classification (otherwise
 ``E_METRICS_KIND_KEY``). Headline values are range-checked: rates in [0, 1] (or [0, 100] for
 ``unit: pp``), ``mcc`` in [-1, 1] (likewise scaled), ``f_stat`` at least 0, and ``ci_low <= value <=
-ci_high`` (``E_METRICS_RANGE``). ``delta``, ``target``, ``tolerance`` and
-``pass`` are written only by the driver, at the top level, in a headline entry or in a ``per_class``
-entry.
+ci_high`` (``E_METRICS_RANGE``); ``floor`` takes the value's bounds and ``lift`` lies within plus or
+minus their width. Per-class recall, precision and f1 lie in [0, 1]. With a top-level ``n``, a class
+prevalence above 0 but below ``1/n`` (less than one example) gives ``E_METRICS_PREVALENCE_SUBSAMPLE``.
+
+``delta``, ``target``, ``tolerance`` and ``pass`` are written only by the driver, at the top level, in a
+headline entry or in a ``per_class`` entry.
 
 **Classification** (single-label) and **detection** steps must carry:
 
@@ -125,6 +128,7 @@ CODES = frozenset(
         "E_METRICS_NO_CLASS_RATES",
         "E_METRICS_PREVALENCE_RANGE",
         "E_METRICS_PREVALENCE_SUM",
+        "E_METRICS_PREVALENCE_SUBSAMPLE",
         "E_METRICS_NO_FLOOR",
         "E_METRICS_BAD_FLOOR",
         "E_METRICS_NO_LIFT",
@@ -304,7 +308,7 @@ class _Check:
 
     def value_range(self, entry: dict[str, Any]) -> None:
         name, value = entry.get("name"), entry.get("value")
-        if not _is_number(value) or not isinstance(name, str):
+        if not isinstance(name, str):
             return
         scale = 100.0 if entry.get("unit") == "pp" else 1.0
         if name == "mcc":
@@ -316,8 +320,15 @@ class _Check:
         else:
             return
         slack = TOLERANCE * scale
-        if not low - slack <= value <= high + slack:
+        floor, lift = entry.get("floor"), entry.get("lift")
+        width = high - low
+        for bounded in (value, floor):
+            if _is_number(bounded) and not low - slack <= bounded <= high + slack:
+                self.codes.add("E_METRICS_RANGE")
+        if _is_number(lift) and abs(lift) > width + slack:
             self.codes.add("E_METRICS_RANGE")
+        if not _is_number(value):
+            return
         ci_low, ci_high = entry.get("ci_low"), entry.get("ci_high")
         if _is_number(ci_low) and ci_low > value + slack:
             self.codes.add("E_METRICS_RANGE")
@@ -344,7 +355,7 @@ class _Check:
         if expected is not None and abs(floor - expected * scale) > TOLERANCE * scale:
             self.codes.add("E_METRICS_BAD_FLOOR")
 
-    def per_class(self, classes: object) -> None:
+    def per_class(self, classes: object, n: object = None) -> None:
         if not self.mapping(classes):
             return
         assert isinstance(classes, dict)
@@ -356,11 +367,17 @@ class _Check:
             self.keys(fields, frozenset(PER_CLASS_FIELDS), driver=True)
             for key in PER_CLASS_FIELDS:
                 self.number(fields, key)
+            for key in ("recall", "precision", "f1"):
+                rate = fields.get(key)
+                if _is_number(rate) and not 0 <= rate <= 1:
+                    self.codes.add("E_METRICS_RANGE")
         declared = {c: classes[c] for c in self.schema.per_class if isinstance(classes.get(c), dict)}
         given = {c: f["prevalence"] for c, f in declared.items() if "prevalence" in f}
         self.prevalences(given, complete=len(given) == len(self.schema.per_class))
         if any(_is_number(p) and p == 0 for p in given.values()):
             self.codes.add("W_CLASS_ABSENT")
+        if _is_number(n) and n > 0 and any(_is_number(p) and 0 < p and p * n < 1 - TOLERANCE for p in given.values()):
+            self.codes.add("E_METRICS_PREVALENCE_SUBSAMPLE")
 
     def class_fields(self, classes: object) -> None:
         declared = self.schema.per_class
@@ -441,7 +458,7 @@ class _Check:
         if "per_class" in obj and not self.imbalance:
             self.codes.add("E_METRICS_KIND_KEY")
         elif "per_class" in obj:
-            self.per_class(obj["per_class"])
+            self.per_class(obj["per_class"], obj.get("n"))
         entries = obj.get("headline", [])
         self.headline(entries, self.scored_prevalence(obj.get("per_class")))
         if isinstance(entries, list):
