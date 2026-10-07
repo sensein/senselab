@@ -10,8 +10,9 @@ Subcommands:
   ``--sources-only`` checks out draft manifests with the empty patch set and nothing else.
 - ``build-one``: build or reuse one sdist's wheel and record the new ``wheels.lock`` sha256.
 - ``run``: run steps in DAG order; ``--step`` runs just those (one batch job; ``--pin`` refuses a manifest
-  changed since submission with ``E_MANIFEST_CHANGED``), ``--finalize --submission <id>`` settles that
-  submission's ``pending`` rows.
+  changed since submission with ``E_MANIFEST_CHANGED``), ``--finalize --submission <id>`` cancels that
+  submission's jobs (queued or running, found by recorded id and by their ``--comment`` tag) and settles its
+  ``pending`` rows. A local run refuses (``E_SUBMIT_OVERLAP``) while a submission is live in its run dir.
 - ``submit``: lint, then one held batch job per step chained with ``afterok``, then release
   (`slurm.submit`).
 - ``lint``: check manifests and patches against the profile.
@@ -132,8 +133,13 @@ def build_parser() -> argparse.ArgumentParser:
     _site_options(run_cmd)
     run_cmd.add_argument("--date", type=_date, help="the run date (default: today, UTC)")
     run_cmd.add_argument("--step", action="append", help="run only this step (repeatable); upstream must be done")
-    run_cmd.add_argument("--finalize", action="store_true", help="mark every pending row never-ran")
-    run_cmd.add_argument("--submission", help="the submission id (set by submit)")
+    run_cmd.add_argument(
+        "--finalize",
+        action="store_true",
+        help="settle pending rows as never-ran; with --submission, first cancel that submission's jobs, "
+        "including any still queued or running",
+    )
+    run_cmd.add_argument("--submission", help="the submission id (set by submit; printed by submit)")
     run_cmd.add_argument("--pin", action="append", default=[], help="a manifest's sha256 at submission, in order")
     run_cmd.add_argument("--min-cell", type=int, default=5)
     run_cmd.add_argument("--timeout", type=float, help="seconds before a step is killed")
@@ -669,9 +675,11 @@ def _cmd_run(args: argparse.Namespace) -> int:
     config = _run_config(args, paths, profile)
     if args.finalize:
         if args.submission is not None:
-            leftover = slurm.cancel_jobs(run.pending_jobs(manifests, config, args.submission))
-            if leftover:
-                _error(f"E_SCANCEL_FAILED: job(s) {','.join(leftover)} may still be queued")
+            cancelled = slurm.cancel_submission(args.submission, run.pending_jobs(manifests, config, args.submission))
+            if cancelled.leftover:
+                _error(f"E_SCANCEL_FAILED: job(s) {','.join(cancelled.leftover)} may still be queued")
+            if not cancelled.listed:
+                _error(f"squeue failed: jobs tagged {args.submission} with no recorded id may remain")
         run.finalize_run_records(manifests, config, submission=args.submission, state_of=slurm.job_state)
         return EXIT_OK
     outcomes = run.run_steps(manifests, config, only=args.step or None, submission=args.submission)
@@ -784,6 +792,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     except UsageError as error:
         _error(str(error))
         return EXIT_USAGE
+    except run.SubmissionOverlap as error:
+        _error(f"{error}; a local run waits until the submission ends or is settled with --finalize")
+        return EXIT_FAILED
     except pydantic.ValidationError as error:
         _error(_validation_text(error))
         return EXIT_FAILED

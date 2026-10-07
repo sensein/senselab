@@ -233,7 +233,9 @@ class FakeSbatch:
 
     ``probe`` answers ``--test-only`` (an exception instance is raised instead); ``fail_at`` makes the n-th
     submission fail, and ``raise_at`` makes it raise the given exception (or send SIGTERM for ``"SIGTERM"``).
-    ``on_release`` runs when ``scontrol release`` is called.
+    ``on_release`` runs when ``scontrol release`` is called. Accepted jobs stay in a fake queue under their
+    ``--comment`` until scancelled, and squeue lists them; ``accept_then_raise_at`` accepts the n-th job into
+    the queue and then raises, so its id never reaches the caller.
     """
 
     def __init__(
@@ -241,6 +243,7 @@ class FakeSbatch:
         probe: tuple[int, str] | BaseException = (0, ""),
         fail_at: int | None = None,
         raise_at: tuple[int, BaseException | str] | None = None,
+        accept_then_raise_at: int | None = None,
     ) -> None:
         """Set the probe answer and the failures."""
         self.calls: list[tuple[list[str], str]] = []
@@ -250,6 +253,8 @@ class FakeSbatch:
         self.raise_at = raise_at
         self.next_id = 100
         self.on_release: Any = None
+        self.accept_then_raise_at = accept_then_raise_at
+        self.queue: dict[str, str] = {}
 
     def __call__(self, argv: list[str], script: str) -> subprocess.CompletedProcess[str]:
         """Answer one call."""
@@ -257,6 +262,11 @@ class FakeSbatch:
         mask = os.umask(0)
         os.umask(mask)
         self.umasks.append(mask)
+        if argv[0] == slurm.SQUEUE:
+            return subprocess.CompletedProcess(argv, 0, "".join(f"{i} {c}\n" for i, c in self.queue.items()), "")
+        if argv[0] == slurm.SCANCEL:
+            for job in argv[1:]:
+                self.queue.pop(job, None)
         if argv[0] in (slurm.SCANCEL, slurm.SCONTROL):
             if argv[:2] == [slurm.SCONTROL, "release"] and self.on_release is not None:
                 self.on_release()
@@ -276,6 +286,10 @@ class FakeSbatch:
         if self.fail_at is not None and count == self.fail_at:
             return subprocess.CompletedProcess(argv, 1, "", "sbatch: error: denied")
         self.next_id += 1
+        comment = next((a.split("=", 1)[1] for a in argv if a.startswith("--comment=")), "")
+        self.queue[str(self.next_id)] = comment
+        if self.accept_then_raise_at is not None and count == self.accept_then_raise_at:
+            raise KeyboardInterrupt
         return subprocess.CompletedProcess(argv, 0, f"{self.next_id};cluster\n", "")
 
     def submissions(self) -> list[str]:
@@ -680,6 +694,63 @@ def test_job_state_reads_sacct() -> None:
     assert slurm.job_state("12", sacct("CANCELLED by 77\n")) == "CANCELLED"
     assert slurm.job_state("12", sacct("", 1)) is None
     assert slurm.job_state("12; rm", sacct("TIMEOUT")) is None
+
+
+def test_every_job_carries_the_submission_tag(tmp_path: Path) -> None:
+    """Each sbatch call has ``--comment=<submission id>``, finalize included."""
+    fake = FakeSbatch((0, PROBE_OK))
+    slurm.submit(_chain(), _config(tmp_path, PATHS), runner=fake)
+    assert [a for a, _ in fake.calls if "--parsable" in a] and all(
+        "--comment=sub1" in a for a, _ in fake.calls if "--parsable" in a
+    )
+
+
+def test_an_accepted_job_with_no_recorded_id_is_cancelled_by_tag(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A job slurmctld accepted whose id never came back is found by its tag and cancelled; the id is printed."""
+    fake = FakeSbatch((0, PROBE_OK), accept_then_raise_at=2)
+    with pytest.raises(slurm.SlurmError, match="cancelled job\\(s\\) 101,102"):
+        slurm.submit(_chain(), _config(tmp_path, PATHS), runner=fake)
+    assert fake.commands("scancel") == [["scancel", "101", "102"]] and fake.queue == {}
+    assert capsys.readouterr().err == "interrupted: submission sub1\n"
+
+
+def test_cancel_submission_reports_the_union(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Recorded ids and tagged ids are cancelled together; the caller's own job and other tags are left."""
+    monkeypatch.setenv("SLURM_JOB_ID", "7")
+    fake = FakeSbatch()
+    fake.queue = {"5": "s1", "6": "other", "7": "s1", "8": "s1"}
+    cancelled = slurm.cancel_submission("s1", ["3", "5"], fake)
+    assert cancelled == slurm.Cancelled(["3", "5", "8"], [], True)
+    assert fake.queue == {"6": "other", "7": "s1"}
+
+    def no_squeue(argv: list[str], script: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(argv, 1 if argv[0] == "squeue" else 0, "", "")
+
+    assert slurm.cancel_submission("s1", ["3"], no_squeue) == slurm.Cancelled(["3"], [], False)
+
+
+def test_an_interrupt_during_the_reservation_undoes_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Ctrl-C while reserving the second run dir removes the first reservation and names the submission."""
+    real = run.reserve_run_record
+    calls: list[str] = []
+
+    def reserve(runs_root: Path, date: datetime.date, analysis: str, order: Any, submission: str) -> Any:  # noqa: ANN401
+        calls.append(analysis)
+        if len(calls) == 2:
+            raise KeyboardInterrupt
+        return real(runs_root, date, analysis, order, submission)
+
+    monkeypatch.setattr(run, "reserve_run_record", reserve)
+    fake = FakeSbatch((0, PROBE_OK))
+    with pytest.raises(KeyboardInterrupt):
+        slurm.submit(_chain(), _config(tmp_path, PATHS), runner=fake)
+    assert calls == ["alpha", "beta"] and fake.calls == []
+    assert _rows(tmp_path, "alpha") == []
+    assert capsys.readouterr().err == "interrupted: submission sub1\n"
 
 
 # --- waited build jobs ----------------------------------------------------------------------------------

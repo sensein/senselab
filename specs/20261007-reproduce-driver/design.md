@@ -1212,17 +1212,23 @@ patch text.
      together exactly one reserves a run dir; an overlap found at a later analysis undoes the reservations
      already made (restoring the replaced rows) and nothing is submitted. A test races two threads against a
      fake sbatch that blocks between calls;
-  4. under `umask 007`, with SIGTERM and SIGHUP raising `Terminated`: the dated log dir (mode `2770`); the
-     partition probes; every step job `--hold` in DAG order, each `--dependency=afterok:<needs' job ids>` (in
-     `needs` order) with `--kill-on-invalid-dep=yes`; the job ids, filled into this submission's rows under
-     the lock; the finalize job (`afterany` every step job) `--hold`; one `scontrol release` of all of them.
+  4. the dated log dir (mode `2770`); the partition probes; every step job `--hold` and
+     `--comment=<submission id>` in DAG order, each `--dependency=afterok:<needs' job ids>` (in `needs` order)
+     with `--kill-on-invalid-dep=yes`; the job ids, filled into this submission's rows under the lock; the
+     finalize job (`afterany` every step job, also `--hold` and tagged); one `scontrol release` of all of them.
+
+  Steps 3 and 4 run under `umask 007` with SIGTERM and SIGHUP raising `Terminated`, so an interrupt during
+  the reservation also undoes it. Any interrupt prints `interrupted: submission <id>` (the id only) on
+  stderr. A slow test runs two real `submit` processes against one run dir on NFS with a fake sbatch on
+  `PATH`: exactly one wins.
 
   Because nothing runs before the release, no upstream can have finished or been purged when a dependent
   is submitted, so an `afterok` dependency is never invalid at submit time. Any exception, Ctrl-C, SIGTERM
   or SIGHUP in step 4 starts the abort, which runs with SIGINT, SIGTERM and SIGHUP ignored (a second signal
-  cannot interrupt it; the handlers are restored afterwards): `scancel` of every job submitted so far, the
-  finalize job included, with its exit checked (a failure is reported as `E_SCANCEL_FAILED` with the
-  leftover job ids, ids only); then each of this submission's still-`pending` rows gets back the row its
+  cannot interrupt it; the handlers are restored afterwards): `scancel` of the union of the job ids recorded
+  so far (the finalize job included) and the user's jobs `squeue` lists under this submission's `--comment`
+  tag, which catches a job slurmctld accepted whose id never reached the driver. The scancel exit is
+  checked (a failure is reported as `E_SCANCEL_FAILED` with the leftover job ids, ids only). Then each of this submission's still-`pending` rows gets back the row its
   placeholder replaced, or becomes `never-ran` with `E_SUBMIT_ABORTED`. Rows of other submissions are never
   touched. The command exits 1.
   A job's exit is non-zero exactly when its step is not `StepOutcome.ok`, which is what `afterok` reads.
@@ -1235,11 +1241,18 @@ patch text.
   submission into `never-ran` with that step's codes.
 - **Finalize.** The finalize job (on the `build` partition, 1 CPU, `1G`, 10 minutes), or `run --finalize
   --submission <id>` by hand, first `scancel`s the job ids recorded in that submission's still-`pending`
-  rows (a no-op once they have ended; by hand it stops a dead submission's leftovers; a failing scancel is
-  reported with the ids), then settles those rows in DAG order: a step with a need that did not succeed is
+  rows together with every job `squeue` lists under its `--comment` tag (never the calling job itself).
+  From the finalize job this is a no-op, since its dependencies have ended. **By hand on a live submission
+  it cancels that submission's queued and running jobs as well**, then settles their rows; that is the way
+  to stop a submission. A failing scancel is reported with the ids. The rows are then settled in DAG order:
+  a placeholder row (no job id, never submitted) is `never-ran` with `E_SUBMIT_ABORTED`; a step with a need that did not succeed is
   `never-ran` with `E_UPSTREAM_NOT_DONE`; any other step's own job ended without writing its row, so it is
   `never-ran` with `E_JOB_ENDED_WITHOUT_RECORD` and, where `sacct` answers, the job's final state word as
   `slurm_state` (`TIMEOUT`, `NODE_FAIL`, `CANCELLED`). It never touches another submission's rows.
+- **Local runs.** A local `run` (full, or `--step` without `--submission`) refuses with `E_SUBMIT_OVERLAP`
+  while any submission has `pending` rows in one of its run dirs, and it never rewrites a row a submission
+  tagged: a full local run merges its rows into the record (rows of other steps are kept) and leaves tagged
+  rows as they are.
 - **Requeue.** `never-ran` written by finalize, or by a failed upstream, is not final against a requeued
   job: a requeued job writes its own row when it ends (same submission tag), so its later row replaces the
   `never-ran`, and `status` then shows the step's true state. A job killed after its step started and not
