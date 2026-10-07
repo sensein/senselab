@@ -315,3 +315,18 @@ test('all on a set column chooses every member', () => {
   const chosen = m.selectAll('gate_failed_names')
   assert.ok(chosen.includes('response_min_s') && chosen.includes('items_min'))
 })
+
+test('a page can register its own columns, and the facets read them after a refresh', () => {
+  const added = A.register([
+    { name: 'review_reason', kind: 'categorical', group: 'decision', nullMeans: 'no reason' },
+    { name: 'participant', kind: 'categorical', group: 'identity' },
+  ])
+  assert.deepEqual(added.map((c) => c.name), ['review_reason'])
+  assert.equal(A.BY_NAME.review_reason.kind, 'categorical')
+  assert.equal(F.BY_NAME.review_reason, undefined)
+  F.refresh()
+  assert.equal(F.BY_NAME.review_reason.mode, 'scalar')
+  const model = new F.FacetModel([{ review_reason: 'weak_events' }, { review_reason: null }])
+  model.toggle('review_reason', 'weak_events')
+  assert.deepEqual(Array.from(model.mask()), [1, 0])
+})

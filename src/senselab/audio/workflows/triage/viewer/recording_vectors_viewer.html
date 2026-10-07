@@ -1785,6 +1785,25 @@ var SchemaAxes = (function () {
   var BY_NAME = {};
   CATALOGUE.forEach(function (c) { BY_NAME[c.name] = c; });
 
+  /**
+   * Add columns a page carries beyond recording_vectors, so the corpus view and the facets can read
+   * them. A name already in the catalogue is left as it is.
+   *
+   * @param {Array<Object>} specs column specs, in the shape `column` takes.
+   * @returns {Array<Object>} the columns added.
+   */
+  function register(specs) {
+    var added = [];
+    specs.forEach(function (spec) {
+      if (BY_NAME[spec.name]) return;
+      var c = column(spec);
+      CATALOGUE.push(c);
+      BY_NAME[c.name] = c;
+      added.push(c);
+    });
+    return added;
+  }
+
   // Owner-directed: participant, task, verdict first. The remaining seven are ranked by
   // discrimination — separation times decision-relevance, under a redundancy cut and a
   // resolution floor — over the r3 corpus. specs/20260922-compact-recording-vectors/views.md
@@ -1982,6 +2001,7 @@ var SchemaAxes = (function () {
     MAX_AXES: MAX_AXES,
     KEY_CHARS: KEY_CHARS,
     categoryLabel: categoryLabel,
+    register: register,
     corpusColumns: corpusColumns,
     readValue: readValue,
     summarise: summarise,
@@ -2046,9 +2066,16 @@ var SchemaFacets = (function () {
       .map(function (x) { return x.f; });
   }
 
-  var CATALOGUE = catalogue();
+  var CATALOGUE = [];
   var BY_NAME = {};
-  CATALOGUE.forEach(function (f) { BY_NAME[f.col.name] = f; });
+
+  /** Re-read the axis catalogue, after a page registered its own columns there. */
+  function refresh() {
+    CATALOGUE.length = 0;
+    Object.keys(BY_NAME).forEach(function (k) { delete BY_NAME[k]; });
+    catalogue().forEach(function (f) { CATALOGUE.push(f); BY_NAME[f.col.name] = f; });
+  }
+  refresh();
 
   /** The facets the panel opens expanded: the ones carrying a decision the reader acts on. */
   var DEFAULT_OPEN = ['verdict', 'task', 'release', 'conformance_speech'];
@@ -2418,6 +2445,7 @@ var SchemaFacets = (function () {
     REFUSED: REFUSED,
     DEFAULT_OPEN: DEFAULT_OPEN,
     FacetModel: FacetModel,
+    refresh: refresh,
   };
 })();
 
