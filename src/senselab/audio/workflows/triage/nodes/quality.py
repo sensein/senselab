@@ -1,13 +1,9 @@
 """QUALITY — acquisition quality, read off every recording whatever routing decided.
 
 Runs after every branch, on every path PREPROCESS completed, and before REDACT and VERDICT;
-``run._drive_branches`` places the call. It writes two things:
-
-- the recording-level ``background_model`` measurement
-  (:func:`~senselab.audio.workflows.triage.background_model.measure_background`), decoded from the
-  ``plain``, ``residual`` and ``recording`` streams: floor, hum, impulses, regions of activity and
-  the acquisition faults. Nothing decides on it yet;
-- the clip-consistency audit below, a self-check of the store's own records.
+``run._drive_branches`` places the call. The recording-level background is not QUALITY's: it is
+read before the branches (:mod:`~senselab.audio.workflows.triage.nodes.background`). QUALITY writes
+the clip-consistency audit below, a self-check of the store's own records.
 
 The audit is clip consistency. A clip span asserts that the signal reached its ceiling over its
 extent; a sample outside every clip span, louder than that ceiling, contradicts the assertion.
@@ -31,18 +27,12 @@ from pathlib import Path
 from typing import Any
 
 from senselab.audio.data_structures import AudioHints
-from senselab.audio.workflows.triage.background_model import (
-    BACKGROUND_MODEL,
-    background_model_parameters,
-    background_reading_of,
-)
 from senselab.audio.workflows.triage.config import TriageConfig, UnmeasuredConfigKey
 from senselab.audio.workflows.triage.nodes.common import (
     BranchResult,
     find_measurement,
     live_entities,
     software_agent,
-    write_measurement,
     write_report,
 )
 from senselab.audio.workflows.triage.vocabulary import STORE_ASSERTIONS, UNDETERMINED, Conformance
@@ -192,17 +182,6 @@ def _clip_amplitudes(store: ProvStore, signal: str) -> Entity:
     return found
 
 
-def _write_background(store: ProvStore, software: str, run_dir: Path, clips: list[tuple[float, float]]) -> str:
-    """Write the recording-level background measurement, or the inputs it lacked."""
-    activity = store.activity(
-        node=NODE, step=BACKGROUND_MODEL, parameters={"version": background_model_parameters()["version"]}
-    )
-    store.was_associated_with(activity, software)
-    reading = background_reading_of(store, run_dir, clips=clips)
-    attributes = {"missing": list(reading)} if isinstance(reading, tuple) else reading.record()
-    return write_measurement(store, activity, software, name=BACKGROUND_MODEL, signal="plain", attributes=attributes)
-
-
 def quality(
     store: ProvStore,
     source: str,
@@ -225,7 +204,7 @@ def quality(
         source: The store-held stream the clip spans were detected on, ``"recording"``.
         config: The triage configuration.
         hint: Accepted for the shared node shape; not read.
-        run_dir: The run directory the streams' paths are relative to, read for the background model.
+        run_dir: Accepted for the shared node shape; not read.
 
     Returns:
         The branch report, the view over the assertions written, and the ``branch_report``
@@ -237,7 +216,7 @@ def quality(
         LookupError: If the ``source`` stream is absent, or if clip spans over it carry no
             clip-amplitude measurement to read them against.
     """
-    del hint
+    del hint, run_dir
     # An unmeasured margin is reported, not raised on; a misspelled key still raises.
     margin: float | None
     try:
@@ -310,14 +289,6 @@ def quality(
         store.was_attributed_to(assertion_id, software)
         store.was_derived_from(assertion_id, contradiction.span_id)
         assertion_ids.append(assertion_id)
-    contested = {contradiction.span_id for contradiction in contradictions}
-
-    background_id = _write_background(
-        store,
-        software,
-        run_dir,
-        [span.extent for span in spans if span.extent is not None and span.id not in contested],
-    )
 
     notes: list[str] = []
     if contradictions:
@@ -356,4 +327,4 @@ def quality(
             "notes": notes,
         },
     )
-    return BranchResult(report=report, view=(*assertion_ids, background_id, report_id), report_entity_id=report_id)
+    return BranchResult(report=report, view=(*assertion_ids, report_id), report_entity_id=report_id)
