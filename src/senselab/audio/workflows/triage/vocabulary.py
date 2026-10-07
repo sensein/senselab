@@ -123,8 +123,9 @@ class RunState(Enum):
 class Release(Enum):
     """Which artefact of this recording may be handed on.
 
-    Four values over one question, total and exclusive: the recording as recorded, only REDACT's
-    redacted copy, neither, or the graph cannot say.
+    Five values over one question, total and exclusive: the recording as recorded, only REDACT's
+    redacted copy, neither because the recording was discarded, neither because the redaction policy
+    holds it, or the graph cannot say.
     ``specs/20260924-which-artefact-is-releasable/design.md`` holds the vocabulary and what each
     value permits; ``specs/20260817-triage-workflow-dag/verdict.md`` holds the fold.
     """
@@ -132,6 +133,7 @@ class Release(Enum):
     WITHOUT_REDACTION = "release_without_redaction"
     WITH_REDACTION = "release_with_redaction"
     WITHHELD = "withheld"
+    DISCARDED = "discarded"
     NOT_ASSESSED = "not_assessed"
 
 
@@ -206,7 +208,7 @@ RELEASE_WITHHELD_GROUNDS = (
     REDACT_VERIFY_FOUND,
     REDACT_UNRESOLVED,
 )
-"""Why a recording is withheld. One stands behind every :attr:`Release.WITHHELD`."""
+"""Why the redaction policy withholds a recording. One stands behind every :attr:`Release.WITHHELD`."""
 
 REVIEWER_CLEARED_RESCAN = (
     "REDACT's re-scan still read a finding, and the reviewer read the original as clean and proposed nothing to hide"
@@ -228,6 +230,7 @@ POLICY_MASKS_ONLY = (
     "an age, a state; the copy keeps those"
 )
 DISCARDED = "the recording was discarded, so no artefact of it is released"
+"""The ground behind every :attr:`Release.DISCARDED`."""
 
 RELEASE_WITH_REDACTION_GROUNDS = (
     REVIEWER_CLEARED_RESCAN,
@@ -2281,7 +2284,7 @@ def fold_file_verdict(
         reviewer_clears=clears,
     )
     if triage is Triage.DISCARD:
-        release, release_ground = Release.WITHHELD, DISCARDED
+        release, release_ground = Release.DISCARDED, DISCARDED
 
     return FileVerdict(
         triage=triage,
