@@ -401,6 +401,115 @@ VOICE: it needs a pitch track the generic layer does not compute.
   `|x| ≥ 0.999` count has no extents and is retired from QUALITY's reading. Retiring the
   parquet's `raw_clipped_s` column follows with the parquet change in unit C.
 
+## Unit B: the task layer (built)
+
+Code: `task_events.py`, parameters `data/task_events.yaml`; the branches call it from
+`breath_pattern.breath_evidence`, `cough_pattern.cough_pattern_of` and
+`voice_phonation.phonation_reading_of`, and VERDICT reads the result through `airway_task` and
+`vocabulary`.
+
+**The generic view in the branches.** QUALITY runs after the branch loop (`run.py`), so a branch
+cannot read the stored `background_model` measurement. It recomputes the same reading with the same
+functions and parameters (`generic_view_of`: the plain and residual band frames, the floor, the
+impulses and the regions). The numbers are identical. Running QUALITY's recording-level part before
+the branches, so they read the measurement, belongs to unit C's DAG change.
+
+**Events.** Each branch's own finder is its type test:
+- breath: the breath train's bursts outside speech, from every run, not only the largest
+  (`BreathTrain.candidates`);
+- cough: the onsets with their inhale and tail;
+- voice: the holds.
+
+A candidate that an impulse explains, i.e. one with nothing 6 dB over the floor once impulse frames
+are masked, is dropped. Every kept event records:
+- `snr_db`: its peak over the stationary floor, impulse frames masked;
+- `local_snr_db`: its peak over the background around it, i.e. the 20th percentile of the
+  broadband level of the non-event, non-impulse frames within 2 s either side, never below the
+  floor;
+- `entangled`: an impulse overlaps it or ends or starts within 50 ms of it.
+
+A cough's onset is itself impulsive, so for cough only an impulse outside the event entangles it.
+Counting impulses inside sent 6 of 200 random kept coughs to review, all clear coughs (best SNR
+59–77 dB).
+
+**Rhythm (C3).** The modulation spectrum of the mean band-over-floor envelope. A peak in 0.1–1.2 Hz
+standing ≥6 dB over the spectrum's median is a rhythm. It sets the breath cluster's gap to
+max(3 s, 1.5 cycles), and recovers phases from regions of activity that no candidate overlaps, that
+lie outside speech and that are at most half voiced. Recovered phases count toward the phases and
+the extent, never toward the decision. In the grid, letting them decide cost one or two fit
+agreements and gained none.
+
+**Extent (C4).**
+- Breath: the dominant cluster (most events ≥ s_lo within the gap), from the inhale back-trace (the
+  broadband level ≥6 dB over the floor, at most 2 s back) to the last event's end. There is no
+  padding and no extension to following speech; the source is `task_events`.
+- Cough: keeps its padded, speech-bounded extent. The cluster extent dropped the intercom inside
+  6ca9935e's task (`background_speech_in_task`, owner-labelled present-and-flagged) out of the extent.
+- Voice: extent unchanged; its evidence is reported only.
+
+**Decision (C5).** It is read over every found event, not only the cluster. The cluster bounds the
+extent; it does not decide, because breathing slower than the gap splits a train, and 80e179b4 went
+to review on the wrong half.
+- absent: no non-recovered event ≥ `s_lo` = 10 dB over the floor;
+- review: none of those ≥ `s_hi` = 16 dB over its local background ("weak"), or every one that is
+  clear is entangled;
+- present: otherwise.
+
+VERDICT reads the result as follows:
+- `breath_present` is decision ∈ {present, review};
+- `breath_review` is decision = review;
+- the counted-breath annotation reads the cluster's breaths.
+
+The old `breathing_pattern` measure (pattern, events, the `little_activity` and speech vetoes) is
+reported and decides nothing: `_measure_found` is gone. A cough's review is its strict/lenient band
+or the evidence's review, and its count is the events that no impulse explains. `discard_contested`
+is unchanged and folds into C5 in unit C.
+
+**Fit (fit split only; the held-out side is reported after).**
+- Stored inputs: the 167 labelled recordings, re-measured and re-folded in memory (ORCD
+  `unitb_20261007`).
+- Global-floor SNR alone (s_lo 3–8, s_hi 8–18, rhythm on or off) never beat r17: at best 103/118 fit.
+  Noise reads 14–26 dB over the floor, as breath does.
+- The background around the event separates them: 3d446af4 21 → 14 dB, ae2a7223 18 → 11 dB.
+- Grid over s_lo ∈ {8, 9, 10, 11} and s_hi ∈ {14–18}: s_lo 10, s_hi 16 is best on fit.
+- Entanglement on or off changed no labelled outcome.
+
+**Result on the owner labels (fit / held-out; r17 baseline, same harness):**
+
+| Group | r17 | unit B |
+|---|---|---|
+| breath | 42/47 / 18/19 | 41/47 / 17/19 |
+| contested and review sets | 11/15 / 6/8 | 13/15 / 5/8 |
+| cough | 18/18 / 7/7 | 18/18 / 7/7 |
+| voice | 30/31 / 11/11 | 30/31 / 11/11 |
+| all | 108/118 / 45/48 | 109/118 / 43/48 |
+
+- Owner "absent" labels passed: 0 in both. Owner "present" labels discarded: 0dc15213 in both (no
+  candidate over the floor; only recovered phases).
+- Present labels left in review fall from 9 to 5: 1f4ea26f, 19c5c847, 2bb59c22, 1965766f, 81873ca0
+  and fac74f45 now pass, while b451fe70 and 01f52a78 newly go to review.
+- Review-acceptable labels now passed rise from 2 to 6: 5cc93330, 167ac3f5, 03ca6c69, 67c60a9f and
+  16eded62, each with one event ≥16 dB over its local background.
+
+**Outcome on a random 200 r17-kept recordings per group (reported, not a target):**
+
+| Group | review band r17 | review band unit B | verdict moves |
+|---|---|---|---|
+| breath | 2.5% | 6.5% | 10 pass→flag, 3 flag→pass, 2 pass→discard |
+| cough | 1.5% | 1.5% | none |
+| voice | 2.0% | 2.0% | none |
+
+The two new breath discards have their strongest event 7.5 and 9.99 dB over the floor, and a
+breathing-band rhythm of 17 and 27 dB. They are not labelled. A rhythm is not allowed to decide
+(C3), so they stand as discards until listened to.
+
+**Not built in unit B.**
+- The session-group floor.
+- Raw-against-enhanced agreement and the enhanced reviewer hints.
+- A high-band slow-breathing finder: the rhythm recovers from the generic regions only.
+- The breath type test still detects on the train's own denoised spectrogram. Only the evidence,
+  extent and decision moved onto the generic floor.
+
 ## Decided (owner, 2026-10-07)
 
 1. **Review-acceptable labels.** "OK if flagged or discarded" and "leave as contested" score review
