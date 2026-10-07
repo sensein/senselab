@@ -1,8 +1,10 @@
 """Markers for the reproduce tests.
 
-``slow`` tests build real venvs and need network; ``network`` tests need a compute node with
-network outside the sandbox. Neither runs unless selected with ``-m``. Tests that use ``nfs_dir``
-run only when ``SENSELAB_REPRO_NFS_DIR`` names a directory to create on an NFS mount.
+``slow`` tests build real environments; ``network`` tests reach PyPI, a package index or Slurm from a node
+with network outside the sandbox (a test can carry both). Neither kind runs by default: the collection hook
+here deselects them unless the ``-m`` expression names one of the test's markers, or
+``SENSELAB_REPRO_SLOW=1`` is set. Tests that use ``nfs_dir`` run only when ``SENSELAB_REPRO_NFS_DIR`` names
+a directory to create on an NFS mount.
 """
 
 import os
@@ -12,11 +14,35 @@ from pathlib import Path
 
 import pytest
 
+OPT_IN = ("slow", "network")
+SLOW_VARIABLE = "SENSELAB_REPRO_SLOW"
+HERE = Path(__file__).resolve().parent
+
 
 def pytest_configure(config: pytest.Config) -> None:
     """Register the two markers so ``--strict-markers`` accepts them."""
-    config.addinivalue_line("markers", "slow: builds real environments and needs network")
-    config.addinivalue_line("markers", "network: needs a compute node with network, outside the sandbox")
+    config.addinivalue_line("markers", "slow: builds real environments (opt-in)")
+    config.addinivalue_line("markers", "network: needs network outside the sandbox: PyPI, an index or Slurm (opt-in)")
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    """Deselect this directory's ``slow`` and ``network`` tests unless ``-m`` names one of their markers.
+
+    ``SENSELAB_REPRO_SLOW=1`` keeps them all.
+    """
+    if os.environ.get(SLOW_VARIABLE) == "1":
+        return
+    expression = str(config.getoption("markexpr", "") or "")
+    named = {m for m in OPT_IN if m in expression}
+    keep: list[pytest.Item] = []
+    drop: list[pytest.Item] = []
+    for item in items:
+        marks = {m.name for m in item.iter_markers()} & set(OPT_IN)
+        here = Path(str(item.path)).resolve().is_relative_to(HERE)
+        (drop if here and marks and not (marks & named) else keep).append(item)
+    if drop:
+        config.hook.pytest_deselected(items=drop)
+        items[:] = keep
 
 
 NFS_DIR_VARIABLE = "SENSELAB_REPRO_NFS_DIR"

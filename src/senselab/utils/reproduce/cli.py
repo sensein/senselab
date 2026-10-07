@@ -141,7 +141,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     run_cmd.add_argument("--submission", help="the submission id (set by submit; printed by submit)")
     run_cmd.add_argument("--pin", action="append", default=[], help="a manifest's sha256 at submission, in order")
-    run_cmd.add_argument("--min-cell", type=int, default=5)
     run_cmd.add_argument("--timeout", type=float, help="seconds before a step is killed")
 
     submit = sub.add_parser("submit", help="one batch job per step, chained with afterok")
@@ -581,7 +580,7 @@ def _prefetch_env(
 
 def _cmd_build_one(args: argparse.Namespace) -> int:
     path = Path(args.manifest)
-    _profile(args)
+    profile = _profile(args)
     (manifest,) = _manifests([path])
     base, cache_dir = _base_dir(args, path), _cache_dir(args)
     step = next((s for s in manifest.steps if s.name == args.step), None)
@@ -603,6 +602,7 @@ def _cmd_build_one(args: argparse.Namespace) -> int:
         rebuild=args.rebuild,
         expected_sha256=expected,
         sdist_cache=cache_dir / SDISTS,
+        modules_init=profile.modules_init,
     )
     if result.wheels_lock_sha256 != expected:
         _record_wheels(path, step.env, result.wheels_lock_sha256)
@@ -619,7 +619,6 @@ def _run_config(args: argparse.Namespace, paths: Sequence[Path], profile: Profil
         cache=_cache_dir(args),
         base_dir=_base_dir(args, paths[0]),
         date=args.date or _today(),
-        min_cell=args.min_cell,
         timeout=args.timeout,
     )
 

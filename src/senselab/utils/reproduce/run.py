@@ -30,7 +30,7 @@ A step's result dir ``R = <results_root>/<step_key>`` is laid out by the driver:
 7. Run the adapter in the sandbox with the driver's interpreter; it may import nothing from senselab
    outside ``senselab.utils.reproduce`` (``E_ADAPTER_IMPORT``) and returns its metrics on a pipe.
    Validate, evaluate ``expect`` (`evaluate_expect`), validate again as the driver with the same
-   ``min_cell`` and write ``R/metrics.json``.
+   `metrics.MIN_CELL` and write ``R/metrics.json``.
 8. Remove ``R/tmp``, fix the exit, record provenance with that exit (`provenance.record_step`) and
    write ``R/summary.json`` last.
 
@@ -313,7 +313,6 @@ class RunConfig:
         cache: The reproduce cache (worktrees, venvs, R libraries, Hugging Face and torch homes).
         base_dir: The manifest repository; adapters and patches are relative to it.
         date: The run date, naming the dated run dir.
-        min_cell: The minimum cell size for metrics suppression, used for both validations.
         no_netns: Test-only: run without the network namespace. Such a run is never reportable: it
             always carries ``E_NOT_REPORTABLE`` and a non-zero exit, so it is never served as done.
         timeout: Seconds before a step (and separately its adapter) is killed (``E_TIMEOUT``); None waits.
@@ -325,7 +324,6 @@ class RunConfig:
     cache: Path
     base_dir: Path
     date: datetime.date = field(default_factory=lambda: datetime.datetime.now(datetime.UTC).date())
-    min_cell: int = 5
     no_netns: bool = False
     timeout: float | None = None
     parent_env: Mapping[str, str] | None = None
@@ -1174,7 +1172,7 @@ class _Execution:
     # --- adapter, expectations -----------------------------------------------------------------
 
     def _adapt(self) -> None:
-        step, config = self.step, self.config
+        step = self.step
         adapter_dir = self.result / ADAPTER_DIR
         if not adapter_dir.is_dir():
             _mkdir(adapter_dir)
@@ -1213,7 +1211,7 @@ class _Execution:
             obj = json.loads(raw.decode())
         except (UnicodeDecodeError, ValueError):
             raise RunError("E_ADAPTER_NO_METRICS") from None
-        clean, found = metrics.validate_metrics(obj, step.metrics_schema, writer="adapter", min_cell=config.min_cell)
+        clean, found = metrics.validate_metrics(obj, step.metrics_schema, writer="adapter")
         self.codes.update(found)
         if clean is None:
             return
@@ -1222,9 +1220,7 @@ class _Execution:
         self.codes.update(codes)
         if final is None:
             return
-        final_clean, found = metrics.validate_metrics(
-            final, step.metrics_schema, writer="driver", min_cell=config.min_cell
-        )
+        final_clean, found = metrics.validate_metrics(final, step.metrics_schema, writer="driver")
         self.codes.update(found)
         if final_clean is None:
             return
@@ -1243,7 +1239,7 @@ class _Execution:
             obj = json.loads(_read_nofollow(out / METRICS))
         except (OSError, ValueError):
             raise RunError("E_UPSTREAM_METRICS") from None
-        clean, _ = metrics.validate_metrics(obj, schema, writer="driver", min_cell=self.config.min_cell)
+        clean, _ = metrics.validate_metrics(obj, schema, writer="driver")
         if clean is None:
             raise RunError("E_UPSTREAM_METRICS")
         return clean

@@ -274,6 +274,9 @@ def test_build_runs_in_the_sandbox() -> None:
     assert "--bind /w/venv /w/venv" in script and "module" not in script
 
 
+INIT = Path("/etc/profile.d/modules.sh")
+
+
 def test_module_variables_reach_the_sandboxed_build(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Modules load outside the namespace (``in_modules`` around ``env -0``); their variables are passed as values."""
     spec, _ = _setup(tmp_path, build_modules=["gcc/12.2.0", "cuda/12.9.1"], build_env_vars={"MAX_JOBS": "4"})
@@ -286,7 +289,7 @@ def test_module_variables_reach_the_sandboxed_build(tmp_path: Path, monkeypatch:
         return "PATH=/m/gcc/bin:/m/cuda/bin:/usr/bin:/bin\0CUDA_HOME=/m/cuda\0HOME=/w/home\0SHLVL=2\0_=/usr/bin/env\0"
 
     monkeypatch.setattr(build, "_capture_env", capture)
-    module_env = build.module_environment(spec, base)
+    module_env = build.module_environment(spec, base, INIT)
     assert module_env == {"PATH": "/m/gcc/bin:/m/cuda/bin:/usr/bin:/bin", "CUDA_HOME": "/m/cuda"}
     (argv,) = seen
     assert argv[:4] == ["bash", "--noprofile", "--norc", "-c"]
@@ -298,15 +301,17 @@ def test_module_variables_reach_the_sandboxed_build(tmp_path: Path, monkeypatch:
     assert env["MAX_JOBS"] == "4" and env["UV_OFFLINE"] == "1"
     plain, _ = _setup(tmp_path / "plain")
     assert build.module_environment(plain, base) == {} and len(seen) == 1
+    with pytest.raises(ReproduceLockError, match="E_MODULES_INIT"):
+        build.module_environment(spec, base)
 
 
 def test_nvcc_is_required_only_for_cuda_builds(tmp_path: Path) -> None:
     """A compiler-only module list loads without the nvcc guard; an arch list or a ``cuda/*`` module adds it."""
     gcc, _ = _setup(tmp_path / "gcc", build_modules=["gcc/12.2.0"])
-    script = build.in_modules(gcc, ["true"])[4]
+    script = build.in_modules(gcc, ["true"], INIT)[4]
     assert script == '. /etc/profile.d/modules.sh && module load gcc/12.2.0 && exec "$@"'
     arch, _ = _setup(tmp_path / "arch", build_modules=["gcc/12.2.0"], torch_cuda_arch_list="8.0")
-    assert "command -v nvcc" in build.in_modules(arch, ["true"])[4]
+    assert "command -v nvcc" in build.in_modules(arch, ["true"], INIT)[4]
     assert build.needs_nvcc(arch) and not build.needs_nvcc(gcc)
     assert build.build_config_sha256(gcc, None, "3.11.15") != build.build_config_sha256(
         gcc.model_copy(update={"build_modules": ["gcc/13.1.0"]}), None, "3.11.15"
@@ -318,8 +323,7 @@ def test_missing_nvcc_fails_the_wrapper(tmp_path: Path) -> None:
     init = tmp_path / "init.sh"
     init.write_text("module() { :; }\n")
     spec, _ = _setup(tmp_path, build_modules=["cuda/1.0"])
-    argv = build.in_modules(spec, ["true"])
-    argv[4] = argv[4].replace(build.MODULES_INIT, str(init))
+    argv = build.in_modules(spec, ["true"], init)
     result = subprocess.run(argv, env={"PATH": "/usr/bin:/bin"}, capture_output=True, text=True, check=False)
     assert result.returncode != 0
     assert "nvcc not on PATH" in result.stderr
@@ -562,6 +566,8 @@ def _profile(tmp_path: Path) -> Profile:
             "build": "builder",
             "deny_patterns_file": "/etc/deny.txt",
             "canary_host": "192.0.2.1",
+            "job_tmp_root": "/dev/shm",
+            "modules_init": str(INIT),
         }
     )
 
@@ -673,6 +679,16 @@ def test_find_uv_in_a_minimal_subprocess(tmp_path: Path) -> None:
     assert result.stdout.strip() == uv
 
 
+def test_render_build_job_without_a_job_tmp_root(tmp_path: Path) -> None:
+    """With no ``job_tmp_root`` in the profile the job sets no ``TMPDIR`` of its own."""
+    spec, _ = _setup(tmp_path)
+    profile = _profile(tmp_path).model_copy(update={"job_tmp_root": None})
+    text = build.render_build_job(
+        profile, spec, manifest=Path("/m.yaml"), profile_path=Path("/p.yaml"), step="s", date=DATE, uv="/u"
+    )
+    assert "TMPDIR" not in text and "/dev/shm" not in text
+
+
 def test_render_build_job_without_cuda(tmp_path: Path) -> None:
     """A plain sdist renders no module load and no arch list; ``rebuild`` is passed through."""
     spec, _ = _setup(tmp_path)
@@ -740,6 +756,7 @@ def _spike_wheel_sha() -> str:
 
 
 @pytest.mark.slow
+@pytest.mark.network
 def test_build_python_speech_features_matches_spike(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Building python_speech_features 0.6 from its real sdist reproduces the spike's wheel bit for bit.
 
@@ -802,6 +819,7 @@ setup(name="demo", version="1.0", py_modules=["demo"])
 
 
 @pytest.mark.slow
+@pytest.mark.network
 def test_build_has_no_network(tmp_path: Path) -> None:
     """A setup.py that refuses to build when it can reach the network builds: the build runs in the namespace."""
     if not sandbox.userns_available():
