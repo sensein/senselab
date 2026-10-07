@@ -599,11 +599,43 @@ def run_step(
     if any(name not in upstream or not upstream[name].ok for name in step.needs):
         _unlink_run(config, analysis, step.name)
         return StepOutcome(step.name, None, "never-ran", None, (), None)
+    seen: dict[str, Path] = {}
+    with _quiet_log():
+        try:
+            return _run_step(step, analysis, config, upstream, upstream_schemas or {}, seen)
+        except (OSError, TypeError, ValueError):
+            _append_driver_log(seen.get("result"), "driver error\n" + traceback.format_exc())
+            return _failed(step, "E_DRIVER", out=seen.get("result"))
+
+
+@contextlib.contextmanager
+def _quiet_log() -> Iterator[None]:
+    """Give the ``senselab`` logger a `logging.NullHandler` and no propagation for the whole step.
+
+    Outside `_driver_log` nothing the driver or a library logs may reach a terminal; with no handler at
+    all, `logging.lastResort` would print it to stderr.
+    """
+    logger = logging.getLogger("senselab")
+    saved = (logger.handlers[:], logger.propagate)
+    logger.handlers[:] = [logging.NullHandler()]
+    logger.propagate = False
     try:
-        return _run_step(step, analysis, config, upstream, upstream_schemas or {})
-    except (OSError, TypeError, ValueError):
-        _log().error("driver error\n%s", traceback.format_exc())
-        return _failed(step, "E_DRIVER")
+        yield
+    finally:
+        logger.handlers[:], logger.propagate = saved
+
+
+def _append_driver_log(result: Path | None, text: str) -> None:
+    """Append to ``R/logs/driver.log`` when that file exists as a regular file; otherwise drop the text."""
+    if result is None:
+        return
+    with contextlib.suppress(OSError):
+        fd = os.open(result / LOGS / DRIVER_LOG, os.O_WRONLY | os.O_APPEND | os.O_NOFOLLOW)
+        try:
+            if stat.S_ISREG(os.fstat(fd).st_mode):
+                os.write(fd, (text + "\n").encode())
+        finally:
+            os.close(fd)
 
 
 def _run_step(
@@ -612,6 +644,7 @@ def _run_step(
     config: RunConfig,
     upstream: Mapping[str, StepOutcome],
     schemas: Mapping[str, MetricsSchema],
+    seen: dict[str, Path],
 ) -> StepOutcome:
     try:
         keyed = _key(step, analysis, config, upstream)
@@ -619,6 +652,7 @@ def _run_step(
         _unlink_run(config, analysis, step.name)
         return _failed(step, error.code)
     result = keyed.result
+    seen["result"] = result
     run = cache.run_dir(config.profile.runs_root, config.date, analysis)
     if cache.is_done(result):
         return _skipped(step, keyed.key, run, result)
@@ -1396,7 +1430,8 @@ def run_steps(manifests: Sequence[Manifest], config: RunConfig) -> list[StepOutc
 
     A step whose need did not succeed (`StepOutcome.ok`) is ``never-ran``; the others run or skip as
     `run_step` decides. Each analysis gets ``<runs_root>/<date>/<analysis>/run.json`` listing its steps'
-    keys, statuses, exits and codes.
+    keys, statuses, exits and codes; when it cannot be written, every step of that analysis also carries
+    ``E_DRIVER`` and a non-zero exit (its result dirs are unchanged).
 
     Args:
         manifests: The manifests; step names are unique across them.
@@ -1415,15 +1450,16 @@ def run_steps(manifests: Sequence[Manifest], config: RunConfig) -> list[StepOutc
         outcomes[step.name] = run_step(step, analysis[step.name], config, upstream, schemas)
     for name in sorted(set(analysis.values())):
         rows = [outcomes[s.name] for s in ordered if analysis[s.name] == name]
-        run = cache.run_dir(config.profile.runs_root, config.date, name)
-        run.mkdir(parents=True, exist_ok=True)
-        _write_json(
-            run / RUN_JSON,
-            {
-                "steps": [
-                    {"step": o.step, "key": o.key, "status": o.status, "exit": o.exit, "codes": list(o.codes)}
-                    for o in rows
-                ]
-            },
-        )
+        record = {
+            "steps": [
+                {"step": o.step, "key": o.key, "status": o.status, "exit": o.exit, "codes": list(o.codes)} for o in rows
+            ]
+        }
+        try:
+            run = cache.run_dir(config.profile.runs_root, config.date, name)
+            run.mkdir(parents=True, exist_ok=True)
+            _write_json(run / RUN_JSON, record)
+        except (OSError, TypeError, ValueError, RunError, cache.CacheError):
+            for o in rows:
+                outcomes[o.step] = o._replace(codes=tuple(sorted({*o.codes, "E_DRIVER"})), exit=o.exit or EXIT_DRIVER)
     return [outcomes[s.name] for s in ordered]
