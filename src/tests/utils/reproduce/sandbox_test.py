@@ -105,6 +105,14 @@ def test_sandbox_argv_shape(tmp_path: Path) -> None:
     assert all(line.startswith(("set -e", "/usr/", "exec /usr/")) for line in script.splitlines())
 
 
+def test_no_netns_argv_keeps_the_mounts_and_drops_the_network_namespace(tmp_path: Path) -> None:
+    """The test-only mode unshares user, mount and PID namespaces only, and raises no loopback."""
+    argv = sandbox_argv(["true"], [tmp_path / "r"], [], [], netns=False)
+    assert argv[:2] == ["/usr/bin/unshare", "-rm"] and "-rnm" not in argv
+    script = argv[argv.index("-c") + 1]
+    assert "/usr/sbin/ip" not in script and f"remount,bind,ro {tmp_path / 'r'}" in script
+
+
 def test_nested_paths_are_bound_shallow_first(tmp_path: Path) -> None:
     """An inner root listed first is still bound after its parent."""
     outer, inner = tmp_path / "r", tmp_path / "r" / "in"

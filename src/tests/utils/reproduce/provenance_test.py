@@ -19,6 +19,7 @@ from senselab.utils.reproduce.provenance import (
     LABEL,
     STORE_FILE,
     Artifact,
+    drop_unrecordable_host_values,
     record_step,
 )
 
@@ -340,3 +341,14 @@ def test_the_store_file_is_json_lines(recorded: dict[str, Any]) -> None:
     """Every line of the store parses, so a reader never meets a half-written record."""
     lines = (recorded["out"] / "prov" / STORE_FILE).read_text().splitlines()
     assert all(isinstance(json.loads(line), dict) for line in lines)
+
+
+def test_drop_unrecordable_host_values_nulls_only_off_pattern_values(tmp_path: Path) -> None:
+    """Off-pattern strings, bad counts and unknown keys are dropped by name; the result always records."""
+    host = _host() | {"gpu_name": PROBE, "cpu_count": True, "cpus_allowed": -1, "extra": "x"}
+    clean, dropped = drop_unrecordable_host_values(host)
+    assert dropped == ["cpu_count", "cpus_allowed", "extra", "gpu_name"]
+    assert set(clean) == set(HOST_KEYS) and clean["gpu_name"] is None and clean["hostname"] == "node042"
+    assert PROBE not in json.dumps(clean)
+    record_step(tmp_path / "prov", **_kwargs(tmp_path, host=clean))
+    assert drop_unrecordable_host_values(_host()) == (_host(), [])

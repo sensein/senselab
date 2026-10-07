@@ -25,6 +25,7 @@ SH = "/bin/sh"
 MOUNT = "/usr/bin/mount"
 SETPRIV = "/usr/bin/setpriv"
 UNSHARE = ["/usr/bin/unshare", "-rnm", "--pid", "--fork", "--kill-child", "--mount-proc", "--propagation", "private"]
+UNSHARE_NO_NETNS = ["/usr/bin/unshare", "-rm", *UNSHARE[2:]]
 DROP = [SETPRIV, "--bounding-set=-all", "--inh-caps=-all", "--ambient-caps=-all", "--no-new-privs"]
 PROXY = "http://127.0.0.1:9"
 PROXY_VARS = ("http_proxy", "https_proxy", "ftp_proxy", "all_proxy")
@@ -81,6 +82,8 @@ def sandbox_script(
     ro_roots: Iterable[str | os.PathLike[str]],
     rw_dirs: Iterable[str | os.PathLike[str]],
     ro_extra: Iterable[str | os.PathLike[str]] = (),
+    *,
+    netns: bool = True,
 ) -> str:
     """Return the ``sh`` script `sandbox_argv` runs inside the namespace; it ends by exec'ing the step.
 
@@ -89,6 +92,8 @@ def sandbox_script(
         rw_dirs: Directories that stay writable. Those under a data root are bound before the root is
             remounted read-only; the others are writable already.
         ro_extra: Further directories (the checkout, the venv) bound and remounted read-only last.
+        netns: Whether the script runs in its own network namespace and raises loopback there; False
+            only for the test-only mode that runs with the host network.
 
     Returns:
         The script. It starts with ``set -e``, so a failed mount ends it before the step runs, and it
@@ -113,7 +118,8 @@ def sandbox_script(
     lines += [f"{MOUNT} -o remount,bind,ro {q(r)}" for r in roots]
     for e in extra:
         lines += [f"{MOUNT} --bind {q(e)} {q(e)}", f"{MOUNT} -o remount,bind,ro {q(e)}"]
-    lines += [f"{IP} link set lo up", f'exec {" ".join(DROP)} "$@"']
+    lines += [f"{IP} link set lo up"] if netns else []
+    lines += [f'exec {" ".join(DROP)} "$@"']
     return "\n".join(lines) + "\n"
 
 
@@ -122,6 +128,8 @@ def sandbox_argv(
     ro_roots: Iterable[str | os.PathLike[str]],
     rw_dirs: Iterable[str | os.PathLike[str]],
     ro_extra: Iterable[str | os.PathLike[str]] = (),
+    *,
+    netns: bool = True,
 ) -> list[str]:
     """Wrap a step's argv to run in the sandbox.
 
@@ -130,6 +138,7 @@ def sandbox_argv(
         ro_roots: Data roots, mounted read-only.
         rw_dirs: Directories that stay writable, such as ``{out}`` and ``{tmp}``.
         ro_extra: The checkout and the venv, mounted read-only.
+        netns: False drops the network namespace (`UNSHARE_NO_NETNS`, no loopback step); test-only.
 
     Returns:
         ``[*UNSHARE, "/bin/sh", "-c", SCRIPT, "sh", *argv]``, where `UNSHARE` is ``/usr/bin/unshare -rnm
@@ -140,7 +149,8 @@ def sandbox_argv(
     """
     if not argv:
         raise ValueError("empty argv")
-    return [*UNSHARE, SH, "-c", sandbox_script(ro_roots, rw_dirs, ro_extra), "sh", *argv]
+    unshare = UNSHARE if netns else UNSHARE_NO_NETNS
+    return [*unshare, SH, "-c", sandbox_script(ro_roots, rw_dirs, ro_extra, netns=netns), "sh", *argv]
 
 
 def userns_available() -> bool:
