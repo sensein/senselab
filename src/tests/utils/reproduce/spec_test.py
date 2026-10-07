@@ -47,7 +47,7 @@ def _env() -> dict[str, Any]:
                 "name": "pkg",
                 "url": "https://files.example/pkg-1.0.tar.gz",
                 "sha256": SHA,
-                "patches": ["envs/a/pkg.diff"],
+                "patches": [{"file": "envs/a/pkg.diff", "sha256": SHA}],
                 "build_env": {"lock": "envs/a/build.lock", "lock_sha256": SHA},
                 "build_env_vars": {"FORCE_CUDA": "1"},
                 "cuda_module": "cuda/12.9",
@@ -83,7 +83,7 @@ def _step(name: str = "train", **over: Any) -> dict[str, Any]:  # noqa: ANN401
         "outputs": ["results/*.json"],
         "needs": [],
         "resources": {"profile": "gpu", "gpu_arch": ["sm_80"], "min_driver": "550", "native": ["ffmpeg"]},
-        "patches": ["patches/train/0001.diff"],
+        "patches": [{"file": "patches/train/0001.diff", "sha256": SHA}],
         "adapter": "adapters/train.py",
         "expect": [{"metric": "top1", "value": 77.56, "tolerance": 0.01, "unit": "pp", "kind": "abs"}],
     }
@@ -362,6 +362,18 @@ ENV_COUNTER_EXAMPLES: dict[str, tuple[dict[str, Any], str]] = {
     "exclude-newer-int": ({"exclude_newer": 20260101}, "exclude_newer must be a YYYY-MM-DD"),
     "exclude-newer-datetime": ({"exclude_newer": datetime.datetime(2026, 1, 1)}, "exclude_newer must be a YYYY-MM-DD"),
     "exclude-newer-short": ({"exclude_newer": "2026-1-1"}, "exclude_newer must be a YYYY-MM-DD"),
+    "lock-absolute": ({"body__lock": "/etc/body.lock"}, "path must be relative"),
+    "lock-parent": ({"torch__lock": "envs/../../body.lock"}, "path must be relative"),
+    "first-resolve-parent": ({"first_resolve": {"file": "../r.txt", "sha256": SHA}}, "path must be relative"),
+    "requirements-in-absolute": ({"body__requirements_in": "/r.in"}, "path must be relative"),
+    "patch-unhashed": (
+        {"sdist_allow": [{**_env()["sdist_allow"][0], "patches": ["envs/a/pkg.diff"]}]},
+        "valid dictionary",
+    ),
+    "patch-parent": (
+        {"sdist_allow": [{**_env()["sdist_allow"][0], "patches": [{"file": "../pkg.diff", "sha256": SHA}]}]},
+        "path must be relative",
+    ),
 }
 
 
@@ -402,6 +414,8 @@ STEP_COUNTER_EXAMPLES: dict[str, tuple[dict[str, Any], str]] = {
     "lone-close-brace": ({"argv": ["run", "a}b"]}, "unmatched brace"),
     "needs-self": ({"needs": ["train"]}, "needs itself"),
     "needs-duplicate": ({"needs": ["a", "a"]}, "duplicate needs"),
+    "step-patch-unhashed": ({"patches": ["patches/train/0001.diff"]}, "valid dictionary"),
+    "step-patch-absolute": ({"patches": [{"file": "/tmp/0001.diff", "sha256": SHA}]}, "path must be relative"),
     "tolerance-from-duplicate-steps": (
         {
             "needs": ["a"],
