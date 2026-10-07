@@ -598,3 +598,55 @@ def test_pandas_na_is_a_missing_id() -> None:
             units=holed_units,
             unit_name="r",
         )
+
+
+# ── Adjacent fixes ────────────────────────────────────────────────────
+
+
+def test_seen_kfold_validation_needs_follow_val_inner_splits() -> None:
+    """The message's unit requirement follows val_inner_splits."""
+    labels, subjects, units = _two_unit_cohort()
+    with pytest.raises(ValueError, match="needs >= 5"):
+        grouped_splits(
+            labels,
+            subjects,
+            protocol="seen_subject",
+            scheme="seen_subject_kfold",
+            seed=0,
+            n_splits=2,
+            units=units,
+            unit_name="r",
+            val_inner_splits=4,
+        )
+
+
+def test_missing_id_message_names_pandas_na() -> None:
+    """The missing-id error lists every value it treats as missing."""
+    labels, subjects, _ = _two_unit_cohort()
+    holed = subjects.astype(object)
+    holed[0] = None
+    with pytest.raises(ValueError, match="pandas.NA"):
+        grouped_splits(labels, holed, protocol="unseen_subject", scheme="stratified_group_kfold", seed=0, n_splits=2)
+
+
+@pytest.mark.parametrize("missing", [float("nan"), np.float32("nan")], ids=["float-nan", "float32-nan"])
+def test_nan_in_a_plain_list_is_refused_before_coercion(missing: object) -> None:
+    """A NaN in a plain list must not become the string "nan" and pass as a subject."""
+    labels, subjects, _ = _two_unit_cohort()
+    as_list = list(subjects)
+    as_list[0] = missing
+    with pytest.raises(ValueError, match="no subject id"):
+        grouped_splits(labels, as_list, protocol="unseen_subject", scheme="stratified_group_kfold", seed=0, n_splits=2)
+    split = Split(name="x", partitions={"train": np.arange(30), "test": np.arange(30, 60)})
+    with pytest.raises(ValueError, match="no subject id"):
+        check_split(split, as_list, labels=labels, protocol="unseen_subject")
+
+
+def test_pandas_nat_is_a_missing_id() -> None:
+    """``pandas.NaT`` counts as missing too."""
+    pd = pytest.importorskip("pandas")
+    labels, subjects, _ = _two_unit_cohort()
+    holed = subjects.astype(object)
+    holed[0] = pd.NaT
+    with pytest.raises(ValueError, match="no subject id"):
+        grouped_splits(labels, holed, protocol="unseen_subject", scheme="stratified_group_kfold", seed=0, n_splits=2)

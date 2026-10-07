@@ -205,12 +205,14 @@ class SplitReport:
 
 
 def _label_keys(labels: np.ndarray) -> List[str]:
+    """Prevalence keys: each label as a string, or each column index for a multi-label matrix."""
     if labels.ndim == 2:
         return [str(j) for j in range(labels.shape[1])]
     return [str(v) for v in sorted(set(labels.tolist()), key=str)]
 
 
 def _prevalence(labels: np.ndarray, rows: np.ndarray, keys: List[str]) -> Dict[str, float]:
+    """Label to its share of `rows` (multi-label: each column's positive rate)."""
     if len(rows) == 0:
         return {k: 0.0 for k in keys}
     if labels.ndim == 2:
@@ -238,6 +240,7 @@ def _partition_stats(
     rows: np.ndarray,
     keys: List[str],
 ) -> PartitionStats:
+    """Row, group and unit counts and prevalence for one partition."""
     n_groups = len(set(subjects[rows].tolist()))
     n_units = len(set(zip(subjects[rows].tolist(), units[rows].tolist()))) if units is not None else n_groups
     stats: PartitionStats = {
@@ -255,10 +258,12 @@ def _partition_stats(
 
 
 def _sorted(rows: np.ndarray) -> np.ndarray:
+    """Row indices as a sorted int array."""
     return np.sort(np.asarray(rows, dtype=int))
 
 
 def _sgkf(y: np.ndarray, groups: np.ndarray, n_splits: int, seed: int) -> List[Tuple[np.ndarray, np.ndarray]]:
+    """scikit-learn's StratifiedGroupKFold with shuffling, as sorted (train, test) pairs."""
     splitter = StratifiedGroupKFold(n_splits=n_splits, shuffle=True, random_state=seed)
     return [(_sorted(tr), _sorted(te)) for tr, te in splitter.split(np.zeros(len(y)), y, groups)]
 
@@ -305,6 +310,7 @@ def _multilabel_group_folds(
 def _kfold_pairs(
     scheme: str, labels: np.ndarray, subjects: np.ndarray, strata: Optional[np.ndarray], n_splits: int, seed: int
 ) -> List[Tuple[np.ndarray, np.ndarray]]:
+    """(train, test) pairs for a single- or multi-label stratified group k-fold."""
     if scheme == "multilabel_stratified_group_kfold":
         return _multilabel_group_folds(labels, subjects, n_splits, seed)
     y = labels if strata is None else np.char.add(np.char.add(labels.astype(str), "\x1f"), strata.astype(str))
@@ -322,6 +328,7 @@ def _unseen_splits(
     val_inner_splits: Optional[int],
     fractions: Optional[Tuple[float, float, float]],
 ) -> List[Split]:
+    """Splits for the unseen-subject schemes."""
     if scheme in ("stratified_group_kfold", "multilabel_stratified_group_kfold"):
         splits = []
         for i, (train, test) in enumerate(_kfold_pairs(scheme, labels, subjects, strata, n_splits, seed)):
@@ -368,6 +375,7 @@ def _unseen_splits(
 
 
 def _majority(values: List[Any]) -> str:
+    """The most frequent value as a string; ties go to the smallest string."""
     counts = Counter(str(v) for v in values)
     top = max(counts.values())
     return min(k for k, c in counts.items() if c == top)
@@ -409,6 +417,7 @@ def _seen_kfold(
     strata: Optional[np.ndarray],
     val_inner_splits: Optional[int],
 ) -> List[Split]:
+    """Seen-subject k-fold: each subject's units dealt round-robin over the folds."""
     rng = np.random.default_rng(seed)
     ordered = _ordered_units(labels, subjects, units, strata, rng)
     dealt: Dict[str, List[int]] = {}
@@ -429,7 +438,8 @@ def _seen_kfold(
                 parts["val"] += [rows for rows, slot in zip(rest, slots) if slot == 0]
                 rest = [rows for rows, slot in zip(rest, slots) if slot != 0]
             parts["train"] += rest
-        for name, needed in (("test", n_splits), ("val", 3)):
+        val_needed = 3 if val_inner_splits is None else max(3, val_inner_splits + 1)
+        for name, needed in (("test", n_splits), ("val", val_needed)):
             if name in parts and not parts[name]:
                 _too_few_units(ordered, "seen_subject_kfold", needed, name)
         splits.append(Split(name=f"fold{f}", partitions={k: _concat(v) for k, v in parts.items()}))
@@ -446,6 +456,7 @@ def _too_few_units(ordered: Mapping[str, List[np.ndarray]], scheme: str, needed:
 
 
 def _concat(arrays: List[np.ndarray]) -> np.ndarray:
+    """Concatenated row arrays, sorted; an empty int array when there are none."""
     return _sorted(np.concatenate(arrays)) if arrays else np.array([], dtype=int)
 
 
@@ -491,6 +502,7 @@ def _seen_holdout(
     strata: Optional[np.ndarray],
     fractions: Tuple[float, float, float],
 ) -> List[Split]:
+    """Seen-subject holdout: each subject's units allocated by the fractions."""
     rng = np.random.default_rng(seed)
     names = ("train", "val", "test")
     parts: Dict[str, List[np.ndarray]] = {name: [] for name, f in zip(names, fractions) if f > 0 or name == "train"}
@@ -510,21 +522,35 @@ KFOLD_SCHEMES = ("stratified_group_kfold", "multilabel_stratified_group_kfold", 
 DEFAULT_N_SPLITS = 5
 
 
-def _count_missing(values: np.ndarray) -> int:
-    """Entries that are None, NaN, the empty string or `pandas.NA`.
+MISSING_IDS = "None, NaN, NaT, pandas.NA or empty"
 
-    `pandas.NA` is recognised without importing pandas: an array can only hold it if the caller has
-    already imported pandas, so the check looks the module up in `sys.modules`.
+
+def _is_missing(value: object, pandas_na: object, pandas_nat: object) -> bool:
+    """Whether one id is missing: None, a float NaN of any width, pandas.NA or NaT, or the empty string."""
+    if (
+        value is None
+        or (pandas_na is not None and value is pandas_na)
+        or (pandas_nat is not None and value is pandas_nat)
+    ):
+        return True
+    if isinstance(value, (float, np.floating)):
+        return math.isnan(value)
+    return isinstance(value, str) and value == ""
+
+
+def _key_array(values: Union[np.ndarray, Sequence[Any]], what: str) -> np.ndarray:
+    """The ids as an array, refusing missing ones before coercion can turn a NaN into the string "nan".
+
+    `pandas.NA` and `pandas.NaT` are recognised without importing pandas: an input can only hold them
+    if the caller has already imported pandas, so the check looks the module up in `sys.modules`.
     """
+    raw = values.tolist() if isinstance(values, np.ndarray) else list(values)
     pandas = sys.modules.get("pandas")
-    na = getattr(pandas, "NA", None) if pandas is not None else None
-    return sum(
-        v is None
-        or (na is not None and v is na)
-        or (isinstance(v, float) and math.isnan(v))
-        or (isinstance(v, str) and v == "")
-        for v in values.tolist()
-    )
+    na, nat = (getattr(pandas, "NA", None), getattr(pandas, "NaT", None)) if pandas is not None else (None, None)
+    missing = sum(_is_missing(v, na, nat) for v in raw)
+    if missing:
+        raise ValueError(f"{missing} rows have no {what} id ({MISSING_IDS}); every row needs one")
+    return values if isinstance(values, np.ndarray) else np.asarray(raw)
 
 
 def _prepare(
@@ -541,9 +567,6 @@ def _prepare(
     n = len(subjects)
     if len(labels) != n or (units is not None and len(units) != n) or (strata is not None and len(strata) != n):
         raise ValueError("labels, subjects, units and strata must have one entry per row")
-    missing = _count_missing(subjects)
-    if missing:
-        raise ValueError(f"{missing} rows have no subject id (None, NaN or empty); every row needs one")
     if labels.ndim == 2 and strata is not None:
         raise ValueError("strata need one label per row; they are not supported with a multi-label matrix")
     if protocol == "unseen_subject":
@@ -556,12 +579,10 @@ def _prepare(
         raise ValueError("seen_subject needs units")
     if unit_name is None:
         raise ValueError("unit_name is required under seen_subject (for example 'recording' or 'clip')")
-    missing = _count_missing(units)
-    if missing:
-        raise ValueError(f"{missing} rows have no unit id (None, NaN or empty)")
 
 
 def _check_fractions(fractions: Tuple[float, ...]) -> None:
+    """Refuse fractions that are not three values in [0, 1) summing to 1."""
     if len(fractions) != 3:
         raise ValueError("fractions must be (train, val, test)")
     if any(f < 0 or f >= 1 for f in fractions):
@@ -612,6 +633,7 @@ def _scheme_arguments(
 
 
 def _stratify_token(base: str, strata_name: Optional[str]) -> str:
+    """`base`, or `base_<strata_name>` when strata are named."""
     return base if strata_name is None else f"{base}_{strata_name}"
 
 
@@ -663,8 +685,8 @@ def grouped_splits(
             subject with fewer than two units).
         ValueError: If the inputs are malformed or the arguments do not fit the scheme or protocol.
     """
-    y, groups = np.asarray(labels), np.asarray(subjects)
-    unit_arr = None if units is None else np.asarray(units)
+    y, groups = np.asarray(labels), _key_array(subjects, "subject")
+    unit_arr = None if units is None else _key_array(units, "unit")
     strata_arr = None if strata is None else np.asarray(strata)
     _prepare(y, groups, protocol, unit_arr, unit_name, strata_arr)
     if scheme not in UNSEEN_SCHEMES + SEEN_SCHEMES:
@@ -752,8 +774,8 @@ def check_split(
         ValueError: If the inputs are malformed: lengths differ, a subject id is missing, a partition
             is empty, holds duplicate, negative or out-of-range indices, or is not an integer array.
     """
-    y, group_arr = np.asarray(labels), np.asarray(subjects)
-    unit_arr = None if units is None else np.asarray(units)
+    y, group_arr = np.asarray(labels), _key_array(subjects, "subject")
+    unit_arr = None if units is None else _key_array(units, "unit")
     strata_arr = None if strata is None else np.asarray(strata)
     _prepare(y, group_arr, protocol, unit_arr, unit_name, strata_arr)
     as_list = [splits] if isinstance(splits, Split) else list(splits)
@@ -810,8 +832,8 @@ def nested_grouped_splits(
             inner pool it came from (for example a seen subject left with one unit in that pool).
         ValueError: As for `grouped_splits`.
     """
-    y, groups = np.asarray(labels), np.asarray(subjects)
-    unit_arr = None if units is None else np.asarray(units)
+    y, groups = np.asarray(labels), _key_array(subjects, "subject")
+    unit_arr = None if units is None else _key_array(units, "unit")
     strata_arr = None if strata is None else np.asarray(strata)
     common: Dict[str, Any] = {"protocol": protocol, "unit_name": unit_name, "strata_name": strata_name}
     outer_splits, outer_report = grouped_splits(

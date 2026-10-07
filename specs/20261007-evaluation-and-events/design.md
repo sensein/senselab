@@ -54,13 +54,13 @@ metric, its **floor** (the best a trivial predictor achieves), the **lift** (val
 
 | Metric | Floor | Why |
 |---|---|---|
-| balanced accuracy | 1/k (0.5 binary) | A constant predictor has recall 1 on one class and 0 on the other k − 1; the mean is 1/k. A random predictor has the same expectation (Brodersen et al. 2010). |
+| balanced accuracy | 1/k (0.5 binary), k = labels present in `y_true` | A constant predictor has recall 1 on one class and 0 on the other k − 1; the mean is 1/k. A random predictor has the same expectation (Brodersen et al. 2010). |
 | positive-class F1 | 2p/(1+p) | The all-positive predictor has precision p and recall 1. Every other constant scores 0. |
 | average precision | p (binary), 1/k (macro one-vs-rest) | A random scorer's expected AP equals the positive rate (Saito & Rehmsmeier 2015). Averaged one-vs-rest, the class prevalences sum to 1, so the mean is 1/k. |
 | ROC-AUC | 0.5 | Any constant or random scorer ranks positives above negatives half the time. |
 | MCC | 0 | A constant predictor has an empty row or column in the confusion matrix and is scored 0 by convention; a random one has expectation 0 (Chicco & Jurman 2020). |
 | accuracy | majority-class prevalence | Always answering the majority class. |
-| macro-F1 | the best constant predictor's macro-F1 | Answering class c gives that class an F1 of 2p_c/(1+p_c) and every other class 0, so the macro mean is 2p_c/(1+p_c)/k. The floor is the maximum over c. |
+| macro-F1 (over present labels) | 1/k | A label-blind predictor that draws labels at the true prevalences has precision and recall p_c for class c, so its expected F1 for c is p_c and its macro mean is 1/k. That beats the best constant predictor (max 2p_c/(1+p_c), over k), which was the floor at first; a floor must not sit below what a label-blind predictor reaches. |
 
 **Balanced accuracy is the only headline.** Raw accuracy is unreadable without its null rate, and
 balanced accuracy's null is fixed at 1/k whatever the prevalence. Macro-F1, MCC and accuracy are
@@ -81,18 +81,28 @@ Hinkley 1997, ch. 3.8). Rows from one subject are correlated, so a row bootstrap
 interval width. **Model comparison** uses a paired cluster bootstrap of the difference, or DeLong's
 test for two correlated ROC-AUCs (DeLong et al. 1988) with the midrank algorithm of Sun & Xu (2014).
 
-**Balanced accuracy's formula.** `recall_score(y_true, y_pred, labels=labels, average="macro",
-zero_division=0)`: macro recall over the declared labels, with invalid outputs counted as misses.
-This is the formula of the lab's earlier VLM evaluation (`provenance.md`, row `score_classification`),
-kept so reruns match. Its floor is `1/k` with k the declared labels present in `y_true`, which is
-what a reproduction driver checks. When a declared label is absent, the formula still averages over
-all declared labels (the absent one contributes 0), so the report lists `absent_labels`; no lift is
-meaningful until the split covers every label.
+**Balanced accuracy's formula.** Recall averaged over the labels present in `y_true`, with invalid
+outputs counted as misses (`balanced_accuracy`): the same as scikit-learn's
+`balanced_accuracy_score`, and the definition whose trivial value is the `1/k` floor a reproduction
+driver checks (coordinator decision, 2026-10-07). Threshold tuning (T6) and resampled intervals (T7)
+call the same function. Macro-F1 also averages over present labels.
+
+The lab's earlier evaluation (`provenance.md`, row `score_classification`) used
+`recall_score(y_true, y_pred, labels=labels, average="macro", zero_division=0)`, macro recall over
+every declared label, where an absent label contributes 0. That formula is kept as
+`legacy_macro_recall` for parity checks with earlier results only; it is never a report headline.
+The two agree when every declared label occurs, and differ otherwise: with labels a, b, c and
+y_true 6 × a + 4 × b all predicted a, the headline is 0.5 and the legacy value 0.333.
+
+Per class, recall and F1 of an absent label are undefined and reported as `None`; precision is
+`None` for a label that was never predicted. The report also lists `absent_labels`.
 
 **Thresholds.** A report built with a tuned threshold records `threshold{value, objective,
-split_name}` and `threshold_tuning: validation`; without one, `threshold_tuning: none`. A threshold
-tuned on the split being scored is refused. The headline is balanced accuracy whatever objective set
-the threshold.
+split_name}` and `threshold_tuning: validation`. Predictions made elsewhere declare
+`threshold_tuning` themselves: `validation`, or `none` (the default); `test` is refused, because a
+threshold tuned on the scored split inflates the score. A threshold whose split name matches the
+scored split (ignoring case and surrounding whitespace) is refused, as are NaN thresholds and
+non-finite scores. The headline is balanced accuracy whatever objective set the threshold.
 
 **Export to a reproduction driver's `metrics.json`** (written by the CLI, T10):
 
@@ -102,11 +112,11 @@ the threshold.
 | `secondary.accuracy` | secondary `accuracy` | same: majority-class prevalence |
 | `secondary.mcc` | secondary `mcc` | same: 0 |
 | `secondary.f1` (binary, positive label) | secondary `f1` | same: 2p/(1+p) |
-| `secondary.f1_macro` | secondary `macro_f1` | driver checks presence only; ours is the best constant predictor's macro-F1 |
+| `secondary.f1_macro` (over present labels) | secondary `macro_f1` | driver checks presence only; ours is 1/k over present labels |
 | `roc_auc` | secondary `auroc` | same: 0.5 |
 | `average_precision`, binary with positive label | secondary `pr_auc` | same: p |
 | `average_precision`, multi-class (macro one-vs-rest, floor 1/k) | not exported | the driver defines `pr_auc` for a declared positive class only |
-| `per_class` | `per_class.{recall, precision, f1, prevalence}` | — |
+| `per_class` | `per_class.{recall, precision, f1, prevalence}` | `None` values (absent labels, never-predicted precision) are mapped in T10 |
 | `confusion_matrix`, binary | `confusion.{tp, fp, fn, tn}` | how invalid outputs map onto the four cells is settled in T10 |
 | `threshold_tuning` | `threshold_tuning` | — |
 | `split_report` | `SplitReport.to_reproduce()` | — |

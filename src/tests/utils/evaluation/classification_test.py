@@ -1,12 +1,21 @@
 """Tests for the imbalance-aware classification report."""
 
+import json
+import math
+import warnings
 from dataclasses import dataclass
 
 import numpy as np
 import pytest
-from sklearn.metrics import recall_score
+from sklearn.metrics import balanced_accuracy_score, recall_score
 
-from senselab.utils.evaluation.classification import ClassificationReport, score_classification, score_splits
+from senselab.utils.evaluation.classification import (
+    ClassificationReport,
+    balanced_accuracy,
+    legacy_macro_recall,
+    score_classification,
+    score_splits,
+)
 from senselab.utils.evaluation.splits import grouped_splits
 
 BINARY = ["neg", "pos"]
@@ -33,15 +42,19 @@ def _ninety_ten() -> list[str]:
 # ── The 90/10 trivial classifier is exposed ───────────────────────────
 
 
-def test_trivial_classifier_sits_on_every_floor() -> None:
-    """All-negative predictions with a constant score: every metric equals its floor."""
+def test_trivial_classifier_sits_on_every_trivial_floor_it_targets() -> None:
+    """All-negative predictions with a constant score sit on the floors of the metrics they target.
+
+    Accuracy, balanced accuracy, MCC, ROC-AUC and AP equal their floors. F1(pos) is 0, below its floor
+    2p/(1+p): that floor is the all-positive predictor's, which this classifier is not.
+    """
     y = _ninety_ten()
     report = _score(y, ["neg"] * 1000, y_score=np.zeros(1000), positive_label="pos")
     acc = report.secondary["accuracy"]
     assert acc.value == pytest.approx(0.9) and acc.floor == pytest.approx(0.9) and acc.lift == pytest.approx(0.0)
     assert report.balanced_accuracy.value == pytest.approx(0.5) == report.balanced_accuracy.floor
     assert report.secondary["mcc"].value == 0.0
-    assert report.secondary["f1"].value == 0.0
+    assert report.secondary["f1"].value == 0.0 < report.secondary["f1"].floor
     assert report.average_precision is not None and report.roc_auc is not None
     assert report.average_precision.value == pytest.approx(0.1) == report.average_precision.floor
     assert report.roc_auc.value == pytest.approx(0.5)
@@ -90,21 +103,54 @@ def test_invalid_outputs_are_misses() -> None:
     report = _score(y_true, y_pred)
     assert report.balanced_accuracy.value == pytest.approx((1.0 + 0.8) / 2)
     assert report.invalid_rate == pytest.approx(0.1)
-    assert report.confusion_matrix["rows"] == BINARY
-    assert report.confusion_matrix["columns"] == BINARY + ["INVALID"]
-    assert report.confusion_matrix["counts"] == [[10, 0, 0], [0, 8, 2]]
+    assert report.confusion_matrix["rows"] == tuple(BINARY)
+    assert report.confusion_matrix["columns"] == (*BINARY, "INVALID")
+    assert report.confusion_matrix["counts"] == ((10, 0, 0), (0, 8, 2))
 
 
-def test_balanced_accuracy_is_the_macro_recall_formula() -> None:
-    """S6 in-repo half: BA equals macro recall over the declared labels, INVALID a miss, on 20 cases."""
-    labels = ["a", "b", "c"]
-    for seed in range(20):
+def _random_cases(n_cases: int, with_absent: bool) -> list[tuple[list, list, list]]:
+    """Seeded multi-class cases with INVALID predictions; every other case drops label ``d`` from y_true."""
+    labels = ["a", "b", "c", "d"]
+    cases = []
+    for seed in range(n_cases):
         rng = np.random.default_rng(seed)
-        y_true = list(rng.choice(labels, 200, p=[0.6, 0.3, 0.1]))
+        present = labels[:3] if with_absent and seed % 2 == 0 else labels
+        y_true = list(rng.choice(present, 200))
         y_pred = list(rng.choice(labels + ["INVALID"], 200))
+        cases.append((labels, y_true, y_pred))
+    return cases
+
+
+def test_headline_is_present_label_balanced_accuracy() -> None:
+    """The headline equals scikit-learn's balanced_accuracy_score, absent labels and INVALID included."""
+    for labels, y_true, y_pred in _random_cases(20, with_absent=True):
         report = _score(y_true, y_pred, labels=labels)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")  # scikit-learn warns that INVALID never occurs in y_true
+            expected = balanced_accuracy_score(y_true, y_pred)
+        assert abs(report.headline_value - expected) <= 1e-12
+        assert abs(balanced_accuracy(y_true, y_pred) - expected) <= 1e-12
+
+
+def test_legacy_macro_recall_is_the_declared_label_formula() -> None:
+    """Parity helper: macro recall over all declared labels, zero_division=0, absent labels included."""
+    for labels, y_true, y_pred in _random_cases(20, with_absent=True):
         expected = recall_score(y_true, y_pred, labels=labels, average="macro", zero_division=0)
-        assert abs(report.balanced_accuracy.value - expected) <= 1e-12
+        assert abs(legacy_macro_recall(y_true, y_pred, labels=labels) - expected) <= 1e-12
+
+
+@pytest.mark.parametrize(
+    ("y_true", "y_pred", "present", "legacy"),
+    [
+        (["a"] * 6 + ["b"] * 4, ["a"] * 10, 0.5, 1 / 3),
+        (["a", "a", "b", "b"], ["a", "b", "b", "b"], 0.75, 0.5),
+    ],
+)
+def test_the_two_formulas_differ_on_absent_labels(y_true: list, y_pred: list, present: float, legacy: float) -> None:
+    """With label ``c`` declared but absent, the headline averages present labels; the legacy helper all three."""
+    report = _score(y_true, y_pred, labels=["a", "b", "c"])
+    assert report.headline_value == pytest.approx(present)
+    assert legacy_macro_recall(y_true, y_pred, labels=["a", "b", "c"]) == pytest.approx(legacy)
 
 
 def test_floors_match_closed_forms() -> None:
@@ -117,7 +163,7 @@ def test_floors_match_closed_forms() -> None:
     assert report.balanced_accuracy.floor == pytest.approx(1 / 3)
     assert report.secondary["accuracy"].floor == pytest.approx(0.7)
     assert report.secondary["mcc"].floor == 0.0
-    assert report.secondary["f1_macro"].floor == pytest.approx((2 * 0.7 / 1.7) / 3)
+    assert report.secondary["f1_macro"].floor == pytest.approx(1 / 3)
     assert report.roc_auc is not None and report.roc_auc.floor == 0.5
     assert report.average_precision is not None and report.average_precision.floor == pytest.approx(1 / 3)
     assert "f1" not in report.secondary
@@ -134,8 +180,29 @@ def test_binary_positive_class_f1_floor() -> None:
 def test_absent_label_is_flagged_and_floor_counts_present_classes() -> None:
     """A declared label with no examples is listed, and the BA floor is 1/k over present classes."""
     report = _score(["a", "a", "b", "b"], ["a", "b", "b", "b"], labels=["a", "b", "c"])
-    assert report.absent_labels == ["c"]
+    assert report.absent_labels == ("c",)
     assert report.balanced_accuracy.floor == pytest.approx(0.5)
+    assert report.secondary["f1_macro"].floor == pytest.approx(0.5)
+
+
+def test_absent_label_per_class_values_are_undefined() -> None:
+    """An absent label's recall and F1 are None; its precision is a number only if it was predicted."""
+    unpredicted = _score(["a", "b"], ["a", "b"], labels=["a", "b", "c"]).per_class["c"]
+    assert (unpredicted["recall"], unpredicted["f1"], unpredicted["precision"]) == (None, None, None)
+    predicted = _score(["a", "b"], ["a", "c"], labels=["a", "b", "c"]).per_class["c"]
+    assert (predicted["recall"], predicted["f1"], predicted["precision"]) == (None, None, 0.0)
+
+
+def test_prior_matched_random_predictor_has_no_macro_f1_lift() -> None:
+    """A label-blind predictor drawing labels at the true prevalences sits on the 1/k macro-F1 floor."""
+    rng = np.random.default_rng(0)
+    labels = ["a", "b", "c"]
+    p = [0.6, 0.3, 0.1]
+    y_true = list(rng.choice(labels, 50_000, p=p))
+    y_pred = list(rng.choice(labels, 50_000, p=p))
+    report = _score(y_true, y_pred, labels=labels)
+    assert abs(report.secondary["f1_macro"].lift) < 0.01
+    assert abs(report.balanced_accuracy.lift) < 0.01
 
 
 # ── required context and inputs ─────────────────────────────────────────
@@ -264,3 +331,73 @@ def test_score_splits_reports_prevalence_by_split() -> None:
                 "test": {"y_true": ["neg"], "y_pred": ["neg"], **{**common, "protocol": "seen_subject"}},
             }
         )
+
+
+# ── Review fixes ──────────────────────────────────────────────────────
+
+
+def test_scored_split_check_ignores_case_and_whitespace() -> None:
+    """A threshold tuned on " Test " is still the scored split "test"."""
+    with pytest.raises(ValueError, match="tuned on the split"):
+        _score(
+            ["neg", "pos"],
+            None,
+            y_score=np.array([0.2, 0.8]),
+            positive_label="pos",
+            threshold=_Threshold(0.5, "f1", " Test "),
+        )
+
+
+@pytest.mark.parametrize(
+    ("threshold", "scores"),
+    [(math.nan, np.array([0.2, 0.8])), (0.5, np.array([0.2, math.nan]))],
+    ids=["nan-threshold", "nan-score"],
+)
+def test_nan_threshold_or_scores_are_refused(threshold: float, scores: np.ndarray) -> None:
+    """NaN in the threshold or the scores is a ValueError, not a silent negative prediction."""
+    with pytest.raises(ValueError, match="finite"):
+        _score(["neg", "pos"], None, y_score=scores, positive_label="pos", threshold=_Threshold(threshold, "f1", "val"))
+
+
+def test_threshold_tuning_for_external_predictions() -> None:
+    """External predictions declare how their threshold was tuned; ``test`` is refused."""
+    assert _score(["neg", "pos"], ["neg", "pos"]).threshold_tuning == "none"
+    assert _score(["neg", "pos"], ["neg", "pos"], threshold_tuning="validation").threshold_tuning == "validation"
+    with pytest.raises(ValueError, match="test"):
+        _score(["neg", "pos"], ["neg", "pos"], threshold_tuning="test")
+
+
+@pytest.mark.parametrize("n_dropped", [-1, True, 1.5])
+def test_n_dropped_is_a_non_negative_int(n_dropped: object) -> None:
+    """The dropped-row count is a non-negative integer."""
+    with pytest.raises(ValueError, match="n_dropped"):
+        _score(["neg", "pos"], ["neg", "pos"], n_dropped=n_dropped)
+
+
+@pytest.mark.parametrize("reference", [{"neg": 0.5, "pos": 0.6}, {"neg": 1.2, "pos": -0.2}])
+def test_reference_prevalence_is_a_distribution(reference: dict) -> None:
+    """Reference prevalences lie in [0, 1] and sum to 1."""
+    with pytest.raises(ValueError, match="reference_prevalence"):
+        _score(["neg", "pos"], ["neg", "pos"], reference_prevalence=reference)
+
+
+def test_report_mappings_are_read_only() -> None:
+    """The report's mappings cannot be changed after scoring."""
+    report = _score(["neg", "pos"], ["neg", "pos"])
+    with pytest.raises(TypeError):
+        report.prevalence["neg"] = 1.0  # type: ignore[index]
+    with pytest.raises(TypeError):
+        report.per_class["neg"]["recall"] = 0.0  # type: ignore[index]
+    with pytest.raises(TypeError):
+        report.secondary["mcc"] = None  # type: ignore[index]
+
+
+def test_to_dict_is_plain_and_carries_floors() -> None:
+    """``to_dict`` is JSON-serialisable and includes the floors, lifts and normalised lifts."""
+    report = _score(_ninety_ten(), ["neg"] * 1000, y_score=np.zeros(1000), positive_label="pos")
+    data = report.to_dict()
+    json.dumps(data)
+    assert data["headline"] == "balanced_accuracy" and data["protocol"] == "unseen_subject"
+    assert data["floors"]["balanced_accuracy"] == pytest.approx(0.5)
+    assert set(data["lift"]) == set(data["floors"]) == set(data["normalized_lift"])
+    assert data["secondary"]["accuracy"]["floor"] == pytest.approx(0.9)

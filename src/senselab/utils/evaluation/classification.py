@@ -5,32 +5,40 @@ several and adds the prevalence of each. Every report names its protocol, leads 
 accuracy (the only headline) and gives every metric's chance or trivial floor, its lift over that
 floor and the lift normalised by the room above the floor.
 
+Balanced accuracy is recall averaged over the labels present in `y_true` (`balanced_accuracy`,
+equal to scikit-learn's `balanced_accuracy_score`), with invalid outputs counted as misses. The
+earlier declared-label formula is kept as `legacy_macro_recall`, for parity checks only.
+
 | Metric | Floor |
 |---|---|
 | balanced accuracy | 1/k, k = declared labels present in `y_true` |
 | accuracy (secondary) | majority-class prevalence |
-| macro-F1 (secondary) | best constant predictor: max over c of 2p_c/(1+p_c), divided by the number of labels |
+| macro-F1 (secondary, over present labels) | 1/k |
 | MCC (secondary) | 0 |
 | positive-class F1 (secondary, binary with `positive_label`) | 2p/(1+p) |
 | ROC-AUC | 0.5 |
 | average precision | p (binary), 1/k (macro one-vs-rest) |
 
-Labels are compared as strings. A prediction equal to `invalid_label` (a model output that could not be parsed)
-counts as a miss: it is a confusion-matrix column, never a row.
+Labels are compared as strings. A prediction equal to `invalid_label` (a model output that could not
+be parsed) counts as a miss: it is a confusion-matrix column, never a row.
+
+Report mappings are read-only views (`types.MappingProxyType`) and sequences are tuples;
+`ClassificationReport.to_dict` gives a plain, JSON-ready copy.
 """
 
 from __future__ import annotations
 
+import dataclasses
 import math
 from collections import Counter
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Literal, Mapping, Optional, Sequence, Union
+from types import MappingProxyType
+from typing import Any, Dict, List, Literal, Mapping, Optional, Sequence, Tuple, Union
 from typing import Protocol as TypingProtocol
 
 import numpy as np
 from sklearn.metrics import (
     average_precision_score,
-    f1_score,
     matthews_corrcoef,
     precision_recall_fscore_support,
     recall_score,
@@ -42,6 +50,8 @@ from senselab.utils.evaluation.splits import SplitReport
 
 HEADLINE = "balanced_accuracy"
 DEFAULT_INVALID_LABEL = "INVALID"
+PREVALENCE_TOLERANCE = 1e-9
+ThresholdTuning = Literal["validation", "none", "test"]
 
 
 class ThresholdLike(TypingProtocol):
@@ -63,6 +73,57 @@ class ThresholdLike(TypingProtocol):
         ...
 
 
+def balanced_accuracy(y_true: Union[np.ndarray, Sequence[Any]], y_pred: Union[np.ndarray, Sequence[Any]]) -> float:
+    """Recall averaged over the labels present in `y_true`: the report's headline.
+
+    Equal to scikit-learn's `balanced_accuracy_score`. A prediction that is not the true label (for
+    example an invalid output) is a miss. Threshold tuning and resampled intervals call this function.
+
+    Args:
+        y_true: True label per row.
+        y_pred: Predicted label per row.
+
+    Returns:
+        The balanced accuracy.
+
+    Raises:
+        ValueError: If the inputs are empty or of different lengths.
+    """
+    truth, pred = _as_strings(y_true), _as_strings(y_pred)
+    if len(truth) == 0 or len(truth) != len(pred):
+        raise ValueError("y_true and y_pred must be non-empty and of the same length")
+    recalls = [float(np.mean(pred[truth == label] == label)) for label in sorted(set(truth.tolist()))]
+    return float(np.mean(recalls))
+
+
+def legacy_macro_recall(
+    y_true: Union[np.ndarray, Sequence[Any]], y_pred: Union[np.ndarray, Sequence[Any]], *, labels: Sequence[Any]
+) -> float:
+    """Macro recall over every declared label with `zero_division=0`, for parity checks only.
+
+    This is the formula of the lab's earlier evaluation code: an absent declared label contributes a
+    recall of 0. It is never a report headline; see `balanced_accuracy`.
+
+    Args:
+        y_true: True label per row.
+        y_pred: Predicted label per row.
+        labels: The declared labels.
+
+    Returns:
+        The declared-label macro recall.
+    """
+    label_list = [str(lab) for lab in labels]
+    return float(
+        recall_score(
+            _as_strings(y_true).tolist(),
+            _as_strings(y_pred).tolist(),
+            labels=label_list,
+            average="macro",
+            zero_division=0,
+        )
+    )
+
+
 @dataclass(frozen=True)
 class MetricValue:
     """A metric with its trivial floor.
@@ -81,6 +142,7 @@ class MetricValue:
 
 
 def _metric(value: float, floor: float) -> MetricValue:
+    """A `MetricValue` with lift and normalised lift computed from the value and floor."""
     room = 1.0 - floor
     return MetricValue(
         value=float(value),
@@ -90,9 +152,22 @@ def _metric(value: float, floor: float) -> MetricValue:
     )
 
 
+def _plain(value: object) -> object:
+    """A JSON-ready copy: mappings to dicts, tuples to lists, dataclasses to dicts."""
+    if isinstance(value, MetricValue):
+        return dataclasses.asdict(value)
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        return _plain(dataclasses.asdict(value))
+    if isinstance(value, Mapping):
+        return {str(k): _plain(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_plain(v) for v in value]
+    return value
+
+
 @dataclass(frozen=True)
 class ClassificationReport:
-    """One split's classification report.
+    """One split's classification report; mappings are read-only, sequences are tuples.
 
     Attributes:
         protocol: `seen_subject` or `unseen_subject`.
@@ -106,43 +181,46 @@ class ClassificationReport:
         reference_prevalence: Caller-supplied reference distribution, shown beside `prevalence`.
         absent_labels: Declared labels with no example in `y_true`.
         headline_value: Balanced accuracy, the only headline.
-        balanced_accuracy: Macro recall over the declared labels, invalid outputs counted as misses.
-        secondary: `accuracy`, `f1_macro`, `mcc`, and `f1` (positive class) for binary with a positive label.
-        per_class: Label to precision, recall, F1, support and prevalence.
+        balanced_accuracy: Recall averaged over the labels present in `y_true` (`balanced_accuracy`).
+        secondary: `accuracy`, `f1_macro` (over present labels), `mcc`, and `f1` (positive class) for
+            binary with a positive label.
+        per_class: Label to precision, recall, F1, support and prevalence. Recall and F1 are `None` for
+            an absent label; precision is `None` for a label never predicted.
         confusion_matrix: `rows` (true labels), `columns` (labels plus the invalid label) and `counts`.
         roc_auc: Binary (positive-label score) or macro one-vs-rest; `None` without scores.
         average_precision: As `roc_auc`.
         positive_label: The positive label of a binary task, if declared.
-        threshold: `{value, objective, split_name}` of the decision threshold, if one was applied.
-        threshold_tuning: `validation` when a threshold tuned on another split was applied, else `none`.
+        threshold: `{value, objective, split_name}` of the decision threshold, if one was applied here.
+        threshold_tuning: `validation` (a threshold tuned on another split) or `none`.
         split_report: The split report of the splits this split came from, if given.
         headline: Always `balanced_accuracy`.
     """
 
     protocol: Protocol
     split_name: str
-    labels: List[str]
+    labels: Tuple[str, ...]
     n: int
     n_dropped: int
     invalid_rate: float
-    prevalence: Dict[str, float]
-    predicted_prevalence: Dict[str, float]
-    reference_prevalence: Optional[Dict[str, float]]
-    absent_labels: List[str]
+    prevalence: Mapping[str, float]
+    predicted_prevalence: Mapping[str, float]
+    reference_prevalence: Optional[Mapping[str, float]]
+    absent_labels: Tuple[str, ...]
     headline_value: float
     balanced_accuracy: MetricValue
-    secondary: Dict[str, MetricValue]
-    per_class: Dict[str, Dict[str, Any]]
-    confusion_matrix: Dict[str, Any]
+    secondary: Mapping[str, MetricValue]
+    per_class: Mapping[str, Mapping[str, Any]]
+    confusion_matrix: Mapping[str, Any]
     roc_auc: Optional[MetricValue]
     average_precision: Optional[MetricValue]
     positive_label: Optional[str]
-    threshold: Optional[Dict[str, Any]]
+    threshold: Optional[Mapping[str, Any]]
     threshold_tuning: Literal["validation", "none"]
     split_report: Optional[SplitReport]
     headline: str = field(default=HEADLINE, init=False)
 
     def _metrics(self) -> Dict[str, MetricValue]:
+        """Every metric with a floor, by name."""
         metrics = {HEADLINE: self.balanced_accuracy, **self.secondary}
         if self.roc_auc is not None:
             metrics["roc_auc"] = self.roc_auc
@@ -165,6 +243,14 @@ class ClassificationReport:
         """Metric name to normalised lift."""
         return {name: m.normalized_lift for name, m in self._metrics().items()}
 
+    def to_dict(self) -> Dict[str, Any]:
+        """A plain, JSON-ready copy of the report, with `floors`, `lift` and `normalized_lift` added."""
+        data = {f.name: _plain(getattr(self, f.name)) for f in dataclasses.fields(self)}
+        data["floors"] = self.floors
+        data["lift"] = self.lift
+        data["normalized_lift"] = self.normalized_lift
+        return data
+
 
 @dataclass(frozen=True)
 class EvaluationReport:
@@ -177,11 +263,12 @@ class EvaluationReport:
     """
 
     protocol: Protocol
-    reports: Dict[str, ClassificationReport]
-    prevalence_by_split: Dict[str, Dict[str, float]]
+    reports: Mapping[str, ClassificationReport]
+    prevalence_by_split: Mapping[str, Mapping[str, float]]
 
 
 def _as_strings(values: Union[np.ndarray, Sequence[Any]]) -> np.ndarray:
+    """The values as an object array of strings."""
     return np.array([str(v) for v in np.asarray(values, dtype=object).tolist()], dtype=object)
 
 
@@ -190,8 +277,8 @@ def _scores_and_floors(
     y_score: np.ndarray,
     labels: List[str],
     positive_label: Optional[str],
-    prevalence: Dict[str, float],
-) -> tuple[Optional[MetricValue], Optional[MetricValue]]:
+    prevalence: Mapping[str, float],
+) -> Tuple[Optional[MetricValue], Optional[MetricValue]]:
     """ROC-AUC and average precision with floors; `None` where undefined (a single class present)."""
     if positive_label is not None:
         truth = y_true == positive_label
@@ -210,6 +297,51 @@ def _scores_and_floors(
     return _metric(float(np.mean(aucs)), 0.5), _metric(float(np.mean(aps)), 1.0 / present)
 
 
+def _same_split(a: str, b: str) -> bool:
+    """Split names compared without case or surrounding whitespace."""
+    return a.strip().casefold() == b.strip().casefold()
+
+
+def _check_reference(reference: Optional[Mapping[str, float]], labels: List[str]) -> Optional[Dict[str, float]]:
+    """A validated copy of the reference prevalence: declared labels, values in [0, 1] summing to 1."""
+    if reference is None:
+        return None
+    values = {str(k): float(v) for k, v in reference.items()}
+    if set(values) - set(labels):
+        raise ValueError("reference_prevalence names labels that are not declared")
+    if any(not 0.0 <= v <= 1.0 for v in values.values()):
+        raise ValueError("reference_prevalence values must be in [0, 1]")
+    if abs(math.fsum(values.values()) - 1.0) > PREVALENCE_TOLERANCE:
+        raise ValueError("reference_prevalence values must sum to 1")
+    return values
+
+
+def _per_class(
+    truth: np.ndarray, pred: np.ndarray, labels: List[str], prevalence: Mapping[str, float]
+) -> Tuple[Dict[str, Mapping[str, Any]], List[float]]:
+    """Per-class metrics (undefined values as `None`) and the F1 of each present label."""
+    precision, recall, f1, support = precision_recall_fscore_support(
+        truth.tolist(), pred.tolist(), labels=labels, zero_division=0
+    )
+    predicted = Counter(pred.tolist())
+    rows: Dict[str, Mapping[str, Any]] = {}
+    present_f1: List[float] = []
+    for j, lab in enumerate(labels):
+        present = support[j] > 0
+        if present:
+            present_f1.append(float(f1[j]))
+        rows[lab] = MappingProxyType(
+            {
+                "precision": float(precision[j]) if predicted[lab] > 0 else None,
+                "recall": float(recall[j]) if present else None,
+                "f1": float(f1[j]) if present else None,
+                "support": int(support[j]),
+                "prevalence": prevalence[lab],
+            }
+        )
+    return rows, present_f1
+
+
 def score_classification(
     y_true: Union[np.ndarray, Sequence[Any]],
     y_pred: Optional[Union[np.ndarray, Sequence[Any]]],
@@ -223,6 +355,7 @@ def score_classification(
     positive_label: Optional[Union[str, int]] = None,
     invalid_label: str = DEFAULT_INVALID_LABEL,
     threshold: Optional[ThresholdLike] = None,
+    threshold_tuning: Optional[ThresholdTuning] = None,
     reference_prevalence: Optional[Mapping[str, float]] = None,
 ) -> ClassificationReport:
     """Score one split.
@@ -237,17 +370,22 @@ def score_classification(
         labels: The declared labels; compared as strings.
         protocol: `seen_subject` or `unseen_subject`; no default.
         split_name: The scored split's name.
-        n_dropped: Rows dropped before scoring; required.
+        n_dropped: Rows dropped before scoring; a non-negative int, required.
         split_report: The `SplitReport` of the splits this split came from, or `None`; its protocol must
             equal `protocol`.
         y_score: Binary: the positive label's score per row. Multi-class: an `(n, k)` array, columns in
-            `labels` order.
+            `labels` order. Must be finite.
         positive_label: The positive label of a binary task; required with binary scores, refused for
             multi-class.
-        invalid_label: The prediction value that marks an output that could not be parsed; must not be a label.
-        threshold: A threshold tuned on another split; predictions become the positive label where the
-            score is at or above it. Its objective is recorded; the headline stays balanced accuracy.
-        reference_prevalence: Optional reference label distribution (for example the training set's).
+        invalid_label: The prediction value that marks an output that could not be parsed; not a label.
+        threshold: A threshold tuned on another split (compared without case or surrounding whitespace);
+            predictions become the positive label where the score is at or above it. Its objective is
+            recorded; the headline stays balanced accuracy.
+        threshold_tuning: For predictions made outside this call: `validation` if their threshold was
+            tuned on a validation split, `none` (the default) if no threshold was tuned. `test` is
+            refused. With `threshold`, it may only be `validation` or omitted.
+        reference_prevalence: Optional reference label distribution (for example the training set's):
+            declared labels, values in [0, 1] summing to 1.
 
     Returns:
         The report.
@@ -258,6 +396,12 @@ def score_classification(
     """
     if protocol not in PROTOCOLS:
         raise ValueError(f"protocol must be one of {PROTOCOLS}")
+    if isinstance(n_dropped, bool) or not isinstance(n_dropped, (int, np.integer)) or n_dropped < 0:
+        raise ValueError("n_dropped must be a non-negative int")
+    if threshold_tuning == "test":
+        raise ValueError("threshold_tuning 'test' is refused: a threshold tuned on the test split inflates the score")
+    if threshold_tuning not in (None, "validation", "none"):
+        raise ValueError("threshold_tuning must be 'validation' or 'none'")
     label_list = [str(lab) for lab in labels]
     if not label_list or len(set(label_list)) != len(label_list):
         raise ValueError("labels must be non-empty and unique")
@@ -282,98 +426,88 @@ def score_classification(
         expected_shape = (n,) if binary else (n, len(label_list))
         if scores.shape != expected_shape:
             raise ValueError(f"y_score must have shape {expected_shape}")
+        if not np.isfinite(scores).all():
+            raise ValueError("y_score must be finite (no NaN or infinity)")
     threshold_record = None
     if threshold is not None:
-        if threshold.split_name == split_name:
+        if threshold_tuning == "none":
+            raise ValueError("a tuned threshold cannot have threshold_tuning 'none'")
+        if _same_split(threshold.split_name, split_name):
             raise ValueError("the threshold was tuned on the split being scored")
+        if not math.isfinite(threshold.threshold):
+            raise ValueError("the threshold must be finite")
         if y_pred is not None:
             raise ValueError("pass y_pred=None when a threshold sets the predictions")
         if scores is None or positive is None:
             raise ValueError("a threshold needs binary y_score and positive_label")
         negative = next(lab for lab in label_list if lab != positive)
         pred = np.where(scores >= threshold.threshold, positive, negative).astype(object)
-        threshold_record = {
-            "value": float(threshold.threshold),
-            "objective": threshold.objective,
-            "split_name": threshold.split_name,
-        }
+        threshold_record = MappingProxyType(
+            {"value": float(threshold.threshold), "objective": threshold.objective, "split_name": threshold.split_name}
+        )
+        tuning: Literal["validation", "none"] = "validation"
     else:
         if y_pred is None:
             raise ValueError("y_pred is required unless a threshold sets the predictions")
         pred = _as_strings(y_pred)
+        tuning = "validation" if threshold_tuning == "validation" else "none"
     if len(pred) != n:
         raise ValueError("y_true and y_pred must have the same length")
     if set(pred.tolist()) - set(label_list) - {invalid_label}:
         raise ValueError("y_pred holds values outside the declared labels and the invalid label")
-    reference = None if reference_prevalence is None else {str(k): float(v) for k, v in reference_prevalence.items()}
-    if reference is not None and set(reference) - set(label_list):
-        raise ValueError("reference_prevalence names labels that are not declared")
+    reference = _check_reference(reference_prevalence, label_list)
 
     true_counts = Counter(truth.tolist())
     pred_counts = Counter(pred.tolist())
     prevalence = {lab: true_counts[lab] / n for lab in label_list}
     predicted = {lab: pred_counts[lab] / n for lab in [*label_list, invalid_label]}
-    absent = [lab for lab in label_list if true_counts[lab] == 0]
-    present = len(label_list) - len(absent)
+    absent = tuple(lab for lab in label_list if true_counts[lab] == 0)
+    floor_k = 1.0 / (len(label_list) - len(absent))
 
-    y_t, y_p = truth.tolist(), pred.tolist()
-    ba = recall_score(y_t, y_p, labels=label_list, average="macro", zero_division=0)
-    precision, recall, f1, support = precision_recall_fscore_support(y_t, y_p, labels=label_list, zero_division=0)
-    per_class = {
-        lab: {
-            "precision": float(precision[j]),
-            "recall": float(recall[j]),
-            "f1": float(f1[j]),
-            "support": int(support[j]),
-            "prevalence": prevalence[lab],
+    per_class, present_f1 = _per_class(truth, pred, label_list, prevalence)
+    columns = (*label_list, invalid_label)
+    pairs = Counter(zip(truth.tolist(), pred.tolist()))
+    confusion = MappingProxyType(
+        {
+            "rows": tuple(label_list),
+            "columns": columns,
+            "counts": tuple(tuple(pairs[(r, c)] for c in columns) for r in label_list),
         }
-        for j, lab in enumerate(label_list)
-    }
-    columns = [*label_list, invalid_label]
-    pairs = Counter(zip(y_t, y_p))
-    confusion = {
-        "rows": label_list,
-        "columns": columns,
-        "counts": [[pairs[(r, c)] for c in columns] for r in label_list],
-    }
-    best_constant_f1 = max(2 * p / (1 + p) for p in prevalence.values())
+    )
+    y_t, y_p = truth.tolist(), pred.tolist()
     secondary = {
         "accuracy": _metric(float(np.mean(truth == pred)), max(prevalence.values())),
-        "f1_macro": _metric(
-            f1_score(y_t, y_p, labels=label_list, average="macro", zero_division=0),
-            best_constant_f1 / len(label_list),
-        ),
+        "f1_macro": _metric(float(np.mean(present_f1)), floor_k),
         # One value across truth and predictions leaves MCC undefined; scikit-learn's convention is 0.
         "mcc": _metric(0.0 if len(set(y_t) | set(y_p)) < 2 else float(matthews_corrcoef(y_t, y_p)), 0.0),
     }
     if positive is not None:
         p = prevalence[positive]
-        secondary["f1"] = _metric(per_class[positive]["f1"], 2 * p / (1 + p))
+        f1_positive = per_class[positive]["f1"]
+        secondary["f1"] = _metric(0.0 if f1_positive is None else f1_positive, 2 * p / (1 + p))
     roc, ap = (None, None) if scores is None else _scores_and_floors(truth, scores, label_list, positive, prevalence)
-    balanced = _metric(float(ba), 1.0 / present)
-    if not math.isfinite(balanced.value):
-        raise ValueError("balanced accuracy is not finite")
+    balanced = _metric(balanced_accuracy(truth, pred), floor_k)
     return ClassificationReport(
         protocol=protocol,
         split_name=split_name,
-        labels=label_list,
+        labels=tuple(label_list),
         n=n,
         n_dropped=int(n_dropped),
         invalid_rate=predicted[invalid_label],
-        prevalence=prevalence,
-        predicted_prevalence=predicted,
-        reference_prevalence=reference,
+        prevalence=MappingProxyType(prevalence),
+        predicted_prevalence=MappingProxyType(predicted),
+        reference_prevalence=None if reference is None else MappingProxyType(reference),
         absent_labels=absent,
         headline_value=balanced.value,
         balanced_accuracy=balanced,
-        secondary=secondary,
-        per_class=per_class,
+        secondary=MappingProxyType(secondary),
+        per_class=MappingProxyType(per_class),
         confusion_matrix=confusion,
         roc_auc=roc,
         average_precision=ap,
         positive_label=positive,
         threshold=threshold_record,
-        threshold_tuning="validation" if threshold_record is not None else "none",
+        threshold_tuning=tuning,
         split_report=split_report,
     )
 
@@ -403,6 +537,6 @@ def score_splits(inputs: Mapping[str, Mapping[str, Any]]) -> EvaluationReport:
         raise ValueError("every split of one evaluation must name the same protocol")
     return EvaluationReport(
         protocol=protocols.pop(),
-        reports=reports,
-        prevalence_by_split={name: dict(r.prevalence) for name, r in reports.items()},
+        reports=MappingProxyType(reports),
+        prevalence_by_split=MappingProxyType({name: r.prevalence for name, r in reports.items()}),
     )
