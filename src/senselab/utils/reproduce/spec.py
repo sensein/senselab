@@ -165,8 +165,15 @@ class BodySpec(LockRef):
         return self
 
 
+ModuleName = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9_.+-]+(/[A-Za-z0-9_.+-]+)*$")]
+
+
 class SdistSpec(_Model):
-    """An sdist built into a wheel at prefetch, in its own hashed build env."""
+    """An sdist built into a wheel at prefetch, in its own hashed build env.
+
+    ``build_modules`` are environment modules loaded, in order, for the build (e.g. a compiler and a
+    CUDA toolkit).
+    """
 
     name: str
     url: str
@@ -174,10 +181,17 @@ class SdistSpec(_Model):
     patches: list[FileRef] = []
     build_env: LockRef
     build_env_vars: dict[str, str] = {}
-    cuda_module: str | None = None
+    build_modules: list[ModuleName] = []
     torch_cuda_arch_list: str | None = None
 
     _no_secrets = field_validator("build_env_vars")(_reject_secret_keys)
+
+    @field_validator("build_modules")
+    @classmethod
+    def _unique_modules(cls, value: list[str]) -> list[str]:
+        if len(set(value)) != len(value):
+            raise ValueError("build_modules has duplicates")
+        return value
 
 
 class PipCheckExpected(_Model):

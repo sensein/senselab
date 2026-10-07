@@ -9,6 +9,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tarfile
 import tempfile
 import zipfile
@@ -16,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from pydantic import ValidationError
 
 from senselab.utils.reproduce import build
 from senselab.utils.reproduce.locks import ReproduceLockError, file_sha256, lock_entries
@@ -167,7 +169,8 @@ def test_build_wheel_argv_env_and_patch(tmp_path: Path, fake_run: FakeRun) -> No
     info = json.loads(wheel.with_name(wheel.name + ".build-info.json").read_text())
     assert info["python_exact"] == "3.11.15"
     assert info["uv"] == "uv 1.0" and info["gcc"] == "gcc 1.0"
-    assert info["modules"] == [] and "nvcc" not in info
+    assert info["build_modules"] == [] and info["nvcc"] == "nvcc 1.0"
+    assert sorted(p.name for p in wheel.parent.iterdir()) == [wheel.name, wheel.name + ".build-info.json"]
 
 
 def test_build_env_is_an_allowlist(tmp_path: Path, fake_run: FakeRun, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -255,7 +258,7 @@ def test_patch_that_does_not_apply_raises(tmp_path: Path, fake_run: FakeRun) -> 
 
 def test_modules_wrap_the_build_without_dotfiles(tmp_path: Path) -> None:
     """With modules the build runs inside ``bash --noprofile --norc -c '. <init> && module load … && exec "$@"'``."""
-    spec, _ = _setup(tmp_path, cuda_module="gcc/12.2.0 cuda/12.9.1")
+    spec, _ = _setup(tmp_path, build_modules=["gcc/12.2.0", "cuda/12.9.1"])
     argv = build.wheel_build_argv(UV, spec, Path("/w/venv/bin/python"), Path("/w/src/demo-1.0"), Path("/w/dist"))
     inner = [UV, "build", "--no-config", "--wheel", "--no-build-isolation", "--python", "/w/venv/bin/python"]
     inner += ["--out-dir", "/w/dist", "/w/src/demo-1.0"]
@@ -271,11 +274,24 @@ def test_modules_wrap_the_build_without_dotfiles(tmp_path: Path) -> None:
     )
 
 
+def test_nvcc_is_required_only_for_cuda_builds(tmp_path: Path) -> None:
+    """A compiler-only module list loads without the nvcc guard; an arch list or a ``cuda/*`` module adds it."""
+    gcc, _ = _setup(tmp_path / "gcc", build_modules=["gcc/12.2.0"])
+    script = build.in_modules(gcc, ["true"])[4]
+    assert script == '. /etc/profile.d/modules.sh && module load gcc/12.2.0 && exec "$@"'
+    arch, _ = _setup(tmp_path / "arch", build_modules=["gcc/12.2.0"], torch_cuda_arch_list="8.0")
+    assert "command -v nvcc" in build.in_modules(arch, ["true"])[4]
+    assert build.needs_nvcc(arch) and not build.needs_nvcc(gcc)
+    assert build.build_config_sha256(gcc, None, "3.11.15") != build.build_config_sha256(
+        gcc.model_copy(update={"build_modules": ["gcc/13.1.0"]}), None, "3.11.15"
+    )
+
+
 def test_missing_nvcc_fails_the_wrapper(tmp_path: Path) -> None:
     """The wrapper's nvcc guard fails when no nvcc is on PATH (module init replaced by a no-op function)."""
     init = tmp_path / "init.sh"
     init.write_text("module() { :; }\n")
-    spec, _ = _setup(tmp_path, cuda_module="cuda/1.0")
+    spec, _ = _setup(tmp_path, build_modules=["cuda/1.0"])
     argv = build.in_modules(spec, ["true"])
     argv[4] = argv[4].replace(build.MODULES_INIT, str(init))
     result = subprocess.run(argv, env={"PATH": "/usr/bin:/bin"}, capture_output=True, text=True, check=False)
@@ -525,8 +541,8 @@ def _profile(tmp_path: Path) -> Profile:
 
 
 def test_render_build_job(tmp_path: Path) -> None:
-    """The batch script uses the build partition, loads the CUDA module, exports the arch list, logs under the root."""
-    spec, _ = _setup(tmp_path, cuda_module="cuda/12.9.1", torch_cuda_arch_list="8.0;9.0")
+    """The batch script uses the build partition, pins uv and the driver, exports the arch list, logs under the root."""
+    spec, _ = _setup(tmp_path, build_modules=["cuda/12.9.1"], torch_cuda_arch_list="8.0;9.0")
     text = build.render_build_job(
         _profile(tmp_path),
         spec,
@@ -535,6 +551,7 @@ def test_render_build_job(tmp_path: Path) -> None:
         step="train",
         date=DATE,
         driver_python="/opt/py/bin/python",
+        uv="/opt/uv/bin/uv",
         environ={"UV_CACHE_DIR": "/cache/uv", "SENSELAB_REPRO_CACHE": "/cache/repro dir", "CFLAGS": "PLANTED"},
     )
     lines = text.splitlines()
@@ -557,16 +574,76 @@ def test_render_build_job(tmp_path: Path) -> None:
         "export UV_CACHE_DIR=/cache/uv",
         "export SENSELAB_REPRO_CACHE='/cache/repro dir'",
         "export REPRO_DRIVER_PYTHON=/opt/py/bin/python",
+        "export REPRO_UV=/opt/uv/bin/uv",
         'export TMPDIR="/dev/shm/reproduce-build-${SLURM_JOB_ID}"',
         'mkdir -p "$TMPDIR"',
         "trap 'rm -rf \"$TMPDIR\"' EXIT",
-        ". /etc/profile.d/modules.sh",
-        "module load cuda/12.9.1",
         'export TORCH_CUDA_ARCH_LIST="8.0;9.0"',
         '"$REPRO_DRIVER_PYTHON" -m senselab.utils.reproduce build-one /repo/m.yaml'
         " --profile /repo/p.yaml --step train --sdist demo",
     ]
-    assert "LD_LIBRARY_PATH" not in text and "PLANTED" not in text
+    assert "LD_LIBRARY_PATH" not in text and "PLANTED" not in text and "module" not in text
+
+
+def test_rendered_prologue_runs_in_an_empty_environment(tmp_path: Path) -> None:
+    """Everything before the driver call runs under ``env -i`` with ``set -u`` and exits 0, removing its TMPDIR."""
+    spec, _ = _setup(tmp_path, build_modules=["gcc/12.2.0", "cuda/12.9.1"], torch_cuda_arch_list="8.0;9.0")
+    text = build.render_build_job(
+        _profile(tmp_path),
+        spec,
+        manifest=Path("/repo/m.yaml"),
+        profile_path=Path("/repo/p.yaml"),
+        step="train",
+        date=DATE,
+        driver_python="/opt/py/bin/python",
+        uv="/opt/uv/bin/uv",
+        environ={"UV_CACHE_DIR": "/cache/uv", "UV_PYTHON_INSTALL_DIR": "/cache/py"},
+    )
+    lines = text.splitlines()
+    assert lines[-1].startswith('"$REPRO_DRIVER_PYTHON" ')
+    job = f"pytest-{os.getpid()}"
+    prologue = "\n".join([*lines[:-1], 'echo "$TMPDIR $REPRO_UV $TORCH_CUDA_ARCH_LIST"']) + "\n"
+    result = subprocess.run(
+        ["env", "-i", "PATH=/usr/bin:/bin", f"SLURM_JOB_ID={job}", "bash", "--noprofile", "--norc", "-c", prologue],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.split() == [f"/dev/shm/reproduce-build-{job}", "/opt/uv/bin/uv", "8.0;9.0"]
+    assert not Path(f"/dev/shm/reproduce-build-{job}").exists()
+
+
+def test_find_uv_honours_repro_uv_under_a_minimal_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """``REPRO_UV`` wins over ``PATH``; it must be an absolute path to an executable."""
+    fake = tmp_path / "bin" / "uv"
+    fake.parent.mkdir()
+    fake.write_text("#!/bin/sh\n")
+    fake.chmod(0o750)
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    monkeypatch.setenv("REPRO_UV", str(fake))
+    assert build.find_uv() == str(fake)
+    for bad in ("uv", str(tmp_path / "absent")):
+        monkeypatch.setenv("REPRO_UV", bad)
+        with pytest.raises(ReproduceLockError, match="REPRO_UV"):
+            build.find_uv()
+    fake.chmod(0o640)
+    monkeypatch.setenv("REPRO_UV", str(fake))
+    with pytest.raises(ReproduceLockError, match="REPRO_UV"):
+        build.find_uv()
+
+
+def test_find_uv_in_a_minimal_subprocess(tmp_path: Path) -> None:
+    """A driver started with only the system ``PATH`` and ``REPRO_UV`` finds that uv."""
+    uv = shutil.which("uv")
+    if uv is None:
+        pytest.skip("no uv on PATH")
+        return
+    code = "from senselab.utils.reproduce.build import find_uv; print(find_uv())"
+    env = {"PATH": "/usr/bin:/bin", "REPRO_UV": uv, "HOME": str(tmp_path)}
+    result = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == uv
 
 
 def test_render_build_job_without_cuda(tmp_path: Path) -> None:
@@ -581,6 +658,7 @@ def test_render_build_job_without_cuda(tmp_path: Path) -> None:
         rebuild=True,
         date=DATE,
         driver_python="/opt/py/bin/python",
+        uv="/opt/uv/bin/uv",
     )
     assert "module" not in text
     assert "TORCH_CUDA_ARCH_LIST" not in text
@@ -588,16 +666,30 @@ def test_render_build_job_without_cuda(tmp_path: Path) -> None:
 
 
 def test_render_build_job_refuses_unsafe_values(tmp_path: Path) -> None:
-    """Values that would break out of the script's quoting are refused."""
-    spec, _ = _setup(tmp_path, cuda_module="cuda/12.9.1; rm -rf x", torch_cuda_arch_list="8.0")
-    with pytest.raises(ValueError, match="cuda_module"):
-        build.render_build_job(
-            _profile(tmp_path), spec, manifest=Path("/m.yaml"), profile_path=Path("/p.yaml"), step="s", date=DATE
-        )
+    """Values that would break out of the script's quoting, and a relative uv, are refused."""
+    with pytest.raises(ValidationError):
+        _setup(tmp_path, build_modules=["cuda/12.9.1; rm -rf x"])
     spec, _ = _setup(tmp_path / "b", torch_cuda_arch_list='8.0"; echo "')
     with pytest.raises(ValueError, match="torch_cuda_arch_list"):
         build.render_build_job(
-            _profile(tmp_path), spec, manifest=Path("/m.yaml"), profile_path=Path("/p.yaml"), step="s", date=DATE
+            _profile(tmp_path),
+            spec,
+            manifest=Path("/m.yaml"),
+            profile_path=Path("/p.yaml"),
+            step="s",
+            date=DATE,
+            uv="/u",
+        )
+    plain, _ = _setup(tmp_path / "c")
+    with pytest.raises(ValueError, match="absolute"):
+        build.render_build_job(
+            _profile(tmp_path),
+            plain,
+            manifest=Path("/m.yaml"),
+            profile_path=Path("/p.yaml"),
+            step="s",
+            date=DATE,
+            uv="uv",
         )
 
 
