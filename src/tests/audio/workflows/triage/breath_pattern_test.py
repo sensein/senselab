@@ -344,8 +344,11 @@ def _track(duration_s: float, runs: list[tuple[float, float, float, float]]) -> 
 def _segments(
     track: tuple[np.ndarray, ...], words: tuple[tuple[float, float], ...] = ()
 ) -> tuple[tuple[tuple[float, float], ...], tuple[tuple[float, float], ...]]:
+    times, f0, strength = track
     return voice_segments(
-        *track,
+        times,
+        f0,
+        strength,
         words,
         voicing_strength_min=breath_pattern_parameters().voicing_strength_min,
         parameters=train_parameters(),

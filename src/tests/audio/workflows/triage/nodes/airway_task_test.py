@@ -103,8 +103,12 @@ def test_a_weak_train_does_not_contest_a_breath_discard() -> None:
     """The detector's events contest a no-breath discard only where the train itself rose clear of the floor."""
     from senselab.audio.workflows.triage.vocabulary import TaskEvidence, discard_contested
 
-    base = {"events_found_n": 4, "contest_events_min": 3, "contest_rise_db_min": 10.0}
-    assert discard_contested(TaskEvidence(**base, breath_train_rise_db=14.3))
-    assert not discard_contested(TaskEvidence(**base, breath_train_rise_db=7.9))
-    assert not discard_contested(TaskEvidence(**base, breath_train_rise_db=None))
+    def evidence(rise_db: float | None) -> TaskEvidence:
+        return TaskEvidence(
+            events_found_n=4, contest_events_min=3, contest_rise_db_min=10.0, breath_train_rise_db=rise_db
+        )
+
+    assert discard_contested(evidence(14.3))
+    assert not discard_contested(evidence(7.9))
+    assert not discard_contested(evidence(None))
     assert discard_contested(TaskEvidence(events_found_n=1, contest_events_min=1))
