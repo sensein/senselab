@@ -1201,41 +1201,61 @@ patch text.
   inputs (a key is never remembered) and its result dir must be done, else the upstream reads
   `E_UPSTREAM_NOT_DONE` and the job's step is `never-ran`. An upstream step is never run by a downstream
   job. The date is fixed at submission, so a job that starts after midnight writes the same run dir.
-- **Held submission (B13 review).** `submit` first runs the cross-checks and refuses while any row of
-  the run dirs is `pending` for another submission (`E_SUBMIT_OVERLAP`; settle a dead one with `run
-  --finalize --submission <id>`). It then renders every script (each step's primary and fallback
-  partition, and the finalize job), so a render error raises before anything is probed, written or
-  submitted. Then, under `umask 007` and with SIGTERM turned into an exception: it creates the dated log dir
-  with mode `2770`; submits every step job `--hold` in DAG order, each `--dependency=afterok:<needs' job
-  ids>` (in `needs` order) with `--kill-on-invalid-dep=yes`; writes one `pending` row per step carrying the
-  job id and a submission id; submits the finalize job (`afterany` every step job) `--hold`; and releases
-  them all with one `scontrol release`. Because nothing runs before the release, no upstream can have
-  finished or been purged when a dependent is submitted, so an `afterok` dependency is never invalid at
-  submit time, and no job can race its own `pending` row. Any exception, Ctrl-C or SIGTERM before the
-  release completes runs `scancel` on every job submitted so far (the finalize job included), marks every
-  step of the submission `never-ran` with `E_SUBMIT_ABORTED`, and exits 1. Nothing is left pending.
+- **Held submission (B13 review and re-review).** `submit` runs, in this order:
+  1. the cross-checks;
+  2. rendering of every script (each step's primary and fallback partition, and the finalize job), so a
+     render error raises before anything is probed, written or submitted;
+  3. the **reservation**: for each analysis in sorted order, under that `run.json`'s lock, it refuses any
+     `pending` row of another submission (`E_SUBMIT_OVERLAP`; settle a dead one with `run --finalize
+     --submission <id>`) and writes a placeholder `pending` row per step tagged with this submission id (job
+     null), remembering the row each replaced. Check and write share one lock, so of two submissions started
+     together exactly one reserves a run dir; an overlap found at a later analysis undoes the reservations
+     already made (restoring the replaced rows) and nothing is submitted. A test races two threads against a
+     fake sbatch that blocks between calls;
+  4. under `umask 007`, with SIGTERM and SIGHUP raising `Terminated`: the dated log dir (mode `2770`); the
+     partition probes; every step job `--hold` in DAG order, each `--dependency=afterok:<needs' job ids>` (in
+     `needs` order) with `--kill-on-invalid-dep=yes`; the job ids, filled into this submission's rows under
+     the lock; the finalize job (`afterany` every step job) `--hold`; one `scontrol release` of all of them.
+
+  Because nothing runs before the release, no upstream can have finished or been purged when a dependent
+  is submitted, so an `afterok` dependency is never invalid at submit time. Any exception, Ctrl-C, SIGTERM
+  or SIGHUP in step 4 starts the abort, which runs with SIGINT, SIGTERM and SIGHUP ignored (a second signal
+  cannot interrupt it; the handlers are restored afterwards): `scancel` of every job submitted so far, the
+  finalize job included, with its exit checked (a failure is reported as `E_SCANCEL_FAILED` with the
+  leftover job ids, ids only); then each of this submission's still-`pending` rows gets back the row its
+  placeholder replaced, or becomes `never-ran` with `E_SUBMIT_ABORTED`. Rows of other submissions are never
+  touched. The command exits 1.
   A job's exit is non-zero exactly when its step is not `StepOutcome.ok`, which is what `afterok` reads.
 - **`run.json` under jobs.** Rows are merged, never rewritten, under an exclusive `file_lock` on
-  `<run dir>/.run.json.lock` (`run.update_run_record`), so jobs of one analysis can end in any order; a
-  merge keeps a row's `job` and `submission`. A job writes only its own step's row, unconditionally. A
-  step that never ran carries why: its failed needs' codes, else `E_UPSTREAM_NOT_DONE` (`run.upstream_codes`).
-  A job whose step did not succeed turns its dependents' `pending` rows of the same submission into
-  `never-ran` with that step's codes. The finalize job (on the `build` partition, 1 CPU, `1G`, 10 minutes)
-  turns its own submission's rows still `pending` (a job Slurm cancelled, or killed before it wrote its row)
-  into `never-ran` with `E_UPSTREAM_NOT_DONE`; it never touches another submission's rows.
+  `<run dir>/.run.json.lock` (`run.update_run_record`); a merge keeps a row's `job` and `submission`. Every
+  job gets `--submission <id>`, and its own row is written only over a row of that submission or an
+  untagged one (a local run's), so a duplicate or stale job cannot overwrite another submission's row. A
+  step that never ran carries why: its failed needs' codes, else `E_UPSTREAM_NOT_DONE`
+  (`run.upstream_codes`). A job whose step did not succeed turns its dependents' `pending` rows of the same
+  submission into `never-ran` with that step's codes.
+- **Finalize.** The finalize job (on the `build` partition, 1 CPU, `1G`, 10 minutes), or `run --finalize
+  --submission <id>` by hand, first `scancel`s the job ids recorded in that submission's still-`pending`
+  rows (a no-op once they have ended; by hand it stops a dead submission's leftovers; a failing scancel is
+  reported with the ids), then settles those rows in DAG order: a step with a need that did not succeed is
+  `never-ran` with `E_UPSTREAM_NOT_DONE`; any other step's own job ended without writing its row, so it is
+  `never-ran` with `E_JOB_ENDED_WITHOUT_RECORD` and, where `sacct` answers, the job's final state word as
+  `slurm_state` (`TIMEOUT`, `NODE_FAIL`, `CANCELLED`). It never touches another submission's rows.
 - **Requeue.** `never-ran` written by finalize, or by a failed upstream, is not final against a requeued
-  job: a requeued job writes its own row when it ends, unconditionally, so its later row replaces the
+  job: a requeued job writes its own row when it ends (same submission tag), so its later row replaces the
   `never-ran`, and `status` then shows the step's true state. A job killed after its step started and not
   requeued reads `never-ran`; its result dir is not done, so the next submission reruns it.
 - **Pinned manifests.** `submit` hashes each manifest's bytes and parses those same bytes; each job gets
   `--pin <sha256>` per manifest and refuses to run when a file no longer hashes the same: it writes its row
-  `failed` with `E_MANIFEST_CHANGED` and exits 1, which cancels its dependents. A full local `run` (no
+  `failed` with `E_MANIFEST_CHANGED`, turns its dependents' `pending` rows into `never-ran` with the same
+  code (where the changed manifests still parse), keeps the record's row order, and exits 1, which cancels
+  its dependents. A full local `run` (no
   `--step`) still rewrites the analysis's whole record.
 - **Scripts.** Each script goes to sbatch on standard input, so nothing is written to the submit dir.
   `--output`/`--error` are `<slurm_logs_root>/<date>/%j.{out,err}` (spec §2.3 item 6), and every job (step,
   finalize and build) runs there (`--chdir`), with the driver started as `python -P` so that directory is
   not on `sys.path`. The driver creates the dir with mode `2770` and runs sbatch under `umask 007`, so the
-  `.out`/`.err` files are never world-readable. `--export=NONE`, then `set -euo pipefail`, `umask 007`,
+  `.out`/`.err` files are never world-readable. Checked with a real trivial job through `submit` from a shell with umask `022`: the
+  job's `.out` and `.err` came out `0660`, so the submit-time umask reaches them (through `SLURM_UMASK`). `--export=NONE`, then `set -euo pipefail`, `umask 007`,
   `PATH=/usr/bin:/bin`, and explicitly `UV_CACHE_DIR`, `UV_LINK_MODE=hardlink`, `UV_PYTHON_INSTALL_DIR`,
   `SENSELAB_REPRO_CACHE` and, when the profile declares native lib dirs, `LD_LIBRARY_PATH` (all of them, in
   profile order), because a batch job inherits nothing. These reach the driver only: the step's own env is

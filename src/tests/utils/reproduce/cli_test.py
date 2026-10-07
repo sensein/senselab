@@ -718,3 +718,60 @@ def test_finalize_touches_only_its_own_submission(site: Site) -> None:
     run.update_run_record(runs, datetime.date.fromisoformat(DATE), "demo", [done], order=["a", "b"])
     got = {r["step"]: (r["status"], r["submission"]) for r in json.loads(record.read_text())["steps"]}
     assert got["a"] == ("executed", "s1")
+
+
+def test_manual_settle_cancels_pending_jobs_and_records_why(
+    site: Site, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """``--finalize --submission`` scancels the pending jobs; a job that ended unrecorded gets its sacct state."""
+    calls: list[list[str]] = []
+    scancel_fails = {"now": False}
+
+    def fake(argv: list[str], script: str, timeout: float | None = None) -> subprocess.CompletedProcess[str]:
+        calls.append(argv)
+        if argv[0] == "sacct":
+            return subprocess.CompletedProcess(argv, 0, "TIMEOUT\n", "")
+        return subprocess.CompletedProcess(argv, 1 if argv[0] == "scancel" and scancel_fails["now"] else 0)
+
+    monkeypatch.setattr(slurm, "default_runner", fake)
+    path = site.manifest("demo", _step("a"), _step("b", needs=["a"]), _step("c"))
+    runs, day = site.tmp / "runs", datetime.date.fromisoformat(DATE)
+    rows: list[dict[str, Any]] = [
+        {"step": s, "key": None, "status": "pending", "exit": None, "codes": [], "job": j, "submission": "s1"}
+        for s, j in (("a", "11"), ("b", "12"))
+    ]
+    rows.append({"step": "c", "key": "f" * 64, "status": "executed", "exit": 0, "codes": [], "submission": "s1"})
+    run.update_run_record(runs, day, "demo", rows, order=["a", "b", "c"])
+    argv = ["run", str(path), *site.common(), "--date", DATE, "--finalize", "--submission", "s1"]
+    assert site.main(*argv) == cli.EXIT_OK
+    assert calls[0] == ["scancel", "11", "12"]
+    got = {r["step"]: r for r in json.loads((runs / DATE / "demo" / run.RUN_JSON).read_text())["steps"]}
+    assert got["a"]["codes"] == ["E_JOB_ENDED_WITHOUT_RECORD"] and got["a"]["slurm_state"] == "TIMEOUT"
+    assert got["b"]["codes"] == ["E_UPSTREAM_NOT_DONE"] and "slurm_state" not in got["b"]
+    assert got["c"]["status"] == "executed"
+
+    run.update_run_record(runs, day, "demo", rows[:2], order=["a", "b", "c"])
+    scancel_fails["now"] = True
+    assert site.main(*argv) == cli.EXIT_OK
+    assert "E_SCANCEL_FAILED: job(s) 11,12 may still be queued" in capsys.readouterr().err
+
+
+def test_a_changed_manifest_marks_dependents_and_keeps_row_order(
+    site: Site, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """``E_MANIFEST_CHANGED`` goes on the job's row and its pending dependents', in the record's order."""
+    path = site.manifest("demo", _step("a"), _step("b", needs=["a"]), _step("c"))
+    runs, day = site.tmp / "runs", datetime.date.fromisoformat(DATE)
+    rows: list[dict[str, Any]] = [
+        {"step": s, "key": None, "status": "pending", "exit": None, "codes": [], "job": "1", "submission": "s1"}
+        for s in ("c", "a", "b")
+    ]
+    run.update_run_record(runs, day, "demo", rows, order=["c", "a", "b"])
+    argv = ["run", str(path), *site.common(), "--date", DATE, "--submission", "s1", "--pin", "0" * 64, "--step", "a"]
+    assert site.main(*argv) == cli.EXIT_FAILED
+    got = json.loads((runs / DATE / "demo" / run.RUN_JSON).read_text())["steps"]
+    assert [(r["step"], r["status"], r["codes"]) for r in got] == [
+        ("c", "pending", []),
+        ("a", "failed", ["E_MANIFEST_CHANGED"]),
+        ("b", "never-ran", ["E_MANIFEST_CHANGED"]),
+    ]
