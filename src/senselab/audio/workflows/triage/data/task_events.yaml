@@ -1,0 +1,24 @@
+# The task layer's shared reading (task_events.py): each branch's candidate events read against the
+# recording-level background, the rhythm prior, the dominant cluster, the extent and the decision.
+# Derivations are in specs/20261007-task-events-in-background/design.md ("Unit B: the task layer");
+# values marked UNFITTED await the joint fit on the owner's labels.
+version: 1
+entangle_abut_s: 0.05            # an impulse this close to an event abuts it (owner, 2026-10-07: only temporally entangled background counts)
+impulse_margin_db: 6.0           # masked of impulse frames, an event must still stand this over the floor (as background_model activity.margin_db)
+decision:
+  snr_low_db: 6.0                # UNFITTED (C5 s_lo): an event under this over the floor is no event
+  snr_high_db: 12.0              # UNFITTED (C5 s_hi): the deciding event at or over this is clear
+inhale:
+  margin_db: 6.0                 # the level the preparatory inhale stands over the floor (as cough_pattern.yaml inhale)
+  back_max_s: 2.0                # the furthest the extent runs back before the first event
+rhythm:
+  band_hz: [0.1, 1.2]            # the breathing band (C3)
+  prominence_min_db: 6.0         # UNFITTED (C3 r): a modulation peak this prominent is a rhythm
+breath:
+  gap_min_s: 3.0                 # the dominant cluster's least inner gap without a rhythm
+  gap_cycles: 1.5                # with a rhythm, gaps up to this many cycles stay inside the cluster
+  recover_voiced_max: 0.5        # a region recovered by the rhythm prior may be voiced over at most this share
+cough:
+  gap_s: 5.0                     # the dominant cluster's longest inner gap between coughs
+voice:
+  gap_s: 10.0                    # the dominant cluster's longest inner gap between holds (reported only)
