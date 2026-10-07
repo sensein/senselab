@@ -226,3 +226,89 @@ def floor_of(frames: BandFrames, residual: BandFrames | None, p: dict[str, Any])
     if residual_db is not None and (fills or quiet_s < q["quiet_min_s"]):
         return Floor(residual_db, "residual", quiet_s, own, residual_db)
     return Floor(own, "quiet_frames", quiet_s, own, residual_db)
+
+
+@dataclass(frozen=True)
+class Impulse:
+    """One short broadband transient: a click, knock or handling noise.
+
+    Attributes:
+        peak_s: Where its envelope peaks.
+        start_s: Where it rises out of its background.
+        end_s: Where it falls back into it.
+        peak_db: Its envelope peak over its background.
+        attack_ms: Rise time from start to peak.
+    """
+
+    peak_s: float
+    start_s: float
+    end_s: float
+    peak_db: float
+    attack_ms: float
+
+    def record(self) -> dict[str, float]:
+        """The impulse, for the store."""
+        return {
+            "peak_s": round(self.peak_s, 4),
+            "start_s": round(self.start_s, 4),
+            "end_s": round(self.end_s, 4),
+            "peak_db": round(self.peak_db, 2),
+            "attack_ms": round(self.attack_ms, 2),
+        }
+
+
+def impulses_of(signal: Signal, p: dict[str, Any]) -> list[Impulse]:
+    """The impulses of a signal: fast to rise and soon over, on a pre-emphasised sample envelope.
+
+    Args:
+        signal: The samples and their rate.
+        p: The parameters.
+
+    Returns:
+        The impulses, in time order.
+    """
+    from scipy.ndimage import median_filter  # noqa: PLC0415
+
+    q = p["impulse"]
+    samples, rate = signal
+    x = np.asarray(samples, dtype=np.float64)
+    if x.size < 2:
+        return []
+    y = x[1:] - 0.97 * x[:-1]
+    step = max(1, int(rate / 1000))
+    width = max(step, int(q["envelope_ms"] * rate / 1000))
+    count = (len(y) - width) // step + 1
+    if count < 3:
+        return []
+    squares = np.cumsum(np.concatenate([[0.0], y * y]))
+    starts = np.arange(count) * step
+    env = 10.0 * np.log10((squares[starts + width] - squares[starts]) / width + 1e-20)
+    background = median_filter(env, size=max(3, int(q["background_ms"])), mode="nearest")
+    excess = env - background
+    ms = step * 1000.0 / rate
+    found: list[Impulse] = []
+    taken = np.zeros(count, dtype=bool)
+    for i in np.argsort(-excess):
+        if excess[i] < q["peak_db"]:
+            break
+        if taken[i]:
+            continue
+        a = i
+        while a > 0 and excess[a - 1] >= q["onset_db"]:
+            a -= 1
+        b = i
+        while b < count - 1 and excess[b + 1] >= q["onset_db"]:
+            b += 1
+        taken[a : b + 1] = True
+        if (i - a) * ms <= q["attack_max_ms"] and (b - a + 1) * ms <= q["duration_max_ms"]:
+            half = width / 2.0
+            found.append(
+                Impulse(
+                    (starts[i] + half) / rate,
+                    (starts[a] + half) / rate,
+                    (starts[b] + half) / rate,
+                    float(excess[i]),
+                    (i - a) * ms,
+                )
+            )
+    return sorted(found, key=lambda imp: imp.peak_s)
