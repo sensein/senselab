@@ -474,7 +474,9 @@ class StepSpec(_Model):
     pattern of some ``inputs`` entry with the same root (``E_SPEC_STAGE_UNDIGESTED``), so its content is
     digested and keyed; ``checkout`` and ``up:`` stages are
     keyed by the commit, patches and upstream keys. An expectation ``unit`` is allowed only on a rate
-    or ``mcc`` metric (`metrics.metric_quantity`).
+    or ``mcc`` metric (`metrics.metric_quantity`). An ``argv`` or ``pythonpath`` entry may not be an absolute
+    path without a placeholder (``E_SPEC_ABSOLUTE_PATH``): a program or module outside the checkout, venv,
+    cache and roots would run unkeyed.
     """
 
     name: Name
@@ -508,6 +510,11 @@ class StepSpec(_Model):
         weights = [(w.repo_type, w.repo) for w in self.hf_weights]
         if len(set(weights)) != len(weights):
             raise ValueError(f"step {self.name!r} has duplicate hf_weights repositories")
+        literal = [t for t in (*self.argv, *self.pythonpath) if t.startswith("/") and not placeholders(t)]
+        if literal:
+            raise ValueError(
+                f"E_SPEC_ABSOLUTE_PATH: step {self.name!r} names absolute paths with no placeholder: {literal}"
+            )
         templates = [*self.argv, self.cwd, *self.pythonpath, *(s.dest for s in self.stage)]
         if self.env.r_lib is not None:
             templates.append(self.env.r_lib)

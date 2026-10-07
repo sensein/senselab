@@ -6,6 +6,7 @@ import copy
 import datetime
 import hashlib
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -135,9 +136,13 @@ class FakeUv:
         self.check_output = "Checked 7 packages in 1ms\nAll installed packages are compatible\n"
         self.check_rc = 0
         self.drop_from_freeze: str | None = None
+        self.sandboxed: list[list[str]] = []
 
     def __call__(self, argv: list[str], env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
-        """Record ``argv`` and ``env`` and emulate uv."""
+        """Record ``argv`` and ``env`` and emulate uv; a sandbox-wrapped call is unwrapped and also noted."""
+        if argv and argv[0] == sandbox.UNSHARE[0]:
+            argv = argv[argv.index("-c") + 3 :]
+            self.sandboxed.append(list(argv))
         self.calls.append((list(argv), env))
         out = ""
         rc = 0
@@ -343,7 +348,7 @@ def test_prefetch_stage_argv_uv_export(tmp_path: Path, fake: tuple[FakeUv, FakeW
     calls = uv.installs(venv)
     assert [a[:7] for a in calls] == [common] * 3
     torch_argv, body_argv, wheel_argv = calls
-    assert torch_argv[7:-1] == ["--require-hashes", "-r"]
+    assert torch_argv[7:-1] == ["--require-hashes", "--only-binary", ":all:", "-r"]
     assert body_argv[7:-1] == ["--require-hashes", "--only-binary", ":all:", "--index-url", PYPI, "-r"]
     assert wheel_argv[7:-1] == [] and wheel_argv[-1].endswith(WHEEL_NAME)
     venv_calls = [a for a, _ in uv.calls if a[1] == "venv"]
@@ -358,9 +363,15 @@ def test_prefetch_stage_argv_uv_export(tmp_path: Path, fake: tuple[FakeUv, FakeW
     assert copies["body.lock"] == (base / ENV_DIR / "body.lock").read_text()
     assert copies[WHEEL_NAME] == hashlib.sha256(b"demo wheel").hexdigest()
     # Allowlisted env: nothing of the caller's beyond the uv dirs and CA bundle.
-    for _, run_env in uv.calls:
-        assert run_env is not None and set(run_env) == ALLOWED_KEYS
-        assert run_env["PATH"] == "/usr/bin:/bin" and run_env["UV_CACHE_DIR"] == "/cache/uv"
+    for argv, run_env in uv.calls:
+        assert run_env is not None and run_env["PATH"] == "/usr/bin:/bin"
+        if argv in uv.sandboxed:
+            assert argv[1:3] == ["pip", "freeze"] and set(run_env) == ALLOWED_KEYS | {
+                "UV_OFFLINE",
+                "UV_PYTHON_DOWNLOADS",
+            }
+        else:
+            assert set(run_env) == ALLOWED_KEYS and run_env["UV_CACHE_DIR"] == "/cache/uv"
     assert wheels.calls[0]["python"] == "3.11.15" and wheels.calls[0]["expected_sha256"] is None
     assert result.wheels_lock_sha256 == file_sha256(base / ENV_DIR / "wheels.lock") and result.record
     assert result.built == ("python_speech_features",)
@@ -372,7 +383,7 @@ def test_prefetch_index_compiled_torch_uses_index(tmp_path: Path, fake: tuple[Fa
     env = EnvSpec.model_validate(_env(tmp_path / "manifests", source="requirements.in", overlays=False))
     result = _prefetch(tmp_path, env)
     torch_argv = uv.installs(result.base.path)[0]
-    assert torch_argv[7:-1] == ["--require-hashes", "--index-url", TORCH_INDEX, "-r"]
+    assert torch_argv[7:-1] == ["--require-hashes", "--only-binary", ":all:", "--index-url", TORCH_INDEX, "-r"]
     assert Path(torch_argv[-1]).name == "torch.lock"
 
 
@@ -675,8 +686,10 @@ def test_pip_check_runs_uv(tmp_path: Path, fake: tuple[FakeUv, FakeWheels]) -> N
     venv = tmp_path / "v"
     assert len(envmod.pip_check(venv)) == 3
     argv, run_env = uv.calls[-1]
-    assert argv == [UV, "pip", "check", "--no-config", "--python", str(venv / "bin" / "python")]
-    assert run_env is not None and set(run_env) == ALLOWED_KEYS
+    assert argv == [UV, "pip", "check", "--no-config", "--python", str(venv.absolute() / "bin" / "python")]
+    assert uv.sandboxed[-1] == argv
+    assert run_env is not None and set(run_env) == ALLOWED_KEYS | {"UV_OFFLINE", "UV_PYTHON_DOWNLOADS"}
+    assert run_env["UV_OFFLINE"] == "1" and run_env["UV_CACHE_DIR"] != os.environ.get("UV_CACHE_DIR")
     uv.check_output, uv.check_rc = "error: no interpreter", 2
     with pytest.raises(ReproduceLockError):
         envmod.pip_check(venv)
@@ -785,38 +798,54 @@ def _r_env(**changes: Any) -> EnvSpec:  # noqa: ANN401
 
 
 class FakeR:
-    """Stands in for the R runner: answers the module-env capture and emulates the Rscript install."""
+    """Stands in for the R runner: the module-env capture, the download, and the sandboxed offline install.
+
+    ``bash`` holds the module-loading calls (capture and download); ``installs`` the unwrapped sandboxed
+    install argvs with their env; ``sandboxed`` the raw install argvs.
+    """
 
     def __init__(self, installed: dict[str, str]) -> None:
         """Report ``installed`` as the library contents."""
         self.installed = installed
         self.calls: list[tuple[list[str], dict[str, str]]] = []
+        self.bash: list[tuple[list[str], dict[str, str]]] = []
+        self.installs: list[tuple[list[str], dict[str, str]]] = []
+        self.sandboxed: list[list[str]] = []
 
     def __call__(self, argv: list[str], env: dict[str, str], cwd: Path) -> subprocess.CompletedProcess[str]:
-        """Record the call; write the files the generated R script would write.
+        """Record the call; write the files the generated R scripts would write.
 
-        ``.libPaths()`` is emulated: ``R_LIBS``, then ``R_LIBS_USER`` when the script exports it and
-        otherwise a user library under ``HOME`` (R's default), then R's own library.
+        ``.libPaths()`` is emulated: ``R_LIBS``, then ``R_LIBS_USER`` when the env sets it and otherwise a user
+        library under ``HOME`` (R's default), then R's own library.
         """
         self.calls.append((argv, env))
+        if argv[0] == sandbox.UNSHARE[0]:
+            self.sandboxed.append(argv)
+            inner = argv[argv.index("-c") + 3 :]
+            self.installs.append((inner, env))
+            r_lib, r_script, out_dir, repo, venv, session = inner[4:10]
+            assert Path(r_script).is_file() and Path(session).is_file() and repo.startswith("file://")
+            out = Path(out_dir)
+            (out / "installed.tsv").write_text("".join(f"{k}\t{v}\n" for k, v in self.installed.items()))
+            (out / "namespaces.tsv").write_text("".join(f"{k}\t{v}\n" for k, v in self.installed.items()))
+            user = env.get("R_LIBS_USER") or f"{env['HOME']}/R/x86_64-pc-linux-gnu-library/4.5"
+            paths = list(dict.fromkeys([env["R_LIBS"], user, "/mod/r/lib64/R/library"]))
+            (out / "lib_paths.txt").write_text("".join(f"{p}\n" for p in paths))
+            (out / "session_info.txt").write_text("R version 4.5.2\nother attached packages: lme4\n")
+            (out / "r_version.txt").write_text("R version 4.5.2 (2025-10-31)\n")
+            if venv:
+                kernel = Path(venv) / "share" / "jupyter" / "kernels" / "ir"
+                kernel.mkdir(parents=True)
+                (kernel / "kernel.json").write_text("{}")
+            return subprocess.CompletedProcess(argv, 0, "", "")
+        self.bash.append((argv, env))
         script = argv[4]
         if "env -0" in script:
             captured = "PATH=/mod/r/bin:/usr/bin:/bin\0LD_LIBRARY_PATH=/mod/r/lib:/mod/blas/lib\0HOME=/x\0"
             return subprocess.CompletedProcess(argv, 0, captured, "")
-        _, r_lib, r_script, out_dir, repo, venv = argv[6:12]
-        assert "Rscript" in script and Path(r_script).is_file() and repo.startswith(envmod.PPM_CRAN + "/")
-        out = Path(out_dir)
-        (out / "installed.tsv").write_text("".join(f"{k}\t{v}\n" for k, v in self.installed.items()))
-        (out / "namespaces.tsv").write_text("".join(f"{k}\t{v}\n" for k, v in self.installed.items()))
-        user = r_lib if 'R_LIBS_USER="$2"' in script else f"{env['HOME']}/R/x86_64-pc-linux-gnu-library/4.5"
-        paths = list(dict.fromkeys([r_lib, user, "/mod/r/lib64/R/library"]))
-        (out / "lib_paths.txt").write_text("".join(f"{p}\n" for p in paths))
-        (out / "session_info.txt").write_text("R version 4.5.2\nother attached packages: lme4\n")
-        (out / "r_version.txt").write_text("R version 4.5.2 (2025-10-31)\n")
-        if venv:
-            kernel = Path(venv) / "share" / "jupyter" / "kernels" / "ir"
-            kernel.mkdir(parents=True)
-            (kernel / "kernel.json").write_text("{}")
+        _, download, repo, contrib = argv[6:10]
+        assert Path(download).is_file() and repo.startswith(envmod.PPM_CRAN + "/")
+        Path(contrib).mkdir(parents=True)
         return subprocess.CompletedProcess(argv, 0, "", "")
 
 
@@ -846,12 +875,17 @@ def test_prefetch_r_writes_session_and_module_env(tmp_path: Path) -> None:
     }
     assert result.session_sha256 == file_sha256(r_lib / "SESSION.json")
     assert result.module_env_sha256 == file_sha256(r_lib / "MODULE_ENV.json")
-    for argv, run_env in runner.calls:
+    for argv, run_env in runner.bash:
         assert argv[:4] == ["bash", "--noprofile", "--norc", "-c"] and argv[5:7] == ["bash", "R/4.5.2"]
         assert argv[4].startswith('. /etc/profile.d/modules.sh && module load "$1"')
         assert set(run_env) <= {"PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "TZ", "SSL_CERT_FILE"}
-    install = next(a for a, _ in runner.calls if "Rscript" in a[4])
-    assert 'R_LIBS="$2" R_LIBS_USER="$2" R_LIBS_SITE=' in install[4] and "--vanilla" in install[4]
+    assert len(runner.bash) == 2 and "Rscript --vanilla" in runner.bash[1][0][4]
+    ((install, install_env),) = runner.installs
+    assert install[:3] == ["/bin/sh", "-c", envmod.R_INSTALL_SH] and "--vanilla" in install[2]
+    assert install_env["R_LIBS"] == install_env["R_LIBS_USER"] == str(r_lib) and install_env["R_LIBS_SITE"] == ""
+    assert install_env["PATH"] == "/mod/r/bin:/usr/bin:/bin" and install_env["LD_LIBRARY_PATH"].startswith("/mod/r")
+    script = runner.sandboxed[0][runner.sandboxed[0].index("-c") + 1]
+    assert f"--bind {r_lib} {r_lib}" in script and "ip link set lo up" in script
     assert session["lib_paths"] == [str(r_lib), "/mod/r/lib64/R/library"]
     n = len(runner.calls)
     again = envmod.prefetch_r(env, cache, _profile(tmp_path), runner=runner)
@@ -872,10 +906,13 @@ def test_prefetch_r_ir_notebook_installs_kernel_into_venv(tmp_path: Path) -> Non
     runner = FakeR({"lme4": "1.1-37", "IRkernel": "1.3.2"})
     venv = tmp_path / "venv"
     envmod.prefetch_r(_r_env(), tmp_path / "c", _profile(tmp_path), kind="ir_notebook", venv=venv, runner=runner)
-    install = next(a for a, _ in runner.calls if "Rscript" in a[4])
-    assert install[11] == str(venv) and 'PATH="$6/bin:$PATH"' in install[4]
+    ((install, _),) = runner.installs
+    assert install[8] == str(venv) and 'PATH="$5/bin:$PATH"' in install[2]
     assert (venv / "share" / "jupyter" / "kernels" / "ir" / "kernel.json").is_file()
-    script = Path(install[8])
+    kernels = venv / "share" / "jupyter" / "kernels"
+    raw = runner.sandboxed[0]
+    assert f"--bind {kernels} {kernels}" in raw[raw.index("-c") + 1]
+    script = Path(install[5])
     assert not script.exists()  # the generated script lives in a removed temp dir
     with pytest.raises(ValueError, match="IRkernel"):
         envmod.prefetch_r(
@@ -888,6 +925,13 @@ def test_prefetch_r_ir_notebook_installs_kernel_into_venv(tmp_path: Path) -> Non
         )
     with pytest.raises(ValueError, match="venv"):
         envmod.prefetch_r(_r_env(), tmp_path / "e", _profile(tmp_path), kind="ir_notebook", runner=runner)
+
+
+def test_r_download_script_resolves_dependencies_and_writes_an_index() -> None:
+    """The download script resolves recursive dependencies against the snapshot and writes ``PACKAGES``."""
+    script = envmod.r_download_script(_r_env().r_packages)
+    assert 'c("lme4", "IRkernel")' in script and "package_dependencies" in script and "recursive = TRUE" in script
+    assert "download.packages" in script and "write_PACKAGES" in script and "install.packages" not in script
 
 
 def test_r_script_lists_declared_packages() -> None:
@@ -919,8 +963,8 @@ def test_session_is_identical_across_fresh_prefetches(tmp_path: Path) -> None:
         result = envmod.prefetch_r(_r_env(), cache, _profile(tmp_path), runner=runner)
         assert not result.reused
         shas.append(result.session_sha256)
-        homes.append(runner.calls[-1][1]["HOME"])
-        assert 'R_LIBS_USER="$2"' in runner.calls[-1][0][4]
+        homes.append(runner.installs[-1][1]["HOME"])
+        assert runner.installs[-1][1]["R_LIBS_USER"] == str(cache / "r" / "demo")
     assert homes[0] != homes[1] and shas[0] == shas[1]
 
 
@@ -958,12 +1002,12 @@ def test_prefetch_r_loads_build_modules_first(tmp_path: Path) -> None:
     with_gcc = profile.model_copy(update={"r": profile.r.model_copy(update={"build_modules": ["gcc/12.2.0"]})})
     runner = FakeR({"lme4": "1.1-37", "IRkernel": "1.3.2"})
     result = envmod.prefetch_r(_r_env(), tmp_path / "c", with_gcc, runner=runner)
-    for argv, _ in runner.calls:
+    for argv, _ in runner.bash:
         assert argv[4].startswith('. /etc/profile.d/modules.sh && module load gcc/12.2.0 "$1" && ')
     assert json.loads(result.module_env.read_text())["build_modules"] == ["gcc/12.2.0"]
     assert json.loads(result.session.read_text())["key"]["build_modules"] == ["gcc/12.2.0"]
     with pytest.raises(ValueError):
-        envmod.r_install_script(["gcc; rm -rf /"])
+        envmod.r_fetch_script(["gcc; rm -rf /"])
 
 
 def test_r_env_vars_merge_order() -> None:
@@ -1036,9 +1080,11 @@ def test_real_env_pip_check_freeze_and_smoke(tmp_path: Path) -> None:
     assert result.base.checked == (profile is not None) == result.derived["test"].checked
     declared = {e.name: e.pin for e in lock_entries((DATA / "body_deps_small.lock").read_text())}
     assert result.base.packages == {**declared, "python-speech-features": "0.6"}
+    assert envmod.installed_from_metadata(result.base.path) == result.base.packages
     assert envmod.pip_check(result.base.path) == []
     derived = result.derived["test"]
     assert derived.packages == {**result.base.packages, "iniconfig": "2.3.0"}
+    assert envmod.installed_from_metadata(derived.path) == derived.packages
     assert envmod.pip_check(derived.path) == []
     if profile is None:
         pytest.skip("no user namespaces here: smoke not run")

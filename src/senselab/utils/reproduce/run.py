@@ -87,6 +87,7 @@ NOTEBOOK_KINDS = frozenset({"notebook", "ir_notebook"})
 EXIT_DRIVER = 1
 EXIT_CWD = 96
 EXIT_PREAMBLE = 97
+EXIT_INTERPRETER = 95
 EXIT_ADAPTER_IMPORT = 86
 TRACEBACK_TAIL = 65536
 PIPE_LIMIT = 1 << 20
@@ -133,6 +134,8 @@ CODES = frozenset(
         "E_PROV_REFUSED",
         "E_DRIVER",
         "E_UPSTREAM_NOT_DONE",
+        "E_STEP_INTERPRETER",
+        "E_OUTPUT_SYMLINK",
         "E_JOB_ENDED_WITHOUT_RECORD",
         "W_HOST_VALUE_DROPPED",
     }
@@ -148,7 +151,7 @@ _EXC_CLASS = re.compile(
 )
 _FRAME = re.compile(r'^\s*File "([^"]+)", line (\d+)')
 _CODE_PATH = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_./+-]{0,255}$")
-_PREAMBLE_KEYS = frozenset({"sys_prefix", "python", "torch", "torch_cuda", "canary_failed"})
+_PREAMBLE_KEYS = frozenset({"sys_prefix", "python", "torch", "torch_cuda", "canary_failed", "interpreter_ok"})
 _RESERVED_ROOTS = ("checkout",)
 
 WRAPPER = 'cd -- "$1" || exit 96\nshift\nexec "$@"\n'
@@ -157,7 +160,7 @@ the read-only bind), then exec its arguments. For the step those are the preambl
 driver's pipe, closes it and execs the step itself."""
 
 _PREAMBLE_CODE = """\
-import contextlib, io, json, os, platform, sys
+import contextlib, io, json, os, platform, shutil, sys
 _buf = io.StringIO()
 with contextlib.redirect_stdout(_buf):
     exec(compile({canary!r}, "<canary>", "exec"), {{}})
@@ -166,8 +169,15 @@ try:
 except ValueError:
     _canary = None
 _failed = _canary.get("canary_failed") if isinstance(_canary, dict) else None
+_allowed = json.loads(sys.argv[2])
+_target = sys.argv[3]
+_found = _target if "/" in _target else shutil.which(_target, path=os.environ.get("PATH", ""))
+_ok = False
+if _found:
+    _places = (os.path.realpath(_found), os.path.realpath(os.path.dirname(os.path.abspath(_found))))
+    _ok = any(p == a or p.startswith(a.rstrip("/") + "/") for a in _allowed for p in _places)
 _out = {{"sys_prefix": sys.prefix, "python": platform.python_version(), "torch": None, "torch_cuda": None,
-         "canary_failed": _failed}}
+         "canary_failed": _failed, "interpreter_ok": _ok}}
 if _failed is True:
     try:
         import torch
@@ -180,11 +190,14 @@ with os.fdopen(int(sys.argv[1]), "w") as _f:
     _f.write(json.dumps(_out) + "\\n")
 if _failed is not True:
     sys.exit(97)
-os.execvp(sys.argv[2], sys.argv[2:])
+if not _ok:
+    sys.exit(95)
+os.execvp(sys.argv[3], sys.argv[3:])
 """
-"""Run as ``<venv>/bin/python -I -B -c PREAMBLE <pipe fd> <step argv…>``: the canary, then torch, a JSON line
-on the driver's pipe (closed before the step starts), then ``execvp`` of the step, only when the canary's
-connect failed."""
+"""Run as ``<venv>/bin/python -I -B -c PREAMBLE <pipe fd> <allowed dirs JSON> <step argv…>``: the canary, then
+torch, a JSON line on the driver's pipe (closed before the step starts), then ``execvp`` of the step, only when
+the canary's connect failed and the step's program, found on its ``PATH``, lies in an allowed dir (by its real
+path, or by the real path of the dir it was found in)."""
 
 ADAPTER_RUNNER = """\
 import builtins, importlib, os, pkgutil, runpy, sys, traceback
@@ -366,6 +379,25 @@ def _write_json(path: Path, obj: object) -> None:
         with contextlib.suppress(OSError):
             os.unlink(tmp)
         raise
+
+
+def _empty_file(path: Path) -> None:
+    """Make ``path`` an empty regular file the driver owns, replacing anything else there."""
+    try:
+        st = os.lstat(path)
+        if stat.S_ISREG(st.st_mode) and st.st_size == 0:
+            return
+        if stat.S_ISDIR(st.st_mode):
+            raise RunError("E_R_MISSING")
+        os.unlink(path)
+    except FileNotFoundError:
+        pass
+    path.parent.mkdir(parents=True, exist_ok=True)
+    os.close(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o440))
+
+
+def _under(path: str, parent: str) -> bool:
+    return path == parent or path.startswith(parent.rstrip("/") + "/")
 
 
 def _read_nofollow(path: Path) -> bytes:
@@ -668,12 +700,13 @@ def _run_step(
                 if cache.is_done(result):
                     return _skipped(step, keyed.key, run, result)
                 execution = _Execution(step, analysis, config, upstream, schemas, keyed)
-                try:
-                    execution.refusals()
-                except RunError as error:
-                    return _failed(step, error.code, keyed.key)
-                cache.reset_result_dir(config.profile.results_root, keyed.key)
-                summary = _summary_or_driver_error(execution, log)
+                with _env_locks(step, analysis, config):
+                    try:
+                        execution.refusals()
+                    except RunError as error:
+                        return _failed(step, error.code, keyed.key)
+                    cache.reset_result_dir(config.profile.results_root, keyed.key)
+                    summary = _summary_or_driver_error(execution, log)
         except cache.CacheError as error:
             return _failed(step, error.code, keyed.key)
     status: Status = "executed" if summary["executed"] else "failed"
@@ -683,6 +716,20 @@ def _run_step(
     except cache.CacheError as error:
         codes, exit_code = tuple(sorted({*codes, error.code})), exit_code or EXIT_DRIVER
     return StepOutcome(step.name, keyed.key, status, exit_code, codes, result)
+
+
+@contextlib.contextmanager
+def _env_locks(step: StepSpec, analysis: str, config: RunConfig) -> Iterator[None]:
+    """Hold shared locks on the step's venv and R library, so a rebuild (exclusive) waits for the step."""
+    venv_path, _ = _step_venv(step, analysis, config.cache)
+    locks = [venv_path.with_name(venv_path.name + ".lock")]
+    if step.kind in cache.R_KINDS:
+        r_lib = _r_lib(step, config.cache)
+        locks.append(r_lib.with_name(r_lib.name + ".lock"))
+    with contextlib.ExitStack() as stack:
+        for lock in locks:
+            stack.enter_context(build.file_lock(lock, shared=True))
+        yield
 
 
 def _summary_or_driver_error(execution: _Execution, log: _Buffer) -> dict[str, Any]:
@@ -730,6 +777,7 @@ class _Execution:
         self.installed: str | None = None
         self.host: dict[str, Any] | None = None
         self.env: dict[str, str] = {}
+        self.r_bins: list[str] = []
         self.recorded_sha: str | None = None
         self.argv: list[str] = []
         self.started = _now()
@@ -740,8 +788,8 @@ class _Execution:
         """Refuse without touching the result dir, so a previous run's diagnostics survive.
 
         Raises:
-            RunError: ``E_NO_USERNS``, ``E_ENV_MISSING``, ``E_ENV_UNCHECKED``, ``E_GPU_MISSING`` or
-                ``E_DRIVER_OLD``.
+            RunError: ``E_NO_USERNS``, ``E_ENV_MISSING``, ``E_ENV_UNCHECKED``, ``E_ENV_CHANGED`` (the dist-info
+                METADATA in the venv no longer name the installed set), ``E_GPU_MISSING`` or ``E_DRIVER_OLD``.
         """
         step, config = self.step, self.config
         if not sandbox.userns_available():
@@ -752,6 +800,8 @@ class _Execution:
             raise RunError("E_ENV_MISSING")
         if not venv.checked:
             raise RunError("E_ENV_UNCHECKED")
+        if env.installed_from_metadata(venv_path) != venv.packages:
+            raise RunError("E_ENV_CHANGED")
         self.venv, self.installed = venv, env.installed_sha256(venv_path)
         self.host = host.host_record(None, runner=config.host_runner)
         resources, record = step.resources, self.host
@@ -842,6 +892,7 @@ class _Execution:
         except ValueError:
             raise RunError("E_ENV_BUILD") from None
         if step.kind in cache.R_KINDS:
+            _empty_file(Path(self._render(sandbox.R_STARTUP_TEMPLATE)))
             self._r_env()
             self._r_session()
 
@@ -867,6 +918,10 @@ class _Execution:
             raise RunError("E_R_MISSING") from None
         if not isinstance(module_env, dict):
             raise RunError("E_R_MISSING")
+        system = {os.path.realpath(p) for p in sandbox.SYSTEM_PATH} | set(sandbox.SYSTEM_PATH)
+        raw_path = module_env.get("PATH")
+        module_path = raw_path if isinstance(raw_path, str) else ""
+        self.r_bins = [p for p in module_path.split(":") if p and p not in system and os.path.realpath(p) not in system]
         native = [self.config.profile.native[n] for n in self.step.resources.native]
         self.env |= env.r_env_vars(
             {k: v for k, v in module_env.items() if k in ("PATH", "LD_LIBRARY_PATH") and isinstance(v, str)},
@@ -893,7 +948,7 @@ class _Execution:
             os.write(fd, env.r_session_script(self.step.env.r_packages).encode())
         finally:
             os.close(fd)
-        argv = [sandbox.SH, "-c", WRAPPER, "sh", str(out), "Rscript", "--vanilla", str(script), str(r_lib)]
+        argv = [sandbox.SH, "-c", WRAPPER, "sh", str(self._cwd()), "Rscript", "--vanilla", str(script), str(r_lib)]
         argv.append(str(out))
         rc, _ = self._spawn(self._sandbox(argv, [out], tmp=self.tmp), self.env, "rsession")
         if rc != 0:
@@ -923,6 +978,10 @@ class _Execution:
                 files = digest.matching_files(root, entry.patterns, require_nonempty=True)
             except digest.DigestError as error:
                 raise RunError(error.code.replace("E_DIGEST_", "E_STAGE_")) from None
+            if entry.root.startswith("up:"):
+                real_root = os.path.realpath(root)
+                if any(not _under(os.path.realpath(root / rel), real_root) for rel in files):
+                    raise RunError("E_OUTPUT_SYMLINK")
             for rel in files:
                 target = target_root / dest / rel
                 if target in taken:
@@ -949,25 +1008,49 @@ class _Execution:
             netns=not self.config.no_netns,
             tmp=tmp,
             visible=[self.result, self.config.cache],
+            masked=[] if self.step.hf_weights else [self.config.cache / "huggingface"],
         )
 
-    def _exec(self) -> None:
-        step, config = self.step, self.config
-        argv = [self._render(a) for a in step.argv]
-        cwd = Path(self._render(step.cwd))
+    def _cwd(self) -> Path:
+        cwd = Path(self._render(self.step.cwd))
         cwd = cwd if cwd.is_absolute() else Path(os.path.realpath(self.keyed.checkout.worktree)) / cwd
         cwd = Path(os.path.realpath(cwd))
         allowed = [os.path.realpath(self.keyed.checkout.worktree), os.path.realpath(self.work)]
         if not cwd.is_dir() or not any(cwd == Path(a) or cwd.is_relative_to(a) for a in allowed):
             raise RunError("E_CWD")
+        return cwd
+
+    def _interpreter_dirs(self) -> list[str]:
+        """Where the step's program may live: the venv (Python kinds), the R module's and native bin dirs (R)."""
+        step = self.step
+        native = [os.fspath(d) for n in step.resources.native for d in self.config.profile.native[n].bin_dirs]
+        venv = [self._render("{venv}")]
+        if step.kind in ("python", "notebook"):
+            places = venv
+        elif step.kind == "r":
+            places = [*self.r_bins, *native]
+        else:
+            places = [*venv, *self.r_bins, *native]
+        return [os.path.realpath(p) for p in places]
+
+    def _exec(self) -> None:
+        step, config = self.step, self.config
+        argv = [self._render(a) for a in step.argv]
+        cwd = self._cwd()
         self.argv = argv
         python = os.path.join(self._render("{venv}"), "bin", "python")
         preamble = _PREAMBLE_CODE.format(canary=sandbox.canary(config.profile.canary_host))
+        allowed = json.dumps(self._interpreter_dirs())
         read, write = os.pipe()
-        wrapped = [sandbox.SH, "-c", WRAPPER, "sh", str(cwd), python, "-I", "-B", "-c", preamble, str(write), *argv]
+        wrapped = [sandbox.SH, "-c", WRAPPER, "sh", str(cwd), python, "-I", "-B", "-c", preamble, str(write), allowed]
+        wrapped += argv
         self.rc, data = self._spawn(self._sandbox(wrapped, [self.work], tmp=self.tmp), self.env, "step", (read, write))
         self.preamble = _parse_preamble(data)
-        self.executed = self.preamble is not None and self.preamble["canary_failed"] is True
+        self.executed = (
+            self.preamble is not None
+            and self.preamble["canary_failed"] is True
+            and self.preamble["interpreter_ok"] is True
+        )
         if self.preamble is not None and self.host is not None:
             self.host |= {k: self.preamble[k] for k in ("python", "torch", "torch_cuda")}
         if self.executed and self.rc != 0:
@@ -1028,9 +1111,12 @@ class _Execution:
             self.codes.add("E_CANARY")
         elif not self._prefix_ok():
             self.codes.add("E_SYS_PREFIX")
+        elif pre["interpreter_ok"] is not True:
+            self.codes.add("E_STEP_INTERPRETER")
         if pre is not None and pre["canary_failed"] is True:
             self._torch_guard(pre)
         self._reserved_names()
+        self._symlinks_out()
         for i, (spec, before) in enumerate(zip(self.step.inputs, self.keyed.input_digests)):
             root = _root_dir(spec.root, self.config, self.upstream, self.keyed.checkout.worktree)
             if not digest.digest_unchanged(before, digest.input_set_digest(root, spec.patterns)):
@@ -1049,6 +1135,16 @@ class _Execution:
             or env.installed_sha256(self.venv.path) != self.installed
         ):
             self.codes.add("E_ENV_CHANGED")
+
+    def _symlinks_out(self) -> None:
+        """Refuse any symlink under ``work/`` that resolves outside ``work/``; none is followed."""
+        work = os.path.realpath(self.work)
+        for top, dirs, files in os.walk(self.work, followlinks=False):
+            for name in [*dirs, *files]:
+                path = os.path.join(top, name)
+                if os.path.islink(path) and not _under(os.path.realpath(path), work):
+                    self.codes.add("E_OUTPUT_SYMLINK")
+                    return
 
     def _reserved_names(self) -> None:
         """Refuse and delete any file or dir under ``work/`` named like a driver-owned file."""
@@ -1156,6 +1252,9 @@ class _Execution:
 
     def _outputs(self) -> list[provenance.Artifact]:
         artifacts = []
+        if "E_OUTPUT_SYMLINK" in self.codes:
+            empty = digest.input_set_digest(self.result, [])
+            return [provenance.Artifact(digest=empty[0], count=empty[1]) for _ in self.step.outputs]
         for pattern in self.step.outputs:
             succeeded = self._exit() == 0
             try:
@@ -1239,6 +1338,8 @@ def _parse_preamble(data: bytes) -> dict[str, Any] | None:
     if not isinstance(parsed, dict) or set(parsed) != _PREAMBLE_KEYS:
         return None
     if not isinstance(parsed["canary_failed"], bool) or not isinstance(parsed["sys_prefix"], str):
+        return None
+    if not isinstance(parsed["interpreter_ok"], bool):
         return None
     for key in ("python", "torch", "torch_cuda"):
         value = parsed[key]
