@@ -10,6 +10,7 @@ import pytest
 from senselab.utils.reproduce.metrics import (
     CODES,
     DRIVER_KEYS,
+    SPLIT_UNITS,
     WARNINGS,
     MetricsError,
     expected_floor,
@@ -116,15 +117,25 @@ def test_valid_output_passes_and_is_suppressed() -> None:
     assert obj["confusion"]["fn"] == 0, "the input is not modified"
 
 
-@pytest.mark.parametrize(("unit", "kept"), [("subject", False), ("family", False), (None, False), ("video", True)])
-def test_n_groups_suppressed_only_for_person_units(unit: str | None, kept: bool) -> None:
-    """A fold's n_groups is suppressed when the unit is a person or not given, and kept otherwise."""
+@pytest.mark.parametrize("unit", [*SPLIT_UNITS, None])
+def test_n_groups_suppressed_for_every_unit(unit: str | None) -> None:
+    """A fold's n_groups below min_cell is suppressed whatever the unit, or with none given."""
     obj = _obj()
     obj["split_report"] = _split(unit=unit) if unit else {k: v for k, v in _split().items() if k != "unit"}
     clean, codes = validate_metrics(obj, _schema())
     assert codes == []
     assert clean is not None
-    assert clean["split_report"]["folds"][1]["n_groups"] == (3 if kept else "<5")
+    assert [f["n_groups"] for f in clean["split_report"]["folds"]] == [12, "<5"]
+
+
+def test_a_small_seen_subject_fold_by_recording_is_suppressed() -> None:
+    """Unit ``recording`` with n_groups 3 (subjects of a seen-subject fold) is emitted as ``"<5"``."""
+    obj = _obj()
+    obj["split_report"] = _split(unit="recording")
+    obj["split_report"]["folds"][1]["n_groups"] = 3
+    clean, codes = validate_metrics(obj, _schema())
+    assert codes == [] and clean is not None
+    assert clean["split_report"]["folds"][1]["n_groups"] == "<5"
 
 
 def test_min_cell_is_configurable() -> None:
