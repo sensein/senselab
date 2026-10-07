@@ -148,6 +148,15 @@ def _logical_lines(text: str) -> list[str]:
     return [line for line in lines if line]
 
 
+def _is_index_option(line: str) -> bool:
+    """Whether ``line`` is an index or find-links option; any other option line is refused."""
+    if not line.startswith("-"):
+        return False
+    if re.split(r"[\s=]", line, maxsplit=1)[0] in INDEX_OPTIONS:
+        return True
+    raise ReproduceLockError(f"option line refused: {line!r}")
+
+
 def lock_entries(text: str) -> list[LockEntry]:
     """Parse a pinned requirements file: a uv lock, an export, a resolve or a freeze.
 
@@ -164,11 +173,8 @@ def lock_entries(text: str) -> list[LockEntry]:
     """
     entries = []
     for line in _logical_lines(text):
-        if line.startswith("-"):
-            option = re.split(r"[\s=]", line, maxsplit=1)[0]
-            if option in INDEX_OPTIONS:
-                continue
-            raise ReproduceLockError(f"option line refused: {line!r}")
+        if _is_index_option(line):
+            continue
         match = _LINE_RE.match(_HASH_RE.sub("", line).strip())
         if not match:
             raise ReproduceLockError(f"not a pinned requirement: {line!r}")
@@ -246,8 +252,12 @@ def _path(base_dir: Path, rel: str) -> Path:
     return path
 
 
-def _verify(base_dir: Path, rel: str, expected: str, what: str, verified: dict[str, str]) -> None:
-    actual = file_sha256(_path(base_dir, rel))
+def _verify(
+    base_dir: Path, rel: str, expected: str, what: str, verified: dict[str, str], contents: dict[str, bytes]
+) -> None:
+    if rel not in contents:
+        contents[rel] = _path(base_dir, rel).read_bytes()
+    actual = hashlib.sha256(contents[rel]).hexdigest()
     if actual != expected:
         raise ReproduceLockError(f"{what} {rel}: sha256 {actual} != manifest {expected}")
     verified[rel] = actual
@@ -267,8 +277,9 @@ def verify_files(refs: Iterable[FileRef], base_dir: Path) -> dict[str, str]:
         ReproduceLockError: If a file resolves outside ``base_dir`` or its sha256 differs.
     """
     verified: dict[str, str] = {}
+    contents: dict[str, bytes] = {}
     for ref in refs:
-        _verify(base_dir, ref.file, ref.sha256, "file", verified)
+        _verify(base_dir, ref.file, ref.sha256, "file", verified, contents)
     return verified
 
 
@@ -276,7 +287,8 @@ def requirements_digest_for(env: EnvSpec, base_dir: Path) -> str:
     """Return the ``requirements-sha256`` header value for a requirements-derived body.
 
     ``requirements.in`` lines are normalised first: continuations joined, comments stripped, inner
-    whitespace collapsed.
+    whitespace collapsed. Index options are digested with the requirements; ``-r``, ``-c``, ``-e`` and
+    every other option are refused, because the files they name are not hashed.
 
     Args:
         env: The step's env; its body source must be ``requirements.in``.
@@ -286,12 +298,20 @@ def requirements_digest_for(env: EnvSpec, base_dir: Path) -> str:
         :func:`requirements_sha256` over the requirement lines and the env's compile inputs.
 
     Raises:
-        ReproduceLockError: If the body is not requirements-derived, or a requirement line repeats.
+        ReproduceLockError: If the body is not requirements-derived, a line is a non-index option, or a
+            requirement line repeats.
     """
     body = env.body
     if body.source != "requirements.in" or body.requirements_in is None:
         raise ReproduceLockError("only a requirements.in body has a requirements digest")
-    lines = [" ".join(line.split()) for line in _logical_lines(_path(base_dir, body.requirements_in).read_text())]
+    return _requirements_digest(env, _path(base_dir, body.requirements_in).read_text())
+
+
+def _requirements_digest(env: EnvSpec, text: str) -> str:
+    body = env.body
+    lines = [" ".join(line.split()) for line in _logical_lines(text)]
+    for line in lines:
+        _is_index_option(line)
     dupes = sorted({line for line in lines if lines.count(line) > 1})
     if dupes:
         raise ReproduceLockError(f"{body.requirements_in} repeats requirement lines: {dupes}")
@@ -304,10 +324,6 @@ def requirements_digest_for(env: EnvSpec, base_dir: Path) -> str:
         body.overrides_sha256,
         env.extra_no_emit,
     )
-
-
-def _entries(base_dir: Path, rel: str) -> list[LockEntry]:
-    return lock_entries(_path(base_dir, rel).read_text())
 
 
 def _group(entries: Iterable[LockEntry]) -> dict[str, list[LockEntry]]:
@@ -414,7 +430,8 @@ def check_integrity(env: EnvSpec, base_dir: Path, uv_lock: Path | None = None) -
     Against ``uv.lock`` the torch family is :func:`uv_lock_torch_family`, which also decides which
     names an overlay may not pin; otherwise it is the name rule of :func:`is_torch_family`.
 
-    The returned sha256s describe the bytes read here. The installer copies each file into ``{tmp}``,
+    Each file is read once; the header, pin and torch checks run on the bytes that were hashed. The
+    returned sha256s describe those bytes. The installer copies each file into ``{tmp}``,
     checks the copy against this mapping and installs from the copy, never from ``base_dir``.
 
     Args:
@@ -429,40 +446,45 @@ def check_integrity(env: EnvSpec, base_dir: Path, uv_lock: Path | None = None) -
         ReproduceLockError: On the first check that fails.
     """
     verified: dict[str, str] = {}
+    contents: dict[str, bytes] = {}
+
+    def text(rel: str) -> str:
+        return contents[rel].decode()
+
     locks = [("torch lock", env.torch), ("body lock", env.body), ("wheels lock", env.wheels)]
     locks += [("test lock", env.test), ("notebook_tools lock", env.notebook_tools)]
     locks += [(f"build_env lock of {s.name}", s.build_env) for s in env.sdist_allow]
     for what, ref in locks:
         if ref is not None:
-            _verify(base_dir, ref.lock, ref.lock_sha256, what, verified)
+            _verify(base_dir, ref.lock, ref.lock_sha256, what, verified, contents)
     for sdist in env.sdist_allow:
         for patch in sdist.patches:
-            _verify(base_dir, patch.file, patch.sha256, f"patch of {sdist.name}", verified)
+            _verify(base_dir, patch.file, patch.sha256, f"patch of {sdist.name}", verified, contents)
 
     body = env.body
     if body.source == "requirements.in":
         if body.requirements_in is None or body.requirements_in_sha256 is None:
             raise ReproduceLockError("a requirements.in body needs requirements_in and its sha256")
-        _verify(base_dir, body.requirements_in, body.requirements_in_sha256, "requirements.in", verified)
+        _verify(base_dir, body.requirements_in, body.requirements_in_sha256, "requirements.in", verified, contents)
         for what, rel, sha in (
             ("config file", body.config_file, body.config_file_sha256),
             ("overrides", body.overrides, body.overrides_sha256),
         ):
             if rel is not None and sha is not None:
-                _verify(base_dir, rel, sha, what, verified)
-        recorded = parse_header(_path(base_dir, body.lock).read_text()).get("requirements-sha256")
-        expected = requirements_digest_for(env, base_dir)
+                _verify(base_dir, rel, sha, what, verified, contents)
+        recorded = parse_header(text(body.lock)).get("requirements-sha256")
+        expected = _requirements_digest(env, text(body.requirements_in))
         if recorded != expected:
             raise ReproduceLockError(
                 f"body lock {body.lock}: header requirements-sha256 {recorded} != recomputed {expected}"
             )
 
     if env.first_resolve is not None:
-        _verify(base_dir, env.first_resolve.file, env.first_resolve.sha256, "first_resolve", verified)
+        _verify(base_dir, env.first_resolve.file, env.first_resolve.sha256, "first_resolve", verified, contents)
 
-    torch = _entries(base_dir, env.torch.lock) if env.torch is not None else []
+    torch = lock_entries(text(env.torch.lock)) if env.torch is not None else []
     torch_names = {e.name for e in torch}
-    base = _entries(base_dir, body.lock) + torch
+    base = lock_entries(text(body.lock)) + torch
     in_family: Callable[[str], bool] = is_torch_family
     uv_packages: list[dict[str, Any]] = []
     family: set[str] = set()
@@ -472,7 +494,7 @@ def check_integrity(env: EnvSpec, base_dir: Path, uv_lock: Path | None = None) -
         in_family = family.__contains__
     for what, ref in (("test", env.test), ("notebook_tools", env.notebook_tools)):
         if ref is not None:
-            problems = _overlay_problems(env, _entries(base_dir, ref.lock), base, torch_names, in_family)
+            problems = _overlay_problems(env, lock_entries(text(ref.lock)), base, torch_names, in_family)
             if problems:
                 raise ReproduceLockError(f"{what} overlay refused: {problems}")
 
@@ -481,7 +503,7 @@ def check_integrity(env: EnvSpec, base_dir: Path, uv_lock: Path | None = None) -
     if body.source == "requirements.in":
         if env.first_resolve is None:
             raise ReproduceLockError("a torch lock with a requirements.in body needs first_resolve")
-        reference = _resolve_reference(_entries(base_dir, env.first_resolve.file))
+        reference = _resolve_reference(lock_entries(text(env.first_resolve.file)))
     else:
         if uv_lock is None:
             raise ReproduceLockError("a uv-export body with a torch lock needs the repository uv.lock to check against")

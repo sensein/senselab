@@ -132,6 +132,33 @@ How `locks.check_integrity` reads those rules:
   from the copy. Step patches are checked the same way, with `verify_files`, when the checkout is
   patched.
 
+- The header digest refuses `-r`, `-c`, `-e` and other non-index options in `requirements.in`: the
+  files they name are not hashed, so editing one would change the compile without changing the
+  digest. Index options are digested with the requirement lines.
+- Each file is read once. The header, pin and torch checks parse the bytes that were hashed, so a
+  file swapped between the hash and a re-read cannot pass.
+
+How `lockgen` produces the locks:
+
+- Each builder runs one uv command with relative paths from a fixed working directory (the manifest
+  repository, or the checkout for `uv export`) and `--no-header`, then writes its own
+  `# reproduce lock` header with the command. The lock bytes therefore do not depend on where the
+  manifest repository sits on disk.
+- A manifest `exclude_newer` date becomes `<date>T23:59:59Z`. uv reads a bare date in the local time
+  zone, which would make the lock depend on the host.
+- The torch pins for an index compile are the torch-family pins of the first resolve, written to a
+  `.in` file beside `torch.lock`, so the recorded command can be rerun. Every non-root family name
+  (`nvidia-*`, `triton`, …) gets `--exclude-newer-package <name>=false`, as the spec says; the spike
+  needed it for the `nvidia-*` names, and on exact pins it is harmless for `triton`.
+- A `uv.lock`-derived torch lock and a uv-export body both use the `uv.lock` torch closure of the
+  roots the env installs, the same set the integrity check uses, so the two cannot disagree. Each
+  name gets the single linux x86_64 manylinux wheel for the env's `cpXY` (or a `py3-none` wheel);
+  zero or several matches is an error.
+- Overlays leave out the names `torch.lock` holds and the `sdist_allow`/`extra_no_emit` names: the
+  base venv provides or deliberately lacks them, and the integrity check refuses an overlay that pins
+  them differently. Notebook tools compile with `torch.lock` and `body.lock` as `--constraints`;
+  their `--index-url` lines do not change the compile index.
+
 **The venv name** is `repro-<analysis>-<env_key8>`. `env_key` is derived from inputs only:
 
 - the lock sha256s
