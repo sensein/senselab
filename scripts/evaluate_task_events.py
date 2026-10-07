@@ -7,7 +7,8 @@ r"""Score triage decisions against the owner's listening labels.
         [--out DIR]
 
 ``LABELS.csv`` is the owner label table (``listen_set``, ``stem``, ``family``, ``owner_label``,
-``owner_note``). ``DECISIONS`` is either a ``recording_vectors.parquet`` (``stem``, ``verdict``,
+``owner_note``), or a ``.json`` exported from the triage review page, whose entries carry the same
+keys. ``DECISIONS`` is either a ``recording_vectors.parquet`` (``stem``, ``verdict``,
 ``ground_keys``, ``declared_family``) or a directory of replay/refold row files (``*.jsonl``, each
 row carrying ``stem`` and ``verdict``, or ``REFOLD``/``VERDICT`` as ``<verdict>/<release>``, and
 optionally ``ground_keys``). On ORCD, point ``DECISIONS`` at a replay's rows directory.
@@ -82,6 +83,35 @@ def family_group(family: str, listen_set: str) -> str:
     if "breath" in fam:
         return "breath"
     return "other"
+
+
+REVIEW_EXPORT_SCHEMA = "senselab.triage.review"
+LABEL_COLUMNS = ("listen_set", "stem", "family", "owner_label", "owner_note")
+
+
+def load_labels(path: Path) -> pd.DataFrame:
+    """The labels from the owner table, or from a review page export.
+
+    Args:
+        path: A ``.csv`` label table, or a ``.json`` review export (``{"schema", "entries": [...]}``).
+
+    Returns:
+        One row per label, with at least the label table's columns.
+
+    Raises:
+        ValueError: When a JSON file is not a review page export.
+    """
+    if path.suffix.lower() != ".json":
+        return pd.read_csv(path)
+    payload = json.loads(path.read_text())
+    if isinstance(payload, dict) and payload.get("schema") not in (None, REVIEW_EXPORT_SCHEMA):
+        raise ValueError(f"{path} is a {payload.get('schema')!r} file, not a triage review export")
+    entries = payload.get("entries", []) if isinstance(payload, dict) else payload
+    table = pd.DataFrame(entries)
+    for column in LABEL_COLUMNS:
+        if column not in table.columns:
+            table[column] = ""
+    return table
 
 
 def map_labels(labels: pd.DataFrame, label_map: dict[str, Any]) -> tuple[pd.DataFrame, list[str]]:
@@ -278,7 +308,7 @@ def main() -> int:
     args = parser.parse_args()
 
     label_map = yaml.safe_load(args.label_map.read_text())
-    labels = pd.read_csv(args.labels)
+    labels = load_labels(args.labels)
     labels = labels.drop_duplicates(["listen_set", "stem"], keep="last")
     labels, unmapped = map_labels(labels, label_map)
     split = load_or_write_split(args.split, labels[labels["target"] != "excluded"])

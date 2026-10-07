@@ -107,3 +107,48 @@ def test_the_review_band_rate_is_reported_per_group_over_kept_recordings() -> No
     rate = ev.review_band_rate(decisions)
     assert rate["breath"] == {"kept": 2, "in_review_band": 1, "rate": 0.5}
     assert rate["voice"]["rate"] == 1.0
+
+
+def test_a_review_page_export_reads_as_labels_and_scores(tmp_path: Path) -> None:
+    """The review page's JSON export carries the label table's keys; its verdicts map to targets."""
+    export = {
+        "schema": "senselab.triage.review",
+        "version": 1,
+        "build": "abc123",
+        "entries": [
+            {
+                "listen_set": "triage_review_abc123",
+                "stem": _stem("00000000") + "_20260920-030735",
+                "family": "respiration-and-cough-breath",
+                "instructed": "",
+                "duration_s": 9.0,
+                "owner_label": "reviewer_discard",
+                "owner_note": "only the room",
+                "pipeline_at_listen": "review (weak_events)",
+                "reviewer_verdict": "discard",
+            }
+        ],
+    }
+    path = tmp_path / "review.json"
+    path.write_text(json.dumps(export))
+    labels = ev.load_labels(path)
+    assert list(labels["owner_label"]) == ["reviewer_discard"]
+    mapped, unmapped = ev.map_labels(labels, LABEL_MAP)
+    assert unmapped == [] and list(mapped["target"]) == ["absent"]
+    mapped["side"] = "fit"
+    decisions = pd.DataFrame({"stem": [_stem("00000000")], "verdict": ["discard"], "ground_keys": [[]]})
+    decisions["key"] = decisions["stem"].map(ev.recording_key)
+    scored = ev.score(mapped, decisions.set_index("key"), LABEL_MAP)
+    assert bool(scored.iloc[0]["agree"]) is True
+
+
+def test_a_json_that_is_not_a_review_export_is_refused(tmp_path: Path) -> None:
+    """A JSON from another tool is not read as labels."""
+    path = tmp_path / "other.json"
+    path.write_text(json.dumps({"schema": "senselab.fsreview.decisions", "entries": []}))
+    try:
+        ev.load_labels(path)
+    except ValueError as error:
+        assert "not a triage review export" in str(error)
+    else:
+        raise AssertionError("expected a ValueError")
