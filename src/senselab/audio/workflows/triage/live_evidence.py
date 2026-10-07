@@ -17,11 +17,14 @@ See ``specs/20260912-ruleset-in-pipeline/design.md`` and
 from __future__ import annotations
 
 import tempfile
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Mapping
 
+from senselab.audio.workflows.triage.background_model import BACKGROUND_MODEL
 from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.label_membership import LabelMembership
+from senselab.audio.workflows.triage.nodes.common import find_measurement
 from senselab.audio.workflows.triage.routing_analysis.families import UNKNOWN_TASK, task_family, task_id_of
 from senselab.audio.workflows.triage.routing_analysis.features import (
     RecordingFeatures,
@@ -31,6 +34,7 @@ from senselab.audio.workflows.triage.routing_analysis.features import (
 )
 from senselab.audio.workflows.triage.routing_analysis.ruleset import (
     RouteEvaluation,
+    RouteState,
     Ruleset,
     critical_blocks,
     evaluate_routes,
@@ -177,7 +181,28 @@ def evaluate_live_routes(store: ProvStore, config: TriageConfig, *, run_dir: Pat
         onomatopoeic=onomatopoeic_vocabulary(config),
         stem=recording_stem(store),
     )
-    return evaluate_routes(features, ruleset)
+    evaluation = evaluate_routes(features, ruleset)
+    if evaluation.state is RouteState.ROUTED:
+        return evaluation
+    return replace(evaluation, state=activity_emptiness(store))
+
+
+def activity_emptiness(store: ProvStore) -> RouteState:
+    """What an unrouted recording carried, read off BACKGROUND's regions of activity.
+
+    Args:
+        store: The provenance store, read for the ``background_model`` measurement.
+
+    Returns:
+        :attr:`RouteState.EMPTY` where BACKGROUND read no activity over the floor,
+        :attr:`RouteState.UNEXPLAINED` where it read some, and :attr:`RouteState.UNREADABLE` where
+        it wrote no reading.
+    """
+    found = find_measurement(store, BACKGROUND_MODEL)
+    active = None if found is None or found.attributes.get("missing") else found.attributes.get("active_s")
+    if active is None:
+        return RouteState.UNREADABLE
+    return RouteState.EMPTY if float(active) <= 0.0 else RouteState.UNEXPLAINED
 
 
 def route_attributes(evaluation: RouteEvaluation, ruleset: Ruleset) -> dict[str, Any]:
