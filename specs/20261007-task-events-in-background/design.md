@@ -183,9 +183,63 @@ They never change a verdict. This is already the rule for airway (`8864ed00`) an
 Background speech (`background_speech.py:274-331`) is a C2 event detector run on the residual with
 a speech type test. It reports into C5's background burden, plus its own flag.
 
-Where they land in the DAG: AIRWAY (`nodes/airway_task.py:157`) and VOICE each write one reading
-containing the C5 evidence vector. VERDICT reads only that vector and applies the C5 rule.
-`settle_task_extent` (`nodes/airway_task.py:106`) is unchanged.
+## QUALITY as the acquisition-quality branch
+
+**What QUALITY does today** (r17, review 2026-10-07):
+- **Its only check** audits PREPROCESS's clip spans for consistency (`nodes/quality.py:184-329`). It
+  contested 0 recordings in r17; PREPROCESS had already withdrawn contradicted spans on 286.
+- **Measures that decide nothing:** SQUIM (STOI/PESQ/SI-SDR), the whole-file disruptions, level, the
+  band profile, and the parquet's floor and SNR.
+- **The `quality:` config is part null, part mis-described.** `stoi_floor`, `pesq_floor` and both
+  disruption maxima are null, with no reader. The section comment calls the whole section unread,
+  which is wrong for `clip_contradiction_margin` and `clip_edge_guard_samples`, which are read.
+- **The parquet's `q_raw_issues`** (−50 dBFS floor, 25 dB SNR, never derived) marks 20,672 r17 passes
+  as unresolved; its SNR is structurally low for quiet airway tasks.
+- **The two clipping readings disagree:** 9,692 recordings keep a clip span, but 595 have whole-file
+  clipped seconds.
+- **The quality problems the owner raised live elsewhere:** background speech in AIRWAY, shutoff and
+  hum in VOICE, and session-relative level nowhere.
+
+**Proposal.** QUALITY owns acquisition quality as measurements, and VERDICT decides:
+- **Recording level:** the C1 background model (stationary floor, hum, impulses); shutoff;
+  dropouts and clipping, as one reading; and level against the session group.
+- **Per task span:** in-span interference (background speech, generalised from
+  `background_speech.py` to every family) and the event SNR over the background, which is C5's
+  evidence.
+- **Moved in:** `background_speech_in_task`, shutoff detection (`voice_phonation.py`) and the residual
+  hum guard. The branches read them from QUALITY.
+- **Retired or fixed:** the null tolerances, the wrong comment, `q_raw_issues` (recomputed from C1 or
+  dropped), and the dual clipping reading.
+- **Kept:** the clip audit, as a self-check on the store rather than a judgement of the recording.
+- **Fitted from labels before anything flags:** in-span interference (the cough and breath
+  background listens), shutoff, and session level (the 2026-10-05 empty-route and contrast
+  listens). SQUIM only if a labelled sample shows it separates usable recordings from unusable ones.
+
+## The DAG
+
+The owner's rule: every recording goes through QUALITY, and a recording a branch takes also gets
+that branch's outputs alongside.
+
+```
+PREPROCESS → TAXONOMY → routing ─┬─ AIRWAY ─┐
+                                 ├─ SPEECH ─┤
+                                 └─ VOICE  ─┤
+          QUALITY (recording level) ────────┤   every recording, no branch input
+          QUALITY (per task span) ◀─────────┘   over whichever branch extents exist
+                                   → REDACT → VERDICT
+```
+
+- **QUALITY runs on every recording, whatever routing decided.** It already runs unconditionally
+  after the branches (`run.py:355`).
+- **The recording-level part needs no branch output.** It also covers recordings no branch takes.
+- **The per-span part runs after the branches**, over the task extents they produced. With no extent
+  there is no per-span reading.
+- **AIRWAY and VOICE** each write one reading carrying the C2–C4 results (`nodes/airway_task.py:157`).
+  `settle_task_extent` (`nodes/airway_task.py:106`) is unchanged.
+- **VERDICT reads QUALITY plus whatever branch readings exist, side by side**, and applies one rule:
+  flag a quality problem only when it falls inside a task span, and discard only when nothing was
+  captured. A recording with no branch reading is decided on QUALITY alone, which can discard it
+  when nothing rises above the background.
 
 ## Parameters (fitted jointly; all in `data/`)
 
@@ -254,3 +308,9 @@ The task-specific type tests keep their existing fitted values. Nothing is tuned
    breath tasks?
 5. **Retiring the old breathing measure:** is it acceptable to retire it from decisions entirely
    (C5), keeping it as a reported measurement?
+6. **In-span interference:** should it flag every family, speech and voice included, or start with
+   airway and voice?
+7. **Session-group level:** what defines a session group (the BIDS session)? And should "only the
+   surroundings were recorded" discard, or go to review?
+8. **SQUIM:** retire it, or keep it as a reported measure pending a labelled test?
+9. **Dropout or clip inside a task span:** should it flag, and from what duration?
