@@ -568,3 +568,48 @@ def test_f_stat_must_be_non_negative() -> None:
     schema = MetricsSchema.model_validate({"kind": "statistic", "headline": ["f_stat"]})
     assert _codes({"headline": [{"name": "f_stat", "value": -1.0}]}, schema) == ["E_METRICS_RANGE"]
     assert _codes({"headline": [{"name": "f_stat", "value": 0.0}]}, schema) == []
+
+
+def test_prevalence_below_one_example_is_refused() -> None:
+    """With n given, a class prevalence above 0 but below 1/n is not a real proportion."""
+    obj, schema = _three_class(1 / 3)
+    obj["n"] = 200
+    obj["per_class"]["other"]["prevalence"] = 1e-9
+    assert _codes(obj, schema) == ["E_METRICS_PREVALENCE_SUBSAMPLE"]
+    obj, schema = _three_class(0.5)
+    obj["n"] = 200
+    assert _codes(obj, schema) == ["W_CLASS_ABSENT"]
+    obj["per_class"]["td"]["prevalence"] = 0.695
+    obj["per_class"]["other"]["prevalence"] = 0.005
+    obj["headline"] = [_entry("balanced_accuracy", 0.7, 1 / 3)]
+    assert _codes(obj, schema) == []
+
+
+@pytest.mark.parametrize(
+    ("entry", "ok"),
+    [
+        ({"name": "macro_f1", "value": 0.5, "floor": -1.0, "lift": 1.5}, False),
+        ({"name": "macro_f1", "value": 0.5, "floor": 1.2, "lift": -0.7}, False),
+        ({"name": "macro_f1", "value": 0.5, "floor": 0.2, "lift": 0.3}, True),
+        ({"name": "macro_f1", "value": 50, "floor": 20, "lift": 30, "unit": "pp"}, True),
+        ({"name": "macro_f1", "value": 0.5, "floor": 0.2, "lift": 1.5}, False),
+    ],
+)
+def test_floor_and_lift_ranges(entry: dict[str, Any], ok: bool) -> None:
+    """Floors share the value's bounds, presence-only floors included; lift stays within the range width."""
+    schema = _schema(headline=["balanced_accuracy", "macro_f1"], headline_labels=[])
+    obj = _obj()
+    obj["headline"] = [_entry("balanced_accuracy", 0.8, 0.5), entry]
+    codes = _codes(obj, schema)
+    if ok:
+        assert codes == []
+    else:
+        assert "E_METRICS_RANGE" in codes
+
+
+@pytest.mark.parametrize("field", ["recall", "precision", "f1"])
+def test_per_class_rates_in_unit_interval(field: str) -> None:
+    """Per-class recall, precision and f1 lie in [0, 1]."""
+    obj, schema = _three_class(0.5)
+    obj["per_class"]["asd"][field] = 7
+    assert _codes(obj, schema) == ["E_METRICS_RANGE", "W_CLASS_ABSENT"]
