@@ -561,6 +561,40 @@ def metric_address_error(address: str, schema: MetricsSchema) -> str | None:
     return None
 
 
+Quantity = Literal["rate", "mcc", "statistic", "count"]
+SCALED_QUANTITIES = frozenset({"rate", "mcc"})
+
+
+def metric_quantity(address: str) -> Quantity | None:
+    """The kind of number a metric address names, which fixes its range and whether it takes a unit.
+
+    Args:
+        address: A metric address (see `metric_address_error`).
+
+    Returns:
+        ``rate`` (a headline rate or a per-class field, in [0, 1] or percentage points), ``mcc`` (in
+        [-1, 1], likewise scaled), ``statistic`` (``f_stat``) or ``count`` (a ``count`` headline,
+        ``counts.*`` or ``confusion.*``); None for a malformed address or an unknown headline name.
+    """
+    parsed = _parse_address(address)
+    if parsed is None:
+        return None
+    if parsed[0] == "per_class":
+        return "rate"
+    if parsed[0] in ("counts", "confusion"):
+        return "count"
+    name = parsed[1]
+    if name == "mcc":
+        return "mcc"
+    if name in RATE_HEADLINES:
+        return "rate"
+    if name == "f_stat":
+        return "statistic"
+    if name == "count":
+        return "count"
+    return None
+
+
 def metric_value(obj: Mapping[str, Any], address: str) -> float:
     """Read one value from a validated ``metrics.json`` object.
 
