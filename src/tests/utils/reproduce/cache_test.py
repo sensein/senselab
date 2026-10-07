@@ -411,6 +411,23 @@ def test_driver_env_identity_reads_only_the_runtime_closure(tmp_path: Path, monk
     assert driver_env_sha256() != base
 
 
+def test_driver_env_identity_follows_requested_extras(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A requirement asking for an extra (``dep[fast]``) brings that extra's requirements into the closure."""
+    site = tmp_path / "site"
+    _dist(site, "senselab", "1.0", ("dep[fast]>=1",))
+    _dist(site, "dep", "2.0", ('speedup; extra == "fast"', 'other; extra == "slow"'))
+    _dist(site, "speedup", "1.0")
+    _dist(site, "other", "1.0")
+    monkeypatch.setattr(cache, "_site_dirs", lambda: [str(site)])
+    base = driver_env_sha256()
+    shutil.rmtree(site / "other-1.0.dist-info")
+    _dist(site, "other", "1.1")
+    assert driver_env_sha256() == base
+    shutil.rmtree(site / "speedup-1.0.dist-info")
+    _dist(site, "speedup", "1.1")
+    assert driver_env_sha256() != base
+
+
 def test_keyed_env_is_the_sandbox_keyed_set(tmp_path: Path) -> None:
     """The payload's env is what `build_env` keys: two different job envs give the same keyed sha and key."""
     step = StepSpec.model_validate(_step_data())
@@ -600,6 +617,18 @@ def test_reset_result_dir_keeps_a_dir_whose_summary_cannot_be_read(tmp_path: Pat
             reset_result_dir(tmp_path, SHA)
         assert info.value.code == "E_RESULT_UNREADABLE"
         assert (out / "metrics.json").exists()
+
+
+def test_reset_result_dir_keeps_a_dir_whose_summary_is_not_utf8(tmp_path: Path) -> None:
+    """A summary that does not decode as UTF-8 gives ``E_RESULT_UNREADABLE`` and nothing is deleted."""
+    out = result_dir(tmp_path, SHA)
+    out.mkdir()
+    (out / "metrics.json").write_text("{}")
+    (out / cache.SUMMARY).write_bytes(b'{"exit": 0, "x": "\xff\xfe"}')
+    with pytest.raises(CacheError) as info:
+        reset_result_dir(tmp_path, SHA)
+    assert info.value.code == "E_RESULT_UNREADABLE" and info.value.__suppress_context__
+    assert sorted(p.name for p in out.iterdir()) == ["metrics.json", cache.SUMMARY]
 
 
 def test_reset_result_dir_refusals(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

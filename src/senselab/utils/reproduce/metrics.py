@@ -101,6 +101,7 @@ RATE_METRICS = (
     HEADLINES_BY_KIND["classification"] | SECONDARY_BY_KIND["classification"] | HEADLINES_BY_KIND["detection"]
 ) - {"mcc"}
 PRESENCE_ONLY_FLOORS = frozenset({"macro_f1", "avg_map", "map_at"})
+POSITIVE_FLOOR_METRICS = frozenset({"pr_auc", "f1"})
 ENTRY_NUMBERS = ("value", "ci_low", "ci_high", "numdf", "dendf", "floor", "lift")
 ENTRY_INTS = ("n", "n_folds")
 ENTRY_UNITS = ("fraction", "pp")
