@@ -81,6 +81,36 @@ Hinkley 1997, ch. 3.8). Rows from one subject are correlated, so a row bootstrap
 interval width. **Model comparison** uses a paired cluster bootstrap of the difference, or DeLong's
 test for two correlated ROC-AUCs (DeLong et al. 1988) with the midrank algorithm of Sun & Xu (2014).
 
+**Balanced accuracy's formula.** `recall_score(y_true, y_pred, labels=labels, average="macro",
+zero_division=0)`: macro recall over the declared labels, with invalid outputs counted as misses.
+This is the formula of the lab's earlier VLM evaluation (`provenance.md`, row `score_classification`),
+kept so reruns match. Its floor is `1/k` with k the declared labels present in `y_true`, which is
+what a reproduction driver checks. When a declared label is absent, the formula still averages over
+all declared labels (the absent one contributes 0), so the report lists `absent_labels`; no lift is
+meaningful until the split covers every label.
+
+**Thresholds.** A report built with a tuned threshold records `threshold{value, objective,
+split_name}` and `threshold_tuning: validation`; without one, `threshold_tuning: none`. A threshold
+tuned on the split being scored is refused. The headline is balanced accuracy whatever objective set
+the threshold.
+
+**Export to a reproduction driver's `metrics.json`** (written by the CLI, T10):
+
+| Report | Driver entry | Floor agreement |
+|---|---|---|
+| `balanced_accuracy` | headline `balanced_accuracy` | same: 1/k over present classes |
+| `secondary.accuracy` | secondary `accuracy` | same: majority-class prevalence |
+| `secondary.mcc` | secondary `mcc` | same: 0 |
+| `secondary.f1` (binary, positive label) | secondary `f1` | same: 2p/(1+p) |
+| `secondary.f1_macro` | secondary `macro_f1` | driver checks presence only; ours is the best constant predictor's macro-F1 |
+| `roc_auc` | secondary `auroc` | same: 0.5 |
+| `average_precision`, binary with positive label | secondary `pr_auc` | same: p |
+| `average_precision`, multi-class (macro one-vs-rest, floor 1/k) | not exported | the driver defines `pr_auc` for a declared positive class only |
+| `per_class` | `per_class.{recall, precision, f1, prevalence}` | — |
+| `confusion_matrix`, binary | `confusion.{tp, fp, fn, tn}` | how invalid outputs map onto the four cells is settled in T10 |
+| `threshold_tuning` | `threshold_tuning` | — |
+| `split_report` | `SplitReport.to_reproduce()` | — |
+
 References:
 
 - Brodersen, K. H., Ong, C. S., Stephan, K. E., & Buhmann, J. M. (2010). The balanced accuracy and
