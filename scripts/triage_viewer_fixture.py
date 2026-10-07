@@ -66,11 +66,10 @@ TASKS = [
     ("breath-hold", 2),
 ]
 FAMILIES = ["speech", "voice", "airway", "ddk"]
-VERDICTS = [("pass", 78), ("flag", 21), ("discard", 1)]
+VERDICTS = [("pass", 78), ("review", 21), ("discard", 1)]
 RELEASES = [
-    ("release_without_redaction", 43),
-    ("not_assessed", 31),
-    ("release_with_redaction", 19),
+    ("as_is", 74),
+    ("redacted", 19),
     ("withheld", 7),
 ]
 RELEASE_GROUNDS = [
@@ -124,7 +123,7 @@ def rows(seed: int = SEED, participants: int = PARTICIPANTS) -> list[dict[str, o
                 "task": task,
                 "declared_family": rng.choice(FAMILIES),
                 "verdict": verdict,
-                "release": _pick(rng, RELEASES),
+                "release": None if verdict == "discard" else _pick(rng, RELEASES),
                 "release_ground": _pick(rng, RELEASE_GROUNDS),
                 "discard_ground": "acoustically_empty" if verdict == "discard" else None,
                 "route_state": _pick(rng, ROUTE_STATES),

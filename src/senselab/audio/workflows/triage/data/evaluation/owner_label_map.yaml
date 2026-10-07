@@ -1,7 +1,7 @@
 # Owner listening labels -> evaluation target.
 #
 # targets:  target -> the verdict outcomes that count as agreement.
-#           Outcomes are pass, review (any flag) and discard; rerun never agrees.
+#           Outcomes are pass, review and discard; an incomplete run never agrees.
 # labels:   owner_label -> {target, remark}. remark is an extent/event observation the owner made;
 #           it is counted, not scored.
 # notes:    applied in order to a row whose owner_label is empty or unmapped; first case-insensitive

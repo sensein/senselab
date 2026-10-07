@@ -78,8 +78,8 @@ def test_scoring_reads_a_rows_directory_and_counts_review_acceptable_both_ways(t
     rows = tmp_path / "rows"
     rows.mkdir()
     lines = [
-        {"stem": _stem("00000000") + "_20260920-030735", "REFOLD": "pass/release_without_redaction"},
-        {"stem": _stem("00000006") + "_20260920-030735", "REFOLD": "pass/release_without_redaction"},
+        {"stem": _stem("00000000") + "_20260920-030735", "REFOLD": "pass/as_is"},
+        {"stem": _stem("00000006") + "_20260920-030735", "REFOLD": "pass/as_is"},
         {"stem": _stem("ffffffff"), "verdict": "discard", "ground_keys": ["no_breath_captured"]},
     ]
     (rows / "slice-0.jsonl").write_text("\n".join(json.dumps(line) for line in lines))
@@ -99,7 +99,7 @@ def test_the_review_band_rate_is_reported_per_group_over_kept_recordings() -> No
     decisions = pd.DataFrame(
         {
             "stem": ["a", "b", "c", "d"],
-            "verdict": ["pass", "flag", "discard", "flag"],
+            "verdict": ["pass", "review", "discard", "review"],
             "ground_keys": [[], ["breath_review_low_confidence"], [], ["voice_review_low_confidence"]],
             "declared_family": ["respiration-and-cough-breath"] * 3 + ["prolonged-vowel"],
         }

@@ -44,6 +44,7 @@ from senselab.audio.workflows.triage.vocabulary import (
     Outcome,
     Release,
     RunState,
+    RunStatus,
     Triage,
 )
 from senselab.utils.prov_store import Entity, ProvStore
@@ -311,7 +312,7 @@ class TestTheRouteIsReadVerbatim:
         )
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
         assert result.file_verdict.agreement["SPEECH"] == "mismatch"
-        assert result.file_verdict.triage is Triage.FLAG
+        assert result.file_verdict.triage is Triage.REVIEW
         assert [
             e.attributes["route_state"] for e in store.entities("branch_decision") if e.attributes["branch"] == "SPEECH"
         ] == ["declined"]
@@ -339,7 +340,7 @@ class TestAnUnreadableNodeVerdictDoesNotKillTheFold:
         store.was_generated_by(alien, activity)
 
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
-        assert result.file_verdict.triage is Triage.RERUN
+        assert result.file_verdict.triage is Triage.REVIEW and result.file_verdict.run_status is RunStatus.INCOMPLETE
         assert "node_outcome_unreadable" in result.file_verdict.ground_keys
         assert any("SPEECH" in reason.why and "'discard'" in reason.why for reason in result.file_verdict.reasons), (
             "the offending node and the value it wrote are both named"
@@ -366,7 +367,8 @@ class TestAnUnreadableNodeVerdictDoesNotKillTheFold:
         assert result.file_verdict.findings["AIRWAY"] == "present"
         assert result.file_verdict.findings["SPEECH"] == "uncertain", "no branch answered for it"
         assert result.file_verdict.agreement["SPEECH"] == "not_run"
-        assert _file_verdict_entity(store).attributes["triage"] == "rerun"
+        assert _file_verdict_entity(store).attributes["triage"] == "review"
+        assert _file_verdict_entity(store).attributes["run_status"] == "incomplete"
 
 
 class TestTheBranchDecisionsAreRead:
@@ -393,7 +395,7 @@ class TestTheBranchDecisionsAreRead:
             routed=ROUTED_PAIR,
         )
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path, ran={"SPEECH": RunState.ERRORED})
-        assert result.file_verdict.triage is Triage.RERUN
+        assert result.file_verdict.triage is Triage.REVIEW and result.file_verdict.run_status is RunStatus.INCOMPLETE
         assert result.file_verdict.ground_keys == ["branch_silent:SPEECH"]
         assert any("errored without a verdict" in reason.why for reason in result.file_verdict.reasons)
 
@@ -428,7 +430,7 @@ class TestTheBranchDecisionsAreRead:
         )
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
         assert result.file_verdict.branches == {}
-        assert result.file_verdict.triage is Triage.PASS
+        assert not result.file_verdict.ground_keys
 
     def test_a_routing_error_without_decisions_reruns_instead_of_discarding(
         self, make_verdict_store: Callable[..., ProvStore], config: TriageConfig, tmp_path: Path
@@ -441,7 +443,7 @@ class TestTheBranchDecisionsAreRead:
             route=False,
         )
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path, ran={"routing": RunState.ERRORED})
-        assert result.file_verdict.triage is Triage.RERUN
+        assert result.file_verdict.triage is Triage.REVIEW and result.file_verdict.run_status is RunStatus.INCOMPLETE
         assert result.file_verdict.discard_ground is None
         assert any(
             "routing failed; branch execution was withheld" in reason.why for reason in result.file_verdict.reasons
@@ -496,7 +498,7 @@ class TestHintsAreReadThroughRoutingsMap:
         )
         result = verdict_module.verdict(store, None, config, hint, run_dir=tmp_path)
         assert result.file_verdict.hints["AIRWAY"] == "found_unclaimed"
-        assert result.file_verdict.triage is Triage.PASS
+        assert not result.file_verdict.ground_keys
 
     def test_the_claim_is_read_off_the_decision_not_re_derived_from_the_config(
         self, make_verdict_store: Callable[..., ProvStore], config: TriageConfig, tmp_path: Path
@@ -532,7 +534,7 @@ class TestHintsAreReadThroughRoutingsMap:
         )
         result = verdict_module.verdict(store, None, config, hint, run_dir=tmp_path)
         assert result.file_verdict.hints == {}
-        assert result.file_verdict.triage is Triage.RERUN
+        assert result.file_verdict.triage is Triage.REVIEW and result.file_verdict.run_status is RunStatus.INCOMPLETE
         assert "declaration_unread" in result.file_verdict.ground_keys
         assert any(reason.why == UNREAD_DECLARATION for reason in result.file_verdict.reasons)
         assert _file_verdict_entity(store).attributes["hints"] == {}
@@ -548,7 +550,7 @@ class TestHintsAreReadThroughRoutingsMap:
         )
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
         assert result.file_verdict.hints["AIRWAY"] == "found_unclaimed"
-        assert result.file_verdict.triage is Triage.PASS
+        assert not result.file_verdict.ground_keys
 
     def test_the_declared_task_is_a_claim_with_no_hint_and_the_null_map(
         self, make_verdict_store: Callable[..., ProvStore], config: TriageConfig, tmp_path: Path
@@ -576,7 +578,7 @@ class TestHintsAreReadThroughRoutingsMap:
         )
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
         assert result.file_verdict.hints["VOICE"] == "claimed_not_found"
-        assert result.file_verdict.triage is Triage.FLAG
+        assert result.file_verdict.triage is Triage.REVIEW
 
     def test_a_declared_task_no_decision_survived_to_read_is_named_without_any_hint(
         self, make_verdict_store: Callable[..., ProvStore], config: TriageConfig, tmp_path: Path
@@ -654,7 +656,7 @@ class TestTheReleaseAxis:
         """SPEECH read words, scanned them and found none; there was nothing for REDACT to do."""
         store = make_verdict_store(concluded=BASE, routed=ROUTED_PAIR, words_n=42, scanned=True)
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
-        assert result.file_verdict.release is Release.WITHOUT_REDACTION
+        assert result.file_verdict.release is Release.AS_IS
         assert result.file_verdict.release_ground == SCAN_FOUND_NOTHING
         assert _file_verdict_entity(store).attributes["release_ground"] == SCAN_FOUND_NOTHING
 
@@ -664,7 +666,7 @@ class TestTheReleaseAxis:
         """Every lexical word came out of the task's own stimulus, so nothing was disclosed."""
         store = make_verdict_store(concluded=BASE, routed=ROUTED_PAIR, words_n=9, scanned=False)
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
-        assert result.file_verdict.release is Release.WITHOUT_REDACTION
+        assert result.file_verdict.release is Release.AS_IS
         assert result.file_verdict.release_ground == NOTHING_BEYOND_STIMULUS
 
     def test_a_transcript_with_no_lexical_word_is_determined(
@@ -673,7 +675,7 @@ class TestTheReleaseAxis:
         """SPEECH's no-lexical exit reports and writes no scan; 1,421 of the corpus take it."""
         store = make_verdict_store(concluded=BASE, routed=ROUTED_PAIR, words_n=0, scanned=None)
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
-        assert result.file_verdict.release is Release.WITHOUT_REDACTION
+        assert result.file_verdict.release is Release.AS_IS
         assert result.file_verdict.release_ground == NO_LEXICAL_WORD
 
     def test_a_finding_no_redact_verdict_answers_is_unassessed(
@@ -682,7 +684,7 @@ class TestTheReleaseAxis:
         """The safety-relevant gap: the scan found something and the redaction did not conclude."""
         store = make_verdict_store(concluded=BASE, routed=ROUTED_PAIR, words_n=42, scanned=True, pii_n=2)
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
-        assert result.file_verdict.release is Release.NOT_ASSESSED
+        assert result.file_verdict.release is None
         assert result.file_verdict.release_ground == REDACTION_OWED
 
     def test_a_fail_withholds_and_a_pass_releases(
@@ -693,8 +695,8 @@ class TestTheReleaseAxis:
         released = make_verdict_store(concluded=[*BASE, ("REDACT", Outcome.PASS, None)], routed=ROUTED_PAIR)
         assert verdict_module.verdict(withheld, None, config, run_dir=tmp_path).file_verdict.release is Release.WITHHELD
         result = verdict_module.verdict(released, None, config, run_dir=tmp_path)
-        assert result.file_verdict.release is Release.WITH_REDACTION
-        assert _file_verdict_entity(released).attributes["release"] == "release_with_redaction"
+        assert result.file_verdict.release is Release.REDACTED
+        assert _file_verdict_entity(released).attributes["release"] == "redacted"
 
     def test_a_surviving_finding_does_not_move_the_triage_axis(
         self, make_verdict_store: Callable[..., ProvStore], config: TriageConfig, tmp_path: Path
@@ -714,7 +716,7 @@ class TestTheReleaseAxis:
             concluded=[*BASE, ("REDACT", Outcome.FAIL, None), ("REDACT", Outcome.PASS, None)], routed=ROUTED_PAIR
         )
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
-        assert result.file_verdict.release is Release.WITH_REDACTION
+        assert result.file_verdict.release is Release.REDACTED
         assert [r.outcome for r in result.file_verdict.reasons if r.node == "REDACT"] == [Outcome.PASS]
 
 
@@ -781,8 +783,8 @@ class TestTheRedactionReviewerAnnotatesAndThisNodeDecides:
         store = make_verdict_store(concluded=[*BASE, ("REDACT", Outcome.PASS, None)], routed=ROUTED_PAIR)
         _annotate(store, status="flagged", iterations=2, flagged=["LOCATION"], model_id="stub/model", revision="a" * 40)
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
-        assert result.file_verdict.release is Release.WITH_REDACTION
-        assert _file_verdict_entity(store).attributes["release"] == "release_with_redaction"
+        assert result.file_verdict.release is Release.REDACTED
+        assert _file_verdict_entity(store).attributes["release"] == "redacted"
 
     def test_the_weighting_key_ships_off_and_unfitted(self) -> None:
         """132 recordings and 41 disagreements is not a fit; the shipped default changes nothing."""
@@ -822,7 +824,7 @@ class TestTheRedactionReviewerAnnotatesAndThisNodeDecides:
             proposal=[{"text": "pataka", "action": "release", "category": "PERSON", "why": "a syllable"}],
         )
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
-        assert result.file_verdict.release is Release.WITH_REDACTION
+        assert result.file_verdict.release is Release.REDACTED
 
     def test_an_empty_proposal_withholds_nothing(
         self, make_verdict_store: Callable[..., ProvStore], tmp_path: Path
@@ -832,7 +834,7 @@ class TestTheRedactionReviewerAnnotatesAndThisNodeDecides:
         store = make_verdict_store(concluded=[*BASE, ("REDACT", Outcome.PASS, None)], routed=ROUTED_PAIR, pii_n=1)
         _annotate(store, status="flagged", redaction="incomplete", original="carries_pii", flagged=[], proposal=[])
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
-        assert result.file_verdict.release is Release.WITH_REDACTION
+        assert result.file_verdict.release is Release.REDACTED
 
     def test_a_fail_no_re_scan_survivor_names_is_never_cleared(
         self, make_verdict_store: Callable[..., ProvStore], tmp_path: Path
@@ -915,9 +917,9 @@ class TestTheRedactionReviewerAnnotatesAndThisNodeDecides:
         """The masks and the quotes are read off the store; some reset is partial, every one is the original."""
         config = _policy_config(tmp_path, "verdict:\n  llm_redaction_withholds: true\n  llm_reset_redactions: true\n")
         for released, expected in (
-            (["Alice"], (Release.WITH_REDACTION, REVIEWER_UNMASKED_SOME)),
-            (["Alice", "Brooklyn"], (Release.WITHOUT_REDACTION, REVIEWER_UNMASKED_ALL)),
-            ([], (Release.WITH_REDACTION, None)),
+            (["Alice"], (Release.REDACTED, REVIEWER_UNMASKED_SOME)),
+            (["Alice", "Brooklyn"], (Release.AS_IS, REVIEWER_UNMASKED_ALL)),
+            ([], (Release.REDACTED, None)),
         ):
             store = make_verdict_store(
                 concluded=[*BASE, ("REDACT", Outcome.PASS, None)], routed=ROUTED_PAIR, pii_n=2, planned_mask=False
@@ -1005,7 +1007,7 @@ class TestTheRedactionReviewerAnnotatesAndThisNodeDecides:
         _annotate(store, status="clean", redaction="complete", original="clean", proposal=[])
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
         assert self._states(store) == expected
-        assert result.file_verdict.release == Release.WITHOUT_REDACTION
+        assert result.file_verdict.release == Release.AS_IS
 
     @pytest.mark.parametrize(
         ("words", "span"),
@@ -1023,7 +1025,7 @@ class TestTheRedactionReviewerAnnotatesAndThisNodeDecides:
         states = self._states(store)
         assert "released_by_kind" not in states.values()
         assert states[words[span[-1]]] == "masked"
-        assert result.file_verdict.release == Release.WITH_REDACTION
+        assert result.file_verdict.release == Release.REDACTED
 
     def test_a_duration_beside_a_name_keeps_the_name(
         self, make_verdict_store: Callable[..., ProvStore], tmp_path: Path
@@ -1041,7 +1043,7 @@ class TestTheRedactionReviewerAnnotatesAndThisNodeDecides:
             "masked",
             "masked",
         )
-        assert result.file_verdict.release == Release.WITH_REDACTION
+        assert result.file_verdict.release == Release.REDACTED
 
     def test_a_reviewer_asking_to_hide_a_duration_proposes_nothing(
         self, make_verdict_store: Callable[..., ProvStore], tmp_path: Path
@@ -1063,7 +1065,7 @@ class TestTheRedactionReviewerAnnotatesAndThisNodeDecides:
         assert ledger is not None
         (proposal,) = ledger.attributes["proposals"]
         assert proposal["agreement"] == "by_kind"
-        assert result.file_verdict.release == Release.WITHOUT_REDACTION
+        assert result.file_verdict.release == Release.AS_IS
 
     def test_a_condition_is_released_and_never_withholds(
         self, make_verdict_store: Callable[..., ProvStore], tmp_path: Path
@@ -1084,7 +1086,7 @@ class TestTheRedactionReviewerAnnotatesAndThisNodeDecides:
             ],
         )
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
-        assert result.file_verdict.release == Release.WITHOUT_REDACTION
+        assert result.file_verdict.release == Release.AS_IS
         ledger = find_measurement(store, PII_LEDGER)
         assert ledger is not None
         assert ledger.attributes["proposals"] == []
@@ -1113,7 +1115,7 @@ class TestTheRedactionReviewerAnnotatesAndThisNodeDecides:
         )
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
         assert self._states(store) == {"Parkinson's": "released_condition", "disease": "released_condition"}
-        assert result.file_verdict.release == Release.WITHOUT_REDACTION
+        assert result.file_verdict.release == Release.AS_IS
         assert "awaits" not in " ".join(reason.why for reason in result.file_verdict.reasons)
 
     def test_a_word_the_policy_always_masks_releases_a_copy_where_redact_never_ran(
@@ -1125,7 +1127,7 @@ class TestTheRedactionReviewerAnnotatesAndThisNodeDecides:
         self._mask(store, ["i", "go", "every", "October", "home"], [])
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
         assert (result.file_verdict.release, result.file_verdict.release_ground) == (
-            Release.WITH_REDACTION,
+            Release.REDACTED,
             POLICY_MASKS_ONLY,
         )
         assert self._states(store) == {"October": "masked"}
@@ -1148,7 +1150,7 @@ class TestTheRedactionReviewerAnnotatesAndThisNodeDecides:
         )
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
         assert self._states(store) == {"Alice": "masked"}
-        assert result.file_verdict.release == Release.WITH_REDACTION
+        assert result.file_verdict.release == Release.REDACTED
         named = [
             reason.why for reason in result.file_verdict.reasons if reason.why.startswith(PERSON_NAME_AWAITS_REVIEW)
         ]
@@ -1182,7 +1184,7 @@ class TestTheRedactionReviewerAnnotatesAndThisNodeDecides:
             proposal=[{"text": "the past couple of weeks", "action": "release", "category": "DATE_TIME"}],
         )
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
-        assert result.file_verdict.release is Release.WITH_REDACTION
+        assert result.file_verdict.release is Release.REDACTED
         assert result.file_verdict.release_ground == REVIEWER_CLEARED_RESCAN
 
     def test_a_reading_that_proposes_a_redaction_keeps_a_re_scan_fail_withheld(
@@ -1229,7 +1231,7 @@ class TestTheRedactionReviewerAnnotatesAndThisNodeDecides:
         store = make_verdict_store(concluded=[*BASE, ("REDACT", Outcome.PASS, None)], routed=ROUTED_PAIR, pii_n=1)
         _annotate(store, status="absent", redaction="", original="", flagged=[], failure="timeout")
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
-        assert result.file_verdict.release is Release.WITH_REDACTION
+        assert result.file_verdict.release is Release.REDACTED
 
     def test_a_redact_proposal_withholds_a_recording_redact_never_ran_on(
         self, make_verdict_store: Callable[..., ProvStore], tmp_path: Path
@@ -1264,7 +1266,7 @@ class TestTheRedactionReviewerAnnotatesAndThisNodeDecides:
             proposal=[{"text": "brooklyn", "action": "redact", "category": "LOCATION", "why": "a place"}],
         )
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
-        assert result.file_verdict.release is Release.WITHOUT_REDACTION
+        assert result.file_verdict.release is Release.AS_IS
         assert result.file_verdict.release_ground == SCAN_FOUND_NOTHING
 
     def test_a_release_only_proposal_leaves_an_unredacted_release_alone(
@@ -1282,7 +1284,7 @@ class TestTheRedactionReviewerAnnotatesAndThisNodeDecides:
             proposal=[{"text": "pataka", "action": "release", "category": "PERSON", "why": "a syllable"}],
         )
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
-        assert result.file_verdict.release is Release.WITHOUT_REDACTION
+        assert result.file_verdict.release is Release.AS_IS
 
     def test_a_flagged_re_read_raises_the_triage_axis_under_the_shipped_key(
         self, make_verdict_store: Callable[..., ProvStore], config: TriageConfig, tmp_path: Path
@@ -1302,7 +1304,7 @@ class TestTheRedactionReviewerAnnotatesAndThisNodeDecides:
             revision="a" * 40,
         )
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
-        assert result.file_verdict.triage is Triage.FLAG
+        assert result.file_verdict.triage is Triage.REVIEW
         ground = next(reason for reason in result.file_verdict.reasons if LLM_REDACTION_RESIDUE in reason.why)
         assert ground.node == "VERDICT" and ground.why.endswith(": LOCATION"), "only redacted categories"
 
@@ -1341,7 +1343,7 @@ class TestTheRedactionReviewerAnnotatesAndThisNodeDecides:
         else:
             # Owner, 2026-09-28: a flagged reading that names no words moves no mask and goes to a person.
             assert grounds == [REVIEWER_NAMED_NO_WORDS]
-            assert result.file_verdict.triage is Triage.FLAG
+            assert result.file_verdict.triage is Triage.REVIEW
 
     def test_the_key_flipped_off_leaves_the_triage_axis_alone(
         self, make_verdict_store: Callable[..., ProvStore], tmp_path: Path
@@ -1381,7 +1383,7 @@ class TestTheRedactionReviewerAnnotatesAndThisNodeDecides:
         )
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
         assert result.file_verdict.triage is Triage.PASS
-        assert result.file_verdict.release is Release.WITH_REDACTION
+        assert result.file_verdict.release is Release.REDACTED
         assert result.file_verdict.llm_redaction == {
             "status": "absent",
             "iterations": 1,
@@ -1516,7 +1518,7 @@ class TestWhatTheStoreRecords:
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
         assert "SPEECH" not in result.file_verdict.conformance
         assert result.file_verdict.findings["SPEECH"] == "uncertain"
-        assert result.file_verdict.triage is Triage.RERUN
+        assert result.file_verdict.triage is Triage.REVIEW and result.file_verdict.run_status is RunStatus.INCOMPLETE
         assert speech.id not in result.view
 
     def test_a_superseded_report_is_replaced_not_added(
@@ -1773,7 +1775,7 @@ class TestTheGatesDecideTheDeclaredTask:
         )
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
         assert "owning_branch_input_absent" in result.file_verdict.ground_keys
-        assert result.file_verdict.triage is Triage.RERUN
+        assert result.file_verdict.triage is Triage.REVIEW and result.file_verdict.run_status is RunStatus.INCOMPLETE
 
     def test_a_read_aloud_task_nothing_was_read_of_says_so(self, config: TriageConfig, tmp_path: Path) -> None:
         """Zero expected tokens realised is its own ground, not an omission count."""

@@ -52,7 +52,7 @@ def _decide(store: ProvStore, triage: Triage) -> None:
         outcome=triage,
         kind=None,
         why="the fixture's decision",
-        detail=FileVerdict(triage=triage, release=Release.NOT_ASSESSED).record(),
+        detail=FileVerdict(triage=triage, release=None).record(),
     )
 
 
@@ -74,7 +74,7 @@ def _corpus_run(root: Path, stem: str) -> Path:
     store.was_generated_by(
         store.entity(prov_type="stream", extent=(0.0, 1.0), attributes={"name": "recording"}), admitting
     )
-    _decide(store, Triage.FLAG)
+    _decide(store, Triage.REVIEW)
     store.write_jsonl(run_root / "run" / "store.jsonl")
     return run_root
 
@@ -147,7 +147,7 @@ class TestRows:
         ]
         assert [row["stem"] for row in rows] == ["sub-a_ses-1_task-vowel"]
         assert rows[0]["status"] == OK
-        assert rows[0]["transitions"]["triage"] == "flag->pass"
+        assert rows[0]["transitions"]["triage"] == "review->pass"
         assert Path(rows[0]["run_root"]).is_relative_to(out)
 
     def test_a_recording_the_replay_has_not_reached_is_a_status(self, tmp_path: Path) -> None:
@@ -202,7 +202,7 @@ class TestReport:
         """The JSON is what was counted and the Markdown leads with the recordings that did not move."""
         corpus, out = tmp_path / "corpus", tmp_path / "replay"
         runs = {}
-        for index, triage in (("a", Triage.FLAG), ("b", Triage.PASS)):
+        for index, triage in (("a", Triage.REVIEW), ("b", Triage.PASS)):
             stem = f"sub-{index}_ses-1_task-vowel"
             runs[stem] = _corpus_run(corpus, stem)
             _replay_into(runs[stem], out, stem, triage)
@@ -213,8 +213,8 @@ class TestReport:
         counted = json.loads((tmp_path / "report" / "replay_diff.json").read_text())
         assert counted["compared"] == 2
         assert counted["identical"] == 1
-        assert counted["triage"] == {"flag->flag": 1, "flag->pass": 1}
-        assert counted["moved_stems"]["triage"] == {"flag->pass": ["sub-b_ses-1_task-vowel"]}
+        assert counted["triage"] == {"review->review": 1, "review->pass": 1}
+        assert counted["moved_stems"]["triage"] == {"review->pass": ["sub-b_ses-1_task-vowel"]}
         assert "1 decisions did not move at all" in (tmp_path / "report" / "replay_diff.md").read_text()
 
     def test_an_empty_tree_is_reported_as_empty(self, tmp_path: Path) -> None:

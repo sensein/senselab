@@ -83,6 +83,7 @@ from senselab.audio.workflows.triage.vocabulary import (
     RedactionEvidence,
     Release,
     RunState,
+    RunStatus,
     TaskEvidence,
     Triage,
     _release_from,
@@ -208,7 +209,7 @@ class TestTheTriageVocabulary:
 
     def test_the_members_are_exactly_four(self) -> None:
         """verdict.md's triage axis; a branch's ``fail`` has no counterpart here."""
-        assert {member.value for member in Triage} == {"pass", "flag", "rerun", "discard"}
+        assert {member.value for member in Triage} == {"pass", "review", "discard"}
 
     def test_a_node_outcome_is_not_a_triage(self) -> None:
         """Outcome stays the node-level vocabulary; the file axis is its own type."""
@@ -251,7 +252,7 @@ class TestDiscardIsNarrow:
             hint_claims={},
             route_state="unexplained",
         )
-        assert folded.triage is Triage.RERUN
+        assert folded.triage is Triage.REVIEW and folded.run_status is RunStatus.INCOMPLETE
         assert folded.ground_keys == ["route_unexplained"]
         assert folded.discard_ground is None
         assert any(reason.why == UNEXPLAINED_CONTENT for reason in folded.reasons)
@@ -270,7 +271,7 @@ class TestDiscardIsNarrow:
             hint_claims={},
             route_state="unreadable",
         )
-        assert folded.triage is Triage.RERUN
+        assert folded.triage is Triage.REVIEW and folded.run_status is RunStatus.INCOMPLETE
         assert folded.ground_keys == ["route_unreadable"]
         assert folded.discard_ground is None
         assert any(reason.why == UNREADABLE_EMPTINESS for reason in folded.reasons)
@@ -318,7 +319,7 @@ class TestDiscardIsNarrow:
             hint_claims={},
             route_state=None,
         )
-        assert folded.triage is Triage.PASS
+        assert not folded.ground_keys
         assert folded.discard_ground is None
 
     def test_a_branch_fail_is_not_a_discard(self) -> None:
@@ -360,7 +361,7 @@ class TestDiscardIsNarrow:
             hint_claims={},
             route_state="empty",
         )
-        assert folded.triage is Triage.FLAG
+        assert folded.triage is Triage.REVIEW
         assert "route_mismatch:SPEECH" in folded.ground_keys
 
     def test_the_empty_execution_set_discards_rather_than_flagging_on_its_own(self) -> None:
@@ -414,7 +415,7 @@ class TestBranchAuthorityIsScoped:
         )
         assert folded.findings["VOICE"] == "present"
         assert folded.conformance["VOICE"] is False
-        assert folded.triage is Triage.FLAG
+        assert folded.triage is Triage.REVIEW
 
     def test_a_branch_that_proposed_no_span_resolves_its_subject_absent(self) -> None:
         """A branch with no subject is authority for that too, and the spans are what say so."""
@@ -474,7 +475,7 @@ class TestTheRoutingIsReportedBeside:
             route_state=ROUTED,
         )
         assert folded.agreement["SPEECH"] == "mismatch"
-        assert folded.triage is Triage.FLAG
+        assert folded.triage is Triage.REVIEW
         assert [reason for reason in folded.reasons if "it found it" in reason.why]
 
     def test_a_routed_branch_that_found_nothing_is_a_mismatch_and_does_not_flag(self) -> None:
@@ -495,7 +496,7 @@ class TestTheRoutingIsReportedBeside:
         )
         assert folded.agreement["SPEECH"] == "mismatch"
         assert folded.findings["SPEECH"] == "absent"
-        assert folded.triage is Triage.PASS
+        assert not folded.ground_keys
         assert not [reason for reason in folded.reasons if "found no subject" in reason.why]
 
     def test_a_declared_branch_that_found_nothing_still_flags(self) -> None:
@@ -509,7 +510,7 @@ class TestTheRoutingIsReportedBeside:
             hint_claims={"SPEECH": True},
             route_state=ROUTED,
         )
-        assert folded.triage is Triage.FLAG
+        assert folded.triage is Triage.REVIEW
         assert [reason for reason in folded.reasons if "was declared and did not find it" in reason.why]
 
     def test_an_unreadable_route_is_resolved_not_mismatched(self) -> None:
@@ -524,7 +525,7 @@ class TestTheRoutingIsReportedBeside:
             route_state=ROUTED,
         )
         assert folded.agreement["SPEECH"] == "resolved"
-        assert folded.triage is Triage.PASS
+        assert not folded.ground_keys
 
     def test_agreeing_branches_are_recorded_as_agreeing(self) -> None:
         """``agree`` is a value a reader can see, not the absence of a mismatch."""
@@ -639,7 +640,7 @@ class TestABranchThatNeverRanIsNotOneThatFailed:
             hint_claims={},
             route_state=ROUTED,
         )
-        assert folded.triage is Triage.RERUN
+        assert folded.triage is Triage.REVIEW and folded.run_status is RunStatus.INCOMPLETE
         assert folded.ground_keys == ["branch_silent:SPEECH"]
         assert any("errored without a verdict" in reason.why for reason in folded.reasons)
 
@@ -684,7 +685,7 @@ class TestABranchThatNeverRanIsNotOneThatFailed:
             hint_claims={},
             route_state=ROUTED,
         )
-        assert folded.triage is Triage.RERUN
+        assert folded.triage is Triage.REVIEW and folded.run_status is RunStatus.INCOMPLETE
         assert any(reason.node == "SPEECH" and "never ran" in reason.why for reason in folded.reasons)
 
     def test_the_branches_map_joins_the_decision_to_the_reported_conformance(self) -> None:
@@ -720,7 +721,7 @@ class TestHintsForMismatchOnly:
             route_state=ROUTED,
         )
         assert "hint_mismatch:AIRWAY" in folded.ground_keys
-        assert folded.triage in (Triage.FLAG, Triage.RERUN)
+        assert folded.triage is Triage.REVIEW
         assert folded.hints["AIRWAY"] == "claimed_not_found"
 
     def test_a_hinted_branch_that_found_its_subject_is_an_agreement(self) -> None:
@@ -800,7 +801,7 @@ class TestHintsForMismatchOnly:
             route_state=ROUTED,
         )
         assert folded.hints == {}
-        assert folded.triage is Triage.RERUN
+        assert folded.triage is Triage.REVIEW and folded.run_status is RunStatus.INCOMPLETE
         assert folded.ground_keys == ["declaration_unread"]
         assert any(reason.why == UNREAD_DECLARATION for reason in folded.reasons)
 
@@ -850,21 +851,21 @@ class TestReleaseIsDecidedFromEvidenceNotFromRedactsAbsence:
         folded = _without_redact(
             RedactionEvidence(lexical_words_n=42, scanned=True, findings_n=0), speech=RunState.COMPLETED
         )
-        assert folded.release is not Release.NOT_ASSESSED
+        assert folded.release is not None
 
     def test_a_declined_scan_is_not_unassessed(self) -> None:
         """SPEECH read every lexical word out of the task's own stimulus, so nothing was disclosed."""
         folded = _without_redact(
             RedactionEvidence(lexical_words_n=9, scanned=False, findings_n=0), speech=RunState.COMPLETED
         )
-        assert folded.release is not Release.NOT_ASSESSED
+        assert folded.release is not None
 
     def test_a_transcript_with_no_lexical_word_is_not_unassessed(self) -> None:
         """SPEECH ran and the consensus carried no word; a redaction has nothing to read."""
         folded = _without_redact(
             RedactionEvidence(lexical_words_n=0, scanned=None, findings_n=0), speech=RunState.COMPLETED
         )
-        assert folded.release is not Release.NOT_ASSESSED
+        assert folded.release is not None
 
     def test_a_recording_speech_never_ran_on_is_unassessed(self) -> None:
         """Nothing read its lexical content, so the axis cannot say the original may be handed on.
@@ -874,7 +875,7 @@ class TestReleaseIsDecidedFromEvidenceNotFromRedactsAbsence:
         artifacts only. The axis now describes the original too, and that premise is void.
         """
         folded = _without_redact(RedactionEvidence(), speech=RunState.SKIPPED)
-        assert folded.release is Release.NOT_ASSESSED
+        assert folded.release is None
         assert folded.release_ground == NO_TRANSCRIPT
 
     def test_the_four_cleared_grounds_name_the_same_state(self) -> None:
@@ -889,7 +890,7 @@ class TestReleaseIsDecidedFromEvidenceNotFromRedactsAbsence:
             _without_redact(RedactionEvidence(lexical_words_n=0), speech=RunState.COMPLETED),
             _without_redact(RedactionEvidence(), speech=RunState.SKIPPED, speech_route=DECLINED),
         ]
-        assert {folded.release for folded in cleared} == {Release.WITHOUT_REDACTION}
+        assert {folded.release for folded in cleared} == {Release.AS_IS}
         assert {folded.release_ground for folded in cleared} == set(RELEASE_WITHOUT_REDACTION_GROUNDS) - {
             REVIEWER_UNMASKED_ALL,
             NO_CONTENT_MASKED,
@@ -900,7 +901,7 @@ class TestReleaseIsDecidedFromEvidenceNotFromRedactsAbsence:
     def test_a_speech_that_errored_is_unassessed(self) -> None:
         """The one genuine unknown: nothing can say whether the recording carried anything."""
         folded = _without_redact(RedactionEvidence(), speech=RunState.ERRORED)
-        assert folded.release is Release.NOT_ASSESSED
+        assert folded.release is None
         assert folded.release_ground == SPEECH_UNREAD
 
     def test_a_finding_redact_never_answered_is_unassessed(self) -> None:
@@ -908,7 +909,7 @@ class TestReleaseIsDecidedFromEvidenceNotFromRedactsAbsence:
         folded = _without_redact(
             RedactionEvidence(lexical_words_n=42, scanned=True, findings_n=3), speech=RunState.COMPLETED
         )
-        assert folded.release is Release.NOT_ASSESSED
+        assert folded.release is None
         assert folded.release_ground == REDACTION_OWED
 
     def test_lexical_content_with_no_scan_record_is_unassessed(self) -> None:
@@ -916,35 +917,29 @@ class TestReleaseIsDecidedFromEvidenceNotFromRedactsAbsence:
         folded = _without_redact(
             RedactionEvidence(lexical_words_n=42, scanned=None, findings_n=0), speech=RunState.COMPLETED
         )
-        assert folded.release is Release.NOT_ASSESSED
+        assert folded.release is None
         assert folded.release_ground == SCAN_UNRECORDED
 
     def test_a_cleared_recording_does_not_read_as_a_redacted_one(self) -> None:
         """Nothing was redacted, so there is no redacted artifact for the axis to be about."""
         folded = _without_redact(RedactionEvidence(lexical_words_n=0), speech=RunState.COMPLETED)
-        assert folded.release is not Release.WITH_REDACTION
+        assert folded.release is not Release.REDACTED
 
     def test_a_redact_verdict_still_decides_where_one_stands(self) -> None:
         """Evidence never overrides the node that actually ran."""
-        assert _with_redact(Outcome.PASS).release is Release.WITH_REDACTION
+        assert _with_redact(Outcome.PASS).release is Release.REDACTED
         assert _with_redact(Outcome.PASS).release_ground is None
 
 
 class TestTheReleaseAxisNamesWhichArtefactMayBeHandedOn:
-    """Four values over one question: which artefact of this recording may I hand on?
+    """Three values over one question: which artefact of this recording may I hand on?
 
     ``specs/20260924-which-artefact-is-releasable/design.md``.
     """
 
-    def test_the_axis_offers_exactly_the_five_answers(self) -> None:
-        """Total and exclusive: the original, only the redacted copy, a policy hold, a discard, or unknown."""
-        assert {member.value for member in Release} == {
-            "release_without_redaction",
-            "release_with_redaction",
-            "withheld",
-            "discarded",
-            "not_assessed",
-        }
+    def test_the_axis_offers_exactly_the_three_answers(self) -> None:
+        """The original, only the redacted copy, or a policy hold; a discard and an unassessed release have none."""
+        assert {member.value for member in Release} == {"as_is", "redacted", "withheld"}
 
     def test_a_redact_flag_withholds(self) -> None:
         """Unresolved is not cleared."""
@@ -957,7 +952,7 @@ class TestTheReleaseAxisNamesWhichArtefactMayBeHandedOn:
 
     def test_a_redact_pass_releases_only_the_redacted_artefact(self) -> None:
         """REDACT passes on having removed findings the original still carries."""
-        assert _with_redact(Outcome.PASS).release is Release.WITH_REDACTION
+        assert _with_redact(Outcome.PASS).release is Release.REDACTED
 
     def test_only_a_reading_that_ran_releases_the_original(self) -> None:
         """Every ground behind the permissive value is one where something read the recording."""
@@ -1003,7 +998,7 @@ class TestTheReleaseAxisNamesWhichArtefactMayBeHandedOn:
         failed = [NodeVerdict("REDACT", Outcome.FAIL, None, "the scan concluded")]
         evidence = RedactionEvidence(rescan_survivors=("DATE_TIME",), masks_n=1, masks_final_n=1)
         ran: dict[str, RunState] = {}
-        assert _release_from(passed, evidence, ran)[0] is Release.WITH_REDACTION
+        assert _release_from(passed, evidence, ran)[0] is Release.REDACTED
         assert (
             _release_from(passed, evidence, ran, reviewer_withholds=REVIEWER_PROPOSED_REDACTION)[0] is Release.WITHHELD
         )
@@ -1036,7 +1031,7 @@ class TestTheReleaseAxisNamesWhichArtefactMayBeHandedOn:
             RedactionEvidence(lexical_words_n=9, scanned=False),
             RedactionEvidence(lexical_words_n=0),
         ):
-            assert _release_from([], evidence, ran)[0] is Release.WITHOUT_REDACTION
+            assert _release_from([], evidence, ran)[0] is Release.AS_IS
             assert _release_from([], evidence, ran, reviewer_withholds=REVIEWER_PROPOSED_REDACTION) == (
                 Release.WITHHELD,
                 REVIEWER_PROPOSED_REDACTION,
@@ -1080,7 +1075,7 @@ class TestTheReleaseAxisNamesWhichArtefactMayBeHandedOn:
             policy=FoldPolicy(llm_redaction_withholds=True),
         )
         assert folded.triage is Triage.DISCARD
-        assert folded.release is Release.DISCARDED
+        assert folded.release is None
 
     def test_the_reviewer_never_moves_an_unassessed_recording(self) -> None:
         """``not_assessed`` stays what it is: a gap is not a release for the reviewer to tighten."""
@@ -1093,7 +1088,7 @@ class TestTheReleaseAxisNamesWhichArtefactMayBeHandedOn:
             assert _release_from([], evidence, ran, reviewer_withholds=REVIEWER_PROPOSED_REDACTION) == _release_from(
                 [], evidence, ran
             )
-            assert _release_from([], evidence, ran)[0] is Release.NOT_ASSESSED
+            assert _release_from([], evidence, ran)[0] is None
 
 
 class TestAReviewerReadingClearsAReScanFail:
@@ -1112,7 +1107,7 @@ class TestAReviewerReadingClearsAReScanFail:
             lexical_words_n=40, scanned=True, findings_n=1, rescan_survivors=("DATE_TIME",), masks_n=1, masks_final_n=1
         )
         assert _release_from(self._FAILED, evidence, {}, reviewer_clears=True) == (
-            Release.WITH_REDACTION,
+            Release.REDACTED,
             REVIEWER_CLEARED_RESCAN,
         )
         assert _release_from(self._FAILED, evidence, {}) == (Release.WITHHELD, REDACT_VERIFY_FOUND)
@@ -1165,7 +1160,7 @@ class TestAReviewerReadingClearsAReScanFail:
         }
         for annotation in (self._CLEAN, release_only):
             folded = self._fold(annotation, on)
-            assert (folded.release, folded.release_ground) == (Release.WITH_REDACTION, REVIEWER_CLEARED_RESCAN)
+            assert (folded.release, folded.release_ground) == (Release.REDACTED, REVIEWER_CLEARED_RESCAN)
 
     def test_a_reading_that_finds_pii_keeps_it_withheld(self) -> None:
         """A redact proposal, or an original read as carrying PII, is not a clearing reading."""
@@ -1215,29 +1210,29 @@ class TestTheMasksThatStandDecideTheRelease:
 
     def test_unchanged_masks_keep_redacts_own_decision(self) -> None:
         """No mask lost a word: REDACT's copy, with no ground of the fold's own."""
-        assert _release_from(self._PASSED, self._evidence(2, changed=False), {}) == (Release.WITH_REDACTION, None)
+        assert _release_from(self._PASSED, self._evidence(2, changed=False), {}) == (Release.REDACTED, None)
 
     def test_the_reviewers_unmasks_thin_the_copy_or_release_the_original(self) -> None:
         """Some masks standing is a partial copy; none standing is the original."""
         assert _release_from(self._PASSED, self._evidence(1, unmasked_n=2), {}) == (
-            Release.WITH_REDACTION,
+            Release.REDACTED,
             REVIEWER_UNMASKED_SOME,
         )
         assert _release_from(self._PASSED, self._evidence(0, unmasked_n=3), {}) == (
-            Release.WITHOUT_REDACTION,
+            Release.AS_IS,
             REVIEWER_UNMASKED_ALL,
         )
 
     def test_the_content_word_trim_alone_has_its_own_grounds(self) -> None:
         """A mask trimmed to its content words with no reviewer involved is named as the trim's."""
-        assert _release_from(self._PASSED, self._evidence(2), {}) == (Release.WITH_REDACTION, MASKS_TRIMMED_TO_CONTENT)
-        assert _release_from(self._PASSED, self._evidence(0), {}) == (Release.WITHOUT_REDACTION, NO_CONTENT_MASKED)
+        assert _release_from(self._PASSED, self._evidence(2), {}) == (Release.REDACTED, MASKS_TRIMMED_TO_CONTENT)
+        assert _release_from(self._PASSED, self._evidence(0), {}) == (Release.AS_IS, NO_CONTENT_MASKED)
 
     def test_a_cleared_rescan_fail_composes_with_the_unmasks(self) -> None:
         """The reading clears the fail and then unmasks what it named."""
         evidence = self._evidence(0, unmasked_n=2, survivors=("DATE_TIME",))
         assert _release_from(self._FAILED, evidence, {}, reviewer_clears=True) == (
-            Release.WITHOUT_REDACTION,
+            Release.AS_IS,
             REVIEWER_UNMASKED_ALL,
         )
         assert _release_from(self._FAILED, evidence, {}) == (Release.WITHHELD, REDACT_VERIFY_FOUND)
@@ -1249,7 +1244,7 @@ class TestTheMasksThatStandDecideTheRelease:
         original, story-recall and productive-vocabulary above all.
         """
         exempt_only = RedactionEvidence(lexical_words_n=40, scanned=True, findings_n=1, masks_n=0, masks_final_n=0)
-        assert _release_from(self._PASSED, exempt_only, {}) == (Release.WITHOUT_REDACTION, FINDINGS_ARE_TASK_CONTENT)
+        assert _release_from(self._PASSED, exempt_only, {}) == (Release.AS_IS, FINDINGS_ARE_TASK_CONTENT)
 
     def test_a_cleared_rescan_fail_with_no_mask_releases_the_original(self) -> None:
         """The reviewer clears a fail REDACT planned no mask over: the original, under its own ground."""
@@ -1257,7 +1252,7 @@ class TestTheMasksThatStandDecideTheRelease:
             lexical_words_n=40, scanned=True, findings_n=1, rescan_survivors=("PERSON",), masks_n=0, masks_final_n=0
         )
         assert _release_from(self._FAILED, unmasked, {}, reviewer_clears=True) == (
-            Release.WITHOUT_REDACTION,
+            Release.AS_IS,
             REVIEWER_CLEARED_UNMASKED,
         )
 
@@ -1267,7 +1262,7 @@ class TestTheMasksThatStandDecideTheRelease:
             lexical_words_n=40, scanned=True, findings_n=1, rescan_survivors=("PERSON",), masks_n=1, masks_final_n=1
         )
         assert _release_from(self._FAILED, kept, {}, reviewer_clears=True) == (
-            Release.WITH_REDACTION,
+            Release.REDACTED,
             REVIEWER_CLEARED_RESCAN,
         )
 
@@ -1280,7 +1275,7 @@ class TestTheMasksThatStandDecideTheRelease:
         )
         ran = {"SPEECH": RunState.COMPLETED}
         owed = RedactionEvidence(lexical_words_n=42, scanned=True, findings_n=3, masks_changed=True)
-        assert _release_from([], owed, ran)[0] is Release.NOT_ASSESSED
+        assert _release_from([], owed, ran)[0] is None
 
     def test_any_reading_taken_may_unmask(self) -> None:
         """Owner, 2026-09-27: the reviewer names exactly what to unmask, whatever else it proposes.
@@ -1351,7 +1346,7 @@ class TestAConditionNeverWithholds:
     def test_a_condition_alone_releases_and_flags_nothing(self) -> None:
         """Policy v7: a condition is neither withheld nor a residue flag, whatever the cohort."""
         folded = self._fold(self._conditions("Parkinson's", "synovial joint cyst"), self._POLICY)
-        assert folded.release is Release.WITH_REDACTION
+        assert folded.release is Release.REDACTED
         assert not any(reason.why.startswith(LLM_REDACTION_RESIDUE) for reason in folded.reasons)
 
     def test_a_condition_beside_another_category_withholds_for_the_other_one(self) -> None:
@@ -1387,13 +1382,13 @@ class TestANonLexicalTaskIsClearedRatherThanHeld:
     def test_a_declined_speech_branch_clears_the_recording(self) -> None:
         """The ruleset declining SPEECH is evidence, not the absence of it."""
         folded = _without_redact(RedactionEvidence(), speech=RunState.SKIPPED, speech_route=DECLINED)
-        assert folded.release is Release.WITHOUT_REDACTION
+        assert folded.release is Release.AS_IS
         assert folded.release_ground == NON_LEXICAL_TASK
 
     def test_a_routed_speech_branch_that_never_ran_is_still_unassessed(self) -> None:
         """Routing asked for SPEECH and got nothing back: that is a gap, not a clearance."""
         folded = _without_redact(RedactionEvidence(), speech=RunState.SKIPPED, speech_route=ROUTED)
-        assert folded.release is Release.NOT_ASSESSED
+        assert folded.release is None
         assert folded.release_ground == NO_TRANSCRIPT
 
     def test_clearing_a_non_lexical_task_raises_no_flag(self) -> None:
@@ -1419,7 +1414,7 @@ class TestASpeechTaskThatProducedNoWordIsFlagged:
     def test_it_is_still_releasable(self) -> None:
         """Flagging it does not withhold it: there is nothing in it to redact."""
         folded = _without_redact(RedactionEvidence(lexical_words_n=0), speech=RunState.COMPLETED)
-        assert folded.release is Release.WITHOUT_REDACTION
+        assert folded.release is Release.AS_IS
         assert folded.release_ground == NO_LEXICAL_WORD
 
     def test_a_declined_branch_with_no_words_does_not_flag(self) -> None:
@@ -1450,7 +1445,7 @@ class TestARedactNonPassIsVisibleWithoutFlippingTriage:
     def test_an_incomplete_verification_reruns(self) -> None:
         """REDACT's ``flag`` is verification that did not finish: the pipeline owes the recording a re-scan."""
         folded = _with_redact(Outcome.FLAG, speech=True, speech_route=ROUTED)
-        assert folded.triage is Triage.RERUN
+        assert folded.triage is Triage.REVIEW and folded.run_status is RunStatus.INCOMPLETE
         assert "redact_rescan_incomplete" in folded.ground_keys
         assert folded.release is Release.WITHHELD
 
@@ -1472,7 +1467,7 @@ class TestReasonsCarryEveryContribution:
             hint_claims={},
             route_state=ROUTED,
         )
-        assert folded.triage is Triage.FLAG
+        assert folded.triage is Triage.REVIEW
         assert len([reason for reason in folded.reasons if reason.outcome is Outcome.FLAG]) == 2
 
     def test_an_admit_failure_leads_the_reasons_without_erasing_them(self) -> None:
@@ -1525,7 +1520,7 @@ class TestACriticalAbsenceFlagsAndNamesItself:
             route_state="unexplained",
             critical_absences=_CONSENSUS_GONE,
         )
-        assert folded.triage is Triage.RERUN
+        assert folded.triage is Triage.REVIEW and folded.run_status is RunStatus.INCOMPLETE
         assert "critical_absence" in folded.ground_keys
         assert folded.discard_ground is None
         assert folded.critical_absences == _CONSENSUS_GONE
@@ -1632,21 +1627,21 @@ class TestAgreementUnplacedFindingsAndASecondSpeaker:
         """r6's open-response card: "Wisconsin" is masked, so agreeing with it releases the redacted copy."""
         assert self._fold(self.READING).release is Release.WITHHELD
         agreed = self._fold(self.READING, agreed=frozenset({0}))
-        assert (agreed.release, agreed.triage) == (Release.WITH_REDACTION, Triage.PASS)
+        assert (agreed.release, agreed.triage) == (Release.REDACTED, Triage.PASS)
 
     def test_an_unplaced_finding_no_one_read_withholds_and_flags(self) -> None:
         """Nothing placed the finding and no reviewer read the transcript: nothing may be released."""
         folded = self._fold({}, unplaced=[("PERSON", UNPLACED_UNREAD)])
         assert (folded.release, folded.release_ground) == (Release.WITHHELD, UNPLACED_FINDING_UNREAD)
-        assert folded.triage is Triage.FLAG
+        assert folded.triage is Triage.REVIEW
 
     def test_an_open_unplaced_finding_flags_and_a_placed_one_does_not(self) -> None:
         """A reading that settles nothing about it sends the recording to review; placing it settles it."""
         reading = {"status": "flagged", "original": "carries_pii", "proposal": []}
         opened = self._fold(reading, unplaced=[("PERSON", UNPLACED_OPEN)])
-        assert opened.triage is Triage.FLAG
+        assert opened.triage is Triage.REVIEW
         assert any(reason.why.startswith(UNPLACED_FINDING_OPEN) for reason in opened.reasons)
-        assert opened.release is Release.WITH_REDACTION
+        assert opened.release is Release.REDACTED
         placed = self._fold(reading, unplaced=[("PERSON", UNPLACED_PLACED)])
         assert placed.triage is Triage.PASS
 
@@ -1654,11 +1649,11 @@ class TestAgreementUnplacedFindingsAndASecondSpeaker:
         """The reviewer's ``more_than_one`` flags; off by policy, or already a diarization flag, it adds nothing."""
         reading = {"status": "clean", "original": "clean", "speakers": "more_than_one", "proposal": []}
         heard = self._fold(reading)
-        assert heard.triage is Triage.FLAG
+        assert heard.triage is Triage.REVIEW
         assert [reason.why for reason in heard.reasons if reason.node == "VERDICT"] == [
             f"{REVIEWER_HEARD_SECOND_SPEAKER}: no words quoted"
         ]
-        assert heard.release is Release.WITH_REDACTION, "a flag for review, not a release decision"
+        assert heard.release is Release.REDACTED, "a flag for review, not a release decision"
         assert self._fold(reading, policy=FoldPolicy()).triage is Triage.PASS
         gate = {"gate": DOMINANT_SPEAKER_GATE, "passed": False, "ground": "another speaker", "reading": "share"}
         diarized = self._fold(reading, flag_gates=[gate])
@@ -1674,8 +1669,8 @@ class TestAgreementUnplacedFindingsAndASecondSpeaker:
         expected = {"text": "You were given the text.", "expected": True, "why": "the examiner's instruction"}
         reading = {"status": "clean", "original": "clean", "speakers": "more_than_one", "proposal": []}
         heard = self._fold({**reading, "other_speakers": [expected]})
-        assert heard.triage is Triage.FLAG
-        assert heard.release is Release.WITH_REDACTION, "a flag for review, not a release decision"
+        assert heard.triage is Triage.REVIEW
+        assert heard.release is Release.REDACTED, "a flag for review, not a release decision"
         assert [reason.why for reason in heard.reasons if reason.node == "VERDICT"] == [
             f"{REVIEWER_HEARD_SECOND_SPEAKER}: 1 passage(s) quoted, 1 expected by the instructions, 0 not"
         ]
@@ -1691,8 +1686,8 @@ class TestAgreementUnplacedFindingsAndASecondSpeaker:
         examiner = {"text": "I said you have up to five minutes", "expected": True, "why": "possibly the examiner"}
         reading = {"status": "clean", "original": "clean", "speakers": "unclear", "proposal": []}
         heard = self._fold({**reading, "other_speakers": [examiner]})
-        assert heard.triage is Triage.FLAG
-        assert heard.release is Release.WITH_REDACTION, "a flag for review, not a release decision"
+        assert heard.triage is Triage.REVIEW
+        assert heard.release is Release.REDACTED, "a flag for review, not a release decision"
         assert [reason.why for reason in heard.reasons if reason.node == "VERDICT"] == [
             f"{REVIEWER_HEARD_SECOND_SPEAKER}: 1 passage(s) quoted, 1 expected by the instructions, 0 not"
         ]
@@ -1705,7 +1700,7 @@ class TestAgreementUnplacedFindingsAndASecondSpeaker:
         model = {"text": "The birch canoe slid on the smooth planks.", "expected": True, "why": "the model reading"}
         reading = {"status": "clean", "original": "clean", "speakers": "more_than_one", "proposal": []}
         heard = self._fold({**reading, "other_speakers": [model]}, declared_family="harvard-sentences-list")
-        assert heard.triage is Triage.FLAG
+        assert heard.triage is Triage.REVIEW
         gate = {
             "gate": DOMINANT_SPEAKER_GATE,
             "passed": False,
@@ -1721,7 +1716,7 @@ class TestAgreementUnplacedFindingsAndASecondSpeaker:
             policy=policy,
             declared_family="harvard-sentences-list",
         )
-        assert diarized.triage is Triage.FLAG
+        assert diarized.triage is Triage.REVIEW
         assert [reason.why for reason in diarized.reasons if reason.node == "VERDICT"] == [
             "another speaker holds part of the task extent: extent_dominant_speaker_share read 0.88 against 0.9; "
             f"{MODEL_SPEAKER_PERMITTED}"
@@ -1740,8 +1735,8 @@ class TestAgreementUnplacedFindingsAndASecondSpeaker:
         """Owner, 2026-09-28: a judgment with no entries moves no mask and goes to a person."""
         reading = {"status": "flagged", "original": "clean", "redaction": "incomplete", "proposal": []}
         on = self._fold(reading, policy=FoldPolicy(llm_redaction_withholds=True, llm_contradiction_flags=True))
-        assert on.triage is Triage.FLAG and REVIEWER_NAMED_NO_WORDS in [reason.why for reason in on.reasons]
-        assert on.release is Release.WITH_REDACTION, "a flag for review, not a release decision"
+        assert on.triage is Triage.REVIEW and REVIEWER_NAMED_NO_WORDS in [reason.why for reason in on.reasons]
+        assert on.release is Release.REDACTED, "a flag for review, not a release decision"
         assert self._fold(reading).triage is Triage.PASS
         agreeing = {"status": "flagged", "original": "carries_pii", "redaction": "complete", "proposal": []}
         assert self._fold(agreeing, policy=FoldPolicy(llm_contradiction_flags=True)).triage is Triage.PASS
@@ -2109,7 +2104,7 @@ class TestOperationalGroundsRerun:
             hint_claims={},
             route_state=ROUTED,
         )
-        assert folded.triage is Triage.FLAG
+        assert folded.triage is Triage.REVIEW
         assert folded.ground_keys == ["conformance:SPEECH"]
 
     def test_no_classifier_output_reruns_and_keeps_the_participant_ground(self) -> None:
@@ -2126,7 +2121,7 @@ class TestOperationalGroundsRerun:
             hint_claims={},
             route_state=ROUTED,
         )
-        assert folded.triage is Triage.RERUN
+        assert folded.triage is Triage.REVIEW and folded.run_status is RunStatus.INCOMPLETE
         assert folded.ground_keys == ["conformance:SPEECH", "taxonomy_no_classifier"]
 
     def test_every_operational_key_reads_as_operational(self) -> None:
@@ -2158,7 +2153,7 @@ class TestOperationalGroundsRerun:
             ],
             **common,
         )
-        assert owed.triage is Triage.RERUN
+        assert owed.triage is Triage.REVIEW and owed.run_status is RunStatus.INCOMPLETE
         assert (owed.release, owed.release_ground) == (clean.release, clean.release_ground)
 
 
@@ -2334,7 +2329,7 @@ class TestTheDeclaredTaskDecides:
             redaction=RedactionEvidence(lexical_words_n=0, scanned=True),
             task=TaskEvidence(owning_branches=("SPEECH",), duration_s=3.9, minimum_duration_s=1.0),
         )
-        assert folded.triage is Triage.RERUN
+        assert folded.triage is Triage.REVIEW and folded.run_status is RunStatus.INCOMPLETE
         assert folded.discard_ground is None
 
     def _breath(self, *, route_state: str, duration_s: float, absent: tuple[str, ...]) -> FileVerdict:
@@ -2362,7 +2357,7 @@ class TestTheDeclaredTaskDecides:
     def test_an_owner_without_its_instrument_reruns_rather_than_calling_the_task_absent(self) -> None:
         """AIRWAY had no hear_scores to look with and found nothing: owed a rerun, not a discard."""
         folded = self._breath(route_state="routed", duration_s=1.98, absent=("AIRWAY:hear_scores",))
-        assert folded.triage is Triage.RERUN
+        assert folded.triage is Triage.REVIEW and folded.run_status is RunStatus.INCOMPLETE
         assert folded.discard_ground is None
         assert KEY_OWNING_BRANCH_INPUT_ABSENT in folded.ground_keys
 
@@ -2375,7 +2370,7 @@ class TestTheDeclaredTaskDecides:
     def test_an_empty_route_whose_owner_lacked_an_input_reruns(self) -> None:
         """An empty route is not called empty while the owning branch could not look."""
         folded = self._breath(route_state="empty", duration_s=3.0, absent=("AIRWAY:hear_scores",))
-        assert folded.triage is Triage.RERUN
+        assert folded.triage is Triage.REVIEW and folded.run_status is RunStatus.INCOMPLETE
         assert folded.discard_ground is None
 
     def test_a_too_short_recording_discards_whatever_its_owner_lacked(self) -> None:
@@ -2451,7 +2446,7 @@ class TestABreathTaskIsDecidedOnDetectedBreaths:
             events=None,
             absent=("AIRWAY:hear_scores",),
         )
-        assert folded.triage is Triage.RERUN
+        assert folded.triage is Triage.REVIEW and folded.run_status is RunStatus.INCOMPLETE
         assert folded.discard_ground is None
 
     def test_one_long_breath_for_three_quick_ones_annotates_a_task_mismatch(self) -> None:
@@ -2549,7 +2544,7 @@ class TestABreathTaskIsDecidedOnItsTaskEvents:
     def test_weak_events_are_flagged_for_review_never_discarded(self) -> None:
         """A review decision keeps the recording and flags it."""
         folded = self._fold(mode=BREATH_SUSTAINED, decision="review", phases=6)
-        assert folded.triage is Triage.FLAG
+        assert folded.triage is Triage.REVIEW
         assert folded.discard_ground is None
         assert KEY_BREATH_REVIEW_LOW_CONFIDENCE in folded.ground_keys
 
@@ -2572,7 +2567,7 @@ class TestABreathTaskIsDecidedOnItsTaskEvents:
         folded = self._fold(
             mode=BREATH_SUSTAINED, decision=None, absent=("spectrogram_narrowband",), conformance=UNDETERMINED
         )
-        assert folded.triage is Triage.RERUN
+        assert folded.triage is Triage.REVIEW and folded.run_status is RunStatus.INCOMPLETE
         assert KEY_OWNING_BRANCH_INPUT_ABSENT in folded.ground_keys
 
     def test_the_old_measure_decides_nothing(self) -> None:
@@ -2643,7 +2638,7 @@ class TestAVoiceTaskIsDecidedOnItsPhonationAttempt:
     def test_the_review_band_flags(self) -> None:
         """A reading that differs between strict and lenient settings is left for review."""
         folded = self._fold(found=True, review=("glide_bound",))
-        assert folded.triage is Triage.FLAG
+        assert folded.triage is Triage.REVIEW
         assert VOICE_REVIEW_LOW_CONFIDENCE in folded.ground_keys
 
     def test_a_shutoff_during_phonation_flags(self) -> None:

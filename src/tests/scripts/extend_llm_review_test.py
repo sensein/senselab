@@ -272,7 +272,7 @@ class TestTheDecisionIsTakenAgainOverTheReading:
         )
         # The counter is the guard against a re-fold that silently did not run: a skip or a raise
         # would leave every assertion below satisfied by the seeded verdict alone.
-        assert list(summary["refolds"]) == ["rerun/not_assessed"]
+        assert list(summary["refolds"]) == ["review/"]
         store = ProvStore.read_jsonl(run_root / "run" / "store.jsonl", run_id=run_root.name)
         assert store.is_invalidated(held["VERDICT"])
         live = [entity for entity in store.entities("verdict") if not store.is_invalidated(entity.id)]
@@ -461,7 +461,7 @@ class TestTheDecisionIsTakenAgainOverTheReading:
             hints=_hints(tmp_path, run_root),
         )
         assert summary["counts"] == {"ok": 1}
-        assert list(summary["refolds"]) == ["rerun/not_assessed"]
+        assert list(summary["refolds"]) == ["review/"]
 
     def test_a_run_root_with_no_log_and_no_named_source_is_an_error_not_a_blind_refold(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

@@ -572,7 +572,7 @@ class TestTheFoldSettlesTheReleaseOfAFail:
     ) -> None:
         """The triple a pass would have written, over the plan REDACT left in the store."""
         released = self._failed(store, redact_config, tmp_path, monkeypatch)
-        written = _settle(store, "release_with_redaction", REVIEWER_CLEARED_RESCAN, tmp_path)
+        written = _settle(store, "redacted", REVIEWER_CLEARED_RESCAN, tmp_path)
         assert sorted(path.name for path in written.values()) == sorted(RELEASED_FILES)
         assert (released / "transcript.txt").read_text() == "hello [PERSON]\n"
         assert "Alice" not in (released / "consensus.json").read_text()
@@ -586,7 +586,7 @@ class TestTheFoldSettlesTheReleaseOfAFail:
     ) -> None:
         """A fold that withholds again removes a copy an earlier fold released."""
         released = self._failed(store, redact_config, tmp_path, monkeypatch)
-        _settle(store, "release_with_redaction", REVIEWER_CLEARED_RESCAN, tmp_path)
+        _settle(store, "redacted", REVIEWER_CLEARED_RESCAN, tmp_path)
         assert _settle(store, "withheld", None, tmp_path) == {}
         assert not any((released / name).exists() for name in RELEASED_FILES)
 
@@ -618,7 +618,7 @@ class TestTheFoldSettlesTheReleaseOfAFail:
         _stub_pii(monkeypatch, findings=[])
         redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
         before = (_release(tmp_path) / "transcript.txt").read_text()
-        _settle(store, "release_with_redaction", None, tmp_path)
+        _settle(store, "redacted", None, tmp_path)
         assert (_release(tmp_path) / "transcript.txt").read_text() == before == "hello [PERSON]\n"
 
 
@@ -759,8 +759,8 @@ class TestTheWordLevelMaskRule:
         plan = _plan(store)
         assert [mask.outcome for mask in plan.masks] == [MASK_UNCHANGED, MASK_UNMASKED]
         assert _states(plan)["Brooklyn"] == UNMASKED_BY_REVIEWER
-        _write_ledger(store, plan, "release_with_redaction", REVIEWER_UNMASKED_SOME)
-        _settle(store, "release_with_redaction", REVIEWER_UNMASKED_SOME, tmp_path)
+        _write_ledger(store, plan, "redacted", REVIEWER_UNMASKED_SOME)
+        _settle(store, "redacted", REVIEWER_UNMASKED_SOME, tmp_path)
         released = _release(tmp_path)
         assert (released / "transcript.txt").read_text() == "i met [PERSON] in Brooklyn today\n"
         assert _silent(released / "audio.wav", 2.1, 2.4)
@@ -783,8 +783,8 @@ class TestTheWordLevelMaskRule:
         (extent,) = plan.final
         assert extent.start <= 2.0 and extent.end >= 2.5
         assert extent.end <= 3.0, "the padding stops where the unmasked neighbour begins"
-        _write_ledger(store, plan, "release_with_redaction", REVIEWER_UNMASKED_SOME)
-        _settle(store, "release_with_redaction", REVIEWER_UNMASKED_SOME, tmp_path)
+        _write_ledger(store, plan, "redacted", REVIEWER_UNMASKED_SOME)
+        _settle(store, "redacted", REVIEWER_UNMASKED_SOME, tmp_path)
         released = _release(tmp_path)
         assert (released / "transcript.txt").read_text() == "i met [PERSON] in Brooklyn today\n"
         assert _silent(released / "audio.wav", 2.05, 2.45)
@@ -930,8 +930,8 @@ class TestTheWordLevelMaskRule:
         plan = _plan(store, applies=False)
         assert [mask.outcome for mask in plan.masks] == [MASK_UNCHANGED]
         assert "in" not in _states(plan), "a word only a timing hull reaches is not the finding's"
-        _write_ledger(store, plan, "release_with_redaction", None)
-        _settle(store, "release_with_redaction", None, tmp_path)
+        _write_ledger(store, plan, "redacted", None)
+        _settle(store, "redacted", None, tmp_path)
         released = _release(tmp_path)
         assert (released / "transcript.txt").read_text() == "back in [DATE_TIME] is\n"
         assert '"words_n": 2' in (released / "consensus.json").read_text()
@@ -956,8 +956,8 @@ class TestTheWordLevelMaskRule:
         assert (mask.outcome, mask.task_words_n) == (MASK_UNCHANGED, 2)
         assert _states(plan) == {"Maria": MASKED, "Smith": MASKED}, "no task word is listed under a mask"
         assert len(plan.final) == 2
-        _write_ledger(store, plan, "release_with_redaction", None)
-        _settle(store, "release_with_redaction", None, tmp_path)
+        _write_ledger(store, plan, "redacted", None)
+        _settle(store, "redacted", None, tmp_path)
         released = _release(tmp_path)
         assert (released / "transcript.txt").read_text() == "the caterpillar [PERSON] ate leaves [PERSON]\n"
         assert _silent(released / "audio.wav", 2.1, 2.4) and _silent(released / "audio.wav", 5.1, 5.4)
@@ -1141,7 +1141,7 @@ class TestTheWordLevelMaskRule:
             [{**_release_entry("Brooklyn", "PERSON"), "relabel": "other_non_person"}],
             original="carries_pii",
         )
-        record = _plan(store).record(release="release_with_redaction", release_ground=REVIEWER_UNMASKED_SOME)
+        record = _plan(store).record(release="redacted", release_ground=REVIEWER_UNMASKED_SOME)
         assert record["name"] == PII_LEDGER
         assert record["counts"]["masked_n"] == 1
         assert record["counts"]["unmasked_by_reviewer_n"] == 1
@@ -1918,7 +1918,8 @@ class TestTheStimulusAccountsForACandidate:
         assert all((_release(tmp_path) / name).exists() for name in RELEASED_FILES)
         result = verdict_module.verdict(store, None, redact_config, run_dir=tmp_path)
         folded = result.file_verdict
-        assert (folded.release.value, folded.release_ground) == ("release_without_redaction", FINDINGS_ARE_TASK_CONTENT)
+        assert folded.release is not None
+        assert (folded.release.value, folded.release_ground) == ("as_is", FINDINGS_ARE_TASK_CONTENT)
         ledger = store.get_entity(result.ledger_entity_id)
         assert ledger.attributes["release_ground"] == FINDINGS_ARE_TASK_CONTENT
         assert _settle(store, folded.release.value, folded.release_ground, tmp_path) == {}
@@ -3094,10 +3095,10 @@ class TestRedactionPolicyV7:
         """No finding, no REDACT: the fold's policy mask still makes the released copy, audio and text."""
         plan = self._plan(store, tmp_path, ["we", "go", "every", "October", "home"])
         assert plan.policy_masks_n == 1
-        _write_ledger(store, plan, "release_with_redaction", None)
+        _write_ledger(store, plan, "redacted", None)
         written = settle_release(
             store,
-            "release_with_redaction",
+            "redacted",
             None,
             run_dir=tmp_path,
             artifacts_dir=_release(tmp_path),

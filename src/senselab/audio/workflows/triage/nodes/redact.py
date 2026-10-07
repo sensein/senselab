@@ -1575,7 +1575,7 @@ class MaskPlan:
             )
         return sorted({mask.planned.category for mask in self.masks if any(word.state == state for word in mask.words)})
 
-    def record(self, *, release: str, release_ground: str | None) -> dict[str, Any]:
+    def record(self, *, release: str | None, release_ground: str | None) -> dict[str, Any]:
         """The ledger, as the measurement VERDICT writes carries it.
 
         Args:
@@ -2805,7 +2805,7 @@ MASK_SOURCE = "recording"
 
 
 def released_audio(store: ProvStore, run_dir: Path, *, bleep_hz: float | None, fill: str) -> ReleasedAudio:
-    """The audio of the redacted copy, as :func:`settle_release` writes it under ``release_with_redaction``.
+    """The audio of the redacted copy, as :func:`settle_release` writes it under ``redacted``.
 
     Args:
         store: The provenance store, after VERDICT.
@@ -2841,7 +2841,7 @@ def released_audio(store: ProvStore, run_dir: Path, *, bleep_hz: float | None, f
 
 def settle_release(
     store: ProvStore,
-    release: str,
+    release: str | None,
     release_ground: str | None,
     *,
     run_dir: Path,
@@ -2851,7 +2851,7 @@ def settle_release(
 ) -> dict[str, Path]:
     """Make the release directory hold exactly the copy the fold released.
 
-    The directory holds a redacted copy only under ``release_with_redaction``; every other release
+    The directory holds a redacted copy only under ``redacted``; every other release
     empties it, including of a copy REDACT itself wrote on a pass. The copy masks the fold's final
     masks, as its ledger records them (:func:`released_masks`), and its text hides exactly the words
     the ledger keeps masked. Where the final extents are REDACT's own, the audio is REDACT's
@@ -2873,7 +2873,7 @@ def settle_release(
         written.
     """
     verdict = find_verdict(store, NODE)
-    if release != Release.WITH_REDACTION.value:
+    if release != Release.REDACTED.value:
         for name in RELEASED_FILES:
             (artifacts_dir / name).unlink(missing_ok=True)
         return {}

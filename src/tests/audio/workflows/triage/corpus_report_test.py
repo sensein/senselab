@@ -30,7 +30,7 @@ from senselab.audio.workflows.triage.vocabulary import (
 def _verdict(
     triage: Triage = Triage.PASS,
     family: str | None = "syllable",
-    release: Release = Release.NOT_ASSESSED,
+    release: Release | None = None,
     **kwargs: object,
 ) -> FileVerdict:
     """Build one fold, defaulting everything the tests do not vary."""
@@ -108,19 +108,19 @@ class TestCounting:
         _write_row(tmp_path, "sub-c", _verdict())
         report = aggregate(decisions(tmp_path))
         assert report.triage == {"discard": 2, "pass": 1}
-        assert report.release == {"not_assessed": 3}
+        assert report.release == {"none": 3}
         assert report.discard_ground == {"acoustically_empty": 1, "unmeasurable": 1}
 
     def test_counts_the_release_ground(self, tmp_path: Path) -> None:
         """71% of a corpus lands on this axis with no REDACT verdict; the ground is what separates them."""
-        _write_row(tmp_path, "sub-a", _verdict(release=Release.NOT_ASSESSED, release_ground=NO_TRANSCRIPT))
-        _write_row(tmp_path, "sub-b", _verdict(release=Release.WITHOUT_REDACTION, release_ground=SCAN_FOUND_NOTHING))
-        _write_row(tmp_path, "sub-c", _verdict(release=Release.WITH_REDACTION))
+        _write_row(tmp_path, "sub-a", _verdict(release=None, release_ground=NO_TRANSCRIPT))
+        _write_row(tmp_path, "sub-b", _verdict(release=Release.AS_IS, release_ground=SCAN_FOUND_NOTHING))
+        _write_row(tmp_path, "sub-c", _verdict(release=Release.REDACTED))
         report = aggregate(decisions(tmp_path))
         assert report.release == {
-            "not_assessed": 1,
-            "release_without_redaction": 1,
-            "release_with_redaction": 1,
+            "none": 1,
+            "as_is": 1,
+            "redacted": 1,
         }
         assert report.release_ground == {NO_TRANSCRIPT: 1, SCAN_FOUND_NOTHING: 1}
 
@@ -149,15 +149,15 @@ class TestCounting:
     def test_counts_critical_absences_by_branch_and_gate(self, tmp_path: Path) -> None:
         """Any entry is a run that reached no branch at all, so it is named rather than left to be noticed."""
         absence = {"SPEECH": {"speech.response_min_s": "no measurement wrote it"}}
-        _write_row(tmp_path, "sub-a", _verdict(Triage.FLAG, critical_absences=absence))
+        _write_row(tmp_path, "sub-a", _verdict(Triage.REVIEW, critical_absences=absence))
         report = aggregate(decisions(tmp_path))
         assert report.critical_absences == {"SPEECH": {"speech.response_min_s": 1}}
 
     def test_flagged_files_are_attributed_to_their_declared_family(self, tmp_path: Path) -> None:
         """Which families flag is the corpus question; a bare flag count cannot answer it."""
-        _write_row(tmp_path, "sub-a", _verdict(Triage.FLAG, family="syllable"))
+        _write_row(tmp_path, "sub-a", _verdict(Triage.REVIEW, family="syllable"))
         _write_row(tmp_path, "sub-b", _verdict(Triage.PASS, family="syllable"))
-        _write_row(tmp_path, "sub-c", _verdict(Triage.FLAG, family=None))
+        _write_row(tmp_path, "sub-c", _verdict(Triage.REVIEW, family=None))
         report = aggregate(decisions(tmp_path))
         assert report.families == {"syllable": 2, "undeclared": 1}
         assert report.flagged_families == {"syllable": 1, "undeclared": 1}
@@ -184,7 +184,7 @@ class TestCounting:
             NodeVerdict(node="QUALITY", outcome=Outcome.FLAG, kind="clip", why="clipped"),
             NodeVerdict(node="SPEECH", outcome=Outcome.PASS, kind=None, why="ok"),
         ]
-        _write_row(tmp_path, "sub-a", _verdict(Triage.FLAG, reasons=reasons))
+        _write_row(tmp_path, "sub-a", _verdict(Triage.REVIEW, reasons=reasons))
         report = aggregate(decisions(tmp_path))
         assert report.reasons == {"QUALITY|flag|clip": 1, "SPEECH|pass|None": 1}
 
@@ -209,11 +209,11 @@ class TestRendering:
 
     def test_every_count_carries_its_share_of_the_corpus(self, tmp_path: Path) -> None:
         """A count without a denominator is not a corpus finding."""
-        _write_row(tmp_path, "sub-a", _verdict(Triage.FLAG))
+        _write_row(tmp_path, "sub-a", _verdict(Triage.REVIEW))
         _write_row(tmp_path, "sub-b", _verdict())
         rendered = render_markdown(aggregate(decisions(tmp_path)), tmp_path)
         assert "2 recordings read" in rendered
-        assert "| `flag` | 1 | 50.00% |" in rendered
+        assert "| `review` | 1 | 50.00% |" in rendered
 
     def test_an_empty_tree_renders_without_dividing_by_zero(self, tmp_path: Path) -> None:
         """A run that produced nothing must still produce a readable report."""
@@ -241,11 +241,11 @@ class TestDuration:
 
     def test_triage_is_cross_tabbed_against_duration(self, tmp_path: Path) -> None:
         """The corpus question is whether the short recordings are the ones that flag."""
-        _write_row(tmp_path, "sub-a", _verdict(Triage.FLAG), duration_s=0.5)
-        _write_row(tmp_path, "sub-b", _verdict(Triage.FLAG), duration_s=0.7)
+        _write_row(tmp_path, "sub-a", _verdict(Triage.REVIEW), duration_s=0.5)
+        _write_row(tmp_path, "sub-b", _verdict(Triage.REVIEW), duration_s=0.7)
         _write_row(tmp_path, "sub-c", _verdict(Triage.PASS), duration_s=20.0)
         report = aggregate(decisions(tmp_path))
-        assert report.triage_by_duration["0-1s"] == {"flag": 2}
+        assert report.triage_by_duration["0-1s"] == {"review": 2}
         assert report.triage_by_duration["10-30s"] == {"pass": 1}
 
     def test_a_row_without_a_decision_still_reaches_its_duration_bucket(self, tmp_path: Path) -> None:
@@ -282,7 +282,7 @@ class TestWhyARecordingDidNotPass:
             NodeVerdict(node="VOICE", outcome=Outcome.FLAG, kind="voice", why="did not happen on prolonged-vowel"),
             NodeVerdict(node="SPEECH", outcome=Outcome.PASS, kind=None, why="ran and reported"),
         ]
-        _write_row(tmp_path, "sub-a", _verdict(Triage.FLAG, reasons=reasons))
+        _write_row(tmp_path, "sub-a", _verdict(Triage.REVIEW, reasons=reasons))
         report = aggregate(decisions(tmp_path))
         assert report.grounds["VOICE"] == {"routed VOICE, it found no subject": 1, "did not happen": 1}
         assert "SPEECH" not in report.grounds
@@ -291,6 +291,6 @@ class TestWhyARecordingDidNotPass:
         """This is the number that says whether one defect is the corpus's flag rate."""
         for index in range(3):
             reasons = [NodeVerdict(node="VOICE", outcome=Outcome.FLAG, kind="voice", why="it found no subject")]
-            _write_row(tmp_path, f"sub-{index}", _verdict(Triage.FLAG, reasons=reasons))
+            _write_row(tmp_path, f"sub-{index}", _verdict(Triage.REVIEW, reasons=reasons))
         report = aggregate(decisions(tmp_path))
         assert report.grounds == {"VOICE": {"it found no subject": 3}}

@@ -32,7 +32,7 @@ from senselab.audio.workflows.triage.cohort import CONDITION_KINDS
 from senselab.audio.workflows.triage.vocabulary import UNPLACED_OPEN, UNPLACED_UNREAD, standing_task_extents
 from senselab.utils import fastio
 
-SCHEMA_VERSION = 24
+SCHEMA_VERSION = 25
 """Bumped whenever a column is added, removed or retyped, a binary layout changes, or a categorical
 column's controlled vocabulary changes."""
 
@@ -376,12 +376,14 @@ class StoreView:
         invalidated: The ids of entities some activity invalidated.
         derived: Entity id to the ids it ``wasDerivedFrom``.
         malformed_lines: How many lines did not parse.
+        activities: Every activity's node, step and parameters, in file order.
     """
 
     entities: list[Entity] = field(default_factory=list)
     invalidated: set[str] = field(default_factory=set)
     derived: dict[str, list[str]] = field(default_factory=dict)
     malformed_lines: int = 0
+    activities: list[dict[str, Any]] = field(default_factory=list)
 
     def live(self, prov_type: str) -> list[Entity]:
         """Every live entity of one type, in file order.
@@ -438,6 +440,14 @@ def read_store(path: Path) -> StoreView:
                         extent=(float(extent[0]), float(extent[1])) if extent else None,
                         attributes=record.get("attributes") or {},
                     )
+                )
+            elif kind == "activity":
+                view.activities.append(
+                    {
+                        "node": record.get("node"),
+                        "step": record.get("step"),
+                        "parameters": record.get("parameters") or {},
+                    }
                 )
             elif kind == "relation":
                 relation, source, target = record.get("relation"), record.get("source"), record.get("target")
@@ -1371,6 +1381,12 @@ def extract(run_root: Path, root: Path, anomalies: dict[str, int] | None = None)
         "participant": participant,
         "task": task,
         "verdict": decision.get("triage"),
+        "run_status": decision.get("run_status"),
+        "missing": [str(key) for key in decision["missing"]] if isinstance(decision.get("missing"), list) else None,
+        "reason": decision.get("reason"),
+        "reason_keys": (
+            [str(key) for key in decision["reason_keys"]] if isinstance(decision.get("reason_keys"), list) else None
+        ),
         "session": session,
         "stem": stem,
         "run_dir": str(run_root.relative_to(root)) if run_root.is_relative_to(root) else str(run_root),
@@ -1571,6 +1587,10 @@ def _fields() -> list[pa.Field]:
         pa.field("participant", pa.string()),
         pa.field("task", pa.string()),
         pa.field("verdict", pa.string()),
+        pa.field("run_status", pa.string()),
+        pa.field("missing", pa.list_(pa.string())),
+        pa.field("reason", pa.string()),
+        pa.field("reason_keys", pa.list_(pa.string())),
         pa.field("session", pa.string()),
         pa.field("stem", pa.string()),
         pa.field("run_dir", pa.string()),
@@ -2030,21 +2050,21 @@ class ScanReport:
     anomalies: dict[str, int] = field(default_factory=dict)
 
 
-def scan(
-    root: Path, slice_index: int = 0, slices: int = 1, *, walk_threads: int = fastio.DEFAULT_THREADS
-) -> tuple[list[dict[str, Any]], ScanReport]:
-    """Extract every row this shard owns.
+def latest_recordings(
+    root: Path, slice_index: int, slices: int, report: ScanReport, *, walk_threads: int = fastio.DEFAULT_THREADS
+) -> list[Path]:
+    """The run directory this shard reads for each stem it owns: the lexically latest.
 
     Args:
         root: The tree of finished run directories.
         slice_index: This shard's index.
         slices: How many shards share the tree.
+        report: Counted into: considered and superseded run directories.
         walk_threads: How many participants are listed at once while finding run directories.
 
     Returns:
-        The rows and what the shard met.
+        One run directory per stem, in stem order.
     """
-    report = ScanReport()
     latest: dict[str, Path] = {}
     for recording in recording_dirs(root, threads=walk_threads):
         stem = stem_of(recording)
@@ -2058,8 +2078,36 @@ def scan(
             latest[stem] = recording
         else:
             report.superseded.append(recording.name)
+    return [recording for _, recording in sorted(latest.items())]
+
+
+def scan(
+    root: Path,
+    slice_index: int = 0,
+    slices: int = 1,
+    *,
+    walk_threads: int = fastio.DEFAULT_THREADS,
+    recordings: Sequence[Path] | None = None,
+    report: ScanReport | None = None,
+) -> tuple[list[dict[str, Any]], ScanReport]:
+    """Extract every row this shard owns.
+
+    Args:
+        root: The tree of finished run directories.
+        slice_index: This shard's index.
+        slices: How many shards share the tree.
+        walk_threads: How many participants are listed at once while finding run directories.
+        recordings: The run directories to read, as :func:`latest_recordings` chose them; walked when None.
+        report: The report those were counted into, continued; a new one when None.
+
+    Returns:
+        The rows and what the shard met.
+    """
+    report = report or ScanReport()
+    if recordings is None:
+        recordings = latest_recordings(root, slice_index, slices, report, walk_threads=walk_threads)
     rows: list[dict[str, Any]] = []
-    for _, recording in sorted(latest.items()):
+    for recording in recordings:
         try:
             row = extract(recording, root, report.anomalies)
         except (OSError, ValueError, KeyError, TypeError):

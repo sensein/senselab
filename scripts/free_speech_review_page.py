@@ -63,14 +63,13 @@ KEPT_MEASUREMENTS = (PII_SCAN, REDACTION_EXEMPTIONS, PII_LEDGER)
 KEPT_MEASUREMENT_MARKERS = tuple(f'"name": "{name}"' for name in KEPT_MEASUREMENTS)
 
 RELEASE_ORDER = (
-    "release_without_redaction",
-    "release_with_redaction",
+    "as_is",
+    "redacted",
     "withheld",
-    "discarded",
-    "not_assessed",
     "unrecorded",
 )
-"""The graph's own release axis, most permissive first, plus the page's own ``unrecorded``."""
+"""The graph's own release axis, most permissive first, plus the page's own ``unrecorded`` for none: a
+discard, or a release the graph could not assess."""
 
 EXTRACT_SCHEMA = "senselab.fsreview.extract"
 EXTRACT_VERSION = 10
@@ -841,7 +840,7 @@ def _redact_detail(redact: Entity | None) -> dict[str, Any]:
     """What REDACT itself concluded.
 
     ``release_ground`` is None exactly when REDACT decided, so on the two states REDACT decides —
-    ``release_with_redaction`` and ``withheld`` — this ``why`` is the only account there is. A
+    ``redacted`` and ``withheld`` — this ``why`` is the only account there is. A
     withholding the reviewer made carries its own ground instead.
 
     Args:
@@ -1432,8 +1431,8 @@ def recording_html(row: dict[str, Any]) -> str:
 
 RELEASE_DECISIONS = (
     ("withheld", "w", "withhold", "withhold"),
-    ("release_with_redaction", "d", "with", "with redaction"),
-    ("release_without_redaction", "o", "without", "without redaction"),
+    ("redacted", "d", "with", "with redaction"),
+    ("as_is", "o", "without", "without redaction"),
 )
 """The three releases a reviewer can say a recording warrants, mutually exclusive, each with its key,
 class slug and label.
@@ -1752,10 +1751,10 @@ mark.pii .cat,mark.swatch .cat{font-size:9.5px;letter-spacing:.06em;color:var(--
 border-radius:3px;padding:0 3px;margin-right:4px;vertical-align:.18em;
 font-family:ui-monospace,Menlo,monospace}
 .chip{font-size:10.5px;letter-spacing:.04em;padding:1px 7px;border-radius:9px;border:1px solid}
-.r-release_without_redaction{background:#e7f3e7;border-color:#8fbf8f;color:#2c5c2c}
+.r-as_is{background:#e7f3e7;border-color:#8fbf8f;color:#2c5c2c}
 .r-withheld{background:#fbe6e4;border-color:#d08e86;color:#8a2f24}
-.r-release_with_redaction{background:#eaeef6;border-color:#8fa0c0;color:#2f4670}
-.r-discarded,.r-not_assessed,.r-unrecorded{background:#f1efe9;border-color:#bdb7a8;color:#6b6350}
+.r-redacted{background:#eaeef6;border-color:#8fa0c0;color:#2f4670}
+.r-unrecorded{background:#f1efe9;border-color:#bdb7a8;color:#6b6350}
 .cat-chip{display:inline-block;font-size:11px;background:var(--card);border:1px solid var(--line);
 border-radius:9px;padding:1px 7px;margin:0 3px 3px 0}
 .errors{color:#8a2f24;font-size:12px}
@@ -1828,8 +1827,8 @@ border-radius:6px;background:var(--bg);color:var(--mut);cursor:pointer}
 .d-without.on{background:#2c5c2c}
 .d-with.on{background:#2f4670}
 .d-withhold.on{background:#8a2f24}
-.rec[data-dec="release_without_redaction"]{border-right:3px solid #2c5c2c}
-.rec[data-dec="release_with_redaction"]{border-right:3px solid #2f4670}
+.rec[data-dec="as_is"]{border-right:3px solid #2c5c2c}
+.rec[data-dec="redacted"]{border-right:3px solid #2f4670}
 .rec[data-dec="withheld"]{border-right:3px solid #8a2f24}
 .whybtn{font:inherit;font-size:11.5px;padding:2px 9px;border:1px solid var(--line);
 border-radius:6px;background:var(--bg);color:var(--mut);cursor:pointer}
@@ -1894,12 +1893,12 @@ _DARK_RULES = """
 :root{--bg:#171614;--fg:#eceae5;--mut:#9a958c;--line:#33312d;--card:#1f1e1b;--acc:#d9a45f;
 --pii:#4a3413;--piib:#c08a38;--brk:#a09b91;--brkbg:#2a2825;--catbg:#5f4418;--catfg:#f0d7a8;
 --ured:#ff5c7a;--ugreen:#5fcf7a;--uorange:#ffc145;color-scheme:dark}
-.r-release_without_redaction{background:#1d2e1d;border-color:#4f7a4f;color:#a8d3a8}
+.r-as_is{background:#1d2e1d;border-color:#4f7a4f;color:#a8d3a8}
 .r-withheld{background:#331e1b;border-color:#8a4b42;color:#e8a89e}
-.r-release_with_redaction{background:#1c2334;border-color:#4a5c86;color:#a7bce4}
-.r-discarded,.r-not_assessed,.r-unrecorded{background:#282622;border-color:#5a5449;color:#bdb5a5}
-.rec[data-dec="release_without_redaction"]{border-right-color:#4f7a4f}
-.rec[data-dec="release_with_redaction"]{border-right-color:#4a5c86}
+.r-redacted{background:#1c2334;border-color:#4a5c86;color:#a7bce4}
+.r-unrecorded{background:#282622;border-color:#5a5449;color:#bdb5a5}
+.rec[data-dec="as_is"]{border-right-color:#4f7a4f}
+.rec[data-dec="redacted"]{border-right-color:#4a5c86}
 .rec[data-dec="withheld"]{border-right-color:#a8463a}
 .d-without.on{background:#3a6b3a}
 .d-with.on{background:#3d5687}
@@ -2058,8 +2057,8 @@ function toggleFlag(card){
 }
 /* ---- the release decision: which artefact this reviewer would hand on ---- */
 const decSel=document.getElementById('dec');
-const DECKEYS={'w':'withheld','W':'withheld','o':'release_without_redaction','O':'release_without_redaction',
-               'd':'release_with_redaction','D':'release_with_redaction'};
+const DECKEYS={'w':'withheld','W':'withheld','o':'as_is','O':'as_is',
+               'd':'redacted','D':'redacted'};
 function paintDecision(card){
   const rec=store.release[card.dataset.stem];
   const value=rec&&rec.v;
@@ -2813,8 +2812,8 @@ placeholder="max"> tokens</div>
 <select id="dec"><option value="any">release decision, any</option>
 <option value="decided">decided</option><option value="undecided">undecided</option>
 <option value="withheld">withhold</option>
-<option value="release_with_redaction">release with redaction</option>
-<option value="release_without_redaction">release without redaction</option>
+<option value="redacted">release with redaction</option>
+<option value="as_is">release without redaction</option>
 </select>
 <select id="rev"><option value="any">judged or not</option>
 <option value="unreviewed">unjudged only</option><option value="reviewed">judged only</option>

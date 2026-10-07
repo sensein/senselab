@@ -45,6 +45,7 @@ from senselab.audio.workflows.triage.vocabulary import (
     NodeVerdict,
     Outcome,
     RunState,
+    release_value,
 )
 from senselab.utils.prov_store import ProvStore
 from senselab.utils.subprocess_venv import record_venv_use
@@ -491,7 +492,7 @@ def run_triage(
                 **released,
                 **settle_release(
                     store,
-                    folded.file_verdict.release.value,
+                    release_value(folded.file_verdict.release),
                     folded.file_verdict.release_ground,
                     run_dir=layout.run_dir,
                     artifacts_dir=layout.artifacts_dir,
