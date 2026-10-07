@@ -6,8 +6,10 @@ import numpy as np
 
 from senselab.audio.workflows.triage.background_model import BandFrames, Floor
 from senselab.audio.workflows.triage.quality_join import (
+    drop_levels,
     join_record,
     quality_join_parameters,
+    separate_gates,
     split_by_task,
     stream_agreement,
     touches,
@@ -43,6 +45,19 @@ def test_a_short_finding_inside_the_task_is_outside_it() -> None:
     split = split_by_task([(1.2, 1.205), (1.3, 1.5)], [(1.0, 2.0)], 0.1, min_s=0.05)
     assert split["in"] == [[1.3, 1.5]]
     assert split["out"] == [[1.2, 1.205]]
+
+
+def test_a_drop_from_a_sounding_signal_is_a_cut_and_one_from_a_decayed_signal_is_a_gate() -> None:
+    """f47eeda7's phonation was still sounding when the recorder died; a cough's tail had decayed into a gate."""
+    level = np.full(800, -60.0)
+    level[100:300] = -25.0  # phonation sounding until the drop at 3.0 s
+    level[400:420] = -25.0  # a cough at 4.0-4.2 s, decayed to the floor before the drop at 4.6 s
+    view = _view(level)
+    drops = drop_levels([[3.0, 3.5], [4.6, 5.2]], view, quality_join_parameters())
+    cut, gated = separate_gates(drops, quality_join_parameters())
+    assert cut == [(3.0, 3.5)]
+    assert gated == [(4.6, 5.2)]
+    assert separate_gates([[1.0, 2.0, None]], quality_join_parameters()) == ([(1.0, 2.0)], [])
 
 
 def test_a_shutoff_soon_after_the_task_cut_it() -> None:

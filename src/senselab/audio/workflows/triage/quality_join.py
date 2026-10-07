@@ -24,7 +24,7 @@ QUALITY_JOIN = "quality_join"
 """QUALITY's measurement of the join."""
 
 OTHER_VOICE = "other_voice"
-FAULT_KINDS = ("shutoff", "dropout", "clip", "discontinuity")
+FAULT_KINDS = ("shutoff", "gate", "dropout", "clip", "discontinuity")
 INSIDE = "in"
 OUTSIDE = "out"
 
@@ -100,6 +100,45 @@ def faults_against(
         spans = [(float(a), float(b)) for a, b in faults.get(kind) or ()]
         out[kind] = split_by_task(spans, task_spans, float(q.get("abut_s", p["abut_s"])), float(q["min_s"]))
     return out
+
+
+def drop_levels(shutoffs: Sequence[Sequence[float]], raw: GenericView | None, p: dict[str, Any]) -> list[list[Any]]:
+    """Each dead stretch with the signal's level over the floor just before it dropped.
+
+    Args:
+        shutoffs: The dead stretches BACKGROUND read as shutoffs.
+        raw: The plain stream's background, or None where it is not stored.
+        p: The parameters.
+
+    Returns:
+        ``[start, end, level]`` per stretch: the level over the floor in the ``faults.shutoff.before_s``
+        before it, or None without the background.
+    """
+    before_s = float(p["faults"]["shutoff"]["before_s"])
+    out: list[list[Any]] = []
+    for a, b in shutoffs:
+        level = None if raw is None else event_snr_db(raw, float(a) - before_s, float(a) - raw.hop_s)
+        out.append([round(float(a), 4), round(float(b), 4), None if level is None else round(level, 2)])
+    return out
+
+
+def separate_gates(drops: Sequence[Sequence[Any]], p: dict[str, Any]) -> tuple[list[Span], list[Span]]:
+    """BACKGROUND's dead stretches split into shutoffs that cut a sounding signal and gates it had decayed into.
+
+    Args:
+        drops: :func:`drop_levels`'s rows.
+        p: The parameters.
+
+    Returns:
+        ``(cut, gated)``: a stretch is a cut where the signal stood ``faults.shutoff.sounding_db`` over
+        the floor just before it dropped, else a gate. A stretch whose level was not read is a cut.
+    """
+    sounding = float(p["faults"]["shutoff"]["sounding_db"])
+    cut: list[Span] = []
+    gated: list[Span] = []
+    for a, b, level in drops:
+        (cut if level is None or level >= sounding else gated).append((float(a), float(b)))
+    return cut, gated
 
 
 def deciding_kinds(split: Mapping[str, Mapping[str, Sequence[Any]]], section: Mapping[str, Any]) -> list[str]:

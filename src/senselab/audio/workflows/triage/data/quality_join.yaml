@@ -11,7 +11,12 @@ faults:                           # a capture fault touching a task span reviews
   shutoff:
     min_s: 0.3                    # background_model.yaml shutoff.min_s: every shutoff run is one
     abut_s: 0.5                   # voice_phonation.yaml shutoff.gap_s: a shutoff this soon after the task cut it
+    sounding_db: 10.0             # UNFITTED: the signal stood this far over the floor just before the drop, so the drop cut it
+    before_s: 0.1                 # the window before the drop that is read
     decides: true
+  gate:                           # a dead stretch the signal had already decayed into: a recorder's noise gate
+    min_s: 0.0
+    decides: false
   dropout:
     min_s: 0.05                   # UNFITTED: a dropout this long inside a task span
     decides: true
