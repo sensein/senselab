@@ -425,10 +425,11 @@ def check_integrity(env: EnvSpec, base_dir: Path, uv_lock: Path | None = None) -
 
     The checks run in order: lock and sdist-patch sha256s (torch, body, wheels, overlays, build envs);
     the ``requirements.in``, config and overrides sha256s and the recomputed header digest; the
-    ``first_resolve`` sha256; overlay pins against the base locks; torch-family pins against
-    ``first_resolve`` (``requirements.in`` bodies) or the repository ``uv.lock`` (uv-export bodies).
-    Against ``uv.lock`` the torch family is :func:`uv_lock_torch_family`, which also decides which
-    names an overlay may not pin; otherwise it is the name rule of :func:`is_torch_family`.
+    ``first_resolve`` sha256; with a torch lock, no torch-lock or torch-family name in the body; overlay
+    pins against the base locks; torch-family pins against ``first_resolve`` (``requirements.in``
+    bodies) or the repository ``uv.lock`` (uv-export bodies). Against ``uv.lock`` the torch family is
+    :func:`uv_lock_torch_family`, which also decides which names the body and overlays may not pin;
+    otherwise it is the name rule of :func:`is_torch_family`.
 
     Each file is read once; the header, pin and torch checks run on the bytes that were hashed. The
     returned sha256s describe those bytes. The installer copies each file into ``{tmp}``,
@@ -484,14 +485,21 @@ def check_integrity(env: EnvSpec, base_dir: Path, uv_lock: Path | None = None) -
 
     torch = lock_entries(text(env.torch.lock)) if env.torch is not None else []
     torch_names = {e.name for e in torch}
-    base = lock_entries(text(body.lock)) + torch
+    body_entries = lock_entries(text(body.lock))
+    base = body_entries + torch
     in_family: Callable[[str], bool] = is_torch_family
     uv_packages: list[dict[str, Any]] = []
     family: set[str] = set()
-    if env.torch is not None and body.source == "uv-export" and uv_lock is not None:
+    if env.torch is not None and body.source == "uv-export":
+        if uv_lock is None:
+            raise ReproduceLockError("a uv-export body with a torch lock needs the repository uv.lock to check against")
         uv_packages = tomllib.loads(uv_lock.read_text()).get("package", [])
         family = uv_lock_torch_family(uv_packages, torch_names & TORCH_NAMES)
         in_family = family.__contains__
+    if env.torch is not None:
+        stray = sorted({e.name for e in body_entries if e.name in torch_names or in_family(e.name)})
+        if stray:
+            raise ReproduceLockError(f"body lock {body.lock} pins torch.lock or torch-family names: {stray}")
     for what, ref in (("test", env.test), ("notebook_tools", env.notebook_tools)):
         if ref is not None:
             problems = _overlay_problems(env, lock_entries(text(ref.lock)), base, torch_names, in_family)
@@ -505,8 +513,6 @@ def check_integrity(env: EnvSpec, base_dir: Path, uv_lock: Path | None = None) -
             raise ReproduceLockError("a torch lock with a requirements.in body needs first_resolve")
         reference = _resolve_reference(lock_entries(text(env.first_resolve.file)))
     else:
-        if uv_lock is None:
-            raise ReproduceLockError("a uv-export body with a torch lock needs the repository uv.lock to check against")
         reference = _uv_lock_reference(uv_packages, family)
     problems = _torch_problems(torch, reference)
     if problems:

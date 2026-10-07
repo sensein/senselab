@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import datetime
+import re
 import shutil
 import subprocess
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 import pytest
@@ -16,6 +17,7 @@ from senselab.utils.reproduce.locks import (
     check_integrity,
     file_sha256,
     lock_entries,
+    normalize_name,
     parse_header,
     requirements_digest_for,
 )
@@ -26,17 +28,42 @@ ENV_DIR = "envs/a"
 UV = "/fake/uv"
 PLACEHOLDER = "00" * 32
 EXCLUDE_NEWER = "2026-07-01T23:59:59Z"
-FAMILY_NO_EMIT = ["--no-emit-package", "nvidia-nvtx-cu12", "--no-emit-package", "torch", "--no-emit-package", "triton"]
-HELD_OUT_NO_EMIT = ["--no-emit-package", "python-speech-features", "--no-emit-package", "opencv-python"]
-# What the fake uv prints, keyed by a word only that builder's argv carries.
-OUTPUTS = {
-    "--no-annotate": "first_resolve_small.txt",
-    "--no-deps": "torch_index_small.lock",
-    "--only-group": "test_small.lock",
-    "--constraints": "test_small.lock",
-    "export": "body_small.lock",
-    "compile": "body_small.lock",
-}
+FAMILY = ["nvidia-nvtx-cu12", "torch", "triton"]
+BODY = ["annotated-doc", "certifi", "idna", "numpy", "packaging", "six"]
+HELD_OUT = ["python-speech-features", "opencv-python"]
+# numpy 2.4.6 with one of its body.lock hashes: a base name re-pinned with a different hash set.
+NUMPY_SUBSET = "numpy==2.4.6 \\\n    --hash=sha256:0280e0356c0829a18d9de1cb7eee50ec22ca639878d7240307ca0943d73cd2c4\n"
+
+
+def _no_emit(names: list[str]) -> list[str]:
+    return [arg for name in names for arg in ("--no-emit-package", name)]
+
+
+def _fixture(argv: list[str]) -> str:
+    """The text uv would print for this builder: chosen by subcommand and input file."""
+    if argv[1] == "export":
+        return (DATA / ("test_small.lock" if "--only-group" in argv else "body_small.lock")).read_text()
+    assert argv[1:3] == ["pip", "compile"]
+    source = PurePosixPath(argv[3]).name
+    if source == "torch.in":
+        return (DATA / "torch_index_small.lock").read_text()
+    if source == "requirements.in":
+        return (DATA / ("body_small.lock" if "--generate-hashes" in argv else "first_resolve_small.txt")).read_text()
+    assert source == "notebook_tools.in"
+    return (DATA / "test_small.lock").read_text() + NUMPY_SUBSET
+
+
+def _drop_no_emit(text: str, argv: list[str]) -> str:
+    """Remove the requirement blocks uv's ``--no-emit-package`` would leave out."""
+    dropped = {normalize_name(argv[i + 1]) for i, arg in enumerate(argv) if arg == "--no-emit-package"}
+    out: list[str] = []
+    keep = True
+    for line in text.splitlines(keepends=True):
+        if line[:1].isalnum():
+            keep = normalize_name(re.split(r"[=@ ;\\]", line, maxsplit=1)[0]) not in dropped
+        if keep:
+            out.append(line)
+    return "".join(out)
 
 
 class FakeUv:
@@ -50,8 +77,7 @@ class FakeUv:
     def __call__(self, argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:  # noqa: ANN401
         """Record ``argv`` and ``cwd``; return the fixture text as stdout."""
         self.calls.append((list(argv), kwargs.get("cwd")))
-        fixture = next(f for key, f in OUTPUTS.items() if key in argv)
-        stdout = (DATA / fixture).read_text() if self.returncode == 0 else ""
+        stdout = _drop_no_emit(_fixture(argv), argv) if self.returncode == 0 else ""
         return subprocess.CompletedProcess(argv, self.returncode, stdout, "uv: resolution failed")
 
 
@@ -158,7 +184,7 @@ def test_first_resolve_argv(tmp_path: Path, fake_uv: FakeUv) -> None:
 
 
 def test_torch_lock_from_index_argv(tmp_path: Path, fake_uv: FakeUv) -> None:
-    """The torch pins come from the first resolve; every CUDA-variant name is exempt from ``--exclude-newer``."""
+    """The torch pins come from the first resolve; only ``nvidia-*`` names are exempt from ``--exclude-newer``."""
     raw = _draft(tmp_path)
     _copy(tmp_path, "first_resolve_small.txt", "first_resolve.txt")
     argv = lockgen.torch_lock_from_index(EnvSpec.model_validate(raw), tmp_path)
@@ -166,7 +192,7 @@ def test_torch_lock_from_index_argv(tmp_path: Path, fake_uv: FakeUv) -> None:
         UV, "pip", "compile", f"{ENV_DIR}/torch.in",
         "--no-deps", "--generate-hashes", "--emit-index-url", "--no-header",
         "--python-version", "3.11", "--exclude-newer", EXCLUDE_NEWER,
-        "--exclude-newer-package", "nvidia-nvtx-cu12=false", "--exclude-newer-package", "triton=false",
+        "--exclude-newer-package", "nvidia-nvtx-cu12=false",
         "--python-platform", "x86_64-manylinux_2_28", "--index-url", "https://download.pytorch.org/whl/cu128",
     ]  # fmt: skip
     assert fake_uv.calls == [(argv, tmp_path)]
@@ -186,7 +212,7 @@ def test_body_lock_from_requirements_argv_and_header(tmp_path: Path, fake_uv: Fa
         "--universal", "--generate-hashes", "--no-header",
         "--python-version", "3.11", "--exclude-newer", EXCLUDE_NEWER, "--index-url", "https://pypi.org/simple",
         "--config-file", f"{ENV_DIR}/uv.toml", "--overrides", f"{ENV_DIR}/overrides.txt",
-        *FAMILY_NO_EMIT, *HELD_OUT_NO_EMIT,
+        *_no_emit(FAMILY + HELD_OUT),
     ]  # fmt: skip
     assert fake_uv.calls == [(argv, tmp_path)]
     header = parse_header((tmp_path / ENV_DIR / "body.lock").read_text())
@@ -195,36 +221,49 @@ def test_body_lock_from_requirements_argv_and_header(tmp_path: Path, fake_uv: Fa
 
 
 def test_body_lock_from_uvlock_export_argv(tmp_path: Path, fake_uv: FakeUv) -> None:
-    """The export leaves out the ``uv.lock`` torch closure, the sdists and extra_no_emit; extras and groups pass."""
+    """The export leaves out the ``uv.lock`` closure of torch.lock's roots, the sdists and extra_no_emit."""
     project = _project(tmp_path)
+    _copy(tmp_path, "torch_small.lock", "torch.lock")
     env = EnvSpec.model_validate(_draft(tmp_path, "uv-export"))
-    argv = lockgen.body_lock_from_uvlock_export(
-        env, tmp_path, project, extras=["qa"], groups=["eval"], torch_roots=["torch"]
-    )
+    argv = lockgen.body_lock_from_uvlock_export(env, tmp_path, project, extras=["qa"], groups=["eval"])
     assert argv == [
         UV, "export", "--frozen", "--no-emit-project", "--no-dev", "--no-header",
-        "--extra", "qa", "--group", "eval", *FAMILY_NO_EMIT, *HELD_OUT_NO_EMIT,
+        "--extra", "qa", "--group", "eval", *_no_emit(FAMILY + HELD_OUT),
     ]  # fmt: skip
     assert fake_uv.calls == [(argv, project)]
     assert _body((tmp_path / ENV_DIR / "body.lock").read_text()) == (DATA / "body_small.lock").read_text()
+
+
+def test_body_export_needs_a_torch_root(tmp_path: Path, fake_uv: FakeUv) -> None:
+    """With a torch lock, the roots come from it; a torch lock without torch, torchvision or torchaudio is refused."""
+    project = _project(tmp_path)
+    _copy(tmp_path, "torch_small.lock", "torch.lock")
+    lock = tmp_path / ENV_DIR / "torch.lock"
+    lock.write_text("".join(b for b in re.split(r"(?m)^(?=\S)", lock.read_text()) if not b.startswith("torch ")))
+    env = EnvSpec.model_validate(_draft(tmp_path, "uv-export"))
+    with pytest.raises(ReproduceLockError, match="holds no torch, torchvision or torchaudio"):
+        lockgen.body_lock_from_uvlock_export(env, tmp_path, project)
+    assert fake_uv.calls == []
 
 
 def test_overlay_test_lock_argv(tmp_path: Path, fake_uv: FakeUv) -> None:
     """The test overlay is the repository's dev group, without the names the base locks hold or hold out."""
     project = _project(tmp_path)
     _copy(tmp_path, "torch_small.lock", "torch.lock")
+    _copy(tmp_path, "body_small.lock", "body.lock")
     env = EnvSpec.model_validate(_draft(tmp_path, "uv-export"))
     argv = lockgen.overlay_lock("test", env, tmp_path, project_dir=project)
     assert argv == [
         UV, "export", "--frozen", "--no-emit-project", "--only-group", "dev", "--no-header",
-        *FAMILY_NO_EMIT, *HELD_OUT_NO_EMIT,
+        *_no_emit(FAMILY + BODY + HELD_OUT),
     ]  # fmt: skip
     assert fake_uv.calls == [(argv, project)]
-    assert (tmp_path / ENV_DIR / "test.lock").exists()
+    names = {e.name for e in lock_entries((tmp_path / ENV_DIR / "test.lock").read_text())}
+    assert names and not names & set(BODY)
 
 
 def test_overlay_notebook_tools_argv(tmp_path: Path, fake_uv: FakeUv) -> None:
-    """Notebook tools compile with the base locks as constraints."""
+    """Notebook tools compile with the base locks as constraints and leave out every base name."""
     _copy(tmp_path, "torch_small.lock", "torch.lock")
     _copy(tmp_path, "body_small.lock", "body.lock")
     (tmp_path / ENV_DIR / "notebook_tools.in").write_text("nbconvert\nipykernel\n")
@@ -235,10 +274,11 @@ def test_overlay_notebook_tools_argv(tmp_path: Path, fake_uv: FakeUv) -> None:
         "--universal", "--generate-hashes", "--no-header",
         "--python-version", "3.11", "--exclude-newer", EXCLUDE_NEWER, "--index-url", "https://pypi.org/simple",
         "--constraints", f"{ENV_DIR}/torch.lock", "--constraints", f"{ENV_DIR}/body.lock",
-        *FAMILY_NO_EMIT, *HELD_OUT_NO_EMIT,
+        *_no_emit(FAMILY + BODY + HELD_OUT),
     ]  # fmt: skip
     assert fake_uv.calls == [(argv, tmp_path)]
-    assert (tmp_path / ENV_DIR / "notebook_tools.lock").exists()
+    names = {e.name for e in lock_entries((tmp_path / ENV_DIR / "notebook_tools.lock").read_text())}
+    assert names and not names & set(BODY)
 
 
 def test_overlay_needs_its_input(tmp_path: Path, fake_uv: FakeUv) -> None:
@@ -276,7 +316,9 @@ def test_torch_lock_from_uvlock_selects_the_linux_wheel_of_the_closure(tmp_path:
     env = EnvSpec.model_validate(_draft(tmp_path, "uv-export"))
     assert lockgen.torch_lock_from_uvlock(env, tmp_path, project / "uv.lock", ["torch"]) == []
     text = (tmp_path / ENV_DIR / "torch.lock").read_text()
-    assert parse_header(text)["source"] == "uv.lock"
+    header = parse_header(text)
+    assert (header["source"], header["roots"]) == ("uv.lock", "torch")
+    assert header["uv-lock-sha256"] == file_sha256(project / "uv.lock")
     assert _body(text) == (DATA / "torch_small.lock").read_text()
     assert all(e.is_url and len(e.hashes) == 1 for e in lock_entries(text))
 
@@ -294,7 +336,11 @@ def test_torch_lock_from_uvlock_refuses_a_missing_wheel(tmp_path: Path) -> None:
 
 
 def test_requirements_env_round_trip_passes_check_integrity(tmp_path: Path, fake_uv: FakeUv) -> None:
-    """first_resolve, torch, body and notebook locks as written pass B3, header recompute included."""
+    """first_resolve, torch, body and notebook locks as written pass B3, header recompute included.
+
+    The fake notebook compile re-pins numpy with a subset of the body's hashes, as a universal compile
+    does; only the overlay's ``--no-emit-package`` of every base name keeps it out.
+    """
     raw = _draft(tmp_path)
     raw["test"] = None
     (tmp_path / ENV_DIR / "notebook_tools.in").write_text("nbconvert\n")
@@ -327,7 +373,7 @@ def test_uv_export_env_round_trip_passes_check_integrity(tmp_path: Path, fake_uv
     raw["notebook_tools"] = None
     env = EnvSpec.model_validate(raw)
     lockgen.torch_lock_from_uvlock(env, tmp_path, project / "uv.lock", ["torch"])
-    lockgen.body_lock_from_uvlock_export(env, tmp_path, project, torch_roots=["torch"])
+    lockgen.body_lock_from_uvlock_export(env, tmp_path, project)
     lockgen.overlay_lock("test", env, tmp_path, project_dir=project)
     check_integrity(_finalize(tmp_path, raw), tmp_path, uv_lock=project / "uv.lock")
 
@@ -362,3 +408,47 @@ def test_real_body_compile_from_pypi(tmp_path: Path) -> None:
     assert all(e.hashes for e in entries)
     assert parse_header(text)["requirements-sha256"] == requirements_digest_for(env, tmp_path)
     check_integrity(_finalize(tmp_path, raw), tmp_path)
+
+
+def _notebook_overlay_passes(tmp_path: Path, raw: dict[str, Any], uv_lock: Path | None = None) -> None:
+    (tmp_path / ENV_DIR / "notebook_tools.in").write_text("nbconvert\nipykernel\n")
+    env = EnvSpec.model_validate(raw)
+    lockgen.overlay_lock("notebook_tools", env, tmp_path, requirements=f"{ENV_DIR}/notebook_tools.in")
+    entries = lock_entries((tmp_path / ENV_DIR / "notebook_tools.lock").read_text())
+    assert {"nbconvert", "ipykernel"} <= {e.name for e in entries}
+    assert all(e.hashes for e in entries)
+    check_integrity(_finalize(tmp_path, raw), tmp_path, uv_lock=uv_lock)
+
+
+@pytest.mark.slow
+def test_real_notebook_overlay_on_a_uv_export_body(tmp_path: Path) -> None:
+    """Notebook tools (nbconvert, ipykernel) compiled against a uv-export body and a uv.lock torch lock pass B3."""
+    project = _project(tmp_path)
+    raw = _draft(tmp_path, "uv-export")
+    raw["test"], raw["exclude_newer"] = None, "2026-08-20"
+    lockgen.torch_lock_from_uvlock(EnvSpec.model_validate(raw), tmp_path, project / "uv.lock", ["torch"])
+    _copy(tmp_path, "body_small.lock", "body.lock")
+    _notebook_overlay_passes(tmp_path, raw, project / "uv.lock")
+
+
+@pytest.mark.slow
+def test_real_notebook_overlay_on_a_requirements_body(tmp_path: Path) -> None:
+    """Notebook tools (nbconvert, ipykernel) compiled against a real requirements.in body pass B3."""
+    (tmp_path / ENV_DIR).mkdir(parents=True)
+    req = tmp_path / ENV_DIR / "requirements.in"
+    req.write_text("six==1.17.0\npackaging==25.0\n")
+    raw: dict[str, Any] = {
+        "python": "3.11",
+        "python_exact": "3.11.9",
+        "torch": None,
+        "body": {
+            **_lock(f"{ENV_DIR}/body.lock"),
+            "source": "requirements.in",
+            "requirements_in": f"{ENV_DIR}/requirements.in",
+            "requirements_in_sha256": file_sha256(req),
+        },
+        "notebook_tools": _lock(f"{ENV_DIR}/notebook_tools.lock"),
+        "exclude_newer": "2026-10-01",
+    }
+    lockgen.body_lock_from_requirements(EnvSpec.model_validate(raw), tmp_path)
+    _notebook_overlay_passes(tmp_path, raw)
