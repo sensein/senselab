@@ -376,3 +376,44 @@ There is no review-rate target; parameters are never tuned to move the review ra
 8. **SQUIM is reported only**, deciding nothing until a labelled test shows it separates.
 9. **A dropout or clip inside a task span flags**, with its minimum duration fitted from labels;
    outside the span it is an annotation.
+
+## Unit C plan (owner-approved revisions, 2026-10-07)
+
+1. **The recording-level background reading is a PREPROCESS output, not QUALITY.** QUALITY is only the
+   per-span join after the branches. Branches read PREPROCESS's reading from the store and never
+   recompute it.
+2. **The session floor is computed before its first use.**
+   - (a) PREPROCESS estimates the floor and level per band for each recording.
+   - (b) A corpus-level SESSION step aggregates those per BIDS session.
+   - (c) The rest of the background reading (activity regions, impulses, faults) is computed against
+     the session-informed floor; routing's emptiness check depends on it.
+   - (d) Everything downstream reads that same floor.
+
+   PREPROCESS splits around SESSION, and the DAG declares the dependency. On the cluster, (a) runs
+   corpus-wide, SESSION once per session, and the rest per recording. A single-file run with no
+   siblings falls back to the per-recording floor and records that it did.
+3. **Decision vocabulary.**
+   - `verdict` ∈ {pass, review, discard}: `flag` is renamed `review`. `rerun` becomes a separate
+     `run_status`; a recording still incomplete after recompute is `review` with reason `not_measured`.
+   - `release` ∈ {as_is, redacted, withheld}, null when the verdict is discard; `withheld` is a
+     redaction-policy hold only.
+   - `reason` (primary) and `reasons` (all), drawn from a vocabulary of about ten keys in `data/`.
+4. **Decision table.**
+   - `triage_decisions`: one row per recording, with core fixed columns (identity, verdict, release,
+     reason, reasons, extent, annotations, figure and audio paths, provenance) and an `evidence` list
+     holding the items that decided *that* row: `{name, value, unit, comparison, threshold, effect}`.
+     The contents differ by row and by task.
+   - `triage_evidence`: a long table of every item read, with a `decisive` flag. Item names are
+     defined per family in `data/`.
+   - Items are emitted from VERDICT's decision path, never reconstructed afterwards.
+5. **Review page.** Only a subset is ever reviewed (chosen by reason, or sampled), never the full set.
+   - It is a static HTML page built for the chosen subset.
+   - Reviewer decisions (pass/review/discard plus a note) are kept in the browser and exported as a
+     local JSON file. There is no hosted state. The JSON keys match the owner label CSV's columns, so
+     reviews feed the evaluation harness.
+   - Display modes:
+     - (a) served from ORCD over an ssh tunnel (an http server on the cluster plus `ssh -L`): the
+       raw and enhanced audio play;
+     - (b) opened standalone without audio access: only a highly quantised spectrogram (coarse time
+       and frequency bins, a few levels) with events, extent and issues marked. No audio is embedded.
+   - Each entry shows the decision, the reason and the evidence items.
