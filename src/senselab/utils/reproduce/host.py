@@ -62,13 +62,22 @@ def _run(argv: Sequence[str]) -> tuple[int, str]:
     return done.returncode, done.stdout
 
 
+CPUINFO = "/proc/cpuinfo"
+
+
+def _one_line(value: str) -> str:
+    # Older Intel parts pad /proc/cpuinfo model names with runs of spaces ("CPU           X5650  @ 2.67GHz");
+    # provenance accepts only single-spaced words, so the record normalises rather than refusing the host.
+    return " ".join(value.split())
+
+
 def _cpu_model() -> str | None:
     try:
-        with open("/proc/cpuinfo") as handle:
+        with open(CPUINFO) as handle:
             for line in handle:
                 key, _, value = line.partition(":")
                 if key.strip() == "model name" and value.strip():
-                    return value.strip()
+                    return _one_line(value)
     except OSError:
         return None
     return None
@@ -77,7 +86,7 @@ def _cpu_model() -> str | None:
 def _gpus(runner: Runner) -> tuple[str | None, str | None, int]:
     code, out = runner(NVIDIA_SMI)
     rows = [line.split(",") for line in out.splitlines() if line.strip()] if code == 0 else []
-    rows = [[c.strip() for c in row] for row in rows if len(row) == 2]
+    rows = [[_one_line(c) for c in row] for row in rows if len(row) == 2]
     if not rows:
         return None, None, 0
     return rows[0][0] or None, rows[0][1] or None, len(rows)
