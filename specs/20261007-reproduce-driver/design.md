@@ -199,21 +199,29 @@ How `build` produces and reuses sdist wheels:
   --fuzz=0`, before the build venv is created. The spike's mmcv patch carries `srcp/…` paths and
   has to be regenerated with `a/`, `b/` paths when its manifest row is written.
 - **Modules load without dotfiles:** `bash --noprofile --norc -c '. /etc/profile.d/modules.sh &&
-  module load <m…> && <fail unless nvcc is on PATH> && export CUDA_HOME=… && exec "$@"'`.
-  `CUDA_HOME` is derived from `nvcc`, as in the spike's mmcv job. `cuda_module` may name several
-  modules separated by spaces. The spike's mmcv build got gcc 12.2 from the login shell's default
-  modules. With dotfiles and the caller's `PATH` gone, the compiler is `/usr/bin/gcc` (8.5 here)
-  unless the manifest loads one, e.g. `cuda_module: "gcc/12.2.0 cuda/12.9.1"`. Each wheel gets a
-  `<wheel>.build-info.json` recording the uv, gcc and nvcc versions, the modules and
-  `python_exact`, so the toolchain is visible either way.
+  module load <m…> && exec "$@"'`. `nvcc` is required only when the build is a CUDA build, that is,
+  when `torch_cuda_arch_list` is set or a `cuda/*` module is listed. Then the script fails unless
+  `nvcc` is on `PATH`, and exports `CUDA_HOME` derived from it, as in the spike's mmcv job.
+  The spike's mmcv build got gcc 12.2 from the login shell's default modules. With dotfiles and the
+  caller's `PATH` gone, the compiler is `/usr/bin/gcc` (8.5 here) unless the manifest loads one,
+  e.g. `build_modules: [gcc/12.2.0, cuda/12.9.1]`. Each wheel gets a `<wheel>.build-info.json`
+  recording the uv, gcc and nvcc versions, the modules and `python_exact`, so the toolchain is
+  visible either way.
+- **Planning amendment: `build_modules` replaces `cuda_module`.** Spec §2.3.3 named one optional
+  `cuda_module` per sdist. A build needs a compiler module as well as a CUDA module, so `SdistSpec`
+  carries `build_modules: [name…]`, loaded in order. Each entry is one module name with no shell
+  syntax, and entries are unique. The list, in order, goes into `build_config_sha256` and so into
+  `env_key`'s sdist inputs.
 - **Content-addressed wheelhouse:** `<wheelhouse>/<wheel sha256>/<wheel file>`, never overwritten.
-  Other bytes already at a wheel's address are an error. A rebuild adds a new directory and
+  The wheel is written to a temp file in that directory and hard-linked into place, so no partial
+  file is ever visible and a file that appears meanwhile is not replaced. Other bytes already at a
+  wheel's address are an error. A rebuild adds a new directory and
   repoints the line; the old wheel stays, so an earlier `wheels.lock` still resolves.
 - `wheels.lock` has nine columns: `name version sdist_url sdist_sha256 build_env_sha256
   patch_sha256s build_config_sha256 wheel_path wheel_sha256`. `wheel_path` is relative to the
   wheelhouse. The spike's seven-column file named the build lock by file name. This one records
   the build lock's sha256 and every patch sha256, and folds `python_exact`, the torch lock sha256,
-  the build variables, the modules and the arch list into `build_config_sha256`, since an arch
+  the build variables, the `build_modules` list and the arch list into `build_config_sha256`, since an arch
   list may contain spaces and the variables are a mapping.
 - Reuse compares every input column with the manifest. A line recorded for other inputs, a missing
   wheel, or a wheel whose sha256 differs is an error that names `--rebuild`, never a silent rebuild:
@@ -229,7 +237,12 @@ How `build` produces and reuses sdist wheels:
   checks the copy's sha256, and installs from the copy.
 - The batch job starts from an empty environment (`--export=NONE`). It exports `PATH`,
   `UV_CACHE_DIR`, `UV_PYTHON_INSTALL_DIR`, `SENSELAB_REPRO_CACHE`, the driver interpreter, and a
-  `TMPDIR` under `/dev/shm/<job>` that is removed on exit. `build-one` builds in a temporary work
+  `TMPDIR` under `/dev/shm/<job>` that is removed on exit. It also exports `REPRO_UV`, the uv path
+  resolved to an absolute path when the script is rendered. uv usually lives in the user's
+  `~/.local/bin`, which a minimal `PATH` lacks; `find_uv` reads `REPRO_UV` first, and every build
+  subprocess runs that absolute uv. The script loads no modules: under `set -u`, sourcing
+  `/etc/profile.d/modules.sh` dies on an unset `MODULEPATH`. `build-one` loads `build_modules`
+  itself, in the wrapper above. A test runs the rendered prologue under `env -i` with `set -u`. `build-one` builds in a temporary work
   directory under that `TMPDIR`, removed afterwards.
 
 **The venv name** is `repro-<analysis>-<env_key8>`. `env_key` is derived from inputs only:

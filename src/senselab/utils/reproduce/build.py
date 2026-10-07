@@ -260,20 +260,17 @@ def torch_index_url(torch: TorchSpec, text: str) -> str | None:
     return torch.index_url if any(not e.is_url for e in lock_entries(text)) else None
 
 
-def modules(sdist: SdistSpec) -> list[str]:
-    """The modules a build loads: ``cuda_module`` split on whitespace (e.g. ``"gcc/12.2.0 cuda/12.9.1"``).
-
-    Raises:
-        ValueError: If a module name is not a plain word.
-    """
-    return [_safe_word(m, "cuda_module") for m in (sdist.cuda_module or "").split()]
+def needs_nvcc(sdist: SdistSpec) -> bool:
+    """Whether the build needs ``nvcc``: an arch list is declared or a ``cuda/*`` module is loaded."""
+    return sdist.torch_cuda_arch_list is not None or any(m.startswith("cuda/") for m in sdist.build_modules)
 
 
 def in_modules(sdist: SdistSpec, argv: list[str]) -> list[str]:
     """Wrap ``argv`` so it runs with the sdist's modules loaded, without reading any dotfile.
 
-    Without modules ``argv`` is returned unchanged. With them it becomes ``bash --noprofile --norc -c
-    '. <MODULES_INIT> && module load <m…> && <nvcc on PATH or fail> && export CUDA_HOME=… && exec "$@"'``.
+    Without ``build_modules`` ``argv`` is returned unchanged. With them it becomes ``bash --noprofile
+    --norc -c '. <MODULES_INIT> && module load <m…> && exec "$@"'``; when :func:`needs_nvcc`, the
+    script also fails unless ``nvcc`` is on ``PATH`` and exports ``CUDA_HOME`` from it.
 
     Args:
         sdist: The sdist spec.
@@ -282,15 +279,16 @@ def in_modules(sdist: SdistSpec, argv: list[str]) -> list[str]:
     Returns:
         The argv to run.
     """
-    names = modules(sdist)
-    if not names:
+    if not sdist.build_modules:
         return argv
-    loaded = " ".join(names)
-    script = (
-        f". {MODULES_INIT} && module load {loaded} && "
-        f'if ! command -v nvcc >/dev/null; then echo "nvcc not on PATH after module load {loaded}" >&2; exit 1; fi'
-        f' && {CUDA_HOME_FROM_NVCC} && exec "$@"'
-    )
+    loaded = " ".join(_safe_word(m, "build module") for m in sdist.build_modules)
+    script = f". {MODULES_INIT} && module load {loaded} && "
+    if needs_nvcc(sdist):
+        script += (
+            f'if ! command -v nvcc >/dev/null; then echo "nvcc not on PATH after module load {loaded}" >&2; exit 1; fi'
+            f" && {CUDA_HOME_FROM_NVCC} && "
+        )
+    script += 'exec "$@"'
     return ["bash", "--noprofile", "--norc", "-c", script, "bash", *argv]
 
 
@@ -398,28 +396,53 @@ def _build_info(uv: str, sdist: SdistSpec, python: str, env: dict[str, str]) -> 
         "python_exact": python,
         "uv": _capture([uv, "--version"], env),
         "gcc": _first_line(_capture(in_modules(sdist, ["gcc", "--version"]), env)),
-        "modules": modules(sdist),
+        "build_modules": list(sdist.build_modules),
         "torch_cuda_arch_list": sdist.torch_cuda_arch_list,
         "build_env_vars": dict(sorted(sdist.build_env_vars.items())),
         "source_date_epoch": SOURCE_DATE_EPOCH,
     }
-    if modules(sdist):
+    if needs_nvcc(sdist):
         info["nvcc"] = _last_line(_capture(in_modules(sdist, ["nvcc", "--version"]), env))
     return info
 
 
 def _store(wheel: Path, wheelhouse: Path, info: Mapping[str, object]) -> tuple[Path, str]:
-    """Move a built wheel to ``<wheelhouse>/<sha256>/<name>``; an existing copy must hold the same bytes."""
-    sha = file_sha256(wheel)
+    """Store a built wheel at ``<wheelhouse>/<sha256>/<name>``; an existing copy must hold the same bytes."""
+    data = wheel.read_bytes()
+    sha = hashlib.sha256(data).hexdigest()
     target = wheelhouse / sha / wheel.name
     if target.exists():
         if file_sha256(target) != sha:
             raise ReproduceLockError(f"{target} exists with other bytes than its directory name says")
         return target, sha
     target.parent.mkdir(parents=True, exist_ok=True)
-    shutil.move(wheel, target)
-    target.with_name(target.name + ".build-info.json").write_text(json.dumps(info, indent=2, sort_keys=True) + "\n")
+    _place(data, target, replace=False)
+    _place(
+        (json.dumps(info, indent=2, sort_keys=True) + "\n").encode(), target.with_name(target.name + ".build-info.json")
+    )
     return target, sha
+
+
+def _place(data: bytes, target: Path, replace: bool = True) -> None:
+    """Write ``data`` to a temp file beside ``target``, then move it into place in one step.
+
+    With ``replace=False`` the move is a hard link, which fails if ``target`` exists; nothing is overwritten.
+    """
+    fd, tmp = tempfile.mkstemp(dir=target.parent, prefix=f".{target.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+        os.chmod(tmp, 0o666 & ~_current_umask())
+        if replace:
+            os.replace(tmp, target)
+        else:
+            try:
+                os.link(tmp, target)
+            except FileExistsError as error:
+                raise ReproduceLockError(f"{target} appeared while storing it; not overwritten") from error
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
 
 
 def build_wheel(
@@ -506,14 +529,14 @@ def build_config_sha256(sdist: SdistSpec, torch_lock: LockRef | None, python: st
         python: The build venv's interpreter version (``python_exact``).
 
     Returns:
-        A hex sha256 over ``python``, the torch lock sha256, ``build_env_vars``, ``cuda_module`` and
+        A hex sha256 over ``python``, the torch lock sha256, ``build_env_vars``, ``build_modules`` (as a list) and
         ``torch_cuda_arch_list``.
     """
     payload = {
         "python_exact": python,
         "torch_lock_sha256": None if torch_lock is None else torch_lock.lock_sha256,
         "build_env_vars": dict(sorted(sdist.build_env_vars.items())),
-        "cuda_module": sdist.cuda_module,
+        "build_modules": list(sdist.build_modules),
         "torch_cuda_arch_list": sdist.torch_cuda_arch_list,
     }
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
@@ -730,7 +753,24 @@ def reuse_wheel(
         ReproduceLockError: If ``wheels.lock`` does not match ``expected_sha256``, the line was recorded
             for other build inputs, the wheel is missing, or its sha256 differs from the line.
     """
-    line = read_wheels_lock(wheels_lock, expected_sha256).get(normalize_name(sdist.name))
+    found = _reuse(wheels_lock, sdist, wheelhouse, torch_lock, python, expected_sha256)
+    return None if found is None else found[:2]
+
+
+def _reuse(
+    wheels_lock: Path,
+    sdist: SdistSpec,
+    wheelhouse: Path,
+    torch_lock: LockRef | None,
+    python: str,
+    expected_sha256: str | None,
+) -> tuple[Path, str, str] | None:
+    """:func:`reuse_wheel`, also returning the sha256 of the ``wheels.lock`` bytes it checked."""
+    with _locked(wheels_lock, shared=True):
+        data = _read_verified(wheels_lock, expected_sha256)
+    if data is None:
+        return None
+    line = parse_wheels_lock(data.decode(), str(wheels_lock)).get(normalize_name(sdist.name))
     if line is None:
         return None
     recorded = (line.sdist_url, line.sdist_sha256, line.build_env_sha256, line.patch_sha256s, line.build_config_sha256)
@@ -744,7 +784,7 @@ def reuse_wheel(
     actual = file_sha256(wheel)
     if actual != line.wheel_sha256:
         raise ReproduceLockError(f"{wheel}: sha256 {actual} != wheels.lock {line.wheel_sha256}")
-    return wheel, actual
+    return wheel, actual, hashlib.sha256(data).hexdigest()
 
 
 def stage_wheel(wheel: Path, sha256: str, dest_dir: Path) -> Path:
@@ -807,9 +847,9 @@ def ensure_wheel(
         ReproduceLockError: From :func:`reuse_wheel` (without ``rebuild``), :func:`build_wheel` or :func:`record_wheel`.
     """
     if not rebuild:
-        reused = reuse_wheel(wheels_lock, sdist, wheelhouse, torch_lock, python=python, expected_sha256=expected_sha256)
+        reused = _reuse(wheels_lock, sdist, wheelhouse, torch_lock, python, expected_sha256)
         if reused is not None:
-            return WheelResult(reused[0], reused[1], file_sha256(wheels_lock), built=False)
+            return WheelResult(*reused, built=False)
     wheel, sha = build_wheel(
         sdist, base_dir, wheelhouse, torch_lock, python=python, work_dir=work_dir, sdist_cache=sdist_cache
     )
@@ -841,24 +881,27 @@ def render_build_job(
     rebuild: bool = False,
     date: datetime.date | None = None,
     driver_python: str = sys.executable,
+    uv: str | None = None,
     environ: Mapping[str, str] | None = None,
 ) -> str:
     """Render the batch script that runs ``build-one`` for one sdist under the profile's build partition.
 
     The job starts from an empty environment (``--export=NONE``) and exports only ``PATH``, the
-    :data:`BATCH_EXPORTS` variables set in ``environ``, the driver interpreter and a per-job
-    ``TMPDIR`` under ``/dev/shm`` that is removed on exit. The log directory
-    ``<slurm_logs_root>/<date>/`` must exist before submission.
+    :data:`BATCH_EXPORTS` variables set in ``environ``, the driver interpreter, ``REPRO_UV`` (the
+    absolute uv, read by :func:`find_uv`) and a per-job ``TMPDIR`` under ``/dev/shm`` that is
+    removed on exit. Modules are not loaded here: ``build-one`` loads ``build_modules`` itself
+    (:func:`in_modules`). The log directory ``<slurm_logs_root>/<date>/`` must exist before submission.
 
     Args:
         profile: The site profile; ``partitions[build]`` gives partition, CPUs, memory, time and gres.
-        sdist: The sdist spec; its modules are loaded and ``torch_cuda_arch_list`` exported.
+        sdist: The sdist spec; its ``torch_cuda_arch_list`` is exported.
         manifest: The manifest holding the step.
         profile_path: The profile file passed to ``build-one``.
         step: The step whose env lists the sdist.
         rebuild: Pass ``--rebuild``.
         date: The log date; defaults to today.
         driver_python: The interpreter with senselab installed.
+        uv: The uv executable; defaults to :func:`find_uv`, resolved to an absolute path now.
         environ: Where the exported variables' values come from; defaults to ``os.environ``.
 
     Returns:
@@ -868,6 +911,9 @@ def render_build_job(
         ValueError: If a value would need quoting the script cannot express safely.
     """
     environ = os.environ if environ is None else environ
+    uv = find_uv() if uv is None else uv
+    if not os.path.isabs(uv):
+        raise ValueError(f"uv must be an absolute path: {uv!r}")
     part = profile.partitions[profile.build]
     logs = _safe_word(str(profile.slurm_logs_root / (date or datetime.date.today()).isoformat()), "log dir")
     name = _safe_word(sdist.name, "sdist name")
@@ -891,13 +937,11 @@ def render_build_job(
     lines += [f"export {key}={shlex.quote(environ[key])}" for key in BATCH_EXPORTS if environ.get(key)]
     lines += [
         f"export REPRO_DRIVER_PYTHON={shlex.quote(driver_python)}",
+        f"export REPRO_UV={shlex.quote(uv)}",
         'export TMPDIR="/dev/shm/reproduce-build-${SLURM_JOB_ID}"',
         'mkdir -p "$TMPDIR"',
         "trap 'rm -rf \"$TMPDIR\"' EXIT",
     ]
-    names = modules(sdist)
-    if names:
-        lines += [f". {MODULES_INIT}", f"module load {' '.join(names)}"]
     if sdist.torch_cuda_arch_list is not None:
         arch = _double_quoted(sdist.torch_cuda_arch_list, "torch_cuda_arch_list")
         lines.append(f"export TORCH_CUDA_ARCH_LIST={arch}")
