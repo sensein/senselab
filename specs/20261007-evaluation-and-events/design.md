@@ -181,3 +181,25 @@ lab implementation was read.
 - The mean is taken over classes present in the references.
 - The report gives mAP at each tIoU threshold and their average separately, so a single number is
   never labelled with the wrong threshold.
+
+## Event interchange formats
+
+`events_io` reads and writes six formats: a per-frame label table, a segment CSV, RTTM, BIDS
+`events.tsv`, ActivityNet/OpenTAD ground-truth JSON and a Label Studio export. `FORMAT_FIELDS`
+declares which event fields each format carries. "Lossless" means every carried field
+round-trips; a reader takes the fields its format lacks (schema id, source, confidence kind) as
+arguments. A reader of a format that holds confidences but not their kind raises unless the caller
+names the kind, so a vote fraction is never relabelled as a probability.
+
+**Per-frame label table.** A generic wide format: a `Frame` column of 0-based frame numbers and
+one column per category, each cell holding that category's label or a background token (`N/A` by
+default). An event `[onset, offset)` covers frames `[onset·fps, offset·fps)`. The writer refuses
+what the table cannot hold without loss: times that are not frame-aligned, overlapping events in
+one category, and adjacent events with the same label, which would read back as one.
+
+**Float exactness.** RTTM and BIDS store durations, so the offset is rebuilt as
+`onset + duration`. Times are written as the shortest decimal that reads back as the same float.
+For times that are multiples of a power of two (the test fixtures use multiples of 1/64 s) the
+rebuilt offset is exact. Otherwise it is within one unit in the last place: one subtraction and
+one addition, each correctly rounded. Over 200,000 random millisecond-resolution pairs, 1.6 % were
+off by one ulp and none by more. The tests assert this bound on pairs known to be inexact.
