@@ -30,9 +30,13 @@ from pydantic import (
     model_validator,
 )
 
+from senselab.utils.reproduce.metrics import CLASSIFICATION_KINDS, HeadlineName, MetricsKind, metric_address_error
+
 Commit = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{40}$")]
 Sha256 = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
 Name = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9_.-]+$")]
+Label = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9][A-Za-z0-9_+-]{0,63}$")]
+CountName = Annotated[str, StringConstraints(pattern=r"^[a-z][a-z0-9_]{0,63}$")]
 SourceRoot = Annotated[str, StringConstraints(pattern=r"^(up:)?[A-Za-z0-9_.-]+$")]
 
 
@@ -338,6 +342,36 @@ class Expect(_Model):
         return self
 
 
+def _no_duplicates(value: list[str], info: ValidationInfo) -> list[str]:
+    if len(set(value)) != len(value):
+        raise ValueError(f"{info.field_name} has duplicates")
+    return value
+
+
+class MetricsSchema(_Model):
+    """What a step's ``metrics.json`` may hold, within the fixed vocabulary of `metrics`.
+
+    ``headline`` names the headline metrics the adapter emits (each must appear); ``headline_labels``
+    the labels that tell apart several entries of one name (e.g. systems); ``counts`` the named counts
+    (each must appear); ``per_class`` the class labels. ``classification`` and ``detection`` steps need
+    class labels, because their output must carry every class's prevalence.
+    """
+
+    kind: MetricsKind
+    headline: list[HeadlineName] = Field(min_length=1)
+    headline_labels: list[Label] = []
+    counts: list[CountName] = []
+    per_class: list[Label] = []
+
+    _unique = field_validator("headline", "headline_labels", "counts", "per_class")(_no_duplicates)
+
+    @model_validator(mode="after")
+    def _classes(self) -> "MetricsSchema":
+        if self.kind in CLASSIFICATION_KINDS and not self.per_class:
+            raise ValueError(f"kind {self.kind} needs per_class labels")
+        return self
+
+
 class StepSpec(_Model):
     """One step: a repository commit, an env, an argv template, its inputs, outputs and expectations."""
 
@@ -358,6 +392,7 @@ class StepSpec(_Model):
     resources: Resources
     patches: list[FileRef] = []
     adapter: str
+    metrics_schema: MetricsSchema
     expect: list[Expect] = []
 
     @model_validator(mode="after")
@@ -378,6 +413,10 @@ class StepSpec(_Model):
         missing = sorted(set(referenced) - needs)
         if missing:
             raise ValueError(f"step {self.name!r} refers to steps outside its needs: {missing}")
+        for expect in self.expect:
+            code = metric_address_error(expect.metric, self.metrics_schema)
+            if code is not None:
+                raise ValueError(f"step {self.name!r} expect metric {expect.metric!r} is not in metrics_schema: {code}")
         if self.kind in ("notebook", "ir_notebook") and self.env.notebook_tools is None:
             raise ValueError(f"kind {self.kind} needs env.notebook_tools")
         if self.kind in ("r", "ir_notebook") and (
