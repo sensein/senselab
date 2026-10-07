@@ -613,7 +613,9 @@ the step.
     and docs do not). `__pycache__` dirs and `*.pyc` are always excluded (`digest.input_set_digest`'s
     `exclude_patterns`), since a Python run beside a native tool rewrites them. A dangling symlink
     or an unreadable file among the matches gives `E_DIGEST_UNREADABLE`, and a dir matching nothing
-    gives `E_DIGEST_EMPTY`
+    gives `E_DIGEST_EMPTY`. A wrapper script in a bin dir (a shell script that execs a binary
+    elsewhere, as conda and module prefixes often install) is digested as the script's own bytes; what
+    it runs is not followed. A profile whose tool is a wrapper names the real binary's dir as well
   - `resources.gpu_arch` (sorted). A step limited to sm_80 can produce different numbers from one
     run on sm_90 (cuBLAS and cuDNN pick kernels, and so reduction orders, per architecture), so widening or narrowing the allowed
     architectures recomputes. `min_driver` is left out: it is a floor checked at run time, and
@@ -625,7 +627,10 @@ the step.
     adapter. B12 passes the step venv's `installed_sha256` when the adapter runs there, or
     `cache.driver_env_sha256()` when it runs in the driver's env: a sha256 over `sys.version` and
     the sorted `name==version` of senselab's runtime dependency closure (its requirements with no
-    extra, followed transitively) as installed in the interpreter's own `purelib`/`platlib`.
+    extra, followed transitively; a requirement that asks for extras, such as `dep[x]`, also brings
+    in `dep`'s requirements for `x`) as installed in the interpreter's own `purelib`/`platlib`.
+    Only `.dist-info` distributions are read: a legacy `.egg-info` dist has no `METADATA` file and is
+    skipped, so a package installed that way does not move the identity.
     `sys.path`, the cwd and `PYTHONPATH` are never read, so a stray checkout cannot shift it;
     extras and dev groups are left out because the adapter may not import them. senselab itself
     is left out, its reproduce code being `reproduce_source_sha256`.
@@ -681,7 +686,8 @@ the step.
   write of a run, so any dir without it is incomplete. A failed run's summary (exit non-zero)
   stays readable for diagnosis and is cleared by `reset_result_dir(results_root, key)` when the
   step is retried. It wipes only when `summary.json` is absent or parses as an object with a
-  non-zero integer exit; any other read error, or a summary that is not such an object, is
+  non-zero integer exit; any other read error (a summary that does not decode as UTF-8 included), or a
+  summary that is not such an object, is
   `E_RESULT_UNREADABLE` and nothing is deleted, so a transient NFS or permission error can never
   erase a finished result. A done dir is never reset (`E_RESULT_DONE`), a symlink or non-directory at the
   path is refused rather than removed (`E_RESULT_NOT_DIR`), and a failed removal or creation is
@@ -796,10 +802,12 @@ is checked within 1e-6 (scaled by 100 for a `pp` entry):
 | pr_auc | p, the positive-class prevalence, when the schema declares `positive` |
 | f1 | 2p/(1+p), the all-positive predictor, when the schema declares `positive` |
 
-`macro_f1`, `avg_map` and `map_at` (and `pr_auc`/`f1` without a declared positive class) are checked
-for presence only: their trivial-classifier value depends on choices (which trivial predictor,
-which IoU thresholds, per-class averaging) that the vocabulary does not carry, so a fixed formula
-would be wrong for some rows. `positive` may be declared only on a binary classification step.
+`macro_f1`, `avg_map` and `map_at` are checked for presence only: their trivial-classifier value
+depends on choices (which trivial predictor, which IoU thresholds, per-class averaging) that the
+vocabulary does not carry, so a fixed formula would be wrong for some rows. `positive` may be
+declared only on a binary classification step. `pr_auc` and `f1` are single-class quantities, so a
+step that declares either as secondary must be binary (`E_SPEC_SECONDARY_BINARY_ONLY`) and declare
+`positive` (`E_SPEC_POSITIVE_REQUIRED`); their floors are then always compared, never presence-only.
 
 **Split protocol.** `split_report.protocol` is `seen_subject`, `unseen_subject` or `none`.
 `seen_subject` and `unseen_subject` are both legitimate evaluations. A seen-subject split asks

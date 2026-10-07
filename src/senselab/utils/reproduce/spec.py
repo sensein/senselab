@@ -34,6 +34,7 @@ from senselab.utils.reproduce.metrics import (
     CLASSIFICATION_HEADLINE,
     CLASSIFICATION_KINDS,
     HEADLINES_BY_KIND,
+    POSITIVE_FLOOR_METRICS,
     SCALED_QUANTITIES,
     SECONDARY_BY_KIND,
     MetricName,
@@ -378,8 +379,10 @@ class MetricsSchema(_Model):
     ``headline_labels`` the labels that tell apart several headline or secondary entries of one name
     (e.g. systems); ``counts`` the named counts (each must appear); ``per_class`` the class labels.
     ``positive`` names the positive class of a binary classification step, which fixes the PR-AUC and
-    F1 floors. ``split`` opts a classification or detection step out of the split report. Only
-    classification and detection steps take ``per_class`` and ``positive``.
+    F1 floors; a step declaring ``pr_auc`` or ``f1`` as secondary must be binary
+    (``E_SPEC_SECONDARY_BINARY_ONLY``) and declare it (``E_SPEC_POSITIVE_REQUIRED``). ``split`` opts a
+    classification or detection step out of the split report. Only classification and detection steps
+    take ``per_class`` and ``positive``.
 
     A classification step declares at least two classes and exactly ``["balanced_accuracy"]`` as its
     headline (``E_SPEC_HEADLINE_NOT_BA`` otherwise); accuracy, top-1, macro F1, AUROC, PR-AUC, MCC and
@@ -423,6 +426,11 @@ class MetricsSchema(_Model):
             self.kind != "classification" or len(self.per_class) != 2 or self.positive not in self.per_class
         ):
             raise ValueError("positive must be one of exactly two per_class labels of a classification step")
+        positive_floor = sorted(secondary & POSITIVE_FLOOR_METRICS)
+        if positive_floor and len(self.per_class) != 2:
+            raise ValueError(f"E_SPEC_SECONDARY_BINARY_ONLY: secondary {positive_floor} needs a binary step")
+        if positive_floor and self.positive is None:
+            raise ValueError(f"E_SPEC_POSITIVE_REQUIRED: secondary {positive_floor} needs a declared positive class")
         return self
 
 
