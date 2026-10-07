@@ -31,6 +31,7 @@ impulse:
   onset_db: 3.0                   # the candidate starts and ends where it falls back within this
   attack_max_ms: 5.0              # UNFITTED (C1): an impulse rises this fast
   duration_max_ms: 80.0           # UNFITTED (C1): and is over this soon; a quick breath (about 0.25 s) is not
+  isolation_ms: 30.0              # and no other candidate stands this close; a glottal pulse train is not alone
 hum:
   mains_hz: [50.0, 60.0]          # mains fundamentals
   harmonics_max: 10               # multiples of each read
@@ -49,3 +50,4 @@ disruptions:                      # dropout and discontinuity extents on the ori
   min_dropout_ms: 10.0            # as disruptions.min_dropout_ms in config/default.yaml
   discontinuity_local_factor: 10.0
   discontinuity_window_ms: 20.0
+  merge_s: 0.01                   # discontinuities this close are one span

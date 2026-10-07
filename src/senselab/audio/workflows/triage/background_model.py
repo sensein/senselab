@@ -258,7 +258,7 @@ class Impulse:
 
 
 def impulses_of(signal: Signal, p: dict[str, Any]) -> list[Impulse]:
-    """The impulses of a signal: fast to rise and soon over, on a pre-emphasised sample envelope.
+    """The impulses of a signal: fast to rise, soon over and alone, on a pre-emphasised sample envelope.
 
     Args:
         signal: The samples and their rate.
@@ -286,7 +286,7 @@ def impulses_of(signal: Signal, p: dict[str, Any]) -> list[Impulse]:
     background = median_filter(env, size=max(3, int(q["background_ms"])), mode="nearest")
     excess = env - background
     ms = step * 1000.0 / rate
-    found: list[Impulse] = []
+    clusters: list[tuple[int, int, int]] = []
     taken = np.zeros(count, dtype=bool)
     for i in np.argsort(-excess):
         if excess[i] < q["peak_db"]:
@@ -300,17 +300,26 @@ def impulses_of(signal: Signal, p: dict[str, Any]) -> list[Impulse]:
         while b < count - 1 and excess[b + 1] >= q["onset_db"]:
             b += 1
         taken[a : b + 1] = True
-        if (i - a) * ms <= q["attack_max_ms"] and (b - a + 1) * ms <= q["duration_max_ms"]:
-            half = width / 2.0
-            found.append(
-                Impulse(
-                    (starts[i] + half) / rate,
-                    (starts[a] + half) / rate,
-                    (starts[b] + half) / rate,
-                    float(excess[i]),
-                    (i - a) * ms,
-                )
+        clusters.append((int(i), int(a), int(b)))
+    peaks = np.array(sorted(c[0] for c in clusters))
+    alone = int(round(q["isolation_ms"] / ms))
+    half = width / 2.0
+    found: list[Impulse] = []
+    for i, a, b in clusters:
+        if (i - a) * ms > q["attack_max_ms"] or (b - a + 1) * ms > q["duration_max_ms"]:
+            continue
+        others = peaks[(peaks < a) | (peaks > b)]
+        if others.size and np.min(np.minimum(np.abs(others - a), np.abs(others - b))) <= alone:
+            continue
+        found.append(
+            Impulse(
+                (starts[i] + half) / rate,
+                (starts[a] + half) / rate,
+                (starts[b] + half) / rate,
+                float(excess[i]),
+                (i - a) * ms,
             )
+        )
     return sorted(found, key=lambda imp: imp.peak_s)
 
 
@@ -422,3 +431,136 @@ def hum_of(residual: Signal | None, p: dict[str, Any]) -> Hum:
                     count += 1
             lines[f"{m:g}"] = count
     return Hum(lines, tuple(float(m) for m in q["mains_hz"] if lines.get(f"{m:g}", 0) >= q["lines_min"]))
+
+
+@dataclass(frozen=True)
+class BackgroundReading:
+    """The recording-level reading: background, activity and acquisition faults.
+
+    Attributes:
+        floor: The floor per band.
+        hum: The residual's mains lines.
+        impulses: The impulses.
+        regions: The regions of activity.
+        shutoffs: The shutoff spans.
+        dropouts: The dropout spans, on the original recording.
+        discontinuities: The discontinuity spans (jumps closer than ``merge_s`` joined), on the original recording.
+        clips: The clip spans PREPROCESS kept.
+        duration_s: The plain stream's length.
+        band_edges_hz: The bands the floor is read in.
+    """
+
+    floor: Floor
+    hum: Hum
+    impulses: tuple[Impulse, ...]
+    regions: tuple[Region, ...]
+    shutoffs: tuple[Span, ...]
+    dropouts: tuple[Span, ...]
+    discontinuities: tuple[Span, ...]
+    clips: tuple[Span, ...]
+    duration_s: float
+    band_edges_hz: tuple[float, ...]
+
+    @property
+    def active_s(self) -> float:
+        """Seconds of activity over the floor."""
+        return float(sum(r.end_s - r.start_s for r in self.regions))
+
+    def record(self) -> dict[str, Any]:
+        """The reading, for the store."""
+
+        def spans(items: Sequence[Span]) -> list[list[float]]:
+            return [[round(a, 4), round(b, 4)] for a, b in items]
+
+        return {
+            "duration_s": round(self.duration_s, 3),
+            "band_edges_hz": list(self.band_edges_hz),
+            "floor": {
+                "band_db": [round(float(v), 2) for v in self.floor.band_db],
+                "source": self.floor.source,
+                "quiet_s": round(self.floor.quiet_s, 3),
+                "own_db": [round(float(v), 2) for v in self.floor.own_db],
+                "residual_db": None
+                if self.floor.residual_db is None
+                else [round(float(v), 2) for v in self.floor.residual_db],
+            },
+            "hum": self.hum.record(),
+            "impulses": [imp.record() for imp in self.impulses],
+            "regions": [region.record() for region in self.regions],
+            "active_s": round(self.active_s, 3),
+            "faults": {
+                "shutoff": spans(self.shutoffs),
+                "dropout": spans(self.dropouts),
+                "discontinuity": spans(self.discontinuities),
+                "clip": spans(self.clips),
+            },
+        }
+
+
+def _merged(times: Sequence[float], gap_s: float) -> list[Span]:
+    out: list[Span] = []
+    for t in times:
+        if out and t - out[-1][1] <= gap_s:
+            out[-1] = (out[-1][0], t)
+        else:
+            out.append((t, t))
+    return out
+
+
+def measure_background(
+    plain: Signal,
+    *,
+    residual: Signal | None,
+    recording: Signal | None,
+    clips: Sequence[Span],
+    p: dict[str, Any] | None = None,
+) -> BackgroundReading:
+    """Read the background, the activity and the acquisition faults of one recording.
+
+    Args:
+        plain: The plain stream.
+        residual: The residual stream, or None.
+        recording: The original recording, read for dropouts and discontinuities, or None.
+        clips: The clip spans PREPROCESS kept.
+        p: The parameters; the packaged ones when None.
+
+    Returns:
+        The reading.
+    """
+    from senselab.audio.tasks.disruptions.api import disruption_extents  # noqa: PLC0415
+
+    p = p or background_model_parameters()
+    frames = band_frames(plain, p)
+    residual_frames = band_frames(residual, p) if residual is not None else None
+    floor = floor_of(frames, residual_frames, p)
+    impulses = impulses_of(plain, p)
+    regions = regions_of(frames, floor.band_db, impulses, p)
+    hop = p["hop_s"]
+    shutoffs = tuple(
+        (float(frames.times_s[a] - hop / 2), float(frames.times_s[b - 1] + hop / 2))
+        for a, b in shutoff_runs(frames.level_db, p)
+    )
+    dropouts: list[Span] = []
+    jumps: list[float] = []
+    if recording is not None:
+        q = p["disruptions"]
+        dropouts, jumps = disruption_extents(
+            recording[0],
+            recording[1],
+            min_dropout_ms=q["min_dropout_ms"],
+            discontinuity_local_factor=q["discontinuity_local_factor"],
+            discontinuity_window_ms=q["discontinuity_window_ms"],
+        )
+    rate = plain[1]
+    return BackgroundReading(
+        floor=floor,
+        hum=hum_of(residual, p),
+        impulses=tuple(impulses),
+        regions=tuple(regions),
+        shutoffs=shutoffs,
+        dropouts=tuple(dropouts),
+        discontinuities=tuple(_merged(jumps, p["disruptions"]["merge_s"])),
+        clips=tuple((float(a), float(b)) for a, b in clips),
+        duration_s=len(plain[0]) / float(rate),
+        band_edges_hz=tuple(float(e) for e in p["band_edges_hz"] if e <= rate / 2.0),
+    )
