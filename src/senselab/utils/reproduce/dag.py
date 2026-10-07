@@ -13,7 +13,7 @@ import heapq
 from collections import Counter
 from collections.abc import Sequence
 
-from senselab.utils.reproduce.metrics import SCALED_QUANTITIES, metric_address_error, metric_quantity
+from senselab.utils.reproduce.metrics import metric_address_error, metric_quantity
 from senselab.utils.reproduce.spec import StepSpec
 
 CODES = frozenset(
@@ -75,9 +75,10 @@ def check_expect_sources(steps: Sequence[StepSpec]) -> None:
 
     A ``from_step`` metric must be an address the upstream ``metrics_schema`` declares (a headline,
     a labelled headline, a count or a per-class field), and name the same quantity as the step's own
-    ``metric`` (`metrics.metric_quantity`), so a rate is never compared with a count. An expectation
-    ``unit`` is allowed only on a rate or ``mcc``. Each ``tolerance_from`` step must declare the
-    expectation's own ``metric``, because the spread is taken over that metric.
+    ``metric`` (`metrics.metric_quantity`), so a rate is never compared with a count; that an
+    expectation ``unit`` sits only on a rate or ``mcc`` is checked by `StepSpec` itself. Each
+    ``tolerance_from`` step must declare the expectation's own ``metric``, because the spread is taken
+    over that metric.
 
     Args:
         steps: A manifest set.
@@ -85,7 +86,7 @@ def check_expect_sources(steps: Sequence[StepSpec]) -> None:
     Raises:
         DagError: ``E_DAG_DUPLICATE_STEP`` or ``E_DAG_UNKNOWN_NEED`` for a malformed set,
             ``E_DAG_FROM_STEP_METRIC`` for an undeclared or malformed upstream metric,
-            ``E_DAG_FROM_STEP_UNIT`` for a quantity or unit mismatch, ``E_DAG_TOLERANCE_METRIC`` for a
+            ``E_DAG_FROM_STEP_UNIT`` for a quantity mismatch, ``E_DAG_TOLERANCE_METRIC`` for a
             calibration step that does not declare the metric.
     """
     by_name = _index(steps)
@@ -96,10 +97,7 @@ def check_expect_sources(steps: Sequence[StepSpec]) -> None:
                 source = expect.from_step.metric
                 if metric_address_error(source, upstream.metrics_schema) is not None:
                     raise DagError("E_DAG_FROM_STEP_METRIC", [step.name])
-                quantity = metric_quantity(expect.metric)
-                if metric_quantity(source) != quantity or (
-                    expect.unit is not None and quantity not in SCALED_QUANTITIES
-                ):
+                if metric_quantity(source) != metric_quantity(expect.metric):
                     raise DagError("E_DAG_FROM_STEP_UNIT", [step.name])
             if expect.tolerance_from is not None:
                 for name in expect.tolerance_from.steps:
