@@ -166,6 +166,39 @@ How `lockgen` produces the locks:
   a requirements body). Notebook tools compile with `torch.lock` and `body.lock` as `--constraints`,
   which still bound the versions of the names left out.
 
+How `build` produces and reuses sdist wheels:
+
+- The build venv is separate from the step venv, so setuptools, wheel and pip (chumpy's `setup.py`
+  imports pip) never reach the step venv unless its own locks list them. It is made from the
+  hashed `build_env` lock, plus the env's torch lock when the build imports torch (mmcv-full).
+  Locks and patches are copied into the work directory, the copies are hashed, and only the copies
+  are used, as in the integrity check.
+- Every uv call passes `--no-config`, so a user or project `uv.toml` cannot change an index or a
+  build setting behind the lock.
+- The build runs with `SOURCE_DATE_EPOCH=315532800` (zip dates of 1980) and a fixed umask of
+  `007`, and tar members unpack with their archive mode under that umask. File modes are stored
+  in the wheel: the first slow-test build, unpacked with the `data` filter, differed from the
+  spike's wheel only in `top_level.txt` (0644 against 0660). The spike unpacked with `tar` under
+  umask 007; with the fixed umask the wheel is bit-identical to the spike's under umask 022 and 007
+  alike. `007` was chosen because it reproduces the wheels the spike already recorded.
+- Patches are `-p1` unified diffs against the unpacked sdist root, applied with GNU `patch
+  --fuzz=0`, before the build venv is created. The spike's mmcv patch carries `srcp/…` paths and
+  has to be regenerated with `a/`, `b/` paths when its manifest row is written.
+- With a `cuda_module`, the build argv is wrapped in `bash -lc 'module load <m> && export
+  CUDA_HOME=… && exec "$@"'`, because `module` is a login-shell function; `CUDA_HOME` is taken
+  from `nvcc`, as in the spike's mmcv job. The batch script also loads the module and exports
+  `TORCH_CUDA_ARCH_LIST`, so the job's own log shows the toolchain.
+- `wheels.lock` has nine columns: `name version sdist_url sdist_sha256 build_env_sha256
+  patch_sha256s build_config_sha256 wheel_file wheel_sha256`. The spike's seven-column file named
+  the build lock by file name; this one records its sha256 and every patch sha256, and folds the
+  torch lock sha256, build variables, CUDA module and arch list into `build_config_sha256`, since
+  an arch list may contain spaces and the variables are a mapping.
+- Reuse compares every input column with the manifest. A line recorded for other inputs, a missing
+  wheel, or a wheel whose sha256 differs is an error that names `--rebuild`, never a silent rebuild:
+  CUDA builds are not bit-reproducible, so a rebuild is a new wheel and changes the lock.
+  `--rebuild` replaces only that sdist's line. Updates hold an exclusive `flock` on `wheels.lock`,
+  because several build jobs of one env can finish together.
+
 **The venv name** is `repro-<analysis>-<env_key8>`. `env_key` is derived from inputs only:
 
 - the lock sha256s
