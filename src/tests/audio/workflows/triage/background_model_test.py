@@ -33,6 +33,7 @@ def _overlap(region: tuple[float, float], span: tuple[float, float]) -> bool:
 
 
 def test_a_quick_breath_is_activity_and_a_click_is_an_impulse() -> None:
+    """A 0.25 s breath with a noise body is activity; a 1 ms click is an impulse and not activity."""
     x = _noise(4.0, -60.0)
     breath = _ramped(_noise(0.25, -25.0, seed=1), 0.06)
     start = int(1.0 * RATE)
@@ -48,6 +49,7 @@ def test_a_quick_breath_is_activity_and_a_click_is_an_impulse() -> None:
 
 
 def test_residual_hum_is_read_as_mains_lines() -> None:
+    """Mains multiples standing over their neighbourhood in the residual fire the hum reading."""
     t = np.arange(3 * RATE) / RATE
     hum = sum(np.sin(2 * np.pi * 60.0 * k * t) for k in range(1, 6)) * 10 ** (-40 / 20.0)
     residual = hum + _noise(3.0, -70.0)
@@ -57,6 +59,7 @@ def test_residual_hum_is_read_as_mains_lines() -> None:
 
 
 def test_a_shutoff_ends_in_a_flat_digital_floor() -> None:
+    """An abrupt fall to digital silence after activity is a shutoff span."""
     x = np.concatenate([_noise(1.0, -60.0), _vowel(2.0, -20.0) + _noise(2.0, -60.0), np.zeros(RATE)])
     reading = measure_background((x, RATE), residual=None, recording=None, clips=())
     assert len(reading.shutoffs) == 1
@@ -64,6 +67,7 @@ def test_a_shutoff_ends_in_a_flat_digital_floor() -> None:
 
 
 def test_a_task_that_fills_the_file_reads_its_floor_off_the_residual() -> None:
+    """A vowel with no quiet frames takes its floor from the residual and stays active."""
     noise = _noise(4.0, -70.0)
     x = _vowel(4.0, -20.0) + noise
     reading = measure_background((x, RATE), residual=(noise, RATE), recording=None, clips=())
@@ -73,6 +77,7 @@ def test_a_task_that_fills_the_file_reads_its_floor_off_the_residual() -> None:
 
 
 def test_silence_has_no_activity_and_a_digital_floor() -> None:
+    """Digital silence has a digital floor, no activity and no impulses."""
     reading = measure_background((np.zeros(2 * RATE), RATE), residual=None, recording=None, clips=())
     assert reading.floor.source == "digital"
     assert reading.regions == ()
@@ -80,6 +85,7 @@ def test_silence_has_no_activity_and_a_digital_floor() -> None:
 
 
 def test_a_dropout_is_a_span_on_the_original_recording() -> None:
+    """A run of exact zeros is a dropout span; the kept clip spans are carried as given."""
     x = _noise(2.0, -30.0)
     x[RATE : RATE + 800] = 0.0
     reading = measure_background((x, RATE), residual=None, recording=(x, RATE), clips=((0.2, 0.21),))

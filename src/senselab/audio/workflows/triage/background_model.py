@@ -17,7 +17,13 @@ from typing import Any, Sequence
 import numpy as np
 import yaml
 
+from senselab.utils.prov_store import ProvStore
+
 BACKGROUND_MODEL_PATH = Path(__file__).parent / "data" / "background_model.yaml"
+BACKGROUND_MODEL = "background_model"
+PLAIN_STREAM = "plain"
+RESIDUAL_STREAM = "residual"
+RECORDING_STREAM = "recording"
 
 Signal = tuple[np.ndarray, int]
 Run = tuple[int, int]
@@ -495,6 +501,44 @@ class BackgroundReading:
                 "clip": spans(self.clips),
             },
         }
+
+
+def _named_stream(store: ProvStore, run_dir: Path, name: str) -> Signal | None:
+    import soundfile  # noqa: PLC0415 -- decoding is only needed where the reading runs
+
+    found = [s for s in store.entities("stream") if s.attributes.get("name") == name and not store.is_invalidated(s.id)]
+    if not found:
+        return None
+    path = Path(str(found[-1].attributes.get("path") or ""))
+    path = path if path.is_absolute() else run_dir / path
+    if not path.is_file():
+        return None
+    samples, rate = soundfile.read(path, dtype="float32", always_2d=True)
+    return samples.mean(axis=1), int(rate)
+
+
+def background_reading_of(
+    store: ProvStore, run_dir: Path, *, clips: Sequence[Span]
+) -> BackgroundReading | tuple[str, ...]:
+    """The recording-level reading of one recording, from the store's streams.
+
+    Args:
+        store: The provenance store, read for the ``plain``, ``residual`` and ``recording`` streams.
+        run_dir: The run directory their paths are relative to.
+        clips: The clip spans PREPROCESS kept.
+
+    Returns:
+        The reading, or the names of the inputs that were absent (the ``plain`` stream).
+    """
+    plain = _named_stream(store, run_dir, PLAIN_STREAM)
+    if plain is None:
+        return (PLAIN_STREAM,)
+    return measure_background(
+        plain,
+        residual=_named_stream(store, run_dir, RESIDUAL_STREAM),
+        recording=_named_stream(store, run_dir, RECORDING_STREAM),
+        clips=clips,
+    )
 
 
 def _merged(times: Sequence[float], gap_s: float) -> list[Span]:
