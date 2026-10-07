@@ -1,0 +1,74 @@
+/* The review page's own layout. Colours are the recording-vectors viewer's tokens; the transcript
+   mark rules come from the free-speech review page, and read the --fg/--line/--u* names below. */
+:root {
+  --fg: var(--ink); --mut: var(--ink-2); --card: var(--panel);
+  --brk: #8d8a83; --brkbg: #f0eeea; --catbg: #f7dcb0; --catfg: #7a4b12;
+  --ured: #b3123a; --ugreen: #1e7b34; --uorange: #a86b00;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --brk: #a09b91; --brkbg: #2a2825; --catbg: #5f4418; --catfg: #f0d7a8;
+    --ured: #ff5c7a; --ugreen: #5fcf7a; --uorange: #ffc145;
+  }
+}
+:root[data-theme="dark"] {
+  --brk: #a09b91; --brkbg: #2a2825; --catbg: #5f4418; --catfg: #f0d7a8;
+  --ured: #ff5c7a; --ugreen: #5fcf7a; --uorange: #ffc145;
+}
+body.review { margin: 0; background: var(--ground); color: var(--ink); font: 13px/1.45 system-ui, sans-serif; }
+.rv-top { display: flex; align-items: center; gap: 12px; padding: 8px 14px; border-bottom: 1px solid var(--line);
+  background: var(--panel); position: sticky; top: 0; z-index: 5; flex-wrap: wrap; }
+.rv-top h1 { font-size: 15px; margin: 0; }
+.rv-top .grow { flex: 1; }
+.rv-tab { font: inherit; padding: 3px 12px; border: 1px solid var(--line); background: var(--panel-2);
+  color: var(--ink-2); border-radius: 12px; cursor: pointer; }
+.rv-tab.on { background: var(--current-bg); color: var(--ink); border-color: var(--accent); }
+.rv-count, .rv-mode, .rv-note { color: var(--ink-2); font-size: 12px; }
+.rv-panel { padding: 10px 14px; }
+.rv-controls { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+.rv-pc { position: relative; height: 62vh; min-height: 380px; }
+.rv-pc canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+.rv-axis-labels { position: absolute; inset: 0 0 auto 0; height: 60px; pointer-events: none; z-index: 2; }
+.rv-axis-labels div { position: absolute; top: 4px; transform: translateX(-50%); max-width: 130px;
+  text-align: center; font: 11px var(--mono); color: var(--ink); }
+.rv-axis-labels div small { display: block; color: var(--ink-3); font-size: 10px; }
+.rv-axis-labels div.brushed { color: var(--accent); font-weight: 600; }
+#tab-review:not([hidden]) { display: grid; grid-template-columns: minmax(200px, 250px) minmax(220px, 300px) minmax(0, 1fr);
+  gap: 12px; align-items: start; }
+.rv-facets { position: sticky; top: 50px; max-height: calc(100vh - 70px); overflow: auto; }
+.rv-facets input[type=search] { width: 100%; box-sizing: border-box; margin-bottom: 6px; font: inherit; padding: 3px 6px; }
+.rv-facet { margin: 6px 0; }
+.rv-facet summary { cursor: pointer; font-weight: 600; font-size: 12px; }
+.rv-facet label { display: flex; gap: 6px; font-size: 12px; align-items: baseline; }
+.rv-facet label .n { margin-left: auto; color: var(--ink-3); font: 11px var(--mono); }
+.rv-facet label.zero { opacity: .45; }
+.rv-list ol { list-style: none; padding: 0; margin: 0; }
+.rv-list li { padding: 4px 6px; border-bottom: 1px solid var(--line); cursor: pointer; }
+.rv-list li.cur { background: var(--current-bg); }
+.rv-list li .s { font: 11px var(--mono); display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rv-list li .done { color: var(--good); font-weight: 700; }
+.rv-chip { display: inline-block; font-size: 10.5px; padding: 0 7px; border-radius: 9px; border: 1px solid var(--line); margin-right: 4px; }
+.rv-chip.v-pass { border-color: var(--good); color: var(--good); }
+.rv-chip.v-review { border-color: var(--warn); color: var(--warn); }
+.rv-chip.v-discard { border-color: var(--bad); color: var(--bad); }
+.rv-detail h2 { font-size: 13px; font-family: var(--mono); word-break: break-all; margin: 0 0 4px; }
+.rv-detail section { margin: 10px 0; }
+.rv-detail h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--ink-2); margin: 0 0 4px; }
+.rv-spec { width: 100%; max-width: 900px; height: 190px; display: block; background: var(--panel);
+  border: 1px solid var(--line); }
+.rv-legend span { margin-right: 12px; font-size: 11px; color: var(--ink-2); }
+.rv-legend i { display: inline-block; width: 10px; height: 10px; margin-right: 4px; vertical-align: -1px; }
+.rv-ev { border-collapse: collapse; font-size: 12px; }
+.rv-ev td, .rv-ev th { border-bottom: 1px solid var(--cell-line); padding: 2px 8px; text-align: left; }
+.rv-ev tr.decisive td { font-weight: 700; background: var(--caution-bg); }
+.rv-ev td.v { font-family: var(--mono); }
+.rv-speech .text { font-size: 15px; line-height: 1.7; }
+.rv-entry { border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; background: var(--panel); }
+.rv-entry label { margin-right: 12px; }
+.rv-entry textarea { width: 100%; box-sizing: border-box; font: inherit; margin-top: 6px; }
+.rv-audio audio { display: block; width: 100%; max-width: 640px; margin: 2px 0 6px; }
+.rv-dec-table { border-collapse: collapse; width: 100%; font-size: 12px; }
+.rv-dec-table td, .rv-dec-table th { border-bottom: 1px solid var(--cell-line); padding: 3px 6px; text-align: left; vertical-align: top; }
+.rv-dec-table td.s { font-family: var(--mono); font-size: 11px; word-break: break-all; }
+.rv-import input { display: none; }
+.rv-import { border: 1px solid var(--line); padding: 2px 8px; border-radius: 4px; cursor: pointer; }
