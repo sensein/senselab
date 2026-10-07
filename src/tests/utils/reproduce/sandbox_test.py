@@ -422,3 +422,42 @@ def test_everything_but_the_writable_dirs_is_read_only(tmp_path: Path) -> None:
     assert done.returncode == 0, done.stderr
     assert done.stdout.split() == ["1", "0", "1", "0"]
     assert not (elsewhere / "w").exists() and not (tmp_path / "w").exists() and (out / "w").exists()
+
+
+NESTED = """
+import ctypes, json, os, sys
+root, out = sys.argv[1], sys.argv[2]
+libc = ctypes.CDLL(None, use_errno=True)
+libc.mount.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_ulong, ctypes.c_void_p]
+libc.umount2.argtypes = [ctypes.c_char_p, ctypes.c_int]
+res = {"unshare": libc.unshare(0x10000000 | 0x00020000) == 0}
+res["cap"] = [line.split()[1] for line in open("/proc/self/status") if line.startswith("CapEff")][0]
+def ok(rc):
+    return rc == 0
+res["remount_rw"] = ok(libc.mount(None, root.encode(), None, 32 | 4096, None))
+res["bind"] = ok(libc.mount(root.encode(), out.encode(), None, 4096, None))
+res["bind_rw"] = ok(libc.mount(None, out.encode(), None, 32 | 4096, None))
+res["umount"] = ok(libc.umount2(root.encode(), 2))
+for name, d in (("root", root), ("bound", out)):
+    try:
+        open(os.path.join(d, "escape-" + name), "w").write("x")
+        res["write_" + name] = True
+    except OSError:
+        res["write_" + name] = False
+print(json.dumps(res))
+"""
+
+
+@needs_userns
+def test_a_nested_user_namespace_cannot_make_a_read_only_root_writable(tmp_path: Path) -> None:
+    """With full capabilities in a nested user namespace, the read-only mounts stay locked read-only."""
+    root, other = tmp_path / "root", tmp_path / "other"
+    for d in (root, other):
+        d.mkdir()
+    done = _run(sandbox_argv([sys.executable, "-c", NESTED, str(root), str(other)], [root], []))
+    assert done.returncode == 0, done.stderr
+    res = json.loads(done.stdout)
+    assert res["unshare"] is True and res["cap"] != "0000000000000000"
+    assert res["remount_rw"] is False and res["bind_rw"] is False
+    assert res["write_root"] is False and res["write_bound"] is False
+    assert not (root / "escape-root").exists() and not (other / "escape-bound").exists()

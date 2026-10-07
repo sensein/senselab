@@ -807,6 +807,7 @@ class FakeR:
         assert "Rscript" in script and Path(r_script).is_file() and repo.startswith(envmod.PPM_CRAN + "/")
         out = Path(out_dir)
         (out / "installed.tsv").write_text("".join(f"{k}\t{v}\n" for k, v in self.installed.items()))
+        (out / "namespaces.tsv").write_text("".join(f"{k}\t{v}\n" for k, v in self.installed.items()))
         user = r_lib if 'R_LIBS_USER="$2"' in script else f"{env['HOME']}/R/x86_64-pc-linux-gnu-library/4.5"
         paths = list(dict.fromkeys([r_lib, user, "/mod/r/lib64/R/library"]))
         (out / "lib_paths.txt").write_text("".join(f"{p}\n" for p in paths))
@@ -1100,12 +1101,14 @@ def test_r_session_script_and_reader_share_prefetch_form(tmp_path: Path) -> None
     assert install.endswith(tail) and "install.packages" not in session
     (tmp_path / "installed.tsv").write_text("lme4\t1.1-37\n")
     (tmp_path / "lib_paths.txt").write_text("/lib/a\n/r/lib\n")
+    (tmp_path / "namespaces.tsv").write_text("Matrix\t1.7-3\nlme4\t1.1-37\n")
     (tmp_path / "session_info.txt").write_text(
         "R version 4.5.2\n\nother attached packages:\n[1] lme4_1.1-37\n\nloaded via a namespace:\n[1] tools\n"
     )
     (tmp_path / "r_version.txt").write_text("R version 4.5.2 (2025-10-31)\n")
     assert envmod.read_r_session(tmp_path) == {
         "installed": {"lme4": "1.1-37"},
+        "namespaces": {"Matrix": "1.7-3", "lme4": "1.1-37"},
         "lib_paths": ["/lib/a", "/r/lib"],
         "r_version": "R version 4.5.2 (2025-10-31)",
         "session_info": ["R version 4.5.2", "other attached packages:", "[1] lme4_1.1-37"],
