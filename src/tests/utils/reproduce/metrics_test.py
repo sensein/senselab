@@ -485,3 +485,86 @@ def test_metric_value_resolves_and_refuses_ambiguity() -> None:
     with pytest.raises(MetricsError) as info:
         metric_value(clean, "per_class.neg.f1")
     assert info.value.code == "E_METRICS_ABSENT"
+
+
+def _three_class(floor: float) -> tuple[dict[str, Any], MetricsSchema]:
+    schema = _schema(headline=["balanced_accuracy"], headline_labels=[], counts=[], per_class=["asd", "td", "other"])
+    rates = {"recall": 0.5, "precision": 0.5}
+    obj = {
+        "headline": [_entry("balanced_accuracy", 0.7, floor)],
+        "per_class": {
+            "asd": {**rates, "prevalence": 0.3},
+            "td": {**rates, "prevalence": 0.7},
+            "other": {**rates, "prevalence": 0.0},
+        },
+        "split_report": {"protocol": "unseen_subject", "invariant_ok": True},
+        "threshold_tuning": "validation",
+    }
+    return obj, schema
+
+
+def test_absent_class_does_not_lower_the_chance_floor() -> None:
+    """With a declared class at prevalence 0, k counts only present classes: 1/3 is refused, 1/2 passes."""
+    obj, schema = _three_class(1 / 3)
+    assert _codes(obj, schema) == ["E_METRICS_BAD_FLOOR", "W_CLASS_ABSENT"]
+    obj, schema = _three_class(0.5)
+    clean, codes = validate_metrics(obj, schema)
+    assert codes == ["W_CLASS_ABSENT"]
+    assert clean is not None
+
+
+@pytest.mark.parametrize("kind", ["statistic", "count"])
+def test_per_class_and_confusion_refused_outside_classification(kind: str) -> None:
+    """Statistic and count steps may not report per-class values or a confusion matrix."""
+    name = "f_stat" if kind == "statistic" else "count"
+    schema = MetricsSchema.model_validate({"kind": kind, "headline": [name]})
+    base = {"headline": [{"name": name, "value": 7}]}
+    assert _codes(base, schema) == []
+    assert _codes({**base, "per_class": {"a": {"recall": 1.0}}}, schema) == ["E_METRICS_KIND_KEY"]
+    assert _codes({**base, "confusion": {"tp": 9, "fp": 9, "fn": 9, "tn": 9}}, schema) == ["E_METRICS_KIND_KEY"]
+
+
+def test_confusion_refused_for_detection() -> None:
+    """A confusion matrix belongs to classification only."""
+    schema = _schema(kind="detection", headline=["avg_map"], headline_labels=[], counts=[])
+    obj = {
+        "headline": [_entry("avg_map", 0.06, 0.01)],
+        "per_class": {"pos": {"prevalence": 0.3}, "neg": {"prevalence": 0.7}},
+        "threshold_tuning": "none",
+        "split_report": {"protocol": "unseen_subject", "invariant_ok": True},
+    }
+    assert _codes(copy.deepcopy(obj), schema) == []
+    obj["confusion"] = {"tp": 9}
+    assert _codes(obj, schema) == ["E_METRICS_KIND_KEY"]
+
+
+@pytest.mark.parametrize(
+    ("entry", "ok"),
+    [
+        ({"name": "balanced_accuracy", "value": 60, "floor": 0.5, "lift": 59.5}, False),
+        ({"name": "balanced_accuracy", "value": 60, "floor": 50, "lift": 10, "unit": "pp"}, True),
+        ({"name": "balanced_accuracy", "value": 101, "floor": 50, "lift": 51, "unit": "pp"}, False),
+        ({"name": "balanced_accuracy", "value": -0.1, "floor": 0.5, "lift": -0.6}, False),
+        ({"name": "balanced_accuracy", "value": 0.8, "floor": 0.5, "lift": 0.3, "ci_low": 0.85}, False),
+        ({"name": "balanced_accuracy", "value": 0.8, "floor": 0.5, "lift": 0.3, "ci_high": 0.75}, False),
+        ({"name": "balanced_accuracy", "value": 0.8, "floor": 0.5, "lift": 0.3, "ci_low": 0.7, "ci_high": 0.9}, True),
+        ({"name": "mcc", "value": -0.5, "floor": 0.0, "lift": -0.5}, True),
+        ({"name": "mcc", "value": -1.5, "floor": 0.0, "lift": -1.5}, False),
+        ({"name": "mcc", "value": -50, "floor": 0.0, "lift": -50, "unit": "pp"}, True),
+    ],
+)
+def test_headline_value_ranges(entry: dict[str, Any], ok: bool) -> None:
+    """Rates lie in [0, 1] or [0, 100] for pp, mcc in [-1, 1] likewise, and the CI brackets the value."""
+    schema = _schema(headline=["balanced_accuracy", "mcc"], headline_labels=[])
+    obj = _obj()
+    others = [_entry("balanced_accuracy", 0.8, 0.5), _entry("mcc", 0.4, 0.0)]
+    obj["headline"] = [entry, *(o for o in others if o["name"] != entry["name"])]
+    codes = _codes(obj, schema)
+    assert codes == ([] if ok else ["E_METRICS_RANGE"])
+
+
+def test_f_stat_must_be_non_negative() -> None:
+    """An F statistic below 0 is out of range."""
+    schema = MetricsSchema.model_validate({"kind": "statistic", "headline": ["f_stat"]})
+    assert _codes({"headline": [{"name": "f_stat", "value": -1.0}]}, schema) == ["E_METRICS_RANGE"]
+    assert _codes({"headline": [{"name": "f_stat", "value": 0.0}]}, schema) == []
