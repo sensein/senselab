@@ -2488,8 +2488,8 @@ class TestABreathTaskIsDecidedOnDetectedBreaths:
         assert folded.discard_ground == NO_BREATH_CAPTURED
 
 
-class TestABreathTaskIsDecidedOnTheBreathingPattern:
-    """Owner, 2026-10-05: the breathing-pattern measure decides a breath task, whatever AIRWAY's detector said."""
+class TestABreathTaskIsDecidedOnItsTaskEvents:
+    """A breath task is decided on its task events read against the background (task_events.decide)."""
 
     _ADMIT_OK = [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")]
 
@@ -2497,17 +2497,16 @@ class TestABreathTaskIsDecidedOnTheBreathingPattern:
         self,
         *,
         mode: str,
-        pattern: str | None,
-        events: int | None,
+        decision: str | None,
+        phases: int = 0,
         instructed: int | None = None,
-        detector_events: int | None = 1,
         conformance: Any = True,  # noqa: ANN401
         absent: tuple[str, ...] = (),
+        pattern: str | None = "alternating_breaths",
         vetoed_by: str | None = None,
-        phases: int | None = None,
-        review: bool = False,
     ) -> FileVerdict:
         family = "respiration-and-cough-breath" if mode == BREATH_SUSTAINED else "respiration-and-cough-fivebreaths"
+        reading = {"pattern": pattern, "evidence": {"decision": decision, "events_n": phases, "why": "weak"}}
         return fold_file_verdict(
             self._ADMIT_OK,
             branch_reports=[_report("AIRWAY", "airway", conformance=conformance)],
@@ -2523,131 +2522,65 @@ class TestABreathTaskIsDecidedOnTheBreathingPattern:
                 minimum_duration_s=1.0,
                 owner_absent_inputs=absent,
                 required_event="breath",
-                events_found_n=detector_events,
+                events_found_n=1,
                 event_kind="breath",
                 instructed_count=instructed,
                 breath_mode=mode,
-                breath_pattern=pattern,
-                breath_events_n=events,
+                breath_pattern=pattern if decision is not None else None,
                 breath_vetoed_by=vetoed_by,
-                breath_train_breaths=(phases + 1) // 2 if phases is not None else None,
-                breath_review=review,
-                breath_reading=({"pattern": pattern} | ({"train": {"phases": phases}} if phases is not None else {}))
-                if pattern
-                else {},
+                breath_train_breaths=(phases + 1) // 2 if decision is not None else None,
+                breath_decision=decision,
+                breath_review=decision == "review",
+                breath_reading=reading if decision is not None else {},
             ),
         )
 
-    def test_a_breath_train_performs_a_sustained_task(self) -> None:
-        """The ten confirmed breathing recordings: a breath train passes."""
-        folded = self._fold(mode=BREATH_SUSTAINED, pattern="alternating_breaths", events=6, phases=6)
+    def test_clear_events_perform_a_sustained_task(self) -> None:
+        """A present decision passes."""
+        folded = self._fold(mode=BREATH_SUSTAINED, decision="present", phases=6)
         assert folded.triage is Triage.PASS
-        assert folded.breath_pattern == {"pattern": "alternating_breaths", "train": {"phases": 6}}
 
-    def test_no_train_discards_whatever_the_detector_said(self) -> None:
-        """A silent recording discards even where AIRWAY's own conformance read True."""
-        folded = self._fold(mode=BREATH_SUSTAINED, pattern="no_breathing", events=0, phases=0, conformance=True)
+    def test_no_event_over_the_floor_discards_whatever_the_detector_said(self) -> None:
+        """An absent decision discards even where AIRWAY's own conformance read True."""
+        folded = self._fold(mode=BREATH_SUSTAINED, decision="absent", conformance=True)
         assert folded.triage is Triage.DISCARD
         assert folded.discard_ground == NO_BREATH_CAPTURED
 
-    def test_measure_events_without_a_train_discard(self) -> None:
-        """The measure's events are reported only: without a train phase the task holds no breath."""
-        folded = self._fold(mode=BREATH_COUNTED, pattern="alternating_breaths", events=6, instructed=3, phases=0)
-        assert folded.discard_ground == NO_BREATH_CAPTURED
-
-    def test_a_quiet_counted_recording_discards(self) -> None:
-        """9d16c147-like: no train phase over the floor is no breath captured."""
-        folded = self._fold(mode=BREATH_COUNTED, pattern="no_breathing", events=0, instructed=5, conformance=False)
-        assert folded.discard_ground == NO_BREATH_CAPTURED
-
-    def test_too_few_breaths_annotate_a_task_mismatch(self) -> None:
-        """7c169ccc: one long breath where three were asked is a task_mismatch annotation, and passes."""
-        folded = self._fold(
-            mode=BREATH_COUNTED, pattern="single_breath", events=1, instructed=3, conformance=False, phases=2
-        )
-        assert folded.triage is Triage.PASS
-        assert folded.discard_ground is None
-        assert KEY_TASK_MISMATCH not in folded.ground_keys and folded.annotation_keys == [KEY_TASK_MISMATCH]
-        assert all(reason.key != KEY_TASK_MISMATCH for reason in folded.reasons)
-        [annotation] = folded.annotations
-        assert "detected 1 breaths (2 phases in the breath train) where 3 were instructed" in annotation.why
-
-    def test_the_instructed_count_passes_a_counted_task(self) -> None:
-        """Ten phases (five inhales, five exhales) for five breaths asked pass, whatever AIRWAY's detector read."""
-        folded = self._fold(
-            mode=BREATH_COUNTED, pattern="alternating_breaths", events=2, instructed=5, conformance=False, phases=10
-        )
-        assert folded.triage is Triage.PASS
-        assert folded.annotation_keys == []
-
-    def test_an_absent_derivative_reruns(self) -> None:
-        """No stored spectrogram: the measure could not look, so the recording is owed a rerun."""
-        folded = self._fold(
-            mode=BREATH_SUSTAINED,
-            pattern=None,
-            events=None,
-            absent=("spectrogram_narrowband",),
-            conformance=UNDETERMINED,
-        )
-        assert folded.triage is Triage.RERUN
-        assert folded.discard_ground is None
-        assert KEY_OWNING_BRANCH_INPUT_ABSENT in folded.ground_keys
-
-    def test_merged_events_pass_on_the_breath_train(self) -> None:
-        """1ba3214d: five clean cycles merged into one event; the train's ten phases are five breaths."""
-        folded = self._fold(
-            mode=BREATH_COUNTED, pattern="single_breath", events=1, instructed=5, conformance=False, phases=10
-        )
-        assert folded.triage is Triage.PASS
-        assert KEY_TASK_MISMATCH not in folded.ground_keys and folded.annotation_keys == []
-
-    def test_too_few_train_breaths_keep_the_task_mismatch(self) -> None:
-        """Phases that fall short of the instruction leave the annotation, read off the train alone."""
-        folded = self._fold(
-            mode=BREATH_COUNTED, pattern="alternating_breaths", events=20, instructed=5, conformance=False, phases=6
-        )
-        assert folded.triage is Triage.PASS
-        [annotation] = folded.annotations
-        assert "detected 3 breaths (6 phases in the breath train) where 5 were instructed" in annotation.why
-
-    def test_a_low_confidence_train_is_flagged_for_review(self) -> None:
-        """81873ca0 / fac74f45: kept breathing on a weak or irregular train is flagged, never discarded."""
-        folded = self._fold(mode=BREATH_SUSTAINED, pattern="alternating_breaths", events=6, phases=6, review=True)
+    def test_weak_events_are_flagged_for_review_never_discarded(self) -> None:
+        """A review decision keeps the recording and flags it."""
+        folded = self._fold(mode=BREATH_SUSTAINED, decision="review", phases=6)
         assert folded.triage is Triage.FLAG
         assert folded.discard_ground is None
         assert KEY_BREATH_REVIEW_LOW_CONFIDENCE in folded.ground_keys
 
-    def test_the_review_band_does_not_flag_a_discarded_recording(self) -> None:
-        """No train phase discards; the review band only reaches breathing that was kept."""
-        folded = self._fold(mode=BREATH_SUSTAINED, pattern="no_breathing", events=0, phases=0, review=True)
-        assert folded.discard_ground == NO_BREATH_CAPTURED
-        assert KEY_BREATH_REVIEW_LOW_CONFIDENCE not in folded.ground_keys
-
-    def test_a_measure_veto_no_longer_discards_a_train(self) -> None:
-        """5201d61d: a speech veto on the measure's events is reported; the train's phases decide."""
-        folded = self._fold(
-            mode=BREATH_COUNTED, pattern="alternating_breaths", events=5, instructed=3, vetoed_by="speech", phases=9
-        )
+    def test_too_few_breaths_annotate_a_task_mismatch(self) -> None:
+        """7c169ccc: one long breath where three were asked is a task_mismatch annotation, and passes."""
+        folded = self._fold(mode=BREATH_COUNTED, decision="present", phases=2, instructed=3, conformance=False)
         assert folded.triage is Triage.PASS
-        assert folded.discard_ground is None
+        assert KEY_TASK_MISMATCH not in folded.ground_keys and folded.annotation_keys == [KEY_TASK_MISMATCH]
+        [annotation] = folded.annotations
+        assert "detected 1 breaths (2 phases in the breath task) where 3 were instructed" in annotation.why
 
-    def test_a_weak_train_the_measure_does_not_confirm_discards(self) -> None:
-        """517381e9: one phase in the review band, and the measure reads no pattern: no breath captured."""
-        folded = self._fold(mode=BREATH_SUSTAINED, pattern="single_breath", events=1, phases=1, review=True)
-        assert folded.discard_ground == NO_BREATH_CAPTURED
-        assert KEY_BREATH_REVIEW_LOW_CONFIDENCE not in folded.ground_keys
+    def test_the_instructed_count_passes_a_counted_task(self) -> None:
+        """Ten phases for five breaths asked pass, whatever AIRWAY's detector read."""
+        folded = self._fold(mode=BREATH_COUNTED, decision="present", phases=10, instructed=5, conformance=False)
+        assert folded.triage is Triage.PASS
+        assert folded.annotation_keys == []
 
-    def test_a_vetoed_weak_train_discards(self) -> None:
-        """167ac3f5: a little-activity veto puts the train in the band, where the vetoed measure decides."""
+    def test_an_absent_derivative_reruns(self) -> None:
+        """No stored input: the measure could not look, so the recording is owed a rerun."""
         folded = self._fold(
-            mode=BREATH_SUSTAINED,
-            pattern="alternating_breaths",
-            events=2,
-            phases=17,
-            vetoed_by="little_activity",
-            review=True,
+            mode=BREATH_SUSTAINED, decision=None, absent=("spectrogram_narrowband",), conformance=UNDETERMINED
         )
-        assert folded.discard_ground == NO_BREATH_CAPTURED
+        assert folded.triage is Triage.RERUN
+        assert KEY_OWNING_BRANCH_INPUT_ABSENT in folded.ground_keys
+
+    def test_the_old_measure_decides_nothing(self) -> None:
+        """167ac3f5 / 5201d61d: a veto or a no-breathing pattern on the old measure moves no decision."""
+        vetoed = self._fold(mode=BREATH_SUSTAINED, decision="present", phases=6, vetoed_by="little_activity")
+        assert vetoed.triage is Triage.PASS
+        silent = self._fold(mode=BREATH_COUNTED, decision="present", phases=6, instructed=3, pattern="no_breathing")
+        assert silent.triage is Triage.PASS
 
 
 class TestAVoiceTaskIsDecidedOnItsPhonationAttempt:

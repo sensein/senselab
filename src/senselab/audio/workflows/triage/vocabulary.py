@@ -420,7 +420,7 @@ def breath_shortfall(evidence: TaskEvidence) -> str | None:
         evidence: The task evidence.
 
     Returns:
-        ``"detected B breaths (P phases in the breath train) where M were instructed"`` where breaths
+        ``"detected B breaths (P phases in the breath task) where M were instructed"`` where breaths
         were present but too few were counted (:func:`breath_conforms`); None otherwise.
     """
     breaths = evidence.breath_train_breaths or 0
@@ -431,9 +431,9 @@ def breath_shortfall(evidence: TaskEvidence) -> str | None:
         or breaths >= evidence.instructed_count
     ):
         return None
-    phases = evidence.breath_reading.get("train") or {}
+    read = evidence.breath_reading.get("evidence") or {}
     return (
-        f"detected {breaths} breaths ({phases.get('phases', 0)} phases in the breath train) "
+        f"detected {breaths} breaths ({read.get('events_n', 0)} phases in the breath task) "
         f"where {evidence.instructed_count} were instructed"
     )
 
