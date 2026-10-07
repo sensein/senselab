@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import functools
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -22,6 +22,7 @@ import numpy as np
 import yaml
 
 from senselab.audio.workflows.triage.background_model import bridge, floor_db, runs_of, shutoff_runs
+from senselab.audio.workflows.triage.task_events import TaskEvidence, evidence_of, generic_view, task_events_parameters
 from senselab.utils.prov_store import ProvStore
 
 VOICE_PHONATION_PATH = Path(__file__).parent / "data" / "voice_phonation.yaml"
@@ -484,6 +485,8 @@ class PhonationReading:
         enhanced_extent: The enhanced stream's extent where the hum guard fired; None otherwise.
         enhanced_minus_plain_db: The enhanced stream's level against the plain one's.
         review: Why the decision is left for review; empty where it is not.
+        evidence: The holds read as task events against the recording-level background, reported
+            beside the reading; None where it was not read.
     """
 
     extent: dict[str, Any] | None
@@ -503,6 +506,7 @@ class PhonationReading:
     enhanced_extent: tuple[float, float] | None = None
     enhanced_minus_plain_db: float | None = None
     review: tuple[str, ...] = ()
+    evidence: TaskEvidence | None = None
 
     @property
     def found(self) -> bool:
@@ -540,6 +544,7 @@ class PhonationReading:
             if self.enhanced_minus_plain_db is None
             else round(self.enhanced_minus_plain_db, 2),
             "review": list(self.review),
+            "evidence": self.evidence.record() if self.evidence is not None else None,
         }
 
 
@@ -780,10 +785,16 @@ def phonation_reading_of(
     plain = _named_stream(store, run_dir, PLAIN_STREAM)
     if plain is None:
         return (PLAIN_STREAM,)
-    return measure_phonation(
+    residual = _named_stream(store, run_dir, RESIDUAL_STREAM)
+    read = measure_phonation(
         plain,
-        residual=_named_stream(store, run_dir, RESIDUAL_STREAM),
+        residual=residual,
         enhanced=_named_stream(store, run_dir, ENHANCED_STREAM),
         words=words,
         glide_direction=glide_direction,
     )
+    holds = list(read.holds) or (
+        [(float(read.extent["start_s"]), float(read.extent["end_s"]))] if read.extent is not None else []
+    )
+    gap = float(task_events_parameters()["voice"]["gap_s"])
+    return replace(read, evidence=evidence_of(generic_view(plain, residual), holds, gap_s=gap, inhale=False))

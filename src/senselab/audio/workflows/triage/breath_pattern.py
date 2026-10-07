@@ -26,6 +26,16 @@ from scipy.signal import find_peaks
 from senselab.audio.tasks.classification.label_scores import label_scores
 from senselab.audio.workflows.triage.nodes.common import find_measurement, lexical_words, live_entities, word_hull
 from senselab.audio.workflows.triage.residue import is_non_lexical
+from senselab.audio.workflows.triage.task_events import (
+    REVIEW,
+    GenericView,
+    Rhythm,
+    TaskEvidence,
+    evidence_of,
+    generic_view_of,
+    rhythm_of,
+    task_events_parameters,
+)
 from senselab.audio.workflows.triage.vocabulary import SUPERSEDES
 from senselab.utils.prov_store import Entity, ProvStore
 
@@ -195,7 +205,8 @@ class ModulationReading:
 EXTENT_BREATH_TRAIN = "breath_train"
 EXTENT_MEASURE_EVENTS = "measure_events"
 EXTENT_AIRWAY_EVENTS = "airway_events"
-EXTENT_SOURCES = (EXTENT_BREATH_TRAIN, EXTENT_MEASURE_EVENTS, EXTENT_AIRWAY_EVENTS)
+EXTENT_TASK_EVENTS = "task_events"
+EXTENT_SOURCES = (EXTENT_TASK_EVENTS, EXTENT_BREATH_TRAIN, EXTENT_MEASURE_EVENTS, EXTENT_AIRWAY_EVENTS)
 
 
 @dataclass(frozen=True)
@@ -386,6 +397,7 @@ class BreathTrain:
         coherence: The bursts' mean coherence.
         rise_db: The bursts' median rise over the floor.
         bursts_found_n: Every burst found in the file, inside the run or not.
+        candidates: Every burst outside speech, in any run: the task layer's breath candidates.
     """
 
     bursts: tuple[Burst, ...] = ()
@@ -397,6 +409,7 @@ class BreathTrain:
     coherence: float | None = None
     rise_db: float | None = None
     bursts_found_n: int = 0
+    candidates: tuple[Burst, ...] = ()
 
     def record(self) -> dict[str, Any]:
         """The train, as JSON-ready values.
@@ -581,6 +594,9 @@ class BreathPattern:
         event_spans_s: Each event's ``(start, end)`` in seconds, trimmed to the frames near its peak.
         extent: The breath-task extent, or None where it was not read.
         train: The breath train, or None where it was not read.
+        evidence: The task layer's reading of the train's candidates against the background
+            (:func:`~senselab.audio.workflows.triage.task_events.evidence_of`), or None where the
+            plain stream was absent.
     """
 
     pattern: str
@@ -594,6 +610,7 @@ class BreathPattern:
     event_spans_s: tuple[tuple[float, float], ...] = field(default_factory=tuple)
     extent: BreathExtent | None = None
     train: BreathTrain | None = None
+    evidence: TaskEvidence | None = None
 
     def record(self) -> dict[str, Any]:
         """The reading, as JSON-ready values.
@@ -602,6 +619,7 @@ class BreathPattern:
             The fields, keyed by name.
         """
         return {
+            "evidence": self.evidence.record() if self.evidence is not None else None,
             "pattern": self.pattern,
             "events_n": self.events_n,
             "event_durations_s": list(self.event_durations_s),
@@ -616,15 +634,18 @@ class BreathPattern:
 
 
 def breath_in_review(read: BreathPattern, parameters: ReviewParameters | None = None) -> bool:
-    """Whether a breath reading is left for review: its train is in the band, or a reviewing veto fired.
+    """Whether a breath reading is left for review.
 
     Args:
         read: The breath reading.
         parameters: The band; ``data/breath_pattern.yaml`` when None.
 
     Returns:
-        :func:`in_review_band` of the train, or a veto in ``veto_reviews``.
+        The task evidence's ``review`` decision where it was read; else :func:`in_review_band` of the
+        train, or a veto in ``veto_reviews``.
     """
+    if read.evidence is not None:
+        return read.evidence.decision == REVIEW
     p = parameters or review_parameters()
     vetoed = read.veto.vetoed_by if read.veto is not None else None
     return in_review_band(read.train, p) or (vetoed is not None and vetoed in p.veto_reviews)
@@ -1146,6 +1167,7 @@ def breath_train(
     bursts = [b for b in bursts if not any(s <= b.peak_s <= e for s, e in speech)]
     if not bursts:
         return BreathTrain()
+    candidates = tuple(bursts)
     gaps = np.diff([b.peak_s for b in bursts])
     cycle = float(np.median(gaps[:-1] + gaps[1:])) if len(gaps) >= 2 else (2 * float(gaps[0]) if len(gaps) else 4.0)
     gap_max = max(p.gap_min_s, p.gap_cycles * cycle / 2)
@@ -1185,6 +1207,7 @@ def breath_train(
         coherence=round(float(np.mean([b.coherence for b in run])), 2),
         rise_db=round(float(np.median([b.rise_db for b in run])), 1),
         bursts_found_n=found_n,
+        candidates=candidates,
     )
 
 
@@ -1422,6 +1445,48 @@ def breath_veto_of(
     )
 
 
+def breath_evidence(
+    view: GenericView,
+    train: BreathTrain,
+    *,
+    voiced: np.ndarray,
+    times_s: np.ndarray,
+    speech: tuple[tuple[float, float], ...],
+) -> TaskEvidence:
+    """The breath train's candidates read against the background, with the rhythm prior's recoveries.
+
+    Args:
+        view: The recording-level background.
+        train: The breath train; its ``candidates`` are the breath type test's events.
+        voiced: Whether each spectrogram frame is voiced.
+        times_s: The spectrogram frames' times.
+        speech: Speech runs and segments, where no breath phase stands.
+
+    Returns:
+        The evidence: the dominant cluster of events, its extent with the preparatory inhale, and the
+        decision. Where a breathing-band rhythm stands, a region of activity no candidate overlaps,
+        outside speech and mostly unvoiced, is recovered as a phase.
+    """
+    p = task_events_parameters()
+    q = p["breath"]
+    rhythm: Rhythm | None = rhythm_of(view, p["rhythm"]["band_hz"], float(p["rhythm"]["prominence_min_db"]))
+    spans = [(b.start_s, b.end_s) for b in train.candidates]
+    recovered: list[tuple[float, float]] = []
+    if rhythm is not None:
+        for region in view.regions:
+            span = (region.start_s, region.end_s)
+            if any(s < span[1] and e > span[0] for s, e in [*spans, *speech]):
+                continue
+            inside = (times_s >= span[0]) & (times_s <= span[1])
+            if inside.any() and float(voiced[inside].mean()) > q["recover_voiced_max"]:
+                continue
+            recovered.append(span)
+    gap = float(q["gap_min_s"])
+    if rhythm is not None:
+        gap = max(gap, float(q["gap_cycles"]) * rhythm.period_s)
+    return evidence_of(view, spans, gap_s=gap, rhythm=rhythm, recovered=recovered, p=p)
+
+
 def breath_pattern_of(
     store: ProvStore,
     run_dir: Path,
@@ -1503,11 +1568,31 @@ def breath_pattern_of(
         sustained=sustained,
         speech=speech,
     )
-    breath_extent = (
-        train_extent(train, pattern.event_spans_s)
-        if train.extent_s is not None
-        else breath_extent_fallback(pattern.event_spans_s, airway, duration_s=duration_s, pad_s=t.pad_s)
+    view = generic_view_of(store, run_dir)
+    evidence = (
+        breath_evidence(
+            view,
+            train,
+            voiced=voiced,
+            times_s=times,
+            speech=tuple(speech_runs(words, words_min=t.speech_words_min, gap_s=t.speech_gap_s)) + speech,
+        )
+        if view is not None
+        else None
     )
+    if evidence is not None and evidence.extent is not None:
+        phases = len(evidence.events)
+        breath_extent: BreathExtent | None = BreathExtent(
+            start_s=round(evidence.extent[0], 3),
+            end_s=round(evidence.extent[1], 3),
+            source=EXTENT_TASK_EVENTS,
+            phases=phases,
+            breaths=_rhu(phases / 2),
+        )
+    elif train.extent_s is not None:
+        breath_extent = train_extent(train, pattern.event_spans_s)
+    else:
+        breath_extent = breath_extent_fallback(pattern.event_spans_s, airway, duration_s=duration_s, pad_s=t.pad_s)
     active_fraction: float | None = None
     active_over: str | None = None
     if airway is not None:
@@ -1521,4 +1606,4 @@ def breath_pattern_of(
     veto = breath_veto_of(
         store, run_dir, active_fraction=active_fraction, active_over=active_over, extent=airway, language=language
     )
-    return replace(pattern, veto=veto, extent=breath_extent, train=train)
+    return replace(pattern, veto=veto, extent=breath_extent, train=train, evidence=evidence)
