@@ -67,6 +67,18 @@ def _env() -> dict[str, Any]:
     }
 
 
+def _metrics_schema(**over: Any) -> dict[str, Any]:  # noqa: ANN401
+    schema: dict[str, Any] = {
+        "kind": "classification",
+        "headline": ["top1", "macro_recall"],
+        "headline_labels": ["sys_a"],
+        "counts": ["n_systems"],
+        "per_class": ["walk", "run", "0"],
+    }
+    schema.update(over)
+    return schema
+
+
 def _step(name: str = "train", **over: Any) -> dict[str, Any]:  # noqa: ANN401
     step: dict[str, Any] = {
         "name": name,
@@ -86,6 +98,7 @@ def _step(name: str = "train", **over: Any) -> dict[str, Any]:  # noqa: ANN401
         "resources": {"profile": "gpu", "gpu_arch": ["sm_80"], "min_driver": "550", "native": ["ffmpeg"]},
         "patches": [{"file": "patches/train/0001.diff", "sha256": SHA}],
         "adapter": "adapters/train.py",
+        "metrics_schema": _metrics_schema(),
         "expect": [{"metric": "top1", "value": 77.56, "tolerance": 0.01, "unit": "pp", "kind": "abs"}],
     }
     step.update(over)
@@ -456,6 +469,37 @@ STEP_COUNTER_EXAMPLES: dict[str, tuple[dict[str, Any], str]] = {
         },
         "greater than or equal to 0",
     ),
+    "metrics-schema-missing": ({"metrics_schema": None}, "valid dictionary"),
+    "metrics-schema-unknown-headline": ({"metrics_schema": _metrics_schema(headline=["top5"])}, "headline"),
+    "metrics-schema-empty-headline": ({"metrics_schema": _metrics_schema(headline=[])}, "at least 1 item"),
+    "metrics-schema-duplicate-headline": (
+        {"metrics_schema": _metrics_schema(headline=["top1", "top1"])},
+        "headline has duplicates",
+    ),
+    "metrics-schema-duplicate-label": (
+        {"metrics_schema": _metrics_schema(per_class=["walk", "walk"])},
+        "per_class has duplicates",
+    ),
+    "metrics-schema-bad-label": ({"metrics_schema": _metrics_schema(per_class=["a b"])}, "should match pattern"),
+    "metrics-schema-bad-count-name": ({"metrics_schema": _metrics_schema(counts=["N-1"])}, "should match pattern"),
+    "metrics-schema-classification-without-classes": (
+        {"metrics_schema": _metrics_schema(per_class=[])},
+        "needs per_class labels",
+    ),
+    "metrics-schema-unknown-kind": ({"metrics_schema": _metrics_schema(kind="regression")}, "kind"),
+    "metrics-schema-unknown-key": ({"metrics_schema": _metrics_schema(confusion=True)}, "Extra inputs"),
+    "expect-metric-undeclared": (
+        {"expect": [{"metric": "auroc", "value": 0.5, "tolerance": 0.1, "kind": "abs"}]},
+        "E_METRICS_UNDECLARED_HEADLINE",
+    ),
+    "expect-metric-bad-address": (
+        {"expect": [{"metric": "per_class.walk.auc", "value": 0.5, "kind": "exact"}]},
+        "E_METRICS_BAD_ADDRESS",
+    ),
+    "expect-metric-undeclared-label": (
+        {"expect": [{"metric": "top1@sys_z", "value": 0.5, "kind": "exact"}]},
+        "E_METRICS_UNDECLARED_LABEL",
+    ),
     "tolerance-from-negative-k": (
         {
             "needs": ["a", "b"],
@@ -479,6 +523,23 @@ def test_step_validator_rejects_counter_example(case: str) -> None:
     over, message = STEP_COUNTER_EXAMPLES[case]
     with pytest.raises(ValidationError, match=message):
         StepSpec.model_validate(_step(**over))
+
+
+@pytest.mark.parametrize(
+    "metric", ["top1", "macro_recall", "top1@sys_a", "counts.n_systems", "per_class.walk.recall", "confusion.fn"]
+)
+def test_expect_metric_addresses_resolve_against_the_schema(metric: str) -> None:
+    """Every addressable form of a declared metric validates as an ``expect`` metric."""
+    step = StepSpec.model_validate(_step(expect=[{"metric": metric, "value": 1.0, "kind": "exact"}]))
+    assert step.expect[0].metric == metric
+
+
+def test_statistic_schema_needs_no_classes() -> None:
+    """A test-statistic step declares only its headline names."""
+    schema = _metrics_schema(kind="statistic", headline=["f_stat"], headline_labels=[], counts=[], per_class=[])
+    step = StepSpec.model_validate(_step(metrics_schema=schema, expect=[]))
+    assert step.metrics_schema.headline == ["f_stat"]
+    assert step.metrics_schema.per_class == []
 
 
 def test_up_stage_root_and_escaped_braces_validate() -> None:
