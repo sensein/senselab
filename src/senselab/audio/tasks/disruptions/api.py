@@ -157,3 +157,37 @@ def detect_disruptions(
         dc_offset=float(segment.mean()),
         zero_crossing_rate=crossings * sr / segment.size,
     )
+
+
+def disruption_extents(
+    samples: np.ndarray,
+    sampling_rate: int,
+    *,
+    min_dropout_ms: float,
+    discontinuity_local_factor: float,
+    discontinuity_window_ms: float,
+) -> tuple[list[tuple[float, float]], list[float]]:
+    """Where the dropouts and discontinuities of one signal are, rather than how many.
+
+    Args:
+        samples: The signal, one channel.
+        sampling_rate: Its rate, in Hz.
+        min_dropout_ms: Shortest run of exact zeros that counts as a dropout.
+        discontinuity_local_factor: How many times the local variation a jump must exceed.
+        discontinuity_window_ms: Length of each window flanking a jump.
+
+    Returns:
+        Each dropout's ``(start, end)`` and each discontinuity's time, in seconds.
+    """
+    x = np.asarray(samples, dtype=np.float64)
+    if x.size < 2:
+        return [], []
+    minimum = max(1, int(min_dropout_ms * sampling_rate / 1000))
+    padded = np.concatenate([[False], x == 0.0, [False]])
+    edges = np.flatnonzero(np.diff(padded.astype(np.int8)))
+    dropouts = [
+        (float(a) / sampling_rate, float(b) / sampling_rate) for a, b in zip(edges[::2], edges[1::2]) if b - a >= minimum
+    ]
+    reference = _local_variation(x, max(1, int(discontinuity_window_ms * sampling_rate / 1000)))
+    jumps = np.flatnonzero(np.abs(np.diff(x)) > discontinuity_local_factor * reference)
+    return dropouts, [float(i + 1) / sampling_rate for i in jumps]
