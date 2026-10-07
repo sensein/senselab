@@ -408,8 +408,40 @@ class MetricsSchema(_Model):
         return self
 
 
+HFRepo = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*$")]
+
+
+class HFFile(_Model):
+    """One file of a Hugging Face snapshot: its path inside the repository and its content sha256."""
+
+    path: RelPath
+    sha256: Sha256
+
+
+class HFWeights(_Model):
+    """Hugging Face weights a step loads: a repository at a 40-hex commit, and every file it reads, hashed.
+
+    ``revision`` is a commit, never a branch or tag, so the snapshot cannot move under the step.
+    """
+
+    repo: HFRepo
+    repo_type: Literal["model", "dataset"] = "model"
+    revision: Commit
+    files: list[HFFile] = Field(min_length=1)
+
+    @field_validator("files")
+    @classmethod
+    def _unique_paths(cls, value: list[HFFile]) -> list[HFFile]:
+        if len({f.path for f in value}) != len(value):
+            raise ValueError("files has duplicate paths")
+        return value
+
+
 class StepSpec(_Model):
-    """One step: a repository commit, an env, an argv template, its inputs, outputs and expectations."""
+    """One step: a repository commit, an env, an argv template, its inputs, outputs and expectations.
+
+    ``hf_weights`` has no default: a manifest states ``[]`` for a step that loads no Hugging Face weights.
+    """
 
     name: Name
     repo: str
@@ -428,6 +460,7 @@ class StepSpec(_Model):
     resources: Resources
     patches: list[FileRef] = []
     adapter: str
+    hf_weights: list[HFWeights]
     metrics_schema: MetricsSchema
     expect: list[Expect] = []
 
@@ -438,6 +471,9 @@ class StepSpec(_Model):
             raise ValueError(f"step {self.name!r} has duplicate needs")
         if self.name in needs:
             raise ValueError(f"step {self.name!r} needs itself")
+        weights = [(w.repo_type, w.repo) for w in self.hf_weights]
+        if len(set(weights)) != len(weights):
+            raise ValueError(f"step {self.name!r} has duplicate hf_weights repositories")
         templates = [*self.argv, self.cwd, *self.pythonpath, *(s.dest for s in self.stage)]
         if self.env.r_lib is not None:
             templates.append(self.env.r_lib)
