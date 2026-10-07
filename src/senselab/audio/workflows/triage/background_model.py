@@ -178,7 +178,8 @@ class Floor:
 
     Attributes:
         band_db: The floor per band, dB.
-        source: ``quiet_frames`` (the recording's own), ``residual`` (the task fills the file),
+        source: ``quiet_frames`` (the recording's own), ``session`` (the task fills the file and its
+            BIDS session supplies the floor), ``residual`` (the task fills the file, no session),
             ``lowest`` (too little quiet to re-read: the first-pass percentile), or ``digital``
             (nothing over digital silence).
         quiet_s: Seconds of quiet frames the own floor was last re-read over; 0 where it never was.
@@ -193,16 +194,21 @@ class Floor:
     residual_db: np.ndarray | None
 
 
-def floor_of(frames: BandFrames, residual: BandFrames | None, p: dict[str, Any]) -> Floor:
-    """The floor, read iteratively outside the active regions and checked against the residual.
+def floor_of(
+    frames: BandFrames, residual: BandFrames | None, p: dict[str, Any], *, session_db: np.ndarray | None = None
+) -> Floor:
+    """The floor, read iteratively outside the active regions and checked against the session and the residual.
 
     Args:
         frames: The plain stream's band frames.
         residual: The residual stream's, or None.
         p: The parameters.
+        session_db: The session floor per band (:func:`session_floor_db`), or None where there is none.
 
     Returns:
-        The floor.
+        The floor: the session's where the recording's own stands ``session.gap_db`` over it (median
+        over bands), else the residual's where the own stands ``floor.residual_gap_db`` over that,
+        else the recording's own.
     """
     q = p["floor"]
     hop = p["hop_s"]
@@ -228,6 +234,8 @@ def floor_of(frames: BandFrames, residual: BandFrames | None, p: dict[str, Any])
         r_live = residual.level_db >= p["digital_floor_dbfs"]
         if r_live.any():
             residual_db = np.percentile(residual.band_db[r_live], q["residual_percentile"], axis=0)
+    if session_db is not None and float(np.median(own - session_db)) >= p["session"]["gap_db"]:
+        return Floor(np.asarray(session_db, dtype=np.float64), "session", quiet_s, own, residual_db)
     if residual_db is not None and float(np.median(own - residual_db)) >= q["residual_gap_db"]:
         return Floor(residual_db, "residual", quiet_s, own, residual_db)
     return Floor(own, "quiet_frames" if quiet_s else "lowest", quiet_s, own, residual_db)
@@ -453,6 +461,8 @@ class BackgroundReading:
         clips: The clip spans PREPROCESS kept.
         duration_s: The plain stream's length.
         band_edges_hz: The bands the floor is read in.
+        frames: The plain stream's band frames the reading was taken over; kept in the sidecar, not
+            the record.
     """
 
     floor: Floor
@@ -465,6 +475,7 @@ class BackgroundReading:
     clips: tuple[Span, ...]
     duration_s: float
     band_edges_hz: tuple[float, ...]
+    frames: BandFrames | None = None
 
     @property
     def active_s(self) -> float:
@@ -557,6 +568,7 @@ def measure_background(
     recording: Signal | None,
     clips: Sequence[Span],
     p: dict[str, Any] | None = None,
+    session_db: np.ndarray | None = None,
 ) -> BackgroundReading:
     """Read the background, the activity and the acquisition faults of one recording.
 
@@ -566,6 +578,7 @@ def measure_background(
         recording: The original recording, read for dropouts and discontinuities, or None.
         clips: The clip spans PREPROCESS kept.
         p: The parameters; the packaged ones when None.
+        session_db: The session floor per band, or None where the recording has no session floor.
 
     Returns:
         The reading.
@@ -575,7 +588,7 @@ def measure_background(
     p = p or background_model_parameters()
     frames = band_frames(plain, p)
     residual_frames = band_frames(residual, p) if residual is not None else None
-    floor = floor_of(frames, residual_frames, p)
+    floor = floor_of(frames, residual_frames, p, session_db=session_db)
     impulses = impulses_of(plain, p)
     regions = regions_of(frames, floor.band_db, impulses, p)
     hop = p["hop_s"]
@@ -606,4 +619,122 @@ def measure_background(
         clips=tuple((float(a), float(b)) for a, b in clips),
         duration_s=len(plain[0]) / float(rate),
         band_edges_hz=tuple(float(e) for e in p["band_edges_hz"] if e <= rate / 2.0),
+        frames=frames,
     )
+
+
+def own_floor_of(plain: Signal, residual: Signal | None, p: dict[str, Any] | None = None) -> dict[str, Any]:
+    """The recording's own floor and level, the per-recording half of the session floor.
+
+    Args:
+        plain: The plain stream.
+        residual: The residual stream, or None.
+        p: The parameters; the packaged ones when None.
+
+    Returns:
+        ``band_edges_hz``; ``own_db``, its ``source`` and ``quiet_s`` (:func:`floor_of` with no
+        session); ``residual_db``; ``active_level_db``, the ``session.level_percentile`` of the
+        broadband level over live frames; and ``duration_s``.
+    """
+    p = p or background_model_parameters()
+    frames = band_frames(plain, p)
+    floor = floor_of(frames, band_frames(residual, p) if residual is not None else None, p)
+    live = frames.level_db >= p["digital_floor_dbfs"]
+    level = float(np.percentile(frames.level_db[live], p["session"]["level_percentile"])) if live.any() else None
+    rate = plain[1]
+    return {
+        "band_edges_hz": [float(e) for e in p["band_edges_hz"] if e <= rate / 2.0],
+        "own_db": [float(v) for v in floor.own_db],
+        "source": floor.source,
+        "quiet_s": float(floor.quiet_s),
+        "residual_db": None if floor.residual_db is None else [float(v) for v in floor.residual_db],
+        "active_level_db": level,
+        "duration_s": len(plain[0]) / float(rate),
+    }
+
+
+def session_floor_db(members: Sequence[dict[str, Any]], p: dict[str, Any] | None = None) -> dict[str, Any]:
+    """The session floor over the own-floor readings of one BIDS session's recordings.
+
+    Args:
+        members: Each recording's :func:`own_floor_of` record.
+        p: The parameters; the packaged ones when None.
+
+    Returns:
+        ``band_edges_hz``; ``band_db``, the ``session.statistic`` per band of the members whose own
+        floor was read over quiet frames and whose bands match, or None with fewer than
+        ``session.members_min`` of them; ``members_n`` and ``used_n``; and ``active_level_db``, the
+        same statistic of the members' levels, or None.
+    """
+    p = p or background_model_parameters()
+    q = p["session"]
+    usable = [m for m in members if m.get("source") == "quiet_frames" and m.get("own_db")]
+    edges = max((tuple(m["band_edges_hz"]) for m in usable), key=len, default=())
+    used = [m for m in usable if tuple(m["band_edges_hz"]) == edges]
+    reducer = {"median": np.median, "mean": np.mean}[q["statistic"]]
+    enough = len(used) >= int(q["members_min"])
+    levels = [float(m["active_level_db"]) for m in members if m.get("active_level_db") is not None]
+    return {
+        "band_edges_hz": list(edges),
+        "band_db": [float(v) for v in reducer(np.asarray([m["own_db"] for m in used]), axis=0)] if enough else None,
+        "members_n": len(members),
+        "used_n": len(used),
+        "active_level_db": float(reducer(levels)) if len(levels) >= int(q["members_min"]) else None,
+    }
+
+
+def write_view_arrays(path: Path, reading: BackgroundReading) -> None:
+    """Write the arrays a branch reads the background through: frames, floor, impulses and regions.
+
+    Args:
+        path: The ``.npz`` to write.
+        reading: The reading, carrying its frames.
+
+    Raises:
+        ValueError: If the reading carries no frames.
+    """
+    if reading.frames is None:
+        raise ValueError("a background reading without its frames has no view to write")
+    floor = reading.floor
+    np.savez(
+        path,
+        times_s=reading.frames.times_s,
+        band_db=reading.frames.band_db,
+        level_db=reading.frames.level_db,
+        floor_band_db=floor.band_db,
+        floor_own_db=floor.own_db,
+        floor_residual_db=floor.residual_db if floor.residual_db is not None else np.zeros(0),
+        floor_source=np.asarray(floor.source),
+        floor_quiet_s=np.asarray(floor.quiet_s),
+        impulses=np.asarray(
+            [[i.peak_s, i.start_s, i.end_s, i.peak_db, i.attack_ms] for i in reading.impulses], dtype=np.float64
+        ).reshape(-1, 5),
+        regions=np.asarray(
+            [[r.start_s, r.end_s, r.peak_db, r.bands_fraction, r.onset_s, r.offset_s] for r in reading.regions],
+            dtype=np.float64,
+        ).reshape(-1, 6),
+    )
+
+
+def read_view_arrays(path: Path) -> tuple[BandFrames, Floor, tuple[Impulse, ...], tuple[Region, ...]]:
+    """Read back what :func:`write_view_arrays` wrote, exactly.
+
+    Args:
+        path: The ``.npz``.
+
+    Returns:
+        The frames, the floor, the impulses and the regions.
+    """
+    with np.load(path) as z:
+        frames = BandFrames(z["times_s"], z["band_db"], z["level_db"])
+        residual = z["floor_residual_db"]
+        floor = Floor(
+            z["floor_band_db"],
+            str(z["floor_source"]),
+            float(z["floor_quiet_s"]),
+            z["floor_own_db"],
+            residual if residual.size else None,
+        )
+        impulses = tuple(Impulse(*map(float, row)) for row in z["impulses"])
+        regions = tuple(Region(*map(float, row)) for row in z["regions"])
+    return frames, floor, impulses, regions
