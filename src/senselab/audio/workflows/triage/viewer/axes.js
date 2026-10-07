@@ -483,6 +483,25 @@ var SchemaAxes = (function () {
   var BY_NAME = {};
   CATALOGUE.forEach(function (c) { BY_NAME[c.name] = c; });
 
+  /**
+   * Add columns a page carries beyond recording_vectors, so the corpus view and the facets can read
+   * them. A name already in the catalogue is left as it is.
+   *
+   * @param {Array<Object>} specs column specs, in the shape `column` takes.
+   * @returns {Array<Object>} the columns added.
+   */
+  function register(specs) {
+    var added = [];
+    specs.forEach(function (spec) {
+      if (BY_NAME[spec.name]) return;
+      var c = column(spec);
+      CATALOGUE.push(c);
+      BY_NAME[c.name] = c;
+      added.push(c);
+    });
+    return added;
+  }
+
   // Owner-directed: participant, task, verdict first. The remaining seven are ranked by
   // discrimination — separation times decision-relevance, under a redundancy cut and a
   // resolution floor — over the r3 corpus. specs/20260922-compact-recording-vectors/views.md
@@ -680,6 +699,7 @@ var SchemaAxes = (function () {
     MAX_AXES: MAX_AXES,
     KEY_CHARS: KEY_CHARS,
     categoryLabel: categoryLabel,
+    register: register,
     corpusColumns: corpusColumns,
     readValue: readValue,
     summarise: summarise,

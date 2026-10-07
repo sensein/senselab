@@ -50,9 +50,16 @@ var SchemaFacets = (function () {
       .map(function (x) { return x.f; });
   }
 
-  var CATALOGUE = catalogue();
+  var CATALOGUE = [];
   var BY_NAME = {};
-  CATALOGUE.forEach(function (f) { BY_NAME[f.col.name] = f; });
+
+  /** Re-read the axis catalogue, after a page registered its own columns there. */
+  function refresh() {
+    CATALOGUE.length = 0;
+    Object.keys(BY_NAME).forEach(function (k) { delete BY_NAME[k]; });
+    catalogue().forEach(function (f) { CATALOGUE.push(f); BY_NAME[f.col.name] = f; });
+  }
+  refresh();
 
   /** The facets the panel opens expanded: the ones carrying a decision the reader acts on. */
   var DEFAULT_OPEN = ['verdict', 'task', 'release', 'conformance_speech'];
@@ -422,6 +429,7 @@ var SchemaFacets = (function () {
     REFUSED: REFUSED,
     DEFAULT_OPEN: DEFAULT_OPEN,
     FacetModel: FacetModel,
+    refresh: refresh,
   };
 })();
 
