@@ -44,9 +44,8 @@ headline entry or in a ``per_class`` entry.
 - a ``split_report``, unless the schema opts out with ``split: {none: whole_dataset}``; for
   classification every fold's prevalence covers every declared class
 
-``n``, ``counts.*``, ``confusion.*``, a ``count`` headline value and, when the split unit is a person
-(``subject``, ``family``) or not given, a fold's ``n_groups`` below the minimum cell size are replaced
-by ``"<{min_cell}"``.
+``n``, ``counts.*``, ``confusion.*``, a ``count`` headline value and a fold's ``n_groups`` (whatever the
+split unit) below the minimum cell size are replaced by ``"<{min_cell}"``.
 
 Results are fixed codes only; nothing from the rejected content is echoed.
 
@@ -109,7 +108,6 @@ PER_CLASS_FIELDS = ("recall", "precision", "f1", "prevalence")
 CONFUSION_CELLS = ("tp", "fp", "fn", "tn")
 SPLIT_PROTOCOLS = ("seen_subject", "unseen_subject", "none")
 SPLIT_UNITS = ("subject", "family", "session", "video", "clip", "recording", "row")
-PERSON_UNITS = frozenset({"subject", "family"})
 SPLIT_STRATIFY = ("none", "class", "class_timepoint", "class_site", "class_age", "timepoint")
 FOLD_KEYS = ("n_groups", "prevalence")
 TUNING_SPLITS = ("validation", "none", "test")
@@ -443,15 +441,13 @@ class _Check:
         if not isinstance(folds, list):
             self.codes.add("E_METRICS_BAD_SHAPE")
             return
-        unit = split.get("unit")
-        people = unit is None or unit in PERSON_UNITS
         for fold in folds:
             if self.mapping(fold):
-                self.fold(fold, people=people)
+                self.fold(fold)
 
-    def fold(self, fold: dict[str, Any], *, people: bool) -> None:
+    def fold(self, fold: dict[str, Any]) -> None:
         self.keys(fold, frozenset(FOLD_KEYS), driver=False)
-        self.integer(fold, "n_groups", suppress=people)
+        self.integer(fold, "n_groups", suppress=True)
         prevalence = fold.get("prevalence")
         if isinstance(prevalence, dict):
             if set(prevalence) - set(self.schema.per_class):

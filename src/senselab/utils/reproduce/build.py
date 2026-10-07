@@ -945,6 +945,7 @@ def render_build_job(
     profile_path: Path,
     step: str,
     rebuild: bool = False,
+    base_dir: Path | None = None,
     date: datetime.date | None = None,
     driver_python: str = sys.executable,
     uv: str | None = None,
@@ -965,7 +966,8 @@ def render_build_job(
         profile_path: The profile file passed to ``build-one``.
         step: The step whose env lists the sdist.
         rebuild: Pass ``--rebuild``.
-        date: The log date; defaults to today.
+        base_dir: Passed to ``build-one`` as ``--base-dir`` (the manifest repository prefetch used).
+        date: The log date; defaults to today. The job runs in the log dir (``--chdir``).
         driver_python: The interpreter with senselab installed.
         uv: The uv executable; defaults to :func:`find_uv`, resolved to an absolute path now.
         environ: Where the exported variables' values come from; defaults to ``os.environ``.
@@ -996,6 +998,7 @@ def render_build_job(
     lines += [
         f"#SBATCH --output={logs}/build-{name}-%j.out",
         f"#SBATCH --error={logs}/build-{name}-%j.err",
+        f"#SBATCH --chdir={logs}",
         "#SBATCH --export=NONE",
         "set -euo pipefail",
         f"export PATH={SYSTEM_PATH}",
@@ -1011,8 +1014,10 @@ def render_build_job(
     if sdist.torch_cuda_arch_list is not None:
         arch = _double_quoted(sdist.torch_cuda_arch_list, "torch_cuda_arch_list")
         lines.append(f"export TORCH_CUDA_ARCH_LIST={arch}")
-    argv = ["-m", "senselab.utils.reproduce", "build-one", str(manifest)]
+    argv = ["-P", "-m", "senselab.utils.reproduce", "build-one", str(manifest)]
     argv += ["--profile", str(profile_path), "--step", step, "--sdist", sdist.name]
+    if base_dir is not None:
+        argv += ["--base-dir", str(base_dir)]
     if rebuild:
         argv.append("--rebuild")
     lines.append('"$REPRO_DRIVER_PYTHON" ' + shlex.join(argv))

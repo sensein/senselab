@@ -36,7 +36,9 @@ A step's result dir ``R = <results_root>/<step_key>`` is laid out by the driver:
 
 Only ``E_*`` codes fail a step; ``W_*`` codes are recorded. Driver errors go to ``R/logs/driver.log``;
 callers get fixed codes only. `run_steps` runs a set of manifests in DAG order; a step whose need did
-not succeed is ``never-ran``.
+not succeed is ``never-ran``. With ``only`` it runs just the named steps, as one batch job does: their
+upstream steps are keyed and must already be done (`resolve_step`), never run, and ``run.json`` is
+merged under a lock rather than rewritten, so jobs of one analysis can finish in any order.
 """
 
 from __future__ import annotations
@@ -57,12 +59,12 @@ import sys
 import threading
 import traceback
 import uuid
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal, NamedTuple
 
-from senselab.utils.reproduce import cache, digest, env, host, metrics, provenance, sandbox, source
+from senselab.utils.reproduce import build, cache, digest, env, host, metrics, provenance, sandbox, source
 from senselab.utils.reproduce.dag import toposort
 from senselab.utils.reproduce.spec import Expect, LockRef, Manifest, MetricsSchema, Profile, StepSpec, render
 
@@ -78,6 +80,8 @@ R_SESSION_DIR = "rsession"
 METRICS = "metrics.json"
 DRIVER_LOG = "driver.log"
 RUN_JSON = "run.json"
+RUN_LOCK = ".run.json.lock"
+PENDING = "pending"
 RESERVED_NAMES = frozenset({cache.SUMMARY, METRICS, RUN_JSON})
 NOTEBOOK_KINDS = frozenset({"notebook", "ir_notebook"})
 EXIT_DRIVER = 1
@@ -128,6 +132,8 @@ CODES = frozenset(
         "E_EXPECT",
         "E_PROV_REFUSED",
         "E_DRIVER",
+        "E_UPSTREAM_NOT_DONE",
+        "E_JOB_ENDED_WITHOUT_RECORD",
         "W_HOST_VALUE_DROPPED",
     }
 )
@@ -598,7 +604,7 @@ def run_step(
     upstream = upstream or {}
     if any(name not in upstream or not upstream[name].ok for name in step.needs):
         _unlink_run(config, analysis, step.name)
-        return StepOutcome(step.name, None, "never-ran", None, (), None)
+        return StepOutcome(step.name, None, "never-ran", None, upstream_codes(step, upstream), None)
     seen: dict[str, Path] = {}
     with _quiet_log():
         try:
@@ -1425,41 +1431,463 @@ def _evaluate(
 # --- a set of manifests ------------------------------------------------------------------------
 
 
-def run_steps(manifests: Sequence[Manifest], config: RunConfig) -> list[StepOutcome]:
-    """Run every step of a set of manifests in DAG order (`dag.toposort`).
+def resolve_step(
+    step: StepSpec,
+    analysis: str,
+    config: RunConfig,
+    upstream: Mapping[str, StepOutcome] | None = None,
+) -> StepOutcome:
+    """Key a step and report its done result, without running, claiming or linking anything.
+
+    A batch job for a downstream step uses this for each upstream step: the upstream job finished first
+    (``afterok``), and its key is computed again here from the same inputs, because a key is never
+    remembered.
+
+    Args:
+        step: The step.
+        analysis: The name of the manifest the step belongs to.
+        config: The run configuration.
+        upstream: The outcome of each of ``step.needs``.
+
+    Returns:
+        ``skipped`` with exit 0 and the summary's codes when the result dir is done; ``never-ran`` when a
+        need is not `StepOutcome.ok`; otherwise ``failed`` with ``E_UPSTREAM_NOT_DONE`` (the key is known
+        but its result is not done) or the keying code.
+    """
+    upstream = upstream or {}
+    if any(name not in upstream or not upstream[name].ok for name in step.needs):
+        return StepOutcome(step.name, None, "never-ran", None, upstream_codes(step, upstream), None)
+    with _quiet_log():
+        try:
+            keyed = _key(step, analysis, config, upstream)
+        except (RunError, digest.DigestError, cache.CacheError) as error:
+            return _failed(step, error.code)
+        except (OSError, TypeError, ValueError):
+            return _failed(step, "E_DRIVER")
+    if not cache.is_done(keyed.result):
+        return _failed(step, "E_UPSTREAM_NOT_DONE", keyed.key, keyed.result)
+    return StepOutcome(step.name, keyed.key, "skipped", 0, _read_summary(keyed.result), keyed.result)
+
+
+def _row(outcome: StepOutcome) -> dict[str, Any]:
+    return {
+        "step": outcome.step,
+        "key": outcome.key,
+        "status": outcome.status,
+        "exit": outcome.exit,
+        "codes": list(outcome.codes),
+    }
+
+
+def upstream_codes(step: StepSpec, upstream: Mapping[str, StepOutcome]) -> tuple[str, ...]:
+    """Why a step never ran: the codes of its needs that did not succeed, else ``E_UPSTREAM_NOT_DONE``."""
+    codes = {c for name in step.needs if name in upstream and not upstream[name].ok for c in upstream[name].codes}
+    return tuple(sorted(codes)) or ("E_UPSTREAM_NOT_DONE",)
+
+
+def never_ran_row(step: str, codes: Sequence[str] = ()) -> dict[str, Any]:
+    """The ``run.json`` row of a step that did not run and will not: no key, no exit."""
+    return {"step": step, "key": None, "status": "never-ran", "exit": None, "codes": list(codes)}
+
+
+def read_run_record(path: Path) -> list[dict[str, Any]]:
+    """Read ``run.json``'s rows; an absent file has none.
+
+    Args:
+        path: The ``run.json`` file (its last component is not followed if it is a symlink).
+
+    Returns:
+        The rows, each a mapping with a string ``step``.
+
+    Raises:
+        ValueError: If the file is not ``{"steps": [{"step": <str>, ...}, ...]}``.
+        OSError: If it exists and cannot be read.
+    """
+    try:
+        data = json.loads(_read_nofollow(path))
+    except FileNotFoundError:
+        return []
+    rows = data.get("steps") if isinstance(data, dict) else None
+    if not isinstance(rows, list) or not all(isinstance(r, dict) and isinstance(r.get("step"), str) for r in rows):
+        raise ValueError("run.json is not a run record")
+    return rows
+
+
+def update_run_record(
+    runs_root: Path,
+    date: datetime.date,
+    analysis: str,
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    order: Sequence[str],
+    pending_only: bool = False,
+    submission: str | None = None,
+    allow_untagged: bool = False,
+    untagged_only: bool = False,
+) -> None:
+    """Merge rows into ``<runs_root>/<date>/<analysis>/run.json`` under an exclusive lock.
+
+    Each row replaces the fields of the same step's row and keeps the others (a submitted job's ``job``
+    id survives its result). Rows are kept in ``order``, then by name.
+
+    Args:
+        runs_root: The profile's runs root.
+        date: The run date.
+        analysis: The manifest name.
+        rows: Rows with at least ``step``.
+        order: Step names in DAG order.
+        pending_only: Change only rows that exist and are still ``pending``; others are left as they are.
+        submission: Change only rows tagged with this submission id.
+        allow_untagged: With ``submission``, also change rows with no submission tag (or no row at all), as a
+            job's own row may be one a local run wrote.
+        untagged_only: Change only rows with no submission tag (or no row): a local run never rewrites a
+            submission's rows.
+
+    Raises:
+        OSError: If the run dir, the lock or the file cannot be written.
+        ValueError: If the existing ``run.json`` is not a run record.
+        cache.CacheError: If the analysis name or date cannot name a run dir.
+    """
+    run = cache.run_dir(runs_root, date, analysis)
+    run.mkdir(parents=True, exist_ok=True)
+    with build.file_lock(run / RUN_LOCK):
+        current = {r["step"]: r for r in read_run_record(run / RUN_JSON)}
+        for row in rows:
+            old = current.get(row["step"])
+            if pending_only and (old is None or old.get("status") != PENDING):
+                continue
+            if submission is not None and not _tag_matches(old, submission, allow_untagged):
+                continue
+            if untagged_only and old is not None and old.get("submission") is not None:
+                continue
+            current[row["step"]] = {**(old or {}), **row}
+        _write_ordered(run, current, order)
+
+
+def _tag_matches(old: Mapping[str, Any] | None, submission: str, allow_untagged: bool) -> bool:
+    if old is None or old.get("submission") is None:
+        return allow_untagged
+    return bool(old.get("submission") == submission)
+
+
+class SubmissionOverlap(Exception):
+    """A run dir holds ``pending`` rows of another submission; ``others`` names those submissions."""
+
+    code = "E_SUBMIT_OVERLAP"
+
+    def __init__(self, analysis: str, others: Sequence[str]) -> None:
+        """Store the analysis and the other submission ids."""
+        self.analysis = analysis
+        self.others = tuple(others)
+        super().__init__(f"E_SUBMIT_OVERLAP: {analysis}: {', '.join(self.others)}")
+
+
+def reserve_run_record(
+    runs_root: Path, date: datetime.date, analysis: str, order: Sequence[str], submission: str
+) -> dict[str, dict[str, Any] | None]:
+    """Under the record's lock: refuse another submission's ``pending`` rows, then write placeholder rows.
+
+    Every step of ``order`` gets ``{status: pending, job: null, submission}``. The check and the write share
+    one lock, so of two submissions racing for one run dir exactly one reserves it.
+
+    Args:
+        runs_root: The profile's runs root.
+        date: The run date.
+        analysis: The manifest name.
+        order: The analysis's step names in DAG order.
+        submission: This submission's id.
+
+    Returns:
+        The rows the placeholders replaced (None where there was none), for `release_reservation`.
+
+    Raises:
+        SubmissionOverlap: If another submission still has a ``pending`` row there.
+    """
+    run = cache.run_dir(runs_root, date, analysis)
+    run.mkdir(parents=True, exist_ok=True)
+    with build.file_lock(run / RUN_LOCK):
+        current = {r["step"]: r for r in read_run_record(run / RUN_JSON)}
+        others = sorted(
+            {
+                str(r.get("submission"))
+                for r in current.values()
+                if r.get("status") == PENDING and r.get("submission") != submission
+            }
+        )
+        if others:
+            raise SubmissionOverlap(analysis, others)
+        snapshot = {name: current.get(name) for name in order}
+        for name in order:
+            current[name] = {**never_ran_row(name), "status": PENDING, "job": None, "submission": submission}
+        _write_ordered(run, current, order)
+    return snapshot
+
+
+def release_reservation(
+    runs_root: Path,
+    date: datetime.date,
+    analysis: str,
+    order: Sequence[str],
+    submission: str,
+    snapshot: Mapping[str, Mapping[str, Any] | None],
+    codes: Sequence[str] | None,
+) -> None:
+    """Undo this submission's still-``pending`` rows: restore the row each replaced, or settle it.
+
+    A row another writer changed since (a job that ran, another submission) is left alone. Where the
+    placeholder replaced a row, that row comes back; otherwise the row is removed (``codes`` None) or becomes
+    ``never-ran`` with ``codes``, tagged with this submission.
+    """
+    run = cache.run_dir(runs_root, date, analysis)
+    with build.file_lock(run / RUN_LOCK):
+        current = {r["step"]: r for r in read_run_record(run / RUN_JSON)}
+        for name in order:
+            row = current.get(name)
+            if row is None or row.get("submission") != submission or row.get("status") != PENDING:
+                continue
+            before = snapshot.get(name)
+            if before is not None:
+                current[name] = dict(before)
+            elif codes is None:
+                del current[name]
+            else:
+                current[name] = {**row, **never_ran_row(name, codes)}
+        _write_ordered(run, current, order)
+
+
+def _write_ordered(run: Path, current: Mapping[str, Mapping[str, Any]], order: Sequence[str]) -> None:
+    position = {name: index for index, name in enumerate(order)}
+    steps = sorted(current.values(), key=lambda r: (position.get(r["step"], len(position)), r["step"]))
+    _write_json(run / RUN_JSON, {"steps": steps})
+
+
+def check_no_live_submission(runs_root: Path, date: datetime.date, analyses: Sequence[str]) -> None:
+    """Refuse a local run while any submission still has ``pending`` rows in one of the run dirs.
+
+    Raises:
+        SubmissionOverlap: Naming the analysis and the submissions.
+    """
+    for name in analyses:
+        rows = read_run_record(cache.run_dir(runs_root, date, name) / RUN_JSON)
+        others = sorted({str(r.get("submission")) for r in rows if r.get("status") == PENDING and r.get("submission")})
+        if others:
+            raise SubmissionOverlap(name, others)
+
+
+def pending_jobs(manifests: Sequence[Manifest], config: RunConfig, submission: str) -> list[str]:
+    """The job ids recorded in a submission's rows that are still ``pending``."""
+    jobs = []
+    for manifest in manifests:
+        rows = read_run_record(cache.run_dir(config.profile.runs_root, config.date, manifest.name) / RUN_JSON)
+        jobs += [
+            str(r["job"])
+            for r in rows
+            if r.get("status") == PENDING and r.get("submission") == submission and r.get("job")
+        ]
+    return jobs
+
+
+def descendants(specs: Mapping[str, StepSpec], roots: set[str]) -> set[str]:
+    """Every step that depends, directly or not, on one of ``roots``."""
+    return _descendants(specs, roots)
+
+
+def _descendants(specs: Mapping[str, StepSpec], roots: set[str]) -> set[str]:
+    found: set[str] = set()
+    changed = True
+    while changed:
+        changed = False
+        for spec in specs.values():
+            if spec.name not in found and any(n in roots or n in found for n in spec.needs):
+                found.add(spec.name)
+                changed = True
+    return found
+
+
+def finalize_run_records(
+    manifests: Sequence[Manifest],
+    config: RunConfig,
+    submission: str | None = None,
+    state_of: Callable[[str], str | None] | None = None,
+) -> None:
+    """Settle every row still ``pending`` once every job of a submission has ended.
+
+    Steps are taken in DAG order. A placeholder row (a submission's, with no job id) was never submitted:
+    ``never-ran`` with ``E_SUBMIT_ABORTED``. A pending step with a need that did not succeed was cancelled with its
+    upstream (``--kill-on-invalid-dep``): ``never-ran`` with ``E_UPSTREAM_NOT_DONE``. Otherwise its own job
+    ended without writing its row (killed, timed out, node failure): ``never-ran`` with
+    ``E_JOB_ENDED_WITHOUT_RECORD`` and, when ``state_of`` knows it, the job's final state as ``slurm_state``.
+    A requeued job's later row replaces either.
+
+    Args:
+        manifests: The manifests of the submission.
+        config: The run configuration (its ``date`` is the submission's run date).
+        submission: Only rows tagged with this submission id are touched; None touches every pending row.
+        state_of: Maps a job id to its final state word (``TIMEOUT``, ``NODE_FAIL``, ``CANCELLED``), or None.
+    """
+    ordered = toposort([s for m in manifests for s in m.steps])
+    analysis = {s.name: m.name for m in manifests for s in m.steps}
+    rows: dict[str, dict[str, Any]] = {}
+    for manifest in manifests:
+        record = cache.run_dir(config.profile.runs_root, config.date, manifest.name) / RUN_JSON
+        rows.update({r["step"]: r for r in read_run_record(record) if r["step"] in analysis})
+    settled: dict[str, list[dict[str, Any]]] = {}
+    for step in ordered:
+        row = rows.get(step.name)
+        if row is None or row.get("status") != PENDING:
+            continue
+        if submission is not None and row.get("submission") != submission:
+            continue
+        upstream_bad = any(not _row_ok(rows.get(n)) for n in step.needs)
+        if row.get("job") is None and row.get("submission") is not None:
+            new = never_ran_row(step.name, ("E_SUBMIT_ABORTED",))
+        elif upstream_bad:
+            new = never_ran_row(step.name, ("E_UPSTREAM_NOT_DONE",))
+        else:
+            new = never_ran_row(step.name, ("E_JOB_ENDED_WITHOUT_RECORD",))
+            job = row.get("job")
+            state = state_of(str(job)) if state_of is not None and job else None
+            if state is not None:
+                new["slurm_state"] = state
+        rows[step.name] = {**row, **new}
+        settled.setdefault(analysis[step.name], []).append(new)
+    for name, new_rows in settled.items():
+        order = [s.name for s in ordered if analysis[s.name] == name]
+        update_run_record(
+            config.profile.runs_root,
+            config.date,
+            name,
+            new_rows,
+            order=order,
+            pending_only=True,
+            submission=submission,
+        )
+
+
+def _row_ok(row: Mapping[str, Any] | None) -> bool:
+    return row is not None and row.get("status") in ("executed", "skipped") and row.get("exit") == 0
+
+
+def run_steps(
+    manifests: Sequence[Manifest],
+    config: RunConfig,
+    only: Collection[str] | None = None,
+    submission: str | None = None,
+) -> list[StepOutcome]:
+    """Run every step of a set of manifests in DAG order (`dag.toposort`), or only the named ones.
 
     A step whose need did not succeed (`StepOutcome.ok`) is ``never-ran``; the others run or skip as
     `run_step` decides. Each analysis gets ``<runs_root>/<date>/<analysis>/run.json`` listing its steps'
     keys, statuses, exits and codes; when it cannot be written, every step of that analysis also carries
     ``E_DRIVER`` and a non-zero exit (its result dirs are unchanged).
 
+    With ``only``, the named steps run and every step they depend on, directly or not, is resolved with
+    `resolve_step` (keyed, never run). Only the named steps' rows are written, merged into ``run.json``
+    (`update_run_record`); a named step that did not succeed also turns its dependents' ``pending`` rows
+    into ``never-ran``.
+
     Args:
         manifests: The manifests; step names are unique across them.
         config: The run configuration.
+        only: Step names to run; None runs every step.
+        submission: With ``only``, the submission id whose ``pending`` dependent rows a failure may settle.
 
     Returns:
-        One outcome per step, in run order.
+        One outcome per step run, in run order (with ``only``, the named steps only).
+
+    A local run (``submission`` None) refuses while any submission has ``pending`` rows in one of the run
+    dirs, and never rewrites a row a submission tagged; rows of steps it did not run are kept.
+
+    Raises:
+        ValueError: If ``only`` names a step outside the manifests.
+        SubmissionOverlap: For a local run while a submission is live in one of the run dirs.
     """
     analysis = {s.name: m.name for m in manifests for s in m.steps}
     specs = {s.name: s for m in manifests for s in m.steps}
-    outcomes: dict[str, StepOutcome] = {}
     ordered = toposort(list(specs.values()))
+    if submission is None:
+        check_no_live_submission(config.profile.runs_root, config.date, sorted(set(analysis.values())))
+    if only is not None:
+        return _run_only(config, analysis, specs, ordered, set(only), submission)
+    outcomes: dict[str, StepOutcome] = {}
     for step in ordered:
         upstream = {name: outcomes[name] for name in step.needs}
         schemas = {name: specs[name].metrics_schema for name in _expect_sources(step)}
         outcomes[step.name] = run_step(step, analysis[step.name], config, upstream, schemas)
     for name in sorted(set(analysis.values())):
         rows = [outcomes[s.name] for s in ordered if analysis[s.name] == name]
-        record = {
-            "steps": [
-                {"step": o.step, "key": o.key, "status": o.status, "exit": o.exit, "codes": list(o.codes)} for o in rows
-            ]
-        }
+        order = [s.name for s in ordered if analysis[s.name] == name]
         try:
-            run = cache.run_dir(config.profile.runs_root, config.date, name)
-            run.mkdir(parents=True, exist_ok=True)
-            _write_json(run / RUN_JSON, record)
+            update_run_record(
+                config.profile.runs_root, config.date, name, [_row(o) for o in rows], order=order, untagged_only=True
+            )
         except (OSError, TypeError, ValueError, RunError, cache.CacheError):
             for o in rows:
                 outcomes[o.step] = o._replace(codes=tuple(sorted({*o.codes, "E_DRIVER"})), exit=o.exit or EXIT_DRIVER)
     return [outcomes[s.name] for s in ordered]
+
+
+def _run_only(
+    config: RunConfig,
+    analysis: Mapping[str, str],
+    specs: Mapping[str, StepSpec],
+    ordered: Sequence[StepSpec],
+    only: set[str],
+    submission: str | None,
+) -> list[StepOutcome]:
+    unknown = sorted(only - set(specs))
+    if unknown:
+        raise ValueError(f"steps not in the manifests: {unknown}")
+    wanted, stack = set(only), list(only)
+    while stack:
+        for need in specs[stack.pop()].needs:
+            if need not in wanted:
+                wanted.add(need)
+                stack.append(need)
+    outcomes: dict[str, StepOutcome] = {}
+    for step in ordered:
+        if step.name not in wanted:
+            continue
+        upstream = {name: outcomes[name] for name in step.needs}
+        if step.name in only:
+            schemas = {name: specs[name].metrics_schema for name in _expect_sources(step)}
+            outcomes[step.name] = run_step(step, analysis[step.name], config, upstream, schemas)
+        else:
+            outcomes[step.name] = resolve_step(step, analysis[step.name], config, upstream)
+    selected = [outcomes[s.name] for s in ordered if s.name in only]
+    failed = [o for o in selected if not o.ok]
+    dependents = _descendants(specs, {o.step for o in failed}) - only
+    why = tuple(sorted({c for o in failed for c in o.codes})) or ("E_UPSTREAM_NOT_DONE",)
+    for name in sorted({analysis[o.step] for o in selected} | {analysis[d] for d in dependents}):
+        order = [s.name for s in ordered if analysis[s.name] == name]
+        own = [_row(o) for o in selected if analysis[o.step] == name]
+        gone = [never_ran_row(d, why) for d in order if d in dependents]
+        try:
+            if own:
+                update_run_record(
+                    config.profile.runs_root,
+                    config.date,
+                    name,
+                    own,
+                    order=order,
+                    submission=submission,
+                    allow_untagged=True,
+                    untagged_only=submission is None,
+                )
+            if gone:
+                update_run_record(
+                    config.profile.runs_root,
+                    config.date,
+                    name,
+                    gone,
+                    order=order,
+                    pending_only=True,
+                    submission=submission,
+                )
+        except (OSError, TypeError, ValueError, RunError, cache.CacheError):
+            for o in selected:
+                if analysis[o.step] == name:
+                    outcomes[o.step] = o._replace(
+                        codes=tuple(sorted({*o.codes, "E_DRIVER"})), exit=o.exit or EXIT_DRIVER
+                    )
+    return [outcomes[s.name] for s in ordered if s.name in only]
