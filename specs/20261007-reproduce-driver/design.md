@@ -263,6 +263,53 @@ Wheel sha256s are outputs, so a rebuild never renames a venv.
 - A run fails if its `sessionInfo()` differs from the one captured at prefetch.
 - The module's `PATH` and `LD_LIBRARY_PATH` are captured at prefetch and keyed.
 
+How `env` installs (B7):
+
+- **Copies, not originals.** `check_integrity` returns the sha256 of the bytes it hashed;
+  `prefetch_env` copies every verified file into a private temp dir, re-hashes each copy against
+  that mapping and installs only from the copies. A test swaps the body lock between the check and
+  the copy and expects a refusal with no install. Stage 3 wheels go through `stage_wheel` the same
+  way, so neither the manifest repository nor the wheelhouse is read by uv.
+- **uv runs with `build.base_environment`** (system `PATH`, private `HOME`/`TMPDIR`, the uv cache
+  and Python dirs, the CA bundle) and `--no-config`, so a caller's `UV_INDEX_URL`, `PYTHONPATH` or
+  `uv.toml` cannot change an install. The test plants both and checks the env keys.
+- **Stage argv.** Torch: `--no-deps --require-hashes`, with `--index-url <torch.index_url>` only
+  when the lock has `==` pins (`build.torch_index_url`); URL-pinned locks need no index. Body and
+  overlays: `--no-deps --require-hashes --only-binary :all: --index-url <body.index_url>`; the
+  overlays are compiled against the body index, and binaries-only keeps a stray sdist (and its
+  setuptools) out of the step venv. Wheels: `--no-deps <copy>`.
+- **The torch lock goes to every sdist build** when the env has one. `SdistSpec` has no "needs
+  torch" field and a build that silently lacks torch fails late or, worse, builds without its
+  extension; the cost is a temporary torch install in the build venv.
+- **Freeze equals locks.** After installing, the parsed `uv pip freeze` must equal the lock entries
+  whose markers hold for the env's Python on this host, plus the stage 3 wheels, with `+cuXXX`
+  dropped on both sides. A mismatch fails the prefetch and leaves no marker. `installed.json` keeps
+  the raw freeze lines (`name @ file://…` included) and the parsed map.
+- **Completion and reuse.** A venv is complete when `.reproduce-venv.json` names its `env_key` and
+  overlay sha256; it is written last. A complete venv is reused without any uv call; anything else
+  at that path is removed and rebuilt, under a `flock` on `<venv>.lock`. Wheels are only reused or
+  built when a venv actually needs building. Two overlays with identical bytes share one derived
+  venv, since the name is the overlay's sha256.
+- **pip check.** Each `The package \`X\` …` line becomes `(normalised X, kind, detail)`, where detail
+  is the rest of the line without backticks; `requires …` lines are `requirement`, lines mentioning
+  the platform are `platform`, anything else is `other` and can never be declared. The comparison
+  is exact both ways: an undeclared violation and a declared one that did not occur both fail.
+- **Smoke catches what pip check cannot.** The slow test's sdist wheel (python_speech_features 0.6)
+  declares no requirements but imports scipy, which no lock holds: `uv pip check` is clean and the
+  sandboxed import fails. Smoke runs one `python -c 'import m'` per module through `sandbox_argv`,
+  the venv bound read-only, offline.
+- **R prefetch** loads the module with `bash --noprofile --norc -c '. /etc/profile.d/modules.sh &&
+  module load "$1" …'` (the plan's `bash -lc` read dotfiles, B6), with an allowlisted env and no
+  `set -u` (the init script fails under it). `Rscript --vanilla` keeps `Renviron.site` and
+  `Rprofile.site` from resetting `R_LIBS_SITE` or the repository; B12 should run R steps the same
+  way. The R script writes plain text (installed TSV, `.libPaths()`, `sessionInfo()`, R version),
+  and Python writes `SESSION.json` with sorted keys, so its sha256 is stable and the script needs no
+  JSON package. `SESSION.json` is written last and only when every declared version is installed
+  and the library is first on `.libPaths()`; it also marks the library complete for reuse.
+- **Merge order** (`r_env_vars`): `PATH` is the caller's prefix (`{venv}/bin`), then the module's
+  entries, then a suffix; `LD_LIBRARY_PATH` is the module's entries, then the native lib dirs, each
+  entry kept at its first position.
+
 ## Sandbox
 
 Every step runs as
