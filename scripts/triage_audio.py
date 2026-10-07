@@ -67,7 +67,7 @@ from senselab.audio.data_structures import AudioHints, SpeakerEmbeddingProvenanc
 from senselab.audio.workflows.triage.config import load_triage_config
 from senselab.audio.workflows.triage.enrollment import Enrollment
 from senselab.audio.workflows.triage.run import run_triage
-from senselab.audio.workflows.triage.vocabulary import RunState
+from senselab.audio.workflows.triage.vocabulary import RunState, release_value
 
 DEFAULT_OUT_DIR = Path("artifacts/triage")
 
@@ -250,7 +250,7 @@ def main(argv: list[str] | None = None) -> int:
     if result.file_verdict is not None:
         print(f"Triage:  {result.file_verdict.triage.value}")
         ground = result.file_verdict.release_ground
-        print(f"Release: {result.file_verdict.release.value}" + (f" — {ground}" if ground else ""))
+        print(f"Release: {release_value(result.file_verdict.release)}" + (f" — {ground}" if ground else ""))
         for name, released in result.released.items():
             print(f"  {name}: {released}")
     else:

@@ -83,8 +83,8 @@ var SchemaAxes = (function () {
 
   // Orders for the closed vocabularies. Anything not listed orders by frequency.
   var ORDERINGS = {
-    verdict: ['pass', 'flag', 'rerun', 'discard'],
-    release: ['release_without_redaction', 'release_with_redaction', 'withheld', 'discarded', 'not_assessed'],
+    verdict: ['pass', 'review', 'discard'],
+    release: ['as_is', 'redacted', 'withheld'],
     conformance_airway: ['true', 'undetermined', 'false'],
     conformance_speech: ['true', 'undetermined', 'false'],
     conformance_voice: ['true', 'undetermined', 'false'],

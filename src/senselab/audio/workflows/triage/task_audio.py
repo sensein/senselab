@@ -547,7 +547,7 @@ def _source(store: ProvStore, run_dir: Path, name: str, config: TriageConfig) ->
         return Source(entity.id, audio, path, entity.attributes.get("checksum_sha256"))
     folded = find_verdict(store, VERDICT_NODE)
     release = None if folded is None else str(folded.attributes.get("release") or "")
-    if release != Release.WITH_REDACTION.value:
+    if release != Release.REDACTED.value:
         raise LookupError(f"release is {release or 'unfolded'}, so no redacted copy is released")
     released = released_audio(
         store, run_dir, bleep_hz=config.get("redaction.bleep_hz"), fill=str(config.require("redaction.fill"))

@@ -221,7 +221,7 @@ def aggregate(records: Iterable[tuple[str, dict[str, Any] | None, dict[str, Any]
         by_duration.setdefault(bucket, Counter())[outcome] += 1
         if outcome != "pass":
             flagged[family] += 1
-        release[str(decision.get("release"))] += 1
+        release[str(decision.get("release") or "none")] += 1
         if decision.get("release_ground"):
             release_ground[str(decision["release_ground"])] += 1
         if decision.get("discard_ground"):

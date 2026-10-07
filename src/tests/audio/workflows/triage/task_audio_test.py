@@ -75,7 +75,7 @@ def _seed(
     tasks: tuple[tuple[float, float], ...] = ((2.0, 5.0), (3.0, 7.5)),
     enhanced: bool = True,
     redacted: bool = True,
-    release: str = Release.WITH_REDACTION.value,
+    release: str = Release.REDACTED.value,
 ) -> tuple[ProvStore, Path]:
     run_dir = tmp_path / "run"
     store = ProvStore(run_id="task-audio-test")
@@ -241,9 +241,7 @@ class TestWhatIsMissing:
         assert outcome.cuts["enhanced"].startswith("absent")
         assert not (run_dir / "streams/task_enhanced.flac").exists()
 
-    @pytest.mark.parametrize(
-        "release", [Release.WITHOUT_REDACTION.value, Release.WITHHELD.value, Release.NOT_ASSESSED.value]
-    )
+    @pytest.mark.parametrize("release", [Release.AS_IS.value, Release.WITHHELD.value, ""])
     def test_no_redacted_cut_unless_the_redacted_copy_is_released(
         self, release: str, tmp_path: Path, config: TriageConfig
     ) -> None:
@@ -286,7 +284,7 @@ class TestWhatIsMissing:
         store.entity(
             prov_type="verdict",
             extent=None,
-            attributes={"node": "VERDICT", "triage": "discard", "release": Release.DISCARDED.value},
+            attributes={"node": "VERDICT", "triage": "discard", "release": None},
         )
         outcome = cut_task_audio(store, config, run_dir=run_dir)
         assert outcome.extent is None and outcome.changed

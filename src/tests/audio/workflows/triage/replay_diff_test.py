@@ -78,7 +78,7 @@ def _fold(
     """
     return FileVerdict(
         triage=triage,
-        release=Release.NOT_ASSESSED,
+        release=None,
         declared_family="syllable",
         reasons=reasons or [],
         deviations=deviations or {},
@@ -234,9 +234,9 @@ class TestSplitting:
 
     def test_both_generations_read_their_decision(self, tmp_path: Path) -> None:
         """Each pass's fold is recovered from its own verdict entity."""
-        store = _replayed(tmp_path, {"fold": _fold(Triage.FLAG)}, {"fold": _fold(Triage.DISCARD)})
+        store = _replayed(tmp_path, {"fold": _fold(Triage.REVIEW)}, {"fold": _fold(Triage.DISCARD)})
         before, after = split_generations(store)
-        assert generation(store, before).value("triage") == "flag"
+        assert generation(store, before).value("triage") == "review"
         assert generation(store, after).value("triage") == "discard"
 
 
@@ -267,12 +267,12 @@ class TestDecisionMovement:
         row = diff_store(
             _replayed(
                 tmp_path,
-                {"fold": _fold(Triage.FLAG)},
-                {"fold": FileVerdict(triage=Triage.PASS, release=Release.WITH_REDACTION, declared_family="syllable")},
+                {"fold": _fold(Triage.REVIEW)},
+                {"fold": FileVerdict(triage=Triage.PASS, release=Release.REDACTED, declared_family="syllable")},
             )
         )
-        assert row["transitions"]["triage"] == "flag->pass"
-        assert row["transitions"]["release"] == "not_assessed->release_with_redaction"
+        assert row["transitions"]["triage"] == "review->pass"
+        assert row["transitions"]["release"] == "None->redacted"
         assert row["identical"] is False
 
     def test_a_store_predating_release_ground_still_compares(self, tmp_path: Path) -> None:
@@ -288,14 +288,14 @@ class TestDecisionMovement:
                 {
                     "fold": FileVerdict(
                         triage=Triage.PASS,
-                        release=Release.WITHOUT_REDACTION,
+                        release=Release.AS_IS,
                         release_ground=SCAN_FOUND_NOTHING,
                         declared_family="syllable",
                     )
                 },
             )
         )
-        assert row["transitions"]["release"] == "not_assessed->release_without_redaction"
+        assert row["transitions"]["release"] == "None->as_is"
         assert row["transitions"]["release_ground"] == f"None->{SCAN_FOUND_NOTHING}"
         assert row["new_keys"] == ["release_ground"]
 
@@ -306,8 +306,8 @@ class TestDecisionMovement:
         row = diff_store(
             _replayed(
                 tmp_path,
-                {"fold": _fold(Triage.FLAG, reasons=[gone])},
-                {"fold": _fold(Triage.FLAG, reasons=[arrived])},
+                {"fold": _fold(Triage.REVIEW, reasons=[gone])},
+                {"fold": _fold(Triage.REVIEW, reasons=[arrived])},
             )
         )
         assert row["grounds"] == {"gained": ["QUALITY|the new ground"], "lost": ["SPEECH|the old ground"]}
@@ -497,7 +497,7 @@ class TestNotReplayable:
         blocked = _replayed(
             tmp_path / "a",
             {"fold": _fold(Triage.DISCARD, ran={"PREPROCESS": RunState.SKIPPED})},
-            {"fold": _fold(Triage.FLAG, ran={"PREPROCESS": RunState.SKIPPED})},
+            {"fold": _fold(Triage.REVIEW, ran={"PREPROCESS": RunState.SKIPPED})},
             admitted=False,
         )
         fine = _replayed(
@@ -525,7 +525,7 @@ class TestAggregate:
         same = _replayed(tmp_path / "b", {"fold": _fold()}, {"fold": _fold()})
         moved = _replayed(
             tmp_path / "c",
-            {"fold": _fold(Triage.FLAG), "scanned": True, "pii_categories": ("PERSON",)},
+            {"fold": _fold(Triage.REVIEW), "scanned": True, "pii_categories": ("PERSON",)},
             {"fold": _fold(Triage.PASS), "scanned": False},
         )
         return [
@@ -546,8 +546,8 @@ class TestAggregate:
         for name in "abc":
             (tmp_path / name).mkdir()
         report = aggregate(self._rows(tmp_path))
-        assert report.triage == {"pass->pass": 2, "flag->pass": 1}
-        assert report.moved_stems["triage"] == {"flag->pass": ["sub-c"]}
+        assert report.triage == {"pass->pass": 2, "review->pass": 1}
+        assert report.moved_stems["triage"] == {"review->pass": ["sub-c"]}
 
     def test_the_leaking_direction_has_its_own_count(self, tmp_path: Path) -> None:
         """Scanned before and not now is counted apart and named in the report."""

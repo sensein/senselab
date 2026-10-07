@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
-r"""Write the replay manifest: every recording of the AIRWAY families, and every recording held for a rerun.
+r"""Write the replay manifest: every recording of the AIRWAY families, and every recording whose run is incomplete.
 
     uv run python scripts/select_replay_manifest.py RECORDING_VECTORS.parquet --out-root DIR OUT.jsonl \
-        [--branch AIRWAY] [--no-rerun]
+        [--branch AIRWAY] [--no-incomplete]
 
 ``RECORDING_VECTORS.parquet`` is the corpus table ``recording_vectors.py`` writes; its ``run_dir``
 is relative to ``--out-root``, the directory the corpus runs live under. Each selected row becomes
 one JSONL object carrying ``stem``, ``enhanced`` (``<out-root>/<run_dir>/run/streams/enhanced.flac``,
 the path the extend drivers derive a run root from), ``declared_family``, ``verdict`` and
-``selected_by`` (``family``, ``rerun`` or both).
+``selected_by`` (``family``, ``incomplete`` or both).
 
 ``--branch`` names the branch whose in-family rows are selected (``AIRWAY`` by default); a row is
-also selected where its verdict is ``rerun``, unless ``--no-rerun``. The selection is in
+also selected where its ``run_status`` is ``incomplete``, unless ``--no-incomplete``. The selection is in
 ``specs/20261006-airway-move/design.md``.
 
 Install:
@@ -27,26 +27,27 @@ from pathlib import Path
 import pandas as pd
 
 from senselab.audio.workflows.triage.nodes.branches import EXPECTATIONS
-from senselab.audio.workflows.triage.vocabulary import Triage
+from senselab.audio.workflows.triage.vocabulary import RunStatus
 
 
-def select(table: pd.DataFrame, *, branch: str, include_rerun: bool) -> pd.DataFrame:
+def select(table: pd.DataFrame, *, branch: str, include_incomplete: bool) -> pd.DataFrame:
     """The rows to replay, each with why it was selected.
 
     Args:
         table: The recording-vectors table.
         branch: The branch whose declared families are selected.
-        include_rerun: Whether every ``rerun`` row is selected too.
+        include_incomplete: Whether every row whose run is incomplete is selected too.
 
     Returns:
         The selected rows, with a ``selected_by`` column.
     """
     by_family = table["declared_family"].isin(sorted(EXPECTATIONS[branch]))
-    by_rerun = (table["verdict"] == Triage.RERUN.value) if include_rerun else pd.Series(False, index=table.index)
-    chosen = table[by_family | by_rerun].copy()
+    by_status = table["run_status"] == RunStatus.INCOMPLETE.value
+    by_incomplete = by_status if include_incomplete else pd.Series(False, index=table.index)
+    chosen = table[by_family | by_incomplete].copy()
     chosen["selected_by"] = [
-        "+".join(name for name, hit in (("family", f), ("rerun", r)) if hit)
-        for f, r in zip(by_family[by_family | by_rerun], by_rerun[by_family | by_rerun])
+        "+".join(name for name, hit in (("family", f), ("incomplete", r)) if hit)
+        for f, r in zip(by_family[by_family | by_incomplete], by_incomplete[by_family | by_incomplete])
     ]
     return chosen
 
@@ -62,11 +63,13 @@ def main() -> int:
     parser.add_argument("out", type=Path, help="The manifest JSONL to write")
     parser.add_argument("--out-root", type=Path, required=True, help="The directory the corpus runs live under")
     parser.add_argument("--branch", default="AIRWAY", choices=sorted(EXPECTATIONS), help="Whose families to select")
-    parser.add_argument("--no-rerun", action="store_true", help="Do not also select every rerun recording")
+    parser.add_argument(
+        "--no-incomplete", action="store_true", help="Do not also select every recording whose run is incomplete"
+    )
     args = parser.parse_args()
 
-    table = pd.read_parquet(args.table, columns=["stem", "run_dir", "declared_family", "verdict"])
-    chosen = select(table, branch=args.branch, include_rerun=not args.no_rerun)
+    table = pd.read_parquet(args.table, columns=["stem", "run_dir", "declared_family", "verdict", "run_status"])
+    chosen = select(table, branch=args.branch, include_incomplete=not args.no_incomplete)
     with args.out.open("w") as handle:
         for row in chosen.itertuples(index=False):
             handle.write(

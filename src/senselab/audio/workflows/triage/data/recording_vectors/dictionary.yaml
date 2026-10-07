@@ -35,16 +35,52 @@ columns:
 
   verdict:
     units: none
-    values: [pass, flag, rerun, discard]
+    values: [pass, review, discard]
     description: >-
-      The file-level triage outcome. `rerun` is a recording the pipeline still owes something -- a
-      missing derivative, a node that did not finish, a configuration the fold cannot read -- before
-      anything about the participant is concluded; `ground_keys` names which.
+      The file-level triage outcome. A recording the pipeline still owes something is `review` with
+      `run_status = incomplete` and reason `not_measured`.
     computation: >-
       The `triage` attribute of the latest live `verdict` entity with `node = VERDICT` (the fold);
       the fold's `FileVerdict.triage`.
     source: [recording_vectors.py:extract, vocabulary.py:FileVerdict.record, nodes/verdict.py:verdict]
     null_means: Never; a row is written only where the fold exists.
+
+  run_status:
+    units: none
+    values: [complete, incomplete]
+    description: >-
+      Whether the pipeline finished what the decision needs. `incomplete` names a recording that is owed
+      a derivative, a node, a readable configuration or a release reading; `missing` names which.
+    computation: The fold's `run_status` attribute (`FileVerdict.run_status`).
+    source: [recording_vectors.py:extract, vocabulary.py:FileVerdict.record]
+    null_means: The fold was written before the run status existed; a re-fold fills it.
+
+  missing:
+    units: none
+    description: >-
+      Where `run_status` is incomplete, the operational ground keys and the release ground key that left
+      it so; empty otherwise.
+    computation: The fold's `missing` attribute (`FileVerdict.missing`).
+    source: [recording_vectors.py:extract, vocabulary.py:FileVerdict.record]
+    null_means: The fold was written before the run status existed; a re-fold fills it.
+
+  reason:
+    units: none
+    description: >-
+      The decision's primary reason, one of data/decision_reasons.yaml `precedence`: the first of
+      `reason_keys`.
+    computation: The fold's `reason` attribute (`FileVerdict.reason`).
+    source: [recording_vectors.py:extract, vocabulary.py:FileVerdict.record, decision.py:reasons_of]
+    null_means: A pass whose release the redaction policy does not hold.
+
+  reason_keys:
+    units: none
+    description: >-
+      Every reason behind the decision, mapped from `ground_keys` and the release ground by
+      data/decision_reasons.yaml and ordered by its `precedence`.
+    computation: The fold's `reason_keys` attribute (`FileVerdict.reason_keys`).
+    source: [recording_vectors.py:extract, vocabulary.py:FileVerdict.record, decision.py:reasons_of]
+    null_means: The fold was written before the reasons existed; a re-fold fills it.
 
   session:
     units: none
@@ -81,11 +117,13 @@ columns:
 
   release:
     units: none
-    values: [release_without_redaction, release_with_redaction, withheld, discarded, not_assessed]
-    description: Which artefact of the recording may be handed on.
+    values: [as_is, redacted, withheld]
+    description: >-
+      Which artefact of the recording may be handed on: the recording as recorded, only REDACT's
+      redacted copy, or neither because the redaction policy holds it (`withheld`).
     computation: The fold's `release` attribute (`FileVerdict.release`).
     source: [recording_vectors.py:extract, vocabulary.py:FileVerdict.record, vocabulary.py:_release_from]
-    null_means: Never in a fold written by this code; null only if the fold omits the attribute.
+    null_means: The recording was discarded, or the graph could not assess its release (verdict `review`, reason `not_measured`).
 
   release_ground:
     units: none
@@ -93,7 +131,7 @@ columns:
       Why the release axis reads as it does, as one of the controlled ground strings `vocabulary.py`
       declares under RELEASE_WITHOUT_REDACTION_GROUNDS, RELEASE_UNKNOWN_GROUNDS,
       RELEASE_WITHHELD_GROUNDS and RELEASE_WITH_REDACTION_GROUNDS, or DISCARDED behind every
-      `discarded` release.
+      discard.
     computation: The fold's `release_ground` attribute.
     source: [recording_vectors.py:extract, vocabulary.py:FileVerdict.record, vocabulary.py:_release_from]
     null_means: REDACT passed and its planned masks stand, so the redacted copy releases on REDACT's own verdict; never null for a withheld or discarded recording.
@@ -134,7 +172,7 @@ columns:
       for a prefix in `GROUND_KEY_PREFIXES` (`gate:<gate>`, `conformance:<branch>`,
       `branch_silent:<branch>`, `hint_mismatch:<branch>`, `node:<node>:<outcome>` …). Keys in
       `OPERATIONAL_GROUND_KEYS` or under `branch_silent` / `unmeasured_operating_point` are the
-      operational ones that make the file `rerun`. The human-readable reason stays in the store.
+      operational ones that make the file `run_status = incomplete`. The human-readable reason stays in the store.
     computation: The fold's `ground_keys` attribute (`FileVerdict.ground_keys`).
     source: [recording_vectors.py:extract, vocabulary.py:FileVerdict.record, vocabulary.py:ground_key]
     null_means: >-
@@ -1213,7 +1251,7 @@ columns:
   task_audio_cuts:
     units: none
     description: Which streams were cut to the task extent.
-    computation: The live `task_plain`, `task_enhanced` and `task_redacted` streams, by source name; `redacted` only under `release_with_redaction`.
+    computation: The live `task_plain`, `task_enhanced` and `task_redacted` streams, by source name; `redacted` only under `redacted`.
     source: [recording_vectors.py:_task_audio_columns, task_audio.py:cut_task_audio]
     null_means: The cut has not run, or the recording has no task extent.
     values: [plain, enhanced, redacted]

@@ -128,6 +128,7 @@ from senselab.audio.workflows.triage.vocabulary import (
     RunState,
     TaskEvidence,
     fold_file_verdict,
+    release_value,
     reviewer_may_unmask,
 )
 from senselab.utils.prov_store import PROV_TYPE, Entity, ProvStore
@@ -1179,7 +1180,7 @@ def verdict(
         store,
         prov_type="measurement",
         extent=None,
-        attributes=plan.record(release=file_verdict.release.value, release_ground=file_verdict.release_ground),
+        attributes=plan.record(release=release_value(file_verdict.release), release_ground=file_verdict.release_ground),
     )
     store.was_generated_by(ledger_id, activity)
     store.was_attributed_to(ledger_id, software)

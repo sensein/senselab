@@ -48,7 +48,15 @@ VOICE_FAMILIES = (
 )
 REVIEW_SETS = ("breath_review_check", "discard_contested_check")
 _TIMESTAMP = re.compile(r"_\d{8}-\d{6}$")
-_OUTCOME = {"pass": "pass", "flag": "review", "discard": "discard", "rerun": "rerun"}
+_OUTCOME = {"pass": "pass", "review": "review", "discard": "discard", "flag": "review", "rerun": "incomplete"}
+"""Verdict to outcome. ``flag`` and ``rerun`` are the values tables written before schema 25 carry."""
+
+
+def _outcome(decision: pd.Series) -> str:
+    """A decision's outcome: its verdict, or ``incomplete`` where its run is."""
+    if str(decision.get("run_status")) == "incomplete":
+        return "incomplete"
+    return _OUTCOME.get(str(decision["verdict"]), str(decision["verdict"]))
 
 
 def recording_key(stem: str) -> str:
@@ -163,7 +171,7 @@ def load_decisions(source: Path) -> pd.DataFrame:
     """Decisions keyed by recording: ``verdict`` and ``ground_keys``, from a parquet or a rows directory."""
     if source.is_file():
         table = pd.read_parquet(source)
-        keep = [c for c in ("stem", "verdict", "ground_keys", "declared_family") if c in table.columns]
+        keep = [c for c in ("stem", "verdict", "run_status", "ground_keys", "declared_family") if c in table.columns]
         table = table[keep].copy()
     else:
         records = []
@@ -193,7 +201,7 @@ def score(labels: pd.DataFrame, decisions: pd.DataFrame, label_map: dict[str, An
         if row["target"] == "excluded":
             continue
         decision = decisions.loc[recording_key(row["stem"])] if recording_key(row["stem"]) in decisions.index else None
-        outcome = "missing" if decision is None else _OUTCOME.get(str(decision["verdict"]), str(decision["verdict"]))
+        outcome = "missing" if decision is None else _outcome(decision)
         keys = [] if decision is None else list(decision["ground_keys"])
         rows.append(
             {
@@ -218,7 +226,7 @@ def review_band_rate(decisions: pd.DataFrame) -> dict[str, dict[str, float]]:
     if "declared_family" not in decisions.columns:
         return {}
     out: dict[str, dict[str, float]] = {}
-    kept = decisions[decisions["verdict"].isin(["pass", "flag"])]
+    kept = decisions[decisions["verdict"].isin(["pass", "review", "flag"])]
     groups = kept["declared_family"].map(lambda f: family_group(f, ""))
     for group in ("breath", "cough", "voice"):
         rows = kept[groups == group]

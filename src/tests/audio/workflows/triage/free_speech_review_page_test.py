@@ -178,7 +178,7 @@ def test_the_residue_and_a_declined_scan_are_in_the_popup_not_on_the_card() -> N
         "task": "free-speech-1",
         "stem": "p_s_task-free-speech-1",
         "fam": "free-speech",
-        "rel": "release_without_redaction",
+        "rel": "as_is",
         "rg": None,
         "why": "",
         "rwhy": "",
@@ -283,7 +283,7 @@ def test_recording_record_reads_the_live_generation(tmp_path: Path) -> None:
         _entity(
             "verdict-old",
             "verdict",
-            {"node": "VERDICT", "release": "release_with_redaction", "declared_family": "free-speech"},
+            {"node": "VERDICT", "release": "redacted", "declared_family": "free-speech"},
         ),
         {"record": "relation", "relation": "wasInvalidatedBy", "source": "verdict-old", "target": "act-replay"},
         _verdict("withheld"),
@@ -302,9 +302,7 @@ def test_recording_record_reads_the_live_generation(tmp_path: Path) -> None:
 
 def test_recording_record_skips_a_family_outside_the_pattern(tmp_path: Path) -> None:
     """An item-list task under the same tree is not a free response."""
-    run_root = _store(
-        tmp_path, "sub-aaa_ses-bbb_task-animal-fluency", [_verdict("release_with_redaction", family="animal-fluency")]
-    )
+    run_root = _store(tmp_path, "sub-aaa_ses-bbb_task-animal-fluency", [_verdict("redacted", family="animal-fluency")])
     assert page.recording_record(run_root, page.free_response_families()) is None
 
 
@@ -401,15 +399,13 @@ def test_finding_key_is_stable_and_position_independent() -> None:
 
 def test_extract_writes_one_line_per_recording(tmp_path: Path) -> None:
     """The sweep keeps the free-response recordings and reports its counts."""
-    _store(tmp_path, _FAMILY_STEM, [_word(0, "one"), _verdict("release_with_redaction")])
+    _store(tmp_path, _FAMILY_STEM, [_word(0, "one"), _verdict("redacted")])
     _store(
         tmp_path,
         "sub-ccc_ses-ddd_task-cinderella-story",
-        [_word(0, "two"), _verdict("release_without_redaction", "x", "cinderella-story")],
+        [_word(0, "two"), _verdict("as_is", "x", "cinderella-story")],
     )
-    _store(
-        tmp_path, "sub-eee_ses-fff_task-animal-fluency", [_verdict("release_with_redaction", family="animal-fluency")]
-    )
+    _store(tmp_path, "sub-eee_ses-fff_task-animal-fluency", [_verdict("redacted", family="animal-fluency")])
     report = page.extract(tmp_path, tmp_path / "out.jsonl", workers=1)
     assert report["candidates"] == 2
     assert report["participants"] == 2
@@ -529,7 +525,7 @@ def _row(participant: str, **rest: Any) -> dict[str, Any]:  # noqa: ANN401 -- mi
         "task": "free-speech-1",
         "stem": f"{participant}_ses-b_task-free-speech-1",
         "fam": "free-speech",
-        "rel": "release_with_redaction",
+        "rel": "redacted",
         "rg": None,
         "tri": "pass",
         "why": "",
@@ -568,7 +564,7 @@ def test_render_is_self_contained_and_groups_by_participant(tmp_path: Path) -> N
                     "sub-ccc",
                     task="cinderella-story",
                     fam="cinderella-story",
-                    rel="release_without_redaction",
+                    rel="as_is",
                     rg="the scan ran over the transcript and found nothing to redact",
                     w=[["two", 0, -1]],
                     ch=3,
@@ -1014,8 +1010,8 @@ def test_the_release_decision_is_the_axis_own_vocabulary() -> None:
     """
     assert [value for value, _, _, _ in page.RELEASE_DECISIONS] == [
         "withheld",
-        "release_with_redaction",
-        "release_without_redaction",
+        "redacted",
+        "as_is",
     ]
     assert set(value for value, _, _, _ in page.RELEASE_DECISIONS) <= set(page.RELEASE_ORDER)
 
@@ -1076,7 +1072,7 @@ def test_the_release_decision_reaches_the_filters_and_the_progress_line() -> Non
     corpus.add(_row("sub-a"))
     document = page.render(corpus, "Review")
     assert 'id="dec"' in document
-    for value in ("decided", "undecided", "withheld", "release_without_redaction", "release_with_redaction"):
+    for value in ("decided", "undecided", "withheld", "as_is", "redacted"):
         assert f'<option value="{value}">' in document
     assert "rows given a release decision" in page._SCRIPT
 
@@ -1130,7 +1126,7 @@ def test_every_progress_term_counts_the_cards_on_this_page() -> None:
 def test_the_decided_row_stripe_is_legible_in_both_themes() -> None:
     """A 3px stripe at the light theme's value is all but invisible on the dark card."""
     dark = page._STYLE.split("@media (prefers-color-scheme:dark)")[1]
-    for value in ("release_without_redaction", "release_with_redaction", "withheld"):
+    for value in ("as_is", "redacted", "withheld"):
         assert f'.rec[data-dec="{value}"]' in dark, value
 
 
@@ -1398,7 +1394,7 @@ def test_census_counts_what_a_rebuild_is_judged_by(tmp_path: Path) -> None:
                     f=[_mark("k1", ["PERSON"], ["presidio"], 0, 1, brk=1)],
                     d={"llm": {"status": "disabled"}},
                 ),
-                _census_row("sub-b", rel="release_with_redaction", d={"llm": {"status": "clean"}}),
+                _census_row("sub-b", rel="redacted", d={"llm": {"status": "clean"}}),
             ]
         )
         + "\n"
@@ -1433,7 +1429,7 @@ def test_compare_reports_each_count_in_both_with_its_delta(tmp_path: Path) -> No
 
 def test_an_extract_carries_its_schema_version(tmp_path: Path) -> None:
     """The header is what lets the page know which graph the rows came from."""
-    _store(tmp_path, _FAMILY_STEM, [_word(0, "one"), _verdict("release_with_redaction")])
+    _store(tmp_path, _FAMILY_STEM, [_word(0, "one"), _verdict("redacted")])
     out = tmp_path / "out.jsonl"
     report = page.extract(tmp_path, out, workers=1)
     assert report["version"] == page.EXTRACT_VERSION
@@ -1542,7 +1538,7 @@ def test_a_mark_matched_by_the_stimulus_reads_as_matched(tmp_path: Path) -> None
             [0, 1],
         ),
         *_label("assertion-1", "NAME", "word-0"),
-        _verdict("release_with_redaction", family="cinderella-story"),
+        _verdict("redacted", family="cinderella-story"),
     ]
     run_root = _store(tmp_path, "sub-aaa_ses-bbb_task-cinderella-story", records)
     row = page.recording_record(run_root, page.free_response_families())
@@ -1693,7 +1689,7 @@ def test_the_marks_are_the_ledgers_spans_each_with_its_state(tmp_path: Path) -> 
             ],
             name_release_proposed=["Alice"],
         ),
-        _verdict("release_with_redaction"),
+        _verdict("redacted"),
     ]
     row = page.recording_record(_store(tmp_path, _FAMILY_STEM, records), page.free_response_families())
     assert row is not None
@@ -1740,7 +1736,7 @@ def test_a_word_released_by_kind_is_a_green_labelled_mark(tmp_path: Path) -> Non
             proposals=[],
             counts={"released_by_kind_n": 2},
         ),
-        _verdict("release_without_redaction"),
+        _verdict("as_is"),
     ]
     row = page.recording_record(_store(tmp_path, _FAMILY_STEM, records), page.free_response_families())
     assert row is not None
@@ -1783,7 +1779,7 @@ def test_a_condition_over_a_detector_mask_is_released(tmp_path: Path) -> None:
                 }
             ],
         ),
-        _verdict("release_without_redaction"),
+        _verdict("as_is"),
     ]
     row = page.recording_record(_store(tmp_path, _FAMILY_STEM, records), page.free_response_families())
     assert row is not None
@@ -1803,7 +1799,7 @@ def test_a_word_two_detectors_mark_differently_is_two_single_category_marks(tmp_
         _word(0, "Acme"),
         *_label("assertion-1", "PERSON", "word-0"),
         *_label("assertion-2", "ORG", "word-0"),
-        _verdict("release_without_redaction"),
+        _verdict("as_is"),
     ]
     row = page.recording_record(_store(tmp_path, _FAMILY_STEM, records), page.free_response_families())
     assert row is not None
@@ -1847,7 +1843,7 @@ def test_a_detector_mark_on_a_task_word_is_not_drawn(tmp_path: Path) -> None:
         _word(2, "Maria"),
         *_label("assertion-1", "PERSON", "word-1"),
         *_label("assertion-2", "PERSON", "word-2"),
-        _verdict("release_without_redaction"),
+        _verdict("as_is"),
     ]
     row = page.recording_record(_store(tmp_path, _FAMILY_STEM, records), page.free_response_families())
     assert row is not None
@@ -1873,7 +1869,7 @@ def test_a_card_with_no_consensus_words_shows_one_recogniser_s_stream(tmp_path: 
                 "words": [{"text": "When", "start": 1.4, "end": 1.6}, {"text": "the", "start": 1.6, "end": 1.7}],
             },
         ),
-        _verdict("not_assessed"),
+        _verdict("withheld"),
     ]
     row = page.recording_record(_store(tmp_path, _FAMILY_STEM, records), page.free_response_families())
     assert row is not None

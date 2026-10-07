@@ -24,20 +24,25 @@ def _table() -> pd.DataFrame:
             "stem": ["a", "b", "c", "d"],
             "run_dir": ["ra", "rb", "rc", "rd"],
             "declared_family": ["voluntary-cough", "harvard-sentences-list", "respiration-and-cough-breath", None],
-            "verdict": ["pass", "rerun", "rerun", "flag"],
+            "verdict": ["pass", "review", "review", "review"],
+            "run_status": ["complete", "incomplete", "incomplete", "complete"],
         }
     )
 
 
-def test_airway_families_and_reruns_are_selected_and_say_why() -> None:
-    """Both airway rows, the speech rerun, and not the flagged row of no family."""
-    chosen = selector.select(_table(), branch="AIRWAY", include_rerun=True)
-    assert dict(zip(chosen["stem"], chosen["selected_by"])) == {"a": "family", "b": "rerun", "c": "family+rerun"}
+def test_airway_families_and_incomplete_runs_are_selected_and_say_why() -> None:
+    """Both airway rows, the incomplete speech row, and not the reviewed row of no family."""
+    chosen = selector.select(_table(), branch="AIRWAY", include_incomplete=True)
+    assert dict(zip(chosen["stem"], chosen["selected_by"])) == {
+        "a": "family",
+        "b": "incomplete",
+        "c": "family+incomplete",
+    }
 
 
-def test_no_rerun_takes_the_families_alone() -> None:
-    """``--no-rerun`` leaves a rerun of another branch's family out."""
-    chosen = selector.select(_table(), branch="AIRWAY", include_rerun=False)
+def test_no_incomplete_takes_the_families_alone() -> None:
+    """``--no-incomplete`` leaves an incomplete run of another branch's family out."""
+    chosen = selector.select(_table(), branch="AIRWAY", include_incomplete=False)
     assert list(chosen["stem"]) == ["a", "c"]
 
 

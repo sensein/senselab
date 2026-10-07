@@ -29,6 +29,7 @@ from senselab.audio.workflows.triage.vocabulary import (
     Outcome,
     Release,
     RunState,
+    RunStatus,
     TaskEvidence,
     Triage,
     fold_file_verdict,
@@ -138,7 +139,7 @@ def test_no_onset_discards_as_no_cough_captured() -> None:
 def test_the_detector_finding_the_instructed_count_contests_a_no_cough_discard() -> None:
     """The measure found no onset; AIRWAY's own detector found the five asked: flag for review."""
     folded = _fold(mode=COUGH_COUNTED, onsets=0, conformance=True, detected=5, contest_min=5)
-    assert folded.triage is Triage.FLAG
+    assert folded.triage is Triage.REVIEW
     assert KEY_DISCARD_CONTESTED in folded.ground_keys
     assert folded.discard_ground is None
 
@@ -153,14 +154,14 @@ def test_a_detector_short_of_the_threshold_leaves_the_discard() -> None:
 def test_a_discard_releases_nothing() -> None:
     """A discarded recording releases ``discarded``, whatever redaction would say."""
     folded = _fold(mode=COUGH_PERFORMED, onsets=0, conformance=True)
-    assert folded.release is Release.DISCARDED
+    assert folded.release is None
     assert folded.record()["release_ground_key"] == "discarded"
 
 
 def test_an_absent_spectrogram_reruns() -> None:
     """No stored spectrogram: the measure could not look, so the recording is owed a rerun."""
     folded = _fold(mode=COUGH_COUNTED, onsets=None, absent=("spectrogram_narrowband",), conformance=UNDETERMINED)
-    assert folded.triage is Triage.RERUN
+    assert folded.triage is Triage.REVIEW and folded.run_status is RunStatus.INCOMPLETE
     assert KEY_OWNING_BRANCH_INPUT_ABSENT in folded.ground_keys
 
 
@@ -181,7 +182,7 @@ def test_a_found_cough_explains_the_route() -> None:
 def test_a_low_confidence_count_is_flagged_for_review() -> None:
     """A count whose decision differs inside the review band flags for review, never discards."""
     folded = _fold(mode=COUGH_COUNTED, onsets=5, review=True)
-    assert folded.triage is Triage.FLAG
+    assert folded.triage is Triage.REVIEW
     assert KEY_COUGH_REVIEW_LOW_CONFIDENCE in folded.ground_keys
 
 
@@ -201,6 +202,6 @@ def test_background_speech_in_the_task_flags_and_never_discards() -> None:
         instructed=3,
         background={"heard": True, "speech_windows": [], "voice_runs": [[16.0, 18.9, 1.4, 4.0]]},
     )
-    assert folded.triage is Triage.FLAG
+    assert folded.triage is Triage.REVIEW
     assert KEY_BACKGROUND_SPEECH_IN_TASK in folded.ground_keys
     assert folded.background_speech["heard"] is True

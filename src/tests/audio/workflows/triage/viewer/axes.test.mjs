@@ -127,7 +127,7 @@ test('a shortened axis says so in its caption, and an ordinary one does not', ()
   const shortened = A.caption(A.summarise('participant', data))
   assert.match(shortened, /first 8 of the id/)
   assert.match(shortened, /whole in the panel/)
-  const plain = A.caption(A.summarise('verdict', rows({ verdict: 'pass' }, { verdict: 'flag' })))
+  const plain = A.caption(A.summarise('verdict', rows({ verdict: 'pass' }, { verdict: 'review' })))
   assert.doesNotMatch(plain, /first 8/)
 })
 
@@ -181,10 +181,10 @@ test('pii_findings_n keeps zero as a value and null as absent', () => {
 
 test('a categorical axis is ordered categories, with a declared order where one exists', () => {
   const s = A.summarise('verdict', rows(
-    { verdict: 'flag' }, { verdict: 'pass' }, { verdict: 'pass' }, { verdict: 'discard' },
+    { verdict: 'review' }, { verdict: 'pass' }, { verdict: 'pass' }, { verdict: 'discard' },
   ))
   assert.equal(s.kind, 'categorical')
-  assert.deepEqual(s.categories, ['pass', 'flag', 'discard'])
+  assert.deepEqual(s.categories, ['pass', 'review', 'discard'])
   assert.equal(A.position(s, 'pass'), 1)
   assert.equal(A.position(s, 'discard'), 0)
   assert.equal(A.position(s, 'nope'), null)
@@ -330,28 +330,28 @@ test('absent can be included or isolated, and is excluded by default', () => {
 })
 
 test('brushing a categorical axis keeps the chosen terms', () => {
-  const data = rows({ verdict: 'pass' }, { verdict: 'flag' }, { verdict: 'discard' })
+  const data = rows({ verdict: 'pass' }, { verdict: 'review' }, { verdict: 'discard' })
   const v = view(['verdict'], data)
-  v.brushes = { verdict: { terms: ['flag', 'discard'] } }
+  v.brushes = { verdict: { terms: ['review', 'discard'] } }
   v.applyBrushes()
   assert.deepEqual(Array.from(v.selected), [0, 1, 1])
 })
 
 test('two brushes intersect', () => {
   const data = rows(
-    { verdict: 'pass', duration_s: 1 }, { verdict: 'flag', duration_s: 1 },
-    { verdict: 'flag', duration_s: 9 },
+    { verdict: 'pass', duration_s: 1 }, { verdict: 'review', duration_s: 1 },
+    { verdict: 'review', duration_s: 9 },
   )
   const v = view(['verdict', 'duration_s'], data)
-  v.brushes = { verdict: { terms: ['flag'] }, duration_s: { lo: 0, hi: 5 } }
+  v.brushes = { verdict: { terms: ['review'] }, duration_s: { lo: 0, hi: 5 } }
   v.applyBrushes()
   assert.deepEqual(Array.from(v.selected), [0, 1, 0])
 })
 
 test('removing an axis drops its brush rather than filtering invisibly', () => {
-  const data = rows({ verdict: 'pass', duration_s: 1 }, { verdict: 'flag', duration_s: 9 })
+  const data = rows({ verdict: 'pass', duration_s: 1 }, { verdict: 'review', duration_s: 9 })
   const v = view(['verdict', 'duration_s'], data)
-  v.brushes = { verdict: { terms: ['flag'] } }
+  v.brushes = { verdict: { terms: ['review'] } }
   v.setAxes(['duration_s'])
   assert.deepEqual(Object.keys(v.brushes), [])
   assert.equal(v.selectedCount, 2)

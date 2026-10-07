@@ -307,8 +307,8 @@ def build_recording(
                 "verdict",
                 None,
                 node="VERDICT",
-                outcome=Triage.FLAG.value,
-                triage=Triage.FLAG.value,
+                outcome=Triage.REVIEW.value,
+                triage=Triage.REVIEW.value,
                 release=Release.WITHHELD.value,
                 discard_ground=None,
                 ground_keys=["node:SPEECH:flag"],
@@ -477,7 +477,7 @@ def test_identity_is_read_from_the_stem_and_the_verdict_from_the_fold(one_row: d
     assert one_row["participant"] == "sub-a1"
     assert one_row["session"] == "ses-b2"
     assert one_row["task"] == "diadochokinesis-pa"
-    assert one_row["verdict"] == Triage.FLAG.value
+    assert one_row["verdict"] == Triage.REVIEW.value
     assert one_row["release"] == Release.WITHHELD.value
     assert one_row["declared_family"] == "diadochokinesis-pa"
 

@@ -14,6 +14,18 @@ from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import Any, Literal, Mapping, Sequence, TypeVar
 
+from senselab.audio.workflows.triage.decision import (
+    ANNOTATION,
+    DISCARD,
+    PASS,
+    REVIEW,
+    WITHHOLD,
+    EvidenceItem,
+    item,
+    reasons_of,
+    records,
+)
+
 GRAPH_ORDER = (
     "ADMIT",
     "PREPROCESS",
@@ -91,17 +103,23 @@ class Outcome(Enum):
 
 
 class Triage(Enum):
-    """What should happen to this recording. The file axis; a node's ``Outcome`` is not one of these.
-
-    ``rerun`` is a recording the pipeline still owes something -- a missing derivative, a node that did
-    not finish, a configuration the fold cannot read -- before anything about the participant can be
-    concluded; :data:`OPERATIONAL_GROUND_KEYS` names those grounds.
-    """
+    """What should happen to this recording. The file axis; a node's ``Outcome`` is not one of these."""
 
     PASS = "pass"
-    FLAG = "flag"
-    RERUN = "rerun"
+    REVIEW = "review"
     DISCARD = "discard"
+
+
+class RunStatus(Enum):
+    """Whether the pipeline finished what this recording's decision needs.
+
+    ``incomplete`` names a recording the pipeline still owes something -- a missing derivative, a node
+    that did not finish, a configuration the fold cannot read; :data:`OPERATIONAL_GROUND_KEYS` names
+    those grounds. Its verdict is :attr:`Triage.REVIEW` with the reason ``not_measured``.
+    """
+
+    COMPLETE = "complete"
+    INCOMPLETE = "incomplete"
 
 
 class KindState(Enum):
@@ -123,18 +141,17 @@ class RunState(Enum):
 class Release(Enum):
     """Which artefact of this recording may be handed on.
 
-    Five values over one question, total and exclusive: the recording as recorded, only REDACT's
-    redacted copy, neither because the recording was discarded, neither because the redaction policy
-    holds it, or the graph cannot say.
+    Three values over one question, read only where the verdict is not ``discard``: the recording as
+    recorded, only REDACT's redacted copy, or neither because the redaction policy holds it. A discard
+    carries no release value, and neither does a recording whose release the graph could not assess
+    (its verdict is ``review``, reason ``not_measured``).
     ``specs/20260924-which-artefact-is-releasable/design.md`` holds the vocabulary and what each
     value permits; ``specs/20260817-triage-workflow-dag/verdict.md`` holds the fold.
     """
 
-    WITHOUT_REDACTION = "release_without_redaction"
-    WITH_REDACTION = "release_with_redaction"
+    AS_IS = "as_is"
+    REDACTED = "redacted"
     WITHHELD = "withheld"
-    DISCARDED = "discarded"
-    NOT_ASSESSED = "not_assessed"
 
 
 NO_LEXICAL_WORD = "SPEECH ran and the consensus transcript carries no lexical word"
@@ -165,7 +182,7 @@ RELEASE_WITHOUT_REDACTION_GROUNDS = (
     FINDINGS_ARE_TASK_CONTENT,
     REVIEWER_CLEARED_UNMASKED,
 )
-"""Which reading cleared the recording. One stands behind every :attr:`Release.WITHOUT_REDACTION`."""
+"""Which reading cleared the recording. One stands behind every :attr:`Release.AS_IS`."""
 
 NO_TRANSCRIPT = "SPEECH did not run, so nothing read the recording for content a redaction would remove"
 SPEECH_UNREAD = "SPEECH left no lexical count, so whether the recording carries redactable content is unknown"
@@ -173,7 +190,7 @@ REDACTION_OWED = "the scan found content to redact and REDACT left no verdict ov
 SCAN_UNRECORDED = "SPEECH read lexical words and recorded no scan either way"
 
 RELEASE_UNKNOWN_GROUNDS = (NO_TRANSCRIPT, SPEECH_UNREAD, REDACTION_OWED, SCAN_UNRECORDED)
-"""Why the graph could not tell. One of these stands behind every :attr:`Release.NOT_ASSESSED`."""
+"""Why the graph could not tell. One of these stands behind every release the graph could not assess."""
 
 REVIEWER_PROPOSED_REDACTION = "the redaction reviewer proposed hiding more and the policy lets that withhold"
 
@@ -230,7 +247,7 @@ POLICY_MASKS_ONLY = (
     "an age, a state; the copy keeps those"
 )
 DISCARDED = "the recording was discarded, so no artefact of it is released"
-"""The ground behind every :attr:`Release.DISCARDED`."""
+"""The release ground of every discard; a discard carries no release value."""
 
 RELEASE_WITH_REDACTION_GROUNDS = (
     REVIEWER_CLEARED_RESCAN,
@@ -815,7 +832,7 @@ OPERATIONAL_GROUND_KEYS = frozenset(
     }
 )
 """Grounds that say the pipeline owes the recording something, not that the participant did anything.
-A flag on one of these makes the file ``rerun`` (:attr:`Triage.RERUN`)."""
+A flag on one of these makes the file :attr:`RunStatus.INCOMPLETE`, verdict ``review``."""
 
 OPERATIONAL_GROUND_PREFIXES = frozenset({PREFIX_UNMEASURED, PREFIX_BRANCH_SILENT})
 """Prefixed grounds that are operational in the same sense."""
@@ -888,6 +905,18 @@ def ground_key(verdict: "NodeVerdict") -> str:
     if "which is not a node outcome" in verdict.why:
         return KEY_NODE_OUTCOME_UNREADABLE
     return f"{PREFIX_NODE}:{verdict.node}:{verdict.outcome.value}"
+
+
+def release_value(release: Release | None) -> str | None:
+    """The stored value of a release, None where there is none.
+
+    Args:
+        release: The fold's release, None on a discard or where the graph could not assess it.
+
+    Returns:
+        Its string value, or None.
+    """
+    return release.value if release is not None else None
 
 
 def release_ground_key(release_ground: str | None) -> str:
@@ -1145,7 +1174,15 @@ class FileVerdict:
 
     Attributes:
         triage: What should happen to the recording.
-        release: Which artefact of the recording may be handed on. Never describes the store.
+        release: Which artefact of the recording may be handed on, or None on a discard and wherever the
+            graph could not assess it. Never describes the store.
+        run_status: Whether the pipeline finished what the decision needs.
+        missing: Where ``run_status`` is incomplete, the operational grounds and the release ground
+            that left it so. Empty otherwise.
+        reason: The decision's primary reason, the first of ``reason_keys``; None on a pass the release
+            does not hold.
+        reason_keys: Every reason behind the decision, ``data/decision_reasons.yaml``'s precedence first.
+        evidence: Every reading the fold weighed, with the decisive ones marked.
         release_ground: Why the release axis reads as it does, in controlled vocabulary, wherever
             REDACT did not decide it — one of :data:`RELEASE_WITHOUT_REDACTION_GROUNDS`,
             :data:`RELEASE_UNKNOWN_GROUNDS`, :data:`RELEASE_WITHHELD_GROUNDS` or
@@ -1195,7 +1232,12 @@ class FileVerdict:
     """
 
     triage: Triage
-    release: Release
+    release: Release | None
+    run_status: RunStatus = RunStatus.COMPLETE
+    missing: list[str] = field(default_factory=list)
+    reason: str | None = None
+    reason_keys: list[str] = field(default_factory=list)
+    evidence: list[EvidenceItem] = field(default_factory=list)
     discard_ground: str | None = None
     release_ground: str | None = None
     ground_keys: list[str] = field(default_factory=list)
@@ -1235,7 +1277,12 @@ class FileVerdict:
         """
         return {
             "triage": self.triage.value,
-            "release": self.release.value,
+            "release": release_value(self.release),
+            "run_status": self.run_status.value,
+            "missing": list(self.missing),
+            "reason": self.reason,
+            "reason_keys": list(self.reason_keys),
+            "evidence": records(self.evidence),
             "discard_ground": self.discard_ground,
             "release_ground": self.release_ground,
             "release_ground_key": release_ground_key(self.release_ground),
@@ -1470,7 +1517,7 @@ def _release_from(
     reviewer_withholds: str | None = None,
     speech_declined: bool = False,
     reviewer_clears: bool = False,
-) -> tuple[Release, str | None]:
+) -> tuple[Release | None, str | None]:
     """Which artefact may be handed on: the evidence's answer, then the reviewer's moves.
 
     REDACT runs only where a scan found something, so its absence is the ordinary case and carries
@@ -1484,8 +1531,8 @@ def _release_from(
         ran: Whether each node ran.
         reviewer_withholds: The withholding ground where the reviewer read residue and the policy
             lets that withhold, else None. It may only tighten: it turns either release into a
-            withholding, whether or not REDACT ran, and never touches a withholding or a
-            ``not_assessed``.
+            withholding, whether or not REDACT ran, and never touches a withholding or a release
+            the graph could not assess.
         speech_declined: Whether the ruleset declined SPEECH, in which case a task that carries no
             lexical content by construction is released without redaction.
         reviewer_clears: Whether the reviewer read the original as clean, proposed nothing to hide,
@@ -1493,7 +1540,8 @@ def _release_from(
             a finding, and only to the redacted copy.
 
     Returns:
-        Which artefact may be handed on, never anything about the store, and the ground behind it.
+        Which artefact may be handed on, never anything about the store, and the ground behind it;
+        None where the graph could not assess it, with one of :data:`RELEASE_UNKNOWN_GROUNDS`.
         A REDACT ``pass`` clears the redacted copy and not the original; the ground is None only where
         that pass decided and a planned mask stands, and one of the controlled grounds otherwise. A
         REDACT ``fail`` or ``flag`` that nothing clears withholds on :data:`REDACT_VERIFY_FOUND` or
@@ -1501,7 +1549,7 @@ def _release_from(
         A copy that would mask nothing is never released as a redacted copy: the original is.
     """
     release, ground = _release_from_evidence(node_verdicts, evidence, ran, speech_declined)
-    if reviewer_withholds is not None and release in (Release.WITH_REDACTION, Release.WITHOUT_REDACTION):
+    if reviewer_withholds is not None and release in (Release.REDACTED, Release.AS_IS):
         return Release.WITHHELD, reviewer_withholds
     redact = next((verdict for verdict in node_verdicts if verdict.node == _REDACT), None)
     if (
@@ -1512,32 +1560,32 @@ def _release_from(
         and redact.outcome is Outcome.FAIL
         and evidence.rescan_survivors
     ):
-        release, ground = Release.WITH_REDACTION, REVIEWER_CLEARED_RESCAN
+        release, ground = Release.REDACTED, REVIEWER_CLEARED_RESCAN
     if (
-        release is Release.WITHOUT_REDACTION
+        release is Release.AS_IS
         and ground == SCAN_FOUND_NOTHING
         and redact is None
         and evidence.masks_final_n > 0
         and evidence.policy_masks_n > 0
     ):
-        return Release.WITH_REDACTION, POLICY_MASKS_ONLY
+        return Release.REDACTED, POLICY_MASKS_ONLY
     if release is Release.WITHHELD and ground is None:
         verify_found = redact is not None and redact.outcome is Outcome.FAIL and bool(evidence.rescan_survivors)
         ground = REDACT_VERIFY_FOUND if verify_found else REDACT_UNRESOLVED
-    if release is not Release.WITH_REDACTION:
+    if release is not Release.REDACTED:
         return release, ground
     reviewer = evidence.reviewer_unmasked_n > 0
     if evidence.masks_final_n == 0:
         if evidence.masks_changed:
-            return Release.WITHOUT_REDACTION, REVIEWER_UNMASKED_ALL if reviewer else NO_CONTENT_MASKED
+            return Release.AS_IS, REVIEWER_UNMASKED_ALL if reviewer else NO_CONTENT_MASKED
         if ground is None:
-            return Release.WITHOUT_REDACTION, FINDINGS_ARE_TASK_CONTENT
+            return Release.AS_IS, FINDINGS_ARE_TASK_CONTENT
         if ground == REVIEWER_CLEARED_RESCAN:
-            return Release.WITHOUT_REDACTION, REVIEWER_CLEARED_UNMASKED
+            return Release.AS_IS, REVIEWER_CLEARED_UNMASKED
     if evidence.masks_changed:
         if reviewer:
-            return Release.WITH_REDACTION, REVIEWER_UNMASKED_SOME
-        return Release.WITH_REDACTION, POLICY_MASKS_ADDED if evidence.policy_masks_n else MASKS_TRIMMED_TO_CONTENT
+            return Release.REDACTED, REVIEWER_UNMASKED_SOME
+        return Release.REDACTED, POLICY_MASKS_ADDED if evidence.policy_masks_n else MASKS_TRIMMED_TO_CONTENT
     return release, ground
 
 
@@ -1546,7 +1594,7 @@ def _release_from_evidence(
     evidence: RedactionEvidence,
     ran: Mapping[str, RunState],
     speech_declined: bool,
-) -> tuple[Release, str | None]:
+) -> tuple[Release | None, str | None]:
     """Which artefact the store's own evidence lets be handed on, before any reviewer reading.
 
     Args:
@@ -1560,25 +1608,25 @@ def _release_from_evidence(
     """
     redact = next((verdict for verdict in node_verdicts if verdict.node == _REDACT), None)
     if redact is not None:
-        return (Release.WITH_REDACTION if redact.outcome is Outcome.PASS else Release.WITHHELD), None
+        return (Release.REDACTED if redact.outcome is Outcome.PASS else Release.WITHHELD), None
     if evidence.findings_n > 0:
-        return Release.NOT_ASSESSED, REDACTION_OWED
+        return None, REDACTION_OWED
     speech = ran.get(_SPEECH)
     if speech is RunState.ERRORED:
-        return Release.NOT_ASSESSED, SPEECH_UNREAD
+        return None, SPEECH_UNREAD
     if evidence.lexical_words_n is None:
         if speech is RunState.COMPLETED:
-            return Release.NOT_ASSESSED, SPEECH_UNREAD
+            return None, SPEECH_UNREAD
         if speech_declined:
-            return Release.WITHOUT_REDACTION, NON_LEXICAL_TASK
-        return Release.NOT_ASSESSED, NO_TRANSCRIPT
+            return Release.AS_IS, NON_LEXICAL_TASK
+        return None, NO_TRANSCRIPT
     if evidence.lexical_words_n == 0:
-        return Release.WITHOUT_REDACTION, NO_LEXICAL_WORD
+        return Release.AS_IS, NO_LEXICAL_WORD
     if evidence.scanned is False:
-        return Release.WITHOUT_REDACTION, NOTHING_BEYOND_STIMULUS
+        return Release.AS_IS, NOTHING_BEYOND_STIMULUS
     if evidence.scanned is True:
-        return Release.WITHOUT_REDACTION, SCAN_FOUND_NOTHING
-    return Release.NOT_ASSESSED, SCAN_UNRECORDED
+        return Release.AS_IS, SCAN_FOUND_NOTHING
+    return None, SCAN_UNRECORDED
 
 
 def _agreement(route: str, reported: bool, found_state: str) -> str:
@@ -1797,6 +1845,289 @@ def _count_mismatch(applied_gates: Sequence[Mapping[str, Any]], evidence: TaskEv
         return None
     detected = found.get("value")
     return f"detected {detected} {evidence.event_kind} events where {evidence.instructed_count} were instructed"
+
+
+_COMPARISON = {"at_least": ">=", "at_most": "<="}
+_DISCARD_ITEMS = {
+    UNMEASURABLE: "admit_outcome",
+    TOO_SHORT_FOR_TASK: "task_duration_s",
+    ACOUSTICALLY_EMPTY: "route_state",
+    NO_BREATH_CAPTURED: "breath_event_db_over_floor",
+    NO_COUGH_CAPTURED: "cough_onsets",
+    NO_PHONATION_CAPTURED: "phonation_found",
+    DECLARED_TASK_ABSENT: "declared_task_found",
+}
+_INSTRUCTION_ITEMS = frozenset({"breaths_found", "coughs_against_instructed", "glide_travel_declared_st"})
+"""Readings compared against the instruction: annotations, never what decides a pass."""
+
+
+def _flag_item(name: str, effect: str = REVIEW) -> EvidenceItem:
+    """A reading that is a flag in its own right.
+
+    Args:
+        name: The item's name.
+        effect: What it does.
+
+    Returns:
+        The item, compared against False.
+    """
+    return item(name, True, effect, comparison="==", threshold=False)
+
+
+def _breath_items(task: TaskEvidence) -> list[EvidenceItem]:
+    """A breath family's readings, as evidence items.
+
+    Args:
+        task: The task evidence the fold read.
+
+    Returns:
+        The task layer's comparisons, the breaths against the instruction, and the rhythm.
+    """
+    evidence = dict(task.breath_reading.get("evidence") or {})
+    inputs = dict(evidence.get("inputs") or {})
+    floor_db, low = inputs.get("floor_db"), inputs.get("snr_low_db")
+    local_db, high = inputs.get("local_db"), inputs.get("snr_high_db")
+    over_floor = floor_db is not None and low is not None and floor_db >= low
+    items = [
+        item(
+            "breath_event_db_over_floor",
+            floor_db,
+            PASS if over_floor else DISCARD,
+            unit="dB",
+            comparison=">=",
+            threshold=low,
+        )
+    ]
+    if over_floor:
+        clear = local_db is not None and high is not None and local_db >= high
+        items.append(
+            item(
+                "breath_event_db_over_local",
+                local_db,
+                PASS if clear else REVIEW,
+                unit="dB",
+                comparison=">=",
+                threshold=high,
+            )
+        )
+        if clear:
+            entangled = bool(inputs.get("entangled"))
+            items.append(
+                item(
+                    "breath_events_entangled",
+                    entangled,
+                    REVIEW if entangled else PASS,
+                    comparison="==",
+                    threshold=False,
+                )
+            )
+    if task.breath_train_breaths is not None:
+        short = task.instructed_count is not None and task.breath_train_breaths < task.instructed_count
+        items.append(
+            item(
+                "breaths_found",
+                task.breath_train_breaths,
+                ANNOTATION if short else PASS,
+                unit="breaths",
+                comparison=">=",
+                threshold=task.instructed_count,
+            )
+        )
+    rhythm = evidence.get("rhythm")
+    if isinstance(rhythm, Mapping) and rhythm.get("hz") is not None:
+        items.append(item("breath_rhythm_hz", rhythm.get("hz"), ANNOTATION, unit="Hz"))
+    return items
+
+
+def _cough_items(task: TaskEvidence) -> list[EvidenceItem]:
+    """A cough family's readings, as evidence items.
+
+    Args:
+        task: The task evidence the fold read.
+
+    Returns:
+        The onsets found, against the instruction where counted, and the review reading.
+    """
+    onsets = task.cough_onsets_n or 0
+    items = [item("cough_onsets", onsets, PASS if onsets else DISCARD, unit="coughs", comparison=">=", threshold=1)]
+    if onsets and task.instructed_count is not None and task.cough_mode == COUGH_COUNTED:
+        items.append(
+            item(
+                "coughs_against_instructed",
+                onsets,
+                ANNOTATION if onsets < task.instructed_count else PASS,
+                unit="coughs",
+                comparison=">=",
+                threshold=task.instructed_count,
+            )
+        )
+    if onsets and task.cough_review:
+        items.append(_flag_item("cough_review"))
+    return items
+
+
+def _voice_items(task: TaskEvidence) -> list[EvidenceItem]:
+    """A voice family's readings, as evidence items.
+
+    Args:
+        task: The task evidence the fold read.
+
+    Returns:
+        Whether phonation was found, its durations, the glide's travel, the review readings and a cut.
+    """
+    reading = task.voice_reading
+    items = [
+        item(
+            "phonation_found", task.voice_found, PASS if task.voice_found else DISCARD, comparison="==", threshold=True
+        )
+    ]
+    if not task.voice_found:
+        return items
+    if reading.get("voiced_s") is not None:
+        items.append(item("phonation_voiced_s", reading.get("voiced_s"), ANNOTATION, unit="s"))
+    if reading.get("longest_hold_s") is not None:
+        items.append(item("longest_hold_s", reading.get("longest_hold_s"), ANNOTATION, unit="s"))
+    glide = dict(reading.get("glide") or {})
+    if glide.get("travel_declared_semitones") is not None:
+        items.append(
+            item(
+                "glide_travel_declared_st",
+                glide.get("travel_declared_semitones"),
+                ANNOTATION if task.voice_mismatch else PASS,
+                unit="semitones",
+            )
+        )
+    items.extend(_flag_item(f"phonation_review:{review}") for review in task.voice_review)
+    if task.voice_capture_cut:
+        items.append(_flag_item("capture_cut_in_task"))
+    return items
+
+
+def _task_items(task: TaskEvidence) -> list[EvidenceItem]:
+    """The task family's readings, as evidence items, before decisiveness is marked.
+
+    Args:
+        task: The task evidence the fold read.
+
+    Returns:
+        One item per reading the family's decision compared, plus the readings it reports beside them.
+    """
+    items: list[EvidenceItem] = []
+    if task.breath_mode is not None and task.breath_decision is not None:
+        items.extend(_breath_items(task))
+    if task.cough_mode is not None and task.cough_onsets_n is not None:
+        items.extend(_cough_items(task))
+    if task.voice_mode is not None and task.voice_found is not None:
+        items.extend(_voice_items(task))
+    if task.background_speech.get("heard"):
+        windows = task.background_speech.get("speech_windows") or []
+        runs = task.background_speech.get("voice_runs") or []
+        items.append(
+            item(
+                "background_speech_in_task", len(windows) + len(runs), REVIEW, unit="runs", comparison="==", threshold=0
+            )
+        )
+    return items
+
+
+def _decision_evidence(
+    *,
+    triage: Triage,
+    ground: str | None,
+    release: Release | None,
+    release_ground: str | None,
+    task: TaskEvidence,
+    route_state: str | None,
+    unmeasurable: bool,
+    performed: bool,
+    flag_keys: Sequence[str],
+    annotation_keys: Sequence[str],
+    gates: Sequence[Mapping[str, Any]],
+    lexical_words_n: int | None,
+) -> list[EvidenceItem]:
+    """Every reading the fold weighed for this recording, with the decisive ones marked.
+
+    Args:
+        triage: The verdict.
+        ground: The discard ground, or None.
+        release: The release, or None.
+        release_ground: The release ground.
+        task: The task evidence.
+        route_state: What the ruleset made of the whole recording.
+        unmeasurable: Whether ADMIT failed the recording.
+        performed: Whether the branch owning the declared task found it.
+        flag_keys: The ground keys of every flag the fold raised.
+        annotation_keys: The annotation keys.
+        gates: The conformance and flag gates the fold applied.
+        lexical_words_n: The consensus transcript's lexical word count, where SPEECH read it.
+
+    Returns:
+        The items in the order the fold reads them: acquisition, task, gates, flags, annotations,
+        release. On a discard the item behind the ground is decisive; on a review every review item; on
+        a pass every task and gate item that passed; a withholding release item is always decisive.
+    """
+    items: list[EvidenceItem] = []
+    if unmeasurable:
+        items.append(item("admit_outcome", "fail", DISCARD, comparison="==", threshold="pass"))
+    if task.duration_s is not None and task.minimum_duration_s is not None:
+        short = task.duration_s < task.minimum_duration_s
+        items.append(
+            item(
+                "task_duration_s",
+                round(task.duration_s, 3),
+                DISCARD if short else PASS,
+                unit="s",
+                comparison=">=",
+                threshold=task.minimum_duration_s,
+            )
+        )
+    if route_state == EMPTY:
+        items.append(
+            item(
+                "route_state",
+                EMPTY,
+                DISCARD if ground == ACOUSTICALLY_EMPTY else PASS,
+                comparison="!=",
+                threshold=EMPTY,
+            )
+        )
+    if ground == DECLARED_TASK_ABSENT:
+        items.append(item("declared_task_found", performed, DISCARD, comparison="==", threshold=True))
+    task_items = _task_items(task)
+    items.extend(task_items)
+    for record in gates:
+        passed = record.get("passed")
+        if passed is True or passed is False:
+            items.append(
+                item(
+                    f"gate:{record.get('gate')}",
+                    record.get("value"),
+                    PASS if passed else REVIEW,
+                    comparison=_COMPARISON.get(str(record.get("op")), str(record.get("op"))),
+                    threshold=record.get("bound"),
+                )
+            )
+    if lexical_words_n is not None:
+        items.append(item("lexical_words", lexical_words_n, PASS, unit="words"))
+    named = {entry.name for entry in items}
+    items.extend(_flag_item(key) for key in flag_keys if key not in named)
+    items.extend(_flag_item(key, ANNOTATION) for key in annotation_keys)
+    if triage is not Triage.DISCARD:
+        effect = WITHHOLD if release is Release.WITHHELD else REVIEW if release is None else PASS
+        items.append(item("release_ground", release_ground_key(release_ground), effect))
+    decisive_discard = _DISCARD_ITEMS.get(ground or "")
+    task_names = {entry.name for entry in task_items} - _INSTRUCTION_ITEMS
+
+    def decides(entry: EvidenceItem) -> bool:
+        if entry.effect == WITHHOLD:
+            return True
+        if triage is Triage.DISCARD:
+            return entry.name == decisive_discard
+        if triage is Triage.REVIEW:
+            return entry.effect == REVIEW
+        return entry.effect == PASS and (entry.name in task_names or entry.name.startswith("gate:"))
+
+    return [replace(entry, decisive=decides(entry)) for entry in items]
 
 
 def fold_file_verdict(
@@ -2248,7 +2579,7 @@ def fold_file_verdict(
         triage = Triage.DISCARD
         ground = ACOUSTICALLY_EMPTY
     elif any(is_operational(reason.key) for reason in flags):
-        triage = Triage.RERUN
+        triage = Triage.REVIEW
     elif no_event and not contested:
         triage = Triage.DISCARD
         ground = EVENT_ABSENT_GROUNDS[str(task_evidence.required_event)]
@@ -2258,7 +2589,7 @@ def fold_file_verdict(
         triage = Triage.DISCARD
         ground = DECLARED_TASK_ABSENT
     elif flags:
-        triage = Triage.FLAG
+        triage = Triage.REVIEW
     else:
         triage = Triage.PASS
 
@@ -2274,16 +2605,55 @@ def fold_file_verdict(
         speech_declined=routes.get(_SPEECH) == DECLINED,
         reviewer_clears=clears,
     )
+    missing = sorted({ground_key(reason) for reason in flags if is_operational(reason.key)})
     if triage is Triage.DISCARD:
-        release, release_ground = Release.DISCARDED, DISCARDED
+        release, release_ground = None, DISCARDED
+    elif release is None:
+        triage = Triage.REVIEW
+        missing.append(release_ground_key(release_ground))
+    elif missing:
+        triage = Triage.REVIEW
+    run_status = RunStatus.INCOMPLETE if triage is not Triage.DISCARD and missing else RunStatus.COMPLETE
+    ground_keys = sorted({*([ground] if ground else []), *(ground_key(reason) for reason in flags)})
+    annotation_keys = sorted({str(annotation.key) for annotation in annotations})
+    held = release is Release.WITHHELD or (release is None and triage is not Triage.DISCARD)
+    decision_reasons = reasons_of(
+        ground_keys,
+        release_ground_key(release_ground) if held else None,
+    )
+    weighed_gates = [
+        *(applied_gates if not measure_decides_gate_node else ()),
+        *(flag_gates or () if task_evidence.voice_mode is None else ()),
+    ]
+    evidence_items = _decision_evidence(
+        triage=triage,
+        ground=ground,
+        release=release,
+        release_ground=release_ground,
+        task=task_evidence,
+        route_state=route_state,
+        unmeasurable=unmeasurable,
+        performed=performed,
+        flag_keys=[ground_key(reason) for reason in flags],
+        annotation_keys=annotation_keys,
+        gates=weighed_gates,
+        lexical_words_n=(redaction or RedactionEvidence()).lexical_words_n
+        if ran.get(_SPEECH) is RunState.COMPLETED
+        else None,
+    )
 
     return FileVerdict(
         triage=triage,
         release=release,
+        run_status=run_status,
+        missing=missing if run_status is RunStatus.INCOMPLETE else [],
         discard_ground=ground,
         release_ground=release_ground,
-        ground_keys=sorted({*([ground] if ground else []), *(ground_key(reason) for reason in flags)}),
-        annotation_keys=sorted({str(annotation.key) for annotation in annotations}),
+        ground_keys=ground_keys,
+        annotation_keys=annotation_keys,
+        reason=decision_reasons[0] if decision_reasons else None,
+        reason_keys=decision_reasons,
+        evidence=evidence_items,
         annotations=annotations,
         findings=findings,
         conformance={name: report.conformance for name, report in reports.items()},
