@@ -1048,3 +1048,23 @@ def test_real_env_pip_check_freeze_and_smoke(tmp_path: Path) -> None:
     declared_env = neg.model_copy(update={"pip_check_expected": [PipCheckExpected(**violations[0]._asdict())]})
     envmod.check_pip(neg_result.base.path, declared_env)
     shutil.rmtree(cache / "venvs")
+
+
+@pytest.mark.slow
+def test_real_prefetch_on_nfs(nfs_dir: Path) -> None:
+    """One real prefetch with the manifests, cache, wheelhouse and ``wheels.lock`` on NFS."""
+    base = nfs_dir / "manifests"
+    env = _slow_env(base, "body_deps_small.lock")
+    result = envmod.prefetch_env(
+        env,
+        base,
+        nfs_dir / "cache",
+        analysis="demo",
+        wheelhouse=nfs_dir / "wh",
+        wheels_lock=base / ENV_DIR / "wheels.lock",
+    )
+    assert result.built == ("python-speech-features",) and result.record
+    assert result.base.packages["python-speech-features"] == "0.6"
+    assert envmod.pip_check(result.base.path) == []
+    with envmod._flock(nfs_dir / "x.lock"):
+        pass

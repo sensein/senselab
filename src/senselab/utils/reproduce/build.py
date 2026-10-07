@@ -20,6 +20,7 @@ are relative to the manifest repository, passed as ``base_dir``.
 
 from __future__ import annotations
 
+import contextlib
 import datetime
 import fcntl
 import hashlib
@@ -641,16 +642,27 @@ def format_wheels_lock(lines: Iterable[WheelLine]) -> str:
 
 
 @contextmanager
-def _locked(wheels_lock: Path, shared: bool) -> Iterator[None]:
-    """Hold a ``flock`` on the sidecar ``<wheels.lock>.lock`` (created if absent)."""
-    sidecar = wheels_lock.with_name(wheels_lock.name + ".lock")
-    sidecar.parent.mkdir(parents=True, exist_ok=True)
-    with open(sidecar, "a") as handle:
-        fcntl.flock(handle, fcntl.LOCK_SH if shared else fcntl.LOCK_EX)
+def file_lock(path: Path, *, shared: bool = False) -> Iterator[None]:
+    """Hold a ``flock`` on ``path`` (created if absent, with its directory), shared or exclusive.
+
+    The file is opened read-write: on NFS ``flock`` becomes a POSIX lock, and a shared lock on a
+    write-only descriptor fails with ``EBADF``.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o666)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_SH if shared else fcntl.LOCK_EX)
         try:
             yield
         finally:
-            fcntl.flock(handle, fcntl.LOCK_UN)
+            fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
+
+
+def _locked(wheels_lock: Path, shared: bool) -> contextlib.AbstractContextManager[None]:
+    """Hold a :func:`file_lock` on the sidecar ``<wheels.lock>.lock``."""
+    return file_lock(wheels_lock.with_name(wheels_lock.name + ".lock"), shared=shared)
 
 
 def _read_verified(wheels_lock: Path, expected_sha256: str | None) -> bytes | None:
