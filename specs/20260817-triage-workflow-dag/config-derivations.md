@@ -2100,6 +2100,13 @@ taxonomy.ruleset -- the whole ruleset block (reference_family_set, branch_gates,
 emptiness, gates) is derived in family-taxonomy-ruleset.md, keyed by gate name, and is not repeated
 here.
 
+taxonomy.ruleset.emptiness.active_s_max (2026-10-07, unit C step 2) replaces peak_streams and
+peak_floor. A recording no gate routed is empty where BACKGROUND read no more than this many seconds
+of activity over its (session-informed) floor, rather than where every tracked YAMNet peak on the
+enhanced and residual streams stayed under 0.2. Zero is the owner's rule as decided ("nothing
+captured: no active region in any stream"); the measurement is in
+specs/20261007-task-events-in-background/design.md, "Unit C step 2".
+
 taxonomy.ruleset.reference_family_set now has a second reader, and the same four entries serve both.
 It was the family set each branch is SCORED against; as of this session it is also the mapping the
 declared task ROUTES through, since a declared task always adds a route to its own branch

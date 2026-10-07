@@ -46,8 +46,10 @@ from senselab.audio.workflows.triage.nodes.voice import PHONATION_READING
 from senselab.audio.workflows.triage.quality_join import (
     QUALITY_JOIN,
     Span,
+    drop_levels,
     join_record,
     quality_join_parameters,
+    separate_gates,
     stream_agreement,
 )
 from senselab.audio.workflows.triage.task_events import generic_view, generic_view_of
@@ -281,10 +283,14 @@ def measure_join(store: ProvStore, run_dir: Path) -> dict[str, Any]:
             other_voice = [(float(w[0]), float(w[1])) for w in (*heard.speech_windows, *heard.voice_runs)]
     session = find_measurement(store, SESSION_FLOOR)
     level = session.attributes.get("level_rel_db") if session is not None else None
+    faults = dict(background.attributes.get("faults") or {})
+    drops = drop_levels(faults.get("shutoff") or (), raw, p)
+    cut, gated = separate_gates(drops, p)
+    faults["shutoff"], faults["gate"] = [list(s) for s in cut], [list(s) for s in gated]
     record = join_record(
         task_spans=spans,
         event_kind=kind,
-        faults=dict(background.attributes.get("faults") or {}),
+        faults=faults,
         other_voice=other_voice,
         streams=streams,
         plain_active_s=background.attributes.get("active_s"),
@@ -292,7 +298,7 @@ def measure_join(store: ProvStore, run_dir: Path) -> dict[str, Any]:
         level_rel_db=None if level is None else float(level),
         p=p,
     )
-    return {**record, "missing": missing}
+    return {**record, "drops": drops, "missing": missing}
 
 
 def write_join(store: ProvStore, activity: str, software: str, run_dir: Path) -> str:
