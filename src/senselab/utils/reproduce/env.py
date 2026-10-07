@@ -13,13 +13,15 @@ Every uv call passes ``--no-config`` and runs with `build.base_environment`; not
 caller's environment reaches uv.
 
 Venvs live at ``<cache>/venvs/repro-<analysis>-<env_key8>`` (derived:
-``…+<overlay sha256[:8]>``). A venv is complete when its ``.reproduce-venv.json`` marker names its
-key; a complete venv is reused, an incomplete one is removed and rebuilt, under a ``flock`` on the
-sidecar ``<venv>.lock``.
+``…+<overlay sha256[:8]>``). Each has a ``.reproduce-venv.json`` marker naming its key, overlay, wheel
+sha256s, the sha256 of ``installed.json`` and the result of the checks. An installed venv whose marker
+matches is reused; anything else is removed and rebuilt, under a ``flock`` on the sidecar
+``<venv>.lock``. A venv is complete (`venv_checked`) only once ``uv pip check`` and the smoke imports
+have passed, which `prefetch_env` runs only when given a profile; a run must refuse an unchecked venv.
 
 R envs (kinds ``r`` and ``ir_notebook``) are prepared by `prefetch_r` under the profile's R module,
 outside the network namespace, from the Posit Package Manager snapshot of ``env.r_snapshot``. It
-writes ``<r_lib>/MODULE_ENV.json`` (the module's ``PATH`` and ``LD_LIBRARY_PATH``) and
+writes ``<r_lib>/MODULE_ENV.json`` (the modules' ``PATH`` and ``LD_LIBRARY_PATH``) and
 ``<r_lib>/SESSION.json`` (``sessionInfo()``, ``.libPaths()`` and installed versions), and fails
 unless every declared ``r_packages`` version is the installed one. `r_env_vars` gives a step's R
 variables in the merge order: module ``LD_LIBRARY_PATH`` entries first, then native lib dirs.
@@ -39,7 +41,7 @@ import tempfile
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from pathlib import Path
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
 from packaging.markers import Marker, default_environment
 
@@ -50,6 +52,7 @@ from senselab.utils.reproduce.build import (
     base_environment,
     ca_bundle,
     ensure_wheel,
+    reuse_wheel,
     stage_wheel,
     torch_index_url,
 )
@@ -72,13 +75,8 @@ OVERLAYS = ("test", "notebook_tools")
 PPM_CRAN = "https://packagemanager.posit.co/cran"
 SESSION = "SESSION.json"
 MODULE_ENV = "MODULE_ENV.json"
-R_MODULE_ENV_SCRIPT = f'. {MODULES_INIT} && module load "$1" && exec env -0'
-R_INSTALL_SCRIPT = (
-    f'. {MODULES_INIT} && module load "$1" && export R_LIBS="$2" R_LIBS_SITE= && '
-    'if [ -n "$6" ]; then export PATH="$6/bin:$PATH"; fi && '
-    'exec Rscript --vanilla "$3" "$2" "$4" "$5" "$6"'
-)
 SMOKE_TIMEOUT = 600
+R_TIMEOUT = 4 * 3600
 _TAIL = 4000
 _ANALYSIS = re.compile(r"^[A-Za-z0-9_.-]+$")
 _MODULE_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$")
@@ -88,29 +86,36 @@ _R_VERSION = re.compile(r"^[0-9][0-9.-]*$")
 _CUDA_LOCAL = re.compile(r"\+cu\d+$")
 _PIP_CHECK_LINE = re.compile(r"^The package `([^`]+)` (.*)$")
 
-Runner = Callable[[list[str], dict[str, str]], "subprocess.CompletedProcess[str]"]
+Runner = Callable[[list[str], dict[str, str], Path], "subprocess.CompletedProcess[str]"]
 
 
 class VenvResult(NamedTuple):
-    """One built or reused venv: its path, key, overlay sha256 (derived venvs), reuse flag and ``{name: version}``."""
+    """One built or reused venv: path, key, overlay sha256 (derived venvs), reuse flag, ``{name: version}``.
+
+    ``checked`` is `venv_checked`: both checks passed and are recorded in the marker.
+    """
 
     path: Path
     env_key: str
     overlay_sha256: str | None
     reused: bool
     packages: dict[str, str]
+    checked: bool
 
 
 class PrefetchResult(NamedTuple):
     """What `prefetch_env` returns.
 
-    ``wheels_lock_sha256`` is the sha256 of ``wheels.lock`` after stage 3 (``None`` when no wheel was
-    needed); when ``built`` is non-empty it changed, and the caller writes it into the manifest.
+    ``wheels_lock_sha256`` is the sha256 of ``wheels.lock`` after the prefetch (``None`` for an env with
+    no sdists). ``record`` is true when it differs from the manifest's ``env.wheels.lock_sha256`` (or the
+    manifest has none): the caller must then write it into the manifest, or the next integrity check
+    refuses the env. ``built`` names the sdists built in this call.
     """
 
     base: VenvResult
     derived: dict[str, VenvResult]
     wheels_lock_sha256: str | None
+    record: bool
     built: tuple[str, ...]
 
 
@@ -320,17 +325,23 @@ def _diff(installed: Mapping[str, str], declared: Mapping[str, str]) -> list[str
 
 
 def _wheels_location(env: EnvSpec, base_dir: Path, wheels_lock: Path | None) -> tuple[Path | None, str | None]:
+    if not env.sdist_allow:
+        return None, None
     if env.wheels is not None:
         if wheels_lock is not None and wheels_lock != base_dir / env.wheels.lock:
             raise ValueError("wheels_lock is given and env.wheels names another file")
         return base_dir / env.wheels.lock, env.wheels.lock_sha256
-    if env.sdist_allow and wheels_lock is None:
+    if wheels_lock is None:
         raise ValueError("an env with sdist_allow needs env.wheels or a wheels_lock path to record wheels in")
+    if wheels_lock.exists():
+        raise ReproduceLockError(
+            f"{wheels_lock} exists but the manifest records no wheels lock; record its sha256 in env.wheels first"
+        )
     return wheels_lock, None
 
 
 class _Wheels:
-    """Stage 3 inputs, prepared on first use: each sdist's wheel reused or built, then copied and checked."""
+    """Stage 3 inputs: the recorded wheel sha256s, and the wheels reused or built, copied and checked on first use."""
 
     def __init__(
         self,
@@ -345,7 +356,30 @@ class _Wheels:
         self.env, self.base_dir, self.wheelhouse, self.lock = env, base_dir, wheelhouse, lock
         self.lock_sha256, self.rebuild, self.dest = expected, rebuild, dest
         self.built: list[str] = []
+        self.shas: dict[str, str] = {}
         self._copies: list[Path] | None = None
+
+    def recorded(self) -> dict[str, str] | None:
+        """``{sdist name: wheel sha256}`` from the verified ``wheels.lock`` lines; ``None`` if a build is due."""
+        if self.rebuild:
+            return None
+        if self._copies is not None:
+            return dict(self.shas)
+        out = {}
+        for sdist in self.env.sdist_allow:
+            assert self.lock is not None
+            found = reuse_wheel(
+                self.lock,
+                sdist,
+                self.wheelhouse,
+                self.env.torch,
+                python=self.env.python_exact,
+                expected_sha256=self.lock_sha256,
+            )
+            if found is None:
+                return None
+            out[sdist.name] = found[1]
+        return out
 
     def copies(self) -> list[Path]:
         if self._copies is None:
@@ -365,9 +399,66 @@ class _Wheels:
                 self.lock_sha256 = result.wheels_lock_sha256
                 if result.built:
                     self.built.append(sdist.name)
+                self.shas[sdist.name] = result.wheel_sha256
                 dest = self.dest / result.wheel_sha256
                 self._copies.append(stage_wheel(result.wheel, result.wheel_sha256, dest))
         return self._copies
+
+
+def checks_digest(env: EnvSpec) -> str:
+    """Digest of what the venv checks compare against: ``pip_check_expected`` and ``smoke_imports``."""
+    payload = {
+        "pip_check_expected": [e.model_dump() for e in env.pip_check_expected],
+        "smoke_imports": list(env.smoke_imports),
+    }
+    return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+
+
+def _read_marker(path: Path) -> dict[str, Any] | None:
+    try:
+        data = json.loads((path / MARKER).read_text())
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _installed_ok(path: Path, marker: Mapping[str, Any]) -> dict[str, Any] | None:
+    try:
+        data = (path / INSTALLED).read_bytes()
+    except OSError:
+        return None
+    if hashlib.sha256(data).hexdigest() != marker.get("installed_sha256"):
+        return None
+    installed: dict[str, Any] = json.loads(data)
+    return installed
+
+
+def venv_checked(path: Path, env: EnvSpec, overlay: LockRef | None = None) -> bool:
+    """Whether a venv is complete for ``env``: installed for its key and overlay, and both checks passed.
+
+    A run (B12) must refuse a venv for which this is false. `prefetch_env` marks the checks only when
+    given a profile.
+
+    Args:
+        path: The venv.
+        env: The step's env.
+        overlay: The overlay lock of a derived venv.
+
+    Returns:
+        True when the marker names ``env_key(env)`` and the overlay sha256, ``installed.json`` matches the
+        marker, and ``pip_check_ok`` and ``smoke_ok`` were recorded for the current `checks_digest`.
+    """
+    marker = _read_marker(path)
+    if marker is None or _installed_ok(path, marker) is None:
+        return False
+    checks = marker.get("checks") or {}
+    return (
+        marker.get("env_key") == env_key(env)
+        and marker.get("overlay_sha256") == (None if overlay is None else overlay.lock_sha256)
+        and checks.get("digest") == checks_digest(env)
+        and checks.get("pip_check_ok") is True
+        and checks.get("smoke_ok") is True
+    )
 
 
 def _build_or_reuse(
@@ -382,12 +473,11 @@ def _build_or_reuse(
     key = env_key(env)
     overlay_sha = None if overlay is None else overlay.lock_sha256
     with _flock(path.with_name(path.name + ".lock")):
-        marker = path / MARKER
-        if marker.is_file() and (path / INSTALLED).is_file():
-            recorded = json.loads(marker.read_text())
-            if recorded.get("env_key") == key and recorded.get("overlay_sha256") == overlay_sha:
-                packages = json.loads((path / INSTALLED).read_text())["packages"]
-                return VenvResult(path, key, overlay_sha, True, packages)
+        marker = _read_marker(path)
+        if marker is not None and (marker.get("env_key"), marker.get("overlay_sha256")) == (key, overlay_sha):
+            installed = _installed_ok(path, marker)
+            if installed is not None and marker.get("wheels") == wheels.recorded():
+                return VenvResult(path, key, overlay_sha, True, installed["packages"], venv_checked(path, env, overlay))
         if path.is_symlink() or path.is_file():
             path.unlink()
         elif path.exists():
@@ -420,12 +510,39 @@ def _build_or_reuse(
             "env_key": key,
             "overlay_sha256": overlay_sha,
             "python_exact": env.python_exact,
+            "wheels": dict(wheels.shas),
             "freeze": lines,
             "packages": packages,
         }
         installed_sha = _write_json(path / INSTALLED, installed)
-        _write_json(marker, {"env_key": key, "overlay_sha256": overlay_sha, "installed_sha256": installed_sha})
-        return VenvResult(path, key, overlay_sha, False, packages)
+        _write_json(
+            path / MARKER,
+            {
+                "env_key": key,
+                "overlay_sha256": overlay_sha,
+                "wheels": dict(wheels.shas),
+                "installed_sha256": installed_sha,
+                "checks": {"digest": checks_digest(env), "pip_check_ok": False, "smoke_ok": False},
+            },
+        )
+        return VenvResult(path, key, overlay_sha, False, packages, False)
+
+
+def _check_venv(venv: VenvResult, env: EnvSpec, profile: Profile, overlay: LockRef | None) -> VenvResult:
+    """Run `check_pip` and `smoke` on a venv unless its marker already records both for the current digest."""
+    with _flock(venv.path.with_name(venv.path.name + ".lock")):
+        if venv_checked(venv.path, env, overlay):
+            return venv._replace(checked=True)
+        marker = _read_marker(venv.path)
+        if marker is None or marker.get("env_key") != venv.env_key:
+            raise ReproduceLockError(f"{venv.path.name} changed while it was being checked")
+        check_pip(venv.path, env)
+        failures = smoke(venv.path, env.smoke_imports, profile)
+        if failures:
+            raise ReproduceLockError(f"smoke imports failed in {venv.path.name}: {failures}")
+        marker["checks"] = {"digest": checks_digest(env), "pip_check_ok": True, "smoke_ok": True}
+        _write_json(venv.path / MARKER, marker)
+    return venv._replace(checked=True)
 
 
 def prefetch_env(
@@ -442,6 +559,10 @@ def prefetch_env(
 ) -> PrefetchResult:
     """Build (or reuse) an env's base venv and its derived venvs from verified copies of its locks.
 
+    A venv is reused when its marker names its key and overlay, its ``installed.json`` matches the
+    marker's sha256, and its recorded wheel sha256s equal the verified ``wheels.lock`` lines. Anything
+    else, or ``rebuild``, rebuilds it.
+
     Args:
         env: The step's env.
         base_dir: The manifest repository; every path in ``env`` is relative to it.
@@ -449,17 +570,19 @@ def prefetch_env(
         analysis: The manifest name, used in venv names.
         wheelhouse: Where stage 3 wheels are stored.
         uv_lock: The checkout's ``uv.lock``, for a uv-export body with a torch lock.
-        profile: When given, each venv is then checked: ``uv pip check`` must equal
-            ``pip_check_expected`` (`check_pip`) and ``smoke_imports`` must import in the sandbox (`smoke`).
-        wheels_lock: Where to record wheels when ``env.wheels`` is unset (the first prefetch).
-        rebuild: Build every sdist again (`build.ensure_wheel`'s ``rebuild``).
+        profile: When given, each venv not yet checked is checked: ``uv pip check`` must equal
+            ``pip_check_expected`` (`check_pip`) and ``smoke_imports`` must import in the sandbox (`smoke`);
+            the marker then records both. Without it no venv is marked checked (`venv_checked` stays false).
+        wheels_lock: Where to record wheels when ``env.wheels`` is unset (the first prefetch); the file must
+            not exist yet.
+        rebuild: Build every sdist again (`build.ensure_wheel`'s ``rebuild``) and rebuild every venv.
 
     Returns:
         A `PrefetchResult`.
 
     Raises:
-        ReproduceLockError: If the integrity check, a copy check, an install, the freeze comparison or
-            a profile check fails.
+        ReproduceLockError: If the integrity check, a copy check, an install, the freeze comparison or a
+            check fails, or ``wheels_lock`` exists while ``env.wheels`` is unset.
         ValueError: If an env with sdists has nowhere to record wheels, or ``wheels_lock`` contradicts ``env.wheels``.
     """
     lock_path, expected = _wheels_location(env, base_dir, wheels_lock)
@@ -479,15 +602,13 @@ def prefetch_env(
                 path = derived_venv_dir(cache, analysis, env, ref)
                 derived[name] = _build_or_reuse(uv, env, path, inputs, wheels, ref, run_env)
     if profile is not None:
-        for venv in (base, *derived.values()):
-            check_pip(venv.path, env)
-            failures = smoke(venv.path, env.smoke_imports, profile)
-            if failures:
-                raise ReproduceLockError(f"smoke imports failed in {venv.path.name}: {failures}")
-    lock_sha = wheels.lock_sha256
-    if lock_sha is None and lock_path is not None and lock_path.is_file():
+        base = _check_venv(base, env, profile, None)
+        derived = {name: _check_venv(v, env, profile, getattr(env, name)) for name, v in derived.items()}
+    lock_sha = None
+    if lock_path is not None and lock_path.is_file():
         lock_sha = hashlib.sha256(lock_path.read_bytes()).hexdigest()
-    return PrefetchResult(base, derived, lock_sha, tuple(wheels.built))
+    record = lock_sha is not None and lock_sha != expected
+    return PrefetchResult(base, derived, lock_sha, record, tuple(wheels.built))
 
 
 def parse_pip_check(text: str) -> list[Violation]:
@@ -565,8 +686,12 @@ def check_pip(venv: Path, env: EnvSpec) -> None:
         raise ReproduceLockError(f"uv pip check on {venv.name}: undeclared {unexpected}; declared but absent {missing}")
 
 
-def _default_runner(argv: list[str], env: dict[str, str]) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(argv, env=env, capture_output=True, text=True, check=False, timeout=SMOKE_TIMEOUT)
+def _smoke_runner(argv: list[str], env: dict[str, str], cwd: Path) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(argv, env=env, cwd=cwd, capture_output=True, text=True, check=False, timeout=SMOKE_TIMEOUT)
+
+
+def _r_runner(argv: list[str], env: dict[str, str], cwd: Path) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(argv, env=env, cwd=cwd, capture_output=True, text=True, check=False, timeout=R_TIMEOUT)
 
 
 def _smoke_env(venv: Path, tmp: Path, profile: Profile | None) -> dict[str, str]:
@@ -604,22 +729,27 @@ def smoke(
         profile: Its ``env`` map is passed to the import; with ``step``, the step's whole env
             (`sandbox.build_env`) is used instead.
         step: The step whose env to use, with ``profile``.
-        runner: Runs ``(argv, env)``; defaults to ``subprocess.run`` with captured output.
+        runner: Runs ``(argv, env, cwd)``; defaults to ``subprocess.run`` with captured output and a
+            :data:`SMOKE_TIMEOUT` second timeout.
 
     Returns:
-        ``"<module>: <output tail>"`` for each import that failed; empty when all succeeded.
+        ``"<module>: <output tail>"`` for each import that failed; empty when all succeeded. Each import
+        runs with an empty private working directory, so nothing in the caller's directory is importable.
 
     Raises:
         ValueError: If a module name is not a dotted identifier.
+        ReproduceLockError: ``E_SMOKE_TIMEOUT`` if an import outlives the timeout.
     """
     bad = [m for m in modules if not _MODULE_NAME.match(m)]
     if bad:
         raise ValueError(f"not module names: {bad}")
-    run = runner or _default_runner
+    run = runner or _smoke_runner
     venv = venv.absolute()
     failures = []
     with tempfile.TemporaryDirectory(prefix="reproduce-smoke-") as name:
         tmp = Path(name).resolve()
+        cwd = tmp / "cwd"
+        cwd.mkdir()
         if step is not None and profile is not None:
             paths = {"out": tmp / "out", "tmp": tmp, "checkout": tmp / "checkout", "venv": venv, "cache": tmp / "cache"}
             env = sandbox.build_env(step, profile, paths)[0]
@@ -627,7 +757,12 @@ def smoke(
             env = _smoke_env(venv, tmp, profile)
         for module in modules:
             argv = sandbox.sandbox_argv([str(venv / "bin" / "python"), "-c", f"import {module}"], [], [tmp], [venv])
-            result = run(argv, env)
+            try:
+                result = run(argv, env, cwd)
+            except subprocess.TimeoutExpired as error:
+                raise ReproduceLockError(
+                    f"E_SMOKE_TIMEOUT: import {module} in {venv.name} ran past {error.timeout}s"
+                ) from error
             if result.returncode != 0:
                 failures.append(f"{module}: {(result.stdout + result.stderr).strip()[-_TAIL:]}")
     return failures
@@ -703,6 +838,55 @@ def _kernel(venv: Path) -> Path:
     return venv / "share" / "jupyter" / "kernels" / "ir" / "kernel.json"
 
 
+def r_module_env_script(build_modules: Sequence[str] = ()) -> str:
+    """The ``bash -c`` script that loads ``build_modules`` then the R module (``$1``) and prints ``env -0``."""
+    return f'. {MODULES_INIT} && module load {_module_words(build_modules)}"$1" && exec env -0'
+
+
+def r_install_script(build_modules: Sequence[str] = ()) -> str:
+    """The ``bash -c`` script that loads the modules and runs the generated R script.
+
+    Positional arguments: ``$1`` R module, ``$2`` r_lib, ``$3`` script, ``$4`` out dir, ``$5`` repository,
+    ``$6`` kernel prefix (may be empty). ``R_LIBS`` and ``R_LIBS_USER`` are the library and
+    ``R_LIBS_SITE`` is empty, so ``.libPaths()`` is the library then R's own.
+    """
+    return (
+        f'. {MODULES_INIT} && module load {_module_words(build_modules)}"$1" && '
+        'export R_LIBS="$2" R_LIBS_USER="$2" R_LIBS_SITE= && '
+        'if [ -n "$6" ]; then export PATH="$6/bin:$PATH"; fi && '
+        'exec Rscript --vanilla "$3" "$2" "$4" "$5" "$6"'
+    )
+
+
+def _module_words(modules: Sequence[str]) -> str:
+    bad = [m for m in modules if not _ENV_MODULE.match(m)]
+    if bad:
+        raise ValueError(f"module names must be plain: {bad}")
+    return "".join(f"{m} " for m in modules)
+
+
+def _r_key(
+    module: str, build_modules: Sequence[str], r_version: str, repo: str, declared: dict[str, str]
+) -> dict[str, Any]:
+    return {
+        "module": module,
+        "build_modules": list(build_modules),
+        "r_version": r_version,
+        "snapshot": repo,
+        "declared": declared,
+    }
+
+
+def _r_reusable(session_path: Path, module_path: Path, key: Mapping[str, Any], kernel_ok: bool) -> bool:
+    if not (session_path.is_file() and module_path.is_file() and kernel_ok):
+        return False
+    try:
+        recorded = json.loads(session_path.read_text())
+    except ValueError:
+        return False
+    return isinstance(recorded, dict) and recorded.get("key") == key
+
+
 def prefetch_r(
     env: EnvSpec,
     cache: Path,
@@ -714,19 +898,22 @@ def prefetch_r(
 ) -> RResult:
     """Install an env's R packages into its private library under the profile's R module, with network.
 
-    Runs outside the network namespace. The module is loaded with ``bash --noprofile --norc -c '.
-    <MODULES_INIT> && module load …'``, so no dotfile is read, and with an allowlisted environment.
-    The packages come from `r_snapshot_url` of ``env.r_snapshot``; ``R_LIBS=<r_lib>`` and an empty
-    ``R_LIBS_SITE`` keep the module's site library out. A library whose ``SESSION.json`` records the
-    same module, snapshot and declared packages is reused.
+    Runs outside the network namespace. ``profile.r.build_modules`` and then ``profile.r.module`` are
+    loaded with ``bash --noprofile --norc -c '. <MODULES_INIT> && module load …'``, so no dotfile is
+    read, and with an allowlisted environment. The packages come from `r_snapshot_url` of
+    ``env.r_snapshot``; ``R_LIBS`` and ``R_LIBS_USER`` are ``<r_lib>`` and ``R_LIBS_SITE`` is empty, so
+    neither the module's site library nor a user library under ``HOME`` is seen. A library whose
+    ``SESSION.json`` records the same key (modules, R version, snapshot, declared packages) is reused;
+    otherwise ``SESSION.json`` is removed and the library rebuilt from empty.
 
     Args:
         env: The step's env; ``r_packages``, ``r_snapshot`` and ``r_lib`` are required.
         cache: The reproduce cache; fills ``{cache}`` in ``r_lib``.
-        profile: Its ``r.module`` is loaded.
+        profile: Its ``r`` entry gives the modules and the R version to expect.
         kind: ``r`` or ``ir_notebook``; the latter installs the ``ir`` kernel spec into ``venv``.
         venv: The derived (notebook tools) venv, for ``ir_notebook``; its ``bin`` leads ``PATH``.
-        runner: Runs ``(argv, env)``; defaults to ``subprocess.run`` with captured output.
+        runner: Runs ``(argv, env, cwd)``; defaults to ``subprocess.run`` with captured output and a
+            :data:`R_TIMEOUT` second timeout.
 
     Returns:
         An `RResult`.
@@ -734,8 +921,8 @@ def prefetch_r(
     Raises:
         ValueError: If the profile has no R module, the env lacks its R fields, or an ``ir_notebook``
             env has no venv or does not declare ``IRkernel``.
-        ReproduceLockError: If a command fails, the library is not first on ``.libPaths()``, the kernel
-            spec is missing, or an installed version differs from the declared one.
+        ReproduceLockError: If a command fails, R is not ``profile.r.version``, the library is not first
+            on ``.libPaths()``, the kernel spec is missing, or an installed version differs from the declared one.
     """
     if profile.r is None:
         raise ValueError("an R env needs profile.r")
@@ -746,55 +933,63 @@ def prefetch_r(
             raise ValueError("an ir_notebook env must declare IRkernel in r_packages")
         if venv is None:
             raise ValueError("an ir_notebook env needs the derived venv for its kernel spec")
-    module = profile.r.module
+    module, build_modules, r_version = profile.r.module, profile.r.build_modules, profile.r.version
     if not _ENV_MODULE.match(module):
         raise ValueError(f"R module {module!r} is not a plain module name")
-    run = runner or _default_runner
+    run = runner or _r_runner
     r_lib = Path(render(env.r_lib, {"cache": cache}))
     repo = r_snapshot_url(env.r_snapshot)
     declared = {p.name: p.version for p in env.r_packages}
+    key = _r_key(module, build_modules, r_version, repo, declared)
     session_path, module_path = r_lib / SESSION, r_lib / MODULE_ENV
     kernel_ok = venv is None or kind != "ir_notebook" or _kernel(venv).is_file()
     with _flock(r_lib.with_name(r_lib.name + ".lock")):
-        if session_path.is_file() and module_path.is_file() and kernel_ok:
-            recorded = json.loads(session_path.read_text())
-            if (recorded.get("module"), recorded.get("snapshot"), recorded.get("declared")) == (module, repo, declared):
-                return RResult(
-                    r_lib,
-                    session_path,
-                    hashlib.sha256(session_path.read_bytes()).hexdigest(),
-                    module_path,
-                    hashlib.sha256(module_path.read_bytes()).hexdigest(),
-                    True,
-                )
-        r_lib.mkdir(parents=True, exist_ok=True)
+        if _r_reusable(session_path, module_path, key, kernel_ok):
+            return RResult(
+                r_lib,
+                session_path,
+                hashlib.sha256(session_path.read_bytes()).hexdigest(),
+                module_path,
+                hashlib.sha256(module_path.read_bytes()).hexdigest(),
+                True,
+            )
+        session_path.unlink(missing_ok=True)
+        if r_lib.is_symlink() or r_lib.is_file():
+            r_lib.unlink()
+        elif r_lib.exists():
+            shutil.rmtree(r_lib)
+        r_lib.mkdir(parents=True)
         with tempfile.TemporaryDirectory(prefix="reproduce-r-") as tmp:
             work = Path(tmp)
             run_env = _r_environment(work)
-            captured = _checked(run(_in_bash(R_MODULE_ENV_SCRIPT, module), run_env), f"module load {module}")
+            captured = _checked(
+                run(_in_bash(r_module_env_script(build_modules), module), run_env, work), f"module load {module}"
+            )
             pairs = dict(item.split("=", 1) for item in captured.split("\0") if "=" in item)
-            module_env = {"module": module, "PATH": pairs.get("PATH", "")}
+            module_env: dict[str, Any] = {"module": module, "build_modules": list(build_modules)}
+            module_env["PATH"] = pairs.get("PATH", "")
             if "LD_LIBRARY_PATH" in pairs:
                 module_env["LD_LIBRARY_PATH"] = pairs["LD_LIBRARY_PATH"]
             script, out = work / "install.R", work / "out"
             script.write_text(r_script(env.r_packages))
             out.mkdir()
             prefix = str(venv) if kind == "ir_notebook" and venv is not None else ""
-            argv = _in_bash(R_INSTALL_SCRIPT, module, str(r_lib), str(script), str(out), repo, prefix)
-            _checked(run(argv, run_env), "Rscript install")
+            argv = _in_bash(r_install_script(build_modules), module, str(r_lib), str(script), str(out), repo, prefix)
+            _checked(run(argv, run_env, work), "Rscript install")
             rows = [line.split("\t") for line in (out / "installed.tsv").read_text().splitlines() if line.strip()]
             installed = {row[0]: row[1] for row in rows}
             lib_paths = (out / "lib_paths.txt").read_text().splitlines()
+            reported_version = (out / "r_version.txt").read_text().strip()
             session = {
-                "module": module,
-                "snapshot": repo,
-                "declared": declared,
+                "key": key,
                 "installed": installed,
                 "lib_paths": lib_paths,
-                "r_version": (out / "r_version.txt").read_text().strip(),
+                "r_version": reported_version,
                 "session_info": (out / "session_info.txt").read_text().splitlines(),
                 "script_sha256": hashlib.sha256(script.read_bytes()).hexdigest(),
             }
+        if reported_version != f"R version {r_version}" and not reported_version.startswith(f"R version {r_version} "):
+            raise ReproduceLockError(f"module {module} gave {reported_version!r}, the profile expects R {r_version}")
         differ = {n: v for n, v in declared.items() if installed.get(n) != v}
         mismatches = [f"{n}: declared {v}, installed {installed.get(n)}" for n, v in differ.items()]
         if mismatches:
@@ -835,12 +1030,12 @@ def r_env_vars(
 
     Returns:
         ``PATH`` (prefix, module, suffix), ``LD_LIBRARY_PATH`` (module entries first, then native lib
-        dirs; omitted when empty), ``R_LIBS=<r_lib>`` and ``R_LIBS_SITE=""``. Repeated entries keep
-        their first position.
+        dirs; omitted when empty), ``R_LIBS`` and ``R_LIBS_USER`` set to ``r_lib``, and ``R_LIBS_SITE=""``.
+        Repeated entries keep their first position.
     """
     path = _dedup([*path_prefix, *module_env.get("PATH", "").split(":"), *path_suffix])
     libs = _dedup([*module_env.get("LD_LIBRARY_PATH", "").split(":"), *native_lib_dirs])
     out = {"PATH": ":".join(path)} if path else {}
     if libs:
         out["LD_LIBRARY_PATH"] = ":".join(libs)
-    return {**out, "R_LIBS": r_lib, "R_LIBS_SITE": ""}
+    return {**out, "R_LIBS": r_lib, "R_LIBS_USER": r_lib, "R_LIBS_SITE": ""}

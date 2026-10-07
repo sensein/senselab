@@ -187,8 +187,13 @@ How `build` produces and reuses sdist wheels:
   build setting behind the lock.
 - **No network during the build.** The sdist fetch and the build-venv installs happen first; the
   `uv build` then runs with `UV_OFFLINE=1`, `PIP_NO_INDEX=1` and `http(s)_proxy` pointed at
-  `127.0.0.1:9`. This stops cooperative tools only. Once B5's sandbox is merged, B7 also runs the
-  build inside the network namespace, which stops everything.
+  `127.0.0.1:9`, and since the B7 review it runs inside the step sandbox (`sandbox.sandbox_argv`):
+  no network namespace route out, the build venv bound read-only, every capability dropped. The
+  modules are loaded outside, through the same `bash --noprofile --norc` wrapper around `env -0`
+  (`module_environment`), and their changed variables are passed into the build as values, the
+  module `PATH` after the venv's `bin`. Lmod is not run inside the namespace. A slow test builds an
+  sdist whose `setup.py` exits when it can connect to PyPI (the host itself can, as a control): it
+  builds. The python-speech-features wheel is still bit-identical to the spike's.
 - The build runs with `SOURCE_DATE_EPOCH=315532800` (zip dates of 1980) and a fixed umask of
   `007`. Tar and zip members unpack with their archive mode under that umask. File modes are
   stored in the wheel: the first slow-test build, unpacked with tarfile's `data` filter, differed
@@ -285,11 +290,24 @@ How `env` installs (B7):
   whose markers hold for the env's Python on this host, plus the stage 3 wheels, with `+cuXXX`
   dropped on both sides. A mismatch fails the prefetch and leaves no marker. `installed.json` keeps
   the raw freeze lines (`name @ file://…` included) and the parsed map.
-- **Completion and reuse.** A venv is complete when `.reproduce-venv.json` names its `env_key` and
-  overlay sha256; it is written last. A complete venv is reused without any uv call; anything else
-  at that path is removed and rebuilt, under a `flock` on `<venv>.lock`. Wheels are only reused or
-  built when a venv actually needs building. Two overlays with identical bytes share one derived
-  venv, since the name is the overlay's sha256.
+- **Installed and reuse.** `.reproduce-venv.json` names the `env_key`, the overlay sha256, the
+  `{sdist: wheel sha256}` map and the sha256 of `installed.json`; it is written last. The venv is
+  reused, without any uv call, only when all of these match: the key and overlay, `installed.json`
+  against its recorded sha256, and the wheel map against the verified `wheels.lock` lines
+  (`build.reuse_wheel`). The venv name leaves wheel sha256s out (they are outputs), so a rebuilt
+  wheel would otherwise leave a venv holding the old one under the same name; the B7 review found
+  that. `rebuild=True` rebuilds every venv as well as every wheel. Anything else at that path is
+  removed and rebuilt, under a `flock` on `<venv>.lock`. Two overlays with identical bytes share
+  one derived venv, since the name is the overlay's sha256.
+- **Complete means checked.** The marker also records `checks: {digest, pip_check_ok, smoke_ok}`,
+  where the digest covers `pip_check_expected` and `smoke_imports` (neither is in `env_key`, so a
+  changed expectation re-runs the checks). Only `prefetch_env` with a profile runs them and sets
+  them true; without a profile a venv is installed but never complete. `venv_checked` is the
+  predicate, and B12 must refuse a venv for which it is false.
+- **`wheels.lock` and the manifest.** With `env.wheels` unset, `wheels_lock` names where the first
+  prefetch records wheels, and an existing file there is refused: its bytes are not covered by any
+  manifest sha256. `PrefetchResult.record` is true whenever the file's sha256 now differs from the
+  manifest's (or the manifest has none), and the caller must write it into `env.wheels`.
 - **pip check.** Each `The package \`X\` …` line becomes `(normalised X, kind, detail)`, where detail
   is the rest of the line without backticks; `requires …` lines are `requirement`, lines mentioning
   the platform are `platform`, anything else is `other` and can never be declared. The comparison
@@ -297,15 +315,28 @@ How `env` installs (B7):
 - **Smoke catches what pip check cannot.** The slow test's sdist wheel (python_speech_features 0.6)
   declares no requirements but imports scipy, which no lock holds: `uv pip check` is clean and the
   sandboxed import fails. Smoke runs one `python -c 'import m'` per module through `sandbox_argv`,
-  the venv bound read-only, offline.
+  the venv bound read-only, offline, with an empty private working directory: `python -c` puts the
+  working directory first on `sys.path`, so a same-named module in the caller's directory would
+  otherwise satisfy the import (a test shows the control import succeeding there and the smoke
+  failing). An import past the timeout raises `E_SMOKE_TIMEOUT`.
 - **R prefetch** loads the module with `bash --noprofile --norc -c '. /etc/profile.d/modules.sh &&
   module load "$1" …'` (the plan's `bash -lc` read dotfiles, B6), with an allowlisted env and no
   `set -u` (the init script fails under it). `Rscript --vanilla` keeps `Renviron.site` and
   `Rprofile.site` from resetting `R_LIBS_SITE` or the repository; B12 should run R steps the same
   way. The R script writes plain text (installed TSV, `.libPaths()`, `sessionInfo()`, R version),
   and Python writes `SESSION.json` with sorted keys, so its sha256 is stable and the script needs no
-  JSON package. `SESSION.json` is written last and only when every declared version is installed
-  and the library is first on `.libPaths()`; it also marks the library complete for reuse.
+  JSON package. `SESSION.json` is written last and only when every declared version is installed,
+  the module's R is `profile.r.version` and the library is first on `.libPaths()`. Its `key`
+  (modules, R version, snapshot, declared packages) marks the library complete for reuse; when it
+  is missing or differs, `SESSION.json` and the whole library are removed before the install, so no
+  package from an earlier snapshot survives.
+- **`R_LIBS_USER=<r_lib>`** as well as `R_LIBS`: without it R adds a user library under `HOME`
+  (the temp home at prefetch), which then appears in `.libPaths()` and makes `SESSION.json` differ
+  between two otherwise identical prefetches. The B7 reviewer checked on the real module that
+  `.libPaths()` is then exactly the library and R's own. The sandbox keys `R_LIBS_USER` the same way.
+- **`profile.r.build_modules`** are loaded before the R module, for the env capture and the
+  install, so packages with C++ sources (lme4) build with a newer compiler than the system's and
+  find its runtime libraries at run time through the captured `LD_LIBRARY_PATH`.
 - **Merge order** (`r_env_vars`): `PATH` is the caller's prefix (`{venv}/bin`), then the module's
   entries, then a suffix; `LD_LIBRARY_PATH` is the module's entries, then the native lib dirs, each
   entry kept at its first position.
@@ -404,7 +435,7 @@ How `sandbox` reads those rules:
   both, the order is the module's entries first, then the selected native lib dirs. This module
   merges nothing yet; B7 implements the merge.
 - Keyed templates: `PYTHONPATH` (the step's entries; an entry containing `:` is refused, since it would split), `R_LIBS`
-  (`r_lib`, as the plan's B7 says, with `R_LIBS_SITE` keyed as an empty constant so no site library
+  and `R_LIBS_USER` (`r_lib`, as the plan's B7 says, with `R_LIBS_SITE` keyed as an empty constant so no site library
   is seen), `JUPYTER_PATH`
   (`{venv}/share/jupyter`), `JUPYTER_DATA_DIR`/`JUPYTER_CONFIG_DIR`/`XDG_CACHE_HOME` (under
   `{tmp}`), `HF_HOME`/`TORCH_HOME` (under `{cache}`), `CUDA_CACHE_PATH` (`{out}/cuda-cache`, as spec
@@ -430,8 +461,8 @@ How `sandbox` reads those rules:
   escape a brace). Native dirs are escaped before they enter the `PATH` and `LD_LIBRARY_PATH`
   templates.
 - Departures from the approved spec's wording (spec §2.3.4), settled in the B5 reviews:
-  - The R library is keyed as `R_LIBS={r_lib}` with `R_LIBS_SITE=""`, per plan B7. It is not
-    `R_LIBS_USER`, which on its own leaves the site library on the search path.
+  - The R library is keyed as `R_LIBS={r_lib}` and `R_LIBS_USER={r_lib}` with `R_LIBS_SITE=""`, per
+    plan B7 and its review. `R_LIBS_USER` alone would leave the site library on the search path.
   - A narrow Slurm allowlist (`SLURM_JOB_ID`, `SLURM_ARRAY_JOB_ID`, `SLURM_ARRAY_TASK_ID`,
     `SLURM_CPUS_PER_TASK`, recorded only) replaces "`SLURM_*` recorded only", for the launcher
     reason above.
