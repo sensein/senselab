@@ -22,7 +22,12 @@ import numpy as np
 import yaml
 
 from senselab.audio.workflows.triage.background_model import bridge, floor_db, runs_of, shutoff_runs
-from senselab.audio.workflows.triage.task_events import TaskEvidence, evidence_of, generic_view, task_events_parameters
+from senselab.audio.workflows.triage.task_events import (
+    TaskEvidence,
+    evidence_of,
+    generic_view_of,
+    task_events_parameters,
+)
 from senselab.utils.prov_store import ProvStore
 
 VOICE_PHONATION_PATH = Path(__file__).parent / "data" / "voice_phonation.yaml"
@@ -780,7 +785,8 @@ def phonation_reading_of(
         glide_direction: ``up`` or ``down`` for a glide family; None for a held one.
 
     Returns:
-        The reading, or the names of the inputs that were absent (the ``plain`` stream).
+        The reading, or the names of the inputs that were absent (the ``plain`` stream). Its task
+        evidence is None where BACKGROUND wrote no background.
     """
     plain = _named_stream(store, run_dir, PLAIN_STREAM)
     if plain is None:
@@ -796,5 +802,8 @@ def phonation_reading_of(
     holds = list(read.holds) or (
         [(float(read.extent["start_s"]), float(read.extent["end_s"]))] if read.extent is not None else []
     )
+    view = generic_view_of(store, run_dir)
+    if view is None:
+        return read
     gap = float(task_events_parameters()["voice"]["gap_s"])
-    return replace(read, evidence=evidence_of(generic_view(plain, residual), holds, gap_s=gap, inhale=False))
+    return replace(read, evidence=evidence_of(view, holds, gap_s=gap, inhale=False))

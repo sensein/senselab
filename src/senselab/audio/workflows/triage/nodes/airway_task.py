@@ -14,6 +14,7 @@ from typing import Any, Mapping
 import numpy as np
 import yaml
 
+from senselab.audio.workflows.triage.background_model import BACKGROUND_MODEL
 from senselab.audio.workflows.triage.background_speech import background_speech_of
 from senselab.audio.workflows.triage.breath_pattern import (
     BreathPattern,
@@ -77,7 +78,7 @@ def breath_attributes(read: BreathPattern | tuple[str, ...]) -> dict[str, Any]:
         return {"absent": list(read)}
     phases = len(read.evidence.events) if read.evidence is not None else None
     return {
-        "absent": [] if read.evidence is not None else ["plain"],
+        "absent": [] if read.evidence is not None else [BACKGROUND_MODEL],
         "decision": read.evidence.decision if read.evidence is not None else None,
         "breaths": None if phases is None else int(np.floor(phases / 2 + 0.5)),
         "pattern": read.pattern,

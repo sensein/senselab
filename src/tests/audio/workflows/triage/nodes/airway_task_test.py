@@ -78,10 +78,10 @@ def test_verdict_reads_the_breath_reading_airway_wrote() -> None:
     assert evidence.owner_absent_inputs == ()
 
 
-def test_a_breath_reading_without_the_plain_stream_is_absent() -> None:
-    """With no task evidence the breath reading names the plain stream as its absent input."""
+def test_a_breath_reading_without_the_background_is_absent() -> None:
+    """With no task evidence the breath reading names the background as its absent input."""
     attributes = airway_task.breath_attributes(BreathPattern(pattern="alternating_breaths", events_n=6))
-    assert attributes["absent"] == ["plain"] and attributes["decision"] is None
+    assert attributes["absent"] == ["background_model"] and attributes["decision"] is None
 
 
 def test_verdict_reads_the_cough_reading_airway_wrote() -> None:
