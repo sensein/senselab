@@ -507,6 +507,16 @@ therefore read the same files on any day.
 triples, so it reveals no file names. It is taken before and after the step, and a change fails
 the step.
 
+- Hashing the relative path (not storing it) is what keeps the digest safe to record in provenance
+  and `summary.json`; hashing it at all is what makes a rename change the digest.
+- Errors are a fixed code (`E_DIGEST_NO_ROOT`, `E_DIGEST_BAD_PATTERN`, `E_DIGEST_UNREADABLE`) with
+  no path, because the exception class and message can reach `summary.json`.
+- Each pattern is walked from its longest wildcard-free directory, and a pattern with no wildcard is
+  hashed directly, so a narrow pattern on a large data root does not walk the whole root.
+- Non-regular files are refused rather than opened: opening a FIFO blocks.
+- Exclusions are whole path components, so the output digest can leave out `{out}/cuda-cache`
+  (written by the CUDA JIT during the step) without also hiding a sibling such as `cuda-cache-x`.
+
 ## Metrics, expectations, provenance
 
 **Adapters.** Each step's adapter turns the analysis's own outputs into `metrics.json`, from a fixed
@@ -519,6 +529,56 @@ vocabulary:
 
 Unknown keys and non-numeric values are rejected. Count fields below a minimum cell size are
 suppressed.
+
+**Why the vocabulary has the shape it has.**
+
+- `headline` is a list of entries, not a map, because one step can report the same metric for
+  several systems (told apart by a declared `label`) or several test statistics of one name (told
+  apart by their degrees of freedom).
+- Every name, label and count name an adapter may emit is declared in the manifest's
+  `metrics_schema`. The declared names must all appear, so a pass rule cannot silently pass on a
+  missing number.
+- Free text is never accepted. The only strings are declared labels, a small set of fixed words
+  (`unit`, `threshold_tuning`, `protocol`) and the split's `unit`/`stratify`, which must be lower-case
+  words without digits so that a subject code cannot be smuggled through.
+- Suppression replaces `n`, `counts.*` and `confusion.*` below the minimum cell with `"<k>"` rather
+  than rejecting the file: a small cell is expected in a real result and is not an adapter bug.
+  Degrees of freedom, `n_folds` and a fold's `n_groups` describe the design, not people, and are
+  never suppressed.
+
+**Imbalance.** A headline number on an imbalanced split means little without its floor, so a
+classification or detection step's output is refused unless it carries:
+
+- `per_class.<label>.prevalence` for every declared class
+- a `floor` on every headline entry: the value a trivial classifier gets (balanced accuracy 0.5 or
+  1/k, F1 of the all-positive predictor, average precision = prevalence, majority-class accuracy)
+- `threshold_tuning`, which may only be `validation` or `none`; a threshold tuned on the test split
+  cannot be written down
+
+`lift` (value minus floor) is optional and checked against the two when present. `pr_auc` and `mcc`
+are headline names like any other, declared when the adapter emits them.
+
+**Split protocol.** `split_report.protocol` is `seen_subject` or `unseen_subject`; both are legitimate
+evaluations. A seen-subject split asks whether a model works on new clips of people it was trained
+on; an unseen-subject split asks whether it works on new people. The protocol travels with every
+number so that a seen-subject result is never read as generalization to new people. `invariant_ok`
+records whether the split met its own protocol's invariant (no subject in two partitions for
+unseen; every test subject in train and no session or video in two partitions for seen). A
+`false` is a finding about the original split, reported with the number, not a schema error.
+
+**Driver-only keys.** `delta`, `target`, `tolerance` and `pass` are refused anywhere in adapter
+output. Only the driver, evaluating `expect`, writes them; otherwise an adapter could report its own
+pass.
+
+**Metric addresses.** `expect` and `from_step` name a value as `<headline>`, `<headline>@<label>`,
+`counts.<name>`, `per_class.<label>.<field>` or `confusion.<cell>`. A manifest's `expect` metrics are
+checked against its `metrics_schema` when the manifest loads, and a bare headline name that matches
+several entries is refused when read, rather than picking one.
+
+**Host record.** Hostname, CPU model and counts, the first GPU's name and driver from `nvidia-smi`
+with the GPU count, and the venv's Python, torch and torch CUDA versions, asked of the venv's own
+interpreter in isolated mode with a minimal environment so the caller's `PYTHONPATH` cannot answer
+for it. Anything unavailable is None.
 
 **Expectations.** Only the driver writes `target`, `tolerance`, `delta` and `pass`, by evaluating the
 step's expectations: a literal value, an upstream step's metric, or a number read from a
