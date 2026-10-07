@@ -288,8 +288,11 @@ The default objective is balanced accuracy, computed by `classification.balanced
 same function as the report headline. `f1` (positive class) and `mcc` are available only as an
 explicit, non-default choice; `ThresholdChoice.objective` records it, the report copies it into
 `threshold.objective`, and the balanced-accuracy headline is still computed at whatever threshold
-was chosen. Tuning is refused on a split name with a token `test`, `holdout` or `heldout` (tokens
-split on non-alphanumerics, any case; "latest" and "pretest" pass, "test_free_val" does not). That
+was chosen. Tuning is refused on a split name that marks held-out data: case-folded and cut into
+letter and digit runs, a run that is `test`, `holdout` or `heldout`, adjacent runs joining to
+`holdout`/`heldout` ("hold-out"), a run starting with `test` ("testset"), or `fold`/`outer`/`inner`
+plus `test` ("outerTest"). "latest", "contest", "pretest" and "attestation" pass; "test_free_val"
+does not. That
 is a guard against slips, not a guarantee: the protection is the caller passing validation rows and
 the report refusing a threshold on the split it was tuned on. Under nested cross-validation the
 inner held-out partition is named `test`; tune on it under a name such as `inner_val`. On the T6 test's synthetic 90/10 data, the

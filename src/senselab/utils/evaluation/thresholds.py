@@ -29,6 +29,7 @@ GRID_PATH = Path(__file__).parent / "data" / "threshold_grid.yaml"
 GRID_KEYS = frozenset({"start", "stop", "step", "tie_break", "round"})
 # Split-name tokens that mark held-out evaluation data; tuning on such a split is refused.
 HELD_OUT_TOKENS = frozenset({"test", "holdout", "heldout"})
+HELD_OUT_PREFIXED = frozenset({"foldtest", "outertest", "innertest"})
 
 
 @dataclass(frozen=True)
@@ -105,11 +106,25 @@ def _objective_value(objective: str, truth: np.ndarray, pred: np.ndarray, positi
 
 
 def is_held_out_name(split_name: str) -> bool:
-    """Whether a split name has a token `test`, `holdout` or `heldout` (tokens split on non-alphanumerics).
+    """Whether a split name marks held-out evaluation data; a guard against slips, not a guarantee.
 
-    "latest", "contest" and "pretest" pass; "test_free_val" does not, since its first token is "test".
+    The name is case-folded and cut into runs of letters and runs of digits. It is held out when:
+
+    - a run is `test`, `holdout` or `heldout` ("test1", "fold0test", "test_free_val");
+    - two adjacent letter runs join to `holdout` or `heldout` ("hold-out", "held_out");
+    - a letter run starts with `test` ("testset"), or is `fold`, `outer` or `inner` followed by `test`
+      ("outerTest").
+
+    "latest", "contest", "pretest" and "attestation" pass: a run that merely ends with `test` is not
+    refused unless its prefix is one of those split words.
     """
-    return bool(HELD_OUT_TOKENS & set(re.split(r"[^0-9a-z]+", split_name.casefold())))
+    runs = re.findall(r"[a-z]+|\d+", split_name.casefold())
+    letters = [r for r in runs if r.isalpha()]
+    if HELD_OUT_TOKENS & set(runs):
+        return True
+    if any(a + b in HELD_OUT_TOKENS for a, b in zip(letters, letters[1:])):
+        return True
+    return any(r.startswith("test") or r in HELD_OUT_PREFIXED for r in letters)
 
 
 def tune_threshold(
@@ -132,8 +147,8 @@ def tune_threshold(
         y_val: True label per validation row: the positive label and one other label. Labels are
             compared as strings.
         scores_val: The positive label's score per row; finite. A score equal to the threshold is positive.
-        split_name: The validation split's name; refused if a token (split on non-alphanumerics, any case)
-            is `test`, `holdout` or `heldout`.
+        split_name: The validation split's name; refused when `is_held_out_name` says it marks held-out
+            data (for example "test", "fold0test", "testset", "hold-out").
         positive_label: The positive label.
         objective: `balanced_accuracy` (default), or the explicit choices `f1` (positive class) and `mcc`.
         grid: Candidate thresholds; defaults to `load_threshold_grid()`.

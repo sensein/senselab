@@ -99,9 +99,27 @@ def test_mcc_objective_is_available_and_recorded() -> None:
         tune_threshold(y, scores, split_name="val", positive_label="pos", objective="accuracy")  # type: ignore[arg-type]
 
 
-@pytest.mark.parametrize("name", ["test", "Test_fold2", " outer-TEST ", "holdout", "fold3-heldout", "test_free_val"])
+@pytest.mark.parametrize(
+    "name",
+    [
+        "test",
+        "Test_fold2",
+        " outer-TEST ",
+        "holdout",
+        "fold3-heldout",
+        "test_free_val",
+        "test1",
+        "testset",
+        "fold0test",
+        "outerTest",
+        "innertest",
+        "hold-out",
+        "held_out",
+        "HoldOut",
+    ],
+)
 def test_tuning_on_a_test_split_is_refused(name: str) -> None:
-    """A split whose name contains "test" (any case) cannot be used for tuning."""
+    """A split name that marks held-out data (test, holdout, heldout, in joined or split forms) is refused."""
     y, scores = _separable()
     with pytest.raises(ValueError, match="test"):
         tune_threshold(y, scores, split_name=name, positive_label="pos")
@@ -174,7 +192,7 @@ def test_the_grid_comes_from_the_data_file(tmp_path: Path, monkeypatch: pytest.M
 # ── Review fixes ──────────────────────────────────────────────────────
 
 
-@pytest.mark.parametrize("name", ["latest", "contest", "pretest", "val", "inner_val_3"])
+@pytest.mark.parametrize("name", ["latest", "contest", "pretest", "attestation", "val", "inner_val_3", "fold2_val"])
 def test_split_names_that_merely_contain_test_are_accepted(name: str) -> None:
     """The guard matches whole tokens, so "latest" or "pretest" is not a test split."""
     y, scores = _separable()
