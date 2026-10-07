@@ -773,14 +773,40 @@ It holds no messages, and no paths other than checkout-relative code frames.
   the BEP028 `Software` node reads `Label` = step name, `Version` = the commit, which is the mapping
   model agents already use; the serializer is unchanged for software agents.
 - **Environments.** The venv: its directory name (`repro-<analysis>-<key8>`, under the cache, not a
-  data root), the Python its interpreter reports, its installed packages and their sha256. The
-  host: the hostname, the driver's own Python, `platform.platform()` and senselab's version. The
-  rest of the host record (CPU, GPU, driver, torch, job id) goes into the activity's `parameters`,
-  because `Environment` has no fields for it.
-- **Closed forms.** Every value `record_step` accepts is checked before anything is written: hex
-  keys and digests, a 40-hex commit, names and roots without `/`, the host record's exact keys with
-  scalar values, `E_*`/`W_*` codes, variable names, ISO 8601 times. Errors name the field, never
-  the value. Step stdout and logs are not inputs to `record_step` at all.
+  data root), the Python its interpreter reports and its installed packages. The host: the
+  hostname, the driver's own Python, `platform.platform()` and senselab's version. The rest of the
+  host record (CPU, GPU, driver, torch, job id) goes into the activity's `parameters`, because
+  `Environment` has no fields for it.
+- **What identifies the env (spec §2.3 step 6).** The activity's `parameters` carry
+  `torch_lock_sha256`, `body_lock_sha256`, `overlay_sha256`, `env_key` and `installed_sha256`.
+  `installed_sha256` is the value in the venv's marker, read through `env.installed_sha256`, which
+  also checks `installed.json` still hashes to it; a venv whose file no longer matches is refused.
+  The two can then be cross-checked. An earlier draft recorded a `dependencies_digest` over the
+  parsed package map instead; it was removed, because `parse_freeze` drops `+cuXXX` and so the
+  digest could not tell a `cu126` venv from a `cu128` one, while `installed.json` keeps the raw
+  freeze lines.
+- **Closed forms.** Every value `record_step` records is checked before anything is written, and a
+  non-string where a string is expected is a `ValueError` naming the field, never a `TypeError`:
+  - hex keys and digests (64-hex sha256s, a 40-hex commit, a hex step key), the overlay sha256
+    hex or None;
+  - step, venv and root names: letters, digits, `_`, `-`, `.`, no leading dot, so `.`, `..` and
+    `up:..` are refused; a root may carry the `up:` prefix;
+  - package names in PEP 503 normalised form, versions from `[A-Za-z0-9.+!_-]` (no `/`, `:` or
+    whitespace);
+  - the host record's exact keys; counts are non-negative integers (not `bool`); strings match a
+    per-key pattern (hostname, numeric driver and CUDA versions, version strings, a numeric job id,
+    and single-spaced words without `/` for the CPU and GPU names), at most 128 characters;
+  - `E_*`/`W_*` codes, variable names, an integer exit code (not `bool`), and full ISO 8601
+    datetimes with a timezone.
+
+  Errors name the field, never the value. Step stdout and logs are not inputs to `record_step` at all.
+- **Write order and reruns.** The store and graph are built and the graph passes `check_graph`
+  before any file is written. `store.jsonl` is then replaced, the BEP028 groups written, and any
+  `prov-reproduce_*.json` the new record did not produce (the `_io` group of a step that now
+  declares no inputs or outputs) is removed, so a rerun into the same `prov/` never leaves a group
+  from an earlier record beside the new one. Other files in `prov/` are left alone. Removing
+  stale groups was preferred to always writing every group, because an empty group file would
+  claim a record kind with no records.
 
 ## Commands
 
