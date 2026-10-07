@@ -314,24 +314,42 @@ def _task_minimum_durations() -> tuple[float, dict[str, float]]:
 
 
 @functools.cache
-def _discard_contested() -> tuple[float, int]:
-    """``data/discard_contested.yaml``: the fraction of the instructed count, and the uncounted minimum."""
-    document = yaml.safe_load(DISCARD_CONTESTED_PATH.read_text()) or {}
-    return float(document["instructed_fraction"]), int(document["uncounted_events_min"])
+def _discard_contested() -> dict[str, Any]:
+    """``data/discard_contested.yaml``, as written."""
+    return yaml.safe_load(DISCARD_CONTESTED_PATH.read_text()) or {}
 
 
-def contest_events_min(instructed: int | None) -> int:
+def contest_events_min(instructed: int | None, event: str = "cough") -> int:
     """The detector events that contest a measure's no-event discard of a family.
 
     Args:
         instructed: The family's instructed count, or None where its instruction names none.
+        event: The family's required event, ``breath`` or ``cough``.
 
     Returns:
-        The instructed count times ``instructed_fraction``, rounded up; ``uncounted_events_min``
-        where no count is instructed.
+        The instructed count times ``instructed_fraction``, rounded up; where no count is
+        instructed, the breath section's ``uncounted_events_min`` for a breath family and the
+        top-level one otherwise.
     """
-    fraction, uncounted = _discard_contested()
-    return math.ceil(instructed * fraction) if instructed is not None else uncounted
+    document = _discard_contested()
+    if instructed is not None:
+        return math.ceil(instructed * float(document["instructed_fraction"]))
+    section = (document.get("breath") or {}) if event == "breath" else {}
+    return int(section.get("uncounted_events_min", document["uncounted_events_min"]))
+
+
+def contest_rise_db_min(event: str) -> float | None:
+    """The breath-train rise a breath family's contested discard needs, or None for any other event.
+
+    Args:
+        event: The family's required event.
+
+    Returns:
+        ``breath.train_rise_db_min`` for a breath family; None otherwise.
+    """
+    if event != "breath":
+        return None
+    return float((_discard_contested().get("breath") or {})["train_rise_db_min"])
 
 
 def minimum_duration_s(declared_family: str | None) -> float | None:
@@ -451,6 +469,13 @@ def _airway_reading(store: ProvStore, name: str) -> tuple[dict[str, Any] | None,
     return (None, absent) if absent else (dict(measurement.attributes), ())
 
 
+def _train_rise_db(reading: dict[str, Any] | None) -> float | None:
+    """The breath train's median burst rise from AIRWAY's breath reading, or None where none was read."""
+    train = ((reading or {}).get("reading") or {}).get("train") or {}
+    rise = train.get("rise_db")
+    return float(rise) if rise is not None else None
+
+
 def _voice_reading(store: ProvStore) -> tuple[dict[str, Any] | None, tuple[str, ...]]:
     """VOICE's phonation reading and the inputs it lacked, as VOICE wrote them.
 
@@ -537,7 +562,9 @@ def _task_evidence(
         instructed_count=airway.required_count.value
         if airway is not None and airway.required_count is not None
         else None,
-        contest_events_min=contest_events_min(instructed) if needed in ("breath", "cough") else None,
+        contest_events_min=contest_events_min(instructed, needed) if needed in ("breath", "cough") else None,
+        contest_rise_db_min=contest_rise_db_min(needed) if needed in ("breath", "cough") else None,
+        breath_train_rise_db=_train_rise_db(reading),
         breath_mode=breath_mode,
         breath_pattern=reading["pattern"] if reading is not None else None,
         breath_events_n=reading["events_n"] if reading is not None else None,

@@ -320,6 +320,9 @@ class TaskEvidence:
         contest_events_min: The events AIRWAY's own detector must have found for a measure's
             no-event discard to be contested instead (``data/discard_contested.yaml``); None where
             no discard of this family is contested.
+        contest_rise_db_min: The breath-train rise a breath family's no-event discard needs to be
+            contested (``data/discard_contested.yaml``, ``breath``); None for any other family.
+        breath_train_rise_db: The breath train's median burst rise over the floor, or None.
         voice_mode: ``sustained`` or ``glide`` for a declared voice family decided on VOICE's
             phonation reading; None for every other family.
         voice_found: Whether the reading found a phonation attempt, or None where it was not read.
@@ -353,6 +356,8 @@ class TaskEvidence:
     cough_reading: dict[str, Any] = field(default_factory=dict)
     background_speech: dict[str, Any] = field(default_factory=dict)
     contest_events_min: int | None = None
+    contest_rise_db_min: float | None = None
+    breath_train_rise_db: float | None = None
     voice_mode: str | None = None
     voice_found: bool | None = None
     voice_mismatch: str | None = None
@@ -1758,13 +1763,18 @@ def discard_contested(evidence: TaskEvidence) -> bool:
         evidence: The task evidence.
 
     Returns:
-        True where the family names a contest threshold and the detector found at least that many
-        events of the family's own kind; False otherwise.
+        True where the family names a contest threshold, the detector found at least that many
+        events of the family's own kind, and, where a rise is named, the breath train rose at least
+        that far; False otherwise.
     """
+    rise_ok = evidence.contest_rise_db_min is None or (
+        evidence.breath_train_rise_db is not None and evidence.breath_train_rise_db >= evidence.contest_rise_db_min
+    )
     return (
         evidence.contest_events_min is not None
         and evidence.events_found_n is not None
         and evidence.events_found_n >= evidence.contest_events_min
+        and rise_ok
     )
 
 
