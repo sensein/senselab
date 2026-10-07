@@ -174,19 +174,23 @@ def local_snr_db(view: GenericView, span: Span, others: Sequence[Span], *, windo
     return float(view.frames.level_db[inside].max() - background)
 
 
-def entangled(view: GenericView, span: Span, abut_s: float) -> bool:
+def entangled(view: GenericView, span: Span, abut_s: float, *, inside: bool = True) -> bool:
     """Whether an impulse overlaps or abuts an event.
 
     Args:
         view: The background.
         span: The event.
         abut_s: How close an impulse may end before or start after the event and still abut it.
+        inside: Whether an impulse inside the event counts; False where the event's own onset is
+            impulsive (a cough), so only an impulse abutting it from outside does.
 
     Returns:
-        True where an impulse lies within ``abut_s`` of the event.
+        True where an impulse lies within ``abut_s`` of the event (outside it, where ``inside`` is
+        False).
     """
     start, end = span
-    return any(imp.end_s >= start - abut_s and imp.start_s <= end + abut_s for imp in view.impulses)
+    near = [imp for imp in view.impulses if imp.end_s >= start - abut_s and imp.start_s <= end + abut_s]
+    return any(inside or imp.start_s < start or imp.end_s > end for imp in near)
 
 
 def impulse_explained(view: GenericView, span: Span, margin_db: float) -> bool:
@@ -306,7 +310,13 @@ class TaskEvent:
 
 
 def task_event(
-    view: GenericView, span: Span, others: Sequence[Span], p: dict[str, Any], *, recovered: bool = False
+    view: GenericView,
+    span: Span,
+    others: Sequence[Span],
+    p: dict[str, Any],
+    *,
+    recovered: bool = False,
+    entangle_inside: bool = True,
 ) -> TaskEvent:
     """One candidate read against the background.
 
@@ -316,6 +326,7 @@ def task_event(
         others: Every candidate, whose frames the local background excludes.
         p: The parameters of ``data/task_events.yaml``.
         recovered: Whether the rhythm prior recovered it.
+        entangle_inside: :func:`entangled`'s ``inside``.
 
     Returns:
         The event.
@@ -329,7 +340,7 @@ def task_event(
         float(end),
         event_snr_db(view, start, end),
         local,
-        entangled(view, span, float(p["entangle_abut_s"])),
+        entangled(view, span, float(p["entangle_abut_s"]), inside=entangle_inside),
         recovered,
     )
 
@@ -458,6 +469,7 @@ def evidence_of(
     rhythm: Rhythm | None = None,
     recovered: Sequence[Span] = (),
     inhale: bool = True,
+    entangle_inside: bool = True,
     p: dict[str, Any] | None = None,
 ) -> TaskEvidence:
     """Read a branch's candidates against the background: events, cluster, extent and decision.
@@ -469,6 +481,7 @@ def evidence_of(
         rhythm: The rhythm, where one stands, recorded beside the evidence.
         recovered: Further spans the rhythm prior recovered.
         inhale: Whether the extent runs back across a preparatory inhale.
+        entangle_inside: Whether an impulse inside an event entangles it (:func:`entangled`).
         p: The parameters; ``data/task_events.yaml`` when None.
 
     Returns:
@@ -479,8 +492,8 @@ def evidence_of(
     kept = [s for s in candidates if not impulse_explained(view, s, margin)]
     extra = [s for s in recovered if not impulse_explained(view, s, margin)]
     others = [*kept, *extra]
-    events = [task_event(view, s, others, p) for s in kept]
-    events += [task_event(view, s, others, p, recovered=True) for s in extra]
+    events = [task_event(view, s, others, p, entangle_inside=entangle_inside) for s in kept]
+    events += [task_event(view, s, others, p, recovered=True, entangle_inside=entangle_inside) for s in extra]
     cluster = dominant_cluster([e for e in events if e.snr_db >= p["decision"]["snr_low_db"]], gap_s) or (
         dominant_cluster(events, gap_s)
     )

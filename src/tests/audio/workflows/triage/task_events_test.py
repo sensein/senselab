@@ -76,6 +76,17 @@ def test_a_click_is_never_a_task_event() -> None:
     assert evidence.events_found_n == 0 and evidence.decision == ABSENT
 
 
+def test_an_impulsive_onset_inside_its_own_event_does_not_entangle_a_cough() -> None:
+    """A click inside a breath entangles it; inside a cough, whose onset is impulsive, it does not."""
+    signal = _with_bursts(_noise(4.0, 0.0005), [1.0], 1.0, 0.01)
+    signal[int(1.5 * RATE) : int(1.5 * RATE) + 16] += 0.8
+    view = generic_view((signal.astype(np.float32), RATE), None)
+    assert view.impulses
+    breath = evidence_of(view, [(1.0, 2.0)], gap_s=3.0)
+    cough = evidence_of(view, [(1.0, 2.0)], gap_s=3.0, entangle_inside=False)
+    assert breath.found[0].entangled and not cough.found[0].entangled
+
+
 def test_a_regular_burst_train_gives_a_breathing_band_rhythm() -> None:
     """Bursts every 2.5 s read as a 0.4 Hz breathing-band rhythm."""
     signal = _with_bursts(_noise(30.0, 0.001), [float(t) for t in np.arange(1.0, 29.0, 2.5)], 1.0, 0.05)

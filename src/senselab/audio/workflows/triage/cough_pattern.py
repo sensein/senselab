@@ -505,5 +505,5 @@ def cough_pattern_of(
     if view is None:
         return read
     gap = float(task_events_parameters()["cough"]["gap_s"])
-    evidence = evidence_of(view, read.event_spans_s, gap_s=gap, inhale=False)
+    evidence = evidence_of(view, read.event_spans_s, gap_s=gap, inhale=False, entangle_inside=False)
     return replace(read, evidence=evidence, extent=read.extent if evidence.events_found_n else None)
