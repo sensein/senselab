@@ -2109,6 +2109,8 @@ def _decision_evidence(
             )
     if lexical_words_n is not None:
         items.append(item("lexical_words", lexical_words_n, PASS, unit="words"))
+    if task.owner_absent_inputs and KEY_OWNING_BRANCH_INPUT_ABSENT in flag_keys:
+        items.append(item(KEY_OWNING_BRANCH_INPUT_ABSENT, list(task.owner_absent_inputs), REVIEW))
     named = {entry.name for entry in items}
     items.extend(_flag_item(key) for key in flag_keys if key not in named)
     items.extend(_flag_item(key, ANNOTATION) for key in annotation_keys)

@@ -450,6 +450,28 @@ def _owner_absent_inputs(
     return tuple(dict.fromkeys(absent))
 
 
+DECISION_INPUTS: dict[str, tuple[str, ...]] = {
+    BREATH_READING: ("decision",),
+    COUGH_READING: ("onsets_n", "review"),
+    PHONATION_READING: ("found",),
+}
+"""Per task reading, the attributes the fold decides on; a reading lacking one is not measured."""
+
+
+def _undecidable(name: str, node: str, attributes: Mapping[str, Any]) -> tuple[str, ...]:
+    """The decision inputs a stored task reading lacks, named for the owner's absent inputs.
+
+    Args:
+        name: The reading's measurement name.
+        node: The node that wrote it.
+        attributes: The measurement's attributes.
+
+    Returns:
+        ``<node>:<name>.<field>`` for each field of :data:`DECISION_INPUTS` that is missing or None.
+    """
+    return tuple(f"{node}:{name}.{field}" for field in DECISION_INPUTS.get(name, ()) if attributes.get(field) is None)
+
+
 def _airway_reading(store: ProvStore, name: str) -> tuple[dict[str, Any] | None, tuple[str, ...]]:
     """AIRWAY's task reading and the inputs it lacked, as AIRWAY wrote them.
 
@@ -459,7 +481,8 @@ def _airway_reading(store: ProvStore, name: str) -> tuple[dict[str, Any] | None,
 
     Returns:
         The measurement's attributes and ``()``; ``None`` and the absent inputs where AIRWAY lacked
-        them; ``None`` and the measurement's own name where AIRWAY reported and wrote no reading;
+        them or the reading lacks a :data:`DECISION_INPUTS` field; ``None`` and the measurement's own
+        name where AIRWAY reported and wrote no reading;
         ``None`` and ``()`` where AIRWAY did not report at all.
     """
     measurement = find_measurement(store, name)
@@ -467,6 +490,7 @@ def _airway_reading(store: ProvStore, name: str) -> tuple[dict[str, Any] | None,
         reported = any(report.node == "AIRWAY" for _, report in _branch_reports(store))
         return None, ((f"AIRWAY:{name}",) if reported else ())
     absent = tuple(str(each) for each in measurement.attributes.get("absent") or ())
+    absent = absent or _undecidable(name, "AIRWAY", measurement.attributes)
     return (None, absent) if absent else (dict(measurement.attributes), ())
 
 
@@ -493,6 +517,7 @@ def _voice_reading(store: ProvStore) -> tuple[dict[str, Any] | None, tuple[str, 
         reported = any(report.node == "VOICE" for _, report in _branch_reports(store))
         return None, ((f"VOICE:{PHONATION_READING}",) if reported else ())
     absent = tuple(f"VOICE:{each}" for each in measurement.attributes.get("absent") or ())
+    absent = absent or _undecidable(PHONATION_READING, "VOICE", measurement.attributes)
     return (None, absent) if absent else (dict(measurement.attributes), ())
 
 
