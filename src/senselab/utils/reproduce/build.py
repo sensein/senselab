@@ -51,7 +51,6 @@ from senselab.utils.reproduce.spec import FileRef, LockRef, Profile, SdistSpec, 
 SOURCE_DATE_EPOCH = "315532800"
 BUILD_UMASK = 0o007
 SYSTEM_PATH = "/usr/bin:/bin"
-MODULES_INIT = "/etc/profile.d/modules.sh"
 DEAD_PROXY = "http://127.0.0.1:9"
 FETCH_TIMEOUT = 60
 WHEELS_HEADER = (
@@ -304,24 +303,43 @@ def needs_nvcc(sdist: SdistSpec) -> bool:
     return sdist.torch_cuda_arch_list is not None or any(m.startswith("cuda/") for m in sdist.build_modules)
 
 
-def in_modules(sdist: SdistSpec, argv: list[str]) -> list[str]:
+def modules_init_word(modules_init: Path | None) -> str:
+    """The profile's modules init script as a plain word.
+
+    Raises:
+        ReproduceLockError: ``E_MODULES_INIT`` when the profile names none, or it is not a plain path.
+    """
+    if modules_init is None:
+        raise ReproduceLockError("E_MODULES_INIT: loading modules needs profile.modules_init")
+    try:
+        return _safe_word(os.fspath(modules_init), "modules_init")
+    except ValueError:
+        raise ReproduceLockError("E_MODULES_INIT: profile.modules_init is not a plain path") from None
+
+
+def in_modules(sdist: SdistSpec, argv: list[str], modules_init: Path | None = None) -> list[str]:
     """Wrap ``argv`` so it runs with the sdist's modules loaded, without reading any dotfile.
 
     Without ``build_modules`` ``argv`` is returned unchanged. With them it becomes ``bash --noprofile
-    --norc -c '. <MODULES_INIT> && module load <m…> && exec "$@"'``; when :func:`needs_nvcc`, the
+    --norc -c '. <modules_init> && module load <m…> && exec "$@"'``; when :func:`needs_nvcc`, the
     script also fails unless ``nvcc`` is on ``PATH`` and exports ``CUDA_HOME`` from it.
 
     Args:
         sdist: The sdist spec.
         argv: The command.
+        modules_init: The profile's ``modules_init``.
 
     Returns:
         The argv to run.
+
+    Raises:
+        ReproduceLockError: ``E_MODULES_INIT`` when modules are needed and ``modules_init`` is missing.
     """
     if not sdist.build_modules:
         return argv
+    init = modules_init_word(modules_init)
     loaded = " ".join(_safe_word(m, "build module") for m in sdist.build_modules)
-    script = f". {MODULES_INIT} && module load {loaded} && "
+    script = f". {init} && module load {loaded} && "
     if needs_nvcc(sdist):
         script += (
             f'if ! command -v nvcc >/dev/null; then echo "nvcc not on PATH after module load {loaded}" >&2; exit 1; fi'
@@ -367,7 +385,7 @@ def _capture_env(argv: list[str], env: dict[str, str]) -> str:
     return result.stdout
 
 
-def module_environment(sdist: SdistSpec, base: Mapping[str, str]) -> dict[str, str]:
+def module_environment(sdist: SdistSpec, base: Mapping[str, str], modules_init: Path | None = None) -> dict[str, str]:
     """The variables the sdist's ``build_modules`` set, captured outside the sandbox.
 
     Runs :func:`in_modules` around ``env -0`` with ``base`` (so the nvcc guard and ``CUDA_HOME`` apply)
@@ -377,6 +395,7 @@ def module_environment(sdist: SdistSpec, base: Mapping[str, str]) -> dict[str, s
     Args:
         sdist: The sdist spec; without ``build_modules`` nothing runs.
         base: :func:`base_environment`.
+        modules_init: The profile's ``modules_init``.
 
     Returns:
         Name to value; empty without modules.
@@ -386,7 +405,7 @@ def module_environment(sdist: SdistSpec, base: Mapping[str, str]) -> dict[str, s
     """
     if not sdist.build_modules:
         return {}
-    text = _capture_env(in_modules(sdist, ["env", "-0"]), dict(base))
+    text = _capture_env(in_modules(sdist, ["env", "-0"], modules_init), dict(base))
     pairs = dict(item.split("=", 1) for item in text.split("\0") if "=" in item)
     return {k: v for k, v in pairs.items() if k not in _UNRECORDED_VARS and base.get(k) != v}
 
@@ -541,6 +560,7 @@ def build_wheel(
     python: str,
     work_dir: Path | None = None,
     sdist_cache: Path | None = None,
+    modules_init: Path | None = None,
 ) -> tuple[Path, str]:
     """Build one sdist into a wheel in a fresh build venv.
 
@@ -558,6 +578,7 @@ def build_wheel(
         out_dir: The wheelhouse; the wheel goes to ``<out_dir>/<sha256>/<wheel file>``.
         torch_lock: The env's torch lock, installed into the build venv first when the build needs torch.
         python: The interpreter for the build venv (the env's ``python_exact``).
+        modules_init: The profile's ``modules_init``, sourced before ``build_modules`` load.
         work_dir: Where the build venv, inputs and source go; must not exist yet. Kept when given;
             otherwise a temporary directory is used and removed.
         sdist_cache: Where the sdist is downloaded; defaults to ``work_dir / "sdist"``.
@@ -572,7 +593,14 @@ def build_wheel(
     if work_dir is None:
         with tempfile.TemporaryDirectory(prefix="reproduce-build-") as tmp:
             return build_wheel(
-                sdist, base_dir, out_dir, torch_lock, python=python, work_dir=Path(tmp) / "w", sdist_cache=sdist_cache
+                sdist,
+                base_dir,
+                out_dir,
+                torch_lock,
+                python=python,
+                work_dir=Path(tmp) / "w",
+                sdist_cache=sdist_cache,
+                modules_init=modules_init,
             )
     if work_dir.exists():
         raise ReproduceLockError(f"build work dir already exists: {work_dir}")
@@ -601,7 +629,7 @@ def build_wheel(
 
     dist = work_dir / "dist"
     dist.mkdir(parents=True, exist_ok=True)
-    env = build_environment(sdist, base, venv, module_environment(sdist, base))
+    env = build_environment(sdist, base, venv, module_environment(sdist, base, modules_init))
     env["UV_CACHE_DIR"] = str(work_dir / "tmp" / "uv-cache")
     writable = [src.parent, dist, work_dir / "home", work_dir / "tmp"]
     _run(wheel_build_argv(uv, build_python, src, dist, venv=venv, writable=writable), env=env)
@@ -925,6 +953,7 @@ def ensure_wheel(
     expected_sha256: str | None = None,
     work_dir: Path | None = None,
     sdist_cache: Path | None = None,
+    modules_init: Path | None = None,
 ) -> WheelResult:
     """Reuse the recorded wheel for an sdist, or build and record it; the entry point of ``build-one``.
 
@@ -941,6 +970,7 @@ def ensure_wheel(
         expected_sha256: The manifest's ``wheels.lock_sha256``, if it has one.
         work_dir: Passed to :func:`build_wheel`.
         sdist_cache: Passed to :func:`build_wheel`.
+        modules_init: Passed to :func:`build_wheel`.
 
     Returns:
         A :class:`WheelResult`; when ``built``, the caller records ``wheels_lock_sha256`` in the manifest.
@@ -953,7 +983,14 @@ def ensure_wheel(
         if reused is not None:
             return WheelResult(*reused, built=False)
     wheel, sha = build_wheel(
-        sdist, base_dir, wheelhouse, torch_lock, python=python, work_dir=work_dir, sdist_cache=sdist_cache
+        sdist,
+        base_dir,
+        wheelhouse,
+        torch_lock,
+        python=python,
+        work_dir=work_dir,
+        sdist_cache=sdist_cache,
+        modules_init=modules_init,
     )
     _, lock_sha = record_wheel(
         wheels_lock, sdist, wheelhouse, wheel, sha, torch_lock, python=python, expected_sha256=expected_sha256
@@ -991,8 +1028,8 @@ def render_build_job(
 
     The job starts from an empty environment (``--export=NONE``) and exports only ``PATH``, the
     :data:`BATCH_EXPORTS` variables set in ``environ``, the driver interpreter, ``REPRO_UV`` (the
-    absolute uv, read by :func:`find_uv`) and a per-job ``TMPDIR`` under ``/dev/shm`` that is
-    removed on exit. Modules are not loaded here: ``build-one`` loads ``build_modules`` itself
+    absolute uv, read by :func:`find_uv`) and, when the profile names a ``job_tmp_root``, a per-job ``TMPDIR``
+    under it that is removed on exit. Modules are not loaded here: ``build-one`` loads ``build_modules`` itself
     (:func:`in_modules`). The log directory ``<slurm_logs_root>/<date>/`` must exist before submission.
 
     Args:
@@ -1043,10 +1080,14 @@ def render_build_job(
     lines += [
         f"export REPRO_DRIVER_PYTHON={shlex.quote(driver_python)}",
         f"export REPRO_UV={shlex.quote(uv)}",
-        'export TMPDIR="/dev/shm/reproduce-build-${SLURM_JOB_ID}"',
-        'mkdir -p "$TMPDIR"',
-        "trap 'rm -rf \"$TMPDIR\"' EXIT",
     ]
+    if profile.job_tmp_root is not None:
+        root = _safe_word(os.fspath(profile.job_tmp_root), "job_tmp_root")
+        lines += [
+            f'export TMPDIR="{root}/reproduce-build-${{SLURM_JOB_ID}}"',
+            'mkdir -p "$TMPDIR"',
+            "trap 'rm -rf \"$TMPDIR\"' EXIT",
+        ]
     if sdist.torch_cuda_arch_list is not None:
         arch = _double_quoted(sdist.torch_cuda_arch_list, "torch_cuda_arch_list")
         lines.append(f"export TORCH_CUDA_ARCH_LIST={arch}")
