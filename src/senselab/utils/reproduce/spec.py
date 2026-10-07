@@ -258,7 +258,11 @@ class StageSpec(_Model):
 
 
 class Resources(_Model):
-    """The profile partition key and the step's hardware and native-tool needs."""
+    """The profile partition key and the step's hardware and native-tool needs.
+
+    ``native`` names entries of the profile's ``native`` map; only those entries' dirs reach the step's
+    ``PATH`` and ``LD_LIBRARY_PATH``.
+    """
 
     profile: str
     gpu_arch: list[str] | None = None
@@ -405,6 +409,13 @@ class PartitionSpec(_Model):
     fallback: str | None = None
 
 
+class NativeSpec(_Model):
+    """A native tool the profile offers: the dirs a step that selects it gets on ``PATH`` and ``LD_LIBRARY_PATH``."""
+
+    bin_dirs: list[Path] = []
+    lib_dirs: list[Path] = []
+
+
 class RModule(_Model):
     """The site R module and the version it provides."""
 
@@ -432,7 +443,7 @@ class Profile(_Model):
     env: dict[str, str] = {}
     partitions: dict[str, PartitionSpec] = Field(min_length=1)
     build: str
-    native_dirs: list[Path] = []
+    native: dict[Name, NativeSpec] = {}
     r: RModule | None = None
     deny_patterns_file: Path
     canary_host: str
@@ -442,9 +453,13 @@ class Profile(_Model):
     @model_validator(mode="after")
     def _consistent(self) -> "Profile":
         paths = [*self.roots.values(), self.results_root, self.runs_root, self.slurm_logs_root, *self.rw_under_roots]
-        relative = sorted(str(p) for p in paths if not p.is_absolute())
+        native = [d for n in self.native.values() for d in (*n.bin_dirs, *n.lib_dirs)]
+        relative = sorted(str(p) for p in (*paths, *native) if not p.is_absolute())
         if relative:
             raise ValueError(f"profile paths must be absolute: {relative}")
+        colon = sorted(str(d) for d in native if ":" in str(d))
+        if colon:
+            raise ValueError(f"native dirs may not contain ':': {colon}")
         if self.build not in self.partitions:
             raise ValueError(f"build key {self.build!r} is not a partition key")
         reserved = sorted(RESERVED_ROOT_NAMES & set(self.roots))
@@ -461,6 +476,23 @@ class Profile(_Model):
                 if not any(path.is_relative_to(w) and _strictly_under(w, root) for w in rw):
                     raise ValueError(f"{field} lies inside a data root and under no rw_under_roots entry inside it")
         return self
+
+
+def check_step_profile(step: StepSpec, profile: Profile) -> None:
+    """Check what a step asks of the profile.
+
+    Args:
+        step: The step.
+        profile: The caller's profile.
+
+    Raises:
+        ValueError: If the step selects a native entry the profile lacks, or names a partition key it lacks.
+    """
+    missing = sorted(set(step.resources.native) - set(profile.native))
+    if missing:
+        raise ValueError(f"step {step.name!r} selects native entries the profile lacks: {missing}")
+    if step.resources.profile not in profile.partitions:
+        raise ValueError(f"step {step.name!r} names partition key {step.resources.profile!r}, not in the profile")
 
 
 def _read(path: Path) -> Any:  # noqa: ANN401

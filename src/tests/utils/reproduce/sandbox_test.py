@@ -79,9 +79,19 @@ def test_sandbox_argv_shape(tmp_path: Path) -> None:
     """Tools are absolute, ``sh`` is ``$0``, the script fails closed, rw binds precede the ro remount, caps drop."""
     root, out = tmp_path / "r", tmp_path / "r" / "out"
     argv = sandbox_argv(["true"], [root], [out], [tmp_path / "ck"])
-    assert argv[:7] == ["/usr/bin/unshare", "-rnm", "--propagation", "private", "/bin/sh", "-c", argv[6]]
-    assert argv[7:] == ["sh", "true"]
-    script = argv[6]
+    unshare = [
+        "/usr/bin/unshare",
+        "-rnm",
+        "--pid",
+        "--fork",
+        "--kill-child",
+        "--mount-proc",
+        "--propagation",
+        "private",
+    ]
+    assert argv[:10] == [*unshare, "/bin/sh", "-c"]
+    assert argv[11:] == ["sh", "true"]
+    script = argv[10]
     assert script.startswith("set -e")
     mount = "/usr/bin/mount"
     assert script.index(f"{mount} --bind {out} {out}") < script.index(f"{mount} -o remount,bind,ro {root}")
@@ -96,7 +106,7 @@ def test_sandbox_argv_shape(tmp_path: Path) -> None:
 def test_nested_paths_are_bound_shallow_first(tmp_path: Path) -> None:
     """An inner root listed first is still bound after its parent."""
     outer, inner = tmp_path / "r", tmp_path / "r" / "in"
-    script = sandbox_argv(["true"], [inner, outer], [], [])[6]
+    script = sandbox_argv(["true"], [inner, outer], [], [])[10]
     assert script.index(f"--bind {outer} ") < script.index(f"--bind {inner} ")
 
 
@@ -129,7 +139,7 @@ def test_loopback_up_and_canary_fails() -> None:
     done = _run(sandbox_argv([sys.executable, "-c", loop], [], [], []))
     assert done.returncode == 0, done.stderr
     assert done.stdout.strip() == "ok"
-    for host in ("pypi.org", "1.1.1.1"):
+    for host in ("pypi.org", "1.1.1.1", "example.org:443"):
         done = _run(sandbox_argv([sys.executable, "-c", canary(host)], [], [], []))
         assert done.returncode == 0, done.stderr
         assert json.loads(done.stdout) == {"canary_failed": True}
@@ -204,6 +214,60 @@ def test_step_cannot_undo_the_mounts(tmp_path: Path) -> None:
 
 
 @needs_userns
+def test_pid_namespace_hides_and_protects_host_processes(tmp_path: Path) -> None:
+    """The step is pid 1, sees only sandbox processes in /proc, and cannot signal a host process."""
+    host = subprocess.Popen(["sleep", "60"])
+    try:
+        probe = (
+            'echo "self=$$"; '
+            "ls /proc | grep -E '^[0-9]+$' | sort -n | tr '\\n' ' '; echo; "
+            f"kill {host.pid} 2>/dev/null && echo kill=sent || echo kill=failed"
+        )
+        done = _run(sandbox_argv(["/bin/sh", "-c", probe], [], [], []))
+        assert done.returncode == 0, done.stderr
+        lines = done.stdout.splitlines()
+        assert lines[0] == "self=1"
+        pids = [int(p) for p in lines[1].split()]
+        assert str(host.pid) not in lines[1].split()
+        assert max(pids) < 100
+        assert lines[2] == "kill=failed"
+        assert host.poll() is None
+    finally:
+        host.kill()
+        host.wait()
+
+
+NOTEBOOK = {
+    "cells": [{"cell_type": "code", "execution_count": None, "id": "c1", "metadata": {}, "outputs": [],
+               "source": "print(6 * 7)"}],
+    "metadata": {"kernelspec": {"name": "python3", "display_name": "Python 3", "language": "python"}},
+    "nbformat": 4,
+    "nbformat_minor": 5,
+}  # fmt: skip
+
+
+@needs_userns
+def test_notebook_executes_in_the_sandbox(tmp_path: Path) -> None:
+    """A one-cell notebook runs through ``python -m nbconvert --execute`` (kernel over loopback) with the step env."""
+    pytest.importorskip("nbconvert")
+    pytest.importorskip("ipykernel")
+    paths = {**_paths(tmp_path), "venv": Path(sys.prefix)}
+    out = paths["out"]
+    for d in (out, paths["tmp"] / "home", paths["checkout"]):
+        d.mkdir(parents=True)
+    nb = paths["checkout"] / "nb.ipynb"
+    nb.write_text(json.dumps(NOTEBOOK))
+    env, _, _ = build_env(_step(), _profile(tmp_path / "root"), paths, parent={})
+    argv = [sys.executable, "-m", "nbconvert", "--to", "notebook", "--execute", "--output-dir", str(out), str(nb)]
+    done = subprocess.run(
+        sandbox_argv(argv, [], [out], [paths["checkout"]]), capture_output=True, text=True, timeout=180, env=env
+    )
+    assert done.returncode == 0, done.stderr[-2000:]
+    executed = json.loads((out / "nb.ipynb").read_text())
+    assert "".join(executed["cells"][0]["outputs"][0]["text"]) == "42\n"
+
+
+@needs_userns
 def test_failing_mount_aborts_before_the_step(tmp_path: Path) -> None:
     """A ro root that does not exist aborts the script; the step never runs."""
     marker = tmp_path / "marker"
@@ -252,22 +316,50 @@ def test_keyed_sha_ignores_volatile_values_and_follows_the_profile(tmp_path: Pat
     assert keyed4 != keyed1
 
 
-def test_r_libs_and_native_libs(tmp_path: Path) -> None:
-    """``r_lib`` keys ``R_LIBS`` as a template with ``R_LIBS_SITE`` empty; native ``bin`` dirs give lib dirs."""
+def test_r_libs(tmp_path: Path) -> None:
+    """``r_lib`` keys ``R_LIBS`` as a template, with ``R_LIBS_SITE`` empty and no ``R_LIBS_USER``."""
     r_step = _step(
         kind="r",
         env={**_step().env.model_dump(mode="json"), "r_packages": [{"name": "x", "version": "1"}]}
         | {"r_snapshot": "2026-01-01", "r_lib": "{cache}/R/e"},
     )
-    profile = _profile(tmp_path / "root").model_copy(update={"native_dirs": [Path("/opt/tool/bin"), Path("/opt/x")]})
-    keyed = keyed_templates(r_step, profile)
+    keyed = keyed_templates(r_step, _profile(tmp_path / "root"))
     assert keyed["R_LIBS"] == "{cache}/R/e"
     assert keyed["R_LIBS_SITE"] == ""
     assert "R_LIBS_USER" not in keyed
-    assert keyed["LD_LIBRARY_PATH"] == "/opt/tool/lib"
-    env, _, _ = build_env(r_step, profile, _paths(tmp_path), parent={})
+    env, _, _ = build_env(r_step, _profile(tmp_path / "root"), _paths(tmp_path), parent={})
     assert env["R_LIBS"] == f"{tmp_path}/cache/R/e"
-    assert "LD_LIBRARY_PATH" not in keyed_templates(_step(), _profile(tmp_path / "root"))
+
+
+NATIVE = {
+    "ffmpeg": {"bin_dirs": ["/opt/ff/bin"], "lib_dirs": ["/opt/ff/curated-lib"]},
+    "sox": {"bin_dirs": ["/opt/sox/bin"], "lib_dirs": ["/opt/sox/lib", "/opt/sox/lib64"]},
+}
+
+
+def test_native_entries_are_opt_in(tmp_path: Path) -> None:
+    """A step without ``native`` gets no native dirs; selecting one gives only that entry's dirs, in order."""
+    profile = Profile.model_validate({**_profile(tmp_path / "root").model_dump(mode="json"), "native": NATIVE})
+    plain = keyed_templates(_step(), profile)
+    assert "LD_LIBRARY_PATH" not in plain
+    assert plain["PATH"] == "{venv}/bin:/usr/bin:/bin"
+    sox = keyed_templates(_step(resources={"profile": "cpu", "native": ["sox"]}), profile)
+    assert sox["LD_LIBRARY_PATH"] == "/opt/sox/lib:/opt/sox/lib64"
+    assert sox["PATH"] == "{venv}/bin:/usr/bin:/bin:/opt/sox/bin"
+    both = keyed_templates(_step(resources={"profile": "cpu", "native": ["ffmpeg", "sox"]}), profile)
+    assert both["LD_LIBRARY_PATH"] == "/opt/ff/curated-lib:/opt/sox/lib:/opt/sox/lib64"
+    _, k_plain, _ = build_env(_step(), profile, _paths(tmp_path), parent={})
+    _, k_sox, _ = build_env(
+        _step(resources={"profile": "cpu", "native": ["sox"]}), profile, _paths(tmp_path), parent={}
+    )
+    assert k_plain != k_sox
+
+
+def test_unknown_native_entry_is_refused(tmp_path: Path) -> None:
+    """A step may select only entries the profile defines."""
+    with pytest.raises(ValueError):
+        build_env(_step(resources={"profile": "cpu", "native": ["ffmpeg"]}), _profile(tmp_path / "root"),
+                  _paths(tmp_path), parent={})  # fmt: skip
 
 
 def test_pythonpath_entries_with_a_colon_are_refused(tmp_path: Path) -> None:
