@@ -1,0 +1,15 @@
+# The triage review page: the quantised spectrogram it carries for each recording, and how its
+# per-recording data is split into side files. Display settings, not decision thresholds.
+# Design: specs/20261007-task-events-in-background/design.md, "Unit C plan", item 5.
+version: 1
+spectrogram:
+  bands: 16 # frequency bands, log-spaced
+  frames: 64 # time bins over the whole recording
+  levels: 4 # quantisation levels, 2 bits per cell
+  f_min_hz: 60.0 # lowest band edge
+  f_max_hz: 8000.0 # highest band edge, capped at the stream's Nyquist frequency
+  window_s: 0.032 # analysis window
+  floor_percentile: 20.0 # cells at or under this percentile of the recording's own levels draw as level 0
+  stream_order: [plain, recording] # the first stored stream found is the one drawn
+shards:
+  records: 500 # recordings per side file
