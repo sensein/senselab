@@ -21,6 +21,7 @@ import numpy as np
 import yaml
 from scipy.signal import find_peaks
 
+from senselab.audio.workflows.triage.background_model import BACKGROUND_MODEL
 from senselab.audio.workflows.triage.breath_pattern import SPECTROGRAM, _in_script, _moving_median, _sidecar
 from senselab.audio.workflows.triage.nodes.common import lexical_words, word_hull
 from senselab.audio.workflows.triage.residue import is_non_lexical
@@ -483,7 +484,8 @@ def cough_pattern_of(
 
     Returns:
         The reading of :func:`measure_cough_pattern`; or ``("spectrogram_narrowband",)`` where the
-        derivative, its sidecar or its framing is missing.
+        derivative, its sidecar or its framing is missing; or ``("background_model",)`` where
+        BACKGROUND wrote no background.
     """
     held = _sidecar(store, run_dir, SPECTROGRAM)
     if held is None:
@@ -503,7 +505,7 @@ def cough_pattern_of(
     )
     view = generic_view_of(store, run_dir)
     if view is None:
-        return read
+        return (BACKGROUND_MODEL,)
     gap = float(task_events_parameters()["cough"]["gap_s"])
     evidence = evidence_of(view, read.event_spans_s, gap_s=gap, inhale=False, entangle_inside=False)
     return replace(read, evidence=evidence, extent=read.extent if evidence.events_found_n else None)

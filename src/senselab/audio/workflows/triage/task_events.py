@@ -20,19 +20,19 @@ import numpy as np
 import yaml
 
 from senselab.audio.workflows.triage.background_model import (
-    PLAIN_STREAM,
-    RESIDUAL_STREAM,
+    BACKGROUND_MODEL,
     BandFrames,
     Floor,
     Impulse,
     Region,
-    _named_stream,
     background_model_parameters,
     band_frames,
     floor_of,
     impulses_of,
+    read_view_arrays,
     regions_of,
 )
+from senselab.audio.workflows.triage.nodes.common import find_measurement
 from senselab.utils.prov_store import ProvStore
 
 TASK_EVENTS_PATH = Path(__file__).parent / "data" / "task_events.yaml"
@@ -101,19 +101,25 @@ def generic_view(plain: tuple[np.ndarray, int], residual: tuple[np.ndarray, int]
 
 
 def generic_view_of(store: ProvStore, run_dir: Path) -> GenericView | None:
-    """The recording-level background from the store's streams.
+    """The recording-level background as BACKGROUND wrote it, read back from its view sidecar.
 
     Args:
-        store: The provenance store, read for the ``plain`` and ``residual`` streams.
-        run_dir: The run directory their paths are relative to.
+        store: The provenance store, read for the ``background_model`` measurement.
+        run_dir: The run directory the sidecar's path is relative to.
 
     Returns:
-        The view, or None where the plain stream is absent.
+        The view, or None where BACKGROUND wrote no reading (an absent input) or its sidecar is gone.
     """
-    plain = _named_stream(store, run_dir, PLAIN_STREAM)
-    if plain is None:
+    found = find_measurement(store, BACKGROUND_MODEL)
+    if found is None or found.attributes.get("missing"):
         return None
-    return generic_view(plain, _named_stream(store, run_dir, RESIDUAL_STREAM))
+    relative = str((found.attributes.get("view") or {}).get("path") or "")
+    path = Path(relative) if Path(relative).is_absolute() else run_dir / relative
+    if not relative or not path.is_file():
+        return None
+    frames, floor, impulses, regions = read_view_arrays(path)
+    broadband = float(10.0 * np.log10(np.sum(10.0 ** (floor.band_db / 10.0)) + 1e-12))
+    return GenericView(frames, floor, impulses, regions, broadband, float(background_model_parameters()["hop_s"]))
 
 
 def _impulse_mask(view: GenericView) -> np.ndarray:
