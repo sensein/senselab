@@ -744,6 +744,70 @@ It holds no messages, and no paths other than checkout-relative code frames.
 - the venv and the host as environments
 - inputs and outputs as `artifact` entities that carry a checksum without a path
 
+**Provenance record (B10).** `provenance.record_step` writes `{out}/prov/store.jsonl` and the
+`prov-reproduce_{io,act,soft,env}.json` files.
+
+- **No path, anywhere.** Data file names and directory names can carry participant identifiers, so
+  the record holds no input or output path, file name, data-root-relative path or glob pattern
+  (patterns are data-root-relative paths too). An input or output is named only by its manifest
+  position (`inputs[<i>]`, `outputs[<i>]`), its role, its data-root name for an input, its
+  input-set digest and its file count. The test writes files under distinctive names, records them
+  and greps every written file for each name component and the temp root.
+- **Why `artifact` is a new type.** The store required a `path` beside every checksum, so that a
+  checksum always said which file it described. An input set has no single file, and its file names
+  must not be written, so the exemption is bound to one new type rather than relaxed for all: every
+  other type still refuses a pathless checksum. The design spec's rev-4 text proposed a separate
+  `content_sha256` attribute; reusing `checksum_sha256` on a dedicated type keeps one checksum term
+  and one BEP028 mapping (`Checksum`, SPDX SHA-256). The value is an input-set digest, not a single
+  file's sha256; `file_count` beside it says how many files it covers. An artifact sits under
+  `prov:Entity`, not `Files`, because BEP028's `Files` are located files.
+- **The command is withheld.** BEP028's `Command` is required; a rendered argv names data files, and
+  even the argv template may hold a data-root-relative path, so `Command` stays null, the activity
+  `Description` says why, and the argv is recorded as `argv_sha256`. The `Description` was hardcoded
+  to triage's wording; it is now a `description` argument of `to_bep028_graph` and
+  `convert_store_file`, with triage's wording as the default. `write_bep028_files` serializes an
+  already-built graph and has no activity to describe, so it takes no `description`.
+- **The step environment** is recorded as its sorted variable names plus `env_sha256`, never values:
+  `HOME`, `TMPDIR` and templated variables expand to paths.
+- **The code commit** is a software agent with `commit_sha` set and `version` `<step> <commit>`, so
+  the BEP028 `Software` node reads `Label` = step name, `Version` = the commit, which is the mapping
+  model agents already use; the serializer is unchanged for software agents.
+- **Environments.** The venv: its directory name (`repro-<analysis>-<key8>`, under the cache, not a
+  data root), the Python its interpreter reports and its installed packages. The host: the
+  hostname, the driver's own Python, `platform.platform()` and senselab's version. The rest of the
+  host record (CPU, GPU, driver, torch, job id) goes into the activity's `parameters`, because
+  `Environment` has no fields for it.
+- **What identifies the env (spec §2.3 step 6).** The activity's `parameters` carry
+  `torch_lock_sha256`, `body_lock_sha256`, `overlay_sha256`, `env_key` and `installed_sha256`.
+  `installed_sha256` is the value in the venv's marker, read through `env.installed_sha256`, which
+  also checks `installed.json` still hashes to it; a venv whose file no longer matches is refused.
+  The two can then be cross-checked. An earlier draft recorded a `dependencies_digest` over the
+  parsed package map instead; it was removed, because `parse_freeze` drops `+cuXXX` and so the
+  digest could not tell a `cu126` venv from a `cu128` one, while `installed.json` keeps the raw
+  freeze lines.
+- **Closed forms.** Every value `record_step` records is checked before anything is written, and a
+  non-string where a string is expected is a `ValueError` naming the field, never a `TypeError`:
+  - hex keys and digests (64-hex sha256s, a 40-hex commit, a hex step key), the overlay sha256
+    hex or None;
+  - step, venv and root names: letters, digits, `_`, `-`, `.`, no leading dot, so `.`, `..` and
+    `up:..` are refused; a root may carry the `up:` prefix;
+  - package names in PEP 503 normalised form, versions from `[A-Za-z0-9.+!_-]` (no `/`, `:` or
+    whitespace);
+  - the host record's exact keys; counts are non-negative integers (not `bool`); strings match a
+    per-key pattern (hostname, numeric driver and CUDA versions, version strings, a numeric job id,
+    and single-spaced words without `/` for the CPU and GPU names), at most 128 characters;
+  - `E_*`/`W_*` codes, variable names, an integer exit code (not `bool`), and full ISO 8601
+    datetimes with a timezone.
+
+  Errors name the field, never the value. Step stdout and logs are not inputs to `record_step` at all.
+- **Write order and reruns.** The store and graph are built and the graph passes `check_graph`
+  before any file is written. `store.jsonl` is then replaced, the BEP028 groups written, and any
+  `prov-reproduce_*.json` the new record did not produce (the `_io` group of a step that now
+  declares no inputs or outputs) is removed, so a rerun into the same `prov/` never leaves a group
+  from an earlier record beside the new one. Other files in `prov/` are left alone. Removing
+  stale groups was preferred to always writing every group, because an empty group file would
+  claim a record kind with no records.
+
 ## Commands
 
 `python -m senselab.utils.reproduce` takes these subcommands:
