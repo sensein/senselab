@@ -31,13 +31,16 @@ from pydantic import (
 )
 
 from senselab.utils.reproduce.metrics import (
-    CHANCE_HEADLINES,
+    CLASSIFICATION_HEADLINE,
     CLASSIFICATION_KINDS,
-    KIND_HEADLINES,
-    HeadlineName,
+    HEADLINES_BY_KIND,
+    SCALED_QUANTITIES,
+    SECONDARY_BY_KIND,
+    MetricName,
     MetricsKind,
     SplitOptOutReason,
     metric_address_error,
+    metric_quantity,
 )
 
 Commit = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{40}$")]
@@ -308,8 +311,8 @@ class ToleranceFrom(_Model):
 
     steps: list[str] = Field(min_length=2)
     rule: Literal["max(a, k*sd)"]
-    a: Annotated[float, Field(ge=0)]
-    k: Annotated[float, Field(ge=0)]
+    a: Annotated[float, Field(ge=0, allow_inf_nan=False)]
+    k: Annotated[float, Field(ge=0, allow_inf_nan=False)]
 
     @field_validator("steps")
     @classmethod
@@ -328,12 +331,17 @@ class Expect(_Model):
     """
 
     metric: str
-    value: float | None = None
+    value: Annotated[float, Field(allow_inf_nan=False)] | None = None
     from_step: FromStep | None = None
-    tolerance: Annotated[float, Field(ge=0)] | None = None
+    tolerance: Annotated[float, Field(ge=0, allow_inf_nan=False)] | None = None
     tolerance_from: ToleranceFrom | None = None
     unit: Literal["fraction", "pp"] | None = None
     kind: Literal["abs", "exact", "none"]
+
+    @field_validator("value", "tolerance")
+    @classmethod
+    def _no_negative_zero(cls, value: float | None) -> float | None:
+        return 0.0 if value == 0 else value
 
     @model_validator(mode="after")
     def _shape(self) -> "Expect":
@@ -366,39 +374,49 @@ class MetricsSchema(_Model):
     """What a step's ``metrics.json`` may hold, within the fixed vocabulary of `metrics`.
 
     ``headline`` names the headline metrics the adapter emits (each must appear, and each must belong
-    to ``kind``); ``headline_labels`` the labels that tell apart several entries of one name (e.g.
-    systems); ``counts`` the named counts (each must appear); ``per_class`` the class labels.
+    to ``kind``); ``secondary`` the secondary metrics (each must appear; classification only);
+    ``headline_labels`` the labels that tell apart several headline or secondary entries of one name
+    (e.g. systems); ``counts`` the named counts (each must appear); ``per_class`` the class labels.
     ``positive`` names the positive class of a binary classification step, which fixes the PR-AUC and
     F1 floors. ``split`` opts a classification or detection step out of the split report. Only
     classification and detection steps take ``per_class`` and ``positive``.
 
-    A classification step declares at least two classes and a balanced-accuracy or macro-recall
-    headline; a detection step declares at least one class.
+    A classification step declares at least two classes and exactly ``["balanced_accuracy"]`` as its
+    headline (``E_SPEC_HEADLINE_NOT_BA`` otherwise); accuracy, top-1, macro F1, AUROC, PR-AUC, MCC and
+    F1 are ``secondary`` (``E_SPEC_SECONDARY_NOT_ALLOWED`` for anything else, and for any secondary
+    metric on another kind). A detection step declares at least one class.
     """
 
     kind: MetricsKind
-    headline: list[HeadlineName] = Field(min_length=1)
+    headline: list[MetricName] = Field(min_length=1)
+    secondary: list[MetricName] = []
     headline_labels: list[Label] = []
     counts: list[CountName] = []
     per_class: list[Label] = []
     positive: Label | None = None
     split: SplitOptOut | None = None
 
-    _unique = field_validator("headline", "headline_labels", "counts", "per_class")(_no_duplicates)
+    _unique = field_validator("headline", "secondary", "headline_labels", "counts", "per_class")(_no_duplicates)
 
     @model_validator(mode="after")
     def _kind(self) -> "MetricsSchema":
         names: set[str] = set(self.headline)
-        foreign = sorted(names - KIND_HEADLINES[self.kind])
+        if self.kind == "classification" and self.headline != [CLASSIFICATION_HEADLINE]:
+            raise ValueError(
+                f"E_SPEC_HEADLINE_NOT_BA: a classification headline is exactly [{CLASSIFICATION_HEADLINE}]"
+            )
+        foreign = sorted(names - HEADLINES_BY_KIND[self.kind])
         if foreign:
             raise ValueError(f"headline names {foreign} do not belong to kind {self.kind}")
+        secondary: set[str] = set(self.secondary)
+        not_allowed = sorted(secondary - SECONDARY_BY_KIND[self.kind])
+        if not_allowed:
+            raise ValueError(f"E_SPEC_SECONDARY_NOT_ALLOWED: secondary {not_allowed} not allowed for kind {self.kind}")
         if self.kind in CLASSIFICATION_KINDS and not self.per_class:
             raise ValueError(f"kind {self.kind} needs per_class labels")
         if self.kind == "classification":
             if len(self.per_class) < 2:
                 raise ValueError("kind classification needs at least two per_class labels")
-            if not CHANCE_HEADLINES & names:
-                raise ValueError("kind classification needs a balanced_accuracy or macro_recall headline")
         if self.kind not in CLASSIFICATION_KINDS and (self.per_class or self.positive is not None):
             raise ValueError(f"kind {self.kind} takes no per_class labels or positive class")
         if self.positive is not None and (
@@ -408,8 +426,45 @@ class MetricsSchema(_Model):
         return self
 
 
+HFRepo = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*$")]
+
+
+class HFFile(_Model):
+    """One file of a Hugging Face snapshot: its path inside the repository and its content sha256."""
+
+    path: RelPath
+    sha256: Sha256
+
+
+class HFWeights(_Model):
+    """Hugging Face weights a step loads: a repository at a 40-hex commit, and every file it reads, hashed.
+
+    ``revision`` is a commit, never a branch or tag, so the snapshot cannot move under the step.
+    """
+
+    repo: HFRepo
+    repo_type: Literal["model", "dataset"] = "model"
+    revision: Commit
+    files: list[HFFile] = Field(min_length=1)
+
+    @field_validator("files")
+    @classmethod
+    def _unique_paths(cls, value: list[HFFile]) -> list[HFFile]:
+        if len({f.path for f in value}) != len(value):
+            raise ValueError("files has duplicate paths")
+        return value
+
+
 class StepSpec(_Model):
-    """One step: a repository commit, an env, an argv template, its inputs, outputs and expectations."""
+    """One step: a repository commit, an env, an argv template, its inputs, outputs and expectations.
+
+    ``hf_weights`` has no default: a manifest states ``[]`` for a step that loads no Hugging Face weights.
+    Stage covered by inputs: every pattern of a ``stage`` entry drawn from a data root must equal a
+    pattern of some ``inputs`` entry with the same root (``E_SPEC_STAGE_UNDIGESTED``), so its content is
+    digested and keyed; ``checkout`` and ``up:`` stages are
+    keyed by the commit, patches and upstream keys. An expectation ``unit`` is allowed only on a rate
+    or ``mcc`` metric (`metrics.metric_quantity`).
+    """
 
     name: Name
     repo: str
@@ -428,6 +483,7 @@ class StepSpec(_Model):
     resources: Resources
     patches: list[FileRef] = []
     adapter: str
+    hf_weights: list[HFWeights]
     metrics_schema: MetricsSchema
     expect: list[Expect] = []
 
@@ -438,6 +494,9 @@ class StepSpec(_Model):
             raise ValueError(f"step {self.name!r} has duplicate needs")
         if self.name in needs:
             raise ValueError(f"step {self.name!r} needs itself")
+        weights = [(w.repo_type, w.repo) for w in self.hf_weights]
+        if len(set(weights)) != len(weights):
+            raise ValueError(f"step {self.name!r} has duplicate hf_weights repositories")
         templates = [*self.argv, self.cwd, *self.pythonpath, *(s.dest for s in self.stage)]
         if self.env.r_lib is not None:
             templates.append(self.env.r_lib)
@@ -453,6 +512,18 @@ class StepSpec(_Model):
             code = metric_address_error(expect.metric, self.metrics_schema)
             if code is not None:
                 raise ValueError(f"step {self.name!r} expect metric {expect.metric!r} is not in metrics_schema: {code}")
+            if expect.unit is not None and metric_quantity(expect.metric) not in SCALED_QUANTITIES:
+                raise ValueError(
+                    f"E_SPEC_EXPECT_UNIT: step {self.name!r} expect metric {expect.metric!r} takes no unit"
+                )
+        digested = {(i.root, p) for i in self.inputs for p in i.patterns}
+        for index, stage in enumerate(self.stage):
+            data_root = stage.root not in RESERVED_ROOT_NAMES and not stage.root.startswith("up:")
+            if data_root and any((stage.root, p) not in digested for p in stage.patterns):
+                raise ValueError(
+                    f"E_SPEC_STAGE_UNDIGESTED: step {self.name!r} stage[{index}] has a pattern that no inputs "
+                    "entry of the same root lists"
+                )
         if self.kind in ("notebook", "ir_notebook") and self.env.notebook_tools is None:
             raise ValueError(f"kind {self.kind} needs env.notebook_tools")
         if self.kind in ("r", "ir_notebook") and (
@@ -499,10 +570,18 @@ class PartitionSpec(_Model):
 
 
 class NativeSpec(_Model):
-    """A native tool the profile offers: the dirs a step that selects it gets on ``PATH`` and ``LD_LIBRARY_PATH``."""
+    """A native tool the profile offers: the dirs a step that selects it gets on ``PATH`` and ``LD_LIBRARY_PATH``.
+
+    ``bin_patterns`` and ``lib_patterns`` select the files whose content is digested into the step key
+    (`cache.native_digests`), relative to each bin and lib dir: by default every top-level entry of a
+    bin dir (what ``PATH`` lookup can reach) and every shared object, versioned or not, at any depth of
+    a lib dir.
+    """
 
     bin_dirs: list[Path] = []
     lib_dirs: list[Path] = []
+    bin_patterns: list[str] = Field(default=["*"], min_length=1)
+    lib_patterns: list[str] = Field(default=["**/*.so", "**/*.so.*"], min_length=1)
 
 
 class RModule(_Model):

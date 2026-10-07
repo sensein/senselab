@@ -129,6 +129,7 @@ def input_set_digest(
     patterns: Iterable[str],
     *,
     exclude: Iterable[str] = (),
+    exclude_patterns: Iterable[str] = (),
     require_nonempty: bool = False,
 ) -> tuple[str, int]:
     """Digest the files under a root that match any pattern.
@@ -138,6 +139,8 @@ def input_set_digest(
         patterns: Relative globs; a file matching several is counted once.
         exclude: Relative subpaths whose files are left out (e.g. ``cuda-cache`` under ``{out}``),
             matched by whole path components.
+        exclude_patterns: Relative globs, in the pattern grammar, whose matching files are left out (e.g.
+            ``**/__pycache__/**``, ``**/*.pyc``).
         require_nonempty: Raise ``E_DIGEST_EMPTY`` when no file matches.
 
     Returns:
@@ -152,7 +155,8 @@ def input_set_digest(
     """
     patterns = list(patterns)
     skip = tuple(e.strip("/") for e in exclude)
-    for pattern in (*patterns, *skip):
+    skip_patterns = list(exclude_patterns)
+    for pattern in (*patterns, *skip, *skip_patterns):
         _check_pattern(pattern)
     top = os.fspath(root)
     if not os.path.isdir(top):
@@ -163,7 +167,11 @@ def input_set_digest(
 
     def visit(path: str) -> tuple[str, str, int] | None:
         rel = os.path.relpath(path, top).replace(os.sep, "/")
-        if _excluded(rel, skip) or not any(pattern_matches(rel, p) for p in patterns):
+        if (
+            _excluded(rel, skip)
+            or any(pattern_matches(rel, p) for p in skip_patterns)
+            or not any(pattern_matches(rel, p) for p in patterns)
+        ):
             return None
         content, size = _hash_file(path)
         return hashlib.sha256(rel.encode()).hexdigest(), content, size
