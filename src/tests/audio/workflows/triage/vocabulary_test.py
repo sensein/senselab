@@ -936,12 +936,13 @@ class TestTheReleaseAxisNamesWhichArtefactMayBeHandedOn:
     ``specs/20260924-which-artefact-is-releasable/design.md``.
     """
 
-    def test_the_axis_offers_exactly_the_four_answers(self) -> None:
-        """Total and exclusive: the original, only the redacted copy, neither, or unknown."""
+    def test_the_axis_offers_exactly_the_five_answers(self) -> None:
+        """Total and exclusive: the original, only the redacted copy, a policy hold, a discard, or unknown."""
         assert {member.value for member in Release} == {
             "release_without_redaction",
             "release_with_redaction",
             "withheld",
+            "discarded",
             "not_assessed",
         }
 
@@ -1079,7 +1080,7 @@ class TestTheReleaseAxisNamesWhichArtefactMayBeHandedOn:
             policy=FoldPolicy(llm_redaction_withholds=True),
         )
         assert folded.triage is Triage.DISCARD
-        assert folded.release is Release.WITHHELD
+        assert folded.release is Release.DISCARDED
 
     def test_the_reviewer_never_moves_an_unassessed_recording(self) -> None:
         """``not_assessed`` stays what it is: a gap is not a release for the reviewer to tighten."""

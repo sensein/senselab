@@ -286,7 +286,7 @@ class TestWhatIsMissing:
         store.entity(
             prov_type="verdict",
             extent=None,
-            attributes={"node": "VERDICT", "triage": "discard", "release": Release.WITHHELD.value},
+            attributes={"node": "VERDICT", "triage": "discard", "release": Release.DISCARDED.value},
         )
         outcome = cut_task_audio(store, config, run_dir=run_dir)
         assert outcome.extent is None and outcome.changed
