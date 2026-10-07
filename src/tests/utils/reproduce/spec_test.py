@@ -488,6 +488,38 @@ STEP_COUNTER_EXAMPLES: dict[str, tuple[dict[str, Any], str]] = {
     ),
     "metrics-schema-unknown-kind": ({"metrics_schema": _metrics_schema(kind="regression")}, "kind"),
     "metrics-schema-unknown-key": ({"metrics_schema": _metrics_schema(confusion=True)}, "Extra inputs"),
+    "metrics-schema-headline-of-other-kind": (
+        {"metrics_schema": _metrics_schema(headline=["macro_recall", "f_stat"])},
+        "do not belong to kind classification",
+    ),
+    "metrics-schema-detection-with-classification-name": (
+        {"metrics_schema": _metrics_schema(kind="detection", headline=["avg_map", "top1"]), "expect": []},
+        "do not belong to kind detection",
+    ),
+    "metrics-schema-one-class": (
+        {"metrics_schema": _metrics_schema(per_class=["walk"])},
+        "at least two per_class labels",
+    ),
+    "metrics-schema-no-chance-headline": (
+        {"metrics_schema": _metrics_schema(headline=["top1"])},
+        "balanced_accuracy or macro_recall",
+    ),
+    "metrics-schema-positive-not-declared": (
+        {"metrics_schema": _metrics_schema(per_class=["walk", "run"], positive="jump")},
+        "positive must be one of exactly two",
+    ),
+    "metrics-schema-positive-three-classes": (
+        {"metrics_schema": _metrics_schema(positive="walk")},
+        "positive must be one of exactly two",
+    ),
+    "metrics-schema-split-bad-reason": (
+        {"metrics_schema": _metrics_schema(split={"none": "too_small"})},
+        "whole_dataset",
+    ),
+    "expect-unit-unknown": (
+        {"expect": [{"metric": "top1", "value": 1.0, "tolerance": 0.1, "unit": "percent", "kind": "abs"}]},
+        "'fraction' or 'pp'",
+    ),
     "expect-metric-undeclared": (
         {"expect": [{"metric": "auroc", "value": 0.5, "tolerance": 0.1, "kind": "abs"}]},
         "E_METRICS_UNDECLARED_HEADLINE",
@@ -532,6 +564,14 @@ def test_expect_metric_addresses_resolve_against_the_schema(metric: str) -> None
     """Every addressable form of a declared metric validates as an ``expect`` metric."""
     step = StepSpec.model_validate(_step(expect=[{"metric": metric, "value": 1.0, "kind": "exact"}]))
     assert step.expect[0].metric == metric
+
+
+def test_binary_schema_with_positive_and_split_opt_out() -> None:
+    """A binary classification step may declare its positive class and opt out of the split report."""
+    schema = _metrics_schema(per_class=["pos", "neg"], positive="pos", split={"none": "whole_dataset"})
+    step = StepSpec.model_validate(_step(metrics_schema=schema))
+    assert step.metrics_schema.positive == "pos"
+    assert step.metrics_schema.split is not None and step.metrics_schema.split.none == "whole_dataset"
 
 
 def test_statistic_schema_needs_no_classes() -> None:
