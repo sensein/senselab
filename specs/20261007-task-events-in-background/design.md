@@ -636,6 +636,95 @@ the attributes the fold decides each task reading on (breath `decision`, cough `
 naming the field, never a pass. The re-fold dry run of 100 r17 stores passed six pre-unit-B breath
 readings, which had no `decision`, silently.
 
+## Unit C step 2: QUALITY's join and the one rule (built)
+
+Code: `quality_join.py`, `nodes/quality.py:measure_join`, parameters `data/quality_join.yaml`; VERDICT
+reads the stored `quality_join` measurement through `vocabulary._join_reasons` and
+`nothing_captured`.
+
+**What the join decides.** QUALITY reads BACKGROUND's findings against the task spans by time
+overlap. A finding is in the task where it overlaps a span or lies within `abut_s` (0.1 s) of one.
+- **Faults.** BACKGROUND's dead stretches are split by the plain stream's level in the 0.1 s
+  before each one: a cut where it stood `sounding_db` (10 dB) over the floor, otherwise a gate (the
+  recorder's noise gate, reported only). Shutoffs, dropouts and clips in the task review, each above
+  its fitted minimum; a shutoff reviews only for a held task (`event_kinds: [phonation]`). Every
+  other fault is the annotation `fault_outside_task:<kind>`. Discontinuities are reported only.
+- **Another voice.** Residual windows heard as speech and harmonic residual runs, outside the
+  task's own events and words (`background_speech_of`). In the task they review every family
+  (owner decision 6); elsewhere they are an annotation.
+- **Streams.** The raw stream's task events at ≥10 dB over the floor, re-read on the enhanced
+  stream. The share lost is reported; no kind decides.
+- **Capture.** `no_activity`: no activity on either stream. `quiet_vs_session`: the recording stands
+  ≥30 dB under its session's active level.
+
+**The rule.** One fold over the join: anything in the task reviews (`fault_in_task:<kind>`,
+`interference_in_task:<kind>`), anything outside annotates. A recording is empty, and discards as
+`no_task_captured`, where routing found it empty or the join found nothing captured, unless a
+branch heard a task event (a breath, a cough, phonation or a lexical word). Routing's emptiness now
+reads BACKGROUND's `active_s` (`emptiness.active_s_max: 0`) rather than YAMNet peaks, on the live
+and offline paths alike. A join that could not be read is `not_measured`. The old
+`background_speech_in_task` and `capture_cut_*` grounds are gone; the join replaces them.
+
+**Fitted bounds.** Fit split only. Each row re-folds the 167 labelled stores with one value
+changed (`evaluate.py` variants over the replayed join).
+
+| Bound | Value | On the labels |
+|---|---|---|
+| dropout `min_s` | 0.5 s | 0.1 s sends 3b06709b (a 0.42 s dropout at the start of a glide, heard present) to review; 0.02 s also bffe3a4f (cough, heard present). No label needs a dropout to decide. |
+| clip `min_s` | 20 ms | 5 ms sends fac74f45 (a 16 ms clip in its breathing, heard present) to review; 50 ms and off change nothing. |
+| shutoff `event_kinds` | phonation | Off, f47eeda7 (phonation cut at 13 s, owner present and flagged) passes. For cough the shutoffs in c60d8bb8 and bffe3a4f follow the coughs and both are heard present. |
+| streams `decides` | none | Breath costs 1–4 agreements, cough 2, phonation 4, all three 9–12. |
+| other voice | decides | Off: 6ca9935e (intercom in a cough task, owner present and flagged) passes and 1c139a67 passes correctly. That is net zero on the labels, so the owner's rule stands. |
+
+Values with no labelled effect, which stay UNFITTED:
+- `capture.level_rel_db_max` (−20 to −500 dB);
+- `abut_s` (0 or 0.25 s);
+- `shutoff.sounding_db` (5 or 15 dB, or off).
+
+`streams.lost_fraction` is moot while no kind decides.
+
+**Result on the owner labels.** Replayed from BACKGROUND at 4d896192 (ORCD `unitc2_20261007`,
+`rows_c3`, 966 targets, no errors), scored by `scripts/evaluate_task_events.py` (fit / held-out):
+
+| Group | r17 | unit B | unit C step 2 |
+|---|---|---|---|
+| breath | 42/47 / 18/19 | 41/47 / 17/19 | 41/47 / 17/19 |
+| contested and review sets | 11/15 / 6/8 | 13/15 / 5/8 | 12/15 / 5/8 |
+| cough | 18/18 / 7/7 | 18/18 / 7/7 | 18/18 / 7/7 |
+| other | 7/7 / 3/3 | 7/7 / 3/3 | 7/7 / 3/3 |
+| voice | 30/31 / 11/11 | 30/31 / 11/11 | 29/31 / 11/11 |
+| all | 108/118 / 45/48 | 109/118 / 43/48 | 107/118 / 43/48 |
+
+- Owner "absent" labels passed: 0. Owner "present" labels discarded: 0dc15213, as before.
+- Two labelled outcomes move from unit B:
+  - **1c139a67** (high-to-low glide, present): pass → review on `interference_in_task:other_voice`,
+    one 0.96 s window at 0.96–1.92 s. That is the steep fall of the glide, whose harmonics the
+    residual keeps.
+  - **efadb6b3** (breath, owner: "a lot of background noise", review acceptable): review → pass. The
+    breath reading is now present, with 12 standing events where unit B read one weak event. This
+    holds with the join switched off (`join_off`), so it comes from step 1's session floor, not from
+    this step.
+- 10 labelled discards now carry `acoustically_empty`, where r17 discarded them on other grounds.
+- `quiet_vs_session` holds on 1965766f (present, passes), because a breath was heard.
+
+**Outcome on the random r17-kept sample (reported, not a target).** 200 per group (199 voice). The
+moves against r17 (B) are in the table.
+
+| Group | review r17 | review C | moves r17 → C | of which this step |
+|---|---|---|---|---|
+| breath | 8 | 15 (+1 discard) | 11 pass→review, 4 review→pass, 1 pass→discard | 1 other voice |
+| cough | 7 | 9 | 2 pass→review | 1 other voice, 1 dropout |
+| voice | 4 | 11 | 7 pass→review | 6 other voice, 1 dropout |
+| speech | 12 | 18 | 10 pass→review, 4 review→pass | 10 other voice |
+
+- The breath moves other than ffb59262 are unit B's (`breath_review_low_confidence`) or step 1's.
+- Speech's review → pass are redaction holds, which now sit on the release axis (decision 10).
+- Another voice is most of what this step adds. Switching it off returns 23 of the 53 sample reviews
+  to pass. Five of the six voice cases are a single 0.96 s YAMNet window inside a glide or a
+  maximum-phonation hold, the same shape as 1c139a67.
+- Both dropouts are a dead stretch from 0 s that ends where the task span starts (31054d13 0–0.75 s,
+  d00fd6df 0–0.84 s). They are listening candidates for a leading-silence exemption.
+
 ## Unit C step 4: the review page (built)
 
 `scripts/triage_review_page.py` builds it in two phases: `extract` walks a run tree on the cluster and
