@@ -2,7 +2,7 @@
 
 Each format is a `read_*` / `write_*` pair. `FORMAT_FIELDS[fmt]` names the fields a format carries;
 those fields round-trip, and a reader takes the rest (schema id, source, confidence kind) as
-arguments.
+arguments. Files are read and written as UTF-8 whatever the locale.
 
 | Format | Functions | Carries |
 |---|---|---|
@@ -11,22 +11,36 @@ arguments.
 | RTTM | `read_rttm`, `write_rttm` | times, label, confidence; one track per recording id |
 | BIDS `events.tsv` | `read_bids_events`, `write_bids_events` | times, label, confidence |
 | ActivityNet / OpenTAD JSON | `read_activitynet_json`, `write_activitynet_json` | times, label, duration; per video |
-| Label Studio export | `read_label_studio`, `write_label_studio` | times, label, duration |
+| Label Studio export | `read_label_studio`, `write_label_studio` | times, label |
 
 **Per-frame label table.** A CSV with a `Frame` column (0-based frame numbers, one row per frame)
 and one column per category. Each cell holds that category's label at that frame, or a background
 token (default `N/A`). An event `[onset_s, offset_s)` covers frames `[onset_s * fps, offset_s * fps)`.
+It is lossless only up to `k / fps`: a time within `_FRAME_ALIGN_TOLERANCE` frames of frame `k` is
+written as frame `k` and reads back as exactly `k / fps`.
+
+**RTTM** has no record for an empty track, so a recording id whose track has no events is not
+written and does not come back.
+
+**BIDS `events.tsv`** stores a duration per row; a zero duration (an impulse event) is refused on
+read, because a `BehaviorEvent` needs `offset_s > onset_s`.
+
+**Label Studio.** Only ``labels`` results with `start`/`end` in seconds (audio-style regions) are
+covered; video ``timelinelabels`` results with frame ranges are not. The clip duration is written
+as each result's ``original_length``, so an empty track cannot carry it; `duration_s` is therefore
+not in this format's `FORMAT_FIELDS`, although the reader restores it whenever a result holds it.
 
 **Float exactness.** RTTM and BIDS store a duration, so the reader rebuilds the offset as
-`onset + duration`. Times written by these functions are exact decimal representations of the
-floats, so for times that are multiples of a power of two (such as 1/64 s) the offset is restored
-exactly; for other times it is restored within one unit in the last place.
+`onset + duration`. Times are written as the shortest decimal that round-trips to the same float,
+so for times that are multiples of a power of two (such as 1/64 s) the offset is restored exactly;
+for other times it is restored within one unit in the last place of the offset.
 """
 
 from __future__ import annotations
 
 import csv
 import json
+import math
 from pathlib import Path
 from typing import Any, Dict, FrozenSet, Iterable, List, Mapping, Optional, Union
 
@@ -42,14 +56,16 @@ FORMAT_FIELDS: Dict[str, FrozenSet[str]] = {
     "rttm": _TIMES_AND_LABEL | {"confidence"},
     "bids_events": _TIMES_AND_LABEL | {"confidence"},
     "activitynet_json": _TIMES_AND_LABEL | {"duration_s"},
-    "label_studio": _TIMES_AND_LABEL | {"duration_s"},
+    "label_studio": _TIMES_AND_LABEL,
 }
 
 SEGMENT_COLUMNS = ("onset_s", "offset_s", "label", "confidence", "confidence_kind", "source", "subject_ref", "track_id")
 FRAME_COLUMN = "Frame"
 RTTM_NA = "<NA>"
 BIDS_NA = "n/a"
+BIDS_REQUIRED = ("onset", "duration", "trial_type")
 _FRAME_ALIGN_TOLERANCE = 1e-6
+_ENCODING = "utf-8"
 
 
 def _num(value: float) -> str:
@@ -79,9 +95,20 @@ def _event(
     )
 
 
-def _no_whitespace(labels: Iterable[str], fmt: str) -> None:
-    if any(not label or any(c.isspace() for c in label) for label in labels):
-        raise ValueError(f"{fmt} must be non-empty and contain no whitespace")
+def _refuse_chars(values: Iterable[str], what: str, forbidden: Optional[str]) -> None:
+    """Refuse empty values, and values holding any of `forbidden` (any whitespace when `None`)."""
+    for value in values:
+        if not value:
+            raise ValueError(f"{what} must be non-empty")
+        bad = any(c.isspace() for c in value) if forbidden is None else any(c in forbidden for c in value)
+        if bad:
+            kind = "whitespace" if forbidden is None else "tabs or line breaks"
+            raise ValueError(f"{what} must not contain {kind}")
+
+
+def _check_fps(fps: float) -> None:
+    if not (math.isfinite(fps) and fps > 0):
+        raise ValueError("fps must be finite and > 0")
 
 
 # ── per-frame label table ────────────────────────────────────────────────
@@ -103,26 +130,37 @@ def write_frame_table(
     Args:
         tracks: Category column name to that category's track.
         path: The CSV file to write.
-        fps: Frames per second.
-        n_frames: Number of frames (rows).
+        fps: Frames per second; finite and > 0.
+        n_frames: Number of frames (rows); at least 1, since a table with no rows has no duration.
         background: The token written where a category has no event.
 
     Raises:
-        ValueError: If an onset or offset is not frame-aligned, an event runs past `n_frames`, two
-            events of one category overlap, two adjacent events of one category share a label (they
-            would read back as one), or an event's label is the background token.
+        ValueError: If `fps` or `n_frames` is out of range; a track's `duration_s` is set and differs
+            from `n_frames / fps`; an onset or offset is not frame-aligned; an event covers no frame
+            or runs past `n_frames`; two events of one category overlap; two adjacent events of one
+            category share a label (they would read back as one); or a label is the background token.
     """
+    _check_fps(fps)
+    if n_frames < 1:
+        raise ValueError("n_frames must be >= 1")
     columns = list(tracks)
     if FRAME_COLUMN in columns:
         raise ValueError(f"{FRAME_COLUMN!r} is reserved for the frame number column")
+    table_duration = n_frames / fps
     cells = {column: [background] * n_frames for column in columns}
     for column, track in tracks.items():
+        if track.duration_s is not None and not math.isclose(track.duration_s, table_duration, rel_tol=1e-12):
+            raise ValueError(
+                f"column {column!r}: duration_s {track.duration_s!r} != n_frames / fps = {table_duration!r}"
+            )
         previous: Optional[tuple[int, str]] = None
         for event in track.events:
             if event.label == background:
                 raise ValueError(f"column {column!r}: a label equals the background token {background!r}")
             start = _frame_index(event.onset_s, fps, "onset")
             end = _frame_index(event.offset_s, fps, "offset")
+            if end <= start:
+                raise ValueError(f"column {column!r}: an event covers no frame at {fps!r} fps")
             if end > n_frames:
                 raise ValueError(f"column {column!r}: an event ends after frame {n_frames}")
             if previous is not None:
@@ -132,7 +170,7 @@ def write_frame_table(
                     raise ValueError(f"column {column!r}: adjacent events share a label and would merge")
             cells[column][start:end] = [event.label] * (end - start)
             previous = (end, event.label)
-    with Path(path).open("w", newline="") as handle:
+    with Path(path).open("w", encoding=_ENCODING, newline="") as handle:
         writer = csv.writer(handle, lineterminator="\n")
         writer.writerow([FRAME_COLUMN, *columns])
         for frame in range(n_frames):
@@ -153,7 +191,7 @@ def read_frame_table(
 
     Args:
         path: The CSV file.
-        fps: Frames per second.
+        fps: Frames per second; finite and > 0.
         schemas: Category column name to the schema its labels come from; only these columns are read.
         source: The source recorded on every event.
         background: The token that means "no event".
@@ -162,16 +200,22 @@ def read_frame_table(
         Category column name to its track, with `duration_s` = frames / fps.
 
     Raises:
-        ValueError: If the frame numbers are not 0, 1, 2, ..., a schema's column is missing, or a
-            label is not in its schema.
+        ValueError: If `fps` is out of range, the table has no `Frame` column or no rows, the frame
+            numbers are not 0, 1, 2, ..., a schema's column is missing, or a label is not in its schema.
     """
-    with Path(path).open(newline="") as handle:
-        rows = list(csv.DictReader(handle))
-    header = set(rows[0]) if rows else set()
+    _check_fps(fps)
+    with Path(path).open(encoding=_ENCODING, newline="") as handle:
+        reader = csv.DictReader(handle)
+        rows = list(reader)
+        header = set(reader.fieldnames or [])
+    if FRAME_COLUMN not in header:
+        raise ValueError(f"the frame table has no {FRAME_COLUMN!r} column")
+    if not rows:
+        raise ValueError("the frame table has no rows")
     missing = sorted(set(schemas) - header)
     if missing:
         raise ValueError(f"columns missing from the frame table: {missing}")
-    if [int(row[FRAME_COLUMN]) for row in rows] != list(range(len(rows))):
+    if [row[FRAME_COLUMN] for row in rows] != [str(i) for i in range(len(rows))]:
         raise ValueError(f"{FRAME_COLUMN} must count 0, 1, 2, ... with one row per frame")
     duration = len(rows) / fps
     tracks: Dict[str, EventTrack] = {}
@@ -196,11 +240,14 @@ def read_frame_table(
 def write_segments_csv(track: EventTrack, path: PathLike) -> None:
     """Write a track as a segment CSV with every event field; a missing value is an empty cell.
 
+    Empty strings cannot occur in the optional fields (`BehaviorEvent` refuses them), so an empty
+    cell always means `None`.
+
     Args:
         track: The track.
         path: The CSV file to write.
     """
-    with Path(path).open("w", newline="") as handle:
+    with Path(path).open("w", encoding=_ENCODING, newline="") as handle:
         writer = csv.writer(handle, lineterminator="\n")
         writer.writerow(SEGMENT_COLUMNS)
         for e in track.events:
@@ -230,7 +277,7 @@ def read_segments_csv(path: PathLike, *, schema_id: str, duration_s: Optional[fl
     Returns:
         The track.
     """
-    with Path(path).open(newline="") as handle:
+    with Path(path).open(encoding=_ENCODING, newline="") as handle:
         rows = list(csv.DictReader(handle))
     events = [
         BehaviorEvent(
@@ -254,6 +301,8 @@ def read_segments_csv(path: PathLike, *, schema_id: str, duration_s: Optional[fl
 def write_rttm(tracks: Mapping[str, EventTrack], path: PathLike) -> None:
     """Write tracks as RTTM ``SPEAKER`` lines, with the label in the speaker-name field.
 
+    A track with no events writes nothing, so its recording id does not come back on read.
+
     Args:
         tracks: Recording id (the RTTM file id) to its track.
         path: The RTTM file to write.
@@ -261,22 +310,22 @@ def write_rttm(tracks: Mapping[str, EventTrack], path: PathLike) -> None:
     Raises:
         ValueError: If a recording id or label is empty or contains whitespace.
     """
-    _no_whitespace(tracks, "RTTM recording ids")
+    _refuse_chars(tracks, "RTTM recording ids", None)
     lines = []
     for uri, track in tracks.items():
-        _no_whitespace((e.label for e in track.events), "RTTM labels")
+        _refuse_chars((e.label for e in track.events), "RTTM labels", None)
         for e in track.events:
             confidence = RTTM_NA if e.confidence is None else _num(e.confidence)
             duration = _num(e.offset_s - e.onset_s)
             fields = ["SPEAKER", uri, "1", _num(e.onset_s), duration, RTTM_NA, RTTM_NA, e.label, confidence, RTTM_NA]
             lines.append(" ".join(fields))
-    Path(path).write_text("".join(line + "\n" for line in lines))
+    Path(path).write_text("".join(line + "\n" for line in lines), encoding=_ENCODING)
 
 
 def read_rttm(
     path: PathLike, *, schema_id: str, source: str, confidence_kind: Optional[ConfidenceKind] = None
 ) -> Dict[str, EventTrack]:
-    """Read the ``SPEAKER`` lines of an RTTM file; other record types are skipped.
+    """Read the ``SPEAKER`` lines of an RTTM file; other record types and blank lines are skipped.
 
     Args:
         path: The RTTM file.
@@ -286,12 +335,17 @@ def read_rttm(
 
     Returns:
         Recording id to its track.
+
+    Raises:
+        ValueError: If a ``SPEAKER`` line has fewer than 9 fields (the line number is given).
     """
     by_uri: Dict[str, List[BehaviorEvent]] = {}
-    for line in Path(path).read_text().splitlines():
+    for number, line in enumerate(Path(path).read_text(encoding=_ENCODING).splitlines(), start=1):
         fields = line.split()
-        if len(fields) < 9 or fields[0] != "SPEAKER":
+        if not fields or fields[0] != "SPEAKER":
             continue
+        if len(fields) < 9:
+            raise ValueError(f"line {number}: a SPEAKER line needs at least 9 fields, found {len(fields)}")
         onset, duration = float(fields[3]), float(fields[4])
         confidence = None if fields[8] == RTTM_NA else float(fields[8])
         event = _event(onset, onset + duration, fields[7], source, confidence, confidence_kind)
@@ -310,9 +364,9 @@ def write_bids_events(track: EventTrack, path: PathLike) -> None:
         path: The TSV file to write.
 
     Raises:
-        ValueError: If a label is empty or contains whitespace.
+        ValueError: If a label is empty or contains a tab or a line break (spaces are allowed).
     """
-    _no_whitespace((e.label for e in track.events), "BIDS labels")
+    _refuse_chars((e.label for e in track.events), "BIDS trial_type labels", "\t\r\n")
     with_confidence = any(e.confidence is not None for e in track.events)
     header = ["onset", "duration", "trial_type"] + (["confidence"] if with_confidence else [])
     lines = ["\t".join(header)]
@@ -321,7 +375,15 @@ def write_bids_events(track: EventTrack, path: PathLike) -> None:
         if with_confidence:
             row.append(BIDS_NA if e.confidence is None else _num(e.confidence))
         lines.append("\t".join(row))
-    Path(path).write_text("".join(line + "\n" for line in lines))
+    with Path(path).open("w", encoding=_ENCODING, newline="") as handle:
+        handle.write("".join(line + "\n" for line in lines))
+
+
+def _bids_number(row: Dict[str, str], column: str, line: int) -> float:
+    raw = row[column]
+    if raw in (BIDS_NA, ""):
+        raise ValueError(f"line {line}: {column} is {raw or 'empty'!r}; an event needs a number here")
+    return float(raw)
 
 
 def read_bids_events(
@@ -332,7 +394,9 @@ def read_bids_events(
     confidence_kind: Optional[ConfidenceKind] = None,
     duration_s: Optional[float] = None,
 ) -> EventTrack:
-    """Read a BIDS ``events.tsv``; ``n/a`` reads as a missing value.
+    """Read a BIDS ``events.tsv``; ``n/a`` in ``confidence`` reads as no confidence.
+
+    Fields are split on tabs only, with no quote handling, so a label may start with a quote character.
 
     Args:
         path: The TSV file.
@@ -343,17 +407,30 @@ def read_bids_events(
 
     Returns:
         The track.
+
+    Raises:
+        ValueError: If ``onset``, ``duration`` or ``trial_type`` is not a column; or a row's onset or
+            duration is ``n/a`` or its duration is 0 (an impulse event: `BehaviorEvent` needs
+            `offset_s > onset_s`). Row errors give the file's line number.
     """
-    with Path(path).open(newline="") as handle:
-        rows = list(csv.DictReader(handle, delimiter="\t"))
+    with Path(path).open(encoding=_ENCODING, newline="") as handle:
+        reader = csv.DictReader(handle, delimiter="\t", quoting=csv.QUOTE_NONE)
+        rows = list(reader)
+        header = reader.fieldnames or []
+    missing = [column for column in BIDS_REQUIRED if column not in header]
+    if missing:
+        raise ValueError(f"events.tsv lacks the columns {missing}")
     events = []
-    for row in rows:
-        onset = float(row["onset"])
+    for line, row in enumerate(rows, start=2):
+        onset = _bids_number(row, "onset", line)
+        duration = _bids_number(row, "duration", line)
+        if duration == 0:
+            raise ValueError(
+                f"line {line}: duration is 0; an event needs offset > onset, so impulse events are refused"
+            )
         raw = row.get("confidence", BIDS_NA)
         confidence = None if raw in (BIDS_NA, "", None) else float(raw)
-        events.append(
-            _event(onset, onset + float(row["duration"]), row["trial_type"], source, confidence, confidence_kind)
-        )
+        events.append(_event(onset, onset + duration, row["trial_type"], source, confidence, confidence_kind))
     return EventTrack(schema_id=schema_id, events=events, duration_s=duration_s)
 
 
@@ -374,7 +451,8 @@ def write_activitynet_json(tracks: Mapping[str, EventTrack], path: PathLike) -> 
         }
         for video, track in tracks.items()
     }
-    Path(path).write_text(json.dumps({"database": database}, indent=2) + "\n")
+    text = json.dumps({"database": database}, indent=2, ensure_ascii=False) + "\n"
+    Path(path).write_text(text, encoding=_ENCODING)
 
 
 def read_activitynet_json(path: PathLike, *, schema_id: str, source: str) -> Dict[str, EventTrack]:
@@ -388,7 +466,7 @@ def read_activitynet_json(path: PathLike, *, schema_id: str, source: str) -> Dic
     Returns:
         Video id to its track.
     """
-    database: Dict[str, Any] = json.loads(Path(path).read_text())["database"]
+    database: Dict[str, Any] = json.loads(Path(path).read_text(encoding=_ENCODING))["database"]
     tracks = {}
     for video, entry in database.items():
         events = [
@@ -425,7 +503,8 @@ def write_label_studio(track: EventTrack, path: PathLike, *, from_name: str, to_
         if track.duration_s is not None:
             result["original_length"] = track.duration_s
         results.append(result)
-    Path(path).write_text(json.dumps([{"annotations": [{"result": results}]}], indent=2) + "\n")
+    text = json.dumps([{"annotations": [{"result": results}]}], indent=2, ensure_ascii=False) + "\n"
+    Path(path).write_text(text, encoding=_ENCODING)
 
 
 def read_label_studio(path: PathLike, *, schema_id: str, source: str) -> EventTrack:
@@ -437,12 +516,12 @@ def read_label_studio(path: PathLike, *, schema_id: str, source: str) -> EventTr
         source: The source recorded on every event.
 
     Returns:
-        The track; `duration_s` comes from ``original_length`` when present.
+        The track; `duration_s` comes from ``original_length`` when any result holds it.
 
     Raises:
         ValueError: If the file is not a non-empty list of tasks.
     """
-    tasks = json.loads(Path(path).read_text())
+    tasks = json.loads(Path(path).read_text(encoding=_ENCODING))
     if not isinstance(tasks, list) or not tasks:
         raise ValueError("a Label Studio export must be a non-empty list of tasks")
     annotation = (tasks[0].get("annotations") or [{}])[0]

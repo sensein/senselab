@@ -153,3 +153,56 @@ def test_whole_clip_event_spans_clip() -> None:
     event = whole_clip_event("wave", 12.5, "model_x")
     assert (event.onset_s, event.offset_s, event.label, event.source) == (0.0, 12.5, "wave", "model_x")
     assert (event.confidence, event.confidence_kind) == (None, "none")
+
+
+@pytest.mark.parametrize("field", ["onset_s", "offset_s", "confidence"])
+@pytest.mark.parametrize("bad", [True, "1.0", float("nan"), float("inf")])
+def test_numbers_are_strict_and_finite(field: str, bad: object) -> None:
+    """Times and confidences refuse bools, strings, NaN and infinities."""
+    fields: dict = {"onset_s": 0.0, "offset_s": 2.0, "label": "reach", "source": "annotator_a"}
+    fields.update({"confidence": 0.5, "confidence_kind": "prob", field: bad})
+    with pytest.raises(ValueError):
+        BehaviorEvent(**fields)
+
+
+def test_integer_times_are_accepted_as_floats() -> None:
+    """An int is a valid time and is stored as a float."""
+    event = _event(0, 2)
+    assert (event.onset_s, event.offset_s) == (0.0, 2.0) and isinstance(event.onset_s, float)
+
+
+@pytest.mark.parametrize("field", ["subject_ref", "track_id"])
+def test_empty_optional_strings_raise(field: str) -> None:
+    """An optional key is absent (`None`) or non-empty, never the empty string."""
+    with pytest.raises(ValueError):
+        _event(0.0, 1.0, **{field: ""})
+
+
+def test_track_events_are_an_immutable_tuple() -> None:
+    """The stored events cannot be appended to behind the sort."""
+    track = EventTrack(schema_id="motion", events=[_event(1.0, 2.0), _event(0.0, 1.0)])
+    assert isinstance(track.events, tuple)
+    assert not hasattr(track.events, "append")
+
+
+def test_schema_refuses_unknown_keys() -> None:
+    """A schema with an unknown key is refused; callers map their metadata first."""
+    with pytest.raises(ValueError):
+        _schema(owner="someone")
+
+
+def test_yaml_boolean_background_label_raises(tmp_path: Path) -> None:
+    """An unquoted ``no`` as the background label gets the same hint as a label."""
+    text = "schema_id: answer\ntask_type: classification\nlabels: ['a', 'b']\nbackground_label: no\n"
+    with pytest.raises(ValueError, match="background_label loaded as a YAML boolean; quote it"):
+        AnnotationSchema.from_yaml(_write(tmp_path, text))
+
+
+def test_yaml_boolean_prevalence_key_raises(tmp_path: Path) -> None:
+    """An unquoted ``yes`` as a reference-prevalence key gets the same hint."""
+    text = (
+        "schema_id: answer\ntask_type: classification\nlabels: ['yes', 'no']\n"
+        "reference_prevalence: {yes: 0.5, 'no': 0.5}\n"
+    )
+    with pytest.raises(ValueError, match="reference_prevalence key True loaded as a YAML boolean; quote it"):
+        AnnotationSchema.from_yaml(_write(tmp_path, text))

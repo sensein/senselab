@@ -189,17 +189,37 @@ lab implementation was read.
 declares which event fields each format carries. "Lossless" means every carried field
 round-trips; a reader takes the fields its format lacks (schema id, source, confidence kind) as
 arguments. A reader of a format that holds confidences but not their kind raises unless the caller
-names the kind, so a vote fraction is never relabelled as a probability.
+names the kind, so a vote fraction is never relabelled as a probability. Files are UTF-8 whatever
+the locale.
 
 **Per-frame label table.** A generic wide format: a `Frame` column of 0-based frame numbers and
 one column per category, each cell holding that category's label or a background token (`N/A` by
 default). An event `[onset, offset)` covers frames `[onset·fps, offset·fps)`. The writer refuses
-what the table cannot hold without loss: times that are not frame-aligned, overlapping events in
-one category, and adjacent events with the same label, which would read back as one.
+what the table cannot hold without loss: times that are not frame-aligned, an event that covers no
+frame, overlapping events in one category, adjacent events with the same label (which would read
+back as one), and a track duration other than `n_frames / fps`. It is lossless up to `k / fps`: a
+time within the alignment tolerance of frame `k` reads back as exactly `k / fps`.
 
-**Float exactness.** RTTM and BIDS store durations, so the offset is rebuilt as
-`onset + duration`. Times are written as the shortest decimal that reads back as the same float.
-For times that are multiples of a power of two (the test fixtures use multiples of 1/64 s) the
-rebuilt offset is exact. Otherwise it is within one unit in the last place: one subtraction and
-one addition, each correctly rounded. Over 200,000 random millisecond-resolution pairs, 1.6 % were
-off by one ulp and none by more. The tests assert this bound on pairs known to be inexact.
+**Format limits.**
+- RTTM has no record for an empty track, so an empty track's recording id does not come back.
+- BIDS stores a duration per row. A zero duration (an impulse event) is refused on read, because
+  a `BehaviorEvent` needs `offset > onset`. Spaces are legal in `trial_type`; tabs and line breaks
+  are refused on write.
+- Label Studio: only `labels` results with start and end in seconds are covered; video
+  `timelinelabels` results with frame ranges are not. The duration travels as each result's
+  `original_length`, so an empty track cannot carry it, and `duration_s` is not declared for this
+  format.
+
+**Float exactness.** RTTM and BIDS store durations, so the offset is rebuilt as `onset + duration`.
+Times are written as the shortest decimal that round-trips to the same float, so the reader gets
+`d = fl(b − a)` exactly back, for onset `a` and offset `b` with `0 ≤ a < b`. Then:
+
+- `d = (b − a)(1 + δ₁)` with `|δ₁| ≤ u = 2⁻⁵³`, so `a + d = b + (b − a)δ₁` and
+  `|a + d − b| ≤ u(b − a) ≤ u·b`.
+- For `b` in `[2^e, 2^(e+1))`, `ulp(b) = 2^(e−52)`, so `u·b < ulp(b)`: `a + d` lies within one ulp
+  of `b`, and rounding it to the nearest float gives `|fl(a + d) − b| ≤ ulp(b)`.
+- When `a ≥ b/2`, `b − a` is exact (Sterbenz), so the offset comes back exactly. Times that are
+  multiples of a power of two (the fixtures use multiples of 1/64 s) also come back exactly.
+
+The test checks the bound on pairs known to be inexact and on a power-of-two offset, where the
+float spacing below `b` is half the spacing above it.

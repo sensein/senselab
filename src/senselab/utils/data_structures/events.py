@@ -16,15 +16,20 @@ from __future__ import annotations
 
 import math
 from pathlib import Path
-from typing import Dict, List, Literal, Optional, Union
+from typing import Annotated, Dict, List, Literal, Optional, Tuple, Union
 
 import yaml
-from pydantic import BaseModel, ConfigDict, StrictStr, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictStr, StringConstraints, field_validator, model_validator
 
 ConfidenceKind = Literal["vote", "prob", "logit", "none"]
 TaskType = Literal["classification", "counting", "description", "segmentation"]
 
 PREVALENCE_TOLERANCE = 1e-9
+
+# A finite number: ints are accepted and stored as floats; bools, strings, NaN and infinities are refused.
+FiniteFloat = Annotated[float, Field(strict=True, allow_inf_nan=False)]
+# A string that is either absent (`None`) or non-empty, so "" and `None` cannot both mean "missing".
+NonEmptyStr = Annotated[str, StringConstraints(strict=True, min_length=1)]
 
 
 class BehaviorEvent(BaseModel):
@@ -38,25 +43,25 @@ class BehaviorEvent(BaseModel):
         confidence_kind: What `confidence` is: a vote fraction, a probability or a logit; `none` exactly
             when `confidence` is `None`.
         source: The producing model's agent id, or an annotator's role label (never a person's name).
-        subject_ref: Optional opaque subject key; never a path.
-        track_id: Optional id of the tracked individual within the clip.
+        subject_ref: Optional opaque subject key, non-empty when given; never a path.
+        track_id: Optional id of the tracked individual within the clip, non-empty when given.
+
+    Times and the confidence are finite numbers; an int is accepted, a bool or a string is not.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    onset_s: float
-    offset_s: float
+    onset_s: FiniteFloat
+    offset_s: FiniteFloat
     label: StrictStr
-    confidence: Optional[float] = None
+    confidence: Optional[FiniteFloat] = None
     confidence_kind: ConfidenceKind = "none"
     source: StrictStr
-    subject_ref: Optional[StrictStr] = None
-    track_id: Optional[StrictStr] = None
+    subject_ref: Optional[NonEmptyStr] = None
+    track_id: Optional[NonEmptyStr] = None
 
     @model_validator(mode="after")
     def _check_interval_and_confidence(self) -> "BehaviorEvent":
-        if not (math.isfinite(self.onset_s) and math.isfinite(self.offset_s)):
-            raise ValueError("onset_s and offset_s must be finite")
         if self.onset_s < 0:
             raise ValueError("onset_s must be >= 0")
         if self.onset_s >= self.offset_s:
@@ -77,6 +82,9 @@ class AnnotationSchema(BaseModel):
         prompt_template: Optional prompt text for model annotators.
         reference_prevalence: Optional caller-supplied label distribution (for example the training
             set's), over a subset of `labels` and summing to 1; reports show it beside the realised one.
+
+    Unknown keys are refused. A caller whose schema files carry extra metadata maps them to these
+    fields (or drops the rest) before constructing the schema.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -86,7 +94,7 @@ class AnnotationSchema(BaseModel):
     labels: List[StrictStr]
     background_label: Optional[StrictStr] = None
     prompt_template: Optional[StrictStr] = None
-    reference_prevalence: Optional[Dict[StrictStr, float]] = None
+    reference_prevalence: Optional[Dict[StrictStr, FiniteFloat]] = None
 
     @model_validator(mode="after")
     def _check_labels_and_prevalence(self) -> "AnnotationSchema":
@@ -116,20 +124,31 @@ class AnnotationSchema(BaseModel):
             The schema.
 
         Raises:
-            ValueError: If the file is not a mapping, if a label loaded as a YAML boolean (an unquoted
-                `yes`, `no`, `on`, `off`, `true` or `false`), or if a label is not a string.
+            ValueError: If the file is not a mapping, or if a label, the background label or a
+                reference-prevalence key loaded as a YAML boolean (an unquoted `yes`, `no`, `on`, `off`,
+                `true` or `false`) or as another non-string.
         """
-        data = yaml.safe_load(Path(path).read_text())
+        data = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
         if not isinstance(data, dict):
             raise ValueError("an annotation schema file must hold a mapping")
         labels = data.get("labels")
         if isinstance(labels, list):
             for i, label in enumerate(labels):
-                if isinstance(label, bool):
-                    raise ValueError(f"labels[{i}] loaded as a YAML boolean; quote it")
-                if not isinstance(label, str):
-                    raise ValueError(f"labels[{i}] is not a string")
+                _require_yaml_string(label, f"labels[{i}]")
+        if data.get("background_label") is not None:
+            _require_yaml_string(data["background_label"], "background_label")
+        prevalence = data.get("reference_prevalence")
+        if isinstance(prevalence, dict):
+            for key in prevalence:
+                _require_yaml_string(key, f"reference_prevalence key {key!r}")
         return cls(**data)
+
+
+def _require_yaml_string(value: object, where: str) -> None:
+    if isinstance(value, bool):
+        raise ValueError(f"{where} loaded as a YAML boolean; quote it")
+    if not isinstance(value, str):
+        raise ValueError(f"{where} is not a string")
 
 
 class EventTrack(BaseModel):
@@ -137,26 +156,26 @@ class EventTrack(BaseModel):
 
     Attributes:
         schema_id: The `AnnotationSchema` the labels come from.
-        events: The events; stored sorted by `(onset_s, offset_s, label)`.
+        events: The events; stored as a tuple sorted by `(onset_s, offset_s, label)`.
         duration_s: Optional clip duration; no event may end after it.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     schema_id: StrictStr
-    events: List[BehaviorEvent]
-    duration_s: Optional[float] = None
+    events: Tuple[BehaviorEvent, ...]
+    duration_s: Optional[FiniteFloat] = None
 
     @field_validator("events")
     @classmethod
-    def _sort_events(cls, events: List[BehaviorEvent]) -> List[BehaviorEvent]:
-        return sorted(events, key=lambda e: (e.onset_s, e.offset_s, e.label))
+    def _sort_events(cls, events: Tuple[BehaviorEvent, ...]) -> Tuple[BehaviorEvent, ...]:
+        return tuple(sorted(events, key=lambda e: (e.onset_s, e.offset_s, e.label)))
 
     @model_validator(mode="after")
     def _check_duration(self) -> "EventTrack":
         if self.duration_s is not None:
-            if not (math.isfinite(self.duration_s) and self.duration_s > 0):
-                raise ValueError("duration_s must be finite and > 0")
+            if self.duration_s <= 0:
+                raise ValueError("duration_s must be > 0")
             late = sum(e.offset_s > self.duration_s for e in self.events)
             if late:
                 raise ValueError(f"{late} events end after duration_s")
