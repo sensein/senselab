@@ -11,6 +11,7 @@ from typing import Any
 
 import pytest
 
+from senselab.utils.reproduce import sandbox
 from senselab.utils.reproduce.sandbox import build_env, canary, keyed_templates, sandbox_argv, userns_available
 from senselab.utils.reproduce.spec import Profile, StepSpec, render
 
@@ -107,7 +108,9 @@ def test_sandbox_argv_shape(tmp_path: Path) -> None:
         'exec /usr/bin/setpriv --bounding-set=-all --inh-caps=-all --ambient-caps=-all --no-new-privs "$@"'
     )
     head = script[:sweep].splitlines()
-    assert all(line.startswith(("set -e", "/usr/")) for line in head)
+    assert all(line.startswith(("set -e", "/usr/", "if [ -d /")) for line in head)
+    for masked in sandbox.MASKED_HOST_DIRS:
+        assert f"if [ -d {masked} ] && [ ! -L {masked} ]; then {mount} -t tmpfs" in script
 
 
 def test_no_netns_argv_keeps_the_mounts_and_drops_the_network_namespace(tmp_path: Path) -> None:

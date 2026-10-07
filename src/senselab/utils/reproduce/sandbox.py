@@ -41,7 +41,12 @@ VOLATILE_TEMPLATES = {
     "IPYTHONDIR": "{tmp}/ipython",
     "JUPYTER_RUNTIME_DIR": "{tmp}/jupyter/runtime",
 }
-RESERVED_PREFIXES = ("SLURM_", "REPRO_", "JUPYTER_", "HF_", "XDG_", "R_LIBS")
+RESERVED_PREFIXES = ("SLURM_", "REPRO_", "JUPYTER_", "HF_", "XDG_", "R_LIBS", "R_ENVIRON", "R_PROFILE")
+R_STARTUP_TEMPLATE = "{cache}/empty-r-startup"
+"""``R_ENVIRON_USER`` and ``R_PROFILE_USER`` of an R step: an empty file the driver owns, so a ``.Renviron`` or
+``.Rprofile`` in the step's working directory is never read."""
+MASKED_HOST_DIRS = ("/run", "/var/run", "/var/lib/sss", "/var/spool/slurmd")
+"""Host directories holding daemon sockets, hidden under an empty read-only tmpfs in every sandbox."""
 RESERVED = frozenset(
     {
         "PATH",
@@ -53,6 +58,8 @@ RESERVED = frozenset(
         "IPYTHONDIR",
         "LD_LIBRARY_PATH",
         "LD_PRELOAD",
+        "LD_AUDIT",
+        "GCONV_PATH",
         "PYTHONHOME",
         "PYTHONSTARTUP",
         "PYTHONNOUSERSITE",
@@ -129,6 +136,7 @@ def sandbox_script(
     netns: bool = True,
     tmp: str | os.PathLike[str] | None = None,
     visible: Iterable[str | os.PathLike[str]] = (),
+    masked: Iterable[str | os.PathLike[str]] = (),
 ) -> str:
     """Return the ``sh`` script `sandbox_argv` runs inside the namespace; it ends by exec'ing the step.
 
@@ -146,6 +154,9 @@ def sandbox_script(
             ``visible``, or the driver's own interpreter, which runs the sweep) lies under ``/tmp``, since
             the bind would hide it, and ``/tmp`` then stays read-only.
         visible: Other paths the step needs to see, checked only against the ``/tmp`` bind.
+        masked: Directories hidden under an empty tmpfs (made read-only by the sweep), when they exist; the
+            host socket dirs of `MASKED_HOST_DIRS` are always masked unless a path the sandbox needs lies
+            under one.
 
     Returns:
         The script. It starts with ``set -e``, so a failed mount ends it before the step runs, and it
@@ -171,17 +182,28 @@ def sandbox_script(
     q = shlex.quote
     skip = [*rw, *([SYSTEM_TMP] if over_tmp else [])]
     lines = ["set -e", f"{MOUNT} --make-rprivate /"]
+    for host_dir in MASKED_HOST_DIRS:
+        if not any(_under(p, host_dir) for p in seen):
+            lines.append(_mask(host_dir))
     lines += [f"{MOUNT} --bind {q(r)} {q(r)}" for r in roots]
     lines += [f"{MOUNT} --bind {q(d)} {q(d)}" for d in rw]
     lines += [f"{MOUNT} --bind {q(e)} {q(e)}" for e in extra]
     if over_tmp:
         lines.append(f"{MOUNT} --bind {q(_abs(tmp))} {SYSTEM_TMP}")  # type: ignore[arg-type]
+    lines += [_mask(_abs(m)) for m in masked]
     pseudo = ",".join(sorted(PSEUDO_FS))
     lines.append(" ".join([q(sys.executable), "-I", "-S", "-c", q(SWEEP), pseudo, *(q(p) for p in skip)]))
     lines.append(f"if [ -d /dev/shm ]; then {MOUNT} -t tmpfs -o nosuid,nodev,mode=1777 tmpfs /dev/shm; fi")
     lines += [f"{IP} link set lo up"] if netns else []
     lines += [f'exec {" ".join(DROP)} "$@"']
     return "\n".join(lines) + "\n"
+
+
+def _mask(path: str) -> str:
+    q = shlex.quote(path)
+    return (
+        f"if [ -d {q} ] && [ ! -L {q} ]; then {MOUNT} -t tmpfs -o nosuid,nodev,noexec,size=64k,mode=755 tmpfs {q}; fi"
+    )
 
 
 def sandbox_argv(
@@ -193,6 +215,7 @@ def sandbox_argv(
     netns: bool = True,
     tmp: str | os.PathLike[str] | None = None,
     visible: Iterable[str | os.PathLike[str]] = (),
+    masked: Iterable[str | os.PathLike[str]] = (),
 ) -> list[str]:
     """Wrap a step's argv to run in the read-only-by-default sandbox.
 
@@ -204,6 +227,7 @@ def sandbox_argv(
         netns: False drops the network namespace (`UNSHARE_NO_NETNS`, no loopback step); test-only.
         tmp: The step's scratch dir, writable and also bound on ``/tmp`` (see `sandbox_script`).
         visible: Other paths the step must see, checked against the ``/tmp`` bind.
+        masked: Directories hidden under an empty read-only tmpfs (see `sandbox_script`).
 
     Returns:
         ``[*UNSHARE, "/bin/sh", "-c", SCRIPT, "sh", *argv]``, where `UNSHARE` is ``/usr/bin/unshare -rnm
@@ -215,7 +239,7 @@ def sandbox_argv(
     if not argv:
         raise ValueError("empty argv")
     unshare = UNSHARE if netns else UNSHARE_NO_NETNS
-    script = sandbox_script(ro_roots, rw_dirs, ro_extra, netns=netns, tmp=tmp, visible=visible)
+    script = sandbox_script(ro_roots, rw_dirs, ro_extra, netns=netns, tmp=tmp, visible=visible, masked=masked)
     return [*unshare, SH, "-c", script, "sh", *argv]
 
 
@@ -285,6 +309,8 @@ def _keyed(step: StepSpec, profile: Profile) -> tuple[dict[str, str], dict[str, 
     if step.env.r_lib is not None:
         templated["R_LIBS"] = step.env.r_lib
         templated["R_LIBS_USER"] = step.env.r_lib
+        templated["R_ENVIRON_USER"] = R_STARTUP_TEMPLATE
+        templated["R_PROFILE_USER"] = R_STARTUP_TEMPLATE
         literal["R_LIBS_SITE"] = ""
     return {**profile.env, **literal}, templated
 

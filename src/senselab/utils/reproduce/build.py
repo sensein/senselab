@@ -40,7 +40,7 @@ import urllib.request
 import zipfile
 from collections.abc import Iterable, Iterator, Mapping
 from contextlib import contextmanager
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import NamedTuple
 
 from senselab.utils.reproduce import sandbox
@@ -191,12 +191,49 @@ def _file_mode(archive_mode: int) -> int:
     return ((archive_mode & 0o777) | 0o600) & ~BUILD_UMASK
 
 
+_HAS_DATA_FILTER = hasattr(tarfile, "data_filter")
+
+
 def _tar_member(member: tarfile.TarInfo, dest: str) -> tarfile.TarInfo | None:
     """The ``data`` extraction filter, with a regular file's mode from :func:`_file_mode`."""
-    filtered = tarfile.data_filter(member, dest)
+    filtered = tarfile.data_filter(member, dest)  # type: ignore[attr-defined,unused-ignore]
     if filtered is None or not member.isreg():
         return filtered
-    return filtered.replace(mode=_file_mode(member.mode), deep=False)
+    return filtered.replace(mode=_file_mode(member.mode), deep=False)  # type: ignore[no-any-return,unused-ignore]
+
+
+def _checked_member(member: tarfile.TarInfo, root: Path) -> tarfile.TarInfo:
+    """The manual check used where ``tarfile.data_filter`` is missing (Python < 3.11.4).
+
+    Only regular files and directories pass, each with a relative name, no ``..`` component, inside ``root``.
+
+    Raises:
+        ReproduceLockError: For any other member.
+    """
+    name = PurePosixPath(member.name)
+    inside = (root / member.name).resolve().is_relative_to(root)
+    if name.is_absolute() or ".." in name.parts or not inside or not (member.isreg() or member.isdir()):
+        raise ReproduceLockError(f"tar member {member.name!r} is not a plain file or directory inside the archive")
+    member.mode = _file_mode(member.mode) if member.isreg() else ((member.mode & 0o755) | 0o700)
+    return member
+
+
+def safe_extract(data: bytes, dest: Path) -> None:
+    """Extract a tar archive's bytes into ``dest`` with the ``data`` filter, or the manual check without it.
+
+    Raises:
+        tarfile.TarError: When the ``data`` filter refuses a member.
+        ReproduceLockError: When the manual check refuses one.
+    """
+    dest.mkdir(parents=True, exist_ok=True)
+    root = dest.resolve()
+    with tarfile.open(fileobj=io.BytesIO(data)) as archive:
+        if _HAS_DATA_FILTER:
+            archive.extractall(dest, filter=_tar_member)
+            return
+        members = [_checked_member(m, root) for m in archive.getmembers()]
+        trusted = {"filter": "fully_trusted"} if hasattr(tarfile, "fully_trusted_filter") else {}
+        archive.extractall(dest, members=members, **trusted)  # type: ignore[arg-type,unused-ignore]
 
 
 def _unpack(data: bytes, filename: str, dest: Path) -> Path:
@@ -223,8 +260,7 @@ def _unpack(data: bytes, filename: str, dest: Path) -> Path:
                 if not member.is_dir():
                     (dest / member.filename).chmod(_file_mode((member.external_attr >> 16) or 0o644))
     else:
-        with tarfile.open(fileobj=io.BytesIO(data)) as archive:
-            archive.extractall(dest, filter=_tar_member)
+        safe_extract(data, dest)
     tops = list(dest.iterdir())
     if len(tops) != 1 or not tops[0].is_dir():
         raise ReproduceLockError(f"{filename} does not unpack to one top-level directory")

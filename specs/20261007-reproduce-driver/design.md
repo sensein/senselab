@@ -308,6 +308,12 @@ How `env` installs (B7):
   prefetch records wheels, and an existing file there is refused: its bytes are not covered by any
   manifest sha256. `PrefetchResult.record` is true whenever the file's sha256 now differs from the
   manifest's (or the manifest has none), and the caller must write it into `env.wheels`.
+- **uv's interpreter query runs in the sandbox (B14 review).** `uv pip check` and `uv pip freeze` ask the
+  venv's interpreter for its environment, which runs `site` and every `.pth` file of the venv. Both run
+  through `sandbox_argv`: offline (`UV_OFFLINE=1`, no network namespace route), the venv bound read-only,
+  uv's cache private under a temporary dir. Third-party `.pth` code therefore never runs outside the
+  sandbox; a test plants a `.pth` that writes a marker and checks no marker appears. `uv pip install`
+  still runs outside: it installs only the hashed, verified wheels of the locks.
 - **pip check.** Each `The package \`X\` …` line becomes `(normalised X, kind, detail)`, where detail
   is the rest of the line without backticks; `requires …` lines are `requirement`, lines mentioning
   the platform are `platform`, anything else is `other` and can never be declared. The comparison
@@ -319,6 +325,15 @@ How `env` installs (B7):
   working directory first on `sys.path`, so a same-named module in the caller's directory would
   otherwise satisfy the import (a test shows the control import succeeding there and the smoke
   failing). An import past the timeout raises `E_SMOKE_TIMEOUT`.
+- **R prefetch in two phases (B14 review).** With network and outside the sandbox, `r_download_script`
+  resolves the declared packages' recursive `Depends`/`Imports`/`LinkingTo` against the snapshot and
+  downloads the source packages R's own library lacks into a local repository (`src/contrib` plus
+  `PACKAGES`). The install then runs inside the sandbox, offline (`R_INSTALL_SH`: `install.packages` from
+  that `file://` repository, then the session record), with only the library, the temporary work dir and,
+  for `ir_notebook`, the venv's `share/jupyter/kernels` writable. Package build scripts (`configure`,
+  `Makevars`) therefore cannot reach the network or write outside the library. The module env captured
+  outside (its `PATH`, `LD_LIBRARY_PATH` and the rest, minus `HOME`/`TMPDIR`) is passed into the sandbox
+  as values; Lmod does not run inside the namespace.
 - **R prefetch** loads the module with `bash --noprofile --norc -c '. /etc/profile.d/modules.sh &&
   module load "$1" …'` (the plan's `bash -lc` read dotfiles, B6), with an allowlisted env and no
   `set -u` (the init script fails under it). `Rscript --vanilla` keeps `Renviron.site` and
@@ -411,6 +426,14 @@ it; then `/tmp` stays read-only and `TMPDIR` still points at `{tmp}` (the test s
 since pytest's `tmp_path` is under `/tmp`). Sandboxed wheel builds (B6) get `UV_CACHE_DIR` under their
 own tmp for the same reason.
 
+**Masked host paths (B14 review).** Before the binds, `/run`, `/var/run`, `/var/lib/sss` and
+`/var/spool/slurmd` (`MASKED_HOST_DIRS`) each get an empty tmpfs, made read-only by the sweep; a missing
+one, a symlink (`/var/run` usually is), or one holding a path the sandbox needs is skipped. That hides the
+munge, sssd, nscd and slurmd sockets. Other `AF_UNIX` sockets on the remaining read-only mounts stay
+reachable: connecting to a socket needs no write permission on its file, so a read-only bind does not
+stop it. A step with `hf_weights: []` also gets `{cache}/huggingface` masked the same way, so it cannot
+read weights another step pinned.
+
 **Network:** there is none.
 
 - Loopback is raised, because notebook kernels talk over 127.0.0.1.
@@ -486,9 +509,11 @@ How `sandbox` reads those rules:
   the full expanded env.
 - The profile map may not name any driver-owned variable, whatever the step uses:
   - the names above;
-  - anything starting with `SLURM_`, `REPRO_`, `JUPYTER_`, `HF_`, `XDG_` or `R_LIBS`;
+  - anything starting with `SLURM_`, `REPRO_`, `JUPYTER_`, `HF_`, `XDG_`, `R_LIBS`, `R_ENVIRON` or
+    `R_PROFILE`;
   - any proxy name, in either case;
-  - `LD_PRELOAD`, `LD_LIBRARY_PATH`, `PYTHONHOME`, `PYTHONSTARTUP` and `PYTHONNOUSERSITE`.
+  - `LD_PRELOAD`, `LD_AUDIT`, `GCONV_PATH`, `LD_LIBRARY_PATH`, `PYTHONHOME`, `PYTHONSTARTUP` and
+    `PYTHONNOUSERSITE`.
 
   The driver's values cannot be overridden, and the refusal does not depend on the step.
 - Templates expand with `spec.render`, the same grammar `spec.placeholders` validates (`{{`/`}}`
@@ -1170,6 +1195,37 @@ It holds no messages, and no paths other than checkout-relative code frames.
   `driver.log`. A claim's stale-takeover warning, which names the lock path under the results tree,
   therefore never reaches a terminal. Before the key exists there is no result dir, and those failures
   return a code only.
+
+## Isolation additions (B14 review)
+
+- **The step's program is pinned.** `argv[0]` used to be taken on trust: `/usr/bin/python3` ran as if it
+  were the venv. The preamble now resolves `argv[0]` (with `shutil.which` on the step's own `PATH` when it
+  has no `/`) and accepts it only when its real path, or the real path of the dir it was found in, lies in
+  an allowed dir: the venv for `python` and `notebook` steps; the R module's own `PATH` entries (system
+  dirs excluded) and the selected native bin dirs for `r` steps; all of these for `ir_notebook` steps,
+  whose program is the notebook venv's `jupyter`. The dir test is what lets the venv's `python`, a symlink
+  to the uv-managed interpreter, pass. Otherwise the preamble reports `interpreter_ok: false` and exits 95
+  without exec'ing, and the step is `failed` with `E_STEP_INTERPRETER`. `StepSpec` also refuses an `argv`
+  or `pythonpath` entry that is an absolute path with no placeholder (`E_SPEC_ABSOLUTE_PATH`).
+- **R startup files.** An R step's env sets `R_ENVIRON_USER` and `R_PROFILE_USER` to
+  `{cache}/empty-r-startup` (`sandbox.R_STARTUP_TEMPLATE`, keyed), an empty file the driver creates and
+  the sandbox shows read-only, so a `.Renviron` or `.Rprofile` in the checkout cannot change `R_LIBS_USER`
+  or `.libPaths()`. The R session check runs in the step's own working directory.
+- **Installed set at run time.** Before the step, the driver reads every `*.dist-info/METADATA` of the
+  venv's `site-packages` (name and version headers only; nothing runs) and compares the set with
+  `installed.json`; an added, removed or changed distribution is `E_ENV_CHANGED`.
+- **Locks held during a step.** A run holds a shared `flock` on the venv's `<venv>.lock` and, for an R
+  step, on `<r_lib>.lock` from the refusals to the summary, so a `prefetch --rebuild` (exclusive) waits.
+- **Symlinks out of `work/`.** After the step, any symlink under `work/` whose target resolves outside
+  `work/` is `E_OUTPUT_SYMLINK`; outputs are then not digested, so no such link is followed. A stage copy
+  from an `up:` root refuses a matched file that resolves outside that upstream's `work/`.
+- **Clean checkout.** `verify_checkout` counts ignored files too (`git status --ignored`), so a file
+  planted under an ignore rule is `E_SRC_MUTATED`.
+- **Torch lock install.** Stage 1 also passes `--only-binary :all:`.
+- **Sdist unpacking.** `build.safe_extract` uses tarfile's `data` filter where it exists (Python 3.11.4
+  and later; senselab still allows 3.11.0). Without it, a manual check passes only regular files and
+  directories with a relative name, no `..` and a resolved path inside the unpack dir, then extracts the
+  checked members. Both paths are tested.
 
 ## Commands
 

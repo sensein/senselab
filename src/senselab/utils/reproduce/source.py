@@ -737,7 +737,9 @@ def verify_checkout(co: Checkout) -> None:
         raise ReproduceSourceError(CHAIN_MISMATCH, "first-parent chain does not end at the commit")
     if git.ok(co.worktree, "rev-parse", "HEAD^{tree}") != co.tree_sha:
         raise ReproduceSourceError(TREE_MISMATCH, "tree differs from the recorded tree")
-    status = git.ok(co.worktree, "status", "--porcelain", "--untracked-files=all", "--ignore-submodules=none")
+    status = git.ok(
+        co.worktree, "status", "--porcelain", "--untracked-files=all", "--ignored", "--ignore-submodules=none"
+    )
     if status:
         raise ReproduceSourceError(WORKTREE_DIRTY, "worktree has changes")
     for path, sha in co.submodules.items():
