@@ -18,6 +18,7 @@ from senselab.utils.reproduce.spec import (
     Profile,
     SourceSpec,
     StepSpec,
+    check_step_profile,
     load_manifest,
     load_manifest_set,
     load_profile,
@@ -144,7 +145,7 @@ def _profile(**over: Any) -> dict[str, Any]:  # noqa: ANN401
             "cpu": {"partition": "cpu-a", "cpus": 16, "mem": "32G", "time": "1:00:00"},
         },
         "build": "cpu",
-        "native_dirs": ["/opt/tools/bin"],
+        "native": {"ffmpeg": {"bin_dirs": ["/opt/tools/bin"], "lib_dirs": ["/opt/tools/curated-lib"]}},
         "r": {"module": "R/4.5.2", "version": "4.5.2"},
         "deny_patterns_file": "/etc/repro/deny.txt",
         "canary_host": "example.org:443",
@@ -520,3 +521,28 @@ def test_root_validator_rejects_counter_example(case: str) -> None:
     over, message = ROOT_COUNTER_EXAMPLES[case]
     with pytest.raises(ValidationError, match=message):
         Profile.model_validate(_profile(**over))
+
+
+@pytest.mark.parametrize(
+    "native",
+    [{"ff": {"bin_dirs": ["relative/bin"]}}, {"ff": {"lib_dirs": ["/opt/a:b"]}}, {"bad name": {}}],
+)
+def test_native_entries_validate(native: dict[str, Any]) -> None:
+    """Native dirs are absolute with no ':', and entry names are plain names."""
+    with pytest.raises(ValidationError):
+        Profile.model_validate(_profile(native=native))
+
+
+def test_step_may_select_only_profile_native_entries() -> None:
+    """``check_step_profile`` refuses a native name or partition key the profile lacks."""
+    profile = Profile.model_validate(_profile())
+    step = StepSpec.model_validate(_step())
+    check_step_profile(step, profile)
+    with pytest.raises(ValueError):
+        check_step_profile(
+            step.model_copy(update={"resources": step.resources.model_copy(update={"native": ["x"]})}), profile
+        )
+    with pytest.raises(ValueError):
+        check_step_profile(
+            step.model_copy(update={"resources": step.resources.model_copy(update={"profile": "x"})}), profile
+        )
