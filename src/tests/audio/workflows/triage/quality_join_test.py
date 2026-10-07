@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 
 from senselab.audio.workflows.triage.background_model import BandFrames, Floor
@@ -78,7 +80,7 @@ def test_a_shutoff_soon_after_the_task_cut_it() -> None:
 
 def test_a_shutoff_decides_only_for_a_held_task() -> None:
     """A recorder gating after a cough is not a cut: the shutoff reviews only where phonation is held."""
-    common = {
+    common: dict[str, Any] = {
         "task_spans": [(1.0, 6.0)],
         "faults": {"shutoff": [[5.9, 7.5]]},
         "other_voice": [],
@@ -134,7 +136,7 @@ def test_events_the_enhanced_stream_loses_disagree() -> None:
 
 def test_nothing_captured_reads_the_activity_and_the_session_level() -> None:
     """No activity on either stream, or a recording far under its session, captured nothing."""
-    base = {"task_spans": [], "event_kind": None, "faults": {}, "other_voice": None, "streams": None}
+    base: dict[str, Any] = {"task_spans": [], "event_kind": None, "faults": {}, "other_voice": None, "streams": None}
     silent = join_record(**base, plain_active_s=0.0, enhanced_active_s=0.0, level_rel_db=None)
     room = join_record(**base, plain_active_s=3.0, enhanced_active_s=3.0, level_rel_db=-51.0)
     normal = join_record(**base, plain_active_s=3.0, enhanced_active_s=3.0, level_rel_db=-5.0)
@@ -186,7 +188,7 @@ def test_the_fold_discards_a_recording_that_captured_nothing() -> None:
 def test_streams_disagreeing_on_an_event_kind_that_decides_reviews() -> None:
     """Disagreement reviews only for the event kinds the parameters name."""
     params = {**quality_join_parameters(), "streams": {**quality_join_parameters()["streams"], "decides": ["cough"]}}
-    base = {
+    base: dict[str, Any] = {
         "task_spans": [(1.0, 3.0)],
         "faults": {},
         "other_voice": [],
