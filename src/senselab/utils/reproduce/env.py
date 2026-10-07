@@ -441,6 +441,29 @@ def installed_sha256(path: Path) -> str | None:
     return str(marker["installed_sha256"])
 
 
+def load_venv(path: Path, env: EnvSpec, overlay: LockRef | None = None) -> VenvResult | None:
+    """The prefetched venv at ``path`` as its marker and ``installed.json`` describe it; a run never builds one.
+
+    Args:
+        path: The venv (`venv_dir` or `derived_venv_dir`).
+        env: The step's env.
+        overlay: The overlay lock of a derived venv.
+
+    Returns:
+        A `VenvResult` whose key and overlay sha256 are the marker's and whose packages are
+        ``installed.json``'s, with ``checked`` from `venv_checked`; None when the marker is missing or
+        malformed or ``installed.json`` no longer matches it.
+    """
+    marker = _read_marker(path)
+    installed = None if marker is None else _installed_ok(path, marker)
+    if marker is None or not isinstance(installed, dict) or not isinstance(installed.get("packages"), dict):
+        return None
+    key, overlay_sha = marker.get("env_key"), marker.get("overlay_sha256")
+    if not isinstance(key, str) or not (overlay_sha is None or isinstance(overlay_sha, str)):
+        return None
+    return VenvResult(path, key, overlay_sha, True, dict(installed["packages"]), venv_checked(path, env, overlay))
+
+
 def venv_checked(path: Path, env: EnvSpec, overlay: LockRef | None = None) -> bool:
     """Whether a venv is complete for ``env``: installed for its key and overlay, and both checks passed.
 

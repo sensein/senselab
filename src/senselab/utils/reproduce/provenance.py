@@ -127,6 +127,32 @@ def _check_host(host: Mapping[str, Any]) -> None:
         _check(value is None or (_matches(value, pattern) and len(value) <= _HOST_STRING_MAX), f"host {key}")
 
 
+def drop_unrecordable_host_values(host: Mapping[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    """Set every host value `record_step` would refuse to None, so an odd host never costs a step its record.
+
+    Args:
+        host: `host.host_record`'s result.
+
+    Returns:
+        ``(host, dropped)``: a copy holding exactly `HOST_KEYS`, with each value outside its closed form
+        (a string off its pattern or too long, a count that is not a non-negative integer) set to None,
+        and the sorted names of the keys so dropped. The dropped values are never returned.
+    """
+    clean: dict[str, Any] = {key: host.get(key) for key in HOST_KEYS}
+    dropped = sorted(set(host) - set(HOST_KEYS))
+    for key in _HOST_INTS:
+        value = clean[key]
+        if value is not None and not (_is_int(value) and value >= 0):
+            clean[key] = None
+            dropped.append(key)
+    for key, pattern in _HOST_STRINGS.items():
+        value = clean[key]
+        if value is not None and not (_matches(value, pattern) and len(value) <= _HOST_STRING_MAX):
+            clean[key] = None
+            dropped.append(key)
+    return clean, sorted(set(dropped))
+
+
 def _check_venv(venv: VenvResult) -> str:
     _check(_is_name(venv.path.name), "venv name")
     _check(_matches(venv.env_key, _HEX64), "venv env_key")
