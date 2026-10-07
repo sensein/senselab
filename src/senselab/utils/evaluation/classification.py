@@ -5,9 +5,9 @@ several and adds the prevalence of each. Every report names its protocol, leads 
 accuracy (the only headline) and gives every metric's chance or trivial floor, its lift over that
 floor and the lift normalised by the room above the floor.
 
-Balanced accuracy is recall averaged over the labels present in `y_true` (`balanced_accuracy`,
+Balanced accuracy is recall averaged over the labels present in `y_true` (`metrics.balanced_accuracy`,
 equal to scikit-learn's `balanced_accuracy_score`), with invalid outputs counted as misses. The
-earlier declared-label formula is kept as `legacy_macro_recall`, for parity checks only.
+earlier declared-label formula is `metrics.legacy_macro_recall`, for parity checks only.
 
 | Metric | Floor |
 |---|---|
@@ -37,15 +37,18 @@ from typing import Any, Callable, Dict, List, Literal, Mapping, Optional, Sequen
 from typing import Protocol as TypingProtocol
 
 import numpy as np
-from sklearn.metrics import (
-    average_precision_score,
-    matthews_corrcoef,
-    precision_recall_fscore_support,
-    recall_score,
-    roc_auc_score,
-)
+from sklearn.metrics import average_precision_score, roc_auc_score
 
-from senselab.utils.evaluation.bootstrap import DEFAULT_RESAMPLES, BootstrapCI, _bootstrap, _validate
+from senselab.utils.evaluation.bootstrap import DEFAULT_RESAMPLES, BootstrapCI, bootstrap_statistics, validate_groups
+from senselab.utils.evaluation.metrics import (
+    as_strings,
+    balanced_accuracy_from_confusion,
+    confusion,
+    encode_labels,
+    macro_f1_from_confusion,
+    mcc_from_confusion,
+    per_class_from_confusion,
+)
 from senselab.utils.evaluation.protocol import PROTOCOLS, Protocol
 from senselab.utils.evaluation.splits import SplitReport
 
@@ -72,57 +75,6 @@ class ThresholdLike(TypingProtocol):
     def split_name(self) -> str:
         """The split it was tuned on."""
         ...
-
-
-def balanced_accuracy(y_true: Union[np.ndarray, Sequence[Any]], y_pred: Union[np.ndarray, Sequence[Any]]) -> float:
-    """Recall averaged over the labels present in `y_true`: the report's headline.
-
-    Equal to scikit-learn's `balanced_accuracy_score`. A prediction that is not the true label (for
-    example an invalid output) is a miss. Threshold tuning and resampled intervals call this function.
-
-    Args:
-        y_true: True label per row.
-        y_pred: Predicted label per row.
-
-    Returns:
-        The balanced accuracy.
-
-    Raises:
-        ValueError: If the inputs are empty or of different lengths.
-    """
-    truth, pred = _as_strings(y_true), _as_strings(y_pred)
-    if len(truth) == 0 or len(truth) != len(pred):
-        raise ValueError("y_true and y_pred must be non-empty and of the same length")
-    recalls = [float(np.mean(pred[truth == label] == label)) for label in sorted(set(truth.tolist()))]
-    return float(np.mean(recalls))
-
-
-def legacy_macro_recall(
-    y_true: Union[np.ndarray, Sequence[Any]], y_pred: Union[np.ndarray, Sequence[Any]], *, labels: Sequence[Any]
-) -> float:
-    """Macro recall over every declared label with `zero_division=0`, for parity checks only.
-
-    This is the formula of the lab's earlier evaluation code: an absent declared label contributes a
-    recall of 0. It is never a report headline; see `balanced_accuracy`.
-
-    Args:
-        y_true: True label per row.
-        y_pred: Predicted label per row.
-        labels: The declared labels.
-
-    Returns:
-        The declared-label macro recall.
-    """
-    label_list = [str(lab) for lab in labels]
-    return float(
-        recall_score(
-            _as_strings(y_true).tolist(),
-            _as_strings(y_pred).tolist(),
-            labels=label_list,
-            average="macro",
-            zero_division=0,
-        )
-    )
 
 
 @dataclass(frozen=True)
@@ -272,11 +224,6 @@ class EvaluationReport:
     prevalence_by_split: Mapping[str, Mapping[str, float]]
 
 
-def _as_strings(values: Union[np.ndarray, Sequence[Any]]) -> np.ndarray:
-    """The values as an object array of strings."""
-    return np.array([str(v) for v in np.asarray(values, dtype=object).tolist()], dtype=object)
-
-
 def _scores_and_floors(
     y_true: np.ndarray,
     y_score: np.ndarray,
@@ -302,33 +249,34 @@ def _scores_and_floors(
     return _metric(float(np.mean(aucs)), 0.5), _metric(float(np.mean(aps)), 1.0 / present)
 
 
-def _mcc(truth: np.ndarray, pred: np.ndarray) -> float:
-    """MCC; 0 when truth and predictions hold a single value between them (scikit-learn's convention)."""
-    y_t, y_p = truth.tolist(), pred.tolist()
-    return 0.0 if len(set(y_t) | set(y_p)) < 2 else float(matthews_corrcoef(y_t, y_p))
-
-
 def _resample_statistics(
-    truth: np.ndarray, pred: np.ndarray, scores: Optional[np.ndarray], labels: List[str], positive: Optional[str]
+    truth: np.ndarray,
+    pred: np.ndarray,
+    n_codes: int,
+    present_codes: List[int],
+    label_strings: np.ndarray,
+    scores: Optional[np.ndarray],
+    labels: List[str],
+    positive: Optional[str],
 ) -> Dict[str, Callable[[np.ndarray], Optional[float]]]:
-    """Row-index statistics for the bootstrap, computed exactly as the report computes them."""
+    """Row-index statistics for the bootstrap on pre-encoded labels, computed as the report computes them."""
 
-    def macro_f1(rows: np.ndarray) -> float:
-        """Macro-F1 over the labels present in the resample."""
-        prevalence = {lab: float(np.mean(truth[rows] == lab)) for lab in labels}
-        return float(np.mean(_per_class(truth[rows], pred[rows], labels, prevalence)[1]))
+    def matrix(rows: np.ndarray) -> np.ndarray:
+        """The resample's confusion matrix."""
+        return confusion(truth[rows], pred[rows], n_codes)
 
     statistics: Dict[str, Callable[[np.ndarray], Optional[float]]] = {
-        HEADLINE: lambda rows: balanced_accuracy(truth[rows], pred[rows]),
-        "f1_macro": macro_f1,
-        "mcc": lambda rows: _mcc(truth[rows], pred[rows]),
+        HEADLINE: lambda rows: balanced_accuracy_from_confusion(matrix(rows)),
+        "f1_macro": lambda rows: macro_f1_from_confusion(matrix(rows), present_codes),
+        "mcc": lambda rows: mcc_from_confusion(matrix(rows)),
     }
     if scores is not None:
 
         def ranking(rows: np.ndarray, which: int) -> Optional[float]:
             """ROC-AUC (0) or average precision (1) on the resample, `None` where undefined."""
-            prevalence = {lab: float(np.mean(truth[rows] == lab)) for lab in labels}
-            value = _scores_and_floors(truth[rows], scores[rows], labels, positive, prevalence)[which]
+            sample = label_strings[rows]
+            prevalence = {lab: float(np.mean(sample == lab)) for lab in labels}
+            value = _scores_and_floors(sample, scores[rows], labels, positive, prevalence)[which]
             return None if value is None else value.value
 
         statistics["roc_auc"] = lambda rows: ranking(rows, 0)
@@ -353,32 +301,6 @@ def _check_reference(reference: Optional[Mapping[str, float]], labels: List[str]
     if abs(math.fsum(values.values()) - 1.0) > PREVALENCE_TOLERANCE:
         raise ValueError("reference_prevalence values must sum to 1")
     return values
-
-
-def _per_class(
-    truth: np.ndarray, pred: np.ndarray, labels: List[str], prevalence: Mapping[str, float]
-) -> Tuple[Dict[str, Mapping[str, Any]], List[float]]:
-    """Per-class metrics (undefined values as `None`) and the F1 of each present label."""
-    precision, recall, f1, support = precision_recall_fscore_support(
-        truth.tolist(), pred.tolist(), labels=labels, zero_division=0
-    )
-    predicted = Counter(pred.tolist())
-    rows: Dict[str, Mapping[str, Any]] = {}
-    present_f1: List[float] = []
-    for j, lab in enumerate(labels):
-        present = support[j] > 0
-        if present:
-            present_f1.append(float(f1[j]))
-        rows[lab] = MappingProxyType(
-            {
-                "precision": float(precision[j]) if predicted[lab] > 0 else None,
-                "recall": float(recall[j]) if present else None,
-                "f1": float(f1[j]) if present else None,
-                "support": int(support[j]),
-                "prevalence": prevalence[lab],
-            }
-        )
-    return rows, present_f1
 
 
 def score_classification(
@@ -455,7 +377,7 @@ def score_classification(
         raise ValueError("invalid_label must not be one of the labels")
     if split_report is not None and split_report.protocol != protocol:
         raise ValueError("the split report's protocol differs from protocol")
-    truth = _as_strings(y_true)
+    truth = as_strings(y_true)
     n = len(truth)
     if n == 0:
         raise ValueError("y_true is empty")
@@ -495,7 +417,7 @@ def score_classification(
     else:
         if y_pred is None:
             raise ValueError("y_pred is required unless a threshold sets the predictions")
-        pred = _as_strings(y_pred)
+        pred = as_strings(y_pred)
         tuning = "validation" if threshold_tuning == "validation" else "none"
     if len(pred) != n:
         raise ValueError("y_true and y_pred must have the same length")
@@ -510,34 +432,51 @@ def score_classification(
     absent = tuple(lab for lab in label_list if true_counts[lab] == 0)
     floor_k = 1.0 / (len(label_list) - len(absent))
 
-    per_class, present_f1 = _per_class(truth, pred, label_list, prevalence)
     columns = (*label_list, invalid_label)
-    pairs = Counter(zip(truth.tolist(), pred.tolist()))
-    confusion = MappingProxyType(
+    (truth_codes, pred_codes), _ = encode_labels(truth, pred, vocabulary=columns)
+    n_codes = len(columns)
+    matrix = confusion(truth_codes, pred_codes, n_codes)
+    per_class: Dict[str, Mapping[str, Any]] = {}
+    for j, lab in enumerate(label_list):
+        precision, recall, f1 = per_class_from_confusion(matrix, j)
+        per_class[lab] = MappingProxyType(
+            {
+                "precision": precision,
+                "recall": recall,
+                "f1": f1,
+                "support": int(matrix[j].sum()),
+                "prevalence": prevalence[lab],
+            }
+        )
+    present_codes = [j for j, lab in enumerate(label_list) if true_counts[lab] > 0]
+    confusion_table = MappingProxyType(
         {
             "rows": tuple(label_list),
             "columns": columns,
-            "counts": tuple(tuple(pairs[(r, c)] for c in columns) for r in label_list),
+            "counts": tuple(tuple(int(c) for c in matrix[j]) for j in range(len(label_list))),
         }
     )
     secondary = {
         "accuracy": _metric(float(np.mean(truth == pred)), max(prevalence.values())),
-        "f1_macro": _metric(float(np.mean(present_f1)), floor_k),
-        "mcc": _metric(_mcc(truth, pred), 0.0),
+        "f1_macro": _metric(macro_f1_from_confusion(matrix, present_codes), floor_k),
+        "mcc": _metric(mcc_from_confusion(matrix), 0.0),
     }
     f1_positive = None if positive is None else per_class[positive]["f1"]
     if positive is not None and f1_positive is not None:
         p = prevalence[positive]
         secondary["f1"] = _metric(f1_positive, 2 * p / (1 + p))
     roc, ap = (None, None) if scores is None else _scores_and_floors(truth, scores, label_list, positive, prevalence)
-    balanced = _metric(balanced_accuracy(truth, pred), floor_k)
+    balanced = _metric(balanced_accuracy_from_confusion(matrix), floor_k)
     ci = None
     if groups is not None:
-        group_arr = _validate(n, groups, n_resamples, 0.95)
+        group_arr = validate_groups(n, groups, n_resamples, 0.95)
+        statistics = _resample_statistics(
+            truth_codes, pred_codes, n_codes, present_codes, truth, scores, label_list, positive
+        )
         ci = MappingProxyType(
-            _bootstrap(
-                _resample_statistics(truth, pred, scores, label_list, positive),
-                truth,
+            bootstrap_statistics(
+                statistics,
+                truth_codes,
                 group_arr,
                 n_resamples=n_resamples,
                 seed=seed,
@@ -559,7 +498,7 @@ def score_classification(
         balanced_accuracy=balanced,
         secondary=MappingProxyType(secondary),
         per_class=MappingProxyType(per_class),
-        confusion_matrix=confusion,
+        confusion_matrix=confusion_table,
         roc_auc=roc,
         average_precision=ap,
         positive_label=positive,

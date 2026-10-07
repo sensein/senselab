@@ -10,7 +10,8 @@ import yaml
 from sklearn.metrics import balanced_accuracy_score, f1_score, matthews_corrcoef
 
 from senselab.utils.evaluation import thresholds
-from senselab.utils.evaluation.classification import balanced_accuracy, score_classification
+from senselab.utils.evaluation.classification import score_classification
+from senselab.utils.evaluation.metrics import balanced_accuracy
 from senselab.utils.evaluation.splits import nested_grouped_splits
 from senselab.utils.evaluation.thresholds import ThresholdChoice, load_threshold_grid, tune_threshold
 from tests.utils.evaluation.conftest import Cohort
@@ -50,7 +51,7 @@ def test_ties_go_to_the_threshold_nearest_one_half() -> None:
 
 
 def test_balanced_accuracy_objective_uses_the_headline_function() -> None:
-    """The BA objective's value is classification.balanced_accuracy at the chosen threshold."""
+    """The BA objective's value is metrics.balanced_accuracy at the chosen threshold."""
     y, scores = _ninety_ten(0)
     choice = tune_threshold(y, scores, split_name="val", positive_label="pos")
     assert choice.value == balanced_accuracy(y, _predict(scores, choice.threshold))
@@ -194,7 +195,7 @@ def test_the_grid_comes_from_the_data_file(tmp_path: Path, monkeypatch: pytest.M
 
 @pytest.mark.parametrize("name", ["latest", "contest", "pretest", "attestation", "val", "inner_val_3", "fold2_val"])
 def test_split_names_that_merely_contain_test_are_accepted(name: str) -> None:
-    """The guard matches whole tokens, so "latest" or "pretest" is not a test split."""
+    """Names that only end with "test" (or contain no held-out marker) pass the guard."""
     y, scores = _separable()
     assert tune_threshold(y, scores, split_name=name, positive_label="pos").split_name == name
 

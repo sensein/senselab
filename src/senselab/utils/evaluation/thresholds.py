@@ -2,7 +2,7 @@
 
 `tune_threshold` picks, from the grid in `data/threshold_grid.yaml`, the threshold that maximises an
 objective on validation data. The default objective is balanced accuracy, computed with
-`classification.balanced_accuracy` (the report's headline function); `f1` (positive class) and `mcc`
+`metrics.balanced_accuracy` (the report's headline function); `f1` (positive class) and `mcc`
 are explicit, non-default choices, and the returned `ThresholdChoice` records which was used. A
 `ThresholdChoice` can be passed to `score_classification(threshold=...)`, which refuses it on the split
 it was tuned on and still reports balanced accuracy as the headline.
@@ -20,7 +20,7 @@ import numpy as np
 import yaml
 from sklearn.metrics import f1_score, matthews_corrcoef
 
-from senselab.utils.evaluation.classification import balanced_accuracy
+from senselab.utils.evaluation.metrics import balanced_accuracy
 
 Objective = Literal["balanced_accuracy", "f1", "mcc"]
 OBJECTIVES: Tuple[str, ...] = get_args(Objective)
@@ -29,6 +29,8 @@ GRID_PATH = Path(__file__).parent / "data" / "threshold_grid.yaml"
 GRID_KEYS = frozenset({"start", "stop", "step", "tie_break", "round"})
 # Split-name tokens that mark held-out evaluation data; tuning on such a split is refused.
 HELD_OUT_TOKENS = frozenset({"test", "holdout", "heldout"})
+# Letter runs that are a split word glued to "test" ("outerTest"); refused although they end in "test",
+# unlike "latest" or "contest", whose prefixes are not split words.
 HELD_OUT_PREFIXED = frozenset({"foldtest", "outertest", "innertest"})
 
 
@@ -116,7 +118,9 @@ def is_held_out_name(split_name: str) -> bool:
       ("outerTest").
 
     "latest", "contest", "pretest" and "attestation" pass: a run that merely ends with `test` is not
-    refused unless its prefix is one of those split words.
+    refused unless its prefix is one of those split words. The rules fail safe, so some names that are
+    not held out are refused too; known cases: "pre_test", "post_test", "test_retest", "testbed",
+    "testimony". Rename such a split (for example "pre_assessment") to tune on it.
     """
     runs = re.findall(r"[a-z]+|\d+", split_name.casefold())
     letters = [r for r in runs if r.isalpha()]

@@ -7,9 +7,12 @@ group's rows keep their input order, so a seed fixes every resample. Percentile 
 `np.percentile` with linear interpolation.
 
 A resample whose truth holds a single class is skipped and counted in `n_skipped`: balanced accuracy
-would be trivially defined there, and ranking metrics undefined. A resample that drops one of
-several classes is kept; balanced accuracy then averages over the classes present in it. A metric
-that is undefined on a kept resample (returns `None` or NaN) is left out for that metric only.
+would be trivially defined there, and ranking metrics undefined. Skipping matches the earlier lab
+bootstrap, which parity requires. An interval with more than 5 % of its resamples skipped is flagged
+`unreliable`: few groups carry the minority class, and the interval under-covers. A resample that drops
+one of several classes is kept; balanced accuracy then averages over the classes present in it. A
+metric that is undefined on a kept resample (returns `None` or NaN) is left out for that metric only;
+one undefined on all rows has `estimate=None`.
 
 `legacy_cluster_bootstrap` reproduces the lab's earlier bootstrap (fixed threshold, F1, balanced
 accuracy, ROC-AUC, average precision) for parity checks.
@@ -24,10 +27,13 @@ from typing import Any, Callable, Dict, Iterator, List, Mapping, Optional, Seque
 import numpy as np
 from sklearn.metrics import average_precision_score, f1_score, roc_auc_score
 
-from senselab.utils.evaluation.splits import _key_array
+from senselab.utils.evaluation._ids import distinct_keys, key_array
+from senselab.utils.evaluation.metrics import balanced_accuracy
 
 METHOD = "cluster_bootstrap_percentile"
 DEFAULT_RESAMPLES = 2000
+# Share of skipped (single-class) resamples above which an interval is flagged unreliable.
+SKIP_FRACTION_LIMIT = 0.05
 
 Values = Union[np.ndarray, Sequence[Any]]
 RowStatistic = Callable[[np.ndarray], Optional[float]]
@@ -38,7 +44,7 @@ class BootstrapCI:
     """A percentile interval from a cluster bootstrap.
 
     Attributes:
-        estimate: The statistic on all rows.
+        estimate: The statistic on all rows, or `None` where it is undefined there.
         low: Lower percentile bound, or `None` if no resample gave a value.
         high: Upper percentile bound, or `None` if no resample gave a value.
         confidence: The interval's nominal coverage.
@@ -47,10 +53,11 @@ class BootstrapCI:
         n_skipped: Resamples skipped because their truth held a single class.
         seed: The seed.
         n_groups: Distinct groups resampled.
+        unreliable: More than 5 % of resamples were skipped, or none gave a value.
         method: `cluster_bootstrap_percentile`.
     """
 
-    estimate: float
+    estimate: Optional[float]
     low: Optional[float]
     high: Optional[float]
     confidence: float
@@ -59,6 +66,7 @@ class BootstrapCI:
     n_skipped: int
     seed: int
     n_groups: int
+    unreliable: bool
     method: str = METHOD
 
 
@@ -94,12 +102,15 @@ def cluster_bootstrap_indices(groups: Values, *, n_resamples: int, seed: int) ->
         yield np.concatenate([members[i] for i in picks])
 
 
-def _validate(n_rows: int, groups: Values, n_resamples: int, confidence: float) -> np.ndarray:
-    """The groups as an array after checking lengths, missing ids, group count and settings."""
-    group_arr = _key_array(groups, "group")
+def validate_groups(n_rows: int, groups: Values, n_resamples: int, confidence: float) -> np.ndarray:
+    """The groups as an array after checking lengths, missing ids, group count and settings.
+
+    Groups are told apart as strings, the same way resampling groups them, so 1 and "1" are one group.
+    """
+    group_arr = key_array(groups, "group")
     if len(group_arr) != n_rows:
         raise ValueError("groups must have one entry per row")
-    if len(set(group_arr.tolist())) < 2:
+    if distinct_keys(group_arr) < 2:
         raise ValueError("a cluster bootstrap needs at least 2 groups")
     if n_resamples < 1:
         raise ValueError("n_resamples must be at least 1")
@@ -114,7 +125,12 @@ def _percentiles(confidence: float) -> tuple[float, float]:
     return low, 100.0 - low
 
 
-def _bootstrap(
+def _defined(value: Optional[float]) -> Optional[float]:
+    """The value as a float, or `None` if it is `None` or NaN."""
+    return None if value is None or math.isnan(value) else float(value)
+
+
+def bootstrap_statistics(
     statistics: Mapping[str, RowStatistic],
     truth: np.ndarray,
     groups: np.ndarray,
@@ -123,26 +139,41 @@ def _bootstrap(
     seed: int,
     confidence: float,
 ) -> Dict[str, BootstrapCI]:
-    """Run the resampling loop for row-index statistics; skip resamples with one class in `truth`."""
+    """Cluster-bootstrap intervals for statistics of row indices.
+
+    The engine behind `cluster_bootstrap_ci` and the report's intervals. Validate `groups` with
+    `validate_groups` first.
+
+    Args:
+        statistics: Name to a function of resampled row indices (`None` or NaN where undefined).
+        truth: True label per row (any comparable codes); a resample holding one value is skipped.
+        groups: Group id per row.
+        n_resamples: Resamples to draw.
+        seed: The seed.
+        confidence: Nominal coverage.
+
+    Returns:
+        Statistic name to its interval.
+    """
     all_rows = np.arange(len(truth))
-    estimates = {name: fn(all_rows) for name, fn in statistics.items()}
+    estimates = {name: _defined(fn(all_rows)) for name, fn in statistics.items()}
     values: Dict[str, List[float]] = {name: [] for name in statistics}
     skipped = 0
     for rows in cluster_bootstrap_indices(groups, n_resamples=n_resamples, seed=seed):
-        if len(set(truth[rows].tolist())) < 2:
+        if np.unique(truth[rows]).size < 2:
             skipped += 1
             continue
         for name, fn in statistics.items():
-            value = fn(rows)
-            if value is not None and not math.isnan(value):
-                values[name].append(float(value))
+            value = _defined(fn(rows))
+            if value is not None:
+                values[name].append(value)
     q_low, q_high = _percentiles(confidence)
-    n_groups = len(set(groups.tolist()))
+    n_groups = distinct_keys(groups)
+    unreliable = skipped / n_resamples > SKIP_FRACTION_LIMIT
     result = {}
     for name, collected in values.items():
-        estimate = estimates[name]
         result[name] = BootstrapCI(
-            estimate=float("nan") if estimate is None else float(estimate),
+            estimate=estimates[name],
             low=float(np.percentile(collected, q_low)) if collected else None,
             high=float(np.percentile(collected, q_high)) if collected else None,
             confidence=confidence,
@@ -151,6 +182,7 @@ def _bootstrap(
             n_skipped=skipped,
             seed=seed,
             n_groups=n_groups,
+            unreliable=unreliable or not collected,
         )
     return result
 
@@ -169,7 +201,7 @@ def cluster_bootstrap_ci(
 
     Args:
         metric_fns: Name to a function of `(y_true, y_values)` restricted to a resample's rows. For
-            balanced accuracy pass `classification.balanced_accuracy` with fixed predictions; nothing
+            balanced accuracy pass `metrics.balanced_accuracy` with fixed predictions; nothing
             is re-tuned inside a resample.
         y_true: True label per row.
         y_values: Predictions or scores per row.
@@ -188,9 +220,9 @@ def cluster_bootstrap_ci(
     truth, values = np.asarray(y_true), np.asarray(y_values)
     if len(values) != len(truth):
         raise ValueError("y_true and y_values must have one entry per row")
-    group_arr = _validate(len(truth), groups, n_resamples, confidence)
+    group_arr = validate_groups(len(truth), groups, n_resamples, confidence)
     statistics = {name: (lambda rows, fn=fn: fn(truth[rows], values[rows])) for name, fn in metric_fns.items()}
-    return _bootstrap(statistics, truth, group_arr, n_resamples=n_resamples, seed=seed, confidence=confidence)
+    return bootstrap_statistics(statistics, truth, group_arr, n_resamples=n_resamples, seed=seed, confidence=confidence)
 
 
 def paired_cluster_bootstrap_delta(
@@ -222,15 +254,20 @@ def paired_cluster_bootstrap_delta(
     truth, a, b = np.asarray(y_true), np.asarray(values_a), np.asarray(values_b)
     if not len(truth) == len(a) == len(b):
         raise ValueError("y_true, values_a and values_b must have one entry per row")
-    group_arr = _validate(len(truth), groups, n_resamples, confidence)
+    group_arr = validate_groups(len(truth), groups, n_resamples, confidence)
 
     def delta(rows: np.ndarray) -> float:
         """The paired difference on one resample."""
         return float(metric_fn(truth[rows], a[rows]) - metric_fn(truth[rows], b[rows]))
 
-    return _bootstrap({"delta": delta}, truth, group_arr, n_resamples=n_resamples, seed=seed, confidence=confidence)[
-        "delta"
-    ]
+    return bootstrap_statistics(
+        {"delta": delta}, truth, group_arr, n_resamples=n_resamples, seed=seed, confidence=confidence
+    )["delta"]
+
+
+def _ranking(metric: Callable[..., float], truth: np.ndarray, scores: np.ndarray) -> Optional[float]:
+    """A ranking metric, or `None` when the truth holds one class."""
+    return None if np.unique(truth).size < 2 else float(metric(truth, scores))
 
 
 def legacy_cluster_bootstrap(
@@ -246,7 +283,7 @@ def legacy_cluster_bootstrap(
     """The lab's earlier binary cluster bootstrap, for parity with its published intervals.
 
     Predictions are `score >= threshold`; the metrics are `f1` (positive class), `balanced_accuracy`
-    (through `classification.balanced_accuracy`), `auroc` and `auprc`. Resampling is as in
+    (through `metrics.balanced_accuracy`), `auroc` and `auprc` (`None` on data holding one class). Resampling is as in
     `cluster_bootstrap_indices`.
 
     Args:
@@ -261,20 +298,18 @@ def legacy_cluster_bootstrap(
     Returns:
         Metric name to its interval.
     """
-    from senselab.utils.evaluation.classification import balanced_accuracy
-
     truth = np.asarray(y_true).astype(int)
     scores = np.asarray(y_score, dtype=float)
     if len(scores) != len(truth):
         raise ValueError("y_true and y_score must have one entry per row")
     if not math.isfinite(threshold):
         raise ValueError("threshold must be finite")
-    group_arr = _validate(len(truth), groups, n_resamples, confidence)
+    group_arr = validate_groups(len(truth), groups, n_resamples, confidence)
     pred = (scores >= threshold).astype(int)
     statistics: Dict[str, RowStatistic] = {
         "f1": lambda rows: float(f1_score(truth[rows], pred[rows], zero_division=0)),
         "balanced_accuracy": lambda rows: balanced_accuracy(truth[rows], pred[rows]),
-        "auroc": lambda rows: float(roc_auc_score(truth[rows], scores[rows])),
-        "auprc": lambda rows: float(average_precision_score(truth[rows], scores[rows])),
+        "auroc": lambda rows: _ranking(roc_auc_score, truth[rows], scores[rows]),
+        "auprc": lambda rows: _ranking(average_precision_score, truth[rows], scores[rows]),
     }
-    return _bootstrap(statistics, truth, group_arr, n_resamples=n_resamples, seed=seed, confidence=confidence)
+    return bootstrap_statistics(statistics, truth, group_arr, n_resamples=n_resamples, seed=seed, confidence=confidence)

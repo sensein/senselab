@@ -1,6 +1,7 @@
 """Tests for the cluster bootstrap."""
 
 import inspect
+import json
 from dataclasses import dataclass
 
 import numpy as np
@@ -14,7 +15,8 @@ from senselab.utils.evaluation.bootstrap import (
     legacy_cluster_bootstrap,
     paired_cluster_bootstrap_delta,
 )
-from senselab.utils.evaluation.classification import balanced_accuracy, score_classification
+from senselab.utils.evaluation.classification import score_classification
+from senselab.utils.evaluation.metrics import balanced_accuracy
 
 
 def _cohort(seed: int = 0, n_groups: int = 30) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -126,7 +128,8 @@ def test_paired_delta_sign_follows_the_better_model() -> None:
     rng = np.random.default_rng(1)
     poor = np.where(rng.random(len(y)) < 0.4, 1 - good, good)
     delta = paired_cluster_bootstrap_delta(_ba, y, good, poor, g, n_resamples=300, seed=0)
-    assert delta.low is not None and delta.estimate > 0 and delta.low > 0
+    assert delta.low is not None and delta.estimate is not None
+    assert delta.estimate > 0 and delta.low > 0
 
 
 def _origin_reimplementation(y: np.ndarray, s: np.ndarray, g: np.ndarray, threshold: float, b: int, seed: int) -> dict:
@@ -281,3 +284,63 @@ def test_threshold_stays_fixed_inside_resamples() -> None:
     expected = cluster_bootstrap_ci({"ba": balanced_accuracy}, labels, fixed, g, n_resamples=300, seed=0)["ba"]
     assert report.ci is not None
     assert (report.ci["balanced_accuracy"].low, report.ci["balanced_accuracy"].high) == (expected.low, expected.high)
+
+
+# ── Review fixes ──────────────────────────────────────────────────────
+
+
+def test_numpy_stream_golden_values() -> None:
+    """Pins the generator stream the resampling depends on; NEP 19 does not promise it across releases."""
+    assert np.random.default_rng(42).integers(0, 40, 40)[:8].tolist() == [3, 30, 26, 17, 17, 34, 3, 27]
+
+
+def test_heavy_skipping_flags_the_interval_unreliable() -> None:
+    """More than 5 % skipped resamples marks the interval unreliable; to_dict carries the flag."""
+    y = np.array([0, 0, 0, 0, 1, 1])
+    g = np.array(["a", "a", "b", "b", "c", "c"])
+    skip_heavy = cluster_bootstrap_ci({"ba": _ba}, y, y, g, n_resamples=400, seed=0)["ba"]
+    assert skip_heavy.n_skipped / 400 > 0.05 and skip_heavy.unreliable
+    y2, s2, g2 = _cohort()
+    calm = cluster_bootstrap_ci({"ba": _ba}, y2, (s2 >= 0.5).astype(int), g2, n_resamples=300, seed=0)["ba"]
+    assert calm.n_skipped == 0 and not calm.unreliable
+
+
+def test_group_ids_are_told_apart_as_strings() -> None:
+    """1 and "1" are one group, as resampling treats them, so this is refused as a single group."""
+    y = np.array([0, 1, 0, 1])
+    with pytest.raises(ValueError, match="at least 2 groups"):
+        cluster_bootstrap_ci({"ba": _ba}, y, y, np.array([1, "1", 1, "1"], dtype=object), n_resamples=10, seed=0)
+
+
+def test_single_class_split_is_json_safe() -> None:
+    """With one class in the scored split, undefined values are None, never NaN, and to_dict is strict JSON."""
+    y = np.array(["neg"] * 12)
+    s = np.linspace(0.1, 0.9, 12)
+    g = np.repeat(["a", "b", "c", "d"], 3)
+    report = score_classification(
+        y,
+        np.where(s >= 0.5, "pos", "neg"),
+        labels=["neg", "pos"],
+        protocol="unseen_subject",
+        split_name="test",
+        n_dropped=0,
+        split_report=None,
+        y_score=s,
+        positive_label="pos",
+        groups=g,
+        n_resamples=50,
+        seed=0,
+    )
+    assert report.roc_auc is None and report.average_precision is None
+    assert report.ci is not None
+    assert report.ci["roc_auc"].estimate is None and report.ci["roc_auc"].low is None
+    assert report.ci["balanced_accuracy"].unreliable and report.ci["balanced_accuracy"].n_skipped == 50
+    json.dumps(report.to_dict(), allow_nan=False)
+
+
+def test_balanced_accuracy_has_one_public_home() -> None:
+    """The headline function lives in metrics; classification does not re-export it."""
+    from senselab.utils.evaluation import classification, metrics
+
+    assert callable(metrics.balanced_accuracy) and callable(metrics.legacy_macro_recall)
+    assert not hasattr(classification, "balanced_accuracy") and not hasattr(classification, "legacy_macro_recall")

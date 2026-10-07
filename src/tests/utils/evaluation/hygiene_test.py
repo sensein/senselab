@@ -49,3 +49,11 @@ def test_no_bare_commit_hashes() -> None:
     """A 40-hex commit appears only in the provenance note, where origins are cited by commit."""
     hits = [name for name, text in _texts().items() if name not in EXEMPT_40HEX and HEX40.search(text)]
     assert hits == []
+
+
+def test_no_cross_module_private_imports() -> None:
+    """Evaluation modules import no `_private` name from a sibling; shared helpers live in `_ids`."""
+    pattern = re.compile(r"from senselab\.utils\.evaluation\.(?!_ids\b)\w+ import [^\n]*\b_[a-z]")
+    package = ROOT / "src" / "senselab" / "utils" / "evaluation"
+    hits = [p.name for p in package.glob("*.py") if pattern.search(p.read_text())]
+    assert hits == []

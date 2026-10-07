@@ -25,7 +25,6 @@ subject with at least two units):
 from __future__ import annotations
 
 import math
-import sys
 from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Literal, Mapping, Optional, Sequence, Tuple, Union, get_args
@@ -33,7 +32,9 @@ from typing import Any, Dict, List, Literal, Mapping, Optional, Sequence, Tuple,
 import numpy as np
 from sklearn.model_selection import GroupShuffleSplit, LeaveOneGroupOut, StratifiedGroupKFold
 
+from senselab.utils.evaluation._ids import key_array
 from senselab.utils.evaluation.protocol import PROTOCOLS, Protocol, ProtocolViolation, check_protocol
+from senselab.utils.reproduce.metrics import SPLIT_STRATIFY, SPLIT_UNITS
 
 Scheme = Literal[
     "stratified_group_kfold",
@@ -50,11 +51,6 @@ UNSEEN_SCHEMES = (
     "group_shuffle",
 )
 SEEN_SCHEMES = ("seen_subject_kfold", "seen_subject_holdout")
-
-# The tokens a reproduction driver's flat `split_report` accepts for `unit` and `stratify`. These mirror
-# the reproduce metrics enums (SPLIT_UNITS, SPLIT_STRATIFY); a cross-check test follows once both meet.
-REPRODUCE_UNITS = ("subject", "family", "session", "video", "clip", "recording", "row")
-REPRODUCE_STRATIFY = ("none", "class", "class_timepoint", "class_site", "class_age", "timepoint")
 
 DEFAULT_HOLDOUT_FRACTIONS = (0.6, 0.2, 0.2)
 # Offset between a fold's seed and the seed of the inner split carved from its training pool.
@@ -185,10 +181,10 @@ class SplitReport:
         Raises:
             ValueError: If `unit` or `stratify` is not a token the driver's schema accepts.
         """
-        if self.unit not in REPRODUCE_UNITS:
-            raise ValueError(f"unit {self.unit!r} is not one of {REPRODUCE_UNITS}")
-        if self.stratify not in REPRODUCE_STRATIFY:
-            raise ValueError(f"stratify {self.stratify!r} is not one of {REPRODUCE_STRATIFY}")
+        if self.unit not in SPLIT_UNITS:
+            raise ValueError(f"unit {self.unit!r} is not one of {SPLIT_UNITS}")
+        if self.stratify not in SPLIT_STRATIFY:
+            raise ValueError(f"stratify {self.stratify!r} is not one of {SPLIT_STRATIFY}")
         return {
             "protocol": self.protocol,
             "unit": self.unit,
@@ -524,37 +520,6 @@ KFOLD_SCHEMES = ("stratified_group_kfold", "multilabel_stratified_group_kfold", 
 DEFAULT_N_SPLITS = 5
 
 
-MISSING_IDS = "None, NaN, NaT, pandas.NA or empty"
-
-
-def _is_missing(value: object, pandas_na: object, pandas_nat: object) -> bool:
-    """Whether one id is missing: None, a float NaN of any width, pandas.NA or NaT, or the empty string."""
-    if (
-        value is None
-        or (pandas_na is not None and value is pandas_na)
-        or (pandas_nat is not None and value is pandas_nat)
-    ):
-        return True
-    if isinstance(value, (float, np.floating)):
-        return math.isnan(value)
-    return isinstance(value, str) and value == ""
-
-
-def _key_array(values: Union[np.ndarray, Sequence[Any]], what: str) -> np.ndarray:
-    """The ids as an array, refusing missing ones before coercion can turn a NaN into the string "nan".
-
-    `pandas.NA` and `pandas.NaT` are recognised without importing pandas: an input can only hold them
-    if the caller has already imported pandas, so the check looks the module up in `sys.modules`.
-    """
-    raw = values.tolist() if isinstance(values, np.ndarray) else list(values)
-    pandas = sys.modules.get("pandas")
-    na, nat = (getattr(pandas, "NA", None), getattr(pandas, "NaT", None)) if pandas is not None else (None, None)
-    missing = sum(_is_missing(v, na, nat) for v in raw)
-    if missing:
-        raise ValueError(f"{missing} rows have no {what} id ({MISSING_IDS}); every row needs one")
-    return values if isinstance(values, np.ndarray) else np.asarray(raw)
-
-
 def _prepare(
     labels: np.ndarray,
     subjects: np.ndarray,
@@ -687,8 +652,8 @@ def grouped_splits(
             subject with fewer than two units).
         ValueError: If the inputs are malformed or the arguments do not fit the scheme or protocol.
     """
-    y, groups = np.asarray(labels), _key_array(subjects, "subject")
-    unit_arr = None if units is None else _key_array(units, "unit")
+    y, groups = np.asarray(labels), key_array(subjects, "subject")
+    unit_arr = None if units is None else key_array(units, "unit")
     strata_arr = None if strata is None else np.asarray(strata)
     _prepare(y, groups, protocol, unit_arr, unit_name, strata_arr)
     if scheme not in UNSEEN_SCHEMES + SEEN_SCHEMES:
@@ -776,8 +741,8 @@ def check_split(
         ValueError: If the inputs are malformed: lengths differ, a subject id is missing, a partition
             is empty, holds duplicate, negative or out-of-range indices, or is not an integer array.
     """
-    y, group_arr = np.asarray(labels), _key_array(subjects, "subject")
-    unit_arr = None if units is None else _key_array(units, "unit")
+    y, group_arr = np.asarray(labels), key_array(subjects, "subject")
+    unit_arr = None if units is None else key_array(units, "unit")
     strata_arr = None if strata is None else np.asarray(strata)
     _prepare(y, group_arr, protocol, unit_arr, unit_name, strata_arr)
     as_list = [splits] if isinstance(splits, Split) else list(splits)
@@ -836,8 +801,8 @@ def nested_grouped_splits(
             inner pool it came from (for example a seen subject left with one unit in that pool).
         ValueError: As for `grouped_splits`.
     """
-    y, groups = np.asarray(labels), _key_array(subjects, "subject")
-    unit_arr = None if units is None else _key_array(units, "unit")
+    y, groups = np.asarray(labels), key_array(subjects, "subject")
+    unit_arr = None if units is None else key_array(units, "unit")
     strata_arr = None if strata is None else np.asarray(strata)
     common: Dict[str, Any] = {"protocol": protocol, "unit_name": unit_name, "strata_name": strata_name}
     outer_splits, outer_report = grouped_splits(

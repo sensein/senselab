@@ -88,14 +88,41 @@ linear), 2.5 and 97.5 for 95 %.
   `Generator.integers(0, n_groups, n_groups)` call, so a seed fixes every resample. The resampling is
   not stratified: the groups carry the label mix, and the convention ported here does not stratify.
 - Predictions are fixed before resampling (a tuned threshold is applied once, with `>=`); nothing is
-  re-tuned inside a resample. Balanced accuracy in a resample is `classification.balanced_accuracy`,
+  re-tuned inside a resample. Balanced accuracy in a resample is `metrics.balanced_accuracy`,
   the headline function, so a resample that drops one of several classes averages over the classes
   it holds and is not biased low.
 - A resample whose truth holds one class is skipped and counted (`n_skipped`, reported on every
-  interval); a metric undefined on a kept resample is left out for that metric (`n_used`).
+  interval); a metric undefined on a kept resample is left out for that metric (`n_used`). The skip
+  stays because the earlier lab bootstrap skips, and parity with it requires the same resamples.
+  A high skip fraction means few groups carry the minority class, and then the interval
+  under-covers, so an interval with more than 5 % skipped (or no usable resample) is flagged
+  `unreliable`. Synthetic illustration (groups of 3–12 rows, a share q of groups
+  holding positives, true BA 0.659, B = 1000, about 400 replicates per row; "keep" scores single-class
+  resamples with present-label BA instead of skipping):
+
+  | groups | q | mean skip | coverage, skip | width, skip | coverage, keep | width, keep |
+  |---|---|---|---|---|---|---|
+  | 8 | 0.25 | 0.136 | 0.659 | 0.283 | 0.885 | 0.358 |
+  | 12 | 0.25 | 0.084 | 0.713 | 0.285 | 0.864 | 0.324 |
+  | 20 | 0.25 | 0.021 | 0.839 | 0.275 | 0.892 | 0.284 |
+  | 40 | 0.25 | 0.001 | 0.895 | 0.213 | 0.897 | 0.214 |
+  | 12 | 0.5 | 0.007 | 0.897 | 0.265 | 0.907 | 0.268 |
+
+- A statistic undefined on all rows (ROC-AUC or AP when the scored split holds one class) has
+  `estimate: None` and no interval; the report's own `roc_auc` and `average_precision` are `None`
+  there, computed without calling scikit-learn, so no warning is raised. No value is ever NaN, and
+  `to_dict()` is strict JSON.
+- The resampling depends on numpy's `Generator.integers` stream, which NEP 19 does not guarantee across
+  numpy releases; a golden-value test pins the first draws, and the X2 parity record states both
+  environments' numpy versions.
+- `metrics.py` holds the label metrics (`balanced_accuracy`, `legacy_macro_recall` and the
+  confusion-matrix forms); the report encodes labels to integers once and every resample computes
+  balanced accuracy, macro-F1 and MCC from its confusion matrix with the same functions as the
+  point estimates.
 - `score_classification(groups=...)` adds intervals for balanced accuracy, macro-F1, MCC, and ROC-AUC
   and average precision when scores exist, each computed exactly as the report computes the metric.
-  With B = 2000 this costs seconds per report, because the per-class metrics run per resample.
+  Timing at B = 2000: ranking
+  metrics (scikit-learn per resample) dominate when scores are given.
 - `legacy_cluster_bootstrap` reproduces the lab's earlier binary bootstrap (`provenance.md`, row
   `cluster_bootstrap_ci`): fixed threshold, F1, balanced accuracy, ROC-AUC and average precision.
   A test reimplements that algorithm and requires identical interval bounds.
@@ -305,7 +332,7 @@ two equally near (0.3 and 0.7) the lower; the comparison is on integers in units
 error cannot decide it. The grid
 lives in `data/` rather than in code so that changing it is a reviewed data change.
 
-The default objective is balanced accuracy, computed by `classification.balanced_accuracy`, the
+The default objective is balanced accuracy, computed by `metrics.balanced_accuracy`, the
 same function as the report headline. `f1` (positive class) and `mcc` are available only as an
 explicit, non-default choice; `ThresholdChoice.objective` records it, the report copies it into
 `threshold.objective`, and the balanced-accuracy headline is still computed at whatever threshold

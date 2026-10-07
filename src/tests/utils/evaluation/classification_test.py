@@ -9,13 +9,8 @@ import numpy as np
 import pytest
 from sklearn.metrics import balanced_accuracy_score, recall_score
 
-from senselab.utils.evaluation.classification import (
-    ClassificationReport,
-    balanced_accuracy,
-    legacy_macro_recall,
-    score_classification,
-    score_splits,
-)
+from senselab.utils.evaluation.classification import ClassificationReport, score_classification, score_splits
+from senselab.utils.evaluation.metrics import balanced_accuracy, legacy_macro_recall
 from senselab.utils.evaluation.splits import grouped_splits
 
 BINARY = ["neg", "pos"]
