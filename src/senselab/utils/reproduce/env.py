@@ -804,21 +804,88 @@ def r_snapshot_url(date: datetime.date) -> str:
     return f"{PPM_CRAN}/{date.isoformat()}"
 
 
-def r_script(packages: Sequence[RPackage]) -> str:
-    """The R script prefetch runs with ``Rscript --vanilla <script> <r_lib> <out dir> <repo> <kernel prefix>``.
+R_SESSION_FIELDS = ("installed", "lib_paths", "r_version", "session_info")
+"""The fields of ``SESSION.json`` that describe the loaded R session, compared again at run time."""
+_R_SESSION_CUT = "loaded via a namespace"
 
-    It installs the packages and their ``Depends``/``Imports``/``LinkingTo`` from ``<repo>`` into
-    ``<r_lib>``, loads each, runs ``IRkernel::installspec(prefix=…)`` when a kernel prefix is given,
-    and writes ``installed.tsv``, ``lib_paths.txt``, ``session_info.txt`` and ``r_version.txt`` to
-    the out dir.
+
+def _r_names(packages: Sequence[RPackage]) -> str:
+    bad = [p for p in packages if not _R_NAME.match(p.name) or not _R_VERSION.match(p.version)]
+    if bad:
+        raise ValueError(f"R package names and versions must be plain: {bad}")
+    return ", ".join(f'"{p.name}"' for p in packages)
+
+
+def _r_session_lines() -> list[str]:
+    return [
+        "for (p in pkgs) suppressPackageStartupMessages(library(p, character.only = TRUE))",
+        'ip <- installed.packages(lib.loc = lib)[, c("Package", "Version"), drop = FALSE]',
+        'write.table(ip, file.path(out, "installed.tsv"), sep = "\\t", quote = FALSE, row.names = FALSE,'
+        " col.names = FALSE)",
+        'writeLines(.libPaths(), file.path(out, "lib_paths.txt"))',
+        'writeLines(capture.output(sessionInfo()), file.path(out, "session_info.txt"))',
+        'writeLines(R.version.string, file.path(out, "r_version.txt"))',
+        "",
+    ]
+
+
+def r_session_script(packages: Sequence[RPackage]) -> str:
+    """The R script that records a loaded session: ``Rscript --vanilla <script> <r_lib> <out dir>``.
+
+    It loads each package and writes ``installed.tsv``, ``lib_paths.txt``, ``session_info.txt`` and
+    ``r_version.txt`` to the out dir; `read_r_session` reads them back. `r_script` ends with the same
+    lines, so prefetch and run record a session the same way.
 
     Raises:
         ValueError: If a package name or version is not plain.
     """
-    bad = [p for p in packages if not _R_NAME.match(p.name) or not _R_VERSION.match(p.version)]
-    if bad:
-        raise ValueError(f"R package names and versions must be plain: {bad}")
-    names = ", ".join(f'"{p.name}"' for p in packages)
+    return "\n".join(
+        [
+            "args <- commandArgs(trailingOnly = TRUE)",
+            "lib <- args[[1]]",
+            "out <- args[[2]]",
+            f"pkgs <- c({_r_names(packages)})",
+            *_r_session_lines(),
+        ]
+    )
+
+
+def read_r_session(out: Path) -> dict[str, Any]:
+    """Read the files `r_session_script` writes, in ``SESSION.json``'s form (`R_SESSION_FIELDS`).
+
+    ``session_info`` keeps the lines of ``sessionInfo()`` before ``loaded via a namespace``: that block
+    lists namespaces an install or a script happened to load, not the session the packages make.
+
+    Args:
+        out: The out dir the script wrote.
+
+    Returns:
+        ``{"installed", "lib_paths", "r_version", "session_info"}``.
+
+    Raises:
+        OSError: If a file is missing or unreadable.
+    """
+    rows = [line.split("\t") for line in (out / "installed.tsv").read_text().splitlines() if line.strip()]
+    info = (out / "session_info.txt").read_text().splitlines()
+    cut = next((i for i, line in enumerate(info) if line.startswith(_R_SESSION_CUT)), len(info))
+    return {
+        "installed": {row[0]: row[1] for row in rows if len(row) >= 2},
+        "lib_paths": (out / "lib_paths.txt").read_text().splitlines(),
+        "r_version": (out / "r_version.txt").read_text().strip(),
+        "session_info": [line.rstrip() for line in info[:cut] if line.strip()],
+    }
+
+
+def r_script(packages: Sequence[RPackage]) -> str:
+    """The R script prefetch runs with ``Rscript --vanilla <script> <r_lib> <out dir> <repo> <kernel prefix>``.
+
+    It installs the packages and their ``Depends``/``Imports``/``LinkingTo`` from ``<repo>`` into
+    ``<r_lib>``, runs ``IRkernel::installspec(prefix=…)`` when a kernel prefix is given, then records the
+    session as `r_session_script` does.
+
+    Raises:
+        ValueError: If a package name or version is not plain.
+    """
     return "\n".join(
         [
             "args <- commandArgs(trailingOnly = TRUE)",
@@ -826,19 +893,12 @@ def r_script(packages: Sequence[RPackage]) -> str:
             "out <- args[[2]]",
             "repo <- args[[3]]",
             'prefix <- if (length(args) >= 4) args[[4]] else ""',
-            f"pkgs <- c({names})",
+            f"pkgs <- c({_r_names(packages)})",
             "options(repos = c(CRAN = repo))",
             "dir.create(lib, recursive = TRUE, showWarnings = FALSE)",
             'install.packages(pkgs, lib = lib, dependencies = c("Depends", "Imports", "LinkingTo"))',
-            "for (p in pkgs) suppressPackageStartupMessages(library(p, character.only = TRUE))",
             "if (nzchar(prefix)) IRkernel::installspec(user = FALSE, prefix = prefix)",
-            'ip <- installed.packages(lib.loc = lib)[, c("Package", "Version"), drop = FALSE]',
-            'write.table(ip, file.path(out, "installed.tsv"), sep = "\\t", quote = FALSE, row.names = FALSE,'
-            " col.names = FALSE)",
-            'writeLines(.libPaths(), file.path(out, "lib_paths.txt"))',
-            'writeLines(capture.output(sessionInfo()), file.path(out, "session_info.txt"))',
-            'writeLines(R.version.string, file.path(out, "r_version.txt"))',
-            "",
+            *_r_session_lines(),
         ]
     )
 
@@ -847,7 +907,14 @@ def _r_environment(work: Path) -> dict[str, str]:
     home, tmp = work / "home", work / "tmp"
     home.mkdir(parents=True, exist_ok=True)
     tmp.mkdir(parents=True, exist_ok=True)
-    env = {"PATH": SYSTEM_PATH, "HOME": str(home), "TMPDIR": str(tmp), "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8"}
+    env = {
+        "PATH": SYSTEM_PATH,
+        "HOME": str(home),
+        "TMPDIR": str(tmp),
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+        **sandbox.FIXED_KEYED,
+    }
     bundle = ca_bundle()
     if bundle is not None:
         env["SSL_CERT_FILE"] = bundle
@@ -1007,16 +1074,12 @@ def prefetch_r(
             prefix = str(venv) if kind == "ir_notebook" and venv is not None else ""
             argv = _in_bash(r_install_script(build_modules), module, str(r_lib), str(script), str(out), repo, prefix)
             _checked(run(argv, run_env, work), "Rscript install")
-            rows = [line.split("\t") for line in (out / "installed.tsv").read_text().splitlines() if line.strip()]
-            installed = {row[0]: row[1] for row in rows}
-            lib_paths = (out / "lib_paths.txt").read_text().splitlines()
-            reported_version = (out / "r_version.txt").read_text().strip()
+            recorded = read_r_session(out)
+            installed, lib_paths = recorded["installed"], recorded["lib_paths"]
+            reported_version = recorded["r_version"]
             session = {
                 "key": key,
-                "installed": installed,
-                "lib_paths": lib_paths,
-                "r_version": reported_version,
-                "session_info": (out / "session_info.txt").read_text().splitlines(),
+                **recorded,
                 "script_sha256": hashlib.sha256(script.read_bytes()).hexdigest(),
             }
         if reported_version != f"R version {r_version}" and not reported_version.startswith(f"R version {r_version} "):
