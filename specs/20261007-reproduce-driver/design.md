@@ -172,32 +172,65 @@ How `build` produces and reuses sdist wheels:
   imports pip) never reach the step venv unless its own locks list them. It is made from the
   hashed `build_env` lock, plus the env's torch lock when the build imports torch (mmcv-full).
   Locks and patches are copied into the work directory, the copies are hashed, and only the copies
-  are used, as in the integrity check.
+  are used, as in the integrity check. The sdist's bytes are read once, hashed and unpacked from
+  memory, so nothing can change between the check and the unpack.
+- Every subprocess gets an **allowlisted environment**, never the caller's: `PATH=/usr/bin:/bin`
+  (the build adds the build venv's `bin`), `HOME` and `TMPDIR` under the work directory,
+  `LANG`/`LC_ALL=C.UTF-8`, `SSL_CERT_FILE`, and the caller's `UV_CACHE_DIR` and
+  `UV_PYTHON_INSTALL_DIR` (asked of uv when unset, because a private `HOME` would otherwise move
+  uv's cache and interpreters). The build adds the declared `build_env_vars`, which may not
+  replace any of these, and the fixed ones below. A `PYTHONPATH`, `CFLAGS`, `LD_LIBRARY_PATH`,
+  `CUDA_HOME` or `PIP_*`/`UV_*` setting in the caller's shell changes the wheel without changing
+  any recorded input. The slow test plants a broken `setuptools` on `PYTHONPATH` and a `CFLAGS`;
+  as a control, letting that `PYTHONPATH` through makes the same build fail.
 - Every uv call passes `--no-config`, so a user or project `uv.toml` cannot change an index or a
   build setting behind the lock.
+- **No network during the build.** The sdist fetch and the build-venv installs happen first; the
+  `uv build` then runs with `UV_OFFLINE=1`, `PIP_NO_INDEX=1` and `http(s)_proxy` pointed at
+  `127.0.0.1:9`. This stops cooperative tools only. Once B5's sandbox is merged, B7 also runs the
+  build inside the network namespace, which stops everything.
 - The build runs with `SOURCE_DATE_EPOCH=315532800` (zip dates of 1980) and a fixed umask of
-  `007`, and tar members unpack with their archive mode under that umask. File modes are stored
-  in the wheel: the first slow-test build, unpacked with the `data` filter, differed from the
-  spike's wheel only in `top_level.txt` (0644 against 0660). The spike unpacked with `tar` under
-  umask 007; with the fixed umask the wheel is bit-identical to the spike's under umask 022 and 007
-  alike. `007` was chosen because it reproduces the wheels the spike already recorded.
+  `007`. Tar and zip members unpack with their archive mode under that umask. File modes are
+  stored in the wheel: the first slow-test build, unpacked with tarfile's `data` filter, differed
+  from the spike's wheel only in `top_level.txt` (0644 against 0660). The spike unpacked with `tar`
+  under umask 007. With the fixed umask the wheel is bit-identical to the spike's under umask 022
+  and 007 alike. `007` was chosen because it reproduces the wheels the spike already recorded.
 - Patches are `-p1` unified diffs against the unpacked sdist root, applied with GNU `patch
   --fuzz=0`, before the build venv is created. The spike's mmcv patch carries `srcp/…` paths and
   has to be regenerated with `a/`, `b/` paths when its manifest row is written.
-- With a `cuda_module`, the build argv is wrapped in `bash -lc 'module load <m> && export
-  CUDA_HOME=… && exec "$@"'`, because `module` is a login-shell function; `CUDA_HOME` is taken
-  from `nvcc`, as in the spike's mmcv job. The batch script also loads the module and exports
-  `TORCH_CUDA_ARCH_LIST`, so the job's own log shows the toolchain.
+- **Modules load without dotfiles:** `bash --noprofile --norc -c '. /etc/profile.d/modules.sh &&
+  module load <m…> && <fail unless nvcc is on PATH> && export CUDA_HOME=… && exec "$@"'`.
+  `CUDA_HOME` is derived from `nvcc`, as in the spike's mmcv job. `cuda_module` may name several
+  modules separated by spaces. The spike's mmcv build got gcc 12.2 from the login shell's default
+  modules. With dotfiles and the caller's `PATH` gone, the compiler is `/usr/bin/gcc` (8.5 here)
+  unless the manifest loads one, e.g. `cuda_module: "gcc/12.2.0 cuda/12.9.1"`. Each wheel gets a
+  `<wheel>.build-info.json` recording the uv, gcc and nvcc versions, the modules and
+  `python_exact`, so the toolchain is visible either way.
+- **Content-addressed wheelhouse:** `<wheelhouse>/<wheel sha256>/<wheel file>`, never overwritten.
+  Other bytes already at a wheel's address are an error. A rebuild adds a new directory and
+  repoints the line; the old wheel stays, so an earlier `wheels.lock` still resolves.
 - `wheels.lock` has nine columns: `name version sdist_url sdist_sha256 build_env_sha256
-  patch_sha256s build_config_sha256 wheel_file wheel_sha256`. The spike's seven-column file named
-  the build lock by file name; this one records its sha256 and every patch sha256, and folds the
-  torch lock sha256, build variables, CUDA module and arch list into `build_config_sha256`, since
-  an arch list may contain spaces and the variables are a mapping.
+  patch_sha256s build_config_sha256 wheel_path wheel_sha256`. `wheel_path` is relative to the
+  wheelhouse. The spike's seven-column file named the build lock by file name. This one records
+  the build lock's sha256 and every patch sha256, and folds `python_exact`, the torch lock sha256,
+  the build variables, the modules and the arch list into `build_config_sha256`, since an arch
+  list may contain spaces and the variables are a mapping.
 - Reuse compares every input column with the manifest. A line recorded for other inputs, a missing
   wheel, or a wheel whose sha256 differs is an error that names `--rebuild`, never a silent rebuild:
   CUDA builds are not bit-reproducible, so a rebuild is a new wheel and changes the lock.
-  `--rebuild` replaces only that sdist's line. Updates hold an exclusive `flock` on `wheels.lock`,
-  because several build jobs of one env can finish together.
+- **`wheels.lock` contract with the manifest.** Readers take a shared `flock` on the sidecar
+  `wheels.lock.lock` and writers an exclusive one, because several build jobs of one env can
+  finish together. Writes go to a temp file followed by `os.replace`. Each read is one read of the
+  bytes, checked against the manifest's `wheels.lock_sha256` when the manifest has one.
+  `record_wheel` and `ensure_wheel` return the new file sha256. The caller (`prefetch`, B13) writes
+  it into the manifest's `wheels.lock_sha256`; until it does, the next integrity check refuses the
+  env. The sidecar is not content; the manifest repository should list it in `.gitignore`.
+- B7 installs a recorded wheel through `stage_wheel`. That copies it into the step's `{tmp}`,
+  checks the copy's sha256, and installs from the copy.
+- The batch job starts from an empty environment (`--export=NONE`). It exports `PATH`,
+  `UV_CACHE_DIR`, `UV_PYTHON_INSTALL_DIR`, `SENSELAB_REPRO_CACHE`, the driver interpreter, and a
+  `TMPDIR` under `/dev/shm/<job>` that is removed on exit. `build-one` builds in a temporary work
+  directory under that `TMPDIR`, removed afterwards.
 
 **The venv name** is `repro-<analysis>-<env_key8>`. `env_key` is derived from inputs only:
 
