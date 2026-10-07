@@ -556,6 +556,26 @@ therefore read the same files on any day.
 triples, so it reveals no file names. It is taken before and after the step, and a change fails
 the step.
 
+- Hashing the relative path (not storing it) is what keeps the digest safe to record in provenance
+  and `summary.json`; hashing it at all is what makes a rename change the digest.
+- Errors are a fixed code (`E_DIGEST_NO_ROOT`, `E_DIGEST_BAD_PATTERN`, `E_DIGEST_UNREADABLE`) with
+  no path, because the exception class and message can reach `summary.json`.
+- Each pattern is walked from its longest wildcard-free directory, and a pattern with no wildcard is
+  hashed directly, so a narrow pattern on a large data root does not walk the whole root.
+- Non-regular files are refused rather than opened: opening a FIFO blocks.
+- Exclusions are whole path components, so the output digest can leave out `{out}/cuda-cache`
+  (written by the CUDA JIT during the step) without also hiding a sibling such as `cuda-cache-x`.
+- Patterns and exclusions with an empty, `.` or `..` component are refused, so one file cannot be
+  named two ways and nothing outside the root can be reached by spelling.
+- `require_nonempty` (`E_DIGEST_EMPTY`) lets a caller refuse an input set that matched nothing; a
+  typo in a pattern would otherwise digest the empty set the same way before and after.
+- **Symlinks are asymmetric, by construction.** A pattern's wildcard-free leading components are
+  resolved by path, so a symlinked directory named there (or in a pattern with no wildcard at all)
+  is followed. Below that prefix the walk does not descend into symlinked directories, so a glob
+  never reaches one; this keeps a symlink loop or a link out of the data root from being walked
+  just because `**` matched it. A manifest that needs files behind a directory symlink names the
+  link in the pattern's fixed prefix.
+
 ## Metrics, expectations, provenance
 
 **Adapters.** Each step's adapter turns the analysis's own outputs into `metrics.json`, from a fixed
@@ -568,6 +588,139 @@ vocabulary:
 
 Unknown keys and non-numeric values are rejected. Count fields below a minimum cell size are
 suppressed.
+
+**Why the vocabulary has the shape it has.**
+
+- `headline` is a list of entries, not a map, because one step can report the same metric for
+  several systems (told apart by a declared `label`) or several test statistics of one name (told
+  apart by their degrees of freedom).
+- Every name, label and count name an adapter may emit is declared in the manifest's
+  `metrics_schema`. The declared names must all appear, so a pass rule cannot silently pass on a
+  missing number.
+- **Headline names are bound to the step's kind:** classification {balanced_accuracy, macro_recall,
+  macro_f1, auroc, f1, accuracy, top1, pr_auc, mcc}; detection {avg_map, map_at}; statistic
+  {f_stat}; count {count}. Otherwise a step could declare itself `statistic` to escape the imbalance
+  rules while reporting an accuracy.
+- A classification step declares at least two classes and a `balanced_accuracy` or `macro_recall`
+  headline, so every classification row reports at least one imbalance-aware number. A baseline
+  such as a Bernoulli or majority-class predictor is a classification step like any other, with
+  `accuracy` beside its majority-class floor and `threshold_tuning: none`.
+- Free text is never accepted. The only strings are declared labels and fixed words: `unit`
+  (`fraction`, `pp`), `threshold_tuning`, `protocol`, and the split's `unit` and `stratify`, each
+  from an enum in `metrics.py`. A new unit or stratification is added by editing that enum, in a
+  reviewed change, never by a manifest.
+
+**Imbalance.** A headline number on an imbalanced split means little without its floor, so a
+classification or detection step's output is refused unless it carries:
+
+- `prevalence` in [0, 1] for every declared class; for classification (single-label by definition
+  here) also `recall` and `precision` for every class, and prevalences that sum to 1 within 1e-6
+- `floor` and `lift` on every headline entry; `lift` must equal value minus floor
+- `threshold_tuning`: `validation`, `none` or `test`. `test` is accepted with the warning
+  `W_TUNED_ON_TEST` (returned beside the clean object, not an error) so that a reproduction can
+  record honestly that the source tuned its threshold on the test split; refusing it would force
+  the adapter to misreport the source.
+
+**Which floors are checked.** With k the number of declared classes **present** on the scored
+split (prevalence above 0) and that split's prevalences, the floor
+is checked within 1e-6 (scaled by 100 for a `pp` entry):
+
+| headline | floor |
+|---|---|
+| balanced_accuracy, macro_recall | 1/k |
+| auroc | 0.5 |
+| mcc | 0 |
+| accuracy, top1 | the largest class prevalence (majority class) |
+| pr_auc | p, the positive-class prevalence, when the schema declares `positive` |
+| f1 | 2p/(1+p), the all-positive predictor, when the schema declares `positive` |
+
+`macro_f1`, `avg_map` and `map_at` (and `pr_auc`/`f1` without a declared positive class) are checked
+for presence only: their trivial-classifier value depends on choices (which trivial predictor,
+which IoU thresholds, per-class averaging) that the vocabulary does not carry, so a fixed formula
+would be wrong for some rows. `positive` may be declared only on a binary classification step.
+
+**Split protocol.** `split_report.protocol` is `seen_subject`, `unseen_subject` or `none`.
+`seen_subject` and `unseen_subject` are both legitimate evaluations. A seen-subject split asks
+whether a model works on new clips of people it was trained on; an unseen-subject split asks whether
+it works on new people. The protocol travels with every number so that a seen-subject result is
+never read as generalization to new people. `invariant_ok` records whether the split met its own
+protocol's invariant (no subject in two partitions for unseen; every test subject in train and no
+session or video in two partitions for seen). A `false` is a finding about the original split,
+reported with the number, not a schema error.
+
+- `none` labels a source split that has no protocol at all (for example a row-level split), and is
+  accepted only with `invariant_ok: false`, so it can never read as a clean split.
+- A classification or detection step must emit a `split_report`. The only way out is an explicit
+  schema opt-out, `split: {none: whole_dataset}`, for a step scored on the whole dataset with no
+  held-out partition (a baseline); a step that opts out may not also emit a report.
+- For classification, every fold's `prevalence` must give every declared class (and sum to 1).
+
+**Suppression and its residual risk.** `n`, `counts.*`, `confusion.*`, a `count` headline value and
+a fold's `n_groups` below the minimum cell become `"<k>"` rather than rejecting the file: a small
+cell is expected in a real result and is not an adapter bug. `n_groups` is suppressed only when the
+fold's unit is a person (`subject`, `family`) or no unit is given; groups of sessions, videos, clips,
+recordings or rows describe the design, not people. Degrees of freedom and `n_folds` are never
+suppressed.
+
+Accepted residual risk: a prevalence multiplied by an unsuppressed `n` (or a recall times a
+class size) can reconstruct a small cell that was suppressed elsewhere. Closing that would mean
+rounding or suppressing prevalences and rates, which are the numbers the imbalance rules exist to
+report. The output stays aggregate-only and is read only through the narrow reruns exception.
+
+The driver validates twice, once the adapter's output and once the final object after writing the
+`expect` results (`writer="driver"`), and must pass the same `min_cell` both times: a token
+`"<5"` is accepted again only under `min_cell=5`.
+
+**Absent classes.** A declared class with prevalence 0 does not count toward k, matching
+scikit-learn's balanced accuracy, which averages recall over the classes present in `y_true`.
+Counting it would lower the chance floor (two present classes of three declared would accept 1/3
+instead of 1/2) and inflate the lift. Such a class gives the warning `W_CLASS_ABSENT`.
+
+**Keys bound to kinds.** `per_class` (and the schema's `per_class`/`positive`) belong only to
+classification and detection, and `confusion` only to classification. Elsewhere the key is refused
+with `E_METRICS_KIND_KEY`, a code distinct from `E_METRICS_UNKNOWN_KEY` because the key is in the
+vocabulary but not for this kind. Without this, a step declared `statistic` could report per-class
+recall and a confusion matrix free of the prevalence, floor and split rules.
+
+**Value ranges.** Headline values are range-checked (`E_METRICS_RANGE`): classification and detection
+rates in [0, 1], or [0, 100] with `unit: pp`; `mcc` in [-1, 1], scaled likewise; `f_stat` at least 0;
+and `ci_low <= value <= ci_high` when given. This catches a percentage written without `unit: pp`.
+`floor` takes the value's bounds for every headline entry, presence-only floors included, and
+`lift` lies within plus or minus the range width under the same scaling. Per-class recall,
+precision and f1 lie in [0, 1], as prevalence already does.
+
+**Sub-sample prevalence.** When the top-level `n` is given, a class prevalence above 0 but below
+`1/n` stands for less than one example and is refused (`E_METRICS_PREVALENCE_SUBSAMPLE`); it would
+otherwise let an adapter dodge `W_CLASS_ABSENT` and the present-class floor rule with a tiny
+non-zero value.
+
+**Driver-only keys.** `delta`, `target`, `tolerance` and `pass` are refused anywhere in adapter
+output. Only the driver, evaluating `expect`, writes them; otherwise an adapter could report its own
+pass.
+
+**Metric addresses.** `expect` and `from_step` name a value as `<headline>`, `<headline>@<label>`,
+`counts.<name>`, `per_class.<label>.<field>` or `confusion.<cell>`. A manifest's `expect` metrics are
+checked against its own `metrics_schema` when the manifest loads, and `expect.unit` is `fraction`
+or `pp`. `from_step.metric` names a metric of the upstream step, so it is checked against the
+upstream step's schema when the DAG is assembled (B11), not here. A bare headline name that matches
+several entries is refused when read, rather than picking one.
+
+**Notes for `run.py` (B12).**
+
+- `validate_metrics` returns error codes (`E_*`) and warnings (`W_*`, `WARNINGS` in `metrics.py`)
+  in one sorted list. Only an `E_*` code fails the step; `clean` is None exactly then. `W_*` codes
+  (`W_TUNED_ON_TEST`, `W_CLASS_ABSENT`) are recorded in `summary.json` and provenance next to the
+  numbers and do not change the exit code.
+- Declared inputs are digested with `input_set_digest(root, patterns, require_nonempty=True)`, so a
+  pattern that matches nothing fails with `E_DIGEST_EMPTY` instead of digesting the empty set the
+  same way before and after the step. Output digests exclude `cuda-cache`.
+- The final object, after the driver writes the `expect` results, is validated again with
+  `writer="driver"` and the same `min_cell`.
+
+**Host record.** Hostname, CPU model and counts, the first GPU's name and driver from `nvidia-smi`
+with the GPU count, and the venv's Python, torch and torch CUDA versions, asked of the venv's own
+interpreter in isolated mode with a minimal environment so the caller's `PYTHONPATH` cannot answer
+for it. Anything unavailable is None.
 
 **Expectations.** Only the driver writes `target`, `tolerance`, `delta` and `pass`, by evaluating the
 step's expectations: a literal value, an upstream step's metric, or a number read from a
