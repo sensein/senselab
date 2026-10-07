@@ -591,6 +591,7 @@ def test_render_build_job(tmp_path: Path) -> None:
         "--gres=gpu:1",
         "--output=/out/slurm/2026-10-07/build-demo-%j.out",
         "--error=/out/slurm/2026-10-07/build-demo-%j.err",
+        "--chdir=/out/slurm/2026-10-07",
     ):
         assert f"#SBATCH {flag}" in lines
     assert "#SBATCH --export=NONE" in lines
@@ -605,7 +606,7 @@ def test_render_build_job(tmp_path: Path) -> None:
         'mkdir -p "$TMPDIR"',
         "trap 'rm -rf \"$TMPDIR\"' EXIT",
         'export TORCH_CUDA_ARCH_LIST="8.0;9.0"',
-        '"$REPRO_DRIVER_PYTHON" -m senselab.utils.reproduce build-one /repo/m.yaml'
+        '"$REPRO_DRIVER_PYTHON" -P -m senselab.utils.reproduce build-one /repo/m.yaml'
         " --profile /repo/p.yaml --step train --sdist demo",
     ]
     assert "LD_LIBRARY_PATH" not in text and "PLANTED" not in text and "module" not in text
