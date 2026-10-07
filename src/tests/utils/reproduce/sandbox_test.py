@@ -317,7 +317,7 @@ def test_keyed_sha_ignores_volatile_values_and_follows_the_profile(tmp_path: Pat
 
 
 def test_r_libs(tmp_path: Path) -> None:
-    """``r_lib`` keys ``R_LIBS`` as a template, with ``R_LIBS_SITE`` empty and no ``R_LIBS_USER``."""
+    """``r_lib`` keys ``R_LIBS`` and ``R_LIBS_USER`` as a template, with ``R_LIBS_SITE`` empty."""
     r_step = _step(
         kind="r",
         env={**_step().env.model_dump(mode="json"), "r_packages": [{"name": "x", "version": "1"}]}
@@ -326,9 +326,9 @@ def test_r_libs(tmp_path: Path) -> None:
     keyed = keyed_templates(r_step, _profile(tmp_path / "root"))
     assert keyed["R_LIBS"] == "{cache}/R/e"
     assert keyed["R_LIBS_SITE"] == ""
-    assert "R_LIBS_USER" not in keyed
+    assert keyed["R_LIBS_USER"] == "{cache}/R/e"
     env, _, _ = build_env(r_step, _profile(tmp_path / "root"), _paths(tmp_path), parent={})
-    assert env["R_LIBS"] == f"{tmp_path}/cache/R/e"
+    assert env["R_LIBS"] == env["R_LIBS_USER"] == f"{tmp_path}/cache/R/e"
 
 
 NATIVE = {

@@ -8,6 +8,7 @@ import hashlib
 import json
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -25,7 +26,7 @@ from senselab.utils.reproduce.locks import (
     requirements_digest_for,
     write_header,
 )
-from senselab.utils.reproduce.spec import EnvSpec, PipCheckExpected, Profile, SdistSpec, TorchSpec
+from senselab.utils.reproduce.spec import EnvSpec, LockRef, PipCheckExpected, Profile, SdistSpec, TorchSpec
 
 DATA = Path(__file__).parent / "data"
 ENV_DIR = "envs/a"
@@ -176,11 +177,13 @@ class FakeUv:
 
 
 class FakeWheels:
-    """Stands in for ``env.ensure_wheel``: stores a demo wheel in the wheelhouse and records the call."""
+    """Stands in for ``env.ensure_wheel`` and ``env.reuse_wheel``: a wheelhouse and ``wheels.lock`` of demo wheels."""
 
     def __init__(self) -> None:
-        """Start with no calls."""
+        """Start with no calls and nothing recorded; new builds hold ``content``."""
         self.calls: list[dict[str, Any]] = []
+        self.content = b"demo wheel"
+        self.recorded: dict[str, tuple[Path, str]] = {}
 
     def __call__(
         self,
@@ -191,17 +194,25 @@ class FakeWheels:
         torch_lock: TorchSpec | None = None,
         **kw: object,
     ) -> WheelResult:
-        """Return a stored wheel; the first call counts as a build."""
-        data = b"demo wheel"
-        sha = hashlib.sha256(data).hexdigest()
-        wheel = wheelhouse / sha / WHEEL_NAME
-        built = not wheel.exists()
-        wheel.parent.mkdir(parents=True, exist_ok=True)
-        wheel.write_bytes(data)
-        wheels_lock.parent.mkdir(parents=True, exist_ok=True)
-        wheels_lock.write_text(f"line {sha}\n")
+        """Reuse the recorded wheel unless ``rebuild``; otherwise store ``content`` as a new wheel and record it."""
         self.calls.append({"sdist": sdist.name, "torch_lock": torch_lock, "wheels_lock": wheels_lock, **kw})
-        return WheelResult(wheel, sha, file_sha256(wheels_lock), built)
+        if not kw.get("rebuild") and sdist.name in self.recorded:
+            wheel, sha = self.recorded[sdist.name]
+            return WheelResult(wheel, sha, file_sha256(wheels_lock), False)
+        sha = hashlib.sha256(self.content).hexdigest()
+        wheel = wheelhouse / sha / WHEEL_NAME
+        wheel.parent.mkdir(parents=True, exist_ok=True)
+        wheel.write_bytes(self.content)
+        self.recorded[sdist.name] = (wheel, sha)
+        wheels_lock.parent.mkdir(parents=True, exist_ok=True)
+        wheels_lock.write_text("".join(f"{n} {s}\n" for n, (_, s) in sorted(self.recorded.items())))
+        return WheelResult(wheel, sha, file_sha256(wheels_lock), True)
+
+    def reuse(
+        self, wheels_lock: Path, sdist: SdistSpec, wheelhouse: Path, torch_lock: object = None, **kw: object
+    ) -> tuple[Path, str] | None:
+        """The recorded wheel for ``sdist``, if any."""
+        return self.recorded.get(sdist.name)
 
 
 @pytest.fixture
@@ -210,6 +221,7 @@ def fake(monkeypatch: pytest.MonkeyPatch) -> tuple[FakeUv, FakeWheels]:
     uv, wheels = FakeUv(), FakeWheels()
     monkeypatch.setattr(envmod, "_run", uv)
     monkeypatch.setattr(envmod, "ensure_wheel", wheels)
+    monkeypatch.setattr(envmod, "reuse_wheel", wheels.reuse)
     monkeypatch.setattr(envmod, "find_uv", lambda: UV)
     for key, value in CALLER_ENV.items():
         monkeypatch.setenv(key, value)
@@ -350,7 +362,7 @@ def test_prefetch_stage_argv_uv_export(tmp_path: Path, fake: tuple[FakeUv, FakeW
         assert run_env is not None and set(run_env) == ALLOWED_KEYS
         assert run_env["PATH"] == "/usr/bin:/bin" and run_env["UV_CACHE_DIR"] == "/cache/uv"
     assert wheels.calls[0]["python"] == "3.11.15" and wheels.calls[0]["expected_sha256"] is None
-    assert result.wheels_lock_sha256 == file_sha256(base / ENV_DIR / "wheels.lock")
+    assert result.wheels_lock_sha256 == file_sha256(base / ENV_DIR / "wheels.lock") and result.record
     assert result.built == ("python_speech_features",)
 
 
@@ -489,7 +501,112 @@ def test_torch_lock_passed_to_wheel_builds(tmp_path: Path, fake: tuple[FakeUv, F
     env = EnvSpec.model_validate(raw)
     _prefetch(tmp_path, env, uv_lock=_uv_lock(tmp_path))
     assert all(c["torch_lock"] == env.torch for c in wheels.calls)
-    assert wheels.calls[1]["expected_sha256"] == file_sha256(base / ENV_DIR / "wheels.lock")
+    first_lock = f"python_speech_features {hashlib.sha256(b'demo wheel').hexdigest()}\n"
+    assert wheels.calls[0]["expected_sha256"] is None
+    assert wheels.calls[1]["expected_sha256"] == hashlib.sha256(first_lock.encode()).hexdigest()
+
+
+def _with_wheels(env: EnvSpec, base: Path) -> EnvSpec:
+    """``env`` with ``env.wheels`` pointing at the current ``wheels.lock``, as the caller records it."""
+    lock = base / ENV_DIR / "wheels.lock"
+    return env.model_copy(update={"wheels": LockRef(lock=f"{ENV_DIR}/wheels.lock", lock_sha256=file_sha256(lock))})
+
+
+def test_existing_wheels_lock_without_manifest_entry_refused(tmp_path: Path, fake: tuple[FakeUv, FakeWheels]) -> None:
+    """With ``env.wheels`` unset, a ``wheels_lock`` file that already exists is refused: record its sha256 first."""
+    uv, _ = fake
+    env = EnvSpec.model_validate(_env(tmp_path / "manifests", torch=False, overlays=False))
+    first = _prefetch(tmp_path, env)
+    assert first.record and first.wheels_lock_sha256 is not None
+    with pytest.raises(ReproduceLockError, match="record its sha256"):
+        _prefetch(tmp_path, env)
+    again = _prefetch(tmp_path, _with_wheels(env, tmp_path / "manifests"), wheels_lock=None)
+    assert again.base.reused and not again.record and again.wheels_lock_sha256 == first.wheels_lock_sha256
+
+
+def test_changed_wheel_rebuilds_the_venv(tmp_path: Path, fake: tuple[FakeUv, FakeWheels]) -> None:
+    """A ``wheels.lock`` line now naming another wheel rebuilds the venv; its name does not change."""
+    uv, wheels = fake
+    base = tmp_path / "manifests"
+    env = EnvSpec.model_validate(_env(base, torch=False, overlays=False))
+    first = _prefetch(tmp_path, env)
+    marker = json.loads((first.base.path / envmod.MARKER).read_text())
+    assert marker["wheels"] == {"python_speech_features": hashlib.sha256(b"demo wheel").hexdigest()}
+    assert json.loads((first.base.path / "installed.json").read_text())["wheels"] == marker["wheels"]
+    env = _with_wheels(env, base)
+    assert _prefetch(tmp_path, env, wheels_lock=None).base.reused
+    wheels.content = b"rebuilt elsewhere"
+    wheels(env.sdist_allow[0], base, tmp_path / "wh", base / ENV_DIR / "wheels.lock", rebuild=True)
+    env = _with_wheels(env, base)
+    second = _prefetch(tmp_path, env, wheels_lock=None)
+    assert second.base.path == first.base.path and not second.base.reused
+    new_sha = hashlib.sha256(b"rebuilt elsewhere").hexdigest()
+    assert json.loads((second.base.path / envmod.MARKER).read_text())["wheels"] == {"python_speech_features": new_sha}
+    assert uv.installs(second.base.path)[-1][-1].endswith(f"{new_sha}/{WHEEL_NAME}")
+
+
+def test_rebuild_rebuilds_a_complete_venv(tmp_path: Path, fake: tuple[FakeUv, FakeWheels]) -> None:
+    """``rebuild=True`` rebuilds every venv and every wheel, even when all are complete."""
+    _, wheels = fake
+    base = tmp_path / "manifests"
+    env = EnvSpec.model_validate(_env(base, torch=False))
+    _prefetch(tmp_path, env)
+    env = _with_wheels(env, base)
+    result = _prefetch(tmp_path, env, wheels_lock=None, rebuild=True)
+    assert not result.base.reused and not any(d.reused for d in result.derived.values())
+    assert result.built == ("python_speech_features",) and wheels.calls[-1]["rebuild"] is True
+
+
+def test_tampered_installed_json_rebuilds(tmp_path: Path, fake: tuple[FakeUv, FakeWheels]) -> None:
+    """An ``installed.json`` that no longer matches the marker's sha256 makes the venv incomplete."""
+    env = EnvSpec.model_validate(_env(tmp_path / "manifests", torch=False, sdist=False, overlays=False))
+    first = _prefetch(tmp_path, env)
+    path = first.base.path / "installed.json"
+    path.write_text(path.read_text().replace("1.17.0", "9.9.9"))
+    assert not _prefetch(tmp_path, env).base.reused
+
+
+def test_checks_recorded_only_with_a_profile(
+    tmp_path: Path, fake: tuple[FakeUv, FakeWheels], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without a profile no venv is marked checked; with one, both checks run once and are recorded."""
+    ran: list[str] = []
+    monkeypatch.setattr(envmod, "check_pip", lambda venv, env: ran.append(f"pip {venv.name}"))
+
+    def fake_smoke(venv: Path, modules: list[str], profile: Profile) -> list[str]:
+        ran.append(f"smoke {venv.name}")
+        return []
+
+    monkeypatch.setattr(envmod, "smoke", fake_smoke)
+    raw = _env(tmp_path / "manifests", torch=False, sdist=False)
+    raw.pop("notebook_tools")
+    env = EnvSpec.model_validate(raw)
+    plain = _prefetch(tmp_path, env)
+    assert not plain.base.checked and not envmod.venv_checked(plain.base.path, env) and ran == []
+    checked = _prefetch(tmp_path, env, profile=_profile(tmp_path))
+    assert checked.base.checked and checked.derived["test"].checked and len(ran) == 4
+    assert envmod.venv_checked(checked.base.path, env)
+    assert env.test is not None and envmod.venv_checked(checked.derived["test"].path, env, env.test)
+    marker = json.loads((checked.base.path / envmod.MARKER).read_text())
+    assert marker["checks"] == {"digest": envmod.checks_digest(env), "pip_check_ok": True, "smoke_ok": True}
+    again = _prefetch(tmp_path, env, profile=_profile(tmp_path))
+    assert again.base.reused and again.base.checked and len(ran) == 4
+    stricter = env.model_copy(update={"smoke_imports": ["numpy"]})
+    assert not envmod.venv_checked(checked.base.path, stricter)
+    _prefetch(tmp_path, stricter, profile=_profile(tmp_path))
+    assert len(ran) == 8
+
+
+def test_failed_check_leaves_venv_unchecked(
+    tmp_path: Path, fake: tuple[FakeUv, FakeWheels], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A smoke failure raises and the marker keeps the checks false."""
+    monkeypatch.setattr(envmod, "check_pip", lambda venv, env: None)
+    monkeypatch.setattr(envmod, "smoke", lambda venv, modules, profile: ["numpy: ImportError"])
+    env = EnvSpec.model_validate(_env(tmp_path / "manifests", torch=False, sdist=False, overlays=False))
+    with pytest.raises(ReproduceLockError, match="smoke"):
+        _prefetch(tmp_path, env, profile=_profile(tmp_path))
+    assert not envmod.venv_checked(envmod.venv_dir(tmp_path / "cache", "demo", env), env)
 
 
 # pip check
@@ -561,8 +678,9 @@ def test_smoke_runs_each_import_in_the_sandbox(tmp_path: Path) -> None:
     """One sandboxed, offline ``python -c 'import m'`` per module; failures are returned by module."""
     calls: list[tuple[list[str], dict[str, str]]] = []
 
-    def runner(argv: list[str], env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    def runner(argv: list[str], env: dict[str, str], cwd: Path) -> subprocess.CompletedProcess[str]:
         calls.append((argv, env))
+        assert cwd.is_dir() and list(cwd.iterdir()) == [] and cwd != Path.cwd()
         bad = argv[-1] == "import broken"
         return subprocess.CompletedProcess(argv, 1 if bad else 0, "", "ModuleNotFoundError" if bad else "")
 
@@ -578,6 +696,34 @@ def test_smoke_runs_each_import_in_the_sandbox(tmp_path: Path) -> None:
         assert env["https_proxy"] == sandbox.PROXY and "PYTHONPATH" not in env
     with pytest.raises(ValueError):
         envmod.smoke(venv, ["os; import shutil"], runner=runner)
+
+
+def test_smoke_timeout_is_a_fixed_error(tmp_path: Path) -> None:
+    """An import that outlives the timeout raises ``E_SMOKE_TIMEOUT``."""
+
+    def runner(argv: list[str], env: dict[str, str], cwd: Path) -> subprocess.CompletedProcess[str]:
+        raise subprocess.TimeoutExpired(argv, envmod.SMOKE_TIMEOUT)
+
+    with pytest.raises(ReproduceLockError, match="E_SMOKE_TIMEOUT"):
+        envmod.smoke(tmp_path / "venv", ["numpy"], runner=runner)
+
+
+def test_smoke_ignores_modules_in_the_callers_directory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A module of the same name in the caller's working directory does not satisfy the sandboxed import."""
+    if not sandbox.userns_available():
+        pytest.skip("no user namespaces here")
+    venv = tmp_path / "venv"
+    (venv / "bin").mkdir(parents=True)
+    (venv / "bin" / "python").symlink_to(sys.executable)
+    caller = tmp_path / "caller"
+    caller.mkdir()
+    (caller / "shadowmod.py").write_text("VALUE = 1\n")
+    monkeypatch.chdir(caller)
+    control = subprocess.run([str(venv / "bin" / "python"), "-c", "import shadowmod"], check=False)
+    assert control.returncode == 0
+    (failure,) = envmod.smoke(venv, ["shadowmod"])
+    assert "No module named 'shadowmod'" in failure
+    assert envmod.smoke(venv, ["json"]) == []
 
 
 # R envs
@@ -624,18 +770,24 @@ class FakeR:
         self.installed = installed
         self.calls: list[tuple[list[str], dict[str, str]]] = []
 
-    def __call__(self, argv: list[str], env: dict[str, str]) -> subprocess.CompletedProcess[str]:
-        """Record the call; write the files the generated R script would write."""
+    def __call__(self, argv: list[str], env: dict[str, str], cwd: Path) -> subprocess.CompletedProcess[str]:
+        """Record the call; write the files the generated R script would write.
+
+        ``.libPaths()`` is emulated: ``R_LIBS``, then ``R_LIBS_USER`` when the script exports it and
+        otherwise a user library under ``HOME`` (R's default), then R's own library.
+        """
         self.calls.append((argv, env))
         script = argv[4]
         if "env -0" in script:
             captured = "PATH=/mod/r/bin:/usr/bin:/bin\0LD_LIBRARY_PATH=/mod/r/lib:/mod/blas/lib\0HOME=/x\0"
             return subprocess.CompletedProcess(argv, 0, captured, "")
         _, r_lib, r_script, out_dir, repo, venv = argv[6:12]
-        assert "Rscript" in script and Path(r_script).is_file() and repo.endswith(R_DATE.isoformat())
+        assert "Rscript" in script and Path(r_script).is_file() and repo.startswith(envmod.PPM_CRAN + "/")
         out = Path(out_dir)
         (out / "installed.tsv").write_text("".join(f"{k}\t{v}\n" for k, v in self.installed.items()))
-        (out / "lib_paths.txt").write_text(f"{r_lib}\n/mod/r/lib64/R/library\n")
+        user = r_lib if 'R_LIBS_USER="$2"' in script else f"{env['HOME']}/R/x86_64-pc-linux-gnu-library/4.5"
+        paths = list(dict.fromkeys([r_lib, user, "/mod/r/lib64/R/library"]))
+        (out / "lib_paths.txt").write_text("".join(f"{p}\n" for p in paths))
         (out / "session_info.txt").write_text("R version 4.5.2\nother attached packages: lme4\n")
         (out / "r_version.txt").write_text("R version 4.5.2 (2025-10-31)\n")
         if venv:
@@ -658,12 +810,14 @@ def test_prefetch_r_writes_session_and_module_env(tmp_path: Path) -> None:
     r_lib = cache / "r" / "demo"
     assert result.r_lib == r_lib and not result.reused
     session = json.loads((r_lib / "SESSION.json").read_text())
-    assert session["snapshot"] == "https://packagemanager.posit.co/cran/2026-05-01"
+    assert session["key"]["snapshot"] == "https://packagemanager.posit.co/cran/2026-05-01"
     assert session["installed"]["Matrix"] == "1.7-3" and session["lib_paths"][0] == str(r_lib)
-    assert session["module"] == "R/4.5.2" and session["session_info"][0] == "R version 4.5.2"
+    assert session["key"]["module"] == "R/4.5.2" and session["session_info"][0] == "R version 4.5.2"
+    assert session["key"]["r_version"] == "4.5.2" and session["key"]["build_modules"] == []
     module_env = json.loads((r_lib / "MODULE_ENV.json").read_text())
     assert module_env == {
         "module": "R/4.5.2",
+        "build_modules": [],
         "PATH": "/mod/r/bin:/usr/bin:/bin",
         "LD_LIBRARY_PATH": "/mod/r/lib:/mod/blas/lib",
     }
@@ -674,7 +828,8 @@ def test_prefetch_r_writes_session_and_module_env(tmp_path: Path) -> None:
         assert argv[4].startswith('. /etc/profile.d/modules.sh && module load "$1"')
         assert set(run_env) <= {"PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "SSL_CERT_FILE"}
     install = next(a for a, _ in runner.calls if "Rscript" in a[4])
-    assert 'R_LIBS="$2" R_LIBS_SITE=' in install[4] and "--vanilla" in install[4]
+    assert 'R_LIBS="$2" R_LIBS_USER="$2" R_LIBS_SITE=' in install[4] and "--vanilla" in install[4]
+    assert session["lib_paths"] == [str(r_lib), "/mod/r/lib64/R/library"]
     n = len(runner.calls)
     again = envmod.prefetch_r(env, cache, _profile(tmp_path), runner=runner)
     assert again.reused and len(runner.calls) == n and again.session_sha256 == result.session_sha256
@@ -729,6 +884,65 @@ def test_prefetch_r_needs_profile_module(tmp_path: Path) -> None:
         envmod.prefetch_r(_r_env(), tmp_path / "c", profile, runner=FakeR({}))
 
 
+def test_session_is_identical_across_fresh_prefetches(tmp_path: Path) -> None:
+    """Two fresh prefetches, each with its own temp HOME, give byte-identical SESSION.json files."""
+    shas = []
+    homes = []
+    for _ in range(2):
+        runner = FakeR({"lme4": "1.1-37", "IRkernel": "1.3.2"})
+        cache = tmp_path / "cache"
+        session = cache / "r" / "demo" / "SESSION.json"
+        session.unlink(missing_ok=True)
+        result = envmod.prefetch_r(_r_env(), cache, _profile(tmp_path), runner=runner)
+        assert not result.reused
+        shas.append(result.session_sha256)
+        homes.append(runner.calls[-1][1]["HOME"])
+        assert 'R_LIBS_USER="$2"' in runner.calls[-1][0][4]
+    assert homes[0] != homes[1] and shas[0] == shas[1]
+
+
+def test_prefetch_r_rebuilds_a_stale_library(tmp_path: Path) -> None:
+    """A library whose SESSION.json is missing or has another key is emptied before the install."""
+    cache = tmp_path / "cache"
+    r_lib = cache / "r" / "demo"
+    (r_lib / "oldpkg").mkdir(parents=True)
+    envmod.prefetch_r(_r_env(), cache, _profile(tmp_path), runner=FakeR({"lme4": "1.1-37", "IRkernel": "1.3.2"}))
+    assert not (r_lib / "oldpkg").exists() and (r_lib / "SESSION.json").is_file()
+    (r_lib / "oldpkg").mkdir()
+    newer = _r_env(r_snapshot="2026-06-01")
+    runner = FakeR({"lme4": "1.1-37", "IRkernel": "1.3.2"})
+    result = envmod.prefetch_r(newer, cache, _profile(tmp_path), runner=runner)
+    assert not result.reused and not (r_lib / "oldpkg").exists()
+    assert json.loads((r_lib / "SESSION.json").read_text())["key"]["snapshot"].endswith("2026-06-01")
+    with pytest.raises(ReproduceLockError):
+        envmod.prefetch_r(_r_env(), cache, _profile(tmp_path), runner=FakeR({"lme4": "0.1", "IRkernel": "1.3.2"}))
+    assert not (r_lib / "SESSION.json").exists()
+
+
+def test_prefetch_r_checks_the_r_version(tmp_path: Path) -> None:
+    """The module must provide the R version the profile names."""
+    profile = _profile(tmp_path)
+    assert profile.r is not None
+    other = profile.model_copy(update={"r": profile.r.model_copy(update={"version": "4.4.3"})})
+    with pytest.raises(ReproduceLockError, match="4.4.3"):
+        envmod.prefetch_r(_r_env(), tmp_path / "c", other, runner=FakeR({"lme4": "1.1-37", "IRkernel": "1.3.2"}))
+
+
+def test_prefetch_r_loads_build_modules_first(tmp_path: Path) -> None:
+    """``profile.r.build_modules`` load before the R module, for both the env capture and the install."""
+    profile = _profile(tmp_path)
+    assert profile.r is not None
+    with_gcc = profile.model_copy(update={"r": profile.r.model_copy(update={"build_modules": ["gcc/12.2.0"]})})
+    runner = FakeR({"lme4": "1.1-37", "IRkernel": "1.3.2"})
+    result = envmod.prefetch_r(_r_env(), tmp_path / "c", with_gcc, runner=runner)
+    for argv, _ in runner.calls:
+        assert argv[4].startswith('. /etc/profile.d/modules.sh && module load gcc/12.2.0 "$1" && ')
+    assert json.loads(result.module_env.read_text())["build_modules"] == ["gcc/12.2.0"]
+    assert json.loads(result.session.read_text())["key"]["build_modules"] == ["gcc/12.2.0"]
+    with pytest.raises(ValueError):
+        envmod.r_install_script(["gcc; rm -rf /"])
+
+
 def test_r_env_vars_merge_order() -> None:
     """Module ``LD_LIBRARY_PATH`` entries come first, then native lib dirs; R_LIBS pins the library."""
     module_env = {"module": "R/4.5.2", "PATH": "/mod/r/bin:/usr/bin:/bin", "LD_LIBRARY_PATH": "/mod/r/lib:/nat/lib"}
@@ -739,6 +953,7 @@ def test_r_env_vars_merge_order() -> None:
         "PATH": "{venv}/bin:/mod/r/bin:/usr/bin:/bin",
         "LD_LIBRARY_PATH": "/mod/r/lib:/nat/lib:/ff/lib",
         "R_LIBS": "{cache}/r/demo",
+        "R_LIBS_USER": "{cache}/r/demo",
         "R_LIBS_SITE": "",
     }
     assert "LD_LIBRARY_PATH" not in envmod.r_env_vars({"PATH": "/usr/bin"}, "/r")
@@ -794,7 +1009,8 @@ def test_real_env_pip_check_freeze_and_smoke(tmp_path: Path) -> None:
     result = envmod.prefetch_env(
         env, base, cache, analysis="demo", wheelhouse=wheelhouse, wheels_lock=wheels_lock, profile=profile
     )
-    assert result.built == ("python-speech-features",)
+    assert result.built == ("python-speech-features",) and result.record
+    assert result.base.checked == (profile is not None) == result.derived["test"].checked
     declared = {e.name: e.pin for e in lock_entries((DATA / "body_deps_small.lock").read_text())}
     assert result.base.packages == {**declared, "python-speech-features": "0.6"}
     assert envmod.pip_check(result.base.path) == []
@@ -809,8 +1025,9 @@ def test_real_env_pip_check_freeze_and_smoke(tmp_path: Path) -> None:
     (failure,) = envmod.smoke(result.base.path, ["python_speech_features"])
     assert failure.startswith("python_speech_features:") and "scipy" in failure
     assert envmod.smoke(derived.path, ["iniconfig"]) == [] and envmod.smoke(result.base.path, ["iniconfig"]) != []
-    again = envmod.prefetch_env(env, base, cache, analysis="demo", wheelhouse=wheelhouse, wheels_lock=wheels_lock)
-    assert again.base.reused and again.built == ()
+    env = _with_wheels(env, base)
+    again = envmod.prefetch_env(env, base, cache, analysis="demo", wheelhouse=wheelhouse, profile=profile)
+    assert again.base.reused and again.base.checked and again.built == () and not again.record
 
     # C1 negative 2: a body with the six line deleted, manifest sha256 updated.
     neg_base = tmp_path / "neg"
@@ -818,9 +1035,10 @@ def test_real_env_pip_check_freeze_and_smoke(tmp_path: Path) -> None:
     body = neg_base / ENV_DIR / "body.lock"
     body.write_text(_drop_entry(body.read_text(), "six"))
     neg = neg.model_copy(update={"body": neg.body.model_copy(update={"lock_sha256": file_sha256(body)})})
-    neg_result = envmod.prefetch_env(
-        neg, neg_base, cache, analysis="demo", wheelhouse=wheelhouse, wheels_lock=wheels_lock
-    )
+    shutil.copyfile(wheels_lock, neg_base / ENV_DIR / "wheels.lock")
+    neg = _with_wheels(neg, neg_base)
+    neg_result = envmod.prefetch_env(neg, neg_base, cache, analysis="demo", wheelhouse=wheelhouse)
+    assert neg_result.built == ()
     assert neg_result.base.path != result.base.path and "six" not in neg_result.base.packages
     violations = envmod.pip_check(neg_result.base.path)
     missing_six = envmod.Violation("python-dateutil", "requirement", "requires six>=1.5, but it's not installed")
