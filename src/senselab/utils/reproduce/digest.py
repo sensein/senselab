@@ -4,6 +4,11 @@ The digest is sha256 over the sorted ``(sha256(relative path), sha256(content), 
 files under a root that match any of a list of patterns. Patterns are relative POSIX globs: ``*``,
 ``?`` and ``[...]`` match within one path component, and a whole ``**`` component matches any number
 of components (including none). Errors carry a fixed code and no path.
+
+Symlinks are asymmetric. A pattern's wildcard-free leading components are resolved by path, so a
+symlinked directory named there (or anywhere in a pattern with no wildcard) is followed. Below that
+prefix the walk never descends into a symlinked directory, so ``*`` or ``**`` never reaches one.
+Symlinked files that match are hashed through the link.
 """
 
 from __future__ import annotations
@@ -30,7 +35,8 @@ class DigestError(Exception):
         """Store the code as both the message and ``code``.
 
         Args:
-            code: ``E_DIGEST_NO_ROOT``, ``E_DIGEST_BAD_PATTERN`` or ``E_DIGEST_UNREADABLE``.
+            code: ``E_DIGEST_NO_ROOT``, ``E_DIGEST_BAD_PATTERN``, ``E_DIGEST_UNREADABLE`` or
+                ``E_DIGEST_EMPTY``.
         """
         super().__init__(code)
         self.code = code
@@ -74,7 +80,8 @@ def _compile(pattern: str) -> re.Pattern[str]:
 
 def _check_pattern(pattern: str) -> None:
     path = PurePosixPath(pattern)
-    if not pattern or path.is_absolute() or "\\" in pattern or ".." in path.parts or "" in pattern.split("/"):
+    parts = pattern.split("/")
+    if not pattern or path.is_absolute() or "\\" in pattern or "" in parts or "." in parts or ".." in parts:
         raise DigestError("E_DIGEST_BAD_PATTERN")
 
 
@@ -118,7 +125,11 @@ def _hash_file(path: str) -> tuple[str, int]:
 
 
 def input_set_digest(
-    root: str | os.PathLike[str], patterns: Iterable[str], *, exclude: Iterable[str] = ()
+    root: str | os.PathLike[str],
+    patterns: Iterable[str],
+    *,
+    exclude: Iterable[str] = (),
+    require_nonempty: bool = False,
 ) -> tuple[str, int]:
     """Digest the files under a root that match any pattern.
 
@@ -127,6 +138,7 @@ def input_set_digest(
         patterns: Relative globs; a file matching several is counted once.
         exclude: Relative subpaths whose files are left out (e.g. ``cuda-cache`` under ``{out}``),
             matched by whole path components.
+        require_nonempty: Raise ``E_DIGEST_EMPTY`` when no file matches.
 
     Returns:
         ``(hex digest, file count)``.
@@ -134,7 +146,9 @@ def input_set_digest(
     Raises:
         DigestError: ``E_DIGEST_NO_ROOT`` when the root is not a directory, ``E_DIGEST_BAD_PATTERN`` for
             an absolute, empty or ``..`` pattern or exclusion, ``E_DIGEST_UNREADABLE`` when a matching
-            file cannot be read, is not a regular file, or a directory cannot be listed.
+            file cannot be read, is not a regular file, or a directory cannot be listed, and
+            ``E_DIGEST_EMPTY`` when ``require_nonempty`` and nothing matches. Patterns and exclusions
+            with an empty, ``.`` or ``..`` component are refused.
     """
     patterns = list(patterns)
     skip = tuple(e.strip("/") for e in exclude)
@@ -169,6 +183,8 @@ def input_set_digest(
                     found[item[0]] = item
     except (OSError, fastio.WalkError):
         raise DigestError("E_DIGEST_UNREADABLE") from None
+    if require_nonempty and not found:
+        raise DigestError("E_DIGEST_EMPTY")
     digest = hashlib.sha256(_HEADER)
     for rel_hash, content, size in sorted(found.values()):
         digest.update(f"{rel_hash}\0{content}\0{size}\n".encode())

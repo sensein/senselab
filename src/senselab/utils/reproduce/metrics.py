@@ -12,17 +12,28 @@ The shape is::
       "counts": {declared name: int},
       "split_report": {"protocol", "unit"?, "stratify"?, "folds"?: [{"n_groups"?, "prevalence"?}],
                        "invariant_ok"},
-      "threshold_tuning": "validation" | "none",
+      "threshold_tuning": "validation" | "none" | "test",
       "n"?, "n_folds"?
     }
 
-``delta``, ``target``, ``tolerance`` and ``pass`` are written only by the driver, at the top level,
-in a headline entry or in a ``per_class`` entry. Classification and detection steps must carry a
-``prevalence`` for every declared class, a ``floor`` on every headline entry, and the split thresholds
-were tuned on (``threshold_tuning``). ``n``, ``counts.*`` and ``confusion.*`` below the minimum cell
-size are replaced by ``"<{min_cell}"``.
+Each kind allows its own headline names (`KIND_HEADLINES`). ``delta``, ``target``, ``tolerance`` and
+``pass`` are written only by the driver, at the top level, in a headline entry or in a ``per_class``
+entry.
 
-Results are fixed error codes only; nothing from the rejected content is echoed.
+**Classification** (single-label) and **detection** steps must carry:
+
+- ``prevalence`` in [0, 1] for every declared class (classification: also ``recall`` and
+  ``precision``, and prevalences summing to 1)
+- ``floor`` and ``lift`` on every headline entry; standard floors are checked (`expected_floor`)
+- ``threshold_tuning``; ``test`` is accepted and returned as the warning ``W_TUNED_ON_TEST``
+- a ``split_report``, unless the schema opts out with ``split: {none: whole_dataset}``; for
+  classification every fold's prevalence covers every declared class
+
+``n``, ``counts.*``, ``confusion.*``, a ``count`` headline value and, when the split unit is a person
+(``subject``, ``family``) or not given, a fold's ``n_groups`` below the minimum cell size are replaced
+by ``"<{min_cell}"``.
+
+Results are fixed codes only; nothing from the rejected content is echoed.
 
 A **metric address** names one value: ``<headline>``, ``<headline>@<label>``, ``counts.<name>``,
 ``per_class.<label>.<field>`` or ``confusion.<cell>``.
@@ -32,9 +43,8 @@ from __future__ import annotations
 
 import copy
 import math
-import re
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Literal, get_args
+from typing import TYPE_CHECKING, Any, Literal, TypeGuard, get_args
 
 if TYPE_CHECKING:
     from senselab.utils.reproduce.spec import MetricsSchema
@@ -55,26 +65,38 @@ HeadlineName = Literal[
     "mcc",
 ]
 MetricsKind = Literal["classification", "detection", "statistic", "count"]
+SplitOptOutReason = Literal["whole_dataset"]
 HEADLINE_NAMES: tuple[str, ...] = get_args(HeadlineName)
 METRICS_KINDS: tuple[str, ...] = get_args(MetricsKind)
+KIND_HEADLINES: dict[str, frozenset[str]] = {
+    "classification": frozenset(
+        {"balanced_accuracy", "macro_recall", "macro_f1", "auroc", "f1", "accuracy", "top1", "pr_auc", "mcc"}
+    ),
+    "detection": frozenset({"avg_map", "map_at"}),
+    "statistic": frozenset({"f_stat"}),
+    "count": frozenset({"count"}),
+}
 CLASSIFICATION_KINDS = frozenset({"classification", "detection"})
+CHANCE_HEADLINES = frozenset({"balanced_accuracy", "macro_recall"})
+PRESENCE_ONLY_FLOORS = frozenset({"macro_f1", "avg_map", "map_at"})
 ENTRY_NUMBERS = ("value", "ci_low", "ci_high", "numdf", "dendf", "floor", "lift")
 ENTRY_INTS = ("n", "n_folds")
 ENTRY_UNITS = ("fraction", "pp")
 PER_CLASS_FIELDS = ("recall", "precision", "f1", "prevalence")
 CONFUSION_CELLS = ("tp", "fp", "fn", "tn")
-SPLIT_PROTOCOLS = ("seen_subject", "unseen_subject")
+SPLIT_PROTOCOLS = ("seen_subject", "unseen_subject", "none")
+SPLIT_UNITS = ("subject", "family", "session", "video", "clip", "recording", "row")
+PERSON_UNITS = frozenset({"subject", "family"})
+SPLIT_STRATIFY = ("none", "class", "class_timepoint", "class_site", "class_age", "timepoint")
 FOLD_KEYS = ("n_groups", "prevalence")
-TUNING_SPLITS = ("validation", "none")
+TUNING_SPLITS = ("validation", "none", "test")
 DRIVER_KEYS = frozenset({"delta", "target", "tolerance", "pass"})
 TOP_KEYS = frozenset(
     {"headline", "per_class", "confusion", "counts", "split_report", "threshold_tuning", "n", "n_folds"}
 )
 SPLIT_KEYS = frozenset({"protocol", "unit", "stratify", "folds", "invariant_ok"})
 ENTRY_KEYS = frozenset({"name", "label", "unit", *ENTRY_NUMBERS, *ENTRY_INTS})
-LIFT_TOLERANCE = 1e-6
-_TOKEN = re.compile(r"^[a-z]+(_[a-z]+)*$")
-_TOKEN_MAX = 40
+TOLERANCE = 1e-6
 
 CODES = frozenset(
     {
@@ -93,15 +115,24 @@ CODES = frozenset(
         "E_METRICS_MISSING_HEADLINE",
         "E_METRICS_MISSING_COUNT",
         "E_METRICS_NO_PREVALENCE",
+        "E_METRICS_NO_CLASS_RATES",
+        "E_METRICS_PREVALENCE_RANGE",
+        "E_METRICS_PREVALENCE_SUM",
         "E_METRICS_NO_FLOOR",
+        "E_METRICS_BAD_FLOOR",
+        "E_METRICS_NO_LIFT",
+        "E_METRICS_LIFT_MISMATCH",
         "E_METRICS_NO_TUNING_SPLIT",
         "E_METRICS_BAD_TUNING_SPLIT",
-        "E_METRICS_LIFT_MISMATCH",
+        "E_SPLIT_MISSING",
+        "E_SPLIT_UNEXPECTED",
         "E_SPLIT_NO_PROTOCOL",
         "E_SPLIT_BAD_PROTOCOL",
         "E_SPLIT_BAD_INVARIANT",
+        "E_SPLIT_FOLD_PREVALENCE",
     }
 )
+WARNINGS = frozenset({"W_TUNED_ON_TEST"})
 ADDRESS_CODES = frozenset(
     {
         "E_METRICS_BAD_ADDRESS",
@@ -130,8 +161,38 @@ class MetricsError(Exception):
         self.code = code
 
 
-def _is_number(value: object) -> bool:
+def _is_number(value: object) -> TypeGuard[int | float]:
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+
+def expected_floor(name: str, prevalence: Mapping[str, float], *, k: int, positive: str | None) -> float | None:
+    """The trivial-classifier value of a headline metric, as a fraction.
+
+    Args:
+        name: The headline name.
+        prevalence: Class label to prevalence on the scored split, for every declared class.
+        k: The number of declared classes.
+        positive: The declared positive class of a binary step, or None.
+
+    Returns:
+        ``1/k`` for balanced accuracy and macro recall, 0.5 for AUROC, 0 for MCC, the largest
+        prevalence for accuracy and top-1, ``p`` for PR-AUC and ``2p/(1+p)`` for F1 when a positive
+        class ``p`` is declared; None when the floor is checked for presence only.
+    """
+    if name in CHANCE_HEADLINES:
+        return 1.0 / k
+    if name == "auroc":
+        return 0.5
+    if name == "mcc":
+        return 0.0
+    if name in ("accuracy", "top1"):
+        return max(prevalence.values())
+    if positive is not None and name == "pr_auc":
+        return prevalence[positive]
+    if positive is not None and name == "f1":
+        p = prevalence[positive]
+        return 2 * p / (1 + p)
+    return None
 
 
 class _Check:
@@ -143,6 +204,8 @@ class _Check:
         self.min_cell = min_cell
         self.token = f"<{min_cell}"
         self.codes: set[str] = set()
+        self.classification = schema.kind == "classification"
+        self.imbalance = schema.kind in CLASSIFICATION_KINDS
 
     def keys(self, obj: Mapping[str, Any], allowed: frozenset[str], *, driver: bool) -> None:
         for key in obj:
@@ -175,12 +238,8 @@ class _Check:
         elif suppress and value < self.min_cell:
             obj[key] = self.token
 
-    def word(self, obj: Mapping[str, Any], key: str, allowed: tuple[str, ...] | None = None) -> None:
-        if key not in obj:
-            return
-        value = obj[key]
-        ok = isinstance(value, str) and len(value) <= _TOKEN_MAX and bool(_TOKEN.match(value))
-        if not ok or (allowed is not None and value not in allowed):
+    def word(self, obj: Mapping[str, Any], key: str, allowed: tuple[str, ...]) -> None:
+        if key in obj and (not isinstance(obj[key], str) or obj[key] not in allowed):
             self.codes.add("E_METRICS_BAD_TOKEN")
 
     def mapping(self, value: object) -> bool:
@@ -189,11 +248,28 @@ class _Check:
         self.codes.add("E_METRICS_BAD_SHAPE")
         return False
 
-    def headline(self, entries: object) -> None:
+    def prevalences(self, values: Mapping[str, Any], *, complete: bool) -> None:
+        """Range-check a label → prevalence map; for classification, also its sum when ``complete``."""
+        numbers = [v for v in values.values() if _is_number(v)]
+        if any(v < 0 or v > 1 for v in numbers):
+            self.codes.add("E_METRICS_PREVALENCE_RANGE")
+        if self.classification and complete and len(numbers) == len(values) and abs(sum(numbers) - 1) > TOLERANCE:
+            self.codes.add("E_METRICS_PREVALENCE_SUM")
+
+    def scored_prevalence(self, classes: object) -> dict[str, float] | None:
+        if not isinstance(classes, dict):
+            return None
+        found = {
+            c: classes.get(c, {}).get("prevalence") for c in self.schema.per_class if isinstance(classes.get(c), dict)
+        }
+        if len(found) != len(self.schema.per_class) or not all(_is_number(v) for v in found.values()):
+            return None
+        return {c: float(v) for c, v in found.items()}
+
+    def headline(self, entries: object, prevalence: dict[str, float] | None) -> None:
         if not isinstance(entries, list):
             self.codes.add("E_METRICS_BAD_SHAPE")
             return
-        classification = self.schema.kind in CLASSIFICATION_KINDS
         for entry in entries:
             if not self.mapping(entry):
                 continue
@@ -208,20 +284,29 @@ class _Check:
             for key in ENTRY_NUMBERS:
                 self.number(entry, key)
             if name == "count":
-                self.integer(entry, "value", suppress=False)
+                self.integer(entry, "value", suppress=True)
             self.integer(entry, "n", suppress=True)
             self.integer(entry, "n_folds", suppress=False)
             self.word(entry, "unit", ENTRY_UNITS)
-            if classification and "floor" not in entry:
-                self.codes.add("E_METRICS_NO_FLOOR")
-            parts = [entry.get(k) for k in ("value", "floor", "lift")]
-            if all(_is_number(p) for p in parts):
-                value, floor, lift = parts
-                if abs(lift - (value - floor)) > LIFT_TOLERANCE * max(1.0, abs(value)):
-                    self.codes.add("E_METRICS_LIFT_MISMATCH")
-        names = {e.get("name") for e in entries if isinstance(e, dict) and isinstance(e.get("name"), str)}
-        if set(self.schema.headline) - names:
-            self.codes.add("E_METRICS_MISSING_HEADLINE")
+            if self.imbalance:
+                self.floor(entry, prevalence)
+
+    def floor(self, entry: dict[str, Any], prevalence: dict[str, float] | None) -> None:
+        if "floor" not in entry:
+            self.codes.add("E_METRICS_NO_FLOOR")
+        if "lift" not in entry:
+            self.codes.add("E_METRICS_NO_LIFT")
+        value, floor, lift = (entry.get(k) for k in ("value", "floor", "lift"))
+        scale = 100.0 if entry.get("unit") == "pp" else 1.0
+        if _is_number(value) and _is_number(floor) and _is_number(lift):
+            if abs(lift - (value - floor)) > TOLERANCE * max(scale, abs(value)):
+                self.codes.add("E_METRICS_LIFT_MISMATCH")
+        name = entry.get("name")
+        if not _is_number(floor) or not isinstance(name, str) or prevalence is None:
+            return
+        expected = expected_floor(name, prevalence, k=len(self.schema.per_class), positive=self.schema.positive)
+        if expected is not None and abs(floor - expected * scale) > TOLERANCE * scale:
+            self.codes.add("E_METRICS_BAD_FLOOR")
 
     def per_class(self, classes: object) -> None:
         if not self.mapping(classes):
@@ -235,11 +320,17 @@ class _Check:
             self.keys(fields, frozenset(PER_CLASS_FIELDS), driver=True)
             for key in PER_CLASS_FIELDS:
                 self.number(fields, key)
+        declared = {c: classes[c] for c in self.schema.per_class if isinstance(classes.get(c), dict)}
+        given = {c: f["prevalence"] for c, f in declared.items() if "prevalence" in f}
+        self.prevalences(given, complete=len(given) == len(self.schema.per_class))
 
-    def prevalence_present(self, classes: object) -> bool:
-        if not isinstance(classes, dict) or not self.schema.per_class:
-            return False
-        return all(isinstance(classes.get(c), dict) and "prevalence" in classes[c] for c in self.schema.per_class)
+    def class_fields(self, classes: object) -> None:
+        declared = self.schema.per_class
+        rows = [classes.get(c) if isinstance(classes, dict) else None for c in declared]
+        if not declared or not all(isinstance(r, dict) and "prevalence" in r for r in rows):
+            self.codes.add("E_METRICS_NO_PREVALENCE")
+        if self.classification and not all(isinstance(r, dict) and {"recall", "precision"} <= set(r) for r in rows):
+            self.codes.add("E_METRICS_NO_CLASS_RATES")
 
     def confusion(self, cells: object) -> None:
         if not self.mapping(cells):
@@ -265,51 +356,76 @@ class _Check:
             return
         assert isinstance(split, dict)
         self.keys(split, SPLIT_KEYS, driver=False)
+        protocol = split.get("protocol")
         if "protocol" not in split:
             self.codes.add("E_SPLIT_NO_PROTOCOL")
-        elif split["protocol"] not in SPLIT_PROTOCOLS:
+        elif protocol not in SPLIT_PROTOCOLS:
             self.codes.add("E_SPLIT_BAD_PROTOCOL")
-        if not isinstance(split.get("invariant_ok"), bool):
+        invariant = split.get("invariant_ok")
+        if not isinstance(invariant, bool) or (protocol == "none" and invariant):
             self.codes.add("E_SPLIT_BAD_INVARIANT")
-        self.word(split, "unit")
-        self.word(split, "stratify")
+        self.word(split, "unit", SPLIT_UNITS)
+        self.word(split, "stratify", SPLIT_STRATIFY)
         if "folds" not in split:
             return
         folds = split["folds"]
         if not isinstance(folds, list):
             self.codes.add("E_METRICS_BAD_SHAPE")
             return
+        unit = split.get("unit")
+        people = unit is None or unit in PERSON_UNITS
         for fold in folds:
-            if not self.mapping(fold):
-                continue
-            self.keys(fold, frozenset(FOLD_KEYS), driver=False)
-            self.integer(fold, "n_groups", suppress=False)
-            prevalence = fold.get("prevalence")
-            if isinstance(prevalence, dict):
-                if set(prevalence) - set(self.schema.per_class):
-                    self.codes.add("E_METRICS_UNDECLARED_LABEL")
-                for label in prevalence:
-                    self.number(prevalence, label)
-            elif "prevalence" in fold:
-                self.number(fold, "prevalence")
+            if self.mapping(fold):
+                self.fold(fold, people=people)
+
+    def fold(self, fold: dict[str, Any], *, people: bool) -> None:
+        self.keys(fold, frozenset(FOLD_KEYS), driver=False)
+        self.integer(fold, "n_groups", suppress=people)
+        prevalence = fold.get("prevalence")
+        if isinstance(prevalence, dict):
+            if set(prevalence) - set(self.schema.per_class):
+                self.codes.add("E_METRICS_UNDECLARED_LABEL")
+            for label in prevalence:
+                self.number(prevalence, label)
+            complete = set(self.schema.per_class) <= set(prevalence)
+            if self.classification and not complete:
+                self.codes.add("E_SPLIT_FOLD_PREVALENCE")
+            self.prevalences(prevalence, complete=complete)
+        elif "prevalence" in fold and not self.classification:
+            self.number(fold, "prevalence")
+            if _is_number(prevalence) and not 0 <= prevalence <= 1:
+                self.codes.add("E_METRICS_PREVALENCE_RANGE")
+        elif self.classification:
+            self.codes.add("E_SPLIT_FOLD_PREVALENCE")
 
     def run(self, obj: dict[str, Any]) -> None:
         self.keys(obj, TOP_KEYS, driver=True)
-        self.headline(obj.get("headline", []))
         if "per_class" in obj:
             self.per_class(obj["per_class"])
+        entries = obj.get("headline", [])
+        self.headline(entries, self.scored_prevalence(obj.get("per_class")))
+        if isinstance(entries, list):
+            names = {e.get("name") for e in entries if isinstance(e, dict) and isinstance(e.get("name"), str)}
+            if set(self.schema.headline) - names:
+                self.codes.add("E_METRICS_MISSING_HEADLINE")
         if "confusion" in obj:
             self.confusion(obj["confusion"])
         self.counts(obj.get("counts", {}))
         if "split_report" in obj:
+            if self.schema.split is not None:
+                self.codes.add("E_SPLIT_UNEXPECTED")
             self.split_report(obj["split_report"])
-        if "threshold_tuning" in obj and obj["threshold_tuning"] not in TUNING_SPLITS:
+        elif self.imbalance and self.schema.split is None:
+            self.codes.add("E_SPLIT_MISSING")
+        tuning = obj.get("threshold_tuning")
+        if "threshold_tuning" in obj and tuning not in TUNING_SPLITS:
             self.codes.add("E_METRICS_BAD_TUNING_SPLIT")
+        if tuning == "test":
+            self.codes.add("W_TUNED_ON_TEST")
         self.integer(obj, "n", suppress=True)
         self.integer(obj, "n_folds", suppress=False)
-        if self.schema.kind in CLASSIFICATION_KINDS:
-            if not self.prevalence_present(obj.get("per_class")):
-                self.codes.add("E_METRICS_NO_PREVALENCE")
+        if self.imbalance:
+            self.class_fields(obj.get("per_class"))
             if "threshold_tuning" not in obj:
                 self.codes.add("E_METRICS_NO_TUNING_SPLIT")
 
@@ -319,26 +435,31 @@ def validate_metrics(
 ) -> tuple[dict[str, Any] | None, list[str]]:
     """Check a ``metrics.json`` object against the vocabulary and a step's schema, and suppress small cells.
 
+    The driver validates the adapter's output, then (after writing the ``expect`` results) the final
+    object with ``writer="driver"``; both passes must use the same ``min_cell``.
+
     Args:
         obj: The parsed ``metrics.json``.
-        schema: The step's ``metrics_schema``; its ``kind`` decides whether prevalence, floor and the
-            threshold-tuning split are required.
+        schema: The step's ``metrics_schema``; its ``kind`` decides whether prevalence, floors, lift,
+            the threshold-tuning split and a split report are required.
         writer: ``adapter`` for an adapter's output, which may not carry ``delta``, ``target``,
             ``tolerance`` or ``pass``; ``driver`` once the driver has evaluated ``expect``.
-        min_cell: ``n``, ``counts.*`` and ``confusion.*`` below this become ``"<{min_cell}"``.
+        min_cell: Suppressed cells below this become ``"<{min_cell}"``.
 
     Returns:
-        ``(clean, codes)``: the suppressed copy and ``[]`` when valid, otherwise ``None`` and the
-        sorted, unique error codes from `CODES`. ``obj`` is not modified.
+        ``(clean, codes)``: ``codes`` is sorted and unique, drawn from `CODES` (errors) and `WARNINGS`.
+        ``clean`` is the suppressed copy when there is no error code, otherwise None. ``obj`` is not
+        modified.
     """
     if not isinstance(obj, dict):
         return None, ["E_METRICS_NOT_OBJECT"]
     clean = copy.deepcopy(obj)
     check = _Check(schema, writer, min_cell)
     check.run(clean)
-    if check.codes:
-        return None, sorted(check.codes)
-    return clean, []
+    codes = sorted(check.codes)
+    if any(c.startswith("E_") for c in codes):
+        return None, codes
+    return clean, codes
 
 
 def _parse_address(address: str) -> tuple[str, ...] | None:
