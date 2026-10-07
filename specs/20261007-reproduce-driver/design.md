@@ -1178,7 +1178,105 @@ It holds no messages, and no paths other than checkout-relative code frames.
 - `lock`: compile locks
 - `prefetch`: mirrors, worktrees, venvs, wheels, R libraries. `--sources-only` creates worktrees only.
 - `build-one`: one sdist build, as a batch job
-- `run`: run steps locally, in DAG order
+- `run`: run steps locally, in DAG order; `--step` runs one batch job's step, `--finalize` settles a submission
 - `submit`: one batch job per step, chained with `afterok`
 - `lint`: check manifests and patches
-- `status`: per step: key, executed, skipped or never-ran, exit, codes
+- `status`: per step: key, executed, skipped, failed, never-ran or pending, exit, codes
+
+Exit codes, for every subcommand: `0` success (for `lint`, no findings; for `run` and `status`, every step
+executed or skipped with exit 0); `1` lint findings, a step that did not succeed, or a failed lock,
+prefetch, build or submission; `2` bad arguments or an unreadable named file or run dir; `3` (`status`
+only) nothing failed but a step is still `pending`. `lint`, `prefetch` and `submit` print one finding per
+line, `<where>: <code> <detail>`; a patch finding names the lint code, line and deny-pattern index, never
+patch text.
+
+## Batch jobs and the command line (B13)
+
+`slurm.py` and `cli.py`.
+
+- **No key at submission.** A downstream step's key covers its `up:` input digests, which exist only once
+  the upstream job has finished (B11 constraint), so `submit` computes no key. Each job runs `run
+  <manifests> --step <name> --date <submission date>`. `run_steps(only=…)` runs the named step and
+  resolves every step it depends on with `run.resolve_step`: the upstream key is computed again from its
+  inputs (a key is never remembered) and its result dir must be done, else the upstream reads
+  `E_UPSTREAM_NOT_DONE` and the job's step is `never-ran`. An upstream step is never run by a downstream
+  job. The date is fixed at submission, so a job that starts after midnight writes the same run dir.
+- **Chains.** Jobs go in DAG order, each `--dependency=afterok:<needs' job ids>` (in `needs` order) with
+  `--kill-on-invalid-dep=yes`, so a failed step's dependants are cancelled rather than left pending. A
+  job's exit is non-zero exactly when its step is not `StepOutcome.ok`, which is what `afterok` reads.
+- **`run.json` under jobs.** Rows are merged, never rewritten, under an exclusive `file_lock` on
+  `<run dir>/.run.json.lock` (`run.update_run_record`), so jobs of one analysis can end in any order.
+  `submit` writes a `pending` row per step before the first job, then each job id, only while the row is
+  still `pending` (a fast job may already have written its own). A job writes only its own step's row; one
+  whose step did not succeed turns its dependants' `pending` rows into `never-ran` at once. A last
+  `--finalize` job, `--dependency=afterany:<every step job>`, on the `build` partition with 1 CPU, `1G` and
+  10 minutes, turns any row still `pending` (a job Slurm cancelled, or killed before it wrote its row) into
+  `never-ran`, which is terminal. A job killed after its step started therefore also reads `never-ran`; its
+  result dir is not done, so the next submission reruns it. If an sbatch call fails, that step and every
+  later one are marked `never-ran`, a finalize job is still submitted for the jobs already queued, and
+  `submit` fails. A full local `run` (no `--step`) still rewrites the analysis's whole record.
+- **Scripts.** Each script goes to `sbatch --parsable` on standard input, so nothing is written to the
+  submit dir. `--output`/`--error` are `<slurm_logs_root>/<date>/%j.{out,err}` (spec §2.3 item 6), created
+  before submission. The job name is `reproduce-<step>`: queue listings are visible to every cluster user,
+  so the analysis name stays out. `--export=NONE`, then `set -euo pipefail`, `umask 007`, `PATH=/usr/bin:/bin`,
+  and explicitly `UV_CACHE_DIR`, `UV_LINK_MODE=hardlink`, `UV_PYTHON_INSTALL_DIR`, `SENSELAB_REPRO_CACHE` and,
+  when the profile declares native lib dirs, `LD_LIBRARY_PATH` (all of them, in profile order), because a
+  batch job inherits nothing. These reach the driver only: the step's own env is built from scratch by the
+  sandbox. The uv dirs are the submitter's, or what `uv cache dir` and `uv python dir` print. A per-job
+  `TMPDIR` under `/dev/shm` is removed on exit. Every value is a plain word or `shlex`-quoted; anything
+  else is refused at render time.
+- **Preemption probe (spec §15 item 8).** A partition entry with a `fallback` is probed with `sbatch
+  --test-only` (the step's script without its dependency lines, since a pending dependency makes the
+  start estimate meaningless). A `Preempts:` line in the answer, or a probe that fails, sends the job to the
+  fallback; an entry without a fallback is never probed. The probe applies to any such entry, not only GPU
+  ones, because a CPU entry can declare a fallback too.
+- **Cross-checks (`slurm.step_findings`, used by `lint`, `prefetch` and `submit`).** `resources.profile`
+  must be a partition key (`partition-unknown`). A `fallback` is a partition *name*, not a key (the site
+  profile names another partition there), so it is checked as a plain word that differs from its own
+  partition (`fallback-invalid`). `gpu_arch` or `min_driver` on an entry with no `gres` is `gpu-no-gres`.
+  Every `inputs`/`stage` root other than `checkout` and `up:` and every `{root:<name>}` in argv, cwd,
+  `pythonpath` and stage `dest` must be a profile root (`root-unknown`); `native-unknown` as in
+  `spec.check_step_profile`. `submit` refuses on any finding.
+- **`lock`.** Per distinct env of a manifest, the builders run in the order resolve, torch, body, overlays
+  (B4 review): for a requirements body `first_resolve` (when the env names one), `torch_lock_from_index`,
+  `body_lock_from_requirements`; for a uv-export body `torch_lock_from_uvlock` with the torch names present
+  in the checkout's `uv.lock` as roots, then `body_lock_from_uvlock_export` with the `--extra`/`--group`
+  options read from the draft's `export_cmd`, which is then replaced by the command that ran; then the `test`
+  overlay (the checkout's dev group) and the `notebook_tools` overlay, compiled from the file beside its
+  lock with the `.in` suffix. The checkout, needed only for a uv-export body or a test overlay, gets the
+  profile's deny patterns. A draft states placeholder sha256s; only the written locks' sha256s are filled
+  in. Input sha256s (`requirements_in`, config, overrides) stay the author's, since they are what the
+  header digest and the integrity check protect.
+- **`prefetch`.** Lints first (refusing on findings), then checks every step out with the profile's deny
+  patterns (B8) and calls `env.prefetch_env` once per distinct env **with the profile** (B7), so the pip
+  check and smoke imports run and `venv_checked` can become true. A uv-export env with a torch lock gets the
+  checkout's `uv.lock`. An env with sdists and no `wheels` records its first `wheels.lock` beside the body
+  lock (`<body dir>/wheels.lock`); two such envs with body locks in one directory collide, and the second is
+  refused by `env.prefetch_env`, since the file then exists unrecorded. When `PrefetchResult.record` is set,
+  the new sha256 is written into `env.wheels` of every step with that env (B6/B7 contract). R steps then get
+  `env.prefetch_r` (an `ir_notebook` step with the derived notebook venv). CUDA sdists (`build.needs_nvcc`)
+  with no reusable wheel are first built as `build-one` batch jobs on the `build` partition, one at a time
+  with `sbatch --wait`, because each build changes `wheels.lock` and so the manifest's sha256 for the next;
+  `--local-builds` builds them in-process instead. Steps declaring `hf_weights` are refused: downloading
+  pinned weights is out of the current scope, and no tier-1 step needs it. `--sources-only` reads a draft
+  (one source mapping, a list, or a `{name, steps}` manifest whose steps may lack `env`; only `name`,
+  `repo`, `commit` and `submodules` are read) and creates only the cleared worktrees with the empty patch
+  set.
+- **`build-one`** (the batch entry point `build.render_build_job` names) takes the manifest's `wheels`
+  location, or the default above when it has none (refusing an unrecorded existing file), calls
+  `build.ensure_wheel` with the wheelhouse `<cache>/wheelhouse` and sdist cache `<cache>/sdists`, and writes
+  a changed `wheels.lock` sha256 into the manifest. Its base dir and cache come from the defaults below,
+  since the rendered build job passes neither.
+- **Manifest writes (`spec.rewrite_manifest`).** The edit is applied to the parsed data. When every change
+  replaces a plain word (a sha256) occurring once in the file, the text is edited in place and must re-parse
+  to the edited data, so comments, anchors and layout survive; otherwise the data is dumped again with
+  `yaml.safe_dump(sort_keys=False)` (comments dropped, anchors re-derived), or as indented JSON. The result
+  must validate as a `Manifest`, and the file is replaced atomically.
+- **Defaults.** `--base-dir` defaults to the git top level of the first manifest's directory; `--cache` to
+  `$SENSELAB_REPRO_CACHE`; `--date` to today in UTC.
+- **`status <run dir>`** reads `run.json`, and for a row with a key, `<run dir>/<step>/summary.json` when
+  the link resolves to the dir named by that key (opened with `O_NOFOLLOW`); the summary's exit and codes
+  win. It opens nothing else: no log, no metrics, no output. A step name, key, status or code of an
+  unexpected shape prints as `?`.
+- **`__main__.py`** guards its call to `main`, because the adapter runner imports every module of the
+  package and would otherwise run the command line inside the adapter sandbox.
