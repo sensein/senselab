@@ -264,9 +264,11 @@ Sechidis, K., Tsoumakas, G., & Vlahavas, I. (2011). On the stratification of mul
 
 ## Threshold grid
 
-`data/threshold_grid.yaml` holds the candidate thresholds for `tune_threshold`: 0.05 to 0.95 in
-steps of 0.05, ties broken towards the threshold closest to 0.5, the result rounded to four
-decimals.
+`src/senselab/utils/evaluation/data/threshold_grid.yaml` holds the candidate thresholds for
+`tune_threshold`: 0.05 to 0.95 in steps of 0.05 (19 values, each `round(start + i·step, 4)`), ties
+broken towards the threshold closest to 0.5 and then towards the lower one, the result rounded to
+four decimals. The file holds only those five keys, with `#` descriptions; there is no
+`derivation:` key, since that would be hashed with the values.
 
 **Derivation.** This is a ported convention, not a fitted value: it is the grid and tie-break the
 lab's earlier threshold-tuning code used (`provenance.md`, row `tune_threshold`), kept so that
@@ -274,9 +276,14 @@ results tuned by either implementation agree. It was not fitted to any data. Amo
 thresholds, the tie-break picks the one nearest 0.5, the least extreme operating point. The grid
 lives in `data/` rather than in code so that changing it is a reviewed data change.
 
-The default objective is balanced accuracy. `f1` and `mcc` are available only as an explicit,
-non-default choice that the report records; the balanced-accuracy headline is still computed at
-whatever threshold was chosen.
+The default objective is balanced accuracy, computed by `classification.balanced_accuracy`, the
+same function as the report headline. `f1` (positive class) and `mcc` are available only as an
+explicit, non-default choice; `ThresholdChoice.objective` records it, the report copies it into
+`threshold.objective`, and the balanced-accuracy headline is still computed at whatever threshold
+was chosen. Tuning is refused on a split whose name contains "test" (any case), and the report
+refuses a threshold on the split it was tuned on. On the T6 test's synthetic 90/10 data, the
+BA-tuned threshold (0.5) gave balanced accuracy 0.858 on a fresh draw, against 0.793 for the
+F1-tuned one (0.6), which is why F1 is not the default.
 
 ## Event metrics
 
