@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import datetime
+import importlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 import textwrap
@@ -269,6 +271,9 @@ def test_data_root_stage_without_input_is_refused() -> None:
     ):
         with pytest.raises(ValueError, match="E_SPEC_STAGE_UNDIGESTED"):
             StepSpec.model_validate(_step_data(stage=[stage]))
+    across = _step_data(stage=[{"root": "data", "patterns": ["x/*.csv", "z/*.csv"], "dest": "x"}])
+    across["inputs"].append({"root": "data", "patterns": ["z/*.csv"]})
+    StepSpec.model_validate(across)
     reordered = _step_data(stage=[{"root": "data", "patterns": ["x/*.csv"], "dest": "x"}])
     reordered["inputs"][0]["patterns"] = ["x/*.tsv", "x/*.csv"]
     reordered["stage"][0]["patterns"] = ["x/*.csv", "x/*.tsv"]
@@ -309,14 +314,101 @@ def test_native_dir_content_is_keyed(tmp_path: Path) -> None:
     assert digest_info.value.code == "E_DIGEST_EMPTY"
 
 
-def test_driver_semantics_and_driver_env_identity(tmp_path: Path) -> None:
-    """The payload carries the driver-semantics number; the driver env identity is stable and hex."""
+def test_native_digests_follow_the_patterns(tmp_path: Path) -> None:
+    """Only bin entries and shared objects count; caches, bytecode and other files do not; a dangling link fails."""
+    profile, lib = _native_profile(tmp_path)
+    step = StepSpec.model_validate(_step_data(resources={"profile": "cpu", "native": ["ffmpeg"]}))
+    base = native_digests(step, profile)
+    (lib / "README").write_text("x")
+    (lib / "pkgconfig").mkdir()
+    (lib / "pkgconfig" / "libav.pc").write_text("x")
+    (lib / "__pycache__").mkdir()
+    (lib / "__pycache__" / "m.so").write_bytes(b"x")
+    (lib / "m.pyc").write_bytes(b"x")
+    assert native_digests(step, profile) == base
+    (lib / "plugins").mkdir()
+    (lib / "plugins" / "libx.so").write_bytes(b"x")
+    assert native_digests(step, profile) != base
+    (lib / "libgone.so").symlink_to(lib / "missing.so")
+    with pytest.raises(DigestError) as info:
+        native_digests(step, profile)
+    assert info.value.code == "E_DIGEST_UNREADABLE"
+
+
+def test_payload_carries_the_reproduce_source_digest(tmp_path: Path) -> None:
+    """The payload holds the digest of the installed reproduce sources; the driver env identity is stable."""
     step = StepSpec.model_validate(_step_data())
     payload = step_key_payload(step, _profile(tmp_path), **_kwargs())
-    assert payload["driver_semantics"] == cache.DRIVER_SEMANTICS
+    assert payload["reproduce_source_sha256"] == cache.reproduce_source_sha256()
     identity = driver_env_sha256()
     assert identity == driver_env_sha256() and len(identity) == 64
     assert _key(tmp_path, adapter_env_sha256=identity) != _key(tmp_path)
+
+
+def test_reproduce_source_digest_follows_every_source_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Editing, adding or renaming a ``.py`` file under the package moves the digest; caches do not."""
+    pkg = tmp_path / "reproduce"
+    (pkg / "sub").mkdir(parents=True)
+    (pkg / "cache.py").write_text("a = 1\n")
+    (pkg / "sub" / "x.py").write_text("b = 1\n")
+    monkeypatch.setattr(cache, "__file__", str(pkg / "cache.py"))
+
+    def digest() -> str:
+        cache.reproduce_source_sha256.cache_clear()
+        return cache.reproduce_source_sha256()
+
+    try:
+        base = digest()
+        (pkg / "__pycache__").mkdir()
+        (pkg / "__pycache__" / "cache.cpython-312.pyc").write_bytes(b"x")
+        (pkg / "notes.txt").write_text("x")
+        assert digest() == base
+        (pkg / "sub" / "x.py").write_text("b = 2\n")
+        edited = digest()
+        assert edited != base
+        (pkg / "sub" / "x.py").rename(pkg / "sub" / "y.py")
+        assert digest() != edited
+    finally:
+        monkeypatch.undo()
+        cache.reproduce_source_sha256.cache_clear()
+
+
+def _dist(site: Path, name: str, version: str, requires: tuple[str, ...] = ()) -> None:
+    info = site / f"{name}-{version}.dist-info"
+    info.mkdir(parents=True, exist_ok=True)
+    lines = [
+        "Metadata-Version: 2.1",
+        f"Name: {name}",
+        f"Version: {version}",
+        *(f"Requires-Dist: {r}" for r in requires),
+    ]
+    (info / "METADATA").write_text("\n".join(lines) + "\n")
+    importlib.invalidate_caches()
+
+
+def test_driver_env_identity_reads_only_the_runtime_closure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Only senselab's no-extra dependency closure in the interpreter's site dirs is hashed."""
+    site = tmp_path / "site"
+    _dist(site, "senselab", "1.0", ("dep>=1", 'extra-only; extra == "x"'))
+    _dist(site, "dep", "2.0", ("leaf",))
+    _dist(site, "leaf", "3.0")
+    _dist(site, "extra-only", "1.0")
+    _dist(site, "unrelated", "1.0")
+    monkeypatch.setattr(cache, "_site_dirs", lambda: [str(site)])
+    elsewhere = tmp_path / "path"
+    _dist(elsewhere, "dep", "9.9")
+    monkeypatch.syspath_prepend(str(elsewhere))
+    base = driver_env_sha256()
+    for name, version in (("unrelated", "2.0"), ("extra-only", "2.0"), ("senselab", "1.1")):
+        for old in site.glob(f"{name}-*.dist-info"):
+            shutil.rmtree(old)
+        importlib.invalidate_caches()
+        _dist(site, name, version, ("dep>=1", 'extra-only; extra == "x"') if name == "senselab" else ())
+        assert driver_env_sha256() == base, name
+    shutil.rmtree(site / "leaf-3.0.dist-info")
+    importlib.invalidate_caches()
+    _dist(site, "leaf", "3.1")
+    assert driver_env_sha256() != base
 
 
 def test_keyed_env_is_the_sandbox_keyed_set(tmp_path: Path) -> None:
@@ -485,6 +577,29 @@ def test_reset_result_dir_clears_an_incomplete_run_and_keeps_a_done_one(tmp_path
         reset_result_dir(tmp_path, SHA)
     assert info.value.code == "E_RESULT_DONE"
     assert is_done(out)
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root reads files regardless of mode")
+def test_reset_result_dir_keeps_a_dir_whose_summary_cannot_be_read(tmp_path: Path) -> None:
+    """A done dir with an unreadable summary raises and is left in place; so does a summary that is not JSON."""
+    out = result_dir(tmp_path, SHA)
+    out.mkdir()
+    (out / "metrics.json").write_text("{}")
+    summary = write_summary(out, {"exit": 0})
+    summary.chmod(0)
+    try:
+        with pytest.raises(CacheError) as info:
+            reset_result_dir(tmp_path, SHA)
+        assert info.value.code == "E_RESULT_UNREADABLE" and info.value.__suppress_context__
+        assert sorted(p.name for p in out.iterdir()) == ["metrics.json", cache.SUMMARY]
+    finally:
+        summary.chmod(0o600)
+    for text in ('{"exit": 0', '{"exit": true}', "[1]"):
+        summary.write_text(text)
+        with pytest.raises(CacheError) as info:
+            reset_result_dir(tmp_path, SHA)
+        assert info.value.code == "E_RESULT_UNREADABLE"
+        assert (out / "metrics.json").exists()
 
 
 def test_reset_result_dir_refusals(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
