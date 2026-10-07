@@ -401,3 +401,19 @@ def test_to_dict_is_plain_and_carries_floors() -> None:
     assert data["floors"]["balanced_accuracy"] == pytest.approx(0.5)
     assert set(data["lift"]) == set(data["floors"]) == set(data["normalized_lift"])
     assert data["secondary"]["accuracy"]["floor"] == pytest.approx(0.9)
+
+
+# ── Review fixes ──────────────────────────────────────────────────────
+
+
+def test_macro_f1_averages_over_present_labels() -> None:
+    """With c declared but absent and everything predicted a, macro-F1 is (0.75 + 0) / 2, not / 3."""
+    report = _score(["a"] * 6 + ["b"] * 4, ["a"] * 10, labels=["a", "b", "c"])
+    assert report.secondary["f1_macro"].value == pytest.approx(0.375)
+
+
+def test_positive_f1_is_omitted_when_the_positive_label_is_absent() -> None:
+    """With no positive example, positive-class F1 is undefined: omitted, as per_class reports None."""
+    report = _score(["neg"] * 5, ["neg"] * 4 + ["pos"], positive_label="pos")
+    assert "f1" not in report.secondary
+    assert report.per_class["pos"]["f1"] is None

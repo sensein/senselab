@@ -564,7 +564,7 @@ def test_holdout_on_two_unit_subjects_names_the_cause() -> None:
 def test_seen_kfold_validation_on_two_unit_subjects_names_the_cause() -> None:
     """With two units per subject nothing is left for validation after the test unit; the error says so."""
     labels, subjects, units = _two_unit_cohort()
-    with pytest.raises(ValueError, match="every subject has 2 units or fewer; seen_subject_kfold needs >= 3"):
+    with pytest.raises(ValueError, match="every subject has 2 units or fewer; seen_subject_kfold needs >= 4"):
         grouped_splits(
             labels,
             subjects,
@@ -606,7 +606,7 @@ def test_pandas_na_is_a_missing_id() -> None:
 def test_seen_kfold_validation_needs_follow_val_inner_splits() -> None:
     """The message's unit requirement follows val_inner_splits."""
     labels, subjects, units = _two_unit_cohort()
-    with pytest.raises(ValueError, match="needs >= 5"):
+    with pytest.raises(ValueError, match="needs >= 8"):
         grouped_splits(
             labels,
             subjects,
@@ -650,3 +650,43 @@ def test_pandas_nat_is_a_missing_id() -> None:
     holed[0] = pd.NaT
     with pytest.raises(ValueError, match="no subject id"):
         grouped_splits(labels, holed, protocol="unseen_subject", scheme="stratified_group_kfold", seed=0, n_splits=2)
+
+
+def _one_subject(n_units: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """One subject with ``n_units`` single-row units; labels alternate."""
+    return np.arange(n_units) % 2, np.array(["s"] * n_units), np.array([f"u{i}" for i in range(n_units)])
+
+
+@pytest.mark.parametrize(("m", "n", "v", "needed"), [(7, 2, 4, 8), (5, 2, 4, 8), (3, 2, 2, 4)])
+def test_seen_kfold_validation_bound(m: int, n: int, v: int, needed: int) -> None:
+    """The bound is max(3, ceil(V*n/(n-1))): the fold that takes ceil(m/n) units must leave V for the inner slots."""
+    labels, subjects, units = _one_subject(m)
+    with pytest.raises(ValueError, match=f"needs >= {needed} units"):
+        grouped_splits(
+            labels,
+            subjects,
+            protocol="seen_subject",
+            scheme="seen_subject_kfold",
+            seed=0,
+            n_splits=n,
+            units=units,
+            unit_name="r",
+            val_inner_splits=v,
+        )
+
+
+def test_seen_kfold_validation_bound_control() -> None:
+    """At the bound (m=8, n=2, V=4) every fold gets a validation partition."""
+    labels, subjects, units = _one_subject(8)
+    splits, _ = grouped_splits(
+        labels,
+        subjects,
+        protocol="seen_subject",
+        scheme="seen_subject_kfold",
+        seed=0,
+        n_splits=2,
+        units=units,
+        unit_name="r",
+        val_inner_splits=4,
+    )
+    assert all(len(s.partitions["val"]) >= 1 for s in splits)

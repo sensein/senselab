@@ -420,6 +420,11 @@ def _seen_kfold(
     """Seen-subject k-fold: each subject's units dealt round-robin over the folds."""
     rng = np.random.default_rng(seed)
     ordered = _ordered_units(labels, subjects, units, strata, rng)
+    # A fold's test takes up to ceil(m/n) of a subject's m units; the rest must cover all V inner slots
+    # for slot 0 (validation) to be filled, so m - ceil(m/n) >= V, i.e. m >= ceil(V*n/(n-1)).
+    val_needed = 3 if val_inner_splits is None else max(3, math.ceil(val_inner_splits * n_splits / (n_splits - 1)))
+    if val_inner_splits is not None and max(len(u) for u in ordered.values()) < val_needed:
+        _too_few_units(ordered, "seen_subject_kfold", val_needed, "val")
     dealt: Dict[str, List[int]] = {}
     for s, unit_rows in ordered.items():
         offset = int(rng.integers(n_splits))
@@ -438,7 +443,6 @@ def _seen_kfold(
                 parts["val"] += [rows for rows, slot in zip(rest, slots) if slot == 0]
                 rest = [rows for rows, slot in zip(rest, slots) if slot != 0]
             parts["train"] += rest
-        val_needed = 3 if val_inner_splits is None else max(3, val_inner_splits + 1)
         for name, needed in (("test", n_splits), ("val", val_needed)):
             if name in parts and not parts[name]:
                 _too_few_units(ordered, "seen_subject_kfold", needed, name)

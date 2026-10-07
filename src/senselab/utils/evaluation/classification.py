@@ -183,7 +183,7 @@ class ClassificationReport:
         headline_value: Balanced accuracy, the only headline.
         balanced_accuracy: Recall averaged over the labels present in `y_true` (`balanced_accuracy`).
         secondary: `accuracy`, `f1_macro` (over present labels), `mcc`, and `f1` (positive class) for
-            binary with a positive label.
+            binary with a positive label that occurs in `y_true` (omitted when it is absent: undefined).
         per_class: Label to precision, recall, F1, support and prevalence. Recall and F1 are `None` for
             an absent label; precision is `None` for a label never predicted.
         confusion_matrix: `rows` (true labels), `columns` (labels plus the invalid label) and `counts`.
@@ -481,10 +481,10 @@ def score_classification(
         # One value across truth and predictions leaves MCC undefined; scikit-learn's convention is 0.
         "mcc": _metric(0.0 if len(set(y_t) | set(y_p)) < 2 else float(matthews_corrcoef(y_t, y_p)), 0.0),
     }
-    if positive is not None:
+    f1_positive = None if positive is None else per_class[positive]["f1"]
+    if positive is not None and f1_positive is not None:
         p = prevalence[positive]
-        f1_positive = per_class[positive]["f1"]
-        secondary["f1"] = _metric(0.0 if f1_positive is None else f1_positive, 2 * p / (1 + p))
+        secondary["f1"] = _metric(f1_positive, 2 * p / (1 + p))
     roc, ap = (None, None) if scores is None else _scores_and_floors(truth, scores, label_list, positive, prevalence)
     balanced = _metric(balanced_accuracy(truth, pred), floor_k)
     return ClassificationReport(

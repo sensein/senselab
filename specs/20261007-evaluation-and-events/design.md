@@ -206,7 +206,9 @@ shuffled within ties with the seed, and dealt round-robin over the n folds from 
 u ≥ 2 and n ≥ 2, ⌈u/n⌉ ≤ ⌈u/2⌉ ≤ (u + 1)/2 < u, so at least one unit is left for training in every
 fold. With `val_inner_splits=k`, a subject's remaining r units are dealt over k slots the same way
 and slot 0 becomes validation, but only when r ≥ 2, which keeps at least one unit in train by the
-same argument.
+same argument. Slot 0 is certain to be filled only when r ≥ k; the worst fold leaves
+r = m − ⌈m/n⌉, so a subject needs m ≥ ⌈k·n/(n − 1)⌉ units (and at least 3). If no subject reaches
+that bound the split is refused up front, naming the bound, rather than left to chance.
 
 **Seen-subject holdout.** Each subject's units, in the same order, are split by fractions
 (default 0.6/0.2/0.2): the counts come from largest-remainder rounding of `u·fraction`, every
