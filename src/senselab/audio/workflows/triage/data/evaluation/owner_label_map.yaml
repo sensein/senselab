@@ -16,6 +16,9 @@ targets:
   absent: [discard]
   excluded: []
 labels:
+  reviewer_pass: {target: present}
+  reviewer_review: {target: present_flagged}
+  reviewer_discard: {target: absent}
   breath_present: {target: present}
   breath_pattern: {target: present}
   cough_present: {target: present}
