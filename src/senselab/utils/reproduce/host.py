@@ -110,12 +110,13 @@ def _probe(venv: Path, runner: Runner) -> dict[str, Any]:
     return empty
 
 
-def host_record(venv: str | os.PathLike[str], *, runner: Runner | None = None) -> dict[str, Any]:
+def host_record(venv: str | os.PathLike[str] | None, *, runner: Runner | None = None) -> dict[str, Any]:
     """Describe this host and a venv's interpreter.
 
     Args:
         venv: The step's venv; its ``bin/python`` is asked for its Python, torch and torch CUDA
-            versions in isolated mode with a minimal environment.
+            versions in isolated mode with a minimal environment. None leaves those three None, for a
+            caller that learns them inside the sandbox instead (the run's preamble).
         runner: Runs an argv and returns ``(returncode, stdout)``; a missing program or timeout is
             ``(127, "")``. Defaults to a subprocess runner.
 
@@ -136,6 +137,6 @@ def host_record(venv: str | os.PathLike[str], *, runner: Runner | None = None) -
         "gpu_name": gpu_name,
         "gpu_driver": gpu_driver,
         "gpu_count": gpu_count,
-        **_probe(Path(venv), run),
+        **(_probe(Path(venv), run) if venv is not None else {"python": None, "torch": None, "torch_cuda": None}),
         "slurm_job_id": os.environ.get("SLURM_JOB_ID"),
     }

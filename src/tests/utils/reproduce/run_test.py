@@ -11,7 +11,9 @@ import hashlib
 import json
 import logging
 import os
+import socket
 import subprocess
+import uuid
 import venv
 from collections.abc import Iterator, Sequence
 from pathlib import Path
@@ -19,7 +21,8 @@ from typing import Any
 
 import pytest
 
-from senselab.utils.reproduce import cache, digest, env, host, run, sandbox, source
+import senselab
+from senselab.utils.reproduce import cache, digest, env, host, provenance, run, sandbox, source
 from senselab.utils.reproduce.digest import input_set_digest
 from senselab.utils.reproduce.run import RunConfig, StepOutcome, evaluate_expect, run_step, run_steps
 from senselab.utils.reproduce.spec import Manifest, Profile, StepSpec
@@ -188,14 +191,14 @@ class World:
         """Check out every step and give it a stdlib venv with a marker, as `env.prefetch_env` would."""
         for step in manifest.steps:
             source.checkout_step(step, cache=self.cache, base_dir=self.base)
-            path = env.venv_dir(self.cache, manifest.name, step.env)
+            path, overlay = run._step_venv(step, manifest.name, self.cache)
             if not (path / "bin" / "python").exists():
                 venv.EnvBuilder(symlinks=True, with_pip=False).create(path)
             data = json.dumps({"packages": {}, "freeze": []}).encode()
             (path / env.INSTALLED).write_bytes(data)
             marker = {
                 "env_key": env.env_key(step.env),
-                "overlay_sha256": None,
+                "overlay_sha256": None if overlay is None else overlay.lock_sha256,
                 "wheels": {},
                 "installed_sha256": hashlib.sha256(data).hexdigest(),
                 "checks": {"digest": env.checks_digest(step.env), "pip_check_ok": checked, "smoke_ok": checked},
@@ -363,12 +366,12 @@ def test_stage_copies_selected_files_without_entering_symlinked_dirs(world: Worl
     outcome = world.run(manifest)["prep"]
     assert outcome.ok, outcome.codes
     assert outcome.out is not None
-    stage = outcome.out / run.STAGE
+    stage = outcome.out / run.WORK / run.STAGE
     assert sorted(p.relative_to(stage).as_posix() for p in stage.rglob("*") if p.is_file()) == [
         "code/step.py",
         "data/in/a.txt",
     ]
-    assert json.loads((outcome.out / "result.json").read_text())["value"] == 3.0
+    assert json.loads((outcome.out / run.WORK / "result.json").read_text())["value"] == 3.0
 
 
 @needs_userns
@@ -395,7 +398,7 @@ def test_no_netns_with_a_reachable_canary_aborts_with_e_canary(world: World) -> 
     assert outcome.status == "failed" and "E_CANARY" in outcome.codes and outcome.exit != 0
     assert outcome.out is not None
     assert _summary(outcome)["canary_failed"] is False
-    assert not (outcome.out / "result.json").exists()
+    assert not (outcome.out / run.WORK / "result.json").exists()
     assert MARKER not in (outcome.out / run.LOGS / "step.stdout.log").read_text()
 
 
@@ -426,7 +429,7 @@ def test_unchecked_and_missing_venvs_and_no_userns_are_refused(world: World, mon
     monkeypatch.setattr(sandbox, "userns_available", lambda: True)
     outcome = run_step(manifest.steps[0], "demo", world.config())
     assert (outcome.status, outcome.codes) == ("failed", ("E_ENV_UNCHECKED",))
-    assert _summary(outcome)["executed"] is False and _summary(outcome)["exit"] != 0
+    assert outcome.key is not None and not (world.tmp / "results" / outcome.key).exists()
     path = env.venv_dir(world.cache, "demo", manifest.steps[0].env)
     (path / env.MARKER).unlink()
     assert run_step(manifest.steps[0], "demo", world.config()).codes == ("E_ENV_MISSING",)
@@ -613,7 +616,8 @@ def test_evaluate_expect_abs_exact_and_units() -> None:
     final, passed, codes = evaluate_expect(step, _metrics(0.623, 0.7), {})
     assert codes == [] and passed is True and final is not None
     ba = final["headline"][0]
-    assert ba["target"] == 62.0 and ba["delta"] == pytest.approx(0.3) and ba["pass"] is True
+    assert ba["target"] == pytest.approx(0.62) and ba["delta"] == pytest.approx(0.003) and ba["pass"] is True
+    assert ba["tolerance"] == pytest.approx(0.005)
     assert final["secondary"][0]["pass"] is True and final["pass"] is True
     assert final["target"] == 40 and final["delta"] == 0 and "tolerance" not in final
     _, failed, _ = evaluate_expect(step, _metrics(0.63, 0.7), {})
@@ -643,8 +647,8 @@ def test_evaluate_expect_from_step_and_tolerance_from() -> None:
     final, passed, codes = evaluate_expect(step, _metrics(0.635, 0.7), upstream)
     assert codes == [] and final is not None
     entry = final["headline"][0]
-    assert entry["target"] == pytest.approx(60.0) and entry["tolerance"] == pytest.approx(4.0)
-    assert entry["delta"] == pytest.approx(3.5) and passed is True
+    assert entry["target"] == pytest.approx(0.60) and entry["tolerance"] == pytest.approx(0.04)
+    assert entry["delta"] == pytest.approx(0.035) and passed is True
     _, failed, _ = evaluate_expect(step, _metrics(0.645, 0.7), upstream)
     assert failed is False
 
@@ -665,24 +669,27 @@ def test_evaluate_expect_shared_place_gets_pass_only_and_bad_address_is_a_code()
     assert evaluate_expect(counted, suppressed, {}) == (None, False, ["E_METRICS_SUPPRESSED"])
 
 
-def test_preamble_parsing_is_strict(tmp_path: Path) -> None:
-    """Only one JSON object line with exactly the four keys and the right types is accepted."""
-    path = tmp_path / "p.json"
-    good = {"sys_prefix": "/v", "torch": "2.5.1+cu128", "torch_cuda": "12.8", "canary_failed": True}
-    path.write_text(json.dumps(good) + "\n")
-    assert run._read_preamble(path) == good
+def test_preamble_parsing_is_strict() -> None:
+    """Only one JSON object line with exactly the five keys and the right types is accepted."""
+    good = {
+        "sys_prefix": "/v",
+        "python": "3.12.11",
+        "torch": "2.5.1+cu128",
+        "torch_cuda": "12.8",
+        "canary_failed": True,
+    }
+    assert run._parse_preamble((json.dumps(good) + "\n").encode()) == good
     for bad in (
         json.dumps(good) + "\n" + json.dumps(good) + "\n",
         json.dumps(good | {"extra": 1}),
+        json.dumps({k: v for k, v in good.items() if k != "python"}),
         json.dumps(good | {"canary_failed": "true"}),
         json.dumps(good | {"torch": "2.5 /x"}),
         "not json",
         "",
     ):
-        path.write_text(bad)
-        assert run._read_preamble(path) is None, bad
-    path.unlink()
-    assert run._read_preamble(path) is None
+        assert run._parse_preamble(bad.encode()) is None, bad
+    assert run._parse_preamble(b"\xff\xfe") is None
 
 
 def test_traceback_gives_class_and_checkout_relative_frame(tmp_path: Path) -> None:
@@ -699,3 +706,418 @@ def test_traceback_gives_class_and_checkout_relative_frame(tmp_path: Path) -> No
     assert run._traceback(stderr, checkout) == ("json.decoder.JSONDecodeError", "pkg/run.py:12")
     stderr.write_text("no traceback here\n")
     assert run._traceback(stderr, checkout) == (None, None)
+    for last in ("subject_X42 recorded at clinic: boom", "notAClass: x", "Error: x"):
+        stderr.write_text(f'Traceback (most recent call last):\n  File "{checkout}/pkg/run.py", line 3\n{last}\n')
+        assert run._traceback(stderr, checkout) == (None, "pkg/run.py:3"), last
+    stderr.write_text("Traceback (most recent call last):\nKeyboardInterrupt\n")
+    assert run._traceback(stderr, checkout) == ("KeyboardInterrupt", None)
+
+
+def test_exact_after_a_unit_conversion_compares_within_a_relative_tolerance() -> None:
+    """0.7 as a fraction equals an exact 70 pp, and the result is written back as a fraction."""
+    step = _schema_step(expect=[{"metric": "top1", "value": 70.0, "unit": "pp", "kind": "exact"}])
+    final, passed, _ = evaluate_expect(step, _metrics(0.6, 0.7), {})
+    assert passed is True and final is not None
+    entry = final["secondary"][0]
+    assert entry["target"] == pytest.approx(0.7) and entry["pass"] is True and "tolerance" not in entry
+    same_unit = _schema_step(expect=[{"metric": "top1", "value": 0.7000000001, "kind": "exact"}])
+    assert evaluate_expect(same_unit, _metrics(0.6, 0.7), {})[1] is False
+
+
+# --- the read-only-by-default sandbox and the driver-owned layout ----------------------------------
+
+
+def _py(world: World, code: str, *extra: str, **change: Any) -> dict[str, Any]:  # noqa: ANN401
+    """A step running ``python -c code {out} {cache} <extra>``; ``code`` must write ``{out}/result.json``."""
+    escaped = code.replace("{", "{{").replace("}", "}}")
+    argv = [
+        "{venv}/bin/python",
+        "-c",
+        escaped,
+        "{out}",
+        "{cache}",
+        *(e.replace("{", "{{").replace("}", "}}") for e in extra),
+    ]
+    return world.step("prep", "prep", "{root:data}/in/a.txt", argv=argv, **change)
+
+
+RESULT = "open(sys.argv[1] + '/result.json', 'w').write(json.dumps({'value': 2.0}))"
+
+
+@needs_userns
+@pytest.mark.parametrize("target", ["cache", "r_lib", "home", "senselab", "scratch"])
+def test_writes_outside_the_writable_dirs_fail(world: World, target: str) -> None:
+    """The cache, an R library, the real home, the senselab source and any other path are read-only."""
+    r_lib = world.cache / "r" / "lib"
+    r_lib.mkdir(parents=True)
+    (world.tmp / "scratch").mkdir()
+    places = {
+        "cache": world.cache,
+        "r_lib": r_lib,
+        "home": Path.home(),
+        "senselab": Path(senselab.__file__).resolve().parent,
+        "scratch": world.tmp / "scratch",
+    }
+    probe = places[target] / f".reproduce-probe-{uuid.uuid4().hex}"
+    code = f"import json, sys; open(sys.argv[3], 'w').write('x'); {RESULT}"
+    manifest = world.manifest(_py(world, code, str(probe)))
+    world.prefetch(manifest)
+    try:
+        outcome = world.run(manifest)["prep"]
+        assert outcome.status == "executed" and outcome.exit != 0 and "E_STEP_FAILED" in outcome.codes
+        assert outcome.out is not None and _summary(outcome)["exc_class"] == "OSError"
+        assert not probe.exists()
+    finally:
+        probe.unlink(missing_ok=True)
+
+
+@needs_userns
+def test_the_step_cannot_touch_driver_owned_files(world: World) -> None:
+    """Logs, the result dir's own files and the dir itself are read-only: a symlink escape or forgery fails."""
+    victim = world.tmp / "victim.txt"
+    victim.write_text("ORIGINAL\n")
+    code = (
+        "import json, os, sys; r = os.path.dirname(sys.argv[1]); hits = []\n"
+        f"for act in (lambda: os.symlink({str(victim)!r}, r + '/logs/adapter.stdout.log'),\n"
+        "            lambda: os.unlink(r + '/logs/driver.log'),\n"
+        "            lambda: open(r + '/summary.json', 'w').write('{\"exit\": 0}'),\n"
+        "            lambda: open(r + '/metrics.json', 'w').write('{}'),\n"
+        "            lambda: os.rmdir(r + '/tmp')):\n"
+        "    try:\n"
+        "        act(); hits.append(1)\n"
+        "    except OSError:\n"
+        "        hits.append(0)\n"
+        "open(sys.argv[1] + '/hits.json', 'w').write(json.dumps(hits))\n"
+        f"{RESULT}\n"
+    )
+    manifest = world.manifest(_py(world, code))
+    world.prefetch(manifest)
+    outcome = world.run(manifest)["prep"]
+    assert outcome.ok, outcome.codes
+    assert outcome.out is not None
+    assert json.loads((outcome.out / run.WORK / "hits.json").read_text()) == [0, 0, 0, 0, 0]
+    assert victim.read_text() == "ORIGINAL\n"
+    assert (outcome.out / run.LOGS / run.DRIVER_LOG).is_file()
+    assert not (outcome.out / run.LOGS / "adapter.stdout.log").is_symlink()
+
+
+@needs_userns
+def test_a_symlink_left_in_tmp_is_not_followed_by_the_cleanup(world: World) -> None:
+    """The step's tmp is removed without following a link the step left there."""
+    victim = world.tmp / "victim-dir"
+    victim.mkdir()
+    (victim / "keep.txt").write_text("x")
+    code = f"import json, os, sys; os.symlink({str(victim)!r}, os.environ['TMPDIR'] + '/link'); {RESULT}"
+    manifest = world.manifest(_py(world, code))
+    world.prefetch(manifest)
+    outcome = world.run(manifest)["prep"]
+    assert outcome.ok, outcome.codes
+    assert outcome.out is not None and not (outcome.out / run.TMP).exists()
+    assert (victim / "keep.txt").read_text() == "x"
+
+
+@needs_userns
+def test_reserved_names_under_work_are_refused_and_deleted(world: World, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A forged summary never makes the dir done, even right after the step; reserved names fail the step."""
+    code = (
+        "import json, os, sys; o = sys.argv[1]; os.makedirs(o + '/sub/run.json')\n"
+        "open(o + '/summary.json', 'w').write(json.dumps({'exit': 0}))\n"
+        "open(o + '/sub/metrics.json', 'w').write(json.dumps({'rows': ['SUBJECT-0042']}))\n"
+        f"{RESULT}\n"
+    )
+    seen: dict[str, bool] = {}
+    real = run._Execution._after
+
+    def spy(self: run._Execution) -> None:
+        seen["done"] = cache.is_done(self.result)
+        real(self)
+
+    monkeypatch.setattr(run._Execution, "_after", spy)
+    manifest = world.manifest(_py(world, code))
+    world.prefetch(manifest)
+    outcome = world.run(manifest)["prep"]
+    assert seen == {"done": False}
+    assert outcome.codes == ("E_RESERVED_NAME",) and outcome.exit != 0
+    assert outcome.out is not None and not cache.is_done(outcome.out)
+    work = outcome.out / run.WORK
+    assert not (work / "summary.json").exists() and not (work / "sub" / "metrics.json").exists()
+    assert not (work / "sub" / "run.json").exists() and not (outcome.out / run.METRICS).exists()
+
+
+@needs_userns
+def test_a_step_cannot_write_its_upstream_result(world: World) -> None:
+    """An upstream result dir is read-only for its dependents."""
+    manifest = world.dag()
+    world.prefetch(manifest)
+    first = world.run(manifest)
+    up = first["prep"].out
+    assert up is not None
+    before = (up / run.WORK / "result.json").read_text()
+    code = "import sys; open(sys.argv[3] + '/result.json', 'w').write('tamper')"
+    score = world.step(
+        "score",
+        "score",
+        "{up:prep}/result.json",
+        needs=["prep"],
+        inputs=[{"root": "up:prep", "patterns": ["result.json"]}],
+        argv=["{venv}/bin/python", "-c", code, "{out}", "{cache}", "{up:prep}"],
+    )
+    tampered = world.manifest(manifest.steps[0].model_dump(mode="json"), score)
+    outcome = world.run(tampered)["score"]
+    assert outcome.exit != 0 and "E_STEP_FAILED" in outcome.codes
+    assert (up / run.WORK / "result.json").read_text() == before
+
+
+@needs_userns
+def test_offline_canary_with_a_local_listener(world: World) -> None:
+    """A listener on the host's loopback: unreachable from the namespace, reached without it (spec C3)."""
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(8)
+    try:
+        world.canary = f"127.0.0.1:{listener.getsockname()[1]}"
+        manifest = world.manifest(world.step("prep", "prep", "{root:data}/in/a.txt"))
+        world.prefetch(manifest)
+        exposed = world.run(manifest, no_netns=True)["prep"]
+        assert set(exposed.codes) == {"E_CANARY", "E_NOT_REPORTABLE"} and exposed.status == "failed"
+        assert world.run(manifest)["prep"].ok
+    finally:
+        listener.close()
+
+
+@needs_userns
+def test_summary_pass_is_none_without_expectations(world: World) -> None:
+    """With no expectations nothing was evaluated, so ``pass`` is null and ``metrics.json`` has none."""
+    manifest = world.manifest(world.step("prep", "prep", "{root:data}/in/a.txt"))
+    world.prefetch(manifest)
+    outcome = world.run(manifest)["prep"]
+    assert outcome.ok and outcome.out is not None
+    assert _summary(outcome)["pass"] is None
+    assert "pass" not in json.loads((outcome.out / run.METRICS).read_text())
+
+
+# --- R, notebooks, timeouts, upstream metrics ----------------------------------------------------------
+
+
+FAKE_RSCRIPT = """#!/bin/sh
+# Rscript --vanilla <script> <r_lib> <out>
+out="$4"
+printf 'lme4\\t1.1-37\\n' > "$out/installed.tsv"
+printf '%s\\n' "$3" > "$out/lib_paths.txt"
+printf 'R version 4.5.2 (2025-10-31)\\nother attached packages: lme4_1.1-37\\nloaded via a namespace: x\\n' \\
+  > "$out/session_info.txt"
+printf 'R version 4.5.2 (2025-10-31)\\n' > "$out/r_version.txt"
+"""
+
+
+def _r_step(world: World, session: dict[str, Any]) -> dict[str, Any]:
+    r_lib = world.cache / "r" / "lme4"
+    fake = world.tmp / "rbin"
+    fake.mkdir(exist_ok=True)
+    (fake / "Rscript").write_text(FAKE_RSCRIPT)
+    (fake / "Rscript").chmod(0o755)
+    r_lib.mkdir(parents=True, exist_ok=True)
+    (r_lib / env.MODULE_ENV).write_text(json.dumps({"module": "R/4.5.2", "build_modules": [], "PATH": str(fake)}))
+    (r_lib / env.SESSION).write_text(json.dumps({"key": {}, **session}))
+    code = (
+        "import json, os, sys\n"
+        "keys = ('PATH', 'R_LIBS', 'R_LIBS_USER', 'R_LIBS_SITE')\n"
+        "open(sys.argv[1] + '/env.json', 'w').write(json.dumps({k: os.environ.get(k) for k in keys}))\n"
+        f"{RESULT}\n"
+    )
+    data = _py(world, code, kind="r")
+    data["env"] |= {"r_packages": [{"name": "lme4", "version": "1.1-37"}], "r_snapshot": "2026-01-01"}
+    data["env"]["r_lib"] = "{cache}/r/lme4"
+    return data
+
+
+def _session(world: World, r_version: str = "R version 4.5.2 (2025-10-31)") -> dict[str, Any]:
+    return {
+        "installed": {"lme4": "1.1-37"},
+        "lib_paths": [os.path.realpath(world.cache / "r" / "lme4")],
+        "r_version": r_version,
+        "session_info": ["R version 4.5.2 (2025-10-31)", "other attached packages: lme4_1.1-37"],
+    }
+
+
+@needs_userns
+def test_an_r_step_checks_its_session_and_gets_the_module_env(world: World) -> None:
+    """A matching session runs with the module's PATH and the R library; a different one is ``E_R_SESSION``."""
+    manifest = world.manifest(_r_step(world, _session(world)))
+    world.prefetch(manifest)
+    outcome = world.run(manifest)["prep"]
+    assert outcome.ok, outcome.codes
+    assert outcome.out is not None
+    seen = json.loads((outcome.out / run.WORK / "env.json").read_text())
+    r_lib = str(world.cache / "r" / "lme4")
+    assert seen["R_LIBS"] == seen["R_LIBS_USER"] == os.path.realpath(r_lib) and seen["R_LIBS_SITE"] == ""
+    assert str(world.tmp / "rbin") in seen["PATH"].split(":")
+    assert not (outcome.out / run.R_SESSION_DIR).exists()
+
+    moved = world.manifest(_r_step(world, _session(world, "R version 4.4.0 (2024-04-24)")))
+    refused = world.run(moved)["prep"]
+    assert refused.codes == ("E_R_SESSION",) and refused.status == "failed" and refused.exit != 0
+    assert refused.out is not None and not (refused.out / run.WORK / "result.json").exists()
+
+
+@needs_userns
+def test_a_notebook_step_runs_in_its_derived_venv(world: World) -> None:
+    """A notebook kind runs with the ``notebook_tools`` derived venv as ``sys.prefix``."""
+    data = world.step("prep", "prep", "{root:data}/in/a.txt", kind="notebook")
+    data["env"]["notebook_tools"] = {"lock": "nb.lock", "lock_sha256": "ef" * 32}
+    manifest = world.manifest(data)
+    world.prefetch(manifest)
+    outcome = world.run(manifest)["prep"]
+    assert outcome.ok, outcome.codes
+    assert _summary(outcome)["sys_prefix_ok"] is True
+    assert outcome.out is not None and (outcome.out / run.WORK / "notebooks").is_dir()
+
+
+@needs_userns
+def test_a_step_past_its_timeout_is_killed(world: World) -> None:
+    """``E_TIMEOUT``, a non-zero exit and nothing executed past the kill."""
+    manifest = world.manifest(_py(world, f"import json, sys, time; time.sleep(60); {RESULT}"))
+    world.prefetch(manifest)
+    outcome = world.run(manifest, timeout=5)["prep"]
+    assert "E_TIMEOUT" in outcome.codes and outcome.exit != 0
+    assert outcome.out is not None and not (outcome.out / run.WORK / "result.json").exists()
+
+
+def _tolerance_dag(world: World) -> Manifest:
+    calibration = [world.step(name, "prep", "{root:data}/in/a.txt", replicate=i) for i, name in ((1, "c1"), (2, "c2"))]
+    score = world.step(
+        "score",
+        "score",
+        "{up:prep}/result.json",
+        needs=["prep", "c1", "c2"],
+        inputs=[{"root": "up:prep", "patterns": ["result.json"]}],
+        expect=[
+            {
+                "metric": "f_stat",
+                "from_step": {"step": "prep", "metric": "f_stat"},
+                "tolerance_from": {"steps": ["c1", "c2"], "rule": "max(a, k*sd)", "a": 2.5, "k": 2},
+                "kind": "abs",
+            }
+        ],
+    )
+    return world.manifest(world.step("prep", "prep", "{root:data}/in/a.txt"), *calibration, score)
+
+
+@needs_userns
+def test_from_step_and_tolerance_from_read_upstream_results(world: World) -> None:
+    """A target from an upstream step and a tolerance from calibration replicates, through their result dirs."""
+    manifest = _tolerance_dag(world)
+    world.prefetch(manifest)
+    outcomes = world.run(manifest)
+    assert all(o.ok for o in outcomes.values()), {n: o.codes for n, o in outcomes.items()}
+    score = outcomes["score"].out
+    assert score is not None
+    entry = json.loads((score / run.METRICS).read_text())["headline"][0]
+    assert (entry["target"], entry["tolerance"], entry["delta"], entry["pass"]) == (2.0, 2.5, 2.0, True)
+
+
+@needs_userns
+def test_an_unreadable_upstream_metrics_file_is_refused(world: World) -> None:
+    """An expectation whose upstream ``metrics.json`` is gone gives ``E_UPSTREAM_METRICS``."""
+    manifest = _tolerance_dag(world)
+    world.prefetch(manifest)
+    config = world.config()
+    steps = {s.name: s for s in manifest.steps}
+    ups = {n: run_step(steps[n], "demo", config) for n in ("prep", "c1", "c2")}
+    assert all(o.ok for o in ups.values())
+    prep_out = ups["prep"].out
+    assert prep_out is not None
+    (prep_out / run.METRICS).unlink()
+    schemas = {n: steps[n].metrics_schema for n in ups}
+    outcome = run_step(steps["score"], "demo", config, ups, schemas)
+    assert outcome.codes == ("E_UPSTREAM_METRICS",) and outcome.exit != 0
+
+
+@needs_userns
+def test_a_missing_cwd_and_bad_stages_are_refused(world: World) -> None:
+    """``E_CWD`` for a cwd that does not exist; ``E_STAGE_*`` for a stage matching nothing or leaving ``stage``."""
+    cases: dict[str, dict[str, Any]] = {
+        "E_CWD": {"cwd": "missing"},
+        "E_STAGE_EMPTY": {"stage": [{"root": "checkout", "patterns": ["none*.py"], "dest": "x"}]},
+        "E_STAGE_BAD_DEST": {"stage": [{"root": "checkout", "patterns": ["*.py"], "dest": "../x"}]},
+    }
+    for code, change in cases.items():
+        manifest = world.manifest(world.step("prep", "prep", "{root:data}/in/a.txt", **change))
+        world.prefetch(manifest)
+        outcome = world.run(manifest)["prep"]
+        assert outcome.codes == (code,) and outcome.status == "failed" and outcome.exit != 0, code
+
+
+@needs_userns
+def test_a_venv_changed_during_the_step_fails_it(world: World, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The venv's installed digest must be the same after the step as before (``E_ENV_CHANGED``)."""
+    manifest = world.manifest(world.step("prep", "prep", "{root:data}/in/a.txt"))
+    world.prefetch(manifest)
+    real = env.installed_sha256
+    calls: list[int] = []
+
+    def drifting(path: Path) -> str | None:
+        calls.append(1)
+        return real(path) if len(calls) == 1 else "f" * 64
+
+    monkeypatch.setattr(env, "installed_sha256", drifting)
+    outcome = world.run(manifest)["prep"]
+    assert outcome.codes == ("E_ENV_CHANGED",) and outcome.exit != 0
+
+
+@needs_userns
+def test_a_refused_provenance_record_fails_the_step(world: World, monkeypatch: pytest.MonkeyPatch) -> None:
+    """``E_PROV_REFUSED`` leaves the result uncached."""
+
+    def refuse(*args: Any, **kwargs: Any) -> list[Path]:  # noqa: ANN401
+        raise ValueError("record_step: host is not in its closed form")
+
+    monkeypatch.setattr(provenance, "record_step", refuse)
+    manifest = world.manifest(world.step("prep", "prep", "{root:data}/in/a.txt"))
+    world.prefetch(manifest)
+    outcome = world.run(manifest)["prep"]
+    assert outcome.codes == ("E_PROV_REFUSED",) and outcome.exit != 0
+    assert outcome.out is not None and not cache.is_done(outcome.out)
+
+
+@needs_userns
+def test_a_driver_failure_is_a_code_with_a_summary_and_no_traceback(
+    world: World, monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]
+) -> None:
+    """An ``OSError`` while writing the summary is ``E_DRIVER``; a summary still lands and nothing is printed."""
+    real = cache.write_summary
+    calls: list[int] = []
+
+    def flaky(out: Path, summary: dict[str, Any]) -> Path:
+        calls.append(1)
+        if len(calls) == 1:
+            raise OSError(f"disk full at {out}")
+        return real(out, summary)
+
+    monkeypatch.setattr(cache, "write_summary", flaky)
+    manifest = world.manifest(world.step("prep", "prep", "{root:data}/in/a.txt"))
+    world.prefetch(manifest)
+    capfd.readouterr()
+    outcome = world.run(manifest)["prep"]
+    captured = capfd.readouterr()
+    assert "E_DRIVER" in outcome.codes and outcome.exit != 0
+    assert "Traceback" not in captured.out + captured.err and str(world.tmp) not in captured.out + captured.err
+    assert outcome.out is not None and "E_DRIVER" in _summary(outcome)["codes"]
+
+
+@needs_userns
+def test_stale_run_links_are_removed_for_steps_that_did_not_run(world: World) -> None:
+    """A never-ran or keyless failed step leaves no same-day link to an older result."""
+    manifest = world.dag()
+    world.prefetch(manifest)
+    world.run(manifest)
+    run_dir = world.tmp / "runs" / world.config().date.strftime("%Y-%m-%d") / "demo"
+    assert (run_dir / "score").is_symlink()
+    failing = world.dag(prep_expect=[{"metric": "f_stat", "value": 99.0, "tolerance": 0.5, "kind": "abs"}])
+    world.prefetch(failing)
+    outcomes = world.run(failing)
+    assert outcomes["score"].status == "never-ran" and not os.path.lexists(run_dir / "score")
+    assert (run_dir / "prep").is_symlink()
+    orphan = world.manifest(world.step("prep", "prep", "{root:data}/in/a.txt", commit="1" * 40))
+    assert world.run(orphan)["prep"].codes == ("E_SRC_MISSING",)
+    assert not os.path.lexists(run_dir / "prep")
