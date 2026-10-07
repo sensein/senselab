@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from senselab.utils.reproduce import host
 from senselab.utils.reproduce.host import HOST_KEYS, host_record
 
 KEYS = {
@@ -110,3 +111,15 @@ def test_default_runner_on_this_host(tmp_path: Path) -> None:
     record = host_record(tmp_path / "absent")
     assert set(record) == KEYS
     assert record["torch"] is None
+
+
+def test_padded_cpu_and_gpu_names_are_single_spaced(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Runs of spaces in cpuinfo or nvidia-smi names collapse, so provenance's single-space form accepts the host."""
+    cpuinfo = tmp_path / "cpuinfo"
+    cpuinfo.write_text("processor\t: 0\nmodel name\t: Intel(R) Xeon(R) CPU           X5650  @ 2.67GHz\n")
+    monkeypatch.setattr(host, "CPUINFO", str(cpuinfo))
+    smi = (0, "NVIDIA  A100-SXM4-80GB , 570.86.15\n")
+    probe = (0, json.dumps({"python": "3.12.11", "torch": None, "torch_cuda": None}))
+    record = host_record(_venv(tmp_path), runner=FakeRunner(smi=smi, probe=probe))
+    assert record["cpu_model"] == "Intel(R) Xeon(R) CPU X5650 @ 2.67GHz"
+    assert record["gpu_name"] == "NVIDIA A100-SXM4-80GB"
