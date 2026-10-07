@@ -671,13 +671,14 @@ def test_evaluate_expect_shared_place_gets_pass_only_and_bad_address_is_a_code()
 
 
 def test_preamble_parsing_is_strict() -> None:
-    """Only one JSON object line with exactly the five keys and the right types is accepted."""
+    """Only one JSON object line with exactly the six keys and the right types is accepted."""
     good = {
         "sys_prefix": "/v",
         "python": "3.12.11",
         "torch": "2.5.1+cu128",
         "torch_cuda": "12.8",
         "canary_failed": True,
+        "interpreter_ok": True,
     }
     assert run._parse_preamble((json.dumps(good) + "\n").encode()) == good
     for bad in (
@@ -686,6 +687,7 @@ def test_preamble_parsing_is_strict() -> None:
         json.dumps({k: v for k, v in good.items() if k != "python"}),
         json.dumps(good | {"canary_failed": "true"}),
         json.dumps(good | {"torch": "2.5 /x"}),
+        json.dumps(good | {"interpreter_ok": 1}),
         "not json",
         "",
     ):
@@ -760,8 +762,8 @@ def test_writes_outside_the_writable_dirs_fail(world: World, target: str) -> Non
         "scratch": world.tmp / "scratch",
     }
     probe = places[target] / f".reproduce-probe-{uuid.uuid4().hex}"
-    code = f"import json, sys; open(sys.argv[3], 'w').write('x'); {RESULT}"
-    manifest = world.manifest(_py(world, code, str(probe)))
+    code = f"import json, sys; open({str(probe)!r}, 'w').write('x'); {RESULT}"
+    manifest = world.manifest(_py(world, code))
     world.prefetch(manifest)
     try:
         outcome = world.run(manifest)["prep"]
@@ -918,6 +920,8 @@ def _r_step(world: World, session: dict[str, Any], matrix: str = "1.7-3") -> dic
     fake.mkdir(exist_ok=True)
     (fake / "Rscript").write_text(FAKE_RSCRIPT.replace("@MATRIX@", matrix))
     (fake / "Rscript").chmod(0o755)
+    (fake / "rpy").write_text('#!/bin/sh\nexec /usr/bin/python3 "$@"\n')
+    (fake / "rpy").chmod(0o755)
     r_lib.mkdir(parents=True, exist_ok=True)
     (r_lib / env.MODULE_ENV).write_text(json.dumps({"module": "R/4.5.2", "build_modules": [], "PATH": str(fake)}))
     (r_lib / env.SESSION).write_text(json.dumps({"key": {}, **session}))
@@ -928,6 +932,7 @@ def _r_step(world: World, session: dict[str, Any], matrix: str = "1.7-3") -> dic
         f"{RESULT}\n"
     )
     data = _py(world, code, kind="r")
+    data["argv"][0] = "rpy"
     data["env"] |= {"r_packages": [{"name": "lme4", "version": "1.1-37"}], "r_snapshot": "2026-01-01"}
     data["env"]["r_lib"] = "{cache}/r/lme4"
     return data
