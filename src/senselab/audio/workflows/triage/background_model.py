@@ -312,3 +312,113 @@ def impulses_of(signal: Signal, p: dict[str, Any]) -> list[Impulse]:
                 )
             )
     return sorted(found, key=lambda imp: imp.peak_s)
+
+
+@dataclass(frozen=True)
+class Region:
+    """One region of activity over the floor; what it is, the branches decide.
+
+    Attributes:
+        start_s: Its start.
+        end_s: Its end.
+        peak_db: Its highest broadband level over the broadband floor.
+        bands_fraction: The largest share of bands over their floor in any of its frames.
+        onset_s: From its start to where it first comes within ``peak_window_db`` of its peak.
+        offset_s: From where it last does to its end.
+    """
+
+    start_s: float
+    end_s: float
+    peak_db: float
+    bands_fraction: float
+    onset_s: float
+    offset_s: float
+
+    def record(self) -> dict[str, float]:
+        """The region, for the store."""
+        return {key: round(float(value), 3) for key, value in self.__dict__.items()}
+
+
+def regions_of(frames: BandFrames, floor: np.ndarray, impulses: Sequence[Impulse], p: dict[str, Any]) -> list[Region]:
+    """The regions of activity: bridged runs of active frames, less those an impulse explains.
+
+    Args:
+        frames: The plain stream's band frames.
+        floor: The floor per band.
+        impulses: The impulses, whose own frames do not make a region.
+        p: The parameters.
+
+    Returns:
+        The regions, in time order.
+    """
+    q = p["activity"]
+    hop = p["hop_s"]
+    mask = active_mask(frames, floor, p)
+    for imp in impulses:
+        mask[(frames.times_s >= imp.start_s - hop) & (frames.times_s <= imp.end_s + hop)] = False
+    above = (frames.band_db >= floor[None, :] + q["margin_db"]).mean(axis=1)
+    broadband = 10.0 * np.log10(np.sum(10.0 ** (floor / 10.0)) + 1e-12)
+    out: list[Region] = []
+    for first, end in bridge(runs_of(mask), int(round(q["bridge_s"] / hop)) + 1):
+        if (end - first) * hop < q["min_s"]:
+            continue
+        level = frames.level_db[first:end]
+        near = np.flatnonzero(level >= level.max() - q["peak_window_db"])
+        out.append(
+            Region(
+                float(frames.times_s[first] - hop / 2),
+                float(frames.times_s[end - 1] + hop / 2),
+                float(level.max() - broadband),
+                float(above[first:end].max()),
+                float(near[0] * hop),
+                float((end - first - 1 - near[-1]) * hop),
+            )
+        )
+    return out
+
+
+@dataclass(frozen=True)
+class Hum:
+    """Mains lines in the residual.
+
+    Attributes:
+        lines: Mains fundamental to how many of its multiples stand over their neighbourhood.
+        mains_hz: The fundamentals with enough lines, empty where none.
+    """
+
+    lines: dict[str, int]
+    mains_hz: tuple[float, ...]
+
+    def record(self) -> dict[str, Any]:
+        """The reading, for the store."""
+        return {"fired": bool(self.mains_hz), "lines": dict(self.lines), "mains_hz": list(self.mains_hz)}
+
+
+def hum_of(residual: Signal | None, p: dict[str, Any]) -> Hum:
+    """The mains lines the residual carries.
+
+    Args:
+        residual: The residual stream, or None where it is absent.
+        p: The parameters.
+
+    Returns:
+        The hum reading.
+    """
+    q = p["hum"]
+    lines: dict[str, int] = {}
+    if residual is not None and len(residual[0]) >= residual[1]:
+        from scipy.signal import welch  # noqa: PLC0415
+
+        samples, rate = residual
+        freqs, psd = welch(np.asarray(samples, dtype=np.float64), fs=rate, nperseg=int(rate))
+        db = 10.0 * np.log10(psd + 1e-20)
+        lo, hi = q["neighbourhood_hz"]
+        for m in q["mains_hz"]:
+            count = 0
+            for k in range(1, int(q["harmonics_max"]) + 1):
+                at = np.abs(freqs - k * m) <= 0.5
+                around = (np.abs(freqs - k * m) >= lo) & (np.abs(freqs - k * m) <= hi)
+                if at.any() and around.any() and db[at].max() - np.median(db[around]) >= q["line_db"]:
+                    count += 1
+            lines[f"{m:g}"] = count
+    return Hum(lines, tuple(float(m) for m in q["mains_hz"] if lines.get(f"{m:g}", 0) >= q["lines_min"]))
