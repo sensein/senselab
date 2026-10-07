@@ -64,6 +64,8 @@ CLI = REPO_ROOT / "scripts" / "triage_audio.py"
 GRAPH = (
     "ADMIT",
     "PREPROCESS",
+    "SESSION",
+    "BACKGROUND",
     "TAXONOMY",
     "routing",
     "AIRWAY",
@@ -74,7 +76,7 @@ GRAPH = (
     "REVIEW",
     "VERDICT",
 )
-"""Every node the runner drives. QUALITY, routing and REVIEW run for real here; the rest are faked."""
+"""Every node the runner drives. SESSION, BACKGROUND, QUALITY, routing and REVIEW run for real; the rest are faked."""
 
 _MISSING = object()
 
@@ -370,6 +372,18 @@ def graph(monkeypatch: pytest.MonkeyPatch) -> Callable[..., list[str]]:
             calls.append("VERDICT")
             return real_verdict(*args, **kwargs)
 
+        real_session, real_background = run_module.write_session_floor, run_module.write_background
+
+        def _session(*args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
+            calls.append("SESSION")
+            return real_session(*args, **kwargs)
+
+        def _background(*args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
+            calls.append("BACKGROUND")
+            return real_background(*args, **kwargs)
+
+        monkeypatch.setattr(run_module, "write_session_floor", _session)
+        monkeypatch.setattr(run_module, "write_background", _background)
         monkeypatch.setattr(run_module, "quality", _quality)
         monkeypatch.setattr(run_module, "review", _review)
         monkeypatch.setattr(run_module, "verdict", _verdict)
@@ -751,7 +765,17 @@ class TestConditionalExecution:
         """Branches do not run without ROUTING's decisions; QUALITY, which reads none, still does."""
         calls = graph(routing_outcome=routing_outcome)
         result = run_triage(tmp_path / "recording.wav", tmp_path / "out", config)
-        assert tuple(calls) == ("ADMIT", "PREPROCESS", "TAXONOMY", "routing", "QUALITY", "REVIEW", "VERDICT")
+        assert tuple(calls) == (
+            "ADMIT",
+            "PREPROCESS",
+            "SESSION",
+            "BACKGROUND",
+            "TAXONOMY",
+            "routing",
+            "QUALITY",
+            "REVIEW",
+            "VERDICT",
+        )
         assert result.ran["routing"] is RunState.ERRORED
         assert all(result.ran[branch] is RunState.SKIPPED for branch in ("AIRWAY", "SPEECH", "VOICE", "REDACT"))
         assert result.file_verdict is not None
