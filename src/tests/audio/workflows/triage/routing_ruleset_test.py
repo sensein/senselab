@@ -535,7 +535,7 @@ class TestAgreementIsAFlagAndNotAGate:
 
 
 def _classified(family: str, enhanced: float, residual: float, **overrides: object) -> RecordingFeatures:
-    """A record whose enhanced and residual YAMNet summaries both exist and carry a top score.
+    """A record whose enhanced and residual YAMNet summaries exist, with BACKGROUND's activity beside them.
 
     Args:
         family: The task family.
@@ -544,12 +544,13 @@ def _classified(family: str, enhanced: float, residual: float, **overrides: obje
         overrides: Further fields to replace.
 
     Returns:
-        The record.
+        The record, reading activity over the floor where either score reaches 0.2 and none otherwise.
     """
     record = _features(
         family,
         classifier_streams=["plain|yamnet", "enhanced|yamnet", "residual|yamnet"],
         peaks={"enhanced|yamnet|Speech": enhanced, "residual|yamnet|Speech": residual},
+        activity={"active_s": 3.0 if max(enhanced, residual) >= 0.2 else 0.0},
     )
     for name, value in overrides.items():
         setattr(record, name, value)

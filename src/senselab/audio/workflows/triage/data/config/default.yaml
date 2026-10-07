@@ -484,8 +484,7 @@ taxonomy:
       SPEECH: [speech.transcript_agreement]
       VOICE: []
     emptiness:                          # the bypass, consulted only when no branch gate fired
-      peak_streams: [enhanced|yamnet, residual|yamnet]  # every stream whose top tracked-label score must fall below the floor
-      peak_floor: 0.2                   # score under which a stream carries nothing; one value for both streams
+      active_s_max: 0.0                 # seconds of activity BACKGROUND may read over the floor in a recording that carried nothing
     gates:                              # gate -> the one number it reads, the comparison, and the cut
       speech.lexical:
         feature: [words, lexical]       # live consensus words that are not bracketed, any outcome

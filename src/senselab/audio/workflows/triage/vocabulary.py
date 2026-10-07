@@ -1825,8 +1825,9 @@ def discard_contested(evidence: TaskEvidence) -> bool:
     )
 
 
-JOIN_UNREAD = ("background_model", "quality_join")
-"""The inputs without which QUALITY's join could not be read: a recording missing one is not measured."""
+JOIN_UNREAD = ("quality_join",)
+"""The join's own measurement: a recording whose QUALITY wrote none is not measured. A missing BACKGROUND
+reading is the branches' absent input, and a PREPROCESS without a plain stream flags on its own."""
 
 
 def nothing_captured(quality: Mapping[str, Any]) -> bool:

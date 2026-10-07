@@ -182,6 +182,11 @@ def _empty_store(run_dir: Path) -> ProvStore:
                 "labels": {"Speech": {"peak": 0.01}, "Cough": {"peak": 0.02}},
             },
         )
+    store.entity(
+        prov_type="measurement",
+        extent=None,
+        attributes={"name": "background_model", "signal": "plain", "active_s": 0.0},
+    )
     return store
 
 
@@ -378,7 +383,7 @@ class TestWhatTheReaderReads:
         """What a configuration consumes is knowable from the gates, not from the feature surface."""
         sources = required_sources(ruleset)
         assert sources == tuple(sorted(set(sources)))
-        assert "stream_peak_max" in sources
+        assert "activity" in sources
         assert {"words", "ppg", "bracketed_set"} <= set(sources)
         assert "transcript_repeat" not in sources
 
