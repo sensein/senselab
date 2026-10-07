@@ -9,9 +9,11 @@ Subcommands:
   libraries. CUDA sdists are built as batch jobs (``build-one``) first, unless ``--local-builds``.
   ``--sources-only`` checks out draft manifests with the empty patch set and nothing else.
 - ``build-one``: build or reuse one sdist's wheel and record the new ``wheels.lock`` sha256.
-- ``run``: run steps in DAG order; ``--step`` runs just those (one batch job), ``--finalize`` settles a
+- ``run``: run steps in DAG order; ``--step`` runs just those (one batch job; ``--pin`` refuses a manifest
+  changed since submission with ``E_MANIFEST_CHANGED``), ``--finalize --submission <id>`` settles that
   submission's ``pending`` rows.
-- ``submit``: lint, then one batch job per step chained with ``afterok`` (`slurm.submit`).
+- ``submit``: lint, then one held batch job per step chained with ``afterok``, then release
+  (`slurm.submit`).
 - ``lint``: check manifests and patches against the profile.
 - ``status``: print each step's key, status, exit and codes from ``run.json`` and ``summary.json``.
 
@@ -32,6 +34,7 @@ when there is none), status, exit (``-``), and the comma-joined codes (``-``). A
 from __future__ import annotations
 
 import argparse
+import contextlib
 import datetime
 import hashlib
 import json
@@ -40,6 +43,7 @@ import re
 import subprocess
 import sys
 import tomllib
+import uuid
 from collections.abc import Callable, Sequence
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -58,6 +62,7 @@ from senselab.utils.reproduce.spec import (
     load_manifest,
     load_profile,
     load_sources,
+    parse_manifest,
     rewrite_manifest,
 )
 
@@ -128,6 +133,8 @@ def build_parser() -> argparse.ArgumentParser:
     run_cmd.add_argument("--date", type=_date, help="the run date (default: today, UTC)")
     run_cmd.add_argument("--step", action="append", help="run only this step (repeatable); upstream must be done")
     run_cmd.add_argument("--finalize", action="store_true", help="mark every pending row never-ran")
+    run_cmd.add_argument("--submission", help="the submission id (set by submit)")
+    run_cmd.add_argument("--pin", action="append", default=[], help="a manifest's sha256 at submission, in order")
     run_cmd.add_argument("--min-cell", type=int, default=5)
     run_cmd.add_argument("--timeout", type=float, help="seconds before a step is killed")
 
@@ -282,6 +289,7 @@ def lint_findings(paths: Sequence[Path], profile_path: Path, base: Path) -> list
         out.append(f"{profile_path}: profile-invalid {error}")
     deny: list[str] = []
     if profile is not None:
+        out += [f"{profile_path}: {f.code} {f.detail}" for f in slurm.profile_findings(profile)]
         try:
             deny = source.load_deny_patterns(profile.deny_patterns_file)
         except OSError:
@@ -482,7 +490,6 @@ def _batch_builds(
         if todo is None:
             return
         path, step, sdist = todo
-        slurm.log_dir(profile, date).mkdir(parents=True, exist_ok=True)
         script = build.render_build_job(
             profile,
             sdist,
@@ -490,12 +497,12 @@ def _batch_builds(
             profile_path=Path(args.profile).absolute(),
             step=step.name,
             rebuild=args.rebuild,
+            base_dir=base,
             date=date,
             environ=environ,
         )
-        result = slurm.default_runner([slurm.SBATCH, "--wait", "--parsable"], script)
-        if result.returncode != 0:
-            raise slurm.SlurmError(f"the build job for {sdist.name} (step {step.name}) failed")
+        slurm.prepare_log_dir(profile, date)
+        slurm.submit_and_wait(script, name=f"reproduce-build-{sdist.name}-{uuid.uuid4().hex[:8]}")
         done.add((str(path), step.name, sdist.name))
 
 
@@ -611,15 +618,41 @@ def _run_config(args: argparse.Namespace, paths: Sequence[Path], profile: Profil
     )
 
 
+def _read_manifests(paths: Sequence[Path]) -> tuple[list[Manifest], list[str]]:
+    """Read each manifest once: its sha256 and the manifest parsed from the same bytes."""
+    _require(paths)
+    data = [p.read_bytes() for p in paths]
+    return [parse_manifest(d, p.suffix) for d, p in zip(data, paths)], [hashlib.sha256(d).hexdigest() for d in data]
+
+
+def _manifest_changed(args: argparse.Namespace, paths: Sequence[Path], profile: Profile) -> int:
+    """Refuse a job whose manifests changed since submission; record ``E_MANIFEST_CHANGED`` where possible."""
+    try:
+        manifests = _manifests(paths)
+    except (ValueError, OSError, yaml.YAMLError):
+        manifests = []
+    config = _run_config(args, paths, profile)
+    analysis = {s.name: m.name for m in manifests for s in m.steps}
+    for step in args.step or []:
+        print(status_line(step, None, "failed", EXIT_FAILED, ["E_MANIFEST_CHANGED"]))
+        if step in analysis:
+            row = {"step": step, "key": None, "status": "failed", "exit": EXIT_FAILED, "codes": ["E_MANIFEST_CHANGED"]}
+            with contextlib.suppress(OSError, ValueError, cache.CacheError):
+                run.update_run_record(profile.runs_root, config.date, analysis[step], [row], order=[step])
+    return EXIT_FAILED
+
+
 def _cmd_run(args: argparse.Namespace) -> int:
     paths = list(args.manifests)
     profile = _profile(args)
-    manifests = _manifests(paths)
+    manifests, shas = _read_manifests(paths)
+    if args.pin and not args.finalize and list(args.pin) != shas:
+        return _manifest_changed(args, paths, profile)
     config = _run_config(args, paths, profile)
     if args.finalize:
-        run.finalize_run_records(manifests, config)
+        run.finalize_run_records(manifests, config, submission=args.submission)
         return EXIT_OK
-    outcomes = run.run_steps(manifests, config, only=args.step or None)
+    outcomes = run.run_steps(manifests, config, only=args.step or None, submission=args.submission)
     for o in outcomes:
         print(status_line(o.step, o.key, o.status, o.exit, o.codes))
     return EXIT_OK if all(o.ok for o in outcomes) else EXIT_FAILED
@@ -634,7 +667,7 @@ def _cmd_submit(args: argparse.Namespace) -> int:
     if findings:
         print("\n".join(findings))
         return EXIT_FAILED
-    manifests = _manifests(paths)
+    manifests, shas = _read_manifests(paths)
     config = slurm.SubmitConfig(
         profile=profile,
         profile_path=Path(args.profile).absolute(),
@@ -644,8 +677,10 @@ def _cmd_submit(args: argparse.Namespace) -> int:
         date=args.date or _today(),
         exports=slurm.batch_exports(profile, cache=cache_dir, environ=_uv_environ(cache_dir)),
         driver_python=sys.executable,
+        manifest_sha256s=shas,
     )
     submission = slurm.submit(manifests, config)
+    print(f"submission\t{submission.submission}")
     for job in submission.jobs:
         print(f"{job.step}\t{job.job_id}")
     if submission.finalize is not None:
@@ -735,4 +770,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         return EXIT_FAILED
     except (slurm.SlurmError, subprocess.SubprocessError) as error:
         _error(str(error))
+        return EXIT_FAILED
+    except (KeyboardInterrupt, slurm.Terminated):
+        _error("interrupted")
+        return EXIT_FAILED
+    except Exception as error:  # noqa: BLE001
+        code = getattr(error, "code", None)
+        _error(code if isinstance(code, str) and _CODE.match(code) else f"E_DRIVER ({type(error).__name__})")
         return EXIT_FAILED

@@ -10,6 +10,7 @@ import datetime
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 from collections.abc import Sequence
@@ -32,17 +33,20 @@ EXPORTS = {
 }
 
 
+_PARTS: dict[str, dict[str, Any]] = {
+    "cpu": {"partition": "main", "cpus": 4, "mem": "8G", "time": "01:00:00", "fallback": "spare"},
+    "gpu": {"partition": "accel", "gres": "gpu:a:1", "cpus": 8, "mem": "32G", "time": "02:00:00"},
+    "build": {"partition": "quick", "cpus": 2, "mem": "4G", "time": "00:15:00"},
+}
+
+
 def _profile(tmp: Path, **change: Any) -> Profile:  # noqa: ANN401
     data: dict[str, Any] = {
         "roots": {"data": str(tmp / "data"), "extra": str(tmp / "extra")},
         "results_root": str(tmp / "results"),
         "runs_root": str(tmp / "runs"),
         "slurm_logs_root": str(tmp / "slurm"),
-        "partitions": {
-            "cpu": {"partition": "main", "cpus": 4, "mem": "8G", "time": "01:00:00", "fallback": "spare"},
-            "gpu": {"partition": "accel", "gres": "gpu:a:1", "cpus": 8, "mem": "32G", "time": "02:00:00"},
-            "build": {"partition": "quick", "cpus": 2, "mem": "4G", "time": "00:15:00"},
-        },
+        "partitions": _PARTS,
         "build": "build",
         "deny_patterns_file": str(tmp / "deny.txt"),
         "canary_host": "192.0.2.1:9",
@@ -115,6 +119,7 @@ def test_render_step_job_flags_and_log_paths(tmp_path: Path) -> None:
         "--time=01:00:00",
         f"--output={logs}/%j.out",
         f"--error={logs}/%j.err",
+        f"--chdir={logs}",
         "--export=NONE",
         "--dependency=afterok:11:12",
         "--kill-on-invalid-dep=yes",
@@ -122,7 +127,7 @@ def test_render_step_job_flags_and_log_paths(tmp_path: Path) -> None:
     lines = text.splitlines()
     assert lines[0] == "#!/bin/bash"
     assert "set -euo pipefail" in lines and "umask 007" in lines
-    assert lines[-1] == '"$REPRO_DRIVER_PYTHON" -m senselab.utils.reproduce run /m/a.yaml --step prep'
+    assert lines[-1] == '"$REPRO_DRIVER_PYTHON" -P -m senselab.utils.reproduce run /m/a.yaml --step prep'
 
 
 def test_render_step_job_gres_and_no_dependency(tmp_path: Path) -> None:
@@ -173,6 +178,25 @@ def test_render_step_job_refuses_unsafe_values(tmp_path: Path) -> None:
         _render(tmp_path, step, dependencies=["12:13"])
     with pytest.raises(ValueError, match="export"):
         _render(tmp_path, step, exports={**EXPORTS, "BAD NAME": "x"})
+    with pytest.raises(ValueError, match="gres"):
+        slurm.render_step_job(
+            _spec("t", resources={"profile": "gpu"}),
+            _profile(tmp_path, partitions={**_PARTS, "gpu": {**_PARTS["gpu"], "gres": "gpu:1 x"}}),
+            partition="accel",
+            command=["run"],
+            date=DATE,
+            exports=EXPORTS,
+        )
+
+
+def test_comma_lists_render(tmp_path: Path) -> None:
+    """Slurm's comma forms (a partition list, several gres) are valid and render as given."""
+    parts = {**_PARTS, "gpu": {**_PARTS["gpu"], "partition": "accel,spare", "gres": "gpu:a100:1,shard:1"}}
+    profile = _profile(tmp_path, partitions=parts)
+    step = _spec("t", resources={"profile": "gpu", "gpu_arch": ["sm_80"]})
+    assert slurm.step_findings(step, profile) == []
+    text = slurm.render_step_job(step, profile, partition="accel,spare", command=["run"], date=DATE, exports=EXPORTS)
+    assert "--partition=accel,spare" in _sbatch_lines(text) and "--gres=gpu:a100:1,shard:1" in _sbatch_lines(text)
 
 
 def test_rendered_script_runs_in_an_empty_environment(tmp_path: Path) -> None:
@@ -196,37 +220,73 @@ def test_rendered_script_runs_in_an_empty_environment(tmp_path: Path) -> None:
         assert seen[key] == value
     assert seen["PATH"] == "/usr/bin:/bin" and seen["TMPDIR"] == f"/dev/shm/reproduce-{job}"
     argv = (tmp_path / "seen.argv").read_text().splitlines()
-    assert argv == ["-m", "senselab.utils.reproduce", "run", "/m/a.yaml", "--step", "prep"]
+    assert argv == ["-P", "-m", "senselab.utils.reproduce", "run", "/m/a.yaml", "--step", "prep"]
     assert not Path(f"/dev/shm/reproduce-{job}").exists()
 
 
-# --- the preemption probe ----------------------------------------------------------------------------
+# --- a fake Slurm ------------------------------------------------------------------------------------
 
 
 class FakeSbatch:
-    """Records each call; ``--test-only`` answers from ``probe``, ``--parsable`` returns increasing job ids."""
+    """A fake sbatch/scontrol/scancel: records calls, the umask each ran under, and returns increasing job ids.
 
-    def __init__(self, probe: tuple[int, str] = (0, ""), fail_at: int | None = None) -> None:
-        """Set the probe answer and, optionally, the submission that fails."""
+    ``probe`` answers ``--test-only`` (an exception instance is raised instead); ``fail_at`` makes the n-th
+    submission fail, and ``raise_at`` makes it raise the given exception (or send SIGTERM for ``"SIGTERM"``).
+    ``on_release`` runs when ``scontrol release`` is called.
+    """
+
+    def __init__(
+        self,
+        probe: tuple[int, str] | BaseException = (0, ""),
+        fail_at: int | None = None,
+        raise_at: tuple[int, BaseException | str] | None = None,
+    ) -> None:
+        """Set the probe answer and the failures."""
         self.calls: list[tuple[list[str], str]] = []
+        self.umasks: list[int] = []
         self.probe = probe
         self.fail_at = fail_at
+        self.raise_at = raise_at
         self.next_id = 100
+        self.on_release: Any = None
 
     def __call__(self, argv: list[str], script: str) -> subprocess.CompletedProcess[str]:
-        """Answer one sbatch call."""
+        """Answer one call."""
         self.calls.append((argv, script))
+        mask = os.umask(0)
+        os.umask(mask)
+        self.umasks.append(mask)
+        if argv[0] in (slurm.SCANCEL, slurm.SCONTROL):
+            if argv[:2] == [slurm.SCONTROL, "release"] and self.on_release is not None:
+                self.on_release()
+            return subprocess.CompletedProcess(argv, 0, "", "")
         if "--test-only" in argv:
+            if isinstance(self.probe, BaseException):
+                raise self.probe
             code, text = self.probe
             return subprocess.CompletedProcess(argv, code, "", text)
-        if self.fail_at is not None and len(self.submissions()) == self.fail_at:
+        count = len(self.submissions())
+        if self.raise_at is not None and count == self.raise_at[0]:
+            if self.raise_at[1] == "SIGTERM":
+                os.kill(os.getpid(), signal.SIGTERM)
+            else:
+                assert isinstance(self.raise_at[1], BaseException)
+                raise self.raise_at[1]
+        if self.fail_at is not None and count == self.fail_at:
             return subprocess.CompletedProcess(argv, 1, "", "sbatch: error: denied")
         self.next_id += 1
         return subprocess.CompletedProcess(argv, 0, f"{self.next_id};cluster\n", "")
 
     def submissions(self) -> list[str]:
-        """The scripts passed to ``--parsable`` submissions."""
+        """The scripts passed to ``--parsable`` submissions (the current call included)."""
         return [s for a, s in self.calls if "--parsable" in a]
+
+    def commands(self, name: str) -> list[list[str]]:
+        """Every call of one command."""
+        return [a for a, _ in self.calls if a[0] == name]
+
+
+# --- the feasibility probe ---------------------------------------------------------------------------
 
 
 PROBE_OK = "sbatch: Job 4242 to start at 2026-03-04T10:00:00 using 4 processors on nodes n1 in partition main"
@@ -235,10 +295,16 @@ PROBE_PREEMPTS = PROBE_OK + "\nsbatch:   Preempts: 4100,4101"
 
 @pytest.mark.parametrize(
     ("probe", "expected"),
-    [((0, PROBE_OK), "main"), ((0, PROBE_PREEMPTS), "spare"), ((1, "sbatch: error: invalid partition"), "spare")],
+    [
+        ((0, PROBE_OK), "main"),
+        ((0, PROBE_PREEMPTS), "main"),
+        ((1, "sbatch: error: Requested node configuration is not available"), "spare"),
+        (subprocess.TimeoutExpired(["sbatch"], 120), "spare"),
+        (OSError("boom"), "spare"),
+    ],
 )
-def test_choose_partition_probes_and_falls_back(tmp_path: Path, probe: tuple[int, str], expected: str) -> None:
-    """A probe that reports preemption, or fails, sends the job to the fallback partition."""
+def test_choose_partition_is_a_feasibility_probe(tmp_path: Path, probe: Any, expected: str) -> None:  # noqa: ANN401
+    """Only a rejected primary partition, or a probe that errors or times out, sends a job to the fallback."""
     fake = FakeSbatch(probe)
     chosen = slurm.choose_partition(_spec("prep"), _profile(tmp_path), lambda p: f"#!/bin/bash\n# {p}\n", fake)
     assert chosen == expected
@@ -248,16 +314,10 @@ def test_choose_partition_probes_and_falls_back(tmp_path: Path, probe: tuple[int
 
 def test_no_probe_without_a_fallback(tmp_path: Path) -> None:
     """A partition with no fallback is used as is, with no probe."""
-    fake = FakeSbatch((0, PROBE_PREEMPTS))
+    fake = FakeSbatch((1, "rejected"))
     step = _spec("train", resources={"profile": "gpu"})
     assert slurm.choose_partition(step, _profile(tmp_path), lambda p: p, fake) == "accel"
     assert fake.calls == []
-
-
-def test_probe_preempts_parses_the_will_run_answer() -> None:
-    """Only a ``Preempts:`` line counts."""
-    assert slurm.probe_preempts(PROBE_PREEMPTS) is True
-    assert slurm.probe_preempts(PROBE_OK) is False
 
 
 # --- resource and root cross-checks --------------------------------------------------------------
@@ -283,30 +343,47 @@ def test_resource_and_root_findings(tmp_path: Path) -> None:
     assert [f.code for f in slurm.step_findings(_spec("p", resources={"profile": "tpu"}), profile)] == [
         "partition-unknown"
     ]
-    looping = _profile(
-        tmp_path,
-        partitions={
-            "cpu": {"partition": "main", "cpus": 1, "mem": "1G", "time": "1:00", "fallback": "main"},
-            "build": {"partition": "quick", "cpus": 1, "mem": "1G", "time": "1:00"},
-        },
-    )
+    looping = _profile(tmp_path, partitions={**_PARTS, "cpu": {**_PARTS["cpu"], "fallback": "main"}})
     assert [f.code for f in slurm.step_findings(_spec("ok"), looping)] == ["fallback-invalid"]
 
 
-# --- submission chains -----------------------------------------------------------------------------
+@pytest.mark.parametrize("field", ["partition", "mem", "time", "gres", "fallback"])
+def test_values_render_would_refuse_are_lint_findings(tmp_path: Path, field: str) -> None:
+    """A partition, mem, time, gres or fallback that is not a plain word or comma list is ``resource-invalid``."""
+    parts = {**_PARTS, "cpu": {**_PARTS["cpu"], "gres": "gpu:1", field: "x y; z"}}
+    profile = _profile(tmp_path, partitions=parts)
+    findings = slurm.step_findings(_spec("ok"), profile)
+    assert ("resource-invalid", f"cpu.{field}") in [(f.code, f.detail) for f in findings]
 
 
-def _config(tmp: Path, paths: Sequence[Path]) -> slurm.SubmitConfig:
-    return slurm.SubmitConfig(
-        profile=_profile(tmp),
-        profile_path=tmp / "profile.yaml",
-        manifest_paths=list(paths),
-        base_dir=tmp / "manifests",
-        cache=tmp / "cache",
-        date=DATE,
-        exports=EXPORTS,
-        driver_python="/opt/py/bin/python",
+def test_profile_findings(tmp_path: Path) -> None:
+    """A log root or build partition value that cannot render is reported once, for the profile."""
+    assert slurm.profile_findings(_profile(tmp_path)) == []
+    bad = _profile(
+        tmp_path,
+        slurm_logs_root=str(tmp_path / "with space"),
+        partitions={**_PARTS, "build": {**_PARTS["build"], "time": "1 h"}},
     )
+    assert sorted(f.code for f in slurm.profile_findings(bad)) == ["logs-invalid", "resource-invalid"]
+
+
+# --- held submission chains --------------------------------------------------------------------------
+
+
+def _config(tmp: Path, paths: Sequence[Path], **change: Any) -> slurm.SubmitConfig:  # noqa: ANN401
+    data: dict[str, Any] = {
+        "profile": _profile(tmp),
+        "profile_path": tmp / "profile.yaml",
+        "manifest_paths": list(paths),
+        "base_dir": tmp / "manifests",
+        "cache": tmp / "cache",
+        "date": DATE,
+        "exports": EXPORTS,
+        "driver_python": "/opt/py/bin/python",
+        "submission": "sub1",
+    }
+    data.update(change)
+    return slurm.SubmitConfig(**data)
 
 
 def _chain() -> list[Manifest]:
@@ -315,105 +392,197 @@ def _chain() -> list[Manifest]:
     return [first, second]
 
 
+def _record(tmp: Path, analysis: str) -> Path:
+    return tmp / "runs" / DATE.isoformat() / analysis / run.RUN_JSON
+
+
 def _rows(tmp: Path, analysis: str) -> list[dict[str, Any]]:
-    path = tmp / "runs" / DATE.isoformat() / analysis / run.RUN_JSON
-    rows: list[dict[str, Any]] = json.loads(path.read_text())["steps"]
+    rows: list[dict[str, Any]] = json.loads(_record(tmp, analysis).read_text())["steps"]
     return rows
 
 
-def test_submit_chains_jobs_with_afterok_in_dag_order(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """One job per step in DAG order, each depending on its needs' job ids, then a finalize job after all."""
+PATHS = [Path("/m/a.yaml"), Path("/m/b.yaml")]
+
+
+def test_submit_holds_every_job_writes_rows_then_releases(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Held jobs in DAG order with afterok on their needs, pending rows, a held finalize job, then one release."""
     cwd = tmp_path / "cwd"
     cwd.mkdir()
     monkeypatch.chdir(cwd)
     fake = FakeSbatch((0, PROBE_OK))
-    submission = slurm.submit(_chain(), _config(tmp_path, [Path("/m/a.yaml"), Path("/m/b.yaml")]), runner=fake)
+    seen: dict[str, Any] = {}
+
+    def at_release() -> None:
+        seen["rows"] = {r["step"]: r for a in ("alpha", "beta") for r in _rows(tmp_path, a)}
+
+    fake.on_release = at_release
+    submission = slurm.submit(_chain(), _config(tmp_path, PATHS, manifest_sha256s=["a" * 64, "b" * 64]), runner=fake)
     jobs = submission.jobs
-    assert submission.finalize == "105"
+    assert submission.finalize == "105" and submission.submission == "sub1"
     assert [(j.step, j.job_id) for j in jobs] == [("lone", "101"), ("prep", "102"), ("score", "103"), ("report", "104")]
     scripts = fake.submissions()
     assert len(scripts) == 5
+    assert all(a[:3] == ["sbatch", "--parsable", "--hold"] for a, _ in fake.calls if "--parsable" in a)
     deps = [[f for f in _sbatch_lines(s) if f.startswith("--dependency")] for s in scripts]
     assert deps == [[], [], ["--dependency=afterok:102"], ["--dependency=afterok:103:102"], deps[4]]
     assert deps[4] == ["--dependency=afterany:101:102:103:104"]
     assert "--kill-on-invalid-dep=yes" not in _sbatch_lines(scripts[4])
-    assert scripts[4].splitlines()[-1].endswith("--finalize")
+    last = scripts[4].splitlines()[-1]
+    assert last.endswith("--finalize") and "--submission sub1" in last
     for job, script in zip(jobs, scripts):
-        last = script.splitlines()[-1]
-        assert f"--step {job.step}" in last and "--date 2026-03-04" in last
-        assert "/m/a.yaml /m/b.yaml" in last and "--cache" in last and "--base-dir" in last
+        line = script.splitlines()[-1]
+        assert f"--step {job.step}" in line and "--date 2026-03-04" in line and "--submission sub1" in line
+        assert f"--pin {'a' * 64} --pin {'b' * 64}" in line
+        assert "/m/a.yaml /m/b.yaml" in line and "--cache" in line and "--base-dir" in line
+    assert fake.commands("scontrol") == [["scontrol", "release", "101,102,103,104,105"]]
+    assert fake.calls[-1][0][0] == "scontrol"
+    assert {s: (r["status"], r["job"], r["submission"]) for s, r in seen["rows"].items()} == {
+        "prep": ("pending", "102", "sub1"),
+        "score": ("pending", "103", "sub1"),
+        "report": ("pending", "104", "sub1"),
+        "lone": ("pending", "101", "sub1"),
+    }
+    assert [r["step"] for r in _rows(tmp_path, "beta")] == ["lone", "report"]
     assert os.listdir(cwd) == []
-    assert (tmp_path / "slurm" / "2026-03-04").is_dir()
-    alpha = _rows(tmp_path, "alpha")
-    assert [(r["step"], r["status"], r["job"], r["key"]) for r in alpha] == [
-        ("prep", "pending", "102", None),
-        ("score", "pending", "103", None),
-    ]
-    assert [(r["step"], r["job"]) for r in _rows(tmp_path, "beta")] == [("lone", "101"), ("report", "104")]
+    logs = tmp_path / "slurm" / "2026-03-04"
+    assert logs.is_dir() and (logs.stat().st_mode & 0o7777) == slurm.LOG_DIR_MODE
+    assert set(fake.umasks) == {slurm.SUBMIT_UMASK}
 
 
-def test_submit_does_not_overwrite_a_row_a_job_already_wrote(tmp_path: Path) -> None:
-    """A job that finished before submit recorded its id keeps its own row."""
-    config = _config(tmp_path, [Path("/m/a.yaml")])
-    manifests = [_manifest("alpha", _step("prep"))]
-
-    def racing(argv: list[str], script: str) -> subprocess.CompletedProcess[str]:
-        if "--parsable" in argv and "--finalize" not in script:
-            row = {"step": "prep", "key": "f" * 64, "status": "executed", "exit": 0, "codes": []}
-            run.update_run_record(config.profile.runs_root, DATE, "alpha", [row], order=["prep"])
-        return subprocess.CompletedProcess(argv, 0, "7\n", "")
-
-    slurm.submit(manifests, config, runner=racing)
-    (row,) = _rows(tmp_path, "alpha")
-    assert row["status"] == "executed" and row["key"] == "f" * 64
+def test_a_render_error_has_no_side_effect(tmp_path: Path) -> None:
+    """A script that cannot render fails before any probe, row, log dir or submission."""
+    fake = FakeSbatch((0, PROBE_OK))
+    with pytest.raises(ValueError, match="export"):
+        slurm.submit(_chain(), _config(tmp_path, PATHS, exports={**EXPORTS, "BAD NAME": "x"}), runner=fake)
+    assert fake.calls == []
+    assert not (tmp_path / "runs").exists() and not (tmp_path / "slurm").exists()
 
 
-def test_a_failed_submission_marks_the_rest_never_ran(tmp_path: Path) -> None:
-    """When sbatch refuses a job, it and every later step are ``never-ran`` and the error is raised."""
-    fake = FakeSbatch((0, PROBE_OK), fail_at=3)
-    with pytest.raises(slurm.SlurmError, match="score"):
-        slurm.submit(_chain(), _config(tmp_path, [Path("/m/a.yaml"), Path("/m/b.yaml")]), runner=fake)
-    statuses = {r["step"]: r["status"] for a in ("alpha", "beta") for r in _rows(tmp_path, a)}
-    assert statuses == {"lone": "pending", "prep": "pending", "score": "never-ran", "report": "never-ran"}
+@pytest.mark.parametrize(
+    "failure",
+    [("fail", 3), ("raise", RuntimeError("boom")), ("raise", KeyboardInterrupt()), ("raise", "SIGTERM")],
+)
+def test_an_aborted_submission_cancels_every_job_and_leaves_nothing_pending(tmp_path: Path, failure: Any) -> None:  # noqa: ANN401
+    """A refused sbatch, an exception, Ctrl-C or SIGTERM: every queued job is cancelled, every row never-ran."""
+    kind, what = failure
+    fake = FakeSbatch(
+        (0, PROBE_OK), fail_at=what if kind == "fail" else None, raise_at=None if kind == "fail" else (3, what)
+    )
+    with pytest.raises(slurm.SlurmError, match="E_SUBMIT_ABORTED"):
+        slurm.submit(_chain(), _config(tmp_path, PATHS), runner=fake)
+    assert fake.commands("scancel") == [["scancel", "101", "102"]]
+    assert fake.commands("scontrol") == []
+    rows = [r for a in ("alpha", "beta") for r in _rows(tmp_path, a)]
+    assert {(r["status"], tuple(r["codes"]), r["submission"]) for r in rows} == {
+        ("never-ran", ("E_SUBMIT_ABORTED",), "sub1")
+    }
+    assert len(rows) == 4
 
 
-def test_submit_uses_the_fallback_partition_when_the_probe_reports_preemption(tmp_path: Path) -> None:
-    """The probe runs per job whose partition has a fallback, and its answer picks the partition."""
-    fake = FakeSbatch((0, PROBE_PREEMPTS))
+def test_a_failed_release_cancels_everything(tmp_path: Path) -> None:
+    """If ``scontrol release`` fails, every job (finalize included) is cancelled."""
+
+    class FailingRelease(FakeSbatch):
+        def __call__(self, argv: list[str], script: str) -> subprocess.CompletedProcess[str]:
+            if argv[:2] == [slurm.SCONTROL, "release"]:
+                self.calls.append((argv, script))
+                return subprocess.CompletedProcess(argv, 1, "", "")
+            return super().__call__(argv, script)
+
+    fake = FailingRelease((0, PROBE_OK))
+    with pytest.raises(slurm.SlurmError, match="E_SUBMIT_ABORTED"):
+        slurm.submit(_chain(), _config(tmp_path, PATHS), runner=fake)
+    assert fake.commands("scancel") == [["scancel", "101", "102", "103", "104", "105"]]
+
+
+def test_submit_refuses_while_another_submission_is_pending(tmp_path: Path) -> None:
+    """Pending rows from another submission refuse with ``E_SUBMIT_OVERLAP`` and nothing is submitted."""
+    row: dict[str, Any] = {"step": "prep", "key": None, "status": "pending", "exit": None, "codes": []}
+    row["submission"] = "old"
+    run.update_run_record(tmp_path / "runs", DATE, "alpha", [row], order=["prep"])
+    fake = FakeSbatch((0, PROBE_OK))
+    with pytest.raises(slurm.SlurmError, match="E_SUBMIT_OVERLAP"):
+        slurm.submit(_chain(), _config(tmp_path, PATHS), runner=fake)
+    assert fake.calls == []
+    assert _rows(tmp_path, "alpha") == [row]
+
+
+def test_submit_uses_the_fallback_only_when_the_probe_rejects(tmp_path: Path) -> None:
+    """A rejected primary partition sends the job to the fallback; the probe script has no dependency."""
+    fake = FakeSbatch(
+        (1, "sbatch: error: Batch job submission failed: Requested partition configuration not available")
+    )
     slurm.submit([_manifest("alpha", _step("prep"))], _config(tmp_path, [Path("/m/a.yaml")]), runner=fake)
     assert "--partition=spare" in _sbatch_lines(fake.submissions()[0])
     probes = [s for a, s in fake.calls if "--test-only" in a]
     assert len(probes) == 1 and not any(f.startswith("--dependency") for f in _sbatch_lines(probes[0]))
 
 
+# --- waited build jobs ----------------------------------------------------------------------------------
+
+
+def test_submit_and_wait_has_no_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The waiting sbatch runs with no timeout, under umask 007, named on the command line."""
+    seen: dict[str, Any] = {}
+
+    def fake_run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:  # noqa: ANN401
+        mask = os.umask(0)
+        os.umask(mask)
+        seen.update(kwargs, argv=argv, umask=mask)
+        return subprocess.CompletedProcess(argv, 0, "7\n", "")
+
+    monkeypatch.setattr(slurm.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(slurm.subprocess, "run", fake_run)
+    slurm.submit_and_wait("#!/bin/bash\n", name="reproduce-build-x-1")
+    assert seen["timeout"] is None and seen["umask"] == slurm.SUBMIT_UMASK
+    assert seen["argv"] == ["/usr/bin/sbatch", "--wait", "--parsable", "--job-name=reproduce-build-x-1"]
+
+
+def test_submit_and_wait_failure_and_interrupt(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A failed job raises; an interrupted wait cancels the job by name and re-raises."""
+    cancels: list[list[str]] = []
+    monkeypatch.setattr(slurm, "default_runner", lambda argv, script, timeout=None: cancels.append(argv))
+    with pytest.raises(slurm.SlurmError, match="failed"):
+        slurm.submit_and_wait("s", name="job-a", runner=lambda a, s: subprocess.CompletedProcess(a, 1, "", ""))
+    assert cancels == []
+
+    def interrupted(argv: list[str], script: str) -> subprocess.CompletedProcess[str]:
+        raise KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt):
+        slurm.submit_and_wait("s", name="job-b", runner=interrupted)
+    assert len(cancels) == 1 and cancels[0][:2] == ["scancel", "--name=job-b"]
+
+
 @pytest.mark.network
 def test_a_real_test_only_probe_answers_with_a_start_time(tmp_path: Path) -> None:
-    """``sbatch --test-only`` on the build partition submits nothing and its answer parses."""
+    """``sbatch --test-only`` on a real partition submits nothing and accepts the rendered script."""
     if shutil.which("sbatch") is None:
         pytest.skip("no sbatch on PATH")
-    partition = (
-        subprocess.run(["sinfo", "-h", "-o", "%P"], capture_output=True, text=True, check=True)
-        .stdout.split()[0]
-        .rstrip("*")
-    )
-    profile = _profile(
-        tmp_path,
-        partitions={
-            "cpu": {"partition": partition, "cpus": 1, "mem": "1G", "time": "00:01:00", "fallback": partition},
-            "build": {"partition": partition, "cpus": 1, "mem": "1G", "time": "00:01:00"},
-        },
-    )
-    text = slurm.render_step_job(
-        _spec("probe"),
-        profile,
-        partition=partition,
-        command=["--help"],
-        date=DATE,
-        exports=EXPORTS,
-        driver_python=sys.executable,
-    )
-    result = slurm.default_runner(["sbatch", "--test-only"], text)
+    partition = subprocess.run(["sinfo", "-h", "-o", "%P"], capture_output=True, text=True, check=True).stdout.split()[
+        0
+    ]
+    partition = partition.rstrip("*")
+    parts = {
+        "cpu": {"partition": partition, "cpus": 1, "mem": "1G", "time": "00:01:00", "fallback": "nonexistent-part"},
+        "build": {"partition": partition, "cpus": 1, "mem": "1G", "time": "00:01:00"},
+    }
+    profile = _profile(tmp_path, partitions=parts)
+    slurm.prepare_log_dir(profile, DATE)
+
+    def script_for(p: str) -> str:
+        return slurm.render_step_job(
+            _spec("probe"),
+            profile,
+            partition=p,
+            command=["--help"],
+            date=DATE,
+            exports=EXPORTS,
+            driver_python=sys.executable,
+        )
+
+    result = slurm.default_runner(["sbatch", "--test-only"], script_for(partition))
     answer = result.stdout + result.stderr
     assert result.returncode == 0, answer
     assert "to start at" in answer
-    assert slurm.probe_preempts(answer) in (True, False)
+    assert slurm.choose_partition(_spec("probe"), profile, script_for, slurm.default_runner) == partition

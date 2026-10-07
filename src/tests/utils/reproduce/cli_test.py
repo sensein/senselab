@@ -7,6 +7,7 @@ and build entry points are checked with their builders replaced by recorders, so
 from __future__ import annotations
 
 import builtins
+import datetime
 import hashlib
 import json
 import os
@@ -528,8 +529,8 @@ def test_run_only_resolves_upstream_without_running_it(world: World) -> None:
 
 
 @needs_userns
-def test_a_failed_job_marks_its_pending_dependants_never_ran(world: World) -> None:
-    """After a failed step, its dependants' pending rows read ``never-ran``; ``--finalize`` settles the rest."""
+def test_a_failed_job_marks_its_pending_dependents_never_ran(world: World) -> None:
+    """After a failed step, its dependents' pending rows read ``never-ran``; ``--finalize`` settles the rest."""
     manifest = world.dag(prep_expect=[{"metric": "f_stat", "value": 99.0, "tolerance": 0.5, "kind": "abs"}])
     world.prefetch(manifest)
     config = world.config()
@@ -541,6 +542,9 @@ def test_a_failed_job_marks_its_pending_dependants_never_ran(world: World) -> No
     assert prep.status == "executed" and not prep.ok
     rows = _rows(world)
     assert rows["prep"][0] == "executed" and rows["prep"][1] != 0 and rows["score"] == ("never-ran", None)
+    record = world.tmp / "runs" / config.date.isoformat() / "demo" / run.RUN_JSON
+    score_row = next(r for r in json.loads(record.read_text())["steps"] if r["step"] == "score")
+    assert "E_EXPECT" in score_row["codes"]
 
     run.update_run_record(config.profile.runs_root, config.date, "demo", pending, order=["prep", "score"])
     run.finalize_run_records([manifest], config)
@@ -562,7 +566,7 @@ def test_the_run_command_prints_codes_and_exits_non_zero_on_failure(
     date = world.config().date.isoformat()
     common = ["--profile", str(profile), "--base-dir", str(base), "--cache", str(world.cache), "--date", date]
     assert cli.main(["run", str(path), *common, "--step", "score"]) == cli.EXIT_FAILED
-    assert capsys.readouterr().out.splitlines() == ["score\t-\tnever-ran\t-\t-"]
+    assert capsys.readouterr().out.splitlines() == ["score\t-\tnever-ran\t-\tE_UPSTREAM_NOT_DONE"]
     assert cli.main(["run", str(path), *common, "--step", "prep"]) == cli.EXIT_OK
     line = capsys.readouterr().out.strip().split("\t")
     assert line[0] == "prep" and line[2] == "executed" and line[3] == "0" and len(line[1]) == 8
@@ -582,6 +586,135 @@ def test_submit_refuses_lint_findings_and_submits_a_clean_chain(
     capsys.readouterr()
     good = site.manifest("demo", _step("prep"), _step("score", needs=["prep"]))
     assert site.main("submit", str(good), *site.common(), "--date", DATE) == cli.EXIT_OK
-    assert capsys.readouterr().out.splitlines() == ["prep\t101", "score\t102", "finalize\t103"]
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[0].startswith("submission\t") and lines[1:] == ["prep\t101", "score\t102", "finalize\t103"]
+    assert fake.commands("scontrol") == [["scontrol", "release", "101,102,103"]]
     script = fake.submissions()[1]
+    assert f"--pin {_sha(good)}" in script.splitlines()[-1]
     assert "export SENSELAB_REPRO_CACHE=" + str(site.cache) in script and "export UV_LINK_MODE=hardlink" in script
+
+
+# --- review fixes: builds, pins, error mapping, names, finalize scope ------------------------------------
+
+
+def _cuda_manifest(site: Site) -> Path:
+    sdist = dict(_sdist(site), build_modules=["cuda/12.9.1"])
+    return site.manifest("demo", _step("prep", env=dict(_step("x")["env"], sdist_allow=[sdist])))
+
+
+def _no_install(monkeypatch: pytest.MonkeyPatch, site: Site) -> list[str]:
+    calls: list[str] = []
+    monkeypatch.setattr(source, "checkout_step", lambda step, **kw: type("Co", (), {"worktree": site.tmp})())
+
+    def prefetch_env(e: Any, b: Path, c: Path, **kw: Any) -> env.PrefetchResult:  # noqa: ANN401
+        calls.append("prefetch_env")
+        return env.PrefetchResult(_venv_result(c / "v"), {}, None, False, ())
+
+    monkeypatch.setattr(env, "prefetch_env", prefetch_env)
+    monkeypatch.setenv("UV_CACHE_DIR", "/c/uv")
+    monkeypatch.setenv("UV_PYTHON_INSTALL_DIR", "/c/py")
+    return calls
+
+
+def test_batch_builds_wait_without_timeout_and_pass_the_base_dir(site: Site, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A CUDA sdist is built by a waited ``build-one`` job given prefetch's ``--base-dir``; then the env installs."""
+    calls = _no_install(monkeypatch, site)
+    waited: list[tuple[list[str], str]] = []
+
+    def wait(argv: list[str], script: str) -> subprocess.CompletedProcess[str]:
+        waited.append((argv, script))
+        return subprocess.CompletedProcess(argv, 0)
+
+    monkeypatch.setattr(slurm, "wait_runner", wait)
+    path = _cuda_manifest(site)
+    assert site.main("prefetch", str(path), *site.common()) == cli.EXIT_OK
+    ((argv, script),) = waited
+    assert argv[:3] == ["sbatch", "--wait", "--parsable"] and argv[3].startswith("--job-name=reproduce-build-pkg-")
+    assert f"--base-dir {site.base}" in script.splitlines()[-1] and "-P -m" in script.splitlines()[-1]
+    assert calls == ["prefetch_env"]
+
+
+def test_a_failed_build_job_fails_the_prefetch(site: Site, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A build job that exits non-zero stops the prefetch before any env is installed."""
+    calls = _no_install(monkeypatch, site)
+    monkeypatch.setattr(slurm, "wait_runner", lambda argv, script: subprocess.CompletedProcess(argv, 1))
+    assert site.main("prefetch", str(_cuda_manifest(site)), *site.common()) == cli.EXIT_FAILED
+    assert calls == []
+
+
+def test_an_interrupted_build_wait_cancels_the_job(site: Site, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Ctrl-C while waiting cancels the build job by name, so no orphan rewrites the manifest later."""
+    calls = _no_install(monkeypatch, site)
+    names: list[str] = []
+    cancels: list[list[str]] = []
+
+    def interrupted(argv: list[str], script: str) -> subprocess.CompletedProcess[str]:
+        names.append(argv[3].split("=", 1)[1])
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(slurm, "wait_runner", interrupted)
+    monkeypatch.setattr(slurm, "default_runner", lambda argv, script, timeout=None: cancels.append(argv))
+    path = _cuda_manifest(site)
+    before = path.read_text()
+    assert site.main("prefetch", str(path), *site.common()) == cli.EXIT_FAILED
+    assert cancels == [["scancel", f"--name={names[0]}", cancels[0][2]]] and cancels[0][2].startswith("--user=")
+    assert calls == [] and path.read_text() == before
+
+
+def test_a_job_refuses_a_manifest_changed_since_submission(site: Site, capsys: pytest.CaptureFixture[str]) -> None:
+    """``run --pin`` with another sha256 records ``E_MANIFEST_CHANGED`` and exits 1 without running anything."""
+    path = site.manifest("demo", _step("prep"))
+    argv = ["run", str(path), *site.common(), "--date", DATE, "--submission", "s1", "--pin", "0" * 64, "--step", "prep"]
+    assert site.main(*argv) == cli.EXIT_FAILED
+    assert capsys.readouterr().out.splitlines() == ["prep\t-\tfailed\t1\tE_MANIFEST_CHANGED"]
+    rows = json.loads((site.tmp / "runs" / DATE / "demo" / run.RUN_JSON).read_text())["steps"]
+    assert [(r["step"], r["status"], r["codes"]) for r in rows] == [("prep", "failed", ["E_MANIFEST_CHANGED"])]
+
+
+def test_driver_errors_are_codes_without_a_traceback(
+    site: Site, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A ``CacheError`` (or any other driver error) is one code on stderr and exit 1."""
+    path = site.manifest("demo", _step("prep"))
+
+    def broken(*args: Any, **kwargs: Any) -> None:  # noqa: ANN401
+        raise cache.CacheError("E_RESULT_UNREADABLE")
+
+    monkeypatch.setattr(run, "run_steps", broken)
+    assert site.main("run", str(path), *site.common(), "--date", DATE) == cli.EXIT_FAILED
+    err = capsys.readouterr().err
+    assert err == "error: E_RESULT_UNREADABLE\n"
+    monkeypatch.setattr(run, "run_steps", lambda *a, **k: (_ for _ in ()).throw(KeyError("/secret/path")))
+    assert site.main("run", str(path), *site.common(), "--date", DATE) == cli.EXIT_FAILED
+    err = capsys.readouterr().err
+    assert err == "error: E_DRIVER (KeyError)\n" and "secret" not in err
+
+
+@pytest.mark.parametrize("name", ["..", ".", ".hidden"])
+def test_dot_names_fail_lint(site: Site, name: str, capsys: pytest.CaptureFixture[str]) -> None:
+    """A manifest or step named ``.``, ``..`` or with a leading dot is ``manifest-invalid``."""
+    path = site.manifest(name, _step("prep"), file="n.yaml")
+    assert site.main("lint", str(path), *site.common()) == cli.EXIT_FAILED
+    assert "manifest-invalid" in capsys.readouterr().out
+    step = site.manifest("demo", _step(name), file="s.yaml")
+    assert site.main("lint", str(step), *site.common()) == cli.EXIT_FAILED
+
+
+def test_finalize_touches_only_its_own_submission(site: Site) -> None:
+    """``--finalize --submission`` settles only that submission's pending rows; a requeued job's row wins after."""
+    path = site.manifest("demo", _step("a"), _step("b"))
+    runs = site.tmp / "runs"
+    rows: list[dict[str, Any]] = [
+        {"step": "a", "key": None, "status": "pending", "exit": None, "codes": [], "submission": "s1"},
+        {"step": "b", "key": None, "status": "pending", "exit": None, "codes": [], "submission": "s2"},
+    ]
+    run.update_run_record(runs, datetime.date.fromisoformat(DATE), "demo", rows, order=["a", "b"])
+    argv = ["run", str(path), *site.common(), "--date", DATE, "--finalize", "--submission", "s1"]
+    assert site.main(*argv) == cli.EXIT_OK
+    record = runs / DATE / "demo" / run.RUN_JSON
+    got = {r["step"]: (r["status"], r["submission"]) for r in json.loads(record.read_text())["steps"]}
+    assert got == {"a": ("never-ran", "s1"), "b": ("pending", "s2")}
+    done = {"step": "a", "key": "f" * 64, "status": "executed", "exit": 0, "codes": []}
+    run.update_run_record(runs, datetime.date.fromisoformat(DATE), "demo", [done], order=["a", "b"])
+    got = {r["step"]: (r["status"], r["submission"]) for r in json.loads(record.read_text())["steps"]}
+    assert got["a"] == ("executed", "s1")
