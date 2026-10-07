@@ -45,6 +45,7 @@ _HEX64 = re.compile(r"^[0-9a-f]{64}$")
 _COMMIT = re.compile(r"^[0-9a-f]{40}$")
 _STEP_KEY = re.compile(r"^[0-9a-f]{16,64}$")
 _NAME = re.compile(r"^[A-Za-z0-9_-][A-Za-z0-9_.-]{0,127}$")
+_VENV_NAME = re.compile(r"^[A-Za-z0-9_-][A-Za-z0-9_.-]{0,127}(\+[0-9a-f]{8})?$")
 _ROOT = re.compile(r"^(up:)?[A-Za-z0-9_-][A-Za-z0-9_.-]{0,127}$")
 _CODE = re.compile(r"^[EW]_[A-Z0-9_]{1,64}$")
 _ENV_KEY = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
@@ -154,7 +155,7 @@ def drop_unrecordable_host_values(host: Mapping[str, Any]) -> tuple[dict[str, An
 
 
 def _check_venv(venv: VenvResult) -> str:
-    _check(_is_name(venv.path.name), "venv name")
+    _check(_is_name(venv.path.name, _VENV_NAME), "venv name")
     _check(_matches(venv.env_key, _HEX64), "venv env_key")
     _check(venv.overlay_sha256 is None or _matches(venv.overlay_sha256, _HEX64), "venv overlay_sha256")
     _check(
@@ -221,7 +222,8 @@ def record_step(
 
     Raises:
         ValueError: If any value is outside its closed form, if the venv's ``installed.json`` does not
-            match its marker, or if the graph fails `check_graph`. Nothing is written then.
+            match its marker, if the graph fails `check_graph`, or if ``prov_dir`` is a symlink. Nothing is
+            written then.
     """
     _check(_matches(step_key, _STEP_KEY), "step_key")
     _check(_is_name(step), "step")
@@ -293,7 +295,9 @@ def record_step(
     _check(not problems, "graph")
 
     target = Path(prov_dir)
+    _check(not target.is_symlink(), "prov_dir")
     target.mkdir(parents=True, exist_ok=True)
+    _check(not target.is_symlink() and target.is_dir(), "prov_dir")
     store_path = target / STORE_FILE
     store.write_jsonl(store_path)
     written = write_bep028_files(graph, target, label=LABEL)

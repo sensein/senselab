@@ -1,8 +1,8 @@
 """The step sandbox: user, network, mount and PID namespaces with read-only data, and an allowlisted env.
 
-`sandbox_argv` wraps a step's argv so that it runs inside a user, network, mount and PID namespace with
-the data roots, the checkout and the venv mounted read-only, the writable directories bound read-write
-and loopback raised; the step itself runs with every capability dropped, so it cannot undo the mounts.
+`sandbox_argv` wraps a step's argv so that it runs inside a user, network, mount and PID namespace in which
+every mount is read-only except the writable directories it names, with loopback raised; the step itself
+runs with every capability dropped, so it cannot undo the mounts.
 `build_env` builds the step's whole environment from the profile and the step; nothing is inherited
 from the caller except a few ``SLURM_*`` job ids and ``CUDA_VISIBLE_DEVICES``, which are recorded but
 not keyed. `canary` is a Python snippet whose TCP connect must fail inside the sandbox.
@@ -15,6 +15,7 @@ import json
 import os
 import shlex
 import subprocess
+import sys
 from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 
@@ -78,46 +79,107 @@ def _shallow_first(paths: Iterable[str | os.PathLike[str]]) -> list[str]:
     return sorted({_abs(p) for p in paths}, key=lambda p: (p.rstrip("/").count("/"), p))
 
 
+SWEEP = """\
+import ctypes, os, sys
+libc = ctypes.CDLL(None, use_errno=True)
+libc.mount.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_ulong, ctypes.c_void_p]
+KEEP = {"nosuid": 2, "nodev": 4, "noexec": 8, "noatime": 1024, "nodiratime": 2048, "relatime": 1 << 21,
+        "strictatime": 1 << 24}
+PSEUDO = set(sys.argv[1].split(","))
+skip = {os.fsencode(p) for p in sys.argv[2:]}
+top = {}
+with open("/proc/self/mountinfo", "rb") as handle:
+    for line in handle:
+        left, _, right = line.partition(b" - ")
+        fields = left.split()
+        top[fields[4]] = (fields[5], right.split()[0].decode())
+bad = []
+for raw, (options, fstype) in top.items():
+    path = raw.decode("unicode_escape").encode("latin-1") if b"\\\\" in raw else raw
+    if path in skip or fstype == "proc":
+        continue
+    flags = 32 | 4096 | 1
+    for option in options.split(b","):
+        flags |= KEEP.get(option.decode(), 0)
+    if libc.mount(None, path, None, flags, None) != 0 and fstype not in PSEUDO:
+        bad.append(fstype)
+if bad:
+    sys.stderr.write("reproduce sandbox: mounts left writable: " + ", ".join(sorted(set(bad))) + "\\n")
+    sys.exit(1)
+"""
+"""Run with the driver's interpreter (``-I -S``) inside the namespace, before the capability drop: remounts the
+topmost mount at every mount point read-only, keeping each mount's locked flags, except the paths named on
+its command line after the comma-separated pseudo types (the writable binds) and the fresh ``/proc``. A
+mount that refuses is fatal unless its type is a kernel pseudo filesystem in `PSEUDO_FS`."""
+
+PSEUDO_FS = frozenset(
+    {
+        "autofs", "binfmt_misc", "bpf", "cgroup", "cgroup2", "configfs", "debugfs", "devpts", "efivarfs",
+        "fusectl", "hugetlbfs", "mqueue", "nsfs", "proc", "pstore", "rpc_pipefs", "securityfs", "sysfs",
+        "tracefs",
+    }
+)  # fmt: skip
+SYSTEM_TMP = "/tmp"
+
+
 def sandbox_script(
     ro_roots: Iterable[str | os.PathLike[str]],
     rw_dirs: Iterable[str | os.PathLike[str]],
     ro_extra: Iterable[str | os.PathLike[str]] = (),
     *,
     netns: bool = True,
+    tmp: str | os.PathLike[str] | None = None,
+    visible: Iterable[str | os.PathLike[str]] = (),
 ) -> str:
     """Return the ``sh`` script `sandbox_argv` runs inside the namespace; it ends by exec'ing the step.
 
+    Everything is read-only by default: after the binds, every mount in the namespace is remounted
+    read-only (`SWEEP`), so only ``rw_dirs`` (and ``tmp``) stay writable, and a fresh private tmpfs is
+    mounted on ``/dev/shm``.
+
     Args:
-        ro_roots: Data roots, bound to themselves and remounted read-only.
-        rw_dirs: Directories that stay writable. Those under a data root are bound before the root is
-            remounted read-only; the others are writable already.
-        ro_extra: Further directories (the checkout, the venv) bound and remounted read-only last.
+        ro_roots: Data roots; each is bound to itself first, so a missing root aborts the script.
+        rw_dirs: The only directories that stay writable, each bound to itself before the sweep.
+        ro_extra: Further directories (the checkout, the venv) that must exist and stay read-only.
         netns: Whether the script runs in its own network namespace and raises loopback there; False
             only for the test-only mode that runs with the host network.
+        tmp: A writable directory also bound on ``/tmp``; skipped when any path given here (or in
+            ``visible``, or the driver's own interpreter, which runs the sweep) lies under ``/tmp``, since
+            the bind would hide it, and ``/tmp`` then stays read-only.
+        visible: Other paths the step needs to see, checked only against the ``/tmp`` bind.
 
     Returns:
         The script. It starts with ``set -e``, so a failed mount ends it before the step runs, and it
-        execs the step through ``setpriv`` with every capability dropped. Each list of mounts is
-        written shallow-first, so a nested path is bound after its parent.
+        execs the step through ``setpriv`` with every capability dropped. Each list of binds is written
+        shallow-first, so a nested path is bound after its parent.
 
     Raises:
         ValueError: If a path is relative, a read-only path lies under (or is) a writable directory, or a
             writable directory lies under a ``ro_extra`` directory.
     """
     roots, rw, extra = _shallow_first(ro_roots), _shallow_first(rw_dirs), _shallow_first(ro_extra)
+    if tmp is not None:
+        rw = _shallow_first([*rw, tmp])
     for d in rw:
         hidden = [p for p in (*roots, *extra) if _under(p, d)]
         if hidden:
             raise ValueError(f"read-only paths under a writable directory would be hidden by its bind: {hidden}")
         if any(_under(d, e) for e in extra):
             raise ValueError(f"writable directory under a read-only checkout or venv: {d}")
+    driver = [os.path.realpath(sys.executable), os.path.realpath(sys.prefix), os.path.realpath(sys.base_prefix)]
+    seen = [*roots, *rw, *extra, *(_abs(v) for v in visible), *driver]
+    over_tmp = tmp is not None and not any(_under(p, SYSTEM_TMP) for p in seen)
     q = shlex.quote
-    lines = ["set -e"]
+    skip = [*rw, *([SYSTEM_TMP] if over_tmp else [])]
+    lines = ["set -e", f"{MOUNT} --make-rprivate /"]
     lines += [f"{MOUNT} --bind {q(r)} {q(r)}" for r in roots]
-    lines += [f"{MOUNT} --bind {q(d)} {q(d)}" for d in rw if any(_under(d, r) for r in roots)]
-    lines += [f"{MOUNT} -o remount,bind,ro {q(r)}" for r in roots]
-    for e in extra:
-        lines += [f"{MOUNT} --bind {q(e)} {q(e)}", f"{MOUNT} -o remount,bind,ro {q(e)}"]
+    lines += [f"{MOUNT} --bind {q(d)} {q(d)}" for d in rw]
+    lines += [f"{MOUNT} --bind {q(e)} {q(e)}" for e in extra]
+    if over_tmp:
+        lines.append(f"{MOUNT} --bind {q(_abs(tmp))} {SYSTEM_TMP}")  # type: ignore[arg-type]
+    pseudo = ",".join(sorted(PSEUDO_FS))
+    lines.append(" ".join([q(sys.executable), "-I", "-S", "-c", q(SWEEP), pseudo, *(q(p) for p in skip)]))
+    lines.append(f"if [ -d /dev/shm ]; then {MOUNT} -t tmpfs -o nosuid,nodev,mode=1777 tmpfs /dev/shm; fi")
     lines += [f"{IP} link set lo up"] if netns else []
     lines += [f'exec {" ".join(DROP)} "$@"']
     return "\n".join(lines) + "\n"
@@ -130,15 +192,19 @@ def sandbox_argv(
     ro_extra: Iterable[str | os.PathLike[str]] = (),
     *,
     netns: bool = True,
+    tmp: str | os.PathLike[str] | None = None,
+    visible: Iterable[str | os.PathLike[str]] = (),
 ) -> list[str]:
-    """Wrap a step's argv to run in the sandbox.
+    """Wrap a step's argv to run in the read-only-by-default sandbox.
 
     Args:
         argv: The expanded step argv; the child receives it unchanged.
-        ro_roots: Data roots, mounted read-only.
-        rw_dirs: Directories that stay writable, such as ``{out}`` and ``{tmp}``.
-        ro_extra: The checkout and the venv, mounted read-only.
+        ro_roots: Data roots; they must exist.
+        rw_dirs: The only directories that stay writable.
+        ro_extra: The checkout and the venv; they must exist.
         netns: False drops the network namespace (`UNSHARE_NO_NETNS`, no loopback step); test-only.
+        tmp: The step's scratch dir, writable and also bound on ``/tmp`` (see `sandbox_script`).
+        visible: Other paths the step must see, checked against the ``/tmp`` bind.
 
     Returns:
         ``[*UNSHARE, "/bin/sh", "-c", SCRIPT, "sh", *argv]``, where `UNSHARE` is ``/usr/bin/unshare -rnm
@@ -150,7 +216,8 @@ def sandbox_argv(
     if not argv:
         raise ValueError("empty argv")
     unshare = UNSHARE if netns else UNSHARE_NO_NETNS
-    return [*unshare, SH, "-c", sandbox_script(ro_roots, rw_dirs, ro_extra, netns=netns), "sh", *argv]
+    script = sandbox_script(ro_roots, rw_dirs, ro_extra, netns=netns, tmp=tmp, visible=visible)
+    return [*unshare, SH, "-c", script, "sh", *argv]
 
 
 def userns_available() -> bool:
@@ -206,7 +273,7 @@ def _keyed(step: StepSpec, profile: Profile) -> tuple[dict[str, str], dict[str, 
         "HF_HOME": "{cache}/huggingface",
         "TORCH_HOME": "{cache}/torch",
         "XDG_CACHE_HOME": "{tmp}/cache",
-        "CUDA_CACHE_PATH": "{out}/cuda-cache",
+        "CUDA_CACHE_PATH": "{tmp}/cuda-cache",
         "REPRO_OUT": "{out}",
         "REPRO_TMP": "{tmp}",
     }

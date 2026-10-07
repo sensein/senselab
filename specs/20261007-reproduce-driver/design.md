@@ -369,14 +369,36 @@ runs.
 - Verified 2026-10-07: pid 1, /proc shows only sandbox pids, a host `sleep` survives `kill`, and a
   one-cell `python -m nbconvert --execute` notebook runs (kernel over loopback).
 
-**Mounts:**
+**Mounts: read-only by default (B12 review, D1).**
 
-1. Each data root is bound to itself.
-2. Each writable directory under a data root is bound next. That includes the step's own output
-   dir, and the order matters: binding it after the parent is remounted read-only gives a
-   read-only directory.
-3. The data roots are remounted read-only.
-4. The checkout and the venv are also mounted read-only.
+1. `mount --make-rprivate /`.
+2. Each data root, then each writable directory, then the checkout and venv are bound to themselves
+   (shallow-first), so a missing one aborts the script. The step's tmp is also bound on `/tmp`.
+3. The sweep: the driver's own interpreter (`-I -S`, one process, ctypes `mount(2)`) reads
+   `/proc/self/mountinfo` and remounts the topmost mount at every mount point
+   `MS_REMOUNT|MS_BIND|MS_RDONLY`, keeping that mount's per-mount flags (`nosuid`, `nodev`, `noexec`,
+   the atime flags), which a user namespace may not clear. Skipped: the writable binds (by path) and
+   the fresh `/proc`. A refusal is fatal (the script exits before the step) unless the mount is a
+   kernel pseudo filesystem (`PSEUDO_FS`: sysfs, cgroup, tracefs, binfmt_misc, autofs, and the
+   like), which holds no data and whose writes need host privileges anyway. Measured on a compute
+   node with 733 mounts (438 NFS, 227 autofs): 0.07 s; the same loop as one `mount` process per entry
+   took 11 s. Two mounts refuse there, tracefs and binfmt_misc. Taking only the topmost entry per path
+   matters: remounting by path always reaches the topmost mount, and the flags of a lower entry
+   (an autofs trigger under an NFS mount) would be refused.
+4. A fresh private tmpfs on `/dev/shm`, so multiprocessing works and nothing reaches the host's.
+
+So everything is read-only except the step's `work/` and `tmp/` dirs (and, for the R session check
+and the adapter, their own driver-made scratch dirs). That includes the cache with its R libraries,
+Hugging Face and torch homes and venvs, native dirs, the driver's interpreter and the senselab
+source, `$HOME`, the results, runs and Slurm-log roots, and scratch. A step that needs another
+writable location must put it under `{out}`; no declaration mechanism exists, since no planned step
+needs one. Hugging Face and torch read cached files offline without writing; if a step turns out to
+need writable model caches, the fix is to point that library at a dir under `{tmp}`, not to make the
+cache writable. `/tmp` is the step's tmp unless a path the step needs (a root, the result dir, the
+cache, the checkout, the venv, the driver's interpreter) lies under `/tmp`, where the bind would hide
+it; then `/tmp` stays read-only and `TMPDIR` still points at `{tmp}` (the test suite runs this way,
+since pytest's `tmp_path` is under `/tmp`). Sandboxed wheel builds (B6) get `UV_CACHE_DIR` under their
+own tmp for the same reason.
 
 **Network:** there is none.
 
@@ -438,8 +460,9 @@ How `sandbox` reads those rules:
   and `R_LIBS_USER` (`r_lib`, as the plan's B7 says, with `R_LIBS_SITE` keyed as an empty constant so no site library
   is seen), `JUPYTER_PATH`
   (`{venv}/share/jupyter`), `JUPYTER_DATA_DIR`/`JUPYTER_CONFIG_DIR`/`XDG_CACHE_HOME` (under
-  `{tmp}`), `HF_HOME`/`TORCH_HOME` (under `{cache}`), `CUDA_CACHE_PATH` (`{out}/cuda-cache`, as spec
-  §15.6 says), `REPRO_OUT`/`REPRO_TMP`.
+  `{tmp}`), `HF_HOME`/`TORCH_HOME` (under `{cache}`), `CUDA_CACHE_PATH` (`{tmp}/cuda-cache`; spec §15.6
+  put it under `{out}`, and B12's review moved it into the step's scratch so it is writable without
+  being an output), `REPRO_OUT`/`REPRO_TMP`.
 - Keyed constants: `LANG=C.UTF-8`, `TZ=UTC`, the three HF offline variables, every proxy variable
   (both cases) set to `http://127.0.0.1:9`, and `no_proxy`/`NO_PROXY` set empty.
 - Recorded only: `TMPDIR`, `HOME`, `IPYTHONDIR`, `JUPYTER_RUNTIME_DIR` (all under `{tmp}`, expanded),
@@ -884,7 +907,7 @@ several entries is refused when read, rather than picking one.
   numbers and do not change the exit code.
 - Declared inputs are digested with `input_set_digest(root, patterns, require_nonempty=True)`, so a
   pattern that matches nothing fails with `E_DIGEST_EMPTY` instead of digesting the empty set the
-  same way before and after the step. Output digests exclude `cuda-cache`.
+  same way before and after the step. Output digests cover `work/` only, which holds no CUDA cache.
 - The final object, after the driver writes the `expect` results, is validated again with
   `writer="driver"` and the same `min_cell`.
 
@@ -983,111 +1006,150 @@ It holds no messages, and no paths other than checkout-relative code frames.
 
 `run.py`: `run_step` for one step, `run_steps` for a set of manifests in DAG order.
 
+- **Result dir layout (B12 review, D2).** `R = <results_root>/<key>`:
+  - `R/work/`: the only dir the step may write. `{out}` (argv, `REPRO_OUT`, `outputs` patterns, and a
+    dependent's `{up:<step>}` and `up:` inputs) means `R/work`. Stage files go to `R/work/stage`, so a
+    script that writes next to its inputs still writes only into `{out}` (spec §15.3); a read-only
+    stage bind would break that.
+  - `R/tmp/`: `{tmp}`, `TMPDIR`, `/tmp` when possible, `HOME` and the Jupyter dirs, `CUDA_CACHE_PATH`.
+    Removed after the run (never following a symlink in it); the driver never reads it after the step.
+  - Driver-owned: `R/logs/`, `R/prov/`, `R/adapter/` (the adapter copy and the R session script),
+    `R/metrics.json`, `R/summary.json`, and `<runs_root>/<date>/<analysis>/run.json`. They are never
+    writable in a sandbox, since `R` itself is read-only there.
+  - Step stdout and stderr go to `R/logs/step.{stdout,stderr}.log`, opened by the driver
+    (`O_CREAT|O_EXCL|O_NOFOLLOW`) before the sandbox starts.
+  - Every driver create under `R` uses `O_EXCL|O_NOFOLLOW`; `metrics.json` is written to such a file
+    and renamed into place, refusing a symlink at the target; `record_step` refuses a symlinked
+    `prov/`. These are defence in depth: the step cannot write `R` at all.
+  - Reserved names: after the step, any `summary.json`, `metrics.json` or `run.json` anywhere under
+    `work/` (file, dir or symlink) is deleted and the step fails with `E_RESERVED_NAME`, so nothing a
+    step forged can be read as a driver file. A forged `R/summary.json` cannot exist: `R` is read-only.
+  - Agents read only `R/summary.json`, `R/metrics.json` and `run.json` (plan amendment,
+    2026-10-07).
 - **Key before skip.** Inputs and native dirs are keyed (B11), so the order of the plan's B12 list
   changes: resolve the prefetched worktree (`source.prefetched_checkout`, which never creates one:
   `E_SRC_MISSING`, or `E_SRC_MISMATCH` when it no longer verifies), open each data root once so an
   automounted root is mounted before the namespace is entered (`E_ROOT_MISSING`), digest every
   declared input with `require_nonempty=True` and the native dirs, compute the key, and only then
   check done. A done dir is linked and the step is `skipped`, with no user namespace, venv or GPU
-  needed. Otherwise the claim is taken, done is checked again, and the dir is reset. These same
-  input digests are the "before" digests.
-- **Refusals before the step.** `E_NO_USERNS`; the venv must load from its marker
-  (`env.load_venv`, `E_ENV_MISSING`) and pass `venv_checked` (`E_ENV_UNCHECKED`); notebook kinds use the
-  derived `notebook_tools` venv. The GPU guard runs before the step, not after as the plan listed
-  it, so a GPU job is not spent on a host that fails it: `gpu_arch` or `min_driver` with no GPU is
-  `E_GPU_MISSING`, a driver below `min_driver` is `E_DRIVER_OLD` (numeric dotted compare). After the
-  step, torch built without CUDA on a `gpu_arch` step is `E_GPU_TORCH_CPU` and a torch CUDA above
-  `max_cuda` is `E_MAX_CUDA`. `gpu_arch` is not matched against the host's architecture here: the
-  host record has no compute capability, and the partition choice (B13) is what places the step.
-- **Directories.** `{tmp}` is `{out}/tmp`. The run creates `{tmp}/home`, `{tmp}/ipython`,
-  `{tmp}/jupyter/{runtime,data,config}`, `{tmp}/cache`, `{out}/cuda-cache`, `{out}/stage` and, for
-  notebook kinds, `{out}/notebooks`. `{tmp}` is removed when the run ends.
-- **Stage.** Files are chosen by `digest.matching_files`, the same walk as `input_set_digest` (the
-  wildcard-free prefix is resolved by path, no symlinked dir is entered below it), and copied by
-  content to `{out}/stage/<dest>/<path relative to the root>`. A rendered `dest` must be relative with
-  no `..` (`E_STAGE_BAD_DEST`); two entries writing one file is `E_STAGE_CONFLICT`; digest codes
-  read `E_STAGE_*`.
-- **The sandboxed run.** Data roots, the checkout, the venv and every upstream result dir are
-  read-only (upstream dirs too, so a step cannot alter what its key was computed from); only `{out}`
-  is writable. A template naming a missing placeholder is `E_RENDER_PLACEHOLDER`, a malformed one
-  `E_RENDER_BAD`. The sandbox execs a small `sh` wrapper, after its mounts, which `cd`s into the
-  step's cwd (so the cwd is on the read-only bind; a `cwd` resolved by the caller before the mounts
-  would keep the writable mount underneath), runs the preamble, and execs the step. The cwd must lie
-  in the checkout or `{out}` (`E_CWD`). The preamble is the venv's `python -I`: it runs the canary,
-  then imports torch, and writes `{sys_prefix, torch, torch_cuda, canary_failed}` to
-  `{out}/logs/preamble.json` (a file, not stdout, so nothing a library prints can garble it). The
-  step is exec'd only when the canary's connect failed. Parsing is strict: exactly one line, one
-  object, those four keys, a boolean canary, version-shaped torch strings; anything else, a missing
-  file, or a connect that succeeded is `E_CANARY`. A prefix that is not the venv is `E_SYS_PREFIX`.
-  stdout and stderr go to `{out}/logs/step.{stdout,stderr}.log`.
+  needed. These input digests are the "before" digests.
+- **Refusals before the reset.** Inside the claim, after done is checked again: `E_NO_USERNS`; the
+  venv must load from its marker (`env.load_venv`, `E_ENV_MISSING`) and pass `venv_checked`
+  (`E_ENV_UNCHECKED`; notebook kinds use the derived `notebook_tools` venv); `gpu_arch` or `min_driver`
+  with no GPU is `E_GPU_MISSING`, a driver below `min_driver` `E_DRIVER_OLD`. These return a code and
+  leave the result dir untouched, so a previous run's diagnostics survive; only then is the dir reset.
+  The GPU guard runs before the step, not after as the plan listed it, so a GPU job is not spent on a
+  host that fails it. After the step, torch built without CUDA on a `gpu_arch` step is
+  `E_GPU_TORCH_CPU` and a torch CUDA above `max_cuda` is `E_MAX_CUDA`. `gpu_arch` is not matched
+  against the host's architecture: the host record has no compute capability, and the partition
+  choice (B13) is what places the step.
+- **Host record.** `host.host_record(None)` probes only the host (hostname, CPUs, `nvidia-smi`); no
+  venv interpreter runs outside the sandbox. Python, torch and torch CUDA come from the preamble.
+- **Stage.** Files are chosen by `digest.matching_files`, the same walk as `input_set_digest`, and
+  copied by content. A rendered `dest` must be relative with no `..` (`E_STAGE_BAD_DEST`); two entries
+  writing one file is `E_STAGE_CONFLICT`; digest codes read `E_STAGE_*`.
+- **R steps (D3).** The env gets the prefetch `MODULE_ENV.json` merge (`env.r_env_vars`: venv `bin`, the
+  module's `PATH`, then the system and native dirs). Before the step, `Rscript --vanilla
+  <env.r_session_script> <r_lib> <R/rsession>` runs in the same sandbox with the same env (its out dir
+  is the only extra writable dir), `env.read_r_session` reads the result, and every field of
+  `env.R_SESSION_FIELDS` (installed versions, `.libPaths()`, R version, `sessionInfo()`) must equal
+  `SESSION.json`'s, or the step fails with `E_R_SESSION` and does not run. Prefetch writes those
+  fields through the same reader, from the same R lines at the end of `r_script`, and now runs R with
+  `TZ=UTC` as the step does. The reader keeps `sessionInfo()` up to `loaded via a namespace`: that
+  block lists whatever namespaces the install happened to load, which differs between prefetch and
+  run without saying anything about the session.
+- **The sandboxed run.** A template naming a missing placeholder is `E_RENDER_PLACEHOLDER`, a
+  malformed one `E_RENDER_BAD`; the cwd must lie in the checkout or `work/` (`E_CWD`). The sandbox
+  execs `sh` which `cd`s into the cwd after the mounts (so it is on the read-only bind), then execs
+  the venv's `python -I -B -c PREAMBLE <fd> <step argv…>`. The preamble runs the canary, imports torch,
+  writes `{sys_prefix, python, torch, torch_cuda, canary_failed}` to the driver's pipe `<fd>`, closes
+  it, and `execvp`s the step only when the canary's connect failed. The step therefore never holds the
+  pipe, and cannot rewrite what the driver reads to dodge `E_MAX_CUDA` or `E_SYS_PREFIX`. Parsing is
+  strict: one line, one object, those five keys, a boolean canary, version-shaped strings; anything
+  else, nothing, or a connect that succeeded is `E_CANARY`. A prefix that is not the venv is
+  `E_SYS_PREFIX`. The driver drains the pipe in a thread (capped at 1 MiB) so a writer never blocks.
 - **After the step.** The inputs are digested again (`E_INPUT_MUTATED`); `verify_checkout` must still
-  hold, which covers `git status --porcelain` being empty and `HEAD^{tree}` being the prefetch tree
-  (`E_SRC_MUTATED`); the venv marker must still name the same `env_key` and overlay, and
-  `installed.json` hash to the same value, as when the step started (`E_ENV_CHANGED`). This is the
-  cross-check of the marker against the `VenvResult` before `installed_sha256` is recorded.
-- **Adapter.** Contract: `adapter.py <result dir> <metrics path>`; it reads the step's outputs and
-  writes one JSON object. It runs in the driver's interpreter, so `adapter_env_sha256` is
-  `cache.driver_env_sha256()`, inside the same sandbox (no network, roots read-only), with a
-  minimal env and `-I`; senselab's own source dir is put first on `sys.path` by the runner, so an
-  editable or `PYTHONPATH` checkout of senselab works too. The script is copied and re-hashed before
-  it runs (`E_ADAPTER_CHANGED`). A non-zero exit is `E_ADAPTER_FAILED`, no readable JSON
-  `E_ADAPTER_NO_METRICS`.
+  hold (clean status, `HEAD^{tree}` the prefetch tree: `E_SRC_MUTATED`); the venv marker must still name
+  the same `env_key` and overlay and `installed.json` hash to the same value as before the step
+  (`E_ENV_CHANGED`), the cross-check of the marker against the `VenvResult` before `installed_sha256`
+  is recorded; reserved names are refused. `E_STEP_FAILED` is added only when the step itself ran.
+- **Adapter.** Contract: `adapter.py <work dir> <metrics path>`; it reads `work/` (read-only) and
+  writes one JSON object to the metrics path, which is `/proc/self/fd/<n>`, the driver's pipe. It runs
+  in the driver's interpreter, so `adapter_env_sha256` is `cache.driver_env_sha256()`, in the same
+  read-only sandbox with `-I -B` (`-I` ignores `PYTHONDONTWRITEBYTECODE`, so `-B` does that job) and
+  its own scratch dir `R/adapter-tmp` as `HOME` and `TMPDIR`, removed afterwards. The runner puts
+  senselab's source dir first on `sys.path`. The script is read, re-hashed against the keyed sha
+  (`E_ADAPTER_CHANGED`) and copied to `R/adapter/adapter.py`. A non-zero exit is `E_ADAPTER_FAILED`,
+  no readable JSON `E_ADAPTER_NO_METRICS`.
 - **The adapter import rule, enforced.** The runner first imports every `senselab.utils.reproduce`
-  module, so everything that package needs is loaded. It then wraps `builtins.__import__` and
-  `importlib.import_module`: an import made by code outside the `senselab` package of a senselab
-  module outside `senselab.utils.reproduce` raises `ImportError`, and `from senselab.utils import
-  reproduce` is the only `from` form on a parent package that passes. After the adapter returns, any
-  senselab module loaded since the start and outside the package also counts. Either case exits 86,
-  which the driver reads as `E_ADAPTER_IMPORT` whatever the adapter did with the exception. This
-  stops the accidental dependency the rule exists for; an adapter that sets out to evade it (reading
-  an already-loaded module through `sys.modules` or an attribute of `senselab`) is not stopped, and
-  adapters live in a reviewed repository.
+  module. It then wraps `builtins.__import__` and `importlib.import_module`: an import made by code
+  outside the `senselab` package of a senselab module outside `senselab.utils.reproduce` raises
+  `ImportError`, and `from senselab.utils import reproduce` is the only `from` form on a parent
+  package that passes. After the adapter returns, any senselab module loaded since the start and
+  outside the package also counts. Either case exits 86, read as `E_ADAPTER_IMPORT` whatever the
+  adapter did with the exception. This stops the accidental dependency the rule is for. Evasion
+  classes it does not stop, all deliberate: reaching an already-loaded module through `sys.modules`
+  or as an attribute of `senselab` (for example after `import senselab.utils.reproduce.cache`, whose
+  own imports loaded `senselab.utils.file_lock`); loading a module file by path
+  (`importlib.util.spec_from_file_location`, `runpy`, `exec` of its source), which loads it under
+  another name; `importlib._bootstrap` and other private machinery; and setting the adapter's own
+  `__name__` to a `senselab.` name. Adapters live in a reviewed repository.
 - **Validation and expectations.** The adapter's object is validated with `writer="adapter"`, then
   `evaluate_expect` writes the results, then the whole object is validated again with
-  `writer="driver"` and the same `min_cell`, and only then written to `{out}/metrics.json`. Only `E_*`
-  codes fail a step; `W_*` codes are recorded in `summary.json` and provenance. An expectation is
-  compared in its own `unit` when it gives one, else in the unit of the step's metric entry, and an
-  upstream value in the other unit is converted (pp = 100 × fraction); per-class rates are fractions.
-  The tolerance from `tolerance_from` is `max(a, k·sd)` with the sample standard deviation. Results
-  go into the metric's own entry (headline or secondary entry, or the per-class entry); a place
-  addressed by several expectations gets only `pass`; the top level gets the step's overall `pass`,
-  so a count or confusion expectation writes only its `target`, `tolerance` and `delta` there, and
-  only when it is the only one there. Satra (2026-10-07): a classification step may pass on an
-  expectation targeting a secondary metric, as long as balanced accuracy is always reported, which
-  the schema already guarantees; no further rule. `pass: false` is `E_EXPECT`.
+  `writer="driver"` and the same `min_cell`, and only then written to `R/metrics.json`. Only `E_*`
+  codes fail a step; `W_*` codes are recorded. An expectation is compared in its own `unit` when it
+  gives one, else in the unit of the step's metric entry, converting upstream values (pp = 100 ×
+  fraction); per-class rates are fractions. `target`, `tolerance` and `delta` are then written in the
+  metric entry's own unit (converted back), so every number in an entry shares the entry's `unit`;
+  recording an `expect_unit` instead would have put two units in one entry. `exact` compares with
+  `==`, or within a relative 1e-9 when a conversion happened (so 0.7 fraction equals an exact 70 pp,
+  which `0.7 * 100` misses by one ulp). The tolerance from `tolerance_from` is `max(a, k·sd)` with the
+  sample standard deviation. Results go into the metric's own entry (headline or secondary, or the
+  per-class entry); a place addressed by several expectations gets only `pass`; the top level gets the
+  step's overall `pass` when there are expectations, so a count or confusion expectation writes only
+  its `target`, `tolerance` and `delta` there, and only when it is the only one there. Satra
+  (2026-10-07): a classification step may pass on an expectation targeting a secondary metric, as long
+  as balanced accuracy is always reported, which the schema already guarantees; no further rule.
+  `pass: false` is `E_EXPECT`.
 - **Exit and summary.** `summary.json` is `{exit, exc_class, frame, codes, pass, sys_prefix_ok, torch,
-  torch_cuda, canary_failed, executed}`. `exit` is the step's own exit when that is non-zero (97 when
-  the preamble stopped it), else 1 when any `E_*` code is present, else 0, so `is_done` and Slurm
-  `afterok` see every failure. `exc_class` and `frame` come from the last Python traceback in the
-  step's stderr: the exception's dotted class name and the last frame inside the checkout as a
-  checkout-relative `file:line`, each kept only when it matches a closed pattern; never the message.
-  `executed` is true when the step's own process ran.
-- **Statuses.** `executed`, `skipped`, `failed` (refused, or the preamble did not hand over) and
-  `never-ran` (a need is not executed-or-skipped with exit 0). `run_steps` writes
-  `<runs_root>/<date>/<analysis>/run.json` with each step's key, status, exit and codes, and links each
-  result dir.
+  torch_cuda, canary_failed, executed}`. `pass` is null when the step has no expectations or they were
+  never evaluated. `exit` is the step's own exit when that is non-zero (97 when the preamble stopped
+  it), else 1 when any `E_*` code is present, else 0, so `is_done` and Slurm `afterok` see every
+  failure. `exc_class` and `frame` come from the last Python traceback in the step's stderr: a dotted
+  class name ending in `Error`, `Exception`, `Interrupt`, `Exit`, `Warning`, `Iteration` or `Timeout`
+  (anything else is null, so a message never passes for a class), and the last frame inside the
+  checkout as a checkout-relative `file:line`. `executed` is true when the step's own process ran.
+- **Order at the end, and provenance's exit.** Outputs are digested (`work/` only; a successful step
+  whose pattern matches nothing is `E_OUTPUT_MISSING`), the scratch dirs removed, then the exit is
+  fixed and `record_step` is called with it, so the record's `exit_code` is the summary's. If the
+  record is refused (`E_PROV_REFUSED`, for a closed-form `ValueError`) or fails (`E_DRIVER`, for an
+  `OSError` or `TypeError`), nothing is recorded and the summary's exit becomes non-zero, so the two
+  never disagree.
+- **Driver failures.** Any `OSError`, `TypeError` or `ValueError` anywhere in `run_step` (log setup,
+  staging, `write_summary`, provenance, scratch removal) becomes `E_DRIVER`, with the traceback in
+  `driver.log` only. After the reset, a summary is still written when possible (an `E_DRIVER` summary
+  if the first write failed).
+- **Statuses and links.** `executed`, `skipped`, `failed` (refused, or the preamble did not hand over)
+  and `never-ran` (a need is not executed-or-skipped with exit 0). `run_steps` writes `run.json` with
+  each step's key, status, exit and codes and links each result dir. A `never-ran` step, or a failed
+  one with no key, removes any same-day `<runs_root>/<date>/<analysis>/<step>` link, which would
+  otherwise point at an older result.
 - **The test-only `no_netns` mode** drops the network namespace (`sandbox_argv(netns=False)`: `unshare
-  -rm`, no loopback step; mounts and the capability drop stay). Its runs always carry
-  `E_NOT_REPORTABLE` and so a non-zero exit: such a result is never done, never skipped to, and never
-  feeds a dependent. The alternative of keying the mode would have put a test switch into every key.
+  -rm`, no loopback step; mounts, the read-only sweep and the capability drop stay). Its runs always
+  carry `E_NOT_REPORTABLE` and so a non-zero exit: such a result is never done, never skipped to, and
+  never feeds a dependent. Keying the mode instead would have put a test switch into every key.
 - **Off-pattern host values (decision).** `provenance.drop_unrecordable_host_values` sets each host
   value `record_step` would refuse to null before recording, and the run records
-  `W_HOST_VALUE_DROPPED` (the key names go to `driver.log`). The step's result stays valid and cacheable:
-  a host value is a description of where it ran, not an input, and refusing would make one oddly named
-  host unable ever to record a run. Any other provenance refusal is `E_PROV_REFUSED`, which fails the
-  step and leaves it uncached, since a done result must carry its record.
+  `W_HOST_VALUE_DROPPED` (the key names go to `driver.log`). The result stays valid and cacheable: a
+  host value describes where the step ran, it is not an input, and refusing would leave one oddly named
+  host unable ever to record a run.
+- **Provenance venv names.** A derived venv is `repro-<analysis>-<key8>+<overlay sha8>`; the record's
+  closed form for venv names accepts exactly that `+<8 hex>` suffix.
 - **Logging.** While a step is claimed and run, the `senselab` logger has one handler and does not
-  propagate: records are buffered until `{out}/logs` exists and then appended to `driver.log`. A
-  claim's stale-takeover warning, which names the lock path under the results tree, therefore never
-  reaches a terminal. Driver tracebacks (`E_DRIVER`) go there too. Before the key exists there is no
-  result dir, and those failures return a code only.
-- **Outputs and provenance.** Each declared output pattern is digested in `{out}` leaving out
-  `cuda-cache`, `tmp`, `logs` and `prov`; a successful step whose pattern matches nothing is
-  `E_OUTPUT_MISSING`. `record_step` gets the torch and body lock sha256s, the recorded env sha and key
-  names, and `argv_sha256` over the rendered argv.
-- **R steps** take the prefetch `MODULE_ENV.json` merge (`env.r_env_vars`) on top of the sandbox env.
-  Re-running `sessionInfo()` at run time and comparing it with `SESSION.json` (spec §2.3.3) is not done
-  yet; the prefetch digest is keyed.
+  propagate: records are buffered until `R/logs` exists and then appended (`O_NOFOLLOW`) to
+  `driver.log`. A claim's stale-takeover warning, which names the lock path under the results tree,
+  therefore never reaches a terminal. Before the key exists there is no result dir, and those failures
+  return a code only.
 
 ## Commands
 
