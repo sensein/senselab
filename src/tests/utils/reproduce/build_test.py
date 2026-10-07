@@ -167,7 +167,7 @@ def test_build_wheel_argv_env_and_patch(tmp_path: Path, fake_run: FakeRun) -> No
         *("--out-dir", str(work / "dist"), str(work / "src" / "demo-1.0")),
     ]
     assert argvs[2][: len(sandbox.UNSHARE)] == sandbox.UNSHARE and argvs[2][-len(inner) :] == inner
-    assert f"remount,bind,ro {venv}" in argvs[2][len(sandbox.UNSHARE) + 2]
+    assert f"--bind {venv} {venv}" in argvs[2][len(sandbox.UNSHARE) + 2]
     info = json.loads(wheel.with_name(wheel.name + ".build-info.json").read_text())
     assert info["python_exact"] == "3.11.15"
     assert info["uv"] == "uv 1.0" and info["gcc"] == "gcc 1.0"
@@ -202,6 +202,7 @@ def test_build_env_is_an_allowlist(tmp_path: Path, fake_run: FakeRun, monkeypatc
         "TORCH_CUDA_ARCH_LIST": "8.0;9.0",
         "UV_OFFLINE": "1",
         "PIP_NO_INDEX": "1",
+        "UV_CACHE_DIR": str(work / "tmp" / "uv-cache"),
         **{key: proxy for key in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY")},
     }
     assert (work / "home").is_dir() and (work / "tmp").is_dir()
@@ -270,7 +271,7 @@ def test_build_runs_in_the_sandbox() -> None:
     assert argv[: len(sandbox.UNSHARE)] == sandbox.UNSHARE
     assert argv[len(sandbox.UNSHARE) :] == [sandbox.SH, "-c", argv[len(sandbox.UNSHARE) + 2], "sh", *inner]
     script = argv[len(sandbox.UNSHARE) + 2]
-    assert "remount,bind,ro /w/venv" in script and "module" not in script
+    assert "--bind /w/venv /w/venv" in script and "module" not in script
 
 
 def test_module_variables_reach_the_sandboxed_build(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

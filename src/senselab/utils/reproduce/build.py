@@ -564,7 +564,9 @@ def build_wheel(
     _run(_install_argv(uv, build_python, inputs / sdist.build_env.lock, None, binary_only=True), env=base)
 
     dist = work_dir / "dist"
+    dist.mkdir(parents=True, exist_ok=True)
     env = build_environment(sdist, base, venv, module_environment(sdist, base))
+    env["UV_CACHE_DIR"] = str(work_dir / "tmp" / "uv-cache")
     writable = [src.parent, dist, work_dir / "home", work_dir / "tmp"]
     _run(wheel_build_argv(uv, build_python, src, dist, venv=venv, writable=writable), env=env)
     wheels = sorted(dist.glob("*.whl")) if dist.is_dir() else []

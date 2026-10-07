@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -94,15 +95,27 @@ def test_sandbox_argv_shape(tmp_path: Path) -> None:
     assert argv[:10] == [*unshare, "/bin/sh", "-c"]
     assert argv[11:] == ["sh", "true"]
     script = argv[10]
-    assert script.startswith("set -e")
+    assert script.startswith("set -e\n/usr/bin/mount --make-rprivate /\n")
     mount = "/usr/bin/mount"
-    assert script.index(f"{mount} --bind {out} {out}") < script.index(f"{mount} -o remount,bind,ro {root}")
-    assert script.index(f"{mount} -o remount,bind,ro {root}") < script.index(f"{mount} --bind {tmp_path / 'ck'}")
+    sweep = script.index(f"{shlex.quote(sys.executable)} -I -S -c ")
+    assert script.index(f"{mount} --bind {root} {root}\n") < script.index(f"{mount} --bind {out} {out}\n") < sweep
+    assert script.index(f"{mount} --bind {tmp_path / 'ck'} {tmp_path / 'ck'}\n") < sweep
+    assert script.index(f" {out}\nif [ -d /dev/shm ]; then {mount} -t tmpfs") > sweep
+    assert "remount,bind,ro" not in script
     assert "/usr/sbin/ip link set lo up" in script
     assert script.rstrip().endswith(
         'exec /usr/bin/setpriv --bounding-set=-all --inh-caps=-all --ambient-caps=-all --no-new-privs "$@"'
     )
-    assert all(line.startswith(("set -e", "/usr/", "exec /usr/")) for line in script.splitlines())
+    head = script[:sweep].splitlines()
+    assert all(line.startswith(("set -e", "/usr/")) for line in head)
+
+
+def test_no_netns_argv_keeps_the_mounts_and_drops_the_network_namespace(tmp_path: Path) -> None:
+    """The test-only mode unshares user, mount and PID namespaces only, and raises no loopback."""
+    argv = sandbox_argv(["true"], [tmp_path / "r"], [], [], netns=False)
+    assert argv[:2] == ["/usr/bin/unshare", "-rm"] and "-rnm" not in argv
+    script = argv[argv.index("-c") + 1]
+    assert "/usr/sbin/ip" not in script and f"--bind {tmp_path / 'r'} {tmp_path / 'r'}" in script
 
 
 def test_nested_paths_are_bound_shallow_first(tmp_path: Path) -> None:
@@ -262,7 +275,11 @@ def test_notebook_executes_in_the_sandbox(tmp_path: Path) -> None:
     env, _, _ = build_env(_step(), _profile(tmp_path / "root"), paths, parent={})
     argv = [sys.executable, "-m", "nbconvert", "--to", "notebook", "--execute", "--output-dir", str(out), str(nb)]
     done = subprocess.run(
-        sandbox_argv(argv, [], [out], [paths["checkout"]]), capture_output=True, text=True, timeout=180, env=env
+        sandbox_argv(argv, [], [out, paths["tmp"]], [paths["checkout"]]),
+        capture_output=True,
+        text=True,
+        timeout=180,
+        env=env,
     )
     assert done.returncode == 0, done.stderr[-2000:]
     executed = json.loads((out / "nb.ipynb").read_text())
@@ -381,3 +398,66 @@ def test_profile_env_may_not_override_driver_variables(tmp_path: Path) -> None:
     for key in keys:
         with pytest.raises(ValueError):
             build_env(_step(), _profile(tmp_path / "root", env={key: "x"}), _paths(tmp_path), parent={})
+
+
+def test_tmp_is_bound_on_system_tmp_unless_that_would_hide_a_path() -> None:
+    """The step's tmp also becomes ``/tmp``, unless a path the step needs lies under ``/tmp``."""
+    root, out, tmp = "/srv/data", "/srv/results/k/work", "/srv/results/k/tmp"
+    script = sandbox_argv(["true"], [root], [out], [], tmp=tmp)[10]
+    assert f"/usr/bin/mount --bind {tmp} {tmp}" in script and f"/usr/bin/mount --bind {tmp} /tmp" in script
+    assert f" {out} /tmp\nif [ -d /dev/shm ]" in script
+    hidden = sandbox_argv(["true"], [root], [out], [], tmp=tmp, visible=["/tmp/cache"])[10]
+    assert f"--bind {tmp} /tmp" not in hidden and f"--bind {tmp} {tmp}" in hidden
+
+
+@needs_userns
+def test_everything_but_the_writable_dirs_is_read_only(tmp_path: Path) -> None:
+    """Paths that are neither roots nor writable dirs are read-only too; a private ``/dev/shm`` is writable."""
+    out, elsewhere = tmp_path / "out", tmp_path / "elsewhere"
+    for d in (out, elsewhere):
+        d.mkdir()
+    probe = 'for d in "$@"; do touch "$d/w" 2>/dev/null && echo 1 || echo 0; done'
+    argv = sandbox_argv(["/bin/sh", "-c", probe, "sh", str(out), str(elsewhere), "/dev/shm", str(tmp_path)], [], [out])
+    done = _run(argv)
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.split() == ["1", "0", "1", "0"]
+    assert not (elsewhere / "w").exists() and not (tmp_path / "w").exists() and (out / "w").exists()
+
+
+NESTED = """
+import ctypes, json, os, sys
+root, out = sys.argv[1], sys.argv[2]
+libc = ctypes.CDLL(None, use_errno=True)
+libc.mount.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_ulong, ctypes.c_void_p]
+libc.umount2.argtypes = [ctypes.c_char_p, ctypes.c_int]
+res = {"unshare": libc.unshare(0x10000000 | 0x00020000) == 0}
+res["cap"] = [line.split()[1] for line in open("/proc/self/status") if line.startswith("CapEff")][0]
+def ok(rc):
+    return rc == 0
+res["remount_rw"] = ok(libc.mount(None, root.encode(), None, 32 | 4096, None))
+res["bind"] = ok(libc.mount(root.encode(), out.encode(), None, 4096, None))
+res["bind_rw"] = ok(libc.mount(None, out.encode(), None, 32 | 4096, None))
+res["umount"] = ok(libc.umount2(root.encode(), 2))
+for name, d in (("root", root), ("bound", out)):
+    try:
+        open(os.path.join(d, "escape-" + name), "w").write("x")
+        res["write_" + name] = True
+    except OSError:
+        res["write_" + name] = False
+print(json.dumps(res))
+"""
+
+
+@needs_userns
+def test_a_nested_user_namespace_cannot_make_a_read_only_root_writable(tmp_path: Path) -> None:
+    """With full capabilities in a nested user namespace, the read-only mounts stay locked read-only."""
+    root, other = tmp_path / "root", tmp_path / "other"
+    for d in (root, other):
+        d.mkdir()
+    done = _run(sandbox_argv([sys.executable, "-c", NESTED, str(root), str(other)], [root], []))
+    assert done.returncode == 0, done.stderr
+    res = json.loads(done.stdout)
+    assert res["unshare"] is True and res["cap"] != "0000000000000000"
+    assert res["remount_rw"] is False and res["bind_rw"] is False
+    assert res["write_root"] is False and res["write_bound"] is False
+    assert not (root / "escape-root").exists() and not (other / "escape-bound").exists()

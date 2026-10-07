@@ -123,3 +123,16 @@ def test_padded_cpu_and_gpu_names_are_single_spaced(tmp_path: Path, monkeypatch:
     record = host_record(_venv(tmp_path), runner=FakeRunner(smi=smi, probe=probe))
     assert record["cpu_model"] == "Intel(R) Xeon(R) CPU X5650 @ 2.67GHz"
     assert record["gpu_name"] == "NVIDIA A100-SXM4-80GB"
+
+
+def test_no_venv_probes_only_the_host() -> None:
+    """With no venv the interpreter fields are None and no interpreter is run."""
+    calls: list[Sequence[str]] = []
+
+    def runner(argv: Sequence[str]) -> tuple[int, str]:
+        calls.append(argv)
+        return 1, ""
+
+    record = host_record(None, runner=runner)
+    assert (record["python"], record["torch"], record["torch_cuda"]) == (None, None, None)
+    assert [c[0] for c in calls] == ["nvidia-smi"]
