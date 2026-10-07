@@ -538,7 +538,7 @@ How `sandbox` reads those rules:
 
 **Step key:** sha256 over these fields, and nothing volatile:
 
-- the driver-semantics number
+- the reproduce source digest (`senselab/utils/reproduce` sources)
 - code commit and submodule SHAs
 - `env_key`
 - `wheels.lock` and overlay sha256s
@@ -582,13 +582,19 @@ the step.
 - **What the key covers.** `step_key_payload` names every field explicitly (no whole-model dump of
   `StepSpec`), so a field added to the manifest later is unkeyed until someone decides it should be
   keyed. The payload holds:
-  - `driver_semantics` (`cache.DRIVER_SEMANTICS`), a number bumped whenever driver-side code
-    changes what a result dir holds or whether it passes: metrics validation, min-cell
+  - `reproduce_source_sha256`: a sha256 over every installed `senselab/utils/reproduce/**/*.py`
+    file (sorted relative path and content sha256), taken from the package directory and computed
+    once per process. It stands for everything the driver decides: metrics validation, min-cell
     suppression, expectation evaluation, the GPU and canary guards, the child preamble and the
-    sandbox script. senselab's own version is not keyed: hatch-vcs changes it on every commit, so
-    keying it would recompute every multi-hour step after any unrelated senselab commit (the same
-    reason the analyze-audio cache dropped it at schema 24). The cost is that a driver change
-    altering results must bump the number.
+    sandbox script. A content digest replaced an earlier hand-bumped number because a forgotten
+    bump serves stale results silently, while a spurious recompute only costs time. senselab's
+    version is not keyed: hatch-vcs changes it on every commit, so keying it would recompute every
+    multi-hour step after any unrelated senselab commit (the reason the analyze-audio cache dropped
+    it at schema 24). The digest covers only `utils/reproduce`, so **B12 rule: adapters import
+    nothing from senselab outside `senselab.utils.reproduce`, and B12 enforces it** (for example by
+    running the adapter with an import hook or a `sys.modules` check that refuses other
+    `senselab.*` modules); otherwise a change to such a module would change results under an
+    unchanged key.
   - the commit and submodule commits, and the patch-set sha256 (`source.patch_set_sha256`, the
     same value that names the worktree)
   - `env_key` (which already covers the torch and body lock sha256s, the sdist inputs and
@@ -598,9 +604,16 @@ the step.
     variables, and every path variable in template form, including `PYTHONPATH`, `PATH`,
     `LD_LIBRARY_PATH` and `R_LIBS`)
   - a content digest of every selected native dir (`native`): `cache.native_digests` runs
-    `digest.input_set_digest(dir, ["**"], require_nonempty=True)` over each `bin_dirs` then
+    `digest.input_set_digest(dir, patterns, require_nonempty=True)` over each `bin_dirs` then
     `lib_dirs` entry of the selected `NativeSpec`s. The keyed env holds only the dir paths, and a
-    module upgraded in place (a new ffmpeg in the same prefix) would otherwise keep the key
+    module upgraded in place (a new ffmpeg in the same prefix) would otherwise keep the key. The
+    patterns are the `NativeSpec`'s `bin_patterns` (default `["*"]`: every top-level entry, which is
+    what `PATH` lookup reaches) and `lib_patterns` (default `["**/*.so", "**/*.so.*"]`: shared
+    objects, versioned or not, at any depth, so plugin subdirs count but headers, pkg-config files
+    and docs do not). `__pycache__` dirs and `*.pyc` are always excluded (`digest.input_set_digest`'s
+    `exclude_patterns`), since a Python run beside a native tool rewrites them. A dangling symlink
+    or an unreadable file among the matches gives `E_DIGEST_UNREADABLE`, and a dir matching nothing
+    gives `E_DIGEST_EMPTY`
   - `resources.gpu_arch` (sorted). A step limited to sm_80 can produce different numbers from one
     run on sm_90 (cuBLAS and cuDNN pick kernels, and so reduction orders, per architecture), so widening or narrowing the allowed
     architectures recomputes. `min_driver` is left out: it is a floor checked at run time, and
@@ -611,16 +624,19 @@ the step.
   - the adapter sha256 and `adapter_env_sha256`, the identity of the interpreter that runs the
     adapter. B12 passes the step venv's `installed_sha256` when the adapter runs there, or
     `cache.driver_env_sha256()` when it runs in the driver's env: a sha256 over `sys.version` and
-    the sorted `name==version` of every installed distribution except senselab itself (whose
-    driver-side behaviour is `driver_semantics`)
+    the sorted `name==version` of senselab's runtime dependency closure (its requirements with no
+    extra, followed transitively) as installed in the interpreter's own `purelib`/`platlib`.
+    `sys.path`, the cwd and `PYTHONPATH` are never read, so a stray checkout cannot shift it;
+    extras and dev groups are left out because the adapter may not import them. senselab itself
+    is left out, its reproduce code being `reproduce_source_sha256`.
   - `hf_weights`, sorted by (repo, repo_type), each entry's files sorted by path
   - the R `SESSION.json` and module-env sha256s (spec §15 item 5 keys both)
   - the metrics schema and expectations, `replicate`, and the upstream keys
-- **Staged data-root files are keyed through `inputs`.** A `stage` entry drawn from a data root
-  must repeat an `inputs` entry with the same root and the same patterns, in any order
-  (`E_SPEC_STAGE_UNDIGESTED`, a `StepSpec` validator), so one digest set covers both and editing
-  a staged file moves the key. Requiring the repeat, rather than digesting stage entries
-  separately, keeps a single list of digests per step. `checkout` stages are keyed by the commit
+- **Staged data-root files are keyed through `inputs` (rule "stage covered by inputs").** Every
+  pattern of a `stage` entry drawn from a data root must equal a pattern of some `inputs` entry with
+  the same root, possibly spread over several entries (`E_SPEC_STAGE_UNDIGESTED`, a `StepSpec`
+  validator), so one digest set covers both and editing a staged file moves the key. Requiring the
+  repeat, rather than digesting stage entries separately, keeps a single list of digests per step. `checkout` stages are keyed by the commit
   and patch set, `up:` stages by the upstream key.
 - **Pattern order is not keyed.** `digest.input_set_digest` digests the union of the matches (a
   file matching several patterns counts once, and entries are sorted), so pattern order carries no
@@ -648,10 +664,10 @@ the step.
   carry that file's sha256 before a run. Taking the post-prefetch sha256 as an argument instead
   would let a key depend on an uncommitted file.
 - **Serialization.** `canonical_json`: `json.dumps(sort_keys=True, separators=(",", ":"),
-  ensure_ascii=True, allow_nan=False)`, tagged `"schema": "reproduce-step-key-2"`. Mappings
+  ensure_ascii=True, allow_nan=False)`, tagged `"schema": "reproduce-step-key-3"`. Mappings
   (submodules, upstream, env, native) are dicts, so their caller-side order cannot matter. Floats
   in expectations are Pydantic-coerced, so `77` and `77.0` key alike. Changing what the payload
-  holds bumps the schema tag; changing driver behaviour bumps `driver_semantics`.
+  holds bumps the schema tag; changing driver code changes `reproduce_source_sha256` by itself.
 - **`hf_weights`.** Required on `StepSpec`, with no default, so every manifest states `[]` for a
   step that loads no weights (all tier-1 steps). Each entry is `{repo: "<org>/<name>", repo_type:
   model|dataset, revision: <40-hex commit>, files: [{path, sha256}, ...]}`. The revision is a
@@ -664,7 +680,10 @@ the step.
   directory, so a reader sees the old summary or the new one and never a torn file. It is the last
   write of a run, so any dir without it is incomplete. A failed run's summary (exit non-zero)
   stays readable for diagnosis and is cleared by `reset_result_dir(results_root, key)` when the
-  step is retried. A done dir is never reset (`E_RESULT_DONE`), a symlink or non-directory at the
+  step is retried. It wipes only when `summary.json` is absent or parses as an object with a
+  non-zero integer exit; any other read error, or a summary that is not such an object, is
+  `E_RESULT_UNREADABLE` and nothing is deleted, so a transient NFS or permission error can never
+  erase a finished result. A done dir is never reset (`E_RESULT_DONE`), a symlink or non-directory at the
   path is refused rather than removed (`E_RESULT_NOT_DIR`), and a failed removal or creation is
   `E_RESULT_RESET` with the `OSError` (which names the path) suppressed.
 - **Claims.** `claim` holds a `SharedFileLock` (heartbeat, stale takeover) on
@@ -700,6 +719,9 @@ the step.
     let each job compute its own key when it starts.
   - Every skip check re-hashes the step's input sets and native dirs. "Done" is never decided from
     a remembered key, so a skip on a large data root costs a full read of its declared inputs.
+  - The stage copy selects files with `digest.pattern_matches` and walks with the same rule as
+    `input_set_digest`: a pattern's wildcard-free prefix is resolved by path, and below it no
+    symlinked directory is descended. Otherwise the copied set and the keyed set could differ.
   - `SharedFileLock` logs a stale-takeover warning on the `senselab` logger, and it carries the
     `.claims` lock path under the results tree. B12 routes that logger to `{out}/logs/driver.log`
     only, never to the terminal.
@@ -709,7 +731,7 @@ the step.
 **Adapters.** Each step's adapter turns the analysis's own outputs into `metrics.json`, from a fixed
 vocabulary:
 
-- headline metrics, and per-class values
+- headline and secondary metrics, and per-class values
 - confusion counts
 - named counts
 - degrees of freedom
@@ -719,20 +741,32 @@ suppressed.
 
 **Why the vocabulary has the shape it has.**
 
-- `headline` is a list of entries, not a map, because one step can report the same metric for
+- `headline` (and `secondary`) is a list of entries, not a map, because one step can report the same metric for
   several systems (told apart by a declared `label`) or several test statistics of one name (told
   apart by their degrees of freedom).
 - Every name, label and count name an adapter may emit is declared in the manifest's
   `metrics_schema`. The declared names must all appear, so a pass rule cannot silently pass on a
   missing number.
-- **Headline names are bound to the step's kind:** classification {balanced_accuracy, macro_recall,
-  macro_f1, auroc, f1, accuracy, top1, pr_auc, mcc}; detection {avg_map, map_at}; statistic
-  {f_stat}; count {count}. Otherwise a step could declare itself `statistic` to escape the imbalance
-  rules while reporting an accuracy.
-- A classification step declares at least two classes and a `balanced_accuracy` or `macro_recall`
-  headline, so every classification row reports at least one imbalance-aware number. A baseline
-  such as a Bernoulli or majority-class predictor is a classification step like any other, with
-  `accuracy` beside its majority-class floor and `threshold_tuning: none`.
+- **Balanced accuracy is the only classification headline (Satra, 2026-10-07: "Raw accuracy is
+  unhelpful without a null rate, so only a balanced accuracy headline is helpful.").** A
+  classification step's `headline` is exactly `["balanced_accuracy"]`; anything else is the schema
+  error `E_SPEC_HEADLINE_NOT_BA`. Accuracy, top-1, macro F1, AUROC, PR-AUC, MCC and F1 may be declared
+  as `secondary` metrics. Secondary entries go through the same validation as headline entries
+  (value range, `floor` checked against `expected_floor`, `lift` required), so accuracy and top-1
+  always travel with their null rate, the majority-class prevalence. `macro_recall` was removed
+  from the vocabulary outright: it is the same quantity as balanced accuracy, and pre-alpha means
+  no aliases, so an adapter maps a source's `recall_macro` to `balanced_accuracy`.
+- **Names are bound to the step's kind** (`HEADLINES_BY_KIND`, `SECONDARY_BY_KIND`): classification
+  headline {balanced_accuracy} and secondary {accuracy, top1, macro_f1, auroc, pr_auc, mcc, f1};
+  detection headline {avg_map, map_at}; statistic {f_stat}; count {count}. Otherwise a step could
+  declare itself `statistic` to escape the imbalance rules while reporting an accuracy. Detection,
+  statistic and count steps take no secondary metrics (`E_SPEC_SECONDARY_NOT_ALLOWED`): none of the
+  tier-1 rows needs one, and a detection secondary would add names whose floors are presence-only
+  anyway. Adding them later is a vocabulary edit.
+- A classification step declares at least two classes. A baseline such as a Bernoulli or
+  majority-class predictor is a classification step like any other: the N4 baseline declares
+  headline `balanced_accuracy` (floor 1/k) and secondary `accuracy` with the majority-class floor,
+  and `threshold_tuning: none`.
 - Free text is never accepted. The only strings are declared labels and fixed words: `unit`
   (`fraction`, `pp`), `threshold_tuning`, `protocol`, and the split's `unit` and `stratify`, each
   from an enum in `metrics.py`. A new unit or stratification is added by editing that enum, in a
@@ -743,7 +777,7 @@ classification or detection step's output is refused unless it carries:
 
 - `prevalence` in [0, 1] for every declared class; for classification (single-label by definition
   here) also `recall` and `precision` for every class, and prevalences that sum to 1 within 1e-6
-- `floor` and `lift` on every headline entry; `lift` must equal value minus floor
+- `floor` and `lift` on every headline and secondary entry; `lift` must equal value minus floor
 - `threshold_tuning`: `validation`, `none` or `test`. `test` is accepted with the warning
   `W_TUNED_ON_TEST` (returned beside the clean object, not an error) so that a reproduction can
   record honestly that the source tuned its threshold on the test split; refusing it would force
@@ -753,9 +787,9 @@ classification or detection step's output is refused unless it carries:
 split (prevalence above 0) and that split's prevalences, the floor
 is checked within 1e-6 (scaled by 100 for a `pp` entry):
 
-| headline | floor |
+| metric | floor |
 |---|---|
-| balanced_accuracy, macro_recall | 1/k |
+| balanced_accuracy | 1/k |
 | auroc | 0.5 |
 | mcc | 0 |
 | accuracy, top1 | the largest class prevalence (majority class) |
@@ -826,11 +860,12 @@ non-zero value.
 output. Only the driver, evaluating `expect`, writes them; otherwise an adapter could report its own
 pass.
 
-**Metric addresses.** `expect` and `from_step` name a value as `<headline>`, `<headline>@<label>`,
+**Metric addresses.** `expect` and `from_step` name a value as `<name>`, `<name>@<label>` (a headline
+or secondary metric; the two name sets are disjoint, so a bare name is unambiguous),
 `counts.<name>`, `per_class.<label>.<field>` or `confusion.<cell>`. A manifest's `expect` metrics are
 checked against its own `metrics_schema` when the manifest loads, and `expect.unit` is `fraction`
 or `pp`. `from_step.metric` names a metric of the upstream step, so it is checked against the
-upstream step's schema when the DAG is assembled (B11), not here. A bare headline name that matches
+upstream step's schema when the DAG is assembled (B11), not here. A bare name that matches
 several entries is refused when read, rather than picking one.
 
 **Notes for `run.py` (B12).**

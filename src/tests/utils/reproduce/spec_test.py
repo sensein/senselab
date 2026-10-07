@@ -70,7 +70,8 @@ def _env() -> dict[str, Any]:
 def _metrics_schema(**over: Any) -> dict[str, Any]:  # noqa: ANN401
     schema: dict[str, Any] = {
         "kind": "classification",
-        "headline": ["top1", "macro_recall"],
+        "headline": ["balanced_accuracy"],
+        "secondary": ["top1"],
         "headline_labels": ["sys_a"],
         "counts": ["n_systems"],
         "per_class": ["walk", "run", "0"],
@@ -490,8 +491,27 @@ STEP_COUNTER_EXAMPLES: dict[str, tuple[dict[str, Any], str]] = {
     "metrics-schema-unknown-kind": ({"metrics_schema": _metrics_schema(kind="regression")}, "kind"),
     "metrics-schema-unknown-key": ({"metrics_schema": _metrics_schema(confusion=True)}, "Extra inputs"),
     "metrics-schema-headline-of-other-kind": (
-        {"metrics_schema": _metrics_schema(headline=["macro_recall", "f_stat"])},
-        "do not belong to kind classification",
+        {"metrics_schema": _metrics_schema(headline=["f_stat"])},
+        "E_SPEC_HEADLINE_NOT_BA",
+    ),
+    "metrics-schema-macro-recall-removed": (
+        {"metrics_schema": _metrics_schema(headline=["macro_recall"])},
+        "headline",
+    ),
+    "metrics-schema-ba-plus-accuracy-headline": (
+        {"metrics_schema": _metrics_schema(headline=["balanced_accuracy", "accuracy"])},
+        "E_SPEC_HEADLINE_NOT_BA",
+    ),
+    "metrics-schema-ba-as-secondary": (
+        {"metrics_schema": _metrics_schema(secondary=["balanced_accuracy"])},
+        "E_SPEC_SECONDARY_NOT_ALLOWED",
+    ),
+    "metrics-schema-secondary-on-statistic": (
+        {
+            "metrics_schema": _metrics_schema(kind="statistic", headline=["f_stat"], per_class=[], secondary=["mcc"]),
+            "expect": [],
+        },
+        "E_SPEC_SECONDARY_NOT_ALLOWED",
     ),
     "metrics-schema-detection-with-classification-name": (
         {"metrics_schema": _metrics_schema(kind="detection", headline=["avg_map", "top1"]), "expect": []},
@@ -501,9 +521,9 @@ STEP_COUNTER_EXAMPLES: dict[str, tuple[dict[str, Any], str]] = {
         {"metrics_schema": _metrics_schema(per_class=["walk"])},
         "at least two per_class labels",
     ),
-    "metrics-schema-no-chance-headline": (
-        {"metrics_schema": _metrics_schema(headline=["top1"])},
-        "balanced_accuracy or macro_recall",
+    "metrics-schema-accuracy-headline": (
+        {"metrics_schema": _metrics_schema(headline=["top1"], secondary=[])},
+        "E_SPEC_HEADLINE_NOT_BA",
     ),
     "metrics-schema-positive-not-declared": (
         {"metrics_schema": _metrics_schema(per_class=["walk", "run"], positive="jump")},
@@ -514,16 +534,21 @@ STEP_COUNTER_EXAMPLES: dict[str, tuple[dict[str, Any], str]] = {
         "positive must be one of exactly two",
     ),
     "metrics-schema-statistic-with-classes": (
-        {"metrics_schema": _metrics_schema(kind="statistic", headline=["f_stat"]), "expect": []},
+        {"metrics_schema": _metrics_schema(kind="statistic", headline=["f_stat"], secondary=[]), "expect": []},
         "takes no per_class labels",
     ),
     "metrics-schema-count-with-classes": (
-        {"metrics_schema": _metrics_schema(kind="count", headline=["count"], per_class=["a", "b"]), "expect": []},
+        {
+            "metrics_schema": _metrics_schema(kind="count", headline=["count"], secondary=[], per_class=["a", "b"]),
+            "expect": [],
+        },
         "takes no per_class labels",
     ),
     "metrics-schema-statistic-with-positive": (
         {
-            "metrics_schema": _metrics_schema(kind="statistic", headline=["f_stat"], per_class=[], positive="a"),
+            "metrics_schema": _metrics_schema(
+                kind="statistic", headline=["f_stat"], secondary=[], per_class=[], positive="a"
+            ),
             "expect": [],
         },
         "takes no per_class labels",
@@ -574,7 +599,7 @@ def test_step_validator_rejects_counter_example(case: str) -> None:
 
 
 @pytest.mark.parametrize(
-    "metric", ["top1", "macro_recall", "top1@sys_a", "counts.n_systems", "per_class.walk.recall", "confusion.fn"]
+    "metric", ["top1", "balanced_accuracy", "top1@sys_a", "counts.n_systems", "per_class.walk.recall", "confusion.fn"]
 )
 def test_expect_metric_addresses_resolve_against_the_schema(metric: str) -> None:
     """Every addressable form of a declared metric validates as an ``expect`` metric."""
@@ -592,7 +617,9 @@ def test_binary_schema_with_positive_and_split_opt_out() -> None:
 
 def test_statistic_schema_needs_no_classes() -> None:
     """A test-statistic step declares only its headline names."""
-    schema = _metrics_schema(kind="statistic", headline=["f_stat"], headline_labels=[], counts=[], per_class=[])
+    schema = _metrics_schema(
+        kind="statistic", headline=["f_stat"], secondary=[], headline_labels=[], counts=[], per_class=[]
+    )
     step = StepSpec.model_validate(_step(metrics_schema=schema, expect=[]))
     assert step.metrics_schema.headline == ["f_stat"]
     assert step.metrics_schema.per_class == []
