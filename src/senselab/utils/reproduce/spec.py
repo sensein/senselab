@@ -9,12 +9,15 @@ reduced step a draft manifest holds for ``prefetch --sources-only``.
 Files are YAML (``.yaml``/``.yml``) or JSON (``.json``).
 """
 
+import copy
 import datetime
 import json
 import os
 import re
+import stat
+import tempfile
 from collections import Counter
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path, PurePosixPath
 from typing import Annotated, Any, Literal
 
@@ -46,7 +49,7 @@ from senselab.utils.reproduce.metrics import (
 
 Commit = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{40}$")]
 Sha256 = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
-Name = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9_.-]+$")]
+Name = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9_][A-Za-z0-9_.-]*$")]
 Label = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9][A-Za-z0-9_+-]{0,63}$")]
 CountName = Annotated[str, StringConstraints(pattern=r"^[a-z][a-z0-9_]{0,63}$")]
 SourceRoot = Annotated[str, StringConstraints(pattern=r"^(up:)?[A-Za-z0-9_.-]+$")]
@@ -549,9 +552,13 @@ def _unique_names(steps: list[StepSpec]) -> list[StepSpec]:
 
 
 class Manifest(_Model):
-    """One analysis: a name and its steps."""
+    """One analysis: a name and its steps.
 
-    name: str
+    The analysis and step names name directories and appear in batch job names (``reproduce-<step>``),
+    which every user of the cluster can list, so they must not carry anything sensitive.
+    """
+
+    name: Name
     steps: list[StepSpec] = Field(min_length=1)
 
     _unique = field_validator("steps")(_unique_names)
@@ -692,6 +699,21 @@ def _read(path: Path) -> Any:  # noqa: ANN401
     raise ValueError(f"expected a .yaml, .yml or .json file: {path}")
 
 
+def parse_manifest(data: bytes, suffix: str) -> Manifest:
+    """Validate a manifest from bytes already read (so they can be hashed first).
+
+    Args:
+        data: The file's bytes.
+        suffix: ``.json``, ``.yaml`` or ``.yml``.
+
+    Returns:
+        The validated manifest.
+    """
+    if suffix not in (".json", ".yaml", ".yml"):
+        raise ValueError(f"expected a .yaml, .yml or .json file, not {suffix!r}")
+    return Manifest.model_validate(_parse(data.decode(), suffix))
+
+
 def load_manifest(path: str | os.PathLike[str]) -> Manifest:
     """Load and validate one manifest file.
 
@@ -720,16 +742,109 @@ def load_manifest_set(paths: Iterable[str | os.PathLike[str]]) -> list[StepSpec]
 
 
 def load_sources(path: str | os.PathLike[str]) -> list[SourceSpec]:
-    """Load a draft manifest: one source mapping or a list of them.
+    """Load a draft manifest for ``prefetch --sources-only``.
+
+    The file is one source mapping, a list of them, or a manifest-shaped ``{name, steps}`` whose steps
+    may still lack ``env`` and every other field: only each step's ``name``, ``repo``, ``commit`` and
+    ``submodules`` are read and validated.
 
     Args:
         path: A YAML or JSON draft manifest.
 
     Returns:
-        The validated sources.
+        The validated sources, in file order.
     """
     data = _read(Path(path))
+    if isinstance(data, dict) and "steps" in data:
+        steps = data["steps"]
+        if not isinstance(steps, list):
+            raise ValueError("a draft manifest's steps must be a list")
+        fields = SourceSpec.model_fields
+        data = [{k: v for k, v in step.items() if k in fields} if isinstance(step, dict) else step for step in steps]
     return [SourceSpec.model_validate(d) for d in (data if isinstance(data, list) else [data])]
+
+
+def _dump(data: Any, suffix: str) -> str:  # noqa: ANN401
+    if suffix == ".json":
+        return json.dumps(data, indent=2) + "\n"
+    return yaml.safe_dump(data, sort_keys=False)
+
+
+def _parse(text: str, suffix: str) -> Any:  # noqa: ANN401
+    return json.loads(text) if suffix == ".json" else yaml.safe_load(text)
+
+
+def _string_changes(old: Any, new: Any, out: dict[str, str]) -> bool:  # noqa: ANN401
+    """Collect ``{old: new}`` for string leaves that differ; False if anything else differs."""
+    if isinstance(old, dict) and isinstance(new, dict):
+        return old.keys() == new.keys() and all(_string_changes(old[k], new[k], out) for k in old)
+    if isinstance(old, list) and isinstance(new, list):
+        return len(old) == len(new) and all(_string_changes(a, b, out) for a, b in zip(old, new))
+    if old == new and type(old) is type(new):
+        return True
+    if isinstance(old, str) and isinstance(new, str) and out.get(old, new) == new:
+        out[old] = new
+        return True
+    return False
+
+
+def _substituted(text: str, old: Any, new: Any, suffix: str) -> str | None:  # noqa: ANN401
+    """The file text with each changed string replaced in place, when each occurs exactly once as a token."""
+    changes: dict[str, str] = {}
+    if not _string_changes(old, new, changes):
+        return None
+    for before, after in changes.items():
+        token = re.compile(rf"(?<![A-Za-z0-9_]){re.escape(before)}(?![A-Za-z0-9_])")
+        if not before or len(token.findall(text)) != 1 or not _PLAIN_WORD.match(after):
+            return None
+        text = token.sub(lambda _: after, text)
+    return text if _parse(text, suffix) == new else None
+
+
+_PLAIN_WORD = re.compile(r"^[A-Za-z0-9_.-]+$")
+
+
+def rewrite_manifest(path: str | os.PathLike[str], edit: Callable[[Any], None]) -> bool:
+    """Apply ``edit`` to a manifest file's parsed data and write the result back atomically.
+
+    When every change replaces a plain word (a sha256, say) that occurs once in the file, the file text
+    is edited in place, so comments, anchors and layout survive; otherwise the data is dumped again
+    (``yaml.safe_dump`` keeps key order but drops comments and expands anchors). The result must still
+    be a valid `Manifest`.
+
+    Args:
+        path: The manifest file (YAML or JSON).
+        edit: Changes the parsed data in place.
+
+    Returns:
+        True if the file changed.
+
+    Raises:
+        ValueError: If the edited data is not a valid manifest.
+    """
+    path = Path(path)
+    text = path.read_text()
+    data = _parse(text, path.suffix)
+    new = copy.deepcopy(data)
+    edit(new)
+    if new == data:
+        return False
+    Manifest.model_validate(new)
+    out = _substituted(text, data, new, path.suffix)
+    if out is None:
+        out = _dump(new, path.suffix)
+        if _parse(out, path.suffix) != new:
+            raise ValueError(f"{path.name}: the edited manifest does not round-trip")
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as handle:
+            handle.write(out)
+        os.chmod(tmp, stat.S_IMODE(path.stat().st_mode))
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+    return True
 
 
 def load_profile(path: str | os.PathLike[str]) -> Profile:
