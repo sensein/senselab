@@ -208,6 +208,7 @@ def _keyed(step: StepSpec, profile: Profile) -> tuple[dict[str, str], dict[str, 
     literal |= {v: PROXY for v in PROXY_VARS} | {v.upper(): PROXY for v in PROXY_VARS} | {v: "" for v in NO_PROXY_VARS}
     if step.env.r_lib is not None:
         templated["R_LIBS"] = step.env.r_lib
+        templated["R_LIBS_USER"] = step.env.r_lib
         literal["R_LIBS_SITE"] = ""
     return {**profile.env, **literal}, templated
 

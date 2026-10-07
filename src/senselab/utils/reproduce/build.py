@@ -2,10 +2,11 @@
 
 Each :class:`SdistSpec` is built in its own build venv, made from its hashed ``build_env`` lock (and
 the env's torch lock when given), with ``uv build --wheel --no-build-isolation``, an allowlisted
-environment (:func:`build_environment`), a fixed ``SOURCE_DATE_EPOCH`` and umask, and no index or
-proxy reachable. Wheels are stored content-addressed, ``<wheelhouse>/<wheel sha256>/<wheel file>``,
-and never overwritten. The first build records the wheel in ``wheels.lock``; later calls reuse it
-after checking its sha256, and only ``rebuild`` builds again, adding a new wheel beside the old one.
+environment (:func:`build_environment`), a fixed ``SOURCE_DATE_EPOCH`` and umask, inside the step
+sandbox's network namespace (:func:`wheel_build_argv`), so no index or host is reachable. Wheels
+are stored content-addressed, ``<wheelhouse>/<wheel sha256>/<wheel file>``, and never overwritten.
+The first build records the wheel in ``wheels.lock``; later calls reuse it after checking its
+sha256, and only ``rebuild`` builds again, adding a new wheel beside the old one.
 
 ``wheels.lock`` has one whitespace-separated line per sdist under a column header::
 
@@ -41,6 +42,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import NamedTuple
 
+from senselab.utils.reproduce import sandbox
 from senselab.utils.reproduce.lockgen import find_uv
 from senselab.utils.reproduce.locks import ReproduceLockError, file_sha256, lock_entries, normalize_name, verify_files
 from senselab.utils.reproduce.spec import FileRef, LockRef, Profile, SdistSpec, TorchSpec
@@ -292,21 +294,64 @@ def in_modules(sdist: SdistSpec, argv: list[str]) -> list[str]:
     return ["bash", "--noprofile", "--norc", "-c", script, "bash", *argv]
 
 
-def wheel_build_argv(uv: str, sdist: SdistSpec, build_python: Path, src: Path, out_dir: Path) -> list[str]:
-    """The exact argv that builds the wheel: ``uv build --wheel --no-build-isolation``, inside :func:`in_modules`.
+def wheel_build_argv(
+    uv: str, build_python: Path, src: Path, out_dir: Path, *, venv: Path, writable: Iterable[Path]
+) -> list[str]:
+    """The exact argv that builds the wheel: ``uv build --wheel --no-build-isolation`` inside the sandbox.
+
+    The build runs in :func:`sandbox.sandbox_argv`'s namespaces: no network, the build venv mounted
+    read-only, every capability dropped. Modules are not loaded inside; their variables reach the
+    build through :func:`build_environment`.
 
     Args:
         uv: The uv executable.
-        sdist: The sdist spec.
         build_python: The build venv's interpreter.
         src: The unpacked, patched sdist.
         out_dir: Where uv writes the wheel.
+        venv: The build venv, mounted read-only.
+        writable: Directories the build writes (the source, the output, ``HOME``, ``TMPDIR``).
 
     Returns:
         The argv.
     """
     argv = [uv, "build", "--no-config", "--wheel", "--no-build-isolation", "--python", str(build_python)]
-    return in_modules(sdist, [*argv, "--out-dir", str(out_dir), str(src)])
+    return sandbox.sandbox_argv([*argv, "--out-dir", str(out_dir), str(src)], [], writable, [venv])
+
+
+_UNRECORDED_VARS = frozenset({"_", "SHLVL", "PWD", "OLDPWD"})
+
+
+def _capture_env(argv: list[str], env: dict[str, str]) -> str:
+    """Run a command that prints ``env -0``; raise with the tail of its output if it fails."""
+    result = subprocess.run(argv, env=env, capture_output=True, text=True, check=False)
+    if result.returncode != 0:
+        output = (result.stdout + result.stderr).strip()[-_TAIL:]
+        raise ReproduceLockError(f"loading build modules failed ({result.returncode}): {output}")
+    return result.stdout
+
+
+def module_environment(sdist: SdistSpec, base: Mapping[str, str]) -> dict[str, str]:
+    """The variables the sdist's ``build_modules`` set, captured outside the sandbox.
+
+    Runs :func:`in_modules` around ``env -0`` with ``base`` (so the nvcc guard and ``CUDA_HOME`` apply)
+    and returns every variable that is new or changed, except shell bookkeeping (``_``, ``SHLVL``,
+    ``PWD``, ``OLDPWD``).
+
+    Args:
+        sdist: The sdist spec; without ``build_modules`` nothing runs.
+        base: :func:`base_environment`.
+
+    Returns:
+        Name to value; empty without modules.
+
+    Raises:
+        ReproduceLockError: If loading the modules fails.
+    """
+    if not sdist.build_modules:
+        return {}
+    text = _capture_env(in_modules(sdist, ["env", "-0"]), dict(base))
+    pairs = dict(item.split("=", 1) for item in text.split("\0") if "=" in item)
+    return {k: v for k, v in pairs.items() if k not in _UNRECORDED_VARS and base.get(k) != v}
 
 
 def _uv_location(uv: str, variable: str, args: list[str]) -> str:
@@ -352,8 +397,10 @@ def base_environment(uv: str, work_dir: Path) -> dict[str, str]:
     return env
 
 
-def build_environment(sdist: SdistSpec, base: Mapping[str, str], venv: Path) -> dict[str, str]:
-    """The wheel build's environment: ``base`` with the venv on ``PATH``, the declared and fixed variables.
+def build_environment(
+    sdist: SdistSpec, base: Mapping[str, str], venv: Path, module_env: Mapping[str, str] | None = None
+) -> dict[str, str]:
+    """The wheel build's environment: ``base``, module variables, the venv first on ``PATH``, declared and fixed ones.
 
     The fixed variables are ``SOURCE_DATE_EPOCH``, ``TORCH_CUDA_ARCH_LIST`` (when declared) and
     :data:`OFFLINE_ENV`, so the build reaches no index or proxy.
@@ -362,6 +409,7 @@ def build_environment(sdist: SdistSpec, base: Mapping[str, str], venv: Path) -> 
         sdist: The sdist spec.
         base: :func:`base_environment`.
         venv: The build venv.
+        module_env: :func:`module_environment`; its ``PATH`` follows the venv's ``bin``.
 
     Returns:
         A new mapping.
@@ -372,7 +420,9 @@ def build_environment(sdist: SdistSpec, base: Mapping[str, str], venv: Path) -> 
     fixed = {"SOURCE_DATE_EPOCH": SOURCE_DATE_EPOCH, **OFFLINE_ENV}
     if sdist.torch_cuda_arch_list is not None:
         fixed["TORCH_CUDA_ARCH_LIST"] = sdist.torch_cuda_arch_list
-    env = {**base, "PATH": f"{venv / 'bin'}:{SYSTEM_PATH}"}
+    modules = dict(module_env or {})
+    path = modules.pop("PATH", SYSTEM_PATH)
+    env = {**base, **modules, "PATH": f"{venv / 'bin'}:{path}"}
     clash = sorted((set(env) | set(fixed) | {"TORCH_CUDA_ARCH_LIST"}) & set(sdist.build_env_vars))
     if clash:
         raise ReproduceLockError(f"build_env_vars of {sdist.name} may not set {clash}")
@@ -395,14 +445,14 @@ def _build_info(uv: str, sdist: SdistSpec, python: str, env: dict[str, str]) -> 
     info: dict[str, object] = {
         "python_exact": python,
         "uv": _capture([uv, "--version"], env),
-        "gcc": _first_line(_capture(in_modules(sdist, ["gcc", "--version"]), env)),
+        "gcc": _first_line(_capture(["gcc", "--version"], env)),
         "build_modules": list(sdist.build_modules),
         "torch_cuda_arch_list": sdist.torch_cuda_arch_list,
         "build_env_vars": dict(sorted(sdist.build_env_vars.items())),
         "source_date_epoch": SOURCE_DATE_EPOCH,
     }
     if needs_nvcc(sdist):
-        info["nvcc"] = _last_line(_capture(in_modules(sdist, ["nvcc", "--version"]), env))
+        info["nvcc"] = _last_line(_capture(["nvcc", "--version"], env))
     return info
 
 
@@ -460,7 +510,8 @@ def build_wheel(
     In order: the build lock, torch lock and patches are copied from ``base_dir`` and the copies
     checked against their manifest sha256s; the sdist is fetched, its bytes read once, checked,
     unpacked and patched; the build venv is created and the verified torch lock, then the build
-    lock, are installed ``--no-deps --require-hashes``; the wheel is built (:func:`wheel_build_argv`,
+    lock, are installed ``--no-deps --require-hashes``; the modules' variables are captured
+    (:func:`module_environment`); the wheel is built in the sandbox (:func:`wheel_build_argv`,
     :func:`build_environment`) and stored content-addressed in ``out_dir`` with a
     ``<wheel>.build-info.json`` beside it (uv, gcc and nvcc versions, modules, ``python``).
 
@@ -512,8 +563,9 @@ def build_wheel(
     _run(_install_argv(uv, build_python, inputs / sdist.build_env.lock, None, binary_only=True), env=base)
 
     dist = work_dir / "dist"
-    env = build_environment(sdist, base, venv)
-    _run(wheel_build_argv(uv, sdist, build_python, src, dist), env=env)
+    env = build_environment(sdist, base, venv, module_environment(sdist, base))
+    writable = [src.parent, dist, work_dir / "home", work_dir / "tmp"]
+    _run(wheel_build_argv(uv, build_python, src, dist, venv=venv, writable=writable), env=env)
     wheels = sorted(dist.glob("*.whl")) if dist.is_dir() else []
     if len(wheels) != 1:
         raise ReproduceLockError(f"building {sdist.name} produced {len(wheels)} wheels, expected 1")

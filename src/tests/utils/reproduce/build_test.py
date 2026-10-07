@@ -19,7 +19,7 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from senselab.utils.reproduce import build
+from senselab.utils.reproduce import build, sandbox
 from senselab.utils.reproduce.locks import ReproduceLockError, file_sha256, lock_entries
 from senselab.utils.reproduce.spec import FileRef, LockRef, Profile, SdistSpec, TorchSpec
 
@@ -162,10 +162,12 @@ def test_build_wheel_argv_env_and_patch(tmp_path: Path, fake_run: FakeRun) -> No
         *(UV, "pip", "install", "--no-config", "--python", py, "--no-deps", "--require-hashes"),
         *("--only-binary", ":all:", "-r", str(work / "inputs" / "envs/a/build.lock")),
     ]
-    assert argvs[2] == [
+    inner = [
         *(UV, "build", "--no-config", "--wheel", "--no-build-isolation", "--python", py),
         *("--out-dir", str(work / "dist"), str(work / "src" / "demo-1.0")),
     ]
+    assert argvs[2][: len(sandbox.UNSHARE)] == sandbox.UNSHARE and argvs[2][-len(inner) :] == inner
+    assert f"remount,bind,ro {venv}" in argvs[2][len(sandbox.UNSHARE) + 2]
     info = json.loads(wheel.with_name(wheel.name + ".build-info.json").read_text())
     assert info["python_exact"] == "3.11.15"
     assert info["uv"] == "uv 1.0" and info["gcc"] == "gcc 1.0"
@@ -256,22 +258,45 @@ def test_patch_that_does_not_apply_raises(tmp_path: Path, fake_run: FakeRun) -> 
     assert fake_run.calls == []
 
 
-def test_modules_wrap_the_build_without_dotfiles(tmp_path: Path) -> None:
-    """With modules the build runs inside ``bash --noprofile --norc -c '. <init> && module load … && exec "$@"'``."""
-    spec, _ = _setup(tmp_path, build_modules=["gcc/12.2.0", "cuda/12.9.1"])
-    argv = build.wheel_build_argv(UV, spec, Path("/w/venv/bin/python"), Path("/w/src/demo-1.0"), Path("/w/dist"))
+def test_build_runs_in_the_sandbox() -> None:
+    """The build argv is the sandbox prefix around ``uv build``, the venv read-only, no module loading inside."""
+    w = Path("/w")
+    writable = [w / "src", w / "dist", w / "home", w / "tmp"]
+    argv = build.wheel_build_argv(
+        UV, w / "venv/bin/python", w / "src/demo-1.0", w / "dist", venv=w / "venv", writable=writable
+    )
     inner = [UV, "build", "--no-config", "--wheel", "--no-build-isolation", "--python", "/w/venv/bin/python"]
     inner += ["--out-dir", "/w/dist", "/w/src/demo-1.0"]
+    assert argv[: len(sandbox.UNSHARE)] == sandbox.UNSHARE
+    assert argv[len(sandbox.UNSHARE) :] == [sandbox.SH, "-c", argv[len(sandbox.UNSHARE) + 2], "sh", *inner]
+    script = argv[len(sandbox.UNSHARE) + 2]
+    assert "remount,bind,ro /w/venv" in script and "module" not in script
+
+
+def test_module_variables_reach_the_sandboxed_build(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Modules load outside the namespace (``in_modules`` around ``env -0``); their variables are passed as values."""
+    spec, _ = _setup(tmp_path, build_modules=["gcc/12.2.0", "cuda/12.9.1"], build_env_vars={"MAX_JOBS": "4"})
+    seen: list[list[str]] = []
+    base = {"PATH": "/usr/bin:/bin", "HOME": "/w/home", "SHLVL": "1"}
+
+    def capture(argv: list[str], env: dict[str, str]) -> str:
+        seen.append(argv)
+        assert env == base
+        return "PATH=/m/gcc/bin:/m/cuda/bin:/usr/bin:/bin\0CUDA_HOME=/m/cuda\0HOME=/w/home\0SHLVL=2\0_=/usr/bin/env\0"
+
+    monkeypatch.setattr(build, "_capture_env", capture)
+    module_env = build.module_environment(spec, base)
+    assert module_env == {"PATH": "/m/gcc/bin:/m/cuda/bin:/usr/bin:/bin", "CUDA_HOME": "/m/cuda"}
+    (argv,) = seen
     assert argv[:4] == ["bash", "--noprofile", "--norc", "-c"]
     assert argv[4].startswith(". /etc/profile.d/modules.sh && module load gcc/12.2.0 cuda/12.9.1 && ")
-    assert "if ! command -v nvcc >/dev/null; then" in argv[4]
-    assert "export CUDA_HOME=" in argv[4]
-    assert argv[4].endswith('exec "$@"')
-    assert argv[5:] == ["bash", *inner]
+    assert "if ! command -v nvcc >/dev/null; then" in argv[4] and "export CUDA_HOME=" in argv[4]
+    assert argv[5:] == ["bash", "env", "-0"]
+    env = build.build_environment(spec, base, Path("/w/venv"), module_env)
+    assert env["PATH"] == "/w/venv/bin:/m/gcc/bin:/m/cuda/bin:/usr/bin:/bin" and env["CUDA_HOME"] == "/m/cuda"
+    assert env["MAX_JOBS"] == "4" and env["UV_OFFLINE"] == "1"
     plain, _ = _setup(tmp_path / "plain")
-    assert (
-        build.wheel_build_argv(UV, plain, Path("/w/venv/bin/python"), Path("/w/src/demo-1.0"), Path("/w/dist")) == inner
-    )
+    assert build.module_environment(plain, base) == {} and len(seen) == 1
 
 
 def test_nvcc_is_required_only_for_cuda_builds(tmp_path: Path) -> None:
@@ -759,3 +784,47 @@ def test_build_python_speech_features_matches_spike(tmp_path: Path, monkeypatch:
         check=False,
     )
     assert check.returncode == 0
+
+
+NET_SETUP_PY = """import socket
+from setuptools import setup
+
+try:
+    socket.create_connection(("pypi.org", 443), timeout=5).close()
+except OSError:
+    pass
+else:
+    raise SystemExit("NETWORK REACHABLE FROM THE BUILD")
+setup(name="demo", version="1.0", py_modules=["demo"])
+"""
+
+
+@pytest.mark.slow
+def test_build_has_no_network(tmp_path: Path) -> None:
+    """A setup.py that refuses to build when it can reach the network builds: the build runs in the namespace."""
+    if not sandbox.userns_available():
+        pytest.skip("no user namespaces here")
+    import socket
+
+    socket.create_connection(("pypi.org", 443), timeout=5).close()  # control: the host itself has network
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w:gz") as tar:
+        for name, text in (("setup.py", NET_SETUP_PY), ("demo.py", "VALUE = 1\n")):
+            data = text.encode()
+            info = tarfile.TarInfo(f"demo-1.0/{name}")
+            info.size = len(data)
+            tar.addfile(info, io.BytesIO(data))
+    sdist = tmp_path / "upstream" / "demo-1.0.tar.gz"
+    sdist.parent.mkdir(parents=True)
+    sdist.write_bytes(buffer.getvalue())
+    base = tmp_path / "manifests"
+    base.mkdir()
+    shutil.copyfile(DATA / "psf_build.lock", base / "build.lock")
+    spec = SdistSpec(
+        name="demo",
+        url=sdist.as_uri(),
+        sha256=file_sha256(sdist),
+        build_env=LockRef(lock="build.lock", lock_sha256=file_sha256(base / "build.lock")),
+    )
+    wheel, _ = build.build_wheel(spec, base, tmp_path / "wh", python="3.11.15", work_dir=tmp_path / "work")
+    assert wheel.name == "demo-1.0-py3-none-any.whl"
