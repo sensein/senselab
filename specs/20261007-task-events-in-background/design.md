@@ -587,3 +587,51 @@ the merge writes `triage_decisions.parquet`, `triage_decisions.tsv` and `triage_
 
 `triage_evidence` holds one row per (recording, item) with `group`, the item's fields and
 `decisive`. In the TSV, list and struct columns are compact JSON.
+
+## Unit C step 1: the session floor and the background before the branches (built)
+
+**The DAG.** `GRAPH_ORDER` is ADMIT, PREPROCESS, SESSION, BACKGROUND, TAXONOMY, routing, the
+branches, QUALITY, REDACT, REVIEW, VERDICT (`vocabulary.py`).
+
+- **PREPROCESS** gains a `background_floor` block after `residual`
+  (`nodes/background.py:write_own_floor`): the recording's own per-band floor (`floor_of` with no
+  session), its source and quiet seconds, the residual's floor, and its active level (the 95th
+  percentile of the broadband level over live frames).
+- **SESSION** (`write_session_floor`) aggregates the own floors of one BIDS session
+  (`sub-<label>_ses-<label>` off the stem). A single-file run sees no siblings and records
+  `floor_source: recording`; the corpus pass is `scripts/extend_session_floor.py`, sharded by session.
+- **BACKGROUND** (`write_background`) reads activity regions, impulses, hum and faults against the
+  session-informed floor and writes `background_model` plus `derivatives/background_view.npz`, the
+  frames, floor, impulses and regions at full precision. A store without a session floor or a plain
+  stream gets `background_model` with `missing` only.
+- **The branches** read that view (`task_events.generic_view_of`) instead of recomputing it. Breath
+  and cough name `background_model` as an absent input where it is missing; VOICE, which decides on
+  phonation alone, keeps its reading and loses only its task evidence. QUALITY no longer writes the
+  background. Routing's emptiness rule is unchanged in this step: it runs after BACKGROUND, but still
+  reads the YAMNet peaks; moving it onto the activity regions is a decision change for the join.
+- **The replay** re-runs the graph from BACKGROUND (`extend.REPLAYED_NODES`). On the cluster:
+  `extend_background_floor.py` over the corpus, then `extend_session_floor.py`, then
+  `extend_replay_decisions.py`.
+
+**The session-floor rule** (`data/background_model.yaml`, `session:`, version 2):
+
+- **Members:** recordings whose own floor was read over quiet frames, with matching bands; at least
+  `members_min` (3) of them, else the session has no floor. A task that fills its file reads the task
+  itself as its floor; its own floor is one member among several, and the median keeps it out.
+- **Statistic:** the per-band median of the members' own floors.
+- **Use:** a recording takes the session floor where its own floor stands `gap_db` (25 dB, median
+  over bands) over it, the same cut the residual check fitted on the labels (noise and breath
+  recordings 5–20 dB, task-filling vowels 27–62 dB over the residual). Otherwise the residual check
+  applies as before, then the own floor. Where the session floor is the recording's own, the reading
+  is bit for bit the one with no session.
+- **Recorded beside it:** `level_rel_db`, the recording's active level less its session's median, and
+  `floor_rel_db`, its broadband own floor less the session floor. A recording that captured only the
+  room stands far under its session's level; deciding on that is the join's, not this step's.
+- `members_min` and `gap_db` are unfitted.
+
+**A reading missing its decision inputs is not measured.** `nodes/verdict.py:DECISION_INPUTS` names
+the attributes the fold decides each task reading on (breath `decision`, cough `onsets_n` and
+`review`, phonation `found`). A stored reading lacking one becomes the owner's absent input
+`<node>:<reading>.<field>`, so the recording is `review` / `not_measured` with an evidence item
+naming the field, never a pass. The re-fold dry run of 100 r17 stores passed six pre-unit-B breath
+readings, which had no `decision`, silently.
