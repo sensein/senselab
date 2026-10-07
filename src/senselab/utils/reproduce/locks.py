@@ -18,9 +18,9 @@ import json
 import re
 import tomllib
 import urllib.parse
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
 from senselab.utils.reproduce.spec import EnvSpec, FileRef
 
@@ -318,7 +318,11 @@ def _group(entries: Iterable[LockEntry]) -> dict[str, list[LockEntry]]:
 
 
 def _overlay_problems(
-    env: EnvSpec, overlay: list[LockEntry], base: list[LockEntry], torch_names: set[str]
+    env: EnvSpec,
+    overlay: list[LockEntry],
+    base: list[LockEntry],
+    torch_names: set[str],
+    in_family: Callable[[str], bool],
 ) -> list[str]:
     pinned = _group(base)
     held_out = {normalize_name(s.name) for s in env.sdist_allow} | {normalize_name(n) for n in env.extra_no_emit}
@@ -326,7 +330,7 @@ def _overlay_problems(
     for name, entries in sorted(_group(overlay).items()):
         if name in held_out:
             problems.append(f"{name}: held out of the base locks (sdist_allow or extra_no_emit)")
-        elif is_torch_family(name) and name not in torch_names:
+        elif in_family(name) and name not in torch_names:
             problems.append(f"{name}: torch-family name absent from torch.lock")
         elif name not in pinned:
             continue
@@ -359,13 +363,44 @@ def _resolve_reference(resolve: list[LockEntry]) -> dict[str, list[tuple[str, se
     return out
 
 
-def _uv_lock_reference(uv_lock: Path) -> dict[str, list[tuple[str, set[str] | None]]]:
+def uv_lock_torch_family(packages: Iterable[Mapping[str, Any]], roots: Iterable[str]) -> set[str]:
+    """Return the torch family a repository ``uv.lock`` implies.
+
+    The family is the roots plus the torch-family-named packages (``nvidia-*``, ``triton``, …) in the
+    transitive closure of the roots' ``dependencies``, over every marker. A CUDA-named package that only
+    another project dependency pulls in is not part of it.
+
+    Args:
+        packages: The ``[[package]]`` tables of a parsed ``uv.lock``.
+        roots: ``torch``, ``torchvision`` and ``torchaudio`` names present in ``torch.lock``.
+
+    Returns:
+        Normalised names.
+    """
+    deps: dict[str, set[str]] = {}
+    for package in packages:
+        names = {normalize_name(d["name"]) for d in package.get("dependencies", [])}
+        deps.setdefault(normalize_name(package["name"]), set()).update(names)
+    seen = {normalize_name(r) for r in roots}
+    stack = list(seen)
+    while stack:
+        for dep in deps.get(stack.pop(), set()) - seen:
+            seen.add(dep)
+            stack.append(dep)
+    return {n for n in seen if is_torch_family(n)}
+
+
+def _uv_lock_reference(
+    packages: list[dict[str, Any]], family: set[str]
+) -> dict[str, list[tuple[str, set[str] | None]]]:
     out: dict[str, list[tuple[str, set[str] | None]]] = {}
-    for package in tomllib.loads(uv_lock.read_text()).get("package", []):
+    for package in packages:
         name = normalize_name(package["name"])
-        if is_torch_family(name):
+        if name in family:
             hashes = {w["hash"].removeprefix("sha256:") for w in package.get("wheels", []) if "hash" in w}
             out.setdefault(name, []).append((package["version"], hashes))
+    for name in family - set(out):
+        out[name] = []
     return out
 
 
@@ -376,6 +411,8 @@ def check_integrity(env: EnvSpec, base_dir: Path, uv_lock: Path | None = None) -
     the ``requirements.in``, config and overrides sha256s and the recomputed header digest; the
     ``first_resolve`` sha256; overlay pins against the base locks; torch-family pins against
     ``first_resolve`` (``requirements.in`` bodies) or the repository ``uv.lock`` (uv-export bodies).
+    Against ``uv.lock`` the torch family is :func:`uv_lock_torch_family`, which also decides which
+    names an overlay may not pin; otherwise it is the name rule of :func:`is_torch_family`.
 
     The returned sha256s describe the bytes read here. The installer copies each file into ``{tmp}``,
     checks the copy against this mapping and installs from the copy, never from ``base_dir``.
@@ -424,10 +461,18 @@ def check_integrity(env: EnvSpec, base_dir: Path, uv_lock: Path | None = None) -
         _verify(base_dir, env.first_resolve.file, env.first_resolve.sha256, "first_resolve", verified)
 
     torch = _entries(base_dir, env.torch.lock) if env.torch is not None else []
+    torch_names = {e.name for e in torch}
     base = _entries(base_dir, body.lock) + torch
+    in_family: Callable[[str], bool] = is_torch_family
+    uv_packages: list[dict[str, Any]] = []
+    family: set[str] = set()
+    if env.torch is not None and body.source == "uv-export" and uv_lock is not None:
+        uv_packages = tomllib.loads(uv_lock.read_text()).get("package", [])
+        family = uv_lock_torch_family(uv_packages, torch_names & TORCH_NAMES)
+        in_family = family.__contains__
     for what, ref in (("test", env.test), ("notebook_tools", env.notebook_tools)):
         if ref is not None:
-            problems = _overlay_problems(env, _entries(base_dir, ref.lock), base, {e.name for e in torch})
+            problems = _overlay_problems(env, _entries(base_dir, ref.lock), base, torch_names, in_family)
             if problems:
                 raise ReproduceLockError(f"{what} overlay refused: {problems}")
 
@@ -440,7 +485,7 @@ def check_integrity(env: EnvSpec, base_dir: Path, uv_lock: Path | None = None) -
     else:
         if uv_lock is None:
             raise ReproduceLockError("a uv-export body with a torch lock needs the repository uv.lock to check against")
-        reference = _uv_lock_reference(uv_lock)
+        reference = _uv_lock_reference(uv_packages, family)
     problems = _torch_problems(torch, reference)
     if problems:
         raise ReproduceLockError(f"torch lock {env.torch.lock} disagrees: {problems}")

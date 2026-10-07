@@ -474,13 +474,69 @@ def test_unhashed_torch_entry_is_refused(tmp_path: Path) -> None:
         check_integrity(_rehash(tmp_path, raw), tmp_path, uv_lock=_uv_lock(tmp_path))
 
 
-def test_torch_family_name_in_uv_lock_missing_from_torch_lock_is_refused(tmp_path: Path) -> None:
-    """A torch-family package in the repository ``uv.lock`` must be in torch.lock."""
+CUBLAS_URL = "https://files.example/nvidia_cublas_cu12-12.8.4.1-py3-none-manylinux_2_27_x86_64.whl"
+CUBLAS_PACKAGE = f"""
+[[package]]
+name = "nvidia-cublas-cu12"
+version = "12.8.4.1"
+source = {{ registry = "https://pypi.org/simple" }}
+wheels = [
+    {{ url = "{CUBLAS_URL}", hash = "sha256:{CUBLAS_SHA}" }},
+]
+"""
+
+
+def _closure_uv_lock(base: Path, torch_needs_cublas: bool = False) -> Path:
+    path = base / "repo" / "uv.lock"
+    path.parent.mkdir()
+    text = (DATA / "uv_closure_small.lock").read_text()
+    if torch_needs_cublas:
+        nvtx = '    { name = "nvidia-nvtx-cu12", marker'
+        text = text.replace(nvtx, '    { name = "nvidia-cublas-cu12" },\n' + nvtx, 1) + CUBLAS_PACKAGE
+    path.write_text(text)
+    return path
+
+
+def test_cuda_names_outside_the_torch_closure_are_not_required(tmp_path: Path) -> None:
+    """A CUDA-named package that only a non-torch dependency pulls in is not part of the torch family."""
     raw = _build(tmp_path, "uv-export")
-    uv_lock = _uv_lock(tmp_path)
-    _append(uv_lock, '\n[[package]]\nname = "torchaudio"\nversion = "2.8.0+cu128"\nsource = { registry = "x" }\n')
-    with pytest.raises(ReproduceLockError, match="torchaudio: in the reference, absent from torch.lock"):
+    uv_lock = _closure_uv_lock(tmp_path)
+    assert 'name = "cuda-bindings"' in uv_lock.read_text()
+    check_integrity(EnvSpec.model_validate(raw), tmp_path, uv_lock=uv_lock)
+
+
+def test_torch_dependency_missing_from_torch_lock_is_refused(tmp_path: Path) -> None:
+    """An ``nvidia-*`` package torch depends on in ``uv.lock`` must be in torch.lock."""
+    raw = _build(tmp_path, "uv-export")
+    uv_lock = _closure_uv_lock(tmp_path, torch_needs_cublas=True)
+    with pytest.raises(ReproduceLockError, match="nvidia-cublas-cu12: in the reference, absent from torch.lock"):
         check_integrity(EnvSpec.model_validate(raw), tmp_path, uv_lock=uv_lock)
+
+
+def test_torch_root_missing_from_uv_lock_closure_is_refused(tmp_path: Path) -> None:
+    """A torch.lock entry outside the ``uv.lock`` torch closure has no reference version."""
+    raw = _build(tmp_path, "uv-export")
+    uv_lock = _closure_uv_lock(tmp_path)
+    _replace(uv_lock, '    { name = "triton", marker', '    { name = "not-triton", marker')
+    with pytest.raises(ReproduceLockError, match=r"triton: torch\.lock 3\.4\.0, reference \[\]"):
+        check_integrity(EnvSpec.model_validate(raw), tmp_path, uv_lock=uv_lock)
+
+
+@pytest.mark.parametrize(
+    "torch_needs_cublas, refused",
+    [(False, False), (True, True)],
+)
+def test_overlay_torch_rule_uses_the_uv_lock_closure(tmp_path: Path, torch_needs_cublas: bool, refused: bool) -> None:
+    """With a repository ``uv.lock``, an overlay may pin a CUDA name torch does not depend on, not one it does."""
+    raw = _build(tmp_path, "uv-export")
+    uv_lock = _closure_uv_lock(tmp_path, torch_needs_cublas)
+    _append(tmp_path / raw["test"]["lock"], f"nvidia-cublas-cu12==12.8.4.1 --hash=sha256:{CUBLAS_SHA}\n")
+    env = _rehash(tmp_path, raw)
+    if refused:
+        with pytest.raises(ReproduceLockError, match="nvidia-cublas-cu12: torch-family name absent"):
+            check_integrity(env, tmp_path, uv_lock=uv_lock)
+    else:
+        check_integrity(env, tmp_path, uv_lock=uv_lock)
 
 
 def test_uv_export_torch_env_needs_the_repository_lock(tmp_path: Path) -> None:
