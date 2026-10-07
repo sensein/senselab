@@ -33,8 +33,13 @@ PROV_TYPE = Literal[
     "target_match",
     "branch_decision",
     "enrollment",
+    "artifact",
 ]
 """Every entity type the store understands.
+
+``artifact`` is a file set identified by its content alone: it may carry a checksum without a
+``path``, for callers whose file names must not be recorded. See
+``specs/20261007-reproduce-driver/design.md``.
 
 ``branch_report`` is what a node that reports rather than decides writes: the four triage branches
 and QUALITY. It carries task conformance and deviations and no outcome, which is why it is not a
@@ -254,13 +259,17 @@ def file_attributes(path: str | Path, *, digest: str | None = None, reason: str 
     return out
 
 
-def _check_entity_attributes(attributes: dict[str, Any]) -> None:
+def _check_entity_attributes(prov_type: str, attributes: dict[str, Any]) -> None:
     """Refuse checksum attributes the store never accepts, at write time and at read-back alike.
+
+    Args:
+        prov_type: The entity's type; only an ``artifact`` may carry a checksum without a ``path``.
+        attributes: The entity's attributes.
 
     Raises:
         ValueError: If a digest and a reason it is missing are supplied together, if the digest is
             not 64 lowercase hex characters, if the reason is empty, or if either is present without
-            a ``path`` saying which file it describes.
+            a ``path`` saying which file it describes on an entity other than an ``artifact``.
     """
     digest, reason = attributes.get(CHECKSUM_KEY), attributes.get(CHECKSUM_UNRESOLVED_KEY)
     if digest is not None and reason is not None:
@@ -269,7 +278,7 @@ def _check_entity_attributes(attributes: dict[str, Any]) -> None:
         raise ValueError(f"{CHECKSUM_KEY} must be 64 lowercase hex characters, got {digest!r}")
     if reason is not None and not (isinstance(reason, str) and reason.strip()):
         raise ValueError(f"{CHECKSUM_UNRESOLVED_KEY} must not be empty; an empty reason says nothing")
-    if (digest is not None or reason is not None) and not attributes.get(PATH_KEY):
+    if (digest is not None or reason is not None) and prov_type != "artifact" and not attributes.get(PATH_KEY):
         raise ValueError(f"a checksum needs a {PATH_KEY!r} naming the file it describes")
 
 
@@ -328,9 +337,10 @@ class ProvStore:
 
         Raises:
             ValueError: If the attributes carry both a checksum and a reason it is missing, a
-                malformed digest, an empty reason, or either without a ``path``.
+                malformed digest, an empty reason, or either without a ``path`` on an entity other
+                than an ``artifact``.
         """
-        _check_entity_attributes(attributes)
+        _check_entity_attributes(prov_type, attributes)
         eid = f"{prov_type}-{_digest([self.run_id, prov_type, extent, attributes])}"
         self._entities[eid] = Entity(id=eid, prov_type=prov_type, extent=extent, attributes=dict(attributes))
         return eid
@@ -647,7 +657,7 @@ class ProvStore:
                 if rec["prov_type"] not in _PROV_TYPES:
                     raise ValueError(f"{where}: entity {rec['id']!r} has unknown prov_type {rec['prov_type']!r}")
                 try:
-                    _check_entity_attributes(rec["attributes"])
+                    _check_entity_attributes(rec["prov_type"], rec["attributes"])
                 except ValueError as err:
                     raise ValueError(f"{where}: entity {rec['id']!r}: {err}") from err
                 extent = rec.pop("extent")
