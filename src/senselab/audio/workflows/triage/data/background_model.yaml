@@ -1,0 +1,51 @@
+# The recording-level background model QUALITY reads off every recording (background_model.py).
+# Task-independent: a per-band stationary floor estimated outside the active regions, mains hum on
+# the residual, impulses, regions of activity, and the acquisition faults. The derivation of every
+# value is in specs/20261007-task-events-in-background/design.md ("Unit A: the generic layer");
+# values marked UNFITTED are to be fitted jointly on the owner's labels.
+version: 1
+frame_s: 0.04                     # analysis window of the band frames, as voice_phonation.yaml
+hop_s: 0.01                       # hop of every per-frame series
+band_edges_hz: [150.0, 300.0, 500.0, 800.0, 1300.0, 2000.0, 3000.0, 4000.0, 5500.0, 7500.0]   # the breath train's subbands
+digital_floor_dbfs: -90.0         # frames under this are digital silence, never the noise floor
+floor_smooth_s: 0.1               # the shutoff's live floor is the quietest window this long, as VOICE
+phonation_db: 10.0                # the shutoff needs a frame this far over that floor before it
+floor:
+  initial_percentile: 10.0        # first-pass floor per band, over live frames
+  iterations: 4                   # re-estimates with the active regions removed
+  pad_s: 0.1                      # active frames are widened by this before the floor is re-read
+  quiet_percentile: 50.0          # the floor is this percentile of the quiet frames per band
+  quiet_min_s: 0.5                # less quiet time than this and the recording's own floor is unobservable
+  residual_percentile: 20.0       # the residual's per-band floor, read over its live frames
+  residual_gap_db: 10.0           # own floor this far over the residual's in half the bands: the task fills the file
+activity:
+  margin_db: 6.0                  # UNFITTED (C2 m): a band is active this far over its floor
+  band_fraction: 0.3              # UNFITTED (C2 q): share of bands active for the frame to be active
+  bridge_s: 0.1                   # gaps an active region is joined across
+  min_s: 0.1                      # shortest active region
+  peak_window_db: 3.0             # onset and offset are read where the level comes within this of the peak
+impulse:
+  envelope_ms: 2.0                # window of the pre-emphasised sample envelope
+  background_ms: 200.0            # running-median window the envelope is read against
+  peak_db: 15.0                   # an envelope peak this far over its background is a candidate
+  onset_db: 3.0                   # the candidate starts and ends where it falls back within this
+  attack_max_ms: 5.0              # UNFITTED (C1): an impulse rises this fast
+  duration_max_ms: 80.0           # UNFITTED (C1): and is over this soon; a quick breath (about 0.25 s) is not
+hum:
+  mains_hz: [50.0, 60.0]          # mains fundamentals
+  harmonics_max: 10               # multiples of each read
+  line_db: 10.0                   # line over its neighbourhood that counts, as voice_phonation.yaml
+  neighbourhood_hz: [2.0, 8.0]    # offsets either side the neighbourhood is read over
+  lines_min: 3                    # lines that fire (31/36 hum, 0/30 clean, 2026-10-06)
+shutoff:                          # as voice_phonation.yaml, now read on every recording
+  below_floor_db: 8.0
+  drop_db: 30.0
+  drop_s: 0.1
+  flat_window_s: 0.3
+  flat_db: 1.0
+  bridge_s: 0.15
+  min_s: 0.3
+disruptions:                      # dropout and discontinuity extents on the original recording
+  min_dropout_ms: 10.0            # as disruptions.min_dropout_ms in config/default.yaml
+  discontinuity_local_factor: 10.0
+  discontinuity_window_ms: 20.0

@@ -21,6 +21,7 @@ from typing import Any, Sequence
 import numpy as np
 import yaml
 
+from senselab.audio.workflows.triage.background_model import bridge, floor_db, runs_of, shutoff_runs
 from senselab.utils.prov_store import ProvStore
 
 VOICE_PHONATION_PATH = Path(__file__).parent / "data" / "voice_phonation.yaml"
@@ -84,84 +85,6 @@ def frames_of(signal: Signal, p: dict[str, Any]) -> Frames:
     level = 10.0 * np.log10(power[:, band].sum(axis=1) / max(frame, 1) + 1e-12)
     times = (np.arange(len(windows)) * hop + frame / 2) / rate
     return Frames(times, level, 10.0 * np.log10(power + 1e-12), bin_hz)
-
-
-def runs_of(mask: np.ndarray) -> list[Run]:
-    """The runs of True in a mask, as ``(first, end)`` index pairs, end exclusive."""
-    padded = np.concatenate([[False], np.asarray(mask, dtype=bool), [False]])
-    edges = np.flatnonzero(np.diff(padded.astype(np.int8)))
-    return [(int(a), int(b)) for a, b in zip(edges[::2], edges[1::2])]
-
-
-def bridge(runs: Sequence[Run], gap_frames: int) -> list[Run]:
-    """Runs joined across every gap shorter than ``gap_frames``."""
-    out: list[Run] = []
-    for first, end in runs:
-        if out and first - out[-1][1] < gap_frames:
-            out[-1] = (out[-1][0], end)
-        else:
-            out.append((first, end))
-    return out
-
-
-def shutoff_runs(frames: Frames, p: dict[str, Any]) -> list[Run]:
-    """Runs where every band dropped abruptly to a flat level well under the rest of the recording.
-
-    Args:
-        frames: The plain stream's frames.
-        p: The parameters.
-
-    Returns:
-        The shutoff runs, in frame indices.
-    """
-    q = p["shutoff"]
-    hop = p["hop_s"]
-    level = frames.level_db
-    digital = level < p["digital_floor_dbfs"]
-    width = max(2, int(round(q["flat_window_s"] / hop)))
-    flat = np.zeros(len(level), dtype=bool)
-    if len(level) >= width:
-        windows = np.lib.stride_tricks.sliding_window_view(level, width)
-        spread = np.percentile(windows, 90, axis=1) - np.percentile(windows, 10, axis=1)
-        for k in np.flatnonzero(spread <= q["flat_db"]):
-            flat[k : k + width] = True
-    live = floor_db(level, ~(flat | digital), p)
-    dead = digital | (flat & (level <= live - q["below_floor_db"]))
-    active = np.flatnonzero(level >= live + p["phonation_db"])
-    if active.size == 0:
-        return []
-    drop_n = max(1, int(round(q["drop_s"] / hop)))
-    found: list[Run] = []
-    for first, end in bridge(runs_of(dead), int(round(q["bridge_s"] / hop)) + 1):
-        if (end - first) * hop < q["min_s"] or first <= active[0]:
-            continue
-        before = level[max(0, first - drop_n) : first]
-        if before.size and before.max() - np.median(level[first:end]) >= q["drop_db"]:
-            found.append((first, end))
-    return found
-
-
-def floor_db(level: np.ndarray, valid: np.ndarray, p: dict[str, Any]) -> float:
-    """The quietest stretch of the recording outside the excluded frames: its noise floor.
-
-    Args:
-        level: The frame level.
-        valid: Which frames the floor may be read from.
-        p: The parameters.
-
-    Returns:
-        The floor, in dB.
-    """
-    width = max(1, int(round(p["floor_smooth_s"] / p["hop_s"])))
-    values = np.where(valid & (level >= p["digital_floor_dbfs"]), level, np.nan)
-    if np.isfinite(values).sum() < width:
-        finite = values[np.isfinite(values)]
-        return float(np.min(finite)) if finite.size else float(np.min(level))
-    kernel = np.ones(width)
-    sums = np.convolve(np.nan_to_num(values), kernel, mode="valid")
-    counts = np.convolve(np.isfinite(values).astype(float), kernel, mode="valid")
-    means = np.where(counts >= width, sums / np.maximum(counts, 1), np.nan)
-    return float(np.nanmin(means)) if np.isfinite(means).any() else float(np.nanmin(values))
 
 
 def pitch_of(signal: Signal, times_s: np.ndarray, p: dict[str, Any]) -> tuple[np.ndarray, np.ndarray]:
@@ -660,7 +583,7 @@ def measure_phonation(
     hop = p["hop_s"]
     frames = frames_of(plain, p)
     blocked = np.zeros(len(frames.times_s), dtype=bool)
-    shutoffs = shutoff_runs(frames, p)
+    shutoffs = shutoff_runs(frames.level_db, p)
     for a, b in shutoffs:
         blocked[a:b] = True
     floor = floor_db(frames.level_db, ~blocked, p)
