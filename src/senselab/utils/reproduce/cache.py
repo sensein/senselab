@@ -3,8 +3,9 @@
 `step_key` is the sha256 of `canonical_json` over `step_key_payload`: everything that decides a
 step's result, and nothing volatile (job ids, visible GPUs, ``TMPDIR``, ``HOME``, the date, where the
 data roots or results live, the partition and limits, ``min_driver``, the step's own name or its
-repository URL). `native_digests` and `driver_env_sha256` compute two of its run-time inputs. A step's outputs live
-in `result_dir` = ``<results_root>/<step_key>``. The dir is complete (`is_done`) once its
+repository URL). `native_digests` and `driver_env_sha256` compute two of its run-time inputs, and
+`reproduce_source_sha256` stands for the driver's own behaviour. A step's outputs live in
+`result_dir` = ``<results_root>/<step_key>``. The dir is complete (`is_done`) once its
 ``summary.json`` exists with ``"exit": 0``; `write_summary` writes that file whole or not at all,
 and is the last write of a run. `claim` holds a `SharedFileLock` on
 ``<results_root>/.claims/<step_key>`` so two jobs never compute one step at once. `link_run` points
@@ -16,18 +17,23 @@ Errors are a `CacheError` whose message is a fixed code only.
 from __future__ import annotations
 
 import datetime
+import functools
 import hashlib
 import json
 import os
 import re
 import shutil
 import sys
+import sysconfig
 import uuid
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
-from importlib.metadata import distributions
+from importlib.metadata import Distribution, distributions
 from pathlib import Path
 from typing import Any
+
+from packaging.requirements import InvalidRequirement, Requirement
+from packaging.utils import canonicalize_name
 
 from senselab.utils.file_lock import SharedFileLock
 from senselab.utils.reproduce.digest import input_set_digest
@@ -36,13 +42,10 @@ from senselab.utils.reproduce.sandbox import keyed_templates
 from senselab.utils.reproduce.source import patch_set_sha256
 from senselab.utils.reproduce.spec import Profile, StepSpec
 
-STEP_KEY_SCHEMA = "reproduce-step-key-2"
-# Bump DRIVER_SEMANTICS whenever driver-side code changes what a step's result dir holds or whether it
-# passes: metrics validation (`metrics.validate_metrics`), min-cell suppression, expectation
-# evaluation (targets, tolerances, delta, pass), the GPU and canary guards, the child preamble, and
-# the sandbox script (`sandbox.sandbox_script`, `sandbox.build_env`).
-DRIVER_SEMANTICS = 1
+STEP_KEY_SCHEMA = "reproduce-step-key-3"
+REPRODUCE_SOURCE_SCHEMA = "reproduce-source-1"
 DRIVER_PACKAGE = "senselab"
+NATIVE_EXCLUDE = ("**/__pycache__/**", "**/*.pyc")
 SUMMARY = "summary.json"
 CLAIMS = ".claims"
 R_KINDS = frozenset({"r", "ir_notebook"})
@@ -58,6 +61,7 @@ CODES = frozenset(
         "E_KEY_R_SESSION",
         "E_KEY_NO_WHEELS",
         "E_RESULT_DONE",
+        "E_RESULT_UNREADABLE",
         "E_RESULT_NOT_DIR",
         "E_RESULT_RESET",
         "E_RESULT_MISSING",
@@ -105,9 +109,9 @@ def canonical_json(obj: object) -> bytes:
     return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False).encode()
 
 
-def _native_dirs(profile: Profile, name: str) -> list[Path]:
+def _native_dirs(profile: Profile, name: str) -> list[tuple[Path, list[str]]]:
     spec = profile.native[name]
-    return [*spec.bin_dirs, *spec.lib_dirs]
+    return [(d, spec.bin_patterns) for d in spec.bin_dirs] + [(d, spec.lib_patterns) for d in spec.lib_dirs]
 
 
 def native_digests(step: StepSpec, profile: Profile) -> dict[str, list[str]]:
@@ -119,34 +123,85 @@ def native_digests(step: StepSpec, profile: Profile) -> dict[str, list[str]]:
 
     Returns:
         Each name in ``step.resources.native`` mapped to one `digest.input_set_digest` hex per dir
-        (``bin_dirs`` then ``lib_dirs``), taken over every file below it.
+        (``bin_dirs`` then ``lib_dirs``), over the files the entry's ``bin_patterns`` or
+        ``lib_patterns`` select, leaving out `NATIVE_EXCLUDE` (``__pycache__`` dirs and ``*.pyc``).
 
     Raises:
         CacheError: ``E_KEY_NATIVE`` if the step selects a native entry the profile lacks.
-        DigestError: As `digest.input_set_digest` with ``require_nonempty``, e.g. ``E_DIGEST_EMPTY``.
+        DigestError: As `digest.input_set_digest` with ``require_nonempty``: ``E_DIGEST_EMPTY`` when a dir
+            matches nothing, ``E_DIGEST_UNREADABLE`` for a dangling symlink or unreadable file among the
+            matches.
     """
     if not set(step.resources.native) <= set(profile.native):
         raise CacheError("E_KEY_NATIVE")
     return {
-        name: [input_set_digest(d, ["**"], require_nonempty=True)[0] for d in _native_dirs(profile, name)]
+        name: [
+            input_set_digest(d, patterns, exclude_patterns=NATIVE_EXCLUDE, require_nonempty=True)[0]
+            for d, patterns in _native_dirs(profile, name)
+        ]
         for name in step.resources.native
     }
+
+
+@functools.cache
+def reproduce_source_sha256() -> str:
+    """The identity of the driver's behaviour: a sha256 over the installed ``senselab.utils.reproduce`` sources.
+
+    Computed once per process, over every ``*.py`` file under the package directory (this module's
+    own directory, i.e. ``Path(senselab.utils.reproduce.__file__).parent``), as sorted pairs of
+    relative POSIX path and content sha256.
+
+    Returns:
+        A hex sha256.
+    """
+    root = Path(__file__).resolve().parent
+    files = sorted(p.relative_to(root).as_posix() for p in root.rglob("*.py") if "__pycache__" not in p.parts)
+    pairs = [[rel, hashlib.sha256((root / rel).read_bytes()).hexdigest()] for rel in files]
+    return hashlib.sha256(canonical_json({"schema": REPRODUCE_SOURCE_SCHEMA, "files": pairs})).hexdigest()
+
+
+def _site_dirs() -> list[str]:
+    paths = sysconfig.get_paths()
+    return sorted({paths["purelib"], paths["platlib"]})
+
+
+def _runtime_closure(installed: Mapping[str, Distribution]) -> set[str]:
+    """`DRIVER_PACKAGE`'s installed runtime dependency closure: requirements with no extra, transitively."""
+    seen: set[str] = set()
+    todo = [DRIVER_PACKAGE]
+    while todo:
+        name = todo.pop()
+        if name in seen or name not in installed:
+            continue
+        seen.add(name)
+        for text in installed[name].requires or []:
+            try:
+                req = Requirement(text)
+            except InvalidRequirement:
+                continue
+            if req.marker is None or req.marker.evaluate({"extra": ""}):
+                todo.append(canonicalize_name(req.name))
+    return seen
 
 
 def driver_env_sha256() -> str:
     """The identity of the driver's own interpreter env, for an adapter that runs in it.
 
+    Only the interpreter's own ``purelib`` and ``platlib`` dirs are read (never ``sys.path``, the cwd or
+    ``PYTHONPATH``), and only `DRIVER_PACKAGE`'s runtime dependency closure there: its requirements
+    without an extra, followed transitively. `DRIVER_PACKAGE` itself is left out; its reproduce code is
+    `reproduce_source_sha256`.
+
     Returns:
-        A hex sha256 over ``sys.version`` and the sorted ``name==version`` of every installed
-        distribution except `DRIVER_PACKAGE` itself, whose driver-side behaviour is `DRIVER_SEMANTICS`.
+        A hex sha256 over ``sys.version`` and the sorted ``name==version`` of that closure.
     """
-    names = sorted(
-        {
-            f"{d.metadata['Name'].lower().replace('_', '-')}=={d.version}"
-            for d in distributions()
-            if d.metadata["Name"] and d.metadata["Name"].lower() != DRIVER_PACKAGE
-        }
-    )
+    installed: dict[str, Distribution] = {}
+    for dist in distributions(path=_site_dirs()):
+        name = dist.metadata["Name"] if dist.read_text("METADATA") else None
+        if name:
+            installed.setdefault(canonicalize_name(name), dist)
+    closure = _runtime_closure(installed) - {DRIVER_PACKAGE}
+    names = sorted(f"{name}=={installed[name].version}" for name in closure)
     return hashlib.sha256(canonical_json({"python": sys.version, "distributions": names})).hexdigest()
 
 
@@ -224,7 +279,7 @@ def step_key_payload(
         raise CacheError("E_KEY_NO_WHEELS")
     return {
         "schema": STEP_KEY_SCHEMA,
-        "driver_semantics": DRIVER_SEMANTICS,
+        "reproduce_source_sha256": reproduce_source_sha256(),
         "commit": step.commit,
         "submodules": dict(sorted(submodules.items())),
         "patch_set_sha256": patch_set_sha256(step.patches),
@@ -400,16 +455,33 @@ def reset_result_dir(results_root: Path, key: str) -> Path:
     Returns:
         The step's result dir (`result_dir`), now an empty directory.
 
+    A dir is wiped only when its ``summary.json`` is absent or records a non-zero integer exit.
+
     Raises:
         CacheError: ``E_KEY_BAD`` for a malformed key, ``E_RESULT_NOT_DIR`` if a symlink or non-directory
-            holds the path, ``E_RESULT_DONE`` if the dir is complete (it is left untouched),
+            holds the path, ``E_RESULT_DONE`` if the dir is complete, ``E_RESULT_UNREADABLE`` if the
+            summary cannot be read or is not an object with an integer exit (nothing is deleted then),
             ``E_RESULT_RESET`` if removing or creating it fails.
     """
     out = result_dir(results_root, key)
     if out.is_symlink() or (os.path.lexists(out) and not out.is_dir()):
         raise CacheError("E_RESULT_NOT_DIR")
-    if is_done(out):
-        raise CacheError("E_RESULT_DONE")
+    if out.is_dir():
+        try:
+            text = (out / SUMMARY).read_text()
+        except FileNotFoundError:
+            text = None
+        except OSError:
+            raise CacheError("E_RESULT_UNREADABLE") from None
+        if text is not None:
+            try:
+                summary = json.loads(text)
+            except ValueError:
+                raise CacheError("E_RESULT_UNREADABLE") from None
+            if not isinstance(summary, dict) or type(summary.get("exit")) is not int:
+                raise CacheError("E_RESULT_UNREADABLE")
+            if summary["exit"] == 0:
+                raise CacheError("E_RESULT_DONE")
     try:
         if out.exists():
             shutil.rmtree(out)

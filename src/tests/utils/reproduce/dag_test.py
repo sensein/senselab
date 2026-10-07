@@ -14,7 +14,8 @@ COMMIT = "0123456789abcdef0123456789abcdef01234567"
 SHA = "ab" * 32
 CLASSIFICATION = {
     "kind": "classification",
-    "headline": ["top1", "macro_recall", "mcc"],
+    "headline": ["balanced_accuracy"],
+    "secondary": ["top1", "mcc"],
     "headline_labels": ["sys_a"],
     "counts": ["n_clips"],
     "per_class": ["walk", "run"],
@@ -96,8 +97,9 @@ def _expecting(target: str, metric: str, from_metric: str, **expect: Any) -> Ste
 
 
 ACCEPTED: dict[str, tuple[str, str, dict[str, Any]]] = {
-    "same-headline": ("top1", "top1", {}),
-    "labelled-headline": ("macro_recall", "top1@sys_a", {}),
+    "same-headline": ("balanced_accuracy", "balanced_accuracy", {}),
+    "same-secondary": ("top1", "top1", {}),
+    "labelled-secondary": ("balanced_accuracy", "top1@sys_a", {}),
     "rate-from-per-class": ("top1", "per_class.walk.recall", {}),
     "count-from-count": ("counts.n_clips", "counts.n_clips", {}),
     "mcc-from-mcc": ("mcc", "mcc", {"unit": "pp"}),
