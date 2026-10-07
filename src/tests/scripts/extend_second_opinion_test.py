@@ -40,8 +40,7 @@ def _answers(other: float) -> dict[str, Any]:
     return {
         "other_voice": {"choice": "one", "probabilities": {"one": 1 - other, "more_than_one": other}},
         "instructions_spoken": {"noul": 0.02},
-        "named_diagnosis": {"noul": 0.01},
-        "safe_harbor_identifier_present": {"noul": 0.03},
+        "policy_identifier_present": {"noul": 0.03},
     }
 
 
@@ -97,6 +96,26 @@ def test_an_opinion_lands_and_a_second_pass_starts_no_server(tmp_path: Path) -> 
     again = _Opener()
     summary = _run(tmp_path, run_root, again)
     assert summary["counts"] == {"present": 1} and again.opened == 0 and summary["server_started"] is False
+
+
+def test_an_opinion_to_an_earlier_question_set_is_asked_again(tmp_path: Path) -> None:
+    """A question-set-1 answer is not this question set's answer: asked again, and the old one retired."""
+    from senselab.text.tasks.decision_model.second_opinion import QUESTION_SET_VERSION
+
+    run_root = _finished_run(tmp_path / "corpus")
+    _run(tmp_path, run_root, _Opener())
+    store = cli.read_store(run_root)
+    (held,) = [
+        entity
+        for entity in store.entities("measurement")
+        if entity.attributes.get("name") == "second_opinion_answers" and not store.is_invalidated(entity.id)
+    ]
+    held.attributes["question_set_version"] = QUESTION_SET_VERSION - 1
+    cli.write_store(store, run_root)
+    assert cli.standing(cli.read_store(run_root)) is None
+    assert _run(tmp_path, run_root, _Opener(other=0.6))["counts"] == {"ok": 1}
+    (live,) = _opinions(run_root)
+    assert live["question_set_version"] == QUESTION_SET_VERSION
 
 
 def test_force_asks_again_and_keeps_one_live_opinion(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

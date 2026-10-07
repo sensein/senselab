@@ -50,6 +50,15 @@ def policy() -> dict[str, Any]:
     return table
 
 
+def version() -> int:
+    """The packaged policy's ``version``, recorded on every redaction ledger.
+
+    Returns:
+        The version number.
+    """
+    return int(policy()["version"])
+
+
 def fold(text: str) -> str:
     """One token as the policy compares it.
 
@@ -292,16 +301,10 @@ def date_positions(texts: Sequence[str]) -> set[int]:
         texts: The words, in order.
 
     Returns:
-        :func:`year_positions`, :func:`month_positions`, :func:`season_positions`,
-        :func:`holiday_positions` and :func:`age_positions`, together.
+        :func:`year_positions`, :func:`month_positions`, :func:`holiday_positions` and
+        :func:`age_positions`, together. A season is not among them: it is released by kind.
     """
-    return (
-        year_positions(texts)
-        | month_positions(texts)
-        | season_positions(texts)
-        | holiday_positions(texts)
-        | age_positions(texts)
-    )
+    return year_positions(texts) | month_positions(texts) | holiday_positions(texts) | age_positions(texts)
 
 
 def state_positions(texts: Sequence[str]) -> set[int]:
@@ -325,6 +328,19 @@ def state_positions(texts: Sequence[str]) -> set[int]:
         if (key in table["states"] and _capitalised(text)) or _raw(text) in table["state_abbreviations"]:
             found.add(position)
     return found
+
+
+def is_state_word(text: str) -> bool:
+    """Whether one word, in any case, is a one-word state or province name.
+
+    Args:
+        text: A word's surface.
+
+    Returns:
+        True for ``wisconsin`` or ``Florida``.
+    """
+    key = fold(text)
+    return bool(key) and key in policy()["states"]
 
 
 def country_runs(texts: Sequence[str]) -> list[tuple[int, int]]:

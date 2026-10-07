@@ -36,7 +36,7 @@ from senselab.audio.workflows.triage.nodes.common import (
 )
 from senselab.audio.workflows.triage.nodes.redact import released_audio
 from senselab.audio.workflows.triage.nodes.verdict import NODE as VERDICT_NODE
-from senselab.audio.workflows.triage.vocabulary import Release
+from senselab.audio.workflows.triage.vocabulary import Release, Triage, standing_task_extents
 from senselab.utils.prov_store import Entity, ProvStore, file_digest
 
 NODE = "TASK_AUDIO"
@@ -151,11 +151,7 @@ def task_extent(store: ProvStore, *, padding_s: float) -> TaskExtent | None:
     """
     if padding_s < 0.0:
         raise ValueError(f"task_audio.padding_s must be at least 0, got {padding_s}")
-    spans = [
-        span
-        for span in live_entities(store, "span")
-        if span.attributes.get("role") == TASK_EXTENT_ROLE and span.extent is not None
-    ]
+    spans = standing_task_extents(live_entities(store, "span"))
     recording = _recording_extent(store)
     if not spans or recording is None:
         return None
@@ -342,6 +338,7 @@ def cut_task_audio(store: ProvStore, config: TriageConfig, *, run_dir: Path) -> 
 
     The redacted cut is taken only where the live fold releases the redacted copy; under every other
     release there is no masked copy anyone may hand on, so none is cut and any earlier one is retired.
+    A recording the fold discarded is cut not at all, and any earlier cut is retired.
     A cut whose inputs and sample range match the one the store already holds is not written again,
     and where every cut matches, nothing is written at all.
 
@@ -356,12 +353,14 @@ def cut_task_audio(store: ProvStore, config: TriageConfig, *, run_dir: Path) -> 
     Raises:
         ValueError: If a redacted cut does not carry its masks on the masked copy's samples.
     """
-    extent = task_extent(store, padding_s=float(config.require("task_audio.padding_s")))
+    folded = find_verdict(store, VERDICT_NODE)
+    discarded = folded is not None and folded.attributes.get("triage") == Triage.DISCARD.value
+    extent = None if discarded else task_extent(store, padding_s=float(config.require("task_audio.padding_s")))
     held = {name: _live_stream(store, f"{PREFIX}{name}") for name in SOURCES}
     cuts: dict[str, str] = {}
     sources: dict[str, Source] = {}
     if extent is None:
-        cuts = {name: f"{ABSENT}: no task extent" for name in SOURCES}
+        cuts = {name: f"{ABSENT}: {'discarded' if discarded else 'no task extent'}" for name in SOURCES}
     else:
         for name in SOURCES:
             try:

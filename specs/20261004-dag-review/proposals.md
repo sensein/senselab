@@ -26,6 +26,9 @@ the free text in the store. At the same time move the quoted words now inside th
 (instructions spoken, reviewer second speaker, person-name review) out of `reasons` into the
 REVIEW annotation, which restores invariant 6 ("no transcript text reaches a verdict"). Effect:
 every flag is countable and explainable from the parquet alone. Cost: code, refold, parquet.
+*Status, 2026-10-04: done on `fix/policy-v8` — `ground_keys` and `release_ground_key` in the fold and
+the parquet (schema 21, `grounds` renamed `discard_ground`), a key per reason, the three grounds carry
+counts instead of quotes; dag.md § VERDICT.*
 
 **2. Make acoustic quality part of the graph, as its own axis (goal a).** Noise floor, SNR,
 clipping and dropout are judged only by the parquet extractor (`recording_vectors.py`
@@ -46,6 +49,8 @@ non-conformance first and any flag outranks the empty-discard. That makes
 `acoustically_empty` dead code (0 in r12) and sends empty recordings (78 Harvard sentences) to
 human review. Fold `empty` before the conformance grounds, keeping those as detail. Cost: code,
 refold.
+*Status, 2026-10-04: done on `fix/policy-v8` — `empty` discards unless a branch found its kind; the
+flag grounds stay in `ground_keys`.*
 
 **4. Separate operational grounds from grounds about the participant (goal d).** 651 recordings
 are flagged because TAXONOMY had no classifier output (399 of them Harvard sentences), 452 for an
@@ -53,6 +58,10 @@ are flagged because TAXONOMY had no classifier output (399 of them Harvard sente
 derivative, not that the participant did something; a reviewer can do nothing with them. Give them
 their own state (`triage = rerun`, or an `operational` ground class excluded from the review queue),
 and re-run the missing derivatives. Cost: code, refold; GPU for the reruns.
+*Status, 2026-10-04: done on `fix/policy-v8` — `triage = rerun`, chosen over a separate pipeline
+axis because the state a reader filters on is the one that must exclude these from review;
+`rerun` outranks `flag`, the release axis is unchanged, and the operational keys are
+`vocabulary.OPERATIONAL_GROUND_KEYS` / `OPERATIONAL_GROUND_PREFIXES`.*
 
 **5. Demote the unfitted sustained-phonation gates until labels fit them (goals a, d).** The flag
 gates `voiced_fraction_min` (1,113) and `f0_spread_max_semitones` (1,024; both on only 274) drive
@@ -168,7 +177,7 @@ Counts: REMOVE 8, ADJUST 18, ADD 8 (the rest KEEP).
 ## What triage state means
 
 The reader's definition is in dag.md § "What the triage state means, for a reader of the
-parquet". In short: `discard` = unusable (`grounds` says why); `flag` = a person should look
-(`flags_n` and `flag_nodes` say how many grounds and where; the reasons themselves need item 1);
+parquet". In short: `discard` = unusable (`discard_ground` says why); `rerun` = the pipeline owes
+it a derivative; `flag` = a person should look (`ground_keys` names each ground);
 `pass` = no ground applied, which is not a statement about audio quality (item 2) or task
 confirmation (`undetermined` conformance never flags). `release` is a separate axis.

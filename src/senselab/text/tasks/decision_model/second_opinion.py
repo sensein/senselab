@@ -1,12 +1,12 @@
 """The questions triage asks a decision model about one transcript, and how the answers are read.
 
-Four judgments the reviewer also makes, phrased as typed questions: whether anyone besides the
-participant speaks, whether the task's instructions are spoken, whether the speaker names a specific
-medical diagnosis of their own, and whether a HIPAA Safe Harbor identifier is present. Each answer is
-kept as a probability; ``other_voice`` also keeps the chosen class.
+Three judgments the reviewer also makes, each of which can raise a flag when the two disagree: whether
+anyone besides the participant speaks, whether the task's instructions are spoken, and whether the
+transcript holds anything redaction policy v8 removes. Each answer is kept as a probability;
+``other_voice`` also keeps the chosen class.
 
-:data:`QUESTION_SET_VERSION` changes whenever a question's wording, type or criteria change, because
-the answers are a function of the wording.
+:data:`QUESTION_SET_VERSION` changes whenever a question's wording, type or criteria change, or the state
+sent with them, because the answers are a function of both.
 """
 
 from __future__ import annotations
@@ -14,13 +14,14 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping
 
-QUESTION_SET_VERSION = 1
+from senselab.text.tasks.pii_detection.redaction_review import task_guidance
+
+QUESTION_SET_VERSION = 3
 """Bump on any change to :data:`QUESTIONS` or to the state :func:`ask_second_opinion` sends."""
 
 OTHER_VOICE = "other_voice"
 INSTRUCTIONS_SPOKEN = "instructions_spoken"
-NAMED_DIAGNOSIS = "named_diagnosis"
-SAFE_HARBOR_IDENTIFIER = "safe_harbor_identifier_present"
+POLICY_IDENTIFIER = "policy_identifier_present"
 MORE_THAN_ONE = "more_than_one"
 
 QUESTIONS: Mapping[str, Mapping[str, Any]] = {
@@ -28,8 +29,9 @@ QUESTIONS: Mapping[str, Mapping[str, Any]] = {
         "type": "choice",
         "instructions": (
             "Is any of this transcript spoken by someone other than the participant (for example an "
-            "examiner giving instructions, or a second person talking)? The participant addressing the "
-            "examiner (for example 'Is that enough?') is still the participant."
+            "examiner giving or repeating instructions, or a second person talking)? The participant "
+            "addressing the examiner (for example 'Is that enough?') is still the participant. Judge it "
+            "against the task (state.task, state.instructions, state.task_content)."
         ),
         "criteria": {
             "one": "Only the participant speaks",
@@ -44,20 +46,17 @@ QUESTIONS: Mapping[str, Mapping[str, Any]] = {
             "or paraphrased, by anyone? The stimulus (state.stimulus) is not the instructions."
         ),
     },
-    NAMED_DIAGNOSIS: {
+    POLICY_IDENTIFIER: {
         "type": "noul",
         "instructions": (
-            "Does the speaker name a specific medical diagnosis they themselves have (a named disease, "
-            "disorder or syndrome; not a symptom, feeling, procedure or medication alone)?"
-        ),
-    },
-    SAFE_HARBOR_IDENTIFIER: {
-        "type": "noul",
-        "instructions": (
-            "Does the transcript contain an identifier under HIPAA Safe Harbor: a person's name, a place "
-            "smaller than a state (city, street, venue, employer, school), a calendar date element other "
-            "than a year, an age over 89, or a contact or ID number? States, countries, and words that are "
-            "part of the task or its stimulus do not count."
+            "Does the transcript contain anything that must be removed before release: the name of a "
+            "person connected to the participant (not a public figure, a fictional character or a work "
+            "title); an absolute date element (a year, a month, a holiday, a day of the month); "
+            "a place smaller than a country connected to the participant (where they or their people "
+            "live, work, travel or are treated); a specific named organization (an employer, a school, a "
+            "hospital, a military unit); an age; or a contact or ID number? Relationship words, seasons, "
+            "weekdays, relative times, countries, health conditions, and anything that is the task's own content "
+            "(state.stimulus, state.task_content) do not count."
         ),
     },
 }
@@ -121,13 +120,15 @@ def opinion_state(transcript: str, context: Mapping[str, Any]) -> dict[str, str]
         context: The reviewer's task context (``task``, ``instructions``, ``asked_to_say``, ...).
 
     Returns:
-        The state.
+        The state, with the task family's task-content guidance
+        (:func:`~senselab.text.tasks.pii_detection.redaction_review.task_guidance`) as ``task_content``.
     """
     return {
         "task": str(context.get("task") or ""),
         "speech_type": str(context.get("speech_type") or ""),
         "instructions": str(context.get("instructions") or ""),
         "stimulus": str(context.get("asked_to_say") or ""),
+        "task_content": task_guidance(str(context.get("task") or "") or None),
         "transcript": transcript,
     }
 

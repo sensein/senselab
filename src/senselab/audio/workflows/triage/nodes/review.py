@@ -59,6 +59,7 @@ from senselab.text.tasks.pii_detection.redaction_review import (
     review_payload,
     review_transcript,
     shutdown_review_worker,
+    task_guidance_digest,
 )
 from senselab.utils.prov_store import ProvStore
 from senselab.utils.tasks.cached_inference import (
@@ -295,7 +296,15 @@ def _entries(proposal: Sequence[ReviewProposal]) -> tuple[dict[str, str], ...]:
         The mappings, in order.
     """
     return tuple(
-        {"text": entry.text, "action": entry.action, "category": entry.category, "why": entry.why} for entry in proposal
+        {
+            "text": entry.text,
+            "action": entry.action,
+            "category": entry.category,
+            "why": entry.why,
+            "relabel": entry.relabel,
+            "place_reason": entry.place_reason,
+        }
+        for entry in proposal
     )
 
 
@@ -492,6 +501,7 @@ def review_cache_key(
         commit_sha=revision,
         params={
             "prompt_version": PROMPT_VERSION,
+            "task_guidance": task_guidance_digest(),
             "max_new_tokens": int(settings["max_new_tokens"]),
             "max_iterations": int(settings["max_iterations"]),
         },

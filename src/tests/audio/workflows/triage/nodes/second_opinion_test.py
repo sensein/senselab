@@ -72,8 +72,7 @@ def _answers(other: float = 0.9) -> dict[str, Any]:
     return {
         "other_voice": {"choice": "more_than_one", "probabilities": {"one": 1 - other, "more_than_one": other}},
         "instructions_spoken": {"noul": 0.02},
-        "named_diagnosis": {"noul": 0.01},
-        "safe_harbor_identifier_present": {"noul": 0.97},
+        "policy_identifier_present": {"noul": 0.97},
     }
 
 
@@ -104,7 +103,7 @@ class TestItAsksAndRecords:
         held = _opinion(store, outcome.measurement_id)
         assert outcome.status == OK and held["name"] == SECOND_OPINION_ANSWERS
         assert held["probabilities"]["other_voice"] == 0.9
-        assert held["probabilities"]["safe_harbor_identifier_present"] == 0.97
+        assert held["probabilities"]["policy_identifier_present"] == 0.97
         assert held["blob_digest"] == pin_of(config).blob_digest
         assert "alicia" in ask.states[0]["transcript"]
         assert store.get_activity(store.generated_by(outcome.measurement_id) or "").node == NODE
@@ -187,9 +186,10 @@ class TestTheOtherPaths:
         """A missing question is a failure, never stored as a reading."""
         config = _config(tmp_path)
         broken = _answers()
-        del broken["named_diagnosis"]
+        del broken["policy_identifier_present"]
         store = _store()
         outcome = second_opinion(store, config, None, _Ask(broken))
-        assert outcome.status == ABSENT and "named_diagnosis" in _opinion(store, outcome.measurement_id)["failure"]
+        failure = _opinion(store, outcome.measurement_id)["failure"]
+        assert outcome.status == ABSENT and "policy_identifier_present" in failure
         retried = _Ask(_answers())
         assert second_opinion(_store(), config, None, retried).status == OK and retried.states

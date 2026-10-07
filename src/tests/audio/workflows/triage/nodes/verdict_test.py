@@ -339,7 +339,8 @@ class TestAnUnreadableNodeVerdictDoesNotKillTheFold:
         store.was_generated_by(alien, activity)
 
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
-        assert result.file_verdict.triage is Triage.FLAG
+        assert result.file_verdict.triage is Triage.RERUN
+        assert "node_outcome_unreadable" in result.file_verdict.ground_keys
         assert any("SPEECH" in reason.why and "'discard'" in reason.why for reason in result.file_verdict.reasons), (
             "the offending node and the value it wrote are both named"
         )
@@ -365,7 +366,7 @@ class TestAnUnreadableNodeVerdictDoesNotKillTheFold:
         assert result.file_verdict.findings["AIRWAY"] == "present"
         assert result.file_verdict.findings["SPEECH"] == "uncertain", "no branch answered for it"
         assert result.file_verdict.agreement["SPEECH"] == "not_run"
-        assert _file_verdict_entity(store).attributes["triage"] == "flag"
+        assert _file_verdict_entity(store).attributes["triage"] == "rerun"
 
 
 class TestTheBranchDecisionsAreRead:
@@ -383,7 +384,7 @@ class TestTheBranchDecisionsAreRead:
         assert result.file_verdict.agreement["SPEECH"] == "not_run"
         assert result.file_verdict.triage is Triage.PASS
 
-    def test_an_asked_branch_that_left_no_verdict_flags(
+    def test_an_asked_branch_that_left_no_verdict_reruns(
         self, make_verdict_store: Callable[..., ProvStore], config: TriageConfig, tmp_path: Path
     ) -> None:
         """ROUTING selected SPEECH and nothing came back; the reason names which silence it was."""
@@ -392,7 +393,8 @@ class TestTheBranchDecisionsAreRead:
             routed=ROUTED_PAIR,
         )
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path, ran={"SPEECH": RunState.ERRORED})
-        assert result.file_verdict.triage is Triage.FLAG
+        assert result.file_verdict.triage is Triage.RERUN
+        assert result.file_verdict.ground_keys == ["branch_silent:SPEECH"]
         assert any("errored without a verdict" in reason.why for reason in result.file_verdict.reasons)
 
     def test_the_branches_map_joins_the_decision_to_the_reported_conformance(
@@ -428,7 +430,7 @@ class TestTheBranchDecisionsAreRead:
         assert result.file_verdict.branches == {}
         assert result.file_verdict.triage is Triage.PASS
 
-    def test_a_routing_error_without_decisions_flags_instead_of_discarding(
+    def test_a_routing_error_without_decisions_reruns_instead_of_discarding(
         self, make_verdict_store: Callable[..., ProvStore], config: TriageConfig, tmp_path: Path
     ) -> None:
         """An execution failure cannot be mistaken for ROUTING deliberately declining every branch."""
@@ -439,7 +441,7 @@ class TestTheBranchDecisionsAreRead:
             route=False,
         )
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path, ran={"routing": RunState.ERRORED})
-        assert result.file_verdict.triage is Triage.FLAG
+        assert result.file_verdict.triage is Triage.RERUN
         assert result.file_verdict.discard_ground is None
         assert any(
             "routing failed; branch execution was withheld" in reason.why for reason in result.file_verdict.reasons
@@ -449,10 +451,10 @@ class TestTheBranchDecisionsAreRead:
 class TestHintsAreReadThroughRoutingsMap:
     """The tag that forces a branch is the tag that can name a mismatch; one map, not two."""
 
-    def test_a_declared_kind_no_branch_found_flags(
+    def test_a_declared_kind_no_branch_found_in_an_empty_recording_is_detail(
         self, make_verdict_store: Callable[..., ProvStore], tmp_path: Path
     ) -> None:
-        """The declaration claimed a cough and AIRWAY found no labelled span."""
+        """The declaration claimed a cough, AIRWAY found no labelled span, and the recording is empty."""
         hint = AudioHints(may_contain=["cough"])
         hint_config = _hint_config(tmp_path)
         store = make_verdict_store(
@@ -464,7 +466,8 @@ class TestHintsAreReadThroughRoutingsMap:
         )
         result = verdict_module.verdict(store, None, hint_config, hint, run_dir=tmp_path)
         assert result.file_verdict.hints["AIRWAY"] == "claimed_not_found"
-        assert result.file_verdict.triage is Triage.FLAG
+        assert result.file_verdict.triage is Triage.DISCARD
+        assert "hint_mismatch:AIRWAY" in result.file_verdict.ground_keys
 
     def test_a_speech_type_value_is_a_claim_like_any_tag(
         self, make_verdict_store: Callable[..., ProvStore], tmp_path: Path
@@ -513,7 +516,7 @@ class TestHintsAreReadThroughRoutingsMap:
         )
         result = verdict_module.verdict(store, None, config, hint, run_dir=tmp_path)
         assert result.file_verdict.hints["AIRWAY"] == "claimed_not_found"
-        assert result.file_verdict.triage is Triage.FLAG
+        assert result.file_verdict.triage is Triage.DISCARD
 
     def test_a_declaration_no_decision_survived_to_read_is_named_not_dropped(
         self, make_verdict_store: Callable[..., ProvStore], config: TriageConfig, tmp_path: Path
@@ -529,7 +532,8 @@ class TestHintsAreReadThroughRoutingsMap:
         )
         result = verdict_module.verdict(store, None, config, hint, run_dir=tmp_path)
         assert result.file_verdict.hints == {}
-        assert result.file_verdict.triage is Triage.FLAG
+        assert result.file_verdict.triage is Triage.RERUN
+        assert "declaration_unread" in result.file_verdict.ground_keys
         assert any(reason.why == UNREAD_DECLARATION for reason in result.file_verdict.reasons)
         assert _file_verdict_entity(store).attributes["hints"] == {}
 
@@ -597,10 +601,10 @@ class TestHintsAreReadThroughRoutingsMap:
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
         assert not any(reason.why == UNREAD_DECLARATION for reason in result.file_verdict.reasons)
 
-    def test_a_map_typo_flags_the_file_it_would_otherwise_have_discarded(
+    def test_a_map_typo_is_named_on_a_file_that_still_discards_as_empty(
         self, make_verdict_store: Callable[..., ProvStore], tmp_path: Path
     ) -> None:
-        """ROUTING recorded the typo on every decision; the fold must not discard over it."""
+        """ROUTING recorded the typo on every decision; the fold names it beside the empty discard."""
         path = tmp_path / "typo.yaml"
         path.write_text("routing:\n  hint_branch_map:\n    cough: AIRWY\n")
         typo_config = load_triage_config(path)
@@ -613,16 +617,17 @@ class TestHintsAreReadThroughRoutingsMap:
             hint=hint,
         )
         result = verdict_module.verdict(store, None, typo_config, hint, run_dir=tmp_path)
-        assert result.file_verdict.triage is Triage.FLAG
-        assert result.file_verdict.discard_ground is None
+        assert result.file_verdict.triage is Triage.DISCARD
+        assert result.file_verdict.discard_ground == "acoustically_empty"
+        assert "config_bad_hint_map" in result.file_verdict.ground_keys
         assert result.file_verdict.bad_map_values == {"cough": "AIRWY"}
         assert any("AIRWY" in reason.why for reason in result.file_verdict.reasons)
         assert _file_verdict_entity(store).attributes["bad_map_values"] == {"cough": "AIRWY"}
 
-    def test_a_declaration_prevents_the_empty_discard(
+    def test_a_declaration_no_longer_prevents_the_empty_discard(
         self, make_verdict_store: Callable[..., ProvStore], tmp_path: Path
     ) -> None:
-        """Discarding a file the declaration says had a cough would delete the graph's own error."""
+        """DAG review proposal 3: an empty recording discards; the unmet declaration is detail."""
         hint = AudioHints(may_contain=["cough"])
         hint_config = _hint_config(tmp_path)
         store = make_verdict_store(
@@ -633,8 +638,8 @@ class TestHintsAreReadThroughRoutingsMap:
             hint=hint,
         )
         result = verdict_module.verdict(store, None, hint_config, hint, run_dir=tmp_path)
-        assert result.file_verdict.triage is Triage.FLAG
-        assert result.file_verdict.discard_ground is None
+        assert result.file_verdict.triage is Triage.DISCARD
+        assert result.file_verdict.discard_ground == "acoustically_empty"
 
 
 class TestTheReleaseAxis:
@@ -910,20 +915,23 @@ class TestTheRedactionReviewerAnnotatesAndThisNodeDecides:
         """The masks and the quotes are read off the store; some reset is partial, every one is the original."""
         config = _policy_config(tmp_path, "verdict:\n  llm_redaction_withholds: true\n  llm_reset_redactions: true\n")
         for released, expected in (
-            (["alice"], (Release.WITH_REDACTION, REVIEWER_UNMASKED_SOME)),
-            (["alice", "brooklyn"], (Release.WITHOUT_REDACTION, REVIEWER_UNMASKED_ALL)),
+            (["Alice"], (Release.WITH_REDACTION, REVIEWER_UNMASKED_SOME)),
+            (["Alice", "Brooklyn"], (Release.WITHOUT_REDACTION, REVIEWER_UNMASKED_ALL)),
             ([], (Release.WITH_REDACTION, None)),
         ):
             store = make_verdict_store(
                 concluded=[*BASE, ("REDACT", Outcome.PASS, None)], routed=ROUTED_PAIR, pii_n=2, planned_mask=False
             )
-            self._mask(store, ["i", "met", "alice", "in", "brooklyn"], [2, 4])
+            self._mask(store, ["i", "met", "Alice", "in", "Brooklyn"], [2, 4])
             _annotate(
                 store,
                 status="flagged",
                 redaction="incomplete",
                 original="clean",
-                proposal=[{"text": text, "action": "release", "category": "PERSON"} for text in released],
+                proposal=[
+                    {"text": text, "action": "release", "category": "PERSON", "relabel": "other_non_person"}
+                    for text in released
+                ],
             )
             result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
             assert (result.file_verdict.release, result.file_verdict.release_ground) == expected
@@ -936,20 +944,20 @@ class TestTheRedactionReviewerAnnotatesAndThisNodeDecides:
         store = make_verdict_store(
             concluded=[*BASE, ("REDACT", Outcome.PASS, None)], routed=ROUTED_PAIR, pii_n=2, planned_mask=False
         )
-        self._mask(store, ["i", "met", "alice", "in", "brooklyn"], [2, 4])
+        self._mask(store, ["i", "met", "Alice", "in", "Brooklyn"], [2, 4])
         _annotate(
             store,
             status="flagged",
             redaction="incomplete",
             original="clean",
-            proposal=[{"text": "brooklyn", "action": "release", "category": "LOCATION"}],
+            proposal=[{"text": "Brooklyn", "action": "release", "category": "PERSON", "relabel": "work_title"}],
         )
         verdict_module.verdict(store, None, config, run_dir=tmp_path)
         ledger = find_measurement(store, PII_LEDGER)
         assert ledger is not None
         assert ledger.attributes["release_ground"] == REVIEWER_UNMASKED_SOME
         states = {word["text"]: word["state"] for mask in ledger.attributes["masks"] for word in mask["words"]}
-        assert states == {"alice": "masked", "brooklyn": "unmasked_by_reviewer"}
+        assert states == {"Alice": "masked", "Brooklyn": "unmasked_by_reviewer"}
         assert [len(entry["word_ids"]) for entry in ledger.attributes["final_masks"]] == [1]
 
     def _states(self, store: ProvStore) -> dict[str, str]:
@@ -1111,16 +1119,16 @@ class TestTheRedactionReviewerAnnotatesAndThisNodeDecides:
     def test_a_word_the_policy_always_masks_releases_a_copy_where_redact_never_ran(
         self, make_verdict_store: Callable[..., ProvStore], tmp_path: Path
     ) -> None:
-        """Policy v7: no detector found anything, but "summer" is a season; the copy masks it, REDACT or not."""
+        """No detector found anything, but "October" is a month; the copy masks it, REDACT or not."""
         config = _policy_config(tmp_path, "verdict:\n  llm_redaction_withholds: true\n")
         store = make_verdict_store(concluded=BASE, routed=ROUTED_PAIR, words_n=5, scanned=True)
-        self._mask(store, ["i", "go", "every", "summer", "home"], [])
+        self._mask(store, ["i", "go", "every", "October", "home"], [])
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
         assert (result.file_verdict.release, result.file_verdict.release_ground) == (
             Release.WITH_REDACTION,
             POLICY_MASKS_ONLY,
         )
-        assert self._states(store) == {"summer": "masked"}
+        assert self._states(store) == {"October": "masked"}
 
     def test_a_masked_person_name_flags_for_review_and_releases_as_before(
         self, make_verdict_store: Callable[..., ProvStore], tmp_path: Path
@@ -1144,7 +1152,7 @@ class TestTheRedactionReviewerAnnotatesAndThisNodeDecides:
         named = [
             reason.why for reason in result.file_verdict.reasons if reason.why.startswith(PERSON_NAME_AWAITS_REVIEW)
         ]
-        assert named == [f'{PERSON_NAME_AWAITS_REVIEW}: 1 name word(s) masked; release proposed for "Alice"']
+        assert named == [f"{PERSON_NAME_AWAITS_REVIEW}: 1 name word(s) masked; release proposed for 1 name(s)"]
         approved = _policy_config(tmp_path, "redaction:\n  name_approvals:\n    REC: [Alice]\n")
         again = verdict_module.verdict(store, None, approved, run_dir=tmp_path)
         assert self._states(store) == {"Alice": "unmasked_by_approval"}
@@ -1508,7 +1516,7 @@ class TestWhatTheStoreRecords:
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
         assert "SPEECH" not in result.file_verdict.conformance
         assert result.file_verdict.findings["SPEECH"] == "uncertain"
-        assert result.file_verdict.triage is Triage.FLAG
+        assert result.file_verdict.triage is Triage.RERUN
         assert speech.id not in result.view
 
     def test_a_superseded_report_is_replaced_not_added(
@@ -1706,26 +1714,28 @@ class TestTheGatesDecideTheDeclaredTask:
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
         assert result.file_verdict.conformance["VOICE"] is True
 
-    def test_a_held_vowel_whose_pitch_spreads_conforms_and_is_flagged_on_its_quality(
+    def test_a_held_vowel_whose_pitch_spreads_is_not_flagged_on_its_quality(
         self, config: TriageConfig, tmp_path: Path
     ) -> None:
-        """The task asks for the vowel held; its steadiness is a quality flag, not the task undone."""
+        """Owner, 2026-10-06: disordered voicing is data; its spread is recorded and flags nothing."""
         store = self._gated_store(
             tmp_path,
             family="maximum-phonation-time",
             branch="VOICE",
             readings={
                 "carrier_duration_s": 8.0,
-                "carrier_voiced_fraction": 0.9,
+                "carrier_voiced_fraction": 0.4,
                 "carrier_f0_spread_semitones": 9.0,
-                "carrier_continuity": 0.8,
             },
         )
+        store.entity(
+            prov_type="measurement",
+            extent=None,
+            attributes={"name": "voice_phonation_reading", "signal": "plain", "absent": [], "found": True},
+        )
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
+        assert not any(key.startswith("gate:") for key in result.file_verdict.ground_keys)
         assert result.file_verdict.conformance["VOICE"] is True
-        flags = {gate["gate"]: gate for gate in result.file_verdict.gates["flagging"]}
-        assert flags["f0_spread_max_semitones"]["passed"] is False
-        assert result.file_verdict.triage is Triage.FLAG
 
     def test_an_absent_reading_is_undetermined_rather_than_a_non_conformance(
         self, config: TriageConfig, tmp_path: Path
@@ -1753,20 +1763,17 @@ class TestTheGatesDecideTheDeclaredTask:
         assert applied["production_min_s"]["passed"] is False
         assert applied["production_min_s"]["reason"] == "no_carrier"
 
-    def test_a_voice_task_whose_tracks_never_arrived_is_undetermined_and_flags_for_review(
-        self, config: TriageConfig, tmp_path: Path
-    ) -> None:
-        """No tracks is an instrument that never reached the store: not a failure, and not silent either."""
-        store = self._gated_store(
-            tmp_path,
-            family="maximum-phonation-time",
-            branch="VOICE",
-            readings={"phonation_extent": "NOT_SEPARABLE_BY_THIS_DESIGN"},
+    def test_a_voice_task_whose_plain_stream_never_arrived_reruns(self, config: TriageConfig, tmp_path: Path) -> None:
+        """No plain stream is an input that never reached VOICE: not a failure, and not silent either."""
+        store = self._gated_store(tmp_path, family="maximum-phonation-time", branch="VOICE", readings={})
+        store.entity(
+            prov_type="measurement",
+            extent=None,
+            attributes={"name": "voice_phonation_reading", "signal": "plain", "absent": ["plain"]},
         )
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
-        assert result.file_verdict.conformance["VOICE"] == UNDETERMINED
-        reasons = [str(reason["why"]) for reason in result.file_verdict.record()["reasons"]]
-        assert any(UNCOMPUTED_READING in why and "instrument_absent" in why for why in reasons)
+        assert "owning_branch_input_absent" in result.file_verdict.ground_keys
+        assert result.file_verdict.triage is Triage.RERUN
 
     def test_a_read_aloud_task_nothing_was_read_of_says_so(self, config: TriageConfig, tmp_path: Path) -> None:
         """Zero expected tokens realised is its own ground, not an omission count."""
@@ -1840,24 +1847,12 @@ class TestTheGatesDecideTheDeclaredTask:
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
         assert result.file_verdict.conformance["VOICE"] is False
 
-    def test_a_prolonged_vowel_is_held_against_its_declared_duration(
-        self, config: TriageConfig, tmp_path: Path
-    ) -> None:
-        """``hold until the timer runs out``: a carrier a fraction of the hold does not conform."""
+    def test_a_prolonged_vowel_has_no_minimum_hold(self, config: TriageConfig, tmp_path: Path) -> None:
+        """Owner, 2026-10-06: there is no good minimum, so a short hold still conforms."""
         short = self._gated_store(
-            tmp_path,
-            family="prolonged-vowel",
-            branch="VOICE",
-            readings={"carrier_duration_s": 2.0, "production_declared_fraction": 0.17},
+            tmp_path, family="prolonged-vowel", branch="VOICE", readings={"carrier_duration_s": 2.0}
         )
-        held = self._gated_store(
-            tmp_path,
-            family="prolonged-vowel",
-            branch="VOICE",
-            readings={"carrier_duration_s": 9.0, "production_declared_fraction": 0.75},
-        )
-        assert verdict_module.verdict(short, None, config, run_dir=tmp_path).file_verdict.conformance["VOICE"] is False
-        assert verdict_module.verdict(held, None, config, run_dir=tmp_path).file_verdict.conformance["VOICE"] is True
+        assert verdict_module.verdict(short, None, config, run_dir=tmp_path).file_verdict.conformance["VOICE"] is True
 
     def test_an_out_of_family_report_is_never_gated(self, config: TriageConfig, tmp_path: Path) -> None:
         """``detect_*`` evaluated no task, so the group's gates say nothing about what it reported."""
@@ -2067,7 +2062,8 @@ class TestAnotherSpeakerInsideTheTaskExtentIsAFlag:
         """An interjection in the middle of the task: the gate's whole purpose."""
         store = self._store({self.READING: 0.6, "response_duration_s": 8.0})
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
-        assert result.file_verdict.triage is Triage.FLAG
+        assert "gate:dominant_speaker_share_min" in result.file_verdict.ground_keys
+        assert result.file_verdict.triage is not Triage.PASS
         assert any(EXTRA_SPEAKER_IN_EXTENT in why for why in self._flagged(result))
 
     def test_a_speaker_only_outside_the_task_extent_does_not_flag(self, config: TriageConfig, tmp_path: Path) -> None:
@@ -2149,3 +2145,124 @@ class TestAnotherSpeakerInsideTheTaskExtentIsAFlag:
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
         assert "dominant_speaker_share_min" not in {gate["gate"] for gate in result.file_verdict.gates["flagging"]}
         assert not any(EXTRA_SPEAKER_IN_EXTENT in why for why in self._flagged(result))
+
+
+class TestTheTaskEvidenceProfiles:
+    """The two data profiles VERDICT reads for whether the declared task was performed at all."""
+
+    def test_every_family_has_a_minimum_and_the_single_cough_ones_are_shorter(self) -> None:
+        """The default minimum covers every family; a single cough can be shorter."""
+        assert verdict_module.minimum_duration_s("harvard-sentences-list") == 1.0
+        assert verdict_module.minimum_duration_s("voluntary-cough") == 0.5
+        assert verdict_module.minimum_duration_s(None) is None
+
+    def test_a_cough_family_reads_its_own_event_tokens_and_no_filler(self) -> None:
+        """[cough] and the Chinese [咳] name a cough task's event; [um] names none; a speech task has none."""
+        tokens = verdict_module._airway_event_tokens()
+        assert {"cough", "咳"} <= tokens["respiration-and-cough-cough"]
+        assert "um" not in tokens["respiration-and-cough-cough"]
+        assert "respiration-and-cough-fivebreaths" not in tokens, "a [breath] token is context, never evidence"
+        assert "harvard-sentences-list" not in tokens
+
+    def test_every_breath_family_is_decided_on_a_detected_breath_and_no_other_family_is(self) -> None:
+        """``data/airway_event_requirements.yaml`` names the breath and the cough families and only them."""
+        breath = {
+            "breath-sounds",
+            "respiration-and-cough-breath",
+            "respiration-and-cough-fivebreaths",
+            "respiration-and-cough-threequickbreaths",
+            "respiration-and-cough-v2-breath",
+            "respiration-and-cough-v2-threebreaths",
+            "respiration-and-cough-v2-threebreathsmouth",
+            "respiration-and-cough-v2-threebreathsnose",
+        }
+        assert {family for family in breath if verdict_module.required_event(family) == "breath"} == breath
+        cough = {"respiration-and-cough-cough", "respiration-and-cough-v2-hardcough", "voluntary-cough"}
+        assert {family for family in cough if verdict_module.required_event(family) == "cough"} == cough
+        assert verdict_module.required_event("harvard-sentences-list") is None
+        assert verdict_module.required_event(None) is None
+
+
+class TestTheEventsFoundReading:
+    """The owning AIRWAY branch's own count of events of its kind reaches the fold."""
+
+    @staticmethod
+    def _store(value: object | None) -> ProvStore:
+        store = ProvStore(run_id="events-found-test")
+        agent = software_agent(store)
+        activity = store.activity(node="AIRWAY", step="seed", parameters={})
+        store.was_associated_with(activity, agent)
+        if value is not None:
+            entity = store.entity(
+                prov_type="measurement",
+                extent=None,
+                attributes={"name": "airway_events_found", "value": value, "signal": "plain"},
+            )
+            store.was_generated_by(entity, activity)
+        return store
+
+    def test_a_zero_count_reads_as_zero_and_no_count_as_none(self) -> None:
+        """Zero is a reading; an absent measurement is no reading at all."""
+        assert verdict_module._airway_events_found(self._store(0)) == 0
+        assert verdict_module._airway_events_found(self._store(3)) == 3
+        assert verdict_module._airway_events_found(self._store(None)) is None
+
+    def test_the_task_evidence_carries_the_kind_the_count_and_the_instruction(self) -> None:
+        """A three-quick-breaths recording: breath, the detected count, three instructed."""
+        evidence = verdict_module._task_evidence(self._store(1), "respiration-and-cough-threequickbreaths")
+        assert evidence.required_event == "breath"
+        assert evidence.events_found_n == 1
+        assert evidence.event_kind == "breath"
+        assert evidence.instructed_count == 3
+
+    def test_a_speech_family_carries_none_of_it(self) -> None:
+        """No airway owner, no airway evidence."""
+        evidence = verdict_module._task_evidence(self._store(2), "harvard-sentences-list")
+        assert evidence.required_event is None
+        assert evidence.events_found_n is None
+        assert evidence.instructed_count is None
+
+
+class TestTheOwnerCouldLook:
+    """An owning branch that lacked an input cannot say its task is absent."""
+
+    @staticmethod
+    def _store(*, absent: Sequence[str] = ()) -> ProvStore:
+        store = ProvStore(run_id="owner-input-test")
+        agent = software_agent(store)
+        activity = store.activity(node="AIRWAY", step="seed", parameters={})
+        store.was_associated_with(activity, agent)
+        if absent:
+            entity = store.entity(
+                prov_type="measurement",
+                extent=None,
+                attributes={"name": "event_instrument", "absent": list(absent), "value": None, "signal": "plain"},
+            )
+            store.was_generated_by(entity, activity)
+        return store
+
+    def test_an_absent_airway_instrument_is_named(self) -> None:
+        """AIRWAY's event_instrument measurement names what it lacked."""
+        absent = verdict_module._owner_absent_inputs(self._store(absent=["hear_scores"]), ("AIRWAY",), None)
+        assert absent == ("AIRWAY:hear_scores",)
+
+    def test_nothing_is_absent_where_every_input_arrived(self) -> None:
+        """No instrument-absent measurement, no critical absence, no uncomputed gate: nothing lacked."""
+        assert verdict_module._owner_absent_inputs(self._store(), ("AIRWAY",), None) == ()
+
+    def test_an_airway_instrument_does_not_count_against_another_owner(self) -> None:
+        """AIRWAY's absence is not a SPEECH-owned task's."""
+        absent = verdict_module._owner_absent_inputs(self._store(absent=["hear_scores"]), ("SPEECH",), None)
+        assert absent == ()
+
+    def test_an_owning_node_gate_left_uncomputed_is_named(self) -> None:
+        """A gate of the owning node left undetermined for want of its reading is an absent input."""
+        record = {
+            "node": "VOICE",
+            "applied": [
+                {"gate": "voiced_fraction_min", "passed": UNDETERMINED, "reason": "instrument_absent"},
+                {"gate": "production_min_s", "passed": True},
+            ],
+        }
+        absent = verdict_module._owner_absent_inputs(self._store(), ("VOICE",), record)
+        assert absent == ("VOICE:voiced_fraction_min",)

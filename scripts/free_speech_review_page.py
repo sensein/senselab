@@ -204,6 +204,7 @@ UNMASKED_BY_REVIEWER = "unmasked_by_reviewer"
 UNMASKED_BY_TRIM = "unmasked_by_trim"
 RELEASED_BY_KIND = "released_by_kind"
 RELEASED_CONDITION = "released_condition"
+RELEASED_NOT_PROPER = "released_not_proper"
 UNMASKED_BY_APPROVAL = "unmasked_by_approval"
 PROPOSED_BY_REVIEWER = "proposed_by_reviewer"
 DETECTED = "detected"
@@ -213,11 +214,12 @@ MARK_STATES = (
     UNMASKED_BY_APPROVAL,
     RELEASED_CONDITION,
     RELEASED_BY_KIND,
+    RELEASED_NOT_PROPER,
     PROPOSED_BY_REVIEWER,
     UNMASKED_BY_TRIM,
     DETECTED,
 )
-"""Every state a mark can carry: the ledger's seven, and a detector finding no mask covers."""
+"""Every state a mark can carry: the ledger's eight, and a detector finding no mask covers."""
 
 MARK_COLOURS = {
     MASKED: "red",
@@ -226,6 +228,7 @@ MARK_COLOURS = {
     UNMASKED_BY_APPROVAL: "green",
     RELEASED_CONDITION: "green",
     RELEASED_BY_KIND: "green",
+    RELEASED_NOT_PROPER: "green",
     DETECTED: "green",
     UNMASKED_BY_TRIM: "orange",
 }
@@ -246,7 +249,15 @@ TRIM_NOT_CONTENT = "n"
 _STATE_PRIORITY = {
     state: rank
     for rank, state in enumerate(
-        (MASKED, UNMASKED_BY_REVIEWER, UNMASKED_BY_APPROVAL, RELEASED_CONDITION, RELEASED_BY_KIND, UNMASKED_BY_TRIM)
+        (
+            MASKED,
+            UNMASKED_BY_REVIEWER,
+            UNMASKED_BY_APPROVAL,
+            RELEASED_CONDITION,
+            RELEASED_BY_KIND,
+            RELEASED_NOT_PROPER,
+            UNMASKED_BY_TRIM,
+        )
     )
 }
 CONDITION = "CONDITION"
@@ -762,6 +773,7 @@ def recording_record(run_root: Path, families: frozenset[str]) -> dict[str, Any]
         "rel": str(attributes.get("release") or ""),
         "rg": attributes.get("release_ground"),
         "tri": str(attributes.get("triage") or attributes.get("outcome") or ""),
+        "gk": [str(key) for key in attributes.get("ground_keys") or ()],
         "why": str(attributes.get("why") or ""),
         "rwhy": str(redact.attributes.get("why") or "") if redact is not None else "",
         "scan": scan_state(scan),
@@ -874,6 +886,7 @@ def determination(view: StoreView, verdict: Mapping[str, Any], redact: Entity | 
                 "node": str(reason.get("node") or ""),
                 "outcome": str(reason.get("outcome") or ""),
                 "why": str(reason.get("why") or ""),
+                "key": str(reason.get("key") or ""),
             }
             for reason in verdict.get("reasons") or []
         ],
@@ -1102,7 +1115,12 @@ def pooled_determination(determination: Mapping[str, Any], pool: ValuePool) -> d
     return {
         "r": pool.add(redact),
         "n": [
-            [pool.add(node.get("node") or ""), pool.add(node.get("outcome") or ""), pool.add(node.get("why") or "")]
+            [
+                pool.add(node.get("node") or ""),
+                pool.add(node.get("outcome") or ""),
+                pool.add(node.get("why") or ""),
+                pool.add(node.get("key") or ""),
+            ]
             for node in determination.get("nodes") or []
         ],
         "l": pool.add(determination.get("llm") or {}),
@@ -1151,6 +1169,8 @@ def card_account(row: Mapping[str, Any]) -> dict[str, Any]:
         said = " ".join(str(words[position][0]) for position in residue["i"] if position < len(words))
     return {
         "rg": row.get("rg") or "",
+        "tri": row.get("tri") or "",
+        "gk": list(row.get("gk") or ()),
         "why": row.get("rwhy") or row.get("why") or "",
         "scan": row.get("scan"),
         "res": None if residue is None else {"n": residue["n"], "m": residue["m"], "c": residue["c"], "said": said},
@@ -2396,6 +2416,7 @@ const STATE_WHY={masked:'masked in the released copy',
   unmasked_by_trim:'a mask covered it and it is shown',
   released_by_kind:'released by kind, whatever the reviewer said',
   released_condition:'a health condition the reviewer listed; conditions are never masked',
+  released_not_proper:'a detector marked it but it is written with no capital letter, so it is no proper noun',
   unmasked_by_approval:'a person\\'s name a human approved for release',
   detected:'a detector marked it and no mask covers it, so it is shown'};
 const TRIM_WHY={p:'only the padding reached it',n:'it is not a content word'};
@@ -2428,6 +2449,7 @@ function cardAccount(a,card){
     out.push('<p class="note">words masked '+n('masked')+' \\u00b7 unmasked by the reviewer '
       +n('unmasked_by_reviewer')+' \\u00b7 unmasked by the trim '+n('unmasked_by_trim')
       +' \\u00b7 released by kind '+n('released_by_kind')
+      +' \\u00b7 not a proper noun '+n('released_not_proper')
       +' \\u00b7 proposed by the reviewer '+n('proposed_by_reviewer')
       +(a.led.task_words_n?' \\u00b7 task words REDACT\\'s plan reached, never masked '+esc(a.led.task_words_n):'')
       +'</p>');
@@ -2467,6 +2489,8 @@ function buildWhy(stem,card){
   for(const key of Object.keys(r.c||{}))acct[key]=P(r.c[key]);
   const ground=acct.rg?{textContent:acct.rg}:null;
 
+  if(acct.tri)out.push('<p class="decisive">triage is <b>'+esc(acct.tri)+'</b>'
+    +((acct.gk||[]).length?' \\u2014 grounds: '+acct.gk.map(k=>'<code>'+esc(k)+'</code>').join(' '):'')+'</p>');
   out.push('<p class="decisive">release is <b>'+esc(rel.replace(/_/g,' '))+'</b>');
   if(rd.outcome)out.push(' \\u2014 <b>REDACT decided it</b>, returning <b>'+esc(rd.outcome)+'</b>');
   else if(ground)out.push(' \\u2014 <b>the fold decided it</b>: '+esc(ground.textContent));
@@ -2614,19 +2638,19 @@ function buildWhy(stem,card){
   /* what each node concluded, and what ran */
   const ran=P(r.a)||{};
   out.push('<h4>nodes</h4><div class="tw"><table><tr><th>node</th><th>state</th>'
-    +'<th>outcome</th><th>why</th></tr>');
+    +'<th>outcome</th><th>ground key</th><th>why</th></tr>');
   const named=new Set();
   for(const n of r.n||[]){
     const name=P(n[0]);named.add(name);
     const outcome=P(n[1]);
     out.push('<tr><td>'+esc(name)+'</td><td>'+esc(ran[name]||'\\u2014')+'</td><td class="'
       +(outcome==='pass'?'ok':outcome==='fail'?'bad':'neutral')+'">'+esc(outcome)
-      +'</td><td>'+esc(P(n[2]))+'</td></tr>');
+      +'</td><td><code>'+esc(P(n[3])||'')+'</code></td><td>'+esc(P(n[2]))+'</td></tr>');
   }
   for(const name of Object.keys(ran)){
     if(named.has(name))continue;
     out.push('<tr class="off"><td>'+esc(name)+'</td><td>'+esc(ran[name])
-      +'</td><td>\\u2014</td><td>ran, but folded no verdict of its own</td></tr>');
+      +'</td><td>\\u2014</td><td></td><td>ran, but folded no verdict of its own</td></tr>');
   }
   out.push('</table></div>');
   const absences=P(r.x)||[];

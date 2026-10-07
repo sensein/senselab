@@ -20,6 +20,7 @@ from senselab.audio.data_structures import AudioHints
 from senselab.audio.tasks.classification.label_scores import label_scores
 from senselab.audio.workflows.triage.classifier_ontology import PROFILE_PATH_KEY, corroboration_sets
 from senselab.audio.workflows.triage.config import TriageConfig
+from senselab.audio.workflows.triage.nodes.airway_task import measure_airway_task
 from senselab.audio.workflows.triage.nodes.branches import (
     AIRWAY_EXPECTATIONS,
     DETECT_GROUP,
@@ -924,10 +925,11 @@ def _airway_alternation(expectation: Expectation, store: ProvStore, params: Bran
 def _airway_coverage(
     expectation: Expectation, store: ProvStore, hint: AudioHints | None, params: BranchParams, run_dir: Path
 ) -> Result:
-    """One span per merged run of breath-scoring HeAR windows, plus ``task_extent``.
+    """A breath held over a declared extent: one span per detected breath event, plus ``task_extent``.
 
-    Reports the covered fraction and answers :data:`UNDETERMINED`; no bound is read against it. See
-    ``specs/20260817-triage-workflow-dag/airway-flag-grounds.md``.
+    The events are found the way :func:`_airway_event_series` finds them, and the count of them is
+    the reading the group's ``events_min`` gate decides the task on. The covered fraction of
+    breath-scoring HeAR windows is reported beside them as context only.
 
     Args:
         expectation: The row.
@@ -937,13 +939,23 @@ def _airway_coverage(
         run_dir: The run directory sidecar paths are relative to.
 
     Returns:
-        :data:`UNDETERMINED`, the spans, and the findings.
+        The spans and the findings.
     """
     assert expectation.label_set is not None
+    envelope = read_envelope_track(store, run_dir)
+    windows = classifier_windows(store)
     scored = hear_score_windows(store, run_dir)
-    if scored is None:
-        return instrument_absent("hear_scores")
+    missing = [*absent_instruments(envelope, windows), *(["hear_scores"] if scored is None else [])]
+    if missing or envelope is None or scored is None:
+        return instrument_absent(*missing)
     kind = expectation.label_set
+    spans = candidate_spans(store)
+    events = airway_events(kind, store, params, spans=amplitude_spans(spans), envelope=envelope, windows=windows)
+    event_evidence = evidence_ids(store, *EVENT_SOURCES)
+    graded = silence_windows(store)
+    rate = sampling_rate_of(store, "plain")
+    block = None if rate is None else read_spectrogram_block(store, run_dir, "spectrogram_wideband", rate)
+
     labels = label_sets_by_classifier(params).get(kind, LabelSet((), ())).hear
     minimum = params.gate("score_min")
     covered = (
@@ -956,29 +968,16 @@ def _airway_coverage(
     total = sum(duration(extent) for extent in covered)
     asked_s, asked_from = coverage_denominator(expectation, store)
     coverage = total / asked_s if asked_s > 0.0 else None
-    evidence = evidence_ids(store, "hear_scores")
-    graded = silence_windows(store)
+    coverage_evidence = evidence_ids(store, "hear_scores")
 
-    components: list[Proposal] = [
-        airway_span(
-            f"{kind}_run",
-            extent,
-            *evidence,
-            label=kind,
-            index=index,
-            boundaries=WINDOW_RUN_BOUNDARIES,
-            in_certified_silence=inside_certified_silence(extent, graded),
-            overlaps_transcript=overlaps_transcript(store, extent),
-        )
-        for index, extent in enumerate(covered)
-    ]
+    components = event_proposals(events, kind, store=store, evidence=event_evidence, graded=graded)
     findings: list[Finding] = [
         measured(
             COVERAGE_FRACTION,
             None,
             None,
             rounded(coverage, 3),
-            *evidence,
+            *coverage_evidence,
             covered_s=rounded(total),
             asked_s=rounded(asked_s),
             asked_from=asked_from,
@@ -986,17 +985,23 @@ def _airway_coverage(
             windows_n=len(scored),
         )
     ]
+    findings.extend(
+        event_measurements(
+            events, kind, store=store, envelope=envelope, block=block, params=params, evidence=event_evidence
+        )
+    )
     route, route_reported = route_findings(expectation, store, hint, params)
     findings.extend(route_reported)
-    task = hull(covered)
+    task = hull([(event.start, event.end) for event in events])
     if task is not None:
         components.append(
             airway_span(
                 TASK_EXTENT,
                 task,
-                *evidence,
+                *sorted({event.span_id for event in events}),
+                *event_evidence,
                 label=kind,
-                runs_n=len(covered),
+                events_n=len(events),
                 covered_s=rounded(total),
                 declared_route=route,
             )
@@ -1004,7 +1009,8 @@ def _airway_coverage(
     findings.extend(lexical_intrusions(store))
     findings.extend(unviable_findings(expectation))
     findings.extend(declared_duration_count(store, expectation.declared_duration_s))
-    findings.extend(off_task_findings(components, candidate_spans(store), params))
+    findings.extend(events_found(events, params))
+    findings.extend(off_task_findings(components, spans, params))
     return Result(components, findings)
 
 
@@ -1195,6 +1201,19 @@ def airway(
     findings = [*result.deviations, *params.record()]
     span_ids = propose_spans(store, activity, software, result.components)
     finding_ids = write_findings(store, activity, software, findings, signal=source)
+    if mode == "align" and family in AIRWAY_EXPECTATIONS:
+        finding_ids.extend(
+            measure_airway_task(
+                store,
+                activity,
+                software,
+                family=family,
+                expectation=AIRWAY_EXPECTATIONS[family],
+                sampling_hz=float(config.require("resample.target_hz")),
+                language=None if hint is None else str(hint.metadata.get("language") or "") or None,
+                run_dir=run_dir,
+            )
+        )
 
     report_id, report = write_report(
         store,

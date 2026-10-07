@@ -1,5 +1,169 @@
 # Resuming the review pass
 
+## State at r17, 2026-10-07 — AIRWAY move, VOICE redesign, r17 parquet
+
+Read this section first. Everything below it is history.
+
+### Where things are
+
+| | |
+|---|---|
+| Code branch | `fix/policy-v8` (PR #581 into `triage`). Tip at writing: `8b068a02`. |
+| Corpus | `/orcd/scratch/bcs/002/satra/triage_r9_20260929/out` (62,550 runs), re-folded in place (r17c re-fold) |
+| Latest parquet | `recording_vectors_r17` (schema 23), at `/orcd/scratch/bcs/002/satra/recording_vectors_r17/`; local copy `~/Downloads/recording_vectors_20261006_r17/` |
+| Pinned checkout | `senselab-r26` (moved forward through `c3e97dd4` → `a8a95cea` → `8b068a02`, each time only with nothing running from it) |
+| Owner labels | `~/Downloads/triage_listening_labels_20261006.csv` (~180 rows), plus per-set `index.csv` in `voice_check_20261006/` (and `discard_cause/`), `discard_contested_check_20261006/` and `breath_review_check_20261006/` |
+| Derivatives | still at the r11 state; the r17 sync is next |
+
+### r17 counts
+
+| Branch | discard | flag | pass | rerun | Total |
+|---|---|---|---|---|---|
+| AIRWAY | 1,814 | 688 | 10,363 | 144 | 13,009 |
+| SPEECH | 1,390 | 2,568 | 37,071 | 178 | 41,207 (unchanged from r16) |
+| VOICE | 79 | 268 | 7,870 | 88 | 8,305 |
+| no family | 29 | – | – | – | 29 |
+| Total | 3,312 | 3,524 | 55,304 | 410 | 62,550 |
+
+From r16 (3,914 / 6,741 / 51,435 / 460):
+- 599 discards and 3,876 flags now pass;
+- 616 passes now flag, mostly breath review and background speech;
+- 32 passes are now discarded, quiet or noise-only breath recordings (not yet listened to);
+- VOICE flags fell from 3,164 to 268; AIRWAY contested discards are 42, down from 335 before the narrowing.
+
+### What landed (fix/policy-v8)
+
+- `3eede30d`: **AIRWAY move.** Breath, cough and background speech are measured in the AIRWAY branch, and VERDICT only reads them. Discard is released as `discarded` with no task-audio cuts. `discard_contested` added; Clef is out of airway decisions.
+- `8864ed00`, `dd8635c9`: **breath fixes.** Vocalised exhales count, along with edge phases and acoustic speech; word timing uses consensus; speech splits the train only across more than two cycles; an edge phase needs ≥5 dB over the floor.
+- `c3e97dd4`: **the breath train decides presence.** Inside the review band the old measure separates review from discard.
+- `7075d730`: **VOICE phonation redesign** (schema 23).
+- `a8a95cea`: **replay driver.** A node error now gives row status `errored`, and `--force` replays past the marker.
+- `8b068a02`: **contested narrowed.** A contest needs a train rise ≥10 dB, plus ≥3 detector events for the uncounted families.
+- **Specs:** `20261006-voice-phonation/`, `20261006-airway-move/`, `20261007-task-events-in-background/` (the next iteration).
+
+### The r17 run
+
+- Replay of 21,492 recordings: the airway families, all 460 reruns and all 8,305 VOICE recordings. Then the full re-fold, task audio, recording vectors and merge, using a chain helper because of the QOS job-count limit.
+- **FFmpeg incident:** the scratch miniforge (`~/orcd/scratch/miniforge/lib`) was found emptied. Every re-fold slice died at the first released-audio decode, and 144 replay SPEECH runs failed silently. `env_common.sh` now prepends `~/ffmpeg/lib` (backup `env_common.sh.bak-20261006`). The 144 were re-replayed with `--force`.
+
+### Owner decisions this cycle
+
+- **Disordered voice is data.** Rough, breathy, hoarse, creaky or unsustained phonation is measured, not flagged.
+- **The VOICE extent is the attempt,** from energy continuity starting at the inhale, and weakly voiced attempts are included. Discard only when nothing rises above the floor.
+- **Broken or restarted holds merge into one extent.** There is no minimum hold. A mic shutoff during phonation flags.
+- **Hum:** the extent comes from raw, with a residual mains-line guard; the enhanced stream is not the default.
+- **Annotations, not flags:** `route_mismatch` when the owning branch found its task, and `task_mismatch`.
+- "it's ok for now to triage some noisy recordings"; "don't overoptimize on specifics. determine the more general components".
+- **Clef is out of VOICE and AIRWAY decisions.**
+
+### Open
+
+- **Next iteration:** the general task-events design (`specs/20261007-task-events-in-background/`): a background model, event detection, rhythm as a prior, an activity-bounded extent, and evidence kept separate from the decision. The five owner questions are in that spec.
+- **The enhanced stream is not a decider**; it is only a hint for reviewers. On the owner labels it releases noise as readily as it rescues breathing.
+- **The breath review band is 486 flags**, 18.9% of the breath family against ≤3.4% for counted families. Acceptable for now.
+- **VOICE:** the break minimum (0.25 s) and the glide bound (6 st) are unfitted. 68de3829 reads as the wrong direction, 5b4817c2's extent runs past the glide, and the hum guard's false-fire rate is unchecked.
+- **Deferred:** multi-speaker, and background speech in voiced families.
+- **318 `route_unexplained` reruns** need a routing-rules fix or a fresh run; the replay cannot clear them.
+
+### Working rules learnt this round
+
+- Listen before changing a rule. Every listen batch overturned at least one fitted cut-off.
+- Fix classes, not recordings. Fit a few parameters jointly over all labels, with a held-out split.
+- Pull samples with original + enhanced + dyngain audio and a four-panel figure, and give an `index.csv` with an empty `owner_note` column.
+- Agents stall on large single edits: ask for edits under ~60 lines, commit per unit, and background tests.
+- Never hold a Slurm wait inside an agent. For a re-fold-only change, pin the checkout and re-submit `refold` → chain helper (`task_audio` → `rvec` → merge).
+- After any replay, grep the rows for non-ok status and the logs for `libtorchcodec`.
+
+## History, 2026-10-06 — redaction v9, readable triage state, breath and cough measures
+
+### Where things are
+
+| | |
+|---|---|
+| Code branch | `fix/policy-v8` (PR #581 into `triage`; #567 merged 2026-10-04). Tip at writing: `217b22fb`. |
+| Corpus | `/orcd/scratch/bcs/002/satra/triage_r9_20260929/out` (62,550 runs), re-folded in place |
+| Latest parquet | `recording_vectors_r16` (schema 21, policy 9, built at `1a73d8d0`); local `~/Downloads/recording_vectors_20261006_r16/`. Superseded by the work below; not yet re-built. |
+| Pinned checkouts | `senselab-r15` … `senselab-r25`, one per run (job ids in `triage_r9_20260929/jobs.txt`) |
+| Owner labels | `~/Downloads/triage_listening_labels_20261006.csv` (103 rows: breath, empty-route, cough listens, each with the owner's note); copy at `/orcd/scratch/bcs/002/satra/tmp_bext/` |
+| Review figures | `~/Downloads/breath_extent_check_20261006/` (`fixed/`, `fixed2/` pending) and `~/Downloads/cough_check_20261006/fixed/` |
+| Derivatives | still at the r11 state (finalized 2026-10-03); not re-synced since |
+
+### Settled since r11 (all on `fix/policy-v8`)
+
+- **Redaction policy v7 → v9** (`specs/20261003-redaction-policy-v7/`, `specs/20261004-redaction-policy-v8/`). The rules:
+  - Names are masked by default. A public figure is released only with human approval (`redaction.name_approvals`); kinship words are released.
+  - Years, months, holidays, day-of-month and ages are locked masked. Seasons, weekdays, relative time and time of day are released (v9).
+  - Places below country are locked masked, unless the reviewer gives a closed-set reason (historical, fictional, landmark, task content). Countries are released unless the reviewer judges triangulation.
+  - Conditions are never masked or withheld. Specific organisations are masked.
+  - Lower-case detector masks are released, in every language. Task text (stimulus, target word, instructions) is never masked; per-family guidance is in `task_guidance.yaml`.
+  - The reviewer can re-label a "person" that isn't a person. Spanish closed-class words count as function words.
+  - Prompt v9. Clef question set 3 (other_voice, instructions_spoken, policy_identifier_present).
+  - `task_guidance.yaml` is hashed by bytes into the cache identity, so it's excluded from the YAML formatter (`7b409a81`).
+- **Readable triage state** (DAG-review proposals 1, 3, 4; `specs/20261004-dag-review/`):
+  - `ground_keys` for every flag, discard and withhold, with no transcript words in grounds.
+  - Empty recordings discard.
+  - A `rerun` state for pipeline failures.
+- **Truncated and absent tasks** (`specs/20261005-truncated-capture-discard/`):
+  - `too_short_for_task` (per-family minimum durations in data/).
+  - `declared_task_absent`: the declared family's owning branch decides.
+  - Bracketed tokens aren't words; `[cough]`/`[咳]` support a cough task.
+  - `owning_branch_input_absent` → rerun, not discard.
+- **Breath tasks** (`specs/20261005-breathing-pattern/`):
+  - A breath train on the denoised pre-emphasised spectrogram: 9 subbands to 7.5 kHz, coherent bursts, template matching, runs split at gaps or speech.
+  - Phases are counted; breaths = phases / 2.
+  - A vocalised exhale counts as the exhale phase (owner, 988c1609).
+  - The extent is the run's span and supersedes AIRWAY's.
+  - A narrow review band, `breath_review_low_confidence`, about 4% of kept breath recordings.
+  - Agreement with owner labels: 53/56.
+  - HeAR/YAMNet and the old vetoes are context only. Classifier-evidence rules were tried and rejected on the owner's labels.
+- **Cough tasks** (`specs/20261006-cough-pattern/`, `cough_pattern.py`):
+  - Sharp coherent broadband onsets (≥ 12 dB rise across ≥ 60% of bands); tails, a second phase and the preparatory inhale attach to the cough.
+  - The extent is the cough train, and the inhale start runs back to 8 dB over the floor (`217b22fb`).
+  - `no_cough_captured`, `cough_review_low_confidence`; a hard cough needs at least 1 onset.
+  - 23/23 owner labels agree. AIRWAY's HeAR-gated detector missed coughs that the classifiers scored low.
+- **Background speech in airway tasks** (`background_speech.py`): `background_speech_in_task` (flag) reads what enhancement removed, from the residual stream and its YAMNet scores. It fires on 6ca9935e's intercom; ~1% of the cough and breath samples.
+
+### Owner decisions not yet in code
+
+1. **`task_mismatch` is an annotation, not a flag, for every airway family.** It goes in a separate `annotation_keys` list; a recording with only that key passes. The breath agent is implementing it; the cough code reuses its constant.
+2. **`rerun` should be rerun.** The 460 r16 rerun recordings get their missing derivatives recomputed (HeAR, TAXONOMY) in the airway replay, and are held until then.
+3. **Discard is not released** (owner, 2026-10-06: "yes, discard should not be released"). Today 3,880 discarded recordings carry a release value and 2,111 have task-audio cuts. Planned: release `discarded` for a triage discard, and no task-audio cuts.
+4. **Move breath, cough and background-speech measurement into the AIRWAY branch** (owner: "yes"). VERDICT then only decides, restoring branches-measure / VERDICT-decides. This replaces AIRWAY's HeAR-gated detector outright, and needs a targeted CPU replay of the airway families (~13,000 recordings).
+5. **Figures use the fixed-gain pre-emphasised spectrogram only.** Dynamic gain inverted loudness on 988c1609; keep `_dyngain.wav` for listening.
+
+### In flight at writing
+
+- **Breath-phase agent, not pushed:**
+  - split phases at voicing boundaries, no overlapping phases;
+  - trailing speech detected acoustically per segment (ba1d1459), the ≥ 5-word cut was too coarse;
+  - edge phases already elevated at file start (ecc63817);
+  - the `task_mismatch` annotation;
+  - re-render into `fixed2/`.
+
+### Next, in order
+
+1. Land the breath-phase work. Then the AIRWAY move, the discard release, rerun handling and the annotation, all one branch unit.
+2. One cluster run:
+   - an airway replay of ~13,000 recordings plus the 460 reruns, recomputing missing HeAR/TAXONOMY;
+   - a full re-fold;
+   - task audio, then the parquet (r17).
+3. Free-speech review page, evaluations, derivatives sync with `finalize_*.sbatch` and the verifier; merge #581.
+
+### Open and deferred
+
+- Lone "El": released; owner, 2026-10-06: it "does not matter". Closed.
+- Multi-speaker in speech tasks: deferred again (owner, 2026-10-06). Signals are noisy; better models later, not gate tweaks.
+- Clef: left out of all airway (breath and cough) decisions (owner, 2026-10-06). It stays the second opinion on lexical review only.
+- 6ca9935e breath extent: fixed in `fixed2/` (owner, 2026-10-06: "looks good"). 0dc15213: some modulation but no clean signal; flagged or discarded is acceptable (owner). Closed.
+- Background speech: cough and breath tasks now; the voiced non-speech families (sustained vowels, glides, DDK…) are tested on a labelled sample later, since residual speech evidence there is unproven (owner agreed, 2026-10-06).
+
+### Working rules learnt this round
+
+- Listen before changing a rule. Every listen batch overturned at least one fitted cut-off.
+- Pull samples with original + enhanced + dyngain audio and a four-panel figure, and give an `index.csv` with an empty `your_listen` column.
+- Agents stall on large single edits: ask for edits under ~60 lines, commit per unit, and background tests.
+- Never hold a Slurm wait inside an agent. For a re-fold-only change, pin a fresh clone and re-submit `refold_*` → `task_audio_*` → `rvec_*`.
+
 ## Settled, 2026-10-03 — r11: the second opinion is Clef 27B
 
 r11 is r10 with Nimble replaced by Clef 27B (`ollama clef:27b`, Ollama 0.35.1, weights

@@ -187,9 +187,7 @@ GATE_SPECS: dict[str, GateSpec] = _gate_specs(
         "voiced_fraction_min": GateSpec("carrier_voiced_fraction", AT_LEAST, float),
         "f0_spread_max_semitones": GateSpec("carrier_f0_spread_semitones", AT_MOST, float),
         "continuity_min": GateSpec("carrier_continuity", AT_LEAST, float),
-        "dominant_segment_min_fraction": GateSpec("sweep_dominant_fraction", AT_LEAST, float),
         "glide_extent_min_semitones": GateSpec("glide_extent_semitones", AT_LEAST, float),
-        "declared_duration_min_fraction": GateSpec("production_declared_fraction", AT_LEAST, float),
         "expected_tokens_matched_min": GateSpec("expected_tokens_matched", AT_LEAST, int),
         "content_omission_fraction_max": GateSpec("expected_content_omitted_fraction", AT_MOST, float),
         "response_min_s": GateSpec("response_duration_s", AT_LEAST, float),
@@ -219,14 +217,14 @@ GATE_KEYS = tuple(GATE_SPECS)
 """The gate names, in declaration order. ``config_test`` pins them against the packaged section."""
 
 CONFORMANCE_GATES: dict[Pattern, tuple[str, ...]] = {
-    Pattern.SUSTAINED: ("production_min_s", "declared_duration_min_fraction"),
-    Pattern.GLIDE: ("production_min_s", "dominant_segment_min_fraction", "glide_extent_min_semitones"),
+    Pattern.SUSTAINED: ("production_min_s",),
+    Pattern.GLIDE: ("production_min_s", "glide_extent_min_semitones"),
     Pattern.ORDERED_TOKENS: ("expected_tokens_matched_min", "content_omission_fraction_max"),
     Pattern.FREE_RESPONSE: ("response_min_s",),
     Pattern.ITEM_LIST: ("items_min",),
     Pattern.EVENT_SERIES: ("events_min", "instructed_count_min_fraction"),
     Pattern.EVENT_ALTERNATION: ("events_min", "instructed_count_min_fraction"),
-    Pattern.SOUND_COVERAGE: (),
+    Pattern.SOUND_COVERAGE: ("events_min",),
     Pattern.SYLLABLE_TRAIN: ("repetitions_min", "instructed_count_min_fraction"),
     Pattern.SYLLABLE_SEQUENCE: ("repetitions_min", "instructed_count_min_fraction"),
     Pattern.PER_SENTENCE: (),

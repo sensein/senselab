@@ -1,0 +1,61 @@
+# The VOICE phonation measure (voice_phonation.py). The derivation of every value is in
+# specs/20261006-voice-phonation/design.md; values marked UNFITTED are to be fitted on the labels.
+version: 1
+frame_s: 0.04                     # analysis window of the level and spectrum frames
+hop_s: 0.01                       # hop of every per-frame series
+band_hz: [80.0, 4000.0]           # band the frame level is read in
+floor_smooth_s: 0.1               # moving-average window whose quietest value is the floor
+digital_floor_dbfs: -90.0         # frames under this are digital silence, never the noise floor
+phonation_db: 10.0                # level over the floor at which a frame is phonation
+voiced_rise_db: 6.0               # level over the floor a voiced frame needs to count as phonation
+vowel_word_pattern: ^[aeiouhym]+$    # a consensus word spelled like this is the vowel itself, not speech
+speech_word_max_s: 1.5            # a word held longer than this is the vowel transcribed, not speech
+break_min_s: 0.25                 # UNFITTED within 0.15-0.4: shortest fall below phonation that is a break
+segment_min_s: 0.8                # shortest run that merges into the extent as a further hold
+merge_gap_max_s: 2.0              # longest gap a further hold merges across
+merge_voiced_fraction_min: 0.3    # voiced share at which a further run is a hold
+merge_db: 20.0                    # or the level over the floor at which it is
+extent_min_s: 0.3                 # an extent shorter than this is no phonation
+inhale:
+  rise_db: 8.0                    # level over the floor an inhale reaches, as in the cough measure
+  max_s: 1.5                      # how far before the onset an inhale may start
+  gap_s: 0.3                      # longest gap between an inhale and the onset
+  min_s: 0.1                      # shortest inhale
+f0:
+  range_hz: [50.0, 1600.0]        # Praat cc search range on the plain stream
+  strength_min: 0.45              # periodicity strength at which a frame is voiced
+  octave_db: 6.0                  # odd-against-even harmonic level difference that moves F0 an octave
+  harmonics: 3                    # harmonics of each parity compared
+  fold_window_s: 0.5              # window of the running median a stray octave folds toward
+  fold_semitones: 9.0             # deviation from that median that folds a frame by an octave
+  spread_window_s: 0.5            # window of the f0 spread annotation
+glide:
+  range_min_semitones: 6.0        # UNFITTED: travel in the declared direction that is a glide
+  jump_max_semitones: 9.0         # frame-to-frame jump treated as a discontinuity, not travel
+  smoothing_frames: 5             # running-median width over the semitone track
+  voiced_min_s: 0.3               # voiced time under which no glide is measurable
+hum:
+  mains_hz: [50.0, 60.0]          # mains fundamentals
+  harmonics_max: 10               # multiples of each read
+  line_db: 10.0                   # line over its neighbourhood that counts
+  neighbourhood_hz: [2.0, 8.0]    # offsets either side the neighbourhood is read over
+  lines_min: 3                    # lines that fire the guard (31/36 hum, 0/30 clean)
+  lock_fraction_min: 0.5          # voiced frames within tolerance of a mains multiple that fire it
+  tolerance_hz: 1.0               # how close an f0 frame is to a mains multiple to be dropped
+  disagreement_s: 1.0             # raw-against-enhanced extent edge difference that goes to review
+  enhanced_drop_db: 20.0          # enhanced under raw by this supports nothing captured
+shutoff:
+  below_floor_db: 8.0             # a dead frame sits this far under the floor of the live frames
+  drop_db: 30.0                   # level fall within drop_s that makes it abrupt
+  drop_s: 0.1                     # how quickly the fall happens
+  flat_window_s: 0.3              # window a dead stretch's flatness is read over
+  flat_db: 1.0                    # largest p10-p90 level spread of a dead stretch
+  bridge_s: 0.15                  # gaps a dead run is joined across
+  min_s: 0.3                      # shortest shutoff run
+  gap_s: 0.5                      # a shutoff this soon after the extent ends cut the task
+speech:
+  run_min_s: 0.08                 # shortest voiced run outside the extent that is reported
+  voiced_fraction_min: 0.3        # voiced share at which a run outside the extent is speech-like
+review:
+  floor_margin_db: 2.0            # strict and lenient phonation_db offsets
+  glide_margin_semitones: 1.5     # strict and lenient glide-bound offsets

@@ -311,6 +311,8 @@ def build_recording(
                 triage=Triage.FLAG.value,
                 release=Release.WITHHELD.value,
                 discard_ground=None,
+                ground_keys=["node:SPEECH:flag"],
+                release_ground_key="speech_detected",
                 declared_family="diadochokinesis-pa",
                 release_ground="speech_detected",
                 gates=GATES if gates is None else gates,
@@ -481,14 +483,16 @@ def test_identity_is_read_from_the_stem_and_the_verdict_from_the_fold(one_row: d
 
 
 def test_the_decision_record_the_html_asked_for_is_present(one_row: dict[str, Any]) -> None:
-    """Conformance per branch, the flag count, the grounds, duration and release."""
+    """Conformance per branch, the flag count, the ground keys, duration and release."""
     assert one_row["conformance_speech"] == "true"
     assert one_row["conformance_voice"] == "undetermined"
     assert one_row["conformance_airway"] is None
     assert one_row["route_airway"] == "declined"
     assert one_row["flags_n"] == 1
     assert one_row["flag_nodes"] == ["SPEECH"]
-    assert one_row["grounds"] is None
+    assert one_row["discard_ground"] is None
+    assert one_row["ground_keys"] == ["node:SPEECH:flag"]
+    assert one_row["release_ground_key"] == "speech_detected"
     assert one_row["duration_s"] == pytest.approx(4.0)
     assert one_row["time_scale_s"] == pytest.approx(4.0)
 
