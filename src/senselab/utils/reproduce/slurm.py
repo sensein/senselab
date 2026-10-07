@@ -1,44 +1,51 @@
-"""Batch jobs for reproduce steps: rendering, the preemption probe, and ``afterok`` submission chains.
+"""Batch jobs for reproduce steps: rendering, the feasibility probe, and held ``afterok`` submission chains.
 
-Each step becomes one batch job that runs ``python -m senselab.utils.reproduce run … --step <name>``.
-A job does not get its step key at submission: an ``up:`` input is digested from the upstream result
-dir, which exists only once the upstream job has finished, so each job keys its own step when it starts
-and resolves its upstream steps' done results (`run.run_steps` with ``only``). Jobs are chained with
-``--dependency=afterok:<ids>`` and ``--kill-on-invalid-dep=yes``, so a failed step cancels every job
-that depends on it.
+Each step becomes one batch job that runs ``python -P -m senselab.utils.reproduce run … --step <name>``.
+No step key is computed at submission (an ``up:`` input exists only once its upstream job finished);
+each job keys its own step when it starts and resolves its upstream steps' done results
+(`run.run_steps` with ``only``).
 
-``submit`` writes a ``pending`` row per step into each analysis's ``run.json`` before the first job is
-submitted, then records each job id. A job rewrites its own row when it ends, and a job whose step did
-not succeed turns its dependants' rows into ``never-ran``. A last ``--finalize`` job, ``afterany`` every
-step job, turns any row still ``pending`` (a job Slurm cancelled or killed) into ``never-ran``, which is
-terminal.
+`submit` renders every script first (both partitions of a step with a fallback, and the finalize job),
+so a render error fails with no side effect. It then submits every job ``--hold``, chained with
+``--dependency=afterok:<ids>`` and ``--kill-on-invalid-dep=yes``, writes a ``pending`` row per step
+tagged with the submission id and job id, submits a ``--finalize`` job ``afterany`` every step job, and
+only then releases them all with ``scontrol release``. Any exception or interrupt before the release
+completes cancels every job submitted so far and marks the steps ``never-ran`` with ``E_SUBMIT_ABORTED``.
 
-A job's ``--output`` and ``--error`` go to ``<slurm_logs_root>/<date>/<jobid>.{out,err}``: a job is
-submitted before its driver knows whether the step will skip. The job starts from an empty environment
-(``--export=NONE``) and exports only ``PATH``, the variables of `batch_exports`, the driver interpreter
-and a per-job ``TMPDIR`` under ``/dev/shm``.
+Every job runs in ``<slurm_logs_root>/<date>`` (``--chdir``), which the driver creates with mode
+``2770``; sbatch runs under ``umask 007``. ``--output`` and ``--error`` are ``<jobid>.{out,err}`` there.
+The job starts from an empty environment (``--export=NONE``) and exports only ``PATH``, the variables of
+`batch_exports`, the driver interpreter and a per-job ``TMPDIR`` under ``/dev/shm``.
 """
 
 from __future__ import annotations
 
+import contextlib
 import datetime
+import getpass
 import os
 import re
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
-from collections.abc import Callable, Mapping, Sequence
+import threading
+import uuid
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import FrameType
 from typing import NamedTuple
 
-from senselab.utils.reproduce import run
-from senselab.utils.reproduce.build import SYSTEM_PATH, _safe_word
+from senselab.utils.reproduce import cache, run
+from senselab.utils.reproduce.build import SYSTEM_PATH
 from senselab.utils.reproduce.dag import toposort
-from senselab.utils.reproduce.spec import RESERVED_ROOT_NAMES, Manifest, Profile, StepSpec, placeholders
+from senselab.utils.reproduce.spec import RESERVED_ROOT_NAMES, Manifest, PartitionSpec, Profile, StepSpec, placeholders
 
 SBATCH = "sbatch"
+SCANCEL = "scancel"
+SCONTROL = "scontrol"
 DRIVER_MODULE = "senselab.utils.reproduce"
 LINK_MODE = "hardlink"
 UV_EXPORTS = ("UV_CACHE_DIR", "UV_PYTHON_INSTALL_DIR")
@@ -48,21 +55,30 @@ FINALIZE_CPUS = 1
 FINALIZE_MEM = "1G"
 FINALIZE_TIME = "00:10:00"
 SUBMIT_TIMEOUT = 120
+LOG_DIR_MODE = 0o2770
+SUBMIT_UMASK = 0o007
+CODES = frozenset({"E_SUBMIT_ABORTED", "E_SUBMIT_OVERLAP", "E_MANIFEST_CHANGED"})
+"""The submission's codes, written into ``run.json`` rows."""
 _SCRIPT_OWNED = frozenset({"PATH", "TMPDIR", "REPRO_DRIVER_PYTHON"})
 _EXPORT_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _JOB_ID = re.compile(r"^[0-9]+$")
-_PREEMPTS = re.compile(r"\bPreempts:")
+_SLURM_WORD = re.compile(r"^[A-Za-z0-9_.+/@:=-]+(,[A-Za-z0-9_.+/@:=-]+)*$")
+_PATH_WORD = re.compile(r"^[A-Za-z0-9_.+/@:=-]+$")
 
 Runner = Callable[[list[str], str], "subprocess.CompletedProcess[str]"]
-"""Runs ``(argv, script)``: an sbatch command line, with the batch script on its standard input."""
+"""Runs ``(argv, stdin)``: an sbatch, scontrol or scancel command line, with a batch script (or "") on stdin."""
 
 
 class SlurmError(RuntimeError):
-    """A submission that failed or was refused."""
+    """A submission that failed or was refused; the message starts with a code when one applies."""
+
+
+class Terminated(BaseException):
+    """SIGTERM arrived while a submission or a waited build job was in flight."""
 
 
 class Finding(NamedTuple):
-    """One cross-check failure of a step against the profile: the step, a fixed code, and a detail."""
+    """One cross-check failure against the profile: the step (or ``<profile>``), a fixed code, a detail."""
 
     step: str
     code: str
@@ -79,10 +95,15 @@ class Job(NamedTuple):
 
 
 class Submission(NamedTuple):
-    """The step jobs of one submission, in DAG order, and the ``--finalize`` job's id (None if none)."""
+    """The step jobs of one submission, in DAG order, the ``--finalize`` job's id, and the submission id."""
 
     jobs: list[Job]
     finalize: str | None
+    submission: str
+
+
+def _new_submission() -> str:
+    return uuid.uuid4().hex[:12]
 
 
 @dataclass
@@ -98,6 +119,9 @@ class SubmitConfig:
         date: The run date, fixed at submission, so a job that starts after midnight writes the same run dir.
         exports: The variables each job exports (`batch_exports`).
         driver_python: The interpreter with senselab installed.
+        manifest_sha256s: The sha256 of each manifest file as submitted, in ``manifest_paths`` order; each job
+            refuses to run (``E_MANIFEST_CHANGED``) when a file no longer has it. Empty pins nothing.
+        submission: The submission id that tags every row.
     """
 
     profile: Profile
@@ -108,14 +132,19 @@ class SubmitConfig:
     date: datetime.date
     exports: Mapping[str, str]
     driver_python: str = field(default_factory=lambda: sys.executable)
+    manifest_sha256s: list[str] = field(default_factory=list)
+    submission: str = field(default_factory=_new_submission)
 
 
-def default_runner(argv: list[str], script: str) -> subprocess.CompletedProcess[str]:
-    """Run an sbatch command with ``script`` on its standard input.
+def default_runner(
+    argv: list[str], script: str, timeout: float | None = SUBMIT_TIMEOUT
+) -> subprocess.CompletedProcess[str]:
+    """Run a Slurm command with ``script`` on its standard input.
 
     Args:
         argv: The command; its first element is looked up on ``PATH``.
-        script: The batch script.
+        script: Standard input (a batch script, or "").
+        timeout: Seconds before the command is killed; None waits for ever.
 
     Returns:
         The completed process, output captured.
@@ -127,13 +156,60 @@ def default_runner(argv: list[str], script: str) -> subprocess.CompletedProcess[
     if found is None:
         raise SlurmError(f"{argv[0]} is not on PATH")
     return subprocess.run(
-        [found, *argv[1:]], input=script, capture_output=True, text=True, check=False, timeout=SUBMIT_TIMEOUT
+        [found, *argv[1:]], input=script, capture_output=True, text=True, check=False, timeout=timeout
     )
 
 
+def wait_runner(argv: list[str], script: str) -> subprocess.CompletedProcess[str]:
+    """`default_runner` with no timeout, for ``sbatch --wait``."""
+    return default_runner(argv, script, timeout=None)
+
+
+@contextlib.contextmanager
+def _umask(mask: int) -> Iterator[None]:
+    old = os.umask(mask)
+    try:
+        yield
+    finally:
+        os.umask(old)
+
+
+@contextlib.contextmanager
+def terminate_raises() -> Iterator[None]:
+    """Turn SIGTERM into `Terminated` for the duration (main thread only; elsewhere a no-op)."""
+    if threading.current_thread() is not threading.main_thread():
+        yield
+        return
+
+    def handler(signum: int, frame: FrameType | None) -> None:
+        raise Terminated()
+
+    old = signal.signal(signal.SIGTERM, handler)
+    try:
+        yield
+    finally:
+        signal.signal(signal.SIGTERM, old)
+
+
 def log_dir(profile: Profile, date: datetime.date) -> Path:
-    """``<slurm_logs_root>/<YYYY-MM-DD>``, where a job's ``<jobid>.out`` and ``<jobid>.err`` go."""
+    """``<slurm_logs_root>/<YYYY-MM-DD>``: every job's working dir and where its ``<jobid>.out``/``.err`` go."""
     return profile.slurm_logs_root / date.isoformat()
+
+
+def prepare_log_dir(profile: Profile, date: datetime.date) -> Path:
+    """Create the dated log dir with mode ``2770`` (group-only, setgid), or set that mode on an existing one.
+
+    Raises:
+        SlurmError: If a symlink or a non-directory is in its place.
+    """
+    logs = log_dir(profile, date)
+    logs.parent.mkdir(parents=True, exist_ok=True)
+    with contextlib.suppress(FileExistsError):
+        os.mkdir(logs, LOG_DIR_MODE)
+    if logs.is_symlink() or not logs.is_dir():
+        raise SlurmError("the dated Slurm log dir is not a directory")
+    os.chmod(logs, LOG_DIR_MODE)
+    return logs
 
 
 def batch_exports(profile: Profile, *, cache: Path, environ: Mapping[str, str]) -> dict[str, str]:
@@ -169,6 +245,49 @@ def batch_exports(profile: Profile, *, cache: Path, environ: Mapping[str, str]) 
 # --- cross-checks ----------------------------------------------------------------------------------------
 
 
+def slurm_word(value: str, what: str) -> str:
+    """Return ``value`` if it is a plain word or a comma-separated list of them (``gpu:a100:1,shard:1``).
+
+    Raises:
+        ValueError: Otherwise.
+    """
+    if not _SLURM_WORD.match(value):
+        raise ValueError(f"{what} {value!r} is not a plain word or comma list")
+    return value
+
+
+def _path_word(value: str, what: str) -> str:
+    if not _PATH_WORD.match(value):
+        raise ValueError(f"{what} {value!r} is not a plain path")
+    return value
+
+
+def _partition_findings(owner: str, key: str, part: PartitionSpec) -> list[Finding]:
+    found = []
+    fields = {"partition": part.partition, "mem": part.mem, "time": part.time, "gres": part.gres}
+    fields["fallback"] = part.fallback
+    for name, value in fields.items():
+        if value is not None and not _SLURM_WORD.match(value):
+            found.append(Finding(owner, "resource-invalid", f"{key}.{name}"))
+    if part.fallback is not None and part.fallback == part.partition:
+        found.append(Finding(owner, "fallback-invalid", f"{key}.fallback is the partition itself"))
+    return found
+
+
+def profile_findings(profile: Profile) -> list[Finding]:
+    """Cross-check what every job's rendering reads from the profile itself.
+
+    Returns:
+        ``logs-invalid`` (``slurm_logs_root`` is not a plain path) and the ``build`` partition's
+        ``resource-invalid``/``fallback-invalid`` findings (the finalize and build jobs run there).
+    """
+    found = []
+    if not _PATH_WORD.match(os.fspath(profile.slurm_logs_root)):
+        found.append(Finding("<profile>", "logs-invalid", "slurm_logs_root"))
+    found += _partition_findings("<profile>", profile.build, profile.partitions[profile.build])
+    return found
+
+
 def _root_names(step: StepSpec) -> list[str]:
     roots = [i.root for i in step.inputs] + [s.root for s in step.stage]
     names = [r for r in roots if not r.startswith("up:") and r not in RESERVED_ROOT_NAMES]
@@ -178,32 +297,28 @@ def _root_names(step: StepSpec) -> list[str]:
 
 
 def step_findings(step: StepSpec, profile: Profile) -> list[Finding]:
-    """Cross-check what a step asks of the profile.
+    """Cross-check what a step asks of the profile, so lint catches what rendering would refuse.
 
     Args:
         step: The step.
         profile: The site profile.
 
     Returns:
-        ``partition-unknown`` (``resources.profile`` is no partition key), ``fallback-invalid`` (the
-        partition's fallback is itself or not a plain word), ``gpu-no-gres`` (``gpu_arch`` or
-        ``min_driver`` on a partition with no ``gres``), ``native-unknown`` and ``root-unknown`` (an input,
-        stage or ``{root:<name>}`` naming no profile root) findings, in that order.
+        ``partition-unknown`` (``resources.profile`` is no partition key); ``resource-invalid`` (a
+        partition, mem, time, gres or fallback value that is not a plain word or comma list);
+        ``fallback-invalid`` (the fallback is the partition itself); ``gpu-no-gres`` (``gpu_arch`` or
+        ``min_driver`` on a partition with no ``gres``); ``native-unknown``; and ``root-unknown`` (an
+        input, stage or ``{root:<name>}`` naming no profile root).
     """
     found: list[Finding] = []
-    part = profile.partitions.get(step.resources.profile)
+    key = step.resources.profile
+    part = profile.partitions.get(key)
     if part is None:
-        found.append(Finding(step.name, "partition-unknown", step.resources.profile))
+        found.append(Finding(step.name, "partition-unknown", key))
     else:
-        if part.fallback is not None:
-            try:
-                _safe_word(part.fallback, "fallback")
-                if part.fallback == part.partition:
-                    raise ValueError("fallback is the partition itself")
-            except ValueError as error:
-                found.append(Finding(step.name, "fallback-invalid", str(error)))
+        found += _partition_findings(step.name, key, part)
         if (step.resources.gpu_arch or step.resources.min_driver) and part.gres is None:
-            found.append(Finding(step.name, "gpu-no-gres", step.resources.profile))
+            found.append(Finding(step.name, "gpu-no-gres", key))
     native = sorted(set(step.resources.native) - set(profile.native))
     if native:
         found.append(Finding(step.name, "native-unknown", ", ".join(native)))
@@ -219,16 +334,21 @@ def step_findings(step: StepSpec, profile: Profile) -> list[Finding]:
 def _header(name: str, partition: str, cpus: int, mem: str, time: str, gres: str | None, logs: Path) -> list[str]:
     lines = [
         "#!/bin/bash",
-        f"#SBATCH --job-name={_safe_word(name, 'job name')}",
-        f"#SBATCH --partition={_safe_word(partition, 'partition')}",
+        f"#SBATCH --job-name={_path_word(name, 'job name')}",
+        f"#SBATCH --partition={slurm_word(partition, 'partition')}",
         f"#SBATCH --cpus-per-task={cpus}",
-        f"#SBATCH --mem={_safe_word(mem, 'mem')}",
-        f"#SBATCH --time={_safe_word(time, 'time')}",
+        f"#SBATCH --mem={slurm_word(mem, 'mem')}",
+        f"#SBATCH --time={slurm_word(time, 'time')}",
     ]
     if gres is not None:
-        lines.append(f"#SBATCH --gres={_safe_word(gres, 'gres')}")
-    logs_text = _safe_word(os.fspath(logs), "log dir")
-    lines += [f"#SBATCH --output={logs_text}/%j.out", f"#SBATCH --error={logs_text}/%j.err", "#SBATCH --export=NONE"]
+        lines.append(f"#SBATCH --gres={slurm_word(gres, 'gres')}")
+    logs_text = _path_word(os.fspath(logs), "log dir")
+    lines += [
+        f"#SBATCH --output={logs_text}/%j.out",
+        f"#SBATCH --error={logs_text}/%j.err",
+        f"#SBATCH --chdir={logs_text}",
+        "#SBATCH --export=NONE",
+    ]
     return lines
 
 
@@ -250,7 +370,7 @@ def _body(exports: Mapping[str, str], driver_python: str, command: Sequence[str]
         'export TMPDIR="/dev/shm/reproduce-${SLURM_JOB_ID}"',
         'mkdir -p "$TMPDIR"',
         "trap 'rm -rf \"$TMPDIR\"' EXIT",
-        '"$REPRO_DRIVER_PYTHON" ' + shlex.join(["-m", DRIVER_MODULE, *command]),
+        '"$REPRO_DRIVER_PYTHON" ' + shlex.join(["-P", "-m", DRIVER_MODULE, *command]),
     ]
     return lines
 
@@ -272,8 +392,8 @@ def render_step_job(
         step: The step; ``resources.profile`` picks the partition entry giving CPUs, memory, time and gres.
         profile: The site profile.
         partition: The partition to submit to (the entry's own, or its fallback; `choose_partition`).
-        command: The driver arguments after ``-m senselab.utils.reproduce`` (`step_command`).
-        date: The log date.
+        command: The driver arguments after ``-P -m senselab.utils.reproduce`` (`step_command`).
+        date: The log date; the job runs in that log dir.
         exports: The variables to export (`batch_exports`).
         dependencies: The job ids of the step's needs; rendered as ``--dependency=afterok:<ids>``.
         driver_python: The interpreter with senselab installed.
@@ -326,10 +446,16 @@ def render_finalize_job(
 
 
 def step_command(config: SubmitConfig, step: str | None, *, finalize: bool = False) -> list[str]:
-    """The driver arguments of a job: ``run <manifests…> --profile … --date … --step <step>`` (or ``--finalize``)."""
+    """A job's driver arguments: ``run <manifests…> --profile … --date … --submission <id> [--pin <sha>…]``.
+
+    Ends with ``--step <step>``, or ``--finalize``.
+    """
     argv = ["run", *(os.fspath(p) for p in config.manifest_paths)]
     argv += ["--profile", os.fspath(config.profile_path), "--base-dir", os.fspath(config.base_dir)]
     argv += ["--cache", os.fspath(config.cache), "--date", config.date.isoformat()]
+    argv += ["--submission", config.submission]
+    for sha in config.manifest_sha256s:
+        argv += ["--pin", sha]
     if finalize:
         return [*argv, "--finalize"]
     assert step is not None
@@ -339,16 +465,13 @@ def step_command(config: SubmitConfig, step: str | None, *, finalize: bool = Fal
 # --- the probe and submission --------------------------------------------------------------------------
 
 
-def probe_preempts(output: str) -> bool:
-    """Whether an ``sbatch --test-only`` answer reports preemption (a ``Preempts:`` line)."""
-    return _PREEMPTS.search(output) is not None
-
-
 def choose_partition(step: StepSpec, profile: Profile, script_for: Callable[[str], str], runner: Runner) -> str:
-    """The partition a step job goes to.
+    """The partition a step job goes to: a feasibility probe of the primary partition.
 
-    A partition entry with a ``fallback`` is probed with ``sbatch --test-only`` first; when the probe
-    reports preemption or fails, the job goes to the fallback. An entry without one is used as is.
+    A partition entry with a ``fallback`` is probed with ``sbatch --test-only``. The job goes to the
+    fallback only when the probe rejects the primary partition (non-zero exit: unavailable, or the request
+    cannot be satisfied there) or the probe itself errors or times out. A ``Preempts:`` line, which lists
+    other jobs ours would preempt, is not a reason to fall back. An entry without a fallback is not probed.
 
     Args:
         step: The step.
@@ -362,14 +485,15 @@ def choose_partition(step: StepSpec, profile: Profile, script_for: Callable[[str
     part = profile.partitions[step.resources.profile]
     if part.fallback is None:
         return part.partition
-    result = runner([SBATCH, "--test-only"], script_for(part.partition))
-    if result.returncode != 0 or probe_preempts((result.stdout or "") + (result.stderr or "")):
+    try:
+        result = runner([SBATCH, "--test-only"], script_for(part.partition))
+    except (SlurmError, OSError, subprocess.SubprocessError):
         return part.fallback
-    return part.partition
+    return part.partition if result.returncode == 0 else part.fallback
 
 
-def _submit_one(runner: Runner, script: str) -> str:
-    result = runner([SBATCH, "--parsable"], script)
+def _submit_held(runner: Runner, script: str) -> str:
+    result = runner([SBATCH, "--parsable", "--hold"], script)
     if result.returncode != 0:
         tail = (result.stderr or "").strip().splitlines()[-1:] or [""]
         raise SlurmError(f"sbatch exited {result.returncode}: {tail[0]}")
@@ -379,84 +503,156 @@ def _submit_one(runner: Runner, script: str) -> str:
     return job_id
 
 
-def submit(manifests: Sequence[Manifest], config: SubmitConfig, runner: Runner | None = None) -> Submission:
-    """Submit one job per step in DAG order, each ``afterok`` its needs' jobs, then a ``--finalize`` job.
+def _check_overlap(profile: Profile, date: datetime.date, names: Sequence[str], submission: str) -> None:
+    for name in names:
+        rows = run.read_run_record(cache.run_dir(profile.runs_root, date, name) / run.RUN_JSON)
+        others = sorted(
+            {
+                str(r.get("submission"))
+                for r in rows
+                if r.get("status") == run.PENDING and r.get("submission") != submission
+            }
+        )
+        if others:
+            raise SlurmError(
+                f"E_SUBMIT_OVERLAP: {name} has pending rows from submission(s) {', '.join(others)}; wait for them, "
+                "or settle them with `run --finalize --submission <id>`"
+            )
 
-    Every analysis's ``run.json`` gets a ``pending`` row per step before the first job is submitted,
-    and each row then gets its ``job`` id unless the job already rewrote it. When a submission fails,
-    that step and every later one are marked ``never-ran``, a finalize job is still submitted for the
-    jobs already queued, and `SlurmError` is raised.
+
+def submit(manifests: Sequence[Manifest], config: SubmitConfig, runner: Runner | None = None) -> Submission:
+    """Submit one held job per step in DAG order (``afterok`` its needs), a held finalize job, then release.
+
+    Order: cross-checks; refuse while another submission's rows are pending (``E_SUBMIT_OVERLAP``); render
+    every script (a render error raises before anything is written); probe partitions; create the log dir;
+    submit each step job ``--hold``; write the ``pending`` rows (submission id, job id); submit the finalize
+    job ``--hold``; ``scontrol release`` every job. sbatch runs under ``umask 007``. Any exception, Ctrl-C or
+    SIGTERM before the release completes cancels every submitted job, marks every step ``never-ran`` with
+    ``E_SUBMIT_ABORTED``, and raises `SlurmError`.
 
     Args:
         manifests: The manifests; step names are unique across them.
         config: The submission's shared settings.
-        runner: Runs sbatch; defaults to `default_runner`.
+        runner: Runs sbatch, scontrol and scancel; defaults to `default_runner`.
 
     Returns:
         The submission.
 
     Raises:
-        SlurmError: If a step fails the profile cross-checks (`step_findings`) or a submission fails.
+        SlurmError: On a cross-check finding, an overlap, or an aborted submission.
+        ValueError: If a script cannot be rendered (nothing was written or submitted).
     """
     runner = default_runner if runner is None else runner
-    profile = config.profile
+    profile, submission = config.profile, config.submission
     analysis = {s.name: m.name for m in manifests for s in m.steps}
     ordered = toposort([s for m in manifests for s in m.steps])
-    findings = [f for s in ordered for f in step_findings(s, profile)]
+    findings = profile_findings(profile) + [f for s in ordered for f in step_findings(s, profile)]
     if findings:
         raise SlurmError(f"{len(findings)} profile cross-check finding(s); run lint")
     orders = {m.name: [s.name for s in ordered if analysis[s.name] == m.name] for m in manifests}
-    log_dir(profile, config.date).mkdir(parents=True, exist_ok=True)
-    for name, order in orders.items():
-        pending = [{**run.never_ran_row(s), "status": run.PENDING, "job": None} for s in order]
-        run.update_run_record(profile.runs_root, config.date, name, pending, order=order)
+    _check_overlap(profile, config.date, list(orders), submission)
+
+    def script_for(step: StepSpec, partition: str, needs: Sequence[str] = ()) -> str:
+        return render_step_job(
+            step,
+            profile,
+            partition=partition,
+            command=step_command(config, step.name),
+            date=config.date,
+            exports=config.exports,
+            dependencies=needs,
+            driver_python=config.driver_python,
+        )
+
+    def finalize_script(ids: Sequence[str]) -> str:
+        return render_finalize_job(
+            profile,
+            command=step_command(config, None, finalize=True),
+            date=config.date,
+            exports=config.exports,
+            dependencies=ids,
+            driver_python=config.driver_python,
+        )
+
+    for step in ordered:
+        part = profile.partitions[step.resources.profile]
+        for partition in (part.partition, part.fallback):
+            if partition is not None:
+                script_for(step, partition)
+    finalize_script([])
+
+    submitted: list[str] = []
     jobs: list[Job] = []
-    by_step: dict[str, str] = {}
-    for index, step in enumerate(ordered):
-
-        def script_for(partition: str, needs: Sequence[str] = (), step: StepSpec = step) -> str:
-            return render_step_job(
-                step,
-                profile,
-                partition=partition,
-                command=step_command(config, step.name),
-                date=config.date,
-                exports=config.exports,
-                dependencies=needs,
-                driver_python=config.driver_python,
-            )
-
+    with _umask(SUBMIT_UMASK), terminate_raises():
         try:
-            partition = choose_partition(step, profile, script_for, runner)
-            job_id = _submit_one(runner, script_for(partition, [by_step[n] for n in step.needs]))
-        except (SlurmError, OSError, subprocess.SubprocessError) as error:
-            rest = ordered[index:]
+            prepare_log_dir(profile, config.date)
+            by_step: dict[str, str] = {}
+            for step in ordered:
+
+                def probe_script(partition: str, step: StepSpec = step) -> str:
+                    return script_for(step, partition)
+
+                partition = choose_partition(step, profile, probe_script, runner)
+                job_id = _submit_held(runner, script_for(step, partition, [by_step[n] for n in step.needs]))
+                submitted.append(job_id)
+                by_step[step.name] = job_id
+                jobs.append(Job(step.name, analysis[step.name], job_id, partition))
             for name, order in orders.items():
-                gone = [run.never_ran_row(s.name) for s in rest if analysis[s.name] == name]
-                if gone:
-                    run.update_run_record(profile.runs_root, config.date, name, gone, order=order, pending_only=True)
-            if by_step:
-                try:
-                    _submit_finalize(config, runner, list(by_step.values()))
-                except (SlurmError, OSError, subprocess.SubprocessError):
-                    pass
-            raise SlurmError(f"submitting {step.name} failed ({error}); {len(jobs)} job(s) already queued") from None
-        by_step[step.name] = job_id
-        name = analysis[step.name]
-        row = {"step": step.name, "job": job_id}
-        run.update_run_record(profile.runs_root, config.date, name, [row], order=orders[name], pending_only=True)
-        jobs.append(Job(step.name, name, job_id, partition))
-    finalize = _submit_finalize(config, runner, [j.job_id for j in jobs]) if jobs else None
-    return Submission(jobs, finalize)
+                rows = [
+                    {**run.never_ran_row(s), "status": run.PENDING, "job": by_step[s], "submission": submission}
+                    for s in order
+                ]
+                run.update_run_record(profile.runs_root, config.date, name, rows, order=order)
+            finalize = _submit_held(runner, finalize_script(submitted)) if submitted else None
+            if finalize is not None:
+                submitted.append(finalize)
+            if submitted:
+                _check(runner([SCONTROL, "release", ",".join(submitted)], ""), "scontrol release")
+        except BaseException as error:
+            _abort(runner, config, orders, submitted)
+            reason = type(error).__name__ if not isinstance(error, (SlurmError, ValueError)) else str(error)
+            raise SlurmError(f"E_SUBMIT_ABORTED: {reason}; {len(submitted)} job(s) cancelled") from None
+    return Submission(jobs, finalize, submission)
 
 
-def _submit_finalize(config: SubmitConfig, runner: Runner, ids: list[str]) -> str:
-    script = render_finalize_job(
-        config.profile,
-        command=step_command(config, None, finalize=True),
-        date=config.date,
-        exports=config.exports,
-        dependencies=ids,
-        driver_python=config.driver_python,
-    )
-    return _submit_one(runner, script)
+def _check(result: subprocess.CompletedProcess[str], what: str) -> None:
+    if result.returncode != 0:
+        raise SlurmError(f"{what} exited {result.returncode}")
+
+
+def _abort(runner: Runner, config: SubmitConfig, orders: Mapping[str, list[str]], submitted: list[str]) -> None:
+    """Cancel every submitted job and mark every step of the submission ``never-ran`` (``E_SUBMIT_ABORTED``)."""
+    if submitted:
+        with contextlib.suppress(Exception):
+            runner([SCANCEL, *submitted], "")
+    for name, order in orders.items():
+        rows = [{**run.never_ran_row(s, ("E_SUBMIT_ABORTED",)), "submission": config.submission} for s in order]
+        with contextlib.suppress(Exception):
+            run.update_run_record(config.profile.runs_root, config.date, name, rows, order=order)
+
+
+def submit_and_wait(script: str, *, name: str, runner: Runner | None = None) -> None:
+    """Submit a batch job with ``sbatch --wait`` and no timeout; cancel it if the wait is interrupted.
+
+    The job is named ``name`` on the command line (overriding the script's), so an interrupted wait
+    (Ctrl-C, SIGTERM, any exception) can ``scancel --name`` it: no orphan job finishes later.
+
+    Args:
+        script: The batch script.
+        name: A job name unique to this wait.
+        runner: Runs the waiting sbatch; defaults to `wait_runner`. ``scancel`` uses `default_runner`.
+
+    Raises:
+        SlurmError: If the job failed.
+    """
+    runner = wait_runner if runner is None else runner
+    argv = [SBATCH, "--wait", "--parsable", f"--job-name={_path_word(name, 'job name')}"]
+    try:
+        with _umask(SUBMIT_UMASK), terminate_raises():
+            result = runner(argv, script)
+    except BaseException:
+        with contextlib.suppress(Exception):
+            default_runner([SCANCEL, f"--name={name}", f"--user={getpass.getuser()}"], "")
+        raise
+    if result.returncode != 0:
+        raise SlurmError(f"batch job {name} failed (sbatch exit {result.returncode})")
