@@ -27,15 +27,18 @@ it did not say so.
 
 ```python
 class Release(Enum):
-    WITHOUT_REDACTION = "release_without_redaction"
-    WITH_REDACTION = "release_with_redaction"
+    AS_IS = "as_is"
+    REDACTED = "redacted"
     WITHHELD = "withheld"
-    DISCARDED = "discarded"
-    NOT_ASSESSED = "not_assessed"
 ```
 
-Five values, total and exclusive over the one question a consumer has: *which artefact of this
-recording may I hand on?*
+Three values over the one question a consumer has: *which artefact of this recording may I hand
+on?* A discard carries no release value, and neither does a recording whose release the graph could
+not assess; that recording's verdict is `review` with the reason `not_measured`. The owner renamed
+the axis on 2026-10-07 ("rename and use these in the decision table"): `release_without_redaction`
+became `as_is`, `release_with_redaction` became `redacted`, and `discarded` and `not_assessed` left
+the axis because the verdict and the reason already carry them. The table below keeps the earlier
+names where this record argues from them.
 
 | value | what it permits | what it does not assert |
 | --- | --- | --- |
@@ -51,7 +54,10 @@ from this change.
 
 `discarded` was split out of `withheld` on 2026-10-07 (owner: "separate withheld into discard vs
 withheld for policy"). Both permit nothing; the split keeps a policy hold from being counted with a
-triage discard. At r17 that is 3,312 `discarded` and 253 `withheld`.
+triage discard. At r17 that is 3,312 `discarded` and 253 `withheld`. The same day the owner's
+decision-table vocabulary (verdict pass / review / discard; release as_is / redacted / withheld)
+removed `discarded` from the axis: a discard is the verdict, and its release is empty. `withheld`
+remains the redaction-policy hold alone.
 
 ## 3. `nothing_to_redact` does not survive, and it does not collapse whole
 

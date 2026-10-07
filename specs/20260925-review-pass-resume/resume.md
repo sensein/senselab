@@ -15,6 +15,13 @@ Read this section first. Everything below it is history.
 | Owner labels | `~/Downloads/triage_listening_labels_20261006.csv` (~180 rows), plus per-set `index.csv` in `voice_check_20261006/` (and `discard_cause/`), `discard_contested_check_20261006/` and `breath_review_check_20261006/` |
 | Derivatives | still at the r11 state; the r17 sync is next |
 
+**Vocabulary (feat/task-events, 2026-10-07; recording_vectors schema 25).** Verdict is
+`pass` · `review` · `discard`; `flag` is now `review`, and `rerun` is `run_status = incomplete` with
+verdict `review` and reason `not_measured`. Release is `as_is` · `redacted` · `withheld` (redaction
+holds only), empty on a discard. Each recording also carries a `reason` from
+`data/decision_reasons.yaml` and its decision evidence; `triage_decisions` and `triage_evidence`
+are written beside recording vectors. The r17 counts below use the old names.
+
 ### r17 counts
 
 | Branch | discard | flag | pass | rerun | Total |
