@@ -13,6 +13,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import threading
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -516,6 +517,169 @@ def test_submit_uses_the_fallback_only_when_the_probe_rejects(tmp_path: Path) ->
     assert "--partition=spare" in _sbatch_lines(fake.submissions()[0])
     probes = [s for a, s in fake.calls if "--test-only" in a]
     assert len(probes) == 1 and not any(f.startswith("--dependency") for f in _sbatch_lines(probes[0]))
+
+
+def test_two_concurrent_submissions_one_wins(tmp_path: Path) -> None:
+    """Two submits racing for one run dir: exactly one reserves it; the other gets E_SUBMIT_OVERLAP, no jobs."""
+    first_in = threading.Event()
+    other_done = threading.Event()
+
+    class Blocking(FakeSbatch):
+        def __call__(self, argv: list[str], script: str) -> subprocess.CompletedProcess[str]:
+            if "--parsable" in argv and not first_in.is_set():
+                first_in.set()
+                assert other_done.wait(30)
+            return super().__call__(argv, script)
+
+    results: dict[str, Any] = {}
+    fakes = {"A": Blocking((0, PROBE_OK)), "B": Blocking((0, PROBE_OK))}
+
+    def go(label: str) -> None:
+        try:
+            results[label] = slurm.submit(
+                _chain(), _config(tmp_path, PATHS, submission=f"sub{label}"), runner=fakes[label]
+            )
+        except slurm.SlurmError as error:
+            results[label] = error
+
+    a = threading.Thread(target=go, args=("A",))
+    a.start()
+    assert first_in.wait(30)
+    b = threading.Thread(target=go, args=("B",))
+    b.start()
+    b.join(30)
+    other_done.set()
+    a.join(30)
+    assert isinstance(results["A"], slurm.Submission)
+    assert isinstance(results["B"], slurm.SlurmError) and "E_SUBMIT_OVERLAP" in str(results["B"])
+    assert fakes["B"].calls == []
+    rows = [r for a_ in ("alpha", "beta") for r in _rows(tmp_path, a_)]
+    assert {r["submission"] for r in rows} == {"subA"} and all(r["job"] for r in rows)
+
+
+def test_a_submission_inside_another_is_refused(tmp_path: Path) -> None:
+    """The reviewer's probe: a second submit run while the first is between sbatch calls gets the overlap."""
+    seen: dict[str, Any] = {}
+
+    class Nested(FakeSbatch):
+        def __call__(self, argv: list[str], script: str) -> subprocess.CompletedProcess[str]:
+            if "--parsable" in argv and "inner" not in seen:
+                inner = FakeSbatch((0, PROBE_OK))
+                try:
+                    slurm.submit(_chain(), _config(tmp_path, PATHS, submission="subB"), runner=inner)
+                    seen["inner"] = "submitted"
+                except slurm.SlurmError as error:
+                    seen["inner"] = str(error)
+                seen["inner_calls"] = inner.calls
+            return super().__call__(argv, script)
+
+    slurm.submit(_chain(), _config(tmp_path, PATHS), runner=Nested((0, PROBE_OK)))
+    assert "E_SUBMIT_OVERLAP" in seen["inner"] and seen["inner_calls"] == []
+
+
+def test_an_abort_keeps_an_earlier_submissions_rows(tmp_path: Path) -> None:
+    """Rows a placeholder replaced come back on abort; nothing else of another submission is touched."""
+    old = [
+        {"step": s, "key": "f" * 64, "status": "executed", "exit": 0, "codes": [], "submission": "old"}
+        for s in ("prep", "score")
+    ]
+    run.update_run_record(tmp_path / "runs", DATE, "alpha", old, order=["prep", "score"])
+    fake = FakeSbatch((0, PROBE_OK), fail_at=2)
+    with pytest.raises(slurm.SlurmError, match="E_SUBMIT_ABORTED"):
+        slurm.submit(_chain(), _config(tmp_path, PATHS), runner=fake)
+    assert _rows(tmp_path, "alpha") == old
+    assert {(r["status"], tuple(r["codes"])) for r in _rows(tmp_path, "beta")} == {("never-ran", ("E_SUBMIT_ABORTED",))}
+
+
+def test_a_second_signal_cannot_interrupt_the_abort(tmp_path: Path) -> None:
+    """SIGTERM at the release starts the abort; another SIGTERM during scancel is ignored and the abort ends."""
+
+    class Signalling(FakeSbatch):
+        def __call__(self, argv: list[str], script: str) -> subprocess.CompletedProcess[str]:
+            if argv[:2] == [slurm.SCONTROL, "release"] or argv[0] == slurm.SCANCEL:
+                os.kill(os.getpid(), signal.SIGTERM)
+            return super().__call__(argv, script)
+
+    fake = Signalling((0, PROBE_OK))
+    with pytest.raises(slurm.SlurmError, match="E_SUBMIT_ABORTED: Terminated"):
+        slurm.submit(_chain(), _config(tmp_path, PATHS), runner=fake)
+    assert fake.commands("scancel") == [["scancel", "101", "102", "103", "104", "105"]]
+    rows = [r for a in ("alpha", "beta") for r in _rows(tmp_path, a)]
+    assert {r["status"] for r in rows} == {"never-ran"}
+    assert signal.getsignal(signal.SIGTERM) is signal.SIG_DFL or callable(signal.getsignal(signal.SIGTERM))
+
+
+def test_sighup_aborts_like_sigterm(tmp_path: Path) -> None:
+    """SIGHUP during the submission aborts it and cancels the jobs already queued."""
+
+    class Hangup(FakeSbatch):
+        def __call__(self, argv: list[str], script: str) -> subprocess.CompletedProcess[str]:
+            if "--parsable" in argv and len(self.submissions()) == 2:
+                os.kill(os.getpid(), signal.SIGHUP)
+            return super().__call__(argv, script)
+
+    fake = Hangup((0, PROBE_OK))
+    with pytest.raises(slurm.SlurmError, match="E_SUBMIT_ABORTED: Terminated"):
+        slurm.submit(_chain(), _config(tmp_path, PATHS), runner=fake)
+    assert fake.commands("scancel") == [["scancel", "101", "102"]]
+
+
+def test_a_failing_scancel_is_reported_with_the_job_ids(tmp_path: Path) -> None:
+    """When scancel fails, the error carries E_SCANCEL_FAILED and the leftover job ids, nothing else."""
+
+    class NoCancel(FakeSbatch):
+        def __call__(self, argv: list[str], script: str) -> subprocess.CompletedProcess[str]:
+            if argv[0] == slurm.SCANCEL:
+                self.calls.append((argv, script))
+                return subprocess.CompletedProcess(argv, 1, "", "scancel: error")
+            return super().__call__(argv, script)
+
+    fake = NoCancel((0, PROBE_OK), fail_at=3)
+    with pytest.raises(slurm.SlurmError) as info:
+        slurm.submit(_chain(), _config(tmp_path, PATHS), runner=fake)
+    assert "E_SCANCEL_FAILED: job(s) 101,102 may still be queued" in str(info.value)
+    assert str(tmp_path) not in str(info.value)
+
+
+def test_a_space_in_gres_is_refused_before_anything(tmp_path: Path) -> None:
+    """A gres that cannot render is a finding: nothing probed, written or submitted."""
+    parts = {**_PARTS, "gpu": {**_PARTS["gpu"], "gres": "gpu a100"}}
+    manifests = [_manifest("alpha", _step("a"), _step("b", needs=["a"], resources={"profile": "gpu"}))]
+    fake = FakeSbatch((0, PROBE_OK))
+    with pytest.raises(slurm.SlurmError, match="cross-check"):
+        slurm.submit(manifests, _config(tmp_path, PATHS, profile=_profile(tmp_path, partitions=parts)), runner=fake)
+    assert fake.calls == [] and not (tmp_path / "runs").exists() and not (tmp_path / "slurm").exists()
+
+
+def test_a_jobs_own_row_needs_its_submission(tmp_path: Path) -> None:
+    """A job writes its row only over its own submission's row, an untagged row, or none."""
+    runs = tmp_path / "runs"
+    tagged: dict[str, Any] = {
+        "step": "a",
+        "key": None,
+        "status": "pending",
+        "exit": None,
+        "codes": [],
+        "submission": "s2",
+    }
+    untagged: dict[str, Any] = {"step": "b", "key": None, "status": "executed", "exit": 0, "codes": []}
+    run.update_run_record(runs, DATE, "alpha", [tagged, untagged], order=["a", "b", "c"])
+    mine = [{"step": x, "status": "executed", "exit": 0, "codes": []} for x in ("a", "b", "c")]
+    run.update_run_record(runs, DATE, "alpha", mine, order=["a", "b", "c"], submission="s1", allow_untagged=True)
+    got = {r["step"]: (r["status"], r.get("submission")) for r in _rows(tmp_path, "alpha")}
+    assert got == {"a": ("pending", "s2"), "b": ("executed", None), "c": ("executed", None)}
+
+
+def test_job_state_reads_sacct() -> None:
+    """``sacct`` gives the first word of the state; anything else is None."""
+
+    def sacct(answer: str, code: int = 0) -> Any:  # noqa: ANN401
+        return lambda argv, script: subprocess.CompletedProcess(argv, code, answer, "")
+
+    assert slurm.job_state("12", sacct("TIMEOUT\n")) == "TIMEOUT"
+    assert slurm.job_state("12", sacct("CANCELLED by 77\n")) == "CANCELLED"
+    assert slurm.job_state("12", sacct("", 1)) is None
+    assert slurm.job_state("12; rm", sacct("TIMEOUT")) is None
 
 
 # --- waited build jobs ----------------------------------------------------------------------------------
