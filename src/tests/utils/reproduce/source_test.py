@@ -163,7 +163,7 @@ def test_patches_are_committed_in_order(repos: dict[str, object], manifest_dir: 
     log = _git(co.worktree, "log", "--first-parent", "--format=%s", "-3").splitlines()
     assert log == ["repro: a2.patch", "repro: a.patch", "repro: clear outputs"]
     assert _git(co.worktree, "rev-parse", "HEAD~3") == repos["commit"]
-    assert co.patches == {r.file: r.sha256 for r in refs}
+    assert co.patches == [(r.file, r.sha256) for r in refs]
 
 
 def test_two_patch_sets_give_two_worktrees(repos: dict[str, object], manifest_dir: Path, tmp_path: Path) -> None:
@@ -448,3 +448,131 @@ def test_checkout_lints_patches(repos: dict[str, object], manifest_dir: Path, tm
         )
     assert info.value.code == source.PATCH_LINT
     assert not (cache / "wt").exists() or not any((cache / "wt").iterdir())
+
+
+COMPACT_OUTPUT_CELL = (
+    '{"cells": [{"cell_type": "code", "execution_count": null, "metadata": {}, '
+    '"outputs": [{"text": "x"}], "source": []}], "metadata": {}, "nbformat": 4, "nbformat_minor": 5}'
+)
+QUOTED_NOTEBOOK_PATCH = (
+    'diff --git "a/caf\\303\\251.ipynb" "b/caf\\303\\251.ipynb"\n'
+    "new file mode 100644\n"
+    "--- /dev/null\n"
+    '+++ "b/caf\\303\\251.ipynb"\n'
+    "@@ -0,0 +1 @@\n"
+    f"+{COMPACT_OUTPUT_CELL}\n"
+)
+OUTPUTS_TEXT_ARRAY_HUNK = """--- a/nb.ipynb
++++ b/nb.ipynb
+@@ -8,3 +8,3 @@
+      "text": [
+-      "committed output\\n"
++      "edited output\\n"
+      ]
+"""
+
+
+def _write_patch(base: Path, rel: str, text: str) -> FileRef:
+    path = base / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(text.encode())
+    return FileRef(file=rel, sha256=hashlib.sha256(text.encode()).hexdigest())
+
+
+def test_unquote_c_path() -> None:
+    """Git's C-quoted paths decode to UTF-8; plain paths pass through."""
+    assert source.unquote_c_path('"b/caf\\303\\251.ipynb"') == "b/caf\u00e9.ipynb"
+    assert source.unquote_c_path("b/plain.ipynb") == "b/plain.ipynb"
+
+
+def test_lint_sees_quoted_notebook_paths() -> None:
+    """A quoted non-ASCII notebook path is still recognised as a notebook."""
+    patch = QUOTED_NOTEBOOK_PATCH.replace('"outputs": [{"text"', '"outputs": [{"output_type": "stream", "text"')
+    assert {f.code for f in source.lint_patch(patch, [])} == {source.LINT_NOTEBOOK_OUTPUTS}
+
+
+def test_patch_leaving_notebook_outputs_is_refused_after_apply(repos: dict[str, object], tmp_path: Path) -> None:
+    """Outputs that slip past the line lint (quoted path, compact JSON) are caught after apply."""
+    base = tmp_path / "manifests"
+    ref = _write_patch(base, "patches/quoted.patch", QUOTED_NOTEBOOK_PATCH)
+    assert source.lint_patch(QUOTED_NOTEBOOK_PATCH, []) == []
+    cache = tmp_path / "cache"
+    with pytest.raises(ReproduceSourceError) as info:
+        source.checkout(_url(repos), str(repos["commit"]), [ref], base_dir=base, cache=cache)
+    assert info.value.code == source.PATCH_LINT
+    tag = f"{str(repos['commit'])[:8]}-{source.patch_set_sha256([ref])[:8]}"
+    assert not (cache / "wt" / f"analysis-{tag}").exists()
+    assert _git(cache / "src" / "analysis", "for-each-ref", f"refs/heads/repro/{tag}") == ""
+
+
+def test_hunk_inside_an_outputs_text_array_never_lands(repos: dict[str, object], tmp_path: Path) -> None:
+    """A hunk written against committed outputs cannot apply to the cleared notebook."""
+    base = tmp_path / "manifests"
+    ref = _write_patch(base, "patches/text.patch", OUTPUTS_TEXT_ARRAY_HUNK)
+    cache = tmp_path / "cache"
+    with pytest.raises(ReproduceSourceError) as info:
+        source.checkout(_url(repos), str(repos["commit"]), [ref], base_dir=base, cache=cache)
+    assert info.value.code in (source.PATCH_DOES_NOT_APPLY, source.PATCH_LINT)
+    assert not (cache / "wt").exists() or not [p for p in (cache / "wt").iterdir() if p.is_dir()]
+
+
+def test_lint_rejects_symlinks() -> None:
+    """Creating a symlink, or turning a file into one, is refused."""
+    new_link = "diff --git a/l b/l\nnew file mode 120000\n--- /dev/null\n+++ b/l\n@@ -0,0 +1 @@\n+/etc\n"
+    mode_change = "diff --git a/run.py b/run.py\nold mode 100644\nnew mode 120000\n"
+    assert [f.code for f in source.lint_patch(new_link, [])] == [source.LINT_SYMLINK]
+    assert [f.code for f in source.lint_patch(mode_change, [])] == [source.LINT_SYMLINK]
+
+
+def test_same_patch_bytes_at_two_paths_are_two_patch_sets(repos: dict[str, object], tmp_path: Path) -> None:
+    """``patches/a/x.patch`` and ``patches/b/x.patch`` with identical bytes do not collide."""
+    base = tmp_path / "manifests"
+    a = _write_patch(base, "patches/a/x.patch", PATCH_A)
+    b = _write_patch(base, "patches/b/x.patch", PATCH_A)
+    assert source.patch_set_sha256([a]) != source.patch_set_sha256([b])
+    cache = tmp_path / "cache"
+    first = source.checkout(_url(repos), str(repos["commit"]), [a], base_dir=base, cache=cache)
+    second = source.checkout(_url(repos), str(repos["commit"]), [b], base_dir=base, cache=cache)
+    assert first.worktree != second.worktree and first.tree_sha == second.tree_sha
+    assert source.checkout(_url(repos), str(repos["commit"]), [a], base_dir=base, cache=cache) == first
+
+
+def test_clear_drops_widget_state_and_attachments() -> None:
+    """Notebook widget state and markdown attachments are removed with the outputs."""
+    nb = json.loads(json.dumps(NOTEBOOK))
+    nb["metadata"]["widgets"] = {"state": {}}
+    nb["cells"][0]["attachments"] = {"img.png": {"image/png": "AAAA"}}
+    cleared = json.loads(source.clear_notebook_outputs(json.dumps(nb))[0])
+    assert "widgets" not in cleared["metadata"] and "attachments" not in cleared["cells"][0]
+
+
+@pytest.fixture()
+def repos_with_notebook_submodule(tmp_path: Path) -> dict[str, object]:
+    """An upstream whose submodule tracks a notebook with outputs."""
+    sub = tmp_path / "upstream" / "nblib"
+    sub.mkdir(parents=True)
+    _git(sub, "init", "-q")
+    (sub / "inner").mkdir()
+    (sub / "inner" / "sub.ipynb").write_text(json.dumps(NOTEBOOK, indent=1) + "\n")
+    _commit_all(sub, "nblib")
+    top = tmp_path / "upstream" / "outer"
+    top.mkdir(parents=True)
+    _git(top, "init", "-q")
+    (top / "run.py").write_text("print(1)\n")
+    _git(top, "submodule", "add", "-q", str(sub), "ext/nblib")
+    return {"top": top, "commit": _commit_all(top, "outer")}
+
+
+def test_submodule_notebook_outputs_fail_closed(
+    repos_with_notebook_submodule: dict[str, object], tmp_path: Path
+) -> None:
+    """A submodule notebook with outputs is refused unless allowed, and then recorded."""
+    url, commit = str(repos_with_notebook_submodule["top"]), str(repos_with_notebook_submodule["commit"])
+    cache = tmp_path / "cache"
+    with pytest.raises(ReproduceSourceError) as info:
+        source.checkout(url, commit, [], cache=cache)
+    assert info.value.code == source.SUBMODULE_NOTEBOOK_OUTPUTS
+    assert "ext/nblib/inner/sub.ipynb" in info.value.detail
+    assert not (cache / "wt" / f"outer-{commit[:8]}-{source.EMPTY_PATCH_SET_SHA256[:8]}").exists()
+    co = source.checkout(url, commit, [], cache=cache, allow_submodule_notebook_outputs=True)
+    assert co.submodule_notebooks_with_outputs == ["ext/nblib/inner/sub.ipynb"]
