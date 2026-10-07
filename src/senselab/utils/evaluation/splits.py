@@ -25,6 +25,7 @@ subject with at least two units):
 from __future__ import annotations
 
 import math
+import sys
 from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Literal, Mapping, Optional, Sequence, Tuple, Union, get_args
@@ -428,8 +429,20 @@ def _seen_kfold(
                 parts["val"] += [rows for rows, slot in zip(rest, slots) if slot == 0]
                 rest = [rows for rows, slot in zip(rest, slots) if slot != 0]
             parts["train"] += rest
+        for name, needed in (("test", n_splits), ("val", 3)):
+            if name in parts and not parts[name]:
+                _too_few_units(ordered, "seen_subject_kfold", needed, name)
         splits.append(Split(name=f"fold{f}", partitions={k: _concat(v) for k, v in parts.items()}))
     return splits
+
+
+def _too_few_units(ordered: Mapping[str, List[np.ndarray]], scheme: str, needed: int, partition: str) -> None:
+    """Raise the ValueError for a partition left empty because subjects have too few units."""
+    most = max(len(units) for units in ordered.values())
+    raise ValueError(
+        f"every subject has {most} units or fewer; {scheme} needs >= {needed} units in some subject "
+        f"to fill the {partition!r} partition"
+    )
 
 
 def _concat(arrays: List[np.ndarray]) -> np.ndarray:
@@ -480,10 +493,14 @@ def _seen_holdout(
 ) -> List[Split]:
     rng = np.random.default_rng(seed)
     names = ("train", "val", "test")
-    parts: Dict[str, List[np.ndarray]] = {name: [] for name in names}
-    for unit_rows in _ordered_units(labels, subjects, units, strata, rng).values():
+    parts: Dict[str, List[np.ndarray]] = {name: [] for name, f in zip(names, fractions) if f > 0 or name == "train"}
+    ordered = _ordered_units(labels, subjects, units, strata, rng)
+    for unit_rows in ordered.values():
         for rows, k in zip(unit_rows, _interleave(_allocate(len(unit_rows), fractions))):
             parts[names[k]].append(rows)
+    for name, assigned in parts.items():
+        if not assigned:
+            _too_few_units(ordered, "seen_subject_holdout", len(parts), name)
     return [Split(name="holdout", partitions={k: _concat(v) for k, v in parts.items()})]
 
 
@@ -494,9 +511,18 @@ DEFAULT_N_SPLITS = 5
 
 
 def _count_missing(values: np.ndarray) -> int:
-    """Entries that are None, NaN or the empty string."""
+    """Entries that are None, NaN, the empty string or `pandas.NA`.
+
+    `pandas.NA` is recognised without importing pandas: an array can only hold it if the caller has
+    already imported pandas, so the check looks the module up in `sys.modules`.
+    """
+    pandas = sys.modules.get("pandas")
+    na = getattr(pandas, "NA", None) if pandas is not None else None
     return sum(
-        v is None or (isinstance(v, float) and math.isnan(v)) or (isinstance(v, str) and v == "")
+        v is None
+        or (na is not None and v is na)
+        or (isinstance(v, float) and math.isnan(v))
+        or (isinstance(v, str) and v == "")
         for v in values.tolist()
     )
 

@@ -523,3 +523,78 @@ def test_multilabel_with_strata_is_refused(imbalanced_cohort: Cohort) -> None:
         check_split(
             split, c.subjects, labels=c.multilabel, protocol="unseen_subject", strata=c.timepoints, stratify="class"
         )
+
+
+# ── Review fixes ──────────────────────────────────────────────────────
+
+
+def _two_unit_cohort() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Ten subjects, each with exactly two units of three rows; labels alternate by row."""
+    subjects = np.repeat([f"s{i}" for i in range(10)], 6)
+    units = np.tile(np.repeat(["u1", "u2"], 3), 10)
+    labels = np.arange(60) % 2
+    return labels, subjects, units
+
+
+def test_holdout_omits_a_zero_fraction_partition(imbalanced_cohort: Cohort) -> None:
+    """A zero validation fraction gives train and test only, as grouped shuffle does."""
+    c = imbalanced_cohort
+    (split,), _ = grouped_splits(
+        c.labels,
+        c.subjects,
+        protocol="seen_subject",
+        scheme="seen_subject_holdout",
+        seed=0,
+        units=c.recordings,
+        unit_name="recording",
+        fractions=(0.8, 0.0, 0.2),
+    )
+    assert set(split.partitions) == {"train", "test"}
+
+
+def test_holdout_on_two_unit_subjects_names_the_cause() -> None:
+    """Three partitions cannot all be filled from two units per subject; the error says so."""
+    labels, subjects, units = _two_unit_cohort()
+    with pytest.raises(ValueError, match="every subject has 2 units or fewer; seen_subject_holdout needs >= 3"):
+        grouped_splits(
+            labels, subjects, protocol="seen_subject", scheme="seen_subject_holdout", seed=0, units=units, unit_name="r"
+        )
+
+
+def test_seen_kfold_validation_on_two_unit_subjects_names_the_cause() -> None:
+    """With two units per subject nothing is left for validation after the test unit; the error says so."""
+    labels, subjects, units = _two_unit_cohort()
+    with pytest.raises(ValueError, match="every subject has 2 units or fewer; seen_subject_kfold needs >= 3"):
+        grouped_splits(
+            labels,
+            subjects,
+            protocol="seen_subject",
+            scheme="seen_subject_kfold",
+            seed=0,
+            n_splits=2,
+            units=units,
+            unit_name="r",
+            val_inner_splits=2,
+        )
+
+
+def test_pandas_na_is_a_missing_id() -> None:
+    """``pandas.NA`` counts as a missing subject or unit id."""
+    pd = pytest.importorskip("pandas")
+    labels, subjects, units = _two_unit_cohort()
+    holed = subjects.astype(object)
+    holed[0] = pd.NA
+    with pytest.raises(ValueError, match="no subject id"):
+        grouped_splits(labels, holed, protocol="unseen_subject", scheme="stratified_group_kfold", seed=0, n_splits=2)
+    holed_units = units.astype(object)
+    holed_units[0] = pd.NA
+    with pytest.raises(ValueError, match="no unit id"):
+        grouped_splits(
+            labels,
+            subjects,
+            protocol="seen_subject",
+            scheme="seen_subject_kfold",
+            seed=0,
+            units=holed_units,
+            unit_name="r",
+        )

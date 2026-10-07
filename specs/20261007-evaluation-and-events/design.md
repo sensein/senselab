@@ -186,7 +186,7 @@ subjects with 4–64 clips each in 2–4 recordings, binary label rate about 0.1
 | Check | Required | Measured |
 |---|---|---|
 | (a) `StratifiedKFold(5, shuffle=True, random_state=0)` on rows shares subjects across partitions | ≥ 1 subject | all 60 subjects, in 5 of 5 folds |
-| (b) label-blind group k-fold max test-fold prevalence deviation | > 0.04 | 0.0408 (see below) |
+| (b) label-blind group k-fold `max_abs_prevalence_deviation` (over all partitions) | > 0.04 | 0.0408 (see below) |
 | (c) `StratifiedGroupKFold(5, shuffle=True, random_state=0)` max deviation | ≤ 0.02 | 0.0023 |
 | (d) a 60/20/20 clip-level holdout per (subject, timepoint) puts clips of a recording in two partitions | ≥ 1 recording | 148 of 182 recordings |
 
@@ -200,6 +200,11 @@ releases differ too. The test now uses the same label-blind, size-balancing idea
 stable ordering (largest subject first, ties by subject key, each into the fold with the fewest
 rows, fold ties to the lowest index). Re-measured at cohort seed 0: 0.0408, still above the 0.04
 tolerance, which was not changed.
+
+(b) is one deterministic instance, 0.0008 above its threshold, so any change to the cohort generator,
+its seed or this baseline must be re-measured before the test is trusted. It is sensitive: in the T4
+re-review, 73 % of random tie orders for the same size-greedy assignment exceeded 0.04, and cohort
+seeds 0–19 ranged from 0.030 to 0.149 under this baseline.
 
 **Input checks.** Every entry point refuses, with a ValueError, rather than ignoring or failing
 later: missing subject ids (None, NaN, empty); labels, units or strata of the wrong length; empty
