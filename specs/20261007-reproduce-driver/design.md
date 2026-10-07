@@ -544,8 +544,8 @@ How `sandbox` reads those rules:
 - keyed env digest
 - argv template, cwd
 - patch-set, adapter and input-set digests
-- weight digests, R session digest
-- expectations, replicate index
+- `hf_weights` (commit-pinned, per-file sha256s), R session and R module-env digests
+- metrics schema, expectations, replicate index
 - upstream keys
 
 **Result dir:** each step writes to `<results_root>/<step_key>/`. A step whose result dir holds a
@@ -575,6 +575,77 @@ the step.
   never reaches one; this keeps a symlink loop or a link out of the data root from being walked
   just because `**` matched it. A manifest that needs files behind a directory symlink names the
   link in the pattern's fixed prefix.
+
+**Step keys, result dirs, claims and ordering (B11).** `cache.py` and `dag.py`.
+
+- **What the key covers.** `step_key_payload` names every field explicitly (no whole-model dump of
+  `StepSpec`), so a field added to the manifest later is unkeyed until someone decides it should be
+  keyed. The payload holds: the commit and submodule commits; the patch-set sha256
+  (`source.patch_set_sha256`, the same value that names the worktree); `env_key` (which already
+  covers the torch and body lock sha256s, the sdist inputs and `python_exact`, so they are not
+  repeated); the `wheels.lock` and overlay (`test`, `notebook_tools`) lock sha256s; the keyed env
+  (`sandbox.keyed_templates`: the profile `env` map, the fixed and offline variables, and every
+  path variable in template form, including `PYTHONPATH` and `R_LIBS`); kind, argv template and
+  cwd; inputs (patterns and one input-set digest each), stage and outputs; the adapter sha256;
+  `hf_weights`; the R `SESSION.json` and module-env sha256s (spec §15 item 5 keys both); the
+  metrics schema and expectations; `replicate`; and the upstream keys.
+- **What it leaves out, and why.** Volatile variables never reach it, by construction: the key reads
+  the keyed env from `keyed_templates`, which never reads `os.environ`, and the profile may not set
+  `SLURM_*`, `CUDA_VISIBLE_DEVICES`, `TMPDIR`, `HOME` and the rest (sandbox `RESERVED`). A second
+  "refuse volatile names" check in `cache.py` would guard a path that cannot be taken, so there is
+  none. The date, the data-root locations (argv keeps `{root:<name>}` as a template; content is
+  covered by the input digests), the results root, the partition and limits (`resources`), the step
+  name and the repository URL are also left out. Leaving the name out means two steps declared
+  identically (same replicate) share one result dir, which is what content addressing should do;
+  the claim makes the second wait and then skip. Leaving the URL out means moving a mirror does not
+  recompute anything; the commit already pins the code. `smoke_imports` and `pip_check_expected`
+  are build checks, not result inputs.
+- **The wheels lock comes from the manifest.** An env with `sdist_allow` and no `env.wheels` cannot
+  be keyed (`E_KEY_NO_WHEELS`): the first prefetch records the wheel sha256s and the manifest must
+  carry that file's sha256 before a run. Taking the post-prefetch sha256 as an argument instead
+  would let a key depend on an uncommitted file.
+- **Serialization.** `canonical_json`: `json.dumps(sort_keys=True, separators=(",", ":"),
+  ensure_ascii=True, allow_nan=False)`, tagged `"schema": "reproduce-step-key-1"`. Mappings
+  (submodules, upstream, env) are dicts, so their caller-side order cannot matter; lists (argv,
+  inputs, patches, expectations) keep manifest order because order is meaningful there. Floats in
+  expectations are Pydantic-coerced, so `77` and `77.0` key alike. Changing what the payload holds
+  bumps the schema tag.
+- **`hf_weights`.** Required on `StepSpec`, with no default, so every manifest states `[]` for a
+  step that loads no weights (all tier-1 steps). Each entry is `{repo: "<org>/<name>", repo_type:
+  model|dataset, revision: <40-hex commit>, files: [{path, sha256}, ...]}`. The revision is a
+  commit, never a branch or tag (senselab's rule that a load passes a commit SHA), and `files`
+  lists every file the step reads with its sha256, which prefetch checks after download; at least
+  one file, no duplicate paths, and one entry per repository.
+- **Completion marker.** A result dir is done when `summary.json` parses as an object with integer
+  `exit` 0 (a JSON `true` is not 0). `write_summary` writes a temporary file with `O_EXCL`, fsyncs
+  it, renames it over `summary.json` and fsyncs the directory, so a reader sees the old summary or
+  the new one and never a torn file; it is the last write of a run, so any dir without it is
+  incomplete. A failed run's summary (exit non-zero) stays readable for diagnosis and is cleared by
+  `reset_result_dir` when the step is retried; a done dir is never reset (`E_RESULT_DONE`).
+- **Claims.** `claim` holds a `SharedFileLock` (heartbeat, stale takeover) on
+  `<results_root>/.claims/<key>`. The lock files live in `.claims/` rather than beside each
+  result dir, so the results root holds only result dirs and `.claims`. `manage_dir_mode=False`:
+  the default chmods the lock's directory to `2775`, which would make a confidential results tree
+  world-traversable. A timeout raises `E_CLAIM_HELD` with the `TimeoutError` (whose message names
+  the lock path) suppressed. The caller re-checks `is_done` inside the claim, because a waiter
+  usually gets the claim right after the holder marked the step done.
+- **Run links.** `<runs_root>/<YYYY-MM-DD>/<analysis>/<step>` is a relative symlink to the result
+  dir (computed between real paths), so the runs and results trees can move together. Relinking to
+  the same target is a no-op; a different target replaces the link by renaming a new symlink over
+  it, so a reader never finds the link missing. A real file or directory at the link path is
+  refused rather than removed.
+- **Ordering.** `toposort` is Kahn's algorithm with a heap on step names, so the order depends only
+  on the set, not on file or step order. A repeated name, a need naming no step in the set, and a
+  cycle are refused; the cycle error names only the steps on one cycle, not every step downstream
+  of it. `toposort` also runs `check_expect_sources`, so one call validates the whole set.
+- **Cross-step expectations.** A `StepSpec` validator cannot see other steps, so `dag.py` checks
+  that a `from_step.metric` is an address the upstream `metrics_schema` declares
+  (`metrics.metric_address_error`), and that it names the same quantity as the step's own metric
+  (`metrics.metric_quantity`: rate, mcc, statistic or count), so a rate is never compared with a
+  count. Units (`fraction`, `pp`) are per metrics entry and only known at run time, so the
+  manifest-time unit check is that an expectation `unit` sits only on a rate or `mcc`, the
+  quantities that take one. Each `tolerance_from` step must declare the expectation's own metric,
+  since the spread is taken over that metric of the calibration replicates.
 
 ## Metrics, expectations, provenance
 

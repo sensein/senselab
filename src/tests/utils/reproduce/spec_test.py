@@ -98,6 +98,7 @@ def _step(name: str = "train", **over: Any) -> dict[str, Any]:  # noqa: ANN401
         "resources": {"profile": "gpu", "gpu_arch": ["sm_80"], "min_driver": "550", "native": ["ffmpeg"]},
         "patches": [{"file": "patches/train/0001.diff", "sha256": SHA}],
         "adapter": "adapters/train.py",
+        "hf_weights": [],
         "metrics_schema": _metrics_schema(),
         "expect": [{"metric": "top1", "value": 77.56, "tolerance": 0.01, "unit": "pp", "kind": "abs"}],
     }
