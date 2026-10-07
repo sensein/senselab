@@ -572,7 +572,8 @@ classification or detection step's output is refused unless it carries:
   record honestly that the source tuned its threshold on the test split; refusing it would force
   the adapter to misreport the source.
 
-**Which floors are checked.** With k declared classes and the scored split's prevalences, the floor
+**Which floors are checked.** With k the number of declared classes **present** on the scored
+split (prevalence above 0) and that split's prevalences, the floor
 is checked within 1e-6 (scaled by 100 for a `pp` entry):
 
 | headline | floor |
@@ -621,6 +622,21 @@ The driver validates twice, once the adapter's output and once the final object 
 `expect` results (`writer="driver"`), and must pass the same `min_cell` both times: a token
 `"<5"` is accepted again only under `min_cell=5`.
 
+**Absent classes.** A declared class with prevalence 0 does not count toward k, matching
+scikit-learn's balanced accuracy, which averages recall over the classes present in `y_true`.
+Counting it would lower the chance floor (two present classes of three declared would accept 1/3
+instead of 1/2) and inflate the lift. Such a class gives the warning `W_CLASS_ABSENT`.
+
+**Keys bound to kinds.** `per_class` (and the schema's `per_class`/`positive`) belong only to
+classification and detection, and `confusion` only to classification. Elsewhere the key is refused
+with `E_METRICS_KIND_KEY`, a code distinct from `E_METRICS_UNKNOWN_KEY` because the key is in the
+vocabulary but not for this kind. Without this, a step declared `statistic` could report per-class
+recall and a confusion matrix free of the prevalence, floor and split rules.
+
+**Value ranges.** Headline values are range-checked (`E_METRICS_RANGE`): classification and detection
+rates in [0, 1], or [0, 100] with `unit: pp`; `mcc` in [-1, 1], scaled likewise; `f_stat` at least 0;
+and `ci_low <= value <= ci_high` when given. This catches a percentage written without `unit: pp`.
+
 **Driver-only keys.** `delta`, `target`, `tolerance` and `pass` are refused anywhere in adapter
 output. Only the driver, evaluating `expect`, writes them; otherwise an adapter could report its own
 pass.
@@ -631,6 +647,18 @@ checked against its own `metrics_schema` when the manifest loads, and `expect.un
 or `pp`. `from_step.metric` names a metric of the upstream step, so it is checked against the
 upstream step's schema when the DAG is assembled (B11), not here. A bare headline name that matches
 several entries is refused when read, rather than picking one.
+
+**Notes for `run.py` (B12).**
+
+- `validate_metrics` returns error codes (`E_*`) and warnings (`W_*`, `WARNINGS` in `metrics.py`)
+  in one sorted list. Only an `E_*` code fails the step; `clean` is None exactly then. `W_*` codes
+  (`W_TUNED_ON_TEST`, `W_CLASS_ABSENT`) are recorded in `summary.json` and provenance next to the
+  numbers and do not change the exit code.
+- Declared inputs are digested with `input_set_digest(root, patterns, require_nonempty=True)`, so a
+  pattern that matches nothing fails with `E_DIGEST_EMPTY` instead of digesting the empty set the
+  same way before and after the step. Output digests exclude `cuda-cache`.
+- The final object, after the driver writes the `expect` results, is validated again with
+  `writer="driver"` and the same `min_cell`.
 
 **Host record.** Hostname, CPU model and counts, the first GPU's name and driver from `nvidia-smi`
 with the GPU count, and the venv's Python, torch and torch CUDA versions, asked of the venv's own

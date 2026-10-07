@@ -16,7 +16,11 @@ The shape is::
       "n"?, "n_folds"?
     }
 
-Each kind allows its own headline names (`KIND_HEADLINES`). ``delta``, ``target``, ``tolerance`` and
+Each kind allows its own headline names (`KIND_HEADLINES`); ``per_class`` belongs only to
+classification and detection, and ``confusion`` only to classification (otherwise
+``E_METRICS_KIND_KEY``). Headline values are range-checked: rates in [0, 1] (or [0, 100] for
+``unit: pp``), ``mcc`` in [-1, 1] (likewise scaled), ``f_stat`` at least 0, and ``ci_low <= value <=
+ci_high`` (``E_METRICS_RANGE``). ``delta``, ``target``, ``tolerance`` and
 ``pass`` are written only by the driver, at the top level, in a headline entry or in a ``per_class``
 entry.
 
@@ -24,7 +28,9 @@ entry.
 
 - ``prevalence`` in [0, 1] for every declared class (classification: also ``recall`` and
   ``precision``, and prevalences summing to 1)
-- ``floor`` and ``lift`` on every headline entry; standard floors are checked (`expected_floor`)
+- ``floor`` and ``lift`` on every headline entry; standard floors are checked (`expected_floor`),
+  with k the number of declared classes present (prevalence above 0); a declared class with
+  prevalence 0 gives the warning ``W_CLASS_ABSENT``
 - ``threshold_tuning``; ``test`` is accepted and returned as the warning ``W_TUNED_ON_TEST``
 - a ``split_report``, unless the schema opts out with ``split: {none: whole_dataset}``; for
   classification every fold's prevalence covers every declared class
@@ -78,6 +84,7 @@ KIND_HEADLINES: dict[str, frozenset[str]] = {
 }
 CLASSIFICATION_KINDS = frozenset({"classification", "detection"})
 CHANCE_HEADLINES = frozenset({"balanced_accuracy", "macro_recall"})
+RATE_HEADLINES = (KIND_HEADLINES["classification"] | KIND_HEADLINES["detection"]) - {"mcc"}
 PRESENCE_ONLY_FLOORS = frozenset({"macro_f1", "avg_map", "map_at"})
 ENTRY_NUMBERS = ("value", "ci_low", "ci_high", "numdf", "dendf", "floor", "lift")
 ENTRY_INTS = ("n", "n_folds")
@@ -122,6 +129,8 @@ CODES = frozenset(
         "E_METRICS_BAD_FLOOR",
         "E_METRICS_NO_LIFT",
         "E_METRICS_LIFT_MISMATCH",
+        "E_METRICS_RANGE",
+        "E_METRICS_KIND_KEY",
         "E_METRICS_NO_TUNING_SPLIT",
         "E_METRICS_BAD_TUNING_SPLIT",
         "E_SPLIT_MISSING",
@@ -132,7 +141,7 @@ CODES = frozenset(
         "E_SPLIT_FOLD_PREVALENCE",
     }
 )
-WARNINGS = frozenset({"W_TUNED_ON_TEST"})
+WARNINGS = frozenset({"W_TUNED_ON_TEST", "W_CLASS_ABSENT"})
 ADDRESS_CODES = frozenset(
     {
         "E_METRICS_BAD_ADDRESS",
@@ -171,7 +180,8 @@ def expected_floor(name: str, prevalence: Mapping[str, float], *, k: int, positi
     Args:
         name: The headline name.
         prevalence: Class label to prevalence on the scored split, for every declared class.
-        k: The number of declared classes.
+        k: The number of declared classes present on the scored split (prevalence above 0); an absent
+            class does not count, as in scikit-learn's balanced accuracy.
         positive: The declared positive class of a binary step, or None.
 
     Returns:
@@ -288,8 +298,31 @@ class _Check:
             self.integer(entry, "n", suppress=True)
             self.integer(entry, "n_folds", suppress=False)
             self.word(entry, "unit", ENTRY_UNITS)
+            self.value_range(entry)
             if self.imbalance:
                 self.floor(entry, prevalence)
+
+    def value_range(self, entry: dict[str, Any]) -> None:
+        name, value = entry.get("name"), entry.get("value")
+        if not _is_number(value) or not isinstance(name, str):
+            return
+        scale = 100.0 if entry.get("unit") == "pp" else 1.0
+        if name == "mcc":
+            low, high = -scale, scale
+        elif name in RATE_HEADLINES:
+            low, high = 0.0, scale
+        elif name == "f_stat":
+            low, high = 0.0, math.inf
+        else:
+            return
+        slack = TOLERANCE * scale
+        if not low - slack <= value <= high + slack:
+            self.codes.add("E_METRICS_RANGE")
+        ci_low, ci_high = entry.get("ci_low"), entry.get("ci_high")
+        if _is_number(ci_low) and ci_low > value + slack:
+            self.codes.add("E_METRICS_RANGE")
+        if _is_number(ci_high) and ci_high < value - slack:
+            self.codes.add("E_METRICS_RANGE")
 
     def floor(self, entry: dict[str, Any], prevalence: dict[str, float] | None) -> None:
         if "floor" not in entry:
@@ -304,7 +337,10 @@ class _Check:
         name = entry.get("name")
         if not _is_number(floor) or not isinstance(name, str) or prevalence is None:
             return
-        expected = expected_floor(name, prevalence, k=len(self.schema.per_class), positive=self.schema.positive)
+        present = sum(1 for p in prevalence.values() if p > 0)
+        if not present:
+            return
+        expected = expected_floor(name, prevalence, k=present, positive=self.schema.positive)
         if expected is not None and abs(floor - expected * scale) > TOLERANCE * scale:
             self.codes.add("E_METRICS_BAD_FLOOR")
 
@@ -323,6 +359,8 @@ class _Check:
         declared = {c: classes[c] for c in self.schema.per_class if isinstance(classes.get(c), dict)}
         given = {c: f["prevalence"] for c, f in declared.items() if "prevalence" in f}
         self.prevalences(given, complete=len(given) == len(self.schema.per_class))
+        if any(_is_number(p) and p == 0 for p in given.values()):
+            self.codes.add("W_CLASS_ABSENT")
 
     def class_fields(self, classes: object) -> None:
         declared = self.schema.per_class
@@ -400,7 +438,9 @@ class _Check:
 
     def run(self, obj: dict[str, Any]) -> None:
         self.keys(obj, TOP_KEYS, driver=True)
-        if "per_class" in obj:
+        if "per_class" in obj and not self.imbalance:
+            self.codes.add("E_METRICS_KIND_KEY")
+        elif "per_class" in obj:
             self.per_class(obj["per_class"])
         entries = obj.get("headline", [])
         self.headline(entries, self.scored_prevalence(obj.get("per_class")))
@@ -408,7 +448,9 @@ class _Check:
             names = {e.get("name") for e in entries if isinstance(e, dict) and isinstance(e.get("name"), str)}
             if set(self.schema.headline) - names:
                 self.codes.add("E_METRICS_MISSING_HEADLINE")
-        if "confusion" in obj:
+        if "confusion" in obj and not self.classification:
+            self.codes.add("E_METRICS_KIND_KEY")
+        elif "confusion" in obj:
             self.confusion(obj["confusion"])
         self.counts(obj.get("counts", {}))
         if "split_report" in obj:
