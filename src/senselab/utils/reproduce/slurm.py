@@ -46,6 +46,7 @@ from senselab.utils.reproduce.spec import RESERVED_ROOT_NAMES, Manifest, Partiti
 SBATCH = "sbatch"
 SCANCEL = "scancel"
 SCONTROL = "scontrol"
+SQUEUE = "squeue"
 DRIVER_MODULE = "senselab.utils.reproduce"
 LINK_MODE = "hardlink"
 UV_EXPORTS = ("UV_CACHE_DIR", "UV_PYTHON_INSTALL_DIR")
@@ -221,6 +222,51 @@ def cancel_jobs(ids: Sequence[str], runner: Runner | None = None) -> list[str]:
     except Exception:  # noqa: BLE001
         return list(ids)
     return [] if result.returncode == 0 else list(ids)
+
+
+class Cancelled(NamedTuple):
+    """What a submission-wide cancel did.
+
+    ``jobs`` is the union of the recorded ids and the ids squeue lists under the submission tag;
+    ``leftover`` those scancel did not confirm; ``listed`` whether squeue answered.
+    """
+
+    jobs: list[str]
+    leftover: list[str]
+    listed: bool
+
+
+def tagged_jobs(submission: str, runner: Runner | None = None) -> list[str] | None:
+    """The user's queued or running job ids whose ``--comment`` is ``submission`` (None if squeue failed).
+
+    The calling job itself (``SLURM_JOB_ID``) is left out, so a finalize job never cancels itself.
+    """
+    runner = default_runner if runner is None else runner
+    try:
+        result = runner([SQUEUE, "-h", f"--user={getpass.getuser()}", "-o", "%i %k"], "")
+    except Exception:  # noqa: BLE001
+        return None
+    if result.returncode != 0:
+        return None
+    own = os.environ.get("SLURM_JOB_ID")
+    ids = []
+    for line in (result.stdout or "").splitlines():
+        parts = line.split(None, 1)
+        if len(parts) == 2 and parts[1].strip() == submission and _JOB_ID.match(parts[0]) and parts[0] != own:
+            ids.append(parts[0])
+    return ids
+
+
+def cancel_submission(submission: str, recorded: Sequence[str], runner: Runner | None = None) -> Cancelled:
+    """Cancel a submission's jobs: the recorded ids plus every job squeue lists under its ``--comment`` tag.
+
+    The tag catches a job slurmctld accepted whose id never reached the caller (an interrupt between the
+    accept and the reply).
+    """
+    listed = tagged_jobs(submission, runner)
+    own = os.environ.get("SLURM_JOB_ID")
+    union = sorted({*recorded, *(listed or [])} - {own}, key=int)
+    return Cancelled(union, cancel_jobs(union, runner), listed is not None)
 
 
 def job_state(job_id: str, runner: Runner | None = None) -> str | None:
@@ -539,8 +585,8 @@ def choose_partition(step: StepSpec, profile: Profile, script_for: Callable[[str
     return part.partition if result.returncode == 0 else part.fallback
 
 
-def _submit_held(runner: Runner, script: str) -> str:
-    result = runner([SBATCH, "--parsable", "--hold"], script)
+def _submit_held(runner: Runner, script: str, submission: str) -> str:
+    result = runner([SBATCH, "--parsable", "--hold", f"--comment={submission}"], script)
     if result.returncode != 0:
         tail = (result.stderr or "").strip().splitlines()[-1:] or [""]
         raise SlurmError(f"sbatch exited {result.returncode}: {tail[0]}")
@@ -621,20 +667,26 @@ def submit(manifests: Sequence[Manifest], config: SubmitConfig, runner: Runner |
     finalize_script([])
 
     snapshots: dict[str, dict[str, dict[str, Any] | None]] = {}
-    try:
-        for name, order in orders.items():
-            snapshots[name] = run.reserve_run_record(profile.runs_root, config.date, name, order, submission)
-    except run.SubmissionOverlap as error:
-        for name, snapshot in snapshots.items():
-            run.release_reservation(profile.runs_root, config.date, name, orders[name], submission, snapshot, None)
-        raise SlurmError(
-            f"E_SUBMIT_OVERLAP: {error.analysis} has pending rows from submission(s) {', '.join(error.others)}; "
-            "wait for them, or settle them with `run --finalize --submission <id>`"
-        ) from None
-
     submitted: list[str] = []
     jobs: list[Job] = []
     with _umask(SUBMIT_UMASK), terminate_raises():
+        try:
+            for name, order in orders.items():
+                snapshots[name] = run.reserve_run_record(profile.runs_root, config.date, name, order, submission)
+        except BaseException as error:
+            with signals_ignored():
+                for name, snapshot in snapshots.items():
+                    with contextlib.suppress(Exception):
+                        run.release_reservation(
+                            profile.runs_root, config.date, name, orders[name], submission, snapshot, None
+                        )
+            if isinstance(error, run.SubmissionOverlap):
+                raise SlurmError(
+                    f"E_SUBMIT_OVERLAP: {error.analysis} has pending rows from submission(s) "
+                    f"{', '.join(error.others)}; wait for them, or settle them with `run --finalize --submission <id>`"
+                ) from None
+            _interrupted(submission, error)
+            raise
         try:
             prepare_log_dir(profile, config.date)
             by_step: dict[str, str] = {}
@@ -644,7 +696,7 @@ def submit(manifests: Sequence[Manifest], config: SubmitConfig, runner: Runner |
                     return script_for(step, partition)
 
                 partition = choose_partition(step, profile, probe_script, runner)
-                job_id = _submit_held(runner, script_for(step, partition, [by_step[n] for n in step.needs]))
+                job_id = _submit_held(runner, script_for(step, partition, [by_step[n] for n in step.needs]), submission)
                 submitted.append(job_id)
                 by_step[step.name] = job_id
                 jobs.append(Job(step.name, analysis[step.name], job_id, partition))
@@ -653,17 +705,20 @@ def submit(manifests: Sequence[Manifest], config: SubmitConfig, runner: Runner |
                 run.update_run_record(
                     profile.runs_root, config.date, name, ids, order=order, pending_only=True, submission=submission
                 )
-            finalize = _submit_held(runner, finalize_script(submitted)) if submitted else None
+            finalize = _submit_held(runner, finalize_script(submitted), submission) if submitted else None
             if finalize is not None:
                 submitted.append(finalize)
             if submitted:
                 _check(runner([SCONTROL, "release", ",".join(submitted)], ""), "scontrol release")
         except BaseException as error:
-            leftover = _abort(runner, config, orders, snapshots, submitted)
+            cancelled = _abort(runner, config, orders, snapshots, submitted)
+            _interrupted(submission, error)
             reason = type(error).__name__ if not isinstance(error, (SlurmError, ValueError)) else str(error)
-            message = f"E_SUBMIT_ABORTED: {reason}; {len(submitted)} job(s) cancelled"
-            if leftover:
-                message += f"; E_SCANCEL_FAILED: job(s) {','.join(leftover)} may still be queued"
+            message = f"E_SUBMIT_ABORTED: {reason}; cancelled job(s) {','.join(cancelled.jobs) or 'none'}"
+            if cancelled.leftover:
+                message += f"; E_SCANCEL_FAILED: job(s) {','.join(cancelled.leftover)} may still be queued"
+            if not cancelled.listed:
+                message += "; squeue failed, so jobs with an unrecorded id may remain (tag " + submission + ")"
             raise SlurmError(message) from None
     return Submission(jobs, finalize, submission)
 
@@ -673,20 +728,22 @@ def _check(result: subprocess.CompletedProcess[str], what: str) -> None:
         raise SlurmError(f"{what} exited {result.returncode}")
 
 
+def _interrupted(submission: str, error: BaseException) -> None:
+    """On an interrupt, name the submission on stderr (its id only), so it can be settled by hand."""
+    if isinstance(error, (KeyboardInterrupt, Terminated)):
+        print(f"interrupted: submission {submission}", file=sys.stderr)
+
+
 def _abort(
     runner: Runner,
     config: SubmitConfig,
     orders: Mapping[str, list[str]],
     snapshots: Mapping[str, Mapping[str, Mapping[str, Any] | None]],
     submitted: list[str],
-) -> list[str]:
-    """With INT/TERM/HUP ignored: cancel the submitted jobs and undo this submission's pending rows.
-
-    Returns:
-        The job ids scancel did not confirm cancelled.
-    """
+) -> Cancelled:
+    """With INT/TERM/HUP ignored: cancel the submission's jobs (recorded and tagged), undo its pending rows."""
     with signals_ignored():
-        leftover = cancel_jobs(submitted, runner)
+        cancelled = cancel_submission(config.submission, submitted, runner)
         for name, order in orders.items():
             with contextlib.suppress(Exception):
                 run.release_reservation(
@@ -698,7 +755,7 @@ def _abort(
                     snapshots.get(name, {}),
                     ("E_SUBMIT_ABORTED",),
                 )
-    return leftover
+    return cancelled
 
 
 def submit_and_wait(script: str, *, name: str, runner: Runner | None = None) -> None:

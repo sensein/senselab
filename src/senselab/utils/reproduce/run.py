@@ -1523,6 +1523,7 @@ def update_run_record(
     pending_only: bool = False,
     submission: str | None = None,
     allow_untagged: bool = False,
+    untagged_only: bool = False,
 ) -> None:
     """Merge rows into ``<runs_root>/<date>/<analysis>/run.json`` under an exclusive lock.
 
@@ -1539,6 +1540,8 @@ def update_run_record(
         submission: Change only rows tagged with this submission id.
         allow_untagged: With ``submission``, also change rows with no submission tag (or no row at all), as a
             job's own row may be one a local run wrote.
+        untagged_only: Change only rows with no submission tag (or no row): a local run never rewrites a
+            submission's rows.
 
     Raises:
         OSError: If the run dir, the lock or the file cannot be written.
@@ -1555,6 +1558,8 @@ def update_run_record(
                 continue
             if submission is not None and not _tag_matches(old, submission, allow_untagged):
                 continue
+            if untagged_only and old is not None and old.get("submission") is not None:
+                continue
             current[row["step"]] = {**(old or {}), **row}
         _write_ordered(run, current, order)
 
@@ -1567,6 +1572,8 @@ def _tag_matches(old: Mapping[str, Any] | None, submission: str, allow_untagged:
 
 class SubmissionOverlap(Exception):
     """A run dir holds ``pending`` rows of another submission; ``others`` names those submissions."""
+
+    code = "E_SUBMIT_OVERLAP"
 
     def __init__(self, analysis: str, others: Sequence[str]) -> None:
         """Store the analysis and the other submission ids."""
@@ -1654,6 +1661,19 @@ def _write_ordered(run: Path, current: Mapping[str, Mapping[str, Any]], order: S
     _write_json(run / RUN_JSON, {"steps": steps})
 
 
+def check_no_live_submission(runs_root: Path, date: datetime.date, analyses: Sequence[str]) -> None:
+    """Refuse a local run while any submission still has ``pending`` rows in one of the run dirs.
+
+    Raises:
+        SubmissionOverlap: Naming the analysis and the submissions.
+    """
+    for name in analyses:
+        rows = read_run_record(cache.run_dir(runs_root, date, name) / RUN_JSON)
+        others = sorted({str(r.get("submission")) for r in rows if r.get("status") == PENDING and r.get("submission")})
+        if others:
+            raise SubmissionOverlap(name, others)
+
+
 def pending_jobs(manifests: Sequence[Manifest], config: RunConfig, submission: str) -> list[str]:
     """The job ids recorded in a submission's rows that are still ``pending``."""
     jobs = []
@@ -1692,7 +1712,8 @@ def finalize_run_records(
 ) -> None:
     """Settle every row still ``pending`` once every job of a submission has ended.
 
-    Steps are taken in DAG order. A pending step with a need that did not succeed was cancelled with its
+    Steps are taken in DAG order. A placeholder row (a submission's, with no job id) was never submitted:
+    ``never-ran`` with ``E_SUBMIT_ABORTED``. A pending step with a need that did not succeed was cancelled with its
     upstream (``--kill-on-invalid-dep``): ``never-ran`` with ``E_UPSTREAM_NOT_DONE``. Otherwise its own job
     ended without writing its row (killed, timed out, node failure): ``never-ran`` with
     ``E_JOB_ENDED_WITHOUT_RECORD`` and, when ``state_of`` knows it, the job's final state as ``slurm_state``.
@@ -1718,7 +1739,9 @@ def finalize_run_records(
         if submission is not None and row.get("submission") != submission:
             continue
         upstream_bad = any(not _row_ok(rows.get(n)) for n in step.needs)
-        if upstream_bad:
+        if row.get("job") is None and row.get("submission") is not None:
+            new = never_ran_row(step.name, ("E_SUBMIT_ABORTED",))
+        elif upstream_bad:
             new = never_ran_row(step.name, ("E_UPSTREAM_NOT_DONE",))
         else:
             new = never_ran_row(step.name, ("E_JOB_ENDED_WITHOUT_RECORD",))
@@ -1772,12 +1795,18 @@ def run_steps(
     Returns:
         One outcome per step run, in run order (with ``only``, the named steps only).
 
+    A local run (``submission`` None) refuses while any submission has ``pending`` rows in one of the run
+    dirs, and never rewrites a row a submission tagged; rows of steps it did not run are kept.
+
     Raises:
         ValueError: If ``only`` names a step outside the manifests.
+        SubmissionOverlap: For a local run while a submission is live in one of the run dirs.
     """
     analysis = {s.name: m.name for m in manifests for s in m.steps}
     specs = {s.name: s for m in manifests for s in m.steps}
     ordered = toposort(list(specs.values()))
+    if submission is None:
+        check_no_live_submission(config.profile.runs_root, config.date, sorted(set(analysis.values())))
     if only is not None:
         return _run_only(config, analysis, specs, ordered, set(only), submission)
     outcomes: dict[str, StepOutcome] = {}
@@ -1787,12 +1816,11 @@ def run_steps(
         outcomes[step.name] = run_step(step, analysis[step.name], config, upstream, schemas)
     for name in sorted(set(analysis.values())):
         rows = [outcomes[s.name] for s in ordered if analysis[s.name] == name]
-        record = {"steps": [_row(o) for o in rows]}
+        order = [s.name for s in ordered if analysis[s.name] == name]
         try:
-            run = cache.run_dir(config.profile.runs_root, config.date, name)
-            run.mkdir(parents=True, exist_ok=True)
-            with build.file_lock(run / RUN_LOCK):
-                _write_json(run / RUN_JSON, record)
+            update_run_record(
+                config.profile.runs_root, config.date, name, [_row(o) for o in rows], order=order, untagged_only=True
+            )
         except (OSError, TypeError, ValueError, RunError, cache.CacheError):
             for o in rows:
                 outcomes[o.step] = o._replace(codes=tuple(sorted({*o.codes, "E_DRIVER"})), exit=o.exit or EXIT_DRIVER)
@@ -1844,6 +1872,7 @@ def _run_only(
                     order=order,
                     submission=submission,
                     allow_untagged=True,
+                    untagged_only=submission is None,
                 )
             if gone:
                 update_run_record(
