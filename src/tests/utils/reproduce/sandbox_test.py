@@ -36,6 +36,7 @@ def _step(**extra: Any) -> StepSpec:  # noqa: ANN401
         "pythonpath": ["{checkout}/lib", "{checkout}"],
         "resources": {"profile": "cpu"},
         "adapter": "a.py",
+        "metrics_schema": {"kind": "statistic", "headline": ["f_stat"]},
     }
     data.update(extra)
     return StepSpec.model_validate(data)
