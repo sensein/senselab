@@ -2418,6 +2418,34 @@ class TestABreathTaskIsDecidedOnDetectedBreaths:
             ),
         )
 
+    def test_a_breath_reading_missing_its_decision_is_not_measured_never_passed(self) -> None:
+        """A breath family whose reading lacks its decision is review, not_measured, naming the field."""
+        folded = fold_file_verdict(
+            self._ADMIT_OK,
+            branch_reports=[_report("AIRWAY", "airway", conformance=True)],
+            spans_by_node=_found("AIRWAY"),
+            branch_decisions=_decisions(AIRWAY=ROUTED, SPEECH=DECLINED, VOICE=DECLINED),
+            ran={"AIRWAY": RunState.COMPLETED},
+            hint_claims={"AIRWAY": True},
+            route_state="routed",
+            declared_family="respiration-and-cough-fivebreaths",
+            task=TaskEvidence(
+                owning_branches=("AIRWAY",),
+                duration_s=30.0,
+                minimum_duration_s=1.0,
+                owner_absent_inputs=("AIRWAY:airway_breath_reading.decision",),
+                required_event="breath",
+                events_found_n=6,
+                event_kind="breath",
+                instructed_count=5,
+                breath_mode=BREATH_COUNTED,
+            ),
+        )
+        assert folded.triage is Triage.REVIEW and folded.run_status is RunStatus.INCOMPLETE
+        assert folded.reason == "not_measured"
+        named = [entry for entry in folded.evidence if entry.name == "owning_branch_input_absent"]
+        assert named and named[0].value == ["AIRWAY:airway_breath_reading.decision"] and named[0].decisive
+
     def test_a_sustained_breath_recording_with_a_detected_breath_passes(self) -> None:
         """One breath event: events_min holds, the task was performed."""
         folded = self._fold(family="respiration-and-cough-breath", conformance=True, events=1)

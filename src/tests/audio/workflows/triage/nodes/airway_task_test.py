@@ -92,6 +92,16 @@ def test_verdict_reads_the_cough_reading_airway_wrote() -> None:
     assert evidence.owner_absent_inputs == ()
 
 
+def test_a_breath_reading_from_before_the_task_layer_is_not_measured() -> None:
+    """A stored breath reading with no ``decision`` names that field as the owner's absent input."""
+    attributes = {"absent": [], "pattern": "alternating_breaths", "events_n": 6, "review": False, "reading": {}}
+    evidence = verdict_module._task_evidence(
+        _seed(airway_task.BREATH_READING, attributes), "respiration-and-cough-fivebreaths"
+    )
+    assert evidence.breath_decision is None
+    assert evidence.owner_absent_inputs == (f"AIRWAY:{airway_task.BREATH_READING}.decision",)
+
+
 def test_no_reading_without_an_airway_report_is_no_absent_input() -> None:
     """A store AIRWAY never reported on lacks nothing of AIRWAY's: the branch did not run."""
     evidence = verdict_module._task_evidence(ProvStore(run_id="unmeasured"), "respiration-and-cough-fivebreaths")
