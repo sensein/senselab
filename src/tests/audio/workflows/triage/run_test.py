@@ -877,7 +877,7 @@ class TestAdmitFailShortCircuits:
         result = run_triage(tmp_path / "recording.wav", tmp_path / "out", config)
         assert result.file_verdict is not None
         assert result.file_verdict.triage is Triage.DISCARD
-        assert result.file_verdict.release is Release.WITHHELD
+        assert result.file_verdict.release is Release.DISCARDED
         assert result.file_verdict.release_ground == DISCARDED
         assert result.released == {}
         assert result.store_path.is_file()
@@ -1327,7 +1327,7 @@ class TestTheExitCodeSaysWhetherTheGraphRanClean:
     ) -> None:
         """The exit code reports whether the graph ran, never what it concluded about the recording."""
         nodes = {node: run_module.NodeOutcome(node=node, state=RunState.COMPLETED) for node in GRAPH}
-        discarded = FileVerdict(triage=Triage.DISCARD, release=Release.WITHHELD, discard_ground="acoustically_empty")
+        discarded = FileVerdict(triage=Triage.DISCARD, release=Release.DISCARDED, discard_ground="acoustically_empty")
         assert self._drive(_cli(), monkeypatch, tmp_path, fake_result(file_verdict=discarded, nodes=nodes)) == 0
 
     def test_the_errored_node_is_named_on_stderr(

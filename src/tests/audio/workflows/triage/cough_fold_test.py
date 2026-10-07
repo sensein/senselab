@@ -151,9 +151,9 @@ def test_a_detector_short_of_the_threshold_leaves_the_discard() -> None:
 
 
 def test_a_discard_releases_nothing() -> None:
-    """A discarded recording is withheld on the ``discarded`` ground, whatever redaction would say."""
+    """A discarded recording releases ``discarded``, whatever redaction would say."""
     folded = _fold(mode=COUGH_PERFORMED, onsets=0, conformance=True)
-    assert folded.release is Release.WITHHELD
+    assert folded.release is Release.DISCARDED
     assert folded.record()["release_ground_key"] == "discarded"
 
 
