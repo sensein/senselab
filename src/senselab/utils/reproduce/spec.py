@@ -369,7 +369,8 @@ class MetricsSchema(_Model):
     to ``kind``); ``headline_labels`` the labels that tell apart several entries of one name (e.g.
     systems); ``counts`` the named counts (each must appear); ``per_class`` the class labels.
     ``positive`` names the positive class of a binary classification step, which fixes the PR-AUC and
-    F1 floors. ``split`` opts a classification or detection step out of the split report.
+    F1 floors. ``split`` opts a classification or detection step out of the split report. Only
+    classification and detection steps take ``per_class`` and ``positive``.
 
     A classification step declares at least two classes and a balanced-accuracy or macro-recall
     headline; a detection step declares at least one class.
@@ -398,6 +399,8 @@ class MetricsSchema(_Model):
                 raise ValueError("kind classification needs at least two per_class labels")
             if not CHANCE_HEADLINES & names:
                 raise ValueError("kind classification needs a balanced_accuracy or macro_recall headline")
+        if self.kind not in CLASSIFICATION_KINDS and (self.per_class or self.positive is not None):
+            raise ValueError(f"kind {self.kind} takes no per_class labels or positive class")
         if self.positive is not None and (
             self.kind != "classification" or len(self.per_class) != 2 or self.positive not in self.per_class
         ):

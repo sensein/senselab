@@ -512,6 +512,21 @@ STEP_COUNTER_EXAMPLES: dict[str, tuple[dict[str, Any], str]] = {
         {"metrics_schema": _metrics_schema(positive="walk")},
         "positive must be one of exactly two",
     ),
+    "metrics-schema-statistic-with-classes": (
+        {"metrics_schema": _metrics_schema(kind="statistic", headline=["f_stat"]), "expect": []},
+        "takes no per_class labels",
+    ),
+    "metrics-schema-count-with-classes": (
+        {"metrics_schema": _metrics_schema(kind="count", headline=["count"], per_class=["a", "b"]), "expect": []},
+        "takes no per_class labels",
+    ),
+    "metrics-schema-statistic-with-positive": (
+        {
+            "metrics_schema": _metrics_schema(kind="statistic", headline=["f_stat"], per_class=[], positive="a"),
+            "expect": [],
+        },
+        "takes no per_class labels",
+    ),
     "metrics-schema-split-bad-reason": (
         {"metrics_schema": _metrics_schema(split={"none": "too_small"})},
         "whole_dataset",
