@@ -142,6 +142,38 @@ def event_snr_db(view: GenericView, start_s: float, end_s: float) -> float:
     return float(view.frames.level_db[inside].max() - view.broadband_floor_db)
 
 
+def local_snr_db(view: GenericView, span: Span, others: Sequence[Span], *, window_s: float, percentile: float) -> float:
+    """An event's level over the background around it: the window either side, outside every event.
+
+    Args:
+        view: The background.
+        span: The event.
+        others: Every candidate event, whose frames are not background.
+        window_s: How far either side the background is read.
+        percentile: The percentile of the background frames' broadband level taken as the background.
+
+    Returns:
+        The event's highest unmasked broadband level over the larger of the local background and the
+        stationary floor; the floor-relative level where the window holds too few background frames.
+    """
+    times = view.frames.times_s
+    masked = _impulse_mask(view)
+    start, end = span
+    inside = (times >= start) & (times <= end) & ~masked
+    if not inside.any():
+        return 0.0
+    taken = np.zeros(len(times), dtype=bool)
+    for a, b in others:
+        taken |= (times >= a) & (times <= b)
+    around = (((times >= start - window_s) & (times < start)) | ((times > end) & (times <= end + window_s))) & ~(
+        masked | taken
+    )
+    background = view.broadband_floor_db
+    if around.sum() >= 5:
+        background = max(background, float(np.percentile(view.frames.level_db[around], percentile)))
+    return float(view.frames.level_db[inside].max() - background)
+
+
 def entangled(view: GenericView, span: Span, abut_s: float) -> bool:
     """Whether an impulse overlaps or abuts an event.
 
@@ -239,7 +271,9 @@ class TaskEvent:
     Attributes:
         start_s: Its start.
         end_s: Its end.
-        snr_db: Its level over the floor in its own window (:func:`event_snr_db`).
+        snr_db: Its level over the stationary floor (:func:`event_snr_db`).
+        local_snr_db: Its level over the background around it (:func:`local_snr_db`); the floor-relative
+            level where none was read.
         entangled: Whether an impulse overlaps or abuts it.
         recovered: Whether the rhythm prior recovered it from a region the branch's finder missed.
         stream: The stream it was found on.
@@ -248,9 +282,15 @@ class TaskEvent:
     start_s: float
     end_s: float
     snr_db: float
+    local_snr_db: float | None = None
     entangled: bool = False
     recovered: bool = False
     stream: str = "plain"
+
+    @property
+    def clear_db(self) -> float:
+        """The level the decision's clear cut reads: the local SNR where read, else the floor SNR."""
+        return self.snr_db if self.local_snr_db is None else self.local_snr_db
 
     def record(self) -> dict[str, Any]:
         """The event, for the store."""
@@ -258,26 +298,40 @@ class TaskEvent:
             "start_s": round(self.start_s, 3),
             "end_s": round(self.end_s, 3),
             "snr_db": round(self.snr_db, 2),
+            "local_snr_db": None if self.local_snr_db is None else round(self.local_snr_db, 2),
             "entangled": self.entangled,
             "recovered": self.recovered,
             "stream": self.stream,
         }
 
 
-def task_event(view: GenericView, span: Span, abut_s: float, *, recovered: bool = False) -> TaskEvent:
+def task_event(
+    view: GenericView, span: Span, others: Sequence[Span], p: dict[str, Any], *, recovered: bool = False
+) -> TaskEvent:
     """One candidate read against the background.
 
     Args:
         view: The background.
         span: The candidate.
-        abut_s: :func:`entangled`'s reach.
+        others: Every candidate, whose frames the local background excludes.
+        p: The parameters of ``data/task_events.yaml``.
         recovered: Whether the rhythm prior recovered it.
 
     Returns:
         The event.
     """
     start, end = span
-    return TaskEvent(float(start), float(end), event_snr_db(view, start, end), entangled(view, span, abut_s), recovered)
+    local = local_snr_db(
+        view, span, others, window_s=float(p["local"]["window_s"]), percentile=float(p["local"]["percentile"])
+    )
+    return TaskEvent(
+        float(start),
+        float(end),
+        event_snr_db(view, start, end),
+        local,
+        entangled(view, span, float(p["entangle_abut_s"])),
+        recovered,
+    )
 
 
 def dominant_cluster(events: Sequence[TaskEvent], gap_s: float) -> list[TaskEvent]:
@@ -373,24 +427,25 @@ class TaskEvidence:
 
 
 def decide(events: Sequence[TaskEvent], p: dict[str, Any]) -> tuple[str, str]:
-    """The decision on a cluster's events (C5).
+    """The decision on the events the type test kept (C5).
 
     Args:
-        events: The dominant cluster's events.
+        events: Every event the type test kept; the cluster bounds the extent, not the decision.
         p: The ``decision`` section of ``data/task_events.yaml``.
 
     Returns:
-        ``(decision, why)``: ``absent`` where no event reaches ``snr_low_db``; ``review`` where the
-        deciding event (the strongest) stays under ``snr_high_db`` or an impulse overlaps or abuts it;
-        ``present`` otherwise.
+        ``(decision, why)``: ``absent`` where no found event stands ``snr_low_db`` over the floor;
+        ``review`` where none of those stands ``snr_high_db`` over its local background (``weak``), or
+        an impulse overlaps or abuts every one that does (``entangled``); ``present`` otherwise.
+        Events the rhythm prior recovered count phases and extent, never the decision.
     """
-    standing = [e for e in events if e.snr_db >= p["snr_low_db"]]
+    standing = [e for e in events if not e.recovered and e.snr_db >= p["snr_low_db"]]
     if not standing:
         return ABSENT, "no event over the floor"
-    deciding = max(standing, key=lambda e: e.snr_db)
-    if deciding.snr_db < p["snr_high_db"]:
+    clear = [e for e in standing if e.clear_db >= p["snr_high_db"]]
+    if not clear:
         return REVIEW, "weak"
-    if deciding.entangled:
+    if all(e.entangled for e in clear):
         return REVIEW, "entangled"
     return PRESENT, "clear"
 
@@ -420,15 +475,16 @@ def evidence_of(
         The evidence.
     """
     p = p or task_events_parameters()
-    abut = float(p["entangle_abut_s"])
     margin = float(p["impulse_margin_db"])
-    events = [task_event(view, s, abut) for s in candidates if not impulse_explained(view, s, margin)]
-    events += [task_event(view, s, abut, recovered=True) for s in recovered if not impulse_explained(view, s, margin)]
-
+    kept = [s for s in candidates if not impulse_explained(view, s, margin)]
+    extra = [s for s in recovered if not impulse_explained(view, s, margin)]
+    others = [*kept, *extra]
+    events = [task_event(view, s, others, p) for s in kept]
+    events += [task_event(view, s, others, p, recovered=True) for s in extra]
     cluster = dominant_cluster([e for e in events if e.snr_db >= p["decision"]["snr_low_db"]], gap_s) or (
         dominant_cluster(events, gap_s)
     )
-    decision, why = decide(cluster, p["decision"])
+    decision, why = decide(events, p["decision"])
     extent: Span | None = None
     if cluster:
         start = cluster[0].start_s
