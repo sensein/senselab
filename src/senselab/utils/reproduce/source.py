@@ -10,9 +10,11 @@ Fetches never prune, so the throwaway ``refs/heads/repro/*`` refs survive every 
 ``repro: clear outputs`` (every tracked notebook with outputs dropped and execution counts nulled,
 as plain JSON), then one ``repro: <patch name>`` commit per patch, and points
 ``refs/heads/repro/<commit[:8]>-<patch set[:8]>`` at the result with ``git update-ref``. The refs
-live only in the cache mirror. Submodules are worktrees of their own mirrors at the recorded
-gitlinks. A sidecar ``<worktree>.json`` marks a complete worktree; a complete worktree is verified
-and reused, an incomplete one is removed and rebuilt, under a `SharedFileLock` on the worktree path.
+live only in the cache mirror. After each patch no tracked notebook may carry outputs. Submodules
+are worktrees of their own mirrors at the recorded gitlinks; their notebooks are never cleared, so
+one with outputs is refused unless the caller allows it. A sidecar ``<worktree>.json`` marks a
+complete worktree; a complete worktree is verified and reused, an incomplete one is removed and
+rebuilt, under a `SharedFileLock` on the worktree path.
 
 Every git command runs with an allowlisted environment, no system or global config, hooks
 disabled, and a fixed identity and date, so the commit and tree shas of a checkout are the same in
@@ -43,7 +45,7 @@ REPRO_REF_PREFIX = "refs/heads/repro/"
 UPSTREAM_HEADS = "refs/upstream/heads/"
 UPSTREAM_PINNED = "refs/upstream/pinned/"
 PATCH_SET_SCHEMA = "reproduce-patch-set-1"
-MARKER_SCHEMA = "reproduce-checkout-1"
+MARKER_SCHEMA = "reproduce-checkout-2"
 CLEAR_MESSAGE = "repro: clear outputs"
 SYSTEM_PATH = "/usr/bin:/bin"
 REPRO_NAME = "reproduce"
@@ -89,16 +91,20 @@ WORKTREE_DIRTY = "worktree-dirty"
 WORKTREE_MISMATCH = "worktree-mismatch"
 REF_MISSING = "ref-missing"
 DENY_PATTERN_INVALID = "deny-pattern-invalid"
+SUBMODULE_NOTEBOOK_OUTPUTS = "submodule-notebook-outputs"
 
 LINT_NOTEBOOK_OUTPUTS = "notebook-outputs"
 LINT_DENY_PATTERN = "deny-pattern"
 LINT_BINARY = "binary-patch"
+LINT_SYMLINK = "symlink"
 
 _NAME_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]*$")
 _OUTPUTS_RE = re.compile(r'^(\s*)"outputs"\s*:\s*\[(.*)$')
 _OUTPUT_TYPE_RE = re.compile(r'"output_type"\s*:')
 _HUNK_RE = re.compile(r"^@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@")
 _TAIL = 2000
+_SYMLINK_MODE_RE = re.compile(r"^(new file mode|new mode) 120000\s*$")
+_C_ESCAPES = {"a": 7, "b": 8, "t": 9, "n": 10, "v": 11, "f": 12, "r": 13, '"': 34, "\\": 92}
 
 
 class ReproduceSourceError(RuntimeError):
@@ -122,11 +128,12 @@ class Checkout(NamedTuple):
     repo: str
     commit: str
     patch_set_sha256: str
-    patches: dict[str, str]
+    patches: list[tuple[str, str]]
     ref: str
     head: str
     tree_sha: str
     submodules: dict[str, str]
+    submodule_notebooks_with_outputs: list[str]
 
 
 class LintFinding(NamedTuple):
@@ -252,7 +259,7 @@ def resolve_submodule_url(parent: str, url: str) -> str:
 
 
 def patch_set_sha256(patches: Sequence[FileRef]) -> str:
-    """The sha256 naming an ordered patch set: each patch's file name and content sha256.
+    """The sha256 naming an ordered patch set: each patch's manifest-relative path and content sha256.
 
     Args:
         patches: The step's patches, in application order.
@@ -260,7 +267,7 @@ def patch_set_sha256(patches: Sequence[FileRef]) -> str:
     Returns:
         A hex sha256; `EMPTY_PATCH_SET_SHA256` for no patches.
     """
-    entries = [[PurePosixPath(p.file).name, p.sha256] for p in patches]
+    entries = [[p.file, p.sha256] for p in patches]
     payload = {"schema": PATCH_SET_SCHEMA, "patches": entries}
     return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
@@ -395,7 +402,10 @@ def _mirror(git: _Git, url: str, commit: str, cache: Path, submodules: bool, see
 
 
 def clear_notebook_outputs(text: str) -> tuple[str, bool]:
-    """Drop every code cell's outputs and null its execution count, as plain JSON.
+    """Drop code-cell outputs, null execution counts, drop widget state and cell attachments, as plain JSON.
+
+    Notebook-level ``metadata.widgets`` and the ``attachments`` of markdown and raw cells are
+    removed too.
 
     Args:
         text: The notebook's JSON text.
@@ -417,7 +427,14 @@ def clear_notebook_outputs(text: str) -> tuple[str, bool]:
     for sheet in notebook.get("worksheets") or []:
         cells.extend(sheet.get("cells") or [])
     changed = False
+    metadata = notebook.get("metadata")
+    if isinstance(metadata, dict) and "widgets" in metadata:
+        del metadata["widgets"]
+        changed = True
     for cell in cells:
+        if isinstance(cell, dict) and cell.get("cell_type") in ("markdown", "raw") and "attachments" in cell:
+            del cell["attachments"]
+            changed = True
         if not isinstance(cell, dict) or cell.get("cell_type") != "code":
             continue
         if cell.get("outputs") != []:
@@ -435,17 +452,33 @@ def clear_notebook_outputs(text: str) -> tuple[str, bool]:
     return json.dumps(notebook, indent=1, sort_keys=True, ensure_ascii=False) + "\n", True
 
 
-def _clear_outputs(git: _Git, worktree: Path) -> None:
-    listing = git.ok(worktree, "ls-files", "-z", "-s")
-    for entry in listing.split("\0"):
+def _notebooks(git: _Git, worktree: Path) -> list[str]:
+    """Tracked regular-file notebooks of ``worktree``, unquoted (``ls-files -z``)."""
+    found = []
+    for entry in git.ok(worktree, "ls-files", "-z", "-s").split("\0"):
         if not entry:
             continue
         meta, path = entry.split("\t", 1)
         if meta.split()[0] in ("100644", "100755") and path.endswith(".ipynb"):
-            file = worktree / path
-            text, changed = clear_notebook_outputs(file.read_text(encoding="utf-8"))
-            if changed:
-                file.write_text(text, encoding="utf-8")
+            found.append(path)
+    return found
+
+
+def _notebooks_needing_clear(git: _Git, worktree: Path) -> list[str]:
+    """Tracked notebooks that `clear_notebook_outputs` would change."""
+    return [
+        path
+        for path in _notebooks(git, worktree)
+        if clear_notebook_outputs((worktree / path).read_text(encoding="utf-8"))[1]
+    ]
+
+
+def _clear_outputs(git: _Git, worktree: Path) -> None:
+    for path in _notebooks(git, worktree):
+        file = worktree / path
+        text, changed = clear_notebook_outputs(file.read_text(encoding="utf-8"))
+        if changed:
+            file.write_text(text, encoding="utf-8")
     git.ok(worktree, "add", "-u")
     git.ok(worktree, "commit", "-q", "--no-verify", "--allow-empty", "-m", CLEAR_MESSAGE)
 
@@ -481,8 +514,39 @@ def _deny_hits(text: bytes, patterns: Sequence[str]) -> list[LintFinding]:
     return findings
 
 
+def unquote_c_path(path: str) -> str:
+    r"""Undo git's C-style quoting of a path (``"caf\303\251.ipynb"``); unquoted paths pass through.
+
+    Args:
+        path: A path as git prints it in a diff header.
+
+    Returns:
+        The path, with octal escapes decoded as UTF-8.
+    """
+    if len(path) < 2 or not (path.startswith('"') and path.endswith('"')):
+        return path
+    body, out, i = path[1:-1], bytearray(), 0
+    while i < len(body):
+        char = body[i]
+        if char == "\\" and i + 1 < len(body):
+            nxt = body[i + 1]
+            if nxt in "01234567" and re.match(r"[0-7]{3}", body[i + 1 : i + 4]):
+                out.append(int(body[i + 1 : i + 4], 8))
+                i += 4
+                continue
+            if nxt in _C_ESCAPES:
+                out.append(_C_ESCAPES[nxt])
+                i += 2
+                continue
+        out.extend(char.encode())
+        i += 1
+    return out.decode(errors="replace")
+
+
 def _is_notebook(header: str) -> bool:
-    return header[4:].split("\t", 1)[0].rstrip().endswith(".ipynb")
+    name = header[4:]
+    name = name if name.startswith('"') else name.split("\t", 1)[0]
+    return unquote_c_path(name.rstrip()).endswith(".ipynb")
 
 
 def _hunk_hits(lines: list[str], start: int, old: int, new: int) -> tuple[list[LintFinding], int]:
@@ -542,7 +606,7 @@ def _outputs_hits(lines: list[str]) -> list[LintFinding]:
 
 
 def lint_patch(patch: str | bytes, deny_patterns: Sequence[str]) -> list[LintFinding]:
-    """Check a unified diff: no hunk inside a notebook's ``"outputs"``, no deny-pattern hit, no binary.
+    """Check a unified diff: no notebook ``"outputs"`` hunk, deny-pattern hit, binary or symlink.
 
     Every line of the patch is scanned for deny patterns, headers and context included. Findings
     carry line numbers and pattern indices only, never patch content.
@@ -561,6 +625,7 @@ def lint_patch(patch: str | bytes, deny_patterns: Sequence[str]) -> list[LintFin
     lines = data.decode(errors="replace").splitlines()
     findings = _outputs_hits(lines)
     findings += [LintFinding(LINT_BINARY, n) for n, line in enumerate(lines, start=1) if line == "GIT binary patch"]
+    findings += [LintFinding(LINT_SYMLINK, n) for n, line in enumerate(lines, start=1) if _SYMLINK_MODE_RE.match(line)]
     findings += _deny_hits(data, deny_patterns)
     return sorted(findings)
 
@@ -607,10 +672,14 @@ def _read_marker(path: Path) -> Checkout:
     if data.pop("schema", None) != MARKER_SCHEMA:
         raise ReproduceSourceError(WORKTREE_MISMATCH, f"{path.name} has another schema")
     data["worktree"], data["mirror"] = Path(data["worktree"]), Path(data["mirror"])
+    data["patches"] = [(file, sha) for file, sha in data["patches"]]
     return Checkout(**data)
 
 
-def _add_submodules(git: _Git, cache: Path, url: str, worktree: Path, prefix: str = "") -> dict[str, str]:
+def _add_submodules(
+    git: _Git, cache: Path, url: str, worktree: Path, notebooks: list[str], prefix: str = ""
+) -> dict[str, str]:
+    """Add submodule worktrees recursively; return their shas and append dirty notebook paths."""
     shas: dict[str, str] = {}
     for path, sub_url, sha in _submodules_at(git, worktree, "HEAD"):
         resolved = resolve_submodule_url(url, sub_url)
@@ -621,7 +690,8 @@ def _add_submodules(git: _Git, cache: Path, url: str, worktree: Path, prefix: st
         if git.ok(target, "rev-parse", "HEAD") != sha:
             raise ReproduceSourceError(HEAD_MISMATCH, f"submodule {path} is not at its gitlink")
         shas[prefix + path] = sha
-        shas.update(_add_submodules(git, cache, resolved, target, f"{prefix}{path}/"))
+        notebooks += [f"{prefix}{path}/{nb}" for nb in _notebooks_needing_clear(git, target)]
+        shas.update(_add_submodules(git, cache, resolved, target, notebooks, f"{prefix}{path}/"))
     return shas
 
 
@@ -685,6 +755,7 @@ def _build(
     refs: Sequence[FileRef],
     patch_set: str,
     submodules: bool,
+    allow_submodule_notebook_outputs: bool,
 ) -> Checkout:
     worktree.parent.mkdir(parents=True, exist_ok=True)
     git.ok(mirror_path, "worktree", "prune")
@@ -695,21 +766,30 @@ def _build(
     for name, data in patches:
         git.ok(worktree, "apply", "--check", "--index", "-", stdin=data, code=PATCH_DOES_NOT_APPLY)
         git.ok(worktree, "apply", "--index", "-", stdin=data, code=PATCH_DOES_NOT_APPLY)
+        dirty = _notebooks_needing_clear(git, worktree)
+        if dirty:
+            raise ReproduceSourceError(PATCH_LINT, f"patch {name} leaves notebook outputs", "\n".join(dirty))
         git.ok(worktree, "commit", "-q", "--no-verify", "-m", f"repro: {name}")
     head = git.ok(worktree, "rev-parse", "HEAD")
     ref = REPRO_REF_PREFIX + _tag(commit, patch_set)
-    shas = _add_submodules(git, cache, url, worktree) if submodules else {}
+    notebooks: list[str] = []
+    shas = _add_submodules(git, cache, url, worktree, notebooks) if submodules else {}
+    if notebooks and not allow_submodule_notebook_outputs:
+        raise ReproduceSourceError(
+            SUBMODULE_NOTEBOOK_OUTPUTS, f"{len(notebooks)} submodule notebook(s) carry outputs", "\n".join(notebooks)
+        )
     co = Checkout(
         worktree=worktree,
         mirror=mirror_path,
         repo=url,
         commit=commit,
         patch_set_sha256=patch_set,
-        patches={r.file: r.sha256 for r in refs},
+        patches=[(r.file, r.sha256) for r in refs],
         ref=ref,
         head=head,
         tree_sha=git.ok(worktree, "rev-parse", "HEAD^{tree}"),
         submodules=shas,
+        submodule_notebooks_with_outputs=sorted(notebooks),
     )
     git.ok(mirror_path, "update-ref", ref, head)
     verify_checkout(co)
@@ -725,6 +805,7 @@ def checkout(
     base_dir: Path | None = None,
     submodules: bool = True,
     deny_patterns: Sequence[str] = (),
+    allow_submodule_notebook_outputs: bool = False,
 ) -> Checkout:
     """Prepare the detached worktree for (``commit``, ``patches``); run at prefetch, never at run.
 
@@ -739,6 +820,8 @@ def checkout(
         base_dir: The manifest repository; required when there are patches.
         submodules: Whether to check out submodules from their mirrors.
         deny_patterns: Extended regexes no patch line may match.
+        allow_submodule_notebook_outputs: Accept notebooks with outputs inside submodules, which
+            are never cleared; their paths are recorded in the checkout. Refused otherwise.
 
     Returns:
         The checkout, with its tree sha and submodule shas.
@@ -760,14 +843,25 @@ def checkout(
     with SharedFileLock(worktree):
         if marker.is_file():
             co = _read_marker(marker)
-            expected = (repo, commit, patch_set, {r.file: r.sha256 for r in patches}, worktree)
-            if (co.repo, co.commit, co.patch_set_sha256, co.patches, co.worktree) != expected:
+            if (co.repo, co.commit, co.patch_set_sha256) != (repo, commit, patch_set):
                 raise ReproduceSourceError(WORKTREE_MISMATCH, f"{marker.name} records another checkout")
             verify_checkout(co)
             return co
         _remove_worktree(git, cache, mirror_path, worktree)
         try:
-            co = _build(git, cache, repo, commit, mirror_path, worktree, data, patches, patch_set, submodules)
+            co = _build(
+                git,
+                cache,
+                repo,
+                commit,
+                mirror_path,
+                worktree,
+                data,
+                patches,
+                patch_set,
+                submodules,
+                allow_submodule_notebook_outputs,
+            )
         except BaseException:
             _remove_worktree(git, cache, mirror_path, worktree)
             raise
