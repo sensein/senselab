@@ -46,12 +46,12 @@ from packaging.markers import Marker, default_environment
 
 from senselab.utils.reproduce import sandbox
 from senselab.utils.reproduce.build import (
-    MODULES_INIT,
     SYSTEM_PATH,
     base_environment,
     ca_bundle,
     ensure_wheel,
     file_lock,
+    modules_init_word,
     reuse_wheel,
     stage_wheel,
     torch_index_url,
@@ -345,9 +345,11 @@ class _Wheels:
         expected: str | None,
         rebuild: bool,
         dest: Path,
+        modules_init: Path | None = None,
     ) -> None:
         self.env, self.base_dir, self.wheelhouse, self.lock = env, base_dir, wheelhouse, lock
         self.lock_sha256, self.rebuild, self.dest = expected, rebuild, dest
+        self.modules_init = modules_init
         self.built: list[str] = []
         self.shas: dict[str, str] = {}
         self._copies: list[Path] | None = None
@@ -388,6 +390,7 @@ class _Wheels:
                     python=self.env.python_exact,
                     rebuild=self.rebuild,
                     expected_sha256=self.lock_sha256,
+                    modules_init=self.modules_init,
                 )
                 self.lock_sha256 = result.wheels_lock_sha256
                 if result.built:
@@ -624,7 +627,8 @@ def prefetch_env(
         inputs = work / "inputs"
         copy_verified(base_dir, verified, inputs)
         run_env = base_environment(uv, work)
-        wheels = _Wheels(env, base_dir, wheelhouse, lock_path, expected, rebuild, work / "wheels")
+        init = None if profile is None else profile.modules_init
+        wheels = _Wheels(env, base_dir, wheelhouse, lock_path, expected, rebuild, work / "wheels", init)
         base = _build_or_reuse(uv, env, venv_dir(cache, analysis, env), inputs, wheels, None, run_env)
         derived = {}
         for name in OVERLAYS:
@@ -993,14 +997,16 @@ def r_download_script(packages: Sequence[RPackage]) -> str:
     )
 
 
-def r_fetch_script(build_modules: Sequence[str] = ()) -> str:
+def r_fetch_script(build_modules: Sequence[str] = (), modules_init: Path | None = None) -> str:
     """The ``bash -c`` script that loads the modules (``$1`` the R module) and runs the download script.
 
     Positional arguments: ``$2`` the `r_download_script`, ``$3`` the repository, ``$4`` the contrib dir.
+
+    Raises:
+        ReproduceLockError: ``E_MODULES_INIT`` without a ``modules_init``.
     """
-    return (
-        f'. {MODULES_INIT} && module load {_module_words(build_modules)}"$1" && exec Rscript --vanilla "$2" "$3" "$4"'
-    )
+    init = modules_init_word(modules_init)
+    return f'. {init} && module load {_module_words(build_modules)}"$1" && exec Rscript --vanilla "$2" "$3" "$4"'
 
 
 R_INSTALL_SH = (
@@ -1046,9 +1052,10 @@ def _kernel(venv: Path) -> Path:
     return venv / "share" / "jupyter" / "kernels" / "ir" / "kernel.json"
 
 
-def r_module_env_script(build_modules: Sequence[str] = ()) -> str:
+def r_module_env_script(build_modules: Sequence[str] = (), modules_init: Path | None = None) -> str:
     """The ``bash -c`` script that loads ``build_modules`` then the R module (``$1``) and prints ``env -0``."""
-    return f'. {MODULES_INIT} && module load {_module_words(build_modules)}"$1" && exec env -0'
+    init = modules_init_word(modules_init)
+    return f'. {init} && module load {_module_words(build_modules)}"$1" && exec env -0'
 
 
 def _module_words(modules: Sequence[str]) -> str:
@@ -1095,7 +1102,7 @@ def prefetch_r(
     install (``install.packages`` from that repository, then the session record) runs inside the sandbox,
     offline, with only the library, the temporary work dir and, for ``ir_notebook``, the venv's kernel dir
     writable. ``profile.r.build_modules`` and then ``profile.r.module`` are
-    loaded with ``bash --noprofile --norc -c '. <MODULES_INIT> && module load …'``, so no dotfile is
+    loaded with ``bash --noprofile --norc -c '. <profile.modules_init> && module load …'``, so no dotfile is
     read, and with an allowlisted environment. The packages come from `r_snapshot_url` of
     ``env.r_snapshot``; ``R_LIBS`` and ``R_LIBS_USER`` are ``<r_lib>`` and ``R_LIBS_SITE`` is empty, so
     neither the module's site library nor a user library under ``HOME`` is seen. A library whose
@@ -1129,6 +1136,7 @@ def prefetch_r(
             raise ValueError("an ir_notebook env must declare IRkernel in r_packages")
         if venv is None:
             raise ValueError("an ir_notebook env needs the derived venv for its kernel spec")
+    modules_init_word(profile.modules_init)
     module, build_modules, r_version = profile.r.module, profile.r.build_modules, profile.r.version
     if not _ENV_MODULE.match(module):
         raise ValueError(f"R module {module!r} is not a plain module name")
@@ -1159,7 +1167,8 @@ def prefetch_r(
             work = Path(tmp)
             run_env = _r_environment(work)
             captured = _checked(
-                run(_in_bash(r_module_env_script(build_modules), module), run_env, work), f"module load {module}"
+                run(_in_bash(r_module_env_script(build_modules, profile.modules_init), module), run_env, work),
+                f"module load {module}",
             )
             pairs = dict(item.split("=", 1) for item in captured.split("\0") if "=" in item)
             module_env: dict[str, Any] = {"module": module, "build_modules": list(build_modules)}
@@ -1173,7 +1182,8 @@ def prefetch_r(
             session_script.write_text(r_session_script(env.r_packages))
             fetch_script.write_text(r_download_script(env.r_packages))
             out.mkdir()
-            fetch = _in_bash(r_fetch_script(build_modules), module, str(fetch_script), repo, str(contrib))
+            fetch_bash = r_fetch_script(build_modules, profile.modules_init)
+            fetch = _in_bash(fetch_bash, module, str(fetch_script), repo, str(contrib))
             _checked(run(fetch, run_env, work), "R package download")
             prefix = str(venv) if kind == "ir_notebook" and venv is not None else ""
             writable = [r_lib, work]

@@ -776,6 +776,7 @@ def _profile(tmp_path: Path) -> Profile:
             "partitions": {"cpu": {"partition": "p", "cpus": 1, "mem": "1G", "time": "1:00:00"}},
             "build": "cpu",
             "r": {"module": "R/4.5.2", "version": "4.5.2"},
+            "modules_init": "/etc/profile.d/modules.sh",
             "deny_patterns_file": str(tmp_path / "deny"),
             "canary_host": "1.1.1.1",
         }
@@ -944,6 +945,16 @@ def test_r_script_lists_declared_packages() -> None:
         envmod.r_script(_r_env(r_packages=[{"name": 'x"); system("id', "version": "1"}]).r_packages)
 
 
+def test_prefetch_r_needs_a_modules_init(tmp_path: Path) -> None:
+    """Without ``profile.modules_init`` the R module cannot load: ``E_MODULES_INIT``, nothing removed."""
+    cache = tmp_path / "c"
+    (cache / "r" / "demo" / "keep").mkdir(parents=True)
+    profile = _profile(tmp_path).model_copy(update={"modules_init": None})
+    with pytest.raises(ReproduceLockError, match="E_MODULES_INIT"):
+        envmod.prefetch_r(_r_env(), cache, profile, runner=FakeR({}))
+    assert (cache / "r" / "demo" / "keep").is_dir()
+
+
 def test_prefetch_r_needs_profile_module(tmp_path: Path) -> None:
     """Without ``profile.r`` there is no R to load."""
     profile = _profile(tmp_path).model_copy(update={"r": None})
@@ -1007,7 +1018,7 @@ def test_prefetch_r_loads_build_modules_first(tmp_path: Path) -> None:
     assert json.loads(result.module_env.read_text())["build_modules"] == ["gcc/12.2.0"]
     assert json.loads(result.session.read_text())["key"]["build_modules"] == ["gcc/12.2.0"]
     with pytest.raises(ValueError):
-        envmod.r_fetch_script(["gcc; rm -rf /"])
+        envmod.r_fetch_script(["gcc; rm -rf /"], Path("/etc/profile.d/modules.sh"))
 
 
 def test_r_env_vars_merge_order() -> None:
@@ -1064,6 +1075,7 @@ def _drop_entry(text: str, name: str) -> str:
 
 
 @pytest.mark.slow
+@pytest.mark.network
 def test_real_env_pip_check_freeze_and_smoke(tmp_path: Path) -> None:
     """A real body + sdist + test-overlay env: clean pip check, freeze equals locks, smoke passes in the sandbox.
 
@@ -1120,6 +1132,7 @@ def test_real_env_pip_check_freeze_and_smoke(tmp_path: Path) -> None:
 
 
 @pytest.mark.slow
+@pytest.mark.network
 def test_real_prefetch_on_nfs(nfs_dir: Path) -> None:
     """One real prefetch with the manifests, cache, wheelhouse and ``wheels.lock`` on NFS."""
     base = nfs_dir / "manifests"

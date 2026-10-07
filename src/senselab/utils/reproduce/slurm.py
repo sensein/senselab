@@ -15,7 +15,8 @@ completes cancels every job submitted so far and marks the steps ``never-ran`` w
 Every job runs in ``<slurm_logs_root>/<date>`` (``--chdir``), which the driver creates with mode
 ``2770``; sbatch runs under ``umask 007``. ``--output`` and ``--error`` are ``<jobid>.{out,err}`` there.
 The job starts from an empty environment (``--export=NONE``) and exports only ``PATH``, the variables of
-`batch_exports`, the driver interpreter and a per-job ``TMPDIR`` under ``/dev/shm``.
+`batch_exports`, the driver interpreter and, when the profile names a ``job_tmp_root``, a per-job ``TMPDIR``
+under it.
 """
 
 from __future__ import annotations
@@ -452,19 +453,20 @@ def _dependency(kind: str, ids: Sequence[str]) -> list[str]:
     return [f"#SBATCH --dependency={kind}:{':'.join(ids)}"] if ids else []
 
 
-def _body(exports: Mapping[str, str], driver_python: str, command: Sequence[str]) -> list[str]:
+def _body(
+    exports: Mapping[str, str], driver_python: str, command: Sequence[str], job_tmp_root: Path | None
+) -> list[str]:
     bad = sorted(k for k in exports if not _EXPORT_NAME.match(k) or k in _SCRIPT_OWNED)
     if bad:
         raise ValueError(f"export names refused: {bad}")
     lines = ["set -euo pipefail", "umask 007", f"export PATH={SYSTEM_PATH}"]
     lines += [f"export {key}={shlex.quote(value)}" for key, value in exports.items()]
-    lines += [
-        f"export REPRO_DRIVER_PYTHON={shlex.quote(driver_python)}",
-        'export TMPDIR="/dev/shm/reproduce-${SLURM_JOB_ID}"',
-        'mkdir -p "$TMPDIR"',
-        "trap 'rm -rf \"$TMPDIR\"' EXIT",
-        '"$REPRO_DRIVER_PYTHON" ' + shlex.join(["-P", "-m", DRIVER_MODULE, *command]),
-    ]
+    lines.append(f"export REPRO_DRIVER_PYTHON={shlex.quote(driver_python)}")
+    if job_tmp_root is not None:
+        root = _path_word(os.fspath(job_tmp_root), "job_tmp_root")
+        lines += [f'export TMPDIR="{root}/reproduce-${{SLURM_JOB_ID}}"', 'mkdir -p "$TMPDIR"']
+        lines.append("trap 'rm -rf \"$TMPDIR\"' EXIT")
+    lines.append('"$REPRO_DRIVER_PYTHON" ' + shlex.join(["-P", "-m", DRIVER_MODULE, *command]))
     return lines
 
 
@@ -502,7 +504,7 @@ def render_step_job(
     lines = _header(f"reproduce-{step.name}", partition, part.cpus, part.mem, part.time, part.gres, logs)
     lines += _dependency("afterok", dependencies)
     lines.append("#SBATCH --kill-on-invalid-dep=yes")
-    lines += _body(exports, driver_python, command)
+    lines += _body(exports, driver_python, command, profile.job_tmp_root)
     return "\n".join(lines) + "\n"
 
 
@@ -534,7 +536,7 @@ def render_finalize_job(
     logs = log_dir(profile, date)
     lines = _header("reproduce-finalize", part.partition, FINALIZE_CPUS, FINALIZE_MEM, FINALIZE_TIME, None, logs)
     lines += _dependency("afterany", dependencies)
-    lines += _body(exports, driver_python, command)
+    lines += _body(exports, driver_python, command, profile.job_tmp_root)
     return "\n".join(lines) + "\n"
 
 
