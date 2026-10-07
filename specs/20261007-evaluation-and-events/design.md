@@ -124,8 +124,9 @@ given), plus the largest absolute deviation of any partition's prevalence from t
 prevalence and the invariant that was checked. The invariant is checked when the report is built,
 so a report that exists is a report that passed.
 
-- `unit` is `subject` under `unseen_subject` and the caller's `unit_name` under `seen_subject`
-  (default `recording`).
+- `unit` is `subject` under `unseen_subject` and the caller's `unit_name` under `seen_subject`.
+  `unit_name` has no default: a clip-level split cannot be reported as a recording-level one by
+  omission.
 - `stratify` is `none` (leave-one-subject-out, grouped shuffle), `class`, or `class_<strata_name>`
   when strata are given; the caller names the strata.
 - `SplitReport.to_reproduce()` reduces the report to the flat shape a reproduction driver records:
@@ -185,11 +186,31 @@ subjects with 4–64 clips each in 2–4 recordings, binary label rate about 0.1
 | Check | Required | Measured |
 |---|---|---|
 | (a) `StratifiedKFold(5, shuffle=True, random_state=0)` on rows shares subjects across partitions | ≥ 1 subject | all 60 subjects, in 5 of 5 folds |
-| (b) `GroupKFold(5)` max test-fold prevalence deviation | > 0.04 | 0.0591 |
+| (b) label-blind group k-fold max test-fold prevalence deviation | > 0.04 | 0.0408 (see below) |
 | (c) `StratifiedGroupKFold(5, shuffle=True, random_state=0)` max deviation | ≤ 0.02 | 0.0023 |
 | (d) a 60/20/20 clip-level holdout per (subject, timepoint) puts clips of a recording in two partitions | ≥ 1 recording | 148 of 182 recordings |
 
 All four held at the first seed tried, so the cohort seed is 0.
+
+**The (b) baseline is deterministic.** It was first scikit-learn's `GroupKFold(5)` (0.0591), but
+`GroupKFold` orders groups with an unstable `np.argsort` on group sizes, so ties between
+equal-sized subjects depend on the sort kernel: a review reproduced a different result on the
+locked numpy by disabling CPU features (`NPY_DISABLE_CPU_FEATURES="X86_V4,X86_V3"`), and older numpy
+releases differ too. The test now uses the same label-blind, size-balancing idea written out with
+stable ordering (largest subject first, ties by subject key, each into the fold with the fewest
+rows, fold ties to the lowest index). Re-measured at cohort seed 0: 0.0408, still above the 0.04
+tolerance, which was not changed.
+
+**Input checks.** Every entry point refuses, with a ValueError, rather than ignoring or failing
+later: missing subject ids (None, NaN, empty); labels, units or strata of the wrong length; empty
+partitions; duplicate, negative or out-of-range indices; non-integer index arrays, including boolean
+masks (refused, not converted, since a mask and a 0/1 index array are easy to confuse); fractions
+that are negative, at least 1, not three, or not summing to 1; fewer than 2 folds or inner folds; and
+any argument the scheme or protocol would ignore (fractions with a k-fold, `n_splits` with
+leave-one-subject-out or the holdout, `val_inner_splits` outside the k-folds, units or `unit_name`
+under `unseen_subject`, strata with leave-one-subject-out, grouped shuffle or a multi-label matrix).
+A nested seen-subject split that leaves a subject with one unit in an outer training pool raises a
+`ProtocolViolation` naming that inner pool.
 
 Sechidis, K., Tsoumakas, G., & Vlahavas, I. (2011). On the stratification of multi-label data.
 *ECML PKDD 2011*, LNCS 6913, 145–158.

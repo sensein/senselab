@@ -107,8 +107,8 @@ def _refuse_chars(values: Iterable[str], what: str, forbidden: Optional[str]) ->
 
 
 def _check_fps(fps: float) -> None:
-    if not (math.isfinite(fps) and fps > 0):
-        raise ValueError("fps must be finite and > 0")
+    if isinstance(fps, bool) or not isinstance(fps, (int, float)) or not (math.isfinite(fps) and fps > 0):
+        raise ValueError("fps must be a finite number > 0 (not a bool)")
 
 
 # ── per-frame label table ────────────────────────────────────────────────
@@ -337,20 +337,30 @@ def read_rttm(
         Recording id to its track.
 
     Raises:
-        ValueError: If a ``SPEAKER`` line has fewer than 9 fields (the line number is given).
+        ValueError: If a ``SPEAKER`` line has fewer than 9 fields, a non-numeric time or confidence,
+            or a duration that is not positive; the message starts with the line number.
     """
     by_uri: Dict[str, List[BehaviorEvent]] = {}
     for number, line in enumerate(Path(path).read_text(encoding=_ENCODING).splitlines(), start=1):
         fields = line.split()
         if not fields or fields[0] != "SPEAKER":
             continue
-        if len(fields) < 9:
-            raise ValueError(f"line {number}: a SPEAKER line needs at least 9 fields, found {len(fields)}")
-        onset, duration = float(fields[3]), float(fields[4])
-        confidence = None if fields[8] == RTTM_NA else float(fields[8])
-        event = _event(onset, onset + duration, fields[7], source, confidence, confidence_kind)
+        try:
+            event = _rttm_event(fields, source, confidence_kind)
+        except ValueError as error:
+            raise ValueError(f"line {number}: {error}") from error
         by_uri.setdefault(fields[1], []).append(event)
     return {uri: EventTrack(schema_id=schema_id, events=events) for uri, events in by_uri.items()}
+
+
+def _rttm_event(fields: List[str], source: str, confidence_kind: Optional[ConfidenceKind]) -> BehaviorEvent:
+    if len(fields) < 9:
+        raise ValueError(f"a SPEAKER line needs at least 9 fields, found {len(fields)}")
+    onset, duration = float(fields[3]), float(fields[4])
+    if duration <= 0:
+        raise ValueError(f"duration is {fields[4]}; an event needs offset > onset")
+    confidence = None if fields[8] == RTTM_NA else float(fields[8])
+    return _event(onset, onset + duration, fields[7], source, confidence, confidence_kind)
 
 
 # ── BIDS events.tsv ─────────────────────────────────────────────────────
@@ -379,11 +389,28 @@ def write_bids_events(track: EventTrack, path: PathLike) -> None:
         handle.write("".join(line + "\n" for line in lines))
 
 
-def _bids_number(row: Dict[str, str], column: str, line: int) -> float:
-    raw = row[column]
+def _bids_number(row: Dict[str, Optional[str]], column: str) -> float:
+    raw = row.get(column)
+    if raw is None:
+        raise ValueError(f"the row has no {column} field")
     if raw in (BIDS_NA, ""):
-        raise ValueError(f"line {line}: {column} is {raw or 'empty'!r}; an event needs a number here")
+        raise ValueError(f"{column} is {raw or 'empty'!r}; an event needs a number here")
     return float(raw)
+
+
+def _bids_event(row: Dict[str, Optional[str]], source: str, confidence_kind: Optional[ConfidenceKind]) -> BehaviorEvent:
+    onset = _bids_number(row, "onset")
+    duration = _bids_number(row, "duration")
+    if duration == 0:
+        raise ValueError("duration is 0; an event needs offset > onset, so impulse events are refused")
+    if duration < 0:
+        raise ValueError(f"duration is {duration!r}; an event needs offset > onset")
+    label = row.get("trial_type")
+    if label is None:
+        raise ValueError("the row has no trial_type field")
+    raw = row.get("confidence")
+    confidence = None if raw is None or raw in (BIDS_NA, "") else float(raw)
+    return _event(onset, onset + duration, label, source, confidence, confidence_kind)
 
 
 def read_bids_events(
@@ -397,6 +424,7 @@ def read_bids_events(
     """Read a BIDS ``events.tsv``; ``n/a`` in ``confidence`` reads as no confidence.
 
     Fields are split on tabs only, with no quote handling, so a label may start with a quote character.
+    A leading byte-order mark is ignored.
 
     Args:
         path: The TSV file.
@@ -409,11 +437,12 @@ def read_bids_events(
         The track.
 
     Raises:
-        ValueError: If ``onset``, ``duration`` or ``trial_type`` is not a column; or a row's onset or
-            duration is ``n/a`` or its duration is 0 (an impulse event: `BehaviorEvent` needs
-            `offset_s > onset_s`). Row errors give the file's line number.
+        ValueError: If ``onset``, ``duration`` or ``trial_type`` is not a column; or a row lacks a field,
+            holds a non-numeric or ``n/a`` onset or duration, or has a duration of 0 (an impulse event:
+            `BehaviorEvent` needs `offset_s > onset_s`) or below. Row errors start with the file's line
+            number.
     """
-    with Path(path).open(encoding=_ENCODING, newline="") as handle:
+    with Path(path).open(encoding="utf-8-sig", newline="") as handle:
         reader = csv.DictReader(handle, delimiter="\t", quoting=csv.QUOTE_NONE)
         rows = list(reader)
         header = reader.fieldnames or []
@@ -422,15 +451,10 @@ def read_bids_events(
         raise ValueError(f"events.tsv lacks the columns {missing}")
     events = []
     for line, row in enumerate(rows, start=2):
-        onset = _bids_number(row, "onset", line)
-        duration = _bids_number(row, "duration", line)
-        if duration == 0:
-            raise ValueError(
-                f"line {line}: duration is 0; an event needs offset > onset, so impulse events are refused"
-            )
-        raw = row.get("confidence", BIDS_NA)
-        confidence = None if raw in (BIDS_NA, "", None) else float(raw)
-        events.append(_event(onset, onset + duration, row["trial_type"], source, confidence, confidence_kind))
+        try:
+            events.append(_bids_event(row, source, confidence_kind))
+        except ValueError as error:
+            raise ValueError(f"line {line}: {error}") from error
     return EventTrack(schema_id=schema_id, events=events, duration_s=duration_s)
 
 

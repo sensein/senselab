@@ -39,6 +39,24 @@ def _in_several(keys: np.ndarray, partitions: Mapping[str, np.ndarray]) -> int:
     return len(shared)
 
 
+def _validate_partitions(partitions: Mapping[str, np.ndarray], n_rows: int) -> None:
+    """Partitions are non-empty integer index arrays with unique, in-range entries (masks are refused)."""
+    for name, rows in partitions.items():
+        rows = np.asarray(rows)
+        if rows.size == 0:
+            raise ValueError(f"partition {name!r} is empty")
+        if rows.dtype == bool:
+            raise ValueError(f"partition {name!r} is a boolean mask; pass row indices (np.flatnonzero(mask))")
+        if not np.issubdtype(rows.dtype, np.integer):
+            raise ValueError(f"partition {name!r} must be an integer index array, not {rows.dtype}")
+        if rows.ndim != 1:
+            raise ValueError(f"partition {name!r} must be one-dimensional")
+        if rows.min() < 0 or rows.max() >= n_rows:
+            raise ValueError(f"partition {name!r} holds indices out of range for {n_rows} rows")
+        if len(np.unique(rows)) != len(rows):
+            raise ValueError(f"partition {name!r} holds duplicate indices")
+
+
 def check_protocol(
     partitions: Mapping[str, np.ndarray],
     subjects: np.ndarray,
@@ -59,13 +77,14 @@ def check_protocol(
 
     Raises:
         ProtocolViolation: If the invariant does not hold.
-        ValueError: If the protocol is unknown, ``train`` or ``test`` is missing, or `units` is
-            missing under `seen_subject`.
+        ValueError: If the protocol is unknown, ``train`` or ``test`` is missing, a partition is empty
+            or not a unique, in-range integer index array, or `units` is missing under `seen_subject`.
     """
     if protocol not in PROTOCOLS:
         raise ValueError(f"protocol must be one of {PROTOCOLS}")
     if "train" not in partitions or "test" not in partitions:
         raise ValueError("a split needs 'train' and 'test' partitions")
+    _validate_partitions(partitions, len(subjects))
     rows_seen: set[int] = set()
     overlap = 0
     for rows in partitions.values():

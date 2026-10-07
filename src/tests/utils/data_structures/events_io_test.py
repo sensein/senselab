@@ -346,7 +346,7 @@ def test_rttm_short_speaker_line_raises_with_line(tmp_path: Path) -> None:
 
 
 _UNICODE_ROUND_TRIP = r"""
-import locale, sys, tempfile
+import locale, shutil, sys, tempfile
 from pathlib import Path
 from senselab.utils.data_structures.events import AnnotationSchema, BehaviorEvent, EventTrack
 from senselab.utils.data_structures import events_io as io
@@ -371,6 +371,8 @@ io.write_frame_table({"C": track}, tmp / "f.csv", fps=10.0, n_frames=100)
 assert io.read_frame_table(tmp / "f.csv", 10.0, {"C": schema}, source="x")["C"].events[0].label == label
 (tmp / "schema.yaml").write_bytes(("schema_id: motion\ntask_type: segmentation\nlabels: [" + label + "]\n").encode())
 assert AnnotationSchema.from_yaml(tmp / "schema.yaml").labels == [label]
+shutil.rmtree(tmp)
+print(tmp)
 print("unicode-ok")
 """
 
@@ -385,4 +387,57 @@ def test_unicode_round_trips_under_a_non_utf8_locale() -> None:
         [sys.executable, "-c", _UNICODE_ROUND_TRIP], env=env, capture_output=True, text=True, encoding="utf-8"
     )
     assert done.returncode == 0, done.stderr[-2000:]
-    assert done.stdout.strip().endswith("unicode-ok")
+    lines = done.stdout.strip().splitlines()
+    assert lines[-1] == "unicode-ok"
+    assert not Path(lines[-2]).exists()
+
+
+# ── Review fixes ──────────────────────────────────────────────────────
+
+
+def test_bids_reader_accepts_a_byte_order_mark(tmp_path: Path) -> None:
+    """A spreadsheet-exported TSV often starts with a BOM; the header still reads as ``onset``."""
+    path = tmp_path / "events.tsv"
+    path.write_bytes("\ufeffonset\tduration\ttrial_type\n0.5\t0.25\treach\n".encode("utf-8"))
+    back = read_bids_events(path, schema_id="motion", source="model_x")
+    assert [(e.onset_s, e.offset_s, e.label) for e in back.events] == [(0.5, 0.75, "reach")]
+
+
+@pytest.mark.parametrize(
+    "row",
+    ["abc\t0.25\treach", "0.5\t-0.25\treach", "0.5\t0.25", "0.5\tx\treach"],
+    ids=["non-numeric-onset", "negative-duration", "missing-field", "non-numeric-duration"],
+)
+def test_bids_row_errors_name_the_line(tmp_path: Path, row: str) -> None:
+    """Every row-level error names the file line it came from."""
+    path = tmp_path / "events.tsv"
+    path.write_text("onset\tduration\ttrial_type\n0.0\t0.25\treach\n" + row + "\n")
+    with pytest.raises(ValueError, match="line 3"):
+        read_bids_events(path, schema_id="motion", source="model_x")
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "SPEAKER rec1 1 abc 0.25 <NA> <NA> reach <NA> <NA>",
+        "SPEAKER rec1 1 0.5 0 <NA> <NA> reach <NA> <NA>",
+        "SPEAKER rec1 1 0.5 -1 <NA> <NA> reach <NA> <NA>",
+    ],
+    ids=["non-numeric-onset", "zero-duration", "negative-duration"],
+)
+def test_rttm_line_errors_name_the_line(tmp_path: Path, line: str) -> None:
+    """RTTM value errors name the file line, including a zero duration."""
+    path = tmp_path / "events.rttm"
+    path.write_text("SPEAKER rec1 1 0.0 0.25 <NA> <NA> reach <NA> <NA>\n" + line + "\n")
+    with pytest.raises(ValueError, match="line 2"):
+        read_rttm(path, schema_id="motion", source="model_x")
+
+
+def test_frame_table_refuses_a_boolean_fps(tmp_path: Path) -> None:
+    """``True`` is not a frame rate, even though it compares equal to 1."""
+    path = tmp_path / "f.csv"
+    with pytest.raises(ValueError, match="fps"):
+        write_frame_table(_frame_tracks(), path, fps=True, n_frames=N_FRAMES)
+    write_frame_table(_frame_tracks(), path, fps=FPS, n_frames=N_FRAMES)
+    with pytest.raises(ValueError, match="fps"):
+        read_frame_table(path, fps=True, schemas=_frame_schemas(), source="model_x")

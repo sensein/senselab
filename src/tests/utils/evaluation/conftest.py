@@ -1,14 +1,17 @@
 """Markers and the synthetic cohort for the evaluation tests.
 
 ``slow`` tests take more than a few seconds, ``network`` tests need to reach the internet and ``gpu``
-tests need CUDA. The fast suite deselects all three with ``-m "not slow and not network and not gpu"``.
+tests need CUDA. A ``slow`` test in this directory is skipped unless ``-m`` is given or ``SENSELAB_RUN_SLOW=1``
+is set, so a plain ``pytest src/tests`` (what CI runs) keeps its timing; ``pytest -m slow`` selects them.
 A ``gpu`` test also carries ``pytest.mark.skipif(not torch.cuda.is_available(), reason="needs CUDA")``,
 so selecting it on a CPU-only host skips it rather than failing.
 
 ``imbalanced_cohort`` is a seeded synthetic cohort; nothing in it comes from real data.
 """
 
+import os
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -27,6 +30,17 @@ def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line("markers", "slow: takes more than a few seconds")
     config.addinivalue_line("markers", "network: needs to reach the internet")
     config.addinivalue_line("markers", "gpu: needs a CUDA device")
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    """Skip this directory's ``slow`` tests unless ``-m`` is given or ``SENSELAB_RUN_SLOW=1``."""
+    if config.getoption("-m") or os.environ.get("SENSELAB_RUN_SLOW") == "1":
+        return
+    here = Path(__file__).parent
+    skip = pytest.mark.skip(reason="slow: run with -m slow or SENSELAB_RUN_SLOW=1")
+    for item in items:
+        if "slow" in item.keywords and here in Path(str(item.fspath)).parents:
+            item.add_marker(skip)
 
 
 @dataclass(frozen=True)
@@ -142,3 +156,24 @@ def within_class_subject_split(
         parts["train"] += rows[:n_train].tolist()
         parts["test"] += rows[n_train:].tolist()
     return {name: np.sort(np.array(rows, dtype=int)) for name, rows in parts.items()}
+
+
+def size_greedy_group_folds(groups: np.ndarray, n_splits: int) -> list[tuple[np.ndarray, np.ndarray]]:
+    """Label-blind group k-fold with a deterministic order: a baseline.
+
+    The same idea as scikit-learn's ``GroupKFold`` (largest group first, each into the fold with the
+    fewest rows), but groups of equal size are ordered by key and fold ties go to the lowest fold, so
+    the result does not depend on a sort kernel's tie order.
+    """
+    names, inverse = np.unique(groups, return_inverse=True)
+    sizes = np.bincount(inverse)
+    order = sorted(range(len(names)), key=lambda g: (-sizes[g], str(names[g])))
+    rows = np.zeros(n_splits, dtype=int)
+    fold_of = np.empty(len(names), dtype=int)
+    for g in order:
+        f = int(np.argmin(rows))
+        fold_of[g] = f
+        rows[f] += sizes[g]
+    row_fold = fold_of[inverse]
+    all_rows = np.arange(len(groups))
+    return [(all_rows[row_fold != f], all_rows[row_fold == f]) for f in range(n_splits)]

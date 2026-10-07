@@ -9,7 +9,7 @@ from collections import Counter
 
 import numpy as np
 import pytest
-from sklearn.model_selection import GroupKFold, StratifiedGroupKFold, StratifiedKFold
+from sklearn.model_selection import StratifiedGroupKFold, StratifiedKFold
 
 from senselab.utils.evaluation.protocol import ProtocolViolation
 from senselab.utils.evaluation.splits import (
@@ -19,7 +19,12 @@ from senselab.utils.evaluation.splits import (
     grouped_splits,
     nested_grouped_splits,
 )
-from tests.utils.evaluation.conftest import Cohort, clip_level_holdout, within_class_subject_split
+from tests.utils.evaluation.conftest import (
+    Cohort,
+    clip_level_holdout,
+    size_greedy_group_folds,
+    within_class_subject_split,
+)
 
 
 def _sklearn_splits(folds: list) -> list[Split]:
@@ -52,10 +57,10 @@ def test_s14a_row_stratified_kfold_violates_unseen(imbalanced_cohort: Cohort) ->
 
 
 def test_s14b_group_kfold_passes_but_deviates(imbalanced_cohort: Cohort) -> None:
-    """Plain group k-fold keeps subjects apart but lets fold prevalence drift by more than 0.04."""
+    """Plain group k-fold (size-balanced, label-blind) keeps subjects apart but lets prevalence drift past 0.04."""
     c = imbalanced_cohort
-    folds = GroupKFold(5).split(np.zeros(len(c.labels)), c.labels, c.subjects)
-    report = check_split(_sklearn_splits(list(folds)), c.subjects, labels=c.labels, protocol="unseen_subject")
+    folds = size_greedy_group_folds(c.subjects, 5)
+    report = check_split(_sklearn_splits(folds), c.subjects, labels=c.labels, protocol="unseen_subject")
     assert report.invariant_ok
     assert report.max_abs_prevalence_deviation > 0.04
 
@@ -162,9 +167,9 @@ def test_subject_by_timepoint_grouping_violates_unseen(imbalanced_cohort: Cohort
     """Grouping by (subject, timepoint) tests one visit while training on another: rejected."""
     c = imbalanced_cohort
     visit = np.char.add(np.char.add(c.subjects, "|"), c.timepoints)
-    folds = GroupKFold(5).split(np.zeros(len(c.labels)), c.labels, visit)
+    folds = size_greedy_group_folds(visit, 5)
     with pytest.raises(ProtocolViolation):
-        check_split(_sklearn_splits(list(folds)), c.subjects, labels=c.labels, protocol="unseen_subject")
+        check_split(_sklearn_splits(folds), c.subjects, labels=c.labels, protocol="unseen_subject")
 
 
 def test_nested_inner_splits_stay_inside_outer_train(imbalanced_cohort: Cohort) -> None:
@@ -204,6 +209,7 @@ def test_seen_subject_kfold_invariant(imbalanced_cohort: Cohort, n_splits: int) 
         seed=0,
         n_splits=n_splits,
         units=c.recordings,
+        unit_name="recording",
     )
     assert len(splits) == n_splits and report.unit == "recording"
     for split in splits:
@@ -222,14 +228,28 @@ def test_seen_subject_with_one_unit_raises(imbalanced_cohort: Cohort) -> None:
     units = c.recordings.copy()
     units[c.subjects == "s00"] = "only"
     with pytest.raises(ProtocolViolation, match="1 subjects have fewer than 2 units"):
-        grouped_splits(c.labels, c.subjects, protocol="seen_subject", scheme="seen_subject_kfold", seed=0, units=units)
+        grouped_splits(
+            c.labels,
+            c.subjects,
+            protocol="seen_subject",
+            scheme="seen_subject_kfold",
+            seed=0,
+            units=units,
+            unit_name="recording",
+        )
 
 
 def test_seen_subject_holdout(imbalanced_cohort: Cohort) -> None:
     """Each subject with 3+ units is in all three partitions; its train share is within one unit of 0.6."""
     c = imbalanced_cohort
     splits, report = grouped_splits(
-        c.labels, c.subjects, protocol="seen_subject", scheme="seen_subject_holdout", seed=0, units=c.recordings
+        c.labels,
+        c.subjects,
+        protocol="seen_subject",
+        scheme="seen_subject_holdout",
+        seed=0,
+        units=c.recordings,
+        unit_name="recording",
     )
     (split,) = splits
     assert report.unit == "recording" and set(split.partitions) == {"train", "val", "test"}
@@ -253,7 +273,9 @@ def test_clip_level_seen_subject_holdout(imbalanced_cohort: Cohort) -> None:
     report = check_split(split, c.subjects, labels=c.labels, protocol="seen_subject", units=c.clips, unit_name="clip")
     assert report.invariant_ok and report.unit == "clip"
     with pytest.raises(ProtocolViolation, match="units appear in more than one partition"):
-        check_split(split, c.subjects, labels=c.labels, protocol="seen_subject", units=c.recordings)
+        check_split(
+            split, c.subjects, labels=c.labels, protocol="seen_subject", units=c.recordings, unit_name="recording"
+        )
 
 
 def test_s5_mutant(imbalanced_cohort: Cohort) -> None:
@@ -263,7 +285,9 @@ def test_s5_mutant(imbalanced_cohort: Cohort) -> None:
     with pytest.raises(ProtocolViolation):
         check_split(split, c.subjects, labels=c.labels, protocol="unseen_subject")
     with pytest.raises(ProtocolViolation):
-        check_split(split, c.subjects, labels=c.labels, protocol="seen_subject", units=c.recordings)
+        check_split(
+            split, c.subjects, labels=c.labels, protocol="seen_subject", units=c.recordings, unit_name="recording"
+        )
     report = check_split(split, c.subjects, labels=c.labels, protocol="seen_subject", units=c.clips, unit_name="clip")
     assert report.unit == "clip" and report.invariant_ok
 
@@ -296,10 +320,28 @@ def test_protocol_is_required(imbalanced_cohort: Cohort) -> None:
 
 
 def test_seen_subject_unit_is_the_declared_name(imbalanced_cohort: Cohort) -> None:
-    """Under seen_subject the report's unit is the caller's unit name, default ``recording``."""
+    """Under seen_subject the report's unit is the caller's unit name, which has no default."""
     c = imbalanced_cohort
+    with pytest.raises(ValueError, match="unit_name"):
+        grouped_splits(
+            c.labels, c.subjects, protocol="seen_subject", scheme="seen_subject_kfold", seed=0, units=c.recordings
+        )
+    with pytest.raises(ValueError, match="unit_name"):
+        check_split(
+            Split(name="x", partitions={"train": np.arange(10), "test": np.arange(10, 20)}),
+            c.subjects,
+            labels=c.labels,
+            protocol="seen_subject",
+            units=c.recordings,
+        )
     _, default = grouped_splits(
-        c.labels, c.subjects, protocol="seen_subject", scheme="seen_subject_kfold", seed=0, units=c.recordings
+        c.labels,
+        c.subjects,
+        protocol="seen_subject",
+        scheme="seen_subject_kfold",
+        seed=0,
+        units=c.recordings,
+        unit_name="recording",
     )
     _, session = grouped_splits(
         c.labels,
@@ -346,3 +388,138 @@ def test_to_reproduce_refuses_tokens_outside_its_vocabulary(imbalanced_cohort: C
     )
     with pytest.raises(ValueError, match="segment"):
         report.to_reproduce()
+
+
+# ── Input validation ──────────────────────────────────────────────────
+
+
+def _toy() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Subjects a and b, two units each, one row per unit."""
+    return np.array([0, 1, 0, 1]), np.array(["a", "a", "b", "b"]), np.array(["u1", "u2", "u1", "u2"])
+
+
+def test_seen_test_subject_absent_from_train_raises() -> None:
+    """Subject a has both its units in test and none in train: rejected."""
+    labels, subjects, units = _toy()
+    split = Split(name="x", partitions={"train": np.array([2, 3]), "test": np.array([0, 1])})
+    with pytest.raises(ProtocolViolation, match="1 test subjects are absent from train"):
+        check_split(split, subjects, labels=labels, protocol="seen_subject", units=units, unit_name="recording")
+
+
+@pytest.mark.parametrize(
+    ("partitions", "message"),
+    [
+        ({"train": np.array([]), "test": np.array([0, 1])}, "empty"),
+        ({"train": np.array([2, 3]), "test": np.array([], dtype=int)}, "empty"),
+        ({"train": np.array([2, 2]), "test": np.array([0, 1])}, "duplicate"),
+        ({"train": np.array([2, 4]), "test": np.array([0, 1])}, "out of range"),
+        ({"train": np.array([2, -1]), "test": np.array([0, 1])}, "out of range"),
+        ({"train": np.array([False, False, True, True]), "test": np.array([0, 1])}, "boolean"),
+        ({"train": np.array([2.0, 3.0]), "test": np.array([0, 1])}, "integer"),
+    ],
+    ids=["empty-float-train", "empty-test", "duplicate", "too-large", "negative", "mask", "float"],
+)
+def test_check_split_refuses_malformed_partitions(partitions: dict, message: str) -> None:
+    """Malformed index arrays are a ValueError, never an IndexError or a silent pass."""
+    labels, subjects, _ = _toy()
+    with pytest.raises(ValueError, match=message):
+        check_split(Split(name="x", partitions=partitions), subjects, labels=labels, protocol="unseen_subject")
+
+
+@pytest.mark.parametrize("missing", [None, float("nan"), ""])
+def test_missing_subject_ids_are_refused(missing: object) -> None:
+    """Every row needs a subject; None, NaN and empty ids are refused by both entry points."""
+    labels = np.array([0, 1, 0, 1, 0, 1])
+    subjects = np.array(["a", "a", "b", missing, "c", "c"], dtype=object)
+    with pytest.raises(ValueError, match="subject"):
+        grouped_splits(labels, subjects, protocol="unseen_subject", scheme="stratified_group_kfold", seed=0, n_splits=2)
+    split = Split(name="x", partitions={"train": np.array([0, 1]), "test": np.array([4, 5])})
+    with pytest.raises(ValueError, match="subject"):
+        check_split(split, subjects, labels=labels, protocol="unseen_subject")
+
+
+def test_lengths_must_match() -> None:
+    """Labels, units and strata need one entry per subject entry."""
+    labels, subjects, units = _toy()
+    split = Split(name="x", partitions={"train": np.array([2, 3]), "test": np.array([0, 1])})
+    with pytest.raises(ValueError, match="one entry per row"):
+        check_split(split, subjects, labels=labels[:3], protocol="unseen_subject")
+    with pytest.raises(ValueError, match="one entry per row"):
+        check_split(split, subjects, labels=labels, protocol="seen_subject", units=units[:3], unit_name="recording")
+    with pytest.raises(ValueError, match="one entry per row"):
+        check_split(split, subjects, labels=labels, protocol="unseen_subject", strata=units[:3])
+    with pytest.raises(ValueError, match="one entry per row"):
+        grouped_splits(labels[:3], subjects, protocol="unseen_subject", scheme="leave_one_subject_out", seed=0)
+
+
+@pytest.mark.parametrize("fractions", [(1.2, -0.1, -0.1), (1.0, 0.0, 0.0), (0.5, 0.2, 0.2), (0.6, 0.4)])
+def test_bad_fractions_are_refused(imbalanced_cohort: Cohort, fractions: tuple) -> None:
+    """Fractions are three non-negative numbers below 1 that sum to 1."""
+    c = imbalanced_cohort
+    with pytest.raises(ValueError, match="fractions"):
+        grouped_splits(
+            c.labels, c.subjects, protocol="unseen_subject", scheme="group_shuffle", seed=0, fractions=fractions
+        )
+
+
+@pytest.mark.parametrize(
+    ("protocol", "scheme", "extra", "message"),
+    [
+        ("unseen_subject", "stratified_group_kfold", {"fractions": (0.6, 0.2, 0.2)}, "fractions"),
+        ("unseen_subject", "leave_one_subject_out", {"n_splits": 5}, "n_splits"),
+        ("unseen_subject", "leave_one_subject_out", {"strata": "timepoints", "strata_name": "timepoint"}, "strata"),
+        ("unseen_subject", "group_shuffle", {"fractions": (0.6, 0.2, 0.2), "val_inner_splits": 4}, "val_inner"),
+        ("unseen_subject", "stratified_group_kfold", {"units": "recordings"}, "units"),
+        ("unseen_subject", "stratified_group_kfold", {"unit_name": "recording"}, "unit_name"),
+        ("seen_subject", "seen_subject_kfold", {"fractions": (0.6, 0.2, 0.2)}, "fractions"),
+        ("seen_subject", "seen_subject_holdout", {"val_inner_splits": 4}, "val_inner"),
+        ("seen_subject", "seen_subject_holdout", {"n_splits": 3}, "n_splits"),
+    ],
+)
+def test_arguments_that_do_not_apply_are_refused(
+    imbalanced_cohort: Cohort, protocol: str, scheme: str, extra: dict, message: str
+) -> None:
+    """An argument the scheme or protocol would ignore is refused instead."""
+    c = imbalanced_cohort
+    kwargs = {k: getattr(c, v) if isinstance(v, str) and k in ("units", "strata") else v for k, v in extra.items()}
+    if protocol == "seen_subject":
+        kwargs = {"units": c.recordings, "unit_name": "recording", **kwargs}
+    with pytest.raises(ValueError, match=message):
+        grouped_splits(c.labels, c.subjects, protocol=protocol, scheme=scheme, seed=0, **kwargs)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("extra", [{"n_splits": 1}, {"val_inner_splits": 1}])
+def test_fewer_than_two_folds_is_a_value_error(imbalanced_cohort: Cohort, extra: dict) -> None:
+    """One fold, or one inner fold, is a ValueError rather than a protocol violation."""
+    c = imbalanced_cohort
+    with pytest.raises(ValueError, match="at least 2") as caught:
+        grouped_splits(
+            c.labels, c.subjects, protocol="unseen_subject", scheme="stratified_group_kfold", seed=0, **extra
+        )
+    assert not isinstance(caught.value, ProtocolViolation)
+
+
+def test_nested_seen_thin_inner_pool_names_the_inner_pool(imbalanced_cohort: Cohort) -> None:
+    """A subject left with one unit in an outer training pool fails, and the error says it is the inner pool."""
+    c = imbalanced_cohort
+    with pytest.raises(ProtocolViolation, match="inner pool"):
+        nested_grouped_splits(
+            c.labels,
+            c.subjects,
+            protocol="seen_subject",
+            seed=0,
+            outer={"scheme": "seen_subject_kfold", "n_splits": 5},
+            inner={"scheme": "seen_subject_kfold", "n_splits": 2},
+            units=c.recordings,
+            unit_name="recording",
+        )
+
+
+def test_multilabel_with_strata_is_refused(imbalanced_cohort: Cohort) -> None:
+    """Per-stratum prevalence is defined for one label per row only."""
+    c = imbalanced_cohort
+    split = Split(name="x", partitions={"train": np.arange(100), "test": np.arange(100, 200)})
+    with pytest.raises(ValueError, match="strata"):
+        check_split(
+            split, c.subjects, labels=c.multilabel, protocol="unseen_subject", strata=c.timepoints, stratify="class"
+        )

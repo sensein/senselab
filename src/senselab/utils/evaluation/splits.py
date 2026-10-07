@@ -50,7 +50,8 @@ UNSEEN_SCHEMES = (
 )
 SEEN_SCHEMES = ("seen_subject_kfold", "seen_subject_holdout")
 
-# The tokens a reproduction driver's flat `split_report` accepts for `unit` and `stratify`.
+# The tokens a reproduction driver's flat `split_report` accepts for `unit` and `stratify`. These mirror
+# the reproduce metrics enums (SPLIT_UNITS, SPLIT_STRATIFY); a cross-check test follows once both meet.
 REPRODUCE_UNITS = ("subject", "family", "session", "video", "clip", "recording", "row")
 REPRODUCE_STRATIFY = ("none", "class", "class_timepoint", "class_site", "class_age", "timepoint")
 
@@ -488,22 +489,100 @@ def _seen_holdout(
 
 # ── public API ──────────────────────────────────────────────────────────
 
+KFOLD_SCHEMES = ("stratified_group_kfold", "multilabel_stratified_group_kfold", "seen_subject_kfold")
+DEFAULT_N_SPLITS = 5
 
-def _validate(
+
+def _count_missing(values: np.ndarray) -> int:
+    """Entries that are None, NaN or the empty string."""
+    return sum(
+        v is None or (isinstance(v, float) and math.isnan(v)) or (isinstance(v, str) and v == "")
+        for v in values.tolist()
+    )
+
+
+def _prepare(
     labels: np.ndarray,
     subjects: np.ndarray,
     protocol: str,
     units: Optional[np.ndarray],
+    unit_name: Optional[str],
     strata: Optional[np.ndarray],
-    strata_name: Optional[str],
 ) -> None:
+    """Checks shared by every entry point; raises ValueError naming what is wrong."""
     if protocol not in PROTOCOLS:
         raise ValueError(f"protocol must be one of {PROTOCOLS}")
     n = len(subjects)
     if len(labels) != n or (units is not None and len(units) != n) or (strata is not None and len(strata) != n):
         raise ValueError("labels, subjects, units and strata must have one entry per row")
+    missing = _count_missing(subjects)
+    if missing:
+        raise ValueError(f"{missing} rows have no subject id (None, NaN or empty); every row needs one")
+    if labels.ndim == 2 and strata is not None:
+        raise ValueError("strata need one label per row; they are not supported with a multi-label matrix")
+    if protocol == "unseen_subject":
+        if units is not None:
+            raise ValueError("units do not apply under unseen_subject, where the unit is the subject")
+        if unit_name is not None:
+            raise ValueError("unit_name does not apply under unseen_subject, where the unit is the subject")
+        return
+    if units is None:
+        raise ValueError("seen_subject needs units")
+    if unit_name is None:
+        raise ValueError("unit_name is required under seen_subject (for example 'recording' or 'clip')")
+    missing = _count_missing(units)
+    if missing:
+        raise ValueError(f"{missing} rows have no unit id (None, NaN or empty)")
+
+
+def _check_fractions(fractions: Tuple[float, ...]) -> None:
+    if len(fractions) != 3:
+        raise ValueError("fractions must be (train, val, test)")
+    if any(f < 0 or f >= 1 for f in fractions):
+        raise ValueError("fractions must each be >= 0 and < 1")
+    if not math.isclose(sum(fractions), 1.0):
+        raise ValueError("fractions must sum to 1")
+
+
+def _scheme_arguments(
+    scheme: str,
+    n_splits: Optional[int],
+    strata: Optional[np.ndarray],
+    strata_name: Optional[str],
+    val_inner_splits: Optional[int],
+    fractions: Optional[Tuple[float, ...]],
+) -> int:
+    """Refuse arguments the scheme would ignore; return the number of splits to make."""
     if (strata is None) != (strata_name is None):
         raise ValueError("strata and strata_name go together")
+    if scheme in ("leave_one_subject_out", "group_shuffle") and strata is not None:
+        raise ValueError(f"strata do not apply to {scheme}")
+    if scheme in ("leave_one_subject_out", "seen_subject_holdout") and n_splits is not None:
+        raise ValueError(f"n_splits does not apply to {scheme}")
+    if scheme in KFOLD_SCHEMES or scheme == "leave_one_subject_out":
+        if fractions is not None:
+            raise ValueError(f"fractions do not apply to {scheme}")
+    else:
+        if fractions is None and scheme == "group_shuffle":
+            raise ValueError("group_shuffle needs fractions=(train, val, test)")
+        if fractions is not None:
+            _check_fractions(fractions)
+    if val_inner_splits is not None:
+        if scheme not in KFOLD_SCHEMES:
+            raise ValueError(f"val_inner_splits does not apply to {scheme}")
+        if val_inner_splits < 2:
+            raise ValueError("val_inner_splits must be at least 2")
+    if scheme in KFOLD_SCHEMES:
+        count = DEFAULT_N_SPLITS if n_splits is None else n_splits
+        if count < 2:
+            raise ValueError("n_splits must be at least 2")
+        return count
+    if scheme == "group_shuffle":
+        count = 1 if n_splits is None else n_splits
+        if count < 1:
+            raise ValueError("n_splits must be at least 1")
+        return count
+    return 0
 
 
 def _stratify_token(base: str, strata_name: Optional[str]) -> str:
@@ -517,9 +596,9 @@ def grouped_splits(
     protocol: Protocol,
     scheme: Scheme,
     seed: int,
-    n_splits: int = 5,
+    n_splits: Optional[int] = None,
     units: Optional[Union[np.ndarray, Sequence[Any]]] = None,
-    unit_name: str = "recording",
+    unit_name: Optional[str] = None,
     strata: Optional[Union[np.ndarray, Sequence[Any]]] = None,
     strata_name: Optional[str] = None,
     val_inner_splits: Optional[int] = None,
@@ -527,22 +606,28 @@ def grouped_splits(
 ) -> Tuple[List[Split], SplitReport]:
     """Make grouped, protocol-checked splits.
 
+    An argument that does not apply to the scheme or protocol is refused rather than ignored.
+
     Args:
         labels: Label per row, or an `(n, L)` 0/1 matrix for `multilabel_stratified_group_kfold`.
-        subjects: Subject key per row.
+        subjects: Subject key per row; none may be missing.
         protocol: `seen_subject` or `unseen_subject`; no default.
         scheme: One of `UNSEEN_SCHEMES` (with `unseen_subject`) or `SEEN_SCHEMES` (with `seen_subject`).
         seed: The random seed; no default.
-        n_splits: Number of folds (or of shuffles for `group_shuffle`).
-        units: Unit key per row, unique within a subject; required for seen-subject schemes.
-        unit_name: The unit's name, reported under `seen_subject` (for example `recording` or `clip`).
-        strata: Optional stratum per row (for example a timepoint), stratified together with the label.
+        n_splits: Number of folds for the k-fold schemes (default 5, at least 2), or of shuffles for
+            `group_shuffle` (default 1); refused for `leave_one_subject_out` and `seen_subject_holdout`.
+        units: Unit key per row, unique within a subject; required under `seen_subject`, refused under
+            `unseen_subject`.
+        unit_name: The unit's name, reported as the split's unit; required under `seen_subject`
+            (for example `recording` or `clip`), refused under `unseen_subject`.
+        strata: Optional stratum per row (for example a timepoint), stratified together with the label;
+            refused for `leave_one_subject_out`, `group_shuffle` and a multi-label matrix.
         strata_name: The strata's name; required with `strata`; the report's `stratify` is
             `class_<strata_name>`.
-        val_inner_splits: When given, a validation partition is carved from each training pool as one of
-            this many inner folds (k-fold schemes only).
-        fractions: `(train, val, test)` for `group_shuffle` (required) and `seen_subject_holdout`
-            (default 0.6/0.2/0.2).
+        val_inner_splits: When given (at least 2), a validation partition is carved from each training
+            pool as one of this many inner folds; k-fold schemes only.
+        fractions: `(train, val, test)`, each in [0, 1) and summing to 1; required for `group_shuffle`,
+            optional for `seen_subject_holdout` (default 0.6/0.2/0.2), refused otherwise.
 
     Returns:
         The splits and their report.
@@ -550,27 +635,26 @@ def grouped_splits(
     Raises:
         ProtocolViolation: If a split breaks the protocol's invariant (for example a seen-subject
             subject with fewer than two units).
-        ValueError: If the arguments do not fit together.
+        ValueError: If the inputs are malformed or the arguments do not fit the scheme or protocol.
     """
     y, groups = np.asarray(labels), np.asarray(subjects)
     unit_arr = None if units is None else np.asarray(units)
     strata_arr = None if strata is None else np.asarray(strata)
-    _validate(y, groups, protocol, unit_arr, strata_arr, strata_name)
-    if fractions is not None and not math.isclose(sum(fractions), 1.0):
-        raise ValueError("fractions must sum to 1")
+    _prepare(y, groups, protocol, unit_arr, unit_name, strata_arr)
+    if scheme not in UNSEEN_SCHEMES + SEEN_SCHEMES:
+        raise ValueError(f"scheme must be one of {get_args(Scheme)}")
+    count = _scheme_arguments(scheme, n_splits, strata_arr, strata_name, val_inner_splits, fractions)
     if scheme in UNSEEN_SCHEMES:
         if protocol != "unseen_subject":
             raise ValueError(f"{scheme} is an unseen_subject scheme")
         if (scheme == "multilabel_stratified_group_kfold") != (y.ndim == 2):
             raise ValueError("an (n, L) label matrix goes with multilabel_stratified_group_kfold only")
-        if scheme == "multilabel_stratified_group_kfold" and strata_arr is not None:
-            raise ValueError("strata are not supported with a multi-label matrix")
         splits = _unseen_splits(
             scheme,
             y,
             groups,
             seed=seed,
-            n_splits=n_splits,
+            n_splits=count,
             strata=strata_arr,
             val_inner_splits=val_inner_splits,
             fractions=fractions,
@@ -578,31 +662,28 @@ def grouped_splits(
         stratify = (
             "none" if scheme in ("leave_one_subject_out", "group_shuffle") else _stratify_token("class", strata_name)
         )
-    elif scheme in SEEN_SCHEMES:
+    else:
         if protocol != "seen_subject":
             raise ValueError(f"{scheme} is a seen_subject scheme")
-        if unit_arr is None:
-            raise ValueError(f"{scheme} needs units")
+        assert unit_arr is not None
         if y.ndim != 1:
             raise ValueError(f"{scheme} needs one label per row")
         if scheme == "seen_subject_kfold":
             splits = _seen_kfold(
-                y, groups, unit_arr, seed=seed, n_splits=n_splits, strata=strata_arr, val_inner_splits=val_inner_splits
+                y, groups, unit_arr, seed=seed, n_splits=count, strata=strata_arr, val_inner_splits=val_inner_splits
             )
         else:
             splits = _seen_holdout(
                 y, groups, unit_arr, seed=seed, strata=strata_arr, fractions=fractions or DEFAULT_HOLDOUT_FRACTIONS
             )
         stratify = _stratify_token("class", strata_name)
-    else:
-        raise ValueError(f"scheme must be one of {get_args(Scheme)}")
     report = SplitReport.from_splits(
         splits,
         labels=y,
         subjects=groups,
         protocol=protocol,
         units=unit_arr,
-        unit_name=unit_name,
+        unit_name=unit_name or "subject",
         stratify=stratify,
         scheme=scheme,
         seed=seed,
@@ -618,39 +699,45 @@ def check_split(
     labels: Union[np.ndarray, Sequence[Any]],
     protocol: Protocol,
     units: Optional[Union[np.ndarray, Sequence[Any]]] = None,
-    unit_name: str = "recording",
+    unit_name: Optional[str] = None,
     stratify: str = "none",
     strata: Optional[Union[np.ndarray, Sequence[Any]]] = None,
 ) -> SplitReport:
     """Check splits made elsewhere against a protocol and report them.
 
+    Partitions must be integer row-index arrays. Boolean masks are refused rather than converted,
+    because a mask and an index array of 0s and 1s are easy to confuse; pass `np.flatnonzero(mask)`.
+
     Args:
         splits: One split or several (for example the folds of a k-fold).
-        subjects: Subject key per row.
+        subjects: Subject key per row; none may be missing.
         labels: Label per row (or an `(n, L)` 0/1 matrix), for the prevalence figures.
         protocol: `seen_subject` or `unseen_subject`; no default.
-        units: Unit key per row; required under `seen_subject`.
-        unit_name: The unit's name, reported under `seen_subject`.
+        units: Unit key per row; required under `seen_subject`, refused under `unseen_subject`.
+        unit_name: The unit's name; required under `seen_subject`, refused under `unseen_subject`.
         stratify: What the caller stratified on, as the report should state it.
-        strata: Optional stratum per row, for per-stratum prevalence.
+        strata: Optional stratum per row, for per-stratum prevalence (one label per row only).
 
     Returns:
         The report, with scheme `external`.
 
     Raises:
         ProtocolViolation: If a split breaks the protocol's invariant.
+        ValueError: If the inputs are malformed: lengths differ, a subject id is missing, a partition
+            is empty, holds duplicate, negative or out-of-range indices, or is not an integer array.
     """
-    group_arr = np.asarray(subjects)
+    y, group_arr = np.asarray(labels), np.asarray(subjects)
     unit_arr = None if units is None else np.asarray(units)
     strata_arr = None if strata is None else np.asarray(strata)
+    _prepare(y, group_arr, protocol, unit_arr, unit_name, strata_arr)
     as_list = [splits] if isinstance(splits, Split) else list(splits)
     return SplitReport.from_splits(
         as_list,
-        labels=np.asarray(labels),
+        labels=y,
         subjects=group_arr,
         protocol=protocol,
         units=unit_arr,
-        unit_name=unit_name,
+        unit_name=unit_name or "subject",
         stratify=stratify,
         scheme="external",
         seed=None,
@@ -667,11 +754,14 @@ def nested_grouped_splits(
     outer: Mapping[str, Any],
     inner: Mapping[str, Any],
     units: Optional[Union[np.ndarray, Sequence[Any]]] = None,
-    unit_name: str = "recording",
+    unit_name: Optional[str] = None,
     strata: Optional[Union[np.ndarray, Sequence[Any]]] = None,
     strata_name: Optional[str] = None,
 ) -> Tuple[List[Tuple[Split, List[Split]]], SplitReport, List[SplitReport]]:
     """Nested splits: inner splits drawn from each outer training partition only.
+
+    Inner splits are made on the outer training rows alone, so by construction no inner partition
+    holds an outer-test row, subject (unseen) or unit (seen).
 
     Args:
         labels: Label per row (or an `(n, L)` 0/1 matrix).
@@ -681,7 +771,7 @@ def nested_grouped_splits(
         outer: `grouped_splits` keyword arguments for the outer level (at least `scheme`).
         inner: The same for the inner level.
         units: Unit key per row; required under `seen_subject`.
-        unit_name: The unit's name, reported under `seen_subject`.
+        unit_name: The unit's name; required under `seen_subject`.
         strata: Optional stratum per row.
         strata_name: The strata's name; required with `strata`.
 
@@ -690,8 +780,9 @@ def nested_grouped_splits(
         one inner report per outer split, computed over that split's training rows.
 
     Raises:
-        ProtocolViolation: If any split breaks the protocol, or an inner partition holds a row outside
-            its outer training partition or an outer-test subject (unseen) or unit (seen).
+        ProtocolViolation: If any split breaks the protocol. An inner failure says which outer split's
+            inner pool it came from (for example a seen subject left with one unit in that pool).
+        ValueError: As for `grouped_splits`.
     """
     y, groups = np.asarray(labels), np.asarray(subjects)
     unit_arr = None if units is None else np.asarray(units)
@@ -704,39 +795,19 @@ def nested_grouped_splits(
     inner_reports = []
     for i, split in enumerate(outer_splits):
         pool = split.partitions["train"]
-        local, report = grouped_splits(
-            y[pool],
-            groups[pool],
-            seed=seed + INNER_SEED_STRIDE * (i + 1),
-            units=None if unit_arr is None else unit_arr[pool],
-            strata=None if strata_arr is None else strata_arr[pool],
-            **common,
-            **dict(inner),
-        )
+        try:
+            local, report = grouped_splits(
+                y[pool],
+                groups[pool],
+                seed=seed + INNER_SEED_STRIDE * (i + 1),
+                units=None if unit_arr is None else unit_arr[pool],
+                strata=None if strata_arr is None else strata_arr[pool],
+                **common,
+                **dict(inner),
+            )
+        except ProtocolViolation as error:
+            raise ProtocolViolation(f"inner pool of outer split {split.name}: {error}") from error
         mapped = [Split(name=s.name, partitions={k: _sorted(pool[v]) for k, v in s.partitions.items()}) for s in local]
-        _check_nested(split, mapped, groups, unit_arr, protocol)
         nested.append((split, mapped))
         inner_reports.append(report)
     return nested, outer_report, inner_reports
-
-
-def _check_nested(
-    outer: Split, inners: List[Split], subjects: np.ndarray, units: Optional[np.ndarray], protocol: str
-) -> None:
-    train = set(outer.partitions["train"].tolist())
-    test = outer.partitions["test"]
-    if protocol == "unseen_subject" or units is None:
-        held = set(subjects[test].tolist())
-    else:
-        held = set(zip(subjects[test].tolist(), units[test].tolist()))
-    for split in inners:
-        for rows in split.partitions.values():
-            if not set(rows.tolist()) <= train:
-                raise ProtocolViolation("an inner partition holds rows outside its outer training partition")
-            keys = (
-                set(subjects[rows].tolist())
-                if protocol == "unseen_subject" or units is None
-                else set(zip(subjects[rows].tolist(), units[rows].tolist()))
-            )
-            if keys & held:
-                raise ProtocolViolation(f"{len(keys & held)} outer-test keys appear in an inner partition")
