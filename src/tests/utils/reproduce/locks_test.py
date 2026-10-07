@@ -338,6 +338,49 @@ def test_requirements_digest_needs_a_requirements_body(tmp_path: Path) -> None:
         requirements_digest_for(EnvSpec.model_validate(_build(tmp_path, "uv-export")), tmp_path)
 
 
+@pytest.mark.parametrize(
+    "line",
+    ["-r more.in", "--requirement more.in", "-c constraints.txt", "--constraint=c.txt", "-e ./pkg", "--editable ."],
+)
+def test_requirements_digest_refuses_file_and_editable_options(tmp_path: Path, line: str) -> None:
+    """A line that pulls in another file or a source tree is refused: what it names is not hashed."""
+    raw = _build(tmp_path)
+    _write(tmp_path, raw["body"]["requirements_in"], f"six\n{line}\n")
+    with pytest.raises(ReproduceLockError, match="option line refused"):
+        requirements_digest_for(EnvSpec.model_validate(raw), tmp_path)
+
+
+def test_requirements_digest_keeps_index_options(tmp_path: Path) -> None:
+    """Index options are part of the digested lines, so changing one changes the digest."""
+    raw = _build(tmp_path)
+    env = EnvSpec.model_validate(raw)
+    _write(tmp_path, raw["body"]["requirements_in"], "--index-url https://a.example/simple\nsix\n")
+    digest = requirements_digest_for(env, tmp_path)
+    _write(tmp_path, raw["body"]["requirements_in"], "--index-url https://b.example/simple\nsix\n")
+    assert requirements_digest_for(env, tmp_path) != digest
+
+
+def test_check_integrity_reads_each_file_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin and header checks run on the bytes that were hashed: no file is opened a second time."""
+    raw = _build(tmp_path)
+    reads: list[Path] = []
+    real_bytes, real_text = Path.read_bytes, Path.read_text
+
+    def read_bytes(self: Path) -> bytes:
+        reads.append(self.resolve())
+        return real_bytes(self)
+
+    def read_text(self: Path, *args: Any, **kwargs: Any) -> str:  # noqa: ANN401
+        reads.append(self.resolve())
+        return real_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_bytes", read_bytes)
+    monkeypatch.setattr(Path, "read_text", read_text)
+    check_integrity(EnvSpec.model_validate(raw), tmp_path)
+    assert reads
+    assert sorted({p for p in reads if reads.count(p) > 1}) == []
+
+
 # Overlays
 
 
