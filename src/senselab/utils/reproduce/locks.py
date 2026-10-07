@@ -22,13 +22,16 @@ from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import NamedTuple
 
-from senselab.utils.reproduce.spec import EnvSpec
+from senselab.utils.reproduce.spec import EnvSpec, FileRef
 
 HEADER_MARKER = "# reproduce lock"
+INDEX_OPTIONS = frozenset({"--index-url", "-i", "--extra-index-url", "--find-links", "-f"})
+TORCH_NAMES = frozenset({"torch", "torchvision", "torchaudio"})
+TORCH_VARIANT_PREFIXES = ("nvidia-", "triton", "pytorch-triton", "cuda-")
 
 _HEADER_RE = re.compile(r"^#\s*([a-z0-9-]+):\s*(.*?)\s*$")
 _KEY_RE = re.compile(r"^[a-z0-9-]+$")
-_LINE_RE = re.compile(r"^([A-Za-z0-9._-]+)(?:\[[^\]]*\])?\s*(==|@)\s*([^\s;\\]+)")
+_LINE_RE = re.compile(r"^([A-Za-z0-9][A-Za-z0-9._-]*)(?:\[[^\]]*\])?\s*(==(?!=)|@)\s*([^\s;\\]+)\s*(?:;\s*(.*))?$")
 _HASH_RE = re.compile(r"--hash=sha256:([0-9a-f]{64})")
 _CUDA_LOCAL_RE = re.compile(r"\+cu\d+$")
 _COMMENT_RE = re.compile(r"(^|\s)#.*$")
@@ -39,11 +42,12 @@ class ReproduceLockError(RuntimeError):
 
 
 class LockEntry(NamedTuple):
-    """One pinned requirement: normalised name, ``==`` version or ``@`` URL, and its sha256 hashes."""
+    """One pinned requirement: normalised name, ``==`` version or ``@`` URL, marker text and sha256 hashes."""
 
     name: str
     pin: str
     is_url: bool
+    marker: str
     hashes: frozenset[str]
 
 
@@ -140,11 +144,14 @@ def parse_header(text: str) -> dict[str, str]:
 
 def _logical_lines(text: str) -> list[str]:
     joined = re.sub(r"\\\r?\n\s*", " ", text)
-    return [line.strip() for line in joined.splitlines() if line.strip() and not line.lstrip().startswith("#")]
+    lines = (_COMMENT_RE.sub("", line).strip() for line in joined.splitlines())
+    return [line for line in lines if line]
 
 
 def lock_entries(text: str) -> list[LockEntry]:
     """Parse a pinned requirements file: a uv lock, an export, a resolve or a freeze.
+
+    Index and find-links option lines are skipped; every other option line is refused.
 
     Args:
         text: The file's contents; comments and backslash continuations are allowed.
@@ -153,24 +160,26 @@ def lock_entries(text: str) -> list[LockEntry]:
         One entry per requirement line, in file order.
 
     Raises:
-        ReproduceLockError: If a line is not an ``==`` or ``@`` pin.
+        ReproduceLockError: If a line is an ``-e``, ``-r``, ``-c`` or other option, or not an ``==``/``@`` pin.
     """
     entries = []
     for line in _logical_lines(text):
-        match = _LINE_RE.match(line)
+        if line.startswith("-"):
+            option = re.split(r"[\s=]", line, maxsplit=1)[0]
+            if option in INDEX_OPTIONS:
+                continue
+            raise ReproduceLockError(f"option line refused: {line!r}")
+        match = _LINE_RE.match(_HASH_RE.sub("", line).strip())
         if not match:
             raise ReproduceLockError(f"not a pinned requirement: {line!r}")
-        name, op, pin = match.groups()
-        entries.append(LockEntry(normalize_name(name), pin, op == "@", frozenset(_HASH_RE.findall(line))))
+        name, op, pin, marker = match.groups()
+        hashes = frozenset(_HASH_RE.findall(line))
+        entries.append(LockEntry(normalize_name(name), pin, op == "@", " ".join((marker or "").split()), hashes))
     return entries
 
 
-def _normalise_version(version: str) -> str:
-    return _CUDA_LOCAL_RE.sub("", version)
-
-
 def entry_version(entry: LockEntry) -> str:
-    """Return an entry's version with any ``+cuXXX`` local tag dropped.
+    """Return an entry's full version, local tag included.
 
     Args:
         entry: A parsed requirement.
@@ -179,16 +188,19 @@ def entry_version(entry: LockEntry) -> str:
         The ``==`` version, or the version in a ``.whl`` URL's file name.
 
     Raises:
-        ReproduceLockError: If a URL pin is not a wheel over ``file://``, ``http://`` or ``https://``.
+        ReproduceLockError: If a URL pin is not a wheel over ``file://``, ``http://`` or ``https://``, or the
+            wheel's project name is not the entry's name.
     """
     if not entry.is_url:
-        return _normalise_version(entry.pin)
+        return entry.pin
     url = urllib.parse.urlsplit(entry.pin)
     filename = urllib.parse.unquote(url.path.rsplit("/", 1)[-1])
     parts = filename.split("-")
     if url.scheme not in ("file", "http", "https") or not filename.endswith(".whl") or len(parts) < 5:
         raise ReproduceLockError(f"{entry.name} is not pinned to a wheel: {entry.pin}")
-    return _normalise_version(parts[1])
+    if normalize_name(parts[0]) != entry.name:
+        raise ReproduceLockError(f"{entry.name} is pinned to a wheel of {parts[0]}: {entry.pin}")
+    return parts[1]
 
 
 def parse_freeze(text: str) -> dict[str, str]:
@@ -203,134 +215,233 @@ def parse_freeze(text: str) -> dict[str, str]:
     Raises:
         ReproduceLockError: For editable installs, source trees, VCS URLs or unpinned lines.
     """
-    return {entry.name: entry_version(entry) for entry in lock_entries(text)}
+    return {entry.name: _CUDA_LOCAL_RE.sub("", entry_version(entry)) for entry in lock_entries(text)}
 
 
-def _by_name(entries: Iterable[LockEntry]) -> dict[str, set[tuple[str, frozenset[str]]]]:
-    out: dict[str, set[tuple[str, frozenset[str]]]] = {}
+def is_torch_family(name: str) -> bool:
+    """Whether a distribution belongs in ``torch.lock``: torch, torchvision, torchaudio or a CUDA-variant name."""
+    name = normalize_name(name)
+    return name in TORCH_NAMES or name.startswith(TORCH_VARIANT_PREFIXES)
+
+
+def versions_agree(a: str, b: str) -> bool:
+    """Compare versions, ignoring a ``+local`` tag only when exactly one side has one.
+
+    Args:
+        a: A version, e.g. ``2.8.0+cu128``.
+        b: Another version.
+
+    Returns:
+        Whether they name the same release.
+    """
+    if ("+" in a) != ("+" in b):
+        return a.split("+", 1)[0] == b.split("+", 1)[0]
+    return a == b
+
+
+def _path(base_dir: Path, rel: str) -> Path:
+    path = base_dir / rel
+    if not path.resolve().is_relative_to(base_dir.resolve()):
+        raise ReproduceLockError(f"{rel} resolves outside {base_dir}")
+    return path
+
+
+def _verify(base_dir: Path, rel: str, expected: str, what: str, verified: dict[str, str]) -> None:
+    actual = file_sha256(_path(base_dir, rel))
+    if actual != expected:
+        raise ReproduceLockError(f"{what} {rel}: sha256 {actual} != manifest {expected}")
+    verified[rel] = actual
+
+
+def verify_files(refs: Iterable[FileRef], base_dir: Path) -> dict[str, str]:
+    """Check hashed files, such as patches, against their manifest sha256s.
+
+    Args:
+        refs: The files, relative to ``base_dir``.
+        base_dir: The manifest repository.
+
+    Returns:
+        ``{relative path: sha256}`` of the bytes checked.
+
+    Raises:
+        ReproduceLockError: If a file resolves outside ``base_dir`` or its sha256 differs.
+    """
+    verified: dict[str, str] = {}
+    for ref in refs:
+        _verify(base_dir, ref.file, ref.sha256, "file", verified)
+    return verified
+
+
+def requirements_digest_for(env: EnvSpec, base_dir: Path) -> str:
+    """Return the ``requirements-sha256`` header value for a requirements-derived body.
+
+    ``requirements.in`` lines are normalised first: continuations joined, comments stripped, inner
+    whitespace collapsed.
+
+    Args:
+        env: The step's env; its body source must be ``requirements.in``.
+        base_dir: The manifest repository.
+
+    Returns:
+        :func:`requirements_sha256` over the requirement lines and the env's compile inputs.
+
+    Raises:
+        ReproduceLockError: If the body is not requirements-derived, or a requirement line repeats.
+    """
+    body = env.body
+    if body.source != "requirements.in" or body.requirements_in is None:
+        raise ReproduceLockError("only a requirements.in body has a requirements digest")
+    lines = [" ".join(line.split()) for line in _logical_lines(_path(base_dir, body.requirements_in).read_text())]
+    dupes = sorted({line for line in lines if lines.count(line) > 1})
+    if dupes:
+        raise ReproduceLockError(f"{body.requirements_in} repeats requirement lines: {dupes}")
+    return requirements_sha256(
+        lines,
+        env.python,
+        env.max_cuda,
+        env.exclude_newer,
+        body.config_file_sha256,
+        body.overrides_sha256,
+        env.extra_no_emit,
+    )
+
+
+def _entries(base_dir: Path, rel: str) -> list[LockEntry]:
+    return lock_entries(_path(base_dir, rel).read_text())
+
+
+def _group(entries: Iterable[LockEntry]) -> dict[str, list[LockEntry]]:
+    out: dict[str, list[LockEntry]] = {}
     for entry in entries:
-        out.setdefault(entry.name, set()).add((entry.pin, entry.hashes))
+        out.setdefault(entry.name, []).append(entry)
     return out
 
 
-def _check_sha(base_dir: Path, rel: str, expected: str, what: str) -> None:
-    actual = file_sha256(base_dir / rel)
-    if actual != expected:
-        raise ReproduceLockError(f"{what} {rel}: sha256 {actual} != manifest {expected}")
+def _overlay_problems(
+    env: EnvSpec, overlay: list[LockEntry], base: list[LockEntry], torch_names: set[str]
+) -> list[str]:
+    pinned = _group(base)
+    held_out = {normalize_name(s.name) for s in env.sdist_allow} | {normalize_name(n) for n in env.extra_no_emit}
+    problems = []
+    for name, entries in sorted(_group(overlay).items()):
+        if name in held_out:
+            problems.append(f"{name}: held out of the base locks (sdist_allow or extra_no_emit)")
+        elif is_torch_family(name) and name not in torch_names:
+            problems.append(f"{name}: torch-family name absent from torch.lock")
+        elif name not in pinned:
+            continue
+        elif len(pinned[name]) > 1 or len(entries) > 1:
+            problems.append(f"{name}: pinned in more than one entry; markers are not evaluated")
+        else:
+            mine, theirs = entries[0], pinned[name][0]
+            if (mine.pin, mine.marker, mine.hashes) != (theirs.pin, theirs.marker, theirs.hashes):
+                problems.append(f"{name}: {mine.pin} differs from base {theirs.pin} or its marker or hashes differ")
+    return problems
 
 
-def _requirement_lines(text: str) -> list[str]:
-    lines = (_COMMENT_RE.sub("", line).strip() for line in text.splitlines())
-    return [line for line in lines if line]
-
-
-def _torch_against_resolve(torch: list[LockEntry], resolve: list[LockEntry]) -> list[str]:
-    versions: dict[str, set[str]] = {}
-    for entry in resolve:
-        versions.setdefault(entry.name, set()).add(entry_version(entry))
-    return [
-        f"{e.name}: torch.lock {entry_version(e)}, first_resolve {sorted(versions.get(e.name, set()))}"
-        for e in torch
-        if entry_version(e) not in versions.get(e.name, set())
-    ]
-
-
-def _torch_against_uv_lock(torch: list[LockEntry], uv_lock: Path) -> list[str]:
-    packages: dict[str, list[tuple[str, set[str]]]] = {}
-    for package in tomllib.loads(uv_lock.read_text()).get("package", []):
-        hashes = {w["hash"].removeprefix("sha256:") for w in package.get("wheels", []) if "hash" in w}
-        packages.setdefault(normalize_name(package["name"]), []).append(
-            (_normalise_version(package["version"]), hashes)
-        )
-    bad = []
+def _torch_problems(torch: list[LockEntry], reference: dict[str, list[tuple[str, set[str] | None]]]) -> list[str]:
+    names = {e.name for e in torch}
+    problems = [f"{e.name}: no --hash in torch.lock" for e in torch if not e.hashes]
     for entry in torch:
-        candidates = packages.get(entry.name, [])
         version = entry_version(entry)
-        if not any(v == version and entry.hashes <= h for v, h in candidates):
-            bad.append(
-                f"{entry.name}: torch.lock {version}, uv.lock {sorted(v for v, _ in candidates)} or hash differs"
-            )
-    return bad
+        candidates = reference.get(entry.name, [])
+        if not any(versions_agree(version, v) and (h is None or entry.hashes <= h) for v, h in candidates):
+            problems.append(f"{entry.name}: torch.lock {version}, reference {sorted(v for v, _ in candidates)}")
+    problems += [f"{n}: in the reference, absent from torch.lock" for n in sorted(reference) if n not in names]
+    return problems
 
 
-def check_integrity(env: EnvSpec, base_dir: Path, uv_lock: Path | None = None) -> None:
+def _resolve_reference(resolve: list[LockEntry]) -> dict[str, list[tuple[str, set[str] | None]]]:
+    out: dict[str, list[tuple[str, set[str] | None]]] = {}
+    for entry in resolve:
+        if is_torch_family(entry.name):
+            out.setdefault(entry.name, []).append((entry_version(entry), None))
+    return out
+
+
+def _uv_lock_reference(uv_lock: Path) -> dict[str, list[tuple[str, set[str] | None]]]:
+    out: dict[str, list[tuple[str, set[str] | None]]] = {}
+    for package in tomllib.loads(uv_lock.read_text()).get("package", []):
+        name = normalize_name(package["name"])
+        if is_torch_family(name):
+            hashes = {w["hash"].removeprefix("sha256:") for w in package.get("wheels", []) if "hash" in w}
+            out.setdefault(name, []).append((package["version"], hashes))
+    return out
+
+
+def check_integrity(env: EnvSpec, base_dir: Path, uv_lock: Path | None = None) -> dict[str, str]:
     """Check an env's hashed files and pin agreement before anything is installed.
 
-    The checks run in order: lock file sha256s (torch, body, wheels, overlays, build envs); the
-    ``requirements.in`` sidecar, config and overrides sha256s and the recomputed header digest; the
+    The checks run in order: lock and sdist-patch sha256s (torch, body, wheels, overlays, build envs);
+    the ``requirements.in``, config and overrides sha256s and the recomputed header digest; the
     ``first_resolve`` sha256; overlay pins against the base locks; torch-family pins against
     ``first_resolve`` (``requirements.in`` bodies) or the repository ``uv.lock`` (uv-export bodies).
 
+    The returned sha256s describe the bytes read here. The installer copies each file into ``{tmp}``,
+    checks the copy against this mapping and installs from the copy, never from ``base_dir``.
+
     Args:
         env: The step's env.
-        base_dir: The manifest repository; every path in ``env`` is relative to it.
+        base_dir: The manifest repository; every path in ``env`` is relative to it and must resolve inside it.
         uv_lock: The checkout's ``uv.lock``; needed for a uv-export body with a torch lock.
+
+    Returns:
+        ``{relative path: sha256}`` of every file verified.
 
     Raises:
         ReproduceLockError: On the first check that fails.
     """
+    verified: dict[str, str] = {}
     locks = [("torch lock", env.torch), ("body lock", env.body), ("wheels lock", env.wheels)]
     locks += [("test lock", env.test), ("notebook_tools lock", env.notebook_tools)]
     locks += [(f"build_env lock of {s.name}", s.build_env) for s in env.sdist_allow]
     for what, ref in locks:
         if ref is not None:
-            _check_sha(base_dir, ref.lock, ref.lock_sha256, what)
+            _verify(base_dir, ref.lock, ref.lock_sha256, what, verified)
+    for sdist in env.sdist_allow:
+        for patch in sdist.patches:
+            _verify(base_dir, patch.file, patch.sha256, f"patch of {sdist.name}", verified)
 
     body = env.body
     if body.source == "requirements.in":
         if body.requirements_in is None or body.requirements_in_sha256 is None:
             raise ReproduceLockError("a requirements.in body needs requirements_in and its sha256")
-        _check_sha(base_dir, body.requirements_in, body.requirements_in_sha256, "requirements.in")
+        _verify(base_dir, body.requirements_in, body.requirements_in_sha256, "requirements.in", verified)
         for what, rel, sha in (
             ("config file", body.config_file, body.config_file_sha256),
             ("overrides", body.overrides, body.overrides_sha256),
         ):
             if rel is not None and sha is not None:
-                _check_sha(base_dir, rel, sha, what)
-        header = parse_header((base_dir / body.lock).read_text())
-        expected = requirements_sha256(
-            _requirement_lines((base_dir / body.requirements_in).read_text()),
-            env.python,
-            env.max_cuda,
-            env.exclude_newer,
-            body.config_file_sha256,
-            body.overrides_sha256,
-            env.extra_no_emit,
-        )
-        if header.get("requirements-sha256") != expected:
+                _verify(base_dir, rel, sha, what, verified)
+        recorded = parse_header(_path(base_dir, body.lock).read_text()).get("requirements-sha256")
+        expected = requirements_digest_for(env, base_dir)
+        if recorded != expected:
             raise ReproduceLockError(
-                f"body lock {body.lock}: header requirements-sha256 {header.get('requirements-sha256')} "
-                f"!= recomputed {expected}"
+                f"body lock {body.lock}: header requirements-sha256 {recorded} != recomputed {expected}"
             )
 
     if env.first_resolve is not None:
-        _check_sha(base_dir, env.first_resolve.file, env.first_resolve.sha256, "first_resolve")
+        _verify(base_dir, env.first_resolve.file, env.first_resolve.sha256, "first_resolve", verified)
 
-    base = lock_entries((base_dir / body.lock).read_text())
-    if env.torch is not None:
-        base += lock_entries((base_dir / env.torch.lock).read_text())
-    pinned = _by_name(base)
+    torch = _entries(base_dir, env.torch.lock) if env.torch is not None else []
+    base = _entries(base_dir, body.lock) + torch
     for what, ref in (("test", env.test), ("notebook_tools", env.notebook_tools)):
-        if ref is None:
-            continue
-        bad = sorted(
-            e.name
-            for e in lock_entries((base_dir / ref.lock).read_text())
-            if e.name in pinned and (e.pin, e.hashes) not in pinned[e.name]
-        )
-        if bad:
-            raise ReproduceLockError(f"{what} overlay pins differ from the base locks: {bad}")
+        if ref is not None:
+            problems = _overlay_problems(env, _entries(base_dir, ref.lock), base, {e.name for e in torch})
+            if problems:
+                raise ReproduceLockError(f"{what} overlay refused: {problems}")
 
     if env.torch is None:
-        return
-    torch = lock_entries((base_dir / env.torch.lock).read_text())
+        return verified
     if body.source == "requirements.in":
         if env.first_resolve is None:
             raise ReproduceLockError("a torch lock with a requirements.in body needs first_resolve")
-        mismatches = _torch_against_resolve(torch, lock_entries((base_dir / env.first_resolve.file).read_text()))
+        reference = _resolve_reference(_entries(base_dir, env.first_resolve.file))
     else:
         if uv_lock is None:
             raise ReproduceLockError("a uv-export body with a torch lock needs the repository uv.lock to check against")
-        mismatches = _torch_against_uv_lock(torch, uv_lock)
-    if mismatches:
-        raise ReproduceLockError(f"torch lock {env.torch.lock} disagrees: {mismatches}")
+        reference = _uv_lock_reference(uv_lock)
+    problems = _torch_problems(torch, reference)
+    if problems:
+        raise ReproduceLockError(f"torch lock {env.torch.lock} disagrees: {problems}")
+    return verified

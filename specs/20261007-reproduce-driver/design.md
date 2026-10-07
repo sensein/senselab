@@ -97,18 +97,36 @@ The install runs four stages, each `--no-deps`. Stages 1, 2 and 4 also use `--re
 
 How `locks.check_integrity` reads those rules:
 
-- The header digest covers the requirement lines, Python, CUDA cap, `exclude_newer`, the config and
-  overrides sha256s and `extra_no_emit`. It leaves out the backend venvs' IPC packages, because a
-  reproduce env holds only what the original env held.
-- An overlay entry for a name the base locks also pin must equal one base entry in both pin and
-  hash set. A universal lock can pin one name several times under different markers, so the overlay
-  entry is matched against any of them.
-- Torch versions are compared with the `+cuXXX` local tag dropped, since a resolve and a URL wheel
-  file name may spell it differently. Against a repository `uv.lock` the torch lock's hashes must
-  also be among that version's wheel hashes: the same version on another index can be a different
-  file.
+- Every manifest path is relative with no `..`, and must also resolve inside the manifest
+  repository, so a symlink cannot point a hashed entry elsewhere. Patches are `{file, sha256}`
+  like locks: an unhashed patch would let a changed diff through every other check.
+- The header digest (`requirements_digest_for`) covers the requirement lines, Python, CUDA cap,
+  `exclude_newer`, the config and overrides sha256s and `extra_no_emit`. It leaves out the backend
+  venvs' IPC packages, because a reproduce env holds only what the original env held. Lines are
+  normalised (continuations joined, comments stripped, whitespace collapsed) so that layout edits do
+  not change the digest; a repeated line is refused rather than collapsed.
+- Lock parsing skips `--index-url`, `--extra-index-url` and `--find-links` lines, which an
+  index-compiled torch lock carries, and refuses every other option (`-e`, `-r`, `-c`, …), since
+  those would install something the lock does not pin. `===` is refused, and a URL pin must name a
+  wheel of its own project.
+- Overlays fail closed. A name the base locks pin more than once (marker variants) may not be pinned
+  by an overlay at all, because comparing markers would need marker evaluation. Otherwise pin,
+  marker text and hash set must be identical. Overlays may not pin `sdist_allow` or `extra_no_emit`
+  names, nor torch-family names that `torch.lock` lacks: those come from other install stages.
+- Torch versions drop a `+local` tag only when one side lacks it (a resolve may spell `2.8.0`
+  where the wheel says `2.8.0+cu128`); when both carry one, `cu126` is not `cu128`. Against a
+  repository `uv.lock` each torch-lock entry needs hashes, and they must be among that version's
+  wheel hashes: the same version on another index can be a different file. The check runs both
+  ways: a torch-family name in the reference that `torch.lock` lacks is refused. Torch-family names
+  are `torch`, `torchvision`, `torchaudio` and the `nvidia-`, `triton`, `pytorch-triton` and `cuda-`
+  prefixes, so an unrelated `nvidia-` package in a repository lock is refused too, which errs
+  closed.
 - The repository `uv.lock` lives in the checkout, not the manifest repository, so the caller passes
   its path.
+- `check_integrity` returns the sha256 of each file it read. The bytes can change after the check,
+  so the installer copies each file into `{tmp}`, checks the copy against that mapping and installs
+  from the copy. Step patches are checked the same way, with `verify_files`, when the checkout is
+  patched.
 
 **The venv name** is `repro-<analysis>-<env_key8>`. `env_key` is derived from inputs only:
 
