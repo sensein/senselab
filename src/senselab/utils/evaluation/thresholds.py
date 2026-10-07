@@ -11,6 +11,7 @@ it was tuned on and still reports balanced accuracy as the headline.
 from __future__ import annotations
 
 import math
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Literal, Optional, Sequence, Tuple, Union, get_args
@@ -26,6 +27,8 @@ OBJECTIVES: Tuple[str, ...] = get_args(Objective)
 TieBreak = Literal["closest_to_0.5"]
 GRID_PATH = Path(__file__).parent / "data" / "threshold_grid.yaml"
 GRID_KEYS = frozenset({"start", "stop", "step", "tie_break", "round"})
+# Split-name tokens that mark held-out evaluation data; tuning on such a split is refused.
+HELD_OUT_TOKENS = frozenset({"test", "holdout", "heldout"})
 
 
 @dataclass(frozen=True)
@@ -81,22 +84,32 @@ def load_threshold_grid(path: Optional[Union[str, Path]] = None) -> ThresholdGri
     if raw["tie_break"] not in get_args(TieBreak):
         raise ValueError(f"tie_break must be one of {get_args(TieBreak)}")
     start, stop, step, places = float(raw["start"]), float(raw["stop"]), float(raw["step"]), int(raw["round"])
+    if places < 1:
+        raise ValueError("a threshold grid needs round >= 1")
     if not (0 < start <= stop < 1 and step > 0):
         raise ValueError("a threshold grid needs 0 < start <= stop < 1 and step > 0")
     count = int(math.floor((stop - start) / step + 1e-9)) + 1
     values = tuple(round(start + i * step, places) for i in range(count))
+    if any(b <= a for a, b in zip(values, values[1:])) or not all(0 < v < 1 for v in values):
+        raise ValueError("a threshold grid must be strictly increasing inside (0, 1) after rounding")
     return ThresholdGrid(values=values, tie_break=raw["tie_break"], round=places)
 
 
 def _objective_value(objective: str, truth: np.ndarray, pred: np.ndarray, positive: str) -> float:
-    """The objective at one threshold's predictions."""
+    """The objective at one threshold's predictions (`truth` always holds two labels here)."""
     if objective == "balanced_accuracy":
         return balanced_accuracy(truth, pred)
     if objective == "f1":
         return float(f1_score(truth == positive, pred == positive, zero_division=0))
-    if len(set(truth.tolist()) | set(pred.tolist())) < 2:
-        return 0.0
     return float(matthews_corrcoef(truth, pred))
+
+
+def is_held_out_name(split_name: str) -> bool:
+    """Whether a split name has a token `test`, `holdout` or `heldout` (tokens split on non-alphanumerics).
+
+    "latest", "contest" and "pretest" pass; "test_free_val" does not, since its first token is "test".
+    """
+    return bool(HELD_OUT_TOKENS & set(re.split(r"[^0-9a-z]+", split_name.casefold())))
 
 
 def tune_threshold(
@@ -110,10 +123,17 @@ def tune_threshold(
 ) -> ThresholdChoice:
     """Choose the grid threshold that maximises an objective on a validation split.
 
+    The split-name check is a guard against obvious mistakes, not a guarantee: the protection is that
+    the caller passes validation rows, and that `score_classification` refuses a threshold on the split
+    it was tuned on. Under nested cross-validation the inner held-out partition is named `test` by
+    `grouped_splits`; when tuning on it, pass a name such as `inner_val`.
+
     Args:
-        y_val: True label per validation row: the positive label and one other label (compared as strings).
-        scores_val: The positive label's score per row; finite.
-        split_name: The validation split's name; a name containing "test" (any case) is refused.
+        y_val: True label per validation row: the positive label and one other label. Labels are
+            compared as strings.
+        scores_val: The positive label's score per row; finite. A score equal to the threshold is positive.
+        split_name: The validation split's name; refused if a token (split on non-alphanumerics, any case)
+            is `test`, `holdout` or `heldout`.
         positive_label: The positive label.
         objective: `balanced_accuracy` (default), or the explicit choices `f1` (positive class) and `mcc`.
         grid: Candidate thresholds; defaults to `load_threshold_grid()`.
@@ -125,7 +145,7 @@ def tune_threshold(
         ValueError: If the split looks like a test split, the objective is unknown, `y_val` does not hold
             exactly two labels including the positive one, or the scores are not finite or of the wrong length.
     """
-    if "test" in split_name.casefold():
+    if is_held_out_name(split_name):
         raise ValueError(f"thresholds are tuned on validation data only; split {split_name!r} looks like a test split")
     if objective not in OBJECTIVES:
         raise ValueError(f"objective must be one of {OBJECTIVES}")
@@ -141,17 +161,24 @@ def tune_threshold(
         raise ValueError("y_val must hold exactly two labels, the positive one among them")
     negative = (present - {positive}).pop()
     candidates = grid if grid is not None else load_threshold_grid()
-    best: Optional[Tuple[float, float]] = None
+    # Exact tie-break on integers: each candidate as a count of 10**-round units, so the distance to
+    # 0.5 carries no float error. Highest objective, then nearest 0.5, then the lower threshold.
+    scale = 10**candidates.round
+    half = scale // 2
+    best_key: Optional[Tuple[float, int, int]] = None
+    best_t = candidates.values[0]
     for t in candidates.values:
         pred = np.where(scores >= t, positive, negative).astype(object)
         value = _objective_value(objective, truth, pred, positive)
-        if best is None or value > best[1] or (value == best[1] and abs(t - 0.5) < abs(best[0] - 0.5)):
-            best = (t, value)
-    assert best is not None
+        units = round(t * scale)
+        key = (value, -abs(units - half), -units)
+        if best_key is None or key > best_key:
+            best_key, best_t = key, t
+    assert best_key is not None
     return ThresholdChoice(
-        threshold=round(best[0], candidates.round),
+        threshold=round(best_t, candidates.round),
         objective=objective,
-        value=best[1],
+        value=best_key[0],
         split_name=split_name,
         grid=candidates.values,
     )

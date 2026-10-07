@@ -555,7 +555,9 @@ def test_holdout_omits_a_zero_fraction_partition(imbalanced_cohort: Cohort) -> N
 def test_holdout_on_two_unit_subjects_names_the_cause() -> None:
     """Three partitions cannot all be filled from two units per subject; the error says so."""
     labels, subjects, units = _two_unit_cohort()
-    with pytest.raises(ValueError, match="every subject has 2 units or fewer; seen_subject_holdout needs >= 3"):
+    with pytest.raises(
+        ValueError, match="every subject has 2 units or fewer; with seen_subject_holdout, a subject with >= 3 units"
+    ):
         grouped_splits(
             labels, subjects, protocol="seen_subject", scheme="seen_subject_holdout", seed=0, units=units, unit_name="r"
         )
@@ -564,7 +566,9 @@ def test_holdout_on_two_unit_subjects_names_the_cause() -> None:
 def test_seen_kfold_validation_on_two_unit_subjects_names_the_cause() -> None:
     """With two units per subject nothing is left for validation after the test unit; the error says so."""
     labels, subjects, units = _two_unit_cohort()
-    with pytest.raises(ValueError, match="every subject has 2 units or fewer; seen_subject_kfold needs >= 4"):
+    with pytest.raises(
+        ValueError, match="every subject has 2 units or fewer; with seen_subject_kfold, a subject with >= 4 units"
+    ):
         grouped_splits(
             labels,
             subjects,
@@ -606,7 +610,7 @@ def test_pandas_na_is_a_missing_id() -> None:
 def test_seen_kfold_validation_needs_follow_val_inner_splits() -> None:
     """The message's unit requirement follows val_inner_splits."""
     labels, subjects, units = _two_unit_cohort()
-    with pytest.raises(ValueError, match="needs >= 8"):
+    with pytest.raises(ValueError, match="a subject with >= 8 units always fills it"):
         grouped_splits(
             labels,
             subjects,
@@ -657,22 +661,41 @@ def _one_subject(n_units: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     return np.arange(n_units) % 2, np.array(["s"] * n_units), np.array([f"u{i}" for i in range(n_units)])
 
 
-@pytest.mark.parametrize(("m", "n", "v", "needed"), [(7, 2, 4, 8), (5, 2, 4, 8), (3, 2, 2, 4)])
-def test_seen_kfold_validation_bound(m: int, n: int, v: int, needed: int) -> None:
-    """The bound is max(3, ceil(V*n/(n-1))): the fold that takes ceil(m/n) units must leave V for the inner slots."""
-    labels, subjects, units = _one_subject(m)
-    with pytest.raises(ValueError, match=f"needs >= {needed} units"):
+def test_seen_kfold_empty_validation_names_the_sufficient_bound() -> None:
+    """One subject with 3 units, n=2, V=2: the fold taking 2 units leaves 1, so validation is empty."""
+    labels, subjects, units = _one_subject(3)
+    with pytest.raises(ValueError, match="'val' partition is empty.*a subject with >= 4 units always fills it"):
         grouped_splits(
             labels,
             subjects,
             protocol="seen_subject",
             scheme="seen_subject_kfold",
             seed=0,
-            n_splits=n,
+            n_splits=2,
             units=units,
             unit_name="r",
-            val_inner_splits=v,
+            val_inner_splits=2,
         )
+
+
+@pytest.mark.parametrize(("n_subjects", "m", "n", "v"), [(50, 4, 5, 4), (50, 7, 2, 4), (20, 6, 5, 5), (3, 7, 2, 4)])
+def test_seen_kfold_validation_accepts_cohorts_below_the_bound(n_subjects: int, m: int, n: int, v: int) -> None:
+    """Cohorts below the per-subject sufficient bound still work when the dealing fills validation."""
+    subjects = np.repeat([f"s{i}" for i in range(n_subjects)], m)
+    units = np.tile([f"u{j}" for j in range(m)], n_subjects)
+    labels = np.arange(len(subjects)) % 2
+    splits, _ = grouped_splits(
+        labels,
+        subjects,
+        protocol="seen_subject",
+        scheme="seen_subject_kfold",
+        seed=0,
+        n_splits=n,
+        units=units,
+        unit_name="r",
+        val_inner_splits=v,
+    )
+    assert all(len(s.partitions["val"]) >= 1 for s in splits)
 
 
 def test_seen_kfold_validation_bound_control() -> None:

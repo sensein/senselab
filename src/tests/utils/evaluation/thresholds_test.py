@@ -1,11 +1,13 @@
 """Tests for validation-only threshold tuning."""
 
 import shutil
+import subprocess
 from pathlib import Path
 
 import numpy as np
 import pytest
 import yaml
+from sklearn.metrics import balanced_accuracy_score, f1_score, matthews_corrcoef
 
 from senselab.utils.evaluation import thresholds
 from senselab.utils.evaluation.classification import balanced_accuracy, score_classification
@@ -97,7 +99,7 @@ def test_mcc_objective_is_available_and_recorded() -> None:
         tune_threshold(y, scores, split_name="val", positive_label="pos", objective="accuracy")  # type: ignore[arg-type]
 
 
-@pytest.mark.parametrize("name", ["test", "Test_fold2", " outer-TEST "])
+@pytest.mark.parametrize("name", ["test", "Test_fold2", " outer-TEST ", "holdout", "fold3-heldout", "test_free_val"])
 def test_tuning_on_a_test_split_is_refused(name: str) -> None:
     """A split whose name contains "test" (any case) cannot be used for tuning."""
     y, scores = _separable()
@@ -167,3 +169,97 @@ def test_the_grid_comes_from_the_data_file(tmp_path: Path, monkeypatch: pytest.M
     monkeypatch.setattr(thresholds, "GRID_PATH", copy)
     choice = tune_threshold(y, scores, split_name="val", positive_label="pos")
     assert choice.threshold == 0.6 and choice.grid == (0.6, 0.7, 0.8, 0.9)
+
+
+# ── Review fixes ──────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("name", ["latest", "contest", "pretest", "val", "inner_val_3"])
+def test_split_names_that_merely_contain_test_are_accepted(name: str) -> None:
+    """The guard matches whole tokens, so "latest" or "pretest" is not a test split."""
+    y, scores = _separable()
+    assert tune_threshold(y, scores, split_name=name, positive_label="pos").split_name == name
+
+
+@pytest.mark.parametrize(
+    ("y", "s", "expected"),
+    [
+        (["pos", "pos", "neg", "neg"], [0.32, 0.9, 0.1, 0.67], 0.3),
+        (["pos", "neg", "pos", "neg"], [0.97, 0.03, 0.06, 0.94], 0.05),
+    ],
+    ids=["0.3-vs-0.7", "0.05-vs-0.95"],
+)
+def test_equidistant_ties_go_to_the_lower_threshold(y: list, s: list, expected: float) -> None:
+    """Thresholds equally far from 0.5 tie exactly; the lower one wins, whatever the float error."""
+    assert tune_threshold(np.array(y), np.array(s), split_name="val", positive_label="pos").threshold == expected
+
+
+def test_a_score_equal_to_the_threshold_is_positive() -> None:
+    """Prediction is positive at or above the threshold."""
+    choice = tune_threshold(np.array(["neg", "pos"]), np.array([0.45, 0.5]), split_name="val", positive_label="pos")
+    assert choice.threshold == 0.5
+
+
+def _origin_rule(y: np.ndarray, s: np.ndarray) -> float:
+    """The earlier lab code's rule, reimplemented: unrounded arange grid, strict improvement, round at the end."""
+    best_t, best = 0.5, -1.0
+    for t in np.arange(0.05, 0.96, 0.05):
+        value = balanced_accuracy_score(y == "pos", s >= t)
+        if value > best or (value == best and abs(t - 0.5) < abs(best_t - 0.5)):
+            best, best_t = value, float(t)
+    return round(best_t, 4)
+
+
+def test_choices_agree_with_the_origin_rule_off_the_grid() -> None:
+    """On 200 small seeded cases (many ties) with no score on a grid value, the choice equals the origin's."""
+    for seed in range(200):
+        rng = np.random.default_rng(seed)
+        y = np.array(["pos", "neg"] * 4)
+        s = rng.random(8)
+        assert tune_threshold(y, s, split_name="val", positive_label="pos").threshold == _origin_rule(y, s)
+
+
+def test_a_score_on_a_grid_value_is_where_the_origin_differs() -> None:
+    """The origin's unrounded grid holds 0.6500000000000001, so it treats a score of 0.65 as below 0.65."""
+    y = np.array(["pos", "neg", "pos", "neg", "pos", "neg", "pos", "neg"])
+    s = np.array([0.69, 0.64, 0.13, 0.11, 0.65, 0.85, 0.2, 0.22])
+    assert tune_threshold(y, s, split_name="val", positive_label="pos").threshold == 0.65
+    assert _origin_rule(y, s) == 0.5
+
+
+def test_f1_and_mcc_values_match_scikit_learn() -> None:
+    """The f1 objective is the positive-class F1; the mcc objective is matthews_corrcoef."""
+    y, scores = _ninety_ten(3)
+    by_f1 = tune_threshold(y, scores, split_name="val", positive_label="pos", objective="f1")
+    pred = _predict(scores, by_f1.threshold)
+    assert by_f1.value == pytest.approx(f1_score(y, pred, pos_label="pos"))
+    by_mcc = tune_threshold(y, scores, split_name="val", positive_label="pos", objective="mcc")
+    assert by_mcc.value == pytest.approx(matthews_corrcoef(y, _predict(scores, by_mcc.threshold)))
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [{"start": 0.0}, {"stop": 1.0}, {"step": 0.001, "round": 2}],
+    ids=["start-0", "stop-1", "duplicates-after-rounding"],
+)
+def test_bad_grids_are_refused(tmp_path: Path, fields: dict) -> None:
+    """Grids must lie inside (0, 1) and be strictly increasing after rounding."""
+    raw = yaml.safe_load(thresholds.GRID_PATH.read_text())
+    raw.update(fields)
+    path = tmp_path / "grid.yaml"
+    path.write_text(yaml.safe_dump(raw))
+    with pytest.raises(ValueError, match="grid"):
+        load_threshold_grid(path)
+
+
+def test_the_grid_file_is_not_gitignored() -> None:
+    """The packaged grid must not match .gitignore, or the wheel build leaves it out."""
+    if shutil.which("git") is None:
+        pytest.skip("git is not available")
+    repo = Path(thresholds.__file__).resolve().parents[4]
+    if not (repo / ".gitignore").exists():
+        pytest.skip("not running from a source checkout")
+    done = subprocess.run(
+        ["git", "check-ignore", "--no-index", "-q", str(thresholds.GRID_PATH.resolve())], cwd=repo, check=False
+    )
+    assert done.returncode == 1, "threshold_grid.yaml is gitignored"

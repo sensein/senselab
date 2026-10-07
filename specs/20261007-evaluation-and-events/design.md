@@ -207,8 +207,11 @@ u ≥ 2 and n ≥ 2, ⌈u/n⌉ ≤ ⌈u/2⌉ ≤ (u + 1)/2 < u, so at least one 
 fold. With `val_inner_splits=k`, a subject's remaining r units are dealt over k slots the same way
 and slot 0 becomes validation, but only when r ≥ 2, which keeps at least one unit in train by the
 same argument. Slot 0 is certain to be filled only when r ≥ k; the worst fold leaves
-r = m − ⌈m/n⌉, so a subject needs m ≥ ⌈k·n/(n − 1)⌉ units (and at least 3). If no subject reaches
-that bound the split is refused up front, naming the bound, rather than left to chance.
+r = m − ⌈m/n⌉, so a subject with m ≥ ⌈k·n/(n − 1)⌉ units (and at least 3) always fills it. That
+bound is sufficient, not necessary: cohorts below it usually fill every fold's validation partition
+through other subjects (for example 50 subjects × 4 units with n = 5, k = 4). The split is
+therefore not refused up front; if a fold's validation partition comes out empty, which is
+deterministic for a given seed, the error names the sufficient bound as advice.
 
 **Seen-subject holdout.** Each subject's units, in the same order, are split by fractions
 (default 0.6/0.2/0.2): the counts come from largest-remainder rounding of `u·fraction`, every
@@ -272,16 +275,24 @@ four decimals. The file holds only those five keys, with `#` descriptions; there
 
 **Derivation.** This is a ported convention, not a fitted value: it is the grid and tie-break the
 lab's earlier threshold-tuning code used (`provenance.md`, row `tune_threshold`), kept so that
-results tuned by either implementation agree. It was not fitted to any data. Among equally good
-thresholds, the tie-break picks the one nearest 0.5, the least extreme operating point. The grid
+results stay comparable. It was not fitted to any data. The earlier code built the grid with an
+unrounded `arange`, so a score lying exactly on a grid value (0.65 against 0.6500000000000001) could
+fall below its threshold there but not here; for scores off the grid, the choices agree (tested on
+200 seeded cases against a reimplementation of the earlier rule). Among equally good
+thresholds, the tie-break picks the one nearest 0.5, the least extreme operating point, and between
+two equally near (0.3 and 0.7) the lower; the comparison is on integers in units of 10^-round, so float
+error cannot decide it. The grid
 lives in `data/` rather than in code so that changing it is a reviewed data change.
 
 The default objective is balanced accuracy, computed by `classification.balanced_accuracy`, the
 same function as the report headline. `f1` (positive class) and `mcc` are available only as an
 explicit, non-default choice; `ThresholdChoice.objective` records it, the report copies it into
 `threshold.objective`, and the balanced-accuracy headline is still computed at whatever threshold
-was chosen. Tuning is refused on a split whose name contains "test" (any case), and the report
-refuses a threshold on the split it was tuned on. On the T6 test's synthetic 90/10 data, the
+was chosen. Tuning is refused on a split name with a token `test`, `holdout` or `heldout` (tokens
+split on non-alphanumerics, any case; "latest" and "pretest" pass, "test_free_val" does not). That
+is a guard against slips, not a guarantee: the protection is the caller passing validation rows and
+the report refusing a threshold on the split it was tuned on. Under nested cross-validation the
+inner held-out partition is named `test`; tune on it under a name such as `inner_val`. On the T6 test's synthetic 90/10 data, the
 BA-tuned threshold (0.5) gave balanced accuracy 0.858 on a fresh draw, against 0.793 for the
 F1-tuned one (0.6), which is why F1 is not the default.
 

@@ -420,11 +420,9 @@ def _seen_kfold(
     """Seen-subject k-fold: each subject's units dealt round-robin over the folds."""
     rng = np.random.default_rng(seed)
     ordered = _ordered_units(labels, subjects, units, strata, rng)
-    # A fold's test takes up to ceil(m/n) of a subject's m units; the rest must cover all V inner slots
-    # for slot 0 (validation) to be filled, so m - ceil(m/n) >= V, i.e. m >= ceil(V*n/(n-1)).
+    # Sufficient (not necessary) per-subject bound for a filled validation partition, named as advice:
+    # the worst fold leaves m - ceil(m/n) units, which must cover all V inner slots.
     val_needed = 3 if val_inner_splits is None else max(3, math.ceil(val_inner_splits * n_splits / (n_splits - 1)))
-    if val_inner_splits is not None and max(len(u) for u in ordered.values()) < val_needed:
-        _too_few_units(ordered, "seen_subject_kfold", val_needed, "val")
     dealt: Dict[str, List[int]] = {}
     for s, unit_rows in ordered.items():
         offset = int(rng.integers(n_splits))
@@ -454,8 +452,8 @@ def _too_few_units(ordered: Mapping[str, List[np.ndarray]], scheme: str, needed:
     """Raise the ValueError for a partition left empty because subjects have too few units."""
     most = max(len(units) for units in ordered.values())
     raise ValueError(
-        f"every subject has {most} units or fewer; {scheme} needs >= {needed} units in some subject "
-        f"to fill the {partition!r} partition"
+        f"the {partition!r} partition is empty: every subject has {most} units or fewer; with {scheme}, "
+        f"a subject with >= {needed} units always fills it"
     )
 
 
@@ -813,7 +811,9 @@ def nested_grouped_splits(
     """Nested splits: inner splits drawn from each outer training partition only.
 
     Inner splits are made on the outer training rows alone, so by construction no inner partition
-    holds an outer-test row, subject (unseen) or unit (seen).
+    holds an outer-test row, subject (unseen) or unit (seen). Inner held-out partitions are named
+    `test`, like every split's; when tuning a threshold on one, pass a split name such as `inner_val`
+    (`tune_threshold` refuses names with a `test` token).
 
     Args:
         labels: Label per row (or an `(n, L)` 0/1 matrix).
