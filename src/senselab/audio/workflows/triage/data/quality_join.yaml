@@ -1,0 +1,29 @@
+# QUALITY's join: interference, faults, stream agreement and capture, read against each task span
+# by time overlap (quality_join.py). The derivation of every value is in
+# specs/20261007-task-events-in-background/design.md ("Unit C step 2"); values marked UNFITTED are
+# to be fitted jointly on the owner's labels.
+version: 1
+abut_s: 0.1                       # UNFITTED: a finding this close to a task span touches it
+interference:                     # another source over a task span; only an in-span one can review
+  other_voice:
+    decides: true                 # owner 2026-10-07: in-span interference flags every family
+faults:                           # a capture fault touching a task span reviews; elsewhere it is an annotation
+  shutoff:
+    min_s: 0.3                    # background_model.yaml shutoff.min_s: every shutoff run is one
+    abut_s: 0.5                   # voice_phonation.yaml shutoff.gap_s: a shutoff this soon after the task cut it
+    decides: true
+  dropout:
+    min_s: 0.05                   # UNFITTED: a dropout this long inside a task span
+    decides: true
+  clip:
+    min_s: 0.01                   # UNFITTED: a clip run this long inside a task span
+    decides: true
+  discontinuity:
+    min_s: 0.0
+    decides: false                # reported only: no label names one
+streams:                          # the raw stream's task events re-read on the enhanced stream
+  snr_low_db: 10.0                # task_events.yaml decision.snr_low_db: an event stands this far over its stream's floor
+  lost_fraction: 0.5              # UNFITTED: the share of raw-standing events the enhanced stream loses that disagrees
+  decides: []                     # event kinds whose disagreement reviews (breath, cough, phonation); fitted
+capture:                          # nothing captured: no activity, or only the room at the session's level
+  level_rel_db_max: -30.0         # UNFITTED: this far under the session's active level with no task event
