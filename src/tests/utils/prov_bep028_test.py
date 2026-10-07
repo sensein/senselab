@@ -140,6 +140,23 @@ def test_every_relation_is_emitted(store: ProvStore) -> None:
     assert {"GeneratedBy", "Used", "AssociatedWith", "AttributedTo", "DerivedFrom", "InvalidatedBy"} <= terms
 
 
+def test_the_activity_description_is_the_callers(store: ProvStore, tmp_path: Path) -> None:
+    """A caller other than triage describes its own activities; ``{label}`` names the activity."""
+    graph = to_bep028_graph(store, description="driver step, command withheld: {label}")
+    [step] = [node for node in graph["Records"]["Activities"] if node["Label"].endswith("gammatone")]
+    assert step["Description"] == "driver step, command withheld: PREPROCESS / gammatone"
+    path = tmp_path / "store.jsonl"
+    store.write_jsonl(path)
+    converted = convert_store_file(path, description="fixed text")
+    assert {node["Description"] for node in converted["Records"]["Activities"]} == {"fixed text"}
+
+
+def test_the_default_description_is_the_triage_one(store: ProvStore) -> None:
+    """Triage's graphs read as before."""
+    [step] = [node for node in to_bep028_graph(store)["Records"]["Activities"] if node["Label"].endswith("gammatone")]
+    assert step["Description"] == "in-process senselab triage step, not a shell command: PREPROCESS / gammatone"
+
+
 def test_an_activity_is_not_claimed_to_be_a_command(store: ProvStore) -> None:
     """``Command`` is REQUIRED and we have none, so it is null and a Description says why."""
     [step] = [node for node in to_bep028_graph(store)["Records"]["Activities"] if node["Label"].endswith("gammatone")]
