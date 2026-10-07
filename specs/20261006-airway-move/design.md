@@ -107,6 +107,37 @@ so the replay's count will differ. 351 is not a narrow band: listen to a sample 
 recordings from the replay before the corpus is settled, and raise `instructed_fraction` if the
 detector is wrong on them.
 
+### Narrowed after the r17 replay (2026-10-07)
+
+On r17 the rule above fired on 335 recordings, not the 25 predicted: 211 `respiration-and-cough-breath`
+and 80 `-v2-breath` (uncounted, so one detector event contested), 35 counted. Most carry a
+`little_activity` veto whose train sits in the review band, so the measure fails and the discard is
+contested on a single event. Candidate rules over the r17 readings (`_task_evidence` at c3e97dd4,
+ORCD job 25038623):
+
+| Contest a no-breath discard when | contested | breath / v2-breath | owner no-breath labels contested |
+|---|---|---|---|
+| current (count, or 1 event uncounted) | 335 | 291 | 2 |
+| uncounted ≥3 events | 144 | 100 | 1 |
+| train rise ≥10 dB | 83 | 71 | 0 |
+| uncounted ≥3 events and train rise ≥10 dB, counted families on events alone | 65 | 21 | 0 |
+| uncounted ≥3 events and train rise ≥10 dB on every breath family (adopted) | 42 | 21 | 0 |
+| train rise ≥12.5 dB | 36 | 32 | 0 |
+
+Owner listens of six contested recordings (2026-10-07, `breath_review_check_20261006`): 1f4ea26f
+(33.3 dB), 793732ff (14.3 dB) and 2bb59c22 (12.3 dB) are breathing and should pass; 1965766f
+(11.3 dB) holds one breath; 16eded62 (10.5 dB, "very weak with background sounds, leave as
+contested") and 3d446af4 (14.8 dB, "lots of background noise"). No rise separates the noisy from
+the clean (14.3 and 14.8 dB sit on opposite sides), so the contest stays a flag for review rather
+than a pass, and the narrowing only removes contests whose own train never rose clear of the floor
+or whose uncounted task the detector barely saw. Owner, 2026-10-07: "most clean signals behave
+well. also it's ok for now to triage some noisy recordings." Adopted in
+`data/discard_contested.yaml` (version 2): `breath.uncounted_events_min` 3, `breath.train_rise_db_min`
+10.0 on every breath family; the counted families' event threshold and every cough family unchanged.
+On the 335 r17 contested readings the adopted rule keeps 42 (breath 14, v2-breath 7, counted breath 12,
+cough 9); all six owner-heard contested recordings stay contested (flagged), at their listened reading. The general background model that would separate the
+noisy cases is the next iteration (`specs/20261007-task-events-in-background/`).
+
 ## The replay that lands this
 
 Owner, 2026-10-06: "yes, rerun should be rerun". `scripts/select_replay_manifest.py` writes the

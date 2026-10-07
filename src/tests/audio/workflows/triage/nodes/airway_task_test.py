@@ -85,8 +85,26 @@ def test_no_reading_without_an_airway_report_is_no_absent_input() -> None:
     assert evidence.owner_absent_inputs == ()
 
 
-def test_the_contest_threshold_is_the_instructed_count_else_one() -> None:
-    """``data/discard_contested.yaml``: the whole instructed count, or one event for an uncounted task."""
-    assert verdict_module.contest_events_min(5) == 5
-    assert verdict_module.contest_events_min(3) == 3
-    assert verdict_module.contest_events_min(None) == 1
+def test_the_contest_threshold_is_the_instructed_count_else_the_uncounted_minimum() -> None:
+    """``data/discard_contested.yaml``: the whole instructed count; else one cough, or three breath events."""
+    assert verdict_module.contest_events_min(5, "breath") == 5
+    assert verdict_module.contest_events_min(3, "cough") == 3
+    assert verdict_module.contest_events_min(None, "cough") == 1
+    assert verdict_module.contest_events_min(None, "breath") == 3
+
+
+def test_a_breath_contest_needs_a_train_that_rose() -> None:
+    """Only a breath family names a train rise; a cough family's contest reads the detector alone."""
+    assert verdict_module.contest_rise_db_min("breath") == 10.0
+    assert verdict_module.contest_rise_db_min("cough") is None
+
+
+def test_a_weak_train_does_not_contest_a_breath_discard() -> None:
+    """The detector's events contest a no-breath discard only where the train itself rose clear of the floor."""
+    from senselab.audio.workflows.triage.vocabulary import TaskEvidence, discard_contested
+
+    base = {"events_found_n": 4, "contest_events_min": 3, "contest_rise_db_min": 10.0}
+    assert discard_contested(TaskEvidence(**base, breath_train_rise_db=14.3))
+    assert not discard_contested(TaskEvidence(**base, breath_train_rise_db=7.9))
+    assert not discard_contested(TaskEvidence(**base, breath_train_rise_db=None))
+    assert discard_contested(TaskEvidence(events_found_n=1, contest_events_min=1))
