@@ -140,18 +140,23 @@ Each task measurement reports a small evidence vector:
 - event count and bands covered;
 - rhythm strength (C3);
 - raw-versus-enhanced agreement: the same events, or an extent within tolerance, on both streams;
-- background burden: impulse rate and tonal lines inside the extent.
+- background entanglement: impulses or tonal lines overlapping or abutting an event. Background
+  elsewhere in the file is reported but does not enter the event's decision.
 
 The decision is one rule for every airway and voice family:
 
 | Condition | Decision |
 |---|---|
 | A clear event: SNR ≥ `s_hi`, on the raw stream or on both streams | present |
-| Events exist, but SNR is in [`s_lo`, `s_hi`), or the streams disagree, or the background burden is high | review |
+| Events exist, but SNR is in [`s_lo`, `s_hi`), or the streams disagree, or a background impulse or tone overlaps or abuts the deciding event | review |
 | Nothing exceeds `s_lo` on any stream | discard (no event captured) |
 
-- The old measure's vetoes (`little_activity`, speech) become reported measurements.
-  `breath_present` falling back to `_measure_found` (`vocabulary.py:377-398`) goes.
+- The old `breathing_pattern` measure leaves decisions entirely: its modulation cycle count, its
+  `alternating_breaths` pattern and its `little_activity` and speech vetoes, which `breath_present`
+  reads through `_measure_found` (`vocabulary.py:377-398`) to split review from discard inside the
+  breath-train review band (c521286e). Decisions use only task-event evidence: active spans, events,
+  the modulation rate as a prior (C3), and event SNR over the background. The old measure stays a
+  reported column at most.
 - `discard_contested` (`vocabulary.py:1754-1768`) is no longer needed as a separate rule. A discard
   can only happen when no stream shows an event above `s_lo`, so AIRWAY's detector contradicting it
   becomes a review condition inside C5, not a second-pass flag.
@@ -181,7 +186,7 @@ They never change a verdict. This is already the rule for airway (`8864ed00`) an
 | C6 instruction | all | which instruction field is compared |
 
 Background speech (`background_speech.py:274-331`) is a C2 event detector run on the residual with
-a speech type test. It reports into C5's background burden, plus its own flag.
+a speech type test. It reports into C5 as background entanglement where it overlaps or abuts an event, plus its own in-span flag.
 
 ## QUALITY as the acquisition-quality branch
 
@@ -211,9 +216,14 @@ a speech type test. It reports into C5's background burden, plus its own flag.
 - **Retired or fixed:** the null tolerances, the wrong comment, `q_raw_issues` (recomputed from C1 or
   dropped), and the dual clipping reading.
 - **Kept:** the clip audit, as a self-check on the store rather than a judgement of the recording.
+- **Decision rules (owner, 2026-10-07):** in-span interference flags in every family; a dropout or
+  clip inside a task span flags, and outside it is an annotation; with the BIDS session as the
+  group, "only the surroundings recorded" discards when no task event rises above the background
+  in any stream, otherwise review. SQUIM is reported only.
 - **Fitted from labels before anything flags:** in-span interference (the cough and breath
-  background listens), shutoff, and session level (the 2026-10-05 empty-route and contrast
-  listens). SQUIM only if a labelled sample shows it separates usable recordings from unusable ones.
+  background listens), the in-span dropout/clip duration, shutoff, and session level (the
+  2026-10-05 empty-route and contrast listens). SQUIM decides only if a labelled sample shows it
+  separates usable recordings from unusable ones.
 
 ## The DAG
 
@@ -276,41 +286,45 @@ The task-specific type tests keep their existing fitted values. Nothing is tuned
 **Report:**
 - in-sample and held-out agreement per listen set and per target;
 - the confusion matrix;
-- the review-band rate on a random sample of 200 kept recordings per family (target ≤5%);
+- the review-band rate on a random sample of 200 kept recordings per family, reported as an outcome,
+  not a target;
 - the change in discard and flag counts against r17 on the full manifest.
 
 **Acceptance:**
 - held-out agreement is no worse than in-sample by more than one recording per set;
-- no owner "present" label is discarded on either side;
-- the review rate is within target for every family.
+- no owner "present" label is discarded on either side.
+
+There is no review-rate target; parameters are never tuned to move the review rate.
 
 **Stores:** the stored derivatives on ORCD. The replay needs no PREPROCESS stage, as with
 `voice_phonation`, which tracks pitch inside the branch.
 
 ## Dependencies
 
-- Enhanced-stream cross-check: the analysis is pending, ORCD job 25116391, which runs the breath
-  train on raw, enhanced and residual for the r17 breath-review sample. Whether enhanced recovers
-  swamped breaths (F7) or loses quiet events (F8) decides how much weight raw-versus-enhanced
-  agreement carries in C5. Until then C5 uses raw and treats disagreement as review.
+- Enhanced-stream cross-check (ORCD job 25116391, done): enhanced passes noise as readily as it
+  recovers swamped breaths, so it never decides presence. C5 uses raw, treats disagreement as
+  review, and attaches enhanced-derived spans as a reviewer hint.
 - The session-group floor needs a session index over the corpus. The r17 parquet has
   session-level fields; the group floor is computed once per session and stored.
 
-## Open questions for the owner
+## Decided (owner, 2026-10-07)
 
-1. **Review-acceptable labels:** may "OK if flagged or discarded" and "leave as contested" be
-   scored as review-acceptable? The evaluation counts either outcome as correct for them.
-2. **Background burden:** should a high impulse or tonal burden alone send a clear event to review,
-   or only when the events are weak?
-3. **Session-group floor:** use it when available, or keep floors per recording for
-   reproducibility of single-file runs?
-4. **Review rate:** is ≤5% review per family the right target, or should it differ for open-ended
-   breath tasks?
-5. **Retiring the old breathing measure:** is it acceptable to retire it from decisions entirely
-   (C5), keeping it as a reported measurement?
-6. **In-span interference:** should it flag every family, speech and voice included, or start with
-   airway and voice?
-7. **Session-group level:** what defines a session group (the BIDS session)? And should "only the
-   surroundings were recorded" discard, or go to review?
-8. **SQUIM:** retire it, or keep it as a reported measure pending a labelled test?
-9. **Dropout or clip inside a task span:** should it flag, and from what duration?
+1. **Review-acceptable labels.** "OK if flagged or discarded" and "leave as contested" score review
+   or discard as correct.
+2. **Background affects an event only where it is temporally entangled with it.** A click or tone
+   overlapping or abutting an event makes that event ambiguous and sends it to review; background
+   elsewhere in the file does not enter the decision. Owner: "does not make sense except if
+   temporarily disambiguated."
+3. **Session-group floor** where available, with the per-recording floor recorded alongside.
+4. **No review-rate target.** The rate is an outcome to report, not something to tune to. Owner:
+   "does not make sense."
+5. **The old `breathing_pattern` measure leaves decisions** (modulation cycle count,
+   `alternating_breaths`, the `little_activity` and speech vetoes, `_measure_found`). Decisions use
+   active spans, events, the modulation rate and event SNR. Owner: "don't we now have active spans
+   and events and modulation rates?"
+6. **In-span interference flags every family**, speech and voice included.
+7. **Session group = the BIDS session.** "Only the surroundings recorded" discards when no task event
+   rises above the background in any stream; otherwise review.
+8. **SQUIM is reported only**, deciding nothing until a labelled test shows it separates.
+9. **A dropout or clip inside a task span flags**, with its minimum duration fitted from labels;
+   outside the span it is an annotation.
