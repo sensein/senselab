@@ -1,0 +1,128 @@
+# The decision table's evidence items: the name of every reading the fold weighs, by family group.
+# Each item records value, unit, comparison, threshold (from data/), effect and whether it decided.
+# `producer` names the unit of specs/20261007-task-events-in-background/design.md that emits it;
+# an item a later unit produces is absent from the tables until that unit lands.
+version: 1
+groups:
+  acquisition:
+    admit_outcome:
+      unit:
+      producer: fold
+      meaning: ADMIT's outcome; a fail discards the recording as unmeasurable
+    task_duration_s:
+      unit: s
+      producer: fold
+      meaning: the recording's duration against its family's minimum in data/task_minimum_duration.yaml
+    route_state:
+      unit:
+      producer: fold
+      meaning: the ruleset's reading of the whole recording; empty with the task not performed discards
+    declared_task_found:
+      unit:
+      producer: fold
+      meaning: whether the branch owning the declared task found it
+    background_speech_in_task:
+      unit: runs
+      producer: unit B
+      meaning: residual windows heard as speech and harmonic residual runs inside an airway task
+    capture_cut_in_task:
+      unit:
+      producer: unit B
+      meaning: a microphone shutoff inside the phonation, so its duration is a lower bound
+    interference_in_span:
+      unit:
+      producer: unit C
+      meaning: another source overlapping or abutting a task event
+    fault_in_span:
+      unit: s
+      producer: unit C
+      meaning: a dropout, clip or shutoff inside the task span
+    streams_agree:
+      unit:
+      producer: unit C
+      meaning: whether the raw and enhanced streams agree on the task's events
+    nothing_captured:
+      unit:
+      producer: unit C
+      meaning: no active region above the background in any stream
+    session_floor_db:
+      unit: dB
+      producer: unit C
+      meaning: the BIDS session's background floor the events were read against
+  breath:
+    breath_event_db_over_floor:
+      unit: dB
+      producer: unit B
+      meaning: the strongest breath event's level over the stationary floor, against data/task_events.yaml decision.snr_low_db
+    breath_event_db_over_local:
+      unit: dB
+      producer: unit B
+      meaning: that event's level over its local background, against decision.snr_high_db
+    breath_events_entangled:
+      unit:
+      producer: unit B
+      meaning: whether an impulse overlaps or abuts every clear breath event
+    breaths_found:
+      unit: breaths
+      producer: unit B
+      meaning: breaths the train counted, against the instructed count
+    breath_rhythm_hz:
+      unit: Hz
+      producer: unit B
+      meaning: the breathing-band modulation rate; a prior, never a decision
+  cough:
+    cough_onsets:
+      unit: coughs
+      producer: unit B
+      meaning: cough onsets found; none discards
+    coughs_against_instructed:
+      unit: coughs
+      producer: unit B
+      meaning: coughs found against the instructed count
+    cough_review:
+      unit:
+      producer: unit B
+      meaning: whether the cough count sits in the review band
+  voice:
+    phonation_found:
+      unit:
+      producer: unit B
+      meaning: whether phonation stands over the floor
+    phonation_voiced_s:
+      unit: s
+      producer: unit B
+      meaning: voiced time inside the phonation extent
+    longest_hold_s:
+      unit: s
+      producer: unit B
+      meaning: the longest held phonation
+    glide_travel_declared_st:
+      unit: semitones
+      producer: unit B
+      meaning: the glide's travel in the declared direction
+  speech:
+    lexical_words:
+      unit: words
+      producer: fold
+      meaning: lexical words in the consensus transcript
+  release:
+    release_ground:
+      unit:
+      producer: fold
+      meaning: why the release axis reads as it does; a withholding ground holds the recording
+prefixes:              # `<prefix>:<name>` items, named by what follows the colon
+  gate:
+    group: speech
+    unit:
+    producer: fold
+    meaning: a task-group or flag gate's reading against its bound
+  phonation_review:
+    group: voice
+    unit:
+    producer: unit B
+    meaning: a phonation reading that leaves the recording for review
+flags:                 # every other item is a ground key of data/decision_reasons.yaml, read as a flag
+  group: acquisition
+  unit:
+  producer: fold
+  meaning: a ground the fold raised; its reason is in data/decision_reasons.yaml
