@@ -496,7 +496,23 @@ STEP_COUNTER_EXAMPLES: dict[str, tuple[dict[str, Any], str]] = {
     ),
     "metrics-schema-macro-recall-removed": (
         {"metrics_schema": _metrics_schema(headline=["macro_recall"])},
-        "headline",
+        r"headline\.0\n  Input should be 'balanced_accuracy'",
+    ),
+    "metrics-schema-pr-auc-without-positive": (
+        {"metrics_schema": _metrics_schema(per_class=["pos", "neg"], secondary=["pr_auc"])},
+        "E_SPEC_POSITIVE_REQUIRED",
+    ),
+    "metrics-schema-f1-without-positive": (
+        {"metrics_schema": _metrics_schema(per_class=["pos", "neg"], secondary=["f1"])},
+        "E_SPEC_POSITIVE_REQUIRED",
+    ),
+    "metrics-schema-pr-auc-multi-class": (
+        {"metrics_schema": _metrics_schema(secondary=["pr_auc"])},
+        "E_SPEC_SECONDARY_BINARY_ONLY",
+    ),
+    "metrics-schema-f1-multi-class": (
+        {"metrics_schema": _metrics_schema(secondary=["top1", "f1"])},
+        "E_SPEC_SECONDARY_BINARY_ONLY",
     ),
     "metrics-schema-ba-plus-accuracy-headline": (
         {"metrics_schema": _metrics_schema(headline=["balanced_accuracy", "accuracy"])},

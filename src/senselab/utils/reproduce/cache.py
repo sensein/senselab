@@ -166,22 +166,29 @@ def _site_dirs() -> list[str]:
 
 
 def _runtime_closure(installed: Mapping[str, Distribution]) -> set[str]:
-    """`DRIVER_PACKAGE`'s installed runtime dependency closure: requirements with no extra, transitively."""
-    seen: set[str] = set()
-    todo = [DRIVER_PACKAGE]
+    """`DRIVER_PACKAGE`'s installed runtime dependency closure, transitively.
+
+    `DRIVER_PACKAGE`'s own requirements are taken with no extra; a requirement that asks for extras
+    (``dep[x]``) also brings in ``dep``'s requirements for those extras.
+    """
+    seen: set[tuple[str, str]] = set()
+    names: set[str] = set()
+    todo: list[tuple[str, frozenset[str]]] = [(DRIVER_PACKAGE, frozenset())]
     while todo:
-        name = todo.pop()
-        if name in seen or name not in installed:
+        name, extras = todo.pop()
+        wanted = {"", *extras} - {extra for seen_name, extra in seen if seen_name == name}
+        if name not in installed or not wanted:
             continue
-        seen.add(name)
+        seen.update((name, extra) for extra in wanted)
+        names.add(name)
         for text in installed[name].requires or []:
             try:
                 req = Requirement(text)
             except InvalidRequirement:
                 continue
-            if req.marker is None or req.marker.evaluate({"extra": ""}):
-                todo.append(canonicalize_name(req.name))
-    return seen
+            if req.marker is None or any(req.marker.evaluate({"extra": extra}) for extra in wanted):
+                todo.append((canonicalize_name(req.name), frozenset(canonicalize_name(e) for e in req.extras)))
+    return names
 
 
 def driver_env_sha256() -> str:
@@ -189,8 +196,8 @@ def driver_env_sha256() -> str:
 
     Only the interpreter's own ``purelib`` and ``platlib`` dirs are read (never ``sys.path``, the cwd or
     ``PYTHONPATH``), and only `DRIVER_PACKAGE`'s runtime dependency closure there: its requirements
-    without an extra, followed transitively. `DRIVER_PACKAGE` itself is left out; its reproduce code is
-    `reproduce_source_sha256`.
+    without an extra, followed transitively along with the extras each requirement asks for.
+    `DRIVER_PACKAGE` itself is left out; its reproduce code is `reproduce_source_sha256`.
 
     Returns:
         A hex sha256 over ``sys.version`` and the sorted ``name==version`` of that closure.
@@ -460,7 +467,7 @@ def reset_result_dir(results_root: Path, key: str) -> Path:
     Raises:
         CacheError: ``E_KEY_BAD`` for a malformed key, ``E_RESULT_NOT_DIR`` if a symlink or non-directory
             holds the path, ``E_RESULT_DONE`` if the dir is complete, ``E_RESULT_UNREADABLE`` if the
-            summary cannot be read or is not an object with an integer exit (nothing is deleted then),
+            summary cannot be read or decoded or is not an object with an integer exit (nothing is deleted then),
             ``E_RESULT_RESET`` if removing or creating it fails.
     """
     out = result_dir(results_root, key)
@@ -471,7 +478,7 @@ def reset_result_dir(results_root: Path, key: str) -> Path:
             text = (out / SUMMARY).read_text()
         except FileNotFoundError:
             text = None
-        except OSError:
+        except (OSError, ValueError):
             raise CacheError("E_RESULT_UNREADABLE") from None
         if text is not None:
             try:
