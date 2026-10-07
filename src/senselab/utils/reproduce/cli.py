@@ -626,19 +626,37 @@ def _read_manifests(paths: Sequence[Path]) -> tuple[list[Manifest], list[str]]:
 
 
 def _manifest_changed(args: argparse.Namespace, paths: Sequence[Path], profile: Profile) -> int:
-    """Refuse a job whose manifests changed since submission; record ``E_MANIFEST_CHANGED`` where possible."""
+    """Refuse a job whose manifests changed since submission.
+
+    Its row becomes ``failed`` with ``E_MANIFEST_CHANGED`` and its dependents' pending rows ``never-ran`` with
+    the same code, where the changed manifests still parse; row order is kept, and only rows of this job's
+    submission (or untagged) are changed.
+    """
     try:
         manifests = _manifests(paths)
     except (ValueError, OSError, yaml.YAMLError):
         manifests = []
     config = _run_config(args, paths, profile)
     analysis = {s.name: m.name for m in manifests for s in m.steps}
-    for step in args.step or []:
-        print(status_line(step, None, "failed", EXIT_FAILED, ["E_MANIFEST_CHANGED"]))
+    specs = {s.name: s for m in manifests for s in m.steps}
+    code = ["E_MANIFEST_CHANGED"]
+
+    def write(name: str, rows: list[dict[str, Any]], **filters: Any) -> None:  # noqa: ANN401
+        record = cache.run_dir(profile.runs_root, config.date, name) / run.RUN_JSON
+        with contextlib.suppress(OSError, ValueError, cache.CacheError):
+            order = [r["step"] for r in run.read_run_record(record)]
+            run.update_run_record(profile.runs_root, config.date, name, rows, order=order, **filters)
+
+    steps = list(args.step or [])
+    for step in steps:
+        print(status_line(step, None, "failed", EXIT_FAILED, code))
         if step in analysis:
-            row = {"step": step, "key": None, "status": "failed", "exit": EXIT_FAILED, "codes": ["E_MANIFEST_CHANGED"]}
-            with contextlib.suppress(OSError, ValueError, cache.CacheError):
-                run.update_run_record(profile.runs_root, config.date, analysis[step], [row], order=[step])
+            row = {"step": step, "key": None, "status": "failed", "exit": EXIT_FAILED, "codes": code}
+            write(analysis[step], [row], submission=args.submission, allow_untagged=True)
+    dependents = run.descendants(specs, {s for s in steps if s in specs}) - set(steps)
+    for name in sorted({analysis[d] for d in dependents}):
+        rows = [run.never_ran_row(d, code) for d in sorted(dependents) if analysis[d] == name]
+        write(name, rows, pending_only=True, submission=args.submission)
     return EXIT_FAILED
 
 
@@ -650,7 +668,11 @@ def _cmd_run(args: argparse.Namespace) -> int:
         return _manifest_changed(args, paths, profile)
     config = _run_config(args, paths, profile)
     if args.finalize:
-        run.finalize_run_records(manifests, config, submission=args.submission)
+        if args.submission is not None:
+            leftover = slurm.cancel_jobs(run.pending_jobs(manifests, config, args.submission))
+            if leftover:
+                _error(f"E_SCANCEL_FAILED: job(s) {','.join(leftover)} may still be queued")
+        run.finalize_run_records(manifests, config, submission=args.submission, state_of=slurm.job_state)
         return EXIT_OK
     outcomes = run.run_steps(manifests, config, only=args.step or None, submission=args.submission)
     for o in outcomes:
