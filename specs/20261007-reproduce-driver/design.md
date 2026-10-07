@@ -516,6 +516,16 @@ the step.
 - Non-regular files are refused rather than opened: opening a FIFO blocks.
 - Exclusions are whole path components, so the output digest can leave out `{out}/cuda-cache`
   (written by the CUDA JIT during the step) without also hiding a sibling such as `cuda-cache-x`.
+- Patterns and exclusions with an empty, `.` or `..` component are refused, so one file cannot be
+  named two ways and nothing outside the root can be reached by spelling.
+- `require_nonempty` (`E_DIGEST_EMPTY`) lets a caller refuse an input set that matched nothing; a
+  typo in a pattern would otherwise digest the empty set the same way before and after.
+- **Symlinks are asymmetric, by construction.** A pattern's wildcard-free leading components are
+  resolved by path, so a symlinked directory named there (or in a pattern with no wildcard at all)
+  is followed. Below that prefix the walk does not descend into symlinked directories, so a glob
+  never reaches one; this keeps a symlink loop or a link out of the data root from being walked
+  just because `**` matched it. A manifest that needs files behind a directory symlink names the
+  link in the pattern's fixed prefix.
 
 ## Metrics, expectations, provenance
 
@@ -538,33 +548,78 @@ suppressed.
 - Every name, label and count name an adapter may emit is declared in the manifest's
   `metrics_schema`. The declared names must all appear, so a pass rule cannot silently pass on a
   missing number.
-- Free text is never accepted. The only strings are declared labels, a small set of fixed words
-  (`unit`, `threshold_tuning`, `protocol`) and the split's `unit`/`stratify`, which must be lower-case
-  words without digits so that a subject code cannot be smuggled through.
-- Suppression replaces `n`, `counts.*` and `confusion.*` below the minimum cell with `"<k>"` rather
-  than rejecting the file: a small cell is expected in a real result and is not an adapter bug.
-  Degrees of freedom, `n_folds` and a fold's `n_groups` describe the design, not people, and are
-  never suppressed.
+- **Headline names are bound to the step's kind:** classification {balanced_accuracy, macro_recall,
+  macro_f1, auroc, f1, accuracy, top1, pr_auc, mcc}; detection {avg_map, map_at}; statistic
+  {f_stat}; count {count}. Otherwise a step could declare itself `statistic` to escape the imbalance
+  rules while reporting an accuracy.
+- A classification step declares at least two classes and a `balanced_accuracy` or `macro_recall`
+  headline, so every classification row reports at least one imbalance-aware number. A baseline
+  such as a Bernoulli or majority-class predictor is a classification step like any other, with
+  `accuracy` beside its majority-class floor and `threshold_tuning: none`.
+- Free text is never accepted. The only strings are declared labels and fixed words: `unit`
+  (`fraction`, `pp`), `threshold_tuning`, `protocol`, and the split's `unit` and `stratify`, each
+  from an enum in `metrics.py`. A new unit or stratification is added by editing that enum, in a
+  reviewed change, never by a manifest.
 
 **Imbalance.** A headline number on an imbalanced split means little without its floor, so a
 classification or detection step's output is refused unless it carries:
 
-- `per_class.<label>.prevalence` for every declared class
-- a `floor` on every headline entry: the value a trivial classifier gets (balanced accuracy 0.5 or
-  1/k, F1 of the all-positive predictor, average precision = prevalence, majority-class accuracy)
-- `threshold_tuning`, which may only be `validation` or `none`; a threshold tuned on the test split
-  cannot be written down
+- `prevalence` in [0, 1] for every declared class; for classification (single-label by definition
+  here) also `recall` and `precision` for every class, and prevalences that sum to 1 within 1e-6
+- `floor` and `lift` on every headline entry; `lift` must equal value minus floor
+- `threshold_tuning`: `validation`, `none` or `test`. `test` is accepted with the warning
+  `W_TUNED_ON_TEST` (returned beside the clean object, not an error) so that a reproduction can
+  record honestly that the source tuned its threshold on the test split; refusing it would force
+  the adapter to misreport the source.
 
-`lift` (value minus floor) is optional and checked against the two when present. `pr_auc` and `mcc`
-are headline names like any other, declared when the adapter emits them.
+**Which floors are checked.** With k declared classes and the scored split's prevalences, the floor
+is checked within 1e-6 (scaled by 100 for a `pp` entry):
 
-**Split protocol.** `split_report.protocol` is `seen_subject` or `unseen_subject`; both are legitimate
-evaluations. A seen-subject split asks whether a model works on new clips of people it was trained
-on; an unseen-subject split asks whether it works on new people. The protocol travels with every
-number so that a seen-subject result is never read as generalization to new people. `invariant_ok`
-records whether the split met its own protocol's invariant (no subject in two partitions for
-unseen; every test subject in train and no session or video in two partitions for seen). A
-`false` is a finding about the original split, reported with the number, not a schema error.
+| headline | floor |
+|---|---|
+| balanced_accuracy, macro_recall | 1/k |
+| auroc | 0.5 |
+| mcc | 0 |
+| accuracy, top1 | the largest class prevalence (majority class) |
+| pr_auc | p, the positive-class prevalence, when the schema declares `positive` |
+| f1 | 2p/(1+p), the all-positive predictor, when the schema declares `positive` |
+
+`macro_f1`, `avg_map` and `map_at` (and `pr_auc`/`f1` without a declared positive class) are checked
+for presence only: their trivial-classifier value depends on choices (which trivial predictor,
+which IoU thresholds, per-class averaging) that the vocabulary does not carry, so a fixed formula
+would be wrong for some rows. `positive` may be declared only on a binary classification step.
+
+**Split protocol.** `split_report.protocol` is `seen_subject`, `unseen_subject` or `none`.
+`seen_subject` and `unseen_subject` are both legitimate evaluations. A seen-subject split asks
+whether a model works on new clips of people it was trained on; an unseen-subject split asks whether
+it works on new people. The protocol travels with every number so that a seen-subject result is
+never read as generalization to new people. `invariant_ok` records whether the split met its own
+protocol's invariant (no subject in two partitions for unseen; every test subject in train and no
+session or video in two partitions for seen). A `false` is a finding about the original split,
+reported with the number, not a schema error.
+
+- `none` labels a source split that has no protocol at all (for example a row-level split), and is
+  accepted only with `invariant_ok: false`, so it can never read as a clean split.
+- A classification or detection step must emit a `split_report`. The only way out is an explicit
+  schema opt-out, `split: {none: whole_dataset}`, for a step scored on the whole dataset with no
+  held-out partition (a baseline); a step that opts out may not also emit a report.
+- For classification, every fold's `prevalence` must give every declared class (and sum to 1).
+
+**Suppression and its residual risk.** `n`, `counts.*`, `confusion.*`, a `count` headline value and
+a fold's `n_groups` below the minimum cell become `"<k>"` rather than rejecting the file: a small
+cell is expected in a real result and is not an adapter bug. `n_groups` is suppressed only when the
+fold's unit is a person (`subject`, `family`) or no unit is given; groups of sessions, videos, clips,
+recordings or rows describe the design, not people. Degrees of freedom and `n_folds` are never
+suppressed.
+
+Accepted residual risk: a prevalence multiplied by an unsuppressed `n` (or a recall times a
+class size) can reconstruct a small cell that was suppressed elsewhere. Closing that would mean
+rounding or suppressing prevalences and rates, which are the numbers the imbalance rules exist to
+report. The output stays aggregate-only and is read only through the narrow reruns exception.
+
+The driver validates twice, once the adapter's output and once the final object after writing the
+`expect` results (`writer="driver"`), and must pass the same `min_cell` both times: a token
+`"<5"` is accepted again only under `min_cell=5`.
 
 **Driver-only keys.** `delta`, `target`, `tolerance` and `pass` are refused anywhere in adapter
 output. Only the driver, evaluating `expect`, writes them; otherwise an adapter could report its own
@@ -572,7 +627,9 @@ pass.
 
 **Metric addresses.** `expect` and `from_step` name a value as `<headline>`, `<headline>@<label>`,
 `counts.<name>`, `per_class.<label>.<field>` or `confusion.<cell>`. A manifest's `expect` metrics are
-checked against its `metrics_schema` when the manifest loads, and a bare headline name that matches
+checked against its own `metrics_schema` when the manifest loads, and `expect.unit` is `fraction`
+or `pp`. `from_step.metric` names a metric of the upstream step, so it is checked against the
+upstream step's schema when the DAG is assembled (B11), not here. A bare headline name that matches
 several entries is refused when read, rather than picking one.
 
 **Host record.** Hostname, CPU model and counts, the first GPU's name and driver from `nvidia-smi`

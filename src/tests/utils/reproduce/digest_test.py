@@ -148,7 +148,7 @@ def test_missing_root_raises_a_code_without_the_path(tmp_path: Path) -> None:
     assert info.value.__cause__ is None
 
 
-@pytest.mark.parametrize("pattern", ["/abs/*.csv", "../up/*.csv", "a/../../b"])
+@pytest.mark.parametrize("pattern", ["/abs/*.csv", "../up/*.csv", "a/../../b", "./a/*.csv", "a/./*.csv", "a//b", "a/"])
 def test_bad_pattern_is_refused(tmp_path: Path, pattern: str) -> None:
     """Bad pattern is refused."""
     with pytest.raises(DigestError) as info:
@@ -183,3 +183,30 @@ def test_empty_match_is_a_zero_count(tmp_path: Path) -> None:
     digest, count = input_set_digest(root, ["nothing/*.csv"])
     assert count == 0
     assert len(digest) == 64
+
+
+def test_dot_exclusion_is_refused(tmp_path: Path) -> None:
+    """Exclusions follow the same component rules as patterns."""
+    with pytest.raises(DigestError) as info:
+        input_set_digest(_tree(tmp_path / "t"), ["**"], exclude=["./a"])
+    assert info.value.code == "E_DIGEST_BAD_PATTERN"
+
+
+def test_require_nonempty(tmp_path: Path) -> None:
+    """``require_nonempty`` turns an empty match into ``E_DIGEST_EMPTY`` and leaves a match alone."""
+    root = _tree(tmp_path / "t")
+    with pytest.raises(DigestError) as info:
+        input_set_digest(root, ["nothing/*.csv"], require_nonempty=True)
+    assert info.value.code == "E_DIGEST_EMPTY"
+    assert str(info.value) == "E_DIGEST_EMPTY"
+    assert input_set_digest(root, PATTERNS, require_nonempty=True)[1] == 3
+
+
+def test_symlinked_directories_followed_only_in_fixed_leading_components(tmp_path: Path) -> None:
+    """A symlinked directory is followed when named in a pattern's fixed prefix, never when reached by a glob."""
+    root = _tree(tmp_path / "t")
+    (root / "via").symlink_to(root / "a", target_is_directory=True)
+    assert input_set_digest(root, ["**/one.csv"])[1] == 1
+    assert input_set_digest(root, ["*/one.csv"])[1] == 1
+    assert input_set_digest(root, ["via/one.csv"])[1] == 1
+    assert input_set_digest(root, ["via/**/*.csv"])[1] == 2
