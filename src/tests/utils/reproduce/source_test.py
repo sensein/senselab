@@ -16,7 +16,7 @@ import pytest
 from senselab.utils.reproduce import source
 from senselab.utils.reproduce.locks import ReproduceLockError
 from senselab.utils.reproduce.source import ReproduceSourceError
-from senselab.utils.reproduce.spec import FileRef, SourceSpec
+from senselab.utils.reproduce.spec import FileRef, SourceSpec, StepSpec
 
 FIXTURE_ENV = {
     "PATH": "/usr/bin:/bin",
@@ -579,3 +579,50 @@ def test_submodule_notebook_outputs_fail_closed(
     with pytest.raises(ReproduceSourceError) as reused:
         source.checkout(url, commit, [], cache=cache)
     assert reused.value.code == source.SUBMODULE_NOTEBOOK_OUTPUTS
+
+
+def _step(repo: str, commit: str, patches: list[FileRef]) -> StepSpec:
+    sha = "ab" * 32
+    return StepSpec.model_validate(
+        {
+            "name": "s",
+            "repo": repo,
+            "commit": commit,
+            "kind": "python",
+            "env": {
+                "python": "3.12",
+                "python_exact": "3.12.11",
+                "torch": None,
+                "body": {"lock": "b.lock", "lock_sha256": sha, "source": "uv-export", "export_cmd": ["uv"]},
+                "exclude_newer": "2026-01-01",
+            },
+            "argv": ["x"],
+            "resources": {"profile": "cpu"},
+            "adapter": "a.py",
+            "hf_weights": [],
+            "patches": [p.model_dump() for p in patches],
+            "metrics_schema": {"kind": "statistic", "headline": ["f_stat"]},
+        }
+    )
+
+
+def test_prefetched_checkout_finds_verifies_and_never_creates(
+    repos: dict[str, object], manifest_dir: Path, tmp_path: Path
+) -> None:
+    """A run resolves the prefetched worktree for the step's patch set; a missing or dirty one is refused."""
+    cache = tmp_path / "cache"
+    step = _step(_url(repos), str(repos["commit"]), [_ref(manifest_dir, "a.patch")])
+    with pytest.raises(ReproduceSourceError) as info:
+        source.prefetched_checkout(step, cache=cache)
+    assert info.value.code == source.WORKTREE_MISSING
+    assert not (cache / "wt").exists()
+    made = source.checkout_step(step, cache=cache, base_dir=manifest_dir)
+    assert source.prefetched_checkout(step, cache=cache) == made
+    other = _step(_url(repos), str(repos["commit"]), [_ref(manifest_dir, "b.patch")])
+    with pytest.raises(ReproduceSourceError) as info:
+        source.prefetched_checkout(other, cache=cache)
+    assert info.value.code == source.WORKTREE_MISSING
+    (made.worktree / "stray.txt").write_text("x")
+    with pytest.raises(ReproduceSourceError) as info:
+        source.prefetched_checkout(step, cache=cache)
+    assert info.value.code == source.WORKTREE_DIRTY

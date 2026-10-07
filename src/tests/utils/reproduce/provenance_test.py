@@ -19,6 +19,7 @@ from senselab.utils.reproduce.provenance import (
     LABEL,
     STORE_FILE,
     Artifact,
+    drop_unrecordable_host_values,
     record_step,
 )
 
@@ -340,3 +341,36 @@ def test_the_store_file_is_json_lines(recorded: dict[str, Any]) -> None:
     """Every line of the store parses, so a reader never meets a half-written record."""
     lines = (recorded["out"] / "prov" / STORE_FILE).read_text().splitlines()
     assert all(isinstance(json.loads(line), dict) for line in lines)
+
+
+def test_drop_unrecordable_host_values_nulls_only_off_pattern_values(tmp_path: Path) -> None:
+    """Off-pattern strings, bad counts and unknown keys are dropped by name; the result always records."""
+    host = _host() | {"gpu_name": PROBE, "cpu_count": True, "cpus_allowed": -1, "extra": "x"}
+    clean, dropped = drop_unrecordable_host_values(host)
+    assert dropped == ["cpu_count", "cpus_allowed", "extra", "gpu_name"]
+    assert set(clean) == set(HOST_KEYS) and clean["gpu_name"] is None and clean["hostname"] == "node042"
+    assert PROBE not in json.dumps(clean)
+    record_step(tmp_path / "prov", **_kwargs(tmp_path, host=clean))
+    assert drop_unrecordable_host_values(_host()) == (_host(), [])
+
+
+def test_a_symlinked_prov_dir_is_refused(tmp_path: Path) -> None:
+    """The record never writes through a symlink in place of ``prov/``."""
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (tmp_path / "prov").symlink_to(elsewhere, target_is_directory=True)
+    with pytest.raises(ValueError, match="prov_dir"):
+        record_step(tmp_path / "prov", **_kwargs(tmp_path))
+    assert list(elsewhere.iterdir()) == []
+
+
+def test_a_derived_venv_name_is_recorded(tmp_path: Path) -> None:
+    """A derived venv's ``+<overlay sha8>`` suffix is part of its closed-form name; other ``+`` uses are not."""
+    kwargs = _kwargs(tmp_path)
+    derived = kwargs["venv"].path.with_name("repro-demo-SUBJ13+89abcdef")
+    kwargs["venv"].path.rename(derived)
+    record_step(tmp_path / "prov", **(kwargs | {"venv": kwargs["venv"]._replace(path=derived)}))
+    odd = derived.with_name("repro+demo")
+    derived.rename(odd)
+    with pytest.raises(ValueError, match="venv name"):
+        record_step(tmp_path / "prov2", **(kwargs | {"venv": kwargs["venv"]._replace(path=odd)}))

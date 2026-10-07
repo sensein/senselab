@@ -89,6 +89,7 @@ CHAIN_MISMATCH = "chain-mismatch"
 TREE_MISMATCH = "tree-mismatch"
 WORKTREE_DIRTY = "worktree-dirty"
 WORKTREE_MISMATCH = "worktree-mismatch"
+WORKTREE_MISSING = "worktree-missing"
 REF_MISSING = "ref-missing"
 DENY_PATTERN_INVALID = "deny-pattern-invalid"
 SUBMODULE_NOTEBOOK_OUTPUTS = "submodule-notebook-outputs"
@@ -896,6 +897,37 @@ def checkout_step(step: StepSpec, *, cache: Path, base_dir: Path, deny_patterns:
         submodules=step.submodules,
         deny_patterns=deny_patterns,
     )
+
+
+def prefetched_checkout(step: StepSpec, *, cache: Path) -> Checkout:
+    """The worktree prefetch made for a step, verified; a run never creates one.
+
+    Args:
+        step: The step.
+        cache: The reproduce cache root.
+
+    Returns:
+        The recorded checkout, after `verify_checkout`.
+
+    Raises:
+        ReproduceSourceError: ``worktree-missing`` when no complete worktree exists for the step's
+            (repository, commit, patch set); ``worktree-mismatch`` when its marker records another
+            checkout or submodules the step disables; otherwise as `verify_checkout`.
+    """
+    patch_set = patch_set_sha256(step.patches)
+    marker = _marker_path(worktree_dir(cache, step.repo, step.commit, patch_set))
+    if not marker.is_file():
+        raise ReproduceSourceError(WORKTREE_MISSING, "no prefetched worktree for the step")
+    try:
+        co = _read_marker(marker)
+    except (OSError, ValueError, TypeError, KeyError):
+        raise ReproduceSourceError(WORKTREE_MISMATCH, f"{marker.name} cannot be read") from None
+    if (co.repo, co.commit, co.patch_set_sha256) != (step.repo, step.commit, patch_set):
+        raise ReproduceSourceError(WORKTREE_MISMATCH, f"{marker.name} records another checkout")
+    if co.submodules and not step.submodules:
+        raise ReproduceSourceError(WORKTREE_MISMATCH, f"{marker.name} has submodules the step disables")
+    verify_checkout(co)
+    return co
 
 
 def checkout_sources(sources: Iterable[SourceSpec], *, cache: Path) -> dict[str, Checkout]:
