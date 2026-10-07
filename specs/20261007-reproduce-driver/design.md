@@ -95,6 +95,21 @@ The install runs four stages, each `--no-deps`. Stages 1, 2 and 4 also use `--re
 - Overlay pins must agree with the base pins.
 - The torch pins must agree with the resolve the body came from.
 
+How `locks.check_integrity` reads those rules:
+
+- The header digest covers the requirement lines, Python, CUDA cap, `exclude_newer`, the config and
+  overrides sha256s and `extra_no_emit`. It leaves out the backend venvs' IPC packages, because a
+  reproduce env holds only what the original env held.
+- An overlay entry for a name the base locks also pin must equal one base entry in both pin and
+  hash set. A universal lock can pin one name several times under different markers, so the overlay
+  entry is matched against any of them.
+- Torch versions are compared with the `+cuXXX` local tag dropped, since a resolve and a URL wheel
+  file name may spell it differently. Against a repository `uv.lock` the torch lock's hashes must
+  also be among that version's wheel hashes: the same version on another index can be a different
+  file.
+- The repository `uv.lock` lives in the checkout, not the manifest repository, so the caller passes
+  its path.
+
 **The venv name** is `repro-<analysis>-<env_key8>`. `env_key` is derived from inputs only:
 
 - the lock sha256s
