@@ -1,8 +1,80 @@
 # Resuming the review pass
 
-## In progress, 2026-10-06 — redaction v9, readable triage state, breath and cough measures
+## State at r17, 2026-10-07 — AIRWAY move, VOICE redesign, r17 parquet
 
 Read this section first. Everything below it is history.
+
+### Where things are
+
+| | |
+|---|---|
+| Code branch | `fix/policy-v8` (PR #581 into `triage`). Tip at writing: `8b068a02`. |
+| Corpus | `/orcd/scratch/bcs/002/satra/triage_r9_20260929/out` (62,550 runs), re-folded in place (r17c re-fold) |
+| Latest parquet | `recording_vectors_r17` (schema 23), at `/orcd/scratch/bcs/002/satra/recording_vectors_r17/`; local copy `~/Downloads/recording_vectors_20261006_r17/` |
+| Pinned checkout | `senselab-r26` (moved forward through `c3e97dd4` → `a8a95cea` → `8b068a02`, each time only with nothing running from it) |
+| Owner labels | `~/Downloads/triage_listening_labels_20261006.csv` (~180 rows), plus per-set `index.csv` in `voice_check_20261006/` (and `discard_cause/`), `discard_contested_check_20261006/` and `breath_review_check_20261006/` |
+| Derivatives | still at the r11 state; the r17 sync is next |
+
+### r17 counts
+
+| Branch | discard | flag | pass | rerun | Total |
+|---|---|---|---|---|---|
+| AIRWAY | 1,814 | 688 | 10,363 | 144 | 13,009 |
+| SPEECH | 1,390 | 2,568 | 37,071 | 178 | 41,207 (unchanged from r16) |
+| VOICE | 79 | 268 | 7,870 | 88 | 8,305 |
+| no family | 29 | – | – | – | 29 |
+| Total | 3,312 | 3,524 | 55,304 | 410 | 62,550 |
+
+From r16 (3,914 / 6,741 / 51,435 / 460):
+- 599 discards and 3,876 flags now pass;
+- 616 passes now flag, mostly breath review and background speech;
+- 32 passes are now discarded, quiet or noise-only breath recordings (not yet listened to);
+- VOICE flags fell from 3,164 to 268; AIRWAY contested discards are 42, down from 335 before the narrowing.
+
+### What landed (fix/policy-v8)
+
+- `3eede30d`: **AIRWAY move.** Breath, cough and background speech are measured in the AIRWAY branch, and VERDICT only reads them. Discard is released as `discarded` with no task-audio cuts. `discard_contested` added; Clef is out of airway decisions.
+- `8864ed00`, `dd8635c9`: **breath fixes.** Vocalised exhales count, along with edge phases and acoustic speech; word timing uses consensus; speech splits the train only across more than two cycles; an edge phase needs ≥5 dB over the floor.
+- `c3e97dd4`: **the breath train decides presence.** Inside the review band the old measure separates review from discard.
+- `7075d730`: **VOICE phonation redesign** (schema 23).
+- `a8a95cea`: **replay driver.** A node error now gives row status `errored`, and `--force` replays past the marker.
+- `8b068a02`: **contested narrowed.** A contest needs a train rise ≥10 dB, plus ≥3 detector events for the uncounted families.
+- **Specs:** `20261006-voice-phonation/`, `20261006-airway-move/`, `20261007-task-events-in-background/` (the next iteration).
+
+### The r17 run
+
+- Replay of 21,492 recordings: the airway families, all 460 reruns and all 8,305 VOICE recordings. Then the full re-fold, task audio, recording vectors and merge, using a chain helper because of the QOS job-count limit.
+- **FFmpeg incident:** the scratch miniforge (`~/orcd/scratch/miniforge/lib`) was found emptied. Every re-fold slice died at the first released-audio decode, and 144 replay SPEECH runs failed silently. `env_common.sh` now prepends `~/ffmpeg/lib` (backup `env_common.sh.bak-20261006`). The 144 were re-replayed with `--force`.
+
+### Owner decisions this cycle
+
+- **Disordered voice is data.** Rough, breathy, hoarse, creaky or unsustained phonation is measured, not flagged.
+- **The VOICE extent is the attempt,** from energy continuity starting at the inhale, and weakly voiced attempts are included. Discard only when nothing rises above the floor.
+- **Broken or restarted holds merge into one extent.** There is no minimum hold. A mic shutoff during phonation flags.
+- **Hum:** the extent comes from raw, with a residual mains-line guard; the enhanced stream is not the default.
+- **Annotations, not flags:** `route_mismatch` when the owning branch found its task, and `task_mismatch`.
+- "it's ok for now to triage some noisy recordings"; "don't overoptimize on specifics. determine the more general components".
+- **Clef is out of VOICE and AIRWAY decisions.**
+
+### Open
+
+- **Next iteration:** the general task-events design (`specs/20261007-task-events-in-background/`): a background model, event detection, rhythm as a prior, an activity-bounded extent, and evidence kept separate from the decision. The five owner questions are in that spec.
+- **The enhanced stream is not a decider**; it is only a hint for reviewers. On the owner labels it releases noise as readily as it rescues breathing.
+- **The breath review band is 486 flags**, 18.9% of the breath family against ≤3.4% for counted families. Acceptable for now.
+- **VOICE:** the break minimum (0.25 s) and the glide bound (6 st) are unfitted. 68de3829 reads as the wrong direction, 5b4817c2's extent runs past the glide, and the hum guard's false-fire rate is unchecked.
+- **Deferred:** multi-speaker, and background speech in voiced families.
+- **318 `route_unexplained` reruns** need a routing-rules fix or a fresh run; the replay cannot clear them.
+
+### Working rules learnt this round
+
+- Listen before changing a rule. Every listen batch overturned at least one fitted cut-off.
+- Fix classes, not recordings. Fit a few parameters jointly over all labels, with a held-out split.
+- Pull samples with original + enhanced + dyngain audio and a four-panel figure, and give an `index.csv` with an empty `owner_note` column.
+- Agents stall on large single edits: ask for edits under ~60 lines, commit per unit, and background tests.
+- Never hold a Slurm wait inside an agent. For a re-fold-only change, pin the checkout and re-submit `refold` → chain helper (`task_audio` → `rvec` → merge).
+- After any replay, grep the rows for non-ok status and the logs for `libtorchcodec`.
+
+## History, 2026-10-06 — redaction v9, readable triage state, breath and cough measures
 
 ### Where things are
 
