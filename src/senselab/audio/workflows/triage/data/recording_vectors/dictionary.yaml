@@ -81,7 +81,7 @@ columns:
 
   release:
     units: none
-    values: [release_without_redaction, release_with_redaction, withheld, not_assessed]
+    values: [release_without_redaction, release_with_redaction, withheld, discarded, not_assessed]
     description: Which artefact of the recording may be handed on.
     computation: The fold's `release` attribute (`FileVerdict.release`).
     source: [recording_vectors.py:extract, vocabulary.py:FileVerdict.record, vocabulary.py:_release_from]
@@ -92,10 +92,11 @@ columns:
     description: >-
       Why the release axis reads as it does, as one of the controlled ground strings `vocabulary.py`
       declares under RELEASE_WITHOUT_REDACTION_GROUNDS, RELEASE_UNKNOWN_GROUNDS,
-      RELEASE_WITHHELD_GROUNDS and RELEASE_WITH_REDACTION_GROUNDS.
+      RELEASE_WITHHELD_GROUNDS and RELEASE_WITH_REDACTION_GROUNDS, or DISCARDED behind every
+      `discarded` release.
     computation: The fold's `release_ground` attribute.
     source: [recording_vectors.py:extract, vocabulary.py:FileVerdict.record, vocabulary.py:_release_from]
-    null_means: REDACT passed and its planned masks stand, so the redacted copy releases on REDACT's own verdict; never null for a withheld recording.
+    null_means: REDACT passed and its planned masks stand, so the redacted copy releases on REDACT's own verdict; never null for a withheld or discarded recording.
 
   release_ground_key:
     units: none

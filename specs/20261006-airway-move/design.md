@@ -62,7 +62,8 @@ AIRWAY did not report at all, nothing of AIRWAY's is absent.
 ## A discard is not released
 
 Owner, 2026-10-06: "yes, discard should not be released". A triage discard now releases
-`withheld` on the ground `discarded` (`vocabulary.DISCARDED`, key `discarded`), whatever the
+`discarded` (split out of `withheld` on 2026-10-07, so `withheld` means a redaction-policy hold) on
+the ground `discarded` (`vocabulary.DISCARDED`, key `discarded`), whatever the
 redaction evidence would have said, so `settle_release` empties the release directory; and
 `task_audio.cut_task_audio` cuts no stream of a discarded recording and retires any earlier cut
 (`absent: discarded`). In r16, 3,880 discarded recordings carried a release value and 2,111 had

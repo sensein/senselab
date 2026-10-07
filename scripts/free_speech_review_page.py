@@ -66,6 +66,7 @@ RELEASE_ORDER = (
     "release_without_redaction",
     "release_with_redaction",
     "withheld",
+    "discarded",
     "not_assessed",
     "unrecorded",
 )
@@ -1754,7 +1755,7 @@ font-family:ui-monospace,Menlo,monospace}
 .r-release_without_redaction{background:#e7f3e7;border-color:#8fbf8f;color:#2c5c2c}
 .r-withheld{background:#fbe6e4;border-color:#d08e86;color:#8a2f24}
 .r-release_with_redaction{background:#eaeef6;border-color:#8fa0c0;color:#2f4670}
-.r-not_assessed,.r-unrecorded{background:#f1efe9;border-color:#bdb7a8;color:#6b6350}
+.r-discarded,.r-not_assessed,.r-unrecorded{background:#f1efe9;border-color:#bdb7a8;color:#6b6350}
 .cat-chip{display:inline-block;font-size:11px;background:var(--card);border:1px solid var(--line);
 border-radius:9px;padding:1px 7px;margin:0 3px 3px 0}
 .errors{color:#8a2f24;font-size:12px}
@@ -1896,7 +1897,7 @@ _DARK_RULES = """
 .r-release_without_redaction{background:#1d2e1d;border-color:#4f7a4f;color:#a8d3a8}
 .r-withheld{background:#331e1b;border-color:#8a4b42;color:#e8a89e}
 .r-release_with_redaction{background:#1c2334;border-color:#4a5c86;color:#a7bce4}
-.r-not_assessed,.r-unrecorded{background:#282622;border-color:#5a5449;color:#bdb5a5}
+.r-discarded,.r-not_assessed,.r-unrecorded{background:#282622;border-color:#5a5449;color:#bdb5a5}
 .rec[data-dec="release_without_redaction"]{border-right-color:#4f7a4f}
 .rec[data-dec="release_with_redaction"]{border-right-color:#4a5c86}
 .rec[data-dec="withheld"]{border-right-color:#a8463a}

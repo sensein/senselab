@@ -30,22 +30,28 @@ class Release(Enum):
     WITHOUT_REDACTION = "release_without_redaction"
     WITH_REDACTION = "release_with_redaction"
     WITHHELD = "withheld"
+    DISCARDED = "discarded"
     NOT_ASSESSED = "not_assessed"
 ```
 
-Four values, total and exclusive over the one question a consumer has: *which artefact of this
+Five values, total and exclusive over the one question a consumer has: *which artefact of this
 recording may I hand on?*
 
 | value | what it permits | what it does not assert |
 | --- | --- | --- |
 | `release_without_redaction` | the recording **as recorded**, and anything derived from it. A reading of its lexical content ran and found nothing a redaction would remove | that the recording is non-identifying. A voice identifies its speaker by construction; this axis is an authority on lexical content only |
 | `release_with_redaction` | **only** REDACT's redacted artefact. The original located findings and had them removed, so handing the original on would hand the findings on | nothing about the store, which holds the unredacted consensus transcript by design and is append-only |
-| `withheld` | neither artefact | — |
+| `withheld` | neither artefact, because the redaction policy holds it | — |
+| `discarded` | neither artefact, because triage discarded the recording | — |
 | `not_assessed` | nothing | — |
 
 `release_with_redaction` permits **exactly what `releasable` permitted** — every byte of the old
 rule, renamed so that the name says which file it was always about. No recording gains permission
 from this change.
+
+`discarded` was split out of `withheld` on 2026-10-07 (owner: "separate withheld into discard vs
+withheld for policy"). Both permit nothing; the split keeps a policy hold from being counted with a
+triage discard. At r17 that is 3,312 `discarded` and 253 `withheld`.
 
 ## 3. `nothing_to_redact` does not survive, and it does not collapse whole
 
