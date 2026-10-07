@@ -51,7 +51,8 @@ body.review { margin: 0; background: var(--ground); color: var(--ink); font: 13p
 .rv-chip.v-pass { border-color: var(--good); color: var(--good); }
 .rv-chip.v-review { border-color: var(--warn); color: var(--warn); }
 .rv-chip.v-discard { border-color: var(--bad); color: var(--bad); }
-.rv-detail h2 { font-size: 13px; font-family: var(--mono); word-break: break-all; margin: 0 0 4px; }
+.rv-detail h2 { font-size: 13px; font-family: var(--mono); word-break: break-all; margin: 0 0 4px;
+  text-transform: none; letter-spacing: 0; }
 .rv-detail section { margin: 10px 0; }
 .rv-detail h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--ink-2); margin: 0 0 4px; }
 .rv-spec { width: 100%; max-width: 900px; height: 190px; display: block; background: var(--panel);

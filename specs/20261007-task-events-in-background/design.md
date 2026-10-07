@@ -635,3 +635,42 @@ the attributes the fold decides each task reading on (breath `decision`, cough `
 `<node>:<reading>.<field>`, so the recording is `review` / `not_measured` with an evidence item
 naming the field, never a pass. The re-fold dry run of 100 r17 stores passed six pre-unit-B breath
 readings, which had no `decision`, silently.
+
+## Unit C step 4: the review page (built)
+
+`scripts/triage_review_page.py` builds it in two phases: `extract` walks a run tree on the cluster and
+writes one JSON line per recording; `render` writes `index.html` plus side files under `data/`. The
+page code is `src/senselab/audio/workflows/triage/review_page/`.
+
+- **One reader for the decision.** Each record's decision and evidence come from
+  `decision_tables.decision_rows`, so the page shows exactly what `triage_decisions` and
+  `triage_evidence` hold. A speech task's transcript, PII marks, release ground and LLM summary come
+  from the free-speech page's own reader (`recording_record`, `paragraph`), and the page carries that
+  page's mark rules (`MARK_STYLE`), so a mark looks and means the same on both.
+- **Reuse, not a second plot.** Explore is the recording-vectors viewer's `CorpusView` over its axis
+  catalogue; the page adds its columns through `SchemaAxes.register` (branch, reason, run status,
+  reason and annotation sets, evidence item sets, and one `ev:<name>` column per evidence item, typed
+  from its values) and re-reads the catalogue with `SchemaFacets.refresh`. Axes are offered per
+  evidence group from `data/decision_evidence.yaml`. Brushes, facets and search narrow one
+  selection, which the Review list shows.
+- **Index versus side files.** The inlined index holds what filtering needs: dictionary-coded
+  scalars, set columns, evidence values by item, and a speech task's plain transcript for search.
+  Everything per recording (the quantised spectrogram, overlays, stream paths, every evidence item,
+  the transcript view) is in side files of `shards.records` recordings each, loaded by a script tag
+  when a recording in that block is opened, which works from `file://` where `fetch` does not.
+- **Spectrogram.** 16 log-spaced bands × 64 time bins over the whole recording, four levels (2 bits a
+  cell, 256 bytes, 344 characters of base64), levels relative to the recording's own 20th percentile
+  and maximum; drawn on canvas with the extent, the task events, the background's active regions and
+  its issues (impulses, faults, background speech). No audio is embedded. Served from the cluster over
+  an ssh tunnel the page plays the stored streams and links the full figure.
+- **The reviewer's export** is JSON whose entries carry the owner label table's columns
+  (`listen_set` = `triage_review_<page id>`, `owner_label` = `reviewer_<verdict>`), so
+  `scripts/evaluate_task_events.py` reads it as labels; `owner_label_map.yaml` maps
+  `reviewer_pass`/`reviewer_review`/`reviewer_discard` to `present`/`present_flagged`/`absent`.
+  Decisions are kept in the browser's storage under the page id and can be imported back.
+- **Size, measured on a sample of eight whole r17 sessions (307 recordings) replayed at this
+  branch:** `index.html` 252 kB, of which about 150 kB is the inlined code and styles, so about
+  330 B per recording in the index; side files 1.47 MB, about 4.8 kB per recording (218 of the 307
+  are speech tasks carrying a transcript view). Scaled to 62,550 recordings: an index of about
+  21 MB and about 300 MB of side files in 126 files of about 2.4 MB, one loaded per block opened.
+  Extract ran at about 7 recordings a second on four workers.
