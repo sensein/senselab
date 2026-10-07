@@ -7,6 +7,7 @@ from senselab.audio.workflows.triage.cough_pattern import CoughPattern
 from senselab.audio.workflows.triage.nodes import airway_task
 from senselab.audio.workflows.triage.nodes import verdict as verdict_module
 from senselab.audio.workflows.triage.nodes.common import software_agent, write_measurement
+from senselab.audio.workflows.triage.task_events import TaskEvent, TaskEvidence
 from senselab.audio.workflows.triage.vocabulary import SUPERSEDES, standing_task_extents
 from senselab.utils.prov_store import Entity, ProvStore
 
@@ -58,16 +59,29 @@ def _seed(name: str, attributes: dict[str, object]) -> ProvStore:
     return store
 
 
+def _task_evidence(decision: str, phases: int) -> TaskEvidence:
+    events = tuple(TaskEvent(float(i), float(i) + 0.5, 15.0) for i in range(phases))
+    return TaskEvidence(events, events, None, (0.0, float(phases)), decision, "clear")
+
+
 def test_verdict_reads_the_breath_reading_airway_wrote() -> None:
-    """VERDICT's task evidence is AIRWAY's breath reading, unchanged."""
-    attributes = airway_task.breath_attributes(BreathPattern(pattern="alternating_breaths", events_n=6))
+    """VERDICT's task evidence is AIRWAY's breath reading, unchanged: the decision and the breaths it counts."""
+    read = BreathPattern(pattern="alternating_breaths", events_n=6, evidence=_task_evidence("present", 6))
+    attributes = airway_task.breath_attributes(read)
     evidence = verdict_module._task_evidence(
         _seed(airway_task.BREATH_READING, attributes), "respiration-and-cough-fivebreaths"
     )
     assert evidence.breath_mode is not None
+    assert evidence.breath_decision == "present"
+    assert evidence.breath_train_breaths == 3
     assert evidence.breath_pattern == "alternating_breaths"
-    assert evidence.breath_events_n == 6
     assert evidence.owner_absent_inputs == ()
+
+
+def test_a_breath_reading_without_the_plain_stream_is_absent() -> None:
+    """With no task evidence the breath reading names the plain stream as its absent input."""
+    attributes = airway_task.breath_attributes(BreathPattern(pattern="alternating_breaths", events_n=6))
+    assert attributes["absent"] == ["plain"] and attributes["decision"] is None
 
 
 def test_verdict_reads_the_cough_reading_airway_wrote() -> None:

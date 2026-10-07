@@ -307,10 +307,11 @@ class TaskEvidence:
         breath_events_n: How many breath events the measure found, or None.
         breath_vetoed_by: The veto that says what the measure found is not breathing, one of
             ``breath_pattern.VETO_*`` (``breath_pattern.breath_veto_of``), or None.
-        breath_train_breaths: The breaths the breath train counts (its phases over two, rounded half
-            up), or None where it was not read.
-        breath_review: Whether the breath train is weak or irregular enough to leave for review
-            (``breath_pattern.in_review_band``).
+        breath_train_breaths: The breaths the task evidence's dominant cluster counts (its events over
+            two, rounded half up), or None where it was not read.
+        breath_decision: The task evidence's decision, ``present``, ``review`` or ``absent``
+            (``task_events.decide``), or None where it was not read.
+        breath_review: Whether the task evidence leaves the breath reading for review.
         breath_reading: The measure's full reading, for the verdict record; empty where none.
         cough_mode: ``counted`` or ``performed`` for a cough family decided on the cough-onset measure
             (``data/cough_pattern.yaml``), by whether its instruction speaks a count; None otherwise.
@@ -351,6 +352,7 @@ class TaskEvidence:
     breath_events_n: int | None = None
     breath_vetoed_by: str | None = None
     breath_train_breaths: int | None = None
+    breath_decision: str | None = None
     breath_review: bool = False
     breath_reading: dict[str, Any] = field(default_factory=dict)
     cough_mode: str | None = None
@@ -379,31 +381,19 @@ NO_BREATH_CAPTURED = "no_breath_captured"
 """Discard ground: the breath train of a breath task counted no breath."""
 BREATH_SUSTAINED = "sustained"
 BREATH_COUNTED = "counted"
-_ALTERNATING_BREATHS = "alternating_breaths"
 
 
 def breath_present(evidence: TaskEvidence) -> bool:
-    """Whether a breath family's breath train found breathing.
+    """Whether a breath family's task events found breathing.
 
     Args:
         evidence: The task evidence.
 
     Returns:
-        True where the breath train counted at least one breath (one phase) outside the review band;
-        inside the band (``breath_review``), only where the measure's own events also found breathing.
-        False where the train counted none or the measure was not read.
+        True where the task evidence decided ``present`` or ``review``; False where it decided
+        ``absent`` or was not read.
     """
-    if evidence.breath_pattern is None or (evidence.breath_train_breaths or 0) == 0:
-        return False
-    return not evidence.breath_review or _measure_found(evidence)
-
-
-def _measure_found(evidence: TaskEvidence) -> bool:
-    if evidence.breath_vetoed_by is not None:
-        return False
-    if evidence.breath_mode == BREATH_SUSTAINED:
-        return evidence.breath_pattern == _ALTERNATING_BREATHS
-    return (evidence.breath_events_n or 0) > 0
+    return evidence.breath_decision in ("present", "review")
 
 
 def breath_conforms(evidence: TaskEvidence) -> bool:
@@ -449,18 +439,17 @@ def breath_shortfall(evidence: TaskEvidence) -> str | None:
 
 
 def breath_review_reading(evidence: TaskEvidence) -> str:
-    """The breath train's readings a low-confidence review flag carries.
+    """The task evidence a low-confidence breath review flag carries.
 
     Args:
         evidence: The task evidence.
 
     Returns:
-        ``"P phases, cycle CV c, rise r dB"``, with ``none`` for a reading absent.
+        ``"N events, best SNR s dB (why)"``, with ``none`` for a reading absent.
     """
-    train = evidence.breath_reading.get("train") or {}
+    read = evidence.breath_reading.get("evidence") or {}
     return (
-        f"{train.get('phases', 0)} phases, cycle CV {train.get('cycle_cv', 'none')}, "
-        f"rise {train.get('rise_db', 'none')} dB"
+        f"{read.get('events_n', 0)} events, best SNR {read.get('best_snr_db', 'none')} dB ({read.get('why', 'none')})"
     )
 
 
@@ -1746,7 +1735,9 @@ def no_required_event(evidence: TaskEvidence, performed: bool) -> bool:
         False where it names none, reported no count, or the task was performed.
     """
     if evidence.breath_mode is not None:
-        return evidence.breath_pattern is not None and not evidence.owner_absent_inputs and not breath_present(evidence)
+        return (
+            evidence.breath_decision is not None and not evidence.owner_absent_inputs and not breath_present(evidence)
+        )
     if evidence.cough_mode is not None:
         return evidence.cough_onsets_n == 0 and not evidence.owner_absent_inputs
     if evidence.voice_mode is not None:
@@ -1900,7 +1891,7 @@ def fold_file_verdict(
         for branch in branches_seen
     }
     findings = {branch: _found(branch in by_branch, spans.get(branch, 0)) for branch in branches_seen}
-    breath_decides = task_evidence.breath_mode is not None and task_evidence.breath_pattern is not None
+    breath_decides = task_evidence.breath_mode is not None and task_evidence.breath_decision is not None
     if breath_decides and _AIRWAY in findings:
         findings[_AIRWAY] = KindState.PRESENT.value if breath_present(task_evidence) else KindState.ABSENT.value
     cough_decides = task_evidence.cough_mode is not None and task_evidence.cough_onsets_n is not None
