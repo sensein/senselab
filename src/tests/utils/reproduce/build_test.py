@@ -828,3 +828,27 @@ def test_build_has_no_network(tmp_path: Path) -> None:
     )
     wheel, _ = build.build_wheel(spec, base, tmp_path / "wh", python="3.11.15", work_dir=tmp_path / "work")
     assert wheel.name == "demo-1.0-py3-none-any.whl"
+
+
+def _hold_locks(directory: Path) -> None:
+    """Take the wheels.lock sidecar lock shared, then exclusive, then read and record through it."""
+    lock = directory / "env" / "wheels.lock"
+    with build._locked(lock, shared=True):
+        pass
+    with build._locked(lock, shared=False):
+        pass
+    with build.file_lock(directory / "venv.lock", shared=True), build.file_lock(directory / "other.lock"):
+        pass
+    assert build.read_wheels_lock(lock) == {}
+    build.write_wheels_lock(lock, [])
+    assert build.read_wheels_lock(lock, file_sha256(lock)) == {}
+
+
+def test_locks_take_shared_and_exclusive(tmp_path: Path) -> None:
+    """Shared and exclusive locks on a sidecar created by the lock itself."""
+    _hold_locks(tmp_path)
+
+
+def test_locks_on_nfs(nfs_dir: Path) -> None:
+    """On NFS ``flock`` is a POSIX lock: a shared lock needs a readable descriptor (EBADF otherwise)."""
+    _hold_locks(nfs_dir)

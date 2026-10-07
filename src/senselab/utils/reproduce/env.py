@@ -29,8 +29,8 @@ variables in the merge order: module ``LD_LIBRARY_PATH`` entries first, then nat
 
 from __future__ import annotations
 
+import contextlib
 import datetime
-import fcntl
 import hashlib
 import json
 import os
@@ -39,7 +39,6 @@ import shutil
 import subprocess
 import tempfile
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
-from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, NamedTuple
 
@@ -52,6 +51,7 @@ from senselab.utils.reproduce.build import (
     base_environment,
     ca_bundle,
     ensure_wheel,
+    file_lock,
     reuse_wheel,
     stage_wheel,
     torch_index_url,
@@ -233,15 +233,8 @@ def _run_ok(argv: list[str], env: dict[str, str]) -> subprocess.CompletedProcess
     return result
 
 
-@contextmanager
-def _flock(path: Path) -> Iterator[None]:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "a") as handle:
-        fcntl.flock(handle, fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            fcntl.flock(handle, fcntl.LOCK_UN)
+def _flock(path: Path) -> contextlib.AbstractContextManager[None]:
+    return file_lock(path, shared=False)
 
 
 def _write_json(path: Path, data: object) -> str:
