@@ -11,6 +11,7 @@ import functools
 from pathlib import Path
 from typing import Any, Mapping
 
+import numpy as np
 import yaml
 
 from senselab.audio.workflows.triage.background_speech import background_speech_of
@@ -23,6 +24,7 @@ from senselab.audio.workflows.triage.breath_pattern import (
 from senselab.audio.workflows.triage.cough_pattern import CoughPattern, cough_pattern_of, in_cough_review_band
 from senselab.audio.workflows.triage.nodes.branches import Expectation
 from senselab.audio.workflows.triage.nodes.common import mint_live, write_measurement
+from senselab.audio.workflows.triage.task_events import REVIEW
 from senselab.audio.workflows.triage.vocabulary import SUPERSEDES, TASK_EXTENT_SPAN_ROLE
 from senselab.utils.prov_store import ProvStore
 
@@ -67,13 +69,17 @@ def breath_attributes(read: BreathPattern | tuple[str, ...]) -> dict[str, Any]:
         read: What :func:`~senselab.audio.workflows.triage.breath_pattern.breath_pattern_of` returned.
 
     Returns:
-        ``absent`` naming the missing inputs; or ``pattern``, ``events_n``, ``vetoed_by``,
-        ``train_breaths``, ``review`` and the full ``reading``.
+        ``absent`` naming the missing inputs; or the task evidence's ``decision`` and the breaths its
+        cluster counts (``breaths``), ``review``, the old measure's ``pattern``, ``events_n`` and
+        ``vetoed_by`` (reported, deciding nothing), and the full ``reading``.
     """
     if not isinstance(read, BreathPattern):
         return {"absent": list(read)}
+    phases = len(read.evidence.events) if read.evidence is not None else None
     return {
-        "absent": [],
+        "absent": [] if read.evidence is not None else ["plain"],
+        "decision": read.evidence.decision if read.evidence is not None else None,
+        "breaths": None if phases is None else int(np.floor(phases / 2 + 0.5)),
         "pattern": read.pattern,
         "events_n": read.events_n,
         "vetoed_by": read.veto.vetoed_by if read.veto is not None else None,
@@ -91,14 +97,16 @@ def cough_attributes(read: CoughPattern | tuple[str, ...], instructed: int | Non
         instructed: The instructed cough count, or None where the task names none.
 
     Returns:
-        ``absent`` naming the missing inputs; or ``onsets_n``, ``review`` and the full ``reading``.
+        ``absent`` naming the missing inputs; or ``onsets_n``, ``review`` (the strict/lenient band, or
+        the task evidence's ``review`` decision) and the full ``reading``.
     """
     if not isinstance(read, CoughPattern):
         return {"absent": list(read)}
+    reviewed = read.evidence is not None and read.evidence.decision == REVIEW
     return {
         "absent": [],
         "onsets_n": read.onsets_n,
-        "review": in_cough_review_band(read, instructed or 1),
+        "review": in_cough_review_band(read, instructed or 1) or reviewed,
         "reading": read.record(),
     }
 
