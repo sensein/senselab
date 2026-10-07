@@ -485,6 +485,55 @@ How `sandbox` reads those rules:
 - Fixes to someone else's analysis are therefore patch files with recorded hashes, never commits
   to their repository.
 
+`source.py` details:
+
+- **Layout.** Mirrors at `<cache>/src/<name>` (the URL's last component without `.git`; a second
+  URL with the same name is refused rather than renamed, so the path stays predictable for
+  authoring). Worktrees at `<cache>/wt/<name>-<commit[:8]>-<patch set[:8]>`, with a sidecar
+  `<worktree>.json` written only after the worktree verifies.
+- **Ref namespaces.** Upstream branches are fetched into `refs/upstream/heads/*`, not
+  `refs/heads/*`, so an upstream branch can never collide with or prune a `refs/heads/repro/*`
+  ref. Fetches also pass `--no-prune`. A commit reachable from no branch or tag is fetched by sha
+  into `refs/upstream/pinned/<sha>`, so gc keeps it.
+- **Patch-set sha256.** sha256 of canonical JSON over the ordered `[manifest-relative path,
+  sha256]` pairs. The full path, not the basename, so `patches/a/x.patch` and `patches/b/x.patch`
+  with identical bytes are two patch sets with two worktrees rather than one marker that matches
+  neither (B8 review). The empty set's value is `EMPTY_PATCH_SET_SHA256`, which names the
+  authoring ref. A marker is reused when its (repo, commit, patch-set sha256) matches.
+- **Reproducible shas.** Commits use a fixed identity and the 1980 epoch, no system or global git
+  config, and hooks off, so the same (commit, patch set) gives the same head and tree sha in any
+  cache. The clear commit is made even when no notebook changes (`--allow-empty`), so every chain
+  has the same shape: `commit`, clear, one commit per patch.
+- **Git environment.** Allowlisted, with a private `HOME`. Fetches keep the caller's `HOME` and
+  `SSH_AUTH_SOCK`/`GIT_SSH_COMMAND`/proxy variables, because upstreams are private SSH remotes and
+  ssh reads its keys there; global config is still not read, so credential helpers configured
+  there do not apply.
+- **Clearing** drops code-cell `outputs`, nulls `execution_count`, and also drops notebook-level
+  `metadata.widgets` (saved widget state can embed output data) and the `attachments` of markdown
+  and raw cells (embedded images can show data). Plain JSON, no nbconvert.
+- **Submodules** are worktrees of their own mirrors at the gitlink sha, not clones: no second copy
+  of the objects, no file-protocol submodule clone. Notebooks inside submodules are not cleared,
+  because a clear commit there would change the superproject's gitlink. Instead the checkout fails
+  closed: a submodule notebook that clearing would change raises `submodule-notebook-outputs`
+  unless the caller passes `allow_submodule_notebook_outputs`, and the paths are then recorded in
+  the checkout.
+- **Patch bytes.** Verified with `verify_files`, read again and re-hashed, then fed to
+  `git apply --check --index -` and `git apply --index -` on stdin; no fuzz.
+- **After each patch**, before its commit, every tracked notebook is run through the clear; if
+  any would change, the checkout fails with `patch-lint`. The line lint below is an early report,
+  not the guarantee: it cannot see outputs in compact one-line JSON or a hunk that starts inside an
+  outputs array without context, and this check can.
+- **Lint.** Deny patterns are matched with `grep -E` so their dialect is the pre-commit hook's,
+  over every patch line (headers and context too). The outputs check tracks `"outputs": [`
+  blocks within each notebook hunk, and also flags any changed line naming `"output_type"`, for a
+  hunk that starts inside an outputs block. Binary patches are refused because they cannot be
+  scanned, and so is creating a symlink or changing a mode to `120000`, because a link could point
+  a checkout path at data outside it. C-quoted header paths (git quotes non-ASCII names) are
+  unquoted before the `.ipynb` test. Findings carry line numbers and pattern indices only.
+- **Reuse.** A worktree with a marker is verified (head, ref, first-parent chain, tree, clean
+  status, submodule heads) and refused on any mismatch rather than rebuilt, so tampering is never
+  papered over. A worktree without a marker is an interrupted build and is removed and rebuilt.
+
 ## Results and cache
 
 **Step key:** sha256 over these fields, and nothing volatile:
