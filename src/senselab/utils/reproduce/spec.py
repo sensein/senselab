@@ -19,12 +19,31 @@ from pathlib import Path, PurePosixPath
 from typing import Annotated, Any, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationInfo, field_validator, model_validator
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 
 Commit = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{40}$")]
 Sha256 = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
 Name = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9_.-]+$")]
 SourceRoot = Annotated[str, StringConstraints(pattern=r"^(up:)?[A-Za-z0-9_.-]+$")]
+
+
+def _relative_path(value: str) -> str:
+    path = PurePosixPath(value)
+    if not value or path.is_absolute() or "\\" in value or ".." in path.parts:
+        raise ValueError(f"path must be relative with no '..': {value!r}")
+    return value
+
+
+RelPath = Annotated[str, AfterValidator(_relative_path)]
 
 FIXED_PLACEHOLDERS = frozenset({"out", "tmp", "checkout", "venv", "cache"})
 RESERVED_ROOT_NAMES = frozenset({"checkout"})
@@ -79,14 +98,14 @@ class _Model(BaseModel):
 class LockRef(_Model):
     """A hashed lock file, relative to the manifest repository."""
 
-    lock: str
+    lock: RelPath
     lock_sha256: Sha256
 
 
 class FileRef(_Model):
     """A hashed file, relative to the manifest repository."""
 
-    file: str
+    file: RelPath
     sha256: Sha256
 
 
@@ -100,13 +119,13 @@ class BodySpec(LockRef):
     """The body lock: compiled from a sidecar ``requirements.in`` or exported from a repository ``uv.lock``."""
 
     source: Literal["requirements.in", "uv-export"]
-    requirements_in: str | None = None
+    requirements_in: RelPath | None = None
     requirements_in_sha256: Sha256 | None = None
     export_cmd: list[str] | None = None
     index_url: str = "https://pypi.org/simple"
-    config_file: str | None = None
+    config_file: RelPath | None = None
     config_file_sha256: Sha256 | None = None
-    overrides: str | None = None
+    overrides: RelPath | None = None
     overrides_sha256: Sha256 | None = None
 
     @model_validator(mode="after")
@@ -127,7 +146,7 @@ class SdistSpec(_Model):
     name: str
     url: str
     sha256: Sha256
-    patches: list[str] = []
+    patches: list[FileRef] = []
     build_env: LockRef
     build_env_vars: dict[str, str] = {}
     cuda_module: str | None = None
@@ -294,7 +313,7 @@ class StepSpec(_Model):
     outputs: list[str] = []
     needs: list[str] = []
     resources: Resources
-    patches: list[str] = []
+    patches: list[FileRef] = []
     adapter: str
     expect: list[Expect] = []
 
