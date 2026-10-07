@@ -538,12 +538,13 @@ How `sandbox` reads those rules:
 
 **Step key:** sha256 over these fields, and nothing volatile:
 
+- the driver-semantics number
 - code commit and submodule SHAs
 - `env_key`
 - `wheels.lock` and overlay sha256s
-- keyed env digest
-- argv template, cwd
-- patch-set, adapter and input-set digests
+- keyed env, native-dir content digests, GPU architectures
+- argv template, cwd, inputs, stage, outputs
+- patch-set, adapter, adapter-env and input-set digests
 - `hf_weights` (commit-pinned, per-file sha256s), R session and R module-env digests
 - metrics schema, expectations, replicate index
 - upstream keys
@@ -580,72 +581,128 @@ the step.
 
 - **What the key covers.** `step_key_payload` names every field explicitly (no whole-model dump of
   `StepSpec`), so a field added to the manifest later is unkeyed until someone decides it should be
-  keyed. The payload holds: the commit and submodule commits; the patch-set sha256
-  (`source.patch_set_sha256`, the same value that names the worktree); `env_key` (which already
-  covers the torch and body lock sha256s, the sdist inputs and `python_exact`, so they are not
-  repeated); the `wheels.lock` and overlay (`test`, `notebook_tools`) lock sha256s; the keyed env
-  (`sandbox.keyed_templates`: the profile `env` map, the fixed and offline variables, and every
-  path variable in template form, including `PYTHONPATH` and `R_LIBS`); kind, argv template and
-  cwd; inputs (patterns and one input-set digest each), stage and outputs; the adapter sha256;
-  `hf_weights`; the R `SESSION.json` and module-env sha256s (spec §15 item 5 keys both); the
-  metrics schema and expectations; `replicate`; and the upstream keys.
+  keyed. The payload holds:
+  - `driver_semantics` (`cache.DRIVER_SEMANTICS`), a number bumped whenever driver-side code
+    changes what a result dir holds or whether it passes: metrics validation, min-cell
+    suppression, expectation evaluation, the GPU and canary guards, the child preamble and the
+    sandbox script. senselab's own version is not keyed: hatch-vcs changes it on every commit, so
+    keying it would recompute every multi-hour step after any unrelated senselab commit (the same
+    reason the analyze-audio cache dropped it at schema 24). The cost is that a driver change
+    altering results must bump the number.
+  - the commit and submodule commits, and the patch-set sha256 (`source.patch_set_sha256`, the
+    same value that names the worktree)
+  - `env_key` (which already covers the torch and body lock sha256s, the sdist inputs and
+    `python_exact`, so they are not repeated), the `wheels.lock` and overlay (`test`,
+    `notebook_tools`) lock sha256s
+  - the keyed env (`sandbox.keyed_templates`: the profile `env` map, the fixed and offline
+    variables, and every path variable in template form, including `PYTHONPATH`, `PATH`,
+    `LD_LIBRARY_PATH` and `R_LIBS`)
+  - a content digest of every selected native dir (`native`): `cache.native_digests` runs
+    `digest.input_set_digest(dir, ["**"], require_nonempty=True)` over each `bin_dirs` then
+    `lib_dirs` entry of the selected `NativeSpec`s. The keyed env holds only the dir paths, and a
+    module upgraded in place (a new ffmpeg in the same prefix) would otherwise keep the key
+  - `resources.gpu_arch` (sorted). A step limited to sm_80 can produce different numbers from one
+    run on sm_90 (cuBLAS and cuDNN pick kernels, and so reduction orders, per architecture), so widening or narrowing the allowed
+    architectures recomputes. `min_driver` is left out: it is a floor checked at run time, and
+    any driver above it runs the same kernels for the same CUDA runtime in the venv, which the
+    locks already pin; keying it would recompute when someone merely tightens the floor
+  - kind, argv template and cwd; inputs (root, sorted patterns, and one input-set digest each),
+    stage (root, sorted patterns, dest) and outputs
+  - the adapter sha256 and `adapter_env_sha256`, the identity of the interpreter that runs the
+    adapter. B12 passes the step venv's `installed_sha256` when the adapter runs there, or
+    `cache.driver_env_sha256()` when it runs in the driver's env: a sha256 over `sys.version` and
+    the sorted `name==version` of every installed distribution except senselab itself (whose
+    driver-side behaviour is `driver_semantics`)
+  - `hf_weights`, sorted by (repo, repo_type), each entry's files sorted by path
+  - the R `SESSION.json` and module-env sha256s (spec §15 item 5 keys both)
+  - the metrics schema and expectations, `replicate`, and the upstream keys
+- **Staged data-root files are keyed through `inputs`.** A `stage` entry drawn from a data root
+  must repeat an `inputs` entry with the same root and the same patterns, in any order
+  (`E_SPEC_STAGE_UNDIGESTED`, a `StepSpec` validator), so one digest set covers both and editing
+  a staged file moves the key. Requiring the repeat, rather than digesting stage entries
+  separately, keeps a single list of digests per step. `checkout` stages are keyed by the commit
+  and patch set, `up:` stages by the upstream key.
+- **Pattern order is not keyed.** `digest.input_set_digest` digests the union of the matches (a
+  file matching several patterns counts once, and entries are sorted), so pattern order carries no
+  meaning and is sorted in the payload. `gpu_arch` and HF repositories and files are sets too. List
+  order is kept where it means something: argv, patches, the `inputs` list itself (paired with
+  `input_digests` and with provenance's `inputs[i]`), and expectations.
 - **What it leaves out, and why.** Volatile variables never reach it, by construction: the key reads
   the keyed env from `keyed_templates`, which never reads `os.environ`, and the profile may not set
   `SLURM_*`, `CUDA_VISIBLE_DEVICES`, `TMPDIR`, `HOME` and the rest (sandbox `RESERVED`). A second
   "refuse volatile names" check in `cache.py` would guard a path that cannot be taken, so there is
-  none. The date, the data-root locations (argv keeps `{root:<name>}` as a template; content is
-  covered by the input digests), the results root, the partition and limits (`resources`), the step
-  name and the repository URL are also left out. Leaving the name out means two steps declared
-  identically (same replicate) share one result dir, which is what content addressing should do;
-  the claim makes the second wait and then skip. Leaving the URL out means moving a mirror does not
-  recompute anything; the commit already pins the code. `smoke_imports` and `pip_check_expected`
-  are build checks, not result inputs.
+  none. Also left out: the date, the data-root locations (argv keeps `{root:<name>}` as a template;
+  content is covered by the input digests), the results root, the partition and limits,
+  `min_driver` (above), the step's own `name` field, and the repository URL. Step names still enter
+  the key wherever a step refers to another: its upstream keys are keyed by need name, and
+  `{up:<name>}` stays a template in argv and stage. Only the step's own name is out, so two steps
+  declared identically (same replicate, same references) share one result dir, which is what
+  content addressing should do; the claim makes the second wait and then skip. Leaving the URL out
+  means moving a mirror does not recompute anything, because the commit already pins the code.
+  `smoke_imports` and `pip_check_expected` are build checks, not result inputs.
+- **Expectation numbers.** `Expect.value`, `Expect.tolerance` and `tolerance_from`'s `a` and `k`
+  refuse NaN and infinity, and `-0.0` is stored as `0.0`, so a key never depends on a float spelling
+  JSON cannot write or that compares equal.
 - **The wheels lock comes from the manifest.** An env with `sdist_allow` and no `env.wheels` cannot
-  be keyed (`E_KEY_NO_WHEELS`): the first prefetch records the wheel sha256s and the manifest must
+  be keyed (`E_KEY_NO_WHEELS`): the first prefetch records the wheel sha256s, and the manifest must
   carry that file's sha256 before a run. Taking the post-prefetch sha256 as an argument instead
   would let a key depend on an uncommitted file.
 - **Serialization.** `canonical_json`: `json.dumps(sort_keys=True, separators=(",", ":"),
-  ensure_ascii=True, allow_nan=False)`, tagged `"schema": "reproduce-step-key-1"`. Mappings
-  (submodules, upstream, env) are dicts, so their caller-side order cannot matter; lists (argv,
-  inputs, patches, expectations) keep manifest order because order is meaningful there. Floats in
-  expectations are Pydantic-coerced, so `77` and `77.0` key alike. Changing what the payload holds
-  bumps the schema tag.
+  ensure_ascii=True, allow_nan=False)`, tagged `"schema": "reproduce-step-key-2"`. Mappings
+  (submodules, upstream, env, native) are dicts, so their caller-side order cannot matter. Floats
+  in expectations are Pydantic-coerced, so `77` and `77.0` key alike. Changing what the payload
+  holds bumps the schema tag; changing driver behaviour bumps `driver_semantics`.
 - **`hf_weights`.** Required on `StepSpec`, with no default, so every manifest states `[]` for a
   step that loads no weights (all tier-1 steps). Each entry is `{repo: "<org>/<name>", repo_type:
   model|dataset, revision: <40-hex commit>, files: [{path, sha256}, ...]}`. The revision is a
-  commit, never a branch or tag (senselab's rule that a load passes a commit SHA), and `files`
-  lists every file the step reads with its sha256, which prefetch checks after download; at least
-  one file, no duplicate paths, and one entry per repository.
+  commit, never a branch or tag (senselab's rule that a load passes a commit SHA). `files` lists
+  every file the step reads with its sha256, which prefetch checks after download. It needs at
+  least one file, no duplicate paths, and one entry per repository.
 - **Completion marker.** A result dir is done when `summary.json` parses as an object with integer
-  `exit` 0 (a JSON `true` is not 0). `write_summary` writes a temporary file with `O_EXCL`, fsyncs
-  it, renames it over `summary.json` and fsyncs the directory, so a reader sees the old summary or
-  the new one and never a torn file; it is the last write of a run, so any dir without it is
-  incomplete. A failed run's summary (exit non-zero) stays readable for diagnosis and is cleared by
-  `reset_result_dir` when the step is retried; a done dir is never reset (`E_RESULT_DONE`).
+  `exit` 0 (a JSON `true` is not 0). `write_summary` writes a temporary file with `O_EXCL` and
+  mode `0o660` (umask permitting), fsyncs it, renames it over `summary.json` and fsyncs the
+  directory, so a reader sees the old summary or the new one and never a torn file. It is the last
+  write of a run, so any dir without it is incomplete. A failed run's summary (exit non-zero)
+  stays readable for diagnosis and is cleared by `reset_result_dir(results_root, key)` when the
+  step is retried. A done dir is never reset (`E_RESULT_DONE`), a symlink or non-directory at the
+  path is refused rather than removed (`E_RESULT_NOT_DIR`), and a failed removal or creation is
+  `E_RESULT_RESET` with the `OSError` (which names the path) suppressed.
 - **Claims.** `claim` holds a `SharedFileLock` (heartbeat, stale takeover) on
-  `<results_root>/.claims/<key>`. The lock files live in `.claims/` rather than beside each
-  result dir, so the results root holds only result dirs and `.claims`. `manage_dir_mode=False`:
-  the default chmods the lock's directory to `2775`, which would make a confidential results tree
+  `<results_root>/.claims/<key>`. The lock files live in `.claims/` rather than beside each result
+  dir, so the results root holds only result dirs and `.claims`. `manage_dir_mode=False`: the
+  default chmods the lock's directory to `2775`, which would make a confidential results tree
   world-traversable. A timeout raises `E_CLAIM_HELD` with the `TimeoutError` (whose message names
   the lock path) suppressed. The caller re-checks `is_done` inside the claim, because a waiter
   usually gets the claim right after the holder marked the step done.
 - **Run links.** `<runs_root>/<YYYY-MM-DD>/<analysis>/<step>` is a relative symlink to the result
   dir (computed between real paths), so the runs and results trees can move together. Relinking to
-  the same target is a no-op; a different target replaces the link by renaming a new symlink over
+  the same target is a no-op. A different target replaces the link by renaming a new symlink over
   it, so a reader never finds the link missing. A real file or directory at the link path is
   refused rather than removed.
 - **Ordering.** `toposort` is Kahn's algorithm with a heap on step names, so the order depends only
   on the set, not on file or step order. A repeated name, a need naming no step in the set, and a
-  cycle are refused; the cycle error names only the steps on one cycle, not every step downstream
+  cycle are refused. The cycle error names only the steps on one cycle, not every step downstream
   of it. `toposort` also runs `check_expect_sources`, so one call validates the whole set.
 - **Cross-step expectations.** A `StepSpec` validator cannot see other steps, so `dag.py` checks
   that a `from_step.metric` is an address the upstream `metrics_schema` declares
-  (`metrics.metric_address_error`), and that it names the same quantity as the step's own metric
-  (`metrics.metric_quantity`: rate, mcc, statistic or count), so a rate is never compared with a
-  count. Units (`fraction`, `pp`) are per metrics entry and only known at run time, so the
-  manifest-time unit check is that an expectation `unit` sits only on a rate or `mcc`, the
-  quantities that take one. Each `tolerance_from` step must declare the expectation's own metric,
-  since the spread is taken over that metric of the calibration replicates.
+  (`metrics.metric_address_error`). It also checks that the address names the same quantity as the
+  step's own metric (`metrics.metric_quantity`: rate, mcc, statistic or count), so a rate is never
+  compared with a count. Units (`fraction`, `pp`) are per metrics entry and only known at run
+  time, so the manifest-time unit check is that any expectation `unit` sits only on a rate or
+  `mcc`, the quantities that take one. That check needs only the step itself, so it is a
+  `StepSpec` validator (`E_SPEC_EXPECT_UNIT`) and applies to every expectation, not only
+  `from_step` ones. Each `tolerance_from` step must declare the expectation's own metric, since the
+  spread is taken over that metric of the calibration replicates.
+- **Constraints on B12/B13.**
+  - Input digests are keyed, so a step's key exists only once its inputs can be hashed. An `up:`
+    input or stage reads the upstream result dir, so a downstream key can be computed only after
+    the upstream step finished; `submit` cannot precompute every key at submission time and must
+    let each job compute its own key when it starts.
+  - Every skip check re-hashes the step's input sets and native dirs. "Done" is never decided from
+    a remembered key, so a skip on a large data root costs a full read of its declared inputs.
+  - `SharedFileLock` logs a stale-takeover warning on the `senselab` logger, and it carries the
+    `.claims` lock path under the results tree. B12 routes that logger to `{out}/logs/driver.log`
+    only, never to the terminal.
 
 ## Metrics, expectations, provenance
 
