@@ -14,6 +14,7 @@ from senselab.utils.reproduce.metrics import (
     MetricsError,
     expected_floor,
     metric_address_error,
+    metric_quantity,
     metric_value,
     validate_metrics,
 )
@@ -23,7 +24,8 @@ from senselab.utils.reproduce.spec import MetricsSchema
 def _schema(**over: Any) -> MetricsSchema:  # noqa: ANN401
     data: dict[str, Any] = {
         "kind": "classification",
-        "headline": ["balanced_accuracy", "mcc"],
+        "headline": ["balanced_accuracy"],
+        "secondary": ["mcc"],
         "headline_labels": ["sys_a", "sys_b"],
         "counts": ["n_systems", "n_flagged"],
         "per_class": ["pos", "neg"],
@@ -60,6 +62,8 @@ def _obj() -> dict[str, Any]:
                 "floor": 0.5,
                 "lift": 0.2,
             },
+        ],
+        "secondary": [
             {
                 "name": "mcc",
                 "value": 0.4,
@@ -105,8 +109,8 @@ def test_valid_output_passes_and_is_suppressed() -> None:
     assert clean["counts"] == {"n_systems": "<5", "n_flagged": 40}
     assert clean["n"] == 120
     assert clean["per_class"]["pos"]["recall"] == 1.0
-    assert clean["headline"][2]["numdf"] == 3
-    assert clean["headline"][2]["n_folds"] == 3
+    assert clean["secondary"][0]["numdf"] == 3
+    assert clean["secondary"][0]["n_folds"] == 3
     assert clean["n_folds"] == 3
     assert [f["n_groups"] for f in clean["split_report"]["folds"]] == [12, "<5"]
     assert obj["confusion"]["fn"] == 0, "the input is not modified"
@@ -165,7 +169,9 @@ def test_already_suppressed_token_is_accepted() -> None:
         (("per_class",), [], "E_METRICS_BAD_SHAPE"),
         (("headline", 0, "lift"), 0.2, "E_METRICS_LIFT_MISMATCH"),
         (("headline", 0, "floor"), 0.6, "E_METRICS_BAD_FLOOR"),
-        (("headline", 2, "floor"), 0.1, "E_METRICS_BAD_FLOOR"),
+        (("secondary", 0, "floor"), 0.1, "E_METRICS_BAD_FLOOR"),
+        (("secondary", 0, "name"), "auroc", "E_METRICS_UNDECLARED_SECONDARY"),
+        (("secondary", 0, "label"), "sys_z", "E_METRICS_UNDECLARED_LABEL"),
         (("threshold_tuning",), "train", "E_METRICS_BAD_TUNING_SPLIT"),
         (("per_class", "pos", "prevalence"), 1.4, "E_METRICS_PREVALENCE_RANGE"),
         (("per_class", "pos", "prevalence"), 0.5, "E_METRICS_PREVALENCE_SUM"),
@@ -261,7 +267,6 @@ def test_threshold_tuned_on_test_is_a_warning() -> None:
     ("name", "k", "positive", "expected"),
     [
         ("balanced_accuracy", 2, None, 0.5),
-        ("macro_recall", 4, None, 0.25),
         ("auroc", 3, None, 0.5),
         ("mcc", 2, None, 0.0),
         ("accuracy", 2, None, 0.6),
@@ -285,13 +290,13 @@ def test_expected_floor(name: str, k: int, positive: str | None, expected: float
 def test_floors_are_checked_for_every_classification_name() -> None:
     """A binary step with a positive class has every standard floor checked, in pp where declared."""
     schema = _schema(
-        headline=["balanced_accuracy", "auroc", "accuracy", "top1", "pr_auc", "f1", "macro_f1", "mcc"],
+        secondary=["auroc", "accuracy", "top1", "pr_auc", "f1", "macro_f1", "mcc"],
         positive="pos",
         headline_labels=[],
     )
     obj = _obj()
-    obj["headline"] = [
-        _entry("balanced_accuracy", 80.0, 50.0, unit="pp"),
+    obj["headline"] = [_entry("balanced_accuracy", 80.0, 50.0, unit="pp")]
+    obj["secondary"] = [
         _entry("auroc", 0.7, 0.5),
         _entry("accuracy", 0.7, 0.6),
         _entry("top1", 70.0, 60.0, unit="pp"),
@@ -301,15 +306,20 @@ def test_floors_are_checked_for_every_classification_name() -> None:
         _entry("mcc", 0.3, 0.0),
     ]
     assert _codes(copy.deepcopy(obj), schema) == []
-    for index, wrong in [(0, 0.4), (3, 0.5), (4, 0.5), (5, 0.4)]:
+    for key, index, wrong in [
+        ("headline", 0, 0.4),
+        ("secondary", 2, 0.5),
+        ("secondary", 3, 0.5),
+        ("secondary", 4, 0.4),
+    ]:
         bad = copy.deepcopy(obj)
-        bad["headline"][index] = _entry(bad["headline"][index]["name"], 0.9, wrong)
-        assert _codes(bad, schema) == ["E_METRICS_BAD_FLOOR"], index
+        bad[key][index] = _entry(bad[key][index]["name"], 0.9, wrong)
+        assert _codes(bad, schema) == ["E_METRICS_BAD_FLOOR"], (key, index)
 
 
 def test_detection_kind_needs_prevalence_floor_and_lift() -> None:
     """Detection needs prevalence, floor and lift; its floors are presence-only and rates are optional."""
-    schema = _schema(kind="detection", headline=["avg_map", "map_at"], headline_labels=[], counts=[])
+    schema = _schema(kind="detection", headline=["avg_map", "map_at"], secondary=[], headline_labels=[], counts=[])
     obj: dict[str, Any] = {
         "headline": [{"name": "avg_map", "value": 0.0595}, _entry("map_at", 0.0948, 0.02)],
         "per_class": {"pos": {"prevalence": 0.3}, "neg": {"prevalence": 0.9}},
@@ -331,10 +341,13 @@ def test_statistic_kind_needs_no_floor_prevalence_or_split() -> None:
 
 
 def test_declared_headline_and_counts_must_be_present() -> None:
-    """Declared headline and counts must be present."""
+    """Declared headline, secondary and counts must be present."""
     obj = _obj()
-    obj["headline"] = [h for h in obj["headline"] if h["name"] != "mcc"]
+    obj["headline"] = []
     assert _codes(obj) == ["E_METRICS_MISSING_HEADLINE"]
+    obj = _obj()
+    del obj["secondary"]
+    assert _codes(obj) == ["E_METRICS_MISSING_SECONDARY"]
     obj = _obj()
     del obj["counts"]["n_flagged"]
     assert _codes(obj) == ["E_METRICS_MISSING_COUNT"]
@@ -440,7 +453,7 @@ def test_codes_are_sorted_and_unique() -> None:
     obj = _obj()
     obj["a"] = 1
     obj["b"] = 2
-    obj["headline"][2]["value"] = "x"
+    obj["secondary"][0]["value"] = "x"
     codes = _codes(obj)
     assert codes == sorted(set(codes))
     assert codes == ["E_METRICS_NOT_NUMBER", "E_METRICS_UNKNOWN_KEY"]
@@ -488,7 +501,7 @@ def test_metric_value_resolves_and_refuses_ambiguity() -> None:
 
 
 def _three_class(floor: float) -> tuple[dict[str, Any], MetricsSchema]:
-    schema = _schema(headline=["balanced_accuracy"], headline_labels=[], counts=[], per_class=["asd", "td", "other"])
+    schema = _schema(secondary=[], headline_labels=[], counts=[], per_class=["asd", "td", "other"])
     rates = {"recall": 0.5, "precision": 0.5}
     obj = {
         "headline": [_entry("balanced_accuracy", 0.7, floor)],
@@ -526,7 +539,7 @@ def test_per_class_and_confusion_refused_outside_classification(kind: str) -> No
 
 def test_confusion_refused_for_detection() -> None:
     """A confusion matrix belongs to classification only."""
-    schema = _schema(kind="detection", headline=["avg_map"], headline_labels=[], counts=[])
+    schema = _schema(kind="detection", headline=["avg_map"], secondary=[], headline_labels=[], counts=[])
     obj = {
         "headline": [_entry("avg_map", 0.06, 0.01)],
         "per_class": {"pos": {"prevalence": 0.3}, "neg": {"prevalence": 0.7}},
@@ -555,10 +568,11 @@ def test_confusion_refused_for_detection() -> None:
 )
 def test_headline_value_ranges(entry: dict[str, Any], ok: bool) -> None:
     """Rates lie in [0, 1] or [0, 100] for pp, mcc in [-1, 1] likewise, and the CI brackets the value."""
-    schema = _schema(headline=["balanced_accuracy", "mcc"], headline_labels=[])
+    schema = _schema(headline_labels=[])
     obj = _obj()
-    others = [_entry("balanced_accuracy", 0.8, 0.5), _entry("mcc", 0.4, 0.0)]
-    obj["headline"] = [entry, *(o for o in others if o["name"] != entry["name"])]
+    is_mcc = entry["name"] == "mcc"
+    obj["headline"] = [_entry("balanced_accuracy", 0.8, 0.5)] if is_mcc else [entry]
+    obj["secondary"] = [entry] if is_mcc else [_entry("mcc", 0.4, 0.0)]
     codes = _codes(obj, schema)
     assert codes == ([] if ok else ["E_METRICS_RANGE"])
 
@@ -597,9 +611,10 @@ def test_prevalence_below_one_example_is_refused() -> None:
 )
 def test_floor_and_lift_ranges(entry: dict[str, Any], ok: bool) -> None:
     """Floors share the value's bounds, presence-only floors included; lift stays within the range width."""
-    schema = _schema(headline=["balanced_accuracy", "macro_f1"], headline_labels=[])
+    schema = _schema(secondary=["macro_f1"], headline_labels=[])
     obj = _obj()
-    obj["headline"] = [_entry("balanced_accuracy", 0.8, 0.5), entry]
+    obj["headline"] = [_entry("balanced_accuracy", 0.8, 0.5)]
+    obj["secondary"] = [entry]
     codes = _codes(obj, schema)
     if ok:
         assert codes == []
@@ -613,3 +628,38 @@ def test_per_class_rates_in_unit_interval(field: str) -> None:
     obj, schema = _three_class(0.5)
     obj["per_class"]["asd"][field] = 7
     assert _codes(obj, schema) == ["E_METRICS_RANGE", "W_CLASS_ABSENT"]
+
+
+def test_secondary_accuracy_carries_its_majority_floor_and_lift() -> None:
+    """A secondary accuracy entry needs a floor equal to the majority prevalence and a lift."""
+    schema = _schema(secondary=["accuracy"], headline_labels=[])
+    obj = _obj()
+    obj["headline"] = [_entry("balanced_accuracy", 0.8, 0.5)]
+    obj["secondary"] = [_entry("accuracy", 0.75, 0.6)]
+    assert _codes(copy.deepcopy(obj), schema) == []
+    bad = copy.deepcopy(obj)
+    bad["secondary"] = [_entry("accuracy", 0.75, 0.5)]
+    assert _codes(bad, schema) == ["E_METRICS_BAD_FLOOR"]
+    for field, code in (("floor", "E_METRICS_NO_FLOOR"), ("lift", "E_METRICS_NO_LIFT")):
+        bad = copy.deepcopy(obj)
+        del bad["secondary"][0][field]
+        assert _codes(bad, schema) == [code]
+    bad = copy.deepcopy(obj)
+    bad["secondary"] = [_entry("accuracy", 1.5, 0.6)]
+    assert "E_METRICS_RANGE" in _codes(bad, schema)
+
+
+def test_secondary_refused_outside_classification() -> None:
+    """A statistic step declares no secondary metrics, so any secondary entry is undeclared."""
+    schema = MetricsSchema.model_validate({"kind": "statistic", "headline": ["f_stat"]})
+    obj = {"headline": [{"name": "f_stat", "value": 1.0}], "secondary": [{"name": "accuracy", "value": 0.5}]}
+    assert _codes(obj, schema) == ["E_METRICS_UNDECLARED_SECONDARY"]
+
+
+def test_secondary_metric_address_and_value() -> None:
+    """A secondary metric is addressed by its bare name, like a headline."""
+    schema = _schema(secondary=["mcc", "top1"], headline_labels=["sys_a", "sys_b"])
+    assert metric_address_error("top1", schema) is None
+    assert metric_address_error("auroc", schema) == "E_METRICS_UNDECLARED_HEADLINE"
+    assert metric_quantity("top1") == "rate" and metric_quantity("mcc") == "mcc"
+    assert metric_quantity("macro_recall") is None
