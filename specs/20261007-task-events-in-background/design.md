@@ -885,3 +885,66 @@ the buttercup case; 50 of the 282 r17 v2 passes with ≤2 decoded repetitions or
   "butter" is flapped and has no closure), 0.015–0.315, 0.505–0.965, 1.135–1.615, 1.835–2.325,
   2.535–2.975, 3.185–3.655 s; extent 0.015–3.655 s (r17's decode: 2 repetitions over 1.152–3.786 s);
   cycle rate 1.54 Hz, period CV 0.14; identity 0.307, the rhotic position never realised. Present.
+
+## Unit C plan (owner-approved revisions, 2026-10-07)
+
+1. **The recording-level background reading is a PREPROCESS output, not QUALITY.** QUALITY is only the
+   per-span join after the branches. Branches read PREPROCESS's reading from the store and never
+   recompute it.
+2. **The session floor is computed before its first use.**
+   - (a) PREPROCESS estimates the floor and level per band for each recording.
+   - (b) A corpus-level SESSION step aggregates those per BIDS session.
+   - (c) The rest of the background reading (activity regions, impulses, faults) is computed against
+     the session-informed floor; routing's emptiness check depends on it.
+   - (d) Everything downstream reads that same floor.
+
+   PREPROCESS splits around SESSION, and the DAG declares the dependency. On the cluster, (a) runs
+   corpus-wide, SESSION once per session, and the rest per recording. A single-file run with no
+   siblings falls back to the per-recording floor and records that it did.
+3. **Decision vocabulary.**
+   - `verdict` ∈ {pass, review, discard}: `flag` is renamed `review`. `rerun` becomes a separate
+     `run_status`; a recording still incomplete after recompute is `review` with reason `not_measured`.
+   - `release` ∈ {as_is, redacted, withheld}, null when the verdict is discard; `withheld` is a
+     redaction-policy hold only.
+   - `reason` (primary) and `reasons` (all), drawn from a vocabulary of about ten keys in `data/`.
+4. **Decision table.**
+   - `triage_decisions`: one row per recording, with core fixed columns (identity, verdict, release,
+     reason, reasons, extent, annotations, figure and audio paths, provenance) and an `evidence` list
+     holding the items that decided *that* row: `{name, value, unit, comparison, threshold, effect}`.
+     The contents differ by row and by task.
+   - `triage_evidence`: a long table of every item read, with a `decisive` flag. Item names are
+     defined per family in `data/`.
+   - Items are emitted from VERDICT's decision path, never reconstructed afterwards.
+5. **Review page.** A static HTML page over the **full set** (all 62,550 recordings). Only some
+   recordings are ever reviewed; the page is how the reviewer narrows to them.
+   - **Tabs over the same loaded data, with one shared selection and one shared set of decisions:**
+     - **Explore:** a parallel-coordinate plot over the decision table's columns plus the evidence
+       items. Evidence differs by family, so the axes are chosen per family or facet from the
+       evidence names defined in `data/`. Brushing the axes narrows the selection. Reuses the
+       recording-vectors viewer (`src/senselab/audio/workflows/triage/viewer/`:
+       `recording_vectors_viewer.html`, `axes.js`), which already draws parallel coordinates; there
+       is no second implementation.
+     - **Review:** faceted filters in the pattern of the free-speech page
+       (`scripts/free_speech_review_page.py`): verdict, release, reason, family/branch,
+       `run_status`, annotations, presence of each evidence item, session/participant, plus text
+       search over stem and transcript. The list shows whatever the brush and the facets select.
+       Each recording shows its decision, reason and evidence items, and the spectrogram (or audio,
+       below). **Speech tasks also show the ASR transcript, PII detections and redactions**
+       (masked tokens, release form, reviewer and LLM proposals where present), as the free-speech
+       page does, so the release decision is reviewable as well as the task verdict.
+     - **Decisions:** the reviewer's entries so far (verdict pass/review/discard plus a note), with
+       JSON export and import so a reviewing session can resume. Kept in the browser; no hosted
+       state. The JSON keys match the owner label CSV's columns, so reviews feed the evaluation
+       harness.
+   - **Display modes:**
+     - (a) **standalone:** each recording carries a compact quantised spectrogram, a coarse
+       time × frequency grid with a few levels stored as a small integer array and drawn on canvas
+       (not an image), with events, extent and issues drawn over it. Size estimate: 16 frequency
+       bins × 64 time bins × 2 bits is 256 B per recording, about 342 B base64, so about 21 MB for
+       62,550 recordings before the table and transcripts.
+     - (b) **served from ORCD over an ssh tunnel** (an http server on the cluster plus `ssh -L`):
+       additionally fetches, on demand, the raw, enhanced and (where it exists) released audio and
+       the full per-recording figure.
+   - No audio is ever embedded. If the single file would be too large, the per-recording data
+     (spectrogram grids, transcripts, evidence) is sharded into side files (for example per family
+     or session) loaded on demand.
