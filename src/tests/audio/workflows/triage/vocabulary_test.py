@@ -1707,6 +1707,7 @@ class TestAgreementUnplacedFindingsAndASecondSpeaker:
             "reading": "extent_dominant_speaker_share",
             "value": 0.88,
             "bound": 0.9,
+            "op": "at_least",
         }
         policy = replace(self.POLICY, model_speaker_families=("harvard-sentences-list",))
         diarized = self._fold(
@@ -2442,8 +2443,9 @@ class TestABreathTaskIsDecidedOnDetectedBreaths:
         )
         assert folded.triage is Triage.REVIEW and folded.run_status is RunStatus.INCOMPLETE
         assert folded.reason == "not_measured"
-        named = [entry for entry in folded.evidence if entry.name == "owning_branch_input_absent"]
-        assert named and named[0].value == ["AIRWAY:airway_breath_reading.decision"] and named[0].decisive
+        named = [entry for entry in folded.evidence if entry.name.startswith("owning_branch_input_absent")]
+        assert [entry.name for entry in named] == ["owning_branch_input_absent:AIRWAY:airway_breath_reading.decision"]
+        assert named[0].value is True and named[0].decisive
 
     def test_a_sustained_breath_recording_with_a_detected_breath_passes(self) -> None:
         """One breath event: events_min holds, the task was performed."""

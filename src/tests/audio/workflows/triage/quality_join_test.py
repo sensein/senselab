@@ -182,7 +182,8 @@ def test_the_fold_discards_a_recording_that_captured_nothing() -> None:
     )
     assert folded.triage is Triage.DISCARD
     assert folded.discard_ground == ACOUSTICALLY_EMPTY
-    assert any(entry.name == "nothing_captured" and entry.decisive for entry in folded.evidence)
+    decisive = {entry.name for entry in folded.evidence if entry.decisive}
+    assert decisive == {"capture.plain_active_s", "capture.enhanced_active_s"}
 
 
 def test_streams_disagreeing_on_an_event_kind_that_decides_reviews() -> None:
