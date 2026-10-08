@@ -989,3 +989,36 @@ needed hand-made symlinks. An absolute stream path now goes through a source rou
 (`--source-base`, default `/_source`): the page fetches `/_source/<absolute path>`, and
 `scripts/triage_review_serve.py` (standard library only) serves the corpus root plus that route,
 restricted to its `--source-root` directories.
+
+## Review page: per-model ASR lanes, and the task span played in place (2026-10-08)
+
+**What the owner saw.** On `sub-06d289b0…_task-diadochokinesis-v2-buttercup` (r18) the transcript read
+"What are the time? What is it like? …" and nothing of Qwen's output. The store holds two hypotheses
+over `plain`: `nyralabs/CrisperWhisper2.0_turbo`, 22 timed words ("What are the time? What is it like?"
+repeated; its full transcript continues as a hallucinated loop, two chunks out of bounds), and
+`Qwen/Qwen3-ASR-1.7B`, 6 words timed by `Qwen3-ForcedAligner-0.6B` ("Barakat, barakat, …" at
+0.00–0.96, 0.96–1.60, 1.84–2.32, 2.56–2.96, 3.20–3.68, 3.68–3.68 s), the syllable train itself. Qwen
+wrote no segments or non-lexical tokens; `asr_hypothesis` carries only words.
+
+**Why it was lost.** Nothing was dropped. The star alignment put each Qwen word in a column with a
+Whisper word (6 `variant` words, agreement 0.5) and left 16 Whisper-only `insertion` words. On a
+1–1 tie `_column_word` takes the first group in source-name order, so every surface was Whisper's
+(`reference_source: asr_crisperwhisper`); Qwen's readings survived only in each word's `readings`,
+which the page showed in a hover. The extract kept each hypothesis's text but not its word times, so
+no per-model timeline existed to show.
+
+**What the page does now.** `transcripts` carries each hypothesis's own words as
+`[start_s, end_s, text]` and each consensus word's extent and surface. Under the spectrogram, on its
+time axis, the page draws a consensus lane (agreement-shaded) and one lane per model; spectrogram and
+lanes share one window (zoom, pan, show-all, show-task-span; ctrl/⌘-wheel and drag), and a click
+seeks the active player with a playhead across both. In the consensus text a word only one model gave
+(`insertion`) is outlined and its tooltip names the model; a `variant` word keeps its surface and
+shows each other reading beside it, outlined when one model alone gave it. The collapsed per-model
+list shows each model's words with their times. Agreement shading and PII marks are unchanged.
+
+**Audio.** `task_plain` and `task_enhanced` are cuts of the plain and enhanced streams over the
+extent ±0.25 s, so on the page they repeated `recording` and `enhanced`. The page no longer lists any
+`task_*` stream: it plays `recording` and `enhanced` (and, for a speech task, the full-length
+`redacted` in place of `task_redacted`), each with a strip marking the task extent and a
+"play task span" control that seeks to the extent and pauses at its end. The task-audio pipeline is
+unchanged.
