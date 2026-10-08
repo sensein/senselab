@@ -130,6 +130,54 @@ def overlays(view: StoreView) -> dict[str, list[list[Any]]]:
     return {"events": sorted(events), "activity": activity, "issues": sorted(issues)}
 
 
+ASR_HYPOTHESIS_ROLE = "asr_hypothesis"
+"""The measurement role PREPROCESS gives each recogniser's own transcript."""
+
+
+def transcripts(view: StoreView) -> dict[str, Any]:
+    """Each ASR model's own transcript, and per consensus word the agreement across them.
+
+    Args:
+        view: The store, read with its ``asr_hypothesis`` measurements.
+
+    Returns:
+        ``models``: each recogniser as ``{source, model_id}``, in the order PREPROCESS ran them;
+        ``own``: each one's transcript, ``{source, model_id, text}``; ``words``: per consensus word in
+        stream order, ``[agreement, outcome, readings]``, where ``readings`` holds each model's surface
+        for that word in ``models`` order, None where the model has no member there.
+    """
+    hypotheses: dict[str, Mapping[str, Any]] = {}
+    for measurement in view.live("measurement"):
+        attributes = measurement.attributes
+        if attributes.get("role") == ASR_HYPOTHESIS_ROLE:
+            hypotheses[str(attributes.get("source") or attributes.get("name") or "")] = attributes
+    entities = sorted(view.live("word"), key=lambda entity: int(entity.attributes.get("index", 0)))
+    sources = list(hypotheses)
+    for entity in entities:
+        for source in entity.attributes.get("sources") or ():
+            if str(source) not in sources:
+                sources.append(str(source))
+    models = [{"source": source, "model_id": (hypotheses.get(source) or {}).get("model_id")} for source in sources]
+    own = []
+    for source, attributes in hypotheses.items():
+        text = str(attributes.get("transcript") or "").strip()
+        if not text:
+            text = " ".join(str(w.get("text") or "").strip() for w in attributes.get("words") or ()).strip()
+        own.append({"source": source, "model_id": attributes.get("model_id"), "text": text})
+    words = []
+    for entity in entities:
+        readings = entity.attributes.get("readings") or {}
+        agreement = entity.attributes.get("agreement")
+        words.append(
+            [
+                None if agreement is None else round(float(agreement), 3),
+                entity.attributes.get("outcome"),
+                [None if readings.get(source) is None else str(readings[source]) for source in sources],
+            ]
+        )
+    return {"models": models, "own": own, "words": words}
+
+
 def _relative(path: Path, root: Path) -> str:
     return str(path.relative_to(root)) if path.is_relative_to(root) else str(path)
 

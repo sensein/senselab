@@ -98,13 +98,21 @@ def _kind(values: Iterable[Any]) -> str:
     return "categorical"
 
 
-def index_of(records: Sequence[Mapping[str, Any]], *, title: str, audio_base: str) -> dict[str, Any]:
+SOURCE_BASE = "/_source"
+"""The URL route a served page fetches a stream outside the scan root through: the stream's absolute path
+appended to it (``scripts/triage_review_serve.py`` serves it)."""
+
+
+def index_of(
+    records: Sequence[Mapping[str, Any]], *, title: str, audio_base: str, source_base: str = SOURCE_BASE
+) -> dict[str, Any]:
     """The page's index over records already in page order.
 
     Args:
         records: The review records, in page order.
         title: The page title.
         audio_base: The URL prefix from the page to the scan root, used when the page is served.
+        source_base: The URL route an absolute stream path (one outside the scan root) is appended to.
 
     Returns:
         The index the page reads.
@@ -143,6 +151,7 @@ def index_of(records: Sequence[Mapping[str, Any]], *, title: str, audio_base: st
         "shard_size": int(spec["shards"]["records"]),
         "shard_dir": SHARD_DIR,
         "audio_base": audio_base,
+        "source_base": source_base,
         "spec": {k: int(spec["spectrogram"][k]) for k in ("frames", "bands", "levels")},
         "counts": dict(Counter(str(r.get("verdict")) for r in records)),
     }
@@ -199,7 +208,13 @@ def page_html(index: Mapping[str, Any], mark_style: str = "") -> str:
 
 
 def write_page(
-    records: Iterable[Mapping[str, Any]], out_dir: Path, *, title: str, audio_base: str, mark_style: str = ""
+    records: Iterable[Mapping[str, Any]],
+    out_dir: Path,
+    *,
+    title: str,
+    audio_base: str,
+    mark_style: str = "",
+    source_base: str = SOURCE_BASE,
 ) -> dict[str, Any]:
     """Write ``index.html`` and its side files.
 
@@ -209,12 +224,13 @@ def write_page(
         title: The page title.
         audio_base: The URL prefix from the page to the scan root.
         mark_style: The marked-transcript CSS rules.
+        source_base: The URL route an absolute stream path is appended to.
 
     Returns:
         The page's id, record count and sizes in bytes.
     """
     rows = ordered(records)
-    index = index_of(rows, title=title, audio_base=audio_base)
+    index = index_of(rows, title=title, audio_base=audio_base, source_base=source_base)
     size = int(index["build"]["shard_size"])
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / SHARD_DIR).mkdir(exist_ok=True)

@@ -24,7 +24,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from multiprocessing import Pool
 from pathlib import Path
-from typing import Any, Iterable, Iterator, Mapping, Sequence
+from typing import Any, Callable, Iterable, Iterator, Mapping, Sequence
 
 from senselab.audio.workflows.triage.b2ai_hints import read_sidecars
 from senselab.audio.workflows.triage.extend import source_of
@@ -1273,7 +1273,11 @@ def load(path: Path) -> Corpus:
     return corpus
 
 
-def paragraph(words: Sequence[Sequence[Any]], marks: Sequence[dict[str, Any]]) -> str:
+def paragraph(
+    words: Sequence[Sequence[Any]],
+    marks: Sequence[dict[str, Any]],
+    word: Callable[[Sequence[Any]], str] | None = None,
+) -> str:
     """One recording's consensus text as marked-up prose.
 
     Each mark the extract identified becomes one ``<mark>`` carrying its review key and its facets,
@@ -1282,6 +1286,7 @@ def paragraph(words: Sequence[Sequence[Any]], marks: Sequence[dict[str, Any]]) -
     Args:
         words: The word entries, ``[text, bracketed, mark index or -1]``.
         marks: The recording's marks, indexed by the third field of a word entry.
+        word: Renders one word entry; None for the plain escaped word.
 
     Returns:
         The HTML for the paragraph's contents.
@@ -1291,18 +1296,20 @@ def paragraph(words: Sequence[Sequence[Any]], marks: Sequence[dict[str, Any]]) -
     while index < len(words):
         owner = int(words[index][2]) if len(words[index]) > 2 else -1
         if owner < 0 or owner >= len(marks):
-            pieces.append(_plain(words[index]))
+            pieces.append((word or _plain)(words[index]))
             index += 1
             continue
         cursor = index + 1
         while cursor < len(words) and len(words[cursor]) > 2 and int(words[cursor][2]) == owner:
             cursor += 1
-        pieces.append(_mark(marks[owner], words[index:cursor]))
+        pieces.append(_mark(marks[owner], words[index:cursor], word or _plain))
         index = cursor
     return " ".join(pieces)
 
 
-def _mark(mark: dict[str, Any], run: Sequence[Sequence[Any]]) -> str:
+def _mark(
+    mark: dict[str, Any], run: Sequence[Sequence[Any]], word: Callable[[Sequence[Any]], str] | None = None
+) -> str:
     """One reviewable mark: its words, underlined in its state's colour, and its category.
 
     A mark carries exactly one category, on its label and on ``data-c`` alike. A span of another
@@ -1314,6 +1321,7 @@ def _mark(mark: dict[str, Any], run: Sequence[Sequence[Any]]) -> str:
     Args:
         mark: The mark record.
         run: The word entries it covers.
+        word: Renders one word entry; None for the plain escaped word.
 
     Returns:
         The mark's HTML.
@@ -1322,7 +1330,7 @@ def _mark(mark: dict[str, Any], run: Sequence[Sequence[Any]]) -> str:
     state = str(mark.get("s") or DETECTED)
     colour = MARK_COLOURS.get(state, "green")
     detectors = html.escape(" ".join(str(name) for name in mark["d"]) or "unattributed")
-    inner = " ".join(_plain(item) for item in run)
+    inner = " ".join((word or _plain)(item) for item in run)
     for overlay in reversed(mark.get("o") or []):
         inner = _overlay_mark(overlay, mark, inner)
     category = "" if colour == "orange" else f'<span class="cat">{shown}</span>'
@@ -1692,7 +1700,8 @@ font-family:ui-monospace,Menlo,monospace}
 """The rules a marked transcript needs: bracketed tokens, PII marks in their state colours, the category
 label and the release chips. The triage review page carries them too."""
 
-_STYLE = """
+_STYLE = (
+    """
 :root{--bg:#fbfaf8;--fg:#1d1c1a;--mut:#6b6860;--line:#e2ded6;--card:#fff;--acc:#7a4b12;
 --pii:#fde8c8;--piib:#c98a2b;--brk:#8d8a83;--brkbg:#f0eeea;--catbg:#f7dcb0;--catfg:#7a4b12;
 --ured:#b3123a;--ugreen:#1e7b34;--uorange:#a86b00;color-scheme:light}
@@ -1760,7 +1769,9 @@ border-radius:3px;padding:0 4px}
 .empty{color:var(--mut);font-style:italic}
 .themebtn{font:inherit;font-size:11px;padding:1px 7px;border:1px solid var(--line);border-radius:9px;
 background:var(--card);color:var(--mut);cursor:pointer}
-""" + MARK_STYLE + """.cat-chip{display:inline-block;font-size:11px;background:var(--card);border:1px solid var(--line);
+"""
+    + MARK_STYLE
+    + """.cat-chip{display:inline-block;font-size:11px;background:var(--card);border:1px solid var(--line);
 border-radius:9px;padding:1px 7px;margin:0 3px 3px 0}
 .errors{color:#8a2f24;font-size:12px}
 .noreview{font-size:11.5px;background:var(--pii);border-left:3px solid var(--piib);
@@ -1893,6 +1904,7 @@ mark.pii{padding:1px 3px}
 }
 @media (prefers-reduced-motion:reduce){*{scroll-behavior:auto !important}}
 """
+)
 
 _DARK_RULES = """
 :root{--bg:#171614;--fg:#eceae5;--mut:#9a958c;--line:#33312d;--card:#1f1e1b;--acc:#d9a45f;

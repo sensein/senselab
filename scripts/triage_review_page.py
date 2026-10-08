@@ -16,11 +16,14 @@ speech task its transcript, PII and redactions (from the free-speech review page
 Open ``index.html`` from ``file://`` to see quantised spectrograms. To hear the audio, serve the
 corpus root from the cluster and tunnel to it, then open http://localhost:8765/review/index.html::
 
-    ssh orcd 'cd CORPUS && python3 -m http.server 8765 --bind 127.0.0.1'   # on the cluster
-    ssh -N -L 8765:127.0.0.1:8765 orcd                                     # on the laptop
+    python3 scripts/triage_review_serve.py CORPUS --port 8765 --source-root /orcd/data/...   # cluster
+    ssh -N -L 8765:<node>:8765 orcd                                                         # laptop
 
-``--audio-base`` is the URL path from the page's directory to the corpus root; the stream paths are
-relative to that root. Both outputs carry transcribed speech and PII: keep them local.
+``--audio-base`` is the URL path from the page's directory to the corpus root; stream paths under
+that root are relative to it. A stream outside it (a raw recording read in place) keeps its absolute
+path and is fetched through ``--source-base`` (``/_source``), which the serve script maps onto the
+filesystem under its ``--source-root`` directories only. Both outputs carry transcribed speech and
+PII: keep them local.
 
 Install:
     uv sync --all-extras --group dev
@@ -40,8 +43,10 @@ from typing import Any, Iterator, Mapping, Sequence
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from senselab.audio.workflows.triage.nodes.branches import SPEECH_EXPECTATIONS  # noqa: E402
-from senselab.audio.workflows.triage.recording_vectors import recording_dirs  # noqa: E402
+from senselab.audio.workflows.triage.recording_vectors import RUN_SUBDIR, STORE_NAME, recording_dirs  # noqa: E402
 from senselab.audio.workflows.triage.review_page import review_record, write_page  # noqa: E402
+from senselab.audio.workflows.triage.review_page.page import SOURCE_BASE  # noqa: E402
+from senselab.audio.workflows.triage.review_page.records import transcripts  # noqa: E402
 from senselab.utils import fastio  # noqa: E402
 
 EXTRACT_SCHEMA = "senselab.triage.review.extract"
@@ -64,8 +69,18 @@ def _free_speech_page() -> Any:  # noqa: ANN401 -- a module
 SPEECH_FAMILIES = frozenset(SPEECH_EXPECTATIONS)
 
 
+def _agreement_word(entry: Sequence[Any]) -> str:
+    """One transcript word; a consensus word carries its position, for its agreement and alternatives."""
+    plain = _free_speech_page()._plain(entry)
+    return f'<span class="w" data-i="{int(entry[3])}">{plain}</span>' if len(entry) > 3 else plain
+
+
 def speech_view(run_root: Path) -> dict[str, Any] | None:
     """A speech task's transcript with its marks, PII findings and what decided its release.
+
+    The transcript shown is the consensus where it holds words, each wrapped with its position so the
+    page can show that word's agreement across the ASR models and their readings; otherwise the one
+    model's own transcript the free-speech reader falls back to, named.
 
     Args:
         run_root: The run root.
@@ -78,8 +93,25 @@ def speech_view(run_root: Path) -> dict[str, Any] | None:
     if row is None:
         return None
     determination = row.get("d") or {}
+    asr = transcripts(fs.read_store_light(run_root / RUN_SUBDIR / STORE_NAME, (fs.ASR_HYPOTHESIS_MARKER,)))
+    consensus_n = len(asr["words"])
+    entries = [
+        [*entry, position] if position < consensus_n else list(entry)
+        for position, entry in enumerate(row.get("w") or [])
+    ]
+    single = row.get("ss")
+    if consensus_n:
+        shown: dict[str, Any] = {"kind": "consensus", "source": None}
+    elif single:
+        shown = {"kind": "model", "source": single.get("src")}
+    else:
+        shown = {"kind": "none", "source": None}
     return {
-        "html": fs.paragraph(row.get("w") or [], row.get("f") or []),
+        "html": fs.paragraph(entries, row.get("f") or [], _agreement_word),
+        "shown": shown,
+        "models": asr["models"],
+        "own": asr["own"],
+        "words": asr["words"],
         "pii": row.get("pii") or [],
         "release_ground": row.get("rg"),
         "why": row.get("why"),
@@ -191,6 +223,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     renderer.add_argument("--out", type=Path, required=True)
     renderer.add_argument("--title", default="Triage review")
     renderer.add_argument("--audio-base", default="../", help="URL path from the page's directory to the corpus root")
+    renderer.add_argument(
+        "--source-base",
+        default=SOURCE_BASE,
+        help="URL route a stream outside the corpus root (an absolute path) is fetched through",
+    )
     arguments = parser.parse_args(argv)
     if arguments.command == "extract":
         summary = extract(
@@ -207,6 +244,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         arguments.out,
         title=arguments.title,
         audio_base=arguments.audio_base,
+        source_base=arguments.source_base,
         mark_style=_free_speech_page().MARK_STYLE,
     )
     print(json.dumps(written, indent=2))

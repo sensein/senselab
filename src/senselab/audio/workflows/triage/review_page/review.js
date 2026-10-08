@@ -578,6 +578,13 @@ var ReviewPage = (function () {
     }
   }
 
+  /** A stream's URL: under the corpus root through audio_base, outside it through the source route. */
+  function streamUrl(path, build) {
+    var encoded = path.split('/').map(encodeURIComponent).join('/');
+    if (path.charAt(0) === '/') return (build.source_base || '/_source') + encoded;
+    return build.audio_base + encoded;
+  }
+
   function audioSection(rec) {
     var sec = el('section', 'rv-audio');
     sec.appendChild(el('h3', null, 'audio'));
@@ -591,7 +598,7 @@ var ReviewPage = (function () {
     var base = state.index.build.audio_base;
     order.forEach(function (name) {
       if (!streams[name]) return;
-      var url = base + streams[name].split('/').map(encodeURIComponent).join('/');
+      var url = streamUrl(streams[name], state.index.build);
       var wrap = el('div');
       wrap.appendChild(el('span', 'rv-note', name));
       var a = el('audio'); a.controls = true; a.preload = 'none'; a.src = url;
@@ -630,12 +637,88 @@ var ReviewPage = (function () {
     return sec;
   }
 
+  /** A recogniser's label: its model id, with the pipeline's source name where that differs. */
+  function modelLabel(m) {
+    if (!m) return 'unknown model';
+    if (m.model_id && m.model_id !== m.source) return m.model_id + (m.source ? ' (' + m.source + ')' : '');
+    return m.source || m.model_id || 'unknown model';
+  }
+
+  /** The agreement band a consensus word's shading is drawn from. */
+  function agreementBand(a) {
+    if (a === null || a === undefined) return null;
+    if (a >= 0.999) return 'ag-all';
+    if (a >= 0.66) return 'ag-most';
+    if (a >= 0.34) return 'ag-some';
+    return 'ag-few';
+  }
+
+  /** What each model read at one consensus word, one line per model. */
+  function alternatives(sp, word) {
+    var models = sp.models || [];
+    var head = word[1] + ', agreement ' + (word[0] === null ? '—' : Math.round(word[0] * 100) + '%');
+    return [head].concat((word[2] || []).map(function (r, k) {
+      return modelLabel(models[k]) + ': ' + (r === null || r === undefined ? '(no word)' : r);
+    })).join('\n');
+  }
+
+  /** Shade each consensus word by its agreement and show the models' readings on hover or tap. */
+  function decorateWords(p, sp, detail) {
+    var words = sp.words || [];
+    p.querySelectorAll('span.w[data-i]').forEach(function (span) {
+      var word = words[+span.getAttribute('data-i')];
+      if (!word) return;
+      var band = agreementBand(word[0]);
+      if (band) span.classList.add(band);
+      span.title = alternatives(sp, word);
+      span.tabIndex = 0;
+      span.onclick = function (e) { e.stopPropagation(); detail.textContent = span.title; detail.hidden = false; };
+    });
+  }
+
   function speechSection(sp) {
     var sec = el('section', 'rv-speech');
     sec.appendChild(el('h3', null, 'transcript, PII and redactions'));
+    var shown = sp.shown || {};
+    var models = sp.models || [];
+    var label;
+    if (shown.kind === 'consensus') {
+      label = 'consensus of ' + models.length + ' ASR model' + (models.length === 1 ? '' : 's') + ': ' +
+        models.map(modelLabel).join(', ') + ' — shaded by agreement; hover or tap a word for each model’s reading';
+    } else if (shown.kind === 'model') {
+      var m = models.filter(function (x) { return x.source === shown.source; })[0] || { source: shown.source };
+      label = 'individual ASR model: ' + modelLabel(m) + ' (the consensus holds no words)';
+    } else {
+      label = 'no ASR model left a word';
+    }
+    sec.appendChild(el('div', 'rv-tx-label', label));
     var p = el('p', 'text');
     p.innerHTML = sp.html || '<span class="empty">no words</span>';
     sec.appendChild(p);
+    if (shown.kind === 'consensus') {
+      var legend = el('div', 'rv-legend rv-ag-legend');
+      [['ag-all', 'all agree'], ['ag-most', '≥ 2/3'], ['ag-some', '≥ 1/3'], ['ag-few', 'under 1/3']].forEach(function (b) {
+        var item = el('span'); item.appendChild(el('i', b[0])); item.appendChild(document.createTextNode(b[1]));
+        legend.appendChild(item);
+      });
+      sec.appendChild(legend);
+      var detail = el('pre', 'rv-word-detail');
+      detail.hidden = true;
+      sec.appendChild(detail);
+      decorateWords(p, sp, detail);
+    }
+    var own = sp.own || [];
+    if (own.length) {
+      var box = el('details', 'rv-own');
+      box.appendChild(el('summary', null, 'individual ASR transcripts (' + own.length + ')'));
+      own.forEach(function (o) {
+        var row = el('div', 'rv-own-row');
+        row.appendChild(el('div', 'rv-own-model', modelLabel(o)));
+        row.appendChild(el('div', 'rv-own-text', o.text || '(no words)'));
+        box.appendChild(row);
+      });
+      sec.appendChild(box);
+    }
     var lines = [];
     if (sp.release_ground) lines.push('release ground: ' + sp.release_ground);
     if (sp.why) lines.push('verdict: ' + sp.why);
@@ -731,6 +814,10 @@ var ReviewPage = (function () {
     exportPayload: exportPayload,
     importDecisions: importDecisions,
     shard: shard,
+    modelLabel: modelLabel,
+    agreementBand: agreementBand,
+    alternatives: alternatives,
+    streamUrl: streamUrl,
   };
 })();
 
