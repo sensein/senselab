@@ -173,7 +173,9 @@ threshold tuned on the scored split inflates the score. A threshold whose split 
 scored split (ignoring case and surrounding whitespace) is refused, as are NaN thresholds and
 non-finite scores. The headline is balanced accuracy whatever objective set the threshold.
 
-**Export to a reproduction driver's `metrics.json`** (written by the CLI, T10):
+**Export to a reproduction driver's `metrics.json`** (`export.reproduce_metrics`; the CLI writes it to
+`reproduce_metrics.json`, beside its own `metrics.json`, since the driver's validator refuses keys outside
+its vocabulary):
 
 | Report | Driver entry | Floor agreement |
 |---|---|---|
@@ -185,10 +187,11 @@ non-finite scores. The headline is balanced accuracy whatever objective set the 
 | `roc_auc` | secondary `auroc` | same: 0.5 |
 | `average_precision`, binary with positive label | secondary `pr_auc` | same: p |
 | `average_precision`, multi-class (macro one-vs-rest, floor 1/k) | not exported | the driver defines `pr_auc` for a declared positive class only |
-| `per_class` | `per_class.{recall, precision, f1, prevalence}` | `None` values (absent labels, never-predicted precision) are mapped in T10 |
-| `confusion_matrix`, binary | `confusion.{tp, fp, fn, tn}` | how invalid outputs map onto the four cells is settled in T10 |
+| `per_class` | `per_class.{recall, precision, f1, prevalence}` | a declared class absent from the split: export refused (its recall is undefined; inventing one would misreport the split); a present class never predicted: precision 0.0 (no prediction of it was correct; scikit-learn's `zero_division=0`) |
+| `confusion_matrix`, binary with positive label | `confusion.{tp, fp, fn, tn}` | omitted when invalid outputs occur (no 2 × 2 cell holds them) and for multi-class |
 | `threshold_tuning` | `threshold_tuning` | — |
-| `split_report` | `SplitReport.to_reproduce()` | — |
+| `split_report` | `SplitReport.to_reproduce()` | omitted when the report has none (the CLI scores splits made elsewhere; the step's schema then opts out with `split: {none: whole_dataset}` or the adapter adds the split report) |
+| intervals (`ci`) | `ci_low`, `ci_high` on the entry | only when the bootstrap gave bounds |
 
 References:
 
@@ -441,3 +444,17 @@ Times are written as the shortest decimal that round-trips to the same float, so
 
 The test checks the bound on pairs known to be inexact and on a power-of-two offset, where the
 float spacing below `b` is half the spacing above it.
+
+## Command line
+
+`senselab-evaluate <predictions.csv> --config <file.yaml> [--out DIR]` follows senselab's two-argument
+rule: every setting is a config key, deep-merged over `data/default.yaml`, whose merged mapping's sha256
+(of the parsed values, so comments do not change it) is written to `metrics.json`. There is no
+`headline` key: the headline is always balanced accuracy. `schema` and `protocol` have no default.
+Predictions are joined to an optional ground-truth CSV on `item_ref`; rows without ground truth are
+dropped and counted (`n_dropped`, `n_unmatched_predictions`), ground-truth rows without a prediction
+are counted (`n_unscored_ground_truth`). With `threshold.tune_on_split`, the threshold is tuned on that
+split's rows and applied to every other split; the tuning split itself is not scored. Cells are read as
+strings with no missing-value conversion (`reader`); other reader settings are refused. The command
+exits 2 on usage or input errors and 1 when the reports were written but the reproduction export was
+refused.

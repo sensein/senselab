@@ -1,40 +1,91 @@
 # Evaluation utilities
 
-Dataset-agnostic splitting and scoring for classification and event detection. Every split and
-every report carries a `protocol` (`seen_subject` or `unseen_subject`), and every classification
-report leads with balanced accuracy, giving each metric's chance or trivial floor beside it.
+Dataset-agnostic splitting and scoring for classification and event detection. Every split and every
+report names its **protocol**, every classification report leads with **balanced accuracy** (the only
+headline), and every metric comes with its chance or trivial **floor**. The design and its reasoning
+are in `specs/20261007-evaluation-and-events/design.md`.
 
-The design and its reasoning are in `specs/20261007-evaluation-and-events/design.md`.
+## Protocols
 
-This page is a stub. The functions below are added module by module; each section is filled in
-when its module lands.
+- `unseen_subject`: no subject appears in two partitions. Does the model work on new people?
+- `seen_subject`: every test subject is also in train, no unit is in two partitions, and every
+  subject has at least two units. Does it work on new material from people it has seen? The unit is
+  declared by the caller (`unit_name`, required, for example `recording` or `clip`) and recorded in the
+  split report.
 
-## Public functions
+A violation raises `ProtocolViolation` (counts only, never ids).
 
-Splits (`splits.py`, `protocol.py`):
+## Modules
 
-- `grouped_splits`: grouped, protocol-checked splits (stratified group k-fold, multi-label,
-  combined strata, leave-one-subject-out, grouped shuffle, seen-subject k-fold and holdout).
-- `nested_grouped_splits`: inner splits drawn from each outer training partition only.
-- `check_split`: checks a split made elsewhere against a protocol and returns its report.
+| Module | Public API |
+|---|---|
+| `splits` | `grouped_splits`, `check_split`, `nested_grouped_splits`, `Split`, `SplitReport` (`to_reproduce()`) |
+| `protocol` | `Protocol`, `ProtocolViolation`, `check_protocol` |
+| `metrics` | `balanced_accuracy` (the headline definition), `legacy_macro_recall` (parity only), confusion-matrix helpers |
+| `classification` | `score_classification`, `score_splits`, `ClassificationReport`, `EvaluationReport` (both `to_dict()`) |
+| `thresholds` | `tune_threshold`, `load_threshold_grid`, `ThresholdChoice` |
+| `bootstrap` | `cluster_bootstrap_ci`, `paired_cluster_bootstrap_delta`, `legacy_cluster_bootstrap`, `BootstrapCI` |
+| `delong` | `delong_test`, `DeLongResult` |
+| `event_metrics` | `event_f1`, `segment_map` |
+| `export` | `reproduce_metrics` (one report in a reproduction driver's `metrics.json` vocabulary) |
+| `cli` | `senselab-evaluate` |
 
-Classification (`classification.py`, `thresholds.py`):
+## Report fields
 
-- `score_classification`: the imbalance-aware report for one split.
-- `score_splits`: reports for several splits, with prevalence per split.
-- `tune_threshold`: a threshold chosen on a validation split from a grid kept in `data/`.
+A `ClassificationReport` holds: `protocol`, `split_name`, `labels`, `n`, `n_dropped`, `invalid_rate`,
+`prevalence`, `predicted_prevalence`, `reference_prevalence`, `absent_labels`, `headline`
+(`balanced_accuracy`), `headline_value`, `balanced_accuracy`, `secondary` (`accuracy`, `f1_macro`,
+`mcc`, and `f1` for a binary task with a positive label), `per_class`, `confusion_matrix` (invalid
+outputs as a column), `roc_auc` and `average_precision` (with scores), `threshold` and
+`threshold_tuning`, `split_report`, and `ci` (cluster-bootstrap intervals when groups are given). Each
+metric is a `MetricValue{value, floor, lift, normalized_lift}`; undefined values are `None`, never NaN.
 
-Uncertainty and comparison (`bootstrap.py`, `delong.py`):
+## Floors
 
-- `cluster_bootstrap_ci`: percentile intervals from resampling groups.
-- `paired_cluster_bootstrap_delta`: the paired group-level difference between two models.
-- `delong_test`: DeLong's test for two correlated ROC-AUCs.
+| Metric | Floor |
+|---|---|
+| balanced accuracy | 1/k, k = labels present in `y_true` |
+| accuracy | majority-class prevalence |
+| macro-F1 (present labels) | 1/k |
+| MCC | 0 |
+| positive-class F1 | 2p/(1+p) |
+| ROC-AUC | 0.5 |
+| average precision | p (binary), 1/k (macro one-vs-rest) |
 
-Events (`event_metrics.py`):
+## Example on synthetic data
 
-- `event_f1`: onset-tolerance F1 with one-to-one matching.
-- `segment_map`: temporal-localisation mean average precision over tIoU thresholds.
+```python
+import numpy as np
+from senselab.utils.evaluation.classification import score_classification
+from senselab.utils.evaluation.splits import grouped_splits
 
-Command line (`cli.py`):
+rng = np.random.default_rng(0)
+subjects = np.repeat([f"s{i}" for i in range(30)], 10)
+y = np.where(rng.random(300) < 0.2, "pos", "neg")
+scores = np.clip(np.where(y == "pos", 0.7, 0.35) + rng.normal(0, 0.15, 300), 0, 1)
 
-- `senselab-evaluate <predictions.csv> --config <file.yaml> [--out DIR]`.
+splits, split_report = grouped_splits(
+    y, subjects, protocol="unseen_subject", scheme="stratified_group_kfold", seed=0
+)
+test = splits[0].partitions["test"]
+report = score_classification(
+    y[test], np.where(scores[test] >= 0.5, "pos", "neg"),
+    labels=["neg", "pos"], protocol="unseen_subject", split_name="fold0", n_dropped=0,
+    split_report=split_report, y_score=scores[test], positive_label="pos",
+    groups=subjects[test], n_resamples=500, seed=0,
+)
+print(report.headline, report.headline_value, report.balanced_accuracy.floor)
+```
+
+## Command line
+
+```bash
+senselab-evaluate predictions.csv --config my_eval.yaml --out results/
+```
+
+Every setting is in the config, deep-merged over `data/default.yaml` (keys: `schema`, `protocol`,
+`columns`, `ground_truth`, `positive_label`, `threshold`, `bootstrap`, `reader`, `export`); `schema` and
+`protocol` are required. The command writes `metrics.json` (the evaluation report, `config_sha256`,
+`senselab_version`, row counts), `config.yaml` (the merged config) and `reproduce_metrics.json` for the
+exported split. It exits 1 when the export is refused (for example a declared class absent from the
+split), 2 on a usage or input error.
