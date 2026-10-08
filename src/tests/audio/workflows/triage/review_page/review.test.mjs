@@ -1,6 +1,6 @@
 // The review page's pure parts: decoding the index, the columns it registers, the axes per evidence
-// group, search, the spectrogram unpacking, and the reviewer's export round trip. Every row here is
-// synthetic.
+// group, search, the spectrogram unpacking, the transcript alignment and lanes, and the reviewer's
+// export round trip. Every row here is synthetic.
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -112,12 +112,7 @@ test('a transcript names its model by id, with the pipeline source where it diff
   assert.equal(R.modelLabel(undefined), 'unknown model')
 })
 
-test('a consensus word is shaded by its agreement band and lists every model reading', () => {
-  assert.equal(R.agreementBand(1), 'ag-all')
-  assert.equal(R.agreementBand(0.67), 'ag-most')
-  assert.equal(R.agreementBand(0.5), 'ag-some')
-  assert.equal(R.agreementBand(0.25), 'ag-few')
-  assert.equal(R.agreementBand(null), null)
+test('a consensus word lists every model reading', () => {
   const sp = { models: [{ source: 'a', model_id: 'org/a' }, { source: 'b', model_id: 'org/b' }] }
   const text = R.alternatives(sp, [0.5, 'variant', ['birch', null]])
   assert.equal(text, 'variant, agreement 50%\norg/a (a): birch\norg/b (b): (no word)')
@@ -170,13 +165,6 @@ test('each model gets a lane of its own timed words, untimed ones left to the te
     'nyralabs/CrisperWhisper2.0_turbo (asr_crisperwhisper)', 'Qwen/Qwen3-ASR-1.7B (asr_qwen)',
   ])
   assert.deepEqual(lanes[1].tokens, [[0.0, 0.96, 'Barakat']])
-})
-
-test('a reading other than the consensus surface is kept, naming the one model that gave it', () => {
-  assert.equal(R.tokenKey('Time?'), 'time')
-  assert.deepEqual(R.otherReadings(SP, SP.words[0], 'What'), [{ text: 'Barakat', models: ['Qwen/Qwen3-ASR-1.7B (asr_qwen)'] }])
-  assert.deepEqual(R.otherReadings(SP, [1, 'agreement', ['what', 'What?'], 0, 1, 'what'], 'what'), [])
-  assert.deepEqual(R.readersOf(SP, SP.words[1]), ['nyralabs/CrisperWhisper2.0_turbo (asr_crisperwhisper)'])
 })
 
 test('the page plays the recording and enhanced streams, never the task cuts', () => {
@@ -247,4 +235,80 @@ test('play task span gives up waiting for seeked and still checks where the play
   await settle()
   assert.deepEqual(failed, [0])
   assert.equal(a.plays, 0)
+})
+
+// The buttercup case's shape: one model repeating a phrase, the other a single word, so most columns
+// are one model's insertions and the rest are variants. One word sits inside a PII mark.
+const PHRASE = ['What', 'is', 'it', 'like?']
+const BUTTERCUP_WORDS = [
+  [0.5, 'variant', ['What', 'Barakat'], 0.01, 0.63, 'What'],
+  [0.5, 'insertion', ['are', null], 0.53, 0.63, 'are'],
+  [0.5, 'insertion', ['the', null], 0.63, 0.8, 'the'],
+  [0.5, 'variant', ['time?', 'barakat'], 0.88, 1.2, 'time?'],
+]
+for (let k = 0; k < 18; k++) {
+  const variant = k % 4 === 0 && k < 16
+  BUTTERCUP_WORDS.push([0.5, variant ? 'variant' : 'insertion', [PHRASE[k % 4], variant ? 'barakat' : null],
+    1.06 + 0.15 * k, 1.2 + 0.15 * k, PHRASE[k % 4]])
+}
+const word = (i, w) => `<span class="w" data-i="${i}">${w[5]}</span>`
+const BUTTERCUP = {
+  models: SP.models,
+  own: SP.own,
+  words: BUTTERCUP_WORDS,
+  html: BUTTERCUP_WORDS.map((w, i) => i === 3
+    ? `<mark class="pii u-green" data-k="k3" data-c="PERSON"><span class="cat">PERSON</span>${word(i, w)}</mark>`
+    : word(i, w)).join(' '),
+}
+
+test('each model gets a short initial from its family, distinct across models', () => {
+  assert.deepEqual(R.modelInitials(SP.models), ['W', 'Q'])
+  assert.deepEqual(R.modelInitials([{ source: 'asr_canary' }, { source: 'asr_crisp', model_id: 'x/canary-1b' }]), ['C', 'C2'])
+})
+
+test('a word without a stored outcome takes one from its readings', () => {
+  assert.equal(R.outcomeOf([1, null, ['a', 'A'], 0, 1, 'a']), 'agreement')
+  assert.equal(R.outcomeOf([0.5, null, ['a', 'b'], 0, 1, 'a']), 'variant')
+  assert.equal(R.outcomeOf([0.5, null, ['a', null], 0, 1, 'a']), 'insertion')
+  assert.equal(R.outcomeOf([0.5, 'variant', ['a', 'a'], 0, 1, 'a']), 'variant')
+})
+
+test('the buttercup alignment has 22 columns: 6 variants and 16 of one model\'s insertions', () => {
+  const cols = R.alignmentColumns(BUTTERCUP)
+  assert.equal(cols.length, 22)
+  assert.deepEqual(R.alignmentSummary(BUTTERCUP),
+    { columns: 22, agreement: 0, variant: 6, insertion: 16, insertionsBy: { W: 16, Q: 0 } })
+  assert.deepEqual(cols[0].rows.map((r) => [r.initial, r.text, r.chosen]), [['W', 'What', true], ['Q', 'Barakat', false]])
+  assert.deepEqual(cols[1].rows.map((r) => [r.initial, r.text]), [['W', 'are'], ['Q', null]])
+})
+
+test('the alignment replaces each word with its column and keeps the PII mark around its word', () => {
+  const html = R.alignmentHtml(BUTTERCUP)
+  assert.equal((html.match(/class="al-col /g) || []).length, 22)
+  assert.equal((html.match(/al-col al-variant/g) || []).length, 6)
+  assert.equal((html.match(/al-col al-insertion/g) || []).length, 16)
+  assert.equal((html.match(/class="al-r al-gap"/g) || []).length, 16)
+  assert.ok(!html.includes('class="w"'))
+  assert.match(html, /<mark class="pii u-green"[^>]*><span class="cat">PERSON<\/span><span class="al-col al-variant" data-i="3" data-t="0.88" data-e="1.2"/)
+  assert.match(html, /<span class="al-t">0\.88<\/span><span class="al-r chosen"><b class="al-m"[^>]*>W<\/b>time\?<\/span><span class="al-r"><b class="al-m"[^>]*>Q<\/b>barakat<\/span>/)
+})
+
+test('an agreement column shows its word once, keeping its bracket markup; readings are escaped', () => {
+  const sp = {
+    models: SP.models,
+    words: [[1, 'agreement', ['[laughs]', '[laughs]'], 0, 0.4, '[laughs]'], [0.5, 'variant', ['a<b', 'c'], 0.4, 0.8, 'c']],
+    html: '<span class="w" data-i="0"><span class="bracket">[laughs]</span></span> <span class="w" data-i="1">c</span>',
+  }
+  const html = R.alignmentHtml(sp)
+  assert.match(html, /al-agreement[^>]*><span class="al-t">0\.00<\/span><span class="al-r"><span class="bracket">\[laughs\]<\/span><\/span><\/span>/)
+  assert.ok(html.includes('a&lt;b'))
+  assert.ok(!html.includes('a<b'))
+})
+
+test('overlapping lane tokens go to separate rows; a label shows only where it fits its box', () => {
+  assert.deepEqual(R.packRows([[0, 1], [0.5, 1.5], [1, 2], [1.2, 1.3]]), [0, 1, 0, 2])
+  assert.deepEqual(R.packRows([[0.88, 1.2], [1.06, 1.2], [1.2, 1.33]]), [0, 1, 0])
+  assert.equal(R.labelFits(40, 'What', 7), true)
+  assert.equal(R.labelFits(20, 'What', 7), false)
+  assert.equal(R.labelFits(0, '', 7), true)
 })
