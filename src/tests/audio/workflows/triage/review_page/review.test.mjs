@@ -128,3 +128,61 @@ test('a stream under the corpus root goes through audio_base, one outside it thr
   assert.equal(R.streamUrl('sub-a/ses-1/run/streams/plain.flac', build), '../sub-a/ses-1/run/streams/plain.flac')
   assert.equal(R.streamUrl('/orcd/data/b2ai/sub a.wav', build), '/_source/orcd/data/b2ai/sub%20a.wav')
 })
+
+test('the time window zooms about a point and pans, staying inside the recording', () => {
+  const whole = { t0: 0, t1: 4 }
+  const z = R.zoomWindow(whole, 4, 0.5, 1)
+  assert.ok(Math.abs(z.t1 - z.t0 - 2) < 1e-9)
+  assert.ok(Math.abs(z.t0 - 0.5) < 1e-9)
+  assert.deepEqual(R.zoomWindow(z, 4, 4, 2), { t0: 0, t1: 4 })
+  assert.ok(R.zoomWindow(whole, 4, 0.001, 2).t1 - R.zoomWindow(whole, 4, 0.001, 2).t0 >= 0.25 - 1e-9)
+  assert.deepEqual(R.panWindow({ t0: 1, t1: 2 }, 4, 5), { t0: 3, t1: 4 })
+  assert.deepEqual(R.panWindow({ t0: 1, t1: 2 }, 4, -5), { t0: 0, t1: 1 })
+})
+
+test('a span is placed as fractions of the window, and dropped outside it', () => {
+  assert.deepEqual(R.placeSpan(1, 2, { t0: 0, t1: 4 }), { left: 0.25, width: 0.25 })
+  assert.equal(R.placeSpan(5, 6, { t0: 0, t1: 4 }), null)
+  assert.equal(R.placeSpan(null, 1, { t0: 0, t1: 4 }), null)
+  assert.deepEqual(R.ticks({ t0: 0, t1: 5 }, 5), [0, 1, 2, 3, 4, 5])
+  assert.deepEqual(R.ticks({ t0: 1.05, t1: 1.5 }, 5), [1.1, 1.2, 1.3, 1.4, 1.5])
+})
+
+// The shape of the r18 buttercup case: two models, every word of the second losing a tie or absent.
+const SP = {
+  models: [
+    { source: 'asr_crisperwhisper', model_id: 'nyralabs/CrisperWhisper2.0_turbo' },
+    { source: 'asr_qwen', model_id: 'Qwen/Qwen3-ASR-1.7B' },
+  ],
+  own: [
+    { source: 'asr_crisperwhisper', model_id: 'nyralabs/CrisperWhisper2.0_turbo', text: 'What are', words: [[0.02, 0.53, 'What'], [0.53, 0.63, 'are']] },
+    { source: 'asr_qwen', model_id: 'Qwen/Qwen3-ASR-1.7B', text: 'Barakat', words: [[0.0, 0.96, 'Barakat'], [null, null, 'untimed']] },
+  ],
+  words: [
+    [0.5, 'variant', ['What', 'Barakat'], 0.01, 0.63, 'What'],
+    [0.5, 'insertion', ['are', null], 0.53, 0.63, 'are'],
+  ],
+}
+
+test('each model gets a lane of its own timed words, untimed ones left to the text list', () => {
+  const lanes = R.modelLanes(SP)
+  assert.deepEqual(lanes.map((l) => l.label), [
+    'nyralabs/CrisperWhisper2.0_turbo (asr_crisperwhisper)', 'Qwen/Qwen3-ASR-1.7B (asr_qwen)',
+  ])
+  assert.deepEqual(lanes[1].tokens, [[0.0, 0.96, 'Barakat']])
+})
+
+test('a reading other than the consensus surface is kept, naming the one model that gave it', () => {
+  assert.equal(R.tokenKey('Time?'), 'time')
+  assert.deepEqual(R.otherReadings(SP, SP.words[0], 'What'), [{ text: 'Barakat', models: ['Qwen/Qwen3-ASR-1.7B (asr_qwen)'] }])
+  assert.deepEqual(R.otherReadings(SP, [1, 'agreement', ['what', 'What?'], 0, 1, 'what'], 'what'), [])
+  assert.deepEqual(R.readersOf(SP, SP.words[1]), ['nyralabs/CrisperWhisper2.0_turbo (asr_crisperwhisper)'])
+})
+
+test('the page plays the recording and enhanced streams, never the task cuts', () => {
+  const streams = { recording: '/a.wav', enhanced: 'e.flac', plain: 'p.flac', redacted: 'r.flac', released: 'x.flac',
+    task_plain: 'tp.flac', task_enhanced: 'te.flac' }
+  assert.deepEqual(R.audioTracks({ streams }).map((t) => t.name), ['recording', 'enhanced', 'released'])
+  assert.deepEqual(R.audioTracks({ streams, speech: {} }).map((t) => [t.name, t.timeline]),
+    [['recording', true], ['enhanced', true], ['redacted', true], ['released', false]])
+})
