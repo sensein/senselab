@@ -2249,8 +2249,9 @@ def mask_plan(
     reviewer entry or rule masks it, and neither any other word reading as the token a finding read on it.
     A decision about a token holds at every occurrence (:func:`word_keys`, the consensus surface or any
     recogniser's reading): a reviewer ``release`` releases every covered occurrence the policy does not
-    lock, and a name kept masked masks every other occurrence that is not task content, approved, a
-    condition or released by kind, placing a :data:`PROPAGATED` mask where no finding covers it.
+    lock, and a name kept masked -- adjacent kept name words matched as one run -- masks every other
+    occurrence that is not task content, approved, a condition or released by kind, placing a
+    :data:`PROPAGATED` mask where no finding covers it.
     The kept words are cut into one extent per adjacent run, padded up to the nearest unmasked word.
     The rules are in ``specs/20261003-redaction-policy-v7/design.md`` and
     ``specs/20261007-task-events-in-background/design.md`` ("Redaction decisions per token").
@@ -2722,30 +2723,40 @@ def mask_plan(
         )
 
     reviewer_name_ids = {word.id for family, group in reviewer_masks if family in name_kinds for word in group}
-    name_sources: dict[str, set[str]] = {}
-    for word_id in kept_ids:
-        families = {category_family(category) for category in found.get(word_id, ())}
-        if not (
-            families & name_kinds or locked.get(word_id) in (LOCK_PERSON, LOCK_PLACE) or word_id in reviewer_name_ids
-        ):
-            continue
-        for key in read_keys.get(word_id) or {surface_key(word_id)}:
-            if key and is_content_word(key) and key not in task_words.keys:
-                name_sources.setdefault(key, set()).add(word_id)
+    name_ids = {
+        word_id
+        for word_id in kept_ids
+        if {category_family(category) for category in found.get(word_id, ())} & name_kinds
+        or locked.get(word_id) in (LOCK_PERSON, LOCK_PLACE)
+        or word_id in reviewer_name_ids
+    }
+    patterns: list[tuple[tuple[frozenset[str], ...], tuple[str, ...]]] = []
+    for run in _runs(sorted(name_ids & set(order)), order):
+        pattern = tuple(
+            frozenset(key for key in (read_keys.get(word_id) or {surface_key(word_id)}) if key) - task_words.keys
+            for word_id in run
+        )
+        if all(pattern) and any(is_content_word(key) for keys in pattern for key in keys):
+            patterns.append((pattern, tuple(run)))
     spread_from: dict[str, tuple[str, ...]] = {}
-    for word in words:
-        if (
-            word.id in kept_ids
-            or word.id in excluded_ids
-            or word.id in approved_ids
-            or word.id in condition_ids
-            or word.id in kind_of
-            or word.attributes.get("bracketed")
-        ):
-            continue
-        shared = keys_of[word.id] & set(name_sources)
-        if shared:
-            spread_from[word.id] = tuple(sorted({source for key in shared for source in name_sources[key]}))
+    for at in range(len(words)):
+        for pattern, sources in patterns:
+            width = len(pattern)
+            if at + width > len(words) or not all(
+                keys_of[words[at + offset].id] & pattern[offset] for offset in range(width)
+            ):
+                continue
+            for word in words[at : at + width]:
+                if (
+                    word.id in kept_ids
+                    or word.id in excluded_ids
+                    or word.id in approved_ids
+                    or word.id in condition_ids
+                    or word.id in kind_of
+                    or word.attributes.get("bracketed")
+                ):
+                    continue
+                spread_from[word.id] = tuple(sorted({*spread_from.get(word.id, ()), *sources}))
     kept_ids |= set(spread_from)
     propagated_masks: list[tuple[str, list[Entity]]] = []
     for run in _runs(sorted(set(spread_from) - covered_ids), order):

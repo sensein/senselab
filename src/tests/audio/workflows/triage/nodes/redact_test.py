@@ -3592,3 +3592,26 @@ class TestTheTaskSOwnEventsAreNeverMasked:
         _stub_pii(monkeypatch, findings=[])
         redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
         assert _verdict_entity(store, "REDACT").attributes["task_event_exempt_n"] == 0
+
+
+class TestAMultiWordNameSpreadsAsARun:
+    """A kept name of several words is matched as the run it is, never word by word."""
+
+    def test_new_york_masks_new_york_and_never_a_lone_new(
+        self, store: ProvStore, redact_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The kept "New York" masks "new york" later, and leaves "a new car" alone."""
+        words = ["in", "New", "York", "a", "new", "car", "in", "new", "york"]
+        _seed_redact_store(
+            store, tmp_path, words=words, findings=[("LOCATION", (_word_extent(1)[0], _word_extent(2)[1]))]
+        )
+        _stub_pii(monkeypatch, findings=[])
+        redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
+        plan = _plan(store)
+        assert sorted(_masked_indices(store, plan)) == [1, 2, 7, 8]
+
+
+def _masked_indices(store: ProvStore, plan: MaskPlan) -> list[int]:
+    """The stream positions of the words the plan keeps masked."""
+    kept = {word.word_id for mask in plan.masks for word in mask.words if word.state == MASKED}
+    return [int(word.attributes["index"]) for word in store.entities("word") if word.id in kept]
