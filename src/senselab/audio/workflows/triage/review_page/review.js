@@ -199,35 +199,133 @@ var ReviewPage = (function () {
     return String(text == null ? '' : text).toLowerCase().replace(/[^\p{L}\p{N}']/gu, '');
   }
 
-  /** The labels of the models that read a consensus word. */
-  function readersOf(sp, word) {
-    var models = sp.models || [];
-    var out = [];
-    (word[2] || []).forEach(function (r, k) { if (r !== null && r !== undefined) out.push(modelLabel(models[k])); });
-    return out;
-  }
-
-  /** The readings of a consensus word other than its surface, each with the models that read it. */
-  function otherReadings(sp, word, surface) {
-    var models = sp.models || [];
-    var shown = tokenKey(surface);
-    var byKey = {};
-    var order = [];
-    (word[2] || []).forEach(function (r, k) {
-      if (r === null || r === undefined) return;
-      var key = tokenKey(r);
-      if (key === shown || !key) return;
-      if (!byKey[key]) { byKey[key] = { text: r, models: [] }; order.push(key); }
-      byKey[key].models.push(modelLabel(models[k]));
-    });
-    return order.map(function (k) { return byKey[k]; });
-  }
-
   /** One lane per model, its own words in its own order: `{label, tokens: [[start, end, text]]}`. */
   function modelLanes(sp) {
     return (sp.own || []).map(function (o) {
       return { label: modelLabel(o), tokens: (o.words || []).filter(function (w) { return w[0] != null && w[1] != null; }) };
     });
+  }
+
+  /** Model families whose name gives a recogniser its initial, matched in this order against its id. */
+  var MODEL_FAMILIES = ['whisper', 'qwen', 'canary', 'parakeet', 'granite', 'wav2vec', 'voxtral', 'gemma', 'mms'];
+
+  /** One short, distinct initial per model, in `models` order: its family's first letter, else its source's. */
+  function modelInitials(models) {
+    var out = [];
+    (models || []).forEach(function (m, k) {
+      var id = String((m && (m.model_id || m.source)) || '').toLowerCase();
+      var family = MODEL_FAMILIES.filter(function (f) { return id.indexOf(f) >= 0; })[0];
+      var base = family || String((m && m.source) || id || 'm').replace(/^asr_/, '') || 'm';
+      var initial = base.charAt(0).toUpperCase();
+      if (out.indexOf(initial) >= 0) initial = initial + (k + 1);
+      out.push(initial);
+    });
+    return out;
+  }
+
+  /** A consensus word's outcome, read from the word where it carries one, else from its readings. */
+  function outcomeOf(word) {
+    if (word[1]) return word[1];
+    var present = (word[2] || []).filter(function (r) { return r !== null && r !== undefined; });
+    if (present.length < (word[2] || []).length) return 'insertion';
+    var keys = present.map(tokenKey);
+    return keys.every(function (k) { return k === keys[0]; }) ? 'agreement' : 'variant';
+  }
+
+  /**
+   * The alignment's columns, one per consensus word: `{i, outcome, agreement, start, end, text, rows}`,
+   * where `rows` holds one `{initial, label, text, chosen}` per model, `text` null where the model has
+   * no word in that slot and `chosen` on the first reading the consensus surface came from.
+   */
+  function alignmentColumns(sp) {
+    var models = sp.models || [];
+    var initials = modelInitials(models);
+    return (sp.words || []).map(function (word, i) {
+      var surface = tokenKey(word[5]);
+      var chosen = false;
+      var rows = models.map(function (m, k) {
+        var r = (word[2] || [])[k];
+        var text = r === null || r === undefined ? null : String(r);
+        var isChosen = !chosen && text !== null && tokenKey(text) === surface;
+        if (isChosen) chosen = true;
+        return { initial: initials[k], label: modelLabel(m), text: text, chosen: isChosen };
+      });
+      return { i: i, outcome: outcomeOf(word), agreement: word[0], start: word[3], end: word[4], text: word[5], rows: rows };
+    });
+  }
+
+  /** How the alignment came out: column counts by outcome, and each model's insertions by initial. */
+  function alignmentSummary(sp) {
+    var cols = alignmentColumns(sp);
+    var out = { columns: cols.length, agreement: 0, variant: 0, insertion: 0, insertionsBy: {} };
+    modelInitials(sp.models).forEach(function (m) { out.insertionsBy[m] = 0; });
+    cols.forEach(function (c) {
+      out[c.outcome] = (out[c.outcome] || 0) + 1;
+      if (c.outcome === 'insertion') {
+        c.rows.forEach(function (r) { if (r.text !== null) out.insertionsBy[r.initial] += 1; });
+      }
+    });
+    return out;
+  }
+
+  function escapeHtml(text) {
+    return String(text).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+
+  var WORD_SPAN = /<span class="w" data-i="(\d+)">((?:<span class="bracket">[^<]*<\/span>)|[^<]*)<\/span>/g;
+
+  /** One alignment column's HTML; `inner` is the consensus word's own markup, kept on the chosen reading. */
+  function columnHtml(col, inner, sp) {
+    var word = (sp.words || [])[col.i];
+    var title = alternatives(sp, word) + (col.start == null ? '' : '\n' + col.start.toFixed(2) + '–' +
+      (col.end == null ? '?' : col.end.toFixed(2)) + ' s');
+    var head = '<span class="al-col al-' + col.outcome + '" data-i="' + col.i + '"' +
+      (col.start == null ? '' : ' data-t="' + col.start + '" data-e="' + (col.end == null ? col.start : col.end) + '"') +
+      ' tabindex="0" title="' + escapeHtml(title) + '">' +
+      '<span class="al-t">' + (col.start == null ? '—' : col.start.toFixed(2)) + '</span>';
+    if (col.outcome === 'agreement') return head + '<span class="al-r">' + inner + '</span></span>';
+    return head + col.rows.map(function (r) {
+      var badge = '<b class="al-m" title="' + escapeHtml(r.label) + '">' + escapeHtml(r.initial) + '</b>';
+      if (r.text === null) return '<span class="al-r al-gap">' + badge + '<i>—</i></span>';
+      return '<span class="al-r' + (r.chosen ? ' chosen' : '') + '">' + badge + (r.chosen ? inner : escapeHtml(r.text)) + '</span>';
+    }).join('') + '</span>';
+  }
+
+  /**
+   * The consensus transcript as aligned columns: each word span of the marked-up transcript is
+   * replaced by its column, so PII and redaction marks keep wrapping the words they wrapped.
+   */
+  function alignmentHtml(sp) {
+    var cols = alignmentColumns(sp);
+    return String(sp.html || '').replace(WORD_SPAN, function (whole, i, inner) {
+      var col = cols[Number(i)];
+      return col ? columnHtml(col, inner, sp) : whole;
+    });
+  }
+
+  /** Greedy row packing: each timed token's row, so tokens sharing a row never overlap in time. */
+  function packRows(tokens) {
+    var ends = [];
+    var order = tokens.map(function (t, k) { return k; }).sort(function (a, b) { return tokens[a][0] - tokens[b][0] || a - b; });
+    var rows = new Array(tokens.length);
+    order.forEach(function (k) {
+      var t = tokens[k];
+      var row = 0;
+      while (row < ends.length && ends[row] > t[0] + 1e-6) row++;
+      ends[row] = Math.max(t[1], t[0]);
+      rows[k] = row;
+    });
+    return rows;
+  }
+
+  var LABEL_PAD_PX = 4;
+
+  /** Whether `text` set at `charPx` a character fits a box `boxPx` wide. */
+  function labelFits(boxPx, text, charPx) {
+    var n = String(text || '').length;
+    return n === 0 || n * charPx + LABEL_PAD_PX <= boxPx;
   }
 
   // ---------------------------------------------------------------- pure: the reviewer's entries
@@ -568,7 +666,7 @@ var ReviewPage = (function () {
       body.appendChild(time);
       body.appendChild(audioSection(rec, time.timeline));
       body.appendChild(evidenceSection(rec));
-      if (rec.speech) body.appendChild(speechSection(rec.speech));
+      if (rec.speech) body.appendChild(speechSection(rec.speech, time.timeline));
       if (rec.missing && rec.missing.length) body.appendChild(el('p', 'rv-note', 'missing: ' + rec.missing.join(', ')));
       body.appendChild(el('p', 'rv-note', 'commit ' + (rec.commit || '—') + ' · config ' + (rec.config_hash || '—')));
     });
@@ -793,15 +891,27 @@ var ReviewPage = (function () {
     return sec;
   }
 
-  /** The consensus lane and one lane per ASR model, on the spectrogram's time axis. */
+  /** The consensus lane and one lane per ASR model, on the spectrogram's time axis, behind a toggle. */
   function lanesOf(tl, sp) {
+    var wrap = el('div', 'rv-lanes-wrap');
+    var toggle = el('button', 'rv-lanes-toggle', 'show timing lanes'); toggle.type = 'button';
     var box = el('div', 'rv-lanes');
+    box.hidden = true;
+    toggle.onclick = function () {
+      box.hidden = !box.hidden;
+      toggle.textContent = box.hidden ? 'show timing lanes' : 'hide timing lanes';
+      toggle.setAttribute('aria-expanded', String(!box.hidden));
+      redraw(tl);
+    };
+    toggle.setAttribute('aria-expanded', 'false');
+    wrap.appendChild(toggle);
+    wrap.appendChild(box);
     var words = sp.words || [];
     var lanes = [];
     if (words.length) {
       lanes.push({
         label: 'consensus', cls: 'consensus',
-        tokens: words.map(function (w, i) { return [w[3], w[4], null, i]; }).filter(function (t) { return t[0] != null; }),
+        tokens: words.map(function (w, i) { return [w[3], w[4], w[5] || '', i]; }).filter(function (t) { return t[0] != null && t[1] != null; }),
       });
     }
     modelLanes(sp).forEach(function (lane) { lanes.push({ label: lane.label, cls: 'model', tokens: lane.tokens }); });
@@ -810,37 +920,57 @@ var ReviewPage = (function () {
       row.appendChild(el('div', 'rv-lane-name', lane.label + ' · ' + lane.tokens.length + ' token' +
         (lane.tokens.length === 1 ? '' : 's')));
       var track = el('div', 'rv-lane-track');
+      var rows = packRows(lane.tokens);
+      var depth = rows.reduce(function (m, r) { return Math.max(m, r + 1); }, 1);
+      track.style.height = (depth * LANE_ROW_PX + 2) + 'px';
       row.appendChild(track);
       box.appendChild(row);
       wireTime(tl, track);
-      var nodes = lane.tokens.map(function (t) {
+      var nodes = lane.tokens.map(function (t, k) {
         var tok = el('span', 'rv-tok');
         tok.dataset.t = t[0];
+        tok.style.top = (rows[k] * LANE_ROW_PX + 1) + 'px';
         if (t[3] != null) {
           var word = words[t[3]];
-          tok.textContent = word[5] || '';
-          var band = agreementBand(word[0]);
-          if (band) tok.classList.add(band);
-          if (word[1] === 'insertion') tok.classList.add('unmatched');
+          var outcome = outcomeOf(word);
+          tok.classList.add('al-' + outcome);
           tok.title = alternatives(sp, word) + '\n' + word[3].toFixed(2) + '–' + word[4].toFixed(2) + ' s';
         } else {
-          tok.textContent = t[2];
           tok.title = lane.label + ': ' + t[2] + '\n' + t[0].toFixed(2) + '–' + t[1].toFixed(2) + ' s';
         }
         track.appendChild(tok);
-        return { node: tok, start: t[0], end: t[1] };
+        return { node: tok, start: t[0], end: t[1], text: t[2] };
       });
       tl.redraw.push(function () {
+        if (box.hidden) return;
+        var width = track.clientWidth;
+        var charPx = laneCharPx();
         nodes.forEach(function (n) {
           var at = placeSpan(n.start, n.end, tl.win);
           n.node.hidden = !at;
           if (!at) return;
           n.node.style.left = (at.left * 100) + '%';
           n.node.style.width = 'max(2px, ' + (at.width * 100) + '%)';
+          var label = labelFits(at.width * width, n.text, charPx) ? n.text : '';
+          if (n.node.textContent !== label) n.node.textContent = label;
         });
       });
     });
-    return box;
+    return wrap;
+  }
+
+  var LANE_ROW_PX = 18;
+  var LANE_FONT = '11px ui-monospace, Menlo, monospace';
+  var laneCharWidth = null;
+
+  /** The width of one character of the lanes' monospace font, measured once. */
+  function laneCharPx() {
+    if (laneCharWidth == null) {
+      var ctx = document.createElement('canvas').getContext('2d');
+      ctx.font = LANE_FONT;
+      laneCharWidth = ctx.measureText('mmmmmmmmmm').width / 10 || 7;
+    }
+    return laneCharWidth;
   }
 
   function drawSpectrogram(canvas, levels, spec, tl, rec) {
@@ -879,6 +1009,14 @@ var ReviewPage = (function () {
       ctx.fillRect(xOf(rec.extent[0]), top, xOf(rec.extent[1]) - xOf(rec.extent[0]), bottom - top);
       ctx.restore();
       bars([rec.extent], 0, 4, Theme.color('accent'));
+    }
+    if (tl.pick) {
+      var px0 = xOf(tl.pick[0]), px1 = Math.max(xOf(tl.pick[1]), px0 + 2);
+      ctx.save(); ctx.globalAlpha = 0.28; ctx.fillStyle = Theme.color('warn');
+      ctx.fillRect(px0, top, px1 - px0, bottom - top);
+      ctx.globalAlpha = 1; ctx.strokeStyle = Theme.color('warn'); ctx.lineWidth = 1.5;
+      ctx.strokeRect(px0, top, px1 - px0, bottom - top);
+      ctx.restore();
     }
     bars(ov.events, 6, 5, Theme.color('good'));
     bars(ov.activity, 13, 3, Theme.color('teal'));
@@ -1011,15 +1149,6 @@ var ReviewPage = (function () {
     return m.source || m.model_id || 'unknown model';
   }
 
-  /** The agreement band a consensus word's shading is drawn from. */
-  function agreementBand(a) {
-    if (a === null || a === undefined) return null;
-    if (a >= 0.999) return 'ag-all';
-    if (a >= 0.66) return 'ag-most';
-    if (a >= 0.34) return 'ag-some';
-    return 'ag-few';
-  }
-
   /** What each model read at one consensus word, one line per model. */
   function alternatives(sp, word) {
     var models = sp.models || [];
@@ -1029,69 +1158,81 @@ var ReviewPage = (function () {
     })).join('\n');
   }
 
-  /**
-   * Shade each consensus word by its agreement and show the models' readings on hover or tap. A word
-   * one model alone produced is marked unmatched; a reading a minority gave is shown beside the word.
-   */
-  function decorateWords(p, sp, detail) {
-    var words = sp.words || [];
-    p.querySelectorAll('span.w[data-i]').forEach(function (span) {
-      var word = words[+span.getAttribute('data-i')];
-      if (!word) return;
-      var band = agreementBand(word[0]);
-      if (band) span.classList.add(band);
-      var readers = readersOf(sp, word);
-      var text = alternatives(sp, word);
-      if (word[1] === 'insertion') {
-        span.classList.add('unmatched');
-        text = 'only ' + readers.join(', ') + '\n' + text;
-      }
-      span.title = text;
-      span.tabIndex = 0;
-      span.onclick = function (e) { e.stopPropagation(); detail.textContent = span.title; detail.hidden = false; };
-      var after = span;
-      otherReadings(sp, word, word[5] != null ? word[5] : span.textContent).forEach(function (other) {
-        var alt = el('span', 'w-alt' + (other.models.length === 1 ? ' unmatched' : ''), other.text);
-        alt.title = (other.models.length === 1 ? 'only ' : '') + other.models.join(', ') + ': ' + other.text;
-        alt.tabIndex = 0;
-        alt.onclick = function (e) { e.stopPropagation(); detail.textContent = alt.title + '\n' + text; detail.hidden = false; };
-        after.after(alt);
-        after = alt;
-      });
-    });
+  /** Pick one alignment column: seek the player to its start and highlight its span on the spectrogram. */
+  function pickColumn(tl, view, col) {
+    view.querySelectorAll('.al-col.on').forEach(function (c) { c.classList.remove('on'); });
+    col.classList.add('on');
+    if (!tl || col.dataset.t == null) return;
+    var start = Number(col.dataset.t), end = Number(col.dataset.e);
+    tl.pick = [start, Math.max(start, end)];
+    var at = placeSpan(start, end, tl.win);
+    if (!at || at.left < 0 || at.left + at.width > 1) tl.win = panWindow(tl.win, tl.d, (start + end) / 2 - (tl.win.t0 + tl.win.t1) / 2);
+    var a = playerAt(tl);
+    if (a) { tl.active = a; tl.spanEnd = null; seekPlayer(a, Math.max(0, Math.min(tl.d, start))); }
+    redraw(tl);
   }
 
-  function speechSection(sp) {
+  /** The alignment legend: the column styles, and how many columns each outcome took. */
+  function alignmentLegend(sp) {
+    var sum = alignmentSummary(sp);
+    var initials = modelInitials(sp.models);
+    var legend = el('div', 'rv-legend rv-al-legend');
+    [['al-agreement', 'agreement: one word'], ['al-variant', 'variant: each model’s reading'],
+      ['al-insertion', 'insertion: one model only, — where the other has none']].forEach(function (b) {
+      var item = el('span'); item.appendChild(el('i', 'al-swatch ' + b[0])); item.appendChild(document.createTextNode(b[1]));
+      legend.appendChild(item);
+    });
+    var models = el('div', 'rv-al-models');
+    (sp.models || []).forEach(function (m, k) {
+      var item = el('span');
+      item.appendChild(el('b', 'al-m', initials[k]));
+      item.appendChild(document.createTextNode(' ' + modelLabel(m)));
+      models.appendChild(item);
+    });
+    var counts = el('div', 'rv-al-counts', sum.columns + ' columns · ' + sum.agreement + ' agreement' +
+      (sum.agreement === 1 ? '' : 's') + ' · ' + sum.variant + ' variant' + (sum.variant === 1 ? '' : 's') + ' · ' +
+      sum.insertion + ' insertion' + (sum.insertion === 1 ? '' : 's') + ' (' + initials.map(function (m) {
+        return m + ' ' + sum.insertionsBy[m];
+      }).join(', ') + ')');
+    var box = el('div', 'rv-al-key');
+    box.appendChild(counts); box.appendChild(models); box.appendChild(legend);
+    return box;
+  }
+
+  function speechSection(sp, tl) {
     var sec = el('section', 'rv-speech');
     sec.appendChild(el('h3', null, 'transcript, PII and redactions'));
     var shown = sp.shown || {};
     var models = sp.models || [];
-    var label;
     if (shown.kind === 'consensus') {
-      label = 'consensus of ' + models.length + ' ASR model' + (models.length === 1 ? '' : 's') + ': ' +
-        models.map(modelLabel).join(', ') + ' — shaded by agreement; hover or tap a word for each model’s reading';
-    } else if (shown.kind === 'model') {
-      var m = models.filter(function (x) { return x.source === shown.source; })[0] || { source: shown.source };
-      label = 'individual ASR model: ' + modelLabel(m) + ' (the consensus holds no words)';
-    } else {
-      label = 'no ASR model left a word';
-    }
-    sec.appendChild(el('div', 'rv-tx-label', label));
-    var p = el('p', 'text');
-    p.innerHTML = sp.html || '<span class="empty">no words</span>';
-    sec.appendChild(p);
-    if (shown.kind === 'consensus') {
-      var legend = el('div', 'rv-legend rv-ag-legend');
-      [['ag-all', 'all agree'], ['ag-most', '≥ 2/3'], ['ag-some', '≥ 1/3'], ['ag-few', 'under 1/3'],
-        ['unmatched', 'one model only']].forEach(function (b) {
-        var item = el('span'); item.appendChild(el('i', b[0])); item.appendChild(document.createTextNode(b[1]));
-        legend.appendChild(item);
+      sec.appendChild(el('div', 'rv-tx-label', 'alignment of ' + models.length + ' ASR model' +
+        (models.length === 1 ? '' : 's') + ', one column per consensus word, read left to right; ' +
+        'click a column to hear it and mark it on the spectrogram'));
+      sec.appendChild(alignmentLegend(sp));
+      var view = el('div', 'rv-align');
+      view.innerHTML = alignmentHtml(sp);
+      view.addEventListener('click', function (e) {
+        var col = e.target.closest ? e.target.closest('.al-col') : null;
+        if (col) pickColumn(tl, view, col);
       });
-      sec.appendChild(legend);
-      var detail = el('pre', 'rv-word-detail');
-      detail.hidden = true;
-      sec.appendChild(detail);
-      decorateWords(p, sp, detail);
+      view.addEventListener('keydown', function (e) {
+        if (e.key !== 'Enter' && e.key !== ' ') return;
+        var col = e.target.closest ? e.target.closest('.al-col') : null;
+        if (col) { e.preventDefault(); pickColumn(tl, view, col); }
+      });
+      sec.appendChild(view);
+    } else {
+      var label;
+      if (shown.kind === 'model') {
+        var m = models.filter(function (x) { return x.source === shown.source; })[0] || { source: shown.source };
+        label = 'individual ASR model: ' + modelLabel(m) + ' (the consensus holds no words)';
+      } else {
+        label = 'no ASR model left a word';
+      }
+      sec.appendChild(el('div', 'rv-tx-label', label));
+      var p = el('p', 'text');
+      p.innerHTML = sp.html || '<span class="empty">no words</span>';
+      sec.appendChild(p);
     }
     var own = sp.own || [];
     if (own.length) {
@@ -1211,7 +1352,6 @@ var ReviewPage = (function () {
     importDecisions: importDecisions,
     shard: shard,
     modelLabel: modelLabel,
-    agreementBand: agreementBand,
     alternatives: alternatives,
     streamUrl: streamUrl,
     zoomWindow: zoomWindow,
@@ -1219,9 +1359,14 @@ var ReviewPage = (function () {
     placeSpan: placeSpan,
     ticks: ticks,
     tokenKey: tokenKey,
-    readersOf: readersOf,
-    otherReadings: otherReadings,
     modelLanes: modelLanes,
+    modelInitials: modelInitials,
+    outcomeOf: outcomeOf,
+    alignmentColumns: alignmentColumns,
+    alignmentSummary: alignmentSummary,
+    alignmentHtml: alignmentHtml,
+    packRows: packRows,
+    labelFits: labelFits,
     audioTracks: audioTracks,
     timelineOf: timelineOf,
     playSpan: playSpan,
