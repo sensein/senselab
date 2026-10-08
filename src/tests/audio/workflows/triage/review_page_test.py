@@ -80,6 +80,8 @@ def _run_root(root: Path) -> Path:
     lines = [
         entity("rec", "stream", {"name": "recording", "path": "streams/recording.flac"}, [0.0, 4.0]),
         entity("plain", "stream", {"name": "plain", "path": "streams/plain.flac"}, [0.0, 4.0]),
+        entity("tp", "stream", {"name": "task_plain", "path": "streams/task_plain.flac"}, [0.0, 3.5]),
+        entity("te", "stream", {"name": "task_enhanced", "path": "streams/task_enhanced.flac"}, [0.0, 3.5]),
         entity("ext", "span", {"role": "task_extent"}, [0.5, 3.5]),
         entity(
             "br",
@@ -147,6 +149,7 @@ def test_a_record_carries_decision_evidence_streams_and_a_spectrogram(tmp_path: 
     assert record["spec_stream"] == "plain" and len(record["spec"]) == 344
     assert record["streams"]["plain"].endswith("run/streams/plain.flac")
     assert record["streams"]["released"].endswith("released/audio.flac")
+    assert not any(name.startswith("task_") for name in record["streams"])
     assert record["speech"] is None
 
 
