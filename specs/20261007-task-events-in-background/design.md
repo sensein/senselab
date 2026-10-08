@@ -968,3 +968,24 @@ applies it to every fold any triage test runs):
 - `admit_outcome` compares as a category (`in [pass]`).
 - A row with no threshold carries no comparison (a `>=` against an unread instructed count used to be
   emitted), and a gate record with no recognised `op` is reported, not compared.
+
+## Review page: transcripts name their source and show word agreement (2026-10-08)
+
+The owner could not tell which transcript the page showed. A speech task's transcript is now labelled:
+the **consensus** of the named ASR models (each by model id, with the pipeline's source name), or,
+where the consensus holds no words, the **one model** the free-speech reader falls back to, named.
+The consensus is the default. Each consensus word carries its stored `agreement` (largest same-key
+group over the sources) and `outcome`, and is shaded in four bands (all agree, ≥2/3, ≥1/3, under 1/3);
+hover or tap shows every model's reading at that word (`readings` on the `word` entity). PII and
+redaction marks wrap the shaded words unchanged (`free_speech_review_page.paragraph` takes the word
+renderer). Every model's own transcript (`asr_hypothesis.transcript`) is listed in a collapsed block.
+Extract reads it with `review_page.records.transcripts`.
+
+## Review page: raw recordings outside the corpus root (2026-10-08)
+
+A replay copy's `recording` stream points at the raw file in place (`/orcd/data/...`), outside the
+scan root, so the page built `audio_base + /orcd/...` and nothing played; earlier listening pages
+needed hand-made symlinks. An absolute stream path now goes through a source route
+(`--source-base`, default `/_source`): the page fetches `/_source/<absolute path>`, and
+`scripts/triage_review_serve.py` (standard library only) serves the corpus root plus that route,
+restricted to its `--source-root` directories.

@@ -105,3 +105,26 @@ test('an export carries the owner label columns and imports back to the same dec
   assert.equal(e.pipeline_at_listen, 'review/withheld (weak_events)')
   assert.deepEqual(R.importDecisions(payload), decisions)
 })
+
+test('a transcript names its model by id, with the pipeline source where it differs', () => {
+  assert.equal(R.modelLabel({ source: 'whisper', model_id: 'openai/whisper-large-v3-turbo' }), 'openai/whisper-large-v3-turbo (whisper)')
+  assert.equal(R.modelLabel({ source: 'canary', model_id: null }), 'canary')
+  assert.equal(R.modelLabel(undefined), 'unknown model')
+})
+
+test('a consensus word is shaded by its agreement band and lists every model reading', () => {
+  assert.equal(R.agreementBand(1), 'ag-all')
+  assert.equal(R.agreementBand(0.67), 'ag-most')
+  assert.equal(R.agreementBand(0.5), 'ag-some')
+  assert.equal(R.agreementBand(0.25), 'ag-few')
+  assert.equal(R.agreementBand(null), null)
+  const sp = { models: [{ source: 'a', model_id: 'org/a' }, { source: 'b', model_id: 'org/b' }] }
+  const text = R.alternatives(sp, [0.5, 'variant', ['birch', null]])
+  assert.equal(text, 'variant, agreement 50%\norg/a (a): birch\norg/b (b): (no word)')
+})
+
+test('a stream under the corpus root goes through audio_base, one outside it through the source route', () => {
+  const build = { audio_base: '../', source_base: '/_source' }
+  assert.equal(R.streamUrl('sub-a/ses-1/run/streams/plain.flac', build), '../sub-a/ses-1/run/streams/plain.flac')
+  assert.equal(R.streamUrl('/orcd/data/b2ai/sub a.wav', build), '/_source/orcd/data/b2ai/sub%20a.wav')
+})

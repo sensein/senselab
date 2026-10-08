@@ -73,3 +73,14 @@ body.review { margin: 0; background: var(--ground); color: var(--ink); font: 13p
 .rv-dec-table td.s { font-family: var(--mono); font-size: 11px; word-break: break-all; }
 .rv-import input { display: none; }
 .rv-import { border: 1px solid var(--line); padding: 2px 8px; border-radius: 4px; cursor: pointer; }
+.rv-tx-label { font-size: 12px; color: var(--ink-2); margin-bottom: 4px; }
+.rv-speech span.w { border-radius: 2px; cursor: help; }
+.ag-most { background: color-mix(in srgb, var(--warn) 14%, transparent); }
+.ag-some { background: color-mix(in srgb, var(--warn) 32%, transparent); text-decoration: underline dotted; }
+.ag-few { background: color-mix(in srgb, var(--bad) 30%, transparent); text-decoration: underline wavy; }
+.rv-ag-legend i.ag-all { border: 1px solid var(--line); }
+.rv-word-detail { font: 12px var(--mono); background: var(--panel-2); border: 1px solid var(--line); padding: 4px 8px;
+  white-space: pre-wrap; margin: 4px 0; }
+.rv-own summary { cursor: pointer; font-size: 12px; font-weight: 600; }
+.rv-own-row { margin: 4px 0 6px; }
+.rv-own-model { font: 11px var(--mono); color: var(--ink-2); }
