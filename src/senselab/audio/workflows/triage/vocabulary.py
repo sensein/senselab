@@ -2041,7 +2041,7 @@ _COMPARISON = {"at_least": ">=", "at_most": "<="}
 _DISCARD_ITEMS = {
     UNMEASURABLE: "admit_outcome",
     TOO_SHORT_FOR_TASK: "task_duration_s",
-    ACOUSTICALLY_EMPTY: "nothing_captured",
+    ACOUSTICALLY_EMPTY: "capture",
     NO_BREATH_CAPTURED: "breath_event_db_over_floor",
     NO_COUGH_CAPTURED: "cough_onsets",
     NO_PHONATION_CAPTURED: "phonation_found",
@@ -2201,9 +2201,10 @@ _DDK_ANNOTATIONS = (
     ("ddk_period_cv", "period_cv", None),
     ("ddk_period_trend_s_per_step", "period_trend_s_per_step", "s"),
     ("ddk_train_fraction", "train_fraction", None),
-    ("ddk_realised_mass", "realised_mass", None),
 )
 """The syllable task's annotations: evidence item name, the reading's annotation key, the unit."""
+DDK_REALISED_MASS = "ddk_realised_mass"
+"""The per-position realised mass, one item per template position: ``ddk_realised_mass:<index>.<phone>``."""
 
 
 def _ddk_items(task: TaskEvidence) -> list[EvidenceItem]:
@@ -2276,6 +2277,10 @@ def _ddk_items(task: TaskEvidence) -> list[EvidenceItem]:
     for name, key, unit in _DDK_ANNOTATIONS:
         if notes.get(key) is not None:
             items.append(item(name, notes.get(key), ANNOTATION, unit=unit))
+    masses, positions = notes.get("realised_mass") or [], notes.get("positions") or []
+    for index, mass in enumerate(masses):
+        phone = positions[index] if index < len(positions) else "?"
+        items.append(item(f"{DDK_REALISED_MASS}:{index}.{phone}", mass, ANNOTATION))
     return items
 
 
@@ -2337,8 +2342,71 @@ def _join_items(quality: Mapping[str, Any]) -> list[EvidenceItem]:
                 threshold=quality.get("lost_fraction_max"),
             )
         )
+    return items
+
+
+CAPTURE = "capture"
+"""The prefix of the capture items, ``capture.<reading>``: what says whether anything was captured."""
+
+
+def _capture_items(route_state: str | None, quality: Mapping[str, Any], acoustically_empty: bool) -> list[EvidenceItem]:
+    """Whether anything was captured, one item per reading: the route state, each stream's activity, the level.
+
+    Args:
+        route_state: What the ruleset made of the whole recording.
+        quality: QUALITY's join record.
+        acoustically_empty: Whether the fold discarded the recording as having captured nothing.
+
+    Returns:
+        ``capture.route_state``, ``capture.plain_active_s`` and ``capture.enhanced_active_s`` where the
+        route is empty or the join read the activity, and ``capture.level_rel_db`` where the join read the
+        level. A reading that fails its comparison discards where the fold discarded the recording as empty
+        on it, and is an annotation otherwise (a task event overrode it, or one stream alone was
+        silent); a reading that clears its comparison passes.
+    """
+
+    def effect(empty: bool, decides: bool = True) -> str:
+        if not empty:
+            return PASS
+        return DISCARD if acoustically_empty and decides else ANNOTATION
+
+    items: list[EvidenceItem] = []
+    plain, enhanced = quality.get("plain_active_s"), quality.get("enhanced_active_s")
+    if route_state == EMPTY or plain is not None:
+        items.append(
+            item(
+                f"{CAPTURE}.route_state",
+                route_state,
+                effect(route_state == EMPTY),
+                comparison="not in",
+                threshold=[EMPTY],
+            )
+        )
+        no_activity = bool(quality.get("no_activity"))
+        for stream, active in (("plain", plain), ("enhanced", enhanced)):
+            if active is None:
+                continue
+            items.append(
+                item(
+                    f"{CAPTURE}.{stream}_active_s",
+                    active,
+                    effect(not active > 0.0, no_activity),
+                    unit="s",
+                    comparison=">",
+                    threshold=0.0,
+                )
+            )
     if quality.get("level_rel_db") is not None:
-        items.append(item("level_rel_db", quality.get("level_rel_db"), ANNOTATION, unit="dB"))
+        items.append(
+            item(
+                f"{CAPTURE}.level_rel_db",
+                quality.get("level_rel_db"),
+                effect(bool(quality.get("quiet_vs_session"))),
+                unit="dB",
+                comparison=">",
+                threshold=quality.get("level_rel_db_max"),
+            )
+        )
     return items
 
 
@@ -2380,7 +2448,7 @@ def _decision_evidence(
     """
     items: list[EvidenceItem] = []
     if unmeasurable:
-        items.append(item("admit_outcome", "fail", DISCARD, comparison="==", threshold="pass"))
+        items.append(item("admit_outcome", "fail", DISCARD, comparison="in", threshold=["pass"]))
     if task.duration_s is not None and task.minimum_duration_s is not None:
         short = task.duration_s < task.minimum_duration_s
         items.append(
@@ -2393,22 +2461,7 @@ def _decision_evidence(
                 threshold=task.minimum_duration_s,
             )
         )
-    if route_state == EMPTY or task.quality.get("plain_active_s") is not None:
-        captured_nothing = route_state == EMPTY or nothing_captured(task.quality)
-        items.append(
-            item(
-                "nothing_captured",
-                {
-                    "route_state": route_state,
-                    "plain_active_s": task.quality.get("plain_active_s"),
-                    "enhanced_active_s": task.quality.get("enhanced_active_s"),
-                    "level_rel_db": task.quality.get("level_rel_db"),
-                },
-                DISCARD if ground == ACOUSTICALLY_EMPTY else ANNOTATION if captured_nothing else PASS,
-                comparison="==",
-                threshold=False,
-            )
-        )
+    items.extend(_capture_items(route_state, task.quality, ground == ACOUSTICALLY_EMPTY))
     if ground == DECLARED_TASK_ABSENT:
         items.append(item("declared_task_found", performed, DISCARD, comparison="==", threshold=True))
     task_items = _task_items(task)
@@ -2421,15 +2474,16 @@ def _decision_evidence(
                     f"gate:{record.get('gate')}",
                     record.get("value"),
                     PASS if passed else REVIEW,
-                    comparison=_COMPARISON.get(str(record.get("op")), str(record.get("op"))),
-                    threshold=record.get("bound"),
+                    comparison=_COMPARISON.get(str(record.get("op"))),
+                    threshold=record.get("bound") if str(record.get("op")) in _COMPARISON else None,
                 )
             )
     if lexical_words_n is not None:
         items.append(item("lexical_words", lexical_words_n, PASS, unit="words"))
-    if task.owner_absent_inputs and KEY_OWNING_BRANCH_INPUT_ABSENT in flag_keys:
-        items.append(item(KEY_OWNING_BRANCH_INPUT_ABSENT, list(task.owner_absent_inputs), REVIEW))
     named = {entry.name for entry in items}
+    if task.owner_absent_inputs and KEY_OWNING_BRANCH_INPUT_ABSENT in flag_keys:
+        items.extend(_flag_item(f"{KEY_OWNING_BRANCH_INPUT_ABSENT}:{absent}") for absent in task.owner_absent_inputs)
+        named.add(KEY_OWNING_BRANCH_INPUT_ABSENT)
     items.extend(_flag_item(key) for key in flag_keys if key not in named)
     items.extend(_flag_item(key, ANNOTATION) for key in annotation_keys)
     if triage is not Triage.DISCARD:
@@ -2442,7 +2496,9 @@ def _decision_evidence(
         if entry.effect == WITHHOLD:
             return True
         if triage is Triage.DISCARD:
-            return entry.name == decisive_discard
+            return entry.name == decisive_discard or (
+                entry.effect == DISCARD and entry.name.startswith(f"{decisive_discard}.")
+            )
         if triage is Triage.REVIEW:
             return entry.effect == REVIEW
         return entry.effect == PASS and (entry.name in task_names or entry.name.startswith("gate:"))

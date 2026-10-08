@@ -26,6 +26,13 @@ ANNOTATION = "annotation"
 EFFECTS = (PASS, REVIEW, DISCARD, WITHHOLD, ANNOTATION)
 """What an evidence item does to the decision. ``withhold`` acts on the release axis only."""
 
+NUMERIC_COMPARISONS = (">=", "<=", ">", "<", "==")
+"""How a number is compared with a numeric bound."""
+BOOLEAN_COMPARISONS = ("==",)
+"""How a flag is compared with a boolean bound."""
+CATEGORY_COMPARISONS = ("in", "not in")
+"""How a category is compared with the list of categories it is read against."""
+
 
 @cache
 def reason_vocabulary() -> dict[str, Any]:
@@ -95,10 +102,12 @@ class EvidenceItem:
 
     Attributes:
         name: The item's name, one of ``data/decision_evidence.yaml``.
-        value: What was read: a number, a count, a flag or a category.
+        value: What was read: one number, count, flag or category, or None where nothing was read.
         unit: The value's unit, or None.
-        comparison: How the value was compared: ``>=``, ``<``, ``==`` and so on.
-        threshold: What it was compared against, from ``data/``; None where the reading is the decision.
+        comparison: How the value was compared, by its type (see :func:`row_problems`); None where it
+            was compared against nothing.
+        threshold: What it was compared against, from ``data/``; None where it was compared against
+            nothing.
         effect: What the item does: ``pass``, ``review``, ``discard``, ``withhold`` or ``annotation``.
         decisive: Whether the item produced this recording's decision.
     """
@@ -157,7 +166,51 @@ def item(
     """
     if effect not in EFFECTS:
         raise ValueError(f"effect {effect!r} is not one of {EFFECTS}")
-    return EvidenceItem(name, value, unit, comparison, threshold, effect, decisive)
+    return EvidenceItem(name, value, unit, comparison if threshold is not None else None, threshold, effect, decisive)
+
+
+def _is_number(value: Any) -> bool:  # noqa: ANN401 -- any reading
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _is_scalar(value: Any) -> bool:  # noqa: ANN401 -- any reading
+    return value is None or isinstance(value, (bool, int, float, str))
+
+
+def row_problems(entry: EvidenceItem) -> list[str]:
+    """What makes an evidence item something other than one scalar row with a comparison of its type.
+
+    A row's value is one scalar or None. A number is compared with :data:`NUMERIC_COMPARISONS` against
+    a number; a flag with :data:`BOOLEAN_COMPARISONS` against a flag; a category with
+    :data:`CATEGORY_COMPARISONS` against a list of categories. A row compared against nothing has
+    neither comparison nor threshold.
+
+    Args:
+        entry: The item.
+
+    Returns:
+        One sentence per problem; empty where the row is well formed.
+    """
+    problems: list[str] = []
+    value, comparison, threshold = entry.value, entry.comparison, entry.threshold
+    if not _is_scalar(value):
+        problems.append(f"{entry.name}: value {value!r} is not a scalar")
+    if comparison is None or threshold is None:
+        if comparison is not None or threshold is not None:
+            problems.append(f"{entry.name}: comparison {comparison!r} without a threshold, or the reverse")
+        return problems
+    if isinstance(threshold, bool):
+        if comparison not in BOOLEAN_COMPARISONS or not (value is None or isinstance(value, bool)):
+            problems.append(f"{entry.name}: {value!r} {comparison} {threshold!r} is not a flag comparison")
+    elif _is_number(threshold):
+        if comparison not in NUMERIC_COMPARISONS or not (value is None or _is_number(value)):
+            problems.append(f"{entry.name}: {value!r} {comparison} {threshold!r} is not a numeric comparison")
+    elif isinstance(threshold, (list, tuple)) and all(isinstance(v, str) for v in threshold):
+        if comparison not in CATEGORY_COMPARISONS or not (value is None or isinstance(value, str)):
+            problems.append(f"{entry.name}: {value!r} {comparison} {threshold!r} is not a category comparison")
+    else:
+        problems.append(f"{entry.name}: threshold {threshold!r} is not a number, a flag or a list of categories")
+    return problems
 
 
 def decisive_items(items: Sequence[EvidenceItem]) -> list[EvidenceItem]:

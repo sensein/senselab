@@ -948,3 +948,23 @@ the buttercup case; 50 of the 282 r17 v2 passes with ≤2 decoded repetitions or
    - No audio is ever embedded. If the single file would be too large, the per-recording data
      (spectrogram grids, transcripts, evidence) is sharded into side files (for example per family
      or session) loaded on demand.
+
+## Evidence items are scalar rows (2026-10-08)
+
+The owner found a `nothing_captured` item whose value was a dictionary (route state, both streams'
+active seconds, the level against the session) compared `==` against `false`. A reviewer cannot read
+which of four readings decided, and the page's per-item axis could not type the column. Every item is
+now one scalar row (`decision.row_problems` states the rule; `src/tests/audio/workflows/triage/conftest.py`
+applies it to every fold any triage test runs):
+
+- `nothing_captured` → `capture.route_state` (`not in [empty]`), `capture.plain_active_s` and
+  `capture.enhanced_active_s` (`> 0` s), `capture.level_rel_db` (`>` the join's
+  `capture.level_rel_db_max`). The separate `level_rel_db` annotation is gone; `capture.level_rel_db`
+  replaces it. On an `acoustically_empty` discard the capture rows that fail their comparison are the
+  decisive ones; a stream silent while the other is active is an annotation.
+- `owning_branch_input_absent` (a list) → one flag per absent input,
+  `owning_branch_input_absent:<node>:<reading>.<field>`.
+- `ddk_realised_mass` (a list) → one row per template position, `ddk_realised_mass:<index>.<phone>`.
+- `admit_outcome` compares as a category (`in [pass]`).
+- A row with no threshold carries no comparison (a `>=` against an unread instructed count used to be
+  emitted), and a gate record with no recognised `op` is reported, not compared.

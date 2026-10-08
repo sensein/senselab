@@ -1,8 +1,10 @@
 # The decision table's evidence items: the name of every reading the fold weighs, by family group.
-# Each item records value, unit, comparison, threshold (from data/), effect and whether it decided.
+# Each item is one scalar row: value, unit, comparison, threshold (from data/), effect and whether it
+# decided. A number compares with >=, <=, >, < or == against a number, a flag with == against a flag,
+# a category with in / not in against a list of categories; a reported reading has neither.
 # `producer` names the unit of specs/20261007-task-events-in-background/design.md that emits it;
 # an item a later unit produces is absent from the tables until that unit lands.
-version: 2
+version: 3
 groups:
   acquisition:
     admit_outcome:
@@ -13,10 +15,6 @@ groups:
       unit: s
       producer: fold
       meaning: the recording's duration against its family's minimum in data/task_minimum_duration.yaml
-    route_state:
-      unit:
-      producer: fold
-      meaning: the ruleset's reading of the whole recording; empty with the task not performed discards
     declared_task_found:
       unit:
       producer: fold
@@ -25,14 +23,22 @@ groups:
       unit:
       producer: unit C
       meaning: the share of the raw stream's standing task events the enhanced stream loses, against data/quality_join.yaml streams.lost_fraction
-    nothing_captured:
+    capture.route_state:
       unit:
       producer: unit C
-      meaning: the route state, the plain and enhanced streams' active seconds and the level against the session; no activity, or only the room, with no task event discards
-    level_rel_db:
+      meaning: the ruleset's reading of the whole recording, not in [empty]; empty with no task event heard discards
+    capture.plain_active_s:
+      unit: s
+      producer: unit C
+      meaning: seconds of activity BACKGROUND read on the plain stream, > 0; with the enhanced stream also silent and no task event heard, discards
+    capture.enhanced_active_s:
+      unit: s
+      producer: unit C
+      meaning: seconds of activity on the enhanced stream, > 0; read with capture.plain_active_s
+    capture.level_rel_db:
       unit: dB
       producer: unit C
-      meaning: the recording's active level against its BIDS session's (SESSION)
+      meaning: the recording's active level against its BIDS session's (SESSION), > data/quality_join.yaml capture.level_rel_db_max; only the room, with no task event heard, discards
   breath:
     breath_event_db_over_floor:
       unit: dB
@@ -125,10 +131,6 @@ groups:
       unit:
       producer: DDK task layer
       meaning: the task extent over the recording's duration
-    ddk_realised_mass:
-      unit:
-      producer: DDK task layer
-      meaning: per template position, the class mass the identity alignment realised, averaged over the task events
   speech:
     lexical_words:
       unit: words
@@ -155,6 +157,16 @@ prefixes:              # `<prefix>:<name>` items, named by what follows the colo
     unit: spans
     producer: unit C
     meaning: another source (another voice) overlapping or abutting a task span
+  ddk_realised_mass:
+    group: ddk
+    unit:
+    producer: DDK task layer
+    meaning: one item per template position, `ddk_realised_mass:<index>.<phone>`, the class mass the identity alignment realised there, averaged over the task events
+  owning_branch_input_absent:
+    group: acquisition
+    unit:
+    producer: unit C
+    meaning: one flag per decision input the owning branch's stored reading lacks, `owning_branch_input_absent:<node>:<reading>.<field>`
   phonation_review:
     group: voice
     unit:
