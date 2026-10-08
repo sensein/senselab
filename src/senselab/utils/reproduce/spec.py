@@ -71,6 +71,8 @@ _KEYED_PLACEHOLDER = re.compile(r"^(root|up):([A-Za-z0-9_.-]+)$")
 _SECRET_KEY = re.compile(r"(^|_)(TOKEN|KEY|SECRET|PASSWORD|PASSWD|CREDENTIALS?)S?(_|$)", re.IGNORECASE)
 ALLOWED_SECRET_LIKE_KEYS = frozenset({"TOKENIZERS_PARALLELISM"})
 _ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+R_LIB_TEMPLATE = re.compile(r"^\{cache\}/r/[A-Za-z0-9_][A-Za-z0-9_.-]*$")
+"""The only form an R library may take: ``{cache}/r/<name>``, one plain name with no leading dot."""
 
 
 def placeholders(template: str) -> list[str]:
@@ -261,8 +263,8 @@ class EnvSpec(_Model):
     @field_validator("r_lib")
     @classmethod
     def _r_lib_under_cache(cls, value: str | None) -> str | None:
-        if value is not None and not value.startswith("{cache}/"):
-            raise ValueError("r_lib must start with {cache}/")
+        if value is not None and not R_LIB_TEMPLATE.match(value):
+            raise ValueError("E_SPEC_BAD_R_LIB: r_lib must be {cache}/r/<name>, one plain name")
         return value
 
     @model_validator(mode="after")
@@ -564,7 +566,8 @@ class Manifest(_Model):
     The analysis and step names name directories and appear in batch job names (``reproduce-<step>``),
     which every user of the cluster can list; class labels, count names and headline labels of each
     ``metrics_schema`` are copied into the agent-readable ``metrics.json``. None of them may carry anything
-    sensitive.
+    sensitive. A ``python`` or ``notebook`` step's program must live in its venv, so a shell wrapper is a
+    script run by the venv's Python (or a program in an R module or native bin dir, for an ``r`` step).
     """
 
     name: Name

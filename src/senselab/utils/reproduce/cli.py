@@ -52,7 +52,7 @@ from typing import Any
 import pydantic
 import yaml
 
-from senselab.utils.reproduce import build, cache, env, lockgen, run, slurm, source
+from senselab.utils.reproduce import build, cache, env, lockgen, run, sandbox, slurm, source
 from senselab.utils.reproduce.dag import DagError, toposort
 from senselab.utils.reproduce.locks import TORCH_NAMES, ReproduceLockError, file_sha256, normalize_name
 from senselab.utils.reproduce.spec import (
@@ -525,6 +525,11 @@ def _cmd_prefetch(args: argparse.Namespace) -> int:
     findings = lint_findings(paths, Path(args.profile), base)
     if findings:
         print("\n".join(findings))
+        return EXIT_FAILED
+    status, detail = sandbox.sandbox_status()
+    if status != "ok":
+        code = "E_SANDBOX_UNAVAILABLE" if status == "sweep-refused" else "E_NO_USERNS"
+        _error(f"{code}: {detail}")
         return EXIT_FAILED
     weighted = [s.name for p in paths for s in load_manifest(p).steps if s.hf_weights]
     if weighted:

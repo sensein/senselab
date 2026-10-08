@@ -93,7 +93,8 @@ libc.mount.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p, ctypes
 KEEP = {"nosuid": 2, "nodev": 4, "noexec": 8, "noatime": 1024, "nodiratime": 2048, "relatime": 1 << 21,
         "strictatime": 1 << 24}
 PSEUDO = set(sys.argv[1].split(","))
-skip = {os.fsencode(p) for p in sys.argv[2:]}
+skip = {os.fsencode(p) for p in sys.argv[2:] if not p.startswith("@")}
+masked = [os.fsencode(p[1:]).rstrip(b"/") + b"/" for p in sys.argv[2:] if p.startswith("@")]
 top = {}
 with open("/proc/self/mountinfo", "rb") as handle:
     for line in handle:
@@ -103,7 +104,7 @@ with open("/proc/self/mountinfo", "rb") as handle:
 bad = []
 for raw, (options, fstype) in top.items():
     path = raw.decode("unicode_escape").encode("latin-1") if b"\\\\" in raw else raw
-    if path in skip or fstype == "proc":
+    if path in skip or fstype == "proc" or any(path.startswith(m) for m in masked):
         continue
     flags = 32 | 4096 | 1
     for option in options.split(b","):
@@ -116,7 +117,8 @@ if bad:
 """
 """Run with the driver's interpreter (``-I -S``) inside the namespace, before the capability drop: remounts the
 topmost mount at every mount point read-only, keeping each mount's locked flags, except the paths named on
-its command line after the comma-separated pseudo types (the writable binds) and the fresh ``/proc``. A
+its command line after the comma-separated pseudo types (the writable binds), the fresh ``/proc``, and every
+mount point under a masked dir (named with a leading ``@``), which the mask makes unreachable. A
 mount that refuses is fatal unless its type is a kernel pseudo filesystem in `PSEUDO_FS`."""
 
 PSEUDO_FS = frozenset(
@@ -168,6 +170,7 @@ def sandbox_script(
             writable directory lies under a ``ro_extra`` directory.
     """
     roots, rw, extra = _shallow_first(ro_roots), _shallow_first(rw_dirs), _shallow_first(ro_extra)
+    masks = [_abs(m) for m in masked]
     if tmp is not None:
         rw = _shallow_first([*rw, tmp])
     for d in rw:
@@ -182,17 +185,18 @@ def sandbox_script(
     q = shlex.quote
     skip = [*rw, *([SYSTEM_TMP] if over_tmp else [])]
     lines = ["set -e", f"{MOUNT} --make-rprivate /"]
-    for host_dir in MASKED_HOST_DIRS:
-        if not any(_under(p, host_dir) for p in seen):
-            lines.append(_mask(host_dir))
+    hidden = [h for h in MASKED_HOST_DIRS if not any(_under(p, h) for p in seen)]
+    lines += [_mask(h) for h in hidden]
     lines += [f"{MOUNT} --bind {q(r)} {q(r)}" for r in roots]
     lines += [f"{MOUNT} --bind {q(d)} {q(d)}" for d in rw]
     lines += [f"{MOUNT} --bind {q(e)} {q(e)}" for e in extra]
     if over_tmp:
         lines.append(f"{MOUNT} --bind {q(_abs(tmp))} {SYSTEM_TMP}")  # type: ignore[arg-type]
-    lines += [_mask(_abs(m)) for m in masked]
+    lines += [_mask(m) for m in masks]
     pseudo = ",".join(sorted(PSEUDO_FS))
-    lines.append(" ".join([q(sys.executable), "-I", "-S", "-c", q(SWEEP), pseudo, *(q(p) for p in skip)]))
+    under_masks = [f"@{p}" for p in (*hidden, *masks)]
+    sweep_args = [pseudo, *skip, *under_masks]
+    lines.append(" ".join([q(sys.executable), "-I", "-S", "-c", q(SWEEP), *(q(p) for p in sweep_args)]))
     lines.append(f"if [ -d /dev/shm ]; then {MOUNT} -t tmpfs -o nosuid,nodev,mode=1777 tmpfs /dev/shm; fi")
     lines += [f"{IP} link set lo up"] if netns else []
     lines += [f'exec {" ".join(DROP)} "$@"']
@@ -243,11 +247,23 @@ def sandbox_argv(
     return [*unshare, SH, "-c", script, "sh", *argv]
 
 
-def userns_available() -> bool:
-    """Return whether an unprivileged namespace with loopback can be created here.
+SWEEP_REFUSED = "reproduce sandbox: mounts left writable"
+"""The start of the sweep's message when a mount refuses the read-only remount (it names filesystem types only)."""
 
-    Returns:
-        True if the namespaces, raising loopback and the capability drop succeed.
+
+def sweep_refusal(text: str) -> str | None:
+    """The sweep's refusal line in ``text`` (a sandbox's stderr), or None."""
+    for line in text.splitlines():
+        if line.startswith(SWEEP_REFUSED):
+            return line.strip()
+    return None
+
+
+def sandbox_status() -> tuple[str, str]:
+    """Whether a sandbox can be built here: ``("ok", "")``, ``("no-userns", detail)`` or ``("sweep-refused", line)``.
+
+    ``sweep-refused`` means the namespaces work but a mount refused the read-only remount, so this node cannot
+    host a sandbox; the line names the refusing filesystem types.
     """
     try:
         done = subprocess.run(
@@ -256,9 +272,20 @@ def userns_available() -> bool:
             capture_output=True,
             timeout=30,
         )
-    except (OSError, subprocess.SubprocessError):
-        return False
-    return done.returncode == 0
+    except (OSError, subprocess.SubprocessError) as error:
+        return "no-userns", type(error).__name__
+    if done.returncode == 0:
+        return "ok", ""
+    stderr = done.stderr.decode(errors="replace") if isinstance(done.stderr, bytes) else str(done.stderr or "")
+    refusal = sweep_refusal(stderr)
+    if refusal is not None:
+        return "sweep-refused", refusal
+    return "no-userns", stderr.strip()[-200:]
+
+
+def userns_available() -> bool:
+    """Return whether a sandbox can be built here (`sandbox_status` is ``ok``)."""
+    return sandbox_status()[0] == "ok"
 
 
 def _escape(text: str) -> str:
