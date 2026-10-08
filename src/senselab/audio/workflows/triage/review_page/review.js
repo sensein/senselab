@@ -664,9 +664,9 @@ var ReviewPage = (function () {
       var time = spectrogramSection(r, rec);
       state.timeline = time.timeline;
       body.appendChild(time);
+      if (rec.speech) body.appendChild(speechSection(rec.speech, time.timeline));
       body.appendChild(audioSection(rec, time.timeline));
       body.appendChild(evidenceSection(rec));
-      if (rec.speech) body.appendChild(speechSection(rec.speech, time.timeline));
       if (rec.missing && rec.missing.length) body.appendChild(el('p', 'rv-note', 'missing: ' + rec.missing.join(', ')));
       body.appendChild(el('p', 'rv-note', 'commit ' + (rec.commit || '—') + ' · config ' + (rec.config_hash || '—')));
     });
