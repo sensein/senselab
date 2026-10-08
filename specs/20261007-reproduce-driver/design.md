@@ -84,7 +84,7 @@ There are up to four locks:
 
 The install runs four stages, each `--no-deps`. Stages 1, 2 and 4 also use `--require-hashes`; stage 3 installs a wheel only after the driver has checked its sha256 against `wheels.lock`:
 
-1. torch
+1. torch (`--only-binary :all:`)
 2. body (`--only-binary :all:`)
 3. the recorded wheels
 4. the overlay, into the derived venv
@@ -205,13 +205,13 @@ How `build` produces and reuses sdist wheels:
 - Patches are `-p1` unified diffs against the unpacked sdist root, applied with GNU `patch
   --fuzz=0`, before the build venv is created. The spike's mmcv patch carries `srcp/…` paths and
   has to be regenerated with `a/`, `b/` paths when its manifest row is written.
-- **Modules load without dotfiles:** `bash --noprofile --norc -c '. /etc/profile.d/modules.sh &&
+- **Modules load without dotfiles:** `bash --noprofile --norc -c '. <profile.modules_init> &&
   module load <m…> && exec "$@"'`. `nvcc` is required only when the build is a CUDA build, that is,
   when `torch_cuda_arch_list` is set or a `cuda/*` module is listed. Then the script fails unless
   `nvcc` is on `PATH`, and exports `CUDA_HOME` derived from it, as in the spike's mmcv job.
-  The spike's mmcv build got gcc 12.2 from the login shell's default modules. With dotfiles and the
-  caller's `PATH` gone, the compiler is `/usr/bin/gcc` (8.5 here) unless the manifest loads one,
-  e.g. `build_modules: [gcc/12.2.0, cuda/12.9.1]`. Each wheel gets a `<wheel>.build-info.json`
+  A build that relied on a compiler from an interactive shell's default modules gets, with dotfiles
+  and the caller's `PATH` gone, the system compiler instead, which can be much older, unless the
+  manifest loads one, e.g. `build_modules: [gcc/<version>, cuda/<version>]`. Each wheel gets a `<wheel>.build-info.json`
   recording the uv, gcc and nvcc versions, the modules and `python_exact`, so the toolchain is
   visible either way.
 - **Planning amendment: `build_modules` replaces `cuda_module`.** Spec §2.3.3 named one optional
@@ -283,7 +283,7 @@ How `env` installs (B7):
 - **uv runs with `build.base_environment`** (system `PATH`, private `HOME`/`TMPDIR`, the uv cache
   and Python dirs, the CA bundle) and `--no-config`, so a caller's `UV_INDEX_URL`, `PYTHONPATH` or
   `uv.toml` cannot change an install. The test plants both and checks the env keys.
-- **Stage argv.** Torch: `--no-deps --require-hashes`, with `--index-url <torch.index_url>` only
+- **Stage argv.** Torch: `--no-deps --require-hashes --only-binary :all:`, with `--index-url <torch.index_url>` only
   when the lock has `==` pins (`build.torch_index_url`); URL-pinned locks need no index. Body and
   overlays: `--no-deps --require-hashes --only-binary :all: --index-url <body.index_url>`; the
   overlays are compiled against the body index, and binaries-only keeps a stray sdist (and its
@@ -402,7 +402,7 @@ runs.
    kernel pseudo filesystem (`PSEUDO_FS`: sysfs, cgroup, tracefs, binfmt_misc, autofs, and the
    like), which holds no data and whose writes need host privileges anyway. `hugetlbfs` and `mqueue`
    are not exempt (B12 re-review): both hold data a step could share with the host, both remount
-   read-only on the development cluster, and if either refuses somewhere the step aborts. An IPC namespace that
+   read-only where this was measured, and if either refuses somewhere the step aborts. An IPC namespace that
    would make `mqueue` private was the alternative; not exempting them is simpler and fails closed. Measured on a compute
    node with 733 mounts (438 NFS, 227 autofs): 0.07 s; the same loop as one `mount` process per entry
    took 11 s. Two mounts refuse there, tracefs and binfmt_misc. Taking only the topmost entry per path
@@ -915,7 +915,8 @@ Accepted residual risk: a prevalence multiplied by an unsuppressed `n` (or a rec
 class size) can reconstruct a small cell that was suppressed elsewhere, and an unsuppressed denominator
 df can reveal a suppressed `n` (for a one-way design, df = n − groups). Closing that would mean rounding
 or suppressing prevalences, rates and df, which are the numbers the imbalance rules and the F test exist
-to report. The output stays aggregate-only and is read only through the narrow reruns exception.
+to report. The output stays aggregate-only, and only the result files named in the deployment's access
+rules (`summary.json`, `metrics.json`, `run.json`) are read.
 
 The driver validates twice, once the adapter's output and once the final object after writing the
 `expect` results (`writer="driver"`), both times with `MIN_CELL`, so a `"<5"` token passes the second
@@ -1252,6 +1253,44 @@ It holds no messages, and no paths other than checkout-relative code frames.
   directories with a relative name, no `..` and a resolved path inside the unpack dir, then extracts the
   checked members. Both paths are tested.
 
+## B14 re-check additions
+
+- **The R library is confined.** `env.r_lib` must be `{cache}/r/<name>`: one plain name (letters, digits,
+  `_`, `.`, `-`, no leading dot), no `/` and no `..` (`E_SPEC_BAD_R_LIB`). A prefix check alone let
+  `{cache}/../victim` make `prefetch_r` remove a tree outside the cache, and let the R install's
+  sandbox write into a venv's `bin`. `prefetch_r` and the runner also check, before any removal, write or
+  lock, that the real path (symlinks resolved) lies directly under `realpath(cache)/r`; a symlinked
+  `{cache}/r` leading elsewhere is refused too.
+- **The venv-bin symlink guard.** For `python` and `notebook` steps the program must be found in the venv
+  and its final target must lie in the venv or in the uv-managed Python install the venv was made from
+  (the parent of `home` in `pyvenv.cfg`, read as text, nothing run). A `bin/evilpy -> /usr/bin/python3`
+  planted in the venv is refused (`E_STEP_INTERPRETER`).
+- **Masked dirs and the sweep.** A mount point under a masked dir (`/run/user/<uid>` under `/run` on a
+  login node, where prefetch runs) cannot be reached once the mask is mounted, and remounting it by path
+  would fail; the sweep skips mount points under every masked dir (passed with a leading `@`).
+- **Which nodes can host a sandbox.** A node is usable only if every mount the sandbox inherits, other
+  than the kernel pseudo filesystems, can be remounted read-only from inside the user namespace. A FUSE
+  mount is the known example that refuses. `sandbox.sandbox_status` tells `ok`, `no-userns` and
+  `sweep-refused` apart. On a refused sweep a run is `failed` with `E_SANDBOX_UNAVAILABLE` (a refusal: the
+  result dir is not reset; the sweep's line, which names filesystem types only, is appended to
+  `R/logs/driver.log`), and `prefetch` stops with the same code before it builds anything; a sandboxed
+  `uv pip` call that meets a refused sweep raises it too. Without user namespaces the code stays
+  `E_NO_USERNS`. A site profile's step partitions and `build` partition must therefore point at nodes
+  where every mount can be made read-only.
+- **Notebook kernel specs.** For `ir_notebook`, prefetch records a sha256 of the notebook venv's
+  `share/jupyter/kernels` tree (relative paths with file contents or link targets) in `installed.json`
+  as `kernels_sha256` (the marker's `installed_sha256` follows), and a run refuses with `E_ENV_CHANGED`
+  when the tree no longer matches or no digest was recorded. A kernel spec names the program Jupyter
+  starts, so changing it would change what runs without changing any keyed input.
+- **No shell programs in Python steps.** Since the step's program is pinned, a `python` or `notebook`
+  step cannot start `bash` or `sh` directly, and there is no shell kind (the plan needs none). A shell
+  wrapper has to be a script run by the venv's Python (`{venv}/bin/python {checkout}/run.py`, which may
+  then call a shell inside the sandbox), or a program in an R module or native bin dir run by an `r` step.
+- **`RunConfig.parent_env`.** The mapping the runner reads the recorded-only job variables from
+  (`SLURM_JOB_ID`, `SLURM_ARRAY_JOB_ID`, `SLURM_ARRAY_TASK_ID`, `SLURM_CPUS_PER_TASK`,
+  `CUDA_VISIBLE_DEVICES`); it defaults to `os.environ`, and nothing else is read from it. Tests pass a
+  fixed mapping so the recorded env does not depend on where they run.
+
 ## Commands
 
 `python -m senselab.utils.reproduce` takes these subcommands:
@@ -1381,7 +1420,7 @@ patch text.
   never probed; the probe applies to CPU entries too.
 - **Cross-checks (`slurm.step_findings` and `slurm.profile_findings`, used by `lint`, `prefetch` and
   `submit`).** `resources.profile` must be a partition key (`partition-unknown`). A `fallback` is a
-  partition *name*, not a key (the site profile names another partition there), so it is checked as a plain
+  partition *name*, not a key (a profile names a Slurm partition there), so it is checked as a plain
   word that differs from its own partition (`fallback-invalid`). A partition, mem, time, gres or fallback
   value that rendering would refuse is `resource-invalid`, so lint catches it first; the profile's log root
   and `build` partition are checked once (`logs-invalid`, `resource-invalid`). `gpu_arch` or `min_driver`
