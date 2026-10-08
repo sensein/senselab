@@ -1022,3 +1022,107 @@ extent ±0.25 s, so on the page they repeated `recording` and `enhanced`. The pa
 `redacted` in place of `task_redacted`), each with a strip marking the task extent and a
 "play task span" control that seeks to the extent and pauses at its end. The task-audio pipeline is
 unchanged.
+
+## Redaction decisions per token, and the task's own content (2026-10-08)
+
+**What the owner saw.** On `sub-06d289b0…_task-diadochokinesis-v2-buttercup` (r18; verdict `pass`, release
+`as_is`) the review page played a `redacted` track and marked one word as PII. The store, read at
+4ee22797: the residue SPEECH scanned is one consensus word, index 3, surface `time?` (0.88–1.20 s);
+Qwen's reading of that word is the lower-case `barakat`. Presidio (`PERSON`) and the rules NER
+(`NAME`) both found `barakat` in the `asr_qwen` haystack, `occurrences_n` 1, placed on that word and
+nowhere else. It was not the capitalised `Barakat`: Qwen's capitalised reading sits under consensus
+word 0 (`What`), which is not in the residue, so no detector read it. REDACT planned one mask
+(0.55–1.85 s, `PERSON+NAME`) and wrote `run/streams/redacted.flac`. The fold then released the word
+twice over -- `released_not_proper` (written lower-case) and the reviewer's `release` of `time?`
+(`relabel: other_non_person`) -- so no mask stood and the release ground was `no_content_masked`. Qwen
+read `barakat` at five other consensus words (0, 8, 13, 16, 20), none of them marked. The
+`ddk_task_reading` read the task as `present` over 6 cycle events (0.015–3.655 s); the word's hull lies
+91 % inside them (pad 0.05 s).
+
+### Redaction decisions per token
+
+A decision about a token holds at every occurrence of it in the recording. A word's tokens are its
+consensus surface and each recogniser's reading of it, lower-cased with curly apostrophes made straight
+and edge punctuation stripped (`nodes/redact.py:word_keys`). A finding's token on a word is that word's
+reading in the haystack the finding was read off (`finding_keys`): the buttercup finding's token is
+`barakat`, never `time`.
+
+- **Kept masked.** Where the fold keeps a word masked as a name -- a finding of a name family
+  (`PERSON`, `LOCATION`, `ORGANIZATION`), a person or place lock, or a reviewer mask of a name family --
+  every other timed word carrying one of its tokens is masked too, unless it is task content (the
+  declared stimulus, lexicon or texts, or the task's events below), a name a human approved, a condition
+  the reviewer listed, or released by kind. A word no finding covered gets a mask of its own, source
+  `propagated`, labelled with the source word's family. Only content-word tokens propagate
+  (`residue.is_content_word`), so a name homograph of a function word ("Will") masks only where a
+  detector put it.
+- **Released.** A reviewer `release` entry, with or without a relabel or a place reason, releases every
+  finding-covered word carrying the quoted token, in any recogniser's reading, unless a `redact` entry
+  quotes that surface. This replaces the earlier same-surface-same-family rule.
+- **Precedence.** Task content first: it is never masked and its tokens never propagate a mask. Then a
+  kept name over a release: where the reviewer releases one occurrence of a token the policy keeps
+  masked at another (a lock the release could not lift, or a `redact` entry on the same token), every
+  occurrence is masked. `TestTheReviewerJudgesATermNotAnInstance::test_a_redact_entry_on_the_term_stops_it_spreading`
+  changed accordingly: the quoted "Prince" is now masked with the other two.
+- **Where it lives.** In `mask_plan`, after the detector findings, the policy locks, the reviewer's
+  release and redact entries and the policy masks are merged into the kept set, before the kept words
+  are cut into extents. It is the fold's, so a re-fold applies it to a finished store.
+- **Provenance.** Each ledger word carries `propagated: true`, `propagation` (`mask` or `release`),
+  `propagated_from` (the word ids whose decision it carries) and `source_findings` (the `pii` ids on
+  those words). Counts `propagated_n` and `propagated_masked_n`; recording vectors (schema 26) carry
+  both. A redacted copy whose masks differ from REDACT's only by propagated masks is released on
+  `name_masks_propagated`.
+
+### Task content in the transcript
+
+For a syllable-repetition family and the other non-lexical families (airway, voice), a transcript word
+whose timing hull lies on the task layer's own events is the recogniser's reading of the task, whatever
+it spells. It is never PII and never masked -- the v8 rule that the stimulus and the target word are
+never masked, extended to the recogniser's misreadings of the task itself.
+
+- **Events.** `data/task_content.yaml` names the readings per family set: `ddk_task_reading` for
+  `SYLLABLE_REPETITION`, `airway_breath_reading` and `airway_cough_reading` for `AIRWAY_ELICITING`,
+  `voice_phonation_reading` for `VOICE_ELICITING`. A reading contributes its evidence's events where its
+  decision is `present` or `review` (an `absent` reading read another activity), and a phonation reading
+  its holds where it found one. A lexical family has no task events.
+- **Overlap rule.** A word is task content where at least `min_share` 0.5 of its hull lies inside the
+  events, each widened by `pad_s` 0.05 s. A token a finding read on such a word is task content at every
+  other finding-covered word too.
+- **Derivation (r18, every store with a finding, 7,436; job 25333020).** Of 546 non-lexical recordings
+  with a finding, 1,510 finding words: the share of the hull inside the events (pad 0.05 s) is
+  bimodal -- 815 words at 0.95 or more, 452 under 0.05, 243 between; median 0.993. 0.5 is the gap's midpoint.
+  Recordings with at least one finding word over the threshold: 355 / 362 / 367 at pad 0 / 0.05 /
+  0.1 s, with every finding word over it 328 / 340 / 346; the pad moves 12 of 367, and 0.05 s is the
+  impulse abutting tolerance already in `task_events.yaml` (`entangle_abut_s`). Any overlap at all
+  instead of 0.5 adds 53 recordings, mostly a word with one edge on a train.
+- **REDACT** exempts a finding every word of which is task content, as an `exempt`/`task_event`
+  assertion derived from the finding and its words (`events_n`, `propagated`), and counts it in
+  `task_event_exempt_n`; a fresh run of the buttercup recording plans no mask and releases the original
+  on `findings_are_task_content`.
+- **The fold** drops task content from every mask, policy and reviewer mask included, and records the
+  covered words as `task_event_ids` (`task_event_words_n`). On a re-fold of a store REDACT masked
+  before the rule, where every located finding covered only task content and no mask stands, the
+  release is `as_is` on the new ground `task_content_unmasked`.
+
+The redaction policy's version is 10.
+
+### Review page
+
+The `redacted` stream is a track on the recording's clock only where the release is `redacted`.
+Otherwise it is folded away in a `<details>` labelled "redaction considered, not released (release
+…)", off the timeline. On such a recording every PII mark is drawn dotted and grey -- detected, not
+applied -- with a tooltip "detected, not applied — release <release>: <release ground>", and the
+transcript panel says so once above the text.
+
+### r18 dry estimate (before the re-fold)
+
+Read under r27 over all 7,436 r18 stores whose recording-vectors row has a PII finding (stores without
+one cannot change), job 25333020, `/orcd/scratch/bcs/002/satra/r18b_20261008/dryrun/`:
+
+- **Propagation.** 76 recordings keep a name masked at one occurrence while another occurrence of the
+  same token is unmasked (305 words): 66 now `redacted`, 10 `withheld`. 21 of them have an occurrence
+  only another recogniser's reading carries. 13 hold a token both masked and reviewer-released.
+  By family: random-item-generation 19, free-speech 17, free-speech-v2 15, diadochokinesis-pataka 6.
+- **Task content.** 546 non-lexical recordings carry a finding (459 `as_is`, 51 `redacted`, 7
+  `withheld`, 29 unassessed); 362 have a finding word on the task's events, 340 with every finding word
+  on them. 27 lose every mask (25 of them `redacted` now, 2 `withheld`), 2 lose some. 332 `as_is` recordings
+  lose the PII mark the page drew. Almost all are DDK (317), then glides 18, phonation 16, airway 11.
