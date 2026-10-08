@@ -427,20 +427,20 @@ def test_unchecked_and_missing_venvs_and_no_userns_are_refused(world: World, mon
     """A venv whose checks did not pass, a missing venv and a host without user namespaces never run."""
     manifest = world.manifest(world.step("prep", "prep", "{root:data}/in/a.txt"))
     world.prefetch(manifest, checked=False)
-    monkeypatch.setattr(sandbox, "userns_available", lambda: True)
+    monkeypatch.setattr(sandbox, "sandbox_status", lambda: ("ok", ""))
     outcome = run_step(manifest.steps[0], "demo", world.config())
     assert (outcome.status, outcome.codes) == ("failed", ("E_ENV_UNCHECKED",))
     assert outcome.key is not None and not (world.tmp / "results" / outcome.key).exists()
     path = env.venv_dir(world.cache, "demo", manifest.steps[0].env)
     (path / env.MARKER).unlink()
     assert run_step(manifest.steps[0], "demo", world.config()).codes == ("E_ENV_MISSING",)
-    monkeypatch.setattr(sandbox, "userns_available", lambda: False)
+    monkeypatch.setattr(sandbox, "sandbox_status", lambda: ("no-userns", "unshare failed"))
     assert run_step(manifest.steps[0], "demo", world.config()).codes == ("E_NO_USERNS",)
 
 
 def test_gpu_guard_and_driver_floor(world: World, monkeypatch: pytest.MonkeyPatch) -> None:
     """A GPU step on a host without a GPU, or below ``min_driver``, is refused before it runs."""
-    monkeypatch.setattr(sandbox, "userns_available", lambda: True)
+    monkeypatch.setattr(sandbox, "sandbox_status", lambda: ("ok", ""))
 
     def runner(gpu: str) -> host.Runner:
         def probe(argv: Sequence[str]) -> tuple[int, str]:

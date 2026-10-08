@@ -65,7 +65,16 @@ from senselab.utils.reproduce.locks import (
     normalize_name,
     parse_freeze,
 )
-from senselab.utils.reproduce.spec import EnvSpec, LockRef, PipCheckExpected, Profile, RPackage, StepSpec, render
+from senselab.utils.reproduce.spec import (
+    R_LIB_TEMPLATE,
+    EnvSpec,
+    LockRef,
+    PipCheckExpected,
+    Profile,
+    RPackage,
+    StepSpec,
+    render,
+)
 
 ENV_KEY_SCHEMA = "reproduce-env-1"
 VENVS = "venvs"
@@ -429,6 +438,60 @@ def _installed_ok(path: Path, marker: Mapping[str, Any]) -> dict[str, Any] | Non
     return installed
 
 
+def confined_r_lib(template: str, cache: Path) -> Path:
+    """The R library path of a ``{cache}/r/<name>`` template, refused unless it really lies in ``<cache>/r``.
+
+    Raises:
+        ValueError: ``E_SPEC_BAD_R_LIB`` for another form, or when the real path (symlinks resolved) is not
+            strictly under ``realpath(cache)/r``; checked before any removal, write or lock.
+    """
+    if not R_LIB_TEMPLATE.match(template):
+        raise ValueError("E_SPEC_BAD_R_LIB: r_lib must be {cache}/r/<name>")
+    r_lib = Path(render(template, {"cache": cache}))
+    base = os.path.join(os.path.realpath(cache), "r")
+    real = os.path.realpath(r_lib)
+    if os.path.dirname(real) != base or real == base:
+        raise ValueError("E_SPEC_BAD_R_LIB: r_lib resolves outside <cache>/r")
+    return r_lib
+
+
+KERNELS = Path("share") / "jupyter" / "kernels"
+
+
+def kernels_sha256(venv: Path) -> str:
+    """A sha256 over the venv's ``share/jupyter/kernels`` tree: each entry's relative path and content (or link)."""
+    root = venv / KERNELS
+    entries = []
+    for top, dirs, files in os.walk(root, followlinks=False):
+        dirs.sort()
+        for name in sorted([*files, *(d for d in dirs if os.path.islink(os.path.join(top, d)))]):
+            path = Path(top) / name
+            rel = path.relative_to(root).as_posix()
+            if path.is_symlink():
+                entries.append([rel, "link", os.readlink(path)])
+            else:
+                entries.append([rel, "file", hashlib.sha256(path.read_bytes()).hexdigest()])
+    return hashlib.sha256(json.dumps(sorted(entries)).encode()).hexdigest()
+
+
+def record_kernels(venv: Path) -> str:
+    """Record `kernels_sha256` in the venv's ``installed.json`` and keep the marker's sha256 in step.
+
+    Returns:
+        The kernels sha256.
+    """
+    with _flock(venv.with_name(venv.name + ".lock")):
+        installed = json.loads((venv / INSTALLED).read_text())
+        digest = kernels_sha256(venv)
+        installed["kernels_sha256"] = digest
+        installed_sha = _write_json(venv / INSTALLED, installed)
+        marker = _read_marker(venv)
+        if marker is not None:
+            marker["installed_sha256"] = installed_sha
+            _write_json(venv / MARKER, marker)
+    return digest
+
+
 def installed_sha256(path: Path) -> str | None:
     """The sha256 of a venv's ``installed.json``, as its marker records it.
 
@@ -700,7 +763,11 @@ def _uv_in_sandbox(uv: str, args: Sequence[str], venv: Path) -> subprocess.Compl
         cache_dir.mkdir()
         run_env |= {"UV_CACHE_DIR": str(cache_dir), "UV_OFFLINE": "1", "UV_PYTHON_DOWNLOADS": "never"}
         argv = [uv, *args, "--no-config", "--python", str(venv.absolute() / "bin" / "python")]
-        return _run(sandbox.sandbox_argv(argv, [], [work], [venv.absolute()]), run_env)
+        result = _run(sandbox.sandbox_argv(argv, [], [work], [venv.absolute()]), run_env)
+    refusal = sandbox.sweep_refusal(result.stderr or "")
+    if refusal is not None:
+        raise ReproduceLockError(f"E_SANDBOX_UNAVAILABLE: {refusal}")
+    return result
 
 
 def pip_freeze(venv: Path, uv: str | None = None) -> str:
@@ -1141,7 +1208,7 @@ def prefetch_r(
     if not _ENV_MODULE.match(module):
         raise ValueError(f"R module {module!r} is not a plain module name")
     run = runner or _r_runner
-    r_lib = Path(render(env.r_lib, {"cache": cache}))
+    r_lib = confined_r_lib(env.r_lib, cache)
     repo = r_snapshot_url(env.r_snapshot)
     declared = {p.name: p.version for p in env.r_packages}
     key = _r_key(module, build_modules, r_version, repo, declared)
@@ -1149,6 +1216,8 @@ def prefetch_r(
     kernel_ok = venv is None or kind != "ir_notebook" or _kernel(venv).is_file()
     with _flock(r_lib.with_name(r_lib.name + ".lock")):
         if _r_reusable(session_path, module_path, key, kernel_ok):
+            if kind == "ir_notebook" and venv is not None:
+                record_kernels(venv)
             return RResult(
                 r_lib,
                 session_path,
@@ -1221,6 +1290,8 @@ def prefetch_r(
             raise ReproduceLockError(f"IRkernel installspec wrote no kernel spec under {venv}")
         module_sha = _write_json(module_path, module_env)
         session_sha = _write_json(session_path, session)
+    if kind == "ir_notebook" and venv is not None:
+        record_kernels(venv)
     return RResult(r_lib, session_path, session_sha, module_path, module_sha, False)
 
 

@@ -135,6 +135,8 @@ CODES = frozenset(
         "E_DRIVER",
         "E_UPSTREAM_NOT_DONE",
         "E_STEP_INTERPRETER",
+        "E_SANDBOX_UNAVAILABLE",
+        "E_SPEC_BAD_R_LIB",
         "E_OUTPUT_SYMLINK",
         "E_JOB_ENDED_WITHOUT_RECORD",
         "W_HOST_VALUE_DROPPED",
@@ -169,13 +171,19 @@ try:
 except ValueError:
     _canary = None
 _failed = _canary.get("canary_failed") if isinstance(_canary, dict) else None
-_allowed = json.loads(sys.argv[2])
+_rule = json.loads(sys.argv[2])
 _target = sys.argv[3]
 _found = _target if "/" in _target else shutil.which(_target, path=os.environ.get("PATH", ""))
 _ok = False
+def _in(p, dirs):
+    return any(p == a or p.startswith(a.rstrip("/") + "/") for a in dirs)
 if _found:
-    _places = (os.path.realpath(_found), os.path.realpath(os.path.dirname(os.path.abspath(_found))))
-    _ok = any(p == a or p.startswith(a.rstrip("/") + "/") for a in _allowed for p in _places)
+    _real = os.path.realpath(_found)
+    _dir = os.path.realpath(os.path.dirname(os.path.abspath(_found)))
+    if _rule["targets"] is None:
+        _ok = _in(_real, _rule["dirs"]) or _in(_dir, _rule["dirs"])
+    else:
+        _ok = _in(_dir, _rule["dirs"]) and _in(_real, _rule["dirs"] + _rule["targets"])
 _out = {{"sys_prefix": sys.prefix, "python": platform.python_version(), "torch": None, "torch_cuda": None,
          "canary_failed": _failed, "interpreter_ok": _ok}}
 if _failed is True:
@@ -194,10 +202,11 @@ if not _ok:
     sys.exit(95)
 os.execvp(sys.argv[3], sys.argv[3:])
 """
-"""Run as ``<venv>/bin/python -I -B -c PREAMBLE <pipe fd> <allowed dirs JSON> <step argv…>``: the canary, then
-torch, a JSON line on the driver's pipe (closed before the step starts), then ``execvp`` of the step, only when
-the canary's connect failed and the step's program, found on its ``PATH``, lies in an allowed dir (by its real
-path, or by the real path of the dir it was found in)."""
+"""Run as ``<venv>/bin/python -I -B -c PREAMBLE <pipe fd> <rule JSON> <step argv…>``: the canary, then torch, a
+JSON line on the driver's pipe (closed before the step starts), then ``execvp`` of the step, only when the
+canary's connect failed and the step's program, found on its ``PATH``, passes the rule. With ``targets`` null
+(R kinds) its real path, or the real path of the dir it was found in, lies in ``dirs``; with ``targets`` (Python
+kinds) it was found in ``dirs`` and its final target lies in ``dirs`` or ``targets`` (the uv-managed install)."""
 
 ADAPTER_RUNNER = """\
 import builtins, importlib, os, pkgutil, runpy, sys, traceback
@@ -379,6 +388,42 @@ def _write_json(path: Path, obj: object) -> None:
         raise
 
 
+def python_install_root(venv_path: Path) -> str | None:
+    """The uv-managed Python install a venv was made from: the parent of ``home`` in ``pyvenv.cfg``, read as text."""
+    try:
+        lines = (venv_path / "pyvenv.cfg").read_text().splitlines()
+    except OSError:
+        return None
+    for line in lines:
+        key, sep, value = line.partition("=")
+        if sep and key.strip() == "home" and value.strip():
+            return os.path.dirname(value.strip().rstrip("/"))
+    return None
+
+
+def _recorded_kernels(venv_path: Path) -> object:
+    try:
+        return json.loads((venv_path / env.INSTALLED).read_text()).get("kernels_sha256")
+    except (OSError, ValueError, AttributeError):
+        return None
+
+
+def _log_refusal(result: Path, text: str) -> None:
+    """Append a refusal's reason to ``R/logs/driver.log``, creating the dirs; the result dir is not reset."""
+    logs = result / LOGS
+    for path in (result, logs):
+        if path.is_symlink():
+            return
+        with contextlib.suppress(FileExistsError):
+            os.mkdir(path, 0o770)
+    with contextlib.suppress(OSError):
+        fd = os.open(logs / DRIVER_LOG, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o660)
+        try:
+            os.write(fd, (text + "\n").encode())
+        finally:
+            os.close(fd)
+
+
 def _empty_file(path: Path) -> None:
     """Make ``path`` an empty regular file the driver owns, replacing anything else there."""
     try:
@@ -459,7 +504,10 @@ def _touch_roots(profile: Profile) -> None:
 
 def _r_lib(step: StepSpec, cache_dir: Path) -> Path:
     assert step.env.r_lib is not None
-    return Path(render(step.env.r_lib, {"cache": cache_dir}))
+    try:
+        return env.confined_r_lib(step.env.r_lib, cache_dir)
+    except ValueError:
+        raise RunError("E_SPEC_BAD_R_LIB") from None
 
 
 def _r_digests(step: StepSpec, cache_dir: Path) -> tuple[str | None, str | None]:
@@ -786,11 +834,17 @@ class _Execution:
         """Refuse without touching the result dir, so a previous run's diagnostics survive.
 
         Raises:
-            RunError: ``E_NO_USERNS``, ``E_ENV_MISSING``, ``E_ENV_UNCHECKED``, ``E_ENV_CHANGED`` (the dist-info
-                METADATA in the venv no longer name the installed set), ``E_GPU_MISSING`` or ``E_DRIVER_OLD``.
+            RunError: ``E_SANDBOX_UNAVAILABLE`` (a mount refuses the read-only remount; the sweep's line goes
+                to ``R/logs/driver.log``), ``E_NO_USERNS``, ``E_ENV_MISSING``, ``E_ENV_UNCHECKED``,
+                ``E_ENV_CHANGED`` (the dist-info METADATA in the venv no longer name the installed set, or an
+                ``ir_notebook`` venv's kernel specs changed), ``E_GPU_MISSING`` or ``E_DRIVER_OLD``.
         """
         step, config = self.step, self.config
-        if not sandbox.userns_available():
+        status, detail = sandbox.sandbox_status()
+        if status == "sweep-refused":
+            _log_refusal(self.result, f"sandbox unavailable on this node: {detail}")
+            raise RunError("E_SANDBOX_UNAVAILABLE")
+        if status != "ok":
             raise RunError("E_NO_USERNS")
         venv_path, self.overlay = _step_venv(step, self.analysis, config.cache)
         venv = env.load_venv(venv_path, step.env, self.overlay)
@@ -799,6 +853,8 @@ class _Execution:
         if not venv.checked:
             raise RunError("E_ENV_UNCHECKED")
         if env.installed_from_metadata(venv_path) != venv.packages:
+            raise RunError("E_ENV_CHANGED")
+        if step.kind == "ir_notebook" and _recorded_kernels(venv_path) != env.kernels_sha256(venv_path):
             raise RunError("E_ENV_CHANGED")
         self.venv, self.installed = venv, env.installed_sha256(venv_path)
         self.host = host.host_record(None, runner=config.host_runner)
@@ -909,7 +965,7 @@ class _Execution:
 
     def _r_env(self) -> None:
         assert self.step.env.r_lib is not None
-        r_lib = self._render(self.step.env.r_lib)
+        r_lib = os.path.realpath(_r_lib(self.step, self.config.cache))
         try:
             module_env = json.loads((Path(r_lib) / env.MODULE_ENV).read_text())
         except (OSError, ValueError):
@@ -934,7 +990,7 @@ class _Execution:
     def _r_session(self) -> None:
         """Record the R session in the step's own sandbox and env, and compare it with ``SESSION.json``."""
         assert self.step.env.r_lib is not None
-        r_lib = Path(self._render(self.step.env.r_lib))
+        r_lib = Path(os.path.realpath(_r_lib(self.step, self.config.cache)))
         try:
             recorded = json.loads((r_lib / env.SESSION).read_text())
         except (OSError, ValueError):
@@ -1018,18 +1074,21 @@ class _Execution:
             raise RunError("E_CWD")
         return cwd
 
-    def _interpreter_dirs(self) -> list[str]:
-        """Where the step's program may live: the venv (Python kinds), the R module's and native bin dirs (R)."""
+    def _interpreter_rule(self) -> dict[str, list[str] | None]:
+        """Where the step's program may live (see `_PREAMBLE_CODE`).
+
+        Python kinds: found in the venv, its final target in the venv or the uv-managed install named by the
+        venv's ``pyvenv.cfg``. R kinds: the R module's and native bin dirs (and the venv for ``ir_notebook``).
+        """
         step = self.step
         native = [os.fspath(d) for n in step.resources.native for d in self.config.profile.native[n].bin_dirs]
-        venv = [self._render("{venv}")]
+        venv_path = self._render("{venv}")
         if step.kind in ("python", "notebook"):
-            places = venv
-        elif step.kind == "r":
-            places = [*self.r_bins, *native]
-        else:
-            places = [*venv, *self.r_bins, *native]
-        return [os.path.realpath(p) for p in places]
+            root = python_install_root(Path(venv_path))
+            targets = [] if root is None else [os.path.realpath(root)]
+            return {"dirs": [os.path.realpath(venv_path)], "targets": targets}
+        places = [*self.r_bins, *native] if step.kind == "r" else [venv_path, *self.r_bins, *native]
+        return {"dirs": [os.path.realpath(p) for p in places], "targets": None}
 
     def _exec(self) -> None:
         step, config = self.step, self.config
@@ -1038,7 +1097,7 @@ class _Execution:
         self.argv = argv
         python = os.path.join(self._render("{venv}"), "bin", "python")
         preamble = _PREAMBLE_CODE.format(canary=sandbox.canary(config.profile.canary_host))
-        allowed = json.dumps(self._interpreter_dirs())
+        allowed = json.dumps(self._interpreter_rule())
         read, write = os.pipe()
         wrapped = [sandbox.SH, "-c", WRAPPER, "sh", str(cwd), python, "-I", "-B", "-c", preamble, str(write), allowed]
         wrapped += argv

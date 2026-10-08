@@ -101,7 +101,8 @@ def test_sandbox_argv_shape(tmp_path: Path) -> None:
     sweep = script.index(f"{shlex.quote(sys.executable)} -I -S -c ")
     assert script.index(f"{mount} --bind {root} {root}\n") < script.index(f"{mount} --bind {out} {out}\n") < sweep
     assert script.index(f"{mount} --bind {tmp_path / 'ck'} {tmp_path / 'ck'}\n") < sweep
-    assert script.index(f" {out}\nif [ -d /dev/shm ]; then {mount} -t tmpfs") > sweep
+    assert f" {out} @/run" in script
+    assert script.index(f"\nif [ -d /dev/shm ]; then {mount} -t tmpfs") > sweep
     assert "remount,bind,ro" not in script
     assert "/usr/sbin/ip link set lo up" in script
     assert script.rstrip().endswith(
@@ -343,14 +344,14 @@ def test_r_libs(tmp_path: Path) -> None:
     r_step = _step(
         kind="r",
         env={**_step().env.model_dump(mode="json"), "r_packages": [{"name": "x", "version": "1"}]}
-        | {"r_snapshot": "2026-01-01", "r_lib": "{cache}/R/e"},
+        | {"r_snapshot": "2026-01-01", "r_lib": "{cache}/r/e"},
     )
     keyed = keyed_templates(r_step, _profile(tmp_path / "root"))
-    assert keyed["R_LIBS"] == "{cache}/R/e"
+    assert keyed["R_LIBS"] == "{cache}/r/e"
     assert keyed["R_LIBS_SITE"] == ""
-    assert keyed["R_LIBS_USER"] == "{cache}/R/e"
+    assert keyed["R_LIBS_USER"] == "{cache}/r/e"
     env, _, _ = build_env(r_step, _profile(tmp_path / "root"), _paths(tmp_path), parent={})
-    assert env["R_LIBS"] == env["R_LIBS_USER"] == f"{tmp_path}/cache/R/e"
+    assert env["R_LIBS"] == env["R_LIBS_USER"] == f"{tmp_path}/cache/r/e"
 
 
 NATIVE = {
@@ -408,7 +409,7 @@ def test_tmp_is_bound_on_system_tmp_unless_that_would_hide_a_path() -> None:
     root, out, tmp = "/srv/data", "/srv/results/k/work", "/srv/results/k/tmp"
     script = sandbox_argv(["true"], [root], [out], [], tmp=tmp)[10]
     assert f"/usr/bin/mount --bind {tmp} {tmp}" in script and f"/usr/bin/mount --bind {tmp} /tmp" in script
-    assert f" {out} /tmp\nif [ -d /dev/shm ]" in script
+    assert f" {out} /tmp @" in script
     hidden = sandbox_argv(["true"], [root], [out], [], tmp=tmp, visible=["/tmp/cache"])[10]
     assert f"--bind {tmp} /tmp" not in hidden and f"--bind {tmp} {tmp}" in hidden
 

@@ -907,7 +907,11 @@ def test_prefetch_r_ir_notebook_installs_kernel_into_venv(tmp_path: Path) -> Non
     """For ``ir_notebook`` the kernel spec goes into the derived venv, whose ``bin`` leads ``PATH``."""
     runner = FakeR({"lme4": "1.1-37", "IRkernel": "1.3.2"})
     venv = tmp_path / "venv"
+    venv.mkdir()
+    (venv / envmod.INSTALLED).write_text(json.dumps({"packages": {}, "freeze": []}))
     envmod.prefetch_r(_r_env(), tmp_path / "c", _profile(tmp_path), kind="ir_notebook", venv=venv, runner=runner)
+    installed = json.loads((venv / envmod.INSTALLED).read_text())
+    assert installed["kernels_sha256"] == envmod.kernels_sha256(venv)
     ((install, _),) = runner.installs
     assert install[8] == str(venv) and 'PATH="$5/bin:$PATH"' in install[2]
     assert (venv / "share" / "jupyter" / "kernels" / "ir" / "kernel.json").is_file()
