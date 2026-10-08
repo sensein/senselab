@@ -1,0 +1,100 @@
+# triage.tsv: one row per recording, built by triage_table.py from triage_decisions.parquet and
+# triage_evidence.parquet, plus the run tree for the source path, the recording's duration and which
+# task-audio files exist. No transcripts. A list is joined with ";", empty when there is none; a
+# missing value is an empty field. Columns are written in the order listed here. The files group is
+# relative to derivatives/senselab-triage/ and empty when the file is absent.
+version: 1
+columns:
+- name: participant_id
+  group: identity
+  description: BIDS participant label, with its sub- prefix
+- name: session_id
+  group: identity
+  description: BIDS session label, with its ses- prefix
+- name: task
+  group: identity
+  description: BIDS task label
+- name: task_family
+  group: identity
+  description: the task family the recording declares
+- name: branch
+  group: identity
+  description: the branch that owns the family (SPEECH, VOICE or AIRWAY), else none
+- name: source_path
+  group: identity
+  description: the recording WAV, relative to the BIDS root
+- name: verdict
+  group: decision
+  description: pass, review or discard
+- name: release
+  group: decision
+  description: as_is, redacted or withheld; empty on discard
+- name: reason
+  group: decision
+  description: the reason key that names the verdict; empty on a clean pass
+- name: reasons
+  group: decision
+  description: every reason key, joined with ";"
+- name: run_status
+  group: decision
+  description: whether every node the decision needed ran
+- name: missing
+  group: decision
+  description: the inputs the decision lacked, joined with ";"
+- name: recording_duration_s
+  group: task
+  description: the recording's duration, seconds
+- name: task_start_s
+  group: task
+  description: start of the task extent in the recording, seconds
+- name: task_end_s
+  group: task
+  description: end of the task extent in the recording, seconds
+- name: task_duration_s
+  group: task
+  description: task_end_s minus task_start_s
+- name: task_events_found
+  group: task
+  description: breaths, coughs or syllables/cycles the task layer found; empty for other families
+- name: task_events_instructed
+  group: task
+  description: the count the instruction asked for; empty where the family is not counted
+- name: annotations
+  group: task
+  description: annotation keys that did not change the verdict, joined with ";"
+- name: decisive_evidence
+  group: evidence
+  description: the evidence items that decided the verdict, each name=value<op>threshold→effect, joined with "; "
+- name: level_rel_session_db
+  group: acquisition
+  description: the recording's level against its session, dB
+- name: active_s
+  group: acquisition
+  description: seconds of activity in the plain stream
+- name: interference_in_task
+  group: acquisition
+  description: interference kinds touching the task extent, joined with ";"
+- name: fault_in_task
+  group: acquisition
+  description: capture faults touching the task extent, each kind:seconds, joined with ";"
+- name: task_audio_plain
+  group: files
+  description: the task extent cut from the plain stream
+- name: task_audio_enhanced
+  group: files
+  description: the task extent cut from the enhanced stream
+- name: task_audio_redacted
+  group: files
+  description: the task extent cut from the redacted stream
+- name: figure
+  group: files
+  description: the summary figure
+- name: pipeline_commit
+  group: provenance
+  description: the senselab commit the decision was last written under
+- name: config_hash
+  group: provenance
+  description: the triage configuration's hash
+- name: schema_version
+  group: provenance
+  description: this table's version, the version key of triage_table.yaml
