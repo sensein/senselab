@@ -551,10 +551,22 @@ columns:
   propagated_n:
     units: count
     description: >-
-      Words unmasked because a reviewer `release` entry named the same content-word term -- surface and
-      family -- elsewhere in the recording, and no `redact` entry names that surface.
+      Words whose state was carried from another occurrence of the same token -- its consensus surface or
+      any recogniser's reading, case folded and edge punctuation stripped: unmasked because a reviewer
+      `release` entry named the token elsewhere and no `redact` entry names it, or masked because the
+      token is a name kept masked elsewhere.
     computation: The ledger's `counts.propagated_n`, distinct word ids whose `propagated` is true.
     source: [recording_vectors.py:_ledger_columns, nodes/redact.py:MaskPlan.record, nodes/redact.py:mask_plan]
+    null_means: No `pii_ledger`.
+
+  propagated_masked_n:
+    units: count
+    description: >-
+      Words kept masked because the same token -- in the consensus or any recogniser's reading -- is a
+      name (a PERSON, LOCATION or ORGANIZATION finding, or a person or place lock) kept masked elsewhere
+      in the recording.
+    computation: The ledger's `counts.propagated_masked_n`, distinct masked word ids whose `propagation` is `mask`.
+    source: [recording_vectors.py:_ledger_columns, nodes/redact.py:MaskPlan.propagated_masked_n, nodes/redact.py:mask_plan]
     null_means: No `pii_ledger`.
 
   unplaced_n:
@@ -779,6 +791,15 @@ columns:
     description: Reviewer `release` entries that let a place, or other words, through as the task's own content.
     computation: The ledger's `counts.place_reason_task_content_n`, release entries whose `place_reason` is `task_content`.
     source: [recording_vectors.py:_ledger_columns, nodes/redact.py:MaskPlan.record, nodes/redact.py:mask_plan]
+    null_means: No `pii_ledger`.
+
+  task_event_words_n:
+    units: count
+    description: >-
+      Words a detector finding covered that lie on the declared non-lexical task's own events (a syllable
+      train, a breath, a cough, a held vowel), or read as the token a finding read on them; none is masked.
+    computation: The ledger's `counts.task_event_words_n`, the length of `task_event_ids` (`task_content.py`, `data/task_content.yaml`).
+    source: [recording_vectors.py:_ledger_columns, nodes/redact.py:task_content, task_content.py:task_content_ids]
     null_means: No `pii_ledger`.
 
   task_text_words_n:
