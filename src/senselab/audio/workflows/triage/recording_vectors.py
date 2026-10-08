@@ -32,7 +32,7 @@ from senselab.audio.workflows.triage.cohort import CONDITION_KINDS
 from senselab.audio.workflows.triage.vocabulary import UNPLACED_OPEN, UNPLACED_UNREAD, standing_task_extents
 from senselab.utils import fastio
 
-SCHEMA_VERSION = 25
+SCHEMA_VERSION = 26
 """Bumped whenever a column is added, removed or retyped, a binary layout changes, or a categorical
 column's controlled vocabulary changes."""
 
@@ -777,8 +777,8 @@ def _ledger_columns(view: StoreView) -> dict[str, Any]:
         ``policy_version``, ``language``, ``masks_n``, ``masks_final_n``, ``policy_masks_n``,
         ``task_words_n``, a count and a category list per :data:`LEDGER_STATES`, a count per
         :data:`LEDGER_RELEASE_KINDS`, :data:`LEDGER_LOCKS`, :data:`LEDGER_RELABELS` and
-        :data:`LEDGER_PLACE_REASONS`, ``task_text_words_n``, ``person_name_masked_n``,
-        ``name_release_proposed_n``, ``propagated_n``, ``unplaced_n``, ``unplaced_open``,
+        :data:`LEDGER_PLACE_REASONS`, ``task_text_words_n``, ``task_event_words_n``, ``person_name_masked_n``,
+        ``name_release_proposed_n``, ``propagated_n``, ``propagated_masked_n``, ``unplaced_n``, ``unplaced_open``,
         ``redact_agreed_n``, ``redact_by_kind_n``, ``redact_new_n``, ``conditions_n``, a count per
         condition kind and ``cohort_diagnoses``. All null where the store carries no ledger.
     """
@@ -800,9 +800,11 @@ def _ledger_columns(view: StoreView) -> dict[str, Any]:
         *(f"relabel_{kind}_n" for kind in LEDGER_RELABELS),
         *(f"place_reason_{reason}_n" for reason in LEDGER_PLACE_REASONS),
         "task_text_words_n",
+        "task_event_words_n",
         "person_name_masked_n",
         "name_release_proposed_n",
         "propagated_n",
+        "propagated_masked_n",
         "unplaced_n",
         "unplaced_open",
         "redact_agreed_n",
@@ -834,9 +836,11 @@ def _ledger_columns(view: StoreView) -> dict[str, Any]:
             for reason in LEDGER_PLACE_REASONS
         },
         "task_text_words_n": int(counts.get("task_text_words_n") or 0),
+        "task_event_words_n": int(counts.get("task_event_words_n") or 0),
         "person_name_masked_n": int(counts.get("person_name_masked_n") or 0),
         "name_release_proposed_n": int(counts.get("name_release_proposed_n") or 0),
         "propagated_n": int(counts.get("propagated_n") or 0),
+        "propagated_masked_n": int(counts.get("propagated_masked_n") or 0),
         "unplaced_n": int(counts.get("unplaced_n") or 0),
         "unplaced_open": any(
             str(finding.get("state")) in UNPLACED_SETTLES_NOTHING for finding in ledger.get("unplaced_findings") or ()
@@ -1632,9 +1636,11 @@ def _fields() -> list[pa.Field]:
         *[pa.field(f"relabel_{kind}_n", pa.int32()) for kind in LEDGER_RELABELS],
         *[pa.field(f"place_reason_{reason}_n", pa.int32()) for reason in LEDGER_PLACE_REASONS],
         pa.field("task_text_words_n", pa.int32()),
+        pa.field("task_event_words_n", pa.int32()),
         pa.field("person_name_masked_n", pa.int32()),
         pa.field("name_release_proposed_n", pa.int32()),
         pa.field("propagated_n", pa.int32()),
+        pa.field("propagated_masked_n", pa.int32()),
         pa.field("unplaced_n", pa.int32()),
         pa.field("unplaced_open", pa.bool_()),
         pa.field("redact_agreed_n", pa.int32()),
