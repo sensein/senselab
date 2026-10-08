@@ -186,3 +186,65 @@ test('the page plays the recording and enhanced streams, never the task cuts', (
   assert.deepEqual(R.audioTracks({ streams, speech: {} }).map((t) => [t.name, t.timeline]),
     [['recording', true], ['enhanced', true], ['redacted', true], ['released', false]])
 })
+
+// A stand-in <audio>: `seekable` says whether setting currentTime lands there (a server answering byte
+// ranges) or falls back to 0 (one that does not); `seeked` fires after the assignment, as in a browser.
+function fakePlayer({ seekable = true, ready = true } = {}) {
+  const t = new EventTarget()
+  let at = 0
+  Object.assign(t, {
+    readyState: ready ? 1 : 0, paused: true, preload: 'none', plays: 0,
+    load() { queueMicrotask(() => { t.readyState = 1; t.dispatchEvent(new Event('loadedmetadata')) }) },
+    play() { t.paused = false; t.plays += 1; t.dispatchEvent(new Event('play')); return Promise.resolve() },
+    pause() { t.paused = true; t.dispatchEvent(new Event('pause')) },
+  })
+  Object.defineProperty(t, 'currentTime', {
+    get: () => at,
+    set: (v) => { at = seekable ? v : 0; queueMicrotask(() => t.dispatchEvent(new Event('seeked'))) },
+  })
+  return t
+}
+
+const settle = () => new Promise((resolve) => setTimeout(resolve, 20))
+
+test('play task span waits for metadata, seeks to the extent start, waits for seeked, then plays', async () => {
+  const tl = R.timelineOf(40, [6.85, 29.73])
+  const a = fakePlayer({ ready: false })
+  tl.players.push(a)
+  R.playSpan(tl, a, () => assert.fail('a seekable player must not report a failed seek'), 1000)
+  assert.equal(a.plays, 0)
+  assert.equal(a.preload, 'auto')
+  await settle()
+  assert.equal(a.currentTime, 6.85)
+  assert.equal(a.plays, 1)
+  assert.equal(tl.spanEnd, 29.73)
+  a.currentTime = 29.8
+  R.stopAtSpanEnd(tl)
+  assert.equal(a.paused, true)
+  assert.equal(tl.spanEnd, null)
+})
+
+test('play task span does not play from 0 where the server cannot seek, and says why', async () => {
+  const tl = R.timelineOf(40, [6.85, 29.73])
+  const a = fakePlayer({ seekable: false })
+  tl.players.push(a)
+  const failed = []
+  R.playSpan(tl, a, (landed, start) => failed.push([landed, start]), 1000)
+  await settle()
+  assert.deepEqual(failed, [[0, 6.85]])
+  assert.equal(a.plays, 0)
+  assert.equal(tl.spanEnd, null)
+  assert.match(R.CANNOT_SEEK, /triage_review_serve\.py/)
+})
+
+test('play task span gives up waiting for seeked and still checks where the player landed', async () => {
+  const tl = R.timelineOf(40, [6.85, 29.73])
+  const a = fakePlayer({ seekable: false })
+  a.addEventListener = function (type, fn, opts) { if (type !== 'seeked') EventTarget.prototype.addEventListener.call(this, type, fn, opts) }
+  tl.players.push(a)
+  const failed = []
+  R.playSpan(tl, a, (landed) => failed.push(landed), 5)
+  await settle()
+  assert.deepEqual(failed, [0])
+  assert.equal(a.plays, 0)
+})

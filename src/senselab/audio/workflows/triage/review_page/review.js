@@ -612,28 +612,63 @@ var ReviewPage = (function () {
 
   function playerAt(tl) { return tl.active || tl.players[0] || null; }
 
-  function seekPlayer(a, t, play) {
-    var go = function () {
-      a.currentTime = t;
-      if (play) a.play().catch(function () { /* the reviewer can press play */ });
-    };
-    if (a.readyState >= 1) { go(); return; }
-    a.addEventListener('loadedmetadata', go, { once: true });
+  function seekPlayer(a, t) { whenReady(a, function () { a.currentTime = t; }); }
+
+  var SEEK_TOLERANCE_S = 0.2;
+  var SEEK_WAIT_MS = 3000;
+  var CANNOT_SEEK = "this server can't seek; serve with triage_review_serve.py";
+
+  /** Run `fn` once the player knows its duration, loading it first where it has not. */
+  function whenReady(a, fn) {
+    if (a.readyState >= 1) { fn(); return; }
+    a.addEventListener('loadedmetadata', fn, { once: true });
     a.preload = 'auto';
     a.load();
   }
 
-  function playSpan(tl, a) {
+  /**
+   * Play the task extent on one player: seek to its start, wait for `seeked`, then play until its end.
+   * Where the player lands away from the start (a server that cannot answer byte ranges), it does not
+   * play, and `onCannotSeek(landedAt, start)` is called instead.
+   */
+  function playSpan(tl, a, onCannotSeek, waitMs) {
     if (!tl.extent) return;
+    var start = tl.extent[0];
+    tl.players.forEach(function (b) { if (b !== a && !b.paused) b.pause(); });
     tl.active = a;
-    tl.spanEnd = tl.extent[1];
-    seekPlayer(a, tl.extent[0], true);
+    tl.spanEnd = null;
+    whenReady(a, function () {
+      var settled = false;
+      var timer = null;
+      var after = function () {
+        if (settled) return;
+        settled = true;
+        if (timer != null) clearTimeout(timer);
+        a.removeEventListener('seeked', after);
+        if (tl.active !== a) return;
+        if (Math.abs(a.currentTime - start) > SEEK_TOLERANCE_S) {
+          if (onCannotSeek) onCannotSeek(a.currentTime, start);
+          return;
+        }
+        tl.spanEnd = tl.extent[1];
+        var played = a.play();
+        if (played && played.catch) played.catch(function () { /* the reviewer can press play */ });
+      };
+      a.addEventListener('seeked', after);
+      timer = setTimeout(after, waitMs == null ? SEEK_WAIT_MS : waitMs);
+      a.currentTime = start;
+    });
+  }
+
+  function stopAtSpanEnd(tl) {
+    var a = tl.active;
+    if (a && tl.spanEnd != null && a.currentTime >= tl.spanEnd) { a.pause(); tl.spanEnd = null; }
   }
 
   function watchPlayhead(tl) {
     function step() {
       var a = tl.active;
-      if (a && tl.spanEnd != null && a.currentTime >= tl.spanEnd) { a.pause(); tl.spanEnd = null; }
+      stopAtSpanEnd(tl);
       redraw(tl);
       if (a && !a.paused) requestAnimationFrame(step);
     }
@@ -644,6 +679,7 @@ var ReviewPage = (function () {
         tl.active = a;
         requestAnimationFrame(step);
       });
+      a.addEventListener('timeupdate', function () { if (tl.active === a) stopAtSpanEnd(tl); });
       a.addEventListener('seeked', function () { redraw(tl); });
       a.addEventListener('pause', function () { redraw(tl); });
     });
@@ -714,7 +750,7 @@ var ReviewPage = (function () {
       if (moved) return;
       var a = playerAt(tl);
       var t = at != null ? at : timeAt(e);
-      if (a) { tl.active = a; tl.spanEnd = null; seekPlayer(a, Math.max(0, Math.min(tl.d, t)), false); }
+      if (a) { tl.active = a; tl.spanEnd = null; seekPlayer(a, Math.max(0, Math.min(tl.d, t))); }
     });
     node.addEventListener('pointercancel', function () { drag = null; });
   }
@@ -898,8 +934,16 @@ var ReviewPage = (function () {
         wrap.appendChild(spanStrip(tl, a));
         if (rec.extent) {
           var b = el('button', 'rv-play-span', '▶ play task span'); b.type = 'button';
-          b.onclick = function () { playSpan(tl, a); };
+          var note = el('span', 'rv-note rv-seek-note'); note.hidden = true;
+          b.onclick = function () {
+            note.hidden = true;
+            playSpan(tl, a, function (at) {
+              note.textContent = CANNOT_SEEK + ' (asked for ' + tl.extent[0].toFixed(2) + ' s, got ' + at.toFixed(2) + ' s)';
+              note.hidden = false;
+            });
+          };
           wrap.appendChild(b);
+          wrap.appendChild(note);
         }
       }
       sec.appendChild(wrap);
@@ -928,7 +972,7 @@ var ReviewPage = (function () {
     strip.onclick = function (e) {
       var box = strip.getBoundingClientRect();
       tl.active = a; tl.spanEnd = null;
-      seekPlayer(a, ((e.clientX - box.left) / Math.max(1, box.width)) * tl.d, false);
+      seekPlayer(a, ((e.clientX - box.left) / Math.max(1, box.width)) * tl.d);
     };
     tl.redraw.push(function () {
       head.hidden = tl.active !== a;
@@ -1179,6 +1223,10 @@ var ReviewPage = (function () {
     otherReadings: otherReadings,
     modelLanes: modelLanes,
     audioTracks: audioTracks,
+    timelineOf: timelineOf,
+    playSpan: playSpan,
+    stopAtSpanEnd: stopAtSpanEnd,
+    CANNOT_SEEK: CANNOT_SEEK,
   };
 })();
 
