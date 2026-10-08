@@ -159,11 +159,11 @@ def transcripts(view: StoreView) -> dict[str, Any]:
                 sources.append(str(source))
     models = [{"source": source, "model_id": (hypotheses.get(source) or {}).get("model_id")} for source in sources]
     own = []
-    for source, attributes in hypotheses.items():
-        text = str(attributes.get("transcript") or "").strip()
+    for source, hypothesis in hypotheses.items():
+        text = str(hypothesis.get("transcript") or "").strip()
         if not text:
-            text = " ".join(str(w.get("text") or "").strip() for w in attributes.get("words") or ()).strip()
-        own.append({"source": source, "model_id": attributes.get("model_id"), "text": text})
+            text = " ".join(str(w.get("text") or "").strip() for w in hypothesis.get("words") or ()).strip()
+        own.append({"source": source, "model_id": hypothesis.get("model_id"), "text": text})
     words = []
     for entity in entities:
         readings = entity.attributes.get("readings") or {}
