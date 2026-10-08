@@ -39,6 +39,7 @@ TORCH_INDEX = "https://download.pytorch.org/whl/cu128"
 WHEEL_NAME = "python_speech_features-0.6-py3-none-any.whl"
 PSF_URL = "https://files.example/python_speech_features-0.6.tar.gz"
 PSF_SHA = "a0aebf746464bc929dc3162cb369d7ff967c398c5120ddf5fb40a65f01b92b11"
+needs_userns = pytest.mark.skipif(not sandbox.userns_available(), reason="unprivileged user namespaces are unavailable")
 
 
 def _copy(base: Path, fixture: str, name: str) -> str:
@@ -1076,6 +1077,7 @@ def _drop_entry(text: str, name: str) -> str:
 
 @pytest.mark.slow
 @pytest.mark.network
+@needs_userns
 def test_real_env_pip_check_freeze_and_smoke(tmp_path: Path) -> None:
     """A real body + sdist + test-overlay env: clean pip check, freeze equals locks, smoke passes in the sandbox.
 
@@ -1133,6 +1135,7 @@ def test_real_env_pip_check_freeze_and_smoke(tmp_path: Path) -> None:
 
 @pytest.mark.slow
 @pytest.mark.network
+@needs_userns
 def test_real_prefetch_on_nfs(nfs_dir: Path) -> None:
     """One real prefetch with the manifests, cache, wheelhouse and ``wheels.lock`` on NFS."""
     base = nfs_dir / "manifests"

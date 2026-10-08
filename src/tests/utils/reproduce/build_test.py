@@ -29,6 +29,7 @@ DATE = datetime.date(2026, 10, 7)
 CALLER_ENV = {"UV_CACHE_DIR": "/cache/uv", "UV_PYTHON_INSTALL_DIR": "/cache/py", "SSL_CERT_FILE": "/certs/ca.pem"}
 SETUP_PY = "from setuptools import setup\n\nsetup(name='demo', version='1.0', py_modules=['demo'])\n"
 PATCH = "--- a/demo.py\n+++ b/demo.py\n@@ -1 +1 @@\n-VALUE = 1\n+VALUE = 2\n"
+needs_userns = pytest.mark.skipif(not sandbox.userns_available(), reason="unprivileged user namespaces are unavailable")
 
 
 def _sdist_bytes() -> bytes:
@@ -757,6 +758,7 @@ def _spike_wheel_sha() -> str:
 
 @pytest.mark.slow
 @pytest.mark.network
+@needs_userns
 def test_build_python_speech_features_matches_spike(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Building python_speech_features 0.6 from its real sdist reproduces the spike's wheel bit for bit.
 
