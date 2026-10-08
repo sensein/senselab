@@ -8,8 +8,9 @@ group's rows keep their input order, so a seed fixes every resample. Percentile 
 
 A resample whose truth holds a single class is skipped and counted in `n_skipped`: balanced accuracy
 would be trivially defined there, and ranking metrics undefined. Skipping matches the earlier lab
-bootstrap, which parity requires. An interval with more than 5 % of its resamples skipped is flagged
-`unreliable`: few groups carry the minority class, and the interval under-covers. A resample that drops
+bootstrap, which parity requires. An interval for which more than 5 % of resamples gave no value
+(skipped, or the metric undefined on that resample) is flagged `unreliable`: heavy skipping means few
+groups carry the minority class, and the interval under-covers. A resample that drops
 one of several classes is kept; balanced accuracy then averages over the classes present in it. A
 metric that is undefined on a kept resample (returns `None` or NaN) is left out for that metric only;
 one undefined on all rows has `estimate=None`.
@@ -21,7 +22,7 @@ accuracy, ROC-AUC, average precision) for parity checks.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Any, Callable, Dict, Iterator, List, Mapping, Optional, Sequence, Union
 
 import numpy as np
@@ -32,7 +33,7 @@ from senselab.utils.evaluation.metrics import balanced_accuracy
 
 METHOD = "cluster_bootstrap_percentile"
 DEFAULT_RESAMPLES = 2000
-# Share of skipped (single-class) resamples above which an interval is flagged unreliable.
+# Share of resamples without a value (skipped or undefined) above which an interval is flagged unreliable.
 SKIP_FRACTION_LIMIT = 0.05
 
 Values = Union[np.ndarray, Sequence[Any]]
@@ -53,7 +54,8 @@ class BootstrapCI:
         n_skipped: Resamples skipped because their truth held a single class.
         seed: The seed.
         n_groups: Distinct groups resampled.
-        unreliable: More than 5 % of resamples were skipped, or none gave a value.
+        unreliable: More than 5 % of resamples gave no value for this statistic: `(n_resamples - n_used) /
+            n_resamples > 0.05`, counting both skipped resamples and resamples where it was undefined.
         method: `cluster_bootstrap_percentile`.
     """
 
@@ -68,6 +70,10 @@ class BootstrapCI:
     n_groups: int
     unreliable: bool
     method: str = METHOD
+
+    def to_dict(self) -> Dict[str, Any]:
+        """A plain, JSON-ready copy."""
+        return asdict(self)
 
 
 def _make_rng(seed: int) -> np.random.Generator:
@@ -169,7 +175,6 @@ def bootstrap_statistics(
                 values[name].append(value)
     q_low, q_high = _percentiles(confidence)
     n_groups = distinct_keys(groups)
-    unreliable = skipped / n_resamples > SKIP_FRACTION_LIMIT
     result = {}
     for name, collected in values.items():
         result[name] = BootstrapCI(
@@ -182,7 +187,7 @@ def bootstrap_statistics(
             n_skipped=skipped,
             seed=seed,
             n_groups=n_groups,
-            unreliable=unreliable or not collected,
+            unreliable=(n_resamples - len(collected)) / n_resamples > SKIP_FRACTION_LIMIT,
         )
     return result
 
@@ -283,8 +288,8 @@ def legacy_cluster_bootstrap(
     """The lab's earlier binary cluster bootstrap, for parity with its published intervals.
 
     Predictions are `score >= threshold`; the metrics are `f1` (positive class), `balanced_accuracy`
-    (through `metrics.balanced_accuracy`), `auroc` and `auprc` (`None` on data holding one class). Resampling is as in
-    `cluster_bootstrap_indices`.
+    (through `metrics.balanced_accuracy`), `roc_auc` and `average_precision` (`None` on data holding one
+    class). Resampling is as in `cluster_bootstrap_indices`.
 
     Args:
         y_true: 0/1 label per row.
@@ -309,7 +314,7 @@ def legacy_cluster_bootstrap(
     statistics: Dict[str, RowStatistic] = {
         "f1": lambda rows: float(f1_score(truth[rows], pred[rows], zero_division=0)),
         "balanced_accuracy": lambda rows: balanced_accuracy(truth[rows], pred[rows]),
-        "auroc": lambda rows: _ranking(roc_auc_score, truth[rows], scores[rows]),
-        "auprc": lambda rows: _ranking(average_precision_score, truth[rows], scores[rows]),
+        "roc_auc": lambda rows: _ranking(roc_auc_score, truth[rows], scores[rows]),
+        "average_precision": lambda rows: _ranking(average_precision_score, truth[rows], scores[rows]),
     }
     return bootstrap_statistics(statistics, truth, group_arr, n_resamples=n_resamples, seed=seed, confidence=confidence)

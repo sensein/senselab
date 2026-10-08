@@ -223,6 +223,14 @@ class EvaluationReport:
     reports: Mapping[str, ClassificationReport]
     prevalence_by_split: Mapping[str, Mapping[str, float]]
 
+    def to_dict(self) -> Dict[str, Any]:
+        """A plain, JSON-ready copy, each report as `ClassificationReport.to_dict` gives it."""
+        return {
+            "protocol": self.protocol,
+            "reports": {name: report.to_dict() for name, report in self.reports.items()},
+            "prevalence_by_split": _plain(self.prevalence_by_split),
+        }
+
 
 def _scores_and_floors(
     y_true: np.ndarray,

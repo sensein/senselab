@@ -42,8 +42,8 @@ def test_aurocs_match_scikit_learn_with_ties() -> None:
     for seed in range(20):
         a, b, y = _case(seed)
         result = delong_test(a, b, y)
-        assert abs(result.auroc_a - roc_auc_score(y, a)) <= 1e-12
-        assert abs(result.auroc_b - roc_auc_score(y, b)) <= 1e-12
+        assert abs(result.roc_auc_a - roc_auc_score(y, a)) <= 1e-12
+        assert abs(result.roc_auc_b - roc_auc_score(y, b)) <= 1e-12
 
 
 def test_variances_match_the_structural_components_reference() -> None:
@@ -116,7 +116,7 @@ def test_matches_the_earlier_implementation() -> None:
         a, b, y = _case(seed, n=200)
         ours = delong_test(a, b, y)
         theirs = _origin_reimplementation(a, b, y)
-        got = (ours.auroc_a, ours.auroc_b, ours.var_a, ours.var_b, ours.cov_ab, ours.z, ours.p_value)
+        got = (ours.roc_auc_a, ours.roc_auc_b, ours.var_a, ours.var_b, ours.cov_ab, ours.z, ours.p_value)
         for value, expected in zip(got, theirs):
             assert value is not None and abs(value - expected) <= 1e-9
 
@@ -149,5 +149,39 @@ def test_result_is_a_plain_record() -> None:
     result = delong_test(a, b, y)
     assert isinstance(result, DeLongResult)
     data = result.to_dict()
-    assert set(data) == {"auroc_a", "auroc_b", "var_a", "var_b", "cov_ab", "z", "p_value", "n_positive", "n_negative"}
+    assert set(data) == {
+        "roc_auc_a",
+        "roc_auc_b",
+        "var_a",
+        "var_b",
+        "cov_ab",
+        "z",
+        "p_value",
+        "n_positive",
+        "n_negative",
+    }
     json.dumps(data, allow_nan=False)
+
+
+def test_no_variance_estimate_even_when_aucs_differ() -> None:
+    """A perfect scorer against a constant one: AUCs 1 and 0.5, but both have zero variance, so z is None."""
+    y = np.array([0, 0, 0, 1, 1, 1])
+    result = delong_test(np.array([0.1, 0.2, 0.3, 0.7, 0.8, 0.9]), np.full(6, 0.5), y)
+    assert (result.roc_auc_a, result.roc_auc_b) == (1.0, 0.5)
+    assert result.z is None and result.p_value is None
+
+
+@pytest.mark.parametrize(
+    ("labels", "positive", "message"),
+    [
+        ([0, 1, 0, None, 1, 0], 1, "label id"),
+        ([0, 1, 2, 1, 0, 1], 1, "exactly two"),
+        (["a", "b", "a", "b", "a", "b"], 1, "positive_label 1 is not one of the labels"),
+    ],
+    ids=["missing", "three-values", "positive-absent"],
+)
+def test_labels_are_checked(labels: list, positive: object, message: str) -> None:
+    """Missing labels, other than two values, or a positive label not among them are refused."""
+    a = np.array([0.1, 0.9, 0.2, 0.8, 0.7, 0.3])
+    with pytest.raises(ValueError, match=message):
+        delong_test(a, a[::-1].copy(), np.array(labels, dtype=object), positive_label=positive)  # type: ignore[arg-type]

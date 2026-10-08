@@ -139,7 +139,7 @@ def _origin_reimplementation(y: np.ndarray, s: np.ndarray, g: np.ndarray, thresh
     order = list(dict.fromkeys(keys.tolist()))
     labels = [y[keys == k] for k in order]
     scores = [s[keys == k] for k in order]
-    values: dict[str, list[float]] = {"f1": [], "balanced_accuracy": [], "auroc": [], "auprc": []}
+    values: dict[str, list[float]] = {"f1": [], "balanced_accuracy": [], "roc_auc": [], "average_precision": []}
     for _ in range(b):
         pick = rng.integers(0, len(order), size=len(order))
         yy = np.concatenate([labels[i] for i in pick])
@@ -149,8 +149,8 @@ def _origin_reimplementation(y: np.ndarray, s: np.ndarray, g: np.ndarray, thresh
         pp = (ss >= threshold).astype(int)
         values["f1"].append(f1_score(yy, pp, zero_division=0))
         values["balanced_accuracy"].append(balanced_accuracy_score(yy, pp))
-        values["auroc"].append(roc_auc_score(yy, ss))
-        values["auprc"].append(average_precision_score(yy, ss))
+        values["roc_auc"].append(roc_auc_score(yy, ss))
+        values["average_precision"].append(average_precision_score(yy, ss))
     return {k: (np.percentile(v, 2.5), np.percentile(v, 97.5)) for k, v in values.items()}
 
 
@@ -344,3 +344,43 @@ def test_balanced_accuracy_has_one_public_home() -> None:
 
     assert callable(metrics.balanced_accuracy) and callable(metrics.legacy_macro_recall)
     assert not hasattr(classification, "balanced_accuracy") and not hasattr(classification, "legacy_macro_recall")
+
+
+def test_unreliable_counts_metric_specific_drops() -> None:
+    """A metric undefined on more than 5 % of kept resamples is unreliable even with no skips."""
+    y2, s2, g2 = _cohort()
+    pred = (s2 >= 0.5).astype(int)
+    calls = {"n": 0}
+
+    def flaky(truth: np.ndarray, values: np.ndarray) -> float | None:
+        calls["n"] += 1
+        return None if calls["n"] % 10 == 0 else _ba(truth, values)
+
+    ci = cluster_bootstrap_ci({"ba": _ba, "flaky": flaky}, y2, pred, g2, n_resamples=200, seed=0)
+    assert ci["ba"].n_skipped == 0 and not ci["ba"].unreliable
+    assert ci["flaky"].n_used < 190 and ci["flaky"].unreliable
+
+
+def test_intervals_and_evaluations_have_to_dict() -> None:
+    """BootstrapCI and EvaluationReport serialise themselves, to strict JSON."""
+    from senselab.utils.evaluation.classification import score_splits
+
+    y, s, g = _cohort()
+    ci = cluster_bootstrap_ci({"ba": _ba}, y, (s >= 0.5).astype(int), g, n_resamples=50, seed=0)["ba"]
+    assert ci.to_dict()["n_resamples"] == 50
+    common = {"labels": ["neg", "pos"], "protocol": "unseen_subject", "n_dropped": 0, "split_report": None}
+    evaluation = score_splits({"test": {"y_true": ["neg", "pos"], "y_pred": ["neg", "pos"], **common}})
+    data = evaluation.to_dict()
+    assert data["protocol"] == "unseen_subject" and data["reports"]["test"]["headline"] == "balanced_accuracy"
+    json.dumps(data, allow_nan=False)
+
+
+def test_legacy_keys_use_the_report_spelling() -> None:
+    """The legacy bootstrap names its ranking metrics as the report does."""
+    y, s, g = _cohort()
+    assert set(legacy_cluster_bootstrap(y, s, g, threshold=0.5, n_resamples=20, seed=0)) == {
+        "f1",
+        "balanced_accuracy",
+        "roc_auc",
+        "average_precision",
+    }

@@ -95,8 +95,9 @@ linear), 2.5 and 97.5 for 95 %.
   interval); a metric undefined on a kept resample is left out for that metric (`n_used`). The skip
   stays because the earlier lab bootstrap skips, and parity with it requires the same resamples.
   A high skip fraction means few groups carry the minority class, and then the interval
-  under-covers, so an interval with more than 5 % skipped (or no usable resample) is flagged
-  `unreliable`. Synthetic illustration (groups of 3–12 rows, a share q of groups
+  under-covers, so an interval is flagged `unreliable` when more than 5 % of resamples gave it no value,
+  `(n_resamples − n_used) / n_resamples > 0.05`, counting skipped resamples and those where that metric
+  was undefined. Synthetic illustration (groups of 3–12 rows, a share q of groups
   holding positives, true BA 0.659, B = 1000, about 400 replicates per row; "keep" scores single-class
   resamples with present-label BA instead of skipping):
 
@@ -136,7 +137,11 @@ one half, and a negative's the share of positives that outrank it. Variances and
 the sample covariance (ddof 1) over positives and over negatives; `z` is the AUROC difference over the
 standard deviation of the difference, and the p-value is two-sided normal (`2·sf(|z|)`, which keeps
 precision for large `|z|` where `2·(1 − cdf)` rounds to 0). When the variance of the difference is not
-positive, `z` and `p_value` are `None` rather than NaN, so results serialise to strict JSON. Ported from
+positive, there is no variance estimate: `z` and `p_value` are `None` rather than NaN, so results
+serialise to strict JSON. That can happen even when the AUCs differ: a perfect scorer against a constant
+one has AUCs 1 and 0.5 but zero variance in both. Labels must be exactly two distinct values, none
+missing, with `positive_label` among them. Field names use the report's spelling (`roc_auc_a`,
+`roc_auc_b`), as do the legacy bootstrap's keys (`roc_auc`, `average_precision`). Ported from
 the lab's earlier implementation (`provenance.md`, row `delong_test`); a test reimplements that
 algorithm and requires agreement within 1e-9, and checks the variances against the quadratic-time
 definition within 1e-12. Each class needs at least two rows.
@@ -145,7 +150,10 @@ definition within 1e-12. Each class needs at least two rows.
 outputs counted as misses (`balanced_accuracy`): the same as scikit-learn's
 `balanced_accuracy_score`, and the definition whose trivial value is the `1/k` floor a reproduction
 driver checks (coordinator decision, 2026-10-07). Threshold tuning (T6) and resampled intervals (T7)
-call the same function. Macro-F1 also averages over present labels.
+call the same function. The recalls are summed with `math.fsum`, so the value does not depend on the
+order of the declared labels; it equals scikit-learn's within 1e-15 (scikit-learn's plain mean over its
+sorted labels can differ in the last bit; for two labels the two are identical, which keeps the binary
+bootstrap parity exact). Macro-F1 also averages over present labels.
 
 The lab's earlier evaluation (`provenance.md`, row `score_classification`) used
 `recall_score(y_true, y_pred, labels=labels, average="macro", zero_division=0)`, macro recall over

@@ -11,6 +11,7 @@ scores many resamples encodes the labels once (`encode_labels`) and reuses the c
 
 from __future__ import annotations
 
+import math
 from typing import Any, List, Sequence, Tuple, Union
 
 import numpy as np
@@ -46,18 +47,21 @@ def confusion(truth: np.ndarray, pred: np.ndarray, k: int) -> np.ndarray:
 
 
 def balanced_accuracy_from_confusion(matrix: np.ndarray) -> float:
-    """Recall averaged over the rows (true labels) that occur."""
+    """Recall averaged over the rows (true labels) that occur, summed exactly so label order cannot matter."""
     support = matrix.sum(axis=1)
     present = support > 0
     if not present.any():
         raise ValueError("balanced accuracy needs at least one row")
-    return float(np.mean(np.diag(matrix)[present] / support[present]))
+    recalls = (np.diag(matrix)[present] / support[present]).tolist()
+    return math.fsum(recalls) / len(recalls)
 
 
 def balanced_accuracy(y_true: Values, y_pred: Values) -> float:
     """Recall averaged over the labels present in `y_true`: the evaluation headline.
 
-    Equal to scikit-learn's `balanced_accuracy_score`. A prediction that is not the true label (for
+    Equal to scikit-learn's `balanced_accuracy_score` within 1e-15: the recalls are summed with
+    `math.fsum`, so the value does not depend on the order of the labels, whereas scikit-learn's plain
+    mean over its sorted labels can differ in the last bit. A prediction that is not the true label (for
     example an invalid output) is a miss. Reports, threshold tuning and the bootstrap all use this
     definition (resamples through `balanced_accuracy_from_confusion` on pre-encoded labels).
 

@@ -412,3 +412,34 @@ def test_positive_f1_is_omitted_when_the_positive_label_is_absent() -> None:
     report = _score(["neg"] * 5, ["neg"] * 4 + ["pos"], positive_label="pos")
     assert "f1" not in report.secondary
     assert report.per_class["pos"]["f1"] is None
+
+
+# ── Order-independent balanced accuracy ───────────────────────────────
+
+
+def test_headline_does_not_depend_on_label_order() -> None:
+    """The reviewer's case: with labels declared c, a, b the headline matches scikit-learn."""
+    y_true = list("abbcccacccaacbbabbccbaca")
+    y_pred = list("abcbccbaacaacbabaccabaaa")
+    expected = balanced_accuracy_score(y_true, y_pred)
+    for labels in (["c", "a", "b"], ["a", "b", "c"], ["b", "c", "a"]):
+        report = _score(y_true, y_pred, labels=labels)
+        assert abs(report.headline_value - expected) <= 1e-15
+    values = {_score(y_true, y_pred, labels=order).headline_value for order in (["c", "a", "b"], ["a", "b", "c"])}
+    assert len(values) == 1
+
+
+@pytest.mark.parametrize("labels", [["c", "a", "b"], [2, 3, 10], ["z", "y", "x", "w"]])
+def test_headline_matches_scikit_learn_for_unsorted_labels(labels: list) -> None:
+    """On random cases with unsorted or integer labels, the headline is within 1e-15 of scikit-learn."""
+    rng = np.random.default_rng(0)
+    for _ in range(300):
+        n = int(rng.integers(6, 40))
+        y = rng.choice(np.array(labels, dtype=object), size=n)
+        p = np.where(rng.random(n) < 0.5, y, rng.choice(np.array(labels, dtype=object), size=n))
+        if len(set(y.tolist())) < 2:
+            continue
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            expected = balanced_accuracy_score(y.tolist(), p.tolist())
+        assert abs(balanced_accuracy(y, p) - expected) <= 1e-15
