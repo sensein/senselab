@@ -664,7 +664,7 @@ var ReviewPage = (function () {
       var time = spectrogramSection(r, rec);
       state.timeline = time.timeline;
       body.appendChild(time);
-      if (rec.speech) body.appendChild(speechSection(rec.speech, time.timeline));
+      if (rec.speech) body.appendChild(speechSection(rec.speech, time.timeline, rec.release));
       body.appendChild(audioSection(rec, time.timeline));
       body.appendChild(evidenceSection(rec));
       if (rec.missing && rec.missing.length) body.appendChild(el('p', 'rv-note', 'missing: ' + rec.missing.join(', ')));
@@ -1038,13 +1038,31 @@ var ReviewPage = (function () {
     return build.audio_base + encoded;
   }
 
-  /** The tracks a recording plays, in page order: each `{name, timeline}`, whether it runs on the recording's clock. */
+  var NOT_RELEASED_REDACTION = 'redaction considered, not released';
+  var NOT_APPLIED = 'detected, not applied';
+
+  /** Whether the recording's release is the redacted copy, so its masks and PII marks were applied. */
+  function redactionReleased(release) { return release === 'redacted'; }
+
+  /** What a PII mark on a recording released other than redacted says: the mark, then the release decision. */
+  function notAppliedTitle(release, ground) {
+    return NOT_APPLIED + ' — release ' + (release || 'not assessed') + (ground ? ': ' + ground : '');
+  }
+
+  /**
+   * The tracks a recording plays, in page order: each `{name, timeline, collapsed}`, whether it runs on the
+   * recording's clock and whether it is shown folded away. The redacted stream is a track only where the
+   * release is the redacted copy; otherwise it is folded away as a redaction considered and not released.
+   */
   function audioTracks(rec) {
     var streams = rec.streams || {};
     var out = [];
-    ['recording', 'enhanced'].forEach(function (n) { if (streams[n]) out.push({ name: n, timeline: true }); });
-    if (rec.speech && streams.redacted) out.push({ name: 'redacted', timeline: true });
-    if (streams.released) out.push({ name: 'released', timeline: false });
+    ['recording', 'enhanced'].forEach(function (n) { if (streams[n]) out.push({ name: n, timeline: true, collapsed: false }); });
+    if (rec.speech && streams.redacted) {
+      var released = redactionReleased(rec.release);
+      out.push({ name: 'redacted', timeline: released, collapsed: !released });
+    }
+    if (streams.released) out.push({ name: 'released', timeline: false, collapsed: false });
     return out;
   }
 
@@ -1062,9 +1080,14 @@ var ReviewPage = (function () {
         ' s, marked on each track; “play task span” plays only that'));
     }
     audioTracks(rec).forEach(function (track) {
-      var wrap = el('div', 'rv-track');
+      var wrap = el(track.collapsed ? 'details' : 'div', 'rv-track' + (track.collapsed ? ' rv-folded' : ''));
       wrap.dataset.stream = track.name;
-      wrap.appendChild(el('span', 'rv-note', track.name));
+      if (track.collapsed) {
+        wrap.appendChild(el('summary', 'rv-note', track.name + ': ' + NOT_RELEASED_REDACTION +
+          ' (release ' + (rec.release || 'not assessed') + ')'));
+      } else {
+        wrap.appendChild(el('span', 'rv-note', track.name));
+      }
       var a = el('audio'); a.controls = true; a.preload = 'none'; a.src = streamUrl(rec.streams[track.name], state.index.build);
       wrap.appendChild(a);
       if (track.timeline && tl) {
@@ -1199,9 +1222,19 @@ var ReviewPage = (function () {
     return box;
   }
 
-  function speechSection(sp, tl) {
-    var sec = el('section', 'rv-speech');
+  /** Marks every PII mark under `root` as detected and not applied, its tooltip giving the release decision. */
+  function markNotApplied(root, release, ground) {
+    var title = notAppliedTitle(release, ground);
+    root.querySelectorAll('mark.pii').forEach(function (m) { m.title = title; m.dataset.applied = '0'; });
+  }
+
+  function speechSection(sp, tl, release) {
+    var applied = redactionReleased(release);
+    var sec = el('section', 'rv-speech' + (applied ? '' : ' rv-not-applied'));
     sec.appendChild(el('h3', null, 'transcript, PII and redactions'));
+    if (!applied && /class="pii/.test(String(sp.html || ''))) {
+      sec.appendChild(el('div', 'rv-note', 'PII marks: ' + notAppliedTitle(release, sp.release_ground)));
+    }
     var shown = sp.shown || {};
     var models = sp.models || [];
     if (shown.kind === 'consensus') {
@@ -1267,6 +1300,7 @@ var ReviewPage = (function () {
       .map(function (k) { return k + ' ' + JSON.stringify(llm[k]); });
     if (shown.length) lines.push('LLM reviewer: ' + shown.join(' · '));
     lines.forEach(function (l) { sec.appendChild(el('div', 'rv-note', l)); });
+    if (!applied) markNotApplied(sec, release, sp.release_ground);
     if (sp.pii && sp.pii.length) {
       var t = el('table', 'rv-ev');
       var hr = el('tr');
@@ -1368,6 +1402,11 @@ var ReviewPage = (function () {
     packRows: packRows,
     labelFits: labelFits,
     audioTracks: audioTracks,
+    redactionReleased: redactionReleased,
+    notAppliedTitle: notAppliedTitle,
+    markNotApplied: markNotApplied,
+    NOT_RELEASED_REDACTION: NOT_RELEASED_REDACTION,
+    NOT_APPLIED: NOT_APPLIED,
     timelineOf: timelineOf,
     playSpan: playSpan,
     stopAtSpanEnd: stopAtSpanEnd,

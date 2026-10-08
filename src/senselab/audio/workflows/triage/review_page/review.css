@@ -116,6 +116,9 @@ body.review { margin: 0; background: var(--ground); color: var(--ink); font: 13p
 .rv-align { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px 5px; max-width: 900px; }
 .rv-align mark.pii { display: inline-flex; flex-wrap: wrap; align-items: flex-start; gap: 4px; padding: 0 2px 2px; }
 .rv-align mark.pii .cat { align-self: center; margin-right: 0; }
+.rv-speech.rv-not-applied mark.pii { border-bottom-style: dotted; border-bottom-color: var(--ink-3); background: transparent; }
+.rv-speech.rv-not-applied mark.pii .cat { background: transparent; color: var(--ink-3); border: 1px dashed var(--ink-3); }
+details.rv-folded summary { cursor: pointer; }
 .al-col { display: inline-flex; flex-direction: column; align-items: stretch; min-width: 1.6em; padding: 1px 4px 2px;
   border: 1px solid transparent; border-radius: 4px; cursor: pointer; font-size: 14px; line-height: 18px; }
 .al-col:hover, .al-col:focus { border-color: var(--line); outline: none; background: var(--panel-2); }
