@@ -23,7 +23,7 @@ from senselab.audio.workflows.triage.review_page.spectrogram import pack, quanti
 READINGS = ("airway_breath_reading", "airway_cough_reading", "voice_phonation_reading")
 BACKGROUND_MODEL = "background_model"
 BACKGROUND_SPEECH = "airway_background_speech"
-STREAMS = ("recording", "plain", "enhanced", "residual", "task_plain", "task_enhanced", "task_redacted")
+STREAMS = ("recording", "plain", "enhanced", "residual", "redacted")
 RELEASED_DIR = "released"
 AUDIO_SUFFIXES = (".flac", ".wav", ".mp3")
 
@@ -134,6 +134,22 @@ ASR_HYPOTHESIS_ROLE = "asr_hypothesis"
 """The measurement role PREPROCESS gives each recogniser's own transcript."""
 
 
+def _seconds(value: Any) -> float | None:  # noqa: ANN401 -- a stored time is any JSON scalar
+    return round(float(value), 3) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+
+def _timed_words(words: Any) -> list[list[Any]]:  # noqa: ANN401 -- a stored word list is any shape
+    """A hypothesis's own words as ``[start_s, end_s, text]``, times None where the model gave none."""
+    out: list[list[Any]] = []
+    for word in words if isinstance(words, (list, tuple)) else ():
+        if not isinstance(word, Mapping):
+            continue
+        text = str(word.get("text") or "").strip()
+        if text:
+            out.append([_seconds(word.get("start")), _seconds(word.get("end")), text])
+    return out
+
+
 def transcripts(view: StoreView) -> dict[str, Any]:
     """Each ASR model's own transcript, and per consensus word the agreement across them.
 
@@ -142,9 +158,11 @@ def transcripts(view: StoreView) -> dict[str, Any]:
 
     Returns:
         ``models``: each recogniser as ``{source, model_id}``, in the order PREPROCESS ran them;
-        ``own``: each one's transcript, ``{source, model_id, text}``; ``words``: per consensus word in
-        stream order, ``[agreement, outcome, readings]``, where ``readings`` holds each model's surface
-        for that word in ``models`` order, None where the model has no member there.
+        ``own``: each one's transcript, ``{source, model_id, text, words}``, where ``words`` is its own
+        word list as ``[start_s, end_s, text]`` in its own order; ``words``: per consensus word in
+        stream order, ``[agreement, outcome, readings, start_s, end_s, text]``, where ``readings`` holds
+        each model's surface for that word in ``models`` order, None where the model has no member there,
+        and ``text`` is the surface the consensus chose.
     """
     hypotheses: dict[str, Mapping[str, Any]] = {}
     for measurement in view.live("measurement"):
@@ -163,16 +181,27 @@ def transcripts(view: StoreView) -> dict[str, Any]:
         text = str(hypothesis.get("transcript") or "").strip()
         if not text:
             text = " ".join(str(w.get("text") or "").strip() for w in hypothesis.get("words") or ()).strip()
-        own.append({"source": source, "model_id": hypothesis.get("model_id"), "text": text})
+        own.append(
+            {
+                "source": source,
+                "model_id": hypothesis.get("model_id"),
+                "text": text,
+                "words": _timed_words(hypothesis.get("words")),
+            }
+        )
     words = []
     for entity in entities:
         readings = entity.attributes.get("readings") or {}
         agreement = entity.attributes.get("agreement")
+        extent = entity.extent or (None, None)
         words.append(
             [
                 None if agreement is None else round(float(agreement), 3),
                 entity.attributes.get("outcome"),
                 [None if readings.get(source) is None else str(readings[source]) for source in sources],
+                _seconds(extent[0]),
+                _seconds(extent[1]),
+                str(entity.attributes.get("text") or ""),
             ]
         )
     return {"models": models, "own": own, "words": words}

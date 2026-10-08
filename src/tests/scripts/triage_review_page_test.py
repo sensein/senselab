@@ -90,7 +90,10 @@ def _asr_store(run_root: Path, consensus: list[str]) -> None:
                 "source": "whisper",
                 "model_id": "openai/whisper-large-v3-turbo",
                 "transcript": "my name is Ada",
-                "words": [],
+                "words": [
+                    {"text": text, "start": 0.25 * i, "end": 0.25 * i + 0.2, "score": None}
+                    for i, text in enumerate(["my", "name", "is", "Ada"])
+                ],
             },
         ),
         entity(
@@ -101,7 +104,7 @@ def _asr_store(run_root: Path, consensus: list[str]) -> None:
                 "source": "canary",
                 "model_id": "nvidia/canary-qwen-2.5b",
                 "transcript": "my name is Ida",
-                "words": [],
+                "words": [{"text": "Ida", "start": 0.75, "end": 0.95, "score": None}, {"text": " ", "start": 1.0}],
             },
         ),
     ]
@@ -141,8 +144,14 @@ def test_the_consensus_transcript_carries_each_word_s_agreement_and_every_model(
     assert view is not None
     assert view["shown"] == {"kind": "consensus", "source": None}
     assert [m["model_id"] for m in view["models"]] == ["openai/whisper-large-v3-turbo", "nvidia/canary-qwen-2.5b"]
-    assert view["words"][3] == [0.5, "variant", ["Ada", "Ida"]]
-    assert view["own"][1] == {"source": "canary", "model_id": "nvidia/canary-qwen-2.5b", "text": "my name is Ida"}
+    assert view["words"][3] == [0.5, "variant", ["Ada", "Ida"], 0.0, 1.0, "Ada"]
+    assert view["own"][1] == {
+        "source": "canary",
+        "model_id": "nvidia/canary-qwen-2.5b",
+        "text": "my name is Ida",
+        "words": [[0.75, 0.95, "Ida"]],
+    }
+    assert view["own"][0]["words"][3] == [0.75, 0.95, "Ada"]
     assert '<span class="w" data-i="3">Ada</span></mark>' in view["html"]
     assert view["html"].count('class="w"') == 4
 
