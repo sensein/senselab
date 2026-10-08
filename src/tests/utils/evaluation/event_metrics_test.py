@@ -35,10 +35,13 @@ def test_event_f1_cases(pred: list, ref: list, expected: tuple) -> None:
     result = event_f1(pred, ref, tolerance_s=0.25)
     assert (result["tp"], result["fp"], result["fn"]) == expected
     tp, fp, fn = expected
-    precision = tp / (tp + fp) if tp + fp else 0.0
-    recall = tp / (tp + fn) if tp + fn else 0.0
+    precision = tp / (tp + fp) if tp + fp else None
+    recall = tp / (tp + fn) if tp + fn else None
     assert result["precision"] == precision and result["recall"] == recall
-    assert result["f1"] == (2 * precision * recall / (precision + recall) if precision + recall else 0.0)
+    if precision is None or recall is None:
+        assert result["f1"] is None
+    else:
+        assert result["f1"] == (2 * precision * recall / (precision + recall) if precision + recall else 0.0)
 
 
 def test_event_f1_prefers_the_nearest_unused_reference() -> None:
@@ -57,9 +60,9 @@ def test_label_none_ignores_labels() -> None:
         "tp": 0,
         "fp": 0,
         "fn": 1,
-        "precision": 0.0,
+        "precision": None,
         "recall": 0.0,
-        "f1": 0.0,
+        "f1": None,
     }
 
 
@@ -171,3 +174,50 @@ def test_result_is_plain_json() -> None:
     result = segment_map({"v": [_ev(0, 2, "a", 0.9)]}, refs)
     assert list(result["map_at"]) == ["0.3", "0.4", "0.5", "0.6", "0.7"]
     json.dumps(result, allow_nan=False)
+
+
+# ── Review fixes ──────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    ("pred", "ref", "shares"),
+    [
+        ([], [], (None, None, None)),
+        ([], [_ev(1.0, 2.0)], (None, 0.0, None)),
+        ([_ev(1.0, 2.0)], [], (0.0, None, None)),
+    ],
+    ids=["both-empty", "no-predictions", "no-references"],
+)
+def test_undefined_shares_are_none(pred: list, ref: list, shares: tuple) -> None:
+    """Precision without predictions, recall without references, and F1 without both are undefined."""
+    result = event_f1(pred, ref, tolerance_s=0.25)
+    assert (result["precision"], result["recall"], result["f1"]) == shares
+
+
+def test_tiou_uses_the_official_union() -> None:
+    """The reviewer's boundary case: union = len(ref) + len(pred) - intersection makes this a match at 0.6."""
+    refs = {"v": [_ev(3.18, 7.08, "a")]}
+    preds = {"v": [_ev(2.011, 8.511000000000001, "a", 0.9)]}
+    assert segment_map(preds, refs, tiou_thresholds=(0.6,))["map_at"]["0.6"] == 1.0
+
+
+def test_ties_follow_the_official_order() -> None:
+    """On tied tIoU the later reference is taken first, so both predictions match."""
+    refs = {"v": [_ev(0, 2, "a"), _ev(4, 6, "a")]}
+    preds = {"v": [_ev(1, 5, "a", 0.9), _ev(0, 2, "a", 0.8)]}
+    assert segment_map(preds, refs, tiou_thresholds=(0.2,))["map_at"]["0.2"] == 1.0
+
+
+def test_tied_confidences_rank_in_reversed_input_order() -> None:
+    """Tied confidences come out in reversed input order, as argsort()[::-1] gives them."""
+    refs = {"v": [_ev(0, 2, "a"), _ev(10, 12, "a")]}
+    hit_first = {"v": [_ev(30, 32, "a", 0.5), _ev(0, 2, "a", 0.5), _ev(10, 12, "a", 0.4)]}
+    # Ranked: (0, 2) TP, then (30, 32) FP, then (10, 12) TP -> AP 0.5 * 1 + 0.5 * 2/3.
+    result = segment_map(hit_first, refs, tiou_thresholds=(0.5,))
+    assert abs(result["map_at"]["0.5"] - (0.5 + 0.5 * 2 / 3)) <= 1e-12
+
+
+def test_threshold_keys_must_be_distinct() -> None:
+    """Thresholds that format to the same key are refused."""
+    with pytest.raises(ValueError, match="distinct"):
+        segment_map({"v": [_ev(0, 2, "a", 0.9)]}, {"v": [_ev(0, 2, "a")]}, tiou_thresholds=(0.6, 0.6000001))

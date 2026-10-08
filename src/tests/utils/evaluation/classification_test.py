@@ -418,23 +418,25 @@ def test_positive_f1_is_omitted_when_the_positive_label_is_absent() -> None:
 
 
 def test_headline_does_not_depend_on_label_order() -> None:
-    """The reviewer's case: with labels declared c, a, b the headline matches scikit-learn."""
+    """The reviewer's case: with labels declared in any order, the headline equals scikit-learn exactly."""
     y_true = list("abbcccacccaacbbabbccbaca")
     y_pred = list("abcbccbaacaacbabaccabaaa")
     expected = balanced_accuracy_score(y_true, y_pred)
     for labels in (["c", "a", "b"], ["a", "b", "c"], ["b", "c", "a"]):
-        report = _score(y_true, y_pred, labels=labels)
-        assert abs(report.headline_value - expected) <= 1e-15
-    values = {_score(y_true, y_pred, labels=order).headline_value for order in (["c", "a", "b"], ["a", "b", "c"])}
-    assert len(values) == 1
+        assert _score(y_true, y_pred, labels=labels).headline_value == expected
+    assert balanced_accuracy(y_true, y_pred) == expected
 
 
-@pytest.mark.parametrize("labels", [["c", "a", "b"], [2, 3, 10], ["z", "y", "x", "w"]])
-def test_headline_matches_scikit_learn_for_unsorted_labels(labels: list) -> None:
-    """On random cases with unsorted or integer labels, the headline is within 1e-15 of scikit-learn."""
+@pytest.mark.parametrize(
+    "labels",
+    [["c", "a", "b"], [2, 3, 10], ["z", "y", "x", "w"], [f"l{i}" for i in (7, 3, 41, 0, 19, 12, 33, 5, 48, 26)] * 1],
+    ids=["strings", "ints", "four", "ten-unsorted"],
+)
+def test_headline_equals_scikit_learn_exactly(labels: list) -> None:
+    """On random cases with unsorted or integer labels, the headline is exactly scikit-learn's value."""
     rng = np.random.default_rng(0)
     for _ in range(300):
-        n = int(rng.integers(6, 40))
+        n = int(rng.integers(6, 120))
         y = rng.choice(np.array(labels, dtype=object), size=n)
         p = np.where(rng.random(n) < 0.5, y, rng.choice(np.array(labels, dtype=object), size=n))
         if len(set(y.tolist())) < 2:
@@ -442,4 +444,29 @@ def test_headline_matches_scikit_learn_for_unsorted_labels(labels: list) -> None
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             expected = balanced_accuracy_score(y.tolist(), p.tolist())
-        assert abs(balanced_accuracy(y, p) - expected) <= 1e-15
+        assert balanced_accuracy(y, p) == expected
+        assert _score(list(y), list(p), labels=labels).headline_value == expected
+
+
+def test_headline_equals_scikit_learn_with_fifty_labels() -> None:
+    """With k = 50 unsorted labels, including INVALID predictions, equality is exact."""
+    rng = np.random.default_rng(1)
+    labels = [f"c{i:02d}" for i in rng.permutation(50)]
+    for _ in range(50):
+        y = rng.choice(labels, size=400)
+        p = np.where(rng.random(400) < 0.6, y, rng.choice(labels + ["INVALID"], size=400))
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            expected = balanced_accuracy_score(y.tolist(), p.tolist())
+        assert _score(list(y), list(p), labels=labels).headline_value == expected
+
+
+def test_integer_labels_in_numeric_arrays() -> None:
+    """Numeric label arrays sort numerically, as scikit-learn sorts them."""
+    rng = np.random.default_rng(2)
+    for _ in range(200):
+        y = rng.choice([2, 3, 10], size=40)
+        p = np.where(rng.random(40) < 0.5, y, rng.choice([2, 3, 10], size=40))
+        if len(set(y.tolist())) < 2:
+            continue
+        assert balanced_accuracy(y, p) == balanced_accuracy_score(y, p)

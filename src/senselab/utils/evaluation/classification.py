@@ -47,6 +47,7 @@ from senselab.utils.evaluation.metrics import (
     encode_labels,
     macro_f1_from_confusion,
     mcc_from_confusion,
+    native_order,
     per_class_from_confusion,
 )
 from senselab.utils.evaluation.protocol import PROTOCOLS, Protocol
@@ -266,6 +267,7 @@ def _resample_statistics(
     scores: Optional[np.ndarray],
     labels: List[str],
     positive: Optional[str],
+    order: List[int],
 ) -> Dict[str, Callable[[np.ndarray], Optional[float]]]:
     """Row-index statistics for the bootstrap on pre-encoded labels, computed as the report computes them."""
 
@@ -274,7 +276,7 @@ def _resample_statistics(
         return confusion(truth[rows], pred[rows], n_codes)
 
     statistics: Dict[str, Callable[[np.ndarray], Optional[float]]] = {
-        HEADLINE: lambda rows: balanced_accuracy_from_confusion(matrix(rows)),
+        HEADLINE: lambda rows: balanced_accuracy_from_confusion(matrix(rows), order),
         "f1_macro": lambda rows: macro_f1_from_confusion(matrix(rows), present_codes),
         "mcc": lambda rows: mcc_from_confusion(matrix(rows)),
     }
@@ -379,6 +381,8 @@ def score_classification(
     if threshold_tuning not in (None, "validation", "none"):
         raise ValueError("threshold_tuning must be 'validation' or 'none'")
     label_list = [str(lab) for lab in labels]
+    # Balanced accuracy averages the recalls in scikit-learn's sorted label order, for exact equality.
+    order = native_order(list(labels))
     if not label_list or len(set(label_list)) != len(label_list):
         raise ValueError("labels must be non-empty and unique")
     if invalid_label in label_list:
@@ -474,12 +478,12 @@ def score_classification(
         p = prevalence[positive]
         secondary["f1"] = _metric(f1_positive, 2 * p / (1 + p))
     roc, ap = (None, None) if scores is None else _scores_and_floors(truth, scores, label_list, positive, prevalence)
-    balanced = _metric(balanced_accuracy_from_confusion(matrix), floor_k)
+    balanced = _metric(balanced_accuracy_from_confusion(matrix, order), floor_k)
     ci = None
     if groups is not None:
         group_arr = validate_groups(n, groups, n_resamples, 0.95)
         statistics = _resample_statistics(
-            truth_codes, pred_codes, n_codes, present_codes, truth, scores, label_list, positive
+            truth_codes, pred_codes, n_codes, present_codes, truth, scores, label_list, positive, order
         )
         ci = MappingProxyType(
             bootstrap_statistics(

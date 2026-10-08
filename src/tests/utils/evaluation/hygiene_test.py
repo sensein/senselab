@@ -54,72 +54,134 @@ def test_no_bare_commit_hashes() -> None:
     assert hits == []
 
 
-# The reviewer's evasions of a line regex, plus a comment that must not count.
+# Evasions of a line regex and of a flat import walk, as (source, the
+# importing module); each must be reported. Legitimate code that must not be reported follows.
+_EVAL = "senselab.utils.evaluation"
 _EVASIONS = {
-    "multiline": "from senselab.utils.evaluation.splits import (\n    Split,\n    _cells,\n)\n",
-    "relative": "from .splits import _concat\n",
-    "relative-alias": "from .bootstrap import _defined as defined\n",
-    "module-alias-attribute": "import senselab.utils.evaluation.splits as sp\nx = sp._sorted\n",
-    "package-import-attribute": "from . import splits\nx = splits._majority\n",
+    "multiline": ("from senselab.utils.evaluation.splits import (\n    Split,\n    _cells,\n)\n", f"{_EVAL}.x"),
+    "relative": ("from .splits import _concat\n", f"{_EVAL}.x"),
+    "relative-alias": ("from .bootstrap import _defined as defined\n", f"{_EVAL}.x"),
+    "module-alias-attribute": ("import senselab.utils.evaluation.splits as sp\nx = sp._sorted\n", f"{_EVAL}.x"),
+    "package-import-attribute": ("from . import splits\nx = splits._majority\n", f"{_EVAL}.x"),
+    "dotted-module": (
+        "import senselab.utils.evaluation.splits\nx = senselab.utils.evaluation.splits._sorted\n",
+        f"{_EVAL}.x",
+    ),
+    "package-alias": ("import senselab.utils.evaluation as ev\nx = ev.bootstrap._defined\n", f"{_EVAL}.x"),
+    "from-package-alias": ("from senselab.utils import evaluation as ev\nx = ev.splits._concat\n", f"{_EVAL}.x"),
+    "getattr": ("from . import splits\nx = getattr(splits, '_majority')\n", f"{_EVAL}.x"),
+    "relative-level-2": ("from ..data_structures.events import _require_yaml_string\n", f"{_EVAL}.x"),
 }
 _ALLOWED = {
-    "comment": "# from senselab.utils.evaluation.splits import _cells\nfrom senselab.utils.evaluation import _ids\n",
-    "ids": "from ._ids import key_array\nfrom senselab.utils.evaluation._ids import is_missing\n",
-    "dunder": "from . import splits\nx = splits.__name__\n",
+    "comment": (
+        "# from senselab.utils.evaluation.splits import _cells\nfrom senselab.utils.evaluation import _ids\n",
+        f"{_EVAL}.x",
+    ),
+    "ids": ("from ._ids import key_array\nfrom senselab.utils.evaluation._ids import is_missing\n", f"{_EVAL}.x"),
+    "dunder": ("from . import splits\nx = splits.__name__\n", f"{_EVAL}.x"),
+    "public-getattr": ("from . import splits\nx = getattr(splits, 'grouped_splits')\n", f"{_EVAL}.x"),
+    "third-party": ("import numpy as np\nx = np._NoValue\n", f"{_EVAL}.x"),
 }
 
 
-def _private_uses(source: str) -> list[str]:
-    """Private names a module takes from a sibling evaluation module (other than `_ids`)."""
-    package = "senselab.utils.evaluation"
+def _dotted(node: ast.expr) -> str | None:
+    """`a.b.c` for a Name/Attribute chain, else None."""
+    parts: list[str] = []
+    while isinstance(node, ast.Attribute):
+        parts.append(node.attr)
+        node = node.value
+    if not isinstance(node, ast.Name):
+        return None
+    return ".".join([node.id, *reversed(parts)])
+
+
+def _private_uses(source: str, module: str) -> list[str]:
+    """Private names `module` (a dotted module name) takes from another senselab module, other than `_ids`.
+
+    Covers `from` imports (absolute, or relative resolved by level against `module`'s package), module
+    aliases from `import a.b.c [as x]` and `from pkg import mod [as x]`, dotted attribute chains on
+    them (`ev.bootstrap._x`), and `getattr(mod, "_x")` with a literal name. Reported as `module:name`.
+    """
+
+    def private(name: str) -> bool:
+        return name.startswith("_") and not name.startswith("__")
+
+    def foreign(target: str) -> bool:
+        return target.startswith("senselab.") and target != module and not target.endswith("._ids")
+
+    package = module.rsplit(".", 1)[0]
+    tree = ast.parse(source)
     hits: list[str] = []
-    aliases: set[str] = set()
-    for node in ast.walk(ast.parse(source)):
+    bound: dict[str, str] = {}
+    for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom):
-            module = node.module or ""
+            base = node.module or ""
             if node.level:
-                module = package + ("." + module if module else "")
-            if not module.startswith(package):
-                continue
+                anchor = package.split(".")
+                anchor = anchor[: len(anchor) - (node.level - 1)]
+                base = ".".join(anchor + ([base] if base else []))
             for alias in node.names:
-                target = module if module != package else f"{package}.{alias.name}"
-                if module == package and not alias.name.startswith("_"):
-                    aliases.add(alias.asname or alias.name)
-                    continue
-                if target.endswith("._ids"):
-                    continue
-                if alias.name.startswith("_") and not alias.name.startswith("__"):
-                    hits.append(f"{module}:{alias.name}")
+                if private(alias.name) and foreign(base) and foreign(f"{base}.{alias.name}"):
+                    hits.append(f"{base}:{alias.name}")
+                bound[alias.asname or alias.name] = f"{base}.{alias.name}"
         elif isinstance(node, ast.Import):
             for alias in node.names:
-                if alias.name.startswith(package + ".") and not alias.name.endswith("._ids"):
-                    aliases.add(alias.asname or alias.name)
-    for node in ast.walk(ast.parse(source)):
-        if (
-            isinstance(node, ast.Attribute)
-            and isinstance(node.value, ast.Name)
-            and node.value.id in aliases
-            and node.attr.startswith("_")
-            and not node.attr.startswith("__")
+                if alias.asname:
+                    bound[alias.asname] = alias.name
+                else:
+                    head = alias.name.split(".")[0]
+                    bound[head] = head
+
+    def resolve(expr: ast.expr) -> str | None:
+        dotted = _dotted(expr)
+        if dotted is None:
+            return None
+        head, _, rest = dotted.partition(".")
+        if head not in bound:
+            return None
+        return bound[head] + ("." + rest if rest else "")
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute) and private(node.attr):
+            target = resolve(node.value)
+            if target is not None and foreign(target):
+                hits.append(f"{target}:{node.attr}")
+        elif (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "getattr"
+            and len(node.args) >= 2
+            and isinstance(node.args[1], ast.Constant)
+            and isinstance(node.args[1].value, str)
+            and private(node.args[1].value)
         ):
-            hits.append(f"{node.value.id}.{node.attr}")
+            target = resolve(node.args[0])
+            if target is not None and foreign(target):
+                hits.append(f"{target}:{node.args[1].value}")
     return hits
 
 
 @pytest.mark.parametrize("name", sorted(_EVASIONS))
 def test_private_use_detector_catches_evasions(name: str) -> None:
-    """Each evasion of a line-based check is caught."""
-    assert _private_uses(_EVASIONS[name])
+    """Each evasion is caught."""
+    assert _private_uses(*_EVASIONS[name])
+
+
+def test_relative_imports_are_reported_under_their_real_module() -> None:
+    """`from ..data_structures.events import _x` in an evaluation module names the data_structures module."""
+    assert _private_uses(*_EVASIONS["relative-level-2"]) == [
+        "senselab.utils.data_structures.events:_require_yaml_string"
+    ]
 
 
 @pytest.mark.parametrize("name", sorted(_ALLOWED))
 def test_private_use_detector_allows_legitimate_code(name: str) -> None:
-    """Comments, `_ids` imports and dunder attributes are not flagged."""
-    assert _private_uses(_ALLOWED[name]) == []
+    """Comments, `_ids` imports, dunders, public getattr and third-party privates are not flagged."""
+    assert _private_uses(*_ALLOWED[name]) == []
 
 
-def test_package_takes_no_private_names_from_siblings() -> None:
-    """No evaluation module uses another's private names."""
+def test_package_takes_no_private_names_from_other_modules() -> None:
+    """No evaluation module uses another senselab module's private names (`_ids` excepted)."""
     package = ROOT / "src" / "senselab" / "utils" / "evaluation"
-    hits = {p.name: _private_uses(p.read_text()) for p in package.glob("*.py")}
+    hits = {p.name: _private_uses(p.read_text(), f"{_EVAL}.{p.stem}") for p in package.glob("*.py")}
     assert {name: found for name, found in hits.items() if found} == {}

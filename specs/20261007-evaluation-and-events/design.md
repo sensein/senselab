@@ -150,10 +150,11 @@ definition within 1e-12. Each class needs at least two rows.
 outputs counted as misses (`balanced_accuracy`): the same as scikit-learn's
 `balanced_accuracy_score`, and the definition whose trivial value is the `1/k` floor a reproduction
 driver checks (coordinator decision, 2026-10-07). Threshold tuning (T6) and resampled intervals (T7)
-call the same function. The recalls are summed with `math.fsum`, so the value does not depend on the
-order of the declared labels; it equals scikit-learn's within 1e-15 (scikit-learn's plain mean over its
-sorted labels can differ in the last bit; for two labels the two are identical, which keeps the binary
-bootstrap parity exact). Macro-F1 also averages over present labels.
+call the same function. The per-class recalls are averaged with `np.mean` over the present labels in
+scikit-learn's sorted order (numbers numerically, strings lexically; `metrics.native_order`), so the
+value equals scikit-learn's exactly and does not depend on the order in which labels are declared. (A
+mean depends on the order of its terms in the last bit; an earlier `math.fsum` version was order-free
+but differed from scikit-learn by up to one ulp.) Macro-F1 also averages over present labels.
 
 The lab's earlier evaluation (`provenance.md`, row `score_classification`) used
 `recall_score(y_true, y_pred, labels=labels, average="macro", zero_division=0)`, macro recall over
@@ -375,18 +376,27 @@ reference), and is a true positive, otherwise a false positive; references left 
 negatives. Matching is greedy and one-to-one, so two predictions near one reference give one true
 positive and one false positive. With `label=None` labels are ignored altogether, as in the lab's
 earlier implementation (`provenance.md`, row `event_f1`), which matched on onsets alone; with a label,
-only events carrying it take part on either side. A share with a zero denominator is 0.0, as there.
-A test reimplements the earlier matching and requires identical counts on 300 random cases.
+only events carrying it take part on either side. Precision is `None` without predictions, recall
+`None` without references, and F1 `None` unless both are defined (the earlier code reported 0.0 and
+pooled clips; to reproduce its numbers, filter labels on each side, call per clip, sum `tp`/`fp`/`fn`
+over clips and compute the shares from the sums). A test reimplements the earlier matching and requires
+identical counts on 300 random cases.
 
 **Segment mAP.** Implemented clean-room from the ActivityNet temporal-localisation definition; no
 lab implementation was read.
 
 - Predictions of each class are ranked by confidence across all videos.
 - Each prediction matches the unmatched reference of the same class and video with the highest
-  temporal IoU, if that is at least the threshold; a duplicate detection is a false positive. Ties in
-  confidence keep input order (videos in mapping order, then events).
+  temporal IoU, if that is at least the threshold; a duplicate detection is a false positive.
+- Temporal IoU uses the evaluator's union, `len(ref) + len(pred) − intersection` (not
+  `max(end) − min(start)`, which differs in the last bit at boundaries such as tIoU exactly 0.6).
+- Ties follow the evaluator's order, for parity with published numbers: ranking is
+  `confidences.argsort()[::-1]`, so tied confidences come out in reversed input order (videos in
+  mapping order, then events); each prediction walks references by `tiou.argsort()[::-1]`, so on tied
+  tIoU the later reference is taken first.
 - Average precision is all-point interpolated.
-- The mean is taken over classes present in the references.
+- The mean (`np.mean`) is taken over classes present in the references, in their order of first
+  appearance; thresholds that format to the same key ("0.6") are refused.
 - The report gives mAP at each tIoU threshold and their average separately, so a single number is
   never labelled with the wrong threshold.
 

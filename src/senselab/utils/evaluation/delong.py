@@ -63,10 +63,10 @@ def _components(scores: np.ndarray, positive: np.ndarray) -> Tuple[float, np.nda
     combined = rankdata(np.concatenate([x, y]), method="average")
     within_x = rankdata(x, method="average")
     within_y = rankdata(y, method="average")
-    auroc = float((combined[:m].sum() / m - (m + 1) / 2.0) / n)
+    roc_auc = float((combined[:m].sum() / m - (m + 1) / 2.0) / n)
     positive_part = (combined[:m] - within_x) / n
     negative_part = 1.0 - (combined[m:] - within_y) / m
-    return auroc, positive_part, negative_part
+    return roc_auc, positive_part, negative_part
 
 
 def delong_test(

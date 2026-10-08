@@ -20,14 +20,14 @@ DEFAULT_TIOU_THRESHOLDS = (0.3, 0.4, 0.5, 0.6, 0.7)
 
 
 class EventF1(TypedDict):
-    """Counts and shares from `event_f1`."""
+    """Counts and shares from `event_f1`; a share is `None` where it is undefined."""
 
     tp: int
     fp: int
     fn: int
-    precision: float
-    recall: float
-    f1: float
+    precision: Optional[float]
+    recall: Optional[float]
+    f1: Optional[float]
 
 
 class SegmentMAP(TypedDict):
@@ -43,9 +43,9 @@ def _events(events: Events) -> List[BehaviorEvent]:
     return list(events.events) if isinstance(events, EventTrack) else list(events)
 
 
-def _ratio(numerator: int, denominator: int) -> float:
-    """A share, 0.0 when the denominator is 0 (the ported convention)."""
-    return numerator / denominator if denominator else 0.0
+def _ratio(numerator: int, denominator: int) -> Optional[float]:
+    """A share, `None` when the denominator is 0."""
+    return numerator / denominator if denominator else None
 
 
 def event_f1(pred: Events, ref: Events, *, tolerance_s: float, label: Optional[str] = None) -> EventF1:
@@ -58,6 +58,11 @@ def event_f1(pred: Events, ref: Events, *, tolerance_s: float, label: Optional[s
     With `label=None` labels are ignored and every event takes part, as in the implementation this
     is ported from. With a label, only events with that label take part on either side.
 
+    Precision is `None` without predictions, recall `None` without references, and F1 `None` unless
+    both are defined. The earlier implementation reported 0.0 in those cases and pooled clips; to
+    reproduce its numbers, keep only the labels it kept on each side yourself, call this per clip, sum
+    `tp`, `fp` and `fn` over clips, and compute the shares from the sums.
+
     Args:
         pred: Predicted events (an `EventTrack` or a sequence of `BehaviorEvent`).
         ref: Reference events.
@@ -65,7 +70,7 @@ def event_f1(pred: Events, ref: Events, *, tolerance_s: float, label: Optional[s
         label: Restrict both sides to this label, or `None` to ignore labels.
 
     Returns:
-        `{tp, fp, fn, precision, recall, f1}`; a share with a zero denominator is 0.0.
+        `{tp, fp, fn, precision, recall, f1}`; a share with a zero denominator is `None`.
 
     Raises:
         ValueError: If the tolerance is negative or not finite.
@@ -95,14 +100,16 @@ def event_f1(pred: Events, ref: Events, *, tolerance_s: float, label: Optional[s
             fp += 1
     fn = used.count(False)
     precision, recall = _ratio(tp, tp + fp), _ratio(tp, tp + fn)
-    f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
+    f1: Optional[float] = None
+    if precision is not None and recall is not None:
+        f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
     return {"tp": tp, "fp": fp, "fn": fn, "precision": precision, "recall": recall, "f1": f1}
 
 
-def _tiou(a: Tuple[float, float], b: Tuple[float, float]) -> float:
-    """Temporal intersection over union of two half-open intervals."""
-    inter = max(0.0, min(a[1], b[1]) - max(a[0], b[0]))
-    union = max(a[1], b[1]) - min(a[0], b[0])
+def _tiou(pred: Tuple[float, float], ref: Tuple[float, float]) -> float:
+    """Temporal IoU as the ActivityNet evaluator computes it: union = len(ref) + len(pred) - intersection."""
+    inter = max(0.0, min(pred[1], ref[1]) - max(pred[0], ref[0]))
+    union = (ref[1] - ref[0]) + (pred[1] - pred[0]) - inter
     return inter / union if union > 0 else 0.0
 
 
@@ -126,22 +133,31 @@ def _class_ap(
     n_refs: int,
     threshold: float,
 ) -> float:
-    """AP of one class: predictions ranked by confidence, each matched to its best unmatched same-video reference."""
-    order = sorted(range(len(preds)), key=lambda i: -preds[i][1])
+    """AP of one class, ranking and matching in the ActivityNet evaluator's order.
+
+    Predictions are ranked by `argsort()[::-1]` of their confidences, so tied confidences come out in
+    reversed input order. Each prediction walks its video's references by descending tIoU (again
+    `argsort()[::-1]`, so on tied tIoU the later reference comes first): the first reference below the
+    threshold ends the walk (false positive), a matched one is passed over, an unmatched one is a hit.
+    """
+    order = np.asarray([p[1] for p in preds], dtype=float).argsort()[::-1]
     matched = {video: [False] * len(segments) for video, segments in refs.items()}
     hits: List[bool] = []
     for i in order:
-        video, _, segment = preds[i]
-        best, best_tiou = -1, -1.0
-        for j, ref_segment in enumerate(refs.get(video, [])):
-            if matched[video][j]:
-                continue
-            value = _tiou(segment, ref_segment)
-            if value >= threshold and value > best_tiou:
-                best, best_tiou = j, value
-        if best >= 0:
-            matched[video][best] = True
-        hits.append(best >= 0)
+        video, _, segment = preds[int(i)]
+        candidates = refs.get(video, [])
+        hit = False
+        if candidates:
+            tious = np.array([_tiou(segment, ref_segment) for ref_segment in candidates])
+            for j in tious.argsort()[::-1]:
+                if tious[j] < threshold:
+                    break
+                if matched[video][j]:
+                    continue
+                matched[video][j] = True
+                hit = True
+                break
+        hits.append(hit)
     return _average_precision(hits, n_refs)
 
 
@@ -158,8 +174,10 @@ def segment_map(
     unmatched reference of the same class in the same video with temporal IoU at or above the threshold,
     taking the one with the highest IoU, and a false positive otherwise (so a duplicate detection is a
     false positive). AP is all-point interpolated over the ranked list, recall counting all of the
-    class's references. The mean is over classes present in the references; predicted classes absent
-    from them are ignored.
+    class's references. The mean is over classes present in the references, in their order of first
+    appearance (as the ActivityNet evaluator indexes them); predicted classes absent from them are
+    ignored. Ties are ordered as that evaluator orders them (see `_class_ap`), for parity with published
+    numbers.
 
     Args:
         preds: Video id to predicted events; every prediction needs a confidence.
@@ -171,8 +189,8 @@ def segment_map(
         strings (for example "0.5"), so mAP at each threshold and their average are reported separately.
 
     Raises:
-        ValueError: If a prediction has no confidence, there are no reference events, or a threshold is
-            outside (0, 1].
+        ValueError: If a prediction has no confidence, there are no reference events, a threshold is
+            outside (0, 1], or two thresholds format to the same key.
     """
     if not tiou_thresholds or any(not 0 < t <= 1 for t in tiou_thresholds):
         raise ValueError("tiou_thresholds must be non-empty, each in (0, 1]")
@@ -188,11 +206,13 @@ def segment_map(
             if e.confidence is None:
                 raise ValueError("every prediction needs a confidence to be ranked")
             pred_by_class.setdefault(e.label, []).append((video, e.confidence, (e.onset_s, e.offset_s)))
-    classes = sorted(ref_by_class)
+    keys = [f"{t:g}" for t in tiou_thresholds]
+    if len(set(keys)) != len(keys):
+        raise ValueError("tiou_thresholds must be distinct after formatting to keys like '0.5'")
+    classes = list(ref_by_class)
     map_at: Dict[str, float] = {}
     per_class: Dict[str, Dict[str, float]] = {}
-    for threshold in tiou_thresholds:
-        key = f"{threshold:g}"
+    for key, threshold in zip(keys, tiou_thresholds):
         per_class[key] = {
             c: _class_ap(
                 pred_by_class.get(c, []),
@@ -202,9 +222,9 @@ def segment_map(
             )
             for c in classes
         }
-        map_at[key] = float(math.fsum(per_class[key].values()) / len(classes))
+        map_at[key] = float(np.mean([per_class[key][c] for c in classes]))
     return {
         "map_at": map_at,
-        "average_map": float(math.fsum(map_at.values()) / len(map_at)),
+        "average_map": float(np.mean(list(map_at.values()))),
         "per_class_ap": per_class,
     }

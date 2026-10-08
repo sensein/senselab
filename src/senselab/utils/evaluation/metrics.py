@@ -11,7 +11,6 @@ scores many resamples encodes the labels once (`encode_labels`) and reuses the c
 
 from __future__ import annotations
 
-import math
 from typing import Any, List, Sequence, Tuple, Union
 
 import numpy as np
@@ -46,24 +45,40 @@ def confusion(truth: np.ndarray, pred: np.ndarray, k: int) -> np.ndarray:
     return np.bincount(truth * k + pred, minlength=k * k).reshape(k, k)
 
 
-def balanced_accuracy_from_confusion(matrix: np.ndarray) -> float:
-    """Recall averaged over the rows (true labels) that occur, summed exactly so label order cannot matter."""
+def native_order(labels: Sequence[Any]) -> List[int]:
+    """Indices of `labels` in the order scikit-learn sorts them (numbers numerically, strings lexically).
+
+    Labels of mixed, unorderable types fall back to their string order.
+    """
+    try:
+        return sorted(range(len(labels)), key=lambda j: labels[j])
+    except TypeError:
+        return sorted(range(len(labels)), key=lambda j: str(labels[j]))
+
+
+def balanced_accuracy_from_confusion(matrix: np.ndarray, order: Sequence[int] | None = None) -> float:
+    """Recall averaged over the rows (true labels) that occur, in `order` (default: row order).
+
+    Pass the labels' sorted order (`native_order`) to reproduce scikit-learn's value bit for bit: it
+    takes `np.mean` of the per-class recalls over its sorted labels, and a mean depends on the order of
+    its terms in the last bit.
+    """
     support = matrix.sum(axis=1)
-    present = support > 0
-    if not present.any():
+    rows = [j for j in (range(len(support)) if order is None else order) if support[j] > 0]
+    if not rows:
         raise ValueError("balanced accuracy needs at least one row")
-    recalls = (np.diag(matrix)[present] / support[present]).tolist()
-    return math.fsum(recalls) / len(recalls)
+    recalls = np.array([matrix[j, j] / support[j] for j in rows], dtype=float)
+    return float(np.mean(recalls))
 
 
 def balanced_accuracy(y_true: Values, y_pred: Values) -> float:
     """Recall averaged over the labels present in `y_true`: the evaluation headline.
 
-    Equal to scikit-learn's `balanced_accuracy_score` within 1e-15: the recalls are summed with
-    `math.fsum`, so the value does not depend on the order of the labels, whereas scikit-learn's plain
-    mean over its sorted labels can differ in the last bit. A prediction that is not the true label (for
-    example an invalid output) is a miss. Reports, threshold tuning and the bootstrap all use this
-    definition (resamples through `balanced_accuracy_from_confusion` on pre-encoded labels).
+    Equal to scikit-learn's `balanced_accuracy_score` exactly: the recalls are averaged with `np.mean`
+    over the present labels in scikit-learn's sorted order, so the value does not depend on the order in
+    which labels are declared or appear. A prediction that is not the true label (for example an invalid
+    output) is a miss. Reports, threshold tuning and the bootstrap all use this definition (resamples
+    through `balanced_accuracy_from_confusion` on pre-encoded labels, in the same order).
 
     Args:
         y_true: True label per row.
@@ -77,7 +92,9 @@ def balanced_accuracy(y_true: Values, y_pred: Values) -> float:
     """
     if len(y_true) == 0 or len(y_true) != len(y_pred):
         raise ValueError("y_true and y_pred must be non-empty and of the same length")
-    (truth, pred), names = encode_labels(y_true, y_pred)
+    present = list(dict.fromkeys(np.asarray(y_true, dtype=object).tolist()))
+    ordered = [present[j] for j in native_order(present)]
+    (truth, pred), names = encode_labels(y_true, y_pred, vocabulary=list(dict.fromkeys(str(v) for v in ordered)))
     return balanced_accuracy_from_confusion(confusion(truth, pred, len(names)))
 
 
