@@ -623,28 +623,40 @@ def _run_config(args: argparse.Namespace, paths: Sequence[Path], profile: Profil
     )
 
 
-def _read_manifests(paths: Sequence[Path]) -> tuple[list[Manifest], list[str]]:
-    """Read each manifest once: its sha256 and the manifest parsed from the same bytes."""
+def _read_bytes(paths: Sequence[Path]) -> tuple[list[bytes], list[str]]:
+    """Read each manifest once; its sha256 is taken before anything parses it."""
     _require(paths)
     data = [p.read_bytes() for p in paths]
-    return [parse_manifest(d, p.suffix) for d, p in zip(data, paths)], [hashlib.sha256(d).hexdigest() for d in data]
+    return data, [hashlib.sha256(d).hexdigest() for d in data]
 
 
-def _manifest_changed(args: argparse.Namespace, paths: Sequence[Path], profile: Profile) -> int:
-    """Refuse a job whose manifests changed since submission.
+def _read_manifests(paths: Sequence[Path]) -> tuple[list[Manifest], list[str]]:
+    """Each manifest's sha256 and the manifest parsed from the same bytes."""
+    data, shas = _read_bytes(paths)
+    return [parse_manifest(d, p.suffix) for d, p in zip(data, paths)], shas
 
-    Its row becomes ``failed`` with ``E_MANIFEST_CHANGED`` and its dependents' pending rows ``never-ran`` with
-    the same code, where the changed manifests still parse; row order is kept, and only rows of this job's
+
+def _manifest_changed(args: argparse.Namespace, paths: Sequence[Path], profile: Profile, data: list[bytes]) -> int:
+    """Refuse a job whose manifests changed since submission, without trusting the changed files.
+
+    Its row becomes ``failed`` with ``E_MANIFEST_CHANGED``. When the changed manifests still parse, its
+    dependents' pending rows become ``never-ran`` with the same code; when they do not, the row is found by
+    step name and submission among the run dirs of the date. Row order is kept, and only rows of this job's
     submission (or untagged) are changed.
     """
-    try:
-        manifests = _manifests(paths)
-    except (ValueError, OSError, yaml.YAMLError):
-        manifests = []
     config = _run_config(args, paths, profile)
-    analysis = {s.name: m.name for m in manifests for s in m.steps}
-    specs = {s.name: s for m in manifests for s in m.steps}
     code = ["E_MANIFEST_CHANGED"]
+    steps = list(args.step or [])
+    try:
+        manifests = [parse_manifest(d, p.suffix) for d, p in zip(data, paths)]
+    except (ValueError, yaml.YAMLError, UnicodeDecodeError):
+        manifests = None
+    if manifests is not None:
+        analysis = {s.name: m.name for m in manifests for s in m.steps}
+        specs = {s.name: s for m in manifests for s in m.steps}
+    else:
+        analysis = _rows_by_step(profile, config.date, steps, args.submission)
+        specs = {}
 
     def write(name: str, rows: list[dict[str, Any]], **filters: Any) -> None:  # noqa: ANN401
         record = cache.run_dir(profile.runs_root, config.date, name) / run.RUN_JSON
@@ -652,7 +664,6 @@ def _manifest_changed(args: argparse.Namespace, paths: Sequence[Path], profile: 
             order = [r["step"] for r in run.read_run_record(record)]
             run.update_run_record(profile.runs_root, config.date, name, rows, order=order, **filters)
 
-    steps = list(args.step or [])
     for step in steps:
         print(status_line(step, None, "failed", EXIT_FAILED, code))
         if step in analysis:
@@ -665,12 +676,34 @@ def _manifest_changed(args: argparse.Namespace, paths: Sequence[Path], profile: 
     return EXIT_FAILED
 
 
+def _rows_by_step(
+    profile: Profile, date: datetime.date, steps: Sequence[str], submission: str | None
+) -> dict[str, str]:
+    """``{step: analysis}`` for rows of these steps (of this submission, when given) in the date's run dirs."""
+    found: dict[str, str] = {}
+    day = profile.runs_root / date.isoformat()
+    try:
+        names = sorted(p.name for p in day.iterdir() if p.is_dir() and not p.is_symlink())
+    except OSError:
+        return found
+    for name in names:
+        try:
+            rows = run.read_run_record(day / name / run.RUN_JSON)
+        except (OSError, ValueError):
+            continue
+        for row in rows:
+            if row["step"] in steps and (submission is None or row.get("submission") == submission):
+                found.setdefault(row["step"], name)
+    return found
+
+
 def _cmd_run(args: argparse.Namespace) -> int:
     paths = list(args.manifests)
     profile = _profile(args)
-    manifests, shas = _read_manifests(paths)
+    data, shas = _read_bytes(paths)
     if args.pin and not args.finalize and list(args.pin) != shas:
-        return _manifest_changed(args, paths, profile)
+        return _manifest_changed(args, paths, profile, data)
+    manifests = [parse_manifest(d, p.suffix) for d, p in zip(data, paths)]
     config = _run_config(args, paths, profile)
     if args.finalize:
         if args.submission is not None:

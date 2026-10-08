@@ -1334,12 +1334,21 @@ patch text.
   while any submission has `pending` rows in one of its run dirs, and it never rewrites a row a submission
   tagged: a full local run merges its rows into the record (rows of other steps are kept) and leaves tagged
   rows as they are.
+- **Identical steps across submissions, and duplicates.** Two submissions whose manifests share an
+  identical step (same key) contend for its claim. The claim waits at most `CLAIM_TIMEOUT_S` (600 s): a job
+  that does not get it in time is `failed` with `E_CLAIM_HELD`, which is closed (its dependents are
+  cancelled), and the step is never executed twice. Within one submission, a duplicate job of a step (a
+  requeue racing the original) re-checks done inside the claim and skips; its row then reads `skipped` and
+  can overwrite the winner's `executed` row (same key, same result dir, so `status` still points at the
+  right result).
 - **Requeue.** `never-ran` written by finalize, or by a failed upstream, is not final against a requeued
   job: a requeued job writes its own row when it ends (same submission tag), so its later row replaces the
   `never-ran`, and `status` then shows the step's true state. A job killed after its step started and not
   requeued reads `never-ran`; its result dir is not done, so the next submission reruns it.
 - **Pinned manifests.** `submit` hashes each manifest's bytes and parses those same bytes; each job gets
-  `--pin <sha256>` per manifest and refuses to run when a file no longer hashes the same: it writes its row
+  `--pin <sha256>` per manifest, hashes the files before parsing anything, and refuses to run when one no
+  longer hashes the same (an unparsable change included; its row is then found by step name and submission
+  among the date's run dirs): it writes its row
   `failed` with `E_MANIFEST_CHANGED`, turns its dependents' `pending` rows into `never-ran` with the same
   code (where the changed manifests still parse), keeps the record's row order, and exits 1, which cancels
   its dependents. A local `run` follows the "Local runs" rule below: it merges its rows and never
