@@ -1,4 +1,4 @@
-# Redaction policy v9: the words the triage fold masks or releases by kind, whatever a detector or
+# Redaction policy v10: the words the triage fold masks or releases by kind, whatever a detector or
 # the redaction reviewer said. Tokens are compared lower-case, accents folded, edge punctuation and a
 # possessive dropped; a phrase is a list of such tokens matched as a contiguous run.
 #
@@ -10,7 +10,9 @@
 # the possibility of triangulation from other unredacted information"). Kinship words are never
 # masked. The lists are the English and Spanish forms present in the Bridge2AI-Voice adult release
 # (sidecar language en / es); a word this file does not list is left to the detectors and the reviewer.
-version: 9
+# v10 (owner, 2026-10-08): the fold decides a token once for every occurrence, and never masks the words
+# lying on a non-lexical task's own events (specs/20261007-task-events-in-background/design.md).
+version: 10
 
 months: [january, february, march, april, may, june, july, august, september, october, november, december, sept]
 # Spanish month names are written lower-case, so they are matched in any case.
