@@ -24,3 +24,22 @@ cough:
   gap_s: 5.0                     # the dominant cluster's longest inner gap between coughs
 voice:
   gap_s: 10.0                    # the dominant cluster's longest inner gap between holds (reported only)
+ddk:                             # the diadochokinesis task layer (ddk_task.py); design "DDK task layer"
+  voicing_strength_min: 0.45     # a pitch-track frame is voiced at or over this strength, as breath_pattern.yaml
+  smooth_s: 0.03                 # the nucleus series is smoothed over this
+  unvoiced_db: 6.0               # UNFITTED: an unvoiced frame's level is lowered this much, so voicing troughs split nuclei
+  nucleus_prominence_db: 6.0     # UNFITTED: a nucleus stands this far over the troughs either side
+  nucleus_spacing_s: 0.08        # nuclei at least this far apart (12.5 syllables a second)
+  syllable_min_s: 0.05           # a syllable is at least this long
+  syllable_max_s: 0.8            # and at most this long; a longer stretch with no trough is another activity
+  cycle_band_hz: [0.5, 3.5]      # the band the cycle rhythm prior is read in (a sequence family only)
+  rhythm_prominence_min_db: 6.0  # as rhythm.prominence_min_db
+  rhythm_agreement: 1.5          # the rhythm's period is used where within this factor of the syllables' own cycle period
+  gap_s: 2.0                     # UNFITTED: the dominant cluster's longest inner gap; the extent is its first event to its last
+  identity_pad_s: 0.03           # an event's posteriorgram frames are read this far either side
+  skip_log: -1.0                 # UNFITTED: the log cost of each template position the alignment deletes
+  events_min:                    # UNFITTED (N_min): clear events a present decision needs
+    syllable: 3
+    cycle: 2
+  identity_min: 0.30             # UNFITTED: the median identity a present decision needs; under it the identity is ambiguous
+  identity_absent_max: 0.15      # UNFITTED: a median identity under this is another activity, and the task is absent
