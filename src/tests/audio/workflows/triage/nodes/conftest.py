@@ -1014,3 +1014,89 @@ def seed_voice_store(tmp_path: Path) -> Callable[..., dict]:
         return ids
 
     return _seed
+
+
+VIEW_FLOOR_DB = -70.0
+"""The per-band floor of a seeded background view."""
+
+VOWELS = frozenset({"aa", "ae", "ah", "ao", "aw", "ay", "eh", "er", "ey", "ih", "iy", "ow", "oy", "uh", "uw"})
+STOPS = frozenset({"p", "t", "k", "b", "d", "g"})
+
+
+def level_of_raster(raster: np.ndarray, labels: Sequence[str] = PHONEME_LABELS) -> np.ndarray:
+    """A broadband level over the floor per posteriorgram frame, read off a one-hot raster.
+
+    Args:
+        raster: The posteriorgram, ``(frame, phoneme)``.
+        labels: Its phoneme axis.
+
+    Returns:
+        0 dB on silence, 8 dB on a stop (a closure trough), 40 dB on a vowel and 25 dB elsewhere.
+    """
+    winners = [labels[int(index)] for index in np.argmax(raster, axis=1)]
+    return np.asarray(
+        [0.0 if w == "<silent>" else 8.0 if w in STOPS else 40.0 if w in VOWELS else 25.0 for w in winners],
+        dtype=float,
+    )
+
+
+def seed_background_view(
+    store: ProvStore,
+    run_dir: Path,
+    level_over_floor_db: np.ndarray,
+    *,
+    impulses: Sequence[tuple[float, float]] = (),
+    hop_s: float = 0.01,
+) -> str:
+    """Write BACKGROUND's reading and view for a recording whose level over the floor is given per frame.
+
+    Args:
+        store: The store to seed.
+        run_dir: The run directory the view goes under.
+        level_over_floor_db: The broadband level over the floor, one value per frame.
+        impulses: ``(start, end)`` of impulses to record.
+        hop_s: The frame hop.
+
+    Returns:
+        The ``background_model`` measurement's id.
+    """
+    from senselab.audio.workflows.triage.background_model import (  # noqa: PLC0415
+        BandFrames,
+        Impulse,
+        background_model_parameters,
+        regions_of,
+    )
+
+    p = background_model_parameters()
+    bands = len(p["band_edges_hz"]) - 1
+    level = np.asarray(level_over_floor_db, dtype=float)
+    times = np.arange(len(level)) * hop_s + hop_s / 2
+    band_db = VIEW_FLOOR_DB + level[:, None] + np.zeros((len(level), bands))
+    level_db = 10.0 * np.log10(np.sum(10.0 ** (band_db / 10.0), axis=1))
+    floor_db = np.full(bands, VIEW_FLOOR_DB)
+    held = [Impulse((a + b) / 2, a, b, 30.0, 1.0) for a, b in impulses]
+    regions = regions_of(BandFrames(times, band_db, level_db), floor_db, held, p)
+    (run_dir / "derivatives").mkdir(exist_ok=True)
+    np.savez(
+        run_dir / "derivatives" / "background_view.npz",
+        times_s=times,
+        band_db=band_db,
+        level_db=level_db,
+        floor_band_db=floor_db,
+        floor_own_db=floor_db,
+        floor_residual_db=np.zeros(0),
+        floor_source=np.asarray("quiet_frames"),
+        floor_quiet_s=np.asarray(1.0),
+        impulses=np.asarray([[i.peak_s, i.start_s, i.end_s, i.peak_db, i.attack_ms] for i in held]).reshape(-1, 5),
+        regions=np.asarray(
+            [[r.start_s, r.end_s, r.peak_db, r.bands_fraction, r.onset_s, r.offset_s] for r in regions]
+        ).reshape(-1, 6),
+    )
+    activity = store.activity(node="BACKGROUND", step="seed-view", parameters={})
+    entity_id = store.entity(
+        prov_type="measurement",
+        extent=None,
+        attributes={"name": "background_model", "signal": "plain", "view": {"path": "derivatives/background_view.npz"}},
+    )
+    store.was_generated_by(entity_id, activity)
+    return entity_id

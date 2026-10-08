@@ -194,7 +194,6 @@ GATE_SPECS: dict[str, GateSpec] = _gate_specs(
         "dominant_speaker_share_min": GateSpec("extent_dominant_speaker_share", AT_LEAST, float),
         "items_min": GateSpec("items_produced", AT_LEAST, int),
         "events_min": GateSpec("airway_events_found", AT_LEAST, int),
-        "repetitions_min": GateSpec("ddk_repetitions_found", AT_LEAST, int),
         "instructed_count_min_fraction": GateSpec(INSTRUCTED_COUNT_FRACTION, AT_LEAST, float),
         "repeat_overlap_min": GateSpec(None, AT_LEAST, float),
         "echo_overlap_max": GateSpec(None, AT_MOST, float),
@@ -225,8 +224,8 @@ CONFORMANCE_GATES: dict[Pattern, tuple[str, ...]] = {
     Pattern.EVENT_SERIES: ("events_min", "instructed_count_min_fraction"),
     Pattern.EVENT_ALTERNATION: ("events_min", "instructed_count_min_fraction"),
     Pattern.SOUND_COVERAGE: ("events_min",),
-    Pattern.SYLLABLE_TRAIN: ("repetitions_min", "instructed_count_min_fraction"),
-    Pattern.SYLLABLE_SEQUENCE: ("repetitions_min", "instructed_count_min_fraction"),
+    Pattern.SYLLABLE_TRAIN: (),
+    Pattern.SYLLABLE_SEQUENCE: (),
     Pattern.PER_SENTENCE: (),
     Pattern.EFFORT: (),
 }

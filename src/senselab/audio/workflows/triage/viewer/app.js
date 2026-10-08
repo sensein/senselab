@@ -686,7 +686,7 @@
       var text = m.rows.map(function (r) {
         return r.map(function (x) { return x == null ? '—' : formatScalar(x); }).join(' ');
       }).join('   |   ');
-      tr(name, text, n, m.rows.length + ' repetitions × ' + m.width + ' syllable positions, row-major');
+      tr(name, text, n, m.rows.length + ' task events × ' + m.width + ' template positions, row-major');
     });
     SchemaAxes.CATEGORICAL_MEASUREMENTS.forEach(function (name) {
       var v = row['m_' + name];

@@ -31,6 +31,7 @@ from senselab.audio.data_structures import AudioHints
 from senselab.audio.workflows.triage.background_model import BACKGROUND_MODEL, _named_stream
 from senselab.audio.workflows.triage.background_speech import background_speech_of
 from senselab.audio.workflows.triage.config import TriageConfig, UnmeasuredConfigKey
+from senselab.audio.workflows.triage.ddk_task import DDK_READING
 from senselab.audio.workflows.triage.nodes.airway_task import BREATH_READING, COUGH_READING
 from senselab.audio.workflows.triage.nodes.background import SESSION_FLOOR
 from senselab.audio.workflows.triage.nodes.common import (
@@ -62,7 +63,12 @@ from senselab.audio.workflows.triage.vocabulary import (
 from senselab.utils.prov_store import Entity, ProvStore
 
 ENHANCED_STREAM = "enhanced"
-EVENT_READINGS = ((BREATH_READING, "breath"), (COUGH_READING, "cough"), (PHONATION_READING, "phonation"))
+EVENT_READINGS = (
+    (BREATH_READING, "breath"),
+    (COUGH_READING, "cough"),
+    (PHONATION_READING, "phonation"),
+    (DDK_READING, "syllable"),
+)
 """The task readings whose events the join re-reads, with the event kind each holds."""
 
 NODE = "QUALITY"
@@ -230,7 +236,7 @@ def task_events_of(store: ProvStore) -> tuple[str | None, list[Span]]:
 
     Returns:
         ``(kind, events)``: the first reading of :data:`EVENT_READINGS` that holds events, with its
-        breath or cough events or its phonation holds; ``(None, [])`` where none does.
+        breath, cough or syllable-task events or its phonation holds; ``(None, [])`` where none does.
     """
     for name, kind in EVENT_READINGS:
         found = find_measurement(store, name)

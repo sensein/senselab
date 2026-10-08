@@ -16,6 +16,11 @@ from senselab.audio.workflows.triage.vocabulary import BRANCHES, Release, Triage
 
 MEASURE_STATS = Path(__file__).parents[5] / "specs" / "20260817-triage-workflow-dag" / "measure-stats-20260921.json"
 
+RETIRED_MEASUREMENTS = frozenset(
+    {"ddk_ppg_period_dispersion", "ddk_repetition_count_from_ppg_decode", "ddk_syllable_rate_from_ppg_decode_hz"}
+)
+"""Measurements the dated corpus scan enumerated that the graph no longer writes: the cyclic decode's."""
+
 
 # ------------------------------------------------------------------------------ a synthetic store
 
@@ -25,7 +30,7 @@ GATES: dict[str, Any] = {
     "group": "syllable_train",
     "family": "diadochokinesis-pa",
     "bounds": {
-        "repetitions_min": 1,
+        "production_min_s": 1,
         "events_min": 1,
         "items_min": 1,
         "dominant_speaker_share_min": 0.9,
@@ -33,7 +38,7 @@ GATES: dict[str, Any] = {
         "rate_prominence_min": None,
     },
     "layers": {
-        "repetitions_min": "by_group",
+        "production_min_s": "by_group",
         "events_min": "by_group",
         "items_min": "by_group",
         "train_min_s": "by_group",
@@ -41,9 +46,9 @@ GATES: dict[str, Any] = {
     },
     "applied": [
         {
-            "gate": "repetitions_min",
+            "gate": "production_min_s",
             "group": "syllable_train",
-            "reading": "ddk_repetitions_found",
+            "reading": "carrier_duration_s",
             "value": 10,
             "bound": 1,
             "layer": "by_group",
@@ -571,7 +576,7 @@ def test_every_measurement_has_a_column_and_a_reading_count() -> None:
     direction — a measurement the graph writes that this schema has no column for — is
     ``ScanReport.anomalies``, which counts exactly that per name on every shard.
     """
-    names = set(json.loads(MEASURE_STATS.read_text()))
+    names = set(json.loads(MEASURE_STATS.read_text())) - RETIRED_MEASUREMENTS
     assert names <= set(rv.MEASUREMENTS), names - set(rv.MEASUREMENTS)
     columns = {field.name for field in rv.schema()}
     for name in set(rv.MEASUREMENTS) | names:
@@ -940,9 +945,9 @@ def test_a_located_bound_is_the_folds_resolved_bound(one_row: dict[str, Any]) ->
 
 def test_an_applied_gate_carries_its_reading_its_bound_and_its_outcome(one_row: dict[str, Any]) -> None:
     """The passing gate's three columns are exactly what the fold recorded."""
-    assert one_row["gate_repetitions_min"] == 10.0
-    assert one_row["gate_repetitions_min_bound"] == 1.0
-    assert one_row["gate_repetitions_min_passed"] == "true"
+    assert one_row["gate_production_min_s"] == 10.0
+    assert one_row["gate_production_min_s_bound"] == 1.0
+    assert one_row["gate_production_min_s_passed"] == "true"
 
 
 def test_a_gate_that_failed_on_a_genuine_zero_reads_zero_not_null(one_row: dict[str, Any]) -> None:
@@ -992,10 +997,10 @@ def test_a_recording_whose_fold_resolved_no_group_carries_no_gates(tmp_path: Pat
     assert row is not None
     assert row["gate_node"] is None and row["gate_group"] is None
     assert row["gate_applied_n"] == 0 and row["gate_failed_n"] == 0
-    assert row.get("gate_repetitions_min") is None
+    assert row.get("gate_production_min_s") is None
     assert row["gate_failed_names"] == []
     table = rv.to_table([row])
-    assert table.column("gate_repetitions_min").null_count == 1
+    assert table.column("gate_production_min_s").null_count == 1
 
 
 # ------------------------------------------------------ enhanced over residual, from the energies

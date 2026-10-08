@@ -84,6 +84,51 @@ groups:
       unit: semitones
       producer: unit B
       meaning: the glide's travel in the declared direction
+  ddk:
+    ddk_event_db_over_floor:
+      unit: dB
+      producer: DDK task layer
+      meaning: the strongest syllable or cycle event's level over the stationary floor, against data/task_events.yaml decision.snr_low_db; none standing discards
+    ddk_identity:
+      unit:
+      producer: DDK task layer
+      meaning: the standing task events' median identity against the declared template, against ddk.identity_min (review under it) and ddk.identity_absent_max (another activity under it, discards)
+    ddk_clear_events:
+      unit: events
+      producer: DDK task layer
+      meaning: task events clear of their local background with no impulse from outside the train touching them, against ddk.events_min
+    ddk_events_against_instructed:
+      unit: events
+      producer: DDK task layer
+      meaning: task events (cycles or syllables) in the dominant cluster against the instructed count
+    ddk_events_found:
+      unit: events
+      producer: DDK task layer
+      meaning: task events in the dominant cluster, where the instruction speaks no count
+    ddk_syllable_rate_hz:
+      unit: Hz
+      producer: DDK task layer
+      meaning: syllables per second over the syllables' onset intervals inside each run
+    ddk_cycle_rate_hz:
+      unit: Hz
+      producer: DDK task layer
+      meaning: cycles per second over the cycle events' onset intervals (sequence families)
+    ddk_period_cv:
+      unit:
+      producer: DDK task layer
+      meaning: the coefficient of variation of the task events' onset intervals
+    ddk_period_trend_s_per_step:
+      unit: s
+      producer: DDK task layer
+      meaning: how the onset interval changes across the train, seconds per event
+    ddk_train_fraction:
+      unit:
+      producer: DDK task layer
+      meaning: the task extent over the recording's duration
+    ddk_realised_mass:
+      unit:
+      producer: DDK task layer
+      meaning: per template position, the class mass the identity alignment realised, averaged over the task events
   speech:
     lexical_words:
       unit: words

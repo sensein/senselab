@@ -16,7 +16,7 @@ const PARQUET = resolve(repo, 'artifacts/viewer_e2e/facets_fixture.parquet')
 const ROWS = 2400
 const SHOTS = resolve(repo, 'artifacts/viewer_e2e')
 
-const GATE_AXIS = 'gate_repetitions_min'
+const GATE_AXIS = 'gate_events_min'
 const GATE_SLOT = 3
 
 /** Open the page and load the fixture, leaving the corpus painted. */
@@ -88,7 +88,7 @@ test('a gate reading takes an axis and its bound is drawn as a reference line', 
 
   expect(drawn.axis).toBe(GATE_AXIS)
   expect(drawn.kind).toBe('numeric')
-  expect(drawn.boundColumn).toBe('gate_repetitions_min_bound')
+  expect(drawn.boundColumn).toBe('gate_events_min_bound')
   expect(drawn.op).toBe('at_least')
   expect(drawn.paintsBounds).toBe(true)
   // one bound governs the whole fixture, and it is the configured 1.0 s
@@ -180,7 +180,7 @@ test('selecting a line opens that recording', async ({ page }) => {
 test('the gate outcome axis separates pass, fail and undetermined', async ({ page }) => {
   await open(page)
   const select = page.locator('#axis-rail .axis-cell:not(.add) select.axis-select').nth(GATE_SLOT)
-  await select.selectOption('gate_repetitions_min_passed')
+  await select.selectOption('gate_events_min_passed')
   const cats = await page.evaluate(slot => window.__viewerState.view.summaries[slot].categories, GATE_SLOT)
   expect(cats).toEqual(['true', 'undetermined', 'false'])
 })

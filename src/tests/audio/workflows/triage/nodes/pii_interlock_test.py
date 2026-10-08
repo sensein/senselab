@@ -35,6 +35,7 @@ from senselab.audio.workflows.triage.vocabulary import Outcome
 from senselab.text.tasks.pii_detection.api import PiiScan, PiiSpan, default_detectors
 from senselab.utils.data_structures import ScriptLine
 from senselab.utils.prov_store import ProvStore
+from tests.audio.workflows.triage.nodes.conftest import level_of_raster, seed_background_view
 
 SENTINEL = "alicia"  # the name the scan finds; nothing released may carry it
 WORDS = ["my", "name", "is", SENTINEL, "and", "i", "live", "here"]
@@ -363,6 +364,7 @@ def _seed_ppg(store: ProvStore, tmp_path: Path) -> None:
         },
     )
     store.was_generated_by(entity_id, activity)
+    seed_background_view(store, tmp_path, level_of_raster(raster))
 
 
 def _texts_the_store_holds(store: ProvStore) -> list[str]:
