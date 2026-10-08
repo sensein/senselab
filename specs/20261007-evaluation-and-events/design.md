@@ -129,6 +129,18 @@ linear), 2.5 and 97.5 for 95 %.
 - `paired_cluster_bootstrap_delta` resamples groups once per draw and scores both models on the
   same rows.
 
+**DeLong's test** (`delong.py`). `delong_test(scores_a, scores_b, labels)` compares two scorers on
+the same rows. Each scorer's structural components (DeLong et al. 1988) are computed from midranks in
+O(N log N) (Sun & Xu 2014): a positive's component is the share of negatives it outranks, ties counting
+one half, and a negative's the share of positives that outrank it. Variances and the covariance use
+the sample covariance (ddof 1) over positives and over negatives; `z` is the AUROC difference over the
+standard deviation of the difference, and the p-value is two-sided normal (`2·sf(|z|)`, which keeps
+precision for large `|z|` where `2·(1 − cdf)` rounds to 0). When the variance of the difference is not
+positive, `z` and `p_value` are `None` rather than NaN, so results serialise to strict JSON. Ported from
+the lab's earlier implementation (`provenance.md`, row `delong_test`); a test reimplements that
+algorithm and requires agreement within 1e-9, and checks the variances against the quadratic-time
+definition within 1e-12. Each class needs at least two rows.
+
 **Balanced accuracy's formula.** Recall averaged over the labels present in `y_true`, with invalid
 outputs counted as misses (`balanced_accuracy`): the same as scikit-learn's
 `balanced_accuracy_score`, and the definition whose trivial value is the `1/k` floor a reproduction
