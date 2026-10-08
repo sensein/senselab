@@ -83,6 +83,8 @@ body.review { margin: 0; background: var(--ground); color: var(--ink); font: 13p
 .rv-strip i.head { width: 0; border-left: 2px solid var(--bad); }
 .rv-play-span { font: inherit; font-size: 12px; margin-top: 3px; padding: 1px 10px; border: 1px solid var(--accent);
   color: var(--accent); background: var(--panel); border-radius: 4px; cursor: pointer; }
+.rv-seek-note { display: block; margin-top: 3px; color: var(--ured); font-weight: 600; }
+.rv-seek-note[hidden] { display: none; }
 .rv-legend span { margin-right: 12px; font-size: 11px; color: var(--ink-2); }
 .rv-legend i { display: inline-block; width: 10px; height: 10px; margin-right: 4px; vertical-align: -1px; }
 .rv-ev { border-collapse: collapse; font-size: 12px; }
