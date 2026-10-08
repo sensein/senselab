@@ -369,17 +369,22 @@ F1-tuned one (0.6), which is why F1 is not the default.
 
 ## Event metrics
 
-**Onset-tolerance F1.** A predicted event matches a reference event of the same label when their
-onsets differ by no more than a tolerance in seconds. Matching is greedy and one-to-one, so two
-predictions near one reference give one true positive and one false positive. Ported from the lab's
-earlier implementation (`provenance.md`, row `event_f1`).
+**Onset-tolerance F1.** Predictions are taken in onset order; each takes the unused reference whose
+onset is nearest its own, if the difference is within the tolerance in seconds (ties to the earlier
+reference), and is a true positive, otherwise a false positive; references left unused are false
+negatives. Matching is greedy and one-to-one, so two predictions near one reference give one true
+positive and one false positive. With `label=None` labels are ignored altogether, as in the lab's
+earlier implementation (`provenance.md`, row `event_f1`), which matched on onsets alone; with a label,
+only events carrying it take part on either side. A share with a zero denominator is 0.0, as there.
+A test reimplements the earlier matching and requires identical counts on 300 random cases.
 
 **Segment mAP.** Implemented clean-room from the ActivityNet temporal-localisation definition; no
 lab implementation was read.
 
 - Predictions of each class are ranked by confidence across all videos.
-- Each prediction matches the best unmatched reference of the same class and video whose temporal
-  IoU is at least the threshold; a duplicate detection is a false positive.
+- Each prediction matches the unmatched reference of the same class and video with the highest
+  temporal IoU, if that is at least the threshold; a duplicate detection is a false positive. Ties in
+  confidence keep input order (videos in mapping order, then events).
 - Average precision is all-point interpolated.
 - The mean is taken over classes present in the references.
 - The report gives mAP at each tIoU threshold and their average separately, so a single number is
