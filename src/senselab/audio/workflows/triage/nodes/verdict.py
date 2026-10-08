@@ -771,6 +771,8 @@ def _redaction_evidence(
         person_names_masked_n=plan.person_names_masked,
         name_release_proposed=plan.name_release_proposed,
         reviewer_requested_n=sum(1 for span in plan.proposals if span.agreement == NEW),
+        propagated_masked_n=plan.propagated_masked_n,
+        task_content_only=plan.task_content_only,
     )
 
 

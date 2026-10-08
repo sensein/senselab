@@ -22,7 +22,7 @@ from senselab.audio.data_structures.audio_hints import AudioHints, ExpectedSpeec
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.nodes import redact as redact_module
 from senselab.audio.workflows.triage.nodes import verdict as verdict_module
-from senselab.audio.workflows.triage.nodes.common import resolve_stream
+from senselab.audio.workflows.triage.nodes.common import live_entities, resolve_stream
 from senselab.audio.workflows.triage.nodes.redact import (
     AGREED_MASKED,
     AGREED_PLACED,
@@ -36,12 +36,16 @@ from senselab.audio.workflows.triage.nodes.redact import (
     PII_LEDGER,
     PLACED_SUBSTRING,
     PLACED_WORDS,
+    PROPAGATED,
+    PROPAGATION_MASK,
+    PROPAGATION_RELEASE,
     PROPOSED_BY_REVIEWER,
     RELEASED_BY_KIND,
     RELEASED_FILES,
     RELEASED_NOT_PROPER,
     REVIEWER,
     STREAM_NAME,
+    TASK_EVENT_LABEL,
     UNMASKED_BY_APPROVAL,
     UNMASKED_BY_REVIEWER,
     UNMASKED_BY_TRIM,
@@ -56,6 +60,7 @@ from senselab.audio.workflows.triage.vocabulary import (
     REDACTION_LLM_ANNOTATION,
     REVIEWER_CLEARED_RESCAN,
     REVIEWER_UNMASKED_SOME,
+    TASK_CONTENT_UNMASKED,
     UNPLACED_CLEARED,
     UNPLACED_OPEN,
     UNPLACED_PLACED,
@@ -157,6 +162,9 @@ def _seed_redact_store(  # noqa: C901 — one independent block per author, as t
     timings: dict[int, dict[str, tuple[float, float]]] | None = None,
     residue: Sequence[int] | None = None,
     unplaced: Sequence[tuple[str, str]] = (),
+    readings: dict[int, dict[str, str]] | None = None,
+    haystacks: dict[int, str] | None = None,
+    recording_stem: str = "plain",
 ) -> None:
     """Write the store PREPROCESS and SPEECH leave for REDACT, with ``tmp_path`` as the run dir.
 
@@ -167,7 +175,9 @@ def _seed_redact_store(  # noqa: C901 — one independent block per author, as t
     re-planning pass exists to widen. ``target_speaker`` writes SPEECH's verdict so a speaker-scoped
     reader has something to scope by. ``timings`` gives a word, by index, its sources' own timings,
     so its hull can reach past its derived extent. ``residue`` names, by index, the words the scan's
-    residue holds; every word when None.
+    residue holds; every word when None. ``readings`` gives a word, by index, each source's surface;
+    ``haystacks`` gives a finding, by index, the text it was read off. ``recording_stem`` names the
+    recording's file, which declares its task.
     """
     ends = [_word_extent(i)[1] for i in range(len(words))] + [float(extent[1]) for _c, extent, *_r in findings]
     duration_s = max([5.0, *(end + 1.0 for end in ends)])
@@ -175,15 +185,18 @@ def _seed_redact_store(  # noqa: C901 — one independent block per author, as t
     wave = (0.05 * rng.standard_normal(int(duration_s * SR))).astype(np.float32)
     (tmp_path / "streams").mkdir(parents=True, exist_ok=True)
     sf.write(str(tmp_path / "streams" / "plain.wav"), wave, SR)
+    if recording_stem != "plain":
+        sf.write(str(tmp_path / "streams" / f"{recording_stem}.wav"), wave, SR)
 
     software = store.agent(agent_type="software", version="senselab test-seed")
     pre = store.activity(node="PREPROCESS", step="condition", parameters={})
     store.was_associated_with(pre, software)
     for name in ("recording", "plain"):
+        path = f"streams/{recording_stem}.wav" if name == "recording" else "streams/plain.wav"
         stream_id = store.entity(
             prov_type="stream",
             extent=(0.0, duration_s),
-            attributes={"name": name, "path": "streams/plain.wav", "sampling_rate": SR, "channels": 1},
+            attributes={"name": name, "path": path, "sampling_rate": SR, "channels": 1},
         )
         store.was_generated_by(stream_id, pre)
 
@@ -194,7 +207,13 @@ def _seed_redact_store(  # noqa: C901 — one independent block per author, as t
         word_id = store.entity(
             prov_type="word",
             extent=_word_extent(index),
-            attributes=word_attributes(text, _word_extent(index), index=index, timings=(timings or {}).get(index)),
+            attributes=word_attributes(
+                text,
+                _word_extent(index),
+                index=index,
+                timings=(timings or {}).get(index),
+                readings=(readings or {}).get(index),
+            ),
         )
         store.was_generated_by(word_id, consensus)
         word_ids.append(word_id)
@@ -226,7 +245,7 @@ def _seed_redact_store(  # noqa: C901 — one independent block per author, as t
         for word_id in covered:
             store.was_derived_from(mark_id, word_id)
 
-    for category, extent, *_rest in findings:
+    for position, (category, extent, *_rest) in enumerate(findings):
         bounds = (float(extent[0]), float(extent[1]))
         covered = [
             word_ids[i] for i in range(len(words)) if _word_extent(i)[0] < bounds[1] and _word_extent(i)[1] > bounds[0]
@@ -237,6 +256,7 @@ def _seed_redact_store(  # noqa: C901 — one independent block per author, as t
             attributes={
                 "category": category,
                 "source": "presidio",
+                "haystack": (haystacks or {}).get(position, "consensus"),
                 "word_ids": covered,
                 "detectors_used": list(scanned_by),
                 "detectors_failed": list(scan_failed),
@@ -2684,7 +2704,7 @@ class TestTheReviewerJudgesATermNotAnInstance:
     def test_a_redact_entry_on_the_term_stops_it_spreading(
         self, store: ProvStore, redact_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Where the reviewer also asks for the term hidden, only the quoted occurrence is released."""
+        """Where the reviewer also asks for the token hidden, it is a name kept masked, so every occurrence is."""
         self._seed(store, redact_config, tmp_path, monkeypatch)
         _annotate(
             store,
@@ -2694,8 +2714,9 @@ class TestTheReviewerJudgesATermNotAnInstance:
             ],
         )
         plan = _plan(store)
-        states = [word.state for mask in plan.masks for word in mask.words]
-        assert states == [UNMASKED_BY_REVIEWER, MASKED, MASKED]
+        princes = [word for mask in plan.masks for word in mask.words]
+        assert [word.state for word in princes] == [MASKED, MASKED, MASKED]
+        assert [word.propagation for word in princes] == ["mask", "", ""]
 
 
 class TestAFunctionWordIsNotATerm:
@@ -3310,3 +3331,264 @@ class TestRedactionPolicyV8:
             UNMASKED_BY_REVIEWER,
             MASKED,
         )
+
+
+def _all_words(plan: MaskPlan) -> dict[str, list[Any]]:
+    """Each surface to the words of that surface across every mask, in mask order."""
+    out: dict[str, list[Any]] = {}
+    for mask in plan.masks:
+        for word in mask.words:
+            out.setdefault(word.text, []).append(word)
+    return out
+
+
+class TestADecisionHoldsForEveryOccurrenceOfAToken:
+    """Owner, 2026-10-08: a token decided a name, or released, is decided so at every occurrence."""
+
+    def _redacted(
+        self,
+        store: ProvStore,
+        config: TriageConfig,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        words: Sequence[str],
+        findings: Sequence[tuple[Any, ...]],
+        **seed: Any,  # noqa: ANN401
+    ) -> None:
+        """REDACT over a seeded store, its re-scan clean."""
+        _seed_redact_store(store, tmp_path, words=list(words), findings=findings, **seed)
+        _stub_pii(monkeypatch, findings=[])
+        redact(store, "recording", config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
+
+    def test_a_name_kept_masked_masks_every_occurrence(
+        self, store: ProvStore, redact_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A name masked once ("Alice") masks the "alice" no detector marked, as a mask of its own."""
+        words = ["i", "met", "Alice", "and", "alice", "left"]
+        self._redacted(store, redact_config, tmp_path, monkeypatch, words, [("PERSON", _word_extent(2))])
+        plan = _plan(store)
+        assert [word.state for word in _all_words(plan)["alice"]] == [MASKED]
+        (spread,) = [mask for mask in plan.masks if mask.source == PROPAGATED]
+        (word,) = spread.words
+        finding = live_entities(store, "pii")[0]
+        assert (word.propagated, word.propagation, word.source_findings) == (True, PROPAGATION_MASK, (finding.id,))
+        assert len(plan.final) == 2 and plan.changed and plan.propagated_masked_n == 1
+        record = plan.record(release="redacted", release_ground=None)
+        assert record["counts"]["propagated_masked_n"] == 1
+        (written,) = [w for m in record["masks"] if m["source"] == PROPAGATED for w in m["words"]]
+        assert (written["propagated"], written["source_findings"]) == (True, [finding.id])
+
+    def test_a_name_masked_once_masks_an_occurrence_a_finding_released(
+        self, store: ProvStore, redact_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The lower-case "barakat" the not-proper rule would release stays masked beside a masked "Barakat"."""
+        words = ["Barakat", "came", "and", "barakat", "went"]
+        self._redacted(
+            store,
+            redact_config,
+            tmp_path,
+            monkeypatch,
+            words,
+            [("PERSON", _word_extent(0)), ("PERSON", _word_extent(3))],
+        )
+        states = {text: [word.state for word in found] for text, found in _all_words(_plan(store)).items()}
+        assert states == {"Barakat": [MASKED], "barakat": [MASKED]}
+
+    def test_a_name_another_recogniser_heard_is_masked_there_too(
+        self, store: ProvStore, redact_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Qwen read "what" as "Barakat": the name masked elsewhere is masked under that word as well."""
+        words = ["my", "friend", "Barakat", "said", "what"]
+        self._redacted(
+            store,
+            redact_config,
+            tmp_path,
+            monkeypatch,
+            words,
+            [("PERSON", _word_extent(2))],
+            readings={4: {"asr_crisperwhisper": "what", "asr_qwen": "Barakat"}},
+        )
+        plan = _plan(store)
+        assert [word.state for word in _all_words(plan)["what"]] == [MASKED]
+        assert any(extent.start <= _word_extent(4)[0] and extent.end >= _word_extent(4)[1] for extent in plan.final)
+
+    def test_a_finding_read_off_one_recogniser_spreads_by_that_recogniser_s_token(
+        self, store: ProvStore, redact_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A PERSON read off Qwen's "Barakat" under the consensus "Time" spreads "barakat", never "time"."""
+        words = ["Time", "and", "time", "and", "what"]
+        self._redacted(
+            store,
+            redact_config,
+            tmp_path,
+            monkeypatch,
+            words,
+            [("PERSON", _word_extent(0))],
+            readings={
+                0: {"asr_crisperwhisper": "Time", "asr_qwen": "Barakat"},
+                4: {"asr_crisperwhisper": "what", "asr_qwen": "barakat"},
+            },
+            haystacks={0: "asr_qwen"},
+        )
+        found = _all_words(_plan(store))
+        assert [word.state for word in found["what"]] == [MASKED]
+        assert "time" not in found
+
+    def test_a_released_token_is_released_wherever_a_recogniser_read_it(
+        self, store: ProvStore, redact_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The reviewer's "the Prince danced" releases the "Prance" Qwen read as "Prince"."""
+        words = ["the", "Prince", "danced", "the", "Prance"]
+        self._redacted(
+            store,
+            redact_config,
+            tmp_path,
+            monkeypatch,
+            words,
+            [("PERSON", _word_extent(1)), ("PERSON", _word_extent(4))],
+            readings={4: {"asr_crisperwhisper": "Prance", "asr_qwen": "Prince"}},
+        )
+        _annotate(store, [{**_release_entry("the Prince danced", "PERSON"), "relabel": "other_non_person"}])
+        plan = _plan(store)
+        found = _all_words(plan)
+        assert [word.state for word in found["Prince"]] == [UNMASKED_BY_REVIEWER]
+        (prance,) = found["Prance"]
+        assert (prance.state, prance.propagation) == (UNMASKED_BY_REVIEWER, PROPAGATION_RELEASE)
+        assert prance.propagated_from == (found["Prince"][0].word_id,)
+        assert plan.final == []
+
+
+_DDK_STEM = "sub-x_ses-y_task-diadochokinesis-v2-buttercup"
+
+
+def _ddk_reading(store: ProvStore, events: Sequence[tuple[float, float]], decision: str = "present") -> None:
+    """SPEECH's syllable-task reading, carrying its events."""
+    agent = store.agent(agent_type="software", version="senselab test-ddk")
+    activity = store.activity(node="SPEECH", step="ddk", parameters={})
+    store.was_associated_with(activity, agent)
+    reading = store.entity(
+        prov_type="measurement",
+        extent=None,
+        attributes={
+            "name": "ddk_task_reading",
+            "decision": decision,
+            "unit": "cycle",
+            "reading": {
+                "evidence": {
+                    "decision": decision,
+                    "events": [{"start_s": start, "end_s": end} for start, end in events],
+                }
+            },
+        },
+    )
+    store.was_generated_by(reading, activity)
+
+
+class TestTheTaskSOwnEventsAreNeverMasked:
+    """Owner, 2026-10-08: a word lying on the task's own events is task content, never PII and never masked."""
+
+    _WORDS = ("What", "are", "the", "time?", "like")
+    _READINGS = {
+        0: {"asr_crisperwhisper": "What", "asr_qwen": "Barakat"},
+        3: {"asr_crisperwhisper": "time?", "asr_qwen": "barakat"},
+    }
+    _EVENTS = ((0.0, 0.6), (2.9, 3.6))
+
+    def _seed(self, store: ProvStore, tmp_path: Path) -> None:
+        """The buttercup card: Qwen's "barakat" under the consensus "time?", tagged PERSON off Qwen."""
+        _seed_redact_store(
+            store,
+            tmp_path,
+            words=list(self._WORDS),
+            findings=[("PERSON", _word_extent(3))],
+            readings=self._READINGS,
+            haystacks={0: "asr_qwen"},
+            recording_stem=_DDK_STEM,
+        )
+
+    def test_redact_plans_no_mask_over_the_task_s_events(
+        self, store: ProvStore, redact_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """REDACT exempts the finding as the task's own content, records why, and masks nothing."""
+        self._seed(store, tmp_path)
+        _ddk_reading(store, self._EVENTS)
+        _stub_pii(monkeypatch, findings=[])
+        result = redact(
+            store,
+            "recording",
+            redact_config,
+            run_dir=tmp_path,
+            artifacts_dir=_release(tmp_path),
+            task_family="diadochokinesis-v2-buttercup",
+        )
+        assert result.verdict.outcome is Outcome.PASS
+        assert _verdict_entity(store, "REDACT").attributes["redactions_n"] == 0
+        assert _verdict_entity(store, "REDACT").attributes["task_event_exempt_n"] == 1
+        (exempt,) = [
+            e
+            for e in store.entities("assertion")
+            if e.attributes.get("verb") == "exempt" and e.attributes.get("label") == TASK_EVENT_LABEL
+        ]
+        assert exempt.attributes["events_n"] == 2
+        folded = verdict_module.verdict(store, None, redact_config, run_dir=tmp_path).file_verdict
+        assert (folded.release.value, folded.release_ground) == ("as_is", FINDINGS_ARE_TASK_CONTENT)
+
+    def test_a_re_fold_releases_the_original_over_a_mask_redact_already_planned(
+        self, store: ProvStore, redact_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A store REDACT masked before the rule: the fold masks nothing and says the task's content is why."""
+        self._seed(store, tmp_path)
+        _stub_pii(monkeypatch, findings=[])
+        redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
+        assert _verdict_entity(store, "REDACT").attributes["redactions_n"] == 1
+        _ddk_reading(store, self._EVENTS)
+        plan = _plan(store)
+        assert plan.final == [] and plan.task_content_only
+        assert plan.task_event_ids == tuple(live_entities(store, "pii")[0].attributes["word_ids"])
+        folded = verdict_module.verdict(store, None, redact_config, run_dir=tmp_path).file_verdict
+        assert (folded.release.value, folded.release_ground) == ("as_is", TASK_CONTENT_UNMASKED)
+
+    def test_the_token_read_on_the_events_is_released_off_them_too(
+        self, store: ProvStore, redact_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The "barakat" past the last event, tagged too, is the same misreading of the task."""
+        _seed_redact_store(
+            store,
+            tmp_path,
+            words=[*self._WORDS, "barakat"],
+            findings=[("PERSON", _word_extent(3)), ("PERSON", _word_extent(5))],
+            readings=self._READINGS,
+            haystacks={0: "asr_qwen"},
+            recording_stem=_DDK_STEM,
+        )
+        _ddk_reading(store, self._EVENTS)
+        _stub_pii(monkeypatch, findings=[])
+        redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
+        plan = _plan(store)
+        assert plan.final == [] and len(plan.task_event_ids) == 2
+
+    def test_a_reading_that_read_another_activity_releases_nothing(
+        self, store: ProvStore, redact_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Events of a reading decided absent are not the task's: the mask stands."""
+        self._seed(store, tmp_path)
+        _stub_pii(monkeypatch, findings=[])
+        redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
+        _ddk_reading(store, self._EVENTS, decision="absent")
+        assert _plan(store, applies=False).task_event_ids == ()
+
+    def test_a_lexical_family_has_no_task_events(
+        self, store: ProvStore, redact_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A free-speech recording's words are never task content by time, whatever reading the store holds."""
+        _seed_redact_store(
+            store,
+            tmp_path,
+            words=list(self._WORDS),
+            findings=[("PERSON", _word_extent(3))],
+            recording_stem="sub-x_ses-y_task-free-speech-1",
+        )
+        _ddk_reading(store, self._EVENTS)
+        _stub_pii(monkeypatch, findings=[])
+        redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
+        assert _verdict_entity(store, "REDACT").attributes["task_event_exempt_n"] == 0

@@ -30,6 +30,7 @@ from senselab.audio.workflows.triage.vocabulary import (
     LLM_REDACTION_RESIDUE,
     MASKS_TRIMMED_TO_CONTENT,
     MODEL_SPEAKER_PERMITTED,
+    NAME_MASKS_PROPAGATED,
     NO_BREATH_CAPTURED,
     NO_CONTENT_MASKED,
     NO_LEXICAL_ITEM_PRODUCED,
@@ -58,6 +59,7 @@ from senselab.audio.workflows.triage.vocabulary import (
     SPEECH_OUTSIDE_TASK,
     SPEECH_UNREAD,
     TASK,
+    TASK_CONTENT_UNMASKED,
     TASK_MISMATCH,
     TOO_SHORT_FOR_TASK,
     UNAVAILABLE,
@@ -895,6 +897,7 @@ class TestReleaseIsDecidedFromEvidenceNotFromRedactsAbsence:
             NO_CONTENT_MASKED,
             FINDINGS_ARE_TASK_CONTENT,
             REVIEWER_CLEARED_UNMASKED,
+            TASK_CONTENT_UNMASKED,
         }
 
     def test_a_speech_that_errored_is_unassessed(self) -> None:
@@ -1226,6 +1229,16 @@ class TestTheMasksThatStandDecideTheRelease:
         """A mask trimmed to its content words with no reviewer involved is named as the trim's."""
         assert _release_from(self._PASSED, self._evidence(2), {}) == (Release.REDACTED, MASKS_TRIMMED_TO_CONTENT)
         assert _release_from(self._PASSED, self._evidence(0), {}) == (Release.AS_IS, NO_CONTENT_MASKED)
+
+    def test_masks_over_task_content_only_release_the_original_on_their_own_ground(self) -> None:
+        """REDACT masked words the fold reads as the task's own content: no mask stands, and that is why."""
+        evidence = replace(self._evidence(0), task_content_only=True)
+        assert _release_from(self._PASSED, evidence, {}) == (Release.AS_IS, TASK_CONTENT_UNMASKED)
+
+    def test_a_name_masked_at_every_occurrence_has_its_own_ground(self) -> None:
+        """Masks the fold carried to other occurrences of a kept name make the copy differ from REDACT's."""
+        evidence = replace(self._evidence(3), propagated_masked_n=1)
+        assert _release_from(self._PASSED, evidence, {}) == (Release.REDACTED, NAME_MASKS_PROPAGATED)
 
     def test_a_cleared_rescan_fail_composes_with_the_unmasks(self) -> None:
         """The reading clears the fail and then unmasks what it named."""

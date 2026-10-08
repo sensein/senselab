@@ -176,6 +176,10 @@ REVIEWER_CLEARED_UNMASKED = (
     "REDACT's re-scan still read a finding it had planned no mask over, and the reviewer read the original as "
     "clean and proposed nothing to hide, so the original is released"
 )
+TASK_CONTENT_UNMASKED = (
+    "every word REDACT masked is the task's own content -- its declared words or its events -- so no mask "
+    "stands and the original is released"
+)
 
 RELEASE_WITHOUT_REDACTION_GROUNDS = (
     NO_LEXICAL_WORD,
@@ -186,6 +190,7 @@ RELEASE_WITHOUT_REDACTION_GROUNDS = (
     NO_CONTENT_MASKED,
     FINDINGS_ARE_TASK_CONTENT,
     REVIEWER_CLEARED_UNMASKED,
+    TASK_CONTENT_UNMASKED,
 )
 """Which reading cleared the recording. One stands behind every :attr:`Release.AS_IS`."""
 
@@ -251,6 +256,11 @@ POLICY_MASKS_ONLY = (
     "the scan found nothing to redact, and the redaction policy masked words it always masks -- a date element, "
     "an age, a state; the copy keeps those"
 )
+
+NAME_MASKS_PROPAGATED = (
+    "a name kept masked was masked at every other place the recording says it, in any recogniser's reading; "
+    "the copy keeps those"
+)
 DISCARDED = "the recording was discarded, so no artefact of it is released"
 """The release ground of every discard; a discard carries no release value."""
 
@@ -260,6 +270,7 @@ RELEASE_WITH_REDACTION_GROUNDS = (
     MASKS_TRIMMED_TO_CONTENT,
     POLICY_MASKS_ADDED,
     POLICY_MASKS_ONLY,
+    NAME_MASKS_PROPAGATED,
 )
 """Why a redacted copy is released other than as REDACT itself planned and passed it."""
 
@@ -287,6 +298,9 @@ class RedactionEvidence:
         name_release_proposed: The reviewer's ``release`` quotes naming a person's name it may not
             release on its own.
         reviewer_requested_n: How many reviewer ``redact`` entries propose hiding more than the masks hide.
+        propagated_masked_n: How many words stay masked because the same token is a name kept masked
+            elsewhere in the recording.
+        task_content_only: Whether every finding located on words covered only the task's own content.
     """
 
     lexical_words_n: int | None = None
@@ -301,6 +315,8 @@ class RedactionEvidence:
     person_names_masked_n: int = 0
     name_release_proposed: tuple[str, ...] = ()
     reviewer_requested_n: int = 0
+    propagated_masked_n: int = 0
+    task_content_only: bool = False
 
 
 @dataclass(frozen=True)
@@ -923,6 +939,7 @@ RELEASE_GROUND_KEYS: dict[str, str] = {
     NO_CONTENT_MASKED: "no_content_masked",
     FINDINGS_ARE_TASK_CONTENT: "findings_are_task_content",
     REVIEWER_CLEARED_UNMASKED: "reviewer_cleared_unmasked",
+    TASK_CONTENT_UNMASKED: "task_content_unmasked",
     NO_TRANSCRIPT: "no_transcript",
     SPEECH_UNREAD: "speech_unread",
     REDACTION_OWED: "redaction_owed",
@@ -936,6 +953,7 @@ RELEASE_GROUND_KEYS: dict[str, str] = {
     MASKS_TRIMMED_TO_CONTENT: "masks_trimmed_to_content",
     POLICY_MASKS_ADDED: "policy_masks_added",
     POLICY_MASKS_ONLY: "policy_masks_only",
+    NAME_MASKS_PROPAGATED: "name_masks_propagated",
     DISCARDED: "discarded",
 }
 """The stable key of every release ground. A release REDACT itself decided carries
@@ -1655,6 +1673,8 @@ def _release_from(
         return release, ground
     reviewer = evidence.reviewer_unmasked_n > 0
     if evidence.masks_final_n == 0:
+        if evidence.masks_changed and evidence.task_content_only:
+            return Release.AS_IS, TASK_CONTENT_UNMASKED
         if evidence.masks_changed:
             return Release.AS_IS, REVIEWER_UNMASKED_ALL if reviewer else NO_CONTENT_MASKED
         if ground is None:
@@ -1664,6 +1684,8 @@ def _release_from(
     if evidence.masks_changed:
         if reviewer:
             return Release.REDACTED, REVIEWER_UNMASKED_SOME
+        if evidence.propagated_masked_n:
+            return Release.REDACTED, NAME_MASKS_PROPAGATED
         return Release.REDACTED, POLICY_MASKS_ADDED if evidence.policy_masks_n else MASKS_TRIMMED_TO_CONTENT
     return release, ground
 
