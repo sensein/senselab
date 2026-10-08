@@ -14,10 +14,12 @@ var SchemaAxes = (function () {
     'breath_coverage_fraction',
     'breath_peak_over_floor_db',
     'cough_peak_over_floor_db',
-    'ddk_ppg_period_dispersion',
-    'ddk_repetition_count_from_ppg_decode',
+    'ddk_cycle_rate_hz',
+    'ddk_events_found',
+    'ddk_identity',
+    'ddk_period_cv',
     'ddk_syllable_rate_from_envelope_modulation_hz',
-    'ddk_syllable_rate_from_ppg_decode_hz',
+    'ddk_syllable_rate_hz',
     'expected_sequence_repeat_fraction',
     'extent_dominant_speaker_share',
     'extent_secondary_source_s',
@@ -69,7 +71,6 @@ var SchemaAxes = (function () {
     ['dominant_speaker_share_min', 'extent_dominant_speaker_share', 'at_least', null],
     ['items_min', 'items_produced', 'at_least', null],
     ['events_min', 'airway_events_found', 'at_least', null],
-    ['repetitions_min', 'ddk_repetitions_found', 'at_least', null],
     ['instructed_count_min_fraction', 'instructed_count_fraction', 'at_least', null],
     ['repeat_overlap_min', null, 'at_least', null],
     ['echo_overlap_max', null, 'at_most', null],
@@ -288,7 +289,7 @@ var SchemaAxes = (function () {
     MATRIX_MEASUREMENTS.forEach(function (n) {
       out.push(column({
         name: 'm_' + n, kind: 'matrix', group: 'measurement', assignable: false,
-        reason: 'a matrix, repetitions by syllable position, flattened row-major — no single number to place on an axis',
+        reason: 'a matrix, task events by template position, flattened row-major — no single number to place on an axis',
         countColumn: 'm_' + n + '_n',
       }));
       out.push(column({ name: 'm_' + n + '_n', kind: 'count', group: 'measurement count' }));

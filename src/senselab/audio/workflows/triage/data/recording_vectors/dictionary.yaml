@@ -147,7 +147,7 @@ columns:
 
   discard_ground:
     units: none
-    values: [unmeasurable, too_short_for_task, acoustically_empty, no_breath_captured, no_cough_captured, no_phonation_captured, declared_task_absent]
+    values: [unmeasurable, too_short_for_task, acoustically_empty, no_breath_captured, no_cough_captured, no_phonation_captured, no_syllable_train_captured, syllable_train_not_target, declared_task_absent]
     description: >-
       Why the recording was discarded: ADMIT could not measure it (`unmeasurable`); it is shorter than
       its declared family's minimum in data/task_minimum_duration.yaml (`too_short_for_task`); the
@@ -157,7 +157,10 @@ columns:
       (counted families) or no alternating pattern (sustained families) (`no_breath_captured`); a cough
       family whose cough-onset measure (data/cough_pattern.yaml), reading every input, found no cough
       onset (`no_cough_captured`); a voice family whose phonation measure (data/voice_phonation.yaml)
-      found nothing over the noise floor (`no_phonation_captured`); or that branch ran
+      found nothing over the noise floor (`no_phonation_captured`); a syllable-repetition family whose
+      task layer (data/task_events.yaml, ddk) found no syllable over the floor
+      (`no_syllable_train_captured`) or read its train as another activity than the declared syllables
+      (`syllable_train_not_target`); or that branch ran
       and found none of the task, a SPEECH task holding no lexical word (`declared_task_absent`).
     computation: The fold's `discard_ground` attribute.
     source: [recording_vectors.py:extract, vocabulary.py:FileVerdict.record]
@@ -1716,23 +1719,37 @@ families:
           only; the cough-then-breathe alternation writes none.
         source: nodes/airway.py:event_measurements, nodes/airway.py:_airway_event_series, nodes/airway.py:rounded
         none_readings: An event outside the envelope is stored as a None reading, not NaN.
-      ddk_ppg_period_dispersion:
+      ddk_cycle_rate_hz:
         kind: scalar
-        units: ratio
-        description: Coefficient of variation of the inter-repetition periods of the DDK posteriorgram decode.
+        units: Hz
+        description: Cycles of the target word per second, on a syllable-sequence task.
         computation: >-
-          SPEECH's DDK instrument decodes the declared syllable template from the phonetic
-          posteriorgram and writes the sample standard deviation of the periods between consecutive
-          completed-repetition onsets over their mean. Not written when the decode completed no
-          repetition.
-        source: nodes/ddk.py:decode_evidence, nodes/ddk.py:dispersion
-        none_readings: A None reading is written on fewer than two intervals or a non-positive mean period.
-      ddk_repetition_count_from_ppg_decode:
+          The inverse of the median onset interval between consecutive cycle events in the task
+          layer's dominant cluster (ddk_task.py), rounded to 3 places.
+        source: ddk_task.py:ddk_reading_of, nodes/ddk.py:reading_findings
+        none_readings: A None reading is written on fewer than two cycle events.
+      ddk_events_found:
         kind: scalar
         units: count
-        description: Repetitions of the declared DDK template the posteriorgram decode completed.
-        computation: The decode's repetition count; 0 is a value.
-        source: nodes/ddk.py:decode_evidence
+        description: Task events (cycles on a sequence task, syllables on a single-syllable task) the DDK task layer read.
+        computation: The task events in the dominant cluster; 0 is a value. An annotation, never a gate.
+        source: ddk_task.py:ddk_reading_of, nodes/ddk.py:reading_findings
+      ddk_identity:
+        kind: scalar
+        units: fraction
+        description: The standing task events' median identity against the declared phoneme template.
+        computation: >-
+          Per event, the mean over template positions of the class mass the local alignment realised
+          (a deleted position counts 0); the median over the events standing over the floor.
+        source: ddk_task.py:identity_of, ddk_task.py:decide_ddk
+        none_readings: A None reading is written where no event stands over the floor.
+      ddk_period_cv:
+        kind: scalar
+        units: ratio
+        description: Coefficient of variation of the onset intervals between consecutive DDK task events.
+        computation: The sample standard deviation of the intervals over their mean, over the dominant cluster.
+        source: ddk_task.py:dispersion, nodes/ddk.py:reading_findings
+        none_readings: A None reading is written on fewer than two intervals or a non-positive mean.
       ddk_syllable_rate_from_envelope_modulation_hz:
         kind: scalar
         units: Hz
@@ -1746,18 +1763,15 @@ families:
           qualifies.
         source: nodes/ddk.py:align_ddk, nodes/ddk.py:ddk_carrier
         none_readings: A None reading is written only when the energy envelope is absent.
-      ddk_syllable_rate_from_ppg_decode_hz:
+      ddk_syllable_rate_hz:
         kind: scalar
         units: Hz
-        description: Syllable rate of the posteriorgram decode.
+        description: Syllables per second of the DDK train.
         computation: >-
-          The template's vowel-position count over the median interval between consecutive
-          completed-repetition onsets (the decode's `rate_hz`), rounded to 3 places.
-        source: nodes/ddk.py:decode_evidence, nodes/ddk.py:Decode.rate_hz
-        none_readings: >-
-          A None reading is written when the posteriorgram is absent or no repetition completed, and
-          the value is None when fewer than two repetitions completed or the template has no vowel
-          position.
+          The inverse of the median onset interval between consecutive syllables inside each run of
+          the task layer's syllables, rounded to 3 places.
+        source: ddk_task.py:ddk_reading_of, nodes/ddk.py:reading_findings
+        none_readings: A None reading is written where no run holds two syllables.
       expected_sequence_repeat_fraction:
         kind: scalar
         units: fraction
@@ -1884,18 +1898,17 @@ families:
         kind: vector
         units: fraction
         description: >-
-          Per template position, the mean posterior mass the expected class held where the decode's
-          completed repetitions placed that position.
+          Per template position, the mean posterior mass the expected class held where the identity
+          alignment charged that position, averaged over the DDK task events.
         computation: >-
-          The decode's `realised_mass`: one value per template position (the list's length is the
-          template's), charged only over completed repetitions; an element is null where no completed
-          repetition placed that position, so every element is null when none completed.
-        source: nodes/ddk.py:decode_evidence
+          One value per template position; a position the alignment deleted in an event counts 0 for
+          that event. Every element is null where no task event stands.
+        source: ddk_task.py:identity_of, nodes/ddk.py:reading_findings
       ddk_cv_instrument_reading:
         kind: matrix
         units: fraction
-        description: The DDK posteriorgram instrument's reading, per completed repetition and template position.
-        computation: The decode's per-repetition realised mass over the decoded extent (rows are repetitions, columns positions).
+        description: The posteriorgram's reading, per DDK task event and template position.
+        computation: Each task event's per-position realised mass over the task extent (rows are events, columns positions).
         source: nodes/ddk.py:instrument_authority
       carrier_rejected:
         kind: categorical
@@ -2146,28 +2159,17 @@ families:
           cough-then-breathe alternation). Not written, so undetermined, when `score_min` is
           unmeasured.
         reading_source: nodes/airway.py:events_found, nodes/airway.py:_airway_alternation
-      repetitions_min:
-        kind: applied
-        reading: ddk_repetitions_found
-        op: at_least
-        units: count
-        reader: gate_readings
-        reading_description: how many DDK repetitions either instrument found.
-        reading_computation: The DDK instrument writes the larger of the decode's repetition count and 1 where the envelope carrier was found.
-        reading_source: nodes/ddk.py:repetitions_found
       instructed_count_min_fraction:
         kind: applied
         reading: instructed_count_fraction
         op: at_least
         units: fraction
         reader: gate_readings
-        reading_description: what was produced over the count the instruction spoke (breaths, coughs, v1 DDK repetitions).
+        reading_description: what was produced over the count the instruction spoke (breaths, coughs).
         reading_computation: >-
-          AIRWAY writes the events found over the row's required count; SPEECH's syllable body writes the
-          decoded repetitions over it, only where the decode counted (it read a repetition, or the envelope
-          found no carrier either). Not written, so not applicable (`no_instructed_count`), where the
-          instruction speaks no count or no instrument counted.
-        reading_source: nodes/airway.py:events_found, nodes/ddk.py:repetitions_found, nodes/branches.py:instructed_fraction
+          AIRWAY writes the events found over the row's required count. Not written, so not applicable
+          (`no_instructed_count`), where the instruction speaks no count.
+        reading_source: nodes/airway.py:events_found, nodes/branches.py:instructed_fraction
       repeat_overlap_min:
         kind: located
         op: at_least

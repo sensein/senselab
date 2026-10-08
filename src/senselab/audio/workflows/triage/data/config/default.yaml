@@ -284,7 +284,6 @@ branch:
   run_gap_max_s: 0.5                   # largest gap two lexical words may straddle and stay one run
   echo_ngram_n: 3                      # n of the n-gram the prompt-echo overlap is measured over
   modulation_band_hz: [1.0, 10.0]      # [lo, hi] band the envelope modulation peak is searched in
-  burst_window_ms: 20.0                # shortest stop burst and aspiration, which is the decode's minimum phone duration
   effort_split_hz: 1000.0              # split the low and high spectral balance of an effort token is taken at
   # kind -> the HeAR heads that ARE that sound. HeAR spellings only: the AudioSet names YAMNet
   # reports are derived per kind from the packaged classifier-ontology profile's corroboration set
@@ -292,7 +291,7 @@ branch:
   label_sets:
     cough: [Cough]
     breath: [Breathe]
-  # The posteriorgram template decode's equivalence classes. Vocabulary only: it reports mass, it
+  # The posteriorgram identity alignment's equivalence classes. Vocabulary only: it reports mass, it
   # does not judge it. Derivations in specs/20260817-triage-workflow-dag/config-derivations.md.
   # consonant class -> the phonemes that ARE that class, in the posteriorgram's ARPAbet spelling.
   # Data, not schema: a campaign may add a class, and `DATA_MAP_PATHS` carries the key so an
@@ -416,14 +415,10 @@ verdict:
       SYLLABLE_TRAIN:                    # one syllable repeated
         train_min_s: 1.0                 # shortest carrier that can hold a train
         rate_prominence_min: 2.0         # modulation peak over its band mean that makes a rate readable
-        repetitions_min: 1               # repetitions either instrument must read
-        instructed_count_min_fraction: 0.5  # UNFITTED: repetitions decoded over the count the instruction spoke
         dominant_speaker_share_min: 0.9  # share of the task extent's attributed seconds one voice must hold
       SYLLABLE_SEQUENCE:                 # a syllable sequence repeated
         train_min_s: 1.0                 # shortest carrier that can hold a train
         rate_prominence_min: 2.0         # modulation peak over its band mean that makes a rate readable
-        repetitions_min: 1               # repetitions either instrument must read
-        instructed_count_min_fraction: 0.5  # UNFITTED: repetitions decoded over the count the instruction spoke
         dominant_speaker_share_min: 0.9  # share of the task extent's attributed seconds one voice must hold
       PER_SENTENCE: {}                   # no row reaches this group; no gate is configured for it
       EFFORT: {}                         # no row reaches this group; no gate is configured for it

@@ -47,7 +47,12 @@ from senselab.audio.workflows.triage.vocabulary import UNDETERMINED
 from senselab.text.tasks.pii_detection.api import PiiScan, PiiSpan, default_detectors
 from senselab.utils.data_structures import ScriptLine
 from senselab.utils.prov_store import Entity, ProvStore
-from tests.audio.workflows.triage.nodes.conftest import gated_from_store, store_readings
+from tests.audio.workflows.triage.nodes.conftest import (
+    gated_from_store,
+    level_of_raster,
+    seed_background_view,
+    store_readings,
+)
 
 SR = 16000
 ENROLLMENT_MODEL = "speechbrain/spkrec-ecapa-voxceleb"
@@ -3100,6 +3105,7 @@ def _seed_pa_posteriorgram(
         },
     )
     store.was_generated_by(entity_id, preprocess)
+    seed_background_view(store, tmp_path, level_of_raster(np.asarray(frames, dtype=float)))
 
 
 class TestADeclaredSyllableTaskIsEvaluatedBySpeech:
@@ -3121,8 +3127,9 @@ class TestADeclaredSyllableTaskIsEvaluatedBySpeech:
     ) -> None:
         """The owner's case: /pa pa pa/ is a speaking task and SPEECH says whether it happened.
 
-        No posteriorgram, so no instrument located the task: the modulation channel still reports
-        its rate and the carrier still answers conformance, and no ``task_extent`` is manufactured.
+        No posteriorgram and no background view, so the task layer took no reading: the modulation
+        channel still reports its rate, no gate answers conformance, and no ``task_extent`` is
+        manufactured.
         """
         _seed_speech_store(store, tmp_path, words=[])
         _seed_train_envelope(store, tmp_path, extent=(1.0, 4.0), rate_hz=5.0)
@@ -3135,7 +3142,7 @@ class TestADeclaredSyllableTaskIsEvaluatedBySpeech:
         assert detail["modulation_peak_hz"] == pytest.approx(5.0, abs=0.5)
         assert detail["modulation_unit"] == "syllables_per_s"
         assert result.report.conformance == UNDETERMINED
-        assert gated_from_store(store, Pattern.SYLLABLE_TRAIN, settings=syllable_config) is True
+        assert gated_from_store(store, Pattern.SYLLABLE_TRAIN, settings=syllable_config) == UNDETERMINED
         assert result.report.conformance_of == "task"
 
     def test_the_train_is_a_speech_span_carrying_its_production(
@@ -3150,7 +3157,7 @@ class TestADeclaredSyllableTaskIsEvaluatedBySpeech:
         trains = [
             entity
             for entity in live_entities(store, "span")
-            if entity.attributes.get("production") == "syllable_task_from_decode"
+            if entity.attributes.get("production") == "syllable_task_from_events"
         ]
         assert [entity.attributes["family"] for entity in trains] == ["speech"]
         assert trains[0].attributes["role"] == "task_extent"

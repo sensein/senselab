@@ -37,6 +37,7 @@ import yaml
 from senselab.audio.data_structures import AudioHints
 from senselab.audio.workflows.triage.background_model import BACKGROUND_MODEL
 from senselab.audio.workflows.triage.config import TriageConfig
+from senselab.audio.workflows.triage.ddk_task import CYCLE, DDK_READING, SYLLABLE
 from senselab.audio.workflows.triage.live_evidence import declared_task, recording_stem
 from senselab.audio.workflows.triage.nodes.airway import EVENTS_FOUND as AIRWAY_EVENTS_FOUND
 from senselab.audio.workflows.triage.nodes.airway import INSTRUMENT_ABSENT as AIRWAY_INSTRUMENT_ABSENT
@@ -102,6 +103,7 @@ from senselab.audio.workflows.triage.nodes.redact import (
 )
 from senselab.audio.workflows.triage.nodes.voice import PHONATION_READING
 from senselab.audio.workflows.triage.quality_join import QUALITY_JOIN
+from senselab.audio.workflows.triage.routing_analysis.families import SYLLABLE_REPETITION
 from senselab.audio.workflows.triage.task_lexicon import task_lexicon
 from senselab.audio.workflows.triage.vocabulary import (
     BREATH_COUNTED,
@@ -456,6 +458,7 @@ DECISION_INPUTS: dict[str, tuple[str, ...]] = {
     BREATH_READING: ("decision",),
     COUGH_READING: ("onsets_n", "review"),
     PHONATION_READING: ("found",),
+    DDK_READING: ("decision",),
 }
 """Per task reading, the attributes the fold decides on; a reading lacking one is not measured."""
 
@@ -523,6 +526,26 @@ def _voice_reading(store: ProvStore) -> tuple[dict[str, Any] | None, tuple[str, 
     return (None, absent) if absent else (dict(measurement.attributes), ())
 
 
+def _speech_ddk_reading(store: ProvStore) -> tuple[dict[str, Any] | None, tuple[str, ...]]:
+    """SPEECH's syllable-task reading and the inputs it lacked, as SPEECH wrote them.
+
+    Args:
+        store: The provenance store.
+
+    Returns:
+        The measurement's attributes and ``()``; ``None`` and the absent inputs where SPEECH lacked
+        them; ``None`` and the measurement's own name where SPEECH reported and wrote no reading;
+        ``None`` and ``()`` where SPEECH did not report at all.
+    """
+    measurement = find_measurement(store, DDK_READING)
+    if measurement is None:
+        reported = any(report.node == "SPEECH" for _, report in _branch_reports(store))
+        return None, ((f"SPEECH:{DDK_READING}",) if reported else ())
+    absent = tuple(f"SPEECH:{each}" for each in measurement.attributes.get("absent") or ())
+    absent = absent or _undecidable(DDK_READING, "SPEECH", measurement.attributes)
+    return (None, absent) if absent else (dict(measurement.attributes), ())
+
+
 def _task_evidence(
     store: ProvStore,
     declared_family: str | None,
@@ -574,6 +597,13 @@ def _task_evidence(
         voice_mode = "glide" if voice.pattern == Pattern.GLIDE else "sustained"
         phonation, missing = _voice_reading(store)
         absent = missing if phonation is not None or missing else absent
+    speech = EXPECTATIONS["SPEECH"].get(declared_family or "") if "SPEECH" in owners else None
+    ddk_mode: str | None = None
+    ddk: dict[str, Any] | None = None
+    if speech is not None and declared_family in SYLLABLE_REPETITION:
+        ddk_mode = CYCLE if speech.pattern == Pattern.SYLLABLE_SEQUENCE else SYLLABLE
+        ddk, missing = _speech_ddk_reading(store)
+        absent = missing if ddk is not None or missing else absent
     instructed = airway.required_count.value if airway is not None and airway.required_count is not None else None
     joined = find_measurement(store, QUALITY_JOIN)
     quality = (
@@ -590,7 +620,8 @@ def _task_evidence(
         event_tokens_n=event_tokens_n(store, declared_family),
         owner_absent_inputs=absent,
         required_event=(needed if needed != "cough" or cough_mode is not None else None)
-        or ("phonation" if voice_mode is not None else None),
+        or ("phonation" if voice_mode is not None else None)
+        or ("syllable" if ddk_mode is not None else None),
         events_found_n=_airway_events_found(store) if "AIRWAY" in owners else None,
         event_kind=airway.label_set if airway is not None else None,
         instructed_count=airway.required_count.value
@@ -622,6 +653,14 @@ def _task_evidence(
             **{k: v for k, v in phonation.items() if k not in ("name", "signal", "absent")},
         }
         if phonation is not None
+        else {},
+        ddk_mode=ddk_mode,
+        ddk_decision=ddk.get("decision") if ddk is not None else None,
+        ddk_reading={
+            "mode": ddk_mode,
+            **{k: v for k, v in ddk.items() if k not in ("name", "signal", "absent", "value", "reading")},
+        }
+        if ddk is not None
         else {},
     )
 

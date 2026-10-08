@@ -356,6 +356,11 @@ class TaskEvidence:
         voice_review: Why the reading is left for review; empty where it is not.
         voice_outside_speech: The speech-like runs read outside the extent.
         voice_reading: The reading's record, for the verdict record; empty where none.
+        ddk_mode: ``syllable`` or ``cycle`` for a declared syllable-repetition family decided on SPEECH's
+            task-layer reading (``ddk_task``); None for every other family.
+        ddk_decision: The reading's decision, ``present``, ``review`` or ``absent``, or None where it
+            was not read.
+        ddk_reading: The reading's record, for the verdict record; empty where none.
     """
 
     owning_branches: tuple[str, ...] = ()
@@ -389,6 +394,9 @@ class TaskEvidence:
     voice_review: tuple[str, ...] = ()
     voice_outside_speech: tuple[dict[str, Any], ...] = ()
     voice_reading: dict[str, Any] = field(default_factory=dict)
+    ddk_mode: str | None = None
+    ddk_decision: str | None = None
+    ddk_reading: dict[str, Any] = field(default_factory=dict)
 
 
 UNMEASURABLE = "unmeasurable"
@@ -534,12 +542,62 @@ def cough_review_reading(evidence: TaskEvidence) -> str:
     )
 
 
+def ddk_present(evidence: TaskEvidence) -> bool:
+    """Whether a syllable-repetition family's task events found the train.
+
+    Args:
+        evidence: The task evidence.
+
+    Returns:
+        True where the reading decided ``present`` or ``review``.
+    """
+    return evidence.ddk_decision in ("present", "review")
+
+
+def ddk_shortfall(evidence: TaskEvidence) -> str | None:
+    """The events found against the instructed count, where a counted syllable family found fewer.
+
+    Args:
+        evidence: The task evidence.
+
+    Returns:
+        ``"detected N <unit>s where M were instructed"`` where the train was present and fewer task
+        events than the instruction asked were read; None otherwise.
+    """
+    notes = evidence.ddk_reading.get("annotations") or {}
+    found, required = notes.get("events_n"), notes.get("required_count")
+    if not ddk_present(evidence) or found is None or required is None or found >= required:
+        return None
+    return f"detected {found} {evidence.ddk_mode}s where {required} were instructed"
+
+
+def ddk_review_reading(evidence: TaskEvidence) -> str:
+    """The task-layer readings a syllable-train review flag carries.
+
+    Args:
+        evidence: The task evidence.
+
+    Returns:
+        ``"N events, C clear, identity I (why)"``.
+    """
+    reading = evidence.ddk_reading
+    inputs = reading.get("inputs") or {}
+    return (
+        f"{reading.get('events_n', 0)} {evidence.ddk_mode} events, {inputs.get('clear_free_n', 0)} clear, "
+        f"identity {reading.get('identity', 'none')} ({reading.get('why', 'none')})"
+    )
+
+
 DECLARED_TASK_ABSENT = "declared_task_absent"
 """Discard ground: the branch owning the declared task ran and found none of it, whatever another branch found."""
 NO_COUGH_CAPTURED = "no_cough_captured"
 """Discard ground: a cough task holds no cough onset."""
 NO_PHONATION_CAPTURED = "no_phonation_captured"
 """Discard ground: a voice task holds nothing over the noise floor."""
+NO_SYLLABLE_TRAIN_CAPTURED = "no_syllable_train_captured"
+"""Discard ground: a syllable-repetition task holds no syllable over the noise floor."""
+SYLLABLE_TRAIN_NOT_TARGET = "syllable_train_not_target"
+"""Discard ground: a syllable-repetition task's events are another activity, not the declared syllables."""
 DISCARD_GROUNDS = (
     UNMEASURABLE,
     TOO_SHORT_FOR_TASK,
@@ -547,6 +605,8 @@ DISCARD_GROUNDS = (
     NO_BREATH_CAPTURED,
     NO_COUGH_CAPTURED,
     NO_PHONATION_CAPTURED,
+    NO_SYLLABLE_TRAIN_CAPTURED,
+    SYLLABLE_TRAIN_NOT_TARGET,
     DECLARED_TASK_ABSENT,
 )
 """Every ground a file discards on, in the order the fold tries them; an operational flag (``rerun``) is
@@ -561,6 +621,10 @@ COUGH_REVIEW_LOW_CONFIDENCE = "cough_review_low_confidence"
 """Flag ground: a cough task's coughs were kept, on a count whose decision differs inside the review band."""
 VOICE_REVIEW_LOW_CONFIDENCE = "voice_review_low_confidence"
 """Flag ground: a voice task's phonation reading differs inside its review band."""
+DDK_REVIEW_WEAK_EVENTS = "ddk_review_weak_events"
+"""Flag ground: a syllable task's train stands, but too few of its events are clear of the background."""
+DDK_REVIEW_IDENTITY = "ddk_review_identity"
+"""Flag ground: a syllable task's train stands, but its identity against the template is ambiguous."""
 STREAMS_DISAGREE = "streams_disagree"
 """Flag ground: the enhanced stream loses the task events the raw stream stands on."""
 SPEECH_OUTSIDE_TASK = "speech_outside_task"
@@ -718,6 +782,10 @@ KEY_COUGH_REVIEW_LOW_CONFIDENCE = COUGH_REVIEW_LOW_CONFIDENCE
 KEY_DISCARD_CONTESTED = DISCARD_CONTESTED
 KEY_NO_PHONATION_CAPTURED = NO_PHONATION_CAPTURED
 KEY_VOICE_REVIEW_LOW_CONFIDENCE = VOICE_REVIEW_LOW_CONFIDENCE
+KEY_NO_SYLLABLE_TRAIN_CAPTURED = NO_SYLLABLE_TRAIN_CAPTURED
+KEY_SYLLABLE_TRAIN_NOT_TARGET = SYLLABLE_TRAIN_NOT_TARGET
+KEY_DDK_REVIEW_WEAK_EVENTS = DDK_REVIEW_WEAK_EVENTS
+KEY_DDK_REVIEW_IDENTITY = DDK_REVIEW_IDENTITY
 KEY_STREAMS_DISAGREE = STREAMS_DISAGREE
 KEY_SPEECH_OUTSIDE_TASK = SPEECH_OUTSIDE_TASK
 KEY_PREPROCESS_ERRORED = "preprocess_errored"
@@ -755,6 +823,10 @@ GROUND_KEYS = (
     KEY_DISCARD_CONTESTED,
     KEY_NO_PHONATION_CAPTURED,
     KEY_VOICE_REVIEW_LOW_CONFIDENCE,
+    KEY_NO_SYLLABLE_TRAIN_CAPTURED,
+    KEY_SYLLABLE_TRAIN_NOT_TARGET,
+    KEY_DDK_REVIEW_WEAK_EVENTS,
+    KEY_DDK_REVIEW_IDENTITY,
     KEY_STREAMS_DISAGREE,
     KEY_SPEECH_OUTSIDE_TASK,
     KEY_PREPROCESS_ERRORED,
@@ -1270,6 +1342,7 @@ class FileVerdict:
     cough_pattern: dict[str, Any] = field(default_factory=dict)
     quality_join: dict[str, Any] = field(default_factory=dict)
     voice_phonation: dict[str, Any] = field(default_factory=dict)
+    ddk_task: dict[str, Any] = field(default_factory=dict)
 
     def record(self) -> dict[str, Any]:
         """Every decision point of this fold, as JSON-ready values.
@@ -1314,6 +1387,7 @@ class FileVerdict:
             "cough_pattern": dict(self.cough_pattern),
             "quality_join": dict(self.quality_join),
             "voice_phonation": dict(self.voice_phonation),
+            "ddk_task": dict(self.ddk_task),
             "ran": {node: state.value for node, state in self.ran.items()},
             "reasons": [
                 {"node": r.node, "outcome": r.outcome.value, "kind": r.kind, "why": r.why, "key": ground_key(r)}
@@ -1698,6 +1772,8 @@ def _owner_performed(
         return cough_conforms(evidence)
     if branch == _VOICE and evidence.voice_mode is not None:
         return bool(evidence.voice_found) and evidence.voice_mismatch is None
+    if branch == _SPEECH and evidence.ddk_mode is not None:
+        return ddk_present(evidence)
     report = by_branch.get(branch)
     if report is None or report.conformance_of != TASK:
         return False
@@ -1795,12 +1871,28 @@ def no_required_event(evidence: TaskEvidence, performed: bool) -> bool:
         return evidence.cough_onsets_n == 0 and not evidence.owner_absent_inputs
     if evidence.voice_mode is not None:
         return evidence.voice_found is False and not evidence.owner_absent_inputs
+    if evidence.ddk_mode is not None:
+        return evidence.ddk_decision == "absent" and not evidence.owner_absent_inputs
     return (
         evidence.required_event in EVENT_ABSENT_GROUNDS
         and evidence.events_found_n == 0
         and not evidence.owner_absent_inputs
         and not performed
     )
+
+
+def ddk_absent_ground(evidence: TaskEvidence) -> str:
+    """The discard ground of a syllable task whose reading decided ``absent``.
+
+    Args:
+        evidence: The task evidence.
+
+    Returns:
+        :data:`SYLLABLE_TRAIN_NOT_TARGET` where a train stood over the floor and its identity read
+        another activity; :data:`NO_SYLLABLE_TRAIN_CAPTURED` otherwise.
+    """
+    standing = (evidence.ddk_reading.get("inputs") or {}).get("standing_n")
+    return SYLLABLE_TRAIN_NOT_TARGET if standing else NO_SYLLABLE_TRAIN_CAPTURED
 
 
 def discard_contested(evidence: TaskEvidence) -> bool:
@@ -1844,16 +1936,23 @@ def nothing_captured(quality: Mapping[str, Any]) -> bool:
 
 
 def task_event_heard(evidence: TaskEvidence, lexical_words_n: int | None) -> bool:
-    """Whether any branch heard an event of the task: a breath, a cough, phonation or a lexical word.
+    """Whether any branch heard an event of the task: a breath, a cough, phonation, syllables or a word.
 
     Args:
         evidence: The task evidence.
         lexical_words_n: The consensus transcript's lexical word count, or None where SPEECH read none.
 
     Returns:
-        True where a task reading holds an event or the transcript holds a lexical word.
+        True where a task reading holds an event (a syllable train among them) or the transcript holds
+        a lexical word.
     """
-    return breath_present(evidence) or cough_present(evidence) or bool(evidence.voice_found) or bool(lexical_words_n)
+    return (
+        breath_present(evidence)
+        or cough_present(evidence)
+        or bool(evidence.voice_found)
+        or ddk_present(evidence)
+        or bool(lexical_words_n)
+    )
 
 
 def join_unread(quality: Mapping[str, Any]) -> list[str]:
@@ -1946,9 +2045,13 @@ _DISCARD_ITEMS = {
     NO_BREATH_CAPTURED: "breath_event_db_over_floor",
     NO_COUGH_CAPTURED: "cough_onsets",
     NO_PHONATION_CAPTURED: "phonation_found",
+    NO_SYLLABLE_TRAIN_CAPTURED: "ddk_event_db_over_floor",
+    SYLLABLE_TRAIN_NOT_TARGET: "ddk_identity",
     DECLARED_TASK_ABSENT: "declared_task_found",
 }
-_INSTRUCTION_ITEMS = frozenset({"breaths_found", "coughs_against_instructed", "glide_travel_declared_st"})
+_INSTRUCTION_ITEMS = frozenset(
+    {"breaths_found", "coughs_against_instructed", "glide_travel_declared_st", "ddk_events_against_instructed"}
+)
 """Readings compared against the instruction: annotations, never what decides a pass."""
 
 
@@ -2092,6 +2195,90 @@ def _voice_items(task: TaskEvidence) -> list[EvidenceItem]:
     return items
 
 
+_DDK_ANNOTATIONS = (
+    ("ddk_syllable_rate_hz", "syllable_rate_hz", "Hz"),
+    ("ddk_cycle_rate_hz", "cycle_rate_hz", "Hz"),
+    ("ddk_period_cv", "period_cv", None),
+    ("ddk_period_trend_s_per_step", "period_trend_s_per_step", "s"),
+    ("ddk_train_fraction", "train_fraction", None),
+    ("ddk_realised_mass", "realised_mass", None),
+)
+"""The syllable task's annotations: evidence item name, the reading's annotation key, the unit."""
+
+
+def _ddk_items(task: TaskEvidence) -> list[EvidenceItem]:
+    """A syllable-repetition family's readings, as evidence items.
+
+    Args:
+        task: The task evidence the fold read.
+
+    Returns:
+        The task layer's comparisons (an event over the floor, clear events, identity), the events
+        against the instruction, and the rates, regularity, train fraction and per-position mass as
+        annotations.
+    """
+    reading = task.ddk_reading
+    inputs = dict(reading.get("inputs") or {})
+    notes = dict(reading.get("annotations") or {})
+    floor_db, low = inputs.get("floor_db"), inputs.get("snr_low_db")
+    standing = bool(inputs.get("standing_n"))
+    items = [
+        item(
+            "ddk_event_db_over_floor",
+            floor_db,
+            PASS if standing else DISCARD,
+            unit="dB",
+            comparison=">=",
+            threshold=low,
+        )
+    ]
+    if not standing:
+        return items
+    identity = inputs.get("identity")
+    absent_max, identity_min = inputs.get("identity_absent_max"), inputs.get("identity_min")
+    other = identity is not None and absent_max is not None and identity < absent_max
+    ambiguous = identity is not None and identity_min is not None and identity < identity_min
+    items.append(
+        item(
+            "ddk_identity",
+            identity,
+            DISCARD if other else REVIEW if ambiguous else PASS,
+            comparison=">=",
+            threshold=identity_min if not other else absent_max,
+        )
+    )
+    if other:
+        return items
+    clear_needed = inputs.get("events_min")
+    clear = inputs.get("clear_free_n")
+    items.append(
+        item(
+            "ddk_clear_events",
+            clear,
+            PASS if clear is not None and clear_needed is not None and clear >= clear_needed else REVIEW,
+            unit=f"{task.ddk_mode}s",
+            comparison=">=",
+            threshold=clear_needed,
+        )
+    )
+    found, required = notes.get("events_n"), notes.get("required_count")
+    if found is not None:
+        items.append(
+            item(
+                "ddk_events_against_instructed" if required is not None else "ddk_events_found",
+                found,
+                PASS if required is not None and found >= required else ANNOTATION,
+                unit=f"{task.ddk_mode}s",
+                comparison=">=" if required is not None else None,
+                threshold=required,
+            )
+        )
+    for name, key, unit in _DDK_ANNOTATIONS:
+        if notes.get(key) is not None:
+            items.append(item(name, notes.get(key), ANNOTATION, unit=unit))
+    return items
+
+
 def _task_items(task: TaskEvidence) -> list[EvidenceItem]:
     """The task family's readings, as evidence items, before decisiveness is marked.
 
@@ -2108,6 +2295,8 @@ def _task_items(task: TaskEvidence) -> list[EvidenceItem]:
         items.extend(_cough_items(task))
     if task.voice_mode is not None and task.voice_found is not None:
         items.extend(_voice_items(task))
+    if task.ddk_mode is not None and task.ddk_decision is not None:
+        items.extend(_ddk_items(task))
     items.extend(_join_items(task.quality))
     return items
 
@@ -2362,6 +2551,9 @@ def fold_file_verdict(
     voice_decides = task_evidence.voice_mode is not None and task_evidence.voice_found is not None
     if voice_decides and _VOICE in findings:
         findings[_VOICE] = KindState.PRESENT.value if task_evidence.voice_found else KindState.ABSENT.value
+    ddk_decides = task_evidence.ddk_mode is not None and task_evidence.ddk_decision is not None
+    if ddk_decides and _SPEECH in findings:
+        findings[_SPEECH] = KindState.PRESENT.value if ddk_present(task_evidence) else KindState.ABSENT.value
     agreement = {branch: _agreement(routes[branch], branch in by_branch, findings[branch]) for branch in branches_seen}
     hints = (
         {}
@@ -2419,7 +2611,9 @@ def fold_file_verdict(
         and ran.get(_SPEECH) is RunState.COMPLETED
         and routes.get(_SPEECH) == ROUTED
     ):
-        flag(_SPEECH, NO_LEXICAL_ITEM_PRODUCED, KEY_NO_LEXICAL_ITEM)
+        (annotate if task_evidence.ddk_mode is not None else flag)(
+            _SPEECH, NO_LEXICAL_ITEM_PRODUCED, KEY_NO_LEXICAL_ITEM
+        )
     annotation = dict(llm_redaction or {})
     deciding = deciding_reading(annotation, agreed_redactions, rules.condition_categories)
     if rules.llm_redaction_flags and _reviewer_found_residue(deciding):
@@ -2507,8 +2701,10 @@ def fold_file_verdict(
         if g.get("passed") == "UNDETERMINED" and g.get("reason") in ("absent_not_computed", "instrument_absent")
     )
     measure_mode = task_evidence.breath_mode or task_evidence.cough_mode
-    measure_decides_gate_node = (measure_mode is not None and gate_record.get("node") == _AIRWAY) or (
-        task_evidence.voice_mode is not None and gate_record.get("node") == _VOICE
+    measure_decides_gate_node = (
+        (measure_mode is not None and gate_record.get("node") == _AIRWAY)
+        or (task_evidence.voice_mode is not None and gate_record.get("node") == _VOICE)
+        or (task_evidence.ddk_mode is not None and gate_record.get("node") == _SPEECH)
     )
     if uncomputed and rules.uncomputed_reading_flags and not measure_decides_gate_node:
         flag(
@@ -2518,7 +2714,9 @@ def fold_file_verdict(
         )
     for name, report in reports.items():
         measure_decides = (
-            (measure_mode is not None and name == _AIRWAY) or (task_evidence.voice_mode is not None and name == _VOICE)
+            (measure_mode is not None and name == _AIRWAY)
+            or (task_evidence.voice_mode is not None and name == _VOICE)
+            or (task_evidence.ddk_mode is not None and name == _SPEECH)
         ) and report.conformance_of == TASK
         if measure_decides:
             if report.deviations and rules.deviation_flags:
@@ -2591,6 +2789,18 @@ def fold_file_verdict(
             KEY_VOICE_REVIEW_LOW_CONFIDENCE,
             voice_kind,
         )
+    speech_kind = by_branch[_SPEECH].kind if _SPEECH in by_branch else None
+    ddk_short = ddk_shortfall(task_evidence)
+    if ddk_short is not None:
+        annotate(_SPEECH, f"{TASK_MISMATCH}: {ddk_short}", KEY_TASK_MISMATCH, speech_kind)
+    if task_evidence.ddk_decision == "review":
+        identity = task_evidence.ddk_reading.get("why") == "identity"
+        flag(
+            _SPEECH,
+            f"{DDK_REVIEW_IDENTITY if identity else DDK_REVIEW_WEAK_EVENTS}: {ddk_review_reading(task_evidence)}",
+            KEY_DDK_REVIEW_IDENTITY if identity else KEY_DDK_REVIEW_WEAK_EVENTS,
+            speech_kind,
+        )
     if task_evidence.voice_outside_speech:
         said = [word for run in task_evidence.voice_outside_speech for word in run.get("words") or ()]
         annotate(
@@ -2619,7 +2829,7 @@ def fold_file_verdict(
                 )
             )
         ):
-            note = annotate if voice_decides and branch == _VOICE else flag
+            note = annotate if (voice_decides and branch == _VOICE) or (ddk_decides and branch == _SPEECH) else flag
             note(
                 branch,
                 f"mismatch: routing {routes[branch]} {branch}, it found it",
@@ -2699,7 +2909,11 @@ def fold_file_verdict(
         triage = Triage.REVIEW
     elif no_event and not contested:
         triage = Triage.DISCARD
-        ground = EVENT_ABSENT_GROUNDS[str(task_evidence.required_event)]
+        ground = (
+            ddk_absent_ground(task_evidence)
+            if task_evidence.ddk_mode is not None
+            else EVENT_ABSENT_GROUNDS[str(task_evidence.required_event)]
+        )
     elif not contested and declared_task_absent(
         by_branch, findings, task_evidence, (redaction or RedactionEvidence()).lexical_words_n
     ):
@@ -2804,6 +3018,7 @@ def fold_file_verdict(
         cough_pattern=dict(task_evidence.cough_reading),
         quality_join=dict(task_evidence.quality),
         voice_phonation=dict(task_evidence.voice_reading),
+        ddk_task=dict(task_evidence.ddk_reading),
     )
 
 

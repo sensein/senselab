@@ -40,6 +40,8 @@ keys:                  # exact verdict ground key -> reason
   no_breath_captured: no_task_captured
   no_cough_captured: no_task_captured
   no_phonation_captured: no_task_captured
+  no_syllable_train_captured: no_task_captured
+  syllable_train_not_target: task_not_found
   declared_task_absent: task_not_found
   preprocess_errored: not_measured
   routing_errored: not_measured
@@ -59,6 +61,8 @@ keys:                  # exact verdict ground key -> reason
   breath_review_low_confidence: weak_events
   cough_review_low_confidence: weak_events
   voice_review_low_confidence: weak_events
+  ddk_review_weak_events: weak_events
+  ddk_review_identity: task_not_conforming
   discard_contested: weak_events
   task_mismatch: task_not_conforming
   instructions_spoken: task_not_conforming
