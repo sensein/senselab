@@ -1049,12 +1049,13 @@ reading in the haystack the finding was read off (`finding_keys`): the buttercup
 
 - **Kept masked.** Where the fold keeps a word masked as a name -- a finding of a name family
   (`PERSON`, `LOCATION`, `ORGANIZATION`), a person or place lock, or a reviewer mask of a name family --
-  every other timed word carrying one of its tokens is masked too, unless it is task content (the
-  declared stimulus, lexicon or texts, or the task's events below), a name a human approved, a condition
-  the reviewer listed, or released by kind. A word no finding covered gets a mask of its own, source
-  `propagated`, labelled with the source word's family. Only content-word tokens propagate
-  (`residue.is_content_word`), so a name homograph of a function word ("Will") masks only where a
-  detector put it.
+  every other occurrence is masked too, unless that word is task content (the declared stimulus, lexicon
+  or texts, or the task's events below), a name a human approved, a condition the reviewer listed, or
+  released by kind. Adjacent kept name words are one name and match as a run: "New York" masks a later
+  "new york" and never the "new" of "a new car". A name propagates only where one of its tokens is a
+  content word (`residue.is_content_word`), so a name homograph of a function word ("Will") masks only
+  where a detector put it. A word no finding covered gets a mask of its own, source `propagated`,
+  labelled with the source word's family.
 - **Released.** A reviewer `release` entry, with or without a relabel or a place reason, releases every
   finding-covered word carrying the quoted token, in any recogniser's reading, unless a `redact` entry
   quotes that surface. This replaces the earlier same-surface-same-family rule.
