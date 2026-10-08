@@ -171,8 +171,31 @@ test('the page plays the recording and enhanced streams, never the task cuts', (
   const streams = { recording: '/a.wav', enhanced: 'e.flac', plain: 'p.flac', redacted: 'r.flac', released: 'x.flac',
     task_plain: 'tp.flac', task_enhanced: 'te.flac' }
   assert.deepEqual(R.audioTracks({ streams }).map((t) => t.name), ['recording', 'enhanced', 'released'])
-  assert.deepEqual(R.audioTracks({ streams, speech: {} }).map((t) => [t.name, t.timeline]),
+  assert.deepEqual(R.audioTracks({ streams, speech: {}, release: 'redacted' }).map((t) => [t.name, t.timeline]),
     [['recording', true], ['enhanced', true], ['redacted', true], ['released', false]])
+})
+
+test('the redacted stream is a track only where the release is the redacted copy', () => {
+  const streams = { recording: '/a.wav', enhanced: 'e.flac', redacted: 'r.flac' }
+  const shown = (release) => R.audioTracks({ streams, speech: {}, release })
+    .filter((t) => t.name === 'redacted').map((t) => [t.timeline, t.collapsed])
+  assert.deepEqual(shown('redacted'), [[true, false]])
+  for (const release of ['as_is', 'withheld', null, undefined]) assert.deepEqual(shown(release), [[false, true]])
+  assert.equal(R.NOT_RELEASED_REDACTION, 'redaction considered, not released')
+  assert.ok(R.redactionReleased('redacted'))
+  assert.ok(!R.redactionReleased('as_is'))
+})
+
+test('a PII mark on a recording not released redacted says it was detected and not applied, and why', () => {
+  const ground = 'every word REDACT masked is the task\'s own content'
+  assert.equal(R.notAppliedTitle('as_is', ground), 'detected, not applied — release as_is: ' + ground)
+  assert.equal(R.notAppliedTitle(null, null), 'detected, not applied — release not assessed')
+  const marks = [{ dataset: {} }, { dataset: {} }]
+  R.markNotApplied({ querySelectorAll: (q) => (q === 'mark.pii' ? marks : []) }, 'as_is', ground)
+  for (const m of marks) {
+    assert.equal(m.title, R.notAppliedTitle('as_is', ground))
+    assert.equal(m.dataset.applied, '0')
+  }
 })
 
 // A stand-in <audio>: `seekable` says whether setting currentTime lands there (a server answering byte

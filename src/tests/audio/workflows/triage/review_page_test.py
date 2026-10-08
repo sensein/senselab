@@ -153,6 +153,24 @@ def test_a_record_carries_decision_evidence_streams_and_a_spectrogram(tmp_path: 
     assert record["speech"] is None
 
 
+def test_a_redacted_stream_rides_with_the_release_that_decides_whether_it_is_shown(tmp_path: Path) -> None:
+    """REDACT's copy is listed beside the release; the page plays it only under a redacted release."""
+    run_root = _run_root(tmp_path)
+    store = run_root / "run" / "store.jsonl"
+    redacted = {
+        "record": "entity",
+        "id": "red",
+        "prov_type": "stream",
+        "extent": [0.0, 4.0],
+        "attributes": {"name": "redacted", "path": "streams/redacted.flac"},
+    }
+    store.write_text(store.read_text() + json.dumps(redacted) + "\n")
+    record = review_page.review_record(run_root, tmp_path)
+    assert record is not None
+    assert record["streams"]["redacted"].endswith("run/streams/redacted.flac")
+    assert record["release"] == "as_is"
+
+
 def test_the_page_inlines_its_index_and_writes_side_files(tmp_path: Path) -> None:
     """index.html carries the index and every part; the side files hand their records to the page."""
     record = review_page.review_record(_run_root(tmp_path / "corpus"), tmp_path / "corpus")
