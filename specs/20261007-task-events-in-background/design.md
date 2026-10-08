@@ -763,3 +763,125 @@ page code is `src/senselab/audio/workflows/triage/review_page/`.
   are speech tasks carrying a transcript view). Scaled to 62,550 recordings: an index of about
   21 MB and about 300 MB of side files in 126 files of about 2.4 MB, one loaded per block opened.
   Extract ran at about 7 recordings a second on four workers.
+
+## DDK task layer (built)
+
+Code: `ddk_task.py`, parameters `data/task_events.yaml` (`ddk:`), wired through `nodes/ddk.py:align_ddk`
+(SPEECH), `nodes/verdict.py:_task_evidence` and `vocabulary._ddk_items`. The ten
+`SYLLABLE_REPETITION` families stay SPEECH's; SPEECH writes one `ddk_task_reading` measurement that
+VERDICT decides on, as AIRWAY's breath and cough readings and VOICE's phonation reading are decided.
+
+### What the old instrument did (investigation at 8076fb5c)
+
+- **The decision read one number.** `repetitions_min` ≥ 1, plus `instructed_count_min_fraction` 0.5
+  for the five v1 families with an instructed count of 10. The five v2 families (5 s, no count)
+  passed on "one repetition" alone. Rate, cycle period, dispersion, realised mass and train fraction
+  were measured in `decode_evidence` and decided nothing.
+- **The posteriorgram decode located the cycles.** It was a strict ordered cyclic Viterbi with no skip
+  arcs, counting only runs that began at template position 0. That drops leading partial cycles and
+  halves counts by borrowing phones across bursts. On sub-06d289b0's v2 buttercup (6 bursts about
+  0.65 s apart, 0.015–3.655 s) it found 2 repetitions over 1.15–3.79 s.
+- **In r17:** 3,301 DDK passes rested on "≥1 repetition" only; about 414 recordings were decided by
+  non-performance grounds (route mismatch 158 and conformance 133 among the reviews, dominant-speaker
+  share 99); no rate or regularity gate existed.
+
+### Design
+
+- **Events (generic regions, task test).** Syllable nuclei are read inside BACKGROUND's activity
+  regions: peaks of the level over the floor, lowered on frames the pitch track calls unvoiced, standing
+  `nucleus_prominence_db` over the troughs either side and `nucleus_spacing_s` apart. A syllable runs
+  trough to trough; one outside `[syllable_min_s, syllable_max_s]` is not one (a held vowel is another
+  activity). Single-syllable families (pa, ta, ka, puh, tuh, kuh) take the syllables as events.
+  Sequence families (pataka, puhtuhkuh, buttercup) group them into cycles: each region's run is split
+  into `round(duration / period)` cycles at the syllable boundaries nearest equal shares, so a pause
+  always closes a cycle and a leading or trailing partial cycle stands as an event. The period is the
+  cycle-band modulation peak (`cycle_band_hz`, the C3 rhythm) where it lies within `rhythm_agreement` of
+  the template's syllable count times the median syllable interval, else that product. Impulses are
+  never events (`impulse_explained`), and only an impulse outside every syllable run entangles one: a
+  stop release is impulsive, so an impulse inside the run is the task's own.
+- **Identity, not location.** The posteriorgram scores each candidate event against the template with a
+  local alignment: a silence filler before and after, the positions in order, entry and exit at any
+  position, and forward jumps that delete positions at `skip_log` each. Only silence is filler, so a
+  phoneme outside the template inside the event is charged to a position (a substitution) and keeps
+  its low mass. Per position it keeps the realised mass (mean class mass over the frames charged) and
+  the peak; the event's identity is the mean of the peaks, a deleted position counting 0.
+- **Extent.** The task events are the events standing over the floor whose identity reaches
+  `identity_absent_max`, in their dominant cluster (`gap_s`). The extent is the first to the last, with
+  nothing added. ASR words are an annotation only: the recogniser finding no lexical word, and routing
+  declining SPEECH, are annotations on a syllable task.
+- **Decision (C5, one rule).**
+  - absent: no event `snr_low_db` over the floor (`no_syllable_train_captured`, reason
+    `no_task_captured`), or the standing events' median identity under `identity_absent_max`
+    (`syllable_train_not_target`, reason `task_not_found`);
+  - review: identity in `[identity_absent_max, identity_min)` (`ddk_review_identity`,
+    `task_not_conforming`); fewer than `events_min` events clear of their local background by
+    `snr_high_db` (`weak`), or the clear ones all entangled (`ddk_review_weak_events`, `weak_events`).
+    QUALITY's join reads the syllable events for stream agreement and in-span interference, as for
+    every family (`streams.decides` is still empty);
+  - present: otherwise.
+- **Annotations, never deciding:** the count against the instruction (`task_mismatch` where short),
+  syllable and cycle rate, the onset intervals' coefficient of variation and trend, the train fraction
+  and the per-position realised mass. `repetitions_min` and `instructed_count_min_fraction` are retired
+  as gates for the syllable groups (`CONFORMANCE_GATES` is empty for them, so their conformance answers
+  `UNDETERMINED` and the reading decides). The cyclic decode, its measurements
+  (`ddk_repetition_count_from_ppg_decode`, `ddk_syllable_rate_from_ppg_decode_hz`,
+  `ddk_ppg_period_dispersion`, `ddk_repetitions_found`) and `branch.burst_window_ms` are gone.
+- **Evidence items** (`data/decision_evidence.yaml`, group `ddk`): `ddk_event_db_over_floor`,
+  `ddk_identity`, `ddk_clear_events` decide; `ddk_events_against_instructed`, the rates, regularity,
+  train fraction and realised mass are annotations.
+
+### Unfitted
+
+There are no owner DDK labels yet. Initial values come from the current data: a read of the task
+layer over 951 r17 DDK recordings (479 random passes, 120 random reviews, the 282 v2 passes with ≤2
+decoded repetitions or a decoded rate under 3 Hz, the 69 discards and the buttercup case; ORCD
+`ddk_20261007/explore_e2`).
+
+| Parameter | Value | From |
+|---|---|---|
+| `identity_min` | 0.30 | 3 of 479 random passes fall under it (1st percentile 0.36) |
+| `identity_absent_max` | 0.15 | no random pass falls under it; 17 of the 32 r17 discards that hold a standing event do |
+| `events_min` | 2 cycles, 3 syllables | every random pass holds at least 4 clear events (1st percentile) |
+| `gap_s` | 2.0 s | none |
+| `skip_log` | −1 | none |
+| `nucleus_prominence_db`, `unvoiced_db` | 6 dB | none |
+
+Of the identity measures read, the mean realised mass separated random passes from r17 discards less
+well (1st percentile of passes 0.20 against a discard median of 0.11) than the mean peak (0.36 against
+0.14). Filler explaining every non-template phoneme let the alignment delete whole events of a
+substituted syllable as silence; filler restricted to silence keeps the substitution visible.
+
+### Validation (replayed from BACKGROUND at 1ed6b3c9)
+
+ORCD `ddk_20261007`, `rows_1ed6b3c9`: 149 r17 DDK recordings, each copied and replayed from
+BACKGROUND with its BIDS session's floor (own floors of 4,274 session members), no errors. The groups:
+the buttercup case; 50 of the 282 r17 v2 passes with ≤2 decoded repetitions or a decoded rate under
+3 Hz (seeded random); all 69 r17 DDK discards; 29 random r17 DDK passes.
+
+| Group | n | r17 → new verdict |
+|---|---|---|
+| case | 1 | pass → pass |
+| v2 passes, ≤2 reps or <3 Hz | 50 | 39 pass, 7 review (`ddk_review_identity`), 4 discard (`syllable_train_not_target`) |
+| r17 discards | 69 | 55 stay discarded, 7 → review (identity), 7 → pass |
+| random r17 passes | 29 | 29 pass |
+
+| Group | r17 reps (median) | new events (median) | r17 decoded rate | new syllable rate | extent r17 → new (median s) |
+|---|---|---|---|---|---|
+| v2 low-rep / low-rate passes | 5 | 10 | 2.31 Hz | 4.0 Hz | 3.48 → 4.05 |
+| r17 discards | 0 | 0 | 1.73 Hz (12 read) | 4.08 Hz (25 read) | 1.80 → 2.64 |
+| random r17 passes | 10 | 12 | 4.28 Hz | 4.54 Hz | 4.14 → 4.25 |
+
+- The v2 passes with ≤2 decoded repetitions fall from 13 of 50 to 3 of 50 with ≤2 task events; the
+  decoded rates under 3 Hz were the decode's borrowing, not slow speech.
+- The 55 discards that stay: 36 `no_task_captured` (no syllable over the floor, or nothing captured),
+  11 `task_not_found` (a train that is not the target), 8 `task_too_short`.
+- The 7 discards that now pass are v1 pa/ka trains whose decode read 1–4 repetitions against the ten
+  asked and which r17 discarded as `declared_task_absent` after `conformance:SPEECH`; the task layer
+  reads 6–16 events with identity 0.31–0.55.
+- Every new review is the identity bound. Five of the seven among the v2 passes are v2-kuh: the velar
+  class reads lower on the posteriorgram (random passes: v2-kuh median identity 0.48 against 0.68
+  for pa, ta and pataka), so a per-family identity bound is the first thing labels should test.
+- **The case, sub-06d289b0 v2-buttercup:** 12 syllables in 6 runs, 6 cycle events (two syllables each:
+  "butter" is flapped and has no closure), 0.015–0.315, 0.505–0.965, 1.135–1.615, 1.835–2.325,
+  2.535–2.975, 3.185–3.655 s; extent 0.015–3.655 s (r17's decode: 2 repetitions over 1.152–3.786 s);
+  cycle rate 1.54 Hz, period CV 0.14; identity 0.307, the rhotic position never realised. Present.
