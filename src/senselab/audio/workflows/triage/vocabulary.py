@@ -177,8 +177,8 @@ REVIEWER_CLEARED_UNMASKED = (
     "clean and proposed nothing to hide, so the original is released"
 )
 TASK_CONTENT_UNMASKED = (
-    "every word REDACT masked is the task's own content -- its declared words or its events -- so no mask "
-    "stands and the original is released"
+    "every finding REDACT masked lies on the non-lexical task's own events -- a syllable train, a breath, a "
+    "cough or a held vowel -- so no mask stands and the original is released"
 )
 
 RELEASE_WITHOUT_REDACTION_GROUNDS = (
@@ -300,7 +300,7 @@ class RedactionEvidence:
         reviewer_requested_n: How many reviewer ``redact`` entries propose hiding more than the masks hide.
         propagated_masked_n: How many words stay masked because the same token is a name kept masked
             elsewhere in the recording.
-        task_content_only: Whether every finding located on words covered only the task's own content.
+        task_content_only: Whether every finding located on words lay on a non-lexical task's own events.
     """
 
     lexical_words_n: int | None = None
