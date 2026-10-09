@@ -699,8 +699,8 @@ _ROUTING = "routing"
 
 BAD_MAP_VALUES = "routing.hint_branch_map names a branch this graph does not route to"
 
-UNEXPLAINED_CONTENT = (
-    "no branch routed and the recording was not measurably empty; the ruleset could not account for what is in it"
+NO_BRANCH_MEASURED = (
+    "no branch routed, no branch owning the declared task measured it, and the recording was not measurably empty"
 )
 
 UNREADABLE_EMPTINESS = (
@@ -808,7 +808,7 @@ KEY_PREPROCESS_ERRORED = "preprocess_errored"
 KEY_ROUTING_ERRORED = "routing_errored"
 KEY_BAD_HINT_MAP = "config_bad_hint_map"
 KEY_DECLARATION_UNREAD = "declaration_unread"
-KEY_ROUTE_UNEXPLAINED = "route_unexplained"
+KEY_NO_BRANCH_MEASURED = "no_branch_measured"
 KEY_ROUTE_UNREADABLE = "route_unreadable"
 KEY_CRITICAL_ABSENCE = "critical_absence"
 KEY_TAXONOMY_NO_CLASSIFIER = "taxonomy_no_classifier"
@@ -849,7 +849,7 @@ GROUND_KEYS = (
     KEY_ROUTING_ERRORED,
     KEY_BAD_HINT_MAP,
     KEY_DECLARATION_UNREAD,
-    KEY_ROUTE_UNEXPLAINED,
+    KEY_NO_BRANCH_MEASURED,
     KEY_ROUTE_UNREADABLE,
     KEY_CRITICAL_ABSENCE,
     KEY_TAXONOMY_NO_CLASSIFIER,
@@ -914,7 +914,7 @@ OPERATIONAL_GROUND_KEYS = frozenset(
         KEY_ROUTING_ERRORED,
         KEY_BAD_HINT_MAP,
         KEY_DECLARATION_UNREAD,
-        KEY_ROUTE_UNEXPLAINED,
+        KEY_NO_BRANCH_MEASURED,
         KEY_ROUTE_UNREADABLE,
         KEY_CRITICAL_ABSENCE,
         KEY_TAXONOMY_NO_CLASSIFIER,
@@ -2673,8 +2673,15 @@ def fold_file_verdict(
         flag(_ROUTING, f"{BAD_MAP_VALUES}: {named}", KEY_BAD_HINT_MAP)
     if hint_claims is None:
         flag(_VERDICT, UNREAD_DECLARATION, KEY_DECLARATION_UNREAD)
-    if route_state == UNEXPLAINED and not (cough_decides and cough_present(task_evidence)):
-        flag(_ROUTING, UNEXPLAINED_CONTENT, KEY_ROUTE_UNEXPLAINED)
+    owner_measured = bool(task_evidence.owning_branches) and (
+        any(branch in by_branch for branch in task_evidence.owning_branches)
+        or breath_decides
+        or cough_decides
+        or voice_decides
+        or ddk_decides
+    )
+    if route_state == UNEXPLAINED and not owner_measured:
+        flag(_ROUTING, NO_BRANCH_MEASURED, KEY_NO_BRANCH_MEASURED)
     if route_state == UNREADABLE:
         flag(_ROUTING, UNREADABLE_EMPTINESS, KEY_ROUTE_UNREADABLE)
     absences = {branch: dict(gates) for branch, gates in (critical_absences or {}).items()}

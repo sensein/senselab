@@ -1262,3 +1262,40 @@ path).
 - **The release joins from the index.** The side file never carried `release`, so before 06d88d06 every
   recording read as not released redacted: the redacted track was folded away and every PII mark said
   "detected, not applied".
+
+## An unexplained route is no ground when the owner measured (owner, 2026-10-09)
+
+`route_unexplained` fired whenever the routing ruleset's content gates routed no branch and the
+recording was not measurably empty. It was operational, so it set `run_status: incomplete` and the
+verdict to review under `not_measured`, even where the branch owning the declared task ran and
+reported. Example: sub-00787e6a glides-high-to-low, where VOICE measured a 0.015–3.195 s extent and the
+recording carried `route_mismatch:VOICE`. The owner: "make route_unexplained an annotation… but it's
+also not a helpful annotation, since all audios go through some route."
+
+### What changed
+
+- **Owner measured: nothing.** Where the declared family names owning branches and one of them left a
+  branch report, or the family's own measure (breath, cough, phonation, syllable) decided, the empty
+  route raises neither a ground nor an annotation. The recording is decided on the owner's evidence:
+  found, absent (`declared_task_absent`, `no_*_captured`) or `route_mismatch:<owner>`, as any other.
+  This subsumes the earlier cough-only exception (45f1c7ec).
+- **No owner measured: `no_branch_measured`.** With no declared family that a branch owns, or an owner
+  that left no report, the recording is still owed a measurement. The key is renamed outright from
+  `route_unexplained` (no alias) and maps to `not_measured` in `data/decision_reasons.yaml`. The
+  routing state `unexplained` itself is unchanged; it is the ruleset's reading, still tallied by
+  `scripts/score_taxonomy_ruleset.py`.
+
+### r18b dry estimate (`triage_decisions.parquet`, 62,550 recordings)
+
+| | recordings |
+|---|---:|
+| carry `route_unexplained` (all `review`) | 284 |
+| it is their only operational (`missing`) key | 282 |
+| of those, declared family has an owning branch | 282 |
+| of those, the owner left a sign of reporting: a task extent (272), `route_mismatch:<owner>` (192) or another reason (98) | 282 |
+| of those, `not_measured` is their only reason, so the verdict is decided afresh on the owner's evidence | 184 |
+| of those, another reason keeps them in review (`task_not_conforming`, `interference_in_task`, `other_speaker`, `weak_events`) | 98 |
+
+The parquet carries no branch-report list, so "owner reported" is read from those three signs; every
+one of the 282 shows at least one. The two remaining carriers also hold `owning_branch_input_absent`
+and stay incomplete under it.
