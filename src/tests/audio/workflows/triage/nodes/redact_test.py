@@ -1939,6 +1939,7 @@ class TestTheStimulusAccountsForACandidate:
         result = verdict_module.verdict(store, None, redact_config, run_dir=tmp_path)
         folded = result.file_verdict
         assert folded.release is not None
+        assert folded.release is not None
         assert (folded.release.value, folded.release_ground) == ("as_is", FINDINGS_ARE_TASK_CONTENT)
         ledger = store.get_entity(result.ledger_entity_id)
         assert ledger.attributes["release_ground"] == FINDINGS_ARE_TASK_CONTENT
@@ -3531,6 +3532,7 @@ class TestTheTaskSOwnEventsAreNeverMasked:
         ]
         assert exempt.attributes["events_n"] == 2
         folded = verdict_module.verdict(store, None, redact_config, run_dir=tmp_path).file_verdict
+        assert folded.release is not None
         assert (folded.release.value, folded.release_ground) == ("as_is", FINDINGS_ARE_TASK_CONTENT)
 
     def test_a_re_fold_releases_the_original_over_a_mask_redact_already_planned(
@@ -3546,6 +3548,7 @@ class TestTheTaskSOwnEventsAreNeverMasked:
         assert plan.final == [] and plan.task_content_only
         assert plan.task_event_ids == tuple(live_entities(store, "pii")[0].attributes["word_ids"])
         folded = verdict_module.verdict(store, None, redact_config, run_dir=tmp_path).file_verdict
+        assert folded.release is not None
         assert (folded.release.value, folded.release_ground) == ("as_is", TASK_CONTENT_UNMASKED)
 
     def test_the_token_read_on_the_events_is_released_off_them_too(
