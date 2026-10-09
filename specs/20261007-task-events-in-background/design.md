@@ -1137,3 +1137,46 @@ The release ground moves on 438: 426 to `task_content_unmasked` (347 of them thr
 the rest findings on declared task words that were `no_content_masked` or `reviewer_unmasked_all`
 before), 9 to `name_masks_propagated`. The buttercup recording stays `as_is`, now on
 `task_content_unmasked`, with no mask and `task_event_words_n` 1.
+
+## Reviewer precedence, and the task-content ground narrowed (owner, 2026-10-09)
+
+### What the reviewer was given (audit at 34189f8f)
+
+- **(a) Task information -- given where declared.** `nodes/review.py:186` `task_context` sends the family
+  (`:207`), the instructions (`:213`) and the stimulus as `asked_to_say` (`:215`); `redaction_review.py:318`
+  `_compose` writes them as `TASK:` (`:338`), `INSTRUCTIONS GIVEN TO THE PARTICIPANT:` (`:344`) and
+  `STIMULUS THE PARTICIPANT WAS GIVEN TO SAY OR RECALL:` (`:346`). A recording whose hint declares no
+  instructions or stimulus sends neither.
+- **(b) The consensus transcript -- only its lexical residue.** `review.py:682` reads
+  `redact.py:3215` `transcript_texts`, which renders the residue words SPEECH scanned (`:3229`) as their
+  consensus surface (`:3231`, `_word_record` `:432`); the words the residue left out -- non-lexical words,
+  the task's own stimulus -- are never shown, and a variant shows its first variant only.
+- **(c) Both recognisers' readings and their variance -- not given.** No reading, outcome or per-model
+  word reaches the prompt.
+- **Recorded inputs.** The annotation stores `task_context` (`review.py:788`), `read_redacted` and
+  `prompt_version` 9 (`:777`); the rounds store `prompt_version` only. A store therefore says whether
+  (a) was given, and by its prompt version that (c) was not; no reading records (b) or (c) as such.
+
+### What changed
+
+- **The reviewer now reads every column.** `_compose` adds a `CONSENSUS COLUMNS` block -- every consensus
+  word, residue or not, with its outcome and each recogniser's word, `-` where one read none; an agreement
+  whose readings all write the consensus word is one short line. The ORIGINAL stays the residue, so every
+  quote still places on the words the detectors read. `review_context` (`review.py`) is `task_context` plus
+  the columns; the result-cache key carries them. Prompt version 10.
+- **Each reading records its inputs.** The annotation and every round carry `review_inputs` (version 1):
+  `task` (a declared family with its instruction or stimulus), `consensus_transcript`, `asr_readings`
+  (two or more recognisers), `recognisers`, `columns_n`, `prompt_version`.
+  `redaction_review.review_inputs_complete` is true only for version 1 or later with all three set.
+- **Precedence.** In `mask_plan`, where the reading's inputs are complete, a reviewer `release` that frees
+  any occurrence of a token outranks a name kept masked: the person or place lock is lifted at every
+  finding-covered occurrence of that token, and a kept name no longer spreads a mask onto a released word.
+  Otherwise the kept name wins, as at 34189f8f. Task content still outranks both; the date, age and state
+  locks are untouched. A reviewer `redact` entry on the same surface is the reviewer's own word on the
+  token and still stops the release spreading, so in the Prince card (release "the Prince danced",
+  redact "Prince smiled") the quoted Prince is released and the other two stay masked; without complete
+  inputs all three are masked. The ledger carries `reviewer_precedence`. Policy v11.
+- **`task_content_unmasked` is the events' alone.** It now needs every located finding to touch the
+  non-lexical task's events (DDK cycles, breaths, coughs, phonation holds; `task_content.py`) and to
+  keep no word once the task's own words are dropped. A lexical task whose findings were all on declared or stimulus words is released
+  on `no_content_masked` or `reviewer_unmasked_all` again. `data/task_content.yaml` v2.
