@@ -1234,3 +1234,31 @@ median 15.0 s and mean 17 s a call on H100, 266 output tokens on average. A leas
 `generation_s = -0.42 + 0.00056 * input + 0.0602 * output`: the longer prompt adds ~0.3 s a call, so the
 set predicts 35.5 GPU-hours of generation (34.8 stored), about 40-45 H100-hours with loads and the
 re-fold, at the v9 array's 16.3 s a row wall clock.
+
+## Review page: Parquet side files and a compressed index (2026-10-09)
+
+Owner-approved. Measured on the full r18b page (62,550 recordings, 126 side files, extract version 2):
+
+| | before (JSON) | after |
+|---|---|---|
+| side files | 509.4 MB, 8,144 B per recording | Parquet 63.7 MB, 1,018 B per recording; `.js` wrappers 84.9 MB, 1,357 B |
+| `index.html` | 29.95 MB | 3.72 MB |
+| page total | 539 MB | 152 MB (Parquet, wrappers, index, 66 kB reader) |
+
+Of the JSON side files, speech was 49% (own transcripts, the pre-rendered HTML and the consensus words
+about equally), evidence 22% (80 distinct item/unit/comparison/threshold entries over 4,797 items in a
+399-record sample, hence the shard dictionary), and stream paths 13% (the run directory repeated in every
+path).
+
+- **Transcript markup written in the page.** The HTML is no longer stored; the page writes it from the
+  word entries and marks. Over all 41,207 speech recordings the page's HTML equals the extract's
+  byte for byte.
+- **Index: zstd JSON, not Parquet.** The same index as a Parquet table (one column per evidence item)
+  was 3.36 MB at zstd 19; the JSON index at zstd 19 is 2.65 MB and keeps the index's shape, so it is
+  inlined as `{n, zstd}` and unpacked with the bundled fzstd. First paint over the tunnel was 1.3 s.
+- **Both modes from one set of files.** Served, the page fetches `.parquet`; from `file://`, where
+  `fetch` is refused, it loads the `.js` wrapper (base64, 1.33x). The wrappers are kept beside the
+  Parquet so a copied directory opens without a server.
+- **The release joins from the index.** The side file never carried `release`, so before 06d88d06 every
+  recording read as not released redacted: the redacted track was folded away and every PII mark said
+  "detected, not applied".
