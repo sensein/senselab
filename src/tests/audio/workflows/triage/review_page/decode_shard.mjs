@@ -1,6 +1,7 @@
 // Decode one review-page side file with the vendored reader and the page's own expansion, as the page
 // does when served, and print its records as JSON: node decode_shard.mjs PAGE_DIR NUMBER [wrapper]
-// With "wrapper", read the file:// wrapper's base64 bytes instead of the Parquet file.
+// With "wrapper", read the file:// wrapper's base64 bytes instead of the Parquet file. With NUMBER
+// "index", print the index index.html inlines instead.
 
 import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
@@ -15,6 +16,12 @@ const [page, number, mode] = process.argv.slice(2)
 vm.runInThisContext(readFileSync(join(page, 'vendor', 'hyparquet.js'), 'utf8'))
 const require = createRequire(import.meta.url)
 const R = require(pageScript)
+if (number === 'index') {
+  const html = readFileSync(join(page, 'index.html'), 'utf8')
+  const packed = JSON.parse(/var REVIEW_INDEX_ZSTD = (\{.*?\});<\/script>/s.exec(html)[1])
+  process.stdout.write(JSON.stringify(R.unpackIndex(packed)))
+  process.exit(0)
+}
 const base = join(page, 'data', 'shard-' + String(number).padStart(4, '0'))
 let buffer
 if (mode === 'wrapper') {
