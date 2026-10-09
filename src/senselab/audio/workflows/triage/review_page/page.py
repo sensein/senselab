@@ -2,8 +2,10 @@
 
 The index carries what the Explore and Review tabs filter on (identity, decision, every evidence
 value, a speech task's plain transcript for search). Each side file carries a block of recordings'
-spectrograms, overlays, stream paths, full evidence and transcript view, and is loaded by a script
-tag when a recording in its block is drawn, so the page works opened from ``file://``.
+spectrograms, overlays, stream paths, full evidence and transcript view as Parquet
+(:mod:`~senselab.audio.workflows.triage.review_page.shards`), fetched when the page is served and
+loaded through its script wrapper when the page is opened from ``file://``. The Parquet reader is
+vendored beside the page, so it needs no network.
 """
 
 from __future__ import annotations
@@ -12,14 +14,17 @@ import hashlib
 import html
 import json
 import re
+import shutil
 from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+from senselab.audio.workflows.triage.review_page.shards import parquet_bytes, wrapper_script
 from senselab.audio.workflows.triage.review_page.spectrogram import settings
 
 SOURCE_DIR = Path(__file__).parent
+VENDOR_DIR = SOURCE_DIR / "vendor"
 VIEWER_DIR = SOURCE_DIR.parent / "viewer"
 SHELL = SOURCE_DIR / "shell.html"
 INLINE_PATTERN = re.compile(r"/\*@INLINE:(?P<path>[^@]+)@\*/")
@@ -35,20 +40,6 @@ PARTS = {
 }
 SCALARS = ("participant", "session", "task", "family", "branch", "verdict", "release", "reason", "run_status")
 LISTS = ("reasons", "annotations")
-SHARD_FIELDS = (
-    "stem",
-    "spec",
-    "spec_stream",
-    "overlay",
-    "streams",
-    "figure",
-    "evidence",
-    "speech",
-    "missing",
-    "extent",
-    "commit",
-    "config_hash",
-)
 SHARD_DIR = "data"
 SPEECH_TEXT = re.compile(r"<[^>]+>")
 
@@ -160,20 +151,6 @@ def index_of(
     return index
 
 
-def shard_script(number: int, block: Sequence[Mapping[str, Any]]) -> str:
-    """One side file: a script handing its block of records to the page.
-
-    Args:
-        number: The block's number.
-        block: Its records, in page order.
-
-    Returns:
-        The script text.
-    """
-    body = json.dumps([{k: r.get(k) for k in SHARD_FIELDS} for r in block], separators=(",", ":"), default=str)
-    return f"ReviewPage.shard({number},{_script_safe(body)});\n"
-
-
 def _script_safe(text: str) -> str:
     """JSON made safe to sit inside a script element."""
     return text.replace("</", "<\\/").replace("\u2028", "\\u2028").replace("\u2029", "\\u2029")
@@ -227,18 +204,23 @@ def write_page(
         source_base: The URL route an absolute stream path is appended to.
 
     Returns:
-        The page's id, record count and sizes in bytes.
+        The page's id, record count and sizes in bytes: the page, the Parquet shards and their wrappers.
     """
     rows = ordered(records)
     index = index_of(rows, title=title, audio_base=audio_base, source_base=source_base)
     size = int(index["build"]["shard_size"])
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / SHARD_DIR).mkdir(exist_ok=True)
-    shard_bytes = 0
+    parquet_total = 0
+    wrapper_total = 0
     for number, start in enumerate(range(0, len(rows), size)):
-        path = out_dir / SHARD_DIR / f"shard-{number:04d}.js"
-        path.write_text(shard_script(number, rows[start : start + size]), encoding="utf-8")
-        shard_bytes += path.stat().st_size
+        data = parquet_bytes(rows[start : start + size])
+        (out_dir / SHARD_DIR / f"shard-{number:04d}.parquet").write_bytes(data)
+        wrapper = out_dir / SHARD_DIR / f"shard-{number:04d}.js"
+        wrapper.write_text(wrapper_script(number, data), encoding="ascii")
+        parquet_total += len(data)
+        wrapper_total += wrapper.stat().st_size
+    shutil.copytree(VENDOR_DIR, out_dir / VENDOR_DIR.name, dirs_exist_ok=True)
     page = out_dir / "index.html"
     page.write_text(page_html(index, mark_style), encoding="utf-8")
     return {
@@ -246,5 +228,6 @@ def write_page(
         "recordings": len(rows),
         "shards": (len(rows) + size - 1) // size,
         "index_bytes": page.stat().st_size,
-        "shard_bytes": shard_bytes,
+        "parquet_bytes": parquet_total,
+        "wrapper_bytes": wrapper_total,
     }

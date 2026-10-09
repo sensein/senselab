@@ -37,7 +37,9 @@ def test_extract_then_render_writes_a_page_over_the_corpus(tmp_path: Path) -> No
     assert script.main(["render", str(extract), "--out", str(tmp_path / "page"), "--title", "sample"]) == 0
     page = (tmp_path / "page" / "index.html").read_text()
     assert "<title>sample</title>" in page and "mark.pii" in page
+    assert (tmp_path / "page" / "data" / "shard-0000.parquet").is_file()
     assert (tmp_path / "page" / "data" / "shard-0000.js").is_file()
+    assert (tmp_path / "page" / "vendor" / "hyparquet.js").is_file()
 
 
 def test_a_manifest_reads_only_the_run_roots_it_lists(tmp_path: Path) -> None:
@@ -72,6 +74,7 @@ def test_a_speech_task_carries_its_marked_transcript(tmp_path: Path, monkeypatch
     view = script.speech_view(tmp_path)
     assert view is not None
     assert 'class="pii u-' in view["html"] and "Ada" in view["html"]
+    assert view["entries"] == row["w"] and view["marks"] == row["f"]
     assert view["pii"][0]["h"] == "Ada" and view["llm"] == {"status": "clean"}
 
 
@@ -166,3 +169,12 @@ def test_without_consensus_words_the_one_model_shown_is_named(tmp_path: Path, mo
     assert view is not None
     assert view["shown"] == {"kind": "model", "source": "whisper"}
     assert 'class="w"' not in view["html"] and view["words"] == []
+
+
+def test_the_transcript_fixture_is_what_this_script_writes() -> None:
+    """The page's own transcript markup is checked against these cases; each one's HTML is this script's."""
+    fixture = ROOT / "src/tests/audio/workflows/triage/review_page/transcripts.json"
+    fs = script._free_speech_page()
+    for case in json.loads(fixture.read_text())["cases"]:
+        entries = [[*entry, i] if i < case["consensus_n"] else list(entry) for i, entry in enumerate(case["entries"])]
+        assert fs.paragraph(entries, case["marks"], script._agreement_word) == case["html"], case["name"]

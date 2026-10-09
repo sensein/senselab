@@ -7,6 +7,7 @@ import assert from 'node:assert/strict'
 import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
+import { readFileSync } from 'node:fs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const triage = join(here, '..', '..', '..', '..', '..', 'senselab', 'audio', 'workflows', 'triage')
@@ -342,4 +343,42 @@ test('a side file record takes its release from the index row, which is the only
   assert.equal(rec.release, 'redacted')
   assert.deepEqual(R.audioTracks(rec).map((t) => [t.name, t.timeline]), [['recording', true], ['redacted', true]])
   assert.equal(R.withRelease(null, { release: 'redacted' }), null)
+})
+
+test('the page writes each transcript exactly as the free-speech review page does', () => {
+  const { cases } = JSON.parse(readFileSync(join(here, 'transcripts.json'), 'utf8'))
+  assert.ok(cases.length >= 6)
+  for (const c of cases) assert.equal(R.transcriptHtml(c.entries, c.marks, c.consensus_n), c.html, c.name)
+})
+
+test('a side-file row expands to the record the page draws, paths under its run directory', () => {
+  const dictionary = [{ name: 'task_duration_s', group: 'acquisition', unit: 's', comparison: '>=', threshold: 1.0 }]
+  const row = {
+    stem: 's', run_dir: 'sub-a/ses-1/s_1', spec: 'AAAA', spec_stream: 'plain', figure: 'summary/summary.pdf',
+    commit: 'c', config_hash: 'h', missing: [], extent: [0.5, 2.0],
+    streams: [{ n: 'recording', p: '/data/s.wav' }, { n: 'plain', p: 'run/streams/plain.flac' }],
+    overlay: { events: [[1, 2]], activity: [], issues: [{ s: 0.1, e: 0.2, k: 'impulse' }] },
+    evidence: [{ i: 0, v: '30.5', e: 'pass', d: true }],
+    speech: {
+      shown_kind: 'consensus', shown_source: null, models: [{ source: 'whisper', model_id: null }], own: [],
+      words: [{ a: 1, o: 'agreement', r: ['hi'], s: 0, e: 0.4, t: 'hi' }],
+      entries: [{ t: null, b: false, m: -1 }, { t: 'there', b: false, m: 0 }],
+      marks: JSON.stringify([{ k: 'k', c: ['X'], s: 'masked', d: [], brk: 0, tx: 0, nt: 1, stim: 0 }]),
+      pii: [], release_ground: '"declined"', why: null, redact_why: null, condition_kind: null, language: 'en',
+      names_proposed: [], llm: '{"status":"disabled"}',
+    },
+  }
+  const rec = R.expandRecord(row, dictionary)
+  assert.deepEqual(rec.streams, { recording: '/data/s.wav', plain: 'sub-a/ses-1/s_1/run/streams/plain.flac' })
+  assert.equal(rec.figure, 'sub-a/ses-1/s_1/summary/summary.pdf')
+  assert.deepEqual(rec.overlay.issues, [[0.1, 0.2, 'impulse']])
+  assert.deepEqual(rec.evidence[0], {
+    name: 'task_duration_s', group: 'acquisition', value: 30.5, unit: 's', comparison: '>=', threshold: 1.0,
+    effect: 'pass', decisive: true,
+  })
+  assert.deepEqual(rec.speech.entries, [['hi', 0, -1], ['there', 0, 0]])
+  assert.equal(rec.speech.release_ground, 'declined')
+  assert.deepEqual(rec.speech.llm, { status: 'disabled' })
+  assert.ok(rec.speech.html.startsWith('<span class="w" data-i="0">hi</span> <mark class="pii u-red"'))
+  assert.equal(R.expandRecord({ ...row, speech: null, extent: null }, dictionary).speech, null)
 })

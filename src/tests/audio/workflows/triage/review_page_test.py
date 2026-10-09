@@ -186,6 +186,7 @@ def test_the_page_inlines_its_index_and_writes_side_files(tmp_path: Path) -> Non
     }
     written = review_page.write_page([other, record], tmp_path / "page", title="t", audio_base="../", mark_style=".m{}")
     assert written["recordings"] == 2 and written["shards"] == 1
+    assert written["parquet_bytes"] > 0 and written["wrapper_bytes"] > written["parquet_bytes"]
     html_text = (tmp_path / "page" / "index.html").read_text()
     assert "/*@" not in html_text and ".m{}" in html_text
     index = json.loads(re.search(r"var REVIEW_INDEX = (\{.*?\});</script>", html_text, re.S).group(1))  # type: ignore[union-attr]
@@ -193,7 +194,9 @@ def test_the_page_inlines_its_index_and_writes_side_files(tmp_path: Path) -> Non
     assert index["cols"]["text"][1] == "a name"
     assert index["evidence"]["breath_event_db_over_local"]["kind"] == "numeric"
     shard = (tmp_path / "page" / "data" / "shard-0000.js").read_text()
-    assert shard.startswith("ReviewPage.shard(0,") and "</" not in shard.replace("<\\/", "")
+    assert shard.startswith('ReviewPage.shardParquet(0,"') and "<" not in shard
+    assert '<script src="vendor/hyparquet.js"></script>' in html_text
+    assert (tmp_path / "page" / "vendor" / "LICENSE-hyparquet").is_file()
 
 
 def test_every_part_the_shell_inlines_is_listed() -> None:
@@ -209,3 +212,89 @@ def test_the_page_script_suite_passes() -> None:
     suite = Path(__file__).parent / "review_page" / "review.test.mjs"
     result = subprocess.run(["node", "--test", str(suite)], capture_output=True, text=True, check=False)
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def _speech_record(record: dict[str, Any]) -> dict[str, Any]:
+    """A speech record over ``record``: two consensus words, the second masked, and every speech field."""
+    return {
+        **record,
+        "stem": "sub-ffffffff_ses-01_task-harvard-sentences",
+        "participant": "sub-ffffffff",
+        "speech": {
+            "html": "unused",
+            "entries": [["hi", 0, -1], ["Ada", 0, 0]],
+            "marks": [
+                {"k": "k0", "c": ["PERSON"], "s": "masked", "d": ["gliner"], "brk": 0, "tx": 0, "nt": 1, "stim": 0}
+            ],
+            "shown": {"kind": "consensus", "source": None},
+            "models": [{"source": "whisper", "model_id": "openai/whisper-large-v3-turbo"}],
+            "own": [
+                {
+                    "source": "whisper",
+                    "model_id": "openai/whisper-large-v3-turbo",
+                    "text": "hi Ada",
+                    "words": [[0.0, 0.4, "hi"], [None, None, "Ada"]],
+                }
+            ],
+            "words": [[1.0, "agreement", ["hi"], 0.0, 0.4, "hi"], [0.5, "variant", [None], 0.5, 0.9, "Ada"]],
+            "pii": [{"c": "PERSON", "s": "gliner", "h": "Ada", "stim": 0}],
+            "release_ground": "a name was masked",
+            "why": "redacted",
+            "redact_why": "masked a name",
+            "condition_kind": None,
+            "names_proposed": ["Ada"],
+            "llm": {"status": "clean", "flagged": []},
+            "language": "en",
+        },
+    }
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not on PATH; the side files cannot be decoded")
+@pytest.mark.parametrize("mode", ["parquet", "wrapper"])
+def test_a_side_file_decodes_in_the_page_to_the_records_it_was_written_from(tmp_path: Path, mode: str) -> None:
+    """The vendored reader and the page's expansion give back each record's fields, served or from file://."""
+    record = review_page.review_record(_run_root(tmp_path / "corpus"), tmp_path / "corpus")
+    assert record is not None
+    speech = _speech_record(record)
+    review_page.write_page([record, speech], tmp_path / "page", title="t", audio_base="../")
+    decoder = Path(__file__).parent / "review_page" / "decode_shard.mjs"
+    result = subprocess.run(
+        ["node", str(decoder), str(tmp_path / "page"), "0", mode], capture_output=True, text=True, check=False
+    )
+    assert result.returncode == 0, result.stderr
+    decoded = {r["stem"]: r for r in json.loads(result.stdout)}
+    for original in (record, speech):
+        got = decoded[original["stem"]]
+        for key in (
+            "spec",
+            "spec_stream",
+            "figure",
+            "commit",
+            "config_hash",
+            "missing",
+            "extent",
+            "streams",
+            "overlay",
+        ):
+            assert got[key] == original[key], key
+        assert got["evidence"] == json.loads(json.dumps(original["evidence"]))
+    assert decoded[record["stem"]]["speech"] is None
+    got = decoded[speech["stem"]]["speech"]
+    for key in (
+        "shown",
+        "models",
+        "own",
+        "words",
+        "entries",
+        "marks",
+        "pii",
+        "release_ground",
+        "why",
+        "redact_why",
+        "condition_kind",
+        "names_proposed",
+        "llm",
+        "language",
+    ):
+        assert got[key] == speech["speech"][key], key
+    assert got["html"].startswith('<span class="w" data-i="0">hi</span> <mark class="pii u-red" data-k="k0"')

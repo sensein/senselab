@@ -1,0 +1,452 @@
+{
+    "about": "Transcript cases and the HTML the free-speech review page writes for each; regenerate the html with scripts/triage_review_page.py's speech markup, never by hand.",
+    "cases": [
+        {
+            "name": "consensus words, a two-word masked name, a bracketed token and characters that need escaping",
+            "consensus_n": 6,
+            "entries": [
+                [
+                    "my",
+                    0,
+                    -1
+                ],
+                [
+                    "name's",
+                    0,
+                    -1
+                ],
+                [
+                    "Ada",
+                    0,
+                    0
+                ],
+                [
+                    "O'Neil",
+                    0,
+                    0
+                ],
+                [
+                    "[laughs]",
+                    1,
+                    -1
+                ],
+                [
+                    "<b>&\"x\"",
+                    0,
+                    -1
+                ]
+            ],
+            "marks": [
+                {
+                    "k": "k-0",
+                    "c": [
+                        "PERSON"
+                    ],
+                    "s": "masked",
+                    "d": [
+                        "gliner",
+                        "presidio"
+                    ],
+                    "brk": 0,
+                    "tx": 0,
+                    "nt": 2,
+                    "stim": 0,
+                    "nm": 1,
+                    "pr": 0,
+                    "hr": 1,
+                    "tr": "",
+                    "pk": "",
+                    "kd": "name",
+                    "dx": ""
+                }
+            ],
+            "html": "<span class=\"w\" data-i=\"0\">my</span> <span class=\"w\" data-i=\"1\">name&#x27;s</span> <mark class=\"pii u-red\" data-k=\"k-0\" data-c=\"PERSON\" data-s=\"masked\" data-nm=\"1\" data-pr=\"0\" data-hr=\"1\" data-tr=\"\" data-pk=\"\" data-kd=\"name\" data-dx=\"\" data-d=\"gliner presidio\" data-brk=\"0\" data-tx=\"0\" data-nt=\"2\" data-stim=\"0\" tabindex=\"0\"><span class=\"cat\">PERSON</span><span class=\"w\" data-i=\"2\">Ada</span> <span class=\"w\" data-i=\"3\">O&#x27;Neil</span></mark> <span class=\"w\" data-i=\"4\"><span class=\"bracket\">[laughs]</span></span> <span class=\"w\" data-i=\"5\">&lt;b&gt;&amp;&quot;x&quot;</span>"
+        },
+        {
+            "name": "every mark state, an unknown state and a missing state",
+            "consensus_n": 11,
+            "entries": [
+                [
+                    "a",
+                    0,
+                    0
+                ],
+                [
+                    "b",
+                    0,
+                    1
+                ],
+                [
+                    "c",
+                    0,
+                    2
+                ],
+                [
+                    "d",
+                    0,
+                    3
+                ],
+                [
+                    "e",
+                    0,
+                    4
+                ],
+                [
+                    "f",
+                    0,
+                    5
+                ],
+                [
+                    "g",
+                    0,
+                    6
+                ],
+                [
+                    "h",
+                    0,
+                    7
+                ],
+                [
+                    "i",
+                    0,
+                    8
+                ],
+                [
+                    "j",
+                    0,
+                    9
+                ],
+                [
+                    "k",
+                    0,
+                    10
+                ]
+            ],
+            "marks": [
+                {
+                    "k": "k0",
+                    "c": [
+                        "LOC"
+                    ],
+                    "s": "masked",
+                    "d": [
+                        "gliner"
+                    ],
+                    "brk": 0,
+                    "tx": 0,
+                    "nt": 1,
+                    "stim": 0
+                },
+                {
+                    "k": "k1",
+                    "c": [
+                        "LOC"
+                    ],
+                    "s": "unmasked_by_reviewer",
+                    "d": [
+                        "gliner"
+                    ],
+                    "brk": 0,
+                    "tx": 0,
+                    "nt": 1,
+                    "stim": 0
+                },
+                {
+                    "k": "k2",
+                    "c": [
+                        "LOC"
+                    ],
+                    "s": "unmasked_by_approval",
+                    "d": [
+                        "gliner"
+                    ],
+                    "brk": 0,
+                    "tx": 0,
+                    "nt": 1,
+                    "stim": 0
+                },
+                {
+                    "k": "k3",
+                    "c": [
+                        "LOC"
+                    ],
+                    "s": "released_condition",
+                    "d": [
+                        "gliner"
+                    ],
+                    "brk": 0,
+                    "tx": 0,
+                    "nt": 1,
+                    "stim": 0
+                },
+                {
+                    "k": "k4",
+                    "c": [
+                        "LOC"
+                    ],
+                    "s": "released_by_kind",
+                    "d": [
+                        "gliner"
+                    ],
+                    "brk": 0,
+                    "tx": 0,
+                    "nt": 1,
+                    "stim": 0
+                },
+                {
+                    "k": "k5",
+                    "c": [
+                        "LOC"
+                    ],
+                    "s": "released_not_proper",
+                    "d": [
+                        "gliner"
+                    ],
+                    "brk": 0,
+                    "tx": 0,
+                    "nt": 1,
+                    "stim": 0
+                },
+                {
+                    "k": "k6",
+                    "c": [
+                        "LOC"
+                    ],
+                    "s": "proposed_by_reviewer",
+                    "d": [
+                        "gliner"
+                    ],
+                    "brk": 0,
+                    "tx": 0,
+                    "nt": 1,
+                    "stim": 0
+                },
+                {
+                    "k": "k7",
+                    "c": [
+                        "LOC"
+                    ],
+                    "s": "unmasked_by_trim",
+                    "d": [
+                        "gliner"
+                    ],
+                    "brk": 0,
+                    "tx": 0,
+                    "nt": 1,
+                    "stim": 0
+                },
+                {
+                    "k": "k8",
+                    "c": [
+                        "LOC"
+                    ],
+                    "s": "detected",
+                    "d": [
+                        "gliner"
+                    ],
+                    "brk": 0,
+                    "tx": 0,
+                    "nt": 1,
+                    "stim": 0
+                },
+                {
+                    "k": "k9",
+                    "c": [
+                        "LOC"
+                    ],
+                    "s": "something_new",
+                    "d": [
+                        "gliner"
+                    ],
+                    "brk": 0,
+                    "tx": 0,
+                    "nt": 1,
+                    "stim": 0
+                },
+                {
+                    "k": "k10",
+                    "c": [
+                        "LOC"
+                    ],
+                    "s": null,
+                    "d": [
+                        "gliner"
+                    ],
+                    "brk": 0,
+                    "tx": 0,
+                    "nt": 1,
+                    "stim": 0
+                }
+            ],
+            "html": "<mark class=\"pii u-red\" data-k=\"k0\" data-c=\"LOC\" data-s=\"masked\" data-nm=\"0\" data-pr=\"0\" data-hr=\"0\" data-tr=\"\" data-pk=\"\" data-kd=\"\" data-dx=\"\" data-d=\"gliner\" data-brk=\"0\" data-tx=\"0\" data-nt=\"1\" data-stim=\"0\" tabindex=\"0\"><span class=\"cat\">LOC</span><span class=\"w\" data-i=\"0\">a</span></mark> <mark class=\"pii u-green\" data-k=\"k1\" data-c=\"LOC\" data-s=\"unmasked_by_reviewer\" data-nm=\"0\" data-pr=\"0\" data-hr=\"0\" data-tr=\"\" data-pk=\"\" data-kd=\"\" data-dx=\"\" data-d=\"gliner\" data-brk=\"0\" data-tx=\"0\" data-nt=\"1\" data-stim=\"0\" tabindex=\"0\"><span class=\"cat\">LOC</span><span class=\"w\" data-i=\"1\">b</span></mark> <mark class=\"pii u-green\" data-k=\"k2\" data-c=\"LOC\" data-s=\"unmasked_by_approval\" data-nm=\"0\" data-pr=\"0\" data-hr=\"0\" data-tr=\"\" data-pk=\"\" data-kd=\"\" data-dx=\"\" data-d=\"gliner\" data-brk=\"0\" data-tx=\"0\" data-nt=\"1\" data-stim=\"0\" tabindex=\"0\"><span class=\"cat\">LOC</span><span class=\"w\" data-i=\"2\">c</span></mark> <mark class=\"pii u-green\" data-k=\"k3\" data-c=\"LOC\" data-s=\"released_condition\" data-nm=\"0\" data-pr=\"0\" data-hr=\"0\" data-tr=\"\" data-pk=\"\" data-kd=\"\" data-dx=\"\" data-d=\"gliner\" data-brk=\"0\" data-tx=\"0\" data-nt=\"1\" data-stim=\"0\" tabindex=\"0\"><span class=\"cat\">LOC</span><span class=\"w\" data-i=\"3\">d</span></mark> <mark class=\"pii u-green\" data-k=\"k4\" data-c=\"LOC\" data-s=\"released_by_kind\" data-nm=\"0\" data-pr=\"0\" data-hr=\"0\" data-tr=\"\" data-pk=\"\" data-kd=\"\" data-dx=\"\" data-d=\"gliner\" data-brk=\"0\" data-tx=\"0\" data-nt=\"1\" data-stim=\"0\" tabindex=\"0\"><span class=\"cat\">LOC</span><span class=\"w\" data-i=\"4\">e</span></mark> <mark class=\"pii u-green\" data-k=\"k5\" data-c=\"LOC\" data-s=\"released_not_proper\" data-nm=\"0\" data-pr=\"0\" data-hr=\"0\" data-tr=\"\" data-pk=\"\" data-kd=\"\" data-dx=\"\" data-d=\"gliner\" data-brk=\"0\" data-tx=\"0\" data-nt=\"1\" data-stim=\"0\" tabindex=\"0\"><span class=\"cat\">LOC</span><span class=\"w\" data-i=\"5\">f</span></mark> <mark class=\"pii u-red\" data-k=\"k6\" data-c=\"LOC\" data-s=\"proposed_by_reviewer\" data-nm=\"0\" data-pr=\"0\" data-hr=\"0\" data-tr=\"\" data-pk=\"\" data-kd=\"\" data-dx=\"\" data-d=\"gliner\" data-brk=\"0\" data-tx=\"0\" data-nt=\"1\" data-stim=\"0\" tabindex=\"0\"><span class=\"cat\">LOC</span><span class=\"w\" data-i=\"6\">g</span></mark> <mark class=\"pii u-orange\" data-k=\"k7\" data-c=\"LOC\" data-s=\"unmasked_by_trim\" data-nm=\"0\" data-pr=\"0\" data-hr=\"0\" data-tr=\"\" data-pk=\"\" data-kd=\"\" data-dx=\"\" data-d=\"gliner\" data-brk=\"0\" data-tx=\"0\" data-nt=\"1\" data-stim=\"0\" tabindex=\"0\"><span class=\"w\" data-i=\"7\">h</span></mark> <mark class=\"pii u-green\" data-k=\"k8\" data-c=\"LOC\" data-s=\"detected\" data-nm=\"0\" data-pr=\"0\" data-hr=\"0\" data-tr=\"\" data-pk=\"\" data-kd=\"\" data-dx=\"\" data-d=\"gliner\" data-brk=\"0\" data-tx=\"0\" data-nt=\"1\" data-stim=\"0\" tabindex=\"0\"><span class=\"cat\">LOC</span><span class=\"w\" data-i=\"8\">i</span></mark> <mark class=\"pii u-green\" data-k=\"k9\" data-c=\"LOC\" data-s=\"something_new\" data-nm=\"0\" data-pr=\"0\" data-hr=\"0\" data-tr=\"\" data-pk=\"\" data-kd=\"\" data-dx=\"\" data-d=\"gliner\" data-brk=\"0\" data-tx=\"0\" data-nt=\"1\" data-stim=\"0\" tabindex=\"0\"><span class=\"cat\">LOC</span><span class=\"w\" data-i=\"9\">j</span></mark> <mark class=\"pii u-green\" data-k=\"k10\" data-c=\"LOC\" data-s=\"detected\" data-nm=\"0\" data-pr=\"0\" data-hr=\"0\" data-tr=\"\" data-pk=\"\" data-kd=\"\" data-dx=\"\" data-d=\"gliner\" data-brk=\"0\" data-tx=\"0\" data-nt=\"1\" data-stim=\"0\" tabindex=\"0\"><span class=\"cat\">LOC</span><span class=\"w\" data-i=\"10\">k</span></mark>"
+        },
+        {
+            "name": "overlays nest inside the outer mark, the first outermost",
+            "consensus_n": 3,
+            "entries": [
+                [
+                    "at",
+                    0,
+                    -1
+                ],
+                [
+                    "Main",
+                    0,
+                    0
+                ],
+                [
+                    "Street",
+                    0,
+                    0
+                ]
+            ],
+            "marks": [
+                {
+                    "k": "k0",
+                    "c": [
+                        "LOCATION"
+                    ],
+                    "s": "masked",
+                    "d": [
+                        "gliner"
+                    ],
+                    "brk": 1,
+                    "tx": 1,
+                    "nt": 2,
+                    "stim": 1,
+                    "o": [
+                        {
+                            "k": "o1",
+                            "c": "PERSON",
+                            "s": "proposed_by_reviewer",
+                            "hr": 1,
+                            "kd": "name",
+                            "dx": "x\"y",
+                            "d": []
+                        },
+                        {
+                            "k": "o2",
+                            "c": "DATE",
+                            "s": "unmasked_by_trim",
+                            "hr": 0,
+                            "kd": "",
+                            "dx": "",
+                            "d": [
+                                "llm"
+                            ]
+                        }
+                    ]
+                }
+            ],
+            "html": "<span class=\"w\" data-i=\"0\">at</span> <mark class=\"pii u-red\" data-k=\"k0\" data-c=\"LOCATION\" data-s=\"masked\" data-nm=\"0\" data-pr=\"0\" data-hr=\"0\" data-tr=\"\" data-pk=\"\" data-kd=\"\" data-dx=\"\" data-d=\"gliner\" data-brk=\"1\" data-tx=\"1\" data-nt=\"2\" data-stim=\"1\" tabindex=\"0\"><span class=\"cat\">LOCATION</span><mark class=\"pii u-red\" data-k=\"o1\" data-c=\"PERSON\" data-s=\"proposed_by_reviewer\" data-nm=\"0\" data-pr=\"1\" data-hr=\"1\" data-tr=\"\" data-kd=\"name\" data-dx=\"x&quot;y\" data-d=\"unattributed\" data-brk=\"1\" data-tx=\"1\" data-nt=\"2\" data-stim=\"1\" tabindex=\"0\"><span class=\"cat\">PERSON</span><mark class=\"pii u-orange\" data-k=\"o2\" data-c=\"DATE\" data-s=\"unmasked_by_trim\" data-nm=\"0\" data-pr=\"0\" data-hr=\"0\" data-tr=\"\" data-kd=\"\" data-dx=\"\" data-d=\"llm\" data-brk=\"1\" data-tx=\"1\" data-nt=\"2\" data-stim=\"1\" tabindex=\"0\"><span class=\"w\" data-i=\"1\">Main</span> <span class=\"w\" data-i=\"2\">Street</span></mark></mark></mark>"
+        },
+        {
+            "name": "a single model's words: no positions, a mark still applies",
+            "consensus_n": 0,
+            "entries": [
+                [
+                    "hello",
+                    0,
+                    -1
+                ],
+                [
+                    "Bob",
+                    0,
+                    0
+                ],
+                [
+                    "there",
+                    0,
+                    -1
+                ]
+            ],
+            "marks": [
+                {
+                    "k": "k0",
+                    "c": [
+                        "PERSON"
+                    ],
+                    "s": "detected",
+                    "d": [],
+                    "brk": 0,
+                    "tx": 0,
+                    "nt": 1,
+                    "stim": 0
+                }
+            ],
+            "html": "hello <mark class=\"pii u-green\" data-k=\"k0\" data-c=\"PERSON\" data-s=\"detected\" data-nm=\"0\" data-pr=\"0\" data-hr=\"0\" data-tr=\"\" data-pk=\"\" data-kd=\"\" data-dx=\"\" data-d=\"unattributed\" data-brk=\"0\" data-tx=\"0\" data-nt=\"1\" data-stim=\"0\" tabindex=\"0\"><span class=\"cat\">PERSON</span>Bob</mark> there"
+        },
+        {
+            "name": "an owner past the marks, a mark with no category and adjacent marks",
+            "consensus_n": 5,
+            "entries": [
+                [
+                    "x",
+                    0,
+                    7
+                ],
+                [
+                    "y",
+                    0,
+                    0
+                ],
+                [
+                    "z",
+                    0,
+                    1
+                ],
+                [
+                    "w",
+                    1,
+                    1
+                ],
+                [
+                    "v",
+                    0,
+                    -1
+                ]
+            ],
+            "marks": [
+                {
+                    "k": "k0",
+                    "c": [],
+                    "s": "unmasked_by_reviewer",
+                    "d": [
+                        "gliner"
+                    ],
+                    "brk": 0,
+                    "tx": 0,
+                    "nt": 1,
+                    "stim": 0,
+                    "tr": "p",
+                    "pk": "pk'1"
+                },
+                {
+                    "k": "k1",
+                    "c": [
+                        "ORG",
+                        "PERSON"
+                    ],
+                    "s": "released_by_kind",
+                    "d": [
+                        "gliner"
+                    ],
+                    "brk": 0,
+                    "tx": 0,
+                    "nt": 1,
+                    "stim": 0,
+                    "nm": true,
+                    "pr": 1
+                }
+            ],
+            "html": "<span class=\"w\" data-i=\"0\">x</span> <mark class=\"pii u-green\" data-k=\"k0\" data-c=\"\" data-s=\"unmasked_by_reviewer\" data-nm=\"0\" data-pr=\"0\" data-hr=\"0\" data-tr=\"p\" data-pk=\"pk&#x27;1\" data-kd=\"\" data-dx=\"\" data-d=\"gliner\" data-brk=\"0\" data-tx=\"0\" data-nt=\"1\" data-stim=\"0\" tabindex=\"0\"><span class=\"cat\"></span><span class=\"w\" data-i=\"1\">y</span></mark> <mark class=\"pii u-green\" data-k=\"k1\" data-c=\"ORG\" data-s=\"released_by_kind\" data-nm=\"1\" data-pr=\"1\" data-hr=\"0\" data-tr=\"\" data-pk=\"\" data-kd=\"\" data-dx=\"\" data-d=\"gliner\" data-brk=\"0\" data-tx=\"0\" data-nt=\"1\" data-stim=\"0\" tabindex=\"0\"><span class=\"cat\">ORG</span><span class=\"w\" data-i=\"2\">z</span> <span class=\"w\" data-i=\"3\"><span class=\"bracket\">w</span></span></mark> <span class=\"w\" data-i=\"4\">v</span>"
+        },
+        {
+            "name": "no words",
+            "consensus_n": 0,
+            "entries": [],
+            "marks": [],
+            "html": ""
+        }
+    ]
+}

@@ -50,7 +50,7 @@ from senselab.audio.workflows.triage.review_page.records import transcripts  # n
 from senselab.utils import fastio  # noqa: E402
 
 EXTRACT_SCHEMA = "senselab.triage.review.extract"
-EXTRACT_VERSION = 1
+EXTRACT_VERSION = 2
 
 
 def _free_speech_page() -> Any:  # noqa: ANN401 -- a module
@@ -80,7 +80,9 @@ def speech_view(run_root: Path) -> dict[str, Any] | None:
 
     The transcript shown is the consensus where it holds words, each wrapped with its position so the
     page can show that word's agreement across the ASR models and their readings; otherwise the one
-    model's own transcript the free-speech reader falls back to, named.
+    model's own transcript the free-speech reader falls back to, named. ``html`` is that transcript
+    marked up, which the index searches; the side files carry ``entries`` and ``marks`` instead, from
+    which the page writes the same markup.
 
     Args:
         run_root: The run root.
@@ -108,6 +110,8 @@ def speech_view(run_root: Path) -> dict[str, Any] | None:
         shown = {"kind": "none", "source": None}
     return {
         "html": fs.paragraph(entries, row.get("f") or [], _agreement_word),
+        "entries": [list(entry[:3]) for entry in row.get("w") or []],
+        "marks": row.get("f") or [],
         "shown": shown,
         "models": asr["models"],
         "own": asr["own"],
