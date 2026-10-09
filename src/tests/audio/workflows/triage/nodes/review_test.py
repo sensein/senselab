@@ -255,6 +255,43 @@ class TestTheReviewerReadsTheResidue:
         assert seen == ["hello [PERSON]"]
 
 
+class TestTheReviewerSeesEveryRecogniserSReading:
+    """Owner, 2026-10-09: the reviewer reads the consensus column by column, and its reading records that it did."""
+
+    def test_the_whole_consensus_reaches_the_reviewer_with_each_recogniser_s_word(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Every consensus word, not only the residue, with its outcome and both recognisers' readings."""
+        store = ProvStore(run_id="review-test")
+        _seed(store, words=["pa", "my", "name", "is", "alice"], scan="ran", residue=[1, 2, 3, 4])
+        contexts: list[dict[str, Any]] = []
+
+        def _fake(original: str, *, context: dict[str, Any] | None = None, **kw: Any) -> ReviewResult:  # noqa: ANN401
+            contexts.append(dict(context or {}))
+            return _clean()
+
+        monkeypatch.setattr(review_module, "review_transcript", _fake)
+        review(store, _config(tmp_path))
+        (context,) = contexts
+        columns = context["consensus_columns"]
+        assert columns["recognisers"] == ["asr_crisperwhisper", "asr_qwen"]
+        assert columns["columns"][0] == [0, "pa", "agreement", ["pa", "pa"]]
+        assert len(columns["columns"]) == 5
+
+    def test_the_reading_and_each_round_record_their_inputs(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """No task declared: the consensus and the readings were given, the task was not."""
+        store = ProvStore(run_id="review-test")
+        _seed(store, scan="ran")
+        _stub(monkeypatch, [_clean()])
+        review(store, _config(tmp_path))
+        inputs = _annotation(store)["review_inputs"]
+        assert (inputs["task"], inputs["consensus_transcript"], inputs["asr_readings"]) == (False, True, True)
+        assert inputs["prompt_version"] == PROMPT_VERSION and inputs["version"] >= 1
+        assert [round_["review_inputs"] for round_ in _rounds_in(store)] == [inputs]
+
+
 class TestTheFourSilencesStayApart:
     """Switched off, nothing to read, tried and could not load, and ran: each its own state."""
 

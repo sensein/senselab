@@ -52,10 +52,12 @@ from senselab.audio.workflows.triage.nodes.redact import STREAM_NAME as REDACTED
 from senselab.audio.workflows.triage.task_lexicon import TaskLexicon, task_lexicon
 from senselab.audio.workflows.triage.vocabulary import PII_SCAN, REDACTION_LLM_ANNOTATION, SCANNED
 from senselab.text.tasks.pii_detection.redaction_review import (
+    CONSENSUS_COLUMNS,
     PROMPT_VERSION,
     REDACT,
     ReviewProposal,
     answer_problem,
+    review_inputs,
     review_payload,
     review_transcript,
     shutdown_review_worker,
@@ -226,6 +228,52 @@ def task_context(store: ProvStore, hint: AudioHints | None, lexicon: TaskLexicon
     return context
 
 
+def consensus_columns(store: ProvStore) -> dict[str, Any]:
+    """The consensus transcript column by column, with each recogniser's reading and the column's outcome.
+
+    Args:
+        store: The provenance store.
+
+    Returns:
+        ``recognisers``, every recogniser a column holds a reading of, sorted, and ``columns``, one
+        ``[index, consensus word, outcome, [each recogniser's word or None]]`` per consensus word in
+        stream order; both empty where the store holds no consensus words.
+    """
+    words = consensus_words(store)
+    recognisers = sorted({str(name) for word in words for name in (word.attributes.get("readings") or {})})
+    columns = []
+    for word in words:
+        readings = {str(name): str(text) for name, text in (word.attributes.get("readings") or {}).items()}
+        columns.append(
+            [
+                int(word.attributes["index"]),
+                str(word.attributes.get("text") or ""),
+                str(word.attributes.get("outcome") or ""),
+                [readings.get(name) for name in recognisers],
+            ]
+        )
+    return {"recognisers": recognisers, "columns": columns}
+
+
+def review_context(store: ProvStore, hint: AudioHints | None, lexicon: TaskLexicon | None = None) -> dict[str, Any]:
+    """What the reviewer is given beside the texts: the task context and the consensus columns.
+
+    Args:
+        store: The provenance store.
+        hint: The caller's declaration, or None.
+        lexicon: The family's task lexicon.
+
+    Returns:
+        :func:`task_context`'s mapping, with :func:`consensus_columns` under ``consensus_columns`` where
+        the store holds consensus words.
+    """
+    context = task_context(store, hint, lexicon)
+    columns = consensus_columns(store)
+    if columns["columns"]:
+        context[CONSENSUS_COLUMNS] = columns
+    return context
+
+
 def detector_state(store: ProvStore) -> str:
     """What the PII detectors did to this recording.
 
@@ -335,7 +383,7 @@ def _rounds(
         original: The recording's words.
         redacted: The text an applied redaction produced, or None where none was applied.
         settings: :func:`_llm_settings`' mapping.
-        context: :func:`task_context`'s mapping.
+        context: :func:`review_context`'s mapping.
 
     Returns:
         ``(reading, reviews)``, as :func:`_loop`.
@@ -354,7 +402,7 @@ def _loop(
         original: The recording's words.
         redacted: The text an applied redaction produced, or None where none was applied.
         settings: :func:`_llm_settings`' mapping.
-        context: :func:`task_context`'s mapping.
+        context: :func:`review_context`'s mapping.
 
     Returns:
         ``(reading, reviews)`` -- the summary and one payload per round, in order.
@@ -485,7 +533,7 @@ def review_cache_key(
     Args:
         original: The recording's words, as the loop reads them.
         redacted: The released text, or None.
-        context: :func:`task_context`'s mapping.
+        context: :func:`review_context`'s mapping.
         settings: :func:`_llm_settings`' mapping.
         revision: The 40-hex commit the reviewer's ref resolved to.
 
@@ -523,7 +571,7 @@ def reading_key(store: ProvStore, config: TriageConfig, hint: AudioHints | None,
     Raises:
         ValueError: If any ``redaction.llm_check`` key is unmeasured.
     """
-    context = task_context(store, hint, task_lexicon(config, declared_task_family(store, hint), hint))
+    context = review_context(store, hint, task_lexicon(config, declared_task_family(store, hint), hint))
     original, redacted = transcript_texts(store)
     return review_cache_key(original, redacted, context, _llm_settings(config), revision)
 
@@ -646,7 +694,7 @@ def _read(
         original: The recording's words.
         redacted: The text an applied redaction produced, or None.
         settings: :func:`_llm_settings`' mapping.
-        context: :func:`task_context`'s mapping.
+        context: :func:`review_context`'s mapping.
 
     Returns:
         :func:`_rounds`' pair.
@@ -678,7 +726,8 @@ def review(store: ProvStore, config: TriageConfig, hint: AudioHints | None = Non
             before any model is contacted.
     """
     settings = _llm_settings(config)
-    context = task_context(store, hint, task_lexicon(config, declared_task_family(store, hint), hint))
+    context = review_context(store, hint, task_lexicon(config, declared_task_family(store, hint), hint))
+    inputs = review_inputs(context)
     original, redacted = transcript_texts(store)
     state = detector_state(store)
     findings_n = _findings_n(store)
@@ -750,7 +799,12 @@ def review(store: ProvStore, config: TriageConfig, hint: AudioHints | None = Non
                 store,
                 prov_type="measurement",
                 extent=None,
-                attributes={"name": LLM_REVIEW_MEASUREMENT, "signal": "consensus_transcript", **review_payload_},
+                attributes={
+                    "name": LLM_REVIEW_MEASUREMENT,
+                    "signal": "consensus_transcript",
+                    **review_payload_,
+                    "review_inputs": dict(inputs),
+                },
             )
             store.was_generated_by(review_id, activity)
             store.was_attributed_to(review_id, software)
@@ -786,6 +840,7 @@ def review(store: ProvStore, config: TriageConfig, hint: AudioHints | None = Non
             "detector_outcome": outcome,
             "read_redacted": redacted is not None,
             "task_context": dict(context),
+            "review_inputs": dict(inputs),
             "result_cache": cache,
         },
     )

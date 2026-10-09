@@ -74,8 +74,14 @@ _CONDITIONS_HEADING = "CONDITIONS:"
 _OTHER_SPEAKERS_HEADING = "OTHER_SPEAKERS:"
 _INSTRUCTIONS_SPOKEN_HEADING = "INSTRUCTIONS_SPOKEN:"
 
-PROMPT_VERSION = 9
+PROMPT_VERSION = 10
 """The prompt and its parse, as one number: it changes whenever either changes what a reading holds."""
+
+REVIEW_INPUTS_VERSION = 1
+"""The shape of the ``review_inputs`` record a reading carries (:func:`review_inputs`)."""
+
+CONSENSUS_COLUMNS = "consensus_columns"
+"""The context key holding the consensus transcript column by column with each recogniser's reading."""
 
 REDACTION_STATES = ("complete", "incomplete", "not_applicable")
 """Whether the redaction, where one was applied, removed the identifying content."""
@@ -230,9 +236,12 @@ _PROMPT = (
     "ORIGINAL words as transcribed, and where an automatic redaction has already been applied, "
     "the RELEASED text it produced, in which every [CATEGORY] token marks removed text. Where no "
     "redaction was applied the RELEASED section says so, and nothing has been removed.\n\n"
-    + _POLICY
-    + _identifier_rule()
-    + "\n\nJudge six things independently.\n"
+    "Where a CONSENSUS COLUMNS block is given, it is the whole recording as the speech recognisers heard "
+    "it, one line per word: the consensus word, whether the recognisers agreed on it, read different words "
+    "(variant) or only some of them heard a word there (insertion), and each recogniser's own word. Use it to "
+    "judge whether a word was said at all and what it was: a name only one recogniser read, where another "
+    "read an ordinary word, may be a misreading. The ORIGINAL is the part of it under review; quote only the "
+    "ORIGINAL.\n\n" + _POLICY + _identifier_rule() + "\n\nJudge six things independently.\n"
     "1. Whether the redaction, where one was applied, actually removed everything the policy removes.\n"
     "2. Whether the ORIGINAL words carry anything the policy removes at all, which is a separate "
     "question and the one no automatic detector here has asked.\n"
@@ -315,6 +324,75 @@ _PROMPT = (
 )
 
 
+def consensus_columns_block(columns: Mapping[str, Any] | None) -> str:
+    """The consensus transcript column by column, as the reviewer reads it.
+
+    Args:
+        columns: The context's :data:`CONSENSUS_COLUMNS` mapping: ``recognisers``, the recogniser names,
+            and ``columns``, one ``[index, consensus word, outcome, [each recogniser's word or None]]``
+            per consensus word.
+
+    Returns:
+        A heading naming the recognisers, then one line per column: an agreement whose readings all
+        write the consensus word as ``index word | agreement``, every other column with each
+        recogniser's word after its number, ``-`` where it read none. Empty where there are no columns.
+    """
+    if not columns or not columns.get("columns"):
+        return ""
+    names = [str(name) for name in columns.get("recognisers") or ()]
+    legend = ", ".join(f"{number} = {name}" for number, name in enumerate(names, start=1))
+    lines = [f"CONSENSUS COLUMNS (recognisers: {legend}):"]
+    for index, text, outcome, readings in columns["columns"]:
+        heard = [None if reading is None else str(reading) for reading in readings]
+        if outcome == "agreement" and all(reading == text for reading in heard):
+            lines.append(f"{index} {text} | agreement")
+            continue
+        each = " | ".join(f"{number}: {reading or '-'}" for number, reading in enumerate(heard, start=1))
+        lines.append(f"{index} {text} | {outcome} | {each}")
+    return "\n".join(lines)
+
+
+def review_inputs(context: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Which of the inputs the fold weighs a reviewer release by a reading was given.
+
+    Args:
+        context: The context the reading was composed from (:func:`_compose`).
+
+    Returns:
+        ``version`` (:data:`REVIEW_INPUTS_VERSION`), ``prompt_version``, ``task`` (the declared task and
+        its instructions or stimulus), ``consensus_transcript`` (the consensus columns), ``asr_readings``
+        (each of two or more recognisers' word per column, with the column's outcome), and
+        ``recognisers`` and ``columns_n``.
+    """
+    facts = dict(context or {})
+    columns = facts.get(CONSENSUS_COLUMNS) or {}
+    rows = list(columns.get("columns") or ())
+    recognisers = [str(name) for name in columns.get("recognisers") or ()]
+    return {
+        "version": REVIEW_INPUTS_VERSION,
+        "prompt_version": PROMPT_VERSION,
+        "task": bool(facts.get("task")) and bool(facts.get("instructions") or facts.get("asked_to_say")),
+        "consensus_transcript": bool(rows),
+        "asr_readings": bool(rows) and len(recognisers) >= 2,
+        "recognisers": recognisers,
+        "columns_n": len(rows),
+    }
+
+
+def review_inputs_complete(inputs: Mapping[str, Any] | None) -> bool:
+    """Whether a reading recorded the task, the consensus transcript and every recogniser's reading.
+
+    Args:
+        inputs: The reading's ``review_inputs`` record, or None where it recorded none.
+
+    Returns:
+        True only for a record of :data:`REVIEW_INPUTS_VERSION` or later with all three set.
+    """
+    if not isinstance(inputs, Mapping) or int(inputs.get("version") or 0) < REVIEW_INPUTS_VERSION:
+        return False
+    return bool(inputs.get("task")) and bool(inputs.get("consensus_transcript")) and bool(inputs.get("asr_readings"))
+
+
 def _compose(
     original: str, redacted: str | None, context: Mapping[str, Any] | None = None, feedback: str | None = None
 ) -> str:
@@ -324,8 +402,8 @@ def _compose(
         original: The transcript as the recording's words were read.
         redacted: The text an applied redaction produced, or None where none was applied.
         context: What the recording declares about itself -- ``task``, ``speech_type``, ``language``,
-            ``instructions``, ``asked_to_say``, ``declared_names`` and ``task_words``. Any key absent or empty is
-            omitted rather than sent empty.
+            ``instructions``, ``asked_to_say``, ``declared_names``, ``task_words`` and
+            :data:`CONSENSUS_COLUMNS`. Any key absent or empty is omitted rather than sent empty.
         feedback: What was wrong with the previous round's answer, which this round must correct; None
             on a first round.
 
@@ -362,6 +440,9 @@ def _compose(
             "and instructions read aloud by someone else are a sign of more than one speaker."
         )
         lines.append("")
+    block = consensus_columns_block(facts.get(CONSENSUS_COLUMNS))
+    if block:
+        lines.extend([block, ""])
     released = redacted if redacted is not None else "(no redaction was applied to this recording)"
     body = "\n".join(lines) + f"ORIGINAL:\n{original}\n\nRELEASED:\n{released}\n"
     if feedback:
