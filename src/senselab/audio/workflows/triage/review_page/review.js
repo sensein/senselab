@@ -3,7 +3,8 @@
 // Explore draws the recording-vectors viewer's parallel coordinates over the decision columns and
 // the evidence items; Review lists what the brushes, facets and search admit and shows one
 // recording; Decisions holds the reviewer's entries and exports them as JSON whose keys are the
-// owner label table's. Per-recording data arrives from side files through `ReviewPage.shard`.
+// owner label table's. Per-recording data arrives from Parquet side files, fetched when served and
+// handed to `ReviewPage.shardParquet` by their script wrappers when opened from file://.
 
 'use strict';
 
@@ -372,6 +373,186 @@ var ReviewPage = (function () {
     return out;
   }
 
+  // ---------------------------------------------------------------- pure: a side file's rows to records
+
+  var EVIDENCE_METADATA = 'senselab.review.evidence';
+  var DETECTED = 'detected';
+  var PROPOSED_BY_REVIEWER = 'proposed_by_reviewer';
+  // The underline each PII mark state draws, as the free-speech review page's MARK_COLOURS.
+  var MARK_COLOURS = {
+    masked: 'red', proposed_by_reviewer: 'red', unmasked_by_reviewer: 'green', unmasked_by_approval: 'green',
+    released_condition: 'green', released_by_kind: 'green', released_not_proper: 'green', detected: 'green',
+    unmasked_by_trim: 'orange',
+  };
+
+  /** Text escaped as Python's `html.escape` escapes it, quotes included. */
+  function pyEscape(text) {
+    return String(text).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#x27;' }[c];
+    });
+  }
+
+  /** A value as a Python f-string formats it. */
+  function pyStr(v) {
+    if (v === true) return 'True';
+    if (v === false) return 'False';
+    if (v === null || v === undefined) return 'None';
+    return String(v);
+  }
+
+  function pyInt(v) { return v ? Math.trunc(Number(v)) : 0; }
+
+  /** One word entry `[text, bracketed, mark]`; a consensus word is wrapped with its position. */
+  function transcriptWord(entry, position, consensusN) {
+    var text = pyEscape(String(entry[0]));
+    var plain = entry[1] ? '<span class="bracket">' + text + '</span>' : text;
+    return position < consensusN ? '<span class="w" data-i="' + position + '">' + plain + '</span>' : plain;
+  }
+
+  function overlayMarkHtml(overlay, outer, inner) {
+    var state = String(overlay.s || DETECTED);
+    var colour = MARK_COLOURS[state] || 'green';
+    var shown = pyEscape(String(overlay.c || ''));
+    var detectors = pyEscape((overlay.d || []).map(String).join(' ') || 'unattributed');
+    var category = colour === 'orange' ? '' : '<span class="cat">' + shown + '</span>';
+    return '<mark class="pii u-' + colour + '" data-k="' + pyEscape(String(overlay.k)) + '" data-c="' + shown + '" ' +
+      'data-s="' + pyEscape(state) + '" data-nm="0" data-pr="' + (state === PROPOSED_BY_REVIEWER ? 1 : 0) + '" ' +
+      'data-hr="' + pyInt(overlay.hr) + '" data-tr="" ' +
+      'data-kd="' + pyEscape(String(overlay.kd || '')) + '" data-dx="' + pyEscape(String(overlay.dx || '')) + '" ' +
+      'data-d="' + detectors + '" data-brk="' + pyStr(outer.brk) + '" data-tx="' + pyStr(outer.tx) + '" ' +
+      'data-nt="' + pyStr(outer.nt) + '" data-stim="' + pyStr(outer.stim) + '" tabindex="0">' + category + inner + '</mark>';
+  }
+
+  function markHtml(mark, inner) {
+    var categories = mark.c || [];
+    var shown = categories.length ? pyEscape(String(categories[0])) : '';
+    var state = String(mark.s || DETECTED);
+    var colour = MARK_COLOURS[state] || 'green';
+    var detectors = pyEscape((mark.d || []).map(String).join(' ') || 'unattributed');
+    var overlays = mark.o || [];
+    for (var k = overlays.length - 1; k >= 0; k--) inner = overlayMarkHtml(overlays[k], mark, inner);
+    var category = colour === 'orange' ? '' : '<span class="cat">' + shown + '</span>';
+    return '<mark class="pii u-' + colour + '" data-k="' + pyEscape(String(mark.k)) + '" data-c="' + shown + '" ' +
+      'data-s="' + pyEscape(state) + '" data-nm="' + pyInt(mark.nm) + '" data-pr="' + pyInt(mark.pr) + '" ' +
+      'data-hr="' + pyInt(mark.hr) + '" data-tr="' + pyEscape(String(mark.tr || '')) + '" ' +
+      'data-pk="' + pyEscape(String(mark.pk || '')) + '" ' +
+      'data-kd="' + pyEscape(String(mark.kd || '')) + '" data-dx="' + pyEscape(String(mark.dx || '')) + '" ' +
+      'data-d="' + detectors + '" data-brk="' + pyStr(mark.brk) + '" data-tx="' + pyStr(mark.tx) + '" ' +
+      'data-nt="' + pyStr(mark.nt) + '" data-stim="' + pyStr(mark.stim) + '" tabindex="0">' + category + inner + '</mark>';
+  }
+
+  /**
+   * A speech task's transcript as marked-up prose, as the free-speech review page's `paragraph` writes it:
+   * each run of words one mark owns becomes that mark, and the first `consensusN` words carry their position.
+   */
+  function transcriptHtml(entries, marks, consensusN) {
+    var owner = function (entry) { return entry.length > 2 ? Math.trunc(Number(entry[2])) : -1; };
+    var pieces = [];
+    var i = 0;
+    while (i < entries.length) {
+      var own = owner(entries[i]);
+      if (own < 0 || own >= marks.length) { pieces.push(transcriptWord(entries[i], i, consensusN)); i += 1; continue; }
+      var j = i + 1;
+      while (j < entries.length && entries[j].length > 2 && owner(entries[j]) === own) j += 1;
+      var inner = [];
+      for (var k = i; k < j; k++) inner.push(transcriptWord(entries[k], k, consensusN));
+      pieces.push(markHtml(marks[own], inner.join(' ')));
+      i = j;
+    }
+    return pieces.join(' ');
+  }
+
+  function underRun(runDir, path) {
+    if (path === null || path === undefined) return null;
+    return path.charAt(0) === '/' || !runDir ? path : runDir + '/' + path;
+  }
+
+  function nullable(v) { return v === undefined ? null : v; }
+
+  function expandSpeech(s) {
+    if (!s) return null;
+    var words = (s.words || []).map(function (w) {
+      return [nullable(w.a), nullable(w.o), (w.r || []).map(nullable), nullable(w.s), nullable(w.e), w.t];
+    });
+    var entries = (s.entries || []).map(function (e, i) {
+      return [e.t === null || e.t === undefined ? words[i][5] : e.t, e.b ? 1 : 0, e.m];
+    });
+    var marks = JSON.parse(s.marks || '[]');
+    return {
+      html: transcriptHtml(entries, marks, words.length),
+      shown: { kind: nullable(s.shown_kind), source: nullable(s.shown_source) },
+      models: (s.models || []).map(function (m) { return { source: m.source, model_id: nullable(m.model_id) }; }),
+      own: (s.own || []).map(function (o) {
+        return {
+          source: o.source, model_id: nullable(o.model_id), text: o.text,
+          words: (o.words || []).map(function (w) { return [nullable(w.s), nullable(w.e), w.t]; }),
+        };
+      }),
+      words: words,
+      entries: entries,
+      marks: marks,
+      pii: (s.pii || []).map(function (p) { return { c: p.c, s: p.s, h: p.h, stim: p.stim }; }),
+      release_ground: s.release_ground === null || s.release_ground === undefined ? null : JSON.parse(s.release_ground),
+      why: nullable(s.why),
+      redact_why: nullable(s.redact_why),
+      condition_kind: nullable(s.condition_kind),
+      language: nullable(s.language),
+      names_proposed: s.names_proposed || [],
+      llm: JSON.parse(s.llm || '{}'),
+    };
+  }
+
+  /** One side-file row as the record the page draws, its evidence read through the shard's dictionary. */
+  function expandRecord(row, dictionary) {
+    var streams = {};
+    (row.streams || []).forEach(function (s) { streams[s.n] = underRun(row.run_dir, s.p); });
+    var overlay = row.overlay || {};
+    return {
+      stem: row.stem,
+      spec: nullable(row.spec),
+      spec_stream: nullable(row.spec_stream),
+      figure: underRun(row.run_dir, nullable(row.figure)),
+      commit: nullable(row.commit),
+      config_hash: nullable(row.config_hash),
+      missing: row.missing || [],
+      extent: row.extent && row.extent.length ? row.extent : null,
+      streams: streams,
+      overlay: {
+        events: overlay.events || [],
+        activity: overlay.activity || [],
+        issues: (overlay.issues || []).map(function (x) { return [x.s, x.e, x.k]; }),
+      },
+      evidence: (row.evidence || []).map(function (item) {
+        var entry = dictionary[item.i] || {};
+        return {
+          name: entry.name, group: nullable(entry.group), value: JSON.parse(item.v), unit: nullable(entry.unit),
+          comparison: nullable(entry.comparison), threshold: nullable(entry.threshold), effect: nullable(item.e),
+          decisive: !!item.d,
+        };
+      }),
+      speech: expandSpeech(row.speech),
+    };
+  }
+
+  function hyparquet() { return typeof Hyparquet !== 'undefined' ? Hyparquet : globalThis.Hyparquet; }
+
+  /** A side file's Parquet bytes as the records the page draws, in page order. */
+  function decodeShard(buffer) {
+    var H = hyparquet();
+    var meta = H.parquetMetadata(buffer);
+    var entry = (meta.key_value_metadata || []).filter(function (kv) { return kv.key === EVIDENCE_METADATA; })[0];
+    var dictionary = entry ? JSON.parse(entry.value) : [];
+    return H.parquetReadObjects({ file: buffer, metadata: meta, compressors: H.compressors })
+      .then(function (rows) { return rows.map(function (row) { return expandRecord(row, dictionary); }); });
+  }
+
+  function base64Bytes(text) {
+    var binary = atob(text);
+    var bytes = new Uint8Array(binary.length);
+    for (var i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return bytes.buffer;
+  }
+
   // ---------------------------------------------------------------- the page
 
   var state = null;
@@ -385,16 +566,38 @@ var ReviewPage = (function () {
     delete waiting[number];
   }
 
+  /** A side file did not load or decode: everyone waiting on it is told there is no record. */
+  function shardFailed(number, error) {
+    if (error && typeof console !== 'undefined') console.warn('side file ' + number + ': ' + error);
+    (waiting[number] || []).forEach(function (cb) { cb(null); });
+    delete waiting[number];
+  }
+
+  /** A side file's `file://` wrapper has loaded: its Parquet bytes, base64-encoded. */
+  function shardParquet(number, text) {
+    var decoded;
+    try { decoded = decodeShard(base64Bytes(text)); } catch (error) { shardFailed(number, error); return; }
+    decoded.then(function (records) { shard(number, records); }, function (error) { shardFailed(number, error); });
+  }
+
   function recordOf(index, cb) {
     var size = state.index.build.shard_size;
     var k = Math.floor(index / size);
-    var take = function (records) { cb(records[index - k * size]); };
+    var take = function (records) { cb(records ? records[index - k * size] : null); };
     if (shards[k]) return take(shards[k]);
     if (waiting[k]) { waiting[k].push(take); return; }
     waiting[k] = [take];
+    var base = state.index.build.shard_dir + '/shard-' + String(k).padStart(4, '0');
+    if (state.served && typeof fetch === 'function') {
+      fetch(base + '.parquet')
+        .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.arrayBuffer(); })
+        .then(decodeShard)
+        .then(function (records) { shard(k, records); }, function (error) { shardFailed(k, error); });
+      return;
+    }
     var s = document.createElement('script');
-    s.src = state.index.build.shard_dir + '/shard-' + String(k).padStart(4, '0') + '.js';
-    s.onerror = function () { delete waiting[k]; cb(null); };
+    s.src = base + '.js';
+    s.onerror = function () { shardFailed(k, 'did not load'); };
     document.body.appendChild(s);
   }
 
@@ -1392,6 +1595,11 @@ var ReviewPage = (function () {
     exportPayload: exportPayload,
     importDecisions: importDecisions,
     shard: shard,
+    shardParquet: shardParquet,
+    decodeShard: decodeShard,
+    expandRecord: expandRecord,
+    transcriptHtml: transcriptHtml,
+    pyEscape: pyEscape,
     modelLabel: modelLabel,
     alternatives: alternatives,
     streamUrl: streamUrl,
