@@ -1180,3 +1180,57 @@ before), 9 to `name_masks_propagated`. The buttercup recording stays `as_is`, no
   non-lexical task's events (DDK cycles, breaths, coughs, phonation holds; `task_content.py`) and to
   keep no word once the task's own words are dropped. A lexical task whose findings were all on declared or stimulus words is released
   on `no_content_masked` or `reviewer_unmasked_all` again. `data/task_content.yaml` v2.
+
+## The reviewer reads the whole annotated transcript: prompt 11 (owner, 2026-10-09)
+
+Owner decisions: **(A)** a reviewer's own `redact` entry stands -- the Prince card is unchanged, only the
+quoted occurrence is released with full inputs; **(B)** the re-review runs on GPU; **(C)** the reviewer
+receives the entire consensus transcript, not the residue, with the PII annotations, the word variation
+and their sources.
+
+### What changed
+
+- **One transcript.** The ORIGINAL is now every consensus word in order (`transcript_block`), headed
+  `TRANSCRIPT (recognisers: A = asr_crisperwhisper, B = asr_qwen; C = the consensus)`. Runs of task words
+  are wrapped in `<task>…</task>` and non-lexical words in `<nonlex>…</nonlex>` (the words SPEECH's residue
+  set aside; bracketed or `is_non_lexical` is `nonlex`, the rest `task`). A word with something to say
+  carries it in braces: `pii CATEGORY by DETECTOR@READING, …` (several categories joined by ` ; `), and the
+  outcome with each recogniser's reading where they differ (`variant A=Maria B=Mario`, `insertion A=It B=-`,
+  `agreement` only where the spellings differ beyond case and punctuation). A reading holding a space or
+  an annotation character is JSON-quoted. The CONSENSUS COLUMNS block is gone; RELEASED is unchanged (the
+  redacted residue, with the loop's `[LLM_*]` masks). The prompt header explains the format with an example.
+- **Context.** `review_context` carries `consensus_transcript` (`nodes/review.py` `consensus_transcript`):
+  per word `[index, word, outcome, [readings], kind, [[category, detector, reading]]]` plus `findings_n`.
+  The task context (family, instructions, stimulus, names, task words, guidance) is unchanged, so
+  SECOND_OPINION's key (built from `task_context`) does not move.
+- **Quotes stay locatable.** `answer_problem` accepts a quote found in the whole transcript or in the
+  residue (`quotable_texts`). `mask_plan` places a reviewer quote as whole-token runs over every timed
+  consensus word and keeps the residue words it covers, falling back to the residue alone (a quote that
+  skips a filler) and then to the residue substring; `refine_plan` does the same. A quote naming only task
+  or non-lexical words places nothing (`release_unplaced`), as the redaction never covers those words.
+- **`review_inputs` version 2**: `task`, `full_transcript`, `pii_annotations`, `asr_readings`, with
+  `recognisers`, `words_n`, `pii_words_n`, `variation_words_n`. `review_inputs_complete` needs version 2
+  and all four, so no prompt-10 or earlier reading outranks a kept name. The result-cache key carries
+  `review_inputs_version` beside `PROMPT_VERSION` 11.
+
+### Measured over the re-review set (r18b stores, Gemma tokenizer at 52f3f65b)
+
+The set is every r18b recording with a PII finding whose reviewer ran (`llm_status` clean or flagged):
+**6,784** of the 7,436 with findings; the other 652 never had a reading. Every stored reading is prompt 9.
+
+| chat-template tokens | median | p90 | p99 | max |
+|---|---|---|---|---|
+| prompt 11 | 3,636 | 3,958 | 5,054 | 9,909 |
+| prompt 10 | 3,619 | 4,208 | 6,600 | 17,967 |
+| stored prompt 9, round 1 | 3,076 | 3,205 | 3,607 | 5,415 |
+
+The header grew from 2,810 to 3,123 tokens; the inline format is shorter than one column per line on
+any transcript past ~100 words (300-599 words: median 5,142 against 7,534; 600+: 6,750 against 12,012;
+the longest, a 1,089-word Cinderella retelling, 9,909 against 17,967). 46 recordings had one recogniser
+only, so their reading cannot be complete (`asr_readings` false).
+
+Stored v9 rounds over the set: 1.066 rounds per recording (6,438 one, 241 two, 105 three), generation
+median 15.0 s and mean 17 s a call on H100, 266 output tokens on average. A least-squares fit gives
+`generation_s = -0.42 + 0.00056 * input + 0.0602 * output`: the longer prompt adds ~0.3 s a call, so the
+set predicts 35.5 GPU-hours of generation (34.8 stored), about 40-45 H100-hours with loads and the
+re-fold, at the v9 array's 16.3 s a row wall clock.
