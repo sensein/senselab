@@ -553,6 +553,12 @@ var ReviewPage = (function () {
     return bytes.buffer;
   }
 
+  /** The page index the page inlines: `{n, zstd}`, its JSON's length and the zstd bytes as base64. */
+  function unpackIndex(packed) {
+    var bytes = hyparquet().zstd(new Uint8Array(base64Bytes(packed.zstd)), packed.n);
+    return JSON.parse(new TextDecoder().decode(bytes));
+  }
+
   // ---------------------------------------------------------------- the page
 
   var state = null;
@@ -618,7 +624,7 @@ var ReviewPage = (function () {
   }
 
   function init() {
-    var index = window.REVIEW_INDEX;
+    var index = unpackIndex(window.REVIEW_INDEX_ZSTD);
     var rows = decodeRows(index);
     SchemaAxes.register(columnSpecs(index));
     SchemaAxes.ORDERINGS.run_status = ['complete', 'incomplete'];
@@ -1577,7 +1583,7 @@ var ReviewPage = (function () {
     e.target.value = '';
   }
 
-  if (typeof window !== 'undefined' && window.REVIEW_INDEX && typeof document !== 'undefined') {
+  if (typeof window !== 'undefined' && window.REVIEW_INDEX_ZSTD && typeof document !== 'undefined') {
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
     else init();
   }
@@ -1596,6 +1602,7 @@ var ReviewPage = (function () {
     importDecisions: importDecisions,
     shard: shard,
     shardParquet: shardParquet,
+    unpackIndex: unpackIndex,
     decodeShard: decodeShard,
     expandRecord: expandRecord,
     transcriptHtml: transcriptHtml,

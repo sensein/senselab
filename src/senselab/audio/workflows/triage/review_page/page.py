@@ -10,6 +10,7 @@ vendored beside the page, so it needs no network.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import html
 import json
@@ -20,6 +21,8 @@ from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+import pyarrow as pa
+
 from senselab.audio.workflows.triage.review_page.shards import parquet_bytes, wrapper_script
 from senselab.audio.workflows.triage.review_page.spectrogram import settings
 
@@ -29,6 +32,8 @@ VIEWER_DIR = SOURCE_DIR.parent / "viewer"
 SHELL = SOURCE_DIR / "shell.html"
 INLINE_PATTERN = re.compile(r"/\*@INLINE:(?P<path>[^@]+)@\*/")
 DATA_MARKER = "/*@INDEX@*/"
+INDEX_PATTERN = re.compile(r"var REVIEW_INDEX_ZSTD = (\{.*?\});</script>", re.S)
+INDEX_ZSTD_LEVEL = 19
 PARTS = {
     "viewer/styles.css": VIEWER_DIR / "styles.css",
     "viewer/theme.js": VIEWER_DIR / "theme.js",
@@ -151,11 +156,6 @@ def index_of(
     return index
 
 
-def _script_safe(text: str) -> str:
-    """JSON made safe to sit inside a script element."""
-    return text.replace("</", "<\\/").replace("\u2028", "\\u2028").replace("\u2029", "\\u2029")
-
-
 def _inline(match: re.Match[str]) -> str:
     part = PARTS.get(match.group("path"))
     if part is None:
@@ -164,7 +164,7 @@ def _inline(match: re.Match[str]) -> str:
 
 
 def page_html(index: Mapping[str, Any], mark_style: str = "") -> str:
-    """The single page, with the index inlined.
+    """The single page, with the index inlined as :func:`pack_index` packs it.
 
     Args:
         index: The page index.
@@ -181,7 +181,41 @@ def page_html(index: Mapping[str, Any], mark_style: str = "") -> str:
     text = INLINE_PATTERN.sub(_inline, text)
     text = text.replace("/*@MARKSTYLE@*/", mark_style)
     text = text.replace("@TITLE@", html.escape(str(index["build"]["title"])))
-    return text.replace(DATA_MARKER, _script_safe(json.dumps(index, separators=(",", ":"), default=str)))
+    return text.replace(DATA_MARKER, json.dumps(pack_index(index), separators=(",", ":")))
+
+
+def pack_index(index: Mapping[str, Any]) -> dict[str, Any]:
+    """The index as the page inlines it: its JSON, zstd-compressed and base64-encoded.
+
+    Args:
+        index: The page index.
+
+    Returns:
+        ``{n, zstd}``: the JSON's length in bytes and the compressed bytes as base64.
+    """
+    data = json.dumps(index, separators=(",", ":"), default=str).encode("utf-8")
+    packed = pa.Codec("zstd", compression_level=INDEX_ZSTD_LEVEL).compress(data, asbytes=True)
+    return {"n": len(data), "zstd": base64.b64encode(packed).decode("ascii")}
+
+
+def read_index(page: str) -> dict[str, Any]:
+    """The index a written page inlines.
+
+    Args:
+        page: The page's HTML.
+
+    Returns:
+        The index.
+
+    Raises:
+        ValueError: When the page inlines no index.
+    """
+    found = INDEX_PATTERN.search(page)
+    if found is None:
+        raise ValueError("the page inlines no index")
+    packed = json.loads(found.group(1))
+    data = pa.Codec("zstd").decompress(base64.b64decode(packed["zstd"]), decompressed_size=packed["n"], asbytes=True)
+    return json.loads(data)
 
 
 def write_page(

@@ -189,7 +189,7 @@ def test_the_page_inlines_its_index_and_writes_side_files(tmp_path: Path) -> Non
     assert written["parquet_bytes"] > 0 and written["wrapper_bytes"] > written["parquet_bytes"]
     html_text = (tmp_path / "page" / "index.html").read_text()
     assert "/*@" not in html_text and ".m{}" in html_text
-    index = json.loads(re.search(r"var REVIEW_INDEX = (\{.*?\});</script>", html_text, re.S).group(1))  # type: ignore[union-attr]
+    index = page_module.read_index(html_text)
     assert index["cols"]["stem"][0] == record["stem"]
     assert index["cols"]["text"][1] == "a name"
     assert index["evidence"]["breath_event_db_over_local"]["kind"] == "numeric"
@@ -298,3 +298,18 @@ def test_a_side_file_decodes_in_the_page_to_the_records_it_was_written_from(tmp_
     ):
         assert got[key] == speech["speech"][key], key
     assert got["html"].startswith('<span class="w" data-i="0">hi</span> <mark class="pii u-red" data-k="k0"')
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not on PATH; the index cannot be unpacked")
+def test_the_page_unpacks_the_index_it_inlines(tmp_path: Path) -> None:
+    """The zstd-packed index the page inlines unpacks in the page to the index that was written."""
+    record = review_page.review_record(_run_root(tmp_path / "corpus"), tmp_path / "corpus")
+    assert record is not None
+    review_page.write_page([record], tmp_path / "page", title="t", audio_base="../")
+    decoder = Path(__file__).parent / "review_page" / "decode_shard.mjs"
+    result = subprocess.run(
+        ["node", str(decoder), str(tmp_path / "page"), "index"], capture_output=True, text=True, check=False
+    )
+    assert result.returncode == 0, result.stderr
+    expected = review_page.index_of([record], title="t", audio_base="../")
+    assert json.loads(result.stdout) == json.loads(json.dumps(expected))
