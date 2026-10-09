@@ -1,7 +1,10 @@
 # Which transcript words are the task's own content: those lying on a task event the task layer read
 # (task_content.py, read by nodes/redact.py). Such a word is never PII and never masked.
 # Derivation: specs/20261007-task-events-in-background/design.md ("Task content in the transcript").
-version: 1
+# v2 (owner, 2026-10-09): the release ground task_content_unmasked is these events' alone -- every
+# located finding lying on them; a finding on a lexical task's declared or stimulus words keeps
+# no_content_masked / reviewer_unmasked_all.
+version: 2
 families:              # a family set of routing_analysis/families.py -> the task readings whose events are its content
   SYLLABLE_REPETITION: [ddk_task_reading]
   AIRWAY_ELICITING: [airway_breath_reading, airway_cough_reading]

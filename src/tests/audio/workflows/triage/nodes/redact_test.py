@@ -57,6 +57,7 @@ from senselab.audio.workflows.triage.nodes.redact import (
 )
 from senselab.audio.workflows.triage.vocabulary import (
     FINDINGS_ARE_TASK_CONTENT,
+    NO_CONTENT_MASKED,
     REDACTION_LLM_ANNOTATION,
     REVIEWER_CLEARED_RESCAN,
     REVIEWER_UNMASKED_SOME,
@@ -2872,6 +2873,7 @@ class TestTaskWordsKindCutAndAReadingThatNamesNothing:
         plan = mask_plan(store, reviewer_applies=False, padding_ms=50, lexicon=lexicon)
         assert plan.final == []
         assert len(plan.task_lexicon_ids) == 2
+        assert not plan.task_content_only, "a lexical task's declared words are not task events"
         assert plan.record(release="x", release_ground=None)["counts"]["task_lexicon_words_n"] == 2
 
     def test_a_word_not_in_proper_form_under_a_place_is_cut(
@@ -3390,6 +3392,7 @@ class TestRedactionPolicyV8:
         )
         assert plan.final == [] and plan.person_names_masked == 0
         assert len(plan.task_text_ids) == 1
+        assert not plan.task_content_only, "a lexical task's target word is not a task event"
 
     def test_a_season_the_question_names_is_task_content(self, store: ProvStore, tmp_path: Path) -> None:
         """free-speech-v2-1 asks about seasons: "summer" is the question's own word, "July" is the speaker's."""
@@ -3681,6 +3684,28 @@ class TestTheTaskSOwnEventsAreNeverMasked:
         _stub_pii(monkeypatch, findings=[])
         redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
         assert _verdict_entity(store, "REDACT").attributes["task_event_exempt_n"] == 0
+
+
+class TestTheTaskContentGroundIsTheEventsAlone:
+    """Owner, 2026-10-09: ``task_content_unmasked`` is for findings on a non-lexical task's events only."""
+
+    def test_a_lexical_task_s_declared_word_keeps_its_previous_ground(
+        self, store: ProvStore, redact_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A Cinderella retelling REDACT masked on "cinderella's": no mask stands, on ``no_content_masked``."""
+        _seed_redact_store(
+            store,
+            tmp_path,
+            words=["then", "cinderella's", "coach", "left"],
+            findings=[("PERSON", _word_extent(1))],
+            recording_stem="sub-x_ses-y_task-cinderella-story",
+        )
+        _stub_pii(monkeypatch, findings=[])
+        redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
+        assert _verdict_entity(store, "REDACT").attributes["redactions_n"] == 1
+        folded = verdict_module.verdict(store, None, redact_config, run_dir=tmp_path).file_verdict
+        assert folded.release is not None
+        assert (folded.release.value, folded.release_ground) == ("as_is", NO_CONTENT_MASKED)
 
 
 class TestAMultiWordNameSpreadsAsARun:
