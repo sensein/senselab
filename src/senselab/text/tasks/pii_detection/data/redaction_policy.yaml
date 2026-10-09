@@ -12,7 +12,9 @@
 # (sidecar language en / es); a word this file does not list is left to the detectors and the reviewer.
 # v10 (owner, 2026-10-08): the fold decides a token once for every occurrence, and never masks the words
 # lying on a non-lexical task's own events (specs/20261007-task-events-in-background/design.md).
-version: 10
+# v11 (owner, 2026-10-09): a reviewer release whose reading recorded the task, the consensus transcript
+# and every recogniser's reading outranks a name kept masked at another occurrence of the token.
+version: 11
 
 months: [january, february, march, april, may, june, july, august, september, october, november, december, sept]
 # Spanish month names are written lower-case, so they are matched in any case.

@@ -102,6 +102,7 @@ from senselab.text.tasks.pii_detection.redaction_review import (
     PLACE_REASONS,
     RELABEL_PLACE,
     RELABELS,
+    review_inputs_complete,
     safe_harbor_codes,
 )
 from senselab.utils.prov_store import Entity, ProvStore
@@ -1643,6 +1644,9 @@ class MaskPlan:
             (:func:`task_content`), which no mask covers.
         task_content_only: Whether every finding located on words covered only the task's own content --
             its lexicon, its texts or its events -- and none was left unplaced.
+        reviewer_precedence: Whether the reviewer's reading recorded the task, the consensus transcript
+            and every recogniser's reading (``review_inputs_complete``), so its ``release`` of a token
+            outranks a name kept masked at another occurrence.
     """
 
     masks: tuple[MaskOutcome, ...]
@@ -1664,6 +1668,7 @@ class MaskPlan:
     task_text_ids: tuple[str, ...] = ()
     task_event_ids: tuple[str, ...] = ()
     task_content_only: bool = False
+    reviewer_precedence: bool = False
 
     @property
     def planned(self) -> list[RedactionExtent]:
@@ -1777,6 +1782,7 @@ class MaskPlan:
             "release": release,
             "release_ground": release_ground,
             "reviewer_applied": self.reviewer_applied,
+            "reviewer_precedence": self.reviewer_precedence,
             "padding_ms": self.padding_ms,
             "masks": [
                 {
@@ -2251,7 +2257,10 @@ def mask_plan(
     recogniser's reading): a reviewer ``release`` releases every covered occurrence the policy does not
     lock, and a name kept masked -- adjacent kept name words matched as one run -- masks every other
     occurrence that is not task content, approved, a condition or released by kind, placing a
-    :data:`PROPAGATED` mask where no finding covers it.
+    :data:`PROPAGATED` mask where no finding covers it. Where the reading recorded the task, the
+    consensus transcript and every recogniser's reading (``review_inputs``), a release that frees an
+    occurrence of a token outranks the name kept masked: the token's person or place lock is lifted at
+    every covered occurrence and no mask spreads onto a released word. Otherwise the kept name wins.
     The kept words are cut into one extent per adjacent run, padded up to the nearest unmasked word.
     The rules are in ``specs/20261003-redaction-policy-v7/design.md`` and
     ``specs/20261007-task-events-in-background/design.md`` ("Redaction decisions per token").
@@ -2303,7 +2312,10 @@ def mask_plan(
     task_words = task_content(store, words, live_findings, declared_task_family(store))
     excluded_ids = declared_ids | task_words.ids
     located, unplaced_records = _located_findings(store, residue_ids, excluded_ids)
-    finding_word_ids = {str(i) for entity in live_findings for i in (entity.attributes.get("word_ids") or ())}
+    finding_word_ids_of = {
+        entity.id: {str(i) for i in (entity.attributes.get("word_ids") or ())} for entity in live_findings
+    }
+    finding_word_ids = {word_id for ids in finding_word_ids_of.values() for word_id in ids}
     read_keys = finding_keys(live_findings, by_id)
     keys_of = {word.id: word_keys(word) for word in words}
     findings_of: dict[str, list[str]] = {}
@@ -2571,6 +2583,20 @@ def mask_plan(
     }
     applied = reviewer_applies and bool(named)
     released = ((named | propagated) - set(locked)) if applied else set()
+    reviewer_wins = applied and review_inputs_complete(reading.get("review_inputs"))
+    if reviewer_wins:
+        for token in named_tokens:
+            occurrences = {
+                word_id
+                for word_id in named | propagated
+                if surface_key(word_id) == token or token in keys_of.get(word_id, set())
+            }
+            if not occurrences & released:
+                continue
+            for word_id in occurrences:
+                if locked.get(word_id) in (LOCK_PERSON, LOCK_PLACE):
+                    locked.pop(word_id)
+                    released.add(word_id)
     approved_release = {word_id for word_id in approved_ids if word_id not in locked}
     # A name the reviewer released takes its lower-case words with it: "Gladiator fighter" tagged
     # PERSON, with "Gladiator" released, does not leave "fighter" masked.
@@ -2753,6 +2779,7 @@ def mask_plan(
                     or word.id in approved_ids
                     or word.id in condition_ids
                     or word.id in kind_of
+                    or (reviewer_wins and word.id in released)
                     or word.attributes.get("bracketed")
                 ):
                     continue
@@ -2956,6 +2983,7 @@ def mask_plan(
         task_text_ids=tuple(sorted(task_text_ids & (finding_word_ids | task_policy_ids))),
         task_event_ids=tuple(sorted(task_words.ids & finding_word_ids)),
         task_content_only=bool(located) and all(not finding.word_ids for finding in located) and not unplaced_records,
+        reviewer_precedence=reviewer_wins,
         named_no_words=reviewer_named_no_words(reading),
         releases=tuple(releases),
         conditions=tuple(conditions),
