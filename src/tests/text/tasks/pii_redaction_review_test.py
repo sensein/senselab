@@ -685,6 +685,48 @@ def test_the_prompt_states_the_time_expression_rule_and_the_cue_word_rule() -> N
     """v7: weekdays and relative times are released, absolute dates are not; a cue word's definition is task content."""
     from senselab.text.tasks.pii_detection import redaction_review as r
 
-    assert r.PROMPT_VERSION == 9
+    assert r.PROMPT_VERSION == 10
     assert "2-3 weeks ago" in r._PROMPT and "this morning" in r._PROMPT and '"Monday"' in r._PROMPT
     assert "gladiator" in r._PROMPT and "hotel" in r._PROMPT
+
+
+_COLUMNS = {
+    "recognisers": ["asr_crisperwhisper", "asr_qwen"],
+    "columns": [
+        [0, "What", "variant", ["What", "Barakat"]],
+        [1, "the", "agreement", ["the", "the"]],
+        [2, "time", "insertion", [None, "time"]],
+    ],
+}
+
+
+def test_the_request_carries_the_consensus_columns_with_each_recogniser_s_word() -> None:
+    """Owner, 2026-10-09: the reviewer sees each column's outcome and every recogniser's reading."""
+    from senselab.text.tasks.pii_detection.redaction_review import _compose
+
+    body = _compose("What the time", None, {"task": "ddk", "consensus_columns": _COLUMNS})
+    assert "CONSENSUS COLUMNS (recognisers: 1 = asr_crisperwhisper, 2 = asr_qwen):" in body
+    assert "0 What | variant | 1: What | 2: Barakat" in body
+    assert "1 the | agreement\n" in body
+    assert "2 time | insertion | 1: - | 2: time" in body
+    assert body.index("CONSENSUS COLUMNS") < body.index("ORIGINAL:")
+
+
+def test_the_reading_records_which_inputs_it_had() -> None:
+    """The task with its instruction or stimulus, the consensus, and two recognisers' readings: complete."""
+    from senselab.text.tasks.pii_detection.redaction_review import review_inputs, review_inputs_complete
+
+    full = review_inputs({"task": "cinderella-story", "instructions": "Tell the story.", "consensus_columns": _COLUMNS})
+    assert (full["task"], full["consensus_transcript"], full["asr_readings"], full["columns_n"]) == (
+        True,
+        True,
+        True,
+        3,
+    )
+    assert review_inputs_complete(full)
+    assert not review_inputs_complete(review_inputs({"task": "cinderella-story", "consensus_columns": _COLUMNS}))
+    assert not review_inputs_complete(review_inputs({"task": "x", "asked_to_say": "y"}))
+    one = {**_COLUMNS, "recognisers": ["asr_qwen"]}
+    assert not review_inputs_complete(review_inputs({"task": "x", "asked_to_say": "y", "consensus_columns": one}))
+    assert not review_inputs_complete(None)
+    assert not review_inputs_complete({**full, "version": 0})
