@@ -31,6 +31,7 @@ from senselab.audio.workflows.triage.vocabulary import (
     MASKS_TRIMMED_TO_CONTENT,
     MODEL_SPEAKER_PERMITTED,
     NAME_MASKS_PROPAGATED,
+    NO_BRANCH_MEASURED,
     NO_BREATH_CAPTURED,
     NO_CONTENT_MASKED,
     NO_LEXICAL_ITEM_PRODUCED,
@@ -64,7 +65,6 @@ from senselab.audio.workflows.triage.vocabulary import (
     TOO_SHORT_FOR_TASK,
     UNAVAILABLE,
     UNDETERMINED,
-    UNEXPLAINED_CONTENT,
     UNJUDGED,
     UNPLACED_FINDING_OPEN,
     UNPLACED_FINDING_UNREAD,
@@ -244,8 +244,8 @@ class TestDiscardIsNarrow:
         assert folded.triage is Triage.DISCARD
         assert folded.discard_ground == "acoustically_empty"
 
-    def test_nothing_routed_but_not_empty_reruns_rather_than_discarding(self) -> None:
-        """Content no gate could account for is a charge against the ruleset, never against the file."""
+    def test_nothing_routed_and_no_owner_measured_reruns_rather_than_discarding(self) -> None:
+        """Content no gate routed and no owning branch measured is owed a measurement, never a discard."""
         folded = fold_file_verdict(
             [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
             branch_decisions=_all_declined(),
@@ -254,9 +254,37 @@ class TestDiscardIsNarrow:
             route_state="unexplained",
         )
         assert folded.triage is Triage.REVIEW and folded.run_status is RunStatus.INCOMPLETE
-        assert folded.ground_keys == ["route_unexplained"]
+        assert folded.ground_keys == ["no_branch_measured"]
         assert folded.discard_ground is None
-        assert any(reason.why == UNEXPLAINED_CONTENT for reason in folded.reasons)
+        assert any(reason.why == NO_BRANCH_MEASURED for reason in folded.reasons)
+
+    def test_nothing_routed_but_the_owner_reported_is_decided_on_its_report(self) -> None:
+        """The declared task's own branch ran and reported, so the empty route leaves no ground."""
+        folded = fold_file_verdict(
+            [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
+            branch_decisions=_all_declined(),
+            branch_reports=[BranchReport(node="VOICE", kind="voice", conformance=True, conformance_of=TASK)],
+            ran={"VOICE": RunState.COMPLETED},
+            hint_claims={},
+            route_state="unexplained",
+            task=TaskEvidence(owning_branches=("VOICE",)),
+        )
+        assert "no_branch_measured" not in folded.ground_keys
+        assert not any(reason.why == NO_BRANCH_MEASURED for reason in [*folded.reasons, *folded.annotations])
+        assert folded.run_status is not RunStatus.INCOMPLETE
+
+    def test_nothing_routed_and_the_owner_did_not_report_reruns(self) -> None:
+        """A declared owner that left no report measured nothing, so the recording is owed a rerun."""
+        folded = fold_file_verdict(
+            [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
+            branch_decisions=_all_declined(),
+            ran={},
+            hint_claims={},
+            route_state="unexplained",
+            task=TaskEvidence(owning_branches=("VOICE",)),
+        )
+        assert folded.triage is Triage.REVIEW and folded.run_status is RunStatus.INCOMPLETE
+        assert "no_branch_measured" in folded.ground_keys
 
     def test_an_unreadable_bypass_reruns_under_its_own_ground(self) -> None:
         """Nothing routed and no bypass to read is owed a rerun, and says which of the two it was.
@@ -276,7 +304,7 @@ class TestDiscardIsNarrow:
         assert folded.ground_keys == ["route_unreadable"]
         assert folded.discard_ground is None
         assert any(reason.why == UNREADABLE_EMPTINESS for reason in folded.reasons)
-        assert not any(reason.why == UNEXPLAINED_CONTENT for reason in folded.reasons)
+        assert not any(reason.why == NO_BRANCH_MEASURED for reason in folded.reasons)
 
     def test_the_two_grounds_are_told_apart_by_their_ground_not_by_their_axis(self) -> None:
         """Both discard; a consumer that cannot tell them apart treats an empty file as a broken one."""
@@ -2328,8 +2356,8 @@ class TestTheDeclaredTaskDecides:
         assert folded.triage is Triage.PASS
         assert folded.discard_ground is None
 
-    def test_a_missing_derivative_reruns_before_the_task_is_called_absent(self) -> None:
-        """A route the ruleset could not explain is owed a rerun; the empty task waits for it."""
+    def test_an_unexplained_route_is_decided_on_the_owner_report(self) -> None:
+        """No branch routed, but the owning branch ran and found none of the task: decided on that, no rerun."""
         folded = fold_file_verdict(
             self._ADMIT_OK,
             branch_reports=[_report("SPEECH", "speech", conformance=False)],
@@ -2342,8 +2370,9 @@ class TestTheDeclaredTaskDecides:
             redaction=RedactionEvidence(lexical_words_n=0, scanned=True),
             task=TaskEvidence(owning_branches=("SPEECH",), duration_s=3.9, minimum_duration_s=1.0),
         )
-        assert folded.triage is Triage.REVIEW and folded.run_status is RunStatus.INCOMPLETE
-        assert folded.discard_ground is None
+        assert "no_branch_measured" not in folded.ground_keys
+        assert folded.run_status is not RunStatus.INCOMPLETE
+        assert folded.triage is Triage.DISCARD and folded.discard_ground == "declared_task_absent"
 
     def _breath(self, *, route_state: str, duration_s: float, absent: tuple[str, ...]) -> FileVerdict:
         return fold_file_verdict(

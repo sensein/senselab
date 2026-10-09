@@ -47,7 +47,7 @@ keys:                  # exact verdict ground key -> reason
   routing_errored: not_measured
   config_bad_hint_map: not_measured
   declaration_unread: not_measured
-  route_unexplained: not_measured
+  no_branch_measured: not_measured
   route_unreadable: not_measured
   critical_absence: not_measured
   taxonomy_no_classifier: not_measured

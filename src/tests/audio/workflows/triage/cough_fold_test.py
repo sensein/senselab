@@ -13,9 +13,9 @@ from senselab.audio.workflows.triage.vocabulary import (
     GROUND_KEYS,
     KEY_COUGH_REVIEW_LOW_CONFIDENCE,
     KEY_DISCARD_CONTESTED,
+    KEY_NO_BRANCH_MEASURED,
     KEY_NO_COUGH_CAPTURED,
     KEY_OWNING_BRANCH_INPUT_ABSENT,
-    KEY_ROUTE_UNEXPLAINED,
     KEY_TASK_MISMATCH,
     NO_COUGH_CAPTURED,
     OPERATIONAL_GROUND_KEYS,
@@ -176,7 +176,7 @@ def test_a_found_cough_explains_the_route() -> None:
     """45f1c7ec: no branch routed, but the declared task's coughs explain the content, so no rerun."""
     folded = _fold(mode=COUGH_COUNTED, onsets=5, airway_route=DECLINED, route_state="unexplained")
     assert folded.triage is Triage.PASS
-    assert KEY_ROUTE_UNEXPLAINED not in folded.ground_keys
+    assert KEY_NO_BRANCH_MEASURED not in folded.ground_keys
 
 
 def test_a_low_confidence_count_is_flagged_for_review() -> None:
