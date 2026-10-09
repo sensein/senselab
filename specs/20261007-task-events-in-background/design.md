@@ -1127,3 +1127,13 @@ one cannot change), job 25333020, `/orcd/scratch/bcs/002/satra/r18b_20261008/dry
   `withheld`, 29 unassessed); 362 have a finding word on the task's events, 340 with every finding word
   on them. 27 lose every mask (25 of them `redacted` now, 2 `withheld`), 2 lose some. 332 `as_is` recordings
   lose the PII mark the page drew. Almost all are DDK (317), then glides 18, phonation 16, airway 11.
+
+**Exact dry re-fold (job 25339582, code at 7a8f3c36).** The same 7,436 stores folded in memory by the new
+VERDICT, nothing written. The release changes on 27: 26 `redacted` → `as_is` and 1 `withheld` → `as_is`,
+all DDK but one glide (pataka 10, buttercup 8, ta 4). Final masks change on 54. 26 recordings gain
+propagated masks (40 words; 24 `redacted`, 2 `withheld`); fewer than the 76 above because a name now
+spreads as its whole run and only through a content-word token. 362 recordings carry task-event words.
+The release ground moves on 438: 426 to `task_content_unmasked` (347 of them through the task's events,
+the rest findings on declared task words that were `no_content_masked` or `reviewer_unmasked_all`
+before), 9 to `name_masks_propagated`. The buttercup recording stays `as_is`, now on
+`task_content_unmasked`, with no mask and `task_event_words_n` 1.
