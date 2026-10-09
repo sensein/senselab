@@ -11,7 +11,7 @@ import json
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterable, Sequence
+from typing import Any, Iterable, Mapping, Sequence
 
 import numpy as np
 import pytest
@@ -646,10 +646,27 @@ _RESET_WORDS = ("i", "met", "Alice", "in", "Brooklyn", "today")
 _RESET_FINDINGS = [("PERSON", _word_extent(2)), ("LOCATION", _word_extent(4))]
 
 
+FULL_REVIEW_INPUTS = {
+    "version": 1,
+    "prompt_version": 10,
+    "task": True,
+    "consensus_transcript": True,
+    "asr_readings": True,
+    "recognisers": ["asr_crisperwhisper", "asr_qwen"],
+    "columns_n": 1,
+}
+"""A reading given the task, the consensus transcript and both recognisers' readings."""
+
+
 def _annotate(
-    store: ProvStore, proposal: Sequence[dict[str, str]], *, original: str = "clean", redaction: str = ""
+    store: ProvStore,
+    proposal: Sequence[dict[str, str]],
+    *,
+    original: str = "clean",
+    redaction: str = "",
+    inputs: Mapping[str, Any] | None = None,
 ) -> None:
-    """REVIEW's annotation, carrying one proposal."""
+    """REVIEW's annotation, carrying one proposal and, where given, the inputs its reading recorded."""
     agent = store.agent(agent_type="software", version="senselab test-review")
     activity = store.activity(node="REVIEW", step="read", parameters={})
     store.was_associated_with(activity, agent)
@@ -662,6 +679,7 @@ def _annotate(
             "original": original,
             "redaction": redaction,
             "proposal": [dict(entry) for entry in proposal],
+            **({"review_inputs": dict(inputs)} if inputs is not None else {}),
         },
     )
     store.was_generated_by(annotation, activity)
@@ -2705,7 +2723,7 @@ class TestTheReviewerJudgesATermNotAnInstance:
     def test_a_redact_entry_on_the_term_stops_it_spreading(
         self, store: ProvStore, redact_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Where the reviewer also asks for the token hidden, it is a name kept masked, so every occurrence is."""
+        """A reading without its inputs recorded: the name kept masked wins, so every occurrence is masked."""
         self._seed(store, redact_config, tmp_path, monkeypatch)
         _annotate(
             store,
@@ -2718,6 +2736,74 @@ class TestTheReviewerJudgesATermNotAnInstance:
         princes = [word for mask in plan.masks for word in mask.words]
         assert [word.state for word in princes] == [MASKED, MASKED, MASKED]
         assert [word.propagation for word in princes] == ["mask", "", ""]
+        assert not plan.reviewer_precedence
+
+    def test_a_release_given_every_input_keeps_the_quoted_prince_released(
+        self, store: ProvStore, redact_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Owner, 2026-10-09: with the task, the consensus and both readings, the release outranks the kept name."""
+        self._seed(store, redact_config, tmp_path, monkeypatch)
+        _annotate(
+            store,
+            [
+                {**_release_entry("the Prince danced", "PERSON"), "relabel": "other_non_person"},
+                _redact_entry("Prince smiled", "PERSON"),
+            ],
+            inputs=FULL_REVIEW_INPUTS,
+        )
+        plan = _plan(store)
+        princes = [word for mask in plan.masks for word in mask.words]
+        assert [word.state for word in princes] == [UNMASKED_BY_REVIEWER, MASKED, MASKED]
+        assert [word.propagation for word in princes] == ["", "", ""]
+        assert plan.reviewer_precedence
+        assert plan.record(release="x", release_ground=None)["reviewer_precedence"] is True
+
+    def test_a_reading_missing_one_input_does_not_outrank_the_kept_name(
+        self, store: ProvStore, redact_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The same reading without the recognisers' readings: the mask wins."""
+        self._seed(store, redact_config, tmp_path, monkeypatch)
+        _annotate(
+            store,
+            [
+                {**_release_entry("the Prince danced", "PERSON"), "relabel": "other_non_person"},
+                _redact_entry("Prince smiled", "PERSON"),
+            ],
+            inputs={**FULL_REVIEW_INPUTS, "asr_readings": False},
+        )
+        plan = _plan(store)
+        assert [word.state for mask in plan.masks for word in mask.words] == [MASKED, MASKED, MASKED]
+        assert not plan.reviewer_precedence
+
+
+class TestAReleaseWithEveryInputOutranksADetectorSName:
+    """Owner, 2026-10-09: a release of one occurrence releases every occurrence a detector kept as a name."""
+
+    def _seed(self, store: ProvStore, config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """PERSON findings on a lower-case "prince" and, later, a capitalised "Prince" the person lock keeps."""
+        words = ["the", "prince", "danced", "then", "Prince", "smiled"]
+        _seed_redact_store(store, tmp_path, words=words, findings=[("PERSON", _word_extent(i)) for i in (1, 4)])
+        _stub_pii(monkeypatch, findings=[])
+        redact(store, "recording", config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
+
+    def test_every_occurrence_is_released(
+        self, store: ProvStore, redact_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The reviewer releases "the prince danced": the locked "Prince" goes too, and nothing re-masks it."""
+        self._seed(store, redact_config, tmp_path, monkeypatch)
+        _annotate(store, [_release_entry("the prince danced", "PERSON")], inputs=FULL_REVIEW_INPUTS)
+        plan = _plan(store)
+        assert MASKED not in {word.state for mask in plan.masks for word in mask.words}
+        assert plan.final == []
+
+    def test_without_every_input_the_kept_name_masks_every_occurrence(
+        self, store: ProvStore, redact_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The same release from a reading that recorded no inputs: both stay masked."""
+        self._seed(store, redact_config, tmp_path, monkeypatch)
+        _annotate(store, [_release_entry("the prince danced", "PERSON")])
+        plan = _plan(store)
+        assert [word.state for mask in plan.masks for word in mask.words] == [MASKED, MASKED]
 
 
 class TestAFunctionWordIsNotATerm:
