@@ -659,6 +659,7 @@ var ReviewPage = (function () {
     box.appendChild(body);
     recordOf(i, function (rec) {
       if (state.current !== i) return;
+      rec = withRelease(rec, r);
       body.innerHTML = '';
       if (!rec) { body.appendChild(el('p', 'rv-note', 'this recording\'s side file did not load')); return; }
       var time = spectrogramSection(r, rec);
@@ -1044,6 +1045,12 @@ var ReviewPage = (function () {
   /** Whether the recording's release is the redacted copy, so its masks and PII marks were applied. */
   function redactionReleased(release) { return release === 'redacted'; }
 
+  /** A side file's record joined to its index row: the release lives in the index, not the side file. */
+  function withRelease(rec, row) {
+    if (rec && row) rec.release = row.release;
+    return rec;
+  }
+
   /** What a PII mark on a recording released other than redacted says: the mark, then the release decision. */
   function notAppliedTitle(release, ground) {
     return NOT_APPLIED + ' — release ' + (release || 'not assessed') + (ground ? ': ' + ground : '');
@@ -1403,6 +1410,7 @@ var ReviewPage = (function () {
     labelFits: labelFits,
     audioTracks: audioTracks,
     redactionReleased: redactionReleased,
+    withRelease: withRelease,
     notAppliedTitle: notAppliedTitle,
     markNotApplied: markNotApplied,
     NOT_RELEASED_REDACTION: NOT_RELEASED_REDACTION,

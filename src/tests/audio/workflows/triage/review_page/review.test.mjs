@@ -335,3 +335,11 @@ test('overlapping lane tokens go to separate rows; a label shows only where it f
   assert.equal(R.labelFits(20, 'What', 7), false)
   assert.equal(R.labelFits(0, '', 7), true)
 })
+
+test('a side file record takes its release from the index row, which is the only place it is stored', () => {
+  const streams = { recording: '/a.wav', redacted: 'r.flac' }
+  const rec = R.withRelease({ streams, speech: {} }, { release: 'redacted' })
+  assert.equal(rec.release, 'redacted')
+  assert.deepEqual(R.audioTracks(rec).map((t) => [t.name, t.timeline]), [['recording', true], ['redacted', true]])
+  assert.equal(R.withRelease(null, { release: 'redacted' }), null)
+})
