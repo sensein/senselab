@@ -685,48 +685,115 @@ def test_the_prompt_states_the_time_expression_rule_and_the_cue_word_rule() -> N
     """v7: weekdays and relative times are released, absolute dates are not; a cue word's definition is task content."""
     from senselab.text.tasks.pii_detection import redaction_review as r
 
-    assert r.PROMPT_VERSION == 10
+    assert r.PROMPT_VERSION == 11
     assert "2-3 weeks ago" in r._PROMPT and "this morning" in r._PROMPT and '"Monday"' in r._PROMPT
     assert "gladiator" in r._PROMPT and "hotel" in r._PROMPT
 
 
-_COLUMNS = {
+_TRANSCRIPT: dict[str, Any] = {
     "recognisers": ["asr_crisperwhisper", "asr_qwen"],
-    "columns": [
-        [0, "What", "variant", ["What", "Barakat"]],
-        [1, "the", "agreement", ["the", "the"]],
-        [2, "time", "insertion", [None, "time"]],
+    "words": [
+        [0, "What", "variant", ["What", "Barakat"], "", [["PERSON", "gliner", "asr_qwen"]]],
+        [1, "the", "agreement", ["the", "the"], "", []],
+        [2, "time", "insertion", [None, "time"], "", []],
+        [3, "um", "agreement", ["um", "um"], "non_lexical", []],
+        [4, "Cinderella", "agreement", ["Cinderella", "Cinderella"], "task", [["PERSON", "presidio", "consensus"]]],
+        [5, "danced.", "agreement", ["danced.", "danced"], "task", []],
+        [
+            6,
+            "Maria",
+            "agreement",
+            ["Maria", "maria"],
+            "",
+            [
+                ["PERSON", "gliner", "consensus"],
+                ["PERSON", "presidio", "asr_crisperwhisper"],
+                ["LOCATION", "rules", "consensus"],
+            ],
+        ],
     ],
+    "findings_n": 4,
 }
 
 
-def test_the_request_carries_the_consensus_columns_with_each_recogniser_s_word() -> None:
-    """Owner, 2026-10-09: the reviewer sees each column's outcome and every recogniser's reading."""
+def test_the_request_carries_the_whole_transcript_with_its_pii_and_variation() -> None:
+    """Owner, 2026-10-09 (C): every consensus word, its PII annotation and each recogniser's reading, in one text."""
     from senselab.text.tasks.pii_detection.redaction_review import _compose
 
-    body = _compose("What the time", None, {"task": "ddk", "consensus_columns": _COLUMNS})
-    assert "CONSENSUS COLUMNS (recognisers: 1 = asr_crisperwhisper, 2 = asr_qwen):" in body
-    assert "0 What | variant | 1: What | 2: Barakat" in body
-    assert "1 the | agreement\n" in body
-    assert "2 time | insertion | 1: - | 2: time" in body
-    assert body.index("CONSENSUS COLUMNS") < body.index("ORIGINAL:")
+    body = _compose("What the time Maria", None, {"task": "ddk", "consensus_transcript": _TRANSCRIPT})
+    assert "ORIGINAL:\nTRANSCRIPT (recognisers: A = asr_crisperwhisper, B = asr_qwen; C = the consensus):\n" in body
+    line = body.split("C = the consensus):\n", 1)[1].split("\n", 1)[0]
+    assert line == (
+        "What{pii PERSON by gliner@B | variant A=What B=Barakat} the time{insertion A=- B=time} "
+        "<nonlex>um</nonlex> <task>Cinderella{pii PERSON by presidio@C} danced.</task> "
+        "Maria{pii PERSON by gliner@C, presidio@A ; LOCATION by rules@C}"
+    )
+    assert "What the time Maria" not in body
+    assert body.count("ORIGINAL:") == 1
+
+
+def test_without_a_transcript_the_original_is_the_residue() -> None:
+    """A caller that gives no transcript is sent the text it passed."""
+    from senselab.text.tasks.pii_detection.redaction_review import _compose
+
+    assert "ORIGINAL:\nWhat the time\n" in _compose("What the time", None, {"task": "ddk"})
+
+
+def test_a_reading_differing_in_more_than_case_is_shown_and_quoted_when_it_needs_to_be() -> None:
+    """An agreement spelled differently keeps its readings; a reading with a space or a brace is JSON-quoted."""
+    from senselab.text.tasks.pii_detection.redaction_review import transcript_block
+
+    block = transcript_block(
+        {
+            "recognisers": ["a", "b", "c"],
+            "words": [
+                [0, "okay", "agreement", ["okay", "OK", "ok ay"], "", []],
+                [1, "x", "variant", ["x", "y{", "x"], "", []],
+            ],
+        }
+    )
+    assert block.splitlines()[0] == "TRANSCRIPT (recognisers: A = a, B = b, D = c; C = the consensus):"
+    assert block.splitlines()[1] == 'okay{agreement A=okay B=OK D="ok ay"} x{variant A=x B="y{" D=x}'
+
+
+def test_quotes_are_checked_against_the_whole_transcript_and_the_residue() -> None:
+    """A quote across a task word occurs in the transcript; one that skips a filler occurs in the residue."""
+    from senselab.text.tasks.pii_detection.redaction_review import quotable_texts, quote_occurs
+
+    texts = quotable_texts("What the time Maria", {"consensus_transcript": _TRANSCRIPT})
+    assert texts == ("What the time um Cinderella danced. Maria", "What the time Maria")
+    assert quote_occurs("time um Cinderella", texts)
+    assert quote_occurs("time Maria", texts)
+    assert not quote_occurs("Barakat", texts)
 
 
 def test_the_reading_records_which_inputs_it_had() -> None:
-    """The task with its instruction or stimulus, the consensus, and two recognisers' readings: complete."""
+    """The task with its instruction or stimulus, the whole transcript, its PII and two readings: complete."""
     from senselab.text.tasks.pii_detection.redaction_review import review_inputs, review_inputs_complete
 
-    full = review_inputs({"task": "cinderella-story", "instructions": "Tell the story.", "consensus_columns": _COLUMNS})
-    assert (full["task"], full["consensus_transcript"], full["asr_readings"], full["columns_n"]) == (
-        True,
-        True,
-        True,
-        3,
+    full = review_inputs(
+        {"task": "cinderella-story", "instructions": "Tell the story.", "consensus_transcript": _TRANSCRIPT}
     )
+    assert {key: full[key] for key in ("version", "prompt_version", "task", "full_transcript", "pii_annotations")} == {
+        "version": 2,
+        "prompt_version": 11,
+        "task": True,
+        "full_transcript": True,
+        "pii_annotations": True,
+    }
+    assert (full["asr_readings"], full["words_n"], full["pii_words_n"], full["variation_words_n"]) == (True, 7, 3, 2)
     assert review_inputs_complete(full)
-    assert not review_inputs_complete(review_inputs({"task": "cinderella-story", "consensus_columns": _COLUMNS}))
+    assert not review_inputs_complete(review_inputs({"task": "cinderella-story", "consensus_transcript": _TRANSCRIPT}))
     assert not review_inputs_complete(review_inputs({"task": "x", "asked_to_say": "y"}))
-    one = {**_COLUMNS, "recognisers": ["asr_qwen"]}
-    assert not review_inputs_complete(review_inputs({"task": "x", "asked_to_say": "y", "consensus_columns": one}))
+    one = {**_TRANSCRIPT, "recognisers": ["asr_qwen"]}
+    assert not review_inputs_complete(review_inputs({"task": "x", "asked_to_say": "y", "consensus_transcript": one}))
+    unannotated = {key: value for key, value in _TRANSCRIPT.items() if key != "findings_n"}
+    assert not review_inputs_complete(
+        review_inputs({"task": "x", "asked_to_say": "y", "consensus_transcript": unannotated})
+    )
+    columns = {"recognisers": _TRANSCRIPT["recognisers"], "words": [word[:4] for word in _TRANSCRIPT["words"]]}
+    assert not review_inputs_complete(
+        review_inputs({"task": "x", "asked_to_say": "y", "consensus_transcript": {**columns, "findings_n": 0}})
+    )
     assert not review_inputs_complete(None)
-    assert not review_inputs_complete({**full, "version": 0})
+    assert not review_inputs_complete({**full, "version": 1})
