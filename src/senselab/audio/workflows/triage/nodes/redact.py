@@ -1642,8 +1642,9 @@ class MaskPlan:
             covered or a date, age or state rule would have masked, which no mask covers.
         task_event_ids: The words a finding covered that are the task's own content read off its events
             (:func:`task_content`), which no mask covers.
-        task_content_only: Whether every finding located on words lay on a non-lexical task's own events
-            (:func:`task_content`) and no mask of it covered any other word, and none was left unplaced.
+        task_content_only: Whether every finding located on words touched a non-lexical task's own events
+            (:func:`task_content`) and kept no word once the task's own words were dropped, and none was
+            left unplaced.
         reviewer_precedence: Whether the reviewer's reading recorded the task, the consensus transcript
             and every recogniser's reading (``review_inputs_complete``), so its ``release`` of a token
             outranks a name kept masked at another occurrence.
