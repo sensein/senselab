@@ -648,15 +648,29 @@ _RESET_FINDINGS = [("PERSON", _word_extent(2)), ("LOCATION", _word_extent(4))]
 
 
 FULL_REVIEW_INPUTS = {
+    "version": 2,
+    "prompt_version": 11,
+    "task": True,
+    "full_transcript": True,
+    "pii_annotations": True,
+    "asr_readings": True,
+    "recognisers": ["asr_crisperwhisper", "asr_qwen"],
+    "words_n": 8,
+    "pii_words_n": 3,
+    "variation_words_n": 0,
+}
+"""A reading given the task and the whole transcript with its PII annotations and both recognisers' readings."""
+
+PROMPT_10_INPUTS = {
     "version": 1,
     "prompt_version": 10,
     "task": True,
     "consensus_transcript": True,
     "asr_readings": True,
     "recognisers": ["asr_crisperwhisper", "asr_qwen"],
-    "columns_n": 1,
+    "columns_n": 8,
 }
-"""A reading given the task, the consensus transcript and both recognisers' readings."""
+"""What a prompt-10 reading recorded: the residue, with the consensus columns beside it."""
 
 
 def _annotate(
@@ -2759,6 +2773,42 @@ class TestTheReviewerJudgesATermNotAnInstance:
         assert plan.reviewer_precedence
         assert plan.record(release="x", release_ground=None)["reviewer_precedence"] is True
 
+    @pytest.mark.parametrize("missing", ["full_transcript", "pii_annotations", "asr_readings", "task"])
+    def test_a_reading_missing_one_input_does_not_outrank_the_kept_name_v2(
+        self,
+        store: ProvStore,
+        redact_config: TriageConfig,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        missing: str,
+    ) -> None:
+        """Owner, 2026-10-09: each of the four inputs is required; without any one the mask wins."""
+        self._seed(store, redact_config, tmp_path, monkeypatch)
+        _annotate(
+            store,
+            [
+                {**_release_entry("the Prince danced", "PERSON"), "relabel": "other_non_person"},
+                _redact_entry("Prince smiled", "PERSON"),
+            ],
+            inputs={**FULL_REVIEW_INPUTS, missing: False},
+        )
+        plan = _plan(store)
+        assert [word.state for mask in plan.masks for word in mask.words] == [MASKED, MASKED, MASKED]
+        assert not plan.reviewer_precedence
+
+    def test_a_prompt_10_reading_does_not_outrank_the_kept_name(
+        self, store: ProvStore, redact_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A reading that saw only the residue and the columns, never the whole annotated transcript."""
+        self._seed(store, redact_config, tmp_path, monkeypatch)
+        _annotate(
+            store,
+            [{**_release_entry("the Prince danced", "PERSON"), "relabel": "other_non_person"}],
+            inputs=PROMPT_10_INPUTS,
+        )
+        plan = _plan(store)
+        assert not plan.reviewer_precedence
+
     def test_a_reading_missing_one_input_does_not_outrank_the_kept_name(
         self, store: ProvStore, redact_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -2805,6 +2855,50 @@ class TestAReleaseWithEveryInputOutranksADetectorSName:
         _annotate(store, [_release_entry("the prince danced", "PERSON")])
         plan = _plan(store)
         assert [word.state for mask in plan.masks for word in mask.words] == [MASKED, MASKED]
+
+
+class TestAQuoteFromTheWholeTranscriptPlacesOnTheResidue:
+    """Prompt 11: the reviewer reads every consensus word, so a quote may run across task or non-lexical words."""
+
+    def _seed(self, store: ProvStore, config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A read passage's residue "Maria ... Smith" around the stimulus words "ate leaves"."""
+        _seed_redact_store(
+            store,
+            tmp_path,
+            words=["the", "caterpillar", "Maria", "ate", "leaves", "Smith"],
+            findings=[("PERSON", (2.0, 5.5))],
+            residue=[2, 5],
+        )
+        _stub_pii(monkeypatch, findings=[])
+        redact(store, "recording", config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
+
+    @pytest.mark.parametrize("quote", ["Maria ate leaves Smith", "Maria Smith"])
+    def test_a_quote_places_on_the_residue_words_it_covers(
+        self,
+        store: ProvStore,
+        redact_config: TriageConfig,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        quote: str,
+    ) -> None:
+        """Quoted across the task words or as the residue reads, the release lands on "Maria" and "Smith" only."""
+        self._seed(store, redact_config, tmp_path, monkeypatch)
+        _annotate(
+            store, [{**_release_entry(quote, "PERSON"), "relabel": "other_non_person"}], inputs=FULL_REVIEW_INPUTS
+        )
+        plan = _plan(store)
+        assert _states(plan) == {"Maria": UNMASKED_BY_REVIEWER, "Smith": UNMASKED_BY_REVIEWER}
+        assert plan.release_unplaced == ()
+
+    def test_a_quote_of_task_words_alone_places_nothing(
+        self, store: ProvStore, redact_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The task's own words are never masked, so a release naming only them is unplaced and changes nothing."""
+        self._seed(store, redact_config, tmp_path, monkeypatch)
+        _annotate(store, [_release_entry("ate leaves")], inputs=FULL_REVIEW_INPUTS)
+        plan = _plan(store)
+        assert _states(plan) == {"Maria": MASKED, "Smith": MASKED}
+        assert plan.release_unplaced == ("ate leaves",)
 
 
 class TestAFunctionWordIsNotATerm:

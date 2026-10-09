@@ -1645,9 +1645,9 @@ class MaskPlan:
         task_content_only: Whether every finding located on words touched a non-lexical task's own events
             (:func:`task_content`) and kept no word once the task's own words were dropped, and none was
             left unplaced.
-        reviewer_precedence: Whether the reviewer's reading recorded the task, the consensus transcript
-            and every recogniser's reading (``review_inputs_complete``), so its ``release`` of a token
-            outranks a name kept masked at another occurrence.
+        reviewer_precedence: Whether the reviewer's reading recorded the task and the whole consensus
+            transcript with its PII annotations and every recogniser's reading (``review_inputs_complete``),
+            so its ``release`` of a token outranks a name kept masked at another occurrence.
     """
 
     masks: tuple[MaskOutcome, ...]
@@ -2247,7 +2247,8 @@ def mask_plan(
     time of day, a weekday, a season, a relative reference or a length of time (:func:`time_by_kind`), a kinship
     word, and a country that is the whole of a place name unless a reviewer ``redact`` entry names it.
     A health condition the reviewer lists is never masked. A word otherwise leaves its mask when a
-    reviewer ``release`` entry names it -- whole-token runs, at every place the quote occurs -- or
+    reviewer ``release`` entry names it -- whole-token runs over the whole consensus transcript the
+    reviewer read, kept on residue words, at every place the quote occurs -- or
     names the same token elsewhere, unless a ``redact`` entry places on that token;
     or when it is not a residue content word
     (:func:`~senselab.audio.workflows.triage.residue.is_content_word`). In a recording declared in a
@@ -2258,8 +2259,9 @@ def mask_plan(
     recogniser's reading): a reviewer ``release`` releases every covered occurrence the policy does not
     lock, and a name kept masked -- adjacent kept name words matched as one run -- masks every other
     occurrence that is not task content, approved, a condition or released by kind, placing a
-    :data:`PROPAGATED` mask where no finding covers it. Where the reading recorded the task, the
-    consensus transcript and every recogniser's reading (``review_inputs``), a release that frees an
+    :data:`PROPAGATED` mask where no finding covers it. Where the reading recorded the task and the whole
+    consensus transcript with its PII annotations and every recogniser's reading (``review_inputs``,
+    :func:`review_inputs_complete`), a release that frees an
     occurrence of a token outranks the name kept masked: the token's person or place lock is lifted at
     every covered occurrence and no mask spreads onto a released word. Otherwise the kept name wins.
     The kept words are cut into one extent per adjacent run, padded up to the nearest unmasked word.
@@ -2302,6 +2304,7 @@ def mask_plan(
     residue_ids = {word.id for word in residue}
     tokens = _tokens(residue)
     words = [word for word in consensus_words(store) if word.extent is not None]
+    transcript_tokens = _tokens(words)
     by_id = {word.id: word for word in words}
     order = {word.id: position for position, word in enumerate(words)}
     vocabulary = lexicon if lexicon is not None else declared_names_lexicon(declared_task_family(store))
@@ -2406,8 +2409,12 @@ def mask_plan(
         for word_id in member_ids:
             family_of_word.setdefault(word_id, category_family(members[0].category))
 
+    def quoted_words(quote: str) -> list[Entity]:
+        hits = [word for word in _place(quote, transcript_tokens) if word.id in residue_ids]
+        return hits or _place(quote, tokens)
+
     def placed_words(quote: str) -> tuple[list[Entity], str]:
-        hits = _place(quote, tokens)
+        hits = quoted_words(quote)
         if hits:
             return hits, PLACED_WORDS
         hits = _place_substring(quote, residue)
@@ -2446,7 +2453,7 @@ def mask_plan(
     for index, entry in enumerate(entries):
         if str(entry.get("action")) != "release" or index in condition_indices:
             continue
-        hits = _place(str(entry.get("text") or ""), tokens)
+        hits = quoted_words(str(entry.get("text") or ""))
         category = str(entry.get("category") or "OTHER").upper()
         relabel = str(entry.get("relabel") or "").strip().lower()
         place_reason = str(entry.get("place_reason") or "").strip().lower()
@@ -2961,7 +2968,7 @@ def mask_plan(
         for index, entry in enumerate(entries)
         if str(entry.get("action")) == "release"
         and index not in condition_indices
-        and (hits := _place(str(entry.get("text") or ""), tokens))
+        and (hits := quoted_words(str(entry.get("text") or "")))
         and not any(word.id in family_of_word for word in hits)
     ]
     name_release_proposed = [
@@ -2969,7 +2976,7 @@ def mask_plan(
         for index, entry in enumerate(entries)
         if str(entry.get("action")) == "release"
         and index not in condition_indices
-        and any(locked.get(word.id) == LOCK_PERSON for word in _place(str(entry.get("text") or ""), tokens))
+        and any(locked.get(word.id) == LOCK_PERSON for word in quoted_words(str(entry.get("text") or "")))
     ]
     return MaskPlan(
         masks=tuple(outcomes),

@@ -35,6 +35,7 @@ from senselab.audio.workflows.triage.nodes.common import (
     consensus_words,
     find_measurement,
     find_verdict,
+    live_entities,
     mint_live,
     path_attributes,
     resolve_stream,
@@ -49,14 +50,21 @@ from senselab.audio.workflows.triage.nodes.redact import (
     transcript_texts,
 )
 from senselab.audio.workflows.triage.nodes.redact import STREAM_NAME as REDACTED_STREAM
+from senselab.audio.workflows.triage.residue import VOCAL, is_non_lexical
 from senselab.audio.workflows.triage.task_lexicon import TaskLexicon, task_lexicon
 from senselab.audio.workflows.triage.vocabulary import PII_SCAN, REDACTION_LLM_ANNOTATION, SCANNED
 from senselab.text.tasks.pii_detection.redaction_review import (
-    CONSENSUS_COLUMNS,
+    CONSENSUS_HAYSTACK,
+    CONSENSUS_TRANSCRIPT,
     PROMPT_VERSION,
     REDACT,
+    REVIEW_INPUTS_VERSION,
+    WORD_NON_LEXICAL,
+    WORD_SCANNED,
+    WORD_TASK,
     ReviewProposal,
     answer_problem,
+    quotable_texts,
     review_inputs,
     review_payload,
     review_transcript,
@@ -228,35 +236,62 @@ def task_context(store: ProvStore, hint: AudioHints | None, lexicon: TaskLexicon
     return context
 
 
-def consensus_columns(store: ProvStore) -> dict[str, Any]:
-    """The consensus transcript column by column, with each recogniser's reading and the column's outcome.
+def consensus_transcript(store: ProvStore) -> dict[str, Any]:
+    """The whole consensus transcript word by word, with each word's PII findings and its variation.
 
     Args:
         store: The provenance store.
 
     Returns:
-        ``recognisers``, every recogniser a column holds a reading of, sorted, and ``columns``, one
-        ``[index, consensus word, outcome, [each recogniser's word or None]]`` per consensus word in
-        stream order; both empty where the store holds no consensus words.
+        ``recognisers``, every recogniser a word holds a reading of, sorted; ``words``, one ``[index,
+        consensus word, outcome, [each recogniser's word or None], kind, [[category, detector, reading],
+        ...]]`` per consensus word in stream order, where ``kind`` says whether the PII scan read the word
+        (:data:`WORD_SCANNED`), or set it aside as task content (:data:`WORD_TASK`) or non-lexical
+        (:data:`WORD_NON_LEXICAL`), and ``reading`` is the recogniser whose transcript a live finding was
+        found on, or :data:`CONSENSUS_HAYSTACK`; and ``findings_n``, the live findings annotated.
     """
     words = consensus_words(store)
     recognisers = sorted({str(name) for word in words for name in (word.attributes.get("readings") or {})})
-    columns = []
+    scan = find_measurement(store, "pii_scan")
+    residue = {str(word_id) for word_id in (scan.attributes.get("residue_word_ids") or ())} if scan else set()
+    vocal = scan is not None and scan.attributes.get("residue_method") == VOCAL
+    findings: dict[str, list[list[str]]] = {}
+    live = live_entities(store, "pii")
+    for finding in live:
+        entry = [
+            str(finding.attributes.get("category") or ""),
+            str(finding.attributes.get("source") or ""),
+            str(finding.attributes.get("haystack") or CONSENSUS_HAYSTACK),
+        ]
+        for word_id in finding.attributes.get("word_ids") or ():
+            listed = findings.setdefault(str(word_id), [])
+            if entry not in listed:
+                listed.append(entry)
+    rows = []
     for word in words:
-        readings = {str(name): str(text) for name, text in (word.attributes.get("readings") or {}).items()}
-        columns.append(
+        text = str(word.attributes.get("text") or "")
+        readings = {str(name): str(reading) for name, reading in (word.attributes.get("readings") or {}).items()}
+        if word.id in residue:
+            kind = WORD_SCANNED
+        elif word.attributes.get("bracketed") or is_non_lexical(text, vocal_task=vocal):
+            kind = WORD_NON_LEXICAL
+        else:
+            kind = WORD_TASK
+        rows.append(
             [
                 int(word.attributes["index"]),
-                str(word.attributes.get("text") or ""),
+                text,
                 str(word.attributes.get("outcome") or ""),
                 [readings.get(name) for name in recognisers],
+                kind,
+                findings.get(word.id, []),
             ]
         )
-    return {"recognisers": recognisers, "columns": columns}
+    return {"recognisers": recognisers, "words": rows, "findings_n": len(live)}
 
 
 def review_context(store: ProvStore, hint: AudioHints | None, lexicon: TaskLexicon | None = None) -> dict[str, Any]:
-    """What the reviewer is given beside the texts: the task context and the consensus columns.
+    """What the reviewer is given beside the texts: the task context and the whole consensus transcript.
 
     Args:
         store: The provenance store.
@@ -264,13 +299,13 @@ def review_context(store: ProvStore, hint: AudioHints | None, lexicon: TaskLexic
         lexicon: The family's task lexicon.
 
     Returns:
-        :func:`task_context`'s mapping, with :func:`consensus_columns` under ``consensus_columns`` where
-        the store holds consensus words.
+        :func:`task_context`'s mapping, with :func:`consensus_transcript` under ``consensus_transcript``
+        where the store holds consensus words.
     """
     context = task_context(store, hint, lexicon)
-    columns = consensus_columns(store)
-    if columns["columns"]:
-        context[CONSENSUS_COLUMNS] = columns
+    transcript = consensus_transcript(store)
+    if transcript["words"]:
+        context[CONSENSUS_TRANSCRIPT] = transcript
     return context
 
 
@@ -426,7 +461,7 @@ def _loop(
             timeout_s=int(settings["timeout_s"]),
             feedback=feedback,
         )
-        problem = answer_problem(result, original, redacted)
+        problem = answer_problem(result, quotable_texts(original, context), redacted)
         reviews.append({**review_payload(result), "iteration": iteration, "feedback": feedback, "problem": problem})
         revision = result.revision or revision
         # An answer the prompt's own rule rejects -- a judgment that asks for the redaction to change
@@ -538,8 +573,9 @@ def review_cache_key(
         revision: The 40-hex commit the reviewer's ref resolved to.
 
     Returns:
-        The key: the texts and context, the prompt and parse version, the model and its commit, and the
-        generation ceiling and iteration bound.
+        The key: the texts and context (the whole annotated transcript included), the prompt and parse
+        version, the ``review_inputs`` version, the model and its commit, and the generation ceiling and
+        iteration bound.
     """
     request = canonical_params({"original": original, "redacted": redacted, "context": dict(context)})
     return result_cache_key(
@@ -549,6 +585,7 @@ def review_cache_key(
         commit_sha=revision,
         params={
             "prompt_version": PROMPT_VERSION,
+            "review_inputs_version": REVIEW_INPUTS_VERSION,
             "task_guidance": task_guidance_digest(),
             "max_new_tokens": int(settings["max_new_tokens"]),
             "max_iterations": int(settings["max_iterations"]),
@@ -872,11 +909,12 @@ class RefinedPlan:
 
 
 def _word_spans(words: Sequence[Any]) -> tuple[str, list[tuple[int, int, Any]]]:
-    """The residue as one string, with each word's character range in it.
+    """Words as one string, with each word's character range in it.
 
     Args:
-        words: The residue words, :func:`~senselab.audio.workflows.triage.nodes.redact.residue_words`,
-            in stream order. Bracketed words are skipped, as ``transcript_texts`` skips them.
+        words: Consensus words in stream order: the residue
+            (:func:`~senselab.audio.workflows.triage.nodes.redact.residue_words`) or the whole
+            transcript. Bracketed words are skipped, as ``transcript_texts`` skips them.
 
     Returns:
         ``(text, spans)``, each span ``(start_char, end_char, word)``. The join is the one
@@ -925,8 +963,9 @@ def refine_plan(store: ProvStore, *, padding_ms: int) -> RefinedPlan:
     """The redaction the reviewer's proposal asks for, as extents over this recording.
 
     The proposal is about text and an extent is about time, so the consensus words' own timings are
-    the join. A proposal entry naming text the transcript does not contain is recorded and
-    otherwise ignored.
+    the join. A quote is found in the whole consensus transcript the reviewer read and keeps the
+    residue words it covers; one found only in the residue text is placed there. A proposal entry
+    naming text neither contains is recorded and otherwise ignored.
 
     Args:
         store: The provenance store, carrying the annotation and the detectors' own spans.
@@ -938,7 +977,10 @@ def refine_plan(store: ProvStore, *, padding_ms: int) -> RefinedPlan:
     annotation = find_measurement(store, REDACTION_LLM_ANNOTATION)
     proposal = list(annotation.attributes.get("proposal") or ()) if annotation is not None else []
     detector = planned_extents(store)
-    text, spans = _word_spans(residue_words(store))
+    residue = residue_words(store)
+    residue_ids = {word.id for word in residue}
+    whole_text, whole_spans = _word_spans(consensus_words(store))
+    text, spans = _word_spans(residue)
 
     keep = list(detector)
     added: list[RedactionExtent] = []
@@ -948,7 +990,8 @@ def refine_plan(store: ProvStore, *, padding_ms: int) -> RefinedPlan:
     for entry in proposal:
         quoted = str(entry.get("text") or "")
         action = str(entry.get("action") or REDACT)
-        covered = _covered(text, spans, quoted)
+        covered = [word for word in _covered(whole_text, whole_spans, quoted) if word.id in residue_ids]
+        covered = covered or _covered(text, spans, quoted)
         if not covered:
             unplaced.append(quoted)
             continue

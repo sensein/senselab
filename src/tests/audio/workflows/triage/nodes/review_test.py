@@ -24,7 +24,7 @@ from senselab.audio.workflows.triage.extend import (
     retire_decisions,
 )
 from senselab.audio.workflows.triage.nodes import review as review_module
-from senselab.audio.workflows.triage.nodes.common import find_measurement, software_agent
+from senselab.audio.workflows.triage.nodes.common import consensus_words, find_measurement, software_agent
 from senselab.audio.workflows.triage.nodes.redact import transcript_texts
 from senselab.audio.workflows.triage.nodes.review import (
     BACKFILL_HELD,
@@ -261,9 +261,16 @@ class TestTheReviewerSeesEveryRecogniserSReading:
     def test_the_whole_consensus_reaches_the_reviewer_with_each_recogniser_s_word(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Every consensus word, not only the residue, with its outcome and both recognisers' readings."""
+        """Every consensus word, not only the residue, with its kind, its PII findings and both readings."""
         store = ProvStore(run_id="review-test")
-        _seed(store, words=["pa", "my", "name", "is", "alice"], scan="ran", residue=[1, 2, 3, 4])
+        _seed(store, words=["pa", "um", "my", "name", "is", "alice"], scan="ran", residue=[2, 3, 4, 5])
+        alice = consensus_words(store)[5]
+        finding = store.entity(
+            prov_type="pii",
+            extent=_extent(5),
+            attributes={"category": "PERSON", "source": "gliner", "haystack": "asr_qwen", "word_ids": [alice.id]},
+        )
+        store.was_generated_by(finding, store.activity(node="SPEECH", step="pii", parameters={}))
         contexts: list[dict[str, Any]] = []
 
         def _fake(original: str, *, context: dict[str, Any] | None = None, **kw: Any) -> ReviewResult:  # noqa: ANN401
@@ -273,10 +280,13 @@ class TestTheReviewerSeesEveryRecogniserSReading:
         monkeypatch.setattr(review_module, "review_transcript", _fake)
         review(store, _config(tmp_path))
         (context,) = contexts
-        columns = context["consensus_columns"]
-        assert columns["recognisers"] == ["asr_crisperwhisper", "asr_qwen"]
-        assert columns["columns"][0] == [0, "pa", "agreement", ["pa", "pa"]]
-        assert len(columns["columns"]) == 5
+        transcript = context["consensus_transcript"]
+        assert transcript["recognisers"] == ["asr_crisperwhisper", "asr_qwen"]
+        assert transcript["findings_n"] == 1
+        assert [word[4] for word in transcript["words"]] == ["task", "non_lexical", "", "", "", ""]
+        assert transcript["words"][0][:4] == [0, "pa", "agreement", ["pa", "pa"]]
+        assert transcript["words"][5][5] == [["PERSON", "gliner", "asr_qwen"]]
+        assert len(transcript["words"]) == 6
 
     def test_the_reading_and_each_round_record_their_inputs(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -287,8 +297,13 @@ class TestTheReviewerSeesEveryRecogniserSReading:
         _stub(monkeypatch, [_clean()])
         review(store, _config(tmp_path))
         inputs = _annotation(store)["review_inputs"]
-        assert (inputs["task"], inputs["consensus_transcript"], inputs["asr_readings"]) == (False, True, True)
-        assert inputs["prompt_version"] == PROMPT_VERSION and inputs["version"] >= 1
+        assert (inputs["task"], inputs["full_transcript"], inputs["pii_annotations"], inputs["asr_readings"]) == (
+            False,
+            True,
+            True,
+            True,
+        )
+        assert inputs["prompt_version"] == PROMPT_VERSION and inputs["version"] == 2
         assert [round_["review_inputs"] for round_ in _rounds_in(store)] == [inputs]
 
 
@@ -429,6 +444,23 @@ class TestTheProposalBecomesTheAppliedRedaction:
         assert [(round(e.start, 3), round(e.end, 3)) for e in applied.extents] == [(1.0, 1.5)]
         assert applied.released_n == 0
         assert applied.unplaced == ("not here",)
+
+    def test_a_quote_across_a_task_word_lands_on_the_residue_words_only(self) -> None:
+        """Prompt 11 shows the task word "pa"; a quote running across it covers the residue words around it."""
+        store = ProvStore(run_id="review-test")
+        _seed(store, words=["alicia", "pa", "smith"], scan="ran", residue=[0, 2])
+        _annotate(store, [{"text": "alicia pa smith", "action": "redact", "category": "PERSON", "why": "a name"}])
+        applied = refine_plan(store, padding_ms=0)
+        assert applied.unplaced == ()
+        assert [(round(e.start, 3), round(e.end, 3)) for e in applied.extents] == [(0.0, 2.5)]
+
+    def test_a_quote_of_a_task_word_alone_is_unplaced(self) -> None:
+        """The task word is shown for context; the redaction never reaches it."""
+        store = ProvStore(run_id="review-test")
+        _seed(store, words=["alicia", "pa", "smith"], scan="ran", residue=[0, 2])
+        _annotate(store, [{"text": "pa", "action": "redact", "category": "OTHER", "why": "?"}])
+        applied = refine_plan(store, padding_ms=0)
+        assert applied.extents == [] and applied.unplaced == ("pa",)
 
     def test_every_applied_span_carries_the_reason_it_is_there(self) -> None:
         """The audit trail the discarded second artefact would otherwise have been."""

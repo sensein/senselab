@@ -74,14 +74,23 @@ _CONDITIONS_HEADING = "CONDITIONS:"
 _OTHER_SPEAKERS_HEADING = "OTHER_SPEAKERS:"
 _INSTRUCTIONS_SPOKEN_HEADING = "INSTRUCTIONS_SPOKEN:"
 
-PROMPT_VERSION = 10
+PROMPT_VERSION = 11
 """The prompt and its parse, as one number: it changes whenever either changes what a reading holds."""
 
-REVIEW_INPUTS_VERSION = 1
+REVIEW_INPUTS_VERSION = 2
 """The shape of the ``review_inputs`` record a reading carries (:func:`review_inputs`)."""
 
-CONSENSUS_COLUMNS = "consensus_columns"
-"""The context key holding the consensus transcript column by column with each recogniser's reading."""
+CONSENSUS_TRANSCRIPT = "consensus_transcript"
+"""The context key holding the whole consensus transcript, word by word, with its PII and variation."""
+
+WORD_SCANNED = ""
+WORD_TASK = "task"
+WORD_NON_LEXICAL = "non_lexical"
+WORD_KINDS = (WORD_SCANNED, WORD_TASK, WORD_NON_LEXICAL)
+"""What a consensus word is to the PII scan: a word it read, the task's own content, or non-lexical."""
+
+CONSENSUS_HAYSTACK = "consensus"
+"""The reading a finding was found on when it was found on the consensus transcript itself."""
 
 REDACTION_STATES = ("complete", "incomplete", "not_applicable")
 """Whether the redaction, where one was applied, removed the identifying content."""
@@ -234,14 +243,31 @@ _POLICY = (
 _PROMPT = (
     "You are auditing one recording's transcript before it is released. You are given the "
     "ORIGINAL words as transcribed, and where an automatic redaction has already been applied, "
-    "the RELEASED text it produced, in which every [CATEGORY] token marks removed text. Where no "
+    "the RELEASED text it produced from the words the detectors read (every word outside the <task> and "
+    "<nonlex> tags), in which every [CATEGORY] token marks removed text. Where no "
     "redaction was applied the RELEASED section says so, and nothing has been removed.\n\n"
-    "Where a CONSENSUS COLUMNS block is given, it is the whole recording as the speech recognisers heard "
-    "it, one line per word: the consensus word, whether the recognisers agreed on it, read different words "
-    "(variant) or only some of them heard a word there (insertion), and each recogniser's own word. Use it to "
-    "judge whether a word was said at all and what it was: a name only one recogniser read, where another "
-    "read an ordinary word, may be a misreading. The ORIGINAL is the part of it under review; quote only the "
-    "ORIGINAL.\n\n" + _POLICY + _identifier_rule() + "\n\nJudge six things independently.\n"
+    "Where the ORIGINAL is headed TRANSCRIPT, it is the whole recording as the speech recognisers heard it: "
+    "every consensus word in order, written as plain words with annotations attached. The heading names "
+    "each recogniser by a letter; C is the consensus itself. Words inside <task>...</task> are the task's "
+    "own content (its stimulus, target words or syllables) and words inside <nonlex>...</nonlex> are "
+    "non-lexical (fillers, sounds, bracketed markers); the automatic detectors did not read either, the "
+    "redaction never removes them, and they are there so you read every word in its place. A word with "
+    "something to say about it carries it in braces right after it, parts separated by ' | ':\n"
+    "  pii CATEGORY by DETECTOR@READING, ... -- an automatic detector found that category on this word, "
+    "reading the transcript the letter names (several categories are separated by ' ; ');\n"
+    "  variant A=word B=word -- the recognisers read different words here;\n"
+    "  insertion A=word B=- -- only some recognisers heard a word here ('-' is none);\n"
+    "  agreement A=word B=word -- they agree on the word but spell it differently.\n"
+    'For example, "my sister Maria{pii PERSON by gliner@C, presidio@A | variant A=Maria B=Mario} lives '
+    'in <task>the cookie jar</task> <nonlex>um</nonlex> Ohio{pii LOCATION by presidio@C}" has a name two '
+    "detectors found and the recognisers read differently, a place one detector found, three task words and "
+    "a filler. A word without braces is one every recogniser read the same way and no detector marked. Use "
+    "the readings to judge whether a word was said at all and what it was: a name only one recogniser read, "
+    "where another read an ordinary word, may be a misreading. Quote words as the ORIGINAL writes them, "
+    "without the braces, their contents or the tags.\n\n"
+    + _POLICY
+    + _identifier_rule()
+    + "\n\nJudge six things independently.\n"
     "1. Whether the redaction, where one was applied, actually removed everything the policy removes.\n"
     "2. Whether the ORIGINAL words carry anything the policy removes at all, which is a separate "
     "question and the one no automatic detector here has asked.\n"
@@ -324,32 +350,105 @@ _PROMPT = (
 )
 
 
-def consensus_columns_block(columns: Mapping[str, Any] | None) -> str:
-    """The consensus transcript column by column, as the reviewer reads it.
+_BARE_READING = re.compile(r"[^\s{}|=<>;,]+")
+
+
+def _reading(text: str | None) -> str:
+    """One recogniser's word as an annotation writes it: bare, ``-`` where it read none, else JSON-quoted."""
+    if text is None or text == "":
+        return "-"
+    return text if _BARE_READING.fullmatch(text) else json.dumps(text, ensure_ascii=False)
+
+
+def _letters(count: int) -> list[str]:
+    """The letters naming ``count`` recognisers: ``A``, ``B`` ... skipping ``C``, which names the consensus."""
+    letters = [chr(code) for code in range(ord("A"), ord("Z") + 1) if chr(code) != "C"]
+    return [letters[i] if i < len(letters) else f"R{i + 1}" for i in range(count)]
+
+
+def transcript_block(transcript: Mapping[str, Any] | None) -> str:
+    """The whole consensus transcript, as the reviewer reads it.
 
     Args:
-        columns: The context's :data:`CONSENSUS_COLUMNS` mapping: ``recognisers``, the recogniser names,
-            and ``columns``, one ``[index, consensus word, outcome, [each recogniser's word or None]]``
-            per consensus word.
+        transcript: The context's :data:`CONSENSUS_TRANSCRIPT` mapping: ``recognisers``, the recogniser
+            names, and ``words``, one ``[index, word, outcome, [each recogniser's word or None], kind,
+            [[category, detector, reading], ...]]`` per consensus word in stream order, where ``kind`` is
+            one of :data:`WORD_KINDS` and ``reading`` is a recogniser name or :data:`CONSENSUS_HAYSTACK`.
 
     Returns:
-        A heading naming the recognisers, then one line per column: an agreement whose readings all
-        write the consensus word as ``index word | agreement``, every other column with each
-        recogniser's word after its number, ``-`` where it read none. Empty where there are no columns.
+        A heading naming each recogniser's letter, then the words on one line: each word followed by its
+        annotations in braces, and each run of task or non-lexical words inside a ``<task>`` or ``<nonlex>``
+        tag. An agreement whose readings differ from the word only in case and punctuation carries no
+        variation. Empty where there are no words.
     """
-    if not columns or not columns.get("columns"):
+    if not transcript or not transcript.get("words"):
         return ""
-    names = [str(name) for name in columns.get("recognisers") or ()]
-    legend = ", ".join(f"{number} = {name}" for number, name in enumerate(names, start=1))
-    lines = [f"CONSENSUS COLUMNS (recognisers: {legend}):"]
-    for index, text, outcome, readings in columns["columns"]:
+    names = [str(name) for name in transcript.get("recognisers") or ()]
+    letters = _letters(len(names))
+    letter_of = {name: letter for name, letter in zip(names, letters)}
+    letter_of[CONSENSUS_HAYSTACK] = "C"
+    legend = ", ".join(f"{letter} = {name}" for letter, name in zip(letters, names))
+    heading = f"TRANSCRIPT (recognisers: {legend}; C = the consensus):"
+    tags = {WORD_TASK: "task", WORD_NON_LEXICAL: "nonlex"}
+    pieces: list[str] = []
+    open_kind = WORD_SCANNED
+    for _index, text, outcome, readings, kind, findings in transcript["words"]:
+        if kind != open_kind:
+            if open_kind in tags:
+                pieces[-1] += f"</{tags[open_kind]}>"
+            open_kind = kind if kind in tags else WORD_SCANNED
+            opening = f"<{tags[open_kind]}>" if open_kind in tags else ""
+        else:
+            opening = ""
+        parts: list[str] = []
+        by_category: dict[str, list[str]] = {}
+        for category, detector, haystack in findings or ():
+            source = f"{detector}@{letter_of.get(str(haystack), str(haystack))}"
+            listed = by_category.setdefault(str(category), [])
+            if source not in listed:
+                listed.append(source)
+        if by_category:
+            parts.append("pii " + " ; ".join(f"{cat} by {', '.join(src)}" for cat, src in by_category.items()))
         heard = [None if reading is None else str(reading) for reading in readings]
-        if outcome == "agreement" and all(reading == text for reading in heard):
-            lines.append(f"{index} {text} | agreement")
-            continue
-        each = " | ".join(f"{number}: {reading or '-'}" for number, reading in enumerate(heard, start=1))
-        lines.append(f"{index} {text} | {outcome} | {each}")
-    return "\n".join(lines)
+        same = outcome == "agreement" and all(
+            reading is not None and _quote_tokens(reading) == _quote_tokens(str(text)) for reading in heard
+        )
+        if heard and not same:
+            each = " ".join(f"{letters[i]}={_reading(reading)}" for i, reading in enumerate(heard))
+            parts.append(f"{outcome or 'unaligned'} {each}")
+        note = "{" + " | ".join(parts) + "}" if parts else ""
+        pieces.append(f"{opening}{text}{note}")
+    if open_kind in tags and pieces:
+        pieces[-1] += f"</{tags[open_kind]}>"
+    return heading + "\n" + " ".join(pieces)
+
+
+def transcript_text(transcript: Mapping[str, Any] | None) -> str:
+    """The whole consensus transcript as plain words, the text a reviewer quote is checked against.
+
+    Args:
+        transcript: The context's :data:`CONSENSUS_TRANSCRIPT` mapping.
+
+    Returns:
+        Every word's consensus text, space-joined; empty where there are no words.
+    """
+    if not transcript:
+        return ""
+    return " ".join(str(word[1]) for word in transcript.get("words") or () if str(word[1]))
+
+
+def quotable_texts(original: str, context: Mapping[str, Any] | None) -> tuple[str, ...]:
+    """The texts a reviewer quote may come from: the whole transcript where one was given, and the residue.
+
+    Args:
+        original: The lexical residue the PII scan read.
+        context: The context the reading was composed from.
+
+    Returns:
+        The non-empty texts.
+    """
+    whole = transcript_text((context or {}).get(CONSENSUS_TRANSCRIPT))
+    return tuple(text for text in (whole, original) if text)
 
 
 def review_inputs(context: Mapping[str, Any] | None) -> dict[str, Any]:
@@ -360,37 +459,42 @@ def review_inputs(context: Mapping[str, Any] | None) -> dict[str, Any]:
 
     Returns:
         ``version`` (:data:`REVIEW_INPUTS_VERSION`), ``prompt_version``, ``task`` (the declared task and
-        its instructions or stimulus), ``consensus_transcript`` (the consensus columns), ``asr_readings``
-        (each of two or more recognisers' word per column, with the column's outcome), and
-        ``recognisers`` and ``columns_n``.
+        its instructions or stimulus), ``full_transcript`` (every consensus word, task and non-lexical
+        words included), ``pii_annotations`` (each word's detector findings with the reading they were
+        found on), ``asr_readings`` (each of two or more recognisers' word wherever they differ, with the
+        outcome), and ``recognisers``, ``words_n``, ``pii_words_n`` and ``variation_words_n``.
     """
     facts = dict(context or {})
-    columns = facts.get(CONSENSUS_COLUMNS) or {}
-    rows = list(columns.get("columns") or ())
-    recognisers = [str(name) for name in columns.get("recognisers") or ()]
+    transcript = facts.get(CONSENSUS_TRANSCRIPT) or {}
+    words = list(transcript.get("words") or ())
+    recognisers = [str(name) for name in transcript.get("recognisers") or ()]
     return {
         "version": REVIEW_INPUTS_VERSION,
         "prompt_version": PROMPT_VERSION,
         "task": bool(facts.get("task")) and bool(facts.get("instructions") or facts.get("asked_to_say")),
-        "consensus_transcript": bool(rows),
-        "asr_readings": bool(rows) and len(recognisers) >= 2,
+        "full_transcript": bool(words) and all(len(word) == 6 and word[4] in WORD_KINDS for word in words),
+        "pii_annotations": bool(words) and "findings_n" in transcript,
+        "asr_readings": bool(words) and len(recognisers) >= 2,
         "recognisers": recognisers,
-        "columns_n": len(rows),
+        "words_n": len(words),
+        "pii_words_n": sum(1 for word in words if len(word) == 6 and word[5]),
+        "variation_words_n": sum(1 for word in words if word[2] != "agreement"),
     }
 
 
 def review_inputs_complete(inputs: Mapping[str, Any] | None) -> bool:
-    """Whether a reading recorded the task, the consensus transcript and every recogniser's reading.
+    """Whether a reading recorded the task and the whole transcript with its PII and every recogniser's reading.
 
     Args:
         inputs: The reading's ``review_inputs`` record, or None where it recorded none.
 
     Returns:
-        True only for a record of :data:`REVIEW_INPUTS_VERSION` or later with all three set.
+        True only for a record of :data:`REVIEW_INPUTS_VERSION` or later with ``task``,
+        ``full_transcript``, ``pii_annotations`` and ``asr_readings`` all set.
     """
     if not isinstance(inputs, Mapping) or int(inputs.get("version") or 0) < REVIEW_INPUTS_VERSION:
         return False
-    return bool(inputs.get("task")) and bool(inputs.get("consensus_transcript")) and bool(inputs.get("asr_readings"))
+    return all(bool(inputs.get(key)) for key in ("task", "full_transcript", "pii_annotations", "asr_readings"))
 
 
 def _compose(
@@ -403,7 +507,9 @@ def _compose(
         redacted: The text an applied redaction produced, or None where none was applied.
         context: What the recording declares about itself -- ``task``, ``speech_type``, ``language``,
             ``instructions``, ``asked_to_say``, ``declared_names``, ``task_words`` and
-            :data:`CONSENSUS_COLUMNS`. Any key absent or empty is omitted rather than sent empty.
+            :data:`CONSENSUS_TRANSCRIPT`. Any key absent or empty is omitted rather than sent empty. Where
+            the transcript is given it is the ORIGINAL (:func:`transcript_block`) and ``original`` is not
+            sent.
         feedback: What was wrong with the previous round's answer, which this round must correct; None
             on a first round.
 
@@ -440,11 +546,9 @@ def _compose(
             "and instructions read aloud by someone else are a sign of more than one speaker."
         )
         lines.append("")
-    block = consensus_columns_block(facts.get(CONSENSUS_COLUMNS))
-    if block:
-        lines.extend([block, ""])
+    block = transcript_block(facts.get(CONSENSUS_TRANSCRIPT)) or original
     released = redacted if redacted is not None else "(no redaction was applied to this recording)"
-    body = "\n".join(lines) + f"ORIGINAL:\n{original}\n\nRELEASED:\n{released}\n"
+    body = "\n".join(lines) + f"ORIGINAL:\n{block}\n\nRELEASED:\n{released}\n"
     if feedback:
         body += f"\nYOUR PREVIOUS ANSWER HAD A PROBLEM TO CORRECT: {feedback}\n"
     return body
@@ -929,27 +1033,31 @@ def _token_close(a: str, b: str) -> bool:
     return difflib.SequenceMatcher(None, a, b).ratio() >= 0.8
 
 
-def quote_occurs(quote: str, original: str) -> bool:
+def quote_occurs(quote: str, original: str | Sequence[str]) -> bool:
     """Whether a quote occurs in the ORIGINAL, allowing case, punctuation, apostrophe, hyphen and spacing.
 
     A word of five letters or more may also differ by a transcription spelling (similarity 0.8).
 
     Args:
         quote: The quoted words.
-        original: The ORIGINAL text.
+        original: The ORIGINAL text, or several texts any one of which may hold the quote
+            (:func:`quotable_texts`).
 
     Returns:
-        True where the quote's words occur, in order and contiguously, in the ORIGINAL's words.
+        True where the quote's words occur, in order and contiguously, in one text's words.
     """
     wanted = _quote_tokens(quote)
     if not wanted:
         return True
-    words = _quote_tokens(original)
     span = len(wanted)
-    return any(
-        all(_token_close(word, want) for word, want in zip(words[start : start + span], wanted))
-        for start in range(len(words) - span + 1)
-    )
+    for text in (original,) if isinstance(original, str) else original:
+        words = _quote_tokens(text)
+        if any(
+            all(_token_close(word, want) for word, want in zip(words[start : start + span], wanted))
+            for start in range(len(words) - span + 1)
+        ):
+            return True
+    return False
 
 
 _IDENTIFIER_CUE = re.compile(
@@ -960,7 +1068,7 @@ _IDENTIFIER_CUE = re.compile(
 _QUOTED = re.compile(r"[\"\u201c]([^\"\u201d]{2,60})[\"\u201d]")
 
 
-def _named_unproposed(reasoning: str, proposal: Sequence[ReviewProposal], original: str) -> list[str]:
+def _named_unproposed(reasoning: str, proposal: Sequence[ReviewProposal], original: str | Sequence[str]) -> list[str]:
     """Quoted names the reasoning calls a venue, employer, school or street with no PROPOSAL entry quoting them."""
     proposed = [_quote_tokens(entry.text) for entry in proposal]
     missing: list[str] = []
@@ -984,12 +1092,12 @@ def _named_unproposed(reasoning: str, proposal: Sequence[ReviewProposal], origin
     return missing
 
 
-def answer_problem(result: "ReviewResult", original: str, redacted: str | None) -> str | None:
+def answer_problem(result: "ReviewResult", original: str | Sequence[str], redacted: str | None) -> str | None:
     """What makes an answer unusable under the prompt's own rule, as feedback for another round.
 
     Args:
         result: One round's result.
-        original: The ORIGINAL the round read.
+        original: The ORIGINAL the round read, or the texts its quotes may come from (:func:`quotable_texts`).
         redacted: The RELEASED text it read, or None where no redaction was applied.
 
     Returns:
