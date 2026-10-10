@@ -146,6 +146,7 @@ class RecordingFacts:
         lexical: The lexical consensus words' extents, in index order.
         speech: The speech-classified regions (:func:`speech_regions`), merged.
         task_events: The task events the branches read (breaths, coughs, phonation holds, syllables).
+        active: BACKGROUND's activity regions on the plain stream.
     """
 
     stem: str
@@ -158,6 +159,7 @@ class RecordingFacts:
     lexical: tuple[tuple[float, float], ...] = ()
     speech: tuple[tuple[float, float], ...] = ()
     task_events: tuple[tuple[float, float], ...] = ()
+    active: tuple[tuple[float, float], ...] = ()
 
     @property
     def extent_fraction(self) -> float | None:
@@ -246,6 +248,25 @@ def speech_regions(
     return merge(out)
 
 
+def _activity(store: ProvStore) -> list[tuple[float, float]]:
+    reading = find_measurement(store, "background_model")
+    regions = [] if reading is None else reading.attributes.get("regions") or []
+    return merge([(float(r["start_s"]), float(r["end_s"])) for r in regions])
+
+
+def active_s(facts: RecordingFacts, span: tuple[float, float]) -> float:
+    """How much of a span BACKGROUND read as active.
+
+    Args:
+        facts: The recording's facts.
+        span: ``(start, end)``.
+
+    Returns:
+        The active seconds inside it.
+    """
+    return _length(_intersect(list(facts.active), span))
+
+
 def _task_events(store: ProvStore) -> list[tuple[float, float]]:
     from senselab.audio.workflows.triage.nodes.quality import task_events_of  # noqa: PLC0415
 
@@ -301,6 +322,7 @@ def facts_of(
         lexical=words,
         speech=tuple(merge(speech)),
         task_events=tuple(merge(_task_events(store))),
+        active=tuple(_activity(store)),
     )
 
 
@@ -374,7 +396,7 @@ def candidate_runs(facts: RecordingFacts, *, min_s: float, lexical_gap_s: float)
 
 
 def window_regions(facts: RecordingFacts, *, min_s: float, lexical_gap_s: float) -> list[tuple[float, float]]:
-    """The speech-classified time no diarized segment, lexical run or task event covers.
+    """The speech-classified time no compared run (:func:`candidate_runs`) or task event covers.
 
     Args:
         facts: The recording's facts.
@@ -385,8 +407,7 @@ def window_regions(facts: RecordingFacts, *, min_s: float, lexical_gap_s: float)
         The regions the sliding windows read, each at least ``min_s``.
     """
     covered = [
-        *((s, e) for s, e, _ in facts.diarization),
-        *lexical_runs_of(facts.lexical, lexical_gap_s),
+        *((run.start, run.end) for run in candidate_runs(facts, min_s=min_s, lexical_gap_s=lexical_gap_s)),
         *facts.task_events,
     ]
     return [(s, e) for s, e in _subtract(list(facts.speech), covered) if e - s >= min_s]
@@ -399,6 +420,8 @@ def window_runs(
     window_s: float,
     hop_s: float,
     cut: float,
+    active_fraction: Callable[[tuple[float, float]], float] = lambda span: 1.0,
+    active_fraction_min: float = 0.0,
 ) -> list[dict[str, Any]]:
     """Sliding windows over each region, grouped into runs of contiguous windows on one side of the cut.
 
@@ -408,29 +431,36 @@ def window_runs(
         window_s: The window length.
         hop_s: The hop.
         cut: The match cut.
+        active_fraction: The share of a window BACKGROUND read as active.
+        active_fraction_min: A window under this share is not embedded and ends the group it would join.
 
     Returns:
         One run record per group, its span the union of its windows and its cosine their mean.
     """
     out: list[dict[str, Any]] = []
     for start, end in regions:
-        group: list[tuple[float, float, float]] = []
+        group: list[tuple[float, float, float, float]] = []
         t = start
         while t + window_s <= end + 1e-9:
-            cosine = cosine_at((t, t + window_s))
-            if cosine is not None:
+            share = active_fraction((t, t + window_s))
+            cosine = cosine_at((t, t + window_s)) if share >= active_fraction_min else None
+            if cosine is None:
+                if group:
+                    out.append(_window_group(group, cut))
+                    group = []
+            else:
                 if group and (cosine >= cut) != (group[-1][2] >= cut):
                     out.append(_window_group(group, cut))
                     group = []
-                group.append((t, t + window_s, cosine))
+                group.append((t, t + window_s, cosine, share))
             t += hop_s
         if group:
             out.append(_window_group(group, cut))
     return out
 
 
-def _window_group(group: Sequence[tuple[float, float, float]], cut: float) -> dict[str, Any]:
-    cosine = float(np.mean([c for _, _, c in group]))
+def _window_group(group: Sequence[tuple[float, float, float, float]], cut: float) -> dict[str, Any]:
+    cosine = float(np.mean([c for _, _, c, _ in group]))
     start, end = group[0][0], group[-1][1]
     return {
         "start": round(start, 3),
@@ -440,6 +470,7 @@ def _window_group(group: Sequence[tuple[float, float, float]], cut: float) -> di
         "speaker": None,
         "cosine": round(cosine, 4),
         "windows_n": len(group),
+        "windows": [[round(a, 3), round(c, 4), round(f, 3)] for a, _, c, f in group],
         "match": group[0][2] >= cut,
     }
 
@@ -773,6 +804,7 @@ def match_runs(
     """
     runs = candidate_runs(facts, min_s=min_s, lexical_gap_s=lexical_gap_s)
     windows = cohort_parameters()["windows"]
+    gates = cohort_parameters()["runs"]
     regions = window_regions(facts, min_s=float(windows["window_s"]), lexical_gap_s=lexical_gap_s)
     loaded = loader() if runs or regions else None
     if (runs or regions) and loaded is None:
@@ -781,6 +813,9 @@ def match_runs(
     if loaded is not None and enrollment.vector is not None:
         samples, rate = loaded
         for run in runs:
+            active = active_s(facts, (run.start, run.end))
+            if facts.active and active < float(gates["active_min_s"]):
+                continue
             vector = embed(cut_samples(samples, rate, (run.start, run.end)), rate)
             if vector is None:
                 continue
@@ -792,6 +827,7 @@ def match_runs(
                     "duration_s": round(run.duration_s, 3),
                     "source": run.source,
                     "speaker": run.speaker,
+                    "active_s": round(active, 3),
                     "cosine": round(cosine, 4),
                     "match": cosine >= cut,
                 }
@@ -802,7 +838,15 @@ def match_runs(
             return None if vector is None or enrollment.vector is None else float(vector @ enrollment.vector)
 
         records.extend(
-            window_runs(regions, cosine_at, window_s=float(windows["window_s"]), hop_s=float(windows["hop_s"]), cut=cut)
+            window_runs(
+                regions,
+                cosine_at,
+                window_s=float(windows["window_s"]),
+                hop_s=float(windows["hop_s"]),
+                cut=cut,
+                active_fraction=lambda span: active_s(facts, span) / (span[1] - span[0]) if facts.active else 1.0,
+                active_fraction_min=float(windows["active_fraction_min"]),
+            )
         )
     nonmatch = [r for r in records if not r["match"]]
     spans = merge([(r["start"], r["end"]) for r in nonmatch])
