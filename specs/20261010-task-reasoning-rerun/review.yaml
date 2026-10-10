@@ -1,0 +1,5 @@
+# REVIEW on for the prompt-12 re-run; the weights stay resident across a task's rows.
+redaction:
+  llm_check:
+    enabled: true
+    keep_worker_resident: true
