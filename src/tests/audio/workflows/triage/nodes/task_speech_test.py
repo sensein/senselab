@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Sequence
 
+from senselab.audio.workflows.triage.config import load_triage_config
 from senselab.audio.workflows.triage.nodes.common import consensus_words, software_agent, write_measurement
 from senselab.audio.workflows.triage.nodes.redact import NON_TASK_SPEECH, mask_plan
 from senselab.audio.workflows.triage.task_content import task_content_ids
@@ -21,6 +22,7 @@ from senselab.audio.workflows.triage.vocabulary import (
     ROUTED,
     BranchDecision,
     FileVerdict,
+    FoldPolicy,
     NodeVerdict,
     Outcome,
     RedactionEvidence,
@@ -254,3 +256,96 @@ def test_the_packaged_setting_reviews_every_release_but_the_original() -> None:
     from senselab.audio.workflows.triage.decision import reviewed_releases
 
     assert reviewed_releases() == frozenset({"redacted", "withheld"})
+
+
+class TestTheReviewerAndTheSecondOpinionDecide:
+    """Owner, 2026-10-10: the reviewer's task reading and the second opinion on the shipped text reach the verdict."""
+
+    _READ = {"status": "clean", "original": "clean", "proposal": []}
+
+    def _fold(
+        self,
+        *,
+        annotation: dict | None = None,
+        opinion: dict | None = None,
+        cohort: dict | None = None,
+        task: TaskEvidence | None = None,
+    ) -> FileVerdict:
+        decisions = {
+            name: BranchDecision(name, False, route, False)
+            for name, route in (("AIRWAY", DECLINED), ("SPEECH", ROUTED), ("VOICE", DECLINED))
+        }
+        return fold_file_verdict(
+            [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
+            branch_decisions=decisions,
+            ran={},
+            hint_claims={},
+            route_state=ROUTED,
+            redaction=RedactionEvidence(lexical_words_n=5, scanned=True),
+            llm_redaction=annotation,
+            second_opinion=opinion,
+            cohort=cohort,
+            task=task or TaskEvidence(owning_branches=("SPEECH",)),
+            policy=FoldPolicy.from_config(load_triage_config()),
+        )
+
+    def test_the_reviewer_s_off_task_and_other_speaker_readings_review_under_their_subjects(self) -> None:
+        """Off-task speech is the participant's; an assistant is another speaker."""
+        folded = self._fold(annotation={**self._READ, "off_task_speech": "some", "other_speaker": "assistant"})
+        assert {"reviewer_off_task_speech", "reviewer_other_speaker"} <= set(folded.ground_keys)
+        assert folded.reason_keys[:2] == ["other_speaker", "off_task_speech"]
+
+    def test_a_confident_not_free_on_the_shipped_text_holds_the_release(self) -> None:
+        """The second opinion reads identifiers in what would ship: review, and the release waits for a person."""
+        opinion = {"status": "ok", "probabilities": {"masked_text_free_of_identifiers": 0.05}}
+        folded = self._fold(annotation=self._READ, opinion=opinion)
+        assert "second_opinion:masked_text_free_of_identifiers" in folded.ground_keys
+        assert folded.release is Release.WITHHELD and folded.reason == "identifying_content"
+
+    def test_speech_matching_no_enrollment_is_another_speaker(self) -> None:
+        """The same speech outside the task is other_speaker where COHORT's comparison does not match it."""
+        task = TaskEvidence(
+            owning_branches=("AIRWAY",),
+            task_speech={"words_n": 3, "runs_n": 1, "runs": [[100.0, 104.0, 3]]},
+            task_speech_words_min=1,
+        )
+        cohort = {"other_speaker": {"status": "measured", "nonmatch_spans": [[99.0, 110.0]]}}
+        folded = self._fold(cohort=cohort, task=task)
+        assert "other_speaker_in_task" in folded.ground_keys and "speech_in_task" not in folded.ground_keys
+        matched = self._fold(cohort={"other_speaker": {"status": "measured", "nonmatch_spans": []}}, task=task)
+        assert "speech_in_task" in matched.ground_keys
+
+
+class TestTheReviewerQuotesBecomeMasks:
+    """The reviewer's off-task quotes are masked; its task-content quotes release a finding."""
+
+    def test_an_off_task_quote_masks_its_words_and_a_task_content_quote_releases_them(
+        self, store: ProvStore, tmp_path: Path
+    ) -> None:
+        """Three quoted off-task words stay masked; a finding the reviewer called task content is not."""
+        _seed_redact_store(
+            store,
+            tmp_path,
+            words=["lion", "tiger", "my", "doctor", "said", "Paris"],
+            findings=[("LOCATION", _word_extent(5))],
+            recording_stem=ITEMS_STEM,
+        )
+        activity = store.activity(node="REVIEW", step="read", parameters={})
+        write_measurement(
+            store,
+            activity,
+            software_agent(store),
+            name="redaction_llm_annotation",
+            signal="plain",
+            attributes={
+                "status": "clean",
+                "original": "clean",
+                "proposal": [],
+                "off_task_speech": "some",
+                "off_task_quotes": ["my doctor said"],
+                "task_content_quotes": ["Paris"],
+            },
+        )
+        plan = mask_plan(store, reviewer_applies=True, padding_ms=50)
+        assert plan.non_task_speech_masked_n == 3
+        assert all(word.text != "Paris" or word.state != "masked" for mask in plan.masks for word in mask.words)
