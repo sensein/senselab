@@ -239,16 +239,21 @@ class TestItemRuns:
         )
         words = consensus_words(store)
         members = {words[i].id for i in (3, 4, 5)}
-        runs = item_runs(words, members, gap_s=3.0, member_share_min=0.5)
+        runs = item_runs(words, members, gap_s=3.0, member_share_min=0.5, content_share_min=0.6)
         assert [w.id for run in runs for w in run] == [w.id for w in words[3:]]
         read = task_speech_of(store, "random-item-generation", member_ids=members)
         assert read.words_n == 3 and read.off_task_fraction == 0.5
         assert read.item_extent == (6.0, 10.4)
 
-    def test_with_no_category_every_run_is_the_task(self, store: ProvStore) -> None:
-        """Nothing is read as outside the list where no word names a member."""
-        _timed_words(store, ITEMS_STEM, [("one", 0.0), ("two", 6.0)])
-        assert task_speech_of(store, "random-item-generation").words_n == 0
+    def test_with_no_category_a_list_is_its_content_words(self, store: ProvStore) -> None:
+        """Items no category names are still a list; a sentence after a pause is not."""
+        _timed_words(
+            store,
+            ITEMS_STEM,
+            [("seven", 0.0), ("lamp", 1.0), ("river", 2.0), ("is", 8.0), ("that", 8.4), ("it", 8.8), ("then", 9.2)],
+        )
+        read = task_speech_of(store, "random-item-generation")
+        assert read.words_n == 4 and read.item_extent == (0.0, 2.4)
 
 
 def test_the_packaged_setting_reviews_every_release_but_the_original() -> None:
@@ -349,3 +354,16 @@ class TestTheReviewerQuotesBecomeMasks:
         plan = mask_plan(store, reviewer_applies=True, padding_ms=50)
         assert plan.non_task_speech_masked_n == 3
         assert all(word.text != "Paris" or word.state != "masked" for mask in plan.masks for word in mask.words)
+
+
+def test_a_lexical_task_s_own_words_are_its_own_sound_and_an_airway_task_has_none(
+    store: ProvStore, tmp_path: Path
+) -> None:
+    """QUALITY sets a spoken task's words aside as the participant's; a breath task's words stay candidates."""
+    from senselab.audio.workflows.triage.nodes.quality import spoken_task_words
+
+    _seed_redact_store(store, tmp_path, words=["once", "upon", "a"], recording_stem="sub-x_ses-y_task-cinderella-story")
+    assert len(spoken_task_words(store)) == 3
+    other = ProvStore(run_id="airway")
+    _seed_redact_store(other, tmp_path, words=["hello"], recording_stem=BREATH_STEM)
+    assert spoken_task_words(other) == []
