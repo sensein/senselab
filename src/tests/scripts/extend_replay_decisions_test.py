@@ -130,10 +130,10 @@ def _manifest(path: Path, roots: list[Path]) -> Path:
 
 
 def test_replayed_nodes_start_at_background_and_exclude_what_is_read_off_disk() -> None:
-    """ADMIT, PREPROCESS and SESSION are read from the store; every node from BACKGROUND on is replayed."""
+    """ADMIT, PREPROCESS and SESSION are read from the store; every node from BACKGROUND on but COHORT is replayed."""
     assert REPLAYED_NODES[0] == "BACKGROUND"
-    assert {"ADMIT", "PREPROCESS", "SESSION"}.isdisjoint(REPLAYED_NODES)
-    assert REPLAYED_NODES == GRAPH_ORDER[GRAPH_ORDER.index("BACKGROUND") :]
+    assert {"ADMIT", "PREPROCESS", "SESSION", "COHORT"}.isdisjoint(REPLAYED_NODES)
+    assert REPLAYED_NODES == tuple(n for n in GRAPH_ORDER[GRAPH_ORDER.index("BACKGROUND") :] if n != "COHORT")
 
 
 def test_replay_run_id_separates_the_replay_from_the_run_and_from_another_config(tmp_path: Path) -> None:

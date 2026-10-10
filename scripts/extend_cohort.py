@@ -352,7 +352,7 @@ def process_session(
     ]
     key = cohort_key(
         session=session,
-        stems=[facts.stem for facts, _, _ in members],
+        members=[facts for facts, _, _ in members],
         quantiles_sha256=None if quantiles_ref is None else str(quantiles_ref.get("sha256")),
         enrollment_config=settings.record(),
     )

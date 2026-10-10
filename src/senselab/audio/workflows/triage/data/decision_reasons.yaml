@@ -2,7 +2,7 @@
 # `reason` is the first of a recording's reasons in `precedence`; `reasons` is all of them, in that order.
 # Owner, 2026-10-07: verdict pass/review/discard, release as_is/redacted/withheld, one reason per recording.
 # Derivation: specs/20261007-task-events-in-background/design.md ("Decision table").
-version: 2
+version: 3
 precedence:            # discard reasons first, then review, then the release axis
 - unmeasurable
 - task_too_short
@@ -15,6 +15,7 @@ precedence:            # discard reasons first, then review, then the release ax
 - weak_events
 - streams_disagree
 - task_not_conforming
+- atypical_recording
 - identifying_content
 - second_opinion_disagrees
 - redaction_hold
@@ -30,6 +31,7 @@ meaning:
   weak_events: the task's events stand too weakly over the background to decide
   streams_disagree: the raw and enhanced streams disagree on the task's events
   task_not_conforming: the task was performed, but not as instructed or not as the routing read it
+  atypical_recording: the recording falls outside its family's corpus distribution (COHORT)
   identifying_content: words that may identify the participant need a reader
   second_opinion_disagrees: the second-opinion model disagrees with the fold
   redaction_hold: the redaction policy holds the recording back from release
@@ -58,6 +60,8 @@ keys:                  # exact verdict ground key -> reason
   streams_disagree: streams_disagree
   reviewer_second_speaker: other_speaker
   gate:dominant_speaker_share_min: other_speaker
+  other_speaker_in_session: other_speaker
+  recording_duration_outlier: atypical_recording
   breath_review_low_confidence: weak_events
   cough_review_low_confidence: weak_events
   voice_review_low_confidence: weak_events

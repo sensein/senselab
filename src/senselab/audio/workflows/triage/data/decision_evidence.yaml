@@ -4,7 +4,7 @@
 # a category with in / not in against a list of categories; a reported reading has neither.
 # `producer` names the unit of specs/20261007-task-events-in-background/design.md that emits it;
 # an item a later unit produces is absent from the tables until that unit lands.
-version: 3
+version: 4
 groups:
   acquisition:
     admit_outcome:
@@ -136,6 +136,27 @@ groups:
       unit: words
       producer: fold
       meaning: lexical words in the consensus transcript
+  cohort:
+    cohort.other_speaker_runs:
+      unit: runs
+      producer: COHORT
+      meaning: speech runs (diarized or lexical, at least the 1.0 s floor) under speech.target_match_cosine against the participant's session enrollment, <= 0; none is the reading where no enrollment was available
+    cohort.lowest_run_cosine:
+      unit:
+      producer: COHORT
+      meaning: the lowest run's cosine against the session enrollment, >= speech.target_match_cosine
+    cohort.duration_over_family_median:
+      unit:
+      producer: COHORT
+      meaning: the recording's duration over its family's corpus median, <= data/cohort_stage.yaml recording_duration_outlier.duration_ratio_max; review only with the extent fraction under its bound
+    cohort.task_extent_fraction:
+      unit:
+      producer: COHORT
+      meaning: the task extent's share of the recording, >= recording_duration_outlier.extent_fraction_min
+    cohort.recording_duration_outlier:
+      unit:
+      producer: COHORT
+      meaning: the duration check had no cohort to read against (a single-file run); not measured, moves nothing
   release:
     release_ground:
       unit:

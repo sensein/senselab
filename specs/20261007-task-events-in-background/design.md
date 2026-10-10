@@ -1299,3 +1299,137 @@ also not a helpful annotation, since all audios go through some route."
 The parquet carries no branch-report list, so "owner reported" is read from those three signs; every
 one of the 282 shows at least one. The two remaining carriers also hold `owning_branch_input_absent`
 and stay incomplete under it.
+
+## Cohort stage (owner, 2026-10-10)
+
+After QUALITY, and during the re-fold, processes that need more than one recording run over what the
+per-recording stages stored, write into each recording's store before VERDICT, and VERDICT decides on
+them. `GRAPH_ORDER` gains `COHORT` between QUALITY and REDACT, so REDACT can read its non-matching
+spans as non-task speech.
+
+### What COHORT writes
+
+One `cohort_reading` measurement per recording (`cohort_stage.py` writes it, `cohort_fold.py` reads
+it), with `status`, `session`, `family`, `lexical_task`, an `other_speaker` block, a `checks` block (one
+entry per distribution check), `quantiles` (`{path, sha256, version}` of the run's artefact) and
+`cohort_key` (a digest of the parameters, the members, the artefact and the enrollment settings).
+Each block has its own `status`: `measured`, `unavailable` (with a `reason`) or, for a check that
+does not read the recording's kind, `not_applicable`. Where a session enrolled, the store also gains
+an `enrollment` entity (model, commit, sources, the vector's SHA-256; never the vector) that the
+reading derives from. A changed reading supersedes the live one; an equal one mints nothing.
+
+A single-file run sees no cohort. `run.py` calls COHORT after QUALITY, which writes the reading
+`unavailable` unless a corpus pass's reading already stands. VERDICT then writes each unavailable
+check as an annotation item with no value (`cohort.<check>`, `cohort.other_speaker_runs`): not
+measured, and moving nothing. Only the checks that need a cohort are affected.
+
+### Session speaker enrollment (`other_speaker`)
+
+- **Model and cut.** `speech.enrollment_model` is `speechbrain/spkrec-ecapa-voxceleb` at
+  `0f99f2d0ebe89ac095bcc5903c4dd8f72b367286`, the model `speaker_vectors.py` embeds with.
+  `speech.target_match_cosine` is **0.231**, the midpoint of the speaker-vector fit's same-speaker
+  5th percentile (0.2493) and between-speaker 95th percentile (0.2125) at the 1.0 s refusal floor
+  (`specs/20260922-speaker-vectors/design.md`, D-6). 1.0 s is the shortest span embedded on either
+  side, so it is the point on that table where the cut applies to the worst case. Both keys are also
+  what SPEECH's identify step reads when an enrollment is passed to it.
+- **Enrollment.** Per participant and session (`sub-<label>_ses-<label>`), from that session's lexical
+  speech recordings (`LEXICAL_SPEECH`; DDK, voice and airway tasks do not enroll). From each, the
+  dominant diarized speaker's exclusive pieces (overlap with another speaker cut out) inside the task
+  extent, each at least 1.0 s; with no diarization, the lexical word runs. Where at least two
+  recordings hold a single diarized speaker inside their extent, only those enroll. Each span is
+  embedded alone on the speaker-vector grid (2.0 s windows, 1.0 s hop, windows of one span are one
+  length), pooled recording-equal (spherical mean of a recording's spans, then of the recordings).
+  With three or more recordings, one whose centroid is under the cut against the others' is left
+  out. The vector is written once per session to `<out>/enrollments/<session>.npy` (mode 600).
+- **Runs.** In every recording of every family: each diarized speaker's exclusive pieces on the
+  enhanced stream, and the lexical (non-bracketed) consensus words merged across gaps up to
+  `branch.run_gap_max_s`; each run of at least 1.0 s is embedded alone, on the plain stream (the same
+  clock), and compared with the enrollment. A run under the cut is a non-match.
+- **To the fold.** Any non-match is the ground `other_speaker_in_session`, reason `other_speaker`,
+  with items `cohort.other_speaker_runs` (count, `<= 0`) and `cohort.lowest_run_cosine` (`>=` the
+  cut). On a non-lexical task the merged non-matching spans are also non-task speech for redaction:
+  `cohort_fold.non_task_speech_spans(reading)`; `nonmatch_spans` returns them for any task.
+- **Batching.** Every embedding call carries the windows of one span only, so no batch mixes
+  durations. CPU is enough (see the validation below for the time per session).
+
+### Distribution checks
+
+- **Quantiles, once per run.** `extend_cohort.py quantiles` takes, per declared family, the 5th, 25th,
+  50th, 75th and 95th percentiles of the recording's duration and of the task extent's share of it
+  (the hull of the standing task extents; 0 where no branch wrote one), and writes
+  `cohort_quantiles.json` with its source (the collected facts, or a `triage.tsv` and its SHA-256),
+  the commit, the row count and digest, and the check parameters. Each reading names the file and its
+  SHA-256.
+- **Checks.** `cohort_stage.CHECK_FUNCTIONS` maps a check name to `(facts, level block, bounds) ->
+  block`; `data/cohort_stage.yaml` `checks:` names each check's level (`family` today), the kinds it
+  reads, its bounds and its ground. A new check is one function and one block, and a new ground key in
+  `data/decision_reasons.yaml`.
+- **`recording_duration_outlier`.** Longer than 3.0 times its family's median duration with the task
+  extent covering under 0.5 of it: review, reason `atypical_recording` (new), items
+  `cohort.duration_over_family_median` (`<= 3.0`) and `cohort.task_extent_fraction` (`>= 0.5`). Read on
+  the airway and voice kinds only. The bounds are the owner's; over r18c's `triage.tsv` (62,521
+  recordings with a duration) they select 42 airway or voice recordings, 31 of them `pass` and 11
+  `review` before this check: maximum-phonation-time 6, glides-low-to-high 11, glides-high-to-low 2,
+  respiration-and-cough-fivebreaths 9, -v2-threebreathsnose 5, -threequickbreaths 2,
+  -v2-threebreaths 2, -v2-threebreathsmouth 2, -breath 1, -cough 1, -v2-hardcough 1. The same
+  bounds over the speech kinds select 135 more (105 passing); those are not read until their bound
+  is looked at.
+
+### The chain
+
+The cohort pass reads branch outputs (task extents), so it runs after anything that rewrites them.
+`cohort_key` digests every member's facts (duration, task-extent hull, diarized segments, lexical
+runs), so a session whose facts a replay moved is read again and an untouched one is skipped. A
+replay (`extend.REPLAYED_NODES`) does not retire COHORT's reading, so the replayed REDACT reads the
+non-matching spans the last cohort pass wrote. For a re-fold:
+
+1. Per-recording stages up to QUALITY are in the stores.
+2. `extend_cohort.py collect` (sharded) and `extend_cohort.py quantiles --facts` (one task), or
+   `quantiles --table triage.tsv`.
+3. `extend_cohort.py apply --quantiles cohort_quantiles.json`, sharded by session (every member of a
+   session in one task), writing each store.
+4. `extend_refold.py` (VERDICT). A re-fold does not re-run REDACT, so non-task speech from COHORT
+   reaches the released audio only through a replay from BACKGROUND after step 3, then steps 2-4
+   again for the sessions whose extents moved.
+
+`apply` is resumable: a session whose stores all carry a live reading under the same `cohort_key` is
+skipped unless `--force`. `--readings-out DIR` writes `<DIR>/<session>.jsonl` and no store.
+
+### Validation on ORCD (r18 stores, read-only, commit 9bf84497)
+
+`apply --readings-out` over nine sessions (job 25486960 and 25487357, 4 CPUs, CPU embedding):
+
+| | |
+| --- | ---: |
+| sessions / recordings | 9 / 321 |
+| time per session (21-47 members) | 34-134 s, about 2.8 s per recording |
+| every session enrolled, single-speaker recordings only | 9 of 9 (2-32 recordings, 21-60 spans each) |
+| runs compared, diarized / lexical | 435 / 634 (first eight sessions) |
+| run cosine p05 / p25 / p50, diarized | 0.202 / 0.578 / 0.711 |
+| run cosine p05 / p25 / p50, lexical | 0.193 / 0.566 / 0.684 |
+| recordings with a non-matching run | 28 of 284 (first eight) |
+| of those, with a non-matching lexical run, or a diarized one overlapping one | 16 |
+
+- **541e6b30, ses-819D91A4, respiration-and-cough-breath-1.** Enrollment over 2 recordings (24 spans,
+  70 s). All six runs fall under the cut: diarized -0.120, 0.080, 0.090; lexical -0.113, 0.151, 0.092.
+  Flagged, and the talker's spans are non-task speech.
+- **f5c03456, ses-60DF03B2.** `respiration-and-cough-v2-threebreathsnose` is the session's one
+  `recording_duration_outlier`.
+- **The twelve recordings flagged only by a diarized run with no lexical word** are glides (3),
+  maximum-phonation-time (3), prolonged-vowel (2), breath tasks (3) and one Harvard sentence: diarized
+  phonation and breathing, outside what the speaker vectors were fitted on. Restricting the comparison
+  to runs carrying lexical words would remove them and keep 541e6b30's; it is not applied until the
+  owner has listened to a sample of both sets.
+- **168c5e68, ses-E16A5EBC, random-item-generation (owner-labelled second speaker at the start).**
+  Not flagged. The diarizer's only segment starts at 2.56 s and no lexical word starts before 2.40 s,
+  so the opening second speaker is in no run at all: every compared run matches (diarized 0.835;
+  lexical 0.799, 0.699, 0.755, 0.532). Sliding 1.0 s windows on the enhanced stream against the same
+  enrollment read 0.065, 0.165, 0.073 and -0.058 for the windows starting at 0.0-1.5 s, and 0.51-0.69
+  from 2.0 s on. The gap is in which audio is compared, not in the embedding or the cut.
+
+**Proposed remedy (not built).** Add a third run source: sliding windows at the 1.0 s floor on a 0.5 s
+hop over the enhanced stream, inside BACKGROUND's activity regions and outside the diarized and
+lexical runs, with a contiguous stretch of at least 1.0 s under the cut becoming one non-matching run.
+It needs a guard against the twelve phonation and breath cases above (the same activity regions hold
+the task's own sounds on voice and airway tasks), so the window source should be measured on owner
+labels before it raises a ground.

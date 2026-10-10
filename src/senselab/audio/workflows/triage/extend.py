@@ -157,10 +157,13 @@ REVIEW_NEEDS_REREAD = "needs_reread"
 
 REVIEW_STATES = (REVIEW_NONE, REVIEW_READ, REVIEW_CARRIED, REVIEW_NEEDS_REREAD)
 
-REPLAYED_NODES: tuple[str, ...] = GRAPH_ORDER[GRAPH_ORDER.index("BACKGROUND") :]
-"""The nodes a replay re-runs: the graph from BACKGROUND on. ADMIT, PREPROCESS and SESSION are read
-off disk; SESSION is written beforehand by the corpus pass over each session
-(``scripts/extend_session_floor.py``)."""
+REPLAYED_NODES: tuple[str, ...] = tuple(
+    node for node in GRAPH_ORDER[GRAPH_ORDER.index("BACKGROUND") :] if node != "COHORT"
+)
+"""The nodes a replay re-runs: the graph from BACKGROUND on, except COHORT. ADMIT, PREPROCESS and
+SESSION are read off disk; SESSION is written beforehand by the corpus pass over each session
+(``scripts/extend_session_floor.py``). COHORT's reading stands through a replay, so the replayed REDACT
+reads it; ``scripts/extend_cohort.py apply`` afterwards rewrites the sessions whose facts moved."""
 
 _DECISION_REASON = "the decision was replayed over this run's stored PREPROCESS output"
 _READING_SUPERSEDED_REASON = "the reading carried forward from before the replay stands in its place"

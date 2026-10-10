@@ -262,3 +262,22 @@ def test_every_cohort_item_is_a_well_formed_row(status: str) -> None:
     block = {"status": status, "runs": [], "nonmatch_n": 0, "runs_n": 0, "cut": CUT, "lowest_cosine": 0.5}
     reading = cohort_attributes(facts, other_speaker=block, checks=checks, quantiles=None, key="k")
     assert [problem for entry in cohort_evidence(reading) for problem in row_problems(entry)] == []
+
+
+def test_the_fold_reviews_on_a_cohort_ground_and_passes_on_an_unavailable_reading() -> None:
+    """A non-matching run is review with reason other_speaker; an unavailable reading moves nothing."""
+    from senselab.audio.workflows.triage.vocabulary import Triage, fold_file_verdict
+
+    speech, breath, breath_audio = _session()
+    block = match_runs(breath, breath_audio, _enroll(speech), _embed, cut=CUT, min_s=1.0, lexical_gap_s=0.5)
+    flagged = cohort_attributes(breath, other_speaker=block, checks={}, quantiles=None, key="k")
+    common = {"branch_decisions": {}, "ran": {}, "hint_claims": {}, "route_state": None}
+    folded = fold_file_verdict([], cohort=flagged, **common)
+    assert folded.triage is Triage.REVIEW and "other_speaker" in folded.reason_keys
+    assert KEY_OTHER_SPEAKER_IN_SESSION in folded.ground_keys
+    assert any(entry.name == "cohort.other_speaker_runs" and entry.decisive for entry in folded.evidence)
+    store = _store()
+    write_cohort_unavailable(store)
+    quiet = fold_file_verdict([], cohort=find_measurement(store, COHORT_READING).attributes, **common)
+    assert KEY_OTHER_SPEAKER_IN_SESSION not in quiet.ground_keys
+    assert quiet.triage == fold_file_verdict([], **common).triage

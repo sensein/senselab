@@ -36,6 +36,7 @@ import yaml
 
 from senselab.audio.data_structures import AudioHints
 from senselab.audio.workflows.triage.background_model import BACKGROUND_MODEL
+from senselab.audio.workflows.triage.cohort_fold import COHORT_NODE, COHORT_READING
 from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.ddk_task import CYCLE, DDK_READING, SYLLABLE
 from senselab.audio.workflows.triage.live_evidence import declared_task, recording_stem
@@ -1117,7 +1118,11 @@ def _derived_ran(
     concluded = {v.node for v in verdicts} | {r.node for r in reports}
     if find_measurement(store, REDACTION_LLM_ANNOTATION) is not None:
         concluded.add(_REVIEW)
-    for node, name in ((SESSION_NODE, SESSION_FLOOR), (BACKGROUND_NODE, BACKGROUND_MODEL)):
+    for node, name in (
+        (SESSION_NODE, SESSION_FLOOR),
+        (BACKGROUND_NODE, BACKGROUND_MODEL),
+        (COHORT_NODE, COHORT_READING),
+    ):
         if find_measurement(store, name) is not None:
             concluded.add(node)
     outputs: dict[str, list[str]] = {}
@@ -1184,6 +1189,7 @@ def verdict(
     decisions, decision_ids = _branch_decisions(store)
     annotation, annotation_ids = _llm_redaction(store)
     opinion, opinion_ids = _second_opinion(store)
+    cohort = find_measurement(store, COHORT_READING)
     resolved_ran = {**_derived_ran(store, node_verdicts, reports), **(ran or {})}
     policy = FoldPolicy.from_config(config)
     plan = mask_plan(
@@ -1222,6 +1228,7 @@ def verdict(
         unplaced=[(finding.family, finding.state) for finding in plan.unplaced],
         second_opinion=opinion,
         task=task_evidence,
+        cohort=None if cohort is None else cohort.attributes,
     )
 
     software = software_agent(store)
@@ -1234,6 +1241,7 @@ def verdict(
         + decision_ids
         + annotation_ids
         + opinion_ids
+        + ([] if cohort is None else [cohort.id])
     )
     for folded_id in folded_ids:
         store.used(activity, folded_id)

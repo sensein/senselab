@@ -72,11 +72,14 @@ GRAPH = (
     "SPEECH",
     "VOICE",
     "QUALITY",
+    "COHORT",
     "REDACT",
     "REVIEW",
     "VERDICT",
 )
-"""Every node the runner drives. SESSION, BACKGROUND, QUALITY, routing and REVIEW run for real; the rest are faked."""
+"""Every node the runner drives. SESSION, BACKGROUND, QUALITY, COHORT, routing and REVIEW run for real.
+
+The rest are faked."""
 
 _MISSING = object()
 
@@ -382,6 +385,13 @@ def graph(monkeypatch: pytest.MonkeyPatch) -> Callable[..., list[str]]:
             calls.append("BACKGROUND")
             return real_background(*args, **kwargs)
 
+        real_cohort = run_module.write_cohort_unavailable
+
+        def _cohort(*args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
+            calls.append("COHORT")
+            return real_cohort(*args, **kwargs)
+
+        monkeypatch.setattr(run_module, "write_cohort_unavailable", _cohort)
         monkeypatch.setattr(run_module, "write_session_floor", _session)
         monkeypatch.setattr(run_module, "write_background", _background)
         monkeypatch.setattr(run_module, "quality", _quality)
@@ -773,6 +783,7 @@ class TestConditionalExecution:
             "TAXONOMY",
             "routing",
             "QUALITY",
+            "COHORT",
             "REVIEW",
             "VERDICT",
         )
