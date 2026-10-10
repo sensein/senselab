@@ -173,6 +173,7 @@ def git_environment(home: Path, *, network: bool = False) -> dict[str, str]:
         "GIT_CONFIG_NOSYSTEM": "1",
         "GIT_CONFIG_GLOBAL": os.devnull,
         "GIT_TERMINAL_PROMPT": "0",
+        "GIT_OPTIONAL_LOCKS": "0",
         "GIT_AUTHOR_NAME": REPRO_NAME,
         "GIT_AUTHOR_EMAIL": REPRO_EMAIL,
         "GIT_AUTHOR_DATE": REPRO_DATE,
