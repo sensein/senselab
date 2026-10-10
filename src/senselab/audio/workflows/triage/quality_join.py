@@ -1,8 +1,9 @@
 """QUALITY's join: what the recording-level background found, read against each task span.
 
-The branches place the task spans and events; BACKGROUND reads faults, activity and the floor; the
-residual reads another voice. This module relates them by time overlap: a finding that overlaps or
-abuts a task span is in the task, anything else is outside it. It also re-reads the raw stream's
+The branches place the task spans and events; BACKGROUND reads faults, activity, the floor and its
+impulses; the residual reads another voice. This module relates them by time overlap: a finding that
+overlaps or abuts a task span is in the task, anything else is outside it. Another voice is speech and
+is split apart from the non-speech interference; whose voice it is the fold decides. It also re-reads the raw stream's
 task events on the enhanced stream, and says whether anything was captured at all.
 
 Every parameter is in ``data/quality_join.yaml``; the design is
@@ -24,6 +25,9 @@ QUALITY_JOIN = "quality_join"
 """QUALITY's measurement of the join."""
 
 OTHER_VOICE = "other_voice"
+IMPULSE = "impulse"
+INTERFERENCE_KINDS = (IMPULSE,)
+"""The non-speech sources BACKGROUND places in time."""
 FAULT_KINDS = ("shutoff", "gate", "dropout", "clip", "discontinuity")
 INSIDE = "in"
 OUTSIDE = "out"
@@ -200,6 +204,7 @@ def join_record(
     event_kind: str | None,
     faults: Mapping[str, Sequence[Sequence[float]]],
     other_voice: Sequence[Span] | None,
+    impulses: Sequence[Span] | None = None,
     streams: Mapping[str, Any] | None,
     plain_active_s: float | None,
     enhanced_active_s: float | None,
@@ -213,6 +218,7 @@ def join_record(
         event_kind: The task events' kind (``breath``, ``cough``, ``phonation``), or None.
         faults: The ``background_model`` measurement's ``faults``.
         other_voice: Spans of another voice anywhere in the recording, or None where it was not read.
+        impulses: BACKGROUND's impulse spans, or None where it was not read.
         streams: :func:`stream_agreement`'s record, or None.
         plain_active_s: Seconds of activity on the plain stream, or None where BACKGROUND read none.
         enhanced_active_s: Seconds of activity on the enhanced stream, or None.
@@ -220,13 +226,16 @@ def join_record(
         p: The parameters; ``data/quality_join.yaml`` when None.
 
     Returns:
-        The record QUALITY writes.
+        The record QUALITY writes: ``other_voice`` split by the task spans, None where it was not read;
+        ``interference``, each non-speech source of :data:`INTERFERENCE_KINDS` split by them, and
+        ``interference_in_task``, the ones whose in-span findings decide.
     """
     p = p or quality_join_parameters()
     fault_split = faults_against(faults, task_spans, p)
+    voice = None if other_voice is None else split_by_task(other_voice, task_spans, float(p["abut_s"]))
     interference: dict[str, dict[str, list[list[float]]]] = {}
-    if other_voice is not None:
-        interference[OTHER_VOICE] = split_by_task(other_voice, task_spans, float(p["abut_s"]))
+    if impulses is not None:
+        interference[IMPULSE] = split_by_task(impulses, task_spans, float(p["abut_s"]))
     agreement = dict(streams or {})
     disagree = bool(agreement.get("disagree")) and event_kind in tuple(p["streams"]["decides"] or ())
     no_activity = plain_active_s is not None and plain_active_s <= 0.0 and not (enhanced_active_s or 0.0) > 0.0
@@ -236,6 +245,7 @@ def join_record(
         "event_kind": event_kind,
         "faults": fault_split,
         "faults_in_task": deciding_kinds(fault_split, p["faults"], event_kind),
+        OTHER_VOICE: voice,
         "interference": interference,
         "interference_in_task": deciding_kinds(interference, p["interference"]),
         "streams": agreement,

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from senselab.audio.workflows.triage.decision import reasons_of
 from senselab.audio.workflows.triage.quality_join import join_record
 from senselab.audio.workflows.triage.vocabulary import (
     COUGH_COUNTED,
@@ -15,7 +16,9 @@ from senselab.audio.workflows.triage.vocabulary import (
     KEY_DISCARD_CONTESTED,
     KEY_NO_BRANCH_MEASURED,
     KEY_NO_COUGH_CAPTURED,
+    KEY_OTHER_VOICE_IN_TASK,
     KEY_OWNING_BRANCH_INPUT_ABSENT,
+    KEY_RESIDUAL_SPEECH_UNATTRIBUTED,
     KEY_TASK_MISMATCH,
     NO_COUGH_CAPTURED,
     OPERATIONAL_GROUND_KEYS,
@@ -74,6 +77,8 @@ def _fold(
     background: dict[str, Any] | None = None,
     detected: int = 0,
     contest_min: int | None = None,
+    cohort: dict[str, Any] | None = None,
+    llm_redaction: dict[str, Any] | None = None,
 ) -> FileVerdict:
     declared, count = _FAMILIES[mode]
     return fold_file_verdict(
@@ -103,6 +108,8 @@ def _fold(
             quality=background or {},
             contest_events_min=contest_min,
         ),
+        cohort=cohort,
+        llm_redaction=llm_redaction,
     )
 
 
@@ -193,9 +200,9 @@ def test_the_cough_grounds_are_named() -> None:
     assert not {KEY_NO_COUGH_CAPTURED, KEY_COUGH_REVIEW_LOW_CONFIDENCE} & OPERATIONAL_GROUND_KEYS
 
 
-def test_background_speech_in_the_task_flags_and_never_discards() -> None:
-    """6ca9935e: an intercom voice the enhancer removed from inside the task flags the recording for quality."""
-    folded = _fold(
+def _intercom(**kwargs: Any) -> FileVerdict:  # noqa: ANN401
+    """6ca9935e: a voice the enhancer removed from inside the task, folded with whatever attributes it."""
+    return _fold(
         mode=COUGH_COUNTED,
         onsets=9,
         family="voluntary-cough",
@@ -210,7 +217,31 @@ def test_background_speech_in_the_task_flags_and_never_discards() -> None:
             enhanced_active_s=12.0,
             level_rel_db=0.0,
         ),
+        **kwargs,
     )
+
+
+def test_background_speech_nothing_attributes_is_an_annotation() -> None:
+    """Residual speech over the task that neither COHORT nor a reader attributes is no reason."""
+    folded = _intercom()
+    assert folded.triage is Triage.PASS
+    assert KEY_RESIDUAL_SPEECH_UNATTRIBUTED in {verdict.key for verdict in folded.annotations}
+    assert KEY_OTHER_VOICE_IN_TASK not in folded.ground_keys
+    assert not any(key.startswith("interference_in_task") for key in folded.ground_keys)
+    matched = _intercom(cohort={"other_speaker": {"status": "measured", "nonmatch_spans": []}})
+    assert matched.triage is Triage.PASS and KEY_OTHER_VOICE_IN_TASK not in matched.ground_keys
+
+
+def test_background_speech_cohort_attributes_flags_another_speaker() -> None:
+    """A non-matching enrollment span over the voice makes it another speaker's: review, never discard."""
+    folded = _intercom(cohort={"other_speaker": {"status": "measured", "nonmatch_spans": [[16.5, 17.0]]}})
     assert folded.triage is Triage.REVIEW
-    assert "interference_in_task:other_voice" in folded.ground_keys
-    assert folded.quality_join["interference_in_task"] == ["other_voice"]
+    assert KEY_OTHER_VOICE_IN_TASK in folded.ground_keys
+    assert reasons_of(folded.ground_keys)[0] == "other_speaker"
+
+
+def test_background_speech_a_reader_attributes_flags_another_speaker() -> None:
+    """The reviewer reading an assistant speak attributes the residual's voice."""
+    folded = _intercom(llm_redaction={"status": "clean", "other_speaker": "assistant"})
+    assert folded.triage is Triage.REVIEW
+    assert KEY_OTHER_VOICE_IN_TASK in folded.ground_keys
