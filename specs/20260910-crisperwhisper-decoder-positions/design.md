@@ -157,7 +157,8 @@ The transformers backend (the non-Linux-x86 path, `crisperwhisper.py:70`) does n
 recording: run locally it transcribes both, because its own decode of chunk 1 breaks the loop where
 the CT2 decode does not (its context words stay at 43 and 40 tokens). HuggingFace's Whisper also
 clamps rather than raising on a position overrun. The condition is therefore only reachable on the
-CT2 path — which is exactly the Linux x86_64 GPU path every cluster run takes.
+CT2 path — the Linux x86_64 path every cluster run takes. The corpus runs took it on CPU at float32
+(the stores record the `crisperwhisper-cpu` environment), not on a GPU.
 
 ## The fix
 
