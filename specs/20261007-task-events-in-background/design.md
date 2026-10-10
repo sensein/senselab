@@ -2174,3 +2174,39 @@ no decision; switching it on is a second replay of the same two stages.
 `scripts/measure_session_background.py` measures all of this read-only over a sample of sessions; the task-event
 decisions are read twice by the same code, against BACKGROUND's stored view and against that view with the
 session background as its floor and the regions re-read against it.
+
+### Measured on ORCD (r18 stores, read-only, commit e060704c)
+
+200 BIDS sessions drawn with seed 0 from `manifest_r18.jsonl`, 7,142 recordings
+(`scripts/measure_session_background.py`, 40 CPU tasks; rows and `summary.json` under
+`/orcd/scratch/bcs/002/satra/sessbg_20261010/`). No store was written.
+
+- **Coverage.** 199 of 200 sessions have a session background; one has no qualifying speech task. Members per
+  session: median 15.5 (p5 5, p95 34). 3,607 of 3,728 lexical recordings carry foreground.
+- **The session background.** Its broadband level: median −78.4 dB (p5 −94.0, p95 −49.2). Spread: members'
+  IQR median 5.7 dB (p95 17.1); within-recording p90 − p10 median 15.9 dB.
+- **New less old.** Session background less the stored session floor (194 sessions with both): median −8.1 dB
+  (p5 −16.5, p25 −12.1, p75 −4.8, p95 +2.4). Against the floor BACKGROUND actually used for each non-speech
+  recording: airway median −17.2 dB (p5 −30.0, p95 +19.1, n 1,503; their floors were 1,123 quiet-frame, 305
+  lowest-percentile, 44 session, 29 residual), voice −7.3 dB (p5 −18.3, p95 +10.8, n 967), syllable repetition
+  −7.2 dB (p5 −17.6, p95 +9.9, n 939; 546 of their floors were the lowest percentile). The residual of the speech
+  tasks sits well under the plain stream's quiet-frame floor: over the speech tasks' own non-speech frames, plain
+  stands a median 5.3 dB over the residual (session medians, p5 0.1, p95 19.5), so the enhanced stream keeps part
+  of what the plain floor holds, or the non-speech frames hold speech the words and windows missed.
+- **Quality, session medians.** Foreground less residual (whole) median 35.6 dB (p5 12.6, p95 53.7); plain less
+  residual over speech frames 39.0 dB (p5 14.3, p95 54.9).
+- **Quality by family** (median [p5, p95]): lexical families read foreground less residual 30–42 dB and plain
+  less residual on non-speech frames 3–7 dB (harvard-sentences-list 38.4 [14.7, 54.9] and 4.8 [0.3, 36.7], n
+  1,375; free-speech 36.5 and 5.0; cape-v-sentences 36.3 and 13.7; loudness 29.8 and 16.4; productive-vocabulary
+  26.4 and 4.5; word-color-stroop 4.2 and 6.6; random-item-generation 7.0 and 5.2). Syllable repetition reads
+  30–42 dB foreground over residual. Airway: plain over residual stays near 2 dB over every frame set (the
+  enhancer removes the breath into the residual), and foreground over residual is negative where a foreground
+  is read at all (breath −10 to −29 dB; coughs +10 to +19 dB). Voice: the held vowel is not speech by words or
+  YAMNet, so its frames count as non-speech, and plain over residual on non-speech frames is 37–47 dB. Not
+  applicable (no foreground): 1,047 airway, 156 voice, 4 syllable-repetition and 121 lexical recordings
+  (harvard-sentences-list 97).
+- **Decisions at the current bounds** (each read twice by the same code; 3,354 of 3,376 recomputed old decisions
+  match the stored ones, the 22 others are the r18 reading's code and `language=None`): 103 of 3,411 change.
+  Airway 78 of 1,505: absent→review 41 (mostly `respiration-and-cough-breath`), review→present 22, present→review
+  8, present→absent 4, review→absent 1, two lose their reading. Voice 6 of 967: absent→present 3, review→present
+  3. Syllable repetition 19 of 939: present→review 16, review→present 3. The switch stays off.
