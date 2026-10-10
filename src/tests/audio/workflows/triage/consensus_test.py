@@ -18,11 +18,14 @@ from senselab.audio.workflows.triage.consensus import (
     degenerate_token,
     is_bracketed,
     isotonic_median_fit,
+    located_span,
+    missing_span,
     rebracket,
     render_transcript,
     vocabulary_key,
     word_attributes,
     word_from_attributes,
+    word_timing_parameters,
 )
 
 
@@ -409,9 +412,16 @@ class TestRenderingAndProvenance:
             "time_fit",
             "n_words_time_shifted",
             "max_time_shift_s",
+            "version",
+            "point_width_s",
+            "untimed_members",
+            "unlocated_n",
+            "unconfirmed_n",
+            "aligner_failed",
         }
         assert consensus.provenance["algorithm"] == "star_sequence_alignment"
-        assert consensus.provenance["time_fit"] == "weighted_isotonic_median"
+        assert consensus.provenance["time_fit"] == "weighted_isotonic_median_over_located_spans"
+        assert consensus.provenance["version"] == 2
         assert consensus.provenance["source_order"] == "lexicographic_by_source_name"
         assert consensus.provenance["outcomes"] == {"agreement": 1, "variant": 0, "insertion": 0}
         assert set(consensus.provenance["sources"][0]) == {"name", "n_words", "timestamp_source", "timestamp_model"}
@@ -568,3 +578,88 @@ class TestDegenerateRecognizerRuns:
         assert word.text == "table"
         assert word.degenerate_sources == ("a",)
         assert word.degenerate is False
+
+
+class TestUntimedSpans:
+    """A missing span stays out of the time fit; a point span is a location; a lone untimed reading is unconfirmed."""
+
+    WIDTH = 0.32
+
+    def test_a_missing_span_is_none_zero_or_inverted_and_a_point_is_not(self) -> None:
+        """``(0, 0)``, None and an end before its start carry no timing; a point past zero does."""
+        assert missing_span(None, 1.0) and missing_span(0.0, 0.0) and missing_span(2.0, 1.0)
+        assert missing_span(float("nan"), 1.0)
+        assert not missing_span(1.0, 1.0) and not missing_span(0.0, 0.4)
+
+    def test_a_point_span_is_read_over_the_fitted_width(self) -> None:
+        """A point is centred in a window of ``data/word_timing.yaml``'s width, floored at zero."""
+        assert word_timing_parameters()["point_width_s"] == pytest.approx(self.WIDTH)
+        assert located_span(2.0, 2.0) == pytest.approx((2.0 - self.WIDTH / 2, 2.0 + self.WIDTH / 2))
+        assert located_span(0.05, 0.05) == pytest.approx((0.0, 0.05 + self.WIDTH / 2))
+        assert located_span(1.0, 1.5) == (1.0, 1.5)
+        assert located_span(0.0, 0.0) is None
+
+    def test_a_point_span_places_its_word(self) -> None:
+        """A word whose every reading is a point gets a positive extent around it."""
+        a = _timed("a", [("one", 1.0, 1.4), ("two", 2.0, 2.0)])
+        b = _timed("b", [("one", 1.0, 1.4), ("two", 2.0, 2.0)])
+        two = _align(a, b).words[1]
+        assert two.extent[1] > two.extent[0]
+        assert two.extent == pytest.approx((2.0 - self.WIDTH / 2, 2.0 + self.WIDTH / 2))
+        assert two.timings == {"a": (2.0, 2.0), "b": (2.0, 2.0)}
+        assert two.untimed_sources == () and not two.unconfirmed
+
+    def test_a_zero_span_never_reaches_the_fit_or_the_timings(self) -> None:
+        """A ``(0, 0)`` member beside a timed one: the word sits where the timed reading puts it."""
+        a = _timed("a", [("one", 5.0, 5.4), ("two", 6.0, 6.4)])
+        b = _timed("b", [("one", 0.0, 0.0), ("two", 6.0, 6.4)])
+        one, two = _align(a, b).words
+        assert one.extent == pytest.approx((5.0, 5.4))
+        assert one.timings == {"a": (5.0, 5.4)}
+        assert one.untimed_sources == ("b",) and not one.unconfirmed
+        assert one.temporal_uncertainty_s == pytest.approx(0.0)
+        assert two.extent == pytest.approx((6.0, 6.4))
+
+    def test_a_lone_untimed_reading_is_unconfirmed_and_unlocated(self) -> None:
+        """Only one recogniser read it and it carries no span: a zero-length extent where the stream stands."""
+        a = _timed("a", [("one", 5.0, 5.4), ("two", 6.0, 6.4)])
+        b = _timed("b", [("one", 5.0, 5.4), ("extra", 0.0, 0.0), ("two", 6.0, 6.4)])
+        consensus = _align(a, b)
+        [extra] = [word for word in consensus.words if word.text == "extra"]
+        assert extra.unconfirmed and extra.untimed_sources == ("b",)
+        assert extra.extent[0] == extra.extent[1] == pytest.approx(5.4)
+        assert extra.temporal_uncertainty_s is None and extra.timings == {}
+        assert consensus.provenance["unconfirmed_n"] == 1 and consensus.provenance["unlocated_n"] == 1
+        attributes = word_attributes(extra)
+        assert attributes["unconfirmed"] is True and attributes["untimed_sources"] == ["b"]
+        assert word_from_attributes(attributes, extra.extent) == extra
+        assert "unconfirmed" not in word_attributes(consensus.words[0])
+
+    def test_a_word_both_recognisers_read_without_timing_is_confirmed(self) -> None:
+        """Two readings confirm a word even where neither places it; it stays unlocated."""
+        a = _timed("a", [("one", 5.0, 5.4), ("two", 0.0, 0.0)])
+        b = _timed("b", [("one", 5.0, 5.4), ("two", None, None)])  # type: ignore[list-item]
+        two = _align(a, b).words[1]
+        assert not two.unconfirmed and set(two.untimed_sources) == {"a", "b"}
+        assert two.extent[0] == two.extent[1]
+
+    def test_a_whole_file_aligner_failure_is_named(self) -> None:
+        """Every word of one recogniser at ``(0, 0)``: it is ``aligner_failed`` and its insertions are unconfirmed."""
+        timed = _timed("asr_crisperwhisper", [("in", 1.0, 1.3), ("out", 2.0, 2.3)])
+        failed = _timed("asr_qwen", [("in", 0.0, 0.0), ("and", 0.0, 0.0), ("out", 0.0, 0.0)])
+        consensus = _align(timed, failed)
+        assert consensus.provenance["aligner_failed"] == ["asr_qwen"]
+        assert consensus.provenance["untimed_members"] == {"asr_crisperwhisper": 0, "asr_qwen": 3}
+        by_text = {word.text: word for word in consensus.words}
+        assert by_text["in"].extent == pytest.approx((1.0, 1.3)) and not by_text["in"].unconfirmed
+        assert by_text["out"].extent == pytest.approx((2.0, 2.3))
+        assert by_text["and"].unconfirmed
+        assert all(word.extent[0] >= 1.0 for word in consensus.words), "no extent is stretched to zero"
+
+    def test_rebracketing_a_column_with_an_untimed_member(self) -> None:
+        """A stored column whose member carries no span re-reads without its timing."""
+        a = _timed("a", [("one", 5.0, 5.4)])
+        b = _timed("b", [("one", 0.0, 0.0)])
+        [word] = _align(a, b).words
+        stored = word_from_attributes(word_attributes(word), word.extent)
+        assert rebracket(stored, onomatopoeic=set(), n_sources=2).word == word

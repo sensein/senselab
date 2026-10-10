@@ -19,7 +19,7 @@ from dataclasses import asdict, dataclass
 from functools import partial
 from importlib.metadata import version as _dist_version
 from pathlib import Path
-from typing import Any, Callable, Sequence
+from typing import Any, Callable, Sequence, cast
 
 import numpy as np
 import torch
@@ -88,12 +88,15 @@ from senselab.audio.tasks.speech_to_text.api import transcribe_audios
 from senselab.audio.workflows.audio_analysis.level import integrated_lufs
 from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.consensus import (
+    CONSENSUS_VERSION,
     ROUTINE,
     SOURCE_ORDER,
     SourceHypothesis,
     align_sources,
     degenerate_parameters,
     degenerate_token,
+    located_span,
+    missing_span,
     render_transcript,
     vocabulary_key,
     word_attributes,
@@ -2557,18 +2560,19 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         untimed_chunks_n = 0
         out_of_bounds_chunks_n = 0
         for chunk in line.chunks or []:
-            if chunk.start is None or chunk.end is None:
+            span: tuple[float, float] | None = None
+            if missing_span(chunk.start, chunk.end):
                 untimed_chunks_n += 1
-                continue
-            span = _bound_to_duration(float(chunk.start), float(chunk.end), duration_s)
-            if span is None:
-                out_of_bounds_chunks_n += 1
-                continue
+            else:
+                span = _bound_to_duration(float(cast(float, chunk.start)), float(cast(float, chunk.end)), duration_s)
+                if span is None:
+                    out_of_bounds_chunks_n += 1
+                    continue
             words.append(
                 {
                     "text": chunk.text,
-                    "start": span[0],
-                    "end": span[1],
+                    "start": None if span is None else span[0],
+                    "end": None if span is None else span[1],
                     "score": chunk.score,
                     "degenerate": degenerate_token(str(chunk.text or ""), **degenerate_parameters()),
                 }
@@ -2605,7 +2609,11 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             SourceHypothesis(
                 name=source,
                 words=tuple(
-                    (str(word["text"]), float(word["start"]), float(word["end"]))
+                    (
+                        str(word["text"]),
+                        None if word.get("start") is None else float(word["start"]),
+                        None if word.get("end") is None else float(word["end"]),
+                    )
                     for word in measurement.attributes["words"]
                 ),
                 timestamp_source=str(measurement.attributes["timestamp_source"]),
@@ -2621,7 +2629,10 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         names = [row["name"] for row in consensus.provenance["sources"]]
         measurement_ids = tuple(hypotheses[name].id for name in names)
         activity = _step(
-            "consensus", {"routine": ROUTINE, "source_order": SOURCE_ORDER, "sources": names}, measurement_ids, software
+            "consensus",
+            {"routine": ROUTINE, "version": CONSENSUS_VERSION, "source_order": SOURCE_ORDER, "sources": names},
+            measurement_ids,
+            software,
         )
         word_ids: list[str] = []
         for word in consensus.words:
@@ -2843,7 +2854,13 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         """
         words = state.get("consensus")
         if words is not None:
-            spans = [span for word in words if not word.bracketed for span in word.timings.values()]
+            spans = [
+                located
+                for word in words
+                if not word.bracketed
+                for start, end in word.timings.values()
+                if (located := located_span(start, end)) is not None
+            ]
             return _merge_intervals(spans), "consensus_transcript"
         amplitude_spans: list[tuple[float, float]] = []
         for span_id in state.get("span_ids") or []:

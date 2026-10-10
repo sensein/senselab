@@ -547,7 +547,13 @@ def _consensus_word_stats(store: ProvStore) -> dict[str, float | int] | None:
     words = consensus_words(store)
     if not words:
         return None
-    uncertainties = sorted(float(word.attributes["temporal_uncertainty_s"]) for word in words)
+    uncertainties = sorted(
+        float(word.attributes["temporal_uncertainty_s"])
+        for word in words
+        if word.attributes.get("temporal_uncertainty_s") is not None
+    )
+    if not uncertainties:
+        return None
     count = len(uncertainties)
     median = (
         uncertainties[count // 2] if count % 2 else (uncertainties[count // 2 - 1] + uncertainties[count // 2]) / 2.0
@@ -561,7 +567,7 @@ def _consensus_word_stats(store: ProvStore) -> dict[str, float | int] | None:
         if timings and not any(float(start) < offset and onset < float(end) for start, end in timings):
             n_off_source += 1
     return {
-        "n_words": count,
+        "n_words": len(words),
         "uncertainty_sum_s": sum(uncertainties),
         "uncertainty_median_s": median,
         "n_uncertain_over_1s": sum(1 for value in uncertainties if value > 1.0),

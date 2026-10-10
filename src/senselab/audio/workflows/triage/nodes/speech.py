@@ -103,6 +103,7 @@ from senselab.audio.workflows.triage.nodes.common import (
     path_attributes,
     resolve_stream,
     software_agent,
+    word_hull,
     write_measurement,
     write_report,
     write_stream,
@@ -610,17 +611,18 @@ def _scan_tokens(words: list[Entity], positions: list[int], haystack: str) -> tu
 
 
 def _timings_hull(words: list[Entity], covered: list[int]) -> tuple[float, float]:
-    """The hull of the covered words' per-source timings: every recognizer's placement of them.
+    """The hull of the covered words' placements: every recognizer's located span of them.
 
     Args:
         words: The consensus words, in stream order.
         covered: The positions a finding covers.
 
     Returns:
-        ``(min member start, max member end)`` over every source timing of every covered word.
+        ``(min start, max end)`` over :func:`~senselab.audio.workflows.triage.nodes.common.word_hull` of every
+        covered word.
     """
-    spans = [span for index in covered for span in words[index].attributes["timings"].values()]
-    return min(float(span[0]) for span in spans), max(float(span[1]) for span in spans)
+    spans = [word_hull(words[index]) for index in covered]
+    return min(span[0] for span in spans), max(span[1] for span in spans)
 
 
 def _hypotheses(store: ProvStore, source_names: list[str]) -> dict[str, Entity]:

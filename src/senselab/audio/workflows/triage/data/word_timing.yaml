@@ -1,0 +1,4 @@
+# How a recognizer's word span places a word (consensus.located_span). Measured over 1,500 r18c recordings
+# (seed 20261010). Derivation: specs/20261007-task-events-in-background/design.md ("Untimed words").
+version: 1
+point_width_s: 0.32    # median duration of Qwen3-ASR's timed words (n 23,889; p25 0.16, p75 0.48); a point span is read over this window centred on it
