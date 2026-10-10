@@ -41,6 +41,8 @@ def _answers(other: float) -> dict[str, Any]:
         "other_voice": {"choice": "one", "probabilities": {"one": 1 - other, "more_than_one": other}},
         "instructions_spoken": {"noul": 0.02},
         "policy_identifier_present": {"noul": 0.03},
+        "masked_text_free_of_identifiers": {"noul": 0.97},
+        "off_task_speech": {"choice": "none", "probabilities": {"none": 0.9, "some": 0.1}},
     }
 
 

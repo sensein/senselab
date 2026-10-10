@@ -9,6 +9,8 @@ import dataclasses
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+import pytest
+
 from senselab.audio.data_structures import AudioHints
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.nodes.second_opinion import (
@@ -73,6 +75,8 @@ def _answers(other: float = 0.9) -> dict[str, Any]:
         "other_voice": {"choice": "more_than_one", "probabilities": {"one": 1 - other, "more_than_one": other}},
         "instructions_spoken": {"noul": 0.02},
         "policy_identifier_present": {"noul": 0.97},
+        "masked_text_free_of_identifiers": {"noul": 0.1},
+        "off_task_speech": {"choice": "none", "probabilities": {"none": 0.8, "some": 0.15, "extensive": 0.05}},
     }
 
 
@@ -104,6 +108,11 @@ class TestItAsksAndRecords:
         assert outcome.status == OK and held["name"] == SECOND_OPINION_ANSWERS
         assert held["probabilities"]["other_voice"] == 0.9
         assert held["probabilities"]["policy_identifier_present"] == 0.97
+        assert held["probabilities"]["masked_text_free_of_identifiers"] == 0.1
+        assert held["probabilities"]["off_task_speech"] == pytest.approx(0.2)
+        assert held["choices"] == {"other_voice": "more_than_one", "off_task_speech": "none"}
+        assert held["class_probabilities"]["off_task_speech"] == {"none": 0.8, "some": 0.15, "extensive": 0.05}
+        assert ask.states[0]["masked_text"] == ask.states[0]["transcript"] and held["masked_differs"] is False
         assert held["blob_digest"] == pin_of(config).blob_digest
         assert "alicia" in ask.states[0]["transcript"]
         assert store.get_activity(store.generated_by(outcome.measurement_id) or "").node == NODE
@@ -141,22 +150,41 @@ class TestItAsksAndRecords:
         assert outcome.status == OK and not again.states
         assert _opinion(store, outcome.measurement_id)["result_cache"]["hit"] is True
 
+    def test_the_shipped_masked_text_is_sent_and_a_new_mask_asks_again(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The state carries the final mask plan's text, and a changed mask misses the cache."""
+        from senselab.audio.workflows.triage.nodes import second_opinion as node
+
+        config = _config(tmp_path)
+        monkeypatch.setattr(node, "masked_text", lambda store, config, hint: ("", "my name is [PERSON]"))
+        first = _Ask(_answers())
+        outcome = second_opinion(_store(), config, None, first)
+        assert first.states[0]["masked_text"] == "my name is [PERSON]"
+        assert outcome.status == OK
+        cached = _Ask(_answers())
+        assert second_opinion(_store(), config, None, cached).status == OK and not cached.states
+        monkeypatch.setattr(node, "masked_text", lambda store, config, hint: ("", "my [PERSON] is [PERSON]"))
+        second = _Ask(_answers())
+        assert second_opinion(_store(), config, None, second).status == OK and second.states
+
     def test_the_key_moves_with_the_text_the_context_the_blob_and_the_seed(self, tmp_path: Path) -> None:
         """Each of the four is in the key."""
         pin = pin_of(_config(tmp_path))
-        base = opinion_cache_key("hello", {"task": "a"}, pin, 7)
+        base = opinion_cache_key("hello", "hello", {"task": "a"}, pin, 7)
         moved_pin = dataclasses.replace(pin, blob_digest="sha256:" + "0" * 64)
         assert (
             len(
                 {
                     base,
-                    opinion_cache_key("hello there", {"task": "a"}, pin, 7),
-                    opinion_cache_key("hello", {"task": "b"}, pin, 7),
-                    opinion_cache_key("hello", {"task": "a"}, moved_pin, 7),
-                    opinion_cache_key("hello", {"task": "a"}, pin, 8),
+                    opinion_cache_key("hello there", "hello there", {"task": "a"}, pin, 7),
+                    opinion_cache_key("hello", "[PERSON]", {"task": "a"}, pin, 7),
+                    opinion_cache_key("hello", "hello", {"task": "b"}, pin, 7),
+                    opinion_cache_key("hello", "hello", {"task": "a"}, moved_pin, 7),
+                    opinion_cache_key("hello", "hello", {"task": "a"}, pin, 8),
                 }
             )
-            == 5
+            == 6
         )
 
 

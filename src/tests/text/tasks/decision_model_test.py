@@ -148,7 +148,7 @@ class TestThePin:
             verify_pin(store, pin, verified_dir=verified)
 
 
-def _answers(other: float = 0.02, instructions: float = 0.03, identifier: float = 0.05) -> dict:
+def _answers(other: float = 0.02, instructions: float = 0.03, identifier: float = 0.05, free: float = 0.9) -> dict:
     return {
         "other_voice": {
             "choice": MORE_THAN_ONE if other > 0.5 else "one",
@@ -156,6 +156,8 @@ def _answers(other: float = 0.02, instructions: float = 0.03, identifier: float 
         },
         "instructions_spoken": {"noul": instructions},
         "policy_identifier_present": {"noul": identifier},
+        "masked_text_free_of_identifiers": {"noul": free},
+        "off_task_speech": {"choice": "some", "probabilities": {"none": 0.25, "some": 0.5, "extensive": 0.25}},
     }
 
 
@@ -169,8 +171,40 @@ class TestTheAnswers:
             "other_voice": 0.85,
             "instructions_spoken": 0.03,
             "policy_identifier_present": 0.99,
+            "masked_text_free_of_identifiers": 0.9,
+            "off_task_speech": 0.75,
         }
-        assert opinion.other_voice_choice == MORE_THAN_ONE
+        assert opinion.choices == {"other_voice": MORE_THAN_ONE, "off_task_speech": "some"}
+        assert opinion.class_probabilities["off_task_speech"] == {"none": 0.25, "some": 0.5, "extensive": 0.25}
+
+    def test_an_off_task_answer_without_its_classes_is_an_error(self) -> None:
+        """A choice whose probabilities name none of its classes carries no confidence."""
+        answers = _answers()
+        answers["off_task_speech"] = {"choice": "some", "probabilities": {"maybe": 1.0}}
+        with pytest.raises(ValueError, match="off_task_speech"):
+            read_answers(answers)
+        del answers["off_task_speech"]
+        with pytest.raises(ValueError, match="off_task_speech"):
+            read_answers(answers)
+
+    def test_a_masked_text_answer_without_a_probability_is_an_error(self) -> None:
+        """The new boolean question is required like the others."""
+        answers = _answers()
+        answers["masked_text_free_of_identifiers"] = {"noul": None}
+        with pytest.raises(ValueError, match="masked_text_free_of_identifiers"):
+            read_answers(answers)
+
+    def test_the_policy_is_the_reviewers_and_the_nature_comes_from_task_guidance(self) -> None:
+        """Both prompts read one policy text and one task-guidance file."""
+        from senselab.text.tasks.decision_model.second_opinion import QUESTION_SET_VERSION
+        from senselab.text.tasks.pii_detection.redaction_review import redaction_policy_text, task_nature_description
+
+        state = opinion_state("dog cat", {"task": "animal-fluency"}, "dog cat")
+        assert state["redaction_policy"] == redaction_policy_text()
+        assert state["task_nature"] == task_nature_description("animal-fluency") != ""
+        assert "state.redaction_policy" in QUESTIONS["policy_identifier_present"]["instructions"]
+        assert "state.masked_text" in QUESTIONS["masked_text_free_of_identifiers"]["instructions"]
+        assert QUESTIONS["off_task_speech"]["type"] == "choice" and QUESTION_SET_VERSION == 4
 
     def test_an_unanswered_question_is_an_error_not_a_zero(self) -> None:
         """A missing answer must not read as a confident no."""
@@ -188,17 +222,23 @@ class TestTheAnswers:
 
     def test_the_state_separates_the_instructions_from_the_stimulus(self) -> None:
         """The stimulus the participant is asked to say is not the instructions."""
+        from senselab.text.tasks.pii_detection.redaction_review import redaction_policy_text
+
         state = opinion_state(
             "the rainbow passage",
             {"task": "reading", "instructions": "Read aloud.", "asked_to_say": "When the sunlight"},
+            "the [PERSON] passage",
         )
         assert state == {
             "task": "reading",
+            "task_nature": "",
             "speech_type": "",
             "instructions": "Read aloud.",
             "stimulus": "When the sunlight",
             "task_content": "",
+            "redaction_policy": redaction_policy_text(),
             "transcript": "the rainbow passage",
+            "masked_text": "the [PERSON] passage",
         }
 
     def test_the_question_set_is_sent_whole(self) -> None:
@@ -209,8 +249,9 @@ class TestTheAnswers:
             seen.append((state, questions))
             return _answers()
 
-        ask_second_opinion(ask, "hello", {"task": "free-speech"})
+        ask_second_opinion(ask, "hello", {"task": "free-speech"}, "[PERSON]")
         assert seen[0][1] is QUESTIONS and seen[0][0]["transcript"] == "hello"
+        assert seen[0][0]["masked_text"] == "[PERSON]"
 
 
 class _Recorder(BaseHTTPRequestHandler):
