@@ -1898,3 +1898,81 @@ The three cleared lists no longer review on off-task speech; fac74f45 still revi
 owner heard, but these stores hold no COHORT non-match and no reviewer `other_speaker`, so nothing reviews it;
 that is the other-speaker detector's gap, not this rule's. 8ca6baff passes until the prompt-13 readings exist
 (above).
+
+## Untimed words (2026-10-10)
+
+A trace over r18c found 18,053 consensus words whose timing hull had no length: 98.7% of them point spans
+(`start == end`), 88% within 0.5 s of their timed neighbours. 229 were `(0, 0)` words in 68 recordings, and
+in 179 files every Qwen3-ASR word was `(0, 0)`, a whole-file failure of its bundled aligner
+(`Qwen/Qwen3-ForcedAligner-0.6B`). The adapter dropped only a None time, so `untimed_chunks_n` stayed 0; the
+isotonic fit and `word_hull` took `(0, 0)` as a reading, which stretched a hull to zero (4bd22301,
+v2-threebreathsnose: 12 words with hull `(0, crisper_end)`, a 0-36 s mask). Every untimed word was skipped by
+the item and task-content readings, so it counted as speech outside the task and withheld on
+`non_task_speech_untimed`.
+
+### What changed (consensus v2)
+
+- `consensus.missing_span`: a span is missing where a time is None or not finite, where both are zero, or
+  where the end precedes the start. The PREPROCESS adapter keeps such a word with `start`/`end` None and
+  counts it in `untimed_chunks_n`; the consensus applies the same test to stored hypotheses, so a re-read
+  of an old store agrees with a fresh run.
+- `consensus.located_span`: a point span is read over `data/word_timing.yaml` `point_width_s`, centred on
+  it and floored at zero. Fitted over 1,500 r18c recordings (seed 20261010): Qwen3-ASR's timed words have a
+  median duration of 0.32 s (n 23,889; p25 0.16, p75 0.48; CrisperWhisper 0.24 s, n 26,369). The points sit
+  on the boundary between their neighbours (point minus the previous word's end: median 0.0 s, n 17,714;
+  the next word's start minus the point: median 0.0 s, n 14,056), so the window is centred.
+- A missing span is out of the isotonic fit and out of `word_hull`, and out of the word's `timings`
+  (`untimed_sources` names its recognisers). A column no member locates gets a zero-length extent where the
+  stream before it ends and `temporal_uncertainty_s` None.
+- `unconfirmed`: a column read by one recogniser only, which no member locates. It is left out of
+  `lexical_words` and of the speech-outside-task count, and the reviewer reads its outcome as `unconfirmed`.
+  It never withholds on its own. A word both recognisers read that neither places stays in the count and
+  still withholds on `non_task_speech_untimed`. It is still scanned for PII; a PII mask on it cannot be placed
+  and withholds on coverage, as before.
+- `aligner_failed`: a recogniser every one of whose words has a missing span is named in the consensus
+  provenance, and the fold annotates `aligner_failed:<source>` (no reason). Triage has no forced aligner other
+  than Qwen3-ASR's own, the one that failed, so its words are not re-aligned: a word only it read is
+  `unconfirmed`. MMS alignment (`tasks/forced_alignment`) exists in senselab but is not wired into triage.
+
+### The residual's other voice is attributed (`quality_join.yaml` v3, `decision_reasons.yaml` v7)
+
+`decision_reasons.yaml` mapped `interference_in_task:other_voice` straight to `other_speaker`, and
+QUALITY emitted no other interference kind, so all 2,148 r18c `interference_in_task` cases were remapped
+wholesale. A 60-recording sample found 59 speech, 48 of them in speech tasks, where the participant can leak
+into the residual.
+
+- QUALITY writes another voice as `other_voice` (split in and out of the task spans), apart from
+  `interference`. `interference` holds the non-speech sources only: BACKGROUND's impulses, `decides: false`
+  (a task's own breath or cough onset reads as an impulse, and nothing is fitted). BACKGROUND has no
+  noise or music class in time; the only classifier labels over the residual are PREPROCESS's YAMNet/AST
+  summaries, which are not wired in.
+- The fold flags `other_voice_in_task` (`other_speaker`) only where a COHORT non-matching span overlaps the
+  voice, or a reader heard another speaker (the reviewer's `speakers: more_than_one`, its `other_speaker`
+  role, or a confident second-opinion `other_voice`). Otherwise it annotates `residual_speech_unattributed`;
+  a voice away from the task annotates `residual_speech_outside_task`. `participant_voice_in_task` is retired.
+
+### Validation on ORCD (r18c stores, in memory, CPU; before 002f3e88, after 7441b95c)
+
+The after run re-reads the consensus from the stored hypotheses onto the stored word ids (the alignment is
+unchanged, every column's readings matched), then replays the task layer, QUALITY, REDACT and the fold. The
+reviewer is not re-run, so it has not yet seen `unconfirmed`.
+
+| set | before | after |
+| --- | --- | --- |
+| 4bd22301 | 64 speech words, 52 untimed; withheld `non_task_speech_untimed` | `aligner_failed:asr_qwen`, 66 unconfirmed; 12 words, 0 untimed; redacted `non_task_speech_masked` |
+| 20 others with an untimed lexical word | 6 withheld (4 `non_task_speech_untimed`, 2 `mask_coverage_failed`) | 0 untimed anywhere; 5 of the 6 release redacted; 59896e0e stays withheld on coverage (a person-name mask on unconfirmed words) |
+
+One glide (53dddba6) moves pass to review: a point-span word is now placed and read as speech outside the
+task. The 60 interference stems: the replay before the change reads 18 with a reason (11 `other_speaker` from
+`interference_in_task:other_voice`); after, 1 is `other_voice_in_task` (38b0735a, attributed by a reader),
+1 keeps `other_speaker` from the reviewer, and the 11 move to no reason (9) or `identifying_content` (2).
+
+### Corpus scope (scan of all 62,550 r18c stores)
+
+- A hypothesis word with a `(0, 0)` span: 400 recordings; a point span: 22,086; union 22,328. Every one needs
+  PREPROCESS's consensus re-run (its extents change). 5,715 of them hold an untimed lexical word or a hull
+  stretched by `(0, 0)` today (from the 60,503-store untimed scan), where the outcome can move.
+- `aligner_failed`: 187 recordings, all `asr_qwen`.
+- QUALITY's other voice touching a task span: 2,158 recordings (2,155 stored `interference_in_task`); 1,378
+  are in the PREPROCESS set, and the other 780 need a QUALITY-onward replay. BACKGROUND impulses exist in
+  51,644 recordings, so the join's new `interference.impulse` record (annotation only) reaches nearly all.
