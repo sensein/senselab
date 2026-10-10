@@ -2221,6 +2221,54 @@ class _NonTaskSpeech:
     extensive: bool = False
 
 
+@dataclass(frozen=True)
+class _HeardOffTask:
+    """Speech outside the task that COHORT and the reviewer heard, placed on words.
+
+    Attributes:
+        speech_ids: Words inside COHORT's non-matching spans of a non-lexical task, or quoted by the reviewer as
+            off-task speech or another speaker's.
+        task_ids: Words the reviewer quoted as the task's own content.
+        extensive: Whether the reviewer read the off-task speech as extensive.
+    """
+
+    speech_ids: frozenset[str] = frozenset()
+    task_ids: frozenset[str] = frozenset()
+    extensive: bool = False
+
+
+def _heard_off_task(
+    store: ProvStore,
+    words: Sequence[Entity],
+    tokens: Sequence[tuple[str, Entity]],
+    reading: Mapping[str, Any],
+) -> _HeardOffTask:
+    """The speech outside the task COHORT's comparison and the reviewer's reading name, on the timed words.
+
+    Args:
+        store: The provenance store, read for the ``cohort_reading`` measurement.
+        words: The timed consensus words, in stream order.
+        tokens: :func:`_tokens` over them.
+        reading: The reviewer's annotation where the fold applies it, else empty.
+
+    Returns:
+        The words to mask and the words the reviewer called the task's own content.
+    """
+    from senselab.audio.workflows.triage.cohort_fold import COHORT_READING, non_task_speech_spans  # noqa: PLC0415
+
+    cohort = find_measurement(store, COHORT_READING)
+    spans = non_task_speech_spans(cohort.attributes if cohort is not None else None)
+    speech = {word.id for word in words if any(_overlaps(word_hull(word), span) for span in spans)}
+    read = reading.get("status") in ("clean", "flagged")
+    quotes = [*(reading.get("off_task_quotes") or ()), *(reading.get("other_speaker_quotes") or ())] if read else []
+    for quote in quotes:
+        speech |= {word.id for word in _place(str(quote), tokens)}
+    task = {
+        word.id for quote in (reading.get("task_content_quotes") or ()) if read for word in _place(str(quote), tokens)
+    }
+    return _HeardOffTask(frozenset(speech), frozenset(task), read and reading.get("off_task_speech") == "extensive")
+
+
 def _non_task_speech(store: ProvStore) -> _NonTaskSpeech:
     """The speech outside the task, as the owning branch's reading names it (``task_speech``).
 
@@ -2347,7 +2395,8 @@ def mask_plan(
     live_findings = live_entities(store, "pii")
     task_words = task_content(store, words, live_findings, declared_task_family(store), lexicon_ids)
     off_task = _non_task_speech(store)
-    excluded_ids = declared_ids | task_words.ids | off_task.item_ids
+    heard = _heard_off_task(store, words, transcript_tokens, reading if reviewer_applies else {})
+    excluded_ids = declared_ids | task_words.ids | off_task.item_ids | heard.task_ids
     located, unplaced_records = _located_findings(store, residue_ids, excluded_ids)
     finding_word_ids_of = {
         entity.id: {str(i) for i in (entity.attributes.get("word_ids") or ())} for entity in live_findings
@@ -2831,7 +2880,7 @@ def mask_plan(
         source = spread_from[run[0]][0]
         family = family_of_word.get(source) or (LOCATION_FAMILY if locked.get(source) == LOCK_PLACE else PERSON_FAMILY)
         propagated_masks.append((family, [by_id[word_id] for word_id in run]))
-    speech_ids = (set(off_task.timed) - excluded_ids) & set(order)
+    speech_ids = ((set(off_task.timed) | heard.speech_ids) - excluded_ids) & set(order)
     speech_untimed = off_task.untimed
     kept_ids |= speech_ids
     speech_masks = [
@@ -3042,7 +3091,7 @@ def mask_plan(
         reviewer_precedence=reviewer_wins,
         non_task_speech_ids=tuple(sorted(speech_ids, key=lambda word_id: order[word_id])),
         non_task_speech_untimed=speech_untimed,
-        non_task_speech_extensive=off_task.extensive,
+        non_task_speech_extensive=off_task.extensive or heard.extensive,
         named_no_words=reviewer_named_no_words(reading),
         releases=tuple(releases),
         conditions=tuple(conditions),

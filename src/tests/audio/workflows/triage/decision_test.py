@@ -27,17 +27,28 @@ from senselab.audio.workflows.triage.vocabulary import (
 
 def test_every_ground_key_maps_to_a_reason() -> None:
     """A ground key the vocabulary does not name fails here, printed, before it reaches a table."""
+    annotations = set(reason_vocabulary()["annotations"])
     keys = [*GROUND_KEYS, *(f"{prefix}:SPEECH" for prefix in GROUND_KEY_PREFIXES), *EVENT_ABSENT_GROUNDS.values()]
-    unmapped = sorted(key for key in keys if reason_of(key) is None)
+    unmapped = sorted(
+        key
+        for key in keys
+        if reason_of(key) is None and key not in annotations and key.split(":")[0] not in annotations
+    )
     print("unmapped ground keys:", unmapped)
     assert unmapped == []
 
 
-def test_every_release_ground_that_holds_or_is_unassessed_maps_to_a_reason() -> None:
-    """A withholding ground is a redaction hold; a release the graph could not assess is not measured."""
+def test_an_annotation_maps_to_no_reason() -> None:
+    """Owner, 2026-10-10: what only annotates names no reason; the list is explicit, not a gap."""
+    for key in reason_vocabulary()["annotations"]:
+        assert reason_of(key) is None and reason_of(f"{key}:other_voice") is None
+
+
+def test_only_a_release_the_graph_could_not_assess_maps_to_a_reason() -> None:
+    """A withholding ground is the release_reason column, not a verdict reason; an unassessed one is not measured."""
     held = {RELEASE_GROUND_KEYS[ground] for ground in RELEASE_WITHHELD_GROUNDS}
     unknown = {RELEASE_GROUND_KEYS[ground] for ground in RELEASE_UNKNOWN_GROUNDS}
-    assert {reason_of(key, release=True) for key in held} == {"redaction_hold"}
+    assert {reason_of(key, release=True) for key in held} == {None}
     assert {reason_of(key, release=True) for key in unknown} == {"not_measured"}
 
 
@@ -45,21 +56,18 @@ def test_every_reason_has_a_place_in_the_precedence_and_a_meaning() -> None:
     """The precedence orders every reason a key can map to, and says what each means."""
     vocabulary = reason_vocabulary()
     named = {*vocabulary["keys"].values(), *vocabulary["release_keys"].values(), *vocabulary["prefixes"].values()}
-    assert named <= set(vocabulary["precedence"])
+    assert named == set(vocabulary["precedence"])
     assert set(vocabulary["precedence"]) == set(vocabulary["meaning"])
 
 
 def test_discard_reasons_come_first() -> None:
     """A discard's reason outranks every review reason the same recording carries."""
-    assert reasons_of(["second_opinion_disagreement", "too_short_for_task", "conformance:SPEECH"]) == [
+    assert reasons_of(["second_opinion:other_voice", "too_short_for_task", "conformance:SPEECH"]) == [
         "task_too_short",
+        "other_speaker",
         "task_not_conforming",
-        "second_opinion_disagrees",
     ]
-    assert reasons_of(["person_name_review"], "reviewer_proposed_redaction") == [
-        "identifying_content",
-        "redaction_hold",
-    ]
+    assert reasons_of(["person_name_review"], "no_transcript") == ["not_measured", "identifying_content"]
 
 
 def test_a_settled_decision_names_no_owed_measurement() -> None:

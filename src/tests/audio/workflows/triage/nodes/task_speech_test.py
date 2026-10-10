@@ -189,7 +189,7 @@ class TestTheFoldReviewsAndReleases:
         folded = _fold(self._TASK, RedactionEvidence(non_task_speech_masked_n=2))
         assert folded.triage is Triage.REVIEW
         assert folded.release is Release.REDACTED and folded.release_ground == NON_TASK_SPEECH_MASKED
-        assert "speech_in_task" in folded.ground_keys and folded.reason == "speech_in_task"
+        assert "speech_in_task" in folded.ground_keys and folded.reason == "off_task_speech"
 
     def test_an_untimed_word_withholds(self) -> None:
         """A word no mask can place holds the recording."""

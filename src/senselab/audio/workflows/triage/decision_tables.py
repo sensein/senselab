@@ -29,8 +29,9 @@ from senselab.audio.workflows.triage.recording_vectors import (
     read_store,
     stem_of,
 )
+from senselab.audio.workflows.triage.vocabulary import release_ground_key
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 DECISIONS_NAME = "triage_decisions"
 EVIDENCE_NAME = "triage_evidence"
 FIGURE_PATH = Path("summary") / "summary.pdf"
@@ -168,6 +169,9 @@ def decision_rows(run_root: Path, root: Path) -> tuple[dict[str, Any], list[dict
         "run_dir": str(run_root.relative_to(root)) if run_root.is_relative_to(root) else str(run_root),
         "verdict": decision.get("triage"),
         "release": decision.get("release"),
+        "release_reason": release_ground_key(decision.get("release_ground"))
+        if decision.get("triage") != "discard"
+        else None,
         "reason": decision.get("reason"),
         "reasons": [str(r) for r in decision.get("reason_keys") or ()],
         "run_status": decision.get("run_status"),
@@ -230,6 +234,7 @@ def decisions_schema() -> pa.Schema:
             pa.field("run_dir", text),
             pa.field("verdict", text),
             pa.field("release", text),
+            pa.field("release_reason", text),
             pa.field("reason", text),
             pa.field("reasons", pa.list_(text)),
             pa.field("run_status", text),

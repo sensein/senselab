@@ -17,8 +17,11 @@ from typing import Any, Callable, Literal, Mapping, Sequence, TypeVar
 from senselab.audio.workflows.triage.cohort_fold import (
     COHORT_GROUND_KEYS,
     COHORT_NODE,
+    MEASURED,
     cohort_evidence,
     cohort_grounds,
+    nonmatch_spans,
+    other_speaker_block,
 )
 from senselab.audio.workflows.triage.decision import (
     ANNOTATION,
@@ -31,6 +34,7 @@ from senselab.audio.workflows.triage.decision import (
     reasons_of,
     records,
     reviewed_releases,
+    second_opinion_withholds,
 )
 
 GRAPH_ORDER = (
@@ -244,11 +248,17 @@ MASK_COVERAGE_FAILED = (
 
 REDACT_UNRESOLVED = "REDACT did not resolve its redaction, so neither copy may be handed on"
 
+SECOND_OPINION_HOLD = (
+    "the second-opinion model confidently reads identifying content in the text as it would ship, so the release "
+    "waits for a person"
+)
+
 RELEASE_WITHHELD_GROUNDS = (
     REVIEWER_PROPOSED_REDACTION,
     UNPLACED_FINDING_UNREAD,
     MASK_COVERAGE_FAILED,
     REDACT_UNRESOLVED,
+    SECOND_OPINION_HOLD,
     NON_TASK_SPEECH_UNTIMED,
     NON_TASK_SPEECH_EXTENSIVE,
 )
@@ -794,11 +804,29 @@ releases it. Controlled vocabulary, with the number of masked name words and any
 the release is unchanged."""
 
 SECOND_OPINION_DISAGREES = "the second-opinion model confidently disagrees with the redaction reviewer"
+SECOND_OPINION_NOT_FREE = "the second-opinion model confidently reads identifying content in the text as it would ship"
+REVIEWER_OFF_TASK = "the redaction reviewer read the participant talking off the task"
+REVIEWER_OTHER_SPEAKER = "the redaction reviewer read another speaker: an assistant, the background or someone unclear"
+OTHER_SPEAKER_IN_TASK = "lexical speech outside the task is another speaker's, by the session enrollment"
+PARTICIPANT_VOICE_IN_TASK = "the other voice over the task is the participant's own, by the session enrollment"
 """The flag ground a decision model's confident disagreement with the reviewer contributes, under
 ``verdict.second_opinion_disagreement_flags``. Controlled vocabulary, with each disagreeing question, the
 model's probability and the reviewer's answer appended; the release is unchanged."""
 
-SECOND_OPINION_QUESTIONS = ("other_voice", "instructions_spoken", "policy_identifier_present")
+SECOND_OPINION_QUESTIONS = (
+    "other_voice",
+    "instructions_spoken",
+    "policy_identifier_present",
+    "off_task_speech",
+)
+MASKED_TEXT_FREE = "masked_text_free_of_identifiers"
+"""The second opinion's question on the text as it would ship; a confident no is read on its own."""
+
+OFF_TASK_LEVELS = ("some", "extensive")
+"""The reviewer's ``off_task_speech`` levels that read off-task speech."""
+
+OTHER_SPEAKER_KINDS = ("assistant", "background", "unclear")
+"""The reviewer's ``other_speaker`` kinds that read another speaker."""
 """The questions whose disagreement with the reviewer can flag a recording."""
 
 MODEL_SPEAKER_PERMITTED = "the task's instructions permit a model speaker"
@@ -863,7 +891,13 @@ KEY_PERSON_NAME_REVIEW = "person_name_review"
 KEY_REVIEWER_SECOND_SPEAKER = "reviewer_second_speaker"
 KEY_REVIEWER_NAMED_NO_WORDS = "reviewer_named_no_words"
 KEY_INSTRUCTIONS_SPOKEN = "instructions_spoken"
-KEY_SECOND_OPINION_DISAGREES = "second_opinion_disagreement"
+PREFIX_SECOND_OPINION = "second_opinion"
+"""A second-opinion question (``second_opinion:<question>``) that disagrees with the fold, or reads identifiers."""
+KEY_REVIEWER_OFF_TASK = "reviewer_off_task_speech"
+KEY_REVIEWER_OTHER_SPEAKER = "reviewer_other_speaker"
+KEY_INSTRUCTIONS_SPOKEN_BY_OTHER = "instructions_spoken_by_other"
+KEY_OTHER_SPEAKER_IN_TASK = "other_speaker_in_task"
+KEY_PARTICIPANT_VOICE_IN_TASK = "participant_voice_in_task"
 KEY_UNPLACED_OPEN = "unplaced_finding_open"
 KEY_UNPLACED_UNREAD = "unplaced_finding_unread"
 
@@ -907,7 +941,11 @@ GROUND_KEYS = (
     KEY_REVIEWER_SECOND_SPEAKER,
     KEY_REVIEWER_NAMED_NO_WORDS,
     KEY_INSTRUCTIONS_SPOKEN,
-    KEY_SECOND_OPINION_DISAGREES,
+    KEY_REVIEWER_OFF_TASK,
+    KEY_REVIEWER_OTHER_SPEAKER,
+    KEY_INSTRUCTIONS_SPOKEN_BY_OTHER,
+    KEY_OTHER_SPEAKER_IN_TASK,
+    KEY_PARTICIPANT_VOICE_IN_TASK,
     KEY_UNPLACED_OPEN,
     KEY_UNPLACED_UNREAD,
     *COHORT_GROUND_KEYS,
@@ -950,6 +988,7 @@ GROUND_KEY_PREFIXES = (
     PREFIX_FAULT_OUTSIDE_TASK,
     PREFIX_INTERFERENCE_IN_TASK,
     PREFIX_INTERFERENCE_OUTSIDE_TASK,
+    PREFIX_SECOND_OPINION,
 )
 """Ground keys written ``<prefix>:<name>``, the name being a gate, a reporting node or a branch."""
 
@@ -972,7 +1011,7 @@ OPERATIONAL_GROUND_KEYS = frozenset(
 """Grounds that say the pipeline owes the recording something, not that the participant did anything.
 A flag on one of these makes the file :attr:`RunStatus.INCOMPLETE`, verdict ``review``."""
 
-OPERATIONAL_GROUND_PREFIXES = frozenset({PREFIX_UNMEASURED, PREFIX_BRANCH_SILENT})
+OPERATIONAL_GROUND_PREFIXES = frozenset({PREFIX_UNMEASURED, PREFIX_BRANCH_SILENT, PREFIX_NODE})
 """Prefixed grounds that are operational in the same sense."""
 
 RELEASE_GROUND_KEYS: dict[str, str] = {
@@ -991,6 +1030,7 @@ RELEASE_GROUND_KEYS: dict[str, str] = {
     REVIEWER_PROPOSED_REDACTION: "reviewer_proposed_redaction",
     UNPLACED_FINDING_UNREAD: "unplaced_finding_unread",
     MASK_COVERAGE_FAILED: "mask_coverage_failed",
+    SECOND_OPINION_HOLD: "second_opinion_not_free",
     REDACT_UNRESOLVED: "redact_unresolved",
     REVIEWER_UNMASKED_SOME: "reviewer_unmasked_some",
     MASKS_TRIMMED_TO_CONTENT: "masks_trimmed_to_content",
@@ -1536,15 +1576,67 @@ def second_opinion_disagreements(
         reviewer["policy_identifier_present"] = identifier_masked
     if "instructions_spoken" in annotation:
         reviewer["instructions_spoken"] = any(str(text).strip() for text in annotation.get("instructions_spoken") or ())
+    if annotation.get("off_task_speech") is not None:
+        reviewer["off_task_speech"] = annotation.get("off_task_speech") in OFF_TASK_LEVELS
     found = []
     for question in SECOND_OPINION_QUESTIONS:
         if question not in reviewer or probabilities.get(question) is None:
             continue
-        p = float(probabilities[question])
+        p = probability_yes(probabilities[question])
         said = reviewer[question]
         if (p >= confident_yes and not said) or (p <= confident_no and said):
             found.append(f"{question} p={p:.2f} reviewer={'yes' if said else 'no'}")
     return found
+
+
+def second_opinion_not_free(opinion: Mapping[str, Any] | None, confident_no: float | None) -> float | None:
+    """The second opinion's probability that the text as it would ship is free of identifiers, where confidently not.
+
+    Args:
+        opinion: The ``second_opinion_answers`` measurement's attributes, or None.
+        confident_no: The probability at or below which an answer is a confident no.
+
+    Returns:
+        The probability where the opinion answered and it is at or below ``confident_no``; None otherwise.
+    """
+    held = dict(opinion or {})
+    value = (held.get("probabilities") or {}).get(MASKED_TEXT_FREE)
+    if held.get("status") != "ok" or value is None or confident_no is None:
+        return None
+    p = probability_yes(value)
+    return p if p <= confident_no else None
+
+
+def probability_yes(value: Any) -> float:  # noqa: ANN401 -- a probability or one per choice
+    """A second-opinion answer as the probability of its affirmative reading.
+
+    Args:
+        value: A probability, or a mapping of choice to probability (``none``, ``some``, ``extensive``).
+
+    Returns:
+        The probability itself, or one less the probability of ``none``.
+    """
+    if isinstance(value, Mapping):
+        return 1.0 - float(value.get("none", 0.0))
+    return float(value)
+
+
+def speaker_of(cohort: Mapping[str, Any] | None, spans: Sequence[Sequence[float]]) -> str:
+    """Whose speech some spans hold, by COHORT's comparison against the session enrollment.
+
+    Args:
+        cohort: COHORT's ``cohort_reading`` attributes, or None.
+        spans: The spans, ``(start, end)``.
+
+    Returns:
+        ``other`` where a span overlaps a non-matching span, ``participant`` where the comparison was measured
+        and none does, ``unknown`` where it was not measured.
+    """
+    if other_speaker_block(cohort).get("status") != MEASURED:
+        return "unknown"
+    nonmatch = nonmatch_spans(cohort)
+    overlaps = any(float(a) < d and c < float(b) for a, b, *_ in spans for c, d in nonmatch)
+    return "other" if overlaps else "participant"
 
 
 def reviewer_named_no_words(llm_redaction: Mapping[str, Any] | None) -> bool:
@@ -1977,6 +2069,9 @@ def discard_contested(evidence: TaskEvidence) -> bool:
     )
 
 
+OTHER_VOICE_KIND = "other_voice"
+"""QUALITY's interference kind for another voice (``quality_join.OTHER_VOICE``)."""
+
 JOIN_UNREAD = ("quality_join",)
 """The join's own measurement: a recording whose QUALITY wrote none is not measured. A missing BACKGROUND
 reading is the branches' absent input, and a PREPROCESS without a plain stream flags on its own."""
@@ -2027,13 +2122,22 @@ def join_unread(quality: Mapping[str, Any]) -> list[str]:
     return [name for name in quality.get("missing") or () if name in JOIN_UNREAD]
 
 
-def _join_reasons(quality: Mapping[str, Any], flag: Callable[..., None], annotate: Callable[..., None]) -> None:
+def _join_reasons(
+    quality: Mapping[str, Any],
+    flag: Callable[..., None],
+    annotate: Callable[..., None],
+    cohort: Mapping[str, Any] | None = None,
+) -> None:
     """Raise QUALITY's join as flags and annotations: what touches a task span reviews, the rest annotates.
+
+    Another voice over the task is the participant's own off-task speech where COHORT matches it to the session
+    enrollment, and another speaker otherwise.
 
     Args:
         quality: QUALITY's join record.
         flag: The fold's flag.
         annotate: The fold's annotate.
+        cohort: COHORT's ``cohort_reading`` attributes, or None.
     """
     unread = join_unread(quality)
     if unread:
@@ -2053,10 +2157,12 @@ def _join_reasons(quality: Mapping[str, Any], flag: Callable[..., None], annotat
             elsewhere = list(split.get("out") or ()) + ([] if kind in deciding else held)
             if kind in deciding:
                 seconds = round(sum(b - a for a, b in held), 3)
+                own = kind == OTHER_VOICE_KIND and speaker_of(cohort, held) == "participant"
                 flag(
                     QUALITY,
-                    f"{inside}: {kind}, {len(held)} span(s), {seconds} s, first at {held[0][0]} s",
-                    f"{inside}:{kind}",
+                    f"{PARTICIPANT_VOICE_IN_TASK if own else inside}: {kind}, {len(held)} span(s), {seconds} s, "
+                    f"first at {held[0][0]} s",
+                    KEY_PARTICIPANT_VOICE_IN_TASK if own else f"{inside}:{kind}",
                 )
             if elsewhere:
                 annotate(QUALITY, f"{outside}: {kind}, {len(elsewhere)} span(s)", f"{outside}:{kind}")
@@ -2810,11 +2916,29 @@ def fold_file_verdict(
             else "no words quoted"
         )
         flag(_VERDICT, f"{REVIEWER_HEARD_SECOND_SPEAKER}: {counted}", KEY_REVIEWER_SECOND_SPEAKER)
+    other_kind = annotation.get("other_speaker")
+    by_other = other_kind in ("assistant", "background")
+    if rules.llm_second_speaker_flags and other_kind in OTHER_SPEAKER_KINDS and not heard_other and not diarized_other:
+        quoted = len(annotation.get("other_speaker_quotes") or ())
+        flag(
+            _VERDICT, f"{REVIEWER_OTHER_SPEAKER}: {other_kind}, {quoted} passage(s) quoted", KEY_REVIEWER_OTHER_SPEAKER
+        )
+    if annotation.get("off_task_speech") in OFF_TASK_LEVELS:
+        quoted = len(annotation.get("off_task_quotes") or ())
+        flag(
+            _VERDICT,
+            f"{REVIEWER_OFF_TASK}: {annotation.get('off_task_speech')}, {quoted} passage(s) quoted",
+            KEY_REVIEWER_OFF_TASK,
+        )
     if rules.llm_contradiction_flags and reviewer_named_no_words(annotation):
         flag(_VERDICT, REVIEWER_NAMED_NO_WORDS, KEY_REVIEWER_NAMED_NO_WORDS)
     spoken = [str(text) for text in annotation.get("instructions_spoken") or () if str(text).strip()]
     if rules.llm_instructions_spoken_flags and spoken:
-        flag(_VERDICT, f"{INSTRUCTIONS_SPOKEN}: {len(spoken)} passage(s) quoted", KEY_INSTRUCTIONS_SPOKEN)
+        flag(
+            _VERDICT,
+            f"{INSTRUCTIONS_SPOKEN}: {len(spoken)} passage(s) quoted",
+            KEY_INSTRUCTIONS_SPOKEN_BY_OTHER if by_other else KEY_INSTRUCTIONS_SPOKEN,
+        )
     disagreements = second_opinion_disagreements(
         second_opinion,
         annotation,
@@ -2823,8 +2947,19 @@ def fold_file_verdict(
         identifier_masked=evidence.masks_final_n > 0 or evidence.reviewer_requested_n > 0,
     )
     clef_decides = not {_AIRWAY, _VOICE} & set(task_evidence.owning_branches)
-    if rules.second_opinion_disagreement_flags and disagreements and clef_decides:
-        flag(_VERDICT, f"{SECOND_OPINION_DISAGREES}: {'; '.join(disagreements)}", KEY_SECOND_OPINION_DISAGREES)
+    if rules.second_opinion_disagreement_flags and clef_decides:
+        for disagreement in disagreements:
+            question = disagreement.split(" ", 1)[0]
+            if question == "instructions_spoken" and by_other:
+                question = KEY_INSTRUCTIONS_SPOKEN_BY_OTHER
+            flag(_VERDICT, f"{SECOND_OPINION_DISAGREES}: {disagreement}", f"{PREFIX_SECOND_OPINION}:{question}")
+    not_free = second_opinion_not_free(second_opinion, rules.second_opinion_confident_no)
+    if not_free is not None:
+        flag(
+            _VERDICT,
+            f"{SECOND_OPINION_NOT_FREE}: p={not_free:.2f}",
+            f"{PREFIX_SECOND_OPINION}:{MASKED_TEXT_FREE}",
+        )
     open_families = sorted({family for family, state in unplaced if state in (UNPLACED_OPEN, UNPLACED_UNREAD)})
     if open_families:
         unread_any = any(state == UNPLACED_UNREAD for _, state in unplaced)
@@ -2966,11 +3101,13 @@ def fold_file_verdict(
         and speech_words >= task_evidence.task_speech_words_min
     ):
         owner = task_evidence.owning_branches[0] if task_evidence.owning_branches else _VERDICT
+        other = speaker_of(cohort, task_evidence.task_speech.get("runs") or ()) == "other"
         flag(
             owner,
-            f"{SPEECH_IN_TASK}: {speech_words} word(s) in {task_evidence.task_speech.get('runs_n', 0)} run(s), "
-            f"{task_evidence.task_speech.get('untimed_n', 0)} untimed",
-            KEY_SPEECH_IN_TASK,
+            f"{OTHER_SPEAKER_IN_TASK if other else SPEECH_IN_TASK}: {speech_words} word(s) in "
+            f"{task_evidence.task_speech.get('runs_n', 0)} run(s), {task_evidence.task_speech.get('untimed_n', 0)} "
+            "untimed",
+            KEY_OTHER_SPEAKER_IN_TASK if other else KEY_SPEECH_IN_TASK,
             by_branch[owner].kind if owner in by_branch else None,
         )
     if task_evidence.voice_outside_speech:
@@ -2982,7 +3119,7 @@ def fold_file_verdict(
             KEY_SPEECH_OUTSIDE_TASK,
             voice_kind,
         )
-    _join_reasons(task_evidence.quality, flag, annotate)
+    _join_reasons(task_evidence.quality, flag, annotate, cohort)
     for why, key in cohort_grounds(cohort):
         flag(COHORT_NODE, why, key)
     for branch in branches_seen:
@@ -3109,6 +3246,8 @@ def fold_file_verdict(
         speech_declined=routes.get(_SPEECH) == DECLINED,
     )
     release, release_ground = final_release(release, release_ground, redaction or RedactionEvidence())
+    if not_free is not None and second_opinion_withholds() and release in (Release.AS_IS, Release.REDACTED):
+        release, release_ground = Release.WITHHELD, SECOND_OPINION_HOLD
     if triage is not Triage.DISCARD and task_evidence.non_lexical and release in (Release.REDACTED, Release.WITHHELD):
         flag(
             _VERDICT,
@@ -3135,10 +3274,10 @@ def fold_file_verdict(
     run_status = RunStatus.INCOMPLETE if triage is not Triage.DISCARD and missing else RunStatus.COMPLETE
     ground_keys = sorted({*([ground] if ground else []), *(ground_key(reason) for reason in flags)})
     annotation_keys = sorted({str(annotation.key) for annotation in annotations})
-    held = release is Release.WITHHELD or (release is None and triage is not Triage.DISCARD)
+    unassessed = release is None and triage is not Triage.DISCARD
     decision_reasons = reasons_of(
         ground_keys,
-        release_ground_key(release_ground) if held else None,
+        release_ground_key(release_ground) if unassessed else None,
         owed_counts=triage is not Triage.DISCARD,
     )
     weighed_gates = [

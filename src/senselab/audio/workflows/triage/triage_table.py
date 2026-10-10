@@ -325,6 +325,7 @@ def row(
         "source_path": tree.get("source_path"),
         "verdict": verdict,
         "release": None if verdict == "discard" else decision.get("release"),
+        "release_reason": None if verdict == "discard" else decision.get("release_reason"),
         "reason": decision.get("reason"),
         "reasons": list(decision.get("reasons") or ()),
         "run_status": decision.get("run_status"),

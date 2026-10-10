@@ -22,6 +22,7 @@ HEADER = [
     "source_path",
     "verdict",
     "release",
+    "release_reason",
     "reason",
     "reasons",
     "run_status",
@@ -93,6 +94,7 @@ def _recording(
         "run_dir": str(run_dir),
         "verdict": verdict,
         "release": release,
+        "release_reason": None if release is None else "scan_found_nothing",
         "reason": None if verdict == "pass" else "weak_events",
         "reasons": [] if verdict == "pass" else ["weak_events", "second\treason"],
         "run_status": "complete",
@@ -216,7 +218,7 @@ def test_lists_are_joined_and_acquisition_readings_fill_their_columns(tmp_path: 
     assert breath["task_audio_plain"].endswith("run/streams/task_plain.flac")
     assert breath["task_audio_enhanced"].endswith("run/streams/task_enhanced.flac")
     assert breath["task_audio_redacted"] == ""
-    assert (breath["pipeline_commit"], breath["config_hash"], breath["schema_version"]) == ("abc123", "c0ffee", "1")
+    assert (breath["pipeline_commit"], breath["config_hash"], breath["schema_version"]) == ("abc123", "c0ffee", "2")
     speech = dict(zip(HEADER, parsed[2]))
     assert speech["branch"] == "SPEECH" and speech["task_audio_enhanced"] == ""
     assert speech["task_events_found"] == "" and speech["interference_in_task"] == ""

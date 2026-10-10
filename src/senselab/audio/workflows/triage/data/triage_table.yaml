@@ -3,7 +3,7 @@
 # task-audio files exist. No transcripts. A list is joined with ";", empty when there is none; a
 # missing value is an empty field. Columns are written in the order listed here. The files group is
 # relative to derivatives/senselab-triage/ and empty when the file is absent.
-version: 1
+version: 2
 columns:
 - name: participant_id
   group: identity
@@ -29,6 +29,9 @@ columns:
 - name: release
   group: decision
   description: as_is, redacted or withheld; empty on discard
+- name: release_reason
+  group: decision
+  description: the release ground key behind the release (data/decision_reasons.yaml release grounds); empty on discard
 - name: reason
   group: decision
   description: the reason key that names the verdict; empty on a clean pass
