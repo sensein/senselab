@@ -180,21 +180,20 @@ def declared_family(store: ProvStore) -> str | None:
 
 def _enhanced_speech(store: ProvStore, run_dir: Path) -> tuple[float | None, list[tuple[float, float]]]:
     """The enhanced stream's YAMNet speech: the highest speech-label score, and the windows reaching the bound."""
-    import json  # noqa: PLC0415
+    from senselab.audio.workflows.triage.background_speech import (  # noqa: PLC0415
+        _classifier_windows,
+        _speech,
+        background_speech_parameters,
+    )
 
-    from senselab.audio.tasks.classification.label_scores import label_scores  # noqa: PLC0415
-    from senselab.audio.workflows.triage.background_speech import background_speech_parameters  # noqa: PLC0415
-
-    found = find_measurement(store, ENHANCED_YAMNET)
-    path = run_dir / str(found.attributes.get("path") or "") if found is not None else None
-    if path is None or not path.is_file():
+    held = _classifier_windows(store, run_dir, ENHANCED_YAMNET)
+    if held is None:
         return None, []
     labels = background_speech_parameters().speech_labels
     least = float(session_background_parameters()["foreground"]["enhanced_speech_min"])
     best, windows = 0.0, []
-    for window in json.loads(path.read_text()):
-        scores = {key: float(value) for pair in label_scores(window) for key, value in pair.items()}
-        score = max((scores.get(label, 0.0) for label in labels), default=0.0)
+    for window in held:
+        score = _speech(window, labels)
         best = max(best, score)
         if score >= least:
             windows.append((float(window.get("start", 0.0)), float(window.get("end", 0.0))))
