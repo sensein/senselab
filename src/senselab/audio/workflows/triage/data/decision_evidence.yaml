@@ -4,7 +4,7 @@
 # a category with in / not in against a list of categories; a reported reading has neither.
 # `producer` names the unit of specs/20261007-task-events-in-background/design.md that emits it;
 # an item a later unit produces is absent from the tables until that unit lands.
-version: 8
+version: 9
 groups:
   acquisition:
     admit_outcome:
@@ -43,6 +43,34 @@ groups:
       unit: dB
       producer: unit C
       meaning: the recording's active level against its BIDS session's (SESSION), > data/quality_join.yaml capture.level_rel_db_max; only the room, with no task event heard, discards
+    speech_quality.foreground_minus_residual_db.whole:
+      unit: dB
+      producer: session background
+      meaning: the enhanced stream's level over speech frames less the residual's over the whole file (data/session_background.yaml); not applicable where the enhanced stream carries no speech; reported only
+    speech_quality.foreground_minus_residual_db.speech:
+      unit: dB
+      producer: session background
+      meaning: that foreground less the residual's level over speech frames; reported only
+    speech_quality.foreground_minus_residual_db.non_speech:
+      unit: dB
+      producer: session background
+      meaning: that foreground less the residual's level over non-speech frames; reported only
+    speech_quality.plain_minus_residual_db.whole:
+      unit: dB
+      producer: session background
+      meaning: the median per-frame plain level over the residual's, over the whole file; reported only
+    speech_quality.plain_minus_residual_db.speech:
+      unit: dB
+      producer: session background
+      meaning: the same over speech frames, roughly the foreground's share; not applicable where the enhanced stream carries no speech; reported only
+    speech_quality.plain_minus_residual_db.non_speech:
+      unit: dB
+      producer: session background
+      meaning: the same over non-speech frames, near 0 dB where the enhancer removes only background; reported only
+    speech_quality.session_foreground_minus_residual_db:
+      unit: dB
+      producer: session background
+      meaning: the median over the session's speech tasks with foreground of foreground less residual, whole file; not applicable where the session has none; reported only
   breath:
     breath_event_db_over_floor:
       unit: dB
