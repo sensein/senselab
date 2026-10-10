@@ -85,7 +85,7 @@ _PHRASES_HEADING = "PHRASES_INSTEAD_OF_ITEMS:"
 _PHRASE_QUOTES_HEADING = "PHRASE_QUOTES:"
 _TASK_CONTENT_QUOTES_HEADING = "TASK_CONTENT_QUOTES:"
 
-PROMPT_VERSION = 14
+PROMPT_VERSION = 15
 """The prompt and its parse, as one number: it changes whenever either changes what a reading holds."""
 
 REVIEW_INPUTS_VERSION = 3
@@ -1294,6 +1294,72 @@ def quote_occurs(quote: str, original: str | Sequence[str]) -> bool:
     return False
 
 
+QUOTE_EDGE = "\"'`.,;:!?()[]{}<>-\u2018\u2019\u201c\u201d\u2026"
+"""Stripped from a token's two ends before a quote is placed on transcript words."""
+
+
+def match_token(text: str) -> str:
+    """One token as a reviewer quote and a transcript word are compared when a quote is placed.
+
+    Args:
+        text: A word's surface, or one whitespace-separated piece of a quote.
+
+    Returns:
+        The token lower-cased, curly apostrophes made straight, and punctuation stripped from both
+        ends. Empty where nothing but punctuation was there.
+    """
+    return text.replace("\u2019", "'").strip(QUOTE_EDGE).lower()
+
+
+def placement_tokens(quote: str) -> list[str]:
+    """A quote's tokens as they are placed on transcript words (:func:`match_token`), empty ones dropped.
+
+    Args:
+        quote: The reviewer's quote.
+
+    Returns:
+        The tokens, in order.
+    """
+    return [token for token in (match_token(piece) for piece in quote.split()) if token]
+
+
+def quote_places(quote: str, tokens: Sequence[str]) -> bool:
+    """Whether a quote places on the transcript as a whole-token run, verbatim.
+
+    Args:
+        quote: The reviewer's quote.
+        tokens: The placeable words' tokens (:func:`match_token`), in stream order.
+
+    Returns:
+        True where the quote's tokens occur contiguously in ``tokens``; False for a quote with no token.
+    """
+    wanted = placement_tokens(quote)
+    width = len(wanted)
+    return bool(width) and any(
+        list(tokens[start : start + width]) == wanted for start in range(len(tokens) - width + 1)
+    )
+
+
+def unplaced_phrase_quotes(result: "ReviewResult", tokens: Sequence[str]) -> list[str]:
+    """The round's ``PHRASE_QUOTES`` entries that place on no run of the transcript's words.
+
+    Args:
+        result: One round's result.
+        tokens: The placeable words' tokens, in stream order.
+
+    Returns:
+        The unplaced quotes, in the order quoted.
+    """
+    return [quote for quote in result.phrase_quotes if not quote_places(quote, tokens)]
+
+
+PHRASE_QUOTES_UNPLACED_FEEDBACK = (
+    "some PHRASE_QUOTES entries do not occur verbatim in the transcript's words; quote each phrase exactly, word "
+    "for word as the ORIGINAL writes it, or drop it"
+)
+"""The correction sent where a phrase quote places on no run of the transcript's words."""
+
+
 _IDENTIFIER_CUE = re.compile(
     r"\b(venue|resort|hotel|hotel chain|motel|clinic|hospital|employer|company|workplace|school|"
     r"university|college|church|street|avenue|road|restaurant)\b",
@@ -1326,13 +1392,20 @@ def _named_unproposed(reasoning: str, proposal: Sequence[ReviewProposal], origin
     return missing
 
 
-def answer_problem(result: "ReviewResult", original: str | Sequence[str], redacted: str | None) -> str | None:
+def answer_problem(
+    result: "ReviewResult",
+    original: str | Sequence[str],
+    redacted: str | None,
+    placeable: Sequence[str] | None = None,
+) -> str | None:
     """What makes an answer unusable under the prompt's own rule, as feedback for another round.
 
     Args:
         result: One round's result.
         original: The ORIGINAL the round read, or the texts its quotes may come from (:func:`quotable_texts`).
         redacted: The RELEASED text it read, or None where no redaction was applied.
+        placeable: The tokens of the transcript words a quote can be placed on, in stream order; where given, a
+            phrase quote that places on no run of them (:func:`unplaced_phrase_quotes`) is a problem.
 
     Returns:
         None where the answer is usable. Otherwise one sentence naming the problem: a judgment that
@@ -1341,8 +1414,9 @@ def answer_problem(result: "ReviewResult", original: str | Sequence[str], redact
         proposal, a release of something the policy always removes (:func:`dated`, :func:`stated`), a
         relabel or place reason outside the allowed values, a place released without a place reason, a
         name or a place released without a reason, proposal quotes that do not occur in the ORIGINAL, or
-        an answer without its CONDITIONS or INSTRUCTIONS_SPOKEN part, or an off-task or other-speaker
-        judgment that quotes nothing.
+        an answer without its CONDITIONS or INSTRUCTIONS_SPOKEN part, an off-task or other-speaker
+        judgment that quotes nothing, or a phrase quote that places on no run of the transcript's words
+        (:data:`PHRASE_QUOTES_UNPLACED_FEEDBACK`, which repeats no quoted text).
     """
     if not result.available:
         return None
@@ -1455,6 +1529,8 @@ def answer_problem(result: "ReviewResult", original: str | Sequence[str], redact
     if missing:
         quoted = ", ".join(json.dumps(text) for text in missing)
         return f"these quotes do not occur in the ORIGINAL: {quoted}; quote the exact words from the ORIGINAL"
+    if placeable is not None and unplaced_phrase_quotes(result, placeable):
+        return PHRASE_QUOTES_UNPLACED_FEEDBACK
     unproposed = _named_unproposed(result.reasoning, result.proposal, original)
     if unproposed:
         quoted = ", ".join(json.dumps(text) for text in unproposed)

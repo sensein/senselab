@@ -45,6 +45,7 @@ from senselab.audio.workflows.triage.nodes.common import (
 )
 from senselab.audio.workflows.triage.nodes.redact import (
     REDACTION_SPAN,
+    placeable_tokens,
     planned_extents,
     residue_words,
     transcript_texts,
@@ -73,6 +74,7 @@ from senselab.text.tasks.pii_detection.redaction_review import (
     shutdown_review_worker,
     task_guidance_digest,
     task_nature,
+    unplaced_phrase_quotes,
 )
 from senselab.text.tasks.pii_detection.redaction_review_vllm import ENGINE_TRANSFORMERS, engine_identity
 from senselab.utils.prov_store import ProvStore
@@ -155,6 +157,8 @@ class _Reading:
         other_speaker_quotes: The passages it attributed to the other speaker.
         task_content_quotes: The PII-annotated words it judged task content.
         engine: The engine that answered the last round, as the worker reported it; empty where none did.
+        phrase_quotes_unplaced_n: How many of the last answering round's phrase quotes place on no run of the
+            timed consensus words (:func:`~senselab.text.tasks.pii_detection.redaction_review.unplaced_phrase_quotes`).
     """
 
     status: str
@@ -180,6 +184,7 @@ class _Reading:
     other_speaker_quotes: tuple[str, ...] = ()
     task_content_quotes: tuple[str, ...] = ()
     engine: dict[str, Any] = field(default_factory=dict)
+    phrase_quotes_unplaced_n: int = 0
 
 
 TASK_READING_QUOTES = ("off_task_quotes", "phrase_quotes", "other_speaker_quotes", "task_content_quotes")
@@ -497,7 +502,11 @@ def _is_flag(result: Any) -> bool:  # noqa: ANN401 — the backend's own result 
 
 
 def _rounds(
-    original: str, redacted: str | None, settings: Mapping[str, Any], context: Mapping[str, Any]
+    original: str,
+    redacted: str | None,
+    settings: Mapping[str, Any],
+    context: Mapping[str, Any],
+    placeable: Sequence[str] | None = None,
 ) -> tuple[_Reading, list[dict[str, Any]]]:
     """The bounded loop, with whether its final answer was usable recorded on the reading.
 
@@ -506,25 +515,36 @@ def _rounds(
         redacted: The text an applied redaction produced, or None where none was applied.
         settings: :func:`_llm_settings`' mapping.
         context: :func:`review_context`'s mapping.
+        placeable: The tokens of the timed consensus words a quote is placed on (:func:`placeable_tokens`).
 
     Returns:
-        ``(reading, reviews)``, as :func:`_loop`.
+        ``(reading, reviews)``, as :func:`_loop`, with the last answering round's unplaced phrase quotes counted.
     """
-    reading, reviews = _loop(original, redacted, settings, context)
+    reading, reviews = _loop(original, redacted, settings, context, placeable)
     problem = reviews[-1].get("problem") if reviews and reviews[-1].get("available") else None
-    return replace(reading, converged=problem is None, problem=problem), reviews
+    answered = [review for review in reviews if review.get("available")]
+    unplaced = int(answered[-1].get("phrase_quotes_unplaced_n") or 0) if answered else 0
+    return replace(reading, converged=problem is None, problem=problem, phrase_quotes_unplaced_n=unplaced), reviews
 
 
 def _loop(
-    original: str, redacted: str | None, settings: Mapping[str, Any], context: Mapping[str, Any]
+    original: str,
+    redacted: str | None,
+    settings: Mapping[str, Any],
+    context: Mapping[str, Any],
+    placeable: Sequence[str] | None = None,
 ) -> tuple[_Reading, list[dict[str, Any]]]:
     """The bounded review / mask / re-review loop, without the worker's lifetime.
+
+    A round whose answer :func:`answer_problem` rejects -- a phrase quote placing on no run of ``placeable``
+    included -- is asked again with that problem as its feedback, until ``max_iterations``.
 
     Args:
         original: The recording's words.
         redacted: The text an applied redaction produced, or None where none was applied.
         settings: :func:`_llm_settings`' mapping.
         context: :func:`review_context`'s mapping.
+        placeable: The tokens of the timed consensus words a quote is placed on, or None to skip that check.
 
     Returns:
         ``(reading, reviews)`` -- the summary and one payload per round, in order.
@@ -549,8 +569,17 @@ def _loop(
             feedback=feedback,
             engine=review_engine(settings),
         )
-        problem = answer_problem(result, quotable_texts(original, context), redacted)
-        reviews.append({**review_payload(result), "iteration": iteration, "feedback": feedback, "problem": problem})
+        problem = answer_problem(result, quotable_texts(original, context), redacted, placeable)
+        unplaced = len(unplaced_phrase_quotes(result, placeable)) if placeable is not None and result.available else 0
+        reviews.append(
+            {
+                **review_payload(result),
+                "iteration": iteration,
+                "feedback": feedback,
+                "problem": problem,
+                "phrase_quotes_unplaced_n": unplaced,
+            }
+        )
         revision = result.revision or revision
         # An answer the prompt's own rule rejects -- a judgment that asks for the redaction to change
         # with no words named, or quotes that are not in the text -- is fed back and asked again over
@@ -650,6 +679,7 @@ def review_cache_key(
     context: Mapping[str, Any],
     settings: Mapping[str, Any],
     revision: str,
+    placeable: Sequence[str] = (),
 ) -> str:
     """The result-cache key of one reading: exactly what the loop reads, and everything that shapes it.
 
@@ -659,13 +689,16 @@ def review_cache_key(
         context: :func:`review_context`'s mapping.
         settings: :func:`_llm_settings`' mapping.
         revision: The 40-hex commit the reviewer's ref resolved to.
+        placeable: The tokens a phrase quote is placed on (:func:`placeable_tokens`).
 
     Returns:
-        The key: the texts and context (the whole annotated transcript included), the prompt and parse
-        version, the ``review_inputs`` version, the model and its commit, the generation ceiling and
-        iteration bound, and the engine's identity (:func:`review_engine`).
+        The key: the texts, the placeable tokens and the context (the whole annotated transcript included),
+        the prompt and parse version, the ``review_inputs`` version, the model and its commit, the generation
+        ceiling and iteration bound, and the engine's identity (:func:`review_engine`).
     """
-    request = canonical_params({"original": original, "redacted": redacted, "context": dict(context)})
+    request = canonical_params(
+        {"original": original, "redacted": redacted, "context": dict(context), "placeable": list(placeable)}
+    )
     return result_cache_key(
         input_signature=transcript_signature(request),
         process=REVIEW_PROCESS,
@@ -699,7 +732,7 @@ def reading_key(store: ProvStore, config: TriageConfig, hint: AudioHints | None,
     """
     context = review_context(store, hint, task_lexicon(config, declared_task_family(store, hint), hint))
     original, redacted = transcript_texts(store)
-    return review_cache_key(original, redacted, context, _llm_settings(config), revision)
+    return review_cache_key(original, redacted, context, _llm_settings(config), revision, placeable_tokens(store))
 
 
 def reading_from_cache(payload: Mapping[str, Any]) -> tuple[_Reading, list[dict[str, Any]]]:
@@ -798,6 +831,7 @@ def backfill_from_store(store: ProvStore, config: TriageConfig) -> tuple[str, st
         instructions_spoken=tuple(str(text) for text in held.get("instructions_spoken") or ()),
         conditions=tuple(dict(entry) for entry in held.get("conditions") or ()),
         engine=engine,
+        phrase_quotes_unplaced_n=int(held.get("phrase_quotes_unplaced_n") or 0),
         **_task_reading(held),
     )
     reviews = [
@@ -805,7 +839,14 @@ def backfill_from_store(store: ProvStore, config: TriageConfig) -> tuple[str, st
         for entity in store.entities("measurement")
         if entity.attributes.get("name") == LLM_REVIEW_MEASUREMENT and not store.is_invalidated(entity.id)
     ]
-    key = review_cache_key(original, redacted, dict(held.get("task_context") or {}), settings, reading.revision or "")
+    key = review_cache_key(
+        original,
+        redacted,
+        dict(held.get("task_context") or {}),
+        settings,
+        reading.revision or "",
+        placeable_tokens(store),
+    )
     return (BACKFILL_STORED, key) if cache_reading(key, reading, reviews) else (BACKFILL_HELD, key)
 
 
@@ -820,7 +861,11 @@ def _resolved(settings: Mapping[str, Any]) -> str | None:
 
 
 def _read(
-    original: str, redacted: str | None, settings: Mapping[str, Any], context: Mapping[str, Any]
+    original: str,
+    redacted: str | None,
+    settings: Mapping[str, Any],
+    context: Mapping[str, Any],
+    placeable: Sequence[str] | None = None,
 ) -> tuple[_Reading, list[dict[str, Any]]]:
     """The loop, with the worker released afterwards unless the run asked to keep it.
 
@@ -829,12 +874,13 @@ def _read(
         redacted: The text an applied redaction produced, or None.
         settings: :func:`_llm_settings`' mapping.
         context: :func:`review_context`'s mapping.
+        placeable: :func:`placeable_tokens` of the store.
 
     Returns:
         :func:`_rounds`' pair.
     """
     try:
-        return _rounds(original, redacted, settings, context)
+        return _rounds(original, redacted, settings, context, placeable)
     finally:
         if not settings["keep_worker_resident"]:
             shutdown_review_worker(forget_failure=False)
@@ -863,6 +909,7 @@ def review(store: ProvStore, config: TriageConfig, hint: AudioHints | None = Non
     context = review_context(store, hint, task_lexicon(config, declared_task_family(store, hint), hint))
     inputs = review_inputs(context)
     original, redacted = transcript_texts(store)
+    placeable = placeable_tokens(store)
     state = detector_state(store)
     findings_n = _findings_n(store)
     outcome = _redact_outcome(store)
@@ -878,13 +925,13 @@ def review(store: ProvStore, config: TriageConfig, hint: AudioHints | None = Non
         )
     else:
         revision = _resolved(settings)
-        key = None if revision is None else review_cache_key(original, redacted, context, settings, revision)
+        key = None if revision is None else review_cache_key(original, redacted, context, settings, revision, placeable)
         held = None if key is None else result_lookup(key)
         if held is not None:
             reading, reviews = reading_from_cache(held["result"])
             cache = {"key": key, "hit": True}
         else:
-            reading, reviews = _read(original, redacted, settings, context)
+            reading, reviews = _read(original, redacted, settings, context, placeable)
             answered = [review for review in reviews if review.get("available")]
             if answered:
                 others = tuple(dict(other) for other in answered[-1].get("other_speakers") or ())
@@ -963,6 +1010,7 @@ def review(store: ProvStore, config: TriageConfig, hint: AudioHints | None = Non
             "iterations": reading.iterations,
             "converged": reading.converged,
             "problem": reading.problem,
+            "phrase_quotes_unplaced_n": reading.phrase_quotes_unplaced_n,
             "flagged": list(reading.flagged),
             "redaction": reading.redaction,
             "original": reading.original,

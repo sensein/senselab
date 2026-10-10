@@ -681,11 +681,43 @@ def test_a_venue_the_reasoning_names_without_a_proposal_entry_is_fed_back() -> N
     assert answer_problem(ordinary, "i love the summer", None) is None
 
 
+def test_a_phrase_quote_that_places_on_no_word_is_a_problem_that_repeats_no_quote() -> None:
+    """Owner, 2026-10-10: a phrase quote that does not place verbatim is incorrect; the feedback quotes nothing."""
+    from senselab.text.tasks.pii_detection.redaction_review import (
+        PHRASE_QUOTES_UNPLACED_FEEDBACK,
+        ReviewResult,
+        answer_problem,
+        quote_places,
+    )
+
+    original = "i like the elephants"
+    tokens = ["i", "like", "the", "elephants"]
+    near = ReviewResult(
+        available=True,
+        redaction="not_applicable",
+        original="clean",
+        phrases_instead_of_items="predominant",
+        phrase_quotes=["I like the elephant"],
+    )
+    assert answer_problem(near, original, None) is None, "the ORIGINAL check alone tolerates the spelling"
+    assert answer_problem(near, original, None, tokens) == PHRASE_QUOTES_UNPLACED_FEEDBACK
+    assert "elephant" not in PHRASE_QUOTES_UNPLACED_FEEDBACK
+    exact = ReviewResult(
+        available=True,
+        redaction="not_applicable",
+        original="clean",
+        phrases_instead_of_items="predominant",
+        phrase_quotes=["I like the elephants."],
+    )
+    assert answer_problem(exact, original, None, tokens) is None
+    assert quote_places("The Elephants!", tokens) and not quote_places("...", tokens)
+
+
 def test_the_prompt_states_the_time_expression_rule_and_the_cue_word_rule() -> None:
     """v7: weekdays and relative times are released, absolute dates are not; a cue word's definition is task content."""
     from senselab.text.tasks.pii_detection import redaction_review as r
 
-    assert r.PROMPT_VERSION == 14
+    assert r.PROMPT_VERSION == 15
     assert "2-3 weeks ago" in r._PROMPT and "this morning" in r._PROMPT and '"Monday"' in r._PROMPT
     assert "gladiator" in r._PROMPT and "hotel" in r._PROMPT
 
@@ -776,7 +808,7 @@ def test_the_reading_records_which_inputs_it_had() -> None:
     )
     assert {key: full[key] for key in ("version", "prompt_version", "task", "full_transcript", "pii_annotations")} == {
         "version": 3,
-        "prompt_version": 14,
+        "prompt_version": 15,
         "task": True,
         "full_transcript": True,
         "pii_annotations": True,
