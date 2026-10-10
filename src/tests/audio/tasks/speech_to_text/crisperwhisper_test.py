@@ -36,10 +36,9 @@ def test_worker_output_maps_to_scriptlines(monkeypatch: pytest.MonkeyPatch) -> N
     monkeypatch.setattr(cw, "resolve_model", lambda *a, **k: ("f" * 40, Path("/fake/snapshot")))
     monkeypatch.setattr(cw, "ensure_venv", lambda *a, **k: "/fake/venv")
     monkeypatch.setattr(cw, "venv_python", lambda *a, **k: "/fake/venv/bin/python")
-    monkeypatch.setattr(cw.subprocess, "run", lambda *a, **k: None)
     monkeypatch.setattr(
         cw,
-        "parse_subprocess_result",
+        "serve_in_venv",
         lambda *a, **k: {
             "results": [
                 {
@@ -76,7 +75,6 @@ def _stub_out_staging(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(cw, "resolve_model", lambda *a, **k: ("f" * 40, Path("/fake/snapshot")))
     monkeypatch.setattr(cw, "ensure_venv", lambda *a, **k: "/fake/venv")
     monkeypatch.setattr(cw, "venv_python", lambda *a, **k: "/fake/venv/bin/python")
-    monkeypatch.setattr(cw.subprocess, "run", lambda *a, **k: None)
 
 
 def test_ct2_position_limit_becomes_a_typed_value_error(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -86,7 +84,7 @@ def test_ct2_position_limit_becomes_a_typed_value_error(monkeypatch: pytest.Monk
     def _raise(*a: object, **k: object) -> dict:
         raise RuntimeError("No position encodings are defined for positions >= 448, but got position 448")
 
-    monkeypatch.setattr(cw, "parse_subprocess_result", _raise)
+    monkeypatch.setattr(cw, "serve_in_venv", _raise)
     audio = Audio(waveform=torch.zeros(1, 16000, dtype=torch.float32), sampling_rate=16000)
 
     with pytest.raises(cw.CrisperWhisperDecoderPositionsExceeded) as caught:
@@ -102,7 +100,7 @@ def test_other_worker_failures_stay_hard(monkeypatch: pytest.MonkeyPatch) -> Non
     def _raise(*a: object, **k: object) -> dict:
         raise RuntimeError("CrisperWhisper 2.0 venv failed:\nCUDA out of memory")
 
-    monkeypatch.setattr(cw, "parse_subprocess_result", _raise)
+    monkeypatch.setattr(cw, "serve_in_venv", _raise)
     audio = Audio(waveform=torch.zeros(1, 16000, dtype=torch.float32), sampling_rate=16000)
 
     with pytest.raises(RuntimeError) as caught:
@@ -149,34 +147,36 @@ class CrisperWhisperModel:
 
 
 def _run_worker(tmp_path: Path, names: list[str]) -> dict:
-    """Run the real worker script against a fake ``crisperwhisper`` library."""
-    import json
-    import subprocess
+    """Serve the real worker script against a fake ``crisperwhisper`` library."""
     import sys
+
+    from senselab.utils.venv_worker import serve_in_venv, shutdown_venv_workers
 
     library = tmp_path / "lib" / "crisperwhisper"
     library.mkdir(parents=True)
     (library / "__init__.py").write_text(_FAKE_LIBRARY)
     (library / "prompt.py").write_text(_FAKE_PROMPT)
-    payload = {
-        "audio_paths": [str(tmp_path / name) for name in names],
-        "model_id": "/fake/snapshot",
-        "backend": "transformers",
-        "longform_strategy": cw.LONGFORM_STRATEGY,
-        "max_new_tokens": cw.MAX_NEW_TOKENS,
-        "prompt_token_budget": cw.DECODER_POSITIONS - cw.MAX_NEW_TOKENS - 1,
-        "capped_strategy": cw.CONTEXT_CAPPED,
-        "position_limit": cw._CT2_POSITION_LIMIT,
-    }
-    done = subprocess.run(
-        [sys.executable, "-c", cw._CRISPER_WORKER_SCRIPT],
-        input=json.dumps(payload),
-        capture_output=True,
-        text=True,
-        env={"PYTHONPATH": str(tmp_path / "lib")},
-        check=False,
-    )
-    return json.loads(done.stdout.strip().splitlines()[-1])
+    try:
+        return serve_in_venv(
+            ("crisperwhisper-test", str(tmp_path)),
+            python=sys.executable,
+            script=cw._CRISPER_WORKER_SCRIPT,
+            init={"model_id": "/fake/snapshot", "backend": "transformers", "device": "cpu", "compute_type": "float32"},
+            request={
+                "audio_paths": [str(tmp_path / name) for name in names],
+                "longform_strategy": cw.LONGFORM_STRATEGY,
+                "max_new_tokens": cw.MAX_NEW_TOKENS,
+                "prompt_token_budget": cw.DECODER_POSITIONS - cw.MAX_NEW_TOKENS - 1,
+                "capped_strategy": cw.CONTEXT_CAPPED,
+                "position_limit": cw._CT2_POSITION_LIMIT,
+            },
+            env={"PYTHONPATH": str(tmp_path / "lib")},
+            label="CrisperWhisper test",
+            load_timeout_s=60,
+            request_timeout_s=60,
+        )
+    finally:
+        shutdown_venv_workers()
 
 
 def test_a_position_overrun_is_decoded_again_with_its_context_capped(tmp_path: Path) -> None:
@@ -194,8 +194,8 @@ def test_a_position_overrun_is_decoded_again_with_its_context_capped(tmp_path: P
 
 def test_any_other_worker_error_is_not_redecoded(tmp_path: Path) -> None:
     """The fallback is keyed on CTranslate2's position-limit message alone."""
-    out = _run_worker(tmp_path, ["broken.wav"])
-    assert "results" not in out and "out of memory" in out["error"]["message"]
+    with pytest.raises(RuntimeError, match="out of memory"):
+        _run_worker(tmp_path, ["broken.wav"])
 
 
 def test_the_strategy_used_reaches_the_scriptline(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -203,7 +203,7 @@ def test_the_strategy_used_reaches_the_scriptline(monkeypatch: pytest.MonkeyPatc
     _stub_out_staging(monkeypatch)
     monkeypatch.setattr(
         cw,
-        "parse_subprocess_result",
+        "serve_in_venv",
         lambda *a, **k: {"results": [{"text": "a", "words": [], "decode_strategy": "continuation_context_capped"}]},
     )
     audio = Audio(waveform=torch.zeros(1, 16000, dtype=torch.float32), sampling_rate=16000)
