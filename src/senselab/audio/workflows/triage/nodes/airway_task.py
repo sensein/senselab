@@ -191,10 +191,12 @@ def measure_airway_task(
     instructed = expectation.required_count.value if expectation.required_count is not None else None
     breath = cough = None
     if needed == "breath":
-        breath = breath_pattern_of(store, run_dir, sampling_hz=sampling_hz, language=language, family=family)
+        breath = breath_pattern_of(
+            store, run_dir, sampling_hz=sampling_hz, language=language, family=family, instructed=instructed
+        )
         name, attributes = BREATH_READING, breath_attributes(breath)
     else:
-        cough = cough_pattern_of(store, run_dir, sampling_hz=sampling_hz, language=language)
+        cough = cough_pattern_of(store, run_dir, sampling_hz=sampling_hz, language=language, instructed=instructed)
         name, attributes = COUGH_READING, cough_attributes(cough, instructed)
     written = [write_measurement(store, activity, software, name=name, signal="plain", attributes=attributes)]
     reading = attributes.get("reading") or {}

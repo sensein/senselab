@@ -2160,7 +2160,26 @@ def _breath_items(task: TaskEvidence) -> list[EvidenceItem]:
     rhythm = evidence.get("rhythm")
     if isinstance(rhythm, Mapping) and rhythm.get("hz") is not None:
         items.append(item("breath_rhythm_hz", rhythm.get("hz"), ANNOTATION, unit="Hz"))
+    items.extend(_outside_items("breath", evidence))
     return items
+
+
+def _outside_items(kind: str, evidence: Mapping[str, Any]) -> list[EvidenceItem]:
+    """The standing events outside the task extent, which decide nothing, as an annotation.
+
+    Args:
+        kind: ``breath`` or ``cough``.
+        evidence: The task evidence's record.
+
+    Returns:
+        ``<kind>_events_outside_extent`` where at least one event outside the cluster stands over the floor;
+        empty otherwise.
+    """
+    outside = dict(evidence.get("outside") or {})
+    standing = outside.get("standing_n")
+    if not standing:
+        return []
+    return [item(f"{kind}_events_outside_extent", standing, ANNOTATION, unit="events")]
 
 
 def _cough_items(task: TaskEvidence) -> list[EvidenceItem]:
@@ -2187,6 +2206,7 @@ def _cough_items(task: TaskEvidence) -> list[EvidenceItem]:
         )
     if onsets and task.cough_review:
         items.append(_flag_item("cough_review"))
+    items.extend(_outside_items("cough", dict(task.cough_reading.get("evidence") or {})))
     return items
 
 

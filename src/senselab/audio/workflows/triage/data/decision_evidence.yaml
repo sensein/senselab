@@ -60,6 +60,10 @@ groups:
       unit: Hz
       producer: unit B
       meaning: the breathing-band modulation rate; a prior, never a decision
+    breath_events_outside_extent:
+      unit: events
+      producer: unit B
+      meaning: breath events outside the task cluster standing over the floor; reported, they decide nothing
   cough:
     cough_onsets:
       unit: coughs
@@ -73,6 +77,10 @@ groups:
       unit:
       producer: unit B
       meaning: whether the cough count sits in the review band
+    cough_events_outside_extent:
+      unit: events
+      producer: unit B
+      meaning: cough events outside the task cluster standing over the floor; reported, they decide nothing
   voice:
     phonation_found:
       unit:

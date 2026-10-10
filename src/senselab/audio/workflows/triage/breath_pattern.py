@@ -24,6 +24,7 @@ import yaml
 from scipy.signal import find_peaks
 
 from senselab.audio.tasks.classification.label_scores import label_scores
+from senselab.audio.workflows.triage.background_speech import background_speech_parameters
 from senselab.audio.workflows.triage.nodes.common import find_measurement, lexical_words, live_entities, word_hull
 from senselab.audio.workflows.triage.residue import is_non_lexical
 from senselab.audio.workflows.triage.task_events import (
@@ -31,10 +32,13 @@ from senselab.audio.workflows.triage.task_events import (
     GenericView,
     Rhythm,
     TaskEvidence,
+    cluster_scores,
     evidence_of,
     generic_view_of,
     rhythm_of,
+    speech_spans,
     task_events_parameters,
+    touches,
 )
 from senselab.audio.workflows.triage.vocabulary import SUPERSEDES
 from senselab.utils.prov_store import Entity, ProvStore
@@ -1142,12 +1146,16 @@ def breath_train(
     floor: float,
     parameters: TrainParameters,
     speech_segments: tuple[tuple[float, float], ...] = (),
+    speech_windows: tuple[tuple[float, float], ...] = (),
+    instructed_n: int | None = None,
 ) -> BreathTrain:
-    """Group bursts into runs split at long gaps or speech, and take the largest as the task.
+    """Group bursts into runs split at long gaps or speech, and take the one that is the task.
 
     A burst peaking inside speech is no phase. Speech between two bursts splits the run only where
     the gap across it is over ``speech_bridge_cycles`` of the breathing cycle measured on the gaps no
-    speech crosses; with fewer than two such gaps there is no cadence, and speech always splits.
+    speech crosses; with fewer than two such gaps there is no cadence, and speech always splits. A run
+    one of whose bursts touches speech is set aside unless every run does; of the rest the task is the
+    one nearest the instructed count and earliest (:func:`~senselab.audio.workflows.triage.task_events.cluster_scores`).
 
     Args:
         bursts: The bursts, in time order (:func:`find_bursts`).
@@ -1157,6 +1165,8 @@ def breath_train(
         floor: Its floor.
         parameters: The train's parameters.
         speech_segments: Acoustic speech segments (:func:`voice_segments`), read as speech runs.
+        speech_windows: Further speech spans no task run touches (word runs, YAMNet speech windows).
+        instructed_n: The phases the instruction asks for, or None.
 
     Returns:
         The train; an empty one with no burst.
@@ -1183,7 +1193,15 @@ def breath_train(
             runs.append([burst])
         else:
             runs[-1].append(burst)
-    run = max(runs, key=lambda r: (len(r), -r[0].start_s))
+    off = [r for r in runs if not touches([(b.start_s, b.end_s) for b in r], [*speech, *speech_windows])]
+    candidates_runs = off or runs
+    scores = cluster_scores(
+        [[(b.start_s, b.end_s) for b in r] for r in candidates_runs],
+        duration_s=duration_s,
+        instructed_n=instructed_n,
+        weights=task_events_parameters()["extent"],
+    )
+    run = candidates_runs[max(range(len(candidates_runs)), key=lambda i: (scores[i], -candidates_runs[i][0].start_s))]
     start, end = max(0.0, run[0].start_s - p.pad_s), min(duration_s, run[-1].end_s + p.pad_s)
     for s, e in speech:
         if start < s < end and s >= run[-1].peak_s:
@@ -1222,6 +1240,8 @@ def measure_breath_train(
     parameters: TrainParameters | None = None,
     sustained: tuple[tuple[float, float], ...] = (),
     speech: tuple[tuple[float, float], ...] = (),
+    speech_windows: tuple[tuple[float, float], ...] = (),
+    instructed_n: int | None = None,
 ) -> BreathTrain:
     """The breath train of a power spectrogram (:func:`find_bursts`, then :func:`breath_train`).
 
@@ -1235,6 +1255,8 @@ def measure_breath_train(
         parameters: The train's parameters; ``data/breath_pattern.yaml`` when None.
         sustained: The sustained vocalisations (:func:`voice_segments`).
         speech: The acoustic speech segments (:func:`voice_segments`).
+        speech_windows: Further speech spans no task run touches.
+        instructed_n: The phases the instruction asks for, or None.
 
     Returns:
         The train.
@@ -1258,6 +1280,8 @@ def measure_breath_train(
         floor=floor,
         parameters=p,
         speech_segments=speech,
+        speech_windows=speech_windows,
+        instructed_n=instructed_n,
     )
 
 
@@ -1452,6 +1476,8 @@ def breath_evidence(
     voiced: np.ndarray,
     times_s: np.ndarray,
     speech: tuple[tuple[float, float], ...],
+    speech_windows: tuple[tuple[float, float], ...] = (),
+    instructed_n: int | None = None,
 ) -> TaskEvidence:
     """The breath train's candidates read against the background, with the rhythm prior's recoveries.
 
@@ -1461,6 +1487,8 @@ def breath_evidence(
         voiced: Whether each spectrogram frame is voiced.
         times_s: The spectrogram frames' times.
         speech: Speech runs and segments, where no breath phase stands.
+        speech_windows: Further speech spans no task cluster touches.
+        instructed_n: The phases the instruction asks for, or None.
 
     Returns:
         The evidence: the dominant cluster of events, its extent with the preparatory inhale, and the
@@ -1484,7 +1512,16 @@ def breath_evidence(
     gap = float(q["gap_min_s"])
     if rhythm is not None:
         gap = max(gap, float(q["gap_cycles"]) * rhythm.period_s)
-    return evidence_of(view, spans, gap_s=gap, rhythm=rhythm, recovered=recovered, p=p)
+    return evidence_of(
+        view,
+        spans,
+        gap_s=gap,
+        rhythm=rhythm,
+        recovered=recovered,
+        speech=sorted({*speech, *speech_windows}),
+        instructed_n=instructed_n,
+        p=p,
+    )
 
 
 def breath_pattern_of(
@@ -1496,6 +1533,7 @@ def breath_pattern_of(
     modulation: ModulationParameters | None = None,
     language: str | None = None,
     family: str | None = None,
+    instructed: int | None = None,
 ) -> BreathPattern | tuple[str, ...]:
     """The recording's breathing pattern, or the stored inputs it could not be read without.
 
@@ -1516,6 +1554,7 @@ def breath_pattern_of(
         modulation: The modulation reading's parameters; ``data/breath_pattern.yaml`` when None.
         language: The recording's declared language, which fixes the script speech words are read in.
         family: The declared task family, which fixes the breath train's least burst spacing.
+        instructed: The breaths the instruction asks for, or None.
 
     Returns:
         The pattern with its veto reading (:func:`breath_veto_of`); or the names of the absent inputs,
@@ -1557,6 +1596,9 @@ def breath_pattern_of(
     sustained, speech = voice_segments(
         track_times, f0, strength, words, voicing_strength_min=p.voicing_strength_min, parameters=t
     )
+    windows = tuple(speech_spans(store, run_dir, background_speech_parameters().speech_labels))
+    per_breath = int(task_events_parameters()["extent"]["events_per_instructed"]["breath"])
+    instructed_phases = None if instructed is None else instructed * per_breath
     train = measure_breath_train(
         power,
         hop_s=hop_s,
@@ -1567,6 +1609,8 @@ def breath_pattern_of(
         parameters=t,
         sustained=sustained,
         speech=speech,
+        speech_windows=windows,
+        instructed_n=instructed_phases,
     )
     view = generic_view_of(store, run_dir)
     evidence = (
@@ -1576,6 +1620,8 @@ def breath_pattern_of(
             voiced=voiced,
             times_s=times,
             speech=tuple(speech_runs(words, words_min=t.speech_words_min, gap_s=t.speech_gap_s)) + speech,
+            speech_windows=windows,
+            instructed_n=instructed_phases,
         )
         if view is not None
         else None
