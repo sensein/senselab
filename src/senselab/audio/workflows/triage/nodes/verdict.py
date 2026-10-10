@@ -108,7 +108,13 @@ from senselab.audio.workflows.triage.nodes.voice import PHONATION_READING
 from senselab.audio.workflows.triage.quality_join import QUALITY_JOIN
 from senselab.audio.workflows.triage.routing_analysis.families import SYLLABLE_REPETITION
 from senselab.audio.workflows.triage.task_lexicon import task_lexicon
-from senselab.audio.workflows.triage.task_speech import TASK_SPEECH_READING, reads_task_speech, words_min_for
+from senselab.audio.workflows.triage.task_speech import (
+    TASK_SPEECH_READING,
+    item_set_family,
+    phrase_share_bound,
+    reads_task_speech,
+    words_min_for,
+)
 from senselab.audio.workflows.triage.vocabulary import (
     BREATH_COUNTED,
     BREATH_SUSTAINED,
@@ -674,6 +680,8 @@ def _task_evidence(
         else {},
         task_speech=task_speech,
         task_speech_words_min=words_min_for(declared_family) if task_speech else None,
+        item_set=item_set_family(declared_family),
+        phrase_share_review=phrase_share_bound(declared_family) if task_speech else None,
     )
 
 

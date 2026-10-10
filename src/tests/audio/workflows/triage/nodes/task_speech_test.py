@@ -11,7 +11,7 @@ from senselab.audio.workflows.triage.nodes.redact import NON_TASK_SPEECH, mask_p
 from senselab.audio.workflows.triage.task_content import task_content_ids
 from senselab.audio.workflows.triage.task_speech import (
     TASK_SPEECH_READING,
-    item_runs,
+    phrase_share_bound,
     task_speech_of,
 )
 from senselab.audio.workflows.triage.vocabulary import (
@@ -199,7 +199,7 @@ class TestTheFoldReviewsAndReleases:
         assert folded.release is Release.WITHHELD and folded.release_ground == NON_TASK_SPEECH_UNTIMED
 
     def test_an_extensive_off_task_share_withholds(self) -> None:
-        """An item list mostly spoken outside its item runs is held."""
+        """An item list whose phrases reach their bound is held."""
         folded = _fold(self._TASK, RedactionEvidence(non_task_speech_masked_n=4, non_task_speech_extensive=True))
         assert folded.release is Release.WITHHELD and folded.release_ground == NON_TASK_SPEECH_EXTENSIVE
 
@@ -227,33 +227,141 @@ def _timed_words(store: ProvStore, stem: str, words: Sequence[tuple[str, float]]
         store.entity(prov_type="word", extent=extent, attributes=word_attributes(text, extent, index=index))
 
 
-class TestItemRuns:
-    """An item list's task runs: split at long pauses, enough category members; the rest is outside the task."""
+def _said(store: ProvStore, utterances: Sequence[str], *, pause_s: float = 0.8) -> None:
+    """One utterance per string, its words 0.4 s long and 0.1 s apart, the utterances ``pause_s`` apart."""
+    words: list[tuple[str, float]] = []
+    at = 0.0
+    for utterance in utterances:
+        for text in utterance.split():
+            words.append((text, at))
+            at += 0.5
+        at += pause_s - 0.1
+    _timed_words(store, ITEMS_STEM, words)
 
-    def test_a_background_speaker_before_the_list_is_outside_it(self, store: ProvStore) -> None:
-        """A sentence at the start, a pause, then the items: only the items are the task, and half is off it."""
-        _timed_words(
-            store,
-            ITEMS_STEM,
-            [("are", 0.0), ("you", 0.5), ("recording", 1.0), ("cat", 6.0), ("dog", 8.0), ("horse", 10.0)],
-        )
-        words = consensus_words(store)
-        members = {words[i].id for i in (3, 4, 5)}
-        runs = item_runs(words, members, gap_s=3.0, member_share_min=0.5, content_share_min=0.6)
-        assert [w.id for run in runs for w in run] == [w.id for w in words[3:]]
-        read = task_speech_of(store, "random-item-generation", member_ids=members)
-        assert read.words_n == 3 and read.off_task_fraction == 0.5
-        assert read.item_extent == (6.0, 10.4)
 
-    def test_with_no_category_a_list_is_its_content_words(self, store: ProvStore) -> None:
-        """Items no category names are still a list; a sentence after a pause is not."""
-        _timed_words(
+def _item_fold(
+    store: ProvStore,
+    *,
+    annotation: dict | None = None,
+    opinion: dict | None = None,
+    cohort: dict | None = None,
+) -> FileVerdict:
+    """Fold an item list's reading, with the reviewer, the second opinion and COHORT as given."""
+    family = "random-item-generation"
+    reading = task_speech_of(store, family)
+    decisions = {
+        name: BranchDecision(name, False, route, False)
+        for name, route in (("AIRWAY", DECLINED), ("SPEECH", ROUTED), ("VOICE", DECLINED))
+    }
+    return fold_file_verdict(
+        [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
+        branch_decisions=decisions,
+        ran={},
+        hint_claims={},
+        route_state=ROUTED,
+        redaction=RedactionEvidence(lexical_words_n=reading.lexical_n, scanned=True),
+        llm_redaction=annotation,
+        second_opinion=opinion,
+        cohort=cohort,
+        task=TaskEvidence(
+            owning_branches=("SPEECH",),
+            task_speech=reading.record(),
+            item_set=True,
+            phrase_share_review=phrase_share_bound(family),
+        ),
+        policy=FoldPolicy.from_config(load_triage_config()),
+    )
+
+
+_ITEMS = ["lion", "tiger", "bear", "zebra", "giraffe", "monkey", "elephant", "horse"]
+
+
+class TestPhrasesInsteadOfItems:
+    """Owner, 2026-10-10: in an item-set task the question is whether phrases are said instead of items."""
+
+    def test_utterances_split_at_pauses_and_a_long_clause_is_a_phrase(self, store: ProvStore) -> None:
+        """Items apart are each an utterance; four words holding a closed-class word is a phrase, three is not."""
+        _said(store, ["lion", "polar bear", "is that enough", "i don't know what else to say"])
+        read = task_speech_of(store, "animal-fluency")
+        assert [(n, phrase) for _a, _b, n, phrase in read.utterances] == [
+            (1, False),
+            (2, False),
+            (3, False),
+            (7, True),
+        ]
+        assert read.phrase_share == 0.25 and read.phrase_word_share == round(7 / 13, 3)
+        assert read.words_n == 7 and len(read.task_content_ids) == 6
+
+    def test_four_items_said_together_are_not_a_phrase(self, store: ProvStore) -> None:
+        """A run of content words with no closed-class word is a list, however long; a letter is not a function word."""
+        _said(store, ["one two three four five", "a b c d e"])
+        read = task_speech_of(store, "random-item-generation")
+        assert read.phrase_share == 0.0 and read.words_n == 0
+
+    def test_a_list_with_asides_is_not_reviewed(self, store: ProvStore) -> None:
+        """Fillers and short asides between items: no phrase, and the reviewer's occasional is an annotation."""
+        _said(store, [*_ITEMS[:4], "um", "let me think", *_ITEMS[4:], "is that enough"])
+        assert task_speech_of(store, "random-item-generation").phrase_share == 0.0
+        annotation = {
+            "status": "clean",
+            "original": "clean",
+            "proposal": [],
+            "phrases_instead_of_items": "occasional",
+            "phrase_quotes": ["let me think"],
+            "off_task_speech": "some",
+        }
+        opinion = {"status": "ok", "choices": {"phrases_instead_of_items": "occasional"}, "probabilities": {}}
+        folded = _item_fold(store, annotation=annotation, opinion=opinion)
+        assert folded.triage is Triage.PASS and folded.release is Release.AS_IS
+        assert "phrases_occasional" in {note.key for note in folded.annotations}
+        assert not {"reviewer_off_task_speech", "phrases_instead_of_items"} & set(folded.ground_keys)
+
+    def test_a_list_turned_into_narration_is_reviewed(self, store: ProvStore) -> None:
+        """One item, then clauses: the phrase share passes its bound and the recording is reviewed."""
+        _said(
             store,
-            ITEMS_STEM,
-            [("seven", 0.0), ("lamp", 1.0), ("river", 2.0), ("is", 8.0), ("that", 8.4), ("it", 8.8), ("then", 9.2)],
+            [
+                "lion",
+                "my dog's name is buddy",
+                "he likes to run in the park",
+                "and we go there every day",
+                "i don't know what else to say",
+                "it was a long time ago",
+            ],
         )
         read = task_speech_of(store, "random-item-generation")
-        assert read.words_n == 4 and read.item_extent == (0.0, 2.4)
+        bound = phrase_share_bound("random-item-generation")
+        assert bound is not None and read.phrase_share is not None and read.phrase_share >= bound
+        folded = _item_fold(store)
+        assert folded.triage is Triage.REVIEW and "phrases_instead_of_items" in folded.ground_keys
+        assert folded.reason == "off_task_speech"
+
+    def test_predominant_from_either_reader_reviews(self, store: ProvStore) -> None:
+        """Below the bound, the reviewer's or the second opinion's predominant still reviews."""
+        _said(store, _ITEMS)
+        read = {"status": "clean", "original": "clean", "proposal": []}
+        reviewer = _item_fold(store, annotation={**read, "phrases_instead_of_items": "predominant"})
+        assert "reviewer_phrases_instead_of_items" in reviewer.ground_keys and reviewer.triage is Triage.REVIEW
+        opinion = {"status": "ok", "choices": {"phrases_instead_of_items": "predominant"}, "probabilities": {}}
+        second = _item_fold(store, annotation=read, opinion=opinion)
+        assert "second_opinion:phrases_instead_of_items" in second.ground_keys and second.triage is Triage.REVIEW
+
+    def test_a_list_with_a_background_speaker_is_reviewed_through_cohort(self, store: ProvStore) -> None:
+        """No phrase at all, but a run that does not match the session enrollment: another speaker, review."""
+        _said(store, _ITEMS)
+        cohort = {
+            "other_speaker": {
+                "status": "measured",
+                "nonmatch_n": 1,
+                "runs_n": 3,
+                "nonmatch_s": 2.1,
+                "cut": 0.3,
+                "nonmatch_spans": [[0.0, 2.1]],
+            }
+        }
+        folded = _item_fold(store, cohort=cohort)
+        assert folded.triage is Triage.REVIEW and "other_speaker_in_session" in folded.ground_keys
+        assert folded.reason == "other_speaker"
 
 
 def test_the_packaged_setting_reviews_every_release_but_the_original() -> None:
@@ -324,6 +432,37 @@ class TestTheReviewerAndTheSecondOpinionDecide:
 class TestTheReviewerQuotesBecomeMasks:
     """The reviewer's off-task quotes are masked; its task-content quotes release a finding."""
 
+    _READ = {"status": "clean", "original": "clean", "proposal": []}
+
+    def _annotate(self, store: ProvStore, **attributes: object) -> None:
+        activity = store.activity(node="REVIEW", step="read", parameters={})
+        write_measurement(
+            store,
+            activity,
+            software_agent(store),
+            name="redaction_llm_annotation",
+            signal="plain",
+            attributes={**self._READ, **attributes},
+        )
+
+    def test_an_item_list_masks_phrase_quotes_only_when_predominant_and_never_an_item(
+        self, store: ProvStore, tmp_path: Path
+    ) -> None:
+        """Occasional phrases mask nothing; predominant ones mask the phrase's words and never an item's."""
+        words = ["lion", "tiger", "so", "my", "doctor", "said", "that"]
+        joined = {i: {"asr_a": (float(i), float(i) + 0.9)} for i in range(2, 7)}
+        _seed_redact_store(store, tmp_path, words=words, timings=joined, recording_stem=ITEMS_STEM, scanned=False)
+        _write(store, "random-item-generation")
+        self._annotate(store, phrases_instead_of_items="occasional", phrase_quotes=["tiger so my doctor said that"])
+        assert mask_plan(store, reviewer_applies=True, padding_ms=50).non_task_speech_masked_n == 0
+        other = ProvStore(run_id="predominant")
+        _seed_redact_store(other, tmp_path, words=words, timings=joined, recording_stem=ITEMS_STEM, scanned=False)
+        _write(other, "random-item-generation")
+        self._annotate(other, phrases_instead_of_items="predominant", phrase_quotes=["tiger so my doctor said that"])
+        plan = mask_plan(other, reviewer_applies=True, padding_ms=50)
+        masked = [word.text for mask in plan.masks if mask.source == NON_TASK_SPEECH for word in mask.words]
+        assert masked == words[2:] and plan.non_task_speech_extensive
+
     def test_an_off_task_quote_masks_its_words_and_a_task_content_quote_releases_them(
         self, store: ProvStore, tmp_path: Path
     ) -> None:
@@ -333,7 +472,7 @@ class TestTheReviewerQuotesBecomeMasks:
             tmp_path,
             words=["lion", "tiger", "my", "doctor", "said", "Paris"],
             findings=[("LOCATION", _word_extent(5))],
-            recording_stem=ITEMS_STEM,
+            recording_stem="sub-x_ses-y_task-cinderella-story",
         )
         activity = store.activity(node="REVIEW", step="read", parameters={})
         write_measurement(

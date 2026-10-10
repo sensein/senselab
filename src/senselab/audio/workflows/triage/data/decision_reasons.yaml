@@ -3,7 +3,7 @@
 # Owner, 2026-10-07: verdict pass/review/discard, release as_is/redacted/withheld, one reason per recording.
 # Owner, 2026-10-10: consolidated to these codes; the release ground is its own column (release_reason).
 # Derivation: specs/20261007-task-events-in-background/design.md ("Decision table", "Reasons consolidated").
-version: 5
+version: 6
 precedence:            # discard reasons first, then incomplete, then the recording, then the content
 - unreadable
 - task_too_short
@@ -74,6 +74,8 @@ keys:                  # exact verdict ground key -> reason
   instructions_spoken: off_task_speech
   speech_in_task: off_task_speech
   reviewer_off_task_speech: off_task_speech
+  phrases_instead_of_items: off_task_speech
+  reviewer_phrases_instead_of_items: off_task_speech
   recording_duration_outlier: atypical_recording
   release_in_nonlexical_task: identifying_content
   release_reviewed: identifying_content
@@ -88,10 +90,12 @@ keys:                  # exact verdict ground key -> reason
   second_opinion:policy_identifier_present: identifying_content
   second_opinion:masked_text_free_of_identifiers: identifying_content
   second_opinion:off_task_speech: off_task_speech
+  second_opinion:phrases_instead_of_items: off_task_speech
 annotations:           # ground keys and prefixes the fold writes only as annotations; they map to no reason
 - speech_outside_task
 - fault_outside_task
 - interference_outside_task
+- phrases_occasional
 reviewed_releases:     # owner, 2026-10-10: masks not yet validated; every release but as_is is reviewed (release_reviewed)
 - redacted
 - withheld

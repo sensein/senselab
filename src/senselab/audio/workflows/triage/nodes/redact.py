@@ -77,7 +77,7 @@ from senselab.audio.workflows.triage.task_lexicon import TaskLexicon, declared_n
 from senselab.audio.workflows.triage.task_speech import (
     TASK_SPEECH_READING,
     item_set_family,
-    task_speech_parameters,
+    phrase_share_bound,
     words_min_for,
 )
 from senselab.audio.workflows.triage.vocabulary import (
@@ -104,6 +104,7 @@ from senselab.text.tasks.pii_detection.redaction_policy import fold as policy_fo
 from senselab.text.tasks.pii_detection.redaction_policy import policy as policy_tables
 from senselab.text.tasks.pii_detection.redaction_policy import version as policy_version
 from senselab.text.tasks.pii_detection.redaction_review import (
+    PHRASES_PREDOMINANT,
     PLACE_HISTORICAL,
     PLACE_REASONS,
     RELABEL_PLACE,
@@ -2210,8 +2211,8 @@ class _NonTaskSpeech:
     Attributes:
         timed: The speech words outside the task with usable timing, where the reading reaches its bound.
         untimed: Those with none, where it does.
-        item_ids: An item-set family's item-run words, which are task content.
-        extensive: Whether an item-set family's speech outside the item runs reaches ``extensive_fraction``.
+        item_ids: An item-set family's item-utterance words, which are task content.
+        extensive: Whether an item-set family's ``phrase_share`` reaches ``phrase_share_review``.
     """
 
     timed: frozenset[str] = frozenset()
@@ -2228,7 +2229,8 @@ class _HeardOffTask:
         speech_ids: Words inside COHORT's non-matching spans of a non-lexical task, or quoted by the reviewer as
             off-task speech or another speaker's.
         task_ids: Words the reviewer quoted as the task's own content.
-        extensive: Whether the reviewer read the off-task speech as extensive.
+        extensive: Whether the reviewer read the off-task speech as extensive, or an item-set family's phrases
+            instead of items as predominant.
     """
 
     speech_ids: frozenset[str] = frozenset()
@@ -2244,8 +2246,11 @@ def _heard_off_task(
 ) -> _HeardOffTask:
     """The speech outside the task COHORT's comparison and the reviewer's reading name, on the timed words.
 
+    In an item-set family the reviewer's phrase quotes are read only where it judged phrases instead of items
+    ``predominant``, and its off-task reading not at all.
+
     Args:
-        store: The provenance store, read for the ``cohort_reading`` measurement.
+        store: The provenance store, read for the ``cohort_reading`` measurement and the declared family.
         words: The timed consensus words, in stream order.
         tokens: :func:`_tokens` over them.
         reading: The reviewer's annotation where the fold applies it, else empty.
@@ -2259,13 +2264,19 @@ def _heard_off_task(
     spans = non_task_speech_spans(cohort.attributes if cohort is not None else None)
     speech = {word.id for word in words if any(_overlaps(word_hull(word), span) for span in spans)}
     read = reading.get("status") in ("clean", "flagged")
-    quotes = [*(reading.get("off_task_quotes") or ()), *(reading.get("other_speaker_quotes") or ())] if read else []
+    if item_set_family(declared_task_family(store)):
+        extensive = read and reading.get("phrases_instead_of_items") == PHRASES_PREDOMINANT
+        own = reading.get("phrase_quotes") if extensive else ()
+    else:
+        extensive = read and reading.get("off_task_speech") == "extensive"
+        own = reading.get("off_task_quotes")
+    quotes = [*(own or ()), *(reading.get("other_speaker_quotes") or ())] if read else []
     for quote in quotes:
         speech |= {word.id for word in _place(str(quote), tokens)}
     task = {
         word.id for quote in (reading.get("task_content_quotes") or ()) if read for word in _place(str(quote), tokens)
     }
-    return _HeardOffTask(frozenset(speech), frozenset(task), read and reading.get("off_task_speech") == "extensive")
+    return _HeardOffTask(frozenset(speech), frozenset(task), bool(extensive))
 
 
 def _non_task_speech(store: ProvStore) -> _NonTaskSpeech:
@@ -2276,28 +2287,27 @@ def _non_task_speech(store: ProvStore) -> _NonTaskSpeech:
 
     Returns:
         The words to mask and the task-content words; empty for a family whose speech outside the task is
-        not read, where no reading was written, or (for the words to mask) where it stays under its bound.
+        not read, where no reading was written, or (for the words to mask) where it stays under its bound:
+        ``words_min`` words in a non-lexical family, ``phrase_share_review`` in an item-set one.
     """
     family = declared_task_family(store)
     bound = words_min_for(family)
-    reading = find_measurement(store, TASK_SPEECH_READING) if bound is not None else None
-    if reading is None or bound is None:
+    share_bound = phrase_share_bound(family)
+    reading = find_measurement(store, TASK_SPEECH_READING) if bound is not None or share_bound is not None else None
+    if reading is None:
         return _NonTaskSpeech()
     attributes = reading.attributes
-    item_ids = (
-        frozenset(str(i) for i in attributes.get("task_content_ids") or ()) if item_set_family(family) else frozenset()
-    )
-    fraction = attributes.get("off_task_fraction")
-    extensive = (
-        item_set_family(family)
-        and fraction is not None
-        and float(fraction) >= float(task_speech_parameters()["extensive_fraction"])
-    )
-    if int(attributes.get("words_n") or 0) < bound:
-        return _NonTaskSpeech(item_ids=item_ids)
     untimed = tuple(str(word_id) for word_id in attributes.get("untimed_ids") or ())
     timed = frozenset(str(word_id) for word_id in attributes.get("word_ids") or ()) - set(untimed)
-    return _NonTaskSpeech(timed, untimed, item_ids, extensive)
+    if share_bound is not None:
+        item_ids = frozenset(str(i) for i in attributes.get("task_content_ids") or ())
+        share = attributes.get("phrase_share")
+        if share is None or float(share) < share_bound:
+            return _NonTaskSpeech(item_ids=item_ids)
+        return _NonTaskSpeech(timed, untimed, item_ids, True)
+    if bound is None or int(attributes.get("words_n") or 0) < bound:
+        return _NonTaskSpeech()
+    return _NonTaskSpeech(timed, untimed)
 
 
 def mask_plan(

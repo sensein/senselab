@@ -409,10 +409,14 @@ class TaskEvidence:
         ddk_decision: The reading's decision, ``present``, ``review`` or ``absent``, or None where it
             was not read.
         ddk_reading: The reading's record, for the verdict record; empty where none.
-        task_speech: The owning branch's speech reading of a non-lexical task (``task_speech.TaskSpeech``),
-            for the verdict record; empty where none was written.
-        task_speech_words_min: The speech words outside the task at or over which the recording is reviewed
-            (``data/task_speech.yaml``), or None where no reading is weighed.
+        task_speech: The owning branch's speech reading of a non-lexical or item-set task
+            (``task_speech.TaskSpeech``), for the verdict record; empty where none was written.
+        task_speech_words_min: The speech words outside a non-lexical task at or over which the recording is
+            reviewed (``data/task_speech.yaml`` ``words_min``), or None where no such reading is weighed.
+        item_set: Whether the declared family is an item-set family (``task_content.yaml``
+            ``open_vocabulary_families``), asked about phrases instead of items rather than off-task speech.
+        phrase_share_review: The ``phrase_share`` at or over which an item-set recording is reviewed
+            (``data/task_speech.yaml`` ``phrase_share_review``), or None where no such reading is weighed.
     """
 
     owning_branches: tuple[str, ...] = ()
@@ -451,6 +455,8 @@ class TaskEvidence:
     ddk_reading: dict[str, Any] = field(default_factory=dict)
     task_speech: dict[str, Any] = field(default_factory=dict)
     task_speech_words_min: int | None = None
+    item_set: bool = False
+    phrase_share_review: float | None = None
 
     @property
     def non_lexical(self) -> bool:
@@ -691,6 +697,12 @@ SPEECH_OUTSIDE_TASK = "speech_outside_task"
 SPEECH_IN_TASK = "speech_in_task"
 """Lexical speech outside a non-lexical task's own content, anywhere in the file: a review ground."""
 
+PHRASES_INSTEAD_OF_ITEMS = "phrases_instead_of_items"
+"""An item-set task whose ``phrase_share`` reaches ``data/task_speech.yaml`` ``phrase_share_review``: a review ground."""
+
+PHRASE_SHARE = "phrase_share"
+"""The evidence item: an item-set task's utterances that are phrases, over all its utterances."""
+
 RELEASE_IN_NONLEXICAL_TASK = "release_in_nonlexical_task"
 """A non-lexical task whose release is redacted or withheld: a review ground."""
 
@@ -810,6 +822,8 @@ the release is unchanged."""
 SECOND_OPINION_DISAGREES = "the second-opinion model confidently disagrees with the redaction reviewer"
 SECOND_OPINION_NOT_FREE = "the second-opinion model confidently reads identifying content in the text as it would ship"
 REVIEWER_OFF_TASK = "the redaction reviewer read the participant talking off the task"
+REVIEWER_PHRASES = "the redaction reviewer read the participant uttering phrases instead of items"
+SECOND_OPINION_PHRASES = "the second-opinion model read the participant uttering phrases instead of items"
 REVIEWER_OTHER_SPEAKER = "the redaction reviewer read another speaker: an assistant, the background or someone unclear"
 OTHER_SPEAKER_IN_TASK = "lexical speech outside the task is another speaker's, by the session enrollment"
 PARTICIPANT_VOICE_IN_TASK = "the other voice over the task is the participant's own, by the session enrollment"
@@ -828,6 +842,10 @@ MASKED_TEXT_FREE = "masked_text_free_of_identifiers"
 
 OFF_TASK_LEVELS = ("some", "extensive")
 """The reviewer's ``off_task_speech`` levels that read off-task speech."""
+
+PHRASES_OCCASIONAL = "occasional"
+PHRASES_PREDOMINANT = "predominant"
+"""The ``phrases_instead_of_items`` levels: ``predominant`` reviews, ``occasional`` annotates."""
 
 OTHER_SPEAKER_KINDS = ("assistant", "background", "unclear")
 """The reviewer's ``other_speaker`` kinds that read another speaker."""
@@ -898,6 +916,9 @@ KEY_INSTRUCTIONS_SPOKEN = "instructions_spoken"
 PREFIX_SECOND_OPINION = "second_opinion"
 """A second-opinion question (``second_opinion:<question>``) that disagrees with the fold, or reads identifiers."""
 KEY_REVIEWER_OFF_TASK = "reviewer_off_task_speech"
+KEY_PHRASES_INSTEAD_OF_ITEMS = PHRASES_INSTEAD_OF_ITEMS
+KEY_REVIEWER_PHRASES = "reviewer_phrases_instead_of_items"
+KEY_PHRASES_OCCASIONAL = "phrases_occasional"
 KEY_REVIEWER_OTHER_SPEAKER = "reviewer_other_speaker"
 KEY_INSTRUCTIONS_SPOKEN_BY_OTHER = "instructions_spoken_by_other"
 KEY_OTHER_SPEAKER_IN_TASK = "other_speaker_in_task"
@@ -946,6 +967,9 @@ GROUND_KEYS = (
     KEY_REVIEWER_NAMED_NO_WORDS,
     KEY_INSTRUCTIONS_SPOKEN,
     KEY_REVIEWER_OFF_TASK,
+    KEY_PHRASES_INSTEAD_OF_ITEMS,
+    KEY_REVIEWER_PHRASES,
+    KEY_PHRASES_OCCASIONAL,
     KEY_REVIEWER_OTHER_SPEAKER,
     KEY_INSTRUCTIONS_SPOKEN_BY_OTHER,
     KEY_OTHER_SPEAKER_IN_TASK,
@@ -1543,6 +1567,7 @@ def second_opinion_disagreements(
     confident_yes: float | None,
     confident_no: float | None,
     identifier_masked: bool | None = None,
+    item_set: bool = False,
 ) -> list[str]:
     """Where the second-opinion model confidently disagrees with the reviewer.
 
@@ -1559,6 +1584,7 @@ def second_opinion_disagreements(
         identifier_masked: Whether, once the reviewer's reading is folded, any mask stands or the
             reviewer asks to hide more -- the reviewer's answer to ``policy_identifier_present``; None
             where the fold has no plan to say.
+        item_set: Whether the declared task is an item-set task, in which ``off_task_speech`` is not compared.
 
     Returns:
         One description per disagreeing question, ``<question> p=<p> reviewer=<yes|no>``, in
@@ -1580,7 +1606,7 @@ def second_opinion_disagreements(
         reviewer["policy_identifier_present"] = identifier_masked
     if "instructions_spoken" in annotation:
         reviewer["instructions_spoken"] = any(str(text).strip() for text in annotation.get("instructions_spoken") or ())
-    if annotation.get("off_task_speech") is not None:
+    if annotation.get("off_task_speech") is not None and not item_set:
         reviewer["off_task_speech"] = annotation.get("off_task_speech") in OFF_TASK_LEVELS
     found = []
     for question in SECOND_OPINION_QUESTIONS:
@@ -1591,6 +1617,40 @@ def second_opinion_disagreements(
         if (p >= confident_yes and not said) or (p <= confident_no and said):
             found.append(f"{question} p={p:.2f} reviewer={'yes' if said else 'no'}")
     return found
+
+
+def _phrase_reasons(
+    annotation: Mapping[str, Any],
+    second_opinion: Mapping[str, Any] | None,
+    flag: Callable[[str, str, str], None],
+    annotate: Callable[[str, str, str], None],
+) -> None:
+    """Raise an item-set task's phrases instead of items, as the reviewer and the second opinion read them.
+
+    ``predominant`` from either is a flag; ``occasional`` is an annotation.
+
+    Args:
+        annotation: REVIEW's annotation, read where it answered (``clean`` or ``flagged``).
+        second_opinion: The ``second_opinion_answers`` attributes, read where its status is ``ok``.
+        flag: The fold's flag.
+        annotate: The fold's annotation.
+    """
+    reviewer = annotation.get("phrases_instead_of_items") if annotation.get("status") in ("clean", "flagged") else None
+    held = dict(second_opinion or {})
+    opinion = (held.get("choices") or {}).get(PHRASES_INSTEAD_OF_ITEMS) if held.get("status") == "ok" else None
+    if reviewer == PHRASES_PREDOMINANT:
+        quoted = len(annotation.get("phrase_quotes") or ())
+        flag(_VERDICT, f"{REVIEWER_PHRASES}: {reviewer}, {quoted} phrase(s) quoted", KEY_REVIEWER_PHRASES)
+    if opinion == PHRASES_PREDOMINANT:
+        p = (held.get("probabilities") or {}).get(PHRASES_INSTEAD_OF_ITEMS)
+        flag(
+            _VERDICT,
+            f"{SECOND_OPINION_PHRASES}: {opinion}" + ("" if p is None else f" p={float(p):.2f}"),
+            f"{PREFIX_SECOND_OPINION}:{PHRASES_INSTEAD_OF_ITEMS}",
+        )
+    said = [level for level in (reviewer, opinion) if level == PHRASES_OCCASIONAL]
+    if said and PHRASES_PREDOMINANT not in (reviewer, opinion):
+        annotate(_VERDICT, f"{REVIEWER_PHRASES}: {PHRASES_OCCASIONAL}", KEY_PHRASES_OCCASIONAL)
 
 
 def second_opinion_not_free(opinion: Mapping[str, Any] | None, confident_no: float | None) -> float | None:
@@ -2500,6 +2560,19 @@ def _task_items(task: TaskEvidence) -> list[EvidenceItem]:
                 SPEECH_IN_TASK, words, REVIEW if words >= bound else PASS, unit="words", comparison="<", threshold=bound
             )
         )
+    share = task.task_speech.get("phrase_share")
+    if task.phrase_share_review is not None and share is not None:
+        bound_share = task.phrase_share_review
+        items.append(
+            item(
+                PHRASE_SHARE,
+                share,
+                REVIEW if float(share) >= bound_share else PASS,
+                unit="fraction",
+                comparison="<",
+                threshold=bound_share,
+            )
+        )
     items.extend(_join_items(task.quality))
     return items
 
@@ -2927,7 +3000,9 @@ def fold_file_verdict(
         flag(
             _VERDICT, f"{REVIEWER_OTHER_SPEAKER}: {other_kind}, {quoted} passage(s) quoted", KEY_REVIEWER_OTHER_SPEAKER
         )
-    if annotation.get("off_task_speech") in OFF_TASK_LEVELS:
+    if task_evidence.item_set:
+        _phrase_reasons(annotation, second_opinion, flag, annotate)
+    elif annotation.get("off_task_speech") in OFF_TASK_LEVELS:
         quoted = len(annotation.get("off_task_quotes") or ())
         flag(
             _VERDICT,
@@ -2949,6 +3024,7 @@ def fold_file_verdict(
         confident_yes=rules.second_opinion_confident_yes,
         confident_no=rules.second_opinion_confident_no,
         identifier_masked=evidence.masks_final_n > 0 or evidence.reviewer_requested_n > 0,
+        item_set=task_evidence.item_set,
     )
     clef_decides = not {_AIRWAY, _VOICE} & set(task_evidence.owning_branches)
     if rules.second_opinion_disagreement_flags and clef_decides:
@@ -3112,6 +3188,18 @@ def fold_file_verdict(
             f"{task_evidence.task_speech.get('runs_n', 0)} run(s), {task_evidence.task_speech.get('untimed_n', 0)} "
             "untimed",
             KEY_OTHER_SPEAKER_IN_TASK if other else KEY_SPEECH_IN_TASK,
+            by_branch[owner].kind if owner in by_branch else None,
+        )
+    share = task_evidence.task_speech.get("phrase_share")
+    if task_evidence.phrase_share_review is not None and share is not None and share >= task_evidence.phrase_share_review:
+        owner = task_evidence.owning_branches[0] if task_evidence.owning_branches else _VERDICT
+        other = speaker_of(cohort, task_evidence.task_speech.get("runs") or ()) == "other"
+        flag(
+            owner,
+            f"{OTHER_SPEAKER_IN_TASK if other else PHRASES_INSTEAD_OF_ITEMS}: phrase_share {share} of "
+            f"{task_evidence.task_speech.get('utterances_n', 0)} utterance(s), "
+            f"{task_evidence.task_speech.get('phrase_words_n', 0)} phrase word(s)",
+            KEY_OTHER_SPEAKER_IN_TASK if other else KEY_PHRASES_INSTEAD_OF_ITEMS,
             by_branch[owner].kind if owner in by_branch else None,
         )
     if task_evidence.voice_outside_speech:
