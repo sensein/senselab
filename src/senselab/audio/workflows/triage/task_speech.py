@@ -28,7 +28,7 @@ import yaml
 
 from senselab.audio.workflows.triage.nodes.branches import AIRWAY_EXPECTATIONS, VOICE_EXPECTATIONS
 from senselab.audio.workflows.triage.nodes.common import consensus_words, word_hull, write_measurement
-from senselab.audio.workflows.triage.residue import is_non_lexical, token_key
+from senselab.audio.workflows.triage.residue import is_content_word, is_non_lexical, token_key
 from senselab.audio.workflows.triage.task_content import task_content_ids, task_content_parameters, task_events
 from senselab.utils.prov_store import Entity, ProvStore
 
@@ -200,19 +200,26 @@ def task_text_ids(words: Sequence[Entity], family: str | None, task_text: Sequen
 
 
 def item_runs(
-    words: Sequence[Entity], member_ids: Collection[str], *, gap_s: float, member_share_min: float
+    words: Sequence[Entity],
+    member_ids: Collection[str],
+    *,
+    gap_s: float,
+    member_share_min: float,
+    content_share_min: float,
 ) -> list[list[Entity]]:
-    """The runs of an item list that are the task: split at long pauses, enough of them category members.
+    """The runs of an item list that are the task: split at long pauses, read as items rather than conversation.
 
     Args:
         words: The lexical words, in stream order.
         member_ids: The words that are members of the declared category.
         gap_s: A pause at least this long between two words splits the list.
-        member_share_min: The share of a run's words that must be category members.
+        member_share_min: The share of a run's words that category members make an item run.
+        content_share_min: The share of a run's words that content words
+            (:func:`~senselab.audio.workflows.triage.residue.is_content_word`) make an item run.
 
     Returns:
-        The task runs, in time order; every run where no word is a member (no category was read, or none
-        of the words names one), so that nothing is read as outside the task.
+        The task runs, in time order: each run whose category members or whose content words reach their share;
+        every run where none does, so that nothing is read as outside the task.
     """
     runs: list[list[Entity]] = []
     for word in sorted((w for w in words if timed(w)), key=lambda w: word_hull(w)[0]):
@@ -220,9 +227,13 @@ def item_runs(
             runs[-1].append(word)
         else:
             runs.append([word])
-    if not set(member_ids) & {w.id for w in words}:
-        return runs
-    return [run for run in runs if sum(w.id in member_ids for w in run) / len(run) >= member_share_min]
+
+    def items(run: list[Entity]) -> bool:
+        members = sum(w.id in member_ids for w in run) / len(run)
+        content = sum(is_content_word(str(w.attributes.get("text") or "")) for w in run) / len(run)
+        return members >= member_share_min or content >= content_share_min
+
+    return [run for run in runs if items(run)] or runs
 
 
 def _speech_runs(words: Sequence[Entity], speech: Sequence[Entity], lexical_ids: set[str]) -> list[list[Entity]]:
@@ -277,7 +288,11 @@ def task_speech_of(
         p = task_speech_parameters()
         text_ids = set()
         runs = item_runs(
-            lexical, member_ids, gap_s=float(p["item_gap_s"]), member_share_min=float(p["member_share_min"])
+            lexical,
+            member_ids,
+            gap_s=float(p["item_gap_s"]),
+            member_share_min=float(p["member_share_min"]),
+            content_share_min=float(p["content_share_min"]),
         )
         content = {word.id for run in runs for word in run}
         if runs:

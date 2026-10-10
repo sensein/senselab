@@ -34,11 +34,14 @@ from senselab.audio.workflows.triage.config import TriageConfig, UnmeasuredConfi
 from senselab.audio.workflows.triage.ddk_task import DDK_READING
 from senselab.audio.workflows.triage.nodes.airway_task import BREATH_READING, COUGH_READING
 from senselab.audio.workflows.triage.nodes.background import SESSION_FLOOR
+from senselab.audio.workflows.triage.nodes.branches import SPEECH_EXPECTATIONS, declared_task_family
 from senselab.audio.workflows.triage.nodes.common import (
     BranchResult,
     find_measurement,
+    lexical_words,
     live_entities,
     software_agent,
+    word_hull,
     write_measurement,
     write_report,
 )
@@ -52,7 +55,9 @@ from senselab.audio.workflows.triage.quality_join import (
     separate_gates,
     stream_agreement,
 )
+from senselab.audio.workflows.triage.routing_analysis.families import SYLLABLE_REPETITION
 from senselab.audio.workflows.triage.task_events import generic_view, generic_view_of
+from senselab.audio.workflows.triage.task_speech import TASK_SPEECH_READING
 from senselab.audio.workflows.triage.vocabulary import (
     STORE_ASSERTIONS,
     UNDETERMINED,
@@ -252,6 +257,24 @@ def task_events_of(store: ProvStore) -> tuple[str | None, list[Span]]:
     return None, []
 
 
+def spoken_task_words(store: ProvStore) -> list[Span]:
+    """The participant's own words where the task is spoken: a lexical family's words, off-task words left out.
+
+    Args:
+        store: The provenance store, read for the declared family, the consensus words and the task's speech reading.
+
+    Returns:
+        The timing hulls of the lexical consensus words of a lexical (not syllable-repetition) family, less those the
+        task's speech reading names as outside the task; empty for every other family, whose own sound is its events.
+    """
+    family = declared_task_family(store)
+    if not family or family not in SPEECH_EXPECTATIONS or family in SYLLABLE_REPETITION:
+        return []
+    reading = find_measurement(store, TASK_SPEECH_READING)
+    off_task = {str(i) for i in (reading.attributes.get("word_ids") or ())} if reading is not None else set()
+    return [word_hull(word) for word in lexical_words(store) if word.id not in off_task and word.extent is not None]
+
+
 def measure_join(store: ProvStore, run_dir: Path) -> dict[str, Any]:
     """The join of the recording-level background against the branches' task spans.
 
@@ -278,7 +301,7 @@ def measure_join(store: ProvStore, run_dir: Path) -> dict[str, Any]:
         missing.append(ENHANCED_STREAM)
     streams = stream_agreement(events, raw, enhanced, p) if raw is not None and events else None
     other_voice: list[Span] | None = None
-    heard = background_speech_of(store, run_dir, events)
+    heard = background_speech_of(store, run_dir, [*events, *spoken_task_words(store)])
     if heard is None:
         missing.append("background_speech")
     else:

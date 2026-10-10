@@ -1566,7 +1566,11 @@ def _item_list_extent(store: ProvStore, *, repetition_allowed: bool | None, memb
     """
     p = task_speech_parameters()
     runs = item_runs(
-        lexical_words(store), member_ids, gap_s=float(p["item_gap_s"]), member_share_min=float(p["member_share_min"])
+        lexical_words(store),
+        member_ids,
+        gap_s=float(p["item_gap_s"]),
+        member_share_min=float(p["member_share_min"]),
+        content_share_min=float(p["content_share_min"]),
     )
     items = [word for run in runs for word in run]
     consensus_id = _consensus_id(store)

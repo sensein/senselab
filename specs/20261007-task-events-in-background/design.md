@@ -1574,8 +1574,9 @@ whole file, with their runs (times and counts only) and the words with no usable
 - **Item-set families** (`task_content.yaml` `open_vocabulary_families`: animal fluency, random item
   generation v1 and v2; SPEECH writes it). Owner, 2026-10-10: these tasks elicit names, places and numbers
   by design, so the words of the item runs are task content whatever they spell. Item runs are the runs of
-  lexical words split at pauses of `item_gap_s` (3.0 s), whose declared-category members reach
-  `member_share_min` (0.5) of the run; with no member anywhere every run is the task. SPEECH's item-list
+  lexical words split at pauses of `item_gap_s` (3.0 s) whose declared-category members reach
+  `member_share_min` (0.5) of the run, or whose content words (not function words, not fillers) reach
+  `content_share_min` (0.6): a list rather than conversation. Where no run qualifies, every run is the task. SPEECH's item-list
   task extent is now the item runs' hull, so a speaker before the list is outside it. The words outside are
   speech outside the task: `item_words_min` (3) of them review and are masked; an off-task share of every
   lexical word at or over `extensive_fraction` (0.5) withholds. All three are unfitted.
@@ -1584,6 +1585,11 @@ whole file, with their runs (times and counts only) and the words with no usable
 The fold raises `speech_in_task` (reason `off_task_speech`), or `other_speaker_in_task` (reason
 `other_speaker`) where a run overlaps one of COHORT's non-matching spans; the evidence item `speech_in_task`
 carries the count against its bound.
+
+QUALITY's other-voice reading sets aside the participant's own sound: the task's events and, for a spoken
+(lexical, not syllable-repetition) family, its lexical words other than those the reading names as outside
+the task (`nodes/quality.py` `spoken_task_words`). Without them every residual speech window of a spoken task
+read as another voice in the first dry run (job 25489778).
 
 ### Masks over the speech (`mask_plan`)
 

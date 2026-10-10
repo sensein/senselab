@@ -1773,7 +1773,7 @@ def _release_from(
     ):
         return Release.REDACTED, POLICY_MASKS_ONLY
     if release is Release.WITHHELD and ground is None:
-        ground = REDACT_UNRESOLVED
+        ground = MASK_COVERAGE_FAILED if evidence.coverage_failed else REDACT_UNRESOLVED
     if release is not Release.REDACTED:
         return release, ground
     reviewer = evidence.reviewer_unmasked_n > 0
