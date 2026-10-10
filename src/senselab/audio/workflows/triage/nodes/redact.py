@@ -1095,12 +1095,11 @@ def redact(
             f"the store's pii scan is incomplete ({'; '.join(reasons)}); "
             "an unchecked recording is not a clean one (N15)"
         )
-    elif not coverage.ok:
-        outcome = Outcome.FAIL
-        why = f"the planned masks do not cover what they mask: {coverage.describe()}"
     else:
         outcome = Outcome.PASS
         why = "every finding redacted; each mask covers its words in the text and the audio"
+        if not coverage.ok:
+            why = f"every finding planned; the final plan is verified, this one does not cover: {coverage.describe()}"
         if exemptions or task_exempt:
             accounted = [
                 *([f"{len(exemptions)} the declared stimulus accounts for"] if exemptions else []),

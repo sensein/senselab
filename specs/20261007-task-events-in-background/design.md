@@ -1616,8 +1616,8 @@ policy, task text and instructions, stimulus, family lexicon, task events, item 
 final masks; SECOND_OPINION reads the text as it would ship (`shipped_texts`); VERDICT verifies only what
 ships (`mask_coverage`): each kept word has usable timing, the released text shows none of them, and each
 final mask's audio is silent (fill `silence`) or replaced (fill `bleep`). A failure withholds on
-`mask_coverage_failed` (was `redact_verify_found`). REDACT checks its own plan the same way and runs no
-detector on redacted text. Removed outright: the re-plan loop, the survivor attribution, the reviewer's
+`mask_coverage_failed` (was `redact_verify_found`). REDACT checks its own plan the same way and records it, but
+its plan is not what ships, so only an incomplete planning scan fails it; it runs no detector on redacted text. Removed outright: the re-plan loop, the survivor attribution, the reviewer's
 clearing of a re-scan fail (`reviewer_cleared_rescan`, `reviewer_cleared_unmasked`) and
 `verdict.llm_rescan_clears`.
 
