@@ -91,7 +91,7 @@ reviewed_releases:     # owner, 2026-10-10: masks not yet validated; every relea
 release_keys:          # release ground key -> reason, for a release withheld or one the graph could not assess
   reviewer_proposed_redaction: redaction_hold
   unplaced_finding_unread: redaction_hold
-  redact_verify_found: redaction_hold
+  mask_coverage_failed: redaction_hold
   redact_unresolved: redaction_hold
   non_task_speech_untimed: redaction_hold
   non_task_speech_extensive: redaction_hold

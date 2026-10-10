@@ -29,7 +29,6 @@ from senselab.audio.workflows.triage.vocabulary import (
     POLICY_MASKS_ONLY,
     REDACTION_LLM_ANNOTATION,
     REDACTION_OWED,
-    REVIEWER_CLEARED_RESCAN,
     REVIEWER_NAMED_NO_WORDS,
     REVIEWER_PROPOSED_REDACTION,
     REVIEWER_UNMASKED_ALL,
@@ -845,16 +844,6 @@ class TestTheRedactionReviewerAnnotatesAndThisNodeDecides:
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
         assert result.file_verdict.release is Release.REDACTED
 
-    def test_a_fail_no_re_scan_survivor_names_is_never_cleared(
-        self, make_verdict_store: Callable[..., ProvStore], tmp_path: Path
-    ) -> None:
-        """An incomplete scan leaves nothing checked, so no reading releases it."""
-        config = _policy_config(tmp_path, "verdict:\n  llm_redaction_withholds: true\n  llm_rescan_clears: true\n")
-        store = make_verdict_store(concluded=[*BASE, ("REDACT", Outcome.FAIL, None)], routed=ROUTED_PAIR, pii_n=1)
-        _annotate(store, status="clean", redaction="complete", original="clean", flagged=[])
-        result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
-        assert result.file_verdict.release is Release.WITHHELD
-
     def test_the_reset_key_ships_on(self) -> None:
         """Owner, 2026-09-27: a reading's release entries unmask the words they name."""
         assert load_triage_config().require("verdict.llm_reset_redactions") is True
@@ -1168,69 +1157,6 @@ class TestTheRedactionReviewerAnnotatesAndThisNodeDecides:
         again = verdict_module.verdict(store, None, approved, run_dir=tmp_path)
         assert self._states(store) == {"Alice": "unmasked_by_approval"}
         assert not any(reason.why.startswith(PERSON_NAME_AWAITS_REVIEW) for reason in again.file_verdict.reasons)
-
-    def test_the_clearing_key_ships_on(self) -> None:
-        """Owner, 2026-09-26: the reviewer, which already read these, decides a re-scan fail."""
-        assert load_triage_config().require("verdict.llm_rescan_clears") is True
-        assert FoldPolicy.from_config(load_triage_config()).llm_rescan_clears is True
-
-    def test_a_clean_reading_releases_the_redacted_copy_of_a_re_scan_fail(
-        self, make_verdict_store: Callable[..., ProvStore], tmp_path: Path
-    ) -> None:
-        """REDACT's re-scan still read a date; the reviewer read the original as clean."""
-        config = _policy_config(tmp_path, "verdict:\n  llm_redaction_withholds: true\n  llm_rescan_clears: true\n")
-        store = make_verdict_store(
-            concluded=[*BASE, ("REDACT", Outcome.FAIL, None)],
-            routed=ROUTED_PAIR,
-            pii_n=1,
-            redact_detail={"unremediable": ["DATE_TIME"], "outstanding": ["DATE_TIME"]},
-        )
-        _annotate(
-            store,
-            status="flagged",
-            redaction="incomplete",
-            original="clean",
-            proposal=[{"text": "the past couple of weeks", "action": "release", "category": "DATE_TIME"}],
-        )
-        result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
-        assert result.file_verdict.release is Release.REDACTED
-        assert result.file_verdict.release_ground == REVIEWER_CLEARED_RESCAN
-
-    def test_a_reading_that_proposes_a_redaction_keeps_a_re_scan_fail_withheld(
-        self, make_verdict_store: Callable[..., ProvStore], tmp_path: Path
-    ) -> None:
-        """The reviewer agrees something is left, so the detectors' refusal stands."""
-        config = _policy_config(tmp_path, "verdict:\n  llm_redaction_withholds: true\n  llm_rescan_clears: true\n")
-        store = make_verdict_store(
-            concluded=[*BASE, ("REDACT", Outcome.FAIL, None)],
-            routed=ROUTED_PAIR,
-            pii_n=1,
-            redact_detail={"unremediable": ["PERSON"]},
-        )
-        _annotate(
-            store,
-            status="flagged",
-            redaction="incomplete",
-            original="carries_pii",
-            proposal=[{"text": "alice", "action": "redact", "category": "PERSON"}],
-        )
-        result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
-        assert result.file_verdict.release is Release.WITHHELD
-
-    def test_with_the_key_off_a_re_scan_fail_stays_withheld(
-        self, make_verdict_store: Callable[..., ProvStore], tmp_path: Path
-    ) -> None:
-        """The switch: the same clean reading leaves REDACT's withholding where it was."""
-        config = _policy_config(tmp_path, "verdict:\n  llm_rescan_clears: false\n")
-        store = make_verdict_store(
-            concluded=[*BASE, ("REDACT", Outcome.FAIL, None)],
-            routed=ROUTED_PAIR,
-            pii_n=1,
-            redact_detail={"unremediable": ["DATE_TIME"]},
-        )
-        _annotate(store, status="clean", redaction="complete", original="clean", proposal=[])
-        result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
-        assert result.file_verdict.release is Release.WITHHELD
 
     def test_a_reviewer_that_could_not_load_withholds_nothing(
         self, make_verdict_store: Callable[..., ProvStore], tmp_path: Path

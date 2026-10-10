@@ -35,6 +35,7 @@ from typing import Any, Callable, Mapping, Sequence
 import yaml
 
 from senselab.audio.data_structures import AudioHints
+from senselab.audio.tasks.redaction.api import apply_redactions
 from senselab.audio.workflows.triage.background_model import BACKGROUND_MODEL
 from senselab.audio.workflows.triage.cohort_fold import COHORT_NODE, COHORT_READING
 from senselab.audio.workflows.triage.config import TriageConfig
@@ -64,6 +65,7 @@ from senselab.audio.workflows.triage.nodes.common import (
     find_verdict,
     lexical_words,
     mint_live,
+    resolve_stream,
     software_agent,
     write_verdict,
 )
@@ -94,10 +96,13 @@ from senselab.audio.workflows.triage.nodes.gates import (
     load_gate_bounds,
 )
 from senselab.audio.workflows.triage.nodes.redact import (
+    MASK_SOURCE,
     NEW,
     UNMASKED_BY_REVIEWER,
+    Coverage,
     MaskPlan,
     fold_mask_plan,
+    mask_coverage,
 )
 from senselab.audio.workflows.triage.nodes.voice import PHONATION_READING
 from senselab.audio.workflows.triage.quality_join import QUALITY_JOIN
@@ -745,8 +750,33 @@ def _second_opinion(store: ProvStore) -> tuple[dict[str, object] | None, list[st
     ]
 
 
+def final_coverage(store: ProvStore, plan: MaskPlan, config: TriageConfig, run_dir: Path) -> Coverage:
+    """Whether the final plan's masks cover their words in the released text and the released audio.
+
+    Args:
+        store: The provenance store, read for the consensus words and the ``recording`` stream.
+        plan: The final mask plan.
+        config: The triage configuration, read for ``redaction.fill`` and ``redaction.bleep_hz``.
+        run_dir: The run directory the stream's path is relative to.
+
+    Returns:
+        The check; the audio is not checked where the plan masks nothing or the stream is not stored.
+    """
+    fill = str(config.require("redaction.fill"))
+    source = masked = None
+    if plan.final:
+        try:
+            _, source = resolve_stream(store, run_dir, MASK_SOURCE)
+            masked = apply_redactions(source, plan.final, fill=fill, bleep_hz=config.get("redaction.bleep_hz"))
+        except (LookupError, OSError, RuntimeError):
+            source = masked = None
+    return mask_coverage(
+        consensus_words(store), plan.final, set(plan.owners()), source, masked, fill=fill, owners=plan.owners()
+    )
+
+
 def _redaction_evidence(
-    store: ProvStore, reports: Sequence[tuple[Entity, BranchReport]], plan: MaskPlan
+    store: ProvStore, reports: Sequence[tuple[Entity, BranchReport]], plan: MaskPlan, coverage: Coverage
 ) -> RedactionEvidence:
     """What the store says about whether this recording carried anything a redaction could remove.
 
@@ -755,6 +785,7 @@ def _redaction_evidence(
         reports: The reporting nodes' reports, paired with the entities they were read from, so
             SPEECH's own lexical count can be read off its report.
         plan: Which masks stand once the reviewer's unmasks and the content-word trim are applied.
+        coverage: Whether the final plan's masks cover their words (:func:`final_coverage`).
 
     Returns:
         SPEECH's lexical count, its scan record as a tri-state, how many live ``pii`` findings the
@@ -763,13 +794,11 @@ def _redaction_evidence(
     speech = next((entity for entity, report in reports if report.node == SPEECH), None)
     words = None if speech is None else speech.attributes.get("words_n")
     scans = [measurement.attributes for measurement in find_measurements(store, PII_SCAN)]
-    redact = find_verdict(store, _REDACT_NODE)
-    survivors = () if redact is None else tuple(str(c) for c in redact.attributes.get("unremediable") or ())
     return RedactionEvidence(
         lexical_words_n=None if words is None else int(words),
         scanned=None if not scans else not any(scan.get(SCANNED) is False for scan in scans),
         findings_n=len([finding for finding in store.entities("pii") if not store.is_invalidated(finding.id)]),
-        rescan_survivors=survivors,
+        coverage_failed=not coverage.ok,
         masks_n=len(plan.masks),
         masks_final_n=len(plan.final),
         masks_changed=plan.changed,
@@ -1218,7 +1247,7 @@ def verdict(
         hint_claims=_hint_claims(decisions, hint, declared_family=declared_family),
         route_state=route_state,
         declared_family=declared_family or None,
-        redaction=_redaction_evidence(store, report_pairs, plan),
+        redaction=_redaction_evidence(store, report_pairs, plan, final_coverage(store, plan, config, run_dir)),
         llm_redaction=annotation,
         critical_absences=_critical_absences(store),
         gates=outcome.record(),

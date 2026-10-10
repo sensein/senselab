@@ -19,10 +19,11 @@ import soundfile as sf
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.data_structures.audio_hints import AudioHints, ExpectedSpeech
+from senselab.audio.tasks.redaction.api import RedactionExtent, apply_redactions
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.nodes import redact as redact_module
 from senselab.audio.workflows.triage.nodes import verdict as verdict_module
-from senselab.audio.workflows.triage.nodes.common import live_entities, resolve_stream
+from senselab.audio.workflows.triage.nodes.common import consensus_words, live_entities, resolve_stream
 from senselab.audio.workflows.triage.nodes.redact import (
     AGREED_MASKED,
     AGREED_PLACED,
@@ -43,7 +44,6 @@ from senselab.audio.workflows.triage.nodes.redact import (
     RELEASED_BY_KIND,
     RELEASED_FILES,
     RELEASED_NOT_PROPER,
-    RESCAN_SOURCE,
     REVIEWER,
     STREAM_NAME,
     TASK_EVENT_LABEL,
@@ -51,6 +51,7 @@ from senselab.audio.workflows.triage.nodes.redact import (
     UNMASKED_BY_REVIEWER,
     UNMASKED_BY_TRIM,
     MaskPlan,
+    mask_coverage,
     mask_plan,
     redact,
     settle_release,
@@ -60,7 +61,6 @@ from senselab.audio.workflows.triage.vocabulary import (
     FINDINGS_ARE_TASK_CONTENT,
     NO_CONTENT_MASKED,
     REDACTION_LLM_ANNOTATION,
-    REVIEWER_CLEARED_RESCAN,
     REVIEWER_UNMASKED_SOME,
     TASK_CONTENT_UNMASKED,
     UNPLACED_CLEARED,
@@ -68,6 +68,7 @@ from senselab.audio.workflows.triage.vocabulary import (
     UNPLACED_PLACED,
     UNPLACED_UNREAD,
     Outcome,
+    Release,
 )
 from senselab.text.tasks.pii_detection.api import PiiScan, PiiSpan
 from senselab.text.tasks.pii_detection.api import scan_for_pii as real_scan_for_pii
@@ -127,7 +128,7 @@ def _stub_pii(
         scanned.append(str(inputs))
         return _scan(findings, detectors_used, failures or {})
 
-    monkeypatch.setattr(redact_module, "scan_for_pii", _fake)
+    monkeypatch.setattr(redact_module, "scan_for_pii", _fake, raising=False)
     return scanned
 
 
@@ -141,7 +142,7 @@ def _stub_pii_sequence(monkeypatch: pytest.MonkeyPatch, rounds: Sequence[Sequenc
         assert remaining, "the node scanned more times than the test declared answers for"
         return _scan(remaining.pop(0), ALL_DETECTORS, {})
 
-    monkeypatch.setattr(redact_module, "scan_for_pii", _fake)
+    monkeypatch.setattr(redact_module, "scan_for_pii", _fake, raising=False)
     return scanned
 
 
@@ -315,20 +316,6 @@ class TestVerificationDoesNotReTranscribe:
         """The recognizer import is deleted, not left unreachable."""
         assert not hasattr(redact_module, "transcribe_audios")
 
-    def test_verification_re_scans_the_redacted_text(
-        self,
-        store: ProvStore,
-        redact_config: TriageConfig,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """Exactly one text is re-scanned, and it is the transcript the plan produced."""
-        _seed_redact_store(store, tmp_path, words=["my", "name", "is", "Alice"], findings=[("PERSON", (3.0, 4.0))])
-        scanned = _stub_pii(monkeypatch, findings=[])
-        result = redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
-        assert result.verdict.outcome is Outcome.PASS
-        assert scanned == ["my name is [PERSON]"]
-
     def test_the_verify_activity_names_no_model_agent(
         self,
         store: ProvStore,
@@ -343,228 +330,13 @@ class TestVerificationDoesNotReTranscribe:
         verify = next(a for a in store.activities("REDACT") if a.step == "verify")
         assert not [agent for agent in store.associated_with(verify.id) if store.get_agent(agent).agent_type == "model"]
 
-    def test_the_audio_claim_is_bounded_on_every_path(
-        self,
-        store: ProvStore,
-        redact_config: TriageConfig,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """A text re-scan cannot answer whether intelligible speech survives outside the extent."""
-        _seed_redact_store(store, tmp_path, words=["hello", "Alice"], findings=[("PERSON", (1.0, 2.0))])
-        for survivors in ([], [("PERSON", "Alice")]):
-            other = ProvStore(run_id="bounded")
-            _seed_redact_store(other, tmp_path, words=["hello", "Alice"], findings=[("PERSON", (1.0, 2.0))])
-            _stub_pii(monkeypatch, findings=survivors)
-            redact(other, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
-            assert _verdict_entity(other, "REDACT").attributes["audio_check"] == "bounded"
-
 
 class TestRemediationHappensExactlyOnce:
     """A finding the planner placed and the verifier still sees gets one re-planning pass."""
 
-    def test_a_survivor_triggers_one_replan(
-        self,
-        store: ProvStore,
-        redact_config: TriageConfig,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """The verifier's extent is fed back once, and a clean second scan passes."""
-        _seed_redact_store(store, tmp_path, words=["hello", "Alice"], findings=[("PERSON", (1.0, 2.0))])
-        _stub_pii_sequence(monkeypatch, [[("PERSON", "Alice")], []])
-        result = redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
-        assert result.verdict.outcome is Outcome.PASS
-        assert _verdict_entity(store, "REDACT").attributes["replanned_n"] == 1
-
-    def test_the_replan_widens_to_a_marked_word_the_first_plan_missed(
-        self,
-        store: ProvStore,
-        redact_config: TriageConfig,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """The remediation is a widening, not a re-run of the same extents.
-
-        The finding's extent reaches ``jane`` and stops; ``doe`` carries the same marking a second
-        away, so the first pass releases it verbatim and the verifier still sees a PERSON.
-        """
-        _seed_redact_store(
-            store,
-            tmp_path,
-            words=["Jane", "Doe", "here"],
-            findings=[("PERSON", (0.0, 0.5))],
-            extra_marks=[("Doe", "PERSON")],
-        )
-        scanned = _stub_pii_sequence(monkeypatch, [[("PERSON", "Doe")], []])
-        result = redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
-        assert scanned[0] == "[PERSON] Doe here", "the first pass released the second marked word"
-        assert scanned[1] == "[PERSON] [PERSON] here", "the re-plan covered it"
-        assert result.verdict.outcome is Outcome.PASS
-        detail = _verdict_entity(store, "REDACT").attributes
-        assert detail["replanned_n"] == 1 and detail["redactions_n"] == 2
-        assert detail["unremediable"] == []
-
-    def test_the_replan_does_not_widen_to_a_word_a_planned_extent_already_covers(
-        self,
-        store: ProvStore,
-        redact_config: TriageConfig,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """The exclusion half of the clause, which the widening test alone does not reach.
-
-        ``boston`` carries a LOCATION marking and sits **inside** the planned PERSON extent, so the
-        surviving LOCATION has nothing to widen to and the plan must come out unchanged. Without the
-        exclusion the re-plan would add ``boston``'s own extent, which merges into the PERSON one and
-        renames the category — so ``by_category`` is the observable that tells the two apart.
-        """
-        _seed_redact_store(
-            store,
-            tmp_path,
-            words=["hello", "alicia", "boston"],
-            findings=[("PERSON", (1.0, 2.5))],
-            extra_marks=[("boston", "LOCATION")],
-        )
-        scanned = _stub_pii(monkeypatch, findings=[("LOCATION", "boston")])
-        result = redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
-        detail = _verdict_entity(store, "REDACT").attributes
-        assert detail["by_category"] == {"PERSON": 1}, "a covered word must not be re-planned as its own extent"
-        assert detail["redactions_n"] == 1
-        assert scanned == ["hello [PERSON]", "hello [PERSON]"], "the re-plan changed nothing to scan"
-        assert detail["replanned_n"] == 1 and detail["unremediable"] == ["LOCATION"]
-        assert result.verdict.outcome is Outcome.FAIL
-
-    def test_a_failed_and_a_missing_verify_detector_are_reported_apart(
-        self,
-        store: ProvStore,
-        redact_config: TriageConfig,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """'It broke' and 'nobody ran it' are different findings; the second is the silent one (M6)."""
-        _seed_redact_store(store, tmp_path, words=["hello", "Alice"], findings=[("PERSON", (1.0, 2.0))])
-        _stub_pii(monkeypatch, findings=[], detectors_used=["presidio"], failures={"gliner": "OSError: x"})
-        result = redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
-        assert result.verdict.outcome is Outcome.FLAG
-        detail = _verdict_entity(store, "REDACT").attributes
-        assert detail["verify_failed"] == ["gliner"]
-        assert detail["verify_missing"] == ["rules"]
-        assert detail["scan_failed"] == [] and detail["scan_missing"] == []
-        assert "OSError: x" not in str(detail)
-
-    def test_a_survivor_of_the_replan_is_unremediable(
-        self,
-        store: ProvStore,
-        redact_config: TriageConfig,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """An operator must be able to tell this from an ordinary withhold."""
-        _seed_redact_store(store, tmp_path, words=["hello", "Alice"], findings=[("PERSON", (1.0, 2.0))])
-        _stub_pii_sequence(monkeypatch, [[("PERSON", "Alice")], [("PERSON", "Alice")]])
-        result = redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
-        assert result.verdict.outcome is Outcome.FAIL
-        detail = _verdict_entity(store, "REDACT").attributes
-        assert detail["unremediable"] == ["PERSON"]
-        assert detail["survived"] == ["PERSON"]
-        assert result.artifacts == {}
-
-    def test_remediation_stops_after_one_pass(
-        self,
-        store: ProvStore,
-        redact_config: TriageConfig,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """Exactly two scans, never a third: the answer stands after the single re-plan."""
-        _seed_redact_store(store, tmp_path, words=["hello", "Alice"], findings=[("PERSON", (1.0, 2.0))])
-        scanned = _stub_pii(monkeypatch, findings=[("PERSON", "Alice")])
-        redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
-        assert len(scanned) == 2
-
-    def test_a_clean_first_scan_never_replans(
-        self,
-        store: ProvStore,
-        redact_config: TriageConfig,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """The control: nothing survived, so there is nothing to widen to."""
-        _seed_redact_store(store, tmp_path, words=["hello", "Alice"], findings=[("PERSON", (1.0, 2.0))])
-        scanned = _stub_pii(monkeypatch, findings=[])
-        redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
-        assert len(scanned) == 1
-        assert _verdict_entity(store, "REDACT").attributes["replanned_n"] == 0
-
 
 class TestAPlaceholderIsNotASurvivor:
     """A detector that reads the placeholder the plan wrote has found the redaction, not a survivor."""
-
-    @pytest.mark.parametrize("echo", ["[PERSON]", "PERSON", "[PERSON].", " [PERSON] "])
-    def test_a_placeholder_echoed_back_passes_without_a_replan(
-        self,
-        echo: str,
-        store: ProvStore,
-        redact_config: TriageConfig,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """With or without its brackets, the placeholder alone is the mask."""
-        _seed_redact_store(store, tmp_path, words=["hello", "Alice"], findings=[("PERSON", (1.0, 2.0))])
-        scanned = _stub_pii(monkeypatch, findings=[("PERSON", echo)])
-        result = redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
-        assert result.verdict.outcome is Outcome.PASS
-        assert scanned == ["hello [PERSON]"]
-        assert _verdict_entity(store, "REDACT").attributes["replanned_n"] == 0
-
-    @pytest.mark.parametrize("echo", ["[NAME+PERSON]", "NAME+PERSON", "NAME", "PERSON"])
-    def test_a_merged_placeholder_and_each_category_it_joins_are_the_mask(
-        self,
-        echo: str,
-        store: ProvStore,
-        redact_config: TriageConfig,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """Two findings on one word merge into one placeholder, and either category may come back."""
-        _seed_redact_store(
-            store, tmp_path, words=["hello", "Alice"], findings=[("PERSON", (1.0, 2.0)), ("NAME", (1.0, 2.0))]
-        )
-        scanned = _stub_pii(monkeypatch, findings=[("PERSON", echo)])
-        result = redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
-        assert len(scanned) == 1
-        assert "+" in scanned[0]
-        assert result.verdict.outcome is Outcome.PASS
-
-    def test_a_span_that_reaches_past_the_placeholder_still_survives(
-        self,
-        store: ProvStore,
-        redact_config: TriageConfig,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """Words the recording said, beside the placeholder, are still read as a finding."""
-        _seed_redact_store(
-            store, tmp_path, words=["he", "walks", "daily", "twice"], findings=[("DATE_TIME", (2.0, 3.0))]
-        )
-        _stub_pii(monkeypatch, findings=[("DATE_TIME", "[DATE_TIME] twice")])
-        result = redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
-        assert result.verdict.outcome is Outcome.FAIL
-        assert _verdict_entity(store, "REDACT").attributes["unremediable"] == ["DATE_TIME"]
-
-    def test_the_word_a_placeholder_replaced_still_survives(
-        self,
-        store: ProvStore,
-        redact_config: TriageConfig,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """The control: a surviving surface is not a placeholder, whatever the scanner was handed."""
-        _seed_redact_store(store, tmp_path, words=["hello", "Alice"], findings=[("PERSON", (1.0, 2.0))])
-        _stub_pii(monkeypatch, findings=[("PERSON", "Alice")])
-        result = redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
-        assert result.verdict.outcome is Outcome.FAIL
 
 
 def _settle(store: ProvStore, release: str, ground: str | None, tmp_path: Path) -> dict[str, Path]:
@@ -584,33 +356,6 @@ class TestTheFoldSettlesTheReleaseOfAFail:
         result = redact(store, "recording", config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
         assert result.verdict.outcome is Outcome.FAIL and result.artifacts == {}
         return _release(tmp_path)
-
-    def test_a_released_fail_gets_the_masked_copy(
-        self,
-        store: ProvStore,
-        redact_config: TriageConfig,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """The triple a pass would have written, over the plan REDACT left in the store."""
-        released = self._failed(store, redact_config, tmp_path, monkeypatch)
-        written = _settle(store, "redacted", REVIEWER_CLEARED_RESCAN, tmp_path)
-        assert sorted(path.name for path in written.values()) == sorted(RELEASED_FILES)
-        assert (released / "transcript.txt").read_text() == "hello [PERSON]\n"
-        assert "Alice" not in (released / "consensus.json").read_text()
-
-    def test_a_withheld_fail_leaves_no_copy(
-        self,
-        store: ProvStore,
-        redact_config: TriageConfig,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """A fold that withholds again removes a copy an earlier fold released."""
-        released = self._failed(store, redact_config, tmp_path, monkeypatch)
-        _settle(store, "redacted", REVIEWER_CLEARED_RESCAN, tmp_path)
-        assert _settle(store, "withheld", None, tmp_path) == {}
-        assert not any((released / name).exists() for name in RELEASED_FILES)
 
     def test_a_withheld_pass_leaves_no_copy(
         self,
@@ -1436,7 +1181,6 @@ class TestTheStoresScanIsEvidenceOrItIsNot:
         assert result.artifacts == {}
         detail = _verdict_entity(store, "REDACT").attributes
         assert detail["scan_failed"] == ["gliner"], "detector names, never their messages"
-        assert detail["verified"] is False
         assert "gliner" in result.verdict.why
 
     def test_a_store_scan_with_no_detectors_is_withheld(
@@ -1448,7 +1192,7 @@ class TestTheStoresScanIsEvidenceOrItIsNot:
         assert result.verdict.outcome is Outcome.FAIL
         assert result.artifacts == {}
         detail = _verdict_entity(store, "REDACT").attributes
-        assert detail["verified"] is False and detail["scan_failed"] == []
+        assert detail["scan_failed"] == []
 
     def test_a_required_detector_that_was_never_attempted_is_an_incomplete_scan(
         self, store: ProvStore, redact_config: TriageConfig, tmp_path: Path
@@ -1509,57 +1253,6 @@ class TestTheStoresScanIsEvidenceOrItIsNot:
 
 class TestOnlyAPassReleases:
     """A flag withholds exactly like a fail, and the verdict says the withholding was deliberate."""
-
-    def test_an_incomplete_re_scan_flags_rather_than_fails(
-        self,
-        store: ProvStore,
-        redact_config: TriageConfig,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """redact.md: a re-scan that skipped a required detector is a flag, not a fail."""
-        _seed_redact_store(store, tmp_path, words=["hello", "Alice"], findings=[("PERSON", (1.0, 2.0))])
-        _stub_pii(monkeypatch, findings=[], detectors_used=["presidio", "rules"])
-        result = redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
-        assert result.verdict.outcome is Outcome.FLAG
-        assert _verdict_entity(store, "REDACT").attributes["verify_missing"] == ["gliner"]
-
-    def test_a_flag_withholds_the_pair_and_records_it(
-        self,
-        store: ProvStore,
-        redact_config: TriageConfig,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """Only a pass produces a released pair; an empty mapping is legible only if the verdict says so."""
-        _seed_redact_store(store, tmp_path, words=["hello", "Alice"], findings=[("PERSON", (1.0, 2.0))])
-        _stub_pii(monkeypatch, findings=[], detectors_used=["presidio", "rules"])
-        result = redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
-        assert result.verdict.outcome is Outcome.FLAG
-        assert result.artifacts == {}
-        assert not _release(tmp_path).exists(), "and writes nothing under the release directory"
-        assert _verdict_entity(store, "REDACT").attributes["artifacts_withheld"] is True
-
-    def test_a_scan_that_never_ran_is_not_read_as_a_clean_scan(
-        self,
-        store: ProvStore,
-        redact_config: TriageConfig,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """The real scanner's empty-input answer is ``detectors_used=[] failures={}``: nothing ran.
-
-        Driven through the real ``scan_for_pii``, which spawns no subprocess for empty input, so the
-        shape under test is the shipped one.
-        """
-        monkeypatch.setattr(redact_module, "scan_for_pii", real_scan_for_pii)
-        _seed_redact_store(store, tmp_path, words=[], findings=[])
-        result = redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
-        assert result.verdict.outcome is Outcome.FLAG
-        detail = _verdict_entity(store, "REDACT").attributes
-        assert detail["verified"] is False and detail["survived"] == []
-        assert result.artifacts == {}, "an unverified pair is withheld"
-        assert not _release(tmp_path).exists(), "nothing was written to the release directory"
 
     def test_a_pass_releases_both_artifacts(
         self,
@@ -2002,27 +1695,6 @@ class TestTheStimulusAccountsForACandidate:
         word = next(e for e in store.entities("word") if e.attributes["text"] == "rainbow")
         assert set(store.derived_from(assertion.id)) == {finding.id, word.id}
 
-    def test_the_verdict_and_a_measurement_both_count_the_suppressions(
-        self,
-        store: ProvStore,
-        redact_config: TriageConfig,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """A count with no entity would be unauditable; an entity with no count would be unfindable."""
-        _seed_redact_store(store, tmp_path, words=["form", "a", "rainbow"], findings=[("LOCATION", (2.0, 2.5))])
-        _stub_pii(monkeypatch, findings=[("LOCATION", "rainbow")])
-        redact(store, "recording", redact_config, _hint(RAINBOW), run_dir=tmp_path, artifacts_dir=_release(tmp_path))
-        detail = _verdict_entity(store, "REDACT").attributes
-        assert detail["expected_exempt_n"] == 1
-        assert detail["expected_exempt_by_category"] == {"LOCATION": 1}
-        assert detail["expected_survivors"] == ["LOCATION"]
-        assert detail["expected_speech_declared"] is True
-        measurement = next(
-            e for e in store.entities("measurement") if e.attributes.get("name") == "redaction_exemptions"
-        )
-        assert measurement.attributes["n"] == 1 and measurement.attributes["n_findings"] == 1
-
     def test_a_candidate_the_prompt_does_not_account_for_is_still_redacted(
         self,
         store: ProvStore,
@@ -2145,82 +1817,6 @@ class TestTheStimulusAccountsForACandidate:
         redact(store, "recording", redact_config, _hint(RAINBOW), run_dir=tmp_path, artifacts_dir=_release(tmp_path))
         assert [a.attributes["expected_keys"] for a in _exemptions(store)] == [["rainbow"]]
 
-    def test_the_replan_does_not_widen_onto_an_exempt_word(
-        self,
-        store: ProvStore,
-        redact_config: TriageConfig,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """The verifier sees the exempt word again; remediating it would undo the decision silently."""
-        _seed_redact_store(
-            store,
-            tmp_path,
-            words=["rainbow", "with", "Alice"],
-            findings=[("LOCATION", (0.0, 0.5)), ("PERSON", (2.0, 2.5))],
-        )
-        scanned = _stub_pii_sequence(monkeypatch, [[("LOCATION", "rainbow")], [("LOCATION", "rainbow")]])
-        result = redact(
-            store, "recording", redact_config, _hint(RAINBOW), run_dir=tmp_path, artifacts_dir=_release(tmp_path)
-        )
-        assert scanned == ["rainbow with [PERSON]"], "the node re-planned over an accounted-for candidate"
-        assert result.verdict.outcome is Outcome.PASS
-        assert _verdict_entity(store, "REDACT").attributes["replanned_n"] == 0
-
-    def test_a_replan_over_a_shared_category_widens_past_the_exempt_word(
-        self,
-        store: ProvStore,
-        redact_config: TriageConfig,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """The one case where both halves of the exemption are live at once.
-
-        ``rainbow`` and ``Alice`` both carry LOCATION. ``Alice`` is not accounted for, so LOCATION is
-        outstanding and the re-plan runs — and it must widen onto ``Alice`` alone. Widening onto both
-        would undo the exemption on the very pass that exists to catch what the first plan missed,
-        which is the failure a skip that is only exercised here can hide.
-        """
-        _seed_redact_store(
-            store,
-            tmp_path,
-            words=["rainbow", "with", "Alice"],
-            findings=[("LOCATION", (0.0, 0.5))],
-            extra_marks=[("Alice", "LOCATION")],
-        )
-        scanned = _stub_pii_sequence(monkeypatch, [[("LOCATION", "Alice")], []])
-        result = redact(
-            store, "recording", redact_config, _hint(RAINBOW), run_dir=tmp_path, artifacts_dir=_release(tmp_path)
-        )
-        assert scanned[0] == "rainbow with Alice"
-        assert scanned[1] == "rainbow with [LOCATION]", "the re-plan widened onto an accounted-for word"
-        assert result.verdict.outcome is Outcome.PASS
-        assert result.artifacts["transcript"].read_text().split() == ["rainbow", "with", "[LOCATION]"]
-        assert _verdict_entity(store, "REDACT").attributes["replanned_n"] == 1
-
-    def test_a_survivor_no_exempt_word_explains_still_fails(
-        self,
-        store: ProvStore,
-        redact_config: TriageConfig,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """The exemption attributes one category to one word; it is not an amnesty on the category."""
-        _seed_redact_store(
-            store,
-            tmp_path,
-            words=["rainbow", "with", "Alice"],
-            findings=[("LOCATION", (0.0, 0.5))],
-            extra_marks=[("Alice", "PERSON")],
-        )
-        _stub_pii(monkeypatch, findings=[("PERSON", "Alice")])
-        result = redact(
-            store, "recording", redact_config, _hint(RAINBOW), run_dir=tmp_path, artifacts_dir=_release(tmp_path)
-        )
-        assert result.verdict.outcome is Outcome.FAIL
-        assert _verdict_entity(store, "REDACT").attributes["unremediable"] == ["PERSON"]
-        assert result.artifacts == {}
-
 
 class TestNoHintIsNoChange:
     """With no hint, or a hint declaring no utterance, the node is what it was."""
@@ -2242,20 +1838,6 @@ class TestNoHintIsNoChange:
         assert _exemptions(store) == []
         detail = _verdict_entity(store, "REDACT").attributes
         assert detail["expected_exempt_n"] == 0 and detail["expected_speech_declared"] is False
-
-    def test_a_survivor_without_a_hint_still_fails(
-        self,
-        store: ProvStore,
-        redact_config: TriageConfig,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """The control on the survivor path: no exemption can be manufactured out of no hint."""
-        _seed_redact_store(store, tmp_path, words=["form", "a", "rainbow"], findings=[("LOCATION", (2.0, 2.5))])
-        _stub_pii(monkeypatch, findings=[("LOCATION", "rainbow")])
-        result = redact(store, "recording", redact_config, None, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
-        assert result.verdict.outcome is Outcome.FAIL
-        assert result.artifacts == {}
 
 
 class TestTheRedactedConsensusArtifact:
@@ -2367,8 +1949,10 @@ class TestTheRedactedConsensusArtifact:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """The control: the new artifact is on the same release gate as the other two."""
-        _seed_redact_store(store, tmp_path, words=["hello", "Alice"], findings=[("PERSON", (1.0, 2.0))])
-        _stub_pii(monkeypatch, findings=[("PERSON", "Alice")])
+        _seed_redact_store(
+            store, tmp_path, words=["hello", "Alice"], findings=[("PERSON", (1.0, 2.0))], scan_failed=["gliner"]
+        )
+        _stub_pii(monkeypatch, findings=[])
         result = redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
         assert result.artifacts == {}
 
@@ -2430,8 +2014,10 @@ class TestTheRedactedStream:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """The run directory is the store side, never the release side; a withheld run still records it."""
-        _seed_redact_store(store, tmp_path, words=["hello", "Alice"], findings=[("PERSON", (1.0, 2.0))])
-        _stub_pii(monkeypatch, findings=[("PERSON", "Alice")])
+        _seed_redact_store(
+            store, tmp_path, words=["hello", "Alice"], findings=[("PERSON", (1.0, 2.0))], scan_failed=["gliner"]
+        )
+        _stub_pii(monkeypatch, findings=[])
         result = redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
         assert result.artifacts == {}
         assert not _release(tmp_path).exists() or not list(_release(tmp_path).iterdir())
@@ -2514,66 +2100,12 @@ class TestWhatTheStoreRecords:
         (software,) = associated[0]
         assert store.get_agent(software).agent_type == "software", "and it is software, not a model"
 
-    def test_the_widen_path_records_what_it_read_and_what_caused_it(
-        self,
-        store: ProvStore,
-        redact_config: TriageConfig,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """A re-plan that leaves no edges is a redaction nobody can trace to its cause.
-
-        The plan read the markings, the verification read the transcript it verified, and the span the
-        re-plan added derives from the finding the re-scan placed on the word it read.
-        """
-        _seed_redact_store(
-            store,
-            tmp_path,
-            words=["Jane", "Doe", "here"],
-            findings=[("PERSON", (0.0, 0.5))],
-            extra_marks=[("Doe", "PERSON")],
-        )
-        _stub_pii_sequence(monkeypatch, [[("PERSON", "Doe")], []])
-        doe = next(w for w in store.entities("word") if w.attributes.get("text") == "Doe")
-        marking = next(e for e in store.entities("assertion") if doe.id in store.derived_from(e.id))
-        consensus = next(e for e in store.entities("measurement") if e.attributes.get("name") == "consensus_transcript")
-        redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
-
-        plan_act = next(a for a in store.activities("REDACT") if a.step == "plan")
-        verify_act = next(a for a in store.activities("REDACT") if a.step == "verify")
-        assert marking.id in store.uses_of(plan_act.id), "the plan consulted the markings"
-        assert consensus.id in store.uses_of(verify_act.id), "verification read the transcript measurement"
-        assert {w.id for w in store.entities("word")} <= set(store.uses_of(verify_act.id))
-
-        (rescanned,) = [e for e in store.entities("pii") if e.attributes.get("source") == RESCAN_SOURCE]
-        assert rescanned.attributes["word_ids"] == [doe.id]
-        spans = [e for e in store.entities("span") if e.attributes.get("name") == "redaction"]
-        widened = next(
-            span for span in spans if span.extent is not None and span.extent[0] < 1.5 and span.extent[1] > 1.0
-        )
-        assert rescanned.id in store.derived_from(widened.id), "the widened span names the finding that caused it"
-
 
 class TestTheReScanDoesNotReadBracketedTokens:
     """SPEECH stopped scanning them; the verification re-scan must stop too, or nothing releases.
 
     See ``specs/20260922-brackets-are-not-speech/design.md``.
     """
-
-    def test_the_rescan_is_handed_no_bracketed_token(
-        self,
-        store: ProvStore,
-        redact_config: TriageConfig,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """A filler token survives into the released transcript and must not be re-scanned."""
-        _seed_redact_store(
-            store, tmp_path, words=["[UH]", "my", "name", "is", "Alice"], findings=[("PERSON", (4.0, 4.5))]
-        )
-        scanned = _stub_pii(monkeypatch, findings=[])
-        redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
-        assert scanned == ["my name is [PERSON]"]
 
     def test_the_released_transcript_still_carries_it(
         self,
@@ -2591,21 +2123,6 @@ class TestTheReScanDoesNotReadBracketedTokens:
         result = redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=release)
         assert result.verdict.outcome is Outcome.PASS
         assert (release / "transcript.txt").read_text().strip() == "[UH] my name is [PERSON]"
-
-    def test_a_survivor_outside_the_brackets_still_fails_the_release(
-        self,
-        store: ProvStore,
-        redact_config: TriageConfig,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """The guard against over-narrowing: a real survivor is still a fail."""
-        _seed_redact_store(
-            store, tmp_path, words=["[UH]", "my", "name", "is", "Alice"], findings=[("PERSON", (4.0, 4.5))]
-        )
-        _stub_pii(monkeypatch, findings=[("PERSON", "Alice")])
-        result = redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
-        assert result.verdict.outcome is not Outcome.PASS
 
 
 class TestAMaskIsAFindingsOwnWords:
@@ -3826,3 +3343,73 @@ def _masked_indices(store: ProvStore, plan: MaskPlan) -> list[int]:
     """The stream positions of the words the plan keeps masked."""
     kept = {word.word_id for mask in plan.masks for word in mask.words if word.state == MASKED}
     return [int(word.attributes["index"]) for word in store.entities("word") if word.id in kept]
+
+
+class TestWhatShipsIsVerifiedNotReDetected:
+    """Owner, 2026-10-10: detect once on the original; verify that each final mask covers its words; never re-detect."""
+
+    def test_redact_runs_no_detector_over_its_redacted_text(
+        self, store: ProvStore, redact_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A detector that would read a name on the redacted text is never asked; REDACT passes on coverage."""
+        _seed_redact_store(store, tmp_path, words=["my", "name", "is", "Alice"], findings=[("PERSON", (3.0, 4.0))])
+        scanned = _stub_pii(monkeypatch, findings=[("PERSON", "Smith")])
+        result = redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
+        assert scanned == []
+        assert result.verdict.outcome is Outcome.PASS
+        assert _verdict_entity(store, "REDACT").attributes["coverage"]["ok"] is True
+
+    def test_a_kinship_word_a_detector_read_as_a_person_is_released(
+        self, store: ProvStore, redact_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The policy releases a kinship word by kind; nothing withholds and the original is released."""
+        _seed_redact_store(store, tmp_path, words=["my", "Mom", "said"], findings=[("PERSON", _word_extent(1))])
+        _stub_pii(monkeypatch, findings=[])
+        redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
+        folded = verdict_module.verdict(store, None, redact_config, run_dir=tmp_path).file_verdict
+        assert folded.release is Release.AS_IS
+
+    def test_instruction_words_a_detector_read_as_a_person_are_task_text(
+        self, store: ProvStore, redact_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A finding on the words of the task's own instructions is never masked."""
+        _seed_redact_store(
+            store, tmp_path, words=["describe", "Cinderella", "slowly"], findings=[("PERSON", _word_extent(1))]
+        )
+        _stub_pii(monkeypatch, findings=[])
+        hint = AudioHints(instructions="Tell the story of Cinderella.")
+        redact(store, "recording", redact_config, hint, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
+        folded = verdict_module.verdict(store, None, redact_config, hint, run_dir=tmp_path).file_verdict
+        assert folded.release is Release.AS_IS
+
+    def test_a_real_name_is_masked_not_withheld(
+        self, store: ProvStore, redact_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A name the first pass found is masked, and the copy covering it is released."""
+        _seed_redact_store(store, tmp_path, words=["I", "met", "Bartholomew"], findings=[("PERSON", _word_extent(2))])
+        _stub_pii(monkeypatch, findings=[])
+        redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
+        folded = verdict_module.verdict(store, None, redact_config, run_dir=tmp_path).file_verdict
+        assert folded.release is Release.REDACTED
+
+    def test_coverage_names_untimed_shown_and_audible_masks(self, store: ProvStore, tmp_path: Path) -> None:
+        """A word no mask reaches is shown in the text; a mask over unchanged audio is audible."""
+        _seed_redact_store(store, tmp_path, words=["hello", "Alice"])
+        words = consensus_words(store)
+        _, audio = resolve_stream(store, tmp_path, "recording")
+        mask = [RedactionExtent(start=1.0, end=1.5, category="PERSON")]
+        ok = mask_coverage(
+            words, mask, {words[1].id}, audio, apply_redactions(audio, mask, fill="silence"), fill="silence"
+        )
+        assert ok.ok
+        missed = mask_coverage(words, [], {words[1].id}, audio, audio, fill="silence")
+        assert missed.text_uncovered_n == 1 and not missed.ok
+        audible = mask_coverage(words, mask, {words[1].id}, audio, audio, fill="silence")
+        assert audible.audio_uncovered_n == 1
+
+    def test_a_coverage_failure_withholds(self) -> None:
+        """The final plan's masks not covering their words holds the recording on the coverage ground."""
+        from senselab.audio.workflows.triage.vocabulary import MASK_COVERAGE_FAILED, RedactionEvidence, final_release
+
+        evidence = RedactionEvidence(masks_final_n=1, coverage_failed=True)
+        assert final_release(Release.REDACTED, None, evidence) == (Release.WITHHELD, MASK_COVERAGE_FAILED)
