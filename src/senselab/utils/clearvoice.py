@@ -398,7 +398,9 @@ def _setup(args, staging):
 """
 
 # Audio-only checkpoints, served by senselab.utils.venv_worker: one load per worker, one request per call.
-_AUDIO_WORKER_SCRIPT = _SETUP_SCRIPT + r"""
+_AUDIO_WORKER_SCRIPT = (
+    _SETUP_SCRIPT
+    + r"""
 
 
 def load(init):
@@ -463,10 +465,13 @@ def handle(state, args):
             scalars.append(float(scalar))
     return {"output_paths": written, "input_norm_scalars": scalars, "device": str(state["device"])}
 """
+)
 
 # The audio-visual checkpoint, one process per call: upstream's TSE path has no tensor-in/tensor-out
 # entry point and writes its tracks to disk.
-_TSE_WORKER_SCRIPT = _SETUP_SCRIPT + r"""
+_TSE_WORKER_SCRIPT = (
+    _SETUP_SCRIPT
+    + r"""
 import json
 
 try:
@@ -525,6 +530,7 @@ except Exception as exc:
     )
     sys.exit(1)
 """
+)
 
 
 def default_audio_timeout_s(total_audio_s: float) -> float:
