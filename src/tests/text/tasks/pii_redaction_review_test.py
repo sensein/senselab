@@ -685,7 +685,7 @@ def test_the_prompt_states_the_time_expression_rule_and_the_cue_word_rule() -> N
     """v7: weekdays and relative times are released, absolute dates are not; a cue word's definition is task content."""
     from senselab.text.tasks.pii_detection import redaction_review as r
 
-    assert r.PROMPT_VERSION == 12
+    assert r.PROMPT_VERSION == 13
     assert "2-3 weeks ago" in r._PROMPT and "this morning" in r._PROMPT and '"Monday"' in r._PROMPT
     assert "gladiator" in r._PROMPT and "hotel" in r._PROMPT
 
@@ -776,7 +776,7 @@ def test_the_reading_records_which_inputs_it_had() -> None:
     )
     assert {key: full[key] for key in ("version", "prompt_version", "task", "full_transcript", "pii_annotations")} == {
         "version": 3,
-        "prompt_version": 12,
+        "prompt_version": 13,
         "task": True,
         "full_transcript": True,
         "pii_annotations": True,
@@ -892,6 +892,44 @@ def test_v12_malformed_task_reading_parts_read_as_unanswered() -> None:
     assert parsed.other_speaker_quotes == [] and parsed.off_task_quotes == [] and parsed.task_content_quotes == []
     silent = parse_completion("REASONING: x\nPROPOSAL: []\n")
     assert silent.other_speaker is None and silent.off_task_speech is None and silent.off_task_quotes == []
+
+
+def test_v13_an_item_set_task_is_asked_about_phrases_instead_of_items() -> None:
+    """Owner, 2026-10-10: an item-set task's point 8 asks about phrases, not off-task speech; the rest is shared."""
+    from senselab.text.tasks.pii_detection import redaction_review as r
+
+    items = r.review_prompt(True)
+    assert r.review_prompt(False) == r._PROMPT
+    assert "PHRASES_INSTEAD_OF_ITEMS:" in items and "PHRASE_QUOTES:" in items
+    assert "OFF_TASK_SPEECH:" not in items and "OFF_TASK_QUOTES:" not in items
+    assert "let me think" in items and "my dog\'s name is" in items
+    assert items.replace(r._POINT_8_PHRASES, "").replace(r._PHRASE_PARTS, "") == r._PROMPT.replace(
+        r._POINT_8_OFF_TASK, ""
+    ).replace(r._OFF_TASK_PARTS, "")
+
+
+def test_v13_the_phrase_reading_is_parsed_checked_and_recorded() -> None:
+    """The phrases part parses into its field, needs a quote when not none, and reaches the payload."""
+    from senselab.text.tasks.pii_detection.redaction_review import (
+        ReviewResult,
+        answer_problem,
+        parse_completion,
+        review_payload,
+    )
+
+    answer = _V12_ANSWER.replace("OFF_TASK_SPEECH: some\n", "PHRASES_INSTEAD_OF_ITEMS: predominant\n").replace(
+        'OFF_TASK_QUOTES: ["is that enough"]', 'PHRASE_QUOTES: ["my dog is old"]'
+    )
+    parsed = parse_completion(answer)
+    assert parsed.phrases_instead_of_items == "predominant" and parsed.phrase_quotes == ["my dog is old"]
+    assert parsed.off_task_speech is None and parsed.task_content_quotes == ["lion", "zebra"]
+    assert parse_completion(answer.replace("predominant", "lots")).phrases_instead_of_items is None
+    unquoted = ReviewResult(available=True, phrases_instead_of_items="occasional")
+    assert "PHRASE_QUOTES" in str(answer_problem(unquoted, "lion zebra", None))
+    unheard = ReviewResult(available=True, phrases_instead_of_items="predominant", phrase_quotes=["purple"])
+    assert "do not occur" in str(answer_problem(unheard, "lion zebra", None))
+    payload = review_payload(ReviewResult(available=True, phrases_instead_of_items="none"))
+    assert payload["phrases_instead_of_items"] == "none" and payload["phrase_quotes"] == []
 
 
 def test_v12_task_reading_quotes_are_checked_and_a_judgment_needs_one() -> None:

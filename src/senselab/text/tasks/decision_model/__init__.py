@@ -14,14 +14,17 @@ from senselab.text.tasks.decision_model.ollama import (
     verify_pin,
 )
 from senselab.text.tasks.decision_model.second_opinion import (
+    ITEM_SET_QUESTIONS,
     QUESTION_SET_VERSION,
     QUESTIONS,
     SecondOpinion,
     ask_second_opinion,
+    questions_for,
     read_answers,
 )
 
 __all__ = [
+    "ITEM_SET_QUESTIONS",
     "QUESTIONS",
     "QUESTION_SET_VERSION",
     "OllamaPin",
@@ -31,6 +34,7 @@ __all__ = [
     "SecondOpinion",
     "ask_decisions",
     "ask_second_opinion",
+    "questions_for",
     "read_answers",
     "verify_pin",
 ]

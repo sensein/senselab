@@ -52,10 +52,12 @@ from senselab.audio.workflows.triage.nodes.redact import (
 from senselab.audio.workflows.triage.nodes.redact import STREAM_NAME as REDACTED_STREAM
 from senselab.audio.workflows.triage.residue import VOCAL, is_non_lexical
 from senselab.audio.workflows.triage.task_lexicon import TaskLexicon, task_lexicon
+from senselab.audio.workflows.triage.task_speech import item_set_family
 from senselab.audio.workflows.triage.vocabulary import PII_SCAN, REDACTION_LLM_ANNOTATION, SCANNED
 from senselab.text.tasks.pii_detection.redaction_review import (
     CONSENSUS_HAYSTACK,
     CONSENSUS_TRANSCRIPT,
+    ITEM_SET,
     PROMPT_VERSION,
     REDACT,
     REVIEW_INPUTS_VERSION,
@@ -144,6 +146,8 @@ class _Reading:
             ``why``; recorded, never masked.
         off_task_speech: The last answering round's ``none`` / ``some`` / ``extensive``, or None.
         off_task_quotes: The off-task passages it quoted.
+        phrases_instead_of_items: In an item-set task, its ``none`` / ``occasional`` / ``predominant``, or None.
+        phrase_quotes: The phrases it quoted as said instead of items.
         other_speaker: Its ``none`` / ``assistant`` / ``background`` / ``unclear``, or None.
         other_speaker_quotes: The passages it attributed to the other speaker.
         task_content_quotes: The PII-annotated words it judged task content.
@@ -166,26 +170,30 @@ class _Reading:
     conditions: tuple[dict[str, str], ...] = ()
     off_task_speech: str | None = None
     off_task_quotes: tuple[str, ...] = ()
+    phrases_instead_of_items: str | None = None
+    phrase_quotes: tuple[str, ...] = ()
     other_speaker: str | None = None
     other_speaker_quotes: tuple[str, ...] = ()
     task_content_quotes: tuple[str, ...] = ()
 
 
-TASK_READING_QUOTES = ("off_task_quotes", "other_speaker_quotes", "task_content_quotes")
+TASK_READING_QUOTES = ("off_task_quotes", "phrase_quotes", "other_speaker_quotes", "task_content_quotes")
 """The task reading's quote lists, on a round's payload, a reading and the annotation alike."""
 
 
 def _task_reading(payload: Mapping[str, Any]) -> dict[str, Any]:
-    """The five task-reading fields of one round's payload or one stored reading.
+    """The task-reading fields of one round's payload or one stored reading.
 
     Args:
         payload: A :func:`review_payload` mapping, or an annotation's attributes.
 
     Returns:
-        ``off_task_speech`` and ``other_speaker`` (a string or None) and the three quote lists as tuples.
+        ``off_task_speech``, ``phrases_instead_of_items`` and ``other_speaker`` (a string or None) and the
+        quote lists as tuples.
     """
     fields_: dict[str, Any] = {
         "off_task_speech": payload.get("off_task_speech") or None,
+        "phrases_instead_of_items": payload.get("phrases_instead_of_items") or None,
         "other_speaker": payload.get("other_speaker") or None,
     }
     for key in TASK_READING_QUOTES:
@@ -237,7 +245,8 @@ def task_context(store: ProvStore, hint: AudioHints | None, lexicon: TaskLexicon
 
     Returns:
         ``task`` (the family), ``task_name``, ``task_nature`` (from
-        :func:`~senselab.text.tasks.pii_detection.redaction_review.task_nature`), ``speech_type`` (the
+        :func:`~senselab.text.tasks.pii_detection.redaction_review.task_nature`), ``item_set`` (True for an
+        item-set family, :func:`~senselab.audio.workflows.triage.task_speech.item_set_family`), ``speech_type`` (the
         hint's, else its metadata's), ``language``, ``instructions``, ``asked_to_say``, ``declared_names``
         and ``task_words``, each omitted where the recording declares none, and ``instructions_from`` and
         ``stimulus_from`` naming where those texts came from.
@@ -252,6 +261,8 @@ def task_context(store: ProvStore, hint: AudioHints | None, lexicon: TaskLexicon
         nature = task_nature(str(family))
         if nature:
             context["task_nature"] = nature
+        if item_set_family(str(family)):
+            context[ITEM_SET] = True
     if hint is not None and hint.metadata.get("task_name"):
         context["task_name"] = str(hint.metadata["task_name"])
     speech_type = (hint.speech_type or hint.metadata.get("speech_type")) if hint is not None else None
@@ -920,6 +931,8 @@ def review(store: ProvStore, config: TriageConfig, hint: AudioHints | None = Non
             "conditions": [dict(entry) for entry in reading.conditions],
             "off_task_speech": reading.off_task_speech,
             "off_task_quotes": list(reading.off_task_quotes),
+            "phrases_instead_of_items": reading.phrases_instead_of_items,
+            "phrase_quotes": list(reading.phrase_quotes),
             "other_speaker": reading.other_speaker,
             "other_speaker_quotes": list(reading.other_speaker_quotes),
             "task_content_quotes": list(reading.task_content_quotes),

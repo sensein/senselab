@@ -77,9 +77,11 @@ _OTHER_SPEAKER_ROLE_HEADING = "OTHER_SPEAKER_ROLE:"
 _OTHER_SPEAKER_QUOTES_HEADING = "OTHER_SPEAKER_QUOTES:"
 _OFF_TASK_SPEECH_HEADING = "OFF_TASK_SPEECH:"
 _OFF_TASK_QUOTES_HEADING = "OFF_TASK_QUOTES:"
+_PHRASES_HEADING = "PHRASES_INSTEAD_OF_ITEMS:"
+_PHRASE_QUOTES_HEADING = "PHRASE_QUOTES:"
 _TASK_CONTENT_QUOTES_HEADING = "TASK_CONTENT_QUOTES:"
 
-PROMPT_VERSION = 12
+PROMPT_VERSION = 13
 """The prompt and its parse, as one number: it changes whenever either changes what a reading holds."""
 
 REVIEW_INPUTS_VERSION = 3
@@ -111,6 +113,16 @@ SPEAKER_STATES = ("one", "more_than_one", "unclear")
 
 OFF_TASK_STATES = ("none", "some", "extensive")
 """How much of the recording the participant spends off the task."""
+
+PHRASES_NONE = "none"
+PHRASES_OCCASIONAL = "occasional"
+PHRASES_PREDOMINANT = "predominant"
+PHRASE_STATES = (PHRASES_NONE, PHRASES_OCCASIONAL, PHRASES_PREDOMINANT)
+"""In an item-set task, whether the participant utters phrases instead of items."""
+
+ITEM_SET = "item_set"
+"""The context key that is True where the declared task is an item-set task: it is asked about phrases instead
+of items, not about off-task speech (:func:`review_prompt`)."""
 
 OTHER_SPEAKER_ROLES = ("none", "assistant", "background", "unclear")
 """Who besides the participant speaks: nobody, an assistant or examiner, someone in the background, or unclear."""
@@ -324,6 +336,35 @@ def redaction_policy_text() -> str:
     return _POLICY + _identifier_rule()
 
 
+_POINT_8_OFF_TASK = (
+    "8. Whether the participant stopped doing the task and talked about something else: a remark, a "
+    "question, a story or a conversation that is not what the instructions ask for. Asking whether "
+    'they are done ("Is that enough?") is some; talking at length about something else is extensive. In a '
+    "non-lexical task (breathing, coughing, phonation, repeated syllables) any words the participant says "
+    "are off-task.\n"
+)
+_OFF_TASK_PARTS = (
+    "OFF_TASK_SPEECH: one of none, some, extensive (point 8).\n"
+    "OFF_TASK_QUOTES: a JSON array of strings, each an exact passage, quoted from the ORIGINAL, where the "
+    "participant talks off-task. Return [] when OFF_TASK_SPEECH is none; otherwise quote at least one.\n"
+)
+_POINT_8_PHRASES = (
+    "8. This task asks for a list of items. Whether the participant is uttering phrases instead of items. An "
+    "item is a short unit, typically one to three words: a name, a number, a letter, an animal, whatever the "
+    "instructions ask for. A phrase is clausal speech, a clause or sentence rather than an item "
+    '("I don\'t know what else to say", "my dog\'s name is ..."). Occasional asides ("um", "let me think", '
+    '"is that enough?") are normal in this task and are not phrases instead of items. Answer none where the '
+    "participant lists items, asides or not; occasional where a few phrases come between the items; "
+    "predominant where phrases make up much of the recording, the list giving way to narration or "
+    "conversation.\n"
+)
+_PHRASE_PARTS = (
+    "PHRASES_INSTEAD_OF_ITEMS: one of none, occasional, predominant (point 8).\n"
+    "PHRASE_QUOTES: a JSON array of strings, each an exact phrase the participant said instead of items, "
+    "quoted from the ORIGINAL. Return [] when PHRASES_INSTEAD_OF_ITEMS is none; otherwise quote at least one.\n"
+)
+
+
 _PROMPT = (
     "You are auditing one recording's transcript before it is released. You are given the "
     "ORIGINAL words as transcribed, and where an automatic redaction has already been applied, "
@@ -398,12 +439,8 @@ _PROMPT = (
     "generation or fluency the task asks for names, places and numbers, so an item said as part of the "
     "list usually is not; in reading or recall the given text's words are task content; in a non-lexical "
     "task no word is task content.\n"
-    "8. Whether the participant stopped doing the task and talked about something else: a remark, a "
-    "question, a story or a conversation that is not what the instructions ask for. Asking whether "
-    'they are done ("Is that enough?") is some; talking at length about something else is extensive. In a '
-    "non-lexical task (breathing, coughing, phonation, repeated syllables) any words the participant says "
-    "are off-task.\n"
-    "9. Whether anyone besides the participant speaks, and who: an assistant, examiner or clinician "
+    + _POINT_8_OFF_TASK
+    + "9. Whether anyone besides the participant speaks, and who: an assistant, examiner or clinician "
     "(reading the instructions aloud, prompting, encouraging, counting, asking the participant to start "
     "or stop), or someone in the background (a conversation, a television, another person in the room "
     "not addressing the participant). Judge it from the words, as under point 4.\n\n"
@@ -423,10 +460,8 @@ _PROMPT = (
     "task; background for anyone else).\n"
     "OTHER_SPEAKER_QUOTES: a JSON array of strings, each the exact words another person said, quoted from the "
     "ORIGINAL. Return [] when OTHER_SPEAKER_ROLE is none; otherwise quote at least one passage.\n"
-    "OFF_TASK_SPEECH: one of none, some, extensive (point 8).\n"
-    "OFF_TASK_QUOTES: a JSON array of strings, each an exact passage, quoted from the ORIGINAL, where the "
-    "participant talks off-task. Return [] when OFF_TASK_SPEECH is none; otherwise quote at least one.\n"
-    "TASK_CONTENT_QUOTES: a JSON array of strings, each a word or phrase carrying a pii annotation that you "
+    + _OFF_TASK_PARTS
+    + "TASK_CONTENT_QUOTES: a JSON array of strings, each a word or phrase carrying a pii annotation that you "
     "judge under point 7 to be task content, quoted exactly from the ORIGINAL. Return [] when there is none.\n"
     "CONDITIONS: a JSON array of every diagnosis under point 5. Each element is an object with "
     'keys "text" (the exact words, quoted from the ORIGINAL) and "why" (one sentence: which diagnosis it is). '
@@ -458,6 +493,22 @@ _PROMPT = (
     "street, the PROPOSAL must carry an entry quoting it: redact a specific named one, or release a "
     "generic description with the reason.\n\n"
 )
+
+
+_ITEM_SET_PROMPT = _PROMPT.replace(_POINT_8_OFF_TASK, _POINT_8_PHRASES).replace(_OFF_TASK_PARTS, _PHRASE_PARTS)
+
+
+def review_prompt(item_set: bool) -> str:
+    """The reviewer's instructions.
+
+    Args:
+        item_set: Whether the declared task is an item-set task (the context's :data:`ITEM_SET`).
+
+    Returns:
+        The prompt; for an item-set task point 8 and its parts ask whether the participant utters phrases
+        instead of items (:data:`PHRASE_STATES`) in place of off-task speech.
+    """
+    return _ITEM_SET_PROMPT if item_set else _PROMPT
 
 
 _BARE_READING = re.compile(r"[^\s{}|=<>;,]+")
@@ -752,6 +803,8 @@ class ReviewResult:
             included.
         off_task_speech: One of :data:`OFF_TASK_STATES`, or None where the answer gave none of them.
         off_task_quotes: The passages the OFF_TASK_QUOTES part quotes.
+        phrases_instead_of_items: One of :data:`PHRASE_STATES`, or None where the answer gave none of them.
+        phrase_quotes: The phrases the PHRASE_QUOTES part quotes.
         other_speaker: One of :data:`OTHER_SPEAKER_ROLES`, or None where the answer gave none of them.
         other_speaker_quotes: The passages the OTHER_SPEAKER_QUOTES part quotes.
         task_content_quotes: The PII-annotated words the TASK_CONTENT_QUOTES part judges task content.
@@ -788,6 +841,8 @@ class ReviewResult:
     instructions_answered: bool = True
     off_task_speech: Optional[str] = None
     off_task_quotes: list[str] = field(default_factory=list)
+    phrases_instead_of_items: Optional[str] = None
+    phrase_quotes: list[str] = field(default_factory=list)
     other_speaker: Optional[str] = None
     other_speaker_quotes: list[str] = field(default_factory=list)
     task_content_quotes: list[str] = field(default_factory=list)
@@ -961,6 +1016,8 @@ class ParsedCompletion:
         instructions_answered: Whether the answer carried an INSTRUCTIONS_SPOKEN part whose array parsed.
         off_task_speech: One of :data:`OFF_TASK_STATES`, or None.
         off_task_quotes: The OFF_TASK_QUOTES part's quoted passages.
+        phrases_instead_of_items: One of :data:`PHRASE_STATES`, or None.
+        phrase_quotes: The PHRASE_QUOTES part's quoted phrases.
         other_speaker: One of :data:`OTHER_SPEAKER_ROLES`, or None.
         other_speaker_quotes: The OTHER_SPEAKER_QUOTES part's quoted passages.
         task_content_quotes: The TASK_CONTENT_QUOTES part's quoted words.
@@ -978,6 +1035,8 @@ class ParsedCompletion:
     instructions_answered: bool = False
     off_task_speech: Optional[str] = None
     off_task_quotes: list[str] = field(default_factory=list)
+    phrases_instead_of_items: Optional[str] = None
+    phrase_quotes: list[str] = field(default_factory=list)
     other_speaker: Optional[str] = None
     other_speaker_quotes: list[str] = field(default_factory=list)
     task_content_quotes: list[str] = field(default_factory=list)
@@ -1057,6 +1116,7 @@ _ARRAY_HEADINGS = (
     _INSTRUCTIONS_SPOKEN_HEADING,
     _OTHER_SPEAKER_QUOTES_HEADING,
     _OFF_TASK_QUOTES_HEADING,
+    _PHRASE_QUOTES_HEADING,
     _TASK_CONTENT_QUOTES_HEADING,
 )
 _LABEL_HEADINGS = (
@@ -1065,6 +1125,7 @@ _LABEL_HEADINGS = (
     _SPEAKERS_HEADING,
     _OTHER_SPEAKER_ROLE_HEADING,
     _OFF_TASK_SPEECH_HEADING,
+    _PHRASES_HEADING,
 )
 
 
@@ -1085,8 +1146,8 @@ def parse_completion(completion: str) -> ParsedCompletion:
         rather than raising -- a caller reads ``available`` to tell that from a reviewer that read the
         text and would change nothing, and ``conditions_answered`` to tell a missing CONDITIONS part
         from one that listed none. A one-word part outside its allowed words reads as the empty string
-        for ``redaction``, ``original`` and ``speakers``, and as None for ``off_task_speech`` and
-        ``other_speaker``.
+        for ``redaction``, ``original`` and ``speakers``, and as None for ``off_task_speech``,
+        ``phrases_instead_of_items`` and ``other_speaker``.
     """
     at = {heading: _heading_at(completion, heading) for heading in _ARRAY_HEADINGS + _LABEL_HEADINGS}
     found = sorted(position for position in at.values() if position != -1)
@@ -1163,6 +1224,8 @@ def parse_completion(completion: str) -> ParsedCompletion:
         instructions_answered=spoken_parsed is not None,
         off_task_speech=_labelled(completion, _OFF_TASK_SPEECH_HEADING, OFF_TASK_STATES) or None,
         off_task_quotes=_quotes(parsed(_OFF_TASK_QUOTES_HEADING)),
+        phrases_instead_of_items=_labelled(completion, _PHRASES_HEADING, PHRASE_STATES) or None,
+        phrase_quotes=_quotes(parsed(_PHRASE_QUOTES_HEADING)),
         other_speaker=_labelled(completion, _OTHER_SPEAKER_ROLE_HEADING, OTHER_SPEAKER_ROLES) or None,
         other_speaker_quotes=_quotes(parsed(_OTHER_SPEAKER_QUOTES_HEADING)),
         task_content_quotes=_quotes(parsed(_TASK_CONTENT_QUOTES_HEADING)),
@@ -1290,6 +1353,11 @@ def answer_problem(result: "ReviewResult", original: str | Sequence[str], redact
             f"you judged OFF_TASK_SPEECH {result.off_task_speech} but OFF_TASK_QUOTES quoted nothing; quote each "
             "off-task passage exactly from the ORIGINAL"
         )
+    if result.phrases_instead_of_items in (PHRASES_OCCASIONAL, PHRASES_PREDOMINANT) and not result.phrase_quotes:
+        return (
+            f"you judged PHRASES_INSTEAD_OF_ITEMS {result.phrases_instead_of_items} but PHRASE_QUOTES quoted "
+            "nothing; quote each phrase exactly from the ORIGINAL"
+        )
     if result.other_speaker in ("assistant", "background") and not result.other_speaker_quotes:
         return (
             f"you judged OTHER_SPEAKER_ROLE {result.other_speaker} but OTHER_SPEAKER_QUOTES quoted nothing; quote "
@@ -1369,6 +1437,7 @@ def answer_problem(result: "ReviewResult", original: str | Sequence[str], redact
         + [entry.text for entry in result.other_speakers]
         + list(result.instructions_spoken)
         + list(result.off_task_quotes)
+        + list(result.phrase_quotes)
         + list(result.other_speaker_quotes)
         + list(result.task_content_quotes)
     )
@@ -1504,11 +1573,12 @@ class _ReviewWorker:
         """Whether the worker process is still running and still holding its weights."""
         return self._process is not None and self._process.poll() is None
 
-    def review(self, text: str, max_new_tokens: int, timeout_s: int) -> dict[str, Any]:
+    def review(self, text: str, prompt: str, max_new_tokens: int, timeout_s: int) -> dict[str, Any]:
         """Ask the loaded model for one review.
 
         Args:
             text: The redacted transcript.
+            prompt: The instructions (:func:`review_prompt`).
             max_new_tokens: Generation ceiling.
             timeout_s: Wall-clock ceiling on this generation alone.
 
@@ -1518,7 +1588,7 @@ class _ReviewWorker:
         Raises:
             ReviewWorkerError: If the worker died, raised, or did not answer in time.
         """
-        self._send({"text": text, "prompt": _PROMPT, "max_new_tokens": int(max_new_tokens)})
+        self._send({"text": text, "prompt": prompt, "max_new_tokens": int(max_new_tokens)})
         return self._await(timeout_s)
 
     def close(self) -> None:
@@ -1733,7 +1803,12 @@ def review_transcript(
     with _WORKER_LOCK:
         try:
             worker, load_s = _worker_for(model_id, revision, timeout_s)
-            output = worker.review(_compose(original, redacted, context, feedback), max_new_tokens, timeout_s)
+            output = worker.review(
+                _compose(original, redacted, context, feedback),
+                review_prompt(bool((context or {}).get(ITEM_SET))),
+                max_new_tokens,
+                timeout_s,
+            )
         except Exception as exc:  # noqa: BLE001 — every failure mode becomes a recorded absence
             return ReviewResult(
                 available=False,
@@ -1760,6 +1835,8 @@ def review_transcript(
         instructions_answered=parsed.instructions_answered,
         off_task_speech=parsed.off_task_speech,
         off_task_quotes=parsed.off_task_quotes,
+        phrases_instead_of_items=parsed.phrases_instead_of_items,
+        phrase_quotes=parsed.phrase_quotes,
         other_speaker=parsed.other_speaker,
         other_speaker_quotes=parsed.other_speaker_quotes,
         task_content_quotes=parsed.task_content_quotes,
@@ -1787,7 +1864,7 @@ def review_payload(result: ReviewResult) -> dict[str, Any]:
         and the two ``_mib`` fields are what it held on the device at its peak and between reviews,
         so a store answers the time and the memory without a stopwatch outside the graph.
         ``off_task_speech`` (one of :data:`OFF_TASK_STATES` or None), ``off_task_quotes``,
-        ``other_speaker`` (one of :data:`OTHER_SPEAKER_ROLES` or None), ``other_speaker_quotes`` and
+        ``phrases_instead_of_items`` (one of :data:`PHRASE_STATES` or None), ``phrase_quotes``, ``other_speaker`` (one of :data:`OTHER_SPEAKER_ROLES` or None), ``other_speaker_quotes`` and
         ``task_content_quotes`` (lists of quoted strings) are the task reading.
     """
     return {
@@ -1817,6 +1894,8 @@ def review_payload(result: ReviewResult) -> dict[str, Any]:
         "instructions_answered": result.instructions_answered,
         "off_task_speech": result.off_task_speech,
         "off_task_quotes": list(result.off_task_quotes),
+        "phrases_instead_of_items": result.phrases_instead_of_items,
+        "phrase_quotes": list(result.phrase_quotes),
         "other_speaker": result.other_speaker,
         "other_speaker_quotes": list(result.other_speaker_quotes),
         "task_content_quotes": list(result.task_content_quotes),
