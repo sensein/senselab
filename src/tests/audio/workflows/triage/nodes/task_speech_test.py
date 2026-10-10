@@ -453,24 +453,24 @@ class TestTheReviewerQuotesBecomeMasks:
         """Occasional phrases mask nothing; predominant ones mask the phrase's words and never an item's."""
         from tests.audio.workflows.triage.nodes import redact_test
 
-        words = ["lion", "tiger", "so", "my", "doctor", "said", "that"]
+        words = ["lion", "tiger", "bear", "zebra", "so", "my", "doctor", "said", "that"]
         monkeypatch.setattr(
             redact_test,
             "_word_extent",
-            lambda i: (float(i), i + 0.5) if i < 2 else (2.0 + (i - 2) * 0.6, 2.5 + (i - 2) * 0.6),
+            lambda i: (float(i), i + 0.5) if i < 4 else (4.0 + (i - 4) * 0.6, 4.5 + (i - 4) * 0.6),
         )
         joined: dict[int, dict[str, tuple[float, float]]] = {}
         _seed_redact_store(store, tmp_path, words=words, timings=joined, recording_stem=ITEMS_STEM, scanned=False)
         _write(store, "random-item-generation")
-        self._annotate(store, phrases_instead_of_items="occasional", phrase_quotes=["tiger so my doctor said that"])
+        self._annotate(store, phrases_instead_of_items="occasional", phrase_quotes=["zebra so my doctor said that"])
         assert mask_plan(store, reviewer_applies=True, padding_ms=50).non_task_speech_masked_n == 0
         other = ProvStore(run_id="predominant")
         _seed_redact_store(other, tmp_path, words=words, timings=joined, recording_stem=ITEMS_STEM, scanned=False)
         _write(other, "random-item-generation")
-        self._annotate(other, phrases_instead_of_items="predominant", phrase_quotes=["tiger so my doctor said that"])
+        self._annotate(other, phrases_instead_of_items="predominant", phrase_quotes=["zebra so my doctor said that"])
         plan = mask_plan(other, reviewer_applies=True, padding_ms=50)
         masked = [word.text for mask in plan.masks if mask.source == NON_TASK_SPEECH for word in mask.words]
-        assert masked == words[2:] and plan.non_task_speech_extensive
+        assert masked == words[4:] and plan.non_task_speech_extensive
 
     def test_an_off_task_quote_masks_its_words_and_a_task_content_quote_releases_them(
         self, store: ProvStore, tmp_path: Path
