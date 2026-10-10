@@ -8,8 +8,9 @@ their BIDS session (``sub-<label>_ses-<label>`` off the stem); ``--slice-index``
 shard the sessions, never a session's members, so each task sees every member of the sessions it
 owns. Every member's store must already carry PREPROCESS's ``background_floor``
 (``scripts/extend_background_floor.py``); a member without one is left out of its session's floor,
-and its own store records the missing floor. Each store gains one ``session_floor`` measurement.
-Run ``scripts/extend_replay_decisions.py`` afterwards: BACKGROUND reads this floor.
+and its own store records the missing floor. Each store gains one ``speech_residual`` measurement,
+read off its plain, enhanced and residual streams, and one ``session_floor`` measurement carrying
+the session floor and the session background over the session's speech tasks' residuals. Run ``scripts/extend_replay_decisions.py`` afterwards: BACKGROUND reads this floor.
 
 Install:
     uv sync --all-extras --group dev
@@ -27,6 +28,7 @@ from typing import Any, Sequence
 from senselab.audio.workflows.triage.extend import (
     ERROR,
     OK,
+    RUN_SUBDIR,
     SLICES_SUBDIR,
     export_prov,
     read_manifest,
@@ -40,6 +42,7 @@ from senselab.audio.workflows.triage.nodes.background import (
     SESSION_FLOOR,
     session_key,
     write_session_floor,
+    write_speech_residual,
 )
 from senselab.audio.workflows.triage.nodes.common import capture_environments, describe_exception, find_measurement
 from senselab.utils.prov_store import ProvStore
@@ -97,21 +100,25 @@ def process_session(session: str, rows: Sequence[dict[str, Any]]) -> list[dict[s
         except (OSError, ValueError) as error:
             opened.append((row, None, None, describe_exception(error)))
     members = []
-    for _, _, store, _ in opened:
+    readings = []
+    for _, run_root, store, _ in opened:
         own = find_measurement(store, OWN_FLOOR) if store is not None else None
         if own is not None and not own.attributes.get("missing"):
             members.append(dict(own.attributes))
+        if store is not None and run_root is not None:
+            readings.append(write_speech_residual(store, run_root / RUN_SUBDIR))
     out: list[dict[str, Any]] = []
     for row, run_root, store, error in opened:
         if store is None or run_root is None:
             out.append({**row, "status": ERROR, SESSION_FLOOR: error})
             continue
-        write_session_floor(store, members, session=session)
+        write_session_floor(store, members, session=session, background_members=readings)
         capture_environments(store, {})
         write_store(store, run_root)
         export_prov(store, run_root)
         written = find_measurement(store, SESSION_FLOOR)
         source = written.attributes.get("floor_source") if written is not None else None
+        background = (written.attributes.get("session_background") or {}) if written is not None else {}
         out.append(
             {
                 **row,
@@ -120,6 +127,8 @@ def process_session(session: str, rows: Sequence[dict[str, Any]]) -> list[dict[s
                 "members_n": len(rows),
                 "members_read_n": len(members),
                 SESSION_FLOOR: source or "missing",
+                "session_background": background.get("source") or background.get("fallback") or "missing",
+                "session_background_members_n": background.get("members_n", 0),
             }
         )
     return out

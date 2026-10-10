@@ -17,9 +17,9 @@ floor:
   quiet_percentile: 50.0          # the floor is this percentile of the quiet frames per band
   quiet_min_s: 0.5                # less quiet time than this and the recording's own floor is unobservable
   residual_percentile: 20.0       # the residual's per-band floor, read over its live frames
-  residual_gap_db: 25.0           # own floor this far over the residual's (median over bands): the task fills the file
+  residual_gap_db: 25.0           # own floor this far over the residual's (median over bands): the task fills the file. Not read for a kind session_background.yaml decides for
 activity:
-  margin_db: 6.0                  # UNFITTED (C2 m): a band is active this far over its floor
+  margin_db: 6.0                  # UNFITTED (C2 m): a band is active this far over its floor. TO REFIT against the session background with task_events.yaml decision
   band_fraction: 0.3              # UNFITTED (C2 q): share of bands active for the frame to be active
   bridge_s: 0.1                   # gaps an active region is joined across
   min_s: 0.1                      # shortest active region
@@ -54,5 +54,5 @@ disruptions:                      # dropout and discontinuity extents on the ori
 session:                          # the BIDS session floor (specs/.../design.md, "Unit C step 1")
   statistic: median               # per band, over the members whose own floor was read over quiet frames
   members_min: 3                  # UNFITTED: fewer usable members and the recording keeps its own floor
-  gap_db: 25.0                    # UNFITTED: own floor this far over the session's (median over bands) takes the session's; as floor.residual_gap_db
+  gap_db: 25.0                    # UNFITTED: own floor this far over the session's (median over bands) takes the session's; as floor.residual_gap_db. Not read for a kind session_background.yaml decides for
   level_percentile: 95.0          # a recording's active level: this percentile of its broadband level over live frames

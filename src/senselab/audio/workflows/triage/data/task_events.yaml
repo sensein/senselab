@@ -3,13 +3,13 @@
 # Derivations are in specs/20261007-task-events-in-background/design.md ("Unit B: the task layer").
 version: 2
 entangle_abut_s: 0.05            # an impulse this close to an event abuts it
-impulse_margin_db: 6.0           # masked of impulse frames, an event must still stand this over the floor (as background_model activity.margin_db)
+impulse_margin_db: 6.0           # masked of impulse frames, an event must still stand this over the floor (as background_model activity.margin_db). TO REFIT with decision.snr_low_db
 local:
   window_s: 2.0                  # the background either side of an event (fitted, unit B grid)
   percentile: 20.0               # of the broadband level of that window's non-event frames (fitted, unit B grid)
 decision:
-  snr_low_db: 10.0               # C5 s_lo, over the stationary floor: an event under this is no event (fitted, unit B grid)
-  snr_high_db: 16.0              # C5 s_hi, over the local background: an event at or over this is clear (fitted, unit B grid). TO REFIT: fitted when every found event decided; since v2 only the task cluster's events decide
+  snr_low_db: 10.0               # C5 s_lo, over the stationary floor: an event under this is no event (fitted, unit B grid). TO REFIT against the session background before session_background.yaml decides
+  snr_high_db: 16.0              # C5 s_hi, over the local background: an event at or over this is clear (fitted, unit B grid). TO REFIT: fitted when every found event decided; since v2 only the task cluster's events decide; and against the session background before session_background.yaml decides
 extent:                          # which cluster of events is the task (task_cluster); design "Decide on the extent's own events" (2026-10-10)
   speech_words_min: 2            # lexical words in a run (gaps under breath_pattern.yaml train.speech_gap_s) that is speech no task cluster touches; one word on one event may be the task misread
   speech_gap_s: 1.0              # the longest gap inside one run of words (as breath_pattern.yaml train.speech_gap_s)
@@ -20,7 +20,7 @@ extent:                          # which cluster of events is the task (task_clu
     breath: 2                    # an inhale and an exhale phase
     cough: 1
 inhale:
-  margin_db: 6.0                 # the level the preparatory inhale stands over the floor (as cough_pattern.yaml inhale)
+  margin_db: 6.0                 # the level the preparatory inhale stands over the floor (as cough_pattern.yaml inhale). TO REFIT with decision.snr_low_db
   back_max_s: 2.0                # the furthest the extent runs back before the first event
 rhythm:
   band_hz: [0.1, 1.2]            # the breathing band (C3)

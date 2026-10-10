@@ -27,6 +27,7 @@ from senselab.audio.workflows.triage.nodes.background import (
     session_key,
     write_background,
     write_session_floor,
+    write_speech_residual,
 )
 from senselab.audio.workflows.triage.nodes.branches import declared_task_family, record_unrun_owner
 from senselab.audio.workflows.triage.nodes.common import (
@@ -275,7 +276,7 @@ def _drive_branches(
     """Run PREPROCESS and SESSION, then hand the rest of the graph to :func:`drive_decisions`.
 
     A single-file run sees no siblings, so SESSION records the recording's own floor as the floor
-    it uses; a corpus run writes SESSION per BIDS session (``scripts/extend_session_floor.py``).
+    it uses and its own speech-residual reading as its session background's only member; a corpus run writes SESSION per BIDS session (``scripts/extend_session_floor.py``).
 
     A PREPROCESS that fails records every node between it and VERDICT ``SKIPPED`` and calls
     nothing further. See ``specs/20260817-triage-workflow-dag/dag.md``.
@@ -301,7 +302,12 @@ def _drive_branches(
     _attempt(
         outcomes,
         SESSION_NODE,
-        lambda: write_session_floor(store, (), session=session_key(recording_stem(store))),
+        lambda: write_session_floor(
+            store,
+            (),
+            session=session_key(recording_stem(store)),
+            background_members=(write_speech_residual(store, run_dir),),
+        ),
     )
     return drive_decisions(
         store,
