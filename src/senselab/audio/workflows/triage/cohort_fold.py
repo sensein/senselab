@@ -22,6 +22,9 @@ MEASURED = "measured"
 UNAVAILABLE = "unavailable"
 """A check, or the whole reading, that had no cohort to read against."""
 
+NOT_APPLICABLE = "not_applicable"
+"""A check that does not read this recording's declared kind."""
+
 OTHER_SPEAKER = "other_speaker"
 """The reading's block for the session enrollment and the per-run matches against it."""
 
@@ -159,8 +162,9 @@ def cohort_evidence(reading: Mapping[str, Any] | None) -> list[EvidenceItem]:
     elif block:
         items.append(item(_named("other_speaker_runs"), None, ANNOTATION, unit="runs"))
     for name, check in check_blocks(reading).items():
-        if check.get("status") != MEASURED:
+        if check.get("status") == UNAVAILABLE:
             items.append(item(_named(name), None, ANNOTATION))
+        if check.get("status") != MEASURED:
             continue
         effect = REVIEW if check.get("outcome") == REVIEW else PASS
         for comparison in check.get("comparisons") or ():

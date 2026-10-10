@@ -23,6 +23,7 @@ quantiles: [0.05, 0.25, 0.5, 0.75, 0.95]
 checks:
   recording_duration_outlier:
     level: family
+    kinds: [airway, voice]      # declared kinds (routing_analysis.families.DECLARED_KIND) the check reads
     ground: recording_duration_outlier
     duration_ratio_max: 3.0     # longer than this times the family median duration ...
     extent_fraction_min: 0.5    # ... with the task extent covering less than this of the recording

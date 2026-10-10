@@ -35,6 +35,7 @@ from senselab.audio.workflows.triage.cohort_fold import (
     COHORT_NODE,
     COHORT_READING,
     MEASURED,
+    NOT_APPLICABLE,
     OTHER_SPEAKER,
     UNAVAILABLE,
 )
@@ -205,18 +206,21 @@ def diarization_measurement(stream: str) -> str:
     return f"{stream}_diarization"
 
 
-def facts_of(store: ProvStore, run_dir: Path | None, *, diarization_stream: str | None = None) -> RecordingFacts:
+def facts_of(
+    store: ProvStore, run_dir: Path | None, *, diarization_stream: str | None = None, stem: str | None = None
+) -> RecordingFacts:
     """Read COHORT's inputs off one recording's store.
 
     Args:
         store: The recording's store.
         run_dir: Its run directory, for the diarization sidecar; None reads no diarization.
         diarization_stream: The stream whose diarization is read; None reads none.
+        stem: The stem to use where the store's ``recording`` stream names none.
 
     Returns:
         The facts.
     """
-    stem = recording_stem(store)
+    stem = recording_stem(store) or (stem or "")
     family = declared_task(stem)[1]
     extents = [span.extent for span in standing_task_extents(live_entities(store, "span")) if span.extent]
     hull = (min(float(e[0]) for e in extents), max(float(e[1]) for e in extents)) if extents else None
@@ -848,6 +852,10 @@ def run_checks(facts: RecordingFacts, artefact: Mapping[str, Any] | None) -> dic
     """
     out: dict[str, dict[str, Any]] = {}
     for name, bounds in cohort_parameters()["checks"].items():
+        kinds = bounds.get("kinds")
+        if kinds and not any(facts.family in DECLARED_KIND[str(kind)] for kind in kinds):
+            out[name] = {"status": NOT_APPLICABLE}
+            continue
         if artefact is None:
             out[name] = {"status": UNAVAILABLE, "reason": NO_QUANTILES}
             continue
@@ -1006,7 +1014,10 @@ def unavailable_attributes(facts: RecordingFacts) -> dict[str, Any]:
     return cohort_attributes(
         facts,
         other_speaker={"status": UNAVAILABLE, "reason": NO_COHORT},
-        checks={name: {"status": UNAVAILABLE, "reason": NO_COHORT} for name in cohort_parameters()["checks"]},
+        checks={
+            name: {**block, "reason": NO_COHORT} if block["status"] == UNAVAILABLE else block
+            for name, block in run_checks(facts, None).items()
+        },
         quantiles=None,
         key=None,
     )
