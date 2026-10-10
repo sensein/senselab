@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -11,7 +12,12 @@ import numpy as np
 import soundfile as sf
 
 from senselab.audio.workflows.triage.extend import read_store, write_store
-from senselab.audio.workflows.triage.nodes.background import FLOOR_FROM_SESSION, OWN_FLOOR, SESSION_FLOOR
+from senselab.audio.workflows.triage.nodes.background import (
+    FLOOR_FROM_SESSION,
+    OWN_FLOOR,
+    SESSION_FLOOR,
+    SPEECH_RESIDUAL,
+)
 from senselab.audio.workflows.triage.nodes.common import find_measurement
 from senselab.utils.prov_store import ProvStore
 
@@ -73,3 +79,49 @@ def test_an_own_floor_already_written_is_not_written_again(tmp_path: Path) -> No
     rows = [_run(tmp_path, "sub-a_ses-1_task-t0", _breaths(1))]
     floor_cli.process(rows)
     assert floor_cli.process(rows)[0]["status"] == "skipped"
+
+
+def _speech_run(root: Path, stem: str, seed: int) -> dict[str, str]:
+    rng = np.random.default_rng(seed)
+    t = np.arange(6 * RATE) / RATE
+    speech = (np.sin(2 * np.pi * 150.0 * t) * 0.05 * ((t % 2.0) < 1.0)).astype(np.float32)
+    room = (rng.standard_normal(6 * RATE) * 1e-3).astype(np.float32)
+    run_root = root / stem
+    streams = run_root / "run" / "streams"
+    streams.mkdir(parents=True)
+    store = ProvStore(run_id=stem)
+    for name, samples in (("plain", speech + room), ("enhanced", speech), ("residual", room)):
+        sf.write(streams / f"{name}.wav", samples, RATE, subtype="FLOAT")
+        store.entity(prov_type="stream", extent=None, attributes={"name": name, "path": f"streams/{name}.wav"})
+    store.entity(prov_type="stream", extent=None, attributes={"name": "recording", "path": f"/data/{stem}.wav"})
+    windows = [{"start": float(a), "end": float(a) + 1.0, "label_scores": [{"Speech": 0.9}]} for a in (0, 2, 4)]
+    (run_root / "run" / "enhanced_yamnet.json").write_text(json.dumps(windows))
+    store.entity(
+        prov_type="measurement",
+        extent=None,
+        attributes={"name": "enhanced_yamnet_scores", "path": "enhanced_yamnet.json"},
+    )
+    write_store(store, run_root)
+    return {"stem": stem, "enhanced": str(streams / "enhanced.wav")}
+
+
+def test_the_session_pass_writes_each_speech_residual_and_the_session_background(tmp_path: Path) -> None:
+    """Two speech tasks and a breath task: each store gains its reading; the session background has the two."""
+    rows = [
+        _speech_run(tmp_path, "sub-a_ses-1_task-rainbow-passage", 1),
+        _speech_run(tmp_path, "sub-a_ses-1_task-free-speech-1", 2),
+        _speech_run(tmp_path, "sub-a_ses-1_task-breath-sounds", 3),
+    ]
+    floor_cli.process(rows)
+    out = session_cli.process_session("sub-a_ses-1", rows)
+    assert {r["session_background"] for r in out} == {"speech_residual"}
+    assert {r["session_background_members_n"] for r in out} == {2}
+    store = read_store(Path(rows[2]["enhanced"]).parents[2])
+    reading = find_measurement(store, SPEECH_RESIDUAL)
+    assert reading is not None and reading.attributes["kind"] == "airway" and reading.attributes["foreground"]
+    found = find_measurement(store, SESSION_FLOOR)
+    assert found is not None
+    assert sorted(found.attributes["session_background"]["members"]) == [
+        "sub-a_ses-1_task-free-speech-1",
+        "sub-a_ses-1_task-rainbow-passage",
+    ]
