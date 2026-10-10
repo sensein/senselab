@@ -394,9 +394,10 @@ _RESET_FINDINGS = [("PERSON", _word_extent(2)), ("LOCATION", _word_extent(4))]
 
 
 FULL_REVIEW_INPUTS = {
-    "version": 2,
-    "prompt_version": 11,
+    "version": 3,
+    "prompt_version": 12,
     "task": True,
+    "instructions": True,
     "full_transcript": True,
     "pii_annotations": True,
     "asr_readings": True,
@@ -2293,7 +2294,7 @@ class TestTheReviewerJudgesATermNotAnInstance:
         assert plan.reviewer_precedence
         assert plan.record(release="x", release_ground=None)["reviewer_precedence"] is True
 
-    @pytest.mark.parametrize("missing", ["full_transcript", "pii_annotations", "asr_readings", "task"])
+    @pytest.mark.parametrize("missing", ["full_transcript", "pii_annotations", "asr_readings", "task", "instructions"])
     def test_a_reading_missing_one_input_does_not_outrank_the_kept_name_v2(
         self,
         store: ProvStore,
