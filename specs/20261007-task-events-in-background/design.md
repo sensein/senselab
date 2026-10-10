@@ -1756,3 +1756,39 @@ The fold builds `reasons` from every ground key it raised, including the operati
 branch left, while `run_status` counts no owed measurement on a discard. A discard is settled; a measurement
 the pipeline did not take after it is not owed. `reasons_of(..., owed_counts=False)` leaves `not_measured`
 out for a discard, so the reasons agree with `run_status`. The ground keys themselves are unchanged.
+
+### Validation on ORCD (r18c stores copied to scratch, read-only, CPU)
+
+CrisperWhisper on the two overrun recordings, CT2 on CPU at float32 as the corpus ran it:
+
+| recording | duration | before (4ee22797) | after (09407efa) |
+| --- | --- | --- | --- |
+| bdf1f48d, random-item-generation-v2 | 59.81 s | `CrisperWhisperDecoderPositionsExceeded` | `continuation_context_capped`, 33 words, 1 degenerate (256 characters) |
+| 5638512b, rainbow-passage | 77.44 s | `CrisperWhisperDecoderPositionsExceeded` | `continuation_context_capped`, 96 words, 1 degenerate (314 characters) |
+
+Both reproduce on CPU. The first fallback tried, `chunked_lcs`, raised `NotImplementedError` (word timings).
+A full triage of each at 09407efa completes with two hypotheses (consensus 43 and 97 words, no degenerate
+consensus word, the looped reading outvoted): bdf1f48d `review` / `speech_in_task`, 5638512b `review` /
+`redaction_unvalidated`, both `run_status` complete. With CrisperWhisper forced absent (67f75158), each
+gets a single-hypothesis consensus (37 and 59 words) and folds `review`, `run_status` complete, reasons
+without `not_measured`.
+
+Replayed at 67f75158 (`extend_reprocessed_outputs` first for the breath set), over copies:
+
+| set | before | after |
+| --- | --- | --- |
+| A, 5 random-item-generation | 5 `not_measured` (`SPEECH:items_min`) | 2 pass, 3 review (`other_speaker`, `off_task_speech` ×2); all complete; category from the questionnaire table on all 5 |
+| C, 10 breath (random sample of the 114) | 10 `not_measured` (`phonation_tracks`) | tracks `f0_range_from: search` on all 10; 7 pass, 2 discard `no_task_captured`, 1 review `weak_events`; all complete |
+| D, 10 secondary (5 Harvard, 5 respiration) | `task_too_short;not_measured…`, complete | 10 discard `task_too_short`, no `not_measured` in reasons |
+
+The A replays exit 3: the reviewer's earlier reading no longer matches the replayed context, so those
+stems need `extend_llm_review` before the re-fold.
+
+### Corpus scope (scan of all 62,550 r18c stores)
+
+- `phonation_tracks` absent with `F0RangeUnavailable`: 738 recordings (116 `not_measured`, 412
+  `task_too_short`, 71 `no_task_captured`, 40 `task_not_found`, 88 pass, the rest single digits). All
+  are respiration, cough and breath families.
+- A CrisperWhisper or Qwen3-ASR token past the degenerate bounds: 2,004 recordings (1,981 CrisperWhisper,
+  30 Qwen3-ASR); 1,895 of them currently pass.
+- One hypothesis: the 2 overrun recordings.
