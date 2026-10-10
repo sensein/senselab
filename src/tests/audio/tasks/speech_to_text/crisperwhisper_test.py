@@ -110,6 +110,87 @@ def test_other_worker_failures_stay_hard(monkeypatch: pytest.MonkeyPatch) -> Non
     assert not isinstance(caught.value, ValueError)
 
 
+_FAKE_LIBRARY = """
+import os
+
+
+class _Word:
+    def __init__(self, word, start, end):
+        self.word, self.start, self.end, self.probability = word, start, end, 0.5
+
+
+class _Result:
+    def __init__(self, text):
+        self.text, self.language, self.words = text, "en", [_Word(text, 0.0, 0.5)]
+
+
+class CrisperWhisperModel:
+    def __init__(self, model_id, backend, device, compute_type):
+        pass
+
+    def transcribe(self, path, language, word_timestamps, longform_strategy):
+        name = os.path.basename(path)
+        if name.startswith("overrun") and longform_strategy == "continuation":
+            raise RuntimeError("No position encodings are defined for positions >= 448, but got position 448")
+        if name.startswith("broken"):
+            raise RuntimeError("CUDA out of memory")
+        return _Result(longform_strategy)
+"""
+
+
+def _run_worker(tmp_path: Path, names: list[str]) -> dict:
+    """Run the real worker script against a fake ``crisperwhisper`` library."""
+    import json
+    import subprocess
+    import sys
+
+    library = tmp_path / "lib" / "crisperwhisper"
+    library.mkdir(parents=True)
+    (library / "__init__.py").write_text(_FAKE_LIBRARY)
+    payload = {
+        "audio_paths": [str(tmp_path / name) for name in names],
+        "model_id": "/fake/snapshot",
+        "backend": "transformers",
+        "longform_strategy": cw.LONGFORM_STRATEGY,
+        "fallback_strategy": cw.CONTEXT_FREE_STRATEGY,
+        "position_limit": cw._CT2_POSITION_LIMIT,
+    }
+    done = subprocess.run(
+        [sys.executable, "-c", cw._CRISPER_WORKER_SCRIPT],
+        input=json.dumps(payload),
+        capture_output=True,
+        text=True,
+        env={"PYTHONPATH": str(tmp_path / "lib")},
+        check=False,
+    )
+    return json.loads(done.stdout.strip().splitlines()[-1])
+
+
+def test_a_position_overrun_is_decoded_again_without_a_context_prompt(tmp_path: Path) -> None:
+    """Only the overrunning input is redecoded context-free; every other input keeps continuation."""
+    out = _run_worker(tmp_path, ["fine.wav", "overrun.wav"])
+    assert [entry["decode_strategy"] for entry in out["results"]] == ["continuation", "chunked_lcs"]
+
+
+def test_any_other_worker_error_is_not_redecoded(tmp_path: Path) -> None:
+    """The fallback is keyed on CTranslate2's position-limit message alone."""
+    out = _run_worker(tmp_path, ["broken.wav"])
+    assert "results" not in out and "out of memory" in out["error"]["message"]
+
+
+def test_the_strategy_used_reaches_the_scriptline(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The host carries the worker's ``decode_strategy`` onto the line it returns."""
+    _stub_out_staging(monkeypatch)
+    monkeypatch.setattr(
+        cw,
+        "parse_subprocess_result",
+        lambda *a, **k: {"results": [{"text": "a", "words": [], "decode_strategy": "chunked_lcs"}]},
+    )
+    audio = Audio(waveform=torch.zeros(1, 16000, dtype=torch.float32), sampling_rate=16000)
+    [line] = cw.CrisperWhisperASR.transcribe_with_crisperwhisper([audio], model=None)
+    assert line.decode_strategy == "chunked_lcs"
+
+
 def test_ct2_cache_key_matches_the_library_layout() -> None:
     """The computed key is the directory name the library's converter writes."""
     snapshot = (

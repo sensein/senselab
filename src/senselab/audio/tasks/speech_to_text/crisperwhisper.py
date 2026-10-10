@@ -59,6 +59,12 @@ _CT2_MARKER = ".conversion_complete"
 # encodings; see specs/20260910-crisperwhisper-decoder-positions/.
 _CT2_POSITION_LIMIT = "No position encodings are defined for positions >="
 
+LONGFORM_STRATEGY = "continuation"
+"""The long-form strategy every recording is decoded with first: 30 s windows, each prompted with the last."""
+
+CONTEXT_FREE_STRATEGY = "chunked_lcs"
+"""The long-form strategy a recording is decoded with again after a position overrun: no window is prompted."""
+
 
 class CrisperWhisperDecoderPositionsExceeded(ValueError):
     """A chunk's prompt plus its token budget overran Whisper's 448 decoder positions; record it as an absence."""
@@ -135,6 +141,9 @@ try:
     device = args.get("device", "auto")
     compute_type = args.get("compute_type", "float32")
     language = args.get("language") or "en"
+    strategy = args["longform_strategy"]
+    fallback = args.get("fallback_strategy")
+    position_limit = args["position_limit"]
 
     # The CT2 backend converts the HF snapshot into a shared cache directory whose
     # writer is neither atomic nor locked. Convert into a private staging directory
@@ -173,9 +182,21 @@ try:
                 return v
         return None
 
+    def _decode(path, longform_strategy):
+        return model.transcribe(
+            path, language=language, word_timestamps=True, longform_strategy=longform_strategy
+        )
+
     results = []
     for path in audio_paths:
-        r = model.transcribe(path, language=language, word_timestamps=True)
+        used = strategy
+        try:
+            r = _decode(path, strategy)
+        except Exception as overrun:
+            if not fallback or position_limit not in str(overrun):
+                raise
+            used = fallback
+            r = _decode(path, fallback)
         words = []
         for w in (getattr(r, "words", None) or []):
             conf = _first_attr(w, ("probability", "confidence", "score", "prob"))
@@ -194,6 +215,7 @@ try:
             "language": getattr(r, "language", language),
             "words": words,
             "score": (float(line_conf) if line_conf is not None else None),
+            "decode_strategy": used,
         })
 
     print(json.dumps({"results": results}))
@@ -233,11 +255,13 @@ class CrisperWhisperASR:
         Returns:
             One ``ScriptLine`` per input with verbatim ``text``, word-level
             ``chunks`` carrying timestamps + ``score`` (native word confidence
-            when exposed), and a line-level ``score``.
+            when exposed), a line-level ``score``, and the ``decode_strategy``
+            used: :data:`LONGFORM_STRATEGY`, or :data:`CONTEXT_FREE_STRATEGY` for
+            an input whose first decode overran the decoder's positions.
 
         Raises:
-            CrisperWhisperDecoderPositionsExceeded: A chunk's decoder prompt plus its
-                token budget overran Whisper's 448 position encodings.
+            CrisperWhisperDecoderPositionsExceeded: The context-free decode also
+                overran Whisper's 448 position encodings.
         """
         if model is None:
             model = HFModel(path_or_uri="nyralabs/CrisperWhisper2.0_turbo")
@@ -279,6 +303,9 @@ class CrisperWhisperASR:
                     "device": device_str,
                     "compute_type": compute_type,
                     "language": language or "en",
+                    "longform_strategy": LONGFORM_STRATEGY,
+                    "fallback_strategy": CONTEXT_FREE_STRATEGY,
+                    "position_limit": _CT2_POSITION_LIMIT,
                     "ct2_entry": str(ct2_entry),
                     "ct2_staging": str(cache_root / f".staging-{uuid.uuid4().hex}"),
                 }
@@ -331,6 +358,7 @@ class CrisperWhisperASR:
                         end=line_end,
                         chunks=chunks,
                         score=(float(entry["score"]) if entry.get("score") is not None else None),
+                        decode_strategy=entry.get("decode_strategy"),
                     )
                 )
             return results

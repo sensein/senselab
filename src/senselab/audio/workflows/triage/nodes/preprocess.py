@@ -2575,6 +2575,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             "out_of_bounds_chunks_n": out_of_bounds_chunks_n,
             "timestamp_source": source_kind,
             "timestamp_model": timing_model,
+            "decode_strategy": line.decode_strategy,
             "duration_s": duration_s,
         }
         entity_id = _measurement(
