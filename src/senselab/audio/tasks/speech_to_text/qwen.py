@@ -25,6 +25,7 @@ from senselab.audio.data_structures import Audio
 from senselab.utils.data_structures import DeviceType, HFModel, ScriptLine, _select_device_and_dtype
 from senselab.utils.dependencies import hf_subprocess_env
 from senselab.utils.subprocess_venv import _clean_subprocess_env, ensure_venv, parse_subprocess_result, venv_python
+from senselab.utils.venv_worker import serve_in_venv
 
 _QWEN_VENV = "qwen-asr"
 _QWEN_REQUIREMENTS = [
@@ -108,91 +109,58 @@ except Exception as exc:
     sys.exit(1)
 """
 
-# Worker script — runs inside the isolated venv.
-# Uses Qwen3ASRModel.from_pretrained's built-in `forced_aligner` kwarg
-# (a string id) so the wrapper handles aligner construction internally.
-# The transcribe() call returns a list[ASRTranscription], where each item
-# has .text, .language, and (when return_time_stamps=True) .time_stamps
-# (a ForcedAlignResult with .items[].text/.start_time/.end_time).
+# Worker script — runs inside the isolated venv, served by senselab.utils.venv_worker.
+# Qwen3ASRModel.from_pretrained's `forced_aligner` kwarg (a string id) makes the wrapper construct
+# the aligner itself. transcribe() returns a list[ASRTranscription] with .text, .language and,
+# when return_time_stamps=True, .time_stamps (spans with .text/.start_time/.end_time).
 _QWEN_WORKER_SCRIPT = r"""
-import json
 import sys
 
-try:
+
+def load(init):
     import torch
     from qwen_asr import Qwen3ASRModel
 
-    args = json.loads(sys.stdin.read())
-    audio_paths = args["audio_paths"]
-    model_name = args["model_name"]
-    model_revision = args["model_revision"]
-    device = args["device"]
-    return_timestamps = bool(args.get("return_timestamps", True))
-    aligner_name = args.get("forced_aligner") if return_timestamps else None
-    aligner_revision = args.get("forced_aligner_revision") if return_timestamps else None
-
-    # revision is forwarded through **kwargs to transformers.AutoModel.from_pretrained,
-    # which does accept it -- so the resolved commit SHA the parent staged pins the ASR
-    # model weights. forced_aligner_kwargs is forwarded the same way into
-    # Qwen3ForcedAligner.from_pretrained(forced_aligner, **forced_aligner_kwargs), which
-    # forwards its own revision the same route. Both wrappers' internal
-    # AutoProcessor.from_pretrained(...) calls do NOT take revision at all (see
-    # align_with_qwen's worker-script comment), so the tokenizer/processor config is a
-    # known, upstream-caused partial-pin gap this call site cannot close.
-    load_kwargs = {"revision": model_revision}
+    aligner_name = init.get("forced_aligner")
+    # revision reaches transformers.AutoModel.from_pretrained through **kwargs, for the ASR model
+    # and, via forced_aligner_kwargs, for the aligner. The wrappers' AutoProcessor loads take none.
+    load_kwargs = {"revision": init["model_revision"]}
     if aligner_name:
         load_kwargs["forced_aligner"] = aligner_name
-        load_kwargs["forced_aligner_kwargs"] = {"revision": aligner_revision}
+        load_kwargs["forced_aligner_kwargs"] = {"revision": init.get("forced_aligner_revision")}
 
-    asr = Qwen3ASRModel.from_pretrained(model_name, **load_kwargs)
-    # The wrapper holds inner HF modules on .model / .forced_aligner.model;
-    # try to move them onto the requested device when CUDA is available.
-    if device == "cuda" and torch.cuda.is_available():
+    asr = Qwen3ASRModel.from_pretrained(init["model_name"], **load_kwargs)
+    if init["device"] == "cuda" and torch.cuda.is_available():
         try:
             asr.model = asr.model.cuda()
             if getattr(asr, "forced_aligner", None) is not None:
                 asr.forced_aligner.model = asr.forced_aligner.model.cuda()
         except Exception as cuda_exc:
-            # If the wrapper internals diverge or .cuda() fails (e.g. OOM), the
-            # wrapper still runs but on CPU, which is ~50× slower. Make the
-            # downgrade visible to the parent process via the subprocess log so
-            # the user can choose to abort rather than wait.
             print(
                 f"WARN: Qwen3-ASR CUDA placement failed ({cuda_exc!r}); "
                 f"falling back to wrapper-default device (likely CPU).",
                 file=sys.stderr,
             )
+    return {"asr": asr, "return_timestamps": bool(init.get("return_timestamps", True))}
 
-    results = asr.transcribe(
-        audio=audio_paths,
-        return_time_stamps=return_timestamps,
-    )
 
+def handle(state, args):
+    return_timestamps = state["return_timestamps"]
+    results = state["asr"].transcribe(audio=args["audio_paths"], return_time_stamps=return_timestamps)
     serialized = []
     for r in results:
         item = {"text": r.text, "language": r.language}
         if return_timestamps and r.time_stamps is not None:
-            chunks = []
-            for span in r.time_stamps:
-                chunks.append({
-                    "text": span.text,
-                    "start": float(span.start_time),
-                    "end": float(span.end_time),
-                })
-            item["chunks"] = chunks
+            item["chunks"] = [
+                {"text": span.text, "start": float(span.start_time), "end": float(span.end_time)}
+                for span in r.time_stamps
+            ]
         serialized.append(item)
-
-    print(json.dumps({"results": serialized}))
-except Exception as exc:
-    import traceback
-    err = {
-        "type": type(exc).__name__,
-        "message": str(exc),
-        "traceback": traceback.format_exc(limit=5),
-    }
-    print(json.dumps({"error": err}))
-    sys.exit(1)
+    return {"results": serialized}
 """
+
+_QWEN_LOAD_TIMEOUT_S = 1800
+_QWEN_REQUEST_TIMEOUT_S = 1800
 
 
 class QwenASR:
@@ -260,18 +228,6 @@ class QwenASR:
                 audio.save_to_file(path)
                 audio_paths.append(path)
 
-            input_json = json.dumps(
-                {
-                    "audio_paths": audio_paths,
-                    "model_name": model_name,
-                    "model_revision": revision,
-                    "device": device_type.value,
-                    "return_timestamps": return_timestamps,
-                    "forced_aligner": aligner_name if return_timestamps else None,
-                    "forced_aligner_revision": aligner_revision,
-                }
-            )
-
             # Stage the ASR model (and, when timestamps are requested, its forced-aligner
             # companion) once — cross-process — and flip the child to offline so its
             # from_pretrained loads from cache with no per-call Hub version check (the 429
@@ -299,16 +255,24 @@ class QwenASR:
             # Matches text_to_speech/qwen_tts.py and the three bare-loader backends.
             also = [(aligner_name, "main")] if return_timestamps and aligner_revision is not None else None
             env = hf_subprocess_env(model_name, model.revision, also=also, base_env=_clean_subprocess_env())
-            result = subprocess.run(
-                [python, "-c", _QWEN_WORKER_SCRIPT],
-                input=input_json,
-                capture_output=True,
-                text=True,
-                timeout=1800,  # 1.7B-3B ASR + 0.6B aligner load + per-audio decode; allow 30 min.
+            output = serve_in_venv(
+                (Path(venv_dir).name, model_name, revision, device_type.value, "default", aligner_name, aligner_revision),
+                python=python,
+                script=_QWEN_WORKER_SCRIPT,
+                init={
+                    "model_name": model_name,
+                    "model_revision": revision,
+                    "device": device_type.value,
+                    "return_timestamps": return_timestamps,
+                    "forced_aligner": aligner_name if return_timestamps else None,
+                    "forced_aligner_revision": aligner_revision,
+                },
+                request={"audio_paths": audio_paths},
                 env=env,
+                label="Qwen3-ASR",
+                load_timeout_s=_QWEN_LOAD_TIMEOUT_S,
+                request_timeout_s=_QWEN_REQUEST_TIMEOUT_S,
             )
-
-            output = parse_subprocess_result(result, "Qwen3-ASR")
 
             results: List[ScriptLine] = []
             for entry in output.get("results", []):
