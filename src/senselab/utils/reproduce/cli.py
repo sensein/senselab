@@ -9,10 +9,12 @@ Subcommands:
   libraries. CUDA sdists are built as batch jobs (``build-one``) first, unless ``--local-builds``.
   ``--sources-only`` checks out draft manifests with the empty patch set and nothing else.
 - ``build-one``: build or reuse one sdist's wheel and record the new ``wheels.lock`` sha256.
-- ``run``: run steps in DAG order; ``--step`` runs just those (one batch job; ``--pin`` refuses a manifest
-  changed since submission with ``E_MANIFEST_CHANGED``), ``--finalize --submission <id>`` cancels that
-  submission's jobs (queued or running, found by recorded id and by their ``--comment`` tag) and settles its
-  ``pending`` rows. A local run refuses (``E_SUBMIT_OVERLAP``) while a submission is live in its run dir.
+- ``run``: run steps in DAG order. ``--dry-run`` reports each step's key and ``will-execute``, ``skipped`` or
+  ``blocked`` with its env and source state, executing and writing nothing (exit 1 when a step is blocked).
+  ``--step`` runs just those (one batch job; ``--pin`` refuses a manifest changed since submission with
+  ``E_MANIFEST_CHANGED``). ``--finalize --submission <id>`` cancels that submission's jobs (queued or running,
+  found by recorded id and by their ``--comment`` tag) and settles its ``pending`` rows. A local run refuses
+  (``E_SUBMIT_OVERLAP``) while a submission is live in its run dir.
 - ``submit``: lint, then one held batch job per step chained with ``afterok``, then release
   (`slurm.submit`).
 - ``lint``: check manifests and patches against the profile.
@@ -139,6 +141,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="settle pending rows as never-ran; with --submission, first cancel that submission's jobs, "
         "including any still queued or running",
     )
+    run_cmd.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="print each step's key and whether it would execute, skip or be blocked; execute and write nothing",
+    )
     run_cmd.add_argument("--submission", help="the submission id (set by submit; printed by submit)")
     run_cmd.add_argument("--pin", action="append", default=[], help="a manifest's sha256 at submission, in order")
     run_cmd.add_argument("--timeout", type=float, help="seconds before a step is killed")
@@ -228,6 +235,14 @@ def status_line(step: str, key: str | None, status: str, exit_code: int | None, 
     code_text = ",".join(c if isinstance(c, str) and _CODE.match(c) else "?" for c in codes) or "-"
     exit_text = "-" if exit_code is None else str(exit_code) if type(exit_code) is int else "?"
     return f"{name}\t{key8}\t{shown}\t{exit_text}\t{code_text}"
+
+
+def plan_line(plan: run.Plan) -> str:
+    """One dry-run line: name, key8 (``-``), status, ``env:<state>``, ``src:<state>``, codes (``-``)."""
+    name = plan.step if _STEP.match(plan.step) else "?"
+    key8 = plan.key[:8] if isinstance(plan.key, str) and _KEY.match(plan.key) else "-"
+    codes = ",".join(c if _CODE.match(c) else "?" for c in plan.codes) or "-"
+    return f"{name}\t{key8}\t{plan.status}\tenv:{plan.env}\tsrc:{plan.src}\t{codes}"
 
 
 def _error(message: str) -> None:
@@ -710,6 +725,11 @@ def _cmd_run(args: argparse.Namespace) -> int:
         return _manifest_changed(args, paths, profile, data)
     manifests = [parse_manifest(d, p.suffix) for d, p in zip(data, paths)]
     config = _run_config(args, paths, profile)
+    if args.dry_run:
+        plans = run.plan_steps(manifests, config)
+        for p in plans:
+            print(plan_line(p))
+        return EXIT_FAILED if any(p.status == "blocked" for p in plans) else EXIT_OK
     if args.finalize:
         if args.submission is not None:
             cancelled = slurm.cancel_submission(args.submission, run.pending_jobs(manifests, config, args.submission))
