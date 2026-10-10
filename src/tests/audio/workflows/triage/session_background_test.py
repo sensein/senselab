@@ -74,7 +74,7 @@ def _reading(room_db: float, seed: int, family: str, *, words: int = 6, **kw: An
 
 
 def test_a_speech_task_reads_its_known_residual_as_the_background() -> None:
-    """White noise at -60 dB under speech at -25 dB: the residual reads near -60 dB and the foreground stands over it."""
+    """Noise at -60 dB under speech at -25 dB: the residual reads near -60 dB and the foreground stands over it."""
     reading = _reading(-60.0, 1, "rainbow-passage")
     assert reading["member"] and reading["not_applicable"] is None
     assert reading["residual_db"]["whole"] == pytest.approx(-60.4, abs=1.0)
@@ -86,7 +86,7 @@ def test_a_speech_task_reads_its_known_residual_as_the_background() -> None:
 
 
 def test_a_session_of_speech_tasks_takes_their_median_residual() -> None:
-    """Three speech tasks at -62, -60 and -50 dB and a breath task at -20 dB: the session reads -60 dB from the three."""
+    """Speech tasks at -62, -60 and -50 dB and a breath task at -20 dB: the session reads -60 dB from the three."""
     readings = [
         _reading(-62.0, 1, "rainbow-passage"),
         _reading(-60.0, 2, "free-speech"),
@@ -135,8 +135,7 @@ def test_an_empty_enhanced_stream_has_no_foreground() -> None:
     session = session_background_of([{**reading, "stem": "x"}])
     assert session["fallback"] == NO_SPEECH_TASK
     items = {
-        i.name: i.value
-        for i in _speech_quality_items({"speech_quality": speech_quality_record(reading, session)})
+        i.name: i.value for i in _speech_quality_items({"speech_quality": speech_quality_record(reading, session)})
     }
     assert items["speech_quality.foreground_minus_residual_db.whole"] == NO_FOREGROUND
     assert items["speech_quality.plain_minus_residual_db.speech"] == NO_FOREGROUND
@@ -145,7 +144,7 @@ def test_an_empty_enhanced_stream_has_no_foreground() -> None:
 
 
 def test_the_switch_decides_which_floor_a_non_speech_task_reads() -> None:
-    """Off, every task keeps the session floor; on, an airway task reads the session background and a speech task does not."""
+    """Off, every task keeps the session floor; on, an airway task reads the session background, a speech task not."""
     session = session_background_of([_reading(-60.0, 1, "rainbow-passage")])
     edges = session["band_edges_hz"]
     off_band, off = background_floor_for("breath-sounds", session, edges)
@@ -167,9 +166,9 @@ def _store(tmp_path: Path, stem: str, room_db: float, seed: int) -> ProvStore:
         path = tmp_path / f"{stem}_{name}.wav" if name != "recording" else tmp_path / f"{stem}.wav"
         soundfile.write(path, samples.astype(np.float32), RATE, subtype="FLOAT")
         store.entity(prov_type="stream", extent=None, attributes={"name": name, "path": str(path)})
-    windows = [
-        {"start": a, "end": b, "label_scores": [{"Speech": 0.9}]} for a, b in SPEECH
-    ] + [{"start": 6.5, "end": 7.0, "label_scores": [{"Silence": 0.9}]}]
+    windows = [{"start": a, "end": b, "label_scores": [{"Speech": 0.9}]} for a, b in SPEECH] + [
+        {"start": 6.5, "end": 7.0, "label_scores": [{"Silence": 0.9}]}
+    ]
     (tmp_path / f"{stem}_enhanced_yamnet.json").write_text(json.dumps(windows))
     store.entity(
         prov_type="measurement",

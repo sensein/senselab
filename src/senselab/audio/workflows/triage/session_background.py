@@ -78,6 +78,10 @@ def _round(value: float | None, digits: int = 2) -> float | None:
     return None if value is None else round(float(value), digits)
 
 
+def _difference(a: float | None, b: float | None) -> float | None:
+    return None if a is None or b is None else _round(a - b)
+
+
 def _level(series: np.ndarray, mask: np.ndarray, percentile: float) -> float | None:
     return float(np.percentile(series[mask], percentile)) if mask.any() else None
 
@@ -188,18 +192,13 @@ def speech_residual_of(
         "plain_db": levels(plain_f),
         "enhanced_db": levels(enhanced_f),
         "foreground_db": _round(fg),
-        "foreground_minus_residual_db": {
-            name: None if fg is None or residual_db[name] is None else _round(fg - float(residual_db[name]))
-            for name in FRAME_SETS
-        },
+        "foreground_minus_residual_db": {name: _difference(fg, residual_db[name]) for name in FRAME_SETS},
         "plain_minus_residual_db": {name: _round(_level(diff, mask, pct)) for name, mask in sets.items()},
         "not_applicable": None if foreground else NO_FOREGROUND,
     }
 
 
-def session_background_of(
-    readings: Sequence[Mapping[str, Any]], p: Mapping[str, Any] | None = None
-) -> dict[str, Any]:
+def session_background_of(readings: Sequence[Mapping[str, Any]], p: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """The session background and quality over the readings of one BIDS session's recordings.
 
     Args:
@@ -271,7 +270,10 @@ def session_background_of(
 
 
 def background_floor_for(
-    family: str | None, session_background: Mapping[str, Any] | None, band_edges_hz: Sequence[float], p: Mapping[str, Any] | None = None
+    family: str | None,
+    session_background: Mapping[str, Any] | None,
+    band_edges_hz: Sequence[float],
+    p: Mapping[str, Any] | None = None,
 ) -> tuple[np.ndarray | None, dict[str, Any]]:
     """The floor BACKGROUND reads a recording against in place of the session floor, and why.
 
