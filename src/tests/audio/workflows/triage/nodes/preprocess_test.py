@@ -1343,8 +1343,6 @@ class TestTheConsensusTranscript:
                 "temporal_uncertainty_s",
                 "variants",
                 "agreement",
-                "degenerate",
-                "degenerate_sources",
                 "index",
             }
             assert word.attributes["outcome"] == "agreement"

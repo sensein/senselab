@@ -471,8 +471,9 @@ def word_attributes(word: ConsensusWord) -> dict[str, Any]:
 
     Returns:
         The mapping a ``word`` entity carries. The extent is the entity's own and is not in it.
+        ``degenerate`` and ``degenerate_sources`` are present only where some reading is degenerate.
     """
-    return {
+    attributes = {
         "text": word.text,
         "bracketed": word.bracketed,
         "outcome": word.outcome,
@@ -487,10 +488,12 @@ def word_attributes(word: ConsensusWord) -> dict[str, Any]:
             for variant in word.variants
         ],
         "agreement": word.agreement,
-        "degenerate": word.degenerate,
-        "degenerate_sources": list(word.degenerate_sources),
         "index": word.index,
     }
+    if word.degenerate_sources:
+        attributes["degenerate"] = word.degenerate
+        attributes["degenerate_sources"] = list(word.degenerate_sources)
+    return attributes
 
 
 def word_from_attributes(attributes: Mapping[str, Any], extent: tuple[float, float]) -> ConsensusWord:

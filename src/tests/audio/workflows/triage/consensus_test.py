@@ -557,6 +557,7 @@ class TestDegenerateRecognizerRuns:
         assert consensus.provenance["degenerate_n"] == 1
         stored = word_attributes(consensus.words[1])
         assert stored["degenerate"] is True
+        assert "degenerate" not in word_attributes(consensus.words[0]), "an ordinary word keeps its stored shape"
         assert word_from_attributes(stored, consensus.words[1].extent) == consensus.words[1]
 
     def test_a_reading_one_recognizer_looped_does_not_win_the_column(self) -> None:
