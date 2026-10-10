@@ -757,3 +757,70 @@ class TestTheReviewerReadsTheTaskItWasGiven:
         assert context["instructions"] == "Recall the story."
         assert context["speech_type"] == "recall"
         assert context["asked_to_say"] == "he is ninety-three"
+
+
+def _stub_engine(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
+    """A reviewer that answers on whatever engine it is asked for, recording each engine asked."""
+    asked: list[dict[str, Any]] = []
+
+    def _fake(original: str, **kw: Any) -> ReviewResult:  # noqa: ANN401
+        asked.append(dict(kw.get("engine") or {}))
+        return ReviewResult(
+            available=True,
+            reasoning="read it",
+            redaction="not_applicable",
+            original="clean",
+            speakers="one",
+            model_id="stub/model",
+            revision="a" * 40,
+            engine=dict(kw.get("engine") or {}),
+        )
+
+    monkeypatch.setattr(review_module, "review_transcript", _fake)
+    return asked
+
+
+class TestResumeIsPerRowAndPerEngine:
+    """A requeued slice skips the rows its engine already read and re-reads the rest."""
+
+    def test_a_reading_stands_only_under_its_prompt_and_engine(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """vLLM reads once and resumes as present; the transformers config reads again and retires it."""
+        from senselab.text.tasks.pii_detection.redaction_review_vllm import engine_identity
+
+        run_root = _finished_run(tmp_path / "corpus")
+        manifest = _manifest(tmp_path, run_root)
+        vllm = _config(tmp_path, LLM_ON + "    engine: vllm\n")
+        asked = _stub_engine(monkeypatch)
+        first = cli.run_slice(manifest, slice_index=0, slice_count=1, config=vllm, log_dir=tmp_path)
+        assert first["counts"] == {"ok": 1} and len(asked) == 1
+        expected = engine_identity("vllm", vllm.require("redaction.llm_check.vllm"))
+        assert asked[0] == expected
+        assert [annotation["engine"] for annotation in _annotations(run_root)] == [expected]
+        requeued = cli.run_slice(manifest, slice_index=0, slice_count=1, config=vllm, log_dir=tmp_path)
+        assert requeued["counts"] == {"present": 1} and len(asked) == 1
+        other = cli.run_slice(manifest, slice_index=0, slice_count=1, config=_config(tmp_path), log_dir=tmp_path)
+        assert other["counts"] == {"ok": 1} and len(asked) == 2
+        assert [annotation["engine"]["name"] for annotation in _annotations(run_root)] == ["transformers"]
+
+    def test_an_annotation_under_an_earlier_prompt_does_not_stand(self, tmp_path: Path) -> None:
+        """A reading under the previous prompt is not standing; one under the current prompt and engine is."""
+        from senselab.text.tasks.pii_detection.redaction_review import PROMPT_VERSION
+        from senselab.text.tasks.pii_detection.redaction_review_vllm import engine_identity
+
+        engine = engine_identity("transformers")
+        for version, stands in ((PROMPT_VERSION - 1, False), (PROMPT_VERSION, True)):
+            run_root = _finished_run(tmp_path / f"corpus-{version}")
+            store = ProvStore.read_jsonl(run_root / "run" / "store.jsonl", run_id=run_root.name)
+            activity = store.activity(node="REVIEW", step="llm_check", parameters={"enabled": True})
+            store.was_associated_with(activity, software_agent(store))
+            reading = store.entity(
+                prov_type="measurement",
+                extent=None,
+                attributes={"name": REDACTION_LLM_ANNOTATION, "status": "clean", "prompt_version": version},
+            )
+            store.was_generated_by(reading, activity)
+            assert (cli.standing(store, engine) is not None) is stands
+            assert cli.standing(store, {**engine, "name": "vllm"}) is None
+            assert cli.standing(store) is not None

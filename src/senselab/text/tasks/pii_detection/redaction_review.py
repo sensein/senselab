@@ -20,6 +20,10 @@ Heavy dependencies (``transformers``, ``torch``, ``accelerate``, ``compressed-te
 isolated venv built by :func:`senselab.utils.subprocess_venv.ensure_venv`, the same way the detector
 cascade's own venv does, so the host stays off a fixed torch stack.
 
+The model is served by one of two engines (:data:`~senselab.text.tasks.pii_detection.redaction_review_vllm.ENGINES`):
+the transformers worker below, or a pinned vLLM server fed one request at a time
+(:mod:`~senselab.text.tasks.pii_detection.redaction_review_vllm`). Each reading records which.
+
 The venv holds **one long-lived worker per process**, started on the first review and reused by every
 later one, so the weights are loaded once rather than once per review. :func:`shutdown_review_worker`
 ends it; it also ends at interpreter exit and when its stdin reaches EOF, so a killed parent does not
@@ -828,6 +832,8 @@ class ReviewResult:
             before it was emptied. ``0`` on a CPU worker and on a call that did not answer.
         resident_mib: Device memory it holds between reviews — the weights and nothing else, which
             is what a second process on the same card has to live beside.
+        engine: The engine that answered (:func:`~senselab.text.tasks.pii_detection.redaction_review_vllm.engine_identity`),
+            as the worker reported it; empty where none answered.
     """
 
     available: bool
@@ -858,6 +864,7 @@ class ReviewResult:
     output_tokens: Optional[int] = None
     peak_reserved_mib: int = 0
     resident_mib: int = 0
+    engine: dict[str, Any] = field(default_factory=dict)
 
 
 # A line protocol over the worker's stdin/stdout, one JSON object per line.
@@ -1525,18 +1532,25 @@ class _ReviewWorker:
         model_id: The repo whose weights it holds.
         revision: The 40-hex commit those weights are, as the worker read it back.
         load_s: How long starting it and loading the weights took.
+        engine: The engine's identity: as expected before :meth:`start`, as the worker reported it after.
+        engine_details: Everything the worker reported about its engine.
     """
 
-    def __init__(self, model_id: str, revision: str) -> None:
+    def __init__(self, model_id: str, revision: str, engine: Mapping[str, Any] | None = None) -> None:
         """Record what the worker will be asked to load. Starting it is :meth:`start`.
 
         Args:
             model_id: The HuggingFace repo.
             revision: The resolved 40-hex commit.
+            engine: The expected engine identity; the transformers engine where None.
         """
+        from senselab.text.tasks.pii_detection.redaction_review_vllm import ENGINE_TRANSFORMERS, engine_identity
+
         self.model_id = model_id
         self.revision: Optional[str] = revision
         self.load_s = 0.0
+        self.engine: dict[str, Any] = dict(engine or engine_identity(ENGINE_TRANSFORMERS))
+        self.engine_details: dict[str, Any] = dict(self.engine)
         self._process: Optional[subprocess.Popen[str]] = None
         self._replies: queue.Queue[dict[str, Any]] = queue.Queue()
         self._noise: deque[str] = deque(maxlen=40)
@@ -1550,6 +1564,11 @@ class _ReviewWorker:
         Raises:
             ReviewWorkerError: If the worker died, raised, or did not report ready in time.
         """
+        from senselab.text.tasks.pii_detection.redaction_review_vllm import ENGINE_VLLM, start_vllm_worker
+
+        if self.engine.get("name") == ENGINE_VLLM:
+            start_vllm_worker(self, timeout_s)
+            return
         venv_dir = ensure_venv(REVIEW_VENV, REVIEW_REQUIREMENTS, python_version=REVIEW_PYTHON)
         model_path = _staged_snapshot(self.model_id, str(self.revision))
         env = hf_subprocess_env(self.model_id, str(self.revision), base_env=_clean_subprocess_env())
@@ -1638,7 +1657,8 @@ class _ReviewWorker:
             The reply.
 
         Raises:
-            ReviewWorkerError: On a timeout, a dead worker, or a worker-reported exception.
+            ReviewWorkerError: On a timeout, a dead worker, or a worker-reported exception. Only a reply the
+                worker marks ``recoverable`` (a request it could not take) leaves it running.
         """
         try:
             reply = self._replies.get(timeout=timeout_s)
@@ -1646,7 +1666,8 @@ class _ReviewWorker:
             self.close()
             raise ReviewWorkerError(f"redaction review worker did not answer in {timeout_s}s\n{self._tail()}") from None
         if "error" in reply:
-            self.close()
+            if not reply.get("recoverable"):
+                self.close()
             error = reply["error"] or {}
             raise ReviewWorkerError(f"{error.get('type', 'RuntimeError')}: {error.get('message', 'unknown error')}")
         if reply.get("eof"):
@@ -1685,7 +1706,7 @@ class _ReviewWorker:
 
 _WORKER_LOCK = threading.Lock()
 _WORKER: Optional[_ReviewWorker] = None
-_WORKER_KEY: Optional[tuple[str, str]] = None
+_WORKER_KEY: Optional[tuple[str, str, str]] = None
 _WORKER_REFUSED: Optional[str] = None
 
 
@@ -1715,13 +1736,16 @@ def shutdown_review_worker(*, forget_failure: bool = True) -> None:
 atexit.register(shutdown_review_worker)
 
 
-def _worker_for(model_id: str, revision: str, timeout_s: int) -> tuple[_ReviewWorker, float]:
-    """The running worker holding this commit, started if there is not a live one already.
+def _worker_for(
+    model_id: str, revision: str, timeout_s: int, engine: Mapping[str, Any] | None = None
+) -> tuple[_ReviewWorker, float]:
+    """The running worker holding this commit on this engine, started if there is not a live one already.
 
     Args:
         model_id: The HuggingFace repo.
         revision: The resolved 40-hex commit.
         timeout_s: Wall-clock ceiling on a load, when one is needed.
+        engine: The expected engine identity; the transformers engine where None.
 
     Returns:
         ``(worker, load_s)`` — the worker with its weights loaded, and the seconds this call spent
@@ -1733,19 +1757,20 @@ def _worker_for(model_id: str, revision: str, timeout_s: int) -> tuple[_ReviewWo
     global _WORKER, _WORKER_KEY, _WORKER_REFUSED
     if _WORKER_REFUSED is not None:
         raise ReviewWorkerError(_WORKER_REFUSED)
-    if _WORKER is not None and _WORKER_KEY == (model_id, revision) and _WORKER.alive:
+    key = (model_id, revision, json.dumps(dict(engine or {}), sort_keys=True))
+    if _WORKER is not None and _WORKER_KEY == key and _WORKER.alive:
         return _WORKER, 0.0
     if _WORKER is not None:
         _WORKER.close()
         _WORKER, _WORKER_KEY = None, None
-    worker = _ReviewWorker(model_id, revision)
+    worker = _ReviewWorker(model_id, revision, engine)
     try:
         worker.start(timeout_s)
     except Exception as exc:
         worker.close()
         _WORKER_REFUSED = _failure(exc)
         raise
-    _WORKER, _WORKER_KEY = worker, (model_id, revision)
+    _WORKER, _WORKER_KEY = worker, key
     return worker, worker.load_s
 
 
@@ -1759,6 +1784,7 @@ def review_transcript(
     max_new_tokens: int = 1024,
     timeout_s: int = 1800,
     feedback: str | None = None,
+    engine: Mapping[str, Any] | None = None,
 ) -> ReviewResult:
     """Ask the reviewer to read one recording's transcript, reporting failure rather than raising.
 
@@ -1781,6 +1807,9 @@ def review_transcript(
         timeout_s: Wall-clock ceiling, applied to the load and to the generation separately.
         feedback: The problem with the previous round's answer (:func:`answer_problem`), sent with the
             texts so this round corrects it; None on a first round.
+        engine: The engine to serve it
+            (:func:`~senselab.text.tasks.pii_detection.redaction_review_vllm.engine_identity`); the transformers
+            worker where None.
 
     Returns:
         The review. ``available`` is ``True`` only when the worker answered; every other path —
@@ -1804,7 +1833,7 @@ def review_transcript(
 
     with _WORKER_LOCK:
         try:
-            worker, load_s = _worker_for(model_id, revision, timeout_s)
+            worker, load_s = _worker_for(model_id, revision, timeout_s, engine)
             output = worker.review(
                 _compose(original, redacted, context, feedback),
                 review_prompt(bool((context or {}).get(ITEM_SET))),
@@ -1820,6 +1849,7 @@ def review_transcript(
                 elapsed_s=round(time.monotonic() - began, 3),
             )
         loaded_revision = worker.revision
+        answered_by = dict(worker.engine)
 
     completion = str(output.get("completion") or "")
     parsed = parse_completion(completion)
@@ -1851,6 +1881,7 @@ def review_transcript(
         output_tokens=output.get("output_tokens"),
         peak_reserved_mib=int(output.get("peak_reserved_mib") or 0),
         resident_mib=int(output.get("resident_mib") or 0),
+        engine=answered_by,
     )
 
 
@@ -1912,4 +1943,5 @@ def review_payload(result: ReviewResult) -> dict[str, Any]:
         "output_tokens": result.output_tokens,
         "peak_reserved_mib": result.peak_reserved_mib,
         "resident_mib": result.resident_mib,
+        "engine": dict(result.engine),
     }
