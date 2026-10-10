@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import platform
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any, Mapping
@@ -20,7 +20,7 @@ from typing import Any, Mapping
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.features_extraction.praat_parselmouth import CppsSettings
 from senselab.audio.workflows.triage.config import TriageConfig
-from senselab.audio.workflows.triage.consensus import located_span
+from senselab.audio.workflows.triage.consensus import located_span, word_timing_parameters
 from senselab.audio.workflows.triage.vocabulary import (
     CONFORMANCE_REFERENTS,
     BranchReport,
@@ -469,11 +469,66 @@ def live_entities(store: ProvStore, prov_type: PROV_TYPE) -> list[Entity]:
     return [e for e in store.entities(prov_type) if not store.is_invalidated(e.id)]
 
 
+PLAIN_STREAM = "plain"
+"""The stream the recognizers were timed against."""
+
+
+def recording_duration(store: ProvStore) -> float | None:
+    """The duration the ``plain`` stream decoded to, as PREPROCESS stored its extent.
+
+    Args:
+        store: The provenance store.
+
+    Returns:
+        The end of the latest live ``plain`` stream's extent, or None where the store carries none.
+    """
+    found = [
+        entity
+        for entity in live_entities(store, "stream")
+        if entity.attributes.get("name") == PLAIN_STREAM and entity.extent is not None
+    ]
+    return float(found[-1].extent[1]) if found and found[-1].extent is not None else None
+
+
+def bound_word_extent(extent: tuple[float, float], duration_s: float) -> tuple[float, float]:
+    """Bound a stored consensus word extent by the duration its audio decoded to.
+
+    A point span's window (:func:`~senselab.audio.workflows.triage.consensus.located_span`) could reach
+    past the end of the recording; an end past it by at most ``point_width_s`` is clamped to it.
+
+    Args:
+        extent: The word's stored ``(start, end)``, in seconds.
+        duration_s: The duration the audio decoded to, in seconds.
+
+    Returns:
+        The extent with both ends at most ``duration_s``.
+
+    Raises:
+        ValueError: If the start is past the end, or the end overruns ``duration_s`` by more than
+            ``point_width_s``: no point window reaches that far.
+    """
+    start, end = float(extent[0]), float(extent[1])
+    if start > end:
+        raise ValueError(f"word extent starts at {start}s, past its end at {end}s")
+    if end <= duration_s:
+        return start, end
+    width = word_timing_parameters()["point_width_s"]
+    if end - duration_s > width:
+        raise ValueError(
+            f"word extent ends at {end}s, past the {duration_s}s this audio decoded to by "
+            f"{end - duration_s:.3f}s; more than a point window ({width}s) outside the recording is an "
+            "inconsistency, not a widened point"
+        )
+    return min(start, duration_s), duration_s
+
+
 def consensus_words(store: ProvStore) -> list[Entity]:
     """The consensus stream: every live ``word`` entity, in ``index`` order.
 
     ``index`` is the position PREPROCESS's consensus emitted the word at, and is the only order a
-    reader may use.
+    reader may use. Where the store carries the ``plain`` stream's duration, a word's extent reaching
+    past it by at most ``point_width_s`` is returned clamped to it (:func:`bound_word_extent`); a word
+    reaching further is returned as stored, for the node slicing it to refuse.
 
     Args:
         store: The provenance store.
@@ -481,7 +536,36 @@ def consensus_words(store: ProvStore) -> list[Entity]:
     Returns:
         The live ``word`` entities, sorted by their ``index`` attribute.
     """
-    return sorted(live_entities(store, "word"), key=lambda word: int(word.attributes["index"]))
+    words = sorted(live_entities(store, "word"), key=lambda word: int(word.attributes["index"]))
+    duration_s = recording_duration(store)
+    if duration_s is None:
+        return words
+    bounded: list[Entity] = []
+    for word in words:
+        try:
+            bounded.append(bound_word(word, duration_s))
+        except ValueError:
+            bounded.append(word)
+    return bounded
+
+
+def bound_word(word: Entity, duration_s: float) -> Entity:
+    """A consensus word with its extent bounded by the duration its audio decoded to.
+
+    Args:
+        word: A consensus ``word`` entity, as stored.
+        duration_s: The duration the audio decoded to, in seconds.
+
+    Returns:
+        The word itself where its extent is None or inside ``duration_s``; otherwise a copy carrying
+        :func:`bound_word_extent`'s extent. The store is not touched.
+
+    Raises:
+        ValueError: As :func:`bound_word_extent`.
+    """
+    if word.extent is None or float(word.extent[1]) <= duration_s:
+        return word
+    return replace(word, extent=bound_word_extent(word.extent, duration_s))
 
 
 def lexical_words(store: ProvStore) -> list[Entity]:
@@ -503,7 +587,7 @@ def lexical_words(store: ProvStore) -> list[Entity]:
     ]
 
 
-def word_hull(word: Entity) -> tuple[float, float]:
+def word_hull(word: Entity, duration_s: float | None = None) -> tuple[float, float]:
     """The hull of a word's located per-source timings — every recognizer's placement of it.
 
     The union of the derived extent and every source's located span
@@ -511,6 +595,8 @@ def word_hull(word: Entity) -> tuple[float, float]:
 
     Args:
         word: A consensus ``word`` entity.
+        duration_s: The duration the audio decoded to (:func:`recording_duration`); a point span's
+            window is kept inside it. Unbounded where None.
 
     Returns:
         ``(min located start, max located end)``; the derived extent where no source located it; ``(0.0, 0.0)``
@@ -519,7 +605,7 @@ def word_hull(word: Entity) -> tuple[float, float]:
     spans = [
         located
         for span in (word.attributes.get("timings") or {}).values()
-        if (located := located_span(span[0], span[1])) is not None
+        if (located := located_span(span[0], span[1], duration_s=duration_s)) is not None
     ]
     if not spans:
         return (float(word.extent[0]), float(word.extent[1])) if word.extent is not None else (0.0, 0.0)
