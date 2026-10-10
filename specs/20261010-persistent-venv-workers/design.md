@@ -60,7 +60,7 @@ interpreter and runs `load` once, every call sends one JSON request line and rea
 Every worker reports its settings once loaded (`venv_worker_stats()`). On ORCD with
 `--cpus-per-task=8` and `OMP_NUM_THREADS=MKL_NUM_THREADS=OPENBLAS_NUM_THREADS=8`, all three report
 `torch.get_num_threads() == 8` and an affinity of 8 CPUs: no oversubscription and no
-single-threading. See the FRCRN section below for its decode cost.
+single-threading. CrisperWhisper's CT2 engine and FRCRN's decode cost are in `validation.md`.
 
 ## Validation
 
