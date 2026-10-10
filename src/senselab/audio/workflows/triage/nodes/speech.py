@@ -116,7 +116,7 @@ from senselab.audio.workflows.triage.nodes.ddk import (
     syllable_detail,
 )
 from senselab.audio.workflows.triage.nodes.redact import category_family
-from senselab.audio.workflows.triage.residue import is_content_word, residue_rule, task_residue
+from senselab.audio.workflows.triage.residue import is_content_word, is_non_lexical, residue_rule, task_residue
 from senselab.audio.workflows.triage.routing_analysis.families import SYLLABLE_REPETITION
 from senselab.audio.workflows.triage.stimulus import (
     LexicalWord,
@@ -126,7 +126,7 @@ from senselab.audio.workflows.triage.stimulus import (
     near_match,
 )
 from senselab.audio.workflows.triage.task_lexicon import category_members, task_lexicon
-from senselab.audio.workflows.triage.task_speech import item_runs, task_speech_parameters, write_task_speech
+from senselab.audio.workflows.triage.task_speech import item_utterances, write_task_speech
 from senselab.audio.workflows.triage.vocabulary import TASK
 from senselab.text.tasks.pii_detection.api import PiiScan, scan_for_pii
 from senselab.utils.data_structures import HFModel, SpeechBrainModel
@@ -1530,12 +1530,7 @@ def _speech_item_list(
             )
         first_seen.setdefault(key, start)
 
-    lexical_items = lexical_words(store)
-    placed = _item_list_extent(
-        store,
-        repetition_allowed=repetition_allowed,
-        member_ids=frozenset(lexical_items[index].id for index in members),
-    )
+    placed = _item_list_extent(store, repetition_allowed=repetition_allowed)
     components.extend(placed.components)
     findings.extend(placed.deviations)
     findings.append(count("items", len(items), None, *(word.id for word in items)))
@@ -1552,27 +1547,20 @@ def _speech_item_list(
     return Result(components, findings)
 
 
-def _item_list_extent(store: ProvStore, *, repetition_allowed: bool | None, member_ids: frozenset[str]) -> Result:
-    """The item list's ``task_extent`` over its item runs, or the finding that says why none.
+def _item_list_extent(store: ProvStore, *, repetition_allowed: bool | None) -> Result:
+    """The item list's ``task_extent`` over its item utterances, or the finding that says why none.
 
     Args:
         store: The provenance store.
         repetition_allowed: The rule the category gives, or None where no category was read.
-        member_ids: The lexical words that are members of the declared category.
 
     Returns:
-        One ``task_extent`` proposal over the hull of the item runs' words
-        (:func:`~senselab.audio.workflows.triage.task_speech.item_runs`), or one :data:`NO_TASK_ITEMS` finding.
+        One ``task_extent`` proposal over the hull of the item utterances' words
+        (:func:`~senselab.audio.workflows.triage.task_speech.item_utterances`), or one :data:`NO_TASK_ITEMS`
+        finding.
     """
-    p = task_speech_parameters()
-    runs = item_runs(
-        lexical_words(store),
-        member_ids,
-        gap_s=float(p["item_gap_s"]),
-        member_share_min=float(p["member_share_min"]),
-        content_share_min=float(p["content_share_min"]),
-    )
-    items = [word for run in runs for word in run]
+    lexical = [word for word in lexical_words(store) if not is_non_lexical(word_text(word))]
+    items = [word for utterance in item_utterances(lexical) for word in utterance]
     consensus_id = _consensus_id(store)
     extent = hull([word_extent(word) for word in items])
     if extent is None or extent[1] <= extent[0] or consensus_id is None:
