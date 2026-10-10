@@ -62,6 +62,13 @@ def test_discard_reasons_come_first() -> None:
     ]
 
 
+def test_a_settled_decision_names_no_owed_measurement() -> None:
+    """``owed_counts=False`` drops ``not_measured`` and keeps every other reason."""
+    keys = ["too_short_for_task", "owning_branch_input_absent", "conformance:SPEECH"]
+    assert reasons_of(keys) == ["task_too_short", "not_measured", "task_not_conforming"]
+    assert reasons_of(keys, "no_transcript", owed_counts=False) == ["task_too_short", "task_not_conforming"]
+
+
 def test_an_unmapped_key_is_left_out_not_invented() -> None:
     """An unknown key yields no reason rather than a guessed one."""
     assert reasons_of(["no_such_key"]) == []
