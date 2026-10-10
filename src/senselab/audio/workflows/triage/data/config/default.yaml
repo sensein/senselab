@@ -323,7 +323,6 @@ verdict:
   # REVIEW's reading annotates; these decide what the annotation means.
   llm_redaction_flags: true            # a reading proposing a redaction is a triage flag ground
   llm_redaction_withholds: false       # UNFITTED. a reading of residue withholds a recording REDACT passed
-  llm_rescan_clears: true              # a clean reading releases the redacted copy of a REDACT re-scan fail
   llm_reset_redactions: true           # owner, 2026-09-27: a reading's release entries unmask exactly the words they name
   condition_categories: [CONDITION]    # owner, 2026-10-03 (policy v7): a listed health condition is never masked and never withholds
   cohort_conditions: bridge2ai_voice_adult_2026-09-04  # data/cohort_conditions profile: which listed conditions the study recruits for

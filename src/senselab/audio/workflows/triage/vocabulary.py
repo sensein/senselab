@@ -180,10 +180,6 @@ FINDINGS_ARE_TASK_CONTENT = (
     "every finding REDACT read is content the task itself declares, so REDACT masked nothing and the original "
     "is released"
 )
-REVIEWER_CLEARED_UNMASKED = (
-    "REDACT's re-scan still read a finding it had planned no mask over, and the reviewer read the original as "
-    "clean and proposed nothing to hide, so the original is released"
-)
 TASK_CONTENT_UNMASKED = (
     "every finding REDACT masked lies on the non-lexical task's own events -- a syllable train, a breath, a "
     "cough or a held vowel -- so no mask stands and the original is released"
@@ -208,7 +204,6 @@ RELEASE_WITHOUT_REDACTION_GROUNDS = (
     REVIEWER_UNMASKED_ALL,
     NO_CONTENT_MASKED,
     FINDINGS_ARE_TASK_CONTENT,
-    REVIEWER_CLEARED_UNMASKED,
     TASK_CONTENT_UNMASKED,
 )
 """Which reading cleared the recording. One stands behind every :attr:`Release.AS_IS`."""
@@ -242,8 +237,9 @@ UNPLACED_FINDING_UNREAD = (
     "a detector finding could not be placed on the transcript's words and no reviewer read the recording"
 )
 
-REDACT_VERIFY_FOUND = (
-    "REDACT's re-scan of its redacted transcript still read identifying content and no reading cleared it"
+MASK_COVERAGE_FAILED = (
+    "a mask the final plan keeps does not cover its words -- they carry no usable timing, the released text shows "
+    "them, or the released audio does not hide them -- so neither copy may be handed on"
 )
 
 REDACT_UNRESOLVED = "REDACT did not resolve its redaction, so neither copy may be handed on"
@@ -251,16 +247,12 @@ REDACT_UNRESOLVED = "REDACT did not resolve its redaction, so neither copy may b
 RELEASE_WITHHELD_GROUNDS = (
     REVIEWER_PROPOSED_REDACTION,
     UNPLACED_FINDING_UNREAD,
-    REDACT_VERIFY_FOUND,
+    MASK_COVERAGE_FAILED,
     REDACT_UNRESOLVED,
     NON_TASK_SPEECH_UNTIMED,
     NON_TASK_SPEECH_EXTENSIVE,
 )
 """Why the redaction policy withholds a recording. One stands behind every :attr:`Release.WITHHELD`."""
-
-REVIEWER_CLEARED_RESCAN = (
-    "REDACT's re-scan still read a finding, and the reviewer read the original as clean and proposed nothing to hide"
-)
 
 REVIEWER_UNMASKED_SOME = (
     "the redaction reviewer unmasked the words it named; the copy keeps the content words still masked"
@@ -286,7 +278,6 @@ DISCARDED = "the recording was discarded, so no artefact of it is released"
 """The release ground of every discard; a discard carries no release value."""
 
 RELEASE_WITH_REDACTION_GROUNDS = (
-    REVIEWER_CLEARED_RESCAN,
     REVIEWER_UNMASKED_SOME,
     MASKS_TRIMMED_TO_CONTENT,
     POLICY_MASKS_ADDED,
@@ -307,8 +298,7 @@ class RedactionEvidence:
         scanned: True where SPEECH scanned the transcript, False where it declined to, and None
             where it recorded no scan either way.
         findings_n: How many live ``pii`` findings the store holds.
-        rescan_survivors: The categories REDACT's re-scan still read after its one re-plan, its
-            ``unremediable``. Empty where REDACT did not run, passed, or could not complete a scan.
+        coverage_failed: Whether a mask the final plan keeps fails to cover its words (``redact.mask_coverage``).
         masks_n: How many masks REDACT planned over the recording.
         masks_final_n: How many masks stand once the reviewer's unmasks and the content-word trim
             are applied; see :func:`~senselab.audio.workflows.triage.nodes.redact.mask_plan`.
@@ -331,7 +321,7 @@ class RedactionEvidence:
     lexical_words_n: int | None = None
     scanned: bool | None = None
     findings_n: int = 0
-    rescan_survivors: tuple[str, ...] = ()
+    coverage_failed: bool = False
     masks_n: int = 0
     masks_final_n: int = 0
     masks_changed: bool = False
@@ -993,7 +983,6 @@ RELEASE_GROUND_KEYS: dict[str, str] = {
     REVIEWER_UNMASKED_ALL: "reviewer_unmasked_all",
     NO_CONTENT_MASKED: "no_content_masked",
     FINDINGS_ARE_TASK_CONTENT: "findings_are_task_content",
-    REVIEWER_CLEARED_UNMASKED: "reviewer_cleared_unmasked",
     TASK_CONTENT_UNMASKED: "task_content_unmasked",
     NO_TRANSCRIPT: "no_transcript",
     SPEECH_UNREAD: "speech_unread",
@@ -1001,9 +990,8 @@ RELEASE_GROUND_KEYS: dict[str, str] = {
     SCAN_UNRECORDED: "scan_unrecorded",
     REVIEWER_PROPOSED_REDACTION: "reviewer_proposed_redaction",
     UNPLACED_FINDING_UNREAD: "unplaced_finding_unread",
-    REDACT_VERIFY_FOUND: "redact_verify_found",
+    MASK_COVERAGE_FAILED: "mask_coverage_failed",
     REDACT_UNRESOLVED: "redact_unresolved",
-    REVIEWER_CLEARED_RESCAN: "reviewer_cleared_rescan",
     REVIEWER_UNMASKED_SOME: "reviewer_unmasked_some",
     MASKS_TRIMMED_TO_CONTENT: "masks_trimmed_to_content",
     POLICY_MASKS_ADDED: "policy_masks_added",
@@ -1195,9 +1183,6 @@ class FoldPolicy:
             recording the evidence would release, with or without REDACT having run. The
             one direction in which a weighting toward the reviewer may move the release axis:
             tightening.
-        llm_rescan_clears: Whether a reading of the original as clean, proposing nothing to hide,
-            releases the redacted copy of a recording REDACT withheld only because its re-scan still
-            read a finding. An incomplete scan or re-scan is never cleared.
         llm_reset_redactions: Whether a reading's ``release`` entries unmask the words they name.
         condition_categories: Upper-cased reviewer categories whose ``proposal`` entries are health
             conditions, as a reading written before conditions had their own part carries them. A
@@ -1235,7 +1220,6 @@ class FoldPolicy:
     unmeasured_points_flag: bool = True
     llm_redaction_flags: bool = True
     llm_redaction_withholds: bool = False
-    llm_rescan_clears: bool = False
     llm_reset_redactions: bool = False
     condition_categories: tuple[str, ...] = ("CONDITION",)
     trim_protected_categories: tuple[str, ...] = ()
@@ -1271,7 +1255,6 @@ class FoldPolicy:
             unmeasured_points_flag=bool(config.get(f"{_SECTION}.unmeasured_points_flag", True)),
             llm_redaction_flags=bool(config.get(f"{_SECTION}.llm_redaction_flags", True)),
             llm_redaction_withholds=bool(config.get(f"{_SECTION}.llm_redaction_withholds", False)),
-            llm_rescan_clears=bool(config.get(f"{_SECTION}.llm_rescan_clears", False)),
             llm_reset_redactions=bool(config.get(f"{_SECTION}.llm_reset_redactions", False)),
             condition_categories=tuple(
                 str(category).upper() for category in (config.get(f"{_SECTION}.condition_categories") or ())
@@ -1633,24 +1616,6 @@ def deciding_reading(
     return {**annotation, "proposal": proposal}
 
 
-def _reviewer_cleared(llm_redaction: Mapping[str, Any] | None) -> bool:
-    """Whether the reading says the original carries nothing identifying and asks to hide nothing.
-
-    Args:
-        llm_redaction: REVIEW's annotation, or None where it wrote none.
-
-    Returns:
-        True only where the reviewer read the text (``clean`` or ``flagged``), judged the original
-        ``clean``, and proposed no ``redact`` entry.
-    """
-    annotation = dict(llm_redaction or {})
-    if annotation.get("status") not in ("clean", "flagged"):
-        return False
-    if annotation.get("original") != "clean":
-        return False
-    return not any(str(entry.get("action")) == "redact" for entry in annotation.get("proposal") or ())
-
-
 def reviewer_may_unmask(llm_redaction: Mapping[str, Any] | None) -> bool:
     """Whether the reading's ``release`` entries may unmask the words they name.
 
@@ -1671,7 +1636,6 @@ def _release_from(
     ran: Mapping[str, RunState],
     reviewer_withholds: str | None = None,
     speech_declined: bool = False,
-    reviewer_clears: bool = False,
 ) -> tuple[Release | None, str | None]:
     """Which artefact may be handed on: the evidence's answer, then the reviewer's moves.
 
@@ -1690,32 +1654,20 @@ def _release_from(
             the graph could not assess.
         speech_declined: Whether the ruleset declined SPEECH, in which case a task that carries no
             lexical content by construction is released without redaction.
-        reviewer_clears: Whether the reviewer read the original as clean, proposed nothing to hide,
-            and the policy lets that release. It moves only a REDACT ``fail`` whose re-scan still read
-            a finding, and only to the redacted copy.
 
     Returns:
         Which artefact may be handed on, never anything about the store, and the ground behind it;
         None where the graph could not assess it, with one of :data:`RELEASE_UNKNOWN_GROUNDS`.
         A REDACT ``pass`` clears the redacted copy and not the original; the ground is None only where
         that pass decided and a planned mask stands, and one of the controlled grounds otherwise. A
-        REDACT ``fail`` or ``flag`` that nothing clears withholds on :data:`REDACT_VERIFY_FOUND` or
-        :data:`REDACT_UNRESOLVED`.
+        REDACT ``fail`` withholds on :data:`REDACT_UNRESOLVED`; a final plan whose masks do not cover their
+        words withholds on :data:`MASK_COVERAGE_FAILED`.
         A copy that would mask nothing is never released as a redacted copy: the original is.
     """
     release, ground = _release_from_evidence(node_verdicts, evidence, ran, speech_declined)
     if reviewer_withholds is not None and release in (Release.REDACTED, Release.AS_IS):
         return Release.WITHHELD, reviewer_withholds
     redact = next((verdict for verdict in node_verdicts if verdict.node == _REDACT), None)
-    if (
-        reviewer_clears
-        and release is Release.WITHHELD
-        and ground is None
-        and redact is not None
-        and redact.outcome is Outcome.FAIL
-        and evidence.rescan_survivors
-    ):
-        release, ground = Release.REDACTED, REVIEWER_CLEARED_RESCAN
     if (
         release is Release.AS_IS
         and ground == SCAN_FOUND_NOTHING
@@ -1725,8 +1677,7 @@ def _release_from(
     ):
         return Release.REDACTED, POLICY_MASKS_ONLY
     if release is Release.WITHHELD and ground is None:
-        verify_found = redact is not None and redact.outcome is Outcome.FAIL and bool(evidence.rescan_survivors)
-        ground = REDACT_VERIFY_FOUND if verify_found else REDACT_UNRESOLVED
+        ground = REDACT_UNRESOLVED
     if release is not Release.REDACTED:
         return release, ground
     reviewer = evidence.reviewer_unmasked_n > 0
@@ -1737,8 +1688,6 @@ def _release_from(
             return Release.AS_IS, REVIEWER_UNMASKED_ALL if reviewer else NO_CONTENT_MASKED
         if ground is None:
             return Release.AS_IS, FINDINGS_ARE_TASK_CONTENT
-        if ground == REVIEWER_CLEARED_RESCAN:
-            return Release.AS_IS, REVIEWER_CLEARED_UNMASKED
     if evidence.masks_changed:
         if reviewer:
             return Release.REDACTED, REVIEWER_UNMASKED_SOME
@@ -1748,10 +1697,10 @@ def _release_from(
     return release, ground
 
 
-def non_task_speech_release(
+def final_release(
     release: Release | None, ground: str | None, evidence: RedactionEvidence
 ) -> tuple[Release | None, str | None]:
-    """The release once lexical speech outside a non-lexical task is weighed.
+    """The release once the final plan's coverage and the speech outside the task are weighed.
 
     Args:
         release: The release before it.
@@ -1759,14 +1708,17 @@ def non_task_speech_release(
         evidence: What the store says about the redaction, read for the non-task speech words.
 
     Returns:
-        A release that hands an artefact on becomes :attr:`Release.WITHHELD` on
-        :data:`NON_TASK_SPEECH_EXTENSIVE` where an item-set task's speech outside its item runs is extensive, on
-        :data:`NON_TASK_SPEECH_UNTIMED` where such a word carries no usable timing, else
+        A release that hands an artefact on becomes :attr:`Release.WITHHELD` on :data:`MASK_COVERAGE_FAILED` where
+        a kept mask does not cover its words, on :data:`NON_TASK_SPEECH_EXTENSIVE` where an item-set task's speech
+        outside its item runs is extensive, on :data:`NON_TASK_SPEECH_UNTIMED` where such a word carries no usable
+        timing, else
         :attr:`Release.REDACTED` on :data:`NON_TASK_SPEECH_MASKED` where one stays masked; any other release
         is returned unchanged.
     """
     if release not in (Release.AS_IS, Release.REDACTED):
         return release, ground
+    if evidence.coverage_failed:
+        return Release.WITHHELD, MASK_COVERAGE_FAILED
     if evidence.non_task_speech_extensive:
         return Release.WITHHELD, NON_TASK_SPEECH_EXTENSIVE
     if evidence.non_task_speech_untimed_n:
@@ -3147,7 +3099,6 @@ def fold_file_verdict(
         triage = Triage.PASS
 
     withholds = rules.llm_redaction_withholds and _reviewer_found_residue(deciding)
-    clears = rules.llm_rescan_clears and _reviewer_cleared(deciding)
     unread = any(state == UNPLACED_UNREAD for _, state in unplaced)
     withholding = REVIEWER_PROPOSED_REDACTION if withholds else UNPLACED_FINDING_UNREAD if unread else None
     release, release_ground = _release_from(
@@ -3156,9 +3107,8 @@ def fold_file_verdict(
         ran,
         withholding,
         speech_declined=routes.get(_SPEECH) == DECLINED,
-        reviewer_clears=clears,
     )
-    release, release_ground = non_task_speech_release(release, release_ground, redaction or RedactionEvidence())
+    release, release_ground = final_release(release, release_ground, redaction or RedactionEvidence())
     if triage is not Triage.DISCARD and task_evidence.non_lexical and release in (Release.REDACTED, Release.WITHHELD):
         flag(
             _VERDICT,

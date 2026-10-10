@@ -2234,7 +2234,7 @@ REDACT_LANE = "REDACT"
 REDACTION_NAME = "redaction"
 
 #: REDACT's own verdict-detail keys the lane reports, the counterpart of ``BRANCH_MEASURES``.
-REDACT_MEASURES = ("redactions_n", "verified", "survived", "outstanding")
+REDACT_MEASURES = ("redactions_n", "coverage")
 
 #: The lanes the summary draws, in order.
 SUMMARY_LANES = (*BRANCHES, REDACT_LANE)

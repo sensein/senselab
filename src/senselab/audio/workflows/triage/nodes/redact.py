@@ -147,34 +147,6 @@ class RedactResult(NodeResult):
     artifacts: dict[str, Path]
 
 
-@dataclass(frozen=True)
-class _Verification:
-    """What re-scanning the redacted consensus text established.
-
-    Attributes:
-        verified: Whether the re-scan ran completely and found nothing.
-        survived: The categories found on the redacted text, sorted; never matched text.
-        scan_ran: Whether a complete re-scan happened at all — an empty ``failures`` is not evidence
-            that one did.
-        failed: Detectors the verification re-scan attempted and that raised. Names only.
-        missing: Detectors ``pii.required_detectors`` names that the verification re-scan never
-            attempted. Reported in the verdict separately from the planning scan's own
-            ``scan_failed`` and ``scan_missing``.
-        cache: The result-cache use of the re-scan (:func:`cache_attributes`), None when it did not
-            reach the detectors.
-        spans: Each surviving span as ``(category, text)``, its placeholders removed; held in memory to
-            place it on words, never written.
-    """
-
-    verified: bool
-    survived: list[str]
-    scan_ran: bool
-    failed: list[str]
-    missing: list[str]
-    cache: dict[str, Any] | None = None
-    spans: tuple[tuple[str, str], ...] = ()
-
-
 def padding_ms(config: TriageConfig) -> int:
     """The redaction margin, in whole milliseconds.
 
@@ -291,86 +263,6 @@ def _verification_text(records: list[dict[str, Any]]) -> str:
     """
     kept = [record for record in records if not (record["kind"] == "word" and record["bracketed"])]
     return " ".join(token for token in (_token(record) for record in kept) if token)
-
-
-def _mask_tokens(records: list[dict[str, Any]]) -> tuple[str, ...]:
-    """Every placeholder the rendered text carries, as a detector may echo it back.
-
-    Args:
-        records: :func:`_render`'s records.
-
-    Returns:
-        Each placeholder with and without its brackets, and each category a merged placeholder
-        joins, longest first.
-    """
-    tokens: set[str] = set()
-    for record in records:
-        if record["kind"] == "word":
-            continue
-        token = str(record["token"])
-        bare = token.strip("[]")
-        tokens.update({token, bare, *bare.split(_RESERVED_CATEGORY_CHAR)})
-    return tuple(sorted((token for token in tokens if token), key=len, reverse=True))
-
-
-def _is_mask(text: str, masks: Sequence[str]) -> bool:
-    """Whether a re-scan span is a placeholder and nothing the recording said.
-
-    Args:
-        text: The span's text.
-        masks: :func:`_mask_tokens`' output for the scanned text.
-
-    Returns:
-        True when no word character remains once every placeholder is removed.
-    """
-    rest = text
-    for mask in masks:
-        rest = rest.replace(mask, " ")
-    return not any(ch.isalnum() for ch in rest)
-
-
-def _verify(records: list[dict[str, Any]], required: list[str]) -> _Verification:
-    """Re-scan the redacted residue with the same detectors; no recognizer runs.
-
-    A span that is a placeholder the plan wrote is the redaction itself and does not survive.
-
-    Args:
-        records: :func:`_render`'s records over the residue, under the plan being verified.
-        required: The detector set ``pii.required_detectors`` names.
-
-    Returns:
-        What the re-scan established. A re-scan that skipped a required detector counts as not
-        having run.
-    """
-    scan = scan_for_pii(_verification_text(records))
-    scan = scan[0] if isinstance(scan, list) else scan
-    cache = cache_attributes(scan.cache)
-    missing = sorted(set(required) - set(scan.detectors_used) - set(scan.failures))
-    failed = sorted(scan.failures)
-    if failed or not scan.detectors_used or missing:
-        return _Verification(verified=False, survived=[], scan_ran=False, failed=failed, missing=missing, cache=cache)
-    masks = _mask_tokens(records)
-    kept = [span for span in scan.spans if not _is_mask(str(span.text or ""), masks)]
-    survived = sorted({span.category for span in kept})
-    spans = tuple((str(span.category), _without_masks(str(span.text or ""), masks)) for span in kept)
-    return _Verification(
-        verified=not survived, survived=survived, scan_ran=True, failed=[], missing=[], cache=cache, spans=spans
-    )
-
-
-def _without_masks(text: str, masks: Sequence[str]) -> str:
-    """A re-scan span's text with every placeholder the plan wrote removed.
-
-    Args:
-        text: The span's text.
-        masks: :func:`_mask_tokens`' output for the scanned text.
-
-    Returns:
-        The words the recording said, single-spaced.
-    """
-    for mask in masks:
-        text = text.replace(mask, " ")
-    return " ".join(text.split())
 
 
 def _overlaps(a: tuple[float, float], b: tuple[float, float]) -> bool:
@@ -852,116 +744,96 @@ def _register_redacted_stream(
     return stream_id
 
 
-RESCAN_SOURCE = "redact_rescan"
-"""The ``source`` of a finding REDACT's re-scan read on words no finding covered."""
+COVERAGE_CHECK = "mask_coverage"
+"""What REDACT and VERDICT verify of a mask plan: that each mask covers its words, in the text and the audio."""
 
 
-class _Rescan:
-    """REDACT's re-scan survivors, placed on words and judged by the fold's own plan.
+@dataclass(frozen=True)
+class Coverage:
+    """Whether a set of masks covers the words it masks, in the released text and the released audio.
 
-    A survivor placed on residue words no planned extent covers becomes a ``pii`` finding of its own; the
-    fold's mask plan (:func:`fold_mask_plan`) then says which of its words stay masked, under every
-    exemption and policy release the fold applies. Those words are re-planned as masks; a survivor whose
-    words the plan releases, or the declared stimulus accounts for, is attributed. A survivor that places
-    on no uncovered word, or on a word with no usable timing, is outstanding.
+    Attributes:
+        masked_n: The words the masks are to hide.
+        untimed_n: Those with no usable timing, which no mask can be placed on.
+        text_uncovered_n: Those the rendered text still shows.
+        audio_uncovered_n: The masks whose audio span is neither silent nor replaced.
     """
 
-    def __init__(
-        self,
-        store: ProvStore,
-        software: str,
-        residue: Sequence[Entity],
-        exempt_word_ids: Collection[str],
-        detectors: Sequence[str],
-    ) -> None:
-        """Hold what classifying a re-scan reads.
+    masked_n: int = 0
+    untimed_n: int = 0
+    text_uncovered_n: int = 0
+    audio_uncovered_n: int = 0
 
-        Args:
-            store: The provenance store, where survivor findings are written.
-            software: The software agent.
-            residue: The residue words, in stream order.
-            exempt_word_ids: The words the declared stimulus accounts for.
-            detectors: The detectors the scan ran.
-        """
-        self.store = store
-        self.software = software
-        self.residue = list(residue)
-        self.tokens = _tokens(self.residue)
-        self.exempt = set(exempt_word_ids)
-        self.detectors = list(detectors)
-        self.findings: list[Entity] = []
-        self._written: dict[tuple[str, tuple[str, ...]], str] = {}
-        self._activity: str | None = None
+    @property
+    def ok(self) -> bool:
+        """Whether every masked word is placed and hidden, and every masked span's audio is."""
+        return not (self.untimed_n or self.text_uncovered_n or self.audio_uncovered_n)
 
-    def _place(self, text: str, planned: Sequence[RedactionExtent]) -> list[Entity]:
-        def open_(word: Entity) -> bool:
-            return not any(_overlaps(word_hull(word), (e.start, e.end)) for e in planned)
-
-        hits = [word for word in _place(text, self.tokens) if open_(word)]
-        return hits or [word for word in _place_substring(text, self.residue) if open_(word)]
-
-    def _write(self, category: str, words: Sequence[Entity]) -> None:
-        key = (category, tuple(word.id for word in words))
-        if key in self._written:
-            return
-        if self._activity is None:
-            self._activity = self.store.activity(node=NODE, step="rescan", parameters={})
-            self.store.was_associated_with(self._activity, self.software)
-        hull = (min(word_hull(w)[0] for w in words), max(word_hull(w)[1] for w in words))
-        finding_id = self.store.entity(
-            prov_type="pii",
-            extent=hull,
-            attributes={
-                "category": category,
-                "source": RESCAN_SOURCE,
-                "haystack": "consensus",
-                "word_ids": [word.id for word in words],
-                "detectors_used": self.detectors,
-                "detectors_failed": [],
-            },
+    def describe(self) -> str:
+        """The failing counts, for a ``why``."""
+        return (
+            f"{self.untimed_n} untimed, {self.text_uncovered_n} shown in the text, "
+            f"{self.audio_uncovered_n} audible mask(s) of {self.masked_n} masked word(s)"
         )
-        self.store.was_generated_by(finding_id, self._activity)
-        self.store.was_attributed_to(finding_id, self.software)
-        for word in words:
-            self.store.was_derived_from(finding_id, word.id)
-        self._written[key] = finding_id
-        self.findings.append(self.store.get_entity(finding_id))
 
-    def classify(
-        self, checked: _Verification, planned: Sequence[RedactionExtent], plan: Callable[[], MaskPlan]
-    ) -> tuple[list[RedactionExtent], list[str], list[str]]:
-        """Place one re-scan's survivors and judge them by the fold's plan.
+    def record(self) -> dict[str, Any]:
+        """The check, as JSON-ready values."""
+        return {
+            "ok": self.ok,
+            "masked_n": self.masked_n,
+            "untimed_n": self.untimed_n,
+            "text_uncovered_n": self.text_uncovered_n,
+            "audio_uncovered_n": self.audio_uncovered_n,
+        }
 
-        Args:
-            checked: The re-scan.
-            planned: The extents the scanned text was rendered under.
-            plan: The fold's mask plan over the store, called once the survivors are written.
 
-        Returns:
-            ``(added, attributed, outstanding)``: an extent per survivor word the fold keeps masked, and the
-            surviving categories accounted for and left outstanding, sorted.
-        """
-        placed: list[tuple[str, list[Entity]]] = []
-        outstanding: set[str] = set()
-        for category, text in checked.spans:
-            hits = self._place(text, planned)
-            if not hits or any(word_hull(w)[1] <= word_hull(w)[0] for w in hits):
-                outstanding.add(category)
-                continue
-            placed.append((category, hits))
-        for category, hits in placed:
-            if not all(word.id in self.exempt for word in hits):
-                self._write(category, hits)
-        kept = set(plan().owners()) if placed else set()
-        added: list[RedactionExtent] = []
-        attributed: set[str] = set()
-        for category, hits in placed:
-            masked = [word for word in hits if word.id in kept and word.id not in self.exempt]
-            if not masked:
-                attributed.add(category)
-                continue
-            added.extend(RedactionExtent(start=word_hull(w)[0], end=word_hull(w)[1], category=category) for w in masked)
-        return added, sorted(attributed - outstanding), sorted(outstanding)
+def _span_hidden(source: Audio, masked: Audio, extent: RedactionExtent, fill: str) -> bool:
+    rate = int(masked.sampling_rate)
+    first, last = max(0, int(extent.start * rate)), max(0, int(math.ceil(extent.end * rate)))
+    after = masked.waveform[..., first:last].numpy()
+    if after.size == 0:
+        return True
+    if fill == "silence":
+        return not after.any()
+    before = source.waveform[..., first:last].numpy()
+    return before.shape != after.shape or not (before == after).all() or not before.any()
+
+
+def mask_coverage(
+    words: Sequence[Entity],
+    extents: Sequence[RedactionExtent],
+    masked_ids: Collection[str],
+    source: Audio | None,
+    masked: Audio | None,
+    *,
+    fill: str,
+    owners: Mapping[str, int] | None = None,
+) -> Coverage:
+    """Whether masks cover their words: placed on usable timing, hidden in the text, silent or replaced in the audio.
+
+    Args:
+        words: The consensus words, in stream order.
+        extents: The masks.
+        masked_ids: The words the masks are to hide.
+        source: The audio the masks were applied to, or None where none was applied.
+        masked: The audio after them, or None.
+        fill: ``redaction.fill``, ``silence`` or ``bleep``.
+        owners: Which mask hides each word, by index into ``extents``; None reads it by overlap, as REDACT's
+            own plan does.
+
+    Returns:
+        The check.
+    """
+    by_id = {word.id: word for word in words}
+    wanted = [by_id[word_id] for word_id in masked_ids if word_id in by_id]
+    untimed = sum(1 for word in wanted if word_hull(word)[1] <= word_hull(word)[0])
+    records, _, _ = _render(list(words), list(extents), owners)
+    indices = {int(word.attributes["index"]) for word in wanted}
+    shown = {int(record["index"]) for record in records if record.get("kind") == "word" and record["index"] in indices}
+    audible = 0
+    if source is not None and masked is not None:
+        audible = sum(1 for extent in extents if not _span_hidden(source, masked, extent, fill))
+    return Coverage(len(wanted), untimed, len(shown), audible)
 
 
 def fold_mask_plan(
@@ -1068,7 +940,6 @@ def redact(
     scan_incomplete = bool(scan_failed) or bool(scan_missing) or not scanned_by
     findings = _findings(store)
     words = consensus_words(store)
-    residue = residue_words(store)
     lexicon = task_lexicon(config, task_family, hint)
     units = _expected_units(
         hint,
@@ -1090,37 +961,21 @@ def redact(
     consulted = _pii_marking_assertions(store)
     planned = plan_redactions(extents, padding_ms=margin_ms)
     records, transcript_text, unplaced_n = _render(words, planned)
-    checked = (
-        _verify(_render(residue, planned)[0], required_detectors)
-        if not scan_incomplete
-        else _Verification(verified=False, survived=[], scan_ran=False, failed=[], missing=[])
-    )
     software = software_agent(store)
-    rescan = _Rescan(store, software, residue, exempt_word_ids, scanned_by)
-    replanned_n = 0
-    attributed: list[str] = []
-    outstanding: list[str] = []
-    while checked.scan_ran and checked.survived:
-        added, attributed, outstanding = rescan.classify(checked, planned, lambda: fold_mask_plan(store, config, hint))
-        if not added and (replanned_n or not outstanding):
-            break
-        replanned_n += 1
-        extents.extend(added)
-        planned = plan_redactions(extents, padding_ms=margin_ms)
-        records, transcript_text, unplaced_n = _render(words, planned)
-        checked = _verify(_render(residue, planned)[0], required_detectors)
-        attributed, outstanding = [], []
-    if checked.scan_ran and checked.survived and not (attributed or outstanding):
-        _, attributed, outstanding = rescan.classify(checked, planned, lambda: fold_mask_plan(store, config, hint))
-    unremediable = list(outstanding)
-    findings = [*findings, *rescan.findings]
 
     stream_id, recording = resolve_stream(store, run_dir, source)
     redacted = apply_redactions(recording, planned, fill=fill, bleep_hz=bleep_hz)
+    covered_ids = {
+        str(word_id)
+        for finding in findings
+        if finding.id not in exempt_findings
+        for word_id in finding.attributes.get("word_ids") or ()
+    } - exempt_word_ids
+    coverage = mask_coverage(words, planned, covered_ids, recording, redacted, fill=fill)
 
-    view: list[str] = [entity.id for entity in rescan.findings]
+    view: list[str] = []
 
-    plan_act = store.activity(node=NODE, step="plan", parameters={"padding_ms": margin_ms, "replanned_n": replanned_n})
+    plan_act = store.activity(node=NODE, step="plan", parameters={"padding_ms": margin_ms})
     store.was_associated_with(plan_act, software)
     store.used(plan_act, scan_measurement.id)
     for finding in findings:
@@ -1216,12 +1071,9 @@ def redact(
         store.was_derived_from(redacted_stream_id, span_id)
     view.append(redacted_stream_id)
 
-    verify_act = store.activity(node=NODE, step="verify", parameters={"required_detectors": required_detectors})
+    verify_act = store.activity(node=NODE, step="verify", parameters={"check": COVERAGE_CHECK})
     store.was_associated_with(verify_act, software)
-    if checked.cache is not None and not checked.cache["hit"]:
-        annotate_result_origin(
-            checked.cache["key"], {"run": store.run_id, "activity": verify_act, "node": NODE, "step": "verify"}
-        )
+    store.used(verify_act, redacted_stream_id)
     if consensus is not None:
         store.used(verify_act, consensus.id)
     for word in words:
@@ -1243,32 +1095,18 @@ def redact(
             f"the store's pii scan is incomplete ({'; '.join(reasons)}); "
             "an unchecked recording is not a clean one (N15)"
         )
-    elif not checked.scan_ran:
-        outcome = Outcome.FLAG
-        parts = []
-        if checked.failed:
-            parts.append(f"detectors failed: {', '.join(checked.failed)}")
-        if checked.missing:
-            parts.append(f"required detectors were not attempted: {', '.join(checked.missing)}")
-        if not parts:
-            parts.append("no detector ran")
-        why = (
-            f"the re-scan over the redacted text is incomplete ({'; '.join(parts)}); an unverified artifact is withheld"
-        )
-    elif outstanding:
+    elif not coverage.ok:
         outcome = Outcome.FAIL
-        why = "verification found pii on the redacted transcript: " + ", ".join(outstanding)
+        why = f"the planned masks do not cover what they mask: {coverage.describe()}"
     else:
         outcome = Outcome.PASS
-        why = "every finding redacted; the redacted transcript re-scans clean"
+        why = "every finding redacted; each mask covers its words in the text and the audio"
         if exemptions or task_exempt:
             accounted = [
                 *([f"{len(exemptions)} the declared stimulus accounts for"] if exemptions else []),
                 *([f"{len(task_exempt)} on the task's own events"] if task_exempt else []),
             ]
-            why = (
-                f"every finding redacted except {' and '.join(accounted)}; the redacted transcript carries nothing else"
-            )
+            why = f"every finding redacted except {' and '.join(accounted)}; each mask covers its words"
 
     if outcome is Outcome.PASS:
         artifacts = _write_artifacts(redacted, transcript_text, records, artifacts_dir)
@@ -1285,22 +1123,13 @@ def redact(
             "by_category": dict(Counter(extent.category for extent in planned)),
             "padding_ms": margin_ms,
             "fill": fill,
-            "verified": checked.verified,
-            "survived": checked.survived,
-            "unremediable": unremediable,
-            "outstanding": outstanding,
+            "coverage": coverage.record(),
             "expected_exempt_n": len(exemptions),
             "task_event_exempt_n": len(task_exempt),
             "expected_exempt_by_category": dict(Counter(exemption.category for exemption in exemptions)),
-            "expected_survivors": attributed,
-            "rescan_findings_n": len(rescan.findings),
             "expected_speech_declared": bool(units),
-            "replanned_n": replanned_n,
             "scan_failed": scan_failed,
             "scan_missing": scan_missing,
-            "verify_failed": checked.failed,
-            "verify_missing": checked.missing,
-            "verify_cache": checked.cache,
             "required_detectors": required_detectors,
             "unplaced_words_n": unplaced_n,
             "audio_check": _AUDIO_CHECK,
