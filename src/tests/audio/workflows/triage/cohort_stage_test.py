@@ -362,5 +362,10 @@ def test_the_last_window_is_anchored_to_the_region_end() -> None:
     from senselab.audio.workflows.triage.cohort_stage import window_runs
 
     seen: list[float] = []
-    window_runs([(0.0, 1.9)], lambda span: seen.append(span[0]) or 0.9, window_s=1.0, hop_s=0.5, cut=CUT)
+
+    def cosine_at(span: tuple[float, float]) -> float:
+        seen.append(span[0])
+        return 0.9
+
+    window_runs([(0.0, 1.9)], cosine_at, window_s=1.0, hop_s=0.5, cut=CUT)
     assert seen == pytest.approx([0.0, 0.5, 0.9])
