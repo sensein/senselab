@@ -355,3 +355,12 @@ def test_a_single_window_under_the_cut_is_not_a_run() -> None:
     cosines = {0.0: 0.1, 0.5: 0.9, 1.0: 0.9}
     runs = window_runs([(0.0, 2.0)], lambda span: cosines[span[0]], window_s=1.0, hop_s=0.5, cut=CUT, windows_min=2)
     assert [(r["start"], r["match"]) for r in runs] == [(0.5, True)]
+
+
+def test_the_last_window_is_anchored_to_the_region_end() -> None:
+    """A region the hop does not divide still has its tail read."""
+    from senselab.audio.workflows.triage.cohort_stage import window_runs
+
+    seen: list[float] = []
+    window_runs([(0.0, 1.9)], lambda span: seen.append(span[0]) or 0.9, window_s=1.0, hop_s=0.5, cut=CUT)
+    assert seen == pytest.approx([0.0, 0.5, 0.9])

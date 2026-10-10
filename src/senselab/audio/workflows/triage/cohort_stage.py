@@ -432,6 +432,8 @@ def window_runs(
 ) -> list[dict[str, Any]]:
     """Sliding windows over each region, grouped into runs of contiguous windows on one side of the cut.
 
+    The last window of a region is anchored to its end, so the region's tail is read.
+
     Args:
         regions: The regions to read.
         cosine_at: The cosine of one window against the enrollment, or None where it cannot be embedded.
@@ -448,8 +450,14 @@ def window_runs(
     out: list[dict[str, Any]] = []
     for start, end in regions:
         group: list[tuple[float, float, float, float]] = []
+        starts: list[float] = []
         t = start
         while t + window_s <= end + 1e-9:
+            starts.append(t)
+            t += hop_s
+        if starts and starts[-1] < end - window_s - 1e-6:
+            starts.append(end - window_s)
+        for t in starts:
             share = active_fraction((t, t + window_s))
             cosine = cosine_at((t, t + window_s)) if share >= active_fraction_min else None
             if cosine is None:
@@ -461,7 +469,6 @@ def window_runs(
                     out.append(_window_group(group, cut))
                     group = []
                 group.append((t, t + window_s, cosine, share))
-            t += hop_s
         if group:
             out.append(_window_group(group, cut))
     return [run for run in out if run["match"] or run["windows_n"] >= windows_min]
