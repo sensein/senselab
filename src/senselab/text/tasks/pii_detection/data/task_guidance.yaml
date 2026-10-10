@@ -35,3 +35,34 @@ families:
     guidance: >-
       The participant answers an open question about their own life. The question's own words are task
       content; the answer is about the speaker and is judged as usual, places, people and dates included.
+# What kind of task each declared family is, as both the reviewer and the second opinion are told it.
+# A family matches a nature as it matches a guidance entry above. Families: routing_analysis/families.py
+# and the B2AI registry's speech_type. Rules: specs/20261007-task-events-in-background/design.md.
+natures:
+  - nature: open_response
+    names: [free-speech, open-response-questions, picture-description, productive-vocabulary, conversation]
+    description: >-
+      An open response: the participant answers in their own words. Such a task invites personal
+      content, so a name, a place, a date or an organization the participant brings up is a real
+      candidate for removal unless it is the task's own stimulus or a description of it.
+  - nature: item_generation
+    names: [animal-fluency, random-item-generation, generative-naming-task, days-and-number-naming, abcs-and-123s]
+    description: >-
+      Item generation or fluency: the participant is asked to produce a list of items, and the task elicits
+      names, places and numbers by design. An item said as part of the list is task content and usually
+      identifies nobody; a remark about the participant's own life between the items is judged as usual.
+  - nature: read_or_recall
+    names: [rainbow-passage, caterpillar-passage, harvard-sentences, cape-v-sentences, word-color-stroop,
+            reading-passage, repeating-words, repeating-sentences, identifying-pictures, cinderella-story,
+            story-recall]
+    description: >-
+      Reading or recall of a given text: the participant reads aloud, repeats or retells a text they were
+      given. The text's words are task content, said correctly or not; words that are not the text's are
+      either the participant's own (judged as usual) or someone else's.
+  - nature: non_lexical
+    names: [diadochokinesis, breath-sounds, respiration-and-cough, voluntary-cough, glides, high-to-low,
+            maximum-phonation-time, prolonged-vowel, loudness, noisy-sounds, silly-sounds, long-sounds]
+    description: >-
+      Non-lexical: the task asks for breathing, coughing, sustained or gliding phonation, or repeated
+      syllables, not words. Any word spoken is outside the task: the participant talking, an examiner
+      prompting, or someone in the background.

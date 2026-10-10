@@ -524,7 +524,7 @@ def test_an_answer_without_its_conditions_part_is_fed_back() -> None:
 def test_the_prompt_asks_for_conditions_apart_from_safe_harbor() -> None:
     """Conditions are a required part of their own, and no longer a PROPOSAL category."""
     assert "CONDITIONS: a JSON array" in redaction_review._PROMPT
-    assert "exactly eight parts" in redaction_review._PROMPT
+    assert "exactly thirteen parts" in redaction_review._PROMPT
     assert "CONTACT, CONDITION, OTHER" not in redaction_review._PROMPT
 
 
@@ -685,7 +685,7 @@ def test_the_prompt_states_the_time_expression_rule_and_the_cue_word_rule() -> N
     """v7: weekdays and relative times are released, absolute dates are not; a cue word's definition is task content."""
     from senselab.text.tasks.pii_detection import redaction_review as r
 
-    assert r.PROMPT_VERSION == 11
+    assert r.PROMPT_VERSION == 12
     assert "2-3 weeks ago" in r._PROMPT and "this morning" in r._PROMPT and '"Monday"' in r._PROMPT
     assert "gladiator" in r._PROMPT and "hotel" in r._PROMPT
 
@@ -775,8 +775,8 @@ def test_the_reading_records_which_inputs_it_had() -> None:
         {"task": "cinderella-story", "instructions": "Tell the story.", "consensus_transcript": _TRANSCRIPT}
     )
     assert {key: full[key] for key in ("version", "prompt_version", "task", "full_transcript", "pii_annotations")} == {
-        "version": 2,
-        "prompt_version": 11,
+        "version": 3,
+        "prompt_version": 12,
         "task": True,
         "full_transcript": True,
         "pii_annotations": True,
@@ -797,3 +797,127 @@ def test_the_reading_records_which_inputs_it_had() -> None:
     )
     assert not review_inputs_complete(None)
     assert not review_inputs_complete({**full, "version": 1})
+
+
+def test_v12_the_request_carries_the_task_nature_name_speech_type_and_instructions() -> None:
+    """The family's nature, the declared task name, the speech type and the instructions are all sent."""
+    from senselab.text.tasks.pii_detection.redaction_review import _compose, task_nature, task_nature_description
+
+    assert task_nature("animal-fluency") == "item_generation"
+    assert task_nature("story-recall-v2") == "read_or_recall"
+    assert task_nature("respiration-and-cough-v2-breath") == "non_lexical"
+    assert task_nature("open-response-questions") == "open_response"
+    assert task_nature("unheard-of") == "" and task_nature(None) == ""
+    body = _compose(
+        "dog cat",
+        None,
+        {
+            "task": "animal-fluency",
+            "task_name": "Animal fluency",
+            "speech_type": "elicited",
+            "instructions": "Name as many animals as you can.",
+        },
+    )
+    assert f"NATURE OF THIS TASK: {task_nature_description('animal-fluency')}" in body
+    assert "TASK NAME THE RECORDING DECLARES: Animal fluency" in body
+    assert "SPEECH TYPE: elicited" in body
+    assert "INSTRUCTIONS GIVEN TO THE PARTICIPANT: Name as many animals as you can." in body
+
+
+def test_v12_the_prompt_asks_about_task_content_off_task_speech_and_other_speakers() -> None:
+    """The prompt asks the three task questions and names the five new parts."""
+    from senselab.text.tasks.pii_detection import redaction_review as r
+
+    for heading in (
+        "OTHER_SPEAKER_ROLE:",
+        "OTHER_SPEAKER_QUOTES:",
+        "OFF_TASK_SPEECH:",
+        "OFF_TASK_QUOTES:",
+        "TASK_CONTENT_QUOTES:",
+    ):
+        assert heading in r._PROMPT
+    assert "NATURE OF THIS TASK" in r._PROMPT and "non-lexical task" in r._PROMPT
+    assert r.redaction_policy_text() in r._PROMPT
+
+
+_V12_ANSWER = (
+    "REASONING: plain.\nREDACTION: not_applicable\nORIGINAL: clean\nSPEAKERS: more_than_one\n"
+    'OTHER_SPEAKERS: [{"text": "go ahead", "expected": true, "why": "prompt"}]\n'
+    "OTHER_SPEAKER_ROLE: assistant\n"
+    'OTHER_SPEAKER_QUOTES: ["go ahead"]\n'
+    "OFF_TASK_SPEECH: some\n"
+    'OFF_TASK_QUOTES: ["is that enough"]\n'
+    'TASK_CONTENT_QUOTES: ["lion", {"text": "zebra"}]\n'
+    "CONDITIONS: []\nINSTRUCTIONS_SPOKEN: []\nPROPOSAL: []\n"
+)
+
+
+def test_v12_the_five_task_reading_fields_are_parsed_and_recorded() -> None:
+    """Each new part parses into its field and reaches the payload under its exact key."""
+    from senselab.text.tasks.pii_detection.redaction_review import ReviewResult, parse_completion, review_payload
+
+    parsed = parse_completion(_V12_ANSWER)
+    assert parsed.speakers == "more_than_one" and len(parsed.other_speakers) == 1
+    assert parsed.other_speaker == "assistant" and parsed.other_speaker_quotes == ["go ahead"]
+    assert parsed.off_task_speech == "some" and parsed.off_task_quotes == ["is that enough"]
+    assert parsed.task_content_quotes == ["lion", "zebra"]
+    assert parsed.proposal == [] and parsed.conditions_answered and parsed.instructions_answered
+    assert parsed.reasoning == "plain."
+    payload = review_payload(
+        ReviewResult(
+            available=True,
+            off_task_speech=parsed.off_task_speech,
+            off_task_quotes=parsed.off_task_quotes,
+            other_speaker=parsed.other_speaker,
+            other_speaker_quotes=parsed.other_speaker_quotes,
+            task_content_quotes=parsed.task_content_quotes,
+        )
+    )
+    assert (payload["off_task_speech"], payload["other_speaker"]) == ("some", "assistant")
+    assert payload["off_task_quotes"] == ["is that enough"] and payload["other_speaker_quotes"] == ["go ahead"]
+    assert payload["task_content_quotes"] == ["lion", "zebra"]
+
+
+def test_v12_malformed_task_reading_parts_read_as_unanswered() -> None:
+    """An unknown word reads as None, a missing or broken array as []."""
+    from senselab.text.tasks.pii_detection.redaction_review import parse_completion
+
+    broken = (
+        "REASONING: x\nSPEAKERS: one\nOTHER_SPEAKER_ROLE: narrator\nOTHER_SPEAKER_QUOTES: [not json\n"
+        'OFF_TASK_SPEECH: lots\nOFF_TASK_QUOTES: {"a": 1}\nTASK_CONTENT_QUOTES: [1, "", null]\nPROPOSAL: []\n'
+    )
+    parsed = parse_completion(broken)
+    assert parsed.speakers == "one"
+    assert parsed.other_speaker is None and parsed.off_task_speech is None
+    assert parsed.other_speaker_quotes == [] and parsed.off_task_quotes == [] and parsed.task_content_quotes == []
+    silent = parse_completion("REASONING: x\nPROPOSAL: []\n")
+    assert silent.other_speaker is None and silent.off_task_speech is None and silent.off_task_quotes == []
+
+
+def test_v12_task_reading_quotes_are_checked_and_a_judgment_needs_one() -> None:
+    """A task-reading quote not in the ORIGINAL, or an off-task judgment without one, is fed back."""
+    from senselab.text.tasks.pii_detection.redaction_review import ReviewResult, answer_problem
+
+    base: dict[str, Any] = {"available": True, "off_task_speech": "none", "other_speaker": "none"}
+    assert answer_problem(ReviewResult(**base), "lion zebra", None) is None
+    unquoted = ReviewResult(**{**base, "off_task_speech": "extensive"})
+    assert "OFF_TASK_QUOTES" in str(answer_problem(unquoted, "lion zebra", None))
+    unheard = ReviewResult(**{**base, "other_speaker": "background", "other_speaker_quotes": ["purple"]})
+    assert "do not occur" in str(answer_problem(unheard, "lion zebra", None))
+    unheard_task = ReviewResult(**{**base, "task_content_quotes": ["purple"]})
+    assert "do not occur" in str(answer_problem(unheard_task, "lion zebra", None))
+
+
+def test_v12_review_inputs_v3_require_the_instructions() -> None:
+    """Version 3 records whether instructions were given, and a reading without them is incomplete."""
+    from senselab.text.tasks.pii_detection.redaction_review import review_inputs, review_inputs_complete
+
+    stimulus_only = review_inputs(
+        {"task": "cinderella-story", "asked_to_say": "y", "consensus_transcript": _TRANSCRIPT}
+    )
+    assert stimulus_only["version"] == 3 and stimulus_only["task"] and not stimulus_only["instructions"]
+    assert not review_inputs_complete(stimulus_only)
+    full = review_inputs({"task": "cinderella-story", "instructions": "Tell it.", "consensus_transcript": _TRANSCRIPT})
+    assert full["instructions"] and review_inputs_complete(full)
+    assert not review_inputs_complete({**full, "version": 2})
+    assert not review_inputs_complete({key: value for key, value in full.items() if key != "instructions"})

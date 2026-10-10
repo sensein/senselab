@@ -303,8 +303,41 @@ class TestTheReviewerSeesEveryRecogniserSReading:
             True,
             True,
         )
-        assert inputs["prompt_version"] == PROMPT_VERSION and inputs["version"] == 2
+        assert inputs["prompt_version"] == PROMPT_VERSION and inputs["version"] == 3
         assert [round_["review_inputs"] for round_ in _rounds_in(store)] == [inputs]
+
+    def test_the_task_reading_reaches_the_annotation_and_the_context_names_the_nature(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """v12: the five task-reading fields are stored, and the task's nature, name and speech type are sent."""
+        from senselab.audio.data_structures import AudioHints
+
+        store = ProvStore(run_id="review-test")
+        _seed(store, words=("hello", "world"), scan="ran")
+        answer = _clean()
+        answer.off_task_speech = "some"
+        answer.off_task_quotes = ["hello"]
+        answer.other_speaker = "assistant"
+        answer.other_speaker_quotes = ["world"]
+        answer.task_content_quotes = ["hello world"]
+        _stub(monkeypatch, [answer])
+        hint = AudioHints(
+            instructions="Say it.",
+            speech_type="elicited",
+            metadata={"task_token": "animal-fluency", "task_name": "Animal fluency"},
+        )
+        review(store, _config(tmp_path), hint)
+        annotation = _annotation(store)
+        assert {key: annotation[key] for key in ("off_task_speech", "other_speaker")} == {
+            "off_task_speech": "some",
+            "other_speaker": "assistant",
+        }
+        assert annotation["off_task_quotes"] == ["hello"] and annotation["other_speaker_quotes"] == ["world"]
+        assert annotation["task_content_quotes"] == ["hello world"]
+        context = annotation["task_context"]
+        assert context["task_nature"] == "item_generation" and context["speech_type"] == "elicited"
+        assert context["task_name"] == "Animal fluency"
+        assert annotation["review_inputs"]["instructions"] is True
 
 
 class TestTheFourSilencesStayApart:

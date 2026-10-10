@@ -73,12 +73,20 @@ _SPEAKERS_HEADING = "SPEAKERS:"
 _CONDITIONS_HEADING = "CONDITIONS:"
 _OTHER_SPEAKERS_HEADING = "OTHER_SPEAKERS:"
 _INSTRUCTIONS_SPOKEN_HEADING = "INSTRUCTIONS_SPOKEN:"
+_OTHER_SPEAKER_ROLE_HEADING = "OTHER_SPEAKER_ROLE:"
+_OTHER_SPEAKER_QUOTES_HEADING = "OTHER_SPEAKER_QUOTES:"
+_OFF_TASK_SPEECH_HEADING = "OFF_TASK_SPEECH:"
+_OFF_TASK_QUOTES_HEADING = "OFF_TASK_QUOTES:"
+_TASK_CONTENT_QUOTES_HEADING = "TASK_CONTENT_QUOTES:"
 
-PROMPT_VERSION = 11
+PROMPT_VERSION = 12
 """The prompt and its parse, as one number: it changes whenever either changes what a reading holds."""
 
-REVIEW_INPUTS_VERSION = 2
+REVIEW_INPUTS_VERSION = 3
 """The shape of the ``review_inputs`` record a reading carries (:func:`review_inputs`)."""
+
+REQUIRED_REVIEW_INPUTS = ("task", "full_transcript", "pii_annotations", "asr_readings", "instructions")
+"""The ``review_inputs`` keys a reading must have had for its releases to be weighed."""
 
 CONSENSUS_TRANSCRIPT = "consensus_transcript"
 """The context key holding the whole consensus transcript, word by word, with its PII and variation."""
@@ -100,6 +108,12 @@ ORIGINAL_STATES = ("clean", "carries_pii")
 
 SPEAKER_STATES = ("one", "more_than_one", "unclear")
 """How many people the transcript's own words show speaking in the recording."""
+
+OFF_TASK_STATES = ("none", "some", "extensive")
+"""How much of the recording the participant spends off the task."""
+
+OTHER_SPEAKER_ROLES = ("none", "assistant", "background", "unclear")
+"""Who besides the participant speaks: nobody, an assistant or examiner, someone in the background, or unclear."""
 
 REDACT = "redact"
 RELEASE = "release"
@@ -127,7 +141,14 @@ redaction policy (:mod:`~senselab.text.tasks.pii_detection.redaction_policy`) in
 
 
 TASK_GUIDANCE_PATH = Path(__file__).parent / "data" / "task_guidance.yaml"
-"""What counts as the task's own content in each task family, as the reviewer is told it."""
+"""What counts as the task's own content in each task family, and what kind of task each family is."""
+
+NATURE_OPEN_RESPONSE = "open_response"
+NATURE_ITEM_GENERATION = "item_generation"
+NATURE_READ_OR_RECALL = "read_or_recall"
+NATURE_NON_LEXICAL = "non_lexical"
+TASK_NATURES = (NATURE_OPEN_RESPONSE, NATURE_ITEM_GENERATION, NATURE_READ_OR_RECALL, NATURE_NON_LEXICAL)
+"""The kinds of task a declared family is, as ``task_guidance.yaml`` names them under ``natures``."""
 
 
 @lru_cache(maxsize=1)
@@ -150,10 +171,64 @@ def task_guidance(family: str | None) -> str:
         The first entry whose names include the family, or a prefix of it followed by ``-``; the empty
         string where none does.
     """
-    key = str(family or "").strip().lower()
     for names, guidance in _task_guidance():
-        if any(key == name or key.startswith(f"{name}-") for name in names):
+        if _family_matches(family, names):
             return guidance
+    return ""
+
+
+def _family_matches(family: str | None, names: Sequence[str]) -> bool:
+    """Whether a declared family equals one of the names, or starts with one followed by ``-``."""
+    key = str(family or "").strip().lower()
+    return bool(key) and any(key == name or key.startswith(f"{name}-") for name in names)
+
+
+@lru_cache(maxsize=1)
+def _task_natures() -> tuple[tuple[str, tuple[str, ...], str], ...]:
+    """The packaged natures, as ``(nature, family names, description)`` in file order."""
+    raw = yaml.safe_load(TASK_GUIDANCE_PATH.read_text()) or {}
+    natures = tuple(
+        (
+            str(entry.get("nature") or ""),
+            tuple(str(name) for name in entry.get("names") or ()),
+            " ".join(str(entry.get("description") or "").split()),
+        )
+        for entry in raw.get("natures") or ()
+    )
+    unknown = [nature for nature, _names, _description in natures if nature not in TASK_NATURES]
+    if unknown:
+        raise ValueError(f"{TASK_GUIDANCE_PATH.name}: unknown natures {unknown}; known: {TASK_NATURES}")
+    return natures
+
+
+def task_nature(family: str | None) -> str:
+    """What kind of task a declared family is.
+
+    Args:
+        family: The declared family, or None.
+
+    Returns:
+        One of :data:`TASK_NATURES` for the first ``natures`` entry whose names match the family, or the
+        empty string where none does.
+    """
+    for nature, names, _description in _task_natures():
+        if _family_matches(family, names):
+            return nature
+    return ""
+
+
+def task_nature_description(family: str | None) -> str:
+    """The description of a declared family's nature, as both prompts send it.
+
+    Args:
+        family: The declared family, or None.
+
+    Returns:
+        The matching ``natures`` entry's description, or the empty string where none matches.
+    """
+    for _nature, names, description in _task_natures():
+        if _family_matches(family, names):
+            return description
     return ""
 
 
@@ -240,6 +315,15 @@ _POLICY = (
 )
 
 
+def redaction_policy_text() -> str:
+    """The redaction policy as the reviewer is given it: the rules, then the remaining Safe Harbor identifiers.
+
+    Returns:
+        The policy text, the one source every prompt that asks what the policy removes is built from.
+    """
+    return _POLICY + _identifier_rule()
+
+
 _PROMPT = (
     "You are auditing one recording's transcript before it is released. You are given the "
     "ORIGINAL words as transcribed, and where an automatic redaction has already been applied, "
@@ -265,9 +349,8 @@ _PROMPT = (
     "the readings to judge whether a word was said at all and what it was: a name only one recogniser read, "
     "where another read an ordinary word, may be a misreading. Quote words as the ORIGINAL writes them, "
     "without the braces, their contents or the tags.\n\n"
-    + _POLICY
-    + _identifier_rule()
-    + "\n\nJudge six things independently.\n"
+    + redaction_policy_text()
+    + "\n\nJudge nine things independently.\n"
     "1. Whether the redaction, where one was applied, actually removed everything the policy removes.\n"
     "2. Whether the ORIGINAL words carry anything the policy removes at all, which is a separate "
     "question and the one no automatic detector here has asked.\n"
@@ -306,8 +389,25 @@ _PROMPT = (
     'familiarize yourself with it. You have up to 5 minutes to read it as many times as you want". '
     'Words that only mention the task ("is that enough?", "I\'ll describe the picture", "five '
     "minutes\" in passing) do not. The task's stimulus -- what the participant was asked to say or "
-    "recall -- is never instructions. Judge this apart from point 4.\n\n"
-    "Answer in exactly eight parts, each on its own line or block, in this order.\n"
+    "recall -- is never instructions. Judge this apart from point 4.\n"
+    "7. For every word an automatic detector marked (each word carrying a pii annotation), whether it is "
+    "task content or a personal disclosure. Task content is what the INSTRUCTIONS ask the participant to "
+    "say, or part of the STIMULUS, or an item the task asks for; a personal disclosure is the participant "
+    "telling something about their own life. Weigh the NATURE OF THIS TASK: an open response invites "
+    "personal content, so a name or a place said there is a real candidate for removal; in item "
+    "generation or fluency the task asks for names, places and numbers, so an item said as part of the "
+    "list usually is not; in reading or recall the given text's words are task content; in a non-lexical "
+    "task no word is task content.\n"
+    "8. Whether the participant stopped doing the task and talked about something else: a remark, a "
+    "question, a story or a conversation that is not what the instructions ask for. Asking whether "
+    'they are done ("Is that enough?") is some; talking at length about something else is extensive. In a '
+    "non-lexical task (breathing, coughing, phonation, repeated syllables) any words the participant says "
+    "are off-task.\n"
+    "9. Whether anyone besides the participant speaks, and who: an assistant, examiner or clinician "
+    "(reading the instructions aloud, prompting, encouraging, counting, asking the participant to start "
+    "or stop), or someone in the background (a conversation, a television, another person in the room "
+    "not addressing the participant). Judge it from the words, as under point 4.\n\n"
+    "Answer in exactly thirteen parts, each on its own line or block, in this order.\n"
     "REASONING: your full reasoning, in prose, including what you considered and rejected.\n"
     "REDACTION: one of complete, incomplete, not_applicable (use not_applicable when no "
     "redaction was applied).\n"
@@ -318,6 +418,16 @@ _PROMPT = (
     'task\'s instructions expect that voice, false where they do not) and "why" (one sentence). Return [] '
     "when SPEAKERS is one; when it is more_than_one the array must quote at least one person, and when it is "
     "unclear it quotes the words you could not attribute to the participant.\n"
+    "OTHER_SPEAKER_ROLE: one of none, assistant, background, unclear (point 9: none when only the "
+    "participant speaks; assistant for an examiner, clinician or anyone addressing the participant about the "
+    "task; background for anyone else).\n"
+    "OTHER_SPEAKER_QUOTES: a JSON array of strings, each the exact words another person said, quoted from the "
+    "ORIGINAL. Return [] when OTHER_SPEAKER_ROLE is none; otherwise quote at least one passage.\n"
+    "OFF_TASK_SPEECH: one of none, some, extensive (point 8).\n"
+    "OFF_TASK_QUOTES: a JSON array of strings, each an exact passage, quoted from the ORIGINAL, where the "
+    "participant talks off-task. Return [] when OFF_TASK_SPEECH is none; otherwise quote at least one.\n"
+    "TASK_CONTENT_QUOTES: a JSON array of strings, each a word or phrase carrying a pii annotation that you "
+    "judge under point 7 to be task content, quoted exactly from the ORIGINAL. Return [] when there is none.\n"
     "CONDITIONS: a JSON array of every diagnosis under point 5. Each element is an object with "
     'keys "text" (the exact words, quoted from the ORIGINAL) and "why" (one sentence: which diagnosis it is). '
     "Return [] when the speaker mentions none; the part is required either way.\n"
@@ -459,10 +569,11 @@ def review_inputs(context: Mapping[str, Any] | None) -> dict[str, Any]:
 
     Returns:
         ``version`` (:data:`REVIEW_INPUTS_VERSION`), ``prompt_version``, ``task`` (the declared task and
-        its instructions or stimulus), ``full_transcript`` (every consensus word, task and non-lexical
-        words included), ``pii_annotations`` (each word's detector findings with the reading they were
-        found on), ``asr_readings`` (each of two or more recognisers' word wherever they differ, with the
-        outcome), and ``recognisers``, ``words_n``, ``pii_words_n`` and ``variation_words_n``.
+        its instructions or stimulus), ``instructions`` (the task's instructions), ``full_transcript``
+        (every consensus word, task and non-lexical words included), ``pii_annotations`` (each word's
+        detector findings with the reading they were found on), ``asr_readings`` (each of two or more
+        recognisers' word wherever they differ, with the outcome), and ``recognisers``, ``words_n``,
+        ``pii_words_n`` and ``variation_words_n``.
     """
     facts = dict(context or {})
     transcript = facts.get(CONSENSUS_TRANSCRIPT) or {}
@@ -472,6 +583,7 @@ def review_inputs(context: Mapping[str, Any] | None) -> dict[str, Any]:
         "version": REVIEW_INPUTS_VERSION,
         "prompt_version": PROMPT_VERSION,
         "task": bool(facts.get("task")) and bool(facts.get("instructions") or facts.get("asked_to_say")),
+        "instructions": bool(str(facts.get("instructions") or "").strip()),
         "full_transcript": bool(words) and all(len(word) == 6 and word[4] in WORD_KINDS for word in words),
         "pii_annotations": bool(words) and "findings_n" in transcript,
         "asr_readings": bool(words) and len(recognisers) >= 2,
@@ -483,18 +595,18 @@ def review_inputs(context: Mapping[str, Any] | None) -> dict[str, Any]:
 
 
 def review_inputs_complete(inputs: Mapping[str, Any] | None) -> bool:
-    """Whether a reading recorded the task and the whole transcript with its PII and every recogniser's reading.
+    """Whether a reading recorded the task, its instructions, and the whole transcript with its PII and readings.
 
     Args:
         inputs: The reading's ``review_inputs`` record, or None where it recorded none.
 
     Returns:
-        True only for a record of :data:`REVIEW_INPUTS_VERSION` or later with ``task``,
-        ``full_transcript``, ``pii_annotations`` and ``asr_readings`` all set.
+        True only for a record of :data:`REVIEW_INPUTS_VERSION` or later with every one of
+        :data:`REQUIRED_REVIEW_INPUTS` set.
     """
     if not isinstance(inputs, Mapping) or int(inputs.get("version") or 0) < REVIEW_INPUTS_VERSION:
         return False
-    return all(bool(inputs.get(key)) for key in ("task", "full_transcript", "pii_annotations", "asr_readings"))
+    return all(bool(inputs.get(key)) for key in REQUIRED_REVIEW_INPUTS)
 
 
 def _compose(
@@ -505,7 +617,8 @@ def _compose(
     Args:
         original: The transcript as the recording's words were read.
         redacted: The text an applied redaction produced, or None where none was applied.
-        context: What the recording declares about itself -- ``task``, ``speech_type``, ``language``,
+        context: What the recording declares about itself -- ``task`` (the family, whose nature
+            :func:`task_nature_description` sends), ``task_name``, ``speech_type``, ``language``,
             ``instructions``, ``asked_to_say``, ``declared_names``, ``task_words`` and
             :data:`CONSENSUS_TRANSCRIPT`. Any key absent or empty is omitted rather than sent empty. Where
             the transcript is given it is the ORIGINAL (:func:`transcript_block`) and ``original`` is not
@@ -520,6 +633,11 @@ def _compose(
     facts = dict(context or {})
     if facts.get("task"):
         lines.append(f"TASK: {facts['task']}")
+    if facts.get("task_name") and facts.get("task_name") != facts.get("task"):
+        lines.append(f"TASK NAME THE RECORDING DECLARES: {facts['task_name']}")
+    nature = task_nature_description(facts.get("task"))
+    if nature:
+        lines.append(f"NATURE OF THIS TASK: {nature}")
     if facts.get("speech_type"):
         lines.append(f"SPEECH TYPE: {facts['speech_type']}")
     if facts.get("language"):
@@ -632,6 +750,11 @@ class ReviewResult:
             instructions are spoken in the recording.
         instructions_answered: Whether the answer carried its INSTRUCTIONS_SPOKEN part, an empty list
             included.
+        off_task_speech: One of :data:`OFF_TASK_STATES`, or None where the answer gave none of them.
+        off_task_quotes: The passages the OFF_TASK_QUOTES part quotes.
+        other_speaker: One of :data:`OTHER_SPEAKER_ROLES`, or None where the answer gave none of them.
+        other_speaker_quotes: The passages the OTHER_SPEAKER_QUOTES part quotes.
+        task_content_quotes: The PII-annotated words the TASK_CONTENT_QUOTES part judges task content.
         conditions_answered: Whether the answer carried its CONDITIONS part, an empty list included.
             :func:`parse_completion` decides it for every answer the model gave; a result built any
             other way is taken as answered, and a failure is never read for it.
@@ -663,6 +786,11 @@ class ReviewResult:
     conditions_answered: bool = True
     instructions_spoken: list[str] = field(default_factory=list)
     instructions_answered: bool = True
+    off_task_speech: Optional[str] = None
+    off_task_quotes: list[str] = field(default_factory=list)
+    other_speaker: Optional[str] = None
+    other_speaker_quotes: list[str] = field(default_factory=list)
+    task_content_quotes: list[str] = field(default_factory=list)
     failure: Optional[str] = None
     model_id: str = ""
     revision: Optional[str] = None
@@ -831,6 +959,11 @@ class ParsedCompletion:
         other_speakers: The OTHER_SPEAKERS part's entries that quote words.
         instructions_spoken: The INSTRUCTIONS_SPOKEN part's quoted passages.
         instructions_answered: Whether the answer carried an INSTRUCTIONS_SPOKEN part whose array parsed.
+        off_task_speech: One of :data:`OFF_TASK_STATES`, or None.
+        off_task_quotes: The OFF_TASK_QUOTES part's quoted passages.
+        other_speaker: One of :data:`OTHER_SPEAKER_ROLES`, or None.
+        other_speaker_quotes: The OTHER_SPEAKER_QUOTES part's quoted passages.
+        task_content_quotes: The TASK_CONTENT_QUOTES part's quoted words.
     """
 
     reasoning: str
@@ -843,6 +976,11 @@ class ParsedCompletion:
     other_speakers: list[OtherSpeaker] = field(default_factory=list)
     instructions_spoken: list[str] = field(default_factory=list)
     instructions_answered: bool = False
+    off_task_speech: Optional[str] = None
+    off_task_quotes: list[str] = field(default_factory=list)
+    other_speaker: Optional[str] = None
+    other_speaker_quotes: list[str] = field(default_factory=list)
+    task_content_quotes: list[str] = field(default_factory=list)
 
 
 CONDITION = "CONDITION"
@@ -892,13 +1030,51 @@ def _array(segment: str) -> list[Any] | None:
     return parsed if isinstance(parsed, list) else None
 
 
-def parse_completion(completion: str) -> ParsedCompletion:
-    """Split the model's answer into its reasoning, its judgments, its conditions and its proposal.
+def _heading_at(completion: str, heading: str) -> int:
+    """The position of a heading's last occurrence that is not the tail of a longer heading, or -1."""
+    marker = -1
+    for found in re.finditer(re.escape(heading), completion):
+        before = completion[found.start() - 1] if found.start() else ""
+        if not before or (not before.isalnum() and before != "_"):
+            marker = found.start()
+    return marker
 
-    The two arrays are looked for after the last ``PROPOSAL:`` and ``CONDITIONS:`` headings, each up to
-    the other heading where that one follows it, rather than at the first ``[`` in the completion,
-    because the reasoning routinely quotes the transcript's own ``[CATEGORY]`` placeholders. The
-    reasoning ends at the first judgment heading, so a one-word answer never reads as prose.
+
+def _quotes(parsed: list[Any] | None) -> list[str]:
+    """The non-empty strings of a parsed array, an element's ``text`` read where it is an object."""
+    quotes: list[str] = []
+    for item in parsed or ():
+        text = item.get("text") if isinstance(item, dict) else item
+        if isinstance(text, str) and text.strip():
+            quotes.append(text)
+    return quotes
+
+
+_ARRAY_HEADINGS = (
+    _PROPOSAL_HEADING,
+    _CONDITIONS_HEADING,
+    _OTHER_SPEAKERS_HEADING,
+    _INSTRUCTIONS_SPOKEN_HEADING,
+    _OTHER_SPEAKER_QUOTES_HEADING,
+    _OFF_TASK_QUOTES_HEADING,
+    _TASK_CONTENT_QUOTES_HEADING,
+)
+_LABEL_HEADINGS = (
+    _REDACTION_HEADING,
+    _ORIGINAL_HEADING,
+    _SPEAKERS_HEADING,
+    _OTHER_SPEAKER_ROLE_HEADING,
+    _OFF_TASK_SPEECH_HEADING,
+)
+
+
+def parse_completion(completion: str) -> ParsedCompletion:
+    """Split the model's answer into its reasoning, its judgments, its quotes and its proposal.
+
+    Each array is looked for after the last occurrence of its heading, up to the next heading of any
+    part, rather than at the first ``[`` in the completion, because the reasoning routinely quotes the
+    transcript's own ``[CATEGORY]`` placeholders. The reasoning ends at the first judgment heading, so
+    a one-word answer never reads as prose.
 
     Args:
         completion: The model's raw text.
@@ -908,51 +1084,37 @@ def parse_completion(completion: str) -> ParsedCompletion:
         because the reasoning is what the step exists to capture. A malformed array yields no entries
         rather than raising -- a caller reads ``available`` to tell that from a reviewer that read the
         text and would change nothing, and ``conditions_answered`` to tell a missing CONDITIONS part
-        from one that listed none.
+        from one that listed none. A one-word part outside its allowed words reads as the empty string
+        for ``redaction``, ``original`` and ``speakers``, and as None for ``off_task_speech`` and
+        ``other_speaker``.
     """
-    proposal_at = completion.rfind(_PROPOSAL_HEADING)
-    conditions_at = completion.rfind(_CONDITIONS_HEADING)
-    others_at = completion.rfind(_OTHER_SPEAKERS_HEADING)
-    spoken_at = completion.rfind(_INSTRUCTIONS_SPOKEN_HEADING)
+    at = {heading: _heading_at(completion, heading) for heading in _ARRAY_HEADINGS + _LABEL_HEADINGS}
+    found = sorted(position for position in at.values() if position != -1)
 
-    def segment(at: int, heading: str, *others: int) -> str:
-        end = min((other for other in others if other > at), default=len(completion))
-        return completion[at + len(heading) : end]
+    def segment(heading: str) -> str:
+        start = at[heading]
+        end = min((position for position in found if position > start), default=len(completion))
+        return completion[start + len(heading) : end]
 
+    def parsed(heading: str) -> list[Any] | None:
+        return _array(segment(heading)) if at[heading] != -1 else None
+
+    proposal_at = at[_PROPOSAL_HEADING]
     if proposal_at != -1:
-        proposal_text = segment(proposal_at, _PROPOSAL_HEADING, conditions_at, others_at, spoken_at)
+        proposal_text = segment(_PROPOSAL_HEADING)
         head = completion[:proposal_at]
     else:
         start = completion.find("[")
-        cut = min((at for at in (conditions_at, others_at, spoken_at) if at != -1), default=-1)
+        cut = min(
+            (at[heading] for heading in _ARRAY_HEADINGS if heading != _PROPOSAL_HEADING and at[heading] != -1),
+            default=-1,
+        )
         proposal_text = completion if cut == -1 else completion[:cut]
         head = completion if start == -1 else completion[:start]
-    conditions_parsed = (
-        _array(segment(conditions_at, _CONDITIONS_HEADING, proposal_at, others_at, spoken_at))
-        if conditions_at != -1
-        else None
-    )
-    others_parsed = (
-        _array(segment(others_at, _OTHER_SPEAKERS_HEADING, proposal_at, conditions_at, spoken_at))
-        if others_at != -1
-        else None
-    )
-    spoken_parsed = (
-        _array(segment(spoken_at, _INSTRUCTIONS_SPOKEN_HEADING, proposal_at, conditions_at, others_at))
-        if spoken_at != -1
-        else None
-    )
-    cuts = [
-        head.find(heading)
-        for heading in (
-            _REDACTION_HEADING,
-            _ORIGINAL_HEADING,
-            _SPEAKERS_HEADING,
-            _OTHER_SPEAKERS_HEADING,
-            _CONDITIONS_HEADING,
-            _INSTRUCTIONS_SPOKEN_HEADING,
-        )
-    ]
+    conditions_parsed = parsed(_CONDITIONS_HEADING)
+    others_parsed = parsed(_OTHER_SPEAKERS_HEADING)
+    spoken_parsed = parsed(_INSTRUCTIONS_SPOKEN_HEADING)
+    cuts = [head.find(heading) for heading in _LABEL_HEADINGS + _ARRAY_HEADINGS]
     first = min((cut for cut in cuts if cut != -1), default=-1)
     reasoning = (head if first == -1 else head[:first]).replace(_REASONING_HEADING, " ")
 
@@ -988,12 +1150,6 @@ def parse_completion(completion: str) -> ParsedCompletion:
         for item in others_parsed or ()
         if isinstance(item, dict) and isinstance(item.get("text"), str) and str(item["text"]).strip()
     ]
-    spoken = [
-        str(item.get("text") if isinstance(item, dict) else item)
-        for item in spoken_parsed or ()
-        if isinstance(item.get("text") if isinstance(item, dict) else item, str)
-        and str(item.get("text") if isinstance(item, dict) else item).strip()
-    ]
     return ParsedCompletion(
         reasoning=reasoning.strip(),
         redaction=_labelled(completion, _REDACTION_HEADING, REDACTION_STATES),
@@ -1003,8 +1159,13 @@ def parse_completion(completion: str) -> ParsedCompletion:
         conditions=conditions,
         conditions_answered=conditions_parsed is not None,
         other_speakers=other_speakers,
-        instructions_spoken=spoken,
+        instructions_spoken=_quotes(spoken_parsed),
         instructions_answered=spoken_parsed is not None,
+        off_task_speech=_labelled(completion, _OFF_TASK_SPEECH_HEADING, OFF_TASK_STATES) or None,
+        off_task_quotes=_quotes(parsed(_OFF_TASK_QUOTES_HEADING)),
+        other_speaker=_labelled(completion, _OTHER_SPEAKER_ROLE_HEADING, OTHER_SPEAKER_ROLES) or None,
+        other_speaker_quotes=_quotes(parsed(_OTHER_SPEAKER_QUOTES_HEADING)),
+        task_content_quotes=_quotes(parsed(_TASK_CONTENT_QUOTES_HEADING)),
     )
 
 
@@ -1107,7 +1268,8 @@ def answer_problem(result: "ReviewResult", original: str | Sequence[str], redact
         proposal, a release of something the policy always removes (:func:`dated`, :func:`stated`), a
         relabel or place reason outside the allowed values, a place released without a place reason, a
         name or a place released without a reason, proposal quotes that do not occur in the ORIGINAL, or
-        an answer without its CONDITIONS or INSTRUCTIONS_SPOKEN part.
+        an answer without its CONDITIONS or INSTRUCTIONS_SPOKEN part, or an off-task or other-speaker
+        judgment that quotes nothing.
     """
     if not result.available:
         return None
@@ -1122,6 +1284,16 @@ def answer_problem(result: "ReviewResult", original: str | Sequence[str], redact
             "your answer had no INSTRUCTIONS_SPOKEN part; add it as a JSON array quoting, exactly from the "
             "ORIGINAL, every passage where the task's instructions are spoken, verbatim or paraphrased, by "
             "anyone, or [] when there is none"
+        )
+    if result.off_task_speech in ("some", "extensive") and not result.off_task_quotes:
+        return (
+            f"you judged OFF_TASK_SPEECH {result.off_task_speech} but OFF_TASK_QUOTES quoted nothing; quote each "
+            "off-task passage exactly from the ORIGINAL"
+        )
+    if result.other_speaker in ("assistant", "background") and not result.other_speaker_quotes:
+        return (
+            f"you judged OTHER_SPEAKER_ROLE {result.other_speaker} but OTHER_SPEAKER_QUOTES quoted nothing; quote "
+            "what the other person said exactly from the ORIGINAL"
         )
     if result.speakers == "more_than_one" and not result.other_speakers:
         return (
@@ -1196,6 +1368,9 @@ def answer_problem(result: "ReviewResult", original: str | Sequence[str], redact
         [entry.text for entry in result.proposal]
         + [entry.text for entry in result.other_speakers]
         + list(result.instructions_spoken)
+        + list(result.off_task_quotes)
+        + list(result.other_speaker_quotes)
+        + list(result.task_content_quotes)
     )
     missing = [text for text in quotes if not quote_occurs(text, original)]
     if missing:
@@ -1583,6 +1758,11 @@ def review_transcript(
         conditions_answered=parsed.conditions_answered,
         instructions_spoken=parsed.instructions_spoken,
         instructions_answered=parsed.instructions_answered,
+        off_task_speech=parsed.off_task_speech,
+        off_task_quotes=parsed.off_task_quotes,
+        other_speaker=parsed.other_speaker,
+        other_speaker_quotes=parsed.other_speaker_quotes,
+        task_content_quotes=parsed.task_content_quotes,
         model_id=model_id,
         revision=loaded_revision or revision,
         raw="" if parsed.reasoning else completion,
@@ -1606,6 +1786,9 @@ def review_payload(result: ReviewResult) -> dict[str, Any]:
         ``elapsed_s`` and ``load_s`` are what the round cost and how much of that was the weights,
         and the two ``_mib`` fields are what it held on the device at its peak and between reviews,
         so a store answers the time and the memory without a stopwatch outside the graph.
+        ``off_task_speech`` (one of :data:`OFF_TASK_STATES` or None), ``off_task_quotes``,
+        ``other_speaker`` (one of :data:`OTHER_SPEAKER_ROLES` or None), ``other_speaker_quotes`` and
+        ``task_content_quotes`` (lists of quoted strings) are the task reading.
     """
     return {
         "available": result.available,
@@ -1632,6 +1815,11 @@ def review_payload(result: ReviewResult) -> dict[str, Any]:
         "conditions_answered": result.conditions_answered,
         "instructions_spoken": list(result.instructions_spoken),
         "instructions_answered": result.instructions_answered,
+        "off_task_speech": result.off_task_speech,
+        "off_task_quotes": list(result.off_task_quotes),
+        "other_speaker": result.other_speaker,
+        "other_speaker_quotes": list(result.other_speaker_quotes),
+        "task_content_quotes": list(result.task_content_quotes),
         "prompt_version": PROMPT_VERSION,
         "failure": result.failure,
         "model_id": result.model_id,
