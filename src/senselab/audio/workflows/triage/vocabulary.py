@@ -14,6 +14,12 @@ from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import Any, Callable, Literal, Mapping, Sequence, TypeVar
 
+from senselab.audio.workflows.triage.cohort_fold import (
+    COHORT_GROUND_KEYS,
+    COHORT_NODE,
+    cohort_evidence,
+    cohort_grounds,
+)
 from senselab.audio.workflows.triage.decision import (
     ANNOTATION,
     DISCARD,
@@ -37,11 +43,12 @@ GRAPH_ORDER = (
     "SPEECH",
     "VOICE",
     "QUALITY",
+    "COHORT",
     "REDACT",
     "REVIEW",
     "VERDICT",
 )
-"""The nodes the runner drives, in the order it drives them. VERDICT folds the twelve before it.
+"""The nodes the runner drives, in the order it drives them. VERDICT folds the thirteen before it.
 
 SESSION reads every member of the recording's BIDS session after PREPROCESS has read each one's own
 floor, and BACKGROUND reads the recording against that floor before routing and the branches."""
@@ -866,6 +873,7 @@ GROUND_KEYS = (
     KEY_SECOND_OPINION_DISAGREES,
     KEY_UNPLACED_OPEN,
     KEY_UNPLACED_UNREAD,
+    *COHORT_GROUND_KEYS,
 )
 """Every ground key that names no node, gate or branch of its own."""
 
@@ -2446,6 +2454,7 @@ def _decision_evidence(
     annotation_keys: Sequence[str],
     gates: Sequence[Mapping[str, Any]],
     lexical_words_n: int | None,
+    cohort_items: Sequence[EvidenceItem] = (),
 ) -> list[EvidenceItem]:
     """Every reading the fold weighed for this recording, with the decisive ones marked.
 
@@ -2462,6 +2471,7 @@ def _decision_evidence(
         annotation_keys: The annotation keys.
         gates: The conformance and flag gates the fold applied.
         lexical_words_n: The consensus transcript's lexical word count, where SPEECH read it.
+        cohort_items: COHORT's items (:func:`~senselab.audio.workflows.triage.cohort_fold.cohort_evidence`).
 
     Returns:
         The items in the order the fold reads them: acquisition, task, gates, flags, annotations,
@@ -2502,6 +2512,7 @@ def _decision_evidence(
             )
     if lexical_words_n is not None:
         items.append(item("lexical_words", lexical_words_n, PASS, unit="words"))
+    items.extend(cohort_items)
     named = {entry.name for entry in items}
     if task.owner_absent_inputs and KEY_OWNING_BRANCH_INPUT_ABSENT in flag_keys:
         items.extend(_flag_item(f"{KEY_OWNING_BRANCH_INPUT_ABSENT}:{absent}") for absent in task.owner_absent_inputs)
@@ -2548,6 +2559,7 @@ def fold_file_verdict(
     unplaced: Sequence[tuple[str, str]] = (),
     second_opinion: Mapping[str, Any] | None = None,
     task: TaskEvidence | None = None,
+    cohort: Mapping[str, Any] | None = None,
 ) -> FileVerdict:
     """Decide the file, from the deciding nodes' verdicts and the reporting nodes' reports.
 
@@ -2602,6 +2614,9 @@ def fold_file_verdict(
         unplaced: ``(family, state)`` for every detector finding SPEECH could not place on words, as
             :class:`~senselab.audio.workflows.triage.nodes.redact.UnplacedFinding` records them. An
             ``open`` one flags; an ``unread`` one flags and withholds.
+        cohort: COHORT's ``cohort_reading`` attributes, or None. Each ground
+            :func:`~senselab.audio.workflows.triage.cohort_fold.cohort_grounds` reads is a flag; a check
+            the reading marks unavailable is an annotation item and raises nothing.
 
     Returns:
         The file verdict on both axes, carrying every contributing reason rather than only the
@@ -2896,6 +2911,8 @@ def fold_file_verdict(
             voice_kind,
         )
     _join_reasons(task_evidence.quality, flag, annotate)
+    for why, key in cohort_grounds(cohort):
+        flag(COHORT_NODE, why, key)
     for branch in branches_seen:
         decision = branch_decisions.get(branch)
         reported = by_branch.get(branch)
@@ -3056,6 +3073,7 @@ def fold_file_verdict(
         lexical_words_n=(redaction or RedactionEvidence()).lexical_words_n
         if ran.get(_SPEECH) is RunState.COMPLETED
         else None,
+        cohort_items=cohort_evidence(cohort),
     )
 
     return FileVerdict(

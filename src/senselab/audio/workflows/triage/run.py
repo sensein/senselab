@@ -14,6 +14,8 @@ from pathlib import Path
 from typing import Any, Callable, TypeVar
 
 from senselab.audio.data_structures import Audio, AudioHints
+from senselab.audio.workflows.triage.cohort_fold import COHORT_NODE
+from senselab.audio.workflows.triage.cohort_stage import write_cohort_unavailable
 from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.enrollment import Enrollment
 from senselab.audio.workflows.triage.live_evidence import recording_stem
@@ -322,7 +324,7 @@ def drive_decisions(
     outcomes: dict[str, NodeOutcome],
     enrollment: Enrollment | None,
 ) -> dict[str, Path]:
-    """Run BACKGROUND, TAXONOMY, routing, the routed branches, QUALITY and REDACT over a preprocessed store.
+    """Run BACKGROUND, TAXONOMY, routing, the routed branches, QUALITY, COHORT and REDACT over a preprocessed store.
 
     Every input is the store and the sidecars under ``run_dir``, so the caller may be a graph pass
     that has just run PREPROCESS or a driver replaying over a finished run. A branch routing
@@ -330,8 +332,9 @@ def drive_decisions(
     (noted :data:`WITHHELD_CRITICAL`) are all recorded ``SKIPPED`` and never called. A branch that
     did not complete and owns the declared family gets a ``task_extent_absent`` finding from
     :func:`~senselab.audio.workflows.triage.nodes.branches.record_unrun_owner`. QUALITY is
-    called after the branch loop over the source recording; REDACT only when SPEECH ran and its scan
-    found PII. See ``specs/20260817-triage-workflow-dag/dag.md``.
+    called after the branch loop over the source recording, then COHORT, which on one recording records
+    ``unavailable`` unless a corpus pass's reading already stands (``scripts/extend_cohort.py``);
+    REDACT only when SPEECH ran and its scan found PII. See ``specs/20260817-triage-workflow-dag/dag.md``.
 
     Args:
         store: The provenance store, holding ADMIT's ``recording`` stream and PREPROCESS's output.
@@ -379,6 +382,7 @@ def drive_decisions(
                 store, branch, family, outcome.note or outcome.error or outcome.state.value, signal=_CONDITIONED_STREAM
             )
     _attempt(outcomes, QUALITY, lambda: quality(store, _SOURCE_STREAM, config, hint, run_dir=run_dir))
+    _attempt(outcomes, COHORT_NODE, lambda: write_cohort_unavailable(store))
     if "SPEECH" in selected and _speech_found_pii(store):
         redacted = _attempt(
             outcomes,

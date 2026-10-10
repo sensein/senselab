@@ -18,6 +18,7 @@ is its reader). A run that sees no cohort writes the reading ``unavailable``
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 import math
@@ -871,13 +872,17 @@ def run_checks(facts: RecordingFacts, artefact: Mapping[str, Any] | None) -> dic
 
 
 def cohort_key(
-    *, session: str | None, stems: Sequence[str], quantiles_sha256: str | None, enrollment_config: Mapping[str, Any]
+    *,
+    session: str | None,
+    members: Sequence[RecordingFacts],
+    quantiles_sha256: str | None,
+    enrollment_config: Mapping[str, Any],
 ) -> str:
     """What a session's readings were computed from, so a repeated pass can tell it has nothing to do.
 
     Args:
         session: The session key.
-        stems: Every member's stem.
+        members: Every member's facts: stem, duration, task extent, diarization and lexical runs.
         quantiles_sha256: The artefact's digest, or None.
         enrollment_config: The model, its commit, the cut and the floor.
 
@@ -889,7 +894,7 @@ def cohort_key(
             "version": cohort_parameters()["version"],
             "parameters": cohort_parameters(),
             "session": session,
-            "stems": sorted(stems),
+            "members": sorted(dataclasses.astuple(facts) for facts in members),
             "quantiles": quantiles_sha256,
             "enrollment": dict(enrollment_config),
         }
@@ -1122,7 +1127,7 @@ def read_session(
     """
     key = cohort_key(
         session=session,
-        stems=[facts.stem for facts, _ in members],
+        members=[facts for facts, _ in members],
         quantiles_sha256=None if quantiles_ref is None else str(quantiles_ref.get("sha256")),
         enrollment_config=settings.record(),
     )

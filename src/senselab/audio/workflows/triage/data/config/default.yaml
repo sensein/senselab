@@ -249,11 +249,13 @@ voice:
 # SPEECH's enrollment, separation, diarization and non-target settings.
 speech:
   second_diarizer:                     # which model corroborates pyannote's speaker count
-  target_match_cosine:                 # similarity above which a diarized speaker is the enrolled target
+  target_match_cosine: 0.231           # similarity at or above which a speaker or run is the enrolled target
   speech_test_stoi_floor:              # STOI floor for a speech span to pass quality
   speech_test_si_sdr_floor:            # SI-SDR floor, same
   hint_tags: [speech, read-speech]     # unread as of v2; hints route through routing.hint_branch_map alone
-  enrollment_model:                    # speaker-embedding model AND revision enrollment is computed with
+  enrollment_model:                    # speaker-embedding model AND resolved commit enrollment is computed with
+    model_id: speechbrain/spkrec-ecapa-voxceleb
+    revision: 0f99f2d0ebe89ac095bcc5903c4dd8f72b367286
   separation_backend: MossFormer2_SS_16K  # which separator runs on overlapping speech
   separation_sound_class:              # the sound class that separator is asked for
   nontarget:                           # what marks a diarized speaker as not the target

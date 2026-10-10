@@ -1251,8 +1251,12 @@ maximum-phonation-time task should produce.
 SPEECH's enrollment, separation, diarization and non-target settings.
 
 speech v2 -- branch-speech.md. speech.enrollment_model names the speaker-embedding model AND its
-revision that enrollment is estimated with; null, and while null an enrollment is refused rather than
-compared. speech.separation_backend chooses between unasdiff in speech_sound mode and
+resolved commit that enrollment is estimated with: speechbrain/spkrec-ecapa-voxceleb at
+0f99f2d0ebe89ac095bcc5903c4dd8f72b367286, the model the speaker vectors were fitted on
+(specs/20260922-speaker-vectors/design.md). speech.target_match_cosine is 0.231, the midpoint of
+that fit's same-speaker 5th percentile (0.2493) and between-speaker 95th percentile (0.2125) at the
+1.0 s refusal floor (D-6), the shortest run either SPEECH or COHORT embeds. Both are read by COHORT's
+session enrollment (specs/20261007-task-events-in-background/design.md, "Cohort stage"). speech.separation_backend chooses between unasdiff in speech_sound mode and
 MossFormer2_SS_16K, and ships **MossFormer2_SS_16K**, which turns the multi-speaker instrument on.
 
 THE TWO WERE NOT RANKED, AND THE VALUE IS NOT A RANKING. The earlier null said "until the two are
@@ -2472,8 +2476,6 @@ Keys deliberately left null, and what each one owes.
 UNSET, and why -- benchmarks/open.md carries each of these:
   speech.second_diarizer: no measured ranking of second diarizers exists; while null, a count of
     not-1 records second_diarizer "not_consulted" and still flags.
-  speech.target_match_cosine: no similarity threshold has been derived; a hint carrying a target
-    embedding under this null is refused rather than answered with an invented cut.
   speech.speech_test_stoi_floor, speech.speech_test_si_sdr_floor: SQUIM thresholds over speech
     spans are unmeasured; while null each span's corroboration records squim_vote "not_evaluated"
     and YAMNet coverage alone decides. Distinct from quality.stoi_floor/pesq_floor: these gate

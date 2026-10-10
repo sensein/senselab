@@ -1907,7 +1907,7 @@ class TestEnrollment:
     def test_a_null_enrollment_model_key_refuses_before_the_branch_measures_anything(
         self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """speech.enrollment_model is null on the packaged config; nothing invents a probe.
+        """With speech.enrollment_model and the match cut null, nothing invents a probe.
 
         A branch never refuses: it proceeds with everything else it can measure — the PII scan, the
         spans, the speakers — and names the two unreadable keys in ``unmeasured`` and a note, rather
@@ -1915,7 +1915,8 @@ class TestEnrollment:
         """
         _seed_speech_store(store, tmp_path, words=["hello", "world"])
         _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
-        result = speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=_enrollment())
+        unset = _override(tmp_path, "speech:\n  enrollment_model:\n  target_match_cosine:\n")
+        result = speech(store, "plain", unset, run_dir=tmp_path, enrollment=_enrollment())
         assert result.report.conformance == UNDETERMINED
         report = _report_entity(store, "SPEECH")
         assert "speech.enrollment_model" in report.attributes["unmeasured"]
