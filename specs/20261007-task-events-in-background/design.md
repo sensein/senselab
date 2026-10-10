@@ -2203,7 +2203,7 @@ session background as its floor and the regions re-read against it.
   enhancer removes the breath into the residual), and foreground over residual is negative where a foreground
   is read at all (breath −10 to −29 dB; coughs +10 to +19 dB). Voice: the held vowel is not speech by words or
   YAMNet, so its frames count as non-speech, and plain over residual on non-speech frames is 37–47 dB. Not
-  applicable (no foreground): 1,047 airway, 156 voice, 4 syllable-repetition and 121 lexical recordings
+  applicable (no foreground): 939 airway, 156 voice, 4 syllable-repetition and 121 lexical recordings
   (harvard-sentences-list 97).
 - **Decisions at the current bounds** (each read twice by the same code; 3,354 of 3,376 recomputed old decisions
   match the stored ones, the 22 others are the r18 reading's code and `language=None`): 103 of 3,411 change.
