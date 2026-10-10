@@ -334,8 +334,8 @@ How `env` installs (B7):
   resolves the declared packages' recursive `Depends`/`Imports`/`LinkingTo` against the snapshot and
   downloads the source packages R's own library lacks into a local repository (`src/contrib` plus
   `PACKAGES`). The install then runs inside the sandbox, offline (`R_INSTALL_SH`: `install.packages` from
-  that `file://` repository, then the session record), with only the library, the temporary work dir and,
-  for `ir_notebook`, the venv's `share/jupyter/kernels` writable. Package build scripts (`configure`,
+  that `file://` repository, then the session record), with only the library and the temporary work dir
+  writable (an `ir_notebook` kernel spec is staged there and copied into the venv by the driver). Package build scripts (`configure`,
   `Makevars`) therefore cannot reach the network or write outside the library. The module env captured
   outside (its `PATH`, `LD_LIBRARY_PATH` and the rest, minus `HOME`/`TMPDIR`) is passed into the sandbox
   as values; Lmod does not run inside the namespace.
@@ -1256,7 +1256,7 @@ It holds no messages, and no paths other than checkout-relative code frames.
 ## B14 re-check additions
 
 - **The R library is confined.** `env.r_lib` must be `{cache}/r/<name>`: one plain name (letters, digits,
-  `_`, `.`, `-`, no leading dot), no `/` and no `..` (`E_SPEC_BAD_R_LIB`). A prefix check alone let
+  `_`, `.`, `-`, no leading dot, no `..` anywhere in it), no `/` (`E_SPEC_BAD_R_LIB`). A prefix check alone let
   `{cache}/../victim` make `prefetch_r` remove a tree outside the cache, and let the R install's
   sandbox write into a venv's `bin`. `prefetch_r` and the runner also check, before any removal, write or
   lock, that the real path (symlinks resolved) lies directly under `realpath(cache)/r`; a symlinked
@@ -1277,10 +1277,14 @@ It holds no messages, and no paths other than checkout-relative code frames.
   `uv pip` call that meets a refused sweep raises it too. Without user namespaces the code stays
   `E_NO_USERNS`. A site profile's step partitions and `build` partition must therefore point at nodes
   where every mount can be made read-only.
-- **Notebook kernel specs.** For `ir_notebook`, prefetch records a sha256 of the notebook venv's
+- **Notebook kernel specs.** For every notebook venv (`notebook_tools`, used by `notebook` and `ir_notebook`
+  steps), prefetch records a sha256 of the notebook venv's
   `share/jupyter/kernels` tree (relative paths with file contents or link targets) in `installed.json`
-  as `kernels_sha256` (the marker's `installed_sha256` follows), and a run refuses with `E_ENV_CHANGED`
-  when the tree no longer matches or no digest was recorded. A kernel spec names the program Jupyter
+  as `kernels_sha256` (the marker's `installed_sha256` follows), and a run of either notebook kind refuses with
+  `E_ENV_CHANGED` when the tree no longer matches or no digest was recorded. The R install for
+  `ir_notebook` writes its kernel spec to a staging prefix under the work dir; nothing of the venv is
+  writable in that sandbox, and the driver copies the staged `kernels/ir` (regular files only) into the venv
+  and records the digest again. A kernel spec names the program Jupyter
   starts, so changing it would change what runs without changing any keyed input.
 - **No shell programs in Python steps.** Since the step's program is pinned, a `python` or `notebook`
   step cannot start `bash` or `sh` directly, and there is no shell kind (the plan needs none). A shell

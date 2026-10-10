@@ -837,7 +837,7 @@ class _Execution:
             RunError: ``E_SANDBOX_UNAVAILABLE`` (a mount refuses the read-only remount; the sweep's line goes
                 to ``R/logs/driver.log``), ``E_NO_USERNS``, ``E_ENV_MISSING``, ``E_ENV_UNCHECKED``,
                 ``E_ENV_CHANGED`` (the dist-info METADATA in the venv no longer name the installed set, or an
-                ``ir_notebook`` venv's kernel specs changed), ``E_GPU_MISSING`` or ``E_DRIVER_OLD``.
+                notebook venv's kernel specs changed), ``E_GPU_MISSING`` or ``E_DRIVER_OLD``.
         """
         step, config = self.step, self.config
         status, detail = sandbox.sandbox_status()
@@ -854,7 +854,7 @@ class _Execution:
             raise RunError("E_ENV_UNCHECKED")
         if env.installed_from_metadata(venv_path) != venv.packages:
             raise RunError("E_ENV_CHANGED")
-        if step.kind == "ir_notebook" and _recorded_kernels(venv_path) != env.kernels_sha256(venv_path):
+        if step.kind in NOTEBOOK_KINDS and _recorded_kernels(venv_path) != env.kernels_sha256(venv_path):
             raise RunError("E_ENV_CHANGED")
         self.venv, self.installed = venv, env.installed_sha256(venv_path)
         self.host = host.host_record(None, runner=config.host_runner)

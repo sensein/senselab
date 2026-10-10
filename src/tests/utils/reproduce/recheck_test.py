@@ -207,3 +207,32 @@ def test_a_changed_kernel_spec_is_e_env_changed(world: World) -> None:
     assert world.run(manifest)["prep"].codes == ("E_ENV_CHANGED",)
     (kernel / "kernel.json").write_text("{}")
     assert world.run(manifest)["prep"].ok
+
+
+@needs_userns
+def test_a_changed_kernel_spec_fails_a_plain_notebook_step(world: World) -> None:
+    """A ``notebook`` step sharing the derived venv refuses when ``kernels/python3/kernel.json`` changed."""
+    data = world.step("prep", "prep", "{root:data}/in/a.txt", kind="notebook")
+    data["env"]["notebook_tools"] = {"lock": "nb.lock", "lock_sha256": "ef" * 32}
+    manifest = world.manifest(data)
+    world.prefetch(manifest)
+    path, _ = run._step_venv(manifest.steps[0], manifest.name, world.cache)
+    kernel = path / "share" / "jupyter" / "kernels" / "python3"
+    kernel.mkdir(parents=True)
+    (kernel / "kernel.json").write_text('{"argv": ["/elsewhere/python"]}')
+    assert world.run(manifest)["prep"].codes == ("E_ENV_CHANGED",)
+    env.record_kernels(path)
+    assert world.run(manifest)["prep"].ok
+
+
+def test_the_r_install_sandbox_writes_no_part_of_the_venv(tmp_path: Path) -> None:
+    """The kernel spec is staged under the work dir and copied in by the driver; no venv path is bound writable."""
+    venv_dir = tmp_path / "venv"
+    venv_dir.mkdir()
+    (venv_dir / env.INSTALLED).write_text(json.dumps({"packages": {}, "freeze": []}))
+    runner = FakeR({"lme4": "1.1-37", "IRkernel": "1.3.2"})
+    env.prefetch_r(_r_env(), tmp_path / "c", _profile(tmp_path), kind="ir_notebook", venv=venv_dir, runner=runner)
+    raw = runner.sandboxed[0]
+    script = raw[raw.index("-c") + 1]
+    assert str(venv_dir) not in script
+    assert (venv_dir / "share" / "jupyter" / "kernels" / "ir" / "kernel.json").is_file()
