@@ -175,11 +175,11 @@ def _inprocess_load_files() -> dict[str, set[str]]:
 
 
 def _subprocess_worker_files() -> set[str]:
-    """Files that launch a subprocess whose worker string loads an HF model."""
+    """Files that launch a subprocess, one-shot or served, whose worker string loads an HF model."""
     found: set[str] = set()
     for py in _iter_src_files():
         txt = py.read_text()
-        if "subprocess.run(" not in txt and "subprocess.Popen(" not in txt:
+        if not any(launch in txt for launch in ("subprocess.run(", "subprocess.Popen(", "serve_in_venv(")):
             continue
         try:
             tree = ast.parse(txt)
