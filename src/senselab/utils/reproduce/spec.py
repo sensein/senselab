@@ -71,8 +71,8 @@ _KEYED_PLACEHOLDER = re.compile(r"^(root|up):([A-Za-z0-9_.-]+)$")
 _SECRET_KEY = re.compile(r"(^|_)(TOKEN|KEY|SECRET|PASSWORD|PASSWD|CREDENTIALS?)S?(_|$)", re.IGNORECASE)
 ALLOWED_SECRET_LIKE_KEYS = frozenset({"TOKENIZERS_PARALLELISM"})
 _ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-R_LIB_TEMPLATE = re.compile(r"^\{cache\}/r/[A-Za-z0-9_][A-Za-z0-9_.-]*$")
-"""The only form an R library may take: ``{cache}/r/<name>``, one plain name with no leading dot."""
+R_LIB_TEMPLATE = re.compile(r"^\{cache\}/r/(?!.*\.\.)[A-Za-z0-9_][A-Za-z0-9_.-]*$")
+"""The only form an R library may take: ``{cache}/r/<name>``, one plain name with no leading dot and no ``..``."""
 
 
 def placeholders(template: str) -> list[str]:
