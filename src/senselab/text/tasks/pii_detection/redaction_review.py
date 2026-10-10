@@ -1864,7 +1864,8 @@ def review_payload(result: ReviewResult) -> dict[str, Any]:
         and the two ``_mib`` fields are what it held on the device at its peak and between reviews,
         so a store answers the time and the memory without a stopwatch outside the graph.
         ``off_task_speech`` (one of :data:`OFF_TASK_STATES` or None), ``off_task_quotes``,
-        ``phrases_instead_of_items`` (one of :data:`PHRASE_STATES` or None), ``phrase_quotes``, ``other_speaker`` (one of :data:`OTHER_SPEAKER_ROLES` or None), ``other_speaker_quotes`` and
+        ``phrases_instead_of_items`` (one of :data:`PHRASE_STATES` or None), ``phrase_quotes``,
+        ``other_speaker`` (one of :data:`OTHER_SPEAKER_ROLES` or None), ``other_speaker_quotes`` and
         ``task_content_quotes`` (lists of quoted strings) are the task reading.
     """
     return {

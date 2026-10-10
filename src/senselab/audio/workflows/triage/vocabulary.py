@@ -698,7 +698,7 @@ SPEECH_IN_TASK = "speech_in_task"
 """Lexical speech outside a non-lexical task's own content, anywhere in the file: a review ground."""
 
 PHRASES_INSTEAD_OF_ITEMS = "phrases_instead_of_items"
-"""An item-set task whose ``phrase_share`` reaches ``data/task_speech.yaml`` ``phrase_share_review``: a review ground."""
+"""An item-set task whose ``phrase_share`` reaches ``task_speech.yaml`` ``phrase_share_review``: a review ground."""
 
 PHRASE_SHARE = "phrase_share"
 """The evidence item: an item-set task's utterances that are phrases, over all its utterances."""
