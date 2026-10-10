@@ -2306,6 +2306,19 @@ so leaving it off costs nothing that the detector cascade was doing. What its an
   may make residency cost ~24 GB instead of ~70 GB. Not measured; it changes numerics.
   See specs/20260817-triage-workflow-dag/llm-check-amortised-load.md.
 
+  engine transformers -- the venv worker above stays the default so a run that turns the reviewer on
+  needs nothing new. vllm is owner-approved (2026-10-10) for corpus passes: measured on one H100 over
+  246 reviewer requests (/orcd/scratch/bcs/002/satra/bench_reviewer_20261009), vLLM 0.31.0 at
+  concurrency 1 answered 246/246 with token ids identical across two runs, at 3.7x the transformers
+  worker's throughput (0.179 against 0.049 calls/s); at concurrency 32 it was not reproducible, with
+  or without VLLM_BATCH_INVARIANT, so one request at a time is part of the engine's identity.
+  vllm.* -- the benchmark's own server arguments, every one in the reading's engine identity and
+  cache key: max_model_len 12288 (every benchmark request fit with max_new_tokens 1024),
+  gpu_memory_utilization 0.90 (one server per card; a pass with several servers per card overrides
+  it, see specs/20261010-vllm-reviewer/design.md), enable_prefix_caching true, kv_cache_dtype auto,
+  generation_config vllm (the request sets every sampling parameter), limit_mm_per_prompt
+  {image: 0, audio: 0} (text only).
+
 redaction.fill silence -- owner-directed. redact.md left this DEFERRED, and which of silence, noise
 or bleep is least damaging to the measurements taken downstream of a released artifact is still not
 measured; silence is a declared choice rather than a fitted one. It is the fill with no content of

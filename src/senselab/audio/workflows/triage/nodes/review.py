@@ -22,7 +22,7 @@ See ``specs/20260924-reviewer-over-every-transcript/design.md``.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -74,6 +74,7 @@ from senselab.text.tasks.pii_detection.redaction_review import (
     task_guidance_digest,
     task_nature,
 )
+from senselab.text.tasks.pii_detection.redaction_review_vllm import ENGINE_TRANSFORMERS, engine_identity
 from senselab.utils.prov_store import ProvStore
 from senselab.utils.tasks.cached_inference import (
     canonical_params,
@@ -153,6 +154,7 @@ class _Reading:
         other_speaker: Its ``none`` / ``assistant`` / ``background`` / ``unclear``, or None.
         other_speaker_quotes: The passages it attributed to the other speaker.
         task_content_quotes: The PII-annotated words it judged task content.
+        engine: The engine that answered the last round, as the worker reported it; empty where none did.
     """
 
     status: str
@@ -177,6 +179,7 @@ class _Reading:
     other_speaker: str | None = None
     other_speaker_quotes: tuple[str, ...] = ()
     task_content_quotes: tuple[str, ...] = ()
+    engine: dict[str, Any] = field(default_factory=dict)
 
 
 TASK_READING_QUOTES = ("off_task_quotes", "phrase_quotes", "other_speaker_quotes", "task_content_quotes")
@@ -232,8 +235,34 @@ def _llm_settings(config: TriageConfig) -> dict[str, Any]:
         "max_new_tokens",
         "timeout_s",
         "keep_worker_resident",
+        "engine",
+        "vllm",
     )
     return {name: config.require(f"{_LLM_SECTION}.{name}") for name in names}
+
+
+def review_engine(settings: Mapping[str, Any]) -> dict[str, Any]:
+    """The engine identity a configuration asks the reviewer to run on.
+
+    Args:
+        settings: :func:`_llm_settings`' mapping.
+
+    Returns:
+        :func:`~senselab.text.tasks.pii_detection.redaction_review_vllm.engine_identity` of its ``engine``.
+    """
+    return engine_identity(str(settings["engine"]), settings.get("vllm"))
+
+
+def configured_engine(config: TriageConfig) -> dict[str, Any]:
+    """The engine identity the configuration's reviewer runs on.
+
+    Args:
+        config: The triage configuration.
+
+    Returns:
+        :func:`review_engine` over its ``redaction.llm_check`` settings.
+    """
+    return review_engine(_llm_settings(config))
 
 
 def task_context(store: ProvStore, hint: AudioHints | None, lexicon: TaskLexicon | None = None) -> dict[str, Any]:
@@ -518,6 +547,7 @@ def _loop(
             max_new_tokens=int(settings["max_new_tokens"]),
             timeout_s=int(settings["timeout_s"]),
             feedback=feedback,
+            engine=review_engine(settings),
         )
         problem = answer_problem(result, quotable_texts(original, context), redacted)
         reviews.append({**review_payload(result), "iteration": iteration, "feedback": feedback, "problem": problem})
@@ -632,8 +662,8 @@ def review_cache_key(
 
     Returns:
         The key: the texts and context (the whole annotated transcript included), the prompt and parse
-        version, the ``review_inputs`` version, the model and its commit, and the generation ceiling and
-        iteration bound.
+        version, the ``review_inputs`` version, the model and its commit, the generation ceiling and
+        iteration bound, and the engine's identity (:func:`review_engine`).
     """
     request = canonical_params({"original": original, "redacted": redacted, "context": dict(context)})
     return result_cache_key(
@@ -647,6 +677,7 @@ def review_cache_key(
             "task_guidance": task_guidance_digest(),
             "max_new_tokens": int(settings["max_new_tokens"]),
             "max_iterations": int(settings["max_iterations"]),
+            "engine": review_engine(settings),
         },
     )
 
@@ -686,6 +717,7 @@ def reading_from_cache(payload: Mapping[str, Any]) -> tuple[_Reading, list[dict[
     fields_["other_speakers"] = tuple(dict(entry) for entry in fields_.get("other_speakers") or ())
     fields_["instructions_spoken"] = tuple(str(text) for text in fields_.get("instructions_spoken") or ())
     fields_["conditions"] = tuple(dict(entry) for entry in fields_.get("conditions") or ())
+    fields_["engine"] = dict(fields_.get("engine") or {})
     fields_.update(_task_reading(fields_))
     return _Reading(**fields_), [dict(review) for review in payload.get("reviews") or ()]
 
@@ -743,6 +775,9 @@ def backfill_from_store(store: ProvStore, config: TriageConfig) -> tuple[str, st
     settings = _llm_settings(config)
     if str(held.get("model_id")) != str(settings["model_id"]):
         return BACKFILL_SKIPPED, f"model {held.get('model_id')!r} is not the configured one"
+    engine = dict(held.get("engine") or engine_identity(ENGINE_TRANSFORMERS))
+    if engine != review_engine(settings):
+        return BACKFILL_SKIPPED, f"engine {engine.get('name')!r} is not the configured one"
     original, redacted = transcript_texts(store)
     if bool(held.get("read_redacted")) != (redacted is not None):
         return BACKFILL_SKIPPED, "the store's redaction differs from the one the reading read"
@@ -762,6 +797,7 @@ def backfill_from_store(store: ProvStore, config: TriageConfig) -> tuple[str, st
         other_speakers=tuple(dict(entry) for entry in held.get("other_speakers") or ()),
         instructions_spoken=tuple(str(text) for text in held.get("instructions_spoken") or ()),
         conditions=tuple(dict(entry) for entry in held.get("conditions") or ()),
+        engine=engine,
         **_task_reading(held),
     )
     reviews = [
@@ -859,6 +895,7 @@ def review(store: ProvStore, config: TriageConfig, hint: AudioHints | None = Non
                     other_speakers=others,
                     instructions_spoken=spoken,
                     conditions=conditions,
+                    engine=dict(answered[-1].get("engine") or {}),
                     **_task_reading(answered[-1]),
                 )
             stored = key is not None and reading.revision == revision and cache_reading(key, reading, reviews)
@@ -876,6 +913,7 @@ def review(store: ProvStore, config: TriageConfig, hint: AudioHints | None = Non
             "read_redacted": redacted is not None,
             "context_keys": sorted(context),
             "prompt_version": PROMPT_VERSION,
+            "engine": review_engine(settings),
         },
         started=started,
         ended=_stamp(),
@@ -940,6 +978,7 @@ def review(store: ProvStore, config: TriageConfig, hint: AudioHints | None = Non
             "other_speaker_quotes": list(reading.other_speaker_quotes),
             "task_content_quotes": list(reading.task_content_quotes),
             "prompt_version": PROMPT_VERSION,
+            "engine": dict(reading.engine),
             "proposal": [dict(entry) for entry in reading.proposal],
             "proposal_redact_n": sum(1 for entry in reading.proposal if entry["action"] == REDACT),
             "proposal_release_n": sum(1 for entry in reading.proposal if entry["action"] != REDACT),

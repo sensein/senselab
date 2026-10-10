@@ -105,6 +105,7 @@ REVIEWED_SUBPROCESS = {
     # directory as the worker's load target, so the worker runs under HF_HUB_OFFLINE with no
     # per-call Hub version check. Checked the same way subprocess_backend.py's gliner branch was.
     "text/tasks/pii_detection/redaction_review.py",
+    "text/tasks/pii_detection/redaction_review_vllm.py",
     # scene-quality / ASR (branch-only, #536)
     "audio/tasks/scene_quality/brouhaha.py",
     "audio/tasks/speech_to_text/crisperwhisper.py",

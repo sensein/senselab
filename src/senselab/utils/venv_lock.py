@@ -45,6 +45,8 @@ TORCH_PACKAGES = frozenset({"torch", "torchaudio"})
 """Installed from the host's PyTorch index, never from the lock body."""
 
 _CUDA_VARIANT_PREFIXES = ("nvidia-", "triton", "pytorch-triton", "cuda-")
+_TRITON_PREFIXES = ("triton", "pytorch-triton")
+"""Installed with ``torch`` from its index wherever ``torch`` depends on them, whatever else does."""
 
 PYTORCH_INDEX_BASE = "https://download.pytorch.org/whl"
 
@@ -364,7 +366,8 @@ def resolved_packages(line_annotated: str) -> dict[str, tuple[str, set[str]]]:
 def torch_only_cuda_packages(packages: dict[str, tuple[str, set[str]]]) -> list[str]:
     """Names to leave out of the lock body.
 
-    These are ``torch``, ``torchaudio`` and the CUDA-variant packages that only they pull in.
+    These are ``torch``, ``torchaudio``, the CUDA-variant packages that only they pull in, and ``triton``
+    wherever ``torch`` pulls it in.
     """
     family = {name for name in packages if name in TORCH_PACKAGES}
     changed = True
@@ -374,7 +377,12 @@ def torch_only_cuda_packages(packages: dict[str, tuple[str, set[str]]]) -> list[
             if name not in family and parents and parents <= family:
                 family.add(name)
                 changed = True
-    return sorted(name for name in family if name in TORCH_PACKAGES or name.startswith(_CUDA_VARIANT_PREFIXES))
+    triton = {
+        name for name, (_, parents) in packages.items() if name.startswith(_TRITON_PREFIXES) and parents & TORCH_PACKAGES
+    }
+    return sorted(
+        {name for name in family if name in TORCH_PACKAGES or name.startswith(_CUDA_VARIANT_PREFIXES)} | triton
+    )
 
 
 def top_cuda_tag(max_cuda_version: Optional[tuple[int, int]]) -> str:

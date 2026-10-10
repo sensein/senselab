@@ -557,6 +557,14 @@ redaction:
     max_new_tokens: 1024               # generation ceiling; the reasoning is the product, not the verdict
     timeout_s: 1800                    # wall clock per review, model load included
     keep_worker_resident: false        # hold the loaded weights across recordings; needs a GPU to itself
+    engine: transformers               # transformers (the venv worker) or vllm (a pinned vLLM server, one request at a time)
+    vllm:                              # the vLLM server's arguments; every one is in the reading's engine identity
+      max_model_len: 12288             # the longest prompt plus max_new_tokens a request may hold
+      gpu_memory_utilization: 0.90     # the card's share this server may take; split across servers on one card
+      enable_prefix_caching: true      # reuse the shared prompt prefix across requests
+      kv_cache_dtype: auto             # the KV cache in the model's own dtype
+      generation_config: vllm          # the server's own sampling defaults; every request sets its own
+      limit_mm_per_prompt: {image: 0, audio: 0}  # text only: no multimodal encoder memory
 
 # A decision model's second opinion over the text the reviewer reads (SECOND_OPINION).
 second_opinion:

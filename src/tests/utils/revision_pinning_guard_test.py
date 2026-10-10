@@ -63,6 +63,9 @@ REVISION_RESOLVED_SUBPROCESS_FILES = {
     # for its lifetime: a later review is served by the weights that SHA names or by a worker that
     # was restarted and re-resolved, never by a pointer that moved under a running one.
     "text/tasks/pii_detection/redaction_review.py",
+    # redaction_review_vllm.py: the same resolved SHA; vllm serve and the tokenizer load the staged
+    # snapshots/<sha> directory, and the worker reports that directory's name back as the revision.
+    "text/tasks/pii_detection/redaction_review_vllm.py",
 }
 
 # Subprocess workers that CANNOT pass a revision to their loader, because the upstream loader has
