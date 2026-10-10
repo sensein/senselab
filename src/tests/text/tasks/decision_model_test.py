@@ -11,7 +11,7 @@ import os
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Iterator, Mapping
 
 import pytest
 
@@ -217,7 +217,7 @@ class TestTheAnswers:
         assert list(criteria) == ["none", "occasional", "predominant"]
         asked: list[set[str]] = []
 
-        def ask(state: dict, questions: dict) -> dict:
+        def ask(state: Mapping[str, Any], questions: Mapping[str, Mapping[str, Any]]) -> dict:
             asked.append(set(questions))
             answers = {k: v for k, v in _answers().items() if k != "off_task_speech"}
             answers["phrases_instead_of_items"] = {

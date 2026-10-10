@@ -902,7 +902,7 @@ def test_v13_an_item_set_task_is_asked_about_phrases_instead_of_items() -> None:
     assert r.review_prompt(False) == r._PROMPT
     assert "PHRASES_INSTEAD_OF_ITEMS:" in items and "PHRASE_QUOTES:" in items
     assert "OFF_TASK_SPEECH:" not in items and "OFF_TASK_QUOTES:" not in items
-    assert "let me think" in items and "my dog\'s name is" in items
+    assert "let me think" in items and "my dog's name is" in items
     assert items.replace(r._POINT_8_PHRASES, "").replace(r._PHRASE_PARTS, "") == r._PROMPT.replace(
         r._POINT_8_OFF_TASK, ""
     ).replace(r._OFF_TASK_PARTS, "")
