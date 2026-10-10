@@ -1050,7 +1050,7 @@ def _stimulus(store: ProvStore, hint: AudioHints | None, params: BranchParams) -
             index=int(word.attributes["index"]),
             text=word_text(word),
             extent=word.extent,
-            agreement=float(word.attributes["agreement"]),
+            agreement=None if word.attributes.get("agreement") is None else float(word.attributes["agreement"]),
         )
         for word in lexical_words(store)
     ]
@@ -1726,7 +1726,11 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
         raise LookupError("no consensus_transcript in the store; PREPROCESS has not run")
     words = [store.get_entity(word_id) for word_id in consensus.attributes["word_ids"]]
     words = [word for word in words if not store.is_invalidated(word.id)]
-    lexical_index = [position for position, word in enumerate(words) if not word.attributes["bracketed"]]
+    lexical_index = [
+        position
+        for position, word in enumerate(words)
+        if not word.attributes["bracketed"] and not word.attributes.get("degenerate")
+    ]
     lexical = [words[position] for position in lexical_index]
     source_names = [str(row["name"]) for row in consensus.attributes["sources"]]
     hypotheses = _hypotheses(store, source_names)

@@ -92,6 +92,8 @@ from senselab.audio.workflows.triage.consensus import (
     SOURCE_ORDER,
     SourceHypothesis,
     align_sources,
+    degenerate_parameters,
+    degenerate_token,
     render_transcript,
     vocabulary_key,
     word_attributes,
@@ -887,7 +889,7 @@ def stimulus_input(store: ProvStore, hint: AudioHints | None) -> tuple[str, list
             index=int(word.attributes["index"]),
             text=str(word.attributes["text"]),
             extent=(float(word.extent[0]), float(word.extent[1])) if word.extent is not None else None,
-            agreement=float(word.attributes["agreement"]),
+            agreement=None if word.attributes.get("agreement") is None else float(word.attributes["agreement"]),
         )
         for word in lexical_words(store)
     ]
@@ -2562,7 +2564,15 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             if span is None:
                 out_of_bounds_chunks_n += 1
                 continue
-            words.append({"text": chunk.text, "start": span[0], "end": span[1], "score": chunk.score})
+            words.append(
+                {
+                    "text": chunk.text,
+                    "start": span[0],
+                    "end": span[1],
+                    "score": chunk.score,
+                    "degenerate": degenerate_token(str(chunk.text or ""), **degenerate_parameters()),
+                }
+            )
         meta: dict[str, Any] = {
             "role": "asr_hypothesis",
             "source": name,
@@ -2571,6 +2581,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             "transcript": line.text or "",
             "words": words,
             "n_words": len(words),
+            "degenerate_n": sum(1 for word in words if word["degenerate"]),
             "untimed_chunks_n": untimed_chunks_n,
             "out_of_bounds_chunks_n": out_of_bounds_chunks_n,
             "timestamp_source": source_kind,
@@ -2599,6 +2610,9 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
                 ),
                 timestamp_source=str(measurement.attributes["timestamp_source"]),
                 timestamp_model=measurement.attributes.get("timestamp_model"),
+                degenerate=frozenset(
+                    position for position, word in enumerate(measurement.attributes["words"]) if word.get("degenerate")
+                ),
             )
             for source, measurement in hypotheses.items()
         ]

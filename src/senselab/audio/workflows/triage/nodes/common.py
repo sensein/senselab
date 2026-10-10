@@ -484,15 +484,20 @@ def consensus_words(store: ProvStore) -> list[Entity]:
 
 
 def lexical_words(store: ProvStore) -> list[Entity]:
-    """The consensus words that are not bracketed, in ``index`` order.
+    """The consensus words that are not bracketed and not a degenerate recognizer run, in ``index`` order.
 
     Args:
         store: The provenance store.
 
     Returns:
-        The subset of :func:`consensus_words` whose ``bracketed`` attribute is False.
+        The subset of :func:`consensus_words` whose ``bracketed`` and ``degenerate`` attributes are not
+        set.
     """
-    return [word for word in consensus_words(store) if not word.attributes["bracketed"]]
+    return [
+        word
+        for word in consensus_words(store)
+        if not word.attributes["bracketed"] and not word.attributes.get("degenerate")
+    ]
 
 
 def word_hull(word: Entity) -> tuple[float, float]:

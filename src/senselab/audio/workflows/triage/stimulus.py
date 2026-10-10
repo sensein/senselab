@@ -55,13 +55,13 @@ class LexicalWord:
         index: The word's position in the consensus stream; the only order a reader may use.
         text: The label surface.
         extent: The word's derived ``(onset_s, offset_s)``, or None when it carries none.
-        agreement: The consensus word's agreement share.
+        agreement: The consensus word's agreement share, or None where no agreement was read.
     """
 
     index: int
     text: str
     extent: tuple[float, float] | None
-    agreement: float
+    agreement: float | None
 
 
 @dataclass(frozen=True)
@@ -101,14 +101,14 @@ class UnexpectedWord:
         index: The word's position in the consensus stream.
         text: The label surface.
         extent: The word's derived extent, or None.
-        agreement: The consensus word's agreement share.
+        agreement: The consensus word's agreement share, or None where no agreement was read.
         after: The expected-token index this word follows, ``-1`` before the first.
     """
 
     index: int
     text: str
     extent: tuple[float, float] | None
-    agreement: float
+    agreement: float | None
     after: int
 
 
