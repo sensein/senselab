@@ -5,6 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Sequence
 
+import pytest
+
 from senselab.audio.workflows.triage.config import load_triage_config
 from senselab.audio.workflows.triage.nodes.common import consensus_words, software_agent, write_measurement
 from senselab.audio.workflows.triage.nodes.redact import NON_TASK_SPEECH, mask_plan
@@ -446,11 +448,18 @@ class TestTheReviewerQuotesBecomeMasks:
         )
 
     def test_an_item_list_masks_phrase_quotes_only_when_predominant_and_never_an_item(
-        self, store: ProvStore, tmp_path: Path
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Occasional phrases mask nothing; predominant ones mask the phrase's words and never an item's."""
+        from tests.audio.workflows.triage.nodes import redact_test
+
         words = ["lion", "tiger", "so", "my", "doctor", "said", "that"]
-        joined = {i: {"asr_a": (float(i), float(i) + 0.9)} for i in range(2, 7)}
+        monkeypatch.setattr(
+            redact_test,
+            "_word_extent",
+            lambda i: (float(i), i + 0.5) if i < 2 else (2.0 + (i - 2) * 0.6, 2.5 + (i - 2) * 0.6),
+        )
+        joined: dict[int, dict[str, tuple[float, float]]] = {}
         _seed_redact_store(store, tmp_path, words=words, timings=joined, recording_stem=ITEMS_STEM, scanned=False)
         _write(store, "random-item-generation")
         self._annotate(store, phrases_instead_of_items="occasional", phrase_quotes=["tiger so my doctor said that"])
