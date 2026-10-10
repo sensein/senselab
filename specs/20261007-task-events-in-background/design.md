@@ -1963,9 +1963,11 @@ reviewer is not re-run, so it has not yet seen `unconfirmed`.
 | 20 others with an untimed lexical word | 6 withheld (4 `non_task_speech_untimed`, 2 `mask_coverage_failed`) | 0 untimed anywhere; 5 of the 6 release redacted; 59896e0e stays withheld on coverage (a person-name mask on unconfirmed words) |
 
 One glide (53dddba6) moves pass to review: a point-span word is now placed and read as speech outside the
-task. The 60 interference stems: the replay before the change reads 18 with a reason (11 `other_speaker` from
-`interference_in_task:other_voice`); after, 1 is `other_voice_in_task` (38b0735a, attributed by a reader),
-1 keeps `other_speaker` from the reviewer, and the 11 move to no reason (9) or `identifying_content` (2).
+task. The 60 interference stems: the replay before the change gives 18 a reason, 14 of them `other_speaker`
+(13 from `interference_in_task:other_voice`); after, those 13 move to no reason (11) or `identifying_content`
+(2), e6806d50 keeps `other_speaker` from another ground, and 38b0735a moves `off_task_speech` to
+`other_speaker` on `other_voice_in_task`, attributed by a reader. 42 have no in-task voice under the current
+residual reader and no reason either way.
 
 ### Corpus scope (scan of all 62,550 r18c stores)
 
