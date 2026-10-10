@@ -273,7 +273,11 @@ def consensus_transcript(store: ProvStore) -> dict[str, Any]:
         readings = {str(name): str(reading) for name, reading in (word.attributes.get("readings") or {}).items()}
         if word.id in residue:
             kind = WORD_SCANNED
-        elif word.attributes.get("bracketed") or is_non_lexical(text, vocal_task=vocal):
+        elif (
+            word.attributes.get("bracketed")
+            or word.attributes.get("degenerate")
+            or is_non_lexical(text, vocal_task=vocal)
+        ):
             kind = WORD_NON_LEXICAL
         else:
             kind = WORD_TASK

@@ -14,6 +14,8 @@ from senselab.audio.workflows.triage.consensus import (
     SourceHypothesis,
     align_sources,
     bracketed_form,
+    degenerate_parameters,
+    degenerate_token,
     is_bracketed,
     isotonic_median_fit,
     rebracket,
@@ -334,12 +336,28 @@ class TestSourceOrderAndBrackets:
 class TestGuardsAndWordlessSources:
     """R-2 and the wordless cases."""
 
-    def test_fewer_than_two_sources_raise_and_the_message_names_the_count(self) -> None:
-        """Test 13."""
-        with pytest.raises(LookupError, match=r"found 1: \['a'\]"):
-            _align(_source("a", "hello"))
-        with pytest.raises(LookupError, match=r"found 0: \[\]"):
+    def test_no_source_raises(self) -> None:
+        """Test 13: nothing to align."""
+        with pytest.raises(LookupError, match="found none"):
             align_sources([], onomatopoeic=set())
+
+    def test_a_single_hypothesis_is_a_single_reading_transcript(self) -> None:
+        """One recognizer survived: every word an insertion with no agreement, and the stream says so."""
+        consensus = _align(_source("a", "hello there"))
+        assert _texts(consensus) == ["hello", "there"]
+        assert _outcomes(consensus) == ["insertion", "insertion"]
+        assert [word.agreement for word in consensus.words] == [None, None]
+        assert consensus.provenance["single_hypothesis"] is True
+        assert consensus.provenance["n_sources"] == 1
+        stored = word_attributes(consensus.words[0])
+        assert stored["agreement"] is None
+        back = word_from_attributes(stored, consensus.words[0].extent)
+        assert back == consensus.words[0]
+        assert rebracket(back, onomatopoeic=set(), n_sources=1).word == back
+
+    def test_two_hypotheses_are_not_single(self) -> None:
+        """The flag is the count of hypotheses, not of words."""
+        assert _align(_source("a", "hi"), _source("b", "hi")).provenance["single_hypothesis"] is False
 
     def test_a_wordless_source_still_counts(self) -> None:
         """Test 14."""
@@ -381,6 +399,8 @@ class TestRenderingAndProvenance:
             "source_order",
             "sources",
             "n_sources",
+            "single_hypothesis",
+            "degenerate_n",
             "reference_source",
             "n_words",
             "outcomes",
@@ -505,3 +525,45 @@ class TestReadingOneStoredColumnAgain:
         mixed = _align(_timed("a", [("[KHH]", 0.1, 0.2)]), _timed("b", [("khh", 0.11, 0.21)])).words[0]
         assert rebracket(mixed, onomatopoeic=set(), n_sources=2).bracket_overrides == 1
         assert rebracket(mixed, onomatopoeic={"khh"}, n_sources=2).bracket_overrides == 0
+
+
+class TestDegenerateRecognizerRuns:
+    """A decoder loop is marked, so readers treat it as unreliable rather than as content."""
+
+    BOUNDS = {"chars_min": 60, "unit_chars_max": 8, "repeats_min": 10.0}
+
+    def test_a_long_or_looping_token_is_degenerate(self) -> None:
+        """One unbroken token past the length bound, or one unit repeated past the repeat bound."""
+        assert degenerate_token("Twi" + "twi" * 30, **self.BOUNDS)
+        assert degenerate_token("-".join("AWZ" * 12), **self.BOUNDS)
+        assert degenerate_token("x" * 60, **self.BOUNDS)
+
+    def test_ordinary_words_and_short_stutters_are_not(self) -> None:
+        """A stutter of a few repeats is the participant's speech, not a loop."""
+        for token in ("hello", "p-p-p-paper", "hahaha", "K-N-O-Z-D", "antidisestablishmentarianism", ""):
+            assert not degenerate_token(token, **self.BOUNDS)
+
+    def test_the_packaged_bounds_load(self) -> None:
+        """``data/asr_degenerate.yaml`` carries the three bounds."""
+        assert set(degenerate_parameters()) == {"chars_min", "unit_chars_max", "repeats_min"}
+
+    def test_a_column_every_reading_of_which_loops_is_degenerate(self) -> None:
+        """Both recognizers' readings are runs: the word is degenerate and round-trips."""
+        loop = "awz" * 12
+        a = replace(_source("a", f"one {loop}"), degenerate=frozenset({1}))
+        b = replace(_source("b", f"one {loop}"), degenerate=frozenset({1}))
+        consensus = _align(a, b)
+        assert [word.degenerate for word in consensus.words] == [False, True]
+        assert consensus.provenance["degenerate_n"] == 1
+        stored = word_attributes(consensus.words[1])
+        assert stored["degenerate"] is True
+        assert word_from_attributes(stored, consensus.words[1].extent) == consensus.words[1]
+
+    def test_a_reading_one_recognizer_looped_does_not_win_the_column(self) -> None:
+        """Where one recognizer read a word and the other a loop, the word is the surface."""
+        a = replace(_timed("a", [("zzzzzzzzzzzz", 0.0, 0.4)]), degenerate=frozenset({0}))
+        b = _timed("b", [("table", 0.0, 0.4)])
+        [word] = _align(a, b).words
+        assert word.text == "table"
+        assert word.degenerate_sources == ("a",)
+        assert word.degenerate is False

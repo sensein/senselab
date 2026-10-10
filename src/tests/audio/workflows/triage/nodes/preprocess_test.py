@@ -23,6 +23,7 @@ from senselab.audio.workflows.triage.nodes.common import (
     PITCH_NARROWING_KEYS,
     find_measurement,
     find_measurements,
+    lexical_words,
     live_entities,
     resolve_stream,
 )
@@ -1342,6 +1343,8 @@ class TestTheConsensusTranscript:
                 "temporal_uncertainty_s",
                 "variants",
                 "agreement",
+                "degenerate",
+                "degenerate_sources",
                 "index",
             }
             assert word.attributes["outcome"] == "agreement"
@@ -1396,7 +1399,7 @@ class TestTheConsensusTranscript:
         assert world.attributes["outcome"] == "variant"
         assert world.attributes["agreement"] == pytest.approx(2 / 3)
 
-    def test_a_single_recognizer_is_an_absence_not_a_consensus(
+    def test_a_single_recognizer_is_a_single_reading_consensus(
         self,
         store: ProvStore,
         config: TriageConfig,
@@ -1404,7 +1407,7 @@ class TestTheConsensusTranscript:
         wav_writer: Callable[..., Path],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Test 20 (R-2): one block raising leaves no consensus and no word; the other blocks still run."""
+        """One block raising leaves a consensus of the other's words, flagged, with no agreement read."""
         _seed_admit(store, tmp_path, wav_writer)
         _stub_models(monkeypatch, crisper=_line("hello world"), qwen=_line("hello world"))
         real = preprocess_module.transcribe_audios
@@ -1417,11 +1420,36 @@ class TestTheConsensusTranscript:
         monkeypatch.setattr(preprocess_module, "transcribe_audios", _one_fails)
         result = preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
         absent = dict(store.get_entity(result.verdict_entity_id).attributes["absent"])
-        assert absent["consensus_transcript"].startswith("LookupError: consensus needs at least two")
-        assert "found 1: ['asr_crisperwhisper']" in absent["consensus_transcript"]
+        assert "consensus_transcript" not in absent
+        consensus = find_measurement(store, "consensus_transcript")
+        assert consensus is not None
+        assert consensus.attributes["single_hypothesis"] is True
+        words = live_entities(store, "word")
+        assert [w.attributes["outcome"] for w in words] == ["insertion", "insertion"]
+        assert [w.attributes["agreement"] for w in words] == [None, None]
+        assert find_measurement(store, "energy_envelope") is not None
+
+    def test_no_recognizer_is_an_absence_not_a_consensus(
+        self,
+        store: ProvStore,
+        config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Both blocks raising leaves no consensus and no word; the other blocks still run."""
+        _seed_admit(store, tmp_path, wav_writer)
+        _stub_models(monkeypatch, crisper=_line("hello world"), qwen=_line("hello world"))
+
+        def _both_fail(audios: list, model: Any, **kwargs: Any) -> Any:  # noqa: ANN401
+            raise LookupError("recognizer unavailable")
+
+        monkeypatch.setattr(preprocess_module, "transcribe_audios", _both_fail)
+        result = preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
+        absent = dict(store.get_entity(result.verdict_entity_id).attributes["absent"])
+        assert absent["consensus_transcript"].startswith("LookupError: consensus needs at least one")
         assert find_measurement(store, "consensus_transcript") is None
         assert live_entities(store, "word") == []
-        assert find_measurement(store, "asr_crisperwhisper") is not None
         assert find_measurement(store, "energy_envelope") is not None
 
     def test_a_defect_in_the_consensus_fails_the_node(
@@ -1849,6 +1877,35 @@ class TestCrisperWhisperPositionOverrunDegradesWithoutLosingTheRecording:
         assert find_measurement(store, "asr_crisperwhisper") is None
         assert find_measurement(store, "asr_qwen") is not None
         assert find_measurement(store, "energy_envelope") is not None
+        consensus = find_measurement(store, "consensus_transcript")
+        assert consensus is not None, "one surviving hypothesis still gives the recording a transcript"
+        assert consensus.attributes["single_hypothesis"] is True
+        assert "consensus_transcript" not in absent
+
+
+class TestARecognizerLoopIsMarkedDegenerate:
+    """A token past the degenerate bounds is flagged on its hypothesis and on the consensus word."""
+
+    def test_the_loop_is_flagged_and_left_out_of_the_lexical_words(
+        self,
+        store: ProvStore,
+        config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Both recognizers loop on the second word; the first stays an ordinary lexical word."""
+        loop = "awz" * 30
+        _seed_admit(store, tmp_path, wav_writer)
+        _stub_models(monkeypatch, crisper=_line(f"hello {loop}"), qwen=_line(f"hello {loop}"))
+        preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
+        crisper = find_measurement(store, "asr_crisperwhisper")
+        assert crisper is not None
+        assert [word["degenerate"] for word in crisper.attributes["words"]] == [False, True]
+        assert crisper.attributes["degenerate_n"] == 1
+        consensus = find_measurement(store, "consensus_transcript")
+        assert consensus is not None and consensus.attributes["degenerate_n"] == 1
+        assert [word.attributes["text"] for word in lexical_words(store)] == ["hello"]
 
 
 def _absent_map(store: ProvStore) -> dict[str, str]:
@@ -2533,13 +2590,11 @@ class TestTheStimulusAlignmentBlock:
         wav_writer: Callable[..., Path],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """One recognizer is not a consensus, so the alignment has no word stream to read."""
+        """No recognizer is no consensus, so the alignment has no word stream to read."""
         _seed_admit(store, tmp_path, wav_writer)
 
         def _only_crisper(audios: list, model: Any, **kwargs: Any) -> list:  # noqa: ANN401
-            if str(model.path_or_uri) == QWEN_ID:
-                raise ValueError("this host could not run the recognizer")
-            return [_line("hello world")]
+            raise ValueError("this host could not run the recognizer")
 
         _stub_models(monkeypatch, crisper=_line("hello world"))
         monkeypatch.setattr(preprocess_module, "transcribe_audios", _only_crisper)

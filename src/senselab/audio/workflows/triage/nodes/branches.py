@@ -1777,15 +1777,15 @@ def gaps(spans: Sequence[Entity]) -> list[Entity]:
 
 
 def lexical(words: Sequence[Entity]) -> list[Entity]:
-    """The consensus words that are not bracketed.
+    """The consensus words that are not bracketed and not a degenerate recognizer run.
 
     Args:
         words: The ``word`` entities, in index order.
 
     Returns:
-        The subset whose ``bracketed`` attribute is false.
+        The subset whose ``bracketed`` and ``degenerate`` attributes are not set.
     """
-    return [word for word in words if not word.attributes.get("bracketed")]
+    return [word for word in words if not word.attributes.get("bracketed") and not word.attributes.get("degenerate")]
 
 
 def word_text(word: Entity) -> str:

@@ -266,6 +266,7 @@ def task_speech_of(
         word
         for word in words
         if not word.attributes.get("bracketed")
+        and not word.attributes.get("degenerate")
         and not is_non_lexical(str(word.attributes.get("text") or ""), vocal_task=vocal)
     ]
     item_extent: tuple[float, float] | None = None

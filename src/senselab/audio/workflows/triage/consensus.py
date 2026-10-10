@@ -10,7 +10,11 @@ rulings R-1..R-5 in ``consensus-asr-rulings.md`` beside it.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from functools import cache
+from pathlib import Path
 from typing import Any, Literal, Mapping, Sequence, cast
+
+import yaml
 
 from senselab.audio.workflows.audio_analysis.harmonize import harmonize_transcripts, normalise_token
 
@@ -27,6 +31,8 @@ __all__ = [
     "Variant",
     "align_sources",
     "bracketed_form",
+    "degenerate_parameters",
+    "degenerate_token",
     "is_bracketed",
     "isotonic_median_fit",
     "rebracket",
@@ -57,12 +63,15 @@ class SourceHypothesis:
         words: ``(text, start_s, end_s)`` per word, in the recognizer's own order.
         timestamp_source: How the words were timed (``native``, ``bundled_aligner``, ...).
         timestamp_model: The aligner that timed them, or None when the recognizer did.
+        degenerate: The positions in ``words`` the recognizer produced as a degenerate run
+            (:func:`degenerate_token`).
     """
 
     name: str
     words: tuple[tuple[str, float, float], ...]
     timestamp_source: str
     timestamp_model: str | None
+    degenerate: frozenset[int] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -98,7 +107,9 @@ class ConsensusWord:
         temporal_uncertainty_s: The wider of the widths of ``starts ∪ {onset}`` and
             ``ends ∪ {offset}``.
         variants: Every distinct reading, empty unless ``outcome == "variant"``.
-        agreement: ``|largest same-key group| / n_sources``.
+        agreement: ``|largest same-key group| / n_sources``, or None where only one hypothesis
+            reached the consensus, so no agreement could be read.
+        degenerate_sources: The sources whose reading in the column is a degenerate run.
     """
 
     index: int
@@ -113,7 +124,13 @@ class ConsensusWord:
     offset_spread_s: float
     temporal_uncertainty_s: float
     variants: tuple[Variant, ...]
-    agreement: float
+    agreement: float | None
+    degenerate_sources: tuple[str, ...] = ()
+
+    @property
+    def degenerate(self) -> bool:
+        """Whether every reading in the column is a degenerate run."""
+        return bool(self.degenerate_sources) and set(self.degenerate_sources) == set(self.sources)
 
 
 @dataclass(frozen=True)
@@ -152,6 +169,53 @@ class _Member:
     key: str
     start: float
     end: float
+    degenerate: bool = False
+
+
+DEGENERATE_PATH = Path(__file__).parent / "data" / "asr_degenerate.yaml"
+
+
+@cache
+def degenerate_parameters() -> dict[str, Any]:
+    """The bounds of ``data/asr_degenerate.yaml``, keyed by :func:`degenerate_token`'s parameter names.
+
+    Returns:
+        ``chars_min``, ``unit_chars_max`` and ``repeats_min``.
+    """
+    document = yaml.safe_load(DEGENERATE_PATH.read_text()) or {}
+    return {
+        "chars_min": int(document["chars_min"]),
+        "unit_chars_max": int(document["unit_chars_max"]),
+        "repeats_min": float(document["repeats_min"]),
+    }
+
+
+def degenerate_token(text: str, *, chars_min: int, unit_chars_max: int, repeats_min: float) -> bool:
+    """Whether one recognizer token is a degenerate run: a decoder loop rather than a word.
+
+    The token is casefolded and reduced to its letters and digits. It is degenerate when that is at
+    least ``chars_min`` long, or when some unit of at most ``unit_chars_max`` characters repeats back to
+    back at least ``repeats_min`` times inside it.
+
+    Args:
+        text: The token as the recognizer produced it.
+        chars_min: The reduced length at or over which a single token is a run.
+        unit_chars_max: The longest repeating unit looked for.
+        repeats_min: The back-to-back repeats of one unit at or over which a token is a run.
+
+    Returns:
+        True for a degenerate run.
+    """
+    reduced = "".join(character for character in text.casefold() if character.isalnum())
+    if len(reduced) >= chars_min:
+        return True
+    for period in range(1, unit_chars_max + 1):
+        run = 0
+        for position in range(len(reduced) - period):
+            run = run + 1 if reduced[position] == reduced[position + period] else 0
+            if (run + period) / period >= repeats_min:
+                return True
+    return False
 
 
 def is_bracketed(text: str) -> bool:
@@ -254,12 +318,16 @@ def _is_bracket_override(group: Sequence[_Member]) -> bool:
     return any(is_bracketed(m.display) for m in group) and not all(is_bracketed(m.display) for m in group)
 
 
-def _column_word(members: Sequence[_Member], n_sources: int) -> tuple[str, Outcome, tuple[Variant, ...], float, int]:
+def _column_word(
+    members: Sequence[_Member], n_sources: int
+) -> tuple[str, Outcome, tuple[Variant, ...], float | None, int]:
     groups: dict[str, list[_Member]] = {}
     for member in members:
         groups.setdefault(member.key, []).append(member)
-    ordered = sorted(groups.values(), key=lambda group: -len(group))
+    ordered = sorted(groups.values(), key=lambda group: (all(m.degenerate for m in group), -len(group)))
     largest = ordered[0]
+    if n_sources == 1:
+        return _surface(largest), "insertion", (), None, sum(1 for group in ordered if _is_bracket_override(group))
     agreement = len(largest) / n_sources
     overrides = sum(1 for group in ordered if _is_bracket_override(group))
     if len(ordered) > 1:
@@ -276,6 +344,9 @@ def _column_word(members: Sequence[_Member], n_sources: int) -> tuple[str, Outco
 def align_sources(sources: Sequence[SourceHypothesis], *, onomatopoeic: set[str]) -> Consensus:
     """Align the hypotheses as sequences and emit one word per aligned column, in column order.
 
+    A single hypothesis is its own stream, read as one recognizer's: every word an ``insertion`` with
+    no agreement, and the provenance's ``single_hypothesis`` True.
+
     Args:
         sources: The hypotheses, in any order; they are ordered by name.
         onomatopoeic: The ``words.onomatopoeic_tokens`` vocabulary, each entry a :func:`vocabulary_key`.
@@ -284,11 +355,10 @@ def align_sources(sources: Sequence[SourceHypothesis], *, onomatopoeic: set[str]
         The consensus stream and its provenance.
 
     Raises:
-        LookupError: If fewer than two hypotheses were given.
+        LookupError: If no hypothesis was given.
     """
-    if len(sources) < 2:
-        names = [source.name for source in sources]
-        raise LookupError(f"consensus needs at least two asr_hypothesis measurements; found {len(sources)}: {names}")
+    if not sources:
+        raise LookupError("consensus needs at least one asr_hypothesis measurement; found none")
     ordered = sorted(sources, key=lambda source: source.name)
     names = [source.name for source in ordered]
     n_sources = len(ordered)
@@ -298,7 +368,7 @@ def align_sources(sources: Sequence[SourceHypothesis], *, onomatopoeic: set[str]
     for source in ordered:
         kept: list[_Member] = []
         dropped = 0
-        for raw, start, end in source.words:
+        for position, (raw, start, end) in enumerate(source.words):
             display = bracketed_form(raw, onomatopoeic)
             if display is None:
                 display = raw
@@ -306,7 +376,9 @@ def align_sources(sources: Sequence[SourceHypothesis], *, onomatopoeic: set[str]
             if not key:
                 dropped += 1
                 continue
-            kept.append(_Member(source.name, raw, display, key, float(start), float(end)))
+            kept.append(
+                _Member(source.name, raw, display, key, float(start), float(end), position in source.degenerate)
+            )
         members_by_source[source.name] = kept
         empty_dropped[source.name] = dropped
 
@@ -358,6 +430,7 @@ def align_sources(sources: Sequence[SourceHypothesis], *, onomatopoeic: set[str]
                 ),
                 variants=variants,
                 agreement=agreement,
+                degenerate_sources=tuple(m.source for m in column if m.degenerate),
             )
         )
 
@@ -376,6 +449,8 @@ def align_sources(sources: Sequence[SourceHypothesis], *, onomatopoeic: set[str]
             for source in ordered
         ],
         "n_sources": n_sources,
+        "single_hypothesis": n_sources == 1,
+        "degenerate_n": sum(1 for word in words if word.degenerate),
         "reference_source": lattice.reference,
         "n_words": len(words),
         "outcomes": outcomes,
@@ -412,6 +487,8 @@ def word_attributes(word: ConsensusWord) -> dict[str, Any]:
             for variant in word.variants
         ],
         "agreement": word.agreement,
+        "degenerate": word.degenerate,
+        "degenerate_sources": list(word.degenerate_sources),
         "index": word.index,
     }
 
@@ -451,7 +528,8 @@ def word_from_attributes(attributes: Mapping[str, Any], extent: tuple[float, flo
             )
             for variant in attributes["variants"]
         ),
-        agreement=float(attributes["agreement"]),
+        agreement=None if attributes["agreement"] is None else float(attributes["agreement"]),
+        degenerate_sources=tuple(str(source) for source in attributes.get("degenerate_sources") or ()),
     )
 
 
@@ -482,11 +560,20 @@ def rebracket(word: ConsensusWord, *, onomatopoeic: set[str], n_sources: int) ->
             key=normalise_token(bracketed_form(word.readings[source], onomatopoeic) or word.readings[source]),
             start=word.timings[source][0],
             end=word.timings[source][1],
+            degenerate=source in word.degenerate_sources,
         )
         for source in word.sources
     ]
     text, outcome, variants, agreement, overrides = _column_word(members, n_sources)
-    if outcome != word.outcome or abs(agreement - word.agreement) > _AGREEMENT_TOLERANCE:
+    if outcome != word.outcome or (agreement is None) != (word.agreement is None):
+        drifted = True
+    else:
+        drifted = (
+            agreement is not None
+            and word.agreement is not None
+            and abs(agreement - word.agreement) > _AGREEMENT_TOLERANCE
+        )
+    if drifted:
         raise ValueError(
             f"word {word.index} reads back as {outcome} at {agreement} where the store holds "
             f"{word.outcome} at {word.agreement}"
