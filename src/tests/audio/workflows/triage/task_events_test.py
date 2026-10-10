@@ -15,6 +15,8 @@ from senselab.audio.workflows.triage.task_events import (
     evidence_of,
     generic_view,
     rhythm_of,
+    task_cluster,
+    task_events_parameters,
 )
 
 RATE = 16000
@@ -93,3 +95,40 @@ def test_a_regular_burst_train_gives_a_breathing_band_rhythm() -> None:
     view = generic_view((signal.astype(np.float32), RATE), None)
     rhythm = rhythm_of(view, (0.1, 1.2), 3.0)
     assert rhythm is not None and abs(rhythm.hz - 0.4) < 0.08
+
+
+WEIGHTS = task_events_parameters()["extent"]
+
+
+def test_a_long_file_takes_the_early_breaths_over_a_late_pause_run() -> None:
+    """On a 130 s file the instructed breaths at the start are the task, not a larger run of sounds at 101-122 s."""
+    early = [TaskEvent(t, t + 0.8, 20.0) for t in (0.85, 2.6, 4.4, 6.5, 8.4, 11.1)]
+    late = [TaskEvent(t, t + 0.6, 20.0) for t in np.arange(101.0, 122.0, 2.5)]
+    for instructed in (6, None):
+        cluster = task_cluster([*early, *late], 3.0, instructed_n=instructed, duration_s=130.0, weights=WEIGHTS)
+        assert cluster[0].start_s == 0.85 and cluster[-1].start_s == 11.1
+
+
+def test_a_cluster_touching_speech_is_set_aside_unless_every_cluster_does() -> None:
+    """A run of events inside a conversation is not the task; where speech touches every run, one is still chosen."""
+    first = [TaskEvent(t, t + 0.5, 20.0) for t in (2.0, 4.0, 6.0)]
+    second = [TaskEvent(t, t + 0.5, 20.0) for t in (30.0, 32.0, 34.0)]
+    talk = [(1.5, 7.0)]
+    cluster = task_cluster([*first, *second], 3.0, speech=talk, instructed_n=6, duration_s=40.0, weights=WEIGHTS)
+    assert cluster[0].start_s == 30.0
+    everywhere = [(0.0, 40.0)]
+    cluster = task_cluster([*first, *second], 3.0, speech=everywhere, instructed_n=6, duration_s=40.0, weights=WEIGHTS)
+    assert cluster[0].start_s == 2.0
+
+
+def test_an_event_outside_the_extent_decides_nothing() -> None:
+    """A clear event outside the cluster cannot pass a recording whose own events are weak; it is reported."""
+    signal = _noise(60.0, 0.001)
+    signal = _with_bursts(signal, [2.0, 4.0, 6.0], 0.8, 0.004)
+    signal = _with_bursts(signal, [50.0], 0.8, 0.2)
+    view = generic_view((signal.astype(np.float32), RATE), None)
+    evidence = evidence_of(view, [(2.0, 2.8), (4.0, 4.8), (6.0, 6.8), (50.0, 50.8)], gap_s=3.0, instructed_n=3)
+    assert [round(e.start_s, 1) for e in evidence.events] == [2.0, 4.0, 6.0]
+    assert evidence.decision != PRESENT
+    assert evidence.inputs["local_db"] < evidence.inputs["snr_high_db"]
+    assert evidence.record()["outside"]["standing_n"] == 1

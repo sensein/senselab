@@ -12,9 +12,10 @@ parameter is in ``data/task_events.yaml``; the design is
 from __future__ import annotations
 
 import functools
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 
 import numpy as np
 import yaml
@@ -32,7 +33,8 @@ from senselab.audio.workflows.triage.background_model import (
     read_view_arrays,
     regions_of,
 )
-from senselab.audio.workflows.triage.nodes.common import find_measurement
+from senselab.audio.workflows.triage.nodes.common import find_measurement, lexical_words, word_hull
+from senselab.audio.workflows.triage.residue import is_non_lexical
 from senselab.utils.prov_store import ProvStore
 
 TASK_EVENTS_PATH = Path(__file__).parent / "data" / "task_events.yaml"
@@ -120,6 +122,65 @@ def generic_view_of(store: ProvStore, run_dir: Path) -> GenericView | None:
     frames, floor, impulses, regions = read_view_arrays(path)
     broadband = float(10.0 * np.log10(np.sum(10.0 ** (floor.band_db / 10.0)) + 1e-12))
     return GenericView(frames, floor, impulses, regions, broadband, float(background_model_parameters()["hop_s"]))
+
+
+YAMNET_SCORES = "yamnet_scores"
+"""PREPROCESS's plain-stream YAMNet windows, read for speech no task cluster touches."""
+
+
+def word_runs(words: Sequence[Span], *, words_min: int, gap_s: float) -> list[Span]:
+    """Runs of words, split at gaps over ``gap_s``, that hold at least ``words_min`` words.
+
+    Args:
+        words: Each word's ``(start, end)``.
+        words_min: The fewest words a run holds.
+        gap_s: The longest gap inside a run.
+
+    Returns:
+        Each run's ``(start, end)``, in time order.
+    """
+    runs: list[list[Span]] = []
+    for word in sorted(words):
+        if runs and word[0] - runs[-1][-1][1] <= gap_s:
+            runs[-1].append(word)
+        else:
+            runs.append([word])
+    return [(run[0][0], max(end for _, end in run)) for run in runs if len(run) >= words_min]
+
+
+def speech_spans(store: ProvStore, run_dir: Path, labels: Sequence[str], p: dict[str, Any] | None = None) -> list[Span]:
+    """Where the recording holds speech: runs of lexical words, and plain-stream YAMNet speech windows.
+
+    Args:
+        store: The provenance store, read for the consensus words and the ``yamnet_scores`` measurement.
+        run_dir: The run directory the windows' sidecar path is relative to.
+        labels: The YAMNet labels that are speech.
+        p: The parameters; ``data/task_events.yaml`` when None.
+
+    Returns:
+        The runs of at least ``extent.speech_words_min`` lexical words (bracketed and non-lexical tokens
+        left out) within ``extent.speech_gap_s``, and every YAMNet window whose highest speech-label score
+        reaches ``extent.speech_score_min``, in time order.
+    """
+    q = (p or task_events_parameters())["extent"]
+    words = [
+        word_hull(word)
+        for word in lexical_words(store)
+        if not is_non_lexical(str(word.attributes.get("text") or ""), vocal_task=True)
+    ]
+    spans = word_runs(
+        [w for w in words if w[1] > w[0]], words_min=int(q["speech_words_min"]), gap_s=float(q["speech_gap_s"])
+    )
+    found = find_measurement(store, YAMNET_SCORES)
+    path = run_dir / str(found.attributes.get("path") or "") if found is not None else None
+    if path is not None and path.is_file():
+        from senselab.audio.tasks.classification.label_scores import label_scores  # noqa: PLC0415
+
+        for window in json.loads(path.read_text()):
+            scores = {key: float(value) for pair in label_scores(window) for key, value in pair.items()}
+            if max((scores.get(label, 0.0) for label in labels), default=0.0) >= float(q["speech_score_min"]):
+                spans.append((float(window.get("start", 0.0)), float(window.get("end", 0.0))))
+    return sorted(spans)
 
 
 def _impulse_mask(view: GenericView) -> np.ndarray:
@@ -361,13 +422,107 @@ def dominant_cluster(events: Sequence[TaskEvent], gap_s: float) -> list[TaskEven
     Returns:
         The cluster; empty with no event.
     """
+    clusters = clusters_of(events, gap_s)
+    return max(clusters, key=lambda c: (len(c), -c[0].start_s)) if clusters else []
+
+
+def clusters_of(events: Sequence[TaskEvent], gap_s: float) -> list[list[TaskEvent]]:
+    """The events split at gaps over ``gap_s``, in time order.
+
+    Args:
+        events: The events.
+        gap_s: The longest gap inside a cluster.
+
+    Returns:
+        The clusters, each in time order.
+    """
     clusters: list[list[TaskEvent]] = []
     for event in sorted(events, key=lambda e: e.start_s):
         if clusters and event.start_s - clusters[-1][-1].end_s <= gap_s:
             clusters[-1].append(event)
         else:
             clusters.append([event])
-    return max(clusters, key=lambda c: (len(c), -c[0].start_s)) if clusters else []
+    return clusters
+
+
+def touches(spans: Sequence[Span], speech: Sequence[Span]) -> bool:
+    """Whether any span overlaps any speech span.
+
+    Args:
+        spans: The spans.
+        speech: The speech spans.
+
+    Returns:
+        True where one of ``spans`` overlaps one of ``speech``.
+    """
+    return any(a < d and c < b for a, b in spans for c, d in speech)
+
+
+def cluster_scores(
+    runs: Sequence[Sequence[Span]], *, duration_s: float, instructed_n: int | None, weights: Mapping[str, Any]
+) -> list[float]:
+    """Each candidate run's score: its agreement with the instructed count plus its earliness.
+
+    Args:
+        runs: The candidate runs, each its events' spans in time order.
+        duration_s: The recording's duration.
+        instructed_n: The events the instruction asks for, or None where it speaks no count.
+        weights: ``extent`` of ``data/task_events.yaml``: ``count_weight`` and ``position_weight``.
+
+    Returns:
+        ``count_weight`` times the count term plus ``position_weight`` times ``1 - start / duration``. The
+        count term is ``1 - |n - instructed| / instructed``, floored at 0, where a count is instructed, and
+        ``n`` over the largest run's ``n`` otherwise.
+    """
+    largest = max((len(run) for run in runs), default=1) or 1
+    scores = []
+    for run in runs:
+        n = len(run)
+        if instructed_n:
+            count = max(0.0, 1.0 - abs(n - instructed_n) / instructed_n)
+        else:
+            count = n / largest
+        early = 1.0 - min(1.0, max(0.0, run[0][0] / duration_s)) if duration_s > 0 else 1.0
+        scores.append(float(weights["count_weight"]) * count + float(weights["position_weight"]) * early)
+    return scores
+
+
+def task_cluster(
+    events: Sequence[TaskEvent],
+    gap_s: float,
+    *,
+    speech: Sequence[Span] = (),
+    instructed_n: int | None = None,
+    duration_s: float,
+    weights: Mapping[str, Any],
+) -> list[TaskEvent]:
+    """The cluster that is the task: off speech, nearest the instructed count, earliest.
+
+    Args:
+        events: The events.
+        gap_s: The longest gap inside a cluster.
+        speech: Speech spans; a cluster one of whose events overlaps one is dropped, unless every
+            cluster is.
+        instructed_n: The events the instruction asks for, or None.
+        duration_s: The recording's duration.
+        weights: ``extent`` of ``data/task_events.yaml``.
+
+    Returns:
+        The highest-scoring cluster (:func:`cluster_scores`), earliest on a tie; empty with no event.
+    """
+    clusters = clusters_of(events, gap_s)
+    if not clusters:
+        return []
+    off = [c for c in clusters if not touches([(e.start_s, e.end_s) for e in c], speech)]
+    candidates = off or clusters
+    scores = cluster_scores(
+        [[(e.start_s, e.end_s) for e in c] for c in candidates],
+        duration_s=duration_s,
+        instructed_n=instructed_n,
+        weights=weights,
+    )
+    best = max(range(len(candidates)), key=lambda i: (scores[i], -candidates[i][0].start_s))
+    return candidates[best]
 
 
 def inhale_start(view: GenericView, start_s: float, margin_db: float, back_max_s: float) -> float:
@@ -396,7 +551,7 @@ class TaskEvidence:
     """The evidence a branch's events give, and the decision it supports.
 
     Attributes:
-        events: The dominant cluster's events, in time order.
+        events: The task cluster's events, in time order (:func:`task_cluster`).
         found: Every event the type test kept, in the cluster or not.
         rhythm: The breathing-band rhythm, or None.
         extent: The cluster's extent with its preparatory inhale, or None with no event.
@@ -417,6 +572,15 @@ class TaskEvidence:
     def events_found_n(self) -> int:
         """Every event the type test kept, in the cluster or not."""
         return len(self.found)
+
+    @property
+    def outside(self) -> tuple[TaskEvent, ...]:
+        """The found events outside the cluster that stand over the floor and were not recovered."""
+        low = float(self.inputs.get("snr_low_db", 0.0))
+        inside = {(e.start_s, e.end_s) for e in self.events}
+        return tuple(
+            e for e in self.found if (e.start_s, e.end_s) not in inside and not e.recovered and e.snr_db >= low
+        )
 
     @property
     def best_snr_db(self) -> float | None:
@@ -443,14 +607,18 @@ class TaskEvidence:
             "rhythm": None if self.rhythm is None else self.rhythm.record(),
             "extent": None if self.extent is None else [round(self.extent[0], 3), round(self.extent[1], 3)],
             "events": [e.record() for e in self.events],
+            "outside": {
+                "standing_n": len(self.outside),
+                "best_local_db": round(max(e.clear_db for e in self.outside), 2) if self.outside else None,
+            },
         }
 
 
 def decide(events: Sequence[TaskEvent], p: dict[str, Any]) -> tuple[str, str]:
-    """The decision on the events the type test kept (C5).
+    """The decision on the task cluster's events (C5).
 
     Args:
-        events: Every event the type test kept; the cluster bounds the extent, not the decision.
+        events: The task cluster's events; an event outside the extent decides nothing.
         p: The ``decision`` section of ``data/task_events.yaml``.
 
     Returns:
@@ -474,7 +642,7 @@ def decision_inputs(events: Sequence[TaskEvent], p: dict[str, Any]) -> dict[str,
     """The readings and bounds :func:`decide` compares, for the decision table.
 
     Args:
-        events: Every event the type test kept.
+        events: The task cluster's events.
         p: The ``decision`` section of ``data/task_events.yaml``.
 
     Returns:
@@ -503,6 +671,8 @@ def evidence_of(
     recovered: Sequence[Span] = (),
     inhale: bool = True,
     entangle_inside: bool = True,
+    speech: Sequence[Span] = (),
+    instructed_n: int | None = None,
     p: dict[str, Any] | None = None,
 ) -> TaskEvidence:
     """Read a branch's candidates against the background: events, cluster, extent and decision.
@@ -510,15 +680,18 @@ def evidence_of(
     Args:
         view: The background.
         candidates: The spans the branch's type test kept.
-        gap_s: The longest gap inside the dominant cluster.
+        gap_s: The longest gap inside a cluster.
         rhythm: The rhythm, where one stands, recorded beside the evidence.
         recovered: Further spans the rhythm prior recovered.
         inhale: Whether the extent runs back across a preparatory inhale.
         entangle_inside: Whether an impulse inside an event entangles it (:func:`entangled`).
+        speech: Speech spans, which no task cluster touches (:func:`task_cluster`).
+        instructed_n: The events the instruction asks for, or None.
         p: The parameters; ``data/task_events.yaml`` when None.
 
     Returns:
-        The evidence.
+        The evidence: the task cluster of the events standing over the floor (of every event where none
+        stands), its extent, and the decision on the cluster's events alone.
     """
     p = p or task_events_parameters()
     margin = float(p["impulse_margin_db"])
@@ -527,15 +700,21 @@ def evidence_of(
     others = [*kept, *extra]
     events = [task_event(view, s, others, p, entangle_inside=entangle_inside) for s in kept]
     events += [task_event(view, s, others, p, recovered=True, entangle_inside=entangle_inside) for s in extra]
-    cluster = dominant_cluster([e for e in events if e.snr_db >= p["decision"]["snr_low_db"]], gap_s) or (
-        dominant_cluster(events, gap_s)
+    choose = functools.partial(
+        task_cluster,
+        gap_s=gap_s,
+        speech=speech,
+        instructed_n=instructed_n,
+        duration_s=view.duration_s,
+        weights=p["extent"],
     )
-    decision, why = decide(events, p["decision"])
+    cluster = choose([e for e in events if e.snr_db >= p["decision"]["snr_low_db"]]) or choose(events)
+    decision, why = decide(cluster, p["decision"])
     extent: Span | None = None
     if cluster:
         start = cluster[0].start_s
         if inhale:
             start = inhale_start(view, start, float(p["inhale"]["margin_db"]), float(p["inhale"]["back_max_s"]))
         extent = (start, max(e.end_s for e in cluster))
-    inputs = decision_inputs(events, p["decision"])
+    inputs = decision_inputs(cluster, p["decision"])
     return TaskEvidence(tuple(cluster), tuple(events), rhythm, extent, decision, why, inputs)
