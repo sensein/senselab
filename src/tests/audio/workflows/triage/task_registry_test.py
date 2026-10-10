@@ -91,3 +91,48 @@ def test_a_recording_in_another_language_keeps_its_own_instructions() -> None:
     text = task_text("story-recall", {"instructions": spanish, "language": "es", "speech_type": "recall"})
     assert (text.instructions, text.instructions_source) == (spanish, SIDECAR)
     assert text.stimulus is None, "no English prompt is borrowed for a Spanish recording"
+
+
+def _random_item_recording(root: Path, instructions: str) -> Path:
+    """A random-item-generation recording under a BIDS root whose phenotype table records its category."""
+    (root / "dataset_description.json").write_text("{}")
+    (root / "phenotype" / "task").mkdir(parents=True)
+    (root / "phenotype" / "task" / "random_item_generation.tsv").write_text(
+        "participant_id\trandom_item_generation_category\trandom_recording_acoustic_task_id\n"
+        "sub-a\tCountry names\tabc-123\n"
+    )
+    audio = root / "sub-a" / "ses-b" / "audio"
+    audio.mkdir(parents=True)
+    wav = audio / "sub-a_ses-b_task-random-item-generation-v2.wav"
+    (audio / "sub-a_ses-b_task-random-item-generation-v2_recording-metadata.json").write_text(
+        json.dumps(
+            {
+                "task_name": "random-item-generation-v2",
+                "instructions": instructions,
+                "acoustic_task_id": "ABC-123",
+                "language": "en",
+            }
+        )
+    )
+    return wav
+
+
+def test_a_category_the_questionnaire_records_reaches_the_hint(tmp_path: Path) -> None:
+    """The registry's questionnaire join supplies the category, and names the table and field it came from."""
+    hint, record = build_hint(_random_item_recording(tmp_path, "Speak a series of items."))
+    assert hint is not None
+    assert hint.metadata["item_category"] == "Country names"
+    assert hint.metadata["item_category_from"] == (
+        "questionnaire:phenotype/task/random_item_generation.tsv:random_item_generation_category"
+    )
+    assert record["item_category_from"] == hint.metadata["item_category_from"]
+
+
+def test_no_phenotype_table_leaves_the_category_undeclared(tmp_path: Path) -> None:
+    """Outside a BIDS root, nothing is joined."""
+    wav = tmp_path / "sub-a_ses-b_task-random-item-generation-v2.wav"
+    (tmp_path / "sub-a_ses-b_task-random-item-generation-v2_recording-metadata.json").write_text(
+        json.dumps({"task_name": "random-item-generation-v2", "instructions": "x", "acoustic_task_id": "abc-123"})
+    )
+    hint, _ = build_hint(wav)
+    assert hint is not None and "item_category" not in hint.metadata

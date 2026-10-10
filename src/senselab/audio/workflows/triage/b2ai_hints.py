@@ -18,7 +18,8 @@ from typing import Any
 
 from senselab.audio.data_structures import AudioHints
 from senselab.audio.data_structures.audio_hints import ExpectedSpeech
-from senselab.audio.workflows.triage.task_registry import task_text
+from senselab.audio.workflows.triage.nodes.branches import ITEM_CATEGORY_FROM_KEY, ITEM_CATEGORY_KEY
+from senselab.audio.workflows.triage.task_registry import prompt_ref, questionnaire_field, task_text
 
 SIDECAR_SUFFIXES = ("_recording-metadata.json", "_acoustictask-metadata.json")
 CARRIED = (
@@ -32,6 +33,25 @@ CARRIED = (
     "acoustic_task_id",
 )
 _TASK = re.compile(r"_task-([^_]+)$")
+DATASET_DESCRIPTION = "dataset_description.json"
+"""The file that marks a BIDS dataset's root."""
+CATEGORY_FIELD_SUFFIX = "_category"
+"""A questionnaire field ending so declares the category an item-list task asked for."""
+
+
+def bids_root_of(wav: Path) -> Path | None:
+    """The BIDS dataset root a recording lies under.
+
+    Args:
+        wav: The recording.
+
+    Returns:
+        The nearest ancestor holding :data:`DATASET_DESCRIPTION`, or None.
+    """
+    for parent in wav.resolve().parents:
+        if (parent / DATASET_DESCRIPTION).is_file():
+            return parent
+    return None
 
 
 def task_id_of(stem: str) -> str:
@@ -99,6 +119,10 @@ def build_hint(wav: Path) -> tuple[AudioHints | None, dict[str, Any]]:
     metadata["stimulus_from"] = text.stimulus_source
     if text.registry_task:
         metadata["registry_task"] = text.registry_task
+    ref = prompt_ref(text.registry_task)
+    joined = questionnaire_field(ref, bids_root_of(wav), fields.get("acoustic_task_id"))
+    if joined is not None and str((ref or {}).get("field") or "").endswith(CATEGORY_FIELD_SUFFIX):
+        metadata[ITEM_CATEGORY_KEY], metadata[ITEM_CATEGORY_FROM_KEY] = joined[0], f"questionnaire:{joined[1]}"
     hint = AudioHints(
         expected_speech=prompts,
         instructions=text.instructions,
@@ -113,5 +137,6 @@ def build_hint(wav: Path) -> tuple[AudioHints | None, dict[str, Any]]:
         "instructions_from": text.instructions_source,
         "stimulus_from": text.stimulus_source,
         "registry_task": text.registry_task,
+        "item_category_from": metadata.get(ITEM_CATEGORY_FROM_KEY),
     }
     return hint, record

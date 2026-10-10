@@ -165,6 +165,70 @@ def task_text(name: str, sidecar: Mapping[str, Any], population: str = "adult") 
     return TaskText(instructions, stimulus, speech_type, instructions_source, stimulus_source, task_id)
 
 
+QUESTIONNAIRE_JOIN = "questionnaire-join"
+"""A registry ``prompt_ref`` whose per-recording prompt is a field of a phenotype table."""
+
+SELECT_FIELD = "field"
+"""A :data:`QUESTIONNAIRE_JOIN` that selects one named field of the joined row."""
+
+
+def prompt_ref(task_id: str | None) -> dict[str, Any] | None:
+    """Where the registry says a task's per-recording prompt is recorded.
+
+    Args:
+        task_id: A registry task id, or None.
+
+    Returns:
+        The task's ``prompt_ref`` mapping, or None where the registry gives it none.
+    """
+    if not task_id:
+        return None
+    task = (_registry().get("tasks") or {}).get(task_id) or {}
+    ref = task.get("prompt_ref")
+    return dict(ref) if isinstance(ref, dict) else None
+
+
+@lru_cache(maxsize=16)
+def _phenotype_join(root: str, join_key: str, field: str) -> tuple[str, dict[str, str]]:
+    for table in sorted(Path(root, "phenotype").glob("**/*.tsv")):
+        with table.open(newline="") as handle:
+            header = handle.readline().rstrip("\n").split("\t")
+            if join_key not in header or field not in header:
+                continue
+            key_at, field_at = header.index(join_key), header.index(field)
+            values: dict[str, str] = {}
+            for line in handle:
+                cells = line.rstrip("\n").split("\t")
+                if len(cells) > max(key_at, field_at) and cells[key_at].strip() and cells[field_at].strip():
+                    values[cells[key_at].strip().upper()] = cells[field_at].strip()
+        return str(table.relative_to(root)), values
+    return "", {}
+
+
+def questionnaire_field(
+    ref: Mapping[str, Any] | None, root: Path | None, acoustic_task_id: str | None
+) -> tuple[str, str] | None:
+    """One recording's value of a :data:`SELECT_FIELD` questionnaire join, read from the BIDS phenotype tables.
+
+    Args:
+        ref: The registry task's ``prompt_ref``.
+        root: The BIDS dataset root holding ``phenotype/``, or None.
+        acoustic_task_id: The recording's ``acoustic_task_id``, the join's key.
+
+    Returns:
+        ``(value, source)`` where ``source`` names the table and field, ``<table>:<field>``; None where
+        the ref is not a single-field questionnaire join, or no table or row carries the value.
+    """
+    if not ref or ref.get("type") != QUESTIONNAIRE_JOIN or ref.get("select") != SELECT_FIELD:
+        return None
+    join_key, field = str(ref.get("join_key") or ""), str(ref.get("field") or "")
+    if root is None or not join_key or not field or not acoustic_task_id:
+        return None
+    table, values = _phenotype_join(str(root), join_key, field)
+    value = values.get(str(acoustic_task_id).strip().upper())
+    return (value, f"{table}:{field}") if value else None
+
+
 def described(name: str) -> dict[str, Any] | None:
     """The flat descriptions' entry for a task name, for cross-checking a sidecar against it.
 
