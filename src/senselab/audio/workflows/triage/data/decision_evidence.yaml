@@ -144,6 +144,10 @@ groups:
       unit: words
       producer: fold
       meaning: lexical words in the consensus transcript
+    speech_in_task:
+      unit: words
+      producer: unit B
+      meaning: lexical words outside the task's own content, over the whole file (a non-lexical task: not its declared text nor a misreading of its events; an item list: outside its item runs), against data/task_speech.yaml words_min or item_words_min
   cohort:
     cohort.other_speaker_runs:
       unit: runs

@@ -30,6 +30,7 @@ from senselab.audio.workflows.triage.decision import (
     item,
     reasons_of,
     records,
+    reviewed_releases,
 )
 
 GRAPH_ORDER = (
@@ -188,6 +189,17 @@ TASK_CONTENT_UNMASKED = (
     "cough or a held vowel -- so no mask stands and the original is released"
 )
 
+NON_TASK_SPEECH_MASKED = (
+    "lexical speech outside a non-lexical task was masked, each run padded; the copy keeps those masks"
+)
+NON_TASK_SPEECH_EXTENSIVE = (
+    "speech outside an item-set task's item runs is extensive, so the policy holds the recording rather than mask it"
+)
+NON_TASK_SPEECH_UNTIMED = (
+    "lexical speech outside a non-lexical task carries no usable timing, so no mask can hide it and neither copy "
+    "may be handed on"
+)
+
 RELEASE_WITHOUT_REDACTION_GROUNDS = (
     NO_LEXICAL_WORD,
     NOTHING_BEYOND_STIMULUS,
@@ -241,6 +253,8 @@ RELEASE_WITHHELD_GROUNDS = (
     UNPLACED_FINDING_UNREAD,
     REDACT_VERIFY_FOUND,
     REDACT_UNRESOLVED,
+    NON_TASK_SPEECH_UNTIMED,
+    NON_TASK_SPEECH_EXTENSIVE,
 )
 """Why the redaction policy withholds a recording. One stands behind every :attr:`Release.WITHHELD`."""
 
@@ -278,6 +292,7 @@ RELEASE_WITH_REDACTION_GROUNDS = (
     POLICY_MASKS_ADDED,
     POLICY_MASKS_ONLY,
     NAME_MASKS_PROPAGATED,
+    NON_TASK_SPEECH_MASKED,
 )
 """Why a redacted copy is released other than as REDACT itself planned and passed it."""
 
@@ -308,6 +323,9 @@ class RedactionEvidence:
         propagated_masked_n: How many words stay masked because the same token is a name kept masked
             elsewhere in the recording.
         task_content_only: Whether every finding located on words lay on a non-lexical task's own events.
+        non_task_speech_masked_n: How many words stay masked as lexical speech outside a non-lexical task.
+        non_task_speech_untimed_n: How many such words carry no usable timing, so no mask can hide them.
+        non_task_speech_extensive: Whether an item-set task's speech outside its item runs is extensive.
     """
 
     lexical_words_n: int | None = None
@@ -324,6 +342,9 @@ class RedactionEvidence:
     reviewer_requested_n: int = 0
     propagated_masked_n: int = 0
     task_content_only: bool = False
+    non_task_speech_masked_n: int = 0
+    non_task_speech_untimed_n: int = 0
+    non_task_speech_extensive: bool = False
 
 
 @dataclass(frozen=True)
@@ -384,6 +405,10 @@ class TaskEvidence:
         ddk_decision: The reading's decision, ``present``, ``review`` or ``absent``, or None where it
             was not read.
         ddk_reading: The reading's record, for the verdict record; empty where none.
+        task_speech: The owning branch's speech reading of a non-lexical task (``task_speech.TaskSpeech``),
+            for the verdict record; empty where none was written.
+        task_speech_words_min: The speech words outside the task at or over which the recording is reviewed
+            (``data/task_speech.yaml``), or None where no reading is weighed.
     """
 
     owning_branches: tuple[str, ...] = ()
@@ -420,6 +445,13 @@ class TaskEvidence:
     ddk_mode: str | None = None
     ddk_decision: str | None = None
     ddk_reading: dict[str, Any] = field(default_factory=dict)
+    task_speech: dict[str, Any] = field(default_factory=dict)
+    task_speech_words_min: int | None = None
+
+    @property
+    def non_lexical(self) -> bool:
+        """Whether the declared task asks for a sound: an airway or voice branch owns it."""
+        return bool({"AIRWAY", "VOICE"} & set(self.owning_branches))
 
 
 UNMEASURABLE = "unmeasurable"
@@ -651,6 +683,15 @@ DDK_REVIEW_IDENTITY = "ddk_review_identity"
 STREAMS_DISAGREE = "streams_disagree"
 """Flag ground: the enhanced stream loses the task events the raw stream stands on."""
 SPEECH_OUTSIDE_TASK = "speech_outside_task"
+
+SPEECH_IN_TASK = "speech_in_task"
+"""Lexical speech outside a non-lexical task's own content, anywhere in the file: a review ground."""
+
+RELEASE_IN_NONLEXICAL_TASK = "release_in_nonlexical_task"
+"""A non-lexical task whose release is redacted or withheld: a review ground."""
+
+RELEASE_REVIEWED = "release_reviewed"
+"""A release ``data/decision_reasons.yaml`` ``reviewed_releases`` names: a review ground."""
 """Annotation: speech-like runs outside a voice task's phonation extent, with the words over them."""
 DISCARD_CONTESTED = "discard_contested"
 """Flag ground: an airway measure found none of its event, and AIRWAY's own event detector found the task's."""
@@ -811,6 +852,9 @@ KEY_DDK_REVIEW_WEAK_EVENTS = DDK_REVIEW_WEAK_EVENTS
 KEY_DDK_REVIEW_IDENTITY = DDK_REVIEW_IDENTITY
 KEY_STREAMS_DISAGREE = STREAMS_DISAGREE
 KEY_SPEECH_OUTSIDE_TASK = SPEECH_OUTSIDE_TASK
+KEY_SPEECH_IN_TASK = SPEECH_IN_TASK
+KEY_RELEASE_IN_NONLEXICAL_TASK = RELEASE_IN_NONLEXICAL_TASK
+KEY_RELEASE_REVIEWED = RELEASE_REVIEWED
 KEY_PREPROCESS_ERRORED = "preprocess_errored"
 KEY_ROUTING_ERRORED = "routing_errored"
 KEY_BAD_HINT_MAP = "config_bad_hint_map"
@@ -852,6 +896,9 @@ GROUND_KEYS = (
     KEY_DDK_REVIEW_IDENTITY,
     KEY_STREAMS_DISAGREE,
     KEY_SPEECH_OUTSIDE_TASK,
+    KEY_SPEECH_IN_TASK,
+    KEY_RELEASE_IN_NONLEXICAL_TASK,
+    KEY_RELEASE_REVIEWED,
     KEY_PREPROCESS_ERRORED,
     KEY_ROUTING_ERRORED,
     KEY_BAD_HINT_MAP,
@@ -962,6 +1009,9 @@ RELEASE_GROUND_KEYS: dict[str, str] = {
     POLICY_MASKS_ADDED: "policy_masks_added",
     POLICY_MASKS_ONLY: "policy_masks_only",
     NAME_MASKS_PROPAGATED: "name_masks_propagated",
+    NON_TASK_SPEECH_MASKED: "non_task_speech_masked",
+    NON_TASK_SPEECH_UNTIMED: "non_task_speech_untimed",
+    NON_TASK_SPEECH_EXTENSIVE: "non_task_speech_extensive",
     DISCARDED: "discarded",
 }
 """The stable key of every release ground. A release REDACT itself decided carries
@@ -1698,6 +1748,34 @@ def _release_from(
     return release, ground
 
 
+def non_task_speech_release(
+    release: Release | None, ground: str | None, evidence: RedactionEvidence
+) -> tuple[Release | None, str | None]:
+    """The release once lexical speech outside a non-lexical task is weighed.
+
+    Args:
+        release: The release before it.
+        ground: Its ground.
+        evidence: What the store says about the redaction, read for the non-task speech words.
+
+    Returns:
+        A release that hands an artefact on becomes :attr:`Release.WITHHELD` on
+        :data:`NON_TASK_SPEECH_EXTENSIVE` where an item-set task's speech outside its item runs is extensive, on
+        :data:`NON_TASK_SPEECH_UNTIMED` where such a word carries no usable timing, else
+        :attr:`Release.REDACTED` on :data:`NON_TASK_SPEECH_MASKED` where one stays masked; any other release
+        is returned unchanged.
+    """
+    if release not in (Release.AS_IS, Release.REDACTED):
+        return release, ground
+    if evidence.non_task_speech_extensive:
+        return Release.WITHHELD, NON_TASK_SPEECH_EXTENSIVE
+    if evidence.non_task_speech_untimed_n:
+        return Release.WITHHELD, NON_TASK_SPEECH_UNTIMED
+    if evidence.non_task_speech_masked_n:
+        return Release.REDACTED, NON_TASK_SPEECH_MASKED
+    return release, ground
+
+
 def _release_from_evidence(
     node_verdicts: Sequence[NodeVerdict],
     evidence: RedactionEvidence,
@@ -2352,6 +2430,14 @@ def _task_items(task: TaskEvidence) -> list[EvidenceItem]:
         items.extend(_voice_items(task))
     if task.ddk_mode is not None and task.ddk_decision is not None:
         items.extend(_ddk_items(task))
+    words = task.task_speech.get("words_n")
+    if task.task_speech_words_min is not None and words is not None:
+        bound = task.task_speech_words_min
+        items.append(
+            item(
+                SPEECH_IN_TASK, words, REVIEW if words >= bound else PASS, unit="words", comparison="<", threshold=bound
+            )
+        )
     items.extend(_join_items(task.quality))
     return items
 
@@ -2921,6 +3007,20 @@ def fold_file_verdict(
             KEY_DDK_REVIEW_IDENTITY if identity else KEY_DDK_REVIEW_WEAK_EVENTS,
             speech_kind,
         )
+    speech_words = task_evidence.task_speech.get("words_n")
+    if (
+        task_evidence.task_speech_words_min is not None
+        and speech_words is not None
+        and speech_words >= task_evidence.task_speech_words_min
+    ):
+        owner = task_evidence.owning_branches[0] if task_evidence.owning_branches else _VERDICT
+        flag(
+            owner,
+            f"{SPEECH_IN_TASK}: {speech_words} word(s) in {task_evidence.task_speech.get('runs_n', 0)} run(s), "
+            f"{task_evidence.task_speech.get('untimed_n', 0)} untimed",
+            KEY_SPEECH_IN_TASK,
+            by_branch[owner].kind if owner in by_branch else None,
+        )
     if task_evidence.voice_outside_speech:
         said = [word for run in task_evidence.voice_outside_speech for word in run.get("words") or ()]
         annotate(
@@ -3058,6 +3158,22 @@ def fold_file_verdict(
         speech_declined=routes.get(_SPEECH) == DECLINED,
         reviewer_clears=clears,
     )
+    release, release_ground = non_task_speech_release(release, release_ground, redaction or RedactionEvidence())
+    if triage is not Triage.DISCARD and task_evidence.non_lexical and release in (Release.REDACTED, Release.WITHHELD):
+        flag(
+            _VERDICT,
+            f"{RELEASE_IN_NONLEXICAL_TASK}: release {release.value} on {release_ground_key(release_ground)}",
+            KEY_RELEASE_IN_NONLEXICAL_TASK,
+        )
+    if triage is not Triage.DISCARD and release is not None and release.value in reviewed_releases():
+        flag(
+            _VERDICT,
+            f"{RELEASE_REVIEWED}: release {release.value} on {release_ground_key(release_ground)}",
+            KEY_RELEASE_REVIEWED,
+        )
+    flags = [reason for reason in reasons if reason.outcome is Outcome.FLAG]
+    if triage is Triage.PASS and flags:
+        triage = Triage.REVIEW
     missing = sorted({ground_key(reason) for reason in flags if is_operational(reason.key)})
     if triage is Triage.DISCARD:
         release, release_ground = None, DISCARDED

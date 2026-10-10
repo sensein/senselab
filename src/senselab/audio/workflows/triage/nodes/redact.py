@@ -74,6 +74,12 @@ from senselab.audio.workflows.triage.residue import is_content_word, is_name_hom
 from senselab.audio.workflows.triage.stimulus import NearMatch, near_match, split_prompts
 from senselab.audio.workflows.triage.task_content import task_content_ids, task_events
 from senselab.audio.workflows.triage.task_lexicon import TaskLexicon, declared_names_lexicon, task_lexicon
+from senselab.audio.workflows.triage.task_speech import (
+    TASK_SPEECH_READING,
+    item_set_family,
+    task_speech_parameters,
+    words_min_for,
+)
 from senselab.audio.workflows.triage.vocabulary import (
     REDACTION_LLM_ANNOTATION,
     UNPLACED_CLEARED,
@@ -156,6 +162,8 @@ class _Verification:
             ``scan_failed`` and ``scan_missing``.
         cache: The result-cache use of the re-scan (:func:`cache_attributes`), None when it did not
             reach the detectors.
+        spans: Each surviving span as ``(category, text)``, its placeholders removed; held in memory to
+            place it on words, never written.
     """
 
     verified: bool
@@ -164,6 +172,7 @@ class _Verification:
     failed: list[str]
     missing: list[str]
     cache: dict[str, Any] | None = None
+    spans: tuple[tuple[str, str], ...] = ()
 
 
 def padding_ms(config: TriageConfig) -> int:
@@ -341,8 +350,27 @@ def _verify(records: list[dict[str, Any]], required: list[str]) -> _Verification
     if failed or not scan.detectors_used or missing:
         return _Verification(verified=False, survived=[], scan_ran=False, failed=failed, missing=missing, cache=cache)
     masks = _mask_tokens(records)
-    survived = sorted({span.category for span in scan.spans if not _is_mask(str(span.text or ""), masks)})
-    return _Verification(verified=not survived, survived=survived, scan_ran=True, failed=[], missing=[], cache=cache)
+    kept = [span for span in scan.spans if not _is_mask(str(span.text or ""), masks)]
+    survived = sorted({span.category for span in kept})
+    spans = tuple((str(span.category), _without_masks(str(span.text or ""), masks)) for span in kept)
+    return _Verification(
+        verified=not survived, survived=survived, scan_ran=True, failed=[], missing=[], cache=cache, spans=spans
+    )
+
+
+def _without_masks(text: str, masks: Sequence[str]) -> str:
+    """A re-scan span's text with every placeholder the plan wrote removed.
+
+    Args:
+        text: The span's text.
+        masks: :func:`_mask_tokens`' output for the scanned text.
+
+    Returns:
+        The words the recording said, single-spaced.
+    """
+    for mask in masks:
+        text = text.replace(mask, " ")
+    return " ".join(text.split())
 
 
 def _overlaps(a: tuple[float, float], b: tuple[float, float]) -> bool:
@@ -392,26 +420,6 @@ def _pii_marked_words(store: ProvStore) -> dict[str, dict[str, str]]:
         for source_id in store.derived_from(assertion.id):
             marked.setdefault(source_id, {}).setdefault(category, assertion.id)
     return marked
-
-
-def _matches_surviving(word: Entity, category: str, planned: list[RedactionExtent], marked: Mapping[str, str]) -> bool:
-    """Whether this word carries a surviving category that no planned extent already covers.
-
-    Args:
-        word: A live consensus ``word`` entity.
-        category: A category the verification re-scan still saw.
-        planned: The padded, merged extents the failing pass produced.
-        marked: The PII categories the store's label assertions place on this word, each mapped to
-            the assertion that placed it.
-
-    Returns:
-        True when the re-plan should widen to this word; a word a planned extent already covers is
-        excluded.
-    """
-    if category not in marked or word.extent is None:
-        return False
-    hull = word_hull(word)
-    return not any(_overlaps(hull, (extent.start, extent.end)) for extent in planned)
 
 
 def _word_record(word: Entity) -> dict[str, Any]:
@@ -643,43 +651,6 @@ def _expected_exemptions(
     return exemptions
 
 
-def _expected_survivors(
-    survived: Sequence[str],
-    words: Sequence[Entity],
-    marked: Mapping[str, Mapping[str, str]],
-    planned: Sequence[RedactionExtent],
-    exempt_word_ids: frozenset[str],
-) -> list[str]:
-    """The surviving categories that nothing but an exempt word can account for.
-
-    A category is attributed to the exemption only when at least one exempt word carries it that no
-    planned extent covers, and no non-exempt word carries it in the same position. With no
-    exemptions this returns nothing.
-
-    Args:
-        survived: What the re-scan still saw.
-        words: PREPROCESS's consensus words.
-        marked: Which PII categories the store's label assertions place on each word.
-        planned: The padded, merged extents the pass produced.
-        exempt_word_ids: The words covered by an exemption.
-
-    Returns:
-        The attributable categories, sorted.
-    """
-    attributable: list[str] = []
-    for category in sorted(set(survived)):
-        uncovered = [
-            word
-            for word in words
-            if category in marked.get(word.id, {})
-            and word.extent is not None
-            and not any(_overlaps(word_hull(word), (extent.start, extent.end)) for extent in planned)
-        ]
-        if uncovered and all(word.id in exempt_word_ids for word in uncovered):
-            attributable.append(category)
-    return attributable
-
-
 def word_keys(word: Entity) -> set[str]:
     """Every token one consensus word reads as: its own surface and each recogniser's reading of it.
 
@@ -744,15 +715,20 @@ class TaskContent:
 
 
 def task_content(
-    store: ProvStore, words: Sequence[Entity], findings: Sequence[Entity], family: str | None
+    store: ProvStore,
+    words: Sequence[Entity],
+    findings: Sequence[Entity],
+    family: str | None,
+    lexicon_ids: Collection[str] = frozenset(),
 ) -> TaskContent:
     """Which consensus words are the declared task's own content, read off its events.
 
     Args:
         store: The provenance store, read for the family's task readings.
-        words: The consensus words.
+        words: The consensus words, in stream order.
         findings: The live ``pii`` entities.
         family: The declared family.
+        lexicon_ids: The words of the task's own lexicon.
 
     Returns:
         The words on the events, and every finding word elsewhere that reads as a token a finding read
@@ -761,7 +737,7 @@ def task_content(
     events = task_events(store, family)
     if not events:
         return TaskContent()
-    on_events = task_content_ids(words, events)
+    on_events = task_content_ids(words, events, family=family, lexicon_ids=lexicon_ids)
     by_id = {word.id: word for word in words}
     read = finding_keys(findings, by_id)
     keys = frozenset(key for word_id in on_events & set(read) for key in read[word_id])
@@ -876,6 +852,150 @@ def _register_redacted_stream(
     return stream_id
 
 
+RESCAN_SOURCE = "redact_rescan"
+"""The ``source`` of a finding REDACT's re-scan read on words no finding covered."""
+
+
+class _Rescan:
+    """REDACT's re-scan survivors, placed on words and judged by the fold's own plan.
+
+    A survivor placed on residue words no planned extent covers becomes a ``pii`` finding of its own; the
+    fold's mask plan (:func:`fold_mask_plan`) then says which of its words stay masked, under every
+    exemption and policy release the fold applies. Those words are re-planned as masks; a survivor whose
+    words the plan releases, or the declared stimulus accounts for, is attributed. A survivor that places
+    on no uncovered word, or on a word with no usable timing, is outstanding.
+    """
+
+    def __init__(
+        self,
+        store: ProvStore,
+        software: str,
+        residue: Sequence[Entity],
+        exempt_word_ids: Collection[str],
+        detectors: Sequence[str],
+    ) -> None:
+        """Hold what classifying a re-scan reads.
+
+        Args:
+            store: The provenance store, where survivor findings are written.
+            software: The software agent.
+            residue: The residue words, in stream order.
+            exempt_word_ids: The words the declared stimulus accounts for.
+            detectors: The detectors the scan ran.
+        """
+        self.store = store
+        self.software = software
+        self.residue = list(residue)
+        self.tokens = _tokens(self.residue)
+        self.exempt = set(exempt_word_ids)
+        self.detectors = list(detectors)
+        self.findings: list[Entity] = []
+        self._written: dict[tuple[str, tuple[str, ...]], str] = {}
+        self._activity: str | None = None
+
+    def _place(self, text: str, planned: Sequence[RedactionExtent]) -> list[Entity]:
+        def open_(word: Entity) -> bool:
+            return not any(_overlaps(word_hull(word), (e.start, e.end)) for e in planned)
+
+        hits = [word for word in _place(text, self.tokens) if open_(word)]
+        return hits or [word for word in _place_substring(text, self.residue) if open_(word)]
+
+    def _write(self, category: str, words: Sequence[Entity]) -> None:
+        key = (category, tuple(word.id for word in words))
+        if key in self._written:
+            return
+        if self._activity is None:
+            self._activity = self.store.activity(node=NODE, step="rescan", parameters={})
+            self.store.was_associated_with(self._activity, self.software)
+        hull = (min(word_hull(w)[0] for w in words), max(word_hull(w)[1] for w in words))
+        finding_id = self.store.entity(
+            prov_type="pii",
+            extent=hull,
+            attributes={
+                "category": category,
+                "source": RESCAN_SOURCE,
+                "haystack": "consensus",
+                "word_ids": [word.id for word in words],
+                "detectors_used": self.detectors,
+                "detectors_failed": [],
+            },
+        )
+        self.store.was_generated_by(finding_id, self._activity)
+        self.store.was_attributed_to(finding_id, self.software)
+        for word in words:
+            self.store.was_derived_from(finding_id, word.id)
+        self._written[key] = finding_id
+        self.findings.append(self.store.get_entity(finding_id))
+
+    def classify(
+        self, checked: _Verification, planned: Sequence[RedactionExtent], plan: Callable[[], MaskPlan]
+    ) -> tuple[list[RedactionExtent], list[str], list[str]]:
+        """Place one re-scan's survivors and judge them by the fold's plan.
+
+        Args:
+            checked: The re-scan.
+            planned: The extents the scanned text was rendered under.
+            plan: The fold's mask plan over the store, called once the survivors are written.
+
+        Returns:
+            ``(added, attributed, outstanding)``: an extent per survivor word the fold keeps masked, and the
+            surviving categories accounted for and left outstanding, sorted.
+        """
+        placed: list[tuple[str, list[Entity]]] = []
+        outstanding: set[str] = set()
+        for category, text in checked.spans:
+            hits = self._place(text, planned)
+            if not hits or any(word_hull(w)[1] <= word_hull(w)[0] for w in hits):
+                outstanding.add(category)
+                continue
+            placed.append((category, hits))
+        for category, hits in placed:
+            if not all(word.id in self.exempt for word in hits):
+                self._write(category, hits)
+        kept = set(plan().owners()) if placed else set()
+        added: list[RedactionExtent] = []
+        attributed: set[str] = set()
+        for category, hits in placed:
+            masked = [word for word in hits if word.id in kept and word.id not in self.exempt]
+            if not masked:
+                attributed.add(category)
+                continue
+            added.extend(RedactionExtent(start=word_hull(w)[0], end=word_hull(w)[1], category=category) for w in masked)
+        return added, sorted(attributed - outstanding), sorted(outstanding)
+
+
+def fold_mask_plan(
+    store: ProvStore, config: TriageConfig, hint: AudioHints | None, *, reviewer_applies: bool = False
+) -> MaskPlan:
+    """The fold's mask plan over the store, with every argument VERDICT reads from the config and the hint.
+
+    Args:
+        store: The provenance store.
+        config: The triage configuration.
+        hint: What the recording was declared to contain.
+        reviewer_applies: Whether the reviewer's ``release`` entries may unmask words.
+
+    Returns:
+        :func:`mask_plan`'s plan.
+    """
+    from senselab.audio.workflows.triage.live_evidence import recording_stem  # noqa: PLC0415
+    from senselab.audio.workflows.triage.vocabulary import FoldPolicy  # noqa: PLC0415
+
+    policy = FoldPolicy.from_config(config)
+    return mask_plan(
+        store,
+        reviewer_applies=reviewer_applies,
+        padding_ms=padding_ms(config),
+        condition_categories=policy.condition_categories,
+        protected_categories=policy.trim_protected_categories,
+        cohort_conditions=policy.cohort_conditions,
+        lexicon=task_lexicon(config, declared_task_family(store), hint),
+        language=None if hint is None else str(hint.metadata.get("language") or "") or None,
+        name_approvals=name_approvals(config, recording_stem(store)),
+        task_text=task_texts(hint),
+    )
+
+
 def redact(
     store: ProvStore,
     source: str,
@@ -932,15 +1052,17 @@ def redact(
     findings = _findings(store)
     words = consensus_words(store)
     residue = residue_words(store)
+    lexicon = task_lexicon(config, task_family, hint)
     units = _expected_units(
         hint,
         task_family,
         terminators=str(config.require(_TERMINATORS_KEY)),
-        lexicon=task_lexicon(config, task_family, hint),
+        lexicon=lexicon,
     )
     exemptions = _expected_exemptions(findings, words, units, branch_params(config).p_normalise, near_match(config))
     exempt_findings = {exemption.finding_id for exemption in exemptions}
-    content = task_content(store, words, findings, task_family)
+    lexicon_ids = {words[i].id for i in lexicon.positions([str(w.attributes.get("text") or "") for w in words])}
+    content = task_content(store, words, findings, task_family, lexicon_ids)
     task_exempt = _task_event_exemptions([f for f in findings if f.id not in exempt_findings], content)
     exempt_findings |= {finding.id for finding in task_exempt}
     exempt_word_ids = frozenset(word_id for exemption in exemptions for word_id in exemption.word_ids) | frozenset(
@@ -949,8 +1071,6 @@ def redact(
     extents = _extents_from_findings([finding for finding in findings if finding.id not in exempt_findings])
     consensus = find_measurement(store, "consensus_transcript")
     consulted = _pii_marking_assertions(store)
-    marked = _pii_marked_words(store)
-
     planned = plan_redactions(extents, padding_ms=margin_ms)
     records, transcript_text, unplaced_n = _render(words, planned)
     checked = (
@@ -958,35 +1078,30 @@ def redact(
         if not scan_incomplete
         else _Verification(verified=False, survived=[], scan_ran=False, failed=[], missing=[])
     )
-    attributed = _expected_survivors(checked.survived, residue, marked, planned, exempt_word_ids)
-    outstanding = [category for category in checked.survived if category not in attributed]
+    software = software_agent(store)
+    rescan = _Rescan(store, software, residue, exempt_word_ids, scanned_by)
     replanned_n = 0
-    unremediable: list[str] = []
-    widened: list[tuple[tuple[float, float], str]] = []
-    if checked.scan_ran and outstanding:
-        replanned_n = 1
-        for category in outstanding:
-            for word in residue:
-                marks = marked.get(word.id, {})
-                if word.id in exempt_word_ids or word.extent is None:
-                    continue
-                if not _matches_surviving(word, category, planned, marks):
-                    continue
-                hull = word_hull(word)
-                extents.append(RedactionExtent(start=hull[0], end=hull[1], category=category))
-                widened.append((hull, marks[category]))
+    attributed: list[str] = []
+    outstanding: list[str] = []
+    while checked.scan_ran and checked.survived:
+        added, attributed, outstanding = rescan.classify(checked, planned, lambda: fold_mask_plan(store, config, hint))
+        if not added and (replanned_n or not outstanding):
+            break
+        replanned_n += 1
+        extents.extend(added)
         planned = plan_redactions(extents, padding_ms=margin_ms)
         records, transcript_text, unplaced_n = _render(words, planned)
         checked = _verify(_render(residue, planned)[0], required_detectors)
-        attributed = _expected_survivors(checked.survived, residue, marked, planned, exempt_word_ids)
-        outstanding = [category for category in checked.survived if category not in attributed]
-        unremediable = list(outstanding)
+        attributed, outstanding = [], []
+    if checked.scan_ran and checked.survived and not (attributed or outstanding):
+        _, attributed, outstanding = rescan.classify(checked, planned, lambda: fold_mask_plan(store, config, hint))
+    unremediable = list(outstanding)
+    findings = [*findings, *rescan.findings]
 
     stream_id, recording = resolve_stream(store, run_dir, source)
     redacted = apply_redactions(recording, planned, fill=fill, bleep_hz=bleep_hz)
 
-    software = software_agent(store)
-    view: list[str] = []
+    view: list[str] = [entity.id for entity in rescan.findings]
 
     plan_act = store.activity(node=NODE, step="plan", parameters={"padding_ms": margin_ms, "replanned_n": replanned_n})
     store.was_associated_with(plan_act, software)
@@ -1007,9 +1122,6 @@ def redact(
         for finding in findings:
             if finding.extent is not None and _overlaps(finding.extent, (extent.start, extent.end)):
                 store.was_derived_from(span_id, finding.id)
-        for bounds, assertion_id in widened:
-            if _overlaps(bounds, (extent.start, extent.end)):
-                store.was_derived_from(span_id, assertion_id)
         span_ids.append(span_id)
         view.append(span_id)
 
@@ -1164,6 +1276,7 @@ def redact(
             "task_event_exempt_n": len(task_exempt),
             "expected_exempt_by_category": dict(Counter(exemption.category for exemption in exemptions)),
             "expected_survivors": attributed,
+            "rescan_findings_n": len(rescan.findings),
             "expected_speech_declared": bool(units),
             "replanned_n": replanned_n,
             "scan_failed": scan_failed,
@@ -1289,6 +1402,12 @@ PROPAGATION_MASK = "mask"
 
 PROPAGATION_RELEASE = "release"
 """A word released because a reviewer ``release`` entry named the same token elsewhere in the recording."""
+
+NON_TASK_SPEECH = "non_task_speech"
+"""The source of a mask over a run of lexical speech outside a non-lexical task (``task_speech``)."""
+
+NON_TASK_SPEECH_CATEGORY = "NON_TASK_SPEECH"
+"""The category such a mask carries."""
 
 PERSON_FAMILY = "PERSON"
 LOCATION_FAMILY = "LOCATION"
@@ -1648,6 +1767,10 @@ class MaskPlan:
         reviewer_precedence: Whether the reviewer's reading recorded the task and the whole consensus
             transcript with its PII annotations and every recogniser's reading (``review_inputs_complete``),
             so its ``release`` of a token outranks a name kept masked at another occurrence.
+        non_task_speech_ids: The timed words of lexical speech outside a non-lexical task
+            (``task_speech_reading``), each kept masked whatever the content-word trim says.
+        non_task_speech_untimed: Such words with no usable timing, which no mask can place.
+        non_task_speech_extensive: Whether an item-set family's speech outside its item runs is extensive.
     """
 
     masks: tuple[MaskOutcome, ...]
@@ -1670,6 +1793,14 @@ class MaskPlan:
     task_event_ids: tuple[str, ...] = ()
     task_content_only: bool = False
     reviewer_precedence: bool = False
+    non_task_speech_ids: tuple[str, ...] = ()
+    non_task_speech_untimed: tuple[str, ...] = ()
+    non_task_speech_extensive: bool = False
+
+    @property
+    def non_task_speech_masked_n(self) -> int:
+        """How many words stay masked as lexical speech outside a non-lexical task."""
+        return len(self.non_task_speech_ids)
 
     @property
     def planned(self) -> list[RedactionExtent]:
@@ -1867,6 +1998,9 @@ class MaskPlan:
             "task_lexicon_ids": list(self.task_lexicon_ids),
             "task_text_ids": list(self.task_text_ids),
             "task_event_ids": list(self.task_event_ids),
+            "non_task_speech_ids": list(self.non_task_speech_ids),
+            "non_task_speech_untimed": list(self.non_task_speech_untimed),
+            "non_task_speech_extensive": self.non_task_speech_extensive,
             "task_content_only": self.task_content_only,
             "reviewer_named_no_words": self.named_no_words,
             "counts": {
@@ -1877,6 +2011,8 @@ class MaskPlan:
                 "task_lexicon_words_n": len(self.task_lexicon_ids),
                 "task_text_words_n": len(self.task_text_ids),
                 "task_event_words_n": len(self.task_event_ids),
+                "non_task_speech_masked_n": self.non_task_speech_masked_n,
+                "non_task_speech_untimed_n": len(self.non_task_speech_untimed),
                 **{
                     f"relabel_{relabel}_n": sum(1 for entry in self.releases if entry.get("relabel") == relabel)
                     for relabel in RELABELS
@@ -2222,6 +2358,55 @@ def _identifier_shaped(text: str) -> bool:
     return is_number(key) or key in words or any(is_number(piece) or piece in words for piece in key.split("-"))
 
 
+@dataclass(frozen=True)
+class _NonTaskSpeech:
+    """What the owning branch's ``task_speech_reading`` gives the mask plan.
+
+    Attributes:
+        timed: The speech words outside the task with usable timing, where the reading reaches its bound.
+        untimed: Those with none, where it does.
+        item_ids: An item-set family's item-run words, which are task content.
+        extensive: Whether an item-set family's speech outside the item runs reaches ``extensive_fraction``.
+    """
+
+    timed: frozenset[str] = frozenset()
+    untimed: tuple[str, ...] = ()
+    item_ids: frozenset[str] = frozenset()
+    extensive: bool = False
+
+
+def _non_task_speech(store: ProvStore) -> _NonTaskSpeech:
+    """The speech outside the task, as the owning branch's reading names it (``task_speech``).
+
+    Args:
+        store: The provenance store, read for the ``task_speech_reading`` measurement.
+
+    Returns:
+        The words to mask and the task-content words; empty for a family whose speech outside the task is
+        not read, where no reading was written, or (for the words to mask) where it stays under its bound.
+    """
+    family = declared_task_family(store)
+    bound = words_min_for(family)
+    reading = find_measurement(store, TASK_SPEECH_READING) if bound is not None else None
+    if reading is None or bound is None:
+        return _NonTaskSpeech()
+    attributes = reading.attributes
+    item_ids = (
+        frozenset(str(i) for i in attributes.get("task_content_ids") or ()) if item_set_family(family) else frozenset()
+    )
+    fraction = attributes.get("off_task_fraction")
+    extensive = (
+        item_set_family(family)
+        and fraction is not None
+        and float(fraction) >= float(task_speech_parameters()["extensive_fraction"])
+    )
+    if int(attributes.get("words_n") or 0) < bound:
+        return _NonTaskSpeech(item_ids=item_ids)
+    untimed = tuple(str(word_id) for word_id in attributes.get("untimed_ids") or ())
+    timed = frozenset(str(word_id) for word_id in attributes.get("word_ids") or ()) - set(untimed)
+    return _NonTaskSpeech(timed, untimed, item_ids, extensive)
+
+
 def mask_plan(
     store: ProvStore,
     *,
@@ -2310,11 +2495,13 @@ def mask_plan(
     vocabulary = lexicon if lexicon is not None else declared_names_lexicon(declared_task_family(store))
     word_texts = [str(w.attributes.get("text") or "") for w in words]
     declared_ids = {words[i].id for i in vocabulary.positions(word_texts)}
+    lexicon_ids = frozenset(declared_ids)
     task_text_ids = {words[i].id for i in task_text_positions(word_texts, task_text)}
     declared_ids |= task_text_ids
     live_findings = live_entities(store, "pii")
-    task_words = task_content(store, words, live_findings, declared_task_family(store))
-    excluded_ids = declared_ids | task_words.ids
+    task_words = task_content(store, words, live_findings, declared_task_family(store), lexicon_ids)
+    off_task = _non_task_speech(store)
+    excluded_ids = declared_ids | task_words.ids | off_task.item_ids
     located, unplaced_records = _located_findings(store, residue_ids, excluded_ids)
     finding_word_ids_of = {
         entity.id: {str(i) for i in (entity.attributes.get("word_ids") or ())} for entity in live_findings
@@ -2798,6 +2985,12 @@ def mask_plan(
         source = spread_from[run[0]][0]
         family = family_of_word.get(source) or (LOCATION_FAMILY if locked.get(source) == LOCK_PLACE else PERSON_FAMILY)
         propagated_masks.append((family, [by_id[word_id] for word_id in run]))
+    speech_ids = (set(off_task.timed) - excluded_ids) & set(order)
+    speech_untimed = off_task.untimed
+    kept_ids |= speech_ids
+    speech_masks = [
+        (NON_TASK_SPEECH_CATEGORY, [by_id[word_id] for word_id in run]) for run in _runs(sorted(speech_ids), order)
+    ]
 
     def state_of(word: Entity) -> str:
         if word.id in kept_ids:
@@ -2828,7 +3021,12 @@ def mask_plan(
                 max(finding.task_words_n for finding in members),
             )
         )
-    for source, masks in ((REVIEWER, reviewer_masks), (POLICY, policy_masks), (PROPAGATED, propagated_masks)):
+    for source, masks in (
+        (REVIEWER, reviewer_masks),
+        (POLICY, policy_masks),
+        (PROPAGATED, propagated_masks),
+        (NON_TASK_SPEECH, speech_masks),
+    ):
         for family, group in masks:
             if not group:
                 continue
@@ -2996,6 +3194,9 @@ def mask_plan(
             not finding.word_ids and finding_word_ids_of[finding.finding_id] & task_words.ids for finding in located
         ),
         reviewer_precedence=reviewer_wins,
+        non_task_speech_ids=tuple(sorted(speech_ids, key=lambda word_id: order[word_id])),
+        non_task_speech_untimed=speech_untimed,
+        non_task_speech_extensive=off_task.extensive,
         named_no_words=reviewer_named_no_words(reading),
         releases=tuple(releases),
         conditions=tuple(conditions),

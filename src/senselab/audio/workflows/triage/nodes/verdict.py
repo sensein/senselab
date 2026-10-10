@@ -97,15 +97,13 @@ from senselab.audio.workflows.triage.nodes.redact import (
     NEW,
     UNMASKED_BY_REVIEWER,
     MaskPlan,
-    mask_plan,
-    name_approvals,
-    padding_ms,
-    task_texts,
+    fold_mask_plan,
 )
 from senselab.audio.workflows.triage.nodes.voice import PHONATION_READING
 from senselab.audio.workflows.triage.quality_join import QUALITY_JOIN
 from senselab.audio.workflows.triage.routing_analysis.families import SYLLABLE_REPETITION
 from senselab.audio.workflows.triage.task_lexicon import task_lexicon
+from senselab.audio.workflows.triage.task_speech import TASK_SPEECH_READING, reads_task_speech, words_min_for
 from senselab.audio.workflows.triage.vocabulary import (
     BREATH_COUNTED,
     BREATH_SUSTAINED,
@@ -614,6 +612,12 @@ def _task_evidence(
         if find_measurement(store, BACKGROUND_MODEL) is not None
         else {}
     )
+    speech_reading = find_measurement(store, TASK_SPEECH_READING) if reads_task_speech(declared_family) else None
+    task_speech = (
+        {k: v for k, v in speech_reading.attributes.items() if k not in ("name", "signal")}
+        if speech_reading is not None
+        else {}
+    )
     return TaskEvidence(
         owning_branches=owners,
         duration_s=duration,
@@ -663,6 +667,8 @@ def _task_evidence(
         }
         if ddk is not None
         else {},
+        task_speech=task_speech,
+        task_speech_words_min=words_min_for(declared_family) if task_speech else None,
     )
 
 
@@ -774,6 +780,9 @@ def _redaction_evidence(
         reviewer_requested_n=sum(1 for span in plan.proposals if span.agreement == NEW),
         propagated_masked_n=plan.propagated_masked_n,
         task_content_only=plan.task_content_only,
+        non_task_speech_masked_n=plan.non_task_speech_masked_n,
+        non_task_speech_untimed_n=len(plan.non_task_speech_untimed),
+        non_task_speech_extensive=plan.non_task_speech_extensive,
     )
 
 
@@ -1192,17 +1201,8 @@ def verdict(
     cohort = find_measurement(store, COHORT_READING)
     resolved_ran = {**_derived_ran(store, node_verdicts, reports), **(ran or {})}
     policy = FoldPolicy.from_config(config)
-    plan = mask_plan(
-        store,
-        reviewer_applies=policy.llm_reset_redactions and reviewer_may_unmask(annotation),
-        padding_ms=padding_ms(config),
-        condition_categories=policy.condition_categories,
-        protected_categories=policy.trim_protected_categories,
-        cohort_conditions=policy.cohort_conditions,
-        lexicon=task_lexicon(config, declared_task_family(store), hint),
-        language=None if hint is None else str(hint.metadata.get("language") or "") or None,
-        name_approvals=name_approvals(config, recording_stem(store)),
-        task_text=task_texts(hint),
+    plan = fold_mask_plan(
+        store, config, hint, reviewer_applies=policy.llm_reset_redactions and reviewer_may_unmask(annotation)
     )
     task_evidence = _task_evidence(
         store,

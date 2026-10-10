@@ -45,6 +45,16 @@ def reason_vocabulary() -> dict[str, Any]:
     return dict(yaml.safe_load(text))
 
 
+def reviewed_releases() -> frozenset[str]:
+    """The release values that hold a recording for review whatever else the fold read.
+
+    Returns:
+        ``reviewed_releases`` of ``data/decision_reasons.yaml``: release axis values (``redacted``,
+        ``withheld``).
+    """
+    return frozenset(str(value) for value in reason_vocabulary().get("reviewed_releases") or ())
+
+
 def reason_of(ground_key: str, *, release: bool = False) -> str | None:
     """The reason a ground key maps to.
 

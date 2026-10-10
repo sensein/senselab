@@ -4,11 +4,21 @@
 # v2 (owner, 2026-10-09): the release ground task_content_unmasked is these events' alone -- every
 # located finding lying on them; a finding on a lexical task's declared or stimulus words keeps
 # no_content_masked / reviewer_unmasked_all.
-version: 2
+# v3 (owner, 2026-10-10): the exemption is recognisers' misreadings of the task's own sounds only. In a
+# syllable-repetition family any word on the events; in an airway or voice family only a word the
+# recognisers disagree on, one spelled as a sound, or a lexicon word, lying alone on one event. A run of
+# agreed dictionary words is never task content. Design "Speech in a non-lexical task".
+version: 3
 families:              # a family set of routing_analysis/families.py -> the task readings whose events are its content
   SYLLABLE_REPETITION: [ddk_task_reading]
   AIRWAY_ELICITING: [airway_breath_reading, airway_cough_reading]
   VOICE_ELICITING: [voice_phonation_reading]
+open_vocabulary_families:  # owner, 2026-10-10: tasks eliciting open-vocabulary items; a word of an item run is task content (task_speech.py)
+- animal-fluency
+- random-item-generation
+- random-item-generation-v2
+any_word_families: [SYLLABLE_REPETITION]   # families whose every word on the events is task content
+agreed_run_min: 2      # adjacent agreed dictionary words that are a run of speech
 decisions: [present, review]   # a reading's evidence decision that read the task; `absent` read another activity
 overlap:
   pad_s: 0.05          # each event widened by this either side (as task_events.yaml entangle_abut_s)

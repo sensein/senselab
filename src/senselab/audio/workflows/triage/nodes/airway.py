@@ -80,6 +80,7 @@ from senselab.audio.workflows.triage.nodes.common import (
     write_report,
 )
 from senselab.audio.workflows.triage.routing_analysis.families import task_id_of
+from senselab.audio.workflows.triage.task_speech import write_task_speech
 from senselab.audio.workflows.triage.vocabulary import TASK
 from senselab.utils.prov_store import Entity, ProvStore
 
@@ -1214,6 +1215,9 @@ def airway(
                 run_dir=run_dir,
             )
         )
+        speech_id = write_task_speech(store, activity, software, family=family, config=config, hint=hint)
+        if speech_id is not None:
+            finding_ids.append(speech_id)
 
     report_id, report = write_report(
         store,
