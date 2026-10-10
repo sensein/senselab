@@ -161,6 +161,22 @@ WRAPPER = 'cd -- "$1" || exit 96\nshift\nexec "$@"\n'
 the read-only bind), then exec its arguments. For the step those are the preamble, which writes to the
 driver's pipe, closes it and execs the step itself."""
 
+PROGRAM_RULE_CODE = """\
+import os, shutil
+def program_allowed(target, path, rule):
+    found = target if "/" in target else shutil.which(target, path=path)
+    if not found:
+        return False
+    def inside(p, dirs):
+        return any(p == a or p.startswith(a.rstrip("/") + "/") for a in dirs)
+    real = os.path.realpath(found)
+    where = os.path.realpath(os.path.dirname(os.path.abspath(found)))
+    if rule["targets"] is None:
+        return inside(real, rule["dirs"]) or inside(where, rule["dirs"])
+    return inside(where, rule["dirs"]) and inside(real, rule["dirs"] + rule["targets"])
+"""
+"""The program check, shared by the preamble (inside the sandbox) and the dry run (on the driver side)."""
+
 _PREAMBLE_CODE = """\
 import contextlib, io, json, os, platform, shutil, sys
 _buf = io.StringIO()
@@ -171,19 +187,10 @@ try:
 except ValueError:
     _canary = None
 _failed = _canary.get("canary_failed") if isinstance(_canary, dict) else None
+{rule_code}
 _rule = json.loads(sys.argv[2])
 _target = sys.argv[3]
-_found = _target if "/" in _target else shutil.which(_target, path=os.environ.get("PATH", ""))
-_ok = False
-def _in(p, dirs):
-    return any(p == a or p.startswith(a.rstrip("/") + "/") for a in dirs)
-if _found:
-    _real = os.path.realpath(_found)
-    _dir = os.path.realpath(os.path.dirname(os.path.abspath(_found)))
-    if _rule["targets"] is None:
-        _ok = _in(_real, _rule["dirs"]) or _in(_dir, _rule["dirs"])
-    else:
-        _ok = _in(_dir, _rule["dirs"]) and _in(_real, _rule["dirs"] + _rule["targets"])
+_ok = program_allowed(_target, os.environ.get("PATH", ""), _rule)
 _out = {{"sys_prefix": sys.prefix, "python": platform.python_version(), "torch": None, "torch_cuda": None,
          "canary_failed": _failed, "interpreter_ok": _ok}}
 if _failed is True:
@@ -281,14 +288,16 @@ was loaded anyway."""
 class RunError(Exception):
     """A step refused or failed for a fixed reason; the message is the code only."""
 
-    def __init__(self, code: str) -> None:
+    def __init__(self, code: str, detail: str = "") -> None:
         """Store the code as both the message and ``code``.
 
         Args:
             code: A fixed ``E_*`` code.
+            detail: A path-free note for ``driver.log`` (the sweep's refusal line).
         """
         super().__init__(code)
         self.code = code
+        self.detail = detail
 
 
 class StepOutcome(NamedTuple):
@@ -624,6 +633,57 @@ def _log() -> logging.Logger:
     return logging.getLogger("senselab")
 
 
+# --- readiness, shared by run_step and the dry run ------------------------------------------------------
+
+
+def _venv_ready(step: StepSpec, analysis: str, config: RunConfig) -> tuple[env.VenvResult, LockRef | None]:
+    """The step's prefetched, checked venv, unchanged since prefetch; read only, nothing executed.
+
+    Raises:
+        RunError: ``E_ENV_MISSING``, ``E_ENV_UNCHECKED`` or ``E_ENV_CHANGED``.
+    """
+    venv_path, overlay = _step_venv(step, analysis, config.cache)
+    venv = env.load_venv(venv_path, step.env, overlay)
+    if venv is None:
+        raise RunError("E_ENV_MISSING")
+    if not venv.checked:
+        raise RunError("E_ENV_UNCHECKED")
+    if env.installed_from_metadata(venv_path) != venv.packages:
+        raise RunError("E_ENV_CHANGED")
+    if step.kind in NOTEBOOK_KINDS and _recorded_kernels(venv_path) != env.kernels_sha256(venv_path):
+        raise RunError("E_ENV_CHANGED")
+    return venv, overlay
+
+
+def _ready(
+    step: StepSpec, analysis: str, config: RunConfig
+) -> tuple[env.VenvResult, LockRef | None, str | None, dict[str, Any]]:
+    """The checks a step must pass before its result dir is reset: sandbox, venv, GPU and driver floor.
+
+    Returns:
+        ``(venv, overlay, installed_sha256, host record)``.
+
+    Raises:
+        RunError: ``E_SANDBOX_UNAVAILABLE`` (with the sweep's line as ``detail``), ``E_NO_USERNS``, a
+            `_venv_ready` code, ``E_GPU_MISSING`` or ``E_DRIVER_OLD``.
+    """
+    status, detail = sandbox.sandbox_status()
+    if status == "sweep-refused":
+        raise RunError("E_SANDBOX_UNAVAILABLE", detail)
+    if status != "ok":
+        raise RunError("E_NO_USERNS")
+    venv, overlay = _venv_ready(step, analysis, config)
+    record = host.host_record(None, runner=config.host_runner)
+    resources = step.resources
+    if (resources.gpu_arch or resources.min_driver) and (record.get("gpu_count") or 0) < 1:
+        raise RunError("E_GPU_MISSING")
+    if resources.min_driver is not None:
+        driver = record.get("gpu_driver")
+        if not isinstance(driver, str) or _version(driver) < _version(resources.min_driver):
+            raise RunError("E_DRIVER_OLD")
+    return venv, overlay, env.installed_sha256(venv.path), record
+
+
 # --- run_step ------------------------------------------------------------------------------------------
 
 
@@ -830,7 +890,7 @@ class _Execution:
 
     # --- before the reset ----------------------------------------------------------------------
 
-    def refusals(self) -> None:
+    def refusals(self, log: bool = True) -> None:
         """Refuse without touching the result dir, so a previous run's diagnostics survive.
 
         Raises:
@@ -839,32 +899,13 @@ class _Execution:
                 ``E_ENV_CHANGED`` (the dist-info METADATA in the venv no longer name the installed set, or an
                 notebook venv's kernel specs changed), ``E_GPU_MISSING`` or ``E_DRIVER_OLD``.
         """
-        step, config = self.step, self.config
-        status, detail = sandbox.sandbox_status()
-        if status == "sweep-refused":
-            _log_refusal(self.result, f"sandbox unavailable on this node: {detail}")
-            raise RunError("E_SANDBOX_UNAVAILABLE")
-        if status != "ok":
-            raise RunError("E_NO_USERNS")
-        venv_path, self.overlay = _step_venv(step, self.analysis, config.cache)
-        venv = env.load_venv(venv_path, step.env, self.overlay)
-        if venv is None:
-            raise RunError("E_ENV_MISSING")
-        if not venv.checked:
-            raise RunError("E_ENV_UNCHECKED")
-        if env.installed_from_metadata(venv_path) != venv.packages:
-            raise RunError("E_ENV_CHANGED")
-        if step.kind in NOTEBOOK_KINDS and _recorded_kernels(venv_path) != env.kernels_sha256(venv_path):
-            raise RunError("E_ENV_CHANGED")
-        self.venv, self.installed = venv, env.installed_sha256(venv_path)
-        self.host = host.host_record(None, runner=config.host_runner)
-        resources, record = step.resources, self.host
-        if (resources.gpu_arch or resources.min_driver) and (record.get("gpu_count") or 0) < 1:
-            raise RunError("E_GPU_MISSING")
-        if resources.min_driver is not None:
-            driver = record.get("gpu_driver")
-            if not isinstance(driver, str) or _version(driver) < _version(resources.min_driver):
-                raise RunError("E_DRIVER_OLD")
+        try:
+            ready = _ready(self.step, self.analysis, self.config)
+        except RunError as error:
+            if error.code == "E_SANDBOX_UNAVAILABLE" and log:
+                _log_refusal(self.result, f"sandbox unavailable on this node: {error.detail}")
+            raise
+        self.venv, self.overlay, self.installed, self.host = ready
 
     # --- the run -------------------------------------------------------------------------------
 
@@ -1065,6 +1106,29 @@ class _Execution:
             masked=[] if self.step.hf_weights else [self.config.cache / "huggingface"],
         )
 
+    def program_ok(self) -> bool | None:
+        """Whether the step's program would pass the preamble's check, judged on the driver side.
+
+        Builds the step env (no write) and applies `PROGRAM_RULE_CODE`. None when the working directory does
+        not exist yet (a cwd under ``{out}``), so the check cannot be made before the run.
+        """
+        try:
+            self.env, _, _ = sandbox.build_env(self.step, self.config.profile, self.keyed.paths)
+        except ValueError:
+            raise RunError("E_ENV_BUILD") from None
+        if self.step.kind in cache.R_KINDS:
+            self._r_env()
+        try:
+            cwd = self._cwd()
+        except RunError:
+            return None
+        target = self._render(self.step.argv[0])
+        if "/" in target and not os.path.isabs(target):
+            target = os.path.join(cwd, target)
+        namespace: dict[str, Any] = {}
+        exec(PROGRAM_RULE_CODE, namespace)  # noqa: S102
+        return bool(namespace["program_allowed"](target, self.env.get("PATH", ""), self._interpreter_rule()))
+
     def _cwd(self) -> Path:
         cwd = Path(self._render(self.step.cwd))
         cwd = cwd if cwd.is_absolute() else Path(os.path.realpath(self.keyed.checkout.worktree)) / cwd
@@ -1096,7 +1160,7 @@ class _Execution:
         cwd = self._cwd()
         self.argv = argv
         python = os.path.join(self._render("{venv}"), "bin", "python")
-        preamble = _PREAMBLE_CODE.format(canary=sandbox.canary(config.profile.canary_host))
+        preamble = _PREAMBLE_CODE.format(canary=sandbox.canary(config.profile.canary_host), rule_code=PROGRAM_RULE_CODE)
         allowed = json.dumps(self._interpreter_rule())
         read, write = os.pipe()
         wrapped = [sandbox.SH, "-c", WRAPPER, "sh", str(cwd), python, "-I", "-B", "-c", preamble, str(write), allowed]
@@ -1922,6 +1986,93 @@ def finalize_run_records(
 
 def _row_ok(row: Mapping[str, Any] | None) -> bool:
     return row is not None and row.get("status") in ("executed", "skipped") and row.get("exit") == 0
+
+
+class Plan(NamedTuple):
+    """What a run would do with one step (`plan_steps`); ``codes`` are fixed codes only."""
+
+    step: str
+    key: str | None
+    status: str
+    env: str
+    src: str
+    codes: tuple[str, ...]
+
+
+_ENV_STATE = {"E_ENV_MISSING": "missing", "E_ENV_UNCHECKED": "missing", "E_ENV_CHANGED": "changed"}
+
+
+def plan_steps(manifests: Sequence[Manifest], config: RunConfig) -> list[Plan]:
+    """What `run_steps` would do, in DAG order, without executing or writing anything.
+
+    Each step is keyed exactly as a run keys it (its inputs are digested) when every upstream step is done;
+    otherwise it waits on its upstream (``will-execute (upstream)``, no key). A keyed step whose result dir
+    is done is ``skipped``. Any other step is checked as a run checks it before reset (`_ready`) and for its
+    program (`_Execution.program_ok`): a refusal makes it ``blocked``, otherwise it is ``will-execute``. No
+    claim is taken, no result dir or run record is touched, and nothing runs in a sandbox but the
+    ``sandbox_status`` probe.
+
+    Args:
+        manifests: The manifests.
+        config: The run configuration.
+
+    Returns:
+        One plan per step, in DAG order.
+    """
+    analysis = {s.name: m.name for m in manifests for s in m.steps}
+    specs = {s.name: s for m in manifests for s in m.steps}
+    ordered = toposort(list(specs.values()))
+    plans: dict[str, Plan] = {}
+    done: dict[str, StepOutcome] = {}
+    with _quiet_log():
+        for step in ordered:
+            plans[step.name] = _plan(step, analysis[step.name], config, plans, done)
+    return [plans[s.name] for s in ordered]
+
+
+def _plan(
+    step: StepSpec,
+    analysis: str,
+    config: RunConfig,
+    plans: Mapping[str, Plan],
+    done: dict[str, StepOutcome],
+) -> Plan:
+    env_state, src_state, codes = "ok", "ok", []
+    try:
+        _venv_ready(step, analysis, config)
+    except RunError as error:
+        env_state, codes = _ENV_STATE.get(error.code, "missing"), [error.code]
+    try:
+        source.prefetched_checkout(step, cache=config.cache)
+    except source.ReproduceSourceError as error:
+        src_state = "missing"
+        codes.append("E_SRC_MISSING" if error.code == source.WORKTREE_MISSING else "E_SRC_MISMATCH")
+    blocked_needs = [n for n in step.needs if plans[n].status == "blocked"]
+    if blocked_needs:
+        upstream = sorted({c for n in blocked_needs for c in plans[n].codes}) or ["E_UPSTREAM_NOT_DONE"]
+        return Plan(step.name, None, "blocked", env_state, src_state, tuple(sorted({*codes, *upstream})))
+    if any(n not in done for n in step.needs):
+        status = "blocked" if codes else "will-execute (upstream)"
+        return Plan(step.name, None, status, env_state, src_state, tuple(sorted(codes)))
+    if src_state != "ok":
+        return Plan(step.name, None, "blocked", env_state, src_state, tuple(sorted(codes)))
+    upstream_outcomes = {n: done[n] for n in step.needs}
+    try:
+        keyed = _key(step, analysis, config, upstream_outcomes)
+    except (RunError, digest.DigestError, cache.CacheError) as error:
+        return Plan(step.name, None, "blocked", env_state, src_state, tuple(sorted({*codes, error.code})))
+    if cache.is_done(keyed.result):
+        done[step.name] = StepOutcome(step.name, keyed.key, "skipped", 0, (), keyed.result)
+        return Plan(step.name, keyed.key, "skipped", env_state, src_state, ())
+    execution = _Execution(step, analysis, config, upstream_outcomes, {}, keyed)
+    try:
+        execution.refusals(log=False)
+        if execution.program_ok() is False:
+            codes.append("E_STEP_INTERPRETER")
+    except RunError as error:
+        codes.append(error.code)
+    status = "blocked" if codes else "will-execute"
+    return Plan(step.name, keyed.key, status, env_state, src_state, tuple(sorted(set(codes))))
 
 
 def run_steps(
