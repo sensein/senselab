@@ -458,6 +458,21 @@ def confined_r_lib(template: str, cache: Path) -> Path:
 KERNELS = Path("share") / "jupyter" / "kernels"
 
 
+def _install_staged_kernel(staged: Path, target: Path) -> None:
+    """Copy a staged kernel spec dir (regular files only) into the venv, replacing the old one."""
+    if not staged.is_dir() or staged.is_symlink():
+        raise ReproduceLockError("IRkernel installspec wrote no kernel spec")
+    files = sorted(p for p in staged.rglob("*"))
+    if any(p.is_symlink() or not (p.is_file() or p.is_dir()) for p in files):
+        raise ReproduceLockError("the staged kernel spec holds a link or a special file")
+    if target.is_symlink() or target.is_file():
+        target.unlink()
+    elif target.exists():
+        shutil.rmtree(target)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(staged, target)
+
+
 def kernels_sha256(venv: Path) -> str:
     """A sha256 over the venv's ``share/jupyter/kernels`` tree: each entry's relative path and content (or link)."""
     root = venv / KERNELS
@@ -702,6 +717,8 @@ def prefetch_env(
     if profile is not None:
         base = _check_venv(base, env, profile, None)
         derived = {name: _check_venv(v, env, profile, getattr(env, name)) for name, v in derived.items()}
+    if "notebook_tools" in derived:
+        record_kernels(derived["notebook_tools"].path)
     lock_sha = None
     if lock_path is not None and lock_path.is_file():
         lock_sha = hashlib.sha256(lock_path.read_bytes()).hexdigest()
@@ -1078,11 +1095,13 @@ def r_fetch_script(build_modules: Sequence[str] = (), modules_init: Path | None 
 
 R_INSTALL_SH = (
     'if [ -n "$5" ]; then export PATH="$5/bin:$PATH"; fi\n'
-    'Rscript --vanilla "$2" "$1" "$3" "$4" "$5"\n'
+    'Rscript --vanilla "$2" "$1" "$3" "$4" "$7"\n'
     'exec Rscript --vanilla "$6" "$1" "$3"\n'
 )
 """The ``sh`` script run in the sandbox for the offline install: ``$1`` r_lib, ``$2`` the `r_script`, ``$3`` out
-dir, ``$4`` the local repository URL, ``$5`` the kernel prefix (may be empty), ``$6`` the `r_session_script`."""
+dir, ``$4`` the local repository URL, ``$5`` the notebook venv whose ``bin`` leads ``PATH`` (may be empty), ``$6``
+the `r_session_script`, ``$7`` the kernel prefix (a staging dir under the work dir; may be empty). Nothing of the
+venv is writable in the sandbox: the driver copies the staged ``kernels/ir`` into it afterwards."""
 _MODULE_ENV_SKIP = frozenset({"HOME", "TMPDIR", "PWD", "OLDPWD", "SHLVL", "_", "R_LIBS", "R_LIBS_USER", "R_LIBS_SITE"})
 
 
@@ -1254,21 +1273,21 @@ def prefetch_r(
             fetch_bash = r_fetch_script(build_modules, profile.modules_init)
             fetch = _in_bash(fetch_bash, module, str(fetch_script), repo, str(contrib))
             _checked(run(fetch, run_env, work), "R package download")
-            prefix = str(venv) if kind == "ir_notebook" and venv is not None else ""
+            notebook_venv = str(venv) if kind == "ir_notebook" and venv is not None else ""
+            staging = work / "kernel-prefix" if notebook_venv else None
+            prefix = "" if staging is None else str(staging)
             writable = [r_lib, work]
-            if prefix:
-                kernels = Path(prefix) / "share" / "jupyter" / "kernels"
-                kernels.mkdir(parents=True, exist_ok=True)
-                writable.append(kernels)
             install_env = {
                 k: v for k, v in pairs.items() if k not in _MODULE_ENV_SKIP and not k.startswith("BASH_FUNC")
             }
             install_env |= run_env | {"PATH": pairs.get("PATH", SYSTEM_PATH)}
             install_env |= {"R_LIBS": str(r_lib), "R_LIBS_USER": str(r_lib), "R_LIBS_SITE": ""}
             install_argv = [sandbox.SH, "-c", R_INSTALL_SH, "sh", str(r_lib), str(script), str(out)]
-            install_argv += [repo_dir.as_uri(), prefix, str(session_script)]
+            install_argv += [repo_dir.as_uri(), notebook_venv, str(session_script), prefix]
             argv = sandbox.sandbox_argv(install_argv, [], writable)
             _checked(run(argv, install_env, work), "Rscript install (sandboxed, offline)")
+            if staging is not None and venv is not None:
+                _install_staged_kernel(staging / KERNELS / "ir", venv / KERNELS / "ir")
             recorded = read_r_session(out)
             installed, lib_paths = recorded["installed"], recorded["lib_paths"]
             reported_version = recorded["r_version"]

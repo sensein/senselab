@@ -205,6 +205,8 @@ class World:
                 "checks": {"digest": env.checks_digest(step.env), "pip_check_ok": checked, "smoke_ok": checked},
             }
             (path / env.MARKER).write_text(json.dumps(marker))
+            if overlay is not None:
+                env.record_kernels(path)
 
     def run(self, manifest: Manifest, **change: Any) -> dict[str, StepOutcome]:  # noqa: ANN401
         """Run the manifest and return the outcomes by step name."""
