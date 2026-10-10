@@ -336,7 +336,9 @@ def measure_background_speech(
     own = [(float(a) - p.event_pad_s, float(b) + p.event_pad_s) for a, b in events]
     floor = residual_floor_db(residual, p)
     found = []
-    for window in residual_windows if floor is not None else ():
+    for window in residual_windows:
+        if floor is None:
+            break
         a, b = float(window.get("start", 0.0)), float(window.get("end", 0.0))
         score, rise = _speech(window, p.speech_labels), _level_db(residual, a, b) - floor
         if score < p.speech_min or rise < p.residual_rise_db:
