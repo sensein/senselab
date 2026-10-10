@@ -63,7 +63,14 @@ def _run(root: Path, task: str, duration: float, speech: list[tuple[float, float
         ends=np.array([e for _, e, _, _ in speech]),
         speakers=np.array([k for _, _, k, _ in speech]),
     )
+    windows = [{"start": s, "end": e, "label_scores": [{"Speech": 0.9}]} for s, e, _, _ in speech]
+    (derivatives / "yamnet_scores.json").write_text(json.dumps(windows))
     store = ProvStore(run_id=run_root.name)
+    store.entity(
+        prov_type="measurement",
+        extent=None,
+        attributes={"name": "yamnet_scores", "signal": "plain", "path": "derivatives/yamnet_scores.json"},
+    )
     store.entity(prov_type="stream", extent=(0.0, duration), attributes={"name": "recording", "path": f"/b/{stem}.wav"})
     store.entity(prov_type="stream", extent=None, attributes={"name": "plain", "path": "streams/plain.wav"})
     store.entity(

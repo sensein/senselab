@@ -64,6 +64,7 @@ RECORDING_STREAM = "recording"
 PLAIN_STREAM = "plain"
 SOURCE_DIARIZATION = "diarization"
 SOURCE_LEXICAL = "lexical"
+SOURCE_WINDOW = "window"
 QUANTILES_KIND = "cohort_quantiles"
 QUANTILES_FILE = "cohort_quantiles.json"
 FAMILY_LEVEL = "family"
@@ -143,6 +144,8 @@ class RecordingFacts:
         task_extent: The hull of the standing task extents, or None where no branch wrote one.
         diarization: ``(start, end, speaker)`` per diarized segment on the configured stream.
         lexical: The lexical consensus words' extents, in index order.
+        speech: The speech-classified regions (:func:`speech_regions`), merged.
+        task_events: The task events the branches read (breaths, coughs, phonation holds, syllables).
     """
 
     stem: str
@@ -153,6 +156,8 @@ class RecordingFacts:
     task_extent: tuple[float, float] | None
     diarization: tuple[tuple[float, float, str], ...] = ()
     lexical: tuple[tuple[float, float], ...] = ()
+    speech: tuple[tuple[float, float], ...] = ()
+    task_events: tuple[tuple[float, float], ...] = ()
 
     @property
     def extent_fraction(self) -> float | None:
@@ -207,6 +212,46 @@ def diarization_measurement(stream: str) -> str:
     return f"{stream}_diarization"
 
 
+def _yamnet_windows(store: ProvStore, run_dir: Path, name: str) -> list[dict[str, Any]]:
+    measurement = find_measurement(store, name)
+    if measurement is None or not measurement.attributes.get("path"):
+        return []
+    path = run_dir / str(measurement.attributes["path"])
+    if not path.is_file():
+        return []
+    return list(json.loads(path.read_text()))
+
+
+def speech_regions(
+    windows: Sequence[Mapping[str, Any]], labels: Sequence[str], score_min: float
+) -> list[tuple[float, float]]:
+    """The classifier windows whose highest speech-label score reaches ``score_min``, merged.
+
+    Args:
+        windows: Classifier windows, each with ``start``, ``end`` and ``label_scores``.
+        labels: The labels that are speech.
+        score_min: The score at or above which a window is speech.
+
+    Returns:
+        The merged regions, earliest first.
+    """
+    out: list[tuple[float, float]] = []
+    for window in windows:
+        scores: dict[str, float] = {}
+        raw = window.get("label_scores") or {}
+        for pair in raw if isinstance(raw, list) else [raw]:
+            scores.update({str(k): float(v) for k, v in dict(pair).items()})
+        if max((scores.get(label, 0.0) for label in labels), default=0.0) >= score_min:
+            out.append((float(window["start"]), float(window["end"])))
+    return merge(out)
+
+
+def _task_events(store: ProvStore) -> list[tuple[float, float]]:
+    from senselab.audio.workflows.triage.nodes.quality import task_events_of  # noqa: PLC0415
+
+    return list(task_events_of(store)[1])
+
+
 def facts_of(
     store: ProvStore, run_dir: Path | None, *, diarization_stream: str | None = None, stem: str | None = None
 ) -> RecordingFacts:
@@ -236,6 +281,15 @@ def facts_of(
                 )
             )
     words = tuple((float(w.extent[0]), float(w.extent[1])) for w in lexical_words(store) if w.extent is not None)
+    speech: list[tuple[float, float]] = []
+    if run_dir is not None:
+        classes = cohort_parameters()["speech"]
+        for name in classes["measurements"]:
+            speech.extend(
+                speech_regions(
+                    _yamnet_windows(store, run_dir, str(name)), classes["labels"], float(classes["score_min"])
+                )
+            )
     return RecordingFacts(
         stem=stem,
         session=session_key(stem),
@@ -245,6 +299,8 @@ def facts_of(
         task_extent=hull,
         diarization=segments,
         lexical=words,
+        speech=tuple(merge(speech)),
+        task_events=tuple(merge(_task_events(store))),
     )
 
 
@@ -291,27 +347,101 @@ def exclusive_pieces(segments: Sequence[tuple[float, float, str]]) -> list[tuple
 def candidate_runs(facts: RecordingFacts, *, min_s: float, lexical_gap_s: float) -> list[Run]:
     """Every run of at least ``min_s`` the recording's speech offers for comparison.
 
+    A diarized piece is compared only where it carries speech: its intersection with the lexical words
+    and the speech-classified regions, less the task events.
+
     Args:
         facts: The recording's facts.
         min_s: The shortest run embedded.
         lexical_gap_s: Largest gap two lexical words may straddle and stay one run.
 
     Returns:
-        The exclusive diarized pieces, then the lexical runs, each kept where it reaches ``min_s``.
+        The diarized speech pieces, then the lexical runs, each kept where it reaches ``min_s``.
     """
+    speech = _subtract(merge([*facts.speech, *facts.lexical]), facts.task_events)
     runs = [
         Run(start, end, SOURCE_DIARIZATION, speaker)
-        for start, end, speaker in exclusive_pieces(facts.diarization)
+        for piece_start, piece_end, speaker in exclusive_pieces(facts.diarization)
+        for start, end in _intersect(speech, (piece_start, piece_end))
         if end - start >= min_s
     ]
-    merged: list[tuple[float, float]] = []
-    for start, end in facts.lexical:
-        if merged and start - merged[-1][1] <= lexical_gap_s:
-            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
-        else:
-            merged.append((start, end))
-    runs.extend(Run(start, end, SOURCE_LEXICAL) for start, end in merged if end - start >= min_s)
+    runs.extend(
+        Run(start, end, SOURCE_LEXICAL)
+        for start, end in lexical_runs_of(facts.lexical, lexical_gap_s)
+        if end - start >= min_s
+    )
     return runs
+
+
+def window_regions(facts: RecordingFacts, *, min_s: float, lexical_gap_s: float) -> list[tuple[float, float]]:
+    """The speech-classified time no diarized segment, lexical run or task event covers.
+
+    Args:
+        facts: The recording's facts.
+        min_s: The shortest region kept.
+        lexical_gap_s: Largest gap two lexical words may straddle and stay one run.
+
+    Returns:
+        The regions the sliding windows read, each at least ``min_s``.
+    """
+    covered = [
+        *((s, e) for s, e, _ in facts.diarization),
+        *lexical_runs_of(facts.lexical, lexical_gap_s),
+        *facts.task_events,
+    ]
+    return [(s, e) for s, e in _subtract(list(facts.speech), covered) if e - s >= min_s]
+
+
+def window_runs(
+    regions: Sequence[tuple[float, float]],
+    cosine_at: Callable[[tuple[float, float]], float | None],
+    *,
+    window_s: float,
+    hop_s: float,
+    cut: float,
+) -> list[dict[str, Any]]:
+    """Sliding windows over each region, grouped into runs of contiguous windows on one side of the cut.
+
+    Args:
+        regions: The regions to read.
+        cosine_at: The cosine of one window against the enrollment, or None where it cannot be embedded.
+        window_s: The window length.
+        hop_s: The hop.
+        cut: The match cut.
+
+    Returns:
+        One run record per group, its span the union of its windows and its cosine their mean.
+    """
+    out: list[dict[str, Any]] = []
+    for start, end in regions:
+        group: list[tuple[float, float, float]] = []
+        t = start
+        while t + window_s <= end + 1e-9:
+            cosine = cosine_at((t, t + window_s))
+            if cosine is not None:
+                if group and (cosine >= cut) != (group[-1][2] >= cut):
+                    out.append(_window_group(group, cut))
+                    group = []
+                group.append((t, t + window_s, cosine))
+            t += hop_s
+        if group:
+            out.append(_window_group(group, cut))
+    return out
+
+
+def _window_group(group: Sequence[tuple[float, float, float]], cut: float) -> dict[str, Any]:
+    cosine = float(np.mean([c for _, _, c in group]))
+    start, end = group[0][0], group[-1][1]
+    return {
+        "start": round(start, 3),
+        "end": round(end, 3),
+        "duration_s": round(end - start, 3),
+        "source": SOURCE_WINDOW,
+        "speaker": None,
+        "cosine": round(cosine, 4),
+        "windows_n": len(group),
+        "match": group[0][2] >= cut,
+    }
 
 
 @dataclass(frozen=True)
@@ -642,8 +772,10 @@ def match_runs(
         non-matching spans.
     """
     runs = candidate_runs(facts, min_s=min_s, lexical_gap_s=lexical_gap_s)
-    loaded = loader() if runs else None
-    if runs and loaded is None:
+    windows = cohort_parameters()["windows"]
+    regions = window_regions(facts, min_s=float(windows["window_s"]), lexical_gap_s=lexical_gap_s)
+    loaded = loader() if runs or regions else None
+    if (runs or regions) and loaded is None:
         return {"status": UNAVAILABLE, "reason": PLAIN_UNREADABLE, "enrollment": enrollment.record()}
     records: list[dict[str, Any]] = []
     if loaded is not None and enrollment.vector is not None:
@@ -664,6 +796,14 @@ def match_runs(
                     "match": cosine >= cut,
                 }
             )
+
+        def cosine_at(span: tuple[float, float]) -> float | None:
+            vector = embed(cut_samples(samples, rate, span), rate)
+            return None if vector is None or enrollment.vector is None else float(vector @ enrollment.vector)
+
+        records.extend(
+            window_runs(regions, cosine_at, window_s=float(windows["window_s"]), hop_s=float(windows["hop_s"]), cut=cut)
+        )
     nonmatch = [r for r in records if not r["match"]]
     spans = merge([(r["start"], r["end"]) for r in nonmatch])
     return {
@@ -676,6 +816,7 @@ def match_runs(
         "runs": records,
         "runs_n": len(records),
         "candidate_runs_n": len(runs),
+        "window_regions_s": round(_length(regions), 3),
         "nonmatch_n": len(nonmatch),
         "nonmatch_s": round(_length(spans), 3),
         "nonmatch_spans": [[round(s, 3), round(e, 3)] for s, e in spans],

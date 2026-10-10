@@ -32,6 +32,7 @@ from senselab.audio.workflows.triage.cohort_stage import (
     exclusive_pieces,
     match_runs,
     run_checks,
+    window_regions,
     write_cohort_reading,
     write_cohort_unavailable,
 )
@@ -67,7 +68,18 @@ def _loader(levels: list[tuple[float, float, float]], duration: float) -> AudioL
     return lambda: (samples, RATE)
 
 
-def _facts(stem: str, family: str, *, diarization=(), lexical=(), duration=20.0, extent=None) -> RecordingFacts:  # noqa: ANN001
+def _facts(  # noqa: ANN202
+    stem: str,
+    family: str,
+    *,
+    diarization=(),  # noqa: ANN001
+    lexical=(),  # noqa: ANN001
+    duration=20.0,  # noqa: ANN001
+    extent=None,  # noqa: ANN001
+    speech=None,  # noqa: ANN001
+    events=(),  # noqa: ANN001
+) -> RecordingFacts:
+    """A recording's facts; speech-classified wherever diarized unless ``speech`` says otherwise."""
     return RecordingFacts(
         stem=stem,
         session="sub-a_ses-1",
@@ -77,6 +89,8 @@ def _facts(stem: str, family: str, *, diarization=(), lexical=(), duration=20.0,
         task_extent=extent,
         diarization=tuple(diarization),
         lexical=tuple(lexical),
+        speech=tuple((a, b) for a, b, _ in diarization) if speech is None else tuple(speech),
+        task_events=tuple(events),
     )
 
 
@@ -287,3 +301,45 @@ def test_the_fold_reviews_on_a_cohort_ground_and_passes_on_an_unavailable_readin
     quiet = fold_file_verdict([], cohort=held.attributes, **common)
     assert KEY_OTHER_SPEAKER_IN_SESSION not in quiet.ground_keys
     assert quiet.triage == fold_file_verdict([], **common).triage
+
+
+def test_a_diarized_run_without_speech_is_not_compared() -> None:
+    """Diarized phonation or breathing, with no lexical word and no speech-classified frame, is not compared."""
+    speech, _, _ = _session()
+    vowel = _facts(
+        "sub-a_ses-1_task-prolonged-vowel", "prolonged-vowel", diarization=[(1.0, 6.0, "A")], speech=[], lexical=[]
+    )
+    block = match_runs(
+        vowel, _loader([(1.0, 6.0, TALKER)], 20.0), _enroll(speech), _embed, cut=CUT, min_s=1.0, lexical_gap_s=0.5
+    )
+    assert block["runs_n"] == 0 and block["nonmatch_n"] == 0
+
+
+def test_task_events_are_cut_out_of_a_diarized_speech_run() -> None:
+    """A speech-classified diarized run loses the task events inside it; what is left under 1.0 s is dropped."""
+    facts = _facts("s", "prolonged-vowel", diarization=[(1.0, 6.0, "A")], events=[(1.5, 5.5)])
+    assert candidate_runs(facts, min_s=1.0, lexical_gap_s=0.5) == []
+
+
+def test_sliding_windows_catch_speech_no_diarized_segment_or_word_covers() -> None:
+    """A talker before the diarizer's first segment is read by the windows and comes out as one non-matching run."""
+    speech, _, _ = _session()
+    facts = _facts(
+        "sub-a_ses-1_task-random-item-generation",
+        "random-item-generation",
+        diarization=[(3.0, 12.0, "A")],
+        lexical=[(3.2, 11.5)],
+        speech=[(0.0, 12.0)],
+    )
+    audio = _loader([(0.0, 2.4, TALKER), (2.4, 12.0, PARTICIPANT)], 20.0)
+    assert window_regions(facts, min_s=1.0, lexical_gap_s=0.5) == [(0.0, 3.0)]
+    block = match_runs(facts, audio, _enroll(speech), _embed, cut=CUT, min_s=1.0, lexical_gap_s=0.5)
+    windows = [r for r in block["runs"] if r["source"] == "window"]
+    assert [(r["start"], r["end"], r["match"]) for r in windows] == [(0.0, 2.5, False), (2.0, 3.0, True)]
+    assert block["nonmatch_spans"] == [[0.0, 2.5]]
+
+
+def test_sliding_windows_skip_task_events() -> None:
+    """Speech-classified time inside a task event is the participant's task sound, not a window to read."""
+    facts = _facts("s", "prolonged-vowel", speech=[(0.0, 8.0)], events=[(0.5, 7.5)])
+    assert window_regions(facts, min_s=1.0, lexical_gap_s=0.5) == []
