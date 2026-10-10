@@ -237,12 +237,19 @@ def task_text_ids(words: Sequence[Entity], family: str | None, task_text: Sequen
     }
 
 
+def _timing(word: Entity) -> tuple[float, float] | None:
+    """A word's consensus timing (its derived extent), or its hull where it has none; None where neither has length."""
+    span = (float(word.extent[0]), float(word.extent[1])) if word.extent is not None else word_hull(word)
+    return span if span[1] > span[0] else None
+
+
 def utterances(words: Sequence[Entity], *, gap_s: float) -> list[list[Entity]]:
     """The words split into utterances at pauses.
 
     Args:
         words: The lexical words, in stream order.
-        gap_s: A pause at least this long between one timed word's hull and the next one's starts an utterance.
+        gap_s: A pause at least this long between one word's consensus timing and the next one's starts an
+            utterance.
 
     Returns:
         The utterances, in stream order. A word with no usable timing stays in the utterance it falls in.
@@ -250,13 +257,14 @@ def utterances(words: Sequence[Entity], *, gap_s: float) -> list[list[Entity]]:
     groups: list[list[Entity]] = []
     last_end: float | None = None
     for word in words:
-        if not timed(word):
+        span = _timing(word)
+        if span is None:
             if groups:
                 groups[-1].append(word)
             else:
                 groups.append([word])
             continue
-        start, end = word_hull(word)
+        start, end = span
         if groups and (last_end is None or start - last_end < gap_s):
             groups[-1].append(word)
             last_end = end if last_end is None else max(last_end, end)
