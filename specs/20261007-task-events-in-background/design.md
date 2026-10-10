@@ -1792,3 +1792,109 @@ stems need `extend_llm_review` before the re-fold.
 - A CrisperWhisper or Qwen3-ASR token past the degenerate bounds: 2,004 recordings (1,981 CrisperWhisper,
   30 Qwen3-ASR); 1,895 of them currently pass.
 - One hypothesis: the 2 overrun recordings.
+
+## Phrases instead of items (owner, 2026-10-10)
+
+For an item-set family (`task_content.yaml` `open_vocabulary_families`: animal fluency, random item
+generation v1 and v2) the review question is no longer how much off-task speech there is but whether the
+participant utters phrases instead of items. An item is a short unit, typically one to three words; a phrase
+is clausal speech. Occasional asides ("um", "let me think", "is that enough?") are normal and do not review.
+
+What it replaces: the fold reviewed on any reviewer `off_task_speech: some`, and the item-run measure
+(category share >= 0.5 or content-word share >= 0.6 over runs split at 3.0 s, `item_words_min` 3,
+`extensive_fraction` 0.5, all unfitted) read 39 of fac74f45's 56 words as outside the item runs. The owner
+cleared three lists this rule reviewed (2ba9a335, 9488c55d, fac74f45) and labelled 8ca6baff as content
+outside the task that should be held (`triage_review_7423bffbc3c9.json`).
+
+### The measure (`task_speech.py`, `data/task_speech.yaml` v4)
+
+- **Utterances.** The lexical consensus words (not bracketed, not degenerate, not `is_non_lexical`) are split
+  where the pause between one word's consensus timing (its derived extent) and the next is at least
+  `utterance_gap_s` = 0.3 s. No transcript-layer utterance threshold exists to reuse: the nearest setting,
+  `branch.pause_min_s` 0.25 s, separates a pause from coarticulation, not utterances; 0.3 s is the owner's
+  value. A word with no timing stays in the utterance it falls in. The recognisers' hull (the union of every
+  recogniser's placement) was tried first and bridged pauses: on r18c one fluency utterance spanned 19.7 s,
+  and 9488c55d read 11 utterances on the hull against 23 on the consensus timing.
+- **Item or phrase.** An utterance is a phrase when it holds at least `phrase_words_min` = 4 lexical words and
+  one of them is a closed-class word (`residue.is_function_word`: `FUNCTION_WORDS`, English and Spanish,
+  which carries the auxiliaries, copulas, modals and their contractions, so the verb test is the closed-class
+  list; a single character is not counted, so a spoken letter is an item). No family word list and no category
+  match decides it.
+- **`phrase_share`** is the phrase utterances over all utterances; `phrase_word_share` is the phrase
+  utterances' words over all lexical words. Both are on `task_speech_reading`, with each utterance's times,
+  word count and phrase flag (no text). A phrase's words, less any declared-category member, are the reading's
+  `word_ids`; every item utterance's word is task content. SPEECH's item-list `task_extent` is the item
+  utterances' hull (every utterance where all are phrases).
+- Removed outright: `item_runs`, `item_words_min`, `item_gap_s`, `member_share_min`, `content_share_min`,
+  `extensive_fraction`.
+
+### The reviewer and the second opinion (prompt 13, question set 5)
+
+`task_context` sets `item_set` for these families. The reviewer's point 8 and its two parts become
+`PHRASES_INSTEAD_OF_ITEMS: none | occasional | predominant` and `PHRASE_QUOTES`; other families keep
+`OFF_TASK_SPEECH`. The second opinion asks `phrases_instead_of_items` (the same three classes; its "yes" is
+`predominant`) in place of `off_task_speech`. Both keep the instructions and the family nature from
+`task_guidance.yaml`. Both versions are bumped, so the cached readings no longer match and need a re-run.
+
+### The fold, for item-set families
+
+- Review on `phrase_share` >= `phrase_share_review` (ground `phrases_instead_of_items`, or
+  `other_speaker_in_task` where the phrase runs overlap COHORT's non-matching spans), on the reviewer's
+  `predominant` (`reviewer_phrases_instead_of_items`) or on the second opinion's chosen `predominant`
+  (`second_opinion:phrases_instead_of_items`). All three map to reason `off_task_speech`
+  (`decision_reasons.yaml` v6). The evidence item is `phrase_share` (`decision_evidence.yaml` v6).
+- `occasional` from either is the annotation `phrases_occasional` and moves nothing.
+- The reviewer's `off_task_speech` is not read for these families, and it is not compared with the second
+  opinion.
+- Other-speaker evidence reviews as before, whatever the phrases: COHORT's `other_speaker_in_session`, the
+  reviewer's `other_speaker`, QUALITY's other voice.
+- Masks: a phrase's words (never an item utterance's, never a category member) are masked only where the
+  recording reaches review on phrases (the share bound, or the reviewer's `predominant` for its quotes), and
+  that release is withheld (`non_task_speech_extensive`). An occasional phrase masks nothing, because a
+  redacted release is itself reviewed (`reviewed_releases`).
+
+Non-item-set families keep the off-task rule unchanged.
+
+### The bound, fitted on four labels
+
+`phrase_share` over r18c's item-set recordings (CPU, read-only, the stored consensus, commit 17378b6b; the
+r18 manifest holds 668 of them, not about 2,600: 265 random-item-generation, 208 v2, 195 animal fluency; 7
+have no lexical word): median 0.0, p75 0.1, p90 0.2, p95 0.286, p99 0.5, maximum 1.0; 366 of 661 are exactly
+0. At or over 0.2: 70; 0.25: 49; 0.3: 30; 0.5: 10. By family, 0.25 is reached by 38 of 264 random item
+generation, 8 of 203 v2 and 3 of 194 animal fluency.
+
+| stem | owner | utterances | phrases | `phrase_share` | `phrase_word_share` | at 3 words |
+|---|---|---|---|---|---|---|
+| 2ba9a335 | cleared | 15 | 1 | 0.067 | 0.174 | 0.133 |
+| 9488c55d | cleared | 23 | 1 | 0.043 | 0.200 | 0.087 |
+| fac74f45 | cleared | 28 | 4 | 0.143 | 0.464 | 0.143 |
+| 8ca6baff | review | 21 | 2 | 0.095 | 0.178 | 0.381 |
+
+The four labels cannot all be met at `phrase_words_min` 4: 8ca6baff (0.095) reads below fac74f45 (0.143) on
+`phrase_share`, and below it on `phrase_word_share` too. Its outside-task speech is mostly three-word clauses,
+which the four-word rule reads as items. `phrase_share_review` = 0.25 is therefore fitted on the three cleared
+lists alone (all below it, the highest 0.143) and set where it would also separate all four labels if
+`phrase_words_min` were 3 (cleared at most 0.143, 8ca6baff 0.381; 82 of 661 recordings at or over 0.25). It is
+fitted on 4 labels. Whether a three-word clause is a phrase is the owner's to decide; until then 8ca6baff
+reaches review only through the reviewer's or the second opinion's `predominant` under prompt 13.
+
+### The six labelled stems, before and after (GPU copies in `tefix_20261010/gpu`, folded in memory)
+
+Before is `gpu/fold2.jsonl` (fce5a4c5, prompt 12 readings); after is 840c8f15 over the same copies and the
+same stored prompt-12 and question-set-4 readings, so no reader answered `phrases_instead_of_items`.
+
+| stem | family | before | after |
+|---|---|---|---|
+| 07929b7b | cinderella-story | pass, as_is | pass, as_is |
+| 168c5e68 | random-item-generation | review, as_is, `off_task_speech` | pass, as_is (`phrase_share` 0.167) |
+| 2ba9a335 | random-item-generation | review, redacted, `off_task_speech` | pass, as_is (0.067) |
+| 8ca6baff | random-item-generation-v2 | review, withheld, `off_task_speech` | pass, as_is (0.095) |
+| 9488c55d | animal-fluency | review, as_is, `off_task_speech` | pass, as_is (0.043) |
+| fac74f45 | random-item-generation | review, withheld, `other_speaker` | review, withheld, `other_speaker` (0.143) |
+
+The three cleared lists no longer review on off-task speech; fac74f45 still reviews on QUALITY's other voice
+(`interference_in_task:other_voice`) and is withheld on the second opinion's "not free"
+(`second_opinion_not_free`), neither of which this change touches. 168c5e68 carries a background voice the
+owner heard, but these stores hold no COHORT non-match and no reviewer `other_speaker`, so nothing reviews it;
+that is the other-speaker detector's gap, not this rule's. 8ca6baff passes until the prompt-13 readings exist
+(above).
