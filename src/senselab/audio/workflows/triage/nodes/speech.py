@@ -70,7 +70,7 @@ from senselab.audio.workflows.triage.nodes.branches import (
     group_by_breaks,
     hull,
     inter_word_gaps,
-    item_category,
+    item_category_of,
     lexical_runs,
     measured,
     merge,
@@ -1505,27 +1505,26 @@ def _speech_item_list(
         Whether any item was produced, the span, and the findings.
     """
     points = params
-    category = item_category(task_family, hint)
+    category, category_from = item_category_of(task_family, hint)
+    findings: list[Finding] = []
+    repetition_allowed: bool | None
     if expectation.repetition_from_category:
         if category is None:
-            placed = _item_list_extent(store, repetition_allowed=None, member_ids=frozenset())
-            return Result(
-                placed.components,
-                [unviable("repetition_rule", "the instructions name no category"), *placed.deviations],
-            )
-        repetition_allowed = category in REPETITION_ALLOWED_CATEGORIES
+            repetition_allowed = None
+            findings.append(unviable("repetition_rule", "no category is declared for this recording"))
+        else:
+            repetition_allowed = category in REPETITION_ALLOWED_CATEGORIES
     else:
         repetition_allowed = bool(expectation.repetition_allowed)
     members = category_members(category, [word_text(word) for word in lexical_words(store)])
 
     items = lexical_words(store)
     components: list[Proposal] = []
-    findings: list[Finding] = []
     first_seen: dict[str, float] = {}
     for word in items:
         key = params.p_normalise(word_text(word))
         start, end = word_extent(word)
-        if key in first_seen and not repetition_allowed:
+        if key in first_seen and repetition_allowed is False:
             findings.append(
                 deviation("repeated_item", start, end, word.id, first_at=first_seen[key], text=word_text(word))
             )
@@ -1542,6 +1541,7 @@ def _speech_item_list(
     findings.append(count("items", len(items), None, *(word.id for word in items)))
     findings.append(count("repetition_allowed", repetition_allowed, None))
     findings.append(count("item_category", category, None))
+    findings.append(count("item_category_from", category_from, None))
     member_ids = [word.id for index, word in enumerate(items) if index in members]
     findings.append(count(CATEGORY_ITEMS, len(member_ids) if category is not None else None, None, *member_ids))
     findings.append(measured(ITEMS_PRODUCED, None, None, len(items), *(word.id for word in items)))

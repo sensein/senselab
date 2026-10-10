@@ -664,14 +664,44 @@ class TestTheItemListAndTheCategoryItsRuleDependsOn:
         result = align_speech("random-item-generation", words, hint, branch_params(_config(tmp_path)))
         assert _of_kind(result, "count", "category_items")[0].evidence["found"] == 2
 
-    def test_an_unreadable_category_concludes_nothing(self, tmp_path: Path) -> None:
+    def test_an_unreadable_category_concludes_nothing_about_repetition(self, tmp_path: Path) -> None:
         """Two of ten categories allow repetition, so a family-scoped rule would invert those."""
         store = self._listed("random-item-generation", ["a", "a"])
         result = align_speech("random-item-generation", store, None, branch_params(_config(tmp_path)))
-        assert _gated(result, "random-item-generation", _config(tmp_path)) == UNDETERMINED
         assert _of_kind(result, "measure", "repetition_rule")
         assert _of_kind(result, "deviation", "repeated_item") == []
         assert _roles(result) == ["task_extent"]
+
+    def test_an_unreadable_category_still_counts_the_items(self, tmp_path: Path) -> None:
+        """``items_produced`` needs no category, so the ``items_min`` gate is computed rather than owed."""
+        store = self._listed("random-item-generation", ["seven", "eight", "nine"])
+        result = align_speech("random-item-generation", store, None, branch_params(_config(tmp_path)))
+        [produced] = _of_kind(result, "measure", "items_produced")
+        assert produced.evidence["value"] == 3
+        [source] = _of_kind(result, "count", "item_category_from")
+        assert source.evidence["found"] is None
+        assert _gated(result, "random-item-generation", _config(tmp_path)) is not UNDETERMINED
+
+    def test_a_category_the_hint_metadata_declares_is_read(self, tmp_path: Path) -> None:
+        """No ``Category:`` line: the questionnaire's category in the hint metadata decides, and its source is kept."""
+        store = self._listed("random-item-generation", ["a", "a"])
+        hint = AudioHints(
+            instructions="The selection will appear when you start recording.",
+            metadata={"item_category": "Animals", "item_category_from": "questionnaire:t.tsv:cat"},
+        )
+        result = align_speech("random-item-generation", store, hint, branch_params(_config(tmp_path)))
+        assert _of_kind(result, "count", "item_category")[0].evidence["found"] == "Animals"
+        assert _of_kind(result, "count", "item_category_from")[0].evidence["found"] == "questionnaire:t.tsv:cat"
+        assert len(_of_kind(result, "deviation", "repeated_item")) == 1
+        assert _of_kind(result, "measure", "repetition_rule") == []
+
+    def test_the_instructions_category_outranks_the_metadata(self, tmp_path: Path) -> None:
+        """The spoken ``Category:`` line is the recording's own declaration."""
+        store = self._listed("random-item-generation", ["a", "a"])
+        hint = AudioHints(instructions="Category: Letters.", metadata={"item_category": "Animals"})
+        result = align_speech("random-item-generation", store, hint, branch_params(_config(tmp_path)))
+        assert _of_kind(result, "count", "item_category")[0].evidence["found"] == "Letters"
+        assert _of_kind(result, "count", "item_category_from")[0].evidence["found"] == "instructions"
 
     def test_an_unreadable_category_still_places_the_task_extent(self, tmp_path: Path) -> None:
         """The repetition rule is unknown; where the items were said is not."""
