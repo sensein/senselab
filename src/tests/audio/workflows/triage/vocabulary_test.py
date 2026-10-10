@@ -1715,14 +1715,14 @@ class TestSecondOpinionDisagreementFlagsForReview:
     def test_a_confident_yes_against_the_reviewers_no_flags_and_names_it(self) -> None:
         """The story-recall pilot case: p=0.85 another voice, the reviewer heard one."""
         folded = self._fold(self._opinion(other_voice=0.85), self._reading(), self._ON)
-        assert "second_opinion_disagreement" in folded.ground_keys and folded.triage is not Triage.PASS
+        assert "second_opinion:other_voice" in folded.ground_keys and folded.triage is not Triage.PASS
         assert self._grounds(folded) == [f"{SECOND_OPINION_DISAGREES}: other_voice p=0.85 reviewer=no"]
         assert folded.record()["second_opinion"]["disagreements"] == ["other_voice p=0.85 reviewer=no"]
 
     def test_an_airway_task_is_never_flagged_on_the_second_opinion(self) -> None:
         """Clef is left out of airway decisions: the same disagreement on an AIRWAY-owned task flags nothing."""
         folded = self._fold(self._opinion(other_voice=0.85), self._reading(), self._ON, owners=("AIRWAY",))
-        assert "second_opinion_disagreement" not in folded.ground_keys
+        assert "second_opinion:other_voice" not in folded.ground_keys
         assert not self._grounds(folded)
 
     def test_a_confident_no_against_the_reviewers_yes_flags(self) -> None:
@@ -1946,7 +1946,7 @@ class TestEveryGroundHasAKeyAndNoTranscript:
             "reviewer_residue",
             "person_name_review",
             "instructions_spoken",
-            "second_opinion_disagreement",
+            "second_opinion:other_voice",
             "unplaced_finding_open",
             "gate:dominant_speaker_share_min",
             "conformance:SPEECH",
@@ -2602,3 +2602,28 @@ class TestAVoiceTaskIsDecidedOnItsPhonationAttempt:
         assert folded.triage is Triage.PASS
         assert "route_mismatch:VOICE" in folded.annotation_keys
         assert "route_mismatch:VOICE" not in folded.ground_keys
+
+
+class TestNotMeasuredIsIncomplete:
+    """Owner, 2026-10-10: the reason ``not_measured`` and ``run_status`` incomplete always agree."""
+
+    @staticmethod
+    def _folds() -> list[FileVerdict]:
+        return [
+            _every_ground_fold(),
+            _with_redact(Outcome.PASS, speech=True, speech_route=ROUTED),
+            _with_redact(Outcome.FAIL, speech=True, speech_route=ROUTED),
+            _with_redact(Outcome.FLAG, speech=True, speech_route=ROUTED),
+            _without_redact(RedactionEvidence(lexical_words_n=3), speech=RunState.COMPLETED),
+            _without_redact(RedactionEvidence(), speech=RunState.ERRORED),
+            _without_redact(RedactionEvidence(findings_n=1), speech=RunState.COMPLETED),
+            _without_redact(RedactionEvidence(lexical_words_n=0), speech=RunState.COMPLETED),
+        ]
+
+    def test_not_measured_appears_exactly_when_the_run_is_incomplete(self) -> None:
+        """Both directions, over folds that are complete and folds the pipeline still owes something."""
+        folds = self._folds()
+        assert any(fold.run_status is RunStatus.INCOMPLETE for fold in folds)
+        assert any(fold.run_status is RunStatus.COMPLETE and fold.triage is Triage.REVIEW for fold in folds)
+        for fold in folds:
+            assert ("not_measured" in fold.reason_keys) == (fold.run_status is RunStatus.INCOMPLETE), fold.reason_keys

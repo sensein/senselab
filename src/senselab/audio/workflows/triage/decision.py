@@ -57,6 +57,15 @@ def reviewed_releases() -> frozenset[str]:
     return frozenset(str(value) for value in reason_vocabulary().get("reviewed_releases") or ())
 
 
+def second_opinion_withholds() -> bool:
+    """Whether a confident second-opinion reading of identifiers in the shipped text withholds the release.
+
+    Returns:
+        ``second_opinion_not_free_withholds`` of ``data/decision_reasons.yaml``.
+    """
+    return bool(reason_vocabulary().get("second_opinion_not_free_withholds"))
+
+
 def reason_of(ground_key: str, *, release: bool = False) -> str | None:
     """The reason a ground key maps to.
 

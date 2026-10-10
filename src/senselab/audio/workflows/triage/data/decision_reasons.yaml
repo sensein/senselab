@@ -1,46 +1,39 @@
 # The decision table's reason vocabulary: every ground key the fold can write maps to one short reason.
 # `reason` is the first of a recording's reasons in `precedence`; `reasons` is all of them, in that order.
 # Owner, 2026-10-07: verdict pass/review/discard, release as_is/redacted/withheld, one reason per recording.
-# Derivation: specs/20261007-task-events-in-background/design.md ("Decision table").
-version: 4
-precedence:            # discard reasons first, then review, then the release axis
-- unmeasurable
+# Owner, 2026-10-10: consolidated to these codes; the release ground is its own column (release_reason).
+# Derivation: specs/20261007-task-events-in-background/design.md ("Decision table", "Reasons consolidated").
+version: 5
+precedence:            # discard reasons first, then incomplete, then the recording, then the content
+- unreadable
 - task_too_short
 - no_task_captured
 - task_not_found
 - not_measured
 - fault_in_task
 - interference_in_task
-- speech_in_task
 - other_speaker
+- off_task_speech
 - weak_events
-- streams_disagree
 - task_not_conforming
 - atypical_recording
 - identifying_content
-- second_opinion_disagrees
-- redaction_unvalidated
-- redaction_hold
 meaning:
-  unmeasurable: ADMIT could not read the recording, or it declares no task this graph holds
+  unreadable: ADMIT could not read the recording, or it declares no task this graph holds
   task_too_short: the recording is shorter than its task's minimum duration
   no_task_captured: nothing the task asks for stands above the background
-  task_not_found: there is activity, but not the declared task
-  not_measured: the pipeline owes the recording a measurement, so it could not be decided
+  task_not_found: the declared task is absent -- other activity, or a different task than declared
+  not_measured: the pipeline owes the recording a measurement (run_status incomplete)
   fault_in_task: a capture fault (shutoff, dropout, clip) falls inside the task
-  interference_in_task: another sound source overlaps the task
-  speech_in_task: the recording holds lexical speech outside the task's own content (a non-lexical task, or an item list's runs), or a non-lexical task's release is redacted or withheld
-  other_speaker: a second speaker is read in the recording
-  weak_events: the task's events stand too weakly over the background to decide
-  streams_disagree: the raw and enhanced streams disagree on the task's events
-  task_not_conforming: the task was performed, but not as instructed or not as the routing read it
+  interference_in_task: a non-speech sound source overlaps the task
+  other_speaker: someone other than the participant speaks -- a background voice, an examiner, an assistant
+  off_task_speech: the participant speaks outside the task's own content
+  weak_events: the task's events stand too weakly over the background to decide, or the streams disagree on them
+  task_not_conforming: the task was performed, but not as instructed
   atypical_recording: the recording falls outside its family's corpus distribution (COHORT)
-  identifying_content: words that may identify the participant need a reader
-  second_opinion_disagrees: the second-opinion model disagrees with the fold
-  redaction_unvalidated: the release is not the recording as recorded, and mask placement is not yet validated
-  redaction_hold: the redaction policy holds the recording back from release
+  identifying_content: content that may identify the participant needs a reader; every release but as_is
 keys:                  # exact verdict ground key -> reason
-  unmeasurable: unmeasurable
+  unmeasurable: unreadable
   too_short_for_task: task_too_short
   acoustically_empty: no_task_captured
   no_breath_captured: no_task_captured
@@ -49,6 +42,7 @@ keys:                  # exact verdict ground key -> reason
   no_syllable_train_captured: no_task_captured
   syllable_train_not_target: task_not_found
   declared_task_absent: task_not_found
+  task_mismatch: task_not_found
   preprocess_errored: not_measured
   routing_errored: not_measured
   config_bad_hint_map: not_measured
@@ -61,40 +55,48 @@ keys:                  # exact verdict ground key -> reason
   uncomputed_reading: not_measured
   owning_branch_input_absent: not_measured
   node_outcome_unreadable: not_measured
-  streams_disagree: streams_disagree
-  reviewer_second_speaker: other_speaker
-  gate:dominant_speaker_share_min: other_speaker
-  other_speaker_in_session: other_speaker
-  recording_duration_outlier: atypical_recording
+  streams_disagree: weak_events
   breath_review_low_confidence: weak_events
   cough_review_low_confidence: weak_events
   voice_review_low_confidence: weak_events
   ddk_review_weak_events: weak_events
-  ddk_review_identity: task_not_conforming
   discard_contested: weak_events
-  task_mismatch: task_not_conforming
-  instructions_spoken: task_not_conforming
+  ddk_review_identity: task_not_conforming
   speech_no_lexical_item: task_not_conforming
-  speech_outside_task: task_not_conforming
-  speech_in_task: speech_in_task
-  release_in_nonlexical_task: speech_in_task
-  release_reviewed: redaction_unvalidated
+  interference_in_task:other_voice: other_speaker
+  participant_voice_in_task: off_task_speech
+  reviewer_second_speaker: other_speaker
+  reviewer_other_speaker: other_speaker
+  gate:dominant_speaker_share_min: other_speaker
+  other_speaker_in_session: other_speaker
+  other_speaker_in_task: other_speaker
+  instructions_spoken_by_other: other_speaker
+  instructions_spoken: off_task_speech
+  speech_in_task: off_task_speech
+  reviewer_off_task_speech: off_task_speech
+  recording_duration_outlier: atypical_recording
+  release_in_nonlexical_task: identifying_content
+  release_reviewed: identifying_content
   person_name_review: identifying_content
   reviewer_residue: identifying_content
   reviewer_named_no_words: identifying_content
   unplaced_finding_open: identifying_content
   unplaced_finding_unread: identifying_content
-  second_opinion_disagreement: second_opinion_disagrees
+  second_opinion:other_voice: other_speaker
+  second_opinion:instructions_spoken: off_task_speech
+  second_opinion:instructions_spoken_by_other: other_speaker
+  second_opinion:policy_identifier_present: identifying_content
+  second_opinion:masked_text_free_of_identifiers: identifying_content
+  second_opinion:off_task_speech: off_task_speech
+annotations:           # ground keys and prefixes the fold writes only as annotations; they map to no reason
+- speech_outside_task
+- fault_outside_task
+- interference_outside_task
 reviewed_releases:     # owner, 2026-10-10: masks not yet validated; every release but as_is is reviewed (release_reviewed)
 - redacted
 - withheld
-release_keys:          # release ground key -> reason, for a release withheld or one the graph could not assess
-  reviewer_proposed_redaction: redaction_hold
-  unplaced_finding_unread: redaction_hold
-  mask_coverage_failed: redaction_hold
-  redact_unresolved: redaction_hold
-  non_task_speech_untimed: redaction_hold
-  non_task_speech_extensive: redaction_hold
+second_opinion_not_free_withholds: true   # owner, 2026-10-10: a confident second-opinion "not free" holds the release for a person
+release_keys:          # release ground key -> reason, for a release the graph could not assess (run_status incomplete)
   no_transcript: not_measured
   speech_unread: not_measured
   redaction_owed: not_measured
@@ -103,15 +105,14 @@ prefixes:              # `<prefix>:<name>` ground key -> reason, where no exact 
   gate: task_not_conforming
   conformance: task_not_conforming
   nothing_read: task_not_conforming
-  route_mismatch: task_not_conforming
-  hint_mismatch: task_not_conforming
+  route_mismatch: task_not_found
+  hint_mismatch: task_not_found
   deviation: task_not_conforming
-  conformance_unanswered: not_measured
+  conformance_unanswered: task_not_conforming
   unmeasured_operating_point: not_measured
   branch_silent: not_measured
-  store_assertion_contradicted: not_measured
-  node: not_measured
+  store_assertion_contradicted: task_not_conforming
+  node: task_not_conforming
   fault_in_task: fault_in_task
   interference_in_task: interference_in_task
-  fault_outside_task: fault_in_task              # an annotation; listed so every prefix names a reason
-  interference_outside_task: interference_in_task
+  second_opinion: identifying_content

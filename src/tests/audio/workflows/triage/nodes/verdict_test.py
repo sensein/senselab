@@ -712,7 +712,7 @@ class TestTheReleaseAxis:
         store = make_verdict_store(concluded=[*BASE, ("REDACT", Outcome.FAIL, None)], routed=ROUTED_PAIR)
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
         assert result.file_verdict.triage is Triage.REVIEW
-        assert result.file_verdict.reason_keys == ["redaction_unvalidated", "redaction_hold"]
+        assert result.file_verdict.reason_keys == ["identifying_content"]
         assert result.file_verdict.release is Release.WITHHELD
         assert any(reason.node == "REDACT" for reason in result.file_verdict.reasons)
 
