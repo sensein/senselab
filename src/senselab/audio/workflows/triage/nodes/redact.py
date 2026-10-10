@@ -2274,7 +2274,7 @@ def _heard_off_task(
         extensive = read and reading.get("phrases_instead_of_items") == PHRASES_PREDOMINANT
         for quote in (reading.get("phrase_quotes") or ()) if read else ():
             phrases |= {word.id for word in _place(str(quote), tokens)}
-        own = ()
+        own: Any = ()
         speech |= phrases if extensive else set()
     else:
         extensive = read and reading.get("off_task_speech") == "extensive"

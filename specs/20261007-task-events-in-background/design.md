@@ -2034,4 +2034,3 @@ evidence table; the bound it was compared against no longer exists. `task_speech
 
 Not yet measured: the prompt-14 readings over the owner's labelled stems (run on ORCD, "vLLM reviewer engine"
 in `specs/20261010-vllm-reviewer/design.md`).
-

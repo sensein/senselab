@@ -255,7 +255,8 @@ def review(state, request):
         return {
             "error": {
                 "type": "ContextLengthError",
-                "message": "prompt of %%d tokens plus max_new_tokens %%d exceeds max_model_len %%d" %% (len(ids), wanted, limit),
+                "message": "prompt of %%d tokens plus max_new_tokens %%d exceeds max_model_len %%d"
+                %% (len(ids), wanted, limit),
             },
             "recoverable": True,
         }
@@ -280,7 +281,10 @@ def review(state, request):
     if usage.get("prompt_tokens") is not None and int(usage["prompt_tokens"]) != len(ids):
         raise RuntimeError("the server read %%s prompt tokens, not %%d" %% (usage["prompt_tokens"], len(ids)))
     tokens = choice.get("token_ids")
-    completion = tokenizer.decode(tokens, skip_special_tokens=True) if tokens is not None else str(choice.get("text") or "")
+    if tokens is not None:
+        completion = tokenizer.decode(tokens, skip_special_tokens=True)
+    else:
+        completion = str(choice.get("text") or "")
     return {
         "completion": completion,
         "generate_s": round(time.monotonic() - began, 3),
@@ -413,9 +417,7 @@ def start_vllm_worker(worker: Any, timeout_s: int) -> None:  # noqa: ANN401 — 
     reply = worker._await(timeout_s)
     live = dict(reply.get("engine") or {})
     loaded: Optional[str] = reply.get("revision")
-    mismatch = [
-        key for key in ("name", "version", "server_args", "concurrency") if live.get(key) != expected.get(key)
-    ]
+    mismatch = [key for key in ("name", "version", "server_args", "concurrency") if live.get(key) != expected.get(key)]
     if loaded != worker.revision:
         mismatch.append("revision")
     if mismatch:
