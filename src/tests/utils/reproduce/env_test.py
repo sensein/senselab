@@ -825,7 +825,7 @@ class FakeR:
             self.sandboxed.append(argv)
             inner = argv[argv.index("-c") + 3 :]
             self.installs.append((inner, env))
-            r_lib, r_script, out_dir, repo, venv, session = inner[4:10]
+            r_lib, r_script, out_dir, repo, venv, session, prefix = inner[4:11]
             assert Path(r_script).is_file() and Path(session).is_file() and repo.startswith("file://")
             out = Path(out_dir)
             (out / "installed.tsv").write_text("".join(f"{k}\t{v}\n" for k, v in self.installed.items()))
@@ -835,8 +835,8 @@ class FakeR:
             (out / "lib_paths.txt").write_text("".join(f"{p}\n" for p in paths))
             (out / "session_info.txt").write_text("R version 4.5.2\nother attached packages: lme4\n")
             (out / "r_version.txt").write_text("R version 4.5.2 (2025-10-31)\n")
-            if venv:
-                kernel = Path(venv) / "share" / "jupyter" / "kernels" / "ir"
+            if prefix:
+                kernel = Path(prefix) / "share" / "jupyter" / "kernels" / "ir"
                 kernel.mkdir(parents=True)
                 (kernel / "kernel.json").write_text("{}")
             return subprocess.CompletedProcess(argv, 0, "", "")
@@ -914,10 +914,10 @@ def test_prefetch_r_ir_notebook_installs_kernel_into_venv(tmp_path: Path) -> Non
     assert installed["kernels_sha256"] == envmod.kernels_sha256(venv)
     ((install, _),) = runner.installs
     assert install[8] == str(venv) and 'PATH="$5/bin:$PATH"' in install[2]
+    assert install[10] and not install[10].startswith(str(venv))
     assert (venv / "share" / "jupyter" / "kernels" / "ir" / "kernel.json").is_file()
-    kernels = venv / "share" / "jupyter" / "kernels"
     raw = runner.sandboxed[0]
-    assert f"--bind {kernels} {kernels}" in raw[raw.index("-c") + 1]
+    assert f"--bind {venv}" not in raw[raw.index("-c") + 1]
     script = Path(install[5])
     assert not script.exists()  # the generated script lives in a removed temp dir
     with pytest.raises(ValueError, match="IRkernel"):
