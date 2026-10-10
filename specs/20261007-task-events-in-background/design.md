@@ -2061,3 +2061,59 @@ evidence table; the bound it was compared against no longer exists. `task_speech
 
 Not yet measured: the prompt-14 readings over the owner's labelled stems (run on ORCD, "vLLM reviewer engine"
 in `specs/20261010-vllm-reviewer/design.md`).
+
+## Session background from speech-task residuals (owner, 2026-10-10)
+
+Owner: "For background noise level, we should use the residual of the speech-only tasks. That should be a good
+estimate of the background, and the enhanced gives us foreground. That difference should be a pretty good
+measure of quality. This assumes a task was done and it's not just an empty recording, so the expectation is
+that enhanced contains some speech output." Then: report the plain level minus the residual level too, over
+the whole file, over speech frames and over non-speech frames.
+
+### The design this replaces (audit at ed0a01df)
+
+- **Streams.** PREPROCESS's `residual` block (`nodes/preprocess.py:2872`) runs FRCRN_SE_16K on `plain`,
+  lag-aligns it, writes it as `enhanced`, and writes `residual = plain - g * enhanced` with the least-squares
+  gain `g`. YAMNet, AST and HeAR then run over both streams (`enhanced_yamnet_scores`,
+  `residual_yamnet_scores`, ...).
+- **Own floor (PREPROCESS, `background_floor`).** `background_model.own_floor_of` (`background_model.py:626`)
+  calls `floor_of` (`:197`) with no session: per band (nine bands, 150–7500 Hz, 40 ms frames, 10 ms hop), the
+  10th percentile over live frames, then four re-reads of the 50th percentile over frames outside the active
+  regions (6 dB over the floor in 30% of bands, padded 0.1 s). It records the source (`quiet_frames`,
+  `lowest`, `residual` or `digital`), the residual's own floor (20th percentile per band over live residual
+  frames) and the active level (95th percentile broadband).
+- **SESSION (`session_floor`).** `nodes/background.py:write_session_floor` (`:142`) with
+  `session_attributes` (`:104`) and `background_model.session_floor_db` (`:656`): the per-band median of the
+  own floors of the BIDS session's members whose own floor was read over quiet frames, at least
+  `session.members_min` (3) of them, whatever their task. Beside it, `level_rel_db` (the recording's active
+  level less the session median) and `floor_rel_db`. A single-file run sees no siblings and records
+  `floor_source: recording` (`run.py:304`); the corpus pass is `scripts/extend_session_floor.py`.
+- **BACKGROUND (`background_model`, `nodes/background.py:164`).** `measure_background` reads the floor with
+  `floor_of(..., session_db=...)`: the session floor where the recording's own stands `session.gap_db` (25 dB,
+  median over bands) over it (`background_model.py:238`), else the residual's floor where the own stands
+  `floor.residual_gap_db` (25 dB) over that (`:240`), else the own floor (`:241`). Regions, impulses and hum
+  are read against that floor and the arrays go into `derivatives/background_view.npz`.
+- **Task events.** Every branch reads that sidecar through `task_events.generic_view_of` (`task_events.py:105`):
+  breath (`breath_pattern.py:1615`), cough (`cough_pattern.py:509`), VOICE's phonation evidence
+  (`voice_phonation.py:805`), DDK (`nodes/ddk.py:215`) and QUALITY's stream agreement (`nodes/quality.py:297`).
+  Two references per event: `event_snr_db` (`task_events.py:193`), the event's peak over the broadband floor
+  against `decision.snr_low_db` (10 dB); and `local_snr_db` (`:212`), the peak over the larger of the floor
+  and the 20th percentile of the non-event frames within ±2 s (`:240`), against `decision.snr_high_db` (16 dB).
+  The floor also sets the activity regions (`activity.margin_db`), the rhythm's band envelope, the inhale
+  extent (`inhale.margin_db`), the impulse test (`impulse_margin_db`) and DDK's nucleus series
+  (`ddk_task.py:136`, level over the broadband floor). Breath's own train and burst readings
+  (`breath_pattern.py:706`, `:823`) use their own percentile floors on the spectrogram and do not read
+  BACKGROUND's.
+- **QUALITY.** `nodes/quality.py:measure_join` re-reads the task events on the enhanced stream against the
+  enhanced stream's own floor (`streams.snr_low_db`, 10 dB), reads the other voice off the residual
+  (`background_speech.py`, its own 5th-percentile 50 ms frame floor), and copies `level_rel_db` from SESSION
+  for the capture check (`quality_join.yaml` `capture.level_rel_db_max`). It has no foreground-over-background
+  measure.
+
+**Bounds fitted on that floor.** `task_events.yaml` `decision.snr_low_db` (10) and `decision.snr_high_db` (16,
+already TO REFIT since v2), both fitted on the unit B grid against BACKGROUND's floor; `background_model.yaml`
+`session.gap_db` and `floor.residual_gap_db` (25, the cut between noise and task-filling recordings over the
+own floor); `quality_join.yaml` `streams.snr_low_db` (10, mirrors `snr_low_db`). Unfitted bounds read against
+the same floor: `activity.margin_db`, `inhale.margin_db`, `impulse_margin_db`, `ddk.nucleus_prominence_db`
+(prominence is relative, so a floor shift moves nuclei only through the unvoiced offset and the smoothing),
+`ddk.events_min`.
