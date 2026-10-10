@@ -337,7 +337,7 @@ _EVENTS: List[Dict[str, Any]] = []
 _LOST: set = set()
 
 
-def _event(kind: str, worker: VenvWorker, **fields: Any) -> None:
+def _event(kind: str, worker: VenvWorker, **fields: object) -> None:
     record = {
         "event": kind,
         "label": worker.label,

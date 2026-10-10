@@ -55,7 +55,7 @@ def worker(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Dict[str, Any]:
     )
     monkeypatch.setattr(cv, "stage_s3fd_weights", lambda: tmp_path / "sfd_face.pth")
 
-    def fake_serve(identity: tuple, **kwargs: Any) -> Dict[str, Any]:
+    def fake_serve(identity: tuple, **kwargs: Any) -> Dict[str, Any]:  # noqa: ANN401
         payload = {**kwargs["init"], **kwargs["request"]}
         captured["payload"] = payload
         captured["timeout"] = kwargs["request_timeout_s"]
@@ -392,7 +392,7 @@ def _counting(monkeypatch: pytest.MonkeyPatch) -> List[int]:
     calls: List[int] = []
     inner: Callable[..., Any] = cv.serve_in_venv
 
-    def counted(identity: tuple, **kwargs: Any) -> Dict[str, Any]:
+    def counted(identity: tuple, **kwargs: Any) -> Dict[str, Any]:  # noqa: ANN401
         calls.append(len(kwargs["request"]["in_paths"]))
         return inner(identity, **kwargs)
 

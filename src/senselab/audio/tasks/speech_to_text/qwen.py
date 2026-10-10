@@ -256,7 +256,15 @@ class QwenASR:
             also = [(aligner_name, "main")] if return_timestamps and aligner_revision is not None else None
             env = hf_subprocess_env(model_name, model.revision, also=also, base_env=_clean_subprocess_env())
             output = serve_in_venv(
-                (Path(venv_dir).name, model_name, revision, device_type.value, "default", aligner_name, aligner_revision),
+                (
+                    Path(venv_dir).name,
+                    model_name,
+                    revision,
+                    device_type.value,
+                    "default",
+                    aligner_name,
+                    aligner_revision,
+                ),
                 python=python,
                 script=_QWEN_WORKER_SCRIPT,
                 init={

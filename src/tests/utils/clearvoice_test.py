@@ -315,7 +315,7 @@ def _stub_worker(monkeypatch: pytest.MonkeyPatch, captured: dict, tmp_path: Path
         body = {"output_paths": [[] for _ in payload["video_paths"]], "device": "cpu"}
         return types.SimpleNamespace(returncode=0, stdout=json.dumps(body), stderr="")
 
-    def fake_serve(identity: tuple, **kwargs: Any) -> Dict[str, Any]:
+    def fake_serve(identity: tuple, **kwargs: Any) -> Dict[str, Any]:  # noqa: ANN401
         captured["identity"] = identity
         captured["init"] = kwargs["init"]
         captured["payload"] = {**kwargs["init"], **kwargs["request"]}
@@ -407,7 +407,7 @@ def test_a_timeout_names_the_ceiling_the_work_and_the_way_out(monkeypatch: pytes
     captured: dict = {}
     _stub_worker(monkeypatch, captured, tmp_path)
 
-    def timing_out(identity: tuple, **kwargs: Any) -> Dict[str, Any]:
+    def timing_out(identity: tuple, **kwargs: Any) -> Dict[str, Any]:  # noqa: ANN401
         raise VenvWorkerTimeout("timed out", float(kwargs["request_timeout_s"]))
 
     monkeypatch.setattr(cv, "serve_in_venv", timing_out)
@@ -428,7 +428,7 @@ def test_a_worker_failure_preserves_the_upstream_error(monkeypatch: pytest.Monke
     _stub_worker(monkeypatch, captured, tmp_path)
     blocked = "clearvoice reached SpeechModel.download_model for FRCRN_SE_16K"
 
-    def failing(identity: tuple, **kwargs: Any) -> Dict[str, Any]:
+    def failing(identity: tuple, **kwargs: Any) -> Dict[str, Any]:  # noqa: ANN401
         raise RuntimeError(blocked)
 
     monkeypatch.setattr(cv, "serve_in_venv", failing)

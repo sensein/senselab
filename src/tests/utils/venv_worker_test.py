@@ -56,7 +56,7 @@ def _clean() -> Iterator[None]:
     venv_worker_events(clear=True)
 
 
-def _call(tmp_path: Path, request: Dict[str, Any], tag: str = "a", **overrides: Any) -> Dict[str, Any]:
+def _call(tmp_path: Path, request: Dict[str, Any], tag: str = "a", **overrides: Any) -> Dict[str, Any]:  # noqa: ANN401
     init = {"load_log": str(tmp_path / f"loads-{tag}.txt"), "tag": tag, **overrides.pop("init", {})}
     return serve_in_venv(
         ("test-venv", f"model-{tag}", "0" * 40, "cpu", "float32"),
