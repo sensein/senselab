@@ -13,6 +13,7 @@ import pytest
 
 from senselab.utils import clearvoice as cv
 from senselab.utils.data_structures import DeviceType
+from senselab.utils.venv_worker import VenvWorkerTimeout
 
 SHA_CHARS = set("0123456789abcdef")
 
@@ -311,18 +312,23 @@ def _stub_worker(monkeypatch: pytest.MonkeyPatch, captured: dict, tmp_path: Path
         captured["payload"] = json.loads(str(kwargs["input"]))
         captured["timeout"] = kwargs["timeout"]
         payload = captured["payload"]
-        body: Dict[str, Any]
-        if payload["mode"] == "tse":
-            body = {"output_paths": [[] for _ in payload["video_paths"]], "device": "cpu"}
-        else:
-            body = {
-                "output_paths": [[f"{payload['out_dir']}/out_0_s0.wav"] for _ in payload["in_paths"]],
-                "input_norm_scalars": [1.0 for _ in payload["in_paths"]],
-                "device": "cpu",
-            }
+        body = {"output_paths": [[] for _ in payload["video_paths"]], "device": "cpu"}
         return types.SimpleNamespace(returncode=0, stdout=json.dumps(body), stderr="")
 
+    def fake_serve(identity: tuple, **kwargs: Any) -> Dict[str, Any]:
+        captured["identity"] = identity
+        captured["init"] = kwargs["init"]
+        captured["payload"] = {**kwargs["init"], **kwargs["request"]}
+        captured["timeout"] = kwargs["request_timeout_s"]
+        payload = captured["payload"]
+        return {
+            "output_paths": [[f"{payload['out_dir']}/out_0_s0.wav"] for _ in payload["in_paths"]],
+            "input_norm_scalars": [1.0 for _ in payload["in_paths"]],
+            "device": "cpu",
+        }
+
     monkeypatch.setattr(cv.subprocess, "run", fake_run)
+    monkeypatch.setattr(cv, "serve_in_venv", fake_serve)
 
 
 def test_the_payload_carries_the_resolved_commit_path_and_the_device(
@@ -348,13 +354,26 @@ def test_the_payload_carries_the_resolved_commit_path_and_the_device(
     assert scalars == [1.0] and len(paths) == 1
 
 
-def test_the_payload_carries_the_staged_io_policy_directory(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """The worker imports the range policy from a file the parent copies next to the payload."""
+def test_the_payload_carries_the_io_policy_module(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """The worker imports the range policy from a copy of the host's own module."""
     captured: dict = {}
     _stub_worker(monkeypatch, captured, tmp_path)
     cv.run_clearvoice_audio(cv.CLEARVOICE_MODELS["FRCRN_SE_16K"], ["/tmp/in.wav"], str(tmp_path), total_audio_s=1.0)
-    io_dir = Path(captured["payload"]["io_dir"])
-    assert (io_dir / "portable_audio_io.py").is_file() or io_dir.name.startswith("senselab-clearvoice")
+    io_module = Path(captured["init"]["io_module"])
+    assert io_module.name == "portable_audio_io.py" and io_module.is_file()
+
+
+def test_the_worker_identity_is_the_checkpoint_commit_and_device(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """One worker per checkpoint, commit and device; the inputs are per request."""
+    captured: dict = {}
+    _stub_worker(monkeypatch, captured, tmp_path)
+    cv.run_clearvoice_audio(
+        cv.CLEARVOICE_MODELS["FRCRN_SE_16K"], ["/tmp/in.wav"], str(tmp_path), total_audio_s=1.0, device=DeviceType.CPU
+    )
+    assert captured["identity"] == ("venv", "FRCRN_SE_16K", "c" * 40, "cpu", "float32")
+    assert "in_paths" not in captured["init"] and "out_dir" not in captured["init"]
 
 
 def test_no_device_is_sent_as_null_not_as_a_guess(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -388,10 +407,10 @@ def test_a_timeout_names_the_ceiling_the_work_and_the_way_out(monkeypatch: pytes
     captured: dict = {}
     _stub_worker(monkeypatch, captured, tmp_path)
 
-    def timing_out(cmd: list, **kwargs: object) -> types.SimpleNamespace:
-        raise subprocess.TimeoutExpired(cmd, float(kwargs["timeout"]))  # type: ignore[arg-type]
+    def timing_out(identity: tuple, **kwargs: Any) -> Dict[str, Any]:
+        raise VenvWorkerTimeout("timed out", float(kwargs["request_timeout_s"]))
 
-    monkeypatch.setattr(cv.subprocess, "run", timing_out)
+    monkeypatch.setattr(cv, "serve_in_venv", timing_out)
     with pytest.raises(RuntimeError) as exc:
         cv.run_clearvoice_audio(
             cv.CLEARVOICE_MODELS["FRCRN_SE_16K"], ["/tmp/in.wav"], str(tmp_path), total_audio_s=30.0, timeout_s=5.0
@@ -409,11 +428,10 @@ def test_a_worker_failure_preserves_the_upstream_error(monkeypatch: pytest.Monke
     _stub_worker(monkeypatch, captured, tmp_path)
     blocked = "clearvoice reached SpeechModel.download_model for FRCRN_SE_16K"
 
-    def failing(cmd: list, **kwargs: object) -> types.SimpleNamespace:
-        body = {"error": {"type": "RuntimeError", "message": blocked, "traceback": "..."}}
-        return types.SimpleNamespace(returncode=1, stdout=json.dumps(body), stderr="")
+    def failing(identity: tuple, **kwargs: Any) -> Dict[str, Any]:
+        raise RuntimeError(blocked)
 
-    monkeypatch.setattr(cv.subprocess, "run", failing)
+    monkeypatch.setattr(cv, "serve_in_venv", failing)
     with pytest.raises(RuntimeError, match="download_model"):
         cv.run_clearvoice_audio(cv.CLEARVOICE_MODELS["FRCRN_SE_16K"], ["/tmp/in.wav"], str(tmp_path), total_audio_s=1.0)
 
@@ -445,32 +463,32 @@ def test_the_tse_payload_carries_the_verified_detector_and_the_video_paths(
 
 def test_the_worker_blocks_the_unpinned_downloader() -> None:
     """Making the download unreachable is the pin; leaving it merely unused is not."""
-    assert "cvnet.SpeechModel.download_model = _blocked_download" in cv._WORKER_SCRIPT
+    assert "cvnet.SpeechModel.download_model = _blocked_download" in cv._AUDIO_WORKER_SCRIPT
 
 
 def test_the_worker_asserts_the_distribution_version_it_patches() -> None:
     """The device patch reconstructs __init__ field by field, so the version cannot drift silently."""
-    assert 'installed != args["expected_version"]' in cv._WORKER_SCRIPT
-    assert "clearvoice.__version__" not in cv._WORKER_SCRIPT, "that attribute reports 0.1.0 in 0.1.2"
+    assert 'installed != args["expected_version"]' in cv._AUDIO_WORKER_SCRIPT
+    assert "clearvoice.__version__" not in cv._AUDIO_WORKER_SCRIPT, "that attribute reports 0.1.0 in 0.1.2"
 
 
 def test_the_worker_writes_through_the_staged_policy_and_never_soundfile() -> None:
     """Every write must get the same subtype resolution and range policy as an in-process one."""
-    assert "from portable_audio_io import read_audio, write_audio" in cv._WORKER_SCRIPT
-    assert "sf.write" not in cv._WORKER_SCRIPT
-    assert "import soundfile" not in cv._WORKER_SCRIPT
+    assert "from portable_audio_io import read_audio, write_audio" in cv._AUDIO_WORKER_SCRIPT
+    assert "sf.write" not in cv._AUDIO_WORKER_SCRIPT
+    assert "import soundfile" not in cv._AUDIO_WORKER_SCRIPT
 
 
 def test_the_worker_refuses_a_cuda_request_the_venv_cannot_honour() -> None:
     """The host's torch and the venv's torch are separate builds; only the venv's answer counts."""
-    assert "torch.cuda.is_available()" in cv._WORKER_SCRIPT
-    assert 'requested.startswith("cuda")' in cv._WORKER_SCRIPT
+    assert "torch.cuda.is_available()" in cv._AUDIO_WORKER_SCRIPT
+    assert 'requested.startswith("cuda")' in cv._AUDIO_WORKER_SCRIPT
 
 
 def test_the_worker_never_names_a_bare_cuda_device() -> None:
     """An index is always chosen, so a CUDA_VISIBLE_DEVICES mask selects the allocated card."""
-    assert 'torch.device("cuda")' not in cv._WORKER_SCRIPT
-    assert '"cuda:%d" % torch.cuda.current_device()' in cv._WORKER_SCRIPT
+    assert 'torch.device("cuda")' not in cv._AUDIO_WORKER_SCRIPT
+    assert '"cuda:%d" % torch.cuda.current_device()' in cv._AUDIO_WORKER_SCRIPT
 
 
 def test_the_worker_imports_the_class_the_package_actually_exports() -> None:
@@ -479,8 +497,8 @@ def test_the_worker_imports_the_class_the_package_actually_exports() -> None:
     ClearerVoice-Studio is the project; only prose carries that spelling. A sweep that renamed the
     prose once reached this import too, and every enhancement and separation checkpoint died at it.
     """
-    assert "from clearvoice import ClearVoice" in cv._WORKER_SCRIPT
-    assert "ClearerVoice" not in cv._WORKER_SCRIPT, "ClearerVoice is the project's name, never an identifier"
+    assert "from clearvoice import ClearVoice" in cv._AUDIO_WORKER_SCRIPT
+    assert "ClearerVoice" not in cv._AUDIO_WORKER_SCRIPT, "ClearerVoice is the project's name, never an identifier"
 
 
 # ── The venv spec ─────────────────────────────────────────────────────
