@@ -205,6 +205,8 @@ class World:
                 "checks": {"digest": env.checks_digest(step.env), "pip_check_ok": checked, "smoke_ok": checked},
             }
             (path / env.MARKER).write_text(json.dumps(marker))
+            if overlay is not None:
+                env.record_kernels(path)
 
     def run(self, manifest: Manifest, **change: Any) -> dict[str, StepOutcome]:  # noqa: ANN401
         """Run the manifest and return the outcomes by step name."""
@@ -427,20 +429,20 @@ def test_unchecked_and_missing_venvs_and_no_userns_are_refused(world: World, mon
     """A venv whose checks did not pass, a missing venv and a host without user namespaces never run."""
     manifest = world.manifest(world.step("prep", "prep", "{root:data}/in/a.txt"))
     world.prefetch(manifest, checked=False)
-    monkeypatch.setattr(sandbox, "userns_available", lambda: True)
+    monkeypatch.setattr(sandbox, "sandbox_status", lambda: ("ok", ""))
     outcome = run_step(manifest.steps[0], "demo", world.config())
     assert (outcome.status, outcome.codes) == ("failed", ("E_ENV_UNCHECKED",))
     assert outcome.key is not None and not (world.tmp / "results" / outcome.key).exists()
     path = env.venv_dir(world.cache, "demo", manifest.steps[0].env)
     (path / env.MARKER).unlink()
     assert run_step(manifest.steps[0], "demo", world.config()).codes == ("E_ENV_MISSING",)
-    monkeypatch.setattr(sandbox, "userns_available", lambda: False)
+    monkeypatch.setattr(sandbox, "sandbox_status", lambda: ("no-userns", "unshare failed"))
     assert run_step(manifest.steps[0], "demo", world.config()).codes == ("E_NO_USERNS",)
 
 
 def test_gpu_guard_and_driver_floor(world: World, monkeypatch: pytest.MonkeyPatch) -> None:
     """A GPU step on a host without a GPU, or below ``min_driver``, is refused before it runs."""
-    monkeypatch.setattr(sandbox, "userns_available", lambda: True)
+    monkeypatch.setattr(sandbox, "sandbox_status", lambda: ("ok", ""))
 
     def runner(gpu: str) -> host.Runner:
         def probe(argv: Sequence[str]) -> tuple[int, str]:
@@ -671,13 +673,14 @@ def test_evaluate_expect_shared_place_gets_pass_only_and_bad_address_is_a_code()
 
 
 def test_preamble_parsing_is_strict() -> None:
-    """Only one JSON object line with exactly the five keys and the right types is accepted."""
+    """Only one JSON object line with exactly the six keys and the right types is accepted."""
     good = {
         "sys_prefix": "/v",
         "python": "3.12.11",
         "torch": "2.5.1+cu128",
         "torch_cuda": "12.8",
         "canary_failed": True,
+        "interpreter_ok": True,
     }
     assert run._parse_preamble((json.dumps(good) + "\n").encode()) == good
     for bad in (
@@ -686,6 +689,7 @@ def test_preamble_parsing_is_strict() -> None:
         json.dumps({k: v for k, v in good.items() if k != "python"}),
         json.dumps(good | {"canary_failed": "true"}),
         json.dumps(good | {"torch": "2.5 /x"}),
+        json.dumps(good | {"interpreter_ok": 1}),
         "not json",
         "",
     ):
@@ -760,8 +764,8 @@ def test_writes_outside_the_writable_dirs_fail(world: World, target: str) -> Non
         "scratch": world.tmp / "scratch",
     }
     probe = places[target] / f".reproduce-probe-{uuid.uuid4().hex}"
-    code = f"import json, sys; open(sys.argv[3], 'w').write('x'); {RESULT}"
-    manifest = world.manifest(_py(world, code, str(probe)))
+    code = f"import json, sys; open({str(probe)!r}, 'w').write('x'); {RESULT}"
+    manifest = world.manifest(_py(world, code))
     world.prefetch(manifest)
     try:
         outcome = world.run(manifest)["prep"]
@@ -918,6 +922,8 @@ def _r_step(world: World, session: dict[str, Any], matrix: str = "1.7-3") -> dic
     fake.mkdir(exist_ok=True)
     (fake / "Rscript").write_text(FAKE_RSCRIPT.replace("@MATRIX@", matrix))
     (fake / "Rscript").chmod(0o755)
+    (fake / "rpy").write_text('#!/bin/sh\nexec /usr/bin/python3 "$@"\n')
+    (fake / "rpy").chmod(0o755)
     r_lib.mkdir(parents=True, exist_ok=True)
     (r_lib / env.MODULE_ENV).write_text(json.dumps({"module": "R/4.5.2", "build_modules": [], "PATH": str(fake)}))
     (r_lib / env.SESSION).write_text(json.dumps({"key": {}, **session}))
@@ -928,6 +934,7 @@ def _r_step(world: World, session: dict[str, Any], matrix: str = "1.7-3") -> dic
         f"{RESULT}\n"
     )
     data = _py(world, code, kind="r")
+    data["argv"][0] = "rpy"
     data["env"] |= {"r_packages": [{"name": "lme4", "version": "1.1-37"}], "r_snapshot": "2026-01-01"}
     data["env"]["r_lib"] = "{cache}/r/lme4"
     return data

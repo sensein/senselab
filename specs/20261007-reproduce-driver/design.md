@@ -48,6 +48,8 @@ A **profile** is supplied by the caller and kept outside this repository. It nam
 - the partitions
 - the R module
 - a deny-pattern file
+- the environment-modules init script (`modules_init`) and the batch jobs' temporary root
+  (`job_tmp_root`), both optional
 
 Nothing site-specific lives in this package.
 
@@ -82,7 +84,7 @@ There are up to four locks:
 
 The install runs four stages, each `--no-deps`. Stages 1, 2 and 4 also use `--require-hashes`; stage 3 installs a wheel only after the driver has checked its sha256 against `wheels.lock`:
 
-1. torch
+1. torch (`--only-binary :all:`)
 2. body (`--only-binary :all:`)
 3. the recorded wheels
 4. the overlay, into the derived venv
@@ -203,13 +205,13 @@ How `build` produces and reuses sdist wheels:
 - Patches are `-p1` unified diffs against the unpacked sdist root, applied with GNU `patch
   --fuzz=0`, before the build venv is created. The spike's mmcv patch carries `srcp/…` paths and
   has to be regenerated with `a/`, `b/` paths when its manifest row is written.
-- **Modules load without dotfiles:** `bash --noprofile --norc -c '. /etc/profile.d/modules.sh &&
+- **Modules load without dotfiles:** `bash --noprofile --norc -c '. <profile.modules_init> &&
   module load <m…> && exec "$@"'`. `nvcc` is required only when the build is a CUDA build, that is,
   when `torch_cuda_arch_list` is set or a `cuda/*` module is listed. Then the script fails unless
   `nvcc` is on `PATH`, and exports `CUDA_HOME` derived from it, as in the spike's mmcv job.
-  The spike's mmcv build got gcc 12.2 from the login shell's default modules. With dotfiles and the
-  caller's `PATH` gone, the compiler is `/usr/bin/gcc` (8.5 here) unless the manifest loads one,
-  e.g. `build_modules: [gcc/12.2.0, cuda/12.9.1]`. Each wheel gets a `<wheel>.build-info.json`
+  A build that relied on a compiler from an interactive shell's default modules gets, with dotfiles
+  and the caller's `PATH` gone, the system compiler instead, which can be much older, unless the
+  manifest loads one, e.g. `build_modules: [gcc/<version>, cuda/<version>]`. Each wheel gets a `<wheel>.build-info.json`
   recording the uv, gcc and nvcc versions, the modules and `python_exact`, so the toolchain is
   visible either way.
 - **Planning amendment: `build_modules` replaces `cuda_module`.** Spec §2.3.3 named one optional
@@ -241,14 +243,17 @@ How `build` produces and reuses sdist wheels:
 - B7 installs a recorded wheel through `stage_wheel`. That copies it into the step's `{tmp}`,
   checks the copy's sha256, and installs from the copy.
 - The batch job starts from an empty environment (`--export=NONE`). It exports `PATH`,
-  `UV_CACHE_DIR`, `UV_PYTHON_INSTALL_DIR`, `SENSELAB_REPRO_CACHE`, the driver interpreter, and a
-  `TMPDIR` under `/dev/shm/<job>` that is removed on exit. It also exports `REPRO_UV`, the uv path
+  `UV_CACHE_DIR`, `UV_PYTHON_INSTALL_DIR`, `SENSELAB_REPRO_CACHE`, the driver interpreter, and, when
+  the profile names a `job_tmp_root`, a `TMPDIR` under `<job_tmp_root>/reproduce-build-<job>` that is
+  removed on exit (without one the job keeps the node's default). It also exports `REPRO_UV`, the uv path
   resolved to an absolute path when the script is rendered. uv usually lives in the user's
   `~/.local/bin`, which a minimal `PATH` lacks; `find_uv` reads `REPRO_UV` first, and every build
   subprocess runs that absolute uv. The script loads no modules: under `set -u`, sourcing
-  `/etc/profile.d/modules.sh` dies on an unset `MODULEPATH`. `build-one` loads `build_modules`
-  itself, in the wrapper above. A test runs the rendered prologue under `env -i` with `set -u`. `build-one` builds in a temporary work
-  directory under that `TMPDIR`, removed afterwards.
+  the modules init script dies on an unset `MODULEPATH`. `build-one` loads `build_modules`
+  itself, in the wrapper above, sourcing the profile's `modules_init`; with modules declared and no
+  `modules_init` the build is refused (`E_MODULES_INIT`), and so is any R env. A test runs the rendered
+  prologue under `env -i` with `set -u`. `build-one` builds in a temporary work directory under that
+  `TMPDIR`, removed afterwards. Build jobs log to `<slurm_logs_root>/<date>/build-<sdist>-%j.{out,err}`.
 
 **The venv name** is `repro-<analysis>-<env_key8>`. `env_key` is derived from inputs only:
 
@@ -278,7 +283,7 @@ How `env` installs (B7):
 - **uv runs with `build.base_environment`** (system `PATH`, private `HOME`/`TMPDIR`, the uv cache
   and Python dirs, the CA bundle) and `--no-config`, so a caller's `UV_INDEX_URL`, `PYTHONPATH` or
   `uv.toml` cannot change an install. The test plants both and checks the env keys.
-- **Stage argv.** Torch: `--no-deps --require-hashes`, with `--index-url <torch.index_url>` only
+- **Stage argv.** Torch: `--no-deps --require-hashes --only-binary :all:`, with `--index-url <torch.index_url>` only
   when the lock has `==` pins (`build.torch_index_url`); URL-pinned locks need no index. Body and
   overlays: `--no-deps --require-hashes --only-binary :all: --index-url <body.index_url>`; the
   overlays are compiled against the body index, and binaries-only keeps a stray sdist (and its
@@ -303,11 +308,17 @@ How `env` installs (B7):
   where the digest covers `pip_check_expected` and `smoke_imports` (neither is in `env_key`, so a
   changed expectation re-runs the checks). Only `prefetch_env` with a profile runs them and sets
   them true; without a profile a venv is installed but never complete. `venv_checked` is the
-  predicate, and B12 must refuse a venv for which it is false.
+  predicate, and the runner refuses a venv for which it is false (`E_ENV_UNCHECKED`).
 - **`wheels.lock` and the manifest.** With `env.wheels` unset, `wheels_lock` names where the first
   prefetch records wheels, and an existing file there is refused: its bytes are not covered by any
   manifest sha256. `PrefetchResult.record` is true whenever the file's sha256 now differs from the
   manifest's (or the manifest has none), and the caller must write it into `env.wheels`.
+- **uv's interpreter query runs in the sandbox (B14 review).** `uv pip check` and `uv pip freeze` ask the
+  venv's interpreter for its environment, which runs `site` and every `.pth` file of the venv. Both run
+  through `sandbox_argv`: offline (`UV_OFFLINE=1`, no network namespace route), the venv bound read-only,
+  uv's cache private under a temporary dir. Third-party `.pth` code therefore never runs outside the
+  sandbox; a test plants a `.pth` that writes a marker and checks no marker appears. `uv pip install`
+  still runs outside: it installs only the hashed, verified wheels of the locks.
 - **pip check.** Each `The package \`X\` …` line becomes `(normalised X, kind, detail)`, where detail
   is the rest of the line without backticks; `requires …` lines are `requirement`, lines mentioning
   the platform are `platform`, anything else is `other` and can never be declared. The comparison
@@ -319,11 +330,20 @@ How `env` installs (B7):
   working directory first on `sys.path`, so a same-named module in the caller's directory would
   otherwise satisfy the import (a test shows the control import succeeding there and the smoke
   failing). An import past the timeout raises `E_SMOKE_TIMEOUT`.
-- **R prefetch** loads the module with `bash --noprofile --norc -c '. /etc/profile.d/modules.sh &&
+- **R prefetch in two phases (B14 review).** With network and outside the sandbox, `r_download_script`
+  resolves the declared packages' recursive `Depends`/`Imports`/`LinkingTo` against the snapshot and
+  downloads the source packages R's own library lacks into a local repository (`src/contrib` plus
+  `PACKAGES`). The install then runs inside the sandbox, offline (`R_INSTALL_SH`: `install.packages` from
+  that `file://` repository, then the session record), with only the library and the temporary work dir
+  writable (an `ir_notebook` kernel spec is staged there and copied into the venv by the driver). Package build scripts (`configure`,
+  `Makevars`) therefore cannot reach the network or write outside the library. The module env captured
+  outside (its `PATH`, `LD_LIBRARY_PATH` and the rest, minus `HOME`/`TMPDIR`) is passed into the sandbox
+  as values; Lmod does not run inside the namespace.
+- **R prefetch** loads the module with `bash --noprofile --norc -c '. <profile.modules_init> &&
   module load "$1" …'` (the plan's `bash -lc` read dotfiles, B6), with an allowlisted env and no
   `set -u` (the init script fails under it). `Rscript --vanilla` keeps `Renviron.site` and
-  `Rprofile.site` from resetting `R_LIBS_SITE` or the repository; B12 should run R steps the same
-  way. The R script writes plain text (installed TSV, `.libPaths()`, `sessionInfo()`, R version),
+  `Rprofile.site` from resetting `R_LIBS_SITE` or the repository; the run-time R session check uses
+  `Rscript --vanilla` too. The R script writes plain text (installed TSV, `.libPaths()`, `sessionInfo()`, R version),
   and Python writes `SESSION.json` with sorted keys, so its sha256 is stable and the script needs no
   JSON package. `SESSION.json` is written last and only when every declared version is installed,
   the module's R is `profile.r.version` and the library is first on `.libPaths()`. Its `key`
@@ -382,7 +402,7 @@ runs.
    kernel pseudo filesystem (`PSEUDO_FS`: sysfs, cgroup, tracefs, binfmt_misc, autofs, and the
    like), which holds no data and whose writes need host privileges anyway. `hugetlbfs` and `mqueue`
    are not exempt (B12 re-review): both hold data a step could share with the host, both remount
-   read-only on this cluster, and if either refuses somewhere the step aborts. An IPC namespace that
+   read-only where this was measured, and if either refuses somewhere the step aborts. An IPC namespace that
    would make `mqueue` private was the alternative; not exempting them is simpler and fails closed. Measured on a compute
    node with 733 mounts (438 NFS, 227 autofs): 0.07 s; the same loop as one `mount` process per entry
    took 11 s. Two mounts refuse there, tracefs and binfmt_misc. Taking only the topmost entry per path
@@ -411,12 +431,21 @@ it; then `/tmp` stays read-only and `TMPDIR` still points at `{tmp}` (the test s
 since pytest's `tmp_path` is under `/tmp`). Sandboxed wheel builds (B6) get `UV_CACHE_DIR` under their
 own tmp for the same reason.
 
+**Masked host paths (B14 review).** Before the binds, `/run`, `/var/run`, `/var/lib/sss` and
+`/var/spool/slurmd` (`MASKED_HOST_DIRS`) each get an empty tmpfs, made read-only by the sweep; a missing
+one, a symlink (`/var/run` usually is), or one holding a path the sandbox needs is skipped. That hides the
+munge, sssd, nscd and slurmd sockets. Other `AF_UNIX` sockets on the remaining read-only mounts stay
+reachable: connecting to a socket needs no write permission on its file, so a read-only bind does not
+stop it. A step with `hf_weights: []` also gets `{cache}/huggingface` masked the same way, so it cannot
+read weights another step pinned.
+
 **Network:** there is none.
 
 - Loopback is raised, because notebook kernels talk over 127.0.0.1.
 - A canary TCP connect at step start must fail.
-- If unprivileged user namespaces are unavailable, the driver refuses to run, except in a test-only
-  mode that marks the run unreportable.
+- If unprivileged user namespaces are unavailable, the driver refuses to run (`E_NO_USERNS`). The
+  test-only mode that drops the network namespace still needs a user namespace, and marks its runs
+  unreportable.
 
 **Environment:** it is built from an allowlist, never inherited.
 
@@ -428,7 +457,8 @@ own tmp for the same reason.
 - **Always set:** `REPRO_OUT` and `REPRO_TMP`.
 - **Refused:** keys that look like secrets.
 
-stdout and stderr always go to files under the step's output dir, never to the caller's terminal.
+stdout and stderr always go to driver-owned files under `R/logs/` of the step's result dir, never to the
+caller's terminal.
 
 How `sandbox` reads those rules:
 
@@ -438,9 +468,8 @@ How `sandbox` reads those rules:
     hide the read-only mount beneath it;
   - a writable dir under the checkout or venv, because their read-only bind comes last and would
     hide it.
-- A writable dir is bound only when it lies under a data root. Elsewhere it is writable already.
-- The checkout and venv are bound after the roots are remounted. A checkout under a data root is
-  then read-only either way.
+- Every writable dir is bound to itself before the sweep, and the sweep skips it by path, so it stays
+  writable; everything else, the checkout and venv binds included, is remounted read-only by the sweep.
 - Every tool the sandbox itself runs is called by absolute path: `/usr/bin/unshare`, `/bin/sh`,
   `/usr/bin/mount`, `/usr/sbin/ip` and `/usr/bin/setpriv`. None is looked up through the step's
   `PATH`, so a step's venv or native dirs cannot shadow them.
@@ -464,16 +493,17 @@ How `sandbox` reads those rules:
   - The intended way to expose FFmpeg is therefore a **curated lib dir**: a directory of symlinks to
     only the needed `.so` files (`libav*`, `libsw*`, `libpostproc*`), named in that entry's
     `lib_dirs`.
-- **For B7, R steps:** the R module's `LD_LIBRARY_PATH` is captured at prefetch. When a step has
-  both, the order is the module's entries first, then the selected native lib dirs. This module
-  merges nothing yet; B7 implements the merge.
+- **R steps:** the R module's `LD_LIBRARY_PATH` is captured at prefetch. When a step has
+  both, the order is the module's entries first, then the selected native lib dirs; `env.r_env_vars`
+  does the merge.
 - Keyed templates: `PYTHONPATH` (the step's entries; an entry containing `:` is refused, since it would split), `R_LIBS`
   and `R_LIBS_USER` (`r_lib`, as the plan's B7 says, with `R_LIBS_SITE` keyed as an empty constant so no site library
   is seen), `JUPYTER_PATH`
   (`{venv}/share/jupyter`), `JUPYTER_DATA_DIR`/`JUPYTER_CONFIG_DIR`/`XDG_CACHE_HOME` (under
   `{tmp}`), `HF_HOME`/`TORCH_HOME` (under `{cache}`), `CUDA_CACHE_PATH` (`{tmp}/cuda-cache`; spec §15.6
   put it under `{out}`, and B12's review moved it into the step's scratch so it is writable without
-  being an output), `REPRO_OUT`/`REPRO_TMP`.
+  being an output), `REPRO_OUT`/`REPRO_TMP`, and for R steps `R_ENVIRON_USER`/`R_PROFILE_USER`
+  (`{cache}/empty-r-startup`).
 - Keyed constants: `LANG=C.UTF-8`, `TZ=UTC`, the three HF offline variables, every proxy variable
   (both cases) set to `http://127.0.0.1:9`, and `no_proxy`/`NO_PROXY` set empty.
 - Recorded only: `TMPDIR`, `HOME`, `IPYTHONDIR`, `JUPYTER_RUNTIME_DIR` (all under `{tmp}`, expanded),
@@ -486,9 +516,11 @@ How `sandbox` reads those rules:
   the full expanded env.
 - The profile map may not name any driver-owned variable, whatever the step uses:
   - the names above;
-  - anything starting with `SLURM_`, `REPRO_`, `JUPYTER_`, `HF_`, `XDG_` or `R_LIBS`;
+  - anything starting with `SLURM_`, `REPRO_`, `JUPYTER_`, `HF_`, `XDG_`, `R_LIBS`, `R_ENVIRON` or
+    `R_PROFILE`;
   - any proxy name, in either case;
-  - `LD_PRELOAD`, `LD_LIBRARY_PATH`, `PYTHONHOME`, `PYTHONSTARTUP` and `PYTHONNOUSERSITE`.
+  - `LD_PRELOAD`, `LD_AUDIT`, `GCONV_PATH`, `LD_LIBRARY_PATH`, `PYTHONHOME`, `PYTHONSTARTUP` and
+    `PYTHONNOUSERSITE`.
 
   The driver's values cannot be overridden, and the refusal does not depend on the step.
 - Templates expand with `spec.render`, the same grammar `spec.placeholders` validates (`{{`/`}}`
@@ -598,8 +630,9 @@ the step.
 - Each pattern is walked from its longest wildcard-free directory, and a pattern with no wildcard is
   hashed directly, so a narrow pattern on a large data root does not walk the whole root.
 - Non-regular files are refused rather than opened: opening a FIFO blocks.
-- Exclusions are whole path components, so the output digest can leave out `{out}/cuda-cache`
-  (written by the CUDA JIT during the step) without also hiding a sibling such as `cuda-cache-x`.
+- Exclusions are whole path components, so a digest can leave out a dir such as `cuda-cache` without
+  also hiding a sibling such as `cuda-cache-x`. (The CUDA JIT cache itself lives in `{tmp}/cuda-cache`,
+  outside `work/`, and is removed after the run.)
 - Patterns and exclusions with an empty, `.` or `..` component are refused, so one file cannot be
   named two ways and nothing outside the root can be reached by spelling.
 - `require_nonempty` (`E_DIGEST_EMPTY`) lets a caller refuse an input set that matched nothing; a
@@ -624,11 +657,10 @@ the step.
     bump serves stale results silently, while a spurious recompute only costs time. senselab's
     version is not keyed: hatch-vcs changes it on every commit, so keying it would recompute every
     multi-hour step after any unrelated senselab commit (the reason the analyze-audio cache dropped
-    it at schema 24). The digest covers only `utils/reproduce`, so **B12 rule: adapters import
-    nothing from senselab outside `senselab.utils.reproduce`, and B12 enforces it** (for example by
-    running the adapter with an import hook or a `sys.modules` check that refuses other
-    `senselab.*` modules); otherwise a change to such a module would change results under an
-    unchanged key.
+    it at schema 24). The digest covers only `utils/reproduce`, so adapters import nothing from
+    senselab outside `senselab.utils.reproduce`; the runner enforces it with an import guard
+    (`E_ADAPTER_IMPORT`, see "Running a step"), since a change to another module would otherwise change
+    results under an unchanged key.
   - the commit and submodule commits, and the patch-set sha256 (`source.patch_set_sha256`, the
     same value that names the worktree)
   - `env_key` (which already covers the torch and body lock sha256s, the sdist inputs and
@@ -658,8 +690,8 @@ the step.
   - kind, argv template and cwd; inputs (root, sorted patterns, and one input-set digest each),
     stage (root, sorted patterns, dest) and outputs
   - the adapter sha256 and `adapter_env_sha256`, the identity of the interpreter that runs the
-    adapter. B12 passes the step venv's `installed_sha256` when the adapter runs there, or
-    `cache.driver_env_sha256()` when it runs in the driver's env: a sha256 over `sys.version` and
+    adapter. Every adapter runs with the driver's interpreter, so the runner passes
+    `cache.driver_env_sha256()`: a sha256 over `sys.version` and
     the sorted `name==version` of senselab's runtime dependency closure (its requirements with no
     extra, followed transitively; a requirement that asks for extras, such as `dep[x]`, also brings
     in `dep`'s requirements for `x`) as installed in the interpreter's own `purelib`/`platlib`.
@@ -708,7 +740,7 @@ the step.
   in expectations are Pydantic-coerced, so `77` and `77.0` key alike. Changing what the payload
   holds bumps the schema tag; changing driver code changes `reproduce_source_sha256` by itself.
 - **`hf_weights`.** Required on `StepSpec`, with no default, so every manifest states `[]` for a
-  step that loads no weights (all tier-1 steps). Each entry is `{repo: "<org>/<name>", repo_type:
+  step that loads no weights (every step of the first rerun set). Each entry is `{repo: "<org>/<name>", repo_type:
   model|dataset, revision: <40-hex commit>, files: [{path, sha256}, ...]}`. The revision is a
   commit, never a branch or tag (senselab's rule that a load passes a commit SHA). `files` lists
   every file the step reads with its sha256, which prefetch checks after download. It needs at
@@ -752,18 +784,18 @@ the step.
   `StepSpec` validator (`E_SPEC_EXPECT_UNIT`) and applies to every expectation, not only
   `from_step` ones. Each `tolerance_from` step must declare the expectation's own metric, since the
   spread is taken over that metric of the calibration replicates.
-- **Constraints on B12/B13.**
+- **Consequences for running and submitting.**
   - Input digests are keyed, so a step's key exists only once its inputs can be hashed. An `up:`
     input or stage reads the upstream result dir, so a downstream key can be computed only after
-    the upstream step finished; `submit` cannot precompute every key at submission time and must
-    let each job compute its own key when it starts.
+    the upstream step finished; `submit` precomputes no key, and each job computes its own key when it
+    starts.
   - Every skip check re-hashes the step's input sets and native dirs. "Done" is never decided from
     a remembered key, so a skip on a large data root costs a full read of its declared inputs.
-  - The stage copy selects files with `digest.pattern_matches` and walks with the same rule as
+  - The stage copy selects files with `digest.matching_files` and walks with the same rule as
     `input_set_digest`: a pattern's wildcard-free prefix is resolved by path, and below it no
     symlinked directory is descended. Otherwise the copied set and the keyed set could differ.
   - `SharedFileLock` logs a stale-takeover warning on the `senselab` logger, and it carries the
-    `.claims` lock path under the results tree. B12 routes that logger to `{out}/logs/driver.log`
+    `.claims` lock path under the results tree. The runner routes that logger to `R/logs/driver.log`
     only, never to the terminal.
 
 ## Metrics, expectations, provenance
@@ -787,6 +819,10 @@ suppressed.
 - Every name, label and count name an adapter may emit is declared in the manifest's
   `metrics_schema`. The declared names must all appear, so a pass rule cannot silently pass on a
   missing number.
+- **Manifest rule:** class labels (`per_class`, `positive`), count names (`counts`) and headline labels
+  (`headline_labels`) are copied verbatim into `metrics.json`, which agents read, so they must not be
+  sensitive: no participant, site or diagnosis identifiers. The same rule holds for analysis and step
+  names, which also name directories and appear in queue listings.
 - **Balanced accuracy is the only classification headline (Satra, 2026-10-07: "Raw accuracy is
   unhelpful without a null rate, so only a balanced accuracy headline is helpful.").** A
   classification step's `headline` is exactly `["balanced_accuracy"]`; anything else is the schema
@@ -801,10 +837,10 @@ suppressed.
   detection headline {avg_map, map_at}; statistic {f_stat}; count {count}. Otherwise a step could
   declare itself `statistic` to escape the imbalance rules while reporting an accuracy. Detection,
   statistic and count steps take no secondary metrics (`E_SPEC_SECONDARY_NOT_ALLOWED`): none of the
-  tier-1 rows needs one, and a detection secondary would add names whose floors are presence-only
+  first rerun set's steps needs one, and a detection secondary would add names whose floors are presence-only
   anyway. Adding them later is a vocabulary edit.
 - A classification step declares at least two classes. A baseline such as a Bernoulli or
-  majority-class predictor is a classification step like any other: the N4 baseline declares
+  majority-class predictor is a classification step like any other: a whole-dataset baseline declares
   headline `balanced_accuracy` (floor 1/k) and secondary `accuracy` with the majority-class floor,
   and `threshold_tuning: none`.
 - Free text is never accepted. The only strings are declared labels and fixed words: `unit`
@@ -863,17 +899,28 @@ reported with the number, not a schema error.
 a fold's `n_groups` below the minimum cell become `"<k>"` rather than rejecting the file: a small
 cell is expected in a real result and is not an adapter bug. `n_groups` is suppressed for every split
 unit, not only `subject`/`family`: an evaluation that splits by recording or clip (a seen-subject
-protocol) still reports `n_groups` as its number of subjects, so a fold of three children under unit
-`recording` would otherwise be emitted as is. Degrees of freedom and `n_folds` are never suppressed.
+protocol) still reports `n_groups` as its number of subjects, so a fold of three subjects under unit
+`recording` would otherwise be emitted as is. `n_folds` is never suppressed, and neither are degrees of
+freedom: they are properties of the fitted model that a reader needs to interpret an F (or t) statistic,
+and an F value without its numerator and denominator df cannot be checked against a target.
+
+**The minimum cell is one constant, `metrics.MIN_CELL = 5`.** Its value is the small-cell suppression
+convention the approved spec states (§2.3, "any count cell below a minimum size (default 5) is
+suppressed"), the threshold disclosure-control practice commonly uses for counts of people. It is a
+constant, not a parameter: there is no `--min-cell` flag and no `RunConfig.min_cell`, so no caller can
+lower it, and since it lives in a reproduce module, `reproduce_source_sha256` keys it; changing it
+recomputes every step. The token is always `"<5"`.
 
 Accepted residual risk: a prevalence multiplied by an unsuppressed `n` (or a recall times a
-class size) can reconstruct a small cell that was suppressed elsewhere. Closing that would mean
-rounding or suppressing prevalences and rates, which are the numbers the imbalance rules exist to
-report. The output stays aggregate-only and is read only through the narrow reruns exception.
+class size) can reconstruct a small cell that was suppressed elsewhere, and an unsuppressed denominator
+df can reveal a suppressed `n` (for a one-way design, df = n − groups). Closing that would mean rounding
+or suppressing prevalences, rates and df, which are the numbers the imbalance rules and the F test exist
+to report. The output stays aggregate-only, and only the result files named in the deployment's access
+rules (`summary.json`, `metrics.json`, `run.json`) are read.
 
 The driver validates twice, once the adapter's output and once the final object after writing the
-`expect` results (`writer="driver"`), and must pass the same `min_cell` both times: a token
-`"<5"` is accepted again only under `min_cell=5`.
+`expect` results (`writer="driver"`), both times with `MIN_CELL`, so a `"<5"` token passes the second
+validation.
 
 **Absent classes.** A declared class with prevalence 0 does not count toward k, matching
 scikit-learn's balanced accuracy, which averages recall over the classes present in `y_true`.
@@ -910,7 +957,7 @@ or `pp`. `from_step.metric` names a metric of the upstream step, so it is checke
 upstream step's schema when the DAG is assembled (B11), not here. A bare name that matches
 several entries is refused when read, rather than picking one.
 
-**Notes for `run.py` (B12).**
+**How `run.py` uses this.**
 
 - `validate_metrics` returns error codes (`E_*`) and warnings (`W_*`, `WARNINGS` in `metrics.py`)
   in one sorted list. Only an `E_*` code fails the step; `clean` is None exactly then. `W_*` codes
@@ -920,16 +967,16 @@ several entries is refused when read, rather than picking one.
   pattern that matches nothing fails with `E_DIGEST_EMPTY` instead of digesting the empty set the
   same way before and after the step. Output digests cover `work/` only, which holds no CUDA cache.
 - The final object, after the driver writes the `expect` results, is validated again with
-  `writer="driver"` and the same `min_cell`.
+  `writer="driver"` (same `MIN_CELL`).
 
-**Host record.** Hostname, CPU model and counts, the first GPU's name and driver from `nvidia-smi`
-with the GPU count, and the venv's Python, torch and torch CUDA versions, asked of the venv's own
-interpreter in isolated mode with a minimal environment so the caller's `PYTHONPATH` cannot answer
-for it. Anything unavailable is None.
+**Host record.** Hostname, CPU model and counts, and the first GPU's name and driver from `nvidia-smi`
+with the GPU count, probed on the host. The venv's Python, torch and torch CUDA versions come from the
+sandboxed preamble (see "Running a step"); no venv interpreter runs outside the sandbox. Anything
+unavailable is None.
 
 **Expectations.** Only the driver writes `target`, `tolerance`, `delta` and `pass`, by evaluating the
-step's expectations: a literal value, an upstream step's metric, or a number read from a
-file under a data root. A failed expectation is a non-zero exit, so a
+step's expectations: a literal value or an upstream step's metric (`from_step`), with a literal
+tolerance or one computed from calibration steps (`tolerance_from`). A failed expectation is a non-zero exit, so a
 dependent job never starts.
 
 **`summary.json`** holds:
@@ -949,7 +996,7 @@ It holds no messages, and no paths other than checkout-relative code frames.
 - the venv and the host as environments
 - inputs and outputs as `artifact` entities that carry a checksum without a path
 
-**Provenance record (B10).** `provenance.record_step` writes `{out}/prov/store.jsonl` and the
+**Provenance record (B10).** `provenance.record_step` writes `R/prov/store.jsonl` and the
 `prov-reproduce_{io,act,soft,env}.json` files.
 
 - **No path, anywhere.** Data file names and directory names can carry participant identifiers, so
@@ -1046,7 +1093,8 @@ It holds no messages, and no paths other than checkout-relative code frames.
   needed. These input digests are the "before" digests.
 - **Refusals before the reset.** Inside the claim, after done is checked again: `E_NO_USERNS`; the
   venv must load from its marker (`env.load_venv`, `E_ENV_MISSING`) and pass `venv_checked`
-  (`E_ENV_UNCHECKED`; notebook kinds use the derived `notebook_tools` venv); `gpu_arch` or `min_driver`
+  (`E_ENV_UNCHECKED`; notebook kinds use the derived `notebook_tools` venv), and its dist-info set must
+  still equal `installed.json` (`E_ENV_CHANGED`); `gpu_arch` or `min_driver`
   with no GPU is `E_GPU_MISSING`, a driver below `min_driver` `E_DRIVER_OLD`. These return a code and
   leave the result dir untouched, so a previous run's diagnostics survive; only then is the dir reset.
   The GPU guard runs before the step, not after as the plan listed it, so a GPU job is not spent on a
@@ -1061,7 +1109,7 @@ It holds no messages, and no paths other than checkout-relative code frames.
   writing one file is `E_STAGE_CONFLICT`; digest codes read `E_STAGE_*`.
 - **R steps (D3).** The env gets the prefetch `MODULE_ENV.json` merge (`env.r_env_vars`: venv `bin`, the
   module's `PATH`, then the system and native dirs). Before the step, `Rscript --vanilla
-  <env.r_session_script> <r_lib> <R/rsession>` runs in the same sandbox with the same env (its out dir
+  <env.r_session_script> <r_lib> <R/rsession>` runs in the same sandbox, env and working directory (its out dir
   is the only extra writable dir), `env.read_r_session` reads the result, and every field of
   `env.R_SESSION_FIELDS` (installed versions, every loaded namespace with its `packageVersion`,
   `.libPaths()`, R version, `sessionInfo()`) must equal `SESSION.json`'s, or the step fails with
@@ -1075,11 +1123,13 @@ It holds no messages, and no paths other than checkout-relative code frames.
 - **The sandboxed run.** A template naming a missing placeholder is `E_RENDER_PLACEHOLDER`, a
   malformed one `E_RENDER_BAD`; the cwd must lie in the checkout or `work/` (`E_CWD`). The sandbox
   execs `sh` which `cd`s into the cwd after the mounts (so it is on the read-only bind), then execs
-  the venv's `python -I -B -c PREAMBLE <fd> <step argv…>`. The preamble runs the canary, imports torch,
-  writes `{sys_prefix, python, torch, torch_cuda, canary_failed}` to the driver's pipe `<fd>`, closes
-  it, and `execvp`s the step only when the canary's connect failed. The step therefore never holds the
+  the venv's `python -I -B -c PREAMBLE <fd> <allowed dirs> <step argv…>`. The preamble runs the canary,
+  imports torch, checks the step's program (see "Isolation additions"), writes `{sys_prefix, python,
+  torch, torch_cuda, canary_failed, interpreter_ok}` to the driver's pipe `<fd>`, closes it, and
+  `execvp`s the step only when the canary's connect failed and the program is allowed. The step therefore never holds the
   pipe, and cannot rewrite what the driver reads to dodge `E_MAX_CUDA` or `E_SYS_PREFIX`. Parsing is
-  strict: one line, one object, those five keys, a boolean canary, version-shaped strings; anything
+  strict: one line, one object, those six keys, booleans for the canary and the program check,
+  version-shaped strings; anything
   else, nothing, or a connect that succeeded is `E_CANARY`. A prefix that is not the venv is
   `E_SYS_PREFIX`. The driver drains the pipe in a thread (capped at 1 MiB) so a writer never blocks.
 - **After the step.** The inputs are digested again (`E_INPUT_MUTATED`); `verify_checkout` must still
@@ -1110,7 +1160,7 @@ It holds no messages, and no paths other than checkout-relative code frames.
   `__name__` to a `senselab.` name. Adapters live in a reviewed repository.
 - **Validation and expectations.** The adapter's object is validated with `writer="adapter"`, then
   `evaluate_expect` writes the results, then the whole object is validated again with
-  `writer="driver"` and the same `min_cell`, and only then written to `R/metrics.json`. Only `E_*`
+  `writer="driver"` (same `MIN_CELL`), and only then written to `R/metrics.json`. Only `E_*`
   codes fail a step; `W_*` codes are recorded. An expectation is compared in its own `unit` when it
   gives one, else in the unit of the step's metric entry, converting upstream values (pp = 100 ×
   fraction); per-class rates are fractions. `target`, `tolerance` and `delta` are then written in the
@@ -1127,8 +1177,8 @@ It holds no messages, and no paths other than checkout-relative code frames.
   `pass: false` is `E_EXPECT`.
 - **Exit and summary.** `summary.json` is `{exit, exc_class, frame, codes, pass, sys_prefix_ok, torch,
   torch_cuda, canary_failed, executed}`. `pass` is null when the step has no expectations or they were
-  never evaluated. `exit` is the step's own exit when that is non-zero (97 when the preamble stopped
-  it), else 1 when any `E_*` code is present, else 0, so `is_done` and Slurm `afterok` see every
+  never evaluated. `exit` is the step's own exit when that is non-zero (97 when the canary connected, 95
+  when the program was refused), else 1 when any `E_*` code is present, else 0, so `is_done` and Slurm `afterok` see every
   failure. `exc_class` and `frame` come from the last Python traceback in the step's stderr: a dotted
   class name ending in `Error`, `Exception`, `Interrupt`, `Exit`, `Warning`, `Iteration` or `Timeout`
   (anything else is null, so a message never passes for a class), and the last frame inside the
@@ -1150,8 +1200,9 @@ It holds no messages, and no paths other than checkout-relative code frames.
   logging plugin installs handlers that hide `lastResort`. In `run_steps`, a `run.json` that cannot
   be written adds `E_DRIVER` and a non-zero exit to every step of that analysis, instead of raising.
 - **Statuses and links.** `executed`, `skipped`, `failed` (refused, or the preamble did not hand over)
-  and `never-ran` (a need is not executed-or-skipped with exit 0). `run_steps` writes `run.json` with
-  each step's key, status, exit and codes and links each result dir. A `never-ran` step, or a failed
+  and `never-ran` (a need is not executed-or-skipped with exit 0; its codes are the failed needs' codes,
+  else `E_UPSTREAM_NOT_DONE`). A full `run_steps` merges each step's row into `run.json` (see "Local runs")
+  and links each result dir. A `never-ran` step, or a failed
   one with no key, removes any same-day `<runs_root>/<date>/<analysis>/<step>` link, which would
   otherwise point at an older result.
 - **The test-only `no_netns` mode** drops the network namespace (`sandbox_argv(netns=False)`: `unshare
@@ -1170,6 +1221,79 @@ It holds no messages, and no paths other than checkout-relative code frames.
   `driver.log`. A claim's stale-takeover warning, which names the lock path under the results tree,
   therefore never reaches a terminal. Before the key exists there is no result dir, and those failures
   return a code only.
+
+## Isolation additions (B14 review)
+
+- **The step's program is pinned.** `argv[0]` used to be taken on trust: `/usr/bin/python3` ran as if it
+  were the venv. The preamble now resolves `argv[0]` (with `shutil.which` on the step's own `PATH` when it
+  has no `/`) and accepts it only when its real path, or the real path of the dir it was found in, lies in
+  an allowed dir: the venv for `python` and `notebook` steps; the R module's own `PATH` entries (system
+  dirs excluded) and the selected native bin dirs for `r` steps; all of these for `ir_notebook` steps,
+  whose program is the notebook venv's `jupyter`. The dir test is what lets the venv's `python`, a symlink
+  to the uv-managed interpreter, pass. Otherwise the preamble reports `interpreter_ok: false` and exits 95
+  without exec'ing, and the step is `failed` with `E_STEP_INTERPRETER`. `StepSpec` also refuses an `argv`
+  or `pythonpath` entry that is an absolute path with no placeholder (`E_SPEC_ABSOLUTE_PATH`).
+- **R startup files.** An R step's env sets `R_ENVIRON_USER` and `R_PROFILE_USER` to
+  `{cache}/empty-r-startup` (`sandbox.R_STARTUP_TEMPLATE`, keyed), an empty file the driver creates and
+  the sandbox shows read-only, so a `.Renviron` or `.Rprofile` in the checkout cannot change `R_LIBS_USER`
+  or `.libPaths()`. The R session check runs in the step's own working directory.
+- **Installed set at run time.** Before the step, the driver reads every `*.dist-info/METADATA` of the
+  venv's `site-packages` (name and version headers only; nothing runs) and compares the set with
+  `installed.json`; an added, removed or changed distribution is `E_ENV_CHANGED`.
+- **Locks held during a step.** A run holds a shared `flock` on the venv's `<venv>.lock` and, for an R
+  step, on `<r_lib>.lock` from the refusals to the summary, so a `prefetch --rebuild` (exclusive) waits.
+- **Symlinks out of `work/`.** After the step, any symlink under `work/` whose target resolves outside
+  `work/` is `E_OUTPUT_SYMLINK`; outputs are then not digested, so no such link is followed. A stage copy
+  from an `up:` root refuses a matched file that resolves outside that upstream's `work/`.
+- **Clean checkout.** `verify_checkout` counts ignored files too (`git status --ignored`), so a file
+  planted under an ignore rule is `E_SRC_MUTATED`.
+- **Torch lock install.** Stage 1 also passes `--only-binary :all:`.
+- **Sdist unpacking.** `build.safe_extract` uses tarfile's `data` filter where it exists (Python 3.11.4
+  and later; senselab still allows 3.11.0). Without it, a manual check passes only regular files and
+  directories with a relative name, no `..` and a resolved path inside the unpack dir, then extracts the
+  checked members. Both paths are tested.
+
+## B14 re-check additions
+
+- **The R library is confined.** `env.r_lib` must be `{cache}/r/<name>`: one plain name (letters, digits,
+  `_`, `.`, `-`, no leading dot, no `..` anywhere in it), no `/` (`E_SPEC_BAD_R_LIB`). A prefix check alone let
+  `{cache}/../victim` make `prefetch_r` remove a tree outside the cache, and let the R install's
+  sandbox write into a venv's `bin`. `prefetch_r` and the runner also check, before any removal, write or
+  lock, that the real path (symlinks resolved) lies directly under `realpath(cache)/r`; a symlinked
+  `{cache}/r` leading elsewhere is refused too.
+- **The venv-bin symlink guard.** For `python` and `notebook` steps the program must be found in the venv
+  and its final target must lie in the venv or in the uv-managed Python install the venv was made from
+  (the parent of `home` in `pyvenv.cfg`, read as text, nothing run). A `bin/evilpy -> /usr/bin/python3`
+  planted in the venv is refused (`E_STEP_INTERPRETER`).
+- **Masked dirs and the sweep.** A mount point under a masked dir (`/run/user/<uid>` under `/run` on a
+  login node, where prefetch runs) cannot be reached once the mask is mounted, and remounting it by path
+  would fail; the sweep skips mount points under every masked dir (passed with a leading `@`).
+- **Which nodes can host a sandbox.** A node is usable only if every mount the sandbox inherits, other
+  than the kernel pseudo filesystems, can be remounted read-only from inside the user namespace. A FUSE
+  mount is the known example that refuses. `sandbox.sandbox_status` tells `ok`, `no-userns` and
+  `sweep-refused` apart. On a refused sweep a run is `failed` with `E_SANDBOX_UNAVAILABLE` (a refusal: the
+  result dir is not reset; the sweep's line, which names filesystem types only, is appended to
+  `R/logs/driver.log`), and `prefetch` stops with the same code before it builds anything; a sandboxed
+  `uv pip` call that meets a refused sweep raises it too. Without user namespaces the code stays
+  `E_NO_USERNS`. A site profile's step partitions and `build` partition must therefore point at nodes
+  where every mount can be made read-only.
+- **Notebook kernel specs.** For every notebook venv (`notebook_tools`, used by `notebook` and `ir_notebook`
+  steps), prefetch records a sha256 of the notebook venv's
+  `share/jupyter/kernels` tree (relative paths with file contents or link targets) in `installed.json`
+  as `kernels_sha256` (the marker's `installed_sha256` follows), and a run of either notebook kind refuses with
+  `E_ENV_CHANGED` when the tree no longer matches or no digest was recorded. The R install for
+  `ir_notebook` writes its kernel spec to a staging prefix under the work dir; nothing of the venv is
+  writable in that sandbox, and the driver copies the staged `kernels/ir` (regular files only) into the venv
+  and records the digest again. A kernel spec names the program Jupyter
+  starts, so changing it would change what runs without changing any keyed input.
+- **No shell programs in Python steps.** Since the step's program is pinned, a `python` or `notebook`
+  step cannot start `bash` or `sh` directly, and there is no shell kind (the plan needs none). A shell
+  wrapper has to be a script run by the venv's Python (`{venv}/bin/python {checkout}/run.py`, which may
+  then call a shell inside the sandbox), or a program in an R module or native bin dir run by an `r` step.
+- **`RunConfig.parent_env`.** The mapping the runner reads the recorded-only job variables from
+  (`SLURM_JOB_ID`, `SLURM_ARRAY_JOB_ID`, `SLURM_ARRAY_TASK_ID`, `SLURM_CPUS_PER_TASK`,
+  `CUDA_VISIBLE_DEVICES`); it defaults to `os.environ`, and nothing else is read from it. Tests pass a
+  fixed mapping so the recorded env does not depend on where they run.
 
 ## Commands
 
@@ -1253,19 +1377,28 @@ patch text.
   while any submission has `pending` rows in one of its run dirs, and it never rewrites a row a submission
   tagged: a full local run merges its rows into the record (rows of other steps are kept) and leaves tagged
   rows as they are.
+- **Identical steps across submissions, and duplicates.** Two submissions whose manifests share an
+  identical step (same key) contend for its claim. The claim waits at most `CLAIM_TIMEOUT_S` (600 s): a job
+  that does not get it in time is `failed` with `E_CLAIM_HELD`, which is closed (its dependents are
+  cancelled), and the step is never executed twice. Within one submission, a duplicate job of a step (a
+  requeue racing the original) re-checks done inside the claim and skips; its row then reads `skipped` and
+  can overwrite the winner's `executed` row (same key, same result dir, so `status` still points at the
+  right result).
 - **Requeue.** `never-ran` written by finalize, or by a failed upstream, is not final against a requeued
   job: a requeued job writes its own row when it ends (same submission tag), so its later row replaces the
   `never-ran`, and `status` then shows the step's true state. A job killed after its step started and not
   requeued reads `never-ran`; its result dir is not done, so the next submission reruns it.
 - **Pinned manifests.** `submit` hashes each manifest's bytes and parses those same bytes; each job gets
-  `--pin <sha256>` per manifest and refuses to run when a file no longer hashes the same: it writes its row
+  `--pin <sha256>` per manifest, hashes the files before parsing anything, and refuses to run when one no
+  longer hashes the same (an unparsable change included; its row is then found by step name and submission
+  among the date's run dirs): it writes its row
   `failed` with `E_MANIFEST_CHANGED`, turns its dependents' `pending` rows into `never-ran` with the same
   code (where the changed manifests still parse), keeps the record's row order, and exits 1, which cancels
-  its dependents. A full local `run` (no
-  `--step`) still rewrites the analysis's whole record.
+  its dependents. A local `run` follows the "Local runs" rule below: it merges its rows and never
+  rewrites a submission's.
 - **Scripts.** Each script goes to sbatch on standard input, so nothing is written to the submit dir.
-  `--output`/`--error` are `<slurm_logs_root>/<date>/%j.{out,err}` (spec §2.3 item 6), and every job (step,
-  finalize and build) runs there (`--chdir`), with the driver started as `python -P` so that directory is
+  `--output`/`--error` are `<slurm_logs_root>/<date>/%j.{out,err}` for step and finalize jobs (spec §2.3
+  item 6) and `build-<sdist>-%j.{out,err}` for build jobs, and every job (step, finalize and build) runs there (`--chdir`), with the driver started as `python -P` so that directory is
   not on `sys.path`. The driver creates the dir with mode `2770` and runs sbatch under `umask 007`, so the
   `.out`/`.err` files are never world-readable. Checked with a real trivial job through `submit` from a shell with umask `022`: the
   job's `.out` and `.err` came out `0660`, so the submit-time umask reaches them (through `SLURM_UMASK`). `--export=NONE`, then `set -euo pipefail`, `umask 007`,
@@ -1273,7 +1406,7 @@ patch text.
   `SENSELAB_REPRO_CACHE` and, when the profile declares native lib dirs, `LD_LIBRARY_PATH` (all of them, in
   profile order), because a batch job inherits nothing. These reach the driver only: the step's own env is
   built from scratch by the sandbox. The uv dirs are the submitter's, or what `uv cache dir` and `uv python
-  dir` print. A per-job `TMPDIR` under `/dev/shm` is removed on exit. Every value is a plain word, a
+  dir` print. With a profile `job_tmp_root`, a per-job `TMPDIR` under it is removed on exit. Every value is a plain word, a
   comma-separated list of plain words for the Slurm fields (`gpu:a100:1,shard:1`, a partition list), or
   `shlex`-quoted; anything else is refused at render time and reported by lint first.
 - **What the queue shows.** `squeue` and `scontrol show job` are readable by every cluster user. They show
@@ -1286,12 +1419,12 @@ patch text.
   is probed with `sbatch --test-only` (the step's script without its dependency lines). The fallback is
   used only when the probe rejects the primary partition (unavailable, or the request cannot be satisfied
   there) or the probe itself errors or times out. A `Preempts:` line lists other jobs ours would preempt;
-  on the site partitions both the primary and the fallback have `PreemptMode=OFF`, so our jobs are not
-  preempted there, and preempting guest jobs is no reason to fall back. An entry without a fallback is
+  where both the primary and the fallback partition run with preemption off, our jobs are not preempted
+  there, and preempting another partition's guest jobs is no reason to fall back. An entry without a fallback is
   never probed; the probe applies to CPU entries too.
 - **Cross-checks (`slurm.step_findings` and `slurm.profile_findings`, used by `lint`, `prefetch` and
   `submit`).** `resources.profile` must be a partition key (`partition-unknown`). A `fallback` is a
-  partition *name*, not a key (the site profile names another partition there), so it is checked as a plain
+  partition *name*, not a key (a profile names a Slurm partition there), so it is checked as a plain
   word that differs from its own partition (`fallback-invalid`). A partition, mem, time, gres or fallback
   value that rendering would refuse is `resource-invalid`, so lint catches it first; the profile's log root
   and `build` partition are checked once (`logs-invalid`, `resource-invalid`). `gpu_arch` or `min_driver`
@@ -1323,7 +1456,7 @@ patch text.
   Each build job is named `reproduce-build-<sdist>-<random>` on the sbatch command line, so if the driver
   is interrupted (Ctrl-C, SIGTERM, any exception) it runs `scancel --name` on it: no orphan job finishes
   later and rewrites the manifest. The job gets the `--base-dir` prefetch used. Steps declaring `hf_weights` are refused: downloading
-  pinned weights is out of the current scope, and no tier-1 step needs it. `--sources-only` reads a draft
+  pinned weights is out of the current scope, and no step of the first rerun set needs it. `--sources-only` reads a draft
   (one source mapping, a list, or a `{name, steps}` manifest whose steps may lack `env`; only `name`,
   `repo`, `commit` and `submodules` are read) and creates only the cleared worktrees with the empty patch
   set.

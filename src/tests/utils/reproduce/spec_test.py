@@ -245,7 +245,7 @@ def _set_ir_notebook(m: dict[str, Any]) -> None:
         notebook_tools=None,
         r_packages=[{"name": "lme4", "version": "1.1-35"}],
         r_snapshot="2026-01-01",
-        r_lib="{cache}/R/a",
+        r_lib="{cache}/r/a",
     )
 
 
@@ -318,8 +318,8 @@ def test_r_kind_requires_r_fields() -> None:
     step = _step(kind="r")
     with pytest.raises(ValidationError):
         StepSpec.model_validate(step)
-    step["env"].update(r_packages=[{"name": "lme4", "version": "1.1-35"}], r_snapshot="2026-01-01", r_lib="{cache}/R/a")
-    assert StepSpec.model_validate(step).env.r_lib == "{cache}/R/a"
+    step["env"].update(r_packages=[{"name": "lme4", "version": "1.1-35"}], r_snapshot="2026-01-01", r_lib="{cache}/r/a")
+    assert StepSpec.model_validate(step).env.r_lib == "{cache}/r/a"
 
 
 def test_expect_needs_one_target_and_one_tolerance() -> None:
@@ -382,7 +382,7 @@ ENV_COUNTER_EXAMPLES: dict[str, tuple[dict[str, Any], str]] = {
     "config-file-without-sha": ({"body__config_file": "envs/a/uv.toml"}, "config_file and config_file_sha256"),
     "overrides-sha-without-file": ({"body__overrides_sha256": SHA}, "overrides and overrides_sha256"),
     "torch-without-first-resolve": ({"first_resolve": None}, "needs first_resolve"),
-    "r-lib-outside-cache": ({"r_lib": "{out}/R/a"}, "must start with"),
+    "r-lib-outside-cache": ({"r_lib": "{out}/r/a"}, "E_SPEC_BAD_R_LIB"),
     "r-snapshot-int": ({"r_snapshot": 20260101}, "YYYY-MM-DD"),
     "r-snapshot-datetime": ({"r_snapshot": datetime.datetime(2026, 1, 1)}, "YYYY-MM-DD"),
     "r-snapshot-short": ({"r_snapshot": "2026-1-1"}, "YYYY-MM-DD"),
