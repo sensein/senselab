@@ -276,7 +276,8 @@ def _drive_branches(
     """Run PREPROCESS and SESSION, then hand the rest of the graph to :func:`drive_decisions`.
 
     A single-file run sees no siblings, so SESSION records the recording's own floor as the floor
-    it uses and its own speech-residual reading as its session background's only member; a corpus run writes SESSION per BIDS session (``scripts/extend_session_floor.py``).
+    it uses and its own speech-residual reading as its session background's only member; a corpus
+    run writes SESSION per BIDS session (``scripts/extend_session_floor.py``).
 
     A PREPROCESS that fails records every node between it and VERDICT ``SKIPPED`` and calls
     nothing further. See ``specs/20260817-triage-workflow-dag/dag.md``.

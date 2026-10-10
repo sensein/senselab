@@ -214,9 +214,9 @@ def floor_of(
         background_db: The session background per band that replaces every other choice, or None.
 
     Returns:
-        The floor: ``background_db`` where given (source ``speech_residual``); else the session's where the recording's own stands ``session.gap_db`` over it (median
-        over bands), else the residual's where the own stands ``floor.residual_gap_db`` over that,
-        else the recording's own.
+        The floor: ``background_db`` where given (source ``speech_residual``); else the session's
+        where the recording's own stands ``session.gap_db`` over it (median over bands), else the
+        residual's where the own stands ``floor.residual_gap_db`` over that, else the recording's own.
     """
     q = p["floor"]
     hop = p["hop_s"]

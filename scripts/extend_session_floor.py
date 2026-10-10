@@ -10,7 +10,8 @@ owns. Every member's store must already carry PREPROCESS's ``background_floor``
 (``scripts/extend_background_floor.py``); a member without one is left out of its session's floor,
 and its own store records the missing floor. Each store gains one ``speech_residual`` measurement,
 read off its plain, enhanced and residual streams, and one ``session_floor`` measurement carrying
-the session floor and the session background over the session's speech tasks' residuals. Run ``scripts/extend_replay_decisions.py`` afterwards: BACKGROUND reads this floor.
+the session floor and the session background over the session's speech tasks' residuals. Run
+``scripts/extend_replay_decisions.py`` afterwards: BACKGROUND reads this floor.
 
 Install:
     uv sync --all-extras --group dev
