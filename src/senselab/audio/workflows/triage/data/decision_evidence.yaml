@@ -4,7 +4,7 @@
 # a category with in / not in against a list of categories; a reported reading has neither.
 # `producer` names the unit of specs/20261007-task-events-in-background/design.md that emits it;
 # an item a later unit produces is absent from the tables until that unit lands.
-version: 4
+version: 5
 groups:
   acquisition:
     admit_outcome:
@@ -147,7 +147,7 @@ groups:
     speech_in_task:
       unit: words
       producer: unit B
-      meaning: lexical words outside the task's own content, over the whole file (a non-lexical task: not its declared text nor a misreading of its events; an item list: outside its item runs), against data/task_speech.yaml words_min or item_words_min
+      meaning: lexical words outside the task's own content, over the whole file (in a non-lexical task neither its declared text nor a misreading of its events, in an item list outside its item runs), against data/task_speech.yaml words_min or item_words_min
   cohort:
     cohort.other_speaker_runs:
       unit: runs
