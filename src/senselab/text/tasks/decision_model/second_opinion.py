@@ -177,9 +177,7 @@ class SecondOpinion:
     raw: dict[str, Any] = field(default_factory=dict)
 
 
-def read_answers(
-    answers: Mapping[str, Any], questions: Mapping[str, Mapping[str, Any]] = QUESTIONS
-) -> SecondOpinion:
+def read_answers(answers: Mapping[str, Any], questions: Mapping[str, Mapping[str, Any]] = QUESTIONS) -> SecondOpinion:
     """Read a decision model's answers to a question set.
 
     Args:

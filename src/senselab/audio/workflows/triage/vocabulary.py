@@ -3191,7 +3191,11 @@ def fold_file_verdict(
             by_branch[owner].kind if owner in by_branch else None,
         )
     share = task_evidence.task_speech.get("phrase_share")
-    if task_evidence.phrase_share_review is not None and share is not None and share >= task_evidence.phrase_share_review:
+    if (
+        task_evidence.phrase_share_review is not None
+        and share is not None
+        and share >= task_evidence.phrase_share_review
+    ):
         owner = task_evidence.owning_branches[0] if task_evidence.owning_branches else _VERDICT
         other = speaker_of(cohort, task_evidence.task_speech.get("runs") or ()) == "other"
         flag(
