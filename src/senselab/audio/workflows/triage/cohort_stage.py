@@ -145,6 +145,8 @@ class RecordingFacts:
         diarization: ``(start, end, speaker)`` per diarized segment on the configured stream.
         lexical: The lexical consensus words' extents, in index order.
         speech: The speech-classified regions (:func:`speech_regions`), merged.
+        removed_speech: Speech-classified on the plain stream and not on the enhanced one: a voice the
+            enhancer removed as background.
         task_events: The task events the branches read (breaths, coughs, phonation holds, syllables).
         active: BACKGROUND's activity regions on the plain stream.
     """
@@ -158,6 +160,7 @@ class RecordingFacts:
     diarization: tuple[tuple[float, float, str], ...] = ()
     lexical: tuple[tuple[float, float], ...] = ()
     speech: tuple[tuple[float, float], ...] = ()
+    removed_speech: tuple[tuple[float, float], ...] = ()
     task_events: tuple[tuple[float, float], ...] = ()
     active: tuple[tuple[float, float], ...] = ()
 
@@ -302,15 +305,17 @@ def facts_of(
                 )
             )
     words = tuple((float(w.extent[0]), float(w.extent[1])) for w in lexical_words(store) if w.extent is not None)
-    speech: list[tuple[float, float]] = []
+    by_name: dict[str, list[tuple[float, float]]] = {}
     if run_dir is not None:
         classes = cohort_parameters()["speech"]
-        for name in classes["measurements"]:
-            speech.extend(
-                speech_regions(
-                    _yamnet_windows(store, run_dir, str(name)), classes["labels"], float(classes["score_min"])
-                )
+        names = {*classes["measurements"], *cohort_parameters()["windows"]["removed"].values()}
+        for name in sorted(names):
+            by_name[str(name)] = speech_regions(
+                _yamnet_windows(store, run_dir, str(name)), classes["labels"], float(classes["score_min"])
             )
+    speech = [region for name in cohort_parameters()["speech"]["measurements"] for region in by_name.get(name, [])]
+    removed = cohort_parameters()["windows"]["removed"]
+    removed_speech = _subtract(by_name.get(removed["from"], []), by_name.get(removed["kept"], []))
     return RecordingFacts(
         stem=stem,
         session=session_key(stem),
@@ -321,6 +326,7 @@ def facts_of(
         diarization=segments,
         lexical=words,
         speech=tuple(merge(speech)),
+        removed_speech=tuple(removed_speech),
         task_events=tuple(merge(_task_events(store))),
         active=tuple(_activity(store)),
     )
@@ -396,7 +402,7 @@ def candidate_runs(facts: RecordingFacts, *, min_s: float, lexical_gap_s: float)
 
 
 def window_regions(facts: RecordingFacts, *, min_s: float, lexical_gap_s: float) -> list[tuple[float, float]]:
-    """The speech-classified time no compared run (:func:`candidate_runs`) or task event covers.
+    """The removed speech no compared run (:func:`candidate_runs`) or task event covers.
 
     Args:
         facts: The recording's facts.
@@ -410,7 +416,7 @@ def window_regions(facts: RecordingFacts, *, min_s: float, lexical_gap_s: float)
         *((run.start, run.end) for run in candidate_runs(facts, min_s=min_s, lexical_gap_s=lexical_gap_s)),
         *facts.task_events,
     ]
-    return [(s, e) for s, e in _subtract(list(facts.speech), covered) if e - s >= min_s]
+    return [(s, e) for s, e in _subtract(list(facts.removed_speech), covered) if e - s >= min_s]
 
 
 def window_runs(
@@ -422,6 +428,7 @@ def window_runs(
     cut: float,
     active_fraction: Callable[[tuple[float, float]], float] = lambda span: 1.0,
     active_fraction_min: float = 0.0,
+    windows_min: int = 1,
 ) -> list[dict[str, Any]]:
     """Sliding windows over each region, grouped into runs of contiguous windows on one side of the cut.
 
@@ -433,6 +440,7 @@ def window_runs(
         cut: The match cut.
         active_fraction: The share of a window BACKGROUND read as active.
         active_fraction_min: A window under this share is not embedded and ends the group it would join.
+        windows_min: A group of fewer windows than this under the cut is not reported.
 
     Returns:
         One run record per group, its span the union of its windows and its cosine their mean.
@@ -456,7 +464,7 @@ def window_runs(
             t += hop_s
         if group:
             out.append(_window_group(group, cut))
-    return out
+    return [run for run in out if run["match"] or run["windows_n"] >= windows_min]
 
 
 def _window_group(group: Sequence[tuple[float, float, float, float]], cut: float) -> dict[str, Any]:
@@ -804,7 +812,6 @@ def match_runs(
     """
     runs = candidate_runs(facts, min_s=min_s, lexical_gap_s=lexical_gap_s)
     windows = cohort_parameters()["windows"]
-    gates = cohort_parameters()["runs"]
     regions = window_regions(facts, min_s=float(windows["window_s"]), lexical_gap_s=lexical_gap_s)
     loaded = loader() if runs or regions else None
     if (runs or regions) and loaded is None:
@@ -814,8 +821,6 @@ def match_runs(
         samples, rate = loaded
         for run in runs:
             active = active_s(facts, (run.start, run.end))
-            if facts.active and active < float(gates["active_min_s"]):
-                continue
             vector = embed(cut_samples(samples, rate, (run.start, run.end)), rate)
             if vector is None:
                 continue
@@ -846,6 +851,7 @@ def match_runs(
                 cut=cut,
                 active_fraction=lambda span: active_s(facts, span) / (span[1] - span[0]) if facts.active else 1.0,
                 active_fraction_min=float(windows["active_fraction_min"]),
+                windows_min=int(windows["windows_min"]),
             )
         )
     nonmatch = [r for r in records if not r["match"]]
