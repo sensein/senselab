@@ -77,6 +77,7 @@ def _facts(  # noqa: ANN202
     duration=20.0,  # noqa: ANN001
     extent=None,  # noqa: ANN001
     speech=None,  # noqa: ANN001
+    removed=(),  # noqa: ANN001
     events=(),  # noqa: ANN001
 ) -> RecordingFacts:
     """A recording's facts; speech-classified wherever diarized unless ``speech`` says otherwise."""
@@ -90,6 +91,7 @@ def _facts(  # noqa: ANN202
         diarization=tuple(diarization),
         lexical=tuple(lexical),
         speech=tuple((a, b) for a, b, _ in diarization) if speech is None else tuple(speech),
+        removed_speech=tuple(removed),
         task_events=tuple(events),
     )
 
@@ -322,7 +324,7 @@ def test_task_events_are_cut_out_of_a_diarized_speech_run() -> None:
 
 
 def test_sliding_windows_catch_speech_no_diarized_segment_or_word_covers() -> None:
-    """A talker before the diarizer's first segment is read by the windows and comes out as one non-matching run."""
+    """A removed talker before the diarizer's first segment is read by the windows: one non-matching run."""
     speech, _, _ = _session()
     facts = _facts(
         "sub-a_ses-1_task-random-item-generation",
@@ -330,6 +332,7 @@ def test_sliding_windows_catch_speech_no_diarized_segment_or_word_covers() -> No
         diarization=[(3.0, 12.0, "A")],
         lexical=[(3.2, 11.5)],
         speech=[(0.0, 12.0)],
+        removed=[(0.0, 12.0)],
     )
     audio = _loader([(0.0, 2.4, TALKER), (2.4, 12.0, PARTICIPANT)], 20.0)
     assert window_regions(facts, min_s=1.0, lexical_gap_s=0.5) == [(0.0, 3.0)]
@@ -340,6 +343,15 @@ def test_sliding_windows_catch_speech_no_diarized_segment_or_word_covers() -> No
 
 
 def test_sliding_windows_skip_task_events() -> None:
-    """Speech-classified time inside a task event is the participant's task sound, not a window to read."""
-    facts = _facts("s", "prolonged-vowel", speech=[(0.0, 8.0)], events=[(0.5, 7.5)])
+    """Removed speech inside a task event is the participant's task sound, not a window to read."""
+    facts = _facts("s", "prolonged-vowel", speech=[(0.0, 8.0)], removed=[(0.0, 8.0)], events=[(0.5, 7.5)])
     assert window_regions(facts, min_s=1.0, lexical_gap_s=0.5) == []
+
+
+def test_a_single_window_under_the_cut_is_not_a_run() -> None:
+    """One window under the cut is not enough; two contiguous ones are."""
+    from senselab.audio.workflows.triage.cohort_stage import window_runs
+
+    cosines = {0.0: 0.1, 0.5: 0.9, 1.0: 0.9}
+    runs = window_runs([(0.0, 2.0)], lambda span: cosines[span[0]], window_s=1.0, hop_s=0.5, cut=CUT, windows_min=2)
+    assert [(r["start"], r["match"]) for r in runs] == [(0.5, True)]
