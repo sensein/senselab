@@ -83,6 +83,7 @@ def _run(root: Path, task: str, duration: float, speech: list[tuple[float, float
 
 @pytest.fixture()
 def corpus(tmp_path: Path) -> Path:
+    """Three speech-bearing recordings and four vowels of one session, the last far longer than the rest."""
     rows = [
         _run(tmp_path, "rainbow-passage", 12.0, [(1.0, 9.0, "A", 0.1)], (1.0, 9.0)),
         _run(tmp_path, "caterpillar-passage", 12.0, [(1.0, 10.0, "A", 0.1)], (1.0, 10.0)),
@@ -99,6 +100,7 @@ def corpus(tmp_path: Path) -> Path:
 
 @pytest.fixture()
 def config(tmp_path: Path) -> Path:
+    """An override naming the enrollment model and the match cut."""
     path = tmp_path / "override.yaml"
     path.write_text(
         "speech:\n"
