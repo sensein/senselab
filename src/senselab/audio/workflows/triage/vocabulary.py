@@ -2702,6 +2702,52 @@ def _capture_items(route_state: str | None, quality: Mapping[str, Any], acoustic
     return items
 
 
+SPEECH_QUALITY = "speech_quality"
+"""The prefix of the foreground-over-background quality items, ``speech_quality.<measure>``."""
+
+SPEECH_QUALITY_FRAME_SETS = ("whole", "speech", "non_speech")
+
+
+def _speech_quality_items(quality: Mapping[str, Any]) -> list[EvidenceItem]:
+    """The recording's and its session's foreground-over-background quality, as annotations.
+
+    Args:
+        quality: QUALITY's join record.
+
+    Returns:
+        ``speech_quality.foreground_minus_residual_db.<set>`` and ``speech_quality.plain_minus_residual_db.<set>``
+        over the whole file, speech frames and non-speech frames, and
+        ``speech_quality.session_foreground_minus_residual_db``; each an annotation in dB, its value the
+        recording's ``not_applicable`` reason where a speech-frame or foreground value has none. Empty where
+        SESSION's reading was not read.
+    """
+    record = dict(quality.get(SPEECH_QUALITY) or {})
+    recording = dict(record.get("recording") or {})
+    if not recording or recording.get("missing"):
+        return []
+    reason = recording.get("not_applicable")
+    items: list[EvidenceItem] = []
+    for measure in ("foreground_minus_residual_db", "plain_minus_residual_db"):
+        values = dict(recording.get(measure) or {})
+        for frames in SPEECH_QUALITY_FRAME_SETS:
+            value = values.get(frames)
+            if value is None and reason and (measure.startswith("foreground") or frames == "speech"):
+                value = reason
+            items.append(item(f"{SPEECH_QUALITY}.{measure}.{frames}", value, ANNOTATION, unit="dB"))
+    session = dict(record.get("session") or {})
+    session_quality = dict(session.get("quality") or {})
+    value = (session_quality.get("foreground_minus_residual_db") or {}).get("whole")
+    items.append(
+        item(
+            f"{SPEECH_QUALITY}.session_foreground_minus_residual_db",
+            value if value is not None else session_quality.get("not_applicable"),
+            ANNOTATION,
+            unit="dB",
+        )
+    )
+    return items
+
+
 def _decision_evidence(
     *,
     triage: Triage,
@@ -2756,6 +2802,7 @@ def _decision_evidence(
             )
         )
     items.extend(_capture_items(route_state, task.quality, ground == ACOUSTICALLY_EMPTY))
+    items.extend(_speech_quality_items(task.quality))
     if ground == DECLARED_TASK_ABSENT:
         items.append(item("declared_task_found", performed, DISCARD, comparison="==", threshold=True))
     task_items = _task_items(task)

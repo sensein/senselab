@@ -25,7 +25,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 from senselab.audio.data_structures import AudioHints
 from senselab.audio.workflows.triage.background_model import BACKGROUND_MODEL, _named_stream
@@ -33,7 +33,7 @@ from senselab.audio.workflows.triage.background_speech import background_speech_
 from senselab.audio.workflows.triage.config import TriageConfig, UnmeasuredConfigKey
 from senselab.audio.workflows.triage.ddk_task import DDK_READING
 from senselab.audio.workflows.triage.nodes.airway_task import BREATH_READING, COUGH_READING
-from senselab.audio.workflows.triage.nodes.background import SESSION_FLOOR
+from senselab.audio.workflows.triage.nodes.background import SESSION_FLOOR, SPEECH_RESIDUAL
 from senselab.audio.workflows.triage.nodes.branches import SPEECH_EXPECTATIONS, declared_task_family
 from senselab.audio.workflows.triage.nodes.common import (
     BranchResult,
@@ -318,6 +318,8 @@ def measure_join(store: ProvStore, run_dir: Path) -> dict[str, Any]:
     drops = drop_levels(faults.get("shutoff") or (), raw, p)
     cut, gated = separate_gates(drops, p)
     faults["shutoff"], faults["gate"] = [list(s) for s in cut], [list(s) for s in gated]
+    residual_reading = find_measurement(store, SPEECH_RESIDUAL)
+    background_record = (session.attributes.get("session_background") or {}) if session is not None else {}
     record = join_record(
         task_spans=spans,
         event_kind=kind,
@@ -330,7 +332,42 @@ def measure_join(store: ProvStore, run_dir: Path) -> dict[str, Any]:
         level_rel_db=None if level is None else float(level),
         p=p,
     )
-    return {**record, "drops": drops, "missing": missing}
+    return {
+        **record,
+        "drops": drops,
+        "missing": missing,
+        "speech_quality": speech_quality_record(
+            None if residual_reading is None else residual_reading.attributes, background_record
+        ),
+    }
+
+
+def speech_quality_record(reading: Mapping[str, Any] | None, session_background: Mapping[str, Any]) -> dict[str, Any]:
+    """The recording's and its session's foreground-over-background quality, as QUALITY reports it.
+
+    Args:
+        reading: SESSION's ``speech_residual`` record for the recording, or None where SESSION wrote none.
+        session_background: SESSION's ``session_background`` record; empty where it wrote none.
+
+    Returns:
+        ``recording``: the reading's ``foreground_db``, ``foreground_minus_residual_db``,
+        ``plain_minus_residual_db``, ``residual_db`` and ``not_applicable``; ``session``: the session
+        background's ``source``, ``fallback``, ``members_n``, ``level_db`` and ``quality``. A side that was
+        not read is ``{"missing": [...]}``.
+    """
+    keys = ("foreground_db", "foreground_minus_residual_db", "plain_minus_residual_db", "residual_db", "not_applicable")
+    if reading is None:
+        recording: dict[str, Any] = {"missing": [SPEECH_RESIDUAL]}
+    elif reading.get("missing"):
+        recording = {"missing": list(reading["missing"])}
+    else:
+        recording = {key: reading.get(key) for key in keys}
+    session = (
+        {key: session_background.get(key) for key in ("source", "fallback", "members_n", "level_db", "quality")}
+        if session_background
+        else {"missing": [SESSION_FLOOR]}
+    )
+    return {"recording": recording, "session": session}
 
 
 def write_join(store: ProvStore, activity: str, software: str, run_dir: Path) -> str:
