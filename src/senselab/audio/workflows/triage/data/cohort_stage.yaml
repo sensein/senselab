@@ -18,6 +18,20 @@ runs:
   diarization_stream: enhanced          # diarized segments on this stream, each speaker's exclusive pieces
   lexical_gap_key: branch.run_gap_max_s # lexical words merge into one run across gaps up to this config key
 
+# Speech-classified regions: YAMNet windows whose highest speech-label score reaches score_min, on
+# each stream named. A diarized run is compared only inside these or the lexical words; the sliding
+# windows read only these. Labels and score as data/background_speech.yaml (owner, 2026-10-06).
+speech:
+  measurements: [yamnet_scores, enhanced_yamnet_scores]   # plain and enhanced YAMNet windows
+  labels: [Speech, Conversation, 'Narration, monologue', 'Male speech, man speaking', 'Female speech, woman speaking', 'Child speech, kid speaking']
+  score_min: 0.5
+
+# Third run source: sliding windows over speech-classified time outside the diarized segments, the
+# lexical runs and the task events, embedded on the plain stream as the enrollment is.
+windows:
+  window_s: 1.0   # the speaker-vector refusal floor: the shortest span whose cosine separates speakers
+  hop_s: 0.5      # half a window: a stretch of 1.5 s or more holds a whole window wherever it starts
+
 # Distribution checks: each names its level, its bounds and the ground it raises.
 quantiles: [0.05, 0.25, 0.5, 0.75, 0.95]
 checks:
