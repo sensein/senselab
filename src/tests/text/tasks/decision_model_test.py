@@ -204,7 +204,32 @@ class TestTheAnswers:
         assert state["task_nature"] == task_nature_description("animal-fluency") != ""
         assert "state.redaction_policy" in QUESTIONS["policy_identifier_present"]["instructions"]
         assert "state.masked_text" in QUESTIONS["masked_text_free_of_identifiers"]["instructions"]
-        assert QUESTIONS["off_task_speech"]["type"] == "choice" and QUESTION_SET_VERSION == 4
+        assert QUESTIONS["off_task_speech"]["type"] == "choice" and QUESTION_SET_VERSION == 5
+
+    def test_an_item_set_task_is_asked_about_phrases_instead_of_items(self) -> None:
+        """Owner, 2026-10-10: the item-set set swaps off_task_speech for phrases_instead_of_items, nothing else."""
+        from senselab.text.tasks.decision_model.second_opinion import ITEM_SET_QUESTIONS, questions_for
+
+        assert questions_for({"task": "animal-fluency", "item_set": True}) is ITEM_SET_QUESTIONS
+        assert questions_for({"task": "animal-fluency"}) is QUESTIONS
+        assert set(ITEM_SET_QUESTIONS) == (set(QUESTIONS) - {"off_task_speech"}) | {"phrases_instead_of_items"}
+        criteria = ITEM_SET_QUESTIONS["phrases_instead_of_items"]["criteria"]
+        assert list(criteria) == ["none", "occasional", "predominant"]
+        asked: list[set[str]] = []
+
+        def ask(state: dict, questions: dict) -> dict:
+            asked.append(set(questions))
+            answers = {k: v for k, v in _answers().items() if k != "off_task_speech"}
+            answers["phrases_instead_of_items"] = {
+                "choice": "predominant",
+                "probabilities": {"none": 0.1, "occasional": 0.2, "predominant": 0.7},
+            }
+            return answers
+
+        opinion = ask_second_opinion(ask, "dog cat", {"task": "animal-fluency", "item_set": True}, "dog cat")
+        assert asked == [set(ITEM_SET_QUESTIONS)]
+        assert opinion.choices["phrases_instead_of_items"] == "predominant"
+        assert opinion.probabilities["phrases_instead_of_items"] == pytest.approx(0.7)
 
     def test_an_unanswered_question_is_an_error_not_a_zero(self) -> None:
         """A missing answer must not read as a confident no."""
