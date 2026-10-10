@@ -685,7 +685,7 @@ def test_the_prompt_states_the_time_expression_rule_and_the_cue_word_rule() -> N
     """v7: weekdays and relative times are released, absolute dates are not; a cue word's definition is task content."""
     from senselab.text.tasks.pii_detection import redaction_review as r
 
-    assert r.PROMPT_VERSION == 13
+    assert r.PROMPT_VERSION == 14
     assert "2-3 weeks ago" in r._PROMPT and "this morning" in r._PROMPT and '"Monday"' in r._PROMPT
     assert "gladiator" in r._PROMPT and "hotel" in r._PROMPT
 
@@ -776,7 +776,7 @@ def test_the_reading_records_which_inputs_it_had() -> None:
     )
     assert {key: full[key] for key in ("version", "prompt_version", "task", "full_transcript", "pii_annotations")} == {
         "version": 3,
-        "prompt_version": 13,
+        "prompt_version": 14,
         "task": True,
         "full_transcript": True,
         "pii_annotations": True,
@@ -930,6 +930,23 @@ def test_v13_the_phrase_reading_is_parsed_checked_and_recorded() -> None:
     assert "do not occur" in str(answer_problem(unheard, "lion zebra", None))
     payload = review_payload(ReviewResult(available=True, phrases_instead_of_items="none"))
     assert payload["phrases_instead_of_items"] == "none" and payload["phrase_quotes"] == []
+
+
+def test_v14_the_reviewer_quotes_every_phrase_and_the_level_beside_them() -> None:
+    """Prompt 14: point 8 asks for every phrase, quoted; several parse in order, and none may still quote asides."""
+    from senselab.text.tasks.pii_detection import redaction_review as r
+
+    items = r.review_prompt(True)
+    assert "Find every phrase" in items and "quoting every phrase" in items and "never an item" in items
+    assert "neither a pause nor the number of words decides it" in items
+    answer = _V12_ANSWER.replace("OFF_TASK_SPEECH: some\n", "PHRASES_INSTEAD_OF_ITEMS: occasional\n").replace(
+        'OFF_TASK_QUOTES: ["is that enough"]', 'PHRASE_QUOTES: ["my dog is old", "is that enough"]'
+    )
+    parsed = r.parse_completion(answer)
+    assert parsed.phrases_instead_of_items == "occasional"
+    assert parsed.phrase_quotes == ["my dog is old", "is that enough"]
+    asides = r.ReviewResult(available=True, phrases_instead_of_items="none", phrase_quotes=["is that enough"])
+    assert r.answer_problem(asides, "lion zebra is that enough", None) is None
 
 
 def test_v12_task_reading_quotes_are_checked_and_a_judgment_needs_one() -> None:

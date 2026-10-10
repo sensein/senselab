@@ -30,7 +30,7 @@ from senselab.text.tasks.pii_detection.redaction_review import (
     task_nature_description,
 )
 
-QUESTION_SET_VERSION = 5
+QUESTION_SET_VERSION = 6
 """Bump on any change to :data:`QUESTIONS` or to the state :func:`ask_second_opinion` sends."""
 
 OTHER_VOICE = "other_voice"
@@ -125,12 +125,14 @@ ITEM_SET_QUESTIONS: Mapping[str, Mapping[str, Any]] = {
         "instructions": (
             "This task asks for a list of items (state.task, state.task_nature, state.instructions). Is the "
             "participant uttering phrases instead of items? An item is a short unit, typically one to three "
-            "words: a name, a number, a letter, an animal. A phrase is clausal speech, such as 'I don't know "
-            "what else to say' or 'my dog's name is ...'. Occasional asides ('um', 'let me think', 'is that "
-            "enough?') are normal in this task and are not phrases instead of items."
+            "words: a name, a number, a letter, an animal, whatever the instructions ask for. A phrase is "
+            "clausal or non-item speech: a clause, a sentence, a comment, a question or a story rather than an "
+            "item, such as 'I don't know what else to say' or 'my dog's name is ...'. Judge each stretch of the "
+            "transcript by what it says; neither a pause nor the number of words decides it. Brief asides about "
+            "the task itself ('um, let me think', 'is that enough?') are normal in this task and do not count."
         ),
         "criteria": {
-            PHRASES_NONE: "The participant lists items, with or without occasional asides",
+            PHRASES_NONE: "The participant lists items, with at most brief asides about the task",
             PHRASES_OCCASIONAL: "A few phrases come between the items",
             PHRASES_PREDOMINANT: "Phrases make up much of the recording; the list gives way to narration",
         },

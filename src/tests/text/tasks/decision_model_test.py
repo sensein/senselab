@@ -204,7 +204,7 @@ class TestTheAnswers:
         assert state["task_nature"] == task_nature_description("animal-fluency") != ""
         assert "state.redaction_policy" in QUESTIONS["policy_identifier_present"]["instructions"]
         assert "state.masked_text" in QUESTIONS["masked_text_free_of_identifiers"]["instructions"]
-        assert QUESTIONS["off_task_speech"]["type"] == "choice" and QUESTION_SET_VERSION == 5
+        assert QUESTIONS["off_task_speech"]["type"] == "choice" and QUESTION_SET_VERSION == 6
 
     def test_an_item_set_task_is_asked_about_phrases_instead_of_items(self) -> None:
         """Owner, 2026-10-10: the item-set set swaps off_task_speech for phrases_instead_of_items, nothing else."""

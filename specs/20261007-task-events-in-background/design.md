@@ -1838,6 +1838,9 @@ outside the task that should be held (`triage_review_7423bffbc3c9.json`).
 
 ### The fold, for item-set families
 
+Superseded the same day: the lexical measure no longer decides and the reviewer's quotes are the mask. See
+"The reviewer reads the phrases" below.
+
 - Review on `phrase_share` >= `phrase_share_review` (ground `phrases_instead_of_items`, or
   `other_speaker_in_task` where the phrase runs overlap COHORT's non-matching spans), on the reviewer's
   `predominant` (`reviewer_phrases_instead_of_items`) or on the second opinion's chosen `predominant`
@@ -1978,3 +1981,57 @@ residual reader and no reason either way.
 - QUALITY's other voice touching a task span: 2,158 recordings (2,155 stored `interference_in_task`); 1,378
   are in the PREPROCESS set, and the other 780 need a QUALITY-onward replay. BACKGROUND impulses exist in
   51,644 recordings, so the join's new `interference.impulse` record (annotation only) reaches nearly all.
+
+## The reviewer reads the phrases (owner, 2026-10-10)
+
+Owner: "Just ask the LLM reviewer to determine if something is a phrase (also 3 is fine)." Then, correcting a
+first reading of it: the reviewer is not given a per-utterance segmentation and answers no per-utterance flag.
+It reads the transcript as before and extracts the phrases, quoted, beside its overall level.
+
+### What decides (`decision_reasons.yaml` v8, `decision_evidence.yaml` v8)
+
+- For an item-set family, review on the reviewer's `PHRASES_INSTEAD_OF_ITEMS: predominant`
+  (`reviewer_phrases_instead_of_items`) or the second opinion's chosen `predominant`
+  (`second_opinion:phrases_instead_of_items`); both map to `off_task_speech`. `occasional` from either is the
+  annotation `phrases_occasional`, as before.
+- The lexical `phrase_share` decides nothing. The ground `phrases_instead_of_items` (and its
+  `other_speaker_in_task` variant, which read the lexical phrase runs against COHORT's non-matching spans) is
+  removed with its reason mapping, and `phrase_share_review` is removed from `data/task_speech.yaml` (v5). The
+  `phrase_share` evidence item stays, as an `annotation` row with no comparison or threshold.
+- Other-speaker evidence reviews as before (COHORT, the reviewer's `other_speaker`, QUALITY's other voice).
+
+### The lexical measure, as evidence (`data/task_speech.yaml` v5)
+
+`phrase_words_min` is 3 (owner: "3 is fine"): an utterance of three or more lexical words holding a
+closed-class word is a phrase. On the four labels of "The bound, fitted on four labels" this separates the
+cleared lists (at most 0.143) from 8ca6baff (0.381). It is reported on `task_speech_reading` and in the
+evidence table; the bound it was compared against no longer exists. `task_speech_reading` also records
+`member_ids`, the lexical words that are members of the declared category.
+
+### The reviewer (prompt 14) and the second opinion (question set 6)
+
+- Point 8 for an item-set task asks the reviewer to find every phrase: clausal or non-item speech (a clause, a
+  sentence, a comment, a question or a story rather than an item), judged by what it says, not by a pause or a
+  word count. `PHRASE_QUOTES` quotes every phrase, one entry each, exactly as in the ORIGINAL, never an item;
+  `[]` only where there is none, at least one where the level is `occasional` or `predominant`. `none` may
+  carry quotes of brief asides about the task. The parse is unchanged; the quotes are checked against the
+  ORIGINAL like every other quote (`answer_problem`).
+- The second opinion's `phrases_instead_of_items` uses the same definition of a phrase, with brief asides about
+  the task not counting; its classes are unchanged.
+
+### The mask (`mask_plan`)
+
+- The reviewer's phrase quotes are placed on the consensus words as whole-token runs (`_place`), the way its
+  off-task and other-speaker quotes are; a quote that places on no word masks nothing and is not otherwise
+  recorded, as for those quotes.
+- Masked only where the reviewer's level is `predominant`, and that release is withheld
+  (`non_task_speech_extensive`), as before; an occasional phrase masks nothing because a redacted release is
+  itself reviewed.
+- Whatever the level, a word the reviewer quotes as a phrase is not exempt as an item utterance's word: the
+  lexical item status yields to the reviewer. A declared-category member stays task content wherever it falls.
+- The lexical phrase words are no longer masked in an item-set family; a non-lexical family's speech words are
+  masked as before.
+
+Not yet measured: the prompt-14 readings over the owner's labelled stems (run on ORCD, "vLLM reviewer engine"
+in `specs/20261010-vllm-reviewer/design.md`).
+

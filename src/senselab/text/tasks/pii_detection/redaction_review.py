@@ -81,7 +81,7 @@ _PHRASES_HEADING = "PHRASES_INSTEAD_OF_ITEMS:"
 _PHRASE_QUOTES_HEADING = "PHRASE_QUOTES:"
 _TASK_CONTENT_QUOTES_HEADING = "TASK_CONTENT_QUOTES:"
 
-PROMPT_VERSION = 13
+PROMPT_VERSION = 14
 """The prompt and its parse, as one number: it changes whenever either changes what a reading holds."""
 
 REVIEW_INPUTS_VERSION = 3
@@ -349,19 +349,21 @@ _OFF_TASK_PARTS = (
     "participant talks off-task. Return [] when OFF_TASK_SPEECH is none; otherwise quote at least one.\n"
 )
 _POINT_8_PHRASES = (
-    "8. This task asks for a list of items. Whether the participant is uttering phrases instead of items. An "
-    "item is a short unit, typically one to three words: a name, a number, a letter, an animal, whatever the "
-    "instructions ask for. A phrase is clausal speech, a clause or sentence rather than an item "
-    '("I don\'t know what else to say", "my dog\'s name is ..."). Occasional asides ("um", "let me think", '
-    '"is that enough?") are normal in this task and are not phrases instead of items. Answer none where the '
-    "participant lists items, asides or not; occasional where a few phrases come between the items; "
-    "predominant where phrases make up much of the recording, the list giving way to narration or "
-    "conversation.\n"
+    "8. This task asks for a list of items. Find every phrase in the recording. An item is a short unit, "
+    "typically one to three words: a name, a number, a letter, an animal, whatever the instructions ask for. "
+    "A phrase is clausal or non-item speech: a clause, a sentence, a comment, a question or a story rather "
+    'than an item ("I don\'t know what else to say", "my dog\'s name is ...", "is that enough?"). Judge each '
+    "stretch of the transcript by what it says; neither a pause nor the number of words decides it. Then judge "
+    "whether the participant is uttering phrases instead of items: none where they list items and say no "
+    'phrase, or only brief asides about the task itself ("um, let me think", "is that enough?"); occasional '
+    "where a few phrases come between the items; predominant where phrases make up much of the recording, the "
+    "list giving way to narration or conversation.\n"
 )
 _PHRASE_PARTS = (
     "PHRASES_INSTEAD_OF_ITEMS: one of none, occasional, predominant (point 8).\n"
-    "PHRASE_QUOTES: a JSON array of strings, each an exact phrase the participant said instead of items, "
-    "quoted from the ORIGINAL. Return [] when PHRASES_INSTEAD_OF_ITEMS is none; otherwise quote at least one.\n"
+    "PHRASE_QUOTES: a JSON array of strings quoting every phrase under point 8, one entry per phrase, each "
+    "exactly as it appears in the ORIGINAL and never an item. Return [] only when there is no phrase at all; "
+    "when PHRASES_INSTEAD_OF_ITEMS is occasional or predominant, quote at least one.\n"
 )
 
 
@@ -505,8 +507,8 @@ def review_prompt(item_set: bool) -> str:
         item_set: Whether the declared task is an item-set task (the context's :data:`ITEM_SET`).
 
     Returns:
-        The prompt; for an item-set task point 8 and its parts ask whether the participant utters phrases
-        instead of items (:data:`PHRASE_STATES`) in place of off-task speech.
+        The prompt; for an item-set task point 8 and its parts ask for every phrase the participant says, quoted,
+        and whether they utter phrases instead of items (:data:`PHRASE_STATES`), in place of off-task speech.
     """
     return _ITEM_SET_PROMPT if item_set else _PROMPT
 

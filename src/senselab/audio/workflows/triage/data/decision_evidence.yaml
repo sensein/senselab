@@ -4,7 +4,7 @@
 # a category with in / not in against a list of categories; a reported reading has neither.
 # `producer` names the unit of specs/20261007-task-events-in-background/design.md that emits it;
 # an item a later unit produces is absent from the tables until that unit lands.
-version: 7
+version: 8
 groups:
   acquisition:
     admit_outcome:
@@ -155,7 +155,7 @@ groups:
     phrase_share:
       unit: fraction
       producer: unit B
-      meaning: an item-set task's utterances (split at data/task_speech.yaml utterance_gap_s) that are phrases (phrase_words_min words or more, holding a closed-class word), over all its utterances, against phrase_share_review
+      meaning: an item-set task's lexical utterances (split at data/task_speech.yaml utterance_gap_s) that are phrases (phrase_words_min words or more, holding a closed-class word), over all its utterances; reported, never compared (the reviewer and the second opinion decide)
   cohort:
     cohort.other_speaker_runs:
       unit: runs

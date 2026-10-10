@@ -3,8 +3,8 @@
 # Owner, 2026-10-07: verdict pass/review/discard, release as_is/redacted/withheld, one reason per recording.
 # Owner, 2026-10-10: consolidated to these codes; the release ground is its own column (release_reason).
 # Derivation: specs/20261007-task-events-in-background/design.md ("Decision table", "Reasons consolidated",
-# "The residual's other voice is attributed").
-version: 7
+# "The residual's other voice is attributed", "The reviewer reads the phrases").
+version: 8
 precedence:            # discard reasons first, then incomplete, then the recording, then the content
 - unreadable
 - task_too_short
@@ -74,7 +74,6 @@ keys:                  # exact verdict ground key -> reason
   instructions_spoken: off_task_speech
   speech_in_task: off_task_speech
   reviewer_off_task_speech: off_task_speech
-  phrases_instead_of_items: off_task_speech
   reviewer_phrases_instead_of_items: off_task_speech
   recording_duration_outlier: atypical_recording
   release_in_nonlexical_task: identifying_content
