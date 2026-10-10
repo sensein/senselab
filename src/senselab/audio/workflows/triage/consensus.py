@@ -221,7 +221,10 @@ def missing_span(start: float | None, end: float | None) -> bool:
 
 
 def located_span(
-    start: float | None, end: float | None, point_width_s: float | None = None
+    start: float | None,
+    end: float | None,
+    point_width_s: float | None = None,
+    duration_s: float | None = None,
 ) -> tuple[float, float] | None:
     """Where a recognizer's span places a word.
 
@@ -229,10 +232,13 @@ def located_span(
         start: The span's start in seconds, or None.
         end: The span's end in seconds, or None.
         point_width_s: The width a point span is read over; ``data/word_timing.yaml`` when None.
+        duration_s: The duration of the audio the span was timed against, or None where unknown.
 
     Returns:
         None for a missing span (:func:`missing_span`); for a point span (``start == end``), the
-        ``point_width_s`` window centred on it, floored at zero; otherwise the span itself.
+        ``point_width_s`` window centred on it, inside ``[0, duration_s]``: shifted off an edge it would
+        cross, and narrowed to ``duration_s`` only where the recording is shorter than the window. Without
+        ``duration_s`` the window is floored at zero and its end is not bounded. Otherwise the span itself.
     """
     if missing_span(start, end):
         return None
@@ -240,7 +246,12 @@ def located_span(
     if end_s > start_s:
         return start_s, end_s
     width = word_timing_parameters()["point_width_s"] if point_width_s is None else float(point_width_s)
-    return max(0.0, start_s - width / 2.0), start_s + width / 2.0
+    if duration_s is None:
+        return max(0.0, start_s - width / 2.0), start_s + width / 2.0
+    bound = max(0.0, float(duration_s))
+    width = min(width, bound)
+    low = min(max(0.0, start_s - width / 2.0), bound - width)
+    return low, min(low + width, bound)
 
 
 @cache
@@ -409,7 +420,9 @@ def _column_word(
     return text, outcome, (), agreement, overrides
 
 
-def align_sources(sources: Sequence[SourceHypothesis], *, onomatopoeic: set[str]) -> Consensus:
+def align_sources(
+    sources: Sequence[SourceHypothesis], *, onomatopoeic: set[str], duration_s: float | None = None
+) -> Consensus:
     """Align the hypotheses as sequences and emit one word per aligned column, in column order.
 
     A single hypothesis is its own stream, read as one recognizer's: every word an ``insertion`` with
@@ -421,6 +434,8 @@ def align_sources(sources: Sequence[SourceHypothesis], *, onomatopoeic: set[str]
     Args:
         sources: The hypotheses, in any order; they are ordered by name.
         onomatopoeic: The ``words.onomatopoeic_tokens`` vocabulary, each entry a :func:`vocabulary_key`.
+        duration_s: The duration of the audio the hypotheses were timed against; every located span is
+            kept inside it (:func:`located_span`). Unbounded where None.
 
     Returns:
         The consensus stream and its provenance.
@@ -459,7 +474,7 @@ def align_sources(sources: Sequence[SourceHypothesis], *, onomatopoeic: set[str]
                     None if missing else float(cast(float, start)),
                     None if missing else float(cast(float, end)),
                     position in source.degenerate,
-                    located_span(start, end, width),
+                    located_span(start, end, width, duration_s),
                 )
             )
         members_by_source[source.name] = kept

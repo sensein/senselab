@@ -2625,7 +2625,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             for source, measurement in hypotheses.items()
         ]
         onomatopoeic = {vocabulary_key(str(token)) for token in (config.get("words.onomatopoeic_tokens") or [])}
-        consensus = align_sources(sources, onomatopoeic=onomatopoeic)
+        consensus = align_sources(sources, onomatopoeic=onomatopoeic, duration_s=duration_s)
         names = [row["name"] for row in consensus.provenance["sources"]]
         measurement_ids = tuple(hypotheses[name].id for name in names)
         activity = _step(
@@ -2859,7 +2859,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
                 for word in words
                 if not word.bracketed
                 for start, end in word.timings.values()
-                if (located := located_span(start, end)) is not None
+                if (located := located_span(start, end, duration_s=duration_s)) is not None
             ]
             return _merge_intervals(spans), "consensus_transcript"
         amplitude_spans: list[tuple[float, float]] = []
