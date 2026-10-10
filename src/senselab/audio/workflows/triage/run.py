@@ -402,7 +402,13 @@ def drive_decisions(
         outcomes["REDACT"] = NodeOutcome(node="REDACT", state=RunState.SKIPPED)
         artifacts = {}
     _attempt(outcomes, REVIEW_NODE, lambda: review(store, config, hint))
+    outcomes[SECOND_OPINION] = NodeOutcome(node=SECOND_OPINION, state=RunState.SKIPPED, note=SECOND_OPINION_DRIVER)
     return artifacts
+
+
+SECOND_OPINION = "SECOND_OPINION"
+SECOND_OPINION_DRIVER = "driven over finished stores by scripts/extend_second_opinion.py"
+"""Why a single-file run leaves SECOND_OPINION to its driver, which needs a pinned model server."""
 
 
 def _attempt_artifacts(

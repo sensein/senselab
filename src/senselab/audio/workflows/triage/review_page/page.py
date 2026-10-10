@@ -43,7 +43,18 @@ PARTS = {
     "review.css": SOURCE_DIR / "review.css",
     "review.js": SOURCE_DIR / "review.js",
 }
-SCALARS = ("participant", "session", "task", "family", "branch", "verdict", "release", "reason", "run_status")
+SCALARS = (
+    "participant",
+    "session",
+    "task",
+    "family",
+    "branch",
+    "verdict",
+    "release",
+    "release_reason",
+    "reason",
+    "run_status",
+)
 LISTS = ("reasons", "annotations")
 SHARD_DIR = "data"
 SPEECH_TEXT = re.compile(r"<[^>]+>")

@@ -431,6 +431,7 @@ class TestHappyPath:
         assert result.file_verdict.triage is Triage.PASS
         assert result.ran == {
             **dict.fromkeys(GRAPH, RunState.COMPLETED),
+            "SECOND_OPINION": RunState.SKIPPED,
             "REPORT": RunState.COMPLETED,
         }
         assert result.file_verdict.ran["QUALITY"] is RunState.COMPLETED

@@ -305,6 +305,7 @@ def review_record(run_root: Path, root: Path, speech: SpeechReader | None = None
         "branch": branch,
         "verdict": decision["verdict"],
         "release": decision["release"],
+        "release_reason": decision.get("release_reason"),
         "reason": decision["reason"],
         "reasons": decision["reasons"],
         "run_status": decision["run_status"],

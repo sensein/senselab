@@ -51,9 +51,13 @@ GRAPH_ORDER = (
     "COHORT",
     "REDACT",
     "REVIEW",
+    "SECOND_OPINION",
     "VERDICT",
 )
-"""The nodes the runner drives, in the order it drives them. VERDICT folds the thirteen before it.
+"""The nodes the runner drives, in the order it drives them. VERDICT folds the fourteen before it.
+
+SECOND_OPINION reads the final mask plan -- REVIEW's reading folded with the policy and the task's exemptions --
+so it follows REVIEW; ``scripts/extend_second_opinion.py`` drives it over finished stores.
 
 SESSION reads every member of the recording's BIDS session after PREPROCESS has read each one's own
 floor, and BACKGROUND reads the recording against that floor before routing and the branches."""
