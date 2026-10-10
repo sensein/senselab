@@ -317,6 +317,7 @@ def measure_join(store: ProvStore, run_dir: Path) -> dict[str, Any]:
         event_kind=kind,
         faults=faults,
         other_voice=other_voice,
+        impulses=[(float(i["start_s"]), float(i["end_s"])) for i in background.attributes.get("impulses") or ()],
         streams=streams,
         plain_active_s=background.attributes.get("active_s"),
         enhanced_active_s=None if enhanced is None else float(sum(r.end_s - r.start_s for r in enhanced.regions)),

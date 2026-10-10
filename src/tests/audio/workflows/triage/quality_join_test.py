@@ -93,8 +93,8 @@ def test_a_shutoff_decides_only_for_a_held_task() -> None:
     assert join_record(**common, event_kind="cough")["faults_in_task"] == []
 
 
-def test_another_voice_inside_the_task_decides_and_one_outside_does_not() -> None:
-    """Interference reviews only where it touches a task span (owner, 2026-10-07)."""
+def test_another_voice_is_split_by_the_task_and_is_never_interference() -> None:
+    """Another voice is split in and out of the task spans; it is speech, so it is no interference kind."""
     inside = join_record(
         task_spans=[(2.0, 10.0)],
         event_kind="cough",
@@ -115,9 +115,10 @@ def test_another_voice_inside_the_task_decides_and_one_outside_does_not() -> Non
         enhanced_active_s=4.0,
         level_rel_db=0.0,
     )
-    assert inside["interference_in_task"] == ["other_voice"]
-    assert outside["interference_in_task"] == []
-    assert outside["interference"]["other_voice"]["out"] == [[8.0, 9.0]]
+    assert inside["other_voice"]["in"] == [[8.0, 9.0]]
+    assert inside["interference_in_task"] == [] and outside["interference_in_task"] == []
+    assert outside["other_voice"]["out"] == [[8.0, 9.0]]
+    assert "other_voice" not in inside["interference"]
 
 
 def test_another_voice_with_no_task_span_is_outside_the_task() -> None:
@@ -132,7 +133,7 @@ def test_another_voice_with_no_task_span_is_outside_the_task() -> None:
         enhanced_active_s=4.0,
         level_rel_db=0.0,
     )
-    assert record["interference"]["other_voice"] == {"in": [], "out": [[1.0, 2.0], [8.5, 9.5]]}
+    assert record["other_voice"] == {"in": [], "out": [[1.0, 2.0], [8.5, 9.5]]}
     assert record["interference_in_task"] == []
     assert record["faults_in_task"] == []
 
@@ -149,8 +150,41 @@ def test_a_talker_far_from_the_task_is_an_annotation() -> None:
         enhanced_active_s=4.0,
         level_rel_db=0.0,
     )
-    assert record["interference"]["other_voice"]["out"] == [[8.5, 9.5]]
+    assert record["other_voice"]["out"] == [[8.5, 9.5]]
     assert record["interference_in_task"] == []
+
+
+def test_an_impulse_in_the_task_is_interference_and_is_reported_only() -> None:
+    """BACKGROUND's impulses are the non-speech source; under the packaged parameters none decides."""
+    record = join_record(
+        task_spans=[(1.0, 2.0)],
+        event_kind="breath",
+        faults={},
+        other_voice=None,
+        impulses=[(1.5, 1.52), (8.0, 8.02)],
+        streams=None,
+        plain_active_s=4.0,
+        enhanced_active_s=4.0,
+        level_rel_db=0.0,
+    )
+    assert record["other_voice"] is None
+    assert record["interference"]["impulse"] == {"in": [[1.5, 1.52]], "out": [[8.0, 8.02]]}
+    assert record["interference_in_task"] == []
+    p = quality_join_parameters()
+    deciding = {**p, "interference": {"impulse": {"decides": True}}}
+    decided = join_record(
+        task_spans=[(1.0, 2.0)],
+        event_kind="breath",
+        faults={},
+        other_voice=None,
+        impulses=[(1.5, 1.52)],
+        streams=None,
+        plain_active_s=4.0,
+        enhanced_active_s=4.0,
+        level_rel_db=0.0,
+        p=deciding,
+    )
+    assert decided["interference_in_task"] == ["impulse"]
 
 
 def test_events_the_enhanced_stream_loses_disagree() -> None:

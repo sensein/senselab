@@ -2,8 +2,9 @@
 # `reason` is the first of a recording's reasons in `precedence`; `reasons` is all of them, in that order.
 # Owner, 2026-10-07: verdict pass/review/discard, release as_is/redacted/withheld, one reason per recording.
 # Owner, 2026-10-10: consolidated to these codes; the release ground is its own column (release_reason).
-# Derivation: specs/20261007-task-events-in-background/design.md ("Decision table", "Reasons consolidated").
-version: 6
+# Derivation: specs/20261007-task-events-in-background/design.md ("Decision table", "Reasons consolidated",
+# "The residual's other voice is attributed").
+version: 7
 precedence:            # discard reasons first, then incomplete, then the recording, then the content
 - unreadable
 - task_too_short
@@ -25,8 +26,8 @@ meaning:
   task_not_found: the declared task is absent -- other activity, or a different task than declared
   not_measured: the pipeline owes the recording a measurement (run_status incomplete)
   fault_in_task: a capture fault (shutoff, dropout, clip) falls inside the task
-  interference_in_task: a non-speech sound source overlaps the task
-  other_speaker: someone other than the participant speaks -- a background voice, an examiner, an assistant
+  interference_in_task: a non-speech sound source (a BACKGROUND impulse, where its kind decides) overlaps the task; another voice is never one
+  other_speaker: someone other than the participant speaks -- a background voice, an examiner, an assistant; the residual's other voice only where COHORT or a reader attributes it
   off_task_speech: the participant speaks outside the task's own content
   weak_events: the task's events stand too weakly over the background to decide, or the streams disagree on them
   task_not_conforming: the task was performed, but not as instructed
@@ -63,8 +64,7 @@ keys:                  # exact verdict ground key -> reason
   discard_contested: weak_events
   ddk_review_identity: task_not_conforming
   speech_no_lexical_item: task_not_conforming
-  interference_in_task:other_voice: other_speaker
-  participant_voice_in_task: off_task_speech
+  other_voice_in_task: other_speaker
   reviewer_second_speaker: other_speaker
   reviewer_other_speaker: other_speaker
   gate:dominant_speaker_share_min: other_speaker
@@ -96,6 +96,9 @@ annotations:           # ground keys and prefixes the fold writes only as annota
 - fault_outside_task
 - interference_outside_task
 - phrases_occasional
+- residual_speech_unattributed
+- residual_speech_outside_task
+- aligner_failed
 reviewed_releases:     # owner, 2026-10-10: masks not yet validated; every release but as_is is reviewed (release_reviewed)
 - redacted
 - withheld

@@ -4,7 +4,7 @@
 # a category with in / not in against a list of categories; a reported reading has neither.
 # `producer` names the unit of specs/20261007-task-events-in-background/design.md that emits it;
 # an item a later unit produces is absent from the tables until that unit lands.
-version: 6
+version: 7
 groups:
   acquisition:
     admit_outcome:
@@ -23,6 +23,10 @@ groups:
       unit:
       producer: unit C
       meaning: the share of the raw stream's standing task events the enhanced stream loses, against data/quality_join.yaml streams.lost_fraction
+    residual_speech_in_task:
+      unit: spans
+      producer: unit C
+      meaning: the other voice's spans in the residual touching a task span; an annotation, attributed to another speaker by COHORT or a reader
     capture.route_state:
       unit:
       producer: unit C
@@ -193,7 +197,7 @@ prefixes:              # `<prefix>:<name>` items, named by what follows the colo
     group: acquisition
     unit: spans
     producer: unit C
-    meaning: another source (another voice) overlapping or abutting a task span
+    meaning: a non-speech source (a BACKGROUND impulse) overlapping or abutting a task span, where data/quality_join.yaml lets its kind decide
   ddk_realised_mass:
     group: ddk
     unit:

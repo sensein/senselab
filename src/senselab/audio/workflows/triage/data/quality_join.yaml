@@ -2,11 +2,11 @@
 # by time overlap (quality_join.py). The derivation of every value is in
 # specs/20261007-task-events-in-background/design.md ("Unit C step 2"); values marked UNFITTED are
 # to be fitted jointly on the owner's labels.
-version: 2
+version: 3
 abut_s: 0.1                       # UNFITTED: a finding this close to a task span touches it
-interference:                     # another source over a task span; only an in-span one can review
-  other_voice:
-    decides: true                 # owner 2026-10-07: in-span interference flags every family
+interference:                     # a non-speech source over a task span; only an in-span one can review. Another voice is speech: the fold attributes it
+  impulse:                        # BACKGROUND's impulses: a click, knock or handling noise
+    decides: false                # UNFITTED: reported only; a task's own breath or cough onset reads as an impulse too
 faults:                           # a capture fault touching a task span reviews; elsewhere it is an annotation
   shutoff:
     min_s: 0.3                    # background_model.yaml shutoff.min_s: every shutoff run is one

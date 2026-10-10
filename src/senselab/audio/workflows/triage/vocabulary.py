@@ -330,6 +330,7 @@ class RedactionEvidence:
         non_task_speech_masked_n: How many words stay masked as lexical speech outside a non-lexical task.
         non_task_speech_untimed_n: How many such words carry no usable timing, so no mask can hide them.
         non_task_speech_extensive: Whether an item-set task's speech outside its item runs is extensive.
+        aligner_failed: The recognisers the consensus names as ``aligner_failed``.
     """
 
     lexical_words_n: int | None = None
@@ -349,6 +350,7 @@ class RedactionEvidence:
     non_task_speech_masked_n: int = 0
     non_task_speech_untimed_n: int = 0
     non_task_speech_extensive: bool = False
+    aligner_failed: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -826,7 +828,10 @@ REVIEWER_PHRASES = "the redaction reviewer read the participant uttering phrases
 SECOND_OPINION_PHRASES = "the second-opinion model read the participant uttering phrases instead of items"
 REVIEWER_OTHER_SPEAKER = "the redaction reviewer read another speaker: an assistant, the background or someone unclear"
 OTHER_SPEAKER_IN_TASK = "lexical speech outside the task is another speaker's, by the session enrollment"
-PARTICIPANT_VOICE_IN_TASK = "the other voice over the task is the participant's own, by the session enrollment"
+OTHER_VOICE_IN_TASK = "another voice over the task is not the participant's, by the session enrollment or a reader"
+RESIDUAL_SPEECH_UNATTRIBUTED = "the residual holds speech over the task that nothing attributes to another speaker"
+RESIDUAL_SPEECH_OUTSIDE_TASK = "the residual holds speech away from the task"
+ALIGNER_FAILED = "a recogniser's aligner timed none of its words; its readings alone are unconfirmed"
 """The flag ground a decision model's confident disagreement with the reviewer contributes, under
 ``verdict.second_opinion_disagreement_flags``. Controlled vocabulary, with each disagreeing question, the
 model's probability and the reviewer's answer appended; the release is unchanged."""
@@ -922,7 +927,9 @@ KEY_PHRASES_OCCASIONAL = "phrases_occasional"
 KEY_REVIEWER_OTHER_SPEAKER = "reviewer_other_speaker"
 KEY_INSTRUCTIONS_SPOKEN_BY_OTHER = "instructions_spoken_by_other"
 KEY_OTHER_SPEAKER_IN_TASK = "other_speaker_in_task"
-KEY_PARTICIPANT_VOICE_IN_TASK = "participant_voice_in_task"
+KEY_OTHER_VOICE_IN_TASK = "other_voice_in_task"
+KEY_RESIDUAL_SPEECH_UNATTRIBUTED = "residual_speech_unattributed"
+KEY_RESIDUAL_SPEECH_OUTSIDE_TASK = "residual_speech_outside_task"
 KEY_UNPLACED_OPEN = "unplaced_finding_open"
 KEY_UNPLACED_UNREAD = "unplaced_finding_unread"
 
@@ -973,7 +980,9 @@ GROUND_KEYS = (
     KEY_REVIEWER_OTHER_SPEAKER,
     KEY_INSTRUCTIONS_SPOKEN_BY_OTHER,
     KEY_OTHER_SPEAKER_IN_TASK,
-    KEY_PARTICIPANT_VOICE_IN_TASK,
+    KEY_OTHER_VOICE_IN_TASK,
+    KEY_RESIDUAL_SPEECH_UNATTRIBUTED,
+    KEY_RESIDUAL_SPEECH_OUTSIDE_TASK,
     KEY_UNPLACED_OPEN,
     KEY_UNPLACED_UNREAD,
     *COHORT_GROUND_KEYS,
@@ -996,9 +1005,11 @@ PREFIX_FAULT_IN_TASK = "fault_in_task"
 PREFIX_FAULT_OUTSIDE_TASK = "fault_outside_task"
 """A capture fault away from every task span, or one QUALITY's parameters do not let decide: an annotation."""
 PREFIX_INTERFERENCE_IN_TASK = "interference_in_task"
-"""Another source (``interference_in_task:<kind>``) touching a task span: a review ground."""
+"""A non-speech source (``interference_in_task:<kind>``) touching a task span: a review ground."""
 PREFIX_INTERFERENCE_OUTSIDE_TASK = "interference_outside_task"
-"""Another source away from every task span: an annotation."""
+"""A non-speech source away from every task span, or one QUALITY's parameters do not let decide: an annotation."""
+PREFIX_ALIGNER_FAILED = "aligner_failed"
+"""A recogniser (``aligner_failed:<source>``) none of whose words its aligner timed: an annotation."""
 
 GROUND_KEY_PREFIXES = (
     PREFIX_GATE,
@@ -1016,6 +1027,7 @@ GROUND_KEY_PREFIXES = (
     PREFIX_FAULT_OUTSIDE_TASK,
     PREFIX_INTERFERENCE_IN_TASK,
     PREFIX_INTERFERENCE_OUTSIDE_TASK,
+    PREFIX_ALIGNER_FAILED,
     PREFIX_SECOND_OPINION,
 )
 """Ground keys written ``<prefix>:<name>``, the name being a gate, a reporting node or a branch."""
@@ -2134,7 +2146,9 @@ def discard_contested(evidence: TaskEvidence) -> bool:
 
 
 OTHER_VOICE_KIND = "other_voice"
-"""QUALITY's interference kind for another voice (``quality_join.OTHER_VOICE``)."""
+"""QUALITY's record of another voice (``quality_join.OTHER_VOICE``)."""
+RESIDUAL_SPEECH_IN_TASK_ITEM = "residual_speech_in_task"
+"""The evidence item counting the other voice's spans that touch a task span."""
 
 JOIN_UNREAD = ("quality_join",)
 """The join's own measurement: a recording whose QUALITY wrote none is not measured. A missing BACKGROUND
@@ -2191,17 +2205,20 @@ def _join_reasons(
     flag: Callable[..., None],
     annotate: Callable[..., None],
     cohort: Mapping[str, Any] | None = None,
+    reader_other: bool = False,
 ) -> None:
     """Raise QUALITY's join as flags and annotations: what touches a task span reviews, the rest annotates.
 
-    Another voice over the task is the participant's own off-task speech where COHORT matches it to the session
-    enrollment, and another speaker otherwise.
+    Another voice over the task is another speaker only where COHORT's comparison places a non-matching span on
+    it or a reader heard another speaker; otherwise it is an annotation. A non-speech source over the task
+    reviews where QUALITY's parameters let its kind decide.
 
     Args:
         quality: QUALITY's join record.
         flag: The fold's flag.
         annotate: The fold's annotate.
         cohort: COHORT's ``cohort_reading`` attributes, or None.
+        reader_other: Whether the reviewer or the second opinion read another speaker.
     """
     unread = join_unread(quality)
     if unread:
@@ -2221,15 +2238,30 @@ def _join_reasons(
             elsewhere = list(split.get("out") or ()) + ([] if kind in deciding else held)
             if kind in deciding:
                 seconds = round(sum(b - a for a, b in held), 3)
-                own = kind == OTHER_VOICE_KIND and speaker_of(cohort, held) == "participant"
                 flag(
                     QUALITY,
-                    f"{PARTICIPANT_VOICE_IN_TASK if own else inside}: {kind}, {len(held)} span(s), {seconds} s, "
-                    f"first at {held[0][0]} s",
-                    KEY_PARTICIPANT_VOICE_IN_TASK if own else f"{inside}:{kind}",
+                    f"{inside}: {kind}, {len(held)} span(s), {seconds} s, first at {held[0][0]} s",
+                    f"{inside}:{kind}",
                 )
             if elsewhere:
                 annotate(QUALITY, f"{outside}: {kind}, {len(elsewhere)} span(s)", f"{outside}:{kind}")
+    voice = dict(quality.get(OTHER_VOICE_KIND) or {})
+    held = list(voice.get("in") or ())
+    if held:
+        seconds = round(sum(b - a for a, b in held), 3)
+        enrollment = speaker_of(cohort, held)
+        read = f"{len(held)} span(s), {seconds} s, first at {held[0][0]} s; enrollment {enrollment}"
+        if enrollment == "other" or reader_other:
+            by = "the session enrollment" if enrollment == "other" else "a reader"
+            flag(QUALITY, f"{OTHER_VOICE_IN_TASK}: {read}, attributed by {by}", KEY_OTHER_VOICE_IN_TASK)
+        else:
+            annotate(QUALITY, f"{RESIDUAL_SPEECH_UNATTRIBUTED}: {read}", KEY_RESIDUAL_SPEECH_UNATTRIBUTED)
+    if voice.get("out"):
+        annotate(
+            QUALITY,
+            f"{RESIDUAL_SPEECH_OUTSIDE_TASK}: {len(voice['out'])} span(s)",
+            KEY_RESIDUAL_SPEECH_OUTSIDE_TASK,
+        )
     if quality.get("streams_disagree"):
         streams = quality.get("streams") or {}
         flag(
@@ -2584,8 +2616,9 @@ def _join_items(quality: Mapping[str, Any]) -> list[EvidenceItem]:
         quality: QUALITY's join record.
 
     Returns:
-        One item per fault or interference kind touching a task span, the stream agreement where it was
-        read, and the level against the session where it was read.
+        One item per fault or interference kind touching a task span, the other voice's spans touching one
+        (an annotation: the fold attributes them), the stream agreement where it was read, and the level
+        against the session where it was read.
     """
     items: list[EvidenceItem] = []
     minimum = dict(quality.get("fault_min_s") or {})
@@ -2602,6 +2635,9 @@ def _join_items(quality: Mapping[str, Any]) -> list[EvidenceItem]:
         items.append(
             item(f"{PREFIX_INTERFERENCE_IN_TASK}:{kind}", len(held), REVIEW, unit="spans", comparison="==", threshold=0)
         )
+    voice = (quality.get(OTHER_VOICE_KIND) or {}).get("in") or ()
+    if voice:
+        items.append(item(RESIDUAL_SPEECH_IN_TASK_ITEM, len(voice), ANNOTATION, unit="spans"))
     streams = dict(quality.get("streams") or {})
     if streams.get("lost_fraction") is not None:
         items.append(
@@ -3215,7 +3251,21 @@ def fold_file_verdict(
             KEY_SPEECH_OUTSIDE_TASK,
             voice_kind,
         )
-    _join_reasons(task_evidence.quality, flag, annotate, cohort)
+    opinion = dict(second_opinion or {})
+    opinion_other = (opinion.get("probabilities") or {}).get("other_voice")
+    reader_other = (
+        bool(heard_other)
+        or other_kind in OTHER_SPEAKER_KINDS
+        or (
+            opinion.get("status") == "ok"
+            and opinion_other is not None
+            and rules.second_opinion_confident_yes is not None
+            and probability_yes(opinion_other) >= rules.second_opinion_confident_yes
+        )
+    )
+    _join_reasons(task_evidence.quality, flag, annotate, cohort, reader_other)
+    for source in evidence.aligner_failed:
+        annotate(_PREPROCESS, f"{ALIGNER_FAILED}: {source}", f"{PREFIX_ALIGNER_FAILED}:{source}")
     for why, key in cohort_grounds(cohort):
         flag(COHORT_NODE, why, key)
     for branch in branches_seen:

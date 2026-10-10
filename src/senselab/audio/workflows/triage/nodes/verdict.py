@@ -797,7 +797,8 @@ def _redaction_evidence(
 
     Returns:
         SPEECH's lexical count, its scan record as a tri-state, how many live ``pii`` findings the
-        store holds, what REDACT's re-scan still read after its re-plan, and the masks that stand.
+        store holds, what REDACT's re-scan still read after its re-plan, the masks that stand, and the
+        recognisers the consensus names ``aligner_failed``.
     """
     speech = next((entity for entity, report in reports if report.node == SPEECH), None)
     words = None if speech is None else speech.attributes.get("words_n")
@@ -820,6 +821,9 @@ def _redaction_evidence(
         non_task_speech_masked_n=plan.non_task_speech_masked_n,
         non_task_speech_untimed_n=len(plan.non_task_speech_untimed),
         non_task_speech_extensive=plan.non_task_speech_extensive,
+        aligner_failed=tuple(str(source) for source in (consensus.attributes.get("aligner_failed") or ()))
+        if (consensus := find_measurement(store, "consensus_transcript")) is not None
+        else (),
     )
 
 
