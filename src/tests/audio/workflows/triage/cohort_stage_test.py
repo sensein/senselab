@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 import pytest
 
@@ -20,7 +22,9 @@ from senselab.audio.workflows.triage.cohort_fold import (
 from senselab.audio.workflows.triage.cohort_stage import (
     NO_COHORT,
     NO_ENROLLMENT_SPANS,
+    AudioLoader,
     RecordingFacts,
+    SessionEnrollment,
     build_quantile_artefact,
     candidate_runs,
     cohort_attributes,
@@ -56,7 +60,7 @@ def _embed(samples: np.ndarray, rate: int) -> np.ndarray | None:
     return _direction(round(float(np.median(samples))))
 
 
-def _loader(levels: list[tuple[float, float, float]], duration: float):  # noqa: ANN202
+def _loader(levels: list[tuple[float, float, float]], duration: float) -> AudioLoader:
     samples = np.zeros(int(duration * RATE), dtype=np.float32)
     for start, end, level in levels:
         samples[int(start * RATE) : int(end * RATE)] = level
@@ -76,7 +80,7 @@ def _facts(stem: str, family: str, *, diarization=(), lexical=(), duration=20.0,
     )
 
 
-def _session() -> tuple[list, RecordingFacts, object]:
+def _session() -> tuple[list, RecordingFacts, AudioLoader]:
     speech = [
         (
             _facts(f"sub-a_ses-1_task-rainbow-passage-{i}", "rainbow-passage", diarization=[(1.0, 9.0, "A")]),
@@ -94,7 +98,7 @@ def _session() -> tuple[list, RecordingFacts, object]:
     return speech, breath, breath_audio
 
 
-def _enroll(members: list) -> object:
+def _enroll(members: list) -> SessionEnrollment:
     return enroll_session(
         "sub-a_ses-1", members, _embed, model_id="m", commit="c" * 40, cut=CUT, min_s=1.0, lexical_gap_s=0.5
     )
@@ -271,13 +275,15 @@ def test_the_fold_reviews_on_a_cohort_ground_and_passes_on_an_unavailable_readin
     speech, breath, breath_audio = _session()
     block = match_runs(breath, breath_audio, _enroll(speech), _embed, cut=CUT, min_s=1.0, lexical_gap_s=0.5)
     flagged = cohort_attributes(breath, other_speaker=block, checks={}, quantiles=None, key="k")
-    common = {"branch_decisions": {}, "ran": {}, "hint_claims": {}, "route_state": None}
+    common: dict[str, Any] = {"branch_decisions": {}, "ran": {}, "hint_claims": {}, "route_state": None}
     folded = fold_file_verdict([], cohort=flagged, **common)
     assert folded.triage is Triage.REVIEW and "other_speaker" in folded.reason_keys
     assert KEY_OTHER_SPEAKER_IN_SESSION in folded.ground_keys
     assert any(entry.name == "cohort.other_speaker_runs" and entry.decisive for entry in folded.evidence)
     store = _store()
     write_cohort_unavailable(store)
-    quiet = fold_file_verdict([], cohort=find_measurement(store, COHORT_READING).attributes, **common)
+    held = find_measurement(store, COHORT_READING)
+    assert held is not None
+    quiet = fold_file_verdict([], cohort=held.attributes, **common)
     assert KEY_OTHER_SPEAKER_IN_SESSION not in quiet.ground_keys
     assert quiet.triage == fold_file_verdict([], **common).triage
