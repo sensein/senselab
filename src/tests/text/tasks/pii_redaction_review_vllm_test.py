@@ -32,14 +32,18 @@ _ANSWER = [
     "[]",
 ]
 
-_FAKE_SERVER = r'''
+_FAKE_SERVER = r"""
 import json, os, sys, threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 argv = sys.argv[1:]
 assert argv[0] == "serve"
 model_path = argv[1]
-opts = {argv[i]: argv[i + 1] for i in range(2, len(argv) - 1) if argv[i].startswith("--") and not argv[i + 1].startswith("--")}
+opts = {
+    argv[i]: argv[i + 1]
+    for i in range(2, len(argv) - 1)
+    if argv[i].startswith("--") and not argv[i + 1].startswith("--")
+}
 port = int(opts["--port"])
 log = os.environ["FAKE_VLLM_LOG"]
 answer = json.loads(os.environ["FAKE_VLLM_ANSWER"])
@@ -69,7 +73,8 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/version":
             return self.reply({"version": os.environ.get("FAKE_VLLM_VERSION", "0.31.0")})
         if self.path == "/v1/models":
-            return self.reply({"data": [{"id": opts["--served-model-name"], "root": model_path, "max_model_len": int(opts["--max-model-len"])}]})
+            model = {"id": opts["--served-model-name"], "root": model_path}
+            return self.reply({"data": [{**model, "max_model_len": int(opts["--max-model-len"])}]})
         self.send_response(404)
         self.end_headers()
 
@@ -91,7 +96,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 ThreadingHTTPServer(("127.0.0.1", port), Handler).serve_forever()
-'''
+"""
 
 
 def _tokenizer(model_dir: Path) -> list[int]:

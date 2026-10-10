@@ -832,8 +832,9 @@ class ReviewResult:
             before it was emptied. ``0`` on a CPU worker and on a call that did not answer.
         resident_mib: Device memory it holds between reviews — the weights and nothing else, which
             is what a second process on the same card has to live beside.
-        engine: The engine that answered (:func:`~senselab.text.tasks.pii_detection.redaction_review_vllm.engine_identity`),
-            as the worker reported it; empty where none answered.
+        engine: The engine that answered, as the worker reported it
+            (:func:`~senselab.text.tasks.pii_detection.redaction_review_vllm.engine_identity`); empty where none
+            answered.
     """
 
     available: bool

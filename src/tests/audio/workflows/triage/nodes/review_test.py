@@ -947,7 +947,7 @@ class TestAReadingIsKeptInTheResultCache:
 
     def test_the_settings_and_the_context_are_in_the_key(self) -> None:
         """A different iteration bound, generation ceiling, commit or task context is a different reading."""
-        settings = {"model_id": "s/m", "max_new_tokens": 1024, "max_iterations": 3}
+        settings = {"model_id": "s/m", "max_new_tokens": 1024, "max_iterations": 3, "engine": "transformers"}
         base = review_cache_key("a b", None, {"task": "x"}, settings, "a" * 40)
         assert base == review_cache_key("a b", None, {"task": "x"}, dict(settings), "a" * 40)
         assert base != review_cache_key("a b", None, {"task": "x"}, {**settings, "max_iterations": 2}, "a" * 40)

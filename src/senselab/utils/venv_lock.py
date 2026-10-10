@@ -378,7 +378,9 @@ def torch_only_cuda_packages(packages: dict[str, tuple[str, set[str]]]) -> list[
                 family.add(name)
                 changed = True
     triton = {
-        name for name, (_, parents) in packages.items() if name.startswith(_TRITON_PREFIXES) and parents & TORCH_PACKAGES
+        name
+        for name, (_, parents) in packages.items()
+        if name.startswith(_TRITON_PREFIXES) and parents & TORCH_PACKAGES
     }
     return sorted(
         {name for name in family if name in TORCH_PACKAGES or name.startswith(_CUDA_VARIANT_PREFIXES)} | triton
