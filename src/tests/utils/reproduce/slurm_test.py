@@ -51,6 +51,7 @@ def _profile(tmp: Path, **change: Any) -> Profile:  # noqa: ANN401
         "build": "build",
         "deny_patterns_file": str(tmp / "deny.txt"),
         "canary_host": "192.0.2.1:9",
+        "job_tmp_root": "/dev/shm",
     }
     data.update(change)
     return Profile.model_validate(data)
@@ -168,6 +169,19 @@ def test_batch_exports_reads_uv_dirs_and_adds_native_libs(tmp_path: Path) -> Non
         slurm.batch_exports(profile, cache=Path("/c/repro"), environ={"UV_CACHE_DIR": "/c/uv"})
     text = _render(tmp_path, _spec("prep"), exports=exports)
     assert f"export LD_LIBRARY_PATH={tmp_path / 'ff' / 'lib'}" in text.splitlines()
+
+
+def test_no_job_tmp_root_means_no_tmpdir(tmp_path: Path) -> None:
+    """A profile without ``job_tmp_root`` renders no ``TMPDIR`` lines; the job keeps the node default."""
+    text = slurm.render_step_job(
+        _spec("prep"),
+        _profile(tmp_path, job_tmp_root=None),
+        partition="main",
+        command=["run"],
+        date=DATE,
+        exports=EXPORTS,
+    )
+    assert "TMPDIR" not in text and "/dev/shm" not in text
 
 
 def test_render_step_job_refuses_unsafe_values(tmp_path: Path) -> None:

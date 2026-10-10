@@ -10,6 +10,7 @@ import pytest
 from senselab.utils.reproduce.metrics import (
     CODES,
     DRIVER_KEYS,
+    MIN_CELL,
     SPLIT_UNITS,
     WARNINGS,
     MetricsError,
@@ -138,20 +139,25 @@ def test_a_small_seen_subject_fold_by_recording_is_suppressed() -> None:
     assert clean["split_report"]["folds"][1]["n_groups"] == "<5"
 
 
-def test_min_cell_is_configurable() -> None:
-    """The suppression threshold and its token follow ``min_cell``."""
-    clean, codes = validate_metrics(_obj(), _schema(), min_cell=11)
-    assert codes == []
-    assert clean is not None
-    assert clean["confusion"] == {"tp": "<11", "fp": 11, "fn": "<11", "tn": "<11"}
+def test_min_cell_is_one_fixed_constant() -> None:
+    """The threshold is ``MIN_CELL = 5``, not a parameter: 4 becomes ``"<5"``, 5 stays."""
+    assert MIN_CELL == 5
+    with pytest.raises(TypeError):
+        validate_metrics(_obj(), _schema(), min_cell=11)  # type: ignore[call-arg]
+    obj = _obj()
+    obj["confusion"] = {"tp": 4, "fp": 5, "fn": 0, "tn": 11}
+    clean, codes = validate_metrics(obj, _schema())
+    assert codes == [] and clean is not None
+    assert clean["confusion"] == {"tp": "<5", "fp": 5, "fn": "<5", "tn": 11}
 
 
 def test_already_suppressed_token_is_accepted() -> None:
-    """A cell already replaced by the token passes again with the same ``min_cell``."""
+    """A cell already replaced by the token passes again; another threshold's token does not."""
     obj = _obj()
     obj["confusion"]["fn"] = "<5"
     assert _codes(obj) == []
-    assert "E_METRICS_NOT_NUMBER" in _codes(obj, min_cell=10)
+    obj["confusion"]["fn"] = "<10"
+    assert "E_METRICS_NOT_NUMBER" in _codes(obj)
 
 
 @pytest.mark.parametrize(

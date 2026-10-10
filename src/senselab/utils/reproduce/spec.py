@@ -71,6 +71,8 @@ _KEYED_PLACEHOLDER = re.compile(r"^(root|up):([A-Za-z0-9_.-]+)$")
 _SECRET_KEY = re.compile(r"(^|_)(TOKEN|KEY|SECRET|PASSWORD|PASSWD|CREDENTIALS?)S?(_|$)", re.IGNORECASE)
 ALLOWED_SECRET_LIKE_KEYS = frozenset({"TOKENIZERS_PARALLELISM"})
 _ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+R_LIB_TEMPLATE = re.compile(r"^\{cache\}/r/(?!.*\.\.)[A-Za-z0-9_][A-Za-z0-9_.-]*$")
+"""The only form an R library may take: ``{cache}/r/<name>``, one plain name with no leading dot and no ``..``."""
 
 
 def placeholders(template: str) -> list[str]:
@@ -261,8 +263,8 @@ class EnvSpec(_Model):
     @field_validator("r_lib")
     @classmethod
     def _r_lib_under_cache(cls, value: str | None) -> str | None:
-        if value is not None and not value.startswith("{cache}/"):
-            raise ValueError("r_lib must start with {cache}/")
+        if value is not None and not R_LIB_TEMPLATE.match(value):
+            raise ValueError("E_SPEC_BAD_R_LIB: r_lib must be {cache}/r/<name>, one plain name")
         return value
 
     @model_validator(mode="after")
@@ -474,7 +476,9 @@ class StepSpec(_Model):
     pattern of some ``inputs`` entry with the same root (``E_SPEC_STAGE_UNDIGESTED``), so its content is
     digested and keyed; ``checkout`` and ``up:`` stages are
     keyed by the commit, patches and upstream keys. An expectation ``unit`` is allowed only on a rate
-    or ``mcc`` metric (`metrics.metric_quantity`).
+    or ``mcc`` metric (`metrics.metric_quantity`). An ``argv`` or ``pythonpath`` entry may not be an absolute
+    path without a placeholder (``E_SPEC_ABSOLUTE_PATH``): a program or module outside the checkout, venv,
+    cache and roots would run unkeyed.
     """
 
     name: Name
@@ -508,6 +512,11 @@ class StepSpec(_Model):
         weights = [(w.repo_type, w.repo) for w in self.hf_weights]
         if len(set(weights)) != len(weights):
             raise ValueError(f"step {self.name!r} has duplicate hf_weights repositories")
+        literal = [t for t in (*self.argv, *self.pythonpath) if t.startswith("/") and not placeholders(t)]
+        if literal:
+            raise ValueError(
+                f"E_SPEC_ABSOLUTE_PATH: step {self.name!r} names absolute paths with no placeholder: {literal}"
+            )
         templates = [*self.argv, self.cwd, *self.pythonpath, *(s.dest for s in self.stage)]
         if self.env.r_lib is not None:
             templates.append(self.env.r_lib)
@@ -555,7 +564,10 @@ class Manifest(_Model):
     """One analysis: a name and its steps.
 
     The analysis and step names name directories and appear in batch job names (``reproduce-<step>``),
-    which every user of the cluster can list, so they must not carry anything sensitive.
+    which every user of the cluster can list; class labels, count names and headline labels of each
+    ``metrics_schema`` are copied into the agent-readable ``metrics.json``. None of them may carry anything
+    sensitive. A ``python`` or ``notebook`` step's program must live in its venv, so a shell wrapper is a
+    script run by the venv's Python (or a program in an R module or native bin dir, for an ``r`` step).
     """
 
     name: Name
@@ -628,7 +640,13 @@ def _strictly_under(path: PurePosixPath, root: PurePosixPath) -> bool:
 
 
 class Profile(_Model):
-    """The caller's site: data roots, result roots, partitions, keyed env, R module, deny patterns."""
+    """The caller's site: data roots, result roots, partitions, keyed env, R module, deny patterns.
+
+    ``modules_init`` is the environment-modules init script sourced before ``module load`` (needed by any
+    sdist with ``build_modules`` and by R envs; without it those are refused with ``E_MODULES_INIT``).
+    ``job_tmp_root`` is where each batch job makes its private ``TMPDIR`` (removed on exit); without it a
+    job keeps the node's default temporary dir.
+    """
 
     roots: dict[Name, Path] = Field(min_length=1)
     results_root: Path
@@ -642,12 +660,15 @@ class Profile(_Model):
     r: RModule | None = None
     deny_patterns_file: Path
     canary_host: str
+    modules_init: Path | None = None
+    job_tmp_root: Path | None = None
 
     _no_secrets = field_validator("env")(_reject_secret_keys)
 
     @model_validator(mode="after")
     def _consistent(self) -> "Profile":
         paths = [*self.roots.values(), self.results_root, self.runs_root, self.slurm_logs_root, *self.rw_under_roots]
+        paths += [p for p in (self.modules_init, self.job_tmp_root) if p is not None]
         native = [d for n in self.native.values() for d in (*n.bin_dirs, *n.lib_dirs)]
         relative = sorted(str(p) for p in (*paths, *native) if not p.is_absolute())
         if relative:
