@@ -1937,6 +1937,33 @@ the item and task-content readings, so it counted as speech outside the task and
   than Qwen3-ASR's own, the one that failed, so its words are not re-aligned: a word only it read is
   `unconfirmed`. MMS alignment (`tasks/forced_alignment`) exists in senselab but is not wired into triage.
 
+### A point window past the end of the recording (2026-10-10)
+
+v2's window was floored at zero and never capped at the end. A point within `point_width_s / 2` of the end
+gave the word an extent past the decode, and SPEECH's `clamp_extent` (one sample of tolerance) raised
+`extent ends at Xs, past the Ys this audio decoded to` on 4.8% of the r18d re-run recordings, mostly
+diadochokinesis; the twelve failing rows at 3f8997c9 overran by 0.005-0.15 s. The hypotheses themselves
+were already bounded (`_bound_to_duration`); only the widening crossed the end.
+
+- **Writer.** `located_span` takes the duration the hypotheses were timed against (`plain`'s) and keeps
+  the window inside `[0, duration]`: shifted off the edge it would cross rather than cut, so a point near
+  either end still gets the full `point_width_s`, and narrowed only where the recording is shorter than the
+  window. Without a duration the old floored, unbounded window stands. `align_sources(..., duration_s=)`
+  and PREPROCESS's speech regions pass it; so does `word_hull(word, duration_s)` where SPEECH, QUALITY
+  (`spoken_task_words`) and `task_speech_of` build an extent from a hull.
+- **Reader.** Stores written at 3f8997c9 carry the uncapped extents, so a replay from SPEECH must not need
+  the consensus re-derived. `consensus_words` returns (in memory; the store is untouched) a word whose
+  extent ends past `plain`'s stored duration by at most `point_width_s` with its end at the duration
+  (`bound_word_extent`); SPEECH, which reads its words by id, applies the same bound against the audio it
+  decoded (`bound_word`). That covers SPEECH, task_speech, REDACT's mask planning and QUALITY, which all
+  read word extents through one of the two. An overrun beyond `point_width_s` cannot come from a widened
+  point, so the reader leaves it and SPEECH's `clamp_extent` still refuses it; an extent whose start is
+  past its end raises in `bound_word_extent`. Redaction hulls still add their padding past the end, as they
+  always did.
+- **No consensus version bump.** The consensus is recomputed by PREPROCESS on every run and keyed by no
+  cache (`CONSENSUS_VERSION` is recorded in the activity's parameters only), so no cached entry can serve
+  an uncapped extent as current; the reader's bound makes both kinds of store read alike.
+
 ### The residual's other voice is attributed (`quality_join.yaml` v3, `decision_reasons.yaml` v7)
 
 `decision_reasons.yaml` mapped `interference_in_task:other_voice` straight to `other_speaker`, and
