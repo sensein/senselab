@@ -1,8 +1,8 @@
 """Host CUDA probe and PyTorch wheel index picker for subprocess venvs.
 
 Used by ``ensure_venv`` to route ``torch`` and ``torchaudio`` installs through
-the matching official PyTorch wheel index (``cu128`` / ``cu126`` / ``cu124`` /
-``cu121`` / ``cpu``), avoiding the ABI mismatch where the two libraries end
+the matching official PyTorch wheel index (``cu130`` / ``cu128`` / ``cu126`` /
+``cu124`` / ``cu121`` / ``cpu``), avoiding the ABI mismatch where the two libraries end
 up compiled for different CUDA toolchains.
 
 The probe must work without ``torch`` already installed (it runs *before*
@@ -31,6 +31,7 @@ logger = logging.getLogger("senselab")
 # in the wrong position.
 _PYTORCH_INDEX_MAP: list[tuple[str, tuple[int, int]]] = sorted(
     [
+        ("cu130", (13, 0)),
         ("cu128", (12, 8)),
         ("cu126", (12, 6)),
         ("cu124", (12, 4)),
@@ -39,6 +40,8 @@ _PYTORCH_INDEX_MAP: list[tuple[str, tuple[int, int]]] = sorted(
     key=lambda entry: entry[1],
     reverse=True,
 )
+DEFAULT_MAX_CUDA: tuple[int, int] = (12, 8)
+"""The CUDA index ceiling of a venv that declares none; a venv opts into a newer index by declaring it."""
 _PYTORCH_INDEX_BASE = "https://download.pytorch.org/whl"
 _CPU_INDEX_URL = f"{_PYTORCH_INDEX_BASE}/cpu"
 _PROBE_TIMEOUT_S = 5.0
@@ -178,8 +181,10 @@ def pick_torch_index(
             unsatisfiable. Declaring ``(12, 1)`` caps the selection to
             ``cu121`` (which carries ``torch==2.2.2+cu121`` + matching
             ``torchaudio``), forward-compatible with 12.x/13.x drivers for
-            inference. ``None`` (default) applies no cap — backends pinning
-            modern torch (e.g. ``>=2.8``) correctly keep ``cu128``.
+            inference. ``None`` (default) applies :data:`DEFAULT_MAX_CUDA`, so
+            backends pinning modern torch (e.g. ``>=2.8``) keep ``cu128``; a
+            backend whose wheels need a newer index (vLLM's ``cu130`` torch)
+            declares it, e.g. ``(13, 0)``.
     """
     if env_override:
         return TorchIndex(
@@ -198,8 +203,9 @@ def pick_torch_index(
     # Cap the host CUDA version to the venv's ceiling so a backend pinning an
     # older torch is not routed through an index with no compatible wheel.
     effective = host_cuda.version
-    if max_cuda_version is not None and max_cuda_version < effective:
-        effective = max_cuda_version
+    ceiling = max_cuda_version if max_cuda_version is not None else DEFAULT_MAX_CUDA
+    if ceiling < effective:
+        effective = ceiling
     for tag, idx_version in _PYTORCH_INDEX_MAP:
         if idx_version <= effective:
             return TorchIndex(

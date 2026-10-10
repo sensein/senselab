@@ -226,3 +226,17 @@ def test_module_exposes_expected_names() -> None:
 
     for name in ("HostCuda", "TorchIndex", "SenselabCudaCompatibilityError", "detect_host_cuda", "pick_torch_index"):
         assert hasattr(cuda_probe, name), f"cuda_probe missing public name: {name}"
+
+
+def test_pick_torch_index_cuda_13_stays_on_cu128_without_a_declared_ceiling() -> None:
+    """A CUDA-13 host routes every venv that declares no ceiling to cu128, the default ceiling."""
+    host = HostCuda(version=(13, 1), source="nvidia-smi", raw="CUDA Version: 13.1")
+    assert pick_torch_index(host).tag == "cu128"
+
+
+def test_pick_torch_index_a_declared_cuda_13_ceiling_routes_cu130() -> None:
+    """A venv whose wheels need CUDA 13 (vLLM's torch) declares (13, 0) and gets cu130 on a CUDA-13 host."""
+    host = HostCuda(version=(13, 1), source="nvidia-smi", raw="CUDA Version: 13.1")
+    assert pick_torch_index(host, max_cuda_version=(13, 0)).tag == "cu130"
+    older = HostCuda(version=(12, 9), source="nvidia-smi", raw="CUDA Version: 12.9")
+    assert pick_torch_index(older, max_cuda_version=(13, 0)).tag == "cu128"
