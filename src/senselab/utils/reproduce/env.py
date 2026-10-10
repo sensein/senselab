@@ -46,12 +46,12 @@ from packaging.markers import Marker, default_environment
 
 from senselab.utils.reproduce import sandbox
 from senselab.utils.reproduce.build import (
-    MODULES_INIT,
     SYSTEM_PATH,
     base_environment,
     ca_bundle,
     ensure_wheel,
     file_lock,
+    modules_init_word,
     reuse_wheel,
     stage_wheel,
     torch_index_url,
@@ -65,7 +65,16 @@ from senselab.utils.reproduce.locks import (
     normalize_name,
     parse_freeze,
 )
-from senselab.utils.reproduce.spec import EnvSpec, LockRef, PipCheckExpected, Profile, RPackage, StepSpec, render
+from senselab.utils.reproduce.spec import (
+    R_LIB_TEMPLATE,
+    EnvSpec,
+    LockRef,
+    PipCheckExpected,
+    Profile,
+    RPackage,
+    StepSpec,
+    render,
+)
 
 ENV_KEY_SCHEMA = "reproduce-env-1"
 VENVS = "venvs"
@@ -345,9 +354,11 @@ class _Wheels:
         expected: str | None,
         rebuild: bool,
         dest: Path,
+        modules_init: Path | None = None,
     ) -> None:
         self.env, self.base_dir, self.wheelhouse, self.lock = env, base_dir, wheelhouse, lock
         self.lock_sha256, self.rebuild, self.dest = expected, rebuild, dest
+        self.modules_init = modules_init
         self.built: list[str] = []
         self.shas: dict[str, str] = {}
         self._copies: list[Path] | None = None
@@ -388,6 +399,7 @@ class _Wheels:
                     python=self.env.python_exact,
                     rebuild=self.rebuild,
                     expected_sha256=self.lock_sha256,
+                    modules_init=self.modules_init,
                 )
                 self.lock_sha256 = result.wheels_lock_sha256
                 if result.built:
@@ -424,6 +436,75 @@ def _installed_ok(path: Path, marker: Mapping[str, Any]) -> dict[str, Any] | Non
         return None
     installed: dict[str, Any] = json.loads(data)
     return installed
+
+
+def confined_r_lib(template: str, cache: Path) -> Path:
+    """The R library path of a ``{cache}/r/<name>`` template, refused unless it really lies in ``<cache>/r``.
+
+    Raises:
+        ValueError: ``E_SPEC_BAD_R_LIB`` for another form, or when the real path (symlinks resolved) is not
+            strictly under ``realpath(cache)/r``; checked before any removal, write or lock.
+    """
+    if not R_LIB_TEMPLATE.match(template):
+        raise ValueError("E_SPEC_BAD_R_LIB: r_lib must be {cache}/r/<name>")
+    r_lib = Path(render(template, {"cache": cache}))
+    base = os.path.join(os.path.realpath(cache), "r")
+    real = os.path.realpath(r_lib)
+    if os.path.dirname(real) != base or real == base:
+        raise ValueError("E_SPEC_BAD_R_LIB: r_lib resolves outside <cache>/r")
+    return r_lib
+
+
+KERNELS = Path("share") / "jupyter" / "kernels"
+
+
+def _install_staged_kernel(staged: Path, target: Path) -> None:
+    """Copy a staged kernel spec dir (regular files only) into the venv, replacing the old one."""
+    if not staged.is_dir() or staged.is_symlink():
+        raise ReproduceLockError("IRkernel installspec wrote no kernel spec")
+    files = sorted(p for p in staged.rglob("*"))
+    if any(p.is_symlink() or not (p.is_file() or p.is_dir()) for p in files):
+        raise ReproduceLockError("the staged kernel spec holds a link or a special file")
+    if target.is_symlink() or target.is_file():
+        target.unlink()
+    elif target.exists():
+        shutil.rmtree(target)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(staged, target)
+
+
+def kernels_sha256(venv: Path) -> str:
+    """A sha256 over the venv's ``share/jupyter/kernels`` tree: each entry's relative path and content (or link)."""
+    root = venv / KERNELS
+    entries = []
+    for top, dirs, files in os.walk(root, followlinks=False):
+        dirs.sort()
+        for name in sorted([*files, *(d for d in dirs if os.path.islink(os.path.join(top, d)))]):
+            path = Path(top) / name
+            rel = path.relative_to(root).as_posix()
+            if path.is_symlink():
+                entries.append([rel, "link", os.readlink(path)])
+            else:
+                entries.append([rel, "file", hashlib.sha256(path.read_bytes()).hexdigest()])
+    return hashlib.sha256(json.dumps(sorted(entries)).encode()).hexdigest()
+
+
+def record_kernels(venv: Path) -> str:
+    """Record `kernels_sha256` in the venv's ``installed.json`` and keep the marker's sha256 in step.
+
+    Returns:
+        The kernels sha256.
+    """
+    with _flock(venv.with_name(venv.name + ".lock")):
+        installed = json.loads((venv / INSTALLED).read_text())
+        digest = kernels_sha256(venv)
+        installed["kernels_sha256"] = digest
+        installed_sha = _write_json(venv / INSTALLED, installed)
+        marker = _read_marker(venv)
+        if marker is not None:
+            marker["installed_sha256"] = installed_sha
+            _write_json(venv / MARKER, marker)
+    return digest
 
 
 def installed_sha256(path: Path) -> str | None:
@@ -519,7 +600,7 @@ def _build_or_reuse(
         if env.torch is not None:
             torch_lock = inputs / env.torch.lock
             text = torch_lock.read_text()
-            _run_ok(install_argv(uv, python, torch_lock, torch_index_url(env.torch, text), False), run_env)
+            _run_ok(install_argv(uv, python, torch_lock, torch_index_url(env.torch, text), True), run_env)
             texts.append(text)
         body = inputs / env.body.lock
         _run_ok(install_argv(uv, python, body, env.body.index_url, True), run_env)
@@ -531,7 +612,7 @@ def _build_or_reuse(
             overlay_lock = inputs / overlay.lock
             _run_ok(install_argv(uv, python, overlay_lock, env.body.index_url, True), run_env)
             texts.append(overlay_lock.read_text())
-        freeze = _run_ok([uv, "pip", "freeze", "--no-config", "--python", str(python)], run_env).stdout
+        freeze = pip_freeze(path, uv)
         packages = parse_freeze(freeze)
         problems = _diff(packages, declared_packages(env, texts, copies))
         if problems:
@@ -624,7 +705,8 @@ def prefetch_env(
         inputs = work / "inputs"
         copy_verified(base_dir, verified, inputs)
         run_env = base_environment(uv, work)
-        wheels = _Wheels(env, base_dir, wheelhouse, lock_path, expected, rebuild, work / "wheels")
+        init = None if profile is None else profile.modules_init
+        wheels = _Wheels(env, base_dir, wheelhouse, lock_path, expected, rebuild, work / "wheels", init)
         base = _build_or_reuse(uv, env, venv_dir(cache, analysis, env), inputs, wheels, None, run_env)
         derived = {}
         for name in OVERLAYS:
@@ -635,6 +717,8 @@ def prefetch_env(
     if profile is not None:
         base = _check_venv(base, env, profile, None)
         derived = {name: _check_venv(v, env, profile, getattr(env, name)) for name, v in derived.items()}
+    if "notebook_tools" in derived:
+        record_kernels(derived["notebook_tools"].path)
     lock_sha = None
     if lock_path is not None and lock_path.is_file():
         lock_sha = hashlib.sha256(lock_path.read_bytes()).hexdigest()
@@ -683,8 +767,69 @@ def compare_pip_check(
     return [v for v in found if v not in wanted], [w for w in wanted if w not in found]
 
 
+def _uv_in_sandbox(uv: str, args: Sequence[str], venv: Path) -> subprocess.CompletedProcess[str]:
+    """Run ``uv <args> --python <venv>/bin/python`` inside the sandbox: offline, the venv read-only.
+
+    uv queries the venv's interpreter, which runs its ``site`` and any ``.pth`` code; inside the sandbox that
+    code cannot write or reach the network. uv gets a private cache under a temporary dir.
+    """
+    with tempfile.TemporaryDirectory(prefix="reproduce-uv-") as tmp:
+        work = Path(tmp).resolve()
+        run_env = base_environment(uv, work)
+        cache_dir = work / "uv-cache"
+        cache_dir.mkdir()
+        run_env |= {"UV_CACHE_DIR": str(cache_dir), "UV_OFFLINE": "1", "UV_PYTHON_DOWNLOADS": "never"}
+        argv = [uv, *args, "--no-config", "--python", str(venv.absolute() / "bin" / "python")]
+        result = _run(sandbox.sandbox_argv(argv, [], [work], [venv.absolute()]), run_env)
+    refusal = sandbox.sweep_refusal(result.stderr or "")
+    if refusal is not None:
+        raise ReproduceLockError(f"E_SANDBOX_UNAVAILABLE: {refusal}")
+    return result
+
+
+def pip_freeze(venv: Path, uv: str | None = None) -> str:
+    """``uv pip freeze`` of a venv, run in the sandbox (`_uv_in_sandbox`).
+
+    Raises:
+        ReproduceLockError: If uv fails.
+    """
+    uv = uv or find_uv()
+    result = _uv_in_sandbox(uv, ["pip", "freeze"], venv)
+    if result.returncode != 0:
+        output = (result.stdout + result.stderr).strip()[-_TAIL:]
+        raise ReproduceLockError(f"uv pip freeze on {venv} failed ({result.returncode}): {output}")
+    return result.stdout
+
+
+def installed_from_metadata(venv: Path) -> dict[str, str]:
+    """The installed set read from the venv's ``*.dist-info/METADATA`` headers; nothing is executed.
+
+    Returns:
+        Normalised names to versions, ``+cuXXX`` dropped, as `locks.parse_freeze` reports a freeze.
+    """
+    out: dict[str, str] = {}
+    for site in sorted((venv / "lib").glob("python*/site-packages")):
+        for meta in sorted(site.glob("*.dist-info/METADATA")):
+            name = version = None
+            try:
+                lines = meta.read_text(encoding="utf-8", errors="replace").splitlines()
+            except OSError:
+                continue
+            for line in lines:
+                if not line.strip():
+                    break
+                key, _, value = line.partition(":")
+                if key == "Name":
+                    name = value.strip()
+                elif key == "Version":
+                    version = value.strip()
+            if name and version:
+                out[normalize_name(name)] = _CUDA_LOCAL.sub("", version)
+    return out
+
+
 def pip_check(venv: Path) -> list[Violation]:
-    """Run ``uv pip check`` on a venv.
+    """Run ``uv pip check`` on a venv, in the sandbox (`_uv_in_sandbox`).
 
     Args:
         venv: The venv.
@@ -696,9 +841,7 @@ def pip_check(venv: Path) -> list[Violation]:
         ReproduceLockError: If uv fails for another reason than incompatibilities.
     """
     uv = find_uv()
-    with tempfile.TemporaryDirectory(prefix="reproduce-check-") as tmp:
-        argv = [uv, "pip", "check", "--no-config", "--python", str(venv / "bin" / "python")]
-        result = _run(argv, base_environment(uv, Path(tmp)))
+    result = _uv_in_sandbox(uv, ["pip", "check"], venv)
     found = parse_pip_check(result.stdout + "\n" + result.stderr)
     if result.returncode not in (0, 1) or (result.returncode == 1) != bool(found):
         output = (result.stdout + result.stderr).strip()[-_TAIL:]
@@ -838,7 +981,7 @@ def r_session_script(packages: Sequence[RPackage]) -> str:
     It loads each package and writes ``installed.tsv``, ``namespaces.tsv`` (every loaded namespace and its
     ``packageVersion``), ``lib_paths.txt``, ``session_info.txt`` and ``r_version.txt`` to the out dir;
     `read_r_session` reads them back. Prefetch runs it in a fresh ``Rscript`` after the install
-    (`r_install_script`) and the run in the step's sandbox, so both record the session the same way.
+    (`R_INSTALL_SH`) and the run in the step's sandbox, so both record the session the same way.
 
     Raises:
         ValueError: If a package name or version is not plain.
@@ -910,6 +1053,58 @@ def r_script(packages: Sequence[RPackage]) -> str:
     )
 
 
+def r_download_script(packages: Sequence[RPackage]) -> str:
+    """The R script prefetch runs, with network, as ``Rscript --vanilla <script> <repo> <contrib dir>``.
+
+    It downloads the source packages of the declared packages and of their recursive
+    ``Depends``/``Imports``/``LinkingTo`` that R's own library lacks, into ``<contrib dir>``, and writes the
+    ``PACKAGES`` index, so the install can run offline from that local repository.
+    """
+    return "\n".join(
+        [
+            "args <- commandArgs(trailingOnly = TRUE)",
+            "repo <- args[[1]]",
+            "contrib <- args[[2]]",
+            f"pkgs <- c({_r_names(packages)})",
+            "options(repos = c(CRAN = repo))",
+            "ap <- available.packages()",
+            "absent <- setdiff(pkgs, rownames(ap))",
+            'if (length(absent)) stop("not in the snapshot: ", paste(absent, collapse = ", "))',
+            'which <- c("Depends", "Imports", "LinkingTo")',
+            "deps <- unlist(tools::package_dependencies(pkgs, db = ap, which = which, recursive = TRUE))",
+            "have <- rownames(installed.packages(lib.loc = .Library))",
+            "want <- intersect(unique(c(pkgs, setdiff(deps, have))), rownames(ap))",
+            "dir.create(contrib, recursive = TRUE, showWarnings = FALSE)",
+            'download.packages(want, destdir = contrib, type = "source")',
+            'tools::write_PACKAGES(contrib, type = "source")',
+        ]
+    )
+
+
+def r_fetch_script(build_modules: Sequence[str] = (), modules_init: Path | None = None) -> str:
+    """The ``bash -c`` script that loads the modules (``$1`` the R module) and runs the download script.
+
+    Positional arguments: ``$2`` the `r_download_script`, ``$3`` the repository, ``$4`` the contrib dir.
+
+    Raises:
+        ReproduceLockError: ``E_MODULES_INIT`` without a ``modules_init``.
+    """
+    init = modules_init_word(modules_init)
+    return f'. {init} && module load {_module_words(build_modules)}"$1" && exec Rscript --vanilla "$2" "$3" "$4"'
+
+
+R_INSTALL_SH = (
+    'if [ -n "$5" ]; then export PATH="$5/bin:$PATH"; fi\n'
+    'Rscript --vanilla "$2" "$1" "$3" "$4" "$7"\n'
+    'exec Rscript --vanilla "$6" "$1" "$3"\n'
+)
+"""The ``sh`` script run in the sandbox for the offline install: ``$1`` r_lib, ``$2`` the `r_script`, ``$3`` out
+dir, ``$4`` the local repository URL, ``$5`` the notebook venv whose ``bin`` leads ``PATH`` (may be empty), ``$6``
+the `r_session_script`, ``$7`` the kernel prefix (a staging dir under the work dir; may be empty). Nothing of the
+venv is writable in the sandbox: the driver copies the staged ``kernels/ir`` into it afterwards."""
+_MODULE_ENV_SKIP = frozenset({"HOME", "TMPDIR", "PWD", "OLDPWD", "SHLVL", "_", "R_LIBS", "R_LIBS_USER", "R_LIBS_SITE"})
+
+
 def _r_environment(work: Path) -> dict[str, str]:
     home, tmp = work / "home", work / "tmp"
     home.mkdir(parents=True, exist_ok=True)
@@ -943,27 +1138,10 @@ def _kernel(venv: Path) -> Path:
     return venv / "share" / "jupyter" / "kernels" / "ir" / "kernel.json"
 
 
-def r_module_env_script(build_modules: Sequence[str] = ()) -> str:
+def r_module_env_script(build_modules: Sequence[str] = (), modules_init: Path | None = None) -> str:
     """The ``bash -c`` script that loads ``build_modules`` then the R module (``$1``) and prints ``env -0``."""
-    return f'. {MODULES_INIT} && module load {_module_words(build_modules)}"$1" && exec env -0'
-
-
-def r_install_script(build_modules: Sequence[str] = ()) -> str:
-    """The ``bash -c`` script that loads the modules and runs the generated R script.
-
-    Positional arguments: ``$1`` R module, ``$2`` r_lib, ``$3`` script, ``$4`` out dir, ``$5`` repository,
-    ``$6`` kernel prefix (may be empty), ``$7`` the `r_session_script`. ``R_LIBS`` and ``R_LIBS_USER`` are
-    the library and ``R_LIBS_SITE`` is empty, so ``.libPaths()`` is the library then R's own. After the
-    install, the session is recorded again by ``$7`` in a fresh ``Rscript`` (``TZ=UTC``), overwriting the
-    install process's own record, so prefetch and run record it from the same kind of process.
-    """
-    return (
-        f'. {MODULES_INIT} && module load {_module_words(build_modules)}"$1" && '
-        'export R_LIBS="$2" R_LIBS_USER="$2" R_LIBS_SITE= && '
-        'if [ -n "$6" ]; then export PATH="$6/bin:$PATH"; fi && '
-        'Rscript --vanilla "$3" "$2" "$4" "$5" "$6" && '
-        'exec Rscript --vanilla "$7" "$2" "$4"'
-    )
+    init = modules_init_word(modules_init)
+    return f'. {init} && module load {_module_words(build_modules)}"$1" && exec env -0'
 
 
 def _module_words(modules: Sequence[str]) -> str:
@@ -1004,10 +1182,13 @@ def prefetch_r(
     venv: Path | None = None,
     runner: Runner | None = None,
 ) -> RResult:
-    """Install an env's R packages into its private library under the profile's R module, with network.
+    """Install an env's R packages into its private library under the profile's R module.
 
-    Runs outside the network namespace. ``profile.r.build_modules`` and then ``profile.r.module`` are
-    loaded with ``bash --noprofile --norc -c '. <MODULES_INIT> && module load …'``, so no dotfile is
+    The download runs outside the sandbox, with network (`r_download_script` fills a local repository); the
+    install (``install.packages`` from that repository, then the session record) runs inside the sandbox,
+    offline, with only the library, the temporary work dir and, for ``ir_notebook``, the venv's kernel dir
+    writable. ``profile.r.build_modules`` and then ``profile.r.module`` are
+    loaded with ``bash --noprofile --norc -c '. <profile.modules_init> && module load …'``, so no dotfile is
     read, and with an allowlisted environment. The packages come from `r_snapshot_url` of
     ``env.r_snapshot``; ``R_LIBS`` and ``R_LIBS_USER`` are ``<r_lib>`` and ``R_LIBS_SITE`` is empty, so
     neither the module's site library nor a user library under ``HOME`` is seen. A library whose
@@ -1041,11 +1222,12 @@ def prefetch_r(
             raise ValueError("an ir_notebook env must declare IRkernel in r_packages")
         if venv is None:
             raise ValueError("an ir_notebook env needs the derived venv for its kernel spec")
+    modules_init_word(profile.modules_init)
     module, build_modules, r_version = profile.r.module, profile.r.build_modules, profile.r.version
     if not _ENV_MODULE.match(module):
         raise ValueError(f"R module {module!r} is not a plain module name")
     run = runner or _r_runner
-    r_lib = Path(render(env.r_lib, {"cache": cache}))
+    r_lib = confined_r_lib(env.r_lib, cache)
     repo = r_snapshot_url(env.r_snapshot)
     declared = {p.name: p.version for p in env.r_packages}
     key = _r_key(module, build_modules, r_version, repo, declared)
@@ -1053,6 +1235,8 @@ def prefetch_r(
     kernel_ok = venv is None or kind != "ir_notebook" or _kernel(venv).is_file()
     with _flock(r_lib.with_name(r_lib.name + ".lock")):
         if _r_reusable(session_path, module_path, key, kernel_ok):
+            if kind == "ir_notebook" and venv is not None:
+                record_kernels(venv)
             return RResult(
                 r_lib,
                 session_path,
@@ -1071,7 +1255,8 @@ def prefetch_r(
             work = Path(tmp)
             run_env = _r_environment(work)
             captured = _checked(
-                run(_in_bash(r_module_env_script(build_modules), module), run_env, work), f"module load {module}"
+                run(_in_bash(r_module_env_script(build_modules, profile.modules_init), module), run_env, work),
+                f"module load {module}",
             )
             pairs = dict(item.split("=", 1) for item in captured.split("\0") if "=" in item)
             module_env: dict[str, Any] = {"module": module, "build_modules": list(build_modules)}
@@ -1079,15 +1264,30 @@ def prefetch_r(
             if "LD_LIBRARY_PATH" in pairs:
                 module_env["LD_LIBRARY_PATH"] = pairs["LD_LIBRARY_PATH"]
             script, session_script, out = work / "install.R", work / "session.R", work / "out"
+            fetch_script, repo_dir = work / "download.R", work / "repo"
+            contrib = repo_dir / "src" / "contrib"
             script.write_text(r_script(env.r_packages))
             session_script.write_text(r_session_script(env.r_packages))
+            fetch_script.write_text(r_download_script(env.r_packages))
             out.mkdir()
-            prefix = str(venv) if kind == "ir_notebook" and venv is not None else ""
-            argv = _in_bash(
-                r_install_script(build_modules),
-                *(module, str(r_lib), str(script), str(out), repo, prefix, str(session_script)),
-            )
-            _checked(run(argv, run_env, work), "Rscript install")
+            fetch_bash = r_fetch_script(build_modules, profile.modules_init)
+            fetch = _in_bash(fetch_bash, module, str(fetch_script), repo, str(contrib))
+            _checked(run(fetch, run_env, work), "R package download")
+            notebook_venv = str(venv) if kind == "ir_notebook" and venv is not None else ""
+            staging = work / "kernel-prefix" if notebook_venv else None
+            prefix = "" if staging is None else str(staging)
+            writable = [r_lib, work]
+            install_env = {
+                k: v for k, v in pairs.items() if k not in _MODULE_ENV_SKIP and not k.startswith("BASH_FUNC")
+            }
+            install_env |= run_env | {"PATH": pairs.get("PATH", SYSTEM_PATH)}
+            install_env |= {"R_LIBS": str(r_lib), "R_LIBS_USER": str(r_lib), "R_LIBS_SITE": ""}
+            install_argv = [sandbox.SH, "-c", R_INSTALL_SH, "sh", str(r_lib), str(script), str(out)]
+            install_argv += [repo_dir.as_uri(), notebook_venv, str(session_script), prefix]
+            argv = sandbox.sandbox_argv(install_argv, [], writable)
+            _checked(run(argv, install_env, work), "Rscript install (sandboxed, offline)")
+            if staging is not None and venv is not None:
+                _install_staged_kernel(staging / KERNELS / "ir", venv / KERNELS / "ir")
             recorded = read_r_session(out)
             installed, lib_paths = recorded["installed"], recorded["lib_paths"]
             reported_version = recorded["r_version"]
@@ -1109,6 +1309,8 @@ def prefetch_r(
             raise ReproduceLockError(f"IRkernel installspec wrote no kernel spec under {venv}")
         module_sha = _write_json(module_path, module_env)
         session_sha = _write_json(session_path, session)
+    if kind == "ir_notebook" and venv is not None:
+        record_kernels(venv)
     return RResult(r_lib, session_path, session_sha, module_path, module_sha, False)
 
 

@@ -382,6 +382,7 @@ def test_uv_export_env_round_trip_passes_check_integrity(tmp_path: Path, fake_uv
 
 
 @pytest.mark.slow
+@pytest.mark.network
 def test_real_body_compile_from_pypi(tmp_path: Path) -> None:
     """A real compile of two pins from PyPI: every line hashed, header parses, B3 passes."""
     (tmp_path / ENV_DIR).mkdir(parents=True)
@@ -421,6 +422,7 @@ def _notebook_overlay_passes(tmp_path: Path, raw: dict[str, Any], uv_lock: Path 
 
 
 @pytest.mark.slow
+@pytest.mark.network
 def test_real_notebook_overlay_on_a_uv_export_body(tmp_path: Path) -> None:
     """Notebook tools (nbconvert, ipykernel) compiled against a uv-export body and a uv.lock torch lock pass B3."""
     project = _project(tmp_path)
@@ -432,6 +434,7 @@ def test_real_notebook_overlay_on_a_uv_export_body(tmp_path: Path) -> None:
 
 
 @pytest.mark.slow
+@pytest.mark.network
 def test_real_notebook_overlay_on_a_requirements_body(tmp_path: Path) -> None:
     """Notebook tools (nbconvert, ipykernel) compiled against a real requirements.in body pass B3."""
     (tmp_path / ENV_DIR).mkdir(parents=True)
