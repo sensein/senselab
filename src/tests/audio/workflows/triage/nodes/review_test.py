@@ -39,6 +39,7 @@ from senselab.audio.workflows.triage.nodes.review import (
 )
 from senselab.audio.workflows.triage.vocabulary import PII_SCAN, REDACTION_LLM_ANNOTATION, SCANNED, Outcome
 from senselab.text.tasks.pii_detection.redaction_review import (
+    PHRASE_QUOTES_UNPLACED_FEEDBACK,
     PROMPT_VERSION,
     ReviewProposal,
     ReviewResult,
@@ -685,6 +686,51 @@ class TestTheLoopStopsWhenAnotherRoundCannotDiffer:
         rounds = _rounds_in(store)
         assert "do not occur in the ORIGINAL" in rounds[1]["feedback"] and '"[PERSON]"' in rounds[1]["feedback"]
         assert _annotation(store)["converged"] is True
+
+    @staticmethod
+    def _phrased(*quotes: str) -> ReviewResult:
+        """A clean round that judges phrases predominant and quotes them."""
+        return ReviewResult(
+            available=True,
+            reasoning="Nothing identifies the speaker.",
+            redaction="not_applicable",
+            original="clean",
+            speakers="one",
+            phrases_instead_of_items="predominant",
+            phrase_quotes=list(quotes),
+            model_id="s/m",
+            revision="a" * 40,
+        )
+
+    def test_an_unplaced_phrase_quote_is_asked_again_and_the_correction_converges(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Owner, 2026-10-10: a phrase quote that places on no word is incorrect, so the reviewer retries."""
+        store = ProvStore(run_id="r")
+        _seed(store, words=["i", "like", "the", "elephants"])
+        seen = _stub(monkeypatch, [self._phrased("i like the elephant"), self._phrased("i like the elephants")])
+        review(store, _config(tmp_path, LLM_ON + "    max_iterations: 3\n"))
+        assert len(seen) == 2
+        rounds = _rounds_in(store)
+        assert [entry["phrase_quotes_unplaced_n"] for entry in rounds] == [1, 0]
+        assert rounds[1]["feedback"] == PHRASE_QUOTES_UNPLACED_FEEDBACK
+        annotation = _annotation(store)
+        assert annotation["converged"] is True and annotation["phrase_quotes_unplaced_n"] == 0
+
+    def test_a_phrase_quote_still_unplaced_at_the_ceiling_is_not_converged(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The same unplaceable quote each round: the ceiling ends it and the reading records the count."""
+        store = ProvStore(run_id="r")
+        _seed(store, words=["i", "like", "the", "elephants"])
+        wrong = self._phrased("i like the elephant")
+        seen = _stub(monkeypatch, [wrong, wrong, wrong])
+        review(store, _config(tmp_path, LLM_ON + "    max_iterations: 3\n"))
+        assert len(seen) == 3
+        annotation = _annotation(store)
+        assert (annotation["converged"], annotation["phrase_quotes_unplaced_n"]) == (False, 1)
+        assert annotation["problem"] == PHRASE_QUOTES_UNPLACED_FEEDBACK
+        assert all(entry["feedback"] == PHRASE_QUOTES_UNPLACED_FEEDBACK for entry in _rounds_in(store)[1:])
 
     def test_a_flag_that_proposes_a_removal_still_iterates(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

@@ -20,7 +20,9 @@ from senselab.audio.workflows.triage.vocabulary import (
     NON_TASK_SPEECH_EXTENSIVE,
     NON_TASK_SPEECH_MASKED,
     NON_TASK_SPEECH_UNTIMED,
+    REVIEWER_QUOTES_UNPLACED,
     ROUTED,
+    SECOND_OPINION_PHRASES_PREDOMINANT,
     BranchDecision,
     FileVerdict,
     FoldPolicy,
@@ -31,6 +33,7 @@ from senselab.audio.workflows.triage.vocabulary import (
     TaskEvidence,
     Triage,
     fold_file_verdict,
+    release_ground_key,
 )
 from senselab.utils.prov_store import ProvStore
 from tests.audio.workflows.triage.nodes.conftest import word_attributes
@@ -247,7 +250,7 @@ def _item_fold(
     opinion: dict | None = None,
     cohort: dict | None = None,
 ) -> FileVerdict:
-    """Fold an item list's reading, with the reviewer, the second opinion and COHORT as given."""
+    """Fold an item list's reading under the reviewer, the second opinion and COHORT."""
     family = "random-item-generation"
     reading = task_speech_of(store, family)
     decisions = {
@@ -260,7 +263,11 @@ def _item_fold(
         ran={},
         hint_claims={},
         route_state=ROUTED,
-        redaction=RedactionEvidence(lexical_words_n=reading.lexical_n, scanned=True),
+        redaction=RedactionEvidence(
+            lexical_words_n=reading.lexical_n,
+            scanned=True,
+            non_task_speech_extensive=(annotation or {}).get("phrases_instead_of_items") == "predominant",
+        ),
         llm_redaction=annotation,
         second_opinion=opinion,
         cohort=cohort,
@@ -358,6 +365,46 @@ class TestPhrasesInsteadOfItems:
         opinion = {"status": "ok", "choices": {"phrases_instead_of_items": "predominant"}, "probabilities": {}}
         second = _item_fold(store, annotation=read, opinion=opinion)
         assert "second_opinion:phrases_instead_of_items" in second.ground_keys and second.triage is Triage.REVIEW
+
+    def test_the_second_opinion_s_predominant_withholds_the_release(self, store: ProvStore) -> None:
+        """Owner, 2026-10-10: the second opinion's predominant withholds, not only reviews (8ca6baff was as_is)."""
+        _said(store, _ITEMS)
+        read = {"status": "clean", "original": "clean", "proposal": []}
+        opinion = {"status": "ok", "choices": {"phrases_instead_of_items": "predominant"}, "probabilities": {}}
+        folded = _item_fold(store, annotation=read, opinion=opinion)
+        assert folded.triage is Triage.REVIEW and "second_opinion:phrases_instead_of_items" in folded.ground_keys
+        assert folded.release is Release.WITHHELD and folded.release_ground == SECOND_OPINION_PHRASES_PREDOMINANT
+        assert release_ground_key(folded.release_ground) == "second_opinion_phrases_predominant"
+        placed = _item_fold(store, annotation={**read, "phrases_instead_of_items": "predominant"}, opinion=opinion)
+        assert placed.release is Release.WITHHELD and placed.release_ground == NON_TASK_SPEECH_EXTENSIVE
+
+    def test_unplaced_reviewer_quotes_review_and_withhold_whatever_its_level(self, store: ProvStore) -> None:
+        """Rounds ran out with phrase quotes unplaced: the phrase level is not read; review, withheld."""
+        _said(store, _ITEMS)
+        annotation = {
+            "status": "clean",
+            "original": "clean",
+            "proposal": [],
+            "converged": False,
+            "phrases_instead_of_items": "none",
+            "phrase_quotes": ["nothing said like this"],
+            "phrase_quotes_unplaced_n": 1,
+        }
+        folded = _item_fold(store, annotation=annotation)
+        assert folded.triage is Triage.REVIEW and "reviewer_quotes_unplaced" in folded.ground_keys
+        assert folded.reason == "off_task_speech"
+        assert folded.release is Release.WITHHELD and folded.release_ground == REVIEWER_QUOTES_UNPLACED
+        assert release_ground_key(folded.release_ground) == "reviewer_quotes_unplaced"
+        predominant = _item_fold(store, annotation={**annotation, "phrases_instead_of_items": "predominant"})
+        assert "reviewer_phrases_instead_of_items" not in predominant.ground_keys
+        assert predominant.release_ground == REVIEWER_QUOTES_UNPLACED
+
+    def test_occasional_from_both_readers_releases(self, store: ProvStore) -> None:
+        """The control: no predominant, nothing withheld."""
+        _said(store, _ITEMS)
+        opinion = {"status": "ok", "choices": {"phrases_instead_of_items": "occasional"}, "probabilities": {}}
+        folded = _item_fold(store, annotation={"status": "clean", "original": "clean", "proposal": []}, opinion=opinion)
+        assert folded.release is Release.AS_IS
 
     def test_a_list_with_a_background_speaker_is_reviewed_through_cohort(self, store: ProvStore) -> None:
         """No phrase at all, but a run that does not match the session enrollment: another speaker, review."""

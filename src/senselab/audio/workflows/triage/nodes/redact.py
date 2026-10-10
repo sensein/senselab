@@ -106,8 +106,11 @@ from senselab.text.tasks.pii_detection.redaction_review import (
     PHRASES_PREDOMINANT,
     PLACE_HISTORICAL,
     PLACE_REASONS,
+    QUOTE_EDGE,
     RELABEL_PLACE,
     RELABELS,
+    match_token,
+    placement_tokens,
     review_inputs_complete,
     safe_harbor_codes,
 )
@@ -550,11 +553,11 @@ def word_keys(word: Entity) -> set[str]:
         word: A consensus word.
 
     Returns:
-        The surfaces as :func:`_match_token` folds them, the empty ones dropped.
+        The surfaces as :func:`match_token` folds them, the empty ones dropped.
     """
     readings = (word.attributes.get("readings") or {}).values()
     texts = [str(word.attributes.get("text") or ""), *(str(reading) for reading in readings)]
-    return {key for key in (_match_token(text) for text in texts) if key}
+    return {key for key in (match_token(text) for text in texts) if key}
 
 
 def finding_keys(findings: Sequence[Entity], by_id: Mapping[str, Entity]) -> dict[str, set[str]]:
@@ -565,7 +568,7 @@ def finding_keys(findings: Sequence[Entity], by_id: Mapping[str, Entity]) -> dic
         by_id: The consensus words by id.
 
     Returns:
-        ``{word id: tokens}``, as :func:`_match_token` folds them; the consensus surface where a finding
+        ``{word id: tokens}``, as :func:`match_token` folds them; the consensus surface where a finding
         names no ``haystack`` or was read off the consensus.
     """
     keys: dict[str, set[str]] = {}
@@ -577,7 +580,7 @@ def finding_keys(findings: Sequence[Entity], by_id: Mapping[str, Entity]) -> dic
                 continue
             readings = word.attributes.get("readings") or {}
             surface = word.attributes.get("text") if haystack == "consensus" else readings.get(haystack)
-            key = _match_token(str(surface or ""))
+            key = match_token(str(surface or ""))
             if key:
                 keys.setdefault(word.id, set()).add(key)
     return keys
@@ -1142,22 +1145,6 @@ def redact(
 RELEASED_FILES = ("audio.wav", "transcript.txt", "consensus.json")
 """What a release of the redacted copy writes into the release directory."""
 
-_QUOTE_EDGE = "\"'`.,;:!?()[]{}<>-\u2018\u2019\u201c\u201d\u2026"  # stripped from a token's two ends before matching
-
-
-def _match_token(text: str) -> str:
-    """One token as a reviewer quote and a transcript word are compared.
-
-    Args:
-        text: A word's surface, or one whitespace-separated piece of a quote.
-
-    Returns:
-        The token lower-cased, curly apostrophes made straight, and punctuation stripped from both
-        ends. Empty where nothing but punctuation was there.
-    """
-    return text.replace("\u2019", "'").strip(_QUOTE_EDGE).lower()
-
-
 MASKED = "masked"
 """A word a mask still hides in the released copy."""
 
@@ -1616,6 +1603,7 @@ class MaskPlan:
             (``task_speech_reading``), each kept masked whatever the content-word trim says.
         non_task_speech_untimed: Such words with no usable timing, which no mask can place.
         non_task_speech_extensive: Whether an item-set family's speech outside its item runs is extensive.
+        phrase_words_n: How many words the reviewer's phrase quotes place on, in an item-set family.
     """
 
     masks: tuple[MaskOutcome, ...]
@@ -1641,6 +1629,7 @@ class MaskPlan:
     non_task_speech_ids: tuple[str, ...] = ()
     non_task_speech_untimed: tuple[str, ...] = ()
     non_task_speech_extensive: bool = False
+    phrase_words_n: int = 0
 
     @property
     def non_task_speech_masked_n(self) -> int:
@@ -1846,6 +1835,7 @@ class MaskPlan:
             "non_task_speech_ids": list(self.non_task_speech_ids),
             "non_task_speech_untimed": list(self.non_task_speech_untimed),
             "non_task_speech_extensive": self.non_task_speech_extensive,
+            "phrase_words_n": self.phrase_words_n,
             "task_content_only": self.task_content_only,
             "reviewer_named_no_words": self.named_no_words,
             "counts": {
@@ -1914,11 +1904,23 @@ def _tokens(words: Sequence[Entity]) -> list[tuple[str, Entity]]:
         ``(token, word)`` for every non-bracketed, timed word whose token is not empty.
     """
     tokens = [
-        (_match_token(str(word.attributes.get("text") or "")), word)
+        (match_token(str(word.attributes.get("text") or "")), word)
         for word in words
         if not word.attributes.get("bracketed") and word.extent is not None
     ]
     return [(token, word) for token, word in tokens if token]
+
+
+def placeable_tokens(store: ProvStore) -> tuple[str, ...]:
+    """The tokens of the consensus words a reviewer quote is placed on (:func:`mask_plan`), in stream order.
+
+    Args:
+        store: The provenance store.
+
+    Returns:
+        :func:`_tokens`' tokens over the timed consensus words.
+    """
+    return tuple(token for token, _ in _tokens([word for word in consensus_words(store) if word.extent is not None]))
 
 
 def _place(quote: str, tokens: Sequence[tuple[str, Entity]]) -> list[Entity]:
@@ -1931,7 +1933,7 @@ def _place(quote: str, tokens: Sequence[tuple[str, Entity]]) -> list[Entity]:
     Returns:
         The words, in stream order, without repeats. Empty where the quote matches no run.
     """
-    wanted = [token for token in (_match_token(piece) for piece in quote.split()) if token]
+    wanted = placement_tokens(quote)
     width = len(wanted)
     surfaces = [token for token, _ in tokens]
     named: dict[str, Entity] = {}
@@ -2473,8 +2475,8 @@ def mask_plan(
     def capitalised(word: Entity) -> bool:
         if non_english:
             return proper(word)
-        surface = text_of(word).strip(_QUOTE_EDGE)
-        return surface[:1].isupper() and _match_token(surface) not in ("i", "i'm", "i'll", "i've", "i'd")
+        surface = text_of(word).strip(QUOTE_EDGE)
+        return surface[:1].isupper() and match_token(surface) not in ("i", "i'm", "i'll", "i've", "i'd")
 
     def content(word: Entity) -> bool:
         if word.id in task_words.ids or (residue_ids and word.id not in residue_ids):
@@ -2592,7 +2594,7 @@ def mask_plan(
     }
     country_redacted = {word.id for hits, _ in redact_placed.values() for word in hits if word.id in country_ids}
     blocked_tokens = {
-        _match_token(str(word.attributes.get("text") or "")) for hits, _ in redact_placed.values() for word in hits
+        match_token(str(word.attributes.get("text") or "")) for hits, _ in redact_placed.values() for word in hits
     }
     approved_ids = _approved(name_approvals, tokens)
     name_kinds = name_families()
@@ -2650,7 +2652,7 @@ def mask_plan(
         kind_of.pop(word_id, None)
 
     def surface_key(word_id: str) -> str:
-        return _match_token(text_of(by_id[word_id])) if word_id in by_id else ""
+        return match_token(text_of(by_id[word_id])) if word_id in by_id else ""
 
     def same_term(ids: set[str]) -> set[str]:
         tokens = {surface_key(word_id) for word_id in ids} - {""}
@@ -2724,18 +2726,18 @@ def mask_plan(
                 if word.id not in released
                 and word.id not in locked
                 and text_of(word) == text_of(word).lower()
-                and _match_token(text_of(word)) not in blocked_tokens
+                and match_token(text_of(word)) not in blocked_tokens
             )
         released |= with_head
     ordinary = {
-        _match_token(str(word.attributes.get("text") or ""))
+        match_token(str(word.attributes.get("text") or ""))
         for word in words
         if word.id not in covered_ids and word.id not in finding_word_ids
     }
 
     def common_word(word: Entity) -> bool:
         text = str(word.attributes.get("text") or "")
-        return text == text.lower() and _match_token(text) in ordinary
+        return text == text.lower() and match_token(text) in ordinary
 
     name_only: set[str] = set()
     elsewhere: set[str] = set()
@@ -3111,6 +3113,7 @@ def mask_plan(
         non_task_speech_ids=tuple(sorted(speech_ids, key=lambda word_id: order[word_id])),
         non_task_speech_untimed=speech_untimed,
         non_task_speech_extensive=heard.extensive,
+        phrase_words_n=len(heard.phrase_ids),
         named_no_words=reviewer_named_no_words(reading),
         releases=tuple(releases),
         conditions=tuple(conditions),

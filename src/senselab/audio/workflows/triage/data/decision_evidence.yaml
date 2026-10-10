@@ -4,7 +4,7 @@
 # a category with in / not in against a list of categories; a reported reading has neither.
 # `producer` names the unit of specs/20261007-task-events-in-background/design.md that emits it;
 # an item a later unit produces is absent from the tables until that unit lands.
-version: 9
+version: 10
 groups:
   acquisition:
     admit_outcome:
@@ -210,6 +210,10 @@ groups:
       unit:
       producer: fold
       meaning: why the release axis reads as it does; a withholding ground holds the recording
+    reviewer_quotes_unplaced:
+      unit:
+      producer: fold
+      meaning: in an item-set task, the reviewer's phrase quotes still placed on no run of the timed consensus words after redaction.llm_check.max_iterations rounds; its phrase level is not read, the recording is reviewed and the release withheld (owner, 2026-10-10)
 prefixes:              # `<prefix>:<name>` items, named by what follows the colon
   gate:
     group: speech

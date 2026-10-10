@@ -199,6 +199,14 @@ NON_TASK_SPEECH_MASKED = (
 NON_TASK_SPEECH_EXTENSIVE = (
     "speech outside an item-set task's item runs is extensive, so the policy holds the recording rather than mask it"
 )
+REVIEWER_QUOTES_UNPLACED = (
+    "the reviewer's phrase quotes in an item-set task still placed on no run of the transcript's words when its "
+    "rounds ran out, so its phrase judgement is unreliable and the policy holds the recording"
+)
+SECOND_OPINION_PHRASES_PREDOMINANT = (
+    "the second-opinion model judged an item-set task's phrases instead of items predominant, so the policy holds "
+    "the recording"
+)
 NON_TASK_SPEECH_UNTIMED = (
     "lexical speech outside a non-lexical task carries no usable timing, so no mask can hide it and neither copy "
     "may be handed on"
@@ -265,6 +273,8 @@ RELEASE_WITHHELD_GROUNDS = (
     SECOND_OPINION_HOLD,
     NON_TASK_SPEECH_UNTIMED,
     NON_TASK_SPEECH_EXTENSIVE,
+    REVIEWER_QUOTES_UNPLACED,
+    SECOND_OPINION_PHRASES_PREDOMINANT,
 )
 """Why the redaction policy withholds a recording. One stands behind every :attr:`Release.WITHHELD`."""
 
@@ -920,6 +930,7 @@ PREFIX_SECOND_OPINION = "second_opinion"
 KEY_REVIEWER_OFF_TASK = "reviewer_off_task_speech"
 KEY_REVIEWER_PHRASES = "reviewer_phrases_instead_of_items"
 KEY_PHRASES_OCCASIONAL = "phrases_occasional"
+KEY_REVIEWER_QUOTES_UNPLACED = "reviewer_quotes_unplaced"
 KEY_REVIEWER_OTHER_SPEAKER = "reviewer_other_speaker"
 KEY_INSTRUCTIONS_SPOKEN_BY_OTHER = "instructions_spoken_by_other"
 KEY_OTHER_SPEAKER_IN_TASK = "other_speaker_in_task"
@@ -972,6 +983,7 @@ GROUND_KEYS = (
     KEY_REVIEWER_OFF_TASK,
     KEY_REVIEWER_PHRASES,
     KEY_PHRASES_OCCASIONAL,
+    KEY_REVIEWER_QUOTES_UNPLACED,
     KEY_REVIEWER_OTHER_SPEAKER,
     KEY_INSTRUCTIONS_SPOKEN_BY_OTHER,
     KEY_OTHER_SPEAKER_IN_TASK,
@@ -1075,6 +1087,8 @@ RELEASE_GROUND_KEYS: dict[str, str] = {
     NON_TASK_SPEECH_MASKED: "non_task_speech_masked",
     NON_TASK_SPEECH_UNTIMED: "non_task_speech_untimed",
     NON_TASK_SPEECH_EXTENSIVE: "non_task_speech_extensive",
+    REVIEWER_QUOTES_UNPLACED: KEY_REVIEWER_QUOTES_UNPLACED,
+    SECOND_OPINION_PHRASES_PREDOMINANT: "second_opinion_phrases_predominant",
     DISCARDED: "discarded",
 }
 """The stable key of every release ground. A release REDACT itself decided carries
@@ -1634,7 +1648,9 @@ def _phrase_reasons(
 ) -> None:
     """Raise an item-set task's phrases instead of items, as the reviewer and the second opinion read them.
 
-    ``predominant`` from either is a flag; ``occasional`` is an annotation.
+    ``predominant`` from either is a flag; ``occasional`` is an annotation. A reviewer whose phrase quotes still
+    placed on no word when its rounds ran out (:func:`reviewer_quotes_unplaced`) raises
+    :data:`KEY_REVIEWER_QUOTES_UNPLACED` instead, and its level is not read.
 
     Args:
         annotation: REVIEW's annotation, read where it answered (``clean`` or ``flagged``).
@@ -1642,9 +1658,14 @@ def _phrase_reasons(
         flag: The fold's flag.
         annotate: The fold's annotation.
     """
-    reviewer = annotation.get("phrases_instead_of_items") if annotation.get("status") in ("clean", "flagged") else None
+    unreliable = reviewer_quotes_unplaced(annotation)
+    read = annotation.get("status") in ("clean", "flagged") and not unreliable
+    reviewer = annotation.get("phrases_instead_of_items") if read else None
     held = dict(second_opinion or {})
     opinion = (held.get("choices") or {}).get(PHRASES_INSTEAD_OF_ITEMS) if held.get("status") == "ok" else None
+    if unreliable:
+        unplaced = int(annotation.get("phrase_quotes_unplaced_n") or 0)
+        flag(_VERDICT, f"{REVIEWER_QUOTES_UNPLACED}: {unplaced} phrase quote(s) unplaced", KEY_REVIEWER_QUOTES_UNPLACED)
     if reviewer == PHRASES_PREDOMINANT:
         quoted = len(annotation.get("phrase_quotes") or ())
         flag(_VERDICT, f"{REVIEWER_PHRASES}: {reviewer}, {quoted} phrase(s) quoted", KEY_REVIEWER_PHRASES)
@@ -1658,6 +1679,33 @@ def _phrase_reasons(
     said = [level for level in (reviewer, opinion) if level == PHRASES_OCCASIONAL]
     if said and PHRASES_PREDOMINANT not in (reviewer, opinion):
         annotate(_VERDICT, f"{REVIEWER_PHRASES}: {PHRASES_OCCASIONAL}", KEY_PHRASES_OCCASIONAL)
+
+
+def reviewer_quotes_unplaced(annotation: Mapping[str, Any] | None) -> bool:
+    """Whether the reviewer answered and its last answering round left phrase quotes placed on no word.
+
+    Args:
+        annotation: REVIEW's annotation.
+
+    Returns:
+        True where its status is ``clean`` or ``flagged`` and ``phrase_quotes_unplaced_n`` is positive.
+    """
+    reviewer = dict(annotation or {})
+    return reviewer.get("status") in ("clean", "flagged") and int(reviewer.get("phrase_quotes_unplaced_n") or 0) > 0
+
+
+def second_opinion_phrases_predominant(second_opinion: Mapping[str, Any] | None) -> bool:
+    """Whether the second opinion read an item-set task's phrases instead of items as predominant.
+
+    Args:
+        second_opinion: The ``second_opinion_answers`` attributes, read where its status is ``ok``.
+
+    Returns:
+        True where it answered ``predominant``.
+    """
+    held = dict(second_opinion or {})
+    opinion = (held.get("choices") or {}).get(PHRASES_INSTEAD_OF_ITEMS) if held.get("status") == "ok" else None
+    return opinion == PHRASES_PREDOMINANT
 
 
 def second_opinion_not_free(opinion: Mapping[str, Any] | None, confident_no: float | None) -> float | None:
@@ -1861,7 +1909,12 @@ def _release_from(
 
 
 def final_release(
-    release: Release | None, ground: str | None, evidence: RedactionEvidence
+    release: Release | None,
+    ground: str | None,
+    evidence: RedactionEvidence,
+    *,
+    reviewer_unplaced: bool = False,
+    second_opinion_predominant: bool = False,
 ) -> tuple[Release | None, str | None]:
     """The release once the final plan's coverage and the speech outside the task are weighed.
 
@@ -1869,12 +1922,17 @@ def final_release(
         release: The release before it.
         ground: Its ground.
         evidence: What the store says about the redaction, read for the non-task speech words.
+        reviewer_unplaced: Whether, in an item-set task, the reviewer's phrase quotes still placed on no word when
+            its rounds ran out (:func:`reviewer_quotes_unplaced`).
+        second_opinion_predominant: Whether, in an item-set task, the second opinion read phrases instead of items
+            as ``predominant`` (:func:`second_opinion_phrases_predominant`).
 
     Returns:
         A release that hands an artefact on becomes :attr:`Release.WITHHELD` on :data:`MASK_COVERAGE_FAILED` where
-        a kept mask does not cover its words, on :data:`NON_TASK_SPEECH_EXTENSIVE` where an item-set task's speech
-        outside its item runs is extensive, on :data:`NON_TASK_SPEECH_UNTIMED` where such a word carries no usable
-        timing, else
+        a kept mask does not cover its words, on :data:`REVIEWER_QUOTES_UNPLACED` where the reviewer's phrase
+        quotes are unplaced, on :data:`NON_TASK_SPEECH_EXTENSIVE` where an item-set task's speech outside its item
+        runs is extensive, on :data:`SECOND_OPINION_PHRASES_PREDOMINANT` where the second opinion reads phrases
+        predominant, on :data:`NON_TASK_SPEECH_UNTIMED` where such a word carries no usable timing, else
         :attr:`Release.REDACTED` on :data:`NON_TASK_SPEECH_MASKED` where one stays masked; any other release
         is returned unchanged.
     """
@@ -1882,8 +1940,12 @@ def final_release(
         return release, ground
     if evidence.coverage_failed:
         return Release.WITHHELD, MASK_COVERAGE_FAILED
+    if reviewer_unplaced:
+        return Release.WITHHELD, REVIEWER_QUOTES_UNPLACED
     if evidence.non_task_speech_extensive:
         return Release.WITHHELD, NON_TASK_SPEECH_EXTENSIVE
+    if second_opinion_predominant:
+        return Release.WITHHELD, SECOND_OPINION_PHRASES_PREDOMINANT
     if evidence.non_task_speech_untimed_n:
         return Release.WITHHELD, NON_TASK_SPEECH_UNTIMED
     if evidence.non_task_speech_masked_n:
@@ -3407,7 +3469,13 @@ def fold_file_verdict(
         withholding,
         speech_declined=routes.get(_SPEECH) == DECLINED,
     )
-    release, release_ground = final_release(release, release_ground, redaction or RedactionEvidence())
+    release, release_ground = final_release(
+        release,
+        release_ground,
+        redaction or RedactionEvidence(),
+        reviewer_unplaced=task_evidence.item_set and reviewer_quotes_unplaced(annotation),
+        second_opinion_predominant=task_evidence.item_set and second_opinion_phrases_predominant(second_opinion),
+    )
     if not_free is not None and second_opinion_withholds() and release in (Release.AS_IS, Release.REDACTED):
         release, release_ground = Release.WITHHELD, SECOND_OPINION_HOLD
     if triage is not Triage.DISCARD and task_evidence.non_lexical and release in (Release.REDACTED, Release.WITHHELD):
