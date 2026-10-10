@@ -70,6 +70,7 @@ from senselab.text.tasks.pii_detection.redaction_review import (
     review_transcript,
     shutdown_review_worker,
     task_guidance_digest,
+    task_nature,
 )
 from senselab.utils.prov_store import ProvStore
 from senselab.utils.tasks.cached_inference import (
@@ -141,6 +142,11 @@ class _Reading:
             instructions are spoken in the recording.
         conditions: The health conditions the last answering round listed, each with ``text`` and
             ``why``; recorded, never masked.
+        off_task_speech: The last answering round's ``none`` / ``some`` / ``extensive``, or None.
+        off_task_quotes: The off-task passages it quoted.
+        other_speaker: Its ``none`` / ``assistant`` / ``background`` / ``unclear``, or None.
+        other_speaker_quotes: The passages it attributed to the other speaker.
+        task_content_quotes: The PII-annotated words it judged task content.
     """
 
     status: str
@@ -158,6 +164,33 @@ class _Reading:
     other_speakers: tuple[dict[str, Any], ...] = ()
     instructions_spoken: tuple[str, ...] = ()
     conditions: tuple[dict[str, str], ...] = ()
+    off_task_speech: str | None = None
+    off_task_quotes: tuple[str, ...] = ()
+    other_speaker: str | None = None
+    other_speaker_quotes: tuple[str, ...] = ()
+    task_content_quotes: tuple[str, ...] = ()
+
+
+TASK_READING_QUOTES = ("off_task_quotes", "other_speaker_quotes", "task_content_quotes")
+"""The task reading's quote lists, on a round's payload, a reading and the annotation alike."""
+
+
+def _task_reading(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """The five task-reading fields of one round's payload or one stored reading.
+
+    Args:
+        payload: A :func:`review_payload` mapping, or an annotation's attributes.
+
+    Returns:
+        ``off_task_speech`` and ``other_speaker`` (a string or None) and the three quote lists as tuples.
+    """
+    fields_: dict[str, Any] = {
+        "off_task_speech": payload.get("off_task_speech") or None,
+        "other_speaker": payload.get("other_speaker") or None,
+    }
+    for key in TASK_READING_QUOTES:
+        fields_[key] = tuple(str(text) for text in payload.get(key) or ())
+    return fields_
 
 
 def _stamp() -> str:
@@ -203,10 +236,11 @@ def task_context(store: ProvStore, hint: AudioHints | None, lexicon: TaskLexicon
             ``task_words``.
 
     Returns:
-        ``task``, ``speech_type``, ``language``, ``instructions``, ``asked_to_say``, ``declared_names`` and
-        ``task_words``, each
-        omitted where the recording declares none, and ``instructions_from`` and ``stimulus_from``
-        naming where those texts came from.
+        ``task`` (the family), ``task_name``, ``task_nature`` (from
+        :func:`~senselab.text.tasks.pii_detection.redaction_review.task_nature`), ``speech_type`` (the
+        hint's, else its metadata's), ``language``, ``instructions``, ``asked_to_say``, ``declared_names``
+        and ``task_words``, each omitted where the recording declares none, and ``instructions_from`` and
+        ``stimulus_from`` naming where those texts came from.
     """
     family = declared_task_family(store, hint)
     prompts = [
@@ -215,8 +249,14 @@ def task_context(store: ProvStore, hint: AudioHints | None, lexicon: TaskLexicon
     context: dict[str, Any] = {}
     if family:
         context["task"] = str(family)
-    if hint is not None and hint.speech_type:
-        context["speech_type"] = str(hint.speech_type)
+        nature = task_nature(str(family))
+        if nature:
+            context["task_nature"] = nature
+    if hint is not None and hint.metadata.get("task_name"):
+        context["task_name"] = str(hint.metadata["task_name"])
+    speech_type = (hint.speech_type or hint.metadata.get("speech_type")) if hint is not None else None
+    if speech_type:
+        context["speech_type"] = str(speech_type)
     if hint is not None and hint.metadata.get("language"):
         context["language"] = str(hint.metadata["language"])
     if hint is not None and hint.instructions:
@@ -632,6 +672,7 @@ def reading_from_cache(payload: Mapping[str, Any]) -> tuple[_Reading, list[dict[
     fields_["other_speakers"] = tuple(dict(entry) for entry in fields_.get("other_speakers") or ())
     fields_["instructions_spoken"] = tuple(str(text) for text in fields_.get("instructions_spoken") or ())
     fields_["conditions"] = tuple(dict(entry) for entry in fields_.get("conditions") or ())
+    fields_.update(_task_reading(fields_))
     return _Reading(**fields_), [dict(review) for review in payload.get("reviews") or ()]
 
 
@@ -706,6 +747,8 @@ def backfill_from_store(store: ProvStore, config: TriageConfig) -> tuple[str, st
         problem=held.get("problem"),
         other_speakers=tuple(dict(entry) for entry in held.get("other_speakers") or ()),
         instructions_spoken=tuple(str(text) for text in held.get("instructions_spoken") or ()),
+        conditions=tuple(dict(entry) for entry in held.get("conditions") or ()),
+        **_task_reading(held),
     )
     reviews = [
         {key: value for key, value in entity.attributes.items() if key not in ("name", "signal")}
@@ -797,7 +840,13 @@ def review(store: ProvStore, config: TriageConfig, hint: AudioHints | None = Non
                 others = tuple(dict(other) for other in answered[-1].get("other_speakers") or ())
                 spoken = tuple(str(text) for text in answered[-1].get("instructions_spoken") or ())
                 conditions = tuple(dict(entry) for entry in answered[-1].get("conditions") or ())
-                reading = replace(reading, other_speakers=others, instructions_spoken=spoken, conditions=conditions)
+                reading = replace(
+                    reading,
+                    other_speakers=others,
+                    instructions_spoken=spoken,
+                    conditions=conditions,
+                    **_task_reading(answered[-1]),
+                )
             stored = key is not None and reading.revision == revision and cache_reading(key, reading, reviews)
             cache = {"key": key, "hit": False, "stored": stored}
 
@@ -869,6 +918,11 @@ def review(store: ProvStore, config: TriageConfig, hint: AudioHints | None = Non
             "other_speakers": [dict(entry) for entry in reading.other_speakers],
             "instructions_spoken": list(reading.instructions_spoken),
             "conditions": [dict(entry) for entry in reading.conditions],
+            "off_task_speech": reading.off_task_speech,
+            "off_task_quotes": list(reading.off_task_quotes),
+            "other_speaker": reading.other_speaker,
+            "other_speaker_quotes": list(reading.other_speaker_quotes),
+            "task_content_quotes": list(reading.task_content_quotes),
             "prompt_version": PROMPT_VERSION,
             "proposal": [dict(entry) for entry in reading.proposal],
             "proposal_redact_n": sum(1 for entry in reading.proposal if entry["action"] == REDACT),
