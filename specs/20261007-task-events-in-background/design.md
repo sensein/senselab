@@ -2049,8 +2049,8 @@ evidence table; the bound it was compared against no longer exists. `task_speech
 ### The mask (`mask_plan`)
 
 - The reviewer's phrase quotes are placed on the consensus words as whole-token runs (`_place`), the way its
-  off-task and other-speaker quotes are; a quote that places on no word masks nothing and is not otherwise
-  recorded, as for those quotes.
+  off-task and other-speaker quotes are. A phrase quote that places on no word is retried in the reviewer's loop
+  (below); one still unplaced when the rounds run out masks nothing and withholds the release.
 - Masked only where the reviewer's level is `predominant`, and that release is withheld
   (`non_task_speech_extensive`), as before; an occasional phrase masks nothing because a redacted release is
   itself reviewed.
@@ -2061,6 +2061,50 @@ evidence table; the bound it was compared against no longer exists. `task_speech
 
 Not yet measured: the prompt-14 readings over the owner's labelled stems (run on ORCD, "vLLM reviewer engine"
 in `specs/20261010-vllm-reviewer/design.md`).
+
+### An unplaced phrase quote is retried (owner, 2026-10-10; prompt 15)
+
+Owner: a phrase quote that cannot be placed "would be an incorrect/hallucinated response then and gemma should
+retry (under a max count)."
+
+- The loop already feeds back a problem `answer_problem` finds and asks again over the same text, up to
+  `redaction.llm_check.max_iterations` (3); that ceiling is the max count, so no new setting. The quote checks
+  it had compared against the ORIGINAL with spelling tolerance (`quote_occurs`, similarity 0.8 for words of five
+  letters or more), which `mask_plan`'s exact whole-token placement does not share: in the tests, "elephant"
+  passes that check against "elephants" and places on nothing.
+- `answer_problem` now also takes the placeable tokens, the `match_token` form of the timed, non-bracketed
+  consensus words that `mask_plan` places on (`redact.placeable_tokens`). A `PHRASE_QUOTES` entry that is not a
+  contiguous run of them, after an ORIGINAL check that passed, is a problem, and its feedback is the fixed
+  `PHRASE_QUOTES_UNPLACED_FEEDBACK`: "some PHRASE_QUOTES entries do not occur verbatim in the transcript's
+  words; quote each phrase exactly, word for word as the ORIGINAL writes it, or drop it". It repeats no quote,
+  so the retry adds no text the prompt did not already carry. A quote absent from the ORIGINAL altogether still
+  gets the existing "do not occur in the ORIGINAL" feedback first.
+- The feedback is a function of the prior round's answer and the store's words alone, so a retry is as
+  reproducible as the round before it (vLLM at concurrency 1).
+- Each round records `phrase_quotes_unplaced_n`, and the reading records the last answering round's count
+  beside `converged`. The placeable tokens join the review cache key, and `PROMPT_VERSION` goes to 15 because a
+  reading now holds the count; every prompt-14 reading is re-read once.
+
+### What the fold does with the two readers' `predominant` (`decision_reasons.yaml` v9, `decision_evidence.yaml` v10)
+
+Owner, asked "should the release be withheld when either model says phrases are predominant?": "yes". Until now
+a second-opinion `predominant` only reviewed (8ca6baff came out review, `as_is`).
+
+- **The reviewer's rounds ran out with a phrase quote unplaced** (`phrase_quotes_unplaced_n` > 0 on a `clean`
+  or `flagged` reading, item-set family): its phrase judgement is unreliable, so its level is not read (no
+  `reviewer_phrases_instead_of_items`, no `phrases_occasional` from it). The flag `reviewer_quotes_unplaced`
+  (reason `off_task_speech`) reviews, and the release is withheld on the ground `reviewer_quotes_unplaced`,
+  whatever level it answered: the withhold comes from the unreliable reading, not from `predominant`.
+- **The reviewer's `predominant` with its quotes placed**: masked and withheld on `non_task_speech_extensive`,
+  as before.
+- **The second opinion's `predominant`**: reviews as before (`second_opinion:phrases_instead_of_items`), and now
+  withholds on `second_opinion_phrases_predominant` where no earlier ground held it. The second opinion quotes
+  nothing, so it masks nothing, and `mask_plan` cannot read its answer, since it reads `mask_plan`'s masked text.
+- Order in `final_release`: `mask_coverage_failed`, `reviewer_quotes_unplaced`, `non_task_speech_extensive`,
+  `second_opinion_phrases_predominant`, `non_task_speech_untimed`. `occasional` from either still only annotates.
+- An earlier draft withheld a `predominant` with no placed quote on `phrases_predominant_unplaced`; the retry
+  replaces it, and that ground does not exist. `MaskPlan.phrase_words_n` (how many words the reviewer's phrase
+  quotes place on) stays in the plan's record as evidence.
 
 ## Session background from speech-task residuals (owner, 2026-10-10)
 
