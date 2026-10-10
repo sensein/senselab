@@ -2117,3 +2117,60 @@ own floor); `quality_join.yaml` `streams.snr_low_db` (10, mirrors `snr_low_db`).
 the same floor: `activity.margin_db`, `inhale.margin_db`, `impulse_margin_db`, `ddk.nucleus_prominence_db`
 (prominence is relative, so a floor shift moves nuclei only through the unvoiced offset and the smoothing),
 `ddk.events_min`.
+
+### What changed (`session_background.py`, `data/session_background.yaml` v1)
+
+- **SESSION's per-recording reading (`speech_residual`).** `nodes/background.py:write_speech_residual` reads the
+  plain, enhanced and residual streams in BACKGROUND's band frames (same bands, 40 ms frames, 10 ms hop). Speech
+  frames are the frames inside the lexical consensus words' hulls (bracketed, degenerate, unconfirmed and
+  non-lexical tokens left out) or inside an enhanced-stream YAMNet window whose highest speech-label score reaches
+  `foreground.enhanced_speech_min` (0.5, the speech bound of `background_speech.yaml`). The enhanced stream
+  carries speech (`foreground`) where it has at least `foreground.lexical_words_min` (1) lexical word or such a
+  window, over at least `foreground.speech_frames_min_s` (0.5 s, unfitted) of speech frames. Recorded: the
+  residual's per-band median over its live frames (`residual_band_db`), each stream's broadband median over the
+  whole file, the speech frames and the non-speech frames, the residual's 10th and 90th percentile, and the
+  quality numbers below. `member` is a lexical family (`routing_analysis.families.LEXICAL_SPEECH`) with
+  foreground.
+- **Quality.** `foreground_minus_residual_db.<set>`: the enhanced level over speech frames less the residual's
+  level over the whole file, the speech frames or the non-speech frames. `plain_minus_residual_db.<set>`: the
+  median over that frame set of the per-frame plain level less the residual level (over speech frames roughly
+  how much of the recording is foreground; over non-speech frames near 0 dB where the enhancer removed only
+  background). Where the enhanced stream carries no speech, `not_applicable` is "not applicable: no foreground"
+  and every foreground and speech-frame value is None; the fold writes that string as the item's value, never a
+  number.
+- **Session background (`session_floor.session_background`).** `session_background_of` over the session's
+  readings: members are the lexical speech tasks with foreground (all of them, `session.members_min` 1,
+  unfitted); `band_db` is the per-band median of their residual band levels, `level_db` the median of their
+  whole-file residual levels, `spread_db` the members' interquartile range of that level and the median of their
+  10th and 90th percentiles; `members` lists their stems, `candidates_n` the lexical tasks read. With no member,
+  `source` is None and `fallback` "no qualifying speech task". The session's quality is the median over members
+  of the same numbers. A single-file run's only member is itself.
+- **The switch (`decides`, off).** `session_background.background_floor_for`: where `decides` is true and the
+  declared kind is in `decides_kinds` (airway, voice, syllable_repetition), BACKGROUND reads the recording
+  against the session background outright (`floor_of(..., background_db=...)`, source `speech_residual`); the
+  local background of `task_events.local_snr_db` stays the second reference unchanged. Where the session has
+  no background, or its bands differ, the session floor stands and `background_model.floor_reference.fallback`
+  says why. With `decides` false (shipped), every recording's floor is exactly as before; `floor_reference`
+  records `decides: false` and `used: session_floor`.
+- **QUALITY and the fold.** `quality_join` gains `speech_quality` (the recording's reading and the session's
+  background summary). The fold writes seven annotation items, `speech_quality.foreground_minus_residual_db.*`,
+  `speech_quality.plain_minus_residual_db.*` and `speech_quality.session_foreground_minus_residual_db`
+  (`decision_evidence.yaml` v9). None decides.
+
+**Bounds marked TO REFIT** (they are fitted or set on BACKGROUND's floor, which the switch would move for the
+airway, voice and syllable-repetition kinds): `task_events.yaml` `decision.snr_low_db`, `decision.snr_high_db`,
+`impulse_margin_db`, `inhale.margin_db`; `background_model.yaml` `activity.margin_db`. `session.gap_db` and
+`floor.residual_gap_db` are not read for a kind the switch decides for. Refit: re-measure the 167 labelled
+recordings of the unit B grid (ORCD, stored inputs) with the session background as the floor, then repeat the
+grid over `s_lo` and `s_hi` (and the activity margin) against the owner's labels, as in "Unit B: the task layer";
+switch `decides` on only with the refitted bounds.
+
+**Re-run.** No new PREPROCESS: every input (plain, enhanced and residual streams, the consensus words, the
+enhanced-stream YAMNet windows) is stored. `scripts/extend_session_floor.py` (SESSION, per BIDS session) writes
+`speech_residual` and the session background; `scripts/extend_replay_decisions.py` (BACKGROUND onward) then
+writes `floor_reference`, QUALITY's `speech_quality` and the fold's items. With `decides` off the replay changes
+no decision; switching it on is a second replay of the same two stages.
+
+`scripts/measure_session_background.py` measures all of this read-only over a sample of sessions; the task-event
+decisions are read twice by the same code, against BACKGROUND's stored view and against that view with the
+session background as its floor and the regions re-read against it.
