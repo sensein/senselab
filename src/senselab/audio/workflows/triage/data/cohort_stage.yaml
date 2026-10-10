@@ -1,0 +1,28 @@
+# COHORT: the corpus and session pass between QUALITY and VERDICT.
+# Read by `senselab.audio.workflows.triage.cohort_stage.cohort_parameters`.
+# Derivations: specs/20261007-task-events-in-background/design.md, section "Cohort stage".
+version: 1
+
+# Session speaker enrollment. Model, commit and match cut are `speech.enrollment_model` and
+# `speech.target_match_cosine`; the shortest span embedded is the speaker-vector floor
+# (data/speaker_vector_profile/2026-09-22.yaml `min_extent_s`).
+enrollment:
+  families: lexical_speech          # routing_analysis.families.LEXICAL_SPEECH enrolls the participant
+  window_s: 2.0                     # window each span is embedded on, as the speaker vectors were fitted
+  hop_s: 1.0                        # its hop
+  single_speaker_recordings_min: 2  # this many single-speaker recordings in the session: only they enroll
+  leave_one_out_min: 3              # this many enrolling recordings: one under the cut against the rest is left out
+
+# The runs compared against the enrollment, in every recording of every family.
+runs:
+  diarization_stream: enhanced          # diarized segments on this stream, each speaker's exclusive pieces
+  lexical_gap_key: branch.run_gap_max_s # lexical words merge into one run across gaps up to this config key
+
+# Distribution checks: each names its level, its bounds and the ground it raises.
+quantiles: [0.05, 0.25, 0.5, 0.75, 0.95]
+checks:
+  recording_duration_outlier:
+    level: family
+    ground: recording_duration_outlier
+    duration_ratio_max: 3.0     # longer than this times the family median duration ...
+    extent_fraction_min: 0.5    # ... with the task extent covering less than this of the recording
