@@ -196,6 +196,7 @@ def second_opinion(
     context = task_context(store, hint, task_lexicon(config, declared_task_family(store, hint), hint))
     original, _ = transcript_texts(store)
     masked = masked_text(store, config, hint)[1] if original.strip() else ""
+    annotation = find_measurement(store, REDACTION_LLM_ANNOTATION)
     opinion: SecondOpinion | None = None
     failure: str | None = None
     cache: dict[str, Any] = {"key": None, "hit": False}
@@ -266,6 +267,8 @@ def second_opinion(
         consensus = find_measurement(store, "consensus_transcript")
         if consensus is not None:
             store.used(activity, consensus.id)
+        if annotation is not None:
+            store.used(activity, annotation.id)
     measurement_id = mint_live(
         store,
         prov_type="measurement",
@@ -289,6 +292,7 @@ def second_opinion(
             "transcript_chars": len(original),
             "masked_chars": len(masked),
             "masked_differs": masked != original,
+            "review_annotation_id": annotation.id if annotation is not None else None,
             "seed": seed,
             "num_parallel": parallel,
             "failure": failure,

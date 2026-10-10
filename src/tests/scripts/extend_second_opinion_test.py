@@ -15,7 +15,11 @@ from typing import Any, Iterator
 import pytest
 
 from senselab.audio.workflows.triage.config import load_triage_config
-from senselab.audio.workflows.triage.vocabulary import SECOND_OPINION_ANSWERS, SECOND_OPINION_DISAGREES
+from senselab.audio.workflows.triage.vocabulary import (
+    REDACTION_LLM_ANNOTATION,
+    SECOND_OPINION_ANSWERS,
+    SECOND_OPINION_DISAGREES,
+)
 from senselab.utils.prov_store import ProvStore
 from tests.scripts.extend_llm_review_test import _finished_run, _hints, _manifest, _seed_verdicts
 
@@ -89,9 +93,48 @@ def _opinions(run_root: Path) -> list[dict[str, Any]]:
     ]
 
 
+def _review(run_root: Path, iterations: int = 0) -> str:
+    """Write a REVIEW annotation into a finished run's store, as REVIEW leaves one; returns its id."""
+    store = cli.read_store(run_root)
+    activity = store.activity(node="REVIEW", step="llm_check", parameters={})
+    annotation = store.entity(
+        prov_type="measurement",
+        extent=None,
+        attributes={
+            "name": REDACTION_LLM_ANNOTATION,
+            "signal": "consensus_transcript",
+            "status": "disabled",
+            "iterations": iterations,
+        },
+    )
+    store.was_generated_by(annotation, activity)
+    cli.write_store(store, run_root)
+    return annotation
+
+
+def _reviewed_run(root: Path, **kw: Any) -> Path:  # noqa: ANN401
+    """A finished run that REVIEW has read."""
+    run_root = _finished_run(root, **kw)
+    _review(run_root)
+    return run_root
+
+
+def test_a_store_review_has_not_read_is_an_error_and_a_later_review_asks_again(tmp_path: Path) -> None:
+    """SECOND_OPINION runs after REVIEW: none without its annotation, and again over a newer one."""
+    run_root = _finished_run(tmp_path / "corpus")
+    unreviewed = _Opener()
+    assert _run(tmp_path, run_root, unreviewed)["counts"] == {"error": 1}
+    _review(run_root)
+    assert _run(tmp_path, run_root, _Opener())["counts"] == {"ok": 1}
+    assert _run(tmp_path, run_root, _Opener())["counts"] == {"present": 1}
+    _review(run_root, iterations=1)
+    reread = _Opener()
+    assert _run(tmp_path, run_root, reread)["counts"] == {"ok": 1}
+
+
 def test_an_opinion_lands_and_a_second_pass_starts_no_server(tmp_path: Path) -> None:
     """Resumable by the store: a standing ok opinion is present and the model is not served."""
-    run_root = _finished_run(tmp_path / "corpus")
+    run_root = _reviewed_run(tmp_path / "corpus")
     first = _Opener()
     assert _run(tmp_path, run_root, first)["counts"] == {"ok": 1}
     assert first.opened == 1 and len(_opinions(run_root)) == 1
@@ -104,7 +147,7 @@ def test_an_opinion_to_an_earlier_question_set_is_asked_again(tmp_path: Path) ->
     """A question-set-1 answer is not this question set's answer: asked again, and the old one retired."""
     from senselab.text.tasks.decision_model.second_opinion import QUESTION_SET_VERSION
 
-    run_root = _finished_run(tmp_path / "corpus")
+    run_root = _reviewed_run(tmp_path / "corpus")
     _run(tmp_path, run_root, _Opener())
     store = cli.read_store(run_root)
     (held,) = [
@@ -122,7 +165,7 @@ def test_an_opinion_to_an_earlier_question_set_is_asked_again(tmp_path: Path) ->
 
 def test_force_asks_again_and_keeps_one_live_opinion(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A changed answer retires the one it replaces."""
-    run_root = _finished_run(tmp_path / "corpus")
+    run_root = _reviewed_run(tmp_path / "corpus")
     _run(tmp_path, run_root, _Opener(other=0.02))
     monkeypatch.setenv("SENSELAB_RESULT_CACHE", str(tmp_path / "fresh-cache"))
     _run(tmp_path, run_root, _Opener(other=0.6), force=True)
@@ -131,7 +174,7 @@ def test_force_asks_again_and_keeps_one_live_opinion(tmp_path: Path, monkeypatch
 
 
 def _two_run_manifest(tmp_path: Path, count: int = 2) -> tuple[Path, list[Path]]:
-    roots = [_finished_run(tmp_path / f"corpus{index}") for index in range(count)]
+    roots = [_reviewed_run(tmp_path / f"corpus{index}") for index in range(count)]
     manifest = tmp_path / "manifest.jsonl"
     manifest.write_text(
         "".join(
@@ -284,7 +327,7 @@ def _live_verdicts(run_root: Path) -> list[Any]:
 
 def test_the_driver_writes_the_opinion_and_leaves_the_verdict_to_the_refold(tmp_path: Path) -> None:
     """No VERDICT is decided here; extend_refold.py then folds the opinion that landed."""
-    run_root = _finished_run(tmp_path / "corpus")
+    run_root = _reviewed_run(tmp_path / "corpus")
     _seed_verdicts(run_root)
     seeded = [entity.id for entity in _live_verdicts(run_root)]
     hints = _hints(tmp_path, run_root)
@@ -317,7 +360,7 @@ def _load_refold() -> Any:  # noqa: ANN401 — a module
 
 
 def _corpus(tmp_path: Path, count: int) -> tuple[list[Path], Path]:
-    roots = [_finished_run(tmp_path / f"corpus{index}", words=("hello", f"row{index}")) for index in range(count)]
+    roots = [_reviewed_run(tmp_path / f"corpus{index}", words=("hello", f"row{index}")) for index in range(count)]
     manifest = tmp_path / "manifest.jsonl"
     manifest.write_text(
         "".join(
@@ -368,7 +411,7 @@ def test_the_opinion_records_its_parallelism_but_the_cache_key_does_not(tmp_path
 
 def test_the_cli_refuses_a_config_that_leaves_it_off(tmp_path: Path) -> None:
     """Writing disabled into every store is not a pass."""
-    run_root = _finished_run(tmp_path / "corpus")
+    run_root = _reviewed_run(tmp_path / "corpus")
     code = cli.main(
         [
             str(_manifest(tmp_path, run_root)),

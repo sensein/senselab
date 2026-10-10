@@ -19,6 +19,10 @@ server answering as many requests in parallel; each store is read and written by
 ``--config`` must set ``second_opinion.enabled: true``; the driver refuses to run otherwise rather
 than writing ``disabled`` into every store.
 
+SECOND_OPINION runs after REVIEW: it reads the final mask plan, the reviewer's releases included. A
+store without REVIEW's ``redaction_llm_annotation`` is an error row, and an opinion asked over an
+earlier annotation than the store's live one is asked again.
+
 The driver writes the ``second_opinion_answers`` and nothing else: no verdict is decided again here. Follow
 the run with ``scripts/extend_refold.py`` over the same corpus, which re-decides every VERDICT over
 the opinions it finds. A store already holding a live ``ok`` ``second_opinion_answers`` that a
@@ -64,7 +68,7 @@ from senselab.audio.workflows.triage.extend import (
 )
 from senselab.audio.workflows.triage.nodes.common import describe_exception, find_measurement, software_agent
 from senselab.audio.workflows.triage.nodes.second_opinion import ABSENT, NODE, Ask, pin_of, second_opinion, settings
-from senselab.audio.workflows.triage.vocabulary import SECOND_OPINION_ANSWERS
+from senselab.audio.workflows.triage.vocabulary import REDACTION_LLM_ANNOTATION, SECOND_OPINION_ANSWERS
 from senselab.text.tasks.decision_model.ollama import OllamaServer, PinMismatchError, ask_decisions, verify_pin
 from senselab.text.tasks.decision_model.second_opinion import QUESTION_SET_VERSION
 from senselab.utils.prov_store import Entity, ProvStore
@@ -236,7 +240,7 @@ def standing(store: ProvStore, config: TriageConfig | None = None) -> Entity | N
     Returns:
         The live ``ok`` ``second_opinion_answers`` a SECOND_OPINION activity generated under the current
         :data:`~senselab.text.tasks.decision_model.second_opinion.QUESTION_SET_VERSION` (and, with
-        ``config``, from its pinned weights), or None.
+        ``config``, from its pinned weights) over the store's live REVIEW annotation, or None.
     """
     opinion = find_measurement(store, SECOND_OPINION_ANSWERS)
     if opinion is None or opinion.attributes.get("status") != "ok":
@@ -244,6 +248,9 @@ def standing(store: ProvStore, config: TriageConfig | None = None) -> Entity | N
     if opinion.attributes.get("question_set_version") != QUESTION_SET_VERSION:
         return None
     if config is not None and opinion.attributes.get("blob_digest") != pin_of(config).blob_digest:
+        return None
+    annotation = find_measurement(store, REDACTION_LLM_ANNOTATION)
+    if annotation is None or opinion.attributes.get("review_annotation_id") != annotation.id:
         return None
     activity_id = store.generated_by(opinion.id)
     if activity_id is None:
@@ -293,8 +300,8 @@ def extend_one(
 
     Returns:
         ``{status, SECOND_OPINION}`` -- ``ok`` when an opinion landed, ``present`` when one already
-        stood or the store came out unchanged, ``error`` when the store would not open or the model
-        was asked and did not answer. An unanswered ask is not written.
+        stood or the store came out unchanged, ``error`` when the store would not open, REVIEW has not
+        written its annotation, or the model was asked and did not answer. An unanswered ask is not written.
     """
     try:
         store = read_store(run_root)
@@ -303,6 +310,8 @@ def extend_one(
     held = standing(store, config)
     if held is not None and not force:
         return {"status": PRESENT, NODE: str(held.attributes.get("status") or "")}
+    if find_measurement(store, REDACTION_LLM_ANNOTATION) is None:
+        return {"status": ERROR, NODE: f"REVIEW has not run: no {REDACTION_LLM_ANNOTATION} in the store"}
     replaced = live_opinions(store)
     hint: AudioHints | None = None
     if build_hint is not None and source is not None:
