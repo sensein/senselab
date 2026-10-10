@@ -442,7 +442,7 @@ var ReviewPage = (function () {
   }
 
   /**
-   * A speech task's transcript as marked-up prose, as the free-speech review page's `paragraph` writes it:
+   * A recording's transcript as marked-up prose, as the free-speech review page's `paragraph` writes it:
    * each run of words one mark owns becomes that mark, and the first `consensusN` words carry their position.
    */
   function transcriptHtml(entries, marks, consensusN) {

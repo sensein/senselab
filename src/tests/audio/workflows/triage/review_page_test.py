@@ -139,7 +139,7 @@ def test_overlays_read_events_activity_and_issues(tmp_path: Path) -> None:
 def test_a_record_carries_decision_evidence_streams_and_a_spectrogram(tmp_path: Path) -> None:
     """The record reads the fold through the decision tables and adds what the page draws."""
     run_root = _run_root(tmp_path)
-    record = review_page.review_record(run_root, tmp_path, speech=lambda _: {"html": "never asked"})
+    record = review_page.review_record(run_root, tmp_path, speech=lambda _: None)
     assert record is not None
     assert (record["verdict"], record["release"], record["branch"]) == ("pass", "as_is", "AIRWAY")
     assert record["extent"] == [0.5, 3.5] and record["duration_s"] == 4.0
@@ -151,6 +151,21 @@ def test_a_record_carries_decision_evidence_streams_and_a_spectrogram(tmp_path: 
     assert record["streams"]["released"].endswith("released/audio.flac")
     assert not any(name.startswith("task_") for name in record["streams"])
     assert record["speech"] is None
+
+
+def test_an_airway_recording_carries_the_transcript_its_reader_finds(tmp_path: Path) -> None:
+    """The transcript reader is asked of every declared family, not only SPEECH's."""
+    run_root = _run_root(tmp_path)
+    asked: list[Path] = []
+
+    def reader(root: Path) -> dict[str, Any]:
+        asked.append(root)
+        return {"html": "two words", "shown": {"kind": "consensus", "source": None}}
+
+    record = review_page.review_record(run_root, tmp_path, speech=reader)
+    assert record is not None and record["branch"] == "AIRWAY"
+    assert asked == [run_root]
+    assert record["speech"] == {"html": "two words", "shown": {"kind": "consensus", "source": None}}
 
 
 def test_a_redacted_stream_rides_with_the_release_that_decides_whether_it_is_shown(tmp_path: Path) -> None:

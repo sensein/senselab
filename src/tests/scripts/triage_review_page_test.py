@@ -171,6 +171,36 @@ def test_without_consensus_words_the_one_model_shown_is_named(tmp_path: Path, mo
     assert 'class="w"' not in view["html"] and view["words"] == []
 
 
+def _add_asr(run_root: Path, consensus: list[str]) -> None:
+    """Append ``_asr_store``'s recognisers and consensus words to an existing store."""
+    scratch = run_root / "asr"
+    _asr_store(scratch, consensus)
+    store = run_root / "run" / "store.jsonl"
+    store.write_text(store.read_text() + (scratch / "run" / "store.jsonl").read_text())
+
+
+def test_an_airway_recording_with_consensus_words_carries_its_transcript(tmp_path: Path) -> None:
+    """A breath task whose store holds consensus words carries them, every model's reading and the marks."""
+    corpus = tmp_path / "corpus"
+    run_root = fixtures._run_root(corpus)
+    _add_asr(run_root, ["my", "name", "is", "Ada"])
+    view = script.speech_view(run_root)
+    assert view is not None
+    assert view["shown"] == {"kind": "consensus", "source": None}
+    assert len(view["words"]) == 4 and len(view["models"]) == 2
+    assert view["html"].count('class="w"') == 4
+    extract = tmp_path / "review.jsonl"
+    assert script.main(["extract", str(corpus), "--out", str(extract), "--workers", "1"]) == 0
+    record = json.loads(extract.read_text().splitlines()[1])
+    assert record["branch"] == "AIRWAY"
+    assert record["speech"]["shown"]["kind"] == "consensus" and len(record["speech"]["words"]) == 4
+
+
+def test_a_recording_with_no_transcript_carries_none(tmp_path: Path) -> None:
+    """No consensus word and no single model's transcript: no view, whatever the family."""
+    assert script.speech_view(fixtures._run_root(tmp_path)) is None
+
+
 def test_the_transcript_fixture_is_what_this_script_writes() -> None:
     """The page's own transcript markup is checked against these cases; each one's HTML is this script's."""
     fixture = ROOT / "src/tests/audio/workflows/triage/review_page/transcripts.json"

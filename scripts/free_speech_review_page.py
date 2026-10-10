@@ -705,26 +705,27 @@ def language_name(code: str) -> str:
     return {"en": "English", "es": "Spanish"}.get(base, code.strip() or "unknown")
 
 
-def recording_record(run_root: Path, families: frozenset[str]) -> dict[str, Any] | None:
-    """One recording's row, or None when it is not a free-response recording.
+def recording_record(run_root: Path, families: frozenset[str] | None) -> dict[str, Any] | None:
+    """One recording's row, or None when its declared family is out of scope.
 
     Args:
         run_root: The directory holding ``run/store.jsonl``.
-        families: The family names to keep.
+        families: The family names to keep; None keeps every declared family.
 
     Returns:
-        The row, or None when the declared family is out of scope.
+        The row, or None when the recording declares no family or one outside ``families``.
     """
     stem = stem_of(run_root)
     task = task_id_of(stem)
-    if task_family(task) not in families:
+    if families is not None and task_family(task) not in families:
         return None
     view = read_store_light(run_root / RUN_SUBDIR / STORE_NAME)
     verdict = view.last("verdict", node=VERDICT_NODE)
     attributes = verdict.attributes if verdict is not None else {}
-    declared = str(attributes.get("declared_family") or task_family(task))
-    if declared not in families:
+    declared = attributes.get("declared_family") or task_family(task)
+    if not declared or (families is not None and declared not in families):
         return None
+    declared = str(declared)
     participant, session, _ = identity(stem)
     marked = marked_words(view)
     ledger = ledger_of(view)
