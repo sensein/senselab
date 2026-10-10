@@ -413,6 +413,18 @@ def _key(text: str) -> str:
     return _NUMERALS.get(key, key)
 
 
+def token_key(text: str) -> str:
+    """A token as the residue compares it: normalised, a digit written as its number word.
+
+    Args:
+        text: The token as the recognizer wrote it.
+
+    Returns:
+        The key; empty for a token with nothing left.
+    """
+    return _key(text)
+
+
 def _base(key: str) -> str:
     for clitic in _CLITICS:
         if key.endswith(clitic) and len(key) > len(clitic):

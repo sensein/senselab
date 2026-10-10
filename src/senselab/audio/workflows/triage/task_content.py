@@ -1,22 +1,28 @@
-"""Which transcript words are the task's own content because they fall on the task's own events.
+"""Which transcript words are the task's own content because they are a recogniser's misreading of its events.
 
 A non-lexical family (a syllable train, a breath, a cough, a held vowel) has its events read by the task
-layer. A transcript word whose timing hull lies on those events is a recogniser's reading of the task,
-whatever it spells, and is never PII. The families, the readings and the overlap rule are in
-``data/task_content.yaml``; the design is ``specs/20261007-task-events-in-background/design.md``
-("Task content in the transcript").
+layer. A transcript word lying on those events can be a recogniser's reading of the task's own sound, and
+is then never PII and never speech outside the task: in a syllable-repetition family any such word; in an
+airway or voice family only a word the recognisers disagree on, one spelled as a sound, or one of the
+task's lexicon, that lies alone on one event. A run of words every recogniser agrees on is speech, never
+task content. The families, the readings and the rules are in ``data/task_content.yaml``; the design is
+``specs/20261007-task-events-in-background/design.md`` ("Task content in the transcript", "Speech in a
+non-lexical task").
 """
 
 from __future__ import annotations
 
 import functools
-from collections.abc import Mapping, Sequence
+import re
+from collections.abc import Collection, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
 import yaml
 
+from senselab.audio.workflows.audio_analysis.harmonize import normalise_token
 from senselab.audio.workflows.triage.nodes.common import find_measurement, word_hull
+from senselab.audio.workflows.triage.residue import is_non_lexical
 from senselab.audio.workflows.triage.routing_analysis import families as family_sets
 from senselab.utils.prov_store import Entity, ProvStore
 
@@ -123,23 +129,120 @@ def share_inside(hull: Span, spans: Sequence[Span], pad_s: float) -> float:
     return covered / (high - low)
 
 
-def task_content_ids(words: Sequence[Entity], events: Sequence[Span]) -> set[str]:
-    """The words that are the task's own content: those lying on its events.
+_TRIPLED = re.compile(r"(.)\1\1")
+_VOWELS = frozenset("aeiouy")
+
+
+def sound_spelling(text: str) -> bool:
+    """Whether a token is spelled as a sound rather than as a dictionary word.
 
     Args:
-        words: The consensus words.
+        text: The token as the recognizer wrote it.
+
+    Returns:
+        True where its letters hold no vowel (``hm``, ``pff``, ``shh``) or one letter three times running
+        (``ahhh``, ``hmmm``); False for a token with no letter.
+    """
+    letters = "".join(ch for ch in str(text).lower() if ch.isalpha())
+    return bool(letters) and (not _VOWELS & set(letters) or bool(_TRIPLED.search(letters)))
+
+
+def readings_disagree(word: Entity) -> bool:
+    """Whether the recognisers read one word differently.
+
+    Args:
+        word: A consensus word.
+
+    Returns:
+        True where its outcome is not ``agreement``, or its readings normalise to more than one token.
+    """
+    readings = (word.attributes.get("readings") or {}).values()
+    keys = {normalise_token(str(reading)) for reading in readings} - {""}
+    return word.attributes.get("outcome") != "agreement" or len(keys) > 1
+
+
+def misreading(word: Entity, lexicon_ids: Collection[str]) -> bool:
+    """Whether a word may be a recogniser's misreading of the task's own sound.
+
+    Args:
+        word: A consensus word.
+        lexicon_ids: The words of the task's own lexicon.
+
+    Returns:
+        True where the recognisers disagree on it, it is spelled as a sound, or it is a lexicon word.
+    """
+    text = str(word.attributes.get("text") or "")
+    return readings_disagree(word) or sound_spelling(text) or word.id in lexicon_ids
+
+
+def agreed_runs(words: Sequence[Entity], lexicon_ids: Collection[str], run_min: int) -> set[str]:
+    """The words in runs of agreed dictionary words, which are speech and never task content.
+
+    Args:
+        words: The consensus words, in stream order.
+        lexicon_ids: The words of the task's own lexicon.
+        run_min: The fewest adjacent words that make a run.
+
+    Returns:
+        The ids of the lexical words none of which may be a misreading (:func:`misreading`), in runs of at
+        least ``run_min`` adjacent words.
+    """
+    runs: list[list[str]] = [[]]
+    for word in words:
+        text = str(word.attributes.get("text") or "")
+        if word.attributes.get("bracketed") or is_non_lexical(text, vocal_task=True) or misreading(word, lexicon_ids):
+            runs.append([])
+        else:
+            runs[-1].append(word.id)
+    return {word_id for run in runs if len(run) >= run_min for word_id in run}
+
+
+def task_content_ids(
+    words: Sequence[Entity],
+    events: Sequence[Span],
+    *,
+    family: str | None = None,
+    lexicon_ids: Collection[str] = frozenset(),
+) -> set[str]:
+    """The words that are the task's own content: recognisers' misreadings lying on its events.
+
+    Args:
+        words: The consensus words, in stream order.
         events: The task events (:func:`task_events`).
+        family: The declared family.
+        lexicon_ids: The words of the task's own lexicon.
 
     Returns:
         The ids of the timed words whose hull's share inside the widened events is at least
-        ``overlap.min_share``; empty where there are no events.
+        ``overlap.min_share`` and which are in no run of agreed dictionary words (:func:`agreed_runs`); in a
+        family outside ``any_word_families``, only those that are a misreading (:func:`misreading`) and lie
+        alone on one event. Empty where there are no events.
     """
     if not events:
         return set()
-    overlap = task_content_parameters()["overlap"]
+    parameters = task_content_parameters()
+    overlap = parameters["overlap"]
     pad_s, min_share = float(overlap["pad_s"]), float(overlap["min_share"])
-    return {
-        word.id
+    spoken = agreed_runs(words, lexicon_ids, int(parameters["agreed_run_min"]))
+    on = [
+        word
         for word in words
-        if word.extent is not None and share_inside(word_hull(word), events, pad_s) >= min_share
-    }
+        if word.extent is not None
+        and word.id not in spoken
+        and share_inside(word_hull(word), events, pad_s) >= min_share
+    ]
+    any_word = any(
+        family in getattr(family_sets, str(name), frozenset()) for name in parameters.get("any_word_families") or ()
+    )
+    if any_word:
+        return {word.id for word in on}
+    widened = _merged(events, pad_s)
+    home: dict[str, int] = {}
+    for word in on:
+        start, end = word_hull(word)
+        shares = [max(0.0, min(end, b) - max(start, a)) for a, b in widened]
+        home[word.id] = max(range(len(widened)), key=lambda i: shares[i])
+    held: dict[int, int] = {}
+    for index in home.values():
+        held[index] = held.get(index, 0) + 1
+    return {word.id for word in on if misreading(word, lexicon_ids) and held[home[word.id]] == 1}

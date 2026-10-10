@@ -11,6 +11,9 @@ import inspect
 from dataclasses import replace
 from typing import Any, Mapping, Sequence
 
+import pytest
+
+from senselab.audio.workflows.triage import vocabulary as vocabulary_module
 from senselab.audio.workflows.triage.quality_join import join_record
 from senselab.audio.workflows.triage.vocabulary import (
     BAD_MAP_VALUES,
@@ -94,6 +97,12 @@ from senselab.audio.workflows.triage.vocabulary import (
     release_ground_key,
     reviewer_may_unmask,
 )
+
+
+@pytest.fixture(autouse=True)
+def _withheld_alone_is_reviewed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """These tests read other rules: the release review is narrowed to ``withheld``, its relaxed setting."""
+    monkeypatch.setattr(vocabulary_module, "reviewed_releases", lambda: frozenset({"withheld"}))
 
 
 def _report(node: str, kind: str, *, conformance: Conformance = UNDETERMINED) -> BranchReport:
@@ -1471,11 +1480,12 @@ class TestASpeechTaskThatProducedNoWordIsFlagged:
 class TestARedactNonPassIsVisibleWithoutFlippingTriage:
     """Triage asks whether a human must look; release asks whether an artifact may be handed on."""
 
-    def test_a_surviving_finding_does_not_move_triage(self) -> None:
-        """A release problem is not a measurement problem."""
+    def test_a_surviving_finding_holds_the_release_for_review(self) -> None:
+        """Owner, 2026-10-10: a withheld release is at least review, in every family; a redacted one is not."""
         folded = _with_redact(Outcome.FAIL, speech=True, speech_route=ROUTED)
-        assert folded.triage is Triage.PASS
+        assert folded.triage is Triage.REVIEW
         assert folded.release is Release.WITHHELD
+        assert _with_redact(Outcome.PASS, speech=True, speech_route=ROUTED).triage is Triage.PASS
 
     def test_it_appears_in_reasons_regardless(self) -> None:
         """A consumer filtering on triage == pass sees the release axis in the same record."""

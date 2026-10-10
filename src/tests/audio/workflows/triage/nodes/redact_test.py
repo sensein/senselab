@@ -43,6 +43,7 @@ from senselab.audio.workflows.triage.nodes.redact import (
     RELEASED_BY_KIND,
     RELEASED_FILES,
     RELEASED_NOT_PROPER,
+    RESCAN_SOURCE,
     REVIEWER,
     STREAM_NAME,
     TASK_EVENT_LABEL,
@@ -391,13 +392,13 @@ class TestRemediationHappensExactlyOnce:
         _seed_redact_store(
             store,
             tmp_path,
-            words=["jane", "doe", "here"],
+            words=["Jane", "Doe", "here"],
             findings=[("PERSON", (0.0, 0.5))],
-            extra_marks=[("doe", "PERSON")],
+            extra_marks=[("Doe", "PERSON")],
         )
-        scanned = _stub_pii_sequence(monkeypatch, [[("PERSON", "doe")], []])
+        scanned = _stub_pii_sequence(monkeypatch, [[("PERSON", "Doe")], []])
         result = redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
-        assert scanned[0] == "[PERSON] doe here", "the first pass released the second marked word"
+        assert scanned[0] == "[PERSON] Doe here", "the first pass released the second marked word"
         assert scanned[1] == "[PERSON] [PERSON] here", "the re-plan covered it"
         assert result.verdict.outcome is Outcome.PASS
         detail = _verdict_entity(store, "REDACT").attributes
@@ -2522,33 +2523,35 @@ class TestWhatTheStoreRecords:
     ) -> None:
         """A re-plan that leaves no edges is a redaction nobody can trace to its cause.
 
-        The plan read the markings, the verification read the transcript it verified, and the span
-        the re-plan added exists because one marking said so. Each was an empty relation before.
+        The plan read the markings, the verification read the transcript it verified, and the span the
+        re-plan added derives from the finding the re-scan placed on the word it read.
         """
         _seed_redact_store(
             store,
             tmp_path,
-            words=["jane", "doe", "here"],
+            words=["Jane", "Doe", "here"],
             findings=[("PERSON", (0.0, 0.5))],
-            extra_marks=[("doe", "PERSON")],
+            extra_marks=[("Doe", "PERSON")],
         )
-        _stub_pii_sequence(monkeypatch, [[("PERSON", "doe")], []])
-        doe = next(w for w in store.entities("word") if w.attributes.get("text") == "doe")
+        _stub_pii_sequence(monkeypatch, [[("PERSON", "Doe")], []])
+        doe = next(w for w in store.entities("word") if w.attributes.get("text") == "Doe")
         marking = next(e for e in store.entities("assertion") if doe.id in store.derived_from(e.id))
         consensus = next(e for e in store.entities("measurement") if e.attributes.get("name") == "consensus_transcript")
         redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
 
         plan_act = next(a for a in store.activities("REDACT") if a.step == "plan")
         verify_act = next(a for a in store.activities("REDACT") if a.step == "verify")
-        assert marking.id in store.uses_of(plan_act.id), "the plan consulted the marking it widened to"
+        assert marking.id in store.uses_of(plan_act.id), "the plan consulted the markings"
         assert consensus.id in store.uses_of(verify_act.id), "verification read the transcript measurement"
         assert {w.id for w in store.entities("word")} <= set(store.uses_of(verify_act.id))
 
+        (rescanned,) = [e for e in store.entities("pii") if e.attributes.get("source") == RESCAN_SOURCE]
+        assert rescanned.attributes["word_ids"] == [doe.id]
         spans = [e for e in store.entities("span") if e.attributes.get("name") == "redaction"]
         widened = next(
             span for span in spans if span.extent is not None and span.extent[0] < 1.5 and span.extent[1] > 1.0
         )
-        assert marking.id in store.derived_from(widened.id), "the widened span names the marking that caused it"
+        assert rescanned.id in store.derived_from(widened.id), "the widened span names the finding that caused it"
 
 
 class TestTheReScanDoesNotReadBracketedTokens:

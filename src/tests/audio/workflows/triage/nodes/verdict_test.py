@@ -9,6 +9,7 @@ from typing import Any, Callable, Mapping, Sequence
 import pytest
 
 from senselab.audio.data_structures import AudioHints
+from senselab.audio.workflows.triage import vocabulary as vocabulary_module
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.nodes import routing as routing_module
 from senselab.audio.workflows.triage.nodes import verdict as verdict_module
@@ -49,6 +50,13 @@ from senselab.audio.workflows.triage.vocabulary import (
 )
 from senselab.utils.prov_store import Entity, ProvStore
 from tests.audio.workflows.triage.nodes.conftest import word_attributes
+
+
+@pytest.fixture(autouse=True)
+def _withheld_alone_is_reviewed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """These tests read other rules: the release review is narrowed to ``withheld``, its relaxed setting."""
+    monkeypatch.setattr(vocabulary_module, "reviewed_releases", lambda: frozenset({"withheld"}))
+
 
 BASE: tuple[tuple[str, Outcome, str | None], ...] = (
     ("ADMIT", Outcome.PASS, None),
@@ -698,13 +706,14 @@ class TestTheReleaseAxis:
         assert result.file_verdict.release is Release.REDACTED
         assert _file_verdict_entity(released).attributes["release"] == "redacted"
 
-    def test_a_surviving_finding_does_not_move_the_triage_axis(
+    def test_a_withheld_release_is_reviewed(
         self, make_verdict_store: Callable[..., ProvStore], config: TriageConfig, tmp_path: Path
     ) -> None:
-        """A release problem is not a measurement problem, and it is in the same record regardless."""
+        """Owner, 2026-10-10: a withheld release is at least review, in every family, and in the same record."""
         store = make_verdict_store(concluded=[*BASE, ("REDACT", Outcome.FAIL, None)], routed=ROUTED_PAIR)
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
-        assert result.file_verdict.triage is Triage.PASS
+        assert result.file_verdict.triage is Triage.REVIEW
+        assert result.file_verdict.reason_keys == ["redaction_unvalidated", "redaction_hold"]
         assert result.file_verdict.release is Release.WITHHELD
         assert any(reason.node == "REDACT" for reason in result.file_verdict.reasons)
 

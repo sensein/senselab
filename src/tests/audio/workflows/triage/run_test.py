@@ -23,6 +23,7 @@ import torch
 
 from senselab.audio.data_structures import Audio, AudioHints
 from senselab.audio.workflows.triage import run as run_module
+from senselab.audio.workflows.triage import vocabulary as vocabulary_module
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.nodes import routing as routing_module
 from senselab.audio.workflows.triage.nodes.admit import AdmitResult
@@ -57,6 +58,13 @@ from senselab.audio.workflows.triage.vocabulary import (
     Triage,
 )
 from senselab.utils.prov_store import ProvStore
+
+
+@pytest.fixture(autouse=True)
+def _withheld_alone_is_reviewed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """These tests read other rules: the release review is narrowed to ``withheld``, its relaxed setting."""
+    monkeypatch.setattr(vocabulary_module, "reviewed_releases", lambda: frozenset({"withheld"}))
+
 
 REPO_ROOT = Path(__file__).resolve().parents[5]
 CLI = REPO_ROOT / "scripts" / "triage_audio.py"

@@ -1,0 +1,11 @@
+# Speech outside the task (task_speech.py): the lexical consensus words, over the whole file, that are not
+# the task's own content. A non-lexical (airway, voice) family's own content is its declared task text and
+# the recognisers' misreadings of its events (task_content.yaml v3); an item-set family's (task_content.yaml
+# open_vocabulary_families) is its item runs. Derivation: specs/20261007-task-events-in-background/design.md
+# ("Speech outside the task").
+version: 2
+words_min: 1           # owner, 2026-10-10 (k = 1): this many such words in a non-lexical family is speech_in_task
+item_words_min: 3      # UNFITTED: this many such words in an item-set family is speech_in_task, and masked
+item_gap_s: 3.0        # UNFITTED: a pause this long between two words splits an item list into runs
+member_share_min: 0.5  # UNFITTED: a run whose declared-category members are at least this share of its words is an item run
+extensive_fraction: 0.5  # UNFITTED: in an item-set family, speech outside the item runs over every lexical word at or over this withholds

@@ -83,6 +83,7 @@ from senselab.audio.workflows.triage.nodes.common import (
     write_measurement,
     write_report,
 )
+from senselab.audio.workflows.triage.task_speech import write_task_speech
 from senselab.audio.workflows.triage.vocabulary import TASK
 from senselab.audio.workflows.triage.voice_phonation import PhonationReading, phonation_reading_of
 from senselab.utils.prov_store import Entity, ProvStore
@@ -782,6 +783,10 @@ def voice(
                 store, activity, software, name=PHONATION_READING, signal="plain", attributes=phonation_attributes(read)
             )
         )
+    for task_family in readings:
+        speech_id = write_task_speech(store, activity, software, family=task_family, config=config, hint=hint)
+        if speech_id is not None:
+            finding_ids.append(speech_id)
 
     extents = [(proposal.start, proposal.end) for proposal in result.components]
     phonation_s = sum(end - start for start, end in extents)

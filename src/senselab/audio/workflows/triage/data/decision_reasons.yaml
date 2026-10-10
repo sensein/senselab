@@ -11,6 +11,7 @@ precedence:            # discard reasons first, then review, then the release ax
 - not_measured
 - fault_in_task
 - interference_in_task
+- speech_in_task
 - other_speaker
 - weak_events
 - streams_disagree
@@ -18,6 +19,7 @@ precedence:            # discard reasons first, then review, then the release ax
 - atypical_recording
 - identifying_content
 - second_opinion_disagrees
+- redaction_unvalidated
 - redaction_hold
 meaning:
   unmeasurable: ADMIT could not read the recording, or it declares no task this graph holds
@@ -27,6 +29,7 @@ meaning:
   not_measured: the pipeline owes the recording a measurement, so it could not be decided
   fault_in_task: a capture fault (shutoff, dropout, clip) falls inside the task
   interference_in_task: another sound source overlaps the task
+  speech_in_task: the recording holds lexical speech outside the task's own content (a non-lexical task, or an item list's runs), or a non-lexical task's release is redacted or withheld
   other_speaker: a second speaker is read in the recording
   weak_events: the task's events stand too weakly over the background to decide
   streams_disagree: the raw and enhanced streams disagree on the task's events
@@ -34,6 +37,7 @@ meaning:
   atypical_recording: the recording falls outside its family's corpus distribution (COHORT)
   identifying_content: words that may identify the participant need a reader
   second_opinion_disagrees: the second-opinion model disagrees with the fold
+  redaction_unvalidated: the release is not the recording as recorded, and mask placement is not yet validated
   redaction_hold: the redaction policy holds the recording back from release
 keys:                  # exact verdict ground key -> reason
   unmeasurable: unmeasurable
@@ -72,17 +76,25 @@ keys:                  # exact verdict ground key -> reason
   instructions_spoken: task_not_conforming
   speech_no_lexical_item: task_not_conforming
   speech_outside_task: task_not_conforming
+  speech_in_task: speech_in_task
+  release_in_nonlexical_task: speech_in_task
+  release_reviewed: redaction_unvalidated
   person_name_review: identifying_content
   reviewer_residue: identifying_content
   reviewer_named_no_words: identifying_content
   unplaced_finding_open: identifying_content
   unplaced_finding_unread: identifying_content
   second_opinion_disagreement: second_opinion_disagrees
+reviewed_releases:     # owner, 2026-10-10: masks not yet validated; every release but as_is is reviewed (release_reviewed)
+- redacted
+- withheld
 release_keys:          # release ground key -> reason, for a release withheld or one the graph could not assess
   reviewer_proposed_redaction: redaction_hold
   unplaced_finding_unread: redaction_hold
   redact_verify_found: redaction_hold
   redact_unresolved: redaction_hold
+  non_task_speech_untimed: redaction_hold
+  non_task_speech_extensive: redaction_hold
   no_transcript: not_measured
   speech_unread: not_measured
   redaction_owed: not_measured
