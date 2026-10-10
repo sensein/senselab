@@ -996,6 +996,23 @@ def fold_mask_plan(
     )
 
 
+def shipped_texts(store: ProvStore, plan: MaskPlan) -> tuple[str, str]:
+    """The consensus transcript as recorded, and as the release would ship it under a mask plan.
+
+    Args:
+        store: The provenance store.
+        plan: The final mask plan (:func:`fold_mask_plan`).
+
+    Returns:
+        ``(original, masked)``: the consensus words' text with bracketed tokens dropped, and the same text
+        with each final mask's words replaced by its placeholder.
+    """
+    words = consensus_words(store)
+    original = _verification_text(_render(words, [])[0])
+    masked = _verification_text(_render(words, plan.final, plan.owners())[0])
+    return original, masked
+
+
 def redact(
     store: ProvStore,
     source: str,
