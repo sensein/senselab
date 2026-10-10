@@ -92,6 +92,8 @@ _LLM_PLACEHOLDER = "[LLM_{category}]"  # what a proposed redaction is masked wit
 SCANNED_STATE = "scanned"
 DECLINED_STATE = "declined"
 UNSCANNED_STATE = "unscanned"
+UNCONFIRMED = "unconfirmed"
+"""The outcome the reviewer reads for a word only one recogniser read and none located."""
 DETECTOR_STATES = (SCANNED_STATE, DECLINED_STATE, UNSCANNED_STATE)
 """What the detectors did to this recording: read it, declined to read it, or never reached it."""
 
@@ -296,10 +298,11 @@ def consensus_transcript(store: ProvStore) -> dict[str, Any]:
     Returns:
         ``recognisers``, every recogniser a word holds a reading of, sorted; ``words``, one ``[index,
         consensus word, outcome, [each recogniser's word or None], kind, [[category, detector, reading],
-        ...]]`` per consensus word in stream order, where ``kind`` says whether the PII scan read the word
-        (:data:`WORD_SCANNED`), or set it aside as task content (:data:`WORD_TASK`) or non-lexical
-        (:data:`WORD_NON_LEXICAL`), and ``reading`` is the recogniser whose transcript a live finding was
-        found on, or :data:`CONSENSUS_HAYSTACK`; and ``findings_n``, the live findings annotated.
+        ...]]`` per consensus word in stream order, where ``outcome`` is :data:`UNCONFIRMED` for an unconfirmed
+        word, ``kind`` says whether the PII scan read the word (:data:`WORD_SCANNED`), or set it aside as task
+        content (:data:`WORD_TASK`) or non-lexical (:data:`WORD_NON_LEXICAL`), and ``reading`` is the recogniser
+        whose transcript a live finding was found on, or :data:`CONSENSUS_HAYSTACK`; and ``findings_n``, the live
+        findings annotated.
     """
     words = consensus_words(store)
     recognisers = sorted({str(name) for word in words for name in (word.attributes.get("readings") or {})})
@@ -336,7 +339,7 @@ def consensus_transcript(store: ProvStore) -> dict[str, Any]:
             [
                 int(word.attributes["index"]),
                 text,
-                str(word.attributes.get("outcome") or ""),
+                UNCONFIRMED if word.attributes.get("unconfirmed") else str(word.attributes.get("outcome") or ""),
                 [readings.get(name) for name in recognisers],
                 kind,
                 findings.get(word.id, []),

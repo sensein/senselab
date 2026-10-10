@@ -1275,7 +1275,7 @@ class TestTheConsensusTranscript:
         assert attributes["n_sources"] == 2
         assert attributes["text"] == "hello world"
         assert attributes["outcomes"] == {"agreement": 2, "variant": 0, "insertion": 0}
-        assert attributes["time_fit"] == "weighted_isotonic_median"
+        assert attributes["time_fit"] == "weighted_isotonic_median_over_located_spans"
         assert len(attributes["word_ids"]) == attributes["n_words"] == 2
         for retired in ("words", "provenance", "systems", "timing_authority", "event_ids"):
             assert retired not in attributes

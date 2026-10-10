@@ -20,6 +20,7 @@ from typing import Any, Mapping
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.features_extraction.praat_parselmouth import CppsSettings
 from senselab.audio.workflows.triage.config import TriageConfig
+from senselab.audio.workflows.triage.consensus import located_span
 from senselab.audio.workflows.triage.vocabulary import (
     CONFORMANCE_REFERENTS,
     BranchReport,
@@ -484,39 +485,47 @@ def consensus_words(store: ProvStore) -> list[Entity]:
 
 
 def lexical_words(store: ProvStore) -> list[Entity]:
-    """The consensus words that are not bracketed and not a degenerate recognizer run, in ``index`` order.
+    """The consensus words that are not bracketed, not a degenerate recognizer run and not unconfirmed.
 
     Args:
         store: The provenance store.
 
     Returns:
-        The subset of :func:`consensus_words` whose ``bracketed`` and ``degenerate`` attributes are not
-        set.
+        The subset of :func:`consensus_words` whose ``bracketed``, ``degenerate`` and ``unconfirmed`` attributes
+        are not set, in ``index`` order.
     """
     return [
         word
         for word in consensus_words(store)
-        if not word.attributes["bracketed"] and not word.attributes.get("degenerate")
+        if not word.attributes["bracketed"]
+        and not word.attributes.get("degenerate")
+        and not word.attributes.get("unconfirmed")
     ]
 
 
 def word_hull(word: Entity) -> tuple[float, float]:
-    """The hull of a word's per-source timings — every recognizer's placement of it.
+    """The hull of a word's located per-source timings — every recognizer's placement of it.
 
-    The union of the derived extent and every source's own reading.
+    The union of the derived extent and every source's located span
+    (:func:`~senselab.audio.workflows.triage.consensus.located_span`); a missing span is left out.
 
     Args:
         word: A consensus ``word`` entity.
 
     Returns:
-        ``(min member start, max member end)``, or the derived extent when no source timed it.
+        ``(min located start, max located end)``; the derived extent where no source located it; ``(0.0, 0.0)``
+        where the word carries neither.
     """
-    spans = [tuple(span) for span in (word.attributes.get("timings") or {}).values()]
-    if word.extent is not None:
-        spans.append(word.extent)
+    spans = [
+        located
+        for span in (word.attributes.get("timings") or {}).values()
+        if (located := located_span(span[0], span[1])) is not None
+    ]
     if not spans:
-        return (0.0, 0.0)
-    return min(float(span[0]) for span in spans), max(float(span[1]) for span in spans)
+        return (float(word.extent[0]), float(word.extent[1])) if word.extent is not None else (0.0, 0.0)
+    if word.extent is not None and word.extent[1] > word.extent[0]:
+        spans.append((float(word.extent[0]), float(word.extent[1])))
+    return min(span[0] for span in spans), max(span[1] for span in spans)
 
 
 PITCH_NARROWING_KEYS = (
