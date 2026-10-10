@@ -1295,6 +1295,24 @@ It holds no messages, and no paths other than checkout-relative code frames.
   `CUDA_VISIBLE_DEVICES`); it defaults to `os.environ`, and nothing else is read from it. Tests pass a
   fixed mapping so the recorded env does not depend on where they run.
 
+## Dry run
+
+`run --dry-run` (`run.plan_steps`) reports, per step in DAG order, `name key8 status env:<ok|missing|changed>
+src:<ok|missing> codes`, and executes and writes nothing: no step, adapter or step sandbox, no claim, no
+result-dir reset and no run record. It shares the run's own code: the key is `_key` (inputs are digested on
+the driver side; only digests come out), done is `cache.is_done`, and the pre-reset checks are `_ready`
+(the `sandbox_status` probe, the venv checks, GPU and driver floor), the same function `refusals` calls.
+- `skipped`: the keyed result dir is done.
+- `will-execute`: the step would run; its program also passes the preamble's rule, applied on the driver
+  side from the same source (`PROGRAM_RULE_CODE`), when its working directory already exists.
+- `will-execute (upstream)`: an upstream step would execute, so this step's key cannot be computed yet
+  (key `-`).
+- `blocked`: a refusal code (env, src, sandbox, interpreter, or a blocked upstream). The exit is 1 when any
+  step is blocked.
+`E_ENV_UNCHECKED` reads `env:missing` (the venv is not usable as prefetched). Every git call runs with
+`GIT_OPTIONAL_LOCKS=0`, so the checkout check (`git status`) never rewrites a worktree's index, in a dry run
+or a real one.
+
 ## Commands
 
 `python -m senselab.utils.reproduce` takes these subcommands:
