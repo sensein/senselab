@@ -37,8 +37,8 @@ var ReviewPage = (function () {
     var cols = index.cols;
     var n = index.build.n;
     var scalars = {};
-    ['participant', 'session', 'task', 'family', 'branch', 'verdict', 'release', 'reason', 'run_status']
-      .forEach(function (k) { scalars[k] = decodeScalar(cols[k]); });
+    ['participant', 'session', 'task', 'family', 'branch', 'verdict', 'release', 'release_reason', 'reason',
+      'run_status'].forEach(function (k) { scalars[k] = cols[k] ? decodeScalar(cols[k]) : []; });
     var reasons = decodeList(cols.reasons), annotations = decodeList(cols.annotations);
     var items = decodeList(cols.items), decisive = decodeList(cols.decisive);
     var rows = new Array(n);
@@ -53,6 +53,7 @@ var ReviewPage = (function () {
         branch: scalars.branch[i],
         verdict: scalars.verdict[i],
         release: scalars.release[i],
+        release_reason: scalars.release_reason[i],
         reason: scalars.reason[i],
         run_status: scalars.run_status[i],
         reasons: reasons[i],
@@ -855,7 +856,7 @@ var ReviewPage = (function () {
     var head = el('section');
     head.appendChild(el('h2', null, r.stem));
     head.appendChild(verdictChip(r.verdict));
-    if (r.release) head.appendChild(el('span', 'rv-chip', r.release));
+    if (r.release) head.appendChild(el('span', 'rv-chip', r.release + (r.release_reason ? ' · ' + r.release_reason : '')));
     head.appendChild(el('span', 'rv-note', [r.declared_family || 'no family', r.branch || 'no branch',
       r.reason ? 'reason ' + r.reason : null, r.run_status === 'incomplete' ? 'incomplete run' : null]
       .filter(Boolean).join(' · ')));
