@@ -212,7 +212,7 @@ def join_record(
         task_spans: The task spans, from the branches.
         event_kind: The task events' kind (``breath``, ``cough``, ``phonation``), or None.
         faults: The ``background_model`` measurement's ``faults``.
-        other_voice: Spans of another voice over the task's surroundings, or None where it was not read.
+        other_voice: Spans of another voice anywhere in the recording, or None where it was not read.
         streams: :func:`stream_agreement`'s record, or None.
         plain_active_s: Seconds of activity on the plain stream, or None where BACKGROUND read none.
         enhanced_active_s: Seconds of activity on the enhanced stream, or None.

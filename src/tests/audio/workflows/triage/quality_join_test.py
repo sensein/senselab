@@ -120,6 +120,39 @@ def test_another_voice_inside_the_task_decides_and_one_outside_does_not() -> Non
     assert outside["interference"]["other_voice"]["out"] == [[8.0, 9.0]]
 
 
+def test_another_voice_with_no_task_span_is_outside_the_task() -> None:
+    """With no task span the whole-file reading is all annotation and nothing reviews."""
+    record = join_record(
+        task_spans=[],
+        event_kind=None,
+        faults={},
+        other_voice=[(1.0, 2.0), (8.5, 9.5)],
+        streams=None,
+        plain_active_s=4.0,
+        enhanced_active_s=4.0,
+        level_rel_db=0.0,
+    )
+    assert record["interference"]["other_voice"] == {"in": [], "out": [[1.0, 2.0], [8.5, 9.5]]}
+    assert record["interference_in_task"] == []
+    assert record["faults_in_task"] == []
+
+
+def test_a_talker_far_from_the_task_is_an_annotation() -> None:
+    """A voice the whole-file reading finds seconds from the task span is outside it."""
+    record = join_record(
+        task_spans=[(1.0, 2.0)],
+        event_kind="breath",
+        faults={},
+        other_voice=[(8.5, 9.5)],
+        streams=None,
+        plain_active_s=4.0,
+        enhanced_active_s=4.0,
+        level_rel_db=0.0,
+    )
+    assert record["interference"]["other_voice"]["out"] == [[8.5, 9.5]]
+    assert record["interference_in_task"] == []
+
+
 def test_events_the_enhanced_stream_loses_disagree() -> None:
     """Two raw events standing over the floor, one gone on the enhanced stream: half lost."""
     raw = np.full(400, -60.0)

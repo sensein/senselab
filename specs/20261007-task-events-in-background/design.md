@@ -1433,3 +1433,59 @@ lexical runs, with a contiguous stretch of at least 1.0 s under the cut becoming
 It needs a guard against the twelve phonation and breath cases above (the same activity regions hold
 the task's own sounds on voice and airway tasks), so the window source should be measured on owner
 labels before it raises a ground.
+
+## QUALITY's other-voice reading reads the whole file (2026-10-10)
+
+`background_speech.py` read only the task hull ±1 s, passed ASR consensus words to it as the
+participant's own events, kept a residual YAMNet window only where the enhanced stream stood 6 dB over
+the residual (`keep_db`), and floored the residual at the 10th percentile of its ~1 s window levels.
+Each of these hid another voice:
+
+- **The hull.** A task span placed on the wrong stretch puts the other talker outside the hull, where
+  nothing read it.
+- **Words as own events.** A second talker's words reach the consensus too, so the reading set their
+  harmonic frames aside as the participant's own.
+- **`keep_db`.** It assumes the enhancer kept a foreground. On a breath task the enhanced stream is
+  near silent, so enhanced minus residual is strongly negative and every residual window was rejected
+  whatever it held.
+- **Window-level floor.** Continuous talk over the file sets every 1 s window level, so the 10th
+  percentile of them is the talk itself and nothing rises over it.
+
+### What changed
+
+- `measure_background_speech` and `background_speech_of` take no extent; every residual window and
+  every harmonic run over the file is read. `pad_s` is gone.
+- `measure_join` passes only the task events (`task_events_of`: breath, cough or syllable events, or
+  phonation holds) as the participant's own events, never ASR words, and reads the residual whether or
+  not any task span stands.
+- `keep_db` is replaced by an **own-share** test. A window is the participant's own sound where the
+  share of its residual energy inside their task events, each padded by `event_pad_s`, is at least
+  `own_share_max`. The window record's fifth field is now that share (it was enhanced over residual).
+  The test reads energy share, not time overlap, because a 1 s window that touches a loud event for
+  0.2 s is that event's sound. It needs no kept foreground: an enhancer that removed the
+  participant's breath whole leaves that breath inside its event, and a talker elsewhere stands outside
+  every event whatever the enhanced stream did. The leakage test (residual-enhanced envelope
+  correlation under `leakage_corr_min`) stays as it was; it catches a participant's sound that is
+  louder than its detected event or falls outside it, so long as the enhancer kept some of it.
+- **Floor.** The residual's floor is now the `floor_percentile` of short-frame levels (`floor_frame_s`)
+  over the whole file, digital-silence frames excluded. Pauses between syllables then reach the
+  floor even where talk is continuous.
+- **Join rule unchanged.** QUALITY splits the spans by time against the task spans
+  (`quality_join.split_by_task`). One that overlaps or abuts a task span is in the task and reviews;
+  any other is an annotation. With no task span, everything is outside.
+- **Versions.** `data/background_speech.yaml` gains `version: 2`. `data/quality_join.yaml` goes to
+  version 2. QUALITY's join activity records both (`version`, `background_speech_version`).
+
+### Parameters
+
+| key | value | status |
+|---|---|---|
+| `own_share_max` | 0.5 | UNFITTED: a window whose residual energy lies mostly inside the participant's own events is theirs |
+| `floor_frame_s` | 0.05 s | UNFITTED: shorter than a syllable, so pauses in talk give frames at the floor |
+| `floor_percentile` | 5 | UNFITTED: was 10 over window levels |
+| `residual_rise_db` | 15 dB | value kept; UNFITTED, since the floor it is measured from is now lower |
+| `event_pad_s` | 0.3 s | kept; it now pads the own-share test as well as the harmonic runs |
+
+Open: the harmonic-run test still requires plain over enhanced inside `thinned_db` (1-10 dB). That
+assumes a kept foreground in the same way `keep_db` did, so a faint harmonic voice on a near-silent
+breath task is still missed by that reading. Only the YAMNet-window reading is free of it.
