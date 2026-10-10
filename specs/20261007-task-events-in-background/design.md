@@ -1473,3 +1473,280 @@ removed speech is what makes it usable.
 
 Every non-match of the nine sessions (stem, start, end) is in
 `/orcd/scratch/bcs/002/satra/cohort_20261010/out_v5/cohort_nonmatch_listen.tsv` for spot-checking.
+### Parameters
+
+| key | value | status |
+|---|---|---|
+| `own_share_max` | 0.5 | UNFITTED: a window whose residual energy lies mostly inside the participant's own events is theirs |
+| `floor_frame_s` | 0.05 s | UNFITTED: shorter than a syllable, so pauses in talk give frames at the floor |
+| `floor_percentile` | 5 | UNFITTED: was 10 over window levels |
+| `residual_rise_db` | 15 dB | value kept; UNFITTED, since the floor it is measured from is now lower |
+| `event_pad_s` | 0.3 s | kept; it now pads the own-share test as well as the harmonic runs |
+
+Open: the harmonic-run test still requires plain over enhanced inside `thinned_db` (1-10 dB). That
+assumes a kept foreground in the same way `keep_db` did, so a faint harmonic voice on a near-silent
+breath task is still missed by that reading. Only the YAMNet-window reading is free of it.
+
+## Review page: transcripts for every family (2026-10-10)
+
+The review page carried a transcript only for SPEECH families. `records.review_record` set `speech`
+only where the branch was `SPEECH`, and `scripts/triage_review_page.py`'s `speech_view` asked the
+free-speech reader for SPEECH families only. An airway or voice recording whose store held consensus
+words (someone speaking during a breath task, say) showed the reviewer no transcript, no per-model
+readings and no PII marks.
+
+### What changed
+
+- `records.review_record` asks the transcript reader about every recording with a declared family.
+  The reader decides whether there is a transcript.
+- `speech_view` reads with `recording_record(run_root, None)`. It returns a view where the store holds
+  consensus words (shown as the consensus) or, failing those, one model's own transcript (shown with
+  that model named). Where neither exists it returns None, so the record carries no transcript. A
+  SPEECH recording with no word anywhere used to carry an empty "no ASR model left a word" view; it
+  now carries none.
+- `scripts/free_speech_review_page.py`'s `recording_record` takes `families=None` to mean every
+  declared family. The free-speech page itself still passes its free-response families.
+- `review.js` and `page.py` keyed nothing on the branch. The transcript section, the redacted-stream
+  track and the search text already followed `rec.speech`, so a non-SPEECH recording with a transcript
+  gets all three. Only docstrings and comments changed there.
+- The triage review extract goes to `EXTRACT_VERSION = 3`, because records of non-SPEECH families can
+  now carry `speech`.
+
+There are no new parameters.
+
+## Speech outside the task, the task's own extent, and what ships (owner, 2026-10-10)
+
+**What the owner heard.** Three r18c airway recordings passed with a background talker or a background
+conversation. A trace at 319fc659 found no path from what the graph read to a review:
+- AIRWAY wrote one `off_task_extent` deviation per lexical word (`reading: lexical_intrusion`), but the fold
+  raises a deviation only under `verdict.deviation_flags`, false for every type; the breath speech veto
+  (five words inside the extent) had been retired with nothing in its place.
+- QUALITY's other-voice reading read only the task hull, passed the ASR words as the participant's own
+  events, kept a window only where the enhancer kept a foreground (false on a breath task) and floored the
+  residual at a window percentile continuous talk sets. (Section "QUALITY's other-voice reading reads the
+  whole file".)
+- The extent took the largest cluster: on a 130 s file it took a run of conversation-pause sounds at
+  101-122 s over the instructed breaths at 0.85-11.9 s, and `decide()` read every found event, so one event
+  outside the extent passed a recording whose in-extent best stood 14.3 dB over its local background,
+  under the 16 dB bound.
+- `task_content` absorbed any word whose hull lay half on an event, whatever it spelled; REDACT's
+  content-word trim cut a talker's four masks to one; the release axis never reached triage.
+
+### Decided on the extent's own events (`task_events.py`, `data/task_events.yaml` v2)
+
+- `decide()` and `decision_inputs()` read the task cluster's events only. Standing events outside it are
+  reported (`evidence.outside.standing_n`, the items `breath_events_outside_extent`,
+  `cough_events_outside_extent`) and decide nothing. `snr_high_db` (16 dB) was fitted when every found
+  event decided; it is marked to be refitted.
+- The task cluster (`task_cluster`), and the breath train's run where no background view stands, is chosen
+  among the clusters none of whose events touches speech -- runs of at least `extent.speech_words_min` (2)
+  lexical words within `speech_gap_s`, and plain-stream YAMNet windows whose speech-label score reaches
+  `speech_score_min` (0.5) -- or among all where every cluster touches speech. Each is scored
+  `count_weight` x agreement with the instructed count (`1 - |n - N| / N`, N = the instructed count x
+  `events_per_instructed`, two phases a breath) or, uncounted, its size over the largest, plus
+  `position_weight` x `1 - start / duration`. Both weights (1.0, 0.5) are owner direction, unfitted. One
+  word is not speech here because a single word lying alone on an event may be the task misread (below).
+- The cough extent is the task cluster's coughs, padded and kept off speech words as before.
+
+### Task content is a misreading only (`task_content.py`, `data/task_content.yaml` v3)
+
+Owner, 2026-10-10: the exemption is for a recogniser's misreading of the task's own sound, never for
+agreed speech.
+- A run of `agreed_run_min` (2) adjacent lexical words that the recognisers agree on, none spelled as a
+  sound and none a lexicon word, is never task content, in any family.
+- In a syllable-repetition family (`any_word_families`) any other word on the events is task content, as
+  before.
+- In an airway or voice family a word is task content only where the recognisers disagree on it (outcome
+  not `agreement`, or readings normalising to different tokens), it is spelled as a sound (no vowel, or
+  one letter three times running), or it is a lexicon word -- and it lies alone on one event: each word is
+  homed on the widened event holding most of its hull, and an event homing two words homes no task
+  content.
+
+### Speech outside the task (`task_speech.py`, `data/task_speech.yaml` v2)
+
+The owning branch stores `task_speech_reading`: the lexical consensus words (not bracketed, not
+`is_non_lexical`; a vocal task reads vocalisations as non-lexical) outside the task's own content, over the
+whole file, with their runs (times and counts only) and the words with no usable timing (a zero-length hull).
+- **Non-lexical families** (airway, voice; AIRWAY and VOICE write it in align mode). Own content is a voice
+  family's declared text (`task_texts`: the instructions and expected speech, plus the expectation's
+  tokens, matched by stem or as a number word, so the prolonged vowel's count-in stays exempt) and the
+  misreadings above. Owner k = 1: `words_min` 1 word is `speech_in_task`.
+- **Item-set families** (`task_content.yaml` `open_vocabulary_families`: animal fluency, random item
+  generation v1 and v2; SPEECH writes it). Owner, 2026-10-10: these tasks elicit names, places and numbers
+  by design, so the words of the item runs are task content whatever they spell. Item runs are the runs of
+  lexical words split at pauses of `item_gap_s` (3.0 s), whose declared-category members reach
+  `member_share_min` (0.5) of the run; with no member anywhere every run is the task. SPEECH's item-list
+  task extent is now the item runs' hull, so a speaker before the list is outside it. The words outside are
+  speech outside the task: `item_words_min` (3) of them review and are masked; an off-task share of every
+  lexical word at or over `extensive_fraction` (0.5) withholds. All three are unfitted.
+- Story recall and productive vocabulary have no item extent and are not read.
+
+The fold raises `speech_in_task` (reason `off_task_speech`), or `other_speaker_in_task` (reason
+`other_speaker`) where a run overlaps one of COHORT's non-matching spans; the evidence item `speech_in_task`
+carries the count against its bound.
+
+### Masks over the speech (`mask_plan`)
+
+A mask source `non_task_speech` (category `NON_TASK_SPEECH`) covers each run of the reading's timed words,
+padded by `redaction.padding_ms` up to the nearest unmasked word, together with COHORT's non-matching spans
+of a non-lexical task and the reviewer's off-task and other-speaker quotes. Its words are kept masked
+whatever the content-word trim says. The release is `redacted` on `non_task_speech_masked`; a word with no
+usable timing withholds on `non_task_speech_untimed`; an extensive off-task share, or the reviewer reading
+off-task speech as `extensive`, withholds on `non_task_speech_extensive`. The copy is assembled by
+`settle_release` from the ledger's final masks; where REDACT never ran (SPEECH declined a non-lexical task,
+so there is no scan for REDACT to read) the recording stream is masked with them, as for policy masks.
+
+### Verify what ships; never re-detect (owner, 2026-10-10)
+
+REDACT re-ran the detectors over its own redacted text and failed on any category they read on a word no
+finding had marked; the fold then withheld on `redact_verify_found`. In r18c 98 recordings were withheld
+this way, 47 of them otherwise passing; in 90 the survivor was on an unmarked word, 25 involved stimulus,
+instruction or kinship words, and 36 would have had no final mask. The re-scan applied none of the fold's
+exemptions and the final plan was never verified.
+
+The order is now: detect once on the original with every detector (SPEECH); REDACT plans masks from those
+findings so REVIEW reads a redacted text; REVIEW reads every finding; the one mask plan (`fold_mask_plan`:
+policy, task text and instructions, stimulus, family lexicon, task events, item runs, reviewer) gives the
+final masks; SECOND_OPINION reads the text as it would ship (`shipped_texts`); VERDICT verifies only what
+ships (`mask_coverage`): each kept word has usable timing, the released text shows none of them, and each
+final mask's audio is silent (fill `silence`) or replaced (fill `bleep`). A failure withholds on
+`mask_coverage_failed` (was `redact_verify_found`). REDACT checks its own plan the same way and runs no
+detector on redacted text. Removed outright: the re-plan loop, the survivor attribution, the reviewer's
+clearing of a re-scan fail (`reviewer_cleared_rescan`, `reviewer_cleared_unmasked`) and
+`verdict.llm_rescan_clears`.
+
+Missed PII is a detection-recall problem, addressed in the first pass -- for example by routing
+low-confidence detector hits to the reviewer -- never by a post-redaction hard fail.
+
+### The release reaches triage
+
+- Owner, 2026-10-10: until mask placement is validated, every release but `as_is` reviews
+  (`data/decision_reasons.yaml` `reviewed_releases: [redacted, withheld]`, ground `release_reviewed`). The
+  setting can be narrowed to `[withheld]` without a code change.
+- A non-lexical recording whose release is redacted or withheld also carries `release_in_nonlexical_task`.
+- A confident second-opinion "not free of identifiers" on the shipped text flags
+  `second_opinion:masked_text_free_of_identifiers` and, under `second_opinion_not_free_withholds` (owner,
+  2026-10-10), withholds on `second_opinion_not_free` pending a person.
+
+### The reviewer and the second opinion reason about the task
+
+REVIEW prompt 12 gives the task name, family, instructions, stimulus, `speech_type` and the family's nature
+(`task_guidance.yaml` `natures`: open response, item generation, read or recall, non-lexical) and asks
+whether a word is task content or a disclosure, whether the participant talked off the task, and who else
+spoke; it answers `off_task_speech` (none/some/extensive) with quotes, `other_speaker`
+(none/assistant/background/unclear) with quotes, and `task_content_quotes`. `review_inputs` v3 needs the
+instructions. SECOND_OPINION question set 4 runs after REVIEW over the final plan, reads the original and
+the masked text, and adds `masked_text_free_of_identifiers` and `off_task_speech`; the policy wording has
+one source (`redaction_policy_text`). The fold reviews on the reviewer's `off_task_speech` (some or
+extensive) and `other_speaker` (assistant, background, unclear), masks their quotes, releases its
+task-content quotes, and flags each disagreeing second-opinion question under its own subject. Both need a
+re-run; the prepared arrays and the cost estimate are in `specs/20261010-task-reasoning-rerun/`.
+
+### Reasons consolidated (`data/decision_reasons.yaml` v5)
+
+| reason | from |
+|---|---|
+| `unreadable` | `unmeasurable` (renamed) |
+| `task_too_short`, `no_task_captured` | unchanged |
+| `task_not_found` | `declared_task_absent`, `syllable_train_not_target`, `task_mismatch`, `route_mismatch`, `hint_mismatch` |
+| `not_measured` | operational grounds and an unassessed release only; it agrees with `run_status` incomplete both ways (node flags are operational) |
+| `fault_in_task` | unchanged |
+| `interference_in_task` | non-speech sources only |
+| `other_speaker` | any voice not the participant's: `interference_in_task:other_voice`, reviewer and diarization second speakers, `other_speaker_in_session`, `other_speaker_in_task`, instructions spoken by another, second-opinion `other_voice` |
+| `off_task_speech` | the participant's: `speech_in_task`, `participant_voice_in_task` (another voice COHORT matched to the enrollment), the reviewer's off-task reading, instructions spoken by the participant, second-opinion `off_task_speech` |
+| `weak_events` | the review bands and `streams_disagree` |
+| `task_not_conforming` | deviations, gates, conformance, `speech_no_lexical_item`, `ddk_review_identity` |
+| `atypical_recording` | COHORT |
+| `identifying_content` | every release but `as_is`, reviewer residue, name review, unplaced findings, second-opinion identifier questions |
+
+`redaction_hold`, `redaction_unvalidated`, `second_opinion_disagrees` and `streams_disagree` are gone; the
+release ground is its own column, `release_reason` (`triage_decisions` schema 2, `triage.tsv` v2, the review
+page). Annotation-only keys (`speech_outside_task`, `fault_outside_task`, `interference_outside_task`) are
+listed under `annotations` and map to no reason.
+
+### The graph
+
+```
+... QUALITY → COHORT → REDACT (plan, coverage) → REVIEW → final mask plan → SECOND_OPINION → VERDICT (coverage of the final plan)
+```
+
+`GRAPH_ORDER` declares SECOND_OPINION between REVIEW and VERDICT; a single-file run records it skipped and
+`scripts/extend_second_opinion.py` drives it over finished stores (`extend_llm_review` → `extend_second_opinion`
+→ `extend_refold`).
+
+## The causes of `not_measured` in r18c (2026-10-10)
+
+r18c's decision table holds 408 `not_measured` rows of 62,550. 282 of them are `route_unexplained` and are
+not addressed here. Of the remaining 126, 114 are `owning_branch_input_absent:phonation_tracks` on breath
+families, 5 are random-item-generation recordings owing `SPEECH:items_min`, 2 lost their transcript to a
+CrisperWhisper position overrun, and 5 are preprocess errors or a silent branch. A further 878 rows carry
+`not_measured` as a secondary reason while `run_status` is `complete`; all are discards (`task_too_short`
+or `unmeasurable`).
+
+### A: an item list without a category
+
+`item_category` reads a `Category:` line from the sidecar instructions. 468 of the corpus's 473
+random-item-generation sidecars carry one; 5 do not. With no category `_speech_item_list` returned before
+measuring anything, so `items_produced` was never written and the `items_min` gate went uncomputed.
+
+- The count of items needs no category; only the repetition rule does (two of ten categories allow
+  repetition). The list is now measured whatever the category, and `repetition_rule` alone is recorded as
+  not separable.
+- The registry's `prompt_ref` for the task is a questionnaire join
+  (`random_recording_acoustic_task_id` → `random_item_generation_category`). The BIDS tree carries it as
+  `phenotype/task/random_item_generation.tsv`: 473 rows, one per recording, keyed by the sidecar's
+  `acoustic_task_id`. Where both exist the two agree on all 468; the table supplies the category for the 5
+  sidecars without the line. `build_hint` joins it into `hint.metadata["item_category"]` with
+  `item_category_from` naming the table and field, and SPEECH records the source as the
+  `item_category_from` count (`instructions`, `family`, or `questionnaire:<table>:<field>`). The
+  instructions' own line outranks the table.
+
+### B: one recognizer lost to a position overrun
+
+`specs/20260910-crisperwhisper-decoder-positions/design.md` traced the overrun: window 1 decodes into a
+space-free repetition loop, the loop becomes window 2's context prompt (247 and 269 tokens), and the prompt
+plus 256 new tokens passes Whisper's 448 positions. With CrisperWhisper absent, the consensus raised
+`LookupError` for want of a second hypothesis, so the recording had no transcript at all.
+
+- **The redecode.** On the overrun, CrisperWhisper decodes the recording once more with every window's
+  context prompt capped at `448 - 256 - 1` tokens, leading context words dropped first (a single looped
+  word drops the context entirely). The library's context-free strategies (`chunked_lcs`, `token_lcs`)
+  were tried first and are not usable: crisperwhisper 2.0.1 raises `NotImplementedError` for
+  `word_timestamps=True` with any strategy but `continuation`. Every other recording keeps the uncapped
+  decode, because the cap is applied only on the retry. The strategy used is recorded as
+  `decode_strategy` on the line and on the `asr_crisperwhisper` measurement (`continuation` or
+  `continuation_context_capped`). Triage does not cache ASR, so there is no cache key to bump; the decode
+  is redone by re-running PREPROCESS.
+- **Degenerate runs.** The loop itself is in window 1's output either way, and it is common: over 207,269
+  hypothesis words of 6,000 r18 recordings, CrisperWhisper produced 201 tokens of 60 or more letters and
+  digits and 216 with one unit of at most 8 characters repeated 10 or more times back to back; Qwen3-ASR
+  produced 2 and 3 of 102,626. CrisperWhisper's long tokens are bimodal (191 over 100 characters, 236 over
+  30), Qwen3-ASR's 99.99th percentile is 18 characters and 6 repeats. `data/asr_degenerate.yaml` sets
+  `chars_min: 60`, `unit_chars_max: 8`, `repeats_min: 10`: past the independent recognizer's tail, and
+  above the 4-6 repeats of an ordinary stutter (`p-p-p-p`), which is the participant's speech. Such a
+  token is `degenerate` on its hypothesis word; a consensus column every reading of which is degenerate is
+  a `degenerate` word, and a degenerate reading never wins a column another recognizer read as a word.
+  `lexical_words` and SPEECH's lexical list leave degenerate words out (no item, no PII scan, no speech
+  outside the task), and the reviewer reads them inside `<nonlex>`.
+- **One hypothesis.** The consensus now needs one hypothesis, not two. A single one is its own stream:
+  every word an `insertion` with `agreement` None, and the measurement's `single_hypothesis` True.
+  `review_inputs_complete` still requires two recognisers' readings, so a reviewer's release does not
+  outrank a kept name mask on such a recording; the kept name wins, which is the conservative side.
+
+### C: phonation tracks on unvoiced breath recordings
+
+`phonation_tracks` called `derive_f0_range`, which raises `F0RangeUnavailable` when the wide search places
+no pitch. A breath recording with no voicing is exactly that case, so the derivative was absent, and the
+breath measure (`breath_pattern_of`, which reads voicing from the tracks to separate breath from voice)
+returned the absence as an owner input. The requirement is right: the breath measure does read voicing.
+The producer was wrong: no pitch is an answer, not a missing input. The tracks now run over the wide
+search range `voice.f0_search_range_hz` when no range derives, recorded as `f0_range_from: search`
+(`derived` otherwise); a breath recording then reads as unvoiced, which is what it is. Any other error from
+the range derivation still leaves the derivative absent.
+
+### D: a discard's reasons
+
+The fold builds `reasons` from every ground key it raised, including the operational ones a skipped
+branch left, while `run_status` counts no owed measurement on a discard. A discard is settled; a measurement
+the pipeline did not take after it is not owed. `reasons_of(..., owed_counts=False)` leaves `not_measured`
+out for a discard, so the reasons agree with `run_status`. The ground keys themselves are unchanged.
