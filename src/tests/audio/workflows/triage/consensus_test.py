@@ -3,7 +3,7 @@
 import inspect
 import random
 from dataclasses import fields, replace
-from typing import Sequence
+from typing import Any, Sequence
 
 import pytest
 
@@ -530,7 +530,7 @@ class TestReadingOneStoredColumnAgain:
 class TestDegenerateRecognizerRuns:
     """A decoder loop is marked, so readers treat it as unreliable rather than as content."""
 
-    BOUNDS = {"chars_min": 60, "unit_chars_max": 8, "repeats_min": 10.0}
+    BOUNDS: dict[str, Any] = {"chars_min": 60, "unit_chars_max": 8, "repeats_min": 10.0}
 
     def test_a_long_or_looping_token_is_degenerate(self) -> None:
         """One unbroken token past the length bound, or one unit repeated past the repeat bound."""
