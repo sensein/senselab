@@ -8,4 +8,4 @@ version: 4
 words_min: 1           # owner, 2026-10-10 (k = 1): this many such words in a non-lexical family is speech_in_task
 utterance_gap_s: 0.3   # owner, 2026-10-10: a pause at least this long between two consensus words ends an utterance
 phrase_words_min: 4    # owner, 2026-10-10: an utterance of at least this many lexical words, holding a closed-class word, is a phrase
-phrase_share_review: 0.5  # PLACEHOLDER, set from the owner's labels below
+phrase_share_review: 0.25 # fitted on 4 owner labels (2026-10-10): the 3 cleared lists read 0.043-0.143; see design.md
