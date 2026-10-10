@@ -1,19 +1,19 @@
-"""Background speech inside an airway task, read off what speech enhancement removed.
+"""Another voice anywhere in a recording, read off what speech enhancement removed.
 
 PREPROCESS writes a ``residual`` stream (the plain stream less the gain-fitted, lag-aligned enhanced
-stream) and classifies it with YAMNet. Two readings find another voice inside the task's extent:
+stream) and classifies it with YAMNet. Two readings find another voice over the whole file:
 
-- a residual window YAMNet hears as speech, where the enhancer kept the foreground (the enhanced
-  stream well over the residual), the residual stands well over its own floor, and the residual's
-  envelope does not follow the enhanced one (a residual that tracks the foreground is the enhancer's
-  leakage of the participant's own sound, not another source);
+- a residual window YAMNet hears as speech, standing over the residual's quiet-frame floor, whose
+  residual energy lies mostly outside the participant's own task events, and whose envelope does not
+  follow the enhanced one (a residual that tracks the enhanced stream is the participant's own sound
+  leaking);
 - a harmonic run in the residual away from the participant's own events, for a voice too faint or
-  band-limited for YAMNet to name: what the enhancer removed is periodic there, as a voice is and
-  breath turbulence or room noise is not.
+  band-limited for YAMNet to name.
 
 The plain stream's own speech score is recorded beside them, as context only.
 
-Every parameter is in ``data/background_speech.yaml``. See ``specs/20261006-cough-pattern/design.md``.
+Every parameter is in ``data/background_speech.yaml``. See ``specs/20261006-cough-pattern/design.md``
+and ``specs/20261007-task-events-in-background/design.md``.
 """
 
 from __future__ import annotations
@@ -47,10 +47,13 @@ class BackgroundSpeechParameters:
 
     Attributes:
         speech_labels: The YAMNet labels that are speech.
+        version: The data file's version.
         speech_min: The highest speech-label score a residual window reaches to hear speech.
-        keep_db: How far the enhanced stream stands over the residual in a window the enhancer kept.
+        own_share_max: The share of a window's residual energy inside the participant's own events (padded
+            by ``event_pad_s``) at or above which the window is the participant's own sound.
         residual_rise_db: How far over its own floor the residual stands where the enhancer removed something.
-        floor_percentile: The percentile of the residual's window levels taken as its floor.
+        floor_frame_s: The frame the residual's floor is read in.
+        floor_percentile: The percentile of the residual's frame levels taken as its floor.
         envelope_frame_s: The frame the residual and enhanced envelopes are read in.
         leakage_corr_min: The envelope correlation at or above which a residual window is leakage.
         windows_min: The residual windows that must read as background speech.
@@ -60,19 +63,20 @@ class BackgroundSpeechParameters:
         frame_hop_s: Its hop.
         harmonicity_min: The normalised autocorrelation peak a harmonic frame reaches.
         harmonic_rise_db: How far over the residual's own frame floor a harmonic frame stands.
-        event_pad_s: How far either side of the participant's own events harmonic frames are set aside.
+        event_pad_s: How far either side of the participant's own events their sound reaches.
         run_gap_s: The longest gap inside one harmonic run.
         run_min_s: The shortest harmonic run.
         run_voiced_min_s: The harmonic frames a run holds, in seconds.
         thinned_db: The range of plain over enhanced level over a run in which the enhancer removed part of
             the sound and kept the foreground.
-        pad_s: How far either side of the task extent is read.
     """
 
     speech_labels: tuple[str, ...]
+    version: int
     speech_min: float
-    keep_db: float
+    own_share_max: float
     residual_rise_db: float
+    floor_frame_s: float
     floor_percentile: float
     envelope_frame_s: float
     leakage_corr_min: float
@@ -88,7 +92,6 @@ class BackgroundSpeechParameters:
     run_min_s: float
     run_voiced_min_s: float
     thinned_db: tuple[float, float]
-    pad_s: float
 
 
 @functools.cache
@@ -103,6 +106,7 @@ def background_speech_parameters() -> BackgroundSpeechParameters:
     band, f0, thinned = held.pop("harmonic_band_hz"), held.pop("f0_range_hz"), held.pop("thinned_db")
     return BackgroundSpeechParameters(
         speech_labels=labels,
+        version=int(held.pop("version")),
         windows_min=int(held.pop("windows_min")),
         harmonic_band_hz=(float(band[0]), float(band[1])),
         f0_range_hz=(float(f0[0]), float(f0[1])),
@@ -113,17 +117,17 @@ def background_speech_parameters() -> BackgroundSpeechParameters:
 
 @dataclass(frozen=True)
 class BackgroundSpeech:
-    """What :func:`measure_background_speech` read over a task extent.
+    """What :func:`measure_background_speech` read over the whole recording.
 
     Attributes:
-        windows: Each residual window YAMNet hears as speech where the enhancer kept the foreground:
-            ``(start, end, speech score, residual dB over its floor, enhanced dB over the residual,
-            envelope correlation)``.
+        windows: Each residual window YAMNet hears as speech standing over the residual's floor with
+            most of its energy outside the participant's own events: ``(start, end, speech score,
+            residual dB over its floor, share of its energy inside the participant's events, envelope
+            correlation)``.
         runs: Each harmonic run in the residual off the participant's events: ``(start, end, harmonic
             seconds, plain dB over enhanced)``.
         residual_floor_db: The residual's floor, in dB.
-        plain_speech_max: The highest speech-label score on the plain stream inside the extent, or None.
-        extent: The extent read, padded.
+        plain_speech_max: The highest speech-label score on the plain stream, or None.
         parameters: The parameters the reading was judged on.
     """
 
@@ -131,7 +135,6 @@ class BackgroundSpeech:
     runs: tuple[tuple[float, ...], ...] = ()
     residual_floor_db: float | None = None
     plain_speech_max: float | None = None
-    extent: tuple[float, float] | None = None
     parameters: BackgroundSpeechParameters | None = None
 
     @property
@@ -148,7 +151,7 @@ class BackgroundSpeech:
 
     @property
     def heard(self) -> bool:
-        """Whether another voice was read inside the extent."""
+        """Whether another voice was read."""
         p = self.parameters or background_speech_parameters()
         return len(self.speech_windows) >= p.windows_min or bool(self.voice_runs)
 
@@ -166,7 +169,6 @@ class BackgroundSpeech:
             "runs": [list(run) for run in self.runs],
             "residual_floor_db": self.residual_floor_db,
             "plain_speech_max": self.plain_speech_max,
-            "extent": list(self.extent) if self.extent is not None else None,
         }
 
 
@@ -205,6 +207,42 @@ def _piece(signal: Signal, start: float, end: float) -> np.ndarray:
 def _level_db(signal: Signal, start: float, end: float) -> float:
     piece = _piece(signal, start, end)
     return float(10.0 * np.log10(np.mean(piece**2) + 1e-12)) if len(piece) else -120.0
+
+
+def _own_share(signal: Signal, start: float, end: float, own: Sequence[tuple[float, float]]) -> float:
+    samples, rate = signal
+    a, b = max(0, int(start * rate)), max(0, int(end * rate))
+    energy = samples[a:b].astype(np.float64) ** 2
+    total = float(energy.sum())
+    if total <= 0.0:
+        return 0.0
+    inside = np.zeros(len(energy), dtype=bool)
+    for lo, hi in own:
+        inside[max(0, int(lo * rate) - a) : max(0, int(hi * rate) - a)] = True
+    return float(energy[inside].sum()) / total
+
+
+def residual_floor_db(residual: Signal, p: BackgroundSpeechParameters) -> float | None:
+    """The residual's floor: a low percentile of its short-frame levels over the whole file.
+
+    Args:
+        residual: The residual samples and their rate.
+        p: The parameters.
+
+    Returns:
+        The ``floor_percentile`` of the ``floor_frame_s`` frame levels, in dB, over the frames that are
+        not digital silence; None where no frame carries any energy.
+    """
+    samples, rate = residual
+    n = max(1, int(p.floor_frame_s * rate))
+    k = len(samples) // n
+    if k == 0:
+        return None
+    energy = (samples[: k * n].astype(np.float64).reshape(k, n) ** 2).mean(axis=1)
+    energy = energy[energy > 0.0]
+    if not len(energy):
+        return None
+    return float(np.percentile(10 * np.log10(energy), p.floor_percentile))
 
 
 def _envelope_corr(a: Signal, b: Signal, start: float, end: float, frame_s: float) -> float:
@@ -253,12 +291,10 @@ def _voiced_runs(
     times: np.ndarray,
     voiced: np.ndarray,
     *,
-    low: float,
-    high: float,
     events: Sequence[tuple[float, float]],
     p: BackgroundSpeechParameters,
 ) -> list[tuple[float, float, float]]:
-    keep = voiced & (times >= low) & (times <= high)
+    keep = voiced.copy()
     for start, end in events:
         keep &= ~((times >= start - p.event_pad_s) & (times <= end + p.event_pad_s))
     hop = float(np.median(np.diff(times))) if len(times) > 1 else 0.01
@@ -277,20 +313,19 @@ def measure_background_speech(
     plain: Signal,
     enhanced: Signal,
     residual: Signal,
-    extent: tuple[float, float],
     events: Sequence[tuple[float, float]] = (),
     plain_windows: Sequence[dict[str, Any]] | None = None,
     parameters: BackgroundSpeechParameters | None = None,
 ) -> BackgroundSpeech:
-    """Another voice inside a task extent, read off what the enhancer removed.
+    """Another voice anywhere in the recording, read off what the enhancer removed.
 
     Args:
         residual_windows: The residual stream's YAMNet windows.
         plain: The plain samples and their rate.
         enhanced: The enhanced samples and their rate.
         residual: The residual samples and their rate.
-        extent: The task extent.
-        events: The participant's own events (coughs, breaths), whose harmonic frames are set aside.
+        events: The participant's own task events (breaths, coughs, syllables, phonation holds), whose
+            sound, padded by ``event_pad_s``, is set aside.
         plain_windows: The plain stream's YAMNet windows, read for context; None reads none.
         parameters: The parameters; ``data/background_speech.yaml`` when None.
 
@@ -298,50 +333,43 @@ def measure_background_speech(
         The reading.
     """
     p = parameters or background_speech_parameters()
-    low, high = extent[0] - p.pad_s, extent[1] + p.pad_s
-    spans = [(float(w.get("start", 0.0)), float(w.get("end", 0.0))) for w in residual_windows]
-    levels = [_level_db(residual, a, b) for a, b in spans]
-    floor = float(np.percentile(levels, p.floor_percentile)) if levels else None
+    own = [(float(a) - p.event_pad_s, float(b) + p.event_pad_s) for a, b in events]
+    floor = residual_floor_db(residual, p)
     found = []
-    for window, (a, b), level in zip(residual_windows, spans, levels):
-        if b <= low or a >= high or floor is None:
+    for window in residual_windows if floor is not None else ():
+        a, b = float(window.get("start", 0.0)), float(window.get("end", 0.0))
+        score, rise = _speech(window, p.speech_labels), _level_db(residual, a, b) - floor
+        if score < p.speech_min or rise < p.residual_rise_db:
             continue
-        score, kept = _speech(window, p.speech_labels), _level_db(enhanced, a, b) - level
-        if score >= p.speech_min and kept >= p.keep_db and level - floor >= p.residual_rise_db:
-            corr = _envelope_corr(residual, enhanced, a, b, p.envelope_frame_s)
-            found.append(
-                (round(a, 3), round(b, 3), round(score, 3), round(level - floor, 2), round(kept, 2), round(corr, 3))
-            )
+        share = _own_share(residual, a, b, own)
+        if share >= p.own_share_max:
+            continue
+        corr = _envelope_corr(residual, enhanced, a, b, p.envelope_frame_s)
+        found.append((round(a, 3), round(b, 3), round(score, 3), round(rise, 2), round(share, 3), round(corr, 3)))
     runs = []
-    for a, b, voiced_s in _voiced_runs(*residual_harmonicity(residual, p), low=low, high=high, events=events, p=p):
+    for a, b, voiced_s in _voiced_runs(*residual_harmonicity(residual, p), events=events, p=p):
         thinned = _level_db(plain, a, b) - _level_db(enhanced, a, b)
         runs.append((round(a, 3), round(b, 3), round(voiced_s, 3), round(thinned, 2)))
-    inside = [
-        _speech(w, p.speech_labels)
-        for w in plain_windows or ()
-        if float(w.get("end", 0.0)) > low and float(w.get("start", 0.0)) < high
-    ]
+    heard_plain = [_speech(w, p.speech_labels) for w in plain_windows or ()]
     return BackgroundSpeech(
         windows=tuple(found),
         runs=tuple(runs),
         residual_floor_db=round(floor, 2) if floor is not None else None,
-        plain_speech_max=round(max(inside), 3) if inside else None,
-        extent=(round(low, 3), round(high, 3)),
+        plain_speech_max=round(max(heard_plain), 3) if heard_plain else None,
         parameters=p,
     )
 
 
 def background_speech_of(
-    store: ProvStore, run_dir: Path, extent: tuple[float, float], events: Sequence[tuple[float, float]] = ()
+    store: ProvStore, run_dir: Path, events: Sequence[tuple[float, float]] = ()
 ) -> BackgroundSpeech | None:
-    """Another voice inside a task extent, read off the stored streams and their classifications.
+    """Another voice anywhere in the recording, read off the stored streams and their classifications.
 
     Args:
         store: The provenance store, read for the plain, enhanced and residual streams, the residual
             and plain YAMNet windows.
         run_dir: The run directory their paths are relative to.
-        extent: The task extent.
-        events: The participant's own events inside it.
+        events: The participant's own task events.
 
     Returns:
         The reading, or None where the residual's windows or any of the three streams is not stored.
@@ -351,14 +379,12 @@ def background_speech_of(
     plain, enhanced, residual = streams
     if windows is None or plain is None or enhanced is None or residual is None:
         return None
-    p = background_speech_parameters()
     return measure_background_speech(
         windows,
         plain=plain,
         enhanced=enhanced,
         residual=residual,
-        extent=extent,
         events=events,
         plain_windows=_classifier_windows(store, run_dir, PLAIN_YAMNET),
-        parameters=p,
+        parameters=background_speech_parameters(),
     )

@@ -29,14 +29,13 @@ from typing import Any
 
 from senselab.audio.data_structures import AudioHints
 from senselab.audio.workflows.triage.background_model import BACKGROUND_MODEL, _named_stream
-from senselab.audio.workflows.triage.background_speech import background_speech_of
+from senselab.audio.workflows.triage.background_speech import background_speech_of, background_speech_parameters
 from senselab.audio.workflows.triage.config import TriageConfig, UnmeasuredConfigKey
 from senselab.audio.workflows.triage.ddk_task import DDK_READING
 from senselab.audio.workflows.triage.nodes.airway_task import BREATH_READING, COUGH_READING
 from senselab.audio.workflows.triage.nodes.background import SESSION_FLOOR
 from senselab.audio.workflows.triage.nodes.common import (
     BranchResult,
-    consensus_words,
     find_measurement,
     live_entities,
     software_agent,
@@ -258,7 +257,7 @@ def measure_join(store: ProvStore, run_dir: Path) -> dict[str, Any]:
 
     Args:
         store: The provenance store, read for the task spans and events, BACKGROUND's reading, the
-            session floor, the consensus words and the plain, enhanced and residual streams.
+            session floor and the plain, enhanced and residual streams.
         run_dir: The run directory the streams' and sidecars' paths are relative to.
 
     Returns:
@@ -279,14 +278,11 @@ def measure_join(store: ProvStore, run_dir: Path) -> dict[str, Any]:
         missing.append(ENHANCED_STREAM)
     streams = stream_agreement(events, raw, enhanced, p) if raw is not None and events else None
     other_voice: list[Span] | None = None
-    if spans:
-        words = [(float(w.extent[0]), float(w.extent[1])) for w in consensus_words(store) if w.extent is not None]
-        hull = (spans[0][0], max(b for _, b in spans))
-        heard = background_speech_of(store, run_dir, hull, [*events, *words])
-        if heard is None:
-            missing.append("background_speech")
-        else:
-            other_voice = [(float(w[0]), float(w[1])) for w in (*heard.speech_windows, *heard.voice_runs)]
+    heard = background_speech_of(store, run_dir, events)
+    if heard is None:
+        missing.append("background_speech")
+    else:
+        other_voice = [(float(w[0]), float(w[1])) for w in (*heard.speech_windows, *heard.voice_runs)]
     session = find_measurement(store, SESSION_FLOOR)
     level = session.attributes.get("level_rel_db") if session is not None else None
     faults = dict(background.attributes.get("faults") or {})
@@ -445,7 +441,12 @@ def quality(
     conformance: Conformance = UNDETERMINED if not measured else not contradictions
 
     join_activity = store.activity(
-        node=NODE, step=QUALITY_JOIN, parameters={"version": quality_join_parameters()["version"]}
+        node=NODE,
+        step=QUALITY_JOIN,
+        parameters={
+            "version": quality_join_parameters()["version"],
+            "background_speech_version": background_speech_parameters().version,
+        },
     )
     store.was_associated_with(join_activity, software)
     join_id = write_join(store, join_activity, software, run_dir)
