@@ -74,6 +74,9 @@ class ScriptLine(BaseModel):
             to do with the audio, so that agreement is not independent corroboration.
         token_entropy (list[float] | float | None): Per-token softmax entropy, or a
             single pre-collapsed mean.
+        decode_strategy (str | None): How the backend decoded audio longer than its
+            window, where it chooses among strategies (CrisperWhisper's long-form
+            strategy); `None` otherwise.
 
     Notes:
         - Either `text` or `speaker` must be provided (or both).
@@ -113,6 +116,7 @@ class ScriptLine(BaseModel):
     timestamp_model: Optional[str] = None
     # Per-token softmax entropy, or a single mean when the caller pre-collapsed it.
     token_entropy: Optional[Union[List[float], float]] = None
+    decode_strategy: Optional[str] = None
 
     @model_validator(mode="before")
     def validate_text_and_speaker(cls, values: Dict[str, Any], _: ValidationInfo) -> Dict[str, Any]:
