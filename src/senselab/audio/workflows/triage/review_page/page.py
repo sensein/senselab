@@ -1,7 +1,7 @@
 """Assemble the review page: a compact index inlined into one HTML file, and per-recording side files.
 
 The index carries what the Explore and Review tabs filter on (identity, decision, every evidence
-value, a speech task's plain transcript for search). Each side file carries a block of recordings'
+value, a recording's plain transcript for search). Each side file carries a block of recordings'
 spectrograms, overlays, stream paths, full evidence and transcript view as Parquet
 (:mod:`~senselab.audio.workflows.triage.review_page.shards`), fetched when the page is served and
 loaded through its script wrapper when the page is opened from ``file://``. The Parquet reader is
@@ -81,7 +81,7 @@ def _list_dictionary(values: Sequence[Sequence[Any]]) -> dict[str, Any]:
 
 
 def _plain_text(speech: Mapping[str, Any] | None) -> str | None:
-    """A speech task's transcript as plain lower-case text, for search."""
+    """A recording's transcript as plain lower-case text, for search."""
     if not speech or not speech.get("html"):
         return None
     return " ".join(html.unescape(SPEECH_TEXT.sub(" ", str(speech["html"]))).lower().split())

@@ -1,8 +1,9 @@
 """One review record per recording: its decision, every evidence item, overlays and a spectrogram.
 
 The decision and evidence come from :func:`~senselab.audio.workflows.triage.decision_tables.decision_rows`,
-so the page cannot disagree with the decision tables. A speech task's transcript, PII and redaction
-view is supplied by the caller, which reads it the way the free-speech review page does.
+so the page cannot disagree with the decision tables. The transcript, PII and redaction view of any
+declared family's recording is supplied by the caller, which reads it the way the free-speech review
+page does.
 """
 
 from __future__ import annotations
@@ -279,7 +280,8 @@ def review_record(run_root: Path, root: Path, speech: SpeechReader | None = None
     Args:
         run_root: The directory holding ``run/store.jsonl``.
         root: The scan root every path is given relative to.
-        speech: Reads a SPEECH task's transcript view, or None to carry none.
+        speech: Reads a recording's transcript view, None where it holds no transcript; asked of every
+            recording with a declared family. None carries no view.
 
     Returns:
         The record, or None where the store holds no fold.
@@ -328,7 +330,7 @@ def review_record(run_root: Path, root: Path, speech: SpeechReader | None = None
         "overlay": overlays(view),
         "streams": stream_paths(view, run_root, root),
         "figure": decision["figure_path"],
-        "speech": speech(run_root) if speech is not None and branch == "SPEECH" else None,
+        "speech": speech(run_root) if speech is not None and family else None,
         "commit": decision["commit"],
         "config_hash": decision["config_hash"],
     }
@@ -340,7 +342,7 @@ def records(run_roots: Iterable[Path], root: Path, speech: SpeechReader | None =
     Args:
         run_roots: The run roots.
         root: The scan root.
-        speech: The SPEECH transcript reader, or None.
+        speech: The transcript reader, or None.
 
     Yields:
         Each record, skipping stores with no fold.

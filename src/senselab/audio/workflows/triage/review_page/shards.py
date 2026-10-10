@@ -3,7 +3,7 @@
 A shard holds, per recording, what the page draws when it opens that recording. Paths are given once per
 record as the run directory and each stream's path under it; evidence items name an entry of the shard's
 evidence dictionary (item, group, unit, comparison and threshold), stored as the file's key-value metadata,
-and carry only their value, effect and decisive flag. A speech task's transcript is carried as its word
+and carry only their value, effect and decisive flag. A recording's transcript is carried as its word
 entries and marks, which the page renders. Values whose shape is open (an evidence value or threshold, a
 mark, the LLM reviewer's record, the release ground) are JSON text.
 

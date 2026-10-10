@@ -3,8 +3,9 @@ r"""Build the triage review page: every recording's decision and evidence, facet
 Two phases, because the corpus lives on a cluster and the page is read on a laptop.
 
 ``extract`` walks a run tree and writes one JSON line per recording: the decision and every evidence
-item (from the decision tables' reader), overlays, stream paths, a quantised spectrogram, and for a
-speech task its transcript, PII and redactions (from the free-speech review page's reader)::
+item (from the decision tables' reader), overlays, stream paths, a quantised spectrogram, and for any
+declared family with a transcript its transcript, PII and redactions (from the free-speech review
+page's reader)::
 
     uv run python scripts/triage_review_page.py extract CORPUS --out review.jsonl --workers 16
 
@@ -42,7 +43,6 @@ from typing import Any, Iterator, Mapping, Sequence
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from senselab.audio.workflows.triage.nodes.branches import SPEECH_EXPECTATIONS  # noqa: E402
 from senselab.audio.workflows.triage.recording_vectors import RUN_SUBDIR, STORE_NAME, recording_dirs  # noqa: E402
 from senselab.audio.workflows.triage.review_page import review_record, write_page  # noqa: E402
 from senselab.audio.workflows.triage.review_page.page import SOURCE_BASE  # noqa: E402
@@ -50,7 +50,7 @@ from senselab.audio.workflows.triage.review_page.records import transcripts  # n
 from senselab.utils import fastio  # noqa: E402
 
 EXTRACT_SCHEMA = "senselab.triage.review.extract"
-EXTRACT_VERSION = 2
+EXTRACT_VERSION = 3
 
 
 def _free_speech_page() -> Any:  # noqa: ANN401 -- a module
@@ -66,9 +66,6 @@ def _free_speech_page() -> Any:  # noqa: ANN401 -- a module
     return module
 
 
-SPEECH_FAMILIES = frozenset(SPEECH_EXPECTATIONS)
-
-
 def _agreement_word(entry: Sequence[Any]) -> str:
     """One transcript word; a consensus word carries its position, for its agreement and alternatives."""
     plain = _free_speech_page()._plain(entry)
@@ -76,7 +73,7 @@ def _agreement_word(entry: Sequence[Any]) -> str:
 
 
 def speech_view(run_root: Path) -> dict[str, Any] | None:
-    """A speech task's transcript with its marks, PII findings and what decided its release.
+    """A recording's transcript with its marks, PII findings and what decided its release, for any declared family.
 
     The transcript shown is the consensus where it holds words, each wrapped with its position so the
     page can show that word's agreement across the ASR models and their readings; otherwise the one
@@ -88,10 +85,11 @@ def speech_view(run_root: Path) -> dict[str, Any] | None:
         run_root: The run root.
 
     Returns:
-        The view, or None where the recording is not a speech task.
+        The view, or None where the recording has no declared family, or neither a consensus word nor a
+        single model's transcript.
     """
     fs = _free_speech_page()
-    row = fs.recording_record(run_root, SPEECH_FAMILIES)
+    row = fs.recording_record(run_root, None)
     if row is None:
         return None
     determination = row.get("d") or {}
@@ -107,7 +105,7 @@ def speech_view(run_root: Path) -> dict[str, Any] | None:
     elif single:
         shown = {"kind": "model", "source": single.get("src")}
     else:
-        shown = {"kind": "none", "source": None}
+        return None
     return {
         "html": fs.paragraph(entries, row.get("f") or [], _agreement_word),
         "entries": [list(entry[:3]) for entry in row.get("w") or []],

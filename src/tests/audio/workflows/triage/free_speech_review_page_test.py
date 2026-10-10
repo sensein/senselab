@@ -306,6 +306,18 @@ def test_recording_record_skips_a_family_outside_the_pattern(tmp_path: Path) -> 
     assert page.recording_record(run_root, page.free_response_families()) is None
 
 
+def test_recording_record_with_no_family_filter_keeps_an_airway_family(tmp_path: Path) -> None:
+    """``families=None`` keeps any declared family: an airway task with consensus words carries them."""
+    stem = "sub-aaa_ses-bbb_task-respiration-and-cough-breath"
+    records = [_word(0, "one"), _word(1, "two"), _verdict("as_is", family="respiration-and-cough-breath")]
+    run_root = _store(tmp_path, stem, records)
+    assert page.recording_record(run_root, page.free_response_families()) is None
+    row = page.recording_record(run_root, None)
+    assert row is not None
+    assert row["fam"] == "respiration-and-cough-breath"
+    assert [w[0] for w in row["w"]] == ["one", "two"]
+
+
 def test_recording_record_builds_one_mark_with_its_detector(tmp_path: Path) -> None:
     """A marked word becomes a mark carrying the detector of the finding that covers it."""
     records = [

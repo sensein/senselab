@@ -1489,3 +1489,30 @@ Each of these hid another voice:
 Open: the harmonic-run test still requires plain over enhanced inside `thinned_db` (1-10 dB). That
 assumes a kept foreground in the same way `keep_db` did, so a faint harmonic voice on a near-silent
 breath task is still missed by that reading. Only the YAMNet-window reading is free of it.
+
+## Review page: transcripts for every family (2026-10-10)
+
+The review page carried a transcript only for SPEECH families. `records.review_record` set `speech`
+only where the branch was `SPEECH`, and `scripts/triage_review_page.py`'s `speech_view` asked the
+free-speech reader for SPEECH families only. An airway or voice recording whose store held consensus
+words (someone speaking during a breath task, say) showed the reviewer no transcript, no per-model
+readings and no PII marks.
+
+### What changed
+
+- `records.review_record` asks the transcript reader about every recording with a declared family.
+  The reader decides whether there is a transcript.
+- `speech_view` reads with `recording_record(run_root, None)`. It returns a view where the store holds
+  consensus words (shown as the consensus) or, failing those, one model's own transcript (shown with
+  that model named). Where neither exists it returns None, so the record carries no transcript. A
+  SPEECH recording with no word anywhere used to carry an empty "no ASR model left a word" view; it
+  now carries none.
+- `scripts/free_speech_review_page.py`'s `recording_record` takes `families=None` to mean every
+  declared family. The free-speech page itself still passes its free-response families.
+- `review.js` and `page.py` keyed nothing on the branch. The transcript section, the redacted-stream
+  track and the search text already followed `rec.speech`, so a non-SPEECH recording with a transcript
+  gets all three. Only docstrings and comments changed there.
+- The triage review extract goes to `EXTRACT_VERSION = 3`, because records of non-SPEECH families can
+  now carry `speech`.
+
+There are no new parameters.
