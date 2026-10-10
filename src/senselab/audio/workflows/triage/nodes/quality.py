@@ -40,6 +40,7 @@ from senselab.audio.workflows.triage.nodes.common import (
     find_measurement,
     lexical_words,
     live_entities,
+    recording_duration,
     software_agent,
     word_hull,
     write_measurement,
@@ -272,7 +273,12 @@ def spoken_task_words(store: ProvStore) -> list[Span]:
         return []
     reading = find_measurement(store, TASK_SPEECH_READING)
     off_task = {str(i) for i in (reading.attributes.get("word_ids") or ())} if reading is not None else set()
-    return [word_hull(word) for word in lexical_words(store) if word.id not in off_task and word.extent is not None]
+    duration_s = recording_duration(store)
+    return [
+        word_hull(word, duration_s)
+        for word in lexical_words(store)
+        if word.id not in off_task and word.extent is not None
+    ]
 
 
 def measure_join(store: ProvStore, run_dir: Path) -> dict[str, Any]:

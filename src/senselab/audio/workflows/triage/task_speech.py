@@ -29,7 +29,12 @@ from typing import TYPE_CHECKING, Any
 import yaml
 
 from senselab.audio.workflows.triage.nodes.branches import AIRWAY_EXPECTATIONS, VOICE_EXPECTATIONS
-from senselab.audio.workflows.triage.nodes.common import consensus_words, word_hull, write_measurement
+from senselab.audio.workflows.triage.nodes.common import (
+    consensus_words,
+    recording_duration,
+    word_hull,
+    write_measurement,
+)
 from senselab.audio.workflows.triage.residue import is_function_word, is_non_lexical, token_key
 from senselab.audio.workflows.triage.task_content import task_content_ids, task_content_parameters, task_events
 from senselab.utils.prov_store import Entity, ProvStore
@@ -295,8 +300,8 @@ def item_utterances(words: Sequence[Entity]) -> list[list[Entity]]:
     return items or groups
 
 
-def _hull(words: Sequence[Entity]) -> tuple[float, float] | None:
-    spans = [word_hull(w) for w in words if timed(w)]
+def _hull(words: Sequence[Entity], duration_s: float | None) -> tuple[float, float] | None:
+    spans = [word_hull(w, duration_s) for w in words if timed(w)]
     return (min(a for a, _ in spans), max(b for _, b in spans)) if spans else None
 
 
@@ -337,6 +342,7 @@ def task_speech_of(
     if not reads_task_speech(family):
         return TaskSpeech()
     words = consensus_words(store)
+    duration_s = recording_duration(store)
     vocal = non_lexical_family(family)
     lexical = [
         word
@@ -362,8 +368,10 @@ def task_speech_of(
             word.id for group, phrase in zip(groups, phrases) if phrase for word in group if word.id in member_ids
         }
         phrase_words_n = sum(len(group) for group, phrase in zip(groups, phrases) if phrase)
-        item_extent = _hull(items)
-        said = tuple((*(_hull(group) or (None, None)), len(group), phrase) for group, phrase in zip(groups, phrases))
+        item_extent = _hull(items, duration_s)
+        said = tuple(
+            (*(_hull(group, duration_s) or (None, None)), len(group), phrase) for group, phrase in zip(groups, phrases)
+        )
     speech = [word for word in lexical if word.id not in text_ids and word.id not in content]
     runs_of_speech = _speech_runs(words, speech, {word.id for word in lexical})
     return TaskSpeech(
@@ -373,7 +381,8 @@ def task_speech_of(
         word_ids=tuple(word.id for word in speech),
         untimed_ids=tuple(word.id for word in speech if not timed(word)),
         runs=tuple(
-            (min(word_hull(w)[0] for w in run), max(word_hull(w)[1] for w in run), len(run)) for run in runs_of_speech
+            (min(word_hull(w, duration_s)[0] for w in run), max(word_hull(w, duration_s)[1] for w in run), len(run))
+            for run in runs_of_speech
         ),
         item_extent=item_extent,
         utterances=said,

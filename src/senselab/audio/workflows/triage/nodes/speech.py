@@ -93,6 +93,7 @@ from senselab.audio.workflows.triage.nodes.branches import (
 from senselab.audio.workflows.triage.nodes.common import (
     BranchResult,
     bound_reading,
+    bound_word,
     cache_attributes,
     clamp_extent,
     consensus_words,
@@ -610,18 +611,19 @@ def _scan_tokens(words: list[Entity], positions: list[int], haystack: str) -> tu
     return kept, tokens
 
 
-def _timings_hull(words: list[Entity], covered: list[int]) -> tuple[float, float]:
+def _timings_hull(words: list[Entity], covered: list[int], duration_s: float) -> tuple[float, float]:
     """The hull of the covered words' placements: every recognizer's located span of them.
 
     Args:
         words: The consensus words, in stream order.
         covered: The positions a finding covers.
+        duration_s: The duration the audio decoded to; a point span's window is kept inside it.
 
     Returns:
         ``(min start, max end)`` over :func:`~senselab.audio.workflows.triage.nodes.common.word_hull` of every
         covered word.
     """
-    spans = [word_hull(words[index]) for index in covered]
+    spans = [word_hull(words[index], duration_s) for index in covered]
     return min(span[0] for span in spans), max(span[1] for span in spans)
 
 
@@ -1719,7 +1721,8 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
     if consensus is None:
         raise LookupError("no consensus_transcript in the store; PREPROCESS has not run")
     words = [store.get_entity(word_id) for word_id in consensus.attributes["word_ids"]]
-    words = [word for word in words if not store.is_invalidated(word.id)]
+    duration_s = plain.waveform.shape[-1] / sampling_rate
+    words = [bound_word(word, duration_s) for word in words if not store.is_invalidated(word.id)]
     lexical_index = [
         position
         for position, word in enumerate(words)
@@ -2457,7 +2460,7 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
                 if (category, covered) in recorded:
                     continue
                 recorded.add((category, covered))
-                extent = _timings_hull(words, list(covered))
+                extent = _timings_hull(words, list(covered), duration_s)
                 sources = sorted({str(name) for index in covered for name in words[index].attributes["sources"]})
                 speakers = {word_speakers[index] for index in covered}
                 resolved = len(speakers) == 1 and None not in speakers
