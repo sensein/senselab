@@ -3,7 +3,7 @@
 import inspect
 import random
 from dataclasses import fields, replace
-from typing import Any, Sequence
+from typing import Any, Sequence, cast
 
 import pytest
 
@@ -434,7 +434,7 @@ class TestRenderingAndProvenance:
         assert [f.name for f in fields(Consensus)] == ["words", "provenance"]
         names = {f.name for f in fields(ConsensusWord)}
         assert not any("slot" in name or "span" in name for name in names)
-        assert set(inspect.signature(align_sources).parameters) == {"sources", "onomatopoeic"}
+        assert set(inspect.signature(align_sources).parameters) == {"sources", "onomatopoeic", "duration_s"}
 
 
 class TestBracketingDoesNotMoveTheAlignment:
@@ -599,6 +599,29 @@ class TestUntimedSpans:
         assert located_span(0.05, 0.05) == pytest.approx((0.0, 0.05 + self.WIDTH / 2))
         assert located_span(1.0, 1.5) == (1.0, 1.5)
         assert located_span(0.0, 0.0) is None
+
+    def test_a_point_span_near_the_end_is_shifted_inside_the_duration(self) -> None:
+        """A point 0.01 s before the end keeps its full width, moved back off the end rather than cut."""
+        start, end = cast(tuple[float, float], located_span(4.99, 4.99, duration_s=5.0))
+        assert end == pytest.approx(5.0) and end <= 5.0
+        assert end - start == pytest.approx(self.WIDTH)
+
+    def test_a_point_span_near_the_start_is_shifted_inside_the_duration(self) -> None:
+        """With the duration known the window is shifted off zero, not floored there."""
+        assert located_span(0.05, 0.05, duration_s=5.0) == pytest.approx((0.0, self.WIDTH))
+
+    def test_a_recording_shorter_than_the_window_bounds_it_on_both_sides(self) -> None:
+        """Only where the duration cannot hold the window is it narrowed, to the whole recording."""
+        assert located_span(0.1, 0.1, duration_s=0.2) == pytest.approx((0.0, 0.2))
+
+    def test_the_consensus_extent_of_a_point_at_the_end_stays_inside_the_duration(self) -> None:
+        """The stored extent is what SPEECH slices; it must not reach past the audio."""
+        a = _timed("a", [("one", 1.0, 1.4), ("two", 4.99, 4.99)])
+        b = _timed("b", [("one", 1.0, 1.4), ("two", 4.99, 4.99)])
+        two = align_sources([a, b], onomatopoeic=set(), duration_s=5.0).words[1]
+        assert two.extent[1] <= 5.0
+        assert two.extent == pytest.approx((5.0 - self.WIDTH, 5.0))
+        assert two.timings == {"a": (4.99, 4.99), "b": (4.99, 4.99)}
 
     def test_a_point_span_places_its_word(self) -> None:
         """A word whose every reading is a point gets a positive extent around it."""
