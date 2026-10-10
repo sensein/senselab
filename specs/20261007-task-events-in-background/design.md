@@ -1341,10 +1341,18 @@ measured, and moving nothing. Only the checks that need a cohort are affected.
   length), pooled recording-equal (spherical mean of a recording's spans, then of the recordings).
   With three or more recordings, one whose centroid is under the cut against the others' is left
   out. The vector is written once per session to `<out>/enrollments/<session>.npy` (mode 600).
-- **Runs.** In every recording of every family: each diarized speaker's exclusive pieces on the
-  enhanced stream, and the lexical (non-bracketed) consensus words merged across gaps up to
-  `branch.run_gap_max_s`; each run of at least 1.0 s is embedded alone, on the plain stream (the same
-  clock), and compared with the enrollment. A run under the cut is a non-match.
+- **Runs: speech only (owner, 2026-10-10).** The embedding is fitted on speech, so only speech is
+  compared, in every recording of every family:
+  - *diarized*: each diarized speaker's exclusive pieces on the enhanced stream, cut to the time that
+    carries speech (the lexical words, or YAMNet windows with a speech-label score of at least 0.5 on
+    the plain or enhanced stream, labels as `data/background_speech.yaml`), less the task events
+    (breaths, coughs, phonation holds, syllables, as QUALITY reads them);
+  - *lexical*: the lexical consensus words merged across gaps up to `branch.run_gap_max_s`;
+  - *window*: 1.0 s windows on a 0.5 s hop, the last anchored to the region's end, over speech the
+    enhancer removed (speech-classified on the plain stream and not on the enhanced one) that no
+    compared run or task event covers. A window under a quarter active (BACKGROUND's activity
+    regions) is not read; two or more contiguous windows under the cut are one non-matching run.
+  Each run of at least 1.0 s is embedded alone, on the plain stream as the enrollment is.
 - **To the fold.** Any non-match is the ground `other_speaker_in_session`, reason `other_speaker`,
   with items `cohort.other_speaker_runs` (count, `<= 0`) and `cohort.lowest_run_cosine` (`>=` the
   cut). On a non-lexical task the merged non-matching spans are also non-task speech for redaction:
@@ -1427,252 +1435,41 @@ skipped unless `--force`. `--readings-out DIR` writes `<DIR>/<session>.jsonl` an
   enrollment read 0.065, 0.165, 0.073 and -0.058 for the windows starting at 0.0-1.5 s, and 0.51-0.69
   from 2.0 s on. The gap is in which audio is compared, not in the embedding or the cut.
 
-**Proposed remedy (not built).** Add a third run source: sliding windows at the 1.0 s floor on a 0.5 s
-hop over the enhanced stream, inside BACKGROUND's activity regions and outside the diarized and
-lexical runs, with a contiguous stretch of at least 1.0 s under the cut becoming one non-matching run.
-It needs a guard against the twelve phonation and breath cases above (the same activity regions hold
-the task's own sounds on voice and airway tasks), so the window source should be measured on owner
-labels before it raises a ground.
+### Speech only, and the window source (re-run over the same nine sessions)
 
-## QUALITY's other-voice reading reads the whole file (2026-10-10)
+The windows read *removed* speech because the enhancer suppresses a background talker: on 168c5e68's
+opening, YAMNet reads Speech 1.0, 0.96 and 0.69 on the plain stream and 0.04, 0.00 and 0.04 on the
+enhanced one. The window settings were read off the nine sessions (jobs 25488000, 25488579,
+25489293, 25489695), with one labelled positive, so they are a first setting and not a fit:
 
-`background_speech.py` read only the task hull ±1 s, passed ASR consensus words to it as the
-participant's own events, kept a residual YAMNet window only where the enhanced stream stood 6 dB over
-the residual (`keep_db`), and floored the residual at the 10th percentile of its ~1 s window levels.
-Each of these hid another voice:
+| window rule (with speech-only runs) | recordings flagged / 321 | 168c5e68 opening | 541e6b30 breath-1 |
+| --- | ---: | :---: | :---: |
+| no windows | 19 | no | yes |
+| all speech-classified time, any activity, 1 window | 81 | yes | yes |
+| all speech-classified time, active >= 0.25, 2 windows | 40 | yes | yes |
+| removed speech, active >= 0.25, 2 windows, tail anchored (shipped) | 30 | yes | yes |
 
-- **The hull.** A task span placed on the wrong stretch puts the other talker outside the hull, where
-  nothing read it.
-- **Words as own events.** A second talker's words reach the consensus too, so the reading set their
-  harmonic frames aside as the participant's own.
-- **`keep_db`.** It assumes the enhancer kept a foreground. On a breath task the enhanced stream is
-  near silent, so enhanced minus residual is strongly negative and every residual window was rejected
-  whatever it held.
-- **Window-level floor.** Continuous talk over the file sets every 1 s window level, so the 10th
-  percentile of them is the talk itself and nothing rises over it.
+Windows over all speech-classified time between the participant's own runs fall under the cut 70% of
+the time (354 of 504), whatever their activity, so that source is not specific; restricting it to
+removed speech is what makes it usable.
 
-### What changed
+| | before (first pass) | after |
+| --- | ---: | ---: |
+| recordings with a non-matching run, first eight sessions (284) | 28 | 25 |
+| the same, all nine sessions (321) | 32 | 30 |
+| non-matching runs by source, nine sessions | | lexical 49, window 33, diarized 9 |
 
-- `measure_background_speech` and `background_speech_of` take no extent; every residual window and
-  every harmonic run over the file is read. `pad_s` is gone.
-- `measure_join` passes only the task events (`task_events_of`: breath, cough or syllable events, or
-  phonation holds) as the participant's own events, never ASR words, and reads the residual whether or
-  not any task span stands.
-- `keep_db` is replaced by an **own-share** test. A window is the participant's own sound where the
-  share of its residual energy inside their task events, each padded by `event_pad_s`, is at least
-  `own_share_max`. The window record's fifth field is now that share (it was enhanced over residual).
-  The test reads energy share, not time overlap, because a 1 s window that touches a loud event for
-  0.2 s is that event's sound. It needs no kept foreground: an enhancer that removed the
-  participant's breath whole leaves that breath inside its event, and a talker elsewhere stands outside
-  every event whatever the enhanced stream did. The leakage test (residual-enhanced envelope
-  correlation under `leakage_corr_min`) stays as it was; it catches a participant's sound that is
-  louder than its detected event or falls outside it, so long as the enhancer kept some of it.
-- **Floor.** The residual's floor is now the `floor_percentile` of short-frame levels (`floor_frame_s`)
-  over the whole file, digital-silence frames excluded. Pauses between syllables then reach the
-  floor even where talk is continuous.
-- **Join rule unchanged.** QUALITY splits the spans by time against the task spans
-  (`quality_join.split_by_task`). One that overlaps or abuts a task span is in the task and reviews;
-  any other is an annotation. With no task span, everything is outside.
-- **Versions.** `data/background_speech.yaml` gains `version: 2`. `data/quality_join.yaml` goes to
-  version 2. QUALITY's join activity records both (`version`, `background_speech_version`).
+- **Cleared** (12): glides 5, maximum-phonation-time 3, prolonged-vowel 2, fivebreaths 2: the diarized
+  phonation and breathing.
+- **New** (10): Harvard sentences 4, productive-vocabulary 2, free-speech-v2 2, random-item-generation 1
+  (168c5e68), v2-breath 1, all from the window source.
+- **168c5e68 random-item-generation:** caught, one window run 0.5-1.92 s (windows 0.155 and 0.028;
+  the 0.0 s window is 0.2 active and not read).
+- **541e6b30 breath-1:** caught as before, all six runs under the cut.
+- **168c5e68 word-color-stroop:** the five diarized runs match (0.47-0.70), while eleven lexical runs
+  (-0.08 to 0.16) and three window runs over removed speech (0.06-0.10) do not. The words fall where
+  the enhancer removed speech, so the ASR may be transcribing a second voice. It needs a listen.
+- Time per session is unchanged: 31-137 s for 21-47 recordings on 4 CPUs.
 
-### Parameters
-
-| key | value | status |
-|---|---|---|
-| `own_share_max` | 0.5 | UNFITTED: a window whose residual energy lies mostly inside the participant's own events is theirs |
-| `floor_frame_s` | 0.05 s | UNFITTED: shorter than a syllable, so pauses in talk give frames at the floor |
-| `floor_percentile` | 5 | UNFITTED: was 10 over window levels |
-| `residual_rise_db` | 15 dB | value kept; UNFITTED, since the floor it is measured from is now lower |
-| `event_pad_s` | 0.3 s | kept; it now pads the own-share test as well as the harmonic runs |
-
-Open: the harmonic-run test still requires plain over enhanced inside `thinned_db` (1-10 dB). That
-assumes a kept foreground in the same way `keep_db` did, so a faint harmonic voice on a near-silent
-breath task is still missed by that reading. Only the YAMNet-window reading is free of it.
-
-## Review page: transcripts for every family (2026-10-10)
-
-The review page carried a transcript only for SPEECH families. `records.review_record` set `speech`
-only where the branch was `SPEECH`, and `scripts/triage_review_page.py`'s `speech_view` asked the
-free-speech reader for SPEECH families only. An airway or voice recording whose store held consensus
-words (someone speaking during a breath task, say) showed the reviewer no transcript, no per-model
-readings and no PII marks.
-
-### What changed
-
-- `records.review_record` asks the transcript reader about every recording with a declared family.
-  The reader decides whether there is a transcript.
-- `speech_view` reads with `recording_record(run_root, None)`. It returns a view where the store holds
-  consensus words (shown as the consensus) or, failing those, one model's own transcript (shown with
-  that model named). Where neither exists it returns None, so the record carries no transcript. A
-  SPEECH recording with no word anywhere used to carry an empty "no ASR model left a word" view; it
-  now carries none.
-- `scripts/free_speech_review_page.py`'s `recording_record` takes `families=None` to mean every
-  declared family. The free-speech page itself still passes its free-response families.
-- `review.js` and `page.py` keyed nothing on the branch. The transcript section, the redacted-stream
-  track and the search text already followed `rec.speech`, so a non-SPEECH recording with a transcript
-  gets all three. Only docstrings and comments changed there.
-- The triage review extract goes to `EXTRACT_VERSION = 3`, because records of non-SPEECH families can
-  now carry `speech`.
-
-There are no new parameters.
-
-## Speech outside the task, the task's own extent, and what ships (owner, 2026-10-10)
-
-**What the owner heard.** Three r18c airway recordings passed with a background talker or a background
-conversation. A trace at 319fc659 found no path from what the graph read to a review:
-- AIRWAY wrote one `off_task_extent` deviation per lexical word (`reading: lexical_intrusion`), but the fold
-  raises a deviation only under `verdict.deviation_flags`, false for every type; the breath speech veto
-  (five words inside the extent) had been retired with nothing in its place.
-- QUALITY's other-voice reading read only the task hull, passed the ASR words as the participant's own
-  events, kept a window only where the enhancer kept a foreground (false on a breath task) and floored the
-  residual at a window percentile continuous talk sets. (Section "QUALITY's other-voice reading reads the
-  whole file".)
-- The extent took the largest cluster: on a 130 s file it took a run of conversation-pause sounds at
-  101-122 s over the instructed breaths at 0.85-11.9 s, and `decide()` read every found event, so one event
-  outside the extent passed a recording whose in-extent best stood 14.3 dB over its local background,
-  under the 16 dB bound.
-- `task_content` absorbed any word whose hull lay half on an event, whatever it spelled; REDACT's
-  content-word trim cut a talker's four masks to one; the release axis never reached triage.
-
-### Decided on the extent's own events (`task_events.py`, `data/task_events.yaml` v2)
-
-- `decide()` and `decision_inputs()` read the task cluster's events only. Standing events outside it are
-  reported (`evidence.outside.standing_n`, the items `breath_events_outside_extent`,
-  `cough_events_outside_extent`) and decide nothing. `snr_high_db` (16 dB) was fitted when every found
-  event decided; it is marked to be refitted.
-- The task cluster (`task_cluster`), and the breath train's run where no background view stands, is chosen
-  among the clusters none of whose events touches speech -- runs of at least `extent.speech_words_min` (2)
-  lexical words within `speech_gap_s`, and plain-stream YAMNet windows whose speech-label score reaches
-  `speech_score_min` (0.5) -- or among all where every cluster touches speech. Each is scored
-  `count_weight` x agreement with the instructed count (`1 - |n - N| / N`, N = the instructed count x
-  `events_per_instructed`, two phases a breath) or, uncounted, its size over the largest, plus
-  `position_weight` x `1 - start / duration`. Both weights (1.0, 0.5) are owner direction, unfitted. One
-  word is not speech here because a single word lying alone on an event may be the task misread (below).
-- The cough extent is the task cluster's coughs, padded and kept off speech words as before.
-
-### Task content is a misreading only (`task_content.py`, `data/task_content.yaml` v3)
-
-Owner, 2026-10-10: the exemption is for a recogniser's misreading of the task's own sound, never for
-agreed speech.
-- A run of `agreed_run_min` (2) adjacent lexical words that the recognisers agree on, none spelled as a
-  sound and none a lexicon word, is never task content, in any family.
-- In a syllable-repetition family (`any_word_families`) any other word on the events is task content, as
-  before.
-- In an airway or voice family a word is task content only where the recognisers disagree on it (outcome
-  not `agreement`, or readings normalising to different tokens), it is spelled as a sound (no vowel, or
-  one letter three times running), or it is a lexicon word -- and it lies alone on one event: each word is
-  homed on the widened event holding most of its hull, and an event homing two words homes no task
-  content.
-
-### Speech outside the task (`task_speech.py`, `data/task_speech.yaml` v2)
-
-The owning branch stores `task_speech_reading`: the lexical consensus words (not bracketed, not
-`is_non_lexical`; a vocal task reads vocalisations as non-lexical) outside the task's own content, over the
-whole file, with their runs (times and counts only) and the words with no usable timing (a zero-length hull).
-- **Non-lexical families** (airway, voice; AIRWAY and VOICE write it in align mode). Own content is a voice
-  family's declared text (`task_texts`: the instructions and expected speech, plus the expectation's
-  tokens, matched by stem or as a number word, so the prolonged vowel's count-in stays exempt) and the
-  misreadings above. Owner k = 1: `words_min` 1 word is `speech_in_task`.
-- **Item-set families** (`task_content.yaml` `open_vocabulary_families`: animal fluency, random item
-  generation v1 and v2; SPEECH writes it). Owner, 2026-10-10: these tasks elicit names, places and numbers
-  by design, so the words of the item runs are task content whatever they spell. Item runs are the runs of
-  lexical words split at pauses of `item_gap_s` (3.0 s), whose declared-category members reach
-  `member_share_min` (0.5) of the run; with no member anywhere every run is the task. SPEECH's item-list
-  task extent is now the item runs' hull, so a speaker before the list is outside it. The words outside are
-  speech outside the task: `item_words_min` (3) of them review and are masked; an off-task share of every
-  lexical word at or over `extensive_fraction` (0.5) withholds. All three are unfitted.
-- Story recall and productive vocabulary have no item extent and are not read.
-
-The fold raises `speech_in_task` (reason `off_task_speech`), or `other_speaker_in_task` (reason
-`other_speaker`) where a run overlaps one of COHORT's non-matching spans; the evidence item `speech_in_task`
-carries the count against its bound.
-
-### Masks over the speech (`mask_plan`)
-
-A mask source `non_task_speech` (category `NON_TASK_SPEECH`) covers each run of the reading's timed words,
-padded by `redaction.padding_ms` up to the nearest unmasked word, together with COHORT's non-matching spans
-of a non-lexical task and the reviewer's off-task and other-speaker quotes. Its words are kept masked
-whatever the content-word trim says. The release is `redacted` on `non_task_speech_masked`; a word with no
-usable timing withholds on `non_task_speech_untimed`; an extensive off-task share, or the reviewer reading
-off-task speech as `extensive`, withholds on `non_task_speech_extensive`. The copy is assembled by
-`settle_release` from the ledger's final masks; where REDACT never ran (SPEECH declined a non-lexical task,
-so there is no scan for REDACT to read) the recording stream is masked with them, as for policy masks.
-
-### Verify what ships; never re-detect (owner, 2026-10-10)
-
-REDACT re-ran the detectors over its own redacted text and failed on any category they read on a word no
-finding had marked; the fold then withheld on `redact_verify_found`. In r18c 98 recordings were withheld
-this way, 47 of them otherwise passing; in 90 the survivor was on an unmarked word, 25 involved stimulus,
-instruction or kinship words, and 36 would have had no final mask. The re-scan applied none of the fold's
-exemptions and the final plan was never verified.
-
-The order is now: detect once on the original with every detector (SPEECH); REDACT plans masks from those
-findings so REVIEW reads a redacted text; REVIEW reads every finding; the one mask plan (`fold_mask_plan`:
-policy, task text and instructions, stimulus, family lexicon, task events, item runs, reviewer) gives the
-final masks; SECOND_OPINION reads the text as it would ship (`shipped_texts`); VERDICT verifies only what
-ships (`mask_coverage`): each kept word has usable timing, the released text shows none of them, and each
-final mask's audio is silent (fill `silence`) or replaced (fill `bleep`). A failure withholds on
-`mask_coverage_failed` (was `redact_verify_found`). REDACT checks its own plan the same way and runs no
-detector on redacted text. Removed outright: the re-plan loop, the survivor attribution, the reviewer's
-clearing of a re-scan fail (`reviewer_cleared_rescan`, `reviewer_cleared_unmasked`) and
-`verdict.llm_rescan_clears`.
-
-Missed PII is a detection-recall problem, addressed in the first pass -- for example by routing
-low-confidence detector hits to the reviewer -- never by a post-redaction hard fail.
-
-### The release reaches triage
-
-- Owner, 2026-10-10: until mask placement is validated, every release but `as_is` reviews
-  (`data/decision_reasons.yaml` `reviewed_releases: [redacted, withheld]`, ground `release_reviewed`). The
-  setting can be narrowed to `[withheld]` without a code change.
-- A non-lexical recording whose release is redacted or withheld also carries `release_in_nonlexical_task`.
-- A confident second-opinion "not free of identifiers" on the shipped text flags
-  `second_opinion:masked_text_free_of_identifiers` and, under `second_opinion_not_free_withholds` (owner,
-  2026-10-10), withholds on `second_opinion_not_free` pending a person.
-
-### The reviewer and the second opinion reason about the task
-
-REVIEW prompt 12 gives the task name, family, instructions, stimulus, `speech_type` and the family's nature
-(`task_guidance.yaml` `natures`: open response, item generation, read or recall, non-lexical) and asks
-whether a word is task content or a disclosure, whether the participant talked off the task, and who else
-spoke; it answers `off_task_speech` (none/some/extensive) with quotes, `other_speaker`
-(none/assistant/background/unclear) with quotes, and `task_content_quotes`. `review_inputs` v3 needs the
-instructions. SECOND_OPINION question set 4 runs after REVIEW over the final plan, reads the original and
-the masked text, and adds `masked_text_free_of_identifiers` and `off_task_speech`; the policy wording has
-one source (`redaction_policy_text`). The fold reviews on the reviewer's `off_task_speech` (some or
-extensive) and `other_speaker` (assistant, background, unclear), masks their quotes, releases its
-task-content quotes, and flags each disagreeing second-opinion question under its own subject. Both need a
-re-run; the prepared arrays and the cost estimate are in `specs/20261010-task-reasoning-rerun/`.
-
-### Reasons consolidated (`data/decision_reasons.yaml` v5)
-
-| reason | from |
-|---|---|
-| `unreadable` | `unmeasurable` (renamed) |
-| `task_too_short`, `no_task_captured` | unchanged |
-| `task_not_found` | `declared_task_absent`, `syllable_train_not_target`, `task_mismatch`, `route_mismatch`, `hint_mismatch` |
-| `not_measured` | operational grounds and an unassessed release only; it agrees with `run_status` incomplete both ways (node flags are operational) |
-| `fault_in_task` | unchanged |
-| `interference_in_task` | non-speech sources only |
-| `other_speaker` | any voice not the participant's: `interference_in_task:other_voice`, reviewer and diarization second speakers, `other_speaker_in_session`, `other_speaker_in_task`, instructions spoken by another, second-opinion `other_voice` |
-| `off_task_speech` | the participant's: `speech_in_task`, `participant_voice_in_task` (another voice COHORT matched to the enrollment), the reviewer's off-task reading, instructions spoken by the participant, second-opinion `off_task_speech` |
-| `weak_events` | the review bands and `streams_disagree` |
-| `task_not_conforming` | deviations, gates, conformance, `speech_no_lexical_item`, `ddk_review_identity` |
-| `atypical_recording` | COHORT |
-| `identifying_content` | every release but `as_is`, reviewer residue, name review, unplaced findings, second-opinion identifier questions |
-
-`redaction_hold`, `redaction_unvalidated`, `second_opinion_disagrees` and `streams_disagree` are gone; the
-release ground is its own column, `release_reason` (`triage_decisions` schema 2, `triage.tsv` v2, the review
-page). Annotation-only keys (`speech_outside_task`, `fault_outside_task`, `interference_outside_task`) are
-listed under `annotations` and map to no reason.
-
-### The graph
-
-```
-... QUALITY → COHORT → REDACT (plan, coverage) → REVIEW → final mask plan → SECOND_OPINION → VERDICT (coverage of the final plan)
-```
-
-`GRAPH_ORDER` declares SECOND_OPINION between REVIEW and VERDICT; a single-file run records it skipped and
-`scripts/extend_second_opinion.py` drives it over finished stores (`extend_llm_review` → `extend_second_opinion`
-→ `extend_refold`).
+Every non-match of the nine sessions (stem, start, end) is in
+`/orcd/scratch/bcs/002/satra/cohort_20261010/out_v5/cohort_nonmatch_listen.tsv` for spot-checking.
