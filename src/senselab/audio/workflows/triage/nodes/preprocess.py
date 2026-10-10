@@ -70,7 +70,7 @@ from senselab.audio.tasks.health_acoustics.hear import (
     shutdown_hear_worker,
     span_hear_input,
 )
-from senselab.audio.tasks.phonation.api import derive_f0_range, f0_track, formant_track
+from senselab.audio.tasks.phonation.api import F0RangeUnavailable, derive_f0_range, f0_track, formant_track
 from senselab.audio.tasks.preprocessing.preprocessing import resample_audios
 from senselab.audio.tasks.spans.api import (
     NoContrast,
@@ -158,6 +158,10 @@ DIARIZATION_DERIVATIVE = "diarization"
 DIARIZATION_SAMPLE_RATE = 16000
 """The rate pyannote's model is fixed at; the backend refuses any other."""
 PHONATION_TRACKS_MEASUREMENT = "phonation_tracks"
+F0_RANGE_DERIVED = "derived"
+"""``f0_range_from`` where the recording's own F0 range was derived from its pitch."""
+F0_RANGE_SEARCH = "search"
+"""``f0_range_from`` where the wide search placed no pitch, so the tracks run over ``voice.f0_search_range_hz``."""
 WITHDRAW_VERB = "withdraw"
 """The assertion verb for a candidate the detector proposed and then took back."""
 WITHDRAWN_CLIPS = "clip_withdrawn"
@@ -1414,7 +1418,9 @@ def sharp_stream(store: ProvStore, run_dir: Path) -> tuple[str, Audio, str]:
 def phonation_tracks(store: ProvStore, config: TriageConfig, *, run_dir: Path) -> str:
     """F0 over the pre-emphasised stream and the first four formants over ``plain``, per frame.
 
-    Both streams are read back out of the store, not taken from a conditioning pass's own arrays.
+    Both streams are read back out of the store, not taken from a conditioning pass's own arrays. The
+    F0 range is the recording's own (:func:`derive_f0_range`), or the wide search range where the
+    search placed no pitch; ``f0_range_from`` names which.
 
     Args:
         store: The provenance store, read for the live ``plain`` and pre-emphasised streams.
@@ -1432,7 +1438,12 @@ def phonation_tracks(store: ProvStore, config: TriageConfig, *, run_dir: Path) -
     f0_range = f0_range_parameters(config)
     plain_id, plain = resolve_stream(store, run_dir, "plain")
     sharp_id, sharp, sharp_signal = sharp_stream(store, run_dir)
-    f0_min_hz, f0_max_hz = derive_f0_range(plain, **f0_range)
+    try:
+        f0_min_hz, f0_max_hz = derive_f0_range(plain, **f0_range)
+        f0_range_from = F0_RANGE_DERIVED
+    except F0RangeUnavailable:
+        f0_min_hz, f0_max_hz = f0_range["search_floor_hz"], f0_range["search_ceiling_hz"]
+        f0_range_from = F0_RANGE_SEARCH
     parameters: dict[str, Any] = {
         "hop_s": float(config.require("phonation_spans.hop_s")),
         "max_formants": int(config.require("phonation_spans.max_formants")),
@@ -1480,6 +1491,7 @@ def phonation_tracks(store: ProvStore, config: TriageConfig, *, run_dir: Path) -
             "hop_s": parameters["hop_s"],
             "f0_min_hz": f0_min_hz,
             "f0_max_hz": f0_max_hz,
+            "f0_range_from": f0_range_from,
             "f0_signal": sharp_signal,
             "formant_signal": "plain",
         },

@@ -13,7 +13,7 @@ from senselab.audio.data_structures.audio_hints import ExpectedSpeech
 from senselab.audio.tasks.classification.huggingface import AudioTooShortForAST
 from senselab.audio.tasks.classification.yamnet import YAMNET_WINDOW_SECONDS
 from senselab.audio.tasks.features_extraction.ppg import PHONEME_LABELS, PpgsPosteriorgramUnavailable
-from senselab.audio.tasks.phonation import F0RangeFailed
+from senselab.audio.tasks.phonation import F0RangeFailed, F0RangeUnavailable
 from senselab.audio.tasks.speech_enhancement.residual import compute_residual
 from senselab.audio.tasks.speech_to_text.crisperwhisper import CrisperWhisperDecoderPositionsExceeded
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
@@ -1100,7 +1100,7 @@ class TestPhonationTracks:
         assert not [e for e in live_entities(store, "span") if e.attributes.get("family") == "phonation"]
         assert not find_measurements(store, "formant_tracks")
 
-    def test_an_underivable_range_leaves_the_tracks_absent(
+    def test_an_underivable_range_is_tracked_over_the_search_range(
         self,
         store: ProvStore,
         config: TriageConfig,
@@ -1108,17 +1108,42 @@ class TestPhonationTracks:
         wav_writer: Callable[..., Path],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """A recording no range derives from leaves the pass absent, rather than guessing one."""
+        """No pitch to narrow on: the tracks still run, over the wide search, and say so."""
+        searched: list[tuple[float, float]] = []
 
         def _no_range(
             audio: Audio, *, search_floor_hz: float, search_ceiling_hz: float, **coefficients: float
         ) -> tuple[float, float]:
             assert set(coefficients) == set(PITCH_NARROWING_KEYS)
-            raise ValueError("no F0 range could be derived from this recording")
+            searched.append((search_floor_hz, search_ceiling_hz))
+            raise F0RangeUnavailable("no F0 range could be derived from this recording")
 
         _seed_admit(store, tmp_path, wav_writer, samples=_default_samples())
         _stub_models(monkeypatch)
         monkeypatch.setattr(preprocess_module, "derive_f0_range", _no_range)
+        result = preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
+        assert "phonation_tracks" not in result.absent
+        tracks = find_measurement(store, "phonation_tracks")
+        assert tracks is not None
+        assert tracks.attributes["f0_range_from"] == "search"
+        assert (tracks.attributes["f0_min_hz"], tracks.attributes["f0_max_hz"]) == searched[0]
+
+    def test_another_range_error_still_leaves_the_tracks_absent(
+        self,
+        store: ProvStore,
+        config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Only the typed no-pitch absence falls back; any other ValueError is still an absence."""
+
+        def _bad(audio: Audio, **parameters: float) -> tuple[float, float]:
+            raise ValueError("unmeasured key")
+
+        _seed_admit(store, tmp_path, wav_writer, samples=_default_samples())
+        _stub_models(monkeypatch)
+        monkeypatch.setattr(preprocess_module, "derive_f0_range", _bad)
         result = preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
         assert "phonation_tracks" in result.absent
         assert find_measurement(store, "phonation_tracks") is None
