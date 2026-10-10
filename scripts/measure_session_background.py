@@ -3,6 +3,7 @@ r"""Measure the session background against the session floor over a sample of fi
 
     uv run python scripts/measure_session_background.py MANIFEST --out-dir DIR \
         [--sessions 200] [--seed 0] [--slice-index I --slice-count N]
+    uv run python scripts/measure_session_background.py --summarise DIR
 
 ``MANIFEST`` is the JSONL every extend driver takes (``stem``, ``enhanced``). ``--sessions`` BIDS
 sessions are drawn with ``--seed`` and sharded by ``--slice-index`` / ``--slice-count``. For every
@@ -12,7 +13,7 @@ and syllable-repetition member of a session with a background, it reads the bran
 twice from the same code, against BACKGROUND's stored view and against that view with the session
 background as its floor. Nothing is written into any run: the stores are read into memory and dropped.
 One JSONL of per-recording rows per task goes under ``--out-dir``; transcript text is never written.
-``summarise`` folds the rows into distributions.
+``--summarise`` folds the rows into distributions.
 
 Install:
     uv sync --all-extras --group dev
@@ -75,9 +76,7 @@ def build_parser() -> argparse.ArgumentParser:
         description=__doc__.split("\n\n", maxsplit=1)[0] if __doc__ else None,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    sub = parser.add_subparsers(dest="command")
-    summary = sub.add_parser("summarise", help="Fold the per-recording rows into distributions")
-    summary.add_argument("out_dir", type=Path)
+    parser.add_argument("--summarise", type=Path, default=None, help="Fold the rows under this directory instead")
     parser.add_argument("manifest", type=Path, nargs="?", help="Manifest JSONL: one object per recording")
     parser.add_argument("--out-dir", type=Path, help="Where the rows go")
     parser.add_argument("--sessions", type=int, default=200, help="BIDS sessions drawn")
@@ -406,8 +405,8 @@ def main(argv: list[str] | None = None) -> int:
         0 on success, 2 on bad arguments.
     """
     args = build_parser().parse_args(argv)
-    if args.command == "summarise":
-        print(json.dumps(summarise(args.out_dir), indent=2, sort_keys=True))
+    if args.summarise is not None:
+        print(json.dumps(summarise(args.summarise), indent=2, sort_keys=True))
         return 0
     if args.manifest is None or args.out_dir is None or not args.manifest.exists():
         print("ERROR: a manifest that exists and --out-dir are required", file=sys.stderr)
