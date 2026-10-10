@@ -1,0 +1,17 @@
+# The session background read off the residual of the session's speech tasks (session_background.py),
+# and the foreground-over-background quality of every recording. Owner, 2026-10-10. The derivation of
+# every value is in specs/20261007-task-events-in-background/design.md ("Session background from
+# speech-task residuals"); values marked UNFITTED are to be fitted on the owner's labels.
+version: 1
+foreground:                       # the enhanced stream carries speech: either reading suffices
+  lexical_words_min: 1            # consensus lexical words (bracketed, degenerate, unconfirmed and non-lexical left out)
+  enhanced_speech_min: 0.5        # an enhanced-stream YAMNet window whose highest speech-label score reaches this (as background_speech.yaml speech_min)
+  speech_frames_min_s: 0.5        # UNFITTED: seconds of speech frames a foreground level is read over; fewer and there is no foreground
+level:
+  percentile: 50.0                # a stream's level over a set of frames: this percentile of its broadband frame level, dB
+  spread_percentiles: [10.0, 90.0]  # the residual's within-recording spread
+session:
+  statistic: median               # the session background per band and broadband, over its members
+  members_min: 1                  # UNFITTED: qualifying speech tasks a session background needs; fewer and the session floor stands
+decides: false                    # OFF (owner, 2026-10-10): BACKGROUND keeps the session floor until the owner has seen the measurements
+decides_kinds: [airway, voice, syllable_repetition]   # the declared kinds whose floor the session background replaces when decides is true

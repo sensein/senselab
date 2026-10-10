@@ -179,7 +179,9 @@ class Floor:
     Attributes:
         band_db: The floor per band, dB.
         source: ``quiet_frames`` (the recording's own), ``session`` (the task fills the file and its
-            BIDS session supplies the floor), ``residual`` (the task fills the file, no session),
+            BIDS session supplies the floor), ``speech_residual`` (the session background read off the
+            residual of its speech tasks, :mod:`~senselab.audio.workflows.triage.session_background`),
+            ``residual`` (the task fills the file, no session),
             ``lowest`` (too little quiet to re-read: the first-pass percentile), or ``digital``
             (nothing over digital silence).
         quiet_s: Seconds of quiet frames the own floor was last re-read over; 0 where it never was.
@@ -195,7 +197,12 @@ class Floor:
 
 
 def floor_of(
-    frames: BandFrames, residual: BandFrames | None, p: dict[str, Any], *, session_db: np.ndarray | None = None
+    frames: BandFrames,
+    residual: BandFrames | None,
+    p: dict[str, Any],
+    *,
+    session_db: np.ndarray | None = None,
+    background_db: np.ndarray | None = None,
 ) -> Floor:
     """The floor, read iteratively outside the active regions and checked against the session and the residual.
 
@@ -204,9 +211,10 @@ def floor_of(
         residual: The residual stream's, or None.
         p: The parameters.
         session_db: The session floor per band (:func:`session_floor_db`), or None where there is none.
+        background_db: The session background per band that replaces every other choice, or None.
 
     Returns:
-        The floor: the session's where the recording's own stands ``session.gap_db`` over it (median
+        The floor: ``background_db`` where given (source ``speech_residual``); else the session's where the recording's own stands ``session.gap_db`` over it (median
         over bands), else the residual's where the own stands ``floor.residual_gap_db`` over that,
         else the recording's own.
     """
@@ -234,6 +242,8 @@ def floor_of(
         r_live = residual.level_db >= p["digital_floor_dbfs"]
         if r_live.any():
             residual_db = np.percentile(residual.band_db[r_live], q["residual_percentile"], axis=0)
+    if background_db is not None:
+        return Floor(np.asarray(background_db, dtype=np.float64), "speech_residual", quiet_s, own, residual_db)
     if session_db is not None and float(np.median(own - session_db)) >= p["session"]["gap_db"]:
         return Floor(np.asarray(session_db, dtype=np.float64), "session", quiet_s, own, residual_db)
     if residual_db is not None and float(np.median(own - residual_db)) >= q["residual_gap_db"]:
@@ -569,6 +579,7 @@ def measure_background(
     clips: Sequence[Span],
     p: dict[str, Any] | None = None,
     session_db: np.ndarray | None = None,
+    background_db: np.ndarray | None = None,
 ) -> BackgroundReading:
     """Read the background, the activity and the acquisition faults of one recording.
 
@@ -579,6 +590,7 @@ def measure_background(
         clips: The clip spans PREPROCESS kept.
         p: The parameters; the packaged ones when None.
         session_db: The session floor per band, or None where the recording has no session floor.
+        background_db: The session background per band that is the floor outright, or None.
 
     Returns:
         The reading.
@@ -588,7 +600,7 @@ def measure_background(
     p = p or background_model_parameters()
     frames = band_frames(plain, p)
     residual_frames = band_frames(residual, p) if residual is not None else None
-    floor = floor_of(frames, residual_frames, p, session_db=session_db)
+    floor = floor_of(frames, residual_frames, p, session_db=session_db, background_db=background_db)
     impulses = impulses_of(plain, p)
     regions = regions_of(frames, floor.band_db, impulses, p)
     hop = p["hop_s"]
