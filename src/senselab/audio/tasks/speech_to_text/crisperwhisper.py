@@ -60,10 +60,16 @@ _CT2_MARKER = ".conversion_complete"
 _CT2_POSITION_LIMIT = "No position encodings are defined for positions >="
 
 LONGFORM_STRATEGY = "continuation"
-"""The long-form strategy every recording is decoded with first: 30 s windows, each prompted with the last."""
+"""The long-form strategy: 30 s windows, each prompted with the last words of the transcript so far."""
 
-CONTEXT_FREE_STRATEGY = "chunked_lcs"
-"""The long-form strategy a recording is decoded with again after a position overrun: no window is prompted."""
+CONTEXT_CAPPED = "continuation_context_capped"
+"""The ``decode_strategy`` of a recording decoded again after a position overrun, its context prompts capped."""
+
+DECODER_POSITIONS = 448
+"""Whisper's decoder position encodings, which a window's prompt and its generated tokens share."""
+
+MAX_NEW_TOKENS = 256
+"""The tokens a window may generate; the library's own default, passed explicitly."""
 
 
 class CrisperWhisperDecoderPositionsExceeded(ValueError):
@@ -142,7 +148,8 @@ try:
     compute_type = args.get("compute_type", "float32")
     language = args.get("language") or "en"
     strategy = args["longform_strategy"]
-    fallback = args.get("fallback_strategy")
+    max_new_tokens = int(args["max_new_tokens"])
+    prompt_budget = args.get("prompt_token_budget")
     position_limit = args["position_limit"]
 
     # The CT2 backend converts the HF snapshot into a shared cache directory whose
@@ -182,21 +189,44 @@ try:
                 return v
         return None
 
-    def _decode(path, longform_strategy):
+    def _decode(path):
         return model.transcribe(
-            path, language=language, word_timestamps=True, longform_strategy=longform_strategy
+            path,
+            language=language,
+            word_timestamps=True,
+            longform_strategy=strategy,
+            max_new_tokens=max_new_tokens,
         )
+
+    def _decode_capped(path):
+        from crisperwhisper.prompt import PromptBuilder
+
+        original = PromptBuilder._build
+
+        def _build(self, mode, hotwords=None, context=None):
+            ids = original(self, mode, hotwords=hotwords, context=context)
+            words = (context or "").split()
+            while words and len(ids) > prompt_budget:
+                words = words[1:]
+                ids = original(self, mode, hotwords=hotwords, context=" ".join(words) or None)
+            return ids
+
+        PromptBuilder._build = _build
+        try:
+            return _decode(path)
+        finally:
+            PromptBuilder._build = original
 
     results = []
     for path in audio_paths:
         used = strategy
         try:
-            r = _decode(path, strategy)
+            r = _decode(path)
         except Exception as overrun:
-            if not fallback or position_limit not in str(overrun):
+            if prompt_budget is None or position_limit not in str(overrun):
                 raise
-            used = fallback
-            r = _decode(path, fallback)
+            used = args["capped_strategy"]
+            r = _decode_capped(path)
         words = []
         for w in (getattr(r, "words", None) or []):
             conf = _first_attr(w, ("probability", "confidence", "score", "prob"))
@@ -256,11 +286,13 @@ class CrisperWhisperASR:
             One ``ScriptLine`` per input with verbatim ``text``, word-level
             ``chunks`` carrying timestamps + ``score`` (native word confidence
             when exposed), a line-level ``score``, and the ``decode_strategy``
-            used: :data:`LONGFORM_STRATEGY`, or :data:`CONTEXT_FREE_STRATEGY` for
-            an input whose first decode overran the decoder's positions.
+            used: :data:`LONGFORM_STRATEGY`, or :data:`CONTEXT_CAPPED` for an input
+            whose first decode overran the decoder's positions and was decoded
+            again with each window's context prompt cut, leading words first,
+            to :data:`DECODER_POSITIONS` less :data:`MAX_NEW_TOKENS`.
 
         Raises:
-            CrisperWhisperDecoderPositionsExceeded: The context-free decode also
+            CrisperWhisperDecoderPositionsExceeded: The capped decode also
                 overran Whisper's 448 position encodings.
         """
         if model is None:
@@ -304,7 +336,9 @@ class CrisperWhisperASR:
                     "compute_type": compute_type,
                     "language": language or "en",
                     "longform_strategy": LONGFORM_STRATEGY,
-                    "fallback_strategy": CONTEXT_FREE_STRATEGY,
+                    "max_new_tokens": MAX_NEW_TOKENS,
+                    "prompt_token_budget": DECODER_POSITIONS - MAX_NEW_TOKENS - 1,
+                    "capped_strategy": CONTEXT_CAPPED,
                     "position_limit": _CT2_POSITION_LIMIT,
                     "ct2_entry": str(ct2_entry),
                     "ct2_staging": str(cache_root / f".staging-{uuid.uuid4().hex}"),

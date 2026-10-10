@@ -110,8 +110,16 @@ def test_other_worker_failures_stay_hard(monkeypatch: pytest.MonkeyPatch) -> Non
     assert not isinstance(caught.value, ValueError)
 
 
+_FAKE_PROMPT = """
+class PromptBuilder:
+    def _build(self, mode, hotwords=None, context=None):
+        return list(range(4 + 10 * len((context or "").split())))
+"""
+
 _FAKE_LIBRARY = """
 import os
+
+from crisperwhisper.prompt import PromptBuilder
 
 
 class _Word:
@@ -128,13 +136,15 @@ class CrisperWhisperModel:
     def __init__(self, model_id, backend, device, compute_type):
         pass
 
-    def transcribe(self, path, language, word_timestamps, longform_strategy):
+    def transcribe(self, path, language, word_timestamps, longform_strategy, max_new_tokens):
         name = os.path.basename(path)
-        if name.startswith("overrun") and longform_strategy == "continuation":
-            raise RuntimeError("No position encodings are defined for positions >= 448, but got position 448")
         if name.startswith("broken"):
             raise RuntimeError("CUDA out of memory")
-        return _Result(longform_strategy)
+        context = "w " * 30 if name.startswith("overrun") else "w"
+        prompt = PromptBuilder()._build("verbatim", context=context)
+        if len(prompt) + max_new_tokens >= 448:
+            raise RuntimeError("No position encodings are defined for positions >= 448, but got position 448")
+        return _Result(str(len(prompt)))
 """
 
 
@@ -147,12 +157,15 @@ def _run_worker(tmp_path: Path, names: list[str]) -> dict:
     library = tmp_path / "lib" / "crisperwhisper"
     library.mkdir(parents=True)
     (library / "__init__.py").write_text(_FAKE_LIBRARY)
+    (library / "prompt.py").write_text(_FAKE_PROMPT)
     payload = {
         "audio_paths": [str(tmp_path / name) for name in names],
         "model_id": "/fake/snapshot",
         "backend": "transformers",
         "longform_strategy": cw.LONGFORM_STRATEGY,
-        "fallback_strategy": cw.CONTEXT_FREE_STRATEGY,
+        "max_new_tokens": cw.MAX_NEW_TOKENS,
+        "prompt_token_budget": cw.DECODER_POSITIONS - cw.MAX_NEW_TOKENS - 1,
+        "capped_strategy": cw.CONTEXT_CAPPED,
         "position_limit": cw._CT2_POSITION_LIMIT,
     }
     done = subprocess.run(
@@ -166,10 +179,17 @@ def _run_worker(tmp_path: Path, names: list[str]) -> dict:
     return json.loads(done.stdout.strip().splitlines()[-1])
 
 
-def test_a_position_overrun_is_decoded_again_without_a_context_prompt(tmp_path: Path) -> None:
-    """Only the overrunning input is redecoded context-free; every other input keeps continuation."""
-    out = _run_worker(tmp_path, ["fine.wav", "overrun.wav"])
-    assert [entry["decode_strategy"] for entry in out["results"]] == ["continuation", "chunked_lcs"]
+def test_a_position_overrun_is_decoded_again_with_its_context_capped(tmp_path: Path) -> None:
+    """Only the overrunning input is decoded again, its prompt cut within the budget; the patch is undone."""
+    out = _run_worker(tmp_path, ["overrun.wav", "fine.wav", "overrun_again.wav"])
+    assert [entry["decode_strategy"] for entry in out["results"]] == [
+        "continuation_context_capped",
+        "continuation",
+        "continuation_context_capped",
+    ]
+    capped = int(out["results"][0]["text"])
+    assert capped + cw.MAX_NEW_TOKENS < cw.DECODER_POSITIONS
+    assert out["results"][1]["text"] == "14", "an input under the budget keeps its whole context"
 
 
 def test_any_other_worker_error_is_not_redecoded(tmp_path: Path) -> None:
@@ -184,11 +204,11 @@ def test_the_strategy_used_reaches_the_scriptline(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setattr(
         cw,
         "parse_subprocess_result",
-        lambda *a, **k: {"results": [{"text": "a", "words": [], "decode_strategy": "chunked_lcs"}]},
+        lambda *a, **k: {"results": [{"text": "a", "words": [], "decode_strategy": "continuation_context_capped"}]},
     )
     audio = Audio(waveform=torch.zeros(1, 16000, dtype=torch.float32), sampling_rate=16000)
     [line] = cw.CrisperWhisperASR.transcribe_with_crisperwhisper([audio], model=None)
-    assert line.decode_strategy == "chunked_lcs"
+    assert line.decode_strategy == "continuation_context_capped"
 
 
 def test_ct2_cache_key_matches_the_library_layout() -> None:
