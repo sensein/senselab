@@ -69,6 +69,13 @@ three and falls back to two; the corpus template takes `SERVERS` and sets 0.90 /
   at once per server, one server per array task; the array spreads the rows over GPUs).
 - `smoke.sbatch` and `smoke_report.py` -- the GPU smoke test.
 
-## Smoke test
+## Smoke test (job 25496477, node2803, driver 590.48.01, commit bd947c9c)
 
-Pending: job, results and throughput are recorded here when it finishes.
+- Three servers at 0.30 do not fit: every server refused to start with "10.32 GiB KV cache is needed, which
+  is larger than the available KV cache memory (0.18 GiB)" (estimated maximum model length 192); all 11 rows
+  were absent readings, 411 s wall including the venv build.
+- Two servers at 0.45 fit: "GPU KV cache size: 14,345 tokens, Maximum concurrency for 12,288 tokens per
+  request: 1.17x". The corpus template's `SERVERS` default is 2.
+- Readings, reproducibility across the two copies, the second opinion and the fold: pending at the time of
+  writing (`$W/report-25496477.json`, `$W/logs/vllm-smoke-25496477.out`, W =
+  `/orcd/scratch/bcs/002/satra/vllm_smoke_20261010`).
