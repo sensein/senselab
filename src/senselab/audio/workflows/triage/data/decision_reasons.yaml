@@ -2,7 +2,7 @@
 # `reason` is the first of a recording's reasons in `precedence`; `reasons` is all of them, in that order.
 # Owner, 2026-10-07: verdict pass/review/discard, release as_is/redacted/withheld, one reason per recording.
 # Derivation: specs/20261007-task-events-in-background/design.md ("Decision table").
-version: 3
+version: 4
 precedence:            # discard reasons first, then review, then the release axis
 - unmeasurable
 - task_too_short
