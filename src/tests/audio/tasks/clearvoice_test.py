@@ -8,8 +8,6 @@ covered by ``src/tests/utils/clearvoice_test.py``'s payload assertions instead, 
 
 from __future__ import annotations
 
-import json
-import types
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
@@ -57,10 +55,10 @@ def worker(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Dict[str, Any]:
     )
     monkeypatch.setattr(cv, "stage_s3fd_weights", lambda: tmp_path / "sfd_face.pth")
 
-    def fake_run(cmd: list, **kwargs: object) -> types.SimpleNamespace:
-        payload = json.loads(str(kwargs["input"]))
+    def fake_serve(identity: tuple, **kwargs: Any) -> Dict[str, Any]:
+        payload = {**kwargs["init"], **kwargs["request"]}
         captured["payload"] = payload
-        captured["timeout"] = kwargs["timeout"]
+        captured["timeout"] = kwargs["request_timeout_s"]
         captured["in_subtypes"] = [soundfile.info(p).subtype for p in payload["in_paths"]]
         captured["in_rates"] = [soundfile.info(p).samplerate for p in payload["in_paths"]]
         captured["in_peaks"] = [float(np.abs(soundfile.read(p, dtype="float32")[0]).max()) for p in payload["in_paths"]]
@@ -74,14 +72,13 @@ def worker(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Dict[str, Any]:
                 write_audio(out_path, samples, rate)
                 paths.append(out_path)
             written.append(paths)
-        body = {
+        return {
             "output_paths": written,
             "input_norm_scalars": [2.5 for _ in payload["in_paths"]],
             "device": payload["device"] or "cpu",
         }
-        return types.SimpleNamespace(returncode=0, stdout=json.dumps(body), stderr="")
 
-    monkeypatch.setattr(cv.subprocess, "run", fake_run)
+    monkeypatch.setattr(cv, "serve_in_venv", fake_serve)
     return captured
 
 
@@ -393,13 +390,13 @@ def test_no_audio_means_no_worker(
 def _counting(monkeypatch: pytest.MonkeyPatch) -> List[int]:
     """Count calls to the stubbed worker, keeping its behaviour."""
     calls: List[int] = []
-    inner: Callable[..., Any] = cv.subprocess.run
+    inner: Callable[..., Any] = cv.serve_in_venv
 
-    def counted(cmd: list, **kwargs: object) -> types.SimpleNamespace:
-        calls.append(len(json.loads(str(kwargs["input"]))["in_paths"]))
-        return inner(cmd, **kwargs)
+    def counted(identity: tuple, **kwargs: Any) -> Dict[str, Any]:
+        calls.append(len(kwargs["request"]["in_paths"]))
+        return inner(identity, **kwargs)
 
-    monkeypatch.setattr(cv.subprocess, "run", counted)
+    monkeypatch.setattr(cv, "serve_in_venv", counted)
     return calls
 
 

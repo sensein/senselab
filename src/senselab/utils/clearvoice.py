@@ -51,6 +51,7 @@ from senselab.utils.subprocess_venv import (
     stage_portable_audio_io,
     venv_python,
 )
+from senselab.utils.venv_worker import VenvWorkerTimeout, serve_in_venv
 
 CLEARVOICE_HF_ORG = "alibabasglab"
 """Every ClearerVoice checkpoint repository lives under this HuggingFace organisation."""
@@ -327,18 +328,16 @@ def stage_s3fd_weights() -> Path:
 # Reuses upstream's model construction, reader normalisation and segmented decoders, and replaces
 # four things: the unpinned downloader, the device auto-detection, the pydub file I/O, and (for
 # "tse") the visualisation step. Each replacement and the defect behind it: design.md D-8..D-12.
-_WORKER_SCRIPT = r"""
-import json
+_SETUP_SCRIPT = r"""
 import os
 import sys
 from pathlib import Path
 
-try:
-    args = json.loads(sys.stdin.read())
+
+def _setup(args, staging):
     sys.path.insert(0, args["io_dir"])
     from portable_audio_io import read_audio, write_audio
 
-    staging = Path(args["staging_dir"])
     model_name = args["model_name"]
 
     # Upstream's configs give checkpoint_dir as the relative path "checkpoints/<MODEL>", so this
@@ -358,7 +357,6 @@ try:
             % (installed, args["expected_version"])
         )
 
-    import numpy as np
     import torch
 
     import clearvoice.networks as cvnet
@@ -396,58 +394,51 @@ try:
         self.device = device
 
     cvnet.SpeechModel.__init__ = _patched_init
+    return device, read_audio, write_audio
+"""
+
+# Audio-only checkpoints, served by senselab.utils.venv_worker: one load per worker, one request per call.
+_AUDIO_WORKER_SCRIPT = _SETUP_SCRIPT + r"""
+
+
+def load(init):
+    import atexit
+    import shutil
+    import tempfile
+
+    staging = Path(tempfile.mkdtemp(prefix="senselab-clearvoice-worker-"))
+    atexit.register(shutil.rmtree, str(staging), True)
+    shutil.copyfile(init["io_module"], staging / "portable_audio_io.py")
+    device, read_audio, write_audio = _setup(dict(init, io_dir=str(staging)), staging)
 
     from clearvoice import ClearVoice
-
-    if args["mode"] == "tse":
-        import clearvoice.utils.video_process as vp
-
-        # Upstream's visualization() writes each track's audio at PCM_16 and re-renders the whole
-        # video per track. Replaced with the write alone, through the staged policy: design.md D-12.
-        def _write_only(tracks, est_sources, video_args):
-            for idx, audio in enumerate(est_sources):
-                write_audio(
-                    os.path.join(video_args.pycropPath, "est_%s.wav" % idx),
-                    np.asarray(audio, dtype=np.float32),
-                    16000,
-                    out_of_range="normalize",
-                )
-
-        vp.visualization = _write_only
-
-        # The detector shells out to gdown when this file is absent; linking the verified copy in
-        # makes that branch unreachable.
-        s3fd_dir = Path(cvnet.__file__).parent / "models" / "av_mossformer2_tse" / "faceDetector" / "s3fd"
-        s3fd_weights = s3fd_dir / "sfd_face.pth"
-        if not s3fd_weights.exists():
-            os.symlink(args["s3fd_weights"], s3fd_weights)
-
-        cv = ClearVoice(task=args["task"], model_names=[model_name])
-        outputs = []
-        for video_path in args["video_paths"]:
-            cv(input_path=video_path, online_write=True, output_path=args["output_dir"])
-            stem = Path(video_path).name.split(".")[0]
-            track_dir = Path(args["output_dir"]) / model_name / stem / "py_faceTracks"
-            wavs = sorted(track_dir.glob("est_*.wav"), key=lambda p: int(p.stem.split("_")[-1]))
-            outputs.append([str(p) for p in wavs])
-        print(json.dumps({"output_paths": outputs, "device": str(device)}))
-        sys.exit(0)
-
-    cv = ClearVoice(task=args["task"], model_names=[model_name])
-    net = cv.models[0]
-
     from clearvoice.dataloader.dataloader import audio_norm
 
+    cv = ClearVoice(task=init["task"], model_names=[init["model_name"]])
+    return {
+        "net": cv.models[0],
+        "device": device,
+        "read_audio": read_audio,
+        "write_audio": write_audio,
+        "audio_norm": audio_norm,
+    }
+
+
+def handle(state, args):
+    import numpy as np
+    import torch
+
+    net = state["net"]
     written = []
     scalars = []
     with torch.no_grad():
         for index, in_path in enumerate(args["in_paths"]):
-            waveform, sample_rate = read_audio(in_path, always_2d=True, channels_first=True)
+            waveform, sample_rate = state["read_audio"](in_path, always_2d=True, channels_first=True)
             waveform = waveform[0]
             scalar = 1.0
             if args["rms_normalise"]:
                 # Returns the inverse, so a single-output task can restore the input's level.
-                waveform, scalar = audio_norm(waveform)
+                waveform, scalar = state["audio_norm"](waveform)
 
             net.data = {
                 "audio": [np.reshape(waveform.astype(np.float32), [1, waveform.shape[0]])],
@@ -466,12 +457,58 @@ try:
             paths = []
             for source_index, signal in enumerate(signals):
                 out_path = os.path.join(args["out_dir"], "out_%d_s%d.wav" % (index, source_index))
-                write_audio(out_path, np.asarray(signal, dtype=np.float32), sample_rate)
+                state["write_audio"](out_path, np.asarray(signal, dtype=np.float32), sample_rate)
                 paths.append(out_path)
             written.append(paths)
             scalars.append(float(scalar))
+    return {"output_paths": written, "input_norm_scalars": scalars, "device": str(state["device"])}
+"""
 
-    print(json.dumps({"output_paths": written, "input_norm_scalars": scalars, "device": str(device)}))
+# The audio-visual checkpoint, one process per call: upstream's TSE path has no tensor-in/tensor-out
+# entry point and writes its tracks to disk.
+_TSE_WORKER_SCRIPT = _SETUP_SCRIPT + r"""
+import json
+
+try:
+    args = json.loads(sys.stdin.read())
+    staging = Path(args["staging_dir"])
+    model_name = args["model_name"]
+    device, read_audio, write_audio = _setup(args, staging)
+
+    import numpy as np
+    import clearvoice.networks as cvnet
+    import clearvoice.utils.video_process as vp
+    from clearvoice import ClearVoice
+
+    # Upstream's visualization() writes each track's audio at PCM_16 and re-renders the whole
+    # video per track. Replaced with the write alone, through the staged policy: design.md D-12.
+    def _write_only(tracks, est_sources, video_args):
+        for idx, audio in enumerate(est_sources):
+            write_audio(
+                os.path.join(video_args.pycropPath, "est_%s.wav" % idx),
+                np.asarray(audio, dtype=np.float32),
+                16000,
+                out_of_range="normalize",
+            )
+
+    vp.visualization = _write_only
+
+    # The detector shells out to gdown when this file is absent; linking the verified copy in
+    # makes that branch unreachable.
+    s3fd_dir = Path(cvnet.__file__).parent / "models" / "av_mossformer2_tse" / "faceDetector" / "s3fd"
+    s3fd_weights = s3fd_dir / "sfd_face.pth"
+    if not s3fd_weights.exists():
+        os.symlink(args["s3fd_weights"], s3fd_weights)
+
+    cv = ClearVoice(task=args["task"], model_names=[model_name])
+    outputs = []
+    for video_path in args["video_paths"]:
+        cv(input_path=video_path, online_write=True, output_path=args["output_dir"])
+        stem = Path(video_path).name.split(".")[0]
+        track_dir = Path(args["output_dir"]) / model_name / stem / "py_faceTracks"
+        wavs = sorted(track_dir.glob("est_*.wav"), key=lambda p: int(p.stem.split("_")[-1]))
+        outputs.append([str(p) for p in wavs])
+    print(json.dumps({"output_paths": outputs, "device": str(device)}))
 except Exception as exc:
     import traceback
 
@@ -557,7 +594,7 @@ def _run_worker(payload: Dict[str, object], timeout_s: float, label: str, on_tim
     python = venv_python(venv_dir)
     try:
         result = subprocess.run(
-            [python, "-c", _WORKER_SCRIPT],
+            [python, "-c", _TSE_WORKER_SCRIPT],
             input=json.dumps(payload),
             capture_output=True,
             text=True,
@@ -565,12 +602,17 @@ def _run_worker(payload: Dict[str, object], timeout_s: float, label: str, on_tim
             env=_clean_subprocess_env(),
         )
     except subprocess.TimeoutExpired as exc:
-        raise RuntimeError(
-            f"{label} worker exceeded its {timeout_s:.10g}s ceiling with {on_timeout}. Nothing is "
-            "returned: every output is discarded with the worker's temporary directory. Pass "
-            "timeout_s to raise the ceiling, or select a CUDA device."
-        ) from exc
+        raise RuntimeError(_timeout_message(label, timeout_s, on_timeout)) from exc
     return parse_subprocess_result(result, venv_label=label)
+
+
+def _timeout_message(label: str, timeout_s: float, on_timeout: str) -> str:
+    """The failure a caller sees when a worker exceeds its ceiling."""
+    return (
+        f"{label} worker exceeded its {timeout_s:.10g}s ceiling with {on_timeout}. Nothing is "
+        "returned: every output is discarded with the worker's temporary directory. Pass "
+        "timeout_s to raise the ceiling, or select a CUDA device."
+    )
 
 
 def run_clearvoice_audio(
@@ -626,25 +668,31 @@ def run_clearvoice_audio(
         effective_timeout_s,
     )
 
-    with tempfile.TemporaryDirectory(prefix="senselab-clearvoice-") as staging:
-        output = _run_worker(
-            {
-                "mode": "audio",
-                "staging_dir": staging,
-                "io_dir": stage_portable_audio_io(staging),
+    venv_dir = ensure_venv(CLEARVOICE_VENV, CLEARVOICE_REQUIREMENTS, python_version=CLEARVOICE_PYTHON)
+    on_timeout = f"{total_audio_s:.10g}s of audio over {len(in_paths)} input(s)"
+    from senselab.utils import portable_audio_io
+
+    try:
+        output = serve_in_venv(
+            (Path(venv_dir).name, spec.name, sha, worker_device or "auto", "float32"),
+            python=venv_python(venv_dir),
+            script=_AUDIO_WORKER_SCRIPT,
+            init={
+                "io_module": str(Path(portable_audio_io.__file__)),
                 "model_name": spec.name,
                 "task": spec.upstream_task,
                 "checkpoint_dir": str(checkpoint_dir),
                 "expected_version": CLEARVOICE_VERSION,
                 "device": worker_device,
-                "rms_normalise": spec.rms_normalises_input,
-                "in_paths": list(in_paths),
-                "out_dir": out_dir,
             },
-            timeout_s=effective_timeout_s,
+            request={"in_paths": list(in_paths), "out_dir": out_dir, "rms_normalise": spec.rms_normalises_input},
+            env=_clean_subprocess_env(),
             label=f"ClearerVoice {spec.name}",
-            on_timeout=f"{total_audio_s:.10g}s of audio over {len(in_paths)} input(s)",
+            load_timeout_s=_TIMEOUT_FLOOR_S,
+            request_timeout_s=effective_timeout_s,
         )
+    except VenvWorkerTimeout as exc:
+        raise RuntimeError(_timeout_message(f"ClearerVoice {spec.name}", exc.timeout_s, on_timeout)) from exc
     return output["output_paths"], output["input_norm_scalars"], sha
 
 
