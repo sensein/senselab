@@ -2270,6 +2270,14 @@ class TestTheDeclaredTaskDecides:
         folded = self._breath(route_state="routed", duration_s=0.3, absent=("AIRWAY:hear_scores",))
         assert folded.discard_ground == TOO_SHORT_FOR_TASK
 
+    def test_a_discard_owes_nothing_so_its_reasons_name_no_missing_measurement(self) -> None:
+        """What the discard left unmeasured is not owed: the reasons agree with a complete run."""
+        folded = self._breath(route_state="routed", duration_s=0.3, absent=("AIRWAY:hear_scores",))
+        assert folded.run_status is RunStatus.COMPLETE
+        assert KEY_OWNING_BRANCH_INPUT_ABSENT in folded.ground_keys
+        assert folded.reason == "task_too_short"
+        assert "not_measured" not in folded.reason_keys
+
 
 class TestABreathTaskIsDecidedOnDetectedBreaths:
     """Owner, 2026-10-05: a breath task stands on breath events AIRWAY detected, never on HeAR or [breath]."""

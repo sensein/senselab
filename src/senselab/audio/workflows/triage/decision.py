@@ -22,6 +22,8 @@ PASS = "pass"
 REVIEW = "review"
 DISCARD = "discard"
 WITHHOLD = "withhold"
+NOT_MEASURED = "not_measured"
+"""The reason a ground key carries where the pipeline owes the recording a measurement."""
 ANNOTATION = "annotation"
 EFFECTS = (PASS, REVIEW, DISCARD, WITHHOLD, ANNOTATION)
 """What an evidence item does to the decision. ``withhold`` acts on the release axis only."""
@@ -77,13 +79,17 @@ def reason_of(ground_key: str, *, release: bool = False) -> str | None:
     return None
 
 
-def reasons_of(ground_keys: Iterable[str], release_ground_key: str | None = None) -> list[str]:
+def reasons_of(
+    ground_keys: Iterable[str], release_ground_key: str | None = None, *, owed_counts: bool = True
+) -> list[str]:
     """Every reason behind a decision, in the vocabulary's precedence.
 
     Args:
         ground_keys: The fold's ground keys.
         release_ground_key: The release ground key where the release axis holds or could not be assessed,
             else None.
+        owed_counts: Whether a measurement the pipeline still owes is a reason; False for a decision no
+            further measurement can change (a discard), which leaves :data:`NOT_MEASURED` out.
 
     Returns:
         The distinct reasons, highest precedence first. A key the vocabulary does not map is logged and
@@ -102,6 +108,8 @@ def reasons_of(ground_keys: Iterable[str], release_ground_key: str | None = None
             logger.warning("release ground key %s maps to no decision reason", release_ground_key)
         else:
             found.add(reason)
+    if not owed_counts:
+        found.discard(NOT_MEASURED)
     order = list(reason_vocabulary()["precedence"])
     return sorted(found, key=order.index)
 

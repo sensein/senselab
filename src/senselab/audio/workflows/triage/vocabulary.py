@@ -3139,6 +3139,7 @@ def fold_file_verdict(
     decision_reasons = reasons_of(
         ground_keys,
         release_ground_key(release_ground) if held else None,
+        owed_counts=triage is not Triage.DISCARD,
     )
     weighed_gates = [
         *(applied_gates if not measure_decides_gate_node else ()),
