@@ -77,7 +77,6 @@ from senselab.audio.workflows.triage.task_lexicon import TaskLexicon, declared_n
 from senselab.audio.workflows.triage.task_speech import (
     TASK_SPEECH_READING,
     item_set_family,
-    phrase_share_bound,
     words_min_for,
 )
 from senselab.audio.workflows.triage.vocabulary import (
@@ -2209,16 +2208,18 @@ class _NonTaskSpeech:
     """What the owning branch's ``task_speech_reading`` gives the mask plan.
 
     Attributes:
-        timed: The speech words outside the task with usable timing, where the reading reaches its bound.
+        timed: A non-lexical family's speech words outside the task with usable timing, where the reading
+            reaches its bound.
         untimed: Those with none, where it does.
-        item_ids: An item-set family's item-utterance words, which are task content.
-        extensive: Whether an item-set family's ``phrase_share`` reaches ``phrase_share_review``.
+        item_ids: An item-set family's item-utterance words, which are task content unless the reviewer
+            quoted them as a phrase.
+        member_ids: An item-set family's declared-category members, which are task content wherever they fall.
     """
 
     timed: frozenset[str] = frozenset()
     untimed: tuple[str, ...] = ()
     item_ids: frozenset[str] = frozenset()
-    extensive: bool = False
+    member_ids: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -2227,14 +2228,17 @@ class _HeardOffTask:
 
     Attributes:
         speech_ids: Words inside COHORT's non-matching spans of a non-lexical task, or quoted by the reviewer as
-            off-task speech or another speaker's.
+            off-task speech or another speaker's; in an item-set family, its phrase quotes where it judged
+            phrases instead of items ``predominant``.
         task_ids: Words the reviewer quoted as the task's own content.
+        phrase_ids: In an item-set family, every word the reviewer's phrase quotes place on, whatever its level.
         extensive: Whether the reviewer read the off-task speech as extensive, or an item-set family's phrases
             instead of items as predominant.
     """
 
     speech_ids: frozenset[str] = frozenset()
     task_ids: frozenset[str] = frozenset()
+    phrase_ids: frozenset[str] = frozenset()
     extensive: bool = False
 
 
@@ -2246,8 +2250,9 @@ def _heard_off_task(
 ) -> _HeardOffTask:
     """The speech outside the task COHORT's comparison and the reviewer's reading name, on the timed words.
 
-    In an item-set family the reviewer's phrase quotes are read only where it judged phrases instead of items
-    ``predominant``, and its off-task reading not at all.
+    In an item-set family the reviewer's phrase quotes are placed whatever its level, and masked only where it
+    judged phrases instead of items ``predominant``; its off-task reading is not read at all. A quote that places
+    on no word names none.
 
     Args:
         store: The provenance store, read for the ``cohort_reading`` measurement and the declared family.
@@ -2256,7 +2261,7 @@ def _heard_off_task(
         reading: The reviewer's annotation where the fold applies it, else empty.
 
     Returns:
-        The words to mask and the words the reviewer called the task's own content.
+        The words to mask, the words the reviewer called the task's own content, and its phrase words.
     """
     from senselab.audio.workflows.triage.cohort_fold import COHORT_READING, non_task_speech_spans  # noqa: PLC0415
 
@@ -2264,9 +2269,13 @@ def _heard_off_task(
     spans = non_task_speech_spans(cohort.attributes if cohort is not None else None)
     speech = {word.id for word in words if any(_overlaps(word_hull(word), span) for span in spans)}
     read = reading.get("status") in ("clean", "flagged")
+    phrases: set[str] = set()
     if item_set_family(declared_task_family(store)):
         extensive = read and reading.get("phrases_instead_of_items") == PHRASES_PREDOMINANT
-        own = reading.get("phrase_quotes") if extensive else ()
+        for quote in (reading.get("phrase_quotes") or ()) if read else ():
+            phrases |= {word.id for word in _place(str(quote), tokens)}
+        own = ()
+        speech |= phrases if extensive else set()
     else:
         extensive = read and reading.get("off_task_speech") == "extensive"
         own = reading.get("off_task_quotes")
@@ -2276,7 +2285,7 @@ def _heard_off_task(
     task = {
         word.id for quote in (reading.get("task_content_quotes") or ()) if read for word in _place(str(quote), tokens)
     }
-    return _HeardOffTask(frozenset(speech), frozenset(task), bool(extensive))
+    return _HeardOffTask(frozenset(speech), frozenset(task), frozenset(phrases), bool(extensive))
 
 
 def _non_task_speech(store: ProvStore) -> _NonTaskSpeech:
@@ -2286,25 +2295,25 @@ def _non_task_speech(store: ProvStore) -> _NonTaskSpeech:
         store: The provenance store, read for the ``task_speech_reading`` measurement.
 
     Returns:
-        The words to mask and the task-content words; empty for a family whose speech outside the task is
-        not read, where no reading was written, or (for the words to mask) where it stays under its bound:
-        ``words_min`` words in a non-lexical family, ``phrase_share_review`` in an item-set one.
+        The words to mask and the task-content words; empty for a family whose speech outside the task is not
+        read or where no reading was written. A non-lexical family's words are masked at ``words_min`` words;
+        an item-set family's reading gives only its task content, because the reviewer's phrase quotes are
+        what is masked there (:func:`_heard_off_task`).
     """
     family = declared_task_family(store)
     bound = words_min_for(family)
-    share_bound = phrase_share_bound(family)
-    reading = find_measurement(store, TASK_SPEECH_READING) if bound is not None or share_bound is not None else None
+    item_set = item_set_family(family)
+    reading = find_measurement(store, TASK_SPEECH_READING) if bound is not None or item_set else None
     if reading is None:
         return _NonTaskSpeech()
     attributes = reading.attributes
     untimed = tuple(str(word_id) for word_id in attributes.get("untimed_ids") or ())
     timed = frozenset(str(word_id) for word_id in attributes.get("word_ids") or ()) - set(untimed)
-    if share_bound is not None:
-        item_ids = frozenset(str(i) for i in attributes.get("task_content_ids") or ())
-        share = attributes.get("phrase_share")
-        if share is None or float(share) < share_bound:
-            return _NonTaskSpeech(item_ids=item_ids)
-        return _NonTaskSpeech(timed, untimed, item_ids, True)
+    if item_set:
+        return _NonTaskSpeech(
+            item_ids=frozenset(str(i) for i in attributes.get("task_content_ids") or ()),
+            member_ids=frozenset(str(i) for i in attributes.get("member_ids") or ()),
+        )
     if bound is None or int(attributes.get("words_n") or 0) < bound:
         return _NonTaskSpeech()
     return _NonTaskSpeech(timed, untimed)
@@ -2405,7 +2414,8 @@ def mask_plan(
     task_words = task_content(store, words, live_findings, declared_task_family(store), lexicon_ids)
     off_task = _non_task_speech(store)
     heard = _heard_off_task(store, words, transcript_tokens, reading if reviewer_applies else {})
-    excluded_ids = declared_ids | task_words.ids | off_task.item_ids | heard.task_ids
+    item_ids = (off_task.item_ids - heard.phrase_ids) | off_task.member_ids
+    excluded_ids = declared_ids | task_words.ids | item_ids | heard.task_ids
     located, unplaced_records = _located_findings(store, residue_ids, excluded_ids)
     finding_word_ids_of = {
         entity.id: {str(i) for i in (entity.attributes.get("word_ids") or ())} for entity in live_findings
@@ -3100,7 +3110,7 @@ def mask_plan(
         reviewer_precedence=reviewer_wins,
         non_task_speech_ids=tuple(sorted(speech_ids, key=lambda word_id: order[word_id])),
         non_task_speech_untimed=speech_untimed,
-        non_task_speech_extensive=off_task.extensive or heard.extensive,
+        non_task_speech_extensive=heard.extensive,
         named_no_words=reviewer_named_no_words(reading),
         releases=tuple(releases),
         conditions=tuple(conditions),

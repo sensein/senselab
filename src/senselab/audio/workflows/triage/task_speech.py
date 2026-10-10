@@ -10,11 +10,12 @@ Two kinds of task have a defined content, so speech outside it can be read:
   split into utterances at pauses (:func:`utterances`) and each utterance is an item or a phrase
   (:func:`is_phrase`). An item utterance's words are the task's own content whatever they spell; a phrase's
   words, less any member of the declared category, are speech outside the task. The share of utterances that
-  are phrases is ``phrase_share``.
+  are phrases is ``phrase_share``, which is evidence only: the reviewer's phrase quotes decide and are masked.
 
-It is read over the whole file. The owning branch stores the reading; VERDICT reviews on it and the fold's mask
-plan masks it. The bounds are in ``data/task_speech.yaml``; the design is
-``specs/20261007-task-events-in-background/design.md`` ("Speech outside the task", "Phrases instead of items").
+It is read over the whole file. The owning branch stores the reading; VERDICT reviews on a non-lexical family's
+reading and the fold's mask plan masks it. The bounds are in ``data/task_speech.yaml``; the design is
+``specs/20261007-task-events-in-background/design.md`` ("Speech outside the task", "Phrases instead of items",
+"The reviewer reads the phrases").
 """
 
 from __future__ import annotations
@@ -101,18 +102,6 @@ def words_min_for(family: str | None) -> int | None:
     return int(task_speech_parameters()["words_min"]) if non_lexical_family(family) else None
 
 
-def phrase_share_bound(family: str | None) -> float | None:
-    """The ``phrase_share`` at or over which an item-set recording is reviewed and its phrases masked.
-
-    Args:
-        family: The declared family, or None.
-
-    Returns:
-        ``phrase_share_review`` for an item-set family, None otherwise.
-    """
-    return float(task_speech_parameters()["phrase_share_review"]) if item_set_family(family) else None
-
-
 @dataclass(frozen=True)
 class TaskSpeech:
     """The lexical words of a recording that are not the task's own content.
@@ -129,6 +118,7 @@ class TaskSpeech:
         utterances: An item-set family's utterances, ``(start, end, words, phrase)``, in stream order; times
             are None for an utterance of untimed words only.
         phrase_words_n: The words of its phrase utterances.
+        member_ids: An item-set family's lexical words that are members of its declared category.
     """
 
     lexical_n: int = 0
@@ -140,6 +130,7 @@ class TaskSpeech:
     item_extent: tuple[float, float] | None = None
     utterances: tuple[tuple[float | None, float | None, int, bool], ...] = ()
     phrase_words_n: int = 0
+    member_ids: tuple[str, ...] = ()
 
     @property
     def words_n(self) -> int:
@@ -194,6 +185,7 @@ class TaskSpeech:
             "word_ids": list(self.word_ids),
             "untimed_ids": list(self.untimed_ids),
             "task_content_ids": list(self.task_content_ids),
+            "member_ids": list(self.member_ids),
         }
 
 
@@ -386,6 +378,7 @@ def task_speech_of(
         item_extent=item_extent,
         utterances=said,
         phrase_words_n=phrase_words_n,
+        member_ids=tuple(word.id for word in lexical if word.id in member_ids) if not vocal else (),
     )
 
 

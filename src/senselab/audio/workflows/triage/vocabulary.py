@@ -417,8 +417,6 @@ class TaskEvidence:
             reviewed (``data/task_speech.yaml`` ``words_min``), or None where no such reading is weighed.
         item_set: Whether the declared family is an item-set family (``task_content.yaml``
             ``open_vocabulary_families``), asked about phrases instead of items rather than off-task speech.
-        phrase_share_review: The ``phrase_share`` at or over which an item-set recording is reviewed
-            (``data/task_speech.yaml`` ``phrase_share_review``), or None where no such reading is weighed.
     """
 
     owning_branches: tuple[str, ...] = ()
@@ -458,7 +456,6 @@ class TaskEvidence:
     task_speech: dict[str, Any] = field(default_factory=dict)
     task_speech_words_min: int | None = None
     item_set: bool = False
-    phrase_share_review: float | None = None
 
     @property
     def non_lexical(self) -> bool:
@@ -700,10 +697,10 @@ SPEECH_IN_TASK = "speech_in_task"
 """Lexical speech outside a non-lexical task's own content, anywhere in the file: a review ground."""
 
 PHRASES_INSTEAD_OF_ITEMS = "phrases_instead_of_items"
-"""An item-set task whose ``phrase_share`` reaches ``task_speech.yaml`` ``phrase_share_review``: a review ground."""
+"""The second-opinion question whose ``predominant`` reviews an item-set task (``second_opinion:<question>``)."""
 
 PHRASE_SHARE = "phrase_share"
-"""The evidence item: an item-set task's utterances that are phrases, over all its utterances."""
+"""The evidence item, an annotation: an item-set task's lexical utterances that are phrases, over all of them."""
 
 RELEASE_IN_NONLEXICAL_TASK = "release_in_nonlexical_task"
 """A non-lexical task whose release is redacted or withheld: a review ground."""
@@ -921,7 +918,6 @@ KEY_INSTRUCTIONS_SPOKEN = "instructions_spoken"
 PREFIX_SECOND_OPINION = "second_opinion"
 """A second-opinion question (``second_opinion:<question>``) that disagrees with the fold, or reads identifiers."""
 KEY_REVIEWER_OFF_TASK = "reviewer_off_task_speech"
-KEY_PHRASES_INSTEAD_OF_ITEMS = PHRASES_INSTEAD_OF_ITEMS
 KEY_REVIEWER_PHRASES = "reviewer_phrases_instead_of_items"
 KEY_PHRASES_OCCASIONAL = "phrases_occasional"
 KEY_REVIEWER_OTHER_SPEAKER = "reviewer_other_speaker"
@@ -974,7 +970,6 @@ GROUND_KEYS = (
     KEY_REVIEWER_NAMED_NO_WORDS,
     KEY_INSTRUCTIONS_SPOKEN,
     KEY_REVIEWER_OFF_TASK,
-    KEY_PHRASES_INSTEAD_OF_ITEMS,
     KEY_REVIEWER_PHRASES,
     KEY_PHRASES_OCCASIONAL,
     KEY_REVIEWER_OTHER_SPEAKER,
@@ -2593,18 +2588,8 @@ def _task_items(task: TaskEvidence) -> list[EvidenceItem]:
             )
         )
     share = task.task_speech.get("phrase_share")
-    if task.phrase_share_review is not None and share is not None:
-        bound_share = task.phrase_share_review
-        items.append(
-            item(
-                PHRASE_SHARE,
-                share,
-                REVIEW if float(share) >= bound_share else PASS,
-                unit="fraction",
-                comparison="<",
-                threshold=bound_share,
-            )
-        )
+    if task.item_set and share is not None:
+        items.append(item(PHRASE_SHARE, share, ANNOTATION, unit="fraction"))
     items.extend(_join_items(task.quality))
     return items
 
@@ -3224,22 +3209,6 @@ def fold_file_verdict(
             f"{task_evidence.task_speech.get('runs_n', 0)} run(s), {task_evidence.task_speech.get('untimed_n', 0)} "
             "untimed",
             KEY_OTHER_SPEAKER_IN_TASK if other else KEY_SPEECH_IN_TASK,
-            by_branch[owner].kind if owner in by_branch else None,
-        )
-    share = task_evidence.task_speech.get("phrase_share")
-    if (
-        task_evidence.phrase_share_review is not None
-        and share is not None
-        and share >= task_evidence.phrase_share_review
-    ):
-        owner = task_evidence.owning_branches[0] if task_evidence.owning_branches else _VERDICT
-        other = speaker_of(cohort, task_evidence.task_speech.get("runs") or ()) == "other"
-        flag(
-            owner,
-            f"{OTHER_SPEAKER_IN_TASK if other else PHRASES_INSTEAD_OF_ITEMS}: phrase_share {share} of "
-            f"{task_evidence.task_speech.get('utterances_n', 0)} utterance(s), "
-            f"{task_evidence.task_speech.get('phrase_words_n', 0)} phrase word(s)",
-            KEY_OTHER_SPEAKER_IN_TASK if other else KEY_PHRASES_INSTEAD_OF_ITEMS,
             by_branch[owner].kind if owner in by_branch else None,
         )
     if task_evidence.voice_outside_speech:

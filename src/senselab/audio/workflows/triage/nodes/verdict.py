@@ -111,7 +111,6 @@ from senselab.audio.workflows.triage.task_lexicon import task_lexicon
 from senselab.audio.workflows.triage.task_speech import (
     TASK_SPEECH_READING,
     item_set_family,
-    phrase_share_bound,
     reads_task_speech,
     words_min_for,
 )
@@ -681,7 +680,6 @@ def _task_evidence(
         task_speech=task_speech,
         task_speech_words_min=words_min_for(declared_family) if task_speech else None,
         item_set=item_set_family(declared_family),
-        phrase_share_review=phrase_share_bound(declared_family) if task_speech else None,
     )
 
 
