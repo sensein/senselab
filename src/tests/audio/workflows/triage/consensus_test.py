@@ -215,7 +215,8 @@ class TestTheRepetitionFinding:
         assert all(later >= earlier for earlier, later in zip(offsets, offsets[1:]))
         assert all(word.extent[0] <= word.extent[1] for word in consensus.words)
         assert all(
-            word.temporal_uncertainty_s >= max(word.onset_spread_s, word.offset_spread_s) for word in consensus.words
+            (word.temporal_uncertainty_s or 0.0) >= max(word.onset_spread_s, word.offset_spread_s)
+            for word in consensus.words
         )
         assert [word.index for word in consensus.words] == list(range(len(consensus.words)))
 
