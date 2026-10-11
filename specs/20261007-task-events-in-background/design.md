@@ -2366,6 +2366,62 @@ no run. Lexical speech families keep the speech-region rule; enrollment and the 
 
 `loudness` and `loudness-v2` ("hey", spoken then shouted) are `LEXICAL_SPEECH` in `families.py`, so the
 general rule leaves them on the speech-region rule; their 392 r34 recordings are not touched by this gate.
+The next section reverses that.
+
+## Loudness is a voice task (owner, 2026-10-11)
+
+**Decision.** "loudness should be treated as voice tasks beyond the hey hey (similar to one two three ah in
+phonation)". As the prolonged-vowel count-in is that family's declared task text, "hey" is the declared task
+text of `loudness` and `loudness-v2`, and every other lexical word in them is speech outside the task.
+
+**What changed** (`data/task_speech.yaml` v6 `voice_task_text`, `data/cohort_stage.yaml` v4, 1d123343):
+
+- `voice_task_text: {loudness: [hey], loudness-v2: [hey]}` is the one declaration. `task_speech.lexical_voice_family`
+  reads it; `non_lexical_family` includes it, so the existing non-lexical path applies unchanged: SPEECH writes a
+  `task_speech_reading` (it already does for any family `reads_task_speech` admits, in align mode), VERDICT
+  reviews on `speech_in_task` at `words_min` (1), and the fold's mask plan masks the words
+  (`non_task_speech_masked`, or withheld where untimed).
+- Task text is matched by `task_text_ids` as for a voice family (stem, number word, every hyphen piece), plus a
+  declared word run together (`heyhey`), so casing, punctuation (`HEY!`), hyphenation (`hey-hey`) and repetition
+  are all task text. The run-together match applies only to `voice_task_text` families; prolonged-vowel is
+  unchanged.
+- COHORT: `word_gated` is true for them (a run is compared only where it holds a word outside the task text),
+  `lexical_task` is false (so a non-matching run's span is non-task speech to the mask, as in a voice family), and
+  they no longer enroll the participant (voice families never did; a shouted "hey" is the material the r34
+  comparison read as another speaker). `cohort_key` digests `voice_task_text`, and the v4 bump changes every
+  participant's key.
+- REVIEW: `bypass_reason` returns `non_lexical_task` for them whether or not SPEECH scanned, as for a voice family
+  with no scan. Unchanged where the residue is non-empty: the reviewer reads those words.
+
+**Routing stays on SPEECH.** VOICE holds no loudness measurement: its loudness rows are
+`VOICE_EXPECTATIONS_PENDING_DECLARATION` (`Pattern.EFFORT`), which neither `align_voice` nor `EXPECTATIONS` reads,
+and `gates.py` gives EFFORT no gate. SPEECH is what measures the task (`ORDERED_TOKENS`, "hey" x3 / x2, its
+count and conformance). Moving the families out of `LEXICAL_SPEECH` would also move them out of
+`SPEECH_ELICITING`, so SPEECH would read them out of family and the routing evaluation's reference standard would
+change. Only the speech, redaction, review and cohort classification changes, so no TAXONOMY/routing re-run is
+needed for routing's sake; the SPEECH branch must re-run to write the reading.
+`session_background` membership (an acoustic level model of foreground speech recordings) is left as is.
+
+**Measured on ORCD** (r34 stores, 1,602 loudness recordings: 897 `loudness`, 705 `loudness-v2`; read in memory,
+CPU, code 1d123343; the reading written, the stored cohort runs re-gated on the new words, VERDICT re-folded;
+enrollment not recomputed, so the cohort side is a prediction):
+
+- 1,576 hold a lexical consensus word; 68 (23 / 45) hold one other than "hey" (191 words, none a near-"hey"
+  spelling); 64 have speech outside the task once the instructions and task content are exempt; none untimed.
+- Cohort non-matching runs: 379 -> 10 recordings. `other_speaker` as the reason: 392 -> 30.
+- Verdicts: 376 change. 336 review/other_speaker -> pass; 16 review/other_speaker -> review/task_not_conforming;
+  7 pass -> review/redacted/off_task_speech; 17 more move to off_task_speech from other_speaker or
+  task_not_conforming (15 redacted, 2 as-is). Pass goes 1,107 -> 1,436; review/redacted/off_task_speech 24 -> 46.
+- REVIEW's bypass reason: 1,528 `task_content_only` -> `non_lexical_task`.
+- 10 recordings whose residue the reviewer read keep the reviewer's `reviewer_off_task_speech` ground rather than
+  `speech_in_task`; 2 with `nothing_read:SPEECH` fold to review with an as-is release (no mask applied), to be
+  re-read after the SPEECH replay.
+
+**Re-run for the final round:** replay from TAXONOMY over the loudness recordings only
+(`extend_replay_decisions.py` on a manifest filtered to `_task-loudness`, packaged config, reviewer off; carried
+readings or `needs_reread` -> `extend_llm_review.py`), so SPEECH writes the reading and REVIEW its reason; then
+COHORT apply over every participant (v4 changes every `cohort_key`, and enrollment loses loudness), its
+consistency, refold over the whole corpus, task audio and the build.
 
 ## triage.tsv coverage (2026-10-11)
 
