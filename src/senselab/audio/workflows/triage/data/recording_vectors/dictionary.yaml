@@ -936,15 +936,28 @@ columns:
 
   llm_status:
     units: none
-    values: [clean, flagged, absent, disabled, nothing_to_read]
+    values: [clean, flagged, absent, disabled, bypassed]
     description: >-
       What the redaction reviewer's reading concluded. `flagged`: a round judged the redaction
       incomplete, the original as carrying PII, or proposed a redaction; `absent`: the model gave no
       usable answer; `disabled`: REVIEW ran with the reviewer switched off, which is what a recording
-      no review pass read carries; `nothing_to_read`: the residue was empty.
+      no review pass read carries; `bypassed`: the lexical residue was empty, so no model was asked
+      (`llm_bypass_reason` says why).
     computation: '`status` of the latest live `redaction_llm_annotation` measurement, which REVIEW writes and the fold copies into `llm_redaction`.'
     source: [recording_vectors.py:_reviewer_columns, nodes/review.py:review, nodes/review.py:_rounds, nodes/verdict.py:_llm_redaction]
     null_means: REVIEW wrote no annotation.
+
+  llm_bypass_reason:
+    units: none
+    values: [no_words, non_lexical_only, task_content_only, unscanned]
+    description: >-
+      Why REVIEW bypassed the reviewer. `no_words`: the consensus has no words; `non_lexical_only`:
+      only bracketed, non-lexical or degenerate tokens; `task_content_only`: lexical words, every one
+      task content (stimulus, instructions or family lexicon); `unscanned`: lexical words SPEECH
+      never scanned, so no residue was computed.
+    computation: The annotation's `bypass_reason`, from the word kinds `consensus_transcript` assigns.
+    source: [recording_vectors.py:_reviewer_columns, nodes/review.py:bypass_reason]
+    null_means: REVIEW wrote no annotation, or its status is not `bypassed`.
 
   llm_iterations:
     units: count
@@ -959,7 +972,7 @@ columns:
     description: The reviewer's judgment of whether the applied redaction removed what identifies the speaker.
     computation: The annotation's `redaction`, from the last round's answer.
     source: [recording_vectors.py:_reviewer_columns, nodes/review.py:_rounds]
-    null_means: No annotation, or no round was answered (disabled, nothing to read, or the model gave no answer).
+    null_means: No annotation, or no round was answered (disabled, bypassed, or the model gave no answer).
 
   llm_original_judgment:
     units: none
@@ -1048,18 +1061,26 @@ columns:
     units: bool
     description: Whether the reading records a failure.
     computation: >-
-      True when the annotation's `failure` is non-empty: every `absent` reading, and every
-      `nothing_to_read` one, which REVIEW records with the failure "the transcript is empty".
+      True when the annotation's `failure` is non-empty, which every `absent` reading carries. A
+      `bypassed` reading is not a failure and carries none.
     source: [recording_vectors.py:_reviewer_columns, nodes/review.py:review, nodes/review.py:_rounds]
     null_means: REVIEW wrote no annotation.
 
   second_opinion_status:
     units: none
-    values: [ok, disabled, nothing_to_read, absent]
+    values: [ok, disabled, bypassed, absent]
     description: What SECOND_OPINION recorded for the recording.
-    computation: The `second_opinion_answers` measurement's `status`, as the fold carried it in its `second_opinion` record. `ok` answered; `disabled` the packaged config left it off; `nothing_to_read` the transcript was empty; `absent` it was asked and did not answer.
+    computation: The `second_opinion_answers` measurement's `status`, as the fold carried it in its `second_opinion` record. `ok` answered; `disabled` the packaged config left it off; `bypassed` the lexical residue was empty, so no model was asked; `absent` it was asked and did not answer.
     source: [recording_vectors.py:_second_opinion_columns, nodes/second_opinion.py:second_opinion, vocabulary.py:fold_file_verdict]
     null_means: SECOND_OPINION wrote no measurement, or the fold that decided the recording predates it.
+
+  second_opinion_bypass_reason:
+    units: none
+    values: [no_words, non_lexical_only, task_content_only, unscanned]
+    description: Why SECOND_OPINION was bypassed; the same reasons as `llm_bypass_reason`.
+    computation: The `second_opinion_answers` measurement's `bypass_reason`, as the fold carried it in its `second_opinion` record.
+    source: [recording_vectors.py:_second_opinion_columns, nodes/second_opinion.py:second_opinion, nodes/review.py:bypass_reason]
+    null_means: No measurement, or its status is not `bypassed`.
 
   second_opinion_other_voice_p:
     units: probability

@@ -716,11 +716,12 @@ def _determined_store(tmp_path: Path) -> Path:
             "declared_family": "cinderella-story",
             "why": "folded the node verdicts",
             "llm_redaction": {
-                "status": "nothing_to_read",
+                "status": "bypassed",
+                "bypass_reason": "task_content_only",
                 "iterations": 0,
                 "model_id": "",
                 "flagged": [],
-                "failure": "none",
+                "failure": None,
             },
             "ran": {"REDACT": "completed", "SPEECH": "completed", "VOICE": "skipped"},
             "critical_absences": {},
@@ -769,7 +770,8 @@ def test_determination_records_who_decided_and_what_never_ran(tmp_path: Path) ->
     determination = row["d"]
     assert determination["redact"]["outcome"] == "fail"
     assert determination["redact"]["why"] == "pii survived"
-    assert determination["llm"]["status"] == "nothing_to_read"
+    assert determination["llm"]["status"] == "bypassed"
+    assert determination["llm"]["bypass_reason"] == "task_content_only"
     assert determination["ran"]["VOICE"] == "skipped"
     assert [gate["gate"] for gate in determination["gates"]["applied"]] == ["response_min_s"]
     assert set(determination["gates"]["bounds"]) == {"response_min_s", "verbatim_overlap_max", "echo_overlap_max"}
@@ -811,7 +813,7 @@ def test_pooled_determination_keeps_the_per_recording_gate_reading() -> None:
     determination = {
         "redact": {"outcome": "fail", "why": "pii survived"},
         "nodes": [{"node": "REDACT", "outcome": "fail", "why": "pii survived"}],
-        "llm": {"status": "nothing_to_read"},
+        "llm": {"status": "bypassed", "bypass_reason": "no_words"},
         "gates": {
             "applied": [
                 {
@@ -846,9 +848,9 @@ def test_pooled_determination_keeps_the_per_recording_gate_reading() -> None:
 
 
 def test_the_page_keeps_the_three_non_readings_apart() -> None:
-    """Switched off, nothing to review, and could-not-load are three different silences."""
+    """Switched off, bypassed, and could-not-load are three different silences."""
     assert "Switched off." in page._SCRIPT
-    assert "There was no text to read." in page._SCRIPT
+    assert "Reviewer bypassed" in page._SCRIPT
     assert "It tried and could not load." in page._SCRIPT
     assert "It reached no conclusion about this recording." in page._SCRIPT
 
@@ -875,7 +877,7 @@ def test_render_carries_the_determination_payload() -> None:
             d={
                 "redact": {"outcome": "fail", "why": "pii survived"},
                 "nodes": [{"node": "REDACT", "outcome": "fail", "why": "pii survived"}],
-                "llm": {"status": "nothing_to_read"},
+                "llm": {"status": "bypassed", "bypass_reason": "no_words"},
                 "gates": {"applied": [], "flagging": [], "bounds": {}, "layers": {}, "group": ""},
                 "ran": {"REDACT": "completed"},
                 "absences": [],
@@ -929,17 +931,20 @@ def test_the_page_separates_every_reviewer_state() -> None:
     assert "It ran and flagged nothing" in page._SCRIPT
     assert "It flagged " in page._SCRIPT
     assert "No annotation was recorded." in page._SCRIPT
-    assert page.LLM_STATES == ("disabled", "nothing_to_read", "absent", "clean", "flagged")
+    assert page.LLM_STATES == ("disabled", "bypassed", "absent", "clean", "flagged")
     assert page.LLM_RAN == ("absent", "clean", "flagged")
 
 
-def test_nothing_to_read_means_an_empty_transcript_and_the_old_sentence_is_gone() -> None:
-    """The reviewer no longer comes through the detectors, so its old sentence is false twice over."""
+def test_bypassed_names_its_reason_and_the_old_sentences_are_gone() -> None:
+    """The reviewer no longer comes through the detectors, and an empty residue is a bypass with a reason."""
     assert "could not have run" not in page._SCRIPT
     assert "REDACT withholds before the reviewer is reached" not in page._SCRIPT
     assert "the detectors found nothing, so there was no redacted text to read back" not in page._SCRIPT
     assert "not_run" not in page.LLM_STATES
-    assert "transcript carries no words, so there was nothing to read back" in page._SCRIPT
+    assert "nothing_to_read" not in page._SCRIPT
+    assert "Reviewer bypassed" in page._SCRIPT
+    for reason in ("no_words", "non_lexical_only", "task_content_only", "unscanned"):
+        assert f"{reason}:" in page._SCRIPT
 
 
 def test_a_clean_reading_beside_a_failure_is_named_a_disagreement() -> None:
