@@ -4,7 +4,8 @@
 version: 6
 
 # Session speaker enrollment. Model, commit and match cut are `speech.enrollment_model` and
-# `speech.target_match_cosine`; the shortest span embedded is `comparison.pooled_min_s`.
+# `speech.target_match_cosine` (the cut is the enrollment's leave-one-out step only); the shortest span embedded is
+# `comparison.pooled_min_s`.
 enrollment:
   families: lexical_speech          # routing_analysis.families.LEXICAL_SPEECH enrolls the participant, less task_speech.yaml voice_task_text (owner, 2026-10-11)
   window_s: 2.0                     # window each span is embedded on, as the speaker vectors were fitted
@@ -22,6 +23,9 @@ participant:
 # outside the task, each compared with the enrollment. Derivation: design.md, "Pooled speaker comparison".
 comparison:
   pooled_min_s: 2.0                     # owner, 2026-10-11: speaker identification needs at least 2 s; a shorter pool is not_measured (too_short_for_speaker_id), and no enrollment span is shorter
+  cosine_min:                           # a pool whose mean window embedding is under this cosine to the enrollment's mean is a non-match
+    default: 0.398                      # fitted 2026-10-11 (r34, 28,330 left-out within vs 85,353 cross-speaker speech pairs): 1% cross-speaker acceptance, 0.40% within rejected; AUC 0.9996
+    task_text: 0.231                    # loudness "hey": UNFITTED, pending the owner; pooled "hey" separates at AUC 0.93, and 0.231 rejects 30% of participants' own (proposal 0.163, the EER point)
   diarization_stream: enhanced          # diarized segments the enrollment reads, each speaker's exclusive pieces
   lexical_gap_key: branch.run_gap_max_s # lexical words merge into one span across gaps up to this config key
   target:                               # what a family's target pool holds: speech (lexical words in the task extent), task_text (task_speech.task_text_ids words) or none

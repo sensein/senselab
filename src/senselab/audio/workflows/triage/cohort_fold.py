@@ -162,12 +162,12 @@ def cohort_grounds(reading: Mapping[str, Any] | None) -> list[tuple[str, str]]:
     if nonmatch:
         read = "; ".join(
             f"{POOL_WHAT[pool]}, {pool_block(reading, pool).get('pooled_s')} s pooled, cosine "
-            f"{pool_block(reading, pool).get('cosine')}"
+            f"{pool_block(reading, pool).get('cosine')} under {pool_block(reading, pool).get('cosine_min')}"
             for pool in nonmatch
         )
         grounds.append(
             (
-                f"{KEY_OTHER_SPEAKER_IN_SESSION}: {read}, below {block.get('cut')} against the "
+                f"{KEY_OTHER_SPEAKER_IN_SESSION}: {read}, against the "
                 f"{block.get('enrollment_source') or 'session'} enrollment",
                 KEY_OTHER_SPEAKER_IN_SESSION,
             )
@@ -200,13 +200,13 @@ def cohort_evidence(reading: Mapping[str, Any] | None) -> list[EvidenceItem]:
     items: list[EvidenceItem] = []
     block = other_speaker_block(reading)
     if block.get("status") == MEASURED:
-        cut = float(block.get("cut") or 0)
         for pool in POOLS:
             record = pool_block(reading, pool)
             if record.get("status") == MEASURED:
                 effect = PASS if record.get("match") else REVIEW
+                bound = float(record.get("cosine_min") or 0)
                 items.append(
-                    item(_named(POOL_ITEMS[pool]), record.get("cosine"), effect, comparison=">=", threshold=cut)
+                    item(_named(POOL_ITEMS[pool]), record.get("cosine"), effect, comparison=">=", threshold=bound)
                 )
             elif record.get("status") in (NOT_MEASURED, UNAVAILABLE):
                 items.append(item(_named(POOL_ITEMS[pool]), None, ANNOTATION))
