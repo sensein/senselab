@@ -132,7 +132,7 @@ def _enroll(members: list) -> Enrollment:
 
 
 def test_session_enrollment_matches_the_participant_and_not_the_talker() -> None:
-    """The talker's diarized and lexical runs fall under the cut; the participant's run matches."""
+    """A breath recording's talker words are compared and flagged; its wordless breathing is not compared."""
     speech, breath, breath_audio = _session()
     enrollment = _enroll(speech + [(breath, breath_audio)])
     assert enrollment.vector is not None
@@ -140,7 +140,7 @@ def test_session_enrollment_matches_the_participant_and_not_the_talker() -> None
     assert enrollment.single_speaker_only
     block = match_runs(breath, breath_audio, enrollment, _embed, cut=CUT, min_s=1.0, lexical_gap_s=0.5)
     by_source = {(r["source"], r["speaker"]): r for r in block["runs"]}
-    assert by_source[("diarization", "A")]["match"] and by_source[("diarization", "A")]["cosine"] > 0.9
+    assert ("diarization", "A") not in by_source, "a run holding no word is not compared in a breath task"
     assert not by_source[("diarization", "B")]["match"] and by_source[("diarization", "B")]["cosine"] < CUT
     assert not by_source[("lexical", None)]["match"]
     assert block["nonmatch_n"] == 2
@@ -334,6 +334,46 @@ def test_task_events_are_cut_out_of_a_diarized_speech_run() -> None:
     assert candidate_runs(facts, min_s=1.0, lexical_gap_s=0.5) == []
 
 
+def test_a_glide_with_speech_classified_phonation_and_no_word_is_not_compared() -> None:
+    """YAMNet speech over a glide's diarized phonation and removed speech offers no run without a word."""
+    speech, _, _ = _session()
+    glide = _facts(
+        "sub-a_ses-1_task-glides-high-to-low",
+        "glides-high-to-low",
+        diarization=[(1.0, 6.0, "A")],
+        speech=[(0.0, 8.0)],
+        removed=[(0.0, 8.0)],
+    )
+    assert glide.words_gated
+    assert candidate_runs(glide, min_s=1.0, lexical_gap_s=0.5) == []
+    assert window_regions(glide, min_s=1.0, lexical_gap_s=0.5) == []
+    block = match_runs(
+        glide, _loader([(0.0, 8.0, TALKER)], 20.0), _enroll(speech), _embed, cut=CUT, min_s=1.0, lexical_gap_s=0.5
+    )
+    assert block["runs_n"] == 0 and block["nonmatch_n"] == 0
+
+
+def test_a_ddk_run_is_compared_only_where_it_holds_a_word() -> None:
+    """A syllable train's diarized pieces: the one holding a word is a run, the wordless one is not."""
+    facts = _facts(
+        "sub-a_ses-1_task-diadochokinesis-pa",
+        "diadochokinesis-pa",
+        diarization=[(1.0, 4.0, "A"), (6.0, 9.0, "B")],
+        lexical=[(7.0, 7.4)],
+    )
+    runs = candidate_runs(facts, min_s=1.0, lexical_gap_s=0.5)
+    assert [(r.start, r.end, r.speaker) for r in runs] == [(6.0, 9.0, "B")]
+
+
+def test_a_speech_family_keeps_the_speech_region_rule() -> None:
+    """A lexical speech task's speech-classified diarized piece is compared with no word inside it."""
+    facts = _facts("sub-a_ses-1_task-rainbow-passage-3", "rainbow-passage", diarization=[(1.0, 5.0, "X")])
+    assert not facts.words_gated
+    assert [(r.start, r.end) for r in candidate_runs(facts, min_s=1.0, lexical_gap_s=0.5)] == [(1.0, 5.0)]
+    removed = _facts("s", "free-speech", speech=[], removed=[(0.0, 3.0)])
+    assert window_regions(removed, min_s=1.0, lexical_gap_s=0.5) == [(0.0, 3.0)]
+
+
 def test_sliding_windows_catch_speech_no_diarized_segment_or_word_covers() -> None:
     """A removed talker before the diarizer's first segment is read by the windows: one non-matching run."""
     speech, _, _ = _session()
@@ -396,6 +436,7 @@ def _breath(session: str) -> tuple[RecordingFacts, AudioLoader]:
         f"{session}_task-respiration-and-cough-breath-1",
         "respiration-and-cough-breath",
         diarization=[(2.0, 4.0, "A"), (10.0, 13.0, "B")],
+        lexical=[(10.2, 10.8), (11.0, 12.5)],
         session=session,
     )
     return facts, _loader([(2.0, 4.0, PARTICIPANT), (10.0, 13.0, TALKER)], 20.0)
@@ -500,7 +541,7 @@ def test_a_session_compared_with_its_own_enrollment_also_reports_the_participant
     runs = readings["sub-a_ses-1"][2]["other_speaker"]["runs"]
     assert runs and all("participant_cosine" in r for r in runs)
     by_speaker = {r["speaker"]: r for r in runs}
-    assert by_speaker["A"]["participant_cosine"] > 0.9 and by_speaker["B"]["participant_cosine"] < CUT
+    assert "A" not in by_speaker and by_speaker["B"]["participant_cosine"] < CUT
 
 
 def test_a_single_session_participant_has_no_consistency_check() -> None:

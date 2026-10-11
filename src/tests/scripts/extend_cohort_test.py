@@ -16,11 +16,13 @@ from senselab.audio.workflows.triage.cohort_fold import COHORT_READING, MEASURED
 from senselab.audio.workflows.triage.extend import read_store, write_store
 from senselab.audio.workflows.triage.nodes.common import find_measurement
 from senselab.utils.prov_store import ProvStore
+from tests.audio.workflows.triage.nodes.conftest import word_attributes
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 RATE = 16000
 DIM = 8
 SESSION = "sub-a_ses-1"
+TALKER_WORDS = ((6.5, 7.0), (7.5, 8.0))
 
 
 def _load(name: str) -> ModuleType:
@@ -52,6 +54,7 @@ def _run(  # noqa: ANN202
     speech: list[tuple[float, float, str, float]],
     extent,  # noqa: ANN001
     session: str = SESSION,
+    words: tuple[tuple[float, float], ...] = (),
 ):
     stem = f"{session}_task-{task}"
     run_root = root / f"{stem}_20261010-000000"
@@ -91,6 +94,8 @@ def _run(  # noqa: ANN202
     )
     if extent is not None:
         store.entity(prov_type="span", extent=extent, attributes={"role": "task_extent", "family": "voice"})
+    for index, span in enumerate(words):
+        store.entity(prov_type="word", extent=span, attributes=word_attributes(f"word{index}", span, index=index))
     write_store(store, run_root)
     return {"stem": run_root.name, "enhanced": str(streams / "enhanced.flac")}
 
@@ -102,7 +107,12 @@ def corpus(tmp_path: Path) -> Path:
         _run(tmp_path, "rainbow-passage", 12.0, [(1.0, 9.0, "A", 0.1)], (1.0, 9.0)),
         _run(tmp_path, "caterpillar-passage", 12.0, [(1.0, 10.0, "A", 0.1)], (1.0, 10.0)),
         _run(
-            tmp_path, "respiration-and-cough-breath-1", 10.0, [(2.0, 4.0, "A", 0.1), (6.0, 9.0, "B", 0.2)], (1.0, 5.0)
+            tmp_path,
+            "respiration-and-cough-breath-1",
+            10.0,
+            [(2.0, 4.0, "A", 0.1), (6.0, 9.0, "B", 0.2)],
+            (1.0, 5.0),
+            words=TALKER_WORDS,
         ),
     ]
     rows += [_run(tmp_path, f"prolonged-vowel-{i}", 10.0, [], (1.0, 9.0)) for i in range(1, 4)]
@@ -213,6 +223,7 @@ def _two_participants(root: Path) -> Path:
             [(2.0, 4.0, "A", 0.1), (6.0, 9.0, "B", 0.2)],
             (1.0, 5.0),
             session="sub-a_ses-2",
+            words=TALKER_WORDS,
         ),
         _run(root, "rainbow-passage", 12.0, [(1.0, 9.0, "A", 0.3)], (1.0, 9.0), session="sub-b_ses-1"),
         _run(root, "caterpillar-passage", 12.0, [(1.0, 9.0, "A", 0.3)], (1.0, 9.0), session="sub-b_ses-1"),
@@ -266,7 +277,7 @@ def test_apply_shards_by_participant_and_falls_back_across_sessions(
     sources = {r["session"]: r["enrollment_source"] for r in slices[0]}
     assert sources == {"sub-a_ses-1": "session", "sub-a_ses-2": "participant_other_sessions"}
     breath = next(r for r in slices[0] if r["session"] == "sub-a_ses-2")
-    assert breath["nonmatch_n"] == 1
+    assert breath["nonmatch_n"] == 2, "the talker's diarized run and its lexical run"
     assert {r["consistency"]["status"] for r in slices[1]} == {"not_applicable"}
     assert sorted(p.name for p in out.glob("*.jsonl")) == ["sub-a.jsonl", "sub-b.jsonl"]
     assert cli.main(["consistency", str(tmp_path / "logs")]) == 0
