@@ -1,7 +1,7 @@
 # COHORT: the corpus and session pass between QUALITY and VERDICT.
 # Read by `senselab.audio.workflows.triage.cohort_stage.cohort_parameters`.
 # Derivations: specs/20261007-task-events-in-background/design.md, section "Cohort stage".
-version: 2
+version: 3
 
 # Session speaker enrollment. Model, commit and match cut are `speech.enrollment_model` and
 # `speech.target_match_cosine`; the shortest span embedded is the speaker-vector floor
@@ -31,6 +31,15 @@ speech:
   measurements: [yamnet_scores, enhanced_yamnet_scores]   # plain and enhanced YAMNet windows
   labels: [Speech, Conversation, 'Narration, monologue', 'Male speech, man speaking', 'Female speech, woman speaking', 'Child speech, kid speaking']
   score_min: 0.5
+
+# Word gate (owner, 2026-10-11): outside `exempt_kind` (airway, voice and DDK families) a diarized run,
+# a lexical run or a removed-speech window run is compared only where it holds a word of speech outside
+# the task (its midpoint inside the run); YAMNet speech alone qualifies none. Lexical speech families keep
+# the speech-region rule above. Derivation: design.md, "Word gate for the speaker comparison".
+word_gate:
+  exempt_kind: lexical_speech   # DECLARED_KIND key; every other family is word-gated
+  task_syllables:               # a families.py set -> the syllables its task text is spelled from; a word made only of them is task text
+    SYLLABLE_REPETITION: [pa, pah, ta, tah, ka, kah, puh, tuh, kuh, buh, ba, da, ga, butter, cup]
 
 # Third run source: sliding windows over speech the enhancer removed (speech-classified on the plain
 # stream, not on the enhanced one) that no compared run or task event covers, embedded on the plain

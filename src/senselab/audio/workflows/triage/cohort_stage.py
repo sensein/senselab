@@ -50,6 +50,7 @@ from senselab.audio.workflows.triage.live_evidence import declared_task, recordi
 from senselab.audio.workflows.triage.nodes.background import session_key
 from senselab.audio.workflows.triage.nodes.branches import derivative_arrays, merge
 from senselab.audio.workflows.triage.nodes.common import (
+    consensus_words,
     find_measurement,
     find_measurements,
     lexical_words,
@@ -57,10 +58,15 @@ from senselab.audio.workflows.triage.nodes.common import (
     software_agent,
     write_measurement,
 )
+from senselab.audio.workflows.triage.residue import is_non_lexical
+from senselab.audio.workflows.triage.routing_analysis import families as family_sets
 from senselab.audio.workflows.triage.routing_analysis.families import DECLARED_KIND, LEXICAL_SPEECH
 from senselab.audio.workflows.triage.speaker_vectors import load_min_extent_s
+from senselab.audio.workflows.triage.task_content import task_content_ids, task_events
+from senselab.audio.workflows.triage.task_lexicon import declared_names_lexicon
+from senselab.audio.workflows.triage.task_speech import TASK_SPEECH_READING, task_text_ids
 from senselab.audio.workflows.triage.vocabulary import standing_task_extents
-from senselab.utils.prov_store import ProvStore
+from senselab.utils.prov_store import Entity, ProvStore
 
 PARAMETERS_PATH = Path(__file__).parent / "data" / "cohort_stage.yaml"
 
@@ -161,7 +167,8 @@ class RecordingFacts:
         duration_s: The recording's duration, or None where the store records none.
         task_extent: The hull of the standing task extents, or None where no branch wrote one.
         diarization: ``(start, end, speaker)`` per diarized segment on the configured stream.
-        lexical: The lexical consensus words' extents, in index order.
+        lexical: The lexical consensus words' extents, in index order; in a word-gated family
+            (:func:`word_gated`) only the words of the speech outside the task (:func:`speech_outside_task`).
         speech: The speech-classified regions (:func:`speech_regions`), merged.
         removed_speech: Speech-classified on the plain stream and not on the enhanced one: a voice the
             enhancer removed as background.
@@ -181,6 +188,22 @@ class RecordingFacts:
     removed_speech: tuple[tuple[float, float], ...] = ()
     task_events: tuple[tuple[float, float], ...] = ()
     active: tuple[tuple[float, float], ...] = ()
+
+    @property
+    def words_gated(self) -> bool:
+        """Whether a run of this recording is compared only where it holds a word (:func:`word_gated`)."""
+        return word_gated(self.family)
+
+    def holds_word(self, span: tuple[float, float]) -> bool:
+        """Whether a span holds the midpoint of one of :attr:`lexical`.
+
+        Args:
+            span: ``(start, end)``.
+
+        Returns:
+            True where some word's midpoint lies inside it.
+        """
+        return any(span[0] <= (a + b) / 2.0 <= span[1] for a, b in self.lexical)
 
     @property
     def extent_fraction(self) -> float | None:
@@ -294,6 +317,81 @@ def _task_events(store: ProvStore) -> list[tuple[float, float]]:
     return list(task_events_of(store)[1])
 
 
+def word_gated(family: str) -> bool:
+    """Whether a family compares a run only where it holds a word: every family outside ``word_gate.exempt_kind``.
+
+    Args:
+        family: The declared task family.
+
+    Returns:
+        True for an airway, voice or syllable-repetition family, and any other outside the exempt kind.
+    """
+    return family not in DECLARED_KIND[str(cohort_parameters()["word_gate"]["exempt_kind"])]
+
+
+def speech_outside_task(store: ProvStore, family: str) -> list[Entity]:
+    """The consensus words of a non-lexical task that are speech outside it.
+
+    The owning branch's ``task_speech_reading`` names them where it stored one; otherwise they are read here
+    as it reads them: lexical consensus words that are not a vocalisation, not the family's expected tokens
+    and not a misreading of the task's own events. A word spelled only from the family's task syllables
+    (:func:`spells_task_syllables`) is never one.
+
+    Args:
+        store: The recording's store.
+        family: The declared task family.
+
+    Returns:
+        The words, in stream order.
+    """
+    words = consensus_words(store)
+    reading = find_measurement(store, TASK_SPEECH_READING)
+    if reading is not None:
+        named = {str(i) for i in reading.attributes.get("word_ids") or ()}
+        said = [word for word in words if word.id in named]
+    else:
+        texts = [str(word.attributes.get("text") or "") for word in words]
+        lexicon = {words[i].id for i in declared_names_lexicon(family).positions(texts)}
+        exempt = task_content_ids(words, task_events(store, family), family=family, lexicon_ids=lexicon)
+        exempt |= task_text_ids(words, family, ())
+        said = [
+            word
+            for word in lexical_words(store)
+            if word.id not in exempt and not is_non_lexical(str(word.attributes.get("text") or ""), vocal_task=True)
+        ]
+    return [word for word in said if not spells_task_syllables(str(word.attributes.get("text") or ""), family)]
+
+
+def spells_task_syllables(text: str, family: str) -> bool:
+    """Whether a word is spelled only from its family's task syllables (``word_gate.task_syllables``).
+
+    Args:
+        text: The word as the recogniser wrote it.
+        family: The declared task family.
+
+    Returns:
+        True where the family's set names syllables and the word's letters are one or more of them run
+        together (``pa``, ``Pa-ta-ka``, ``buttercup``); False otherwise.
+    """
+    syllables = _task_syllables(family)
+    letters = "".join(ch for ch in text.lower() if ch.isalpha())
+    return bool(syllables and letters) and _spelled(letters, syllables)
+
+
+def _task_syllables(family: str) -> tuple[str, ...]:
+    for set_name, syllables in (cohort_parameters()["word_gate"].get("task_syllables") or {}).items():
+        if family in getattr(family_sets, str(set_name), frozenset()):
+            return tuple(sorted({str(s).lower() for s in syllables}, key=len, reverse=True))
+    return ()
+
+
+def _spelled(letters: str, syllables: Sequence[str]) -> bool:
+    reach = [True] + [False] * len(letters)
+    for end in range(1, len(letters) + 1):
+        reach[end] = any(end >= len(s) and reach[end - len(s)] and letters[end - len(s) : end] == s for s in syllables)
+    return reach[-1]
+
+
 def facts_of(
     store: ProvStore, run_dir: Path | None, *, diarization_stream: str | None = None, stem: str | None = None
 ) -> RecordingFacts:
@@ -322,7 +420,8 @@ def facts_of(
                     for start, end, speaker in zip(arrays["starts"], arrays["ends"], arrays["speakers"])
                 )
             )
-    words = tuple((float(w.extent[0]), float(w.extent[1])) for w in lexical_words(store) if w.extent is not None)
+    said = speech_outside_task(store, family) if word_gated(family) else lexical_words(store)
+    words = tuple((float(w.extent[0]), float(w.extent[1])) for w in said if w.extent is not None)
     by_name: dict[str, list[tuple[float, float]]] = {}
     if run_dir is not None:
         classes = cohort_parameters()["speech"]
@@ -394,7 +493,8 @@ def candidate_runs(facts: RecordingFacts, *, min_s: float, lexical_gap_s: float)
     """Every run of at least ``min_s`` the recording's speech offers for comparison.
 
     A diarized piece is compared only where it carries speech: its intersection with the lexical words
-    and the speech-classified regions, less the task events.
+    and the speech-classified regions, less the task events. In a word-gated family a run is kept only
+    where it holds a word (:meth:`RecordingFacts.holds_word`).
 
     Args:
         facts: The recording's facts.
@@ -416,6 +516,8 @@ def candidate_runs(facts: RecordingFacts, *, min_s: float, lexical_gap_s: float)
         for start, end in lexical_runs_of(facts.lexical, lexical_gap_s)
         if end - start >= min_s
     )
+    if facts.words_gated:
+        return [run for run in runs if facts.holds_word((run.start, run.end))]
     return runs
 
 
@@ -428,13 +530,15 @@ def window_regions(facts: RecordingFacts, *, min_s: float, lexical_gap_s: float)
         lexical_gap_s: Largest gap two lexical words may straddle and stay one run.
 
     Returns:
-        The regions the sliding windows read, each at least ``min_s``.
+        The regions the sliding windows read, each at least ``min_s``; in a word-gated family only those
+        holding a word.
     """
     covered = [
         *((run.start, run.end) for run in candidate_runs(facts, min_s=min_s, lexical_gap_s=lexical_gap_s)),
         *facts.task_events,
     ]
-    return [(s, e) for s, e in _subtract(list(facts.removed_speech), covered) if e - s >= min_s]
+    regions = [(s, e) for s, e in _subtract(list(facts.removed_speech), covered) if e - s >= min_s]
+    return [region for region in regions if facts.holds_word(region)] if facts.words_gated else regions
 
 
 def window_runs(
@@ -1186,17 +1290,18 @@ def match_runs(
             vector = embed(cut_samples(samples, rate, span), rate)
             return None if vector is None or enrollment.vector is None else float(vector @ enrollment.vector)
 
+        windowed = window_runs(
+            regions,
+            cosine_at,
+            window_s=float(windows["window_s"]),
+            hop_s=float(windows["hop_s"]),
+            cut=cut,
+            active_fraction=lambda span: active_s(facts, span) / (span[1] - span[0]) if facts.active else 1.0,
+            active_fraction_min=float(windows["active_fraction_min"]),
+            windows_min=int(windows["windows_min"]),
+        )
         records.extend(
-            window_runs(
-                regions,
-                cosine_at,
-                window_s=float(windows["window_s"]),
-                hop_s=float(windows["hop_s"]),
-                cut=cut,
-                active_fraction=lambda span: active_s(facts, span) / (span[1] - span[0]) if facts.active else 1.0,
-                active_fraction_min=float(windows["active_fraction_min"]),
-                windows_min=int(windows["windows_min"]),
-            )
+            r for r in windowed if not facts.words_gated or facts.holds_word((float(r["start"]), float(r["end"])))
         )
     nonmatch = [r for r in records if not r["match"]]
     spans = merge([(r["start"], r["end"]) for r in nonmatch])
