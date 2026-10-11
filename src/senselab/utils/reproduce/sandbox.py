@@ -128,6 +128,34 @@ PSEUDO_FS = frozenset(
     }
 )  # fmt: skip
 SYSTEM_TMP = "/tmp"
+SHORT_TMP = "/dev/shm/repro-tmp"
+"""Where the step's tmp is bound when ``/tmp`` cannot be: a short path on the sandbox's private ``/dev/shm``, so an
+AF_UNIX socket under ``TMPDIR`` fits the 108-byte ``sun_path`` limit."""
+
+
+def _over_tmp(seen: Iterable[str]) -> bool:
+    return not any(_under(p, SYSTEM_TMP) for p in seen)
+
+
+def _seen(roots: list[str], rw: list[str], extra: list[str], visible: Iterable[str | os.PathLike[str]]) -> list[str]:
+    driver = [os.path.realpath(sys.executable), os.path.realpath(sys.prefix), os.path.realpath(sys.base_prefix)]
+    return [*roots, *rw, *extra, *(_abs(v) for v in visible), *driver]
+
+
+def inner_tmp(
+    ro_roots: Iterable[str | os.PathLike[str]],
+    rw_dirs: Iterable[str | os.PathLike[str]],
+    ro_extra: Iterable[str | os.PathLike[str]],
+    *,
+    tmp: str | os.PathLike[str],
+    visible: Iterable[str | os.PathLike[str]] = (),
+) -> str:
+    """The path the step sees its tmp at: ``/tmp`` when the bind there hides nothing, else `SHORT_TMP`.
+
+    Takes the same arguments as `sandbox_script`, so it gives the path the script binds.
+    """
+    roots, rw, extra = _shallow_first(ro_roots), _shallow_first([*rw_dirs, tmp]), _shallow_first(ro_extra)
+    return SYSTEM_TMP if _over_tmp(_seen(roots, rw, extra, visible)) else SHORT_TMP
 
 
 def sandbox_script(
@@ -152,9 +180,10 @@ def sandbox_script(
         ro_extra: Further directories (the checkout, the venv) that must exist and stay read-only.
         netns: Whether the script runs in its own network namespace and raises loopback there; False
             only for the test-only mode that runs with the host network.
-        tmp: A writable directory also bound on ``/tmp``; skipped when any path given here (or in
-            ``visible``, or the driver's own interpreter, which runs the sweep) lies under ``/tmp``, since
-            the bind would hide it, and ``/tmp`` then stays read-only.
+        tmp: A writable directory also bound on ``/tmp``; when any path given here (or in ``visible``, or
+            the driver's own interpreter, which runs the sweep) lies under ``/tmp``, the bind would hide it,
+            so ``/tmp`` stays read-only and the dir is bound on `SHORT_TMP` instead (`inner_tmp` names
+            which).
         visible: Other paths the step needs to see, checked only against the ``/tmp`` bind.
         masked: Directories hidden under an empty tmpfs (made read-only by the sweep), when they exist; the
             host socket dirs of `MASKED_HOST_DIRS` are always masked unless a path the sandbox needs lies
@@ -179,9 +208,8 @@ def sandbox_script(
             raise ValueError(f"read-only paths under a writable directory would be hidden by its bind: {hidden}")
         if any(_under(d, e) for e in extra):
             raise ValueError(f"writable directory under a read-only checkout or venv: {d}")
-    driver = [os.path.realpath(sys.executable), os.path.realpath(sys.prefix), os.path.realpath(sys.base_prefix)]
-    seen = [*roots, *rw, *extra, *(_abs(v) for v in visible), *driver]
-    over_tmp = tmp is not None and not any(_under(p, SYSTEM_TMP) for p in seen)
+    seen = _seen(roots, rw, extra, visible)
+    over_tmp = tmp is not None and _over_tmp(seen)
     q = shlex.quote
     skip = [*rw, *([SYSTEM_TMP] if over_tmp else [])]
     lines = ["set -e", f"{MOUNT} --make-rprivate /"]
@@ -198,6 +226,8 @@ def sandbox_script(
     sweep_args = [pseudo, *skip, *under_masks]
     lines.append(" ".join([q(sys.executable), "-I", "-S", "-c", q(SWEEP), *(q(p) for p in sweep_args)]))
     lines.append(f"if [ -d /dev/shm ]; then {MOUNT} -t tmpfs -o nosuid,nodev,mode=1777 tmpfs /dev/shm; fi")
+    if tmp is not None and not over_tmp:
+        lines += [f"/usr/bin/mkdir {SHORT_TMP}", f"{MOUNT} --bind {q(_abs(tmp))} {SHORT_TMP}"]
     lines += [f"{IP} link set lo up"] if netns else []
     lines += [f'exec {" ".join(DROP)} "$@"']
     return "\n".join(lines) + "\n"
