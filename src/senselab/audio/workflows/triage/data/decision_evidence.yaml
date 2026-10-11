@@ -188,11 +188,11 @@ groups:
     cohort.target_cosine:
       unit:
       producer: COHORT
-      meaning: one embedding pooled over the task's own speech (lexical speech in the task extent; loudness's "hey") against the participant's session enrollment (or, where the session has none, the other sessions'), >= speech.target_match_cosine; no value where the pool is under data/cohort_stage.yaml comparison.pooled_min_s (too_short_for_speaker_id) or no enrollment was available, an annotation
+      meaning: one embedding pooled over the task's own speech (lexical speech in the task extent; loudness's "hey") against the participant's session enrollment with the recording left out (or, where the session has none, the other sessions'), >= data/cohort_stage.yaml comparison.cosine_min (task_text for loudness's target, else default); no value where the pool is under data/cohort_stage.yaml comparison.pooled_min_s (too_short_for_speaker_id) or no enrollment was available, an annotation
     cohort.non_task_cosine:
       unit:
       producer: COHORT
-      meaning: one embedding pooled over the speech outside the task (its words, and removed speech holding one) against the same enrollment, >= speech.target_match_cosine; no value where the pool is under comparison.pooled_min_s, an annotation
+      meaning: one embedding pooled over the speech outside the task (its words, and removed speech holding one) against the same enrollment, >= comparison.cosine_min.default; no value where the pool is under comparison.pooled_min_s, an annotation
     cohort.speaker_comparison:
       unit:
       producer: COHORT

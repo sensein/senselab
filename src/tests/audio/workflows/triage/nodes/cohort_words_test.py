@@ -134,7 +134,7 @@ def _loudness_facts(store: ProvStore, tmp_path: Path, words: list[str]) -> Recor
 def _compare(facts: RecordingFacts, level: float) -> dict[str, Any]:
     speech, _, _ = _session()
     audio = _loader([(0.0, 10.0, level)], 20.0)
-    return compare_speaker(facts, audio, _enroll(speech), _embed, cut=CUT, min_s=MIN_S, lexical_gap_s=0.6)
+    return compare_speaker(facts, audio, _enroll(speech), _embed, min_s=MIN_S, lexical_gap_s=0.6)
 
 
 @pytest.mark.parametrize("level,flagged", [(PARTICIPANT, False), (TALKER, True)])
@@ -209,3 +209,12 @@ def test_a_speech_task_pools_its_extent_and_the_words_outside_it(store: ProvStor
     assert len(facts.lexical) == 2 and facts.target == facts.lexical and facts.non_task == ()
     block = _compare(dataclasses.replace(facts, session="sub-a_ses-1"), PARTICIPANT)
     assert block[POOL_NON_TASK]["status"] == NOT_APPLICABLE
+
+
+def test_each_pool_reads_its_fitted_bound() -> None:
+    """Loudness's "hey" target keeps its own bound; every other pool reads the fitted default."""
+    from senselab.audio.workflows.triage.cohort_stage import pool_cosine_min  # noqa: PLC0415
+
+    assert pool_cosine_min("loudness", POOL_TARGET) == 0.231
+    assert pool_cosine_min("loudness", POOL_NON_TASK) == pool_cosine_min("rainbow-passage", POOL_TARGET) == 0.398
+    assert pool_cosine_min("prolonged-vowel", POOL_NON_TASK) == 0.398

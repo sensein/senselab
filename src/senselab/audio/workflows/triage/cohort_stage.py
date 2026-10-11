@@ -7,7 +7,7 @@ Two families of reading, over what the per-recording stages already stored:
   vector pooled from the participant's other sessions. Each recording then gives at most two pooled
   embeddings, each compared with the session's vector, or with the other sessions' where the session has
   none: its target speech (:func:`target_rule`) and its speech outside the task. A pool shorter than
-  ``comparison.pooled_min_s`` is not measured; one under the match cut is a non-match. A session whose
+  ``comparison.pooled_min_s`` is not measured; one under its ``comparison.cosine_min`` is a non-match. A session whose
   vector is far from its other sessions' is ``session_speaker_inconsistent``.
 - **Distribution checks.** Corpus quantiles per declared family, stored once per run as a cohort
   artefact with its own provenance, and per-recording checks against them
@@ -1245,13 +1245,28 @@ def pool_record(spans: Sequence[tuple[float, float]], *, min_s: float, reason_em
     return {"status": MEASURED, **head}
 
 
+def pool_cosine_min(family: str, pool: str) -> float:
+    """The cosine under which a pool does not match the enrollment (``comparison.cosine_min``).
+
+    Args:
+        family: The declared task family.
+        pool: :data:`POOL_TARGET` or :data:`POOL_NON_TASK`.
+
+    Returns:
+        ``task_text`` for the target pool of a family compared on its task text (loudness), else ``default``.
+    """
+    bounds = cohort_parameters()["comparison"]["cosine_min"]
+    if pool == POOL_TARGET and target_rule(family) == TARGET_TASK_TEXT:
+        return float(bounds[TARGET_TASK_TEXT])
+    return float(bounds["default"])
+
+
 def compare_speaker(
     facts: RecordingFacts,
     loader: AudioLoader,
     enrollment: Enrollment,
     embed: Embedder,
     *,
-    cut: float,
     min_s: float,
     lexical_gap_s: float,
     source: str = SOURCE_SESSION,
@@ -1260,14 +1275,13 @@ def compare_speaker(
     """Compare one recording's pooled target speech and pooled speech outside the task with an enrollment.
 
     Each pool's spans are concatenated on the plain stream and embedded once (the enrollment's windows); a pool
-    under ``min_s`` is not embedded.
+    under ``min_s`` is not embedded. A pool matches at or above its :func:`pool_cosine_min`.
 
     Args:
         facts: The recording's facts.
         loader: Its plain-stream loader.
         enrollment: The enrollment compared against, with a vector.
         embed: The span embedder.
-        cut: The match cut: a pool at or above it matches.
         min_s: ``comparison.pooled_min_s``.
         lexical_gap_s: Largest gap two words may straddle and stay one span.
         source: Where ``enrollment`` came from (:data:`SOURCE_SESSION` or
@@ -1310,7 +1324,8 @@ def compare_speaker(
             pools[name] = {**pool, "status": UNAVAILABLE, "reason": NOT_EMBEDDED}
             continue
         cosine = float(vector @ enrollment.vector)
-        pool.update(cosine=round(cosine, 4), match=cosine >= cut)
+        bound = pool_cosine_min(facts.family, name)
+        pool.update(cosine=round(cosine, 4), cosine_min=bound, match=cosine >= bound)
         if participant is not None and participant.vector is not None:
             pool["participant_cosine"] = round(float(vector @ participant.vector), 4)
     nonmatch = [name for name, pool in pools.items() if pool["status"] == MEASURED and not pool["match"]]
@@ -1320,7 +1335,6 @@ def compare_speaker(
         **head,
         "model_id": enrollment.model_id,
         "model_commit_sha": enrollment.model_commit_sha,
-        "cut": cut,
         "pooled_min_s": min_s,
         **pools,
         "nonmatch": nonmatch,
@@ -1844,7 +1858,6 @@ def read_participant(
                     loader,
                     enrollment,
                     embed if embed is not None else (lambda samples, rate: None),
-                    cut=float(settings.cut or 0.0),
                     min_s=settings.min_s,
                     lexical_gap_s=settings.lexical_gap_s,
                     source=source,

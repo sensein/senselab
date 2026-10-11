@@ -145,7 +145,7 @@ def _enroll(members: list) -> Enrollment:
 
 
 def _compare(facts: RecordingFacts, audio: AudioLoader, enrollment: Enrollment) -> dict:
-    return compare_speaker(facts, audio, enrollment, _embed, cut=CUT, min_s=MIN_S, lexical_gap_s=0.5)
+    return compare_speaker(facts, audio, enrollment, _embed, min_s=MIN_S, lexical_gap_s=0.5)
 
 
 def test_a_breath_task_pools_its_talker_words_and_has_no_target() -> None:
@@ -214,7 +214,7 @@ def test_a_pool_is_its_spans_concatenated_and_embedded_once() -> None:
     facts = _facts("s", "prolonged-vowel", non_task=[(1.0, 1.8), (5.0, 5.8), (9.0, 9.6)])
     enrollment = _enroll(speech)
     block = compare_speaker(
-        facts, _loader([(1.0, 10.0, PARTICIPANT)], 20.0), enrollment, counting, cut=CUT, min_s=MIN_S, lexical_gap_s=0.5
+        facts, _loader([(1.0, 10.0, PARTICIPANT)], 20.0), enrollment, counting, min_s=MIN_S, lexical_gap_s=0.5
     )
     assert block[POOL_NON_TASK]["pooled_s"] == 2.2 and block[POOL_NON_TASK]["match"]
     assert seen == [220]
@@ -344,9 +344,15 @@ def test_every_cohort_item_is_a_well_formed_row(status: str) -> None:
     checks = run_checks(facts, artefact if status == MEASURED else None)
     block = {
         "status": status,
-        "cut": CUT,
         POOL_TARGET: {"status": NOT_MEASURED, "reason": TOO_SHORT_FOR_SPEAKER_ID, "spans": [], "pooled_s": 0.0},
-        POOL_NON_TASK: {"status": MEASURED, "spans": [[1.0, 4.0]], "pooled_s": 3.0, "cosine": 0.1, "match": False},
+        POOL_NON_TASK: {
+            "status": MEASURED,
+            "spans": [[1.0, 4.0]],
+            "pooled_s": 3.0,
+            "cosine": 0.1,
+            "cosine_min": CUT,
+            "match": False,
+        },
     }
     reading = cohort_attributes(facts, other_speaker=block, checks=checks, quantiles=None, key="k")
     assert [problem for entry in cohort_evidence(reading) for problem in row_problems(entry)] == []

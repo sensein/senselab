@@ -416,7 +416,6 @@ class TestPhrasesInsteadOfItems:
         cohort = {
             "other_speaker": {
                 "status": "measured",
-                "cut": 0.3,
                 "target": {"status": "measured", "spans": [[0.0, 2.1]], "pooled_s": 2.1, "cosine": 0.1, "match": False},
             }
         }
