@@ -34,7 +34,7 @@ because both are a single server-side operation that fails with `EEXIST`/`ENOTEM
 `mkdir`, and `rename(2)` of a directory onto a name that is absent or names a non-empty directory. NFS 4.1+
 sessions give exactly-once semantics, so a retransmitted create does not report a false `EEXIST` to its winner.
 
-Measured, not assumed: `pool/tests/race.py`, 32 processes on 4 nodes racing for the same 400 names at the same
+Measured, not assumed: `pool/harness/race.py`, 32 processes on 4 nodes racing for the same 400 names at the same
 second, gave exactly one winner for every name with both `mkdir` and staged rename (400/400, 0 with none,
 0 with two).
 
@@ -100,10 +100,10 @@ used, `retry`, `unclaimed`), the counts, attempts, and the missing indices.
 
 ## Test on ORCD (2026-10-11)
 
-Per-slice command `pool/tests/dummy_slice.sh` (sleep, then: slices i%13==0 fail their first two attempts,
+Per-slice command `pool/harness/dummy_slice.sh` (sleep, then: slices i%13==0 fail their first two attempts,
 i%5==0 their first, i%7==0 succeed with exit 3, a declared success code). Every attempt writes its own start/end
 record, so overlap of two attempts on one slice is checked directly. Each test ends with the gate link
-(`pool/tests/test_gate.sbatch`) afterany on the workers.
+(`pool/harness/test_gate.sbatch`) afterany on the workers.
 
 | test | setup | outcome |
 |---|---|---|
