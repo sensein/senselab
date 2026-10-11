@@ -868,10 +868,10 @@ def _unpack_value(entry: dict, data_dir: Path) -> object:
     if btype == "ndarray":
         return np.load(str(data_dir / entry["file"]), allow_pickle=False)
     if btype == "audio":
-        import torchaudio
+        from senselab.utils.portable_audio_io import read_audio
 
-        waveform, sr = torchaudio.load(str(data_dir / entry["file"]))
-        return {"waveform": waveform, "sampling_rate": sr}
+        samples, sr = read_audio(data_dir / entry["file"], always_2d=True)
+        return {"waveform": torch.from_numpy(samples), "sampling_rate": sr}
     if btype == "path":
         return Path(entry["value"])
     if btype == "fileref":
@@ -906,9 +906,9 @@ manifest = json.loads((container / "manifest.json").read_text())
 data_dir = container / "data"
 
 # senselab is not installed in this venv; the parent stages the audio I/O policy alongside the
-# payload so a result audio is written under the same range policy the host applies.
+# payload so inputs are read and results written by the same module the host uses.
 sys.path.insert(0, str(container))
-from portable_audio_io import write_audio
+from portable_audio_io import read_audio, write_audio
 
 try:
     from safetensors.torch import load_file as _st_load, save_file as _st_save
@@ -924,9 +924,9 @@ for key, entry in manifest.get("entries", {}).items():
     elif t == "ndarray":
         args[key] = np.load(str(data_dir / entry["file"]), allow_pickle=False)
     elif t == "audio":
-        import torchaudio
-        wf, sr = torchaudio.load(str(data_dir / entry["file"]))
-        args[key] = {"waveform": wf, "sampling_rate": sr}
+        import torch
+        wf, sr = read_audio(str(data_dir / entry["file"]), always_2d=True)
+        args[key] = {"waveform": torch.from_numpy(wf), "sampling_rate": sr}
     elif t == "path":
         args[key] = Path(entry["value"])
     elif t == "fileref":

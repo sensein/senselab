@@ -9,6 +9,7 @@ process; :func:`shutdown_yamnet_worker` ends it early.
 import atexit
 import json
 import queue
+import shutil
 import subprocess
 import tempfile
 import threading
@@ -20,7 +21,12 @@ from typing import Any, Dict, List, Optional
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.preprocessing import resample_audios
 from senselab.utils.data_structures.logging import logger
-from senselab.utils.subprocess_venv import _clean_subprocess_env, ensure_venv, venv_python
+from senselab.utils.subprocess_venv import (
+    _clean_subprocess_env,
+    ensure_venv,
+    stage_portable_audio_io,
+    venv_python,
+)
 
 
 def write_worker_wav(path: "Path | str", waveform: Any, sampling_rate: int) -> Dict[str, Any]:  # noqa: ANN401
@@ -95,8 +101,10 @@ def load():
     import shutil
 
     import numpy as np
-    import soundfile as sf
     import tensorflow_hub as hub
+
+    sys.path.insert(0, sys.argv[1])
+    from portable_audio_io import read_audio
 
     # The TF-Hub cache defaults to $TMPDIR, which is wrong twice over: it is discarded between
     # reboots so the model is re-fetched, and a partially-written entry is reused forever
@@ -125,14 +133,14 @@ def load():
     with open(class_map_path) as f:
         reader = csv.DictReader(f)
         class_names = [row["display_name"] for row in reader]
-    return sf, model, class_names
+    return read_audio, model, class_names
 
 
-def classify(sf, model, class_names, audio_paths, top_k):
+def classify(read_audio, model, class_names, audio_paths, top_k):
     all_results = []
     for audio_path in audio_paths:
         # Audio is already resampled to 16kHz mono by the caller
-        data, sr = sf.read(audio_path, dtype="float32")
+        data, sr = read_audio(audio_path, channels_first=False)
         if data.ndim > 1:
             data = data.mean(axis=1)
 
@@ -152,7 +160,7 @@ def classify(sf, model, class_names, audio_paths, top_k):
 
 def main():
     started = time.monotonic()
-    sf, model, class_names = load()
+    read_audio, model, class_names = load()
     emit({"ready": True, "load_s": round(time.monotonic() - started, 3)})
     while True:
         line = sys.stdin.readline()
@@ -165,7 +173,7 @@ def main():
             return
         emit({
             "results": classify(
-                sf, model, class_names, request["audio_paths"], request.get("top_k", 5)
+                read_audio, model, class_names, request["audio_paths"], request.get("top_k", 5)
             )
         })
 
@@ -195,6 +203,7 @@ class _YAMNetWorker:
         """Record the worker's state. Starting it is :meth:`start`."""
         self.load_s = 0.0
         self._process: Optional["subprocess.Popen[str]"] = None
+        self._io_dir: Optional[str] = None
         self._replies: "queue.Queue[Dict[str, Any]]" = queue.Queue()
         self._noise: "deque[str]" = deque(maxlen=40)
 
@@ -209,8 +218,9 @@ class _YAMNetWorker:
         """
         venv_dir = ensure_venv(_YAMNET_VENV, _YAMNET_REQUIREMENTS, python_version=_YAMNET_PYTHON)
         began = time.monotonic()
+        self._io_dir = stage_portable_audio_io(tempfile.mkdtemp(prefix="senselab-io-"))
         self._process = subprocess.Popen(  # noqa: S603 — the interpreter is this repo's own venv
-            [venv_python(venv_dir), "-c", _YAMNET_WORKER],
+            [venv_python(venv_dir), "-c", _YAMNET_WORKER, self._io_dir],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -249,6 +259,9 @@ class _YAMNetWorker:
     def close(self) -> None:
         """End the worker, releasing the model. Safe to call on a worker that never started."""
         process, self._process = self._process, None
+        io_dir, self._io_dir = self._io_dir, None
+        if io_dir is not None:
+            shutil.rmtree(io_dir, ignore_errors=True)
         if process is None:
             return
         try:
