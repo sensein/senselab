@@ -49,7 +49,17 @@ def test_the_policy_module_imports_nothing_from_senselab() -> None:
     tree = ast.parse(Path(pio.__file__).read_text())
     offenders: list[str] = []
     allowed = {"numpy", "soundfile", "logging", "os", "typing", "__future__"}
+    # torchcodec may be imported inside a function body only, so importing the module never needs it.
+    lazy = {
+        id(node)
+        for function in ast.walk(tree)
+        if isinstance(function, ast.FunctionDef)
+        for node in ast.walk(function)
+        if isinstance(node, ast.ImportFrom) and node.module == "torchcodec.decoders"
+    }
     for node in ast.walk(tree):
+        if id(node) in lazy:
+            continue
         if isinstance(node, ast.Import):
             offenders += [a.name for a in node.names if a.name.split(".")[0] not in allowed]
         elif isinstance(node, ast.ImportFrom):
@@ -349,3 +359,46 @@ def test_read_audio_returns_senselab_axis_order(tmp_path: Path) -> None:
     assert mono.ndim == 1, "a mono read stays 1-D unless always_2d is asked for"
     mono_2d, _ = read_audio(mono_path, always_2d=True)
     assert mono_2d.shape == (1, _SR)
+
+
+def test_a_frame_window_is_the_same_samples_as_a_slice_of_the_whole(tmp_path: Path) -> None:
+    """``start``/``stop`` are frame indices into the whole decode, clamped at the end."""
+    stereo = np.stack([_over_unity_signal(0.5), _over_unity_signal(0.25)])
+    for name, subtype in (("w.wav", None), ("f.flac", "PCM_24")):
+        path = tmp_path / name
+        write_audio(path, stereo, _SR, subtype=subtype)
+        whole, _ = read_audio(path)
+        for start, stop in ((0, 10), (123, 4567), (_SR - 5, None), (_SR - 5, _SR + 100)):
+            window, _ = read_audio(path, start=start, stop=stop)
+            assert np.array_equal(window, whole[:, start:stop]), (name, start, stop)
+        with pytest.raises(ValueError, match="exceeds"):
+            read_audio(path, start=_SR)
+
+
+def test_audio_info_names_the_decoder_read_audio_uses(tmp_path: Path) -> None:
+    """Lossless formats with exact counts are libsndfile's; a compressed container is torchcodec's."""
+    path = tmp_path / "x.flac"
+    write_audio(path, _over_unity_signal(0.5), _SR)
+    info = pio.audio_info(path)
+    assert (info.decoder, info.format, info.frames, info.sampling_rate, info.channels) == (
+        pio.LIBSNDFILE,
+        "FLAC",
+        _SR,
+        _SR,
+        1,
+    )
+    mp4 = Path(__file__).parents[1] / "data_for_testing" / "video_48khz_stereo_16bits.mp4"
+    if mp4.is_file():
+        assert pio.audio_info(mp4).decoder == pio.TORCHCODEC
+        samples, rate = read_audio(mp4, start=1000, stop=5000)
+        assert samples.shape == (2, 4000) and rate == 48000
+
+
+def test_read_audio_blocks_tiles_the_whole_read(tmp_path: Path) -> None:
+    """Concatenated blocks are the whole file, in senselab's axis order."""
+    stereo = np.stack([_over_unity_signal(0.5), _over_unity_signal(0.25)])
+    path = tmp_path / "s.wav"
+    write_audio(path, stereo, _SR)
+    blocks = list(pio.read_audio_blocks(path, 0.3))
+    assert all(rate == _SR for _, rate in blocks)
+    assert np.array_equal(np.concatenate([b for b, _ in blocks], axis=1), read_audio(path)[0])
