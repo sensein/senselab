@@ -1,13 +1,16 @@
 """The one definition of how senselab reads and writes audio files.
 
-Two callers implement nothing of their own: :meth:`senselab.audio.data_structures.Audio.save_to_file`
-delegates to :func:`write_audio`, and subprocess-venv workers -- which run in isolated
-environments where senselab is not installed -- get this file staged next to their payload by
+Every audio read in senselab is :func:`read_audio`, :func:`read_audio_blocks` or :func:`audio_info`;
+``Audio``'s lazy load calls them, and ``src/tests/utils/portable_audio_read_guard_test.py`` fails on
+any other decoder call. :meth:`senselab.audio.data_structures.Audio.save_to_file` delegates to
+:func:`write_audio`. Subprocess-venv workers -- which run in isolated environments where senselab is
+not installed -- get this file staged next to their payload by
 :func:`senselab.utils.subprocess_venv.stage_portable_audio_io` and import it directly.
 
-**This module must import nothing from senselab, and nothing beyond numpy, soundfile and the
-standard library.** ``src/tests/utils/portable_audio_io_test.py`` enforces both by AST sweep; a
-convenient ``from senselab...`` here breaks every worker the next time a venv is rebuilt.
+**This module must import nothing from senselab, and at module level nothing beyond numpy, soundfile
+and the standard library.** torchcodec is imported inside the one function that needs it, so a worker
+reading lossless files never needs it. ``src/tests/utils/portable_audio_io_test.py`` enforces this by
+AST sweep; a convenient ``from senselab...`` here breaks every worker the next time a venv is rebuilt.
 
 Two decisions live here and nowhere else:
 
@@ -22,7 +25,7 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import NamedTuple, Optional, Sequence, Tuple, Union
+from typing import IO, Any, Iterator, NamedTuple, Optional, Sequence, Tuple, Union
 
 import numpy as np
 import soundfile as sf
@@ -310,23 +313,205 @@ def write_audio(
     )
 
 
+LIBSNDFILE = "libsndfile"
+TORCHCODEC = "torchcodec"
+
+EXACT_FRAME_COUNT_FORMATS = frozenset({"FLAC", "WAV", "WAVEX", "W64", "RF64", "AIFF"})
+"""libsndfile major formats whose header frame count is exact; :func:`read_audio` reads these with libsndfile."""
+
+
+def _is_short_data_chunk(line: str) -> bool:
+    """Whether a line of libsndfile's ``extra_info`` reports a data chunk longer than the file."""
+    return line.lstrip().startswith("data") and "(should be" in line
+
+
+class AudioInfo(NamedTuple):
+    """What a file holds, and which decoder :func:`read_audio` reads it with."""
+
+    sampling_rate: int
+    channels: int
+    frames: Optional[int]
+    format: str
+    decoder: str
+
+
+def _libsndfile_info(source: str) -> Optional["sf._SoundFileInfo"]:
+    """``sf.info(source)``, or None where libsndfile cannot open it."""
+    try:
+        return sf.info(source)
+    except (RuntimeError, OSError, TypeError, ValueError):
+        return None
+
+
+def _torchcodec_decoder(source: str) -> Any:  # noqa: ANN401
+    """An open torchcodec ``AudioDecoder``; torchcodec is imported here so workers never need it.
+
+    Raises:
+        RuntimeError: If torchcodec cannot be imported or cannot open ``source``.
+    """
+    try:
+        from torchcodec.decoders import AudioDecoder
+    except (ImportError, RuntimeError, OSError) as exc:
+        raise RuntimeError(f"torchcodec is needed to decode {source!r} and cannot be imported: {exc}") from exc
+    try:
+        return AudioDecoder(source)
+    except (RuntimeError, ValueError) as exc:
+        raise RuntimeError(f"torchcodec cannot open {source!r}: {exc}") from exc
+
+
+def audio_info(path: Union[str, os.PathLike]) -> AudioInfo:
+    """Describe an audio file without decoding its samples.
+
+    Args:
+        path: Source file.
+
+    Returns:
+        An :class:`AudioInfo`. ``frames`` is the header's exact count for a libsndfile read, and the
+        header's estimate (or None) for a torchcodec one. ``decoder`` names the decoder
+        :func:`read_audio` uses for this file.
+
+    Raises:
+        RuntimeError: If no decoder can open the file.
+    """
+    source = os.fspath(path)
+    info = _libsndfile_info(source)
+    if info is not None and info.format in EXACT_FRAME_COUNT_FORMATS:
+        return AudioInfo(int(info.samplerate), int(info.channels), int(info.frames), info.format, LIBSNDFILE)
+    try:
+        metadata = _torchcodec_decoder(source).metadata
+    except RuntimeError:
+        if info is None:
+            raise
+        return AudioInfo(int(info.samplerate), int(info.channels), None, info.format, LIBSNDFILE)
+    duration = getattr(metadata, "duration_seconds_from_header", None)
+    estimate = None if duration is None else round(duration * metadata.sample_rate)
+    codec = str(getattr(metadata, "codec", "") or "").upper()
+    return AudioInfo(int(metadata.sample_rate), int(metadata.num_channels), estimate, codec, TORCHCODEC)
+
+
+def _frame_window(
+    start: Optional[int], stop: Optional[int], total: Optional[int], source: str, rate: int
+) -> Tuple[int, Optional[int]]:
+    """Validate a ``[start, stop)`` frame window against a file of ``total`` frames (None: unknown)."""
+    first = 0 if start is None else int(start)
+    if first < 0 or (stop is not None and int(stop) < first):
+        raise ValueError(f"Invalid frame window [{start}, {stop}) for {source!r}.")
+    if total is not None and total > 0 and first >= total:
+        raise ValueError(f"Offset ({first / rate} s) exceeds the audio file duration ({total / rate:.2f} s).")
+    if stop is None:
+        return first, None
+    return first, int(stop) if total is None else min(int(stop), total)
+
+
+def _read_libsndfile(source: str, info: "sf._SoundFileInfo", start: Optional[int], stop: Optional[int]) -> np.ndarray:
+    """Decode ``[start, stop)`` with libsndfile as ``(channels, frames)``, refusing a short read."""
+    total = int(info.frames)
+    short_chunk = next((ln.strip() for ln in info.extra_info.splitlines() if _is_short_data_chunk(ln)), None)
+    if short_chunk:
+        logger.warning(
+            "%s: the header's data chunk is longer than the file (%s); reading the %d frames present.",
+            source,
+            short_chunk,
+            total,
+        )
+    first, last = _frame_window(start, stop, total, source, int(info.samplerate))
+    data, _ = sf.read(source, start=first, stop=last, dtype="float32", always_2d=True)
+    expected = (total if last is None else last) - first
+    if info.format in EXACT_FRAME_COUNT_FORMATS and data.shape[0] != expected:
+        raise RuntimeError(
+            f"libsndfile decoded {data.shape[0]} frames of {source!r} where its header promises {expected}; "
+            "the file is truncated or corrupt."
+        )
+    return data.T
+
+
+def _read_torchcodec(source: str, start: Optional[int], stop: Optional[int]) -> Tuple[np.ndarray, int]:
+    """Decode ``[start, stop)`` with torchcodec as ``(channels, frames)``, refusing an empty or non-finite one."""
+    decoder = _torchcodec_decoder(source)
+    rate = int(decoder.metadata.sample_rate)
+    if start is None and stop is None:
+        samples = decoder.get_all_samples().data
+    elif getattr(decoder.metadata, "begin_stream_seconds", None) == 0:
+        first, last = _frame_window(start, stop, None, source, rate)
+        if last is None:
+            samples = decoder.get_samples_played_in_range(start_seconds=first / rate).data
+        else:
+            samples = decoder.get_samples_played_in_range(start_seconds=first / rate, stop_seconds=last / rate).data
+    else:
+        whole = decoder.get_all_samples().data
+        first, last = _frame_window(start, stop, int(whole.shape[-1]), source, rate)
+        samples = whole[:, first:last]
+    array = np.asarray(samples.numpy(), dtype=np.float32)
+    if array.ndim != 2 or array.shape[0] == 0:
+        raise RuntimeError(f"torchcodec decoded no channels from {source!r}.")
+    if not np.isfinite(array).all():
+        raise RuntimeError(f"torchcodec decoded non-finite samples from {source!r}.")
+    return array, rate
+
+
 def read_audio(
     path: Union[str, os.PathLike],
     always_2d: bool = False,
     channels_first: bool = True,
+    *,
+    start: Optional[int] = None,
+    stop: Optional[int] = None,
 ) -> Tuple[np.ndarray, int]:
     """Read audio as float32, in senselab's axis order.
+
+    FLAC, WAV, WAVEX, W64, RF64 and AIFF are decoded by libsndfile, and a decode shorter than the
+    header's frame count raises. Every other format is decoded by torchcodec; where torchcodec cannot
+    decode it, a format libsndfile opens is decoded by libsndfile. :func:`audio_info` names the decoder.
 
     Args:
         path: Source file.
         always_2d: Return a 2-D array even for mono.
         channels_first: For 2-D output, put channels on the first axis. Ignored when the result
             is 1-D.
+        start: First frame to read; None reads from the beginning.
+        stop: Frame to stop before; None reads to the end. Clamped to the file's length.
 
     Returns:
         ``(samples, sampling_rate)``.
+
+    Raises:
+        ValueError: If ``start`` lies at or beyond the end of the file, or the window is inverted.
+        RuntimeError: If no decoder can read the file, or a lossless decode is short of its header.
     """
-    data, sampling_rate = sf.read(os.fspath(path), dtype="float32", always_2d=always_2d)
-    if data.ndim == 2 and channels_first:
-        data = data.T
-    return data, int(sampling_rate)
+    source = os.fspath(path)
+    info = _libsndfile_info(source)
+    if info is not None and info.format in EXACT_FRAME_COUNT_FORMATS:
+        data, rate = _read_libsndfile(source, info, start, stop), int(info.samplerate)
+    else:
+        try:
+            data, rate = _read_torchcodec(source, start, stop)
+        except RuntimeError:
+            if info is None:
+                raise
+            data, rate = _read_libsndfile(source, info, start, stop), int(info.samplerate)
+    if data.shape[0] == 1 and not always_2d:
+        return np.ascontiguousarray(data[0]), rate
+    return np.ascontiguousarray(data if channels_first else data.T), rate
+
+
+def read_audio_blocks(
+    source: Union[str, os.PathLike, IO[bytes]], block_seconds: float
+) -> Iterator[Tuple[np.ndarray, int]]:
+    """Read audio in consecutive blocks without decoding the rest of the source first.
+
+    Args:
+        source: A path, or a readable binary file-like object libsndfile can open.
+        block_seconds: Duration of each block; the last block may be shorter.
+
+    Yields:
+        ``(samples, sampling_rate)``, samples float32 shaped ``(channels, frames)``.
+    """
+    opened = source if hasattr(source, "read") else os.fspath(source)  # type: ignore[arg-type]
+    with sf.SoundFile(opened, "r") as handle:
+        rate = int(handle.samplerate)
+        block_frames = int(block_seconds * rate)
+        while True:
+            block = handle.read(frames=block_frames, dtype="float32", always_2d=True)
+            if block.shape[0] == 0:
+                return
+            yield np.ascontiguousarray(block.T), rate
