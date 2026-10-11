@@ -485,3 +485,60 @@ def test_consecutive_windows_concatenate_to_the_full_decode(tmp_path: Path, suff
     assert torch.equal(tiled, whole), (
         f"{suffix}: tiled windows differ from the full decode by {(tiled - whole).abs().max().item():.3e}"
     )
+
+
+def _write_flac(path: Path, frames: int = 16000, rate: int = 16000) -> np.ndarray:
+    """Writes a 24-bit mono FLAC of uniform noise and returns what libsndfile reads back."""
+    rng = np.random.default_rng(7)
+    sf.write(str(path), rng.uniform(-0.5, 0.5, frames).astype(np.float32), rate, subtype="PCM_24")
+    data, _ = sf.read(str(path), dtype="float32", always_2d=True)
+    return data.T
+
+
+def test_a_whole_file_decode_shorter_than_the_flac_header_is_read_with_libsndfile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A torchcodec decode that stops early (ffmpeg's FLAC parser losing sync) is replaced, not kept."""
+    path = tmp_path / "stream.flac"
+    reference = _write_flac(path)
+    real = Audio._torchcodec_window
+
+    def truncated(self: Audio, filepath: str, start: float, stop: float | None) -> torch.Tensor:
+        return real(self, filepath, start, stop)[:, :12288]
+
+    monkeypatch.setattr(Audio, "_torchcodec_window", truncated)
+    audio = Audio(filepath=str(path))
+    assert audio.waveform.shape[-1] == reference.shape[-1]
+    assert torch.allclose(audio.waveform, torch.from_numpy(reference), atol=1e-6)
+    assert audio.sampling_rate == 16000
+
+
+def test_a_torchcodec_decode_error_on_a_flac_is_read_with_libsndfile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``decodeAVFrame`` on a file libFLAC reads is a decoder limitation, not an unreadable file."""
+    path = tmp_path / "stream.flac"
+    reference = _write_flac(path)
+
+    def failing(self: Audio, filepath: str, start: float, stop: float | None) -> torch.Tensor:
+        raise RuntimeError("decodeAVFrame: Could not push packet to decoder")
+
+    monkeypatch.setattr(Audio, "_torchcodec_window", failing)
+    assert torch.allclose(Audio(filepath=str(path)).waveform, torch.from_numpy(reference), atol=1e-6)
+    window = Audio(filepath=str(path), offset_in_sec=0.25, duration_in_sec=0.5).waveform
+    assert torch.allclose(window, torch.from_numpy(reference[:, 4000:12000]), atol=1e-6)
+
+
+def test_a_torchcodec_error_on_a_file_libsndfile_cannot_count_still_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Only a lossless file libsndfile can count falls back; anything else keeps the original error."""
+    path = tmp_path / "not_audio.flac"
+    path.write_bytes(b"not a flac file")
+
+    def failing(self: Audio, filepath: str, start: float, stop: float | None) -> torch.Tensor:
+        raise RuntimeError("decodeAVFrame")
+
+    monkeypatch.setattr(Audio, "_torchcodec_window", failing)
+    with pytest.raises(RuntimeError, match="decodeAVFrame"):
+        _ = Audio(filepath=str(path)).waveform

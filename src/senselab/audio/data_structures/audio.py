@@ -46,6 +46,57 @@ except ModuleNotFoundError:
 _TORCH_BACKEND_SUBTYPE = "PCM_16"
 
 
+_EXACT_FRAME_COUNT_FORMATS = frozenset({"FLAC", "WAV", "WAVEX", "W64", "RF64", "AIFF"})
+"""libsndfile major formats whose header frame count is exact, so a shorter decode is a truncation."""
+
+
+def _soundfile_frames(filepath: Union[str, os.PathLike]) -> Optional[int]:
+    """The frame count libsndfile reads from a lossless file's header.
+
+    Args:
+        filepath: The audio file.
+
+    Returns:
+        The frame count, or None where soundfile is unavailable, cannot open the file, or the
+        format's count is not exact.
+    """
+    if not SOUNDFILE_AVAILABLE:
+        return None
+    try:
+        info = sf.info(str(filepath))
+    except (RuntimeError, OSError, TypeError):
+        return None
+    return int(info.frames) if info.format in _EXACT_FRAME_COUNT_FORMATS else None
+
+
+def _soundfile_window(
+    filepath: Union[str, os.PathLike], start_seconds: float, stop_seconds: Optional[float]
+) -> tuple[torch.Tensor, int]:
+    """Decode a window of a file with libsndfile.
+
+    Args:
+        filepath: The audio file.
+        start_seconds: Start of the window.
+        stop_seconds: End of the window; None reads to the end.
+
+    Returns:
+        The samples, shape ``(num_channels, num_samples)``, and the sampling rate.
+
+    Raises:
+        ValueError: If the start lies beyond the end of the file.
+    """
+    info = sf.info(str(filepath))
+    rate = int(info.samplerate)
+    first = round(start_seconds * rate)
+    if first >= info.frames and info.frames > 0:
+        raise ValueError(
+            f"Offset ({start_seconds} s) exceeds the audio file duration ({info.frames / rate:.2f} s)."
+        )
+    last = None if stop_seconds is None else min(round(stop_seconds * rate), int(info.frames))
+    data, rate = sf.read(str(filepath), start=first, stop=last, dtype="float32", always_2d=True)
+    return torch.from_numpy(np.ascontiguousarray(data.T)), int(rate)
+
+
 def _decoded_samples_start_the_stream_timeline(decoder: "AudioDecoder") -> bool:
     """Reports whether a stream's decoded samples and its timestamps share an origin.
 
@@ -216,6 +267,9 @@ class Audio(BaseModel):
         Returns:
             A torch.Tensor containing the loaded audio data.
 
+        Where libsndfile reads the file and its format's frame count is exact, a torchcodec decode
+        that raises, or a whole-file decode shorter than that count, is replaced by libsndfile's.
+
         Raises:
             RuntimeError: If torchcodec is not available.
             ValueError: If the offset or duration exceeds the file duration.
@@ -227,22 +281,18 @@ class Audio(BaseModel):
             if self._duration_in_sec is not None and self._duration_in_sec > 0:
                 stop_seconds = start_seconds + self._duration_in_sec
 
-            decoder = AudioDecoder(str(filepath))
-            self._sampling_rate = decoder.metadata.sample_rate
-
+            try:
+                decoded = self._torchcodec_window(filepath, start_seconds, stop_seconds)
+            except RuntimeError:
+                if _soundfile_frames(filepath) is None:
+                    raise
+                decoded, self._sampling_rate = _soundfile_window(filepath, start_seconds, stop_seconds)
+                return decoded
             if stop_seconds is None and start_seconds == 0.0:
-                return decoder.get_all_samples().data  # shape: (num_channels, num_samples)
-
-            if _decoded_samples_start_the_stream_timeline(decoder):
-                if stop_seconds is not None:
-                    samples = decoder.get_samples_played_in_range(
-                        start_seconds=start_seconds, stop_seconds=stop_seconds
-                    )
-                else:
-                    samples = decoder.get_samples_played_in_range(start_seconds=start_seconds)
-                return samples.data  # shape: (num_channels, num_samples)
-
-            return self._window_of_all_samples(decoder, start_seconds, stop_seconds)
+                exact_frames = _soundfile_frames(filepath)
+                if exact_frames is not None and decoded.shape[-1] < exact_frames:
+                    decoded, self._sampling_rate = _soundfile_window(filepath, 0.0, None)
+            return decoded
 
         if TORCHAUDIO_AVAILABLE:
             # Fallback: torchaudio for loading, soundfile for metadata
@@ -277,6 +327,34 @@ class Audio(BaseModel):
             "Neither torchcodec nor torchaudio is available for audio loading. "
             "Ensure FFmpeg is installed system-wide and torchcodec/torchaudio matches your torch version."
         )
+
+    def _torchcodec_window(
+        self, filepath: Union[str, os.PathLike], start_seconds: float, stop_seconds: Optional[float]
+    ) -> torch.Tensor:
+        """Decode a window of a file with torchcodec.
+
+        Args:
+            filepath: The audio file.
+            start_seconds: Start of the window.
+            stop_seconds: End of the window; None reads to the end.
+
+        Returns:
+            A torch.Tensor of shape (num_channels, num_samples).
+        """
+        decoder = AudioDecoder(str(filepath))
+        self._sampling_rate = decoder.metadata.sample_rate
+
+        if stop_seconds is None and start_seconds == 0.0:
+            return decoder.get_all_samples().data  # shape: (num_channels, num_samples)
+
+        if _decoded_samples_start_the_stream_timeline(decoder):
+            if stop_seconds is not None:
+                samples = decoder.get_samples_played_in_range(start_seconds=start_seconds, stop_seconds=stop_seconds)
+            else:
+                samples = decoder.get_samples_played_in_range(start_seconds=start_seconds)
+            return samples.data  # shape: (num_channels, num_samples)
+
+        return self._window_of_all_samples(decoder, start_seconds, stop_seconds)
 
     def _window_of_all_samples(
         self, decoder: "AudioDecoder", start_seconds: float, stop_seconds: Optional[float]
