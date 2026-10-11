@@ -2441,6 +2441,17 @@ readings or `needs_reread` -> `extend_llm_review.py`), so SPEECH writes the read
 COHORT apply over every participant (v4 changes every `cohort_key`, and enrollment loses loudness), its
 consistency, refold over the whole corpus, task audio and the build.
 
+
+### The "hey" comparison is an annotation (owner, 2026-10-11)
+
+The pooled "hey" target comparison separates other speakers at AUC 0.93 with an EER of 14.4% (cosine 0.163), and at the
+speech-fitted 0.231 it rejected 242 of 807 participants' own recordings (30%). A shouted single word against an
+enrollment built from normal-voice speech tasks does not identify a speaker well enough to send a recording to review.
+The owner chose option (a): `comparison.cosine_min.task_text` is null, so the "hey" pool is still embedded and its
+cosine is recorded as the `cohort.target_cosine` evidence item with effect `annotation`, but it raises no
+`other_speaker_in_session`. Words other than "hey" are unchanged: masked and flagged as non-task speech, and pooled
+into the non-task comparison under the fitted default bound. cohort_stage.yaml v7.
+
 ## Pooled speaker comparison (owner, 2026-10-11)
 
 **Decision.** "since speaker identification requires at least 2s windows, any comparison should use embeddings

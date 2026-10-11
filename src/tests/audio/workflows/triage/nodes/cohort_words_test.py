@@ -137,21 +137,20 @@ def _compare(facts: RecordingFacts, level: float) -> dict[str, Any]:
     return compare_speaker(facts, audio, _enroll(speech), _embed, min_s=MIN_S, lexical_gap_s=0.6)
 
 
-@pytest.mark.parametrize("level,flagged", [(PARTICIPANT, False), (TALKER, True)])
-def test_a_hey_pool_is_other_speaker_only_where_it_misses_the_enrollment(
-    store: ProvStore, tmp_path: Path, level: float, flagged: bool
-) -> None:
-    """A pooled "hey" matching the enrollment raises nothing; one under the cut is other_speaker."""
+@pytest.mark.parametrize("level", [PARTICIPANT, TALKER])
+def test_a_hey_pool_is_recorded_and_never_flags(store: ProvStore, tmp_path: Path, level: float) -> None:
+    """A pooled "hey" is compared and its cosine recorded, but it decides nothing whether it matches or not."""
     from senselab.audio.workflows.triage.vocabulary import fold_file_verdict  # noqa: PLC0415
 
     facts = _loudness_facts(store, tmp_path, ["hey", "hey", "HEY!"])
     block = _compare(facts, level)
     assert block[POOL_TARGET]["status"] == MEASURED and block[POOL_TARGET]["pooled_s"] == 2.5
-    assert (not block[POOL_TARGET]["match"]) is flagged and block[POOL_NON_TASK]["status"] == NOT_APPLICABLE
+    assert block[POOL_TARGET]["match"] is None and block[POOL_TARGET]["cosine_min"] is None
+    assert block[POOL_TARGET]["cosine"] is not None and block[POOL_NON_TASK]["status"] == NOT_APPLICABLE
     attributes = cohort_attributes(facts, other_speaker=block, checks={}, quantiles=None, key="k")
     common: dict[str, Any] = {"branch_decisions": {}, "ran": {}, "hint_claims": {}, "route_state": None}
     folded = fold_file_verdict([], cohort=attributes, **common)
-    assert ("other_speaker" in folded.reason_keys) is flagged
+    assert "other_speaker" not in folded.reason_keys
 
 
 def test_a_hey_pool_under_two_seconds_is_not_measured(store: ProvStore, tmp_path: Path) -> None:
@@ -212,9 +211,9 @@ def test_a_speech_task_pools_its_extent_and_the_words_outside_it(store: ProvStor
 
 
 def test_each_pool_reads_its_fitted_bound() -> None:
-    """Loudness's "hey" target keeps its own bound; every other pool reads the fitted default."""
+    """Loudness's "hey" target has no bound (annotation only); every other pool reads the fitted default."""
     from senselab.audio.workflows.triage.cohort_stage import pool_cosine_min  # noqa: PLC0415
 
-    assert pool_cosine_min("loudness", POOL_TARGET) == 0.231
+    assert pool_cosine_min("loudness", POOL_TARGET) is None
     assert pool_cosine_min("loudness", POOL_NON_TASK) == pool_cosine_min("rainbow-passage", POOL_TARGET) == 0.398
     assert pool_cosine_min("prolonged-vowel", POOL_NON_TASK) == 0.398
