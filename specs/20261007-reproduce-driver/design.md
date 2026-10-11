@@ -1313,6 +1313,31 @@ the driver side; only digests come out), done is `cache.is_done`, and the pre-re
 `GIT_OPTIONAL_LOCKS=0`, so the checkout check (`git status`) never rewrites a worktree's index, in a dry run
 or a real one.
 
+## A short TMPDIR inside the sandbox
+
+A step's tmp lives at `R/tmp` = `<results_root>/<64-hex key>/tmp`, which on a real results root is longer
+than the 108-byte `sun_path` limit of an AF_UNIX socket. Inside the sandbox `TMPDIR` used to be that host
+path, so anything that binds a socket under it failed: PyTorch DataLoader workers sharing tensor fds go
+through `multiprocessing.resource_sharer`, whose listener binds in `TMPDIR`; the bind raised
+`OSError: AF_UNIX path too long` in the workers and the parent then waited for ever (a GPU rerun hung to its
+4-hour limit on about 30 s of CPU).
+
+Now the step sees its tmp at a short path, and every variable and placeholder under `{tmp}` follows it
+(`TMPDIR`, `HOME`, the Jupyter and IPython dirs, `XDG_CACHE_HOME`, `CUDA_CACHE_PATH`, `REPRO_TMP`, and
+`{tmp}` in argv):
+- `/tmp`, when the step's tmp is bound there (no path the sandbox needs lies under `/tmp`);
+- otherwise `sandbox.SHORT_TMP` (`/dev/shm/repro-tmp`): the script binds the tmp dir there, on the
+  sandbox's private `/dev/shm` tmpfs, after the sweep, so it stays writable. This is the test-suite case,
+  whose paths are under `/tmp`.
+`sandbox.inner_tmp` gives the path from the same arguments as the script, and the runner builds the step
+env from the keyed paths with `tmp` replaced by it (`_inner_paths`); the driver itself keeps using the host
+path to create and remove the dir. The R session check uses the same env, and the adapter sandbox binds its
+scratch dir the same way (`TMPDIR` and `HOME` under the short path). Keyed templates are unchanged
+(`{tmp}/cuda-cache` stays a template); only the recorded expanded env changes.
+
+This changes `reproduce_source_sha256`, so every step key changes once, and every step recomputes on its
+next run.
+
 ## Commands
 
 `python -m senselab.utils.reproduce` takes these subcommands:
