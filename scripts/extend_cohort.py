@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-r"""Run COHORT over finished triage runs: corpus quantiles, then session enrollment and readings.
+r"""Run COHORT over finished triage runs: corpus quantiles, then speaker enrollment and readings.
 
     uv run python scripts/extend_cohort.py collect MANIFEST --slice-index I --slice-count N [--log-dir DIR]
     uv run python scripts/extend_cohort.py quantiles (--facts DIR | --table TRIAGE_TSV) --out FILE [--commit SHA]
     uv run python scripts/extend_cohort.py apply MANIFEST --quantiles FILE --slice-index I --slice-count N \
-        [--sessions KEY ...] [--readings-out DIR] [--enrollments-out DIR] [--force] [--config OVERRIDE.yaml] \
+        [--participants SUB ...] [--readings-out DIR] [--enrollments-out DIR] [--force] [--config OVERRIDE.yaml] \
         [--commit SHA] [--log-dir DIR] [--device cpu|cuda]
+    uv run python scripts/extend_cohort.py consistency LOG_DIR [--iqr-multiple K]
 
 ``MANIFEST`` is the JSONL every extend driver takes (``stem``, ``enhanced``).
 
@@ -14,16 +15,20 @@ r"""Run COHORT over finished triage runs: corpus quantiles, then session enrollm
 - ``quantiles`` takes the per-family quantiles over every collected row (or over a ``triage.tsv``,
   whose ``task_family``, ``recording_duration_s`` and ``task_duration_s`` columns are the same facts)
   and writes the run's cohort artefact, ``cohort_quantiles.json``, with its provenance.
-- ``apply`` groups the manifest by BIDS session and shards the sessions, never a session's members.
-  Per session it builds the participant's enrollment, compares every member's speech runs with it,
-  checks every member against the quantiles, and writes one ``cohort_reading`` into each store.
-  With ``--readings-out`` nothing is written into a store: each session's readings go to
-  ``<DIR>/<session>.jsonl`` instead.
+- ``apply`` groups the manifest by participant and shards the participants, never a participant's
+  sessions. Per participant it builds each session's enrollment and, per session, the participant
+  enrollment of the other sessions; compares every member's speech runs with its session's (or, where
+  the session has none, the other sessions'); checks each session against the other sessions and
+  every member against the quantiles; and writes one ``cohort_reading`` into each store. With
+  ``--readings-out`` nothing is written into a store: each participant's readings go to
+  ``<DIR>/<participant>.jsonl`` instead.
+- ``consistency`` reads the apply logs' session-vs-other-sessions cosines and prints their
+  distribution and lower fence, from which ``participant.consistency_cosine_min`` is set.
 
-``apply`` is resumable: a session whose every store already carries a live reading under the same
-cohort key (parameters, quantile digest, model, cut, members) is skipped unless ``--force``; with
-``--readings-out`` a session whose file exists is skipped. A repeated write of an identical reading
-mints nothing.
+``apply`` is resumable: a participant whose every store already carries a live reading under the
+same cohort key (parameters, quantile digest, model, cut, every member of every session) is skipped
+unless ``--force``; with ``--readings-out`` a participant whose file exists is skipped. A repeated
+write of an identical reading mints nothing.
 
 Run ``scripts/extend_refold.py`` afterwards: VERDICT reads the reading.
 
@@ -47,19 +52,21 @@ import numpy as np
 
 from senselab.audio.workflows.triage.cohort_fold import COHORT_READING
 from senselab.audio.workflows.triage.cohort_stage import (
+    CONSISTENCY_CHECK,
     QUANTILES_FILE,
     EnrollmentConfig,
     RecordingFacts,
-    SessionEnrollment,
     build_quantile_artefact,
     cohort_key,
     cohort_parameters,
+    consistency_bound,
     ecapa_embedder,
     enrollment_config,
     facts_of,
+    participant_key,
     plain_loader,
+    read_participant,
     read_quantile_artefact,
-    read_session,
     write_cohort_reading,
     write_enrollment_entity,
     write_quantile_artefact,
@@ -111,19 +118,25 @@ def build_parser() -> argparse.ArgumentParser:
     quantiles.add_argument("--out", type=Path, required=True, help=f"The artefact path, e.g. DIR/{QUANTILES_FILE}")
     quantiles.add_argument("--commit", default=None)
 
-    apply = sub.add_parser("apply", help="Enroll each session and write every member's cohort reading")
+    apply = sub.add_parser("apply", help="Enroll each participant and session and write every member's reading")
     apply.add_argument("manifest", type=Path)
     apply.add_argument("--quantiles", type=Path, default=None, help="The artefact; omitted, every check is unavailable")
     apply.add_argument("--slice-index", type=int, required=True)
     apply.add_argument("--slice-count", type=int, required=True)
-    apply.add_argument("--sessions", nargs="*", default=None, help="Only these sub-<label>_ses-<label> keys")
+    apply.add_argument("--participants", nargs="*", default=None, help="Only these sub-<label> participants")
     apply.add_argument("--readings-out", type=Path, default=None, help="Write readings here, never into a store")
-    apply.add_argument("--enrollments-out", type=Path, default=None, help="Write each session's vector here, 0600")
-    apply.add_argument("--force", action="store_true", help="Re-read sessions already carrying this cohort key")
+    apply.add_argument(
+        "--enrollments-out", type=Path, default=None, help="Write each session's and participant's vector here, 0600"
+    )
+    apply.add_argument("--force", action="store_true", help="Re-read participants already carrying this cohort key")
     apply.add_argument("--config", type=Path, default=None, help="Partial YAML deep-merged over the packaged config")
     apply.add_argument("--commit", default=None)
     apply.add_argument("--log-dir", type=Path, default=None, help=f"Where {SLICES_SUBDIR}/ goes")
     apply.add_argument("--device", default=None, help="cpu or cuda; default lets senselab pick")
+
+    consistency = sub.add_parser("consistency", help="The session-vs-other-sessions cosines and their lower fence")
+    consistency.add_argument("logs", type=Path, help="The apply --log-dir, its slices/, or a --readings-out directory")
+    consistency.add_argument("--iqr-multiple", type=float, default=1.5)
     return parser
 
 
@@ -280,33 +293,41 @@ def run_quantiles(*, facts: Path | None, table: Path | None, out: Path, commit: 
 # ------------------------------------------------------------------------------ apply
 
 
-def sessions_of(rows: Sequence[dict[str, Any]]) -> list[tuple[str, list[dict[str, Any]]]]:
-    """The manifest's rows grouped by BIDS session, sessions in sorted order.
+def participants_of(rows: Sequence[dict[str, Any]]) -> list[tuple[str, list[tuple[str, list[dict[str, Any]]]]]]:
+    """The manifest's rows grouped by participant, then by BIDS session, both in sorted order.
 
     Args:
         rows: Every manifest row.
 
     Returns:
-        ``(session, rows)`` pairs; a stem naming no session is its own group, keyed by the stem.
+        ``(participant, [(session, rows), ...])`` pairs; a stem naming no session is its own session,
+        keyed by the stem, under the participant its first underscore names.
     """
-    groups: dict[str, list[dict[str, Any]]] = {}
+    groups: dict[str, dict[str, list[dict[str, Any]]]] = {}
     for row in rows:
-        groups.setdefault(session_key(str(row["stem"])) or str(row["stem"]), []).append(row)
-    return sorted(groups.items())
+        session = session_key(str(row["stem"])) or str(row["stem"])
+        groups.setdefault(participant_key(session), {}).setdefault(session, []).append(row)
+    return [(participant, sorted(sessions.items())) for participant, sessions in sorted(groups.items())]
 
 
-def _write_enrollment(enrollment: SessionEnrollment, directory: Path) -> None:
-    if enrollment.vector is None:
+def _write_vector(vector: np.ndarray | None, path: Path) -> None:
+    if vector is None:
         return
-    directory.mkdir(parents=True, exist_ok=True)
-    path = directory / f"{enrollment.session}.npy"
+    path.parent.mkdir(parents=True, exist_ok=True)
     with open(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "wb") as handle:
-        np.save(handle, np.asarray(enrollment.vector, dtype=np.float32))
+        np.save(handle, np.asarray(vector, dtype=np.float32))
 
 
-def process_session(
-    session: str,
-    rows: Sequence[dict[str, Any]],
+def _consistency_cosine(block: dict[str, Any]) -> float | None:
+    for comparison in block.get("comparisons") or ():
+        if comparison.get("name") == "session_vs_other_sessions_cosine":
+            return comparison.get("value")
+    return None
+
+
+def process_participant(
+    participant: str,
+    sessions: Sequence[tuple[str, Sequence[dict[str, Any]]]],
     *,
     settings: EnrollmentConfig,
     embed: Any,  # noqa: ANN401 -- an Embedder, or None where the settings are unusable
@@ -316,104 +337,152 @@ def process_session(
     enrollments_out: Path | None = None,
     force: bool = False,
 ) -> list[dict[str, Any]]:
-    """COHORT over one session's members, written into their stores or into ``readings_out``.
+    """COHORT over every session of one participant, written into the stores or into ``readings_out``.
 
     Args:
-        session: The session key.
-        rows: Its members' manifest rows.
+        participant: The participant label.
+        sessions: ``(session, manifest rows)`` per session.
         settings: The enrollment settings.
         embed: The span embedder.
         artefact: The quantile artefact, or None.
         quantiles_ref: Its ``{path, sha256, version}``, or None.
         readings_out: Where readings go instead of the stores, or None.
-        enrollments_out: Where the session vector goes, or None.
-        force: Re-read a session already carrying this cohort key.
+        enrollments_out: Where the session and participant vectors go, or None.
+        force: Re-read a participant already carrying this cohort key.
 
     Returns:
-        One outcome record per member: counts and ids only.
+        One outcome record per member: ids, counts and cosines only.
     """
     started = time.time()
-    if readings_out is not None and (readings_out / f"{session}.jsonl").exists() and not force:
-        return [{"stem": row["stem"], "session": session, "status": SKIPPED} for row in rows]
-    opened: list[tuple[dict[str, Any], Path, ProvStore]] = []
+    rows_n = sum(len(rows) for _, rows in sessions)
+    if readings_out is not None and (readings_out / f"{participant}.jsonl").exists() and not force:
+        return [
+            {"stem": row["stem"], "participant": participant, "session": session, "status": SKIPPED}
+            for session, rows in sessions
+            for row in rows
+        ]
     failed: list[dict[str, Any]] = []
-    for row in rows:
-        try:
-            run_root = run_root_of(Path(row["enhanced"]))
-            opened.append((row, run_root, read_store(run_root)))
-        except (OSError, ValueError) as error:
-            failed.append(
-                {"stem": row["stem"], "session": session, "status": ERROR, "error": describe_exception(error)}
-            )
     stream = str(cohort_parameters()["runs"]["diarization_stream"])
-    members = [
-        (facts_of(store, run_root / RUN_SUBDIR, diarization_stream=stream, stem=str(row["stem"])), run_root, store)
-        for row, run_root, store in opened
-    ]
+    opened: list[tuple[str, list[tuple[RecordingFacts, Path, ProvStore]]]] = []
+    for session, rows in sessions:
+        members: list[tuple[RecordingFacts, Path, ProvStore]] = []
+        for row in rows:
+            try:
+                run_root = run_root_of(Path(row["enhanced"]))
+                store = read_store(run_root)
+            except (OSError, ValueError) as error:
+                failed.append(
+                    {
+                        "stem": row["stem"],
+                        "participant": participant,
+                        "session": session,
+                        "status": ERROR,
+                        "error": describe_exception(error),
+                    }
+                )
+                continue
+            facts = facts_of(store, run_root / RUN_SUBDIR, diarization_stream=stream, stem=str(row["stem"]))
+            members.append((facts, run_root, store))
+        if members:
+            opened.append((session, members))
+    every = [member for _, members in opened for member in members]
     key = cohort_key(
-        session=session,
-        members=[facts for facts, _, _ in members],
+        group=participant,
+        members=[facts for facts, _, _ in every],
         quantiles_sha256=None if quantiles_ref is None else str(quantiles_ref.get("sha256")),
         enrollment_config=settings.record(),
     )
-    if readings_out is None and not force and members:
-        held = [find_measurement(store, COHORT_READING) for _, _, store in members]
+    if readings_out is None and not force and every:
+        held = [find_measurement(store, COHORT_READING) for _, _, store in every]
         if all(h is not None and h.attributes.get("cohort_key") == key for h in held):
-            return [{"stem": f.stem, "session": session, "status": SKIPPED} for f, _, _ in members] + failed
-    enrollment, readings = read_session(
-        session,
-        [(facts, plain_loader(store, run_root / RUN_SUBDIR)) for facts, run_root, store in members],
+            return [
+                {"stem": facts.stem, "participant": participant, "session": session, "status": SKIPPED}
+                for session, members in opened
+                for facts, _, _ in members
+            ] + failed
+    enrollments, readings = read_participant(
+        participant,
+        [
+            (session, [(facts, plain_loader(store, run_root / RUN_SUBDIR)) for facts, run_root, store in members])
+            for session, members in opened
+        ],
         settings=settings,
         embed=embed,
         artefact=artefact,
         quantiles_ref=quantiles_ref,
     )
-    if enrollment is not None and enrollments_out is not None:
-        _write_enrollment(enrollment, enrollments_out)
+    if enrollments is not None and enrollments_out is not None:
+        for session, enrollment in enrollments.sessions.items():
+            _write_vector(enrollment.vector, enrollments_out / f"{session}.npy")
+        _write_vector(enrollments.pooled.vector, enrollments_out / f"{participant}.npy")
     out: list[dict[str, Any]] = []
-    for (facts, run_root, store), attributes in zip(members, readings, strict=True):
-        if readings_out is None:
-            reading_id = write_cohort_reading(store, attributes)
-            if enrollment is not None and enrollment.vector is not None:
-                write_enrollment_entity(store, enrollment, reading_id)
-            capture_environments(store, {})
-            write_store(store, run_root)
-            export_prov(store, run_root)
-        block = attributes["other_speaker"]
-        checks = attributes["checks"]
-        out.append(
-            {
-                "stem": facts.stem,
-                "session": session,
-                "family": facts.family,
-                "status": OK,
-                "other_speaker": block.get("status"),
-                "runs_n": block.get("runs_n"),
-                "nonmatch_n": block.get("nonmatch_n"),
-                "cosines": [[r["source"], r["duration_s"], r["cosine"]] for r in block.get("runs") or ()],
-                "checks": {name: c.get("outcome") or c.get("status") for name, c in checks.items()},
-                "attributes": attributes if readings_out is not None else None,
-            }
-        )
-    elapsed = time.time() - started
+    for session, members in opened:
+        compared = None if enrollments is None else enrollments.source_for(session)[1]
+        for (facts, run_root, store), attributes in zip(members, readings[session], strict=True):
+            if readings_out is None:
+                reading_id = write_cohort_reading(store, attributes)
+                if compared is not None and compared.vector is not None:
+                    write_enrollment_entity(store, compared, reading_id)
+                capture_environments(store, {})
+                write_store(store, run_root)
+                export_prov(store, run_root)
+            block = attributes["other_speaker"]
+            checks = attributes["checks"]
+            consistency = checks.get(CONSISTENCY_CHECK) or {}
+            out.append(
+                {
+                    "stem": facts.stem,
+                    "participant": participant,
+                    "session": session,
+                    "family": facts.family,
+                    "status": OK,
+                    "other_speaker": block.get("status"),
+                    "enrollment_source": block.get("enrollment_source"),
+                    "runs_n": block.get("runs_n"),
+                    "nonmatch_n": block.get("nonmatch_n"),
+                    "cosines": [
+                        [r["source"], r["duration_s"], r["cosine"], r.get("participant_cosine")]
+                        for r in block.get("runs") or ()
+                    ],
+                    "consistency": {
+                        "status": consistency.get("status"),
+                        "cosine": _consistency_cosine(consistency),
+                        "outcome": consistency.get("outcome"),
+                    },
+                    "checks": {name: c.get("outcome") or c.get("status") for name, c in checks.items()},
+                    "attributes": attributes if readings_out is not None else None,
+                }
+            )
     if readings_out is not None:
         readings_out.mkdir(parents=True, exist_ok=True)
-        partial = readings_out / f"{session}.jsonl.partial"
+        partial = readings_out / f"{participant}.jsonl.partial"
         partial.write_text("".join(json.dumps(r, sort_keys=True) + "\n" for r in out), encoding="utf-8")
-        partial.replace(readings_out / f"{session}.jsonl")
+        partial.replace(readings_out / f"{participant}.jsonl")
     summary = {
-        "enrollment": None if enrollment is None else enrollment.record(),
-        "members_n": len(rows),
-        "elapsed_s": round(elapsed, 2),
+        "participant": participant,
+        "sessions_n": len(sessions),
+        "members_n": rows_n,
+        "enrolled_sessions_n": None if enrollments is None else len(enrollments.enrolled_sessions),
+        "sessions": {}
+        if enrollments is None
+        else {
+            session: {
+                "enrollment": enrollment.record(),
+                "enrollment_source": enrollments.source_for(session)[0],
+            }
+            for session, enrollment in enrollments.sessions.items()
+        },
+        "pooled": None if enrollments is None else enrollments.pooled.record(),
+        "elapsed_s": round(time.time() - started, 2),
     }
     for record in out:
         record.pop("attributes", None)
-        record["session_summary"] = summary
+        record["participant_summary"] = summary
     return out + failed
 
 
 def run_apply(args: argparse.Namespace) -> dict[str, Any]:
-    """Apply COHORT over one shard of sessions.
+    """Apply COHORT over one shard of participants.
 
     Args:
         args: The parsed ``apply`` arguments.
@@ -443,17 +512,19 @@ def run_apply(args: argparse.Namespace) -> dict[str, Any]:
             hop_s=float(params["hop_s"]),
             device=device,
         )
-    sessions = sessions_of(read_manifest(args.manifest, required=("stem", "enhanced")))
-    if args.sessions:
-        wanted = set(args.sessions)
-        sessions = [(s, rows) for s, rows in sessions if s in wanted]
-    mine = take_slice([{"session": s, "rows": rows} for s, rows in sessions], args.slice_index, args.slice_count)
-    print(f"[slice {args.slice_index}/{args.slice_count}] {len(mine)} sessions", flush=True)
+    participants = participants_of(read_manifest(args.manifest, required=("stem", "enhanced")))
+    if args.participants:
+        wanted = set(args.participants)
+        participants = [(p, sessions) for p, sessions in participants if p in wanted]
+    mine = take_slice(
+        [{"participant": p, "sessions": sessions} for p, sessions in participants], args.slice_index, args.slice_count
+    )
+    print(f"[slice {args.slice_index}/{args.slice_count}] {len(mine)} participants", flush=True)
     log: list[dict[str, Any]] = []
     for group in mine:
-        records = process_session(
-            group["session"],
-            group["rows"],
+        records = process_participant(
+            group["participant"],
+            group["sessions"],
             settings=settings,
             embed=embed,
             artefact=artefact,
@@ -463,12 +534,12 @@ def run_apply(args: argparse.Namespace) -> dict[str, Any]:
             force=args.force,
         )
         log.extend(records)
-        head = records[0].get("session_summary") if records else None
+        head = records[0].get("participant_summary") if records else None
         if head:
-            enrolled = head["enrollment"] or {}
+            sources = [s["enrollment_source"] for s in head["sessions"].values()]
             print(
-                f"  {group['session']}: {head['members_n']} members, enrollment {enrolled.get('status')} "
-                f"({enrolled.get('recordings_n')} recordings, {enrolled.get('spans_n')} spans), {head['elapsed_s']} s",
+                f"  {group['participant']}: {head['sessions_n']} sessions, {head['members_n']} members, "
+                f"{head['enrolled_sessions_n']} enrolled, sources {sorted(sources)}, {head['elapsed_s']} s",
                 flush=True,
             )
     counts: dict[str, int] = {}
@@ -485,7 +556,7 @@ def run_apply(args: argparse.Namespace) -> dict[str, Any]:
         "manifest": str(args.manifest),
         "slice_index": args.slice_index,
         "slice_count": args.slice_count,
-        "sessions": len(mine),
+        "participants": len(mine),
         "rows": len(log),
         "counts": counts,
         "nonmatch_recordings": sum(1 for r in log if (r.get("nonmatch_n") or 0) > 0),
@@ -498,6 +569,66 @@ def run_apply(args: argparse.Namespace) -> dict[str, Any]:
     }
     (slices_dir / f"{label}.summary.json").write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
     return summary
+
+
+# ------------------------------------------------------------------------------ consistency
+
+
+def lower_fence(values: Sequence[float], iqr_multiple: float) -> dict[str, Any]:
+    """Tukey's lower fence over a sample: the first quartile less ``iqr_multiple`` interquartile ranges.
+
+    Args:
+        values: The sample.
+        iqr_multiple: The multiple of the interquartile range.
+
+    Returns:
+        ``n``, the quartiles, the 1st/5th percentiles, the minimum, the fence and how many values fall under it.
+    """
+    array = np.asarray(values, dtype=np.float64)
+    q1, q2, q3 = (float(np.quantile(array, q)) for q in (0.25, 0.5, 0.75))
+    fence = q1 - iqr_multiple * (q3 - q1)
+    return {
+        "n": int(array.size),
+        "min": round(float(array.min()), 4),
+        "p01": round(float(np.quantile(array, 0.01)), 4),
+        "p05": round(float(np.quantile(array, 0.05)), 4),
+        "q1": round(q1, 4),
+        "median": round(q2, 4),
+        "q3": round(q3, 4),
+        "iqr_multiple": iqr_multiple,
+        "fence": round(fence, 4),
+        "under_fence": int((array < fence).sum()),
+    }
+
+
+def run_consistency(logs: Path, *, iqr_multiple: float) -> dict[str, Any]:
+    """The session-vs-other-sessions cosines the apply logs hold, and their lower fence.
+
+    Args:
+        logs: The apply log directory, its ``slices/``, or a ``--readings-out`` directory.
+        iqr_multiple: The fence's multiple of the interquartile range.
+
+    Returns:
+        The fence summary and, at the packaged bound, how many sessions it flags.
+    """
+    base = logs / SLICES_SUBDIR if (logs / SLICES_SUBDIR).is_dir() else logs
+    paths = sorted(base.glob("cohort-slice-*.jsonl")) or sorted(base.glob("sub-*.jsonl"))
+    by_session: dict[str, float] = {}
+    for path in paths:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            record = json.loads(line)
+            cosine = (record.get("consistency") or {}).get("cosine")
+            if cosine is not None:
+                by_session[str(record["session"])] = float(cosine)
+    if not by_session:
+        return {"sessions": 0}
+    bound = consistency_bound()
+    return {
+        "sessions": len(by_session),
+        "fence": lower_fence(list(by_session.values()), iqr_multiple),
+        "packaged_bound": bound,
+        "flagged_at_packaged_bound": None if bound is None else sum(1 for c in by_session.values() if c < bound),
+    }
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -527,6 +658,9 @@ def main(argv: list[str] | None = None) -> int:
             summary = run_quantiles(facts=args.facts, table=args.table, out=args.out, commit=args.commit)
             print(json.dumps(summary, indent=2, sort_keys=True))
             return 0
+        if args.command == "consistency":
+            print(json.dumps(run_consistency(args.logs, iqr_multiple=args.iqr_multiple), indent=2, sort_keys=True))
+            return 0
         if not args.manifest.exists():
             print(f"ERROR: manifest not found: {args.manifest}", file=sys.stderr)
             return 2
@@ -534,7 +668,7 @@ def main(argv: list[str] | None = None) -> int:
     except (OSError, ValueError) as error:
         print(f"ERROR: {error}", file=sys.stderr)
         return 2
-    print(f"Sessions: {summary['sessions']}  Rows: {summary['rows']}  Elapsed: {summary['elapsed_s']:.1f} s")
+    print(f"Participants: {summary['participants']}  Rows: {summary['rows']}  Elapsed: {summary['elapsed_s']:.1f} s")
     print(f"Log:      {summary['log']}")
     for status, number in sorted(summary["counts"].items()):
         print(f"  {status:<32} {number}")
