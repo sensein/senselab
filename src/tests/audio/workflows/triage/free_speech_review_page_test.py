@@ -943,8 +943,10 @@ def test_bypassed_names_its_reason_and_the_old_sentences_are_gone() -> None:
     assert "not_run" not in page.LLM_STATES
     assert "nothing_to_read" not in page._SCRIPT
     assert "Reviewer bypassed" in page._SCRIPT
-    for reason in ("no_words", "non_lexical_only", "task_content_only", "unscanned"):
+    for reason in ("no_words", "non_lexical_only", "task_content_only", "non_lexical_task"):
         assert f"{reason}:" in page._SCRIPT
+    assert "unscanned:'the transcript" not in page._SCRIPT
+    assert "llm.absent_reason==='pii_scan_missing'" in page._SCRIPT
 
 
 def test_a_clean_reading_beside_a_failure_is_named_a_disagreement() -> None:

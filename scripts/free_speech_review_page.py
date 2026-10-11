@@ -72,8 +72,11 @@ RELEASE_ORDER = (
 discard, or a release the graph could not assess."""
 
 EXTRACT_SCHEMA = "senselab.fsreview.extract"
-EXTRACT_VERSION = 11
-"""11 carries the reviewer's ``bypassed`` status and its ``bypass_reason`` in place of ``nothing_to_read``.
+EXTRACT_VERSION = 12
+"""12 replaces the bypass reason ``unscanned`` with ``non_lexical_task`` and carries an ``absent`` reading's
+``absent_reason`` (``pii_scan_missing``).
+
+11 carries the reviewer's ``bypassed`` status and its ``bypass_reason`` in place of ``nothing_to_read``.
 
 10 carries each span's policy lock or release kind, the listed conditions, and the names awaiting
 review (redaction policy v7). 7 carries each span's trim reason and condition kind, and a single ASR
@@ -2551,11 +2554,16 @@ function buildWhy(stem,card){
       non_lexical_only:'the transcript carries only bracketed, non-lexical or degenerate tokens',
       task_content_only:'every lexical word in the transcript is task content (stimulus, '
         +'instructions or the task family\\'s lexicon)',
-      unscanned:'the transcript has lexical words, but the PII scan never ran, so no residue was computed'};
+      non_lexical_task:'the task asks for a sound, not words; its lexical words outside the task text '
+        +'are masked and reviewed as speech in the task, not read for PII'};
     const why=BYPASS[llm.bypass_reason]||'reason not recorded';
     out.push('<div class="warn"><b>Reviewer bypassed</b> ('+esc(llm.bypass_reason||'unrecorded')+'): '
       +esc(why)+', so the reviewer is enabled but was not asked. '
       +'It reached no conclusion about this recording.</div>');
+  }else if(st==='absent'&&llm.absent_reason==='pii_scan_missing'){
+    out.push('<div class="warn"><b>No PII scan.</b> The transcript has lexical words of a task that '
+      +'asks for words, and no PII scan read them, so the reviewer was not asked. This is a missing '
+      +'measurement (not_measured), not a clean reading.</div>');
   }else if(st==='absent'){
     out.push('<div class="warn"><b>It tried and could not load.</b> That is not the same as '
       +'finding nothing, and it is not a clean reading. '+(llm.failure?esc(llm.failure):'')
