@@ -292,10 +292,9 @@ def write_audio(
             do not fit the subtype under ``out_of_range="raise"``.
     """
     fmt = format_for(path, format)
-    if not libsndfile_can_write(fmt):
-        raise ValueError(f"{fmt!r} is not a format soundfile can write; got destination {os.fspath(path)!r}")
-
     array = np.asarray(samples)
+    if not libsndfile_can_write(fmt):
+        return _write_with_torchcodec(path, array, sampling_rate, fmt, subtype, out_of_range, channels_first)
     if array.ndim == 2 and channels_first:
         array = array.T
 
@@ -311,6 +310,50 @@ def write_audio(
         out_of_range_fraction=fraction,
         gain=gain,
     )
+
+
+ENCODER_SUBTYPE = "PCM_16"
+"""What torchcodec's ``AudioEncoder`` writes for a container libsndfile cannot; it exposes no encoding control."""
+
+
+def _write_with_torchcodec(
+    path: Union[str, os.PathLike],
+    array: np.ndarray,
+    sampling_rate: int,
+    fmt: str,
+    subtype: Optional[str],
+    out_of_range: str,
+    channels_first: bool,
+) -> AudioWriteReport:
+    """Write a container libsndfile cannot (AAC in ``.m4a``, say) with torchcodec, under the range policy.
+
+    Raises:
+        ValueError: If a subtype was requested, or the samples do not fit ``PCM_16`` under ``"raise"``.
+        RuntimeError: If torchcodec cannot be imported or the encode fails.
+    """
+    destination = os.fspath(path)
+    if subtype is not None:
+        raise ValueError(
+            f"subtype={subtype!r} cannot be honoured for a {fmt} file: libsndfile cannot write this container "
+            "and torchcodec's AudioEncoder exposes no encoding control."
+        )
+    if array.ndim == 1:
+        array = array[None, :]
+    elif not channels_first:
+        array = array.T
+    array, peak, fraction, gain = apply_range_policy(array, fmt, ENCODER_SUBTYPE, out_of_range, destination)
+    try:
+        import torch
+        from torchcodec.encoders import AudioEncoder
+    except (ImportError, RuntimeError, OSError) as exc:
+        raise RuntimeError(f"torchcodec is needed to write a {fmt} file and cannot be imported: {exc}") from exc
+    try:
+        AudioEncoder(samples=torch.from_numpy(np.ascontiguousarray(array)), sample_rate=sampling_rate).to_file(
+            destination
+        )
+    except Exception as exc:
+        raise RuntimeError(f"torchcodec could not write {destination!r}: {exc}") from exc
+    return AudioWriteReport(destination, fmt, ENCODER_SUBTYPE, peak, fraction, gain)
 
 
 LIBSNDFILE = "libsndfile"
