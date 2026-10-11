@@ -4,7 +4,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from senselab.audio.workflows.triage.cohort_stage import facts_of, speech_outside_task, spells_task_syllables
+from senselab.audio.workflows.triage.cohort_stage import (
+    RecordingFacts,
+    enrollment_candidates,
+    facts_of,
+    lexical_task,
+    speech_outside_task,
+    spells_task_syllables,
+    word_gated,
+)
 from senselab.audio.workflows.triage.nodes.common import software_agent, write_measurement
 from senselab.audio.workflows.triage.task_speech import TASK_SPEECH_READING
 from senselab.utils.prov_store import ProvStore
@@ -13,6 +21,7 @@ from tests.audio.workflows.triage.nodes.redact_test import _seed_redact_store, _
 BREATH_STEM = "sub-x_ses-y_task-respiration-and-cough-v2-threebreathsnose"
 DDK_STEM = "sub-x_ses-y_task-diadochokinesis-pa"
 SPEECH_STEM = "sub-x_ses-y_task-rainbow-passage"
+LOUDNESS_STEM = "sub-x_ses-y_task-loudness"
 
 
 def _reading(store: ProvStore, name: str, events: list[tuple[float, float]]) -> None:
@@ -74,6 +83,50 @@ def test_task_syllables_spell_only_their_own_family() -> None:
     assert spells_task_syllables("puhtuhkuh", "diadochokinesis-v2-puhtuhkuh")
     assert not spells_task_syllables("pattern", "diadochokinesis-pa")
     assert not spells_task_syllables("pa", "prolonged-vowel")
+
+
+def test_a_loudness_run_holding_only_hey_is_not_compared(store: ProvStore, tmp_path: Path) -> None:
+    """Owner, 2026-10-11: loudness is word-gated on its 'hey', not on the speech-region rule."""
+    _seed_redact_store(store, tmp_path, words=["hey", "Hey!", "HEY-HEY"], recording_stem=LOUDNESS_STEM)
+    facts = facts_of(store, None)
+    assert facts.family == "loudness" and facts.words_gated and not facts.lexical_task
+    assert facts.lexical == ()
+
+
+def test_a_loudness_word_other_than_hey_qualifies_its_run(store: ProvStore, tmp_path: Path) -> None:
+    """Any other lexical word in a loudness recording is speech outside the task."""
+    _seed_redact_store(store, tmp_path, words=["hey", "okay", "hey"], recording_stem=LOUDNESS_STEM)
+    facts = facts_of(store, None)
+    assert facts.words_gated and facts.lexical == (_word_extent(1),)
+
+
+def test_loudness_never_enrolls_and_prolonged_vowel_is_unchanged() -> None:
+    """Loudness leaves the enrollment as a voice family does; the vowel stays gated and non-lexical."""
+    assert word_gated("loudness") and word_gated("loudness-v2") and word_gated("prolonged-vowel")
+    assert not lexical_task("loudness") and not lexical_task("prolonged-vowel") and lexical_task("rainbow-passage")
+    assert not word_gated("rainbow-passage")
+    span = [(0.0, 3.0, "A")]
+    members = [
+        (
+            RecordingFacts(
+                stem=f"sub-a_ses-1_task-{family}",
+                session="sub-a_ses-1",
+                family=family,
+                lexical_task=lexical_task(family),
+                duration_s=3.0,
+                task_extent=None,
+                diarization=tuple(span),
+                lexical=(),
+                speech=((0.0, 3.0),),
+                removed_speech=(),
+                task_events=(),
+            ),
+            lambda: None,
+        )
+        for family in ("loudness", "loudness-v2", "rainbow-passage")
+    ]
+    enrolled = enrollment_candidates(members, min_s=1.0, lexical_gap_s=0.5)
+    assert [candidate.facts.family for candidate in enrolled] == ["rainbow-passage"]
 
 
 def test_a_speech_task_keeps_every_lexical_word(store: ProvStore, tmp_path: Path) -> None:
