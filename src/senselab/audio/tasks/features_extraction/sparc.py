@@ -51,11 +51,12 @@ import traceback
 from pathlib import Path
 
 import numpy as np
-import soundfile as sf
 import torch
 from sparc import load_model
 
 args = json.loads(sys.stdin.read())
+sys.path.insert(0, args["io_dir"])
+from portable_audio_io import read_audio
 audio_paths = args["audio_paths"]
 language = args["language"]
 device = args["device"]
@@ -65,7 +66,7 @@ coder = load_model(language, device=device)
 
 output_paths = []
 for i, audio_path in enumerate(audio_paths):
-    data, sr = sf.read(audio_path, dtype="float32")
+    data, sr = read_audio(audio_path, channels_first=False)
     waveform = data.squeeze()
 
     try:
@@ -246,6 +247,7 @@ class SparcFeatureExtractor:
                     "language": used_language,
                     "device": device.value,
                     "output_dir": str(tmp),
+                    "io_dir": stage_portable_audio_io(tmp),
                 }
             )
 

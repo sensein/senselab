@@ -25,6 +25,7 @@ from senselab.utils.subprocess_venv import (
     ensure_venv,
     parse_subprocess_result,
     provisioned_venv_dirs,
+    stage_portable_audio_io,
     venv_python,
 )
 
@@ -103,10 +104,11 @@ import traceback
 from pathlib import Path
 
 import numpy as np
-import soundfile as sf
 import torch
 
 args = json.loads(sys.stdin.read())
+sys.path.insert(0, args["io_dir"])
+from portable_audio_io import read_audio
 audio_paths = args["audio_paths"]
 device = args["device"]
 output_dir = args["output_dir"]
@@ -117,7 +119,7 @@ gpu = 0 if device == "cuda" else None
 
 outputs = []
 for i, audio_path in enumerate(audio_paths):
-    data, sr = sf.read(audio_path, dtype="float32")
+    data, sr = read_audio(audio_path, channels_first=False)
     waveform = torch.from_numpy(data).unsqueeze(0) if data.ndim == 1 else torch.from_numpy(data.T)
     try:
         posteriorgram = ppgs.from_audio(
@@ -252,6 +254,7 @@ def extract_ppgs_from_audios(
                 "audio_paths": audio_paths,
                 "device": device.value,
                 "output_dir": str(tmp),
+                "io_dir": stage_portable_audio_io(tmp),
             }
         )
 
