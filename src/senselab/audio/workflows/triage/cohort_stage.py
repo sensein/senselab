@@ -4,11 +4,11 @@ Two families of reading, over what the per-recording stages already stored:
 
 - **Speaker enrollment.** One speaker vector per participant and session, pooled from the
   cleanest single-speaker spans of that session's lexical speech tasks, and per session a participant
-  vector pooled from the participant's other sessions. Every recording's speech -- its diarized
-  segments on the enhanced stream and its runs of lexical consensus words -- is then embedded run by
-  run and compared with the session's vector, or with the other sessions' where the session has none.
-  A run under the match cut is a non-match. A session whose vector is far from its other sessions'
-  is ``session_speaker_inconsistent``.
+  vector pooled from the participant's other sessions. Each recording then gives at most two pooled
+  embeddings, each compared with the session's vector, or with the other sessions' where the session has
+  none: its target speech (:func:`target_rule`) and its speech outside the task. A pool shorter than
+  ``comparison.pooled_min_s`` is not measured; one under the match cut is a non-match. A session whose
+  vector is far from its other sessions' is ``session_speaker_inconsistent``.
 - **Distribution checks.** Corpus quantiles per declared family, stored once per run as a cohort
   artefact with its own provenance, and per-recording checks against them
   (:data:`CHECK_FUNCTIONS`; ``recording_duration_outlier`` is the first).
@@ -41,7 +41,10 @@ from senselab.audio.workflows.triage.cohort_fold import (
     KEY_SESSION_SPEAKER_INCONSISTENT,
     MEASURED,
     NOT_APPLICABLE,
+    NOT_MEASURED,
     OTHER_SPEAKER,
+    POOL_NON_TASK,
+    POOL_TARGET,
     UNAVAILABLE,
 )
 from senselab.audio.workflows.triage.config import TriageConfig
@@ -61,7 +64,6 @@ from senselab.audio.workflows.triage.nodes.common import (
 from senselab.audio.workflows.triage.residue import is_non_lexical
 from senselab.audio.workflows.triage.routing_analysis import families as family_sets
 from senselab.audio.workflows.triage.routing_analysis.families import DECLARED_KIND, LEXICAL_SPEECH
-from senselab.audio.workflows.triage.speaker_vectors import load_min_extent_s
 from senselab.audio.workflows.triage.task_content import task_content_ids, task_events
 from senselab.audio.workflows.triage.task_lexicon import declared_names_lexicon
 from senselab.audio.workflows.triage.task_speech import (
@@ -77,9 +79,6 @@ PARAMETERS_PATH = Path(__file__).parent / "data" / "cohort_stage.yaml"
 
 RECORDING_STREAM = "recording"
 PLAIN_STREAM = "plain"
-SOURCE_DIARIZATION = "diarization"
-SOURCE_LEXICAL = "lexical"
-SOURCE_WINDOW = "window"
 QUANTILES_KIND = "cohort_quantiles"
 QUANTILES_FILE = "cohort_quantiles.json"
 FAMILY_LEVEL = "family"
@@ -105,6 +104,16 @@ NO_QUANTILES = "no cohort quantiles were supplied"
 FAMILY_NOT_IN_QUANTILES = "the recording's family has no quantiles in the cohort artefact"
 NO_DURATION = "the store records no recording duration"
 PLAIN_UNREADABLE = "the plain stream could not be read"
+TOO_SHORT_FOR_SPEAKER_ID = "too_short_for_speaker_id"
+NO_TARGET_COMPARISON = "no_target_comparison"
+NO_SPEECH_OUTSIDE_TASK = "no_speech_outside_task"
+NOT_EMBEDDED = "the pooled audio embedded to nothing"
+
+TARGET_SPEECH = "speech"
+TARGET_TASK_TEXT = "task_text"
+TARGET_NONE = "none"
+TARGET_RULES = (TARGET_SPEECH, TARGET_TASK_TEXT, TARGET_NONE)
+"""``comparison.target`` rules: lexical words in the task extent, the declared task text, or no target pool."""
 
 Embedder = Callable[[np.ndarray, int], "np.ndarray | None"]
 """Embeds one span's mono samples at a sampling rate into a unit vector, or None where it cannot."""
@@ -172,13 +181,12 @@ class RecordingFacts:
         duration_s: The recording's duration, or None where the store records none.
         task_extent: The hull of the standing task extents, or None where no branch wrote one.
         diarization: ``(start, end, speaker)`` per diarized segment on the configured stream.
-        lexical: The extents of the words a run must hold to be compared (:func:`gate_words`), in index order:
-            every lexical word, the speech outside the task, or the declared task text, by :func:`compare_on`.
-        speech: The speech-classified regions (:func:`speech_regions`), merged.
+        lexical: Every lexical consensus word's extent, in index order.
+        target: The extents of the words the target pool holds (:func:`target_words`), in index order.
+        non_task: The extents of the words of speech outside the task (:func:`non_task_words`), in index order.
         removed_speech: Speech-classified on the plain stream and not on the enhanced one: a voice the
             enhancer removed as background.
         task_events: The task events the branches read (breaths, coughs, phonation holds, syllables).
-        active: BACKGROUND's activity regions on the plain stream.
     """
 
     stem: str
@@ -189,26 +197,10 @@ class RecordingFacts:
     task_extent: tuple[float, float] | None
     diarization: tuple[tuple[float, float, str], ...] = ()
     lexical: tuple[tuple[float, float], ...] = ()
-    speech: tuple[tuple[float, float], ...] = ()
+    target: tuple[tuple[float, float], ...] = ()
+    non_task: tuple[tuple[float, float], ...] = ()
     removed_speech: tuple[tuple[float, float], ...] = ()
     task_events: tuple[tuple[float, float], ...] = ()
-    active: tuple[tuple[float, float], ...] = ()
-
-    @property
-    def words_gated(self) -> bool:
-        """Whether a run of this recording is compared only where it holds a word (:func:`word_gated`)."""
-        return word_gated(self.family)
-
-    def holds_word(self, span: tuple[float, float]) -> bool:
-        """Whether a span holds the midpoint of one of :attr:`lexical`.
-
-        Args:
-            span: ``(start, end)``.
-
-        Returns:
-            True where some word's midpoint lies inside it.
-        """
-        return any(span[0] <= (a + b) / 2.0 <= span[1] for a, b in self.lexical)
 
     @property
     def extent_fraction(self) -> float | None:
@@ -297,73 +289,34 @@ def speech_regions(
     return merge(out)
 
 
-def _activity(store: ProvStore) -> list[tuple[float, float]]:
-    reading = find_measurement(store, "background_model")
-    regions = [] if reading is None else reading.attributes.get("regions") or []
-    return merge([(float(r["start_s"]), float(r["end_s"])) for r in regions])
-
-
-def active_s(facts: RecordingFacts, span: tuple[float, float]) -> float:
-    """How much of a span BACKGROUND read as active.
-
-    Args:
-        facts: The recording's facts.
-        span: ``(start, end)``.
-
-    Returns:
-        The active seconds inside it.
-    """
-    return _length(_intersect(list(facts.active), span))
-
-
 def _task_events(store: ProvStore) -> list[tuple[float, float]]:
     from senselab.audio.workflows.triage.nodes.quality import task_events_of  # noqa: PLC0415
 
     return list(task_events_of(store)[1])
 
 
-COMPARE_ON_SPEECH = "speech"
-COMPARE_ON_NON_TASK_WORDS = "non_task_words"
-COMPARE_ON_TASK_TEXT = "task_text"
-COMPARE_ON = (COMPARE_ON_SPEECH, COMPARE_ON_NON_TASK_WORDS, COMPARE_ON_TASK_TEXT)
-
-
-def compare_on(family: str) -> str:
-    """What a run of a family must hold to be compared with the enrollment (``word_gate.compare_on``).
+def target_rule(family: str) -> str:
+    """What a family's target pool holds (``comparison.target``).
 
     Args:
         family: The declared task family.
 
     Returns:
-        One of :data:`COMPARE_ON`: the family's own entry, else its declared kind's, else the default.
+        One of :data:`TARGET_RULES`: the family's own entry, else its declared kind's, else the default.
 
     Raises:
-        ValueError: Where the configured rule is not one of :data:`COMPARE_ON`.
+        ValueError: Where the configured rule is not one of :data:`TARGET_RULES`.
     """
-    table = cohort_parameters()["word_gate"]["compare_on"]
-    families = table.get("families") or {}
-    rule = families.get(family)
+    table = cohort_parameters()["comparison"]["target"]
+    rule = (table.get("families") or {}).get(family)
     if rule is None:
         rule = next(
             (value for kind, value in (table.get("kinds") or {}).items() if family in DECLARED_KIND[str(kind)]),
             table["default"],
         )
-    if rule not in COMPARE_ON:
-        raise ValueError(f"cohort_stage.yaml word_gate.compare_on: {rule!r} for {family!r} is not one of {COMPARE_ON}")
+    if rule not in TARGET_RULES:
+        raise ValueError(f"cohort_stage.yaml comparison.target: {rule!r} for {family!r} is not one of {TARGET_RULES}")
     return str(rule)
-
-
-def word_gated(family: str) -> bool:
-    """Whether a family compares a run only where it holds a word: any rule but ``speech`` (:func:`compare_on`).
-
-    Args:
-        family: The declared task family.
-
-    Returns:
-        True for an airway, voice or syllable-repetition family, and a family compared on its task text
-        (``loudness``).
-    """
-    return compare_on(family) != COMPARE_ON_SPEECH
 
 
 def lexical_task(family: str) -> bool:
@@ -425,26 +378,54 @@ def task_text_words(store: ProvStore, family: str) -> list[Entity]:
     return [word for word in lexical_words(store) if word.id in ids]
 
 
-def gate_words(store: ProvStore, family: str) -> list[Entity]:
-    """The words a run must hold to be compared, by the family's rule (:func:`compare_on`).
+def _midpoint_in(word: Entity, span: tuple[float, float] | None) -> bool:
+    if word.extent is None or span is None:
+        return False
+    return span[0] <= (float(word.extent[0]) + float(word.extent[1])) / 2.0 <= span[1]
+
+
+def target_words(store: ProvStore, family: str, extent: tuple[float, float] | None) -> list[Entity]:
+    """The words the target pool holds, by :func:`target_rule`.
 
     Args:
         store: The recording's store.
         family: The declared task family.
+        extent: The task extent's hull, or None where no branch wrote one (the whole recording).
 
     Returns:
-        The task-text words, the speech outside the task, or every lexical word, in stream order.
+        ``speech``: the lexical words whose midpoint is inside the extent; ``task_text``: the declared task-text
+        words; ``none``: nothing. In stream order.
     """
-    rule = compare_on(family)
-    if rule == COMPARE_ON_TASK_TEXT:
+    rule = target_rule(family)
+    if rule == TARGET_TASK_TEXT:
         return task_text_words(store, family)
-    if rule == COMPARE_ON_NON_TASK_WORDS:
-        return speech_outside_task(store, family)
-    return lexical_words(store)
+    if rule == TARGET_SPEECH:
+        words = lexical_words(store)
+        return words if extent is None else [word for word in words if _midpoint_in(word, extent)]
+    return []
+
+
+def non_task_words(store: ProvStore, family: str, extent: tuple[float, float] | None) -> list[Entity]:
+    """The words of speech outside the task.
+
+    Args:
+        store: The recording's store.
+        family: The declared task family.
+        extent: The task extent's hull, or None where no branch wrote one.
+
+    Returns:
+        In a lexical speech task (:func:`lexical_task`) the lexical words whose midpoint is outside the extent
+        (none without one); elsewhere :func:`speech_outside_task`. In stream order.
+    """
+    if lexical_task(family):
+        if extent is None:
+            return []
+        return [word for word in lexical_words(store) if word.extent is not None and not _midpoint_in(word, extent)]
+    return speech_outside_task(store, family)
 
 
 def spells_task_syllables(text: str, family: str) -> bool:
-    """Whether a word is spelled only from its family's task syllables (``word_gate.task_syllables``).
+    """Whether a word is spelled only from its family's task syllables (``non_task.task_syllables``).
 
     Args:
         text: The word as the recogniser wrote it.
@@ -460,7 +441,7 @@ def spells_task_syllables(text: str, family: str) -> bool:
 
 
 def _task_syllables(family: str) -> tuple[str, ...]:
-    for set_name, syllables in (cohort_parameters()["word_gate"].get("task_syllables") or {}).items():
+    for set_name, syllables in (cohort_parameters()["non_task"].get("task_syllables") or {}).items():
         if family in getattr(family_sets, str(set_name), frozenset()):
             return tuple(sorted({str(s).lower() for s in syllables}, key=len, reverse=True))
     return ()
@@ -501,17 +482,14 @@ def facts_of(
                     for start, end, speaker in zip(arrays["starts"], arrays["ends"], arrays["speakers"])
                 )
             )
-    words = tuple((float(w.extent[0]), float(w.extent[1])) for w in gate_words(store, family) if w.extent is not None)
     by_name: dict[str, list[tuple[float, float]]] = {}
+    classes = cohort_parameters()["speech"]
+    removed = classes["removed"]
     if run_dir is not None:
-        classes = cohort_parameters()["speech"]
-        names = {*classes["measurements"], *cohort_parameters()["windows"]["removed"].values()}
-        for name in sorted(names):
+        for name in sorted(set(removed.values())):
             by_name[str(name)] = speech_regions(
                 _yamnet_windows(store, run_dir, str(name)), classes["labels"], float(classes["score_min"])
             )
-    speech = [region for name in cohort_parameters()["speech"]["measurements"] for region in by_name.get(name, [])]
-    removed = cohort_parameters()["windows"]["removed"]
     removed_speech = _subtract(by_name.get(removed["from"], []), by_name.get(removed["kept"], []))
     return RecordingFacts(
         stem=stem,
@@ -521,34 +499,16 @@ def facts_of(
         duration_s=_recording_duration(store),
         task_extent=hull,
         diarization=segments,
-        lexical=words,
-        speech=tuple(merge(speech)),
+        lexical=_extents(lexical_words(store)),
+        target=_extents(target_words(store, family, hull)),
+        non_task=_extents(non_task_words(store, family, hull)),
         removed_speech=tuple(removed_speech),
         task_events=tuple(merge(_task_events(store))),
-        active=tuple(_activity(store)),
     )
 
 
-@dataclass(frozen=True)
-class Run:
-    """One stretch of speech compared against the enrollment.
-
-    Attributes:
-        start: Its start, in seconds.
-        end: Its end, in seconds.
-        source: :data:`SOURCE_DIARIZATION` or :data:`SOURCE_LEXICAL`.
-        speaker: The diarizer's label for a diarized run, else None.
-    """
-
-    start: float
-    end: float
-    source: str
-    speaker: str | None = None
-
-    @property
-    def duration_s(self) -> float:
-        """The run's length in seconds."""
-        return self.end - self.start
+def _extents(words: Sequence[Entity]) -> tuple[tuple[float, float], ...]:
+    return tuple((float(w.extent[0]), float(w.extent[1])) for w in words if w.extent is not None)
 
 
 def exclusive_pieces(segments: Sequence[tuple[float, float, str]]) -> list[tuple[float, float, str]]:
@@ -569,127 +529,37 @@ def exclusive_pieces(segments: Sequence[tuple[float, float, str]]) -> list[tuple
     return sorted(pieces)
 
 
-def candidate_runs(facts: RecordingFacts, *, min_s: float, lexical_gap_s: float) -> list[Run]:
-    """Every run of at least ``min_s`` the recording's speech offers for comparison.
-
-    A diarized piece is compared only where it carries speech: its intersection with the lexical words
-    and the speech-classified regions, less the task events. In a word-gated family a run is kept only
-    where it holds a word (:meth:`RecordingFacts.holds_word`).
+def target_spans(facts: RecordingFacts, *, lexical_gap_s: float) -> list[tuple[float, float]]:
+    """The spans the target pool embeds: the target words merged across gaps up to ``lexical_gap_s``.
 
     Args:
         facts: The recording's facts.
-        min_s: The shortest run embedded.
-        lexical_gap_s: Largest gap two lexical words may straddle and stay one run.
+        lexical_gap_s: Largest gap two words may straddle and stay one span.
 
     Returns:
-        The diarized speech pieces, then the lexical runs, each kept where it reaches ``min_s``.
+        The spans, earliest first.
     """
-    speech = _subtract(merge([*facts.speech, *facts.lexical]), facts.task_events)
-    runs = [
-        Run(start, end, SOURCE_DIARIZATION, speaker)
-        for piece_start, piece_end, speaker in exclusive_pieces(facts.diarization)
-        for start, end in _intersect(speech, (piece_start, piece_end))
-        if end - start >= min_s
-    ]
-    runs.extend(
-        Run(start, end, SOURCE_LEXICAL)
-        for start, end in lexical_runs_of(facts.lexical, lexical_gap_s)
-        if end - start >= min_s
-    )
-    if facts.words_gated:
-        return [run for run in runs if facts.holds_word((run.start, run.end))]
-    return runs
+    return lexical_runs_of(facts.target, lexical_gap_s)
 
 
-def window_regions(facts: RecordingFacts, *, min_s: float, lexical_gap_s: float) -> list[tuple[float, float]]:
-    """The removed speech no compared run (:func:`candidate_runs`) or task event covers.
+def non_task_spans(facts: RecordingFacts, *, lexical_gap_s: float) -> list[tuple[float, float]]:
+    """The spans the non-task pool embeds: its words, and the removed speech holding one, less task events.
 
     Args:
         facts: The recording's facts.
-        min_s: The shortest region kept.
-        lexical_gap_s: Largest gap two lexical words may straddle and stay one run.
+        lexical_gap_s: Largest gap two words may straddle and stay one span.
 
     Returns:
-        The regions the sliding windows read, each at least ``min_s``; in a word-gated family only those
-        holding a word.
+        The merged spans, earliest first; empty where the recording has no speech outside the task.
     """
-    covered = [
-        *((run.start, run.end) for run in candidate_runs(facts, min_s=min_s, lexical_gap_s=lexical_gap_s)),
-        *facts.task_events,
+    if not facts.non_task:
+        return []
+    removed = [
+        (s, e)
+        for s, e in _subtract(list(facts.removed_speech), facts.task_events)
+        if any(s <= (a + b) / 2.0 <= e for a, b in facts.non_task)
     ]
-    regions = [(s, e) for s, e in _subtract(list(facts.removed_speech), covered) if e - s >= min_s]
-    return [region for region in regions if facts.holds_word(region)] if facts.words_gated else regions
-
-
-def window_runs(
-    regions: Sequence[tuple[float, float]],
-    cosine_at: Callable[[tuple[float, float]], float | None],
-    *,
-    window_s: float,
-    hop_s: float,
-    cut: float,
-    active_fraction: Callable[[tuple[float, float]], float] = lambda span: 1.0,
-    active_fraction_min: float = 0.0,
-    windows_min: int = 1,
-) -> list[dict[str, Any]]:
-    """Sliding windows over each region, grouped into runs of contiguous windows on one side of the cut.
-
-    The last window of a region is anchored to its end, so the region's tail is read.
-
-    Args:
-        regions: The regions to read.
-        cosine_at: The cosine of one window against the enrollment, or None where it cannot be embedded.
-        window_s: The window length.
-        hop_s: The hop.
-        cut: The match cut.
-        active_fraction: The share of a window BACKGROUND read as active.
-        active_fraction_min: A window under this share is not embedded and ends the group it would join.
-        windows_min: A group of fewer windows than this under the cut is not reported.
-
-    Returns:
-        One run record per group, its span the union of its windows and its cosine their mean.
-    """
-    out: list[dict[str, Any]] = []
-    for start, end in regions:
-        group: list[tuple[float, float, float, float]] = []
-        starts: list[float] = []
-        t = start
-        while t + window_s <= end + 1e-9:
-            starts.append(t)
-            t += hop_s
-        if starts and starts[-1] < end - window_s - 1e-6:
-            starts.append(end - window_s)
-        for t in starts:
-            share = active_fraction((t, t + window_s))
-            cosine = cosine_at((t, t + window_s)) if share >= active_fraction_min else None
-            if cosine is None:
-                if group:
-                    out.append(_window_group(group, cut))
-                    group = []
-            else:
-                if group and (cosine >= cut) != (group[-1][2] >= cut):
-                    out.append(_window_group(group, cut))
-                    group = []
-                group.append((t, t + window_s, cosine, share))
-        if group:
-            out.append(_window_group(group, cut))
-    return [run for run in out if run["match"] or run["windows_n"] >= windows_min]
-
-
-def _window_group(group: Sequence[tuple[float, float, float, float]], cut: float) -> dict[str, Any]:
-    cosine = float(np.mean([c for _, _, c, _ in group]))
-    start, end = group[0][0], group[-1][1]
-    return {
-        "start": round(start, 3),
-        "end": round(end, 3),
-        "duration_s": round(end - start, 3),
-        "source": SOURCE_WINDOW,
-        "speaker": None,
-        "cosine": round(cosine, 4),
-        "windows_n": len(group),
-        "windows": [[round(a, 3), round(c, 4), round(f, 3)] for a, _, c, f in group],
-        "match": group[0][2] >= cut,
-    }
+    return _subtract(merge([*lexical_runs_of(facts.non_task, lexical_gap_s), *removed]), facts.task_events)
 
 
 @dataclass(frozen=True)
@@ -1300,7 +1170,49 @@ def consistency_check(enrollments: ParticipantEnrollments, session: str, *, boun
     }
 
 
-def match_runs(
+def pooled_samples(samples: np.ndarray, rate: int, spans: Sequence[tuple[float, float]]) -> np.ndarray:
+    """The spans of a mono signal, concatenated in order.
+
+    Args:
+        samples: The signal.
+        rate: Its sampling rate.
+        spans: ``(start, end)`` per span, in seconds.
+
+    Returns:
+        The concatenated samples; empty where no span holds any.
+    """
+    pieces = [cut_samples(samples, rate, span) for span in spans]
+    pieces = [piece for piece in pieces if piece.size]
+    return np.concatenate(pieces) if pieces else np.zeros(0, dtype=samples.dtype)
+
+
+def pool_record(spans: Sequence[tuple[float, float]], *, min_s: float, reason_empty: str) -> dict[str, Any]:
+    """A pool's record before embedding: its spans and seconds, and whether it is long enough to compare.
+
+    Args:
+        spans: The pool's spans.
+        min_s: ``comparison.pooled_min_s``.
+        reason_empty: The ``not_applicable`` reason where the pool holds nothing.
+
+    Returns:
+        ``status`` :data:`NOT_APPLICABLE` (no span), :data:`NOT_MEASURED` with ``reason``
+        :data:`TOO_SHORT_FOR_SPEAKER_ID` (under ``min_s``), or :data:`MEASURED` pending a cosine; with
+        ``spans``, ``spans_n`` and ``pooled_s``.
+    """
+    seconds = _length(spans)
+    head = {
+        "spans": [[round(a, 3), round(b, 3)] for a, b in spans],
+        "spans_n": len(spans),
+        "pooled_s": round(seconds, 3),
+    }
+    if not spans:
+        return {"status": NOT_APPLICABLE, "reason": reason_empty, **head}
+    if seconds < min_s:
+        return {"status": NOT_MEASURED, "reason": TOO_SHORT_FOR_SPEAKER_ID, **head}
+    return {"status": MEASURED, **head}
+
+
+def compare_speaker(
     facts: RecordingFacts,
     loader: AudioLoader,
     enrollment: Enrollment,
@@ -1312,94 +1224,75 @@ def match_runs(
     source: str = SOURCE_SESSION,
     participant: Enrollment | None = None,
 ) -> dict[str, Any]:
-    """Compare every run of one recording's speech with an enrollment.
+    """Compare one recording's pooled target speech and pooled speech outside the task with an enrollment.
+
+    Each pool's spans are concatenated on the plain stream and embedded once (the enrollment's windows); a pool
+    under ``min_s`` is not embedded.
 
     Args:
         facts: The recording's facts.
         loader: Its plain-stream loader.
         enrollment: The enrollment compared against, with a vector.
         embed: The span embedder.
-        cut: The match cut: a run at or above it matches.
-        min_s: The shortest run embedded.
-        lexical_gap_s: Largest gap two lexical words may straddle and stay one run.
+        cut: The match cut: a pool at or above it matches.
+        min_s: ``comparison.pooled_min_s``.
+        lexical_gap_s: Largest gap two words may straddle and stay one span.
         source: Where ``enrollment`` came from (:data:`SOURCE_SESSION` or
             :data:`SOURCE_PARTICIPANT_OTHER_SESSIONS`), recorded.
-        participant: A second enrollment each diarized and lexical run is also compared with, reported
-            as ``participant_cosine``; it decides nothing.
+        participant: A second enrollment each pool is also compared with, reported as ``participant_cosine``;
+            it decides nothing.
 
     Returns:
-        The ``other_speaker`` block: each run with its cosine and match, the counts, and the merged
-        non-matching spans.
+        The ``other_speaker`` block: one record per pool (:data:`POOL_TARGET`, :data:`POOL_NON_TASK`), the
+        non-matching pools and their merged spans.
     """
-    runs = candidate_runs(facts, min_s=min_s, lexical_gap_s=lexical_gap_s)
-    windows = cohort_parameters()["windows"]
-    regions = window_regions(facts, min_s=float(windows["window_s"]), lexical_gap_s=lexical_gap_s)
-    loaded = loader() if runs or regions else None
-    second = None if participant is None else participant.vector
+    if target_rule(facts.family) == TARGET_NONE:
+        target: dict[str, Any] = {"status": NOT_APPLICABLE, "reason": NO_TARGET_COMPARISON}
+    else:
+        target = pool_record(
+            target_spans(facts, lexical_gap_s=lexical_gap_s), min_s=min_s, reason_empty=TOO_SHORT_FOR_SPEAKER_ID
+        )
+        if target["status"] == NOT_APPLICABLE:
+            target["status"] = NOT_MEASURED
+    pools = {
+        POOL_TARGET: target,
+        POOL_NON_TASK: pool_record(
+            non_task_spans(facts, lexical_gap_s=lexical_gap_s), min_s=min_s, reason_empty=NO_SPEECH_OUTSIDE_TASK
+        ),
+    }
     head = {
         "enrollment_source": source,
         "enrollment": enrollment.record(),
         "participant_enrollment": None if participant is None else participant.record(),
     }
-    if (runs or regions) and loaded is None:
-        return {"status": UNAVAILABLE, "reason": PLAIN_UNREADABLE, **head}
-    records: list[dict[str, Any]] = []
-    if loaded is not None and enrollment.vector is not None:
-        samples, rate = loaded
-        for run in runs:
-            active = active_s(facts, (run.start, run.end))
-            vector = embed(cut_samples(samples, rate, (run.start, run.end)), rate)
-            if vector is None:
-                continue
-            cosine = float(vector @ enrollment.vector)
-            record: dict[str, Any] = {
-                "start": round(run.start, 3),
-                "end": round(run.end, 3),
-                "duration_s": round(run.duration_s, 3),
-                "source": run.source,
-                "speaker": run.speaker,
-                "active_s": round(active, 3),
-                "cosine": round(cosine, 4),
-                "match": cosine >= cut,
-            }
-            if second is not None:
-                record["participant_cosine"] = round(float(vector @ second), 4)
-            records.append(record)
-
-        def cosine_at(span: tuple[float, float]) -> float | None:
-            vector = embed(cut_samples(samples, rate, span), rate)
-            return None if vector is None or enrollment.vector is None else float(vector @ enrollment.vector)
-
-        windowed = window_runs(
-            regions,
-            cosine_at,
-            window_s=float(windows["window_s"]),
-            hop_s=float(windows["hop_s"]),
-            cut=cut,
-            active_fraction=lambda span: active_s(facts, span) / (span[1] - span[0]) if facts.active else 1.0,
-            active_fraction_min=float(windows["active_fraction_min"]),
-            windows_min=int(windows["windows_min"]),
-        )
-        records.extend(
-            r for r in windowed if not facts.words_gated or facts.holds_word((float(r["start"]), float(r["end"])))
-        )
-    nonmatch = [r for r in records if not r["match"]]
-    spans = merge([(r["start"], r["end"]) for r in nonmatch])
+    wanted = [name for name, pool in pools.items() if pool["status"] == MEASURED]
+    loaded = loader() if wanted else None
+    if wanted and loaded is None:
+        return {"status": UNAVAILABLE, "reason": PLAIN_UNREADABLE, **head, **pools}
+    for name in wanted:
+        pool = pools[name]
+        samples, rate = loaded  # type: ignore[misc]
+        vector = embed(pooled_samples(samples, rate, [(float(a), float(b)) for a, b in pool["spans"]]), rate)
+        if vector is None or enrollment.vector is None:
+            pools[name] = {**pool, "status": UNAVAILABLE, "reason": NOT_EMBEDDED}
+            continue
+        cosine = float(vector @ enrollment.vector)
+        pool.update(cosine=round(cosine, 4), match=cosine >= cut)
+        if participant is not None and participant.vector is not None:
+            pool["participant_cosine"] = round(float(vector @ participant.vector), 4)
+    nonmatch = [name for name, pool in pools.items() if pool["status"] == MEASURED and not pool["match"]]
+    spans = merge([(float(a), float(b)) for name in nonmatch for a, b in pools[name]["spans"]])
     return {
         "status": MEASURED,
         **head,
         "model_id": enrollment.model_id,
         "model_commit_sha": enrollment.model_commit_sha,
         "cut": cut,
-        "min_run_s": min_s,
-        "runs": records,
-        "runs_n": len(records),
-        "candidate_runs_n": len(runs),
-        "window_regions_s": round(_length(regions), 3),
-        "nonmatch_n": len(nonmatch),
+        "pooled_min_s": min_s,
+        **pools,
+        "nonmatch": nonmatch,
         "nonmatch_s": round(_length(spans), 3),
-        "nonmatch_spans": [[round(s, 3), round(e, 3)] for s, e in spans],
-        "lowest_cosine": min((r["cosine"] for r in records), default=None),
+        "nonmatch_spans": [[round(a, 3), round(b, 3)] for a, b in spans],
     }
 
 
@@ -1779,7 +1672,7 @@ class EnrollmentConfig:
         model_id: ``speech.enrollment_model.model_id``, or None.
         commit: ``speech.enrollment_model.revision``, or None.
         cut: ``speech.target_match_cosine``, or None.
-        min_s: The speaker-vector refusal floor.
+        min_s: ``comparison.pooled_min_s``: the shortest pool compared and the shortest enrollment span.
         lexical_gap_s: ``branch.run_gap_max_s``.
     """
 
@@ -1820,12 +1713,13 @@ def enrollment_config(config: TriageConfig) -> EnrollmentConfig:
     """
     model = config.get("speech.enrollment_model")
     cut = config.get("speech.target_match_cosine")
-    gap_key = str(cohort_parameters()["runs"]["lexical_gap_key"])
+    comparison = cohort_parameters()["comparison"]
+    gap_key = str(comparison["lexical_gap_key"])
     return EnrollmentConfig(
         model_id=None if not isinstance(model, Mapping) else str(model.get("model_id")),
         commit=None if not isinstance(model, Mapping) else str(model.get("revision")),
         cut=None if cut is None else float(cut),
-        min_s=load_min_extent_s(),
+        min_s=float(comparison["pooled_min_s"]),
         lexical_gap_s=float(config.require(gap_key)),
     )
 
@@ -1910,7 +1804,7 @@ def read_participant(
                     "enrollment": enrollment.record(),
                 }
             else:
-                block = match_runs(
+                block = compare_speaker(
                     facts,
                     loader,
                     enrollment,

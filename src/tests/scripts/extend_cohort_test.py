@@ -185,7 +185,7 @@ def test_the_pass_writes_every_store_and_a_rerun_is_skipped(
     assert breath["other_speaker"]["status"] == MEASURED
     assert breath["other_speaker"]["nonmatch_spans"] == [[6.0, 9.0]]
     assert breath["quantiles"]["sha256"] and breath["cohort_key"]
-    assert _reading(rows[0])["other_speaker"]["nonmatch_n"] == 0
+    assert _reading(rows[0])["other_speaker"]["nonmatch"] == []
     assert _reading(rows[6])["checks"]["recording_duration_outlier"]["outcome"] == "review"
     assert _reading(rows[3])["checks"]["recording_duration_outlier"]["outcome"] == "pass"
     stores = [(Path(r["enhanced"]).parents[2] / "run" / "store.jsonl").read_bytes() for r in rows]
@@ -208,7 +208,7 @@ def test_readings_out_writes_no_store(
     assert [(Path(r["enhanced"]).parents[2] / "run" / "store.jsonl").read_bytes() for r in rows] == stores
     written = [json.loads(line) for line in (out / "sub-a.jsonl").read_text().splitlines()]
     assert len(written) == len(rows)
-    assert sum(1 for record in written if record["nonmatch_n"]) == 1
+    assert sum(1 for record in written if record["nonmatch"]) == 1
 
 
 def _two_participants(root: Path) -> Path:
@@ -269,7 +269,10 @@ def test_apply_shards_by_participant_and_falls_back_across_sessions(
             == 0
         )
     slices = [
-        [json.loads(line) for line in (tmp_path / "logs" / "slices" / f"cohort-slice-{i}-of-2.jsonl").read_text().splitlines()]
+        [
+            json.loads(line)
+            for line in (tmp_path / "logs" / "slices" / f"cohort-slice-{i}-of-2.jsonl").read_text().splitlines()
+        ]
         for i in range(2)
     ]
     assert [sorted({r["participant"] for r in records}) for records in slices] == [["sub-a"], ["sub-b"]]
@@ -277,7 +280,8 @@ def test_apply_shards_by_participant_and_falls_back_across_sessions(
     sources = {r["session"]: r["enrollment_source"] for r in slices[0]}
     assert sources == {"sub-a_ses-1": "session", "sub-a_ses-2": "participant_other_sessions"}
     breath = next(r for r in slices[0] if r["session"] == "sub-a_ses-2")
-    assert breath["nonmatch_n"] == 2, "the talker's diarized run and its lexical run"
+    assert breath["nonmatch"] == ["non_task"], "the talker's words and the removed speech around them, pooled"
+    assert breath["pools"]["non_task"]["pooled_s"] == 3.0 and breath["pools"]["target"]["status"] == "not_applicable"
     assert {r["consistency"]["status"] for r in slices[1]} == {"not_applicable"}
     assert sorted(p.name for p in out.glob("*.jsonl")) == ["sub-a.jsonl", "sub-b.jsonl"]
     assert cli.main(["consistency", str(tmp_path / "logs")]) == 0
