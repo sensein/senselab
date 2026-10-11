@@ -202,7 +202,9 @@ def cohort_evidence(reading: Mapping[str, Any] | None) -> list[EvidenceItem]:
     if block.get("status") == MEASURED:
         for pool in POOLS:
             record = pool_block(reading, pool)
-            if record.get("status") == MEASURED:
+            if record.get("status") == MEASURED and record.get("match") is None:
+                items.append(item(_named(POOL_ITEMS[pool]), record.get("cosine"), ANNOTATION))
+            elif record.get("status") == MEASURED:
                 effect = PASS if record.get("match") else REVIEW
                 bound = float(record.get("cosine_min") or 0)
                 items.append(

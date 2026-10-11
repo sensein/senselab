@@ -1245,7 +1245,7 @@ def pool_record(spans: Sequence[tuple[float, float]], *, min_s: float, reason_em
     return {"status": MEASURED, **head}
 
 
-def pool_cosine_min(family: str, pool: str) -> float:
+def pool_cosine_min(family: str, pool: str) -> float | None:
     """The cosine under which a pool does not match the enrollment (``comparison.cosine_min``).
 
     Args:
@@ -1254,11 +1254,12 @@ def pool_cosine_min(family: str, pool: str) -> float:
 
     Returns:
         ``task_text`` for the target pool of a family compared on its task text (loudness), else ``default``.
+        None where the bound is null: the cosine is recorded and decides nothing.
     """
     bounds = cohort_parameters()["comparison"]["cosine_min"]
-    if pool == POOL_TARGET and target_rule(family) == TARGET_TASK_TEXT:
-        return float(bounds[TARGET_TASK_TEXT])
-    return float(bounds["default"])
+    key = TARGET_TASK_TEXT if pool == POOL_TARGET and target_rule(family) == TARGET_TASK_TEXT else "default"
+    value = bounds.get(key)
+    return None if value is None else float(value)
 
 
 def compare_speaker(
@@ -1325,10 +1326,10 @@ def compare_speaker(
             continue
         cosine = float(vector @ enrollment.vector)
         bound = pool_cosine_min(facts.family, name)
-        pool.update(cosine=round(cosine, 4), cosine_min=bound, match=cosine >= bound)
+        pool.update(cosine=round(cosine, 4), cosine_min=bound, match=None if bound is None else cosine >= bound)
         if participant is not None and participant.vector is not None:
             pool["participant_cosine"] = round(float(vector @ participant.vector), 4)
-    nonmatch = [name for name, pool in pools.items() if pool["status"] == MEASURED and not pool["match"]]
+    nonmatch = [name for name, pool in pools.items() if pool["status"] == MEASURED and pool["match"] is False]
     spans = merge([(float(a), float(b)) for name in nonmatch for a, b in pools[name]["spans"]])
     return {
         "status": MEASURED,
