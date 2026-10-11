@@ -10,7 +10,7 @@ import torch
 from pydantic import BaseModel, Field
 
 try:
-    from torchcodec.decoders import AudioDecoder, VideoDecoder
+    from torchcodec.decoders import VideoDecoder
 
     TORCHCODEC_AVAILABLE = True
 except (ImportError, RuntimeError) as _torchcodec_err:
@@ -19,6 +19,7 @@ except (ImportError, RuntimeError) as _torchcodec_err:
 
 from senselab.audio.data_structures import Audio
 from senselab.utils.constants import SENSELAB_NAMESPACE
+from senselab.utils.portable_audio_io import read_audio
 
 try:
     import av  # noqa: F401
@@ -181,12 +182,10 @@ class Video(BaseModel):
         frames = [frame.data.permute(1, 2, 0) for frame in decoder]
         self._frames = torch.stack(frames) if frames else torch.empty(0)
 
-        # Decode audio stream if present (AudioDecoder available since torchcodec 0.3)
         try:
-            audio_decoder = AudioDecoder(str(self._file_path))
-            samples = audio_decoder.get_all_samples()
-            if samples.data.numel() > 0:
-                self._audio = Audio(waveform=samples.data, sampling_rate=samples.sample_rate)
+            samples, sampling_rate = read_audio(self._file_path, always_2d=True)
+            if samples.size > 0:
+                self._audio = Audio(waveform=samples, sampling_rate=sampling_rate)
         except Exception:
             pass  # No audio stream or decoding failed — video-only is fine
 

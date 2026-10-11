@@ -14,12 +14,12 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-import soundfile as sf
 
 from senselab.audio.workflows.triage.decision_tables import decision_rows, item_group
 from senselab.audio.workflows.triage.nodes.branches import EXPECTATIONS
 from senselab.audio.workflows.triage.recording_vectors import RUN_SUBDIR, STORE_NAME, StoreView, read_store
 from senselab.audio.workflows.triage.review_page.spectrogram import pack, quantised_levels, settings
+from senselab.utils.portable_audio_io import read_audio
 
 READINGS = ("airway_breath_reading", "airway_cough_reading", "voice_phonation_reading")
 BACKGROUND_MODEL = "background_model"
@@ -258,8 +258,8 @@ def spectrogram_of(view: StoreView, run_root: Path) -> tuple[str | None, str | N
         if not path.is_absolute():
             path = run_root / RUN_SUBDIR / path
         try:
-            samples, rate = sf.read(str(path), dtype="float32", always_2d=False)
-        except (OSError, RuntimeError, sf.LibsndfileError):
+            samples, rate = read_audio(path, channels_first=False)
+        except (OSError, RuntimeError):
             continue
         return pack(quantised_levels(np.asarray(samples).T, float(rate))), str(name)
     return None, None

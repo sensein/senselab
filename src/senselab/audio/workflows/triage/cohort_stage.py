@@ -631,7 +631,7 @@ def plain_loader(store: ProvStore, run_dir: Path) -> AudioLoader:
     """
 
     def load() -> tuple[np.ndarray, int] | None:
-        import soundfile as sf  # noqa: PLC0415
+        from senselab.utils.portable_audio_io import read_audio  # noqa: PLC0415
 
         found = [
             e
@@ -644,7 +644,7 @@ def plain_loader(store: ProvStore, run_dir: Path) -> AudioLoader:
         if not path.is_absolute():
             path = run_dir / path
         try:
-            samples, rate = sf.read(str(path), dtype="float32", always_2d=True)
+            samples, rate = read_audio(path, always_2d=True, channels_first=False)
         except (OSError, RuntimeError):
             return None
         return np.ascontiguousarray(samples[:, 0]), int(rate)

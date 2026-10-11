@@ -541,7 +541,7 @@ def _waveform(run_dir: Path, view: StoreView) -> np.ndarray | None:
         The samples of the first stream that decodes, in the figure's own preference order, or
         None when none does.
     """
-    import soundfile
+    from senselab.utils.portable_audio_io import read_audio  # noqa: PLC0415
 
     for name in ("preemphasised", "plain"):
         stream = view.last("stream", name=name)
@@ -549,7 +549,7 @@ def _waveform(run_dir: Path, view: StoreView) -> np.ndarray | None:
             continue
         path = run_dir / str(stream.attributes["path"])
         try:
-            samples, _ = soundfile.read(path, dtype="float32", always_2d=True)
+            samples, _ = read_audio(path, always_2d=True, channels_first=False)
         except (OSError, RuntimeError):
             continue
         return np.asarray(samples, dtype="float64").mean(axis=1)
@@ -1212,13 +1212,13 @@ def _stream_frames_dbfs(run_dir: Path, view: StoreView, name: str) -> np.ndarray
         One level per frame at the evaluation window and hop, or None when the stream is absent or
         does not decode.
     """
-    import soundfile
+    from senselab.utils.portable_audio_io import read_audio  # noqa: PLC0415
 
     stream = view.last("stream", name=name)
     if stream is None or not stream.attributes.get("path"):
         return None
     try:
-        samples, rate = soundfile.read(run_dir / str(stream.attributes["path"]), dtype="float32", always_2d=True)
+        samples, rate = read_audio(run_dir / str(stream.attributes["path"]), always_2d=True, channels_first=False)
     except (OSError, RuntimeError):
         return None
     x = np.asarray(samples, dtype=np.float64).mean(axis=1)
