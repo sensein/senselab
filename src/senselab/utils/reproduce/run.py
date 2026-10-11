@@ -982,7 +982,7 @@ class _Execution:
         self._stage()
         try:
             self.env, _, self.recorded_sha = sandbox.build_env(
-                step, config.profile, self.keyed.paths, parent=config.parent_env
+                step, config.profile, self._inner_paths(), parent=config.parent_env
             )
         except ValueError:
             raise RunError("E_ENV_BUILD") from None
@@ -991,8 +991,22 @@ class _Execution:
             self._r_env()
             self._r_session()
 
+    def _sandbox_args(self, rw: list[Path]) -> tuple[list[Path], list[Path], list[Path]]:
+        ups = [self.keyed.paths[f"up:{n}"] for n in self.step.needs]
+        extra = [self.keyed.checkout.worktree, self.keyed.paths["venv"], *ups]
+        return list(self.config.profile.roots.values()), rw, extra
+
+    def _inner(self, rw: list[Path], tmp: Path) -> str:
+        """Where a sandbox with these writable dirs shows ``tmp``: ``/tmp`` or the short fallback."""
+        roots, rw_dirs, extra = self._sandbox_args(rw)
+        return sandbox.inner_tmp(roots, rw_dirs, extra, tmp=tmp, visible=[self.result, self.config.cache])
+
+    def _inner_paths(self) -> dict[str, str | os.PathLike[str]]:
+        """The placeholder values the step sees: the keyed paths with ``tmp`` at its in-sandbox path."""
+        return {**self.keyed.paths, "tmp": self._inner([self.work], self.tmp)}
+
     def _values(self) -> dict[str, str | os.PathLike[str]]:
-        values: dict[str, str | os.PathLike[str]] = {k: os.path.realpath(v) for k, v in self.keyed.paths.items()}
+        values: dict[str, str | os.PathLike[str]] = {k: os.path.realpath(v) for k, v in self._inner_paths().items()}
         values |= {f"root:{n}": os.path.realpath(r) for n, r in self.config.profile.roots.items()}
         return values
 
@@ -1094,12 +1108,12 @@ class _Execution:
     # --- exec ----------------------------------------------------------------------------------
 
     def _sandbox(self, argv: list[str], rw: list[Path], *, tmp: Path | None) -> list[str]:
-        ups = [self.keyed.paths[f"up:{n}"] for n in self.step.needs]
+        roots, rw_dirs, extra = self._sandbox_args(rw)
         return sandbox.sandbox_argv(
             argv,
-            self.config.profile.roots.values(),
-            rw,
-            [self.keyed.checkout.worktree, self.keyed.paths["venv"], *ups],
+            roots,
+            rw_dirs,
+            extra,
             netns=not self.config.no_netns,
             tmp=tmp,
             visible=[self.result, self.config.cache],
@@ -1113,7 +1127,7 @@ class _Execution:
         not exist yet (a cwd under ``{out}``), so the check cannot be made before the run.
         """
         try:
-            self.env, _, _ = sandbox.build_env(self.step, self.config.profile, self.keyed.paths)
+            self.env, _, _ = sandbox.build_env(self.step, self.config.profile, self._inner_paths())
         except ValueError:
             raise RunError("E_ENV_BUILD") from None
         if self.step.kind in cache.R_KINDS:
@@ -1314,10 +1328,11 @@ class _Execution:
         senselab_root = str(Path(sys.modules["senselab"].__file__ or "").resolve().parent.parent)
         read, write = os.pipe()
         argv = [sys.executable, "-I", "-B", "-c", ADAPTER_RUNNER, senselab_root, str(write), str(copy), str(self.work)]
+        inner = self._inner([scratch], scratch)
         adapter_env = {
             "PATH": ":".join(sandbox.SYSTEM_PATH),
-            "HOME": str(scratch / "home"),
-            "TMPDIR": str(scratch),
+            "HOME": f"{inner}/home",
+            "TMPDIR": inner,
             **sandbox.FIXED_KEYED,
             **sandbox.OFFLINE,
             **{v: sandbox.PROXY for v in sandbox.PROXY_VARS},
@@ -1325,7 +1340,7 @@ class _Execution:
             **{v: "" for v in sandbox.NO_PROXY_VARS},
         }
         wrapped = [sandbox.SH, "-c", WRAPPER, "sh", str(self.work), *argv]
-        rc, raw = self._spawn(self._sandbox(wrapped, [scratch], tmp=None), adapter_env, "adapter", (read, write))
+        rc, raw = self._spawn(self._sandbox(wrapped, [scratch], tmp=scratch), adapter_env, "adapter", (read, write))
         if rc == EXIT_ADAPTER_IMPORT:
             raise RunError("E_ADAPTER_IMPORT")
         if rc != 0:
