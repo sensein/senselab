@@ -114,7 +114,7 @@ SECOND_OPINION writes one `nimble_opinion` measurement per call, on every path:
 
 | attribute | |
 |---|---|
-| `status` | `ok` / `disabled` / `nothing_to_read` / `absent` (asked, no answer: `failure` says why) |
+| `status` | `ok` / `disabled` / `bypassed` / `absent` (asked, no answer: `failure` says why) |
 | `probabilities` | question → P(yes); `other_voice` is P(more_than_one) |
 | `other_voice_choice` | the class the model chose |
 | `question_set_version`, `model_id`, `blob_digest`, `config_digest`, `manifest_digest`, `seed` | identity |
