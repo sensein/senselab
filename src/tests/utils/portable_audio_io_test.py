@@ -49,13 +49,14 @@ def test_the_policy_module_imports_nothing_from_senselab() -> None:
     tree = ast.parse(Path(pio.__file__).read_text())
     offenders: list[str] = []
     allowed = {"numpy", "soundfile", "logging", "os", "typing", "__future__"}
-    # torchcodec may be imported inside a function body only, so importing the module never needs it.
+    # torch and torchcodec may be imported inside a function body only, so importing the module never needs them.
     lazy = {
         id(node)
         for function in ast.walk(tree)
         if isinstance(function, ast.FunctionDef)
         for node in ast.walk(function)
-        if isinstance(node, ast.ImportFrom) and node.module == "torchcodec.decoders"
+        if (isinstance(node, ast.ImportFrom) and node.module in {"torchcodec.decoders", "torchcodec.encoders"})
+        or (isinstance(node, ast.Import) and [a.name for a in node.names] == ["torch"])
     }
     for node in ast.walk(tree):
         if id(node) in lazy:
@@ -205,10 +206,15 @@ def test_widest_subtype_refuses_what_it_cannot_answer(monkeypatch: pytest.Monkey
         widest_subtype("wav", np.float32)
 
 
-def test_write_audio_refuses_a_container_libsndfile_cannot_write(tmp_path: Path) -> None:
-    """The shim has one backend, so an m4a is refused here rather than silently mis-encoded."""
-    with pytest.raises(ValueError, match="not a format soundfile can write"):
-        write_audio(tmp_path / "x.m4a", _over_unity_signal(0.5), _SR)
+def test_write_audio_encodes_a_container_libsndfile_cannot_write_under_the_same_policy(tmp_path: Path) -> None:
+    """An m4a goes through torchcodec at PCM_16: a subtype is refused, and over-unity samples raise."""
+    report = write_audio(tmp_path / "x.m4a", _over_unity_signal(0.5), _SR)
+    assert (report.format, report.subtype) == ("M4A", pio.ENCODER_SUBTYPE)
+    assert (tmp_path / "x.m4a").stat().st_size > 0
+    with pytest.raises(ValueError, match="cannot be honoured"):
+        write_audio(tmp_path / "y.m4a", _over_unity_signal(0.5), _SR, subtype="PCM_16")
+    with pytest.raises(ValueError, match="exceed"):
+        write_audio(tmp_path / "z.m4a", _over_unity_signal(1.6), _SR)
 
 
 # --------------------------------------------------------------------------------------------
