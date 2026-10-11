@@ -4,7 +4,7 @@
 # a category with in / not in against a list of categories; a reported reading has neither.
 # `producer` names the unit of specs/20261007-task-events-in-background/design.md that emits it;
 # an item a later unit produces is absent from the tables until that unit lands.
-version: 10
+version: 11
 groups:
   acquisition:
     admit_outcome:
@@ -188,11 +188,19 @@ groups:
     cohort.other_speaker_runs:
       unit: runs
       producer: COHORT
-      meaning: speech runs (diarized or lexical, at least the 1.0 s floor) under speech.target_match_cosine against the participant's session enrollment, <= 0; none is the reading where no enrollment was available
+      meaning: speech runs (diarized or lexical, at least the 1.0 s floor) under speech.target_match_cosine against the participant's session enrollment (or, where the session has none, the enrollment pooled from the participant's other sessions), <= 0; none is the reading where no enrollment was available
     cohort.lowest_run_cosine:
       unit:
       producer: COHORT
       meaning: the lowest run's cosine against the session enrollment, >= speech.target_match_cosine
+    cohort.session_vs_other_sessions_cosine:
+      unit:
+      producer: COHORT
+      meaning: the session enrollment's cosine against the participant enrollment pooled from the other sessions, >= data/cohort_stage.yaml participant.consistency_cosine_min; under it the session is session_speaker_inconsistent
+    cohort.session_speaker_consistency:
+      unit:
+      producer: COHORT
+      meaning: the consistency check had nothing to read (a single-file run, or a session without an enrollment of its own); not measured, moves nothing
     cohort.duration_over_family_median:
       unit:
       producer: COHORT

@@ -32,12 +32,15 @@ CHECKS = "checks"
 """The reading's block of distribution checks, one per check name."""
 
 KEY_OTHER_SPEAKER_IN_SESSION = "other_speaker_in_session"
-"""A speech run in the recording does not match the participant's session enrollment."""
+"""A speech run does not match the participant's enrollment: the session's own, or the other sessions'."""
 
 KEY_RECORDING_DURATION_OUTLIER = "recording_duration_outlier"
 """The recording is far longer than its family's and the task covers little of it."""
 
-COHORT_GROUND_KEYS = (KEY_OTHER_SPEAKER_IN_SESSION, KEY_RECORDING_DURATION_OUTLIER)
+KEY_SESSION_SPEAKER_INCONSISTENT = "session_speaker_inconsistent"
+"""The session's enrollment is far from the participant's other sessions': another person, or a mislabelled session."""
+
+COHORT_GROUND_KEYS = (KEY_OTHER_SPEAKER_IN_SESSION, KEY_RECORDING_DURATION_OUTLIER, KEY_SESSION_SPEAKER_INCONSISTENT)
 """Every ground key a cohort reading can raise."""
 
 ITEM_PREFIX = "cohort"
@@ -118,7 +121,8 @@ def cohort_grounds(reading: Mapping[str, Any] | None) -> list[tuple[str, str]]:
         grounds.append(
             (
                 f"{KEY_OTHER_SPEAKER_IN_SESSION}: {block.get('nonmatch_n')} of {block.get('runs_n')} speech run(s), "
-                f"{block.get('nonmatch_s')} s, below cosine {block.get('cut')} against the session enrollment",
+                f"{block.get('nonmatch_s')} s, below cosine {block.get('cut')} against the "
+                f"{block.get('enrollment_source') or 'session'} enrollment",
                 KEY_OTHER_SPEAKER_IN_SESSION,
             )
         )

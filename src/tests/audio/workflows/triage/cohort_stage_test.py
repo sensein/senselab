@@ -11,6 +11,7 @@ from senselab.audio.workflows.triage.cohort_fold import (
     COHORT_READING,
     KEY_OTHER_SPEAKER_IN_SESSION,
     KEY_RECORDING_DURATION_OUTLIER,
+    KEY_SESSION_SPEAKER_INCONSISTENT,
     MEASURED,
     NOT_APPLICABLE,
     UNAVAILABLE,
@@ -20,17 +21,26 @@ from senselab.audio.workflows.triage.cohort_fold import (
     nonmatch_spans,
 )
 from senselab.audio.workflows.triage.cohort_stage import (
+    CONSISTENCY_CHECK,
     NO_COHORT,
     NO_ENROLLMENT_SPANS,
+    SCOPE_PARTICIPANT,
+    SOURCE_NONE,
+    SOURCE_PARTICIPANT_OTHER_SESSIONS,
+    SOURCE_SESSION,
     AudioLoader,
+    Enrollment,
+    EnrollmentConfig,
+    ParticipantEnrollments,
     RecordingFacts,
-    SessionEnrollment,
     build_quantile_artefact,
     candidate_runs,
     cohort_attributes,
+    enroll_participant,
     enroll_session,
     exclusive_pieces,
     match_runs,
+    read_participant,
     run_checks,
     window_regions,
     write_cohort_reading,
@@ -79,11 +89,12 @@ def _facts(  # noqa: ANN202
     speech=None,  # noqa: ANN001
     removed=(),  # noqa: ANN001
     events=(),  # noqa: ANN001
+    session="sub-a_ses-1",  # noqa: ANN001
 ) -> RecordingFacts:
     """A recording's facts; speech-classified wherever diarized unless ``speech`` says otherwise."""
     return RecordingFacts(
         stem=stem,
-        session="sub-a_ses-1",
+        session=session,
         family=family,
         lexical_task=family == "rainbow-passage",
         duration_s=duration,
@@ -114,7 +125,7 @@ def _session() -> tuple[list, RecordingFacts, AudioLoader]:
     return speech, breath, breath_audio
 
 
-def _enroll(members: list) -> SessionEnrollment:
+def _enroll(members: list) -> Enrollment:
     return enroll_session(
         "sub-a_ses-1", members, _embed, model_id="m", commit="c" * 40, cut=CUT, min_s=1.0, lexical_gap_s=0.5
     )
@@ -369,3 +380,145 @@ def test_the_last_window_is_anchored_to_the_region_end() -> None:
 
     window_runs([(0.0, 1.9)], cosine_at, window_s=1.0, hop_s=0.5, cut=CUT)
     assert seen == pytest.approx([0.0, 0.5, 0.9])
+
+
+# ------------------------------------------------------------------------------ participant enrollment
+
+
+def _speech(session: str, index: int, level: float = PARTICIPANT) -> tuple[RecordingFacts, AudioLoader]:
+    stem = f"{session}_task-rainbow-passage-{index}"
+    facts = _facts(stem, "rainbow-passage", diarization=[(1.0, 9.0, "A")], session=session)
+    return facts, _loader([(1.0, 9.0, level)], 20.0)
+
+
+def _breath(session: str) -> tuple[RecordingFacts, AudioLoader]:
+    facts = _facts(
+        f"{session}_task-respiration-and-cough-breath-1",
+        "respiration-and-cough-breath",
+        diarization=[(2.0, 4.0, "A"), (10.0, 13.0, "B")],
+        session=session,
+    )
+    return facts, _loader([(2.0, 4.0, PARTICIPANT), (10.0, 13.0, TALKER)], 20.0)
+
+
+def _participant(sessions: list, embed: Any = _embed) -> ParticipantEnrollments:  # noqa: ANN401
+    return enroll_participant(
+        "sub-a", sessions, embed, model_id="m", commit="c" * 40, cut=CUT, min_s=1.0, lexical_gap_s=0.5
+    )
+
+
+def _read(sessions: list) -> tuple[ParticipantEnrollments | None, dict]:
+    settings = EnrollmentConfig(model_id="m", commit="c" * 40, cut=CUT, min_s=1.0, lexical_gap_s=0.5)
+    return read_participant("sub-a", sessions, settings=settings, embed=_embed, artefact=None, quantiles_ref=None)
+
+
+def test_participant_enrollment_pools_every_session_and_embeds_each_recording_once() -> None:
+    """The pool holds every session's recordings; one recording's spans are embedded once for all pools."""
+    calls: list[int] = []
+
+    def counting(samples: np.ndarray, rate: int) -> np.ndarray | None:
+        calls.append(samples.size)
+        return _embed(samples, rate)
+
+    sessions = [(s, [_speech(s, i) for i in range(2)]) for s in ("sub-a_ses-1", "sub-a_ses-2")]
+    found = _participant(sessions, counting)
+    assert found.pooled.scope == SCOPE_PARTICIPANT
+    assert len(found.pooled.recordings) == 4 and found.pooled.sessions == ["sub-a_ses-1", "sub-a_ses-2"]
+    assert found.pooled.single_speaker_only and found.pooled.vector is not None
+    assert float(found.pooled.vector @ _direction(PARTICIPANT)) > 0.99
+    assert len(calls) == 4, "four recordings of one span each, embedded once across five pools"
+
+
+def test_leave_one_session_out_excludes_the_session_compared() -> None:
+    """Each session's participant enrollment is pooled from the other sessions only."""
+    sessions = [(s, [_speech(s, i) for i in range(2)]) for s in ("sub-a_ses-1", "sub-a_ses-2", "sub-a_ses-3")]
+    found = _participant(sessions)
+    for session, _ in sessions:
+        other = found.other_sessions[session]
+        assert other.excluded_session == session
+        assert session not in other.sessions and len(other.sessions) == 2
+        assert not any(stem.startswith(session) for stem in other.recordings)
+        assert len(other.recordings) == 4
+
+
+def test_a_session_far_from_the_other_sessions_is_inconsistent_and_reviewed() -> None:
+    """A session voiced by someone else falls under the bound against the rest; the others pass."""
+    sessions = [
+        ("sub-a_ses-1", [_speech("sub-a_ses-1", i) for i in range(2)]),
+        ("sub-a_ses-2", [_speech("sub-a_ses-2", i) for i in range(2)]),
+        ("sub-a_ses-3", [_speech("sub-a_ses-3", i, TALKER) for i in range(2)]),
+    ]
+    _, readings = _read(sessions)
+    outcomes = {s: readings[s][0]["checks"][CONSISTENCY_CHECK]["outcome"] for s, _ in sessions}
+    assert outcomes == {"sub-a_ses-1": "pass", "sub-a_ses-2": "pass", "sub-a_ses-3": REVIEW}
+    flagged = readings["sub-a_ses-3"][1]
+    assert KEY_SESSION_SPEAKER_INCONSISTENT in [key for _, key in cohort_grounds(flagged)]
+    items = {entry.name: entry for entry in cohort_evidence(flagged)}
+    assert items["cohort.session_vs_other_sessions_cosine"].effect == REVIEW
+    assert items["cohort.session_vs_other_sessions_cosine"].value < CUT
+    assert KEY_SESSION_SPEAKER_INCONSISTENT not in [key for _, key in cohort_grounds(readings["sub-a_ses-1"][0])]
+
+
+def test_the_fold_reviews_an_inconsistent_session_as_other_speaker() -> None:
+    """The ground maps to the other_speaker reason."""
+    from senselab.audio.workflows.triage.vocabulary import Triage, fold_file_verdict
+
+    sessions = [
+        ("sub-a_ses-1", [_speech("sub-a_ses-1", i) for i in range(2)]),
+        ("sub-a_ses-2", [_speech("sub-a_ses-2", i, TALKER) for i in range(2)]),
+    ]
+    _, readings = _read(sessions)
+    common: dict[str, Any] = {"branch_decisions": {}, "ran": {}, "hint_claims": {}, "route_state": None}
+    folded = fold_file_verdict([], cohort=readings["sub-a_ses-2"][0], **common)
+    assert folded.triage is Triage.REVIEW and "other_speaker" in folded.reason_keys
+    assert KEY_SESSION_SPEAKER_INCONSISTENT in folded.ground_keys
+
+
+def test_a_session_without_an_enrollment_falls_back_to_the_other_sessions() -> None:
+    """No lexical speech in the session: its members are compared against the other sessions' pool."""
+    sessions = [
+        ("sub-a_ses-1", [_speech("sub-a_ses-1", i) for i in range(2)]),
+        ("sub-a_ses-2", [_breath("sub-a_ses-2")]),
+    ]
+    found, readings = _read(sessions)
+    assert found is not None and found.sessions["sub-a_ses-2"].vector is None
+    block = readings["sub-a_ses-2"][0]["other_speaker"]
+    assert block["status"] == MEASURED and block["enrollment_source"] == SOURCE_PARTICIPANT_OTHER_SESSIONS
+    assert block["enrollment"]["excluded_session"] == "sub-a_ses-2"
+    assert block["nonmatch_spans"] == [[10.0, 13.0]]
+    assert readings["sub-a_ses-1"][0]["other_speaker"]["enrollment_source"] == SOURCE_SESSION
+    assert readings["sub-a_ses-2"][0]["checks"][CONSISTENCY_CHECK]["status"] == NOT_APPLICABLE, "one enrolled session"
+
+
+def test_a_session_compared_with_its_own_enrollment_also_reports_the_participant_cosine() -> None:
+    """Each diarized and lexical run carries its cosine against the other sessions' pool too."""
+    sessions = [
+        ("sub-a_ses-1", [_speech("sub-a_ses-1", i) for i in range(2)] + [_breath("sub-a_ses-1")]),
+        ("sub-a_ses-2", [_speech("sub-a_ses-2", i) for i in range(2)]),
+    ]
+    _, readings = _read(sessions)
+    runs = readings["sub-a_ses-1"][2]["other_speaker"]["runs"]
+    assert runs and all("participant_cosine" in r for r in runs)
+    by_speaker = {r["speaker"]: r for r in runs}
+    assert by_speaker["A"]["participant_cosine"] > 0.9 and by_speaker["B"]["participant_cosine"] < CUT
+
+
+def test_a_single_session_participant_has_no_consistency_check() -> None:
+    """One session: its own enrollment, no participant cosine, and the check is not applicable."""
+    sessions = [("sub-a_ses-1", [_speech("sub-a_ses-1", i) for i in range(2)] + [_breath("sub-a_ses-1")])]
+    found, readings = _read(sessions)
+    assert found is not None and found.other_sessions == {}
+    reading = readings["sub-a_ses-1"][2]
+    assert reading["other_speaker"]["enrollment_source"] == SOURCE_SESSION
+    assert all("participant_cosine" not in r for r in reading["other_speaker"]["runs"])
+    assert reading["checks"][CONSISTENCY_CHECK]["status"] == NOT_APPLICABLE
+    assert KEY_SESSION_SPEAKER_INCONSISTENT not in [key for _, key in cohort_grounds(reading)]
+    assert not any("session" in entry.name for entry in cohort_evidence(reading))
+
+
+def test_a_participant_with_no_enrollment_anywhere_compares_nothing() -> None:
+    """No session enrolls: the source is none and the block names why."""
+    _, readings = _read([("sub-a_ses-1", [_breath("sub-a_ses-1")]), ("sub-a_ses-2", [_breath("sub-a_ses-2")])])
+    block = readings["sub-a_ses-1"][0]["other_speaker"]
+    assert block["status"] == UNAVAILABLE and block["enrollment_source"] == SOURCE_NONE
+    assert block["reason"] == NO_ENROLLMENT_SPANS

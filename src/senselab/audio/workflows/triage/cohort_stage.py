@@ -2,10 +2,13 @@
 
 Two families of reading, over what the per-recording stages already stored:
 
-- **Session speaker enrollment.** One speaker vector per participant and session, pooled from the
-  cleanest single-speaker spans of that session's lexical speech tasks. Every recording's speech --
-  its diarized segments on the enhanced stream and its runs of lexical consensus words -- is then
-  embedded run by run and compared with it. A run under the match cut is a non-match.
+- **Speaker enrollment.** One speaker vector per participant and session, pooled from the
+  cleanest single-speaker spans of that session's lexical speech tasks, and per session a participant
+  vector pooled from the participant's other sessions. Every recording's speech -- its diarized
+  segments on the enhanced stream and its runs of lexical consensus words -- is then embedded run by
+  run and compared with the session's vector, or with the other sessions' where the session has none.
+  A run under the match cut is a non-match. A session whose vector is far from its other sessions'
+  is ``session_speaker_inconsistent``.
 - **Distribution checks.** Corpus quantiles per declared family, stored once per run as a cohort
   artefact with its own provenance, and per-recording checks against them
   (:data:`CHECK_FUNCTIONS`; ``recording_duration_outlier`` is the first).
@@ -35,6 +38,7 @@ from senselab.audio.workflows.triage.cohort_fold import (
     CHECKS,
     COHORT_NODE,
     COHORT_READING,
+    KEY_SESSION_SPEAKER_INCONSISTENT,
     MEASURED,
     NOT_APPLICABLE,
     OTHER_SPEAKER,
@@ -69,8 +73,22 @@ QUANTILES_KIND = "cohort_quantiles"
 QUANTILES_FILE = "cohort_quantiles.json"
 FAMILY_LEVEL = "family"
 
+SCOPE_SESSION = "session"
+SCOPE_PARTICIPANT = "participant"
+SOURCE_SESSION = "session"
+SOURCE_PARTICIPANT_OTHER_SESSIONS = "participant_other_sessions"
+SOURCE_NONE = "none"
+"""``enrollment_source``: what a recording's runs were compared against."""
+
+CONSISTENCY_CHECK = "session_speaker_consistency"
+"""The check comparing a session's enrollment with the participant's other sessions."""
+
 NO_COHORT = "no cohort was read: the run saw this recording alone"
-NO_ENROLLMENT_SPANS = "the session holds no lexical speech span long enough to enroll"
+NO_ENROLLMENT_SPANS = "no lexical speech span long enough to enroll"
+FEWER_THAN_TWO_ENROLLED_SESSIONS = "the participant has fewer than two sessions with an enrollment of their own"
+SESSION_NOT_ENROLLED = "the session has no enrollment of its own"
+OTHER_SESSIONS_NOT_ENROLLED = "the participant's other sessions hold no enrollment"
+CONSISTENCY_UNSET = "participant.consistency_cosine_min is unset"
 ENROLLMENT_UNMEASURED = "speech.enrollment_model or speech.target_match_cosine is unset"
 NO_QUANTILES = "no cohort quantiles were supplied"
 FAMILY_NOT_IN_QUANTILES = "the recording's family has no quantiles in the cohort artefact"
@@ -655,16 +673,31 @@ def plain_loader(store: ProvStore, run_dir: Path) -> AudioLoader:
 # ------------------------------------------------------------------------------ the enrollment
 
 
+def participant_key(session: str) -> str:
+    """The participant a session key (or a stem standing for one) belongs to.
+
+    Args:
+        session: ``sub-<label>_ses-<label>``, or a stem naming no session.
+
+    Returns:
+        ``sub-<label>``: everything before the first underscore.
+    """
+    return session.split("_", 1)[0]
+
+
 @dataclass
-class SessionEnrollment:
-    """One participant's speaker vector for one session.
+class Enrollment:
+    """One participant's speaker vector, pooled over one session or over several.
 
     Attributes:
-        session: The session key.
-        vector: The unit vector, or None where the session could not enroll.
+        key: The session key for a session enrollment; the participant label for a participant one.
+        scope: :data:`SCOPE_SESSION` or :data:`SCOPE_PARTICIPANT`.
+        vector: The unit vector, or None where nothing could enroll.
         reason: Why there is no vector, else None.
         model_id: The embedding model.
         model_commit_sha: Its resolved commit.
+        sessions: The sessions whose recordings were candidates.
+        excluded_session: The session a leave-one-session-out enrollment was built without, else None.
         recordings: The stems whose spans were pooled.
         left_out: Stems left out by the leave-one-out step.
         spans_n: How many spans were embedded.
@@ -672,11 +705,14 @@ class SessionEnrollment:
         single_speaker_only: Whether only single-speaker recordings enrolled.
     """
 
-    session: str
+    key: str
+    scope: str
     vector: np.ndarray | None
     reason: str | None
     model_id: str | None
     model_commit_sha: str | None
+    sessions: list[str] = field(default_factory=list)
+    excluded_session: str | None = None
     recordings: list[str] = field(default_factory=list)
     left_out: list[str] = field(default_factory=list)
     spans_n: int = 0
@@ -701,12 +737,15 @@ class SessionEnrollment:
             Its fields, JSON-ready.
         """
         return {
-            "session": self.session,
+            "key": self.key,
+            "scope": self.scope,
             "status": MEASURED if self.vector is not None else UNAVAILABLE,
             "reason": self.reason,
             "model_id": self.model_id,
             "model_commit_sha": self.model_commit_sha,
             "method": "recording_equal_spherical_mean",
+            "sessions": list(self.sessions),
+            "excluded_session": self.excluded_session,
             "recordings": list(self.recordings),
             "recordings_n": len(self.recordings),
             "left_out": list(self.left_out),
@@ -715,6 +754,172 @@ class SessionEnrollment:
             "single_speaker_only": self.single_speaker_only,
             "vector_sha256": self.vector_sha256,
         }
+
+
+@dataclass(frozen=True)
+class EnrollmentCandidate:
+    """One lexical speech recording that offers enrollment spans.
+
+    Attributes:
+        facts: The recording's facts.
+        loader: Its plain-stream loader.
+        spans: The spans it offers.
+    """
+
+    facts: RecordingFacts
+    loader: AudioLoader
+    spans: EnrollmentSpans
+
+
+def enrollment_candidates(
+    members: Sequence[tuple[RecordingFacts, AudioLoader]],
+    *,
+    min_s: float,
+    lexical_gap_s: float,
+    parameters: Mapping[str, Any] | None = None,
+) -> list[EnrollmentCandidate]:
+    """The members of an enrolling family that offer at least one span.
+
+    Args:
+        members: Recordings with their plain-stream loaders.
+        min_s: The shortest span kept.
+        lexical_gap_s: Largest gap two lexical words may straddle and stay one run.
+        parameters: The ``enrollment`` block of ``data/cohort_stage.yaml``; None reads the packaged one.
+
+    Returns:
+        The candidates, in member order.
+    """
+    params = dict(parameters if parameters is not None else cohort_parameters()["enrollment"])
+    out = []
+    for facts, loader in members:
+        if facts.family not in DECLARED_KIND[str(params["families"])]:
+            continue
+        spans = enrollment_spans(facts, min_s=min_s, lexical_gap_s=lexical_gap_s)
+        if spans.spans:
+            out.append(EnrollmentCandidate(facts, loader, spans))
+    return out
+
+
+Centroid = tuple[np.ndarray, int, float]
+"""One recording's spherical mean over its spans, the spans embedded and their seconds."""
+
+
+class CentroidCache:
+    """Each candidate's recording centroid, embedded once however many pools read it."""
+
+    def __init__(self, embed: Embedder) -> None:
+        """Hold the embedder.
+
+        Args:
+            embed: The span embedder.
+        """
+        self.embed = embed
+        self._held: dict[str, Centroid | None] = {}
+
+    def __call__(self, candidate: EnrollmentCandidate) -> Centroid | None:
+        """The candidate's centroid, or None where it loads or embeds nothing.
+
+        Args:
+            candidate: The recording.
+
+        Returns:
+            ``(vector, spans embedded, seconds)``.
+        """
+        stem = candidate.facts.stem
+        if stem not in self._held:
+            self._held[stem] = self._compute(candidate)
+        return self._held[stem]
+
+    def _compute(self, candidate: EnrollmentCandidate) -> Centroid | None:
+        loaded = candidate.loader()
+        if loaded is None:
+            return None
+        samples, rate = loaded
+        spans = candidate.spans.spans
+        vectors = [v for v in (self.embed(cut_samples(samples, rate, span), rate) for span in spans) if v is not None]
+        if not vectors:
+            return None
+        return _unit(np.vstack(vectors).mean(axis=0)), len(vectors), _length(spans)
+
+
+def pool_enrollment(
+    key: str,
+    scope: str,
+    candidates: Sequence[EnrollmentCandidate],
+    centroid: Callable[[EnrollmentCandidate], Centroid | None],
+    *,
+    model_id: str,
+    commit: str,
+    cut: float,
+    parameters: Mapping[str, Any] | None = None,
+    excluded_session: str | None = None,
+) -> Enrollment:
+    """Pool candidates into one speaker vector, recording-equal, under the enrollment's quality rules.
+
+    Where at least ``single_speaker_recordings_min`` candidates are single-speaker, only they enroll;
+    with ``leave_one_out_min`` or more centroids, one under the cut against the rest is left out.
+
+    Args:
+        key: The enrollment's key.
+        scope: :data:`SCOPE_SESSION` or :data:`SCOPE_PARTICIPANT`.
+        candidates: The recordings offering spans.
+        centroid: Each candidate's centroid (:class:`CentroidCache`).
+        model_id: The embedding model, recorded.
+        commit: Its resolved commit, recorded.
+        cut: The match cut, used by the leave-one-out step.
+        parameters: The ``enrollment`` block of ``data/cohort_stage.yaml``; None reads the packaged one.
+        excluded_session: The session left out of a participant enrollment, recorded.
+
+    Returns:
+        The enrollment; one with no vector names why.
+    """
+    params = dict(parameters if parameters is not None else cohort_parameters()["enrollment"])
+    sessions = sorted({c.facts.session or c.facts.stem for c in candidates})
+    single = [c for c in candidates if c.spans.single_speaker]
+    single_only = len(single) >= int(params["single_speaker_recordings_min"])
+    chosen = single if single_only else list(candidates)
+    centroids: list[tuple[str, np.ndarray, int, float]] = []
+    for candidate in chosen:
+        found = centroid(candidate)
+        if found is not None:
+            centroids.append((candidate.facts.stem, *found))
+    if not centroids:
+        return Enrollment(
+            key,
+            scope,
+            None,
+            NO_ENROLLMENT_SPANS,
+            model_id,
+            commit,
+            sessions=sessions,
+            excluded_session=excluded_session,
+        )
+    left_out: list[str] = []
+    if len(centroids) >= int(params["leave_one_out_min"]):
+        kept = []
+        for index, (stem, vector, n, seconds) in enumerate(centroids):
+            others = _unit(np.vstack([c[1] for j, c in enumerate(centroids) if j != index]).mean(axis=0))
+            if float(vector @ others) >= cut:
+                kept.append((stem, vector, n, seconds))
+            else:
+                left_out.append(stem)
+        centroids = kept or centroids
+        left_out = left_out if kept else []
+    return Enrollment(
+        key,
+        scope,
+        _unit(np.vstack([c[1] for c in centroids]).mean(axis=0)),
+        None,
+        model_id,
+        commit,
+        sessions=sessions,
+        excluded_session=excluded_session,
+        recordings=[c[0] for c in centroids],
+        left_out=left_out,
+        spans_n=sum(c[2] for c in centroids),
+        seconds=sum(c[3] for c in centroids),
+        single_speaker_only=single_only,
+    )
 
 
 def enroll_session(
@@ -728,8 +933,8 @@ def enroll_session(
     min_s: float,
     lexical_gap_s: float,
     parameters: Mapping[str, Any] | None = None,
-) -> SessionEnrollment:
-    """Pool one session's lexical speech spans into one speaker vector, recording-equal.
+) -> Enrollment:
+    """Pool one session's lexical speech spans into one speaker vector (:func:`pool_enrollment`).
 
     Args:
         session: The session key.
@@ -743,75 +948,200 @@ def enroll_session(
         parameters: The ``enrollment`` block of ``data/cohort_stage.yaml``; None reads the packaged one.
 
     Returns:
-        The enrollment; one with no vector names why.
+        The session enrollment.
     """
-    params = dict(parameters if parameters is not None else cohort_parameters()["enrollment"])
-    candidates = [
-        (facts, loader, enrollment_spans(facts, min_s=min_s, lexical_gap_s=lexical_gap_s))
-        for facts, loader in members
-        if facts.family in DECLARED_KIND[str(params["families"])]
-    ]
-    candidates = [(facts, loader, spans) for facts, loader, spans in candidates if spans.spans]
-    single = [entry for entry in candidates if entry[2].single_speaker]
-    single_only = len(single) >= int(params["single_speaker_recordings_min"])
-    chosen = single if single_only else candidates
-    centroids: list[tuple[str, np.ndarray, int, float]] = []
-    for facts, loader, spans in chosen:
-        loaded = loader()
-        if loaded is None:
-            continue
-        samples, rate = loaded
-        vectors = [v for v in (embed(cut_samples(samples, rate, span), rate) for span in spans.spans) if v is not None]
-        if vectors:
-            centroids.append((facts.stem, _unit(np.vstack(vectors).mean(axis=0)), len(vectors), _length(spans.spans)))
-    if not centroids:
-        return SessionEnrollment(session, None, NO_ENROLLMENT_SPANS, model_id, commit)
-    left_out: list[str] = []
-    if len(centroids) >= int(params["leave_one_out_min"]):
-        kept = []
-        for index, (stem, vector, n, seconds) in enumerate(centroids):
-            others = _unit(np.vstack([c[1] for j, c in enumerate(centroids) if j != index]).mean(axis=0))
-            if float(vector @ others) >= cut:
-                kept.append((stem, vector, n, seconds))
-            else:
-                left_out.append(stem)
-        centroids = kept or centroids
-        left_out = left_out if kept else []
-    vector = _unit(np.vstack([c[1] for c in centroids]).mean(axis=0))
-    return SessionEnrollment(
+    candidates = enrollment_candidates(members, min_s=min_s, lexical_gap_s=lexical_gap_s, parameters=parameters)
+    return pool_enrollment(
         session,
-        vector,
-        None,
-        model_id,
-        commit,
-        recordings=[c[0] for c in centroids],
-        left_out=left_out,
-        spans_n=sum(c[2] for c in centroids),
-        seconds=sum(c[3] for c in centroids),
-        single_speaker_only=single_only,
+        SCOPE_SESSION,
+        candidates,
+        CentroidCache(embed),
+        model_id=model_id,
+        commit=commit,
+        cut=cut,
+        parameters=parameters,
     )
+
+
+@dataclass
+class ParticipantEnrollments:
+    """Every enrollment one participant's sessions yield.
+
+    Attributes:
+        participant: The participant label.
+        sessions: Each session's own enrollment, by session key.
+        other_sessions: Per session, the participant enrollment pooled from every other session; empty
+            for a participant with one session.
+        pooled: The participant enrollment over every session.
+    """
+
+    participant: str
+    sessions: dict[str, Enrollment]
+    other_sessions: dict[str, Enrollment]
+    pooled: Enrollment
+
+    @property
+    def enrolled_sessions(self) -> list[str]:
+        """The sessions whose own enrollment holds a vector, in order."""
+        return [key for key, enrollment in self.sessions.items() if enrollment.vector is not None]
+
+    def source_for(self, session: str) -> tuple[str, Enrollment]:
+        """The enrollment a session's recordings are compared against, and where it came from.
+
+        Args:
+            session: The session key.
+
+        Returns:
+            ``(enrollment_source, enrollment)``: the session's own where it enrolled, else the other
+            sessions' participant enrollment where that holds a vector, else :data:`SOURCE_NONE` and
+            the session's own (vectorless) enrollment.
+        """
+        own = self.sessions[session]
+        if own.vector is not None:
+            return SOURCE_SESSION, own
+        other = self.other_sessions.get(session)
+        if other is not None and other.vector is not None:
+            return SOURCE_PARTICIPANT_OTHER_SESSIONS, other
+        return SOURCE_NONE, own
+
+
+def enroll_participant(
+    participant: str,
+    sessions: Sequence[tuple[str, Sequence[tuple[RecordingFacts, AudioLoader]]]],
+    embed: Embedder,
+    *,
+    model_id: str,
+    commit: str,
+    cut: float,
+    min_s: float,
+    lexical_gap_s: float,
+    parameters: Mapping[str, Any] | None = None,
+) -> ParticipantEnrollments:
+    """Each session's enrollment, each session's leave-one-session-out participant enrollment, and the pool.
+
+    Every pool applies :func:`pool_enrollment`'s rules to its own candidates. Each recording's
+    centroid is embedded once and shared by every pool that reads it.
+
+    Args:
+        participant: The participant label.
+        sessions: ``(session key, members)`` per session of the participant.
+        embed: The span embedder.
+        model_id: The embedding model, recorded.
+        commit: Its resolved commit, recorded.
+        cut: The match cut, used by the leave-one-out step.
+        min_s: The shortest span embedded.
+        lexical_gap_s: Largest gap two lexical words may straddle and stay one run.
+        parameters: The ``enrollment`` block of ``data/cohort_stage.yaml``; None reads the packaged one.
+
+    Returns:
+        The enrollments.
+    """
+    centroid = CentroidCache(embed)
+    by_session = {
+        session: enrollment_candidates(members, min_s=min_s, lexical_gap_s=lexical_gap_s, parameters=parameters)
+        for session, members in sessions
+    }
+
+    def pool(key: str, scope: str, candidates: list[EnrollmentCandidate], excluded: str | None = None) -> Enrollment:
+        return pool_enrollment(
+            key,
+            scope,
+            candidates,
+            centroid,
+            model_id=model_id,
+            commit=commit,
+            cut=cut,
+            parameters=parameters,
+            excluded_session=excluded,
+        )
+
+    own = {session: pool(session, SCOPE_SESSION, candidates) for session, candidates in by_session.items()}
+    others = {
+        session: pool(
+            participant,
+            SCOPE_PARTICIPANT,
+            [c for other, candidates in by_session.items() if other != session for c in candidates],
+            session,
+        )
+        for session in by_session
+        if len(by_session) > 1
+    }
+    pooled = pool(participant, SCOPE_PARTICIPANT, [c for candidates in by_session.values() for c in candidates])
+    return ParticipantEnrollments(participant, own, others, pooled)
+
+
+def consistency_check(enrollments: ParticipantEnrollments, session: str, *, bound: float | None) -> dict[str, Any]:
+    """``session_speaker_consistency``: the session's enrollment against the participant's other sessions.
+
+    Args:
+        enrollments: The participant's enrollments.
+        session: The session key.
+        bound: The cosine under which the session is inconsistent, or None where it is unset.
+
+    Returns:
+        The check's block: not applicable under two enrolled sessions, unavailable where the session
+        did not enroll, else the cosine and its outcome.
+    """
+    enrolled = enrollments.enrolled_sessions
+    count = {"enrolled_sessions_n": len(enrolled)}
+    if len(enrolled) < 2:
+        return {"status": NOT_APPLICABLE, "reason": FEWER_THAN_TWO_ENROLLED_SESSIONS, **count}
+    own, other = enrollments.sessions[session], enrollments.other_sessions.get(session)
+    if own.vector is None:
+        return {"status": UNAVAILABLE, "reason": SESSION_NOT_ENROLLED, **count}
+    if other is None or other.vector is None:
+        return {"status": UNAVAILABLE, "reason": OTHER_SESSIONS_NOT_ENROLLED, **count}
+    if bound is None:
+        return {"status": UNAVAILABLE, "reason": CONSISTENCY_UNSET, **count}
+    cosine = float(own.vector @ other.vector)
+    return {
+        "status": MEASURED,
+        "ground": KEY_SESSION_SPEAKER_INCONSISTENT,
+        "outcome": REVIEW if cosine < bound else PASS,
+        "why": (
+            f"the session's enrollment reads cosine {cosine:.3f} against the participant's "
+            f"{len(other.sessions)} other session(s)"
+        ),
+        **count,
+        "other_sessions": list(other.sessions),
+        "comparisons": [
+            {
+                "name": "session_vs_other_sessions_cosine",
+                "value": round(cosine, 4),
+                "unit": None,
+                "comparison": ">=",
+                "threshold": bound,
+            }
+        ],
+    }
 
 
 def match_runs(
     facts: RecordingFacts,
     loader: AudioLoader,
-    enrollment: SessionEnrollment,
+    enrollment: Enrollment,
     embed: Embedder,
     *,
     cut: float,
     min_s: float,
     lexical_gap_s: float,
+    source: str = SOURCE_SESSION,
+    participant: Enrollment | None = None,
 ) -> dict[str, Any]:
-    """Compare every run of one recording's speech with the session enrollment.
+    """Compare every run of one recording's speech with an enrollment.
 
     Args:
         facts: The recording's facts.
         loader: Its plain-stream loader.
-        enrollment: The session's enrollment, with a vector.
+        enrollment: The enrollment compared against, with a vector.
         embed: The span embedder.
         cut: The match cut: a run at or above it matches.
         min_s: The shortest run embedded.
         lexical_gap_s: Largest gap two lexical words may straddle and stay one run.
+        source: Where ``enrollment`` came from (:data:`SOURCE_SESSION` or
+            :data:`SOURCE_PARTICIPANT_OTHER_SESSIONS`), recorded.
+        participant: A second enrollment each diarized and lexical run is also compared with, reported
+            as ``participant_cosine``; it decides nothing.
 
     Returns:
         The ``other_speaker`` block: each run with its cosine and match, the counts, and the merged
@@ -821,8 +1151,14 @@ def match_runs(
     windows = cohort_parameters()["windows"]
     regions = window_regions(facts, min_s=float(windows["window_s"]), lexical_gap_s=lexical_gap_s)
     loaded = loader() if runs or regions else None
+    second = None if participant is None else participant.vector
+    head = {
+        "enrollment_source": source,
+        "enrollment": enrollment.record(),
+        "participant_enrollment": None if participant is None else participant.record(),
+    }
     if (runs or regions) and loaded is None:
-        return {"status": UNAVAILABLE, "reason": PLAIN_UNREADABLE, "enrollment": enrollment.record()}
+        return {"status": UNAVAILABLE, "reason": PLAIN_UNREADABLE, **head}
     records: list[dict[str, Any]] = []
     if loaded is not None and enrollment.vector is not None:
         samples, rate = loaded
@@ -832,18 +1168,19 @@ def match_runs(
             if vector is None:
                 continue
             cosine = float(vector @ enrollment.vector)
-            records.append(
-                {
-                    "start": round(run.start, 3),
-                    "end": round(run.end, 3),
-                    "duration_s": round(run.duration_s, 3),
-                    "source": run.source,
-                    "speaker": run.speaker,
-                    "active_s": round(active, 3),
-                    "cosine": round(cosine, 4),
-                    "match": cosine >= cut,
-                }
-            )
+            record: dict[str, Any] = {
+                "start": round(run.start, 3),
+                "end": round(run.end, 3),
+                "duration_s": round(run.duration_s, 3),
+                "source": run.source,
+                "speaker": run.speaker,
+                "active_s": round(active, 3),
+                "cosine": round(cosine, 4),
+                "match": cosine >= cut,
+            }
+            if second is not None:
+                record["participant_cosine"] = round(float(vector @ second), 4)
+            records.append(record)
 
         def cosine_at(span: tuple[float, float]) -> float | None:
             vector = embed(cut_samples(samples, rate, span), rate)
@@ -865,7 +1202,7 @@ def match_runs(
     spans = merge([(r["start"], r["end"]) for r in nonmatch])
     return {
         "status": MEASURED,
-        "enrollment": enrollment.record(),
+        **head,
         "model_id": enrollment.model_id,
         "model_commit_sha": enrollment.model_commit_sha,
         "cut": cut,
@@ -1071,15 +1408,15 @@ def run_checks(facts: RecordingFacts, artefact: Mapping[str, Any] | None) -> dic
 
 def cohort_key(
     *,
-    session: str | None,
+    group: str | None,
     members: Sequence[RecordingFacts],
     quantiles_sha256: str | None,
     enrollment_config: Mapping[str, Any],
 ) -> str:
-    """What a session's readings were computed from, so a repeated pass can tell it has nothing to do.
+    """What a participant's readings were computed from, so a repeated pass can tell it has nothing to do.
 
     Args:
-        session: The session key.
+        group: The participant label (every session of it is one group).
         members: Every member's facts: stem, duration, task extent, diarization and lexical runs.
         quantiles_sha256: The artefact's digest, or None.
         enrollment_config: The model, its commit, the cut and the floor.
@@ -1091,7 +1428,7 @@ def cohort_key(
         {
             "version": cohort_parameters()["version"],
             "parameters": cohort_parameters(),
-            "session": session,
+            "group": group,
             "members": sorted(dataclasses.astuple(facts) for facts in members),
             "quantiles": quantiles_sha256,
             "enrollment": dict(enrollment_config),
@@ -1170,12 +1507,12 @@ def write_cohort_reading(store: ProvStore, attributes: Mapping[str, Any]) -> str
     return new_id
 
 
-def write_enrollment_entity(store: ProvStore, enrollment: SessionEnrollment, reading_id: str) -> str:
-    """Record the session enrollment a reading compared against, without its vector.
+def write_enrollment_entity(store: ProvStore, enrollment: Enrollment, reading_id: str) -> str:
+    """Record the enrollment a reading compared against, without its vector.
 
     Args:
         store: The recording's store.
-        enrollment: The session enrollment.
+        enrollment: The session's own enrollment, or the participant's from the other sessions.
         reading_id: The ``cohort_reading`` derived from it.
 
     Returns:
@@ -1183,14 +1520,20 @@ def write_enrollment_entity(store: ProvStore, enrollment: SessionEnrollment, rea
     """
     software = software_agent(store)
     record = enrollment.record()
-    activity = store.activity(node=COHORT_NODE, step="session_enrollment", parameters={"session": enrollment.session})
+    activity = store.activity(
+        node=COHORT_NODE,
+        step=f"{enrollment.scope}_enrollment",
+        parameters={"key": enrollment.key, "excluded_session": enrollment.excluded_session},
+    )
     store.was_associated_with(activity, software)
     entity_id = store.entity(
         prov_type="enrollment",
         extent=None,
         attributes={
-            "subject_id": enrollment.session.split("_", 1)[0],
-            "session": enrollment.session,
+            "subject_id": participant_key(enrollment.key),
+            "scope": enrollment.scope,
+            "sessions": record["sessions"],
+            "excluded_session": enrollment.excluded_session,
             "model_id": record["model_id"],
             "model_commit_sha": record["model_commit_sha"],
             "method": record["method"],
@@ -1214,12 +1557,13 @@ def unavailable_attributes(facts: RecordingFacts) -> dict[str, Any]:
     Returns:
         The attributes.
     """
+    checks = {**run_checks(facts, None), CONSISTENCY_CHECK: {"status": UNAVAILABLE}}
     return cohort_attributes(
         facts,
-        other_speaker={"status": UNAVAILABLE, "reason": NO_COHORT},
+        other_speaker={"status": UNAVAILABLE, "reason": NO_COHORT, "enrollment_source": SOURCE_NONE},
         checks={
             name: {**block, "reason": NO_COHORT} if block["status"] == UNAVAILABLE else block
-            for name, block in run_checks(facts, None).items()
+            for name, block in checks.items()
         },
         quantiles=None,
         key=None,
@@ -1300,40 +1644,53 @@ def enrollment_config(config: TriageConfig) -> EnrollmentConfig:
     )
 
 
-def read_session(
-    session: str,
-    members: Sequence[tuple[RecordingFacts, AudioLoader]],
+def consistency_bound() -> float | None:
+    """``participant.consistency_cosine_min`` from ``data/cohort_stage.yaml``.
+
+    Returns:
+        The bound, or None where it is unset.
+    """
+    value = (cohort_parameters().get("participant") or {}).get("consistency_cosine_min")
+    return None if value is None else float(value)
+
+
+def read_participant(
+    participant: str,
+    sessions: Sequence[tuple[str, Sequence[tuple[RecordingFacts, AudioLoader]]]],
     *,
     settings: EnrollmentConfig,
     embed: Embedder | None,
     artefact: Mapping[str, Any] | None,
     quantiles_ref: Mapping[str, Any] | None,
-) -> tuple[SessionEnrollment | None, list[dict[str, Any]]]:
-    """COHORT over one session: its enrollment, then every member's reading.
+) -> tuple[ParticipantEnrollments | None, dict[str, list[dict[str, Any]]]]:
+    """COHORT over one participant: the enrollments, then every member's reading, session by session.
+
+    A session that enrolled compares its members against its own enrollment and reports each run's
+    cosine against the other sessions' too; one that did not falls back to the other sessions'.
 
     Args:
-        session: The session key.
-        members: Every recording of the session, with its plain-stream loader.
+        participant: The participant label.
+        sessions: ``(session key, members)`` per session, each member with its plain-stream loader.
         settings: The enrollment settings.
         embed: The span embedder, or None where the settings are unusable.
         artefact: The quantile artefact, or None.
         quantiles_ref: ``{path, sha256, version}`` of that artefact, or None.
 
     Returns:
-        The enrollment (None where the settings are unusable) and one attribute mapping per member,
-        in order.
+        The enrollments (None where the settings are unusable) and, per session, one attribute mapping
+        per member, in order.
     """
     key = cohort_key(
-        session=session,
-        members=[facts for facts, _ in members],
+        group=participant,
+        members=[facts for _, members in sessions for facts, _ in members],
         quantiles_sha256=None if quantiles_ref is None else str(quantiles_ref.get("sha256")),
         enrollment_config=settings.record(),
     )
-    enrollment: SessionEnrollment | None = None
+    enrollments: ParticipantEnrollments | None = None
     if settings.usable and embed is not None:
-        enrollment = enroll_session(
-            session,
-            members,
+        enrollments = enroll_participant(
+            participant,
+            sessions,
             embed,
             model_id=str(settings.model_id),
             commit=str(settings.commit),
@@ -1341,25 +1698,46 @@ def read_session(
             min_s=settings.min_s,
             lexical_gap_s=settings.lexical_gap_s,
         )
-    readings: list[dict[str, Any]] = []
-    for facts, loader in members:
-        if enrollment is None:
-            block: dict[str, Any] = {"status": UNAVAILABLE, "reason": ENROLLMENT_UNMEASURED}
-        elif enrollment.vector is None:
-            block = {"status": UNAVAILABLE, "reason": enrollment.reason, "enrollment": enrollment.record()}
+    bound = consistency_bound()
+    out: dict[str, list[dict[str, Any]]] = {}
+    for session, members in sessions:
+        readings: list[dict[str, Any]] = []
+        if enrollments is None:
+            source, enrollment, second = SOURCE_NONE, None, None
+            consistency: dict[str, Any] = {"status": UNAVAILABLE, "reason": ENROLLMENT_UNMEASURED}
         else:
-            block = match_runs(
-                facts,
-                loader,
-                enrollment,
-                embed if embed is not None else (lambda samples, rate: None),
-                cut=float(settings.cut or 0.0),
-                min_s=settings.min_s,
-                lexical_gap_s=settings.lexical_gap_s,
+            source, enrollment = enrollments.source_for(session)
+            second = enrollments.other_sessions.get(session) if source == SOURCE_SESSION else None
+            consistency = consistency_check(enrollments, session, bound=bound)
+        for facts, loader in members:
+            if enrollment is None:
+                block: dict[str, Any] = {
+                    "status": UNAVAILABLE,
+                    "reason": ENROLLMENT_UNMEASURED,
+                    "enrollment_source": SOURCE_NONE,
+                }
+            elif source == SOURCE_NONE:
+                block = {
+                    "status": UNAVAILABLE,
+                    "reason": enrollment.reason,
+                    "enrollment_source": SOURCE_NONE,
+                    "enrollment": enrollment.record(),
+                }
+            else:
+                block = match_runs(
+                    facts,
+                    loader,
+                    enrollment,
+                    embed if embed is not None else (lambda samples, rate: None),
+                    cut=float(settings.cut or 0.0),
+                    min_s=settings.min_s,
+                    lexical_gap_s=settings.lexical_gap_s,
+                    source=source,
+                    participant=second,
+                )
+            checks = {**run_checks(facts, artefact), CONSISTENCY_CHECK: consistency}
+            readings.append(
+                cohort_attributes(facts, other_speaker=block, checks=checks, quantiles=quantiles_ref, key=key)
             )
-        readings.append(
-            cohort_attributes(
-                facts, other_speaker=block, checks=run_checks(facts, artefact), quantiles=quantiles_ref, key=key
-            )
-        )
-    return enrollment, readings
+        out[session] = readings
+    return enrollments, out

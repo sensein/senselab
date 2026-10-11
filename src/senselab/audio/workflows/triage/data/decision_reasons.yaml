@@ -4,7 +4,7 @@
 # Owner, 2026-10-10: consolidated to these codes; the release ground is its own column (release_reason).
 # Derivation: specs/20261007-task-events-in-background/design.md ("Decision table", "Reasons consolidated",
 # "The residual's other voice is attributed", "The reviewer reads the phrases").
-version: 9
+version: 10
 precedence:            # discard reasons first, then incomplete, then the recording, then the content
 - unreadable
 - task_too_short
@@ -69,6 +69,7 @@ keys:                  # exact verdict ground key -> reason
   reviewer_other_speaker: other_speaker
   gate:dominant_speaker_share_min: other_speaker
   other_speaker_in_session: other_speaker
+  session_speaker_inconsistent: other_speaker
   other_speaker_in_task: other_speaker
   instructions_spoken_by_other: other_speaker
   instructions_spoken: off_task_speech
