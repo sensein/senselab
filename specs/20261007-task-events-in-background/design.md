@@ -1394,14 +1394,15 @@ non-matching spans the last cohort pass wrote. For a re-fold:
 1. Per-recording stages up to QUALITY are in the stores.
 2. `extend_cohort.py collect` (sharded) and `extend_cohort.py quantiles --facts` (one task), or
    `quantiles --table triage.tsv`.
-3. `extend_cohort.py apply --quantiles cohort_quantiles.json`, sharded by session (every member of a
-   session in one task), writing each store.
+3. `extend_cohort.py apply --quantiles cohort_quantiles.json`, sharded by participant (every session
+   of a participant in one task), writing each store.
 4. `extend_refold.py` (VERDICT). A re-fold does not re-run REDACT, so non-task speech from COHORT
    reaches the released audio only through a replay from BACKGROUND after step 3, then steps 2-4
    again for the sessions whose extents moved.
 
-`apply` is resumable: a session whose stores all carry a live reading under the same `cohort_key` is
-skipped unless `--force`. `--readings-out DIR` writes `<DIR>/<session>.jsonl` and no store.
+`apply` is resumable: a participant whose stores all carry a live reading under the same `cohort_key`
+(every member of every session) is skipped unless `--force`. `--readings-out DIR` writes
+`<DIR>/<participant>.jsonl` and no store.
 
 ### Validation on ORCD (r18 stores, read-only, commit 9bf84497)
 
@@ -1473,6 +1474,92 @@ removed speech is what makes it usable.
 
 Every non-match of the nine sessions (stem, start, end) is in
 `/orcd/scratch/bcs/002/satra/cohort_20261010/out_v5/cohort_nonmatch_listen.tsv` for spot-checking.
+
+### Participant enrollment across sessions (owner, 2026-10-10)
+
+- **Pools.** Per participant, `enroll_participant` builds three kinds of enrollment from the same
+  candidates (lexical speech recordings offering spans), each under the session rules above
+  (single-speaker only where at least two candidates are; leave-one-out at three or more
+  centroids): each session's own; per session, a participant enrollment pooled from every *other*
+  session (leave-one-session-out); and the participant's pool over all sessions (written to
+  `<enrollments-out>/<participant>.npy`, compared with nothing). Each recording's centroid is embedded
+  once and shared by every pool (`CentroidCache`).
+- **Fallback.** A session with no enrollment of its own compares its members against the other
+  sessions' enrollment. `other_speaker.enrollment_source` is `session`, `participant_other_sessions`
+  or `none`; the reading names the enrollment record it used (its `scope`, `sessions`,
+  `excluded_session`) and the store's `enrollment` entity is that enrollment.
+- **Both cosines.** Where a session compares against its own enrollment and the participant has
+  other sessions, each diarized and lexical run also carries `participant_cosine` against the other
+  sessions' enrollment. It decides nothing; it is what the cut's placement for pooled enrollments is
+  read from.
+- **`session_speaker_consistency`.** For a participant with two or more sessions that enrolled on
+  their own, each such session's enrollment against the other sessions' enrollment. Under
+  `participant.consistency_cosine_min` the check's outcome is review with ground
+  `session_speaker_inconsistent`, reason `other_speaker`; item `cohort.session_vs_other_sessions_cosine`
+  (`>=` the bound). It is written into every recording of the session. One enrolled session:
+  `not_applicable`, no item. A session that did not enroll, or a single-file run: `unavailable`, an
+  annotation item `cohort.session_speaker_consistency` with no value.
+- **Why review, not annotation.** A session far from the participant's others is either a different
+  person or a mislabelled session; both make every recording of that session wrong to pass as the
+  participant's. The bound is an outlier fence, so it selects few sessions (14 of 313 below), and a
+  wrong flag costs a review while a missed one releases another person's voice under the
+  participant's id. Clean must be right; noisy may go to review. With exactly two enrolled sessions
+  the cosine is symmetric, so both sessions are flagged: the check cannot say which one is the odd
+  one, and the reviewer must.
+- **Sharding.** `apply` groups by participant and shards participants (`participants_of`), so every
+  session a participant enrollment needs is in one task; `cohort_key` digests every member of every
+  session, so a change in any session re-reads the participant. `--participants` replaces
+  `--sessions`; `--readings-out` writes `<participant>.jsonl`. `collect` reads per-recording facts
+  only and is unchanged.
+
+#### Validation on ORCD (r18d stores, read-only, commit 781a519b, job 25540330)
+
+`apply --readings-out` over every participant with more than one session in `manifest_r18d.jsonl`
+(48 tasks, 4 CPUs, CPU embedding, r31 quantiles and config). The longest task (3 participants, 461
+recordings) took 1278 s; the longest participant 817 s.
+
+| | |
+| --- | ---: |
+| participants in the manifest / with more than one session | 1,527 / 142 |
+| sessions / recordings of those 142 | 351 / 9,434 |
+| participants by sessions enrolled on their own: 1 / 2 / 3 / 4 / 5 / 6 | 16 / 94 / 9 / 18 / 4 / 1 |
+| sessions using the fallback (`participant_other_sessions`) / their recordings | 22 / 111 |
+| sessions with no enrollment at all (`none`) | 0 |
+| fallback recordings with a non-matching run | 6 of 111 (7 of 22 runs under 0.231) |
+
+Session-vs-other-sessions cosine over the 313 sessions that enrolled in a participant with two or
+more enrolled sessions:
+
+| min | p01 | p05 | p10 | p25 | p50 | p75 | p90 | max |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 0.097 | 0.443 | 0.651 | 0.713 | 0.801 | 0.865 | 0.914 | 0.933 | 0.971 |
+
+- **The bound.** Tukey's lower fence, Q1 - 1.5 IQR = 0.631; median - 3 x 1.4826 MAD = 0.640 agrees,
+  and both leave the same 14 sessions under. `participant.consistency_cosine_min` is **0.63**:
+  14 sessions (345 recordings) of 8 participants, 10 of the 14 in two-session participants (so in
+  pairs). A 3.0 IQR fence (0.461) would leave 5. The bound is fitted to the distribution's outliers
+  only: **unfitted against labels.** The lowest, 0.097, is a two-session participant whose sessions
+  read as two different speakers; it needs a listen before the bound is trusted.
+- `extend_cohort.py consistency LOG_DIR` prints this distribution and fence from an apply's logs.
+
+Same-participant run cosines, diarized and lexical runs of recordings compared against their own
+session's enrollment, against that enrollment and against the other sessions' enrollment:
+
+| runs | n | session p05 / p25 / p50 | other sessions p05 / p25 / p50 | under 0.231: session / other / both |
+| --- | ---: | --- | --- | --- |
+| diarized | 10,873 | 0.452 / 0.662 / 0.763 | 0.335 / 0.557 / 0.666 | 149 / 285 / 136 |
+| lexical | 19,111 | 0.289 / 0.602 / 0.710 | 0.229 / 0.514 / 0.629 | 724 / 969 / 672 |
+| runs matching the session (>= 0.231) | 29,111 | 0.432 / 0.636 / 0.733 | 0.340 / 0.542 / 0.647 | - / 446 / - |
+
+- **Is 0.231 well placed for pooled enrollments?** The other sessions' enrollment reads the same
+  runs about 0.07 lower at the median (diarized -0.079, lexical -0.062) and about 0.1 lower at p05.
+  Of the 29,111 runs that match their own session, 446 (1.5%) fall under 0.231 against the other
+  sessions. The cut still sits below the bulk (other-session p05 is 0.335 diarized, 0.229 lexical),
+  so for the fallback it is usable, but the same cut is about 0.1 stricter there than against a
+  session enrollment. Placing a cross-session cut as D-6 placed 0.231 (same-speaker p05 against
+  between-speaker p95) needs the between-speaker side measured against pooled enrollments, which this
+  run did not do. The fallback reads only 111 recordings, so the cut is not refitted here.
+
 ### Parameters
 
 | key | value | status |
