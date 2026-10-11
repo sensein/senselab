@@ -752,6 +752,7 @@ class Enrollment:
         model_commit_sha: Its resolved commit.
         sessions: The sessions whose recordings were candidates.
         excluded_session: The session a leave-one-session-out enrollment was built without, else None.
+        excluded_recording: The recording a leave-the-recording-out enrollment was built without, else None.
         recordings: The stems whose spans were pooled.
         left_out: Stems left out by the leave-one-out step.
         spans_n: How many spans were embedded.
@@ -767,6 +768,7 @@ class Enrollment:
     model_commit_sha: str | None
     sessions: list[str] = field(default_factory=list)
     excluded_session: str | None = None
+    excluded_recording: str | None = None
     recordings: list[str] = field(default_factory=list)
     left_out: list[str] = field(default_factory=list)
     spans_n: int = 0
@@ -800,6 +802,7 @@ class Enrollment:
             "method": "recording_equal_spherical_mean",
             "sessions": list(self.sessions),
             "excluded_session": self.excluded_session,
+            "excluded_recording": self.excluded_recording,
             "recordings": list(self.recordings),
             "recordings_n": len(self.recordings),
             "left_out": list(self.left_out),
@@ -1027,12 +1030,14 @@ class ParticipantEnrollments:
         other_sessions: Per session, the participant enrollment pooled from every other session; empty
             for a participant with one session.
         pooled: The participant enrollment over every session.
+        without: Re-pools one session's enrollment without one recording: ``(session, stem) -> Enrollment``.
     """
 
     participant: str
     sessions: dict[str, Enrollment]
     other_sessions: dict[str, Enrollment]
     pooled: Enrollment
+    without: Callable[[str, str], Enrollment] | None = None
 
     @property
     def enrolled_sessions(self) -> list[str]:
@@ -1058,6 +1063,29 @@ class ParticipantEnrollments:
             return SOURCE_PARTICIPANT_OTHER_SESSIONS, other
         return SOURCE_NONE, own
 
+    def source_for_recording(self, session: str, stem: str) -> tuple[str, Enrollment]:
+        """The enrollment one recording is compared against: :meth:`source_for`, with the recording left out.
+
+        Args:
+            session: The session key.
+            stem: The recording.
+
+        Returns:
+            ``(enrollment_source, enrollment)``. Where the recording enrolled its own session, the session's
+            enrollment re-pooled without it; where that holds no vector, the other sessions' enrollment, else
+            :data:`SOURCE_NONE`.
+        """
+        source, enrollment = self.source_for(session)
+        if source != SOURCE_SESSION or stem not in enrollment.recordings or self.without is None:
+            return source, enrollment
+        left = self.without(session, stem)
+        if left.vector is not None:
+            return SOURCE_SESSION, left
+        other = self.other_sessions.get(session)
+        if other is not None and other.vector is not None:
+            return SOURCE_PARTICIPANT_OTHER_SESSIONS, other
+        return SOURCE_NONE, left
+
 
 def enroll_participant(
     participant: str,
@@ -1074,7 +1102,8 @@ def enroll_participant(
     """Each session's enrollment, each session's leave-one-session-out participant enrollment, and the pool.
 
     Every pool applies :func:`pool_enrollment`'s rules to its own candidates. Each recording's
-    centroid is embedded once and shared by every pool that reads it.
+    centroid is embedded once and shared by every pool that reads it, including the session pools re-built
+    without one recording (:meth:`ParticipantEnrollments.source_for_recording`).
 
     Args:
         participant: The participant label.
@@ -1109,6 +1138,10 @@ def enroll_participant(
             excluded_session=excluded,
         )
 
+    def without(session: str, stem: str) -> Enrollment:
+        left = pool(session, SCOPE_SESSION, [c for c in by_session.get(session, []) if c.facts.stem != stem])
+        return dataclasses.replace(left, excluded_recording=stem)
+
     own = {session: pool(session, SCOPE_SESSION, candidates) for session, candidates in by_session.items()}
     others = {
         session: pool(
@@ -1121,7 +1154,7 @@ def enroll_participant(
         if len(by_session) > 1
     }
     pooled = pool(participant, SCOPE_PARTICIPANT, [c for candidates in by_session.values() for c in candidates])
-    return ParticipantEnrollments(participant, own, others, pooled)
+    return ParticipantEnrollments(participant, own, others, pooled, without)
 
 
 def consistency_check(enrollments: ParticipantEnrollments, session: str, *, bound: float | None) -> dict[str, Any]:
@@ -1790,6 +1823,8 @@ def read_participant(
             second = enrollments.other_sessions.get(session) if source == SOURCE_SESSION else None
             consistency = consistency_check(enrollments, session, bound=bound)
         for facts, loader in members:
+            if enrollments is not None:
+                source, enrollment = enrollments.source_for_recording(session, facts.stem)
             if enrollment is None:
                 block: dict[str, Any] = {
                     "status": UNAVAILABLE,
@@ -1813,7 +1848,7 @@ def read_participant(
                     min_s=settings.min_s,
                     lexical_gap_s=settings.lexical_gap_s,
                     source=source,
-                    participant=second,
+                    participant=second if source == SOURCE_SESSION else None,
                 )
             checks = {**run_checks(facts, artefact), CONSISTENCY_CHECK: consistency}
             readings.append(
