@@ -10,5 +10,5 @@
 D=${RACE_DIR:?}; N=${RACE_NAMES:-400}
 PY=/orcd/scratch/bcs/002/satra/senselab-r28/.venv/bin/python
 T=${RACE_START:?}; while [ "$(date +%s)" -lt "$T" ]; do sleep 0.2; done
-for k in 1 2 3 4; do $PY /orcd/scratch/bcs/002/satra/r18d_20261010/pool/tests/race.py run "$D" "$N" & done
+for k in 1 2 3 4; do $PY /orcd/scratch/bcs/002/satra/r18d_20261010/pool/harness/race.py run "$D" "$N" & done
 wait
