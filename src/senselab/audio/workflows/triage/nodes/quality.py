@@ -85,6 +85,9 @@ CONTRADICTED_CLIP = "clip_above_unclipped_sample"
 CONTEST_VERB = "contest"
 """The assertion verb for a clip span this node answers but does not withdraw."""
 
+STREAM_NOT_STORED = "stream_not_stored"
+"""The note QUALITY records when the stream its clip spans would be detected on is not in the store."""
+
 CLIP_AMPLITUDE_MEASUREMENT = "clip_amplitude"
 """PREPROCESS's amplitude reading of the signal its clip spans were detected on.
 
@@ -152,7 +155,7 @@ def preceded_by(store: ProvStore) -> list[str]:
     )
 
 
-def _stream_id(store: ProvStore, name: str) -> str:
+def _stream_id(store: ProvStore, name: str) -> str | None:
     """The live stream entity's id, by name, without decoding it.
 
     Invalidated entities are never returned and the latest write wins.
@@ -162,15 +165,10 @@ def _stream_id(store: ProvStore, name: str) -> str:
         name: The stream entity's ``name`` attribute.
 
     Returns:
-        The stream entity's id.
-
-    Raises:
-        LookupError: If no live stream entity carries that name.
+        The stream entity's id, or None where no live stream entity carries that name.
     """
     found = [entity for entity in live_entities(store, "stream") if entity.attributes.get("name") == name]
-    if not found:
-        raise LookupError(f"no stream named {name!r} in the store; the node that writes it has not run")
-    return found[-1].id
+    return found[-1].id if found else None
 
 
 def clip_spans(store: ProvStore, signal: str) -> list[Entity]:
@@ -419,8 +417,9 @@ def quality(
     Raises:
         UnknownConfigKey: If ``quality.clip_contradiction_margin`` is not a packaged key. A key
             that is packaged but null is reported instead, in ``unmeasured``.
-        LookupError: If the ``source`` stream is absent, or if clip spans over it carry no
-            clip-amplitude measurement to read them against.
+        LookupError: If clip spans over ``source`` carry no clip-amplitude measurement to read
+            them against. An absent ``source`` stream is not raised on: the report is undetermined
+            and names the stream in ``missing``.
     """
     del hint
     # An unmeasured margin is reported, not raised on; a misspelled key still raises.
@@ -451,7 +450,8 @@ def quality(
         },
     )
     store.was_associated_with(activity, software)
-    store.used(activity, stream_id)
+    if stream_id is not None:
+        store.used(activity, stream_id)
     for span in spans:
         store.used(activity, span.id)
 
@@ -497,6 +497,8 @@ def quality(
         assertion_ids.append(assertion_id)
 
     notes: list[str] = []
+    if stream_id is None:
+        notes.append(f"{STREAM_NOT_STORED}: no live {source!r} stream, so no clip span over it was checked")
     if contradictions:
         loudest = max(contradictions, key=lambda found: found.louder_amplitude)
         notes.append(
@@ -530,6 +532,7 @@ def quality(
         unmeasured=() if margin is not None else ("quality.clip_contradiction_margin",),
         detail={
             "signal": source,
+            "missing": [] if stream_id is not None else [source],
             "preceded_by": preceded,
             "clip_spans_n": len(spans),
             "checked_n": len(measured),
