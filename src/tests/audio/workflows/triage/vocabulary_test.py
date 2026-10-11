@@ -1191,7 +1191,7 @@ class TestTheMasksThatStandDecideTheRelease:
         assert reviewer_may_unmask(hides_more) is True
         assert reviewer_may_unmask(None) is False
         assert reviewer_may_unmask({"status": "absent", "failure": "CUDA error", "proposal": []}) is False
-        assert reviewer_may_unmask({"status": "nothing_to_read", "proposal": []}) is False
+        assert reviewer_may_unmask({"status": "bypassed", "bypass_reason": "no_words", "proposal": []}) is False
 
 
 class TestAConditionNeverWithholds:
@@ -2627,3 +2627,36 @@ class TestNotMeasuredIsIncomplete:
         assert any(fold.run_status is RunStatus.COMPLETE and fold.triage is Triage.REVIEW for fold in folds)
         for fold in folds:
             assert ("not_measured" in fold.reason_keys) == (fold.run_status is RunStatus.INCOMPLETE), fold.reason_keys
+
+
+class TestABypassFoldsAsTheOldNothingToRead:
+    """``bypassed`` replaced ``nothing_to_read`` by name only: the fold reads neither as a reading."""
+
+    _OLD_REVIEW = {
+        "status": "nothing_to_read",
+        "iterations": 0,
+        "proposal": [],
+        "failure": "the transcript is empty; there was no text to read",
+    }
+    _OLD_OPINION = {"status": "nothing_to_read", "probabilities": {}}
+
+    @pytest.mark.parametrize("reason", ["no_words", "non_lexical_only", "task_content_only", "unscanned"])
+    @pytest.mark.parametrize("lexical_words_n", [0, 12])
+    def test_every_decision_matches(self, reason: str, lexical_words_n: int) -> None:
+        """Triage, release, every ground and reason: identical; only the carried status differs."""
+        evidence = RedactionEvidence(lexical_words_n=lexical_words_n, scanned=True)
+        old = _every_ground_fold(
+            llm_redaction=dict(self._OLD_REVIEW), second_opinion=dict(self._OLD_OPINION), redaction=evidence
+        )
+        bypassed = {"status": "bypassed", "bypass_reason": reason, "iterations": 0, "proposal": [], "failure": None}
+        new = _every_ground_fold(
+            llm_redaction=bypassed,
+            second_opinion={"status": "bypassed", "bypass_reason": reason, "probabilities": {}},
+            redaction=evidence,
+        )
+        old_record, new_record = old.record(), new.record()
+        assert new_record["second_opinion"]["bypass_reason"] == reason
+        for record in (old_record, new_record):
+            record.pop("llm_redaction")
+            record.pop("second_opinion")
+        assert new_record == old_record

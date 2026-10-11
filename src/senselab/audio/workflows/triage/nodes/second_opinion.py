@@ -22,7 +22,7 @@ from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.nodes.branches import declared_task_family
 from senselab.audio.workflows.triage.nodes.common import find_measurement, mint_live, software_agent
 from senselab.audio.workflows.triage.nodes.redact import fold_mask_plan, shipped_texts, transcript_texts
-from senselab.audio.workflows.triage.nodes.review import task_context
+from senselab.audio.workflows.triage.nodes.review import bypass_reason, task_context
 from senselab.audio.workflows.triage.task_lexicon import task_lexicon
 from senselab.audio.workflows.triage.vocabulary import (
     REDACTION_LLM_ANNOTATION,
@@ -50,10 +50,11 @@ PROCESS = "second_opinion_answers"
 
 OK = "ok"
 DISABLED = "disabled"
-NOTHING_TO_READ = "nothing_to_read"
+BYPASSED = "bypassed"
 ABSENT = "absent"
-STATUSES = (OK, DISABLED, NOTHING_TO_READ, ABSENT)
-"""``second_opinion_answers.status``: answered, switched off, no text, or asked and not answered."""
+STATUSES = (OK, DISABLED, BYPASSED, ABSENT)
+"""``second_opinion_answers.status``: answered, switched off, bypassed (with REVIEW's
+:data:`~senselab.audio.workflows.triage.nodes.review.BYPASS_REASONS` reason), or asked and not answered."""
 
 _SECTION = "second_opinion"
 Ask = Callable[[Mapping[str, Any], Mapping[str, Mapping[str, Any]]], Mapping[str, Any]]
@@ -200,10 +201,12 @@ def second_opinion(
     opinion: SecondOpinion | None = None
     failure: str | None = None
     cache: dict[str, Any] = {"key": None, "hit": False}
+    reason: str | None = None
     if not held["enabled"]:
         status = DISABLED
     elif not original.strip():
-        status = NOTHING_TO_READ
+        status = BYPASSED
+        reason = bypass_reason(store)
     else:
         key = opinion_cache_key(original, masked, context, pin, seed)
         stored = result_lookup(key)
@@ -277,6 +280,7 @@ def second_opinion(
             "name": SECOND_OPINION_ANSWERS,
             "signal": "consensus_transcript",
             "status": status,
+            "bypass_reason": reason,
             "probabilities": dict(opinion.probabilities) if opinion is not None else {},
             "choices": dict(opinion.choices) if opinion is not None else {},
             "class_probabilities": (
