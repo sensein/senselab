@@ -542,3 +542,17 @@ def test_a_participant_with_no_enrollment_anywhere_compares_nothing() -> None:
     block = readings["sub-a_ses-1"][0]["other_speaker"]
     assert block["status"] == UNAVAILABLE and block["enrollment_source"] == SOURCE_NONE
     assert block["reason"] == NO_ENROLLMENT_SPANS
+
+
+def test_a_recording_is_compared_with_its_session_enrollment_left_out() -> None:
+    """Two enrolling recordings, one voiced by someone else: each is compared with the other's enrollment only."""
+    sessions = [("sub-a_ses-1", [_speech("sub-a_ses-1", 0), _speech("sub-a_ses-1", 1, TALKER)])]
+    found, readings = _read(sessions)
+    assert found is not None and sorted(found.sessions["sub-a_ses-1"].recordings) == [
+        "sub-a_ses-1_task-rainbow-passage-0",
+        "sub-a_ses-1_task-rainbow-passage-1",
+    ]
+    talker = readings["sub-a_ses-1"][1]["other_speaker"]
+    assert talker["enrollment"]["excluded_recording"] == "sub-a_ses-1_task-rainbow-passage-1"
+    assert talker["enrollment"]["recordings"] == ["sub-a_ses-1_task-rainbow-passage-0"]
+    assert not talker[POOL_TARGET]["match"] and talker["nonmatch"] == [POOL_TARGET]

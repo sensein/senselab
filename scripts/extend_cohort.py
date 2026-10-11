@@ -417,8 +417,8 @@ def process_participant(
         _write_vector(enrollments.pooled.vector, enrollments_out / f"{participant}.npy")
     out: list[dict[str, Any]] = []
     for session, members in opened:
-        compared = None if enrollments is None else enrollments.source_for(session)[1]
         for (facts, run_root, store), attributes in zip(members, readings[session], strict=True):
+            compared = None if enrollments is None else enrollments.source_for_recording(session, facts.stem)[1]
             if readings_out is None:
                 reading_id = write_cohort_reading(store, attributes)
                 if compared is not None and compared.vector is not None:
