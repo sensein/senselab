@@ -89,9 +89,7 @@ def _soundfile_window(
     rate = int(info.samplerate)
     first = round(start_seconds * rate)
     if first >= info.frames and info.frames > 0:
-        raise ValueError(
-            f"Offset ({start_seconds} s) exceeds the audio file duration ({info.frames / rate:.2f} s)."
-        )
+        raise ValueError(f"Offset ({start_seconds} s) exceeds the audio file duration ({info.frames / rate:.2f} s).")
     last = None if stop_seconds is None else min(round(stop_seconds * rate), int(info.frames))
     data, rate = sf.read(str(filepath), start=first, stop=last, dtype="float32", always_2d=True)
     return torch.from_numpy(np.ascontiguousarray(data.T)), int(rate)
