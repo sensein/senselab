@@ -53,8 +53,8 @@ from senselab.audio.workflows.triage.nodes.redact import (
 from senselab.audio.workflows.triage.nodes.redact import STREAM_NAME as REDACTED_STREAM
 from senselab.audio.workflows.triage.residue import VOCAL, is_non_lexical
 from senselab.audio.workflows.triage.task_lexicon import TaskLexicon, task_lexicon
-from senselab.audio.workflows.triage.task_speech import item_set_family
-from senselab.audio.workflows.triage.vocabulary import PII_SCAN, REDACTION_LLM_ANNOTATION, SCANNED
+from senselab.audio.workflows.triage.task_speech import item_set_family, non_lexical_family
+from senselab.audio.workflows.triage.vocabulary import PII_SCAN, PII_SCAN_MISSING, REDACTION_LLM_ANNOTATION, SCANNED
 from senselab.text.tasks.pii_detection.redaction_review import (
     CONSENSUS_HAYSTACK,
     CONSENSUS_TRANSCRIPT,
@@ -103,6 +103,8 @@ DETECTOR_STATES = (SCANNED_STATE, DECLINED_STATE, UNSCANNED_STATE)
 DISABLED = "disabled"
 BYPASSED = "bypassed"
 ABSENT = "absent"
+PII_SCAN_MISSING_FAILURE = "the consensus carries lexical words and no PII scan read them"
+"""The ``failure`` an :data:`ABSENT` annotation carries where its ``absent_reason`` is ``pii_scan_missing``."""
 CLEAN = "clean"
 FLAGGED = "flagged"
 REVIEW_STATES = (DISABLED, BYPASSED, ABSENT, CLEAN, FLAGGED)
@@ -111,10 +113,11 @@ REVIEW_STATES = (DISABLED, BYPASSED, ABSENT, CLEAN, FLAGGED)
 NO_WORDS = "no_words"
 NON_LEXICAL_ONLY = "non_lexical_only"
 TASK_CONTENT_ONLY = "task_content_only"
-UNSCANNED_WORDS = "unscanned"
-BYPASS_REASONS = (NO_WORDS, NON_LEXICAL_ONLY, TASK_CONTENT_ONLY, UNSCANNED_WORDS)
-"""Why the lexical residue is empty: the consensus has no words; only bracketed, non-lexical or
-degenerate tokens; lexical words, every one task content; or lexical words SPEECH never scanned."""
+NON_LEXICAL_TASK = "non_lexical_task"
+BYPASS_REASONS = (NO_WORDS, NON_LEXICAL_ONLY, TASK_CONTENT_ONLY, NON_LEXICAL_TASK)
+"""Why the reviewer is not asked: the consensus has no words; only bracketed, non-lexical or degenerate
+tokens; lexical words, every one task content; or the declared family asks for a sound (airway, voice), whose
+lexical words outside the task text are masked and reviewed on the task-speech path, not read for PII."""
 
 
 @dataclass(frozen=True)
@@ -168,6 +171,8 @@ class _Reading:
         phrase_quotes_unplaced_n: How many of the last answering round's phrase quotes place on no run of the
             timed consensus words (:func:`~senselab.text.tasks.pii_detection.redaction_review.unplaced_phrase_quotes`).
         bypass_reason: One of :data:`BYPASS_REASONS` where the status is :data:`BYPASSED`, else None.
+        absent_reason: :data:`~senselab.audio.workflows.triage.vocabulary.PII_SCAN_MISSING` where the status is
+            :data:`ABSENT` because the measurement the reviewer reads was never taken, else None.
     """
 
     status: str
@@ -195,6 +200,7 @@ class _Reading:
     engine: dict[str, Any] = field(default_factory=dict)
     phrase_quotes_unplaced_n: int = 0
     bypass_reason: str | None = None
+    absent_reason: str | None = None
 
 
 TASK_READING_QUOTES = ("off_task_quotes", "phrase_quotes", "other_speaker_quotes", "task_content_quotes")
@@ -392,22 +398,29 @@ def consensus_transcript(store: ProvStore) -> dict[str, Any]:
     return {"recognisers": recognisers, "words": rows, "findings_n": len(live)}
 
 
-def bypass_reason(store: ProvStore, transcript: Mapping[str, Any] | None = None) -> str:
+def bypass_reason(
+    store: ProvStore, transcript: Mapping[str, Any] | None = None, hint: AudioHints | None = None
+) -> str | None:
     """Why a recording whose lexical residue is empty was not read, from :func:`consensus_transcript`'s word kinds.
 
     Args:
         store: The provenance store.
         transcript: :func:`consensus_transcript` of the store, where the caller already holds it.
+        hint: The caller's declaration, read for the declared family.
 
     Returns:
-        One of :data:`BYPASS_REASONS`.
+        One of :data:`BYPASS_REASONS`, or None where the consensus carries lexical words, the store holds no
+        PII scan and the declared family asks for words: a missing measurement
+        (:data:`~senselab.audio.workflows.triage.vocabulary.PII_SCAN_MISSING`), not a bypass.
     """
     kinds = {row[4] for row in (transcript or consensus_transcript(store))["words"]}
     if not kinds:
         return NO_WORDS
     if WORD_TASK not in kinds:
         return NON_LEXICAL_ONLY
-    return UNSCANNED_WORDS if detector_state(store) == UNSCANNED_STATE else TASK_CONTENT_ONLY
+    if detector_state(store) != UNSCANNED_STATE:
+        return TASK_CONTENT_ONLY
+    return NON_LEXICAL_TASK if non_lexical_family(declared_task_family(store, hint)) else None
 
 
 def review_context(store: ProvStore, hint: AudioHints | None, lexicon: TaskLexicon | None = None) -> dict[str, Any]:
@@ -948,18 +961,13 @@ def review(store: ProvStore, config: TriageConfig, hint: AudioHints | None = Non
     if not settings["enabled"]:
         reading = _Reading(DISABLED, 0, (), "", "", "", (), "", None, None)
     elif not original.strip():
-        reading = _Reading(
-            BYPASSED,
-            0,
-            (),
-            "",
-            "",
-            "",
-            (),
-            "",
-            None,
-            None,
-            bypass_reason=bypass_reason(store, context.get(CONSENSUS_TRANSCRIPT)),
+        reason = bypass_reason(store, context.get(CONSENSUS_TRANSCRIPT), hint)
+        reading = (
+            _Reading(BYPASSED, 0, (), "", "", "", (), "", None, None, bypass_reason=reason)
+            if reason is not None
+            else _Reading(
+                ABSENT, 0, (), "", "", "", (), "", None, PII_SCAN_MISSING_FAILURE, absent_reason=PII_SCAN_MISSING
+            )
         )
     else:
         revision = _resolved(settings)
@@ -1004,7 +1012,7 @@ def review(store: ProvStore, config: TriageConfig, hint: AudioHints | None = Non
         ended=_stamp(),
     )
     store.was_associated_with(activity, software)
-    if reading.status not in (DISABLED, BYPASSED):
+    if reading.status not in (DISABLED, BYPASSED) and reading.absent_reason is None:
         if reading.revision is not None:
             store.was_associated_with(
                 activity, store.agent(agent_type="model", model_id=reading.model_id, commit_sha=reading.revision)
@@ -1046,6 +1054,7 @@ def review(store: ProvStore, config: TriageConfig, hint: AudioHints | None = Non
             "signal": "consensus_transcript",
             "status": reading.status,
             "bypass_reason": reading.bypass_reason,
+            "absent_reason": reading.absent_reason,
             "iterations": reading.iterations,
             "converged": reading.converged,
             "problem": reading.problem,

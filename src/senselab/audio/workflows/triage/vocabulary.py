@@ -83,6 +83,10 @@ PII_SCAN = "pii_scan"
 SCANNED = "scanned"
 """The :data:`PII_SCAN` key a declined scan carries, and a scan that ran does not."""
 
+PII_SCAN_MISSING = "pii_scan_missing"
+"""The ``absent_reason`` REVIEW and SECOND_OPINION record where a lexical family's consensus carries lexical
+words and the store holds no :data:`PII_SCAN`, and the ground key the fold flags it under."""
+
 SECOND_OPINION_ANSWERS = "second_opinion_answers"
 """The measurement SECOND_OPINION writes a decision model's probabilities into.
 
@@ -790,6 +794,9 @@ OWNING_BRANCH_INPUT_ABSENT = (
     "the branch owning the declared task lacked an input it needs to look for the task, "
     "so whether the task was performed is unknown"
 )
+PII_SCAN_MISSING_WHY = (
+    f"{PII_SCAN_MISSING}: the consensus carries lexical words of a task that asks for words, and no PII scan read them"
+)
 NO_LEXICAL_ITEM_PRODUCED = "SPEECH ran over a task that asks for words and read no lexical item"
 """The flag ground a critical failure contributes, with the branch, gate and recorded absence appended.
 
@@ -918,6 +925,7 @@ KEY_TAXONOMY_NO_CLASSIFIER = "taxonomy_no_classifier"
 KEY_REDACT_RESCAN_INCOMPLETE = "redact_rescan_incomplete"
 KEY_UNCOMPUTED_READING = "uncomputed_reading"
 KEY_OWNING_BRANCH_INPUT_ABSENT = "owning_branch_input_absent"
+KEY_PII_SCAN_MISSING = PII_SCAN_MISSING
 KEY_NODE_OUTCOME_UNREADABLE = "node_outcome_unreadable"
 KEY_NO_LEXICAL_ITEM = "speech_no_lexical_item"
 KEY_REVIEWER_RESIDUE = "reviewer_residue"
@@ -973,6 +981,7 @@ GROUND_KEYS = (
     KEY_REDACT_RESCAN_INCOMPLETE,
     KEY_UNCOMPUTED_READING,
     KEY_OWNING_BRANCH_INPUT_ABSENT,
+    KEY_PII_SCAN_MISSING,
     KEY_NODE_OUTCOME_UNREADABLE,
     KEY_NO_LEXICAL_ITEM,
     KEY_REVIEWER_RESIDUE,
@@ -1052,6 +1061,7 @@ OPERATIONAL_GROUND_KEYS = frozenset(
         KEY_REDACT_RESCAN_INCOMPLETE,
         KEY_UNCOMPUTED_READING,
         KEY_OWNING_BRANCH_INPUT_ABSENT,
+        KEY_PII_SCAN_MISSING,
         KEY_NODE_OUTCOME_UNREADABLE,
     }
 )
@@ -3087,6 +3097,8 @@ def fold_file_verdict(
         )
     annotation = dict(llm_redaction or {})
     deciding = deciding_reading(annotation, agreed_redactions, rules.condition_categories)
+    if PII_SCAN_MISSING in (annotation.get("absent_reason"), (second_opinion or {}).get("absent_reason")):
+        flag(_VERDICT, PII_SCAN_MISSING_WHY, KEY_PII_SCAN_MISSING)
     if rules.llm_redaction_flags and _reviewer_found_residue(deciding):
         named = ", ".join(
             sorted(
@@ -3564,6 +3576,7 @@ def fold_file_verdict(
             {
                 "status": second_opinion.get("status"),
                 "bypass_reason": second_opinion.get("bypass_reason"),
+                "absent_reason": second_opinion.get("absent_reason"),
                 "probabilities": dict(second_opinion.get("probabilities") or {}),
                 "disagreements": list(disagreements),
                 "model_id": second_opinion.get("model_id"),
