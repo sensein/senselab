@@ -172,8 +172,8 @@ class RecordingFacts:
         duration_s: The recording's duration, or None where the store records none.
         task_extent: The hull of the standing task extents, or None where no branch wrote one.
         diarization: ``(start, end, speaker)`` per diarized segment on the configured stream.
-        lexical: The lexical consensus words' extents, in index order; in a word-gated family
-            (:func:`word_gated`) only the words of the speech outside the task (:func:`speech_outside_task`).
+        lexical: The extents of the words a run must hold to be compared (:func:`gate_words`), in index order:
+            every lexical word, the speech outside the task, or the declared task text, by :func:`compare_on`.
         speech: The speech-classified regions (:func:`speech_regions`), merged.
         removed_speech: Speech-classified on the plain stream and not on the enhanced one: a voice the
             enhancer removed as background.
@@ -322,18 +322,48 @@ def _task_events(store: ProvStore) -> list[tuple[float, float]]:
     return list(task_events_of(store)[1])
 
 
-def word_gated(family: str) -> bool:
-    """Whether a family compares a run only where it holds a word: every family outside ``word_gate.exempt_kind``.
+COMPARE_ON_SPEECH = "speech"
+COMPARE_ON_NON_TASK_WORDS = "non_task_words"
+COMPARE_ON_TASK_TEXT = "task_text"
+COMPARE_ON = (COMPARE_ON_SPEECH, COMPARE_ON_NON_TASK_WORDS, COMPARE_ON_TASK_TEXT)
+
+
+def compare_on(family: str) -> str:
+    """What a run of a family must hold to be compared with the enrollment (``word_gate.compare_on``).
 
     Args:
         family: The declared task family.
 
     Returns:
-        True for an airway, voice or syllable-repetition family, any other outside the exempt kind, and a
-        lexical family read as a voice task (``task_speech.lexical_voice_family``).
+        One of :data:`COMPARE_ON`: the family's own entry, else its declared kind's, else the default.
+
+    Raises:
+        ValueError: Where the configured rule is not one of :data:`COMPARE_ON`.
     """
-    exempt = DECLARED_KIND[str(cohort_parameters()["word_gate"]["exempt_kind"])]
-    return family not in exempt or lexical_voice_family(family)
+    table = cohort_parameters()["word_gate"]["compare_on"]
+    families = table.get("families") or {}
+    rule = families.get(family)
+    if rule is None:
+        rule = next(
+            (value for kind, value in (table.get("kinds") or {}).items() if family in DECLARED_KIND[str(kind)]),
+            table["default"],
+        )
+    if rule not in COMPARE_ON:
+        raise ValueError(f"cohort_stage.yaml word_gate.compare_on: {rule!r} for {family!r} is not one of {COMPARE_ON}")
+    return str(rule)
+
+
+def word_gated(family: str) -> bool:
+    """Whether a family compares a run only where it holds a word: any rule but ``speech`` (:func:`compare_on`).
+
+    Args:
+        family: The declared task family.
+
+    Returns:
+        True for an airway, voice or syllable-repetition family, and a family compared on its task text
+        (``loudness``).
+    """
+    return compare_on(family) != COMPARE_ON_SPEECH
 
 
 def lexical_task(family: str) -> bool:
@@ -379,6 +409,38 @@ def speech_outside_task(store: ProvStore, family: str) -> list[Entity]:
             if word.id not in exempt and not is_non_lexical(str(word.attributes.get("text") or ""), vocal_task=True)
         ]
     return [word for word in said if not spells_task_syllables(str(word.attributes.get("text") or ""), family)]
+
+
+def task_text_words(store: ProvStore, family: str) -> list[Entity]:
+    """The lexical consensus words that are the family's declared task text (``task_speech.task_text_ids``).
+
+    Args:
+        store: The recording's store.
+        family: The declared task family.
+
+    Returns:
+        The words, in stream order; empty for a family declaring no task text.
+    """
+    ids = task_text_ids(consensus_words(store), family, ())
+    return [word for word in lexical_words(store) if word.id in ids]
+
+
+def gate_words(store: ProvStore, family: str) -> list[Entity]:
+    """The words a run must hold to be compared, by the family's rule (:func:`compare_on`).
+
+    Args:
+        store: The recording's store.
+        family: The declared task family.
+
+    Returns:
+        The task-text words, the speech outside the task, or every lexical word, in stream order.
+    """
+    rule = compare_on(family)
+    if rule == COMPARE_ON_TASK_TEXT:
+        return task_text_words(store, family)
+    if rule == COMPARE_ON_NON_TASK_WORDS:
+        return speech_outside_task(store, family)
+    return lexical_words(store)
 
 
 def spells_task_syllables(text: str, family: str) -> bool:
@@ -439,8 +501,7 @@ def facts_of(
                     for start, end, speaker in zip(arrays["starts"], arrays["ends"], arrays["speakers"])
                 )
             )
-    said = speech_outside_task(store, family) if word_gated(family) else lexical_words(store)
-    words = tuple((float(w.extent[0]), float(w.extent[1])) for w in said if w.extent is not None)
+    words = tuple((float(w.extent[0]), float(w.extent[1])) for w in gate_words(store, family) if w.extent is not None)
     by_name: dict[str, list[tuple[float, float]]] = {}
     if run_dir is not None:
         classes = cohort_parameters()["speech"]
