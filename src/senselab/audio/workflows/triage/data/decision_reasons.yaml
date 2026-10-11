@@ -4,7 +4,7 @@
 # Owner, 2026-10-10: consolidated to these codes; the release ground is its own column (release_reason).
 # Derivation: specs/20261007-task-events-in-background/design.md ("Decision table", "Reasons consolidated",
 # "The residual's other voice is attributed", "The reviewer reads the phrases").
-version: 10
+version: 11
 precedence:            # discard reasons first, then incomplete, then the recording, then the content
 - unreadable
 - task_too_short
@@ -55,6 +55,7 @@ keys:                  # exact verdict ground key -> reason
   redact_rescan_incomplete: not_measured
   uncomputed_reading: not_measured
   owning_branch_input_absent: not_measured
+  pii_scan_missing: not_measured   # owner, 2026-10-10: lexical words of a lexical family with no PII scan are a missing measurement
   node_outcome_unreadable: not_measured
   streams_disagree: weak_events
   breath_review_low_confidence: weak_events

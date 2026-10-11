@@ -221,18 +221,51 @@ class TestTheReviewerReadsTheResidue:
         assert (annotation["status"], annotation["bypass_reason"]) == ("bypassed", "task_content_only")
         assert annotation["failure"] is None
 
-    def test_a_store_with_no_scan_is_bypassed_as_unscanned(
+    def test_lexical_words_with_no_scan_are_a_missing_measurement(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """SPEECH never ran, so no residue was computed and nothing reaches the pathway."""
+        """A lexical family's words with no PII scan: absent with pii_scan_missing, never bypassed, no model asked."""
+        from senselab.audio.data_structures import AudioHints
+
+        for hint in (None, AudioHints(metadata={"task_token": "free-speech"})):
+            store = ProvStore(run_id="review-test")
+            _seed(store, scan=None)
+            seen = _stub(monkeypatch, [_clean()])
+            review(store, _config(tmp_path), hint)
+            assert seen == []
+            annotation = _annotation(store)
+            assert annotation["detector_state"] == "unscanned"
+            assert (annotation["status"], annotation["bypass_reason"], annotation["absent_reason"]) == (
+                "absent",
+                None,
+                "pii_scan_missing",
+            )
+            assert annotation["failure"]
+            assert not store.agents("model")
+
+    @pytest.mark.parametrize("task", ["prolonged-vowel", "voluntary-cough", "respiration-and-cough-breath"])
+    def test_a_non_lexical_family_with_no_scan_is_bypassed_as_non_lexical_task(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, task: str
+    ) -> None:
+        """Voice and airway words are masked and reviewed on the task-speech path, not read for PII."""
+        from senselab.audio.data_structures import AudioHints
+
         store = ProvStore(run_id="review-test")
         _seed(store, scan=None)
         seen = _stub(monkeypatch, [_clean()])
-        review(store, _config(tmp_path))
+        review(store, _config(tmp_path), AudioHints(metadata={"task_token": task}))
         assert seen == []
         annotation = _annotation(store)
-        assert annotation["detector_state"] == "unscanned"
-        assert (annotation["status"], annotation["bypass_reason"]) == ("bypassed", "unscanned")
+        assert (annotation["status"], annotation["bypass_reason"], annotation["absent_reason"]) == (
+            "bypassed",
+            "non_lexical_task",
+            None,
+        )
+        assert annotation["failure"] is None
+
+    def test_no_bypass_reason_names_a_missing_scan(self) -> None:
+        """``bypassed`` is only no words, non-lexical words, task content, or a family that asks for a sound."""
+        assert review_module.BYPASS_REASONS == ("no_words", "non_lexical_only", "task_content_only", "non_lexical_task")
 
     def test_only_the_residue_is_read(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """A syllable train around a disclosure: the reviewer reads the disclosure alone."""

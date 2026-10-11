@@ -2604,6 +2604,54 @@ class TestAVoiceTaskIsDecidedOnItsPhonationAttempt:
         assert "route_mismatch:VOICE" not in folded.ground_keys
 
 
+_PII_SCAN_MISSING = {"status": "absent", "absent_reason": "pii_scan_missing", "failure": "no PII scan read them"}
+
+
+def _missing_scan_fold(**overrides: Any) -> FileVerdict:  # noqa: ANN401 -- fold keyword arguments
+    """A fold whose SPEECH was declined and never scanned, with the reviewer's and second opinion's records.
+
+    Args:
+        **overrides: ``llm_redaction`` and ``second_opinion``.
+
+    Returns:
+        The folded file verdict.
+    """
+    return fold_file_verdict(
+        [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
+        branch_decisions=_decisions(AIRWAY=DECLINED, SPEECH=DECLINED, VOICE=DECLINED),
+        ran={"SPEECH": RunState.SKIPPED},
+        hint_claims={},
+        route_state=ROUTED,
+        redaction=RedactionEvidence(),
+        **overrides,
+    )
+
+
+class TestAMissingPiiScanIsNotMeasured:
+    """Owner, 2026-10-10: lexical words of a lexical family with no PII scan are a missing measurement."""
+
+    @pytest.mark.parametrize("carrier", ["llm_redaction", "second_opinion"])
+    def test_either_record_makes_the_run_incomplete(self, carrier: str) -> None:
+        """REVIEW's or SECOND_OPINION's ``absent_reason`` is flagged ``pii_scan_missing``: review, not_measured."""
+        folded = _missing_scan_fold(**{carrier: dict(_PII_SCAN_MISSING)})
+        assert folded.triage is Triage.REVIEW and folded.run_status is RunStatus.INCOMPLETE
+        assert "pii_scan_missing" in folded.ground_keys and "pii_scan_missing" in folded.missing
+        assert folded.reason == "not_measured"
+        assert is_operational("pii_scan_missing")
+
+    def test_a_non_lexical_task_bypass_is_not_a_missing_measurement(self) -> None:
+        """A voice or airway family's bypass concludes nothing and owes nothing."""
+        bypassed = {"status": "bypassed", "bypass_reason": "non_lexical_task"}
+        folded = _missing_scan_fold(llm_redaction=bypassed, second_opinion=dict(bypassed))
+        assert folded.run_status is RunStatus.COMPLETE
+        assert "pii_scan_missing" not in folded.ground_keys and "not_measured" not in folded.reason_keys
+
+    def test_a_model_that_did_not_load_is_not_a_missing_scan(self) -> None:
+        """An ``absent`` reading with no ``absent_reason`` stays what it was: not a reading, and no ground."""
+        folded = _missing_scan_fold(llm_redaction={"status": "absent", "failure": "would not load"})
+        assert "pii_scan_missing" not in folded.ground_keys
+
+
 class TestNotMeasuredIsIncomplete:
     """Owner, 2026-10-10: the reason ``not_measured`` and ``run_status`` incomplete always agree."""
 
@@ -2618,6 +2666,9 @@ class TestNotMeasuredIsIncomplete:
             _without_redact(RedactionEvidence(), speech=RunState.ERRORED),
             _without_redact(RedactionEvidence(findings_n=1), speech=RunState.COMPLETED),
             _without_redact(RedactionEvidence(lexical_words_n=0), speech=RunState.COMPLETED),
+            _missing_scan_fold(llm_redaction=dict(_PII_SCAN_MISSING)),
+            _missing_scan_fold(second_opinion=dict(_PII_SCAN_MISSING)),
+            _missing_scan_fold(llm_redaction={"status": "bypassed", "bypass_reason": "non_lexical_task"}),
         ]
 
     def test_not_measured_appears_exactly_when_the_run_is_incomplete(self) -> None:
@@ -2640,7 +2691,7 @@ class TestABypassFoldsAsTheOldNothingToRead:
     }
     _OLD_OPINION = {"status": "nothing_to_read", "probabilities": {}}
 
-    @pytest.mark.parametrize("reason", ["no_words", "non_lexical_only", "task_content_only", "unscanned"])
+    @pytest.mark.parametrize("reason", ["no_words", "non_lexical_only", "task_content_only", "non_lexical_task"])
     @pytest.mark.parametrize("lexical_words_n", [0, 12])
     def test_every_decision_matches(self, reason: str, lexical_words_n: int) -> None:
         """Triage, release, every ground and reason: identical; only the carried status differs."""

@@ -36,8 +36,13 @@ def _config(tmp_path: Path, text: str = ON) -> TriageConfig:
     return load_triage_config(path)
 
 
-def _store(words: Sequence[str] = ("my", "name", "is", "alicia"), residue: Sequence[int] | None = None) -> ProvStore:
-    """Consensus words and SPEECH's scan of them (all, unless ``residue`` names positions): the residue REVIEW reads."""
+def _store(
+    words: Sequence[str] = ("my", "name", "is", "alicia"), residue: Sequence[int] | None = None, scanned: bool = True
+) -> ProvStore:
+    """Consensus words and SPEECH's scan of them (all, unless ``residue`` names positions): the residue REVIEW reads.
+
+    ``scanned=False`` leaves the scan out, as a store SPEECH never scanned.
+    """
     store = ProvStore(run_id="second-opinion")
     software = store.agent(agent_type="software", version="senselab test-seed")
     activity = store.activity(node="PREPROCESS", step="consensus", parameters={})
@@ -61,6 +66,8 @@ def _store(words: Sequence[str] = ("my", "name", "is", "alicia"), residue: Seque
         },
     )
     store.was_generated_by(transcript, activity)
+    if not scanned:
+        return store
     scan = store.entity(
         prov_type="measurement",
         extent=None,
@@ -219,6 +226,23 @@ class TestTheOtherPaths:
         outcome = second_opinion(store, _config(tmp_path), None, ask)
         assert outcome.status == BYPASSED and not ask.states
         assert _opinion(store, outcome.measurement_id)["bypass_reason"] == reason
+
+    def test_lexical_words_with_no_scan_are_absent_not_bypassed(self, tmp_path: Path) -> None:
+        """A lexical family's words and no PII scan: a missing measurement, the model never asked."""
+        store, ask = _store(scanned=False), _Ask(_answers())
+        outcome = second_opinion(store, _config(tmp_path), AudioHints(metadata={"task_token": "free-speech"}), ask)
+        assert outcome.status == ABSENT and not ask.states
+        opinion = _opinion(store, outcome.measurement_id)
+        assert (opinion["bypass_reason"], opinion["absent_reason"]) == (None, "pii_scan_missing")
+        assert opinion["failure"]
+
+    def test_a_non_lexical_family_with_no_scan_is_bypassed(self, tmp_path: Path) -> None:
+        """A voice family's words are masked on the task-speech path; the second opinion is not needed."""
+        store, ask = _store(scanned=False), _Ask(_answers())
+        outcome = second_opinion(store, _config(tmp_path), AudioHints(metadata={"task_token": "prolonged-vowel"}), ask)
+        assert outcome.status == BYPASSED and not ask.states
+        opinion = _opinion(store, outcome.measurement_id)
+        assert (opinion["bypass_reason"], opinion["absent_reason"]) == ("non_lexical_task", None)
 
     def test_no_server_is_absent_with_a_failure(self, tmp_path: Path) -> None:
         """ask=None on a cache miss."""
