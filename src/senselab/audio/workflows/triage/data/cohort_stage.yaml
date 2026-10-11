@@ -1,7 +1,7 @@
 # COHORT: the corpus and session pass between QUALITY and VERDICT.
 # Read by `senselab.audio.workflows.triage.cohort_stage.cohort_parameters`.
 # Derivations: specs/20261007-task-events-in-background/design.md, section "Cohort stage".
-version: 1
+version: 2
 
 # Session speaker enrollment. Model, commit and match cut are `speech.enrollment_model` and
 # `speech.target_match_cosine`; the shortest span embedded is the speaker-vector floor
@@ -12,6 +12,12 @@ enrollment:
   hop_s: 1.0                        # its hop
   single_speaker_recordings_min: 2  # this many single-speaker recordings in the session: only they enroll
   leave_one_out_min: 3              # this many enrolling recordings: one under the cut against the rest is left out
+
+# Participant enrollment across sessions: every session's candidates pooled under the rules above.
+# Per session, the pool of the participant's other sessions is the fallback where the session has no
+# enrollment of its own, and the comparison for session_speaker_consistency.
+participant:
+  consistency_cosine_min: 0.231  # PROVISIONAL: session vs other-sessions enrollment cosine under this is session_speaker_inconsistent
 
 # The runs compared against the enrollment, in every recording of every family.
 runs:
