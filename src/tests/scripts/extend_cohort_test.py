@@ -45,8 +45,15 @@ def _embed(samples: np.ndarray, rate: int) -> np.ndarray | None:
     return vector / np.linalg.norm(vector)
 
 
-def _run(root: Path, task: str, duration: float, speech: list[tuple[float, float, str, float]], extent) -> dict:  # noqa: ANN001
-    stem = f"{SESSION}_task-{task}"
+def _run(  # noqa: ANN202
+    root: Path,
+    task: str,
+    duration: float,
+    speech: list[tuple[float, float, str, float]],
+    extent,  # noqa: ANN001
+    session: str = SESSION,
+):
+    stem = f"{session}_task-{task}"
     run_root = root / f"{stem}_20261010-000000"
     streams = run_root / "run" / "streams"
     derivatives = run_root / "run" / "derivatives"
@@ -187,11 +194,88 @@ def test_readings_out_writes_no_store(
     rows = [json.loads(line) for line in corpus.read_text().splitlines()]
     stores = [(Path(r["enhanced"]).parents[2] / "run" / "store.jsonl").read_bytes() for r in rows]
     out = tmp_path / "readings"
-    assert _apply(corpus, config, quantiles, "--readings-out", str(out), "--sessions", SESSION) == 0
+    assert _apply(corpus, config, quantiles, "--readings-out", str(out), "--participants", "sub-a") == 0
     assert [(Path(r["enhanced"]).parents[2] / "run" / "store.jsonl").read_bytes() for r in rows] == stores
-    written = [json.loads(line) for line in (out / f"{SESSION}.jsonl").read_text().splitlines()]
+    written = [json.loads(line) for line in (out / "sub-a.jsonl").read_text().splitlines()]
     assert len(written) == len(rows)
     assert sum(1 for record in written if record["nonmatch_n"]) == 1
+
+
+def _two_participants(root: Path) -> Path:
+    """sub-a with two sessions (the second has only a breath task, its talker on level 0.2), sub-b with one."""
+    rows = [
+        _run(root, "rainbow-passage", 12.0, [(1.0, 9.0, "A", 0.1)], (1.0, 9.0)),
+        _run(root, "caterpillar-passage", 12.0, [(1.0, 10.0, "A", 0.1)], (1.0, 10.0)),
+        _run(
+            root,
+            "respiration-and-cough-breath-1",
+            10.0,
+            [(2.0, 4.0, "A", 0.1), (6.0, 9.0, "B", 0.2)],
+            (1.0, 5.0),
+            session="sub-a_ses-2",
+        ),
+        _run(root, "rainbow-passage", 12.0, [(1.0, 9.0, "A", 0.3)], (1.0, 9.0), session="sub-b_ses-1"),
+        _run(root, "caterpillar-passage", 12.0, [(1.0, 9.0, "A", 0.3)], (1.0, 9.0), session="sub-b_ses-1"),
+    ]
+    manifest = root / "manifest.jsonl"
+    manifest.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    return manifest
+
+
+def test_apply_shards_by_participant_and_falls_back_across_sessions(
+    tmp_path: Path, config: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every session of a participant lands in one task; a session with no enrollment reads the other one's."""
+    monkeypatch.setattr(cli, "ecapa_embedder", lambda *a, **k: _embed)
+    manifest = _two_participants(tmp_path)
+    grouped = cli.participants_of([json.loads(line) for line in manifest.read_text().splitlines()])
+    assert [(p, [s for s, _ in sessions]) for p, sessions in grouped] == [
+        ("sub-a", ["sub-a_ses-1", "sub-a_ses-2"]),
+        ("sub-b", ["sub-b_ses-1"]),
+    ]
+    quantiles = _quantiles(manifest)
+    out = tmp_path / "readings"
+    for index in range(2):
+        assert (
+            cli.main(
+                [
+                    "apply",
+                    str(manifest),
+                    "--quantiles",
+                    str(quantiles),
+                    "--slice-index",
+                    str(index),
+                    "--slice-count",
+                    "2",
+                    "--config",
+                    str(config),
+                    "--log-dir",
+                    str(tmp_path / "logs"),
+                    "--readings-out",
+                    str(out),
+                ]
+            )
+            == 0
+        )
+    slices = [
+        [json.loads(line) for line in (tmp_path / "logs" / "slices" / f"cohort-slice-{i}-of-2.jsonl").read_text().splitlines()]
+        for i in range(2)
+    ]
+    assert [sorted({r["participant"] for r in records}) for records in slices] == [["sub-a"], ["sub-b"]]
+    assert sorted({r["session"] for r in slices[0]}) == ["sub-a_ses-1", "sub-a_ses-2"]
+    sources = {r["session"]: r["enrollment_source"] for r in slices[0]}
+    assert sources == {"sub-a_ses-1": "session", "sub-a_ses-2": "participant_other_sessions"}
+    breath = next(r for r in slices[0] if r["session"] == "sub-a_ses-2")
+    assert breath["nonmatch_n"] == 1
+    assert {r["consistency"]["status"] for r in slices[1]} == {"not_applicable"}
+    assert sorted(p.name for p in out.glob("*.jsonl")) == ["sub-a.jsonl", "sub-b.jsonl"]
+    assert cli.main(["consistency", str(tmp_path / "logs")]) == 0
+
+
+def test_lower_fence_flags_the_outlying_session() -> None:
+    """Tukey's fence over the session cosines sits under the bulk and above the outlier."""
+    found = cli.lower_fence([0.8, 0.82, 0.85, 0.79, 0.81, 0.83, 0.1], 1.5)
+    assert found["under_fence"] == 1 and 0.1 < found["fence"] < 0.79
 
 
 def test_an_unset_enrollment_model_leaves_the_enrollment_unavailable(corpus: Path, tmp_path: Path) -> None:
