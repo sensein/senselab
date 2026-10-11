@@ -2341,3 +2341,38 @@ session background as its floor and the regions re-read against it.
   Airway 78 of 1,505: absent→review 41 (mostly `respiration-and-cough-breath`), review→present 22, present→review
   8, present→absent 4, review→absent 1, two lose their reading. Voice 6 of 967: absent→present 3, review→present
   3. Syllable repetition 19 of 939: present→review 16, review→present 3. The switch stays off.
+
+## Word gate for the speaker comparison (owner, 2026-10-11)
+
+**What r34 showed.** The r18d build at r34 (a8a56dd7) held 5,369 recordings whose reason is `other_speaker`;
+3,817 of them were decided by `cohort.other_speaker_runs`, concentrated in voice and DDK families (glides
+1,083, maximum-phonation-time 465, loudness 392, prolonged-vowel 229, DDK about 540). The speech gate of
+9cafbe5e compared a diarized run wherever it carried lexical words or YAMNet speech >= 0.5. YAMNet labels
+held, sung and glided vowels and syllable trains as speech, so phonation was embedded and compared, and the
+ECAPA vector, fitted on speech, reads phonation as another speaker.
+
+**The rule** (`data/cohort_stage.yaml` v3, `word_gate`). In every family outside `exempt_kind`
+(`lexical_speech` in `routing_analysis.families.DECLARED_KIND`, i.e. airway, voice and syllable-repetition
+families), a diarized run, a lexical run and a removed-speech window run are compared only where they hold
+the midpoint of a word of speech outside the task. Those words are the owning branch's
+`task_speech_reading.word_ids` where it stored one; otherwise lexical consensus words that are not a
+vocalisation, not the family's expected tokens and not a misreading of the task's own events
+(`task_content_ids`). In a syllable-repetition family a word spelled only from the task's syllables
+(`word_gate.task_syllables`, read off the DDK instructions' targets /pa/ /ta/ /ka/ /puh/ /tuh/ /kuh/
+/pataka/ /puhtuhkuh/ /buttercup/ and their common spellings) is task text too: `task_content_ids` keeps a
+run of agreed dictionary words as speech, and recognisers agree on `pa pa pa`. YAMNet speech alone qualifies
+no run. Lexical speech families keep the speech-region rule; enrollment and the cross-session check
+(`session_speaker_inconsistent`) are unchanged.
+
+`loudness` and `loudness-v2` ("hey", spoken then shouted) are `LEXICAL_SPEECH` in `families.py`, so the
+general rule leaves them on the speech-region rule; their 392 r34 recordings are not touched by this gate.
+
+## triage.tsv coverage (2026-10-11)
+
+r34's `triage.tsv` had 62,550 rows and 62,522 distinct `source_path` values. The manifest is sound
+(62,550 runs, 62,550 recordings, every run root in the decision tables once): the 28 "duplicates" were the
+empty string, held by the 29 ADMIT-unreadable recordings, whose stores record no `recording` stream from
+which the table read the source path (their `task_family` was empty for the same reason).
+`scripts/triage_table.py --manifest` now takes such a run's source from the manifest and its family from the
+stem, and refuses to write (exit 2) where a stem, run directory or source path repeats, a row has no source
+path, or a manifest run has no row or a row is not in the manifest.
