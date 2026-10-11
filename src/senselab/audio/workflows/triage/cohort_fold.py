@@ -23,16 +23,32 @@ UNAVAILABLE = "unavailable"
 """A check, or the whole reading, that had no cohort to read against."""
 
 NOT_APPLICABLE = "not_applicable"
-"""A check that does not read this recording's declared kind."""
+"""A check that does not read this recording's declared kind, or a speaker pool with nothing in it."""
+
+NOT_MEASURED = "not_measured"
+"""A speaker pool too short to identify a speaker by: an annotation, never a flag."""
 
 OTHER_SPEAKER = "other_speaker"
-"""The reading's block for the session enrollment and the per-run matches against it."""
+"""The reading's block for the session enrollment and the pooled comparisons against it."""
+
+POOL_TARGET = "target"
+"""The pool of the task's own speech: what the participant was asked to say."""
+
+POOL_NON_TASK = "non_task"
+"""The pool of the speech outside the task."""
+
+POOLS = (POOL_TARGET, POOL_NON_TASK)
+
+POOL_ITEMS = {POOL_TARGET: "target_cosine", POOL_NON_TASK: "non_task_cosine"}
+"""Each pool's evidence item name, under :data:`ITEM_PREFIX`."""
+
+POOL_WHAT = {POOL_TARGET: "the task's own speech", POOL_NON_TASK: "the speech outside the task"}
 
 CHECKS = "checks"
 """The reading's block of distribution checks, one per check name."""
 
 KEY_OTHER_SPEAKER_IN_SESSION = "other_speaker_in_session"
-"""A speech run does not match the participant's enrollment: the session's own, or the other sessions'."""
+"""A pooled speech comparison does not match the participant's enrollment: the session's own, or the other sessions'."""
 
 KEY_RECORDING_DURATION_OUTLIER = "recording_duration_outlier"
 """The recording is far longer than its family's and the task covers little of it."""
@@ -63,6 +79,30 @@ def other_speaker_block(reading: Mapping[str, Any] | None) -> dict[str, Any]:
     return _block(reading, OTHER_SPEAKER)
 
 
+def pool_block(reading: Mapping[str, Any] | None, pool: str) -> dict[str, Any]:
+    """One pooled comparison of a cohort reading's ``other_speaker`` block.
+
+    Args:
+        reading: The ``cohort_reading`` attributes, or None.
+        pool: :data:`POOL_TARGET` or :data:`POOL_NON_TASK`.
+
+    Returns:
+        The pool's record, empty where the block carries none.
+    """
+    value = other_speaker_block(reading).get(pool)
+    return dict(value) if isinstance(value, Mapping) else {}
+
+
+def _nonmatching(reading: Mapping[str, Any] | None) -> list[str]:
+    if other_speaker_block(reading).get("status") != MEASURED:
+        return []
+    return [
+        pool
+        for pool in POOLS
+        if pool_block(reading, pool).get("status") == MEASURED and pool_block(reading, pool).get("match") is False
+    ]
+
+
 def check_blocks(reading: Mapping[str, Any] | None) -> dict[str, dict[str, Any]]:
     """The distribution checks of a cohort reading, by name.
 
@@ -76,33 +116,34 @@ def check_blocks(reading: Mapping[str, Any] | None) -> dict[str, dict[str, Any]]
 
 
 def nonmatch_spans(reading: Mapping[str, Any] | None) -> list[tuple[float, float]]:
-    """The spans whose speech did not match the participant's session enrollment, merged.
+    """The spans of every pool that did not match the participant's enrollment.
 
     Args:
         reading: The ``cohort_reading`` attributes, or None.
 
     Returns:
-        ``(start, end)`` in seconds, earliest first; empty where nothing was compared or all matched.
+        ``(start, end)`` in seconds, earliest first; empty where nothing was compared or every pool matched.
     """
-    block = other_speaker_block(reading)
-    if block.get("status") != MEASURED:
-        return []
-    return [(float(start), float(end)) for start, end in block.get("nonmatch_spans") or ()]
+    return sorted(
+        (float(start), float(end))
+        for pool in _nonmatching(reading)
+        for start, end in pool_block(reading, pool).get("spans") or ()
+    )
 
 
 def non_task_speech_spans(reading: Mapping[str, Any] | None) -> list[tuple[float, float]]:
-    """The non-matching spans a redaction treats as non-task speech: those of a non-lexical task.
+    """The spans a redaction treats as non-task speech: a non-matching non-task pool of a non-lexical task.
 
     Args:
         reading: The ``cohort_reading`` attributes, or None.
 
     Returns:
-        :func:`nonmatch_spans` where the recording's declared task is not a lexical speech task, else
-        empty.
+        The non-task pool's spans where it did not match and the declared task is not a lexical speech task,
+        else empty.
     """
-    if (reading or {}).get("lexical_task") is not False:
+    if (reading or {}).get("lexical_task") is not False or POOL_NON_TASK not in _nonmatching(reading):
         return []
-    return nonmatch_spans(reading)
+    return [(float(start), float(end)) for start, end in pool_block(reading, POOL_NON_TASK).get("spans") or ()]
 
 
 def cohort_grounds(reading: Mapping[str, Any] | None) -> list[tuple[str, str]]:
@@ -117,11 +158,16 @@ def cohort_grounds(reading: Mapping[str, Any] | None) -> list[tuple[str, str]]:
     """
     grounds: list[tuple[str, str]] = []
     block = other_speaker_block(reading)
-    if block.get("status") == MEASURED and int(block.get("nonmatch_n") or 0) > 0:
+    nonmatch = _nonmatching(reading)
+    if nonmatch:
+        read = "; ".join(
+            f"{POOL_WHAT[pool]}, {pool_block(reading, pool).get('pooled_s')} s pooled, cosine "
+            f"{pool_block(reading, pool).get('cosine')}"
+            for pool in nonmatch
+        )
         grounds.append(
             (
-                f"{KEY_OTHER_SPEAKER_IN_SESSION}: {block.get('nonmatch_n')} of {block.get('runs_n')} speech run(s), "
-                f"{block.get('nonmatch_s')} s, below cosine {block.get('cut')} against the "
+                f"{KEY_OTHER_SPEAKER_IN_SESSION}: {read}, below {block.get('cut')} against the "
                 f"{block.get('enrollment_source') or 'session'} enrollment",
                 KEY_OTHER_SPEAKER_IN_SESSION,
             )
@@ -137,10 +183,11 @@ def _named(name: str) -> str:
 
 
 def cohort_evidence(reading: Mapping[str, Any] | None) -> list[EvidenceItem]:
-    """The cohort reading's evidence items: the enrollment match and every check's comparisons.
+    """The cohort reading's evidence items: each pooled comparison and every check's comparisons.
 
-    A check the reading marks unavailable is one item with no value, an annotation: not measured, and
-    moving nothing.
+    A check the reading marks unavailable, a speaker comparison with no enrollment, and a pool too short to
+    identify a speaker by are each one item with no value, an annotation: not measured, and moving nothing.
+    A pool with nothing in it writes no item.
 
     Args:
         reading: The ``cohort_reading`` attributes, or None where no cohort reading is in the store.
@@ -153,18 +200,18 @@ def cohort_evidence(reading: Mapping[str, Any] | None) -> list[EvidenceItem]:
     items: list[EvidenceItem] = []
     block = other_speaker_block(reading)
     if block.get("status") == MEASURED:
-        nonmatch = int(block.get("nonmatch_n") or 0)
-        effect = REVIEW if nonmatch else PASS
-        items.append(item(_named("other_speaker_runs"), nonmatch, effect, unit="runs", comparison="<=", threshold=0))
-        lowest = block.get("lowest_cosine")
-        if lowest is not None:
-            items.append(
-                item(
-                    _named("lowest_run_cosine"), lowest, effect, comparison=">=", threshold=float(block.get("cut") or 0)
+        cut = float(block.get("cut") or 0)
+        for pool in POOLS:
+            record = pool_block(reading, pool)
+            if record.get("status") == MEASURED:
+                effect = PASS if record.get("match") else REVIEW
+                items.append(
+                    item(_named(POOL_ITEMS[pool]), record.get("cosine"), effect, comparison=">=", threshold=cut)
                 )
-            )
+            elif record.get("status") in (NOT_MEASURED, UNAVAILABLE):
+                items.append(item(_named(POOL_ITEMS[pool]), None, ANNOTATION))
     elif block:
-        items.append(item(_named("other_speaker_runs"), None, ANNOTATION, unit="runs"))
+        items.append(item(_named("speaker_comparison"), None, ANNOTATION))
     for name, check in check_blocks(reading).items():
         if check.get("status") == UNAVAILABLE:
             items.append(item(_named(name), None, ANNOTATION))

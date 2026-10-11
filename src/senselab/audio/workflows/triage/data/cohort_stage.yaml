@@ -1,11 +1,10 @@
 # COHORT: the corpus and session pass between QUALITY and VERDICT.
 # Read by `senselab.audio.workflows.triage.cohort_stage.cohort_parameters`.
 # Derivations: specs/20261007-task-events-in-background/design.md, section "Cohort stage".
-version: 5
+version: 6
 
 # Session speaker enrollment. Model, commit and match cut are `speech.enrollment_model` and
-# `speech.target_match_cosine`; the shortest span embedded is the speaker-vector floor
-# (data/speaker_vector_profile/2026-09-22.yaml `min_extent_s`).
+# `speech.target_match_cosine`; the shortest span embedded is `comparison.pooled_min_s`.
 enrollment:
   families: lexical_speech          # routing_analysis.families.LEXICAL_SPEECH enrolls the participant, less task_speech.yaml voice_task_text (owner, 2026-10-11)
   window_s: 2.0                     # window each span is embedded on, as the speaker vectors were fitted
@@ -19,44 +18,34 @@ enrollment:
 participant:
   consistency_cosine_min: 0.63  # session vs other-sessions enrollment cosine under this is session_speaker_inconsistent; Tukey lower fence (Q1 - 1.5 IQR) over r18d, UNFITTED against labels
 
-# The runs compared against the enrollment, in every recording of every family.
-runs:
-  diarization_stream: enhanced          # diarized segments on this stream, each speaker's exclusive pieces
-  lexical_gap_key: branch.run_gap_max_s # lexical words merge into one run across gaps up to this config key
+# Speaker comparison: per recording, one embedding pooled over its target speech and one over its speech
+# outside the task, each compared with the enrollment. Derivation: design.md, "Pooled speaker comparison".
+comparison:
+  pooled_min_s: 2.0                     # owner, 2026-10-11: speaker identification needs at least 2 s; a shorter pool is not_measured (too_short_for_speaker_id), and no enrollment span is shorter
+  diarization_stream: enhanced          # diarized segments the enrollment reads, each speaker's exclusive pieces
+  lexical_gap_key: branch.run_gap_max_s # lexical words merge into one span across gaps up to this config key
+  target:                               # what a family's target pool holds: speech (lexical words in the task extent), task_text (task_speech.task_text_ids words) or none
+    default: none                       # owner, 2026-10-11: airway, voice and DDK have no target comparison
+    kinds:
+      lexical_speech: speech            # DECLARED_KIND key -> rule
+    families:
+      loudness: task_text               # owner, 2026-10-11: compared on its "hey" only (task_speech.yaml voice_task_text)
+      loudness-v2: task_text            # owner, 2026-10-11
 
-# Speech-classified regions: YAMNet windows whose highest speech-label score reaches score_min, on
-# each stream named. A diarized run is compared only inside these or the lexical words; the sliding
-# windows read only these. Labels and score as data/background_speech.yaml (owner, 2026-10-06).
+# Speech the enhancer removed: speech-classified on `from` and not on `kept`. A removed region holding a
+# word of speech outside the task joins the non-task pool. Labels and score as data/background_speech.yaml
+# (owner, 2026-10-06).
 speech:
-  measurements: [yamnet_scores, enhanced_yamnet_scores]   # plain and enhanced YAMNet windows
   labels: [Speech, Conversation, 'Narration, monologue', 'Male speech, man speaking', 'Female speech, woman speaking', 'Child speech, kid speaking']
   score_min: 0.5
+  removed: {from: yamnet_scores, kept: enhanced_yamnet_scores}
 
-# Word gate: what a diarized, lexical or removed-speech window run must hold (a word's midpoint inside it)
-# to be compared with the enrollment, one rule per family: `speech` (the speech-region rule above),
-# `non_task_words` (a word of speech outside the task) or `task_text` (a word of the family's declared task
-# text, task_speech.task_text_ids). A family takes `families`, else its DECLARED_KIND under `kinds`, else
-# `default`. Derivation: design.md, "Word gate for the speaker comparison" and "Loudness is a voice task".
-word_gate:
-  compare_on:
-    default: non_task_words        # airway, voice and DDK families (owner, 2026-10-11)
-    kinds:
-      lexical_speech: speech       # lexical speech families keep the speech-region rule
-    families:
-      loudness: task_text          # owner, 2026-10-11: compared on its "hey" only (task_speech.yaml voice_task_text)
-      loudness-v2: task_text       # owner, 2026-10-11
+# Speech outside the task, by family: in a lexical speech task the lexical words outside the task extent;
+# elsewhere the task_speech reading's words. In a syllable-repetition family a word spelled only from its
+# task syllables is task text.
+non_task:
   task_syllables:               # a families.py set -> the syllables its task text is spelled from; a word made only of them is task text
     SYLLABLE_REPETITION: [pa, pah, ta, tah, ka, kah, puh, tuh, kuh, buh, ba, da, ga, butter, cup]
-
-# Third run source: sliding windows over speech the enhancer removed (speech-classified on the plain
-# stream, not on the enhanced one) that no compared run or task event covers, embedded on the plain
-# stream as the enrollment is. Settings read off nine r18 sessions (spec, "Cohort stage").
-windows:
-  removed: {from: yamnet_scores, kept: enhanced_yamnet_scores}
-  window_s: 1.0              # the speaker-vector refusal floor: the shortest span whose cosine separates speakers
-  hop_s: 0.5                 # half a window
-  active_fraction_min: 0.25  # a window with less of its time in BACKGROUND's activity is not read
-  windows_min: 2             # contiguous windows under the cut that make a non-matching run (1.5 s)
 
 # Distribution checks: each names its level, its bounds and the ground it raises.
 quantiles: [0.05, 0.25, 0.5, 0.75, 0.95]

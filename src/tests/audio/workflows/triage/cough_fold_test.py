@@ -228,13 +228,27 @@ def test_background_speech_nothing_attributes_is_an_annotation() -> None:
     assert KEY_RESIDUAL_SPEECH_UNATTRIBUTED in {verdict.key for verdict in folded.annotations}
     assert KEY_OTHER_VOICE_IN_TASK not in folded.ground_keys
     assert not any(key.startswith("interference_in_task") for key in folded.ground_keys)
-    matched = _intercom(cohort={"other_speaker": {"status": "measured", "nonmatch_spans": []}})
+    matched = _intercom(
+        cohort={
+            "other_speaker": {
+                "status": "measured",
+                "non_task": {"status": "measured", "spans": [[16.5, 17.0]], "cosine": 0.6, "match": True},
+            }
+        }
+    )
     assert matched.triage is Triage.PASS and KEY_OTHER_VOICE_IN_TASK not in matched.ground_keys
 
 
 def test_background_speech_cohort_attributes_flags_another_speaker() -> None:
-    """A non-matching enrollment span over the voice makes it another speaker's: review, never discard."""
-    folded = _intercom(cohort={"other_speaker": {"status": "measured", "nonmatch_spans": [[16.5, 17.0]]}})
+    """A non-matching pool over the voice makes it another speaker's: review, never discard."""
+    folded = _intercom(
+        cohort={
+            "other_speaker": {
+                "status": "measured",
+                "non_task": {"status": "measured", "spans": [[16.5, 17.0]], "cosine": 0.1, "match": False},
+            }
+        }
+    )
     assert folded.triage is Triage.REVIEW
     assert KEY_OTHER_VOICE_IN_TASK in folded.ground_keys
     assert reasons_of(folded.ground_keys)[0] == "other_speaker"

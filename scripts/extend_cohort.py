@@ -50,7 +50,7 @@ from typing import Any, Sequence
 
 import numpy as np
 
-from senselab.audio.workflows.triage.cohort_fold import COHORT_READING
+from senselab.audio.workflows.triage.cohort_fold import COHORT_READING, POOLS
 from senselab.audio.workflows.triage.cohort_stage import (
     CONSISTENCY_CHECK,
     QUANTILES_FILE,
@@ -362,7 +362,7 @@ def process_participant(
             for row in rows
         ]
     failed: list[dict[str, Any]] = []
-    stream = str(cohort_parameters()["runs"]["diarization_stream"])
+    stream = str(cohort_parameters()["comparison"]["diarization_stream"])
     opened: list[tuple[str, list[tuple[RecordingFacts, Path, ProvStore]]]] = []
     for session, rows in sessions:
         members: list[tuple[RecordingFacts, Path, ProvStore]] = []
@@ -438,12 +438,22 @@ def process_participant(
                     "status": OK,
                     "other_speaker": block.get("status"),
                     "enrollment_source": block.get("enrollment_source"),
-                    "runs_n": block.get("runs_n"),
-                    "nonmatch_n": block.get("nonmatch_n"),
-                    "cosines": [
-                        [r["source"], r["duration_s"], r["cosine"], r.get("participant_cosine")]
-                        for r in block.get("runs") or ()
-                    ],
+                    "pools": {
+                        pool: {
+                            key: (block.get(pool) or {}).get(key)
+                            for key in (
+                                "status",
+                                "reason",
+                                "pooled_s",
+                                "spans_n",
+                                "cosine",
+                                "participant_cosine",
+                                "match",
+                            )
+                        }
+                        for pool in POOLS
+                    },
+                    "nonmatch": list(block.get("nonmatch") or ()),
                     "consistency": {
                         "status": consistency.get("status"),
                         "cosine": _consistency_cosine(consistency),
@@ -559,7 +569,7 @@ def run_apply(args: argparse.Namespace) -> dict[str, Any]:
         "participants": len(mine),
         "rows": len(log),
         "counts": counts,
-        "nonmatch_recordings": sum(1 for r in log if (r.get("nonmatch_n") or 0) > 0),
+        "nonmatch_recordings": sum(1 for r in log if r.get("nonmatch")),
         "quantiles": quantiles_ref,
         "config_hash": config.config_hash,
         "commit": args.commit,

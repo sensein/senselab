@@ -411,16 +411,13 @@ class TestPhrasesInsteadOfItems:
         assert folded.release is Release.AS_IS
 
     def test_a_list_with_a_background_speaker_is_reviewed_through_cohort(self, store: ProvStore) -> None:
-        """No phrase at all, but a run that does not match the session enrollment: another speaker, review."""
+        """No phrase at all, but a target pool that does not match the session enrollment: another speaker, review."""
         _said(store, _ITEMS)
         cohort = {
             "other_speaker": {
                 "status": "measured",
-                "nonmatch_n": 1,
-                "runs_n": 3,
-                "nonmatch_s": 2.1,
                 "cut": 0.3,
-                "nonmatch_spans": [[0.0, 2.1]],
+                "target": {"status": "measured", "spans": [[0.0, 2.1]], "pooled_s": 2.1, "cosine": 0.1, "match": False},
             }
         }
         folded = _item_fold(store, cohort=cohort)
@@ -486,10 +483,23 @@ class TestTheReviewerAndTheSecondOpinionDecide:
             task_speech={"words_n": 3, "runs_n": 1, "runs": [[100.0, 104.0, 3]]},
             task_speech_words_min=1,
         )
-        cohort = {"other_speaker": {"status": "measured", "nonmatch_spans": [[99.0, 110.0]]}}
+        cohort = {
+            "other_speaker": {
+                "status": "measured",
+                "non_task": {"status": "measured", "spans": [[99.0, 110.0]], "cosine": 0.1, "match": False},
+            }
+        }
         folded = self._fold(cohort=cohort, task=task)
         assert "other_speaker_in_task" in folded.ground_keys and "speech_in_task" not in folded.ground_keys
-        matched = self._fold(cohort={"other_speaker": {"status": "measured", "nonmatch_spans": []}}, task=task)
+        matched = self._fold(
+            cohort={
+                "other_speaker": {
+                    "status": "measured",
+                    "non_task": {"status": "measured", "spans": [[99.0, 110.0]], "cosine": 0.6, "match": True},
+                }
+            },
+            task=task,
+        )
         assert "speech_in_task" in matched.ground_keys
 
 
