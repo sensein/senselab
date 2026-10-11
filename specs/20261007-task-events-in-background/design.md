@@ -1341,6 +1341,8 @@ measured, and moving nothing. Only the checks that need a cohort are affected.
   length), pooled recording-equal (spherical mean of a recording's spans, then of the recordings).
   With three or more recordings, one whose centroid is under the cut against the others' is left
   out. The vector is written once per session to `<out>/enrollments/<session>.npy` (mode 600).
+- **Superseded 2026-10-11** by one pooled embedding per recording ("Pooled speaker comparison" below); the
+  run, window and word-gate rules that follow are the history.
 - **Runs: speech only (owner, 2026-10-10).** The embedding is fitted on speech, so only speech is
   compared, in every recording of every family:
   - *diarized*: each diarized speaker's exclusive pieces on the enhanced stream, cut to the time that
@@ -2385,11 +2387,27 @@ text of `loudness` and `loudness-v2`, and every other lexical word in them is sp
   declared word run together (`heyhey`), so casing, punctuation (`HEY!`), hyphenation (`hey-hey`) and repetition
   are all task text. The run-together match applies only to `voice_task_text` families; prolonged-vowel is
   unchanged.
-- COHORT: `word_gated` is true for them (a run is compared only where it holds a word outside the task text),
-  `lexical_task` is false (so a non-matching run's span is non-task speech to the mask, as in a voice family), and
-  they no longer enroll the participant (voice families never did; a shouted "hey" is the material the r34
-  comparison read as another speaker). `cohort_key` digests `voice_task_text`, and the v4 bump changes every
-  participant's key.
+- COHORT (v4, superseded by v5 below): `word_gated` was true for them (a run compared only where it held a word
+  outside the task text), `lexical_task` is false (so non-matching speech outside the task is non-task speech to
+  the mask, as in a voice family), and they no longer enroll the participant (voice families never did; a shouted
+  "hey" is the material the r34 comparison read as another speaker). `cohort_key` digests `voice_task_text`.
+- **The speaker comparison is on the "hey" (owner, 2026-10-11).** "speaker comparison for loudness should only be
+  done on hey hey because that's the target speaker, and anything outside should be masked for review."
+  `cohort_stage.yaml` v5 made it a per-family setting and v6 a pool: loudness's target pool is its task-text words
+  (`comparison.target.families: {loudness: task_text, loudness-v2: task_text}`, `task_speech.task_text_ids`). A
+  "hey" pool under its bound is `other_speaker`: the person doing the task is not the participant. Words other
+  than "hey" never enter the target pool; they stay masked and flagged through `speech_in_task` and form the
+  non-task pool. A recording with no "hey" has no target comparison.
+- **Risk, measured.** The enrollment is normal-voice speech; a shouted "hey" against it reads low for the same
+  person. Over r34 (1,601 loudness recordings in the manifest): 1,564 hold a "hey"; only 810 pool to the 2.0 s
+  floor (median pooled 2.02 s; `loudness` 618 of 896, `loudness-v2` 192 of 705), 807 compared. Cosine to the
+  participant's enrollment p05 0.105, p25 0.211, p50 0.305, p75 0.389, p95 0.497. **242 of 807 (30%) fall under
+  0.231**: the cut does not suit shouted single words, and this is what produced r34's 392 loudness flags. Against
+  other participants' enrollments the same pools separate at AUC 0.93, EER 14.4% (cosine 0.163); 0.231 sits at
+  about 5% cross-speaker acceptance and rejects 29% of the participants' own. No cut does both: the Tukey lower
+  fence of the within distribution (-0.058) flags nothing and accepts about 93% of other speakers. **Proposal,
+  unapplied:** `comparison.cosine_min.task_text: 0.163` (the EER point; 117 of 807 flagged). Applied until the
+  owner decides: 0.231.
 - REVIEW: `bypass_reason` returns `non_lexical_task` for them whether or not SPEECH scanned, as for a voice family
   with no scan. Unchanged where the residue is non-empty: the reviewer reads those words.
 
@@ -2422,6 +2440,67 @@ enrollment not recomputed, so the cohort side is a prediction):
 readings or `needs_reread` -> `extend_llm_review.py`), so SPEECH writes the reading and REVIEW its reason; then
 COHORT apply over every participant (v4 changes every `cohort_key`, and enrollment loses loudness), its
 consistency, refold over the whole corpus, task audio and the build.
+
+## Pooled speaker comparison (owner, 2026-10-11)
+
+**Decision.** "since speaker identification requires at least 2s windows, any comparison should use embeddings
+pooled across the task extent." Then: "based on embeddings figure out the within speaker versus cross speaker
+distances (a hausdorff metric may be useful in this particular setting)."
+
+**Rule** (`cohort_stage.yaml` v6, `cohort_stage.compare_speaker`). Per recording at most two pools, each concatenated
+on the plain stream and embedded once on the enrollment's grid (2.0 s windows, 1.0 s hop, spherical mean):
+
+- *target*: lexical words in the task extent for lexical speech families (`comparison.target.kinds`), the "hey"
+  for loudness, none for voice, airway and DDK. The phonation or syllable task itself is not compared; it would be
+  only if the owner later asks for it.
+- *non_task*: the words of speech outside the task (outside the extent in a lexical speech task, the
+  `task_speech_reading` words elsewhere) plus the removed speech (plain-only YAMNet speech) holding one, less task
+  events. Those words are masked and flagged regardless; the comparison only decides whether the reason is
+  `other_speaker` or `off_task_speech` (`vocabulary.speaker_of` reads the non-matching spans).
+- A pool under `comparison.pooled_min_s` (2.0 s) is `not_measured: too_short_for_speaker_id`, an annotation item
+  with no value; an empty one writes no item. Items `cohort.target_cosine`, `cohort.non_task_cosine`
+  (`decision_evidence.yaml` v12) replace `cohort.other_speaker_runs` and `cohort.lowest_run_cosine`. A non-match is
+  `other_speaker_in_session`; on a non-lexical task the non-task pool's spans are non-task speech to the mask.
+- The per-run diarized, lexical and sliding-window comparisons are removed. Enrollment is unchanged except that no
+  span under 2.0 s enrolls, and a recording that enrolled its own session is compared with that session's
+  enrollment re-pooled without it (`source_for_recording`; falls back to the other sessions').
+- `speech.target_match_cosine` (0.231, fitted on 1.0 s pieces) is now only the enrollment's leave-one-out cut.
+
+**Fit** (r34 stores, read-only, code 451a2942, jobs 25588983 and 25592012;
+`/orcd/scratch/bcs/002/satra/r18d_20261010/speaker_fit/`). Every participant (1,527; 62,550 recordings): ECAPA
+window sets and means for each enrollment span and each pool. Within = a target pool against its participant's
+enrollment with the recording left out (session, else other sessions); cross = against another participant's
+session enrollment, that participant holding a recording of the same family with a pooled duration within 25%
+(three per recording). The 116 within pairs from the 14 sessions r34's consistency check flagged are left out of
+the fit (only 5 of them, 1 speech and 4 loudness, fall beyond the chosen bound). Distances are 1 - cosine.
+
+| speech, recording vs enrollment (28,330 within, 85,353 cross) | AUC | EER | 1% cross acceptance: bound, within rejected |
+| --- | ---: | ---: | --- |
+| mean (between means) | 0.9996 | 0.54% (0.572) | 0.602, 0.40% |
+| symmetric Hausdorff | 0.988 | 5.1% (0.892) | 0.834, 12.9% |
+| average Hausdorff | 0.9997 | 0.53% (0.609) | 0.632, 0.36% |
+| directed Hausdorff, recording to enrollment | 0.987 | 2.9% (0.647) | 0.602, 3.6% |
+| directed mean | 0.9989 | 1.0% (0.570) | 0.570, 1.0% |
+
+By pooled duration the mean's 1% bound is 0.626 (2-4 s, 0.14% rejected), 0.585 (4-8 s, 0.62%), 0.583 (>8 s,
+0.77%). Recording vs recording separates less (speech mean AUC 0.990 same session, 0.980 other session) and loudness
+"hey" vs "hey" not at all (AUC 0.63). The max-based Hausdorff forms are hurt by single odd windows; the mean and
+the average Hausdorff tie, so the rule is the **mean**, which the pooled embedding already is, at the 1%
+cross-acceptance bound: **`comparison.cosine_min.default: 0.398`**. Loudness's target keeps 0.231 (previous
+section). Distributions per comparison, stratum and metric: `speaker_fit_distributions.tsv`; figure
+`speaker_fit.png` (both in the fit directory and `~/Downloads/b2ai-reviews/`).
+
+**Under the rule** (all r34 recordings): speech targets 28,442 compared, 113 under 0.398 (17 under 0.231).
+Non-task pools reaching 2.0 s are rare: airway 130 (112 under), lexical speech 381 (45), voice 53 (25), loudness 9
+(3). Of the 4,491 recordings r34's run comparison flagged, 432 stay flagged and 4,059 drop (voice 1,715, lexical
+speech 1,617, airway 557, loudness 170); 102 are new (lexical speech 53, loudness 36, airway 10, voice 3).
+
+- **541e6b30 breath-1:** caught. The talker's words and the removed speech around them pool to 10.2 s, cosine 0.135.
+- **168c5e68 random-item-generation (opening speaker):** **not caught.** The opening speaker is in the non-task
+  pool (removed speech from 0.0 s holding a word) but it pools to 1.92 s, under the 2.0 s floor, so it is
+  `too_short_for_speaker_id`; the target pool (20.2 s) matches at 0.80.
+- **168c5e68 word-color-stroop:** flagged on both pools (target 0.19, non-task 0.16), the recording the 2026-10-10
+  validation said needs a listen.
 
 ## triage.tsv coverage (2026-10-11)
 
