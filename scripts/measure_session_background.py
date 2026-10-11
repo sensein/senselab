@@ -336,9 +336,7 @@ def summarise(out_dir: Path) -> dict[str, Any]:
     session_rows = list(sessions.values())
     with_bg = [r for r in session_rows if r.get("new_background_db") is not None]
     diffs = [
-        r["new_background_db"] - r["old_session_floor_db"]
-        for r in with_bg
-        if r.get("old_session_floor_db") is not None
+        r["new_background_db"] - r["old_session_floor_db"] for r in with_bg if r.get("old_session_floor_db") is not None
     ]
     floor_diffs = [
         r["new_background_db"] - r["old_background_floor_db"]

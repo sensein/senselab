@@ -940,7 +940,8 @@ columns:
     description: >-
       What the redaction reviewer's reading concluded. `flagged`: a round judged the redaction
       incomplete, the original as carrying PII, or proposed a redaction; `absent`: the model gave no
-      usable answer; `disabled`: REVIEW ran with the reviewer switched off, which is what a recording
+      usable answer, or (`absent_reason` `pii_scan_missing`) a task asking for words carries lexical
+      words no PII scan read, which the fold flags `pii_scan_missing` (not_measured); `disabled`: REVIEW ran with the reviewer switched off, which is what a recording
       no review pass read carries; `bypassed`: the lexical residue was empty, so no model was asked
       (`llm_bypass_reason` says why).
     computation: '`status` of the latest live `redaction_llm_annotation` measurement, which REVIEW writes and the fold copies into `llm_redaction`.'
@@ -949,12 +950,14 @@ columns:
 
   llm_bypass_reason:
     units: none
-    values: [no_words, non_lexical_only, task_content_only, unscanned]
+    values: [no_words, non_lexical_only, task_content_only, non_lexical_task]
     description: >-
       Why REVIEW bypassed the reviewer. `no_words`: the consensus has no words; `non_lexical_only`:
       only bracketed, non-lexical or degenerate tokens; `task_content_only`: lexical words, every one
-      task content (stimulus, instructions or family lexicon); `unscanned`: lexical words SPEECH
-      never scanned, so no residue was computed.
+      task content (stimulus, instructions or family lexicon); `non_lexical_task`: lexical words, no
+      PII scan, and a declared family that asks for a sound (airway, voice), whose words outside the
+      task text are masked and reviewed on the task-speech path. Lexical words with no scan in any
+      other family are not a bypass: the status is `absent` with `absent_reason` `pii_scan_missing`.
     computation: The annotation's `bypass_reason`, from the word kinds `consensus_transcript` assigns.
     source: [recording_vectors.py:_reviewer_columns, nodes/review.py:bypass_reason]
     null_means: REVIEW wrote no annotation, or its status is not `bypassed`.
@@ -1070,13 +1073,13 @@ columns:
     units: none
     values: [ok, disabled, bypassed, absent]
     description: What SECOND_OPINION recorded for the recording.
-    computation: The `second_opinion_answers` measurement's `status`, as the fold carried it in its `second_opinion` record. `ok` answered; `disabled` the packaged config left it off; `bypassed` the lexical residue was empty, so no model was asked; `absent` it was asked and did not answer.
+    computation: The `second_opinion_answers` measurement's `status`, as the fold carried it in its `second_opinion` record. `ok` answered; `disabled` the packaged config left it off; `bypassed` the lexical residue was empty, so no model was asked; `absent` it was asked and did not answer, or (`absent_reason` `pii_scan_missing`) was not asked because a task asking for words carries lexical words no PII scan read.
     source: [recording_vectors.py:_second_opinion_columns, nodes/second_opinion.py:second_opinion, vocabulary.py:fold_file_verdict]
     null_means: SECOND_OPINION wrote no measurement, or the fold that decided the recording predates it.
 
   second_opinion_bypass_reason:
     units: none
-    values: [no_words, non_lexical_only, task_content_only, unscanned]
+    values: [no_words, non_lexical_only, task_content_only, non_lexical_task]
     description: Why SECOND_OPINION was bypassed; the same reasons as `llm_bypass_reason`.
     computation: The `second_opinion_answers` measurement's `bypass_reason`, as the fold carried it in its `second_opinion` record.
     source: [recording_vectors.py:_second_opinion_columns, nodes/second_opinion.py:second_opinion, nodes/review.py:bypass_reason]
