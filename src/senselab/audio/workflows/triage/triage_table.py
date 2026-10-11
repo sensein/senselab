@@ -13,7 +13,7 @@ import functools
 import json
 import math
 import os
-from collections import defaultdict
+from collections import Counter, defaultdict
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -24,6 +24,7 @@ import yaml
 
 from senselab.audio.workflows.triage.nodes.branches import EXPECTATIONS
 from senselab.audio.workflows.triage.recording_vectors import RUN_SUBDIR, STORE_NAME
+from senselab.audio.workflows.triage.routing_analysis.families import task_family, task_id_of
 from senselab.utils import fastio
 
 COLUMNS_PATH = Path(__file__).parent / "data" / "triage_table.yaml"
@@ -239,7 +240,38 @@ def recording_stream(store_path: Path) -> dict[str, Any] | None:
     return None
 
 
-def run_tree_facts(run_dir: str, audio_paths: Sequence[str], run_root: Path, bids_root: Path) -> dict[str, Any]:
+def manifest_sources(path: Path) -> dict[str, str]:
+    """The run manifest's source per run directory name.
+
+    Args:
+        path: A JSONL manifest, one ``{"stem": <run directory name>, "source": <audio path>}`` per line.
+
+    Returns:
+        ``{run directory name: source path}``.
+
+    Raises:
+        ValueError: Where a run directory name appears twice.
+    """
+    sources: dict[str, str] = {}
+    for line in path.read_text().splitlines():
+        if not line.strip():
+            continue
+        record = json.loads(line)
+        name = str(record["stem"])
+        if name in sources:
+            raise ValueError(f"manifest names run directory {name} twice")
+        sources[name] = str(record["source"])
+    return sources
+
+
+def _relative(path: str, bids_root: Path) -> str:
+    source = Path(path)
+    return str(source.relative_to(bids_root)) if source.is_relative_to(bids_root) else str(source)
+
+
+def run_tree_facts(
+    run_dir: str, audio_paths: Sequence[str], run_root: Path, bids_root: Path, source: str | None = None
+) -> dict[str, Any]:
     """What only the run tree holds: the source path, the recording's duration, the task audio present.
 
     Args:
@@ -247,6 +279,8 @@ def run_tree_facts(run_dir: str, audio_paths: Sequence[str], run_root: Path, bid
         audio_paths: ``triage_decisions.audio_paths``, relative to ``run_root``.
         run_root: The scan root the decision tables were built over.
         bids_root: The BIDS root the source path is given relative to.
+        source: The manifest's source for this run, used where the store records no ``recording`` stream
+            (ADMIT found the file unreadable).
 
     Returns:
         ``source_path``, ``recording_duration_s`` and one ``task_audio_*`` key per cut that exists.
@@ -256,13 +290,12 @@ def run_tree_facts(run_dir: str, audio_paths: Sequence[str], run_root: Path, bid
     if stream is not None:
         path = (stream.get("attributes") or {}).get("path")
         if path:
-            source = Path(str(path))
-            facts["source_path"] = (
-                str(source.relative_to(bids_root)) if source.is_relative_to(bids_root) else str(source)
-            )
+            facts["source_path"] = _relative(str(path), bids_root)
         extent = stream.get("extent")
         if extent:
             facts["recording_duration_s"] = float(extent[1])
+    if "source_path" not in facts and source:
+        facts["source_path"] = _relative(source, bids_root)
     for relative in audio_paths:
         column = TASK_AUDIO_COLUMNS.get(Path(relative).stem)
         if column is not None and os.path.exists(run_root / relative):
@@ -277,6 +310,7 @@ def rows(
     bids_root: Path,
     *,
     threads: int = fastio.DEFAULT_THREADS,
+    sources: Mapping[str, str] | None = None,
 ) -> Iterator[dict[str, Any]]:
     """One ``triage.tsv`` row per decision.
 
@@ -286,6 +320,7 @@ def rows(
         run_root: The scan root the decision tables were built over.
         bids_root: The BIDS root.
         threads: Run-tree reads in flight.
+        sources: :func:`manifest_sources`, the source of a run whose store records none.
 
     Yields:
         One mapping per recording, keyed by :func:`columns`.
@@ -295,7 +330,9 @@ def rows(
     version = column_dictionary()["version"]
 
     def facts(record: Mapping[str, Any]) -> dict[str, Any]:
-        return run_tree_facts(str(record["run_dir"]), record.get("audio_paths") or (), run_root, bids_root)
+        run_dir = str(record["run_dir"])
+        source = (sources or {}).get(Path(run_dir).name)
+        return run_tree_facts(run_dir, record.get("audio_paths") or (), run_root, bids_root, source)
 
     for record, tree in zip(records, fastio.ordered_map(facts, records, threads=threads)):
         yield row(record, by_stem.get(str(record["stem"]), {}), tree, version)
@@ -316,12 +353,13 @@ def row(
         The row, keyed by :func:`columns`.
     """
     verdict = decision.get("verdict")
+    family = decision.get("declared_family") or task_family(task_id_of(str(decision.get("stem") or "")))
     return {
         "participant_id": decision.get("participant"),
         "session_id": decision.get("session"),
         "task": decision.get("task"),
-        "task_family": decision.get("declared_family"),
-        "branch": branch_of(decision.get("declared_family")),
+        "task_family": family,
+        "branch": branch_of(family),
         "source_path": tree.get("source_path"),
         "verdict": verdict,
         "release": None if verdict == "discard" else decision.get("release"),
@@ -350,6 +388,44 @@ def row(
         "config_hash": decision.get("config_hash"),
         "schema_version": version,
     }
+
+
+def coverage_problems(
+    decisions: pa.Table, table_rows: Sequence[Mapping[str, Any]], expected: Iterable[str] | None = None
+) -> list[str]:
+    """What stops the table being one row per recording.
+
+    Args:
+        decisions: ``triage_decisions``, read for each row's run directory and stem.
+        table_rows: The rows :func:`rows` built from it, in its order.
+        expected: The run directory names the run was asked for (the manifest), or None.
+
+    Returns:
+        One line per problem: a stem or run directory that appears twice, a run asked for and absent or
+        present and not asked for, a row with no source path, a source path held by two rows. Empty
+        where there are none.
+    """
+    problems: list[str] = []
+    stems = [str(s) for s in decisions.column("stem").to_pylist()]
+    names = [Path(str(d)).name for d in decisions.column("run_dir").to_pylist()]
+    for label, values in (("stem", stems), ("run directory", names)):
+        repeated = sorted(value for value, n in Counter(values).items() if n > 1)
+        if repeated:
+            problems.append(f"{len(repeated)} {label}s appear more than once, e.g. {repeated[:3]}")
+    if expected is not None:
+        wanted, have = set(expected), set(names)
+        if wanted - have:
+            problems.append(f"{len(wanted - have)} manifest runs have no row, e.g. {sorted(wanted - have)[:3]}")
+        if have - wanted:
+            problems.append(f"{len(have - wanted)} rows are not in the manifest, e.g. {sorted(have - wanted)[:3]}")
+    empty = [stem for stem, r in zip(stems, table_rows) if not r.get("source_path")]
+    if empty:
+        problems.append(f"{len(empty)} rows have no source_path, e.g. {empty[:3]}")
+    paths = Counter(str(r["source_path"]) for r in table_rows if r.get("source_path"))
+    shared = sorted(path for path, n in paths.items() if n > 1)
+    if shared:
+        problems.append(f"{len(shared)} source paths are held by more than one row")
+    return problems
 
 
 def write_tsv(table_rows: Iterable[Mapping[str, Any]], path: Path) -> int:

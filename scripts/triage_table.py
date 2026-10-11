@@ -2,10 +2,15 @@
 
     uv run python scripts/triage_table.py --decisions DIR/triage_decisions.parquet
         --evidence DIR/triage_evidence.parquet --run-root OUT --bids-root BIDS --out DIR/triage.tsv
+        [--manifest MANIFEST.jsonl]
 
 The decision tables are the ones ``scripts/triage_recording_vectors.py --merge`` writes; ``--run-root``
 is the tree they were built over. The columns are ``data/triage_table.yaml``, copied beside the TSV as
-``triage.columns.yaml``. The table carries no transcript text.
+``triage.columns.yaml``. The table carries no transcript text. Nothing is written, and the exit status is
+2, where the table would not be one row per recording (``triage_table.coverage_problems``): a stem, run
+directory or source path held twice, a row with no source path, or, with ``--manifest``, a run asked for
+and absent or present and not asked for. The manifest also supplies the source path of a run whose
+store records none.
 """
 
 from __future__ import annotations
@@ -30,7 +35,7 @@ def main(argv: list[str] | None = None) -> int:
         argv: The command line, or None to read ``sys.argv``.
 
     Returns:
-        0 when rows were written, 1 when none were.
+        0 when rows were written, 1 when none were, 2 when coverage failed and nothing was written.
     """
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--decisions", type=Path, required=True, help="triage_decisions.parquet")
@@ -38,6 +43,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--run-root", type=Path, required=True, help="The run tree the tables were built over.")
     parser.add_argument("--bids-root", type=Path, required=True, help="The BIDS root source paths are relative to.")
     parser.add_argument("--out", type=Path, required=True, help="Where triage.tsv goes.")
+    parser.add_argument("--manifest", type=Path, help="The run manifest (JSONL of stem, source) to check against.")
     parser.add_argument("--threads", type=int, default=fastio.DEFAULT_THREADS, help="Run-tree reads in flight.")
     args = parser.parse_args(argv)
 
@@ -52,10 +58,18 @@ def main(argv: list[str] | None = None) -> int:
             releases[str(row["release"] or "")] += 1
             yield row
 
-    written = triage_table.write_tsv(
-        counted(triage_table.rows(decisions, evidence, args.run_root, args.bids_root, threads=args.threads)),
-        args.out,
+    sources = triage_table.manifest_sources(args.manifest) if args.manifest else None
+    built = list(
+        counted(
+            triage_table.rows(decisions, evidence, args.run_root, args.bids_root, threads=args.threads, sources=sources)
+        )
     )
+    problems = triage_table.coverage_problems(decisions, built, None if sources is None else sources.keys())
+    if problems:
+        for problem in problems:
+            print(f"COVERAGE: {problem}", file=sys.stderr)
+        return 2
+    written = triage_table.write_tsv(built, args.out)
     print(f"{written} rows -> {args.out}")
     print(f"verdict {dict(sorted(verdicts.items()))}")
     print(f"release {dict(sorted(releases.items()))}")
