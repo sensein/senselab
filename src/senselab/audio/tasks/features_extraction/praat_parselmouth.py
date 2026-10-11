@@ -17,6 +17,7 @@ from joblib import Memory, Parallel, delayed
 
 from senselab.audio.data_structures import Audio
 from senselab.utils.data_structures import logger
+from senselab.utils.portable_audio_io import read_audio
 
 try:
     import parselmouth  # type: ignore
@@ -141,7 +142,8 @@ def get_sound(audio: Union[Path, Audio], sampling_rate: int = 16000) -> parselmo
             if not audio.exists():
                 logger.error(f"File does not exist: {audio}")
                 raise FileNotFoundError(f"File does not exist: {audio}")
-            snd_full = parselmouth.Sound(str(audio))
+            samples, rate = read_audio(audio, always_2d=True)
+            snd_full = parselmouth.Sound(samples.astype(np.float64), sampling_frequency=float(rate))
         elif isinstance(audio, Audio):
             snd_full = parselmouth.Sound(audio.waveform, audio.sampling_rate)
 

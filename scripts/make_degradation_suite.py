@@ -42,9 +42,10 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     import numpy as np
-    import soundfile as sf
 
-    data, sr = sf.read(str(args.audio), dtype="float32", always_2d=True)
+    from senselab.utils.portable_audio_io import read_audio, write_audio
+
+    data, sr = read_audio(args.audio, always_2d=True, channels_first=False)
     wav = data.mean(axis=1)
     duration = len(wav) / sr
     start = round(args.span_start_fraction * duration, 3)
@@ -63,7 +64,7 @@ def main(argv: list[str] | None = None) -> int:
 
     def _emit(name: str, y: "np.ndarray", kind: str) -> None:
         path = args.out / f"{args.audio.stem}__{name}.wav"
-        sf.write(str(path), np.clip(y, -1.0, 1.0), sr)
+        write_audio(path, np.clip(y, -1.0, 1.0), sr, subtype="PCM_16")
         manifest["variants"][name] = {  # type: ignore[index]
             "path": str(path),
             "kind": kind,

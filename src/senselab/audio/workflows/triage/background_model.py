@@ -524,7 +524,7 @@ class BackgroundReading:
 
 
 def _named_stream(store: ProvStore, run_dir: Path, name: str) -> Signal | None:
-    import soundfile  # noqa: PLC0415 -- decoding is only needed where the reading runs
+    from senselab.utils.portable_audio_io import read_audio  # noqa: PLC0415
 
     found = [s for s in store.entities("stream") if s.attributes.get("name") == name and not store.is_invalidated(s.id)]
     if not found:
@@ -533,7 +533,7 @@ def _named_stream(store: ProvStore, run_dir: Path, name: str) -> Signal | None:
     path = path if path.is_absolute() else run_dir / path
     if not path.is_file():
         return None
-    samples, rate = soundfile.read(path, dtype="float32", always_2d=True)
+    samples, rate = read_audio(path, always_2d=True, channels_first=False)
     return samples.mean(axis=1), int(rate)
 
 
