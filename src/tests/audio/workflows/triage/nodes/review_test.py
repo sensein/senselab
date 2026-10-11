@@ -210,23 +210,29 @@ def _annotation(store: ProvStore) -> dict[str, Any]:
 class TestTheReviewerReadsTheResidue:
     """The reviewer reads exactly the string SPEECH's scan read, and nothing where it read nothing."""
 
-    def test_a_declined_scan_is_nothing_to_read(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_a_declined_scan_is_bypassed_as_task_content(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """SPEECH declined because nothing lexical lay outside the task: no model is contacted."""
         store = ProvStore(run_id="review-test")
         _seed(store, words=["buttercup", "meadow"], scan="declined")
         seen = _stub(monkeypatch, [_clean()])
         review(store, _config(tmp_path))
         assert seen == []
-        assert _annotation(store)["status"] == "nothing_to_read"
+        annotation = _annotation(store)
+        assert (annotation["status"], annotation["bypass_reason"]) == ("bypassed", "task_content_only")
+        assert annotation["failure"] is None
 
-    def test_a_store_with_no_scan_is_nothing_to_read(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_a_store_with_no_scan_is_bypassed_as_unscanned(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """SPEECH never ran, so no residue was computed and nothing reaches the pathway."""
         store = ProvStore(run_id="review-test")
         _seed(store, scan=None)
         seen = _stub(monkeypatch, [_clean()])
         review(store, _config(tmp_path))
         assert seen == []
-        assert _annotation(store)["detector_state"] == "unscanned"
+        annotation = _annotation(store)
+        assert annotation["detector_state"] == "unscanned"
+        assert (annotation["status"], annotation["bypass_reason"]) == ("bypassed", "unscanned")
 
     def test_only_the_residue_is_read(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """A syllable train around a disclosure: the reviewer reads the disclosure alone."""
@@ -342,7 +348,7 @@ class TestTheReviewerSeesEveryRecogniserSReading:
 
 
 class TestTheFourSilencesStayApart:
-    """Switched off, nothing to read, tried and could not load, and ran: each its own state."""
+    """Switched off, bypassed, tried and could not load, and ran: each its own state."""
 
     def test_switched_off_contacts_nothing_and_says_so(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """Off means no subprocess and an annotation recording the absence as a choice."""
@@ -352,15 +358,54 @@ class TestTheFourSilencesStayApart:
         review(store, _config(tmp_path, "redaction:\n  llm_check:\n    enabled: false\n"))
         assert seen == []
         assert _annotation(store)["status"] == "disabled"
+        assert _annotation(store)["bypass_reason"] is None
 
-    def test_an_empty_transcript_is_nothing_to_read(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """The 20,518 with no lexical word; there is no text, so there is no reading."""
+    def test_switched_off_over_an_empty_residue_is_still_disabled(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The switch is read before the residue: off wins over bypassed."""
+        store = ProvStore(run_id="review-test")
+        _seed(store, words=[], scan=None)
+        seen = _stub(monkeypatch, [])
+        review(store, _config(tmp_path, "redaction:\n  llm_check:\n    enabled: false\n"))
+        assert seen == []
+        assert (_annotation(store)["status"], _annotation(store)["bypass_reason"]) == ("disabled", None)
+
+    def test_an_empty_transcript_is_bypassed_as_no_words(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The recordings with no word at all; there is no text, so there is no reading."""
         store = ProvStore(run_id="review-test")
         _seed(store, words=[], scan=None)
         seen = _stub(monkeypatch, [])
         review(store, _config(tmp_path))
         assert seen == []
-        assert _annotation(store)["status"] == "nothing_to_read"
+        annotation = _annotation(store)
+        assert (annotation["status"], annotation["bypass_reason"]) == ("bypassed", "no_words")
+        assert annotation["failure"] is None and annotation["iterations"] == 0
+
+    def test_a_scan_with_only_non_lexical_words_is_bypassed_as_non_lexical(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The scan ran and set every word aside as non-lexical."""
+        store = ProvStore(run_id="review-test")
+        _seed(store, words=["[breath]", "[cough]"], scan="ran", residue=[])
+        seen = _stub(monkeypatch, [])
+        review(store, _config(tmp_path))
+        assert seen == []
+        assert (_annotation(store)["status"], _annotation(store)["bypass_reason"]) == ("bypassed", "non_lexical_only")
+
+    def test_a_scan_with_lexical_task_words_is_bypassed_as_task_content(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Lexical words exist, but the scan read none of them: every one is task content."""
+        store = ProvStore(run_id="review-test")
+        _seed(store, words=["[breath]", "buttercup", "meadow"], scan="ran", residue=[])
+        seen = _stub(monkeypatch, [])
+        review(store, _config(tmp_path))
+        assert seen == []
+        assert (_annotation(store)["status"], _annotation(store)["bypass_reason"]) == (
+            "bypassed",
+            "task_content_only",
+        )
 
     def test_a_model_that_would_not_load_is_absent_not_clean(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -829,16 +874,14 @@ class TestTheBracketedTokensAreNotSpeech:
     reading one string, and about not spending a card to be told that ``[breath]`` is not a name.
     """
 
-    def test_a_transcript_of_only_markers_is_nothing_to_read(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_a_transcript_of_only_markers_is_bypassed(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """It renders empty, so the node records the silence rather than contacting a model."""
         store = ProvStore(run_id="r")
         _seed(store, words=["[breath]", "[cough]"])
         seen = _stub(monkeypatch, [])
         review(store, _config(tmp_path))
         assert seen == [], "no model may be contacted for a transcript of markers"
-        assert _annotation(store)["status"] == "nothing_to_read"
+        assert (_annotation(store)["status"], _annotation(store)["bypass_reason"]) == ("bypassed", "non_lexical_only")
 
     def test_a_marker_between_two_words_leaves_the_words_joined(self, tmp_path: Path) -> None:
         """What the reviewer is shown, and therefore what its quotes are taken from."""

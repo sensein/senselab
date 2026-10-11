@@ -15,9 +15,9 @@ from senselab.audio.data_structures import AudioHints
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.nodes.second_opinion import (
     ABSENT,
+    BYPASSED,
     DISABLED,
     NODE,
-    NOTHING_TO_READ,
     OK,
     opinion_cache_key,
     pin_of,
@@ -36,8 +36,8 @@ def _config(tmp_path: Path, text: str = ON) -> TriageConfig:
     return load_triage_config(path)
 
 
-def _store(words: Sequence[str] = ("my", "name", "is", "alicia")) -> ProvStore:
-    """Consensus words and SPEECH's scan of all of them: the residue REVIEW reads."""
+def _store(words: Sequence[str] = ("my", "name", "is", "alicia"), residue: Sequence[int] | None = None) -> ProvStore:
+    """Consensus words and SPEECH's scan of them (all, unless ``residue`` names positions): the residue REVIEW reads."""
     store = ProvStore(run_id="second-opinion")
     software = store.agent(agent_type="software", version="senselab test-seed")
     activity = store.activity(node="PREPROCESS", step="consensus", parameters={})
@@ -64,7 +64,12 @@ def _store(words: Sequence[str] = ("my", "name", "is", "alicia")) -> ProvStore:
     scan = store.entity(
         prov_type="measurement",
         extent=None,
-        attributes={"name": PII_SCAN, "signal": "consensus_transcript", "findings_n": 0, "residue_word_ids": word_ids},
+        attributes={
+            "name": PII_SCAN,
+            "signal": "consensus_transcript",
+            "findings_n": 0,
+            "residue_word_ids": word_ids if residue is None else [word_ids[position] for position in residue],
+        },
     )
     store.was_generated_by(scan, activity)
     return store
@@ -189,19 +194,31 @@ class TestItAsksAndRecords:
 
 
 class TestTheOtherPaths:
-    """Off, nothing to read, and asked without an answer are each recorded, and none asks the model."""
+    """Off, bypassed, and asked without an answer are each recorded, and none asks the model."""
 
     def test_the_packaged_config_is_disabled_and_asks_nothing(self, tmp_path: Path) -> None:
         """No GPU and no store in a default run."""
         store, ask = _store(), _Ask(_answers())
         outcome = second_opinion(store, load_triage_config(), None, ask)
         assert outcome.status == DISABLED and not ask.states
+        assert _opinion(store, outcome.measurement_id)["bypass_reason"] is None
 
-    def test_an_empty_transcript_asks_nothing(self, tmp_path: Path) -> None:
-        """No residue, nothing to read."""
-        store, ask = _store(words=()), _Ask(_answers())
+    @pytest.mark.parametrize(
+        ("words", "residue", "reason"),
+        [
+            ((), None, "no_words"),
+            (("[breath]", "[cough]"), [], "non_lexical_only"),
+            (("[breath]", "buttercup", "meadow"), [], "task_content_only"),
+        ],
+    )
+    def test_an_empty_residue_is_bypassed_with_its_reason(
+        self, tmp_path: Path, words: Sequence[str], residue: Sequence[int] | None, reason: str
+    ) -> None:
+        """No residue: bypassed, the reason recorded, and the model never asked."""
+        store, ask = _store(words=words, residue=residue), _Ask(_answers())
         outcome = second_opinion(store, _config(tmp_path), None, ask)
-        assert outcome.status == NOTHING_TO_READ and not ask.states
+        assert outcome.status == BYPASSED and not ask.states
+        assert _opinion(store, outcome.measurement_id)["bypass_reason"] == reason
 
     def test_no_server_is_absent_with_a_failure(self, tmp_path: Path) -> None:
         """ask=None on a cache miss."""

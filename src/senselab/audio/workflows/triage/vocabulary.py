@@ -1786,7 +1786,7 @@ def _reviewer_found_residue(llm_redaction: Mapping[str, Any] | None) -> bool:
     Returns:
         True only where the reviewer read the text, flagged it, and proposed at least one ``redact``
         entry. A proposal that only releases, or proposes nothing, says the detectors hid too much
-        or nothing, which is not residue. ``absent``, ``disabled`` and ``nothing_to_read`` are not
+        or nothing, which is not residue. ``absent``, ``disabled`` and ``bypassed`` are not
         readings and conclude nothing.
     """
     annotation = dict(llm_redaction or {})
@@ -3563,6 +3563,7 @@ def fold_file_verdict(
         second_opinion=(
             {
                 "status": second_opinion.get("status"),
+                "bypass_reason": second_opinion.get("bypass_reason"),
                 "probabilities": dict(second_opinion.get("probabilities") or {}),
                 "disagreements": list(disagreements),
                 "model_id": second_opinion.get("model_id"),

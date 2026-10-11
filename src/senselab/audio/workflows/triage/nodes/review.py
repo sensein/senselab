@@ -101,12 +101,20 @@ DETECTOR_STATES = (SCANNED_STATE, DECLINED_STATE, UNSCANNED_STATE)
 """What the detectors did to this recording: read it, declined to read it, or never reached it."""
 
 DISABLED = "disabled"
-NOTHING_TO_READ = "nothing_to_read"
+BYPASSED = "bypassed"
 ABSENT = "absent"
 CLEAN = "clean"
 FLAGGED = "flagged"
-REVIEW_STATES = (DISABLED, NOTHING_TO_READ, ABSENT, CLEAN, FLAGGED)
-"""Switched off, nothing to read, tried and could not load, and the two readings it can reach."""
+REVIEW_STATES = (DISABLED, BYPASSED, ABSENT, CLEAN, FLAGGED)
+"""Switched off, bypassed with one of :data:`BYPASS_REASONS`, tried and could not load, and the two readings."""
+
+NO_WORDS = "no_words"
+NON_LEXICAL_ONLY = "non_lexical_only"
+TASK_CONTENT_ONLY = "task_content_only"
+UNSCANNED_WORDS = "unscanned"
+BYPASS_REASONS = (NO_WORDS, NON_LEXICAL_ONLY, TASK_CONTENT_ONLY, UNSCANNED_WORDS)
+"""Why the lexical residue is empty: the consensus has no words; only bracketed, non-lexical or
+degenerate tokens; lexical words, every one task content; or lexical words SPEECH never scanned."""
 
 
 @dataclass(frozen=True)
@@ -159,6 +167,7 @@ class _Reading:
         engine: The engine that answered the last round, as the worker reported it; empty where none did.
         phrase_quotes_unplaced_n: How many of the last answering round's phrase quotes place on no run of the
             timed consensus words (:func:`~senselab.text.tasks.pii_detection.redaction_review.unplaced_phrase_quotes`).
+        bypass_reason: One of :data:`BYPASS_REASONS` where the status is :data:`BYPASSED`, else None.
     """
 
     status: str
@@ -185,6 +194,7 @@ class _Reading:
     task_content_quotes: tuple[str, ...] = ()
     engine: dict[str, Any] = field(default_factory=dict)
     phrase_quotes_unplaced_n: int = 0
+    bypass_reason: str | None = None
 
 
 TASK_READING_QUOTES = ("off_task_quotes", "phrase_quotes", "other_speaker_quotes", "task_content_quotes")
@@ -380,6 +390,24 @@ def consensus_transcript(store: ProvStore) -> dict[str, Any]:
             ]
         )
     return {"recognisers": recognisers, "words": rows, "findings_n": len(live)}
+
+
+def bypass_reason(store: ProvStore, transcript: Mapping[str, Any] | None = None) -> str:
+    """Why a recording whose lexical residue is empty was not read, from :func:`consensus_transcript`'s word kinds.
+
+    Args:
+        store: The provenance store.
+        transcript: :func:`consensus_transcript` of the store, where the caller already holds it.
+
+    Returns:
+        One of :data:`BYPASS_REASONS`.
+    """
+    kinds = {row[4] for row in (transcript or consensus_transcript(store))["words"]}
+    if not kinds:
+        return NO_WORDS
+    if WORD_TASK not in kinds:
+        return NON_LEXICAL_ONLY
+    return UNSCANNED_WORDS if detector_state(store) == UNSCANNED_STATE else TASK_CONTENT_ONLY
 
 
 def review_context(store: ProvStore, hint: AudioHints | None, lexicon: TaskLexicon | None = None) -> dict[str, Any]:
@@ -921,7 +949,17 @@ def review(store: ProvStore, config: TriageConfig, hint: AudioHints | None = Non
         reading = _Reading(DISABLED, 0, (), "", "", "", (), "", None, None)
     elif not original.strip():
         reading = _Reading(
-            NOTHING_TO_READ, 0, (), "", "", "", (), "", None, "the transcript is empty; there was no text to read"
+            BYPASSED,
+            0,
+            (),
+            "",
+            "",
+            "",
+            (),
+            "",
+            None,
+            None,
+            bypass_reason=bypass_reason(store, context.get(CONSENSUS_TRANSCRIPT)),
         )
     else:
         revision = _resolved(settings)
@@ -966,7 +1004,7 @@ def review(store: ProvStore, config: TriageConfig, hint: AudioHints | None = Non
         ended=_stamp(),
     )
     store.was_associated_with(activity, software)
-    if reading.status not in (DISABLED, NOTHING_TO_READ):
+    if reading.status not in (DISABLED, BYPASSED):
         if reading.revision is not None:
             store.was_associated_with(
                 activity, store.agent(agent_type="model", model_id=reading.model_id, commit_sha=reading.revision)
@@ -1007,6 +1045,7 @@ def review(store: ProvStore, config: TriageConfig, hint: AudioHints | None = Non
             "name": REDACTION_LLM_ANNOTATION,
             "signal": "consensus_transcript",
             "status": reading.status,
+            "bypass_reason": reading.bypass_reason,
             "iterations": reading.iterations,
             "converged": reading.converged,
             "problem": reading.problem,
