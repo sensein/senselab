@@ -32,7 +32,7 @@ from senselab.audio.workflows.triage.cohort import CONDITION_KINDS
 from senselab.audio.workflows.triage.vocabulary import UNPLACED_OPEN, UNPLACED_UNREAD, standing_task_extents
 from senselab.utils import fastio
 
-SCHEMA_VERSION = 26
+SCHEMA_VERSION = 27
 """Bumped whenever a column is added, removed or retyped, a binary layout changes, or a categorical
 column's controlled vocabulary changes."""
 
@@ -875,6 +875,7 @@ def _reviewer_columns(decision: Mapping[str, Any]) -> dict[str, Any]:
     flagged = annotation.get("flagged") or []
     return {
         "llm_status": annotation.get("status"),
+        "llm_bypass_reason": annotation.get("bypass_reason") or None,
         "llm_iterations": int(annotation["iterations"]) if annotation.get("iterations") is not None else None,
         "llm_redaction_judgment": annotation.get("redaction") or None,
         "llm_original_judgment": annotation.get("original") or None,
@@ -917,6 +918,7 @@ def _second_opinion_columns(decision: Mapping[str, Any]) -> dict[str, Any]:
     disagreements = [str(entry).split(" ", 1)[0] for entry in opinion.get("disagreements") or ()]
     return {
         "second_opinion_status": opinion.get("status"),
+        "second_opinion_bypass_reason": opinion.get("bypass_reason") or None,
         **{f"second_opinion_{name}_p": _number(probabilities.get(name)) for name in SECOND_OPINION_PROBABILITIES},
         "second_opinion_disagrees": disagreements,
         "second_opinion_disagrees_n": len(disagreements),
@@ -1662,6 +1664,7 @@ def _fields() -> list[pa.Field]:
         pa.field("gate_failed_names", pa.list_(pa.string())),
         pa.field("gate_flagged_names", pa.list_(pa.string())),
         pa.field("llm_status", pa.string()),
+        pa.field("llm_bypass_reason", pa.string()),
         pa.field("llm_iterations", pa.int32()),
         pa.field("llm_redaction_judgment", pa.string()),
         pa.field("llm_original_judgment", pa.string()),
@@ -1677,6 +1680,7 @@ def _fields() -> list[pa.Field]:
         pa.field("llm_revision", pa.string()),
         pa.field("llm_failed", pa.bool_()),
         pa.field("second_opinion_status", pa.string()),
+        pa.field("second_opinion_bypass_reason", pa.string()),
         *[pa.field(f"second_opinion_{name}_p", pa.float64()) for name in SECOND_OPINION_PROBABILITIES],
         pa.field("second_opinion_disagrees", pa.list_(pa.string())),
         pa.field("second_opinion_disagrees_n", pa.int32()),

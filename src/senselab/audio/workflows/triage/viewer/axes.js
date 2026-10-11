@@ -197,6 +197,7 @@ var SchemaAxes = (function () {
     // REVIEW's reading. It decides nothing itself, but VERDICT weights both axes by it, so a row
     // that cannot show what the reviewer read cannot explain the verdict beside it.
     column({ name: 'llm_status', kind: 'categorical', group: 'review', nullMeans: 'REVIEW left no annotation' }),
+    column({ name: 'llm_bypass_reason', kind: 'categorical', group: 'review', nullMeans: 'REVIEW was not bypassed' }),
     column({ name: 'llm_speakers', kind: 'categorical', group: 'review', nullMeans: 'the reader answered none' }),
     column({
       name: 'llm_original_judgment', kind: 'categorical', group: 'review',
@@ -238,6 +239,7 @@ var SchemaAxes = (function () {
     // SECOND_OPINION: a decision model's probabilities over the same text, and where they
     // confidently disagree with the reviewer.
     column({ name: 'second_opinion_status', kind: 'categorical', group: 'review', nullMeans: 'SECOND_OPINION wrote nothing' }),
+    column({ name: 'second_opinion_bypass_reason', kind: 'categorical', group: 'review', nullMeans: 'SECOND_OPINION was not bypassed' }),
     column({
       name: 'second_opinion_other_voice_p', kind: 'numeric', group: 'review',
       label: 'second opinion · P(other voice)', nullMeans: 'no ok opinion',

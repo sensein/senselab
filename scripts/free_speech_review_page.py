@@ -72,8 +72,10 @@ RELEASE_ORDER = (
 discard, or a release the graph could not assess."""
 
 EXTRACT_SCHEMA = "senselab.fsreview.extract"
-EXTRACT_VERSION = 10
-"""10 carries each span's policy lock or release kind, the listed conditions, and the names awaiting
+EXTRACT_VERSION = 11
+"""11 carries the reviewer's ``bypassed`` status and its ``bypass_reason`` in place of ``nothing_to_read``.
+
+10 carries each span's policy lock or release kind, the listed conditions, and the names awaiting
 review (redaction policy v7). 7 carries each span's trim reason and condition kind, and a single ASR
 stream where the consensus is empty.
 
@@ -1494,13 +1496,11 @@ def _flag_control(stem: str) -> str:
     return _FLAG_TOGGLE
 
 
-LLM_STATES = ("disabled", "nothing_to_read", "absent", "clean", "flagged")
+LLM_STATES = ("disabled", "bypassed", "absent", "clean", "flagged")
 """Every state the reviewer records, in the order the ladder reaches them.
 
-``disabled`` is the config leaving it off; ``nothing_to_read`` is a transcript with no words in it;
-the last three are readings it actually took. ``not_run`` retired when the reviewer stopped being
-reached through the detectors: it meant "the detectors marked nothing", which is now a population
-that gets read rather than one that gets skipped.
+``disabled`` is the config leaving it off; ``bypassed`` is a recording whose lexical residue is empty,
+with the annotation's ``bypass_reason`` saying why; the last three are readings it actually took.
 """
 
 LLM_RAN = ("absent", "clean", "flagged")
@@ -2546,9 +2546,15 @@ function buildWhy(stem,card){
     out.push('<div class="warn"><b>Switched off.</b> The reviewer is disabled in the '
       +'configuration, so no review was attempted and none of what follows was corroborated by '
       +'one. This is not a verdict about the recording.</div>');
-  }else if(st==='nothing_to_read'){
-    out.push('<div class="warn"><b>There was no text to read.</b> The reviewer is enabled, and '
-      +'this recording\\'s transcript carries no words, so there was nothing to read back. '
+  }else if(st==='bypassed'){
+    const BYPASS={no_words:'the consensus transcript carries no words',
+      non_lexical_only:'the transcript carries only bracketed, non-lexical or degenerate tokens',
+      task_content_only:'every lexical word in the transcript is task content (stimulus, '
+        +'instructions or the task family\\'s lexicon)',
+      unscanned:'the transcript has lexical words, but the PII scan never ran, so no residue was computed'};
+    const why=BYPASS[llm.bypass_reason]||'reason not recorded';
+    out.push('<div class="warn"><b>Reviewer bypassed</b> ('+esc(llm.bypass_reason||'unrecorded')+'): '
+      +esc(why)+', so the reviewer is enabled but was not asked. '
       +'It reached no conclusion about this recording.</div>');
   }else if(st==='absent'){
     out.push('<div class="warn"><b>It tried and could not load.</b> That is not the same as '
@@ -2821,7 +2827,7 @@ placeholder="max"> tokens</div>
 <option value="flagged">it flagged something</option>
 <option value="clean">it ran and flagged nothing</option>
 <option value="absent">it could not load</option>
-<option value="nothing_to_read">there was no text to read</option>
+<option value="bypassed">bypassed: no residue to read</option>
 <option value="disabled">switched off</option>
 </select>
 <select id="flag"><option value="any">review flag, any</option>

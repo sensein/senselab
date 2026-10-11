@@ -199,8 +199,10 @@ def test_carrier_rejected_lists_every_name_voice_can_write() -> None:
         ("residue_method", [SYLLABLE, VOCAL, ALIGNED, FREE]),
         (
             "llm_status",
-            [review.CLEAN, review.FLAGGED, review.ABSENT, review.DISABLED, review.NOTHING_TO_READ],
+            [review.CLEAN, review.FLAGGED, review.ABSENT, review.DISABLED, review.BYPASSED],
         ),
+        ("llm_bypass_reason", list(review.BYPASS_REASONS)),
+        ("second_opinion_bypass_reason", list(review.BYPASS_REASONS)),
         ("llm_redaction_judgment", list(REDACTION_STATES)),
         ("llm_original_judgment", list(ORIGINAL_STATES)),
         ("llm_speakers", list(SPEAKER_STATES)),
