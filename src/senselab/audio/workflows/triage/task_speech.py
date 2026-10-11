@@ -5,7 +5,9 @@ Two kinds of task have a defined content, so speech outside it can be read:
 - An airway or voice family asks for a sound, not words. A lexical consensus word in such a recording -- not
   bracketed, not a vocalisation (:func:`~senselab.audio.workflows.triage.residue.is_non_lexical`) -- that is
   neither the voice family's declared task text nor a recogniser's misreading of the task's own events
-  (:func:`~senselab.audio.workflows.triage.task_content.task_content_ids`) is speech outside the task.
+  (:func:`~senselab.audio.workflows.triage.task_content.task_content_ids`) is speech outside the task. A
+  lexical family declared in ``data/task_speech.yaml`` ``voice_task_text`` (``loudness``) is read the same way,
+  its declared words standing for the voice family's task text (:func:`lexical_voice_family`).
 - An item-set family (fluency, item generation) asks for a list of open-vocabulary items. Its lexical words are
   split into utterances at pauses (:func:`utterances`) and each utterance is an item or a phrase
   (:func:`is_phrase`). An item utterance's words are the task's own content whatever they spell; a phrase's
@@ -59,6 +61,33 @@ def task_speech_parameters() -> dict[str, Any]:
     return dict(yaml.safe_load(TASK_SPEECH_PATH.read_text()) or {})
 
 
+def voice_task_text(family: str | None) -> tuple[str, ...] | None:
+    """The declared task text of a lexical family read as a voice task (``task_speech.yaml`` ``voice_task_text``).
+
+    Args:
+        family: The declared family, or None.
+
+    Returns:
+        The family's task-text words; None for a family not declared there.
+    """
+    table = task_speech_parameters().get("voice_task_text") or {}
+    if not family or family not in table:
+        return None
+    return tuple(str(word) for word in table[family] or ())
+
+
+def lexical_voice_family(family: str | None) -> bool:
+    """Whether a lexical family is read as a voice task beyond its declared task text (``loudness``).
+
+    Args:
+        family: The declared family, or None.
+
+    Returns:
+        True for a family under ``task_speech.yaml`` ``voice_task_text``.
+    """
+    return voice_task_text(family) is not None
+
+
 def non_lexical_family(family: str | None) -> bool:
     """Whether a declared family asks for a sound rather than words.
 
@@ -66,9 +95,12 @@ def non_lexical_family(family: str | None) -> bool:
         family: The declared family, or None.
 
     Returns:
-        True for an airway or voice family.
+        True for an airway or voice family, and for a lexical family read as a voice task
+        (:func:`lexical_voice_family`).
     """
-    return bool(family) and (family in AIRWAY_EXPECTATIONS or family in VOICE_EXPECTATIONS)
+    return bool(family) and (
+        family in AIRWAY_EXPECTATIONS or family in VOICE_EXPECTATIONS or lexical_voice_family(family)
+    )
 
 
 def item_set_family(family: str | None) -> bool:
@@ -217,21 +249,36 @@ def task_text_ids(words: Sequence[Entity], family: str | None, task_text: Sequen
             (:func:`~senselab.audio.workflows.triage.nodes.redact.task_texts`).
 
     Returns:
-        The ids of the words matching them, by stem or as a number word (``1`` is ``one``); empty for any
-        family other than a voice one.
+        The ids of the words matching them, by stem or as a number word (``1`` is ``one``); in a lexical family
+        read as a voice task, also a word that is its declared task text run together (``heyhey``). Empty for
+        any other family.
     """
-    if not family or family not in VOICE_EXPECTATIONS:
+    declared = voice_task_text(family)
+    if family in VOICE_EXPECTATIONS:
+        tokens: Sequence[str] = VOICE_EXPECTATIONS[str(family)].tokens or ()
+    elif declared is not None:
+        tokens = declared
+    else:
         return set()
     from senselab.audio.workflows.triage.nodes.redact import task_text_positions  # noqa: PLC0415
 
-    expectation = VOICE_EXPECTATIONS[family]
-    texts = [*task_text, *(expectation.tokens or ())]
+    texts = [*task_text, *tokens]
     keys = {token_key(piece) for text in texts for piece in str(text).split()} - {""}
+    units = {token_key(piece) for text in declared or () for piece in str(text).split()} - {""}
     surfaces = [str(word.attributes.get("text") or "") for word in words]
     by_stem = task_text_positions(surfaces, texts)
     return {
-        word.id for position, word in enumerate(words) if position in by_stem or token_key(surfaces[position]) in keys
+        word.id
+        for position, word in enumerate(words)
+        if position in by_stem
+        or token_key(surfaces[position]) in keys
+        or any(_repeats(token_key(surfaces[position]), unit) for unit in units)
     }
+
+
+def _repeats(key: str, unit: str) -> bool:
+    """Whether a key is one unit run together one or more times (``heyhey`` of ``hey``)."""
+    return bool(key) and len(key) % len(unit) == 0 and unit * (len(key) // len(unit)) == key
 
 
 def _timing(word: Entity) -> tuple[float, float] | None:

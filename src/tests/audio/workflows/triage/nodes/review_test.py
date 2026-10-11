@@ -263,6 +263,33 @@ class TestTheReviewerReadsTheResidue:
         )
         assert annotation["failure"] is None
 
+    @pytest.mark.parametrize("task", ["loudness", "loudness-v2"])
+    def test_a_scanned_loudness_recording_of_hey_is_bypassed_as_non_lexical_task(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, task: str
+    ) -> None:
+        """Owner, 2026-10-11: loudness is a voice task, so its 'hey' alone is a non-lexical task, scanned or not."""
+        from senselab.audio.data_structures import AudioHints
+
+        for scan, residue in (("ran", []), (None, None)):
+            store = ProvStore(run_id="review-test")
+            _seed(store, words=["hey", "HEY!"], scan=scan, residue=residue)
+            seen = _stub(monkeypatch, [_clean()])
+            review(store, _config(tmp_path), AudioHints(metadata={"task_token": task}))
+            assert seen == []
+            annotation = _annotation(store)
+            assert (annotation["status"], annotation["bypass_reason"]) == ("bypassed", "non_lexical_task")
+
+    def test_a_scanned_prolonged_vowel_of_task_words_stays_task_content(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The vowel's count-in under a scan keeps its reason: the loudness change does not reach it."""
+        from senselab.audio.data_structures import AudioHints
+
+        store = ProvStore(run_id="review-test")
+        _seed(store, words=["one", "two", "three"], scan="ran", residue=[])
+        review(store, _config(tmp_path), AudioHints(metadata={"task_token": "prolonged-vowel"}))
+        assert (_annotation(store)["status"], _annotation(store)["bypass_reason"]) == ("bypassed", "task_content_only")
+
     def test_no_bypass_reason_names_a_missing_scan(self) -> None:
         """``bypassed`` is only no words, non-lexical words, task content, or a family that asks for a sound."""
         assert review_module.BYPASS_REASONS == ("no_words", "non_lexical_only", "task_content_only", "non_lexical_task")

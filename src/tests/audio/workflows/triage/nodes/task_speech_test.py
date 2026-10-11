@@ -13,7 +13,11 @@ from senselab.audio.workflows.triage.nodes.redact import NON_TASK_SPEECH, mask_p
 from senselab.audio.workflows.triage.task_content import task_content_ids
 from senselab.audio.workflows.triage.task_speech import (
     TASK_SPEECH_READING,
+    lexical_voice_family,
+    non_lexical_family,
     task_speech_of,
+    voice_task_text,
+    words_min_for,
 )
 from senselab.audio.workflows.triage.vocabulary import (
     DECLINED,
@@ -595,3 +599,72 @@ def test_a_lexical_task_s_own_words_are_its_own_sound_and_an_airway_task_has_non
     other = ProvStore(run_id="airway")
     _seed_redact_store(other, tmp_path, words=["hello"], recording_stem=BREATH_STEM)
     assert spoken_task_words(other) == []
+
+
+LOUDNESS_STEM = "sub-x_ses-y_task-loudness"
+LOUDNESS_V2_STEM = "sub-x_ses-y_task-loudness-v2"
+
+
+def _speech_fold(task: TaskEvidence, redaction: RedactionEvidence) -> FileVerdict:
+    decisions = {
+        name: BranchDecision(name, False, route, False)
+        for name, route in (("AIRWAY", DECLINED), ("SPEECH", ROUTED), ("VOICE", DECLINED))
+    }
+    return fold_file_verdict(
+        [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
+        branch_decisions=decisions,
+        ran={},
+        hint_claims={},
+        route_state=ROUTED,
+        redaction=redaction,
+        task=task,
+    )
+
+
+class TestLoudnessIsAVoiceTask:
+    """Owner, 2026-10-11: loudness is a voice task beyond its "hey", as the count-in is in prolonged-vowel."""
+
+    @pytest.mark.parametrize("stem,family", [(LOUDNESS_STEM, "loudness"), (LOUDNESS_V2_STEM, "loudness-v2")])
+    def test_every_variant_of_hey_is_task_text(self, store: ProvStore, tmp_path: Path, stem: str, family: str) -> None:
+        """Casing, punctuation, hyphenation and repetition of the declared word are all task text."""
+        words = ["hey", "Hey!", "HEY", "hey-hey", "HEY-HEY!", "heyhey", "hey,", "Hey."]
+        _seed_redact_store(store, tmp_path, words=words, recording_stem=stem)
+        assert non_lexical_family(family) and lexical_voice_family(family) and words_min_for(family) == 1
+        read = task_speech_of(store, family)
+        assert read.words_n == 0 and len(read.task_text_ids) == len(words)
+
+    def test_only_hey_neither_reviews_nor_masks(self, store: ProvStore, tmp_path: Path) -> None:
+        """'hey', 'hey hey' and 'HEY!' pass the fold and leave no mask."""
+        _seed_redact_store(store, tmp_path, words=["hey", "hey", "HEY!"], recording_stem=LOUDNESS_STEM, scanned=False)
+        _write(store, "loudness")
+        plan = mask_plan(store, reviewer_applies=False, padding_ms=50)
+        assert [mask for mask in plan.masks if mask.source == NON_TASK_SPEECH] == []
+        assert plan.non_task_speech_masked_n == 0
+        reading = task_speech_of(store, "loudness").record()
+        task = TaskEvidence(owning_branches=("SPEECH",), task_speech=reading, task_speech_words_min=1)
+        folded = _speech_fold(task, RedactionEvidence(lexical_words_n=3, scanned=True))
+        assert "speech_in_task" not in folded.ground_keys and folded.release is Release.AS_IS
+
+    def test_any_other_word_is_masked_and_reviewed(self, store: ProvStore, tmp_path: Path) -> None:
+        """A word beside the 'hey's is speech outside the task: masked, and the recording reviewed."""
+        _seed_redact_store(
+            store, tmp_path, words=["hey", "okay", "hey", "HEY!"], recording_stem=LOUDNESS_STEM, scanned=False
+        )
+        read = task_speech_of(store, "loudness")
+        assert read.words_n == 1 and len(read.task_text_ids) == 3
+        _write(store, "loudness")
+        plan = mask_plan(store, reviewer_applies=False, padding_ms=50)
+        speech = [mask for mask in plan.masks if mask.source == NON_TASK_SPEECH]
+        assert [len(mask.words) for mask in speech] == [1] and plan.non_task_speech_masked_n == 1
+        task = TaskEvidence(owning_branches=("SPEECH",), task_speech=read.record(), task_speech_words_min=1)
+        folded = _speech_fold(task, RedactionEvidence(lexical_words_n=4, scanned=True, non_task_speech_masked_n=1))
+        assert folded.triage is Triage.REVIEW and "speech_in_task" in folded.ground_keys
+        assert folded.release is Release.REDACTED and folded.release_ground == NON_TASK_SPEECH_MASKED
+
+    def test_prolonged_vowel_is_unchanged(self, store: ProvStore, tmp_path: Path) -> None:
+        """The count-in stays the vowel's task text; neither 'hey' nor a run-together count-in is."""
+        _seed_redact_store(store, tmp_path, words=["one", "two", "three", "hey", "oneone"], recording_stem=VOWEL_STEM)
+        read = task_speech_of(store, "prolonged-vowel")
+        assert len(read.task_text_ids) == 3 and read.words_n == 2
+        assert not lexical_voice_family("prolonged-vowel") and voice_task_text("prolonged-vowel") is None
+        assert not lexical_voice_family("free-speech") and not non_lexical_family("free-speech")

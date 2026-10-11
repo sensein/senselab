@@ -53,7 +53,7 @@ from senselab.audio.workflows.triage.nodes.redact import (
 from senselab.audio.workflows.triage.nodes.redact import STREAM_NAME as REDACTED_STREAM
 from senselab.audio.workflows.triage.residue import VOCAL, is_non_lexical
 from senselab.audio.workflows.triage.task_lexicon import TaskLexicon, task_lexicon
-from senselab.audio.workflows.triage.task_speech import item_set_family, non_lexical_family
+from senselab.audio.workflows.triage.task_speech import item_set_family, lexical_voice_family, non_lexical_family
 from senselab.audio.workflows.triage.vocabulary import PII_SCAN, PII_SCAN_MISSING, REDACTION_LLM_ANNOTATION, SCANNED
 from senselab.text.tasks.pii_detection.redaction_review import (
     CONSENSUS_HAYSTACK,
@@ -409,8 +409,9 @@ def bypass_reason(
         hint: The caller's declaration, read for the declared family.
 
     Returns:
-        One of :data:`BYPASS_REASONS`, or None where the consensus carries lexical words, the store holds no
-        PII scan and the declared family asks for words: a missing measurement
+        One of :data:`BYPASS_REASONS`; :data:`NON_LEXICAL_TASK` for a lexical family read as a voice task
+        (``task_speech.lexical_voice_family``) whether or not it was scanned. None where the consensus carries
+        lexical words, the store holds no PII scan and the declared family asks for words: a missing measurement
         (:data:`~senselab.audio.workflows.triage.vocabulary.PII_SCAN_MISSING`), not a bypass.
     """
     kinds = {row[4] for row in (transcript or consensus_transcript(store))["words"]}
@@ -418,9 +419,12 @@ def bypass_reason(
         return NO_WORDS
     if WORD_TASK not in kinds:
         return NON_LEXICAL_ONLY
+    family = declared_task_family(store, hint)
+    if lexical_voice_family(family):
+        return NON_LEXICAL_TASK
     if detector_state(store) != UNSCANNED_STATE:
         return TASK_CONTENT_ONLY
-    return NON_LEXICAL_TASK if non_lexical_family(declared_task_family(store, hint)) else None
+    return NON_LEXICAL_TASK if non_lexical_family(family) else None
 
 
 def review_context(store: ProvStore, hint: AudioHints | None, lexicon: TaskLexicon | None = None) -> dict[str, Any]:

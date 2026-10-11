@@ -64,7 +64,12 @@ from senselab.audio.workflows.triage.routing_analysis.families import DECLARED_K
 from senselab.audio.workflows.triage.speaker_vectors import load_min_extent_s
 from senselab.audio.workflows.triage.task_content import task_content_ids, task_events
 from senselab.audio.workflows.triage.task_lexicon import declared_names_lexicon
-from senselab.audio.workflows.triage.task_speech import TASK_SPEECH_READING, task_text_ids
+from senselab.audio.workflows.triage.task_speech import (
+    TASK_SPEECH_READING,
+    lexical_voice_family,
+    task_speech_parameters,
+    task_text_ids,
+)
 from senselab.audio.workflows.triage.vocabulary import standing_task_extents
 from senselab.utils.prov_store import Entity, ProvStore
 
@@ -324,9 +329,23 @@ def word_gated(family: str) -> bool:
         family: The declared task family.
 
     Returns:
-        True for an airway, voice or syllable-repetition family, and any other outside the exempt kind.
+        True for an airway, voice or syllable-repetition family, any other outside the exempt kind, and a
+        lexical family read as a voice task (``task_speech.lexical_voice_family``).
     """
-    return family not in DECLARED_KIND[str(cohort_parameters()["word_gate"]["exempt_kind"])]
+    exempt = DECLARED_KIND[str(cohort_parameters()["word_gate"]["exempt_kind"])]
+    return family not in exempt or lexical_voice_family(family)
+
+
+def lexical_task(family: str) -> bool:
+    """Whether a family is a lexical speech task for COHORT: in ``LEXICAL_SPEECH`` and not read as a voice task.
+
+    Args:
+        family: The declared task family.
+
+    Returns:
+        True for a lexical speech family other than one under ``task_speech.yaml`` ``voice_task_text``.
+    """
+    return family in LEXICAL_SPEECH and not lexical_voice_family(family)
 
 
 def speech_outside_task(store: ProvStore, family: str) -> list[Entity]:
@@ -437,7 +456,7 @@ def facts_of(
         stem=stem,
         session=session_key(stem),
         family=family,
-        lexical_task=family in LEXICAL_SPEECH,
+        lexical_task=lexical_task(family),
         duration_s=_recording_duration(store),
         task_extent=hull,
         diarization=segments,
@@ -891,12 +910,12 @@ def enrollment_candidates(
         parameters: The ``enrollment`` block of ``data/cohort_stage.yaml``; None reads the packaged one.
 
     Returns:
-        The candidates, in member order.
+        The candidates, in member order; a lexical family read as a voice task (``loudness``) never enrolls.
     """
     params = dict(parameters if parameters is not None else cohort_parameters()["enrollment"])
     out = []
     for facts, loader in members:
-        if facts.family not in DECLARED_KIND[str(params["families"])]:
+        if facts.family not in DECLARED_KIND[str(params["families"])] or lexical_voice_family(facts.family):
             continue
         spans = enrollment_spans(facts, min_s=min_s, lexical_gap_s=lexical_gap_s)
         if spans.spans:
@@ -1533,6 +1552,7 @@ def cohort_key(
         {
             "version": cohort_parameters()["version"],
             "parameters": cohort_parameters(),
+            "voice_task_text": task_speech_parameters().get("voice_task_text"),
             "group": group,
             "members": sorted(dataclasses.astuple(facts) for facts in members),
             "quantiles": quantiles_sha256,
