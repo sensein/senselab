@@ -1153,8 +1153,8 @@ def extend_quality(store: ProvStore, config: TriageConfig, *, run_dir: Path) -> 
 
     Raises:
         ValueError: If ``quality.clip_contradiction_margin`` is unmeasured.
-        LookupError: If the store holds no live ``recording`` stream, or holds clip spans over it
-            with no ``clip_amplitude`` measurement to read them against.
+        LookupError: If the store holds clip spans over the ``recording`` stream with no
+            ``clip_amplitude`` measurement to read them against.
     """
     if find_branch_report(store, QUALITY) is not None:
         return None

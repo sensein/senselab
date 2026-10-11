@@ -30,6 +30,7 @@ from senselab.audio.workflows.triage.nodes.quality import (
     CLIP_FAMILY,
     CLIP_LEVELS,
     CONTRADICTED_CLIP,
+    STREAM_NOT_STORED,
     UNCLIPPED_LOUDER_N,
     quality,
 )
@@ -401,10 +402,25 @@ class TestTheEdgeGuard:
 class TestTheStreamItReads:
     """The check is about the original recording, which is the signal the spans were detected on."""
 
-    def test_an_absent_recording_stream_raises(self, store: ProvStore, config: TriageConfig, tmp_path: Path) -> None:
-        """Nothing to read is an operational failure, which the runner records as ``errored``."""
-        with pytest.raises(LookupError, match="recording"):
-            quality(store, "recording", config, run_dir=tmp_path)
+    def test_an_absent_recording_stream_is_reported_not_measured(
+        self, store: ProvStore, config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """A store ADMIT refused (all-zero samples) holds no stream; QUALITY reports it rather than erroring."""
+        result = quality(store, "recording", config, run_dir=tmp_path)
+        assert result.report.conformance == UNDETERMINED
+        report = store.get_entity(result.report_entity_id)
+        assert report.attributes["missing"] == ["recording"]
+        assert report.attributes["clip_spans_n"] == 0
+        assert any(note.startswith(STREAM_NOT_STORED) for note in report.attributes["notes"])
+
+    def test_a_stored_recording_stream_is_not_named_missing(
+        self, store: ProvStore, config: TriageConfig, tmp_path: Path, wav_writer: Callable[..., Path]
+    ) -> None:
+        """Where the stream is stored, ``missing`` is empty and no note is added."""
+        _seed(store, tmp_path, wav_writer, _bed(), [])
+        report = store.get_entity(quality(store, "recording", config, run_dir=tmp_path).report_entity_id)
+        assert report.attributes["missing"] == []
+        assert report.attributes["notes"] == []
 
     def test_a_clip_span_over_another_signal_is_not_read_against_this_one(
         self, store: ProvStore, config: TriageConfig, tmp_path: Path, wav_writer: Callable[..., Path]
