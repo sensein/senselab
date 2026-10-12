@@ -108,6 +108,24 @@ class TestSpeechInANonLexicalTask:
         read = task_speech_of(store, "prolonged-vowel")
         assert len(read.task_text_ids) == 3 and read.words_n == 1
 
+    def test_words_after_the_last_task_event_are_speech(self, store: ProvStore, tmp_path: Path) -> None:
+        """r37 B3: the count-in said after the vowel's last hold is no longer task text; before it, it is."""
+        _seed_redact_store(
+            store, tmp_path, words=["1", "two", "aaaah", "three", "okay"], recording_stem=VOWEL_STEM
+        )
+        activity = store.activity(node="VOICE", step="phonation", parameters={})
+        write_measurement(
+            store,
+            activity,
+            software_agent(store),
+            name="voice_phonation_reading",
+            signal="plain",
+            attributes={"found": True, "holds": [list(_word_extent(2))]},
+        )
+        read = task_speech_of(store, "prolonged-vowel")
+        assert len(read.task_text_ids) == 2 and len(read.post_task_ids) == 2
+        assert read.words_n == 2 and read.record()["post_task_n"] == 2
+
     def test_a_word_with_no_usable_timing_is_untimed(self, store: ProvStore) -> None:
         """A consensus word at (0, 0) cannot be masked."""
         store.entity(
