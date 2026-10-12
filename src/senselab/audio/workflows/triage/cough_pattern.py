@@ -522,7 +522,7 @@ def cough_pattern_of(
         entangle_inside=False,
         speech=speech,
         instructed_n=None if instructed is None else instructed * per_cough,
-        stops=sorted({*speech, *(w for w in words if w[1] > w[0]), *turns}),
+        stops=sorted({*(w for w in words if w[1] > w[0]), *turns}),
         grow_kind="cough",
     )
     extent = cough_extent(

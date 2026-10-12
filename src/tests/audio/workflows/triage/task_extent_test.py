@@ -24,7 +24,7 @@ from senselab.audio.workflows.triage.task_extent import (
     TOO_WIDE,
     extent_check,
     grow,
-    median_gap_s,
+    median_interval_s,
     modulation_events,
     reachable_outside,
     task_extent_parameters,
@@ -53,7 +53,7 @@ class TestGrowth:
     def test_growth_takes_events_within_k_median_gaps_and_stops_beyond(self) -> None:
         """Events 2 s apart grow in; one 10 s further does not."""
         core = [(10.0, 10.5), (12.5, 13.0), (14.5, 15.0)]
-        gap = median_gap_s(core, floor_s=0.25, single_s=3.0)
+        gap = median_interval_s(core, floor_s=0.25, single_s=3.0)
         grew = grow(core, [(6.0, 6.5), (8.0, 8.5), (17.0, 17.5), (28.0, 28.5)], limit_s=2.5 * gap, stops=())
         assert grew.added == ((6.0, 6.5), (8.0, 8.5), (17.0, 17.5))
         assert grew.stopped == ("edge", "gap")
@@ -69,7 +69,7 @@ class TestGrowth:
 
     def test_a_one_event_cluster_grows_by_its_family_gap(self) -> None:
         """With one event the clustering gap is the base."""
-        assert median_gap_s([(13.9, 14.8)], floor_s=0.25, single_s=5.0) == 5.0
+        assert median_interval_s([(13.9, 14.8)], floor_s=0.25, single_s=5.0) == 5.0
 
     def test_growth_through_evidence_is_off_by_default_and_never_moves_the_decision(self) -> None:
         """Switched off the extent is the cluster's; switched on it grows and the decision stands."""
@@ -172,12 +172,13 @@ class TestVoice:
         assert voiced_onset(voiced, 0, 400, 20) == 120
 
     def test_a_run_at_the_vowels_pitch_continues_it(self) -> None:
-        """A run within the semitone bound continues; an octave away does not."""
+        """A run within the semitone bound continues, an octave away breaks, a fragment is passed over."""
         voiced = np.ones(100, dtype=bool)
         f0 = np.full(100, 200.0)
         q = {"semitones": 3.0, "voiced_min_s": 0.1}
-        assert continues((0, 50), 210.0, voiced, f0, q, 0.01)
-        assert not continues((0, 50), 400.0, voiced, f0, q, 0.01)
+        assert continues((0, 50), 210.0, voiced, f0, q, 0.01) == "continues"
+        assert continues((0, 50), 400.0, voiced, f0, q, 0.01) == "breaks"
+        assert continues((0, 5), 210.0, voiced, f0, q, 0.01) == "unread"
 
     def _reading(self, **kw: Any) -> PhonationReading:  # noqa: ANN401
         extent = {"start_s": 3.4, "end_s": 11.6, "onset_s": 3.4, "offset_s": 11.6, "voiced_onset_s": 3.4}

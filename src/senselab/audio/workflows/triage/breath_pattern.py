@@ -1499,7 +1499,8 @@ def breath_evidence(
         The evidence: the dominant cluster of events, grown where ``data/task_extent.yaml`` switches growth
         on, its extent with the preparatory inhale, and the decision. Where a breathing-band rhythm stands, a
         region of activity no candidate overlaps, outside speech and mostly unvoiced, is recovered as a
-        phase; where the modulation detector is on, its mostly unvoiced events off speech join growth.
+        phase; where the modulation detector is on, its mostly unvoiced events off speech runs and segments join
+        growth.
     """
     p = task_events_parameters()
     q = p["breath"]
@@ -1523,7 +1524,7 @@ def breath_evidence(
         modulated = [
             span
             for span in modulation_candidates(view, task_extent_parameters()["modulation"])
-            if unvoiced(span) and not any(s < span[1] and e > span[0] for s, e in [*speech, *speech_windows])
+            if unvoiced(span) and not any(s < span[1] and e > span[0] for s, e in speech)
         ]
     gap = float(q["gap_min_s"])
     if rhythm is not None:
@@ -1555,7 +1556,7 @@ def breath_stops(
     Args:
         store: The provenance store, read for the diarization.
         run_dir: The run directory its sidecar is relative to.
-        speech: Speech runs, segments and classifier windows.
+        speech: Speech runs and segments (lexical words and the voiced runs chained to them).
         words: Every lexical word's span.
 
     Returns:
@@ -1665,7 +1666,7 @@ def breath_pattern_of(
             speech=runs,
             speech_windows=windows,
             instructed_n=instructed_phases,
-            stops=breath_stops(store, run_dir, speech=[*runs, *windows], words=words),
+            stops=breath_stops(store, run_dir, speech=runs, words=words),
         )
         if view is not None
         else None

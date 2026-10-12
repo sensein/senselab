@@ -39,7 +39,7 @@ from senselab.audio.workflows.triage.task_extent import (
     enabled,
     extent_check,
     grow,
-    median_gap_s,
+    median_interval_s,
     modulation_events,
     overlaps,
     reachable_outside,
@@ -203,10 +203,10 @@ def modulation_candidates(view: GenericView, q: Mapping[str, Any] | None = None)
         q: The ``modulation`` section of ``data/task_extent.yaml``; the packaged one when None.
 
     Returns:
-        :func:`~senselab.audio.workflows.triage.task_extent.modulation_events` over the mean band level over
+        :func:`~senselab.audio.workflows.triage.task_extent.modulation_events` over the broadband level over
         the stationary floor.
     """
-    over = np.clip(view.frames.band_db - view.floor.band_db[None, :], 0.0, None).mean(axis=1)
+    over = np.clip(view.frames.level_db - view.broadband_floor_db, 0.0, None)
     return modulation_events(view.frames.times_s, over, view.hop_s, q)
 
 
@@ -779,7 +779,7 @@ def evidence_of(
     g = q.get("growth") or {}
     if cluster and grow_kind is not None and enabled("growth", q) and grow_kind in (g.get("families") or ()):
         core = [(e.start_s, e.end_s) for e in cluster]
-        base = median_gap_s(core, floor_s=float(g["gap_floor_s"]), single_s=gap_s)
+        base = median_interval_s(core, floor_s=float(g["gap_floor_s"]), single_s=gap_s)
         pool = {(e.start_s, e.end_s): e for e in found if e.snr_db >= low and e not in cluster}
         grew = grow(core, list(pool), limit_s=float(g["k"]) * base, stops=stops or ())
         grown = sorted([*cluster, *(pool[s] for s in grew.added)], key=lambda e: e.start_s)

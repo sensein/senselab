@@ -70,20 +70,20 @@ def overlaps(span: Span, spans: Sequence[Span]) -> bool:
     return any(a < span[1] and span[0] < b for a, b in spans)
 
 
-def median_gap_s(core: Sequence[Span], *, floor_s: float, single_s: float) -> float:
-    """The cluster's median gap between one event's end and the next one's start.
+def median_interval_s(core: Sequence[Span], *, floor_s: float, single_s: float) -> float:
+    """The cluster's median interval from one event's start to the next one's.
 
     Args:
         core: The cluster's events, in time order.
         floor_s: The least the median is read as.
-        single_s: The gap a one-event cluster is given.
+        single_s: The interval a one-event cluster is given.
 
     Returns:
-        The median gap, at least ``floor_s``; ``single_s`` with fewer than two events.
+        The median onset interval, at least ``floor_s``; ``single_s`` with fewer than two events.
     """
     if len(core) < 2:
         return float(single_s)
-    gaps = [max(0.0, b[0] - a[1]) for a, b in zip(core, core[1:])]
+    gaps = [max(0.0, b[0] - a[0]) for a, b in zip(core, core[1:])]
     return max(float(floor_s), float(np.median(gaps)))
 
 
@@ -95,7 +95,7 @@ class Growth:
         added: The events taken in, in time order.
         before_s: How far the start moved back.
         after_s: How far the end moved on.
-        limit_s: The largest gap growth crossed: ``k`` times the cluster's median gap.
+        limit_s: The largest gap growth crossed: ``k`` times the cluster's median onset interval.
         stopped: Why growth stopped before the start and after the end: ``edge`` (no event left), ``gap``
             (the next event lay beyond the limit) or ``stop`` (speech or another speaker lay in the way).
     """
