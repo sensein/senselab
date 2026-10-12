@@ -85,7 +85,13 @@ from senselab.audio.workflows.triage.nodes.common import (
 )
 from senselab.audio.workflows.triage.task_speech import write_task_speech
 from senselab.audio.workflows.triage.vocabulary import TASK
-from senselab.audio.workflows.triage.voice_phonation import PhonationReading, phonation_reading_of
+from senselab.audio.workflows.triage.voice_phonation import (
+    PhonationReading,
+    phonation_reading_of,
+    speech_words,
+    voice_phonation_parameters,
+    voice_task_extent,
+)
 from senselab.utils.prov_store import Entity, ProvStore
 
 NODE = "VOICE"
@@ -460,7 +466,49 @@ def read_phonation(store: ProvStore, run_dir: Path, task_family: str) -> Phonati
     """
     expectation = VOICE_EXPECTATIONS[task_family]
     direction = expectation.declared_direction if expectation.pattern is Pattern.GLIDE else None
-    return phonation_reading_of(store, run_dir, words=phonation_words(store), glide_direction=direction)
+    return phonation_reading_of(
+        store, run_dir, words=phonation_words(store), glide_direction=direction, agreed=agreed_speech_spans(store)
+    )
+
+
+def agreed_speech_spans(store: ProvStore) -> list[tuple[float, float]]:
+    """The lexical words every recogniser agrees on that are speech rather than the vowel transcribed.
+
+    Args:
+        store: The provenance store.
+
+    Returns:
+        ``(start, end)`` per agreed lexical word that
+        :func:`~senselab.audio.workflows.triage.voice_phonation.speech_words` keeps, in time order.
+    """
+    p = voice_phonation_parameters()
+    return sorted(
+        (float(word.extent[0]), float(word.extent[1]))
+        for word in lexical(consensus_words(store))
+        if word.extent is not None
+        and word.attributes.get("outcome") == "agreement"
+        and speech_words([(float(word.extent[0]), float(word.extent[1]), word_text(word))], p)
+    )
+
+
+def count_in_span(task_family: str, store: ProvStore, params: BranchParams) -> tuple[float, float] | None:
+    """Where the declared count-in was read, from its first matched token to its last.
+
+    Args:
+        task_family: The declared family, a key of :data:`VOICE_EXPECTATIONS`.
+        store: The provenance store.
+        params: The operating points, for the token normalisation.
+
+    Returns:
+        The span, or None where the family declares no count-in or none of it was read.
+    """
+    expectation = VOICE_EXPECTATIONS[task_family]
+    if expectation.pattern is not Pattern.SUSTAINED or expectation.tokens is None:
+        return None
+    matched, _ = ordered_run(expectation.tokens, lexical(consensus_words(store)), params.p_normalise)
+    if not matched:
+        return None
+    return word_extent(matched[0][1])[0], word_extent(matched[-1][1])[1]
 
 
 def phonation_attributes(read: PhonationReading | tuple[str, ...]) -> dict[str, Any]:
@@ -509,6 +557,8 @@ def align_voice(
     params.bind(expectation.pattern, task_family)
     evidence = read_evidence(store, run_dir)
     read = read_phonation(store, run_dir, task_family) if reading is None else reading
+    if isinstance(read, PhonationReading) and not read.check:
+        read = voice_task_extent(read, count_in_span(task_family, store, params))
     components: list[Proposal] = []
     findings: list[Finding] = []
     if expectation.pattern is Pattern.SUSTAINED:
@@ -520,7 +570,7 @@ def align_voice(
     if read.extent is None:
         findings.append(count("attempt_count", 0, None))
         return Result(components, findings)
-    extent = (float(read.extent["start_s"]), float(read.extent["end_s"]))
+    extent = read.task_extent or (float(read.extent["start_s"]), float(read.extent["end_s"]))
     record = read.record()
     plain = next(
         (
@@ -537,14 +587,14 @@ def align_voice(
             extent,
             *read_off,
             production="glide" if expectation.pattern is Pattern.GLIDE else "sustained",
-            extent_from="phonation",
+            extent_from="count_in_and_phonation" if read.task_extent is not None else "phonation",
             onset_s=read.extent["onset_s"],
             holds_n=record["holds_n"],
             longest_hold_s=record["longest_hold_s"],
             voiced_fraction=record["voiced_fraction"],
         )
     )
-    start, end = extent
+    start, end = float(read.extent["start_s"]), float(read.extent["end_s"])
     phonation_s = end - float(read.extent["onset_s"])
     findings.extend(
         [
@@ -743,7 +793,10 @@ def voice(
 
     def align(task_family: str, store: ProvStore, hint: AudioHints | None, params: BranchParams) -> Result:
         """Bind the run directory the mode contract does not carry. Names match ``AlignMode``."""
-        readings[task_family] = read_phonation(store, run_dir, task_family)
+        read = read_phonation(store, run_dir, task_family)
+        if isinstance(read, PhonationReading):
+            read = voice_task_extent(read, count_in_span(task_family, store, params))
+        readings[task_family] = read
         return align_voice(task_family, store, hint, params, run_dir=run_dir, reading=readings[task_family])
 
     def detect(store: ProvStore, params: BranchParams) -> Result:
