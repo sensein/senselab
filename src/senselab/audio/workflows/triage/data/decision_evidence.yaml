@@ -4,7 +4,7 @@
 # a category with in / not in against a list of categories; a reported reading has neither.
 # `producer` names the unit of specs/20261007-task-events-in-background/design.md that emits it;
 # an item a later unit produces is absent from the tables until that unit lands.
-version: 14
+version: 15
 groups:
   acquisition:
     admit_outcome:
@@ -175,6 +175,19 @@ groups:
       unit:
       producer: DDK task layer
       meaning: the task extent over the recording's duration
+  extent:
+    extent_complete:
+      unit:
+      producer: r37 extents
+      meaning: whether the task extent holds the whole task and nothing beyond it (complete, too_narrow, too_wide, both, no_task), in [complete]; not complete reviews under data/task_extent.yaml completeness.reviews, else an annotation
+    task_events_outside_extent:
+      unit: events
+      producer: r37 extents
+      meaning: task events (or words read as the stimulus, or a count-in) outside the extent with no speech between them and it; reported
+    extent_growth_s:
+      unit: s
+      producer: r37 extents
+      meaning: how far bounded growth moved a breath or cough extent (data/task_extent.yaml growth); reported
   speech:
     lexical_words:
       unit: words

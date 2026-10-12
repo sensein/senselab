@@ -32,6 +32,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
+import numpy as np
 import yaml
 
 from senselab.audio.data_structures import AudioHints
@@ -107,9 +108,9 @@ from senselab.audio.workflows.triage.nodes.redact import (
 )
 from senselab.audio.workflows.triage.nodes.voice import PHONATION_READING
 from senselab.audio.workflows.triage.quality_join import QUALITY_JOIN
-from senselab.audio.workflows.triage.routing_analysis.families import SYLLABLE_REPETITION
+from senselab.audio.workflows.triage.routing_analysis.families import LEXICAL_SPEECH, SYLLABLE_REPETITION
+from senselab.audio.workflows.triage.task_extent import STIMULUS_EXTENT_CHECK, task_extent_parameters
 from senselab.audio.workflows.triage.task_lexicon import task_lexicon
-from senselab.audio.workflows.triage.routing_analysis.families import LEXICAL_SPEECH
 from senselab.audio.workflows.triage.task_speech import (
     TASK_SPEECH_READING,
     item_set_family,
@@ -634,6 +635,7 @@ def _task_evidence(
         if speech_reading is not None
         else {}
     )
+    check, growth_s = extent_reading(store, reading, cough, phonation, ddk)
     return TaskEvidence(
         owning_branches=owners,
         duration_s=duration,
@@ -689,6 +691,10 @@ def _task_evidence(
         narrative=narrative_family(declared_family),
         separated_speakers_n=separated_speakers_n(store),
         speech_before_task=_speech_before_task(store, declared_family),
+        extent_check=check,
+        extent_reviews=bool(task_extent_parameters()["completeness"]["reviews"]),
+        extent_growth_s=growth_s,
+        atypical=atypical_readings(cough, ddk),
     )
 
 
@@ -728,6 +734,77 @@ def _speech_before_task(store: ProvStore, declared_family: str | None) -> dict[s
     if not extents:
         return {}
     return speech_before(lexical_words(store), min(float(extent[0]) for extent in extents))
+
+
+def extent_reading(
+    store: ProvStore,
+    breath: Mapping[str, Any] | None,
+    cough: Mapping[str, Any] | None,
+    phonation: Mapping[str, Any] | None,
+    ddk: Mapping[str, Any] | None,
+) -> tuple[dict[str, Any], float | None]:
+    """The owning branch's completeness reading of the task extent, and how far growth moved it.
+
+    Args:
+        store: The provenance store, read for SPEECH's ``stimulus_extent_check``.
+        breath: AIRWAY's breath reading, or None.
+        cough: AIRWAY's cough reading, or None.
+        phonation: VOICE's phonation reading, or None.
+        ddk: SPEECH's syllable-task reading, or None.
+
+    Returns:
+        ``(check, growth seconds)``: the first reading's ``extent_check`` (a stimulus's from its measurement)
+        and its growth; ``({}, None)`` where none was read.
+    """
+    for reading in (breath, cough):
+        if reading is not None:
+            evidence = dict((reading.get("reading") or {}).get("evidence") or {})
+            growth = evidence.get("growth") or {}
+            seconds = growth.get("seconds")
+            return dict(evidence.get("extent_check") or {}), None if seconds is None else float(seconds)
+    if phonation is not None:
+        return dict(phonation.get("extent_check") or {}), None
+    if ddk is not None:
+        return dict(((ddk.get("reading") or {}).get("evidence") or {}).get("extent_check") or {}), None
+    measurement = find_measurement(store, STIMULUS_EXTENT_CHECK)
+    if measurement is None:
+        return {}, None
+    attributes = dict(measurement.attributes)
+    return {
+        "status": attributes.get("value"),
+        "outside_n": attributes.get("outside_n", 0),
+        "checks": list(attributes.get("checks") or ()),
+    }, None
+
+
+def atypical_readings(cough: Mapping[str, Any] | None, ddk: Mapping[str, Any] | None) -> tuple[str, ...]:
+    """The readings of an attempted cough or syllable task outside its family's corpus range.
+
+    Args:
+        cough: AIRWAY's cough reading, or None.
+        ddk: SPEECH's syllable-task reading, or None.
+
+    Returns:
+        ``cough_event_s=<median>`` where the cough events' median duration exceeds ``atypical.cough_event_s_max``,
+        and ``ddk_rate_hz=<rate>`` where the syllable rate lies outside ``atypical.ddk_rate_hz``
+        (``data/task_extent.yaml``); a null bound reads nothing.
+    """
+    q = task_extent_parameters()["atypical"]
+    out: list[str] = []
+    events = (((cough or {}).get("reading") or {}).get("evidence") or {}).get("events") or ()
+    durations = [float(e["end_s"]) - float(e["start_s"]) for e in events]
+    bound = q.get("cough_event_s_max")
+    if durations and bound is not None and float(np.median(durations)) > float(bound):
+        out.append(f"cough_event_s={float(np.median(durations)):.2f}")
+    rate = ((ddk or {}).get("annotations") or {}).get("syllable_rate_hz")
+    low, high = (list(q.get("ddk_rate_hz") or ()) + [None, None])[:2]
+    if (
+        rate is not None
+        and (ddk or {}).get("decision") != "absent"
+        and ((low is not None and float(rate) < float(low)) or (high is not None and float(rate) > float(high)))
+    ):
+        out.append(f"ddk_rate_hz={float(rate):.2f}")
+    return tuple(out)
 
 
 def _route_state(store: ProvStore) -> tuple[str | None, list[str]]:

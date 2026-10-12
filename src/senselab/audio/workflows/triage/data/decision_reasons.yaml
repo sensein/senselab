@@ -4,7 +4,7 @@
 # Owner, 2026-10-10: consolidated to these codes; the release ground is its own column (release_reason).
 # Derivation: specs/20261007-task-events-in-background/design.md ("Decision table", "Reasons consolidated",
 # "The residual's other voice is attributed", "The reviewer reads the phrases").
-version: 13
+version: 14
 precedence:            # discard reasons first, then incomplete, then the recording, then the content
 - unreadable
 - task_too_short
@@ -16,6 +16,7 @@ precedence:            # discard reasons first, then incomplete, then the record
 - other_speaker
 - off_task_speech
 - weak_events
+- extent_incomplete
 - task_not_conforming
 - atypical_recording
 - identifying_content
@@ -30,6 +31,7 @@ meaning:
   other_speaker: someone other than the participant speaks -- a background voice, an examiner, an assistant; the residual's other voice only where COHORT or a reader attributes it
   off_task_speech: the participant speaks outside the task's own content
   weak_events: the task's events stand too weakly over the background to decide, or the streams disagree on them
+  extent_incomplete: the task extent leaves part of the task out, or takes in more than the task (data/task_extent.yaml completeness)
   task_not_conforming: the task was performed, but not as instructed
   atypical_recording: the recording falls outside its family's corpus distribution (COHORT)
   identifying_content: content that may identify the participant needs a reader; every release but as_is
@@ -65,6 +67,7 @@ keys:                  # exact verdict ground key -> reason
   ddk_review_weak_events: weak_events
   discard_contested: weak_events
   ddk_review_identity: task_not_conforming
+  extent_incomplete: extent_incomplete
   speech_no_lexical_item: task_not_conforming
   other_voice_in_task: other_speaker
   reviewer_second_speaker: other_speaker
@@ -110,6 +113,7 @@ annotations:           # ground keys and prefixes the fold writes only as annota
 - speaker_gate_recording_condition   # r37 C1: an uncorroborated speaker-gate fire on a hot or clipped participant
 - off_task_aside                     # r37 G1: an off-task aside in a narrative family
 - speech_before_task                 # r37 G3: lexical speech before a lexical task's extent
+- atypical_attempt
 reviewed_releases:     # owner, 2026-10-10: masks not yet validated; every release but as_is is reviewed (release_reviewed)
 - redacted
 - withheld

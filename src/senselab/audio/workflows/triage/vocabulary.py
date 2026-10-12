@@ -47,6 +47,7 @@ from senselab.audio.workflows.triage.discard_replaced_task import (
     replaced_task,
 )
 from senselab.audio.workflows.triage.discard_replaced_task import enabled as replaced_task_enabled
+from senselab.audio.workflows.triage.task_extent import COMPLETE as EXTENT_COMPLETE
 
 GRAPH_ORDER = (
     "ADMIT",
@@ -452,6 +453,13 @@ class TaskEvidence:
             attributed to, or None where nothing was separated.
         speech_before_task: The lexical speech before the task's extent in a lexical family -- ``words_n``,
             ``start_s``, ``end_s`` and ``seconds`` -- or empty where none stands.
+        extent_check: The owning branch's completeness reading of the task extent (``task_extent.ExtentCheck``):
+            ``status``, ``outside_n`` and ``checks``; empty where none was read.
+        extent_reviews: Whether an extent that is not complete reviews (``data/task_extent.yaml``
+            ``completeness.reviews``); otherwise it is an annotation.
+        extent_growth_s: How far bounded growth moved the task extent, or None where growth did not run.
+        atypical: The readings of an attempted airway or syllable task that fall outside its family's corpus
+            range (``data/task_extent.yaml`` ``atypical``); empty where none does.
     """
 
     owning_branches: tuple[str, ...] = ()
@@ -494,6 +502,10 @@ class TaskEvidence:
     narrative: bool = False
     separated_speakers_n: int | None = None
     speech_before_task: dict[str, Any] = field(default_factory=dict)
+    extent_check: dict[str, Any] = field(default_factory=dict)
+    extent_reviews: bool = False
+    extent_growth_s: float | None = None
+    atypical: tuple[str, ...] = ()
 
     @property
     def non_lexical(self) -> bool:
@@ -989,6 +1001,10 @@ KEY_UNPLACED_UNREAD = "unplaced_finding_unread"
 KEY_SPEAKER_GATE_RECORDING_CONDITION = "speaker_gate_recording_condition"
 KEY_OFF_TASK_ASIDE = "off_task_aside"
 KEY_SPEECH_BEFORE_TASK = "speech_before_task"
+KEY_EXTENT_INCOMPLETE = "extent_incomplete"
+KEY_ATYPICAL_ATTEMPT = "atypical_attempt"
+EXTENT_INCOMPLETE = "the task extent does not hold the whole task, or holds more than it"
+ATYPICAL_ATTEMPT = "the task was attempted, with events outside its family's corpus range"
 
 GROUND_KEYS = (
     KEY_UNMEASURABLE,
@@ -1047,6 +1063,8 @@ GROUND_KEYS = (
     KEY_SPEAKER_GATE_RECORDING_CONDITION,
     KEY_OFF_TASK_ASIDE,
     KEY_SPEECH_BEFORE_TASK,
+    KEY_EXTENT_INCOMPLETE,
+    KEY_ATYPICAL_ATTEMPT,
     *COHORT_GROUND_KEYS,
     *COHORT_ANNOTATION_KEYS,
 )
@@ -2762,9 +2780,34 @@ def _task_items(task: TaskEvidence) -> list[EvidenceItem]:
     share = task.task_speech.get("phrase_share")
     if task.item_set and share is not None:
         items.append(item(PHRASE_SHARE, share, ANNOTATION, unit="fraction"))
+    items.extend(_extent_items(task))
     items.extend(_join_items(task.quality))
     if task.speech_before_task.get("words_n"):
         items.append(item(SPEECH_BEFORE_TASK_ITEM, task.speech_before_task.get("seconds"), ANNOTATION, unit="s"))
+    return items
+
+
+def _extent_items(task: TaskEvidence) -> list[EvidenceItem]:
+    """The task extent's completeness, the task events left outside it, and how far it grew.
+
+    Args:
+        task: The task evidence the fold read.
+
+    Returns:
+        ``extent_complete`` against ``[complete]`` (review where ``extent_reviews``, else an annotation),
+        ``task_events_outside_extent`` and, where growth ran, ``extent_growth_s``; empty where no completeness
+        was read.
+    """
+    status = task.extent_check.get("status")
+    if status is None:
+        return []
+    effect = PASS if status == EXTENT_COMPLETE else REVIEW if task.extent_reviews else ANNOTATION
+    items = [
+        item("extent_complete", str(status), effect, comparison="in", threshold=[EXTENT_COMPLETE]),
+        item("task_events_outside_extent", int(task.extent_check.get("outside_n") or 0), ANNOTATION, unit="events"),
+    ]
+    if task.extent_growth_s is not None:
+        items.append(item("extent_growth_s", task.extent_growth_s, ANNOTATION, unit="s"))
     return items
 
 
@@ -3509,6 +3552,15 @@ def fold_file_verdict(
             KEY_COUGH_REVIEW_LOW_CONFIDENCE,
             by_branch[_AIRWAY].kind if _AIRWAY in by_branch else None,
         )
+    extent_status = task_evidence.extent_check.get("status")
+    owner = task_evidence.owning_branches[0] if task_evidence.owning_branches else _VERDICT
+    if extent_status is not None and extent_status != EXTENT_COMPLETE:
+        checks = ", ".join(str(check) for check in task_evidence.extent_check.get("checks") or ())
+        (flag if task_evidence.extent_reviews else annotate)(
+            owner, f"{EXTENT_INCOMPLETE}: {extent_status} ({checks})", KEY_EXTENT_INCOMPLETE
+        )
+    if task_evidence.atypical:
+        annotate(owner, f"{ATYPICAL_ATTEMPT}: {', '.join(task_evidence.atypical)}", KEY_ATYPICAL_ATTEMPT)
     voice_kind = by_branch[_VOICE].kind if _VOICE in by_branch else None
     if task_evidence.voice_mismatch is not None and task_evidence.voice_found:
         annotate(_VOICE, f"{TASK_MISMATCH}: {task_evidence.voice_mismatch}", KEY_TASK_MISMATCH, voice_kind)

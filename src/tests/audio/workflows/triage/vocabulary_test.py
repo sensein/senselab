@@ -2207,6 +2207,55 @@ class TestTheDeclaredTaskDecides:
         assert folded.triage is Triage.PASS
         assert folded.discard_ground is None
 
+    @pytest.mark.parametrize("reviews", [True, False])
+    def test_an_incomplete_extent_reviews_when_switched_on_and_is_noted_otherwise(self, reviews: bool) -> None:
+        """A5: not complete reviews under completeness.reviews; off, it is an annotation and the pass stands."""
+        folded = fold_file_verdict(
+            self._ADMIT_OK,
+            branch_reports=[_report("SPEECH", "speech", conformance=True)],
+            spans_by_node=_found("SPEECH"),
+            branch_decisions=_decisions(SPEECH=ROUTED, AIRWAY=DECLINED, VOICE=DECLINED),
+            ran={"SPEECH": RunState.COMPLETED},
+            hint_claims={"SPEECH": True},
+            route_state="routed",
+            declared_family="harvard-sentences-list",
+            redaction=RedactionEvidence(lexical_words_n=8, scanned=True),
+            task=TaskEvidence(
+                owning_branches=("SPEECH",),
+                duration_s=3.5,
+                minimum_duration_s=1.0,
+                extent_check={"status": "too_narrow", "outside_n": 1, "checks": ["narrow:tokens_outside"]},
+                extent_reviews=reviews,
+            ),
+        )
+        items = {entry.name: entry for entry in folded.evidence}
+        assert items["extent_complete"].value == "too_narrow"
+        assert items["task_events_outside_extent"].value == 1
+        if reviews:
+            assert folded.triage is Triage.REVIEW and "extent_incomplete" in folded.reason_keys
+        else:
+            assert folded.triage is Triage.PASS and "extent_incomplete" in folded.annotation_keys
+
+    def test_an_atypical_attempt_is_an_annotation(self) -> None:
+        """E2: an atypical attempt is data, never a reason."""
+        folded = fold_file_verdict(
+            self._ADMIT_OK,
+            branch_reports=[_report("SPEECH", "speech", conformance=True)],
+            spans_by_node=_found("SPEECH"),
+            branch_decisions=_decisions(SPEECH=ROUTED, AIRWAY=DECLINED, VOICE=DECLINED),
+            ran={"SPEECH": RunState.COMPLETED},
+            hint_claims={"SPEECH": True},
+            route_state="routed",
+            declared_family="harvard-sentences-list",
+            redaction=RedactionEvidence(lexical_words_n=8, scanned=True),
+            task=TaskEvidence(
+                owning_branches=("SPEECH",), duration_s=3.5, minimum_duration_s=1.0, atypical=("ddk_rate_hz=2.00",)
+            ),
+        )
+        assert folded.triage is Triage.PASS
+        assert "atypical_attempt" in folded.annotation_keys
+        assert not folded.reason_keys
+
     def test_an_unexplained_route_is_decided_on_the_owner_report(self) -> None:
         """No branch routed, but the owning branch ran and found none of the task: decided on that, no rerun."""
         folded = fold_file_verdict(
