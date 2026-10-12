@@ -22,15 +22,16 @@ The design is in ``specs/20261002-subprocess-venv-locks/design.md``.
 from __future__ import annotations
 
 import hashlib
-import json
 import re
-import shutil
 import subprocess
 import tempfile
 import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
+
+from senselab.utils import uv_tools
+from senselab.utils.uv_tools import find_uv, is_torch_family, normalize_name
 
 LOCK_DIR = Path(__file__).parent / "data" / "venv_locks"
 """Where the committed locks live."""
@@ -43,8 +44,6 @@ QUARANTINED = ("lightning!=2.6.2,!=2.6.3", "pytorch-lightning!=2.6.2,!=2.6.3")
 
 TORCH_PACKAGES = frozenset({"torch", "torchaudio"})
 """Installed from the host's PyTorch index, never from the lock body."""
-
-_CUDA_VARIANT_PREFIXES = ("nvidia-", "triton", "pytorch-triton", "cuda-")
 
 PYTORCH_INDEX_BASE = "https://download.pytorch.org/whl"
 
@@ -81,11 +80,6 @@ class VenvLock:
     header: dict[str, str] = field(default_factory=dict)
 
 
-def normalize_name(name: str) -> str:
-    """Return a distribution name normalized per PEP 503."""
-    return re.sub(r"[-_.]+", "-", name).lower()
-
-
 def requirements_sha256(
     requirements: list[str], python_version: str, max_cuda_version: Optional[tuple[int, int]] = None
 ) -> str:
@@ -99,13 +93,12 @@ def requirements_sha256(
     Returns:
         A hex SHA-256.
     """
-    payload = {
-        "requirements": sorted(requirements),
+    fields = {
         "ipc": list(IPC_REQUIREMENTS),
         "python": python_version,
         "max_cuda": list(max_cuda_version) if max_cuda_version else None,
     }
-    return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+    return uv_tools.requirements_sha256(requirements, header_fields=fields)
 
 
 def lock_path(name: str, lock_dir: Path = LOCK_DIR) -> Path:
@@ -294,13 +287,6 @@ def discover_backends(package_root: Optional[Path] = None) -> dict[str, Backend]
     return found
 
 
-def _uv() -> str:
-    found = shutil.which("uv")
-    if not found:
-        raise VenvLockError("uv is not on PATH; it is needed to compile a lock")
-    return found
-
-
 def _compile(
     in_file: Path,
     python_version: str,
@@ -311,7 +297,7 @@ def _compile(
     no_emit: tuple[str, ...] = (),
 ) -> str:
     cmd = [
-        _uv(),
+        find_uv(),
         "pip",
         "compile",
         str(in_file),
@@ -374,7 +360,7 @@ def torch_only_cuda_packages(packages: dict[str, tuple[str, set[str]]]) -> list[
             if name not in family and parents and parents <= family:
                 family.add(name)
                 changed = True
-    return sorted(name for name in family if name in TORCH_PACKAGES or name.startswith(_CUDA_VARIANT_PREFIXES))
+    return sorted(name for name in family if is_torch_family(name, roots=TORCH_PACKAGES))
 
 
 def top_cuda_tag(max_cuda_version: Optional[tuple[int, int]]) -> str:
@@ -496,7 +482,7 @@ def compile_lock(
             raise VenvLockError(f"'{name}': no torch within the requirements is served on every index: {notes}")
         no_emit = tuple(torch_only_cuda_packages(packages)) if pins else ()
         body = _compile(in_file, python_version, constraints, exclude_newer, hashes=True, no_emit=no_emit)
-    uv_version = subprocess.run([_uv(), "--version"], capture_output=True, text=True).stdout.strip()
+    uv_version = subprocess.run([find_uv(), "--version"], capture_output=True, text=True).stdout.strip()
     lines = [
         f"# senselab subprocess-venv lock: {name}",
         f"# requirements-sha256: {requirements_sha256(requirements, python_version, max_cuda_version)}",

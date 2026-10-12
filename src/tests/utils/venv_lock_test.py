@@ -189,7 +189,7 @@ def test_torch_is_bounded_down_until_every_index_serves_it(monkeypatch: pytest.M
 
     monkeypatch.setattr(venv_lock, "_compile", fake_compile)
     monkeypatch.setattr(venv_lock, "wheel_on_index", lambda pkg, version, tag, py, platform: version != "2.9.0")
-    monkeypatch.setattr(venv_lock, "_uv", lambda: "uv")
+    monkeypatch.setattr(venv_lock, "find_uv", lambda: "uv")
 
     text = compile_lock("t", ["torch>=2.8", "foo"], "3.12", exclude_newer="2026-10-02T00:00:00Z")
 

@@ -273,7 +273,13 @@ def _safe_key(repo_id: str, revision: str) -> str:
     return f"{repo_id.replace('/', '--')}--{revision}"
 
 
-def is_hf_model_cached(repo_id: str, revision: str = "main", repo_type: str = "model") -> bool:
+def is_hf_model_cached(
+    repo_id: str,
+    revision: str = "main",
+    repo_type: str = "model",
+    *,
+    cache_dir: str | Path | None = None,
+) -> bool:
     """Check whether a HuggingFace model snapshot exists in the local cache.
 
     This is a **filesystem-only** check — no network calls are made, so it is already
@@ -283,6 +289,16 @@ def is_hf_model_cached(repo_id: str, revision: str = "main", repo_type: str = "m
     believed it skipped the download and handed back a SHA anyway, and
     :func:`resolve_model` then wrote ``refs/<ref>`` for a snapshot that had never been
     staged — a cache entry that looks resolvable and is not.
+
+    Args:
+        repo_id: The Hub repo id.
+        revision: A branch, tag or commit SHA.
+        repo_type: ``"model"``, ``"dataset"`` or ``"space"``.
+        cache_dir: A Hub cache to check instead of the process-global one, whose path
+            ``huggingface_hub`` fixes at import.
+
+    Returns:
+        Whether the snapshot's ``config.json`` is in the cache.
     """
     try:
         from huggingface_hub import try_to_load_from_cache
@@ -292,6 +308,7 @@ def is_hf_model_cached(repo_id: str, revision: str = "main", repo_type: str = "m
             filename="config.json",
             revision=revision,
             repo_type=repo_type,
+            cache_dir=cache_dir,
         )
         return isinstance(result, str)
     except Exception:

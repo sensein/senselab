@@ -50,6 +50,7 @@ from senselab.utils.cuda_probe import (
     pick_torch_index,
 )
 from senselab.utils.file_lock import SharedFileLock
+from senselab.utils.uv_tools import find_uv
 from senselab.utils.venv_lock import VenvLock, load_lock
 
 logger = logging.getLogger("senselab")
@@ -273,38 +274,6 @@ def _cache_dir() -> Path:
     return cache
 
 
-def _find_uv() -> str:
-    """Find the uv binary, auto-installing if not present.
-
-    Checks PATH and common install locations. If uv is not found,
-    installs it automatically (needed for environments like Google Colab
-    where uv is not pre-installed).
-    """
-    uv = shutil.which("uv")
-    if uv:
-        return uv
-    for candidate in [
-        Path.home() / ".local" / "bin" / "uv",
-        Path.home() / ".cargo" / "bin" / "uv",
-    ]:
-        if candidate.is_file():
-            return str(candidate)
-
-    # Auto-install uv (e.g., on Google Colab or fresh environments)
-    logger.info("uv not found — installing automatically...")
-    result = subprocess.run(
-        ["pip", "install", "uv"],
-        capture_output=True,
-        text=True,
-        timeout=120,
-    )
-    if result.returncode == 0:
-        uv = shutil.which("uv")
-        if uv:
-            return uv
-    raise FileNotFoundError("uv not found and auto-install failed. Install with: pip install uv")
-
-
 # ── Venv management ──────────────────────────────────────────────────
 
 # Overrides the build-lock timeout below; see
@@ -462,7 +431,7 @@ def _ensure_venv_once(
                 logger.debug("Reusing existing venv: %s", venv_dir)
                 return venv_dir
 
-        uv = _find_uv()
+        uv = find_uv(install=True)
         py_ver = lock.python
         index_label = torch_index.tag if torch_index is not None else "n/a (torch-free)"
         logger.info(
