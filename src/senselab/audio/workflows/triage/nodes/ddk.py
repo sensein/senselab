@@ -28,6 +28,7 @@ from senselab.audio.workflows.triage.ddk_task import (
     ddk_parameters,
     ddk_reading_of,
 )
+from senselab.audio.workflows.triage.live_evidence import declared_task, recording_stem
 from senselab.audio.workflows.triage.nodes.branches import (
     BranchParams,
     EnvelopeTrack,
@@ -59,6 +60,7 @@ from senselab.audio.workflows.triage.nodes.common import (
     word_hull,
 )
 from senselab.audio.workflows.triage.task_events import GenericView, generic_view_of
+from senselab.audio.workflows.triage.task_extent import agreed_speech_runs, task_extent_parameters
 from senselab.utils.prov_store import Entity, ProvStore
 
 RATE = "ddk_syllable_rate_from_envelope_modulation_hz"
@@ -611,8 +613,23 @@ def ddk_reading(
         voicing=reads.voicing,
         required_count=None if required is None else required.value,
         recording_s=duration(stream_extent(store)),
+        speech_runs=ddk_speech_runs(store),
     )
     return reading, ids
+
+
+def ddk_speech_runs(store: ProvStore) -> list[tuple[float, float]]:
+    """The runs of agreed non-task words a syllable train is trimmed at.
+
+    Args:
+        store: The provenance store, read for the consensus words and the recording's declared family.
+
+    Returns:
+        ``task_extent.agreed_speech_runs`` over the consensus words, at ``trim.ddk.agreed_run_min``.
+    """
+    family = declared_task(recording_stem(store))[1] or None
+    run_min = int(task_extent_parameters()["trim"]["ddk"]["agreed_run_min"])
+    return agreed_speech_runs(lexical_words(store), family, run_min)
 
 
 def align_ddk(
