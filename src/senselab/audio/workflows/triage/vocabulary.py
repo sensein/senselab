@@ -23,8 +23,10 @@ from senselab.audio.workflows.triage.cohort_fold import (
     cohort_annotations,
     cohort_evidence,
     cohort_grounds,
+    hot_or_clipped,
     nonmatch_spans,
     other_speaker_block,
+    participant_matched,
 )
 from senselab.audio.workflows.triage.decision import (
     ANNOTATION,
@@ -339,6 +341,8 @@ class RedactionEvidence:
         masks_n: How many masks REDACT planned over the recording.
         masks_final_n: How many masks stand once the reviewer's unmasks and the content-word trim
             are applied; see :func:`~senselab.audio.workflows.triage.nodes.redact.mask_plan`.
+        pii_masks_final_n: How many of those hide identifying content: every standing mask but those over
+            speech outside the task.
         masks_changed: Whether any planned mask lost a word.
         reviewer_unmasked_n: How many words the reviewer's ``release`` entries unmasked.
         policy_masks_n: How many masks the redaction policy itself placed, over words no detector
@@ -362,6 +366,7 @@ class RedactionEvidence:
     coverage_failed: bool = False
     masks_n: int = 0
     masks_final_n: int = 0
+    pii_masks_final_n: int = 0
     masks_changed: bool = False
     reviewer_unmasked_n: int = 0
     policy_masks_n: int = 0
@@ -440,6 +445,13 @@ class TaskEvidence:
             reviewed (``data/task_speech.yaml`` ``words_min``), or None where no such reading is weighed.
         item_set: Whether the declared family is an item-set family (``task_content.yaml``
             ``open_vocabulary_families``), asked about phrases instead of items rather than off-task speech.
+        narrative: Whether the declared family is an open or narrative lexical family (a free response:
+            story retell, free speech, picture description, open response), where an off-task aside is
+            an annotation.
+        separated_speakers_n: How many distinct speakers the separated sources inside the task extent are
+            attributed to, or None where nothing was separated.
+        speech_before_task: The lexical speech before the task's extent in a lexical family -- ``words_n``,
+            ``start_s``, ``end_s`` and ``seconds`` -- or empty where none stands.
     """
 
     owning_branches: tuple[str, ...] = ()
@@ -479,6 +491,9 @@ class TaskEvidence:
     task_speech: dict[str, Any] = field(default_factory=dict)
     task_speech_words_min: int | None = None
     item_set: bool = False
+    narrative: bool = False
+    separated_speakers_n: int | None = None
+    speech_before_task: dict[str, Any] = field(default_factory=dict)
 
     @property
     def non_lexical(self) -> bool:
@@ -872,6 +887,12 @@ MASKED_TEXT_FREE = "masked_text_free_of_identifiers"
 OFF_TASK_LEVELS = ("some", "extensive")
 """The reviewer's ``off_task_speech`` levels that read off-task speech."""
 
+OFF_TASK_ASIDE_LEVEL = "some"
+"""The reviewer's ``off_task_speech`` level that, in a narrative family, is an aside rather than a flag."""
+
+SPEECH_BEFORE_TASK_ITEM = "speech_before_task_s"
+"""The evidence item carrying how long the speech before a lexical task's extent lasts."""
+
 PHRASES_OCCASIONAL = "occasional"
 PHRASES_PREDOMINANT = "predominant"
 """The ``phrases_instead_of_items`` levels: ``predominant`` reviews, ``occasional`` annotates."""
@@ -892,6 +913,14 @@ proposes nothing contributes no ground. Controlled vocabulary, with the categori
 redactions appended; the substrings and the reasoning stay in the store's ``redaction_llm_review``
 measurements.
 """
+
+SPEAKER_GATE_RECORDING_CONDITION = (
+    "the speaker gate fired on a hot or clipped participant's recording and nothing else reads a second voice"
+)
+OFF_TASK_ASIDE = "the redaction reviewer read an off-task aside in a narrative task"
+SPEECH_BEFORE_TASK = "speech stands before the task's extent"
+OTHER_VOICE_PARTICIPANT = "other_voice_participant"
+"""The second opinion's ``other_voice`` where COHORT reads the participant: the participant's own speech."""
 
 EXTRA_SPEAKER_IN_EXTENT = "another speaker holds part of the task extent"
 """The flag ground the multi-speaker gate contributes to the triage axis.
@@ -957,6 +986,9 @@ KEY_RESIDUAL_SPEECH_UNATTRIBUTED = "residual_speech_unattributed"
 KEY_RESIDUAL_SPEECH_OUTSIDE_TASK = "residual_speech_outside_task"
 KEY_UNPLACED_OPEN = "unplaced_finding_open"
 KEY_UNPLACED_UNREAD = "unplaced_finding_unread"
+KEY_SPEAKER_GATE_RECORDING_CONDITION = "speaker_gate_recording_condition"
+KEY_OFF_TASK_ASIDE = "off_task_aside"
+KEY_SPEECH_BEFORE_TASK = "speech_before_task"
 
 GROUND_KEYS = (
     KEY_UNMEASURABLE,
@@ -1012,6 +1044,9 @@ GROUND_KEYS = (
     KEY_UNPLACED_OPEN,
     KEY_UNPLACED_UNREAD,
     TASK_REPLACED_BY_TALK,
+    KEY_SPEAKER_GATE_RECORDING_CONDITION,
+    KEY_OFF_TASK_ASIDE,
+    KEY_SPEECH_BEFORE_TASK,
     *COHORT_GROUND_KEYS,
     *COHORT_ANNOTATION_KEYS,
 )
@@ -1746,6 +1781,58 @@ def second_opinion_not_free(opinion: Mapping[str, Any] | None, confident_no: flo
         return None
     p = probability_yes(value)
     return p if p <= confident_no else None
+
+
+def opinion_reads_other_voice(
+    opinion: Mapping[str, Any] | None, confident_yes: float | None, cohort: Mapping[str, Any] | None
+) -> bool:
+    """Whether the second opinion confidently reads another voice that COHORT does not read as the participant.
+
+    Args:
+        opinion: The ``second_opinion_answers`` attributes, or None.
+        confident_yes: The probability at or above which an answer is a confident yes.
+        cohort: COHORT's ``cohort_reading`` attributes, or None.
+
+    Returns:
+        True where the opinion answered, its ``other_voice`` is at or above ``confident_yes``, and COHORT's
+        comparison does not read the participant (:func:`participant_matched`).
+    """
+    held = dict(opinion or {})
+    value = (held.get("probabilities") or {}).get("other_voice")
+    if held.get("status") != "ok" or value is None or confident_yes is None:
+        return False
+    return probability_yes(value) >= confident_yes and not participant_matched(cohort)
+
+
+def second_voice_signals(
+    *,
+    reviewer: bool,
+    second_opinion: bool,
+    cohort: Mapping[str, Any] | None,
+    separated_speakers_n: int | None,
+) -> list[str]:
+    """The readings other than the diarizer's that place a second voice in the recording.
+
+    Args:
+        reviewer: Whether the reviewer heard another speaker.
+        second_opinion: Whether the second opinion did (:func:`opinion_reads_other_voice`).
+        cohort: COHORT's ``cohort_reading`` attributes, or None.
+        separated_speakers_n: How many distinct speakers the separated sources are attributed to, or None.
+
+    Returns:
+        ``reviewer``, ``second_opinion``, ``cohort`` (a pool that does not match the enrollment) and
+        ``separation`` (two or more separated speakers), for each that reads one, in that order.
+    """
+    signals = []
+    if reviewer:
+        signals.append("reviewer")
+    if second_opinion:
+        signals.append("second_opinion")
+    if nonmatch_spans(cohort):
+        signals.append("cohort")
+    if separated_speakers_n is not None and separated_speakers_n >= 2:
+        signals.append("separation")
+    return signals
 
 
 def probability_yes(value: Any) -> float:  # noqa: ANN401 -- a probability or one per choice
@@ -2676,6 +2763,8 @@ def _task_items(task: TaskEvidence) -> list[EvidenceItem]:
     if task.item_set and share is not None:
         items.append(item(PHRASE_SHARE, share, ANNOTATION, unit="fraction"))
     items.extend(_join_items(task.quality))
+    if task.speech_before_task.get("words_n"):
+        items.append(item(SPEECH_BEFORE_TASK_ITEM, task.speech_before_task.get("seconds"), ANNOTATION, unit="s"))
     return items
 
 
@@ -2912,7 +3001,7 @@ def _decision_evidence(
                 item(
                     f"gate:{record.get('gate')}",
                     record.get("value"),
-                    PASS if passed else REVIEW,
+                    PASS if passed else ANNOTATION if record.get("annotation") else REVIEW,
                     comparison=_COMPARISON.get(str(record.get("op"))),
                     threshold=record.get("bound") if str(record.get("op")) in _COMPARISON else None,
                 )
@@ -3212,11 +3301,30 @@ def fold_file_verdict(
             f"; release proposed for {proposed_n} name(s)" if proposed_n else ""
         )
         flag(_VERDICT, why, KEY_PERSON_NAME_REVIEW)
-    diarized_other = any(
-        record.get("passed") is False and record.get("gate") == DOMINANT_SPEAKER_GATE for record in flag_gates or ()
-    )
     others = [dict(other) for other in annotation.get("other_speakers") or () if isinstance(other, Mapping)]
     heard_other = annotation.get("speakers") == "more_than_one" or (annotation.get("speakers") == "unclear" and others)
+    other_kind = annotation.get("other_speaker")
+    opinion = dict(second_opinion or {})
+    opinion_heard_other = opinion_reads_other_voice(opinion, rules.second_opinion_confident_yes, cohort)
+    second_voice = second_voice_signals(
+        reviewer=bool(heard_other) or other_kind in OTHER_SPEAKER_KINDS,
+        second_opinion=opinion_heard_other,
+        cohort=cohort,
+        separated_speakers_n=task_evidence.separated_speakers_n,
+    )
+    gate_records = [
+        {**record, "annotation": True}
+        if record.get("passed") is False
+        and record.get("gate") == DOMINANT_SPEAKER_GATE
+        and not second_voice
+        and hot_or_clipped(cohort)
+        else dict(record)
+        for record in flag_gates or ()
+    ]
+    diarized_other = any(
+        record.get("passed") is False and record.get("gate") == DOMINANT_SPEAKER_GATE and not record.get("annotation")
+        for record in gate_records
+    )
     if rules.llm_second_speaker_flags and heard_other and not diarized_other:
         expected_n = sum(1 for other in others if other.get("expected") is True)
         counted = (
@@ -3226,7 +3334,6 @@ def fold_file_verdict(
             else "no words quoted"
         )
         flag(_VERDICT, f"{REVIEWER_HEARD_SECOND_SPEAKER}: {counted}", KEY_REVIEWER_SECOND_SPEAKER)
-    other_kind = annotation.get("other_speaker")
     by_other = other_kind in ("assistant", "background")
     if rules.llm_second_speaker_flags and other_kind in OTHER_SPEAKER_KINDS and not heard_other and not diarized_other:
         quoted = len(annotation.get("other_speaker_quotes") or ())
@@ -3237,11 +3344,14 @@ def fold_file_verdict(
         _phrase_reasons(annotation, second_opinion, flag, annotate)
     elif annotation.get("off_task_speech") in OFF_TASK_LEVELS:
         quoted = len(annotation.get("off_task_quotes") or ())
-        flag(
-            _VERDICT,
-            f"{REVIEWER_OFF_TASK}: {annotation.get('off_task_speech')}, {quoted} passage(s) quoted",
-            KEY_REVIEWER_OFF_TASK,
-        )
+        if task_evidence.narrative and annotation.get("off_task_speech") == OFF_TASK_ASIDE_LEVEL:
+            annotate(_VERDICT, f"{OFF_TASK_ASIDE}: {quoted} passage(s) quoted", KEY_OFF_TASK_ASIDE)
+        else:
+            flag(
+                _VERDICT,
+                f"{REVIEWER_OFF_TASK}: {annotation.get('off_task_speech')}, {quoted} passage(s) quoted",
+                KEY_REVIEWER_OFF_TASK,
+            )
     if rules.llm_contradiction_flags and reviewer_named_no_words(annotation):
         flag(_VERDICT, REVIEWER_NAMED_NO_WORDS, KEY_REVIEWER_NAMED_NO_WORDS)
     spoken = [str(text) for text in annotation.get("instructions_spoken") or () if str(text).strip()]
@@ -3256,7 +3366,7 @@ def fold_file_verdict(
         annotation,
         confident_yes=rules.second_opinion_confident_yes,
         confident_no=rules.second_opinion_confident_no,
-        identifier_masked=evidence.masks_final_n > 0 or evidence.reviewer_requested_n > 0,
+        identifier_masked=evidence.pii_masks_final_n > 0 or evidence.reviewer_requested_n > 0,
         item_set=task_evidence.item_set,
     )
     clef_decides = not {_AIRWAY, _VOICE} & set(task_evidence.owning_branches)
@@ -3265,12 +3375,18 @@ def fold_file_verdict(
             question = disagreement.split(" ", 1)[0]
             if question == "instructions_spoken" and by_other:
                 question = KEY_INSTRUCTIONS_SPOKEN_BY_OTHER
+            if question == "other_voice" and participant_matched(cohort):
+                question = OTHER_VOICE_PARTICIPANT
             flag(_VERDICT, f"{SECOND_OPINION_DISAGREES}: {disagreement}", f"{PREFIX_SECOND_OPINION}:{question}")
     not_free = second_opinion_not_free(second_opinion, rules.second_opinion_confident_no)
+    not_free_corroborated = not_free is not None and (
+        _reviewer_found_residue(deciding) or evidence.reviewer_requested_n > 0 or evidence.pii_masks_final_n > 0
+    )
     if not_free is not None:
         flag(
             _VERDICT,
-            f"{SECOND_OPINION_NOT_FREE}: p={not_free:.2f}",
+            f"{SECOND_OPINION_NOT_FREE}: p={not_free:.2f}, "
+            + ("corroborated by the reviewer or a standing mask" if not_free_corroborated else "uncorroborated"),
             f"{PREFIX_SECOND_OPINION}:{MASKED_TEXT_FREE}",
         )
     open_families = sorted({family for family, state in unplaced if state in (UNPLACED_OPEN, UNPLACED_UNREAD)})
@@ -3281,8 +3397,16 @@ def fold_file_verdict(
             f"{UNPLACED_FINDING_UNREAD if unread_any else UNPLACED_FINDING_OPEN}: {', '.join(open_families)}",
             KEY_UNPLACED_UNREAD if unread_any else KEY_UNPLACED_OPEN,
         )
-    for record in flag_gates or ():
+    for record in gate_records:
         if record.get("passed") is not False or task_evidence.voice_mode is not None:
+            continue
+        if record.get("annotation"):
+            annotate(
+                _VERDICT,
+                f"{SPEAKER_GATE_RECORDING_CONDITION}: {record.get('reading')} read {record.get('value')} "
+                f"against {record.get('bound')}",
+                KEY_SPEAKER_GATE_RECORDING_CONDITION,
+            )
             continue
         flag(
             _VERDICT,
@@ -3432,19 +3556,16 @@ def fold_file_verdict(
             KEY_SPEECH_OUTSIDE_TASK,
             voice_kind,
         )
-    opinion = dict(second_opinion or {})
-    opinion_other = (opinion.get("probabilities") or {}).get("other_voice")
-    reader_other = (
-        bool(heard_other)
-        or other_kind in OTHER_SPEAKER_KINDS
-        or (
-            opinion.get("status") == "ok"
-            and opinion_other is not None
-            and rules.second_opinion_confident_yes is not None
-            and probability_yes(opinion_other) >= rules.second_opinion_confident_yes
-        )
-    )
+    reader_other = bool(heard_other) or other_kind in OTHER_SPEAKER_KINDS or opinion_heard_other
     _join_reasons(task_evidence.quality, flag, annotate, cohort, reader_other)
+    before = task_evidence.speech_before_task
+    if before.get("words_n"):
+        annotate(
+            _VERDICT,
+            f"{SPEECH_BEFORE_TASK}: {before.get('words_n')} word(s) over {before.get('seconds')} s, "
+            f"from {before.get('start_s')} s",
+            KEY_SPEECH_BEFORE_TASK,
+        )
     for source in evidence.aligner_failed:
         annotate(_PREPROCESS, f"{ALIGNER_FAILED}: {source}", f"{PREFIX_ALIGNER_FAILED}:{source}")
     corroborated = reader_other or diarized_other
@@ -3596,7 +3717,7 @@ def fold_file_verdict(
         reviewer_unplaced=task_evidence.item_set and reviewer_quotes_unplaced(annotation),
         second_opinion_predominant=task_evidence.item_set and second_opinion_phrases_predominant(second_opinion),
     )
-    if not_free is not None and second_opinion_withholds() and release in (Release.AS_IS, Release.REDACTED):
+    if not_free_corroborated and second_opinion_withholds() and release in (Release.AS_IS, Release.REDACTED):
         release, release_ground = Release.WITHHELD, SECOND_OPINION_HOLD
     if triage is not Triage.DISCARD and task_evidence.non_lexical and release in (Release.REDACTED, Release.WITHHELD):
         flag(
@@ -3632,7 +3753,7 @@ def fold_file_verdict(
     )
     weighed_gates = [
         *(applied_gates if not measure_decides_gate_node else ()),
-        *(flag_gates or () if task_evidence.voice_mode is None else ()),
+        *(gate_records if task_evidence.voice_mode is None else ()),
     ]
     evidence_items = _decision_evidence(
         triage=triage,

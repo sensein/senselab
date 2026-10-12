@@ -4,7 +4,7 @@
 # a category with in / not in against a list of categories; a reported reading has neither.
 # `producer` names the unit of specs/20261007-task-events-in-background/design.md that emits it;
 # an item a later unit produces is absent from the tables until that unit lands.
-version: 13
+version: 14
 groups:
   acquisition:
     admit_outcome:
@@ -184,6 +184,10 @@ groups:
       unit: words
       producer: unit B
       meaning: lexical words outside a non-lexical task's own content (neither its declared text nor a misreading of its events), over the whole file, against data/task_speech.yaml words_min
+    speech_before_task_s:
+      unit: s
+      producer: fold
+      meaning: in a lexical family, from the first to the last lexical word before the task extent; an annotation (speech_before_task)
     phrase_share:
       unit: fraction
       producer: unit B

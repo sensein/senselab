@@ -1694,6 +1694,7 @@ class TestSecondOpinionDisagreementFlagsForReview:
             findings_n=masks_final_n,
             masks_n=masks_final_n,
             masks_final_n=masks_final_n,
+            pii_masks_final_n=masks_final_n,
             reviewer_requested_n=reviewer_requested_n,
         )
         return fold_file_verdict(

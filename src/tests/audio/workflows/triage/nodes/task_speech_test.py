@@ -9,12 +9,14 @@ import pytest
 
 from senselab.audio.workflows.triage.config import load_triage_config
 from senselab.audio.workflows.triage.nodes.common import consensus_words, software_agent, write_measurement
-from senselab.audio.workflows.triage.nodes.redact import NON_TASK_SPEECH, mask_plan
+from senselab.audio.workflows.triage.nodes.redact import NON_TASK_SPEECH, MaskPlan, mask_plan
 from senselab.audio.workflows.triage.task_content import task_content_ids
 from senselab.audio.workflows.triage.task_speech import (
     TASK_SPEECH_READING,
     lexical_voice_family,
+    narrative_family,
     non_lexical_family,
+    speech_before,
     task_speech_of,
     voice_task_text,
     words_min_for,
@@ -468,12 +470,13 @@ class TestTheReviewerAndTheSecondOpinionDecide:
         assert {"reviewer_off_task_speech", "reviewer_other_speaker"} <= set(folded.ground_keys)
         assert folded.reason_keys[:2] == ["other_speaker", "off_task_speech"]
 
-    def test_a_confident_not_free_on_the_shipped_text_holds_the_release(self) -> None:
-        """The second opinion reads identifiers in what would ship: review, and the release waits for a person."""
+    def test_an_uncorroborated_not_free_reviews_and_keeps_the_release(self) -> None:
+        """r37 G2 (fac74f45): the second opinion alone reads identifiers in what would ship: review, release kept."""
         opinion = {"status": "ok", "probabilities": {"masked_text_free_of_identifiers": 0.05}}
         folded = self._fold(annotation=self._READ, opinion=opinion)
         assert "second_opinion:masked_text_free_of_identifiers" in folded.ground_keys
-        assert folded.release is Release.WITHHELD and folded.reason == "identifying_content"
+        assert folded.triage is Triage.REVIEW and folded.reason == "identifying_content"
+        assert folded.release is Release.AS_IS
 
     def test_speech_matching_no_enrollment_is_another_speaker(self) -> None:
         """The same speech outside the task is other_speaker where COHORT's comparison does not match it."""
@@ -565,16 +568,14 @@ class TestTheReviewerQuotesBecomeMasks:
         masked = [word.text for mask in plan.masks if mask.source == NON_TASK_SPEECH for word in mask.words]
         assert masked == words[3:]
 
-    def test_an_off_task_quote_masks_its_words_and_a_task_content_quote_releases_them(
-        self, store: ProvStore, tmp_path: Path
-    ) -> None:
-        """Three quoted off-task words stay masked; a finding the reviewer called task content is not."""
+    @staticmethod
+    def _off_task_plan(store: ProvStore, tmp_path: Path, stem: str, level: str = "some") -> MaskPlan:
         _seed_redact_store(
             store,
             tmp_path,
             words=["lion", "tiger", "my", "doctor", "said", "Paris"],
             findings=[("LOCATION", _word_extent(5))],
-            recording_stem="sub-x_ses-y_task-cinderella-story",
+            recording_stem=stem,
         )
         activity = store.activity(node="REVIEW", step="read", parameters={})
         write_measurement(
@@ -587,14 +588,31 @@ class TestTheReviewerQuotesBecomeMasks:
                 "status": "clean",
                 "original": "clean",
                 "proposal": [],
-                "off_task_speech": "some",
+                "off_task_speech": level,
                 "off_task_quotes": ["my doctor said"],
                 "task_content_quotes": ["Paris"],
             },
         )
-        plan = mask_plan(store, reviewer_applies=True, padding_ms=50)
+        return mask_plan(store, reviewer_applies=True, padding_ms=50)
+
+    def test_an_off_task_quote_masks_its_words_and_a_task_content_quote_releases_them(
+        self, store: ProvStore, tmp_path: Path
+    ) -> None:
+        """Three quoted off-task words stay masked; a finding the reviewer called task content is not."""
+        plan = self._off_task_plan(store, tmp_path, "sub-x_ses-y_task-rainbow-passage")
         assert plan.non_task_speech_masked_n == 3
         assert all(word.text != "Paris" or word.state != "masked" for mask in plan.masks for word in mask.words)
+
+    def test_a_narrative_task_s_off_task_aside_is_not_masked(self, store: ProvStore, tmp_path: Path) -> None:
+        """r37 G1 (07929b7b cinderella): "some" off-task speech in a free response masks nothing; extensive does."""
+        assert self._off_task_plan(store, tmp_path, "sub-x_ses-y_task-cinderella-story").non_task_speech_masked_n == 0
+        other = ProvStore(run_id="extensive")
+        (tmp_path / "extensive").mkdir()
+        plan = self._off_task_plan(
+            other, tmp_path / "extensive", "sub-x_ses-y_task-cinderella-story", level="extensive"
+        )
+        assert plan.non_task_speech_masked_n == 3
+        assert plan.pii_masks_final_n == 0
 
 
 def test_a_lexical_task_s_own_words_are_its_own_sound_and_an_airway_task_has_none(
@@ -677,3 +695,19 @@ class TestLoudnessIsAVoiceTask:
         assert len(read.task_text_ids) == 3 and read.words_n == 2
         assert not lexical_voice_family("prolonged-vowel") and voice_task_text("prolonged-vowel") is None
         assert not lexical_voice_family("free-speech") and not non_lexical_family("free-speech")
+
+
+def test_the_narrative_families_are_the_free_responses() -> None:
+    """r37 G1: story retell, free speech, picture description and open response; not items, sentences or DDK."""
+    for family in ("cinderella-story", "story-recall", "free-speech", "picture-description", "open-response-questions"):
+        assert narrative_family(family), family
+    for family in ("animal-fluency", "harvard-sentences-list", "word-color-stroop", "diadochokinesis-pa", None):
+        assert not narrative_family(family), family
+
+
+def test_speech_before_the_task_is_its_words_and_their_span(store: ProvStore) -> None:
+    """r37 G3 (168c5e68): the words whose midpoint precedes the extent, from the first's start to the last's end."""
+    _timed_words(store, ITEMS_STEM, [("hello", 0.1), ("there", 0.6), ("cat", 2.5), ("dog", 3.5)])
+    words = consensus_words(store)
+    assert speech_before(words, 2.4) == {"words_n": 2, "start_s": 0.1, "end_s": 1.0, "seconds": 0.9}
+    assert speech_before(words, 0.0) == {}

@@ -4,7 +4,7 @@
 # Owner, 2026-10-10: consolidated to these codes; the release ground is its own column (release_reason).
 # Derivation: specs/20261007-task-events-in-background/design.md ("Decision table", "Reasons consolidated",
 # "The residual's other voice is attributed", "The reviewer reads the phrases").
-version: 12
+version: 13
 precedence:            # discard reasons first, then incomplete, then the recording, then the content
 - unreadable
 - task_too_short
@@ -88,6 +88,7 @@ keys:                  # exact verdict ground key -> reason
   unplaced_finding_open: identifying_content
   unplaced_finding_unread: identifying_content
   second_opinion:other_voice: other_speaker
+  second_opinion:other_voice_participant: off_task_speech   # r37 C2: COHORT reads the participant
   second_opinion:instructions_spoken: off_task_speech
   second_opinion:instructions_spoken_by_other: other_speaker
   second_opinion:policy_identifier_present: identifying_content
@@ -106,10 +107,13 @@ annotations:           # ground keys and prefixes the fold writes only as annota
 - recurring_non_target_voice    # COHORT: a non-matching voice outside the task recurring across recordings
 - non_task_self_talk            # COHORT: a non-matching voice outside the task that is the participant's own
 - speaker_nonmatch_shared       # COHORT: a non-match shared across the participant and uncorroborated
+- speaker_gate_recording_condition   # r37 C1: an uncorroborated speaker-gate fire on a hot or clipped participant
+- off_task_aside                     # r37 G1: an off-task aside in a narrative family
+- speech_before_task                 # r37 G3: lexical speech before a lexical task's extent
 reviewed_releases:     # owner, 2026-10-10: masks not yet validated; every release but as_is is reviewed (release_reviewed)
 - redacted
 - withheld
-second_opinion_not_free_withholds: true   # owner, 2026-10-10: a confident second-opinion "not free" holds the release for a person
+second_opinion_not_free_withholds: true   # owner, 2026-10-10; r37 G2: a confident second-opinion "not free" holds the release only where the reviewer or a standing identifier mask corroborates it
 release_keys:          # release ground key -> reason, for a release the graph could not assess (run_status incomplete)
   no_transcript: not_measured
   speech_unread: not_measured

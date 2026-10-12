@@ -64,6 +64,7 @@ from senselab.audio.workflows.triage.nodes.common import (
     find_measurements,
     find_verdict,
     lexical_words,
+    live_entities,
     mint_live,
     resolve_stream,
     software_agent,
@@ -108,10 +109,14 @@ from senselab.audio.workflows.triage.nodes.voice import PHONATION_READING
 from senselab.audio.workflows.triage.quality_join import QUALITY_JOIN
 from senselab.audio.workflows.triage.routing_analysis.families import SYLLABLE_REPETITION
 from senselab.audio.workflows.triage.task_lexicon import task_lexicon
+from senselab.audio.workflows.triage.routing_analysis.families import LEXICAL_SPEECH
 from senselab.audio.workflows.triage.task_speech import (
     TASK_SPEECH_READING,
     item_set_family,
+    narrative_family,
+    non_lexical_family,
     reads_task_speech,
+    speech_before,
     words_min_for,
 )
 from senselab.audio.workflows.triage.vocabulary import (
@@ -143,6 +148,7 @@ from senselab.audio.workflows.triage.vocabulary import (
     fold_file_verdict,
     release_value,
     reviewer_may_unmask,
+    standing_task_extents,
 )
 from senselab.utils.prov_store import PROV_TYPE, Entity, ProvStore
 
@@ -680,7 +686,48 @@ def _task_evidence(
         task_speech=task_speech,
         task_speech_words_min=words_min_for(declared_family) if task_speech else None,
         item_set=item_set_family(declared_family),
+        narrative=narrative_family(declared_family),
+        separated_speakers_n=separated_speakers_n(store),
+        speech_before_task=_speech_before_task(store, declared_family),
     )
+
+
+SEPARATED_SOURCE_READING = "extent_source_active_s"
+"""SPEECH's per-separated-source reading inside a task extent, carrying the speaker it is attributed to."""
+
+
+def separated_speakers_n(store: ProvStore) -> int | None:
+    """How many distinct speakers SPEECH's separated sources inside the task extents are attributed to.
+
+    Args:
+        store: The provenance store.
+
+    Returns:
+        The count of distinct ``speaker`` labels over the live ``extent_source_active_s`` readings, or None
+        where SPEECH separated nothing.
+    """
+    readings = find_measurements(store, SEPARATED_SOURCE_READING)
+    if not readings:
+        return None
+    return len({str(reading.attributes.get("speaker")) for reading in readings})
+
+
+def _speech_before_task(store: ProvStore, declared_family: str | None) -> dict[str, Any]:
+    """The lexical speech before a lexical family's task extent (:func:`speech_before`).
+
+    Args:
+        store: The provenance store.
+        declared_family: The declared task family.
+
+    Returns:
+        The reading; empty for any other family, where no task extent stands, or where no word precedes it.
+    """
+    if declared_family not in LEXICAL_SPEECH or non_lexical_family(declared_family):
+        return {}
+    extents = [span.extent for span in standing_task_extents(live_entities(store, "span")) if span.extent is not None]
+    if not extents:
+        return {}
+    return speech_before(lexical_words(store), min(float(extent[0]) for extent in extents))
 
 
 def _route_state(store: ProvStore) -> tuple[str | None, list[str]]:
@@ -808,6 +855,7 @@ def _redaction_evidence(
         coverage_failed=not coverage.ok,
         masks_n=len(plan.masks),
         masks_final_n=len(plan.final),
+        pii_masks_final_n=plan.pii_masks_final_n,
         masks_changed=plan.changed,
         reviewer_unmasked_n=plan.count(UNMASKED_BY_REVIEWER),
         policy_masks_n=plan.policy_masks_n,
