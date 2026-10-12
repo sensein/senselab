@@ -294,7 +294,9 @@ def _lock_uv() -> str:
     try:
         return find_uv()
     except FileNotFoundError as exc:
-        raise VenvLockError("uv is not on PATH; it is needed to compile a lock") from exc
+        raise VenvLockError(
+            "uv not found on PATH or in ~/.local/bin, ~/.cargo/bin; it is needed to compile a lock"
+        ) from exc
 
 
 def _compile(
@@ -360,8 +362,8 @@ def resolved_packages(line_annotated: str) -> dict[str, tuple[str, set[str]]]:
 def torch_only_cuda_packages(packages: dict[str, tuple[str, set[str]]]) -> list[str]:
     """Names to leave out of the lock body.
 
-    These are ``torch``, ``torchaudio``, the CUDA-variant packages that only they pull in, and ``triton``
-    wherever ``torch`` pulls it in.
+    These are ``torch``, ``torchaudio``, the CUDA-variant packages that only they pull in, and ``triton`` /
+    ``pytorch-triton*`` wherever ``torch`` is one of their parents.
     """
     family = {name for name in packages if name in TORCH_PACKAGES}
     changed = True

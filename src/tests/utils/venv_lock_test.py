@@ -248,5 +248,5 @@ def test_a_missing_uv_is_a_venv_lock_error(monkeypatch: pytest.MonkeyPatch) -> N
         raise FileNotFoundError("uv not found")
 
     monkeypatch.setattr(venv_lock, "find_uv", no_uv)
-    with pytest.raises(venv_lock.VenvLockError, match="uv is not on PATH"):
+    with pytest.raises(venv_lock.VenvLockError, match="uv not found on PATH or in ~/.local/bin, ~/.cargo/bin"):
         compile_lock("t", ["foo"], "3.12", exclude_newer="2026-10-02T00:00:00Z")

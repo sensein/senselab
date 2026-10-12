@@ -35,6 +35,9 @@ not build. `6fdb9a50` fixed it with a `huggingface-hub<2` constraint, after the 
     only they pull in: `nvidia-*`, `triton`, `pytorch-triton*` and `cuda-*`. A package
     counts as torch-only when every parent in uv's `# via` annotations is already torch-only.
     `sympy` and `filelock`, for example, stay in the body.
+  - `triton` and `pytorch-triton*` are also left out whenever `torch` is one of their parents,
+    even if another package (for example vLLM) needs them too. They then come from the torch
+    index with torch, at the version that torch wheel pins, instead of from PyPI.
   - The exact pins go into the header's `torch:` line.
   - `ensure_venv` keeps its two stages:
     1. Install the header pins from the host's PyTorch index, chosen as before by
@@ -46,7 +49,10 @@ not build. `6fdb9a50` fixed it with a `huggingface-hub<2` constraint, after the 
 - **The pinned torch exists where it will be installed.**
   - For each venv, the compile checks the PyTorch simple index. The pinned
     `torch`/`torchaudio` must have a wheel for the venv's Python on:
-    - the newest CUDA index the venv can route to (`cu128`, or the cap's tag) for linux x86_64;
+    - the newest CUDA index the venv can route to for linux x86_64: the cap's tag, or, without
+      a cap, `DEFAULT_MAX_CUDA` = (12, 8), so `cu128`. The index table has a `cu130` row
+      (CUDA 13.0), but a venv reaches it only by declaring `max_cuda_version=(13, 0)`, as the
+      vLLM server venv does;
     - the `cpu` index for linux x86_64 and for macOS arm64.
   - If any check fails, the compile adds `torch<that version` and resolves again. Each
     skipped version is recorded as a `# note:` line in the header.

@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import base64
 import fcntl
+import hashlib
 import http.client
 import json
 import mimetypes
@@ -66,8 +67,15 @@ START_ERROR_KINDS = ("exited", "timeout", "version", "snapshot")
   body that is not JSON, or JSON of the wrong shape).
 - ``snapshot``: it serves another snapshot."""
 
-CONTENT_LOGGING_FLAGS = ("--enable-log-requests", "--enable-log-outputs")
-"""Server flags (bare or ``flag=value``) that would write request or output content to the log; refused."""
+CONTENT_LOGGING_PREFIXES = ("--enable-log-req", "--enable-log-out")
+"""Prefixes of the server flags, and of their abbreviations, that would write request or output content to the
+log; any argument starting with one is refused."""
+
+REFUSED_FLAGS = ("--config",)
+"""Server flags (bare or ``flag=value``) refused because they could turn content logging on from a file."""
+
+ERROR_DETAIL_CHARS = 300
+"""The most characters of a server's error message a raised error keeps."""
 
 SERVER_FLAGS = (
     ("max_model_len", "--max-model-len"),
@@ -219,12 +227,14 @@ class VllmServer:
             startup_timeout_s: Seconds the server has to become healthy once the start lock is held.
 
         Raises:
-            ValueError: If ``server_args`` asks the server to log request or output content.
+            ValueError: If ``server_args`` asks the server to log request or output content, or names a config
+                file.
         """
-        for arg in server_args:
-            for flag in CONTENT_LOGGING_FLAGS:
-                if arg == flag or str(arg).startswith(flag + "="):
-                    raise ValueError(f"{arg} would log request or output content; it is not allowed")
+        for arg in map(str, server_args):
+            if arg.startswith(CONTENT_LOGGING_PREFIXES) or any(
+                arg == f or arg.startswith(f + "=") for f in REFUSED_FLAGS
+            ):
+                raise ValueError(f"{arg} could log request or output content; it is not allowed")
         self.executable = str(executable)
         self.model_dir = Path(model_dir)
         self.server_args = [str(arg) for arg in server_args]
@@ -436,10 +446,16 @@ def ensure_vllm_venv() -> Path:
     return Path(venv_dir) / "bin" / "vllm"
 
 
+def _path_label(path: Union[str, Path]) -> str:
+    """A media path as an error message may show it: its suffix and a short digest of the path, never its name."""
+    path = Path(path)
+    return f"a {path.suffix!r} file (path sha256 {hashlib.sha256(str(path).encode()).hexdigest()[:12]})"
+
+
 def _data_url(path: Path) -> str:
     mime = mimetypes.guess_type(path.name)[0]
     if mime is None:
-        raise ValueError(f"cannot tell the media type of {path.name!r} from its suffix")
+        raise ValueError(f"cannot tell the media type of {_path_label(path)} from its suffix")
     return f"data:{mime};base64,{base64.b64encode(path.read_bytes()).decode()}"
 
 
@@ -482,7 +498,10 @@ def content_part(
         else:
             root, resolved = Path(local_media_dir).resolve(), path.resolve()
             if root not in resolved.parents:
-                raise ValueError(f"{path} is not under the server's local media directory {local_media_dir}")
+                raise ValueError(
+                    f"{_path_label(path)} is not under the server's local media directory"
+                    f" (path sha256 {hashlib.sha256(str(local_media_dir).encode()).hexdigest()[:12]})"
+                )
             url = resolved.as_uri()
     key = f"{kind}_url"
     return {"type": key, key: {"url": url}}
@@ -497,14 +516,37 @@ def _refuse_reserved(sampling: Mapping[str, Any], reserved: Sequence[str]) -> No
 def _send(request: urllib.request.Request, timeout_s: float) -> Any:  # noqa: ANN401 — a JSON value
     """Send a request without any proxy and parse the JSON reply; nothing is logged.
 
-    A refused request re-raises its ``HTTPError`` with the server's decoded error body in the message.
+    A refused request re-raises its ``HTTPError`` with the server's error message (see :func:`_error_message`)
+    after the reason.
     """
     try:
         with _NO_PROXY.open(request, timeout=timeout_s) as response:
             return json.loads(response.read())
     except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace").strip()
-        raise urllib.error.HTTPError(exc.url, exc.code, f"{exc.reason}: {detail}", exc.headers, None) from exc
+        message = _error_message(exc.read())
+        reason = f"{exc.reason}: {message}" if message else str(exc.reason)
+        raise urllib.error.HTTPError(exc.url, exc.code, reason, exc.headers, None) from None
+
+
+def _error_message(raw: bytes) -> str:
+    """The message of a vLLM error body, at most :data:`ERROR_DETAIL_CHARS` long.
+
+    Only ``error.message``, a top-level ``message`` or ``detail`` is kept (a validation ``detail`` list as
+    ``loc: msg`` items); ``input`` and every other field, which can echo the prompt, are dropped, as is a body
+    that is not JSON.
+    """
+    try:
+        body = json.loads(raw)
+    except ValueError:
+        return ""
+    if not isinstance(body, dict):
+        return ""
+    error = body.get("error")
+    message: Any = error.get("message") if isinstance(error, dict) else body.get("message", body.get("detail"))
+    if isinstance(message, list):
+        items = [item for item in message if isinstance(item, dict)]
+        message = "; ".join(f"{'.'.join(map(str, item.get('loc') or ()))}: {item.get('msg', '')}" for item in items)
+    return message[:ERROR_DETAIL_CHARS] if isinstance(message, str) else ""
 
 
 def _post_json(url: str, body: Mapping[str, Any], timeout_s: float) -> Any:  # noqa: ANN401 — a JSON value
@@ -536,7 +578,8 @@ def chat(
 
     Raises:
         ValueError: If ``sampling`` sets ``model``, ``messages`` or ``stream``.
-        urllib.error.HTTPError: If the server refuses the request; the message carries the server's error body.
+        urllib.error.HTTPError: If the server refuses the request; the message carries the server's short error
+            message.
     """
     _refuse_reserved(sampling, ("model", "messages", "stream"))
     body = {"model": model, "messages": list(messages), **sampling, "stream": False}
@@ -583,7 +626,8 @@ def transcribe(
         ValueError: If ``sampling`` sets ``file``, ``model``, ``language`` or ``prompt``, or a field name or the
             file's suffix holds a quote, CR or LF.
         TypeError: If a ``sampling`` value is not a string, number or bool.
-        urllib.error.HTTPError: If the server refuses the request; the message carries the server's error body.
+        urllib.error.HTTPError: If the server refuses the request; the message carries the server's short error
+            message.
     """
     _refuse_reserved(sampling, ("file", "model", "language", "prompt"))
     fields = {"model": model, "language": language, "prompt": prompt}
@@ -591,9 +635,13 @@ def transcribe(
     form += [(name, _form_value(name, value)) for name, value in sampling.items()]
     path = Path(audio_path)
     filename = f"audio{path.suffix}"
-    for text in [name for name, _ in form] + [filename]:
-        if any(char in text for char in _UNSAFE_HEADER_CHARS):
-            raise ValueError(f"{text!r} holds a quote, CR or LF, which a multipart header cannot carry")
+    for name, _ in form:
+        if any(char in name for char in _UNSAFE_HEADER_CHARS):
+            raise ValueError(f"field name {name!r} holds a quote, CR or LF, which a multipart header cannot carry")
+    if any(char in filename for char in _UNSAFE_HEADER_CHARS):
+        raise ValueError(
+            f"the suffix of {_path_label(path)} holds a quote, CR or LF, which a multipart header cannot carry"
+        )
     boundary = uuid.uuid4().hex
     chunks: list[bytes] = []
     for name, value in form:
@@ -636,7 +684,8 @@ def complete(
     Raises:
         ValueError: If the prompt is empty or holds anything but non-negative ints, or ``sampling`` sets
             ``model``, ``prompt`` or ``stream``.
-        urllib.error.HTTPError: If the server refuses the request; the message carries the server's error body.
+        urllib.error.HTTPError: If the server refuses the request; the message carries the server's short error
+            message.
     """
     ids = list(prompt_token_ids)
     if not ids or not all(isinstance(i, int) and not isinstance(i, bool) and i >= 0 for i in ids):
