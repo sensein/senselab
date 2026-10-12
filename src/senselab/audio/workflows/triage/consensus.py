@@ -122,6 +122,10 @@ class ConsensusWord:
         degenerate_sources: The sources whose reading in the column is a degenerate run.
         untimed_sources: The sources whose span for the word is missing.
         unconfirmed: Whether only one recognizer read the word and none located it.
+        arbitrated_source: The recognizer whose span the word's time was taken from where the recognizers
+            placed it far apart (:func:`arbitrate_time`); None where the fit stands.
+        unlocated: Whether the recognizers placed it far apart and none of them on sound, so the word carries
+            no time.
     """
 
     index: int
@@ -140,6 +144,8 @@ class ConsensusWord:
     degenerate_sources: tuple[str, ...] = ()
     untimed_sources: tuple[str, ...] = ()
     unconfirmed: bool = False
+    arbitrated_source: str | None = None
+    unlocated: bool = False
 
     @property
     def degenerate(self) -> bool:
@@ -200,6 +206,17 @@ def word_timing_parameters() -> dict[str, Any]:
     """
     document = yaml.safe_load(WORD_TIMING_PATH.read_text()) or {}
     return {"point_width_s": float(document["point_width_s"])}
+
+
+@cache
+def arbitration_parameters() -> dict[str, float]:
+    """The ``arbitration`` block of ``data/word_timing.yaml``.
+
+    Returns:
+        ``disagreement_s``, ``held_voicing_min_s``, ``held_voicing_bridge_s`` and ``voiced_strength_min``.
+    """
+    document = yaml.safe_load(WORD_TIMING_PATH.read_text()) or {}
+    return {key: float(value) for key, value in dict(document["arbitration"]).items()}
 
 
 def missing_span(start: float | None, end: float | None) -> bool:
@@ -604,7 +621,8 @@ def word_attributes(word: ConsensusWord) -> dict[str, Any]:
     Returns:
         The mapping a ``word`` entity carries. The extent is the entity's own and is not in it.
         ``degenerate`` and ``degenerate_sources`` are present only where some reading is degenerate,
-        ``untimed_sources`` only where some span is missing, and ``unconfirmed`` only where it is True.
+        ``untimed_sources`` only where some span is missing, ``unconfirmed`` and ``unlocated`` only where
+        True, and ``arbitrated_source`` only where a recognizer's span was taken.
     """
     attributes = {
         "text": word.text,
@@ -630,6 +648,10 @@ def word_attributes(word: ConsensusWord) -> dict[str, Any]:
         attributes["untimed_sources"] = list(word.untimed_sources)
     if word.unconfirmed:
         attributes["unconfirmed"] = True
+    if word.arbitrated_source is not None:
+        attributes["arbitrated_source"] = word.arbitrated_source
+    if word.unlocated:
+        attributes["unlocated"] = True
     return attributes
 
 
@@ -674,7 +696,66 @@ def word_from_attributes(attributes: Mapping[str, Any], extent: tuple[float, flo
         degenerate_sources=tuple(str(source) for source in attributes.get("degenerate_sources") or ()),
         untimed_sources=tuple(str(source) for source in attributes.get("untimed_sources") or ()),
         unconfirmed=bool(attributes.get("unconfirmed")),
+        arbitrated_source=None
+        if attributes.get("arbitrated_source") is None
+        else str(attributes["arbitrated_source"]),
+        unlocated=bool(attributes.get("unlocated")),
     )
+
+
+Interval = tuple[float, float]
+
+
+def _inside(point: float, spans: Sequence[Interval]) -> bool:
+    return any(start <= point <= end for start, end in spans)
+
+
+def arbitrate_time(
+    word: ConsensusWord,
+    *,
+    on_sound: Sequence[Interval],
+    off_limits: Sequence[Interval] = (),
+    disagreement_s: float,
+    duration_s: float | None = None,
+) -> ConsensusWord:
+    """The word re-timed where its recognizers place it far apart: its text and readings are never touched.
+
+    A word at least two recognizers located, whose located starts differ by more than ``disagreement_s``, takes
+    the span of the one recognizer whose span's midpoint falls on sound -- inside ``on_sound`` and outside
+    ``off_limits``. Where more than one does, the fit stands; where none does, the word is unlocated and carries
+    a zero-length extent at its fitted onset.
+
+    Args:
+        word: The position, as aligned.
+        on_sound: The recording's acoustic activity.
+        off_limits: Spans on which no word lies even where there is sound (a voice task's held phonation).
+        disagreement_s: The start difference over which the recognizers disagree on where the word is.
+        duration_s: The duration the spans were timed against, for a point span's window.
+
+    Returns:
+        The word, with ``extent`` and ``arbitrated_source`` or ``unlocated`` set where it was arbitrated, and
+        unchanged otherwise.
+    """
+    located = {
+        source: span
+        for source, (start, end) in word.timings.items()
+        if (span := located_span(start, end, duration_s=duration_s)) is not None
+    }
+    if len(located) < 2:
+        return word
+    starts = [span[0] for span in located.values()]
+    if max(starts) - min(starts) <= disagreement_s:
+        return word
+    sounding = [
+        source
+        for source, span in sorted(located.items())
+        if _inside((span[0] + span[1]) / 2.0, on_sound) and not _inside((span[0] + span[1]) / 2.0, off_limits)
+    ]
+    if len(sounding) == 1:
+        return replace(word, extent=located[sounding[0]], arbitrated_source=sounding[0], unlocated=False)
+    if not sounding:
+        return replace(word, extent=(word.extent[0], word.extent[0]), arbitrated_source=None, unlocated=True)
+    return word
 
 
 def rebracket(word: ConsensusWord, *, onomatopoeic: set[str], n_sources: int) -> Rebracketed:

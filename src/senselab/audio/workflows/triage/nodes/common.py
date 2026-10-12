@@ -599,9 +599,12 @@ def word_hull(word: Entity, duration_s: float | None = None) -> tuple[float, flo
             window is kept inside it. Unbounded where None.
 
     Returns:
-        ``(min located start, max located end)``; the derived extent where no source located it; ``(0.0, 0.0)``
-        where the word carries neither.
+        ``(min located start, max located end)``; the derived extent where no source located it, or where the
+        recognizers placed it far apart and its time was arbitrated (``arbitrated_source``) or found on no sound
+        (``unlocated``); ``(0.0, 0.0)`` where the word carries neither.
     """
+    if word.attributes.get("arbitrated_source") is not None or word.attributes.get("unlocated"):
+        return (float(word.extent[0]), float(word.extent[1])) if word.extent is not None else (0.0, 0.0)
     spans = [
         located
         for span in (word.attributes.get("timings") or {}).values()
