@@ -125,3 +125,38 @@ airway 232 → 232, voice 110 → 109; by half 589/913 → 261/641.
   `other_speaker` is COHORT's target non-match, which B2 and B1 change only on a COHORT re-run), 07929b7b
   pataka (a DDK family has no COHORT pool, so C2 cannot apply; the second opinion alone keeps it in review),
   fac74f45 (review with the release kept, as G2 specifies; the owner's "cleared" also needs the 0.2 bound fit).
+
+## Round 3 (owner labels, 2026-10-12) and the release checks
+
+- **B1, an unlocated word under a mask** (`r37_withhold_63fba63e9d52.json`: 3 mask the gap, 3 release, 3
+  withhold for other reasons). An unlocated word now carries `mask_gap`, the span between its timed neighbours
+  (the recording's start or end where it has none on a side; the neighbours' hull where they touch), and
+  `word_hull` reads it, so a mask over the word covers the gap instead of failing coverage and withholding. The
+  recording still reviews: the release is `redacted` (`reviewed_releases`). `word_arbitration` records
+  `unlocated_mask_gap_s`.
+- **G1** stays as built: the owner listened to 15 of the 736 unmasked narrative asides; all were safe.
+- **An empty release** (owner on 1f06eb2c glides: "released is empty"). Cause: the reviewer's off-task quote
+  placed on all six words, and the first word's two recognisers placed it 5.3 s apart (CrisperWhisper at 0.5 s,
+  inside the glide; Qwen at 5.76 s, on the speech after it), so its timing hull (0.5-5.92 s) put the
+  `NON_TASK_SPEECH` mask over the whole glide; 0.24 s of the 5.74 s extent stayed audible. B1 cannot place the
+  word: the held voicing runs on through the speech (0.52-6.26 s), so both placements fall on the held
+  phonation; the word is unlocated and its gap (0-5.77 s) is the same span. Hiding the word therefore means
+  hiding the task, which the owner labelled withhold. VERDICT now reads the task extent the release is cut to
+  against the final masks (`task_extent_s`, `task_audible_s` on `RedactionEvidence`); an `as_is` or `redacted`
+  release leaving under `release_audible_share_min` (0.1, `data/decision_reasons.yaml`, UNFITTED) of the extent
+  audible, or a zero-length extent, is `withheld` on `release_empty`, which reviews (`release_reviewed`).
+  Measured over r36 (task audio sidecars, read-only): 154 of 3,247 redacted cuts leave under 10% audible (129
+  under 5%, 184 under 20%, 211 under 30%), all `review/redacted`; productive vocabulary 41, glides 34, maximum
+  phonation time 27, prolonged vowel 6, airway 21, free speech and narrative 17. 1f06eb2c is among them.
+- **`task_fraction` over 1** (83 rows of the schema-3 table over r36, all AIRWAY, 70 discards and 13 passes,
+  recordings 0.19-6.2 s, median 0.42 s): the extent ended 0-5 ms past the recording (event frames rounded up).
+  A task-extent span is now written bounded by the shortest live `recording` / `plain` stream
+  (`nodes.common.clamp_to_recording`, in `branches.propose_span` and `airway_task.settle_task_extent`), and
+  `task_fraction` is capped at 1 against the rounding of the duration columns.
+- **The config hash of a refold.** A refold whose VERDICT activity already stood from an earlier round with the
+  same configuration left that activity in its old position, so the table read the replay's hash as the last
+  VERDICT's (r36 finalize read the refold summaries instead). `decision_tables` now reads `config_hash` from the
+  marker that carries the commit (the last replay or refold marker), falling back to the last VERDICT activity.
+- **Listen sets** (`scripts/triage_review_page.py render --exclude-labelled DIR [--allow-labelled ...]`): a
+  listen set naming a participant any owner label file in `DIR` names is refused (exit 2). Round 3 let 4bd22301
+  and 541e6b30 through.

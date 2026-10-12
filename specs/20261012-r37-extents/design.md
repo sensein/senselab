@@ -260,3 +260,32 @@ below cover only those. Each extent is compared with r36.
 
 **Round-1 labels (52 with an extent):** the 27 read complete stay put on 23. Of the 22 too narrow, 19 widen.
 Both too-wide labels narrow.
+
+## Round 3 (owner labels on the 70-recording listen set, 2026-10-12)
+
+`r37_round3_extents_cc33de81b9e3.json` holds 15 labelled rows; the owner reads an unmarked row as "ok" (the
+proposal is fine). Strata were drawn from the r2 measurement (`extent_r37/analysis_r2.txt`, "listen strata,
+round 3"), non-discarded, from participants not labelled before.
+
+| Stratum (10 each) | Owner | `data/task_extent.yaml` v3 |
+|---|---|---|
+| Continuity, end bounded (`tail_s`, `runs_max`) | 9 ok, 1 better | `continuity` **on** |
+| Breath growth across speech | 7 ok, 3 better | `growth.cross_speech` **on** |
+| Phonation in parts | 7 ok, 2 better, 1 current better | `parts` **on** |
+| Count-in overlapping or 2-3 s before | 9 ok | `count_in` stays on (`gap_max_s` 3.0) |
+| Weak-breath edges | 9 ok, 1 both wrong ("no task really") | `edges` **on** |
+| DDK margin | 7 ok, 1 same, 2 current better (narrow on a difficult voice) | unchanged (`margin_intervals` 1.0); no corpus bound supports widening |
+| Background rule candidates (lowest events over background) | 3 notes: "too much (background) noise", "should be withheld" | see "Deferred" |
+
+### Deferred to after the release (owner, 2026-10-12: release first, no new research)
+
+- **Background in airway tasks.** The owner's rule: background speech withholds the release (a privacy
+  concern) and reviews; background noise alone reviews with the release kept, with the session background
+  (`session_background.py`) as the reference where the file's own floor is the noise. Neither bound has been
+  measured (`background_speech_share`, background over the session floor), so nothing is switched on:
+  `discard_replaced_task.yaml` `background` stays off. Recordings with another voice in the background already
+  reach `other_speaker` (the three noted files were `review/withheld (other_speaker)` at listen time).
+- **E1 (`discard_replaced_task.yaml`) stays off.** On the owner's 20 round-3 labels it would discard 20; the
+  owner said discard 9, review 9, pass 2: it fires on a weak task where it should fire on an absent one. The
+  rework (require no task event anywhere in the file, read after the extent changes) and its corpus
+  re-measurement are not done.
