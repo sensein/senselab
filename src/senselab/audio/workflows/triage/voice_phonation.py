@@ -307,6 +307,7 @@ def extent_of(
     f0_hz: np.ndarray | None = None,
     agreed: Sequence[tuple[float, float]] = (),
     continuity: dict[str, Any] | None = None,
+    parts: dict[str, Any] | None = None,
 ) -> Extent | None:
     """The phonation extent: the longest run off speech words, merged with the further holds around it.
 
@@ -322,12 +323,15 @@ def extent_of(
         agreed: The spans of agreed lexical words, which phonation continuity does not cross.
         continuity: The ``continuity`` section of ``data/task_extent.yaml`` where it is on; None merges by
             length and level only.
+        parts: The ``parts`` section of ``data/task_extent.yaml`` where it is on; None takes no further part.
 
     Returns:
         The extent, or None where no run reaches ``extent_min_s``. Where continuity is on, a further run
         within ``continuity.gap_max_s`` whose median F0 lies within ``continuity.semitones`` of the extent's,
         with at least ``continuity.voiced_min_s`` of voicing and no agreed word between, merges whatever its
-        length.
+        length, and the extent ends ``continuity.tail_s`` after its last voiced frame. Where parts are on, a
+        further run with ``parts.hold_min_s`` of voicing within ``parts.gap_max_s`` and no agreed word between
+        is another part of the task.
     """
     hop = p["hop_s"]
     margin = p["phonation_db"] if phonation_db is None else phonation_db
@@ -357,9 +361,17 @@ def extent_of(
         if last < len(runs) - 1 and mergeable(last + 1) and _joins(runs[last], runs[last + 1], gap, spoken):
             last += 1
             grown = True
+    merged_first, merged_last = first, last
     if continuity is not None and f0_hz is not None:
         first, last = _continued(runs, first, last, frames, voiced, f0_hz, agreed, continuity, hop)
+    if parts is not None:
+        first, last = _parts(runs, first, last, frames, voiced, agreed, parts, hop)
     onset, offset = runs[first][0], runs[last][1]
+    tail = int(round(float((continuity or {}).get("tail_s", 0.0)) / hop))
+    if first < merged_first:
+        onset = _voiced_bound(runs[first], voiced, tail, start=True)
+    if last > merged_last:
+        offset = _voiced_bound(runs[last], voiced, tail, start=False)
     start = _inhale_start(frames, voiced, floor, onset, blocked, p)
     holds = tuple(runs[first : last + 1])
     outside = tuple(run for i, run in enumerate(runs) if i < first or i > last)
@@ -444,6 +456,52 @@ def _continued(
         if state == BREAKS:
             break
         if state == CONTINUES:
+            last = j
+        j += 1
+    return first, last
+
+
+def _voiced_bound(run: Run, voiced: np.ndarray, tail: int, *, start: bool) -> int:
+    """A taken-in run's bound: its first voiced frame less ``tail``, or its last voiced frame plus ``tail``."""
+    inside = np.flatnonzero(voiced[run[0] : run[1]])
+    if not inside.size:
+        return run[0] if start else run[1]
+    if start:
+        return max(run[0], run[0] + int(inside[0]) - tail)
+    return min(run[1], run[0] + int(inside[-1]) + 1 + tail)
+
+
+def _parts(
+    runs: Sequence[Run],
+    first: int,
+    last: int,
+    frames: Frames,
+    voiced: np.ndarray,
+    agreed: Sequence[tuple[float, float]],
+    q: dict[str, Any],
+    hop: float,
+) -> tuple[int, int]:
+    """The run indices the extent spans once further parts of the task are taken in; other runs are passed over."""
+    reach = int(round(float(q["gap_max_s"]) / hop))
+    hold = int(round(float(q["hold_min_s"]) / hop))
+    times = frames.times_s
+
+    def free(a: int, b: int) -> bool:
+        lo, hi = float(times[a]), float(times[max(a, b - 1)])
+        return not any(s < hi and lo < e for s, e in agreed)
+
+    def part(run: Run) -> bool:
+        piece = voiced[run[0] : run[1]]
+        return int(piece.sum()) >= hold and float(piece.mean()) >= float(q["voiced_fraction_min"])
+
+    i = first - 1
+    while i >= 0 and runs[first][0] - runs[i][1] <= reach and free(runs[i][0], runs[first][0]):
+        if part(runs[i]):
+            first = i
+        i -= 1
+    j = last + 1
+    while j < len(runs) and runs[j][0] - runs[last][1] <= reach and free(runs[last][1], runs[j][1]):
+        if part(runs[j]):
             last = j
         j += 1
     return first, last
@@ -751,6 +809,7 @@ def measure_phonation(
         f0_hz=f0,
         agreed=agreed,
         continuity=dict(x["continuity"]) if enabled("continuity", x) else None,
+        parts=dict(x["parts"]) if enabled("parts", x) else None,
     )
     onset_frames = max(1, int(round(float(x["trim"]["voice"]["onset_voiced_s"]) / hop)))
     sounding = voiced_onset(voiced, extent.onset, extent.offset, onset_frames) if extent is not None else 0
@@ -976,9 +1035,9 @@ def voice_task_extent(
 
     Returns:
         The reading with ``task_extent``, ``count_in`` and ``check``. The count-in joins the extent where it
-        ends at most ``count_in.gap_max_s`` before the phonation's start. Too narrow where a count-in lies
-        outside the extent, or a reachable run outside it holds ``completeness.voice_hold_min_s`` of voicing
-        within ``continuity.semitones`` of the extent's F0; too wide where the extent starts over
+        starts before the phonation and ends at most ``count_in.gap_max_s`` before its start (an overlap is
+        taken in). Too narrow where a count-in lies outside the extent, or a reachable run outside it holds
+        ``completeness.voice_hold_min_s`` of voicing within ``continuity.semitones`` of the extent's F0; too wide where the extent starts over
         ``completeness.onset_tolerance_s`` before the phonation onset.
     """
     x = extent_p or task_extent_parameters()
@@ -988,7 +1047,7 @@ def voice_task_extent(
     if (
         count_in is not None
         and enabled("count_in", x)
-        and count_in[1] <= start + float(x["completeness"]["onset_tolerance_s"])
+        and count_in[0] < start
         and start - count_in[1] <= float(x["count_in"]["gap_max_s"])
     ):
         start = min(start, count_in[0])
