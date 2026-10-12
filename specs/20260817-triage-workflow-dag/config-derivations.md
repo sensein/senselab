@@ -422,6 +422,14 @@ DC offset, handling noise and room rumble, none of which is content, and all of 
 lowest band's level and any slope taken through it. The top edge is not a key: it is Nyquist, which
 is a property of the file, not a decision.
 
+## ppg
+
+The phonetic posteriorgram's worker. `timeout_min_s` (1800 s) is the least the ppgs subprocess is allowed,
+whatever the recording's length. The length-scaled budget (300 s startup plus 2 s per audio second) timed out
+on 211cf773 (a 30 s breath recording) in the 2026-09-20 run under node contention, which errored PREPROCESS
+and left the recording not_measured. Thirty minutes is six times that budget for a 30 s file; a worker still
+running then is hung, not slow. Derivation: `specs/20261012-r37-extents/design.md` ("E3").
+
 ## gammatone
 
 The auditory filterbank's channel layout.

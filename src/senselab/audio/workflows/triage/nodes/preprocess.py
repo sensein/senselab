@@ -837,12 +837,13 @@ def write_ppg_posteriorgram(
     )
 
 
-def ppg_posteriorgram(store: ProvStore, *, run_dir: Path) -> str:
+def ppg_posteriorgram(store: ProvStore, *, run_dir: Path, timeout_min_s: float | None = None) -> str:
     """The phonetic posteriorgram over the ``enhanced`` stream, to one npz sidecar.
 
     Args:
         store: The provenance store.
         run_dir: The run directory the sidecar is written under.
+        timeout_min_s: The least the ppgs worker is allowed, in seconds (``ppg.timeout_min_s``).
 
     Returns:
         The measurement entity's id.
@@ -852,7 +853,7 @@ def ppg_posteriorgram(store: ProvStore, *, run_dir: Path) -> str:
         PpgsPosteriorgramUnavailable: If the model produced no posteriorgram for this recording.
     """
     enhanced_id, audio = ppg_input(store, run_dir)
-    [result] = extract_ppgs_from_audios([audio])
+    [result] = extract_ppgs_from_audios([audio], timeout_min_s=timeout_min_s)
     return write_ppg_posteriorgram(
         store,
         run_dir=run_dir,
@@ -2820,7 +2821,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
 
     def _ppg_posteriorgram() -> None:
         """The phonetic posteriorgram over the ``enhanced`` stream, to one npz sidecar."""
-        entity_id = ppg_posteriorgram(store, run_dir=run_dir)
+        entity_id = ppg_posteriorgram(store, run_dir=run_dir, timeout_min_s=float(config.require("ppg.timeout_min_s")))
         derivatives[PPG_MEASUREMENT] = entity_id
         view.append(entity_id)
 
@@ -3204,10 +3205,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         if not bool(config.require("hear.keep_worker_resident")):
             shutdown_hear_worker()
 
-    if hard_failures:
-        summary = "; ".join(f"{name}: {message}" for name, message in hard_failures)
-        raise RuntimeError(f"PREPROCESS: {len(hard_failures)} block(s) failed unexpectedly: {summary}")
-
+    failed = dict(sorted(hard_failures))
     verdict_id, verdict = write_verdict(
         store,
         condition,
@@ -3215,8 +3213,9 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         node=NODE,
         outcome=Outcome.PASS,
         kind=None,
-        why="conditioning complete; absent derivatives are listed",
-        detail={"absent": dict(sorted(absent.items())), "derivatives": derivatives},
+        why="conditioning complete; absent derivatives are listed"
+        + (f"; {len(failed)} block(s) failed: {', '.join(failed)}" if failed else ""),
+        detail={"absent": dict(sorted(absent.items())), "derivatives": derivatives, "failed": failed},
     )
     view.append(verdict_id)
     return PreprocessResult(

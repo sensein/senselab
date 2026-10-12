@@ -204,7 +204,7 @@ def _worker_timeout_s(audio_seconds: float) -> float:
 
 
 def extract_ppgs_from_audios(
-    audios: List[Audio], device: Optional[DeviceType] = None
+    audios: List[Audio], device: Optional[DeviceType] = None, timeout_min_s: Optional[float] = None
 ) -> List["torch.Tensor | PpgsPosteriorgramUnavailable"]:
     """Extracts phonetic posteriorgrams (PPGs) from every audio.
 
@@ -215,6 +215,8 @@ def extract_ppgs_from_audios(
         audios: The audios to extract PPGs from. Every one must be mono and at
             :data:`PPGS_SAMPLE_RATE`.
         device: Device to use (CUDA or CPU).
+        timeout_min_s: The least the worker is allowed, in seconds, whatever the audio's length; None
+            allows only the length-scaled budget.
 
     Returns:
         One entry per input audio, in input order: a PPG tensor in ``(1, phonemes, frames)`` layout
@@ -237,6 +239,8 @@ def extract_ppgs_from_audios(
 
     python = venv_python(ensure_ppgs_venv())
     budget = _worker_timeout_s(sum(audio.waveform.shape[-1] / audio.sampling_rate for audio in audios))
+    if timeout_min_s is not None:
+        budget = max(budget, float(timeout_min_s))
 
     with tempfile.TemporaryDirectory(prefix="senselab-ppgs-") as tmpdir:
         tmp = Path(tmpdir)

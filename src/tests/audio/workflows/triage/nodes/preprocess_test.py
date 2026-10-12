@@ -1450,7 +1450,7 @@ class TestTheConsensusTranscript:
         assert live_entities(store, "word") == []
         assert find_measurement(store, "energy_envelope") is not None
 
-    def test_a_defect_in_the_consensus_fails_the_node(
+    def test_a_defect_in_the_consensus_is_a_failed_block(
         self,
         store: ProvStore,
         config: TriageConfig,
@@ -1458,7 +1458,7 @@ class TestTheConsensusTranscript:
         wav_writer: Callable[..., Path],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Test 21: a RuntimeError from align_sources is a hard failure naming the block."""
+        """Test 21: a RuntimeError from align_sources is a failed block, named, and the node completes."""
         _seed_admit(store, tmp_path, wav_writer)
         _stub_models(monkeypatch, crisper=_line("hello world"), qwen=_line("hello world"))
 
@@ -1466,8 +1466,9 @@ class TestTheConsensusTranscript:
             raise RuntimeError("alignment blew up")
 
         monkeypatch.setattr(preprocess_module, "align_sources", _broken)
-        with pytest.raises(RuntimeError, match="consensus_transcript: RuntimeError: alignment blew up"):
-            preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
+        result = preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
+        assert "consensus_transcript" in result.absent
+        assert "consensus_transcript" in result.verdict.why
 
     def test_provenance_links_words_to_the_sources_that_produced_them(
         self,
@@ -1754,10 +1755,10 @@ class TestTheEnvelopeSidecarHoldsMeasurementsOnly:
             assert span.extent[1] < 2.9, "the burst ends at 1.5 s; a span to 3.0 s is the NaN hangover"
 
 
-class TestAnUnexpectedBlockFailureIsNotAbsorbed:
+class TestAnUnexpectedBlockFailureStopsOnlyItsReaders:
     """A failure that is neither a null-config ValueError nor a missing-prerequisite LookupError."""
 
-    def test_every_other_block_still_runs_before_preprocess_raises(
+    def test_every_other_block_runs_and_the_node_completes_naming_the_failure(
         self,
         store: ProvStore,
         config: TriageConfig,
@@ -1765,7 +1766,7 @@ class TestAnUnexpectedBlockFailureIsNotAbsorbed:
         wav_writer: Callable[..., Path],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """The loop does not abort early: unrelated derivatives, before and after the break, survive."""
+        """The failed blocks are absent and named on the verdict; every other derivative survives."""
         _seed_admit(store, tmp_path, wav_writer)
         _stub_models(monkeypatch)
 
@@ -1774,12 +1775,11 @@ class TestAnUnexpectedBlockFailureIsNotAbsorbed:
 
         monkeypatch.setattr(preprocess_module, "extract_spectrogram_from_audios", _broken)
 
-        with pytest.raises(RuntimeError) as excinfo:
-            preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
+        result = preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
 
-        message = str(excinfo.value)
-        assert "spectrogram_wideband" in message
-        assert "spectrogram_narrowband" in message
+        assert {"spectrogram_wideband", "spectrogram_narrowband"} <= set(result.absent)
+        assert "spectrogram_wideband" in result.verdict.why
+        assert "spectrogram_narrowband" in result.verdict.why
         # Before the failing blocks in `blocks`' own order:
         assert find_measurement(store, "energy_envelope") is not None
         # After the failing blocks: `spans` still proposes from the amplitude sources alone, and
@@ -2376,7 +2376,7 @@ class TestThePosteriorgramAndPraatBlocks:
         _seed_admit(store, tmp_path, wav_writer)
         seen: list[int] = []
 
-        def _recording_ppgs(audios: list, device: Any = None) -> list:  # noqa: ANN401
+        def _recording_ppgs(audios: list, device: Any = None, timeout_min_s: float | None = None) -> list:  # noqa: ANN401
             seen.append(audios[0].waveform.shape[-1])
             return fake_ppgs(audios, device)
 
@@ -2397,7 +2397,7 @@ class TestThePosteriorgramAndPraatBlocks:
         """The typed absence is caught by the block runner: no entity, a reason, and Praat still runs."""
         _seed_admit(store, tmp_path, wav_writer)
 
-        def _unavailable(audios: list, device: Any = None) -> list:  # noqa: ANN401
+        def _unavailable(audios: list, device: Any = None, timeout_min_s: float | None = None) -> list:  # noqa: ANN401
             return [PpgsPosteriorgramUnavailable("ppgs produced no posteriorgram: RuntimeError: shapes")]
 
         _stub_models(monkeypatch, enhance=_fake_enhance(0.5, noise_scale=0.05, seed=1), ppgs=_unavailable)

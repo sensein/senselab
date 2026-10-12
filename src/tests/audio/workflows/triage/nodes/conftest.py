@@ -83,12 +83,13 @@ def _audio(tmp_path: Path) -> Audio:
     return Audio(filepath=str(tmp_path / "input.wav"))
 
 
-def fake_ppgs(audios: list, device: Any = None) -> list:  # noqa: ANN401
+def fake_ppgs(audios: list, device: Any = None, timeout_min_s: float | None = None) -> list:  # noqa: ANN401
     """One posteriorgram per input, in the model's own ``(1, phonemes, frames)`` layout.
 
     Args:
         audios: The conditioned audios.
         device: Accepted for the real signature; unread.
+        timeout_min_s: Accepted for the real signature; unread.
 
     Returns:
         One random tensor per audio, at 100 frames per second of audio.
