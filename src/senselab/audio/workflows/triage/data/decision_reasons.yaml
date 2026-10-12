@@ -4,7 +4,7 @@
 # Owner, 2026-10-10: consolidated to these codes; the release ground is its own column (release_reason).
 # Derivation: specs/20261007-task-events-in-background/design.md ("Decision table", "Reasons consolidated",
 # "The residual's other voice is attributed", "The reviewer reads the phrases").
-version: 11
+version: 12
 precedence:            # discard reasons first, then incomplete, then the recording, then the content
 - unreadable
 - task_too_short
@@ -44,6 +44,7 @@ keys:                  # exact verdict ground key -> reason
   syllable_train_not_target: task_not_found
   declared_task_absent: task_not_found
   task_mismatch: task_not_found
+  task_replaced_by_talk: task_not_found   # data/discard_replaced_task.yaml; discards only when enabled
   preprocess_errored: not_measured
   routing_errored: not_measured
   config_bad_hint_map: not_measured
@@ -101,6 +102,10 @@ annotations:           # ground keys and prefixes the fold writes only as annota
 - residual_speech_unattributed
 - residual_speech_outside_task
 - aligner_failed
+- session_condition_shift       # COHORT: a session inconsistency its recording condition explains
+- recurring_non_target_voice    # COHORT: a non-matching voice outside the task recurring across recordings
+- non_task_self_talk            # COHORT: a non-matching voice outside the task that is the participant's own
+- speaker_nonmatch_shared       # COHORT: a non-match shared across the participant and uncorroborated
 reviewed_releases:     # owner, 2026-10-10: masks not yet validated; every release but as_is is reviewed (release_reviewed)
 - redacted
 - withheld

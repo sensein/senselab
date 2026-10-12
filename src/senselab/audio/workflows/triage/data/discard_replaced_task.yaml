@@ -1,0 +1,28 @@
+# Discard where the task is absent or weak and talk outside it takes its place (discard_replaced_task.py).
+# Derivations: specs/20261007-task-events-in-background/design.md, "Discard when talk replaces the task".
+version: 1
+enabled: false                     # owner, 2026-10-12: off until a sample of the candidates has been listened to
+
+non_lexical:                       # airway, voice, and the lexical families read as a voice task
+  kinds: [airway, voice]
+  families: [loudness, loudness-v2]
+  free_speech_words_per_s: 2.03    # median consensus words per second over free-speech, picture-description and open-response recordings, r36
+  talk_fraction_min: 0.25          # talk outside the task at this share of that rate or more
+  extent_fraction_max: 0.5         # a task extent under this share of the recording is weak
+
+lexical:                           # lexical speech, less the families above
+  kinds: [lexical_speech]
+  exclude: [loudness, loudness-v2]
+
+short_response:                    # free-response families: a response under fraction_max of the family median
+  fraction_max: 0.1
+  family_median_s:                 # median gate response_min_s reading per family, r36 (n in brackets)
+    cinderella-story: 91.92        # [258]
+    free-speech: 26.75             # [3073]
+    free-speech-v2: 25.89          # [2119]
+    open-response-questions: 27.97 # [199]
+    picture-description: 49.08     # [889]
+    picture-description-option1: 28.57  # [373]
+    picture-description-option2: 39.68  # [329]
+    story-recall: 40.45            # [888]
+    story-recall-v2: 73.38         # [660]

@@ -147,7 +147,7 @@ columns:
 
   discard_ground:
     units: none
-    values: [unmeasurable, too_short_for_task, acoustically_empty, no_breath_captured, no_cough_captured, no_phonation_captured, no_syllable_train_captured, syllable_train_not_target, declared_task_absent]
+    values: [unmeasurable, too_short_for_task, acoustically_empty, no_breath_captured, no_cough_captured, no_phonation_captured, no_syllable_train_captured, syllable_train_not_target, declared_task_absent, task_replaced_by_talk]
     description: >-
       Why the recording was discarded: ADMIT could not measure it (`unmeasurable`); it is shorter than
       its declared family's minimum in data/task_minimum_duration.yaml (`too_short_for_task`); the
@@ -161,7 +161,9 @@ columns:
       task layer (data/task_events.yaml, ddk) found no syllable over the floor
       (`no_syllable_train_captured`) or read its train as another activity than the declared syllables
       (`syllable_train_not_target`); or that branch ran
-      and found none of the task, a SPEECH task holding no lexical word (`declared_task_absent`).
+      and found none of the task, a SPEECH task holding no lexical word (`declared_task_absent`); or,
+      where data/discard_replaced_task.yaml is enabled, the task is absent or weak and talk outside it
+      takes its place (`task_replaced_by_talk`).
     computation: The fold's `discard_ground` attribute.
     source: [recording_vectors.py:extract, vocabulary.py:FileVerdict.record]
     null_means: The recording was not discarded.

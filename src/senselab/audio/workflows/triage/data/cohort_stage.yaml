@@ -1,7 +1,7 @@
 # COHORT: the corpus and session pass between QUALITY and VERDICT.
 # Read by `senselab.audio.workflows.triage.cohort_stage.cohort_parameters`.
 # Derivations: specs/20261007-task-events-in-background/design.md, section "Cohort stage".
-version: 7
+version: 8
 
 # Session speaker enrollment. Model, commit and match cut are `speech.enrollment_model` and
 # `speech.target_match_cosine` (the cut is the enrollment's leave-one-out step only); the shortest span embedded is
@@ -18,6 +18,25 @@ enrollment:
 # enrollment of its own, and the comparison for session_speaker_consistency.
 participant:
   consistency_cosine_min: 0.63  # session vs other-sessions enrollment cosine under this is session_speaker_inconsistent; Tukey lower fence (Q1 - 1.5 IQR) over r18d, UNFITTED against labels
+
+# Recording condition per participant and session (level, SNR, clipping), read by cohort_fold.hot_or_clipped and
+# cohort_fold.condition_shift. Derivations: specs/20261007-task-events-in-background/design.md, "Recording condition".
+condition:
+  snr_percentiles: {floor: 10, level: 95}  # energy-envelope percentiles read as floor and active level (recording_vectors/evaluation.yaml frame)
+  hot_rms_dbfs_min: -20.0                  # PROVISIONAL: a participant or session median RMS at or over this is hot
+  clipped_fraction_min: 0.5                # PROVISIONAL: a participant or session with this share of clipped recordings is clipped
+  shift_level_db_min: 6.0                  # PROVISIONAL: a session median level this far from the other sessions' is a condition shift
+  shift_snr_db_min: 6.0                    # PROVISIONAL: likewise for the median SNR
+
+# The participant's non-matching speech outside the task, clustered across their recordings (cohort_stage.non_target_voices).
+non_target_voice:
+  cosine_min: 0.398    # one voice: comparison.cosine_min.default (fitted 2026-10-11, 1% cross-speaker acceptance)
+  recurring_min: 2     # recordings a cluster spans to be a recurring voice
+
+# A speaker non-match shared across a participant's recordings (cohort_fold.shared_nonmatch).
+shared_nonmatch:
+  recordings_min: 3     # PROVISIONAL: non-matching recordings
+  fraction_min: 0.5     # PROVISIONAL: share of the participant's compared recordings
 
 # Speaker comparison: per recording, one embedding pooled over its target speech and one over its speech
 # outside the task, each compared with the enrollment. Derivation: design.md, "Pooled speaker comparison".
