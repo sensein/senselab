@@ -4,7 +4,7 @@
 # a category with in / not in against a list of categories; a reported reading has neither.
 # `producer` names the unit of specs/20261007-task-events-in-background/design.md that emits it;
 # an item a later unit produces is absent from the tables until that unit lands.
-version: 12
+version: 13
 groups:
   acquisition:
     admit_outcome:
@@ -19,6 +19,10 @@ groups:
       unit:
       producer: fold
       meaning: whether the branch owning the declared task found it
+    task_replaced_by_talk:
+      unit:
+      producer: fold
+      meaning: the discard_replaced_task.py reading a task_replaced_by_talk discard rests on (talk fraction of the free-speech rate, expected tokens matched, or response fraction of the family median) against data/discard_replaced_task.yaml
     streams_disagree:
       unit:
       producer: unit C
@@ -213,6 +217,18 @@ groups:
       unit:
       producer: COHORT
       meaning: the task extent's share of the recording, >= recording_duration_outlier.extent_fraction_min
+    cohort.participant_hot_or_clipped:
+      unit:
+      producer: COHORT
+      meaning: whether the participant's median RMS or share of clipped recordings reaches data/cohort_stage.yaml condition.hot_rms_dbfs_min or condition.clipped_fraction_min; reported only
+    cohort.session_level_shift_db:
+      unit: dB
+      producer: COHORT
+      meaning: the session's median RMS less the participant's other sessions'; with session_snr_shift_db, at or over data/cohort_stage.yaml condition.shift_* the consistency check is session_condition_shift
+    cohort.session_snr_shift_db:
+      unit: dB
+      producer: COHORT
+      meaning: the session's median envelope SNR less the participant's other sessions'
     cohort.recording_duration_outlier:
       unit:
       producer: COHORT

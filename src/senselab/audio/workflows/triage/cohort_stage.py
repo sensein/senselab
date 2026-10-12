@@ -38,11 +38,18 @@ from senselab.audio.workflows.triage.cohort_fold import (
     CHECKS,
     COHORT_NODE,
     COHORT_READING,
+    CONDITION,
+    CONSISTENCY_CHECK_NAME,
     KEY_SESSION_SPEAKER_INCONSISTENT,
+    LABEL_RECURRING,
+    LABEL_SELF_TALK,
+    LABEL_SINGLE,
     MEASURED,
+    NON_TARGET_VOICE,
     NOT_APPLICABLE,
     NOT_MEASURED,
     OTHER_SPEAKER,
+    PARTICIPANT_NONMATCH,
     POOL_NON_TASK,
     POOL_TARGET,
     UNAVAILABLE,
@@ -90,7 +97,7 @@ SOURCE_PARTICIPANT_OTHER_SESSIONS = "participant_other_sessions"
 SOURCE_NONE = "none"
 """``enrollment_source``: what a recording's runs were compared against."""
 
-CONSISTENCY_CHECK = "session_speaker_consistency"
+CONSISTENCY_CHECK = CONSISTENCY_CHECK_NAME
 """The check comparing a session's enrollment with the participant's other sessions."""
 
 NO_COHORT = "no cohort was read: the run saw this recording alone"
@@ -108,6 +115,7 @@ TOO_SHORT_FOR_SPEAKER_ID = "too_short_for_speaker_id"
 NO_TARGET_COMPARISON = "no_target_comparison"
 NO_SPEECH_OUTSIDE_TASK = "no_speech_outside_task"
 NOT_EMBEDDED = "the pooled audio embedded to nothing"
+NO_NONMATCHING_NON_TASK = "no non-matching speech outside the task"
 
 TARGET_SPEECH = "speech"
 TARGET_TASK_TEXT = "task_text"
@@ -187,6 +195,9 @@ class RecordingFacts:
         removed_speech: Speech-classified on the plain stream and not on the enhanced one: a voice the
             enhancer removed as background.
         task_events: The task events the branches read (breaths, coughs, phonation holds, syllables).
+        rms_dbfs: The plain stream's whole-file RMS level (PREPROCESS ``level``), or None.
+        clipped_s: The raw recording's clipped seconds (``disruptions_file``), or None.
+        snr_db: The plain energy envelope's active level over its floor (``condition.snr_percentiles``), or None.
     """
 
     stem: str
@@ -201,6 +212,9 @@ class RecordingFacts:
     non_task: tuple[tuple[float, float], ...] = ()
     removed_speech: tuple[tuple[float, float], ...] = ()
     task_events: tuple[tuple[float, float], ...] = ()
+    rms_dbfs: float | None = None
+    clipped_s: float | None = None
+    snr_db: float | None = None
 
     @property
     def extent_fraction(self) -> float | None:
@@ -504,7 +518,67 @@ def facts_of(
         non_task=_extents(non_task_words(store, family, hull)),
         removed_speech=tuple(removed_speech),
         task_events=tuple(merge(_task_events(store))),
+        **condition_readings(store, run_dir),
     )
+
+
+LEVEL_MEASUREMENT = "level"
+DISRUPTIONS_MEASUREMENT = "disruptions_file"
+ENVELOPE_MEASUREMENT = "energy_envelope"
+
+
+def _reading(store: ProvStore, name: str, key: str) -> float | None:
+    measurement = find_measurement(store, name)
+    value = None if measurement is None else measurement.attributes.get(key)
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(float(value)):
+        return None
+    return round(float(value), 3)
+
+
+def envelope_snr_db(levels: np.ndarray | None, floor_percentile: float, level_percentile: float) -> float | None:
+    """An envelope's active level over its floor.
+
+    Args:
+        levels: Frame levels in dBFS, or None.
+        floor_percentile: The percentile read as the floor.
+        level_percentile: The percentile read as the active level.
+
+    Returns:
+        The difference in dB, or None where there are no finite frames.
+    """
+    if levels is None:
+        return None
+    finite = np.asarray(levels, dtype=np.float64)
+    finite = finite[np.isfinite(finite)]
+    if not finite.size:
+        return None
+    return round(float(np.percentile(finite, level_percentile) - np.percentile(finite, floor_percentile)), 3)
+
+
+def condition_readings(store: ProvStore, run_dir: Path | None) -> dict[str, float | None]:
+    """The recording-condition readings of one store: level, clipping and SNR.
+
+    Args:
+        store: The recording's store.
+        run_dir: Its run directory, for the envelope sidecar; None reads no SNR.
+
+    Returns:
+        ``rms_dbfs``, ``clipped_s`` and ``snr_db``, each None where the store holds no reading.
+    """
+    snr = None
+    if run_dir is not None:
+        arrays = derivative_arrays(store, run_dir, ENVELOPE_MEASUREMENT)
+        percentiles = cohort_parameters()["condition"]["snr_percentiles"]
+        snr = envelope_snr_db(
+            None if arrays is None else arrays.get("envelope_dbfs"),
+            float(percentiles["floor"]),
+            float(percentiles["level"]),
+        )
+    return {
+        "rms_dbfs": _reading(store, LEVEL_MEASUREMENT, "rms_dbfs"),
+        "clipped_s": _reading(store, DISRUPTIONS_MEASUREMENT, "clipped_s"),
+        "snr_db": snr,
+    }
 
 
 def _extents(words: Sequence[Entity]) -> tuple[tuple[float, float], ...]:
@@ -1272,6 +1346,7 @@ def compare_speaker(
     lexical_gap_s: float,
     source: str = SOURCE_SESSION,
     participant: Enrollment | None = None,
+    vectors: dict[str, np.ndarray] | None = None,
 ) -> dict[str, Any]:
     """Compare one recording's pooled target speech and pooled speech outside the task with an enrollment.
 
@@ -1289,6 +1364,7 @@ def compare_speaker(
             :data:`SOURCE_PARTICIPANT_OTHER_SESSIONS`), recorded.
         participant: A second enrollment each pool is also compared with, reported as ``participant_cosine``;
             it decides nothing.
+        vectors: Filled with each embedded pool's vector, by pool name; never written into the reading.
 
     Returns:
         The ``other_speaker`` block: one record per pool (:data:`POOL_TARGET`, :data:`POOL_NON_TASK`), the
@@ -1324,6 +1400,8 @@ def compare_speaker(
         if vector is None or enrollment.vector is None:
             pools[name] = {**pool, "status": UNAVAILABLE, "reason": NOT_EMBEDDED}
             continue
+        if vectors is not None:
+            vectors[name] = vector
         cosine = float(vector @ enrollment.vector)
         bound = pool_cosine_min(facts.family, name)
         pool.update(cosine=round(cosine, 4), cosine_min=bound, match=None if bound is None else cosine >= bound)
@@ -1341,6 +1419,170 @@ def compare_speaker(
         "nonmatch": nonmatch,
         "nonmatch_s": round(_length(spans), 3),
         "nonmatch_spans": [[round(a, 3), round(b, 3)] for a, b in spans],
+    }
+
+
+# ------------------------------------------------------------------------------ across recordings
+
+
+def recording_condition(facts: RecordingFacts) -> dict[str, Any]:
+    """One recording's condition readings.
+
+    Args:
+        facts: The recording's facts.
+
+    Returns:
+        ``rms_dbfs``, ``snr_db`` and ``clipped_s``.
+    """
+    return {"rms_dbfs": facts.rms_dbfs, "snr_db": facts.snr_db, "clipped_s": facts.clipped_s}
+
+
+def _median(values: Sequence[float]) -> float | None:
+    return None if not values else round(float(np.median(values)), 2)
+
+
+def condition_summary(members: Sequence[RecordingFacts]) -> dict[str, Any]:
+    """The recording condition of a group of recordings: level, SNR and clipping.
+
+    Args:
+        members: The group's facts.
+
+    Returns:
+        ``recordings_n``, ``rms_dbfs_median``, ``snr_db_median`` and ``clipped_fraction`` (the share of the
+        recordings with a clipping reading that clipped at all); a value is None where no member has it.
+    """
+    clipped = [f.clipped_s for f in members if f.clipped_s is not None]
+    return {
+        "recordings_n": len(members),
+        "rms_dbfs_median": _median([f.rms_dbfs for f in members if f.rms_dbfs is not None]),
+        "snr_db_median": _median([f.snr_db for f in members if f.snr_db is not None]),
+        "clipped_fraction": None if not clipped else round(sum(1 for c in clipped if c > 0) / len(clipped), 4),
+    }
+
+
+def condition_blocks(sessions: Sequence[tuple[str, Sequence[RecordingFacts]]]) -> dict[str, dict[str, Any]]:
+    """Each session's condition block: the session's, the participant's and the other sessions' summaries.
+
+    Args:
+        sessions: ``(session key, members)`` per session of one participant.
+
+    Returns:
+        By session key: ``session``, ``participant`` and ``other_sessions`` (None for a participant with one
+        session), each a :func:`condition_summary`.
+    """
+    every = [facts for _, members in sessions for facts in members]
+    participant = condition_summary(every)
+    out: dict[str, dict[str, Any]] = {}
+    for session, members in sessions:
+        others = [facts for other, group in sessions if other != session for facts in group]
+        out[session] = {
+            "session": condition_summary(members),
+            "participant": participant,
+            "other_sessions": condition_summary(others) if others else None,
+        }
+    return out
+
+
+def cluster_voices(vectors: Mapping[str, np.ndarray], cut: float) -> list[list[str]]:
+    """Average-linkage clusters of unit vectors: the closest pair merges while its mean cosine reaches ``cut``.
+
+    Args:
+        vectors: Unit vectors by key.
+        cut: The mean pairwise cosine two clusters need to merge.
+
+    Returns:
+        The clusters, largest first, each a sorted key list.
+    """
+    clusters = [[key] for key in sorted(vectors)]
+    while len(clusters) > 1:
+        best: tuple[float, int, int] | None = None
+        for i in range(len(clusters)):
+            for j in range(i + 1, len(clusters)):
+                cosine = float(np.mean([vectors[a] @ vectors[b] for a in clusters[i] for b in clusters[j]]))
+                if best is None or cosine > best[0]:
+                    best = (cosine, i, j)
+        assert best is not None
+        if best[0] < cut:
+            break
+        _, i, j = best
+        clusters[i] = sorted(clusters[i] + clusters[j])
+        del clusters[j]
+    return sorted(clusters, key=lambda c: (-len(c), c[0]))
+
+
+def non_target_voices(
+    pools: Mapping[str, Mapping[str, Any]], *, cut: float, recurring_min: int
+) -> dict[str, dict[str, Any]]:
+    """Cluster one participant's non-matching speech outside the task, and say whose each cluster is.
+
+    A recording whose non-task voice matches the participant's own speech in their other recordings (the
+    mean of their matching target pools) is :data:`~senselab.audio.workflows.triage.cohort_fold.LABEL_SELF_TALK`;
+    otherwise a voice in a cluster of at least ``recurring_min`` recordings is
+    :data:`~senselab.audio.workflows.triage.cohort_fold.LABEL_RECURRING`, and any other
+    :data:`~senselab.audio.workflows.triage.cohort_fold.LABEL_SINGLE`.
+
+    Args:
+        pools: By stem: ``session``, ``non_task`` (the non-task pool's vector where it did not match, else
+            None) and ``target`` (the target pool's vector where it matched, else None).
+        cut: The cosine two voices (and a voice and the participant) need to be one speaker.
+        recurring_min: The recordings a cluster needs to be a recurring voice.
+
+    Returns:
+        By stem, the ``non_target_voice`` block of every recording in ``pools``.
+    """
+    candidates = {stem: p["non_task"] for stem, p in pools.items() if p.get("non_task") is not None}
+    out: dict[str, dict[str, Any]] = {
+        stem: {"status": NOT_APPLICABLE, "reason": NO_NONMATCHING_NON_TASK} for stem in pools if stem not in candidates
+    }
+    for number, members in enumerate(cluster_voices(candidates, cut), start=1):
+        sessions = sorted({str(pools[stem].get("session")) for stem in members})
+        for stem in members:
+            own = [p["target"] for key, p in pools.items() if key != stem and p.get("target") is not None]
+            self_cosine = None if not own else round(float(candidates[stem] @ _unit(np.vstack(own).mean(axis=0))), 4)
+            if self_cosine is not None and self_cosine >= cut:
+                label = LABEL_SELF_TALK
+            elif len(members) >= recurring_min:
+                label = LABEL_RECURRING
+            else:
+                label = LABEL_SINGLE
+            out[stem] = {
+                "status": MEASURED,
+                "cluster": f"V{number}",
+                "cluster_recordings_n": len(members),
+                "cluster_sessions_n": len(sessions),
+                "cluster_recordings": list(members),
+                "self_cosine": self_cosine,
+                "self_recordings_n": len(own),
+                "cosine_min": cut,
+                "label": label,
+            }
+    return out
+
+
+def participant_nonmatch(blocks: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """How many of a participant's compared recordings hold a speaker non-match.
+
+    Args:
+        blocks: Every member's ``other_speaker`` block.
+
+    Returns:
+        ``recordings_compared_n`` (a pool compared against a bound), ``recordings_nonmatch_n`` and
+        ``nonmatch_fraction`` (None where none was compared).
+    """
+    compared = [
+        block
+        for block in blocks
+        if block.get("status") == MEASURED
+        and any(
+            isinstance(block.get(pool), Mapping) and block[pool].get("match") is not None
+            for pool in (POOL_TARGET, POOL_NON_TASK)
+        )
+    ]
+    nonmatch = [block for block in compared if block.get("nonmatch")]
+    return {
+        "recordings_compared_n": len(compared),
+        "recordings_nonmatch_n": len(nonmatch),
+        "nonmatch_fraction": round(len(nonmatch) / len(compared), 4) if compared else None,
     }
 
 
@@ -1570,6 +1812,9 @@ def cohort_attributes(
     checks: Mapping[str, Any],
     quantiles: Mapping[str, Any] | None,
     key: str | None,
+    condition: Mapping[str, Any] | None = None,
+    non_target_voice: Mapping[str, Any] | None = None,
+    nonmatch: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """The ``cohort_reading`` attributes for one recording.
 
@@ -1579,19 +1824,27 @@ def cohort_attributes(
         checks: The distribution checks' blocks.
         quantiles: ``{path, sha256, version}`` of the artefact read, or None.
         key: :func:`cohort_key`, or None for a run that saw no cohort.
+        condition: The session's :func:`condition_blocks` entry, or None where no cohort was read.
+        non_target_voice: The recording's :func:`non_target_voices` block, or None.
+        nonmatch: The participant's :func:`participant_nonmatch`, or None.
 
     Returns:
         The attributes.
     """
     measured = other_speaker.get("status") == MEASURED or any(c.get("status") == MEASURED for c in checks.values())
+    fraction = facts.extent_fraction
     return {
         "version": int(cohort_parameters()["version"]),
         "status": MEASURED if measured else UNAVAILABLE,
         "session": facts.session,
         "family": facts.family,
         "lexical_task": facts.lexical_task,
+        "task_extent_fraction": None if fraction is None else round(fraction, 4),
         OTHER_SPEAKER: dict(other_speaker),
         CHECKS: {name: dict(block) for name, block in checks.items()},
+        CONDITION: {"recording": recording_condition(facts), **dict(condition or {})},
+        NON_TARGET_VOICE: dict(non_target_voice or {"status": UNAVAILABLE}),
+        PARTICIPANT_NONMATCH: dict(nonmatch or {}),
         "quantiles": dict(quantiles) if quantiles else None,
         "cohort_key": key,
     }
@@ -1827,6 +2080,8 @@ def read_participant(
             lexical_gap_s=settings.lexical_gap_s,
         )
     bound = consistency_bound()
+    conditions = condition_blocks([(session, [facts for facts, _ in members]) for session, members in sessions])
+    vectors: dict[str, dict[str, np.ndarray]] = {}
     out: dict[str, list[dict[str, Any]]] = {}
     for session, members in sessions:
         readings: list[dict[str, Any]] = []
@@ -1863,10 +2118,61 @@ def read_participant(
                     lexical_gap_s=settings.lexical_gap_s,
                     source=source,
                     participant=second if source == SOURCE_SESSION else None,
+                    vectors=vectors.setdefault(facts.stem, {}),
                 )
             checks = {**run_checks(facts, artefact), CONSISTENCY_CHECK: consistency}
             readings.append(
-                cohort_attributes(facts, other_speaker=block, checks=checks, quantiles=quantiles_ref, key=key)
+                cohort_attributes(
+                    facts,
+                    other_speaker=block,
+                    checks=checks,
+                    quantiles=quantiles_ref,
+                    key=key,
+                    condition=conditions[session],
+                )
             )
         out[session] = readings
-    return enrollments, out
+    return enrollments, with_cross_recording(sessions, out, vectors)
+
+
+def with_cross_recording(
+    sessions: Sequence[tuple[str, Sequence[tuple[RecordingFacts, Any]]]],
+    readings: Mapping[str, Sequence[dict[str, Any]]],
+    vectors: Mapping[str, Mapping[str, np.ndarray]],
+) -> dict[str, list[dict[str, Any]]]:
+    """Add what needs every member's comparison to each reading: the non-target voices and the shared non-matches.
+
+    Args:
+        sessions: ``(session key, members)`` per session, members as :func:`read_participant` takes them.
+        readings: Per session, one attribute mapping per member, in order.
+        vectors: By stem, each pool's vector :func:`compare_speaker` embedded.
+
+    Returns:
+        The readings, each with its ``non_target_voice`` and ``participant_nonmatch`` blocks.
+    """
+    params = cohort_parameters()["non_target_voice"]
+    pools: dict[str, dict[str, Any]] = {}
+    blocks: list[Mapping[str, Any]] = []
+    for session, members in sessions:
+        for (facts, _), attributes in zip(members, readings[session], strict=True):
+            block = attributes[OTHER_SPEAKER]
+            blocks.append(block)
+            held = vectors.get(facts.stem) or {}
+            pool_of = {
+                name: block.get(name) if isinstance(block.get(name), Mapping) else {}
+                for name in (POOL_TARGET, POOL_NON_TASK)
+            }
+            pools[facts.stem] = {
+                "session": session,
+                "non_task": held.get(POOL_NON_TASK) if pool_of[POOL_NON_TASK].get("match") is False else None,
+                "target": held.get(POOL_TARGET) if pool_of[POOL_TARGET].get("match") is True else None,
+            }
+    voices = non_target_voices(pools, cut=float(params["cosine_min"]), recurring_min=int(params["recurring_min"]))
+    nonmatch = participant_nonmatch(blocks)
+    out: dict[str, list[dict[str, Any]]] = {}
+    for session, members in sessions:
+        out[session] = [
+            {**attributes, NON_TARGET_VOICE: voices[facts.stem], PARTICIPANT_NONMATCH: dict(nonmatch)}
+            for (facts, _), attributes in zip(members, readings[session], strict=True)
+        ]
+    return out

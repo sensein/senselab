@@ -15,9 +15,12 @@ from enum import Enum
 from typing import Any, Callable, Literal, Mapping, Sequence, TypeVar
 
 from senselab.audio.workflows.triage.cohort_fold import (
+    COHORT_ANNOTATION_KEYS,
     COHORT_GROUND_KEYS,
     COHORT_NODE,
     MEASURED,
+    check_blocks,
+    cohort_annotations,
     cohort_evidence,
     cohort_grounds,
     nonmatch_spans,
@@ -36,6 +39,12 @@ from senselab.audio.workflows.triage.decision import (
     reviewed_releases,
     second_opinion_withholds,
 )
+from senselab.audio.workflows.triage.discard_replaced_task import (
+    TASK_REPLACED_BY_TALK,
+    ReplacedTaskInputs,
+    replaced_task,
+)
+from senselab.audio.workflows.triage.discard_replaced_task import enabled as replaced_task_enabled
 
 GRAPH_ORDER = (
     "ADMIT",
@@ -686,6 +695,7 @@ DISCARD_GROUNDS = (
     NO_SYLLABLE_TRAIN_CAPTURED,
     SYLLABLE_TRAIN_NOT_TARGET,
     DECLARED_TASK_ABSENT,
+    TASK_REPLACED_BY_TALK,
 )
 """Every ground a file discards on, in the order the fold tries them; an operational flag (``rerun``) is
 tried between the third and the fourth, since a missing derivative may be why the task was not found."""
@@ -1001,7 +1011,9 @@ GROUND_KEYS = (
     KEY_RESIDUAL_SPEECH_OUTSIDE_TASK,
     KEY_UNPLACED_OPEN,
     KEY_UNPLACED_UNREAD,
+    TASK_REPLACED_BY_TALK,
     *COHORT_GROUND_KEYS,
+    *COHORT_ANNOTATION_KEYS,
 )
 """Every ground key that names no node, gate or branch of its own."""
 
@@ -2377,6 +2389,7 @@ _DISCARD_ITEMS = {
     NO_SYLLABLE_TRAIN_CAPTURED: "ddk_event_db_over_floor",
     SYLLABLE_TRAIN_NOT_TARGET: "ddk_identity",
     DECLARED_TASK_ABSENT: "declared_task_found",
+    TASK_REPLACED_BY_TALK: TASK_REPLACED_BY_TALK,
 }
 _INSTRUCTION_ITEMS = frozenset(
     {"breaths_found", "coughs_against_instructed", "glide_travel_declared_st", "ddk_events_against_instructed"}
@@ -2835,6 +2848,7 @@ def _decision_evidence(
     gates: Sequence[Mapping[str, Any]],
     lexical_words_n: int | None,
     cohort_items: Sequence[EvidenceItem] = (),
+    replaced: Mapping[str, Any] | None = None,
 ) -> list[EvidenceItem]:
     """Every reading the fold weighed for this recording, with the decisive ones marked.
 
@@ -2852,6 +2866,8 @@ def _decision_evidence(
         gates: The conformance and flag gates the fold applied.
         lexical_words_n: The consensus transcript's lexical word count, where SPEECH read it.
         cohort_items: COHORT's items (:func:`~senselab.audio.workflows.triage.cohort_fold.cohort_evidence`).
+        replaced: The :func:`~senselab.audio.workflows.triage.discard_replaced_task.replaced_task` reading the
+            discard rests on, or None.
 
     Returns:
         The items in the order the fold reads them: acquisition, task, gates, flags, annotations,
@@ -2877,6 +2893,16 @@ def _decision_evidence(
     items.extend(_speech_quality_items(task.quality))
     if ground == DECLARED_TASK_ABSENT:
         items.append(item("declared_task_found", performed, DISCARD, comparison="==", threshold=True))
+    if ground == TASK_REPLACED_BY_TALK and replaced is not None:
+        items.append(
+            item(
+                TASK_REPLACED_BY_TALK,
+                replaced.get("value"),
+                DISCARD,
+                comparison=replaced.get("comparison"),
+                threshold=replaced.get("threshold"),
+            )
+        )
     task_items = _task_items(task)
     items.extend(task_items)
     for record in gates:
@@ -2918,6 +2944,71 @@ def _decision_evidence(
         return entry.effect == PASS and (entry.name in task_names or entry.name.startswith("gate:"))
 
     return [replace(entry, decisive=decides(entry)) for entry in items]
+
+
+def _gate_value(applied_gates: Sequence[Mapping[str, Any]], gate: str) -> float | None:
+    for record in applied_gates:
+        value = record.get("value")
+        if record.get("gate") == gate and isinstance(value, (int, float)) and not isinstance(value, bool):
+            return float(value)
+    return None
+
+
+def cohort_extent_fraction(cohort: Mapping[str, Any] | None) -> float | None:
+    """The task extent's share of the recording, as COHORT read it.
+
+    Args:
+        cohort: COHORT's ``cohort_reading`` attributes, or None.
+
+    Returns:
+        The reading's ``task_extent_fraction``, else the duration check's comparison of it, else None.
+    """
+    value = (cohort or {}).get("task_extent_fraction")
+    if isinstance(value, (int, float)):
+        return float(value)
+    for check in check_blocks(cohort).values():
+        for comparison in check.get("comparisons") or ():
+            if comparison.get("name") == "task_extent_fraction" and isinstance(comparison.get("value"), (int, float)):
+                return float(comparison["value"])
+    return None
+
+
+def replaced_task_inputs(
+    declared_family: str | None,
+    task: TaskEvidence,
+    annotation: Mapping[str, Any],
+    applied_gates: Sequence[Mapping[str, Any]],
+    cohort: Mapping[str, Any] | None,
+    *,
+    task_mismatch: bool,
+) -> ReplacedTaskInputs:
+    """What :func:`~senselab.audio.workflows.triage.discard_replaced_task.replaced_task` reads, off the fold's inputs.
+
+    Args:
+        declared_family: The declared task family.
+        task: The task evidence.
+        annotation: The reviewer's reading.
+        applied_gates: The gates the owning branch applied.
+        cohort: COHORT's ``cohort_reading`` attributes, or None.
+        task_mismatch: Whether the fold annotated ``task_mismatch``.
+
+    Returns:
+        The inputs.
+    """
+    words = task.task_speech.get("words_n")
+    return ReplacedTaskInputs(
+        family=declared_family,
+        duration_s=task.duration_s,
+        talk_words_n=None if words is None else float(words),
+        task_mismatch=task_mismatch,
+        extent_fraction=cohort_extent_fraction(cohort),
+        expected_tokens_matched=_gate_value(applied_gates, "expected_tokens_matched_min"),
+        response_s=_gate_value(applied_gates, "response_min_s"),
+        reviewer_off_task=annotation.get("off_task_speech") in OFF_TASK_LEVELS,
+        reviewer_more_than_one=annotation.get("speakers") == "more_than_one",
+        instructions_by_other=bool([t for t in annotation.get("instructions_spoken") or () if str(t).strip()])
+        and annotation.get("other_speaker") in ("assistant", "background"),
+    )
 
 
 def fold_file_verdict(
@@ -3356,8 +3447,11 @@ def fold_file_verdict(
     _join_reasons(task_evidence.quality, flag, annotate, cohort, reader_other)
     for source in evidence.aligner_failed:
         annotate(_PREPROCESS, f"{ALIGNER_FAILED}: {source}", f"{PREFIX_ALIGNER_FAILED}:{source}")
-    for why, key in cohort_grounds(cohort):
+    corroborated = reader_other or diarized_other
+    for why, key in cohort_grounds(cohort, corroborated=corroborated):
         flag(COHORT_NODE, why, key)
+    for why, key in cohort_annotations(cohort, corroborated=corroborated):
+        annotate(COHORT_NODE, why, key)
     for branch in branches_seen:
         decision = branch_decisions.get(branch)
         reported = by_branch.get(branch)
@@ -3441,6 +3535,16 @@ def fold_file_verdict(
             by_branch[_AIRWAY].kind if _AIRWAY in by_branch else None,
         )
     flags = [reason for reason in reasons if reason.outcome is Outcome.FLAG]
+    replaced = replaced_task(
+        replaced_task_inputs(
+            declared_family,
+            task_evidence,
+            annotation,
+            applied_gates,
+            cohort,
+            task_mismatch=any(note.key == KEY_TASK_MISMATCH for note in annotations),
+        )
+    )
     ground: str | None = None
     if unmeasurable and admit is not None:
         triage = Triage.DISCARD
@@ -3466,6 +3570,10 @@ def fold_file_verdict(
     ):
         triage = Triage.DISCARD
         ground = DECLARED_TASK_ABSENT
+    elif replaced is not None and replaced_task_enabled():
+        triage = Triage.DISCARD
+        ground = TASK_REPLACED_BY_TALK
+        flag(_VERDICT, f"{TASK_REPLACED_BY_TALK}: {replaced['why']}", TASK_REPLACED_BY_TALK)
     elif flags:
         triage = Triage.REVIEW
     else:
@@ -3542,6 +3650,7 @@ def fold_file_verdict(
         if ran.get(_SPEECH) is RunState.COMPLETED
         else None,
         cohort_items=cohort_evidence(cohort),
+        replaced=replaced,
     )
 
     return FileVerdict(
