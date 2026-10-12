@@ -111,7 +111,7 @@ columns:
   description: the median SQUIM SI-SDR over the plain stream's spans, dB; empty for airway families
 - name: clipped_s
   group: quality
-  description: seconds of clipping in the raw recording (disruptions_file)
+  description: seconds the clip detector's live spans hold (PREPROCESS clip spans); empty where PREPROCESS did not measure the recording
 - name: dropout_s
   group: quality
   description: seconds of dropout in the raw recording (disruptions_file)

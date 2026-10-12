@@ -210,7 +210,7 @@ class RecordingFacts:
             enhancer removed as background.
         task_events: The task events the branches read (breaths, coughs, phonation holds, syllables).
         rms_dbfs: The plain stream's whole-file RMS level (PREPROCESS ``level``), or None.
-        clipped_s: The raw recording's clipped seconds (``disruptions_file``), or None.
+        clipped_s: Seconds the clip detector's live spans hold, or None where PREPROCESS measured no level.
         snr_db: The plain energy envelope's active level over its floor (``condition.snr_percentiles``), or None.
         activity: PREPROCESS's acoustic activity (its ``amplitude`` spans, merged), or None where PREPROCESS
             proposed no spans at all; the speaker pools are restricted to it.
@@ -565,7 +565,7 @@ def activity_of(store: ProvStore) -> tuple[tuple[float, float], ...] | None:
 
 
 LEVEL_MEASUREMENT = "level"
-DISRUPTIONS_MEASUREMENT = "disruptions_file"
+CLIP_FAMILY = "clip"
 ENVELOPE_MEASUREMENT = "energy_envelope"
 
 
@@ -605,7 +605,8 @@ def condition_readings(store: ProvStore, run_dir: Path | None) -> dict[str, floa
         run_dir: Its run directory, for the envelope sidecar; None reads no SNR.
 
     Returns:
-        ``rms_dbfs``, ``clipped_s`` and ``snr_db``, each None where the store holds no reading.
+        ``rms_dbfs``, ``clipped_s`` (the live ``clip`` spans' seconds) and ``snr_db``, each None where the store
+        holds no reading.
     """
     snr = None
     if run_dir is not None:
@@ -616,11 +617,13 @@ def condition_readings(store: ProvStore, run_dir: Path | None) -> dict[str, floa
             float(percentiles["floor"]),
             float(percentiles["level"]),
         )
-    return {
-        "rms_dbfs": _reading(store, LEVEL_MEASUREMENT, "rms_dbfs"),
-        "clipped_s": _reading(store, DISRUPTIONS_MEASUREMENT, "clipped_s"),
-        "snr_db": snr,
-    }
+    rms = _reading(store, LEVEL_MEASUREMENT, "rms_dbfs")
+    clips = [
+        float(span.extent[1]) - float(span.extent[0])
+        for span in live_entities(store, "span")
+        if span.attributes.get("family") == CLIP_FAMILY and span.extent
+    ]
+    return {"rms_dbfs": rms, "clipped_s": None if rms is None else round(sum(clips), 4), "snr_db": snr}
 
 
 def _extents(words: Sequence[Entity]) -> tuple[tuple[float, float], ...]:

@@ -97,7 +97,9 @@ def _measurement(name: str, **attributes: Any) -> dict[str, Any]:  # noqa: ANN40
 SPEECH_STORE = [
     _measurement("session_floor", session_background={"level_db": -71.75}),
     _measurement("speech_residual", foreground_minus_residual_db={"whole": 24.8, "speech": 25.0}),
-    _measurement("disruptions_file", clipped_s=0.25, dropout_s=0.0),
+    _measurement("disruptions_file", clipped_s=0.0, dropout_s=0.0),
+    {"record": "entity", "id": "clip-1", "prov_type": "span", "extent": [1.0, 1.1], "attributes": {"family": "clip"}},
+    {"record": "entity", "id": "clip-2", "prov_type": "span", "extent": [2.0, 2.15], "attributes": {"family": "clip"}},
     _measurement(
         "consensus_transcript",
         outcomes={"agreement": 30, "variant": 6, "insertion": 4},
