@@ -8,6 +8,10 @@ watchdog kills that group if the owner dies, and leaving the context stops it (S
 :func:`server_args` builds the ordered server arguments, :func:`engine_identity` the engine's identity for a
 cache key and provenance, and :func:`utilisation` the per-server memory share of a card.
 
+The clients :func:`chat` (with :func:`content_part` for text, image, video and audio parts), :func:`transcribe`
+and :func:`complete` call a running server's OpenAI-compatible endpoints over loopback and return the parsed JSON;
+they log nothing. :func:`ensure_vllm_venv` builds the server's venv from its committed lock.
+
 Ported and generalised from the server half of ``sensein/senselab@feat/task-events`` (f2a806af),
 ``src/senselab/text/tasks/pii_detection/redaction_review_vllm.py``. Standard library only, so the module imports
 in a lean environment.
@@ -15,22 +19,40 @@ in a lean environment.
 
 from __future__ import annotations
 
+import base64
 import fcntl
 import http.client
 import json
+import mimetypes
 import os
 import signal
 import socket
 import subprocess
 import sys
 import time
+import urllib.parse
 import urllib.request
+import uuid
 from pathlib import Path
 from types import TracebackType
 from typing import IO, Any, Mapping, Optional, Sequence, Union
 
 HOST = "127.0.0.1"
 """The only address a server listens on."""
+
+VLLM_VENV = "vllm-server"
+VLLM_VERSION = "0.31.0"
+VLLM_PYTHON = "3.12"
+VLLM_REQUIREMENTS = [f"vllm=={VLLM_VERSION}"]
+VLLM_MAX_CUDA = (13, 0)
+"""The server's venv: its name, the one requirement, its Python and its CUDA index ceiling (vLLM 0.31 needs
+CUDA 13). The committed lock ``data/venv_locks/vllm-server.txt`` is compiled from these."""
+
+REQUEST_TIMEOUT_S = 600.0
+"""Default seconds a client waits for a reply."""
+
+URL_SCHEMES = ("http", "https", "data", "file")
+"""Schemes an image or video part may name directly; anything else is read as a local path."""
 
 START_ERROR_KINDS = ("exited", "timeout", "version", "snapshot")
 """Why a server failed to start.
@@ -392,3 +414,217 @@ def utilisation(servers_per_card: int) -> float:
     if servers_per_card < 1:
         raise ValueError(f"servers_per_card must be at least 1, not {servers_per_card}")
     return (90 // servers_per_card) / 100
+
+
+def ensure_vllm_venv() -> Path:
+    """Build or reuse the server's venv from its committed lock and return its ``vllm`` executable.
+
+    The first call installs the venv (it needs the network); later calls reuse it without installing anything.
+
+    Returns:
+        ``<venv>/bin/vllm``, to pass to :class:`VllmServer`.
+
+    Raises:
+        VenvLockError: If the committed lock is missing or was compiled from other inputs.
+    """
+    from senselab.utils import subprocess_venv
+
+    venv_dir = subprocess_venv.ensure_venv(
+        VLLM_VENV, VLLM_REQUIREMENTS, python_version=VLLM_PYTHON, max_cuda_version=VLLM_MAX_CUDA
+    )
+    return Path(venv_dir) / "bin" / "vllm"
+
+
+def _data_url(path: Path) -> str:
+    mime = mimetypes.guess_type(path.name)[0]
+    if mime is None:
+        raise ValueError(f"cannot tell the media type of {path.name!r} from its suffix")
+    return f"data:{mime};base64,{base64.b64encode(path.read_bytes()).decode()}"
+
+
+def content_part(
+    kind: str, source: Union[str, Path], *, local_media_dir: Optional[Union[str, Path]] = None
+) -> dict[str, Any]:
+    """One content part of a chat message.
+
+    Args:
+        kind: ``text``, ``image``, ``video`` or ``audio``.
+        source: The text for ``text``. For ``image`` and ``video``, an ``http(s)``, ``data:`` or ``file://`` URL is
+            passed as is, and anything else is a local file. ``audio`` is always a local file.
+        local_media_dir: The server's ``--allowed-local-media-path``. When given, a local image or video file goes
+            in as a ``file://`` URL and must lie under it; otherwise it is read and sent inline as a base64
+            ``data:`` URL. Audio is always sent inline.
+
+    Returns:
+        A ``text``, ``image_url``, ``video_url`` or ``input_audio`` part. An audio part's ``format`` is the file's
+        suffix.
+
+    Raises:
+        ValueError: On an unknown kind, an audio URL, a file outside ``local_media_dir``, or a suffix with no
+            known media type.
+    """
+    if kind == "text":
+        return {"type": "text", "text": str(source)}
+    if kind not in ("image", "video", "audio"):
+        raise ValueError(f"unknown content part kind {kind!r}; known: text, image, video, audio")
+    if isinstance(source, str) and urllib.parse.urlsplit(source).scheme in URL_SCHEMES:
+        if kind == "audio":
+            raise ValueError("an audio part is sent inline from a local file, not by URL")
+        url = source
+    else:
+        path = Path(source)
+        if kind == "audio":
+            data = base64.b64encode(path.read_bytes()).decode()
+            return {"type": "input_audio", "input_audio": {"data": data, "format": path.suffix.lstrip(".").lower()}}
+        if local_media_dir is None:
+            url = _data_url(path)
+        else:
+            root, resolved = Path(local_media_dir).resolve(), path.resolve()
+            if root not in resolved.parents:
+                raise ValueError(f"{path} is not under the server's local media directory {local_media_dir}")
+            url = resolved.as_uri()
+    key = f"{kind}_url"
+    return {"type": key, key: {"url": url}}
+
+
+def _refuse_reserved(sampling: Mapping[str, Any], reserved: Sequence[str]) -> None:
+    taken = sorted(set(sampling) & set(reserved))
+    if taken:
+        raise ValueError(f"sampling may not set {taken}; the client sets them")
+
+
+def _send(request: urllib.request.Request, timeout_s: float) -> Any:  # noqa: ANN401 — a JSON value
+    """Send a request without any proxy and parse the JSON reply; nothing is logged."""
+    with _NO_PROXY.open(request, timeout=timeout_s) as response:
+        return json.loads(response.read())
+
+
+def _post_json(url: str, body: Mapping[str, Any], timeout_s: float) -> Any:  # noqa: ANN401 — a JSON value
+    request = urllib.request.Request(
+        url, data=json.dumps(body).encode(), headers={"Content-Type": "application/json"}, method="POST"
+    )
+    return _send(request, timeout_s)
+
+
+def chat(
+    url: str,
+    model: str,
+    messages: Sequence[Mapping[str, Any]],
+    *,
+    sampling: Mapping[str, Any],
+    timeout_s: float = REQUEST_TIMEOUT_S,
+) -> Any:  # noqa: ANN401 — a JSON value
+    """``POST /v1/chat/completions``, not streamed.
+
+    Args:
+        url: The server's base URL, such as :attr:`VllmServer.url`.
+        model: The served model name.
+        messages: Chat messages; a message's ``content`` is a string or a list of :func:`content_part` parts.
+        sampling: Further request fields (``temperature``, ``max_tokens``, ``seed``, ...).
+        timeout_s: Seconds to wait for the reply.
+
+    Returns:
+        The parsed reply.
+
+    Raises:
+        ValueError: If ``sampling`` sets ``model``, ``messages`` or ``stream``.
+        urllib.error.HTTPError: If the server refuses the request.
+    """
+    _refuse_reserved(sampling, ("model", "messages", "stream"))
+    body = {"model": model, "messages": list(messages), **sampling, "stream": False}
+    return _post_json(f"{url}/v1/chat/completions", body, timeout_s)
+
+
+def _form_value(name: str, value: Any) -> str:  # noqa: ANN401 — a scalar form value
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (str, int, float)):
+        return str(value)
+    raise TypeError(f"form field {name!r} must be a string, number or bool, not {type(value).__name__}")
+
+
+def transcribe(
+    url: str,
+    model: str,
+    audio_path: Union[str, Path],
+    *,
+    language: Optional[str] = None,
+    prompt: Optional[str] = None,
+    sampling: Mapping[str, Any],
+    timeout_s: float = REQUEST_TIMEOUT_S,
+) -> Any:  # noqa: ANN401 — a JSON value
+    """``POST /v1/audio/transcriptions`` with the audio file as multipart form data.
+
+    Args:
+        url: The server's base URL.
+        model: The served model name.
+        audio_path: The audio file.
+        language: The audio's language, sent only when given.
+        prompt: A prompt for the transcription, sent only when given.
+        sampling: Further scalar form fields (``temperature``, ``response_format``, ...); a bool is sent as
+            ``true``/``false``. The reply is parsed as JSON, so ``response_format`` must be a JSON one.
+        timeout_s: Seconds to wait for the reply.
+
+    Returns:
+        The parsed reply.
+
+    Raises:
+        ValueError: If ``sampling`` sets ``file``, ``model``, ``language`` or ``prompt``.
+        TypeError: If a ``sampling`` value is not a string, number or bool.
+        urllib.error.HTTPError: If the server refuses the request.
+    """
+    _refuse_reserved(sampling, ("file", "model", "language", "prompt"))
+    fields = {"model": model, "language": language, "prompt": prompt}
+    form = [(name, value) for name, value in fields.items() if value is not None]
+    form += [(name, _form_value(name, value)) for name, value in sampling.items()]
+    path = Path(audio_path)
+    boundary = uuid.uuid4().hex
+    chunks: list[bytes] = []
+    for name, value in form:
+        chunks.append(f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"\r\n\r\n{value}\r\n'.encode())
+    mime = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+    chunks.append(
+        f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="{path.name}"\r\n'
+        f"Content-Type: {mime}\r\n\r\n".encode()
+    )
+    chunks += [path.read_bytes(), f"\r\n--{boundary}--\r\n".encode()]
+    request = urllib.request.Request(
+        f"{url}/v1/audio/transcriptions",
+        data=b"".join(chunks),
+        headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+        method="POST",
+    )
+    return _send(request, timeout_s)
+
+
+def complete(
+    url: str,
+    model: str,
+    prompt_token_ids: Sequence[int],
+    *,
+    sampling: Mapping[str, Any],
+    timeout_s: float = REQUEST_TIMEOUT_S,
+) -> Any:  # noqa: ANN401 — a JSON value
+    """``POST /v1/completions`` with the prompt as token ids, not streamed.
+
+    Args:
+        url: The server's base URL.
+        model: The served model name.
+        prompt_token_ids: The prompt, already tokenised (for example by the model's chat template).
+        sampling: Further request fields (``max_tokens``, ``temperature``, ``stop_token_ids``, ...).
+        timeout_s: Seconds to wait for the reply.
+
+    Returns:
+        The parsed reply.
+
+    Raises:
+        ValueError: If the prompt is empty or holds anything but non-negative ints, or ``sampling`` sets
+            ``model``, ``prompt`` or ``stream``.
+        urllib.error.HTTPError: If the server refuses the request.
+    """
+    ids = list(prompt_token_ids)
+    if not ids or not all(isinstance(i, int) and not isinstance(i, bool) and i >= 0 for i in ids):
+        raise ValueError("prompt_token_ids must be a non-empty list of non-negative ints")
+    _refuse_reserved(sampling, ("model", "prompt", "stream"))
+    body = {"model": model, "prompt": ids, **sampling, "stream": False}
+    return _post_json(f"{url}/v1/completions", body, timeout_s)
