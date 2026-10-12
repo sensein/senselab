@@ -577,7 +577,7 @@ def test_dir_name_carries_every_tag_pick_torch_index_can_produce(
     """Every tag ``pick_torch_index`` can return folds into a valid, single-path-component directory name.
 
     Enumerated from the source rather than hand-listed: the static CUDA-index map
-    (``cu128``/``cu126``/``cu124``/``cu121``) plus the two tags ``pick_torch_index``
+    (``cu130``/``cu128``/``cu126``/``cu124``/``cu121``) plus the two tags ``pick_torch_index``
     returns outside that map (``cpu`` for no host CUDA, ``override`` for an operator's
     ``SENSELAB_TORCH_INDEX_URL``). Adding a future ``cuXXX`` entry to the map is picked
     up automatically -- this test does not hardcode the tag list.
@@ -585,7 +585,7 @@ def test_dir_name_carries_every_tag_pick_torch_index_can_produce(
     from senselab.utils.cuda_probe import _PYTORCH_INDEX_MAP
 
     tags = {tag for tag, _ in _PYTORCH_INDEX_MAP} | {"cpu", "override"}
-    assert tags == {"cu128", "cu126", "cu124", "cu121", "cpu", "override"}, (
+    assert tags == {"cu130", "cu128", "cu126", "cu124", "cu121", "cpu", "override"}, (
         "the static CUDA-index map grew or shrank -- update this test's expectations, not just the map"
     )
 
