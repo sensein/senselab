@@ -10,7 +10,6 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import os
 import re
 import shutil
 import subprocess
@@ -18,9 +17,6 @@ from pathlib import Path
 from typing import Collection, Iterable, Mapping
 
 logger = logging.getLogger("senselab")
-
-UV_ENV = "SENSELAB_UV"
-"""Names an absolute path to the ``uv`` executable to use instead of searching for one."""
 
 TORCH_NAMES = frozenset({"torch", "torchvision", "torchaudio"})
 """The PyTorch distributions served from a PyTorch index."""
@@ -36,8 +32,7 @@ def _home_locations() -> list[Path]:
 def find_uv(*, install: bool = False) -> str:
     """Return the path of the ``uv`` executable.
 
-    The search order is the ``SENSELAB_UV`` override, then ``PATH``, then the standard install
-    locations under the home directory.
+    The search order is ``PATH``, then ``~/.local/bin/uv``, then ``~/.cargo/bin/uv``.
 
     Args:
         install: When nothing is found, ``pip install uv`` and search ``PATH`` again (for hosts
@@ -47,14 +42,8 @@ def find_uv(*, install: bool = False) -> str:
         The path of ``uv``.
 
     Raises:
-        FileNotFoundError: If ``SENSELAB_UV`` is set but is not an absolute path to an executable
-            file, or no ``uv`` is found (after the install, when requested).
+        FileNotFoundError: If no ``uv`` is found (after the install, when requested).
     """
-    pinned = os.environ.get(UV_ENV)
-    if pinned:
-        if not os.path.isabs(pinned) or not os.path.isfile(pinned) or not os.access(pinned, os.X_OK):
-            raise FileNotFoundError(f"{UV_ENV}={pinned!r} is not an absolute path to an executable")
-        return pinned
     found = shutil.which("uv")
     if found:
         return found
