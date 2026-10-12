@@ -541,11 +541,13 @@ def ddk_reading_of(
     t = (extent_p or task_extent_parameters())["trim"]
     ratio = float(t["ddk"]["edge_duration_ratio"])
     trim: Trim | None = None
+    trimmed: list[TaskEvent] = []
     if cluster and enabled("trim", extent_p):
         trim = trim_train([(e.start_s, e.end_s) for e in cluster], speech_runs, ratio=ratio)
+        trimmed = [event for i, event in enumerate(cluster) if i not in trim.kept]
         cluster = [cluster[i] for i in trim.kept]
     extent = (cluster[0].start_s, max(e.end_s for e in cluster)) if cluster else None
-    check = ddk_extent_check(extent, cluster, targets, speech_runs, ratio=ratio)
+    check = ddk_extent_check(extent, cluster, targets, speech_runs, ratio=ratio, trimmed=trimmed)
     evidence = replace(
         shared,
         events=tuple(cluster),
@@ -577,6 +579,7 @@ def ddk_extent_check(
     speech_runs: Sequence[Span],
     *,
     ratio: float,
+    trimmed: Sequence[TaskEvent] = (),
 ) -> ExtentCheck:
     """Whether a syllable task's extent holds its whole train and nothing else.
 
@@ -586,13 +589,14 @@ def ddk_extent_check(
         targets: Every event standing over the floor whose identity reaches ``identity_absent_max``.
         speech_runs: Runs of agreed non-task words.
         ratio: The edge-duration ratio of ``trim.ddk.edge_duration_ratio``.
+        trimmed: The events trimming removed, which are not the task and so are never outside it.
 
     Returns:
         Too narrow where a target event outside the extent has no speech run between it and the extent; too
         wide where a speech run lies inside the extent or an edge event lasts over ``ratio`` times the
         median event.
     """
-    held = {(e.start_s, e.end_s) for e in cluster}
+    held = {(e.start_s, e.end_s) for e in (*cluster, *trimmed)}
     outside = [(e.start_s, e.end_s) for e in targets if (e.start_s, e.end_s) not in held]
     reachable = reachable_outside(extent, outside, speech_runs)
     durations = [e.end_s - e.start_s for e in cluster]

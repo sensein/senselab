@@ -755,11 +755,12 @@ def evidence_of(
     modulated = [
         s for s in growth_candidates if not impulse_explained(view, s, margin) and not overlaps(s, [*kept, *extra])
     ]
-    others = [*kept, *extra, *modulated]
+    others = [*kept, *extra]
     events = [task_event(view, s, others, p, entangle_inside=entangle_inside) for s in kept]
     events += [task_event(view, s, others, p, recovered=True, entangle_inside=entangle_inside) for s in extra]
+    every = [*others, *modulated]
     from_modulation = [
-        replace(task_event(view, s, others, p, recovered=True, entangle_inside=entangle_inside), source=MODULATION)
+        replace(task_event(view, s, every, p, recovered=True, entangle_inside=entangle_inside), source=MODULATION)
         for s in modulated
     ]
     choose = functools.partial(

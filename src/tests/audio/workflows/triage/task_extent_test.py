@@ -82,7 +82,15 @@ class TestGrowth:
         view = generic_view((signal.astype(np.float32), RATE), None)
         spans = [(s, s + 0.6) for s in bursts]
         off = evidence_of(view, spans, gap_s=3.0, stops=[], grow_kind="breath", extent_p=_on(growth=False))
-        on = evidence_of(view, spans, gap_s=3.0, stops=[], grow_kind="breath", extent_p=_on(growth=True))
+        on = evidence_of(
+            view,
+            spans,
+            gap_s=3.0,
+            stops=[],
+            grow_kind="breath",
+            growth_candidates=[(7.0, 7.4)],
+            extent_p=_on(growth=True),
+        )
         assert off.extent is not None and off.extent[1] < 6.0
         assert off.check["status"] == TOO_NARROW and off.check["outside_n"] == 2
         assert on.extent is not None and on.extent[1] > 11.0
