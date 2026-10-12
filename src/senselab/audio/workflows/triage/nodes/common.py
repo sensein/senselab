@@ -601,8 +601,12 @@ def word_hull(word: Entity, duration_s: float | None = None) -> tuple[float, flo
     Returns:
         ``(min located start, max located end)``; the derived extent where no source located it, or where the
         recognizers placed it far apart and its time was arbitrated (``arbitrated_source``) or found on no sound
-        (``unlocated``); ``(0.0, 0.0)`` where the word carries neither.
+        (``unlocated``); for an unlocated word, the gap between its timed neighbours (``mask_gap``) where it
+        carries one; ``(0.0, 0.0)`` where the word carries neither.
     """
+    gap = word.attributes.get("mask_gap")
+    if word.attributes.get("unlocated") and gap is not None:
+        return float(gap[0]), float(gap[1])
     if word.attributes.get("arbitrated_source") is not None or word.attributes.get("unlocated"):
         return (float(word.extent[0]), float(word.extent[1])) if word.extent is not None else (0.0, 0.0)
     spans = [

@@ -96,6 +96,26 @@ def test_the_counts_name_what_moved() -> None:
     assert result.moved == (0, 1)
 
 
+def test_an_unlocated_word_is_masked_over_the_gap_between_its_timed_neighbours() -> None:
+    """r37 owner: mask the gap between the timed neighbours rather than withhold; the hull reads the gap."""
+    words = _words([("red", 2.0), ("blue", 20.0), ("green", 25.0)], [("red", 2.0), ("blue", 8.0), ("green", 25.1)])
+    result = arbitrate(words, on_sound=[(1.8, 2.6), (24.0, 26.0)], duration_s=60.0)
+    first, middle, last = result.words
+    assert middle.unlocated and middle.mask_gap == (round(first.extent[1], 3), round(last.extent[0], 3))
+    assert first.mask_gap is None and last.mask_gap is None
+    store = ProvStore(run_id="gap")
+    stored = store.entity(prov_type="word", extent=middle.extent, attributes=word_attributes(middle))
+    assert word_hull(store.get_entity(stored)) == middle.mask_gap
+    assert word_from_attributes(word_attributes(middle), middle.extent) == middle
+
+
+def test_an_unlocated_word_with_no_neighbour_after_runs_to_the_end() -> None:
+    """No timed word after it: the gap closes at the recording's end."""
+    words = _words([("red", 2.0), ("blue", 40.0)], [("red", 2.0), ("blue", 8.0)])
+    result = arbitrate(words, on_sound=[(1.8, 2.6)], duration_s=60.0)
+    assert result.words[1].mask_gap == (round(result.words[0].extent[1], 3), 60.0)
+
+
 def test_held_voicing_is_a_long_voiced_run_bridged_over_short_gaps() -> None:
     """A two-second vowel with a 0.1 s break is one held run; a 0.4 s word is none."""
     times = np.arange(0.0, 5.0, 0.01)

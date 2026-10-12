@@ -10,7 +10,7 @@ phonation), and marks a word no recognizer places on sound ``unlocated``. PREPRO
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -121,6 +121,41 @@ def phonation_holds(store: ProvStore, run_dir: Path | None, family: str | None) 
     )
 
 
+def with_mask_gaps(words: Sequence[ConsensusWord], *, duration_s: float | None) -> list[ConsensusWord]:
+    """Each unlocated word given the span between its timed neighbours as the place a mask over it covers.
+
+    A neighbour is the nearest word on either side that is not unlocated and carries a non-empty extent. With
+    none before, the gap opens at 0; with none after, it closes at ``duration_s`` (else the latest word end).
+    Where the neighbours touch or overlap, the gap is the hull of both neighbours.
+
+    Args:
+        words: The positions, in stream order, as arbitrated.
+        duration_s: The recording's duration, or None.
+
+    Returns:
+        The positions, every unlocated one with ``mask_gap`` set.
+    """
+    timed = [i for i, word in enumerate(words) if not word.unlocated and word.extent[1] > word.extent[0]]
+    end_of_stream = (
+        float(duration_s) if duration_s is not None else max((word.extent[1] for word in words), default=0.0)
+    )
+    out = list(words)
+    for i, word in enumerate(words):
+        if not word.unlocated:
+            continue
+        before = [j for j in timed if j < i]
+        after = [j for j in timed if j > i]
+        prev = words[before[-1]].extent if before else None
+        nxt = words[after[0]].extent if after else None
+        start = prev[1] if prev is not None else 0.0
+        end = nxt[0] if nxt is not None else end_of_stream
+        if end <= start:
+            start = prev[0] if prev is not None else 0.0
+            end = nxt[1] if nxt is not None else end_of_stream
+        out[i] = replace(word, mask_gap=(round(float(start), 3), round(float(max(start, end)), 3)))
+    return out
+
+
 @dataclass(frozen=True)
 class Arbitrated:
     """What the arbitration made of one transcript.
@@ -176,6 +211,7 @@ def arbitrate(
             if result.arbitrated_source is not None:
                 won[result.arbitrated_source] = won.get(result.arbitrated_source, 0) + 1
         out.append(result)
+    out = with_mask_gaps(out, duration_s=duration_s)
     return Arbitrated(
         words=tuple(out),
         moved=tuple(moved),
@@ -184,6 +220,7 @@ def arbitrate(
             "disagreed_n": disagreed,
             "retimed_n": sum(won.values()),
             "unlocated_n": sum(1 for word in out if word.unlocated),
+            "unlocated_mask_gap_s": round(sum(w.mask_gap[1] - w.mask_gap[0] for w in out if w.mask_gap), 3),
             "won_by_source": dict(sorted(won.items())),
             "held_phonation": [[round(a, 3), round(b, 3)] for a, b in off_limits],
             "activity_s": round(sum(b - a for a, b in on_sound), 3),
