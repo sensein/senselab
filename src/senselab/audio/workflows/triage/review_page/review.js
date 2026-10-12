@@ -63,6 +63,7 @@ var ReviewPage = (function () {
         extent_duration_s: cols.extent_duration_s[i],
         duration_s: cols.duration_s[i],
         text: cols.text[i],
+        checks: cols.checks ? cols.checks[i] : null,
       };
     }
     Object.keys(index.evidence).forEach(function (name) {
@@ -332,17 +333,23 @@ var ReviewPage = (function () {
 
   // ---------------------------------------------------------------- pure: the reviewer's entries
 
-  function listenSet(buildId) { return 'triage_review_' + buildId; }
+  /** The answers a reviewer chooses from: a listen set's own labels, or the triage verdicts. */
+  function labelsOf(build) { return build.listen ? build.listen.labels : VERDICTS; }
 
-  /** One exported entry, in the owner label table's columns plus the reviewer's own verdict. */
-  function entryFor(row, decision, buildId) {
+  function listenSet(build) { return build.listen ? build.listen.name : 'triage_review_' + build.id; }
+
+  /**
+   * One exported entry, in the owner label table's columns plus the reviewer's own answer. A listen set's
+   * answer is its owner label as chosen; a whole-corpus review's is the verdict, prefixed `reviewer_`.
+   */
+  function entryFor(row, decision, build) {
     return {
-      listen_set: listenSet(buildId),
+      listen_set: listenSet(build),
       stem: row.stem,
       family: row.declared_family,
       instructed: '',
       duration_s: row.duration_s,
-      owner_label: 'reviewer_' + decision.verdict,
+      owner_label: build.listen ? decision.verdict : 'reviewer_' + decision.verdict,
       owner_note: decision.note || '',
       pipeline_at_listen: row.verdict + (row.release ? '/' + row.release : '') + (row.reason ? ' (' + row.reason + ')' : ''),
       reviewer_verdict: decision.verdict,
@@ -350,25 +357,25 @@ var ReviewPage = (function () {
     };
   }
 
-  function exportPayload(rowsByStem, decisions, buildId, now) {
+  function exportPayload(rowsByStem, decisions, build, now) {
     var stems = Object.keys(decisions).sort();
     return {
       schema: EXPORT_SCHEMA,
       version: EXPORT_VERSION,
-      build: buildId,
+      build: build.id,
       exported_at: now,
       entries: stems.filter(function (s) { return rowsByStem[s]; })
-        .map(function (s) { return entryFor(rowsByStem[s], decisions[s], buildId); }),
+        .map(function (s) { return entryFor(rowsByStem[s], decisions[s], build); }),
     };
   }
 
-  /** Decisions out of an exported file: `{stem: {verdict, note, at}}`. */
-  function importDecisions(payload) {
+  /** Decisions out of an exported file, keeping answers among `labels`: `{stem: {verdict, note, at}}`. */
+  function importDecisions(payload, labels) {
     var entries = Array.isArray(payload) ? payload : (payload && payload.entries) || [];
     var out = {};
     entries.forEach(function (e) {
       var verdict = e.reviewer_verdict || String(e.owner_label || '').replace(/^reviewer_/, '');
-      if (!e.stem || VERDICTS.indexOf(verdict) < 0) return;
+      if (!e.stem || labels.indexOf(verdict) < 0) return;
       out[e.stem] = { verdict: verdict, note: e.owner_note || '', at: e.reviewed_at || null };
     });
     return out;
@@ -862,6 +869,7 @@ var ReviewPage = (function () {
       .filter(Boolean).join(' · ')));
     if (r.reasons.length > 1) head.appendChild(el('div', 'rv-note', 'all reasons: ' + r.reasons.join(', ')));
     if (r.annotations.length) head.appendChild(el('div', 'rv-note', 'annotations: ' + r.annotations.join(', ')));
+    if (r.checks) head.appendChild(checksTable(state.index.build.listen, r.checks));
     box.appendChild(head);
     box.appendChild(entryForm(r));
     var body = el('div', null);
@@ -883,11 +891,25 @@ var ReviewPage = (function () {
     });
   }
 
+  /** A listen set's check values for one recording, one row per column of its list. */
+  function checksTable(listen, checks) {
+    var t = el('table', 'rv-ev rv-checks');
+    t.appendChild(el('caption', null, 'checks from the ' + listen.name + ' list'));
+    listen.columns.forEach(function (name, k) {
+      var tr = el('tr');
+      tr.appendChild(el('th', null, name));
+      tr.appendChild(el('td', 'v', checks[k] == null || checks[k] === '' ? '—' : String(checks[k])));
+      t.appendChild(tr);
+    });
+    return t;
+  }
+
   function entryForm(r) {
     var box = el('section', 'rv-entry');
-    box.appendChild(el('h3', null, 'your decision'));
+    var listen = state.index.build.listen;
+    box.appendChild(el('h3', null, listen ? listen.question : 'your decision'));
     var current = state.decisions[r.stem] || {};
-    VERDICTS.forEach(function (v) {
+    labelsOf(state.index.build).forEach(function (v) {
       var l = el('label');
       var c = el('input'); c.type = 'radio'; c.name = 'rv-verdict'; c.value = v; c.checked = current.verdict === v;
       c.onchange = function () { record(r, v, note.value); };
@@ -1556,15 +1578,16 @@ var ReviewPage = (function () {
       body.appendChild(tr);
     });
     $('rv-dec-summary').textContent = stems.length + ' decisions' + (stems.length ? ' — ' +
-      VERDICTS.map(function (v) { return v + ' ' + (counts[v] || 0); }).join(', ') : '');
+      labelsOf(state.index.build).map(function (v) { return v + ' ' + (counts[v] || 0); }).join(', ') : '');
   }
 
   function exportJson() {
-    var payload = exportPayload(state.byStem, state.decisions, state.index.build.id, new Date().toISOString());
+    var payload = exportPayload(state.byStem, state.decisions, state.index.build, new Date().toISOString());
     var blob = new Blob([JSON.stringify(payload, null, 1)], { type: 'application/json' });
     var a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = 'triage_review_' + state.index.build.id + '.json';
+    a.download = (state.index.build.listen ? listenSet(state.index.build) + '_' + state.index.build.id
+      : listenSet(state.index.build)) + '.json';
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
   }
@@ -1575,7 +1598,7 @@ var ReviewPage = (function () {
     var reader = new FileReader();
     reader.onload = function () {
       try {
-        var got = importDecisions(JSON.parse(reader.result));
+        var got = importDecisions(JSON.parse(reader.result), labelsOf(state.index.build));
         Object.keys(got).forEach(function (s) { state.decisions[s] = got[s]; });
         saveDecisions(); renderDecisions(); renderList();
       } catch (err) { $('rv-dec-summary').textContent = 'could not read that file: ' + err.message; }
@@ -1600,6 +1623,7 @@ var ReviewPage = (function () {
     unpackSpec: unpackSpec,
     entryFor: entryFor,
     exportPayload: exportPayload,
+    labelsOf: labelsOf,
     importDecisions: importDecisions,
     shard: shard,
     shardParquet: shardParquet,

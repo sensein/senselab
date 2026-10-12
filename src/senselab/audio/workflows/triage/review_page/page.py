@@ -18,6 +18,7 @@ import re
 import shutil
 from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -105,13 +106,37 @@ def _kind(values: Iterable[Any]) -> str:
     return "categorical"
 
 
+@dataclass(frozen=True)
+class ListenSet:
+    """A named list of recordings for an owner to label, with the check values each was listed with.
+
+    Attributes:
+        name: The export's ``listen_set``.
+        question: The question the label answers, shown over the label control.
+        labels: The answers to choose from; the chosen one is the export's ``owner_label``.
+        columns: The check columns, in display order.
+        checks: Each listed stem's check values, in ``columns`` order.
+    """
+
+    name: str
+    question: str
+    labels: tuple[str, ...]
+    columns: tuple[str, ...]
+    checks: Mapping[str, tuple[str, ...]]
+
+
 SOURCE_BASE = "/_source"
 """The URL route a served page fetches a stream outside the scan root through: the stream's absolute path
 appended to it (``scripts/triage_review_serve.py`` serves it)."""
 
 
 def index_of(
-    records: Sequence[Mapping[str, Any]], *, title: str, audio_base: str, source_base: str = SOURCE_BASE
+    records: Sequence[Mapping[str, Any]],
+    *,
+    title: str,
+    audio_base: str,
+    source_base: str = SOURCE_BASE,
+    listen: ListenSet | None = None,
 ) -> dict[str, Any]:
     """The page's index over records already in page order.
 
@@ -120,6 +145,8 @@ def index_of(
         title: The page title.
         audio_base: The URL prefix from the page to the scan root, used when the page is served.
         source_base: The URL route an absolute stream path (one outside the scan root) is appended to.
+        listen: The listen set the page labels, or None for the triage verdicts. Its check values become
+            the ``checks`` column, one list per record in ``listen.columns`` order.
 
     Returns:
         The index the page reads.
@@ -162,6 +189,14 @@ def index_of(
         "spec": {k: int(spec["spectrogram"][k]) for k in ("frames", "bands", "levels")},
         "counts": dict(Counter(str(r.get("verdict")) for r in records)),
     }
+    if listen is not None:
+        payload["listen"] = {
+            "name": listen.name,
+            "question": listen.question,
+            "labels": list(listen.labels),
+            "columns": list(listen.columns),
+        }
+        columns["checks"] = [list(listen.checks[r["stem"]]) if r["stem"] in listen.checks else None for r in records]
     index = {"build": payload, "cols": columns, "evidence": evidence}
     payload["id"] = hashlib.sha256(json.dumps(index, sort_keys=True, default=str).encode()).hexdigest()[:12]
     return index
@@ -237,6 +272,7 @@ def write_page(
     audio_base: str,
     mark_style: str = "",
     source_base: str = SOURCE_BASE,
+    listen: ListenSet | None = None,
 ) -> dict[str, Any]:
     """Write ``index.html`` and its side files.
 
@@ -247,12 +283,13 @@ def write_page(
         audio_base: The URL prefix from the page to the scan root.
         mark_style: The marked-transcript CSS rules.
         source_base: The URL route an absolute stream path is appended to.
+        listen: The listen set the page labels, or None for the triage verdicts; only its stems are written.
 
     Returns:
         The page's id, record count and sizes in bytes: the page, the Parquet shards and their wrappers.
     """
-    rows = ordered(records)
-    index = index_of(rows, title=title, audio_base=audio_base, source_base=source_base)
+    rows = ordered(r for r in records if listen is None or r["stem"] in listen.checks)
+    index = index_of(rows, title=title, audio_base=audio_base, source_base=source_base, listen=listen)
     size = int(index["build"]["shard_size"])
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / SHARD_DIR).mkdir(exist_ok=True)

@@ -54,6 +54,46 @@ def test_a_manifest_reads_only_the_run_roots_it_lists(tmp_path: Path) -> None:
     assert len(script.load(out)) == 1
 
 
+def test_a_listen_set_renders_only_its_stems_with_their_checks(tmp_path: Path, capsys: object) -> None:
+    """``--stems`` keeps the listed recordings, carries each one's check columns and names the listen set."""
+    corpus = tmp_path / "corpus"
+    fixtures._run_root(corpus)
+    extract = tmp_path / "review.jsonl"
+    script.extract(corpus, extract, 1)
+    header, line = extract.read_text().splitlines()[:2]
+    other = json.loads(line)
+    other["stem"] = "sub-ffff_ses-02_task-harvard-sentences"
+    extract.write_text("\n".join([header, line, json.dumps(other)]) + "\n")
+    listed = tmp_path / "extent_check_listen.tsv"
+    listed.write_text(
+        "stem\textent_start_s\tlex_cov\towner_extent_holds_task\towner_note\n"
+        f"{fixtures.STEM}\t0.5\t0.9\t\t\n"
+        "sub-gggg_ses-01_task-absent\t1.0\t\t\t\n"
+    )
+    page_dir = tmp_path / "page"
+    argv = ["render", str(extract), "--out", str(page_dir), "--stems", str(listed), "--listen-set", "extent_check"]
+    assert script.main([*argv, "--labels", "yes,no,partly", "--question", "does the extent hold the task?"]) == 0
+    summary = json.loads(capsys.readouterr().out)  # type: ignore[attr-defined]
+    assert summary["recordings"] == 1 and summary["listed"] == 2 and summary["listed_not_in_extract"] == 1
+    index = fixtures.page_module.read_index((page_dir / "index.html").read_text())
+    assert index["build"]["listen"] == {
+        "name": "extent_check",
+        "question": "does the extent hold the task?",
+        "labels": ["yes", "no", "partly"],
+        "columns": ["extent_start_s", "lex_cov"],
+    }
+    assert index["cols"]["stem"] == [fixtures.STEM]
+    assert index["cols"]["checks"] == [["0.5", "0.9"]]
+
+
+def test_a_plain_stem_list_is_a_listen_set_without_checks(tmp_path: Path) -> None:
+    """One stem per line, no header: the recordings are kept and no check columns are shown."""
+    listed = tmp_path / "stems.txt"
+    listed.write_text("sub-a_ses-1_task-x\nsub-b_ses-1_task-y\n")
+    listen = script.listen_set(listed, "stems", ["pass", "review", "discard"], "your decision")
+    assert listen.columns == () and set(listen.checks) == {"sub-a_ses-1_task-x", "sub-b_ses-1_task-y"}
+
+
 def test_a_speech_task_carries_its_marked_transcript(tmp_path: Path, monkeypatch: object) -> None:
     """The free-speech page's reader supplies the transcript view; the page keeps its HTML and findings."""
     fs = script._free_speech_page()

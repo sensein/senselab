@@ -94,6 +94,8 @@ body.review { margin: 0; background: var(--ground); color: var(--ink); font: 13p
 .rv-ev td, .rv-ev th { border-bottom: 1px solid var(--cell-line); padding: 2px 8px; text-align: left; }
 .rv-ev tr.decisive td { font-weight: 700; background: var(--caution-bg); }
 .rv-ev td.v { font-family: var(--mono); }
+.rv-checks { margin-top: 6px; }
+.rv-checks caption { text-align: left; font-size: 11px; color: var(--c-muted); }
 .rv-speech .text { font-size: 15px; line-height: 1.7; }
 .rv-entry { border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; background: var(--panel); }
 .rv-entry label { margin-right: 12px; }
