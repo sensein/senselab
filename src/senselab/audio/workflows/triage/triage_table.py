@@ -304,7 +304,9 @@ def store_readings(view: StoreView, extent: tuple[float, float] | None) -> dict[
         outcomes = dict(transcript.attributes.get("outcomes") or {})
         words = sum(int(v) for v in outcomes.values() if isinstance(v, int))
         out["asr_agreement"] = round(int(outcomes.get("agreement") or 0) / words, 4) if words else None
-        out["asr_single_hypothesis"] = transcript.attributes.get("single_hypothesis")
+        single = transcript.attributes.get("single_hypothesis")
+        sources = transcript.attributes.get("n_sources")
+        out["asr_single_hypothesis"] = single if single is not None else (None if sources is None else sources < 2)
         out["asr_degenerate_n"] = transcript.attributes.get("degenerate_n")
     ledger = view.last("measurement", name="pii_ledger")
     if ledger is not None:

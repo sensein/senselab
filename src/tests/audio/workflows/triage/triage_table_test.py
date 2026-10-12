@@ -380,3 +380,16 @@ def test_a_withheld_release_reports_no_masked_seconds(tmp_path: Path) -> None:
     tree = triage_table.run_tree_facts(withheld["run_dir"], (), tmp_path / "out", tmp_path / BIDS, extent=(1.13, 9.58))
     assert rows[1]["masked_s"] == 2.45 and rows[1]["snr_db"] is None
     assert triage_table.row(withheld, {}, tree, 3)["masked_s"] is None
+
+
+def test_an_older_consensus_reads_single_hypothesis_off_its_source_count() -> None:
+    """A consensus written before single_hypothesis existed is single where it had one source."""
+    from senselab.audio.workflows.triage.recording_vectors import Entity, StoreView
+
+    def view(attributes: dict[str, Any]) -> StoreView:
+        entity = Entity("c", "measurement", None, {"name": "consensus_transcript", **attributes})
+        return StoreView(entities=[entity])
+
+    assert triage_table.store_readings(view({"n_sources": 1, "outcomes": {}}), None)["asr_single_hypothesis"] is True
+    assert triage_table.store_readings(view({"n_sources": 2, "outcomes": {}}), None)["asr_single_hypothesis"] is False
+    assert triage_table.store_readings(view({"outcomes": {}}), None)["asr_single_hypothesis"] is None
