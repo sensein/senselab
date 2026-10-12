@@ -2,7 +2,7 @@
 
     python condition.py MANIFEST K N OUT_PREFIX
 
-Writes one JSON line per run: stem, participant, rms_dbfs (PREPROCESS ``level``), clipped_s (``disruptions_file``).
+Writes one JSON line per run: stem, participant, and COHORT's ``condition_readings`` (level, the clip detector's live spans).
 No transcript text. Nothing is written into any store.
 """
 
@@ -12,7 +12,7 @@ from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
 from senselab.audio.workflows.triage.extend import read_store, run_root_of
-from senselab.audio.workflows.triage.nodes.common import find_measurement
+from senselab.audio.workflows.triage.cohort_stage import condition_readings
 
 
 def one(row: dict) -> dict:
@@ -22,14 +22,7 @@ def one(row: dict) -> dict:
         store = read_store(run_root)
     except Exception as error:  # noqa: BLE001
         return {"stem": row.get("stem"), "error": repr(error)[:200]}
-    level = find_measurement(store, "level")
-    disruptions = find_measurement(store, "disruptions_file")
-    return {
-        "stem": run_root.name,
-        "participant": run_root.name.split("_")[0],
-        "rms_dbfs": None if level is None else level.attributes.get("rms_dbfs"),
-        "clipped_s": None if disruptions is None else disruptions.attributes.get("clipped_s"),
-    }
+    return {"stem": run_root.name, "participant": run_root.name.split("_")[0], **condition_readings(store, None)}
 
 
 if __name__ == "__main__":

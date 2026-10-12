@@ -80,13 +80,15 @@ spans as `speaker:<source>` issues.
 - **G3** (168c5e68). Lexical speech before a lexical family's task extent is the annotation
   `speech_before_task` with the evidence item `speech_before_task_s` (first word to last word before it).
 
-## Measurement (r36 stores, read-only, commit 1c8821e8)
+## Measurement (r36 stores, read-only, commit 95d09ebb)
 
-`measure/condition.py` (each run's level and clipping, then `cohort_stage.condition_summary` per participant),
+`measure/condition.py` + `measure/conditions.py` (each run's `cohort_stage.condition_readings`, then
+`condition_summary` per participant and `cohort_fold.hot_or_clipped`: 124 of 1,527 participants, 4,989 runs,
+including 004d42e9, 0482bc77 and 168c5e68),
 `measure/fold.py` (per run: the r36 decision; **A** = VERDICT at this commit with the gate fed the r36 share;
 **B** = A plus B1, B3, C1 and the participant condition written into the in-memory store, PII findings pointed
 at the arbitrated words as a replay would place them), `measure/pools.py` (B2), `measure/analyse.py`. 62,550
-runs, 62,521 folded both ways (29 with no consensus transcript skipped in B). Outputs in
+runs, all folded both ways. Outputs in
 `/orcd/scratch/bcs/002/satra/r18d_20261010/r37_words_speaker/`. Hold-out = participant hex digit parity.
 
 | | r36 | A | B |
@@ -95,15 +97,20 @@ runs, 62,521 folded both ways (29 with no consensus transcript skipped in B). Ou
 | as_is / redacted / withheld | 55,817 / 3,263 / 604 | 56,729 / 2,537 / 418 | 56,719 / 2,507 / 458 |
 | `other_speaker` reason | 1,502 | 1,480 | 902 |
 
-`other_speaker` by group (r36 → B): ordered 622 → 256, narrative 319 → 193, ddk 182 → 80, item set 37 → 32,
+`other_speaker` by group (r36 → B): ordered 622 → 257, narrative 319 → 192, ddk 182 → 80, item set 37 → 32,
 airway 232 → 232, voice 110 → 109; by half 589/913 → 261/641.
 
 - **B1**: 9,144 runs (31,087 words) disagree by > 1 s; 7,826 words in 3,919 runs re-timed (CrisperWhisper
   6,662, Qwen 1,164; halves 1,959/1,960); 704 words in 580 runs unlocated. Masks narrowed in 193 runs (median
   2.2 s, 815 s in all), widened in 52. 40 releases move to withheld (an unlocated word under a non-task mask:
   `mask_coverage_failed` 39, `non_task_speech_untimed` 11 with overlap), all already in review.
+- **B2**: COHORT's 112 target non-matches pooled mostly silence: median 0.33 of the pool lies on activity
+  (matches 0.94); 25 fall under 2 s (not measured), 71 keep under half. Non-task non-matches: 186, median 0.63,
+  66 under 2 s. 017b7678's target pool 37.4 s → 5.6 s; 00053adb stroop 2.62 s → 0.80 s (not measured). 1,510
+  matching target pools also fall under 2 s. The match itself is re-read by the r37 COHORT run (the enrollment
+  vectors are not stored).
 - **B3**: 2,628 words after the last event in 529 runs; 120 runs gain speech words.
-- **C1**: fires 628 → 42 (ordered 13, narrative 16, item set 13); none new; 581 stop (4 of them still flagged by
+- **C1**: fires 628 → 42 (ordered 14, narrative 15, item set 13); none new; 581 stop (4 of them still flagged by
   another signal); 24 corroborated, 18 uncorroborated kept in review, 5 downgraded on a hot/clipped participant.
   Halves 342/286 → 21/21. The recomputed share matched r36 on 39,456/39,456 readings.
 - **C2**: 32 `other_voice` → `off_task_speech`; 21 lose `other_speaker`. In r36, 22 `other_speaker` reasons
