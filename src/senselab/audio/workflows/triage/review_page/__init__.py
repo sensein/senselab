@@ -6,11 +6,12 @@ transcript and redactions) and Decisions (the reviewer's entries, exported as JS
 ``specs/20261007-task-events-in-background/design.md`` ("Unit C plan", item 5) is the design.
 """
 
-from senselab.audio.workflows.triage.review_page.page import index_of, page_html, write_page
+from senselab.audio.workflows.triage.review_page.page import ListenSet, index_of, page_html, write_page
 from senselab.audio.workflows.triage.review_page.records import overlays, review_record, stream_paths
 from senselab.audio.workflows.triage.review_page.spectrogram import pack, quantised_levels, unpack
 
 __all__ = [
+    "ListenSet",
     "index_of",
     "overlays",
     "pack",

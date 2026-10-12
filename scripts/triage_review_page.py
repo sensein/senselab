@@ -20,6 +20,14 @@ corpus root from the cluster and tunnel to it, then open http://localhost:8765/r
     python3 scripts/triage_review_serve.py CORPUS --port 8765 --source-root /orcd/data/...   # cluster
     ssh -N -L 8765:<node>:8765 orcd                                                         # laptop
 
+A listen set is a page over only the recordings an owner was asked to label, with their own question and
+answers in place of the triage verdicts. ``--stems`` names the list: a TSV with a ``stem`` column, whose
+other columns, apart from the empty ``owner_*`` ones, are shown beside each recording as its checks::
+
+    uv run python scripts/triage_review_page.py render review.jsonl --out CORPUS/review_extent_check \
+        --stems extent_check_listen.tsv --listen-set extent_check --labels yes,no,partly \
+        --question "does the extent hold the task?"
+
 ``--audio-base`` is the URL path from the page's directory to the corpus root; stream paths under
 that root are relative to it. A stream outside it (a raw recording read in place) keeps its absolute
 path and is fetched through ``--source-base`` (``/_source``), which the serve script maps onto the
@@ -33,18 +41,19 @@ Install:
 from __future__ import annotations
 
 import argparse
+import csv
 import importlib.util
 import json
 import sys
 from collections import Counter
 from multiprocessing import Pool
 from pathlib import Path
-from typing import Any, Iterator, Mapping, Sequence
+from typing import Any, Collection, Iterator, Mapping, Sequence
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from senselab.audio.workflows.triage.recording_vectors import RUN_SUBDIR, STORE_NAME, recording_dirs  # noqa: E402
-from senselab.audio.workflows.triage.review_page import review_record, write_page  # noqa: E402
+from senselab.audio.workflows.triage.review_page import ListenSet, review_record, write_page  # noqa: E402
 from senselab.audio.workflows.triage.review_page.page import SOURCE_BASE  # noqa: E402
 from senselab.audio.workflows.triage.review_page.records import transcripts  # noqa: E402
 from senselab.utils import fastio  # noqa: E402
@@ -184,11 +193,12 @@ def extract(
     return {"schema": EXTRACT_SCHEMA, "version": EXTRACT_VERSION, "run_roots": len(run_roots), **dict(counts)}
 
 
-def load(path: Path) -> list[Mapping[str, Any]]:
+def load(path: Path, stems: Collection[str] | None = None) -> list[Mapping[str, Any]]:
     """The records of an extract, without its header and error lines.
 
     Args:
         path: The JSONL.
+        stems: Only these recordings, or None for every one. A line naming none of them is not parsed.
 
     Returns:
         The records.
@@ -200,7 +210,38 @@ def load(path: Path) -> list[Mapping[str, Any]]:
     header = json.loads(lines[0]) if lines else {}
     if header.get("schema") != EXTRACT_SCHEMA or header.get("version") != EXTRACT_VERSION:
         raise ValueError(f"{path} is not a {EXTRACT_SCHEMA} v{EXTRACT_VERSION} extract")
-    return [record for record in map(json.loads, lines[1:]) if "error" not in record]
+    if stems is None:
+        return [record for record in map(json.loads, lines[1:]) if "error" not in record]
+    wanted = set(stems)
+    named = [line for line in lines[1:] if any(stem in line for stem in wanted)]
+    return [record for record in map(json.loads, named) if "error" not in record and record["stem"] in wanted]
+
+
+OWNER_PREFIX = "owner_"
+DEFAULT_LABELS = "pass,review,discard"
+
+
+def listen_set(path: Path, name: str, labels: Sequence[str], question: str) -> ListenSet:
+    """A listen set read from its list.
+
+    Args:
+        path: A TSV with a ``stem`` column, or one stem per line. A TSV's other columns, apart from the
+            ``owner_*`` columns the owner fills in, are the check values.
+        name: The export's ``listen_set``.
+        labels: The answers to choose from.
+        question: The question the answer is to.
+
+    Returns:
+        The listen set.
+    """
+    lines = [line for line in path.read_text().splitlines() if line.strip()]
+    if not lines or "stem" not in lines[0].split("\t"):
+        return ListenSet(name, question, tuple(labels), (), {line.strip(): () for line in lines})
+    rows = list(csv.DictReader(lines, delimiter="\t"))
+    header = lines[0].split("\t")
+    columns = tuple(c for c in header if c != "stem" and not c.startswith(OWNER_PREFIX))
+    checks = {row["stem"]: tuple(row.get(c) or "" for c in columns) for row in rows}
+    return ListenSet(name, question, tuple(labels), columns, checks)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -230,6 +271,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=SOURCE_BASE,
         help="URL route a stream outside the corpus root (an absolute path) is fetched through",
     )
+    renderer.add_argument("--stems", type=Path, default=None, help="a listen set's list: only these recordings")
+    renderer.add_argument("--listen-set", default=None, help="the listen set's name, its export's listen_set")
+    renderer.add_argument("--labels", default=DEFAULT_LABELS, help="the listen set's answers, comma-separated")
+    renderer.add_argument("--question", default="your decision", help="the question the listen set's answer is to")
     arguments = parser.parse_args(argv)
     if arguments.command == "extract":
         summary = extract(
@@ -241,14 +286,27 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         print(json.dumps(summary, indent=2))
         return 0
+    listen = None
+    if arguments.stems is not None:
+        listen = listen_set(
+            arguments.stems,
+            arguments.listen_set or arguments.stems.stem,
+            [label.strip() for label in arguments.labels.split(",") if label.strip()],
+            arguments.question,
+        )
+    records = load(arguments.data, None if listen is None else listen.checks)
     written = write_page(
-        load(arguments.data),
+        records,
         arguments.out,
         title=arguments.title,
         audio_base=arguments.audio_base,
         source_base=arguments.source_base,
         mark_style=_free_speech_page().MARK_STYLE,
+        listen=listen,
     )
+    if listen is not None:
+        written["listed"] = len(listen.checks)
+        written["listed_not_in_extract"] = len(set(listen.checks) - {r["stem"] for r in records})
     print(json.dumps(written, indent=2))
     return 0
 

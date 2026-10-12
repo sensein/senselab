@@ -94,7 +94,7 @@ test('an export carries the owner label columns and imports back to the same dec
   const rows = R.decodeRows(INDEX)
   const byStem = Object.fromEntries(rows.map((r) => [r.stem, r]))
   const decisions = { [rows[1].stem]: { verdict: 'discard', note: 'only the room', at: '2026-10-07T00:00:00Z' } }
-  const payload = R.exportPayload(byStem, decisions, 'abc123', '2026-10-07T01:00:00Z')
+  const payload = R.exportPayload(byStem, decisions, INDEX.build, '2026-10-07T01:00:00Z')
   assert.equal(payload.schema, R.EXPORT_SCHEMA)
   const e = payload.entries[0]
   assert.deepEqual(
@@ -104,7 +104,27 @@ test('an export carries the owner label columns and imports back to the same dec
   assert.equal(e.listen_set, 'triage_review_abc123')
   assert.equal(e.owner_label, 'reviewer_discard')
   assert.equal(e.pipeline_at_listen, 'review/withheld (weak_events)')
-  assert.deepEqual(R.importDecisions(payload), decisions)
+  assert.deepEqual(R.importDecisions(payload, R.labelsOf(INDEX.build)), decisions)
+})
+
+test('a listen set exports its own name and answer as the owner label, and imports only its answers', () => {
+  const build = { ...INDEX.build, listen: { name: 'extent_check', question: 'q', labels: ['yes', 'no', 'partly'], columns: ['lex_cov'] } }
+  const index = { ...INDEX, build, cols: { ...INDEX.cols, checks: [['0.5'], null, ['0.9']] } }
+  const rows = R.decodeRows(index)
+  assert.deepEqual(rows[0].checks, ['0.5'])
+  assert.equal(rows[1].checks, null)
+  assert.deepEqual(R.labelsOf(build), ['yes', 'no', 'partly'])
+  assert.deepEqual(R.labelsOf(INDEX.build), ['pass', 'review', 'discard'])
+  const byStem = Object.fromEntries(rows.map((r) => [r.stem, r]))
+  const decisions = { [rows[0].stem]: { verdict: 'partly', note: 'starts late', at: '2026-10-12T00:00:00Z' } }
+  const payload = R.exportPayload(byStem, decisions, build, '2026-10-12T01:00:00Z')
+  const e = payload.entries[0]
+  assert.equal(e.listen_set, 'extent_check')
+  assert.equal(e.owner_label, 'partly')
+  assert.equal(e.reviewer_verdict, 'partly')
+  assert.equal(e.pipeline_at_listen, 'pass/as_is')
+  assert.deepEqual(R.importDecisions(payload, R.labelsOf(build)), decisions)
+  assert.deepEqual(R.importDecisions(payload, R.labelsOf(INDEX.build)), {})
 })
 
 test('a transcript names its model by id, with the pipeline source where it differs', () => {
