@@ -6,7 +6,7 @@ enabled: false                     # owner, 2026-10-12: off until a sample of th
 background:                        # r37 round 2: the task's events against the recording's background (task_events.background_reading)
   enabled: false                   # read beside the other rules; off until its own listen stratum is labelled
   kinds: [airway]
-  event_over_background_db_max: null   # TO FIT: specs/20261012-r37-extents/design.md, "Events against background"
+  event_over_background_db_max:        # TO FIT: specs/20261012-r37-extents/design.md, "Events against background"
 
 non_lexical:                       # airway, voice, and the lexical families read as a voice task
   kinds: [airway, voice]
