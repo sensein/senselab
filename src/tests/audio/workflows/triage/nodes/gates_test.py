@@ -282,7 +282,7 @@ class TestAnAbsenceIsAnsweredByItsReason:
         """A family whose instruction permits a model speaker is not asked who spoke."""
         bounds = _bounds(Pattern.ORDERED_TOKENS, dominant_speaker_share_min=0.9)
         applied = apply_flag_gates(
-            bounds, {"extent_dominant_speaker_share": 0.5}, exempt=("dominant_speaker_share_min",)
+            bounds, {"extent_dominant_exclusive_share": 0.5}, exempt=("dominant_speaker_share_min",)
         )
         assert applied == []
 

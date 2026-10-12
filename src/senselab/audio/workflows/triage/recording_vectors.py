@@ -171,7 +171,7 @@ SECONDARY_ROLE = "secondary_source_extent"
 SOLO_ROLE = "solo_extent"
 SEPARATED_PREFIX = "separated_"
 DOMINANT_SHARE = "extent_dominant_speaker_share"
-"""The reading ``dominant_speaker_share_min`` gates. Folded by ``min``, as the gate folds it."""
+"""The overlap-inclusive dominant-speaker share, folded by ``min``; the gate reads ``extent_dominant_exclusive_share``."""
 
 SPANS_LAYOUT = "BHH"
 SPAN_LABELS_LAYOUT = "HBB"
