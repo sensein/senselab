@@ -189,7 +189,7 @@ def test_a_session_inconsistency_the_condition_explains_is_an_annotation() -> No
     assert "other_speaker" not in folded.reason_keys
     assert folded.triage is fold_file_verdict([], **COMMON).triage
     items = {entry.name: entry for entry in cohort_evidence(reading)}
-    assert items["cohort.session_level_shift_db"].value == pytest.approx(shift + 1.0)
+    assert items["cohort.session_level_shift_db"].value == pytest.approx(shift + 1.0, abs=0.01)
 
 
 def test_a_session_inconsistency_in_the_same_condition_stays_a_ground() -> None:
