@@ -382,10 +382,15 @@ def run_f0_hz(run: Run, voiced: np.ndarray, f0_hz: np.ndarray) -> tuple[float | 
     return (float(np.median(piece)) if piece.size else None), int(piece.size)
 
 
+CONTINUES = "continues"
+BREAKS = "breaks"
+UNREAD = "unread"
+
+
 def continues(
     run: Run, centre_hz: float | None, voiced: np.ndarray, f0_hz: np.ndarray, q: dict[str, Any], hop: float
-) -> bool:
-    """Whether a run continues a vowel held at ``centre_hz``: enough voicing, its median F0 near it.
+) -> str:
+    """Whether a run continues a vowel held at ``centre_hz``.
 
     Args:
         run: The run.
@@ -396,12 +401,13 @@ def continues(
         hop: The frame hop.
 
     Returns:
-        True where the run holds ``voiced_min_s`` of voicing and its median F0 lies within ``semitones``.
+        ``unread`` where the run holds under ``voiced_min_s`` of voicing (it neither continues nor breaks the
+        vowel); ``continues`` where its median F0 lies within ``semitones``; ``breaks`` otherwise.
     """
     median, frames_n = run_f0_hz(run, voiced, f0_hz)
     if centre_hz is None or median is None or frames_n * hop < float(q["voiced_min_s"]):
-        return False
-    return abs(12.0 * np.log2(median / centre_hz)) <= float(q["semitones"])
+        return UNREAD
+    return CONTINUES if abs(12.0 * np.log2(median / centre_hz)) <= float(q["semitones"]) else BREAKS
 
 
 def _continued(
@@ -415,7 +421,7 @@ def _continued(
     q: dict[str, Any],
     hop: float,
 ) -> tuple[int, int]:
-    """The run indices the extent spans once phonation continuity is followed outward."""
+    """The run indices the extent spans once phonation continuity is followed outward; unread runs are passed over."""
     centre, _ = run_f0_hz((runs[first][0], runs[last][1]), voiced, f0_hz)
     reach = int(round(float(q["gap_max_s"]) / hop))
     times = frames.times_s
@@ -424,16 +430,22 @@ def _continued(
         lo, hi = float(times[a]), float(times[max(a, b - 1)])
         return not any(s < hi and lo < e for s, e in agreed)
 
-    while first > 0 and runs[first][0] - runs[first - 1][1] <= reach:
-        if not free(runs[first - 1][0], runs[first][0]) or not continues(
-            runs[first - 1], centre, voiced, f0_hz, q, hop
-        ):
+    i = first - 1
+    while i >= 0 and runs[first][0] - runs[i][1] <= reach and free(runs[i][0], runs[first][0]):
+        state = continues(runs[i], centre, voiced, f0_hz, q, hop)
+        if state == BREAKS:
             break
-        first -= 1
-    while last < len(runs) - 1 and runs[last + 1][0] - runs[last][1] <= reach:
-        if not free(runs[last][1], runs[last + 1][1]) or not continues(runs[last + 1], centre, voiced, f0_hz, q, hop):
+        if state == CONTINUES:
+            first = i
+        i -= 1
+    j = last + 1
+    while j < len(runs) and runs[j][0] - runs[last][1] <= reach and free(runs[last][1], runs[j][1]):
+        state = continues(runs[j], centre, voiced, f0_hz, q, hop)
+        if state == BREAKS:
             break
-        last += 1
+        if state == CONTINUES:
+            last = j
+        j += 1
     return first, last
 
 
@@ -708,7 +720,8 @@ def measure_phonation(
 
     Returns:
         The reading. Where ``continuity`` is on the extent follows phonation continuity; where ``trim`` is on it
-        starts at the phonation onset, the first voiced stretch of ``trim.voice.onset_voiced_s``.
+        starts at the phonation onset, the first voiced stretch of ``trim.voice.onset_voiced_s``, where that
+        lies over ``completeness.onset_tolerance_s`` after its first phonation frame.
     """
     p = p or voice_phonation_parameters()
     x = extent_p or task_extent_parameters()
@@ -741,7 +754,8 @@ def measure_phonation(
     )
     onset_frames = max(1, int(round(float(x["trim"]["voice"]["onset_voiced_s"]) / hop)))
     sounding = voiced_onset(voiced, extent.onset, extent.offset, onset_frames) if extent is not None else 0
-    if extent is not None and enabled("trim", x) and sounding > extent.onset:
+    head = (sounding - extent.onset) * hop if extent is not None else 0.0
+    if extent is not None and enabled("trim", x) and head > float(x["completeness"]["onset_tolerance_s"]):
         extent = replace(
             extent,
             onset=sounding,
