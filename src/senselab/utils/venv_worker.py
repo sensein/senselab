@@ -21,8 +21,8 @@ and the call raises as the one-shot path did.
 
 Wire format: one JSON object per line on stdin and on a private copy of the worker's stdout. The
 worker's own file descriptor 1 is pointed at its stderr before the backend script runs, so a
-library's prints cannot interleave with replies. Design notes and measurements:
-``specs/20261010-persistent-venv-workers/design.md``.
+library's prints cannot interleave with replies. Ported from sensein/senselab@feat/task-events
+(f2a806af).
 """
 
 from __future__ import annotations
