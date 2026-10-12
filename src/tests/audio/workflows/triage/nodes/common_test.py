@@ -17,6 +17,7 @@ from senselab.audio.workflows.triage.nodes.common import (
     bound_word_extent,
     capture_environments,
     clamp_extent,
+    clamp_to_recording,
     consensus_words,
     find_measurement,
     host_environment,
@@ -440,3 +441,13 @@ class TestPathAttributes:
         """A write that did not land records the reason, not a null and not an exception."""
         attributes = path_attributes("derivatives/gone.npz", tmp_path)
         assert attributes == {"path": "derivatives/gone.npz", CHECKSUM_UNRESOLVED_KEY: "file not found"}
+
+
+def test_clamp_to_recording_bounds_an_extent_past_the_shortest_stream() -> None:
+    """r37: 83 airway extents ended up to 5 ms past their recording; the written span stops at its end."""
+    store = ProvStore(run_id="clamp")
+    assert clamp_to_recording(store, (0.0, 0.405)) == (0.0, 0.405)
+    store.entity(prov_type="stream", extent=(0.0, 0.399), attributes={"name": "recording", "path": "r.wav"})
+    store.entity(prov_type="stream", extent=(0.0, 0.4), attributes={"name": "plain", "path": "p.flac"})
+    assert clamp_to_recording(store, (-0.01, 0.405)) == (0.0, 0.399)
+    assert clamp_to_recording(store, (0.5, 0.6)) == (0.5, 0.6)

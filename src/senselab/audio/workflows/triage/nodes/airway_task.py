@@ -22,7 +22,7 @@ from senselab.audio.workflows.triage.breath_pattern import (
 )
 from senselab.audio.workflows.triage.cough_pattern import CoughPattern, cough_pattern_of, in_cough_review_band
 from senselab.audio.workflows.triage.nodes.branches import Expectation
-from senselab.audio.workflows.triage.nodes.common import mint_live, write_measurement
+from senselab.audio.workflows.triage.nodes.common import clamp_to_recording, mint_live, write_measurement
 from senselab.audio.workflows.triage.task_events import REVIEW
 from senselab.audio.workflows.triage.vocabulary import SUPERSEDES, TASK_EXTENT_SPAN_ROLE
 from senselab.utils.prov_store import ProvStore
@@ -108,7 +108,9 @@ def cough_attributes(read: CoughPattern | tuple[str, ...], instructed: int | Non
 
 
 def settle_task_extent(store: ProvStore, activity: str, software: str, extent: Mapping[str, Any] | None) -> str | None:
-    """Write the measure's task extent as the task-extent span that stands, retiring any earlier one.
+    """Write the measure's task extent, bounded by the recording, as the task-extent span that stands.
+
+    Any earlier one is retired.
 
     The span carries ``supersedes``, naming the live task-extent spans that do not, which stay live;
     readers take it in their place (:func:`~senselab.audio.workflows.triage.vocabulary.standing_task_extents`).
@@ -137,7 +139,7 @@ def settle_task_extent(store: ProvStore, activity: str, software: str, extent: M
         kept = mint_live(
             store,
             prov_type="span",
-            extent=(float(extent["start_s"]), float(extent["end_s"])),
+            extent=clamp_to_recording(store, (float(extent["start_s"]), float(extent["end_s"]))),
             attributes={
                 "family": "airway",
                 "role": TASK_EXTENT_SPAN_ROLE,
