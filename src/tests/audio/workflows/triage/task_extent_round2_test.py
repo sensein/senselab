@@ -108,7 +108,8 @@ def test_the_background_rule_reads_only_when_switched_on_and_fitted() -> None:
     off = {"background": {"enabled": False, "kinds": ["airway"], "event_over_background_db_max": 6.0}}
     on = {"background": {"enabled": True, "kinds": ["airway"], "event_over_background_db_max": 6.0}}
     assert background_drowns(inputs, off) is None
-    assert background_drowns(inputs, on)["name"] == "event_over_background_db"
+    drowned = background_drowns(inputs, on)
+    assert drowned is not None and drowned["name"] == "event_over_background_db"
     assert (
         background_drowns(ReplacedTaskInputs(family="respiration-and-cough-breath", event_over_background_db=9.0), on)
         is None
