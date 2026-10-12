@@ -107,6 +107,7 @@ from senselab.audio.workflows.triage.label_membership import (
     optional_label_membership,
 )
 from senselab.audio.workflows.triage.nodes.background import OWN_FLOOR, write_own_floor
+from senselab.audio.workflows.triage.nodes.branches import declared_task_family
 from senselab.audio.workflows.triage.nodes.common import (
     NodeResult,
     cpps_settings,
@@ -144,6 +145,7 @@ from senselab.audio.workflows.triage.stimulus import (
     align_stimulus,
 )
 from senselab.audio.workflows.triage.vocabulary import Outcome
+from senselab.audio.workflows.triage.word_arbitration import WORD_ARBITRATION, arbitrate_words
 from senselab.utils.data_structures import DeviceType, HFModel, PyannoteAudioModel, ScriptLine
 from senselab.utils.prov_store import CHECKSUM_KEY, PATH_KEY, Entity, ProvStore, file_digest
 
@@ -2686,6 +2688,17 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         derivatives[STIMULUS_MEASUREMENT] = entity_id
         view.append(entity_id)
 
+    def _word_arbitration() -> None:
+        """Each word the recognizers place far apart takes the time that falls on sound; its text stays.
+
+        Reads the spans and the phonation tracks back out of the store, and rewrites the consensus words it
+        moves (:func:`~senselab.audio.workflows.triage.word_arbitration.arbitrate_words`).
+        """
+        entity_id = arbitrate_words(store, run_dir=run_dir, family=declared_task_family(store, hint))
+        if entity_id is not None:
+            derivatives[WORD_ARBITRATION] = entity_id
+            view.append(entity_id)
+
     def _phonation_tracks() -> None:
         """F0 and formant tracks over the whole stream — measured once, localised nowhere.
 
@@ -3146,7 +3159,6 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             lambda: _asr("asr_qwen", _qwen_model, "bundled_aligner", QWEN_TIMESTAMP_MODEL, return_timestamps=True),
         ),
         ("consensus_transcript", _consensus),
-        (STIMULUS_MEASUREMENT, _stimulus_alignment),
         (PHONATION_TRACKS_MEASUREMENT, _phonation_tracks),
         ("energy_envelope", _envelope),
         ("normalized_envelope", _normalized_envelope),
@@ -3157,6 +3169,8 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         ),
         ("continuity_trace", _continuity_trace),
         ("spans", _spans),
+        (WORD_ARBITRATION, _word_arbitration),
+        (STIMULUS_MEASUREMENT, _stimulus_alignment),
         ("residual", _residual),
         (OWN_FLOOR, lambda: view.append(write_own_floor(store, run_dir))),
         ("enhanced_yamnet", lambda: _stream_yamnet("enhanced")),

@@ -48,6 +48,7 @@ from senselab.audio.workflows.triage.consensus import (
     word_from_attributes,
 )
 from senselab.audio.workflows.triage.enrollment import Enrollment
+from senselab.audio.workflows.triage.nodes.branches import declared_task_family
 from senselab.audio.workflows.triage.nodes.common import (
     REMINT,
     BranchResult,
@@ -97,6 +98,7 @@ from senselab.audio.workflows.triage.run import (
     drive_decisions,
 )
 from senselab.audio.workflows.triage.vocabulary import GRAPH_ORDER, QUALITY, REDACTION_LLM_ANNOTATION
+from senselab.audio.workflows.triage.word_arbitration import arbitrate_words
 from senselab.utils.prov_bep028 import to_bep028_graph, write_bep028_files
 from senselab.utils.prov_store import Entity, ProvStore
 from senselab.utils.subprocess_venv import record_venv_use
@@ -1074,8 +1076,9 @@ def replay_decisions(
 ) -> ReplayOutcome:
     """Re-decide a finished run from TAXONOMY, over the PREPROCESS output its store already holds.
 
-    Retires every live decision a replayed node made, then runs TAXONOMY through REDACT, VERDICT and
-    REPORT against the store and the sidecars under ``run_dir``. An answered REVIEW reading the
+    Retires every live decision a replayed node made, arbitrates the consensus words' times
+    (:func:`~senselab.audio.workflows.triage.word_arbitration.arbitrate_words`), then runs TAXONOMY through
+    REDACT, VERDICT and REPORT against the store and the sidecars under ``run_dir``. An answered REVIEW reading the
     replay's own REVIEW did not answer again is carried forward by :func:`carry_reading_forward`
     where its inputs are unchanged, and reported as :data:`REVIEW_NEEDS_REREAD` where they are not.
     The store must have been read under :func:`replay_run_id`, so what the replay writes takes ids
@@ -1101,6 +1104,7 @@ def replay_decisions(
     software = software_agent(store)
     held = held_reading(store)
     retired = retire_decisions(store, live_decisions(store), software=software)
+    arbitrate_words(store, run_dir=run_dir, family=declared_task_family(store, hint))
     outcomes: dict[str, NodeOutcome] = {}
     with record_venv_use() as used_venvs:
         released = drive_decisions(
