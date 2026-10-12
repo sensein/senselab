@@ -137,6 +137,11 @@ class EvidenceItem:
             nothing.
         effect: What the item does: ``pass``, ``review``, ``discard``, ``withhold`` or ``annotation``.
         decisive: Whether the item produced this recording's decision.
+        source: What read it (``diarizer``, ``cohort``, ``reviewer``, ``second_opinion``, ``residual``), where
+            the item says who speaks; None otherwise.
+        model: The model that read it, where one did.
+        spans: Where in the recording it was read, ``(start, end)`` in seconds; empty where it is a reading of
+            the whole text or the whole recording.
     """
 
     name: str
@@ -146,6 +151,9 @@ class EvidenceItem:
     threshold: Any
     effect: str
     decisive: bool = False
+    source: str | None = None
+    model: str | None = None
+    spans: tuple[tuple[float, float], ...] = ()
 
     def record(self) -> dict[str, Any]:
         """The item, JSON-ready.
@@ -161,6 +169,9 @@ class EvidenceItem:
             "threshold": self.threshold,
             "effect": self.effect,
             "decisive": self.decisive,
+            "source": self.source,
+            "model": self.model,
+            "spans": [[round(float(a), 3), round(float(b), 3)] for a, b in self.spans],
         }
 
 
@@ -282,6 +293,9 @@ def from_records(rows: Sequence[Mapping[str, Any]]) -> list[EvidenceItem]:
             row.get("threshold"),
             str(row["effect"]),
             bool(row.get("decisive")),
+            None if row.get("source") is None else str(row["source"]),
+            None if row.get("model") is None else str(row["model"]),
+            tuple((float(a), float(b)) for a, b in row.get("spans") or ()),
         )
         for row in rows
     ]

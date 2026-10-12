@@ -229,3 +229,58 @@ class TestSpeechBeforeTheTask:
         folded = _fold()
         assert KEY_SPEECH_BEFORE_TASK not in folded.annotation_keys
         assert not [entry for entry in folded.evidence if entry.name == SPEECH_BEFORE_TASK_ITEM]
+
+
+def _item(folded: FileVerdict, name: str) -> Any:  # noqa: ANN401 -- an evidence item
+    [found] = [entry for entry in folded.evidence if entry.name == name]
+    return found
+
+
+class TestEveryOtherSpeakerItemSaysWhoReadItAndWhere:
+    """C3: an other_speaker evidence item names its source, model, spans and value against its bound."""
+
+    def test_the_speaker_gate_names_the_diarizer_and_the_exclusive_spans(self) -> None:
+        """017b7678: "perhaps need to know where other speaker was found or how?"."""
+        fired = {**_FIRED, "model": "pyannote/speaker-diarization-3.1", "spans": [[4.0, 6.0]]}
+        [gate] = _gate_items(_fold(flag_gates=[fired]))
+        assert (gate.source, gate.model, gate.spans) == ("diarizer", "pyannote/speaker-diarization-3.1", ((4.0, 6.0),))
+        assert (gate.value, gate.comparison, gate.threshold) == (0.7, ">=", 0.9)
+
+    def test_the_second_opinion_names_its_probability_against_its_bound(self) -> None:
+        """A bare flag becomes p against confident_yes, with the model that answered."""
+        opinion = {"status": "ok", "model_id": "ollama:clef:27b", "probabilities": {"other_voice": 0.84}}
+        entry = _item(_fold(opinion=opinion), "second_opinion:other_voice")
+        assert (entry.source, entry.model, entry.value, entry.comparison, entry.threshold) == (
+            "second_opinion",
+            "ollama:clef:27b",
+            0.84,
+            ">=",
+            0.8,
+        )
+
+    def test_the_reviewer_and_cohort_name_their_spans(self) -> None:
+        """The reviewer's placed quotes, and COHORT's non-matching pool."""
+        task = TaskEvidence(owning_branches=("SPEECH",), reviewer_other_spans=((1.0, 2.5),))
+        folded = _fold(annotation={**_READ, "speakers": "more_than_one", "model_id": "gemma"}, task=task)
+        entry = _item(folded, "reviewer_second_speaker")
+        assert (entry.source, entry.model, entry.spans) == ("reviewer", "gemma", ((1.0, 2.5),))
+        cohort = _cohort(target=False)
+        cohort["other_speaker"]["model_id"] = "ecapa"
+        cohort["other_speaker"]["target"]["cosine_min"] = 0.398
+        folded = _fold(cohort=cohort)
+        pool = _item(folded, "cohort.target_cosine")
+        assert (pool.source, pool.model, pool.spans, pool.value, pool.threshold) == (
+            "cohort",
+            "ecapa",
+            ((1.0, 6.0),),
+            0.1,
+            0.398,
+        )
+        session = _item(folded, "other_speaker_in_session")
+        assert session.source == "cohort" and session.spans == ((1.0, 6.0),)
+
+    def test_the_record_carries_them(self) -> None:
+        """The verdict record, and so the tables, carry who read the item and where."""
+        fired = {**_FIRED, "model": "pyannote", "spans": [[4.0, 6.0]]}
+        [row] = [r for r in _fold(flag_gates=[fired]).record()["evidence"] if r["name"].startswith("gate:")]
+        assert (row["source"], row["model"], row["spans"]) == ("diarizer", "pyannote", [[4.0, 6.0]])

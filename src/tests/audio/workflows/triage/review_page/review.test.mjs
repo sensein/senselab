@@ -372,13 +372,19 @@ test('the page writes each transcript exactly as the free-speech review page doe
 })
 
 test('a side-file row expands to the record the page draws, paths under its run directory', () => {
-  const dictionary = [{ name: 'task_duration_s', group: 'acquisition', unit: 's', comparison: '>=', threshold: 1.0 }]
+  const dictionary = [
+    { name: 'task_duration_s', group: 'acquisition', unit: 's', comparison: '>=', threshold: 1.0 },
+    { name: 'gate:dominant_speaker_share_min', group: 'speech', unit: null, comparison: '>=', threshold: 0.9 },
+  ]
   const row = {
     stem: 's', run_dir: 'sub-a/ses-1/s_1', spec: 'AAAA', spec_stream: 'plain', figure: 'summary/summary.pdf',
     commit: 'c', config_hash: 'h', missing: [], extent: [0.5, 2.0],
     streams: [{ n: 'recording', p: '/data/s.wav' }, { n: 'plain', p: 'run/streams/plain.flac' }],
     overlay: { events: [[1, 2]], activity: [], issues: [{ s: 0.1, e: 0.2, k: 'impulse' }] },
-    evidence: [{ i: 0, v: '30.5', e: 'pass', d: true }],
+    evidence: [
+      { i: 0, v: '30.5', e: 'pass', d: true },
+      { i: 1, v: '0.7', e: 'review', d: true, x: '{"model":"pyannote","source":"diarizer","spans":[[4.0,6.0]]}' },
+    ],
     speech: {
       shown_kind: 'consensus', shown_source: null, models: [{ source: 'whisper', model_id: null }], own: [],
       words: [{ a: 1, o: 'agreement', r: ['hi'], s: 0, e: 0.4, t: 'hi' }],
@@ -394,8 +400,11 @@ test('a side-file row expands to the record the page draws, paths under its run 
   assert.deepEqual(rec.overlay.issues, [[0.1, 0.2, 'impulse']])
   assert.deepEqual(rec.evidence[0], {
     name: 'task_duration_s', group: 'acquisition', value: 30.5, unit: 's', comparison: '>=', threshold: 1.0,
-    effect: 'pass', decisive: true,
+    effect: 'pass', decisive: true, source: null, model: null, spans: [],
   })
+  assert.equal(rec.evidence[1].source, 'diarizer')
+  assert.equal(R.readBy(rec.evidence[1]), 'diarizer · pyannote · 4–6 s')
+  assert.equal(R.readBy(rec.evidence[0]), '')
   assert.deepEqual(rec.speech.entries, [['hi', 0, -1], ['there', 0, 0]])
   assert.equal(rec.speech.release_ground, 'declined')
   assert.deepEqual(rec.speech.llm, { status: 'disabled' })

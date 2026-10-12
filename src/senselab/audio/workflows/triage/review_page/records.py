@@ -274,6 +274,25 @@ def _value(text: str | None) -> Any:  # noqa: ANN401 -- an evidence value is any
         return text
 
 
+def _with_speaker_spans(overlay: dict[str, list[list[Any]]], evidence: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
+    """The overlay, with each span an evidence item that names a speaker read, as ``[start, end, speaker:<source>]``.
+
+    Args:
+        overlay: :func:`overlays`' result.
+        evidence: The recording's evidence rows.
+
+    Returns:
+        The overlay, its issues extended and sorted.
+    """
+    spoken = [
+        [float(span[0]), float(span[1]), f"speaker:{item['source']}"]
+        for item in evidence
+        if item.get("source")
+        for span in item.get("spans") or ()
+    ]
+    return {**overlay, "issues": sorted([*overlay["issues"], *spoken])}
+
+
 def review_record(run_root: Path, root: Path, speech: SpeechReader | None = None) -> dict[str, Any] | None:
     """One recording's review record.
 
@@ -323,12 +342,15 @@ def review_record(run_root: Path, root: Path, speech: SpeechReader | None = None
                 "threshold": _value(item["threshold"]),
                 "effect": item["effect"],
                 "decisive": item["decisive"],
+                "source": item.get("source"),
+                "model": item.get("model"),
+                "spans": [list(span) for span in item.get("spans") or ()],
             }
             for item in evidence
         ],
         "spec": spec,
         "spec_stream": spec_stream,
-        "overlay": overlays(view),
+        "overlay": _with_speaker_spans(overlays(view), evidence),
         "streams": stream_paths(view, run_root, root),
         "figure": decision["figure_path"],
         "speech": speech(run_root) if speech is not None and family else None,

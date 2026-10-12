@@ -104,7 +104,9 @@ SCHEMA = pa.schema(
         ),
         (
             "evidence",
-            pa.list_(pa.struct([("i", pa.int32()), ("v", pa.string()), ("e", pa.string()), ("d", pa.bool_())])),
+            pa.list_(
+                pa.struct([("i", pa.int32()), ("v", pa.string()), ("e", pa.string()), ("d", pa.bool_()), ("x", pa.string())])
+            ),
         ),
         ("speech", SPEECH),
     ]
@@ -237,6 +239,7 @@ def shard_rows(block: Sequence[Mapping[str, Any]]) -> tuple[list[dict[str, Any]]
                     "v": _json(item.get("value")),
                     "e": _text(item.get("effect")),
                     "d": bool(item.get("decisive")),
+                    "x": _json({k: item.get(k) for k in ("source", "model", "spans")}) if item.get("source") else None,
                 }
             )
         run_dir = run_dir_of(record)
