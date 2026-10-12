@@ -99,11 +99,24 @@ def _wait_for(path: Path, timeout_s: float = 30.0) -> dict[str, Any]:
 
 
 def _gone(pid: int) -> bool:
+    """Whether a process is gone (a zombie counts as gone: it runs nothing)."""
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
         return True
-    return False
+    try:
+        return Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0] == "Z"
+    except (FileNotFoundError, IndexError):
+        return True
+
+
+def _eventually(check: Any, timeout_s: float = 15.0) -> bool:  # noqa: ANN401
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        if check():
+            return True
+        time.sleep(0.05)
+    return bool(check())
 
 
 def _race(root: Path, *, processes: int, items: int, hold: float = 0.0) -> None:
@@ -398,9 +411,389 @@ def test_status_counts_per_state_and_class(tmp_path: Path) -> None:
         "failed_attempts": 1,
         "interrupted": 1,
         "staged": 0,
+        "conflicts": 0,
     }
     assert status["classes"] == {
         "main": {"queued": 1, "leased": 0, "done": 1, "dead": 1},
         "gpu-a": {"queued": 1, "leased": 1, "done": 0, "dead": 0},
     }
     assert _read(pool.root / "status.json") == status
+
+
+def test_a_put_back_does_not_strip_a_live_owner(tmp_path: Path) -> None:
+    """A lease renamed aside and back (a reaper's put-back) stays the owner's.
+
+    Heartbeat, complete, and a worker that keeps its child.
+    """
+    pool = _pool(tmp_path, heartbeat_s=0.2)
+    first, second = pool.publish([_item(0), _item(1, "spare")])
+    aside = tmp_path / "aside"
+
+    def aside_and_back(path: Path, seconds: float) -> threading.Thread:
+        os.rename(path, aside)
+
+        def put_back() -> None:
+            time.sleep(seconds)
+            os.rename(aside, path)
+
+        back = threading.Thread(target=put_back)
+        back.start()
+        return back
+
+    lease = pool.claim(["main"], "w")
+    assert lease is not None
+    back = aside_and_back(lease.path, 0.4)
+    assert pool.heartbeat(lease)
+    back.join()
+    back = aside_and_back(lease.path, 0.4)
+    assert pool.complete(lease, {"exit_code": 0})
+    back.join()
+    assert _read(pool.root / "done" / f"{first.id}.json")["attempt"] == 1
+
+    record = tmp_path / "child.json"
+    napper = _SLEEPER.replace("time.sleep(60)", "time.sleep(6)")
+    worker_pool = wp.WorkPool.create(tmp_path / "worker-pool", lease_s=60.0, heartbeat_s=0.2)
+    [item] = worker_pool.publish([_item(2, command=(sys.executable, "-c", napper, str(record)))])
+    worker = _worker(worker_pool, "--linger", "0", "--poll", "0.1")
+    child = _wait_for(record)
+    for _ in range(3):  # each window spans a heartbeat; each gap is longer than the owner's re-check wait
+        aside_and_back(worker_pool.root / "leases" / item.id, 0.3).join()
+        time.sleep(1.2)
+    assert worker.wait(timeout=30) == 0
+    assert _gone(child["pid"])
+    assert _read(worker_pool.root / "done" / f"{item.id}.json")["exit_code"] == 0
+    assert _names(worker_pool.root / "interrupted") == []
+
+
+def test_a_reaper_puts_back_a_lease_claimed_again_under_it(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The reaper reads the owner's token before its rename.
+
+    A lease that changed hands is put back, even when its heartbeat also looks old.
+    """
+    pool = _pool(tmp_path)
+    [item] = pool.publish([_item(0)])
+    stale = pool.claim(["main"], "w-stalled")
+    assert stale is not None
+    _expire(pool, item.id)
+    rename = os.rename
+    fresh: list[wp.Lease | None] = []
+
+    def swap_first(src: Any, dst: Any) -> None:  # noqa: ANN401
+        if Path(dst).name.startswith("reap-") and Path(src).parent.name == "leases" and not fresh:
+            monkeypatch.setattr(wp.os, "rename", rename)
+            assert pool.release(stale) == "requeued"
+            fresh.append(pool.claim(["main"], "w-new"))
+            _expire(pool, item.id)
+            monkeypatch.setattr(wp.os, "rename", swap_first)
+        rename(src, dst)
+
+    monkeypatch.setattr(wp.os, "rename", swap_first)
+    assert pool.reap() == 0
+    monkeypatch.setattr(wp.os, "rename", rename)
+    [lease] = fresh
+    assert lease is not None and lease.item.attempt == 2
+    assert _read(pool.root / "leases" / item.id / "owner.json")["token"] == lease.token
+    assert _names(pool.root / "interrupted") == [f"{item.id}.1.json"]
+    assert pool.heartbeat(lease) and pool.complete(lease, {"exit_code": 0})
+
+
+def test_a_stalled_heartbeat_thread_cannot_touch_the_next_item(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A heartbeat thread stalled past the join timeout, then reporting its lease lost, leaves the next run alone."""
+    monkeypatch.setattr(wp, "JOIN_GRACE_S", 0.1, raising=False)
+    monkeypatch.setattr(wp, "PUTBACK_WAIT_S", 0.1, raising=False)
+    pool = _pool(tmp_path, heartbeat_s=0.2)
+    record = tmp_path / "child.json"
+    napper = _SLEEPER.replace("time.sleep(60)", "time.sleep(2)")
+    first, second = pool.publish(
+        [_item(0, command=("sleep", "0.6")), _item(1, command=(sys.executable, "-c", napper, str(record)))]
+    )
+    gate, real = threading.Event(), pool.heartbeat
+
+    def stalls_for_the_first(lease: wp.Lease) -> bool:
+        if lease.item.id == first.id:
+            gate.wait(30)
+            return False
+        return real(lease)
+
+    monkeypatch.setattr(pool, "heartbeat", stalls_for_the_first)
+    worker = wp._Worker(pool, ["main"], "w", 0, 0.1)
+    lease = pool.claim(["main"], "w")
+    assert lease is not None and lease.item.id == first.id
+    worker._run(lease)
+    assert _read(pool.root / "done" / f"{first.id}.json")["exit_code"] == 0
+
+    def open_the_gate() -> None:
+        _wait_for(record)
+        gate.set()
+
+    opener = threading.Thread(target=open_the_gate)
+    opener.start()
+    lease = pool.claim(["main"], "w")
+    assert lease is not None and lease.item.id == second.id
+    worker._run(lease)
+    opener.join()
+    assert _read(pool.root / "done" / f"{second.id}.json")["exit_code"] == 0
+
+
+def test_the_childs_whole_process_group_is_killed(tmp_path: Path) -> None:
+    """What the child leaves running in its process group dies when the item finishes."""
+    pool = _pool(tmp_path)
+    grandchild = tmp_path / "grandchild.pid"
+    [item] = pool.publish([_item(0, command=("sh", "-c", f"sleep 60 & echo $! > {grandchild}; exit 0"))])
+    assert _worker(pool, "--linger", "0", "--poll", "0.1").wait(timeout=60) == 0
+    assert _read(pool.root / "done" / f"{item.id}.json")["exit_code"] == 0
+    pid = int(grandchild.read_text())
+    assert _eventually(lambda: _gone(pid))
+
+
+def test_reaping_uses_the_storage_clock_not_the_local_one(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A local clock an hour ahead reaps no live lease.
+
+    A staged claim named an hour ago is not reaped while its dir is fresh; a lease that has really expired is reaped
+    with the local clock an hour behind.
+    """
+    pool = _pool(tmp_path)
+    first, second = pool.publish([_item(0), _item(1)])
+    lease = pool.claim(["main"], "w0")
+    assert lease is not None and lease.item.id == first.id
+    real_now, real_rename = wp._now, os.rename
+    monkeypatch.setattr(wp, "_now", lambda: real_now() + 3600)
+    assert pool.reap() == 0
+    assert _names(pool.root / "leases") == [first.id]
+
+    def dies_publishing_the_claim(src: Any, dst: Any) -> None:  # noqa: ANN401
+        if Path(dst).parent.name == "leases":
+            raise _Died
+        real_rename(src, dst)
+
+    monkeypatch.setattr(wp, "_now", lambda: real_now() - 3600)
+    monkeypatch.setattr(wp.os, "rename", dies_publishing_the_claim)
+    with pytest.raises(_Died):
+        pool.claim(["main"], "w1")
+    monkeypatch.setattr(wp.os, "rename", real_rename)
+    monkeypatch.setattr(wp, "_now", real_now)
+    assert pool.reap() == 0
+    assert [n for n in _names(pool.root / "tmp") if (pool.root / "tmp" / n / "item.json").exists()]
+    monkeypatch.setattr(wp, "_now", lambda: real_now() - 3600)
+    _expire(pool, first.id)
+    assert pool.reap() == 1
+    assert _read(pool.root / "queue" / f"{first.id}.json")["attempt"] == 2
+
+
+def test_duplicates_go_to_conflicts_and_never_run_twice(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Queued copies of done or dead items, and an item whose lease dir exists, go to conflicts/.
+
+    Publish sees items held in tmp/, links exclusively and reads back a link that landed but raised.
+    """
+    pool = _pool(tmp_path)
+    done_item, dead_item, leased_item = pool.publish([_item(0), _item(1), _item(2)])
+    lease = pool.claim(["main"], "w")
+    assert lease is not None and lease.item.id == done_item.id and pool.complete(lease, {"exit_code": 0})
+    for _ in range(2):
+        lease = pool.claim(["main"], "w")
+        assert lease is not None and lease.item.id == dead_item.id
+        pool.fail(lease, 1)
+    assert (pool.root / "dead" / f"{dead_item.id}.json").exists()
+    for item in (done_item, dead_item):
+        (pool.root / "queue" / f"{item.id}.json").write_text(json.dumps(item.to_dict()))
+    other = pool.root / "leases" / leased_item.id
+    other.mkdir()
+    (other / "owner.json").write_text(json.dumps({"token": "other"}))
+    (other / "item.json").write_text(json.dumps(leased_item.to_dict()))
+    (other / "heartbeat").touch()
+    done_raw = (pool.root / "done" / f"{done_item.id}.json").read_bytes()
+
+    assert pool.claim(["main"], "w") is None
+    assert sorted(n.split(".")[0:2] for n in _names(pool.root / "conflicts")) == [
+        [done_item.id, "done"],
+        [dead_item.id, "dead"],
+        [leased_item.id, "leased"],
+    ]
+    assert _names(pool.root / "queue") == []
+    assert _read(other / "owner.json")["token"] == "other"
+    assert (pool.root / "done" / f"{done_item.id}.json").read_bytes() == done_raw
+    assert pool.status()["counts"]["conflicts"] == 3
+
+    rename = os.rename
+
+    def dies_publishing_the_claim(src: Any, dst: Any) -> None:  # noqa: ANN401
+        if Path(dst).parent.name == "leases":
+            raise _Died
+        rename(src, dst)
+
+    pool.publish([_item(3, "spare")])
+    monkeypatch.setattr(wp.os, "rename", dies_publishing_the_claim)
+    with pytest.raises(_Died):
+        pool.claim(["spare"], "w")
+    monkeypatch.setattr(wp.os, "rename", rename)
+    with pytest.raises(ValueError, match="item-0003"):
+        pool.publish([_item(3, "spare")])
+
+    link = os.link
+
+    def lands_then_raises(src: Any, dst: Any) -> None:  # noqa: ANN401
+        link(src, dst)
+        raise FileExistsError(errno.EEXIST, os.strerror(errno.EEXIST), str(dst))
+
+    def another_publisher_first(src: Any, dst: Any) -> None:  # noqa: ANN401
+        Path(dst).write_text(json.dumps(_item(5).to_dict()))
+        link(src, dst)
+
+    monkeypatch.setattr(wp.os, "link", lands_then_raises)
+    [published] = pool.publish([_item(4)])
+    assert _read(pool.root / "queue" / f"{published.id}.json")["payload_sha256"] == published.payload_sha256
+    monkeypatch.setattr(wp.os, "link", another_publisher_first)
+    with pytest.raises(ValueError, match="item-0005"):
+        pool.publish([_item(5)])
+    monkeypatch.setattr(wp.os, "link", link)
+    assert "placed" not in _read(pool.root / "queue" / "item-0005.json")
+    assert [n for n in _names(pool.root / "tmp") if n.endswith(".json")] == []
+
+
+def test_renames_and_links_that_land_and_then_raise_are_read_back(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A retransmitted NFS call that did its work but reports an error.
+
+    Publish, claim, complete, release, fail and the move to dead/ all still succeed exactly once.
+    """
+    pool = _pool(tmp_path)
+    rename, link = os.rename, os.link
+
+    def rename_lands_then_raises(src: Any, dst: Any) -> None:  # noqa: ANN401
+        rename(src, dst)
+        raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), str(src))
+
+    def link_lands_then_raises(src: Any, dst: Any) -> None:  # noqa: ANN401
+        link(src, dst)
+        raise FileExistsError(errno.EEXIST, os.strerror(errno.EEXIST), str(dst))
+
+    monkeypatch.setattr(wp.os, "rename", rename_lands_then_raises)
+    monkeypatch.setattr(wp.os, "link", link_lands_then_raises)
+    first, second, third = pool.publish([_item(0), _item(1, "spare"), _item(2, "gpu-a", max_attempts=1)])
+    lease = pool.claim(["main"], "w")
+    assert lease is not None and lease.item.id == first.id
+    assert pool.complete(lease, {"exit_code": 0})
+    lease = pool.claim(["spare"], "w")
+    assert lease is not None and pool.release(lease) == "requeued"
+    lease = pool.claim(["spare"], "w")
+    assert lease is not None and lease.item.attempt == 2 and pool.fail(lease, 1) == "retry"
+    lease = pool.claim(["gpu-a"], "w")
+    assert lease is not None and pool.fail(lease, 1) == "dead"
+    monkeypatch.setattr(wp.os, "rename", rename)
+    monkeypatch.setattr(wp.os, "link", link)
+    assert _read(pool.root / "done" / f"{first.id}.json")["attempt"] == 1
+    assert _read(pool.root / "queue" / f"{second.id}.json")["attempt"] == 3
+    assert _read(pool.root / "dead" / f"{third.id}.json")["dead_reason"] == "failures"
+    assert _names(pool.root / "tmp") == _names(pool.root / "leases") == _names(pool.root / "conflicts") == []
+
+
+def test_a_stalled_finisher_loses_cleanly_to_the_reaper(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A finisher stalled in its hand-off loses it to the tmp/ reaper and writes nothing.
+
+    A stale complete() that renamed a re-claimed lease aside puts it back; a hand-off left after done/ was written
+    is dropped, not run.
+    """
+    pool = _pool(tmp_path, lease_s=1.0, heartbeat_s=0.3)
+    first, second, third = pool.publish([_item(0), _item(1, "spare"), _item(2, "gpu-a")])
+
+    held = pool.claim(["main"], "w")
+    assert held is not None
+    lease: wp.Lease = held
+    write, entered, go = wp._write_json, threading.Event(), threading.Event()
+    result: list[bool] = []
+
+    def stalls_writing_done(path: Path, data: Any) -> None:  # noqa: ANN401
+        if path.name == "done.json" and not go.is_set():
+            entered.set()
+            go.wait(30)
+        write(path, data)
+
+    monkeypatch.setattr(wp, "_write_json", stalls_writing_done)
+    finisher = threading.Thread(target=lambda: result.append(pool.complete(lease, {"exit_code": 0})))
+    finisher.start()
+    assert entered.wait(10)
+    time.sleep(1.6)
+    assert pool.reap() == 1
+    go.set()
+    finisher.join()
+    monkeypatch.setattr(wp, "_write_json", write)
+    assert result == [False]
+    assert not (pool.root / "done" / f"{first.id}.json").exists()
+    assert _read(pool.root / "queue" / f"{first.id}.json")["attempt"] == 2
+    assert _read(pool.root / "interrupted" / f"{first.id}.1.json")["reason"] == "reap"
+
+    stale = pool.claim(["spare"], "w-stalled")
+    assert stale is not None
+    rename = os.rename
+    fresh: list[wp.Lease | None] = []
+
+    def reclaimed_before_the_rename(src: Any, dst: Any) -> None:  # noqa: ANN401
+        if Path(dst).name.startswith("done-") and Path(src) == stale.path and not fresh:
+            monkeypatch.setattr(wp.os, "rename", rename)
+            _expire(pool, second.id)
+            assert pool.reap() == 1
+            fresh.append(pool.claim(["spare"], "w-new"))
+            monkeypatch.setattr(wp.os, "rename", reclaimed_before_the_rename)
+        rename(src, dst)
+
+    monkeypatch.setattr(wp.os, "rename", reclaimed_before_the_rename)
+    assert not pool.complete(stale, {"exit_code": 0})
+    monkeypatch.setattr(wp.os, "rename", rename)
+    [new] = fresh
+    assert new is not None and new.item.attempt == 2
+    assert _read(pool.root / "leases" / second.id / "owner.json")["token"] == new.token
+    assert not (pool.root / "done" / f"{second.id}.json").exists()
+    assert pool.heartbeat(new) and pool.complete(new, {"exit_code": 0})
+    assert _read(pool.root / "done" / f"{second.id}.json")["attempt"] == 2
+
+    last = pool.claim(["gpu-a"], "w")
+    assert last is not None
+    rmtree = shutil.rmtree
+
+    def dies_cleaning_up(path: Any, *args: Any, **kwargs: Any) -> None:  # noqa: ANN401
+        if Path(path).name.startswith("done-"):
+            raise _Died
+        rmtree(path, *args, **kwargs)
+
+    monkeypatch.setattr(wp.shutil, "rmtree", dies_cleaning_up)
+    with pytest.raises(_Died):
+        pool.complete(last, {"exit_code": 0})
+    monkeypatch.setattr(wp.shutil, "rmtree", rmtree)
+    assert (pool.root / "done" / f"{third.id}.json").exists()
+    assert [n for n in _names(pool.root / "tmp") if (pool.root / "tmp" / n / "item.json").exists()]
+    time.sleep(1.6)
+    pool.reap()
+    assert not (pool.root / "queue" / f"{third.id}.json").exists()
+    assert not (pool.root / "interrupted" / f"{third.id}.1.json").exists()
+    assert _names(pool.root / "tmp") == []
+
+
+def test_a_re_reap_does_not_skip_an_attempt(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A release that dies after staging the next state but before placing it: the reaper re-derives attempt 2."""
+    pool = _pool(tmp_path, lease_s=1.0, heartbeat_s=0.3)
+    [item] = pool.publish([_item(0)])
+    lease = pool.claim(["main"], "w")
+    assert lease is not None
+    rename, link = os.rename, os.link
+
+    def dies_placing(real: Any) -> Any:  # noqa: ANN401
+        def wrapped(src: Any, dst: Any) -> None:  # noqa: ANN401
+            if Path(dst).parent.name == "queue":
+                raise _Died
+            real(src, dst)
+
+        return wrapped
+
+    monkeypatch.setattr(wp.os, "rename", dies_placing(rename))
+    monkeypatch.setattr(wp.os, "link", dies_placing(link))
+    with pytest.raises(_Died):
+        pool.release(lease)
+    monkeypatch.setattr(wp.os, "rename", rename)
+    monkeypatch.setattr(wp.os, "link", link)
+    assert _names(pool.root / "queue") == []
+    time.sleep(1.6)
+    assert pool.reap() == 1
+    assert _read(pool.root / "queue" / f"{item.id}.json")["attempt"] == 2
+    assert _names(pool.root / "interrupted") == [f"{item.id}.1.json"]
+    assert _names(pool.root / "tmp") == []

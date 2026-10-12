@@ -10,16 +10,18 @@ A pool is a directory that every node can see::
     done/<item>.json             the item succeeded (exit code, host, times)
     failed/<item>.<a>.json       attempt ``a`` failed
     dead/<item>.json             the item spent its failure or interruption budget
+    conflicts/<item>.<why>.<t>.json  a duplicate copy of an item, kept out of the queue
     workers/<worker>.json        the workers that ran here
     status.json                  written by :meth:`WorkPool.status`
 
-Every move of an item is one ``rename(2)``, so an item is always in exactly one place, and every lease
-directory is staged complete in ``tmp/`` before it is renamed into ``leases/``. :meth:`WorkPool.claim` takes an
-item with ``rename(queue/<i>.json, tmp/claim-<token>/item.json)`` and publishes the lease with
-``rename(tmp/claim-<token>, leases/<i>)``; :meth:`WorkPool.complete`, :meth:`WorkPool.fail`,
+An item is always in one place. :meth:`WorkPool.claim` takes it with ``rename(queue/<i>.json,
+tmp/claim-<token>/item.json)`` into a dir that already holds ``owner.json`` and a heartbeat, and publishes the
+lease with ``rename(tmp/claim-<token>, leases/<i>)``. :meth:`WorkPool.complete`, :meth:`WorkPool.fail`,
 :meth:`WorkPool.release` and :meth:`WorkPool.reap` all start by renaming ``leases/<i>`` aside, so only one of
-them acts on a lease. After a rename reports an error, the destination is read back, because a retransmitted
-NFS rename can report failure to the process that made it.
+them acts on a lease; the next state is written as a new file there and placed with an exclusive ``link(2)``
+(``done/``, ``dead/``, or ``queue/`` with attempt+1). After a rename or link reports an error, the destination is
+read back for the caller's token, because a retransmitted NFS call can report failure to the process that made
+it. Ages are measured on the storage's clock.
 
 ``python -m senselab.utils.work_pool work POOL --classes a,b`` runs a worker: claim, run the item's command with
 ``POOL_ITEM_ID`` and ``POOL_ATTEMPT`` set, heartbeat, then complete or fail; SIGTERM releases the item.
@@ -51,7 +53,7 @@ from typing import Any, Iterable, Mapping, Optional, Sequence, Union
 SCHEMA = "work-pool-1"
 """The ``schema`` value of ``pool.json``."""
 
-SUBDIRS = ("queue", "leases", "tmp", "interrupted", "done", "failed", "dead", "workers")
+SUBDIRS = ("queue", "leases", "tmp", "interrupted", "done", "failed", "dead", "conflicts", "workers")
 """The pool's subdirectories."""
 
 ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,199}")
@@ -71,6 +73,23 @@ SIGNAL_GRACE_S = 3.0
 
 SIGNAL_EXIT = 143
 """A worker's exit code after SIGTERM."""
+
+PUTBACK_WAIT_S = 1.0
+"""Seconds before a lease found absent is checked again: a reaper that renamed a live lease aside puts it back."""
+
+JOIN_GRACE_S = 5.0
+"""Extra seconds a worker waits for its heartbeat thread to stop after a run."""
+
+MOVED = ".moved-"
+"""Prefix of a marker file created in a dir just renamed into ``tmp/``, so the dir's mtime (its age) counts from
+the move. Ages are read from the dir alone: an open of a file inside would make the NFS client keep a
+``.nfs*`` copy of it when its owner deletes it, and the owner's removal of the dir would fail."""
+
+REMOVE_RETRY_S = 1.0
+"""Seconds a dir removal keeps retrying while an NFS ``.nfs*`` placeholder (a file open elsewhere) blocks it."""
+
+NEXT = "next.json"
+"""The next state of an item in a hand-off dir, placed with ``link(2)``."""
 
 PathLike = Union[str, Path]
 
@@ -146,17 +165,63 @@ def _fresh_mtime(path: Path) -> Optional[float]:
         raise
 
 
+def _fresh_times(path: Path) -> Optional[float]:
+    """The later of the path's mtime and ctime through an open; None when it is absent."""
+    try:
+        fd = os.open(path, os.O_RDONLY)
+        try:
+            st = os.fstat(fd)
+            return max(st.st_mtime, st.st_ctime)
+        finally:
+            os.close(fd)
+    except OSError as exc:
+        if _gone(exc):
+            return None
+        raise
+
+
+def _mark_moved(directory: Path) -> None:
+    """Create a fresh marker file in a dir, which sets the dir's mtime on the storage's clock."""
+    try:
+        os.close(os.open(directory / f"{MOVED}{uuid.uuid4().hex[:12]}", os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o660))
+    except OSError as exc:
+        if not _gone(exc):
+            raise
+
+
+def _remove_dir(path: Path) -> None:
+    """Remove a dir tree, retrying briefly while an NFS ``.nfs*`` placeholder blocks it."""
+    deadline = time.monotonic() + REMOVE_RETRY_S
+    while True:
+        shutil.rmtree(path, ignore_errors=True)
+        if not _exists(path) or time.monotonic() > deadline:
+            return
+        time.sleep(0.05)
+
+
+def _unlink(path: Path) -> None:
+    try:
+        path.unlink()
+    except OSError:
+        pass
+
+
+def _place(source: Path, target: Path, token: str) -> bool:
+    """Link ``source`` to ``target`` only if ``target`` does not exist; True when ``target`` carries ``token``.
+
+    The read-back covers a retransmitted link that landed but reported ``EEXIST``.
+    """
+    try:
+        os.link(source, target)
+        return True
+    except OSError:
+        held = _read_json(target)
+        return isinstance(held, dict) and held.get("placed") == token
+
+
 def _tmp_name(kind: str, token: str) -> str:
-    """A ``tmp/`` entry name: its kind, its creation time in milliseconds and a token."""
+    """A ``tmp/`` entry name: its kind, the local time in milliseconds (for reading only) and a token."""
     return f"{kind}-{int(_now() * 1000)}-{token}"
-
-
-def _tmp_age(name: str) -> Optional[float]:
-    """Seconds since a ``tmp/`` entry was named; None for a name :func:`_tmp_name` did not make."""
-    parts = name.split("-")
-    if len(parts) < 3 or not parts[1].isdigit():
-        return None
-    return _now() - int(parts[1]) / 1000
 
 
 @dataclass(frozen=True)
@@ -312,9 +377,39 @@ class WorkPool:
     def _d(self, name: str) -> Path:
         return self.root / name
 
+    # -- clock and ages -------------------------------------------------------------------------------------------
+    def _server_now(self) -> float:
+        """The storage's clock: the mtime of a dot-file in ``tmp/`` just touched (a server time on NFS)."""
+        path = self._d("tmp") / f".clock-{self.host}-{os.getpid()}-{threading.get_ident()}"
+        os.close(os.open(path, os.O_WRONLY | os.O_CREAT, 0o660))
+        try:
+            os.utime(path)
+            stamp = _fresh_mtime(path)
+        finally:
+            try:
+                path.unlink()
+            except OSError:
+                pass
+        return _now() if stamp is None else stamp
+
+    def _entry_time(self, path: Path) -> Optional[float]:
+        """When a ``tmp/`` entry last changed: the later of its mtime and ctime (storage clock)."""
+        return _fresh_times(path)
+
     # -- publishing ----------------------------------------------------------------------------------------------
+    def _tmp_items(self) -> list[tuple[Path, dict[str, Any]]]:
+        """Items held in ``tmp/``: staged claims, hand-offs and publish files."""
+        held = []
+        for name in _names(self._d("tmp")):
+            path = self._d("tmp") / name
+            for candidate in (path, path / "item.json", path / NEXT):
+                data = _read_json(candidate) if candidate != path or name.endswith(".json") else None
+                if isinstance(data, dict) and "id" in data:
+                    held.append((path, data))
+        return held
+
     def _known(self, item_id: str) -> bool:
-        return any(
+        if any(
             _exists(p)
             for p in (
                 self._d("queue") / f"{item_id}.json",
@@ -322,12 +417,15 @@ class WorkPool:
                 self._d("done") / f"{item_id}.json",
                 self._d("dead") / f"{item_id}.json",
             )
-        )
+        ):
+            return True
+        return any(data.get("id") == item_id for _, data in self._tmp_items())
 
     def publish(self, items: Iterable[Item]) -> list[Item]:
-        """Put items in the queue, each with one atomic rename from ``tmp/``.
+        """Put items in the queue, each with one exclusive ``link(2)`` from ``tmp/``.
 
-        Every item is checked before any is published.
+        Every item is checked before any is published. An id that appears in the queue between the check and the
+        link raises; the items before it stay published.
 
         Args:
             items: New items; their ids must not be in the pool yet.
@@ -365,9 +463,14 @@ class WorkPool:
                 )
             )
         for item in ready:
-            staged = self._d("tmp") / (_tmp_name("pub", uuid.uuid4().hex) + ".json")
-            staged.write_text(json.dumps(item.to_dict(), indent=1, sort_keys=True) + "\n")
-            os.rename(staged, self._d("queue") / f"{item.id}.json")
+            token = uuid.uuid4().hex
+            staged = self._d("tmp") / (_tmp_name("pub", token) + ".json")
+            staged.write_text(json.dumps({**item.to_dict(), "placed": token}, indent=1, sort_keys=True) + "\n")
+            try:
+                if not _place(staged, self._d("queue") / f"{item.id}.json", token):
+                    raise ValueError(f"item {item.id} is already in the pool")
+            finally:
+                _unlink(staged)
         return ready
 
     # -- claiming ------------------------------------------------------------------------------------------------
@@ -390,7 +493,14 @@ class WorkPool:
             {"token": token, "worker": worker, "host": self.host, "pid": os.getpid(), "claimed": _now()},
         )
         (staged / "heartbeat").touch()
-        return staged, token, _now()
+        return staged, token, time.monotonic()
+
+    def _conflict(self, held_item: Path, item_id: str, reason: str, token: str) -> None:
+        """Move an item that must not run (a duplicate) to ``conflicts/``."""
+        try:
+            os.rename(held_item, self._d("conflicts") / f"{item_id}.{reason}.{token[:12]}.json")
+        except OSError:
+            pass  # left where it is: reap() settles it, and _settle drops a superseded copy
 
     def _try_claim(self, staged: Path, token: str, item_id: str, worker: str) -> tuple[Optional[Lease], bool]:
         """Take one item into the staged dir, then publish the lease. Returns (lease, staged dir still usable)."""
@@ -403,6 +513,10 @@ class WorkPool:
         if not isinstance(data, dict):
             return None, _exists(staged)
         item = Item.from_dict(data)
+        for reason in ("done", "dead"):
+            if _exists(self._d(reason) / f"{item.id}.json"):
+                self._conflict(held_item, item.id, reason, token)
+                return None, not _exists(held_item)
         try:
             _write_json(
                 staged / "owner.json",
@@ -421,18 +535,17 @@ class WorkPool:
         except OSError:
             return None, False  # the staged dir was reaped under a stalled claim; the reaper requeues the item
         target = self._d("leases") / item.id
-        for retry in (False, True):
-            error: Optional[OSError] = None
-            try:
-                os.rename(staged, target)
-            except OSError as exc:
-                error = exc
-            held = _read_json(target / "owner.json")
-            if isinstance(held, dict) and held.get("token") == token:
-                return Lease(item=item, token=token, worker=worker, path=target), False
-            if error is None or error.errno not in (errno.ENOTEMPTY, errno.EEXIST) or retry:
-                break
-            self._reap_lease(item.id)  # a stale lease dir holds the name
+        error: Optional[OSError] = None
+        try:
+            os.rename(staged, target)
+        except OSError as exc:
+            error = exc
+        held = _read_json(target / "owner.json")
+        if isinstance(held, dict) and held.get("token") == token:
+            return Lease(item=item, token=token, worker=worker, path=target), False
+        if error is not None and error.errno in (errno.ENOTEMPTY, errno.EEXIST):
+            self._conflict(held_item, item.id, "leased", token)  # a lease of this id exists: a duplicate
+            return None, not _exists(held_item)
         try:
             os.rename(held_item, source)  # give the item back
         except OSError:
@@ -441,6 +554,9 @@ class WorkPool:
 
     def claim(self, resource_classes: Iterable[str], worker: str) -> Optional[Lease]:
         """Reap, then claim one queued item of the given classes.
+
+        An item that already has a ``done/`` or ``dead/`` record, or whose lease dir already exists, is a duplicate:
+        it goes to ``conflicts/`` instead of running.
 
         Args:
             resource_classes: The classes this worker can run.
@@ -460,7 +576,7 @@ class WorkPool:
                 item_id = name[: -len(".json")]
                 if self._class_of(item_id) not in classes:
                     continue
-                if staged is not None and _now() - made > self.lease_s / 2:
+                if staged is not None and time.monotonic() - made > self.lease_s / 2:
                     self._drop_staged(staged)
                     staged = None
                 if staged is None:
@@ -482,9 +598,19 @@ class WorkPool:
         if not _exists(staged / "item.json"):
             shutil.rmtree(staged, ignore_errors=True)
 
-    def _owns(self, lease: Lease) -> bool:
-        held = _read_json(lease.path / "owner.json")
-        return isinstance(held, dict) and held.get("token") == lease.token
+    def _still_mine(self, lease: Lease) -> bool:
+        """Whether the lease is the caller's: a token mismatch says no at once.
+
+        Absence is re-checked once after :data:`PUTBACK_WAIT_S`, because a reaper that renamed a live lease aside
+        puts it back.
+        """
+        for check in range(2):
+            held = _read_json(lease.path / "owner.json")
+            if isinstance(held, dict):
+                return held.get("token") == lease.token
+            if check == 0:
+                time.sleep(PUTBACK_WAIT_S)
+        return False
 
     def heartbeat(self, lease: Lease) -> bool:
         """Touch the lease's heartbeat if the lease is still this caller's.
@@ -493,62 +619,77 @@ class WorkPool:
             lease: The lease.
 
         Returns:
-            False when the lease was lost (reaped, or finished).
+            False when the lease was lost: another token holds it, or it was absent on two checks.
         """
-        if not self._owns(lease):
-            return False
-        try:
-            os.utime(lease.path / "heartbeat")
-        except OSError as exc:
-            if _gone(exc):
+        for check in range(2):
+            if not self._still_mine(lease):
                 return False
-            raise
-        return True
+            try:
+                os.utime(lease.path / "heartbeat")
+                return True
+            except OSError as exc:
+                if not _gone(exc):
+                    raise
+        return False
 
     # -- finishing -----------------------------------------------------------------------------------------------
     def _take_lease(self, lease: Lease, kind: str) -> Optional[Path]:
         """Rename the caller's lease aside into ``tmp/``; None when it is no longer the caller's."""
-        if not self._owns(lease):
-            return None
-        aside = self._d("tmp") / _tmp_name(kind, lease.token)
-        try:
-            os.rename(lease.path, aside)
-        except OSError:
-            pass  # read back below
-        held = _read_json(aside / "owner.json")
-        if not isinstance(held, dict):
-            return None
-        if held.get("token") != lease.token:  # the lease was reaped and claimed again between check and rename
+        for check in range(2):
+            if not self._still_mine(lease):
+                return None
+            aside = self._d("tmp") / _tmp_name(kind, lease.token)
             try:
-                os.rename(aside, lease.path)
+                os.rename(lease.path, aside)
             except OSError:
-                pass  # left in tmp/: reap() returns its item after lease_s
-            return None
-        return aside
+                pass  # read back below
+            held = _read_json(aside / "owner.json")
+            if not isinstance(held, dict):
+                continue  # gone between the check and the rename (a reaper's put-back window): check again
+            if held.get("token") != lease.token:  # reaped and claimed again between the check and the rename
+                try:
+                    os.rename(aside, lease.path)
+                except OSError:
+                    pass  # left in tmp/: reap() settles it after lease_s
+                return None
+            _mark_moved(aside)
+            return aside
+        return None
 
-    def _move_item(self, aside: Path, target: Path) -> bool:
-        """Move the item file out of an aside dir; False when a reaper took the dir first."""
-        try:
-            os.rename(aside / "item.json", target)
+    def _superseded(self, item: Item, aside: Path) -> bool:
+        """Whether a newer copy of the item exists outside this aside dir (so this one is a leftover).
+
+        Checked in the order an item moves (queue, tmp, leases, dead), so a copy moving on is still seen.
+        """
+        if _exists(self._d("queue") / f"{item.id}.json"):
             return True
-        except OSError:
-            return _exists(aside) and not _exists(aside / "item.json") and _exists(target)
+        for path, data in self._tmp_items():
+            if path != aside and data.get("id") == item.id and int(data.get("attempt", 0)) > item.attempt:
+                return True
+        return _exists(self._d("leases") / item.id / "item.json") or _exists(self._d("dead") / f"{item.id}.json")
 
     def _settle(self, aside: Path, kind: str, record: Mapping[str, Any]) -> str:
         """Record an interrupted or failed attempt, then requeue the item with attempt+1 or bury it in dead/.
 
-        Returns ``requeued``, ``dead``, ``done`` (it had completed; dropped), or ``lost`` (another process took
-        the aside dir).
+        The next state is written to a new file in the aside dir and linked into place last, so a crash at any
+        point leaves ``item.json`` unchanged for the next reaper, which re-derives the same attempt number.
+
+        Returns ``requeued``, ``dead``, ``done`` (it had completed; dropped), ``superseded`` (a leftover copy;
+        dropped), or ``lost`` (another process took the aside dir).
         """
         data = _read_json(aside / "item.json")
         if not isinstance(data, dict):
-            shutil.rmtree(aside, ignore_errors=True)
+            _remove_dir(aside)
             return "lost"
         item = Item.from_dict(data)
         if _exists(self._d("done") / f"{item.id}.json"):
-            shutil.rmtree(aside, ignore_errors=True)
+            _remove_dir(aside)
             return "done"
+        if self._superseded(item, aside):
+            _remove_dir(aside)
+            return "superseded"
         directory = self._d(kind)
+        token = uuid.uuid4().hex
         try:
             _write_json(
                 directory / f"{item.id}.{item.attempt}.json",
@@ -565,16 +706,17 @@ class WorkPool:
             limit = (item.max_attempts or self.max_attempts) if kind == "failed" else self.max_interrupts
             if count >= limit:
                 reason = "failures" if kind == "failed" else "interrupts"
-                _write_json(aside / "item.json", {**item.to_dict(), "dead_reason": reason, "dead_time": _now()})
+                following = {**item.to_dict(), "dead_reason": reason, "dead_time": _now()}
                 outcome, target = "dead", self._d("dead") / f"{item.id}.json"
             else:
-                _write_json(aside / "item.json", replace(item, attempt=item.attempt + 1).to_dict())
+                following = replace(item, attempt=item.attempt + 1).to_dict()
                 outcome, target = "requeued", self._d("queue") / f"{item.id}.json"
+            _write_json(aside / NEXT, {**following, "placed": token})
         except OSError:
             return "lost"
-        if not self._move_item(aside, target):
+        if not _place(aside / NEXT, target, token):
             return "lost"
-        shutil.rmtree(aside, ignore_errors=True)
+        _remove_dir(aside)
         return outcome
 
     def complete(self, lease: Lease, result: Mapping[str, Any]) -> bool:
@@ -600,16 +742,15 @@ class WorkPool:
             "host": self.host,
             "token": lease.token,
             "completed": _now(),
+            "placed": lease.token,
         }
-        target = self._d("done") / f"{item.id}.json"
         try:
             _write_json(aside / "done.json", record)
-            os.rename(aside / "done.json", target)
         except OSError:
-            held = _read_json(target)
-            if not (isinstance(held, dict) and held.get("token") == lease.token):
-                return False
-        shutil.rmtree(aside, ignore_errors=True)
+            return False
+        if not _place(aside / "done.json", self._d("done") / f"{item.id}.json", lease.token):
+            return False
+        _remove_dir(aside)
         return True
 
     def fail(self, lease: Lease, exit_code: int) -> str:
@@ -652,15 +793,22 @@ class WorkPool:
         return None
 
     def _settle_reaped(self, aside: Path) -> int:
+        _mark_moved(aside)
         owner = _read_json(aside / "owner.json")
         outcome = self._settle(aside, "interrupted", {"reason": "reap", "previous_owner": owner})
         return 1 if outcome in ("requeued", "dead") else 0
 
-    def _reap_lease(self, item_id: str) -> int:
-        """Reap one lease if its heartbeat is older than lease_s; only one reaper wins the rename aside."""
+    def _reap_lease(self, item_id: str, now: float) -> int:
+        """Reap one lease whose heartbeat is older than lease_s; only one reaper wins the rename aside.
+
+        The owner's token is read before the rename and the heartbeat is checked again after it; a lease that
+        turns out to be another or a fresh one is put back.
+        """
         lease_dir = self._d("leases") / item_id
+        held = _read_json(lease_dir / "owner.json")
+        token = held.get("token") if isinstance(held, dict) else None
         beat = self._beat(lease_dir)
-        if beat is None or _now() - beat <= self.lease_s:
+        if token is None or beat is None or now - beat <= self.lease_s:
             return 0
         aside = self._d("tmp") / _tmp_name("reap", uuid.uuid4().hex)
         try:
@@ -669,34 +817,36 @@ class WorkPool:
             pass  # read back below
         if not _exists(aside):
             return 0
+        moved = _read_json(aside / "owner.json")
         beat = self._beat(aside)
-        if beat is not None and _now() - beat <= self.lease_s:  # a fresh lease took the name before the rename
+        mine = isinstance(moved, dict) and moved.get("token") == token
+        if not mine or beat is None or self._server_now() - beat <= self.lease_s:
             try:
-                os.rename(aside, lease_dir)
+                os.rename(aside, lease_dir)  # another lease took the name, or this one is fresh: put it back
                 return 0
             except OSError:
                 pass
         return self._settle_reaped(aside)
 
     def reap(self) -> int:
-        """Re-publish expired leases and abandoned ``tmp/`` claims (older than lease_s) with attempt+1.
+        """Re-publish expired leases and abandoned ``tmp/`` entries (older than lease_s) with attempt+1.
 
-        Each counts as an interruption, so an item reaped ``max_interrupts`` times goes to ``dead/`` instead.
+        Ages are measured on the storage's clock (heartbeat mtimes against a just-touched file), so a node whose
+        clock is off neither reaps live leases nor keeps dead ones. Each reap counts as an interruption, so an
+        item reaped ``max_interrupts`` times goes to ``dead/`` instead.
 
         Returns:
             How many items this call re-published or sent to ``dead/``.
         """
-        count = sum(self._reap_lease(name) for name in _names(self._d("leases")))
+        now = self._server_now()
+        count = sum(self._reap_lease(name, now) for name in _names(self._d("leases")))
         for name in _names(self._d("tmp")):
-            age = _tmp_age(name)
-            if age is None or age <= self.lease_s:
-                continue
             path = self._d("tmp") / name
-            if name.startswith("pub-"):
-                try:
-                    path.unlink()
-                except OSError:
-                    pass
+            changed = self._entry_time(path)
+            if changed is None or now - changed <= self.lease_s:
+                continue
+            if name.endswith(".json"):  # a publish file whose publisher stalled or died
+                _unlink(path)
                 continue
             aside = self._d("tmp") / _tmp_name("reap", uuid.uuid4().hex)
             try:
@@ -712,8 +862,8 @@ class WorkPool:
         """Counts per state and per class, also written to ``status.json``.
 
         Returns:
-            ``{"schema", "time", "counts": {queued, leased, done, dead, failed_attempts, interrupted, staged},
-            "classes": {class: {queued, leased, done, dead}}, "workers"}``.
+            ``{"schema", "time", "counts": {queued, leased, done, dead, failed_attempts, interrupted, staged,
+            conflicts}, "classes": {class: {queued, leased, done, dead}}, "workers"}``.
         """
         per_class: dict[str, dict[str, int]] = {}
 
@@ -748,6 +898,7 @@ class WorkPool:
                 "failed_attempts": len(_names(self._d("failed"))),
                 "interrupted": len(_names(self._d("interrupted"))),
                 "staged": staged,
+                "conflicts": len(_names(self._d("conflicts"))),
             },
             "classes": per_class,
             "workers": len(_names(self._d("workers"))),
@@ -761,48 +912,71 @@ def _log(message: str) -> None:
     print(f"[work_pool {time.strftime('%Y-%m-%dT%H:%M:%S')}] {message}", file=sys.stderr, flush=True)
 
 
+def _signal_group(pgid: int, sig: int) -> bool:
+    """Signal a process group; False when it no longer exists."""
+    try:
+        os.killpg(pgid, sig)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+def _kill_group(pgid: int) -> None:
+    """SIGTERM a process group, then SIGKILL whatever is left after :data:`KILL_GRACE_S`; a gone group is fine."""
+    if not _signal_group(pgid, signal.SIGTERM):
+        return
+    deadline = time.monotonic() + KILL_GRACE_S
+    while time.monotonic() < deadline:
+        if not _signal_group(pgid, 0):
+            return
+        time.sleep(0.1)
+    _signal_group(pgid, signal.SIGKILL)
+
+
+class _Run:
+    """One item's run: its lease, child, and the events its heartbeat thread acts on."""
+
+    def __init__(self, lease: Lease) -> None:
+        self.lease = lease
+        self.child: Optional[subprocess.Popen[bytes]] = None
+        self.lost = threading.Event()
+        self.stop = threading.Event()
+
+    def kill(self) -> None:
+        """Kill this run's child's whole process group (the child runs in its own session)."""
+        if self.child is not None:
+            _kill_group(self.child.pid)
+
+
 class _Worker:
     """Claim, run, heartbeat, finish, repeat."""
 
     def __init__(self, pool: WorkPool, classes: Sequence[str], worker: str, linger: int, poll_s: float) -> None:
         self.pool, self.classes, self.worker = pool, list(classes), worker
         self.linger, self.poll_s = linger, poll_s
-        self.child: Optional[subprocess.Popen[bytes]] = None
+        self.run: Optional[_Run] = None
         self.terminating = threading.Event()
-        self.lost = threading.Event()
 
     def _on_term(self, signum: int, _frame: Any) -> None:  # noqa: ANN401
         _log(f"signal {signum}: stopping the item in hand and releasing it")
         self.terminating.set()
-        threading.Thread(target=self._kill_child, daemon=True).start()
+        run = self.run
+        if run is not None:
+            threading.Thread(target=run.kill, daemon=True).start()
 
-    def _kill_child(self) -> None:
-        child = self.child
-        if child is None or child.poll() is not None:
-            return
-        try:
-            os.killpg(child.pid, signal.SIGTERM)
-        except ProcessLookupError:
-            return
-        deadline = _now() + KILL_GRACE_S
-        while child.poll() is None and _now() < deadline:
-            time.sleep(0.1)
-        if child.poll() is None:
+    def _heartbeats(self, run: _Run) -> None:
+        while not run.stop.wait(self.pool.heartbeat_s):
             try:
-                os.killpg(child.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-
-    def _heartbeats(self, lease: Lease, stop: threading.Event) -> None:
-        while not stop.wait(self.pool.heartbeat_s):
-            try:
-                mine = self.pool.heartbeat(lease)
+                mine = self.pool.heartbeat(run.lease)
             except OSError:
                 continue
+            if run.stop.is_set():
+                return
             if not mine:
-                _log(f"lease {lease.item.id} attempt {lease.item.attempt} was lost; stopping its child")
-                self.lost.set()
-                self._kill_child()
+                item = run.lease.item
+                _log(f"lease {item.id} attempt {item.attempt} was lost; stopping its child")
+                run.lost.set()
+                run.kill()
                 return
 
     def _run(self, lease: Lease) -> None:
@@ -811,8 +985,8 @@ class _Worker:
             self.pool.release(lease)
             return
         env = {**os.environ, **item.env, "POOL_ITEM_ID": item.id, "POOL_ATTEMPT": str(item.attempt)}
-        self.lost.clear()
-        stop = threading.Event()
+        run = _Run(lease)
+        self.run = run
         start = _now()
         _log(f"item {item.id} attempt {item.attempt}: running")
         try:
@@ -821,19 +995,20 @@ class _Worker:
             _log(f"item {item.id}: could not start its command ({exc.strerror})")
             rc = 127
         else:
-            self.child = child
-            beats = threading.Thread(target=self._heartbeats, args=(lease, stop), daemon=True)
+            run.child = child
+            beats = threading.Thread(target=self._heartbeats, args=(run,), daemon=True)
             beats.start()
             if self.terminating.is_set():
-                self._kill_child()
+                threading.Thread(target=run.kill, daemon=True).start()
             rc = child.wait()
-            if (rc < 0 or rc in (137, 143)) and not self.lost.is_set():
+            run.kill()  # whatever the child left running in its group
+            if (rc < 0 or rc in (137, 143)) and not run.lost.is_set():
                 self.terminating.wait(SIGNAL_GRACE_S)  # a job-wide SIGTERM can reach the child first
-            stop.set()
-            beats.join(timeout=self.pool.heartbeat_s + KILL_GRACE_S + 5)
-            self.child = None
+            run.stop.set()
+            beats.join(timeout=self.pool.heartbeat_s + PUTBACK_WAIT_S + JOIN_GRACE_S)
+        self.run = None
         end = _now()
-        if self.lost.is_set():
+        if run.lost.is_set():
             _log(f"item {item.id} attempt {item.attempt}: lease lost (rc {rc}); nothing written")
         elif self.terminating.is_set():
             _log(f"item {item.id} attempt {item.attempt}: released ({self.pool.release(lease)})")

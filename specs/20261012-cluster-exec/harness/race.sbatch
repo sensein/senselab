@@ -7,7 +7,8 @@
 #   sbatch -p <partition> -N 2 --ntasks-per-node 8 --export=ALL,POOL=<shared dir>,PY=<python with senselab> race.sbatch
 # Submit from the repository root (or set RACE_HARNESS to this directory).
 # Leg 1: every task claims and completes 2000 items. Leg 2: lease_s=5 and every third task SIGKILLs itself
-# while holding a lease, so reaping races claiming. Each leg ends with: race items=N done=N double=0 lost=0
+# while holding a lease, so reaping races claiming. Leg 3: each lease is held 5.5-8 s (lease_s=5) under real
+# heartbeats, and runs of one id must never overlap. Each leg ends with: race items=N done=N double=0 lost=0
 set -uo pipefail
 POOL=${POOL:?set POOL to a directory every node sees}
 PY=${PY:-python3}
@@ -35,6 +36,13 @@ $PY "$HERE/race.py" publish "$RUN/leg2" --items "$ITEMS" --lease-s 5 --heartbeat
 srun --kill-on-bad-exit=0 $PY "$HERE/race.py" work "$RUN/leg2" --items "$ITEMS" --start $(( $(date +%s) + 10 )) \
     --hold 0.02 --kill-third
 $PY "$HERE/race.py" check "$RUN/leg2" --items "$ITEMS" || rc=1
+
+echo "== leg 3: holds longer than lease_s=5 under real heartbeats, overlap per id across attempts"
+ITEMS3=${ITEMS3:-96}
+$PY "$HERE/race.py" publish "$RUN/leg3" --items "$ITEMS3" --lease-s 5 --heartbeat-s 1
+srun --kill-on-bad-exit=0 $PY "$HERE/race.py" work "$RUN/leg3" --items "$ITEMS3" --start $(( $(date +%s) + 10 )) \
+    --hold-range 5.5,8 --beats
+$PY "$HERE/race.py" check "$RUN/leg3" --items "$ITEMS3" --overlap || rc=1
 
 [ "$rc" = 0 ] && rm -rf "$RUN"
 exit $rc

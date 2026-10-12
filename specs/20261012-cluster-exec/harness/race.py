@@ -5,12 +5,15 @@
                                                      # rename and file-out-of-queue rename
     python race.py prim-check DIR --names N          # every name must have exactly one winner per primitive
     python race.py publish POOL --items N --lease-s S --heartbeat-s H
-    python race.py work POOL --items N --start T [--hold S] [--kill-third]
-    python race.py check POOL --items N              # last line: race items=N done=D double=X lost=Y
+    python race.py work POOL --items N --start T [--hold S] [--kill-third] [--hold-range LO,HI --beats]
+    python race.py check POOL --items N [--overlap]  # last line: race items=N done=D double=X lost=Y [overlap=Z]
 
 Ported from sensein/senselab@feat/task-events (f2a806af), specs/20261011-slice-pool/pool/harness/race.py, with
 the file-out-of-queue rename added and the pool legs on top. ``--kill-third`` makes every third worker (by
 SLURM_PROCID) SIGKILL itself while it holds a lease, so its lease must be reaped while the others claim.
+``--hold-range LO,HI --beats`` holds each lease a random LO..HI seconds (longer than lease_s) while a thread sends
+real heartbeats; each run takes ``<pool>-running/<id>`` with mkdir, so a second run of an id that starts while
+another still holds it (on any node, at any attempt) is counted as an overlap.
 """
 
 import argparse
@@ -20,12 +23,15 @@ import random
 import signal
 import socket
 import sys
+import threading
 import time
 import uuid
 from collections import Counter
 from pathlib import Path
 
-from senselab.utils.work_pool import Item, WorkPool
+from typing import Callable
+
+from senselab.utils.work_pool import Item, Lease, WorkPool
 
 
 def me() -> str:
@@ -106,7 +112,38 @@ def publish(root: Path, items: int, lease_s: float, heartbeat_s: float) -> None:
     print(f"published {items} into {root.name} lease_s={lease_s}")
 
 
-def work(root: Path, items: int, start: float, hold: float, kill_third: bool) -> None:
+def held(pool: WorkPool, lease: Lease, seconds: float, running: Path, note: Callable[..., None]) -> None:
+    """Hold a lease for ``seconds`` with real heartbeats, marking the run in ``running/`` to catch overlaps."""
+    item = lease.item
+    marker = running / item.id
+    try:
+        os.mkdir(marker)
+        mine = True
+    except FileExistsError:
+        mine = False
+        note(overlap=item.id, attempt=item.attempt)
+    stop, lost = threading.Event(), []
+
+    def beat() -> None:
+        while not stop.wait(pool.heartbeat_s):
+            if not pool.heartbeat(lease):
+                lost.append(1)
+                return
+
+    thread = threading.Thread(target=beat, daemon=True)
+    thread.start()
+    time.sleep(seconds)
+    stop.set()
+    thread.join()
+    if lost:
+        note(leaselost=item.id, attempt=item.attempt)
+    if mine:
+        os.rmdir(marker)
+
+
+def work(
+    root: Path, items: int, start: float, hold: float, kill_third: bool, hold_range: str = "", beats: bool = False
+) -> None:
     pool, who = WorkPool(root), me()
     rank = int(os.environ.get("SLURM_PROCID", "0"))
     kill_after = random.Random(rank).randint(5, 40) if kill_third and rank % 3 == 0 else None
@@ -114,6 +151,11 @@ def work(root: Path, items: int, start: float, hold: float, kill_third: bool) ->
 
     def note(**rec: object) -> None:
         os.write(fd, (json.dumps(rec) + "\n").encode())
+
+    running = root.parent / f"{root.name}-running"
+    running.mkdir(exist_ok=True)
+    rng = random.Random(f"{who}")
+    lo, hi = (float(x) for x in hold_range.split(",")) if hold_range else (0.0, 0.0)
 
     wait_until(start)
     claimed, deadline = 0, time.time() + 900
@@ -129,15 +171,19 @@ def work(root: Path, items: int, start: float, hold: float, kill_third: bool) ->
         if kill_after is not None and claimed == kill_after:
             note(killed=lease.item.id, attempt=lease.item.attempt)
             os.kill(os.getpid(), signal.SIGKILL)
-        if hold:
+        if beats:
+            held(pool, lease, rng.uniform(lo, hi), running, note)
+        elif hold:
             time.sleep(hold)
         note(complete=lease.item.id, attempt=lease.item.attempt, ok=pool.complete(lease, {"exit_code": 0}))
     os.close(fd)
 
 
-def check(root: Path, items: int) -> int:
+def check(root: Path, items: int, overlap_leg: bool = False) -> int:
     claims: Counter[tuple[str, int]] = Counter()
     completes: Counter[str] = Counter()
+    overlaps: Counter[str] = Counter()
+    leaselost = 0
     killed, hosts, logs = 0, set(), list((root.parent / f"{root.name}-log").glob("*.jsonl"))
     for path in logs:
         hosts.add(path.name.split(".")[0])
@@ -147,6 +193,10 @@ def check(root: Path, items: int) -> int:
                 claims[(rec["claim"], rec["attempt"])] += 1
             elif "killed" in rec:
                 killed += 1
+            elif "overlap" in rec:
+                overlaps[rec["overlap"]] += 1
+            elif "leaselost" in rec:
+                leaselost += 1
             elif rec.get("ok"):
                 completes[rec["complete"]] += 1
     expected = {f"item-{i:05d}" for i in range(items)}
@@ -156,9 +206,11 @@ def check(root: Path, items: int) -> int:
     lost = len(expected - done)
     st = WorkPool(root).status()["counts"]
     print(f"leg {root.name} workers={len(logs)} hosts={len(hosts)} claims={sum(claims.values())} killed={killed} "
-          f"interrupted={st['interrupted']} dead={st['dead']} queued={st['queued']} leased={st['leased']}")
-    print(f"race items={items} done={len(done & expected)} double={double} lost={lost}")
-    return 0 if double == 0 and lost == 0 and done == expected else 1
+          f"interrupted={st['interrupted']} dead={st['dead']} queued={st['queued']} leased={st['leased']} "
+          f"conflicts={st['conflicts']} leaselost={leaselost}")
+    tail = f" overlap={len(overlaps)}" if overlap_leg else ""
+    print(f"race items={items} done={len(done & expected)} double={double} lost={lost}{tail}")
+    return 0 if double == 0 and lost == 0 and not overlaps and done == expected else 1
 
 
 def main() -> int:
@@ -172,6 +224,9 @@ def main() -> int:
     p.add_argument("--lease-s", type=float, default=60.0)
     p.add_argument("--heartbeat-s", type=float, default=5.0)
     p.add_argument("--kill-third", action="store_true")
+    p.add_argument("--hold-range", default="")
+    p.add_argument("--beats", action="store_true")
+    p.add_argument("--overlap", action="store_true")
     a = p.parse_args()
     if a.mode == "prim-setup":
         prim_setup(a.root, a.names)
@@ -182,9 +237,9 @@ def main() -> int:
     elif a.mode == "publish":
         publish(a.root, a.items, a.lease_s, a.heartbeat_s)
     elif a.mode == "work":
-        work(a.root, a.items, a.start, a.hold, a.kill_third)
+        work(a.root, a.items, a.start, a.hold, a.kill_third, a.hold_range, a.beats)
     else:
-        return check(a.root, a.items)
+        return check(a.root, a.items, a.overlap)
     return 0
 
 
