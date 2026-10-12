@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from typing import Sequence
 
 import pytest
 
+from senselab.audio.tasks.redaction.api import RedactionExtent
 from senselab.audio.workflows.triage.config import load_triage_config
 from senselab.audio.workflows.triage.nodes.common import consensus_words, software_agent, write_measurement
 from senselab.audio.workflows.triage.nodes.redact import NON_TASK_SPEECH, MaskPlan, mask_plan
+from senselab.audio.workflows.triage.nodes.verdict import task_audible
 from senselab.audio.workflows.triage.task_content import task_content_ids
 from senselab.audio.workflows.triage.task_speech import (
     TASK_SPEECH_READING,
@@ -26,6 +29,7 @@ from senselab.audio.workflows.triage.vocabulary import (
     NON_TASK_SPEECH_EXTENSIVE,
     NON_TASK_SPEECH_MASKED,
     NON_TASK_SPEECH_UNTIMED,
+    RELEASE_EMPTY,
     REVIEWER_QUOTES_UNPLACED,
     ROUTED,
     SECOND_OPINION_PHRASES_PREDOMINANT,
@@ -223,6 +227,22 @@ class TestTheFoldReviewsAndReleases:
         """A word no mask can place holds the recording."""
         folded = _fold(self._TASK, RedactionEvidence(non_task_speech_masked_n=1, non_task_speech_untimed_n=1))
         assert folded.release is Release.WITHHELD and folded.release_ground == NON_TASK_SPEECH_UNTIMED
+
+    def test_a_release_its_masks_leave_empty_withholds_and_reviews(self) -> None:
+        """r37, 1f06eb2c: masks over all but a sliver of the task extent hand on nothing; held, and reviewed."""
+        evidence = RedactionEvidence(non_task_speech_masked_n=1, task_extent_s=5.74, task_audible_s=0.235)
+        folded = _fold(self._TASK, evidence)
+        assert folded.release is Release.WITHHELD and folded.release_ground == RELEASE_EMPTY
+        assert folded.triage is Triage.REVIEW
+        kept = _fold(self._TASK, replace(evidence, task_audible_s=3.0))
+        assert kept.release is Release.REDACTED
+
+    def test_a_zero_length_task_extent_withholds_and_no_extent_does_not(self) -> None:
+        """An empty extent hands on nothing; a recording with no task extent is not judged here."""
+        empty = _fold(self._TASK, RedactionEvidence(non_task_speech_masked_n=1, task_extent_s=0.0, task_audible_s=0.0))
+        assert empty.release is Release.WITHHELD and empty.release_ground == RELEASE_EMPTY
+        none = _fold(self._TASK, RedactionEvidence(non_task_speech_masked_n=1))
+        assert none.release is Release.REDACTED
 
     def test_an_extensive_off_task_share_withholds(self) -> None:
         """An item list whose phrases reach their bound is held."""
@@ -728,3 +748,13 @@ def test_speech_before_the_task_is_its_words_and_their_span(store: ProvStore) ->
     words = consensus_words(store)
     assert speech_before(words, 2.4) == {"words_n": 2, "start_s": 0.1, "end_s": 1.0, "seconds": 0.9}
     assert speech_before(words, 0.0) == {}
+
+
+def test_task_audible_is_the_extent_outside_every_mask_clamped_to_the_recording() -> None:
+    """Overlapping masks count once; an extent past the recording's end is clamped to it."""
+    store = ProvStore(run_id="audible")
+    store.entity(prov_type="stream", extent=(0.0, 6.5), attributes={"name": "plain", "path": "p.flac"})
+    assert task_audible(store, []) == (None, None)
+    store.entity(prov_type="span", extent=(0.0, 7.0), attributes={"role": "task_extent", "branch": "VOICE"})
+    masks = [RedactionExtent(start=0.25, end=4.0, category="X"), RedactionExtent(start=3.0, end=6.0, category="X")]
+    assert task_audible(store, masks) == (6.5, 0.75)

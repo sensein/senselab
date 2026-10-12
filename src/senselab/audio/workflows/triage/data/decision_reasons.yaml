@@ -117,6 +117,7 @@ annotations:           # ground keys and prefixes the fold writes only as annota
 reviewed_releases:     # owner, 2026-10-10: masks not yet validated; every release but as_is is reviewed (release_reviewed)
 - redacted
 - withheld
+release_audible_share_min: 0.1   # UNFITTED: a release whose masks leave less of the task extent audible than this withholds (release_empty)
 second_opinion_not_free_withholds: true   # owner, 2026-10-10; r37 G2: a confident second-opinion "not free" holds the release only where the reviewer or a standing identifier mask corroborates it
 release_keys:          # release ground key -> reason, for a release the graph could not assess (run_status incomplete)
   no_transcript: not_measured

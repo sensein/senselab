@@ -57,6 +57,15 @@ def reviewed_releases() -> frozenset[str]:
     return frozenset(str(value) for value in reason_vocabulary().get("reviewed_releases") or ())
 
 
+def release_audible_share_min() -> float:
+    """The least share of the task extent a release must leave audible.
+
+    Returns:
+        ``release_audible_share_min`` of ``data/decision_reasons.yaml``.
+    """
+    return float(reason_vocabulary()["release_audible_share_min"])
+
+
 def second_opinion_withholds() -> bool:
     """Whether a confident second-opinion reading of identifiers in the shipped text withholds the release.
 

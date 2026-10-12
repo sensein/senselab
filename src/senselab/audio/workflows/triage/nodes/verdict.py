@@ -67,6 +67,7 @@ from senselab.audio.workflows.triage.nodes.common import (
     lexical_words,
     live_entities,
     mint_live,
+    recording_duration,
     resolve_stream,
     software_agent,
     word_hull,
@@ -981,6 +982,36 @@ def final_coverage(store: ProvStore, plan: MaskPlan, config: TriageConfig, run_d
     )
 
 
+def task_audible(store: ProvStore, masks: Sequence[Any]) -> tuple[float | None, float | None]:
+    """The task extent a release is cut to, and how much of it no mask covers.
+
+    Args:
+        store: The provenance store, read for its live task-extent spans and the recording's duration.
+        masks: The final masks, each with ``start`` and ``end``.
+
+    Returns:
+        ``(extent_s, audible_s)``: the hull of the live task-extent spans clamped to the recording, and its time
+        outside every mask; ``(None, None)`` where no task extent stands.
+    """
+    extents = [span.extent for span in standing_task_extents(live_entities(store, "span")) if span.extent is not None]
+    if not extents:
+        return None, None
+    duration = recording_duration(store)
+    start = max(0.0, min(float(extent[0]) for extent in extents))
+    end = max(float(extent[1]) for extent in extents)
+    if duration is not None:
+        start, end = min(start, float(duration)), min(end, float(duration))
+    length = max(0.0, end - start)
+    covered = 0.0
+    edge = start
+    for lo, hi in sorted((max(start, float(m.start)), min(end, float(m.end))) for m in masks):
+        lo = max(lo, edge)
+        if hi > lo:
+            covered += hi - lo
+            edge = hi
+    return round(length, 3), round(max(0.0, length - covered), 3)
+
+
 def _redaction_evidence(
     store: ProvStore, reports: Sequence[tuple[Entity, BranchReport]], plan: MaskPlan, coverage: Coverage
 ) -> RedactionEvidence:
@@ -1001,6 +1032,7 @@ def _redaction_evidence(
     speech = next((entity for entity, report in reports if report.node == SPEECH), None)
     words = None if speech is None else speech.attributes.get("words_n")
     scans = [measurement.attributes for measurement in find_measurements(store, PII_SCAN)]
+    extent_s, audible_s = task_audible(store, plan.final)
     return RedactionEvidence(
         lexical_words_n=None if words is None else int(words),
         scanned=None if not scans else not any(scan.get(SCANNED) is False for scan in scans),
@@ -1020,6 +1052,8 @@ def _redaction_evidence(
         non_task_speech_masked_n=plan.non_task_speech_masked_n,
         non_task_speech_untimed_n=len(plan.non_task_speech_untimed),
         non_task_speech_extensive=plan.non_task_speech_extensive,
+        task_extent_s=extent_s,
+        task_audible_s=audible_s,
         aligner_failed=tuple(str(source) for source in (consensus.attributes.get("aligner_failed") or ()))
         if (consensus := find_measurement(store, "consensus_transcript")) is not None
         else (),
