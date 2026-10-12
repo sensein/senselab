@@ -4,8 +4,8 @@ version: 1
 growth:                          # A1: breath and cough extents grow outward from the task cluster
   enabled: false
   families: [breath, cough]      # the event kinds that grow
-  k: 2.5                         # UNFITTED: a gap up to k x the cluster's median inter-event gap keeps growing (one missed cycle, 25% jitter)
-  gap_floor_s: 0.25              # the median gap is read as at least this (back-to-back phases)
+  k: 2.5                         # UNFITTED: a gap up to k x the cluster's median onset interval keeps growing (one missed cycle, 25% jitter)
+  gap_floor_s: 0.25              # the median onset interval is read as at least this
   single_event_gap: cluster      # a one-event cluster's gap is its family's clustering gap (task_events.yaml)
   diarized_turn_min_s: 1.0       # a diarized turn at least this long stops growth, as COHORT's min_run_s
 modulation:                      # A1: envelope-modulation event detector beside the breath type test
