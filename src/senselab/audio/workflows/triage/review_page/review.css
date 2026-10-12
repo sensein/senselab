@@ -139,3 +139,5 @@ details.rv-folded summary { cursor: pointer; }
   font-style: normal; line-height: 14px; text-align: center; }
 .al-swatch { display: inline-block; width: 14px; height: 10px; margin-right: 4px; vertical-align: -1px; border-radius: 2px; }
 i.al-swatch.al-agreement { border: 1px solid var(--line); }
+.rv-list li.rv-group-head { cursor: default; background: var(--panel-2, transparent); font-weight: 600; }
+.rv-list li.rv-group-head .rv-note { display: block; font-weight: 400; }

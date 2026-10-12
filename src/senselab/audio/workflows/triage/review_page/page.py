@@ -73,6 +73,51 @@ def ordered(records: Iterable[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
     return sorted(records, key=lambda r: (str(r.get("participant") or ""), str(r.get("session") or ""), r["stem"]))
 
 
+def participant_summaries(records: Iterable[Mapping[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Each participant's issues across their recordings, for grouping the review list.
+
+    Args:
+        records: The review records.
+
+    Returns:
+        By participant: ``recordings``, ``sessions``, ``verdicts`` (count per verdict), ``issues`` (distinct
+        reasons plus distinct annotations, summed over the recordings), ``reasons`` and ``annotations`` (count
+        of recordings per key, most frequent first).
+    """
+    out: dict[str, dict[str, Any]] = {}
+    for record in records:
+        key = str(record.get("participant") or "")
+        entry = out.setdefault(
+            key,
+            {
+                "recordings": 0,
+                "sessions": set(),
+                "verdicts": Counter(),
+                "issues": 0,
+                "reasons": Counter(),
+                "annotations": Counter(),
+            },
+        )
+        reasons, annotations = set(record.get("reasons") or ()), set(record.get("annotations") or ())
+        entry["recordings"] += 1
+        entry["sessions"].add(str(record.get("session") or ""))
+        entry["verdicts"][str(record.get("verdict"))] += 1
+        entry["issues"] += len(reasons) + len(annotations)
+        entry["reasons"].update(reasons)
+        entry["annotations"].update(annotations)
+    return {
+        key: {
+            "recordings": entry["recordings"],
+            "sessions": len(entry["sessions"]),
+            "verdicts": dict(sorted(entry["verdicts"].items())),
+            "issues": entry["issues"],
+            "reasons": dict(entry["reasons"].most_common()),
+            "annotations": dict(entry["annotations"].most_common()),
+        }
+        for key, entry in sorted(out.items())
+    }
+
+
 def _dictionary(values: Sequence[Any]) -> dict[str, Any]:
     """One scalar column as distinct values and per-row codes, -1 for absent."""
     distinct: dict[Any, int] = {}
@@ -197,7 +242,7 @@ def index_of(
             "columns": list(listen.columns),
         }
         columns["checks"] = [list(listen.checks[r["stem"]]) if r["stem"] in listen.checks else None for r in records]
-    index = {"build": payload, "cols": columns, "evidence": evidence}
+    index = {"build": payload, "cols": columns, "evidence": evidence, "participants": participant_summaries(records)}
     payload["id"] = hashlib.sha256(json.dumps(index, sort_keys=True, default=str).encode()).hexdigest()[:12]
     return index
 
