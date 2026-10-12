@@ -433,7 +433,7 @@ def _continued(
     q: dict[str, Any],
     hop: float,
 ) -> tuple[int, int]:
-    """The run indices the extent spans once phonation continuity is followed outward; unread runs are passed over."""
+    """The run indices the extent spans once continuity is followed out, ``runs_max`` runs a side."""
     centre, _ = run_f0_hz((runs[first][0], runs[last][1]), voiced, f0_hz)
     reach = int(round(float(q["gap_max_s"]) / hop))
     times = frames.times_s
@@ -442,6 +442,8 @@ def _continued(
         lo, hi = float(times[a]), float(times[max(a, b - 1)])
         return not any(s < hi and lo < e for s, e in agreed)
 
+    runs_max = int(q.get("runs_max") or len(runs))
+    taken = 0
     i = first - 1
     while i >= 0 and runs[first][0] - runs[i][1] <= reach and free(runs[i][0], runs[first][0]):
         state = continues(runs[i], centre, voiced, f0_hz, q, hop)
@@ -449,7 +451,11 @@ def _continued(
             break
         if state == CONTINUES:
             first = i
+            taken += 1
+            if taken >= runs_max:
+                break
         i -= 1
+    taken = 0
     j = last + 1
     while j < len(runs) and runs[j][0] - runs[last][1] <= reach and free(runs[last][1], runs[j][1]):
         state = continues(runs[j], centre, voiced, f0_hz, q, hop)
@@ -457,6 +463,9 @@ def _continued(
             break
         if state == CONTINUES:
             last = j
+            taken += 1
+            if taken >= runs_max:
+                break
         j += 1
     return first, last
 
@@ -1037,8 +1046,8 @@ def voice_task_extent(
         The reading with ``task_extent``, ``count_in`` and ``check``. The count-in joins the extent where it
         starts before the phonation and ends at most ``count_in.gap_max_s`` before its start (an overlap is
         taken in). Too narrow where a count-in lies outside the extent, or a reachable run outside it holds
-        ``completeness.voice_hold_min_s`` of voicing within ``continuity.semitones`` of the extent's F0; too wide where the extent starts over
-        ``completeness.onset_tolerance_s`` before the phonation onset.
+        ``completeness.voice_hold_min_s`` of voicing within ``continuity.semitones`` of the extent's F0; too wide
+        where the extent starts over ``completeness.onset_tolerance_s`` before the phonation onset.
     """
     x = extent_p or task_extent_parameters()
     if read.extent is None:

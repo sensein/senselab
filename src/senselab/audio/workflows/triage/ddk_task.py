@@ -548,7 +548,12 @@ def ddk_reading_of(
     spanning = family in set(t["ddk"].get("exclude_families") or ())
     extent = (cluster[0].start_s, max(e.end_s for e in cluster)) if cluster else None
     if cluster and extent is not None and enabled("trim", extent_p) and not spanning:
-        trim = trim_train([(e.start_s, e.end_s) for e in cluster], speech_runs, ratio=ratio)
+        trim = trim_train(
+            [(e.start_s, e.end_s) for e in cluster],
+            speech_runs,
+            ratio=ratio,
+            kept_share_min=float(t["ddk"]["kept_share_min"]),
+        )
         trimmed = [event for i, event in enumerate(cluster) if i not in trim.kept]
         kept = [cluster[i] for i in trim.kept]
         if kept:

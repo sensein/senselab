@@ -331,13 +331,15 @@ class Trim:
         return {"speech_n": self.speech_n, "edge_n": self.edge_n}
 
 
-def trim_train(events: Sequence[Span], runs: Sequence[Span], *, ratio: float) -> Trim:
+def trim_train(events: Sequence[Span], runs: Sequence[Span], *, ratio: float, kept_share_min: float = 0.0) -> Trim:
     """A syllable train trimmed to itself: split at speech runs, edge events of another length dropped.
 
     Args:
         events: The train's events, in time order.
         runs: Runs of agreed non-task words (:func:`agreed_speech_runs`).
         ratio: An edge event lasting more than this times the kept events' median duration is dropped.
+        kept_share_min: The share of the events the largest piece must hold for the speech split to stand; under
+            it the runs are read as the task misread and the train is not split.
 
     Returns:
         The events of the largest piece the runs leave (earliest on a tie), each overlapping no run, with its
@@ -354,6 +356,8 @@ def trim_train(events: Sequence[Span], runs: Sequence[Span], *, ratio: float) ->
             pieces.append([])
         pieces[-1].append(index)
     best = max((piece for piece in pieces if piece), key=len, default=[])
+    if len(best) < kept_share_min * len(events):
+        best = list(range(len(events)))
     if not best:
         return Trim((), speech_n=len(events))
     kept = list(best)
