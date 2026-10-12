@@ -56,8 +56,9 @@ What `vllm_server` takes from these numbers:
   It also adds the rule that leaves triton out of a lock wherever torch pulls it in.
   - The committed `venv_locks/vllm-server.txt` has the same body as `f2a806af`'s `pii-review-vllm.txt`
     (requirements-sha256 `5b1a68e3…d8a4`, Python 3.12, exclude-newer `2026-10-10T00:00:00Z`).
-- **Logging.** vLLM logs no request content unless `--enable-log-requests` is passed. `server_args` refuses that
-  flag and `--enable-log-outputs`, and the clients log nothing.
+- **Logging.** vLLM logs no request content unless `--enable-log-requests` is passed. `VllmServer` refuses any
+  argument starting with `--enable-log-req` or `--enable-log-out` (argparse accepts abbreviations), and
+  `--config` (a config file could turn them on). The clients log nothing.
 
 ### The slice pool (`f2a806af:specs/20261011-slice-pool/`)
 
@@ -123,6 +124,8 @@ The primitives shared by both hashed-lock formats. The header formats themselves
     env.
   - The wire format is one JSON line each way. The worker's fd 1 is pointed at stderr so that library prints
     cannot interleave with replies.
+- A worker found dead between calls is replaced once: under the pool lock, only the caller whose entry is still
+  that worker replaces it. A caller queued behind it is served by the replacement.
 - `venv_worker_events(clear=False)`, `venv_worker_stats()` and `shutdown_venv_workers()` (registered at exit)
   report and stop the workers. `VenvWorkerTimeout` is raised on a timeout.
 - The only change in the port: the logger is `logging.getLogger("senselab")` from the standard library (the same
@@ -149,7 +152,9 @@ The primitives shared by both hashed-lock formats. The header formats themselves
   parts), `transcribe(url, model, audio_path, *, language, prompt, sampling)` (multipart, under a fixed file
   name) and `complete(url, model, prompt_token_ids, *, sampling)`.
   - They use a proxy-free opener on loopback and return the parsed JSON.
-  - An HTTP error carries the server's decoded error body.
+  - An HTTP error keeps the status, the reason and the server's error message, cut to 300 characters. Fields
+    that can echo the prompt (`input`, `param`) are dropped, and so is a body that is not JSON.
+  - An error message names a local media path only by its suffix and a short sha256 of the path.
   - The request shapes were checked against the vLLM v0.31.0 source.
 - `ensure_vllm_venv()` builds the `vllm-server` venv from the committed lock (vLLM 0.31.0, Python 3.12, CUDA
   ceiling (13, 0)) and returns `<venv>/bin/vllm`.

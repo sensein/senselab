@@ -45,6 +45,15 @@ def value(flag, default=None):
     return flags[flags.index(flag) + 1] if flag in flags else default
 
 
+REJECTIONS = {
+    "short": {"error": {"message": "max_tokens is too large", "type": "BadRequestError", "code": 400}},
+    "long": {"error": {"message": "m" * 1000, "type": "BadRequestError", "param": "CANARY-7f3a", "code": 400}},
+    "detail": {
+        "detail": [{"type": "int_parsing", "loc": ["body", "max_tokens"], "msg": "bad", "input": "CANARY-7f3a"}]
+    },
+}
+
+
 def event(name):
     with open(os.path.join(out, "events.log"), "a") as handle:
         handle.write("%s %d %.6f\n" % (name, os.getpid(), time.time()))
@@ -85,9 +94,9 @@ class Handler(BaseHTTPRequestHandler):
         body = self.rfile.read(int(self.headers["Content-Length"]))
         if "--enable-log-requests" in flags:
             print(body.decode(), flush=True)
-        if self.path == value("--fake-reject"):
-            error = {"error": {"message": "max_tokens is too large", "type": "BadRequestError", "code": 400}}
-            payload = json.dumps(error).encode()
+        reject = value("--fake-reject", ":").split(":")
+        if self.path == reject[0]:
+            payload = json.dumps(REJECTIONS[reject[1]]).encode() if reject[1] != "text" else b"echo CANARY-7f3a"
             self.send_response(400)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(payload)))
@@ -659,10 +668,56 @@ def test_transcribe_refuses_unsafe_form_names_and_sends_a_fixed_file_name(
 
 
 def test_an_http_error_carries_the_servers_error_body(fake: dict[str, Path]) -> None:
-    """A refused request raises ``HTTPError`` with the server's decoded error body in its message."""
-    with _server(fake, "--fake-reject", "/v1/completions") as server:
+    """A refused request raises ``HTTPError`` with the status, the reason and the server's error message."""
+    with _server(fake, "--fake-reject", "/v1/completions:short") as server:
         assert server.url is not None
         with pytest.raises(urllib.error.HTTPError) as caught:
             vs.complete(server.url, "m", [1], sampling={"max_tokens": 10**9})
     assert caught.value.code == 400
-    assert "max_tokens is too large" in str(caught.value) and "BadRequestError" in str(caught.value)
+    assert str(caught.value) == "HTTP Error 400: Bad Request: max_tokens is too large"
+
+
+def test_an_http_error_keeps_a_short_message_and_drops_echoed_input(fake: dict[str, Path]) -> None:
+    """Only a message of at most 300 characters survives; ``input``, other fields and a non-JSON body are dropped."""
+    for mode, kept in (("long", "m" * 300), ("detail", "body.max_tokens: bad"), ("text", "")):
+        with _server(fake, "--fake-reject", f"/v1/completions:{mode}") as server:
+            assert server.url is not None
+            with pytest.raises(urllib.error.HTTPError) as caught:
+                vs.complete(server.url, "m", [1], sampling={})
+        message = str(caught.value)
+        assert caught.value.code == 400 and CANARY not in message, mode
+        assert message == "HTTP Error 400: Bad Request" + (f": {kept}" if kept else ""), mode
+
+
+def test_abbreviated_logging_flags_and_config_files_are_refused(fake: dict[str, Path]) -> None:
+    """Abbreviations of the content-logging flags and ``--config`` (which could turn them on) are refused."""
+    for flag in (
+        "--enable-log-req",
+        "--enable-log-reque",
+        "--enable-log-requests=1",
+        "--enable-log-out",
+        "--enable-log-outputs",
+        "--config",
+        "--config=serve.yaml",
+    ):
+        with pytest.raises(ValueError):
+            _server(fake, flag)
+    assert _server(fake, "--enable-log-stats").server_args == ["--enable-log-stats"]
+
+
+def test_media_errors_name_a_path_only_by_suffix_and_digest(tmp_path: Path) -> None:
+    """A refused media path shows up as its suffix and a short sha256 of the path, never its name or directory."""
+    folder = tmp_path / CANARY
+    folder.mkdir()
+    cases = [
+        (folder / f"{CANARY}.unknownext", lambda path: vs.content_part("image", path)),
+        (folder / f"{CANARY}.mp4", lambda path: vs.content_part("video", path, local_media_dir=tmp_path / "media")),
+        (folder / f'{CANARY}.wa"v', lambda path: vs.transcribe("http://127.0.0.1:9", "m", path, sampling={})),
+    ]
+    for path, call in cases:
+        path.write_bytes(b"")
+        with pytest.raises(ValueError) as caught:
+            call(path)
+        message = str(caught.value)
+        assert CANARY not in message and str(tmp_path) not in message, message
+        assert repr(path.suffix) in message and hashlib.sha256(str(path).encode()).hexdigest()[:12] in message
