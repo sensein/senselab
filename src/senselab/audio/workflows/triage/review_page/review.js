@@ -684,6 +684,7 @@ var ReviewPage = (function () {
       applyFilters();
     };
     $('rv-more').onclick = function () { state.listShown += LIST_PAGE; renderList(); };
+    $('rv-group').onchange = function () { state.listShown = LIST_PAGE; renderList(); };
     $('rv-export').onclick = exportJson;
     $('rv-import').onchange = importJson;
     document.addEventListener('keydown', onKey);
@@ -823,7 +824,23 @@ var ReviewPage = (function () {
     var picked = selectedIndices();
     var reviewed = picked.filter(function (i) { return state.decisions[state.rows[i].stem]; }).length;
     $('rv-list-head').textContent = picked.length.toLocaleString() + ' recordings · ' + reviewed + ' reviewed here';
-    picked.slice(0, state.listShown).forEach(function (i) {
+    var grouped = $('rv-group') && $('rv-group').checked;
+    var order = picked;
+    var heads = {};
+    if (grouped) {
+      order = [];
+      groupByParticipant(state.rows, picked, state.index.participants || {}).forEach(function (g) {
+        heads[g.items[0]] = g;
+        order = order.concat(g.items);
+      });
+    }
+    order.slice(0, state.listShown).forEach(function (i) {
+      if (heads[i] !== undefined) {
+        var g = heads[i];
+        var h = el('li', 'rv-group-head', g.participant + ' · ' + g.items.length + ' shown');
+        h.appendChild(el('span', 'rv-note', participantLine(g.summary)));
+        list.appendChild(h);
+      }
       var r = state.rows[i];
       var li = el('li', i === state.current ? 'cur' : null);
       li.dataset.i = i;
@@ -835,6 +852,33 @@ var ReviewPage = (function () {
       list.appendChild(li);
     });
     $('rv-more').hidden = picked.length <= state.listShown;
+  }
+
+  /** The picked rows grouped by participant, the participant with most issues first, page order within. */
+  function groupByParticipant(rows, picked, summaries) {
+    var groups = {};
+    var names = [];
+    picked.forEach(function (i) {
+      var p = rows[i].participant || '';
+      if (!groups[p]) { groups[p] = { participant: p, summary: summaries[p] || null, items: [] }; names.push(p); }
+      groups[p].items.push(i);
+    });
+    names.sort(function (a, b) {
+      var ia = groups[a].summary ? groups[a].summary.issues : 0, ib = groups[b].summary ? groups[b].summary.issues : 0;
+      return ib - ia || (a < b ? -1 : a > b ? 1 : 0);
+    });
+    return names.map(function (p) { return groups[p]; });
+  }
+
+  /** One participant's issues in a line: recordings, sessions, verdicts, the commonest reasons and annotations. */
+  function participantLine(summary) {
+    if (!summary) return 'no participant summary';
+    var top = function (counts, n) {
+      return Object.keys(counts || {}).slice(0, n).map(function (k) { return k + ' ×' + counts[k]; }).join(', ');
+    };
+    var verdicts = Object.keys(summary.verdicts || {}).map(function (k) { return k + ' ' + summary.verdicts[k]; }).join(', ');
+    return [summary.recordings + ' recordings in ' + summary.sessions + ' session(s)', verdicts,
+      summary.issues + ' issues', top(summary.reasons, 3), top(summary.annotations, 3)].filter(Boolean).join(' · ');
   }
 
   function onKey(e) {
@@ -1618,6 +1662,8 @@ var ReviewPage = (function () {
     decodeRows: decodeRows,
     columnSpecs: columnSpecs,
     evidenceGroups: evidenceGroups,
+    groupByParticipant: groupByParticipant,
+    participantLine: participantLine,
     axesFor: axesFor,
     searchMask: searchMask,
     unpackSpec: unpackSpec,

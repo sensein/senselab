@@ -328,3 +328,36 @@ def test_the_page_unpacks_the_index_it_inlines(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stderr
     expected = review_page.index_of([record], title="t", audio_base="../")
     assert json.loads(result.stdout) == json.loads(json.dumps(expected))
+
+
+def test_each_participant_is_summarised_for_the_grouped_list() -> None:
+    """Recordings, sessions, verdicts, issues and the reasons and annotations across a participant's recordings."""
+    records = [
+        {
+            "participant": "sub-a",
+            "session": "ses-1",
+            "verdict": "review",
+            "reasons": ["other_speaker"],
+            "annotations": ["task_mismatch"],
+        },
+        {
+            "participant": "sub-a",
+            "session": "ses-2",
+            "verdict": "review",
+            "reasons": ["other_speaker", "weak_events"],
+            "annotations": [],
+        },
+        {"participant": "sub-b", "session": "ses-1", "verdict": "pass", "reasons": [], "annotations": []},
+    ]
+    summaries = page_module.participant_summaries(records)
+    assert summaries["sub-a"] == {
+        "recordings": 2,
+        "sessions": 2,
+        "verdicts": {"review": 2},
+        "issues": 4,
+        "reasons": {"other_speaker": 2, "weak_events": 1},
+        "annotations": {"task_mismatch": 1},
+    }
+    assert summaries["sub-b"]["issues"] == 0
+    index = page_module.index_of([{"stem": f"s{i}", **r} for i, r in enumerate(records)], title="t", audio_base="../")
+    assert set(index["participants"]) == {"sub-a", "sub-b"}

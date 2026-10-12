@@ -402,3 +402,22 @@ test('a side-file row expands to the record the page draws, paths under its run 
   assert.ok(rec.speech.html.startsWith('<span class="w" data-i="0">hi</span> <mark class="pii u-red"'))
   assert.equal(R.expandRecord({ ...row, speech: null, extent: null }, dictionary).speech, null)
 })
+
+
+test('the list groups by participant, most issues first, page order within', () => {
+  const rows = [{ participant: 'sub-a' }, { participant: 'sub-b' }, { participant: 'sub-a' }, { participant: 'sub-c' }]
+  const summaries = {
+    'sub-a': { recordings: 2, sessions: 1, verdicts: { review: 2 }, issues: 3, reasons: { other_speaker: 2 }, annotations: {} },
+    'sub-b': { recordings: 1, sessions: 1, verdicts: { review: 1 }, issues: 5, reasons: { weak_events: 1 }, annotations: { task_mismatch: 1 } },
+  }
+  const groups = R.groupByParticipant(rows, [0, 1, 2, 3], summaries)
+  assert.deepEqual(groups.map((g) => g.participant), ['sub-b', 'sub-a', 'sub-c'])
+  assert.deepEqual(groups[1].items, [0, 2])
+  assert.equal(groups[2].summary, null)
+  const line = R.participantLine(summaries['sub-b'])
+  assert.match(line, /1 recordings in 1 session/)
+  assert.match(line, /5 issues/)
+  assert.match(line, /weak_events ×1/)
+  assert.match(line, /task_mismatch ×1/)
+  assert.equal(R.participantLine(null), 'no participant summary')
+})
