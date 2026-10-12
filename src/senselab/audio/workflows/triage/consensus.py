@@ -126,6 +126,8 @@ class ConsensusWord:
             placed it far apart (:func:`arbitrate_time`); None where the fit stands.
         unlocated: Whether the recognizers placed it far apart and none of them on sound, so the word carries
             no time.
+        mask_gap: For an unlocated word, the span between its timed neighbours, which a mask over the word
+            covers; None otherwise.
     """
 
     index: int
@@ -146,6 +148,7 @@ class ConsensusWord:
     unconfirmed: bool = False
     arbitrated_source: str | None = None
     unlocated: bool = False
+    mask_gap: tuple[float, float] | None = None
 
     @property
     def degenerate(self) -> bool:
@@ -622,7 +625,8 @@ def word_attributes(word: ConsensusWord) -> dict[str, Any]:
         The mapping a ``word`` entity carries. The extent is the entity's own and is not in it.
         ``degenerate`` and ``degenerate_sources`` are present only where some reading is degenerate,
         ``untimed_sources`` only where some span is missing, ``unconfirmed`` and ``unlocated`` only where
-        True, and ``arbitrated_source`` only where a recognizer's span was taken.
+        True, ``arbitrated_source`` only where a recognizer's span was taken, and ``mask_gap`` only where an
+        unlocated word carries one.
     """
     attributes = {
         "text": word.text,
@@ -652,6 +656,8 @@ def word_attributes(word: ConsensusWord) -> dict[str, Any]:
         attributes["arbitrated_source"] = word.arbitrated_source
     if word.unlocated:
         attributes["unlocated"] = True
+    if word.mask_gap is not None:
+        attributes["mask_gap"] = list(word.mask_gap)
     return attributes
 
 
@@ -698,6 +704,9 @@ def word_from_attributes(attributes: Mapping[str, Any], extent: tuple[float, flo
         unconfirmed=bool(attributes.get("unconfirmed")),
         arbitrated_source=None if attributes.get("arbitrated_source") is None else str(attributes["arbitrated_source"]),
         unlocated=bool(attributes.get("unlocated")),
+        mask_gap=None
+        if attributes.get("mask_gap") is None
+        else (float(attributes["mask_gap"][0]), float(attributes["mask_gap"][1])),
     )
 
 
