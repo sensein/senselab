@@ -98,6 +98,7 @@ class Growth:
         limit_s: The largest gap growth crossed: ``k`` times the cluster's median onset interval.
         stopped: Why growth stopped before the start and after the end: ``edge`` (no event left), ``gap``
             (the next event lay beyond the limit) or ``stop`` (speech or another speaker lay in the way).
+        crossed_n: The gaps growth crossed that held speech or another speaker (``growth.cross_speech``).
     """
 
     added: tuple[Span, ...] = ()
@@ -105,6 +106,7 @@ class Growth:
     after_s: float = 0.0
     limit_s: float = 0.0
     stopped: tuple[str, str] = (EDGE, EDGE)
+    crossed_n: int = 0
 
     @property
     def seconds(self) -> float:
@@ -120,10 +122,18 @@ class Growth:
             "seconds": round(self.seconds, 3),
             "limit_s": round(self.limit_s, 3),
             "stopped": list(self.stopped),
+            "crossed_n": self.crossed_n,
         }
 
 
-def grow(core: Sequence[Span], candidates: Sequence[Span], *, limit_s: float, stops: Sequence[Span]) -> Growth:
+def grow(
+    core: Sequence[Span],
+    candidates: Sequence[Span],
+    *,
+    limit_s: float,
+    stops: Sequence[Span],
+    cross_stops: bool = False,
+) -> Growth:
     """Grow a cluster outward one candidate event at a time.
 
     Args:
@@ -132,6 +142,8 @@ def grow(core: Sequence[Span], candidates: Sequence[Span], *, limit_s: float, st
         limit_s: The largest gap from the current edge to the next event that growth crosses.
         stops: Speech and other-speaker spans; growth halts at the first one between the edge and the next
             event, or overlapping that event.
+        cross_stops: Whether growth crosses a stop between the edge and the next event (breathing continuing
+            across speech); an event overlapping a stop still halts it, and so does the gap.
 
     Returns:
         The growth; nothing added where ``core`` is empty.
@@ -142,14 +154,16 @@ def grow(core: Sequence[Span], candidates: Sequence[Span], *, limit_s: float, st
     before = sorted((c for c in candidates if c[0] < lo and c[1] <= hi), key=lambda c: -c[1])
     after = sorted((c for c in candidates if c[1] > hi and c[0] >= lo), key=lambda c: c[0])
     added: list[Span] = []
+    crossed = 0
     start, why_before = lo, EDGE
     for event in before:
         if start - event[1] > limit_s:
             why_before = GAP
             break
-        if overlaps((event[0], start), stops):
+        if overlaps(event if cross_stops else (event[0], start), stops):
             why_before = STOP
             break
+        crossed += int(overlaps((event[1], start), stops))
         added.append(event)
         start = min(start, event[0])
     end, why_after = hi, EDGE
@@ -157,12 +171,13 @@ def grow(core: Sequence[Span], candidates: Sequence[Span], *, limit_s: float, st
         if event[0] - end > limit_s:
             why_after = GAP
             break
-        if overlaps((end, event[1]), stops):
+        if overlaps(event if cross_stops else (end, event[1]), stops):
             why_after = STOP
             break
+        crossed += int(overlaps((end, event[0]), stops))
         added.append(event)
         end = max(end, event[1])
-    return Growth(tuple(sorted(added)), lo - start, end - hi, limit_s, (why_before, why_after))
+    return Growth(tuple(sorted(added)), lo - start, end - hi, limit_s, (why_before, why_after), crossed)
 
 
 def reachable_outside(extent: Span | None, outside: Sequence[Span], stops: Sequence[Span]) -> list[Span]:
@@ -354,6 +369,42 @@ def trim_train(events: Sequence[Span], runs: Sequence[Span], *, ratio: float) ->
             break
         edge += 1
     return Trim(tuple(kept), speech_n=len(events) - len(best), edge_n=edge)
+
+
+def margined_extent(
+    original: Span,
+    kept: Sequence[Span],
+    *,
+    head: bool,
+    tail: bool,
+    intervals: float,
+    runs: Sequence[Span],
+) -> Span:
+    """A trimmed train's extent, with a margin of its own onset interval kept beyond each trimmed edge.
+
+    Args:
+        original: The extent before trimming.
+        kept: The events kept, in time order.
+        head: Whether events were trimmed before the first kept one.
+        tail: Whether events were trimmed after the last kept one.
+        intervals: How many of the kept train's median onset intervals the margin is.
+        runs: Speech runs the margin never enters.
+
+    Returns:
+        The kept events' hull, moved out by the margin on each trimmed edge, never past the original extent nor
+        into a speech run; the hull alone where fewer than two events give no interval.
+    """
+    start, end = kept[0][0], max(b for _, b in kept)
+    if len(kept) < 2:
+        return start, end
+    margin = intervals * float(np.median([b[0] - a[0] for a, b in zip(kept, kept[1:])]))
+    if head:
+        floor = max([original[0], *(b for a, b in runs if b <= start)])
+        start = max(floor, start - margin)
+    if tail:
+        ceiling = min([original[1], *(a for a, b in runs if a >= end)])
+        end = min(ceiling, end + margin)
+    return start, end
 
 
 def word_span(word: Any) -> Span:  # noqa: ANN401 -- a consensus word entity

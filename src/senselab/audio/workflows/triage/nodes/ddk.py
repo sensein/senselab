@@ -614,6 +614,7 @@ def ddk_reading(
         required_count=None if required is None else required.value,
         recording_s=duration(stream_extent(store)),
         speech_runs=ddk_speech_runs(store),
+        family=declared_task(recording_stem(store))[1] or None,
     )
     return reading, ids
 

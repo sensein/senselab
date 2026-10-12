@@ -36,6 +36,7 @@ from senselab.audio.workflows.triage.task_extent import (
     Trim,
     enabled,
     extent_check,
+    margined_extent,
     overlaps,
     reachable_outside,
     task_extent_parameters,
@@ -495,6 +496,7 @@ def ddk_reading_of(
     p: dict[str, Any] | None = None,
     speech_runs: Sequence[Span] = (),
     extent_p: Mapping[str, Any] | None = None,
+    family: str | None = None,
 ) -> DdkReading:
     """Read one declared syllable-repetition task off the background and the posteriorgram.
 
@@ -509,6 +511,7 @@ def ddk_reading_of(
         p: The parameters; ``data/task_events.yaml`` when None.
         speech_runs: Runs of agreed non-task words (``task_extent.agreed_speech_runs``).
         extent_p: The parameters of ``data/task_extent.yaml``; the packaged file when None.
+        family: The declared family; one under ``trim.ddk.exclude_families`` is never trimmed.
 
     Returns:
         The reading; with ``absent`` naming ``background_model`` or ``ppg_posteriorgram`` where either
@@ -542,12 +545,27 @@ def ddk_reading_of(
     ratio = float(t["ddk"]["edge_duration_ratio"])
     trim: Trim | None = None
     trimmed: list[TaskEvent] = []
-    if cluster and enabled("trim", extent_p):
+    spanning = family in set(t["ddk"].get("exclude_families") or ())
+    extent = (cluster[0].start_s, max(e.end_s for e in cluster)) if cluster else None
+    if cluster and extent is not None and enabled("trim", extent_p) and not spanning:
         trim = trim_train([(e.start_s, e.end_s) for e in cluster], speech_runs, ratio=ratio)
         trimmed = [event for i, event in enumerate(cluster) if i not in trim.kept]
-        cluster = [cluster[i] for i in trim.kept]
-    extent = (cluster[0].start_s, max(e.end_s for e in cluster)) if cluster else None
-    check = ddk_extent_check(extent, cluster, targets, speech_runs, ratio=ratio, trimmed=trimmed)
+        kept = [cluster[i] for i in trim.kept]
+        if kept:
+            extent = margined_extent(
+                extent,
+                [(e.start_s, e.end_s) for e in kept],
+                head=trim.kept[0] > 0,
+                tail=trim.kept[-1] < len(cluster) - 1,
+                intervals=float(t["ddk"]["margin_intervals"]),
+                runs=speech_runs,
+            )
+        cluster = kept
+        if not cluster:
+            extent = None
+    check = ddk_extent_check(
+        extent, cluster, targets, () if spanning else speech_runs, ratio=None if spanning else ratio, trimmed=trimmed
+    )
     evidence = replace(
         shared,
         events=tuple(cluster),
@@ -578,7 +596,7 @@ def ddk_extent_check(
     targets: Sequence[TaskEvent],
     speech_runs: Sequence[Span],
     *,
-    ratio: float,
+    ratio: float | None,
     trimmed: Sequence[TaskEvent] = (),
 ) -> ExtentCheck:
     """Whether a syllable task's extent holds its whole train and nothing else.
@@ -588,7 +606,7 @@ def ddk_extent_check(
         cluster: The task events, in time order.
         targets: Every event standing over the floor whose identity reaches ``identity_absent_max``.
         speech_runs: Runs of agreed non-task words.
-        ratio: The edge-duration ratio of ``trim.ddk.edge_duration_ratio``.
+        ratio: The edge-duration ratio of ``trim.ddk.edge_duration_ratio``; None reads no edge event.
         trimmed: The events trimming removed, which are not the task and so are never outside it.
 
     Returns:
@@ -601,7 +619,9 @@ def ddk_extent_check(
     reachable = reachable_outside(extent, outside, speech_runs)
     durations = [e.end_s - e.start_s for e in cluster]
     median = float(np.median(durations)) if durations else 0.0
-    edge = len(durations) > 2 and (durations[0] > ratio * median or durations[-1] > ratio * median)
+    edge = (
+        ratio is not None and len(durations) > 2 and (durations[0] > ratio * median or durations[-1] > ratio * median)
+    )
     inside = 0 if extent is None else sum(1 for run in speech_runs if overlaps(run, [extent]))
     return extent_check(
         has_extent=extent is not None,
