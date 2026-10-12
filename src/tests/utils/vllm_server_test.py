@@ -1,0 +1,321 @@
+"""The vLLM server lifecycle against a fake ``vllm``: the start lock, start failures, owner death, args and logs."""
+
+from __future__ import annotations
+
+import json
+import os
+import socket
+import stat
+import subprocess
+import sys
+import threading
+import time
+import urllib.request
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from senselab.utils import vllm_server as vs
+
+SHA = "a" * 40
+CANARY = "CANARY-7f3a"
+
+# A stand-in for ``vllm serve``: /health, /version and /v1/models through http.server. It forks a grandchild
+# that listens on a second port, prints one access line per request (never the body, unless asked to log
+# requests) and records its start and ready times.
+_FAKE = r"""
+import json, os, sys, time
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+argv = sys.argv[1:]
+assert argv[0] == "serve"
+model_dir, flags = argv[1], argv[2:]
+out = os.environ["FAKE_VLLM_DIR"]
+
+
+def value(flag, default=None):
+    return flags[flags.index(flag) + 1] if flag in flags else default
+
+
+def event(name):
+    with open(os.path.join(out, "events.log"), "a") as handle:
+        handle.write("%s %d %.6f\n" % (name, os.getpid(), time.time()))
+
+
+class Handler(BaseHTTPRequestHandler):
+    def log_message(self, *args):
+        print("%s %s" % (self.command, self.path), flush=True)
+
+    def reply(self, payload):
+        body = json.dumps(payload).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self):
+        if self.path == "/health":
+            return self.reply({})
+        if self.path == "/version":
+            return self.reply({"version": value("--fake-version", "0.31.0")})
+        if self.path == "/v1/models":
+            return self.reply({"data": [{"id": model_dir, "root": value("--fake-root", model_dir)}]})
+        self.send_error(404)
+
+    def do_POST(self):
+        body = self.rfile.read(int(self.headers["Content-Length"]))
+        if "--enable-log-requests" in flags:
+            print(body.decode(), flush=True)
+        self.reply({"choices": []})
+
+
+event("start")
+if "--fake-nofit" in flags:
+    print("ValueError: the KV cache cannot hold max_model_len tokens", file=sys.stderr, flush=True)
+    sys.exit(1)
+side = HTTPServer(("127.0.0.1", 0), Handler)
+if os.fork() == 0:
+    side.serve_forever()
+    os._exit(0)
+with open(os.path.join(out, "%d.json" % os.getpid()), "w") as handle:
+    json.dump({"pgid": os.getpgid(0), "ports": [int(value("--port")), side.server_port]}, handle)
+side.server_close()
+time.sleep(float(value("--fake-slow", "0")))
+main = HTTPServer(("127.0.0.1", int(value("--port"))), Handler)
+event("ready")
+main.serve_forever()
+"""
+
+# Holds a server until it is killed.
+_HOLDER = r"""
+import sys, time
+from senselab.utils.vllm_server import VllmServer
+
+exe, model, locks = sys.argv[1:4]
+with VllmServer(exe, model, server_args=[], devices=["0"], start_lock_dir=locks, expected_version="0.31.0"):
+    print("up", flush=True)
+    time.sleep(600)
+"""
+
+_NO_PROXY = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
+@pytest.fixture
+def fake(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Path]:
+    """A fake ``vllm`` executable, a snapshot dir named by its commit, and the fake's record dir."""
+    out = tmp_path / "fake"
+    out.mkdir()
+    script = tmp_path / "fake_vllm.py"
+    script.write_text(_FAKE)
+    exe = tmp_path / "bin" / "vllm"
+    exe.parent.mkdir()
+    exe.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{script}" "$@"\n')
+    exe.chmod(exe.stat().st_mode | stat.S_IXUSR)
+    model = tmp_path / "hub" / "snapshots" / SHA
+    model.mkdir(parents=True)
+    monkeypatch.setenv("FAKE_VLLM_DIR", str(out))
+    return {"exe": exe, "model": model, "out": out, "locks": tmp_path / "locks"}
+
+
+def _server(fake: dict[str, Path], *args: str, **kwargs: Any) -> vs.VllmServer:  # noqa: ANN401
+    return vs.VllmServer(
+        fake["exe"],
+        fake["model"],
+        server_args=list(args),
+        devices=["0"],
+        start_lock_dir=fake["locks"],
+        expected_version="0.31.0",
+        **kwargs,
+    )
+
+
+def _infos(fake: dict[str, Path]) -> list[dict[str, Any]]:
+    return [json.loads(path.read_text()) for path in sorted(fake["out"].glob("*.json"))]
+
+
+def _refuses(port: int) -> bool:
+    try:
+        socket.create_connection(("127.0.0.1", port), timeout=1).close()
+    except OSError:
+        return True
+    return False
+
+
+def _group_alive(pgid: int) -> bool:
+    try:
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _gone(info: dict[str, Any], timeout_s: float = 30.0) -> bool:
+    """Whether the server's group has no process left and none of its ports accepts, within the timeout."""
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        if not _group_alive(info["pgid"]) and all(_refuses(port) for port in info["ports"]):
+            return True
+        time.sleep(0.2)
+    return False
+
+
+def test_two_servers_start_one_at_a_time_under_the_lock(fake: dict[str, Path]) -> None:
+    """The second server starts only once the first is healthy, then both serve side by side."""
+    both_up = threading.Barrier(2)
+    errors: list[BaseException] = []
+
+    def run() -> None:
+        try:
+            with _server(fake, "--fake-slow", "1"):
+                both_up.wait(timeout=60)
+        except BaseException as exc:  # noqa: BLE001 — reported by the assertion below
+            errors.append(exc)
+
+    threads = [threading.Thread(target=run) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=120)
+    assert errors == []
+    events = [line.split() for line in (fake["out"] / "events.log").read_text().splitlines()]
+    starts = {pid: float(at) for name, pid, at in events if name == "start"}
+    readies = {pid: float(at) for name, pid, at in events if name == "ready"}
+    first, second = sorted(starts, key=starts.__getitem__)
+    assert starts[second] >= readies[first]
+    assert (fake["locks"] / f"vllm-start-{socket.gethostname()}-0.lock").is_file()
+    assert all(_gone(info) for info in _infos(fake))
+
+
+def test_a_server_that_exits_before_health_is_exited(fake: dict[str, Path]) -> None:
+    """A server that refuses its KV cache exits before it is healthy: the fit failure."""
+    with pytest.raises(vs.VllmStartError) as caught:
+        with _server(fake, "--fake-nofit"):
+            pass
+    assert caught.value.kind == "exited"
+
+
+def test_a_slow_server_is_timeout(fake: dict[str, Path]) -> None:
+    """A server not healthy within the start-up timeout is stopped, its whole group with it."""
+    began = time.monotonic()
+    with pytest.raises(vs.VllmStartError) as caught:
+        with _server(fake, "--fake-slow", "60", startup_timeout_s=1):
+            pass
+    assert caught.value.kind == "timeout" and time.monotonic() - began < 30
+    [info] = _infos(fake)
+    assert _gone(info)
+
+
+def test_a_version_mismatch_is_version(fake: dict[str, Path]) -> None:
+    """A server of another version is refused; so is one serving a snapshot other than ``model_dir``'s commit."""
+    cases = [
+        (("--fake-version", "0.30.0"), "version"),
+        (("--fake-root", str(fake["model"].parent / ("b" * 40))), "snapshot"),
+    ]
+    for args, kind in cases:
+        with pytest.raises(vs.VllmStartError) as caught:
+            with _server(fake, *args):
+                pass
+        assert caught.value.kind == kind
+    assert all(_gone(info) for info in _infos(fake))
+
+
+def test_the_server_dies_with_its_owner(fake: dict[str, Path]) -> None:
+    """Killing the owner with SIGKILL takes the server and its grandchild down; both ports refuse."""
+    src = Path(vs.__file__).resolve().parents[2]
+    env = {**os.environ, "PYTHONPATH": os.pathsep.join([str(src), os.environ.get("PYTHONPATH", "")])}
+    holder = subprocess.Popen(  # noqa: S603 — this interpreter
+        [sys.executable, "-c", _HOLDER, str(fake["exe"]), str(fake["model"]), str(fake["locks"])],
+        stdout=subprocess.PIPE,
+        env=env,
+    )
+    try:
+        assert holder.stdout is not None
+        for line in holder.stdout:
+            if line.strip() == b"up":
+                break
+        else:
+            pytest.fail("the owner exited before its server was up")
+        [info] = _infos(fake)
+        assert _group_alive(info["pgid"]) and not any(_refuses(port) for port in info["ports"])
+    finally:
+        holder.kill()
+        holder.wait()
+    assert _gone(info)
+
+
+def test_server_args_are_ordered_and_identity_is_stable() -> None:
+    """The argv order is fixed whatever the mapping order; the identity is equal for equal inputs."""
+    settings = {
+        "enable_prefix_caching": False,
+        "limit_mm_per_prompt": {"video": 1, "image": 4, "audio": 2},
+        "generation_config": "vllm",
+        "kv_cache_dtype": "auto",
+        "gpu_memory_utilization": 0.45,
+        "max_num_seqs": 8,
+        "max_model_len": 12288,
+    }
+    args = vs.server_args(settings)
+    assert args == [
+        "--max-model-len",
+        "12288",
+        "--max-num-seqs",
+        "8",
+        "--gpu-memory-utilization",
+        "0.45",
+        "--kv-cache-dtype",
+        "auto",
+        "--generation-config",
+        "vllm",
+        "--limit-mm-per-prompt",
+        '{"audio":2,"image":4,"video":1}',
+        "--no-enable-prefix-caching",
+    ]
+    assert vs.server_args({**settings, "enable_prefix_caching": True})[-1] == "--enable-prefix-caching"
+    with pytest.raises(KeyError):
+        vs.server_args({key: value for key, value in settings.items() if key != "max_num_seqs"})
+
+    identity = vs.engine_identity("0.31.0", args, concurrency=8, batch_size=16, servers_per_card=2)
+    assert identity == {
+        "name": "vllm",
+        "version": "0.31.0",
+        "server_args": args,
+        "concurrency": 8,
+        "batch_size": 16,
+        "servers_per_card": 2,
+    }
+    again = vs.engine_identity("0.31.0", list(args), concurrency=8, batch_size=16, servers_per_card=2)
+    assert json.dumps(again, sort_keys=True) == json.dumps(identity, sort_keys=True)
+    assert identity != vs.engine_identity("0.31.0", args, concurrency=4, batch_size=16, servers_per_card=2)
+    args.append("--extra")
+    assert "--extra" not in identity["server_args"]
+
+
+def test_utilisation_rule() -> None:
+    """``floor(90 / n) / 100`` of the card per server; at least one server."""
+    for servers, expected in [(1, 0.9), (2, 0.45), (3, 0.3), (4, 0.22), (7, 0.12)]:
+        assert vs.utilisation(servers) == expected
+    with pytest.raises(ValueError):
+        vs.utilisation(0)
+
+
+def test_request_content_is_not_logged(fake: dict[str, Path], tmp_path: Path) -> None:
+    """The server log is mode 600 and holds access lines, never a request body; request logging is refused."""
+    logs = tmp_path / "logs"
+    with _server(fake, log_dir=logs) as server:
+        request = urllib.request.Request(
+            f"{server.url}/v1/completions",
+            data=json.dumps({"prompt": CANARY}).encode(),
+            headers={"Content-Type": "application/json"},
+        )
+        with _NO_PROXY.open(request, timeout=30) as response:
+            assert response.status == 200
+    [log] = list(logs.iterdir())
+    assert stat.S_IMODE(log.stat().st_mode) == 0o600
+    text = log.read_text()
+    assert "POST /v1/completions" in text and CANARY not in text
+    with pytest.raises(ValueError):
+        _server(fake, "--enable-log-requests")
