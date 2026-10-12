@@ -797,3 +797,262 @@ def test_a_re_reap_does_not_skip_an_attempt(tmp_path: Path, monkeypatch: pytest.
     assert _read(pool.root / "queue" / f"{item.id}.json")["attempt"] == 2
     assert _names(pool.root / "interrupted") == [f"{item.id}.1.json"]
     assert _names(pool.root / "tmp") == []
+
+
+# -- controller ----------------------------------------------------------------------------------------------------
+class _FakeSlurm:
+    """A fake ``runner``: records sbatch/squeue/scancel argv and keeps a job table that squeue prints."""
+
+    def __init__(self) -> None:
+        self.calls: list[list[str]] = []
+        self.jobs: list[dict[str, Any]] = []
+        self.next_id = 1000
+
+    def add(self, name: str, partition: str, state: str, age_s: float = 0.0, reason: str = "None") -> str:
+        self.next_id += 1
+        self.jobs.append(
+            {
+                "id": str(self.next_id),
+                "name": name,
+                "partition": partition,
+                "state": state,
+                "submit": time.time() - age_s,
+                "reason": reason,
+            }
+        )
+        return str(self.next_id)
+
+    def __call__(self, argv: Any) -> str:  # noqa: ANN401
+        argv = list(argv)
+        self.calls.append(argv)
+        if argv[0] == "sbatch":
+            opts = dict(a[2:].split("=", 1) for a in argv if a.startswith("--") and "=" in a)
+            return self.add(opts["job-name"], opts["partition"], "PENDING", reason="Priority") + "\n"
+        if argv[0] == "squeue":
+            return "".join(
+                f"{j['id']}|{j['partition']}|{j['state']}|"
+                f"{time.strftime('%Y-%m-%dT%H:%M:%S', time.localtime(j['submit']))}|{j['name']}|{j['reason']}\n"
+                for j in self.jobs
+            )
+        if argv[0] == "scancel":
+            self.jobs = [j for j in self.jobs if j["id"] not in argv[1:]]
+            return ""
+        raise AssertionError(argv)
+
+    def sbatches(self) -> list[list[str]]:
+        return [c for c in self.calls if c[0] == "sbatch"]
+
+    def per_partition(self) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        for argv in self.sbatches():
+            part = next(a.split("=", 1)[1] for a in argv if a.startswith("--partition="))
+            counts[part] = counts.get(part, 0) + 1
+        return counts
+
+
+def _cls(name: str = "main", **max_workers: int) -> wp.ResourceClass:
+    parts = max_workers or {"main": 2, "spare": 2}
+    return wp.ResourceClass(
+        name=name, partitions=tuple(wp.PartitionSpec(partition=p, max_workers=n) for p, n in parts.items())
+    )
+
+
+def _controller(pool: wp.WorkPool, slurm: _FakeSlurm, *classes: wp.ResourceClass, **kwargs: Any) -> wp.Controller:  # noqa: ANN401
+    return wp.Controller(pool, list(classes) or [_cls()], runner=slurm, **kwargs)
+
+
+def test_controller_tops_up_workers_on_every_partition_of_a_class(tmp_path: Path) -> None:
+    """Queued items get workers spread over the class's partitions; later ones go where workers start."""
+    pool = _pool(tmp_path)
+    pool.publish([_item(i) for i in range(3)])
+    slurm = _FakeSlurm()
+    control = _controller(pool, slurm)
+    summary = control.tick()
+    assert slurm.per_partition() == {"main": 2, "spare": 1}
+    assert len(summary["submitted"]) == 3
+    name = f"work-pool-{control.pool8}-main"
+    for argv in slurm.sbatches():
+        assert "--parsable" in argv and f"--job-name={name}" in argv
+        wrap = argv[argv.index("--wrap") + 1]
+        assert wrap.startswith("exec ")  # the worker, not a shell, gets Slurm's SIGTERM
+        assert f"work_pool work {pool.root} --classes main" in wrap
+    squeue = next(c for c in slurm.calls if c[0] == "squeue")
+    assert "--me" in squeue and f"--name={name}" in squeue
+
+    control.tick()  # three live workers for three queued items: nothing more
+    assert len(slurm.sbatches()) == 3
+
+    # main's workers start, spare's stays pending: the next items go to main, which has no pending workers.
+    for job in slurm.jobs:
+        if job["partition"] == "main":
+            job["state"], job["reason"] = "RUNNING", "None"
+    pool.publish([_item(i) for i in range(3, 6)])
+    slurm.calls.clear()
+    wider = _controller(pool, slurm, _cls(main=4, spare=4))
+    wider.tick()
+    assert slurm.per_partition() == {"main": 2, "spare": 1}
+
+
+def test_a_partition_with_stale_pending_workers_is_skipped(tmp_path: Path) -> None:
+    """Workers pending past pending_s for Priority, QOS* or ReqNodeNotAvail* skip the partition; Resources does not."""
+    cases = [
+        ("Priority", 1200.0, True),
+        ("QOSMaxJobsPerUserLimit", 1200.0, True),
+        ("ReqNodeNotAvail,_UnavailableNodes:n1", 1200.0, True),
+        ("Resources", 1200.0, False),
+        ("Priority", 10.0, False),
+    ]
+    for k, (reason, age, skipped) in enumerate(cases):
+        pool = _pool(tmp_path / str(k))
+        pool.publish([_item(i) for i in range(6)])
+        slurm = _FakeSlurm()
+        control = _controller(pool, slurm, _cls(main=4, spare=4), pending_s=600.0)
+        slurm.add(f"work-pool-{control.pool8}-main", "spare", "PENDING", age_s=age, reason=reason)
+        summary = control.tick()
+        counts = slurm.per_partition()
+        if skipped:
+            assert counts == {"main": 4}, reason
+            assert summary["partitions"]["spare"]["stale"] is True
+        else:
+            assert counts.get("spare", 0) >= 1, (reason, age)
+
+
+def test_max_workers_per_partition_is_respected(tmp_path: Path) -> None:
+    """No partition gets more live workers (pending plus running) of a class than its max_workers."""
+    pool = _pool(tmp_path)
+    pool.publish([_item(i) for i in range(10)])
+    slurm = _FakeSlurm()
+    control = _controller(pool, slurm, _cls(main=1, spare=2))
+    control.tick()
+    assert slurm.per_partition() == {"main": 1, "spare": 2}
+    for job in slurm.jobs:
+        job["state"] = "RUNNING"
+    control.tick()
+    control.tick()
+    assert len(slurm.sbatches()) == 3
+    slurm.jobs.pop()  # a spare worker ends: one more there
+    control.tick()
+    assert slurm.per_partition() == {"main": 1, "spare": 3}
+
+
+def test_idle_pending_workers_are_cancelled_when_the_queue_drains(tmp_path: Path) -> None:
+    """With nothing queued, the class's pending workers are cancelled; running and foreign jobs are left alone."""
+    pool = _pool(tmp_path)
+    pool.publish([_item(0)])
+    lease = pool.claim(["main"], "w")
+    assert lease is not None
+    slurm = _FakeSlurm()
+    control = _controller(pool, slurm, _cls(), _cls("gpu-a", main=1))
+    mine = f"work-pool-{control.pool8}-main"
+    pending = [slurm.add(mine, "main", "PENDING"), slurm.add(mine, "spare", "PENDING", reason="Resources")]
+    running = slurm.add(mine, "spare", "RUNNING")
+    foreign = slurm.add("someone-else", "main", "PENDING")
+    other_pool = slurm.add("work-pool-00000000-main", "main", "PENDING")
+    summary = control.tick()
+    assert sorted(summary["cancelled"]) == sorted(pending)
+    scancels = [c for c in slurm.calls if c[0] == "scancel"]
+    assert [sorted(c[1:]) for c in scancels] == [sorted(pending)]
+    assert {j["id"] for j in slurm.jobs} == {running, foreign, other_pool}
+    assert slurm.sbatches() == []
+
+
+def test_exclude_and_requeue_are_rendered(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """gres, exclude, requeue, cpus, mem and time reach sbatch; classes load from YAML; the CLI and controller job."""
+    pool = _pool(tmp_path)
+    pool.publish([_item(0, "gpu-a"), _item(1, "gpu-a")])
+    classes_file = tmp_path / "classes.yaml"
+    classes_file.write_text(
+        "classes:\n"
+        "  - name: gpu-a\n"
+        "    partitions:\n"
+        "      - {partition: main, gres: 'gpu:1', cpus: 4, mem: 16G, time: '00:10:00', exclude: [n1, n2],"
+        " requeue: true, max_workers: 1}\n"
+        "      - {partition: spare, max_workers: 1}\n"
+    )
+    [gpu] = wp.load_classes(classes_file)
+    assert gpu.name == "gpu-a" and [p.partition for p in gpu.partitions] == ["main", "spare"]
+    slurm = _FakeSlurm()
+    _controller(pool, slurm, gpu, log_dir=tmp_path / "logs").tick()
+    by_part = {next(a for a in c if a.startswith("--partition=")): c for c in slurm.sbatches()}
+    first, second = by_part["--partition=main"], by_part["--partition=spare"]
+    for flag in ("--gres=gpu:1", "--cpus-per-task=4", "--mem=16G", "--time=00:10:00", "--exclude=n1,n2", "--requeue"):
+        assert flag in first, flag
+    assert not [a for a in second if a.startswith(("--gres", "--exclude", "--requeue"))]
+    assert f"--output={tmp_path / 'logs'}/%x-%j.out" in first
+
+    # submit_controller renders the controller's own job.
+    job = wp.submit_controller(pool, classes_file, partition="main", time="00:30:00", runner=slurm, poll_s=15.0)
+    argv = slurm.calls[-1]
+    assert job == slurm.jobs[-1]["id"] and "--time=00:30:00" in argv and "--partition=main" in argv
+    assert f"control {pool.root} --classes {classes_file} --poll 15.0" in argv[argv.index("--wrap") + 1]
+
+    # The CLI, through fake sbatch/squeue/scancel on PATH.
+    bin_dir, log = tmp_path / "bin", tmp_path / "calls.log"
+    bin_dir.mkdir()
+    for tool, out in (("sbatch", "4242"), ("squeue", ""), ("scancel", "")):
+        script = bin_dir / tool
+        script.write_text(f'#!/bin/sh\necho "{tool} $*" >> {log}\necho "{out}"\n')
+        script.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    assert wp.main(["control", str(pool.root), "--classes", str(classes_file), "--once"]) == 0
+    lines = log.read_text().splitlines()
+    assert lines[0].startswith("squeue --me -h") and any("--requeue" in line for line in lines if "sbatch" in line)
+
+
+def test_each_tick_reaps_expired_leases(tmp_path: Path) -> None:
+    """With no live worker, one tick puts an expired lease back in the queue (attempt 2) and submits a worker."""
+    pool = _pool(tmp_path, lease_s=1.5, heartbeat_s=0.5)
+    [item] = pool.publish([_item(0)])
+    assert pool.claim(["main"], "gone") is not None
+    _expire(pool, item.id)
+    slurm = _FakeSlurm()
+    summary = _controller(pool, slurm).tick()
+    assert summary["reaped"] == 1
+    assert _read(pool.root / "queue" / f"{item.id}.json")["attempt"] == 2
+    assert _names(pool.root / "leases") == []
+    assert len(slurm.sbatches()) == 1
+
+
+def test_a_partition_hitting_the_release_cap_gets_no_workers(tmp_path: Path) -> None:
+    """Workers failing --host-check release their item and exit; release_cap such releases pause the partition."""
+    pool = _pool(tmp_path)
+    pool.publish([_item(i) for i in range(4)])
+    env = {**_env(), "SLURM_JOB_PARTITION": "spare"}
+    for k in range(3):
+        rc = subprocess.run(  # noqa: S603 — this interpreter
+            [sys.executable, "-m", "senselab.utils.work_pool", "work", str(pool.root), "--classes", "main"]
+            + ["--host-check", "false", "--poll", "0.1", "--linger", "0", "--worker", f"w{k}"],
+            env=env,
+            timeout=60,
+        ).returncode
+        assert rc == wp.HOST_CHECK_EXIT
+    assert len(_names(pool.root / "hostcheck")) == 3
+    assert _names(pool.root / "done") == [] and len(_names(pool.root / "queue")) == 4
+    assert (
+        sorted(_read(pool.root / "interrupted" / n)["reason"] for n in _names(pool.root / "interrupted"))
+        == ["release"] * 3
+    )
+
+    slurm = _FakeSlurm()
+    control = _controller(pool, slurm, _cls(main=4, spare=4), release_cap=3)
+    summary = control.tick()
+    assert slurm.per_partition() == {"main": 4}
+    assert summary["partitions"]["spare"]["paused"] == "host-check"
+    assert _read(pool.root / "status.json")["partitions"]["spare"]["paused"] == "host-check"
+    assert _read(pool.root / "status.json")["partitions"]["main"]["paused"] is None
+
+    # Releases older than the window no longer count.
+    oldest = sorted(_names(pool.root / "hostcheck"))[0]
+    os.utime(pool.root / "hostcheck" / oldest, (0, 0))
+    slurm = _FakeSlurm()
+    _controller(pool, slurm, _cls(main=4, spare=4), release_cap=3).tick()
+    assert slurm.per_partition().get("spare", 0) >= 1
+
+    # A worker whose host check passes runs items as usual.
+    rc = subprocess.run(  # noqa: S603 — this interpreter
+        [sys.executable, "-m", "senselab.utils.work_pool", "work", str(pool.root), "--classes", "main"]
+        + ["--host-check", "true", "--poll", "0.1", "--linger", "0"],
+        env=env,
+        timeout=60,
+    ).returncode
+    assert rc == 0 and len(_names(pool.root / "done")) == 4
