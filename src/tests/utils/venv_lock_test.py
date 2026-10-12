@@ -224,3 +224,14 @@ def test_the_newest_index_follows_the_cuda_cap() -> None:
     assert venv_lock.top_cuda_tag(None) == "cu128"
     assert venv_lock.top_cuda_tag((12, 4)) == "cu124"
     assert venv_lock.top_cuda_tag((12, 1)) == "cu121"
+
+
+def test_a_missing_uv_is_a_venv_lock_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Without uv, compiling a lock fails with ``VenvLockError``, the module's own error type."""
+
+    def no_uv() -> str:
+        raise FileNotFoundError("uv not found")
+
+    monkeypatch.setattr(venv_lock, "find_uv", no_uv)
+    with pytest.raises(venv_lock.VenvLockError, match="uv is not on PATH"):
+        compile_lock("t", ["foo"], "3.12", exclude_newer="2026-10-02T00:00:00Z")

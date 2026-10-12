@@ -287,6 +287,13 @@ def discover_backends(package_root: Optional[Path] = None) -> dict[str, Backend]
     return found
 
 
+def _lock_uv() -> str:
+    try:
+        return find_uv()
+    except FileNotFoundError as exc:
+        raise VenvLockError("uv is not on PATH; it is needed to compile a lock") from exc
+
+
 def _compile(
     in_file: Path,
     python_version: str,
@@ -297,7 +304,7 @@ def _compile(
     no_emit: tuple[str, ...] = (),
 ) -> str:
     cmd = [
-        find_uv(),
+        _lock_uv(),
         "pip",
         "compile",
         str(in_file),
@@ -482,7 +489,7 @@ def compile_lock(
             raise VenvLockError(f"'{name}': no torch within the requirements is served on every index: {notes}")
         no_emit = tuple(torch_only_cuda_packages(packages)) if pins else ()
         body = _compile(in_file, python_version, constraints, exclude_newer, hashes=True, no_emit=no_emit)
-    uv_version = subprocess.run([find_uv(), "--version"], capture_output=True, text=True).stdout.strip()
+    uv_version = subprocess.run([_lock_uv(), "--version"], capture_output=True, text=True).stdout.strip()
     lines = [
         f"# senselab subprocess-venv lock: {name}",
         f"# requirements-sha256: {requirements_sha256(requirements, python_version, max_cuda_version)}",

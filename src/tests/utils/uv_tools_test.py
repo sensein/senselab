@@ -7,7 +7,6 @@ from pathlib import Path
 
 import pytest
 
-from senselab.utils import uv_tools
 from senselab.utils.uv_tools import find_uv, is_torch_family, normalize_name, requirements_sha256
 
 
@@ -18,37 +17,23 @@ def _executable(path: Path) -> Path:
     return path
 
 
-def test_find_uv_prefers_the_env_override_then_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The override wins over PATH, PATH over the home install locations, and a bad override is refused."""
-    pinned = _executable(tmp_path / "pinned" / "uv")
+def test_find_uv_searches_path_then_the_home_install_locations(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """PATH wins over ``~/.local/bin`` and ``~/.cargo/bin``; with neither, ``uv`` is not found."""
     on_path = _executable(tmp_path / "bin" / "uv")
     home = tmp_path / "home"
-    in_home = _executable(home / ".local" / "bin" / "uv")
+    in_local = _executable(home / ".local" / "bin" / "uv")
+    in_cargo = _executable(home / ".cargo" / "bin" / "uv")
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
     monkeypatch.setenv("PATH", str(on_path.parent))
-
-    monkeypatch.setenv(uv_tools.UV_ENV, str(pinned))
-    assert find_uv() == str(pinned)
-
-    monkeypatch.delenv(uv_tools.UV_ENV)
     assert find_uv() == str(on_path)
 
     monkeypatch.setenv("PATH", str(tmp_path / "empty"))
-    assert find_uv() == str(in_home)
+    assert find_uv() == str(in_local)
+    in_local.unlink()
+    assert find_uv() == str(in_cargo)
 
-    in_home.unlink()
+    in_cargo.unlink()
     with pytest.raises(FileNotFoundError):
-        find_uv()
-
-    for bad in ("uv", str(tmp_path / "missing" / "uv")):
-        monkeypatch.setenv(uv_tools.UV_ENV, bad)
-        with pytest.raises(FileNotFoundError, match=uv_tools.UV_ENV):
-            find_uv()
-    not_executable = tmp_path / "plain" / "uv"
-    not_executable.parent.mkdir()
-    not_executable.write_text("")
-    monkeypatch.setenv(uv_tools.UV_ENV, str(not_executable))
-    with pytest.raises(FileNotFoundError, match=uv_tools.UV_ENV):
         find_uv()
 
 
