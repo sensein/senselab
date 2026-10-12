@@ -94,6 +94,20 @@ def _breath(floor_db: float, local_db: float | None) -> dict[str, Any]:  # noqa:
     }
 
 
+def test_the_config_hash_is_the_last_marker_s_even_where_an_unchanged_fold_left_an_older_verdict_activity_last(
+    tmp_path: Path,
+) -> None:
+    """r36: a refold whose VERDICT activity already stood kept it in place; the refold marker names the config."""
+    run_root = _run_root(tmp_path, _fold(**_breath(24.0, 20.0)))
+    store = run_root / "run" / "store.jsonl"
+    lines = store.read_text().splitlines()
+    replay = {"record": "activity", "node": "VERDICT", "step": None, "parameters": {"config_hash": "replay0"}}
+    marker = {"record": "activity", "node": "REFOLD", "step": "marker", "parameters": {"commit": "d00d", "config_hash": "c0ffee"}}
+    store.write_text("\n".join([*lines, json.dumps(replay), json.dumps(marker)]) + "\n")
+    row, _ = decision_tables.decision_rows(run_root, tmp_path)  # type: ignore[misc]
+    assert (row["commit"], row["config_hash"]) == ("d00d", "c0ffee")
+
+
 def test_a_pass_row_carries_its_decisive_task_evidence_and_its_paths(tmp_path: Path) -> None:
     """The decision row reads verdict, release and reason off the fold; the evidence is the decisive items."""
     run_root = _run_root(tmp_path, _fold(**_breath(24.0, 20.0)))

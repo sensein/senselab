@@ -96,13 +96,13 @@ def _provenance(view: StoreView) -> dict[str, Any]:
         view: The store.
 
     Returns:
-        ``commit``, the last activity's recorded commit (a replay or refold marker), and ``config_hash``,
-        the last VERDICT activity's; None where the store records neither.
+        ``commit``, the last activity's recorded commit (a replay or refold marker), and ``config_hash``, the
+        configuration that marker records; where it records none, the last VERDICT activity's. None where the
+        store records neither.
     """
-    commit = next(
-        (a["parameters"].get("commit") for a in reversed(view.activities) if a["parameters"].get("commit")), None
-    )
-    config = next(
+    marker = next((a["parameters"] for a in reversed(view.activities) if a["parameters"].get("commit")), None)
+    commit = None if marker is None else marker.get("commit")
+    config = (marker or {}).get("config_hash") or next(
         (
             a["parameters"].get("config_hash")
             for a in reversed(view.activities)
