@@ -1181,7 +1181,7 @@ columns:
     units: fraction
     description: The worst dominant-speaker share over the recording's task extents; the value the `dominant_speaker_share_min` flag gate reads.
     computation: Minimum of the numeric values of every live `extent_dominant_speaker_share` measurement.
-    source: [recording_vectors.py:_speaker_columns, nodes/speech.py:_speakers_within, nodes/verdict.py:flag_gate_readings]
+    source: [recording_vectors.py:_speaker_columns, speaker_share.py:speakers_within, nodes/verdict.py:flag_gate_readings]
     null_means: No numeric share reading.
 
   residual_peak_dbfs:
@@ -1838,7 +1838,7 @@ families:
           contributor's seconds over every attributed second inside the extent. Per extent, so the
           mean differs from `extent_dominant_speaker_share_min` wherever a recording has more than
           one extent.
-        source: nodes/speech.py:_speakers_within, nodes/speech.py:speech
+        source: speaker_share.py:speakers_within, nodes/speech.py:speech
         none_readings: >-
           A None reading is written when no diarized segment intersects the extent, so
           `m_extent_speaker_count_n` can be 1 while this column's `_n` is 0.
@@ -1862,7 +1862,7 @@ families:
         units: count
         description: Per task extent, how many diarized speakers hold a segment intersecting it.
         computation: The number of distinct speaker labels among the segments intersecting the extent.
-        source: nodes/speech.py:_speakers_within
+        source: speaker_share.py:speakers_within
       glide_extent_semitones:
         kind: scalar
         units: semitones
@@ -2178,13 +2178,13 @@ families:
         reading_source: nodes/speech.py:_speech_free_response
       dominant_speaker_share_min:
         kind: applied
-        reading: extent_dominant_speaker_share
+        reading: extent_dominant_exclusive_share
         op: at_least
         units: fraction
         reader: flag_gate_readings
-        reading_description: the worst dominant-speaker share over the task extents (a flag gate).
-        reading_computation: SPEECH writes one share per task extent.
-        reading_source: nodes/speech.py:_speakers_within
+        reading_description: the worst dominant-speaker share over the task extents, counting a second voice only where it holds the extent alone (a flag gate).
+        reading_computation: SPEECH writes one exclusive share per task extent; exclusive second-voice time under speech.secondary_exclusive_min_s counts as none.
+        reading_source: speaker_share.py:speakers_within
       items_min:
         kind: applied
         reading: items_produced

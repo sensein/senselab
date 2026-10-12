@@ -959,7 +959,7 @@ TRACKS_ABSENT_MEASUREMENTS = ("phonation_extent", "sweep_extent")
 CARRIER_PRESENCE_READING = "carrier_duration_s"
 """The reading VOICE writes for every carrier it measured over: its absence means none qualified."""
 
-SPEAKER_SHARE_READING = "extent_dominant_speaker_share"
+SPEAKER_SHARE_READING = "extent_dominant_exclusive_share"
 """The reading the speaker gate is answered with."""
 
 

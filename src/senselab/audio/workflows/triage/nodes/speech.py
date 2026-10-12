@@ -120,6 +120,7 @@ from senselab.audio.workflows.triage.nodes.ddk import (
 from senselab.audio.workflows.triage.nodes.redact import category_family
 from senselab.audio.workflows.triage.residue import is_content_word, is_non_lexical, residue_rule, task_residue
 from senselab.audio.workflows.triage.routing_analysis.families import SYLLABLE_REPETITION
+from senselab.audio.workflows.triage.speaker_share import speakers_within
 from senselab.audio.workflows.triage.stimulus import (
     LexicalWord,
     NearMatch,
@@ -333,47 +334,6 @@ def _overlaps(a: tuple[float, float], b: tuple[float, float]) -> bool:
         True when they intersect.
     """
     return a[0] < b[1] and a[1] > b[0]
-
-
-def _speakers_within(
-    extent: tuple[float, float], segments: list[tuple[str, str, tuple[float, float]]]
-) -> dict[str, Any]:
-    """How the diarizer's speakers divide one task extent between them.
-
-    A reading, not a judgement: it names who holds seconds inside the extent and how many, and
-    reaches no conclusion about whether that is the task being performed correctly.
-
-    Args:
-        extent: The task extent.
-        segments: ``(entity_id, speaker label, extent)`` per diarized segment, on the same clock.
-
-    Returns:
-        The covariates, plus ``share`` -- the largest contributor's seconds over every attributed
-        second inside the extent, or ``None`` when no segment intersects it -- and ``sources``,
-        the ids the reading was taken off.
-    """
-    held: dict[str, float] = {}
-    sources: list[str] = []
-    for segment_id, label, (start, end) in segments:
-        overlap = min(extent[1], end) - max(extent[0], start)
-        if overlap <= 0.0:
-            continue
-        held[label] = held.get(label, 0.0) + overlap
-        sources.append(segment_id)
-    labels = sorted(held)
-    seconds = [held[label] for label in labels]
-    attributed = sum(seconds)
-    dominant = max(seconds) if seconds else 0.0
-    return {
-        "speaker_labels": labels,
-        "speaker_seconds": [round(value, 6) for value in seconds],
-        "attributed_s": round(attributed, 6),
-        "dominant_s": round(dominant, 6),
-        "secondary_s": round(attributed - dominant, 6),
-        "extent_s": round(extent[1] - extent[0], 6),
-        "share": (dominant / attributed) if attributed > 0.0 else None,
-        "sources": sources,
-    }
 
 
 def _frame_rms(audio: Audio, frame_s: float) -> tuple[torch.Tensor, float]:
@@ -919,11 +879,18 @@ EXTENT_SECONDARY_SOURCE_S = "extent_secondary_source_s"
 """The seconds inside the task extent that a source other than the largest one holds."""
 
 EXTENT_DOMINANT_SHARE = "extent_dominant_speaker_share"
+"""The largest contributor's seconds inside the task extent over every attributed second inside it.
+
+Recorded beside the gate's reading; overlap counts toward the second voice here, so it decides nothing.
+"""
+
+EXTENT_DOMINANT_EXCLUSIVE_SHARE = "extent_dominant_exclusive_share"
 """The reading ``dominant_speaker_share_min`` is read against.
 
-The largest contributor's seconds inside the task extent over every attributed second inside it.
-``None`` when no diarized segment intersects the extent, and absent when PREPROCESS wrote no
-diarization derivative -- both of which a gate must turn into ``UNDETERMINED``, never ``False``.
+The largest contributor's seconds over those plus the time another speaker holds the extent alone, where
+that time reaches ``speech.secondary_exclusive_min_s`` (:func:`speakers_within`). ``None`` when no diarized
+segment intersects the extent, and absent when PREPROCESS wrote no diarization derivative -- both of which a
+gate must turn into ``UNDETERMINED``, never ``False``.
 """
 
 
@@ -1961,15 +1928,22 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
     # This reads the same segments against the extent the branch minted, and reaches no verdict.
     extent_speakers: Any = "no_task_extent" if not task_extents else "derivative_absent"
     if task_extents and read is not None:
-        within_act = store.activity(node=NODE, step="extent_speakers", parameters={"signal": read.signal})
+        exclusive_min_s = float(config.require("speech.secondary_exclusive_min_s"))
+        within_act = store.activity(
+            node=NODE,
+            step="extent_speakers",
+            parameters={"signal": read.signal, "secondary_exclusive_min_s": exclusive_min_s},
+        )
         store.was_associated_with(within_act, software)
         store.used(within_act, read.measurement_id)
         within_findings: list[Finding] = []
         readings = []
         for span_id, extent in task_extents:
-            reading = _speakers_within(extent, speaker_segments)
+            reading = speakers_within(extent, speaker_segments, exclusive_min_s=exclusive_min_s)
             readings.append(reading)
-            covariates = {key: value for key, value in reading.items() if key not in ("share", "sources")}
+            covariates = {
+                key: value for key, value in reading.items() if key not in ("share", "exclusive_share", "sources")
+            }
             evidence = (span_id, read.measurement_id, *reading["sources"])
             within_findings.append(
                 measured(
@@ -1988,6 +1962,17 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
                     extent[0],
                     extent[1],
                     reading["share"],
+                    *evidence,
+                    **covariates,
+                    diarizer=read.model,
+                )
+            )
+            within_findings.append(
+                measured(
+                    EXTENT_DOMINANT_EXCLUSIVE_SHARE,
+                    extent[0],
+                    extent[1],
+                    reading["exclusive_share"],
                     *evidence,
                     **covariates,
                     diarizer=read.model,

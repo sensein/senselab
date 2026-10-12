@@ -191,7 +191,7 @@ GATE_SPECS: dict[str, GateSpec] = _gate_specs(
         "expected_tokens_matched_min": GateSpec("expected_tokens_matched", AT_LEAST, int),
         "content_omission_fraction_max": GateSpec("expected_content_omitted_fraction", AT_MOST, float),
         "response_min_s": GateSpec("response_duration_s", AT_LEAST, float),
-        "dominant_speaker_share_min": GateSpec("extent_dominant_speaker_share", AT_LEAST, float),
+        "dominant_speaker_share_min": GateSpec("extent_dominant_exclusive_share", AT_LEAST, float),
         "items_min": GateSpec("items_produced", AT_LEAST, int),
         "events_min": GateSpec("airway_events_found", AT_LEAST, int),
         "instructed_count_min_fraction": GateSpec(INSTRUCTED_COUNT_FRACTION, AT_LEAST, float),
