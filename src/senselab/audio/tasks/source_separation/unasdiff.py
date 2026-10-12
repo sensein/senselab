@@ -111,12 +111,12 @@ from senselab.utils.data_structures.device import DeviceType
 from senselab.utils.data_structures.logging import logger
 from senselab.utils.subprocess_venv import (
     _clean_subprocess_env,
-    _find_uv,
     ensure_venv,
     parse_subprocess_result,
     stage_portable_audio_io,
     venv_python,
 )
+from senselab.utils.uv_tools import find_uv
 
 _UNASDIFF_VENV = "unasdiff"
 _UNASDIFF_PYTHON = "3.10"
@@ -183,7 +183,7 @@ def _ensure_flash_attn(venv_dir: Path) -> None:
     marker = venv_dir / _FLASH_ATTN_MARKER
     if not _flash_attn_requested() or marker.is_file():
         return
-    uv = _find_uv()
+    uv = find_uv(install=True)
     python = venv_python(venv_dir)
     subprocess.run([uv, "pip", "install", "--python", python, *_FLASH_ATTN_BUILD_REQUIREMENTS], check=True)
     subprocess.run(
