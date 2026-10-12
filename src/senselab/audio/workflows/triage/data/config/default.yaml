@@ -79,6 +79,10 @@ band_profile:
   ltas_bands: 24                       # SIZE: how many log-spaced bands span ltas_low_hz to Nyquist
   ltas_low_hz: 50.0                    # bottom edge of the lowest band; below it is rumble, not content
 
+# The phonetic posteriorgram's worker.
+ppg:
+  timeout_min_s: 1800.0                # the least the ppgs worker is allowed, whatever the audio's length
+
 # Auditory filterbank layout.
 gammatone:
   n_channels: 40                       # ERB-spaced channel count
