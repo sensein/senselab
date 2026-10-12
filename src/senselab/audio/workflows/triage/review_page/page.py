@@ -18,7 +18,7 @@ import re
 import shutil
 from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -161,6 +161,8 @@ class ListenSet:
         labels: The answers to choose from; the chosen one is the export's ``owner_label``.
         columns: The check columns, in display order.
         checks: Each listed stem's check values, in ``columns`` order.
+        proposed: Each listed stem's proposed extent ``(start_s, end_s)``, marked beside its current one.
+        directions: The answers to a second question, which way the proposed extent is off; empty for none.
     """
 
     name: str
@@ -168,6 +170,8 @@ class ListenSet:
     labels: tuple[str, ...]
     columns: tuple[str, ...]
     checks: Mapping[str, tuple[str, ...]]
+    proposed: Mapping[str, tuple[float, float]] = field(default_factory=dict)
+    directions: tuple[str, ...] = ()
 
 
 SOURCE_BASE = "/_source"
@@ -191,7 +195,8 @@ def index_of(
         audio_base: The URL prefix from the page to the scan root, used when the page is served.
         source_base: The URL route an absolute stream path (one outside the scan root) is appended to.
         listen: The listen set the page labels, or None for the triage verdicts. Its check values become
-            the ``checks`` column, one list per record in ``listen.columns`` order.
+            the ``checks`` column, one list per record in ``listen.columns`` order, and its proposed extents
+            the ``proposed_extent`` column.
 
     Returns:
         The index the page reads.
@@ -235,13 +240,21 @@ def index_of(
         "counts": dict(Counter(str(r.get("verdict")) for r in records)),
     }
     if listen is not None:
-        payload["listen"] = {
+        listened: dict[str, Any] = {
             "name": listen.name,
             "question": listen.question,
             "labels": list(listen.labels),
             "columns": list(listen.columns),
         }
+        if listen.directions:
+            listened["directions"] = list(listen.directions)
+        payload["listen"] = listened
         columns["checks"] = [list(listen.checks[r["stem"]]) if r["stem"] in listen.checks else None for r in records]
+        if listen.proposed:
+            columns["proposed_extent"] = [
+                [float(v) for v in listen.proposed[r["stem"]]] if r["stem"] in listen.proposed else None
+                for r in records
+            ]
     index = {"build": payload, "cols": columns, "evidence": evidence, "participants": participant_summaries(records)}
     payload["id"] = hashlib.sha256(json.dumps(index, sort_keys=True, default=str).encode()).hexdigest()[:12]
     return index

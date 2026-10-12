@@ -83,6 +83,11 @@ body.review { margin: 0; background: var(--ground); color: var(--ink); font: 13p
   cursor: pointer; }
 .rv-strip i { position: absolute; top: 0; bottom: 0; }
 .rv-strip i.ext { background: color-mix(in srgb, var(--accent) 45%, transparent); }
+.rv-strip.two { height: 14px; }
+.rv-strip.two i.ext { bottom: 50%; }
+.rv-strip i.prop { top: 50%; background: color-mix(in srgb, var(--c-violet) 55%, transparent); }
+.rv-play-span.prop { border-color: var(--c-violet); color: var(--c-violet); margin-left: 6px; }
+.rv-direction { margin: 4px 0; }
 .rv-strip i.head { width: 0; border-left: 2px solid var(--bad); }
 .rv-play-span { font: inherit; font-size: 12px; margin-top: 3px; padding: 1px 10px; border: 1px solid var(--accent);
   color: var(--accent); background: var(--panel); border-radius: 4px; cursor: pointer; }

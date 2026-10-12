@@ -94,6 +94,23 @@ def test_a_plain_stem_list_is_a_listen_set_without_checks(tmp_path: Path) -> Non
     assert listen.columns == () and set(listen.checks) == {"sub-a_ses-1_task-x", "sub-b_ses-1_task-y"}
 
 
+def test_a_listen_set_marks_a_proposed_extent_and_asks_its_direction(tmp_path: Path) -> None:
+    """``proposed_start_s``/``proposed_end_s`` become the ``proposed_extent`` column; directions join the listen."""
+    corpus = tmp_path / "corpus"
+    fixtures._run_root(corpus)
+    extract = tmp_path / "review.jsonl"
+    script.extract(corpus, extract, 1)
+    listed = tmp_path / "r37.tsv"
+    listed.write_text(f"stem\tstratum\tproposed_start_s\tproposed_end_s\n{fixtures.STEM}\tA1\t0.25\t1.5\n")
+    page_dir = tmp_path / "page"
+    argv = ["render", str(extract), "--out", str(page_dir), "--stems", str(listed), "--listen-set", "r37_extents"]
+    assert script.main([*argv, "--labels", "proposed_better,same", "--directions", "too_narrow,too_wide,ok"]) == 0
+    index = fixtures.page_module.read_index((page_dir / "index.html").read_text())
+    assert index["build"]["listen"]["directions"] == ["too_narrow", "too_wide", "ok"]
+    assert index["cols"]["proposed_extent"] == [[0.25, 1.5]]
+    assert index["cols"]["checks"] == [["A1", "0.25", "1.5"]]
+
+
 def test_a_speech_task_carries_its_marked_transcript(tmp_path: Path, monkeypatch: object) -> None:
     """The free-speech page's reader supplies the transcript view; the page keeps its HTML and findings."""
     fs = script._free_speech_page()

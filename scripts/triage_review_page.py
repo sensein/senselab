@@ -22,7 +22,9 @@ corpus root from the cluster and tunnel to it, then open http://localhost:8765/r
 
 A listen set is a page over only the recordings an owner was asked to label, with their own question and
 answers in place of the triage verdicts. ``--stems`` names the list: a TSV with a ``stem`` column, whose
-other columns, apart from the empty ``owner_*`` ones, are shown beside each recording as its checks::
+other columns, apart from the empty ``owner_*`` ones, are shown beside each recording as its checks.
+``proposed_start_s`` and ``proposed_end_s`` columns mark a proposed extent beside the current one, and
+``--directions`` asks which way it is off::
 
     uv run python scripts/triage_review_page.py render review.jsonl --out CORPUS/review_extent_check \
         --stems extent_check_listen.tsv --listen-set extent_check --labels yes,no,partly \
@@ -219,9 +221,13 @@ def load(path: Path, stems: Collection[str] | None = None) -> list[Mapping[str, 
 
 OWNER_PREFIX = "owner_"
 DEFAULT_LABELS = "pass,review,discard"
+PROPOSED_START = "proposed_start_s"
+PROPOSED_END = "proposed_end_s"
 
 
-def listen_set(path: Path, name: str, labels: Sequence[str], question: str) -> ListenSet:
+def listen_set(
+    path: Path, name: str, labels: Sequence[str], question: str, directions: Sequence[str] = ()
+) -> ListenSet:
     """A listen set read from its list.
 
     Args:
@@ -230,18 +236,26 @@ def listen_set(path: Path, name: str, labels: Sequence[str], question: str) -> L
         name: The export's ``listen_set``.
         labels: The answers to choose from.
         question: The question the answer is to.
+        directions: The answers to which way a proposed extent is off; empty for no such question. A TSV's
+            ``proposed_start_s`` and ``proposed_end_s`` columns give each recording's proposed extent.
 
     Returns:
         The listen set.
     """
     lines = [line for line in path.read_text().splitlines() if line.strip()]
     if not lines or "stem" not in lines[0].split("\t"):
-        return ListenSet(name, question, tuple(labels), (), {line.strip(): () for line in lines})
+        checks = {line.strip(): () for line in lines}
+        return ListenSet(name, question, tuple(labels), (), checks, directions=tuple(directions))
     rows = list(csv.DictReader(lines, delimiter="\t"))
     header = lines[0].split("\t")
     columns = tuple(c for c in header if c != "stem" and not c.startswith(OWNER_PREFIX))
     checks = {row["stem"]: tuple(row.get(c) or "" for c in columns) for row in rows}
-    return ListenSet(name, question, tuple(labels), columns, checks)
+    proposed = {
+        row["stem"]: (float(row[PROPOSED_START]), float(row[PROPOSED_END]))
+        for row in rows
+        if row.get(PROPOSED_START) and row.get(PROPOSED_END)
+    }
+    return ListenSet(name, question, tuple(labels), columns, checks, proposed, tuple(directions))
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -275,6 +289,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     renderer.add_argument("--listen-set", default=None, help="the listen set's name, its export's listen_set")
     renderer.add_argument("--labels", default=DEFAULT_LABELS, help="the listen set's answers, comma-separated")
     renderer.add_argument("--question", default="your decision", help="the question the listen set's answer is to")
+    renderer.add_argument(
+        "--directions", default="", help="answers to which way the proposed extent is off, comma-separated"
+    )
     arguments = parser.parse_args(argv)
     if arguments.command == "extract":
         summary = extract(
@@ -293,6 +310,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             arguments.listen_set or arguments.stems.stem,
             [label.strip() for label in arguments.labels.split(",") if label.strip()],
             arguments.question,
+            [d.strip() for d in arguments.directions.split(",") if d.strip()],
         )
     records = load(arguments.data, None if listen is None else listen.checks)
     written = write_page(
