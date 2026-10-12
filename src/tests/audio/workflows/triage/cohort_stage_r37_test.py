@@ -1,4 +1,4 @@
-"""COHORT's r37 amendments: speaker pools restricted to acoustic activity (B2); whether COHORT reads the participant (C2)."""
+"""COHORT's r37 amendments: speaker pools on acoustic activity (B2); whether COHORT reads the participant (C2)."""
 
 from __future__ import annotations
 

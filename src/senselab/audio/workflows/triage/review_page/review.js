@@ -1427,7 +1427,7 @@ var ReviewPage = (function () {
   }
 
   /** Who read an evidence item that names a speaker, with which model, and where: "source · model · spans". */
-  function readBy(it) {
+  function readerLabel(it) {
     if (!it.source) return '';
     var spans = (it.spans || []).map(function (s) { return fmt(s[0]) + '–' + fmt(s[1]) + ' s'; });
     return [it.source, it.model || null, spans.length ? spans.join(', ') : null]
@@ -1453,7 +1453,7 @@ var ReviewPage = (function () {
       tr.appendChild(el('td', null, it.unit || ''));
       tr.appendChild(el('td', 'v', it.comparison ? it.comparison + ' ' + fmt(it.threshold) : ''));
       tr.appendChild(el('td', null, it.effect || ''));
-      tr.appendChild(el('td', null, readBy(it)));
+      tr.appendChild(el('td', null, readerLabel(it)));
       t.appendChild(tr);
     });
     sec.appendChild(t);
@@ -1674,7 +1674,7 @@ var ReviewPage = (function () {
     decodeRows: decodeRows,
     columnSpecs: columnSpecs,
     evidenceGroups: evidenceGroups,
-    readBy: readBy,
+    readerLabel: readerLabel,
     groupByParticipant: groupByParticipant,
     participantLine: participantLine,
     axesFor: axesFor,

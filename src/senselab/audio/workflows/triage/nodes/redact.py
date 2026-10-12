@@ -1927,7 +1927,9 @@ def placeable_tokens(store: ProvStore) -> tuple[str, ...]:
     Returns:
         :func:`quote_tokens`' tokens over the timed consensus words.
     """
-    return tuple(token for token, _ in quote_tokens([word for word in consensus_words(store) if word.extent is not None]))
+    return tuple(
+        token for token, _ in quote_tokens([word for word in consensus_words(store) if word.extent is not None])
+    )
 
 
 def place_quote(quote: str, tokens: Sequence[tuple[str, Entity]]) -> list[Entity]:
@@ -2293,7 +2295,10 @@ def _heard_off_task(
     for quote in quotes:
         speech |= {word.id for word in place_quote(str(quote), tokens)}
     task = {
-        word.id for quote in (reading.get("task_content_quotes") or ()) if read for word in place_quote(str(quote), tokens)
+        word.id
+        for quote in (reading.get("task_content_quotes") or ())
+        if read
+        for word in place_quote(str(quote), tokens)
     }
     return _HeardOffTask(frozenset(speech), frozenset(task), frozenset(phrases), bool(extensive))
 

@@ -696,9 +696,7 @@ def word_from_attributes(attributes: Mapping[str, Any], extent: tuple[float, flo
         degenerate_sources=tuple(str(source) for source in attributes.get("degenerate_sources") or ()),
         untimed_sources=tuple(str(source) for source in attributes.get("untimed_sources") or ()),
         unconfirmed=bool(attributes.get("unconfirmed")),
-        arbitrated_source=None
-        if attributes.get("arbitrated_source") is None
-        else str(attributes["arbitrated_source"]),
+        arbitrated_source=None if attributes.get("arbitrated_source") is None else str(attributes["arbitrated_source"]),
         unlocated=bool(attributes.get("unlocated")),
     )
 

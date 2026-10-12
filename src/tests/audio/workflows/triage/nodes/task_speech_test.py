@@ -110,9 +110,7 @@ class TestSpeechInANonLexicalTask:
 
     def test_words_after_the_last_task_event_are_speech(self, store: ProvStore, tmp_path: Path) -> None:
         """r37 B3: the count-in said after the vowel's last hold is no longer task text; before it, it is."""
-        _seed_redact_store(
-            store, tmp_path, words=["1", "two", "aaaah", "three", "okay"], recording_stem=VOWEL_STEM
-        )
+        _seed_redact_store(store, tmp_path, words=["1", "two", "aaaah", "three", "okay"], recording_stem=VOWEL_STEM)
         activity = store.activity(node="VOICE", step="phonation", parameters={})
         write_measurement(
             store,
@@ -719,8 +717,9 @@ def test_the_narrative_families_are_the_free_responses() -> None:
     """r37 G1: story retell, free speech, picture description and open response; not items, sentences or DDK."""
     for family in ("cinderella-story", "story-recall", "free-speech", "picture-description", "open-response-questions"):
         assert narrative_family(family), family
-    for family in ("animal-fluency", "harvard-sentences-list", "word-color-stroop", "diadochokinesis-pa", None):
-        assert not narrative_family(family), family
+    for other in ("animal-fluency", "harvard-sentences-list", "word-color-stroop", "diadochokinesis-pa"):
+        assert not narrative_family(other), other
+    assert not narrative_family(None)
 
 
 def test_speech_before_the_task_is_its_words_and_their_span(store: ProvStore) -> None:

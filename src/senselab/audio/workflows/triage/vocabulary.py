@@ -3054,8 +3054,8 @@ def speaker_explanations(
     out["session_speaker_inconsistent"] = {"source": "cohort", "model": model}
     out["cohort.session_vs_other_sessions_cosine"] = {"source": "cohort", "model": model}
     for pool, name in (("target", "cohort.target_cosine"), ("non_task", "cohort.non_task_cosine")):
-        record = block.get(pool)
-        spans = record.get("spans") if isinstance(record, Mapping) else None
+        pooled = block.get(pool)
+        spans = pooled.get("spans") if isinstance(pooled, Mapping) else None
         out[name] = {"source": "cohort", "model": model, "spans": _spans_of(spans)}
     voice = dict(task.quality.get(OTHER_VOICE_KIND) or {})
     out[KEY_OTHER_VOICE_IN_TASK] = {"source": "residual", "model": None, "spans": _spans_of(voice.get("in"))}
