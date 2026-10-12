@@ -460,6 +460,8 @@ class TaskEvidence:
         extent_growth_s: How far bounded growth moved the task extent, or None where growth did not run.
         atypical: The readings of an attempted airway or syllable task that fall outside its family's corpus
             range (``data/task_extent.yaml`` ``atypical``); empty where none does.
+        task_background: The task events' level against the recording's background
+            (``task_events.background_reading``); empty where none was read.
         reviewer_other_spans: Where the reviewer's other-speaker quotes lie on the timed words.
     """
 
@@ -507,6 +509,7 @@ class TaskEvidence:
     extent_reviews: bool = False
     extent_growth_s: float | None = None
     atypical: tuple[str, ...] = ()
+    task_background: dict[str, Any] = field(default_factory=dict)
     reviewer_other_spans: tuple[tuple[float, float], ...] = ()
 
     @property
@@ -3259,6 +3262,7 @@ def replaced_task_inputs(
         reviewer_more_than_one=annotation.get("speakers") == "more_than_one",
         instructions_by_other=bool([t for t in annotation.get("instructions_spoken") or () if str(t).strip()])
         and annotation.get("other_speaker") in ("assistant", "background"),
+        event_over_background_db=task.task_background.get("event_over_background_db"),
     )
 
 

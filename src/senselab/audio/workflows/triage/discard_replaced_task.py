@@ -33,7 +33,8 @@ TASK_REPLACED_BY_TALK = "task_replaced_by_talk"
 RULE_NON_LEXICAL = "non_lexical"
 RULE_LEXICAL = "lexical"
 RULE_SHORT_RESPONSE = "short_response"
-RULES = (RULE_NON_LEXICAL, RULE_LEXICAL, RULE_SHORT_RESPONSE)
+RULE_BACKGROUND = "background"
+RULES = (RULE_NON_LEXICAL, RULE_LEXICAL, RULE_SHORT_RESPONSE, RULE_BACKGROUND)
 
 
 @cache
@@ -73,6 +74,8 @@ class ReplacedTaskInputs:
         reviewer_off_task: Whether the reviewer read off-task speech (some or extensive).
         reviewer_more_than_one: Whether the reviewer read more than one speaker.
         instructions_by_other: Whether the reviewer read the instructions spoken by an assistant or background voice.
+        event_over_background_db: The task events' level over the recording's background
+            (``task_events.background_reading``), or None where none was read.
     """
 
     family: str | None
@@ -85,6 +88,7 @@ class ReplacedTaskInputs:
     reviewer_off_task: bool = False
     reviewer_more_than_one: bool = False
     instructions_by_other: bool = False
+    event_over_background_db: float | None = None
 
 
 def _in_kinds(family: str, block: Mapping[str, Any]) -> bool:
@@ -117,6 +121,35 @@ def rule_family(family: str | None, params: Mapping[str, Any] | None = None) -> 
     return None
 
 
+def background_drowns(inputs: ReplacedTaskInputs, params: Mapping[str, Any] | None = None) -> dict[str, Any] | None:
+    """Whether the task's events stand too little over the recording's background (``background`` block).
+
+    Args:
+        inputs: The recording's readings.
+        params: The parameters; None reads the packaged ones.
+
+    Returns:
+        The rule's record where the block is on, the family's kind is one it reads, and the events stand under
+        ``event_over_background_db_max`` over the background; None otherwise.
+    """
+    p = params if params is not None else parameters()
+    block = p.get(RULE_BACKGROUND) or {}
+    bound = block.get("event_over_background_db_max")
+    value = inputs.event_over_background_db
+    if not block.get("enabled") or bound is None or value is None or not inputs.family:
+        return None
+    if not _in_kinds(inputs.family, block) or float(value) >= float(bound):
+        return None
+    return {
+        "rule": RULE_BACKGROUND,
+        "why": f"the task's events stand {float(value):.1f} dB over the recording's background",
+        "name": "event_over_background_db",
+        "value": round(float(value), 2),
+        "comparison": ">=",
+        "threshold": float(bound),
+    }
+
+
 def replaced_task(inputs: ReplacedTaskInputs, params: Mapping[str, Any] | None = None) -> dict[str, Any] | None:
     """Whether the task is absent or weak and talk outside it takes its place.
 
@@ -132,6 +165,9 @@ def replaced_task(inputs: ReplacedTaskInputs, params: Mapping[str, Any] | None =
     kind = rule_family(inputs.family, p)
     reviewer = inputs.reviewer_off_task or inputs.reviewer_more_than_one
     if kind == RULE_NON_LEXICAL:
+        drowned = background_drowns(inputs, p)
+        if drowned is not None:
+            return drowned
         block = p[RULE_NON_LEXICAL]
         if not inputs.duration_s or inputs.talk_words_n is None:
             return None

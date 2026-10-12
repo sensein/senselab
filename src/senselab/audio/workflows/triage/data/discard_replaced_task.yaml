@@ -1,7 +1,12 @@
 # Discard where the task is absent or weak and talk outside it takes its place (discard_replaced_task.py).
 # Derivations: specs/20261007-task-events-in-background/cross-dataset.md, "E1".
-version: 1
+version: 2
 enabled: false                     # owner, 2026-10-12: off until a sample of the candidates has been listened to
+
+background:                        # r37 round 2: the task's events against the recording's background (task_events.background_reading)
+  enabled: false                   # read beside the other rules; off until its own listen stratum is labelled
+  kinds: [airway]
+  event_over_background_db_max: null   # TO FIT: specs/20261012-r37-extents/design.md, "Events against background"
 
 non_lexical:                       # airway, voice, and the lexical families read as a voice task
   kinds: [airway, voice]

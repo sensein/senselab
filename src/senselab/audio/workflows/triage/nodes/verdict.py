@@ -699,6 +699,7 @@ def _task_evidence(
         extent_reviews=bool(task_extent_parameters()["completeness"]["reviews"]),
         extent_growth_s=growth_s,
         atypical=atypical_readings(cough, ddk),
+        task_background=background_of(reading, cough, ddk),
     )
 
 
@@ -831,6 +832,25 @@ def extent_reading(
         "outside_n": attributes.get("outside_n", 0),
         "checks": list(attributes.get("checks") or ()),
     }, None
+
+
+def background_of(
+    breath: Mapping[str, Any] | None, cough: Mapping[str, Any] | None, ddk: Mapping[str, Any] | None
+) -> dict[str, Any]:
+    """The owning reading's task events against the recording's background (``task_events.background_reading``).
+
+    Args:
+        breath: AIRWAY's breath reading, or None.
+        cough: AIRWAY's cough reading, or None.
+        ddk: SPEECH's syllable-task reading, or None.
+
+    Returns:
+        The first reading's ``background``; empty where none was read.
+    """
+    for reading in (breath, cough, ddk):
+        if reading is not None:
+            return dict((((reading.get("reading") or {}).get("evidence") or {}).get("background")) or {})
+    return {}
 
 
 def atypical_readings(cough: Mapping[str, Any] | None, ddk: Mapping[str, Any] | None) -> tuple[str, ...]:
