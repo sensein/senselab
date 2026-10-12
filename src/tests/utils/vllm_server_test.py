@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import socket
 import stat
 import subprocess
@@ -25,7 +26,7 @@ CANARY = "CANARY-7f3a"
 # that listens on a second port, prints one access line per request (never the body, unless asked to log
 # requests) and records its start and ready times.
 _FAKE = r"""
-import json, os, sys, time
+import json, os, signal, sys, time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 argv = sys.argv[1:]
@@ -56,6 +57,16 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):
+        broken = value("--fake-broken", "")
+        if broken and self.path == broken.split(":")[0]:
+            mode = broken.split(":")[1]
+            if mode == "http500":
+                return self.send_error(500)
+            body = b"not json" if mode == "notjson" else b"[1, 2]"
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            return self.wfile.write(body)
         if self.path == "/health":
             return self.reply({})
         if self.path == "/version":
@@ -72,6 +83,8 @@ class Handler(BaseHTTPRequestHandler):
 
 
 event("start")
+if "--fake-ignore-term" in flags:
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
 if "--fake-nofit" in flags:
     print("ValueError: the KV cache cannot hold max_model_len tokens", file=sys.stderr, flush=True)
     sys.exit(1)
@@ -80,7 +93,14 @@ if os.fork() == 0:
     side.serve_forever()
     os._exit(0)
 with open(os.path.join(out, "%d.json" % os.getpid()), "w") as handle:
-    json.dump({"pgid": os.getpgid(0), "ports": [int(value("--port")), side.server_port]}, handle)
+    json.dump(
+        {
+            "pgid": os.getpgid(0),
+            "ports": [int(value("--port")), side.server_port],
+            "devices": os.environ.get("CUDA_VISIBLE_DEVICES"),
+        },
+        handle,
+    )
 side.server_close()
 time.sleep(float(value("--fake-slow", "0")))
 main = HTTPServer(("127.0.0.1", int(value("--port"))), Handler)
@@ -223,28 +243,86 @@ def test_a_version_mismatch_is_version(fake: dict[str, Path]) -> None:
     assert all(_gone(info) for info in _infos(fake))
 
 
-def test_the_server_dies_with_its_owner(fake: dict[str, Path]) -> None:
-    """Killing the owner with SIGKILL takes the server and its grandchild down; both ports refuse."""
+def _hold(fake: dict[str, Path], *, own_session: bool) -> tuple[subprocess.Popen[bytes], dict[str, Any]]:
+    """Start a process that holds a server; return it once the server is up, with the server's record."""
     src = Path(vs.__file__).resolve().parents[2]
     env = {**os.environ, "PYTHONPATH": os.pathsep.join([str(src), os.environ.get("PYTHONPATH", "")])}
     holder = subprocess.Popen(  # noqa: S603 — this interpreter
         [sys.executable, "-c", _HOLDER, str(fake["exe"]), str(fake["model"]), str(fake["locks"])],
         stdout=subprocess.PIPE,
         env=env,
+        start_new_session=own_session,
     )
+    assert holder.stdout is not None
+    for line in holder.stdout:
+        if line.strip() == b"up":
+            break
+    else:
+        holder.wait()
+        pytest.fail("the owner exited before its server was up")
+    [info] = _infos(fake)
+    assert _group_alive(info["pgid"]) and not any(_refuses(port) for port in info["ports"])
+    return holder, info
+
+
+def test_the_server_dies_with_its_owner(fake: dict[str, Path]) -> None:
+    """Killing the owner with SIGKILL takes the server and its grandchild down; both ports refuse."""
+    holder, info = _hold(fake, own_session=False)
+    holder.kill()
+    holder.wait()
+    assert _gone(info)
+
+
+def test_the_server_dies_when_the_owners_group_is_killed(fake: dict[str, Path]) -> None:
+    """A SIGKILL to the owner's whole process group does not take the watchdog with it; the server goes too."""
+    holder, info = _hold(fake, own_session=True)
     try:
-        assert holder.stdout is not None
-        for line in holder.stdout:
-            if line.strip() == b"up":
-                break
-        else:
-            pytest.fail("the owner exited before its server was up")
-        [info] = _infos(fake)
-        assert _group_alive(info["pgid"]) and not any(_refuses(port) for port in info["ports"])
+        os.killpg(holder.pid, signal.SIGKILL)
     finally:
-        holder.kill()
         holder.wait()
     assert _gone(info)
+
+
+def test_devices_set_the_visible_devices_only_when_given(
+    fake: dict[str, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Explicit devices become the server's ``CUDA_VISIBLE_DEVICES``; without them the inherited value stays."""
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "3")
+    host = socket.gethostname()
+    for devices, seen, lock in [(["0", "1"], "0,1", "0-1"), (None, "3", "3")]:
+        for path in fake["out"].glob("*.json"):
+            path.unlink()
+        server = vs.VllmServer(
+            fake["exe"],
+            fake["model"],
+            server_args=[],
+            devices=devices,
+            start_lock_dir=fake["locks"],
+            expected_version="0.31.0",
+        )
+        assert server.lock_path.name == f"vllm-start-{host}-{lock}.lock"
+        with server:
+            [info] = _infos(fake)
+        assert info["devices"] == seen
+
+
+def test_a_broken_version_or_models_probe_is_version(fake: dict[str, Path]) -> None:
+    """An HTTP error, a body that is not JSON or JSON of the wrong shape on either probe is a ``version`` error."""
+    for path in ("/version", "/v1/models"):
+        for mode in ("http500", "notjson", "list"):
+            with pytest.raises(vs.VllmStartError) as caught:
+                with _server(fake, "--fake-broken", f"{path}:{mode}"):
+                    pass
+            assert caught.value.kind == "version", (path, mode, caught.value)
+    assert all(_gone(info) for info in _infos(fake))
+
+
+def test_a_server_that_ignores_sigterm_is_killed(fake: dict[str, Path], monkeypatch: pytest.MonkeyPatch) -> None:
+    """When the group outlives SIGTERM past the stop timeout, SIGKILL ends it."""
+    monkeypatch.setattr(vs, "STOP_TIMEOUT_S", 1.0)
+    with _server(fake, "--fake-ignore-term"):
+        [info] = _infos(fake)
+    assert _gone(info, timeout_s=5)
 
 
 def test_server_args_are_ordered_and_identity_is_stable() -> None:
@@ -317,5 +395,6 @@ def test_request_content_is_not_logged(fake: dict[str, Path], tmp_path: Path) ->
     assert stat.S_IMODE(log.stat().st_mode) == 0o600
     text = log.read_text()
     assert "POST /v1/completions" in text and CANARY not in text
-    with pytest.raises(ValueError):
-        _server(fake, "--enable-log-requests")
+    for flag in ("--enable-log-requests", "--enable-log-requests=true", "--enable-log-outputs"):
+        with pytest.raises(ValueError):
+            _server(fake, flag)
