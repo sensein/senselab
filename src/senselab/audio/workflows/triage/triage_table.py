@@ -297,7 +297,8 @@ def store_readings(view: StoreView, extent: tuple[float, float] | None) -> dict[
     over = (residual.attributes.get("foreground_minus_residual_db") or {}) if residual is not None else {}
     out["speech_over_residual_db"] = _number_or_none(over.get("whole")) if isinstance(over, Mapping) else None
     raw = view.last("measurement", name="disruptions_file")
-    out["clipped_s"] = _number_or_none(raw.attributes.get("clipped_s")) if raw is not None else None
+    clips = [e.extent[1] - e.extent[0] for e in view.live("span") if e.attributes.get("family") == "clip" and e.extent]
+    out["clipped_s"] = round(sum(clips), 4) if raw is not None else None
     out["dropout_s"] = _number_or_none(raw.attributes.get("dropout_s")) if raw is not None else None
     transcript = view.last("measurement", name="consensus_transcript")
     if transcript is not None:

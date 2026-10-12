@@ -335,3 +335,16 @@ def test_a_nonmatch_under_the_shared_bounds_stays_a_ground() -> None:
     reading[PARTICIPANT_NONMATCH] = {"recordings_compared_n": 10, "recordings_nonmatch_n": 1, "nonmatch_fraction": 0.1}
     assert not shared_nonmatch(reading)
     assert [key for _, key in cohort_grounds(reading)] == [KEY_OTHER_SPEAKER_IN_SESSION]
+
+
+def test_the_condition_reads_level_and_the_clip_detectors_spans_off_the_store() -> None:
+    """RMS from PREPROCESS's level; clipped seconds from the live clip spans; no level, no clipping reading."""
+    from senselab.audio.workflows.triage.cohort_stage import condition_readings
+    from senselab.utils.prov_store import ProvStore
+
+    store = ProvStore(run_id="r")
+    assert condition_readings(store, None) == {"rms_dbfs": None, "clipped_s": None, "snr_db": None}
+    store.entity(prov_type="measurement", extent=None, attributes={"name": "level", "rms_dbfs": -12.5})
+    store.entity(prov_type="span", extent=(1.0, 1.25), attributes={"family": "clip"})
+    store.entity(prov_type="span", extent=(3.0, 3.5), attributes={"family": "amplitude"})
+    assert condition_readings(store, None) == {"rms_dbfs": -12.5, "clipped_s": 0.25, "snr_db": None}
