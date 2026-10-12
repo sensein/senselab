@@ -20,7 +20,7 @@ participant:
   consistency_cosine_min: 0.63  # session vs other-sessions enrollment cosine under this is session_speaker_inconsistent; Tukey lower fence (Q1 - 1.5 IQR) over r18d, UNFITTED against labels
 
 # Recording condition per participant and session (level, SNR, clipping), read by cohort_fold.hot_or_clipped and
-# cohort_fold.condition_shift. Derivations: specs/20261007-task-events-in-background/design.md, "Recording condition".
+# cohort_fold.condition_shift. Derivations: specs/20261007-task-events-in-background/cross-dataset.md, "D1".
 condition:
   snr_percentiles: {floor: 10, level: 95}  # energy-envelope percentiles read as floor and active level (recording_vectors/evaluation.yaml frame)
   hot_rms_dbfs_min: -20.0                  # PROVISIONAL: a participant or session median RMS at or over this is hot

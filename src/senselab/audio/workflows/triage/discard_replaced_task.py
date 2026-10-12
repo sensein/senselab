@@ -12,7 +12,7 @@ Three rules, each over readings the fold already holds, with the bounds in
   median, and the reviewer reads off-task speech or an examiner speaking the instructions.
 
 The rule is switched by ``enabled``. The design and the measurements behind the bounds are
-``specs/20261007-task-events-in-background/design.md``, "Discard when talk replaces the task".
+``specs/20261007-task-events-in-background/cross-dataset.md``, "E1".
 """
 
 from __future__ import annotations
