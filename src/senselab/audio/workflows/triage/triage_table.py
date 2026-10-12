@@ -1,9 +1,10 @@
 """``triage.tsv``: one flat row per recording, over the decision tables.
 
 The decision, its decisive evidence and the acquisition readings come from ``triage_decisions`` and
-``triage_evidence`` (:mod:`~senselab.audio.workflows.triage.decision_tables`); the run tree supplies only
-the source path, the recording's duration and which task-audio files exist. The columns and their
-order are ``data/triage_table.yaml``.
+``triage_evidence`` (:mod:`~senselab.audio.workflows.triage.decision_tables`); the run tree supplies the
+source path, the recording's duration, which task-audio files exist and the whole-file readings its store
+holds (:func:`store_readings`); the recording vectors supply the whole-file SNR, noise floor and SQUIM
+(:data:`VECTOR_COLUMNS`). The columns and their order are ``data/triage_table.yaml``.
 """
 
 from __future__ import annotations
@@ -23,7 +24,7 @@ import pyarrow.compute as pc
 import yaml
 
 from senselab.audio.workflows.triage.nodes.branches import EXPECTATIONS
-from senselab.audio.workflows.triage.recording_vectors import RUN_SUBDIR, STORE_NAME
+from senselab.audio.workflows.triage.recording_vectors import RUN_SUBDIR, STORE_NAME, StoreView, read_store
 from senselab.audio.workflows.triage.routing_analysis.families import task_family, task_id_of
 from senselab.utils import fastio
 
@@ -41,11 +42,25 @@ TASK_AUDIO_COLUMNS = {
 }
 LEVEL_ITEM = "capture.level_rel_db"
 ACTIVE_ITEM = "capture.plain_active_s"
+LEXICAL_ITEM = "lexical_words"
+SPEECH_IN_TASK_ITEM = "speech_in_task"
 INTERFERENCE_PREFIX = "interference_in_task:"
 FAULT_PREFIX = "fault_in_task:"
 FOUND_ITEMS = ("breaths_found", "cough_onsets", "ddk_events_against_instructed", "ddk_events_found")
 INSTRUCTED_ITEMS = ("breaths_found", "coughs_against_instructed", "ddk_events_against_instructed")
-_SCALAR_ITEMS = frozenset({LEVEL_ITEM, ACTIVE_ITEM, *FOUND_ITEMS, *INSTRUCTED_ITEMS})
+_SCALAR_ITEMS = frozenset({LEVEL_ITEM, ACTIVE_ITEM, LEXICAL_ITEM, SPEECH_IN_TASK_ITEM, *FOUND_ITEMS, *INSTRUCTED_ITEMS})
+VECTOR_COLUMNS = {
+    "q_plain_snr_db": "snr_db",
+    "q_plain_floor_dbfs": "noise_floor_dbfs",
+    "q_plain_squim_pesq": "squim_pesq",
+    "q_plain_squim_stoi": "squim_stoi",
+    "q_plain_squim_si_sdr": "squim_si_sdr",
+}
+"""``recording_vectors`` column to ``triage.tsv`` column: the whole-file plain-stream readings."""
+SQUIM_COLUMNS = ("squim_pesq", "squim_stoi", "squim_si_sdr")
+NO_SQUIM_BRANCHES = ("AIRWAY",)
+"""Branches whose families SQUIM, a speech-quality estimate, does not describe: their SQUIM columns are empty."""
+WITHHELD = "withheld"
 
 
 @functools.cache
@@ -214,30 +229,97 @@ def acquisition(by_name: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:
         "fault_in_task": faults,
         "task_events_found": found,
         "task_events_instructed": instructed,
+        "lexical_words_n": value(LEXICAL_ITEM),
+        "speech_in_task_n": value(SPEECH_IN_TASK_ITEM),
     }
 
 
-def recording_stream(store_path: Path) -> dict[str, Any] | None:
-    """ADMIT's ``recording`` stream, read off the head of a store.
+def _number_or_none(value: Any) -> float | None:  # noqa: ANN401 -- a stored reading is any type
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(float(value)):
+        return None
+    return float(value)
+
+
+def _merged_length(spans: Iterable[tuple[float, float]]) -> float:
+    total, cursor = 0.0, -math.inf
+    for start, end in sorted(spans):
+        start = max(start, cursor)
+        if end > start:
+            total += end - start
+        cursor = max(cursor, end)
+    return total
+
+
+def _cohort_columns(reading: Mapping[str, Any] | None) -> dict[str, Any]:
+    """The speaker columns of a ``cohort_reading``."""
+    block = dict((reading or {}).get("other_speaker") or {})
+    measured = block.get("status") == "measured"
+
+    def cosine(pool: str) -> float | None:
+        record = block.get(pool) if measured else None
+        return _number_or_none(record.get("cosine")) if isinstance(record, Mapping) else None
+
+    consistency = dict(((reading or {}).get("checks") or {}).get("session_speaker_consistency") or {})
+    value = next(
+        (
+            c.get("value")
+            for c in consistency.get("comparisons") or ()
+            if c.get("name") == "session_vs_other_sessions_cosine"
+        ),
+        None,
+    )
+    return {
+        "speaker_target_cosine": cosine("target"),
+        "speaker_non_task_cosine": cosine("non_task"),
+        "session_consistency_cosine": _number_or_none(value),
+        "enrollment_source": block.get("enrollment_source") if reading else None,
+    }
+
+
+def store_readings(view: StoreView, extent: tuple[float, float] | None) -> dict[str, Any]:
+    """The whole-file readings ``triage.tsv`` takes from one store.
 
     Args:
-        store_path: A ``run/store.jsonl``.
+        view: The store.
+        extent: The task extent, for the masked seconds inside it, or None.
 
     Returns:
-        The first ``recording`` stream entity, or None where the store is unreadable or has none.
+        ``session_background_dbfs``, ``speech_over_residual_db``, ``clipped_s``, ``dropout_s``, the ASR
+        columns, ``off_task_words_n`` (the ledger's non-task speech words, where a ledger stands),
+        ``masked_s`` (the final masks' merged seconds inside the extent, where a ledger stands) and the
+        speaker columns. A key is None where the store holds no reading.
     """
-    try:
-        with store_path.open() as handle:
-            for line in handle:
-                if '"recording"' not in line:
-                    continue
-                record = json.loads(line)
-                attributes = record.get("attributes") or {}
-                if record.get("prov_type") == "stream" and attributes.get("name") == "recording":
-                    return record
-    except (OSError, ValueError):
-        return None
-    return None
+    out: dict[str, Any] = {}
+    floor = view.last("measurement", name="session_floor")
+    background = (floor.attributes.get("session_background") or {}) if floor is not None else {}
+    out["session_background_dbfs"] = _number_or_none(background.get("level_db"))
+    residual = view.last("measurement", name="speech_residual")
+    over = (residual.attributes.get("foreground_minus_residual_db") or {}) if residual is not None else {}
+    out["speech_over_residual_db"] = _number_or_none(over.get("whole")) if isinstance(over, Mapping) else None
+    raw = view.last("measurement", name="disruptions_file")
+    out["clipped_s"] = _number_or_none(raw.attributes.get("clipped_s")) if raw is not None else None
+    out["dropout_s"] = _number_or_none(raw.attributes.get("dropout_s")) if raw is not None else None
+    transcript = view.last("measurement", name="consensus_transcript")
+    if transcript is not None:
+        outcomes = dict(transcript.attributes.get("outcomes") or {})
+        words = sum(int(v) for v in outcomes.values() if isinstance(v, int))
+        out["asr_agreement"] = round(int(outcomes.get("agreement") or 0) / words, 4) if words else None
+        out["asr_single_hypothesis"] = transcript.attributes.get("single_hypothesis")
+        out["asr_degenerate_n"] = transcript.attributes.get("degenerate_n")
+    ledger = view.last("measurement", name="pii_ledger")
+    if ledger is not None:
+        out["off_task_words_n"] = len(ledger.attributes.get("non_task_speech_ids") or ())
+        masks = [
+            (float(m["start_s"]), float(m["end_s"]))
+            for m in ledger.attributes.get("final_masks") or ()
+            if isinstance(m, Mapping) and m.get("start_s") is not None and m.get("end_s") is not None
+        ]
+        if extent is not None:
+            masks = [(max(a, extent[0]), min(b, extent[1])) for a, b in masks if min(b, extent[1]) > max(a, extent[0])]
+        out["masked_s"] = round(_merged_length(masks), 3)
+    cohort = view.last("measurement", name="cohort_reading")
+    out.update(_cohort_columns(None if cohort is None else cohort.attributes))
+    return out
 
 
 def manifest_sources(path: Path) -> dict[str, str]:
@@ -270,9 +352,14 @@ def _relative(path: str, bids_root: Path) -> str:
 
 
 def run_tree_facts(
-    run_dir: str, audio_paths: Sequence[str], run_root: Path, bids_root: Path, source: str | None = None
+    run_dir: str,
+    audio_paths: Sequence[str],
+    run_root: Path,
+    bids_root: Path,
+    source: str | None = None,
+    extent: tuple[float, float] | None = None,
 ) -> dict[str, Any]:
-    """What only the run tree holds: the source path, the recording's duration, the task audio present.
+    """What only the run tree holds: the source path, the duration, the task audio present, the store's readings.
 
     Args:
         run_dir: The run directory, relative to ``run_root``.
@@ -281,19 +368,26 @@ def run_tree_facts(
         bids_root: The BIDS root the source path is given relative to.
         source: The manifest's source for this run, used where the store records no ``recording`` stream
             (ADMIT found the file unreadable).
+        extent: The task extent, for the masked seconds inside it.
 
     Returns:
-        ``source_path``, ``recording_duration_s`` and one ``task_audio_*`` key per cut that exists.
+        ``source_path``, ``recording_duration_s``, one ``task_audio_*`` key per cut that exists, and
+        :func:`store_readings`.
     """
     facts: dict[str, Any] = {}
-    stream = recording_stream(run_root / run_dir / RUN_SUBDIR / STORE_NAME)
+    try:
+        view = read_store(run_root / run_dir / RUN_SUBDIR / STORE_NAME)
+    except OSError:
+        view = None
+    stream = None if view is None else view.last("stream", name="recording")
     if stream is not None:
-        path = (stream.get("attributes") or {}).get("path")
+        path = stream.attributes.get("path")
         if path:
             facts["source_path"] = _relative(str(path), bids_root)
-        extent = stream.get("extent")
-        if extent:
-            facts["recording_duration_s"] = float(extent[1])
+        if stream.extent:
+            facts["recording_duration_s"] = float(stream.extent[1])
+    if view is not None:
+        facts.update(store_readings(view, extent))
     if "source_path" not in facts and source:
         facts["source_path"] = _relative(source, bids_root)
     for relative in audio_paths:
@@ -311,6 +405,7 @@ def rows(
     *,
     threads: int = fastio.DEFAULT_THREADS,
     sources: Mapping[str, str] | None = None,
+    vectors: pa.Table | None = None,
 ) -> Iterator[dict[str, Any]]:
     """One ``triage.tsv`` row per decision.
 
@@ -321,21 +416,42 @@ def rows(
         bids_root: The BIDS root.
         threads: Run-tree reads in flight.
         sources: :func:`manifest_sources`, the source of a run whose store records none.
+        vectors: ``recording_vectors``, read for :data:`VECTOR_COLUMNS` by stem; None leaves them empty.
 
     Yields:
         One mapping per recording, keyed by :func:`columns`.
     """
     by_stem = acquisition_by_stem(evidence)
+    by_vector = vector_readings(vectors)
     records = decisions.to_pylist()
     version = column_dictionary()["version"]
 
     def facts(record: Mapping[str, Any]) -> dict[str, Any]:
         run_dir = str(record["run_dir"])
         source = (sources or {}).get(Path(run_dir).name)
-        return run_tree_facts(run_dir, record.get("audio_paths") or (), run_root, bids_root, source)
+        start, end = record.get("extent_start_s"), record.get("extent_end_s")
+        extent = None if start is None or end is None else (float(start), float(end))
+        return run_tree_facts(run_dir, record.get("audio_paths") or (), run_root, bids_root, source, extent)
 
     for record, tree in zip(records, fastio.ordered_map(facts, records, threads=threads)):
-        yield row(record, by_stem.get(str(record["stem"]), {}), tree, version)
+        stem = str(record["stem"])
+        yield row(record, {**by_stem.get(stem, {}), **by_vector.get(stem, {})}, tree, version)
+
+
+def vector_readings(vectors: pa.Table | None) -> dict[str, dict[str, Any]]:
+    """The whole-file readings ``triage.tsv`` takes from the recording vectors.
+
+    Args:
+        vectors: ``recording_vectors`` (at least ``stem`` and the :data:`VECTOR_COLUMNS` it holds), or None.
+
+    Returns:
+        By stem, the readings keyed by their ``triage.tsv`` column; empty where no table was given.
+    """
+    if vectors is None:
+        return {}
+    present = [name for name in VECTOR_COLUMNS if name in vectors.column_names]
+    table = vectors.select(["stem", *present]).to_pylist()
+    return {str(r["stem"]): {VECTOR_COLUMNS[name]: _number_or_none(r.get(name)) for name in present} for r in table}
 
 
 def row(
@@ -354,32 +470,63 @@ def row(
     """
     verdict = decision.get("verdict")
     family = decision.get("declared_family") or task_family(task_id_of(str(decision.get("stem") or "")))
+    branch = branch_of(family)
+    reasons = list(decision.get("reasons") or ())
+    annotations = list(decision.get("annotations") or ())
+    duration = tree.get("recording_duration_s")
+    task_s = decision.get("extent_duration_s")
+    released = verdict != "discard" and decision.get("release") != WITHHELD
+    masked = tree.get("masked_s") if released else None
+    off_task = tree.get("off_task_words_n")
+    if off_task is None:
+        off_task = readings.get("speech_in_task_n")
+    squim = {name: None if branch in NO_SQUIM_BRANCHES else readings.get(name) for name in SQUIM_COLUMNS}
     return {
         "participant_id": decision.get("participant"),
         "session_id": decision.get("session"),
         "task": decision.get("task"),
         "task_family": family,
-        "branch": branch_of(family),
+        "branch": branch,
         "source_path": tree.get("source_path"),
         "verdict": verdict,
         "release": None if verdict == "discard" else decision.get("release"),
         "release_reason": None if verdict == "discard" else decision.get("release_reason"),
         "reason": decision.get("reason"),
-        "reasons": list(decision.get("reasons") or ()),
+        "reasons": reasons,
+        "issues_n": len(set(reasons)) + len(set(annotations)),
         "run_status": decision.get("run_status"),
         "missing": list(decision.get("missing") or ()),
-        "recording_duration_s": tree.get("recording_duration_s"),
+        "recording_duration_s": duration,
         "task_start_s": decision.get("extent_start_s"),
         "task_end_s": decision.get("extent_end_s"),
-        "task_duration_s": decision.get("extent_duration_s"),
+        "task_duration_s": task_s,
+        "task_fraction": None if not duration or task_s is None else round(float(task_s) / float(duration), 4),
         "task_events_found": readings.get("task_events_found"),
         "task_events_instructed": readings.get("task_events_instructed"),
-        "annotations": list(decision.get("annotations") or ()),
+        "annotations": annotations,
         "decisive_evidence": EVIDENCE_SEP.join(evidence_text(item) for item in decision.get("evidence") or ()),
         "level_rel_session_db": readings.get("level_rel_session_db"),
         "active_s": readings.get("active_s"),
         "interference_in_task": list(readings.get("interference_in_task") or ()),
         "fault_in_task": list(readings.get("fault_in_task") or ()),
+        "snr_db": readings.get("snr_db"),
+        "noise_floor_dbfs": readings.get("noise_floor_dbfs"),
+        "session_background_dbfs": tree.get("session_background_dbfs"),
+        "speech_over_residual_db": tree.get("speech_over_residual_db"),
+        **squim,
+        "clipped_s": tree.get("clipped_s"),
+        "dropout_s": tree.get("dropout_s"),
+        "lexical_words_n": readings.get("lexical_words_n"),
+        "off_task_words_n": off_task,
+        "asr_agreement": tree.get("asr_agreement"),
+        "asr_single_hypothesis": tree.get("asr_single_hypothesis"),
+        "asr_degenerate_n": tree.get("asr_degenerate_n"),
+        "masked_s": masked,
+        "masked_fraction": None if masked is None or not task_s else round(float(masked) / float(task_s), 4),
+        "speaker_target_cosine": tree.get("speaker_target_cosine"),
+        "speaker_non_task_cosine": tree.get("speaker_non_task_cosine"),
+        "session_consistency_cosine": tree.get("session_consistency_cosine"),
+        "enrollment_source": tree.get("enrollment_source"),
         "task_audio_plain": tree.get("task_audio_plain"),
         "task_audio_enhanced": tree.get("task_audio_enhanced"),
         "task_audio_redacted": tree.get("task_audio_redacted"),

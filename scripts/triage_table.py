@@ -2,7 +2,7 @@
 
     uv run python scripts/triage_table.py --decisions DIR/triage_decisions.parquet
         --evidence DIR/triage_evidence.parquet --run-root OUT --bids-root BIDS --out DIR/triage.tsv
-        [--manifest MANIFEST.jsonl]
+        [--manifest MANIFEST.jsonl] [--vectors DIR/recording_vectors.parquet]
 
 The decision tables are the ones ``scripts/triage_recording_vectors.py --merge`` writes; ``--run-root``
 is the tree they were built over. The columns are ``data/triage_table.yaml``, copied beside the TSV as
@@ -10,7 +10,8 @@ is the tree they were built over. The columns are ``data/triage_table.yaml``, co
 2, where the table would not be one row per recording (``triage_table.coverage_problems``): a stem, run
 directory or source path held twice, a row with no source path, or, with ``--manifest``, a run asked for
 and absent or present and not asked for. The manifest also supplies the source path of a run whose
-store records none.
+store records none. ``--vectors`` is the ``recording_vectors.parquet`` built over the same tree, read for the
+whole-file SNR, noise floor and SQUIM columns; without it they are empty. Every store is read, never written.
 """
 
 from __future__ import annotations
@@ -44,6 +45,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--bids-root", type=Path, required=True, help="The BIDS root source paths are relative to.")
     parser.add_argument("--out", type=Path, required=True, help="Where triage.tsv goes.")
     parser.add_argument("--manifest", type=Path, help="The run manifest (JSONL of stem, source) to check against.")
+    parser.add_argument("--vectors", type=Path, help="recording_vectors.parquet, for the whole-file quality columns.")
     parser.add_argument("--threads", type=int, default=fastio.DEFAULT_THREADS, help="Run-tree reads in flight.")
     args = parser.parse_args(argv)
 
@@ -59,9 +61,22 @@ def main(argv: list[str] | None = None) -> int:
             yield row
 
     sources = triage_table.manifest_sources(args.manifest) if args.manifest else None
+    vectors = None
+    if args.vectors is not None:
+        wanted = ["stem", *triage_table.VECTOR_COLUMNS]
+        present = set(pq.read_schema(args.vectors).names)
+        vectors = pq.read_table(args.vectors, columns=[name for name in wanted if name in present])
     built = list(
         counted(
-            triage_table.rows(decisions, evidence, args.run_root, args.bids_root, threads=args.threads, sources=sources)
+            triage_table.rows(
+                decisions,
+                evidence,
+                args.run_root,
+                args.bids_root,
+                threads=args.threads,
+                sources=sources,
+                vectors=vectors,
+            )
         )
     )
     problems = triage_table.coverage_problems(decisions, built, None if sources is None else sources.keys())

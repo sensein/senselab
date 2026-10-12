@@ -1,9 +1,11 @@
 # triage.tsv: one row per recording, built by triage_table.py from triage_decisions.parquet and
-# triage_evidence.parquet, plus the run tree for the source path, the recording's duration and which
-# task-audio files exist. No transcripts. A list is joined with ";", empty when there is none; a
-# missing value is an empty field. Columns are written in the order listed here. The files group is
-# relative to derivatives/senselab-triage/ and empty when the file is absent.
-version: 2
+# triage_evidence.parquet, plus the run tree for the source path, the recording's duration, which
+# task-audio files exist and the store's whole-file readings, and recording_vectors.parquet for the
+# whole-file SNR, noise floor and SQUIM. Quality readings are whole-file. No transcripts. A list is
+# joined with ";", empty when there is none; a missing value is an empty field. Columns are written in
+# the order listed here. The files group is relative to derivatives/senselab-triage/ and empty when the
+# file is absent.
+version: 3
 columns:
 - name: participant_id
   group: identity
@@ -38,6 +40,9 @@ columns:
 - name: reasons
   group: decision
   description: every reason key, joined with ";"
+- name: issues_n
+  group: decision
+  description: distinct reasons plus distinct annotation keys; 0 is a clean file
 - name: run_status
   group: decision
   description: whether every node the decision needed ran
@@ -56,6 +61,9 @@ columns:
 - name: task_duration_s
   group: task
   description: task_end_s minus task_start_s
+- name: task_fraction
+  group: task
+  description: task_duration_s over recording_duration_s
 - name: task_events_found
   group: task
   description: breaths, coughs or syllables/cycles the task layer found; empty for other families
@@ -80,6 +88,66 @@ columns:
 - name: fault_in_task
   group: acquisition
   description: capture faults touching the task extent, each kind:seconds, joined with ";"
+- name: snr_db
+  group: quality
+  description: the plain stream's active frame level (95th percentile) over its noise floor, whole file, dB (recording_vectors q_plain_snr_db)
+- name: noise_floor_dbfs
+  group: quality
+  description: the plain stream's 10th-percentile frame level, whole file, dBFS (recording_vectors q_plain_floor_dbfs)
+- name: session_background_dbfs
+  group: quality
+  description: the session's background level from the residual of its speech tasks, dBFS (SESSION's session_floor)
+- name: speech_over_residual_db
+  group: quality
+  description: the enhanced foreground over the residual, whole file, dB (speech_residual foreground_minus_residual_db); empty where the enhanced stream carries no speech
+- name: squim_pesq
+  group: quality
+  description: the median SQUIM PESQ over the plain stream's spans; empty for airway families
+- name: squim_stoi
+  group: quality
+  description: the median SQUIM STOI over the plain stream's spans; empty for airway families
+- name: squim_si_sdr
+  group: quality
+  description: the median SQUIM SI-SDR over the plain stream's spans, dB; empty for airway families
+- name: clipped_s
+  group: quality
+  description: seconds of clipping in the raw recording (disruptions_file)
+- name: dropout_s
+  group: quality
+  description: seconds of dropout in the raw recording (disruptions_file)
+- name: lexical_words_n
+  group: speech_content
+  description: lexical consensus words; empty where SPEECH did not read the recording
+- name: off_task_words_n
+  group: speech_content
+  description: words that are not the task's own content (the redaction ledger's non-task speech, else the speech words in a non-lexical task)
+- name: asr_agreement
+  group: speech_content
+  description: the share of consensus words both recognisers agree on
+- name: asr_single_hypothesis
+  group: speech_content
+  description: true where only one recogniser produced a transcript
+- name: asr_degenerate_n
+  group: speech_content
+  description: recogniser loop or garbage tokens dropped from the consensus
+- name: masked_s
+  group: speech_content
+  description: seconds of the task extent the redaction masks; empty when withheld or discarded
+- name: masked_fraction
+  group: speech_content
+  description: masked_s over task_duration_s; empty when withheld or discarded
+- name: speaker_target_cosine
+  group: speaker
+  description: the task's own speech, pooled, against the participant's enrollment (COHORT); empty where not compared
+- name: speaker_non_task_cosine
+  group: speaker
+  description: the speech outside the task, pooled, against the participant's enrollment (COHORT); empty where not compared
+- name: session_consistency_cosine
+  group: speaker
+  description: the session's enrollment against the participant's other sessions' (COHORT)
+- name: enrollment_source
+  group: speaker
+  description: what the cosines compare against, session, participant_other_sessions or none
 - name: task_audio_plain
   group: files
   description: the task extent cut from the plain stream
