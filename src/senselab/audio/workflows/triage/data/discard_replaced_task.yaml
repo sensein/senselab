@@ -1,5 +1,5 @@
 # Discard where the task is absent or weak and talk outside it takes its place (discard_replaced_task.py).
-# Derivations: specs/20261007-task-events-in-background/design.md, "Discard when talk replaces the task".
+# Derivations: specs/20261007-task-events-in-background/cross-dataset.md, "E1".
 version: 1
 enabled: false                     # owner, 2026-10-12: off until a sample of the candidates has been listened to
 
