@@ -13,6 +13,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -84,6 +85,14 @@ class Handler(BaseHTTPRequestHandler):
         body = self.rfile.read(int(self.headers["Content-Length"]))
         if "--enable-log-requests" in flags:
             print(body.decode(), flush=True)
+        if self.path == value("--fake-reject"):
+            error = {"error": {"message": "max_tokens is too large", "type": "BadRequestError", "code": 400}}
+            payload = json.dumps(error).encode()
+            self.send_response(400)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            return self.wfile.write(payload)
         kind = self.headers.get("Content-Type", "")
         record = {"path": self.path, "content_type": kind.split(";")[0]}
         if kind.startswith("multipart/form-data"):
@@ -544,7 +553,7 @@ def test_transcribe_posts_multipart_audio(fake: dict[str, Path], tmp_path: Path)
     }
     assert second["form"] == {"model": "m"}
     [(name, upload)] = first["files"].items()
-    assert name == "file" and upload["filename"] == "voice.wav" and upload["type"].startswith("audio/")
+    assert name == "file" and upload["filename"] == "audio.wav" and upload["type"].startswith("audio/")
     data = media["audio"].read_bytes()
     assert upload["size"] == len(data) and upload["sha256"] == hashlib.sha256(data).hexdigest()
     for sampling in ({"file": "x"}, {"model": "x"}, {"language": "x"}, {"prompt": "x"}):
@@ -625,3 +634,35 @@ def test_the_vllm_server_lock_is_committed_and_matches_its_requirements(
     monkeypatch.setattr(subprocess_venv, "ensure_venv", ensure_venv)
     assert vs.ensure_vllm_venv() == tmp_path / "venv" / "bin" / "vllm"
     assert calls == [(("vllm-server", ["vllm==0.31.0"]), {"python_version": "3.12", "max_cuda_version": (13, 0)})]
+
+
+def test_transcribe_refuses_unsafe_form_names_and_sends_a_fixed_file_name(
+    fake: dict[str, Path], tmp_path: Path
+) -> None:
+    """A quote, CR or LF in a field name or the file suffix is refused; the file goes up as ``audio<suffix>``."""
+    audio = tmp_path / f"{CANARY}.wav"
+    audio.write_bytes(b"RIFF\x24\x00\x00\x00WAVEfmt " + bytes(16))
+    for bad in ('a"b', "a\rb", "a\nb"):
+        with pytest.raises(ValueError):
+            vs.transcribe("http://127.0.0.1:9", "m", audio, sampling={bad: 1})
+    for suffix in ('.wa"v', ".wa\rv", ".wa\nv"):
+        odd = tmp_path / f"clip{suffix}"
+        odd.write_bytes(b"")
+        with pytest.raises(ValueError):
+            vs.transcribe("http://127.0.0.1:9", "m", odd, sampling={})
+    with _server(fake) as server:
+        assert server.url is not None
+        assert vs.transcribe(server.url, "m", audio, sampling={}) == {"text": "ok"}
+    [request] = _requests(fake)
+    assert request["files"]["file"]["filename"] == "audio.wav"
+    assert CANARY not in json.dumps(request)
+
+
+def test_an_http_error_carries_the_servers_error_body(fake: dict[str, Path]) -> None:
+    """A refused request raises ``HTTPError`` with the server's decoded error body in its message."""
+    with _server(fake, "--fake-reject", "/v1/completions") as server:
+        assert server.url is not None
+        with pytest.raises(urllib.error.HTTPError) as caught:
+            vs.complete(server.url, "m", [1], sampling={"max_tokens": 10**9})
+    assert caught.value.code == 400
+    assert "max_tokens is too large" in str(caught.value) and "BadRequestError" in str(caught.value)

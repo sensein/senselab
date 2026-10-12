@@ -30,6 +30,7 @@ import socket
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
@@ -494,9 +495,16 @@ def _refuse_reserved(sampling: Mapping[str, Any], reserved: Sequence[str]) -> No
 
 
 def _send(request: urllib.request.Request, timeout_s: float) -> Any:  # noqa: ANN401 — a JSON value
-    """Send a request without any proxy and parse the JSON reply; nothing is logged."""
-    with _NO_PROXY.open(request, timeout=timeout_s) as response:
-        return json.loads(response.read())
+    """Send a request without any proxy and parse the JSON reply; nothing is logged.
+
+    A refused request re-raises its ``HTTPError`` with the server's decoded error body in the message.
+    """
+    try:
+        with _NO_PROXY.open(request, timeout=timeout_s) as response:
+            return json.loads(response.read())
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace").strip()
+        raise urllib.error.HTTPError(exc.url, exc.code, f"{exc.reason}: {detail}", exc.headers, None) from exc
 
 
 def _post_json(url: str, body: Mapping[str, Any], timeout_s: float) -> Any:  # noqa: ANN401 — a JSON value
@@ -528,11 +536,14 @@ def chat(
 
     Raises:
         ValueError: If ``sampling`` sets ``model``, ``messages`` or ``stream``.
-        urllib.error.HTTPError: If the server refuses the request.
+        urllib.error.HTTPError: If the server refuses the request; the message carries the server's error body.
     """
     _refuse_reserved(sampling, ("model", "messages", "stream"))
     body = {"model": model, "messages": list(messages), **sampling, "stream": False}
     return _post_json(f"{url}/v1/chat/completions", body, timeout_s)
+
+
+_UNSAFE_HEADER_CHARS = ('"', "\r", "\n")
 
 
 def _form_value(name: str, value: Any) -> str:  # noqa: ANN401 — a scalar form value
@@ -558,7 +569,7 @@ def transcribe(
     Args:
         url: The server's base URL.
         model: The served model name.
-        audio_path: The audio file.
+        audio_path: The audio file. It is sent as ``audio<suffix>``, so its name never leaves the host.
         language: The audio's language, sent only when given.
         prompt: A prompt for the transcription, sent only when given.
         sampling: Further scalar form fields (``temperature``, ``response_format``, ...); a bool is sent as
@@ -569,22 +580,27 @@ def transcribe(
         The parsed reply.
 
     Raises:
-        ValueError: If ``sampling`` sets ``file``, ``model``, ``language`` or ``prompt``.
+        ValueError: If ``sampling`` sets ``file``, ``model``, ``language`` or ``prompt``, or a field name or the
+            file's suffix holds a quote, CR or LF.
         TypeError: If a ``sampling`` value is not a string, number or bool.
-        urllib.error.HTTPError: If the server refuses the request.
+        urllib.error.HTTPError: If the server refuses the request; the message carries the server's error body.
     """
     _refuse_reserved(sampling, ("file", "model", "language", "prompt"))
     fields = {"model": model, "language": language, "prompt": prompt}
     form = [(name, value) for name, value in fields.items() if value is not None]
     form += [(name, _form_value(name, value)) for name, value in sampling.items()]
     path = Path(audio_path)
+    filename = f"audio{path.suffix}"
+    for text in [name for name, _ in form] + [filename]:
+        if any(char in text for char in _UNSAFE_HEADER_CHARS):
+            raise ValueError(f"{text!r} holds a quote, CR or LF, which a multipart header cannot carry")
     boundary = uuid.uuid4().hex
     chunks: list[bytes] = []
     for name, value in form:
         chunks.append(f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"\r\n\r\n{value}\r\n'.encode())
-    mime = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+    mime = mimetypes.guess_type(filename)[0] or "application/octet-stream"
     chunks.append(
-        f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="{path.name}"\r\n'
+        f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="{filename}"\r\n'
         f"Content-Type: {mime}\r\n\r\n".encode()
     )
     chunks += [path.read_bytes(), f"\r\n--{boundary}--\r\n".encode()]
@@ -620,7 +636,7 @@ def complete(
     Raises:
         ValueError: If the prompt is empty or holds anything but non-negative ints, or ``sampling`` sets
             ``model``, ``prompt`` or ``stream``.
-        urllib.error.HTTPError: If the server refuses the request.
+        urllib.error.HTTPError: If the server refuses the request; the message carries the server's error body.
     """
     ids = list(prompt_token_ids)
     if not ids or not all(isinstance(i, int) and not isinstance(i, bool) and i >= 0 for i in ids):
