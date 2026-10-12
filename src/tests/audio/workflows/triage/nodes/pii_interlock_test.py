@@ -31,6 +31,7 @@ from senselab.audio.workflows.triage.nodes.common import live_entities
 from senselab.audio.workflows.triage.nodes.ddk import CV_AUTHORITY, INSTRUMENT_READING, TRANSCRIPT_CLAIM
 from senselab.audio.workflows.triage.nodes.redact import _pii_marked_words, redact
 from senselab.audio.workflows.triage.nodes.speech import _hypotheses, speech
+from senselab.audio.workflows.triage.task_extent import task_extent_parameters
 from senselab.audio.workflows.triage.vocabulary import Outcome
 from senselab.text.tasks.pii_detection.api import PiiScan, PiiSpan, default_detectors
 from senselab.utils.data_structures import ScriptLine
@@ -406,6 +407,7 @@ def _ddk_store(
     Returns:
         ``(store, the texts handed to scan_for_pii)``.
     """
+    monkeypatch.setitem(task_extent_parameters()["trim"], "enabled", False)
     seed_preprocess_store(store, duration_s=DURATION_S, words=_place(DDK_WORDS))
     _seed_level(store, tmp_path)
     _seed_ppg(store, tmp_path)
