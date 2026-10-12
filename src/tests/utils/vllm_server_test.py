@@ -1,7 +1,9 @@
-"""The vLLM server lifecycle against a fake ``vllm``: the start lock, start failures, owner death, args and logs."""
+"""The vLLM server and its clients against a fake ``vllm``: lifecycle, args, logs and request shapes."""
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 import os
 import signal
@@ -24,9 +26,12 @@ CANARY = "CANARY-7f3a"
 
 # A stand-in for ``vllm serve``: /health, /version and /v1/models through http.server. It forks a grandchild
 # that listens on a second port, prints one access line per request (never the body, unless asked to log
-# requests) and records its start and ready times.
+# requests) and records its start and ready times. Each POST is recorded in requests.jsonl (a JSON body as is; a
+# multipart body as its form fields and, per file, its name, type, size and digest).
 _FAKE = r"""
-import json, os, signal, sys, time
+import hashlib, json, os, signal, sys, time
+from email.parser import BytesParser
+from email.policy import HTTP
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 argv = sys.argv[1:]
@@ -79,7 +84,32 @@ class Handler(BaseHTTPRequestHandler):
         body = self.rfile.read(int(self.headers["Content-Length"]))
         if "--enable-log-requests" in flags:
             print(body.decode(), flush=True)
-        self.reply({"choices": []})
+        kind = self.headers.get("Content-Type", "")
+        record = {"path": self.path, "content_type": kind.split(";")[0]}
+        if kind.startswith("multipart/form-data"):
+            form = BytesParser(policy=HTTP).parsebytes(b"Content-Type: " + kind.encode() + b"\r\n\r\n" + body)
+            record["form"], record["files"] = {}, {}
+            for part in form.iter_parts():
+                name = part.get_param("name", header="content-disposition")
+                data = part.get_payload(decode=True)
+                if part.get_filename() is None:
+                    record["form"][name] = data.decode()
+                else:
+                    record["files"][name] = {
+                        "filename": part.get_filename(),
+                        "type": part.get_content_type(),
+                        "size": len(data),
+                        "sha256": hashlib.sha256(data).hexdigest(),
+                    }
+        else:
+            record["json"] = json.loads(body)
+        with open(os.path.join(out, "requests.jsonl"), "a") as handle:
+            handle.write(json.dumps(record) + "\n")
+        if self.path == "/v1/chat/completions":
+            return self.reply({"choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}}]})
+        if self.path == "/v1/audio/transcriptions":
+            return self.reply({"text": "ok"})
+        self.reply({"choices": [{"index": 0, "text": "ok", "token_ids": [7, 8]}]})
 
 
 event("start")
@@ -398,3 +428,200 @@ def test_request_content_is_not_logged(fake: dict[str, Path], tmp_path: Path) ->
     for flag in ("--enable-log-requests", "--enable-log-requests=true", "--enable-log-outputs"):
         with pytest.raises(ValueError):
             _server(fake, flag)
+
+
+def _requests(fake: dict[str, Path]) -> list[dict[str, Any]]:
+    path = fake["out"] / "requests.jsonl"
+    return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
+
+
+def _media(tmp_path: Path) -> dict[str, Path]:
+    """Tiny local image, video and audio files in one directory."""
+    media = tmp_path / "media"
+    media.mkdir()
+    files = {
+        "image": (media / "frame.png", b"\x89PNG\r\n\x1a\n" + bytes(16)),
+        "video": (media / "clip.mp4", b"\x00\x00\x00\x18ftypmp42" + bytes(16)),
+        "audio": (media / "voice.wav", b"RIFF\x24\x00\x00\x00WAVEfmt " + bytes(16)),
+    }
+    for path, data in files.values():
+        path.write_bytes(data)
+    return {"dir": media, **{kind: path for kind, (path, _) in files.items()}}
+
+
+def _b64(path: Path) -> str:
+    return base64.b64encode(path.read_bytes()).decode()
+
+
+def test_chat_sends_image_video_and_audio_parts(fake: dict[str, Path], tmp_path: Path) -> None:
+    """Text, image, video and audio parts reach the server in order: local files inline, or as file URLs."""
+    media = _media(tmp_path)
+    messages: list[dict[str, Any]] = [
+        {"role": "system", "content": "Describe the clip."},
+        {
+            "role": "user",
+            "content": [
+                vs.content_part("text", "What happens?"),
+                vs.content_part("image", media["image"]),
+                vs.content_part("image", str(media["image"])),
+                vs.content_part("video", media["video"]),
+                vs.content_part("audio", media["audio"]),
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                vs.content_part("video", media["video"], local_media_dir=media["dir"]),
+                vs.content_part("image", "https://example.org/frame.png"),
+            ],
+        },
+    ]
+    with _server(fake) as server:
+        assert server.url is not None
+        reply = vs.chat(server.url, "m", messages, sampling={"temperature": 0.0, "max_tokens": 8, "seed": 3})
+    assert reply["choices"][0]["message"]["content"] == "ok"
+    [request] = _requests(fake)
+    assert request["path"] == "/v1/chat/completions" and request["content_type"] == "application/json"
+    body = request["json"]
+    sent = body["messages"]
+    shape = [[part["type"] for part in m["content"]] if isinstance(m["content"], list) else "text" for m in sent]
+    assert shape == ["text", ["text", "image_url", "image_url", "video_url", "input_audio"], ["video_url", "image_url"]]
+    parts, local = sent[1]["content"], sent[2]["content"]
+    assert parts[0] == {"type": "text", "text": "What happens?"}
+    image_url = f"data:image/png;base64,{_b64(media['image'])}"
+    assert parts[1]["image_url"]["url"] == parts[2]["image_url"]["url"] == image_url
+    assert parts[3]["video_url"]["url"] == f"data:video/mp4;base64,{_b64(media['video'])}"
+    assert parts[4]["input_audio"] == {"data": _b64(media["audio"]), "format": "wav"}
+    assert local[0]["video_url"]["url"] == media["video"].resolve().as_uri()
+    assert local[1]["image_url"]["url"] == "https://example.org/frame.png"
+    assert {key: body[key] for key in ("model", "temperature", "max_tokens", "seed", "stream")} == {
+        "model": "m",
+        "temperature": 0.0,
+        "max_tokens": 8,
+        "seed": 3,
+        "stream": False,
+    }
+    elsewhere = tmp_path / "elsewhere.mp4"
+    elsewhere.write_bytes(b"")
+    refused = [
+        lambda: vs.content_part("video", elsewhere, local_media_dir=media["dir"]),
+        lambda: vs.content_part("audio", "https://example.org/voice.wav"),
+        lambda: vs.content_part("image", tmp_path / "frame.unknownext"),
+        lambda: vs.content_part("smell", "x"),
+        lambda: vs.chat("http://127.0.0.1:9", "m", messages, sampling={"messages": []}),
+    ]
+    for call in refused:
+        with pytest.raises(ValueError):
+            call()
+    assert len(_requests(fake)) == 1
+
+
+def test_transcribe_posts_multipart_audio(fake: dict[str, Path], tmp_path: Path) -> None:
+    """The audio file and the form fields go up as multipart; language and prompt only when given."""
+    media = _media(tmp_path)
+    with _server(fake) as server:
+        assert server.url is not None
+        reply = vs.transcribe(
+            server.url,
+            "m",
+            media["audio"],
+            language="en",
+            prompt="A child and a parent.",
+            sampling={"temperature": 0.2, "response_format": "json", "use_beam_search": False},
+        )
+        bare = vs.transcribe(server.url, "m", media["audio"], sampling={})
+    assert reply == bare == {"text": "ok"}
+    first, second = _requests(fake)
+    assert first["path"] == second["path"] == "/v1/audio/transcriptions"
+    assert first["content_type"] == "multipart/form-data"
+    assert first["form"] == {
+        "model": "m",
+        "language": "en",
+        "prompt": "A child and a parent.",
+        "temperature": "0.2",
+        "response_format": "json",
+        "use_beam_search": "false",
+    }
+    assert second["form"] == {"model": "m"}
+    [(name, upload)] = first["files"].items()
+    assert name == "file" and upload["filename"] == "voice.wav" and upload["type"].startswith("audio/")
+    data = media["audio"].read_bytes()
+    assert upload["size"] == len(data) and upload["sha256"] == hashlib.sha256(data).hexdigest()
+    for sampling in ({"file": "x"}, {"model": "x"}, {"language": "x"}, {"prompt": "x"}):
+        with pytest.raises(ValueError):
+            vs.transcribe("http://127.0.0.1:9", "m", media["audio"], sampling=sampling)
+    with pytest.raises(TypeError):
+        vs.transcribe("http://127.0.0.1:9", "m", media["audio"], sampling={"timestamp_granularities": ["word"]})
+    assert len(_requests(fake)) == 2
+
+
+def test_complete_sends_token_ids(fake: dict[str, Path]) -> None:
+    """The prompt goes up as token ids with the sampling settings; the parsed reply comes back."""
+    sampling = {"max_tokens": 4, "temperature": 0.0, "stop_token_ids": [2], "return_token_ids": True}
+    with _server(fake) as server:
+        assert server.url is not None
+        reply = vs.complete(server.url, "m", [101, 7, 0], sampling=sampling)
+    assert reply["choices"][0]["token_ids"] == [7, 8]
+    [request] = _requests(fake)
+    assert request["path"] == "/v1/completions"
+    assert request["json"] == {"model": "m", "prompt": [101, 7, 0], **sampling, "stream": False}
+    bad: list[list[Any]] = [[], [1, "2"], [1, -1], [True]]
+    for ids in bad:
+        with pytest.raises(ValueError):
+            vs.complete("http://127.0.0.1:9", "m", ids, sampling={})
+    with pytest.raises(ValueError):
+        vs.complete("http://127.0.0.1:9", "m", [1], sampling={"prompt": "x"})
+
+
+def test_clients_bypass_the_proxy_on_loopback(
+    fake: dict[str, Path], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With every proxy variable pointing at a closed port, all three clients still reach the loopback server."""
+    media = _media(tmp_path)
+    with _server(fake) as server:
+        assert server.url is not None
+        for variable in ("http_proxy", "HTTP_PROXY", "https_proxy", "HTTPS_PROXY", "all_proxy", "ALL_PROXY"):
+            monkeypatch.setenv(variable, "http://127.0.0.1:9")
+        for no_proxy in ("127.0.0.1", None):
+            for variable in ("no_proxy", "NO_PROXY"):
+                if no_proxy is None:
+                    monkeypatch.delenv(variable, raising=False)
+                else:
+                    monkeypatch.setenv(variable, no_proxy)
+            text: list[dict[str, Any]] = [{"role": "user", "content": [vs.content_part("text", "hi")]}]
+            assert vs.chat(server.url, "m", text, sampling={})["choices"]
+            assert vs.transcribe(server.url, "m", media["audio"], sampling={}) == {"text": "ok"}
+            assert vs.complete(server.url, "m", [1], sampling={})["choices"]
+    paths = ["/v1/chat/completions", "/v1/audio/transcriptions", "/v1/completions"]
+    assert [request["path"] for request in _requests(fake)] == paths * 2
+
+
+def test_the_vllm_server_lock_is_committed_and_matches_its_requirements(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The committed lock was compiled from the registered requirements, and the venv is built from it."""
+    from senselab.utils import subprocess_venv, venv_lock
+
+    assert (vs.VLLM_VENV, vs.VLLM_REQUIREMENTS, vs.VLLM_PYTHON, vs.VLLM_MAX_CUDA) == (
+        "vllm-server",
+        ["vllm==0.31.0"],
+        "3.12",
+        (13, 0),
+    )
+    path = venv_lock.lock_path(vs.VLLM_VENV)
+    lock = venv_lock.parse_lock(path)
+    assert lock.requirements_sha256 == venv_lock.requirements_sha256(
+        vs.VLLM_REQUIREMENTS, vs.VLLM_PYTHON, vs.VLLM_MAX_CUDA
+    )
+    assert lock.python == "3.12" and lock.header["torch-index"] == "cu130"
+    assert lock.header["exclude-newer"] == "2026-10-10T00:00:00Z"
+    assert any(line.startswith("vllm==0.31.0 ") for line in path.read_text().splitlines())
+    calls: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
+
+    def ensure_venv(*args: Any, **kwargs: Any) -> Path:  # noqa: ANN401
+        calls.append((args, kwargs))
+        return tmp_path / "venv"
+
+    monkeypatch.setattr(subprocess_venv, "ensure_venv", ensure_venv)
+    assert vs.ensure_vllm_venv() == tmp_path / "venv" / "bin" / "vllm"
+    assert calls == [(("vllm-server", ["vllm==0.31.0"]), {"python_version": "3.12", "max_cuda_version": (13, 0)})]
