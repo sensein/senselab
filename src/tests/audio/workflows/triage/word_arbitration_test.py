@@ -116,6 +116,21 @@ def test_an_unlocated_word_with_no_neighbour_after_runs_to_the_end() -> None:
     assert result.words[1].mask_gap == (round(result.words[0].extent[1], 3), 60.0)
 
 
+def test_in_a_voice_task_the_gap_leaves_out_the_held_phonation_where_a_placement_lies_beside_it() -> None:
+    """061cec48: the gap is the whole vowel; the word lies after it, where one recogniser placed it."""
+    words = _words([("one", 0.5), ("red", 8.0), ("blue", 17.0)], [("one", 0.5), ("red", 16.0), ("blue", 17.0)])
+    result = arbitrate(words, on_sound=[(0.4, 0.9), (16.9, 17.4)], off_limits=[(1.0, 15.0)], duration_s=20.0)
+    middle = result.words[1]
+    assert middle.unlocated and middle.mask_gap == (15.0, round(result.words[2].extent[0], 3))
+
+
+def test_with_no_placement_beside_the_held_phonation_the_gap_stays_whole() -> None:
+    """1f06eb2c: both placements lie on the phonation, so the whole gap is masked (and the release reads empty)."""
+    words = _words([("red", 5.0), ("blue", 17.0)], [("red", 2.0), ("blue", 17.0)])
+    result = arbitrate(words, on_sound=[(16.9, 17.4)], off_limits=[(1.0, 15.0)], duration_s=20.0)
+    assert result.words[0].mask_gap == (0.0, round(result.words[1].extent[0], 3))
+
+
 def test_held_voicing_is_a_long_voiced_run_bridged_over_short_gaps() -> None:
     """A two-second vowel with a 0.1 s break is one held run; a 0.4 s word is none."""
     times = np.arange(0.0, 5.0, 0.01)
