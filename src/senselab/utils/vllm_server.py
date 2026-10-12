@@ -33,11 +33,18 @@ HOST = "127.0.0.1"
 """The only address a server listens on."""
 
 START_ERROR_KINDS = ("exited", "timeout", "version", "snapshot")
-"""Why a server failed to start: it exited before it was healthy (a KV cache that cannot hold
-``max_model_len`` included), it was not healthy in time, or it serves another version or snapshot."""
+"""Why a server failed to start.
 
-REQUEST_LOGGING_FLAG = "--enable-log-requests"
-"""The server flag that would write request content to the log; it is refused."""
+- ``exited``: it exited before it was healthy. This covers a KV cache that cannot hold ``max_model_len``, and
+  also a port taken between :func:`_free_port` releasing it and the server binding it (a process outside the
+  start lock can take it in that window).
+- ``timeout``: it was not healthy in time.
+- ``version``: it reports another version, or its ``/version`` or ``/v1/models`` probe failed (an HTTP error, a
+  body that is not JSON, or JSON of the wrong shape).
+- ``snapshot``: it serves another snapshot."""
+
+CONTENT_LOGGING_FLAGS = ("--enable-log-requests", "--enable-log-outputs")
+"""Server flags (bare or ``flag=value``) that would write request or output content to the log; refused."""
 
 SERVER_FLAGS = (
     ("max_model_len", "--max-model-len"),
@@ -60,7 +67,8 @@ STOP_TIMEOUT_S = 60.0
 
 _NO_PROXY = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
-# Runs as ``python -c _WATCHDOG <owner pid> <server group>``, a child of the owner in the owner's group. It kills
+# Runs as ``python -c _WATCHDOG <owner pid> <server group>``, a child of the owner in a session of its own, so a
+# signal to the owner's whole group does not reach it. It kills
 # the server group once the owner is gone: on the SIGTERM PR_SET_PDEATHSIG sends when the owner dies, or when its
 # parent is no longer the owner. A SIGTERM while the owner lives (the owning thread ended) is ignored.
 _WATCHDOG = r"""
@@ -118,10 +126,16 @@ def _free_port() -> int:
         return int(probe.getsockname()[1])
 
 
-def _get(url: str, timeout_s: float = 60.0) -> Any:  # noqa: ANN401 — parsed JSON
-    with _NO_PROXY.open(url, timeout=timeout_s) as response:
-        raw = response.read()
-    return json.loads(raw) if raw else None
+def _probe(url: str, key: str, timeout_s: float = 60.0) -> Any:  # noqa: ANN401 — a JSON value
+    """``GET url`` and return the body's ``key``; any failure is a ``version`` start error."""
+    try:
+        with _NO_PROXY.open(url, timeout=timeout_s) as response:
+            body = json.loads(response.read())
+        if not isinstance(body, dict):
+            raise ValueError(f"the body is {type(body).__name__}, not an object")
+        return body.get(key)
+    except (OSError, http.client.HTTPException, ValueError) as exc:
+        raise VllmStartError("version", f"probe {url} failed: {exc}") from exc
 
 
 def _healthy(url: str) -> bool:
@@ -143,11 +157,11 @@ class VllmServer:
     """One ``vllm serve`` over a model snapshot, listening on a free loopback port while the context is open.
 
     On entry it takes ``fcntl.flock`` on ``<start_lock_dir>/vllm-start-<host>-<devices>.lock``, starts
-    ``<executable> serve <model_dir> --host 127.0.0.1 --port <port> *server_args`` in its own session with
-    ``CUDA_VISIBLE_DEVICES`` set to ``devices``, waits for ``/health`` and releases the lock. It then checks that
-    ``GET /version`` is ``expected_version`` and that the served model's root ends in ``model_dir``'s last
-    component (the ``snapshots/<commit>`` name). On exit, and on any start failure, the server's process group
-    gets SIGTERM, then SIGKILL.
+    ``<executable> serve <model_dir> --host 127.0.0.1 --port <port> *server_args`` in its own session (with
+    ``CUDA_VISIBLE_DEVICES`` set to ``devices`` when they are given), waits for ``/health`` and releases the lock.
+    It then checks that ``GET /version`` is ``expected_version`` and that the served model's root ends in
+    ``model_dir``'s last component (the ``snapshots/<commit>`` name). On exit, and on any start failure,
+    the server's process group gets SIGTERM, then SIGKILL.
 
     Attributes:
         url: ``http://127.0.0.1:<port>`` while the context is open, else None.
@@ -160,7 +174,7 @@ class VllmServer:
         model_dir: Union[str, Path],
         *,
         server_args: Sequence[str],
-        devices: Sequence[Union[int, str]],
+        devices: Optional[Sequence[Union[int, str]]] = None,
         start_lock_dir: Union[str, Path],
         expected_version: str,
         log_dir: Optional[Union[str, Path]] = None,
@@ -172,7 +186,9 @@ class VllmServer:
             executable: The ``vllm`` console script to run (for example ``<venv>/bin/vllm``).
             model_dir: The model snapshot directory, named by its commit.
             server_args: The arguments after the port, such as :func:`server_args` builds.
-            devices: The visible devices, as ``CUDA_VISIBLE_DEVICES`` lists them.
+            devices: The server's visible devices. When given, the server's ``CUDA_VISIBLE_DEVICES`` is set to
+                them; when None, the inherited environment is left alone and the lock is named by the inherited
+                ``CUDA_VISIBLE_DEVICES`` (``all`` if unset).
             start_lock_dir: Where the start lock file lives.
             expected_version: The vLLM version the server must report.
             log_dir: Where the server's output goes, one file per server with mode 600; the owner's stderr when
@@ -180,14 +196,16 @@ class VllmServer:
             startup_timeout_s: Seconds the server has to become healthy once the start lock is held.
 
         Raises:
-            ValueError: If ``server_args`` asks the server to log request content.
+            ValueError: If ``server_args`` asks the server to log request or output content.
         """
-        if REQUEST_LOGGING_FLAG in server_args:
-            raise ValueError(f"{REQUEST_LOGGING_FLAG} would log request content; it is not allowed")
+        for arg in server_args:
+            for flag in CONTENT_LOGGING_FLAGS:
+                if arg == flag or str(arg).startswith(flag + "="):
+                    raise ValueError(f"{arg} would log request or output content; it is not allowed")
         self.executable = str(executable)
         self.model_dir = Path(model_dir)
         self.server_args = [str(arg) for arg in server_args]
-        self.devices = [str(device) for device in devices]
+        self.devices = None if devices is None else [str(device) for device in devices]
         self.start_lock_dir = Path(start_lock_dir)
         self.expected_version = expected_version
         self.log_dir = None if log_dir is None else Path(log_dir)
@@ -201,7 +219,10 @@ class VllmServer:
     @property
     def lock_path(self) -> Path:
         """The start lock shared by every server on this host's ``devices``."""
-        devices = "-".join(self.devices) or "none"
+        if self.devices is None:
+            devices = os.environ.get("CUDA_VISIBLE_DEVICES", "all").replace(",", "-") or "none"
+        else:
+            devices = "-".join(self.devices) or "none"
         return self.start_lock_dir / f"vllm-start-{socket.gethostname()}-{devices}.lock"
 
     def __enter__(self) -> VllmServer:
@@ -238,7 +259,9 @@ class VllmServer:
     def _launch(self) -> None:
         port = _free_port()
         command = [self.executable, "serve", str(self.model_dir), "--host", HOST, "--port", str(port)]
-        env = {**os.environ, "CUDA_VISIBLE_DEVICES": ",".join(self.devices)}
+        env = dict(os.environ)
+        if self.devices is not None:
+            env["CUDA_VISIBLE_DEVICES"] = ",".join(self.devices)
         sink: Union[int, IO[bytes]] = 2
         if self.log_dir is not None:
             self.log_dir.mkdir(parents=True, exist_ok=True)
@@ -256,6 +279,7 @@ class VllmServer:
         self._watchdog = subprocess.Popen(  # noqa: S603 — this interpreter
             [sys.executable, "-c", _WATCHDOG, str(os.getpid()), str(self._server.pid)],
             stdin=subprocess.DEVNULL,
+            start_new_session=True,
         )
         self.port, self.url = port, f"http://{HOST}:{port}"
 
@@ -272,10 +296,13 @@ class VllmServer:
 
     def _check_identity(self) -> None:
         assert self.url is not None
-        version = (_get(f"{self.url}/version") or {}).get("version")
+        version = _probe(f"{self.url}/version", "version")
         if version != self.expected_version:
             raise VllmStartError("version", f"the server is vllm {version}, not {self.expected_version}")
-        model = ((_get(f"{self.url}/v1/models") or {}).get("data") or [{}])[0]
+        data = _probe(f"{self.url}/v1/models", "data")
+        if not isinstance(data, list) or not data or not isinstance(data[0], dict):
+            raise VllmStartError("version", f"probe {self.url}/v1/models: no model entry")
+        model = data[0]
         served = os.path.basename(os.path.normpath(str(model.get("root") or "")))
         if served != self.model_dir.name:
             raise VllmStartError("snapshot", f"the server serves snapshot {served!r}, not {self.model_dir.name!r}")
