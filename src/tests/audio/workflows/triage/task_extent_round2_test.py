@@ -83,7 +83,9 @@ def test_edges_switched_on_widen_a_breath_extent_to_the_envelope() -> None:
     signal = _bursts([2.0, 4.0], 8.0, 0.02)
     view = generic_view((signal, RATE), None)
     spans = [(2.2, 2.4), (4.2, 4.4)]
-    off = evidence_of(view, spans, gap_s=3.0, inhale=False, stops=[], grow_kind="breath", extent_p=_params())
+    off = evidence_of(
+        view, spans, gap_s=3.0, inhale=False, stops=[], grow_kind="breath", extent_p=_params(edges__enabled=False)
+    )
     on = evidence_of(
         view, spans, gap_s=3.0, inhale=False, stops=[], grow_kind="breath", extent_p=_params(edges__enabled=True)
     )
