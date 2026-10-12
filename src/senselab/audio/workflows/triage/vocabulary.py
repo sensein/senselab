@@ -38,6 +38,7 @@ from senselab.audio.workflows.triage.decision import (
     item,
     reasons_of,
     records,
+    release_audible_share_min,
     reviewed_releases,
     second_opinion_withholds,
 )
@@ -227,6 +228,10 @@ NON_TASK_SPEECH_UNTIMED = (
     "lexical speech outside a non-lexical task carries no usable timing, so no mask can hide it and neither copy "
     "may be handed on"
 )
+RELEASE_EMPTY = (
+    "the masks leave less of the task extent audible than data/decision_reasons.yaml release_audible_share_min, "
+    "or the extent is empty, so the release would hand on nothing"
+)
 
 RELEASE_WITHOUT_REDACTION_GROUNDS = (
     NO_LEXICAL_WORD,
@@ -291,6 +296,7 @@ RELEASE_WITHHELD_GROUNDS = (
     NON_TASK_SPEECH_EXTENSIVE,
     REVIEWER_QUOTES_UNPLACED,
     SECOND_OPINION_PHRASES_PREDOMINANT,
+    RELEASE_EMPTY,
 )
 """Why the redaction policy withholds a recording. One stands behind every :attr:`Release.WITHHELD`."""
 
@@ -359,6 +365,9 @@ class RedactionEvidence:
         non_task_speech_untimed_n: How many such words carry no usable timing, so no mask can hide them.
         non_task_speech_extensive: Whether an item-set task's speech outside its item runs is extensive.
         aligner_failed: The recognisers the consensus names as ``aligner_failed``.
+        task_extent_s: The length of the task extent the release is cut to (the hull of the live task-extent
+            spans); None where the recording has no task extent.
+        task_audible_s: How much of that extent no final mask covers; None where it has none.
     """
 
     lexical_words_n: int | None = None
@@ -380,6 +389,8 @@ class RedactionEvidence:
     non_task_speech_untimed_n: int = 0
     non_task_speech_extensive: bool = False
     aligner_failed: tuple[str, ...] = ()
+    task_extent_s: float | None = None
+    task_audible_s: float | None = None
 
 
 @dataclass(frozen=True)
@@ -1166,6 +1177,7 @@ RELEASE_GROUND_KEYS: dict[str, str] = {
     NAME_MASKS_PROPAGATED: "name_masks_propagated",
     NON_TASK_SPEECH_MASKED: "non_task_speech_masked",
     NON_TASK_SPEECH_UNTIMED: "non_task_speech_untimed",
+    RELEASE_EMPTY: "release_empty",
     NON_TASK_SPEECH_EXTENSIVE: "non_task_speech_extensive",
     REVIEWER_QUOTES_UNPLACED: KEY_REVIEWER_QUOTES_UNPLACED,
     SECOND_OPINION_PHRASES_PREDOMINANT: "second_opinion_phrases_predominant",
@@ -2065,11 +2077,51 @@ def final_release(
         quotes are unplaced, on :data:`NON_TASK_SPEECH_EXTENSIVE` where an item-set task's speech outside its item
         runs is extensive, on :data:`SECOND_OPINION_PHRASES_PREDOMINANT` where the second opinion reads phrases
         predominant, on :data:`NON_TASK_SPEECH_UNTIMED` where such a word carries no usable timing, else
-        :attr:`Release.REDACTED` on :data:`NON_TASK_SPEECH_MASKED` where one stays masked; any other release
-        is returned unchanged.
+        :attr:`Release.REDACTED` on :data:`NON_TASK_SPEECH_MASKED` where one stays masked; any of them becomes
+        :attr:`Release.WITHHELD` on :data:`RELEASE_EMPTY` where the release would hand on nothing
+        (:func:`release_empty`); any other release is returned unchanged.
     """
     if release not in (Release.AS_IS, Release.REDACTED):
         return release, ground
+    release, ground = _release_weighed(
+        release,
+        ground,
+        evidence,
+        reviewer_unplaced=reviewer_unplaced,
+        second_opinion_predominant=second_opinion_predominant,
+    )
+    if release in (Release.AS_IS, Release.REDACTED) and release_empty(evidence):
+        return Release.WITHHELD, RELEASE_EMPTY
+    return release, ground
+
+
+def release_empty(evidence: RedactionEvidence) -> bool:
+    """Whether a release cut to the task extent would hand on nothing.
+
+    Args:
+        evidence: What the store says about the redaction, read for the task extent and its audible time.
+
+    Returns:
+        True where the task extent is zero-length, or the share of it no final mask covers is under
+        ``release_audible_share_min`` of ``data/decision_reasons.yaml``; False where the recording has no task
+        extent.
+    """
+    if evidence.task_extent_s is None:
+        return False
+    if evidence.task_extent_s <= 0.0:
+        return True
+    audible = evidence.task_audible_s if evidence.task_audible_s is not None else evidence.task_extent_s
+    return audible / evidence.task_extent_s < release_audible_share_min()
+
+
+def _release_weighed(
+    release: Release,
+    ground: str | None,
+    evidence: RedactionEvidence,
+    *,
+    reviewer_unplaced: bool,
+    second_opinion_predominant: bool,
+) -> tuple[Release, str | None]:
     if evidence.coverage_failed:
         return Release.WITHHELD, MASK_COVERAGE_FAILED
     if reviewer_unplaced:
