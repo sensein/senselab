@@ -158,3 +158,105 @@ span. No decision or decision input moved.
 
 Pass criteria for the listen set (H) are set before listening: at most 1 in 10 over-inclusions in the A1
 strata; at most 1 in 10 trims that cut task sound in A2; none of the buttercup trims cutting the train.
+
+## Round 2 (owner labels on the 114-recording listen set, 2026-10-12)
+
+The owner labelled 106 of the 114 listen-set recordings (`r37_extents_47a340f876aa.json`). Ten no_task picks
+were r36 discards, a sampling error. From here on, strata are drawn from recordings that are not discarded.
+Extent changes are read only on recordings that are not discarded.
+
+| Stratum (owner) | Change, `data/task_extent.yaml` v2 |
+|---|---|
+| A1 grown, 9 of 9 better | `growth` and `modulation` **on** |
+| Voice onset trim, 10 of 10 better | `trim` **on** |
+| Count-in, 10 of 10 better | `count_in` **on**; `gap_max_s` 3.0 s (r36 count-in-to-vowel gaps, p99 2.9 s, n=1,232); a count-in overlapping the vowel is taken in (282b529e: "three" timed 0.35 s past the vowel's start) |
+| Stimulus edges, 10 of 10 better | `stimulus_edges` **on** |
+| DDK trim, 7 of 10 better, "a bit narrow" | `trim` on with a margin: a trimmed edge keeps one of the train's own median onset intervals (`margin_intervals`), never into speech; a speech split stands only where the kept piece holds half the train (`kept_share_min`; 2ca44133 was cut to two cycles by agreed words read off the task) |
+| Buttercup, 2 current better, "extends through most of recording" | `exclude_families`: buttercup families are never trimmed |
+| Continuity, 7 better, 3 too wide | still **off**; a run continuity takes in ends `tail_s` (0.1 s) after its last voiced frame, and at most `runs_max` (1) run a side is taken in |
+| A1 stopped at speech, 6 both wrong ("breathing spans the full recording") | `growth.cross_speech` (**off**): growth crosses speech between breaths, never an event on speech, and still stops at the gap |
+| Phonation done in parts (805ef15c, 8d28ce2d) | `parts` (**off**): a further run with 1 s of voicing, voiced over half, within 6 s and no agreed word between, is part of the task |
+| Weak breaths wider than their events (2b1c662a, 949e6c91, 49b2620c) | `edges` (**off**): the first and last breath run out to where the broadband level falls under 3 dB over the floor (dips of 0.1 s bridged, 3 s at most, never into a stop) |
+| Background notes (837ad878, 430a8478, 893ee933, 30d1bba6, 16f9cd2d, 340f3db5, 92ad6bb2, a396e2c0; 49b2620c and 949e6c91 "can be passed") | every task reading records `background` (`task_events.background_reading`); `discard_replaced_task.yaml` `background` block, **off**, bound unfitted |
+
+### Events against background
+
+Each reading records:
+
+- `event_db`: the median of the task events' peak levels;
+- `background_db`: the median level of frames that no found event and no impulse holds;
+- their difference, `event_over_background_db`;
+- `background_over_floor_db`: the background over the stationary floor;
+- `background_speech_share`: the share of the background inside speech or diarized turns.
+
+On the labels, **no single ratio separates the owner's discard notes**:
+
+- 837ad878 ("too much background relative weak breathing") reads 13.4 dB over a background at the floor.
+- 49b2620c ("very weak events … no background … can be passed") reads 14.9 dB, also at the floor.
+- In 837ad878 the floor itself is the noise, so a ratio against any in-file background cannot see it.
+
+Two candidates, each tested against the labels and the r36 corpus:
+
+| Candidate | Discard notes hit (half 0 / half 1) | Other labelled airway files hit (of 49) | r36 non-discarded airway files hit (of 11,682) |
+|---|---|---|---|
+| ratio under 6 dB | 1 / 1 | 0 | 255 |
+| background over 20 dB above the floor | 2 / 1 | 2 | 413 |
+| either | 3 / 1 | 2 | 563 |
+
+Nine notes split across the participant halves do not support a bound. The two notes that are not breath or
+cough (a396e2c0 DDK, 340f3db5 with no reading) fall outside the rule. The block stays off, with its bound null.
+
+### Measured (r36 stores, read-only, 3bfe4e6f, fresh clone, 62,550 runs)
+
+Scope: 50,158 recordings carry an owned extent, 0 errors. 47,612 of them are not discarded, and the figures
+below cover only those. Each extent is compared with r36.
+
+**Defaults on:**
+
+- **Breath:** 856 of 9,036 grow.
+- **Cough:** 26 of 2,646 grow.
+- **Voice:** 3,471 of 8,225 change. The onset trim moves them later, and the count-in now sits inside 1,219
+  extents (6 before).
+- **DDK:** 316 of 7,882 trimmed, none widened. Buttercup: 0.
+- **Stimulus:** 715 of 19,823 extended.
+- **extent_complete, non-discarded:**
+  - breath: 637 too_narrow;
+  - voice: 98 too_narrow, 105 too_wide;
+  - DDK: 109 too_wide, where a speech run under the half-train guard stays inside, and 45 too_narrow;
+  - stimulus: 6 too_narrow.
+
+**Switched-off rules, against the defaults:**
+
+- **`cross_speech`:** changes 23 breath extents (median +6.0 s). 17 take in words, which are masked and so
+  reviewed.
+- **`edges`:** changes 8,459 of 9,036 breath extents (median +0.48 s). It widened all three labelled controls
+  the owner read as right. It is too general as it stands.
+- **`continuity`:** changes 206 voice extents. The three it widened that the owner read as too wide are
+  still wide.
+- **`parts`:** changes 93 voice extents.
+
+**Discards:**
+
+- No `too_short_for_task` discard would reach its family minimum under any setting (0 of 1,623). That ground
+  reads the recording's duration, not the extent.
+- f5c03456's 130 s recording keeps 5.3–11.9 s in every setting, `cross_speech` included, so its conversation
+  tail stays out.
+- SUBJ23's recordings are unchanged except by `edges` (+0.1 to +1.3 s).
+
+**Agreement with the round-2 labels:**
+
+| Stratum | Agreement |
+|---|---|
+| A1 grown | 8 of 9 (75c5b87a's owner direction is too wide) |
+| A1 stopped at speech, with `cross_speech` | 6 of 7 that carry a direction |
+| Voice onset | 9 of 10 |
+| DDK | 8 of 9 that carry a direction |
+| Count-in | 10 of 10 |
+| Stimulus | 9 of 10 (e80daf66 wide at the start) |
+| Continuity | 7 of 10 |
+| A5 too_narrow, all switches | 7 of 7 that carry a direction |
+| Controls | 7 of 10 (the 3 misses are `edges`) |
+| Buttercup | 2 of 4 (the owner preferred one trim) |
+
+**Round-1 labels (52 with an extent):** the 27 read complete stay put on 23. Of the 22 too narrow, 19 widen.
+Both too-wide labels narrow.
