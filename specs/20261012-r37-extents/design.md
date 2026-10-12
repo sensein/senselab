@@ -30,7 +30,8 @@ other clusters. 211cf773 keeps 1 event in its extent and 7 standing outside it.
   tried first: close inhale and exhale phases put it under a second (2aa113a2: limit 1.9 s);
 - stop at the first **stop** between the edge and the event or on it: speech runs and segments, YAMNet speech
   windows, every lexical word (not only runs: growth is the conservative direction), and every diarized turn
-  of at least 1 s (COHORT's `min_run_s`) on the enhanced stream, whoever's.
+  of at least 1 s (COHORT's `min_run_s`) on the enhanced stream, whoever's. YAMNet speech windows are not
+  stops: on the labelled breath files they fell on breathing (211cf773 holds ten).
 
 The growth record (`growth`: events added, seconds before/after, the limit, why each side stopped) is on the
 reading's evidence; `extent_growth_s` is an evidence item. Speech left inside a grown span is the task
