@@ -1901,7 +1901,7 @@ class MaskPlan:
         }
 
 
-def _tokens(words: Sequence[Entity]) -> list[tuple[str, Entity]]:
+def quote_tokens(words: Sequence[Entity]) -> list[tuple[str, Entity]]:
     """The residue words a quote is matched against, each as its matching token.
 
     Args:
@@ -1925,17 +1925,17 @@ def placeable_tokens(store: ProvStore) -> tuple[str, ...]:
         store: The provenance store.
 
     Returns:
-        :func:`_tokens`' tokens over the timed consensus words.
+        :func:`quote_tokens`' tokens over the timed consensus words.
     """
-    return tuple(token for token, _ in _tokens([word for word in consensus_words(store) if word.extent is not None]))
+    return tuple(token for token, _ in quote_tokens([word for word in consensus_words(store) if word.extent is not None]))
 
 
-def _place(quote: str, tokens: Sequence[tuple[str, Entity]]) -> list[Entity]:
+def place_quote(quote: str, tokens: Sequence[tuple[str, Entity]]) -> list[Entity]:
     """Every word a quote names, as whole-token runs, over every place it occurs.
 
     Args:
         quote: The reviewer's quote.
-        tokens: :func:`_tokens`' output.
+        tokens: :func:`quote_tokens`' output.
 
     Returns:
         The words, in stream order, without repeats. Empty where the quote matches no run.
@@ -2103,7 +2103,7 @@ def _runs(ids: Sequence[str], order: Mapping[str, int]) -> list[list[str]]:
 
 def _approved(approvals: Sequence[str], tokens: Sequence[tuple[str, Entity]]) -> set[str]:
     """The word ids every approved name places on, over every place it occurs."""
-    return {word.id for approval in approvals for word in _place(str(approval), tokens)}
+    return {word.id for approval in approvals for word in place_quote(str(approval), tokens)}
 
 
 _SUFFIXES = ("ing", "es", "ed", "s")
@@ -2266,7 +2266,7 @@ def _heard_off_task(
     Args:
         store: The provenance store, read for the ``cohort_reading`` measurement and the declared family.
         words: The timed consensus words, in stream order.
-        tokens: :func:`_tokens` over them.
+        tokens: :func:`quote_tokens` over them.
         reading: The reviewer's annotation where the fold applies it, else empty.
 
     Returns:
@@ -2282,7 +2282,7 @@ def _heard_off_task(
     if item_set_family(declared_task_family(store)):
         extensive = read and reading.get("phrases_instead_of_items") == PHRASES_PREDOMINANT
         for quote in (reading.get("phrase_quotes") or ()) if read else ():
-            phrases |= {word.id for word in _place(str(quote), tokens)}
+            phrases |= {word.id for word in place_quote(str(quote), tokens)}
         own: Any = ()
         speech |= phrases if extensive else set()
     else:
@@ -2291,9 +2291,9 @@ def _heard_off_task(
         own = () if aside else reading.get("off_task_quotes")
     quotes = [*(own or ()), *(reading.get("other_speaker_quotes") or ())] if read else []
     for quote in quotes:
-        speech |= {word.id for word in _place(str(quote), tokens)}
+        speech |= {word.id for word in place_quote(str(quote), tokens)}
     task = {
-        word.id for quote in (reading.get("task_content_quotes") or ()) if read for word in _place(str(quote), tokens)
+        word.id for quote in (reading.get("task_content_quotes") or ()) if read for word in place_quote(str(quote), tokens)
     }
     return _HeardOffTask(frozenset(speech), frozenset(task), frozenset(phrases), bool(extensive))
 
@@ -2409,9 +2409,9 @@ def mask_plan(
     except ValueError:
         residue = []
     residue_ids = {word.id for word in residue}
-    tokens = _tokens(residue)
+    tokens = quote_tokens(residue)
     words = [word for word in consensus_words(store) if word.extent is not None]
-    transcript_tokens = _tokens(words)
+    transcript_tokens = quote_tokens(words)
     by_id = {word.id: word for word in words}
     order = {word.id: position for position, word in enumerate(words)}
     vocabulary = lexicon if lexicon is not None else declared_names_lexicon(declared_task_family(store))
@@ -2521,8 +2521,8 @@ def mask_plan(
             family_of_word.setdefault(word_id, category_family(members[0].category))
 
     def quoted_words(quote: str) -> list[Entity]:
-        hits = [word for word in _place(quote, transcript_tokens) if word.id in residue_ids]
-        return hits or _place(quote, tokens)
+        hits = [word for word in place_quote(quote, transcript_tokens) if word.id in residue_ids]
+        return hits or place_quote(quote, tokens)
 
     def placed_words(quote: str) -> tuple[list[Entity], str]:
         hits = quoted_words(quote)

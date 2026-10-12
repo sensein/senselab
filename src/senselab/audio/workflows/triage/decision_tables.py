@@ -31,7 +31,7 @@ from senselab.audio.workflows.triage.recording_vectors import (
 )
 from senselab.audio.workflows.triage.vocabulary import release_ground_key
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 DECISIONS_NAME = "triage_decisions"
 EVIDENCE_NAME = "triage_evidence"
 FIGURE_PATH = Path("summary") / "summary.pdf"
@@ -45,9 +45,13 @@ EVIDENCE_ITEM = pa.struct(
         pa.field("comparison", pa.string()),
         pa.field("threshold", pa.string()),
         pa.field("effect", pa.string()),
+        pa.field("source", pa.string()),
+        pa.field("model", pa.string()),
+        pa.field("spans", pa.list_(pa.list_(pa.float64()))),
     ]
 )
-"""One evidence item in ``triage_decisions.evidence``; ``value`` and ``threshold`` are JSON."""
+"""One evidence item in ``triage_decisions.evidence``; ``value`` and ``threshold`` are JSON. ``source``,
+``model`` and ``spans`` say who read an item that names a speaker, and where."""
 
 
 @cache
@@ -134,6 +138,22 @@ def _audio_paths(view: StoreView, run_root: Path, root: Path) -> list[str]:
     return paths
 
 
+def _explanation(entry: Mapping[str, Any]) -> dict[str, Any]:
+    """Who read an evidence item and where: its ``source``, ``model`` and ``spans``.
+
+    Args:
+        entry: The item, as the fold recorded it.
+
+    Returns:
+        The three fields; None and empty where the item names no speaker.
+    """
+    return {
+        "source": entry.get("source"),
+        "model": entry.get("model"),
+        "spans": [[float(a), float(b)] for a, b, *_ in entry.get("spans") or ()],
+    }
+
+
 def decision_rows(run_root: Path, root: Path) -> tuple[dict[str, Any], list[dict[str, Any]]] | None:
     """One recording's decision row and its evidence rows.
 
@@ -188,6 +208,7 @@ def decision_rows(run_root: Path, root: Path) -> tuple[dict[str, Any], list[dict
                 "comparison": entry.get("comparison"),
                 "threshold": _json(entry.get("threshold")),
                 "effect": entry.get("effect"),
+                **_explanation(entry),
             }
             for entry in items
             if entry.get("decisive")
@@ -210,6 +231,7 @@ def decision_rows(run_root: Path, root: Path) -> tuple[dict[str, Any], list[dict
             "threshold": _json(entry.get("threshold")),
             "effect": entry.get("effect"),
             "decisive": bool(entry.get("decisive")),
+            **_explanation(entry),
             "schema_version": SCHEMA_VERSION,
         }
         for entry in items
@@ -273,6 +295,9 @@ def evidence_schema() -> pa.Schema:
             pa.field("threshold", text),
             pa.field("effect", text),
             pa.field("decisive", pa.bool_()),
+            pa.field("source", text),
+            pa.field("model", text),
+            pa.field("spans", pa.list_(pa.list_(pa.float64()))),
             pa.field("schema_version", pa.int32()),
         ]
     )

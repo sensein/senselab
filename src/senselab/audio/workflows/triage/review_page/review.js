@@ -532,10 +532,11 @@ var ReviewPage = (function () {
       },
       evidence: (row.evidence || []).map(function (item) {
         var entry = dictionary[item.i] || {};
+        var read = item.x ? JSON.parse(item.x) : {};
         return {
           name: entry.name, group: nullable(entry.group), value: JSON.parse(item.v), unit: nullable(entry.unit),
           comparison: nullable(entry.comparison), threshold: nullable(entry.threshold), effect: nullable(item.e),
-          decisive: !!item.d,
+          decisive: !!item.d, source: nullable(read.source), model: nullable(read.model), spans: read.spans || [],
         };
       }),
       speech: expandSpeech(row.speech),
@@ -1425,6 +1426,14 @@ var ReviewPage = (function () {
     return strip;
   }
 
+  /** Who read an evidence item that names a speaker, with which model, and where: "source · model · spans". */
+  function readBy(it) {
+    if (!it.source) return '';
+    var spans = (it.spans || []).map(function (s) { return fmt(s[0]) + '–' + fmt(s[1]) + ' s'; });
+    return [it.source, it.model || null, spans.length ? spans.join(', ') : null]
+      .filter(function (x) { return x; }).join(' · ');
+  }
+
   function evidenceSection(rec) {
     var sec = el('section');
     sec.appendChild(el('h3', null, 'evidence (decisive in bold)'));
@@ -1432,7 +1441,9 @@ var ReviewPage = (function () {
     if (!items.length) { sec.appendChild(el('p', 'rv-note', 'the fold recorded no evidence items')); return sec; }
     var t = el('table', 'rv-ev');
     var hr = el('tr');
-    ['item', 'group', 'value', 'unit', 'against', 'effect'].forEach(function (h) { hr.appendChild(el('th', null, h)); });
+    ['item', 'group', 'value', 'unit', 'against', 'effect', 'read by'].forEach(function (h) {
+      hr.appendChild(el('th', null, h));
+    });
     t.appendChild(hr);
     items.slice().sort(function (a, b) { return (b.decisive ? 1 : 0) - (a.decisive ? 1 : 0); }).forEach(function (it) {
       var tr = el('tr', it.decisive ? 'decisive' : null);
@@ -1442,6 +1453,7 @@ var ReviewPage = (function () {
       tr.appendChild(el('td', null, it.unit || ''));
       tr.appendChild(el('td', 'v', it.comparison ? it.comparison + ' ' + fmt(it.threshold) : ''));
       tr.appendChild(el('td', null, it.effect || ''));
+      tr.appendChild(el('td', null, readBy(it)));
       t.appendChild(tr);
     });
     sec.appendChild(t);
@@ -1662,6 +1674,7 @@ var ReviewPage = (function () {
     decodeRows: decodeRows,
     columnSpecs: columnSpecs,
     evidenceGroups: evidenceGroups,
+    readBy: readBy,
     groupByParticipant: groupByParticipant,
     participantLine: participantLine,
     axesFor: axesFor,

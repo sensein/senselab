@@ -460,6 +460,7 @@ class TaskEvidence:
         extent_growth_s: How far bounded growth moved the task extent, or None where growth did not run.
         atypical: The readings of an attempted airway or syllable task that fall outside its family's corpus
             range (``data/task_extent.yaml`` ``atypical``); empty where none does.
+        reviewer_other_spans: Where the reviewer's other-speaker quotes lie on the timed words.
     """
 
     owning_branches: tuple[str, ...] = ()
@@ -506,6 +507,7 @@ class TaskEvidence:
     extent_reviews: bool = False
     extent_growth_s: float | None = None
     atypical: tuple[str, ...] = ()
+    reviewer_other_spans: tuple[tuple[float, float], ...] = ()
 
     @property
     def non_lexical(self) -> bool:
@@ -2965,6 +2967,123 @@ def _speech_quality_items(quality: Mapping[str, Any]) -> list[EvidenceItem]:
     return items
 
 
+OTHER_SPEAKER_SOURCES = {
+    f"{PREFIX_GATE}:{DOMINANT_SPEAKER_GATE}": "diarizer",
+    f"{PREFIX_SECOND_OPINION}:other_voice": "second_opinion",
+    f"{PREFIX_SECOND_OPINION}:{OTHER_VOICE_PARTICIPANT}": "second_opinion",
+    f"{PREFIX_SECOND_OPINION}:{KEY_INSTRUCTIONS_SPOKEN_BY_OTHER}": "second_opinion",
+    KEY_REVIEWER_SECOND_SPEAKER: "reviewer",
+    KEY_REVIEWER_OTHER_SPEAKER: "reviewer",
+    KEY_INSTRUCTIONS_SPOKEN_BY_OTHER: "reviewer",
+    KEY_OTHER_SPEAKER_IN_TASK: "cohort",
+    KEY_OTHER_VOICE_IN_TASK: "residual",
+    "other_speaker_in_session": "cohort",
+    "session_speaker_inconsistent": "cohort",
+    "cohort.target_cosine": "cohort",
+    "cohort.non_task_cosine": "cohort",
+    "cohort.session_vs_other_sessions_cosine": "cohort",
+}
+"""The evidence items that say who speaks, and the reader each one names."""
+
+
+def _spans_of(rows: Any) -> tuple[tuple[float, float], ...]:  # noqa: ANN401 -- stored span rows of any length
+    return tuple((float(row[0]), float(row[1])) for row in rows or () if len(row) >= 2)
+
+
+def speaker_explanations(
+    *,
+    gate_records: Sequence[Mapping[str, Any]],
+    cohort: Mapping[str, Any] | None,
+    opinion: Mapping[str, Any] | None,
+    confident_yes: float | None,
+    annotation: Mapping[str, Any],
+    task: TaskEvidence,
+) -> dict[str, dict[str, Any]]:
+    """For each evidence item that says who speaks: its source, its model, its spans and its value against its bound.
+
+    Args:
+        gate_records: The flag gates applied, the speaker gate carrying ``model`` and ``spans`` where VERDICT
+            found them.
+        cohort: COHORT's ``cohort_reading`` attributes, or None.
+        opinion: The ``second_opinion_answers`` attributes, or None.
+        confident_yes: The probability at or above which the second opinion is a confident yes.
+        annotation: REVIEW's annotation.
+        task: The task evidence, read for the speech outside the task, the residual's other voice and the
+            reviewer's placed quotes.
+
+    Returns:
+        Item name to the fields that replace the item's own: ``source``, ``model``, ``spans`` and, where the
+        item is otherwise a bare flag, ``value``, ``comparison`` and ``threshold``.
+    """
+    out: dict[str, dict[str, Any]] = {}
+    for record in gate_records:
+        if record.get("gate") == DOMINANT_SPEAKER_GATE:
+            out[f"{PREFIX_GATE}:{DOMINANT_SPEAKER_GATE}"] = {
+                "source": "diarizer",
+                "model": record.get("model"),
+                "spans": _spans_of(record.get("spans")),
+            }
+    held = dict(opinion or {})
+    p = (held.get("probabilities") or {}).get("other_voice")
+    if p is not None:
+        read = {
+            "source": "second_opinion",
+            "model": held.get("model_id"),
+            "value": round(probability_yes(p), 4),
+            "comparison": ">=",
+            "threshold": confident_yes,
+        }
+        out[f"{PREFIX_SECOND_OPINION}:other_voice"] = read
+        out[f"{PREFIX_SECOND_OPINION}:{OTHER_VOICE_PARTICIPANT}"] = read
+    if held.get("model_id") is not None:
+        out[f"{PREFIX_SECOND_OPINION}:{KEY_INSTRUCTIONS_SPOKEN_BY_OTHER}"] = {
+            "source": "second_opinion",
+            "model": held.get("model_id"),
+        }
+    reviewer = {"source": "reviewer", "model": annotation.get("model_id"), "spans": tuple(task.reviewer_other_spans)}
+    for key in (KEY_REVIEWER_SECOND_SPEAKER, KEY_REVIEWER_OTHER_SPEAKER, KEY_INSTRUCTIONS_SPOKEN_BY_OTHER):
+        out[key] = dict(reviewer)
+    block = other_speaker_block(cohort)
+    model = block.get("model_id")
+    out[KEY_OTHER_SPEAKER_IN_TASK] = {
+        "source": "cohort",
+        "model": model,
+        "spans": _spans_of(task.task_speech.get("runs")),
+    }
+    out["other_speaker_in_session"] = {"source": "cohort", "model": model, "spans": tuple(nonmatch_spans(cohort))}
+    out["session_speaker_inconsistent"] = {"source": "cohort", "model": model}
+    out["cohort.session_vs_other_sessions_cosine"] = {"source": "cohort", "model": model}
+    for pool, name in (("target", "cohort.target_cosine"), ("non_task", "cohort.non_task_cosine")):
+        record = block.get(pool)
+        spans = record.get("spans") if isinstance(record, Mapping) else None
+        out[name] = {"source": "cohort", "model": model, "spans": _spans_of(spans)}
+    voice = dict(task.quality.get(OTHER_VOICE_KIND) or {})
+    out[KEY_OTHER_VOICE_IN_TASK] = {"source": "residual", "model": None, "spans": _spans_of(voice.get("in"))}
+    return out
+
+
+def _explained(items: Sequence[EvidenceItem], explain: Mapping[str, Mapping[str, Any]]) -> list[EvidenceItem]:
+    """The items, each that says who speaks carrying its source, model, spans and value against its bound.
+
+    Args:
+        items: The evidence items.
+        explain: :func:`speaker_explanations`.
+
+    Returns:
+        The items; one that names a speaker and has no explanation still names its source.
+    """
+    out = []
+    for entry in items:
+        fields = dict(explain.get(entry.name) or {})
+        if not fields and entry.name in OTHER_SPEAKER_SOURCES:
+            fields = {"source": OTHER_SPEAKER_SOURCES[entry.name]}
+        if "threshold" in fields and fields["threshold"] is None:
+            fields.pop("threshold")
+            fields.pop("comparison", None)
+        out.append(replace(entry, **fields) if fields else entry)
+    return out
+
+
 def _decision_evidence(
     *,
     triage: Triage,
@@ -3824,6 +3943,17 @@ def fold_file_verdict(
         else None,
         cohort_items=cohort_evidence(cohort),
         replaced=replaced,
+    )
+    evidence_items = _explained(
+        evidence_items,
+        speaker_explanations(
+            gate_records=gate_records,
+            cohort=cohort,
+            opinion=second_opinion,
+            confident_yes=rules.second_opinion_confident_yes,
+            annotation=annotation,
+            task=task_evidence,
+        ),
     )
 
     return FileVerdict(

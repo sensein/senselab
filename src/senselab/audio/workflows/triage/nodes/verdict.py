@@ -67,6 +67,7 @@ from senselab.audio.workflows.triage.nodes.common import (
     lexical_words,
     live_entities,
     mint_live,
+    word_hull,
     resolve_stream,
     software_agent,
     write_verdict,
@@ -105,6 +106,8 @@ from senselab.audio.workflows.triage.nodes.redact import (
     MaskPlan,
     fold_mask_plan,
     mask_coverage,
+    place_quote,
+    quote_tokens,
 )
 from senselab.audio.workflows.triage.nodes.voice import PHONATION_READING
 from senselab.audio.workflows.triage.quality_join import QUALITY_JOIN
@@ -124,6 +127,7 @@ from senselab.audio.workflows.triage.vocabulary import (
     BREATH_COUNTED,
     BREATH_SUSTAINED,
     COUGH_COUNTED,
+    DOMINANT_SPEAKER_GATE,
     COUGH_PERFORMED,
     GRAPH_ORDER,
     KEY_NODE_OUTCOME_UNREADABLE,
@@ -696,6 +700,58 @@ def _task_evidence(
         extent_growth_s=growth_s,
         atypical=atypical_readings(cough, ddk),
     )
+
+
+def explained_gate(store: ProvStore, record: dict[str, Any]) -> dict[str, Any]:
+    """A flag gate's record, with the model and the spans behind the speaker gate's worst reading.
+
+    Args:
+        store: The provenance store.
+        record: The applied gate's record.
+
+    Returns:
+        The record; for the speaker gate, with ``model`` (the diarizer) and ``spans`` (where a second voice
+        holds the extent alone) of the reading the gate was answered with.
+    """
+    if record.get("gate") != DOMINANT_SPEAKER_GATE:
+        return record
+    readings = [m for m in find_measurements(store, SPEAKER_SHARE_READING) if m.attributes.get("value") is not None]
+    if not readings:
+        return record
+    worst = min(readings, key=lambda m: float(m.attributes["value"]))
+    return {
+        **record,
+        "model": worst.attributes.get("diarizer"),
+        "spans": [list(span) for span in worst.attributes.get("secondary_exclusive_spans") or ()],
+    }
+
+
+def reviewer_other_spans(store: ProvStore, annotation: Mapping[str, Any] | None) -> tuple[tuple[float, float], ...]:
+    """Where the reviewer's other-speaker quotes lie on the timed consensus words.
+
+    Args:
+        store: The provenance store.
+        annotation: REVIEW's annotation, or None.
+
+    Returns:
+        The timing hull of each placed quote, earliest first; empty where nothing is quoted or placed.
+    """
+    reading = dict(annotation or {})
+    quotes = [
+        *(str(q) for q in reading.get("other_speaker_quotes") or ()),
+        *(str(entry.get("text")) for entry in reading.get("other_speakers") or () if isinstance(entry, Mapping)),
+    ]
+    quotes = [quote for quote in quotes if quote.strip()]
+    if not quotes:
+        return ()
+    tokens = quote_tokens(consensus_words(store))
+    spans = []
+    for quote in quotes:
+        placed = place_quote(quote, tokens)
+        if placed:
+            hulls = [word_hull(word) for word in placed]
+            spans.append((min(a for a, _ in hulls), max(b for _, b in hulls)))
+    return tuple(sorted(set(spans)))
 
 
 SEPARATED_SOURCE_READING = "extent_source_active_s"
@@ -1368,10 +1424,9 @@ def verdict(
     plan = fold_mask_plan(
         store, config, hint, reviewer_applies=policy.llm_reset_redactions and reviewer_may_unmask(annotation)
     )
-    task_evidence = _task_evidence(
-        store,
-        declared_family or None,
-        outcome.record(),
+    task_evidence = replace(
+        _task_evidence(store, declared_family or None, outcome.record()),
+        reviewer_other_spans=reviewer_other_spans(store, annotation),
     )
     file_verdict = fold_file_verdict(
         node_verdicts,
@@ -1386,7 +1441,7 @@ def verdict(
         llm_redaction=annotation,
         critical_absences=_critical_absences(store),
         gates=outcome.record(),
-        flag_gates=[gate.record() for gate in outcome.flagging],
+        flag_gates=[explained_gate(store, gate.record()) for gate in outcome.flagging],
         policy=policy,
         agreed_redactions=plan.agreed,
         unplaced=[(finding.family, finding.state) for finding in plan.unplaced],
