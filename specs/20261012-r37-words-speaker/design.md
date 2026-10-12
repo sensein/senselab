@@ -131,9 +131,16 @@ airway 232 → 232, voice 110 → 109; by half 589/913 → 261/641.
 - **B1, an unlocated word under a mask** (`r37_withhold_63fba63e9d52.json`: 3 mask the gap, 3 release, 3
   withhold for other reasons). An unlocated word now carries `mask_gap`, the span between its timed neighbours
   (the recording's start or end where it has none on a side; the neighbours' hull where they touch), and
-  `word_hull` reads it, so a mask over the word covers the gap instead of failing coverage and withholding. The
-  recording still reviews: the release is `redacted` (`reviewed_releases`). `word_arbitration` records
-  `unlocated_mask_gap_s`.
+  `word_hull` reads it, so a mask over the word covers the gap instead of failing coverage and withholding. In a
+  voice family the gap leaves out the held phonation (B1's premise: no word lies on it) where a recogniser's
+  placement midpoint falls in what is left (061cec48: the gap 1.5-16.41 s is the whole vowel; CrisperWhisper's
+  16.3 s is after it, so the mask is 14.5-16.41 s); where none does, the whole gap stands. The recording still
+  reviews: the release is `redacted` (`reviewed_releases`). `word_arbitration` records `unlocated_mask_gap_s`.
+  Dry-run replay of the ten listen-set recordings at 4b8ed9ff (`--out-root`, stores untouched; the reviewer's
+  reading is re-read later in the chain, so this is the replay's own state): the three "mask the gap is enough"
+  are `redacted`; of the three "release", 7cff2179 passes `as_is`, SUBJ17 is `redacted` (the words between its
+  two phonations), and 3194e5bb is `withheld` on `release_empty` (its one word is the glide read as a word by both
+  recognisers, both placements on the held phonation, so the gap is the whole file); all but 7cff2179 review.
 - **G1** stays as built: the owner listened to 15 of the 736 unmasked narrative asides; all were safe.
 - **An empty release** (owner on 1f06eb2c glides: "released is empty"). Cause: the reviewer's off-task quote
   placed on all six words, and the first word's two recognisers placed it 5.3 s apart (CrisperWhisper at 0.5 s,
