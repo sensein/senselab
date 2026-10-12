@@ -490,6 +490,28 @@ def recording_duration(store: ProvStore) -> float | None:
     return float(found[-1].extent[1]) if found and found[-1].extent is not None else None
 
 
+def clamp_to_recording(store: ProvStore, extent: tuple[float, float]) -> tuple[float, float]:
+    """An extent bounded by the recording: never before 0, never past the shortest live recording stream's end.
+
+    Args:
+        store: The provenance store, read for its live ``recording`` and ``plain`` streams.
+        extent: ``(start, end)``, in seconds.
+
+    Returns:
+        The bounded extent; the extent unchanged where no stream carries a duration or bounding it would leave
+        no positive duration.
+    """
+    ends = [
+        float(entity.extent[1])
+        for entity in live_entities(store, "stream")
+        if entity.attributes.get("name") in ("recording", PLAIN_STREAM) and entity.extent is not None
+    ]
+    start, end = max(0.0, float(extent[0])), float(extent[1])
+    if ends:
+        end = min(end, min(ends))
+    return (start, end) if end > start else (float(extent[0]), float(extent[1]))
+
+
 def bound_word_extent(extent: tuple[float, float], duration_s: float) -> tuple[float, float]:
     """Bound a stored consensus word extent by the duration its audio decoded to.
 

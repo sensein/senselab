@@ -23,7 +23,12 @@ from senselab.audio.data_structures import AudioHints
 from senselab.audio.workflows.triage.config import TriageConfig, UnmeasuredConfigKey
 from senselab.audio.workflows.triage.consensus import vocabulary_key
 from senselab.audio.workflows.triage.nodes.admit import NODE as ADMIT_NODE
-from senselab.audio.workflows.triage.nodes.common import find_measurement, live_entities, software_agent
+from senselab.audio.workflows.triage.nodes.common import (
+    clamp_to_recording,
+    find_measurement,
+    live_entities,
+    software_agent,
+)
 from senselab.audio.workflows.triage.nodes.gates import (
     DEFAULT_LAYER,
     FAMILY_LAYER,
@@ -461,7 +466,7 @@ def record_unrun_owner(
 
 
 def propose_span(store: ProvStore, activity_id: str, agent_id: str, proposal: Proposal) -> str:
-    """Write one proposed span, with its family, its role and its derivation.
+    """Write one proposed span, with its family, its role and its derivation, bounded by the recording.
 
     Args:
         store: The provenance store.
@@ -482,7 +487,7 @@ def propose_span(store: ProvStore, activity_id: str, agent_id: str, proposal: Pr
         )
     span_id = store.entity(
         prov_type="span",
-        extent=(proposal.start, proposal.end),
+        extent=clamp_to_recording(store, (proposal.start, proposal.end)),
         attributes={**proposal.attributes, "family": proposal.family, "role": proposal.role},
     )
     store.was_generated_by(span_id, activity_id)

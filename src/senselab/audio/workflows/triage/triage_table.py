@@ -503,7 +503,7 @@ def row(
         "task_start_s": decision.get("extent_start_s"),
         "task_end_s": decision.get("extent_end_s"),
         "task_duration_s": task_s,
-        "task_fraction": None if not duration or task_s is None else round(float(task_s) / float(duration), 4),
+        "task_fraction": None if not duration or task_s is None else round(min(1.0, float(task_s) / float(duration)), 4),
         "task_events_found": readings.get("task_events_found"),
         "task_events_instructed": readings.get("task_events_instructed"),
         "annotations": annotations,
