@@ -23,10 +23,10 @@ participant:
 # cohort_fold.condition_shift. Derivations: specs/20261007-task-events-in-background/cross-dataset.md, "D1".
 condition:
   snr_percentiles: {floor: 10, level: 95}  # energy-envelope percentiles read as floor and active level (recording_vectors/evaluation.yaml frame)
-  hot_rms_dbfs_min: -20.0                  # PROVISIONAL: a participant or session median RMS at or over this is hot
-  clipped_fraction_min: 0.5                # PROVISIONAL: a participant or session with this share of clipped recordings is clipped
-  shift_level_db_min: 6.0                  # PROVISIONAL: a session median level this far from the other sessions' is a condition shift
-  shift_snr_db_min: 6.0                    # PROVISIONAL: likewise for the median SNR
+  hot_rms_dbfs_min: -9.343                 # a participant or session median RMS at or over this is hot; Tukey upper fence over 1,527 participant medians, r36
+  clipped_fraction_min: 0.475              # a participant or session with this share of recordings holding clip spans is clipped; Tukey upper fence, r36
+  shift_level_db_min: 17.783               # a session median level this far from the other sessions' is a condition shift; Tukey upper fence over 351 sessions, r36
+  shift_snr_db_min: 15.117                 # likewise for the median envelope SNR; Tukey upper fence over 351 sessions, r36
 
 # The participant's non-matching speech outside the task, clustered across their recordings (cohort_stage.non_target_voices).
 non_target_voice:
@@ -35,8 +35,8 @@ non_target_voice:
 
 # A speaker non-match shared across a participant's recordings (cohort_fold.shared_nonmatch).
 shared_nonmatch:
-  recordings_min: 3     # PROVISIONAL: non-matching recordings
-  fraction_min: 0.5     # PROVISIONAL: share of the participant's compared recordings
+  recordings_min: 3     # non-matching recordings, the fewest that can be shared beyond a pair
+  fraction_min: 0.169   # share of the participant's compared recordings; Tukey upper fence over the 214 participants with any non-match, r36
 
 # Speaker comparison: per recording, one embedding pooled over its target speech and one over its speech
 # outside the task, each compared with the enrollment. Derivation: design.md, "Pooled speaker comparison".
