@@ -1731,7 +1731,11 @@ class TestTheGatesDecideTheDeclaredTask:
             tmp_path,
             family="harvard-sentences-list",
             branch="SPEECH",
-            readings={"expected_tokens_matched": 6, "expected_tokens_omitted": 0, "extent_dominant_exclusive_share": 0.5},
+            readings={
+                "expected_tokens_matched": 6,
+                "expected_tokens_omitted": 0,
+                "extent_dominant_exclusive_share": 0.5,
+            },
         )
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
         flagging = {gate["gate"]: gate for gate in result.file_verdict.gates["flagging"]}

@@ -1,5 +1,8 @@
-"""The r37 fold amendments: the speaker gate's downgrade, the second opinion on the participant's own speech,
-the narrative off-task aside, the identifier test, the corroborated "not free" hold and speech before the task.
+"""The r37 fold amendments to the speaker and release grounds.
+
+The speaker gate's downgrade, the second opinion on the participant's own speech, the narrative off-task
+aside, the identifier test, the corroborated "not free" hold, speech before the task, and who read each
+other_speaker item.
 
 Design: ``specs/20261012-r37-words-speaker/design.md``.
 """
@@ -120,7 +123,10 @@ class TestTheSpeakerGateDowngradesOnlyUnderAHotParticipant:
         """Another reading of a second voice keeps the gate a flag whatever the condition."""
         corroborations: list[dict[str, Any]] = [
             {"cohort": _cohort(target=False, condition=_HOT)},
-            {"cohort": _cohort(condition=_HOT), "task": TaskEvidence(owning_branches=("SPEECH",), separated_speakers_n=2)},
+            {
+                "cohort": _cohort(condition=_HOT),
+                "task": TaskEvidence(owning_branches=("SPEECH",), separated_speakers_n=2),
+            },
             {"cohort": _cohort(condition=_HOT), "annotation": {**_READ, "speakers": "more_than_one"}},
             {
                 "cohort": _cohort(target=None, condition=_HOT),

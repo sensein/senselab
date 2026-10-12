@@ -120,7 +120,9 @@ def test_a_store_s_moved_words_are_superseded_and_the_transcript_rewritten() -> 
         store.entity(prov_type="span", extent=extent, attributes={"measure": "amplitude", "signal": "preemphasised"})
     measurement = arbitrate_words(store, run_dir=None, family="word-color-stroop")
     assert measurement is not None
-    record = find_measurement(store, WORD_ARBITRATION).attributes
+    found = find_measurement(store, WORD_ARBITRATION)
+    assert found is not None
+    record = found.attributes
     assert record["retimed_n"] == 1 and record["unlocated_n"] == 0 and record["moved_n"] == 1
     live = consensus_words(store)
     assert [w.extent for w in live] == [(2.0, 2.3), words[1].extent]

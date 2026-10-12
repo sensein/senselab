@@ -66,9 +66,7 @@ def activity_spans(store: ProvStore) -> list[Interval]:
     )
 
 
-def held_voicing(
-    times_s: np.ndarray, voiced: np.ndarray, *, min_s: float, bridge_s: float
-) -> list[Interval]:
+def held_voicing(times_s: np.ndarray, voiced: np.ndarray, *, min_s: float, bridge_s: float) -> list[Interval]:
     """The voiced runs long enough to be a held phonation rather than a word.
 
     Args:

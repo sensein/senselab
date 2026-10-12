@@ -67,9 +67,9 @@ from senselab.audio.workflows.triage.nodes.common import (
     lexical_words,
     live_entities,
     mint_live,
-    word_hull,
     resolve_stream,
     software_agent,
+    word_hull,
     write_verdict,
 )
 from senselab.audio.workflows.triage.nodes.gates import (
@@ -127,8 +127,8 @@ from senselab.audio.workflows.triage.vocabulary import (
     BREATH_COUNTED,
     BREATH_SUSTAINED,
     COUGH_COUNTED,
-    DOMINANT_SPEAKER_GATE,
     COUGH_PERFORMED,
+    DOMINANT_SPEAKER_GATE,
     GRAPH_ORDER,
     KEY_NODE_OUTCOME_UNREADABLE,
     PII_SCAN,

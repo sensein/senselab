@@ -403,8 +403,8 @@ test('a side-file row expands to the record the page draws, paths under its run 
     effect: 'pass', decisive: true, source: null, model: null, spans: [],
   })
   assert.equal(rec.evidence[1].source, 'diarizer')
-  assert.equal(R.readBy(rec.evidence[1]), 'diarizer · pyannote · 4–6 s')
-  assert.equal(R.readBy(rec.evidence[0]), '')
+  assert.equal(R.readerLabel(rec.evidence[1]), 'diarizer · pyannote · 4–6 s')
+  assert.equal(R.readerLabel(rec.evidence[0]), '')
   assert.deepEqual(rec.speech.entries, [['hi', 0, -1], ['there', 0, 0]])
   assert.equal(rec.speech.release_ground, 'declined')
   assert.deepEqual(rec.speech.llm, { status: 'disabled' })

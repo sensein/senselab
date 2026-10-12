@@ -105,7 +105,9 @@ SCHEMA = pa.schema(
         (
             "evidence",
             pa.list_(
-                pa.struct([("i", pa.int32()), ("v", pa.string()), ("e", pa.string()), ("d", pa.bool_()), ("x", pa.string())])
+                pa.struct(
+                    [("i", pa.int32()), ("v", pa.string()), ("e", pa.string()), ("d", pa.bool_()), ("x", pa.string())]
+                )
             ),
         ),
         ("speech", SPEECH),
