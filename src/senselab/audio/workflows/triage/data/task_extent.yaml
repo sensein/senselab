@@ -29,6 +29,7 @@ trim:                            # A2: the extent ends at the task's own acousti
   ddk:
     agreed_run_min: 2            # a run of this many agreed non-task words cuts the train (task_content.yaml agreed_run_min)
     edge_duration_ratio: 2.5     # UNFITTED: an edge event longer than this x the train's median event is not the train
+    kept_share_min: 0.5          # a speech split stands only where its kept piece holds this share of the train's events
     margin_intervals: 1.0        # a trimmed edge keeps this many of the train's own median onset intervals beyond its last event
     exclude_families:            # families whose task word spans the recording: never trimmed
     - diadochokinesis-buttercup
@@ -44,6 +45,7 @@ continuity:                      # A3: an interrupted vowel is spanned by phonat
   voiced_min_s: 0.1              # a further run holds at least this much voicing
   gap_max_s: 2.5                 # and lies at most this far from the extent
   tail_s: 0.1                    # a run continuity takes in ends this long after its last voiced frame
+  runs_max: 1                    # round 2: continuity takes in at most this many further runs a side (the completion burst)
 parts:                           # round 2: a voice task done in several separate phonations is spanned whole
   enabled: false
   hold_min_s: 1.0                # UNFITTED: a further run with this much voicing is a part of the task

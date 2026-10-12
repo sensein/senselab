@@ -163,3 +163,13 @@ def test_a_count_in_overlapping_the_vowel_is_taken_in() -> None:
     extent = {"start_s": 2.585, "end_s": 12.0, "onset_s": 2.585, "offset_s": 12.0, "voiced_onset_s": 2.585}
     read = voice_task_extent(PhonationReading(extent), (1.58, 2.94), _params())
     assert read.task_extent == (1.58, 12.0)
+
+
+def test_a_speech_split_leaving_under_half_the_train_does_not_stand() -> None:
+    """Round 2 (2ca44133's shape): agreed 'words' all through a train are the task misread, not speech."""
+    from senselab.audio.workflows.triage.task_extent import trim_train
+
+    events = [(0.5 * i, 0.5 * i + 0.4) for i in range(10)]
+    runs = [(1.45, 1.55), (2.95, 3.05)]
+    assert trim_train(events, runs, ratio=2.5, kept_share_min=0.5).kept == tuple(range(10))
+    assert len(trim_train(events, runs, ratio=2.5).kept) < 10
