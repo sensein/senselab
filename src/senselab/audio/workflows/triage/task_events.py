@@ -595,6 +595,7 @@ class TaskEvidence:
             stops were given.
         trim: What trimming the events to the task's own extent removed (``task_extent.Trim.record``); empty
             where none was trimmed.
+        background: The task events' level against the recording's background (:func:`background_reading`).
     """
 
     events: tuple[TaskEvent, ...]
@@ -607,6 +608,7 @@ class TaskEvidence:
     growth: dict[str, Any] = field(default_factory=dict)
     check: dict[str, Any] = field(default_factory=dict)
     trim: dict[str, Any] = field(default_factory=dict)
+    background: dict[str, Any] = field(default_factory=dict)
 
     @property
     def events_found_n(self) -> int:
@@ -654,6 +656,7 @@ class TaskEvidence:
             **({"growth": dict(self.growth)} if self.growth else {}),
             **({"extent_check": dict(self.check)} if self.check else {}),
             **({"trim": dict(self.trim)} if self.trim else {}),
+            **({"background": dict(self.background)} if self.background else {}),
         }
 
 
@@ -782,7 +785,13 @@ def evidence_of(
         core = [(e.start_s, e.end_s) for e in cluster]
         base = median_interval_s(core, floor_s=float(g["gap_floor_s"]), single_s=gap_s)
         pool = {(e.start_s, e.end_s): e for e in found if e.snr_db >= low and e not in cluster}
-        grew = grow(core, list(pool), limit_s=float(g["k"]) * base, stops=stops or ())
+        grew = grow(
+            core,
+            list(pool),
+            limit_s=float(g["k"]) * base,
+            stops=stops or (),
+            cross_stops=bool(g.get("cross_speech")),
+        )
         grown = sorted([*cluster, *(pool[s] for s in grew.added)], key=lambda e: e.start_s)
         growth = grew.record()
     extent: Span | None = None
@@ -790,7 +799,13 @@ def evidence_of(
         start = grown[0].start_s
         if inhale:
             start = inhale_start(view, start, float(p["inhale"]["margin_db"]), float(p["inhale"]["back_max_s"]))
-        extent = (start, max(e.end_s for e in grown))
+        end = max(e.end_s for e in grown)
+        if grow_kind == "breath" and enabled("edges", q):
+            edge_q = q["edges"]
+            reach = {key: float(edge_q[key]) for key in ("margin_db", "bridge_s", "max_s")}
+            start = min(start, envelope_edge(view, grown[0].start_s, -1, stops=stops or (), **reach))
+            end = max(end, envelope_edge(view, end, 1, stops=stops or (), **reach))
+        extent = (start, end)
     check: dict[str, Any] = {}
     if stops is not None:
         held = {(e.start_s, e.end_s) for e in grown}
@@ -799,8 +814,106 @@ def evidence_of(
             for e in found
             if (e.start_s, e.end_s) not in held and e.snr_db >= low and (not e.recovered or e.source == MODULATION)
         ]
-        reachable = reachable_outside(extent, outside, stops)
+        crossing = bool(g.get("cross_speech")) and grow_kind is not None and enabled("growth", q)
+        reachable = reachable_outside(extent, outside, () if crossing else stops)
         check = extent_check(
             has_extent=extent is not None, narrow={"events_outside": len(reachable)}, wide={}, outside_n=len(reachable)
         ).record()
-    return TaskEvidence(tuple(grown), tuple(found), rhythm, extent, decision, why, inputs, growth, check)
+    background = background_reading(view, grown, found, stops or ())
+    return TaskEvidence(
+        tuple(grown), tuple(found), rhythm, extent, decision, why, inputs, growth, check, background=background
+    )
+
+
+def envelope_edge(
+    view: GenericView,
+    t: float,
+    direction: int,
+    *,
+    margin_db: float,
+    bridge_s: float,
+    max_s: float,
+    stops: Sequence[Span] = (),
+) -> float:
+    """Where the broadband envelope around an event edge falls back to the floor.
+
+    Args:
+        view: The background.
+        t: The edge.
+        direction: -1 walks back from a start, +1 on from an end.
+        margin_db: The level over the stationary floor that is still the event.
+        bridge_s: A dip under the margin this short does not end it.
+        max_s: The furthest the edge moves.
+        stops: Spans the edge never enters.
+
+    Returns:
+        The furthest frame boundary within ``max_s`` that stands ``margin_db`` over the floor, reached across dips
+        of at most ``bridge_s``; ``t`` where the next frame does not.
+    """
+    times = view.frames.times_s
+    level = view.frames.level_db - view.broadband_floor_db
+    if not len(times):
+        return t
+    hop = view.hop_s
+    j = int(np.clip(np.searchsorted(times, t), 0, len(times) - 1))
+    last, dip, steps = t, 0, 0
+    bridge, limit = int(round(bridge_s / hop)), int(round(max_s / hop))
+    while 0 <= j + direction < len(times) and steps < limit:
+        j += direction
+        steps += 1
+        now = float(times[j])
+        if any(a <= now <= b for a, b in stops):
+            break
+        if level[j] >= margin_db:
+            last = now - hop / 2 if direction < 0 else now + hop / 2
+            dip = 0
+        else:
+            dip += 1
+            if dip > bridge:
+                break
+    return min(t, last) if direction < 0 else max(t, last)
+
+
+def background_reading(
+    view: GenericView, events: Sequence[TaskEvent], found: Sequence[TaskEvent], stops: Sequence[Span] = ()
+) -> dict[str, Any]:
+    """The task events' level against the recording's background: the frames no found event or impulse holds.
+
+    Args:
+        view: The background.
+        events: The task events.
+        found: Every event the type tests found, none of whose frames is background.
+        stops: Speech and other-speaker spans, whose share of the background is reported.
+
+    Returns:
+        ``event_db`` (the median of the task events' unmasked peak levels), ``background_db`` (the median level of
+        the background frames; the stationary floor with fewer than 10), ``event_over_background_db``,
+        ``background_over_floor_db`` and ``background_speech_share``; empty without a task event.
+    """
+    if not events:
+        return {}
+    times, level = view.frames.times_s, view.frames.level_db
+    masked = _impulse_mask(view)
+    peaks = []
+    for e in events:
+        inside = (times >= e.start_s) & (times <= e.end_s) & ~masked
+        if inside.any():
+            peaks.append(float(level[inside].max()))
+    if not peaks:
+        return {}
+    taken = masked.copy()
+    for e in found:
+        taken |= (times >= e.start_s) & (times <= e.end_s)
+    background = ~taken
+    background_db = float(np.median(level[background])) if background.sum() >= 10 else view.broadband_floor_db
+    speech = np.zeros(len(times), dtype=bool)
+    for a, b in stops:
+        speech |= (times >= a) & (times <= b)
+    event_db = float(np.median(peaks))
+    return {
+        "event_db": round(event_db, 2),
+        "background_db": round(background_db, 2),
+        "event_over_background_db": round(event_db - background_db, 2),
+        "background_over_floor_db": round(background_db - view.broadband_floor_db, 2),
+        "background_speech_share": round(float(speech[background].mean()), 3) if background.any() else None,
+    }
