@@ -121,16 +121,34 @@ def phonation_holds(store: ProvStore, run_dir: Path | None, family: str | None) 
     )
 
 
-def with_mask_gaps(words: Sequence[ConsensusWord], *, duration_s: float | None) -> list[ConsensusWord]:
-    """Each unlocated word given the span between its timed neighbours as the place a mask over it covers.
+def _subtract(span: Interval, holes: Sequence[Interval]) -> list[Interval]:
+    """What is left of a span once every hole is cut out of it, earliest first."""
+    pieces = [span]
+    for lo, hi in holes:
+        pieces = [
+            piece
+            for start, end in pieces
+            for piece in ((start, min(end, lo)), (max(start, hi), end))
+            if piece[1] > piece[0]
+        ]
+    return pieces
+
+
+def with_mask_gaps(
+    words: Sequence[ConsensusWord], *, duration_s: float | None, off_limits: Sequence[Interval] = ()
+) -> list[ConsensusWord]:
+    """Each unlocated word given the place a mask over it covers: the gap between its timed neighbours.
 
     A neighbour is the nearest word on either side that is not unlocated and carries a non-empty extent. With
     none before, the gap opens at 0; with none after, it closes at ``duration_s`` (else the latest word end).
-    Where the neighbours touch or overlap, the gap is the hull of both neighbours.
+    Where the neighbours touch or overlap, the gap is the hull of both neighbours. No word lies on the held
+    phonation (``off_limits``), so the gap less the held phonation is kept where a recogniser's placement
+    midpoint falls in what is left (the hull of those pieces); where none does, the whole gap.
 
     Args:
         words: The positions, in stream order, as arbitrated.
         duration_s: The recording's duration, or None.
+        off_limits: The held phonation, in a voice family.
 
     Returns:
         The positions, every unlocated one with ``mask_gap`` set.
@@ -152,7 +170,18 @@ def with_mask_gaps(words: Sequence[ConsensusWord], *, duration_s: float | None) 
         if end <= start:
             start = prev[0] if prev is not None else 0.0
             end = nxt[1] if nxt is not None else end_of_stream
-        out[i] = replace(word, mask_gap=(round(float(start), 3), round(float(max(start, end)), 3)))
+        gap = (float(start), float(max(start, end)))
+        midpoints = [
+            (span[0] + span[1]) / 2.0
+            for a, b in word.timings.values()
+            if (span := located_span(a, b, duration_s=duration_s)) is not None
+        ]
+        held = [
+            piece for piece in _subtract(gap, off_limits) if any(piece[0] <= m <= piece[1] for m in midpoints)
+        ]
+        if held:
+            gap = (min(piece[0] for piece in held), max(piece[1] for piece in held))
+        out[i] = replace(word, mask_gap=(round(gap[0], 3), round(gap[1], 3)))
     return out
 
 
@@ -211,7 +240,7 @@ def arbitrate(
             if result.arbitrated_source is not None:
                 won[result.arbitrated_source] = won.get(result.arbitrated_source, 0) + 1
         out.append(result)
-    out = with_mask_gaps(out, duration_s=duration_s)
+    out = with_mask_gaps(out, duration_s=duration_s, off_limits=off_limits)
     return Arbitrated(
         words=tuple(out),
         moved=tuple(moved),
