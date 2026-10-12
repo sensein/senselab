@@ -195,6 +195,8 @@ class TaskSpeech:
             are None for an utterance of untimed words only.
         phrase_words_n: The words of its phrase utterances.
         member_ids: An item-set family's lexical words that are members of its declared category.
+        post_task_ids: In an airway or voice family, the lexical words after the task's last event, which are
+            speech outside the task whatever they spell.
     """
 
     lexical_n: int = 0
@@ -207,6 +209,7 @@ class TaskSpeech:
     utterances: tuple[tuple[float | None, float | None, int, bool], ...] = ()
     phrase_words_n: int = 0
     member_ids: tuple[str, ...] = ()
+    post_task_ids: tuple[str, ...] = ()
 
     @property
     def words_n(self) -> int:
@@ -262,6 +265,8 @@ class TaskSpeech:
             "untimed_ids": list(self.untimed_ids),
             "task_content_ids": list(self.task_content_ids),
             "member_ids": list(self.member_ids),
+            "post_task_n": len(self.post_task_ids),
+            "post_task_ids": list(self.post_task_ids),
         }
 
 
@@ -441,9 +446,14 @@ def task_speech_of(
     item_extent: tuple[float, float] | None = None
     said: tuple[tuple[float | None, float | None, int, bool], ...] = ()
     phrase_words_n = 0
+    post_task: set[str] = set()
     if vocal:
+        events = task_events(store, family)
         text_ids = task_text_ids(words, family, task_text)
-        content = task_content_ids(words, task_events(store, family), family=family, lexicon_ids=lexicon_ids)
+        content = task_content_ids(words, events, family=family, lexicon_ids=lexicon_ids)
+        post_task = after_last_event(lexical, events) if not lexical_voice_family(family) else set()
+        text_ids -= post_task
+        content -= post_task
     else:
         p = task_speech_parameters()
         text_ids = set()
@@ -474,7 +484,24 @@ def task_speech_of(
         utterances=said,
         phrase_words_n=phrase_words_n,
         member_ids=tuple(word.id for word in lexical if word.id in member_ids) if not vocal else (),
+        post_task_ids=tuple(word.id for word in lexical if word.id in post_task),
     )
+
+
+def after_last_event(words: Sequence[Entity], events: Sequence[tuple[float, float]]) -> set[str]:
+    """The words that start once the task's last event has ended.
+
+    Args:
+        words: The lexical words.
+        events: The task's events.
+
+    Returns:
+        The ids of the timed words starting at or after the last event's end; empty where no event was read.
+    """
+    if not events:
+        return set()
+    last = max(float(end) for _, end in events)
+    return {word.id for word in words if (span := _timing(word)) is not None and span[0] >= last}
 
 
 def category_member_ids(words: Sequence[Entity], family: str | None, hint: AudioHints | None) -> set[str]:
