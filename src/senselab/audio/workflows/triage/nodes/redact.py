@@ -77,9 +77,11 @@ from senselab.audio.workflows.triage.task_lexicon import TaskLexicon, declared_n
 from senselab.audio.workflows.triage.task_speech import (
     TASK_SPEECH_READING,
     item_set_family,
+    narrative_family,
     words_min_for,
 )
 from senselab.audio.workflows.triage.vocabulary import (
+    OFF_TASK_ASIDE_LEVEL,
     REDACTION_LLM_ANNOTATION,
     UNPLACED_CLEARED,
     UNPLACED_OPEN,
@@ -1659,6 +1661,11 @@ class MaskPlan:
         )
 
     @property
+    def pii_masks_final_n(self) -> int:
+        """How many standing extents hide identifying content: every final extent but speech outside the task."""
+        return sum(len(mask.final) for mask in self.masks if mask.source != NON_TASK_SPEECH)
+
+    @property
     def policy_masks_n(self) -> int:
         """How many masks the policy itself placed, over words no detector finding covered."""
         return sum(1 for mask in self.masks if mask.source == POLICY and mask.final)
@@ -2280,7 +2287,8 @@ def _heard_off_task(
         speech |= phrases if extensive else set()
     else:
         extensive = read and reading.get("off_task_speech") == "extensive"
-        own = reading.get("off_task_quotes")
+        aside = narrative_family(declared_task_family(store)) and reading.get("off_task_speech") == OFF_TASK_ASIDE_LEVEL
+        own = () if aside else reading.get("off_task_quotes")
     quotes = [*(own or ()), *(reading.get("other_speaker_quotes") or ())] if read else []
     for quote in quotes:
         speech |= {word.id for word in _place(str(quote), tokens)}

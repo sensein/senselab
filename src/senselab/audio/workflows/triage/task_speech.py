@@ -115,6 +115,45 @@ def item_set_family(family: str | None) -> bool:
     return bool(family) and family in set(task_content_parameters().get("open_vocabulary_families") or ())
 
 
+def narrative_family(family: str | None) -> bool:
+    """Whether a declared family is an open or narrative lexical task: a free response.
+
+    Args:
+        family: The declared family, or None.
+
+    Returns:
+        True for a SPEECH family whose expectation is ``FREE_RESPONSE`` (story retell, free speech, picture
+        description, open response).
+    """
+    from senselab.audio.workflows.triage.nodes.branches import SPEECH_EXPECTATIONS, Pattern  # noqa: PLC0415
+
+    expectation = SPEECH_EXPECTATIONS.get(family or "")
+    return expectation is not None and expectation.pattern == Pattern.FREE_RESPONSE
+
+
+def speech_before(words: Sequence[Entity], start_s: float) -> dict[str, Any]:
+    """The lexical words whose timing lies before a task's extent starts.
+
+    Args:
+        words: The lexical consensus words, in stream order.
+        start_s: Where the task's extent starts.
+
+    Returns:
+        ``words_n``, ``start_s``, ``end_s`` and ``seconds`` (from the first such word's start to the last one's
+        end) over the timed words whose midpoint is before ``start_s``; empty where there is none.
+    """
+    spans = [span for span in (_timing(word) for word in words) if span is not None and sum(span) / 2.0 < start_s]
+    if not spans:
+        return {}
+    low, high = min(a for a, _ in spans), min(max(b for _, b in spans), start_s)
+    return {
+        "words_n": len(spans),
+        "start_s": round(low, 3),
+        "end_s": round(high, 3),
+        "seconds": round(max(0.0, high - low), 3),
+    }
+
+
 def reads_task_speech(family: str | None) -> bool:
     """Whether a family's speech outside the task is read.
 
