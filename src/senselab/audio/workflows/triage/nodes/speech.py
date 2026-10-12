@@ -128,6 +128,7 @@ from senselab.audio.workflows.triage.stimulus import (
     align_stimulus,
     near_match,
 )
+from senselab.audio.workflows.triage.task_extent import STIMULUS_EXTENT_CHECK, enabled, extent_check
 from senselab.audio.workflows.triage.task_lexicon import category_members, task_lexicon
 from senselab.audio.workflows.triage.task_speech import item_utterances, write_task_speech
 from senselab.audio.workflows.triage.vocabulary import TASK
@@ -137,6 +138,7 @@ from senselab.utils.prov_store import Entity, ProvStore
 from senselab.utils.tasks.cached_inference import annotate_result_origin
 
 NODE = "SPEECH"
+NEAR_MATCH_SECTION = "stimulus.near_match"
 TASK_EXTENT_ROLE = "task_extent"
 """The role that says where the declared task was performed. Exactly one may survive a recording."""
 ORIGINAL = "recording"  # the stream disruptions are measured on: as captured, unnormalised, unresampled
@@ -1031,6 +1033,38 @@ def _stimulus(store: ProvStore, hint: AudioHints | None, params: BranchParams) -
     return measurement.id, align_stimulus(prompts, words, terminators=terminators)
 
 
+def _read_as_stimulus(alignment: StimulusAlignment, words: Sequence[Entity], params: BranchParams) -> list[Entity]:
+    """The words read as the stimulus: every realised token's, and a substituted token's a recogniser read as it.
+
+    A substituted token counts where any recogniser's reading normalises to its key, or the consensus reading
+    is a near match of it under ``stimulus.near_match``.
+
+    Args:
+        alignment: The stimulus alignment.
+        words: The lexical consensus words.
+        params: The operating points, read for ``stimulus.near_match``.
+
+    Returns:
+        The words, in expected-token order.
+    """
+    by_index = {int(word.attributes["index"]): word for word in words}
+    exact_below = params.setting(f"{NEAR_MATCH_SECTION}.exact_below", int)
+    two_edits_from = params.setting(f"{NEAR_MATCH_SECTION}.two_edits_from", int)
+    near = None if exact_below is None or two_edits_from is None else NearMatch(exact_below, two_edits_from)
+    out: list[Entity] = []
+    for token in alignment.expected:
+        word = by_index.get(token.word_index) if token.word_index is not None else None
+        if word is None or token.realisation == "absent":
+            continue
+        if token.realisation == "substituted":
+            readings = (word.attributes.get("readings") or {}).values()
+            read = any(normalise_token(str(reading)) == token.key for reading in readings)
+            if not read and not (near is not None and near.matches(token.key, normalise_token(word_text(word)))):
+                continue
+        out.append(word)
+    return out
+
+
 def _stimulus_agrees(store: ProvStore, alignment: StimulusAlignment) -> bool:
     """Whether the rebuilt alignment carries the counts PREPROCESS recorded for the derivative.
 
@@ -1249,8 +1283,16 @@ def _speech_ordered(  # noqa: C901 — the two token sources and the five depart
     findings: list[Finding] = []
     if alignment is not None and not _stimulus_agrees(store, alignment):
         findings.append(measured("stimulus_alignment_rebuild_agrees", None, None, False, evidence[0]))
+    read_as = _read_as_stimulus(alignment, words, params) if alignment is not None else []
+    spanning = read_as if read_as and enabled("stimulus_edges") else [word for _, word in matched]
+    if alignment is not None and matched:
+        hull = (word_extent(spanning[0])[0], word_extent(spanning[-1])[1])
+        outside = [w for w in read_as if word_extent(w)[1] <= hull[0] or word_extent(w)[0] >= hull[1]]
+        check = extent_check(has_extent=hull[1] > hull[0], narrow={"tokens_outside": len(outside)}, wide={})
+        covariates = {key: value for key, value in check.record().items() if key != "status"}
+        findings.append(measured(STIMULUS_EXTENT_CHECK, None, None, check.status, *evidence, **covariates))
     if matched:
-        read_extent = (word_extent(matched[0][1])[0], word_extent(matched[-1][1])[1])
+        read_extent = (word_extent(spanning[0])[0], word_extent(spanning[-1])[1])
         if read_extent[1] > read_extent[0]:
             components.append(
                 MINT(
