@@ -265,3 +265,21 @@ def test_the_transcript_fixture_is_what_this_script_writes() -> None:
     for case in json.loads(fixture.read_text())["cases"]:
         entries = [[*entry, i] if i < case["consensus_n"] else list(entry) for i, entry in enumerate(case["entries"])]
         assert fs.paragraph(entries, case["marks"], script._agreement_word) == case["html"], case["name"]
+
+
+def test_a_listen_set_naming_a_labelled_participant_is_refused(tmp_path: Path) -> None:
+    """r37 round 3 let two labelled participants through; the build now fails unless one is allowed on purpose."""
+    labels = tmp_path / "owner_labels"
+    labels.mkdir()
+    entry = {"stem": "sub-SUBJ22_ses-A_task-x", "owner_label": "ok"}
+    (labels / "round.json").write_text(json.dumps({"schema": "s", "entries": [entry]}))
+    (labels / "older.tsv").write_text("stem\tnote\nsub-SUBJ23_ses-B_task-y\t\n")
+    assert script.labelled_participants(labels) == {"sub-SUBJ22", "sub-SUBJ23"}
+    stems = ["sub-SUBJ22_ses-C_task-z", "sub-fresh_ses-D_task-z", "sub-SUBJ23_ses-E_task-z"]
+    assert script.already_labelled(stems, labels) == [stems[0], stems[2]]
+    assert script.already_labelled(stems, labels, ["sub-SUBJ22"]) == [stems[2]]
+    listing = tmp_path / "listen.tsv"
+    listing.write_text("stem\n" + "\n".join(stems) + "\n")
+    argv = ["render", str(tmp_path / "none.jsonl"), "--out", str(tmp_path / "page"), "--stems", str(listing)]
+    assert script.main([*argv, "--exclude-labelled", str(labels)]) == 2
+    assert not (tmp_path / "page").exists()

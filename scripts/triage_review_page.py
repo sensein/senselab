@@ -258,6 +258,56 @@ def listen_set(
     return ListenSet(name, question, tuple(labels), columns, checks, proposed, tuple(directions))
 
 
+def participant_of(stem: str) -> str:
+    """A stem's participant: everything before its ``_ses-``.
+
+    Args:
+        stem: A recording stem.
+
+    Returns:
+        The ``sub-...`` participant.
+    """
+    return stem.split("_ses-", 1)[0]
+
+
+def labelled_participants(directory: Path) -> set[str]:
+    """Every participant an owner label file in a directory names.
+
+    Args:
+        directory: The owner labels: review exports (JSON with ``entries`` carrying ``stem``) and TSVs with a
+            ``stem`` column.
+
+    Returns:
+        The participants.
+    """
+    found: set[str] = set()
+    for path in sorted(directory.glob("*.json")):
+        data = json.loads(path.read_text())
+        entries = data.get("entries") if isinstance(data, dict) else data
+        values = entries.values() if isinstance(entries, dict) else entries or ()
+        found |= {participant_of(str(e["stem"])) for e in values if isinstance(e, dict) and e.get("stem")}
+    for path in sorted(directory.glob("*.tsv")):
+        lines = [line for line in path.read_text().splitlines() if line.strip()]
+        if lines and "stem" in lines[0].split("\t"):
+            found |= {participant_of(row["stem"]) for row in csv.DictReader(lines, delimiter="\t") if row.get("stem")}
+    return found
+
+
+def already_labelled(stems: Sequence[str], directory: Path, allowed: Sequence[str] = ()) -> list[str]:
+    """The stems whose participant an owner has already labelled, less those named as allowed.
+
+    Args:
+        stems: The listen set's stems.
+        directory: The owner labels (:func:`labelled_participants`).
+        allowed: Participants (or stems) the listen set names on purpose.
+
+    Returns:
+        The offending stems, in order.
+    """
+    labelled = labelled_participants(directory) - {participant_of(a) for a in allowed}
+    return [stem for stem in stems if participant_of(stem) in labelled]
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Entry point.
 
@@ -292,6 +342,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     renderer.add_argument(
         "--directions", default="", help="answers to which way the proposed extent is off, comma-separated"
     )
+    renderer.add_argument(
+        "--exclude-labelled",
+        type=Path,
+        default=None,
+        help="the owner labels directory: refuse a listen set naming a participant already labelled there",
+    )
+    renderer.add_argument(
+        "--allow-labelled", default="", help="participants or stems the listen set names on purpose, comma-separated"
+    )
     arguments = parser.parse_args(argv)
     if arguments.command == "extract":
         summary = extract(
@@ -312,6 +371,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             arguments.question,
             [d.strip() for d in arguments.directions.split(",") if d.strip()],
         )
+        if arguments.exclude_labelled is not None:
+            allowed = [a.strip() for a in arguments.allow_labelled.split(",") if a.strip()]
+            offending = already_labelled(list(listen.checks), arguments.exclude_labelled, allowed)
+            if offending:
+                print(
+                    f"refusing: {len(offending)} listed recordings belong to participants already labelled in "
+                    f"{arguments.exclude_labelled}: {sorted({participant_of(s) for s in offending})}",
+                    file=sys.stderr,
+                )
+                return 2
     records = load(arguments.data, None if listen is None else listen.checks)
     written = write_page(
         records,
