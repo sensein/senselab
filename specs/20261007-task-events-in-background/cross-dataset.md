@@ -73,6 +73,25 @@ background, speech over residual, clip-span and dropout seconds, lexical and off
 single hypothesis / degenerate count, masked seconds and fraction inside the extent (empty when withheld or
 discarded), COHORT target / non-task / consistency cosines and enrollment source.
 
-## Measured over r36 (read-only)
+## Measured over r36 (read-only, commit 84731705 for COHORT; clip spans substituted from the recording vectors)
 
-See `r37x_crossdataset/results.json` and `fcheck.json`; the summary is in the hand-off of 2026-10-12.
+COHORT readings for all 1,527 participants, 1,736 sessions, 62,550 recordings (`r37x_crossdataset/results.json`).
+
+- **D1.** 124 participants (4,989 recordings) and 166 sessions are hot or clipped; 004d42e9, 0482bc77 and
+  168c5e68 among them, 01401050 and 00053adb not. The level bound alone flags none. Hold-out by participant
+  (hex half of the id): fences fitted on half 0 (−8.6 dBFS, 0.468) flag 65 of 761 and 62 of 766. Of the 415
+  `session_speaker_consistency` reviews (18 sessions, 10 participants), the condition explains 58 recordings in 3
+  sessions.
+- **D2.** 186 non-matching non-task pools: 149 single, 36 in 13 recurring clusters (13 participants; 11 clusters
+  touch airway families, 3 voice, 2 DDK, 2 lexical; one spans 10 recordings), 1 self-talk. The cases: 01401050
+  one single voice (maximum-phonation-time-3, 3.3 s); 0482bc77 two single voices (DDK ka, cough) that do not
+  cluster; 00053adb story has no non-task pool ≥ 2 s; 168c5e68's stroop non-task pool (6.7 s) is single and
+  the opening voice of the labelled recording pools to 1.92 s, under the floor.
+- **D3.** 9 recordings of 5 participants: their non-match becomes `speaker_nonmatch_shared`.
+- **At the fold:** 68 recordings change cohort grounds (58 `session_speaker_inconsistent`, 10
+  `other_speaker_in_session` removed); 59 lose the `other_speaker` reason altogether.
+- **E1.** 195 recordings hit (156 non-lexical, 20 short response, 19 lexical); 131 are review in r36 and would
+  discard (airway 64, voice 39, lexical 28), 64 are already discards. Labels: 4 of 5 labelled discards hit
+  (0550ca66 story-recall missed, as in the trace), 0 of 19 labelled non-discards. Hits by participant half: 88 / 107.
+- **F.** Every pre-existing column is unchanged against r36 `triage.tsv`; fill rates and ranges in
+  `qc_columns.md`.
