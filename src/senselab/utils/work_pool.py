@@ -12,7 +12,8 @@ A pool is a directory that every node can see::
     dead/<item>.json             the item spent its failure or interruption budget
     conflicts/<item>.<why>.<t>.json  a duplicate copy of an item, kept out of the queue
     workers/<worker>.json        the workers that ran here
-    hostcheck/<p>.<worker>.<t>.json  a worker on partition ``p`` failed its host check and released its item
+    hostcheck/<p>.<worker>.<t>.json  a worker on partition ``p`` failed its host check (before claiming anything)
+    controller/                  the controller's lock, the jobs it submitted (jobs/<id>.json), stale markers
     status.json                  written by :meth:`WorkPool.status` (and :class:`Controller`, with ``partitions``)
 
 An item is always in one place. :meth:`WorkPool.claim` takes it with ``rename(queue/<i>.json,
@@ -39,6 +40,7 @@ from __future__ import annotations
 import argparse
 import datetime
 import errno
+import fcntl
 import hashlib
 import json
 import os
@@ -59,7 +61,19 @@ from typing import Any, Callable, Iterable, Mapping, Optional, Sequence, Union
 SCHEMA = "work-pool-1"
 """The ``schema`` value of ``pool.json``."""
 
-SUBDIRS = ("queue", "leases", "tmp", "interrupted", "done", "failed", "dead", "conflicts", "workers", "hostcheck")
+SUBDIRS = (
+    "queue",
+    "leases",
+    "tmp",
+    "interrupted",
+    "done",
+    "failed",
+    "dead",
+    "conflicts",
+    "workers",
+    "hostcheck",
+    "controller",
+)
 """The pool's subdirectories."""
 
 ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,199}")
@@ -98,7 +112,13 @@ NEXT = "next.json"
 """The next state of an item in a hand-off dir, placed with ``link(2)``."""
 
 HOST_CHECK_EXIT = 3
-"""A worker's exit code after its host check failed (it released its item)."""
+"""A worker's exit code after its host check failed (it claimed nothing)."""
+
+HOST_CHECK_TIMEOUT_S = 300.0
+"""Seconds a host check may run before it counts as failed."""
+
+CONTROLLER_LOCKED_EXIT = 4
+"""A controller's exit code when another controller holds the pool's lock."""
 
 PathLike = Union[str, Path]
 
@@ -867,30 +887,25 @@ class WorkPool:
         return count
 
     # -- host checks ---------------------------------------------------------------------------------------------
-    def note_host_check_failure(self, lease: Lease, partition: Optional[str]) -> None:
-        """Record that a worker on ``partition`` failed its host check and released ``lease``'s item.
+    def note_host_check_failure(self, worker: str, partition: Optional[str], rc: Union[int, str]) -> None:
+        """Record that a worker on ``partition`` failed its host check.
 
         Args:
-            lease: The released lease.
+            worker: The worker's name.
             partition: The worker's partition (``SLURM_JOB_PARTITION``); None outside Slurm.
+            rc: The check's exit code, or ``timeout``.
         """
         directory = self._d("hostcheck")
         directory.mkdir(exist_ok=True)
         part = partition or ""
         safe = re.sub(r"[^A-Za-z0-9._-]", "_", part) or "_"
         _write_json(
-            directory / f"{safe}.{lease.worker}.{int(_now() * 1000)}.json",
-            {
-                "partition": part,
-                "worker": lease.worker,
-                "host": self.host,
-                "item": lease.item.id,
-                "attempt": lease.item.attempt,
-            },
+            directory / f"{safe}.{worker}.{int(_now() * 1000)}.json",
+            {"partition": part, "worker": worker, "host": self.host, "rc": rc},
         )
 
     def host_check_failures(self, window_s: float) -> dict[str, int]:
-        """Host-check releases per partition recorded within the last ``window_s`` seconds (storage clock)."""
+        """Host-check failures per partition recorded within the last ``window_s`` seconds (storage clock)."""
         now = self._server_now()
         counts: dict[str, int] = {}
         for name in _names(self._d("hostcheck")):
@@ -1006,13 +1021,27 @@ class _Worker:
         linger: int,
         poll_s: float,
         host_check: Optional[Sequence[str]] = None,
+        host_check_timeout_s: float = HOST_CHECK_TIMEOUT_S,
     ) -> None:
         self.pool, self.classes, self.worker = pool, list(classes), worker
         self.linger, self.poll_s = linger, poll_s
         self.host_check = list(host_check) if host_check else None
-        self.host_ok = self.host_check is None
+        self.host_check_timeout_s = host_check_timeout_s
         self.run: Optional[_Run] = None
         self.terminating = threading.Event()
+
+    def _check_host(self) -> Union[int, str]:
+        """Run the host check in its own session; 0, its exit code, ``timeout`` or 127 (could not start)."""
+        try:
+            child = subprocess.Popen(self.host_check or [], start_new_session=True)  # noqa: S603
+        except OSError:
+            return 127
+        try:
+            return child.wait(timeout=self.host_check_timeout_s)
+        except subprocess.TimeoutExpired:
+            _signal_group(child.pid, signal.SIGKILL)
+            child.wait()
+            return "timeout"
 
     def _on_term(self, signum: int, _frame: Any) -> None:  # noqa: ANN401
         _log(f"signal {signum}: stopping the item in hand and releasing it")
@@ -1095,6 +1124,13 @@ class _Worker:
             partition=env.get("SLURM_JOB_PARTITION"),
             started=_now(),
         )
+        if self.host_check is not None:
+            rc = self._check_host()
+            if rc != 0:
+                self.pool.note_host_check_failure(self.worker, env.get("SLURM_JOB_PARTITION"), rc)
+                _log(f"host check failed (rc {rc}) on {self.pool.host}; exiting without claiming")
+                self._record(exited=_now(), items=0, terminated=False, host_check=rc)
+                return HOST_CHECK_EXIT
         idle, ran = 0, 0
         while not self.terminating.is_set():
             lease = self.pool.claim(self.classes, self.worker)
@@ -1105,18 +1141,6 @@ class _Worker:
                 self.terminating.wait(self.poll_s)
                 continue
             idle = 0
-            if not self.host_ok:
-                try:
-                    rc = subprocess.run(self.host_check or [], check=False).returncode  # noqa: S603
-                except OSError:
-                    rc = 127
-                if rc != 0:
-                    outcome = self.pool.release(lease)
-                    self.pool.note_host_check_failure(lease, env.get("SLURM_JOB_PARTITION"))
-                    _log(f"host check failed (rc {rc}) on {self.pool.host}: item {lease.item.id} {outcome}; exiting")
-                    self._record(exited=_now(), items=ran, terminated=False, host_check=rc)
-                    return HOST_CHECK_EXIT
-                self.host_ok = True
             self._run(lease)
             ran += 1
         self._record(exited=_now(), items=ran, terminated=self.terminating.is_set())
@@ -1132,6 +1156,7 @@ def work(
     linger: int = 3,
     poll_s: float = 10.0,
     host_check: Optional[Sequence[str]] = None,
+    host_check_timeout_s: float = HOST_CHECK_TIMEOUT_S,
 ) -> int:
     """Run one worker in this process until the queue stays empty (installs SIGTERM and SIGINT handlers).
 
@@ -1141,15 +1166,17 @@ def work(
         worker: The worker's name (default ``<host>-<job id or "local">-<pid>``).
         linger: Further empty polls before the worker exits.
         poll_s: Seconds between polls of an empty queue.
-        host_check: A command run once, after the first claim; when it fails, the worker releases the item,
-            records it under ``hostcheck/`` for its partition and exits with :data:`HOST_CHECK_EXIT`.
+        host_check: A command run once, before the first claim; when it fails or outlasts
+            ``host_check_timeout_s``, the worker records it under ``hostcheck/`` for its partition and exits with
+            :data:`HOST_CHECK_EXIT` without claiming anything.
+        host_check_timeout_s: Seconds the host check may run.
 
     Returns:
         0, :data:`SIGNAL_EXIT` after SIGTERM or SIGINT, or :data:`HOST_CHECK_EXIT`.
     """
     name = worker or f"{_host()}-{os.environ.get('SLURM_JOB_ID', 'local')}-{os.getpid()}"
     name = re.sub(r"[^A-Za-z0-9._-]", "_", name)
-    return _Worker(WorkPool(pool), classes, name, linger, poll_s, host_check).loop()
+    return _Worker(WorkPool(pool), classes, name, linger, poll_s, host_check, host_check_timeout_s).loop()
 
 
 # -- controller --------------------------------------------------------------------------------------------------
@@ -1159,7 +1186,10 @@ Runner = Callable[[Sequence[str]], str]
 STALE_REASONS = ("Priority", "QOS", "ReqNodeNotAvail")
 """Pending reasons (prefixes) that make a partition stale after ``pending_s``; ``Resources`` is not one."""
 
-LIVE_STATES = ("PENDING", "RUNNING", "CONFIGURING")
+HELD_REASONS = ("JobHeld", "launch failed requeued held")
+"""Pending reasons (prefixes) of held jobs, which never start on their own: stale at once."""
+
+LIVE_STATES = ("PENDING", "RUNNING", "CONFIGURING", "SUSPENDED", "REQUEUED")
 """Worker job states that count as live."""
 
 SQUEUE_FORMAT = "%i|%P|%T|%V|%j|%r"
@@ -1252,7 +1282,7 @@ def load_classes(path: PathLike) -> list[ResourceClass]:
 
 def pool_tag(pool: WorkPool) -> str:
     """Eight hex characters naming the pool in its workers' job names (``work-pool-<tag>-<class>``)."""
-    return hashlib.sha256(str(pool.root).encode()).hexdigest()[:8]
+    return hashlib.sha256(str(pool.root.resolve()).encode()).hexdigest()[:8]
 
 
 def _submit_time(text: str) -> Optional[float]:
@@ -1354,25 +1384,72 @@ class Controller:
         return argv
 
     def _stale(self, job: _Job, now: float) -> bool:
+        if job.state != "PENDING":
+            return False
+        if job.reason.startswith(HELD_REASONS):
+            return True
         return (
-            job.state == "PENDING"
-            and job.reason.startswith(STALE_REASONS)
-            and job.submitted is not None
-            and now - job.submitted > self.pending_s
+            job.reason.startswith(STALE_REASONS) and job.submitted is not None and now - job.submitted > self.pending_s
         )
 
+    def _cdir(self, name: str) -> Path:
+        path = self.pool.root / "controller" / name
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def _record_job(self, job_id: str, cls: str, partition: str) -> None:
+        """Record a job this controller submitted (only recorded jobs are ever cancelled)."""
+        _write_json(self._cdir("jobs") / f"{job_id}.json", {"job": job_id, "class": cls, "partition": partition})
+
+    def _recorded(self) -> set[str]:
+        return {n[: -len(".json")] for n in _names(self._cdir("jobs")) if n.endswith(".json")}
+
+    def _cancel(self, ids: Sequence[str]) -> list[str]:
+        """``scancel --state=PENDING`` the recorded ones of ``ids`` (a worker that started meanwhile is left alone)."""
+        recorded = self._recorded()
+        mine = [i for i in ids if i in recorded]
+        if not mine:
+            return []
+        try:
+            self.runner(["scancel", "--state=PENDING", *mine])
+        except (OSError, subprocess.SubprocessError) as exc:
+            _log(f"control: scancel failed ({exc}); retrying next tick")
+            return []
+        return mine
+
+    def _marked_stale(self, partition: str, now: float) -> bool:
+        """Whether this controller cancelled stale workers on ``partition`` within ``pending_s`` (storage clock)."""
+        safe = re.sub(r"[^A-Za-z0-9._-]", "_", partition)
+        changed = _fresh_mtime(self._cdir("stale") / safe)
+        return changed is not None and now - changed <= self.pending_s
+
+    def _mark_stale(self, partition: str) -> None:
+        safe = re.sub(r"[^A-Za-z0-9._-]", "_", partition)
+        path = self._cdir("stale") / safe
+        os.close(os.open(path, os.O_WRONLY | os.O_CREAT, 0o660))
+        os.utime(path)
+
     def tick(self) -> dict[str, Any]:
-        """Reap, count, then submit workers where queued items exceed live ones and cancel idle pending ones.
+        """Reap, count, then submit workers where items exceed live workers and cancel workers nobody needs.
+
+        Pending workers on a stale or paused partition do not count as live: they are cancelled (when this pool's
+        controller submitted them) and the partition gets no workers for ``pending_s``, so the work goes elsewhere.
+        A failed ``sbatch`` skips its partition for the rest of the tick.
 
         Returns:
-            ``{"reaped", "submitted": [{class, partition, job}], "cancelled": [job ids], "partitions": {p: {pending,
-            running, stale, host_check_releases, paused}}, "status"}``; the same ``partitions`` go into
-            ``status.json``.
+            ``{"reaped", "submitted": [{class, partition, job}], "cancelled": [job ids], "failed": [partitions],
+            "partitions": {p: {pending, running, stale, host_check_releases, paused}}, "status"}``; the same
+            ``partitions`` go into ``status.json``.
+
+        Raises:
+            OSError: The pool could not be read or written.
+            subprocess.SubprocessError: ``squeue`` failed.
         """
         reaped = self.pool.reap()
         status = self.pool.status()
         jobs = [j for j in self._jobs() if j.state in LIVE_STATES]
         now = self.clock()
+        storage_now = self.pool._server_now()
         releases = self.pool.host_check_failures(self.release_window_s)
         partitions: dict[str, dict[str, Any]] = {}
         for p in dict.fromkeys(spec.partition for c in self.classes for spec in c.partitions):
@@ -1380,21 +1457,31 @@ class Controller:
             partitions[p] = {
                 "pending": sum(j.state == "PENDING" for j in mine),
                 "running": sum(j.state != "PENDING" for j in mine),
-                "stale": any(self._stale(j, now) for j in mine),
+                "stale": any(self._stale(j, now) for j in mine) or self._marked_stale(p, storage_now),
                 "host_check_releases": releases.get(p, 0),
                 "paused": "host-check" if releases.get(p, 0) >= self.release_cap else None,
             }
+
+        def blocked(p: str) -> bool:
+            row = partitions.get(p)
+            return row is not None and bool(row["stale"] or row["paused"])
+
         submitted: list[dict[str, str]] = []
         cancelled: list[str] = []
+        failed: list[str] = []
         for cls in self.classes:
-            queued = int(status["classes"].get(cls.name, {}).get("queued", 0))
-            live = [j for j in jobs if j.cls == cls.name]
+            row = status["classes"].get(cls.name, {})
+            queued, leased = int(row.get("queued", 0)), int(row.get("leased", 0))
+            ours = [j for j in jobs if j.cls == cls.name]
+            stuck = [j for j in ours if j.state == "PENDING" and blocked(j.partition)]
+            live = [j for j in ours if j not in stuck]
             if queued == 0:
-                idle = [j.id for j in live if j.state == "PENDING"]
-                if idle:
-                    self.runner(["scancel", *idle])
-                    cancelled += idle
+                cancelled += self._cancel([j.id for j in ours if j.state == "PENDING"])
                 continue
+            gone = self._cancel([j.id for j in stuck])
+            cancelled += gone
+            for p in dict.fromkeys(j.partition for j in stuck if j.id in gone):
+                self._mark_stale(p)
             pending = {
                 s.partition: [j for j in live if j.partition == s.partition and j.state == "PENDING"]
                 for s in cls.partitions
@@ -1405,17 +1492,21 @@ class Controller:
                 p: max((now - j.submitted for j in js if j.submitted is not None), default=0.0)
                 for p, js in pending.items()
             }
-            usable = [
-                (k, s)
-                for k, s in enumerate(cls.partitions)
-                if not partitions[s.partition]["paused"] and not partitions[s.partition]["stale"]
-            ]
-            for _ in range(max(0, queued - len(live))):
-                room = [(k, s) for k, s in usable if count[s.partition] < s.max_workers]
+            usable = [(k, s) for k, s in enumerate(cls.partitions) if not blocked(s.partition)]
+            wanted = queued + leased - len(live)
+            while wanted > 0:
+                room = [(k, s) for k, s in usable if count[s.partition] < s.max_workers and s.partition not in failed]
                 if not room:
                     break
                 _, spec = min(room, key=lambda ks: (npend[ks[1].partition], oldest[ks[1].partition], ks[0]))
-                job_id = self.runner(self._render(cls, spec)).strip().split(";")[0]
+                try:
+                    job_id = self.runner(self._render(cls, spec)).strip().split(";")[0]
+                except (OSError, subprocess.SubprocessError) as exc:
+                    _log(f"control: sbatch on {spec.partition} failed ({exc}); skipping it this tick")
+                    failed.append(spec.partition)
+                    continue
+                self._record_job(job_id, cls.name, spec.partition)
+                wanted -= 1
                 submitted.append({"class": cls.name, "partition": spec.partition, "job": job_id})
                 count[spec.partition] += 1
                 npend[spec.partition] += 1
@@ -1425,30 +1516,49 @@ class Controller:
             "reaped": reaped,
             "submitted": submitted,
             "cancelled": cancelled,
+            "failed": failed,
             "partitions": partitions,
             "status": status,
         }
 
     def run(self, once: bool = False) -> int:
-        """Tick every ``poll_s`` until nothing is queued, leased or staged (or once).
+        """Hold the pool's controller lock and tick every ``poll_s`` until nothing is queued, leased or staged.
+
+        A tick that fails (a Slurm command, or the pool's storage) is logged and retried after ``poll_s``.
 
         Args:
             once: Tick once and return.
 
         Returns:
-            0.
+            0; 1 when ``once`` and the tick failed; :data:`CONTROLLER_LOCKED_EXIT` when another controller runs.
         """
-        while True:
-            summary = self.tick()
-            counts = summary["status"]["counts"]
-            _log(
-                f"control: reaped {summary['reaped']}, submitted {len(summary['submitted'])}, cancelled "
-                f"{len(summary['cancelled'])}; queued {counts['queued']} leased {counts['leased']} done "
-                f"{counts['done']} dead {counts['dead']}"
-            )
-            if once or counts["queued"] + counts["leased"] + counts["staged"] == 0:
-                return 0
-            time.sleep(self.poll_s)
+        lock = open(self._cdir("") / "lock", "a")  # noqa: SIM115 — held for the whole run
+        try:
+            try:
+                fcntl.lockf(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError:
+                _log(f"control: another controller holds {self.pool.root}/controller/lock; exiting")
+                return CONTROLLER_LOCKED_EXIT
+            while True:
+                try:
+                    summary = self.tick()
+                except (OSError, subprocess.SubprocessError) as exc:
+                    _log(f"control: tick failed ({exc!r}); retrying in {self.poll_s} s")
+                    if once:
+                        return 1
+                    time.sleep(self.poll_s)
+                    continue
+                counts = summary["status"]["counts"]
+                _log(
+                    f"control: reaped {summary['reaped']}, submitted {len(summary['submitted'])}, cancelled "
+                    f"{len(summary['cancelled'])}; queued {counts['queued']} leased {counts['leased']} done "
+                    f"{counts['done']} dead {counts['dead']}"
+                )
+                if once or counts["queued"] + counts["leased"] + counts["staged"] == 0:
+                    return 0
+                time.sleep(self.poll_s)
+        finally:
+            lock.close()
 
 
 def submit_controller(
@@ -1501,9 +1611,9 @@ def submit_controller(
 def main(argv: Optional[Sequence[str]] = None) -> int:
     """Command line: ``work`` runs one worker, ``control`` runs a controller.
 
-    ``work POOL --classes a,b [--linger N] [--poll S] [--worker NAME] [--host-check CMD]``;
+    ``work POOL --classes a,b [--linger N] [--poll S] [--worker NAME] [--host-check CMD] [--host-check-timeout S]``;
     ``control POOL --classes FILE [--once] [--poll S] [--pending-s S] [--release-cap N] [--log-dir D]
-    [--host-check CMD] [--worker-linger N] [--worker-poll S]``.
+    [--host-check CMD] [--host-check-timeout S] [--worker-linger N] [--worker-poll S]``.
 
     Args:
         argv: Arguments (default ``sys.argv[1:]``).
@@ -1520,6 +1630,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     run.add_argument("--poll", type=float, default=10.0)
     run.add_argument("--worker")
     run.add_argument("--host-check", help="a command (split like a shell) that must succeed on this node")
+    run.add_argument("--host-check-timeout", type=float, default=HOST_CHECK_TIMEOUT_S)
     ctl = sub.add_parser("control", help="run a controller that submits and cancels Slurm workers")
     ctl.add_argument("pool")
     ctl.add_argument("--classes", required=True, help="the resource classes' YAML file")
@@ -1529,6 +1640,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ctl.add_argument("--release-cap", type=int, default=3)
     ctl.add_argument("--log-dir")
     ctl.add_argument("--host-check", help="passed on to each worker")
+    ctl.add_argument("--host-check-timeout", type=float, help="passed on to each worker")
     ctl.add_argument("--worker-linger", type=int, help="passed on to each worker as --linger")
     ctl.add_argument("--worker-poll", type=float, help="passed on to each worker as --poll")
     args = parser.parse_args(argv)
@@ -1537,6 +1649,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         command = [sys.executable, "-m", "senselab.utils.work_pool", "work", str(pool.root)]
         if args.host_check:
             command += ["--host-check", args.host_check]
+        if args.host_check_timeout is not None:
+            command += ["--host-check-timeout", str(args.host_check_timeout)]
         if args.worker_linger is not None:
             command += ["--linger", str(args.worker_linger)]
         if args.worker_poll is not None:
@@ -1553,7 +1667,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return controller.run(once=args.once)
     classes = [c for c in args.classes.split(",") if c]
     check = shlex.split(args.host_check) if args.host_check else None
-    return work(args.pool, classes, worker=args.worker, linger=args.linger, poll_s=args.poll, host_check=check)
+    return work(
+        args.pool,
+        classes,
+        worker=args.worker,
+        linger=args.linger,
+        poll_s=args.poll,
+        host_check=check,
+        host_check_timeout_s=args.host_check_timeout,
+    )
 
 
 if __name__ == "__main__":
