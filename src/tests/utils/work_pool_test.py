@@ -835,9 +835,14 @@ class _FakeSlurm:
                 for j in self.jobs
             )
         if argv[0] == "scancel":
-            self.jobs = [j for j in self.jobs if j["id"] not in argv[1:]]
+            ids = [a for a in argv[1:] if not a.startswith("--")]
+            pending_only = "--state=PENDING" in argv
+            self.jobs = [j for j in self.jobs if j["id"] not in ids or (pending_only and j["state"] != "PENDING")]
             return ""
         raise AssertionError(argv)
+
+    def scancels(self) -> list[list[str]]:
+        return [c for c in self.calls if c[0] == "scancel"]
 
     def sbatches(self) -> list[list[str]]:
         return [c for c in self.calls if c[0] == "sbatch"]
@@ -946,13 +951,15 @@ def test_idle_pending_workers_are_cancelled_when_the_queue_drains(tmp_path: Path
     mine = f"work-pool-{control.pool8}-main"
     pending = [slurm.add(mine, "main", "PENDING"), slurm.add(mine, "spare", "PENDING", reason="Resources")]
     running = slurm.add(mine, "spare", "RUNNING")
+    for job in [*pending, running]:
+        control._record_job(job, "main", "main")
+    unrecorded = slurm.add(mine, "main", "PENDING")  # named like ours but not submitted by this pool's controller
     foreign = slurm.add("someone-else", "main", "PENDING")
     other_pool = slurm.add("work-pool-00000000-main", "main", "PENDING")
     summary = control.tick()
     assert sorted(summary["cancelled"]) == sorted(pending)
-    scancels = [c for c in slurm.calls if c[0] == "scancel"]
-    assert [sorted(c[1:]) for c in scancels] == [sorted(pending)]
-    assert {j["id"] for j in slurm.jobs} == {running, foreign, other_pool}
+    assert [c[:2] + sorted(c[2:]) for c in slurm.scancels()] == [["scancel", "--state=PENDING", *sorted(pending)]]
+    assert {j["id"] for j in slurm.jobs} == {running, unrecorded, foreign, other_pool}
     assert slurm.sbatches() == []
 
 
@@ -1014,7 +1021,7 @@ def test_each_tick_reaps_expired_leases(tmp_path: Path) -> None:
 
 
 def test_a_partition_hitting_the_release_cap_gets_no_workers(tmp_path: Path) -> None:
-    """Workers failing --host-check release their item and exit; release_cap such releases pause the partition."""
+    """Workers failing --host-check exit before claiming; release_cap such failures pause the partition."""
     pool = _pool(tmp_path)
     pool.publish([_item(i) for i in range(4)])
     env = {**_env(), "SLURM_JOB_PARTITION": "spare"}
@@ -1028,10 +1035,8 @@ def test_a_partition_hitting_the_release_cap_gets_no_workers(tmp_path: Path) -> 
         assert rc == wp.HOST_CHECK_EXIT
     assert len(_names(pool.root / "hostcheck")) == 3
     assert _names(pool.root / "done") == [] and len(_names(pool.root / "queue")) == 4
-    assert (
-        sorted(_read(pool.root / "interrupted" / n)["reason"] for n in _names(pool.root / "interrupted"))
-        == ["release"] * 3
-    )
+    assert _names(pool.root / "interrupted") == []  # the check runs before any claim: no item is charged
+    assert {_read(pool.root / "queue" / n)["attempt"] for n in _names(pool.root / "queue")} == {1}
 
     slurm = _FakeSlurm()
     control = _controller(pool, slurm, _cls(main=4, spare=4), release_cap=3)
@@ -1056,3 +1061,175 @@ def test_a_partition_hitting_the_release_cap_gets_no_workers(tmp_path: Path) -> 
         timeout=60,
     ).returncode
     assert rc == 0 and len(_names(pool.root / "done")) == 4
+
+
+def test_a_stale_partitions_pending_workers_do_not_hold_back_work(tmp_path: Path) -> None:
+    """A partition whose recorded worker is stale-pending is cancelled and skipped, and the item goes elsewhere."""
+    pool = _pool(tmp_path)
+    pool.publish([_item(0)])
+    slurm = _FakeSlurm()
+    control = _controller(pool, slurm, _cls(slow=1, fast=1), pending_s=600.0)
+    stuck = slurm.add(control.job_name("main"), "slow", "PENDING", age_s=1200.0, reason="Priority")
+    control._record_job(stuck, "main", "slow")
+    summary = control.tick()
+    assert slurm.per_partition() == {"fast": 1}
+    assert summary["cancelled"] == [stuck]
+    assert slurm.scancels() == [["scancel", "--state=PENDING", stuck]]
+    # The cancelled partition stays skipped for pending_s, so it is not refilled at once.
+    slurm.jobs.clear()
+    slurm.calls.clear()
+    summary = control.tick()
+    assert slurm.per_partition() == {"fast": 1}
+    assert summary["partitions"]["slow"]["stale"] is True
+
+
+def test_only_recorded_jobs_are_cancelled_and_only_while_pending(tmp_path: Path) -> None:
+    """The controller records each job it submits under controller/ and cancels with --state=PENDING only those."""
+    pool = _pool(tmp_path)
+    pool.publish([_item(0), _item(1)])
+    slurm = _FakeSlurm()
+    control = _controller(pool, slurm)
+    jobs = [s["job"] for s in control.tick()["submitted"]]
+    assert len(jobs) == 2
+    assert sorted(_names(pool.root / "controller" / "jobs")) == sorted(f"{j}.json" for j in jobs)
+    assert _read(pool.root / "controller" / "jobs" / f"{jobs[0]}.json")["class"] == "main"
+    for name in _names(pool.root / "queue"):
+        (pool.root / "queue" / name).unlink()
+
+    # One worker starts between squeue and scancel: --state=PENDING leaves it running.
+    def starts_first(argv: Any) -> str:  # noqa: ANN401
+        if argv[0] == "scancel":
+            slurm.jobs[0]["state"] = "RUNNING"
+        return slurm(argv)
+
+    control.runner = starts_first
+    summary = control.tick()
+    assert sorted(summary["cancelled"]) == sorted(jobs)
+    assert slurm.scancels()[-1][:2] == ["scancel", "--state=PENDING"]
+    assert [j["id"] for j in slurm.jobs] == [jobs[0]]
+
+
+def test_slurm_and_storage_errors_do_not_stop_the_controller(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A failed sbatch skips its partition for the tick; a failed squeue or reap is logged and retried."""
+    pool = _pool(tmp_path)
+    pool.publish([_item(i) for i in range(3)])
+    slurm = _FakeSlurm()
+    tried: list[list[str]] = []
+
+    def flaky(argv: Any) -> str:  # noqa: ANN401
+        if argv[0] == "sbatch" and "--partition=main" in argv:
+            tried.append(list(argv))
+            raise subprocess.CalledProcessError(1, argv, "", "sbatch: error: Batch job submission failed")
+        return slurm(argv)
+
+    control = _controller(pool, slurm, _cls(main=3, spare=3))
+    control.runner = flaky
+    summary = control.tick()
+    assert slurm.per_partition() == {"spare": 3}
+    assert len(tried) == 1  # tried once, then skipped for the rest of the tick
+    assert summary["failed"] == ["main"]
+    assert len(_names(pool.root / "controller" / "jobs")) == 3
+
+    # run(): an EIO from reap and a squeue failure are logged; the next tick goes on, and an empty pool ends it.
+    for name in _names(pool.root / "queue"):
+        (pool.root / "queue" / name).unlink()
+    errors: list[BaseException] = [OSError(errno.EIO, "I/O error"), subprocess.CalledProcessError(1, ["squeue"])]
+    reap = pool.reap
+
+    def failing_reap() -> int:
+        if errors:
+            raise errors.pop(0)
+        return reap()
+
+    monkeypatch.setattr(pool, "reap", failing_reap)
+    calm = _controller(pool, _FakeSlurm(), poll_s=0.01)
+    assert calm.run() == 0
+    assert errors == []
+    errors.append(OSError(errno.EIO, "I/O error"))
+    assert calm.run(once=True) == 1
+
+
+def test_the_deficit_counts_leased_items(tmp_path: Path) -> None:
+    """Workers needed = queued + leased - live, still capped by max_workers."""
+    pool = _pool(tmp_path)
+    pool.publish([_item(i) for i in range(4)])
+    assert pool.claim(["main"], "a") is not None and pool.claim(["main"], "b") is not None
+    slurm = _FakeSlurm()
+    control = _controller(pool, slurm, _cls(main=2, spare=2))
+    for _ in range(2):
+        slurm.add(control.job_name("main"), "main", "RUNNING")
+    control.tick()
+    assert slurm.per_partition() == {"spare": 2}
+    control.tick()
+    assert len(slurm.sbatches()) == 2
+    small = _FakeSlurm()
+    for _ in range(2):
+        small.add(control.job_name("main"), "main", "RUNNING")
+    _controller(pool, small, _cls(main=2, spare=1)).tick()
+    assert small.per_partition() == {"spare": 1}
+
+
+def test_a_host_check_runs_before_claiming_and_times_out(tmp_path: Path) -> None:
+    """A hanging host check is stopped after --host-check-timeout; nothing is claimed or charged."""
+    pool = _pool(tmp_path)
+    [item] = pool.publish([_item(0)])
+    start = time.monotonic()
+    rc = subprocess.run(  # noqa: S603 — this interpreter
+        [sys.executable, "-m", "senselab.utils.work_pool", "work", str(pool.root), "--classes", "main"]
+        + ["--host-check", "sleep 30", "--host-check-timeout", "1", "--linger", "0", "--worker", "slow"],
+        env={**_env(), "SLURM_JOB_PARTITION": "spare"},
+        timeout=60,
+    ).returncode
+    assert rc == wp.HOST_CHECK_EXIT and time.monotonic() - start < 20
+    [record] = _names(pool.root / "hostcheck")
+    assert _read(pool.root / "hostcheck" / record)["rc"] == "timeout"
+    assert _read(pool.root / "queue" / f"{item.id}.json")["attempt"] == 1
+    assert _names(pool.root / "interrupted") == _names(pool.root / "leases") == []
+
+
+def test_a_second_controller_exits_and_the_tag_follows_the_real_path(tmp_path: Path) -> None:
+    """The controller lock lets one controller run per pool; a symlinked pool path gives the same job names."""
+    pool = _pool(tmp_path)
+    link = tmp_path / "link"
+    link.symlink_to(pool.root)
+    assert wp.pool_tag(wp.WorkPool(link)) == wp.pool_tag(pool)
+    holder = subprocess.Popen(  # noqa: S603 — this interpreter
+        [
+            sys.executable,
+            "-c",
+            "import fcntl, sys, time; f = open(sys.argv[1], 'a'); fcntl.lockf(f, fcntl.LOCK_EX); "
+            "print('held', flush=True); time.sleep(60)",
+            str(pool.root / "controller" / "lock"),
+        ],
+        stdout=subprocess.PIPE,
+    )
+    try:
+        assert holder.stdout is not None and holder.stdout.readline().strip() == b"held"
+        slurm = _FakeSlurm()
+        assert _controller(pool, slurm).run(once=True) == wp.CONTROLLER_LOCKED_EXIT
+        assert slurm.calls == []
+    finally:
+        holder.kill()
+        holder.wait()
+    assert _controller(pool, _FakeSlurm()).run(once=True) == 0
+
+
+def test_held_workers_are_stale_and_suspended_or_requeued_ones_are_live(tmp_path: Path) -> None:
+    """Held reasons make a partition stale at once; SUSPENDED and REQUEUED workers count as live."""
+    for reason in ("JobHeldUser", "JobHeldAdmin", "launch failed requeued held"):
+        pool = _pool(tmp_path / reason.replace(" ", "-"))
+        pool.publish([_item(0)])
+        slurm = _FakeSlurm()
+        control = _controller(pool, slurm, _cls(main=1, spare=1))
+        slurm.add(control.job_name("main"), "main", "PENDING", age_s=5.0, reason=reason)
+        summary = control.tick()
+        assert summary["partitions"]["main"]["stale"] is True, reason
+        assert slurm.per_partition() == {"spare": 1}, reason
+    for state in ("SUSPENDED", "REQUEUED"):
+        pool = _pool(tmp_path / state)
+        pool.publish([_item(0)])
+        slurm = _FakeSlurm()
+        control = _controller(pool, slurm, _cls(main=1, spare=1))
+        slurm.add(control.job_name("main"), "main", state)
+        assert control.tick()["partitions"]["main"]["running"] == 1, state
+        assert slurm.sbatches() == [], state
