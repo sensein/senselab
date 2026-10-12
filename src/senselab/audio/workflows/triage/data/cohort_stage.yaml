@@ -1,7 +1,7 @@
 # COHORT: the corpus and session pass between QUALITY and VERDICT.
 # Read by `senselab.audio.workflows.triage.cohort_stage.cohort_parameters`.
 # Derivations: specs/20261007-task-events-in-background/design.md, section "Cohort stage".
-version: 8
+version: 9
 
 # Session speaker enrollment. Model, commit and match cut are `speech.enrollment_model` and
 # `speech.target_match_cosine` (the cut is the enrollment's leave-one-out step only); the shortest span embedded is

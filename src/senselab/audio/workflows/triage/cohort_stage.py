@@ -158,6 +158,20 @@ def _intersect(spans: Sequence[tuple[float, float]], window: tuple[float, float]
     return [(max(start, lo), min(end, hi)) for start, end in spans if min(end, hi) > max(start, lo)]
 
 
+def _within(spans: Sequence[tuple[float, float]], keep: Sequence[tuple[float, float]]) -> list[tuple[float, float]]:
+    """The parts of ``spans`` that ``keep`` covers.
+
+    Args:
+        spans: The spans.
+        keep: The spans they are restricted to.
+
+    Returns:
+        The intersection, merged, earliest first.
+    """
+    kept = merge(list(keep))
+    return merge([piece for span in merge(list(spans)) for piece in _intersect(kept, span)])
+
+
 def _subtract(spans: Sequence[tuple[float, float]], cut: Sequence[tuple[float, float]]) -> list[tuple[float, float]]:
     kept: list[tuple[float, float]] = []
     removed = merge(list(cut))
@@ -198,6 +212,8 @@ class RecordingFacts:
         rms_dbfs: The plain stream's whole-file RMS level (PREPROCESS ``level``), or None.
         clipped_s: The raw recording's clipped seconds (``disruptions_file``), or None.
         snr_db: The plain energy envelope's active level over its floor (``condition.snr_percentiles``), or None.
+        activity: PREPROCESS's acoustic activity (its ``amplitude`` spans, merged), or None where PREPROCESS
+            proposed no spans at all; the speaker pools are restricted to it.
     """
 
     stem: str
@@ -215,6 +231,7 @@ class RecordingFacts:
     rms_dbfs: float | None = None
     clipped_s: float | None = None
     snr_db: float | None = None
+    activity: tuple[tuple[float, float], ...] | None = None
 
     @property
     def extent_fraction(self) -> float | None:
@@ -519,7 +536,32 @@ def facts_of(
         removed_speech=tuple(removed_speech),
         task_events=tuple(merge(_task_events(store))),
         **condition_readings(store, run_dir),
+        activity=activity_of(store),
     )
+
+
+ACTIVITY_MEASURE = "amplitude"
+SPANS_NO_CONTRAST = "spans_no_contrast"
+
+
+def activity_of(store: ProvStore) -> tuple[tuple[float, float], ...] | None:
+    """PREPROCESS's acoustic activity: its live ``amplitude`` spans on any signal, merged.
+
+    Args:
+        store: The recording's store.
+
+    Returns:
+        The merged spans; empty where PREPROCESS recorded that no span rose over the floor; None where it
+        proposed no span and recorded no such absence.
+    """
+    spans = [
+        (float(span.extent[0]), float(span.extent[1]))
+        for span in live_entities(store, "span")
+        if span.attributes.get("measure") == ACTIVITY_MEASURE and span.extent is not None
+    ]
+    if spans:
+        return tuple(merge(spans))
+    return () if find_measurement(store, SPANS_NO_CONTRAST) is not None else None
 
 
 LEVEL_MEASUREMENT = "level"
@@ -611,9 +653,10 @@ def target_spans(facts: RecordingFacts, *, lexical_gap_s: float) -> list[tuple[f
         lexical_gap_s: Largest gap two words may straddle and stay one span.
 
     Returns:
-        The spans, earliest first.
+        The spans, earliest first, restricted to the acoustic activity where PREPROCESS measured it.
     """
-    return lexical_runs_of(facts.target, lexical_gap_s)
+    runs = lexical_runs_of(facts.target, lexical_gap_s)
+    return runs if facts.activity is None else _within(runs, facts.activity)
 
 
 def non_task_spans(facts: RecordingFacts, *, lexical_gap_s: float) -> list[tuple[float, float]]:
@@ -624,7 +667,8 @@ def non_task_spans(facts: RecordingFacts, *, lexical_gap_s: float) -> list[tuple
         lexical_gap_s: Largest gap two words may straddle and stay one span.
 
     Returns:
-        The merged spans, earliest first; empty where the recording has no speech outside the task.
+        The merged spans, earliest first, restricted to the acoustic activity where PREPROCESS measured it;
+        empty where the recording has no speech outside the task.
     """
     if not facts.non_task:
         return []
@@ -633,7 +677,8 @@ def non_task_spans(facts: RecordingFacts, *, lexical_gap_s: float) -> list[tuple
         for s, e in _subtract(list(facts.removed_speech), facts.task_events)
         if any(s <= (a + b) / 2.0 <= e for a, b in facts.non_task)
     ]
-    return _subtract(merge([*lexical_runs_of(facts.non_task, lexical_gap_s), *removed]), facts.task_events)
+    spans = _subtract(merge([*lexical_runs_of(facts.non_task, lexical_gap_s), *removed]), facts.task_events)
+    return spans if facts.activity is None else _within(spans, facts.activity)
 
 
 @dataclass(frozen=True)

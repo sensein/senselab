@@ -273,6 +273,23 @@ def _condition_explains(reading: Mapping[str, Any] | None, name: str, check: Map
     return bool(shift and shift["explained"])
 
 
+def participant_matched(reading: Mapping[str, Any] | None) -> bool:
+    """Whether COHORT's comparison reads the participant: some pool matched the enrollment and none did not.
+
+    Args:
+        reading: The ``cohort_reading`` attributes, or None.
+
+    Returns:
+        True where the comparison was measured, at least one pool matched and no pool is a non-match.
+    """
+    if other_speaker_block(reading).get("status") != MEASURED:
+        return False
+    measured = [pool_block(reading, pool) for pool in POOLS if pool_block(reading, pool).get("status") == MEASURED]
+    return any(pool.get("match") is True for pool in measured) and not any(
+        pool.get("match") is False for pool in measured
+    )
+
+
 def check_blocks(reading: Mapping[str, Any] | None) -> dict[str, dict[str, Any]]:
     """The distribution checks of a cohort reading, by name.
 
