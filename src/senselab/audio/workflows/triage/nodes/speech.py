@@ -1288,7 +1288,9 @@ def _speech_ordered(  # noqa: C901 — the two token sources and the five depart
     if alignment is not None and matched:
         hull = (word_extent(spanning[0])[0], word_extent(spanning[-1])[1])
         outside = [w for w in read_as if word_extent(w)[1] <= hull[0] or word_extent(w)[0] >= hull[1]]
-        check = extent_check(has_extent=hull[1] > hull[0], narrow={"tokens_outside": len(outside)}, wide={})
+        check = extent_check(
+            has_extent=hull[1] > hull[0], narrow={"tokens_outside": len(outside)}, wide={}, outside_n=len(outside)
+        )
         covariates = {key: value for key, value in check.record().items() if key != "status"}
         findings.append(measured(STIMULUS_EXTENT_CHECK, None, None, check.status, *evidence, **covariates))
     if matched:
