@@ -180,7 +180,7 @@ def test_a_session_inconsistency_the_condition_explains_is_an_annotation() -> No
     shift = float(cohort_fold._parameters()["condition"]["shift_level_db_min"])
     reading = _inconsistent(shift + 1.0)["sub-a_ses-3"][0]
     assert reading["checks"][CONSISTENCY_CHECK]["outcome"] == REVIEW
-    assert condition_shift(reading)["explained"] is True
+    assert (condition_shift(reading) or {}).get("explained") is True
     assert KEY_SESSION_SPEAKER_INCONSISTENT not in [key for _, key in cohort_grounds(reading)]
     assert [key for _, key in cohort_annotations(reading)] == [KEY_SESSION_CONDITION_SHIFT]
     folded = fold_file_verdict([], cohort=reading, **COMMON)
@@ -195,7 +195,7 @@ def test_a_session_inconsistency_the_condition_explains_is_an_annotation() -> No
 def test_a_session_inconsistency_in_the_same_condition_stays_a_ground() -> None:
     """A session inconsistency in the same condition stays a ground."""
     reading = _inconsistent(0.0)["sub-a_ses-3"][0]
-    assert condition_shift(reading)["explained"] is False
+    assert (condition_shift(reading) or {}).get("explained") is False
     assert KEY_SESSION_SPEAKER_INCONSISTENT in [key for _, key in cohort_grounds(reading)]
     assert cohort_annotations(reading) == []
 
@@ -292,7 +292,7 @@ def _shared(label: str = LABEL_SINGLE) -> dict[str, Any]:
 
 def test_participant_nonmatch_counts_compared_recordings() -> None:
     """Participant nonmatch counts compared recordings."""
-    blocks = [
+    blocks: list[dict[str, Any]] = [
         {"status": MEASURED, "target": {"match": True}, "nonmatch": []},
         {"status": MEASURED, "target": {"match": False}, "nonmatch": ["target"]},
         {"status": MEASURED, "target": {"match": None}, "nonmatch": []},

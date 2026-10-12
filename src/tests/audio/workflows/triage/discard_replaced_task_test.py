@@ -20,6 +20,13 @@ from senselab.audio.workflows.triage.discard_replaced_task import (
 BREATH = "respiration-and-cough-v2-breath"
 
 
+def _rule(inputs: ReplacedTaskInputs) -> str:
+    """The rule that holds for the inputs; fails where none does."""
+    hit = replaced_task(inputs)
+    assert hit is not None
+    return str(hit["rule"])
+
+
 def _rate() -> float:
     return float(rule.parameters()[RULE_NON_LEXICAL]["free_speech_words_per_s"])
 
@@ -60,9 +67,9 @@ def test_non_lexical_talk_over_a_strong_task_or_little_talk_does_not() -> None:
 def test_lexical_absent_task_needs_the_reviewer() -> None:
     """Lexical absent task needs the reviewer."""
     absent = ReplacedTaskInputs("word-color-stroop", expected_tokens_matched=0, reviewer_off_task=True)
-    assert replaced_task(absent)["rule"] == RULE_LEXICAL
+    assert _rule(absent) == RULE_LEXICAL
     no_extent = ReplacedTaskInputs("word-color-stroop", extent_fraction=0.0, reviewer_more_than_one=True)
-    assert replaced_task(no_extent)["rule"] == RULE_LEXICAL
+    assert _rule(no_extent) == RULE_LEXICAL
     assert replaced_task(ReplacedTaskInputs("word-color-stroop", expected_tokens_matched=0)) is None
     assert (
         replaced_task(ReplacedTaskInputs("word-color-stroop", expected_tokens_matched=3, reviewer_off_task=True))
@@ -74,9 +81,9 @@ def test_a_short_free_response_with_off_task_talk_holds() -> None:
     """A short free response with off task talk holds."""
     median = float(rule.parameters()[RULE_SHORT_RESPONSE]["family_median_s"]["story-recall"])
     short = ReplacedTaskInputs("story-recall", response_s=0.05 * median, reviewer_off_task=True)
-    assert replaced_task(short)["rule"] == RULE_SHORT_RESPONSE
+    assert _rule(short) == RULE_SHORT_RESPONSE
     by_other = ReplacedTaskInputs("story-recall", response_s=0.05 * median, instructions_by_other=True)
-    assert replaced_task(by_other)["rule"] == RULE_SHORT_RESPONSE
+    assert _rule(by_other) == RULE_SHORT_RESPONSE
     assert replaced_task(ReplacedTaskInputs("story-recall", response_s=0.5 * median, reviewer_off_task=True)) is None
     assert replaced_task(ReplacedTaskInputs("story-recall", response_s=0.05 * median)) is None
 
