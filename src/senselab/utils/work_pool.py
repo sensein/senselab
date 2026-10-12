@@ -12,7 +12,8 @@ A pool is a directory that every node can see::
     dead/<item>.json             the item spent its failure or interruption budget
     conflicts/<item>.<why>.<t>.json  a duplicate copy of an item, kept out of the queue
     workers/<worker>.json        the workers that ran here
-    status.json                  written by :meth:`WorkPool.status`
+    hostcheck/<p>.<worker>.<t>.json  a worker on partition ``p`` failed its host check and released its item
+    status.json                  written by :meth:`WorkPool.status` (and :class:`Controller`, with ``partitions``)
 
 An item is always in one place. :meth:`WorkPool.claim` takes it with ``rename(queue/<i>.json,
 tmp/claim-<token>/item.json)`` into a dir that already holds ``owner.json`` and a heartbeat, and publishes the
@@ -26,6 +27,9 @@ it. Ages are measured on the storage's clock.
 ``python -m senselab.utils.work_pool work POOL --classes a,b`` runs a worker: claim, run the item's command with
 ``POOL_ITEM_ID`` and ``POOL_ATTEMPT`` set, heartbeat, then complete or fail; SIGTERM releases the item.
 
+``python -m senselab.utils.work_pool control POOL --classes classes.yaml`` runs a :class:`Controller`: each tick
+reaps, counts queued items per class and this pool's Slurm workers per partition, and submits or cancels workers.
+
 Ported and generalised from ``sensein/senselab@feat/task-events`` (f2a806af),
 ``specs/20261011-slice-pool/pool/slice_pool.py``. Standard library only.
 """
@@ -33,11 +37,13 @@ Ported and generalised from ``sensein/senselab@feat/task-events`` (f2a806af),
 from __future__ import annotations
 
 import argparse
+import datetime
 import errno
 import hashlib
 import json
 import os
 import re
+import shlex
 import shutil
 import signal
 import socket
@@ -48,12 +54,12 @@ import time
 import uuid
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Optional, Sequence, Union
+from typing import Any, Callable, Iterable, Mapping, Optional, Sequence, Union
 
 SCHEMA = "work-pool-1"
 """The ``schema`` value of ``pool.json``."""
 
-SUBDIRS = ("queue", "leases", "tmp", "interrupted", "done", "failed", "dead", "conflicts", "workers")
+SUBDIRS = ("queue", "leases", "tmp", "interrupted", "done", "failed", "dead", "conflicts", "workers", "hostcheck")
 """The pool's subdirectories."""
 
 ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,199}")
@@ -90,6 +96,9 @@ REMOVE_RETRY_S = 1.0
 
 NEXT = "next.json"
 """The next state of an item in a hand-off dir, placed with ``link(2)``."""
+
+HOST_CHECK_EXIT = 3
+"""A worker's exit code after its host check failed (it released its item)."""
 
 PathLike = Union[str, Path]
 
@@ -857,6 +866,44 @@ class WorkPool:
                 count += self._settle_reaped(aside)
         return count
 
+    # -- host checks ---------------------------------------------------------------------------------------------
+    def note_host_check_failure(self, lease: Lease, partition: Optional[str]) -> None:
+        """Record that a worker on ``partition`` failed its host check and released ``lease``'s item.
+
+        Args:
+            lease: The released lease.
+            partition: The worker's partition (``SLURM_JOB_PARTITION``); None outside Slurm.
+        """
+        directory = self._d("hostcheck")
+        directory.mkdir(exist_ok=True)
+        part = partition or ""
+        safe = re.sub(r"[^A-Za-z0-9._-]", "_", part) or "_"
+        _write_json(
+            directory / f"{safe}.{lease.worker}.{int(_now() * 1000)}.json",
+            {
+                "partition": part,
+                "worker": lease.worker,
+                "host": self.host,
+                "item": lease.item.id,
+                "attempt": lease.item.attempt,
+            },
+        )
+
+    def host_check_failures(self, window_s: float) -> dict[str, int]:
+        """Host-check releases per partition recorded within the last ``window_s`` seconds (storage clock)."""
+        now = self._server_now()
+        counts: dict[str, int] = {}
+        for name in _names(self._d("hostcheck")):
+            path = self._d("hostcheck") / name
+            changed = _fresh_mtime(path)
+            record = _read_json(path)
+            if changed is None or now - changed > window_s or not isinstance(record, dict):
+                continue
+            part = str(record.get("partition") or "")
+            if part:
+                counts[part] = counts.get(part, 0) + 1
+        return counts
+
     # -- counting ------------------------------------------------------------------------------------------------
     def status(self) -> dict[str, Any]:
         """Counts per state and per class, also written to ``status.json``.
@@ -951,9 +998,19 @@ class _Run:
 class _Worker:
     """Claim, run, heartbeat, finish, repeat."""
 
-    def __init__(self, pool: WorkPool, classes: Sequence[str], worker: str, linger: int, poll_s: float) -> None:
+    def __init__(
+        self,
+        pool: WorkPool,
+        classes: Sequence[str],
+        worker: str,
+        linger: int,
+        poll_s: float,
+        host_check: Optional[Sequence[str]] = None,
+    ) -> None:
         self.pool, self.classes, self.worker = pool, list(classes), worker
         self.linger, self.poll_s = linger, poll_s
+        self.host_check = list(host_check) if host_check else None
+        self.host_ok = self.host_check is None
         self.run: Optional[_Run] = None
         self.terminating = threading.Event()
 
@@ -1048,6 +1105,18 @@ class _Worker:
                 self.terminating.wait(self.poll_s)
                 continue
             idle = 0
+            if not self.host_ok:
+                try:
+                    rc = subprocess.run(self.host_check or [], check=False).returncode  # noqa: S603
+                except OSError:
+                    rc = 127
+                if rc != 0:
+                    outcome = self.pool.release(lease)
+                    self.pool.note_host_check_failure(lease, env.get("SLURM_JOB_PARTITION"))
+                    _log(f"host check failed (rc {rc}) on {self.pool.host}: item {lease.item.id} {outcome}; exiting")
+                    self._record(exited=_now(), items=ran, terminated=False, host_check=rc)
+                    return HOST_CHECK_EXIT
+                self.host_ok = True
             self._run(lease)
             ran += 1
         self._record(exited=_now(), items=ran, terminated=self.terminating.is_set())
@@ -1062,6 +1131,7 @@ def work(
     worker: Optional[str] = None,
     linger: int = 3,
     poll_s: float = 10.0,
+    host_check: Optional[Sequence[str]] = None,
 ) -> int:
     """Run one worker in this process until the queue stays empty (installs SIGTERM and SIGINT handlers).
 
@@ -1071,17 +1141,369 @@ def work(
         worker: The worker's name (default ``<host>-<job id or "local">-<pid>``).
         linger: Further empty polls before the worker exits.
         poll_s: Seconds between polls of an empty queue.
+        host_check: A command run once, after the first claim; when it fails, the worker releases the item,
+            records it under ``hostcheck/`` for its partition and exits with :data:`HOST_CHECK_EXIT`.
 
     Returns:
-        0, or :data:`SIGNAL_EXIT` after SIGTERM or SIGINT.
+        0, :data:`SIGNAL_EXIT` after SIGTERM or SIGINT, or :data:`HOST_CHECK_EXIT`.
     """
     name = worker or f"{_host()}-{os.environ.get('SLURM_JOB_ID', 'local')}-{os.getpid()}"
     name = re.sub(r"[^A-Za-z0-9._-]", "_", name)
-    return _Worker(WorkPool(pool), classes, name, linger, poll_s).loop()
+    return _Worker(WorkPool(pool), classes, name, linger, poll_s, host_check).loop()
+
+
+# -- controller --------------------------------------------------------------------------------------------------
+Runner = Callable[[Sequence[str]], str]
+"""Runs a command (``sbatch``, ``squeue``, ``scancel``) and returns its stdout."""
+
+STALE_REASONS = ("Priority", "QOS", "ReqNodeNotAvail")
+"""Pending reasons (prefixes) that make a partition stale after ``pending_s``; ``Resources`` is not one."""
+
+LIVE_STATES = ("PENDING", "RUNNING", "CONFIGURING")
+"""Worker job states that count as live."""
+
+SQUEUE_FORMAT = "%i|%P|%T|%V|%j|%r"
+"""Job id, partition, state, submit time, name and reason; the reason last, as it may hold spaces."""
+
+
+def run_command(argv: Sequence[str]) -> str:
+    """The default runner: run ``argv`` and return its stdout.
+
+    Args:
+        argv: The command.
+
+    Returns:
+        Its stdout.
+
+    Raises:
+        subprocess.CalledProcessError: The command failed.
+    """
+    return subprocess.run(list(argv), check=True, capture_output=True, text=True).stdout  # noqa: S603
+
+
+@dataclass(frozen=True)
+class PartitionSpec:
+    """Where and how a resource class's workers are submitted.
+
+    Attributes:
+        partition: The Slurm partition.
+        cpus: ``--cpus-per-task``.
+        mem: ``--mem``.
+        time: ``--time``.
+        gres: ``--gres``, when set.
+        exclude: Nodes for ``--exclude``.
+        requeue: Whether to pass ``--requeue``.
+        max_workers: Live (pending plus running) workers of the class allowed on this partition.
+    """
+
+    partition: str
+    cpus: int = 1
+    mem: str = "4G"
+    time: str = "01:00:00"
+    gres: Optional[str] = None
+    exclude: tuple[str, ...] = ()
+    requeue: bool = False
+    max_workers: int = 1
+
+
+@dataclass(frozen=True)
+class ResourceClass:
+    """A resource class the caller defines, and the partitions that offer it (in order of preference on ties).
+
+    Attributes:
+        name: The class name items carry; matches :data:`ID_PATTERN`.
+        partitions: Where its workers may run.
+    """
+
+    name: str
+    partitions: tuple[PartitionSpec, ...]
+
+    def __post_init__(self) -> None:
+        """Check the name and partitions."""
+        if not ID_PATTERN.fullmatch(self.name) or not self.partitions:
+            raise ValueError(f"resource class {self.name!r} needs a plain name and at least one partition")
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> ResourceClass:
+        """A class from ``{name, partitions: [{partition, cpus, mem, time, gres, exclude, requeue, max_workers}]}``."""
+        parts = []
+        for row in data["partitions"]:
+            row = dict(row)
+            if "exclude" in row:
+                row["exclude"] = tuple(str(n) for n in row["exclude"] or ())
+            parts.append(PartitionSpec(**row))
+        return cls(name=str(data["name"]), partitions=tuple(parts))
+
+
+def load_classes(path: PathLike) -> list[ResourceClass]:
+    """Resource classes from a YAML (or JSON) file holding ``classes: [{name, partitions: [...]}]``.
+
+    Args:
+        path: The file.
+
+    Returns:
+        The classes.
+    """
+    import yaml  # a senselab dependency; imported here so the pool itself stays standard library only
+
+    data = yaml.safe_load(Path(path).read_text())
+    return [ResourceClass.from_dict(row) for row in data["classes"]]
+
+
+def pool_tag(pool: WorkPool) -> str:
+    """Eight hex characters naming the pool in its workers' job names (``work-pool-<tag>-<class>``)."""
+    return hashlib.sha256(str(pool.root).encode()).hexdigest()[:8]
+
+
+def _submit_time(text: str) -> Optional[float]:
+    try:
+        return datetime.datetime.fromisoformat(text).timestamp()
+    except ValueError:
+        return None
+
+
+@dataclass
+class _Job:
+    id: str
+    partition: str
+    state: str
+    submitted: Optional[float]
+    cls: str
+    reason: str
+
+
+class Controller:
+    """Keeps Slurm workers on every partition that offers a class, in step with the pool's queue."""
+
+    def __init__(
+        self,
+        pool: WorkPool,
+        classes: Sequence[ResourceClass],
+        *,
+        runner: Runner = run_command,
+        worker_command: Optional[Sequence[str]] = None,
+        poll_s: float = 30.0,
+        pending_s: float = 600.0,
+        release_cap: int = 3,
+        release_window_s: float = 3600.0,
+        log_dir: Optional[PathLike] = None,
+        clock: Callable[[], float] = time.time,
+    ) -> None:
+        """Set up a controller; nothing is submitted until :meth:`tick`.
+
+        Args:
+            pool: The pool.
+            classes: The resource classes and their partitions.
+            runner: Runs ``sbatch``, ``squeue`` and ``scancel``.
+            worker_command: The worker's argv up to ``--classes`` (default: this interpreter running
+                ``python -m senselab.utils.work_pool work POOL``).
+            poll_s: Seconds between ticks in :meth:`run`.
+            pending_s: A partition whose workers have been pending this long for a stale reason gets none.
+            release_cap: Host-check releases on a partition within ``release_window_s`` that pause it.
+            release_window_s: The release cap's window.
+            log_dir: Where workers write ``%x-%j.out`` (default: sbatch's default).
+            clock: The local clock, against which squeue's submit times are aged.
+        """
+        self.pool, self.classes, self.runner = pool, list(classes), runner
+        self.worker_command = list(worker_command or [sys.executable, "-m", "senselab.utils.work_pool", "work"])
+        if worker_command is None:
+            self.worker_command.append(str(pool.root))
+        self.poll_s, self.pending_s = poll_s, pending_s
+        self.release_cap, self.release_window_s = release_cap, release_window_s
+        self.log_dir = Path(log_dir).absolute() if log_dir is not None else None
+        self.clock = clock
+        self.pool8 = pool_tag(pool)
+
+    def job_name(self, cls: str) -> str:
+        """The job name of this pool's workers of class ``cls``."""
+        return f"work-pool-{self.pool8}-{cls}"
+
+    def _jobs(self) -> list[_Job]:
+        names = {self.job_name(c.name): c.name for c in self.classes}
+        out = self.runner(["squeue", "--me", "-h", f"--name={','.join(names)}", "-o", SQUEUE_FORMAT])
+        jobs = []
+        for line in out.splitlines():
+            fields = line.strip().split("|", 5)
+            if len(fields) < 6 or fields[4] not in names:
+                continue
+            job_id, partition, state, submitted, name, reason = fields
+            jobs.append(_Job(job_id, partition, state, _submit_time(submitted), names[name], reason))
+        return jobs
+
+    def _render(self, cls: ResourceClass, spec: PartitionSpec) -> list[str]:
+        argv = [
+            "sbatch",
+            "--parsable",
+            f"--partition={spec.partition}",
+            f"--job-name={self.job_name(cls.name)}",
+            f"--cpus-per-task={spec.cpus}",
+            f"--mem={spec.mem}",
+            f"--time={spec.time}",
+        ]
+        if spec.gres:
+            argv.append(f"--gres={spec.gres}")
+        if spec.exclude:
+            argv.append(f"--exclude={','.join(spec.exclude)}")
+        if spec.requeue:
+            argv.append("--requeue")
+        if self.log_dir is not None:
+            argv.append(f"--output={self.log_dir}/%x-%j.out")
+        # exec: the worker replaces sbatch's wrapper shell, so a cancel or preemption SIGTERM reaches it and it can
+        # release its item (a shell dying first ends the step, and Slurm then kills the worker outright).
+        argv += ["--wrap", "exec " + shlex.join([*self.worker_command, "--classes", cls.name])]
+        return argv
+
+    def _stale(self, job: _Job, now: float) -> bool:
+        return (
+            job.state == "PENDING"
+            and job.reason.startswith(STALE_REASONS)
+            and job.submitted is not None
+            and now - job.submitted > self.pending_s
+        )
+
+    def tick(self) -> dict[str, Any]:
+        """Reap, count, then submit workers where queued items exceed live ones and cancel idle pending ones.
+
+        Returns:
+            ``{"reaped", "submitted": [{class, partition, job}], "cancelled": [job ids], "partitions": {p: {pending,
+            running, stale, host_check_releases, paused}}, "status"}``; the same ``partitions`` go into
+            ``status.json``.
+        """
+        reaped = self.pool.reap()
+        status = self.pool.status()
+        jobs = [j for j in self._jobs() if j.state in LIVE_STATES]
+        now = self.clock()
+        releases = self.pool.host_check_failures(self.release_window_s)
+        partitions: dict[str, dict[str, Any]] = {}
+        for p in dict.fromkeys(spec.partition for c in self.classes for spec in c.partitions):
+            mine = [j for j in jobs if j.partition == p]
+            partitions[p] = {
+                "pending": sum(j.state == "PENDING" for j in mine),
+                "running": sum(j.state != "PENDING" for j in mine),
+                "stale": any(self._stale(j, now) for j in mine),
+                "host_check_releases": releases.get(p, 0),
+                "paused": "host-check" if releases.get(p, 0) >= self.release_cap else None,
+            }
+        submitted: list[dict[str, str]] = []
+        cancelled: list[str] = []
+        for cls in self.classes:
+            queued = int(status["classes"].get(cls.name, {}).get("queued", 0))
+            live = [j for j in jobs if j.cls == cls.name]
+            if queued == 0:
+                idle = [j.id for j in live if j.state == "PENDING"]
+                if idle:
+                    self.runner(["scancel", *idle])
+                    cancelled += idle
+                continue
+            pending = {
+                s.partition: [j for j in live if j.partition == s.partition and j.state == "PENDING"]
+                for s in cls.partitions
+            }
+            count = {s.partition: sum(j.partition == s.partition for j in live) for s in cls.partitions}
+            npend = {p: len(js) for p, js in pending.items()}
+            oldest = {
+                p: max((now - j.submitted for j in js if j.submitted is not None), default=0.0)
+                for p, js in pending.items()
+            }
+            usable = [
+                (k, s)
+                for k, s in enumerate(cls.partitions)
+                if not partitions[s.partition]["paused"] and not partitions[s.partition]["stale"]
+            ]
+            for _ in range(max(0, queued - len(live))):
+                room = [(k, s) for k, s in usable if count[s.partition] < s.max_workers]
+                if not room:
+                    break
+                _, spec = min(room, key=lambda ks: (npend[ks[1].partition], oldest[ks[1].partition], ks[0]))
+                job_id = self.runner(self._render(cls, spec)).strip().split(";")[0]
+                submitted.append({"class": cls.name, "partition": spec.partition, "job": job_id})
+                count[spec.partition] += 1
+                npend[spec.partition] += 1
+                partitions[spec.partition]["pending"] += 1
+        _write_json(self.pool.root / "status.json", {**status, "partitions": partitions})
+        return {
+            "reaped": reaped,
+            "submitted": submitted,
+            "cancelled": cancelled,
+            "partitions": partitions,
+            "status": status,
+        }
+
+    def run(self, once: bool = False) -> int:
+        """Tick every ``poll_s`` until nothing is queued, leased or staged (or once).
+
+        Args:
+            once: Tick once and return.
+
+        Returns:
+            0.
+        """
+        while True:
+            summary = self.tick()
+            counts = summary["status"]["counts"]
+            _log(
+                f"control: reaped {summary['reaped']}, submitted {len(summary['submitted'])}, cancelled "
+                f"{len(summary['cancelled'])}; queued {counts['queued']} leased {counts['leased']} done "
+                f"{counts['done']} dead {counts['dead']}"
+            )
+            if once or counts["queued"] + counts["leased"] + counts["staged"] == 0:
+                return 0
+            time.sleep(self.poll_s)
+
+
+def submit_controller(
+    pool: WorkPool,
+    classes_file: PathLike,
+    *,
+    partition: str,
+    time: str,
+    runner: Runner = run_command,
+    poll_s: float = 30.0,
+    cpus: int = 1,
+    mem: str = "2G",
+    output: Optional[PathLike] = None,
+    extra_args: Sequence[str] = (),
+) -> str:
+    """Submit a small job that runs ``control POOL --classes FILE`` until the pool drains.
+
+    Args:
+        pool: The pool.
+        classes_file: The resource classes' YAML file.
+        partition: The controller job's partition.
+        time: Its ``--time``.
+        runner: Runs ``sbatch``.
+        poll_s: Seconds between ticks.
+        cpus: Its ``--cpus-per-task``.
+        mem: Its ``--mem``.
+        output: Its ``--output``, when set.
+        extra_args: More ``control`` arguments (e.g. ``--host-check``).
+
+    Returns:
+        The controller's job id.
+    """
+    command = [sys.executable, "-m", "senselab.utils.work_pool", "control", str(pool.root)]
+    command += ["--classes", str(Path(classes_file).absolute()), "--poll", str(float(poll_s)), *extra_args]
+    argv = [
+        "sbatch",
+        "--parsable",
+        f"--partition={partition}",
+        f"--job-name=work-pool-control-{pool_tag(pool)}",
+        f"--cpus-per-task={cpus}",
+        f"--mem={mem}",
+        f"--time={time}",
+    ]
+    if output is not None:
+        argv.append(f"--output={output}")
+    argv += ["--wrap", "exec " + shlex.join(command)]
+    return runner(argv).strip().split(";")[0]
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
-    """Command line: ``work POOL --classes a,b [--linger N] [--poll S] [--worker NAME]``.
+    """Command line: ``work`` runs one worker, ``control`` runs a controller.
+
+    ``work POOL --classes a,b [--linger N] [--poll S] [--worker NAME] [--host-check CMD]``;
+    ``control POOL --classes FILE [--once] [--poll S] [--pending-s S] [--release-cap N] [--log-dir D]
+    [--host-check CMD] [--worker-linger N] [--worker-poll S]``.
 
     Args:
         argv: Arguments (default ``sys.argv[1:]``).
@@ -1097,9 +1519,41 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     run.add_argument("--linger", type=int, default=3)
     run.add_argument("--poll", type=float, default=10.0)
     run.add_argument("--worker")
+    run.add_argument("--host-check", help="a command (split like a shell) that must succeed on this node")
+    ctl = sub.add_parser("control", help="run a controller that submits and cancels Slurm workers")
+    ctl.add_argument("pool")
+    ctl.add_argument("--classes", required=True, help="the resource classes' YAML file")
+    ctl.add_argument("--once", action="store_true", help="tick once and exit")
+    ctl.add_argument("--poll", type=float, default=30.0)
+    ctl.add_argument("--pending-s", type=float, default=600.0)
+    ctl.add_argument("--release-cap", type=int, default=3)
+    ctl.add_argument("--log-dir")
+    ctl.add_argument("--host-check", help="passed on to each worker")
+    ctl.add_argument("--worker-linger", type=int, help="passed on to each worker as --linger")
+    ctl.add_argument("--worker-poll", type=float, help="passed on to each worker as --poll")
     args = parser.parse_args(argv)
+    if args.cmd == "control":
+        pool = WorkPool(args.pool)
+        command = [sys.executable, "-m", "senselab.utils.work_pool", "work", str(pool.root)]
+        if args.host_check:
+            command += ["--host-check", args.host_check]
+        if args.worker_linger is not None:
+            command += ["--linger", str(args.worker_linger)]
+        if args.worker_poll is not None:
+            command += ["--poll", str(args.worker_poll)]
+        controller = Controller(
+            pool,
+            load_classes(args.classes),
+            worker_command=command,
+            poll_s=args.poll,
+            pending_s=args.pending_s,
+            release_cap=args.release_cap,
+            log_dir=args.log_dir,
+        )
+        return controller.run(once=args.once)
     classes = [c for c in args.classes.split(",") if c]
-    return work(args.pool, classes, worker=args.worker, linger=args.linger, poll_s=args.poll)
+    check = shlex.split(args.host_check) if args.host_check else None
+    return work(args.pool, classes, worker=args.worker, linger=args.linger, poll_s=args.poll, host_check=check)
 
 
 if __name__ == "__main__":
