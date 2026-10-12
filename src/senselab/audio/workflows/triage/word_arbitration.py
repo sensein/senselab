@@ -176,9 +176,7 @@ def with_mask_gaps(
             for a, b in word.timings.values()
             if (span := located_span(a, b, duration_s=duration_s)) is not None
         ]
-        held = [
-            piece for piece in _subtract(gap, off_limits) if any(piece[0] <= m <= piece[1] for m in midpoints)
-        ]
+        held = [piece for piece in _subtract(gap, off_limits) if any(piece[0] <= m <= piece[1] for m in midpoints)]
         if held:
             gap = (min(piece[0] for piece in held), max(piece[1] for piece in held))
         out[i] = replace(word, mask_gap=(round(gap[0], 3), round(gap[1], 3)))

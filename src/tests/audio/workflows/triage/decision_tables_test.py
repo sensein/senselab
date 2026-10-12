@@ -102,7 +102,12 @@ def test_the_config_hash_is_the_last_marker_s_even_where_an_unchanged_fold_left_
     store = run_root / "run" / "store.jsonl"
     lines = store.read_text().splitlines()
     replay = {"record": "activity", "node": "VERDICT", "step": None, "parameters": {"config_hash": "replay0"}}
-    marker = {"record": "activity", "node": "REFOLD", "step": "marker", "parameters": {"commit": "d00d", "config_hash": "c0ffee"}}
+    marker = {
+        "record": "activity",
+        "node": "REFOLD",
+        "step": "marker",
+        "parameters": {"commit": "d00d", "config_hash": "c0ffee"},
+    }
     store.write_text("\n".join([*lines, json.dumps(replay), json.dumps(marker)]) + "\n")
     row, _ = decision_tables.decision_rows(run_root, tmp_path)  # type: ignore[misc]
     assert (row["commit"], row["config_hash"]) == ("d00d", "c0ffee")
