@@ -33,6 +33,7 @@ from senselab.audio.workflows.triage.task_events import (
     speech_spans,
     task_events_parameters,
 )
+from senselab.audio.workflows.triage.task_extent import diarized_turns, task_extent_parameters
 from senselab.utils.prov_store import ProvStore
 
 COUGH_PATTERN_PATH = Path(__file__).parent / "data" / "cough_pattern.yaml"
@@ -511,14 +512,18 @@ def cough_pattern_of(
         return (BACKGROUND_MODEL,)
     q = task_events_parameters()
     per_cough = int(q["extent"]["events_per_instructed"]["cough"])
+    speech = speech_spans(store, run_dir, background_speech_parameters().speech_labels, q)
+    turns = diarized_turns(store, run_dir, float(task_extent_parameters()["growth"]["diarized_turn_min_s"]))
     evidence = evidence_of(
         view,
         read.event_spans_s,
         gap_s=float(q["cough"]["gap_s"]),
         inhale=False,
         entangle_inside=False,
-        speech=speech_spans(store, run_dir, background_speech_parameters().speech_labels, q),
+        speech=speech,
         instructed_n=None if instructed is None else instructed * per_cough,
+        stops=sorted({*speech, *(w for w in words if w[1] > w[0]), *turns}),
+        grow_kind="cough",
     )
     extent = cough_extent(
         [(e.start_s, e.end_s) for e in evidence.events],

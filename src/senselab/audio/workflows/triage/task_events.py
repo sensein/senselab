@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import functools
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -35,9 +35,21 @@ from senselab.audio.workflows.triage.background_model import (
 )
 from senselab.audio.workflows.triage.nodes.common import find_measurement, lexical_words, word_hull
 from senselab.audio.workflows.triage.residue import is_non_lexical
+from senselab.audio.workflows.triage.task_extent import (
+    enabled,
+    extent_check,
+    grow,
+    median_gap_s,
+    modulation_events,
+    overlaps,
+    reachable_outside,
+    task_extent_parameters,
+)
 from senselab.utils.prov_store import ProvStore
 
 TASK_EVENTS_PATH = Path(__file__).parent / "data" / "task_events.yaml"
+MODULATION = "modulation"
+"""``source`` of an event the envelope-modulation detector found."""
 
 PRESENT = "present"
 REVIEW = "review"
@@ -181,6 +193,21 @@ def speech_spans(store: ProvStore, run_dir: Path, labels: Sequence[str], p: dict
             if max((scores.get(label, 0.0) for label in labels), default=0.0) >= float(q["speech_score_min"]):
                 spans.append((float(window.get("start", 0.0)), float(window.get("end", 0.0))))
     return sorted(spans)
+
+
+def modulation_candidates(view: GenericView, q: Mapping[str, Any] | None = None) -> list[Span]:
+    """The envelope-modulation detector over the background's band frames.
+
+    Args:
+        view: The background.
+        q: The ``modulation`` section of ``data/task_extent.yaml``; the packaged one when None.
+
+    Returns:
+        :func:`~senselab.audio.workflows.triage.task_extent.modulation_events` over the mean band level over
+        the stationary floor.
+    """
+    over = np.clip(view.frames.band_db - view.floor.band_db[None, :], 0.0, None).mean(axis=1)
+    return modulation_events(view.frames.times_s, over, view.hop_s, q)
 
 
 def _impulse_mask(view: GenericView) -> np.ndarray:
@@ -348,6 +375,8 @@ class TaskEvent:
         entangled: Whether an impulse overlaps or abuts it.
         recovered: Whether the rhythm prior recovered it from a region the branch's finder missed.
         stream: The stream it was found on.
+        source: ``type_test`` for the branch's own finder, ``modulation`` for the envelope-modulation
+            detector (:func:`~senselab.audio.workflows.triage.task_extent.modulation_events`).
     """
 
     start_s: float
@@ -357,6 +386,7 @@ class TaskEvent:
     entangled: bool = False
     recovered: bool = False
     stream: str = "plain"
+    source: str = "type_test"
 
     @property
     def clear_db(self) -> float:
@@ -373,6 +403,7 @@ class TaskEvent:
             "entangled": self.entangled,
             "recovered": self.recovered,
             "stream": self.stream,
+            "source": self.source,
         }
 
 
@@ -558,6 +589,12 @@ class TaskEvidence:
         decision: ``present``, ``review`` or ``absent`` (:func:`decide`).
         why: The condition that decided it.
         inputs: The readings and bounds :func:`decide` compared (:func:`decision_inputs`).
+        growth: How far bounded growth moved the cluster's edges (``task_extent.Growth.record``); empty where
+            growth is off.
+        check: Whether the extent holds the whole task (``task_extent.ExtentCheck.record``); empty where no
+            stops were given.
+        trim: What trimming the events to the task's own extent removed (``task_extent.Trim.record``); empty
+            where none was trimmed.
     """
 
     events: tuple[TaskEvent, ...]
@@ -567,6 +604,9 @@ class TaskEvidence:
     decision: str
     why: str
     inputs: dict[str, Any] = field(default_factory=dict)
+    growth: dict[str, Any] = field(default_factory=dict)
+    check: dict[str, Any] = field(default_factory=dict)
+    trim: dict[str, Any] = field(default_factory=dict)
 
     @property
     def events_found_n(self) -> int:
@@ -611,6 +651,9 @@ class TaskEvidence:
                 "standing_n": len(self.outside),
                 "best_local_db": round(max(e.clear_db for e in self.outside), 2) if self.outside else None,
             },
+            **({"growth": dict(self.growth)} if self.growth else {}),
+            **({"extent_check": dict(self.check)} if self.check else {}),
+            **({"trim": dict(self.trim)} if self.trim else {}),
         }
 
 
@@ -674,6 +717,10 @@ def evidence_of(
     speech: Sequence[Span] = (),
     instructed_n: int | None = None,
     p: dict[str, Any] | None = None,
+    stops: Sequence[Span] | None = None,
+    growth_candidates: Sequence[Span] = (),
+    grow_kind: str | None = None,
+    extent_p: Mapping[str, Any] | None = None,
 ) -> TaskEvidence:
     """Read a branch's candidates against the background: events, cluster, extent and decision.
 
@@ -688,18 +735,33 @@ def evidence_of(
         speech: Speech spans, which no task cluster touches (:func:`task_cluster`).
         instructed_n: The events the instruction asks for, or None.
         p: The parameters; ``data/task_events.yaml`` when None.
+        stops: Speech and other-speaker spans growth halts at; where given, the extent's completeness is read
+            (``check``).
+        growth_candidates: Further spans the envelope-modulation detector found; they join growth and
+            completeness, never the cluster or the decision.
+        grow_kind: The event kind (``breath``, ``cough``) whose cluster grows where ``growth`` is switched on
+            for it in ``data/task_extent.yaml``; None never grows.
+        extent_p: The parameters of ``data/task_extent.yaml``; the packaged file when None.
 
     Returns:
         The evidence: the task cluster of the events standing over the floor (of every event where none
-        stands), its extent, and the decision on the cluster's events alone.
+        stands), grown where growth is on, its extent, and the decision on the chosen cluster's events alone.
     """
     p = p or task_events_parameters()
+    q = extent_p or task_extent_parameters()
     margin = float(p["impulse_margin_db"])
     kept = [s for s in candidates if not impulse_explained(view, s, margin)]
     extra = [s for s in recovered if not impulse_explained(view, s, margin)]
-    others = [*kept, *extra]
+    modulated = [
+        s for s in growth_candidates if not impulse_explained(view, s, margin) and not overlaps(s, [*kept, *extra])
+    ]
+    others = [*kept, *extra, *modulated]
     events = [task_event(view, s, others, p, entangle_inside=entangle_inside) for s in kept]
     events += [task_event(view, s, others, p, recovered=True, entangle_inside=entangle_inside) for s in extra]
+    from_modulation = [
+        replace(task_event(view, s, others, p, recovered=True, entangle_inside=entangle_inside), source=MODULATION)
+        for s in modulated
+    ]
     choose = functools.partial(
         task_cluster,
         gap_s=gap_s,
@@ -708,13 +770,36 @@ def evidence_of(
         duration_s=view.duration_s,
         weights=p["extent"],
     )
-    cluster = choose([e for e in events if e.snr_db >= p["decision"]["snr_low_db"]]) or choose(events)
+    low = float(p["decision"]["snr_low_db"])
+    cluster = choose([e for e in events if e.snr_db >= low]) or choose(events)
     decision, why = decide(cluster, p["decision"])
+    inputs = decision_inputs(cluster, p["decision"])
+    found = [*events, *from_modulation]
+    grown, growth = list(cluster), {}
+    g = q.get("growth") or {}
+    if cluster and grow_kind is not None and enabled("growth", q) and grow_kind in (g.get("families") or ()):
+        core = [(e.start_s, e.end_s) for e in cluster]
+        base = median_gap_s(core, floor_s=float(g["gap_floor_s"]), single_s=gap_s)
+        pool = {(e.start_s, e.end_s): e for e in found if e.snr_db >= low and e not in cluster}
+        grew = grow(core, list(pool), limit_s=float(g["k"]) * base, stops=stops or ())
+        grown = sorted([*cluster, *(pool[s] for s in grew.added)], key=lambda e: e.start_s)
+        growth = grew.record()
     extent: Span | None = None
-    if cluster:
-        start = cluster[0].start_s
+    if grown:
+        start = grown[0].start_s
         if inhale:
             start = inhale_start(view, start, float(p["inhale"]["margin_db"]), float(p["inhale"]["back_max_s"]))
-        extent = (start, max(e.end_s for e in cluster))
-    inputs = decision_inputs(cluster, p["decision"])
-    return TaskEvidence(tuple(cluster), tuple(events), rhythm, extent, decision, why, inputs)
+        extent = (start, max(e.end_s for e in grown))
+    check: dict[str, Any] = {}
+    if stops is not None:
+        held = {(e.start_s, e.end_s) for e in grown}
+        outside = [
+            (e.start_s, e.end_s)
+            for e in found
+            if (e.start_s, e.end_s) not in held and e.snr_db >= low and (not e.recovered or e.source == MODULATION)
+        ]
+        reachable = reachable_outside(extent, outside, stops)
+        check = extent_check(
+            has_extent=extent is not None, narrow={"events_outside": len(reachable)}, wide={}, outside_n=len(reachable)
+        ).record()
+    return TaskEvidence(tuple(grown), tuple(found), rhythm, extent, decision, why, inputs, growth, check)

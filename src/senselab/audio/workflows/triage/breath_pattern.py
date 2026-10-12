@@ -17,7 +17,7 @@ import json
 import unicodedata
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 import numpy as np
 import yaml
@@ -35,11 +35,13 @@ from senselab.audio.workflows.triage.task_events import (
     cluster_scores,
     evidence_of,
     generic_view_of,
+    modulation_candidates,
     rhythm_of,
     speech_spans,
     task_events_parameters,
     touches,
 )
+from senselab.audio.workflows.triage.task_extent import diarized_turns, enabled, task_extent_parameters
 from senselab.audio.workflows.triage.vocabulary import SUPERSEDES
 from senselab.utils.prov_store import Entity, ProvStore
 
@@ -1478,6 +1480,7 @@ def breath_evidence(
     speech: tuple[tuple[float, float], ...],
     speech_windows: tuple[tuple[float, float], ...] = (),
     instructed_n: int | None = None,
+    stops: Sequence[tuple[float, float]] | None = None,
 ) -> TaskEvidence:
     """The breath train's candidates read against the background, with the rhythm prior's recoveries.
 
@@ -1489,26 +1492,39 @@ def breath_evidence(
         speech: Speech runs and segments, where no breath phase stands.
         speech_windows: Further speech spans no task cluster touches.
         instructed_n: The phases the instruction asks for, or None.
+        stops: Speech and other-speaker spans growth halts at (:func:`breath_stops`); None reads no
+            completeness.
 
     Returns:
-        The evidence: the dominant cluster of events, its extent with the preparatory inhale, and the
-        decision. Where a breathing-band rhythm stands, a region of activity no candidate overlaps,
-        outside speech and mostly unvoiced, is recovered as a phase.
+        The evidence: the dominant cluster of events, grown where ``data/task_extent.yaml`` switches growth
+        on, its extent with the preparatory inhale, and the decision. Where a breathing-band rhythm stands, a
+        region of activity no candidate overlaps, outside speech and mostly unvoiced, is recovered as a
+        phase; where the modulation detector is on, its mostly unvoiced events off speech join growth.
     """
     p = task_events_parameters()
     q = p["breath"]
     rhythm: Rhythm | None = rhythm_of(view, p["rhythm"]["band_hz"], float(p["rhythm"]["prominence_min_db"]))
     spans = [(b.start_s, b.end_s) for b in train.candidates]
+
+    def unvoiced(span: tuple[float, float]) -> bool:
+        inside = (times_s >= span[0]) & (times_s <= span[1])
+        return not inside.any() or float(voiced[inside].mean()) <= q["recover_voiced_max"]
+
     recovered: list[tuple[float, float]] = []
     if rhythm is not None:
         for region in view.regions:
             span = (region.start_s, region.end_s)
             if any(s < span[1] and e > span[0] for s, e in [*spans, *speech]):
                 continue
-            inside = (times_s >= span[0]) & (times_s <= span[1])
-            if inside.any() and float(voiced[inside].mean()) > q["recover_voiced_max"]:
-                continue
-            recovered.append(span)
+            if unvoiced(span):
+                recovered.append(span)
+    modulated: list[tuple[float, float]] = []
+    if enabled("modulation"):
+        modulated = [
+            span
+            for span in modulation_candidates(view, task_extent_parameters()["modulation"])
+            if unvoiced(span) and not any(s < span[1] and e > span[0] for s, e in [*speech, *speech_windows])
+        ]
     gap = float(q["gap_min_s"])
     if rhythm is not None:
         gap = max(gap, float(q["gap_cycles"]) * rhythm.period_s)
@@ -1521,7 +1537,33 @@ def breath_evidence(
         speech=sorted({*speech, *speech_windows}),
         instructed_n=instructed_n,
         p=p,
+        stops=stops,
+        growth_candidates=modulated,
+        grow_kind="breath",
     )
+
+
+def breath_stops(
+    store: ProvStore,
+    run_dir: Path,
+    *,
+    speech: Sequence[tuple[float, float]],
+    words: Sequence[tuple[float, float]],
+) -> list[tuple[float, float]]:
+    """Where an airway task's extent may not grow: speech, every lexical word, and long diarized turns.
+
+    Args:
+        store: The provenance store, read for the diarization.
+        run_dir: The run directory its sidecar is relative to.
+        speech: Speech runs, segments and classifier windows.
+        words: Every lexical word's span.
+
+    Returns:
+        The spans, in time order: ``speech``, ``words`` and the diarized turns at least
+        ``growth.diarized_turn_min_s`` long (``data/task_extent.yaml``).
+    """
+    turns = diarized_turns(store, run_dir, float(task_extent_parameters()["growth"]["diarized_turn_min_s"]))
+    return sorted({*speech, *(w for w in words if w[1] > w[0]), *turns})
 
 
 def breath_pattern_of(
@@ -1613,15 +1655,17 @@ def breath_pattern_of(
         instructed_n=instructed_phases,
     )
     view = generic_view_of(store, run_dir)
+    runs = tuple(speech_runs(words, words_min=t.speech_words_min, gap_s=t.speech_gap_s)) + speech
     evidence = (
         breath_evidence(
             view,
             train,
             voiced=voiced,
             times_s=times,
-            speech=tuple(speech_runs(words, words_min=t.speech_words_min, gap_s=t.speech_gap_s)) + speech,
+            speech=runs,
             speech_windows=windows,
             instructed_n=instructed_phases,
+            stops=breath_stops(store, run_dir, speech=[*runs, *windows], words=words),
         )
         if view is not None
         else None
