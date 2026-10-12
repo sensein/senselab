@@ -127,6 +127,31 @@ test('a listen set exports its own name and answer as the owner label, and impor
   assert.deepEqual(R.importDecisions(payload, R.labelsOf(INDEX.build)), {})
 })
 
+test('a listen set with a proposed extent and directions decodes, exports and imports the direction', () => {
+  const build = {
+    ...INDEX.build,
+    listen: { name: 'r37_extents', question: 'q', labels: ['proposed_better', 'same'], columns: [], directions: ['too_narrow', 'too_wide', 'ok'] },
+  }
+  const index = { ...INDEX, build, cols: { ...INDEX.cols, checks: [[], [], []], proposed_extent: [[0.5, 3.8], null, null] } }
+  const rows = R.decodeRows(index)
+  assert.deepEqual(rows[0].proposed_extent, [0.5, 3.8])
+  assert.equal(rows[1].proposed_extent, null)
+  assert.equal(R.decodeRows(INDEX)[0].proposed_extent, null)
+  const byStem = Object.fromEntries(rows.map((r) => [r.stem, r]))
+  const decisions = { [rows[0].stem]: { verdict: 'proposed_better', note: '', at: '2026-10-12T00:00:00Z', direction: 'ok' } }
+  const payload = R.exportPayload(byStem, decisions, build, '2026-10-12T01:00:00Z')
+  assert.equal(payload.entries[0].owner_direction, 'ok')
+  assert.equal(R.exportPayload(byStem, decisions, INDEX.build, 'x').entries[0].owner_direction, undefined)
+  assert.deepEqual(R.importDecisions(payload, R.labelsOf(build)), decisions)
+})
+
+test('the task span view covers both extents, either of which may be absent', () => {
+  assert.deepEqual(R.spanUnion([1, 3], [0.5, 2]), [0.5, 3])
+  assert.deepEqual(R.spanUnion(null, [0.5, 2]), [0.5, 2])
+  assert.deepEqual(R.spanUnion([1, 3], null), [1, 3])
+  assert.equal(R.spanUnion(null, null), null)
+})
+
 test('a transcript names its model by id, with the pipeline source where it differs', () => {
   assert.equal(R.modelLabel({ source: 'whisper', model_id: 'openai/whisper-large-v3-turbo' }), 'openai/whisper-large-v3-turbo (whisper)')
   assert.equal(R.modelLabel({ source: 'canary', model_id: null }), 'canary')
@@ -279,6 +304,25 @@ test('play task span gives up waiting for seeked and still checks where the play
   await settle()
   assert.deepEqual(failed, [0])
   assert.equal(a.plays, 0)
+})
+
+test('play proposed span seeks to the proposed start and stops at its end, leaving the extent alone', async () => {
+  const tl = R.timelineOf(40, [6.85, 29.73], [4.1, 31.2])
+  assert.deepEqual(tl.proposed, [4.1, 31.2])
+  assert.equal(R.timelineOf(40, [1, 2]).proposed, null)
+  const a = fakePlayer({})
+  tl.players.push(a)
+  R.playSpan(tl, a, () => assert.fail('a seekable player must not report a failed seek'), 1000, tl.proposed)
+  await settle()
+  assert.equal(a.currentTime, 4.1)
+  assert.equal(a.plays, 1)
+  assert.equal(tl.spanEnd, 31.2)
+  a.currentTime = 30.0
+  R.stopAtSpanEnd(tl)
+  assert.equal(a.paused, false)
+  a.currentTime = 31.3
+  R.stopAtSpanEnd(tl)
+  assert.equal(a.paused, true)
 })
 
 // The buttercup case's shape: one model repeating a phrase, the other a single word, so most columns

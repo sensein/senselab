@@ -64,6 +64,7 @@ var ReviewPage = (function () {
         duration_s: cols.duration_s[i],
         text: cols.text[i],
         checks: cols.checks ? cols.checks[i] : null,
+        proposed_extent: cols.proposed_extent ? cols.proposed_extent[i] : null,
       };
     }
     Object.keys(index.evidence).forEach(function (name) {
@@ -343,7 +344,7 @@ var ReviewPage = (function () {
    * answer is its owner label as chosen; a whole-corpus review's is the verdict, prefixed `reviewer_`.
    */
   function entryFor(row, decision, build) {
-    return {
+    var entry = {
       listen_set: listenSet(build),
       stem: row.stem,
       family: row.declared_family,
@@ -355,6 +356,8 @@ var ReviewPage = (function () {
       reviewer_verdict: decision.verdict,
       reviewed_at: decision.at,
     };
+    if (build.listen && build.listen.directions) entry.owner_direction = decision.direction || '';
+    return entry;
   }
 
   function exportPayload(rowsByStem, decisions, build, now) {
@@ -377,6 +380,7 @@ var ReviewPage = (function () {
       var verdict = e.reviewer_verdict || String(e.owner_label || '').replace(/^reviewer_/, '');
       if (!e.stem || labels.indexOf(verdict) < 0) return;
       out[e.stem] = { verdict: verdict, note: e.owner_note || '', at: e.reviewed_at || null };
+      if (e.owner_direction) out[e.stem].direction = e.owner_direction;
     });
     return out;
   }
@@ -957,29 +961,57 @@ var ReviewPage = (function () {
     labelsOf(state.index.build).forEach(function (v) {
       var l = el('label');
       var c = el('input'); c.type = 'radio'; c.name = 'rv-verdict'; c.value = v; c.checked = current.verdict === v;
-      c.onchange = function () { record(r, v, note.value); };
+      c.onchange = function () { record(r, v, note.value, directionOf()); };
       l.appendChild(c); l.appendChild(document.createTextNode(' ' + v));
       box.appendChild(l);
     });
+    var directions = listen && listen.directions ? listen.directions : [];
+    var picked = current.direction || null;
+    function directionOf() { return picked; }
+    if (directions.length) {
+      var row = el('div', 'rv-direction');
+      row.appendChild(el('span', 'rv-note', 'proposed extent: '));
+      directions.forEach(function (v) {
+        var l = el('label');
+        var c = el('input'); c.type = 'radio'; c.name = 'rv-direction'; c.value = v; c.checked = picked === v;
+        c.onchange = function () {
+          picked = v;
+          var d = state.decisions[r.stem];
+          if (d) record(r, d.verdict, note.value, v);
+        };
+        l.appendChild(c); l.appendChild(document.createTextNode(' ' + v));
+        row.appendChild(l);
+      });
+      box.appendChild(row);
+    }
     var clear = el('button', null, 'clear'); clear.type = 'button';
     clear.onclick = function () { delete state.decisions[r.stem]; saveDecisions(); openRecording(r.index); renderList(); };
     box.appendChild(clear);
     var note = el('textarea'); note.rows = 2; note.placeholder = 'note'; note.value = current.note || '';
-    note.oninput = function () { if (state.decisions[r.stem]) record(r, state.decisions[r.stem].verdict, note.value); };
+    note.oninput = function () {
+      if (state.decisions[r.stem]) record(r, state.decisions[r.stem].verdict, note.value, directionOf());
+    };
     box.appendChild(note);
     return box;
   }
 
-  function record(r, verdict, note) {
+  function record(r, verdict, note, direction) {
     state.decisions[r.stem] = { verdict: verdict, note: note || '', at: new Date().toISOString() };
+    if (direction) state.decisions[r.stem].direction = direction;
     saveDecisions();
     renderList();
   }
 
-  /** One recording's time view: spectrogram, ASR lanes and audio players over one zoomable window. */
-  function timelineOf(duration, extent) {
+  /**
+   * One recording's time view: spectrogram, ASR lanes and audio players over one zoomable window. `proposed`
+   * is a listen set's proposed extent, marked beside the current one, or null.
+   */
+  function timelineOf(duration, extent, proposed) {
     var d = duration || 1;
-    return { d: d, extent: extent, win: { t0: 0, t1: d }, redraw: [], players: [], active: null, spanEnd: null };
+    return {
+      d: d, extent: extent, proposed: proposed || null, win: { t0: 0, t1: d }, redraw: [], players: [], active: null,
+      spanEnd: null,
+    };
   }
 
   function redraw(tl) { tl.redraw.forEach(function (f) { f(); }); }
@@ -1003,13 +1035,14 @@ var ReviewPage = (function () {
   }
 
   /**
-   * Play the task extent on one player: seek to its start, wait for `seeked`, then play until its end.
-   * Where the player lands away from the start (a server that cannot answer byte ranges), it does not
-   * play, and `onCannotSeek(landedAt, start)` is called instead.
+   * Play a span on one player, the task extent unless `span` is given: seek to its start, wait for
+   * `seeked`, then play until its end. Where the player lands away from the start (a server that cannot
+   * answer byte ranges), it does not play, and `onCannotSeek(landedAt, start)` is called instead.
    */
-  function playSpan(tl, a, onCannotSeek, waitMs) {
-    if (!tl.extent) return;
-    var start = tl.extent[0];
+  function playSpan(tl, a, onCannotSeek, waitMs, span) {
+    var sp = span || tl.extent;
+    if (!sp) return;
+    var start = sp[0];
     tl.players.forEach(function (b) { if (b !== a && !b.paused) b.pause(); });
     tl.active = a;
     tl.spanEnd = null;
@@ -1026,7 +1059,7 @@ var ReviewPage = (function () {
           if (onCannotSeek) onCannotSeek(a.currentTime, start);
           return;
         }
-        tl.spanEnd = tl.extent[1];
+        tl.spanEnd = sp[1];
         var played = a.play();
         if (played && played.catch) played.catch(function () { /* the reviewer can press play */ });
       };
@@ -1074,10 +1107,11 @@ var ReviewPage = (function () {
     button('◀', 'pan left', function () { setWindow(tl, panWindow(tl.win, tl.d, -(tl.win.t1 - tl.win.t0) / 2)); });
     button('▶', 'pan right', function () { setWindow(tl, panWindow(tl.win, tl.d, (tl.win.t1 - tl.win.t0) / 2)); });
     button('all', 'show the whole recording', function () { setWindow(tl, { t0: 0, t1: tl.d }); });
-    if (tl.extent) {
-      button('task span', 'show the task extent', function () {
-        var pad = 0.05 * (tl.extent[1] - tl.extent[0]);
-        var t0 = Math.max(0, tl.extent[0] - pad), t1 = Math.min(tl.d, tl.extent[1] + pad);
+    var both = spanUnion(tl.extent, tl.proposed);
+    if (both) {
+      button('task span', 'show the task extent' + (tl.proposed ? 's, current and proposed' : ''), function () {
+        var pad = 0.05 * (both[1] - both[0]);
+        var t0 = Math.max(0, both[0] - pad), t1 = Math.min(tl.d, both[1] + pad);
         setWindow(tl, { t0: t0, t1: Math.max(t1, t0 + Math.min(MIN_SPAN_S, tl.d)) });
       });
     }
@@ -1086,6 +1120,13 @@ var ReviewPage = (function () {
     tl.redraw.push(function () { where.textContent = tl.win.t0.toFixed(2) + '–' + tl.win.t1.toFixed(2) + ' s'; });
     bar.appendChild(el('span', 'rv-note', 'ctrl/⌘-wheel zooms, drag pans, click seeks'));
     return bar;
+  }
+
+  /** The smallest span covering both spans, either of which may be null. */
+  function spanUnion(a, b) {
+    if (!a) return b || null;
+    if (!b) return a;
+    return [Math.min(a[0], b[0]), Math.max(a[1], b[1])];
   }
 
   /** Wheel-zoom, drag-pan and click-to-seek on one element of the time view. */
@@ -1135,7 +1176,7 @@ var ReviewPage = (function () {
     var sec = el('section', 'rv-time');
     sec.appendChild(el('h3', null, 'spectrogram' + (rec.spec_stream ? ' · ' + rec.spec_stream : '') +
       (rec.speech && (rec.speech.own || []).length ? ' and ASR timelines' : '')));
-    var tl = timelineOf(r.duration_s, rec.extent);
+    var tl = timelineOf(r.duration_s, rec.extent, r.proposed_extent);
     sec.timeline = tl;
     sec.appendChild(zoomControls(tl));
     var frame = el('div', 'rv-timeline');
@@ -1160,7 +1201,8 @@ var ReviewPage = (function () {
       if (at) head.style.left = (at.left * 100) + '%';
     });
     var legend = el('div', 'rv-legend');
-    [['extent', 'accent'], ['task events', 'good'], ['activity', 'teal'], ['issues', 'bad']].forEach(function (p) {
+    var keys = tl.proposed ? [['current extent', 'accent'], ['proposed extent', 'violet']] : [['extent', 'accent']];
+    keys.concat([['task events', 'good'], ['activity', 'teal'], ['issues', 'bad']]).forEach(function (p) {
       var s = el('span'); var sw = el('i'); sw.style.background = Theme.color(p[1]);
       s.appendChild(sw); s.appendChild(document.createTextNode(p[0])); legend.appendChild(s);
     });
@@ -1288,6 +1330,13 @@ var ReviewPage = (function () {
       ctx.restore();
       bars([rec.extent], 0, 4, Theme.color('accent'));
     }
+    if (tl.proposed) {
+      var q0 = xOf(tl.proposed[0]), q1 = xOf(tl.proposed[1]);
+      ctx.save(); ctx.strokeStyle = Theme.color('violet'); ctx.lineWidth = 2; ctx.setLineDash([5, 3]);
+      ctx.strokeRect(q0, top, Math.max(1.5, q1 - q0), bottom - top);
+      ctx.restore();
+      bars([tl.proposed], 17, 4, Theme.color('violet'));
+    }
     if (tl.pick) {
       var px0 = xOf(tl.pick[0]), px1 = Math.max(xOf(tl.pick[1]), px0 + 2);
       ctx.save(); ctx.globalAlpha = 0.28; ctx.fillStyle = Theme.color('warn');
@@ -1360,8 +1409,12 @@ var ReviewPage = (function () {
     }
     var base = state.index.build.audio_base;
     if (rec.extent) {
-      sec.appendChild(el('p', 'rv-note', 'task extent ' + rec.extent[0].toFixed(2) + '–' + rec.extent[1].toFixed(2) +
-        ' s, marked on each track; “play task span” plays only that'));
+      sec.appendChild(el('p', 'rv-note', (tl && tl.proposed ? 'current ' : '') + 'task extent ' +
+        rec.extent[0].toFixed(2) + '–' + rec.extent[1].toFixed(2) + ' s, marked on each track; “play task span” plays only that'));
+    }
+    if (tl && tl.proposed) {
+      sec.appendChild(el('p', 'rv-note', 'proposed extent ' + tl.proposed[0].toFixed(2) + '–' + tl.proposed[1].toFixed(2) +
+        ' s, marked below it; “play proposed span” plays only that'));
     }
     audioTracks(rec).forEach(function (track) {
       var wrap = el(track.collapsed ? 'details' : 'div', 'rv-track' + (track.collapsed ? ' rv-folded' : ''));
@@ -1390,6 +1443,19 @@ var ReviewPage = (function () {
           wrap.appendChild(b);
           wrap.appendChild(note);
         }
+        if (tl.proposed) {
+          var pb = el('button', 'rv-play-span prop', '▶ play proposed span'); pb.type = 'button';
+          var pnote = el('span', 'rv-note rv-seek-note'); pnote.hidden = true;
+          pb.onclick = function () {
+            pnote.hidden = true;
+            playSpan(tl, a, function (at) {
+              pnote.textContent = CANNOT_SEEK + ' (asked for ' + tl.proposed[0].toFixed(2) + ' s, got ' + at.toFixed(2) + ' s)';
+              pnote.hidden = false;
+            }, null, tl.proposed);
+          };
+          wrap.appendChild(pb);
+          wrap.appendChild(pnote);
+        }
       }
       sec.appendChild(wrap);
     });
@@ -1411,6 +1477,13 @@ var ReviewPage = (function () {
       ext.style.left = (tl.extent[0] / tl.d * 100) + '%';
       ext.style.width = ((tl.extent[1] - tl.extent[0]) / tl.d * 100) + '%';
       strip.appendChild(ext);
+    }
+    if (tl.proposed) {
+      var prop = el('i', 'prop');
+      prop.style.left = (tl.proposed[0] / tl.d * 100) + '%';
+      prop.style.width = ((tl.proposed[1] - tl.proposed[0]) / tl.d * 100) + '%';
+      strip.appendChild(prop);
+      strip.classList.add('two');
     }
     var head = el('i', 'head');
     strip.appendChild(head);
@@ -1716,6 +1789,7 @@ var ReviewPage = (function () {
     NOT_APPLIED: NOT_APPLIED,
     timelineOf: timelineOf,
     playSpan: playSpan,
+    spanUnion: spanUnion,
     stopAtSpanEnd: stopAtSpanEnd,
     CANNOT_SEEK: CANNOT_SEEK,
   };
