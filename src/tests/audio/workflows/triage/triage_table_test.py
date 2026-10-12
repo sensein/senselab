@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import pyarrow as pa
+import pytest
 import yaml
 
 from senselab.audio.workflows.triage import decision_tables, triage_table
@@ -25,12 +26,14 @@ HEADER = [
     "release_reason",
     "reason",
     "reasons",
+    "issues_n",
     "run_status",
     "missing",
     "recording_duration_s",
     "task_start_s",
     "task_end_s",
     "task_duration_s",
+    "task_fraction",
     "task_events_found",
     "task_events_instructed",
     "annotations",
@@ -39,6 +42,26 @@ HEADER = [
     "active_s",
     "interference_in_task",
     "fault_in_task",
+    "snr_db",
+    "noise_floor_dbfs",
+    "session_background_dbfs",
+    "speech_over_residual_db",
+    "squim_pesq",
+    "squim_stoi",
+    "squim_si_sdr",
+    "clipped_s",
+    "dropout_s",
+    "lexical_words_n",
+    "off_task_words_n",
+    "asr_agreement",
+    "asr_single_hypothesis",
+    "asr_degenerate_n",
+    "masked_s",
+    "masked_fraction",
+    "speaker_target_cosine",
+    "speaker_non_task_cosine",
+    "session_consistency_cosine",
+    "enrollment_source",
     "task_audio_plain",
     "task_audio_enhanced",
     "task_audio_redacted",
@@ -61,8 +84,58 @@ def _item(name: str, value: Any, effect: str, comparison: str | None = None, thr
     }
 
 
+def _measurement(name: str, **attributes: Any) -> dict[str, Any]:  # noqa: ANN401
+    """A live measurement entity line."""
+    return {
+        "record": "entity",
+        "id": f"m-{name}",
+        "prov_type": "measurement",
+        "attributes": {"name": name, **attributes},
+    }
+
+
+SPEECH_STORE = [
+    _measurement("session_floor", session_background={"level_db": -71.75}),
+    _measurement("speech_residual", foreground_minus_residual_db={"whole": 24.8, "speech": 25.0}),
+    _measurement("disruptions_file", clipped_s=0.25, dropout_s=0.0),
+    _measurement(
+        "consensus_transcript",
+        outcomes={"agreement": 30, "variant": 6, "insertion": 4},
+        single_hypothesis=False,
+        degenerate_n=2,
+    ),
+    _measurement(
+        "pii_ledger",
+        non_task_speech_ids=["w1", "w2", "w3"],
+        final_masks=[{"start_s": 0.5, "end_s": 2.13}, {"start_s": 2.0, "end_s": 3.0}, {"start_s": 9.0, "end_s": 11.0}],
+    ),
+    _measurement(
+        "cohort_reading",
+        other_speaker={
+            "status": "measured",
+            "enrollment_source": "session",
+            "target": {"status": "measured", "cosine": 0.71},
+            "non_task": {"status": "not_measured"},
+        },
+        checks={
+            "session_speaker_consistency": {
+                "status": "measured",
+                "comparisons": [{"name": "session_vs_other_sessions_cosine", "value": 0.82}],
+            }
+        },
+    ),
+]
+
+
 def _recording(
-    root: Path, task: str, family: str, verdict: str, release: str | None, evidence: list[dict], cuts: list[str]
+    root: Path,
+    task: str,
+    family: str,
+    verdict: str,
+    release: str | None,
+    evidence: list[dict],
+    cuts: list[str],
+    store: list[dict] | None = None,
 ) -> dict[str, Any]:
     """One run directory in the tree, and its ``triage_decisions`` row."""
     participant, session = "sub-SUBJ13", "ses-01"
@@ -80,6 +153,7 @@ def _recording(
             "extent": [0.0, 12.5],
             "attributes": {"name": "recording", "path": str(source)},
         },
+        *(store or ()),
     ]
     (streams.parent / "store.jsonl").write_text("\n".join(json.dumps(line) for line in lines) + "\n")
     for cut in cuts:
@@ -152,6 +226,7 @@ def _tables(root: Path) -> tuple[pa.Table, pa.Table]:
         "redacted",
         [_item("gate:dominant_speaker_share_min", 0.9898385139140226, "pass", ">=", 0.9)],
         ["task_plain"],
+        SPEECH_STORE,
     )
     vowel = _recording(
         root, "prolonged-vowel", "prolonged-vowel", "discard", "as_is", [_item("phonation_found", False, "discard")], []
@@ -165,15 +240,33 @@ def _tables(root: Path) -> tuple[pa.Table, pa.Table]:
         _evidence(breath["stem"], "fault_in_task:clip", 0.047, 0.02),
         _evidence(speech["stem"], "capture.level_rel_db", 0.5),
         _evidence(speech["stem"], "lexical_words", 40),
+        _evidence(breath["stem"], "speech_in_task", 7, 3),
     ]
     decisions = pa.Table.from_pylist([breath, speech, vowel], schema=decision_tables.decisions_schema())
     return decisions, pa.Table.from_pylist(evidence, schema=decision_tables.evidence_schema())
 
 
+def _vectors(decisions: pa.Table) -> pa.Table:
+    """The recording vectors' whole-file readings for every recording."""
+    stems = decisions.column("stem").to_pylist()
+    return pa.table(
+        {
+            "stem": stems,
+            "q_plain_snr_db": [31.5, 28.25, None],
+            "q_plain_floor_dbfs": [-70.0, -66.5, None],
+            "q_plain_squim_pesq": [2.5, 3.25, None],
+            "q_plain_squim_stoi": [0.9, 0.95, None],
+            "q_plain_squim_si_sdr": [12.0, 18.5, None],
+        }
+    )
+
+
 def _written(tmp_path: Path) -> tuple[list[list[str]], str]:
     """Build and write the table; return its parsed rows and raw text."""
     decisions, evidence = _tables(tmp_path)
-    rows = triage_table.rows(decisions, evidence, tmp_path / "out", tmp_path / BIDS, threads=2)
+    rows = triage_table.rows(
+        decisions, evidence, tmp_path / "out", tmp_path / BIDS, threads=2, vectors=_vectors(decisions)
+    )
     path = tmp_path / "pub" / triage_table.TABLE_NAME
     assert triage_table.write_tsv(rows, path) == 3
     text = path.read_text(encoding="utf-8")
@@ -218,7 +311,7 @@ def test_lists_are_joined_and_acquisition_readings_fill_their_columns(tmp_path: 
     assert breath["task_audio_plain"].endswith("run/streams/task_plain.flac")
     assert breath["task_audio_enhanced"].endswith("run/streams/task_enhanced.flac")
     assert breath["task_audio_redacted"] == ""
-    assert (breath["pipeline_commit"], breath["config_hash"], breath["schema_version"]) == ("abc123", "c0ffee", "2")
+    assert (breath["pipeline_commit"], breath["config_hash"], breath["schema_version"]) == ("abc123", "c0ffee", "3")
     speech = dict(zip(HEADER, parsed[2]))
     assert speech["branch"] == "SPEECH" and speech["task_audio_enhanced"] == ""
     assert speech["task_events_found"] == "" and speech["interference_in_task"] == ""
@@ -251,3 +344,39 @@ def test_evidence_text_reads_strings_and_structures_compactly() -> None:
     assert triage_table.evidence_text(_item("kinds", ["a", "b"], "review", "not in", ["c"])) == (
         'kinds=["a","b"]not in["c"]→review'
     )
+
+
+def test_the_whole_file_qc_columns_fill_from_the_store_the_vectors_and_the_evidence(tmp_path: Path) -> None:
+    """Issues, task fraction, quality, speech-content and speaker columns, each from its stated source."""
+    parsed, _ = _written(tmp_path)
+    breath, speech, vowel = (dict(zip(HEADER, row)) for row in parsed[1:4])
+    assert breath["issues_n"] == "4" and speech["issues_n"] == "2"
+    assert float(breath["task_fraction"]) == pytest.approx(8.45 / 12.5, abs=1e-3)
+    assert (breath["snr_db"], breath["noise_floor_dbfs"]) == ("31.5", "-70")
+    assert (breath["squim_pesq"], breath["squim_stoi"], breath["squim_si_sdr"]) == ("", "", ""), "airway: no SQUIM"
+    assert (speech["squim_pesq"], speech["squim_stoi"], speech["squim_si_sdr"]) == ("3.25", "0.95", "18.5")
+    assert (speech["session_background_dbfs"], speech["speech_over_residual_db"]) == ("-71.75", "24.8")
+    assert (speech["clipped_s"], speech["dropout_s"]) == ("0.25", "0")
+    assert (speech["lexical_words_n"], speech["off_task_words_n"]) == ("40", "3")
+    assert breath["off_task_words_n"] == "7", "a non-lexical task's speech words, with no ledger"
+    assert (speech["asr_agreement"], speech["asr_single_hypothesis"], speech["asr_degenerate_n"]) == (
+        "0.75",
+        "false",
+        "2",
+    )
+    assert speech["masked_s"] == "2.45", "the masks inside the 1.13-9.58 s extent, merged"
+    assert float(speech["masked_fraction"]) == pytest.approx(2.45 / 8.45, abs=1e-3)
+    assert (speech["speaker_target_cosine"], speech["speaker_non_task_cosine"]) == ("0.71", "")
+    assert (speech["session_consistency_cosine"], speech["enrollment_source"]) == ("0.82", "session")
+    assert vowel["masked_s"] == "" and vowel["snr_db"] == ""
+    assert breath["enrollment_source"] == "" and breath["asr_agreement"] == ""
+
+
+def test_a_withheld_release_reports_no_masked_seconds(tmp_path: Path) -> None:
+    """Withheld audio releases nothing, so nothing of it is masked."""
+    decisions, evidence = _tables(tmp_path)
+    rows = list(triage_table.rows(decisions, evidence, tmp_path / "out", tmp_path / BIDS, threads=1))
+    withheld = dict(decisions.to_pylist()[1], release="withheld")
+    tree = triage_table.run_tree_facts(withheld["run_dir"], (), tmp_path / "out", tmp_path / BIDS, extent=(1.13, 9.58))
+    assert rows[1]["masked_s"] == 2.45 and rows[1]["snr_db"] is None
+    assert triage_table.row(withheld, {}, tree, 3)["masked_s"] is None
