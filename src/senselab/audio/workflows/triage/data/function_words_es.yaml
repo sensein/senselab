@@ -1,0 +1,13 @@
+# Spanish closed-class words: articles, pronouns, possessives, prepositions, conjunctions, auxiliary and
+# copular verb forms, and the adverbs of degree, time and place. Merged into residue.FUNCTION_WORDS, so
+# the mask trim never keeps one masked. Compared as `residue._key` compares a token: lower case,
+# alphanumerics and the apostrophe kept, accents kept.
+#
+# derivation: policy v7, owner 2026-10-03: "the model way over tags the Spanish records". On the r10
+# free-speech extract (177 Spanish recordings, sidecar language es) 88 carried a mask against 907 of
+# 11,524 English ones, and 351 of the 382 masked Spanish words were lower-case common words an English
+# NER model tagged PERSON ("pero" 12, "muy" 10, "estado" 8, "porque" 8, "está" 7, "bien" 6, "mientras" 6,
+# "él" 5, "ahí" 5, "entonces" 4, "yo" 4). The list is the closed classes of a Spanish grammar; open-class
+# words the detectors mis-tag are released by the fold's language rule instead
+# (specs/20261003-redaction-policy-v7/design.md, "Spanish").
+words: [a, al, ante, bajo, con, contra, de, del, desde, durante, en, entre, hacia, hasta, mediante, para, por, según, sin, sobre, tras, el, la, lo, los, las, un, una, unos, unas, y, e, o, u, ni, pero, sino, que, porque, pues, aunque, si, cuando, como, donde, mientras, entonces, luego, también, tampoco, yo, tú, tu, él, ella, ello, nosotros, nosotras, vosotros, vosotras, ellos, ellas, usted, ustedes, me, te, se, nos, os, le, les, mi, mis, tus, su, sus, nuestro, nuestra, nuestros, nuestras, mío, mía, míos, mías, tuyo, tuya, suyo, suya, suyos, suyas, este, esta, esto, estos, estas, ese, esa, eso, esos, esas, aquel, aquella, aquello, aquellos, aquellas, quien, quienes, cual, cuales, cuyo, qué, quién, cuál, cómo, dónde, cuándo, cuánto, cuánta, es, son, soy, eres, somos, era, eran, éramos, fue, fueron, fui, ser, sido, siendo, está, están, estoy, estás, estamos, estaba, estaban, estaban, estuve, estuvo, estar, estado, estando, ha, han, he, has, hemos, había, habían, haber, hay, habido, va, van, voy, vas, vamos, iba, iban, ir, tengo, tiene, tienen, tienes, tenemos, tenía, tenían, tener, puedo, puede, pueden, poder, podía, hace, hacer, hago, muy, más, menos, mucho, mucha, muchos, muchas, poco, poca, pocos, pocas, algo, alguien, alguno, alguna, algunos, algunas, nada, nadie, ninguno, ninguna, todo, toda, todos, todas, otro, otra, otros, otras, mismo, misma, tan, tanto, tanta, así, ahí, allí, allá, aquí, acá, ya, aún, todavía, siempre, nunca, ahora, después, antes, casi, solo, sólo, bien, mal, sí, no, ok, pues, bueno, okay]

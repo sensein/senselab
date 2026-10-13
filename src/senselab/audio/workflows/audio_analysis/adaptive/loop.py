@@ -42,8 +42,8 @@ from senselab.audio.workflows.audio_analysis.adaptive.interventions import (
 from senselab.audio.workflows.audio_analysis.adaptive.policy import BudgetLedger, load_policy, plan_round
 from senselab.audio.workflows.audio_analysis.adaptive.regions import propose_regions
 from senselab.audio.workflows.audio_analysis.adaptive.types import AxisName, PlannedIntervention, Region
-from senselab.audio.workflows.audio_analysis.axes import DEFAULT_TIME_GRID
 from senselab.audio.workflows.audio_analysis.estimates import estimate_frame
+from senselab.audio.workflows.audio_analysis.grid import DEFAULT_TIME_GRID
 from senselab.audio.workflows.audio_analysis.io import merge_json
 from senselab.audio.workflows.audio_analysis.layout import (
     belief_dir,
@@ -687,7 +687,7 @@ def _grid_from_rows(rows: list[dict[str, Any]]) -> tuple[float, float]:
 
     The fallback was ``(1.0, 0.5)`` — the asr axis's old private grid, hard-coded here as a second
     place that decided a spacing. With one grid there is one answer, and it is
-    ``axes.DEFAULT_TIME_GRID``.
+    ``grid.DEFAULT_TIME_GRID``.
     """
     if not rows:
         return DEFAULT_TIME_GRID

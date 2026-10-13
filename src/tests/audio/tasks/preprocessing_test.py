@@ -14,6 +14,7 @@ from senselab.audio.tasks.preprocessing import (
     evenly_segment_audios,
     extract_segments,
     pad_audios,
+    resample_audios,
     select_channel_from_audios,
 )
 
@@ -24,7 +25,11 @@ def test_resample_audios(
     resampled_mono_audio_sample: Audio,
     resampled_stereo_audio_sample: Audio,
 ) -> None:
-    """Tests functionality for resampling Audio objects."""
+    """Tests functionality for resampling Audio objects.
+
+    Covers the genuine-resample path (48 kHz -> 16 kHz, via the `resampled_*_audio_sample`
+    fixtures); the same-rate paths are covered separately below.
+    """
     resample_rate = 16000
 
     for sample, resampled_sample in zip(
@@ -34,6 +39,54 @@ def test_resample_audios(
         assert math.ceil(expected_size) == resampled_sample.waveform.shape[1], (
             f"Expected size {math.ceil(expected_size)}, but got {resampled_sample.waveform.shape[1]}"
         )
+
+
+def _sine(duration_s: float, sampling_rate: int, freq: float = 440.0) -> Audio:
+    """A mono sine tone at a known rate, for tests that need a synthetic waveform.
+
+    Args:
+        duration_s: Tone duration in seconds.
+        sampling_rate: Sampling rate in Hz.
+        freq: Tone frequency in Hz.
+
+    Returns:
+        The audio.
+    """
+    t = torch.arange(int(duration_s * sampling_rate), dtype=torch.float32) / sampling_rate
+    waveform = (0.5 * torch.sin(2 * math.pi * freq * t)).unsqueeze(0)
+    return Audio(waveform=waveform, sampling_rate=sampling_rate)
+
+
+def test_resample_audios_same_rate_is_a_no_op() -> None:
+    """When `lowcut` is `None`, an audio already at `resample_rate` is returned unchanged."""
+    audio = _sine(1.0, 16000)
+    [out] = resample_audios([audio], resample_rate=16000)
+    assert out.sampling_rate == 16000
+    assert torch.equal(out.waveform, audio.waveform)
+
+
+def test_resample_audios_same_rate_with_explicit_lowcut_still_filters() -> None:
+    """An explicit `lowcut` is honored even when the rate already matches."""
+    audio = _sine(1.0, 16000)
+    [out] = resample_audios([audio], resample_rate=16000, lowcut=2000.0)
+    assert out.sampling_rate == 16000
+    assert out.waveform.shape == audio.waveform.shape
+    assert not torch.equal(out.waveform, audio.waveform)
+
+
+def test_resample_audios_mixed_batch_only_resamples_what_needs_it() -> None:
+    """A batch mixing an already-correct rate with a different one resamples only the latter."""
+    already_correct = _sine(1.0, 16000)
+    needs_resampling = _sine(1.0, 48000)
+
+    [out_correct, out_resampled] = resample_audios([already_correct, needs_resampling], resample_rate=16000)
+
+    assert out_correct.sampling_rate == 16000
+    assert torch.equal(out_correct.waveform, already_correct.waveform)
+
+    assert out_resampled.sampling_rate == 16000
+    expected_size = needs_resampling.waveform.shape[1] / needs_resampling.sampling_rate * 16000
+    assert math.ceil(expected_size) == out_resampled.waveform.shape[1]
 
 
 def test_downmix_audios(mono_audio_sample: Audio, stereo_audio_sample: Audio) -> None:
@@ -138,3 +191,81 @@ def test_concatenate_audios(resampled_mono_audio_sample: Audio, resampled_mono_a
         resampled_mono_audio_sample_x2.waveform,
         torch.cat([resampled_mono_audio_sample.waveform, resampled_mono_audio_sample.waveform], dim=1),
     )
+
+
+class TestExtractSegmentsRefusesAnEmptySegment:
+    """The one fix that is correct under every mechanism (C3b).
+
+    See ``specs/20260817-triage-workflow-dag/benchmarks/glides-diarization.md`` for the run this
+    came from.
+    """
+
+    @staticmethod
+    def _tone(duration_s: float, sampling_rate: int = 16000) -> Audio:
+        """A 440 Hz mono tone.
+
+        Args:
+            duration_s: How long the tone runs.
+            sampling_rate: Its rate.
+
+        Returns:
+            The audio.
+        """
+        t = torch.arange(int(duration_s * sampling_rate), dtype=torch.float32) / sampling_rate
+        return Audio(waveform=(0.5 * torch.sin(2 * math.pi * 440.0 * t)).unsqueeze(0), sampling_rate=sampling_rate)
+
+    def test_a_zero_length_request_raises_like_its_sibling_does(self) -> None:
+        """chunk_audios has refused start >= end since it was written; extract_segments did not."""
+        audio = self._tone(1.0)
+        with pytest.raises(ValueError, match="Start time must be < end"):
+            extract_segments([(audio, [(1.0, 1.0)])])
+
+    def test_a_reversed_request_raises_too(self) -> None:
+        """An end before its start selects nothing and is a caller error, not an empty result."""
+        with pytest.raises(ValueError, match="Start time must be < end"):
+            extract_segments([(self._tone(1.0), [(0.5, 0.2)])])
+
+    def test_an_ordinary_segment_is_unaffected(self) -> None:
+        """The guard is a refusal at the degenerate boundary, not a new minimum length."""
+        [[segment]] = extract_segments([(self._tone(1.0), [(0.2, 0.4)])])
+        assert segment.waveform.shape[-1] > 0
+
+    def test_a_nonzero_request_narrower_than_one_sample_raises_too(self) -> None:
+        """The refusal is about the tensor, so it has to reach the sample domain.
+
+        ``(0.0, 0.00001)`` at 16 kHz has ``start < end`` and still selects sample 0 to sample 0 --
+        the same ``(1, 0)`` shape pyannote rejects, reached through the arithmetic rather than
+        through the arguments.
+        """
+        with pytest.raises(ValueError, match="select no samples"):
+            extract_segments([(self._tone(1.0), [(0.0, 0.00001)])])
+
+    def test_the_narrowest_request_that_does_select_a_sample_is_allowed(self) -> None:
+        """One sample is not zero samples; the guard refuses the empty case and nothing wider."""
+        [[segment]] = extract_segments([(self._tone(1.0), [(0.0, 1.0 / 16000)])])
+        assert segment.waveform.shape[-1] == 1
+
+    def test_no_accepted_request_ever_returns_an_empty_waveform(self) -> None:
+        """The invariant the guard exists for, swept across the sub-sample boundary."""
+        audio = self._tone(0.05)
+        refused, accepted = 0, 0
+        for quarter_samples in range(0, 9):  # quarter-sample steps, so the sub-sample region is swept
+            end = quarter_samples / (4 * 16000)
+            try:
+                [[segment]] = extract_segments([(audio, [(0.0, end)])])
+            except ValueError:
+                refused += 1
+                continue
+            accepted += 1
+            assert segment.waveform.shape[-1] > 0, f"(0.0, {end}) returned a zero-length Audio"
+        assert refused and accepted, "the sweep must cross the boundary, not sit on one side of it"
+
+    def test_the_guard_is_what_keeps_a_1_by_0_tensor_out_of_a_model(self) -> None:
+        """Before the guard a degenerate request returned Audio(waveform=(1, 0)).
+
+        Every model-facing caller then passed it on: pyannote refuses it with the exact message the
+        cluster recorded, and nothing before that point had said anything was wrong.
+        """
+        audio = self._tone(1.0)
+        with pytest.raises(ValueError):
+            extract_segments([(audio, [(0.5, 0.5)])])

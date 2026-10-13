@@ -17,7 +17,13 @@ import torch
 
 from senselab.audio.data_structures import Audio
 from senselab.utils.data_structures import DeviceType, _select_device_and_dtype, logger
-from senselab.utils.subprocess_venv import _clean_subprocess_env, ensure_venv, parse_subprocess_result, venv_python
+from senselab.utils.subprocess_venv import (
+    _clean_subprocess_env,
+    ensure_venv,
+    parse_subprocess_result,
+    stage_portable_audio_io,
+    venv_python,
+)
 
 # S3PRL venv specification
 _S3PRL_VENV = "s3prl"
@@ -29,6 +35,8 @@ _S3PRL_REQUIREMENTS = [
     "soundfile",
 ]
 _S3PRL_PYTHON = "3.11"
+# torch<2.5 has no wheel on the cu126/cu128 indexes; cu124 carries 2.4.1.
+_S3PRL_MAX_CUDA_VERSION = (12, 4)
 
 # Worker script for S3PRL embedding extraction — runs inside the isolated venv
 _S3PRL_WORKER_SCRIPT = r"""
@@ -38,10 +46,11 @@ import traceback
 from pathlib import Path
 
 import numpy as np
-import soundfile as sf
 import torch
 
 args = json.loads(sys.stdin.read())
+sys.path.insert(0, args["io_dir"])
+from portable_audio_io import read_audio
 audio_paths = args["audio_paths"]
 model_name = args["model_name"]
 device = args["device"]
@@ -66,7 +75,7 @@ try:
     output_paths = []
     shapes = []
     for i, audio_path in enumerate(audio_paths):
-        data, sr = sf.read(audio_path, dtype="float32")
+        data, sr = read_audio(audio_path, channels_first=False)
         waveform = torch.tensor(data.squeeze()).to(device)
 
         with torch.no_grad():
@@ -149,17 +158,19 @@ class S3PRLEmbeddingExtractor:
                     "Resample with resample_audios() first."
                 )
 
-        venv_dir = ensure_venv(_S3PRL_VENV, _S3PRL_REQUIREMENTS, python_version=_S3PRL_PYTHON)
+        venv_dir = ensure_venv(
+            _S3PRL_VENV, _S3PRL_REQUIREMENTS, python_version=_S3PRL_PYTHON, max_cuda_version=_S3PRL_MAX_CUDA_VERSION
+        )
         python = venv_python(venv_dir)
 
         with tempfile.TemporaryDirectory(prefix="senselab-s3prl-") as tmpdir:
             tmp = Path(tmpdir)
 
-            # Serialize audios to FLAC
+            # Serialize audios for the worker
             audio_paths = []
             for i, audio in enumerate(audios):
-                path = str(tmp / f"audio_{i}.flac")
-                audio.save_to_file(path, format="flac")
+                path = str(tmp / f"audio_{i}.wav")
+                audio.save_to_file(path)
                 audio_paths.append(path)
 
             # Run worker in isolated venv
@@ -169,6 +180,7 @@ class S3PRLEmbeddingExtractor:
                     "model_name": model_name,
                     "device": device.value,
                     "output_dir": str(tmp),
+                    "io_dir": stage_portable_audio_io(tmp),
                 }
             )
 

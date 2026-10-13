@@ -15,9 +15,9 @@ from senselab.audio.workflows.audio_analysis.axes import (
     AXES,
     AXIS_GRIDS,
     AXIS_NAMES,
-    DEFAULT_TIME_GRID,
     axis,
 )
+from senselab.audio.workflows.audio_analysis.grid import DEFAULT_TIME_GRID
 
 
 def test_asr_is_on_the_word_grid_and_the_others_are_on_time() -> None:

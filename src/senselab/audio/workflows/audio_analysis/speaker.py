@@ -50,7 +50,7 @@ the aggregator per FR-007).
 from __future__ import annotations
 
 import math
-from typing import Any, Mapping, Sequence
+from typing import Any, Final, Mapping, Sequence
 
 import numpy as np
 
@@ -59,6 +59,7 @@ from senselab.audio.workflows.audio_analysis.attribution import (
     target_activity_doubt,
     word_coverage,
 )
+from senselab.audio.workflows.audio_analysis.background_mask import MaskState
 from senselab.audio.workflows.audio_analysis.embeddings import (
     WindowEmbedding,
     calibrate_cosine_uncertainty,
@@ -124,6 +125,21 @@ latter question answered instead.
 """
 
 
+_VOCAL_ACTIVITY: Final[tuple[MaskState, ...]] = ("target_active", "nontarget_active")
+"""Mask states that positively report a voice, whether or not it is the target's.
+
+Named because they are the states under which the speaker axis's word gate does not apply: a mask
+saying someone is vocalising outranks word absence as evidence about whether there is speech here.
+The other three states — ``target_free``, ``indeterminate`` and ``None`` — report no voice, decline
+to say, and "no region covered this bucket, possibly because the mask never ran" respectively.
+
+Typed as :data:`~.background_mask.MaskState` rather than ``str`` so a member the mask does not
+define is a type error here instead of a branch that silently never fires; the reverse direction —
+a *fifth* state added upstream, to which this gate would silently keep applying — is what
+``speaker_attribution_test`` pins against ``MASK_STATES``.
+"""
+
+
 def harvest_speaker_votes(
     *,
     pass_summary: dict[str, Any],
@@ -142,7 +158,14 @@ def harvest_speaker_votes(
     scored voters come from ``attribution``: ``speaker_assignment`` (do the diarizers agree who is
     here, measured over *all* the answers they gave, since absent a target embedding no speaker is
     privileged) and ``target_activity`` (do we know anyone was active at all). Both are gated by
-    ``word_coverage``: a bucket with no words has no speech to attribute and gets no claim.
+    ``word_coverage`` **except where the mask reports a voice**: a bucket with no words has no speech
+    to attribute and gets no claim, unless the region state is ``target_active`` or
+    ``nontarget_active``, in which case the mask has positively measured a vocalization and neither
+    of these word-independent voters may be dropped for lacking words (see :data:`_VOCAL_ACTIVITY`).
+    **No mask state reaches this function on a run today** — the region table is never put in the
+    pass summary — so the exemption, the ``target_free`` clear and the ``target_activity`` voter are
+    all inert, and the fold sees one voter where this docstring declares two (F-187 in
+    ``specs/20260815-215106-analyze-audio-audit/register.md``).
     Everything else this emits is a *measurement* other consumers read — the cluster assignments, the
     embedding cosines, the change points, the overlap distribution — and is deliberately unscored, so
     the fold sees two voters.
@@ -177,11 +200,12 @@ def harvest_speaker_votes(
             the EER for ECAPA on VoxCeleb.
         fused_words: The consensus words from ``asr.fuse_consensus_words``, used as a **gate** rather
             than as a voter: a bucket no word occupies has no speech to attribute, so the axis makes
-            no claim there. Word timing bounds *where* a speaker change can be; it is not evidence
-            about *who*, and folding it in as doubt swamped the per-speaker term with ~0.223 of
-            standing jitter (see ``attribution.word_coverage``). Empty or ``None`` disables the gate
-            entirely: with no word measured anywhere, a bucket's emptiness carries no information, and
-            gating on it would delete the axis rather than sharpen it.
+            no claim there — unless the background mask reports a voice in it, which is measured
+            evidence the word proxy is wrong. Word timing bounds *where* a speaker change can be; it
+            is not evidence about *who*, and folding it in as doubt swamped the per-speaker term with
+            ~0.223 of standing jitter (see ``attribution.word_coverage``). Empty or ``None`` disables
+            the gate entirely: with no word measured anywhere, a bucket's emptiness carries no
+            information, and gating on it would delete the axis rather than sharpen it.
 
     Returns:
         List of ``{"start", "end", "votes"}`` dicts. ``votes`` shape::
@@ -510,6 +534,17 @@ def harvest_speaker_votes(
     # evidence (the consensus words, the mask regions) and the third reads the cluster assignments
     # the loop above has just finished writing.
     buckets = [(round(float(b["start"]), 6), round(float(b["end"]), 6)) for b in out]
+    # **``regions`` is a key the current producer does not emit, so every state below is
+    # unreachable on a real run.** ``stages.py`` puts ``BackgroundMask.to_json()`` into the pass
+    # summary under ``background_mask.result``, and ``to_json`` serializes only the aggregate
+    # counters (``total_masked_s``, ``regions_total``, …) — the per-region table exists solely in
+    # ``to_rows()`` → ``L2/background_mask.parquet``. So ``mask_regions`` is always ``[]`` here,
+    # ``target_activity_doubt`` returns ``(None, None)`` for every bucket, and the ``target_free``
+    # clear, the ``_VOCAL_ACTIVITY`` exemption and the ``target_activity`` voter have all never
+    # fired. Confirmed against the artifacts: every other vote name has an
+    # ``L1/signals/*.parquet`` in the repo's runs, ``target_activity`` has none. Wiring the region
+    # table through the summary is a separate, deliberately deferred decision; until it happens the
+    # tests covering these branches exercise a document shape production does not produce.
     mask_doc = ((pass_summary.get("background_mask") or {}).get("result")) or {}
     mask_regions = mask_doc.get("regions") or []
     coverage = word_coverage(list(fused_words or ()), buckets)
@@ -524,13 +559,25 @@ def harvest_speaker_votes(
             # where no attribution was made, which is a claim of a different kind.
             bucket_dict["votes"] = {}
             continue
-        if fused_words and coverage[key] <= 0.0:
-            # **No words here, so no speech to attribute.** Word timing is used to *sharpen* the
-            # question rather than to vote on it: its one job is telling us when there is nothing to
-            # be uncertain about. Measured on a clean two-speaker conversation, 22 of the 29 buckets
-            # the axis flagged were wordless — the inter-turn silence where the four diarizers
-            # disagree about exactly where the boundary falls. There is no speaker to get wrong in a
-            # gap between turns, so the axis makes no claim rather than reporting the disagreement.
+        if state not in _VOCAL_ACTIVITY and fused_words and coverage[key] <= 0.0:
+            # **No words here, and no mask evidence of a voice, so no speech to attribute.** Word
+            # timing is used to *sharpen* the question rather than to vote on it: its one job is
+            # telling us when there is nothing to be uncertain about. Measured on a clean two-speaker
+            # conversation, 22 of the 29 buckets the axis flagged were wordless — the inter-turn
+            # silence where the four diarizers disagree about exactly where the boundary falls. There
+            # is no speaker to get wrong in a gap between turns, so the axis makes no claim rather
+            # than reporting the disagreement.
+            #
+            # Word absence is a *proxy* for speech absence, and it holds only for adult connected
+            # speech: a cry, a cough or a groan is a voice with no words in it. So the proxy yields
+            # to the mask wherever the mask positively reports vocal activity, because both voters
+            # below are word-independent — ``speaker_assignment`` is entropy over diarizer cluster
+            # assignments and ``target_activity`` is the region state itself — and neither is
+            # evidence the word gate is entitled to discard. Two cases were being zeroed silently:
+            # a non-lexical vocalization, which lands in ``nontarget_active``, and real speech the
+            # ASR missed, which lands in ``target_active``. Everything else keeps the old reading:
+            # true silence is ``target_free`` (returned above) or ``indeterminate``/``None``, and
+            # ``None`` also means the mask stage never ran, so it can license nothing.
             #
             # Gated on the fold having produced **at least one word anywhere**, which is what makes
             # this bucket's emptiness a measurement rather than an absence of measurement. Two

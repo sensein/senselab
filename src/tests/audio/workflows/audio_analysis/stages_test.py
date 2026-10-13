@@ -9,6 +9,8 @@ asymmetry between what ``stage_features`` returns and what it writes.
 
 from __future__ import annotations
 
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -352,3 +354,33 @@ def test_run_pass_honors_align_asr_false(audio: Audio, ctx: StageContext, monkey
     monkeypatch.setattr(stages_mod, "transcribe_audios", lambda *a, **k: [ScriptLine(text="hello")])
     summary = run_pass(audio, ctx, PassPlan(asr_models=("ibm-granite/granite-speech-3.3-8b",), align_asr=False))
     assert "alignment" not in summary
+
+
+# ── the extraction boundary ───────────────────────────────────────────
+
+
+def test_importing_the_extraction_layer_loads_none_of_the_refiner() -> None:
+    """Importing ``stages`` must not load ``axes``, ``contracts`` or ``adaptive``.
+
+    Import-time only, and that is the whole claim. One runtime edge survives and is accepted:
+    ``stages.py`` imports ``calibration`` inside two function bodies and ``calibration`` imports
+    ``axes`` at module level, so ``run_pass`` on the unmodified variant under the default
+    ``PassPlan.background_mask=True`` does load ``axes``. An ``axes`` import moved inside a function
+    body would likewise pass here.
+
+    A subprocess is the only place even the import-time claim is checkable, because the parent test
+    session has already imported the whole package. The accepted edge and the measurements are in
+    ``specs/20260816-143540-triage-graph/phase2-notes.md``, "Extraction boundary".
+    """
+    pkg = "senselab.audio.workflows.audio_analysis"
+    code = (
+        "import sys; "
+        f"import {pkg}.stages; "
+        f"pkg = {pkg!r}; "
+        "forbidden = tuple(pkg + s for s in ('.axes', '.contracts', '.adaptive')); "
+        "print(','.join(sorted(m for m, v in sys.modules.items() "
+        "if v is not None and m.startswith(forbidden))))"
+    )
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True)
+    leaked = [m for m in out.stdout.strip().split(",") if m]
+    assert leaked == [], f"importing the extraction layer pulled in refiner modules: {leaked}"

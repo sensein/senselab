@@ -1,0 +1,152 @@
+torchcodec 0.16.0  torch 2.13.0  libsndfile 1.2.2
+
+== 1. encode API signature: is there any encoding / bit-depth control now?
+  AudioEncoder.__init__ (self, samples: torch.Tensor, *, sample_rate: int)
+  to_file              (self, dest: str | pathlib.Path, *, bit_rate: int | None = None, num_channels: int | None = None, sample_rate: int | None = None) -> None
+  AudioDecoder.__init__ (self, source: str | pathlib.Path | io.RawIOBase | _io.BufferedReader | bytes | torch.Tensor, *, stream_index: int | None = None, sample_rate: int | None = None, num_channels: int | None = None)
+
+== 2. does encode still silently clamp, and still choose PCM_16 for .wav?
+Traceback (most recent call last):
+  File "/private/tmp/tcnew/check016.py", line 18, in <module>
+    AudioEncoder(samples=flat, sample_rate=SR).to_file(p); wmsg="no warning"
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/private/tmp/tcnew/.venv/lib/python3.12/site-packages/torchcodec/encoders/_audio_encoder.py", line 34, in __init__
+    load_core_libraries()
+  File "/private/tmp/tcnew/.venv/lib/python3.12/site-packages/torchcodec/_internally_replaced_utils.py", line 145, in load_core_libraries
+    raise RuntimeError(
+RuntimeError: Could not load libtorchcodec. Likely causes:
+          1. FFmpeg is not properly installed in your environment. We support
+             versions 4, 5, 6, 7, 8, and 9, and we attempt to load libtorchcodec
+             for each of those versions. Errors for versions not installed on
+             your system are expected; only the error for your installed FFmpeg
+             version is relevant. On Windows, ensure you've installed the
+             "full-shared" version which ships DLLs.
+          2. The PyTorch version (2.13.0) is not compatible with
+             this version of TorchCodec. Refer to the version compatibility
+             table:
+             https://github.com/pytorch/torchcodec?tab=readme-ov-file#installing-torchcodec.
+          3. Another runtime dependency; see exceptions below.
+
+        The following exceptions were raised as we tried to load libtorchcodec:
+        
+[start of libtorchcodec loading traceback]
+FFmpeg version 9:
+Traceback (most recent call last):
+  File "/private/tmp/tcnew/.venv/lib/python3.12/site-packages/torch/_ops.py", line 1516, in load_library
+    ctypes.CDLL(path)
+  File "/Users/satra/.local/share/uv/python/cpython-3.12.0-macos-aarch64-none/lib/python3.12/ctypes/__init__.py", line 379, in __init__
+    self._handle = _dlopen(self._name, mode)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^
+OSError: dlopen(/private/tmp/tcnew/.venv/lib/python3.12/site-packages/torchcodec/libtorchcodec_core9.dylib, 0x0006): Library not loaded: @rpath/libavutil.61.dylib
+  Referenced from: <C8B8D81C-B294-3F42-8C03-7B266A1D2EF9> /private/tmp/tcnew/.venv/lib/python3.12/site-packages/torchcodec/libtorchcodec_core9.dylib
+  Reason: no LC_RPATH's found
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/private/tmp/tcnew/.venv/lib/python3.12/site-packages/torchcodec/_internally_replaced_utils.py", line 132, in load_core_libraries
+    torch.ops.load_library(core_library_path)
+  File "/private/tmp/tcnew/.venv/lib/python3.12/site-packages/torch/_ops.py", line 1518, in load_library
+    raise OSError(f"Could not load this library: {path}") from e
+OSError: Could not load this library: /private/tmp/tcnew/.venv/lib/python3.12/site-packages/torchcodec/libtorchcodec_core9.dylib
+
+FFmpeg version 8:
+Traceback (most recent call last):
+  File "/private/tmp/tcnew/.venv/lib/python3.12/site-packages/torch/_ops.py", line 1516, in load_library
+    ctypes.CDLL(path)
+  File "/Users/satra/.local/share/uv/python/cpython-3.12.0-macos-aarch64-none/lib/python3.12/ctypes/__init__.py", line 379, in __init__
+    self._handle = _dlopen(self._name, mode)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^
+OSError: dlopen(/private/tmp/tcnew/.venv/lib/python3.12/site-packages/torchcodec/libtorchcodec_core8.dylib, 0x0006): Library not loaded: @rpath/libavutil.60.dylib
+  Referenced from: <CB795C10-4828-3C7F-8ED0-27B197D28AC0> /private/tmp/tcnew/.venv/lib/python3.12/site-packages/torchcodec/libtorchcodec_core8.dylib
+  Reason: no LC_RPATH's found
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/private/tmp/tcnew/.venv/lib/python3.12/site-packages/torchcodec/_internally_replaced_utils.py", line 132, in load_core_libraries
+    torch.ops.load_library(core_library_path)
+  File "/private/tmp/tcnew/.venv/lib/python3.12/site-packages/torch/_ops.py", line 1518, in load_library
+    raise OSError(f"Could not load this library: {path}") from e
+OSError: Could not load this library: /private/tmp/tcnew/.venv/lib/python3.12/site-packages/torchcodec/libtorchcodec_core8.dylib
+
+FFmpeg version 7:
+Traceback (most recent call last):
+  File "/private/tmp/tcnew/.venv/lib/python3.12/site-packages/torch/_ops.py", line 1516, in load_library
+    ctypes.CDLL(path)
+  File "/Users/satra/.local/share/uv/python/cpython-3.12.0-macos-aarch64-none/lib/python3.12/ctypes/__init__.py", line 379, in __init__
+    self._handle = _dlopen(self._name, mode)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^
+OSError: dlopen(/private/tmp/tcnew/.venv/lib/python3.12/site-packages/torchcodec/libtorchcodec_core7.dylib, 0x0006): Library not loaded: @rpath/libavutil.59.dylib
+  Referenced from: <CC95D1CF-5584-390E-A2E3-23EECA6BDEE4> /private/tmp/tcnew/.venv/lib/python3.12/site-packages/torchcodec/libtorchcodec_core7.dylib
+  Reason: no LC_RPATH's found
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/private/tmp/tcnew/.venv/lib/python3.12/site-packages/torchcodec/_internally_replaced_utils.py", line 132, in load_core_libraries
+    torch.ops.load_library(core_library_path)
+  File "/private/tmp/tcnew/.venv/lib/python3.12/site-packages/torch/_ops.py", line 1518, in load_library
+    raise OSError(f"Could not load this library: {path}") from e
+OSError: Could not load this library: /private/tmp/tcnew/.venv/lib/python3.12/site-packages/torchcodec/libtorchcodec_core7.dylib
+
+FFmpeg version 6:
+Traceback (most recent call last):
+  File "/private/tmp/tcnew/.venv/lib/python3.12/site-packages/torch/_ops.py", line 1516, in load_library
+    ctypes.CDLL(path)
+  File "/Users/satra/.local/share/uv/python/cpython-3.12.0-macos-aarch64-none/lib/python3.12/ctypes/__init__.py", line 379, in __init__
+    self._handle = _dlopen(self._name, mode)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^
+OSError: dlopen(/private/tmp/tcnew/.venv/lib/python3.12/site-packages/torchcodec/libtorchcodec_core6.dylib, 0x0006): Library not loaded: @rpath/libavutil.58.dylib
+  Referenced from: <A6181DB4-B946-3F4D-B351-F4D14B1E2B25> /private/tmp/tcnew/.venv/lib/python3.12/site-packages/torchcodec/libtorchcodec_core6.dylib
+  Reason: no LC_RPATH's found
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/private/tmp/tcnew/.venv/lib/python3.12/site-packages/torchcodec/_internally_replaced_utils.py", line 132, in load_core_libraries
+    torch.ops.load_library(core_library_path)
+  File "/private/tmp/tcnew/.venv/lib/python3.12/site-packages/torch/_ops.py", line 1518, in load_library
+    raise OSError(f"Could not load this library: {path}") from e
+OSError: Could not load this library: /private/tmp/tcnew/.venv/lib/python3.12/site-packages/torchcodec/libtorchcodec_core6.dylib
+
+FFmpeg version 5:
+Traceback (most recent call last):
+  File "/private/tmp/tcnew/.venv/lib/python3.12/site-packages/torch/_ops.py", line 1516, in load_library
+    ctypes.CDLL(path)
+  File "/Users/satra/.local/share/uv/python/cpython-3.12.0-macos-aarch64-none/lib/python3.12/ctypes/__init__.py", line 379, in __init__
+    self._handle = _dlopen(self._name, mode)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^
+OSError: dlopen(/private/tmp/tcnew/.venv/lib/python3.12/site-packages/torchcodec/libtorchcodec_core5.dylib, 0x0006): Library not loaded: @rpath/libavutil.57.dylib
+  Referenced from: <A069756C-0A2D-35BD-80C8-E43B38988D9A> /private/tmp/tcnew/.venv/lib/python3.12/site-packages/torchcodec/libtorchcodec_core5.dylib
+  Reason: no LC_RPATH's found
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/private/tmp/tcnew/.venv/lib/python3.12/site-packages/torchcodec/_internally_replaced_utils.py", line 132, in load_core_libraries
+    torch.ops.load_library(core_library_path)
+  File "/private/tmp/tcnew/.venv/lib/python3.12/site-packages/torch/_ops.py", line 1518, in load_library
+    raise OSError(f"Could not load this library: {path}") from e
+OSError: Could not load this library: /private/tmp/tcnew/.venv/lib/python3.12/site-packages/torchcodec/libtorchcodec_core5.dylib
+
+FFmpeg version 4:
+Traceback (most recent call last):
+  File "/private/tmp/tcnew/.venv/lib/python3.12/site-packages/torch/_ops.py", line 1516, in load_library
+    ctypes.CDLL(path)
+  File "/Users/satra/.local/share/uv/python/cpython-3.12.0-macos-aarch64-none/lib/python3.12/ctypes/__init__.py", line 379, in __init__
+    self._handle = _dlopen(self._name, mode)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^
+OSError: dlopen(/private/tmp/tcnew/.venv/lib/python3.12/site-packages/torchcodec/libtorchcodec_core4.dylib, 0x0006): Library not loaded: @rpath/libavutil.56.dylib
+  Referenced from: <45B5DCCD-B7EB-3AF9-A658-A3EEF69BAEE4> /private/tmp/tcnew/.venv/lib/python3.12/site-packages/torchcodec/libtorchcodec_core4.dylib
+  Reason: no LC_RPATH's found
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/private/tmp/tcnew/.venv/lib/python3.12/site-packages/torchcodec/_internally_replaced_utils.py", line 132, in load_core_libraries
+    torch.ops.load_library(core_library_path)
+  File "/private/tmp/tcnew/.venv/lib/python3.12/site-packages/torch/_ops.py", line 1518, in load_library
+    raise OSError(f"Could not load this library: {path}") from e
+OSError: Could not load this library: /private/tmp/tcnew/.venv/lib/python3.12/site-packages/torchcodec/libtorchcodec_core4.dylib
+[end of libtorchcodec loading traceback].

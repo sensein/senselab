@@ -1,13 +1,20 @@
 """unasdiff source separation — API contract and class-space handling."""
 
+import ast
+import json
+import subprocess
+import types
+from pathlib import Path
+
 import pytest
+import soundfile
 import torch
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.source_separation import separate_audios, unasdiff
 from senselab.audio.tasks.source_separation.api import resolve_source_classes
 from senselab.audio.tasks.source_separation.unasdiff import align_permutations
-from senselab.utils.data_structures import HFModel
+from senselab.utils.data_structures import DeviceType, HFModel
 from senselab.utils.subprocess_venv import _cache_dir_path
 
 
@@ -20,16 +27,50 @@ def _cuda_available() -> bool:
         return False
 
 
-def test_class_map_has_41_classes_in_50_slots() -> None:
-    """The prior's 50-wide embedding has only 41 trained rows.
+def _stub_worker(monkeypatch: pytest.MonkeyPatch, captured: dict) -> types.ModuleType:
+    """Replace the venv and the worker subprocess with a fake that records what the host sent.
 
-    Passing an index in 41..49 would condition on an untrained embedding row and
-    produce plausible-looking noise rather than an error.
+    Args:
+        monkeypatch: The test's monkeypatch fixture.
+        captured: Filled in with ``payload``, ``timeout``, ``in_subtypes`` and ``in_peak``.
+
+    Returns:
+        The ``unasdiff`` module, with ``ensure_venv``, ``venv_python`` and ``subprocess.run``
+        stubbed for the duration of the test.
+    """
+    from senselab.audio.tasks.source_separation import unasdiff as u
+
+    monkeypatch.setattr(u, "ensure_venv", lambda *a, **k: Path("/tmp/fake-unasdiff-venv"))
+    monkeypatch.setattr(u, "venv_python", lambda venv_dir: "python3")
+
+    def fake_run(
+        cmd: list, *, input: str, capture_output: bool, text: bool, timeout: float, env: dict
+    ) -> types.SimpleNamespace:
+        payload = json.loads(input)
+        captured["payload"] = payload
+        captured["timeout"] = timeout
+        captured["in_subtypes"] = [soundfile.info(p).subtype for p in payload["in_paths"]]
+        captured["in_peak"] = max(abs(soundfile.read(p, dtype="float32")[0]).max() for p in payload["in_paths"])
+        for paths in payload["out_paths"]:
+            for p in paths:
+                segment = torch.randn(int(u._WINDOW_S * u._TARGET_SR))
+                soundfile.write(p, segment.numpy(), u._TARGET_SR, subtype="FLOAT")
+        return types.SimpleNamespace(returncode=0, stdout=json.dumps({"output_paths": payload["out_paths"]}), stderr="")
+
+    monkeypatch.setattr(u.subprocess, "run", fake_run)
+    return u
+
+
+def test_class_map_has_41_classes_in_51_slots() -> None:
+    """The prior's 51-row embedding (num_class=50 plus an untrained CFG null row) has 41 trained rows.
+
+    Passing an index in 41..49 (untrained headroom) or 50 (the untrained CFG null) would condition
+    on an untrained embedding row and produce plausible-looking noise rather than an error.
     """
     doc = unasdiff.load_fsd_class_map_document()
     assert len(doc["classes"]) == 41
     assert max(doc["classes"].values()) == 40
-    assert doc["num_embedding_slots"] == 50
+    assert doc["num_embedding_slots"] == 51
 
 
 def test_resolve_source_classes_maps_names_to_indices() -> None:
@@ -76,41 +117,27 @@ def test_torch_is_pinned_for_cuda_routing() -> None:
     assert "torch" in named and "torchaudio" in named
 
 
-def test_flash_attn_env_var_is_unset_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
-    """With the env var unset, the effective requirements match the base list exactly."""
+def test_flash_attn_is_off_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    """With the env var unset, no flash-attn build runs."""
     monkeypatch.delenv(unasdiff._UNASDIFF_FLASH_ATTN_ENV, raising=False)
-    assert unasdiff._unasdiff_requirements() == unasdiff._UNASDIFF_REQUIREMENTS
+    assert not unasdiff._flash_attn_requested()
 
 
-def test_flash_attn_env_var_opts_flash_attn_into_the_requirements(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Setting SENSELAB_UNASDIFF_FLASH_ATTN truthy appends flash-attn to the venv's requirements.
-
-    Opt-in, not unconditional: this branch already watched av==14.4.0 (no wheel) fall back to a
-    source build and take an entire venv install down with it, and flash-attn is considerably
-    more build-fragile than that (matching CUDA toolkit, --no-build-isolation, 10-30 minutes of
-    MAX_JOBS-tuned compilation). Installing it unconditionally would convert upstream's graceful
-    ImportError fallback into a hard venv-creation failure on any host without a working nvcc.
-    """
+def test_flash_attn_opt_in_builds_into_the_locked_venv_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Opted in, flash-attn is built with --no-build-isolation after the locked install, then marked."""
     monkeypatch.setenv(unasdiff._UNASDIFF_FLASH_ATTN_ENV, "1")
-    assert "flash-attn==2.5.8" in unasdiff._unasdiff_requirements()
+    monkeypatch.setattr(unasdiff, "_find_uv", lambda: "/fake/uv")
+    calls: list[list[str]] = []
+    monkeypatch.setattr(subprocess, "run", lambda argv, **_: calls.append(list(argv)))
+    (tmp_path / "bin").mkdir()
 
+    unasdiff._ensure_flash_attn(tmp_path)
+    assert len(calls) == 2
+    assert "--no-build-isolation" in calls[1] and unasdiff._FLASH_ATTN_SPEC in calls[1]
+    assert (tmp_path / unasdiff._FLASH_ATTN_MARKER).is_file()
 
-def test_flash_attn_env_var_changes_venv_identity(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Toggling the env var changes the requirements list that ensure_venv keys reuse on.
-
-    ensure_venv's marker comparison is `stored["requirements"] == sorted(requirements)`
-    (subprocess_venv.py), so a set-vs-unset environment must resolve to two different
-    requirements lists -- otherwise flipping the flag would silently reuse whichever venv
-    happened to be cached instead of forcing the rebuild the new dependency needs.
-    """
-    monkeypatch.delenv(unasdiff._UNASDIFF_FLASH_ATTN_ENV, raising=False)
-    unset_requirements = unasdiff._unasdiff_requirements()
-
-    monkeypatch.setenv(unasdiff._UNASDIFF_FLASH_ATTN_ENV, "true")
-    set_requirements = unasdiff._unasdiff_requirements()
-
-    assert set_requirements != unset_requirements
-    assert sorted(set_requirements) != sorted(unset_requirements)
+    unasdiff._ensure_flash_attn(tmp_path)
+    assert len(calls) == 2, "a venv already carrying flash-attn is not rebuilt"
 
 
 def test_worker_script_compiles_standalone() -> None:
@@ -150,6 +177,74 @@ def test_worker_packs_the_mixture_so_degradation_reproduces_it() -> None:
     """
     assert "zeros" in unasdiff._WORKER_SCRIPT
     assert "orig_x" in unasdiff._WORKER_SCRIPT
+
+
+def test_the_sampler_choice_matches_upstream_per_mode() -> None:
+    """speech_sound keeps upstream's multi-model sampler; the other two modes use its single-model one.
+
+    The mocked-subprocess tests elsewhere in this file never execute the real worker script, so
+    they cannot see which upstream sampler function it calls. This is a structural check on the
+    worker source itself: mode == "speech_sound" must select p_sample_loop_group (it needs two
+    different priors in one call, which only that sampler supports); every other mode must select
+    the plain p_sample_loop, matching upstream's own single-prior benchmark scripts.
+    """
+    tree = ast.parse(unasdiff._WORKER_SCRIPT)
+
+    sampler_name_assignments = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name)
+        and node.targets[0].id == "sampler_name"
+        and isinstance(node.value, ast.IfExp)
+    ]
+    assert len(sampler_name_assignments) == 1, "expected exactly one `sampler_name = ... if ... else ...`"
+    if_exp = sampler_name_assignments[0].value
+    assert isinstance(if_exp, ast.IfExp)
+    assert isinstance(if_exp.test, ast.Compare)
+    assert isinstance(if_exp.test.left, ast.Name) and if_exp.test.left.id == "mode"
+    assert isinstance(if_exp.test.comparators[0], ast.Constant)
+    assert if_exp.test.comparators[0].value == "speech_sound"
+    assert isinstance(if_exp.body, ast.Constant) and if_exp.body.value == "group"
+    assert isinstance(if_exp.orelse, ast.Constant) and if_exp.orelse.value == "single"
+
+    dispatch_ifs = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.If)
+        and isinstance(node.test, ast.Compare)
+        and isinstance(node.test.left, ast.Name)
+        and node.test.left.id == "sampler_name"
+    ]
+    assert len(dispatch_ifs) == 1, "expected exactly one `if sampler_name == ...` dispatch"
+    dispatch = dispatch_ifs[0]
+
+    def _attr_call_names(stmts: list) -> list:
+        names = []
+        for stmt in stmts:
+            for node in ast.walk(stmt):
+                if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+                    names.append(node.func.attr)
+        return names
+
+    assert "p_sample_loop_group" in _attr_call_names(dispatch.body)
+    assert "p_sample_loop" in _attr_call_names(dispatch.orelse)
+    assert "p_sample_loop_group" not in _attr_call_names(dispatch.orelse)
+
+
+def test_single_prior_modes_construct_one_model_instance() -> None:
+    """sound_sound and speech_speech load their one prior once, not n_sources times.
+
+    p_sample_loop processes a batch of n_sources slots through a single model instance and a
+    per-slot label tensor; constructing n_sources separate deepcopy'd instances (the shape
+    p_sample_loop_group needs) would waste (n_sources - 1) instances' worth of memory for a
+    single-prior mode.
+    """
+    assert "sampler_model, diffusion_config = load_prior(sound_config_path, sound_ckpt_path)" in unasdiff._WORKER_SCRIPT
+    assert (
+        "sampler_model, diffusion_config = load_prior(speech_config_path, speech_ckpt_path)" in unasdiff._WORKER_SCRIPT
+    )
 
 
 def test_sound_modes_require_source_classes(mono_audio_sample: Audio) -> None:
@@ -462,7 +557,7 @@ def test_diffusion_steps_reaches_the_worker_payload(monkeypatch: pytest.MonkeyPa
 
 
 def test_separate_audios_forwards_diffusion_steps(mono_audio_sample: Audio, monkeypatch: pytest.MonkeyPatch) -> None:
-    """api.separate_audios threads diffusion_steps through to separate_with_unasdiff unchanged."""
+    """api.separate_audios threads the default diffusion_steps through unchanged."""
     captured = {}
 
     def fake(audios: list, n_sources: int, source_class_indices: list, **kwargs: object) -> list:
@@ -470,8 +565,32 @@ def test_separate_audios_forwards_diffusion_steps(mono_audio_sample: Audio, monk
         return [[audios[0]] * n_sources]
 
     monkeypatch.setattr("senselab.audio.tasks.source_separation.api.separate_with_unasdiff", fake)
-    separate_audios([mono_audio_sample], mode="speech_speech", n_sources=2, diffusion_steps=42)
-    assert captured["diffusion_steps"] == 42
+    separate_audios([mono_audio_sample], mode="speech_speech", n_sources=2, diffusion_steps=unasdiff._DIFFUSION_STEPS)
+    assert captured["diffusion_steps"] == unasdiff._DIFFUSION_STEPS
+
+
+def test_a_non_default_diffusion_steps_is_rejected_at_the_api_boundary(mono_audio_sample: Audio) -> None:
+    """The priors are trained at a fixed schedule length; other values re-specify it, not subsample it.
+
+    ``separate_with_unasdiff`` itself still accepts any positive value (a future retrained prior
+    may use a different schedule), but ``separate_audios`` is the boundary a caller who has not
+    read unasdiff's internals reaches first, and 100 there does not mean "half the steps".
+    """
+    with pytest.raises(ValueError, match="diffusion_steps"):
+        separate_audios([mono_audio_sample], mode="speech_speech", n_sources=2, diffusion_steps=100)
+
+
+def test_the_default_diffusion_steps_is_accepted(mono_audio_sample: Audio, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The only value separate_audios accepts today is unasdiff._DIFFUSION_STEPS itself."""
+    captured = {}
+
+    def fake(audios: list, n_sources: int, source_class_indices: list, **kwargs: object) -> list:
+        captured["diffusion_steps"] = kwargs["diffusion_steps"]
+        return [[audios[0]] * n_sources]
+
+    monkeypatch.setattr("senselab.audio.tasks.source_separation.api.separate_with_unasdiff", fake)
+    separate_audios([mono_audio_sample], mode="speech_speech", n_sources=2, diffusion_steps=200)
+    assert captured["diffusion_steps"] == 200
 
 
 @pytest.mark.skipif(
@@ -497,3 +616,639 @@ def test_unasdiff_separates_a_mixture_into_n_sources(mono_audio_sample: Audio) -
 
     a, b = result[0][0].waveform, result[0][1].waveform
     assert (a - b).abs().mean() > 1e-4, "both slots returned the same signal"
+
+
+# ── Worker device selection ───────────────────────────────────────────
+
+_CUDA_VISIBLE_DEVICES = "CUDA_VISIBLE_DEVICES"
+
+
+def _reads_os_environ(node: ast.AST) -> bool:
+    """True if ``node`` is the expression ``os.environ``."""
+    return isinstance(node, ast.Attribute) and node.attr == "environ" and isinstance(node.value, ast.Name)
+
+
+def _cuda_visible_devices_landmarks(script: str) -> dict:
+    """Line numbers of the four events the worker's device handling must order correctly.
+
+    Args:
+        script: The worker script source.
+
+    Returns:
+        ``{"saves": [...], "restores": [...], "upstream_imports": [...], "cuda_api": [...]}``,
+        each a list of line numbers in the order ``ast.walk`` yields them.
+    """
+    tree = ast.parse(script)
+    landmarks: dict = {"saves": [], "restores": [], "upstream_imports": [], "cuda_api": []}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and _reads_os_environ(node.func.value):
+            named = node.args and isinstance(node.args[0], ast.Constant) and node.args[0].value == _CUDA_VISIBLE_DEVICES
+            if named and node.func.attr == "get":
+                landmarks["saves"].append(node.lineno)
+            elif named and node.func.attr == "pop":
+                landmarks["restores"].append(node.lineno)
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if (
+                    isinstance(target, ast.Subscript)
+                    and _reads_os_environ(target.value)
+                    and isinstance(target.slice, ast.Constant)
+                    and target.slice.value == _CUDA_VISIBLE_DEVICES
+                ):
+                    landmarks["restores"].append(node.lineno)
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name in ("models", "diffusion"):
+                    landmarks["upstream_imports"].append(node.lineno)
+        if (
+            isinstance(node, ast.Attribute)
+            and node.attr == "cuda"
+            and isinstance(node.value, ast.Name)
+            and node.value.id == "torch"
+        ):
+            landmarks["cuda_api"].append(node.lineno)
+    return landmarks
+
+
+def test_the_worker_restores_cuda_visible_devices_before_it_touches_cuda() -> None:
+    """The upstream module-scope GPU pin is saved before the import and put back before any CUDA call.
+
+    ``models/atten_unet.py`` assigns ``CUDA_VISIBLE_DEVICES = "0"`` at module scope, ahead of its
+    own ``import torch``. CUDA initialises lazily, so restoring the launcher's value after the
+    import but before the first CUDA API call is what makes the pin have no effect. This is a
+    static ordering check because the pin's effect is only observable on a multi-GPU host.
+    """
+    marks = _cuda_visible_devices_landmarks(unasdiff._WORKER_SCRIPT)
+    assert marks["saves"], "the worker never reads CUDA_VISIBLE_DEVICES before the upstream import"
+    assert marks["restores"], "the worker never restores CUDA_VISIBLE_DEVICES after the upstream import"
+    assert marks["upstream_imports"], "test premise: the worker imports the upstream modules"
+    assert marks["cuda_api"], "test premise: the worker calls into torch.cuda"
+
+    assert min(marks["saves"]) < min(marks["upstream_imports"]), "the save must precede the pinning import"
+    assert max(marks["restores"]) > max(marks["upstream_imports"]), "the restore must follow every upstream import"
+    assert max(marks["restores"]) < min(marks["cuda_api"]), "the restore must precede the first CUDA API call"
+
+
+def test_the_worker_never_requests_a_bare_cuda_device() -> None:
+    """Every ``torch.device`` the worker builds for CUDA carries an explicit index.
+
+    A bare ``"cuda"`` takes whatever index torch defaults to, which is the outcome the upstream
+    pin produced on a four-GPU node.
+    """
+    tree = ast.parse(unasdiff._WORKER_SCRIPT)
+    bare = []
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "device"):
+            continue
+        # Every string constant reachable from the argument, so a ternary picking between
+        # "cuda" and "cpu" is caught as readily as a plain literal.
+        for inner in ast.walk(node.args[0]) if node.args else []:
+            if isinstance(inner, ast.Constant) and inner.value == "cuda":
+                bare.append(node.lineno)
+    assert not bare, f"bare torch.device('cuda') at worker line(s) {sorted(set(bare))}"
+
+
+def test_the_callers_device_reaches_the_worker_payload(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A caller-selected device is sent to the worker instead of being validated and dropped.
+
+    ``device`` used to be handed to ``_select_device_and_dtype`` purely for validation and its
+    result discarded, so the worker chose for itself and no caller could select a card.
+    """
+    captured: dict = {}
+    u = _stub_worker(monkeypatch, captured)
+
+    audio = Audio(waveform=torch.randn(1, int(u._WINDOW_S * u._TARGET_SR)), sampling_rate=u._TARGET_SR)
+    u.separate_with_unasdiff(
+        [audio],
+        n_sources=2,
+        source_class_indices=[0, 0],
+        mode="speech_speech",
+        checkpoint_dir="/tmp/fake-unasdiff-checkpoints",
+        device=DeviceType.CPU,
+    )
+    assert captured["payload"]["device"] == "cpu"
+
+
+def test_no_device_leaves_the_choice_to_the_worker(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``device=None`` sends ``None``, not a device the host's own torch build happened to see.
+
+    The host interpreter and the venv have separate torch builds; only the venv's answer to
+    ``torch.cuda.is_available()`` governs where the worker can run.
+    """
+    captured: dict = {}
+    u = _stub_worker(monkeypatch, captured)
+
+    audio = Audio(waveform=torch.randn(1, int(u._WINDOW_S * u._TARGET_SR)), sampling_rate=u._TARGET_SR)
+    u.separate_with_unasdiff(
+        [audio],
+        n_sources=2,
+        source_class_indices=[0, 0],
+        mode="speech_speech",
+        checkpoint_dir="/tmp/fake-unasdiff-checkpoints",
+    )
+    assert captured["payload"]["device"] is None
+
+
+def test_mps_is_admitted_when_named_but_never_chosen_for_an_unresolved_device() -> None:
+    """MPS runs this model correctly; it is simply slow, so it is opt-in rather than refused.
+
+    This test previously asserted MPS raised, on the belief that the backend could not run there.
+    It can: the only blocker was upstream's ``_extract_into_tensor`` moving the float64 schedule to
+    the device before its own unconditional ``.float()``, which MPS cannot do. With the cast
+    hoisted the sampler completes on MPS and returns ``mps:0`` tensors, with no op falling back.
+
+    What remains true is that it is a bad default -- 90-193 s per diffusion step against 16.7 s on
+    CPU -- so an unresolved device must still resolve to CPU. See
+    specs/20260906-unasdiff-mps-and-timeout.
+    """
+    assert DeviceType.MPS in unasdiff._COMPATIBLE_DEVICES
+    unresolved_branch = unasdiff._WORKER_SCRIPT.split("if requested is None:")[1].split("if str(requested)")[0]
+    assert "mps" not in unresolved_branch
+
+
+# ── Worker timeout ────────────────────────────────────────────────────
+
+
+def test_the_default_timeout_scales_with_windows_and_steps() -> None:
+    """The ceiling is derived from the work, not a constant.
+
+    A fixed 3600 s ceiling failed every input past roughly 90 s on an A100 — the run that
+    exceeded it lost every window.
+    """
+    floor = unasdiff._default_timeout_s(1, 1)
+    assert floor == unasdiff._TIMEOUT_FLOOR_S
+
+    big = unasdiff._default_timeout_s(200, unasdiff._DIFFUSION_STEPS)
+    bigger_input = unasdiff._default_timeout_s(400, unasdiff._DIFFUSION_STEPS)
+    more_steps = unasdiff._default_timeout_s(200, 2 * unasdiff._DIFFUSION_STEPS)
+    assert big > floor
+    assert bigger_input == pytest.approx(2 * big)
+    assert more_steps == pytest.approx(2 * big)
+
+
+def test_the_default_timeout_is_device_aware() -> None:
+    """A CPU (or MPS) ceiling is the CUDA one scaled by the measured CPU/A100 wall-time ratio.
+
+    _SECONDS_PER_WINDOW_STEP_CUDA (0.4) is an A100 measurement; the review's own measurement put
+    CPU at roughly 45x that on this workload (see doc.md), so an explicit CPU device must derive a
+    ceiling roughly 45x the CUDA one for identical work, not the same number for every device.
+    """
+    cuda = unasdiff._default_timeout_s(200, unasdiff._DIFFUSION_STEPS, device=DeviceType.CUDA)
+    cpu = unasdiff._default_timeout_s(200, unasdiff._DIFFUSION_STEPS, device=DeviceType.CPU)
+    mps = unasdiff._default_timeout_s(200, unasdiff._DIFFUSION_STEPS, device=DeviceType.MPS)
+    assert cpu == pytest.approx(45 * cuda)
+    assert mps == pytest.approx(45 * cuda)
+
+
+def test_the_derived_ceiling_is_device_aware_end_to_end(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The device the caller passes reaches the derived timeout, not just the worker payload."""
+    captured: dict = {}
+    u = _stub_worker(monkeypatch, captured)
+
+    n_samples = int(6.0 * u._TARGET_SR)  # two windows
+    audio = Audio(waveform=torch.randn(1, n_samples), sampling_rate=u._TARGET_SR)
+    u.separate_with_unasdiff(
+        [audio],
+        n_sources=2,
+        source_class_indices=[0, 0],
+        mode="speech_speech",
+        checkpoint_dir="/tmp/fake-unasdiff-checkpoints",
+        diffusion_steps=9000,
+        device=DeviceType.CPU,
+    )
+    expected = u._default_timeout_s(2, 9000, device=DeviceType.CPU)
+    assert captured["timeout"] == expected
+    assert captured["timeout"] == pytest.approx(45 * u._default_timeout_s(2, 9000, device=DeviceType.CUDA))
+
+
+def test_the_derived_ceiling_reaches_subprocess_run(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The timeout ``subprocess.run`` receives is the derived one, not a hardcoded constant."""
+    captured: dict = {}
+    u = _stub_worker(monkeypatch, captured)
+
+    n_samples = int(6.0 * u._TARGET_SR)  # two windows
+    audio = Audio(waveform=torch.randn(1, n_samples), sampling_rate=u._TARGET_SR)
+    u.separate_with_unasdiff(
+        [audio],
+        n_sources=2,
+        source_class_indices=[0, 0],
+        mode="speech_speech",
+        checkpoint_dir="/tmp/fake-unasdiff-checkpoints",
+        diffusion_steps=9000,
+    )
+    expected = u._default_timeout_s(2, 9000)
+    assert captured["timeout"] == expected
+    assert captured["timeout"] != 3600
+
+
+def test_an_explicit_timeout_overrides_the_derived_one(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``timeout_s`` is honoured verbatim."""
+    captured: dict = {}
+    u = _stub_worker(monkeypatch, captured)
+
+    audio = Audio(waveform=torch.randn(1, int(u._WINDOW_S * u._TARGET_SR)), sampling_rate=u._TARGET_SR)
+    u.separate_with_unasdiff(
+        [audio],
+        n_sources=2,
+        source_class_indices=[0, 0],
+        mode="speech_speech",
+        checkpoint_dir="/tmp/fake-unasdiff-checkpoints",
+        timeout_s=42.0,
+    )
+    assert captured["timeout"] == 42.0
+
+
+def test_a_non_positive_timeout_raises() -> None:
+    """A zero or negative ceiling would abort the worker instantly; reject it up front."""
+    audio = Audio(waveform=torch.randn(1, 16000), sampling_rate=16000)
+    for bad in (0, -1.0):
+        with pytest.raises(ValueError, match="timeout_s"):
+            unasdiff.separate_with_unasdiff(
+                [audio],
+                n_sources=2,
+                source_class_indices=[0, 0],
+                mode="speech_speech",
+                timeout_s=bad,
+            )
+
+
+def test_a_timeout_names_the_ceiling_the_input_and_the_windows_written(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A ``TimeoutExpired`` becomes an actionable ``RuntimeError``, not a bare stack trace.
+
+    The unhandled exception said only that a subprocess ran too long: not which ceiling it hit,
+    how much audio it was given, or how far it had got.
+    """
+    import types
+
+    from senselab.audio.tasks.source_separation import unasdiff as u
+
+    monkeypatch.setattr(u, "ensure_venv", lambda *a, **k: Path("/tmp/fake-unasdiff-venv"))
+    monkeypatch.setattr(u, "venv_python", lambda venv_dir: "python3")
+
+    def fake_run(cmd: list, *, input: str, capture_output: bool, text: bool, timeout: float, env: dict) -> None:
+        payload = json.loads(input)
+        # One window completes before the ceiling fires, so the error can report progress.
+        for p in payload["out_paths"][0]:
+            segment = torch.randn(int(u._WINDOW_S * u._TARGET_SR))
+            soundfile.write(p, segment.numpy(), u._TARGET_SR, subtype="FLOAT")
+        raise subprocess.TimeoutExpired(cmd, timeout)
+
+    monkeypatch.setattr(u.subprocess, "run", fake_run)
+
+    n_samples = int(6.0 * u._TARGET_SR)  # two windows
+    audio = Audio(waveform=torch.randn(1, n_samples), sampling_rate=u._TARGET_SR)
+    with pytest.raises(RuntimeError) as exc:
+        u.separate_with_unasdiff(
+            [audio],
+            n_sources=2,
+            source_class_indices=[0, 0],
+            mode="speech_speech",
+            checkpoint_dir="/tmp/fake-unasdiff-checkpoints",
+            timeout_s=123.0,
+        )
+
+    message = str(exc.value)
+    assert "123s" in message, "the ceiling that fired must be named"
+    assert "1/2 window(s) written" in message, "progress at the point of failure must be reported"
+    assert "6.0s of audio" in message, "the input being processed must be named"
+    assert "speech_speech" in message and "diffusion_steps=200" in message
+    assert "timeout_s" in message, "the message must name the knob that raises the ceiling"
+
+
+def test_separate_audios_forwards_timeout_s(mono_audio_sample: Audio, monkeypatch: pytest.MonkeyPatch) -> None:
+    """api.separate_audios threads timeout_s through to separate_with_unasdiff unchanged."""
+    captured = {}
+
+    def fake(audios: list, n_sources: int, source_class_indices: list, **kwargs: object) -> list:
+        captured["timeout_s"] = kwargs["timeout_s"]
+        return [[audios[0]] * n_sources]
+
+    monkeypatch.setattr("senselab.audio.tasks.source_separation.api.separate_with_unasdiff", fake)
+    separate_audios([mono_audio_sample], mode="speech_speech", n_sources=2, timeout_s=99.0)
+    assert captured["timeout_s"] == 99.0
+
+
+def test_separate_audios_forwards_device(mono_audio_sample: Audio, monkeypatch: pytest.MonkeyPatch) -> None:
+    """api.separate_audios threads device through to separate_with_unasdiff unchanged."""
+    captured = {}
+
+    def fake(audios: list, n_sources: int, source_class_indices: list, **kwargs: object) -> list:
+        captured["device"] = kwargs["device"]
+        return [[audios[0]] * n_sources]
+
+    monkeypatch.setattr("senselab.audio.tasks.source_separation.api.separate_with_unasdiff", fake)
+    separate_audios([mono_audio_sample], mode="speech_speech", n_sources=2, device=DeviceType.CPU)
+    assert captured["device"] is DeviceType.CPU
+
+
+# ── n_sources bound ───────────────────────────────────────────────────
+
+
+def test_more_than_three_sources_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The paper evaluated at most three sources; this backend does not extrapolate past that."""
+    captured: dict = {}
+    u = _stub_worker(monkeypatch, captured)
+    audio = Audio(waveform=torch.randn(1, int(u._WINDOW_S * u._TARGET_SR)), sampling_rate=u._TARGET_SR)
+    with pytest.raises(ValueError, match="n_sources"):
+        u.separate_with_unasdiff(
+            [audio],
+            n_sources=4,
+            source_class_indices=[0, 0, 0, 0],
+            mode="speech_speech",
+        )
+    assert not captured, "the worker subprocess must never run once validation has failed"
+
+
+def test_three_sources_is_accepted(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Three sources -- the paper's own upper bound -- must not be rejected."""
+    captured: dict = {}
+    u = _stub_worker(monkeypatch, captured)
+    audio = Audio(waveform=torch.randn(1, int(u._WINDOW_S * u._TARGET_SR)), sampling_rate=u._TARGET_SR)
+    u.separate_with_unasdiff(
+        [audio],
+        n_sources=3,
+        source_class_indices=[0, 0, 0],
+        mode="speech_speech",
+    )
+    assert len(captured["payload"]["out_paths"][0]) == 3
+
+
+# ── Label-range validation ────────────────────────────────────────────
+
+
+def test_a_sound_label_in_the_speech_slot_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    """speech_sound's slot 0 always loads the speech prior, whose only valid label is 0.
+
+    The module docstring promises this catch; api.resolve_source_classes only catches a typo in a
+    class *name*, so a caller going through unasdiff.separate_with_unasdiff directly with a raw
+    index bypasses it entirely without this check.
+    """
+    captured: dict = {}
+    u = _stub_worker(monkeypatch, captured)
+    audio = Audio(waveform=torch.randn(1, int(u._WINDOW_S * u._TARGET_SR)), sampling_rate=u._TARGET_SR)
+    with pytest.raises(ValueError, match="slot 0") as exc:
+        u.separate_with_unasdiff(
+            [audio],
+            n_sources=2,
+            source_class_indices=[14, 0],
+            mode="speech_sound",
+        )
+    assert "speech" in str(exc.value)
+    assert "14" in str(exc.value)
+    assert not captured, "the worker subprocess must never run once validation has failed"
+
+
+def test_a_sound_label_above_40_in_a_sound_slot_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The sound prior's embedding has 41 trained rows (0..40); above that is untrained headroom."""
+    captured: dict = {}
+    u = _stub_worker(monkeypatch, captured)
+    audio = Audio(waveform=torch.randn(1, int(u._WINDOW_S * u._TARGET_SR)), sampling_rate=u._TARGET_SR)
+    with pytest.raises(ValueError, match="slot 1") as exc:
+        u.separate_with_unasdiff(
+            [audio],
+            n_sources=2,
+            source_class_indices=[0, 41],
+            mode="speech_sound",
+        )
+    assert "sound" in str(exc.value)
+    assert "41" in str(exc.value)
+    assert not captured
+
+
+def test_a_negative_label_in_a_sound_slot_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A negative index is also out of the sound prior's valid range, not just anything above 40."""
+    captured: dict = {}
+    u = _stub_worker(monkeypatch, captured)
+    audio = Audio(waveform=torch.randn(1, int(u._WINDOW_S * u._TARGET_SR)), sampling_rate=u._TARGET_SR)
+    with pytest.raises(ValueError, match="slot 0"):
+        u.separate_with_unasdiff(
+            [audio],
+            n_sources=2,
+            source_class_indices=[-1, 0],
+            mode="sound_sound",
+        )
+    assert not captured
+
+
+def test_a_nonzero_label_in_speech_speech_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Both slots load the speech prior in speech_speech; its only valid label is 0."""
+    captured: dict = {}
+    u = _stub_worker(monkeypatch, captured)
+    audio = Audio(waveform=torch.randn(1, int(u._WINDOW_S * u._TARGET_SR)), sampling_rate=u._TARGET_SR)
+    with pytest.raises(ValueError, match="slot 1") as exc:
+        u.separate_with_unasdiff(
+            [audio],
+            n_sources=2,
+            source_class_indices=[0, 3],
+            mode="speech_speech",
+        )
+    assert "speech" in str(exc.value)
+    assert not captured
+
+
+def test_valid_labels_reach_the_worker(monkeypatch: pytest.MonkeyPatch) -> None:
+    """In-range labels for every slot must not be rejected."""
+    captured: dict = {}
+    u = _stub_worker(monkeypatch, captured)
+    audio = Audio(waveform=torch.randn(1, int(u._WINDOW_S * u._TARGET_SR)), sampling_rate=u._TARGET_SR)
+    u.separate_with_unasdiff(
+        [audio],
+        n_sources=2,
+        source_class_indices=[0, 40],
+        mode="speech_sound",
+    )
+    assert captured["payload"]["labels"] == [0, 40]
+
+
+# ── Provenance metadata ───────────────────────────────────────────────
+
+
+def test_provenance_metadata_carries_the_resolved_checkpoint_sha(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every returned Audio records the resolved commit, not just the pinned ref.
+
+    resolve_model returns (sha, path); the host used to discard the sha, so nothing downstream
+    could tell which commit of the mirror actually produced a given separation.
+    """
+    captured: dict = {}
+    u = _stub_worker(monkeypatch, captured)
+    fake_sha = "a" * 40
+    monkeypatch.setattr(
+        "senselab.utils.dependencies.resolve_model",
+        lambda *a, **k: (fake_sha, Path("/tmp/fake-unasdiff-checkpoints")),
+    )
+
+    audio = Audio(waveform=torch.randn(1, int(u._WINDOW_S * u._TARGET_SR)), sampling_rate=u._TARGET_SR)
+    result = u.separate_with_unasdiff(
+        [audio],
+        n_sources=2,
+        source_class_indices=[3, 7],
+        mode="sound_sound",
+        source_classes=["Applause", "Cello"],
+    )
+
+    meta = result[0][0].metadata["unasdiff"]
+    assert meta["checkpoint_revision"] == fake_sha
+    assert len(meta["checkpoint_revision"]) == 40
+    assert all(c in "0123456789abcdef" for c in meta["checkpoint_revision"])
+    assert meta["mode"] == "sound_sound"
+    assert meta["source_classes"] == ["Applause", "Cello"]
+    assert meta["n_sources"] == 2
+    assert meta["diffusion_steps"] == u._DIFFUSION_STEPS
+    assert meta["upstream_commit"] == u._UNASDIFF_COMMIT
+    assert "device" in meta
+    # Every slot -- not just the first -- carries the record.
+    for source in result[0]:
+        assert source.metadata["unasdiff"] == meta
+
+
+def test_provenance_metadata_reaches_every_stitched_window(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A multi-window (stitched) output also carries the provenance record, not only the short path."""
+    u = _stub_worker(monkeypatch, {})
+    monkeypatch.setattr(
+        "senselab.utils.dependencies.resolve_model",
+        lambda *a, **k: ("b" * 40, Path("/tmp/fake-unasdiff-checkpoints")),
+    )
+
+    n_samples = int(6.0 * u._TARGET_SR)  # two windows
+    audio = Audio(waveform=torch.randn(1, n_samples), sampling_rate=u._TARGET_SR)
+    result = u.separate_with_unasdiff(
+        [audio],
+        n_sources=2,
+        source_class_indices=[0, 0],
+        mode="speech_speech",
+    )
+    for source in result[0]:
+        assert source.metadata["unasdiff"]["checkpoint_revision"] == "b" * 40
+
+
+def test_separate_audios_forwards_source_classes_into_the_provenance_call(
+    mono_audio_sample: Audio, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """api.separate_audios threads source_classes through so it can be recorded as provenance."""
+    captured = {}
+
+    def fake(audios: list, n_sources: int, source_class_indices: list, **kwargs: object) -> list:
+        captured["source_classes"] = kwargs["source_classes"]
+        return [[audios[0]] * n_sources]
+
+    monkeypatch.setattr("senselab.audio.tasks.source_separation.api.separate_with_unasdiff", fake)
+    separate_audios([mono_audio_sample], mode="speech_sound", n_sources=2, source_classes=["Applause"])
+    assert captured["source_classes"] == ["Applause"]
+
+
+# ── WAV intermediates ─────────────────────────────────────────────────
+
+
+def test_input_windows_are_written_as_float_not_pcm16(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The window files the host hands the worker are FLOAT, and samples past +-1 survive.
+
+    Both defaults used to clip here: ``sf.write`` picks PCM_16 for a ``.wav``, and
+    ``Audio.save_to_file`` wrote PCM_16 through torchcodec, which offers no encoding control.
+    """
+    captured: dict = {}
+    u = _stub_worker(monkeypatch, captured)
+
+    window_samples = int(u._WINDOW_S * u._TARGET_SR)
+    waveform = torch.zeros(1, window_samples)
+    waveform[0, 100] = 1.75
+    u.separate_with_unasdiff(
+        [Audio(waveform=waveform, sampling_rate=u._TARGET_SR)],
+        n_sources=2,
+        source_class_indices=[0, 0],
+        mode="speech_speech",
+        checkpoint_dir="/tmp/fake-unasdiff-checkpoints",
+    )
+
+    assert captured["in_subtypes"] == ["FLOAT"]
+    # PCM_16 caps at 1.0; the exact peak is not asserted because resample_audios filters even at
+    # an unchanged rate, which rounds the impulse off.
+    assert captured["in_peak"] > 1.5, "an out-of-range sample was clipped on write"
+
+
+def test_the_worker_writes_through_the_staged_policy() -> None:
+    """The worker must not write audio itself, and its parent must stage what it imports.
+
+    The repo-wide boundary is ``src/tests/utils/audio_write_boundary_test.py``; this keeps the
+    check local to the backend that has to carry the two halves in one file.
+    """
+    assert "from portable_audio_io import" in unasdiff._WORKER_SCRIPT, (
+        "the worker must import the staged range policy rather than calling soundfile itself"
+    )
+    tree = ast.parse(unasdiff._WORKER_SCRIPT)
+    raw_writes = [
+        node.lineno
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr in {"write", "save"}
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id in {"sf", "soundfile", "torchaudio"}
+    ]
+    assert not raw_writes, f"worker line(s) {raw_writes} write audio directly, bypassing the range policy"
+    assert "stage_portable_audio_io(" in Path(unasdiff.__file__).read_text(), (
+        "the parent must stage portable_audio_io.py into the worker's temp dir"
+    )
+
+
+def test_an_unresolved_device_is_sized_for_the_slow_path_not_for_cuda() -> None:
+    """``device=None`` must not be costed as if CUDA were certain.
+
+    The host cannot resolve what the worker will pick: its torch is a different build from the
+    venv's, which is exactly why the choice is deferred. Costing the unknown as CUDA granted a
+    1800s floor to work that takes ~14400s on CPU, so a run that was progressing normally was
+    killed ~85 minutes in and its finished windows discarded. The unknown is sized for the slow
+    path instead -- an over-large ceiling costs nothing, an under-large one destroys work.
+    """
+    unresolved = unasdiff._default_timeout_s(1, unasdiff._DIFFUSION_STEPS, device=None)
+    cpu = unasdiff._default_timeout_s(1, unasdiff._DIFFUSION_STEPS, device=DeviceType.CPU)
+    cuda = unasdiff._default_timeout_s(1, unasdiff._DIFFUSION_STEPS, device=DeviceType.CUDA)
+    assert unresolved == cpu
+    assert unresolved > cuda
+
+
+def test_the_worker_refuses_work_it_cannot_finish_in_the_ceiling() -> None:
+    """The worker fails fast, because only the worker knows the device it resolved to."""
+    assert "deadline_s" in unasdiff._WORKER_SCRIPT
+    assert "estimate_s > deadline_s" in unasdiff._WORKER_SCRIPT
+
+
+def test_the_host_tells_the_worker_its_deadline(mono_audio_sample: Audio, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A worker that is not told the ceiling cannot refuse against it."""
+    captured: dict = {}
+    u = _stub_worker(monkeypatch, captured)
+    u.separate_with_unasdiff([mono_audio_sample], 2, [0, 0], timeout_s=1234.0)
+    assert captured["payload"]["deadline_s"] == pytest.approx(1234.0)
+
+
+def test_mps_is_reachable_only_when_named() -> None:
+    """MPS is measurably slower than CPU here, so it must never be chosen by default.
+
+    Measured on this model, one 4 s window, per diffusion step: cpu 16.7 s, mps 90-193 s. An
+    unresolved device therefore resolves to cpu, and mps is honoured only when asked for by name.
+    """
+    script = unasdiff._WORKER_SCRIPT
+    assert 'str(requested).startswith("mps")' in script
+    unresolved_branch = script.split("if requested is None:")[1].split("if str(requested)")[0]
+    assert "mps" not in unresolved_branch
+
+
+def test_the_mps_path_casts_the_schedule_before_moving_it() -> None:
+    """MPS has no float64; upstream moves the schedule then casts, so the move raises first."""
+    script = unasdiff._WORKER_SCRIPT
+    assert "patch_extract_for_mps" in script
+    assert "src.float().to(device=timesteps.device)[timesteps]" in script
+
+
+@pytest.mark.skipif(not torch.backends.mps.is_available(), reason="the allowlist admits MPS only where MPS exists")
+def test_naming_mps_is_not_refused_by_the_host_allowlist(
+    mono_audio_sample: Audio, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The worker's MPS branch is dead code unless the host allowlist admits MPS first.
+
+    ``_select_device_and_dtype`` is consulted before the worker is launched, so a compatible list
+    of CUDA and CPU alone rejects ``DeviceType.MPS`` there and ``resolve_device`` is never reached.
+    """
+    captured: dict = {}
+    u = _stub_worker(monkeypatch, captured)
+    u.separate_with_unasdiff([mono_audio_sample], 2, [0, 0], device=DeviceType.MPS)
+    assert captured["payload"]["device"] == "mps"

@@ -1,0 +1,689 @@
+"""The consensus text stream: sequence alignment decides, time is metadata, nothing is re-sorted."""
+
+import inspect
+import random
+from dataclasses import fields, replace
+from typing import Any, Sequence, cast
+
+import pytest
+
+from senselab.audio.workflows.audio_analysis.harmonize import harmonize_transcripts
+from senselab.audio.workflows.triage.consensus import (
+    Consensus,
+    ConsensusWord,
+    SourceHypothesis,
+    align_sources,
+    bracketed_form,
+    degenerate_parameters,
+    degenerate_token,
+    is_bracketed,
+    isotonic_median_fit,
+    located_span,
+    missing_span,
+    rebracket,
+    render_transcript,
+    vocabulary_key,
+    word_attributes,
+    word_from_attributes,
+    word_timing_parameters,
+)
+
+
+def _source(
+    name: str, text: str, *, first_s: float = 0.0, step_s: float = 0.5, length_s: float = 0.4
+) -> SourceHypothesis:
+    """A hypothesis from whitespace-separated tokens at a fixed spacing."""
+    tokens = text.split()
+    words = tuple((token, first_s + i * step_s, first_s + i * step_s + length_s) for i, token in enumerate(tokens))
+    return SourceHypothesis(name=name, words=words, timestamp_source="native", timestamp_model=None)
+
+
+def _timed(name: str, words: Sequence[tuple[str, float, float]]) -> SourceHypothesis:
+    """A hypothesis from explicit ``(text, start, end)`` triples."""
+    return SourceHypothesis(name=name, words=tuple(words), timestamp_source="native", timestamp_model=None)
+
+
+def _align(*sources: SourceHypothesis, onomatopoeic: set[str] | None = None) -> Consensus:
+    return align_sources(list(sources), onomatopoeic=onomatopoeic or set())
+
+
+def _outcomes(consensus: Consensus) -> list[str]:
+    return [word.outcome for word in consensus.words]
+
+
+def _texts(consensus: Consensus) -> list[str]:
+    return [word.text for word in consensus.words]
+
+
+class TestAgreementVariantInsertion:
+    """The three outcomes are set relations over normalised keys; nothing is thresholded."""
+
+    def test_identical_streams_agree_everywhere_and_keep_each_source_time_verbatim(self) -> None:
+        """Test 1: agreement with per-source timings preserved unrounded."""
+        a = _timed("a", [("hello", 0.1234, 0.4321), ("world", 0.5, 0.9)])
+        b = _timed("b", [("hello", 0.1234, 0.4321), ("world", 0.5, 0.9)])
+        consensus = _align(a, b)
+        assert _outcomes(consensus) == ["agreement", "agreement"]
+        assert all(word.agreement == 1.0 for word in consensus.words)
+        assert consensus.words[0].readings == {"a": "hello", "b": "hello"}
+        assert consensus.words[0].timings == {"a": (0.1234, 0.4321), "b": (0.1234, 0.4321)}
+        assert consensus.words[0].extent == (0.1234, 0.4321)
+        for word in consensus.words:
+            assert word.onset_spread_s == 0.0 and word.offset_spread_s == 0.0
+            assert word.temporal_uncertainty_s == 0.0
+
+    def test_a_variant_records_every_reading_with_its_share(self) -> None:
+        """Test 2: hi Jon / hi John."""
+        consensus = _align(_source("a", "hi Jon"), _source("b", "hi John"))
+        jon = consensus.words[1]
+        assert jon.outcome == "variant"
+        assert jon.text == "Jon" == jon.variants[0].text
+        assert [(v.text, list(v.sources), v.share) for v in jon.variants] == [("Jon", ["a"], 0.5), ("John", ["b"], 0.5)]
+        assert jon.agreement == 0.5
+        assert jon.readings == {"a": "Jon", "b": "John"}
+
+    def test_insertions_on_either_side_of_an_agreement(self) -> None:
+        """Test 3: I uh think / I think so."""
+        consensus = _align(_source("a", "I uh think"), _source("b", "I think so"))
+        assert _texts(consensus) == ["I", "uh", "think", "so"]
+        assert _outcomes(consensus) == ["agreement", "insertion", "agreement", "insertion"]
+        assert consensus.words[1].sources == ("a",) and consensus.words[3].sources == ("b",)
+
+    def test_an_agreed_repetition_is_two_agreement_words(self) -> None:
+        """Test 5."""
+        consensus = _align(_source("a", "that that"), _source("b", "that that"))
+        assert _outcomes(consensus) == ["agreement", "agreement"]
+
+    def test_a_variant_beside_a_repetition(self) -> None:
+        """Test 6: the the / a."""
+        consensus = _align(_source("a", "the the"), _source("b", "a"))
+        assert _outcomes(consensus) == ["variant", "insertion"]
+        assert [(v.text, list(v.sources)) for v in consensus.words[0].variants] == [("the", ["a"]), ("a", ["b"])]
+        assert consensus.words[1].sources == ("a",)
+
+    def test_empty_key_tokens_are_dropped_and_counted_per_source(self) -> None:
+        """Test 11."""
+        consensus = _align(_source("a", "... hello"), _source("b", "hello"))
+        assert _texts(consensus) == ["hello"]
+        assert consensus.provenance["empty_tokens_dropped"] == {"a": 1, "b": 0}
+
+    def test_three_sources(self) -> None:
+        """Test 12: majority variant, two-source insertion, three-way tie."""
+        majority = _align(_source("a", "cat"), _source("b", "cat"), _source("c", "cot"))
+        assert majority.words[0].outcome == "variant"
+        assert majority.words[0].agreement == pytest.approx(2 / 3)
+        assert list(majority.words[0].variants[0].sources) == ["a", "b"]
+
+        insertion = _align(_source("a", "x y"), _source("b", "x y"), _source("c", "y"))
+        assert _outcomes(insertion) == ["insertion", "agreement"]
+        assert insertion.words[0].agreement == pytest.approx(2 / 3)
+        assert insertion.words[0].sources == ("a", "b")
+
+        tie = _align(_source("a", "cat"), _source("b", "cot"), _source("c", "cut"))
+        assert len(tie.words[0].variants) == 3
+        assert tie.words[0].agreement == pytest.approx(1 / 3)
+
+
+class TestTheRepetitionFinding:
+    """Test 4: the columns are emitted verbatim; nothing collapses or re-sorts a repeated token."""
+
+    def test_and_the_and_the_d_the_is_six_words_in_column_order(self) -> None:
+        """4a: six words, in column order, the duplicates real; b's words sit on a's first copies in time."""
+        consensus = _align(_source("a", "and the and the d- the"), _source("b", "and the"))
+        assert _texts(consensus) == ["and", "the", "and", "the", "d-", "the"]
+        assert _outcomes(consensus) == ["agreement", "agreement", "insertion", "insertion", "insertion", "insertion"]
+        assert render_transcript(consensus.words) == "**and** **the** and the d- the"
+        assert render_transcript(consensus.words, strong=("", "")) == "and the and the d- the"
+
+    def test_conflicting_times_keep_stream_order_and_derive_monotone_times(self) -> None:
+        """4b: b opens boy before a's stumble; the stream does not move, the fit does not either."""
+        a = _timed("a", [("the", 1.00, 1.20), ("d-", 1.20, 1.35), ("boy", 1.40, 1.70)])
+        b = _timed("b", [("the", 1.00, 1.18), ("boy", 1.10, 1.70)])
+        consensus = _align(a, b)
+        assert _texts(consensus) == ["the", "d-", "boy"]
+        assert [word.extent[0] for word in consensus.words] == pytest.approx([1.0, 1.2, 1.25])
+        boy = consensus.words[2]
+        assert boy.onset_spread_s == pytest.approx(0.30) == boy.temporal_uncertainty_s
+        assert boy.timings["b"] == (1.10, 1.70)
+        assert consensus.provenance["n_words_time_shifted"] == 0
+
+    def test_the_gets_case_pairs_the_coincident_copy_and_nothing_pools(self) -> None:
+        """4c: b's gets@9.60-9.84 overlaps a's first copy, so the tie goes there and the fit has nothing to move."""
+        a = _timed("a", [("gets", 9.66, 9.74), ("a-", 9.88, 9.99), ("gets", 9.99, 10.10)])
+        b = _timed("b", [("gets", 9.60, 9.84)])
+        consensus = _align(a, b)
+        assert _texts(consensus) == ["gets", "a-", "gets"]
+        assert _outcomes(consensus) == ["agreement", "insertion", "insertion"]
+        assert consensus.words[0].extent == pytest.approx((9.63, 9.79))
+        assert consensus.words[0].temporal_uncertainty_s == pytest.approx(0.10)
+        assert consensus.words[1].extent == (9.88, 9.99)
+        assert consensus.words[2].extent == (9.99, 10.10)
+        assert consensus.words[1].temporal_uncertainty_s == 0.0 == consensus.words[2].temporal_uncertainty_s
+        assert consensus.provenance["n_words_time_shifted"] == 0
+        assert consensus.provenance["max_time_shift_s"] == 0.0
+
+    def test_the_four_second_case_is_an_equal_cost_tie_that_time_breaks(self) -> None:
+        """4d: R-5's case; both pairings of b's the@31.20 cost 6, so it pairs with The@31.30, not the@35.30."""
+        a = _timed(
+            "a",
+            [
+                ("The", 31.30, 31.52),
+                ("[UM]", 31.52, 31.70),
+                ("the", 35.30, 35.36),
+                ("little", 35.36, 35.58),
+                ("boy", 35.58, 36.06),
+            ],
+        )
+        b = _timed("b", [("the", 31.20, 31.84), ("little", 35.28, 35.60), ("boy", 35.60, 36.16)])
+        consensus = _align(a, b)
+        assert _outcomes(consensus) == ["agreement", "insertion", "insertion", "agreement", "agreement"]
+        the = consensus.words[0]
+        assert the.extent == pytest.approx((31.25, 31.68))
+        assert the.temporal_uncertainty_s == pytest.approx(0.32)
+        assert consensus.words[2].extent == (35.30, 35.36) and consensus.words[2].temporal_uncertainty_s == 0.0
+        assert consensus.provenance["n_words_time_shifted"] == 0
+
+    def test_a_conflict_the_cost_model_holds_stays_aligned_and_carries_its_uncertainty(self) -> None:
+        """4d': R-5 rule 4 with no tie to break; one ``the`` per source 4.1 s apart stays paired."""
+        a = _timed("a", [("the", 35.30, 35.36), ("little", 35.36, 35.58), ("boy", 35.58, 36.06)])
+        b = _timed("b", [("the", 31.20, 31.84), ("little", 35.28, 35.60), ("boy", 35.60, 36.16)])
+        consensus = _align(a, b)
+        assert _outcomes(consensus) == ["agreement", "agreement", "agreement"]
+        the = consensus.words[0]
+        assert the.extent[0] == pytest.approx(33.25)
+        assert the.temporal_uncertainty_s == pytest.approx(4.10)
+        assert consensus.provenance["n_words_time_shifted"] == 0
+
+    def test_derived_times_are_monotone_and_bounded_by_the_uncertainty(self) -> None:
+        """4e: the property, over a long random pair with jittered times."""
+        rng = random.Random(7)
+        vocabulary = ["the", "boy", "and", "dog", "ran", "a-", "[UM]", "home", "to", "his"]
+        base = [rng.choice(vocabulary) for _ in range(200)]
+        a_words, b_words = [], []
+        cursor = 0.0
+        for token in base:
+            a_start = cursor + rng.uniform(-0.2, 0.2)
+            a_words.append((token, a_start, a_start + 0.3 + rng.uniform(-0.1, 0.1)))
+            if rng.random() > 0.15:
+                b_start = cursor + rng.uniform(-0.6, 0.6)
+                b_words.append((token, b_start, b_start + 0.3 + rng.uniform(-0.2, 0.2)))
+            cursor += 0.4
+        consensus = _align(_timed("a", a_words), _timed("b", b_words))
+        onsets = [word.extent[0] for word in consensus.words]
+        offsets = [word.extent[1] for word in consensus.words]
+        assert all(later >= earlier for earlier, later in zip(onsets, onsets[1:]))
+        assert all(later >= earlier for earlier, later in zip(offsets, offsets[1:]))
+        assert all(word.extent[0] <= word.extent[1] for word in consensus.words)
+        assert all(
+            (word.temporal_uncertainty_s or 0.0) >= max(word.onset_spread_s, word.offset_spread_s)
+            for word in consensus.words
+        )
+        assert [word.index for word in consensus.words] == list(range(len(consensus.words)))
+
+
+class TestTheMedianFit:
+    """The fit is PAVA over medians of the stacked member readings; even counts take the midpoint."""
+
+    def test_two_readings_take_their_midpoint_when_nothing_pools(self) -> None:
+        """4f."""
+        consensus = _align(_timed("a", [("hi", 1.00, 1.20)]), _timed("b", [("hi", 1.10, 1.30)]))
+        assert consensus.words[0].extent == pytest.approx((1.05, 1.25))
+
+    def test_an_odd_pooled_block_lands_on_a_member_reading(self) -> None:
+        """4f: the median of three stacked readings is the middle one, not a mean."""
+        assert isotonic_median_fit([[1.0, 3.0], [1.5]]) == ([1.5, 1.5], [True, True])
+
+    def test_output_is_non_decreasing_for_any_input(self) -> None:
+        """PAVA's invariant, held over random inputs."""
+        rng = random.Random(3)
+        for _ in range(500):
+            readings = [[rng.uniform(0, 10) for _ in range(rng.randint(1, 3))] for _ in range(rng.randint(1, 15))]
+            fitted, pooled = isotonic_median_fit(readings)
+            assert all(later >= earlier for earlier, later in zip(fitted, fitted[1:]))
+            assert len(pooled) == len(readings)
+
+    def test_unpooled_positions_reproduce_their_own_value_exactly(self) -> None:
+        """A block of one position is its own median, bit for bit."""
+        fitted, pooled = isotonic_median_fit([[1.0, 1.2], [2.0], [3.0, 3.5, 4.0]])
+        assert fitted == [1.1, 2.0, 3.5]
+        assert pooled == [False, False, False]
+
+    def test_an_empty_position_is_refused(self) -> None:
+        """The precondition every caller meets, stated as a raise rather than a silent guess."""
+        with pytest.raises(ValueError, match="position 1 carries no reading"):
+            isotonic_median_fit([[1.0], []])
+
+    def test_one_outlier_costs_one_neighbour_and_moves_no_other_position(self) -> None:
+        """4g: pooling stops at the offending position."""
+        words = [(f"w{i}", 1.0 + 0.5 * i, 1.3 + 0.5 * i) for i in range(20)]
+        clean = _align(_timed("a", words), _timed("b", words))
+        late = list(words)
+        late[7] = (late[7][0], late[7][1] + 15.0, late[7][2] + 15.0)
+        skewed = _align(_timed("a", words), _timed("b", late))
+        own = [1.0 + 0.5 * i for i in range(20)]
+        for index, word in enumerate(skewed.words):
+            if index == 7:
+                assert word.extent[0] == pytest.approx(own[8])
+            else:
+                assert word.extent[0] == pytest.approx(own[index])
+                assert word.extent == pytest.approx(clean.words[index].extent)
+        assert skewed.provenance["n_words_time_shifted"] == 2
+
+
+class TestSourceOrderAndBrackets:
+    """R-1 and §3.2: order by name, override and insertion are two mechanisms."""
+
+    def test_source_order_does_not_depend_on_argument_order(self) -> None:
+        """Test 7."""
+        a, b = _source("a", "and the and the d- the"), _source("b", "and the")
+        forward, backward = _align(a, b), _align(b, a)
+        assert [(w.text, w.outcome, w.sources, w.extent) for w in forward.words] == [
+            (w.text, w.outcome, w.sources, w.extent) for w in backward.words
+        ]
+        assert [s["name"] for s in forward.provenance["sources"]] == ["a", "b"]
+        assert [s["name"] for s in backward.provenance["sources"]] == ["a", "b"]
+
+    def test_a_bracket_override_is_one_agreement_word_with_the_bracketed_surface(self) -> None:
+        """Test 8."""
+        for sources in (
+            (_source("a", "[COUGH] hi"), _source("b", "cough hi")),
+            (_source("b", "cough hi"), _source("a", "[COUGH] hi")),
+        ):
+            consensus = _align(*sources)
+            cough = consensus.words[0]
+            assert cough.outcome == "agreement"
+            assert cough.text == "[COUGH]" and cough.bracketed
+            assert cough.readings == {"a": "[COUGH]", "b": "cough"}
+            assert consensus.provenance["bracket_overrides_n"] == 1
+
+    def test_a_bracket_override_inside_a_variant_column_is_still_counted(self) -> None:
+        """A bracketed/plain split can occur inside one of several groups in a variant column.
+
+        Three sources land in one column: two share the key ``cough`` (one bracketed, one plain --
+        an override) and the third reads the unrelated ``cuff``. The column is a variant (more than
+        one key present), but the override inside its winning group must still be tallied.
+        """
+        consensus = _align(_source("a", "[COUGH]"), _source("b", "cough"), _source("c", "cuff"))
+        word = consensus.words[0]
+        assert word.outcome == "variant"
+        assert word.text == "[COUGH]" and word.bracketed
+        assert consensus.provenance["bracket_overrides_n"] == 1
+
+    def test_a_bracketed_insertion_is_not_an_override(self) -> None:
+        """Test 9."""
+        consensus = _align(_source("a", "I [UM] think"), _source("b", "I think"))
+        um = consensus.words[1]
+        assert um.outcome == "insertion" and um.bracketed and um.sources == ("a",)
+        assert consensus.provenance["bracket_overrides_n"] == 0
+        assert render_transcript(consensus.words) == "**I** [UM] **think**"
+
+    def test_an_onomatopoeic_token_becomes_a_bracketed_word(self) -> None:
+        """Test 10."""
+        both = _align(_source("a", "hello khh world"), _source("b", "hello khh world"), onomatopoeic={"khh"})
+        assert both.words[1].outcome == "agreement" and both.words[1].text == "[KHH]"
+        assert both.words[1].readings == {"a": "khh", "b": "khh"}
+        one = _align(_source("a", "hello khh world"), _source("b", "hello world"), onomatopoeic={"khh"})
+        assert one.words[1].outcome == "insertion" and one.words[1].text == "[KHH]"
+        plain = _align(_source("a", "hello khh world"), _source("b", "hello khh world"))
+        assert plain.words[1].text == "khh" and not plain.words[1].bracketed
+
+    def test_the_bracket_helpers(self) -> None:
+        """The three small helpers the node and the consensus share."""
+        assert is_bracketed("[COUGH]") and is_bracketed(" [um] ")
+        assert not is_bracketed("cough") and not is_bracketed("[") and not is_bracketed("[a")
+        assert bracketed_form("Khh,", {"khh"}) == "[KHH]"
+        assert bracketed_form("[BREATH]", set()) == "[BREATH]"
+        assert bracketed_form("hello", {"khh"}) is None
+        assert vocabulary_key("Ahem!") == "ahem"
+
+
+class TestGuardsAndWordlessSources:
+    """R-2 and the wordless cases."""
+
+    def test_no_source_raises(self) -> None:
+        """Test 13: nothing to align."""
+        with pytest.raises(LookupError, match="found none"):
+            align_sources([], onomatopoeic=set())
+
+    def test_a_single_hypothesis_is_a_single_reading_transcript(self) -> None:
+        """One recognizer survived: every word an insertion with no agreement, and the stream says so."""
+        consensus = _align(_source("a", "hello there"))
+        assert _texts(consensus) == ["hello", "there"]
+        assert _outcomes(consensus) == ["insertion", "insertion"]
+        assert [word.agreement for word in consensus.words] == [None, None]
+        assert consensus.provenance["single_hypothesis"] is True
+        assert consensus.provenance["n_sources"] == 1
+        stored = word_attributes(consensus.words[0])
+        assert stored["agreement"] is None
+        back = word_from_attributes(stored, consensus.words[0].extent)
+        assert back == consensus.words[0]
+        assert rebracket(back, onomatopoeic=set(), n_sources=1).word == back
+
+    def test_two_hypotheses_are_not_single(self) -> None:
+        """The flag is the count of hypotheses, not of words."""
+        assert _align(_source("a", "hi"), _source("b", "hi")).provenance["single_hypothesis"] is False
+
+    def test_a_wordless_source_still_counts(self) -> None:
+        """Test 14."""
+        consensus = _align(_source("a", "hello"), _source("b", ""))
+        assert _outcomes(consensus) == ["insertion"]
+        assert consensus.words[0].agreement == 0.5
+        assert consensus.provenance["n_sources"] == 2
+        assert [(s["name"], s["n_words"]) for s in consensus.provenance["sources"]] == [("a", 1), ("b", 0)]
+        assert consensus.provenance["reference_source"] == "a"
+        empty = _align(_source("a", ""), _source("b", ""))
+        assert empty.words == ()
+        assert empty.provenance["n_words"] == 0
+        assert empty.provenance["reference_source"] is None
+        assert render_transcript(empty.words) == ""
+
+
+class TestRenderingAndProvenance:
+    """Tests 15-17."""
+
+    def test_render_marks_agreement_and_joins_variants(self) -> None:
+        """Test 15: bold marks agreement; the slash form is display only."""
+        consensus = _align(_source("a", "hi Jon"), _source("b", "hi John"))
+        assert render_transcript(consensus.words) == "**hi** Jon/John"
+        assert render_transcript(consensus.words, strong=("", "")) == "hi Jon"
+        assert render_transcript(consensus.words, strong=("<b>", "</b>")) == "<b>hi</b> Jon/John"
+
+    def test_render_follows_index_not_argument_order(self) -> None:
+        """The renderer sorts by index, so a caller's order cannot reorder the text."""
+        consensus = _align(_source("a", "one two"), _source("b", "one two"))
+        assert render_transcript(list(reversed(consensus.words))) == "**one** **two**"
+
+    def test_the_provenance_field_set(self) -> None:
+        """Test 16: exactly the fields the module owns, none of the retired knobs."""
+        consensus = _align(_source("a", "hello"), _source("b", "hello"))
+        assert set(consensus.provenance) == {
+            "algorithm",
+            "routine",
+            "normalisation",
+            "source_order",
+            "sources",
+            "n_sources",
+            "single_hypothesis",
+            "degenerate_n",
+            "reference_source",
+            "n_words",
+            "outcomes",
+            "bracket_overrides_n",
+            "empty_tokens_dropped",
+            "time_fit",
+            "n_words_time_shifted",
+            "max_time_shift_s",
+            "version",
+            "point_width_s",
+            "untimed_members",
+            "unlocated_n",
+            "unconfirmed_n",
+            "aligner_failed",
+        }
+        assert consensus.provenance["algorithm"] == "star_sequence_alignment"
+        assert consensus.provenance["time_fit"] == "weighted_isotonic_median_over_located_spans"
+        assert consensus.provenance["version"] == 2
+        assert consensus.provenance["source_order"] == "lexicographic_by_source_name"
+        assert consensus.provenance["outcomes"] == {"agreement": 1, "variant": 0, "insertion": 0}
+        assert set(consensus.provenance["sources"][0]) == {"name", "n_words", "timestamp_source", "timestamp_model"}
+        for retired in ("slot_overlap", "slot_mid_tol_s", "winner_margin", "alternate_min_share"):
+            assert retired not in consensus.provenance
+
+    def test_the_consensus_emits_words_and_provenance_only(self) -> None:
+        """Test 17 (R-4): no slot, no span, no grouping parameter."""
+        assert [f.name for f in fields(Consensus)] == ["words", "provenance"]
+        names = {f.name for f in fields(ConsensusWord)}
+        assert not any("slot" in name or "span" in name for name in names)
+        assert set(inspect.signature(align_sources).parameters) == {"sources", "onomatopoeic", "duration_s"}
+
+
+class TestBracketingDoesNotMoveTheAlignment:
+    """The claim re-bracketing a finished run rests on: a vocabulary decides surfaces, not columns."""
+
+    LEXICON = {"cough", "khh", "hack"}
+    """Three entries of the shipped vocabulary, enough for an agreement and a variant column."""
+
+    def _pair(self) -> tuple[SourceHypothesis, SourceHypothesis]:
+        """Two hypotheses sharing an onomatopoeic agreement column and an onomatopoeic variant one.
+
+        Returns:
+            The two hypotheses.
+        """
+        a = _timed("a", [("I", 0.1, 0.2), ("cough", 0.3, 0.45), ("khh", 0.6, 0.7), ("hello", 0.9, 1.1)])
+        b = _timed("b", [("I", 0.11, 0.21), ("Cough,", 0.31, 0.46), ("hack", 0.61, 0.72), ("hello", 0.92, 1.13)])
+        return a, b
+
+    def test_the_lattice_is_the_same_under_either_display(self) -> None:
+        """``harmonize_transcripts`` normalises, and normalisation drops brackets."""
+        plain = harmonize_transcripts({"a": [(0.3, 0.45, "cough")], "b": [(0.31, 0.46, "Cough,")]})
+        bracketed = harmonize_transcripts({"a": [(0.3, 0.45, "[COUGH]")], "b": [(0.31, 0.46, "[COUGH]")]})
+        assert [slot.indices for slot in plain.slots] == [slot.indices for slot in bracketed.slots]
+        assert [(slot.start_s, slot.end_s) for slot in plain.slots] == [
+            (slot.start_s, slot.end_s) for slot in bracketed.slots
+        ]
+
+    def test_only_the_surfaces_and_the_flag_move(self) -> None:
+        """Column membership, order, timings, extents, outcomes and agreement are all fixed."""
+        plain = _align(*self._pair())
+        bracketed = _align(*self._pair(), onomatopoeic=self.LEXICON)
+        assert len(plain.words) == len(bracketed.words)
+        for before, after in zip(plain.words, bracketed.words):
+            assert (before.index, before.outcome, before.agreement) == (after.index, after.outcome, after.agreement)
+            assert before.sources == after.sources
+            assert before.readings == after.readings
+            assert before.timings == after.timings
+            assert before.extent == after.extent
+            assert before.onset_spread_s == after.onset_spread_s
+            assert before.offset_spread_s == after.offset_spread_s
+            assert before.temporal_uncertainty_s == after.temporal_uncertainty_s
+            assert [v.sources for v in before.variants] == [v.sources for v in after.variants]
+            assert [v.share for v in before.variants] == [v.share for v in after.variants]
+        assert _texts(plain) == ["I", "cough", "khh", "hello"]
+        assert _texts(bracketed) == ["I", "[COUGH]", "[KHH]", "hello"]
+        assert [word.bracketed for word in bracketed.words] == [False, True, True, False]
+
+    def test_the_two_recognizers_do_not_agree_just_because_both_are_bracketed(self) -> None:
+        """``bracketed_form`` brackets each token's own key, so two spellings stay two readings."""
+        bracketed = _align(*self._pair(), onomatopoeic=self.LEXICON)
+        variant = bracketed.words[2]
+        assert variant.outcome == "variant"
+        assert [v.text for v in variant.variants] == ["[KHH]", "[HACK]"]
+        assert bracketed.provenance["outcomes"] == _align(*self._pair()).provenance["outcomes"]
+
+
+class TestReadingOneStoredColumnAgain:
+    """What an extend pass does to a finished run's words, at the level of one column."""
+
+    def _stored(self, onomatopoeic: set[str] | None = None) -> tuple[ConsensusWord, ...]:
+        """The stream a run under this vocabulary would have stored.
+
+        Args:
+            onomatopoeic: The vocabulary the run was made under.
+
+        Returns:
+            The words.
+        """
+        a = _timed("a", [("I", 0.1, 0.2), ("cough", 0.3, 0.45), ("khh", 0.6, 0.7)])
+        b = _timed("b", [("I", 0.11, 0.21), ("Cough,", 0.31, 0.46), ("hack", 0.61, 0.72)])
+        return _align(a, b, onomatopoeic=onomatopoeic).words
+
+    def test_a_word_round_trips_through_its_stored_attributes(self) -> None:
+        """The attribute writer and the reader are inverses, so a store loses nothing."""
+        for word in self._stored():
+            assert word_from_attributes(word_attributes(word), word.extent) == word
+
+    def test_re_reading_under_the_vocabulary_gives_the_run_that_vocabulary_would_have_made(self) -> None:
+        """The extend path and a fresh run under the cough lexicon mint the same words."""
+        fresh = self._stored({"cough", "khh", "hack"})
+        reread = [rebracket(word, onomatopoeic={"cough", "khh", "hack"}, n_sources=2) for word in self._stored()]
+        assert [result.word for result in reread] == list(fresh)
+        assert [result.word.bracketed for result in reread] == [False, True, True]
+
+    def test_re_reading_under_the_vocabulary_it_was_made_under_changes_nothing(self) -> None:
+        """Convergence: a second pass over an already-re-flagged word is the identity."""
+        lexicon = {"cough", "khh", "hack"}
+        for word in self._stored(lexicon):
+            assert rebracket(word, onomatopoeic=lexicon, n_sources=2).word == word
+
+    def test_a_column_that_does_not_read_back_as_the_alignment_recorded_it_is_refused(self) -> None:
+        """A word whose agreement cannot be reproduced was not rebuilt from its own readings."""
+        word = self._stored()[0]
+        with pytest.raises(ValueError, match="reads back as"):
+            rebracket(replace(word, agreement=0.5), onomatopoeic=set(), n_sources=2)
+
+    def test_the_override_count_is_reported_beside_the_word(self) -> None:
+        """A bracketed token outvoting a plain twin is what ``bracket_overrides_n`` counts."""
+        mixed = _align(_timed("a", [("[KHH]", 0.1, 0.2)]), _timed("b", [("khh", 0.11, 0.21)])).words[0]
+        assert rebracket(mixed, onomatopoeic=set(), n_sources=2).bracket_overrides == 1
+        assert rebracket(mixed, onomatopoeic={"khh"}, n_sources=2).bracket_overrides == 0
+
+
+class TestDegenerateRecognizerRuns:
+    """A decoder loop is marked, so readers treat it as unreliable rather than as content."""
+
+    BOUNDS: dict[str, Any] = {"chars_min": 60, "unit_chars_max": 8, "repeats_min": 10.0}
+
+    def test_a_long_or_looping_token_is_degenerate(self) -> None:
+        """One unbroken token past the length bound, or one unit repeated past the repeat bound."""
+        assert degenerate_token("Twi" + "twi" * 30, **self.BOUNDS)
+        assert degenerate_token("-".join("AWZ" * 12), **self.BOUNDS)
+        assert degenerate_token("x" * 60, **self.BOUNDS)
+
+    def test_ordinary_words_and_short_stutters_are_not(self) -> None:
+        """A stutter of a few repeats is the participant's speech, not a loop."""
+        for token in ("hello", "p-p-p-paper", "hahaha", "K-N-O-Z-D", "antidisestablishmentarianism", ""):
+            assert not degenerate_token(token, **self.BOUNDS)
+
+    def test_the_packaged_bounds_load(self) -> None:
+        """``data/asr_degenerate.yaml`` carries the three bounds."""
+        assert set(degenerate_parameters()) == {"chars_min", "unit_chars_max", "repeats_min"}
+
+    def test_a_column_every_reading_of_which_loops_is_degenerate(self) -> None:
+        """Both recognizers' readings are runs: the word is degenerate and round-trips."""
+        loop = "awz" * 12
+        a = replace(_source("a", f"one {loop}"), degenerate=frozenset({1}))
+        b = replace(_source("b", f"one {loop}"), degenerate=frozenset({1}))
+        consensus = _align(a, b)
+        assert [word.degenerate for word in consensus.words] == [False, True]
+        assert consensus.provenance["degenerate_n"] == 1
+        stored = word_attributes(consensus.words[1])
+        assert stored["degenerate"] is True
+        assert "degenerate" not in word_attributes(consensus.words[0]), "an ordinary word keeps its stored shape"
+        assert word_from_attributes(stored, consensus.words[1].extent) == consensus.words[1]
+
+    def test_a_reading_one_recognizer_looped_does_not_win_the_column(self) -> None:
+        """Where one recognizer read a word and the other a loop, the word is the surface."""
+        a = replace(_timed("a", [("zzzzzzzzzzzz", 0.0, 0.4)]), degenerate=frozenset({0}))
+        b = _timed("b", [("table", 0.0, 0.4)])
+        [word] = _align(a, b).words
+        assert word.text == "table"
+        assert word.degenerate_sources == ("a",)
+        assert word.degenerate is False
+
+
+class TestUntimedSpans:
+    """A missing span stays out of the time fit; a point span is a location; a lone untimed reading is unconfirmed."""
+
+    WIDTH = 0.32
+
+    def test_a_missing_span_is_none_zero_or_inverted_and_a_point_is_not(self) -> None:
+        """``(0, 0)``, None and an end before its start carry no timing; a point past zero does."""
+        assert missing_span(None, 1.0) and missing_span(0.0, 0.0) and missing_span(2.0, 1.0)
+        assert missing_span(float("nan"), 1.0)
+        assert not missing_span(1.0, 1.0) and not missing_span(0.0, 0.4)
+
+    def test_a_point_span_is_read_over_the_fitted_width(self) -> None:
+        """A point is centred in a window of ``data/word_timing.yaml``'s width, floored at zero."""
+        assert word_timing_parameters()["point_width_s"] == pytest.approx(self.WIDTH)
+        assert located_span(2.0, 2.0) == pytest.approx((2.0 - self.WIDTH / 2, 2.0 + self.WIDTH / 2))
+        assert located_span(0.05, 0.05) == pytest.approx((0.0, 0.05 + self.WIDTH / 2))
+        assert located_span(1.0, 1.5) == (1.0, 1.5)
+        assert located_span(0.0, 0.0) is None
+
+    def test_a_point_span_near_the_end_is_shifted_inside_the_duration(self) -> None:
+        """A point 0.01 s before the end keeps its full width, moved back off the end rather than cut."""
+        start, end = cast(tuple[float, float], located_span(4.99, 4.99, duration_s=5.0))
+        assert end == pytest.approx(5.0) and end <= 5.0
+        assert end - start == pytest.approx(self.WIDTH)
+
+    def test_a_point_span_near_the_start_is_shifted_inside_the_duration(self) -> None:
+        """With the duration known the window is shifted off zero, not floored there."""
+        assert located_span(0.05, 0.05, duration_s=5.0) == pytest.approx((0.0, self.WIDTH))
+
+    def test_a_recording_shorter_than_the_window_bounds_it_on_both_sides(self) -> None:
+        """Only where the duration cannot hold the window is it narrowed, to the whole recording."""
+        assert located_span(0.1, 0.1, duration_s=0.2) == pytest.approx((0.0, 0.2))
+
+    def test_the_consensus_extent_of_a_point_at_the_end_stays_inside_the_duration(self) -> None:
+        """The stored extent is what SPEECH slices; it must not reach past the audio."""
+        a = _timed("a", [("one", 1.0, 1.4), ("two", 4.99, 4.99)])
+        b = _timed("b", [("one", 1.0, 1.4), ("two", 4.99, 4.99)])
+        two = align_sources([a, b], onomatopoeic=set(), duration_s=5.0).words[1]
+        assert two.extent[1] <= 5.0
+        assert two.extent == pytest.approx((5.0 - self.WIDTH, 5.0))
+        assert two.timings == {"a": (4.99, 4.99), "b": (4.99, 4.99)}
+
+    def test_a_point_span_places_its_word(self) -> None:
+        """A word whose every reading is a point gets a positive extent around it."""
+        a = _timed("a", [("one", 1.0, 1.4), ("two", 2.0, 2.0)])
+        b = _timed("b", [("one", 1.0, 1.4), ("two", 2.0, 2.0)])
+        two = _align(a, b).words[1]
+        assert two.extent[1] > two.extent[0]
+        assert two.extent == pytest.approx((2.0 - self.WIDTH / 2, 2.0 + self.WIDTH / 2))
+        assert two.timings == {"a": (2.0, 2.0), "b": (2.0, 2.0)}
+        assert two.untimed_sources == () and not two.unconfirmed
+
+    def test_a_zero_span_never_reaches_the_fit_or_the_timings(self) -> None:
+        """A ``(0, 0)`` member beside a timed one: the word sits where the timed reading puts it."""
+        a = _timed("a", [("one", 5.0, 5.4), ("two", 6.0, 6.4)])
+        b = _timed("b", [("one", 0.0, 0.0), ("two", 6.0, 6.4)])
+        one, two = _align(a, b).words
+        assert one.extent == pytest.approx((5.0, 5.4))
+        assert one.timings == {"a": (5.0, 5.4)}
+        assert one.untimed_sources == ("b",) and not one.unconfirmed
+        assert one.temporal_uncertainty_s == pytest.approx(0.0)
+        assert two.extent == pytest.approx((6.0, 6.4))
+
+    def test_a_lone_untimed_reading_is_unconfirmed_and_unlocated(self) -> None:
+        """Only one recogniser read it and it carries no span: a zero-length extent where the stream stands."""
+        a = _timed("a", [("one", 5.0, 5.4), ("two", 6.0, 6.4)])
+        b = _timed("b", [("one", 5.0, 5.4), ("extra", 0.0, 0.0), ("two", 6.0, 6.4)])
+        consensus = _align(a, b)
+        [extra] = [word for word in consensus.words if word.text == "extra"]
+        assert extra.unconfirmed and extra.untimed_sources == ("b",)
+        assert extra.extent[0] == extra.extent[1] == pytest.approx(5.4)
+        assert extra.temporal_uncertainty_s is None and extra.timings == {}
+        assert consensus.provenance["unconfirmed_n"] == 1 and consensus.provenance["unlocated_n"] == 1
+        attributes = word_attributes(extra)
+        assert attributes["unconfirmed"] is True and attributes["untimed_sources"] == ["b"]
+        assert word_from_attributes(attributes, extra.extent) == extra
+        assert "unconfirmed" not in word_attributes(consensus.words[0])
+
+    def test_a_word_both_recognisers_read_without_timing_is_confirmed(self) -> None:
+        """Two readings confirm a word even where neither places it; it stays unlocated."""
+        a = _timed("a", [("one", 5.0, 5.4), ("two", 0.0, 0.0)])
+        b = _timed("b", [("one", 5.0, 5.4), ("two", None, None)])  # type: ignore[list-item]
+        two = _align(a, b).words[1]
+        assert not two.unconfirmed and set(two.untimed_sources) == {"a", "b"}
+        assert two.extent[0] == two.extent[1]
+
+    def test_a_whole_file_aligner_failure_is_named(self) -> None:
+        """Every word of one recogniser at ``(0, 0)``: it is ``aligner_failed`` and its insertions are unconfirmed."""
+        timed = _timed("asr_crisperwhisper", [("in", 1.0, 1.3), ("out", 2.0, 2.3)])
+        failed = _timed("asr_qwen", [("in", 0.0, 0.0), ("and", 0.0, 0.0), ("out", 0.0, 0.0)])
+        consensus = _align(timed, failed)
+        assert consensus.provenance["aligner_failed"] == ["asr_qwen"]
+        assert consensus.provenance["untimed_members"] == {"asr_crisperwhisper": 0, "asr_qwen": 3}
+        by_text = {word.text: word for word in consensus.words}
+        assert by_text["in"].extent == pytest.approx((1.0, 1.3)) and not by_text["in"].unconfirmed
+        assert by_text["out"].extent == pytest.approx((2.0, 2.3))
+        assert by_text["and"].unconfirmed
+        assert all(word.extent[0] >= 1.0 for word in consensus.words), "no extent is stretched to zero"
+
+    def test_rebracketing_a_column_with_an_untimed_member(self) -> None:
+        """A stored column whose member carries no span re-reads without its timing."""
+        a = _timed("a", [("one", 5.0, 5.4)])
+        b = _timed("b", [("one", 0.0, 0.0)])
+        [word] = _align(a, b).words
+        stored = word_from_attributes(word_attributes(word), word.extent)
+        assert rebracket(stored, onomatopoeic=set(), n_sources=2).word == word

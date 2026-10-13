@@ -1,0 +1,44 @@
+{
+    "assertions_by_branch": {
+        "AIRWAY": 11359,
+        "REDACT": 5637,
+        "SPEECH": 409083,
+        "VOICE": 3211
+    },
+    "assertions_by_branch_verb_name": {
+        "AIRWAY|deviate|off_task_extent": 10813,
+        "AIRWAY|deviate|truncation": 546,
+        "REDACT|exempt|<none>": 5637,
+        "SPEECH|contest|lexical_transcript": 89245,
+        "SPEECH|deviate|filler": 1216,
+        "SPEECH|deviate|off_task_extent": 3429,
+        "SPEECH|deviate|omission": 13430,
+        "SPEECH|deviate|repeat_reading": 483,
+        "SPEECH|deviate|repeated_item": 479,
+        "SPEECH|deviate|stimulus_mismatch": 28547,
+        "SPEECH|deviate|truncation": 488,
+        "SPEECH|label|<none>": 271766,
+        "VOICE|deviate|lexical_content": 1120,
+        "VOICE|deviate|omission": 1141,
+        "VOICE|deviate|repeat_attempt": 820,
+        "VOICE|deviate|sweep_direction_mismatch": 96,
+        "VOICE|deviate|truncation": 34
+    },
+    "assertions_with_extent_by_branch": {
+        "AIRWAY": 11359,
+        "REDACT": 5637,
+        "SPEECH": 399282,
+        "VOICE": 2070
+    },
+    "note": "branches_present counts only verb deviate/contest (typed findings)",
+    "parse_errors": {},
+    "recordings_total": 62529,
+    "recordings_with_any_assertion": 23014,
+    "recordings_with_assertion_by_branch": {
+        "AIRWAY": 4156,
+        "SPEECH": 17577,
+        "VOICE": 1281
+    },
+    "recordings_with_speech_or_voice_assertion": 18858,
+    "root": "/orcd/scratch/bcs/002/satra/triage_design_20260919/run/out"
+}

@@ -166,7 +166,7 @@ def _probe_function(
         reqs.append(f"{dep}{ver_spec}")
 
     try:
-        venv_dir = ensure_venv(venv_name, reqs, python_version=python_version)
+        venv_dir = ensure_venv(venv_name, reqs, python_version=python_version, compile_lock=True)
         python = venv_python(venv_dir)
         result = subprocess.run(
             [python, "-c", test_script],

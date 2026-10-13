@@ -383,3 +383,32 @@ def test_an_inserted_filler_survives_and_does_not_duplicate_its_neighbour() -> N
     assert filler["sources"] == ["crisper"], "the filler is attributed to the model that heard it"
     assert filler["coverage"] < 1.0, "and marked as witnessed by only part of the ensemble"
     assert sum(1 for w in out if w["text"] == "think") == 1, "the neighbour must not be duplicated"
+
+
+def test_a_bracketed_reading_beats_a_plain_one_for_display_text() -> None:
+    """CrisperWhisper's "[COUGH]" and Qwen's "cough" normalize to one vote, one slot.
+
+    Which raw form got *displayed*, though, used to be whichever model the tally visited first —
+    iteration order, not a choice. The bracketed form must win regardless of order.
+    """
+    out = fuse_word_streams({"crisper": [_w("[COUGH]", 1.0, 1.4)], "qwen": [_w("cough", 1.0, 1.4)]})
+    assert len(out) == 1, "one normalized vote, one word — not two competing readings"
+    assert out[0]["text"] == "[COUGH]"
+    assert out[0]["existence_confidence"] == pytest.approx(1.0), "they agree once brackets are not the difference"
+    assert sorted(out[0]["sources"]) == ["crisper", "qwen"]
+
+
+def test_a_bracketed_reading_still_wins_when_the_plain_form_is_seen_first() -> None:
+    """Members are visited in (mid, start, model)-sorted order, tie-broken alphabetically by model.
+
+    A plain-word model sorting before the bracketing one is exactly the case that used to leave
+    "display" on the plain form, since it was whichever member was seen first.
+    """
+    out = fuse_word_streams({"aaa_plain": [_w("cough", 1.0, 1.4)], "zzz_brackets": [_w("[COUGH]", 1.0, 1.4)]})
+    assert out[0]["text"] == "[COUGH]"
+
+
+def test_two_plain_readings_are_unaffected_by_the_bracket_rule() -> None:
+    """The bracket preference must not fire, and must not change anything, when neither side brackets."""
+    out = fuse_word_streams({"m1": [_w("cough", 1.0, 1.4)], "m2": [_w("cough", 1.0, 1.4)]})
+    assert out[0]["text"] == "cough"

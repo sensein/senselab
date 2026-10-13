@@ -1,0 +1,7 @@
+# A recognizer token that is a decoder loop rather than a word (consensus.degenerate_token). Measured over
+# 207,269 hypothesis words of 6,000 r18 recordings. Derivation: specs/20261007-task-events-in-background/design.md
+# ("Degenerate recognizer runs").
+version: 1
+chars_min: 60          # letters and digits in one token at or over this: Qwen3-ASR 2 of 102,626, CrisperWhisper 201 of 104,643
+unit_chars_max: 8      # the longest repeating unit looked for
+repeats_min: 10        # back-to-back repeats of one unit at or over this: Qwen3-ASR 3 of 102,626, CrisperWhisper 216 of 104,643

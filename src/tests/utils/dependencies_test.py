@@ -65,6 +65,24 @@ def test_cached_commit_hash_raises_rather_than_returning_a_ref(tmp_path: Path, m
         _get_cached_commit_hash("org/never-downloaded", "main")
 
 
+def test_a_newline_suffixed_sha_is_not_passed_through(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Unstripped subprocess stdout must not ride the full-SHA shortcut into provenance."""
+    from senselab.utils.model_revision import RevisionResolutionError
+
+    monkeypatch.setenv("HF_HUB_CACHE", str(tmp_path / "hub"))
+    with pytest.raises(RevisionResolutionError):
+        _get_cached_commit_hash("org/model", "e" * 40 + "\n")
+
+
+def test_point_ref_at_does_not_mistake_a_newline_suffixed_sha_for_a_commit(tmp_path: Path) -> None:
+    """Only a genuine 40-hex commit skips the pointer write; a newline-suffixed one is a ref name."""
+    sha = "c" * 40
+    dep._point_ref_at(tmp_path, sha, sha)
+    assert not (tmp_path / "refs").exists(), "a commit needs no refs/ pointer"
+    dep._point_ref_at(tmp_path, sha + "\n", sha)
+    assert (tmp_path / "refs").is_dir(), "a non-commit ref must get its pointer written"
+
+
 def test_resolve_model_returns_sha_and_snapshot_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """resolve_model returns the immutable SHA + local snapshot dir without re-downloading a cached model."""
     sha = "b" * 40
@@ -216,10 +234,10 @@ def test_heartbeat_lock_class_removed() -> None:
 def test_ensure_hf_model_locks_via_shared_file_lock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The slow path in ensure_hf_model must acquire via SharedFileLock, not a bare filelock.FileLock.
 
-    SharedFileLock is what stamps a JSON holder identity (user/host/pid) into the lock file
-    while it is held; a bare `filelock.FileLock` never writes any content there. Reading that
-    identity back from *inside* the locked `snapshot_download` call proves the real class is
-    wired in as the thing serialising the download, not merely imported and unused.
+    SharedFileLock is what stamps a JSON holder identity (user/host/pid) into the ``.holder``
+    file while it is held; a bare `filelock.FileLock` never writes any content there. Reading
+    that identity back from *inside* the locked `snapshot_download` call proves the real class
+    is wired in as the thing serialising the download, not merely imported and unused.
     """
     monkeypatch.setattr(dep, "_senselab_cache_dir", lambda: tmp_path)
     monkeypatch.setattr(dep, "is_hf_model_cached", lambda *a, **k: False)
@@ -231,8 +249,8 @@ def test_ensure_hf_model_locks_via_shared_file_lock(tmp_path: Path, monkeypatch:
     captured: dict = {}
 
     def fake_snapshot_download(**kwargs: object) -> None:
-        lock_path = tmp_path / f"{dep._safe_key('org/model', 'main')}.lock"
-        captured["holder"] = lock_holder(lock_path)
+        holder_path = tmp_path / f"{dep._safe_key('org/model', 'main')}.holder"
+        captured["holder"] = lock_holder(holder_path)
 
     monkeypatch.setattr("huggingface_hub.snapshot_download", fake_snapshot_download)
 

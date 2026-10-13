@@ -45,6 +45,7 @@ from senselab.utils.subprocess_venv import (
     _clean_subprocess_env,
     ensure_venv,
     parse_subprocess_result,
+    stage_portable_audio_io,
     venv_python,
 )
 
@@ -156,11 +157,12 @@ import sys
 from pathlib import Path
 
 import numpy as np
-import soundfile as sf
 import torch
 from transformers import AutoConfig, pipeline
 
 args = json.loads(sys.stdin.read())
+sys.path.insert(0, args["io_dir"])
+from portable_audio_io import read_audio
 audio_paths = args["audio_paths"]
 model_id = args["model_id"]
 revision = args["revision"]
@@ -177,7 +179,7 @@ pipe = pipeline(
 
 results = []
 for audio_path in audio_paths:
-    data, sr = sf.read(audio_path, dtype="float32")
+    data, sr = read_audio(audio_path, channels_first=False)
     output = pipe({"array": data, "sampling_rate": sr})
     results.append(output)
 
@@ -607,8 +609,8 @@ def _classify_continuous_ser_venv(
 
         audio_paths = []
         for i, audio in enumerate(audios):
-            path = str(tmp / f"audio_{i}.flac")
-            audio.save_to_file(path, format="flac")
+            path = str(tmp / f"audio_{i}.wav")
+            audio.save_to_file(path)
             audio_paths.append(path)
 
         # Forward the resolved commit SHA to the worker, never the ref -- it has no senselab
@@ -628,6 +630,7 @@ def _classify_continuous_ser_venv(
                 "revision": revision,
                 "device": device_type.value,
                 "output_dir": str(tmp),
+                "io_dir": stage_portable_audio_io(tmp),
             }
         )
 

@@ -1,0 +1,93 @@
+# Task content for a list task whose category is "City names": a listed word matching an item is the task's own
+# content, so the residue never hands it to the PII detectors and no mask covers it. A starting list,
+# not an exhaustive one: an item missing here is scanned as before. Derivation and counts are in
+# specs/20260929-task-check-alignment/design.md (section D).
+category: City names
+items:
+- amsterdam
+- athens
+- atlanta
+- austin
+- baltimore
+- bangkok
+- barcelona
+- beijing
+- berlin
+- boston
+- brampton
+- brussels
+- budapest
+- buenos aires
+- cairo
+- calgary
+- chicago
+- cleveland
+- dallas
+- delhi
+- denver
+- detroit
+- dubai
+- dublin
+- edmonton
+- florence
+- halifax
+- hamilton
+- hong kong
+- honolulu
+- houston
+- istanbul
+- jerusalem
+- kingston
+- kitchener
+- las vegas
+- lima
+- lisbon
+- london
+- los angeles
+- madrid
+- manchester
+- melbourne
+- mexico city
+- miami
+- milan
+- minneapolis
+- mississauga
+- montreal
+- moscow
+- mumbai
+- munich
+- nashville
+- new orleans
+- new york
+- ottawa
+- paris
+- philadelphia
+- phoenix
+- pittsburgh
+- portland
+- prague
+- quebec
+- regina
+- rio
+- rome
+- san diego
+- san francisco
+- santiago
+- seattle
+- seoul
+- shanghai
+- singapore
+- st louis
+- stockholm
+- sydney
+- tampa
+- tokyo
+- toronto
+- vancouver
+- venice
+- victoria
+- vienna
+- warsaw
+- washington
+- waterloo
+- winnipeg

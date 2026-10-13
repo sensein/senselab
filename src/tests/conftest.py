@@ -156,3 +156,9 @@ def cpu_cuda_device(request: pytest.FixtureRequest) -> DeviceType:
     only for models verified to work on MPS.
     """
     return request.param
+
+
+@pytest.fixture(autouse=True)
+def _isolated_result_cache(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Give every test its own empty result cache, so no test reads another's entries."""
+    monkeypatch.setenv("SENSELAB_RESULT_CACHE", str(tmp_path_factory.mktemp("result-cache")))

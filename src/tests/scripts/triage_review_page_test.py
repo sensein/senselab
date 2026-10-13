@@ -1,0 +1,285 @@
+"""Tests for ``scripts/triage_review_page.py``: extract a corpus, then render the page from the extract."""
+
+from __future__ import annotations
+
+import importlib.util
+import json
+import sys
+from pathlib import Path
+from types import ModuleType
+
+ROOT = Path(__file__).resolve().parents[3]
+
+
+def _module(name: str, path: Path) -> ModuleType:
+    spec = importlib.util.spec_from_file_location(name, path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+script = _module("triage_review_page", ROOT / "scripts" / "triage_review_page.py")
+fixtures = _module("review_page_fixtures", ROOT / "src/tests/audio/workflows/triage/review_page_test.py")
+
+
+def test_extract_then_render_writes_a_page_over_the_corpus(tmp_path: Path) -> None:
+    """One recording extracted, rendered into index.html and one side file, with the mark rules carried."""
+    corpus = tmp_path / "corpus"
+    fixtures._run_root(corpus)
+    extract = tmp_path / "review.jsonl"
+    assert script.main(["extract", str(corpus), "--out", str(extract), "--workers", "1"]) == 0
+    lines = extract.read_text().splitlines()
+    assert json.loads(lines[0]) == {"schema": script.EXTRACT_SCHEMA, "version": script.EXTRACT_VERSION}
+    record = json.loads(lines[1])
+    assert record["verdict"] == "pass" and record["speech"] is None
+    assert script.main(["render", str(extract), "--out", str(tmp_path / "page"), "--title", "sample"]) == 0
+    page = (tmp_path / "page" / "index.html").read_text()
+    assert "<title>sample</title>" in page and "mark.pii" in page
+    assert (tmp_path / "page" / "data" / "shard-0000.parquet").is_file()
+    assert (tmp_path / "page" / "data" / "shard-0000.js").is_file()
+    assert (tmp_path / "page" / "vendor" / "hyparquet.js").is_file()
+
+
+def test_a_manifest_reads_only_the_run_roots_it_lists(tmp_path: Path) -> None:
+    """``--manifest`` replaces the walk."""
+    corpus = tmp_path / "corpus"
+    run_root = fixtures._run_root(corpus)
+    manifest = tmp_path / "roots.txt"
+    manifest.write_text(f"{run_root}\n")
+    out = tmp_path / "review.jsonl"
+    summary = script.extract(corpus, out, 1, manifest=manifest)
+    assert summary["run_roots"] == 1 and summary["recordings"] == 1
+    assert len(script.load(out)) == 1
+
+
+def test_a_listen_set_renders_only_its_stems_with_their_checks(tmp_path: Path, capsys: object) -> None:
+    """``--stems`` keeps the listed recordings, carries each one's check columns and names the listen set."""
+    corpus = tmp_path / "corpus"
+    fixtures._run_root(corpus)
+    extract = tmp_path / "review.jsonl"
+    script.extract(corpus, extract, 1)
+    header, line = extract.read_text().splitlines()[:2]
+    other = json.loads(line)
+    other["stem"] = "sub-ffff_ses-02_task-harvard-sentences"
+    extract.write_text("\n".join([header, line, json.dumps(other)]) + "\n")
+    listed = tmp_path / "extent_check_listen.tsv"
+    listed.write_text(
+        "stem\textent_start_s\tlex_cov\towner_extent_holds_task\towner_note\n"
+        f"{fixtures.STEM}\t0.5\t0.9\t\t\n"
+        "sub-gggg_ses-01_task-absent\t1.0\t\t\t\n"
+    )
+    page_dir = tmp_path / "page"
+    argv = ["render", str(extract), "--out", str(page_dir), "--stems", str(listed), "--listen-set", "extent_check"]
+    assert script.main([*argv, "--labels", "yes,no,partly", "--question", "does the extent hold the task?"]) == 0
+    summary = json.loads(capsys.readouterr().out)  # type: ignore[attr-defined]
+    assert summary["recordings"] == 1 and summary["listed"] == 2 and summary["listed_not_in_extract"] == 1
+    index = fixtures.page_module.read_index((page_dir / "index.html").read_text())
+    assert index["build"]["listen"] == {
+        "name": "extent_check",
+        "question": "does the extent hold the task?",
+        "labels": ["yes", "no", "partly"],
+        "columns": ["extent_start_s", "lex_cov"],
+    }
+    assert index["cols"]["stem"] == [fixtures.STEM]
+    assert index["cols"]["checks"] == [["0.5", "0.9"]]
+
+
+def test_a_plain_stem_list_is_a_listen_set_without_checks(tmp_path: Path) -> None:
+    """One stem per line, no header: the recordings are kept and no check columns are shown."""
+    listed = tmp_path / "stems.txt"
+    listed.write_text("sub-a_ses-1_task-x\nsub-b_ses-1_task-y\n")
+    listen = script.listen_set(listed, "stems", ["pass", "review", "discard"], "your decision")
+    assert listen.columns == () and set(listen.checks) == {"sub-a_ses-1_task-x", "sub-b_ses-1_task-y"}
+
+
+def test_a_listen_set_marks_a_proposed_extent_and_asks_its_direction(tmp_path: Path) -> None:
+    """``proposed_start_s``/``proposed_end_s`` become the ``proposed_extent`` column; directions join the listen."""
+    corpus = tmp_path / "corpus"
+    fixtures._run_root(corpus)
+    extract = tmp_path / "review.jsonl"
+    script.extract(corpus, extract, 1)
+    listed = tmp_path / "r37.tsv"
+    listed.write_text(f"stem\tstratum\tproposed_start_s\tproposed_end_s\n{fixtures.STEM}\tA1\t0.25\t1.5\n")
+    page_dir = tmp_path / "page"
+    argv = ["render", str(extract), "--out", str(page_dir), "--stems", str(listed), "--listen-set", "r37_extents"]
+    assert script.main([*argv, "--labels", "proposed_better,same", "--directions", "too_narrow,too_wide,ok"]) == 0
+    index = fixtures.page_module.read_index((page_dir / "index.html").read_text())
+    assert index["build"]["listen"]["directions"] == ["too_narrow", "too_wide", "ok"]
+    assert index["cols"]["proposed_extent"] == [[0.25, 1.5]]
+    assert index["cols"]["checks"] == [["A1", "0.25", "1.5"]]
+
+
+def test_a_speech_task_carries_its_marked_transcript(tmp_path: Path, monkeypatch: object) -> None:
+    """The free-speech page's reader supplies the transcript view; the page keeps its HTML and findings."""
+    fs = script._free_speech_page()
+    row = {
+        "w": [["my", 0, -1], ["name", 0, -1], ["is", 0, -1], ["Ada", 0, 0]],
+        "f": [{"k": "k0", "c": ["NAME"], "s": "masked", "d": ["gliner"], "brk": 0, "tx": 0, "nt": 0, "stim": 0}],
+        "pii": [{"c": "NAME", "s": "gliner", "h": "Ada", "stim": 0}],
+        "rg": None,
+        "why": "redacted",
+        "rwhy": "masked a name",
+        "hk": None,
+        "np": [],
+        "d": {"llm": {"status": "clean"}},
+        "lang": "en",
+    }
+    monkeypatch.setattr(fs, "recording_record", lambda run_root, families: row)  # type: ignore[attr-defined]
+    _asr_store(tmp_path, ["my", "name", "is", "Ada"])
+    view = script.speech_view(tmp_path)
+    assert view is not None
+    assert 'class="pii u-' in view["html"] and "Ada" in view["html"]
+    assert view["entries"] == row["w"] and view["marks"] == row["f"]
+    assert view["pii"][0]["h"] == "Ada" and view["llm"] == {"status": "clean"}
+
+
+def _asr_store(run_root: Path, consensus: list[str]) -> None:
+    """A store with two recognisers' transcripts and the consensus words over them."""
+
+    def entity(eid: str, prov: str, attributes: dict) -> dict:
+        return {"record": "entity", "id": eid, "prov_type": prov, "extent": [0.0, 1.0], "attributes": attributes}
+
+    lines = [
+        entity(
+            "h0",
+            "measurement",
+            {
+                "role": "asr_hypothesis",
+                "source": "whisper",
+                "model_id": "openai/whisper-large-v3-turbo",
+                "transcript": "my name is Ada",
+                "words": [
+                    {"text": text, "start": 0.25 * i, "end": 0.25 * i + 0.2, "score": None}
+                    for i, text in enumerate(["my", "name", "is", "Ada"])
+                ],
+            },
+        ),
+        entity(
+            "h1",
+            "measurement",
+            {
+                "role": "asr_hypothesis",
+                "source": "canary",
+                "model_id": "nvidia/canary-qwen-2.5b",
+                "transcript": "my name is Ida",
+                "words": [{"text": "Ida", "start": 0.75, "end": 0.95, "score": None}, {"text": " ", "start": 1.0}],
+            },
+        ),
+    ]
+    for index, text in enumerate(consensus):
+        other = "Ida" if text == "Ada" else text
+        lines.append(
+            entity(
+                f"w{index}",
+                "word",
+                {
+                    "index": index,
+                    "text": text,
+                    "outcome": "variant" if other != text else "agreement",
+                    "agreement": 0.5 if other != text else 1.0,
+                    "sources": ["whisper", "canary"],
+                    "readings": {"whisper": text, "canary": other},
+                },
+            )
+        )
+    (run_root / "run").mkdir(parents=True, exist_ok=True)
+    (run_root / "run" / "store.jsonl").write_text("\n".join(json.dumps(line) for line in lines) + "\n")
+
+
+def test_the_consensus_transcript_carries_each_word_s_agreement_and_every_model(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    """Consensus words wrap their position, PII marks stay around them, and each model's transcript is named."""
+    fs = script._free_speech_page()
+    row = {
+        "w": [["my", 0, -1], ["name", 0, -1], ["is", 0, -1], ["Ada", 0, 0]],
+        "f": [{"k": "k0", "c": ["NAME"], "s": "masked", "d": ["gliner"], "brk": 0, "tx": 0, "nt": 0, "stim": 0}],
+        "ss": None,
+    }
+    monkeypatch.setattr(fs, "recording_record", lambda run_root, families: row)  # type: ignore[attr-defined]
+    _asr_store(tmp_path, ["my", "name", "is", "Ada"])
+    view = script.speech_view(tmp_path)
+    assert view is not None
+    assert view["shown"] == {"kind": "consensus", "source": None}
+    assert [m["model_id"] for m in view["models"]] == ["openai/whisper-large-v3-turbo", "nvidia/canary-qwen-2.5b"]
+    assert view["words"][3] == [0.5, "variant", ["Ada", "Ida"], 0.0, 1.0, "Ada"]
+    assert view["own"][1] == {
+        "source": "canary",
+        "model_id": "nvidia/canary-qwen-2.5b",
+        "text": "my name is Ida",
+        "words": [[0.75, 0.95, "Ida"]],
+    }
+    assert view["own"][0]["words"][3] == [0.75, 0.95, "Ada"]
+    assert '<span class="w" data-i="3">Ada</span></mark>' in view["html"]
+    assert view["html"].count('class="w"') == 4
+
+
+def test_without_consensus_words_the_one_model_shown_is_named(tmp_path: Path, monkeypatch: object) -> None:
+    """The free-speech reader's single-model fallback is labelled with that model, its words unwrapped."""
+    fs = script._free_speech_page()
+    row = {"w": [["hello", 0, -1]], "f": [], "ss": {"src": "whisper", "n": 2}}
+    monkeypatch.setattr(fs, "recording_record", lambda run_root, families: row)  # type: ignore[attr-defined]
+    _asr_store(tmp_path, [])
+    view = script.speech_view(tmp_path)
+    assert view is not None
+    assert view["shown"] == {"kind": "model", "source": "whisper"}
+    assert 'class="w"' not in view["html"] and view["words"] == []
+
+
+def _add_asr(run_root: Path, consensus: list[str]) -> None:
+    """Append ``_asr_store``'s recognisers and consensus words to an existing store."""
+    scratch = run_root / "asr"
+    _asr_store(scratch, consensus)
+    store = run_root / "run" / "store.jsonl"
+    store.write_text(store.read_text() + (scratch / "run" / "store.jsonl").read_text())
+
+
+def test_an_airway_recording_with_consensus_words_carries_its_transcript(tmp_path: Path) -> None:
+    """A breath task whose store holds consensus words carries them, every model's reading and the marks."""
+    corpus = tmp_path / "corpus"
+    run_root = fixtures._run_root(corpus)
+    _add_asr(run_root, ["my", "name", "is", "Ada"])
+    view = script.speech_view(run_root)
+    assert view is not None
+    assert view["shown"] == {"kind": "consensus", "source": None}
+    assert len(view["words"]) == 4 and len(view["models"]) == 2
+    assert view["html"].count('class="w"') == 4
+    extract = tmp_path / "review.jsonl"
+    assert script.main(["extract", str(corpus), "--out", str(extract), "--workers", "1"]) == 0
+    record = json.loads(extract.read_text().splitlines()[1])
+    assert record["branch"] == "AIRWAY"
+    assert record["speech"]["shown"]["kind"] == "consensus" and len(record["speech"]["words"]) == 4
+
+
+def test_a_recording_with_no_transcript_carries_none(tmp_path: Path) -> None:
+    """No consensus word and no single model's transcript: no view, whatever the family."""
+    assert script.speech_view(fixtures._run_root(tmp_path)) is None
+
+
+def test_the_transcript_fixture_is_what_this_script_writes() -> None:
+    """The page's own transcript markup is checked against these cases; each one's HTML is this script's."""
+    fixture = ROOT / "src/tests/audio/workflows/triage/review_page/transcripts.json"
+    fs = script._free_speech_page()
+    for case in json.loads(fixture.read_text())["cases"]:
+        entries = [[*entry, i] if i < case["consensus_n"] else list(entry) for i, entry in enumerate(case["entries"])]
+        assert fs.paragraph(entries, case["marks"], script._agreement_word) == case["html"], case["name"]
+
+
+def test_a_listen_set_naming_a_labelled_participant_is_refused(tmp_path: Path) -> None:
+    """r37 round 3 let two labelled participants through; the build now fails unless one is allowed on purpose."""
+    labels = tmp_path / "owner_labels"
+    labels.mkdir()
+    entry = {"stem": "sub-4bd22301_ses-A_task-x", "owner_label": "ok"}
+    (labels / "round.json").write_text(json.dumps({"schema": "s", "entries": [entry]}))
+    (labels / "older.tsv").write_text("stem\tnote\nsub-541e6b30_ses-B_task-y\t\n")
+    assert script.labelled_participants(labels) == {"sub-4bd22301", "sub-541e6b30"}
+    stems = ["sub-4bd22301_ses-C_task-z", "sub-fresh_ses-D_task-z", "sub-541e6b30_ses-E_task-z"]
+    assert script.already_labelled(stems, labels) == [stems[0], stems[2]]
+    assert script.already_labelled(stems, labels, ["sub-4bd22301"]) == [stems[2]]
+    listing = tmp_path / "listen.tsv"
+    listing.write_text("stem\n" + "\n".join(stems) + "\n")
+    argv = ["render", str(tmp_path / "none.jsonl"), "--out", str(tmp_path / "page"), "--stems", str(listing)]
+    assert script.main([*argv, "--exclude-labelled", str(labels)]) == 2
+    assert not (tmp_path / "page").exists()
