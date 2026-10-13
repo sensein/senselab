@@ -37,6 +37,7 @@ _NEMO_REQUIREMENTS = [
     # NeMo pulls librosa without a floor; pin numba so uv doesn't backtrack
     # librosa -> numba -> llvmlite 0.36.0 (no Python 3.12 support). See qwen.py.
     "numba>=0.60",
+    "huggingface-hub<2",
 ]
 # NOTE: Same `lightning` package issue as diarization — see nvidia.py comment.
 _NEMO_PYTHON = "3.12"

@@ -31,6 +31,7 @@ _NEMO_REQUIREMENTS = [
     # NeMo pulls librosa without a floor; pin numba so uv doesn't backtrack
     # librosa -> numba -> llvmlite 0.36.0 (no Python 3.12 support). See qwen.py.
     "numba>=0.60",
+    "huggingface-hub<2",
 ]
 # NOTE: `lightning` 2.6.2/2.6.3 were pulled from PyPI as malware (quarantined,
 # not merely removed) around April 2026. `lightning` itself is still on PyPI —

@@ -1,0 +1,919 @@
+"""The task layer's shared reading: task events over the generic background, their evidence and extent.
+
+A branch finds candidate task events with its own type test; this module reads every candidate
+against the recording-level background (:mod:`~senselab.audio.workflows.triage.background_model`):
+its SNR over the stationary floor in its own window with impulse frames masked, whether an impulse
+overlaps or abuts it, the rhythm of the recording's activity, the dominant cluster and the extent
+with its preparatory inhale, and the present / review / absent decision on that evidence. Every
+parameter is in ``data/task_events.yaml``; the design is
+``specs/20261007-task-events-in-background/design.md``.
+"""
+
+from __future__ import annotations
+
+import functools
+import json
+from dataclasses import dataclass, field, replace
+from pathlib import Path
+from typing import Any, Mapping, Sequence
+
+import numpy as np
+import yaml
+
+from senselab.audio.workflows.triage.background_model import (
+    BACKGROUND_MODEL,
+    BandFrames,
+    Floor,
+    Impulse,
+    Region,
+    background_model_parameters,
+    band_frames,
+    floor_of,
+    impulses_of,
+    read_view_arrays,
+    regions_of,
+)
+from senselab.audio.workflows.triage.nodes.common import find_measurement, lexical_words, word_hull
+from senselab.audio.workflows.triage.residue import is_non_lexical
+from senselab.audio.workflows.triage.task_extent import (
+    enabled,
+    extent_check,
+    grow,
+    median_interval_s,
+    modulation_events,
+    overlaps,
+    reachable_outside,
+    task_extent_parameters,
+)
+from senselab.utils.prov_store import ProvStore
+
+TASK_EVENTS_PATH = Path(__file__).parent / "data" / "task_events.yaml"
+MODULATION = "modulation"
+"""``source`` of an event the envelope-modulation detector found."""
+
+PRESENT = "present"
+REVIEW = "review"
+ABSENT = "absent"
+DECISIONS = (PRESENT, REVIEW, ABSENT)
+
+Span = tuple[float, float]
+
+
+@functools.cache
+def task_events_parameters() -> dict[str, Any]:
+    """The parameters of ``data/task_events.yaml``.
+
+    Returns:
+        The parsed mapping.
+    """
+    return dict(yaml.safe_load(TASK_EVENTS_PATH.read_text()) or {})
+
+
+@dataclass(frozen=True)
+class GenericView:
+    """What a branch reads of the recording-level background.
+
+    Attributes:
+        frames: The plain stream's band frames.
+        floor: The stationary floor per band.
+        impulses: The impulses.
+        regions: The regions of activity.
+        broadband_floor_db: The floor summed over the bands, dB.
+        hop_s: The frames' hop.
+    """
+
+    frames: BandFrames
+    floor: Floor
+    impulses: tuple[Impulse, ...]
+    regions: tuple[Region, ...]
+    broadband_floor_db: float
+    hop_s: float
+
+    @property
+    def duration_s(self) -> float:
+        """The frames' span."""
+        return float(len(self.frames.times_s) * self.hop_s)
+
+
+def generic_view(plain: tuple[np.ndarray, int], residual: tuple[np.ndarray, int] | None) -> GenericView:
+    """The recording-level background of one recording, read as QUALITY reads it.
+
+    Args:
+        plain: The plain stream.
+        residual: The residual stream, or None.
+
+    Returns:
+        The view.
+    """
+    p = background_model_parameters()
+    frames = band_frames(plain, p)
+    floor = floor_of(frames, band_frames(residual, p) if residual is not None else None, p)
+    impulses = tuple(impulses_of(plain, p))
+    regions = tuple(regions_of(frames, floor.band_db, impulses, p))
+    broadband = float(10.0 * np.log10(np.sum(10.0 ** (floor.band_db / 10.0)) + 1e-12))
+    return GenericView(frames, floor, impulses, regions, broadband, float(p["hop_s"]))
+
+
+def generic_view_of(store: ProvStore, run_dir: Path) -> GenericView | None:
+    """The recording-level background as BACKGROUND wrote it, read back from its view sidecar.
+
+    Args:
+        store: The provenance store, read for the ``background_model`` measurement.
+        run_dir: The run directory the sidecar's path is relative to.
+
+    Returns:
+        The view, or None where BACKGROUND wrote no reading (an absent input) or its sidecar is gone.
+    """
+    found = find_measurement(store, BACKGROUND_MODEL)
+    if found is None or found.attributes.get("missing"):
+        return None
+    relative = str((found.attributes.get("view") or {}).get("path") or "")
+    path = Path(relative) if Path(relative).is_absolute() else run_dir / relative
+    if not relative or not path.is_file():
+        return None
+    frames, floor, impulses, regions = read_view_arrays(path)
+    broadband = float(10.0 * np.log10(np.sum(10.0 ** (floor.band_db / 10.0)) + 1e-12))
+    return GenericView(frames, floor, impulses, regions, broadband, float(background_model_parameters()["hop_s"]))
+
+
+YAMNET_SCORES = "yamnet_scores"
+"""PREPROCESS's plain-stream YAMNet windows, read for speech no task cluster touches."""
+
+
+def word_runs(words: Sequence[Span], *, words_min: int, gap_s: float) -> list[Span]:
+    """Runs of words, split at gaps over ``gap_s``, that hold at least ``words_min`` words.
+
+    Args:
+        words: Each word's ``(start, end)``.
+        words_min: The fewest words a run holds.
+        gap_s: The longest gap inside a run.
+
+    Returns:
+        Each run's ``(start, end)``, in time order.
+    """
+    runs: list[list[Span]] = []
+    for word in sorted(words):
+        if runs and word[0] - runs[-1][-1][1] <= gap_s:
+            runs[-1].append(word)
+        else:
+            runs.append([word])
+    return [(run[0][0], max(end for _, end in run)) for run in runs if len(run) >= words_min]
+
+
+def speech_spans(store: ProvStore, run_dir: Path, labels: Sequence[str], p: dict[str, Any] | None = None) -> list[Span]:
+    """Where the recording holds speech: runs of lexical words, and plain-stream YAMNet speech windows.
+
+    Args:
+        store: The provenance store, read for the consensus words and the ``yamnet_scores`` measurement.
+        run_dir: The run directory the windows' sidecar path is relative to.
+        labels: The YAMNet labels that are speech.
+        p: The parameters; ``data/task_events.yaml`` when None.
+
+    Returns:
+        The runs of at least ``extent.speech_words_min`` lexical words (bracketed and non-lexical tokens
+        left out) within ``extent.speech_gap_s``, and every YAMNet window whose highest speech-label score
+        reaches ``extent.speech_score_min``, in time order.
+    """
+    q = (p or task_events_parameters())["extent"]
+    words = [
+        word_hull(word)
+        for word in lexical_words(store)
+        if not is_non_lexical(str(word.attributes.get("text") or ""), vocal_task=True)
+    ]
+    spans = word_runs(
+        [w for w in words if w[1] > w[0]], words_min=int(q["speech_words_min"]), gap_s=float(q["speech_gap_s"])
+    )
+    found = find_measurement(store, YAMNET_SCORES)
+    path = run_dir / str(found.attributes.get("path") or "") if found is not None else None
+    if path is not None and path.is_file():
+        from senselab.audio.tasks.classification.label_scores import label_scores  # noqa: PLC0415
+
+        for window in json.loads(path.read_text()):
+            scores = {key: float(value) for pair in label_scores(window) for key, value in pair.items()}
+            if max((scores.get(label, 0.0) for label in labels), default=0.0) >= float(q["speech_score_min"]):
+                spans.append((float(window.get("start", 0.0)), float(window.get("end", 0.0))))
+    return sorted(spans)
+
+
+def modulation_candidates(view: GenericView, q: Mapping[str, Any] | None = None) -> list[Span]:
+    """The envelope-modulation detector over the background's band frames.
+
+    Args:
+        view: The background.
+        q: The ``modulation`` section of ``data/task_extent.yaml``; the packaged one when None.
+
+    Returns:
+        :func:`~senselab.audio.workflows.triage.task_extent.modulation_events` over the broadband level over
+        the stationary floor.
+    """
+    over = np.clip(view.frames.level_db - view.broadband_floor_db, 0.0, None)
+    return modulation_events(view.frames.times_s, over, view.hop_s, q)
+
+
+def _impulse_mask(view: GenericView) -> np.ndarray:
+    mask = np.zeros(len(view.frames.times_s), dtype=bool)
+    for imp in view.impulses:
+        mask[(view.frames.times_s >= imp.start_s - view.hop_s) & (view.frames.times_s <= imp.end_s + view.hop_s)] = True
+    return mask
+
+
+def event_snr_db(view: GenericView, start_s: float, end_s: float) -> float:
+    """An event's level over the broadband floor in its own window, impulse frames masked.
+
+    Args:
+        view: The background.
+        start_s: The event's start.
+        end_s: Its end.
+
+    Returns:
+        The highest broadband level over the floor among the window's frames no impulse holds; the
+        floor's own level (0 dB) where every frame is masked or the window holds none.
+    """
+    times = view.frames.times_s
+    inside = (times >= start_s) & (times <= end_s) & ~_impulse_mask(view)
+    if not inside.any():
+        return 0.0
+    return float(view.frames.level_db[inside].max() - view.broadband_floor_db)
+
+
+def local_snr_db(view: GenericView, span: Span, others: Sequence[Span], *, window_s: float, percentile: float) -> float:
+    """An event's level over the background around it: the window either side, outside every event.
+
+    Args:
+        view: The background.
+        span: The event.
+        others: Every candidate event, whose frames are not background.
+        window_s: How far either side the background is read.
+        percentile: The percentile of the background frames' broadband level taken as the background.
+
+    Returns:
+        The event's highest unmasked broadband level over the larger of the local background and the
+        stationary floor; the floor-relative level where the window holds too few background frames.
+    """
+    times = view.frames.times_s
+    masked = _impulse_mask(view)
+    start, end = span
+    inside = (times >= start) & (times <= end) & ~masked
+    if not inside.any():
+        return 0.0
+    taken = np.zeros(len(times), dtype=bool)
+    for a, b in others:
+        taken |= (times >= a) & (times <= b)
+    around = (((times >= start - window_s) & (times < start)) | ((times > end) & (times <= end + window_s))) & ~(
+        masked | taken
+    )
+    background = view.broadband_floor_db
+    if around.sum() >= 5:
+        background = max(background, float(np.percentile(view.frames.level_db[around], percentile)))
+    return float(view.frames.level_db[inside].max() - background)
+
+
+def entangled(view: GenericView, span: Span, abut_s: float, *, inside: bool = True) -> bool:
+    """Whether an impulse overlaps or abuts an event.
+
+    Args:
+        view: The background.
+        span: The event.
+        abut_s: How close an impulse may end before or start after the event and still abut it.
+        inside: Whether an impulse inside the event counts; False where the event's own onset is
+            impulsive (a cough), so only an impulse abutting it from outside does.
+
+    Returns:
+        True where an impulse lies within ``abut_s`` of the event (outside it, where ``inside`` is
+        False).
+    """
+    start, end = span
+    near = [imp for imp in view.impulses if imp.end_s >= start - abut_s and imp.start_s <= end + abut_s]
+    return any(inside or imp.start_s < start or imp.end_s > end for imp in near)
+
+
+def impulse_explained(view: GenericView, span: Span, margin_db: float) -> bool:
+    """Whether an event is only an impulse: masked of impulse frames, nothing stands over the floor.
+
+    Args:
+        view: The background.
+        span: The event.
+        margin_db: The level over the floor the rest of the event must reach.
+
+    Returns:
+        True where an impulse lies in the event and its other frames stay under ``margin_db``.
+    """
+    start, end = span
+    if not any(imp.end_s >= start and imp.start_s <= end for imp in view.impulses):
+        return False
+    return event_snr_db(view, start, end) < margin_db
+
+
+@dataclass(frozen=True)
+class Rhythm:
+    """The dominant modulation rate of the recording's band envelopes in the breathing band.
+
+    Attributes:
+        hz: The peak's frequency.
+        prominence_db: The peak over the spectrum's median in the read range.
+    """
+
+    hz: float
+    prominence_db: float
+
+    @property
+    def period_s(self) -> float:
+        """One cycle."""
+        return 1.0 / self.hz
+
+    def record(self) -> dict[str, float]:
+        """The rhythm, for the store."""
+        return {"hz": round(self.hz, 3), "prominence_db": round(self.prominence_db, 2)}
+
+
+def rhythm_of(view: GenericView, band_hz: Sequence[float], prominence_min_db: float) -> Rhythm | None:
+    """The breathing-band modulation peak of the mean band envelope, where one stands.
+
+    Args:
+        view: The background.
+        band_hz: The breathing band, ``(low, high)``.
+        prominence_min_db: The prominence a peak needs to stand.
+
+    Returns:
+        The rhythm, or None where the recording is shorter than two cycles of the band's low edge or
+        no peak stands.
+    """
+    from scipy.signal import welch  # noqa: PLC0415
+
+    low, high = float(band_hz[0]), float(band_hz[1])
+    fs = 1.0 / view.hop_s
+    over = view.frames.band_db - view.floor.band_db[None, :]
+    envelope = np.clip(over, 0.0, None).mean(axis=1)
+    if len(envelope) * view.hop_s < 2.0 / low:
+        return None
+    step = max(1, int(round(fs / 10.0)))
+    series = envelope[: len(envelope) // step * step].reshape(-1, step).mean(axis=1)
+    series = series - series.mean()
+    if not np.any(series):
+        return None
+    freqs, psd = welch(series, fs=fs / step, nperseg=len(series), detrend="linear")
+    db = 10.0 * np.log10(psd + 1e-20)
+    read = (freqs >= low / 2.0) & (freqs <= 4.0)
+    band = (freqs >= low) & (freqs <= high)
+    if not band.any() or not read.any():
+        return None
+    peak = int(np.flatnonzero(band)[int(np.argmax(db[band]))])
+    prominence = float(db[peak] - np.median(db[read]))
+    return Rhythm(float(freqs[peak]), prominence) if prominence >= prominence_min_db else None
+
+
+@dataclass(frozen=True)
+class TaskEvent:
+    """One task event the branch's type test kept, with its evidence.
+
+    Attributes:
+        start_s: Its start.
+        end_s: Its end.
+        snr_db: Its level over the stationary floor (:func:`event_snr_db`).
+        local_snr_db: Its level over the background around it (:func:`local_snr_db`); the floor-relative
+            level where none was read.
+        entangled: Whether an impulse overlaps or abuts it.
+        recovered: Whether the rhythm prior recovered it from a region the branch's finder missed.
+        stream: The stream it was found on.
+        source: ``type_test`` for the branch's own finder, ``modulation`` for the envelope-modulation
+            detector (:func:`~senselab.audio.workflows.triage.task_extent.modulation_events`).
+    """
+
+    start_s: float
+    end_s: float
+    snr_db: float
+    local_snr_db: float | None = None
+    entangled: bool = False
+    recovered: bool = False
+    stream: str = "plain"
+    source: str = "type_test"
+
+    @property
+    def clear_db(self) -> float:
+        """The level the decision's clear cut reads: the local SNR where read, else the floor SNR."""
+        return self.snr_db if self.local_snr_db is None else self.local_snr_db
+
+    def record(self) -> dict[str, Any]:
+        """The event, for the store."""
+        return {
+            "start_s": round(self.start_s, 3),
+            "end_s": round(self.end_s, 3),
+            "snr_db": round(self.snr_db, 2),
+            "local_snr_db": None if self.local_snr_db is None else round(self.local_snr_db, 2),
+            "entangled": self.entangled,
+            "recovered": self.recovered,
+            "stream": self.stream,
+            "source": self.source,
+        }
+
+
+def task_event(
+    view: GenericView,
+    span: Span,
+    others: Sequence[Span],
+    p: dict[str, Any],
+    *,
+    recovered: bool = False,
+    entangle_inside: bool = True,
+) -> TaskEvent:
+    """One candidate read against the background.
+
+    Args:
+        view: The background.
+        span: The candidate.
+        others: Every candidate, whose frames the local background excludes.
+        p: The parameters of ``data/task_events.yaml``.
+        recovered: Whether the rhythm prior recovered it.
+        entangle_inside: :func:`entangled`'s ``inside``.
+
+    Returns:
+        The event.
+    """
+    start, end = span
+    local = local_snr_db(
+        view, span, others, window_s=float(p["local"]["window_s"]), percentile=float(p["local"]["percentile"])
+    )
+    return TaskEvent(
+        float(start),
+        float(end),
+        event_snr_db(view, start, end),
+        local,
+        entangled(view, span, float(p["entangle_abut_s"]), inside=entangle_inside),
+        recovered,
+    )
+
+
+def dominant_cluster(events: Sequence[TaskEvent], gap_s: float) -> list[TaskEvent]:
+    """The events split at gaps over ``gap_s``; the cluster with most events, earliest on a tie.
+
+    Args:
+        events: The events, in time order.
+        gap_s: The longest gap inside a cluster.
+
+    Returns:
+        The cluster; empty with no event.
+    """
+    clusters = clusters_of(events, gap_s)
+    return max(clusters, key=lambda c: (len(c), -c[0].start_s)) if clusters else []
+
+
+def clusters_of(events: Sequence[TaskEvent], gap_s: float) -> list[list[TaskEvent]]:
+    """The events split at gaps over ``gap_s``, in time order.
+
+    Args:
+        events: The events.
+        gap_s: The longest gap inside a cluster.
+
+    Returns:
+        The clusters, each in time order.
+    """
+    clusters: list[list[TaskEvent]] = []
+    for event in sorted(events, key=lambda e: e.start_s):
+        if clusters and event.start_s - clusters[-1][-1].end_s <= gap_s:
+            clusters[-1].append(event)
+        else:
+            clusters.append([event])
+    return clusters
+
+
+def touches(spans: Sequence[Span], speech: Sequence[Span]) -> bool:
+    """Whether any span overlaps any speech span.
+
+    Args:
+        spans: The spans.
+        speech: The speech spans.
+
+    Returns:
+        True where one of ``spans`` overlaps one of ``speech``.
+    """
+    return any(a < d and c < b for a, b in spans for c, d in speech)
+
+
+def cluster_scores(
+    runs: Sequence[Sequence[Span]], *, duration_s: float, instructed_n: int | None, weights: Mapping[str, Any]
+) -> list[float]:
+    """Each candidate run's score: its agreement with the instructed count plus its earliness.
+
+    Args:
+        runs: The candidate runs, each its events' spans in time order.
+        duration_s: The recording's duration.
+        instructed_n: The events the instruction asks for, or None where it speaks no count.
+        weights: ``extent`` of ``data/task_events.yaml``: ``count_weight`` and ``position_weight``.
+
+    Returns:
+        ``count_weight`` times the count term plus ``position_weight`` times ``1 - start / duration``. The
+        count term is ``1 - |n - instructed| / instructed``, floored at 0, where a count is instructed, and
+        ``n`` over the largest run's ``n`` otherwise.
+    """
+    largest = max((len(run) for run in runs), default=1) or 1
+    scores = []
+    for run in runs:
+        n = len(run)
+        if instructed_n:
+            count = max(0.0, 1.0 - abs(n - instructed_n) / instructed_n)
+        else:
+            count = n / largest
+        early = 1.0 - min(1.0, max(0.0, run[0][0] / duration_s)) if duration_s > 0 else 1.0
+        scores.append(float(weights["count_weight"]) * count + float(weights["position_weight"]) * early)
+    return scores
+
+
+def task_cluster(
+    events: Sequence[TaskEvent],
+    gap_s: float,
+    *,
+    speech: Sequence[Span] = (),
+    instructed_n: int | None = None,
+    duration_s: float,
+    weights: Mapping[str, Any],
+) -> list[TaskEvent]:
+    """The cluster that is the task: off speech, nearest the instructed count, earliest.
+
+    Args:
+        events: The events.
+        gap_s: The longest gap inside a cluster.
+        speech: Speech spans; a cluster one of whose events overlaps one is dropped, unless every
+            cluster is.
+        instructed_n: The events the instruction asks for, or None.
+        duration_s: The recording's duration.
+        weights: ``extent`` of ``data/task_events.yaml``.
+
+    Returns:
+        The highest-scoring cluster (:func:`cluster_scores`), earliest on a tie; empty with no event.
+    """
+    clusters = clusters_of(events, gap_s)
+    if not clusters:
+        return []
+    off = [c for c in clusters if not touches([(e.start_s, e.end_s) for e in c], speech)]
+    candidates = off or clusters
+    scores = cluster_scores(
+        [[(e.start_s, e.end_s) for e in c] for c in candidates],
+        duration_s=duration_s,
+        instructed_n=instructed_n,
+        weights=weights,
+    )
+    best = max(range(len(candidates)), key=lambda i: (scores[i], -candidates[i][0].start_s))
+    return candidates[best]
+
+
+def inhale_start(view: GenericView, start_s: float, margin_db: float, back_max_s: float) -> float:
+    """Where the level rising into the first event leaves the floor, at most ``back_max_s`` before it.
+
+    Args:
+        view: The background.
+        start_s: The first event's start.
+        margin_db: The broadband level over the floor that counts as risen.
+        back_max_s: The furthest the start is moved back.
+
+    Returns:
+        The start, moved back across contiguous frames standing ``margin_db`` over the floor.
+    """
+    times = view.frames.times_s
+    level = view.frames.level_db - view.broadband_floor_db
+    index = int(np.searchsorted(times, start_s))
+    first = index
+    while first > 0 and level[first - 1] >= margin_db and start_s - times[first - 1] <= back_max_s:
+        first -= 1
+    return float(max(0.0, times[first] - view.hop_s / 2)) if first < index else float(start_s)
+
+
+@dataclass(frozen=True)
+class TaskEvidence:
+    """The evidence a branch's events give, and the decision it supports.
+
+    Attributes:
+        events: The task cluster's events, in time order (:func:`task_cluster`).
+        found: Every event the type test kept, in the cluster or not.
+        rhythm: The breathing-band rhythm, or None.
+        extent: The cluster's extent with its preparatory inhale, or None with no event.
+        decision: ``present``, ``review`` or ``absent`` (:func:`decide`).
+        why: The condition that decided it.
+        inputs: The readings and bounds :func:`decide` compared (:func:`decision_inputs`).
+        growth: How far bounded growth moved the cluster's edges (``task_extent.Growth.record``); empty where
+            growth is off.
+        check: Whether the extent holds the whole task (``task_extent.ExtentCheck.record``); empty where no
+            stops were given.
+        trim: What trimming the events to the task's own extent removed (``task_extent.Trim.record``); empty
+            where none was trimmed.
+        background: The task events' level against the recording's background (:func:`background_reading`).
+    """
+
+    events: tuple[TaskEvent, ...]
+    found: tuple[TaskEvent, ...]
+    rhythm: Rhythm | None
+    extent: Span | None
+    decision: str
+    why: str
+    inputs: dict[str, Any] = field(default_factory=dict)
+    growth: dict[str, Any] = field(default_factory=dict)
+    check: dict[str, Any] = field(default_factory=dict)
+    trim: dict[str, Any] = field(default_factory=dict)
+    background: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def events_found_n(self) -> int:
+        """Every event the type test kept, in the cluster or not."""
+        return len(self.found)
+
+    @property
+    def outside(self) -> tuple[TaskEvent, ...]:
+        """The found events outside the cluster that stand over the floor and were not recovered."""
+        low = float(self.inputs.get("snr_low_db", 0.0))
+        inside = {(e.start_s, e.end_s) for e in self.events}
+        return tuple(
+            e for e in self.found if (e.start_s, e.end_s) not in inside and not e.recovered and e.snr_db >= low
+        )
+
+    @property
+    def best_snr_db(self) -> float | None:
+        """The strongest event's SNR."""
+        return max((e.snr_db for e in self.events), default=None)
+
+    @property
+    def median_snr_db(self) -> float | None:
+        """The events' median SNR."""
+        return float(np.median([e.snr_db for e in self.events])) if self.events else None
+
+    def record(self) -> dict[str, Any]:
+        """The evidence, for the store."""
+        best, median = self.best_snr_db, self.median_snr_db
+        return {
+            "decision": self.decision,
+            "why": self.why,
+            "inputs": dict(self.inputs),
+            "events_n": len(self.events),
+            "events_found_n": self.events_found_n,
+            "recovered_n": sum(e.recovered for e in self.events),
+            "best_snr_db": None if best is None else round(best, 2),
+            "median_snr_db": None if median is None else round(median, 2),
+            "rhythm": None if self.rhythm is None else self.rhythm.record(),
+            "extent": None if self.extent is None else [round(self.extent[0], 3), round(self.extent[1], 3)],
+            "events": [e.record() for e in self.events],
+            "outside": {
+                "standing_n": len(self.outside),
+                "best_local_db": round(max(e.clear_db for e in self.outside), 2) if self.outside else None,
+            },
+            **({"growth": dict(self.growth)} if self.growth else {}),
+            **({"extent_check": dict(self.check)} if self.check else {}),
+            **({"trim": dict(self.trim)} if self.trim else {}),
+            **({"background": dict(self.background)} if self.background else {}),
+        }
+
+
+def decide(events: Sequence[TaskEvent], p: dict[str, Any]) -> tuple[str, str]:
+    """The decision on the task cluster's events (C5).
+
+    Args:
+        events: The task cluster's events; an event outside the extent decides nothing.
+        p: The ``decision`` section of ``data/task_events.yaml``.
+
+    Returns:
+        ``(decision, why)``: ``absent`` where no found event stands ``snr_low_db`` over the floor;
+        ``review`` where none of those stands ``snr_high_db`` over its local background (``weak``), or
+        an impulse overlaps or abuts every one that does (``entangled``); ``present`` otherwise.
+        Events the rhythm prior recovered count phases and extent, never the decision.
+    """
+    standing = [e for e in events if not e.recovered and e.snr_db >= p["snr_low_db"]]
+    if not standing:
+        return ABSENT, "no event over the floor"
+    clear = [e for e in standing if e.clear_db >= p["snr_high_db"]]
+    if not clear:
+        return REVIEW, "weak"
+    if all(e.entangled for e in clear):
+        return REVIEW, "entangled"
+    return PRESENT, "clear"
+
+
+def decision_inputs(events: Sequence[TaskEvent], p: dict[str, Any]) -> dict[str, Any]:
+    """The readings and bounds :func:`decide` compares, for the decision table.
+
+    Args:
+        events: The task cluster's events.
+        p: The ``decision`` section of ``data/task_events.yaml``.
+
+    Returns:
+        ``floor_db``, the strongest unrecovered event's level over the floor, against ``snr_low_db``;
+        ``local_db``, the strongest of those events' level over its local background, against
+        ``snr_high_db``; ``entangled``, whether an impulse touches every clear event; and the two bounds.
+    """
+    unrecovered = [e for e in events if not e.recovered]
+    standing = [e for e in unrecovered if e.snr_db >= p["snr_low_db"]]
+    clear = [e for e in standing if e.clear_db >= p["snr_high_db"]]
+    return {
+        "floor_db": round(max(e.snr_db for e in unrecovered), 2) if unrecovered else None,
+        "local_db": round(max(e.clear_db for e in standing), 2) if standing else None,
+        "entangled": bool(clear) and all(e.entangled for e in clear),
+        "snr_low_db": float(p["snr_low_db"]),
+        "snr_high_db": float(p["snr_high_db"]),
+    }
+
+
+def evidence_of(
+    view: GenericView,
+    candidates: Sequence[Span],
+    *,
+    gap_s: float,
+    rhythm: Rhythm | None = None,
+    recovered: Sequence[Span] = (),
+    inhale: bool = True,
+    entangle_inside: bool = True,
+    speech: Sequence[Span] = (),
+    instructed_n: int | None = None,
+    p: dict[str, Any] | None = None,
+    stops: Sequence[Span] | None = None,
+    growth_candidates: Sequence[Span] = (),
+    grow_kind: str | None = None,
+    extent_p: Mapping[str, Any] | None = None,
+) -> TaskEvidence:
+    """Read a branch's candidates against the background: events, cluster, extent and decision.
+
+    Args:
+        view: The background.
+        candidates: The spans the branch's type test kept.
+        gap_s: The longest gap inside a cluster.
+        rhythm: The rhythm, where one stands, recorded beside the evidence.
+        recovered: Further spans the rhythm prior recovered.
+        inhale: Whether the extent runs back across a preparatory inhale.
+        entangle_inside: Whether an impulse inside an event entangles it (:func:`entangled`).
+        speech: Speech spans, which no task cluster touches (:func:`task_cluster`).
+        instructed_n: The events the instruction asks for, or None.
+        p: The parameters; ``data/task_events.yaml`` when None.
+        stops: Speech and other-speaker spans growth halts at; where given, the extent's completeness is read
+            (``check``).
+        growth_candidates: Further spans the envelope-modulation detector found; they join growth and
+            completeness, never the cluster or the decision.
+        grow_kind: The event kind (``breath``, ``cough``) whose cluster grows where ``growth`` is switched on
+            for it in ``data/task_extent.yaml``; None never grows.
+        extent_p: The parameters of ``data/task_extent.yaml``; the packaged file when None.
+
+    Returns:
+        The evidence: the task cluster of the events standing over the floor (of every event where none
+        stands), grown where growth is on, its extent, and the decision on the chosen cluster's events alone.
+    """
+    p = p or task_events_parameters()
+    q = extent_p or task_extent_parameters()
+    margin = float(p["impulse_margin_db"])
+    kept = [s for s in candidates if not impulse_explained(view, s, margin)]
+    extra = [s for s in recovered if not impulse_explained(view, s, margin)]
+    modulated = [
+        s for s in growth_candidates if not impulse_explained(view, s, margin) and not overlaps(s, [*kept, *extra])
+    ]
+    others = [*kept, *extra]
+    events = [task_event(view, s, others, p, entangle_inside=entangle_inside) for s in kept]
+    events += [task_event(view, s, others, p, recovered=True, entangle_inside=entangle_inside) for s in extra]
+    every = [*others, *modulated]
+    from_modulation = [
+        replace(task_event(view, s, every, p, recovered=True, entangle_inside=entangle_inside), source=MODULATION)
+        for s in modulated
+    ]
+    choose = functools.partial(
+        task_cluster,
+        gap_s=gap_s,
+        speech=speech,
+        instructed_n=instructed_n,
+        duration_s=view.duration_s,
+        weights=p["extent"],
+    )
+    low = float(p["decision"]["snr_low_db"])
+    cluster = choose([e for e in events if e.snr_db >= low]) or choose(events)
+    decision, why = decide(cluster, p["decision"])
+    inputs = decision_inputs(cluster, p["decision"])
+    found = [*events, *from_modulation]
+    grown, growth = list(cluster), {}
+    g = q.get("growth") or {}
+    if cluster and grow_kind is not None and enabled("growth", q) and grow_kind in (g.get("families") or ()):
+        core = [(e.start_s, e.end_s) for e in cluster]
+        base = median_interval_s(core, floor_s=float(g["gap_floor_s"]), single_s=gap_s)
+        pool = {(e.start_s, e.end_s): e for e in found if e.snr_db >= low and e not in cluster}
+        grew = grow(
+            core,
+            list(pool),
+            limit_s=float(g["k"]) * base,
+            stops=stops or (),
+            cross_stops=bool(g.get("cross_speech")),
+        )
+        grown = sorted([*cluster, *(pool[s] for s in grew.added)], key=lambda e: e.start_s)
+        growth = grew.record()
+    extent: Span | None = None
+    if grown:
+        start = grown[0].start_s
+        if inhale:
+            start = inhale_start(view, start, float(p["inhale"]["margin_db"]), float(p["inhale"]["back_max_s"]))
+        end = max(e.end_s for e in grown)
+        if grow_kind == "breath" and enabled("edges", q):
+            edge_q = q["edges"]
+            reach = {key: float(edge_q[key]) for key in ("margin_db", "bridge_s", "max_s")}
+            start = min(start, envelope_edge(view, grown[0].start_s, -1, stops=stops or (), **reach))
+            end = max(end, envelope_edge(view, end, 1, stops=stops or (), **reach))
+        extent = (start, end)
+    check: dict[str, Any] = {}
+    if stops is not None:
+        held = {(e.start_s, e.end_s) for e in grown}
+        outside = [
+            (e.start_s, e.end_s)
+            for e in found
+            if (e.start_s, e.end_s) not in held and e.snr_db >= low and (not e.recovered or e.source == MODULATION)
+        ]
+        crossing = bool(g.get("cross_speech")) and grow_kind is not None and enabled("growth", q)
+        reachable = reachable_outside(extent, outside, () if crossing else stops)
+        check = extent_check(
+            has_extent=extent is not None, narrow={"events_outside": len(reachable)}, wide={}, outside_n=len(reachable)
+        ).record()
+    background = background_reading(view, grown, found, stops or ())
+    return TaskEvidence(
+        tuple(grown), tuple(found), rhythm, extent, decision, why, inputs, growth, check, background=background
+    )
+
+
+def envelope_edge(
+    view: GenericView,
+    t: float,
+    direction: int,
+    *,
+    margin_db: float,
+    bridge_s: float,
+    max_s: float,
+    stops: Sequence[Span] = (),
+) -> float:
+    """Where the broadband envelope around an event edge falls back to the floor.
+
+    Args:
+        view: The background.
+        t: The edge.
+        direction: -1 walks back from a start, +1 on from an end.
+        margin_db: The level over the stationary floor that is still the event.
+        bridge_s: A dip under the margin this short does not end it.
+        max_s: The furthest the edge moves.
+        stops: Spans the edge never enters.
+
+    Returns:
+        The furthest frame boundary within ``max_s`` that stands ``margin_db`` over the floor, reached across dips
+        of at most ``bridge_s``; ``t`` where the next frame does not.
+    """
+    times = view.frames.times_s
+    level = view.frames.level_db - view.broadband_floor_db
+    if not len(times):
+        return t
+    hop = view.hop_s
+    j = int(np.clip(np.searchsorted(times, t), 0, len(times) - 1))
+    last, dip, steps = t, 0, 0
+    bridge, limit = int(round(bridge_s / hop)), int(round(max_s / hop))
+    while 0 <= j + direction < len(times) and steps < limit:
+        j += direction
+        steps += 1
+        now = float(times[j])
+        if any(a <= now <= b for a, b in stops):
+            break
+        if level[j] >= margin_db:
+            last = now - hop / 2 if direction < 0 else now + hop / 2
+            dip = 0
+        else:
+            dip += 1
+            if dip > bridge:
+                break
+    return min(t, last) if direction < 0 else max(t, last)
+
+
+def background_reading(
+    view: GenericView, events: Sequence[TaskEvent], found: Sequence[TaskEvent], stops: Sequence[Span] = ()
+) -> dict[str, Any]:
+    """The task events' level against the recording's background: the frames no found event or impulse holds.
+
+    Args:
+        view: The background.
+        events: The task events.
+        found: Every event the type tests found, none of whose frames is background.
+        stops: Speech and other-speaker spans, whose share of the background is reported.
+
+    Returns:
+        ``event_db`` (the median of the task events' unmasked peak levels), ``background_db`` (the median level of
+        the background frames; the stationary floor with fewer than 10), ``event_over_background_db``,
+        ``background_over_floor_db`` and ``background_speech_share``; empty without a task event.
+    """
+    if not events:
+        return {}
+    times, level = view.frames.times_s, view.frames.level_db
+    masked = _impulse_mask(view)
+    peaks = []
+    for e in events:
+        inside = (times >= e.start_s) & (times <= e.end_s) & ~masked
+        if inside.any():
+            peaks.append(float(level[inside].max()))
+    if not peaks:
+        return {}
+    taken = masked.copy()
+    for e in found:
+        taken |= (times >= e.start_s) & (times <= e.end_s)
+    background = ~taken
+    background_db = float(np.median(level[background])) if background.sum() >= 10 else view.broadband_floor_db
+    speech = np.zeros(len(times), dtype=bool)
+    for a, b in stops:
+        speech |= (times >= a) & (times <= b)
+    event_db = float(np.median(peaks))
+    return {
+        "event_db": round(event_db, 2),
+        "background_db": round(background_db, 2),
+        "event_over_background_db": round(event_db - background_db, 2),
+        "background_over_floor_db": round(background_db - view.broadband_floor_db, 2),
+        "background_speech_share": round(float(speech[background].mean()), 3) if background.any() else None,
+    }

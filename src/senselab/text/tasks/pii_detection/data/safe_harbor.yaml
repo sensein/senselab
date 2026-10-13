@@ -1,0 +1,61 @@
+# The HIPAA Safe Harbor de-identification standard, the rule the redaction reviewer applies to what
+# must stay masked. Source: 45 CFR 164.514(b)(2), https://www.ecfr.gov/current/title-45/part-164/section-164.514
+# (identifiers (A)-(R) in (b)(2)(i); the actual-knowledge condition in (b)(2)(ii)). The `text` of each
+# identifier paraphrases the regulation closely; `release` says what Safe Harbor itself lets through.
+# Owner, 2026-09-28: "reviewer should use safe harbor". A health condition is not one of the 18; the
+# triage fold routes a reviewer's CONDITION proposal to human review separately.
+citation: 45 CFR 164.514(b)(2)
+identifiers:
+- {code: A, name: names, text: 'Names, of the speaker or of anyone else.'}
+- code: B
+  name: geographic subdivisions smaller than a state
+  text: >-
+    Any geographic subdivision smaller than a state: street address, city, county, precinct, ZIP
+    code and their equivalent geocodes.
+  release: >-
+    A state or a country; the first three digits of a ZIP code where the area they name holds more
+    than 20,000 people.
+- code: C
+  name: dates and ages
+  text: >-
+    Every element of a date except the year for a date directly related to the individual (birth,
+    admission, discharge, death, and the like); every age over 89 and any date element indicating such
+    an age.
+  release: A year alone; an age of 89 or under; ages over 89 only as the single category "90 or older".
+- {code: D, name: telephone numbers, text: Telephone numbers.}
+- {code: E, name: fax numbers, text: Fax numbers.}
+- {code: F, name: email addresses, text: Electronic mail addresses.}
+- {code: G, name: social security numbers, text: Social Security numbers.}
+- {code: H, name: medical record numbers, text: Medical record numbers.}
+- {code: I, name: health plan beneficiary numbers, text: Health plan beneficiary numbers.}
+- {code: J, name: account numbers, text: Account numbers.}
+- {code: K, name: certificate and licence numbers, text: Certificate and licence numbers.}
+- {code: L, name: vehicle identifiers, text: 'Vehicle identifiers and serial numbers, including licence plates.'}
+- {code: M, name: device identifiers, text: Device identifiers and serial numbers.}
+- {code: N, name: urls, text: Web URLs.}
+- {code: O, name: ip addresses, text: IP addresses.}
+- {code: P, name: biometric identifiers, text: 'Biometric identifiers, including finger and voice prints.'}
+- {code: Q, name: photographs, text: Full-face photographs and comparable images.}
+- {code: R, name: other unique identifiers, text: 'Any other unique identifying number, characteristic or code.'}
+residual: >-
+  Actual knowledge (45 CFR 164.514(b)(2)(ii)): even an item Safe Harbor lets through stays masked when,
+  combined with the rest of this transcript -- an age, an occupation, family details, a rare condition,
+  dates, named people or institutions -- it could single the speaker out.
+examples:
+- '"I grew up in Florida": a state, so it may be released.'
+- '"I live in St. Petersburg": a city, smaller than a state, so it stays masked.'
+- "\"I'm the only pediatric cardiologist in Florida\": a state, but with a unique role it could single the speaker out, so it stays masked."
+- "\"I'm 93\": the speaker's own age over 89, so it stays masked; a number the task's own stimulus contains (a story character's age) identifies nobody."
+- '"last Tuesday", "in March": a date element related to the speaker, so it stays masked; "in 1998" is a year alone and may be released.'
+# The reviewer's categories, and the detectors' families (data/pii_category_families.yaml in triage),
+# as the Safe Harbor identifiers they fall under. Empty: no Safe Harbor identifier by itself (judged
+# under the residual clause only).
+categories:
+  PERSON: [A]
+  LOCATION: [B]
+  DATE_TIME: [C]
+  CONTACT: [D, E, F, N, O]
+  ID: [G, H, I, J, K, L, M, R]
+  ORGANIZATION: []
+  CONDITION: []
+  OTHER: [R]

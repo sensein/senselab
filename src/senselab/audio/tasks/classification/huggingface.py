@@ -5,17 +5,40 @@ if you need to process multiple audios in parallel, pass the entire list of audi
 function at once, rather than calling the function with one audio at a time.
 """
 
+import inspect
 import os
 import time
 from typing import Dict, List, Literal, Optional, cast
 
-from transformers import AutoFeatureExtractor, AutoModelForAudioClassification, Pipeline, pipeline
+import torchaudio.compliance.kaldi as ta_kaldi
+from transformers import ASTFeatureExtractor, AutoFeatureExtractor, AutoModelForAudioClassification, Pipeline, pipeline
 
 from senselab.audio.data_structures import Audio, AudioClassificationResult
 from senselab.audio.tasks.preprocessing import resample_audios
 from senselab.utils.data_structures import DeviceType, HFModel, _select_device_and_dtype
 from senselab.utils.data_structures.logging import logger
 from senselab.utils.dependencies import resolve_model
+
+
+class AudioTooShortForAST(ValueError):
+    """Audio shorter than AST's kaldi-fbank feature extractor can window; attribute it as an absence."""
+
+
+def _ast_min_samples(feature_extractor: object) -> Optional[int]:
+    """AST's minimum input length in samples, or ``None`` for a non-AST feature extractor.
+
+    Args:
+        feature_extractor: The pipeline's feature extractor.
+
+    Returns:
+        The minimum sample count at ``feature_extractor.sampling_rate``, or ``None`` when
+        ``feature_extractor`` is not :class:`~transformers.ASTFeatureExtractor`.
+    """
+    if not isinstance(feature_extractor, ASTFeatureExtractor):
+        return None
+    frame_length_ms = inspect.signature(ta_kaldi.fbank).parameters["frame_length"].default
+    return int(feature_extractor.sampling_rate * frame_length_ms * ta_kaldi.MILLISECONDS_TO_SECONDS)
+
 
 # Phase 2: head-load diagnostic for the standard pipeline path.
 # The PR-#511 family of bugs (random-init head silently produces ~uniform softmax)
@@ -203,12 +226,18 @@ class HuggingFaceAudioClassifier:
 
         # Validate mono and resample to expected rate inside the loop
         # to avoid holding all resampled audios in memory at once
+        min_samples = _ast_min_samples(feature_extractor)
         formatted_audios = []
         for audio in audios:
             if audio.waveform.shape[0] != 1:
                 raise ValueError(f"Stereo audio is not supported. Got {audio.waveform.shape[0]} channels")
             if audio.sampling_rate != expected_sampling_rate:
                 audio = resample_audios([audio], resample_rate=expected_sampling_rate)[0]
+            n_samples = audio.waveform.shape[-1]
+            if min_samples is not None and n_samples < min_samples:
+                raise AudioTooShortForAST(
+                    f"{n_samples} samples at {expected_sampling_rate} Hz, need at least {min_samples}"
+                )
             formatted_audios.append(_audio_to_huggingface_dict(audio))
 
         # Take the start time of the transcription

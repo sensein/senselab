@@ -1,6 +1,7 @@
 """This module represents the API for the speech classification task within the senselab package.
 
-Supports HuggingFace models and YAMNet (via isolated subprocess venv).
+Supports HuggingFace models, YAMNet, and HeAR's bundled health sound event
+detector (the latter two via isolated subprocess venvs).
 Users can specify the audio clips to classify, the classification model,
 the preferred device, and the model-specific parameters.
 
@@ -26,6 +27,13 @@ def _is_yamnet(model: Union[SenselabModel, str]) -> bool:
     if isinstance(model, str):
         return model.lower() in _YAMNET_ALIASES
     return False
+
+
+def _is_hear_event_detector(model: Union[SenselabModel, str]) -> bool:
+    """Check if the model refers to HeAR's bundled health sound event detector."""
+    from senselab.audio.tasks.health_acoustics.hear import is_hear_event_detector_spec
+
+    return is_hear_event_detector_spec(model)
 
 
 @requires_compatibility("audio.tasks.classification.classify_audios")
@@ -59,6 +67,16 @@ def classify_audios(
     internally, so it always returns windowed results.  The ``win_length``
     and ``hop_length`` parameters are ignored for YAMNet.
 
+    **HeAR event detector** (``model="hear-event-detector"``, or
+    ``"hear-event-detector-small"``): Google's health sound event detector
+    (``Cough, Snore, Baby Cough, Breathe, Sneeze, Throat Clear, Laugh,
+    Speech``), in an isolated TensorFlow subprocess venv.  Its window is
+    fixed at 2 s — the graph rejects every other length — so ``win_length``
+    is ignored while ``hop_length`` is honoured.  Scores are independent
+    presence probabilities, not a distribution, and the detector is a
+    presence gate rather than a locator; see
+    :mod:`senselab.audio.tasks.health_acoustics` for both caveats in full.
+
     Args:
         audios: Audio objects to classify.
         model: The classification model.  Can be an ``HFModel`` for
@@ -86,6 +104,29 @@ def classify_audios(
         if win_length is not None:
             logger.info("YAMNet uses fixed 0.96s windows; win_length/hop_length parameters are ignored.")
         return YAMNetClassifier.classify_with_yamnet(audios=audios, top_k=top_k or 5)
+
+    # HeAR's bundled event detector is an audio event classifier, so it is reachable from here
+    # (the discoverable home for classifiers) as well as from its own task package. This is a
+    # dispatch alias only: the implementation, the isolated TensorFlow venv and the pinned
+    # revision all live in audio/tasks/health_acoustics/, because the detector shares that
+    # repository, that venv and that 2 s window rule with the HeAR encoder, which is not a
+    # classifier and does not belong here.
+    if _is_hear_event_detector(model):
+        from senselab.audio.tasks.health_acoustics import detect_health_acoustic_events
+        from senselab.audio.tasks.health_acoustics.api import DEFAULT_DETECTION_HOP_SECONDS
+
+        if win_length is not None:
+            logger.info(
+                "HeAR's event detector rejects every input length but 2s (its graph raises), so "
+                "win_length is ignored; hop_length is honoured."
+            )
+        return detect_health_acoustic_events(
+            audios=audios,
+            model=str(model),
+            device=device,
+            hop_length=hop_length if hop_length is not None else DEFAULT_DETECTION_HOP_SECONDS,
+            top_k=top_k,
+        )
 
     if win_length is not None:
         return _classify_windowed(

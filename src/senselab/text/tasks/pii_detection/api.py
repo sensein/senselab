@@ -115,15 +115,22 @@ def default_detectors() -> list[str]:
     return sorted(_DEFAULT_DETECTORS)
 
 
-@dataclass
-class PiiSpan:
-    """One PII detection in a transcript."""
+class PiiSpan(ScriptLine):
+    """One PII detection, as the timed line it sits in.
 
-    text: str
-    category: str  # presidio entity_type, e.g. "PERSON", "EMAIL_ADDRESS", "PHONE_NUMBER"
-    source: str  # "presidio" or "gliner/<original_label>"
+    A ``ScriptLine``, so ``text``, ``start``, ``end``, ``speaker``, ``score`` and ``timestamp_model``
+    are inherited and mean what they mean everywhere else. ``start`` and ``end`` are None until
+    something locates the finding — scanning a bare string cannot.
+
+    Attributes:
+        category: The entity type, e.g. ``"PERSON"``, ``"EMAIL_ADDRESS"``.
+        source: The detector that found it, e.g. ``"presidio"`` or ``"gliner/<label>"``.
+        asr_model: Identifier of the scanned input.
+    """
+
+    category: str
+    source: str
     asr_model: str
-    score: float | None = None  # detector confidence in [0, 1]
 
 
 @dataclass
@@ -148,11 +155,15 @@ class PiiScan:
         failures: Why a detector did not run, keyed by name. An empty ``spans`` with a
             populated ``failures`` is "we could not check", which must never be read as
             "we checked and it was clean".
+        cache: The result-cache record of this input's detector scan — ``key``, whether it was
+            reused (``hit``) and where a reused scan was first computed (``origin``). Empty when
+            the input never reached the detectors.
     """
 
     spans: list[PiiSpan] = field(default_factory=list)
     detectors_used: list[str] = field(default_factory=list)
     failures: dict[str, str] = field(default_factory=dict)
+    cache: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -254,7 +265,7 @@ def _corroborated_contains_pii(
         return True
     groups: dict[tuple[str, str], set[str]] = {}
     for s in spans:
-        normalized = s.text.strip().lower()
+        normalized = (s.text or "").strip().lower()
         if not normalized:
             continue
         root = s.source.split("/", 1)[0] if s.source else "unknown"
@@ -323,7 +334,9 @@ def corroboration_family(category: str) -> str:
     return _CORROBORATION_FAMILY.get(category.upper(), category.upper())
 
 
-def _materialize_spans(raw_spans: list[dict[str, Any]], source_id: str) -> list[PiiSpan]:
+def _materialize_spans(
+    raw_spans: list[dict[str, Any]], source_id: str, line: ScriptLine | None = None
+) -> list[PiiSpan]:
     """Build deduped ``PiiSpan`` objects from one input's raw subprocess spans.
 
     Dedupe key is ``(category, normalized_text, source)`` so a single entity detected by
@@ -338,12 +351,25 @@ def _materialize_spans(raw_spans: list[dict[str, Any]], source_id: str) -> list[
             Standalone text has no ASR backend; this reuses that field as the
             per-input identifier ``_compute_detection_confidence`` groups by, rather
             than adding a parallel field for a single-input-per-report caller.
+        line: The line scanned, when the input was one. Its extent, speaker and timing
+            provenance are copied onto every finding; a bare-string input leaves them None.
 
     Returns:
         Deduped ``PiiSpan`` list for the input.
     """
     seen: set[tuple[str, str, str]] = set()
     spans: list[PiiSpan] = []
+    timing: dict[str, Any] = (
+        {
+            "start": line.start,
+            "end": line.end,
+            "speaker": line.speaker,
+            "timestamp_source": line.timestamp_source,
+            "timestamp_model": line.timestamp_model,
+        }
+        if line is not None
+        else {}
+    )
     for raw in raw_spans:
         text: str = raw.get("text") or ""
         category: str = raw.get("category") or ""
@@ -361,6 +387,7 @@ def _materialize_spans(raw_spans: list[dict[str, Any]], source_id: str) -> list[
                 source=source,
                 asr_model=source_id,
                 score=float(score) if score is not None else None,
+                **timing,
             )
         )
     return spans
@@ -465,6 +492,7 @@ def scan_for_pii(
         return _finish(_empty({"pii_subprocess": msg}))
 
     spans_by_index_raw = result.get("spans_by_asr", {})
+    cache_by_index = dict(result.get("cache", {}))
     failures = dict(result.get("failures", {}))
     detectors_used = list(result.get("detectors_used", []))
 
@@ -500,16 +528,18 @@ def scan_for_pii(
         print(f"warn: {no_detector_msg}", file=sys.stderr)
         return _finish(_empty(failures))
 
-    return _finish(
-        [
+    scans: list[PiiScan] = []
+    for i, item in enumerate(items):
+        line = item if isinstance(item, ScriptLine) else None
+        scans.append(
             PiiScan(
-                spans=_materialize_spans(spans_by_index_raw.get(str(i), []), str(i)),
+                spans=_materialize_spans(spans_by_index_raw.get(str(i), []), str(i), line=line),
                 detectors_used=list(detectors_used),
                 failures=dict(failures),
+                cache=dict(cache_by_index.get(str(i), {})),
             )
-            for i in range(len(texts))
-        ]
-    )
+        )
+    return _finish(scans)
 
 
 def decide_pii(
@@ -687,7 +717,7 @@ def _compute_detection_confidence(spans: list[PiiSpan], n_asr_models: int, n_det
         return 0.0
     groups: dict[tuple[str, str], dict[str, Any]] = {}
     for s in spans:
-        normalized = s.text.strip().lower()
+        normalized = (s.text or "").strip().lower()
         if not normalized:
             continue
         key = (corroboration_family(s.category), normalized)

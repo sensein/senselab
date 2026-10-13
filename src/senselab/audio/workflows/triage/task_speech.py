@@ -1,0 +1,565 @@
+"""Speech outside the task: the lexical consensus words a recording holds that are not the task's own content.
+
+Two kinds of task have a defined content, so speech outside it can be read:
+
+- An airway or voice family asks for a sound, not words. A lexical consensus word in such a recording -- not
+  bracketed, not a vocalisation (:func:`~senselab.audio.workflows.triage.residue.is_non_lexical`) -- that is
+  neither the voice family's declared task text nor a recogniser's misreading of the task's own events
+  (:func:`~senselab.audio.workflows.triage.task_content.task_content_ids`) is speech outside the task. A
+  lexical family declared in ``data/task_speech.yaml`` ``voice_task_text`` (``loudness``) is read the same way,
+  its declared words standing for the voice family's task text (:func:`lexical_voice_family`).
+- An item-set family (fluency, item generation) asks for a list of open-vocabulary items. Its lexical words are
+  split into utterances at pauses (:func:`utterances`) and each utterance is an item or a phrase
+  (:func:`is_phrase`). An item utterance's words are the task's own content whatever they spell; a phrase's
+  words, less any member of the declared category, are speech outside the task. The share of utterances that
+  are phrases is ``phrase_share``, which is evidence only: the reviewer's phrase quotes decide and are masked.
+
+It is read over the whole file. The owning branch stores the reading; VERDICT reviews on a non-lexical family's
+reading and the fold's mask plan masks it. The bounds are in ``data/task_speech.yaml``; the design is
+``specs/20261007-task-events-in-background/design.md`` ("Speech outside the task", "Phrases instead of items",
+"The reviewer reads the phrases").
+"""
+
+from __future__ import annotations
+
+import functools
+from collections.abc import Collection, Sequence
+from dataclasses import dataclass
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
+
+import yaml
+
+from senselab.audio.workflows.triage.nodes.branches import AIRWAY_EXPECTATIONS, VOICE_EXPECTATIONS
+from senselab.audio.workflows.triage.nodes.common import (
+    consensus_words,
+    recording_duration,
+    word_hull,
+    write_measurement,
+)
+from senselab.audio.workflows.triage.residue import is_function_word, is_non_lexical, token_key
+from senselab.audio.workflows.triage.task_content import task_content_ids, task_content_parameters, task_events
+from senselab.utils.prov_store import Entity, ProvStore
+
+if TYPE_CHECKING:
+    from senselab.audio.data_structures import AudioHints
+    from senselab.audio.workflows.triage.config import TriageConfig
+
+TASK_SPEECH_PATH = Path(__file__).parent / "data" / "task_speech.yaml"
+
+TASK_SPEECH_READING = "task_speech_reading"
+"""The measurement holding a task's reading of the speech outside it."""
+
+
+@functools.cache
+def task_speech_parameters() -> dict[str, Any]:
+    """The parameters of ``data/task_speech.yaml``.
+
+    Returns:
+        The parsed mapping.
+    """
+    return dict(yaml.safe_load(TASK_SPEECH_PATH.read_text()) or {})
+
+
+def voice_task_text(family: str | None) -> tuple[str, ...] | None:
+    """The declared task text of a lexical family read as a voice task (``task_speech.yaml`` ``voice_task_text``).
+
+    Args:
+        family: The declared family, or None.
+
+    Returns:
+        The family's task-text words; None for a family not declared there.
+    """
+    table = task_speech_parameters().get("voice_task_text") or {}
+    if not family or family not in table:
+        return None
+    return tuple(str(word) for word in table[family] or ())
+
+
+def lexical_voice_family(family: str | None) -> bool:
+    """Whether a lexical family is read as a voice task beyond its declared task text (``loudness``).
+
+    Args:
+        family: The declared family, or None.
+
+    Returns:
+        True for a family under ``task_speech.yaml`` ``voice_task_text``.
+    """
+    return voice_task_text(family) is not None
+
+
+def non_lexical_family(family: str | None) -> bool:
+    """Whether a declared family asks for a sound rather than words.
+
+    Args:
+        family: The declared family, or None.
+
+    Returns:
+        True for an airway or voice family, and for a lexical family read as a voice task
+        (:func:`lexical_voice_family`).
+    """
+    return bool(family) and (
+        family in AIRWAY_EXPECTATIONS or family in VOICE_EXPECTATIONS or lexical_voice_family(family)
+    )
+
+
+def item_set_family(family: str | None) -> bool:
+    """Whether a declared family elicits open-vocabulary items (``task_content.yaml`` ``open_vocabulary_families``).
+
+    Args:
+        family: The declared family, or None.
+
+    Returns:
+        True for a fluency or item-generation family.
+    """
+    return bool(family) and family in set(task_content_parameters().get("open_vocabulary_families") or ())
+
+
+def narrative_family(family: str | None) -> bool:
+    """Whether a declared family is an open or narrative lexical task: a free response.
+
+    Args:
+        family: The declared family, or None.
+
+    Returns:
+        True for a SPEECH family whose expectation is ``FREE_RESPONSE`` (story retell, free speech, picture
+        description, open response).
+    """
+    from senselab.audio.workflows.triage.nodes.branches import SPEECH_EXPECTATIONS, Pattern  # noqa: PLC0415
+
+    expectation = SPEECH_EXPECTATIONS.get(family or "")
+    return expectation is not None and expectation.pattern == Pattern.FREE_RESPONSE
+
+
+def speech_before(words: Sequence[Entity], start_s: float) -> dict[str, Any]:
+    """The lexical words whose timing lies before a task's extent starts.
+
+    Args:
+        words: The lexical consensus words, in stream order.
+        start_s: Where the task's extent starts.
+
+    Returns:
+        ``words_n``, ``start_s``, ``end_s`` and ``seconds`` (from the first such word's start to the last one's
+        end) over the timed words whose midpoint is before ``start_s``; empty where there is none.
+    """
+    spans = [span for span in (_timing(word) for word in words) if span is not None and sum(span) / 2.0 < start_s]
+    if not spans:
+        return {}
+    low, high = min(a for a, _ in spans), min(max(b for _, b in spans), start_s)
+    return {
+        "words_n": len(spans),
+        "start_s": round(low, 3),
+        "end_s": round(high, 3),
+        "seconds": round(max(0.0, high - low), 3),
+    }
+
+
+def reads_task_speech(family: str | None) -> bool:
+    """Whether a family's speech outside the task is read.
+
+    Args:
+        family: The declared family, or None.
+
+    Returns:
+        True for a non-lexical or an item-set family.
+    """
+    return non_lexical_family(family) or item_set_family(family)
+
+
+def words_min_for(family: str | None) -> int | None:
+    """The speech words outside the task at or over which a non-lexical recording is reviewed and masked.
+
+    Args:
+        family: The declared family, or None.
+
+    Returns:
+        ``words_min`` for a non-lexical family, None otherwise.
+    """
+    return int(task_speech_parameters()["words_min"]) if non_lexical_family(family) else None
+
+
+@dataclass(frozen=True)
+class TaskSpeech:
+    """The lexical words of a recording that are not the task's own content.
+
+    Attributes:
+        lexical_n: The lexical consensus words, over the whole file.
+        task_text_ids: Those that are the voice family's declared task text.
+        task_content_ids: Those that are the task's own content: a misreading of its events, an item utterance's
+            word, or a category member inside a phrase.
+        word_ids: The rest, the speech outside the task, in stream order.
+        untimed_ids: Those of them with no usable timing, which no mask can place.
+        runs: Each run of adjacent timed speech words: ``(start, end, words)``.
+        item_extent: The item utterances' hull, for an item-set family where one was read; None otherwise.
+        utterances: An item-set family's utterances, ``(start, end, words, phrase)``, in stream order; times
+            are None for an utterance of untimed words only.
+        phrase_words_n: The words of its phrase utterances.
+        member_ids: An item-set family's lexical words that are members of its declared category.
+        post_task_ids: In an airway or voice family, the lexical words after the task's last event, which are
+            speech outside the task whatever they spell.
+    """
+
+    lexical_n: int = 0
+    task_text_ids: tuple[str, ...] = ()
+    task_content_ids: tuple[str, ...] = ()
+    word_ids: tuple[str, ...] = ()
+    untimed_ids: tuple[str, ...] = ()
+    runs: tuple[tuple[float, float, int], ...] = ()
+    item_extent: tuple[float, float] | None = None
+    utterances: tuple[tuple[float | None, float | None, int, bool], ...] = ()
+    phrase_words_n: int = 0
+    member_ids: tuple[str, ...] = ()
+    post_task_ids: tuple[str, ...] = ()
+
+    @property
+    def words_n(self) -> int:
+        """The speech words outside the task."""
+        return len(self.word_ids)
+
+    @property
+    def off_task_fraction(self) -> float | None:
+        """The speech words outside the task over every lexical word; None with no lexical word."""
+        return round(self.words_n / self.lexical_n, 3) if self.lexical_n else None
+
+    @property
+    def phrase_utterances_n(self) -> int:
+        """The utterances that are phrases."""
+        return sum(1 for utterance in self.utterances if utterance[3])
+
+    @property
+    def phrase_share(self) -> float | None:
+        """The phrase utterances over every utterance; None with no utterance."""
+        return round(self.phrase_utterances_n / len(self.utterances), 3) if self.utterances else None
+
+    @property
+    def phrase_word_share(self) -> float | None:
+        """The phrase utterances' words over every lexical word; None with no utterance."""
+        return round(self.phrase_words_n / self.lexical_n, 3) if self.utterances and self.lexical_n else None
+
+    def record(self) -> dict[str, Any]:
+        """The reading, for the store: counts, times and word ids, never a word's text.
+
+        Returns:
+            JSON-ready attributes.
+        """
+        return {
+            "words_n": self.words_n,
+            "untimed_n": len(self.untimed_ids),
+            "lexical_n": self.lexical_n,
+            "off_task_fraction": self.off_task_fraction,
+            "task_text_n": len(self.task_text_ids),
+            "task_content_n": len(self.task_content_ids),
+            "runs_n": len(self.runs),
+            "runs": [[round(a, 3), round(b, 3), n] for a, b, n in self.runs],
+            "item_extent": None if self.item_extent is None else [round(v, 3) for v in self.item_extent],
+            "utterances_n": len(self.utterances),
+            "phrase_utterances_n": self.phrase_utterances_n,
+            "phrase_words_n": self.phrase_words_n,
+            "phrase_share": self.phrase_share,
+            "phrase_word_share": self.phrase_word_share,
+            "utterances": [
+                [None if a is None else round(a, 3), None if b is None else round(b, 3), n, phrase]
+                for a, b, n, phrase in self.utterances
+            ],
+            "word_ids": list(self.word_ids),
+            "untimed_ids": list(self.untimed_ids),
+            "task_content_ids": list(self.task_content_ids),
+            "member_ids": list(self.member_ids),
+            "post_task_n": len(self.post_task_ids),
+            "post_task_ids": list(self.post_task_ids),
+        }
+
+
+def timed(word: Entity) -> bool:
+    """Whether a word carries timing a mask can be placed on.
+
+    Args:
+        word: A consensus word.
+
+    Returns:
+        True where its timing hull has a positive length.
+    """
+    start, end = word_hull(word)
+    return end > start
+
+
+def task_text_ids(words: Sequence[Entity], family: str | None, task_text: Sequence[str]) -> set[str]:
+    """The words of a voice family's own declared text: its instructions, stimulus and expected tokens.
+
+    Args:
+        words: The consensus words, in stream order.
+        family: The declared family.
+        task_text: The task's texts as the recording declares them
+            (:func:`~senselab.audio.workflows.triage.nodes.redact.task_texts`).
+
+    Returns:
+        The ids of the words matching them, by stem or as a number word (``1`` is ``one``); in a lexical family
+        read as a voice task, also a word that is its declared task text run together (``heyhey``). Empty for
+        any other family.
+    """
+    declared = voice_task_text(family)
+    if family in VOICE_EXPECTATIONS:
+        tokens: Sequence[str] = VOICE_EXPECTATIONS[str(family)].tokens or ()
+    elif declared is not None:
+        tokens = declared
+    else:
+        return set()
+    from senselab.audio.workflows.triage.nodes.redact import task_text_positions  # noqa: PLC0415
+
+    texts = [*task_text, *tokens]
+    keys = {token_key(piece) for text in texts for piece in str(text).split()} - {""}
+    units = {token_key(piece) for text in declared or () for piece in str(text).split()} - {""}
+    surfaces = [str(word.attributes.get("text") or "") for word in words]
+    by_stem = task_text_positions(surfaces, texts)
+    return {
+        word.id
+        for position, word in enumerate(words)
+        if position in by_stem
+        or token_key(surfaces[position]) in keys
+        or any(_repeats(token_key(surfaces[position]), unit) for unit in units)
+    }
+
+
+def _repeats(key: str, unit: str) -> bool:
+    """Whether a key is one unit run together one or more times (``heyhey`` of ``hey``)."""
+    return bool(key) and len(key) % len(unit) == 0 and unit * (len(key) // len(unit)) == key
+
+
+def _timing(word: Entity) -> tuple[float, float] | None:
+    """A word's consensus timing (its derived extent), or its hull where it has none; None where neither has length."""
+    span = (float(word.extent[0]), float(word.extent[1])) if word.extent is not None else word_hull(word)
+    return span if span[1] > span[0] else None
+
+
+def utterances(words: Sequence[Entity], *, gap_s: float) -> list[list[Entity]]:
+    """The words split into utterances at pauses.
+
+    Args:
+        words: The lexical words, in stream order.
+        gap_s: A pause at least this long between one word's consensus timing and the next one's starts an
+            utterance.
+
+    Returns:
+        The utterances, in stream order. A word with no usable timing stays in the utterance it falls in.
+    """
+    groups: list[list[Entity]] = []
+    last_end: float | None = None
+    for word in words:
+        span = _timing(word)
+        if span is None:
+            if groups:
+                groups[-1].append(word)
+            else:
+                groups.append([word])
+            continue
+        start, end = span
+        if groups and (last_end is None or start - last_end < gap_s):
+            groups[-1].append(word)
+            last_end = end if last_end is None else max(last_end, end)
+        else:
+            groups.append([word])
+            last_end = end
+    return groups
+
+
+def is_phrase(words: Sequence[Entity], *, words_min: int) -> bool:
+    """Whether an utterance is a phrase rather than an item: long enough, and holding a closed-class word.
+
+    Args:
+        words: The utterance's lexical words.
+        words_min: The fewest words a phrase holds.
+
+    Returns:
+        True where it holds at least ``words_min`` words and one of them is a closed-class word
+        (:func:`~senselab.audio.workflows.triage.residue.is_function_word`).
+    """
+    return len(words) >= words_min and any(is_function_word(str(w.attributes.get("text") or "")) for w in words)
+
+
+def item_utterances(words: Sequence[Entity]) -> list[list[Entity]]:
+    """An item list's item utterances, under ``data/task_speech.yaml``.
+
+    Args:
+        words: The lexical words, in stream order.
+
+    Returns:
+        Every utterance that is not a phrase; every utterance where all are phrases.
+    """
+    p = task_speech_parameters()
+    groups = utterances(words, gap_s=float(p["utterance_gap_s"]))
+    items = [group for group in groups if not is_phrase(group, words_min=int(p["phrase_words_min"]))]
+    return items or groups
+
+
+def _hull(words: Sequence[Entity], duration_s: float | None) -> tuple[float, float] | None:
+    spans = [word_hull(w, duration_s) for w in words if timed(w)]
+    return (min(a for a, _ in spans), max(b for _, b in spans)) if spans else None
+
+
+def _speech_runs(words: Sequence[Entity], speech: Sequence[Entity], lexical_ids: set[str]) -> list[list[Entity]]:
+    order = {word.id: position for position, word in enumerate(words)}
+    runs: list[list[Entity]] = []
+    for word in (w for w in speech if timed(w)):
+        if runs:
+            between = words[order[runs[-1][-1].id] + 1 : order[word.id]]
+            if not any(other.id in lexical_ids for other in between):
+                runs[-1].append(word)
+                continue
+        runs.append([word])
+    return runs
+
+
+def task_speech_of(
+    store: ProvStore,
+    family: str | None,
+    *,
+    task_text: Sequence[str] = (),
+    lexicon_ids: Collection[str] = frozenset(),
+    member_ids: Collection[str] = frozenset(),
+) -> TaskSpeech:
+    """The speech outside the task, read over the whole file.
+
+    Args:
+        store: The provenance store, read for the consensus words and the task readings' events.
+        family: The declared family.
+        task_text: The task's declared texts, exempt in a voice family.
+        lexicon_ids: The words of the task's own lexicon.
+        member_ids: The words that are members of an item-set family's declared category, never masked inside a
+            phrase.
+
+    Returns:
+        The reading; empty for a family whose speech outside the task is not read.
+    """
+    if not reads_task_speech(family):
+        return TaskSpeech()
+    words = consensus_words(store)
+    duration_s = recording_duration(store)
+    vocal = non_lexical_family(family)
+    lexical = [
+        word
+        for word in words
+        if not word.attributes.get("bracketed")
+        and not word.attributes.get("degenerate")
+        and not word.attributes.get("unconfirmed")
+        and not is_non_lexical(str(word.attributes.get("text") or ""), vocal_task=vocal)
+    ]
+    item_extent: tuple[float, float] | None = None
+    said: tuple[tuple[float | None, float | None, int, bool], ...] = ()
+    phrase_words_n = 0
+    post_task: set[str] = set()
+    if vocal:
+        events = task_events(store, family)
+        text_ids = task_text_ids(words, family, task_text)
+        content = task_content_ids(words, events, family=family, lexicon_ids=lexicon_ids)
+        post_task = after_last_event(lexical, events) if not lexical_voice_family(family) else set()
+        text_ids -= post_task
+        content -= post_task
+    else:
+        p = task_speech_parameters()
+        text_ids = set()
+        groups = utterances(lexical, gap_s=float(p["utterance_gap_s"]))
+        phrases = [is_phrase(group, words_min=int(p["phrase_words_min"])) for group in groups]
+        items = [word for group, phrase in zip(groups, phrases) if not phrase for word in group]
+        content = {word.id for word in items} | {
+            word.id for group, phrase in zip(groups, phrases) if phrase for word in group if word.id in member_ids
+        }
+        phrase_words_n = sum(len(group) for group, phrase in zip(groups, phrases) if phrase)
+        item_extent = _hull(items, duration_s)
+        said = tuple(
+            (*(_hull(group, duration_s) or (None, None)), len(group), phrase) for group, phrase in zip(groups, phrases)
+        )
+    speech = [word for word in lexical if word.id not in text_ids and word.id not in content]
+    runs_of_speech = _speech_runs(words, speech, {word.id for word in lexical})
+    return TaskSpeech(
+        lexical_n=len(lexical),
+        task_text_ids=tuple(word.id for word in lexical if word.id in text_ids),
+        task_content_ids=tuple(word.id for word in lexical if word.id in content and word.id not in text_ids),
+        word_ids=tuple(word.id for word in speech),
+        untimed_ids=tuple(word.id for word in speech if not timed(word)),
+        runs=tuple(
+            (min(word_hull(w, duration_s)[0] for w in run), max(word_hull(w, duration_s)[1] for w in run), len(run))
+            for run in runs_of_speech
+        ),
+        item_extent=item_extent,
+        utterances=said,
+        phrase_words_n=phrase_words_n,
+        member_ids=tuple(word.id for word in lexical if word.id in member_ids) if not vocal else (),
+        post_task_ids=tuple(word.id for word in lexical if word.id in post_task),
+    )
+
+
+def after_last_event(words: Sequence[Entity], events: Sequence[tuple[float, float]]) -> set[str]:
+    """The words that start once the task's last event has ended.
+
+    Args:
+        words: The lexical words.
+        events: The task's events.
+
+    Returns:
+        The ids of the timed words starting at or after the last event's end; empty where no event was read.
+    """
+    if not events:
+        return set()
+    last = max(float(end) for _, end in events)
+    return {word.id for word in words if (span := _timing(word)) is not None and span[0] >= last}
+
+
+def category_member_ids(words: Sequence[Entity], family: str | None, hint: AudioHints | None) -> set[str]:
+    """The words that are members of an item-set family's declared category.
+
+    Args:
+        words: The consensus words, in stream order.
+        family: The declared family.
+        hint: What the recording was declared to contain, read for a category named per recording.
+
+    Returns:
+        The member words' ids; empty for any other family or where the instructions name no category.
+    """
+    if not item_set_family(family):
+        return set()
+    from senselab.audio.workflows.triage.nodes.branches import item_category  # noqa: PLC0415
+    from senselab.audio.workflows.triage.task_lexicon import category_members  # noqa: PLC0415
+
+    positions = category_members(item_category(str(family), hint), [str(w.attributes.get("text") or "") for w in words])
+    return {words[i].id for i in positions}
+
+
+def write_task_speech(
+    store: ProvStore,
+    activity: str,
+    software: str,
+    *,
+    family: str,
+    config: TriageConfig,
+    hint: AudioHints | None,
+) -> str | None:
+    """Write a task's reading of the speech outside it (:func:`task_speech_of`).
+
+    Args:
+        store: The provenance store.
+        activity: The owning branch's activity.
+        software: The software agent.
+        family: The declared family.
+        config: The triage configuration, read for the family's task lexicon.
+        hint: What the recording was declared to contain, read for the task's texts and category.
+
+    Returns:
+        The measurement's id; None for a family whose speech outside the task is not read.
+    """
+    if not reads_task_speech(family):
+        return None
+    from senselab.audio.workflows.triage.nodes.redact import task_texts  # noqa: PLC0415
+    from senselab.audio.workflows.triage.task_lexicon import task_lexicon  # noqa: PLC0415
+
+    words = consensus_words(store)
+    positions = task_lexicon(config, family, hint).positions([str(w.attributes.get("text") or "") for w in words])
+    reading = task_speech_of(
+        store,
+        family,
+        task_text=task_texts(hint),
+        lexicon_ids={words[i].id for i in positions},
+        member_ids=category_member_ids(words, family, hint),
+    )
+    return write_measurement(
+        store, activity, software, name=TASK_SPEECH_READING, signal="plain", attributes=reading.record()
+    )

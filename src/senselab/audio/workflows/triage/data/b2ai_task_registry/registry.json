@@ -1,0 +1,1563 @@
+{
+ "schema_version": "1",
+ "source": {
+  "repo": "bridge2ai-redcap",
+  "git_tag": "v4.9.1"
+ },
+ "tasks": {
+  "adult.prolonged-vowel": {
+   "task_id": "adult.prolonged-vowel",
+   "canonical_name": "Prolonged Vowel",
+   "population": "adult",
+   "status": "current",
+   "family": "Prolonged Vowel",
+   "version": null,
+   "age_or_cohort": [
+    "All"
+   ],
+   "recording_count": 1,
+   "instructions": "This task helps us analyze features in your voice. Please press the play button to listen to the demonstration on how to complete the task. Then, tap the record button and imitate the speaker by repeating the sentence “1, 2, 3 aah” in your normal voice. Please hold the sound “aah” until the timer runs out.",
+   "instructions_source": "harvested",
+   "speech_type": "non-lexical",
+   "prompt_ref": {
+    "type": "static-inline"
+   },
+   "recordings": [],
+   "aliases": [
+    "prolonged-vowel"
+   ]
+  },
+  "adult.maximum-phonation-time.v2": {
+   "task_id": "adult.maximum-phonation-time.v2",
+   "canonical_name": "Maximum Phonation Time (v2)",
+   "population": "adult",
+   "status": "current",
+   "family": "Maximum Phonation Time",
+   "version": "v2",
+   "age_or_cohort": [
+    "All"
+   ],
+   "recording_count": 2,
+   "instructions": "This task helps us analyze the way your breathing is connected to your voice. Take a very deep breath, tap on the record button, and hold out “ah” for as long as possible until you completely run out of air. Try to hold it until the progress bar reaches the end of the screen.",
+   "instructions_source": "harvested",
+   "speech_type": "non-lexical",
+   "prompt_ref": {
+    "type": "static-inline"
+   },
+   "recordings": [
+    {
+     "recording_id": "maximum-phonation-time-v2-1",
+     "canonical_name": "Maximum phonation time (v2)-1",
+     "sub_name": "(v2)-1",
+     "instructions": "This task helps us analyze the way your breathing is connected to your voice. Take a very deep breath, tap on the record button, and hold out “ah” for as long as possible until you completely run out of air. Try to hold it until the progress bar reaches the end of the screen.",
+     "instructions_source": "curated"
+    },
+    {
+     "recording_id": "maximum-phonation-time-v2-2",
+     "canonical_name": "Maximum phonation time (v2)-2",
+     "sub_name": "(v2)-2",
+     "instructions": "This task helps us analyze the way your breathing is connected to your voice. Take a very deep breath, tap on the record button, and hold out “ah” for as long as possible until you completely run out of air. Try to hold it until the progress bar reaches the end of the screen. Now try to hold out “ah” for even longer.",
+     "instructions_source": "curated"
+    }
+   ],
+   "aliases": [
+    "maximum-phonation-time",
+    "maximum-phonation-time(v2)",
+    "maximum-phonation-time-(v2)",
+    "maximum-phonation-time-v2"
+   ]
+  },
+  "adult.glides": {
+   "task_id": "adult.glides",
+   "canonical_name": "Glides",
+   "population": "adult",
+   "status": "current",
+   "family": "Glides",
+   "version": null,
+   "age_or_cohort": [
+    "All"
+   ],
+   "recording_count": 2,
+   "instructions": "Please watch the video to help you understand the next task and imitate what the speaker does. When you're ready, press the record button and use the sound “ee” to gradually move from your lowest note to your highest.",
+   "instructions_source": "harvested",
+   "speech_type": "non-lexical",
+   "prompt_ref": {
+    "type": "static-inline"
+   },
+   "recordings": [],
+   "aliases": [
+    "glides"
+   ]
+  },
+  "adult.harvard-sentences": {
+   "task_id": "adult.harvard-sentences",
+   "canonical_name": "Harvard Sentences",
+   "population": "adult",
+   "status": "current",
+   "family": "Harvard Sentences",
+   "version": null,
+   "age_or_cohort": [
+    "All"
+   ],
+   "recording_count": 20,
+   "instructions": "Please read the following sentences out loud in your typical voice.",
+   "instructions_source": "harvested",
+   "speech_type": "read",
+   "prompt_ref": {
+    "type": "stimulus-bank",
+    "bank": "harvard_sentences_bank",
+    "select": "list-index"
+   },
+   "recordings": [],
+   "aliases": [
+    "harvard-sentences"
+   ]
+  },
+  "adult.loudness.v2": {
+   "task_id": "adult.loudness.v2",
+   "canonical_name": "Loudness (v2)",
+   "population": "adult",
+   "status": "current",
+   "family": "Loudness",
+   "version": "v2",
+   "age_or_cohort": [
+    "All"
+   ],
+   "recording_count": 1,
+   "instructions": "This helps us to determine the loudness of the voice. When you're ready, press the record button and say “hey” in your normal voice. Then, shout “hey” as loud as you can. Try to reach the target line on the screen. Follow the prompts on the screen to continue.",
+   "instructions_source": "harvested",
+   "speech_type": "non-lexical",
+   "prompt_ref": {
+    "type": "static-inline"
+   },
+   "recordings": [],
+   "aliases": [
+    "loudness",
+    "loudness(v2)",
+    "loudness-(v2)",
+    "loudness-v2"
+   ]
+  },
+  "adult.diadochokinesis.v2": {
+   "task_id": "adult.diadochokinesis.v2",
+   "canonical_name": "Diadochokinesis (v2)",
+   "population": "adult",
+   "status": "current",
+   "family": "Diadochokinesis",
+   "version": "v2",
+   "age_or_cohort": [
+    "All"
+   ],
+   "recording_count": 5,
+   "instructions": "This task helps us analyze the ease and precision of speech sound productions. Please press the play button to listen to the demonstration on how to complete the task. Then, tap the record button and imitate the speaker by repeating the syllables 'puhtuhkuh' as quickly and consistently as possible until the timer runs out - 'puhtuhkuhpuhtuhkuh'",
+   "instructions_source": "harvested",
+   "speech_type": "non-lexical",
+   "prompt_ref": {
+    "type": "static-inline"
+   },
+   "recordings": [],
+   "aliases": [
+    "diadochokinesis",
+    "diadochokinesis(v2)",
+    "diadochokinesis-(v2)",
+    "diadochokinesis-v2"
+   ]
+  },
+  "adult.free-speech.v2": {
+   "task_id": "adult.free-speech.v2",
+   "canonical_name": "Free Speech (v2)",
+   "population": "adult",
+   "status": "current",
+   "family": "Free Speech",
+   "version": "v2",
+   "age_or_cohort": [
+    "All"
+   ],
+   "recording_count": 3,
+   "instructions": "This section is meant to hear you speak freely by answering an open-ended question. We'd like to get a recording of your natural speech. Please answer the following questions as though you were having a conversation. We'll record about 30 seconds of your response.",
+   "instructions_source": "harvested",
+   "speech_type": "elicited",
+   "prompt_ref": {
+    "type": "static-inline"
+   },
+   "recordings": [],
+   "aliases": [
+    "free-speech",
+    "free-speech(v2)",
+    "free-speech-(v2)",
+    "free-speech-v2"
+   ]
+  },
+  "adult.respiration-and-cough.v2": {
+   "task_id": "adult.respiration-and-cough.v2",
+   "canonical_name": "Respiration and Cough (v2)",
+   "population": "adult",
+   "status": "current",
+   "family": "Respiration and Cough",
+   "version": "v2",
+   "age_or_cohort": [
+    "All"
+   ],
+   "recording_count": 5,
+   "instructions": "Please do not cover your mouth or place your hand between your mouth and the microphone during recording. Breathe normally, then when you are ready, tap the record button below and cough HARD as if something were stuck in your throat. Tap stop when finished.",
+   "instructions_source": "harvested",
+   "speech_type": "non-lexical",
+   "prompt_ref": {
+    "type": "static-inline"
+   },
+   "recordings": [
+    {
+     "recording_id": "respiration-and-cough-v2-breath",
+     "canonical_name": "Respiration and cough (v2)-Breath",
+     "sub_name": "(v2)-Breath",
+     "instructions": "After pressing on record, breathe comfortably through your mouth for 20 seconds, until the timer runs out.",
+     "instructions_source": "curated"
+    },
+    {
+     "recording_id": "respiration-and-cough-v2-hardcough",
+     "canonical_name": "Respiration and cough (v2)-HardCough",
+     "sub_name": "(v2)-HardCough",
+     "instructions": "Please do not cover your mouth or place your hand between your mouth and the microphone during recording. Breathe normally, then when you are ready, tap the record button below and cough HARD as if something were stuck in your throat. Tap stop when finished.",
+     "instructions_source": "curated"
+    },
+    {
+     "recording_id": "respiration-and-cough-v2-threebreaths",
+     "canonical_name": "Respiration and cough (v2)-ThreeBreaths",
+     "sub_name": "(v2)-ThreeBreaths",
+     "instructions": "After pressing on record, exhale normally, then inhale quickly through your mouth, as if you are trying to catch your breath. Record 3 of these breaths in a single recording. Tap stop when finished.",
+     "instructions_source": "curated"
+    },
+    {
+     "recording_id": "respiration-and-cough-v2-threebreathsmouth",
+     "canonical_name": "Respiration and cough (v2)-ThreeBreathsMouth",
+     "sub_name": "(v2)-ThreeBreathsMouth",
+     "instructions": "After pressing on record, take 3 deep breaths in and out through your mouth. Tap stop when finished.",
+     "instructions_source": "curated"
+    },
+    {
+     "recording_id": "respiration-and-cough-v2-threebreathsnose",
+     "canonical_name": "Respiration and cough (v2)-ThreeBreathsNose",
+     "sub_name": "(v2)-ThreeBreathsNose",
+     "instructions": "After pressing on record, take 3 deep breaths in and out through your nose with your mouth closed. Tap stop when finished.",
+     "instructions_source": "curated"
+    }
+   ],
+   "aliases": [
+    "respiration-and-cough",
+    "respiration-and-cough(v2)",
+    "respiration-and-cough-(v2)",
+    "respiration-and-cough-v2"
+   ]
+  },
+  "adult.picture-description": {
+   "task_id": "adult.picture-description",
+   "canonical_name": "Picture Description",
+   "population": "adult",
+   "status": "current",
+   "family": "Picture Description",
+   "version": null,
+   "age_or_cohort": [
+    "All"
+   ],
+   "recording_count": 1,
+   "instructions": "Describe everything that is happening in the picture (as though describing it for the blind), trying to use complete sentences.",
+   "instructions_source": "harvested",
+   "speech_type": "elicited",
+   "prompt_ref": {
+    "type": "image",
+    "asset_repo": "eipm/bridge2ai-redcap",
+    "asset_commit": "67e75fac084c2763c21cce064ebbbe8a93664046",
+    "asset_map": {
+     "description": "docs/Adults/Acoustic Tasks/Current/Picture Description/PictureDescriptionTaskPicture1.png",
+     "option1": "docs/Adults/Acoustic Tasks/Current/Picture Description/PictureDescriptionTaskPicture1.png",
+     "option2": "docs/Adults/Acoustic Tasks/Current/Picture Description/PictureDescriptionTaskPicture2.jpg"
+    }
+   },
+   "recordings": [],
+   "aliases": [
+    "picture-description"
+   ]
+  },
+  "adult.story-recall.v2": {
+   "task_id": "adult.story-recall.v2",
+   "canonical_name": "Story Recall (v2)",
+   "population": "adult",
+   "status": "current",
+   "family": "Story Recall",
+   "version": "v2",
+   "age_or_cohort": [
+    "All"
+   ],
+   "recording_count": 1,
+   "instructions": "Below you will be presented with a story about a boy and a frog. You may click forward to see the next image in the series. Feel free to move back and forth as much as you like until you are comfortable with the story. You will have up to 5 minutes to view the story, but you are not required to use the full 5 minutes. Once the time is up, please retell the story in as much detail as possible. When you are ready, please click the record button below. Once you click the record button, the story will disappear.",
+   "instructions_source": "harvested",
+   "speech_type": "recall",
+   "prompt_ref": {
+    "type": "static-inline",
+    "asset_repo": "eipm/bridge2ai-redcap",
+    "asset_commit": "67e75fac084c2763c21cce064ebbbe8a93664046",
+    "asset_path": "docs/Adults/Acoustic Tasks/Current/Story Recall - v2/StoryRecall_{n}.jpg",
+    "asset_count": 10
+   },
+   "recordings": [],
+   "aliases": [
+    "story-recall",
+    "story-recall(v2)",
+    "story-recall-(v2)",
+    "story-recall-v2"
+   ]
+  },
+  "adult.caterpillar-passage": {
+   "task_id": "adult.caterpillar-passage",
+   "canonical_name": "Caterpillar Passage",
+   "population": "adult",
+   "status": "current",
+   "family": "Caterpillar Passage",
+   "version": null,
+   "age_or_cohort": [
+    "Voice"
+   ],
+   "recording_count": 1,
+   "instructions": "This is a passage that contains speech sounds in English by sound frequency to test your ability to produce speech sounds. Please read the following passage out loud in your typical voice.",
+   "instructions_source": "harvested",
+   "speech_type": "read",
+   "prompt_ref": {
+    "type": "static-inline"
+   },
+   "recordings": [],
+   "aliases": [
+    "caterpillar-passage"
+   ]
+  },
+  "adult.cape-v-sentences.v2": {
+   "task_id": "adult.cape-v-sentences.v2",
+   "canonical_name": "Cape V Sentences (v2)",
+   "population": "adult",
+   "status": "current",
+   "family": "Cape V Sentences",
+   "version": "v2",
+   "age_or_cohort": [
+    "Voice"
+   ],
+   "recording_count": 6,
+   "instructions": "Please read the following sentences out loud in your typical voice.",
+   "instructions_source": "harvested",
+   "speech_type": "read",
+   "prompt_ref": {
+    "type": "stimulus-bank",
+    "bank": "cape_v_sentences_bank",
+    "select": "version-index"
+   },
+   "recordings": [],
+   "aliases": [
+    "cape-v-sentences",
+    "cape-v-sentences(v2)",
+    "cape-v-sentences-(v2)",
+    "cape-v-sentences-v2"
+   ]
+  },
+  "adult.productive-vocabulary": {
+   "task_id": "adult.productive-vocabulary",
+   "canonical_name": "Productive Vocabulary",
+   "population": "adult",
+   "status": "current",
+   "family": "Productive Vocabulary",
+   "version": null,
+   "age_or_cohort": [
+    "Neurological & Neurodegenerative"
+   ],
+   "recording_count": 6,
+   "instructions": "Below you will be provided with a series of words. You may or may not know the word. If you know the word, please provide a definition of the word. After you have defined the word, press 'Next Word'. If you do NOT know the word, press 'I don't know this word, next', and you will be provided a new word. Once 6 words are defined, the 'Done' button appears.",
+   "instructions_source": "harvested",
+   "speech_type": "elicited",
+   "prompt_ref": {
+    "type": "questionnaire-join",
+    "instrument": "vocab",
+    "join_key": "vocabulary_recording_acoustic_task_id",
+    "select": "index-field",
+    "field_template": "vocabulary_item_word_{i}"
+   },
+   "recordings": [],
+   "aliases": [
+    "productive-vocabulary"
+   ]
+  },
+  "adult.random-item-generation.v2": {
+   "task_id": "adult.random-item-generation.v2",
+   "canonical_name": "Random Item Generation (v2)",
+   "population": "adult",
+   "status": "current",
+   "family": "Random Item Generation",
+   "version": "v2",
+   "age_or_cohort": [
+    "Neurological & Neurodegenerative"
+   ],
+   "recording_count": 1,
+   "instructions": "You will have to speak a series of (i) random letters or numbers (repetition allowed), or (ii) items from a given category e.g., cities, animals, etc. (repetition not allowed), with the goal of maximizing the number of items. The selection will appear when you start recording. The recording will automatically stop at the end.",
+   "instructions_source": "harvested",
+   "speech_type": "elicited",
+   "prompt_ref": {
+    "type": "questionnaire-join",
+    "instrument": "random",
+    "join_key": "random_recording_acoustic_task_id",
+    "select": "field",
+    "field": "random_item_generation_category"
+   },
+   "recordings": [],
+   "aliases": [
+    "random-item-generation",
+    "random-item-generation(v2)",
+    "random-item-generation-(v2)",
+    "random-item-generation-v2"
+   ]
+  },
+  "adult.word-color-stroop": {
+   "task_id": "adult.word-color-stroop",
+   "canonical_name": "Word-Color Stroop",
+   "population": "adult",
+   "status": "current",
+   "family": "Word-Color Stroop",
+   "version": null,
+   "age_or_cohort": [
+    "Neurological & Neurodegenerative"
+   ],
+   "recording_count": 1,
+   "instructions": "This exercise asks you to name out loud the color in which a word is displayed. Sometimes the word will be a color word: do not read the word aloud, just state the color in which it's displayed. For example, if you see the word \"brown\", and its letters are displayed in blue, you will say the word \"blue\". Please answer as quickly as possible. Time limit = 5 seconds/item, 15 random words. Total time 75s. Tap on the red circle below to start recording. The recording will continue through all tasks and automatically stop at the end.",
+   "instructions_source": "harvested",
+   "speech_type": "read",
+   "prompt_ref": {
+    "type": "questionnaire-join",
+    "instrument": "stroop",
+    "join_key": "stroop_recording_acoustic_task_id",
+    "select": "color-list",
+    "n": 15,
+    "field_template": "stroop_item_color_{i}"
+   },
+   "recordings": [],
+   "aliases": [
+    "word-color-stroop"
+   ]
+  },
+  "adult.rainbow-passage": {
+   "task_id": "adult.rainbow-passage",
+   "canonical_name": "Rainbow Passage",
+   "population": "adult",
+   "status": "retired",
+   "family": "Rainbow Passage",
+   "version": null,
+   "age_or_cohort": [
+    "All"
+   ],
+   "recording_count": 1,
+   "instructions": "This task helps us evaluate how you use breathing to support your voice. Please read the following passage out loud in your typical voice.",
+   "instructions_source": "harvested",
+   "speech_type": "read",
+   "prompt_ref": {
+    "type": "static-inline"
+   },
+   "recordings": [],
+   "aliases": [
+    "rainbow-passage"
+   ]
+  },
+  "adult.maximum-phonation-time.v1": {
+   "task_id": "adult.maximum-phonation-time.v1",
+   "canonical_name": "Maximum Phonation Time (v1)",
+   "population": "adult",
+   "status": "retired",
+   "family": "Maximum Phonation Time",
+   "version": "v1",
+   "age_or_cohort": [
+    "All"
+   ],
+   "recording_count": 3,
+   "instructions": "This task helps us analyze the way your breathing is connected to your voice. Take a very deep breath and hold out “ah” for as long as possible until you completely run out of air. We will repeat this task 3 times.",
+   "instructions_source": "curated",
+   "speech_type": "non-lexical",
+   "prompt_ref": {
+    "type": "static-inline"
+   },
+   "recordings": [],
+   "aliases": [
+    "maximum-phonation-time",
+    "maximum-phonation-time-v1"
+   ]
+  },
+  "adult.loudness.v1": {
+   "task_id": "adult.loudness.v1",
+   "canonical_name": "Loudness (v1)",
+   "population": "adult",
+   "status": "retired",
+   "family": "Loudness",
+   "version": "v1",
+   "age_or_cohort": [
+    "All"
+   ],
+   "recording_count": 1,
+   "instructions": "This helps us to determine the loudness of the voice. When you are ready, press on the record button and shout “hey” as loud as possible 3 times in a single recording.",
+   "instructions_source": "harvested",
+   "speech_type": "non-lexical",
+   "prompt_ref": {
+    "type": "static-inline"
+   },
+   "recordings": [],
+   "aliases": [
+    "loudness",
+    "loudness-v1"
+   ]
+  },
+  "adult.diadochokinesis.v1": {
+   "task_id": "adult.diadochokinesis.v1",
+   "canonical_name": "Diadochokinesis (v1)",
+   "population": "adult",
+   "status": "retired",
+   "family": "Diadochokinesis",
+   "version": "v1",
+   "age_or_cohort": [
+    "All"
+   ],
+   "recording_count": 5,
+   "instructions": "This task helps us analyze the ease and precision of speech sound productions. Please press the play button to listen to the demonstration on how to complete the task. Then, tap the record button and imitate the speaker by repeating the word 'buttercup' as quickly and consistently as possible until the timer runs out.",
+   "instructions_source": "harvested",
+   "speech_type": "non-lexical",
+   "prompt_ref": {
+    "type": "static-inline"
+   },
+   "recordings": [
+    {
+     "recording_id": "diadochokinesis-pa",
+     "canonical_name": "Diadochokinesis-PA",
+     "sub_name": "PA",
+     "instructions": "This task helps us analyze the ease and precision of speech sound productions. Record yourself repeating the syllable /PA/ as fast as possible 10 times.",
+     "instructions_source": "curated"
+    },
+    {
+     "recording_id": "diadochokinesis-ta",
+     "canonical_name": "Diadochokinesis-TA",
+     "sub_name": "TA",
+     "instructions": "This task helps us analyze the ease and precision of speech sound productions. Record yourself repeating the syllable /TA/ as fast as possible 10 times.",
+     "instructions_source": "curated"
+    },
+    {
+     "recording_id": "diadochokinesis-ka",
+     "canonical_name": "Diadochokinesis-KA",
+     "sub_name": "KA",
+     "instructions": "This task helps us analyze the ease and precision of speech sound productions. Record yourself repeating the syllable /KA/ as fast as possible 10 times.",
+     "instructions_source": "curated"
+    },
+    {
+     "recording_id": "diadochokinesis-pataka",
+     "canonical_name": "Diadochokinesis-Pataka",
+     "sub_name": "Pataka",
+     "instructions": "This task helps us analyze the ease and precision of speech sound productions. Now repeat the word /Pataka/ as fast as possible 10 times.",
+     "instructions_source": "curated"
+    },
+    {
+     "recording_id": "diadochokinesis-buttercup",
+     "canonical_name": "Diadochokinesis-Buttercup",
+     "sub_name": "Buttercup",
+     "instructions": "This task helps us analyze the ease and precision of speech sound productions. Now repeat the word /buttercup/ as fast as possible 10 times.",
+     "instructions_source": "curated"
+    }
+   ],
+   "aliases": [
+    "diadochokinesis",
+    "diadochokinesis-v1"
+   ]
+  },
+  "adult.free-speech.v1": {
+   "task_id": "adult.free-speech.v1",
+   "canonical_name": "Free Speech (v1)",
+   "population": "adult",
+   "status": "retired",
+   "family": "Free Speech",
+   "version": "v1",
+   "age_or_cohort": [
+    "All"
+   ],
+   "recording_count": 3,
+   "instructions": "This section is meant to hear you speak freely by answering an open-ended question. Please answer the following questions and record your answer. Keep talking until the time stops. Do not record yourself reading the prompt and avoid any information that could identify an individual.",
+   "instructions_source": "curated",
+   "speech_type": "elicited",
+   "prompt_ref": {
+    "type": "static-inline"
+   },
+   "recordings": [],
+   "aliases": [
+    "free-speech",
+    "free-speech-v1"
+   ]
+  },
+  "adult.respiration-and-cough.v1": {
+   "task_id": "adult.respiration-and-cough.v1",
+   "canonical_name": "Respiration and Cough (v1)",
+   "population": "adult",
+   "status": "retired",
+   "family": "Respiration and Cough",
+   "version": "v1",
+   "age_or_cohort": [
+    "All"
+   ],
+   "recording_count": 10,
+   "instructions": "Breathing sounds can also provide information on your health. Let's record them.",
+   "instructions_source": "harvested",
+   "speech_type": "non-lexical",
+   "prompt_ref": {
+    "type": "static-inline"
+   },
+   "recordings": [
+    {
+     "recording_id": "respiration-and-cough-breath-1",
+     "canonical_name": "Respiration and cough-Breath-1",
+     "sub_name": "Breath-1",
+     "instructions": "First, let's hear you breathe comfortably for 30 seconds",
+     "instructions_source": "curated"
+    },
+    {
+     "recording_id": "respiration-and-cough-fivebreaths-1",
+     "canonical_name": "Respiration and cough-FiveBreaths-1",
+     "sub_name": "FiveBreaths-1",
+     "instructions": "After pressing on record, take 5 big breaths in and out through your nose with your mouth closed.",
+     "instructions_source": "curated"
+    },
+    {
+     "recording_id": "respiration-and-cough-fivebreaths-2",
+     "canonical_name": "Respiration and cough-FiveBreaths-2",
+     "sub_name": "FiveBreaths-2",
+     "instructions": "After pressing on record, take 5 big breaths in and out through your mouth.",
+     "instructions_source": "curated"
+    },
+    {
+     "recording_id": "respiration-and-cough-threequickbreaths-1",
+     "canonical_name": "Respiration and cough-ThreeQuickBreaths-1",
+     "sub_name": "ThreeQuickBreaths-1",
+     "instructions": "After pressing on record, exhale, then inhale quickly through your mouth, as if you are trying to catch your breath. Record 3 of these breaths in a single recording.",
+     "instructions_source": "curated"
+    },
+    {
+     "recording_id": "respiration-and-cough-cough-1",
+     "canonical_name": "Respiration and cough-Cough-1",
+     "sub_name": "Cough-1",
+     "instructions": "After pressing record, cough 5 times",
+     "instructions_source": "curated"
+    },
+    {
+     "recording_id": "respiration-and-cough-breath-2",
+     "canonical_name": "Respiration and cough-Breath-2",
+     "sub_name": "Breath-2",
+     "instructions": "First, let's hear you breathe comfortably for 30 seconds",
+     "instructions_source": "curated"
+    },
+    {
+     "recording_id": "respiration-and-cough-fivebreaths-3",
+     "canonical_name": "Respiration and cough-FiveBreaths-3",
+     "sub_name": "FiveBreaths-3",
+     "instructions": "After pressing on record, take 5 big breaths in and out through your nose with your mouth closed.",
+     "instructions_source": "curated"
+    },
+    {
+     "recording_id": "respiration-and-cough-fivebreaths-4",
+     "canonical_name": "Respiration and cough-FiveBreaths-4",
+     "sub_name": "FiveBreaths-4",
+     "instructions": "After pressing on record, take 5 big breaths in and out through your mouth.",
+     "instructions_source": "curated"
+    },
+    {
+     "recording_id": "respiration-and-cough-threequickbreaths-2",
+     "canonical_name": "Respiration and cough-ThreeQuickBreaths-2",
+     "sub_name": "ThreeQuickBreaths-2",
+     "instructions": "After pressing on record, exhale, then inhale quickly through your mouth, as if you are trying to catch your breath. Record 3 of these breaths in a single recording.",
+     "instructions_source": "curated"
+    },
+    {
+     "recording_id": "respiration-and-cough-cough-2",
+     "canonical_name": "Respiration and cough-Cough-2",
+     "sub_name": "Cough-2",
+     "instructions": "After pressing record, cough 5 times",
+     "instructions_source": "curated"
+    }
+   ],
+   "aliases": [
+    "respiration-and-cough",
+    "respiration-and-cough-v1"
+   ]
+  },
+  "adult.story-recall.v1": {
+   "task_id": "adult.story-recall.v1",
+   "canonical_name": "Story Recall (v1)",
+   "population": "adult",
+   "status": "retired",
+   "family": "Story Recall",
+   "version": "v1",
+   "age_or_cohort": [
+    "All"
+   ],
+   "recording_count": 1,
+   "instructions": "You are given a text. Read the text so you familiarize yourself with it. You have up to 5 minutes to read it as many times as you want. When you are ready, you will be asked to recall the story. This can be in your own words.",
+   "instructions_source": "curated",
+   "speech_type": "recall",
+   "prompt_ref": {
+    "type": "static-inline"
+   },
+   "recordings": [],
+   "aliases": [
+    "story-recall",
+    "story-recall-v1"
+   ]
+  },
+  "adult.free-speech-voice": {
+   "task_id": "adult.free-speech-voice",
+   "canonical_name": "Free Speech (Voice)",
+   "population": "adult",
+   "status": "retired",
+   "family": "Free Speech (Voice)",
+   "version": null,
+   "age_or_cohort": [
+    "Voice"
+   ],
+   "recording_count": 1,
+   "instructions": "Please answer the following question. You can read the question, then click on the recording button when you are ready to answer. You can keep talking until the timer is up.",
+   "instructions_source": "harvested",
+   "speech_type": "elicited",
+   "prompt_ref": {
+    "type": "static-inline"
+   },
+   "recordings": [],
+   "aliases": [
+    "free-speech-voice"
+   ]
+  },
+  "adult.cape-v-sentences.v1": {
+   "task_id": "adult.cape-v-sentences.v1",
+   "canonical_name": "Cape V Sentences (v1)",
+   "population": "adult",
+   "status": "retired",
+   "family": "Cape V Sentences",
+   "version": "v1",
+   "age_or_cohort": [
+    "Voice"
+   ],
+   "recording_count": 6,
+   "instructions": "Please read the following sentences out loud in your typical voice.",
+   "instructions_source": "harvested",
+   "speech_type": "read",
+   "prompt_ref": {
+    "type": "stimulus-bank",
+    "bank": "cape_v_sentences_bank",
+    "select": "version-index"
+   },
+   "recordings": [],
+   "aliases": [
+    "cape-v-sentences",
+    "cape-v-sentences-v1"
+   ]
+  },
+  "adult.animal-fluency": {
+   "task_id": "adult.animal-fluency",
+   "canonical_name": "Animal Fluency",
+   "population": "adult",
+   "status": "retired",
+   "family": "Animal Fluency",
+   "version": null,
+   "age_or_cohort": [
+    "Mood"
+   ],
+   "recording_count": 1,
+   "instructions": "For this task, you say as many animals as you can, while avoiding repeating the same ones. There is a 1 minute timer on this, and we will ask that you continue trying until the time is up. ",
+   "instructions_source": "harvested",
+   "speech_type": "elicited",
+   "prompt_ref": {
+    "type": "static-inline"
+   },
+   "recordings": [],
+   "aliases": [
+    "animal-fluency"
+   ]
+  },
+  "adult.open-response-questions": {
+   "task_id": "adult.open-response-questions",
+   "canonical_name": "Open Response Questions",
+   "population": "adult",
+   "status": "retired",
+   "family": "Open Response Questions",
+   "version": null,
+   "age_or_cohort": [
+    "Mood"
+   ],
+   "recording_count": 1,
+   "instructions": "Please answer the following questions and record your answer.",
+   "instructions_source": "harvested",
+   "speech_type": "elicited",
+   "prompt_ref": {
+    "type": "static-inline"
+   },
+   "recordings": [],
+   "aliases": [
+    "open-response-questions"
+   ]
+  },
+  "adult.breath-sounds": {
+   "task_id": "adult.breath-sounds",
+   "canonical_name": "Breath Sounds",
+   "population": "adult",
+   "status": "retired",
+   "family": "Breath Sounds",
+   "version": null,
+   "age_or_cohort": [
+    "Respiratory"
+   ],
+   "recording_count": 1,
+   "instructions": "You are being asked to record your breathing sounds. Please relax for 60 seconds until the task starts. Take three deep breaths in a row in and out of the mouth.",
+   "instructions_source": "curated",
+   "speech_type": "non-lexical",
+   "prompt_ref": {
+    "type": "static-inline"
+   },
+   "recordings": [],
+   "aliases": [
+    "breath-sounds"
+   ]
+  },
+  "adult.voluntary-cough": {
+   "task_id": "adult.voluntary-cough",
+   "canonical_name": "Voluntary Cough",
+   "population": "adult",
+   "status": "retired",
+   "family": "Voluntary Cough",
+   "version": null,
+   "age_or_cohort": [
+    "Respiratory"
+   ],
+   "recording_count": 1,
+   "instructions": "You are being asked to record coughing sounds. Breathe normally, then when you are ready, push record and cough HARD as if something were stuck in your throat. Then breathe normally again. Complete this task 3 times in a single recording.",
+   "instructions_source": "harvested",
+   "speech_type": "non-lexical",
+   "prompt_ref": {
+    "type": "static-inline"
+   },
+   "recordings": [],
+   "aliases": [
+    "voluntary-cough"
+   ]
+  },
+  "adult.cinderella-story": {
+   "task_id": "adult.cinderella-story",
+   "canonical_name": "Cinderella Story",
+   "population": "adult",
+   "status": "retired",
+   "family": "Cinderella Story",
+   "version": null,
+   "age_or_cohort": [
+    "Neurological & Neurodegenerative"
+   ],
+   "recording_count": 1,
+   "instructions": "You'll receive a hard copy of the Cinderella storybook from our study team to refresh your memory of the story. When ready, click the 'Record' button below to begin narrating the story. Once you've finished, tap on 'Stop Recording'.",
+   "instructions_source": "harvested",
+   "speech_type": "recall",
+   "prompt_ref": {
+    "type": "static-inline"
+   },
+   "recordings": [],
+   "aliases": [
+    "cinderella-story"
+   ]
+  },
+  "adult.random-item-generation.v1": {
+   "task_id": "adult.random-item-generation.v1",
+   "canonical_name": "Random Item Generation (v1)",
+   "population": "adult",
+   "status": "retired",
+   "family": "Random Item Generation",
+   "version": "v1",
+   "age_or_cohort": [
+    "Neurological & Neurodegenerative"
+   ],
+   "recording_count": 1,
+   "instructions": "You will have to speak a series of (i) random letters or numbers (repetition allowed), or (ii) items from a given category e.g., cities, animals, etc. (repetition not allowed), with the goal of maximizing the number of items. The selection will appear when you start recording. The recording will automatically stop at the end.",
+   "instructions_source": "harvested",
+   "speech_type": "elicited",
+   "prompt_ref": {
+    "type": "questionnaire-join",
+    "instrument": "random",
+    "join_key": "random_recording_acoustic_task_id",
+    "select": "field",
+    "field": "random_item_generation_category"
+   },
+   "recordings": [],
+   "aliases": [
+    "random-item-generation",
+    "random-item-generation-v1"
+   ]
+  },
+  "pediatric.identifying-pictures": {
+   "task_id": "pediatric.identifying-pictures",
+   "canonical_name": "Identifying Pictures",
+   "population": "pediatric",
+   "status": "current",
+   "family": "Identifying Pictures",
+   "version": null,
+   "age_or_cohort": [
+    "2–4",
+    "4–6",
+    "6–10",
+    "10+"
+   ],
+   "recording_count": 37,
+   "instructions": "That was great! Let's look at a few more pictures – if you know what it is, say it out loud so we can hear you! Remember, this time you're going to tell me the name of the picture, not the sound that it makes. If you're not sure, you can skip it and move on to the next picture. When you are ready, press \"record\".",
+   "instructions_source": "curated",
+   "speech_type": "read",
+   "prompt_ref": {
+    "type": "image",
+    "select": "index",
+    "asset_repo": "eipm/bridge2ai-redcap",
+    "asset_commit": "67e75fac084c2763c21cce064ebbbe8a93664046",
+    "asset_path": "docs/Pediatrics/Acoustic Tasks/Current/Identifying Pictures/pediatric_identifying_pictures_{i:02d}.jpg",
+    "text_bank": "identifying_pictures_bank"
+   },
+   "recordings": [],
+   "aliases": [
+    "identifying-pictures"
+   ]
+  },
+  "pediatric.noisy-sounds": {
+   "task_id": "pediatric.noisy-sounds",
+   "canonical_name": "Noisy Sounds",
+   "population": "pediatric",
+   "status": "current",
+   "family": "Noisy Sounds",
+   "version": null,
+   "age_or_cohort": [
+    "2–4",
+    "4–6",
+    "6–10"
+   ],
+   "recording_count": 10,
+   "instructions": "What a great job! Do you like making silly sounds? Do you know what sound a ghost or a mouse makes? Let's see if we can figure out what sound each of these pictures make.",
+   "instructions_source": "harvested",
+   "speech_type": "non-lexical",
+   "prompt_ref": {
+    "type": "image",
+    "select": "index",
+    "asset_repo": "eipm/bridge2ai-redcap",
+    "asset_commit": "67e75fac084c2763c21cce064ebbbe8a93664046",
+    "asset_path": "docs/Pediatrics/Acoustic Tasks/Current/Noisy Sounds/pediatric_noisy_sounds_{i}.jpg",
+    "text_bank": "noisy_sounds_bank"
+   },
+   "recordings": [
+    {
+     "recording_id": "noisy-sounds-1",
+     "canonical_name": "Noisy Sounds-1",
+     "sub_name": "1",
+     "instructions": "Here's a picture of an airplane – it makes an 'ah' sound – we're going to say that three times – 'ah ah ah'. When you are ready, press \"record\".",
+     "instructions_source": "curated"
+    },
+    {
+     "recording_id": "noisy-sounds-2",
+     "canonical_name": "Noisy Sounds-2",
+     "sub_name": "2",
+     "instructions": "Next is a little mouse – it makes an 'ee ee ee' sound - your turn! When you are ready, press \"record\".",
+     "instructions_source": "curated"
+    },
+    {
+     "recording_id": "noisy-sounds-3",
+     "canonical_name": "Noisy Sounds-3",
+     "sub_name": "3",
+     "instructions": "Here's a little ghost – he says 'oo oo oo' – your turn! When you are ready, press \"record\".",
+     "instructions_source": "curated"
+    },
+    {
+     "recording_id": "noisy-sounds-4",
+     "canonical_name": "Noisy Sounds-4",
+     "sub_name": "4",
+     "instructions": "The baby is sleeping, so we say 'sh sh sh'. Now you try! When you are ready, press \"record\".",
+     "instructions_source": "curated"
+    },
+    {
+     "recording_id": "noisy-sounds-5",
+     "canonical_name": "Noisy Sounds-5",
+     "sub_name": "5",
+     "instructions": "The snake makes a 'ss ss ss'. Can I hear you make that snake sound? When you are ready, press \"record\".",
+     "instructions_source": "curated"
+    },
+    {
+     "recording_id": "noisy-sounds-6",
+     "canonical_name": "Noisy Sounds-6",
+     "sub_name": "6",
+     "instructions": "Eating ice cream you might say \"muh muh muh\" – your turn! When you are ready, press \"record\".",
+     "instructions_source": "curated"
+    },
+    {
+     "recording_id": "noisy-sounds-7",
+     "canonical_name": "Noisy Sounds-7",
+     "sub_name": "7",
+     "instructions": "Uh oh! Looks like the baby has been colouring on the walls. We should tell him to stop – \"nuh nuh nuh\". You tell him too! When you are ready, press \"record\".",
+     "instructions_source": "curated"
+    },
+    {
+     "recording_id": "noisy-sounds-8",
+     "canonical_name": "Noisy Sounds-8",
+     "sub_name": "8",
+     "instructions": "The little bee makes a buzzing noise – 'zz zz zz'. Your turn! When you are ready, press \"record\".",
+     "instructions_source": "curated"
+    },
+    {
+     "recording_id": "noisy-sounds-9",
+     "canonical_name": "Noisy Sounds-9",
+     "sub_name": "9",
+     "instructions": "Bunnies hop around – 'hh hh hh' - now you do it! When you are ready, press \"record\".",
+     "instructions_source": "curated"
+    },
+    {
+     "recording_id": "noisy-sounds-10",
+     "canonical_name": "Noisy Sounds-10",
+     "sub_name": "10",
+     "instructions": "Have you ever seen a kangaroo jumping around? They go 'jj jj jj' – you try! When you are ready, press \"record\".",
+     "instructions_source": "curated"
+    }
+   ],
+   "aliases": [
+    "noisy-sounds"
+   ]
+  },
+  "pediatric.silly-sounds": {
+   "task_id": "pediatric.silly-sounds",
+   "canonical_name": "Silly Sounds",
+   "population": "pediatric",
+   "status": "current",
+   "family": "Silly Sounds",
+   "version": null,
+   "age_or_cohort": [
+    "4–6",
+    "6–10",
+    "10+"
+   ],
+   "recording_count": 4,
+   "instructions": "That was great! Let’s try some more sounds",
+   "instructions_source": "harvested",
+   "speech_type": "non-lexical",
+   "prompt_ref": {
+    "type": "image",
+    "select": "index",
+    "asset_repo": "eipm/bridge2ai-redcap",
+    "asset_commit": "67e75fac084c2763c21cce064ebbbe8a93664046",
+    "asset_path": "docs/Pediatrics/Acoustic Tasks/Current/Silly Sounds/pediatric_10plus_silly_sounds_{i}.jpg",
+    "text_bank": "silly_sounds_bank"
+   },
+   "recordings": [
+    {
+     "recording_id": "silly-sounds-1",
+     "canonical_name": "Silly Sounds-1",
+     "sub_name": "1",
+     "instructions": "First, we're going to say PUH PUH PUH over and over for about 5 seconds. Remember to take a breath if you need one! When you are ready, press \"record\".",
+     "instructions_source": "curated"
+    },
+    {
+     "recording_id": "silly-sounds-2",
+     "canonical_name": "Silly Sounds-2",
+     "sub_name": "2",
+     "instructions": "Next let's do the same thing, but this time say TUH TUH TUH. When you are ready, press \"record\".",
+     "instructions_source": "curated"
+    },
+    {
+     "recording_id": "silly-sounds-3",
+     "canonical_name": "Silly Sounds-3",
+     "sub_name": "3",
+     "instructions": "We've got one more to try. Tell me KUH KUH KUH... When you are ready, press \"record\".",
+     "instructions_source": "curated"
+    },
+    {
+     "recording_id": "silly-sounds-4",
+     "canonical_name": "Silly Sounds-4",
+     "sub_name": "4",
+     "instructions": "Let's try to put them together and say PUH TUH KUH over and over until the timer stops. If that word seems a little too tricky, you can say PAT-A-CAKE over and over instead. When you are ready, press \"record\".",
+     "instructions_source": "curated"
+    }
+   ],
+   "aliases": [
+    "silly-sounds"
+   ]
+  },
+  "pediatric.repeating-words": {
+   "task_id": "pediatric.repeating-words",
+   "canonical_name": "Repeating Words",
+   "population": "pediatric",
+   "status": "current",
+   "family": "Repeating Words",
+   "version": null,
+   "age_or_cohort": [
+    "4–6",
+    "6–10",
+    "10+"
+   ],
+   "recording_count": 25,
+   "instructions": "Say the following word 3 times",
+   "instructions_source": "harvested",
+   "speech_type": "read",
+   "prompt_ref": {
+    "type": "stimulus-bank",
+    "bank": "repeating_words_bank",
+    "select": "index-or-word"
+   },
+   "recordings": [],
+   "aliases": [
+    "repeating-words"
+   ]
+  },
+  "pediatric.repeating-sentences": {
+   "task_id": "pediatric.repeating-sentences",
+   "canonical_name": "Repeating Sentences",
+   "population": "pediatric",
+   "status": "current",
+   "family": "Repeating Sentences",
+   "version": null,
+   "age_or_cohort": [
+    "4–6",
+    "6–10",
+    "10+"
+   ],
+   "recording_count": 6,
+   "instructions": "Next we have some silly sentences to look at. They don’t exactly make sense – but that’s what makes them silly! If you can read them on your own go right ahead! Or you can have someone else say the sentence first and you just repeat it after them (just be sure to only record when you are talking) You are doing a great job! We have only two more tasks to complete before we’re all finished!",
+   "instructions_source": "harvested",
+   "speech_type": "read",
+   "prompt_ref": {
+    "type": "stimulus-bank",
+    "bank": "repeating_sentences_bank",
+    "select": "index",
+    "asset_repo": "eipm/bridge2ai-redcap",
+    "asset_commit": "67e75fac084c2763c21cce064ebbbe8a93664046",
+    "asset_path": "docs/Pediatrics/Acoustic Tasks/Current/Repeating Sentences/pediatric_10plus_repeating_setences_{i}.jpg",
+    "note": "sentences presented as images"
+   },
+   "recordings": [],
+   "aliases": [
+    "repeating-sentences"
+   ]
+  },
+  "pediatric.picture-description": {
+   "task_id": "pediatric.picture-description",
+   "canonical_name": "Picture Description",
+   "population": "pediatric",
+   "status": "current",
+   "family": "Picture Description",
+   "version": null,
+   "age_or_cohort": [
+    "4–6",
+    "6–10",
+    "10+"
+   ],
+   "recording_count": 1,
+   "instructions": "You're almost done! Now let's look at a picture that has a lot of details. Look at the picture and describe what you see – there are no right or wrong answers. Whatever you want to tell me about is perfect! When you are ready, press \"record\".",
+   "instructions_source": "curated",
+   "speech_type": "elicited",
+   "prompt_ref": {
+    "type": "image",
+    "asset_repo": "eipm/bridge2ai-redcap",
+    "asset_commit": "67e75fac084c2763c21cce064ebbbe8a93664046",
+    "asset_path": "docs/Pediatrics/Acoustic Tasks/Current/Picture Description/pediatric_10plus_picture_description.jpg"
+   },
+   "recordings": [],
+   "aliases": [
+    "picture-description"
+   ]
+  },
+  "pediatric.reading-passage": {
+   "task_id": "pediatric.reading-passage",
+   "canonical_name": "Reading Passage",
+   "population": "pediatric",
+   "status": "current",
+   "family": "Reading Passage",
+   "version": null,
+   "age_or_cohort": [
+    "6–10",
+    "10+"
+   ],
+   "recording_count": 11,
+   "instructions": "We're going to read a short story about a roller coaster ride called \"The Caterpillar\". A sentence or two will appear on the screen – read it aloud as if you were reading any regular story book. If you're not sure about a word, just skip it and keep going. When you are ready, press \"record\".",
+   "instructions_source": "curated",
+   "speech_type": "read",
+   "prompt_ref": {
+    "type": "stimulus-bank",
+    "bank": "reading_passage_bank",
+    "select": "index",
+    "asset_repo": "eipm/bridge2ai-redcap",
+    "asset_commit": "67e75fac084c2763c21cce064ebbbe8a93664046",
+    "asset_path": "docs/Pediatrics/Acoustic Tasks/Current/Reading Passage/pediatric_10plus_reading_passage_{i}.jpg",
+    "note": "sentences presented as images; text vision-validated against the redcap image stimuli"
+   },
+   "recordings": [],
+   "aliases": [
+    "reading-passage"
+   ]
+  },
+  "pediatric.conversation-2-to-4": {
+   "task_id": "pediatric.conversation-2-to-4",
+   "canonical_name": "Conversation (2 to 4)",
+   "population": "pediatric",
+   "status": "current",
+   "family": "Conversation (2 to 4)",
+   "version": null,
+   "age_or_cohort": [
+    "2–4"
+   ],
+   "recording_count": 1,
+   "instructions": "There are lots of pictures inside – let's talk about some of the things you see. When you are ready, press \"record\".",
+   "instructions_source": "harvested",
+   "speech_type": "elicited",
+   "prompt_ref": {
+    "type": "static-inline"
+   },
+   "recordings": [],
+   "aliases": [
+    "conversation-2-to-4"
+   ]
+  },
+  "pediatric.conversation-4-to-6": {
+   "task_id": "pediatric.conversation-4-to-6",
+   "canonical_name": "Conversation (4 to 6)",
+   "population": "pediatric",
+   "status": "current",
+   "family": "Conversation (4 to 6)",
+   "version": null,
+   "age_or_cohort": [
+    "4–6"
+   ],
+   "recording_count": 1,
+   "instructions": "Tell me about some of the things you see in the book. When you are ready, press \"record\".",
+   "instructions_source": "harvested",
+   "speech_type": "elicited",
+   "prompt_ref": {
+    "type": "static-inline"
+   },
+   "recordings": [],
+   "aliases": [
+    "conversation-4-to-6"
+   ]
+  },
+  "pediatric.conversation-6-plus": {
+   "task_id": "pediatric.conversation-6-plus",
+   "canonical_name": "Conversation (6 plus)",
+   "population": "pediatric",
+   "status": "current",
+   "family": "Conversation (6 plus)",
+   "version": null,
+   "age_or_cohort": [
+    "6–10",
+    "10+"
+   ],
+   "recording_count": 4,
+   "instructions": "Tell me about how you get ready for school in the morning.",
+   "instructions_source": "harvested",
+   "speech_type": "elicited",
+   "prompt_ref": {
+    "type": "static-inline"
+   },
+   "recordings": [
+    {
+     "recording_id": "conversation-6-plus-ready-for-school",
+     "canonical_name": "Conversation (6 plus)-ready for school",
+     "sub_name": "ready for school",
+     "instructions": "Tell me about how you get ready for school in the morning.",
+     "instructions_source": "curated"
+    },
+    {
+     "recording_id": "conversation-6-plus-favorite-show-movie-game",
+     "canonical_name": "Conversation (6 plus)-favorite show movie game",
+     "sub_name": "favorite show movie game",
+     "instructions": "Do you have a favourite movie? Video game? Show? I'd love to hear about it! When you're ready to share, press \"record\".",
+     "instructions_source": "curated"
+    },
+    {
+     "recording_id": "conversation-6-plus-favorite-food",
+     "canonical_name": "Conversation (6 plus)-favorite food",
+     "sub_name": "favorite food",
+     "instructions": "Do you have a favourite food? Or a food you really don't like? When you're ready to share, press \"record\".",
+     "instructions_source": "curated"
+    },
+    {
+     "recording_id": "conversation-6-plus-outside-of-school",
+     "canonical_name": "Conversation (6 plus)-outside of school",
+     "sub_name": "outside of school",
+     "instructions": "What do you like to do when you're not at school? Tell me about any activities you do like sports, dance, karate, art, etc. When you're ready to share, press \"record\".",
+     "instructions_source": "curated"
+    }
+   ],
+   "aliases": [
+    "conversation-6-plus"
+   ]
+  },
+  "pediatric.abcs-and-123s": {
+   "task_id": "pediatric.abcs-and-123s",
+   "canonical_name": "ABCs and 123s",
+   "population": "pediatric",
+   "status": "current",
+   "family": "ABCs and 123s",
+   "version": null,
+   "age_or_cohort": [
+    "2–4"
+   ],
+   "recording_count": 2,
+   "instructions": "Let's sing our ABCs together! A,B... When you are ready, press \"record\".",
+   "instructions_source": "harvested",
+   "speech_type": "elicited",
+   "prompt_ref": {
+    "type": "static-inline"
+   },
+   "recordings": [
+    {
+     "recording_id": "abcs-and-123s-abcs",
+     "canonical_name": "Abcs and 123s-abcs",
+     "sub_name": "abcs",
+     "instructions": "Let's sing our ABCs together! A,B... When you are ready, press \"record\".",
+     "instructions_source": "curated"
+    },
+    {
+     "recording_id": "abcs-and-123s-123s",
+     "canonical_name": "Abcs and 123s-123s",
+     "sub_name": "123s",
+     "instructions": "I wonder how high you can count? Let's start at 1, 2... When you are ready, press \"record\".",
+     "instructions_source": "curated"
+    }
+   ],
+   "aliases": [
+    "abcs-and-123s"
+   ]
+  },
+  "pediatric.days-and-number-naming": {
+   "task_id": "pediatric.days-and-number-naming",
+   "canonical_name": "Days and Number Naming",
+   "population": "pediatric",
+   "status": "current",
+   "family": "Days and Number Naming",
+   "version": null,
+   "age_or_cohort": [
+    "4–6"
+   ],
+   "recording_count": 3,
+   "instructions": "Fantastic! I bet you know the days of the week too. Let's start with Monday... When you are ready, press \"record\".",
+   "instructions_source": "harvested",
+   "speech_type": "elicited",
+   "prompt_ref": {
+    "type": "static-inline"
+   },
+   "recordings": [
+    {
+     "recording_id": "days-and-number-naming-numbers",
+     "canonical_name": "Days and Number naming-numbers",
+     "sub_name": "numbers",
+     "instructions": "Let's see how high you can count? Let's start at 1... When you are ready, press \"record\".",
+     "instructions_source": "curated"
+    },
+    {
+     "recording_id": "days-and-number-naming-days",
+     "canonical_name": "Days and Number naming-days",
+     "sub_name": "days",
+     "instructions": "I bet you know the days of the week too. Let's start with Monday... When you are ready, press \"record\".",
+     "instructions_source": "curated"
+    },
+    {
+     "recording_id": "days-and-number-naming-months",
+     "canonical_name": "Days and Number naming-months",
+     "sub_name": "months",
+     "instructions": "How about months of the year? Can you name some for me? Start with January... When you are ready, press \"record\".",
+     "instructions_source": "curated"
+    }
+   ],
+   "aliases": [
+    "days-and-number-naming"
+   ]
+  },
+  "pediatric.role-naming-tasks-sounds": {
+   "task_id": "pediatric.role-naming-tasks-sounds",
+   "canonical_name": "Role Naming Tasks Sounds",
+   "population": "pediatric",
+   "status": "current",
+   "family": "Role Naming Tasks Sounds",
+   "version": null,
+   "age_or_cohort": [
+    "6–10"
+   ],
+   "recording_count": 3,
+   "instructions": "Thank you for sharing all of that information with me! It was super interesting Let's try some different questions - if you're not sure what the answer is, you can just move on to the next question. I bet you know the months of the year too. Let's start with January... When you are ready, press \"record\". That was great Next can you count from 60 to 70? When you are ready, press \"record\".",
+   "instructions_source": "harvested",
+   "speech_type": "elicited",
+   "prompt_ref": {
+    "type": "static-inline"
+   },
+   "recordings": [
+    {
+     "recording_id": "role-naming-tasks-sounds-days",
+     "canonical_name": "Role naming tasks sounds-days",
+     "sub_name": "days",
+     "instructions": "What are the days in the week (starting with Sunday)?",
+     "instructions_source": "curated"
+    },
+    {
+     "recording_id": "role-naming-tasks-sounds-months",
+     "canonical_name": "Role naming tasks sounds-months",
+     "sub_name": "months",
+     "instructions": "I bet you know the months of the year too. Let's start with January... When you are ready, press \"record\".",
+     "instructions_source": "curated"
+    },
+    {
+     "recording_id": "role-naming-tasks-sounds-numbers",
+     "canonical_name": "Role naming tasks sounds-numbers",
+     "sub_name": "numbers",
+     "instructions": "Next can you count from 60 to 70? When you are ready, press \"record\".",
+     "instructions_source": "curated"
+    }
+   ],
+   "aliases": [
+    "role-naming-tasks-sounds"
+   ]
+  },
+  "pediatric.generative-naming-task": {
+   "task_id": "pediatric.generative-naming-task",
+   "canonical_name": "Generative Naming Task",
+   "population": "pediatric",
+   "status": "current",
+   "family": "Generative Naming Task",
+   "version": null,
+   "age_or_cohort": [
+    "10+"
+   ],
+   "recording_count": 2,
+   "instructions": "First, I want you to name as many animals you can think of. When you are ready, press \"record\".",
+   "instructions_source": "harvested",
+   "speech_type": "elicited",
+   "prompt_ref": {
+    "type": "static-inline"
+   },
+   "recordings": [
+    {
+     "recording_id": "generative-naming-task-animals",
+     "canonical_name": "Generative Naming Task-animals",
+     "sub_name": "animals",
+     "instructions": "First, I want you to name as many animals you can think of. When you are ready, press \"record\".",
+     "instructions_source": "curated"
+    },
+    {
+     "recording_id": "generative-naming-task-food",
+     "canonical_name": "Generative Naming Task-food",
+     "sub_name": "food",
+     "instructions": "Next I want you to name as many food items you can think of. When you are ready, press \"record\".",
+     "instructions_source": "curated"
+    }
+   ],
+   "aliases": [
+    "generative-naming-task"
+   ]
+  },
+  "pediatric.long-sounds": {
+   "task_id": "pediatric.long-sounds",
+   "canonical_name": "Long Sounds",
+   "population": "pediatric",
+   "status": "current",
+   "family": "Long Sounds",
+   "version": null,
+   "age_or_cohort": [
+    "10+"
+   ],
+   "recording_count": 2,
+   "instructions": "First, let's start by saying 'ahhhhh' for around 5 seconds. We're going to repeat this three times during one recording. Try to have the child produce the sound at a habitual pitch – some tend to use a higher \"note\" or create vibrato if they have any singing background The sound produced should be as steady/consistent as possible Re-record if you perceive the child is using a higher pitch when sustaining the vowel (in comparison to speaking) When you are ready, press \"record\". Next, say the 'eeeeee' sound as steady as you can for about 5 seconds. We'll do this three times as well. When you are ready, press \"record\".",
+   "instructions_source": "harvested",
+   "speech_type": "non-lexical",
+   "prompt_ref": {
+    "type": "image",
+    "select": "index",
+    "asset_repo": "eipm/bridge2ai-redcap",
+    "asset_commit": "67e75fac084c2763c21cce064ebbbe8a93664046",
+    "asset_path": "docs/Pediatrics/Acoustic Tasks/Current/Long Sounds/pediatric_10plus_long-sounds_{i}.jpg",
+    "text_bank": "long_sounds_bank"
+   },
+   "recordings": [
+    {
+     "recording_id": "long-sounds-1",
+     "canonical_name": "Long Sounds-1",
+     "sub_name": "1",
+     "instructions": "First, let's start by saying 'ahhhhh' for around 5 seconds. We're going to repeat this three times during one recording. Try to have the child produce the sound at a habitual pitch – some tend to use a higher \"note\" or create vibrato if they have any singing background. The sound produced should be as steady/consistent as possible. Re-record if you perceive the child is using a higher pitch when sustaining the vowel (in comparison to speaking). When you are ready, press \"record\".",
+     "instructions_source": "curated"
+    },
+    {
+     "recording_id": "long-sounds-2",
+     "canonical_name": "Long Sounds-2",
+     "sub_name": "2",
+     "instructions": "Next, say the 'eeeeee' sound as steady as you can for about 5 seconds. We'll do this three times as well. When you are ready, press \"record\".",
+     "instructions_source": "curated"
+    }
+   ],
+   "aliases": [
+    "long-sounds"
+   ]
+  }
+ },
+ "alias_index": {
+  "prolonged-vowel": "adult.prolonged-vowel",
+  "maximum-phonation-time": "adult.maximum-phonation-time.v2",
+  "maximum-phonation-time(v2)": "adult.maximum-phonation-time.v2",
+  "maximum-phonation-time-(v2)": "adult.maximum-phonation-time.v2",
+  "maximum-phonation-time-v2": "adult.maximum-phonation-time.v2",
+  "glides": "adult.glides",
+  "harvard-sentences": "adult.harvard-sentences",
+  "loudness": "adult.loudness.v2",
+  "loudness(v2)": "adult.loudness.v2",
+  "loudness-(v2)": "adult.loudness.v2",
+  "loudness-v2": "adult.loudness.v2",
+  "diadochokinesis": "adult.diadochokinesis.v2",
+  "diadochokinesis(v2)": "adult.diadochokinesis.v2",
+  "diadochokinesis-(v2)": "adult.diadochokinesis.v2",
+  "diadochokinesis-v2": "adult.diadochokinesis.v2",
+  "free-speech": "adult.free-speech.v2",
+  "free-speech(v2)": "adult.free-speech.v2",
+  "free-speech-(v2)": "adult.free-speech.v2",
+  "free-speech-v2": "adult.free-speech.v2",
+  "respiration-and-cough": "adult.respiration-and-cough.v2",
+  "respiration-and-cough(v2)": "adult.respiration-and-cough.v2",
+  "respiration-and-cough-(v2)": "adult.respiration-and-cough.v2",
+  "respiration-and-cough-v2": "adult.respiration-and-cough.v2",
+  "picture-description": "adult.picture-description",
+  "story-recall": "adult.story-recall.v2",
+  "story-recall(v2)": "adult.story-recall.v2",
+  "story-recall-(v2)": "adult.story-recall.v2",
+  "story-recall-v2": "adult.story-recall.v2",
+  "caterpillar-passage": "adult.caterpillar-passage",
+  "cape-v-sentences": "adult.cape-v-sentences.v2",
+  "cape-v-sentences(v2)": "adult.cape-v-sentences.v2",
+  "cape-v-sentences-(v2)": "adult.cape-v-sentences.v2",
+  "cape-v-sentences-v2": "adult.cape-v-sentences.v2",
+  "productive-vocabulary": "adult.productive-vocabulary",
+  "random-item-generation": "adult.random-item-generation.v2",
+  "random-item-generation(v2)": "adult.random-item-generation.v2",
+  "random-item-generation-(v2)": "adult.random-item-generation.v2",
+  "random-item-generation-v2": "adult.random-item-generation.v2",
+  "word-color-stroop": "adult.word-color-stroop",
+  "rainbow-passage": "adult.rainbow-passage",
+  "maximum-phonation-time-v1": "adult.maximum-phonation-time.v1",
+  "loudness-v1": "adult.loudness.v1",
+  "diadochokinesis-v1": "adult.diadochokinesis.v1",
+  "free-speech-v1": "adult.free-speech.v1",
+  "respiration-and-cough-v1": "adult.respiration-and-cough.v1",
+  "story-recall-v1": "adult.story-recall.v1",
+  "free-speech-voice": "adult.free-speech-voice",
+  "cape-v-sentences-v1": "adult.cape-v-sentences.v1",
+  "animal-fluency": "adult.animal-fluency",
+  "open-response-questions": "adult.open-response-questions",
+  "breath-sounds": "adult.breath-sounds",
+  "voluntary-cough": "adult.voluntary-cough",
+  "cinderella-story": "adult.cinderella-story",
+  "random-item-generation-v1": "adult.random-item-generation.v1",
+  "identifying-pictures": "pediatric.identifying-pictures",
+  "noisy-sounds": "pediatric.noisy-sounds",
+  "silly-sounds": "pediatric.silly-sounds",
+  "repeating-words": "pediatric.repeating-words",
+  "repeating-sentences": "pediatric.repeating-sentences",
+  "reading-passage": "pediatric.reading-passage",
+  "conversation-2-to-4": "pediatric.conversation-2-to-4",
+  "conversation-4-to-6": "pediatric.conversation-4-to-6",
+  "conversation-6-plus": "pediatric.conversation-6-plus",
+  "abcs-and-123s": "pediatric.abcs-and-123s",
+  "days-and-number-naming": "pediatric.days-and-number-naming",
+  "role-naming-tasks-sounds": "pediatric.role-naming-tasks-sounds",
+  "generative-naming-task": "pediatric.generative-naming-task",
+  "long-sounds": "pediatric.long-sounds"
+ }
+}

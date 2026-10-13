@@ -80,11 +80,12 @@ def _load_senselab(path: Path) -> tuple[Any | None, str | None]:  # noqa: ANN401
 def _load_fallback(path: Path, *, senselab_reason: str | None) -> tuple[Any | None, str | None]:  # noqa: ANN401
     try:
         import numpy as np
-        import soundfile as sf
+
+        from senselab.utils.portable_audio_io import read_audio  # noqa: PLC0415
     except ImportError as exc:
         return None, f"audio_io_unavailable ({exc.name}; senselab path: {senselab_reason})"
     try:
-        data, sr = sf.read(str(path), dtype="float32", always_2d=True)
+        data, sr = read_audio(str(path), always_2d=True, channels_first=False)
     except (OSError, RuntimeError) as exc:
         return None, f"audio_read_failed ({exc!r})"
     mono = data.mean(axis=1)

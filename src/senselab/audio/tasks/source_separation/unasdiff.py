@@ -1,8 +1,9 @@
 """unasdiff unsupervised source separation via isolated subprocess venv.
 
-unasdiff (Shi, Runwu et al., *Unsupervised Audio Source Separation using Diffusion
-Priors*, https://github.com/RunwuShi/unasdiff) separates a mixture into speech and
-one FSD50K-conditioned sound source without ever training on mixtures: it factors
+unasdiff (Shi, Runwu et al., *Unsupervised Single-Channel Audio Separation with
+Diffusion Source Priors*, AAAI 2026, arXiv:2512.07226,
+https://github.com/RunwuShi/unasdiff) separates a mixture into speech and
+one FSDKaggle2018-conditioned sound source without ever training on mixtures: it factors
 the mixture likelihood into two independently-trained unconditional diffusion
 priors (a speech prior and a sound prior) and runs posterior sampling at inference
 time. This is what makes it usable for the off-target-speaker-detection problem
@@ -11,9 +12,9 @@ project's notes) -- there is no dataset of "target speech + arbitrary intruder"
 mixtures to train a supervised separator on, but there are large unconditional
 speech and sound corpora to train priors on separately.
 
-Upstream ships training code and the two benchmark scripts its paper's numbers
-came from (``benchmark_musdb.py``, ``benchmark_urmp.py``); it has no installable
-package, no inference-only entry point, and no long-form chunking (the paper's
+Upstream ships training code and the three benchmark scripts its paper's numbers
+came from (``test_speech_sound.py``, ``test_soundevent.py``, ``test_speech_speech.py``); it has no
+installable package, no inference-only entry point, and no long-form chunking (the paper's
 mixtures are short benchmark clips). The worker driver, the three separation
 modes, and chunking for arbitrary-length recordings are therefore this
 repository's own code reusing upstream's model construction, not a thin wrapper
@@ -22,14 +23,20 @@ API, and long-form chunking.
 
 Two label spaces, not one
 --------------------------
-The sound prior's conditioning embedding has 50 slots (``num_class=50`` in
-``config/atten_unet_fsd/config.toml``), of which 41 were populated by training on
-FSD50K subset labels -- see ``data/fsd41_classes.json`` and
+The sound prior's conditioning embedding has 51 slots: ``config/atten_unet_fsd/config.toml`` sets
+``num_class=50``, and ``models/atten_unet.py``'s ``LabelEmbedder`` allocates
+``num_classes + use_cfg_embedding`` rows, where ``use_cfg_embedding`` is ``True`` because
+``dropout_prob=0.1 > 0``. Of those 51, 41 (rows 0-40) were populated by training on FSDKaggle2018
+subset labels -- see ``data/fsd41_classes.json`` and
 :func:`load_fsd_class_map_document`. The speech prior's conditioning label space is
 disjoint and has exactly one member (unconditional speech). Passing a sound-prior
 index to the speech prior, or an index above 40 to the sound prior, is a caller
 error this module is built to catch rather than silently accept -- see
-:func:`senselab.audio.tasks.source_separation.api.resolve_source_classes`.
+:func:`_validate_source_class_indices`, which runs in :func:`separate_with_unasdiff`
+before the worker ever starts, and
+:func:`senselab.audio.tasks.source_separation.api.resolve_source_classes`, which
+catches the same error one layer up, at the point a caller's class *name* resolves
+to an index.
 
 Why a subprocess venv
 ----------------------
@@ -40,21 +47,10 @@ would collide with unrelated names on the host ``sys.path``), so it clones into 
 isolated venv at a pinned commit rather than merging its dependency set (or its
 module names) into senselab core.
 
-flash-attn is deliberately absent from ``_UNASDIFF_REQUIREMENTS`` by default:
-``models/atten_unet.py`` sets ``use_flash = False`` up front and only flips it to
-``True`` inside a ``try: from flash_attn import flash_attn_func`` that falls back
-to manual softmax attention on ``ImportError`` -- verified against the pinned
-commit, not assumed (see this task's report). The fallback materializes a
-``[b, h, t, t]`` attention matrix and is therefore slower and heavier, an
-acceptable trade against building flash-attn 2.5.8 unconditionally in every
-user's cache: this branch already watched a far milder case (``av==14.4.0``, no
-wheel available) fall back to a source build and take an *entire* venv install
-down with it, and flash-attn is considerably more build-fragile than that -- it
-needs a matching CUDA toolkit, ``--no-build-isolation``, and 10-30 minutes with
-``MAX_JOBS`` tuning to avoid OOM. Setting ``SENSELAB_UNASDIFF_FLASH_ATTN``
-truthy opts in for a host with a working ``nvcc`` (see :func:`_unasdiff_requirements`);
-because ``ensure_venv`` keys venv reuse on a marker containing the requirements
-list, toggling this env var forces a full rebuild.
+flash-attn is not in the venv's lock: upstream falls back to manual softmax attention without it.
+Setting ``SENSELAB_UNASDIFF_FLASH_ATTN`` truthy builds ``flash-attn==2.5.8`` into the locked venv
+after it is installed (see :func:`_ensure_flash_attn`); that needs a working ``nvcc``. See
+``specs/20261002-subprocess-venv-locks/design.md``.
 
 Licensing
 ---------
@@ -80,13 +76,19 @@ reason: an unresolved license request must not end up load-bearing in a default 
 
 Two priors, one mode dispatch
 ------------------------------
-``p_sample_loop_group`` (upstream's multi-model sampler) zips one model object against one label
-per slot, so ``n_sources`` model instances are always constructed -- even when two slots share
-weights. Which prior a slot loads is **not** recoverable from ``source_class_indices`` alone: index
-``0`` is simultaneously "unconditional speech" in the speech prior's one-label space and "Hi-hat" in
-the sound prior's, so :func:`separate_with_unasdiff` takes ``mode`` explicitly rather than inferring
-it, and the worker payload carries all four checkpoint/config paths so the worker can build whichever
+Which prior a slot loads is **not** recoverable from ``source_class_indices`` alone: index ``0`` is
+simultaneously "unconditional speech" in the speech prior's one-label space and "Hi-hat" in the
+sound prior's, so :func:`separate_with_unasdiff` takes ``mode`` explicitly rather than inferring it,
+and the worker payload carries all four checkpoint/config paths so the worker can build whichever
 slots the mode calls for.
+
+``speech_sound`` needs two different priors in the same reverse-diffusion call, which only
+upstream's multi-model sampler, ``p_sample_loop_group``, supports: it zips one model object against
+one label per slot, so ``n_sources`` model instances are always constructed there. ``sound_sound``
+and ``speech_speech`` use only one prior each, so they use upstream's single-model sampler,
+``p_sample_loop``, instead -- a single model instance processes every slot in one batched forward
+per step, with a per-slot label tensor, matching upstream's own single-prior benchmark scripts
+exactly and building one model instance rather than ``n_sources``.
 """
 
 from __future__ import annotations
@@ -101,6 +103,7 @@ from importlib import resources
 from pathlib import Path
 from typing import Any, List, Optional, Tuple, Union
 
+import soundfile as sf
 import torch
 
 from senselab.audio.data_structures import Audio
@@ -108,8 +111,10 @@ from senselab.utils.data_structures.device import DeviceType
 from senselab.utils.data_structures.logging import logger
 from senselab.utils.subprocess_venv import (
     _clean_subprocess_env,
+    _find_uv,
     ensure_venv,
     parse_subprocess_result,
+    stage_portable_audio_io,
     venv_python,
 )
 
@@ -128,14 +133,7 @@ _UNASDIFF_MAX_CUDA_VERSION = (12, 4)
 # Python 3.10; the version pins are reproduced without the +cu124 local tag, and the CUDA
 # build comes from the Stage-1 index -- capped by _UNASDIFF_MAX_CUDA_VERSION above, because
 # host-CUDA routing alone picks an index this torch pin has no wheels on.
-#
-# flash-attn is absent by default: atten_unet.py sets use_flash=False on
-# ImportError and branches to a manual softmax attention, so it is optional in
-# fact and not merely in the README. The fallback materialises a [b, h, t, t]
-# attention matrix, so it is slower and heavier -- but installing flash-attn
-# unconditionally trades a slow-but-working default for a build that can take
-# the whole venv down on a host without a matching CUDA toolkit (see
-# _unasdiff_requirements and SENSELAB_UNASDIFF_FLASH_ATTN below). Opt-in only.
+
 _UNASDIFF_REQUIREMENTS = [
     "torch==2.6.0",
     "torchaudio==2.6.0",
@@ -151,50 +149,48 @@ _UNASDIFF_REQUIREMENTS = [
     # H100: uv finds no wheel for av==14.4.0 on this interpreter and falls back to a source
     # build, which fails with "You are REQUIRED to use ffmpeg 7" and pkg-config unable to
     # find avformat/avcodec/... -- so the whole venv build dies. Checked upstream at the
-    # pinned commit: neither inference.py, utils.py nor dataloader.py imports av, so it is a
-    # training/data-pipeline dependency the inference path never touches. Same reasoning as
-    # flash-attn above, and the opposite of DriftSE's pesq, which looked training-only but
-    # was imported at module scope -- which is why this one was verified rather than assumed.
+    # pinned commit: nothing this worker imports (models/, diffusion/, utils.py) imports av
+    # anywhere -- it is a training/data-pipeline dependency the inference path never touches.
+    # Same reasoning as flash-attn above, and the opposite of DriftSE's pesq, which looked
+    # training-only but was imported at module scope -- which is why this one was verified
+    # rather than assumed.
     "soundfile",
 ]
 
-# Operator override, same style as SENSELAB_TORCH_INDEX_URL (subprocess_venv.py) and
-# SENSELAB_UNASDIFF_CHECKPOINTS above: absent by default, read once at venv-build time via
-# _unasdiff_requirements(). Not read in the worker -- flash-attn's own presence in the venv
-# (or absence of it) is what the worker's `from flash_attn import flash_attn_func` observes.
 _UNASDIFF_FLASH_ATTN_ENV = "SENSELAB_UNASDIFF_FLASH_ATTN"
+_FLASH_ATTN_SPEC = "flash-attn==2.5.8"
+_FLASH_ATTN_BUILD_REQUIREMENTS = ["ninja", "packaging", "psutil", "wheel", "setuptools"]
+_FLASH_ATTN_MARKER = ".flash-attn-installed"
 
 
-def _unasdiff_requirements() -> List[str]:
-    """Return this venv's pip requirements, with flash-attn appended only if opted in.
+def _flash_attn_requested() -> bool:
+    """Whether ``SENSELAB_UNASDIFF_FLASH_ATTN`` is set truthy."""
+    return os.environ.get(_UNASDIFF_FLASH_ATTN_ENV, "").strip().lower() in ("1", "true", "yes", "on")
 
-    flash-attn stays out of ``_UNASDIFF_REQUIREMENTS`` unconditionally (see the module
-    docstring and the comment above that list) because installing it is considerably more
-    build-fragile than the one dependency (``av``) that has already taken a venv build down in
-    this repository: flash-attn needs a matching CUDA toolkit, ``--no-build-isolation``, and
-    10-30 minutes with ``MAX_JOBS`` tuning to avoid OOM. Upstream's own code tolerates a
-    *missing* flash-attn gracefully (``atten_unet.py`` falls back to manual softmax attention on
-    ``ImportError``), but nothing tolerates the *install* failing -- so making it unconditional
-    would convert that graceful runtime fallback into a hard venv-creation failure on any host
-    without a working ``nvcc``.
 
-    Setting ``SENSELAB_UNASDIFF_FLASH_ATTN`` truthy (``1``/``true``/``yes``/``on``, case
-    insensitive) opts in for a host that has a working CUDA toolchain and wants the speedup.
-    ``ensure_venv`` keys venv reuse on a marker containing the requirements list
-    (``subprocess_venv.py``), so toggling this env var changes the requirements and therefore
-    forces a full rebuild -- flipping the flag costs a 10-30 minute reinstall, not a quick
-    incremental change. A failed opt-in build fails loudly, which is the point: the person who
-    asked for flash-attn is the person who can supply a working ``nvcc`` or turn the flag back
-    off.
+def _ensure_flash_attn(venv_dir: Path) -> None:
+    """Build ``flash-attn`` into an installed unasdiff venv, once, when opted in.
 
-    Returns:
-        ``_UNASDIFF_REQUIREMENTS`` with ``"flash-attn==2.5.8"`` appended when the env var is
-        set truthy, unchanged otherwise.
+    Runs after the locked install, with ``--no-build-isolation`` against the venv's own ``torch``.
+    A marker in the venv records the build; a rebuilt venv (a changed lock) has none.
+
+    Args:
+        venv_dir: The installed unasdiff venv.
+
+    Raises:
+        subprocess.CalledProcessError: When the build fails.
     """
-    requirements = list(_UNASDIFF_REQUIREMENTS)
-    if os.environ.get(_UNASDIFF_FLASH_ATTN_ENV, "").strip().lower() in ("1", "true", "yes", "on"):
-        requirements.append("flash-attn==2.5.8")
-    return requirements
+    marker = venv_dir / _FLASH_ATTN_MARKER
+    if not _flash_attn_requested() or marker.is_file():
+        return
+    uv = _find_uv()
+    python = venv_python(venv_dir)
+    subprocess.run([uv, "pip", "install", "--python", python, *_FLASH_ATTN_BUILD_REQUIREMENTS], check=True)
+    subprocess.run(
+        [uv, "pip", "install", "--python", python, "--no-build-isolation", "--no-deps", _FLASH_ATTN_SPEC],
+        check=True,
+    )
+    marker.write_text(_FLASH_ATTN_SPEC + "\n")
 
 
 _UNASDIFF_REPO_URL = "https://github.com/RunwuShi/unasdiff.git"
@@ -220,18 +216,64 @@ _MODE_SPEECH_SOUND = "speech_sound"
 _MODE_SOUND_SOUND = "sound_sound"
 _MODE_SPEECH_SPEECH = "speech_speech"
 
+# The paper evaluated at most this many sources; see doc.md for the citation.
+_MAX_SOURCES = 3
+
 _TARGET_SR = 16000
 _WINDOW_S = 4.0  # upstream's trained window; not a tunable
 _OVERLAP_S = 2.0  # 50% overlap between adjacent windows -- see Task 5 / doc.md
-# config/*/config.toml: diffusion_step. Upstream's own quality default -- the only value with
-# any published basis -- so it stays the default for separate_with_unasdiff's diffusion_steps
-# parameter. 200 network evaluations per window is the dominant cost of this backend (measured
-# RTF ~22-26x on an H100, vs. DriftSE's 1 step and SGMSE+'s 30 in this same repository), so a
-# caller who wants to trade quality for speed can lower it -- see that parameter's docstring for
-# why no lower value is recommended here.
+# config/*/config.toml: diffusion_step -- the reverse-diffusion schedule length the priors were
+# trained at (T=200). api.separate_audios accepts no other value for this parameter: changing it
+# re-specifies the schedule rather than subsampling it. This lower-level function still accepts
+# other positive values, since a future retrained prior may use a different T; see doc.md for the
+# mechanism and the measured per-step cost.
 _DIFFUSION_STEPS = 200
 
+# Terms of the default worker ceiling, in seconds per (window x diffusion step) and as a floor.
+# Derivation and the measurement behind both numbers:
+# specs/20260818-071500-unasdiff-device-timeout-pcm16.
+_SECONDS_PER_WINDOW_STEP_CUDA = 0.4
+# CPU/MPS multiplier on the CUDA figure -- derivation in doc.md.
+_CPU_TIMEOUT_MULTIPLIER = 45.0
+_TIMEOUT_HEADROOM = 4.0
+_TIMEOUT_FLOOR_S = 1800.0
+
 _FSD_CLASS_MAP_RESOURCE = "fsd41_classes.json"
+
+# Devices a caller may name. MPS is admitted but never auto-selected: it runs correctly and is
+# 5-11x slower than CPU here. Derivation: specs/20260906-unasdiff-mps-and-timeout.
+_COMPATIBLE_DEVICES = (DeviceType.CUDA, DeviceType.CPU, DeviceType.MPS)
+
+
+def _seconds_per_window_step(device: Optional[DeviceType]) -> float:
+    """Return the per-(window x diffusion-step) cost, in seconds, for ``device``.
+
+    Args:
+        device: The device the worker will run on. Only ``DeviceType.CUDA`` uses the measured CUDA
+            figure. ``None`` means the caller left the choice to the worker, which the host cannot
+            resolve -- its torch is a different build from the venv's -- so it is sized for the
+            slow path, like any other non-CUDA device.
+
+    Returns:
+        Seconds per window-step.
+    """
+    if device == DeviceType.CUDA:
+        return _SECONDS_PER_WINDOW_STEP_CUDA
+    return _SECONDS_PER_WINDOW_STEP_CUDA * _CPU_TIMEOUT_MULTIPLIER
+
+
+def _default_timeout_s(n_windows: int, diffusion_steps: int, device: Optional[DeviceType] = None) -> float:
+    """Return the default worker ceiling for ``n_windows`` windows at ``diffusion_steps`` steps.
+
+    Args:
+        n_windows: Total number of 4 s windows the worker will separate, across every input.
+        diffusion_steps: Reverse-diffusion steps per window.
+        device: The device the worker will run on; see :func:`_seconds_per_window_step`.
+
+    Returns:
+        Seconds, never below ``_TIMEOUT_FLOOR_S``.
+    """
+    return max(_TIMEOUT_FLOOR_S, _TIMEOUT_HEADROOM * _seconds_per_window_step(device) * n_windows * diffusion_steps)
 
 
 @functools.lru_cache(maxsize=1)
@@ -283,7 +325,11 @@ try:
     diffusion_steps = int(args["diffusion_steps"])
     labels = args["labels"]
     in_paths, out_paths = args["in_paths"], args["out_paths"]
+    deadline_s = args.get("deadline_s")
     seed = int(args["seed"])
+    requested_device = args.get("device")
+    sys.path.insert(0, args["io_dir"])
+    from portable_audio_io import read_audio, write_audio
 
     import fcntl, os, shutil, tempfile as _tempfile
 
@@ -322,11 +368,85 @@ try:
 
     # Library modules only. The three test_*.py scripts call torch.cuda.set_device(0) at
     # import and abort on a CPU host.
+    #
+    # models/atten_unet.py assigns CUDA_VISIBLE_DEVICES="0" at module scope, before its own
+    # `import torch`. The launcher's value is saved here and put back immediately after, ahead of
+    # the first CUDA API call below -- see specs/20260818-071500-unasdiff-device-timeout-pcm16.
+    saved_visible_devices = os.environ.get("CUDA_VISIBLE_DEVICES")
     import models
     import diffusion
+    if saved_visible_devices is None:
+        os.environ.pop("CUDA_VISIBLE_DEVICES", None)
+    else:
+        os.environ["CUDA_VISIBLE_DEVICES"] = saved_visible_devices
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    def patch_extract_for_mps():
+        # Upstream's _extract_into_tensor moves the schedule to the device and only then casts to
+        # float32: torch.from_numpy(arr).to(device=...)[timesteps].float(). MPS has no float64, so
+        # the move raises before the cast that would have made it moot. Casting first is the same
+        # arithmetic in the same order of operations that upstream already performs -- .float() is
+        # unconditional there -- so CUDA and CPU results are unchanged; only MPS stops raising.
+        import diffusion.gaussian_diffusion as gd
+
+        def extract_into_tensor(arr, timesteps, broadcast_shape):
+            src = arr if isinstance(arr, torch.Tensor) else torch.from_numpy(arr)
+            res = src.float().to(device=timesteps.device)[timesteps]
+            while len(res.shape) < len(broadcast_shape):
+                res = res[..., None]
+            return res.expand(broadcast_shape)
+
+        gd._extract_into_tensor = extract_into_tensor
+
+    def resolve_device(requested):
+        # Bare "cuda" would take whatever index torch defaults to; an index is always chosen.
+        #
+        # MPS is reachable only when asked for by name, never by leaving the choice open: it is
+        # measurably slower than CPU for this model, so auto-selecting it on Apple Silicon would
+        # be a pessimisation. See specs/20260906-unasdiff-mps-and-timeout.
+        if requested is None:
+            return torch.device("cuda:%d" % torch.cuda.current_device() if torch.cuda.is_available() else "cpu")
+        if str(requested).startswith("mps"):
+            if not torch.backends.mps.is_available():
+                raise RuntimeError(
+                    "unasdiff worker: device %r was requested but torch.backends.mps.is_available() "
+                    "is False inside the unasdiff venv" % (requested,)
+                )
+            sys.stderr.write(
+                "unasdiff worker: running on MPS, which is measurably SLOWER than CPU for this "
+                "model -- about 90-193s per diffusion step against 16.7s on CPU. MPS is honoured "
+                "because you named it; leaving device unset picks CPU instead.\n"
+            )
+            patch_extract_for_mps()
+            return torch.device("mps")
+        if not str(requested).startswith("cuda"):
+            return torch.device(requested)
+        if not torch.cuda.is_available():
+            raise RuntimeError(
+                "unasdiff worker: device %r was requested but torch.cuda.is_available() is False "
+                "inside the unasdiff venv (CUDA_VISIBLE_DEVICES=%r)"
+                % (requested, os.environ.get("CUDA_VISIBLE_DEVICES"))
+            )
+        if ":" in str(requested):
+            return torch.device(requested)
+        return torch.device("cuda:%d" % torch.cuda.current_device())
+
+    device = resolve_device(requested_device)
     torch.manual_seed(seed)
+
+    # Refuse work that cannot finish inside the ceiling the host granted. Only the worker can do
+    # this: the host's torch is a different build, so the host cannot know which device the worker
+    # will land on when the caller left the choice open. Without it a CPU run is killed ~85 minutes
+    # in, having made real progress that is then discarded.
+    seconds_per_step = {"cuda": 0.4, "mps": 130.0, "cpu": 17.0}.get(device.type, 17.0)
+    n_windows_total = sum(len(paths) for paths in out_paths)
+    estimate_s = seconds_per_step * n_windows_total * diffusion_steps
+    if deadline_s is not None and estimate_s > deadline_s:
+        raise RuntimeError(
+            "unasdiff worker: %d window(s) x %d diffusion steps on %s is about %.0fs of work, over "
+            "the %.0fs ceiling. Measured per-step cost on this model: cuda 0.4s, cpu 17s, mps 130s "
+            "(mps is slower than cpu here). Use a CUDA device, lower diffusion_steps, shorten the "
+            "input, or raise timeout_s." % (n_windows_total, diffusion_steps, device.type, estimate_s, deadline_s)
+        )
 
     def load_prior(config_path, ckpt_path):
         # Reimplementation of load_model() from upstream's benchmark scripts (not named here
@@ -357,52 +477,64 @@ try:
         # split-and-sum.
         return sum(torch.split(x, x.shape[-1] // n_src, dim=-1))
 
-    def separate_window(models_list, gaussian, mixture, n_src, labels):
+    def separate_window(sampler_model, sampler_name, sampler_labels, gaussian, mixture, n_src):
         # One 4 s window. Returns a list of n_src waveforms.
         #
-        # p_sample_loop_group ignores the measurement argument it is handed and recomputes
-        # measurement = degradation(orig_x, n_src) on every step. Packing orig_x as
-        # [mixture, zeros, ..., zeros] makes that sum equal the mixture exactly, so the sampler
-        # sees precisely what it saw in the benchmark and no per-source information enters.
-        # This looks like an oracle from the call site; it is not.
+        # Both p_sample_loop_group and p_sample_loop ignore the measurement argument they are
+        # handed and recompute measurement = degradation(orig_x, n_src) on every step. Packing
+        # orig_x as [mixture, zeros, ..., zeros] makes that sum equal the mixture exactly, so the
+        # sampler sees precisely what it saw in the benchmark and no per-source information
+        # enters. This looks like an oracle from the call site; it is not.
         T = mixture.shape[-1]
         mix = mixture.reshape(1, 1, -1)
         orig_x = torch.cat([mix] + [torch.zeros_like(mix)] * (n_src - 1), dim=-1)
         shape = (1, 1, n_src * T)
-        gen = gaussian.p_sample_loop_group(
-            models_list,
+        sampler_kwargs = dict(
             shape=shape,
             measurement=mix,
             orig_x=orig_x,
             n_src=n_src,
             clip_denoised=True,
             degradation=degradation,
-            model_kwargs=labels,
+            model_kwargs=sampler_labels,
         )
+        # speech_sound needs two different priors in one call, which only p_sample_loop_group
+        # supports (it zips one model object against one label per slot, so n_sources model
+        # instances are always constructed there). sound_sound and speech_speech use only one
+        # prior each, so they use upstream's own p_sample_loop instead: a single model instance
+        # processes every slot in one batched forward per step, with a per-slot label tensor --
+        # matching upstream's own single-prior benchmark scripts exactly (not named here
+        # literally, same reason as load_prior above), at the cost of n_sources - 1 fewer model
+        # instances than p_sample_loop_group would build.
+        if sampler_name == "group":
+            gen = gaussian.p_sample_loop_group(sampler_model, **sampler_kwargs)
+        else:
+            gen = gaussian.p_sample_loop(sampler_model, **sampler_kwargs)
         out = None
         for out in gen:
             pass
         est = out["sample"].reshape(1, 1, -1)
         return [seg.reshape(-1) for seg in torch.split(est, T, dim=-1)]
 
-    # Model list + diffusion process for this mode. p_sample_loop_group zips `model` against
-    # `model_kwargs` one-to-one, so every slot needs its own model object -- even
-    # speech-speech, where both slots share the same weights: a separate deepcopy'd instance
-    # per slot, not one instance reused twice.
+    # Which sampler this mode uses, and the model(s)/labels it is given -- see separate_window
+    # for why speech_sound alone needs the "group" sampler.
+    sampler_name = "group" if mode == "speech_sound" else "single"
     if mode == "speech_sound":
         speech_model, speech_cfg = load_prior(speech_config_path, speech_ckpt_path)
-        models_list = [speech_model] + [
+        sampler_model = [speech_model] + [
             load_prior(sound_config_path, sound_ckpt_path)[0] for _ in range(n_sources - 1)
         ]
+        sampler_labels = labels
         diffusion_config = speech_cfg
     elif mode == "sound_sound":
-        loaded = [load_prior(sound_config_path, sound_ckpt_path) for _ in range(n_sources)]
-        models_list = [m for m, _ in loaded]
-        diffusion_config = loaded[0][1]
+        sampler_model, diffusion_config = load_prior(sound_config_path, sound_ckpt_path)
+        sampler_labels = labels
     elif mode == "speech_speech":
-        loaded = [load_prior(speech_config_path, speech_ckpt_path) for _ in range(n_sources)]
-        models_list = [m for m, _ in loaded]
-        diffusion_config = loaded[0][1]
+        sampler_model, diffusion_config = load_prior(speech_config_path, speech_ckpt_path)
+        # Upstream's own speech-speech benchmark script passes model_kwargs=None here (not
+        # named here literally, same reason as load_prior above): the speech prior has no
+        # conditioning to give it, and p_sample already tolerates model_kwargs=None.
+        sampler_labels = None
     else:
         raise ValueError("unknown mode: " + str(mode))
 
@@ -421,7 +553,7 @@ try:
 
     results = []
     for in_path, out_path_list in zip(in_paths, out_paths):
-        y_np, sr = sf.read(in_path, dtype="float32", always_2d=True)
+        y_np, sr = read_audio(in_path, always_2d=True, channels_first=False)
         y = torch.as_tensor(y_np[:, 0]).to(device)
         assert sr == 16000, "worker expects 16 kHz; the host resamples"
 
@@ -429,11 +561,11 @@ try:
         peak = y.abs().amax().clamp(min=1e-8)
         y_norm = y / peak * 0.95
 
-        sources = separate_window(models_list, gaussian, y_norm, n_sources, labels)
+        sources = separate_window(sampler_model, sampler_name, sampler_labels, gaussian, y_norm, n_sources)
 
         for src_wave, out_path in zip(sources, out_path_list):
             src_wave = src_wave / 0.95 * peak
-            sf.write(out_path, src_wave.detach().cpu().numpy(), sr)
+            write_audio(out_path, src_wave.detach().cpu().numpy(), sr)
         results.append(out_path_list)
 
     print(json.dumps({"output_paths": results, "seed": seed}))
@@ -540,7 +672,9 @@ def _window_starts(n_samples: int, window_samples: int, hop_samples: int) -> Lis
     return starts
 
 
-def _resolve_checkpoint_paths(checkpoint_dir: Optional[Union[str, Path]]) -> tuple[Path, Path, Path, Path]:
+def _resolve_checkpoint_paths(
+    checkpoint_dir: Optional[Union[str, Path]],
+) -> tuple[Path, Path, Path, Path, Optional[str]]:
     """Resolve the four files unasdiff's two priors need: two checkpoints, two configs.
 
     Resolution order mirrors DriftSE's (``speech_enhancement/driftse.py``): an explicit
@@ -554,8 +688,12 @@ def _resolve_checkpoint_paths(checkpoint_dir: Optional[Union[str, Path]]) -> tup
         checkpoint_dir: Explicit override directory, if any.
 
     Returns:
-        ``(speech_ckpt, speech_config, sound_ckpt, sound_config)`` paths.
+        ``(speech_ckpt, speech_config, sound_ckpt, sound_config, checkpoint_revision)``.
+        ``checkpoint_revision`` is the resolved 40-hex commit SHA when the pinned HF mirror was
+        the source, ``None`` when the caller supplied their own checkpoints (``checkpoint_dir`` or
+        ``SENSELAB_UNASDIFF_CHECKPOINTS``) -- there is no commit to attribute those to.
     """
+    checkpoint_revision: Optional[str] = None
     if checkpoint_dir is not None:
         base = Path(checkpoint_dir)
     else:
@@ -565,13 +703,46 @@ def _resolve_checkpoint_paths(checkpoint_dir: Optional[Union[str, Path]]) -> tup
         else:
             from senselab.utils.dependencies import resolve_model
 
-            _, base = resolve_model(_UNASDIFF_HF_REPO, _UNASDIFF_HF_REVISION)
+            checkpoint_revision, base = resolve_model(_UNASDIFF_HF_REPO, _UNASDIFF_HF_REVISION)
     return (
         base / _UNASDIFF_SPEECH_CKPT,
         base / _UNASDIFF_SPEECH_CONFIG,
         base / _UNASDIFF_SOUND_CKPT,
         base / _UNASDIFF_SOUND_CONFIG,
+        checkpoint_revision,
     )
+
+
+def _validate_source_class_indices(mode: str, source_class_indices: List[int]) -> None:
+    """Raise if any slot's label is out of range for the prior that slot loads.
+
+    Speech and sound are two disjoint label spaces sharing the integer 0 for unrelated meanings
+    (see this module's docstring) -- an index valid for one prior is not merely unchecked for the
+    other, it silently selects a real (wrong) meaning there. This is the catch the module docstring
+    promises at this layer; :func:`senselab.audio.tasks.source_separation.api.resolve_source_classes`
+    only catches a typo in a class *name* and is bypassed entirely by a caller passing raw indices
+    to this function directly.
+
+    Args:
+        mode: One of ``"speech_sound"``, ``"sound_sound"``, ``"speech_speech"``.
+        source_class_indices: One label per slot.
+
+    Raises:
+        ValueError: Naming the offending slot, which prior it loads, and the index it was given.
+    """
+    max_sound_index = max(load_fsd_class_map_document()["classes"].values())
+    for slot, index in enumerate(source_class_indices):
+        slot_is_speech = mode == _MODE_SPEECH_SPEECH or (mode == _MODE_SPEECH_SOUND and slot == 0)
+        if slot_is_speech:
+            if index != 0:
+                raise ValueError(
+                    f"slot {slot} loads the speech prior in mode={mode!r}, whose only valid label is 0; got {index}"
+                )
+        elif not (0 <= index <= max_sound_index):
+            raise ValueError(
+                f"slot {slot} loads the sound prior in mode={mode!r}, whose valid labels are "
+                f"0..{max_sound_index}; got {index}"
+            )
 
 
 def separate_with_unasdiff(
@@ -583,6 +754,8 @@ def separate_with_unasdiff(
     device: Optional[DeviceType] = None,
     seed: int = 17,
     diffusion_steps: int = _DIFFUSION_STEPS,
+    timeout_s: Optional[float] = None,
+    source_classes: Optional[List[str]] = None,
 ) -> List[List[Audio]]:
     """Separate each audio into ``n_sources`` sources with unasdiff.
 
@@ -610,46 +783,84 @@ def separate_with_unasdiff(
         mode: One of ``"speech_sound"``, ``"sound_sound"``, ``"speech_speech"``.
         checkpoint_dir: Directory containing the four mirror files. If ``None``, resolved from
             ``SENSELAB_UNASDIFF_CHECKPOINTS`` or the pinned HF mirror.
-        device: Accepted for signature parity with other separation/enhancement entry points.
-            The worker selects CUDA when available and CPU otherwise.
+        device: Device the worker runs on. ``DeviceType.CUDA`` is resolved to an explicit
+            ``"cuda:<index>"`` (the index ``torch.cuda.current_device()`` reports in this
+            process, so under a ``CUDA_VISIBLE_DEVICES`` mask it is the allocated card) and sent
+            to the worker; ``DeviceType.CPU`` is sent as ``"cpu"``. ``None`` leaves the choice to
+            the worker, which takes ``cuda:<current index>`` when CUDA is available and CPU
+            otherwise. Only CUDA and CPU are accepted.
         seed: RNG seed, recorded in the log line.
-        diffusion_steps: Number of reverse-diffusion steps the sampler runs per window. Each
-            step is a network evaluation, so this is the backend's dominant cost -- 200 steps
-            measure at RTF ~22-26x on an H100, versus DriftSE's 1 step and SGMSE+'s 30 in this
-            same repository. The default, ``200``, is upstream's own ``config/*/config.toml:
-            diffusion_step`` value and is kept as the quality default: it is the only value
-            with any published basis. Lowering it trades quality for speed roughly
-            proportionally, but **no lower value has been measured in this repository** -- there
-            is no fitted threshold or "recommended" lower setting to fall back on (see this
-            module's ``CLAUDE.md``-derived convention against unfitted thresholds), so any value
-            below 200 is the caller's own unmeasured quality/speed trade.
+        diffusion_steps: Reverse-diffusion schedule length passed to the sampler, not a step count
+            to subsample -- see ``doc.md`` for the mechanism. The priors are trained at ``T=200``,
+            which is why :func:`senselab.audio.tasks.source_separation.api.separate_audios` accepts
+            no other value; this lower-level function still accepts any positive integer, since a
+            future retrained prior may use a different ``T``, but no value other than ``200`` has
+            any published or measured basis against the checkpoints this backend ships today.
+        timeout_s: Ceiling on the worker subprocess, in seconds. ``None`` derives one from the
+            work -- total windows across every input, times ``diffusion_steps``, times a
+            per-window-step factor that itself depends on ``device`` (CPU and MPS scale the
+            measured CUDA figure -- see :func:`_seconds_per_window_step`), with a floor covering
+            the first-use clone and the checkpoint load (:func:`_default_timeout_s`). Exceeding it
+            raises ``RuntimeError`` and discards every window, completed or not.
+        source_classes: Class names, one per sound slot, purely for the ``metadata["unasdiff"]``
+            provenance record below -- conditioning itself uses ``source_class_indices``. ``None``
+            for a mode with no class names (``"speech_speech"``).
 
     Returns:
-        One list of ``n_sources`` ``Audio`` objects per input, in order. For a multi-window
-        input, every returned ``Audio``'s ``metadata["unasdiff_alignment_margins"]`` carries one
-        ``best_score - second_best_score`` float per window boundary (see
+        One list of ``n_sources`` ``Audio`` objects per input, in order. Every returned ``Audio``
+        carries ``metadata["unasdiff"]``: ``mode``, ``source_classes``, ``n_sources``,
+        ``diffusion_steps``, ``upstream_commit`` (the pinned clone commit), ``checkpoint_revision``
+        (the resolved 40-hex commit of the checkpoint mirror, or ``None`` when the caller supplied
+        checkpoints directly rather than through the pinned mirror), and ``device``. For a
+        multi-window input, every returned ``Audio``'s ``metadata["unasdiff_alignment_margins"]``
+        also carries one ``best_score - second_best_score`` float per window boundary (see
         ``data/permutation_alignment.json`` for the measurement behind reading this number,
         which the profile does not gate on since the measurement did not support a fitted
         threshold).
 
     Raises:
-        ValueError: if ``len(source_class_indices) != n_sources``, or if ``diffusion_steps`` is
-            not positive.
-        RuntimeError: if the worker fails; the upstream traceback is included.
+        ValueError: if ``n_sources`` exceeds ``_MAX_SOURCES`` (the paper's own evaluated range --
+            see ``doc.md``), if ``len(source_class_indices) != n_sources``, if ``diffusion_steps``
+            is not positive, if ``timeout_s`` is not positive, if any slot's label is out of range
+            for the prior it loads (see :func:`_validate_source_class_indices`), or if ``device``
+            is neither CUDA nor CPU (or names a device this host does not have).
+        RuntimeError: if the worker fails; the upstream traceback is included. Also if the
+            worker exceeds ``timeout_s`` -- that message names the ceiling, the inputs, and how
+            many windows had been written when it fired.
     """
     if not audios:
         return []
+    if n_sources > _MAX_SOURCES:
+        raise ValueError(
+            f"n_sources={n_sources} exceeds {_MAX_SOURCES}: the paper this backend implements "
+            f"evaluated at most {_MAX_SOURCES} sources. See doc.md."
+        )
     if len(source_class_indices) != n_sources:
         raise ValueError(
             f"source_class_indices must have exactly n_sources={n_sources} entries, got {len(source_class_indices)}"
         )
     if diffusion_steps <= 0:
         raise ValueError(f"diffusion_steps must be a positive integer, got {diffusion_steps}")
+    if timeout_s is not None and timeout_s <= 0:
+        raise ValueError(f"timeout_s must be a positive number of seconds, got {timeout_s}")
+    _validate_source_class_indices(mode, source_class_indices)
 
     from senselab.audio.tasks.preprocessing import downmix_audios_to_mono, resample_audios
-    from senselab.utils.data_structures.device import _select_device_and_dtype
+    from senselab.utils.data_structures.device import _select_device_and_dtype, device_run_opt
 
-    _select_device_and_dtype(user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.CPU])
+    # None is forwarded as None rather than resolved here: the host interpreter and the venv's
+    # own torch are separate builds, and only the venv's answer to torch.cuda.is_available()
+    # governs where the worker can actually run.
+    worker_device: Optional[str] = None
+    if device is not None:
+        # MPS is admitted so a caller who names it is not refused by a list, but it is never
+        # reached by leaving the choice open: measured on this model it costs 90-193 s per
+        # diffusion step against 16.7 s on CPU. The worker warns rather than the host, because
+        # only the worker knows whether MPS is actually there.
+        selected_device, _ = _select_device_and_dtype(
+            user_preference=device, compatible_devices=list(_COMPATIBLE_DEVICES)
+        )
+        worker_device = device_run_opt(selected_device)
 
     mono_16k = downmix_audios_to_mono(resample_audios(audios, resample_rate=_TARGET_SR))
 
@@ -661,27 +872,47 @@ def separate_with_unasdiff(
         _window_starts(int(audio.waveform.shape[-1]), window_samples, hop_samples) for audio in mono_16k
     ]
 
-    speech_ckpt_path, speech_config_path, sound_ckpt_path, sound_config_path = _resolve_checkpoint_paths(checkpoint_dir)
+    total_windows = sum(len(w) for w in windows_per_audio)
+    effective_timeout_s = (
+        _default_timeout_s(total_windows, diffusion_steps, device=device) if timeout_s is None else timeout_s
+    )
+
+    speech_ckpt_path, speech_config_path, sound_ckpt_path, sound_config_path, checkpoint_revision = (
+        _resolve_checkpoint_paths(checkpoint_dir)
+    )
+    provenance = {
+        "mode": mode,
+        "source_classes": source_classes,
+        "n_sources": n_sources,
+        "diffusion_steps": diffusion_steps,
+        "upstream_commit": _UNASDIFF_COMMIT,
+        "checkpoint_revision": checkpoint_revision,
+        "device": worker_device or "worker-selected",
+    }
 
     venv_dir = ensure_venv(
         _UNASDIFF_VENV,
-        _unasdiff_requirements(),
+        _UNASDIFF_REQUIREMENTS,
         python_version=_UNASDIFF_PYTHON,
         max_cuda_version=_UNASDIFF_MAX_CUDA_VERSION,
     )
+    _ensure_flash_attn(Path(venv_dir))
     python = venv_python(venv_dir)
     # Cached alongside the venv rather than per-tempdir, so the pinned-commit clone in the
     # worker script happens once per host, not once per call.
     repo_dir = Path(venv_dir) / "unasdiff-src"
 
     logger.info(
-        "unasdiff: separating %d audio(s) (%d window(s) total), mode=%s, n_sources=%d, seed=%d, diffusion_steps=%d",
+        "unasdiff: separating %d audio(s) (%d window(s) total), mode=%s, n_sources=%d, seed=%d, "
+        "diffusion_steps=%d, device=%s, timeout=%.0fs",
         len(mono_16k),
-        sum(len(w) for w in windows_per_audio),
+        total_windows,
         mode,
         n_sources,
         seed,
         diffusion_steps,
+        worker_device or "worker's choice",
+        effective_timeout_s,
     )
 
     with tempfile.TemporaryDirectory(prefix="senselab-unasdiff-") as tmpdir:
@@ -697,9 +928,8 @@ def separate_with_unasdiff(
             waveform = audio.waveform.squeeze(0)
             for w, start in enumerate(starts):
                 segment = waveform[start : start + window_samples]
-                segment_audio = Audio(waveform=segment.unsqueeze(0), sampling_rate=_TARGET_SR)
                 in_path = str(tmp / f"in_{i}_{w}.wav")
-                segment_audio.save_to_file(in_path)
+                Audio(waveform=segment.unsqueeze(0), sampling_rate=_TARGET_SR).save_to_file(in_path)
                 in_paths.append(in_path)
                 out_paths.append([str(tmp / f"out_{i}_{w}_{s}.wav") for s in range(n_sources)])
             window_ranges.append((flat_start, len(in_paths)))
@@ -720,17 +950,32 @@ def separate_with_unasdiff(
                 "out_paths": out_paths,
                 "seed": seed,
                 "diffusion_steps": diffusion_steps,
+                "device": worker_device,
+                "deadline_s": effective_timeout_s,
+                "io_dir": stage_portable_audio_io(tmp),
             }
         )
 
-        result = subprocess.run(
-            [python, "-c", _WORKER_SCRIPT],
-            input=input_json,
-            capture_output=True,
-            text=True,
-            timeout=3600,
-            env=_clean_subprocess_env(),
-        )
+        try:
+            result = subprocess.run(
+                [python, "-c", _WORKER_SCRIPT],
+                input=input_json,
+                capture_output=True,
+                text=True,
+                timeout=effective_timeout_s,
+                env=_clean_subprocess_env(),
+            )
+        except subprocess.TimeoutExpired as exc:
+            completed = sum(1 for paths in out_paths if all(Path(p).is_file() for p in paths))
+            total_input_s = sum(int(a.waveform.shape[-1]) for a in mono_16k) / _TARGET_SR
+            raise RuntimeError(
+                f"unasdiff worker exceeded its {effective_timeout_s:.0f}s ceiling with "
+                f"{completed}/{len(out_paths)} window(s) written, separating {len(mono_16k)} input(s) "
+                f"({total_input_s:.1f}s of audio at {_TARGET_SR} Hz) with mode={mode!r}, "
+                f"n_sources={n_sources}, diffusion_steps={diffusion_steps}, "
+                f"device={worker_device or 'worker-selected'}. The written windows are discarded "
+                f"with the worker's temporary directory; pass timeout_s to raise the ceiling."
+            ) from exc
         output = parse_subprocess_result(result, venv_label="unasdiff")
         all_output_paths: List[List[str]] = output["output_paths"]
 
@@ -749,6 +994,7 @@ def separate_with_unasdiff(
                     source_audio = Audio(filepath=p)
                     _ = source_audio.waveform
                     source_audio.metadata = dict(audio.metadata)
+                    source_audio.metadata["unasdiff"] = provenance
                     sources.append(source_audio)
                 separated.append(sources)
                 continue
@@ -799,6 +1045,7 @@ def separate_with_unasdiff(
                 stitched_audio = Audio(waveform=(acc[s] / weight_sum).unsqueeze(0), sampling_rate=_TARGET_SR)
                 stitched_audio.metadata = dict(audio.metadata)
                 stitched_audio.metadata["unasdiff_alignment_margins"] = margins
+                stitched_audio.metadata["unasdiff"] = provenance
                 sources.append(stitched_audio)
             separated.append(sources)
 

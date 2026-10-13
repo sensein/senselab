@@ -59,6 +59,7 @@ _CANARY_REQUIREMENTS = [
     # modern numba floor so the chain resolves to llvmlite>=0.43 (same fix as the
     # qwen-asr venv).
     "numba>=0.60",
+    "huggingface-hub<2",
     # SALM's Qwen LM uses a LoRA adapter -> the worker imports peft at load time,
     # but NeMo doesn't always pull it transitively on a fresh resolve. Pin it
     # explicitly (the senselab core lists peft for Granite; the isolated venv needs
