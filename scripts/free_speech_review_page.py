@@ -24,7 +24,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from multiprocessing import Pool
 from pathlib import Path
-from typing import Any, Iterable, Iterator, Mapping, Sequence
+from typing import Any, Callable, Iterable, Iterator, Mapping, Sequence
 
 from senselab.audio.workflows.triage.b2ai_hints import read_sidecars
 from senselab.audio.workflows.triage.extend import source_of
@@ -63,18 +63,22 @@ KEPT_MEASUREMENTS = (PII_SCAN, REDACTION_EXEMPTIONS, PII_LEDGER)
 KEPT_MEASUREMENT_MARKERS = tuple(f'"name": "{name}"' for name in KEPT_MEASUREMENTS)
 
 RELEASE_ORDER = (
-    "release_without_redaction",
-    "release_with_redaction",
+    "as_is",
+    "redacted",
     "withheld",
-    "discarded",
-    "not_assessed",
     "unrecorded",
 )
-"""The graph's own release axis, most permissive first, plus the page's own ``unrecorded``."""
+"""The graph's own release axis, most permissive first, plus the page's own ``unrecorded`` for none: a
+discard, or a release the graph could not assess."""
 
 EXTRACT_SCHEMA = "senselab.fsreview.extract"
-EXTRACT_VERSION = 10
-"""10 carries each span's policy lock or release kind, the listed conditions, and the names awaiting
+EXTRACT_VERSION = 12
+"""12 replaces the bypass reason ``unscanned`` with ``non_lexical_task`` and carries an ``absent`` reading's
+``absent_reason`` (``pii_scan_missing``).
+
+11 carries the reviewer's ``bypassed`` status and its ``bypass_reason`` in place of ``nothing_to_read``.
+
+10 carries each span's policy lock or release kind, the listed conditions, and the names awaiting
 review (redaction policy v7). 7 carries each span's trim reason and condition kind, and a single ASR
 stream where the consensus is empty.
 
@@ -706,26 +710,27 @@ def language_name(code: str) -> str:
     return {"en": "English", "es": "Spanish"}.get(base, code.strip() or "unknown")
 
 
-def recording_record(run_root: Path, families: frozenset[str]) -> dict[str, Any] | None:
-    """One recording's row, or None when it is not a free-response recording.
+def recording_record(run_root: Path, families: frozenset[str] | None) -> dict[str, Any] | None:
+    """One recording's row, or None when its declared family is out of scope.
 
     Args:
         run_root: The directory holding ``run/store.jsonl``.
-        families: The family names to keep.
+        families: The family names to keep; None keeps every declared family.
 
     Returns:
-        The row, or None when the declared family is out of scope.
+        The row, or None when the recording declares no family or one outside ``families``.
     """
     stem = stem_of(run_root)
     task = task_id_of(stem)
-    if task_family(task) not in families:
+    if families is not None and task_family(task) not in families:
         return None
     view = read_store_light(run_root / RUN_SUBDIR / STORE_NAME)
     verdict = view.last("verdict", node=VERDICT_NODE)
     attributes = verdict.attributes if verdict is not None else {}
-    declared = str(attributes.get("declared_family") or task_family(task))
-    if declared not in families:
+    declared = attributes.get("declared_family") or task_family(task)
+    if not declared or (families is not None and declared not in families):
         return None
+    declared = str(declared)
     participant, session, _ = identity(stem)
     marked = marked_words(view)
     ledger = ledger_of(view)
@@ -841,7 +846,7 @@ def _redact_detail(redact: Entity | None) -> dict[str, Any]:
     """What REDACT itself concluded.
 
     ``release_ground`` is None exactly when REDACT decided, so on the two states REDACT decides —
-    ``release_with_redaction`` and ``withheld`` — this ``why`` is the only account there is. A
+    ``redacted`` and ``withheld`` — this ``why`` is the only account there is. A
     withholding the reviewer made carries its own ground instead.
 
     Args:
@@ -1274,7 +1279,11 @@ def load(path: Path) -> Corpus:
     return corpus
 
 
-def paragraph(words: Sequence[Sequence[Any]], marks: Sequence[dict[str, Any]]) -> str:
+def paragraph(
+    words: Sequence[Sequence[Any]],
+    marks: Sequence[dict[str, Any]],
+    word: Callable[[Sequence[Any]], str] | None = None,
+) -> str:
     """One recording's consensus text as marked-up prose.
 
     Each mark the extract identified becomes one ``<mark>`` carrying its review key and its facets,
@@ -1283,6 +1292,7 @@ def paragraph(words: Sequence[Sequence[Any]], marks: Sequence[dict[str, Any]]) -
     Args:
         words: The word entries, ``[text, bracketed, mark index or -1]``.
         marks: The recording's marks, indexed by the third field of a word entry.
+        word: Renders one word entry; None for the plain escaped word.
 
     Returns:
         The HTML for the paragraph's contents.
@@ -1292,18 +1302,20 @@ def paragraph(words: Sequence[Sequence[Any]], marks: Sequence[dict[str, Any]]) -
     while index < len(words):
         owner = int(words[index][2]) if len(words[index]) > 2 else -1
         if owner < 0 or owner >= len(marks):
-            pieces.append(_plain(words[index]))
+            pieces.append((word or _plain)(words[index]))
             index += 1
             continue
         cursor = index + 1
         while cursor < len(words) and len(words[cursor]) > 2 and int(words[cursor][2]) == owner:
             cursor += 1
-        pieces.append(_mark(marks[owner], words[index:cursor]))
+        pieces.append(_mark(marks[owner], words[index:cursor], word or _plain))
         index = cursor
     return " ".join(pieces)
 
 
-def _mark(mark: dict[str, Any], run: Sequence[Sequence[Any]]) -> str:
+def _mark(
+    mark: dict[str, Any], run: Sequence[Sequence[Any]], word: Callable[[Sequence[Any]], str] | None = None
+) -> str:
     """One reviewable mark: its words, underlined in its state's colour, and its category.
 
     A mark carries exactly one category, on its label and on ``data-c`` alike. A span of another
@@ -1315,6 +1327,7 @@ def _mark(mark: dict[str, Any], run: Sequence[Sequence[Any]]) -> str:
     Args:
         mark: The mark record.
         run: The word entries it covers.
+        word: Renders one word entry; None for the plain escaped word.
 
     Returns:
         The mark's HTML.
@@ -1323,7 +1336,7 @@ def _mark(mark: dict[str, Any], run: Sequence[Sequence[Any]]) -> str:
     state = str(mark.get("s") or DETECTED)
     colour = MARK_COLOURS.get(state, "green")
     detectors = html.escape(" ".join(str(name) for name in mark["d"]) or "unattributed")
-    inner = " ".join(_plain(item) for item in run)
+    inner = " ".join((word or _plain)(item) for item in run)
     for overlay in reversed(mark.get("o") or []):
         inner = _overlay_mark(overlay, mark, inner)
     category = "" if colour == "orange" else f'<span class="cat">{shown}</span>'
@@ -1432,8 +1445,8 @@ def recording_html(row: dict[str, Any]) -> str:
 
 RELEASE_DECISIONS = (
     ("withheld", "w", "withhold", "withhold"),
-    ("release_with_redaction", "d", "with", "with redaction"),
-    ("release_without_redaction", "o", "without", "without redaction"),
+    ("redacted", "d", "with", "with redaction"),
+    ("as_is", "o", "without", "without redaction"),
 )
 """The three releases a reviewer can say a recording warrants, mutually exclusive, each with its key,
 class slug and label.
@@ -1486,13 +1499,11 @@ def _flag_control(stem: str) -> str:
     return _FLAG_TOGGLE
 
 
-LLM_STATES = ("disabled", "nothing_to_read", "absent", "clean", "flagged")
+LLM_STATES = ("disabled", "bypassed", "absent", "clean", "flagged")
 """Every state the reviewer records, in the order the ladder reaches them.
 
-``disabled`` is the config leaving it off; ``nothing_to_read`` is a transcript with no words in it;
-the last three are readings it actually took. ``not_run`` retired when the reviewer stopped being
-reached through the detectors: it meant "the detectors marked nothing", which is now a population
-that gets read rather than one that gets skipped.
+``disabled`` is the config leaving it off; ``bypassed`` is a recording whose lexical residue is empty,
+with the annotation's ``bypass_reason`` saying why; the last three are readings it actually took.
 """
 
 LLM_RAN = ("absent", "clean", "flagged")
@@ -1673,7 +1684,28 @@ _VERDICT_CONTROLS = "".join(
 )
 
 
-_STYLE = """
+MARK_STYLE = """
+.bracket{font-family:ui-monospace,Menlo,monospace;font-size:.82em;color:var(--brk);
+background:var(--brkbg);border-radius:3px;padding:0 3px;letter-spacing:.02em}
+mark.pii,mark.swatch{background:transparent;color:var(--fg);border-bottom:3px solid var(--line);
+border-radius:0;padding:0 1px}
+mark.pii.u-red,mark.swatch.u-red{border-bottom-color:var(--ured)}
+mark.pii.u-green,mark.swatch.u-green{border-bottom-color:var(--ugreen)}
+mark.pii.u-orange,mark.swatch.u-orange{border-bottom-color:var(--uorange);border-bottom-style:dashed}
+mark.pii .cat,mark.swatch .cat{font-size:9.5px;letter-spacing:.06em;color:var(--catfg);background:var(--catbg);
+border-radius:3px;padding:0 3px;margin-right:4px;vertical-align:.18em;
+font-family:ui-monospace,Menlo,monospace}
+.chip{font-size:10.5px;letter-spacing:.04em;padding:1px 7px;border-radius:9px;border:1px solid}
+.r-as_is{background:#e7f3e7;border-color:#8fbf8f;color:#2c5c2c}
+.r-withheld{background:#fbe6e4;border-color:#d08e86;color:#8a2f24}
+.r-redacted{background:#eaeef6;border-color:#8fa0c0;color:#2f4670}
+.r-unrecorded{background:#f1efe9;border-color:#bdb7a8;color:#6b6350}
+"""
+"""The rules a marked transcript needs: bracketed tokens, PII marks in their state colours, the category
+label and the release chips. The triage review page carries them too."""
+
+_STYLE = (
+    """
 :root{--bg:#fbfaf8;--fg:#1d1c1a;--mut:#6b6860;--line:#e2ded6;--card:#fff;--acc:#7a4b12;
 --pii:#fde8c8;--piib:#c98a2b;--brk:#8d8a83;--brkbg:#f0eeea;--catbg:#f7dcb0;--catfg:#7a4b12;
 --ured:#b3123a;--ugreen:#1e7b34;--uorange:#a86b00;color-scheme:light}
@@ -1739,24 +1771,11 @@ margin-bottom:6px}
 border-radius:3px;padding:0 4px}
 .text{margin:0;font-size:16px}
 .empty{color:var(--mut);font-style:italic}
-.bracket{font-family:ui-monospace,Menlo,monospace;font-size:.82em;color:var(--brk);
-background:var(--brkbg);border-radius:3px;padding:0 3px;letter-spacing:.02em}
-mark.pii,mark.swatch{background:transparent;color:var(--fg);border-bottom:3px solid var(--line);
-border-radius:0;padding:0 1px}
-mark.pii.u-red,mark.swatch.u-red{border-bottom-color:var(--ured)}
-mark.pii.u-green,mark.swatch.u-green{border-bottom-color:var(--ugreen)}
-mark.pii.u-orange,mark.swatch.u-orange{border-bottom-color:var(--uorange);border-bottom-style:dashed}
 .themebtn{font:inherit;font-size:11px;padding:1px 7px;border:1px solid var(--line);border-radius:9px;
 background:var(--card);color:var(--mut);cursor:pointer}
-mark.pii .cat,mark.swatch .cat{font-size:9.5px;letter-spacing:.06em;color:var(--catfg);background:var(--catbg);
-border-radius:3px;padding:0 3px;margin-right:4px;vertical-align:.18em;
-font-family:ui-monospace,Menlo,monospace}
-.chip{font-size:10.5px;letter-spacing:.04em;padding:1px 7px;border-radius:9px;border:1px solid}
-.r-release_without_redaction{background:#e7f3e7;border-color:#8fbf8f;color:#2c5c2c}
-.r-withheld{background:#fbe6e4;border-color:#d08e86;color:#8a2f24}
-.r-release_with_redaction{background:#eaeef6;border-color:#8fa0c0;color:#2f4670}
-.r-discarded,.r-not_assessed,.r-unrecorded{background:#f1efe9;border-color:#bdb7a8;color:#6b6350}
-.cat-chip{display:inline-block;font-size:11px;background:var(--card);border:1px solid var(--line);
+"""
+    + MARK_STYLE
+    + """.cat-chip{display:inline-block;font-size:11px;background:var(--card);border:1px solid var(--line);
 border-radius:9px;padding:1px 7px;margin:0 3px 3px 0}
 .errors{color:#8a2f24;font-size:12px}
 .noreview{font-size:11.5px;background:var(--pii);border-left:3px solid var(--piib);
@@ -1828,8 +1847,8 @@ border-radius:6px;background:var(--bg);color:var(--mut);cursor:pointer}
 .d-without.on{background:#2c5c2c}
 .d-with.on{background:#2f4670}
 .d-withhold.on{background:#8a2f24}
-.rec[data-dec="release_without_redaction"]{border-right:3px solid #2c5c2c}
-.rec[data-dec="release_with_redaction"]{border-right:3px solid #2f4670}
+.rec[data-dec="as_is"]{border-right:3px solid #2c5c2c}
+.rec[data-dec="redacted"]{border-right:3px solid #2f4670}
 .rec[data-dec="withheld"]{border-right:3px solid #8a2f24}
 .whybtn{font:inherit;font-size:11.5px;padding:2px 9px;border:1px solid var(--line);
 border-radius:6px;background:var(--bg);color:var(--mut);cursor:pointer}
@@ -1889,17 +1908,18 @@ mark.pii{padding:1px 3px}
 }
 @media (prefers-reduced-motion:reduce){*{scroll-behavior:auto !important}}
 """
+)
 
 _DARK_RULES = """
 :root{--bg:#171614;--fg:#eceae5;--mut:#9a958c;--line:#33312d;--card:#1f1e1b;--acc:#d9a45f;
 --pii:#4a3413;--piib:#c08a38;--brk:#a09b91;--brkbg:#2a2825;--catbg:#5f4418;--catfg:#f0d7a8;
 --ured:#ff5c7a;--ugreen:#5fcf7a;--uorange:#ffc145;color-scheme:dark}
-.r-release_without_redaction{background:#1d2e1d;border-color:#4f7a4f;color:#a8d3a8}
+.r-as_is{background:#1d2e1d;border-color:#4f7a4f;color:#a8d3a8}
 .r-withheld{background:#331e1b;border-color:#8a4b42;color:#e8a89e}
-.r-release_with_redaction{background:#1c2334;border-color:#4a5c86;color:#a7bce4}
-.r-discarded,.r-not_assessed,.r-unrecorded{background:#282622;border-color:#5a5449;color:#bdb5a5}
-.rec[data-dec="release_without_redaction"]{border-right-color:#4f7a4f}
-.rec[data-dec="release_with_redaction"]{border-right-color:#4a5c86}
+.r-redacted{background:#1c2334;border-color:#4a5c86;color:#a7bce4}
+.r-unrecorded{background:#282622;border-color:#5a5449;color:#bdb5a5}
+.rec[data-dec="as_is"]{border-right-color:#4f7a4f}
+.rec[data-dec="redacted"]{border-right-color:#4a5c86}
 .rec[data-dec="withheld"]{border-right-color:#a8463a}
 .d-without.on{background:#3a6b3a}
 .d-with.on{background:#3d5687}
@@ -2058,8 +2078,8 @@ function toggleFlag(card){
 }
 /* ---- the release decision: which artefact this reviewer would hand on ---- */
 const decSel=document.getElementById('dec');
-const DECKEYS={'w':'withheld','W':'withheld','o':'release_without_redaction','O':'release_without_redaction',
-               'd':'release_with_redaction','D':'release_with_redaction'};
+const DECKEYS={'w':'withheld','W':'withheld','o':'as_is','O':'as_is',
+               'd':'redacted','D':'redacted'};
 function paintDecision(card){
   const rec=store.release[card.dataset.stem];
   const value=rec&&rec.v;
@@ -2529,10 +2549,21 @@ function buildWhy(stem,card){
     out.push('<div class="warn"><b>Switched off.</b> The reviewer is disabled in the '
       +'configuration, so no review was attempted and none of what follows was corroborated by '
       +'one. This is not a verdict about the recording.</div>');
-  }else if(st==='nothing_to_read'){
-    out.push('<div class="warn"><b>There was no text to read.</b> The reviewer is enabled, and '
-      +'this recording\\'s transcript carries no words, so there was nothing to read back. '
+  }else if(st==='bypassed'){
+    const BYPASS={no_words:'the consensus transcript carries no words',
+      non_lexical_only:'the transcript carries only bracketed, non-lexical or degenerate tokens',
+      task_content_only:'every lexical word in the transcript is task content (stimulus, '
+        +'instructions or the task family\\'s lexicon)',
+      non_lexical_task:'the task asks for a sound, not words; its lexical words outside the task text '
+        +'are masked and reviewed as speech in the task, not read for PII'};
+    const why=BYPASS[llm.bypass_reason]||'reason not recorded';
+    out.push('<div class="warn"><b>Reviewer bypassed</b> ('+esc(llm.bypass_reason||'unrecorded')+'): '
+      +esc(why)+', so the reviewer is enabled but was not asked. '
       +'It reached no conclusion about this recording.</div>');
+  }else if(st==='absent'&&llm.absent_reason==='pii_scan_missing'){
+    out.push('<div class="warn"><b>No PII scan.</b> The transcript has lexical words of a task that '
+      +'asks for words, and no PII scan read them, so the reviewer was not asked. This is a missing '
+      +'measurement (not_measured), not a clean reading.</div>');
   }else if(st==='absent'){
     out.push('<div class="warn"><b>It tried and could not load.</b> That is not the same as '
       +'finding nothing, and it is not a clean reading. '+(llm.failure?esc(llm.failure):'')
@@ -2804,7 +2835,7 @@ placeholder="max"> tokens</div>
 <option value="flagged">it flagged something</option>
 <option value="clean">it ran and flagged nothing</option>
 <option value="absent">it could not load</option>
-<option value="nothing_to_read">there was no text to read</option>
+<option value="bypassed">bypassed: no residue to read</option>
 <option value="disabled">switched off</option>
 </select>
 <select id="flag"><option value="any">review flag, any</option>
@@ -2813,8 +2844,8 @@ placeholder="max"> tokens</div>
 <select id="dec"><option value="any">release decision, any</option>
 <option value="decided">decided</option><option value="undecided">undecided</option>
 <option value="withheld">withhold</option>
-<option value="release_with_redaction">release with redaction</option>
-<option value="release_without_redaction">release without redaction</option>
+<option value="redacted">release with redaction</option>
+<option value="as_is">release without redaction</option>
 </select>
 <select id="rev"><option value="any">judged or not</option>
 <option value="unreviewed">unjudged only</option><option value="reviewed">judged only</option>

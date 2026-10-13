@@ -1,0 +1,1798 @@
+// The triage review page: three tabs over one selection of recordings.
+//
+// Explore draws the recording-vectors viewer's parallel coordinates over the decision columns and
+// the evidence items; Review lists what the brushes, facets and search admit and shows one
+// recording; Decisions holds the reviewer's entries and exports them as JSON whose keys are the
+// owner label table's. Per-recording data arrives from Parquet side files, fetched when served and
+// handed to `ReviewPage.shardParquet` by their script wrappers when opened from file://.
+
+'use strict';
+
+var ReviewPage = (function () {
+  var EXPORT_SCHEMA = 'senselab.triage.review';
+  var EXPORT_VERSION = 1;
+  var VERDICTS = ['pass', 'review', 'discard'];
+  var DECISION_AXES = ['declared_family', 'verdict', 'release', 'reason', 'run_status', 'extent_duration_s', 'duration_s'];
+  var FACETS = ['verdict', 'release', 'reason', 'branch', 'declared_family', 'run_status', 'annotations',
+    'evidence_items', 'decisive_items', 'reasons'];
+  var MAX_EVIDENCE_AXES = 8;
+  var LIST_PAGE = 200;
+  // The LLM reviewer's bookkeeping, left out of the line the page shows.
+  var LLM_HIDDEN = ['task_context', 'result_cache', 'prompt_version', 'model_id', 'revision', 'original'];
+
+  // ---------------------------------------------------------------- pure: index to rows
+
+  function decodeScalar(col) {
+    return col.codes.map(function (c) { return c < 0 ? null : col.values[c]; });
+  }
+
+  function decodeList(col) {
+    return col.codes.map(function (codes) { return codes.map(function (c) { return col.values[c]; }); });
+  }
+
+  function evidenceKey(name) { return 'ev:' + name; }
+
+  /** One row object per recording, keyed the way the axis catalogue reads them. */
+  function decodeRows(index) {
+    var cols = index.cols;
+    var n = index.build.n;
+    var scalars = {};
+    ['participant', 'session', 'task', 'family', 'branch', 'verdict', 'release', 'release_reason', 'reason',
+      'run_status'].forEach(function (k) { scalars[k] = cols[k] ? decodeScalar(cols[k]) : []; });
+    var reasons = decodeList(cols.reasons), annotations = decodeList(cols.annotations);
+    var items = decodeList(cols.items), decisive = decodeList(cols.decisive);
+    var rows = new Array(n);
+    for (var i = 0; i < n; i++) {
+      rows[i] = {
+        index: i,
+        stem: cols.stem[i],
+        participant: scalars.participant[i],
+        session: scalars.session[i],
+        task: scalars.task[i],
+        declared_family: scalars.family[i],
+        branch: scalars.branch[i],
+        verdict: scalars.verdict[i],
+        release: scalars.release[i],
+        release_reason: scalars.release_reason[i],
+        reason: scalars.reason[i],
+        run_status: scalars.run_status[i],
+        reasons: reasons[i],
+        annotations: annotations[i],
+        evidence_items: items[i],
+        decisive_items: decisive[i],
+        extent_duration_s: cols.extent_duration_s[i],
+        duration_s: cols.duration_s[i],
+        text: cols.text[i],
+        checks: cols.checks ? cols.checks[i] : null,
+        proposed_extent: cols.proposed_extent ? cols.proposed_extent[i] : null,
+      };
+    }
+    Object.keys(index.evidence).forEach(function (name) {
+      var e = index.evidence[name];
+      var key = evidenceKey(name);
+      for (var j = 0; j < e.rows.length; j++) rows[e.rows[j]][key] = e.values[j];
+    });
+    return rows;
+  }
+
+  /** The column specs this page adds to the axis catalogue. */
+  function columnSpecs(index) {
+    var specs = [
+      { name: 'branch', kind: 'categorical', group: 'decision', nullMeans: 'no branch owns the declared family' },
+      { name: 'reason', kind: 'categorical', group: 'decision', nullMeans: 'a pass with no reason' },
+      { name: 'run_status', kind: 'categorical', group: 'decision', nullMeans: 'the fold wrote no run status' },
+      { name: 'reasons', kind: 'set', group: 'decision', assignable: false, reason: 'a set of reasons — filter by a term' },
+      { name: 'annotations', kind: 'set', group: 'decision', assignable: false, reason: 'a set of annotations — filter by a term' },
+      { name: 'evidence_items', kind: 'set', group: 'evidence', label: 'evidence items read', assignable: false,
+        reason: 'a set of evidence names — filter by a term' },
+      { name: 'decisive_items', kind: 'set', group: 'evidence', label: 'decisive evidence items', assignable: false,
+        reason: 'a set of evidence names — filter by a term' },
+      { name: 'extent_duration_s', kind: 'numeric', group: 'decision', unit: 's', nullMeans: 'no task extent' },
+    ];
+    Object.keys(index.evidence).sort().forEach(function (name) {
+      var e = index.evidence[name];
+      specs.push({
+        name: evidenceKey(name), label: name, kind: e.kind === 'numeric' ? 'numeric' : 'categorical',
+        group: 'evidence: ' + (e.group || 'other'), unit: e.unit || null,
+        nullMeans: 'the fold did not weigh ' + name + ' for this recording',
+      });
+    });
+    return specs;
+  }
+
+  /** Evidence groups present, each with its items most-read first. */
+  function evidenceGroups(index) {
+    var groups = {};
+    Object.keys(index.evidence).forEach(function (name) {
+      var e = index.evidence[name];
+      var g = e.group || 'other';
+      (groups[g] = groups[g] || []).push({ name: name, n: e.rows.length });
+    });
+    Object.keys(groups).forEach(function (g) {
+      groups[g].sort(function (a, b) { return b.n - a.n || (a.name < b.name ? -1 : 1); });
+    });
+    return groups;
+  }
+
+  /** The axes for one choice: the decision columns, or verdict and reason beside a group's items. */
+  function axesFor(choice, index) {
+    if (!choice || choice === 'decision') return DECISION_AXES.slice();
+    var items = evidenceGroups(index)[choice] || [];
+    return ['verdict', 'reason'].concat(items.slice(0, MAX_EVIDENCE_AXES).map(function (i) { return evidenceKey(i.name); }));
+  }
+
+  /** Rows a stem/transcript search and a participant/session filter admit. */
+  function searchMask(rows, query, who) {
+    var q = (query || '').trim().toLowerCase();
+    var w = (who || '').trim().toLowerCase();
+    if (!q && !w) return null;
+    var out = new Uint8Array(rows.length);
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i];
+      var ok = true;
+      if (q) ok = r.stem.toLowerCase().indexOf(q) >= 0 || (r.text != null && r.text.indexOf(q) >= 0);
+      if (ok && w) ok = String(r.participant || '').toLowerCase().indexOf(w) >= 0 ||
+        String(r.session || '').toLowerCase().indexOf(w) >= 0;
+      out[i] = ok ? 1 : 0;
+    }
+    return out;
+  }
+
+  function andMasks(a, b) {
+    if (!a) return b;
+    if (!b) return a;
+    var out = new Uint8Array(a.length);
+    for (var i = 0; i < a.length; i++) out[i] = a[i] && b[i] ? 1 : 0;
+    return out;
+  }
+
+  /** Two-bit levels, time-major, out of the base64 text the builder packs. */
+  function unpackSpec(text, frames, bands) {
+    var bin = typeof atob === 'function' ? atob(text) : Buffer.from(text, 'base64').toString('binary');
+    var out = new Uint8Array(frames * bands);
+    for (var i = 0; i < out.length; i++) {
+      var byte = bin.charCodeAt(i >> 2);
+      out[i] = (byte >> ((i & 3) * 2)) & 3;
+    }
+    return out;
+  }
+
+  // ---------------------------------------------------------------- pure: the time window
+
+  var MIN_SPAN_S = 0.25;
+
+  /** The window `[t0, t1]` after zooming by `factor` about time `at`, kept inside `[0, duration]`. */
+  function zoomWindow(win, duration, factor, at) {
+    var d = duration > 0 ? duration : 1;
+    var span = Math.min(d, Math.max(Math.min(MIN_SPAN_S, d), (win.t1 - win.t0) * factor));
+    var frac = win.t1 > win.t0 ? (at - win.t0) / (win.t1 - win.t0) : 0.5;
+    var t0 = Math.max(0, Math.min(d - span, at - frac * span));
+    return { t0: t0, t1: t0 + span };
+  }
+
+  /** The window moved by `dt` seconds, kept inside `[0, duration]`. */
+  function panWindow(win, duration, dt) {
+    var span = win.t1 - win.t0;
+    var t0 = Math.max(0, Math.min(Math.max(0, duration - span), win.t0 + dt));
+    return { t0: t0, t1: t0 + span };
+  }
+
+  /** A span's left edge and width as fractions of the window, or null where it falls outside. */
+  function placeSpan(start, end, win) {
+    if (start == null || end == null || end < win.t0 || start > win.t1) return null;
+    var span = win.t1 - win.t0;
+    return { left: (start - win.t0) / span, width: Math.max(0, end - start) / span };
+  }
+
+  /** Tick times for a window: a 1-2-5 step giving about `target` ticks. */
+  function ticks(win, target) {
+    var span = win.t1 - win.t0;
+    if (!(span > 0)) return [];
+    var raw = span / (target || 5);
+    var mag = Math.pow(10, Math.floor(Math.log10(raw)));
+    var step = [1, 2, 5, 10].map(function (m) { return m * mag; }).filter(function (v) { return v >= raw; })[0];
+    var out = [];
+    for (var k = Math.ceil(win.t0 / step - 1e-9); k * step <= win.t1 + 1e-9; k++) out.push(Math.round(k * step * 1000) / 1000 + 0);
+    return out;
+  }
+
+  // ---------------------------------------------------------------- pure: transcripts
+
+  /** A token's comparison key: the consensus normalisation (casefold, alphanumerics and apostrophe). */
+  function tokenKey(text) {
+    return String(text == null ? '' : text).toLowerCase().replace(/[^\p{L}\p{N}']/gu, '');
+  }
+
+  /** One lane per model, its own words in its own order: `{label, tokens: [[start, end, text]]}`. */
+  function modelLanes(sp) {
+    return (sp.own || []).map(function (o) {
+      return { label: modelLabel(o), tokens: (o.words || []).filter(function (w) { return w[0] != null && w[1] != null; }) };
+    });
+  }
+
+  /** Model families whose name gives a recogniser its initial, matched in this order against its id. */
+  var MODEL_FAMILIES = ['whisper', 'qwen', 'canary', 'parakeet', 'granite', 'wav2vec', 'voxtral', 'gemma', 'mms'];
+
+  /** One short, distinct initial per model, in `models` order: its family's first letter, else its source's. */
+  function modelInitials(models) {
+    var out = [];
+    (models || []).forEach(function (m, k) {
+      var id = String((m && (m.model_id || m.source)) || '').toLowerCase();
+      var family = MODEL_FAMILIES.filter(function (f) { return id.indexOf(f) >= 0; })[0];
+      var base = family || String((m && m.source) || id || 'm').replace(/^asr_/, '') || 'm';
+      var initial = base.charAt(0).toUpperCase();
+      if (out.indexOf(initial) >= 0) initial = initial + (k + 1);
+      out.push(initial);
+    });
+    return out;
+  }
+
+  /** A consensus word's outcome, read from the word where it carries one, else from its readings. */
+  function outcomeOf(word) {
+    if (word[1]) return word[1];
+    var present = (word[2] || []).filter(function (r) { return r !== null && r !== undefined; });
+    if (present.length < (word[2] || []).length) return 'insertion';
+    var keys = present.map(tokenKey);
+    return keys.every(function (k) { return k === keys[0]; }) ? 'agreement' : 'variant';
+  }
+
+  /**
+   * The alignment's columns, one per consensus word: `{i, outcome, agreement, start, end, text, rows}`,
+   * where `rows` holds one `{initial, label, text, chosen}` per model, `text` null where the model has
+   * no word in that slot and `chosen` on the first reading the consensus surface came from.
+   */
+  function alignmentColumns(sp) {
+    var models = sp.models || [];
+    var initials = modelInitials(models);
+    return (sp.words || []).map(function (word, i) {
+      var surface = tokenKey(word[5]);
+      var chosen = false;
+      var rows = models.map(function (m, k) {
+        var r = (word[2] || [])[k];
+        var text = r === null || r === undefined ? null : String(r);
+        var isChosen = !chosen && text !== null && tokenKey(text) === surface;
+        if (isChosen) chosen = true;
+        return { initial: initials[k], label: modelLabel(m), text: text, chosen: isChosen };
+      });
+      return { i: i, outcome: outcomeOf(word), agreement: word[0], start: word[3], end: word[4], text: word[5], rows: rows };
+    });
+  }
+
+  /** How the alignment came out: column counts by outcome, and each model's insertions by initial. */
+  function alignmentSummary(sp) {
+    var cols = alignmentColumns(sp);
+    var out = { columns: cols.length, agreement: 0, variant: 0, insertion: 0, insertionsBy: {} };
+    modelInitials(sp.models).forEach(function (m) { out.insertionsBy[m] = 0; });
+    cols.forEach(function (c) {
+      out[c.outcome] = (out[c.outcome] || 0) + 1;
+      if (c.outcome === 'insertion') {
+        c.rows.forEach(function (r) { if (r.text !== null) out.insertionsBy[r.initial] += 1; });
+      }
+    });
+    return out;
+  }
+
+  function escapeHtml(text) {
+    return String(text).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+
+  var WORD_SPAN = /<span class="w" data-i="(\d+)">((?:<span class="bracket">[^<]*<\/span>)|[^<]*)<\/span>/g;
+
+  /** One alignment column's HTML; `inner` is the consensus word's own markup, kept on the chosen reading. */
+  function columnHtml(col, inner, sp) {
+    var word = (sp.words || [])[col.i];
+    var title = alternatives(sp, word) + (col.start == null ? '' : '\n' + col.start.toFixed(2) + '–' +
+      (col.end == null ? '?' : col.end.toFixed(2)) + ' s');
+    var head = '<span class="al-col al-' + col.outcome + '" data-i="' + col.i + '"' +
+      (col.start == null ? '' : ' data-t="' + col.start + '" data-e="' + (col.end == null ? col.start : col.end) + '"') +
+      ' tabindex="0" title="' + escapeHtml(title) + '">' +
+      '<span class="al-t">' + (col.start == null ? '—' : col.start.toFixed(2)) + '</span>';
+    if (col.outcome === 'agreement') return head + '<span class="al-r">' + inner + '</span></span>';
+    return head + col.rows.map(function (r) {
+      var badge = '<b class="al-m" title="' + escapeHtml(r.label) + '">' + escapeHtml(r.initial) + '</b>';
+      if (r.text === null) return '<span class="al-r al-gap">' + badge + '<i>—</i></span>';
+      return '<span class="al-r' + (r.chosen ? ' chosen' : '') + '">' + badge + (r.chosen ? inner : escapeHtml(r.text)) + '</span>';
+    }).join('') + '</span>';
+  }
+
+  /**
+   * The consensus transcript as aligned columns: each word span of the marked-up transcript is
+   * replaced by its column, so PII and redaction marks keep wrapping the words they wrapped.
+   */
+  function alignmentHtml(sp) {
+    var cols = alignmentColumns(sp);
+    return String(sp.html || '').replace(WORD_SPAN, function (whole, i, inner) {
+      var col = cols[Number(i)];
+      return col ? columnHtml(col, inner, sp) : whole;
+    });
+  }
+
+  /** Greedy row packing: each timed token's row, so tokens sharing a row never overlap in time. */
+  function packRows(tokens) {
+    var ends = [];
+    var order = tokens.map(function (t, k) { return k; }).sort(function (a, b) { return tokens[a][0] - tokens[b][0] || a - b; });
+    var rows = new Array(tokens.length);
+    order.forEach(function (k) {
+      var t = tokens[k];
+      var row = 0;
+      while (row < ends.length && ends[row] > t[0] + 1e-6) row++;
+      ends[row] = Math.max(t[1], t[0]);
+      rows[k] = row;
+    });
+    return rows;
+  }
+
+  var LABEL_PAD_PX = 4;
+
+  /** Whether `text` set at `charPx` a character fits a box `boxPx` wide. */
+  function labelFits(boxPx, text, charPx) {
+    var n = String(text || '').length;
+    return n === 0 || n * charPx + LABEL_PAD_PX <= boxPx;
+  }
+
+  // ---------------------------------------------------------------- pure: the reviewer's entries
+
+  /** The answers a reviewer chooses from: a listen set's own labels, or the triage verdicts. */
+  function labelsOf(build) { return build.listen ? build.listen.labels : VERDICTS; }
+
+  function listenSet(build) { return build.listen ? build.listen.name : 'triage_review_' + build.id; }
+
+  /**
+   * One exported entry, in the owner label table's columns plus the reviewer's own answer. A listen set's
+   * answer is its owner label as chosen; a whole-corpus review's is the verdict, prefixed `reviewer_`.
+   */
+  function entryFor(row, decision, build) {
+    var entry = {
+      listen_set: listenSet(build),
+      stem: row.stem,
+      family: row.declared_family,
+      instructed: '',
+      duration_s: row.duration_s,
+      owner_label: build.listen ? decision.verdict : 'reviewer_' + decision.verdict,
+      owner_note: decision.note || '',
+      pipeline_at_listen: row.verdict + (row.release ? '/' + row.release : '') + (row.reason ? ' (' + row.reason + ')' : ''),
+      reviewer_verdict: decision.verdict,
+      reviewed_at: decision.at,
+    };
+    if (build.listen && build.listen.directions) entry.owner_direction = decision.direction || '';
+    return entry;
+  }
+
+  function exportPayload(rowsByStem, decisions, build, now) {
+    var stems = Object.keys(decisions).sort();
+    return {
+      schema: EXPORT_SCHEMA,
+      version: EXPORT_VERSION,
+      build: build.id,
+      exported_at: now,
+      entries: stems.filter(function (s) { return rowsByStem[s]; })
+        .map(function (s) { return entryFor(rowsByStem[s], decisions[s], build); }),
+    };
+  }
+
+  /** Decisions out of an exported file, keeping answers among `labels`: `{stem: {verdict, note, at}}`. */
+  function importDecisions(payload, labels) {
+    var entries = Array.isArray(payload) ? payload : (payload && payload.entries) || [];
+    var out = {};
+    entries.forEach(function (e) {
+      var verdict = e.reviewer_verdict || String(e.owner_label || '').replace(/^reviewer_/, '');
+      if (!e.stem || labels.indexOf(verdict) < 0) return;
+      out[e.stem] = { verdict: verdict, note: e.owner_note || '', at: e.reviewed_at || null };
+      if (e.owner_direction) out[e.stem].direction = e.owner_direction;
+    });
+    return out;
+  }
+
+  // ---------------------------------------------------------------- pure: a side file's rows to records
+
+  var EVIDENCE_METADATA = 'senselab.review.evidence';
+  var DETECTED = 'detected';
+  var PROPOSED_BY_REVIEWER = 'proposed_by_reviewer';
+  // The underline each PII mark state draws, as the free-speech review page's MARK_COLOURS.
+  var MARK_COLOURS = {
+    masked: 'red', proposed_by_reviewer: 'red', unmasked_by_reviewer: 'green', unmasked_by_approval: 'green',
+    released_condition: 'green', released_by_kind: 'green', released_not_proper: 'green', detected: 'green',
+    unmasked_by_trim: 'orange',
+  };
+
+  /** Text escaped as Python's `html.escape` escapes it, quotes included. */
+  function pyEscape(text) {
+    return String(text).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#x27;' }[c];
+    });
+  }
+
+  /** A value as a Python f-string formats it. */
+  function pyStr(v) {
+    if (v === true) return 'True';
+    if (v === false) return 'False';
+    if (v === null || v === undefined) return 'None';
+    return String(v);
+  }
+
+  function pyInt(v) { return v ? Math.trunc(Number(v)) : 0; }
+
+  /** One word entry `[text, bracketed, mark]`; a consensus word is wrapped with its position. */
+  function transcriptWord(entry, position, consensusN) {
+    var text = pyEscape(String(entry[0]));
+    var plain = entry[1] ? '<span class="bracket">' + text + '</span>' : text;
+    return position < consensusN ? '<span class="w" data-i="' + position + '">' + plain + '</span>' : plain;
+  }
+
+  function overlayMarkHtml(overlay, outer, inner) {
+    var state = String(overlay.s || DETECTED);
+    var colour = MARK_COLOURS[state] || 'green';
+    var shown = pyEscape(String(overlay.c || ''));
+    var detectors = pyEscape((overlay.d || []).map(String).join(' ') || 'unattributed');
+    var category = colour === 'orange' ? '' : '<span class="cat">' + shown + '</span>';
+    return '<mark class="pii u-' + colour + '" data-k="' + pyEscape(String(overlay.k)) + '" data-c="' + shown + '" ' +
+      'data-s="' + pyEscape(state) + '" data-nm="0" data-pr="' + (state === PROPOSED_BY_REVIEWER ? 1 : 0) + '" ' +
+      'data-hr="' + pyInt(overlay.hr) + '" data-tr="" ' +
+      'data-kd="' + pyEscape(String(overlay.kd || '')) + '" data-dx="' + pyEscape(String(overlay.dx || '')) + '" ' +
+      'data-d="' + detectors + '" data-brk="' + pyStr(outer.brk) + '" data-tx="' + pyStr(outer.tx) + '" ' +
+      'data-nt="' + pyStr(outer.nt) + '" data-stim="' + pyStr(outer.stim) + '" tabindex="0">' + category + inner + '</mark>';
+  }
+
+  function markHtml(mark, inner) {
+    var categories = mark.c || [];
+    var shown = categories.length ? pyEscape(String(categories[0])) : '';
+    var state = String(mark.s || DETECTED);
+    var colour = MARK_COLOURS[state] || 'green';
+    var detectors = pyEscape((mark.d || []).map(String).join(' ') || 'unattributed');
+    var overlays = mark.o || [];
+    for (var k = overlays.length - 1; k >= 0; k--) inner = overlayMarkHtml(overlays[k], mark, inner);
+    var category = colour === 'orange' ? '' : '<span class="cat">' + shown + '</span>';
+    return '<mark class="pii u-' + colour + '" data-k="' + pyEscape(String(mark.k)) + '" data-c="' + shown + '" ' +
+      'data-s="' + pyEscape(state) + '" data-nm="' + pyInt(mark.nm) + '" data-pr="' + pyInt(mark.pr) + '" ' +
+      'data-hr="' + pyInt(mark.hr) + '" data-tr="' + pyEscape(String(mark.tr || '')) + '" ' +
+      'data-pk="' + pyEscape(String(mark.pk || '')) + '" ' +
+      'data-kd="' + pyEscape(String(mark.kd || '')) + '" data-dx="' + pyEscape(String(mark.dx || '')) + '" ' +
+      'data-d="' + detectors + '" data-brk="' + pyStr(mark.brk) + '" data-tx="' + pyStr(mark.tx) + '" ' +
+      'data-nt="' + pyStr(mark.nt) + '" data-stim="' + pyStr(mark.stim) + '" tabindex="0">' + category + inner + '</mark>';
+  }
+
+  /**
+   * A recording's transcript as marked-up prose, as the free-speech review page's `paragraph` writes it:
+   * each run of words one mark owns becomes that mark, and the first `consensusN` words carry their position.
+   */
+  function transcriptHtml(entries, marks, consensusN) {
+    var owner = function (entry) { return entry.length > 2 ? Math.trunc(Number(entry[2])) : -1; };
+    var pieces = [];
+    var i = 0;
+    while (i < entries.length) {
+      var own = owner(entries[i]);
+      if (own < 0 || own >= marks.length) { pieces.push(transcriptWord(entries[i], i, consensusN)); i += 1; continue; }
+      var j = i + 1;
+      while (j < entries.length && entries[j].length > 2 && owner(entries[j]) === own) j += 1;
+      var inner = [];
+      for (var k = i; k < j; k++) inner.push(transcriptWord(entries[k], k, consensusN));
+      pieces.push(markHtml(marks[own], inner.join(' ')));
+      i = j;
+    }
+    return pieces.join(' ');
+  }
+
+  function underRun(runDir, path) {
+    if (path === null || path === undefined) return null;
+    return path.charAt(0) === '/' || !runDir ? path : runDir + '/' + path;
+  }
+
+  function nullable(v) { return v === undefined ? null : v; }
+
+  function expandSpeech(s) {
+    if (!s) return null;
+    var words = (s.words || []).map(function (w) {
+      return [nullable(w.a), nullable(w.o), (w.r || []).map(nullable), nullable(w.s), nullable(w.e), w.t];
+    });
+    var entries = (s.entries || []).map(function (e, i) {
+      return [e.t === null || e.t === undefined ? words[i][5] : e.t, e.b ? 1 : 0, e.m];
+    });
+    var marks = JSON.parse(s.marks || '[]');
+    return {
+      html: transcriptHtml(entries, marks, words.length),
+      shown: { kind: nullable(s.shown_kind), source: nullable(s.shown_source) },
+      models: (s.models || []).map(function (m) { return { source: m.source, model_id: nullable(m.model_id) }; }),
+      own: (s.own || []).map(function (o) {
+        return {
+          source: o.source, model_id: nullable(o.model_id), text: o.text,
+          words: (o.words || []).map(function (w) { return [nullable(w.s), nullable(w.e), w.t]; }),
+        };
+      }),
+      words: words,
+      entries: entries,
+      marks: marks,
+      pii: (s.pii || []).map(function (p) { return { c: p.c, s: p.s, h: p.h, stim: p.stim }; }),
+      release_ground: s.release_ground === null || s.release_ground === undefined ? null : JSON.parse(s.release_ground),
+      why: nullable(s.why),
+      redact_why: nullable(s.redact_why),
+      condition_kind: nullable(s.condition_kind),
+      language: nullable(s.language),
+      names_proposed: s.names_proposed || [],
+      llm: JSON.parse(s.llm || '{}'),
+    };
+  }
+
+  /** One side-file row as the record the page draws, its evidence read through the shard's dictionary. */
+  function expandRecord(row, dictionary) {
+    var streams = {};
+    (row.streams || []).forEach(function (s) { streams[s.n] = underRun(row.run_dir, s.p); });
+    var overlay = row.overlay || {};
+    return {
+      stem: row.stem,
+      spec: nullable(row.spec),
+      spec_stream: nullable(row.spec_stream),
+      figure: underRun(row.run_dir, nullable(row.figure)),
+      commit: nullable(row.commit),
+      config_hash: nullable(row.config_hash),
+      missing: row.missing || [],
+      extent: row.extent && row.extent.length ? row.extent : null,
+      streams: streams,
+      overlay: {
+        events: overlay.events || [],
+        activity: overlay.activity || [],
+        issues: (overlay.issues || []).map(function (x) { return [x.s, x.e, x.k]; }),
+      },
+      evidence: (row.evidence || []).map(function (item) {
+        var entry = dictionary[item.i] || {};
+        var read = item.x ? JSON.parse(item.x) : {};
+        return {
+          name: entry.name, group: nullable(entry.group), value: JSON.parse(item.v), unit: nullable(entry.unit),
+          comparison: nullable(entry.comparison), threshold: nullable(entry.threshold), effect: nullable(item.e),
+          decisive: !!item.d, source: nullable(read.source), model: nullable(read.model), spans: read.spans || [],
+        };
+      }),
+      speech: expandSpeech(row.speech),
+    };
+  }
+
+  function hyparquet() { return typeof Hyparquet !== 'undefined' ? Hyparquet : globalThis.Hyparquet; }
+
+  /** A side file's Parquet bytes as the records the page draws, in page order. */
+  function decodeShard(buffer) {
+    var H = hyparquet();
+    var meta = H.parquetMetadata(buffer);
+    var entry = (meta.key_value_metadata || []).filter(function (kv) { return kv.key === EVIDENCE_METADATA; })[0];
+    var dictionary = entry ? JSON.parse(entry.value) : [];
+    return H.parquetReadObjects({ file: buffer, metadata: meta, compressors: H.compressors })
+      .then(function (rows) { return rows.map(function (row) { return expandRecord(row, dictionary); }); });
+  }
+
+  function base64Bytes(text) {
+    var binary = atob(text);
+    var bytes = new Uint8Array(binary.length);
+    for (var i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return bytes.buffer;
+  }
+
+  /** The page index the page inlines: `{n, zstd}`, its JSON's length and the zstd bytes as base64. */
+  function unpackIndex(packed) {
+    var bytes = hyparquet().zstd(new Uint8Array(base64Bytes(packed.zstd)), packed.n);
+    return JSON.parse(new TextDecoder().decode(bytes));
+  }
+
+  // ---------------------------------------------------------------- the page
+
+  var state = null;
+  var shards = {};
+  var waiting = {};
+
+  /** A side file has loaded: its records, in page order, starting at number * shard_size. */
+  function shard(number, records) {
+    shards[number] = records;
+    (waiting[number] || []).forEach(function (cb) { cb(records); });
+    delete waiting[number];
+  }
+
+  /** A side file did not load or decode: everyone waiting on it is told there is no record. */
+  function shardFailed(number, error) {
+    if (error && typeof console !== 'undefined') console.warn('side file ' + number + ': ' + error);
+    (waiting[number] || []).forEach(function (cb) { cb(null); });
+    delete waiting[number];
+  }
+
+  /** A side file's `file://` wrapper has loaded: its Parquet bytes, base64-encoded. */
+  function shardParquet(number, text) {
+    var decoded;
+    try { decoded = decodeShard(base64Bytes(text)); } catch (error) { shardFailed(number, error); return; }
+    decoded.then(function (records) { shard(number, records); }, function (error) { shardFailed(number, error); });
+  }
+
+  function recordOf(index, cb) {
+    var size = state.index.build.shard_size;
+    var k = Math.floor(index / size);
+    var take = function (records) { cb(records ? records[index - k * size] : null); };
+    if (shards[k]) return take(shards[k]);
+    if (waiting[k]) { waiting[k].push(take); return; }
+    waiting[k] = [take];
+    var base = state.index.build.shard_dir + '/shard-' + String(k).padStart(4, '0');
+    if (state.served && typeof fetch === 'function') {
+      fetch(base + '.parquet')
+        .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.arrayBuffer(); })
+        .then(decodeShard)
+        .then(function (records) { shard(k, records); }, function (error) { shardFailed(k, error); });
+      return;
+    }
+    var s = document.createElement('script');
+    s.src = base + '.js';
+    s.onerror = function () { shardFailed(k, 'did not load'); };
+    document.body.appendChild(s);
+  }
+
+  function $(id) { return document.getElementById(id); }
+  function el(tag, cls, text) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text != null) e.textContent = text;
+    return e;
+  }
+
+  function loadDecisions() {
+    try { return JSON.parse(window.localStorage.getItem(state.storeKey) || '{}'); } catch (e) { return {}; }
+  }
+  function saveDecisions() {
+    try { window.localStorage.setItem(state.storeKey, JSON.stringify(state.decisions)); } catch (e) { /* none */ }
+    $('rv-dec-n').textContent = Object.keys(state.decisions).length;
+  }
+
+  function init() {
+    var index = unpackIndex(window.REVIEW_INDEX_ZSTD);
+    var rows = decodeRows(index);
+    SchemaAxes.register(columnSpecs(index));
+    SchemaAxes.ORDERINGS.run_status = ['complete', 'incomplete'];
+    SchemaFacets.refresh();
+    var byStem = {};
+    rows.forEach(function (r) { byStem[r.stem] = r; });
+    state = {
+      index: index, rows: rows, byStem: byStem, storeKey: 'triage-review:' + index.build.id,
+      decisions: {}, current: -1, listShown: LIST_PAGE, served: /^https?:$/.test(location.protocol),
+    };
+    state.decisions = loadDecisions();
+    $('rv-dec-n').textContent = Object.keys(state.decisions).length;
+    $('rv-mode').textContent = state.served ? 'served: audio plays where the cluster serves it'
+      : 'opened from file: quantised spectrograms, no audio';
+    Theme.wire($('rv-theme'));
+    Theme.onChange(function () { if (state.view) state.view.draw(); if (state.current >= 0) openRecording(state.current); });
+    window.addEventListener('resize', function () { if (state.timeline) redraw(state.timeline); });
+
+    var view = new CorpusView($('rv-pc'), $('rv-pc-overlay'));
+    state.view = view;
+    view.setRows(rows);
+    view.onSelectionChange = function (count) {
+      $('rv-selected').textContent = count.toLocaleString() + ' of ' + rows.length.toLocaleString() + ' selected';
+      state.facets.setBase(view.brushMask);
+      renderFacets();
+      renderList();
+    };
+    state.facets = new SchemaFacets.FacetModel(rows);
+
+    var groupSelect = $('rv-axes-group');
+    ['decision'].concat(Object.keys(evidenceGroups(index)).sort()).forEach(function (g) {
+      var o = el('option', null, g); o.value = g; groupSelect.appendChild(o);
+    });
+    groupSelect.onchange = function () { setAxes(groupSelect.value); };
+    var colour = $('rv-colour');
+    ['verdict', 'release', 'reason', 'branch', 'run_status'].forEach(function (c) {
+      var o = el('option', null, c); o.value = c; colour.appendChild(o);
+    });
+    colour.onchange = function () { view.colourBy = colour.value; view.buildColourMap(); view.draw(); };
+    $('rv-clear').onclick = function () { view.clearBrushes(); renderAxisLabels(); };
+    wirePointer(view);
+    setAxes('decision');
+
+    document.querySelectorAll('.rv-tab').forEach(function (b) { b.onclick = function () { showTab(b.dataset.tab); }; });
+    $('rv-search').oninput = applyFilters;
+    $('rv-who').oninput = applyFilters;
+    $('rv-facets-clear').onclick = function () {
+      state.facets.activeNames().forEach(function (n) { state.facets.clear(n); });
+      applyFilters();
+    };
+    $('rv-more').onclick = function () { state.listShown += LIST_PAGE; renderList(); };
+    $('rv-group').onchange = function () { state.listShown = LIST_PAGE; renderList(); };
+    $('rv-export').onclick = exportJson;
+    $('rv-import').onchange = importJson;
+    document.addEventListener('keydown', onKey);
+    window.addEventListener('resize', function () { view.draw(); renderAxisLabels(); });
+    applyFilters();
+    renderDecisions();
+  }
+
+  function showTab(name) {
+    document.querySelectorAll('.rv-tab').forEach(function (b) { b.classList.toggle('on', b.dataset.tab === name); });
+    ['explore', 'review', 'decisions'].forEach(function (t) { $('tab-' + t).hidden = t !== name; });
+    if (name === 'explore') { state.view.draw(); renderAxisLabels(); }
+    if (name === 'decisions') renderDecisions();
+  }
+
+  function setAxes(choice) {
+    var names = axesFor(choice, state.index).filter(function (n) { return SchemaAxes.BY_NAME[n]; });
+    state.view.brushes = {};
+    state.view.setAxes(names);
+    state.view.buildColourMap();
+    state.view.applyBrushes();
+    state.view.draw();
+    renderAxisLabels();
+  }
+
+  function renderAxisLabels() {
+    var box = $('rv-axis-labels');
+    box.innerHTML = '';
+    var view = state.view;
+    if (!view.geom) view.layout();
+    view.summaries.forEach(function (s, a) {
+      var d = el('div', view.brushes[s.name] ? 'brushed' : null, s.col.label);
+      d.style.left = view.geom.xs[a] + 'px';
+      d.appendChild(el('small', null, SchemaAxes.caption(s)));
+      box.appendChild(d);
+    });
+    var active = Object.keys(view.brushes);
+    $('rv-brushes').textContent = active.length ? 'brushed: ' + active.map(function (n) {
+      return (SchemaAxes.BY_NAME[n] || { label: n }).label;
+    }).join(', ') : '';
+  }
+
+  function wirePointer(view) {
+    var canvas = $('rv-pc-overlay');
+    var drag = null;
+    function local(e) { var r = canvas.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; }
+    function onBand(p) { return view.geom && p.y >= view.geom.bandTop - 6 && p.y <= view.geom.bandBottom + 6; }
+    canvas.addEventListener('mousedown', function (e) {
+      var p = local(e);
+      var a = view.axisAt(p.x);
+      if (a >= 0 && onBand(p)) drag = { axis: a, y0: p.y, y1: p.y };
+    });
+    canvas.addEventListener('mousemove', function (e) {
+      var p = local(e);
+      if (!drag) {
+        var hit = view.pick(p.x, p.y);
+        if (hit !== view.hover) { view.hover = hit; view.paintOverlay(); }
+        return;
+      }
+      drag.y1 = p.y;
+      view.paintOverlay();
+      var ctx = view.octx, x = view.geom.xs[drag.axis];
+      var top = Math.min(drag.y0, drag.y1), bot = Math.max(drag.y0, drag.y1);
+      ctx.save();
+      ctx.fillStyle = Theme.color('brush-fill');
+      ctx.fillRect(x - 16, top, 32, bot - top);
+      ctx.restore();
+    });
+    window.addEventListener('mouseup', function (e) {
+      if (!drag) return;
+      var p = local(e);
+      var s = view.summaries[drag.axis];
+      var top = Math.min(drag.y0, p.y), bot = Math.max(drag.y0, p.y);
+      if (bot - top < 3) view.setBrush(s.name, null);
+      else if (s.kind === 'numeric') {
+        var hi = view.valueAt(drag.axis, top), lo = view.valueAt(drag.axis, bot);
+        view.setBrush(s.name, { lo: Math.min(lo, hi), hi: Math.max(lo, hi) });
+      } else {
+        var terms = s.categories.filter(function (c) { var y = view.yOf(s, c); return y != null && y >= top - 1 && y <= bot + 1; });
+        view.setBrush(s.name, terms.length ? { terms: terms } : null);
+      }
+      drag = null;
+      renderAxisLabels();
+    });
+    canvas.addEventListener('click', function (e) {
+      var p = local(e);
+      if (view.axisAt(p.x) >= 0 && onBand(p)) return;
+      var hit = view.pick(p.x, p.y);
+      if (hit >= 0) { showTab('review'); openRecording(hit); }
+    });
+  }
+
+  function applyFilters() {
+    var mask = andMasks(state.facets.mask(), searchMask(state.rows, $('rv-search').value, $('rv-who').value));
+    state.listShown = LIST_PAGE;
+    state.view.setFacetMask(mask);
+  }
+
+  function renderFacets() {
+    var box = $('rv-facet-list');
+    var open = {};
+    box.querySelectorAll('details[open]').forEach(function (d) { open[d.dataset.name] = true; });
+    box.innerHTML = '';
+    FACETS.forEach(function (name) {
+      if (!SchemaFacets.BY_NAME[name]) return;
+      var v = state.facets.values(name);
+      var d = el('details', 'rv-facet');
+      d.dataset.name = name;
+      if (open[name] || v.chosen.length || name === 'verdict' || name === 'reason') d.open = true;
+      d.appendChild(el('summary', null, v.label + (v.chosen.length ? ' · ' + v.chosen.length : '')));
+      v.values.forEach(function (item) {
+        if (!item.total) return;
+        var l = el('label', item.available ? null : 'zero');
+        var c = el('input'); c.type = 'checkbox'; c.checked = item.chosen;
+        c.onchange = function () { state.facets.toggle(name, item.term); applyFilters(); };
+        l.appendChild(c);
+        l.appendChild(el('span', null, item.label));
+        l.appendChild(el('span', 'n', item.available.toLocaleString() + ' / ' + item.total.toLocaleString()));
+        d.appendChild(l);
+      });
+      box.appendChild(d);
+    });
+  }
+
+  function selectedIndices() {
+    var out = [];
+    var sel = state.view.selected;
+    for (var i = 0; i < sel.length; i++) if (sel[i]) out.push(i);
+    return out;
+  }
+
+  function verdictChip(v) { return el('span', 'rv-chip v-' + v, v); }
+
+  function renderList() {
+    var list = $('rv-list');
+    list.innerHTML = '';
+    var picked = selectedIndices();
+    var reviewed = picked.filter(function (i) { return state.decisions[state.rows[i].stem]; }).length;
+    $('rv-list-head').textContent = picked.length.toLocaleString() + ' recordings · ' + reviewed + ' reviewed here';
+    var grouped = $('rv-group') && $('rv-group').checked;
+    var order = picked;
+    var heads = {};
+    if (grouped) {
+      order = [];
+      groupByParticipant(state.rows, picked, state.index.participants || {}).forEach(function (g) {
+        heads[g.items[0]] = g;
+        order = order.concat(g.items);
+      });
+    }
+    order.slice(0, state.listShown).forEach(function (i) {
+      if (heads[i] !== undefined) {
+        var g = heads[i];
+        var h = el('li', 'rv-group-head', g.participant + ' · ' + g.items.length + ' shown');
+        h.appendChild(el('span', 'rv-note', participantLine(g.summary)));
+        list.appendChild(h);
+      }
+      var r = state.rows[i];
+      var li = el('li', i === state.current ? 'cur' : null);
+      li.dataset.i = i;
+      li.appendChild(el('span', 's', r.stem));
+      li.appendChild(verdictChip(r.verdict));
+      li.appendChild(el('span', 'rv-note', (r.reason || '') + ' · ' + (r.declared_family || 'no family')));
+      if (state.decisions[r.stem]) li.appendChild(el('span', 'done', ' ✓ ' + state.decisions[r.stem].verdict));
+      li.onclick = function () { openRecording(i); };
+      list.appendChild(li);
+    });
+    $('rv-more').hidden = picked.length <= state.listShown;
+  }
+
+  /** The picked rows grouped by participant, the participant with most issues first, page order within. */
+  function groupByParticipant(rows, picked, summaries) {
+    var groups = {};
+    var names = [];
+    picked.forEach(function (i) {
+      var p = rows[i].participant || '';
+      if (!groups[p]) { groups[p] = { participant: p, summary: summaries[p] || null, items: [] }; names.push(p); }
+      groups[p].items.push(i);
+    });
+    names.sort(function (a, b) {
+      var ia = groups[a].summary ? groups[a].summary.issues : 0, ib = groups[b].summary ? groups[b].summary.issues : 0;
+      return ib - ia || (a < b ? -1 : a > b ? 1 : 0);
+    });
+    return names.map(function (p) { return groups[p]; });
+  }
+
+  /** One participant's issues in a line: recordings, sessions, verdicts, the commonest reasons and annotations. */
+  function participantLine(summary) {
+    if (!summary) return 'no participant summary';
+    var top = function (counts, n) {
+      return Object.keys(counts || {}).slice(0, n).map(function (k) { return k + ' ×' + counts[k]; }).join(', ');
+    };
+    var verdicts = Object.keys(summary.verdicts || {}).map(function (k) { return k + ' ' + summary.verdicts[k]; }).join(', ');
+    return [summary.recordings + ' recordings in ' + summary.sessions + ' session(s)', verdicts,
+      summary.issues + ' issues', top(summary.reasons, 3), top(summary.annotations, 3)].filter(Boolean).join(' · ');
+  }
+
+  function onKey(e) {
+    if (e.target && /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;
+    if (e.key !== 'j' && e.key !== 'k') return;
+    var picked = selectedIndices();
+    if (!picked.length) return;
+    var at = picked.indexOf(state.current);
+    var next = e.key === 'j' ? Math.min(picked.length - 1, at + 1) : Math.max(0, at - 1);
+    openRecording(picked[at < 0 ? 0 : next]);
+  }
+
+  function fmt(v) {
+    if (v == null) return '—';
+    if (typeof v === 'number') return Number.isInteger(v) ? String(v) : v.toFixed(Math.abs(v) >= 100 ? 0 : 2);
+    if (typeof v === 'object') return JSON.stringify(v);
+    return String(v);
+  }
+
+  function openRecording(i) {
+    state.current = i;
+    var r = state.rows[i];
+    document.querySelectorAll('#rv-list li').forEach(function (li) { li.classList.toggle('cur', Number(li.dataset.i) === i); });
+    var box = $('rv-detail');
+    box.innerHTML = '';
+    var head = el('section');
+    head.appendChild(el('h2', null, r.stem));
+    head.appendChild(verdictChip(r.verdict));
+    if (r.release) head.appendChild(el('span', 'rv-chip', r.release + (r.release_reason ? ' · ' + r.release_reason : '')));
+    head.appendChild(el('span', 'rv-note', [r.declared_family || 'no family', r.branch || 'no branch',
+      r.reason ? 'reason ' + r.reason : null, r.run_status === 'incomplete' ? 'incomplete run' : null]
+      .filter(Boolean).join(' · ')));
+    if (r.reasons.length > 1) head.appendChild(el('div', 'rv-note', 'all reasons: ' + r.reasons.join(', ')));
+    if (r.annotations.length) head.appendChild(el('div', 'rv-note', 'annotations: ' + r.annotations.join(', ')));
+    if (r.checks) head.appendChild(checksTable(state.index.build.listen, r.checks));
+    box.appendChild(head);
+    box.appendChild(entryForm(r));
+    var body = el('div', null);
+    body.appendChild(el('p', 'rv-note', 'loading…'));
+    box.appendChild(body);
+    recordOf(i, function (rec) {
+      if (state.current !== i) return;
+      rec = withRelease(rec, r);
+      body.innerHTML = '';
+      if (!rec) { body.appendChild(el('p', 'rv-note', 'this recording\'s side file did not load')); return; }
+      var time = spectrogramSection(r, rec);
+      state.timeline = time.timeline;
+      body.appendChild(time);
+      if (rec.speech) body.appendChild(speechSection(rec.speech, time.timeline, rec.release));
+      body.appendChild(audioSection(rec, time.timeline));
+      body.appendChild(evidenceSection(rec));
+      if (rec.missing && rec.missing.length) body.appendChild(el('p', 'rv-note', 'missing: ' + rec.missing.join(', ')));
+      body.appendChild(el('p', 'rv-note', 'commit ' + (rec.commit || '—') + ' · config ' + (rec.config_hash || '—')));
+    });
+  }
+
+  /** A listen set's check values for one recording, one row per column of its list. */
+  function checksTable(listen, checks) {
+    var t = el('table', 'rv-ev rv-checks');
+    t.appendChild(el('caption', null, 'checks from the ' + listen.name + ' list'));
+    listen.columns.forEach(function (name, k) {
+      var tr = el('tr');
+      tr.appendChild(el('th', null, name));
+      tr.appendChild(el('td', 'v', checks[k] == null || checks[k] === '' ? '—' : String(checks[k])));
+      t.appendChild(tr);
+    });
+    return t;
+  }
+
+  function entryForm(r) {
+    var box = el('section', 'rv-entry');
+    var listen = state.index.build.listen;
+    box.appendChild(el('h3', null, listen ? listen.question : 'your decision'));
+    var current = state.decisions[r.stem] || {};
+    labelsOf(state.index.build).forEach(function (v) {
+      var l = el('label');
+      var c = el('input'); c.type = 'radio'; c.name = 'rv-verdict'; c.value = v; c.checked = current.verdict === v;
+      c.onchange = function () { record(r, v, note.value, directionOf()); };
+      l.appendChild(c); l.appendChild(document.createTextNode(' ' + v));
+      box.appendChild(l);
+    });
+    var directions = listen && listen.directions ? listen.directions : [];
+    var picked = current.direction || null;
+    function directionOf() { return picked; }
+    if (directions.length) {
+      var row = el('div', 'rv-direction');
+      row.appendChild(el('span', 'rv-note', 'proposed extent: '));
+      directions.forEach(function (v) {
+        var l = el('label');
+        var c = el('input'); c.type = 'radio'; c.name = 'rv-direction'; c.value = v; c.checked = picked === v;
+        c.onchange = function () {
+          picked = v;
+          var d = state.decisions[r.stem];
+          if (d) record(r, d.verdict, note.value, v);
+        };
+        l.appendChild(c); l.appendChild(document.createTextNode(' ' + v));
+        row.appendChild(l);
+      });
+      box.appendChild(row);
+    }
+    var clear = el('button', null, 'clear'); clear.type = 'button';
+    clear.onclick = function () { delete state.decisions[r.stem]; saveDecisions(); openRecording(r.index); renderList(); };
+    box.appendChild(clear);
+    var note = el('textarea'); note.rows = 2; note.placeholder = 'note'; note.value = current.note || '';
+    note.oninput = function () {
+      if (state.decisions[r.stem]) record(r, state.decisions[r.stem].verdict, note.value, directionOf());
+    };
+    box.appendChild(note);
+    return box;
+  }
+
+  function record(r, verdict, note, direction) {
+    state.decisions[r.stem] = { verdict: verdict, note: note || '', at: new Date().toISOString() };
+    if (direction) state.decisions[r.stem].direction = direction;
+    saveDecisions();
+    renderList();
+  }
+
+  /**
+   * One recording's time view: spectrogram, ASR lanes and audio players over one zoomable window. `proposed`
+   * is a listen set's proposed extent, marked beside the current one, or null.
+   */
+  function timelineOf(duration, extent, proposed) {
+    var d = duration || 1;
+    return {
+      d: d, extent: extent, proposed: proposed || null, win: { t0: 0, t1: d }, redraw: [], players: [], active: null,
+      spanEnd: null,
+    };
+  }
+
+  function redraw(tl) { tl.redraw.forEach(function (f) { f(); }); }
+
+  function setWindow(tl, win) { tl.win = win; redraw(tl); }
+
+  function playerAt(tl) { return tl.active || tl.players[0] || null; }
+
+  function seekPlayer(a, t) { whenReady(a, function () { a.currentTime = t; }); }
+
+  var SEEK_TOLERANCE_S = 0.2;
+  var SEEK_WAIT_MS = 3000;
+  var CANNOT_SEEK = "this server can't seek; serve with triage_review_serve.py";
+
+  /** Run `fn` once the player knows its duration, loading it first where it has not. */
+  function whenReady(a, fn) {
+    if (a.readyState >= 1) { fn(); return; }
+    a.addEventListener('loadedmetadata', fn, { once: true });
+    a.preload = 'auto';
+    a.load();
+  }
+
+  /**
+   * Play a span on one player, the task extent unless `span` is given: seek to its start, wait for
+   * `seeked`, then play until its end. Where the player lands away from the start (a server that cannot
+   * answer byte ranges), it does not play, and `onCannotSeek(landedAt, start)` is called instead.
+   */
+  function playSpan(tl, a, onCannotSeek, waitMs, span) {
+    var sp = span || tl.extent;
+    if (!sp) return;
+    var start = sp[0];
+    tl.players.forEach(function (b) { if (b !== a && !b.paused) b.pause(); });
+    tl.active = a;
+    tl.spanEnd = null;
+    whenReady(a, function () {
+      var settled = false;
+      var timer = null;
+      var after = function () {
+        if (settled) return;
+        settled = true;
+        if (timer != null) clearTimeout(timer);
+        a.removeEventListener('seeked', after);
+        if (tl.active !== a) return;
+        if (Math.abs(a.currentTime - start) > SEEK_TOLERANCE_S) {
+          if (onCannotSeek) onCannotSeek(a.currentTime, start);
+          return;
+        }
+        tl.spanEnd = sp[1];
+        var played = a.play();
+        if (played && played.catch) played.catch(function () { /* the reviewer can press play */ });
+      };
+      a.addEventListener('seeked', after);
+      timer = setTimeout(after, waitMs == null ? SEEK_WAIT_MS : waitMs);
+      a.currentTime = start;
+    });
+  }
+
+  function stopAtSpanEnd(tl) {
+    var a = tl.active;
+    if (a && tl.spanEnd != null && a.currentTime >= tl.spanEnd) { a.pause(); tl.spanEnd = null; }
+  }
+
+  function watchPlayhead(tl) {
+    function step() {
+      var a = tl.active;
+      stopAtSpanEnd(tl);
+      redraw(tl);
+      if (a && !a.paused) requestAnimationFrame(step);
+    }
+    tl.players.forEach(function (a) {
+      a.addEventListener('play', function () {
+        tl.players.forEach(function (b) { if (b !== a) b.pause(); });
+        if (tl.active !== a) tl.spanEnd = null;
+        tl.active = a;
+        requestAnimationFrame(step);
+      });
+      a.addEventListener('timeupdate', function () { if (tl.active === a) stopAtSpanEnd(tl); });
+      a.addEventListener('seeked', function () { redraw(tl); });
+      a.addEventListener('pause', function () { redraw(tl); });
+    });
+  }
+
+  function now(tl) { var a = tl.active; return a ? a.currentTime : null; }
+
+  function zoomControls(tl) {
+    var bar = el('div', 'rv-zoom');
+    function button(label, title, fn) {
+      var b = el('button', null, label); b.type = 'button'; b.title = title; b.onclick = fn; bar.appendChild(b);
+    }
+    var mid = function () { return (tl.win.t0 + tl.win.t1) / 2; };
+    button('−', 'zoom out', function () { setWindow(tl, zoomWindow(tl.win, tl.d, 2, mid())); });
+    button('+', 'zoom in', function () { setWindow(tl, zoomWindow(tl.win, tl.d, 0.5, mid())); });
+    button('◀', 'pan left', function () { setWindow(tl, panWindow(tl.win, tl.d, -(tl.win.t1 - tl.win.t0) / 2)); });
+    button('▶', 'pan right', function () { setWindow(tl, panWindow(tl.win, tl.d, (tl.win.t1 - tl.win.t0) / 2)); });
+    button('all', 'show the whole recording', function () { setWindow(tl, { t0: 0, t1: tl.d }); });
+    var both = spanUnion(tl.extent, tl.proposed);
+    if (both) {
+      button('task span', 'show the task extent' + (tl.proposed ? 's, current and proposed' : ''), function () {
+        var pad = 0.05 * (both[1] - both[0]);
+        var t0 = Math.max(0, both[0] - pad), t1 = Math.min(tl.d, both[1] + pad);
+        setWindow(tl, { t0: t0, t1: Math.max(t1, t0 + Math.min(MIN_SPAN_S, tl.d)) });
+      });
+    }
+    var where = el('span', 'rv-note');
+    bar.appendChild(where);
+    tl.redraw.push(function () { where.textContent = tl.win.t0.toFixed(2) + '–' + tl.win.t1.toFixed(2) + ' s'; });
+    bar.appendChild(el('span', 'rv-note', 'ctrl/⌘-wheel zooms, drag pans, click seeks'));
+    return bar;
+  }
+
+  /** The smallest span covering both spans, either of which may be null. */
+  function spanUnion(a, b) {
+    if (!a) return b || null;
+    if (!b) return a;
+    return [Math.min(a[0], b[0]), Math.max(a[1], b[1])];
+  }
+
+  /** Wheel-zoom, drag-pan and click-to-seek on one element of the time view. */
+  function wireTime(tl, node) {
+    function timeAt(e) {
+      var box = node.getBoundingClientRect();
+      return tl.win.t0 + ((e.clientX - box.left) / Math.max(1, box.width)) * (tl.win.t1 - tl.win.t0);
+    }
+    node.addEventListener('wheel', function (e) {
+      if (e.ctrlKey || e.metaKey) {
+        e.preventDefault();
+        setWindow(tl, zoomWindow(tl.win, tl.d, e.deltaY > 0 ? 1.25 : 0.8, timeAt(e)));
+      } else if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) {
+        e.preventDefault();
+        var box = node.getBoundingClientRect();
+        setWindow(tl, panWindow(tl.win, tl.d, (e.deltaX / Math.max(1, box.width)) * (tl.win.t1 - tl.win.t0)));
+      }
+    }, { passive: false });
+    var drag = null;
+    node.addEventListener('pointerdown', function (e) {
+      if (e.button !== 0) return;
+      var tok = e.target.closest ? e.target.closest('.rv-tok') : null;
+      drag = { x: e.clientX, win: tl.win, moved: false, at: tok ? Number(tok.dataset.t) : null };
+      if (node.setPointerCapture) node.setPointerCapture(e.pointerId);
+    });
+    node.addEventListener('pointermove', function (e) {
+      if (!drag) return;
+      var dx = e.clientX - drag.x;
+      if (Math.abs(dx) > 3) drag.moved = true;
+      if (!drag.moved) return;
+      var box = node.getBoundingClientRect();
+      setWindow(tl, panWindow(drag.win, tl.d, (-dx / Math.max(1, box.width)) * (drag.win.t1 - drag.win.t0)));
+    });
+    node.addEventListener('pointerup', function (e) {
+      if (!drag) return;
+      var moved = drag.moved, at = drag.at;
+      drag = null;
+      if (moved) return;
+      var a = playerAt(tl);
+      var t = at != null ? at : timeAt(e);
+      if (a) { tl.active = a; tl.spanEnd = null; seekPlayer(a, Math.max(0, Math.min(tl.d, t))); }
+    });
+    node.addEventListener('pointercancel', function () { drag = null; });
+  }
+
+  function spectrogramSection(r, rec) {
+    var sec = el('section', 'rv-time');
+    sec.appendChild(el('h3', null, 'spectrogram' + (rec.spec_stream ? ' · ' + rec.spec_stream : '') +
+      (rec.speech && (rec.speech.own || []).length ? ' and ASR timelines' : '')));
+    var tl = timelineOf(r.duration_s, rec.extent, r.proposed_extent);
+    sec.timeline = tl;
+    sec.appendChild(zoomControls(tl));
+    var frame = el('div', 'rv-timeline');
+    sec.appendChild(frame);
+    if (rec.spec) {
+      var spec = state.index.build.spec;
+      var levels = unpackSpec(rec.spec, spec.frames, spec.bands);
+      var canvas = el('canvas', 'rv-spec');
+      frame.appendChild(canvas);
+      wireTime(tl, canvas);
+      tl.redraw.push(function () { drawSpectrogram(canvas, levels, spec, tl, rec); });
+    } else {
+      frame.appendChild(el('p', 'rv-note', 'no stream decoded for this recording'));
+    }
+    if (rec.speech) frame.appendChild(lanesOf(tl, rec.speech));
+    var head = el('div', 'rv-playhead');
+    frame.appendChild(head);
+    tl.redraw.push(function () {
+      var t = now(tl);
+      var at = t == null ? null : placeSpan(t, t, tl.win);
+      head.hidden = !at;
+      if (at) head.style.left = (at.left * 100) + '%';
+    });
+    var legend = el('div', 'rv-legend');
+    var keys = tl.proposed ? [['current extent', 'accent'], ['proposed extent', 'violet']] : [['extent', 'accent']];
+    keys.concat([['task events', 'good'], ['activity', 'teal'], ['issues', 'bad']]).forEach(function (p) {
+      var s = el('span'); var sw = el('i'); sw.style.background = Theme.color(p[1]);
+      s.appendChild(sw); s.appendChild(document.createTextNode(p[0])); legend.appendChild(s);
+    });
+    sec.appendChild(legend);
+    requestAnimationFrame(function () { redraw(tl); });
+    return sec;
+  }
+
+  /** The consensus lane and one lane per ASR model, on the spectrogram's time axis, behind a toggle. */
+  function lanesOf(tl, sp) {
+    var wrap = el('div', 'rv-lanes-wrap');
+    var toggle = el('button', 'rv-lanes-toggle', 'show timing lanes'); toggle.type = 'button';
+    var box = el('div', 'rv-lanes');
+    box.hidden = true;
+    toggle.onclick = function () {
+      box.hidden = !box.hidden;
+      toggle.textContent = box.hidden ? 'show timing lanes' : 'hide timing lanes';
+      toggle.setAttribute('aria-expanded', String(!box.hidden));
+      redraw(tl);
+    };
+    toggle.setAttribute('aria-expanded', 'false');
+    wrap.appendChild(toggle);
+    wrap.appendChild(box);
+    var words = sp.words || [];
+    var lanes = [];
+    if (words.length) {
+      lanes.push({
+        label: 'consensus', cls: 'consensus',
+        tokens: words.map(function (w, i) { return [w[3], w[4], w[5] || '', i]; }).filter(function (t) { return t[0] != null && t[1] != null; }),
+      });
+    }
+    modelLanes(sp).forEach(function (lane) { lanes.push({ label: lane.label, cls: 'model', tokens: lane.tokens }); });
+    lanes.forEach(function (lane) {
+      var row = el('div', 'rv-lane ' + lane.cls);
+      row.appendChild(el('div', 'rv-lane-name', lane.label + ' · ' + lane.tokens.length + ' token' +
+        (lane.tokens.length === 1 ? '' : 's')));
+      var track = el('div', 'rv-lane-track');
+      var rows = packRows(lane.tokens);
+      var depth = rows.reduce(function (m, r) { return Math.max(m, r + 1); }, 1);
+      track.style.height = (depth * LANE_ROW_PX + 2) + 'px';
+      row.appendChild(track);
+      box.appendChild(row);
+      wireTime(tl, track);
+      var nodes = lane.tokens.map(function (t, k) {
+        var tok = el('span', 'rv-tok');
+        tok.dataset.t = t[0];
+        tok.style.top = (rows[k] * LANE_ROW_PX + 1) + 'px';
+        if (t[3] != null) {
+          var word = words[t[3]];
+          var outcome = outcomeOf(word);
+          tok.classList.add('al-' + outcome);
+          tok.title = alternatives(sp, word) + '\n' + word[3].toFixed(2) + '–' + word[4].toFixed(2) + ' s';
+        } else {
+          tok.title = lane.label + ': ' + t[2] + '\n' + t[0].toFixed(2) + '–' + t[1].toFixed(2) + ' s';
+        }
+        track.appendChild(tok);
+        return { node: tok, start: t[0], end: t[1], text: t[2] };
+      });
+      tl.redraw.push(function () {
+        if (box.hidden) return;
+        var width = track.clientWidth;
+        var charPx = laneCharPx();
+        nodes.forEach(function (n) {
+          var at = placeSpan(n.start, n.end, tl.win);
+          n.node.hidden = !at;
+          if (!at) return;
+          n.node.style.left = (at.left * 100) + '%';
+          n.node.style.width = 'max(2px, ' + (at.width * 100) + '%)';
+          var label = labelFits(at.width * width, n.text, charPx) ? n.text : '';
+          if (n.node.textContent !== label) n.node.textContent = label;
+        });
+      });
+    });
+    return wrap;
+  }
+
+  var LANE_ROW_PX = 18;
+  var LANE_FONT = '11px ui-monospace, Menlo, monospace';
+  var laneCharWidth = null;
+
+  /** The width of one character of the lanes' monospace font, measured once. */
+  function laneCharPx() {
+    if (laneCharWidth == null) {
+      var ctx = document.createElement('canvas').getContext('2d');
+      ctx.font = LANE_FONT;
+      laneCharWidth = ctx.measureText('mmmmmmmmmm').width / 10 || 7;
+    }
+    return laneCharWidth;
+  }
+
+  function drawSpectrogram(canvas, levels, spec, tl, rec) {
+    var dpr = window.devicePixelRatio || 1;
+    var w = canvas.clientWidth, h = canvas.clientHeight;
+    if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
+      canvas.width = Math.round(w * dpr); canvas.height = Math.round(h * dpr);
+    }
+    var ctx = canvas.getContext('2d');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+    var top = 22, bottom = h - 16, cellH = (bottom - top) / spec.bands;
+    var d = tl.d, win = tl.win, span = win.t1 - win.t0;
+    var xOf = function (t) { return Math.max(0, Math.min(w, ((t - win.t0) / span) * w)); };
+    var frameS = d / spec.frames;
+    var cellW = (frameS / span) * w;
+    var shades = ['panel', 'dim', 'muted', 'ink-2'].map(function (t) { return Theme.color(t); });
+    var f0 = Math.max(0, Math.floor(win.t0 / frameS)), f1 = Math.min(spec.frames, Math.ceil(win.t1 / frameS));
+    for (var f = f0; f < f1; f++) {
+      var x = ((f * frameS - win.t0) / span) * w;
+      for (var b = 0; b < spec.bands; b++) {
+        ctx.fillStyle = shades[levels[f * spec.bands + b]];
+        ctx.fillRect(x, bottom - (b + 1) * cellH, cellW + 0.5, cellH + 0.5);
+      }
+    }
+    var ov = rec.overlay || {};
+    function bars(spans, y, height, colour) {
+      ctx.fillStyle = colour;
+      (spans || []).forEach(function (s) {
+        if (s[1] < win.t0 || s[0] > win.t1) return;
+        ctx.fillRect(xOf(s[0]), y, Math.max(1.5, xOf(s[1]) - xOf(s[0])), height);
+      });
+    }
+    if (rec.extent) {
+      ctx.save(); ctx.globalAlpha = 0.18; ctx.fillStyle = Theme.color('accent');
+      ctx.fillRect(xOf(rec.extent[0]), top, xOf(rec.extent[1]) - xOf(rec.extent[0]), bottom - top);
+      ctx.restore();
+      bars([rec.extent], 0, 4, Theme.color('accent'));
+    }
+    if (tl.proposed) {
+      var q0 = xOf(tl.proposed[0]), q1 = xOf(tl.proposed[1]);
+      ctx.save(); ctx.strokeStyle = Theme.color('violet'); ctx.lineWidth = 2; ctx.setLineDash([5, 3]);
+      ctx.strokeRect(q0, top, Math.max(1.5, q1 - q0), bottom - top);
+      ctx.restore();
+      bars([tl.proposed], 17, 4, Theme.color('violet'));
+    }
+    if (tl.pick) {
+      var px0 = xOf(tl.pick[0]), px1 = Math.max(xOf(tl.pick[1]), px0 + 2);
+      ctx.save(); ctx.globalAlpha = 0.28; ctx.fillStyle = Theme.color('warn');
+      ctx.fillRect(px0, top, px1 - px0, bottom - top);
+      ctx.globalAlpha = 1; ctx.strokeStyle = Theme.color('warn'); ctx.lineWidth = 1.5;
+      ctx.strokeRect(px0, top, px1 - px0, bottom - top);
+      ctx.restore();
+    }
+    bars(ov.events, 6, 5, Theme.color('good'));
+    bars(ov.activity, 13, 3, Theme.color('teal'));
+    bars(ov.issues, bottom + 2, 6, Theme.color('bad'));
+    ctx.fillStyle = Theme.color('ink-3');
+    ctx.font = '10px ui-monospace, Menlo, monospace';
+    ctx.textBaseline = 'bottom';
+    ticks(win, 6).forEach(function (t) {
+      var x = ((t - win.t0) / span) * w;
+      ctx.textAlign = x < 20 ? 'left' : x > w - 20 ? 'right' : 'center';
+      ctx.fillText((span < 2 ? t.toFixed(2) : t.toFixed(1)) + ' s', x, h);
+    });
+  }
+
+  /** A stream's URL: under the corpus root through audio_base, outside it through the source route. */
+  function streamUrl(path, build) {
+    var encoded = path.split('/').map(encodeURIComponent).join('/');
+    if (path.charAt(0) === '/') return (build.source_base || '/_source') + encoded;
+    return build.audio_base + encoded;
+  }
+
+  var NOT_RELEASED_REDACTION = 'redaction considered, not released';
+  var NOT_APPLIED = 'detected, not applied';
+
+  /** Whether the recording's release is the redacted copy, so its masks and PII marks were applied. */
+  function redactionReleased(release) { return release === 'redacted'; }
+
+  /** A side file's record joined to its index row: the release lives in the index, not the side file. */
+  function withRelease(rec, row) {
+    if (rec && row) rec.release = row.release;
+    return rec;
+  }
+
+  /** What a PII mark on a recording released other than redacted says: the mark, then the release decision. */
+  function notAppliedTitle(release, ground) {
+    return NOT_APPLIED + ' — release ' + (release || 'not assessed') + (ground ? ': ' + ground : '');
+  }
+
+  /**
+   * The tracks a recording plays, in page order: each `{name, timeline, collapsed}`, whether it runs on the
+   * recording's clock and whether it is shown folded away. The redacted stream is a track only where the
+   * release is the redacted copy; otherwise it is folded away as a redaction considered and not released.
+   */
+  function audioTracks(rec) {
+    var streams = rec.streams || {};
+    var out = [];
+    ['recording', 'enhanced'].forEach(function (n) { if (streams[n]) out.push({ name: n, timeline: true, collapsed: false }); });
+    if (rec.speech && streams.redacted) {
+      var released = redactionReleased(rec.release);
+      out.push({ name: 'redacted', timeline: released, collapsed: !released });
+    }
+    if (streams.released) out.push({ name: 'released', timeline: false, collapsed: false });
+    return out;
+  }
+
+  function audioSection(rec, tl) {
+    var sec = el('section', 'rv-audio');
+    sec.appendChild(el('h3', null, 'audio'));
+    if (!state.served) {
+      sec.appendChild(el('p', 'rv-note', 'Audio plays when this page is served from the cluster over an ssh tunnel; ' +
+        'opened from a file it shows the quantised spectrogram only.'));
+      return sec;
+    }
+    var base = state.index.build.audio_base;
+    if (rec.extent) {
+      sec.appendChild(el('p', 'rv-note', (tl && tl.proposed ? 'current ' : '') + 'task extent ' +
+        rec.extent[0].toFixed(2) + '–' + rec.extent[1].toFixed(2) + ' s, marked on each track; “play task span” plays only that'));
+    }
+    if (tl && tl.proposed) {
+      sec.appendChild(el('p', 'rv-note', 'proposed extent ' + tl.proposed[0].toFixed(2) + '–' + tl.proposed[1].toFixed(2) +
+        ' s, marked below it; “play proposed span” plays only that'));
+    }
+    audioTracks(rec).forEach(function (track) {
+      var wrap = el(track.collapsed ? 'details' : 'div', 'rv-track' + (track.collapsed ? ' rv-folded' : ''));
+      wrap.dataset.stream = track.name;
+      if (track.collapsed) {
+        wrap.appendChild(el('summary', 'rv-note', track.name + ': ' + NOT_RELEASED_REDACTION +
+          ' (release ' + (rec.release || 'not assessed') + ')'));
+      } else {
+        wrap.appendChild(el('span', 'rv-note', track.name));
+      }
+      var a = el('audio'); a.controls = true; a.preload = 'none'; a.src = streamUrl(rec.streams[track.name], state.index.build);
+      wrap.appendChild(a);
+      if (track.timeline && tl) {
+        tl.players.push(a);
+        wrap.appendChild(spanStrip(tl, a));
+        if (rec.extent) {
+          var b = el('button', 'rv-play-span', '▶ play task span'); b.type = 'button';
+          var note = el('span', 'rv-note rv-seek-note'); note.hidden = true;
+          b.onclick = function () {
+            note.hidden = true;
+            playSpan(tl, a, function (at) {
+              note.textContent = CANNOT_SEEK + ' (asked for ' + tl.extent[0].toFixed(2) + ' s, got ' + at.toFixed(2) + ' s)';
+              note.hidden = false;
+            });
+          };
+          wrap.appendChild(b);
+          wrap.appendChild(note);
+        }
+        if (tl.proposed) {
+          var pb = el('button', 'rv-play-span prop', '▶ play proposed span'); pb.type = 'button';
+          var pnote = el('span', 'rv-note rv-seek-note'); pnote.hidden = true;
+          pb.onclick = function () {
+            pnote.hidden = true;
+            playSpan(tl, a, function (at) {
+              pnote.textContent = CANNOT_SEEK + ' (asked for ' + tl.proposed[0].toFixed(2) + ' s, got ' + at.toFixed(2) + ' s)';
+              pnote.hidden = false;
+            }, null, tl.proposed);
+          };
+          wrap.appendChild(pb);
+          wrap.appendChild(pnote);
+        }
+      }
+      sec.appendChild(wrap);
+    });
+    if (tl) watchPlayhead(tl);
+    if (rec.figure) {
+      var link = el('a', null, 'full figure');
+      link.href = base + rec.figure.split('/').map(encodeURIComponent).join('/');
+      link.target = '_blank'; link.rel = 'noopener';
+      sec.appendChild(link);
+    }
+    return sec;
+  }
+
+  /** A track's whole-recording strip: the task extent marked, its own playhead, click to seek. */
+  function spanStrip(tl, a) {
+    var strip = el('div', 'rv-strip');
+    if (tl.extent) {
+      var ext = el('i', 'ext');
+      ext.style.left = (tl.extent[0] / tl.d * 100) + '%';
+      ext.style.width = ((tl.extent[1] - tl.extent[0]) / tl.d * 100) + '%';
+      strip.appendChild(ext);
+    }
+    if (tl.proposed) {
+      var prop = el('i', 'prop');
+      prop.style.left = (tl.proposed[0] / tl.d * 100) + '%';
+      prop.style.width = ((tl.proposed[1] - tl.proposed[0]) / tl.d * 100) + '%';
+      strip.appendChild(prop);
+      strip.classList.add('two');
+    }
+    var head = el('i', 'head');
+    strip.appendChild(head);
+    strip.onclick = function (e) {
+      var box = strip.getBoundingClientRect();
+      tl.active = a; tl.spanEnd = null;
+      seekPlayer(a, ((e.clientX - box.left) / Math.max(1, box.width)) * tl.d);
+    };
+    tl.redraw.push(function () {
+      head.hidden = tl.active !== a;
+      head.style.left = (Math.min(1, a.currentTime / tl.d) * 100) + '%';
+    });
+    return strip;
+  }
+
+  /** Who read an evidence item that names a speaker, with which model, and where: "source · model · spans". */
+  function readerLabel(it) {
+    if (!it.source) return '';
+    var spans = (it.spans || []).map(function (s) { return fmt(s[0]) + '–' + fmt(s[1]) + ' s'; });
+    return [it.source, it.model || null, spans.length ? spans.join(', ') : null]
+      .filter(function (x) { return x; }).join(' · ');
+  }
+
+  function evidenceSection(rec) {
+    var sec = el('section');
+    sec.appendChild(el('h3', null, 'evidence (decisive in bold)'));
+    var items = rec.evidence || [];
+    if (!items.length) { sec.appendChild(el('p', 'rv-note', 'the fold recorded no evidence items')); return sec; }
+    var t = el('table', 'rv-ev');
+    var hr = el('tr');
+    ['item', 'group', 'value', 'unit', 'against', 'effect', 'read by'].forEach(function (h) {
+      hr.appendChild(el('th', null, h));
+    });
+    t.appendChild(hr);
+    items.slice().sort(function (a, b) { return (b.decisive ? 1 : 0) - (a.decisive ? 1 : 0); }).forEach(function (it) {
+      var tr = el('tr', it.decisive ? 'decisive' : null);
+      tr.appendChild(el('td', null, it.name));
+      tr.appendChild(el('td', null, it.group || ''));
+      tr.appendChild(el('td', 'v', fmt(it.value)));
+      tr.appendChild(el('td', null, it.unit || ''));
+      tr.appendChild(el('td', 'v', it.comparison ? it.comparison + ' ' + fmt(it.threshold) : ''));
+      tr.appendChild(el('td', null, it.effect || ''));
+      tr.appendChild(el('td', null, readerLabel(it)));
+      t.appendChild(tr);
+    });
+    sec.appendChild(t);
+    return sec;
+  }
+
+  /** A recogniser's label: its model id, with the pipeline's source name where that differs. */
+  function modelLabel(m) {
+    if (!m) return 'unknown model';
+    if (m.model_id && m.model_id !== m.source) return m.model_id + (m.source ? ' (' + m.source + ')' : '');
+    return m.source || m.model_id || 'unknown model';
+  }
+
+  /** What each model read at one consensus word, one line per model. */
+  function alternatives(sp, word) {
+    var models = sp.models || [];
+    var head = word[1] + ', agreement ' + (word[0] === null ? '—' : Math.round(word[0] * 100) + '%');
+    return [head].concat((word[2] || []).map(function (r, k) {
+      return modelLabel(models[k]) + ': ' + (r === null || r === undefined ? '(no word)' : r);
+    })).join('\n');
+  }
+
+  /** Pick one alignment column: seek the player to its start and highlight its span on the spectrogram. */
+  function pickColumn(tl, view, col) {
+    view.querySelectorAll('.al-col.on').forEach(function (c) { c.classList.remove('on'); });
+    col.classList.add('on');
+    if (!tl || col.dataset.t == null) return;
+    var start = Number(col.dataset.t), end = Number(col.dataset.e);
+    tl.pick = [start, Math.max(start, end)];
+    var at = placeSpan(start, end, tl.win);
+    if (!at || at.left < 0 || at.left + at.width > 1) tl.win = panWindow(tl.win, tl.d, (start + end) / 2 - (tl.win.t0 + tl.win.t1) / 2);
+    var a = playerAt(tl);
+    if (a) { tl.active = a; tl.spanEnd = null; seekPlayer(a, Math.max(0, Math.min(tl.d, start))); }
+    redraw(tl);
+  }
+
+  /** The alignment legend: the column styles, and how many columns each outcome took. */
+  function alignmentLegend(sp) {
+    var sum = alignmentSummary(sp);
+    var initials = modelInitials(sp.models);
+    var legend = el('div', 'rv-legend rv-al-legend');
+    [['al-agreement', 'agreement: one word'], ['al-variant', 'variant: each model’s reading'],
+      ['al-insertion', 'insertion: one model only, — where the other has none']].forEach(function (b) {
+      var item = el('span'); item.appendChild(el('i', 'al-swatch ' + b[0])); item.appendChild(document.createTextNode(b[1]));
+      legend.appendChild(item);
+    });
+    var models = el('div', 'rv-al-models');
+    (sp.models || []).forEach(function (m, k) {
+      var item = el('span');
+      item.appendChild(el('b', 'al-m', initials[k]));
+      item.appendChild(document.createTextNode(' ' + modelLabel(m)));
+      models.appendChild(item);
+    });
+    var counts = el('div', 'rv-al-counts', sum.columns + ' columns · ' + sum.agreement + ' agreement' +
+      (sum.agreement === 1 ? '' : 's') + ' · ' + sum.variant + ' variant' + (sum.variant === 1 ? '' : 's') + ' · ' +
+      sum.insertion + ' insertion' + (sum.insertion === 1 ? '' : 's') + ' (' + initials.map(function (m) {
+        return m + ' ' + sum.insertionsBy[m];
+      }).join(', ') + ')');
+    var box = el('div', 'rv-al-key');
+    box.appendChild(counts); box.appendChild(models); box.appendChild(legend);
+    return box;
+  }
+
+  /** Marks every PII mark under `root` as detected and not applied, its tooltip giving the release decision. */
+  function markNotApplied(root, release, ground) {
+    var title = notAppliedTitle(release, ground);
+    root.querySelectorAll('mark.pii').forEach(function (m) { m.title = title; m.dataset.applied = '0'; });
+  }
+
+  function speechSection(sp, tl, release) {
+    var applied = redactionReleased(release);
+    var sec = el('section', 'rv-speech' + (applied ? '' : ' rv-not-applied'));
+    sec.appendChild(el('h3', null, 'transcript, PII and redactions'));
+    if (!applied && /class="pii/.test(String(sp.html || ''))) {
+      sec.appendChild(el('div', 'rv-note', 'PII marks: ' + notAppliedTitle(release, sp.release_ground)));
+    }
+    var shown = sp.shown || {};
+    var models = sp.models || [];
+    if (shown.kind === 'consensus') {
+      sec.appendChild(el('div', 'rv-tx-label', 'alignment of ' + models.length + ' ASR model' +
+        (models.length === 1 ? '' : 's') + ', one column per consensus word, read left to right; ' +
+        'click a column to hear it and mark it on the spectrogram'));
+      sec.appendChild(alignmentLegend(sp));
+      var view = el('div', 'rv-align');
+      view.innerHTML = alignmentHtml(sp);
+      view.addEventListener('click', function (e) {
+        var col = e.target.closest ? e.target.closest('.al-col') : null;
+        if (col) pickColumn(tl, view, col);
+      });
+      view.addEventListener('keydown', function (e) {
+        if (e.key !== 'Enter' && e.key !== ' ') return;
+        var col = e.target.closest ? e.target.closest('.al-col') : null;
+        if (col) { e.preventDefault(); pickColumn(tl, view, col); }
+      });
+      sec.appendChild(view);
+    } else {
+      var label;
+      if (shown.kind === 'model') {
+        var m = models.filter(function (x) { return x.source === shown.source; })[0] || { source: shown.source };
+        label = 'individual ASR model: ' + modelLabel(m) + ' (the consensus holds no words)';
+      } else {
+        label = 'no ASR model left a word';
+      }
+      sec.appendChild(el('div', 'rv-tx-label', label));
+      var p = el('p', 'text');
+      p.innerHTML = sp.html || '<span class="empty">no words</span>';
+      sec.appendChild(p);
+    }
+    var own = sp.own || [];
+    if (own.length) {
+      var box = el('details', 'rv-own');
+      box.appendChild(el('summary', null, 'individual ASR transcripts (' + own.length + ')'));
+      own.forEach(function (o) {
+        var row = el('div', 'rv-own-row');
+        row.appendChild(el('div', 'rv-own-model', modelLabel(o)));
+        row.appendChild(el('div', 'rv-own-text', o.text || '(no words)'));
+        if ((o.words || []).length) {
+          var timed = el('div', 'rv-own-words');
+          o.words.forEach(function (w) {
+            var item = el('span', 'rv-own-w');
+            item.appendChild(el('small', null, w[0] == null ? 'untimed' : w[0].toFixed(2) + '–' + w[1].toFixed(2)));
+            item.appendChild(document.createTextNode(' ' + w[2]));
+            timed.appendChild(item);
+          });
+          row.appendChild(timed);
+        }
+        box.appendChild(row);
+      });
+      sec.appendChild(box);
+    }
+    var lines = [];
+    if (sp.release_ground) lines.push('release ground: ' + sp.release_ground);
+    if (sp.why) lines.push('verdict: ' + sp.why);
+    if (sp.redact_why) lines.push('REDACT: ' + sp.redact_why);
+    if (sp.condition_kind) lines.push('held condition: ' + sp.condition_kind);
+    if (sp.names_proposed && sp.names_proposed.length) lines.push('names proposed for release: ' + sp.names_proposed.join(', '));
+    var llm = sp.llm || {};
+    var shown = Object.keys(llm).filter(function (k) { return LLM_HIDDEN.indexOf(k) < 0; })
+      .map(function (k) { return k + ' ' + JSON.stringify(llm[k]); });
+    if (shown.length) lines.push('LLM reviewer: ' + shown.join(' · '));
+    lines.forEach(function (l) { sec.appendChild(el('div', 'rv-note', l)); });
+    if (!applied) markNotApplied(sec, release, sp.release_ground);
+    if (sp.pii && sp.pii.length) {
+      var t = el('table', 'rv-ev');
+      var hr = el('tr');
+      ['category', 'detector', 'text', 'in stimulus'].forEach(function (h) { hr.appendChild(el('th', null, h)); });
+      t.appendChild(hr);
+      sp.pii.forEach(function (f) {
+        var tr = el('tr');
+        [f.c, f.s, f.h, f.stim === 1 ? 'yes' : f.stim === 0 ? 'no' : '—'].forEach(function (v) { tr.appendChild(el('td', null, v)); });
+        t.appendChild(tr);
+      });
+      sec.appendChild(t);
+    }
+    return sec;
+  }
+
+  function renderDecisions() {
+    var body = $('rv-dec-body');
+    body.innerHTML = '';
+    var stems = Object.keys(state.decisions).sort();
+    var counts = {};
+    stems.forEach(function (s) {
+      var d = state.decisions[s];
+      var r = state.byStem[s];
+      counts[d.verdict] = (counts[d.verdict] || 0) + 1;
+      var tr = el('tr');
+      tr.appendChild(el('td', 's', s));
+      tr.appendChild(el('td', null, r ? r.declared_family || '' : 'not in this page'));
+      tr.appendChild(el('td', null, r ? r.verdict + (r.reason ? ' (' + r.reason + ')' : '') : ''));
+      tr.appendChild(el('td', null, d.verdict));
+      tr.appendChild(el('td', null, d.note || ''));
+      tr.appendChild(el('td', null, d.at || ''));
+      var x = el('button', null, 'remove'); x.type = 'button';
+      x.onclick = function () { delete state.decisions[s]; saveDecisions(); renderDecisions(); renderList(); };
+      var td = el('td'); td.appendChild(x); tr.appendChild(td);
+      if (r) tr.querySelector('td.s').onclick = function () { showTab('review'); openRecording(r.index); };
+      body.appendChild(tr);
+    });
+    $('rv-dec-summary').textContent = stems.length + ' decisions' + (stems.length ? ' — ' +
+      labelsOf(state.index.build).map(function (v) { return v + ' ' + (counts[v] || 0); }).join(', ') : '');
+  }
+
+  function exportJson() {
+    var payload = exportPayload(state.byStem, state.decisions, state.index.build, new Date().toISOString());
+    var blob = new Blob([JSON.stringify(payload, null, 1)], { type: 'application/json' });
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = (state.index.build.listen ? listenSet(state.index.build) + '_' + state.index.build.id
+      : listenSet(state.index.build)) + '.json';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
+  }
+
+  function importJson(e) {
+    var file = e.target.files && e.target.files[0];
+    if (!file) return;
+    var reader = new FileReader();
+    reader.onload = function () {
+      try {
+        var got = importDecisions(JSON.parse(reader.result), labelsOf(state.index.build));
+        Object.keys(got).forEach(function (s) { state.decisions[s] = got[s]; });
+        saveDecisions(); renderDecisions(); renderList();
+      } catch (err) { $('rv-dec-summary').textContent = 'could not read that file: ' + err.message; }
+    };
+    reader.readAsText(file);
+    e.target.value = '';
+  }
+
+  if (typeof window !== 'undefined' && window.REVIEW_INDEX_ZSTD && typeof document !== 'undefined') {
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
+    else init();
+  }
+
+  return {
+    EXPORT_SCHEMA: EXPORT_SCHEMA,
+    EXPORT_VERSION: EXPORT_VERSION,
+    decodeRows: decodeRows,
+    columnSpecs: columnSpecs,
+    evidenceGroups: evidenceGroups,
+    readerLabel: readerLabel,
+    groupByParticipant: groupByParticipant,
+    participantLine: participantLine,
+    axesFor: axesFor,
+    searchMask: searchMask,
+    unpackSpec: unpackSpec,
+    entryFor: entryFor,
+    exportPayload: exportPayload,
+    labelsOf: labelsOf,
+    importDecisions: importDecisions,
+    shard: shard,
+    shardParquet: shardParquet,
+    unpackIndex: unpackIndex,
+    decodeShard: decodeShard,
+    expandRecord: expandRecord,
+    transcriptHtml: transcriptHtml,
+    pyEscape: pyEscape,
+    modelLabel: modelLabel,
+    alternatives: alternatives,
+    streamUrl: streamUrl,
+    zoomWindow: zoomWindow,
+    panWindow: panWindow,
+    placeSpan: placeSpan,
+    ticks: ticks,
+    tokenKey: tokenKey,
+    modelLanes: modelLanes,
+    modelInitials: modelInitials,
+    outcomeOf: outcomeOf,
+    alignmentColumns: alignmentColumns,
+    alignmentSummary: alignmentSummary,
+    alignmentHtml: alignmentHtml,
+    packRows: packRows,
+    labelFits: labelFits,
+    audioTracks: audioTracks,
+    redactionReleased: redactionReleased,
+    withRelease: withRelease,
+    notAppliedTitle: notAppliedTitle,
+    markNotApplied: markNotApplied,
+    NOT_RELEASED_REDACTION: NOT_RELEASED_REDACTION,
+    NOT_APPLIED: NOT_APPLIED,
+    timelineOf: timelineOf,
+    playSpan: playSpan,
+    spanUnion: spanUnion,
+    stopAtSpanEnd: stopAtSpanEnd,
+    CANNOT_SEEK: CANNOT_SEEK,
+  };
+})();
+
+if (typeof module !== 'undefined' && module.exports) module.exports = ReviewPage;

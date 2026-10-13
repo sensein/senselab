@@ -31,10 +31,12 @@ from senselab.audio.workflows.triage.nodes.common import live_entities
 from senselab.audio.workflows.triage.nodes.ddk import CV_AUTHORITY, INSTRUMENT_READING, TRANSCRIPT_CLAIM
 from senselab.audio.workflows.triage.nodes.redact import _pii_marked_words, redact
 from senselab.audio.workflows.triage.nodes.speech import _hypotheses, speech
+from senselab.audio.workflows.triage.task_extent import task_extent_parameters
 from senselab.audio.workflows.triage.vocabulary import Outcome
 from senselab.text.tasks.pii_detection.api import PiiScan, PiiSpan, default_detectors
 from senselab.utils.data_structures import ScriptLine
 from senselab.utils.prov_store import ProvStore
+from tests.audio.workflows.triage.nodes.conftest import level_of_raster, seed_background_view
 
 SENTINEL = "alicia"  # the name the scan finds; nothing released may carry it
 WORDS = ["my", "name", "is", SENTINEL, "and", "i", "live", "here"]
@@ -363,6 +365,7 @@ def _seed_ppg(store: ProvStore, tmp_path: Path) -> None:
         },
     )
     store.was_generated_by(entity_id, activity)
+    seed_background_view(store, tmp_path, level_of_raster(raster))
 
 
 def _texts_the_store_holds(store: ProvStore) -> list[str]:
@@ -404,6 +407,7 @@ def _ddk_store(
     Returns:
         ``(store, the texts handed to scan_for_pii)``.
     """
+    monkeypatch.setitem(task_extent_parameters()["trim"], "enabled", False)
     seed_preprocess_store(store, duration_s=DURATION_S, words=_place(DDK_WORDS))
     _seed_level(store, tmp_path)
     _seed_ppg(store, tmp_path)

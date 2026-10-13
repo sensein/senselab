@@ -70,7 +70,7 @@ from senselab.audio.workflows.triage.nodes.branches import (
     group_by_breaks,
     hull,
     inter_word_gaps,
-    item_category,
+    item_category_of,
     lexical_runs,
     measured,
     merge,
@@ -93,6 +93,7 @@ from senselab.audio.workflows.triage.nodes.branches import (
 from senselab.audio.workflows.triage.nodes.common import (
     BranchResult,
     bound_reading,
+    bound_word,
     cache_attributes,
     clamp_extent,
     consensus_words,
@@ -103,6 +104,7 @@ from senselab.audio.workflows.triage.nodes.common import (
     path_attributes,
     resolve_stream,
     software_agent,
+    word_hull,
     write_measurement,
     write_report,
     write_stream,
@@ -116,8 +118,9 @@ from senselab.audio.workflows.triage.nodes.ddk import (
     syllable_detail,
 )
 from senselab.audio.workflows.triage.nodes.redact import category_family
-from senselab.audio.workflows.triage.residue import is_content_word, residue_rule, task_residue
+from senselab.audio.workflows.triage.residue import is_content_word, is_non_lexical, residue_rule, task_residue
 from senselab.audio.workflows.triage.routing_analysis.families import SYLLABLE_REPETITION
+from senselab.audio.workflows.triage.speaker_share import speakers_within
 from senselab.audio.workflows.triage.stimulus import (
     LexicalWord,
     NearMatch,
@@ -125,7 +128,9 @@ from senselab.audio.workflows.triage.stimulus import (
     align_stimulus,
     near_match,
 )
+from senselab.audio.workflows.triage.task_extent import STIMULUS_EXTENT_CHECK, enabled, extent_check
 from senselab.audio.workflows.triage.task_lexicon import category_members, task_lexicon
+from senselab.audio.workflows.triage.task_speech import item_utterances, write_task_speech
 from senselab.audio.workflows.triage.vocabulary import TASK
 from senselab.text.tasks.pii_detection.api import PiiScan, scan_for_pii
 from senselab.utils.data_structures import HFModel, SpeechBrainModel
@@ -133,6 +138,7 @@ from senselab.utils.prov_store import Entity, ProvStore
 from senselab.utils.tasks.cached_inference import annotate_result_origin
 
 NODE = "SPEECH"
+NEAR_MATCH_SECTION = "stimulus.near_match"
 TASK_EXTENT_ROLE = "task_extent"
 """The role that says where the declared task was performed. Exactly one may survive a recording."""
 ORIGINAL = "recording"  # the stream disruptions are measured on: as captured, unnormalised, unresampled
@@ -330,47 +336,6 @@ def _overlaps(a: tuple[float, float], b: tuple[float, float]) -> bool:
         True when they intersect.
     """
     return a[0] < b[1] and a[1] > b[0]
-
-
-def _speakers_within(
-    extent: tuple[float, float], segments: list[tuple[str, str, tuple[float, float]]]
-) -> dict[str, Any]:
-    """How the diarizer's speakers divide one task extent between them.
-
-    A reading, not a judgement: it names who holds seconds inside the extent and how many, and
-    reaches no conclusion about whether that is the task being performed correctly.
-
-    Args:
-        extent: The task extent.
-        segments: ``(entity_id, speaker label, extent)`` per diarized segment, on the same clock.
-
-    Returns:
-        The covariates, plus ``share`` -- the largest contributor's seconds over every attributed
-        second inside the extent, or ``None`` when no segment intersects it -- and ``sources``,
-        the ids the reading was taken off.
-    """
-    held: dict[str, float] = {}
-    sources: list[str] = []
-    for segment_id, label, (start, end) in segments:
-        overlap = min(extent[1], end) - max(extent[0], start)
-        if overlap <= 0.0:
-            continue
-        held[label] = held.get(label, 0.0) + overlap
-        sources.append(segment_id)
-    labels = sorted(held)
-    seconds = [held[label] for label in labels]
-    attributed = sum(seconds)
-    dominant = max(seconds) if seconds else 0.0
-    return {
-        "speaker_labels": labels,
-        "speaker_seconds": [round(value, 6) for value in seconds],
-        "attributed_s": round(attributed, 6),
-        "dominant_s": round(dominant, 6),
-        "secondary_s": round(attributed - dominant, 6),
-        "extent_s": round(extent[1] - extent[0], 6),
-        "share": (dominant / attributed) if attributed > 0.0 else None,
-        "sources": sources,
-    }
 
 
 def _frame_rms(audio: Audio, frame_s: float) -> tuple[torch.Tensor, float]:
@@ -608,18 +573,20 @@ def _scan_tokens(words: list[Entity], positions: list[int], haystack: str) -> tu
     return kept, tokens
 
 
-def _timings_hull(words: list[Entity], covered: list[int]) -> tuple[float, float]:
-    """The hull of the covered words' per-source timings: every recognizer's placement of them.
+def _timings_hull(words: list[Entity], covered: list[int], duration_s: float) -> tuple[float, float]:
+    """The hull of the covered words' placements: every recognizer's located span of them.
 
     Args:
         words: The consensus words, in stream order.
         covered: The positions a finding covers.
+        duration_s: The duration the audio decoded to; a point span's window is kept inside it.
 
     Returns:
-        ``(min member start, max member end)`` over every source timing of every covered word.
+        ``(min start, max end)`` over :func:`~senselab.audio.workflows.triage.nodes.common.word_hull` of every
+        covered word.
     """
-    spans = [span for index in covered for span in words[index].attributes["timings"].values()]
-    return min(float(span[0]) for span in spans), max(float(span[1]) for span in spans)
+    spans = [word_hull(words[index], duration_s) for index in covered]
+    return min(span[0] for span in spans), max(span[1] for span in spans)
 
 
 def _hypotheses(store: ProvStore, source_names: list[str]) -> dict[str, Entity]:
@@ -914,11 +881,18 @@ EXTENT_SECONDARY_SOURCE_S = "extent_secondary_source_s"
 """The seconds inside the task extent that a source other than the largest one holds."""
 
 EXTENT_DOMINANT_SHARE = "extent_dominant_speaker_share"
+"""The largest contributor's seconds inside the task extent over every attributed second inside it.
+
+Recorded beside the gate's reading; overlap counts toward the second voice here, so it decides nothing.
+"""
+
+EXTENT_DOMINANT_EXCLUSIVE_SHARE = "extent_dominant_exclusive_share"
 """The reading ``dominant_speaker_share_min`` is read against.
 
-The largest contributor's seconds inside the task extent over every attributed second inside it.
-``None`` when no diarized segment intersects the extent, and absent when PREPROCESS wrote no
-diarization derivative -- both of which a gate must turn into ``UNDETERMINED``, never ``False``.
+The largest contributor's seconds over those plus the time another speaker holds the extent alone, where
+that time reaches ``speech.secondary_exclusive_min_s`` (:func:`speakers_within`). ``None`` when no diarized
+segment intersects the extent, and absent when PREPROCESS wrote no diarization derivative -- both of which a
+gate must turn into ``UNDETERMINED``, never ``False``.
 """
 
 
@@ -1049,7 +1023,7 @@ def _stimulus(store: ProvStore, hint: AudioHints | None, params: BranchParams) -
             index=int(word.attributes["index"]),
             text=word_text(word),
             extent=word.extent,
-            agreement=float(word.attributes["agreement"]),
+            agreement=None if word.attributes.get("agreement") is None else float(word.attributes["agreement"]),
         )
         for word in lexical_words(store)
     ]
@@ -1057,6 +1031,38 @@ def _stimulus(store: ProvStore, hint: AudioHints | None, params: BranchParams) -
     if terminators is None:
         return None
     return measurement.id, align_stimulus(prompts, words, terminators=terminators)
+
+
+def _read_as_stimulus(alignment: StimulusAlignment, words: Sequence[Entity], params: BranchParams) -> list[Entity]:
+    """The words read as the stimulus: every realised token's, and a substituted token's a recogniser read as it.
+
+    A substituted token counts where any recogniser's reading normalises to its key, or the consensus reading
+    is a near match of it under ``stimulus.near_match``.
+
+    Args:
+        alignment: The stimulus alignment.
+        words: The lexical consensus words.
+        params: The operating points, read for ``stimulus.near_match``.
+
+    Returns:
+        The words, in expected-token order.
+    """
+    by_index = {int(word.attributes["index"]): word for word in words}
+    exact_below = params.setting(f"{NEAR_MATCH_SECTION}.exact_below", int)
+    two_edits_from = params.setting(f"{NEAR_MATCH_SECTION}.two_edits_from", int)
+    near = None if exact_below is None or two_edits_from is None else NearMatch(exact_below, two_edits_from)
+    out: list[Entity] = []
+    for token in alignment.expected:
+        word = by_index.get(token.word_index) if token.word_index is not None else None
+        if word is None or token.realisation == "absent":
+            continue
+        if token.realisation == "substituted":
+            readings = (word.attributes.get("readings") or {}).values()
+            read = any(normalise_token(str(reading)) == token.key for reading in readings)
+            if not read and not (near is not None and near.matches(token.key, normalise_token(word_text(word)))):
+                continue
+        out.append(word)
+    return out
 
 
 def _stimulus_agrees(store: ProvStore, alignment: StimulusAlignment) -> bool:
@@ -1277,8 +1283,18 @@ def _speech_ordered(  # noqa: C901 — the two token sources and the five depart
     findings: list[Finding] = []
     if alignment is not None and not _stimulus_agrees(store, alignment):
         findings.append(measured("stimulus_alignment_rebuild_agrees", None, None, False, evidence[0]))
+    read_as = _read_as_stimulus(alignment, words, params) if alignment is not None else []
+    spanning = read_as if read_as and enabled("stimulus_edges") else [word for _, word in matched]
+    if alignment is not None and matched:
+        hull = (word_extent(spanning[0])[0], word_extent(spanning[-1])[1])
+        outside = [w for w in read_as if word_extent(w)[1] <= hull[0] or word_extent(w)[0] >= hull[1]]
+        check = extent_check(
+            has_extent=hull[1] > hull[0], narrow={"tokens_outside": len(outside)}, wide={}, outside_n=len(outside)
+        )
+        covariates = {key: value for key, value in check.record().items() if key != "status"}
+        findings.append(measured(STIMULUS_EXTENT_CHECK, None, None, check.status, *evidence, **covariates))
     if matched:
-        read_extent = (word_extent(matched[0][1])[0], word_extent(matched[-1][1])[1])
+        read_extent = (word_extent(spanning[0])[0], word_extent(spanning[-1])[1])
         if read_extent[1] > read_extent[0]:
             components.append(
                 MINT(
@@ -1504,27 +1520,26 @@ def _speech_item_list(
         Whether any item was produced, the span, and the findings.
     """
     points = params
-    category = item_category(task_family, hint)
+    category, category_from = item_category_of(task_family, hint)
+    findings: list[Finding] = []
+    repetition_allowed: bool | None
     if expectation.repetition_from_category:
         if category is None:
-            placed = _item_list_extent(store, repetition_allowed=None)
-            return Result(
-                placed.components,
-                [unviable("repetition_rule", "the instructions name no category"), *placed.deviations],
-            )
-        repetition_allowed = category in REPETITION_ALLOWED_CATEGORIES
+            repetition_allowed = None
+            findings.append(unviable("repetition_rule", "no category is declared for this recording"))
+        else:
+            repetition_allowed = category in REPETITION_ALLOWED_CATEGORIES
     else:
         repetition_allowed = bool(expectation.repetition_allowed)
     members = category_members(category, [word_text(word) for word in lexical_words(store)])
 
     items = lexical_words(store)
     components: list[Proposal] = []
-    findings: list[Finding] = []
     first_seen: dict[str, float] = {}
     for word in items:
         key = params.p_normalise(word_text(word))
         start, end = word_extent(word)
-        if key in first_seen and not repetition_allowed:
+        if key in first_seen and repetition_allowed is False:
             findings.append(
                 deviation("repeated_item", start, end, word.id, first_at=first_seen[key], text=word_text(word))
             )
@@ -1536,6 +1551,7 @@ def _speech_item_list(
     findings.append(count("items", len(items), None, *(word.id for word in items)))
     findings.append(count("repetition_allowed", repetition_allowed, None))
     findings.append(count("item_category", category, None))
+    findings.append(count("item_category_from", category_from, None))
     member_ids = [word.id for index, word in enumerate(items) if index in members]
     findings.append(count(CATEGORY_ITEMS, len(member_ids) if category is not None else None, None, *member_ids))
     findings.append(measured(ITEMS_PRODUCED, None, None, len(items), *(word.id for word in items)))
@@ -1547,16 +1563,19 @@ def _speech_item_list(
 
 
 def _item_list_extent(store: ProvStore, *, repetition_allowed: bool | None) -> Result:
-    """The item list's ``task_extent`` over its lexical words, or the finding that says why none.
+    """The item list's ``task_extent`` over its item utterances, or the finding that says why none.
 
     Args:
         store: The provenance store.
         repetition_allowed: The rule the category gives, or None where no category was read.
 
     Returns:
-        One ``task_extent`` proposal, or one :data:`NO_TASK_ITEMS` finding.
+        One ``task_extent`` proposal over the hull of the item utterances' words
+        (:func:`~senselab.audio.workflows.triage.task_speech.item_utterances`), or one :data:`NO_TASK_ITEMS`
+        finding.
     """
-    items = lexical_words(store)
+    lexical = [word for word in lexical_words(store) if not is_non_lexical(word_text(word))]
+    items = [word for utterance in item_utterances(lexical) for word in utterance]
     consensus_id = _consensus_id(store)
     extent = hull([word_extent(word) for word in items])
     if extent is None or extent[1] <= extent[0] or consensus_id is None:
@@ -1713,8 +1732,13 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
     if consensus is None:
         raise LookupError("no consensus_transcript in the store; PREPROCESS has not run")
     words = [store.get_entity(word_id) for word_id in consensus.attributes["word_ids"]]
-    words = [word for word in words if not store.is_invalidated(word.id)]
-    lexical_index = [position for position, word in enumerate(words) if not word.attributes["bracketed"]]
+    duration_s = plain.waveform.shape[-1] / sampling_rate
+    words = [bound_word(word, duration_s) for word in words if not store.is_invalidated(word.id)]
+    lexical_index = [
+        position
+        for position, word in enumerate(words)
+        if not word.attributes["bracketed"] and not word.attributes.get("degenerate")
+    ]
     lexical = [words[position] for position in lexical_index]
     source_names = [str(row["name"]) for row in consensus.attributes["sources"]]
     hypotheses = _hypotheses(store, source_names)
@@ -1761,6 +1785,10 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
         if proposal.role == TASK_EXTENT_ROLE
     ]
     view.extend(write_findings(store, expect, software, expectation_findings, signal=source))
+    if mode == "align" and declared_family:
+        speech_id = write_task_speech(store, expect, software, family=declared_family, config=config, hint=hint)
+        if speech_id is not None:
+            view.append(speech_id)
 
     if not lexical:
         notes.append("no consensus word; this branch measured no lexical subject")
@@ -1944,15 +1972,22 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
     # This reads the same segments against the extent the branch minted, and reaches no verdict.
     extent_speakers: Any = "no_task_extent" if not task_extents else "derivative_absent"
     if task_extents and read is not None:
-        within_act = store.activity(node=NODE, step="extent_speakers", parameters={"signal": read.signal})
+        exclusive_min_s = float(config.require("speech.secondary_exclusive_min_s"))
+        within_act = store.activity(
+            node=NODE,
+            step="extent_speakers",
+            parameters={"signal": read.signal, "secondary_exclusive_min_s": exclusive_min_s},
+        )
         store.was_associated_with(within_act, software)
         store.used(within_act, read.measurement_id)
         within_findings: list[Finding] = []
         readings = []
         for span_id, extent in task_extents:
-            reading = _speakers_within(extent, speaker_segments)
+            reading = speakers_within(extent, speaker_segments, exclusive_min_s=exclusive_min_s)
             readings.append(reading)
-            covariates = {key: value for key, value in reading.items() if key not in ("share", "sources")}
+            covariates = {
+                key: value for key, value in reading.items() if key not in ("share", "exclusive_share", "sources")
+            }
             evidence = (span_id, read.measurement_id, *reading["sources"])
             within_findings.append(
                 measured(
@@ -1971,6 +2006,17 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
                     extent[0],
                     extent[1],
                     reading["share"],
+                    *evidence,
+                    **covariates,
+                    diarizer=read.model,
+                )
+            )
+            within_findings.append(
+                measured(
+                    EXTENT_DOMINANT_EXCLUSIVE_SHARE,
+                    extent[0],
+                    extent[1],
+                    reading["exclusive_share"],
                     *evidence,
                     **covariates,
                     diarizer=read.model,
@@ -2443,7 +2489,7 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
                 if (category, covered) in recorded:
                     continue
                 recorded.add((category, covered))
-                extent = _timings_hull(words, list(covered))
+                extent = _timings_hull(words, list(covered), duration_s)
                 sources = sorted({str(name) for index in covered for name in words[index].attributes["sources"]})
                 speakers = {word_speakers[index] for index in covered}
                 resolved = len(speakers) == 1 and None not in speakers

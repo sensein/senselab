@@ -7,9 +7,11 @@ empty. A store carrying findings but no scan measurement is refused rather than 
 
 Every non-invalidated ``pii`` entity is redacted regardless of speaker, except one the declared
 stimulus accounts for (:func:`_expected_exemptions`, recorded as an ``exempt``/``expected_speech``
-assertion). Extents are padded by ``redaction.padding_ms`` and merged by ``plan_redactions``, then
-filled with ``redaction.fill`` at ``redaction.bleep_hz`` when that is a bleep. A word carries its
-PII marking through a live ``assertion`` whose ``verb`` is ``"label"`` and ``label`` is ``"pii"``.
+assertion) and one every word of which is the task's own content read off its events
+(:func:`task_content`, an ``exempt``/``task_event`` assertion). Extents are padded by
+``redaction.padding_ms`` and merged by ``plan_redactions``, then filled with ``redaction.fill`` at
+``redaction.bleep_hz`` when that is a bleep. A word carries its PII marking through a live
+``assertion`` whose ``verb`` is ``"label"`` and ``label`` is ``"pii"``.
 
 No recognizer runs here: verification is a re-scan of the redacted residue, :func:`residue_words`,
 with the same detectors, judged complete by ``pii.required_detectors``. A
@@ -70,8 +72,16 @@ from senselab.audio.workflows.triage.nodes.common import (
 )
 from senselab.audio.workflows.triage.residue import is_content_word, is_name_homograph, is_proper_form
 from senselab.audio.workflows.triage.stimulus import NearMatch, near_match, split_prompts
+from senselab.audio.workflows.triage.task_content import task_content_ids, task_events
 from senselab.audio.workflows.triage.task_lexicon import TaskLexicon, declared_names_lexicon, task_lexicon
+from senselab.audio.workflows.triage.task_speech import (
+    TASK_SPEECH_READING,
+    item_set_family,
+    narrative_family,
+    words_min_for,
+)
 from senselab.audio.workflows.triage.vocabulary import (
+    OFF_TASK_ASIDE_LEVEL,
     REDACTION_LLM_ANNOTATION,
     UNPLACED_CLEARED,
     UNPLACED_OPEN,
@@ -95,10 +105,15 @@ from senselab.text.tasks.pii_detection.redaction_policy import fold as policy_fo
 from senselab.text.tasks.pii_detection.redaction_policy import policy as policy_tables
 from senselab.text.tasks.pii_detection.redaction_policy import version as policy_version
 from senselab.text.tasks.pii_detection.redaction_review import (
+    PHRASES_PREDOMINANT,
     PLACE_HISTORICAL,
     PLACE_REASONS,
+    QUOTE_EDGE,
     RELABEL_PLACE,
     RELABELS,
+    match_token,
+    placement_tokens,
+    review_inputs_complete,
     safe_harbor_codes,
 )
 from senselab.utils.prov_store import Entity, ProvStore
@@ -121,6 +136,7 @@ CONSENSUS_ARTIFACT_VERSION = 1  # bumped when a record's field set changes
 _TERMINATORS_KEY = "stimulus.sentence_terminators"
 _EXEMPT_VERB = "exempt"  # the store's assertion verb for a redaction not made
 _EXPECTED_LABEL = "expected_speech"  # what accounted for it: the stimulus the participant was asked to read
+TASK_EVENT_LABEL = "task_event"  # what accounted for it: the task's own events, which the words lie on
 _EXEMPTION_MEASUREMENT = "redaction_exemptions"
 
 
@@ -134,31 +150,6 @@ class RedactResult(NodeResult):
     """
 
     artifacts: dict[str, Path]
-
-
-@dataclass(frozen=True)
-class _Verification:
-    """What re-scanning the redacted consensus text established.
-
-    Attributes:
-        verified: Whether the re-scan ran completely and found nothing.
-        survived: The categories found on the redacted text, sorted; never matched text.
-        scan_ran: Whether a complete re-scan happened at all — an empty ``failures`` is not evidence
-            that one did.
-        failed: Detectors the verification re-scan attempted and that raised. Names only.
-        missing: Detectors ``pii.required_detectors`` names that the verification re-scan never
-            attempted. Reported in the verdict separately from the planning scan's own
-            ``scan_failed`` and ``scan_missing``.
-        cache: The result-cache use of the re-scan (:func:`cache_attributes`), None when it did not
-            reach the detectors.
-    """
-
-    verified: bool
-    survived: list[str]
-    scan_ran: bool
-    failed: list[str]
-    missing: list[str]
-    cache: dict[str, Any] | None = None
 
 
 def padding_ms(config: TriageConfig) -> int:
@@ -279,67 +270,6 @@ def _verification_text(records: list[dict[str, Any]]) -> str:
     return " ".join(token for token in (_token(record) for record in kept) if token)
 
 
-def _mask_tokens(records: list[dict[str, Any]]) -> tuple[str, ...]:
-    """Every placeholder the rendered text carries, as a detector may echo it back.
-
-    Args:
-        records: :func:`_render`'s records.
-
-    Returns:
-        Each placeholder with and without its brackets, and each category a merged placeholder
-        joins, longest first.
-    """
-    tokens: set[str] = set()
-    for record in records:
-        if record["kind"] == "word":
-            continue
-        token = str(record["token"])
-        bare = token.strip("[]")
-        tokens.update({token, bare, *bare.split(_RESERVED_CATEGORY_CHAR)})
-    return tuple(sorted((token for token in tokens if token), key=len, reverse=True))
-
-
-def _is_mask(text: str, masks: Sequence[str]) -> bool:
-    """Whether a re-scan span is a placeholder and nothing the recording said.
-
-    Args:
-        text: The span's text.
-        masks: :func:`_mask_tokens`' output for the scanned text.
-
-    Returns:
-        True when no word character remains once every placeholder is removed.
-    """
-    rest = text
-    for mask in masks:
-        rest = rest.replace(mask, " ")
-    return not any(ch.isalnum() for ch in rest)
-
-
-def _verify(records: list[dict[str, Any]], required: list[str]) -> _Verification:
-    """Re-scan the redacted residue with the same detectors; no recognizer runs.
-
-    A span that is a placeholder the plan wrote is the redaction itself and does not survive.
-
-    Args:
-        records: :func:`_render`'s records over the residue, under the plan being verified.
-        required: The detector set ``pii.required_detectors`` names.
-
-    Returns:
-        What the re-scan established. A re-scan that skipped a required detector counts as not
-        having run.
-    """
-    scan = scan_for_pii(_verification_text(records))
-    scan = scan[0] if isinstance(scan, list) else scan
-    cache = cache_attributes(scan.cache)
-    missing = sorted(set(required) - set(scan.detectors_used) - set(scan.failures))
-    failed = sorted(scan.failures)
-    if failed or not scan.detectors_used or missing:
-        return _Verification(verified=False, survived=[], scan_ran=False, failed=failed, missing=missing, cache=cache)
-    masks = _mask_tokens(records)
-    survived = sorted({span.category for span in scan.spans if not _is_mask(str(span.text or ""), masks)})
-    return _Verification(verified=not survived, survived=survived, scan_ran=True, failed=[], missing=[], cache=cache)
-
-
 def _overlaps(a: tuple[float, float], b: tuple[float, float]) -> bool:
     """Whether two extents share any temporal intersection > 0.
 
@@ -387,26 +317,6 @@ def _pii_marked_words(store: ProvStore) -> dict[str, dict[str, str]]:
         for source_id in store.derived_from(assertion.id):
             marked.setdefault(source_id, {}).setdefault(category, assertion.id)
     return marked
-
-
-def _matches_surviving(word: Entity, category: str, planned: list[RedactionExtent], marked: Mapping[str, str]) -> bool:
-    """Whether this word carries a surviving category that no planned extent already covers.
-
-    Args:
-        word: A live consensus ``word`` entity.
-        category: A category the verification re-scan still saw.
-        planned: The padded, merged extents the failing pass produced.
-        marked: The PII categories the store's label assertions place on this word, each mapped to
-            the assertion that placed it.
-
-    Returns:
-        True when the re-plan should widen to this word; a word a planned extent already covers is
-        excluded.
-    """
-    if category not in marked or word.extent is None:
-        return False
-    hull = word_hull(word)
-    return not any(_overlaps(hull, (extent.start, extent.end)) for extent in planned)
 
 
 def _word_record(word: Entity) -> dict[str, Any]:
@@ -638,41 +548,117 @@ def _expected_exemptions(
     return exemptions
 
 
-def _expected_survivors(
-    survived: Sequence[str],
-    words: Sequence[Entity],
-    marked: Mapping[str, Mapping[str, str]],
-    planned: Sequence[RedactionExtent],
-    exempt_word_ids: frozenset[str],
-) -> list[str]:
-    """The surviving categories that nothing but an exempt word can account for.
-
-    A category is attributed to the exemption only when at least one exempt word carries it that no
-    planned extent covers, and no non-exempt word carries it in the same position. With no
-    exemptions this returns nothing.
+def word_keys(word: Entity) -> set[str]:
+    """Every token one consensus word reads as: its own surface and each recogniser's reading of it.
 
     Args:
-        survived: What the re-scan still saw.
-        words: PREPROCESS's consensus words.
-        marked: Which PII categories the store's label assertions place on each word.
-        planned: The padded, merged extents the pass produced.
-        exempt_word_ids: The words covered by an exemption.
+        word: A consensus word.
 
     Returns:
-        The attributable categories, sorted.
+        The surfaces as :func:`match_token` folds them, the empty ones dropped.
     """
-    attributable: list[str] = []
-    for category in sorted(set(survived)):
-        uncovered = [
-            word
-            for word in words
-            if category in marked.get(word.id, {})
-            and word.extent is not None
-            and not any(_overlaps(word_hull(word), (extent.start, extent.end)) for extent in planned)
-        ]
-        if uncovered and all(word.id in exempt_word_ids for word in uncovered):
-            attributable.append(category)
-    return attributable
+    readings = (word.attributes.get("readings") or {}).values()
+    texts = [str(word.attributes.get("text") or ""), *(str(reading) for reading in readings)]
+    return {key for key in (match_token(text) for text in texts) if key}
+
+
+def finding_keys(findings: Sequence[Entity], by_id: Mapping[str, Entity]) -> dict[str, set[str]]:
+    """The token each finding read on each word it covers: that word's reading in the finding's own text.
+
+    Args:
+        findings: The ``pii`` entities.
+        by_id: The consensus words by id.
+
+    Returns:
+        ``{word id: tokens}``, as :func:`match_token` folds them; the consensus surface where a finding
+        names no ``haystack`` or was read off the consensus.
+    """
+    keys: dict[str, set[str]] = {}
+    for finding in findings:
+        haystack = str(finding.attributes.get("haystack") or "consensus")
+        for word_id in finding.attributes.get("word_ids") or ():
+            word = by_id.get(str(word_id))
+            if word is None:
+                continue
+            readings = word.attributes.get("readings") or {}
+            surface = word.attributes.get("text") if haystack == "consensus" else readings.get(haystack)
+            key = match_token(str(surface or ""))
+            if key:
+                keys.setdefault(word.id, set()).add(key)
+    return keys
+
+
+@dataclass(frozen=True)
+class TaskContent:
+    """The consensus words that are the task's own content because they lie on its events.
+
+    Attributes:
+        event_ids: Every timed word whose hull lies on the declared family's task events
+            (:func:`~senselab.audio.workflows.triage.task_content.task_content_ids`).
+        propagated_ids: Words a finding covered off the events that read as a token a finding read on them.
+        keys: The tokens the findings read on ``event_ids``.
+        events_n: How many task events were read.
+    """
+
+    event_ids: frozenset[str] = frozenset()
+    propagated_ids: frozenset[str] = frozenset()
+    keys: frozenset[str] = frozenset()
+    events_n: int = 0
+
+    @property
+    def ids(self) -> frozenset[str]:
+        """Every word that is task content, on the events or by propagation."""
+        return self.event_ids | self.propagated_ids
+
+
+def task_content(
+    store: ProvStore,
+    words: Sequence[Entity],
+    findings: Sequence[Entity],
+    family: str | None,
+    lexicon_ids: Collection[str] = frozenset(),
+) -> TaskContent:
+    """Which consensus words are the declared task's own content, read off its events.
+
+    Args:
+        store: The provenance store, read for the family's task readings.
+        words: The consensus words, in stream order.
+        findings: The live ``pii`` entities.
+        family: The declared family.
+        lexicon_ids: The words of the task's own lexicon.
+
+    Returns:
+        The words on the events, and every finding word elsewhere that reads as a token a finding read
+        on them; empty for a lexical family or where no reading read the task.
+    """
+    events = task_events(store, family)
+    if not events:
+        return TaskContent()
+    on_events = task_content_ids(words, events, family=family, lexicon_ids=lexicon_ids)
+    by_id = {word.id: word for word in words}
+    read = finding_keys(findings, by_id)
+    keys = frozenset(key for word_id in on_events & set(read) for key in read[word_id])
+    elsewhere = frozenset(word_id for word_id, tokens in read.items() if word_id not in on_events and tokens & keys)
+    return TaskContent(frozenset(on_events), elsewhere, keys, len(events))
+
+
+def _task_event_exemptions(findings: Sequence[Entity], content: TaskContent) -> list[Entity]:
+    """The findings every word of which is the task's own content.
+
+    Args:
+        findings: The live ``pii`` entities not already exempt.
+        content: :func:`task_content`'s reading.
+
+    Returns:
+        The findings, in their own order.
+    """
+    return [
+        finding
+        for finding in findings
+        if finding.extent is not None
+        and (ids := {str(i) for i in finding.attributes.get("word_ids") or ()})
+        and ids <= content.ids
+    ]
 
 
 def _write_artifacts(
@@ -763,6 +749,147 @@ def _register_redacted_stream(
     return stream_id
 
 
+COVERAGE_CHECK = "mask_coverage"
+"""What REDACT and VERDICT verify of a mask plan: that each mask covers its words, in the text and the audio."""
+
+
+@dataclass(frozen=True)
+class Coverage:
+    """Whether a set of masks covers the words it masks, in the released text and the released audio.
+
+    Attributes:
+        masked_n: The words the masks are to hide.
+        untimed_n: Those with no usable timing, which no mask can be placed on.
+        text_uncovered_n: Those the rendered text still shows.
+        audio_uncovered_n: The masks whose audio span is neither silent nor replaced.
+    """
+
+    masked_n: int = 0
+    untimed_n: int = 0
+    text_uncovered_n: int = 0
+    audio_uncovered_n: int = 0
+
+    @property
+    def ok(self) -> bool:
+        """Whether every masked word is placed and hidden, and every masked span's audio is."""
+        return not (self.untimed_n or self.text_uncovered_n or self.audio_uncovered_n)
+
+    def describe(self) -> str:
+        """The failing counts, for a ``why``."""
+        return (
+            f"{self.untimed_n} untimed, {self.text_uncovered_n} shown in the text, "
+            f"{self.audio_uncovered_n} audible mask(s) of {self.masked_n} masked word(s)"
+        )
+
+    def record(self) -> dict[str, Any]:
+        """The check, as JSON-ready values."""
+        return {
+            "ok": self.ok,
+            "masked_n": self.masked_n,
+            "untimed_n": self.untimed_n,
+            "text_uncovered_n": self.text_uncovered_n,
+            "audio_uncovered_n": self.audio_uncovered_n,
+        }
+
+
+def _span_hidden(source: Audio, masked: Audio, extent: RedactionExtent, fill: str) -> bool:
+    rate = int(masked.sampling_rate)
+    first, last = max(0, int(extent.start * rate)), max(0, int(math.ceil(extent.end * rate)))
+    after = masked.waveform[..., first:last].numpy()
+    if after.size == 0:
+        return True
+    if fill == "silence":
+        return not after.any()
+    before = source.waveform[..., first:last].numpy()
+    return before.shape != after.shape or not (before == after).all() or not before.any()
+
+
+def mask_coverage(
+    words: Sequence[Entity],
+    extents: Sequence[RedactionExtent],
+    masked_ids: Collection[str],
+    source: Audio | None,
+    masked: Audio | None,
+    *,
+    fill: str,
+    owners: Mapping[str, int] | None = None,
+) -> Coverage:
+    """Whether masks cover their words: placed on usable timing, hidden in the text, silent or replaced in the audio.
+
+    Args:
+        words: The consensus words, in stream order.
+        extents: The masks.
+        masked_ids: The words the masks are to hide.
+        source: The audio the masks were applied to, or None where none was applied.
+        masked: The audio after them, or None.
+        fill: ``redaction.fill``, ``silence`` or ``bleep``.
+        owners: Which mask hides each word, by index into ``extents``; None reads it by overlap, as REDACT's
+            own plan does.
+
+    Returns:
+        The check.
+    """
+    by_id = {word.id: word for word in words}
+    wanted = [by_id[word_id] for word_id in masked_ids if word_id in by_id]
+    untimed = sum(1 for word in wanted if word_hull(word)[1] <= word_hull(word)[0])
+    records, _, _ = _render(list(words), list(extents), owners)
+    indices = {int(word.attributes["index"]) for word in wanted}
+    shown = {int(record["index"]) for record in records if record.get("kind") == "word" and record["index"] in indices}
+    audible = 0
+    if source is not None and masked is not None:
+        audible = sum(1 for extent in extents if not _span_hidden(source, masked, extent, fill))
+    return Coverage(len(wanted), untimed, len(shown), audible)
+
+
+def fold_mask_plan(
+    store: ProvStore, config: TriageConfig, hint: AudioHints | None, *, reviewer_applies: bool = False
+) -> MaskPlan:
+    """The fold's mask plan over the store, with every argument VERDICT reads from the config and the hint.
+
+    Args:
+        store: The provenance store.
+        config: The triage configuration.
+        hint: What the recording was declared to contain.
+        reviewer_applies: Whether the reviewer's ``release`` entries may unmask words.
+
+    Returns:
+        :func:`mask_plan`'s plan.
+    """
+    from senselab.audio.workflows.triage.live_evidence import recording_stem  # noqa: PLC0415
+    from senselab.audio.workflows.triage.vocabulary import FoldPolicy  # noqa: PLC0415
+
+    policy = FoldPolicy.from_config(config)
+    return mask_plan(
+        store,
+        reviewer_applies=reviewer_applies,
+        padding_ms=padding_ms(config),
+        condition_categories=policy.condition_categories,
+        protected_categories=policy.trim_protected_categories,
+        cohort_conditions=policy.cohort_conditions,
+        lexicon=task_lexicon(config, declared_task_family(store), hint),
+        language=None if hint is None else str(hint.metadata.get("language") or "") or None,
+        name_approvals=name_approvals(config, recording_stem(store)),
+        task_text=task_texts(hint),
+    )
+
+
+def shipped_texts(store: ProvStore, plan: MaskPlan) -> tuple[str, str]:
+    """The consensus transcript as recorded, and as the release would ship it under a mask plan.
+
+    Args:
+        store: The provenance store.
+        plan: The final mask plan (:func:`fold_mask_plan`).
+
+    Returns:
+        ``(original, masked)``: the consensus words' text with bracketed tokens dropped, and the same text
+        with each final mask's words replaced by its placeholder.
+    """
+    words = consensus_words(store)
+    original = _verification_text(_render(words, [])[0])
+    masked = _verification_text(_render(words, plan.final, plan.owners())[0])
+    return original, masked
+
+
 def redact(
     store: ProvStore,
     source: str,
@@ -818,59 +945,42 @@ def redact(
     scan_incomplete = bool(scan_failed) or bool(scan_missing) or not scanned_by
     findings = _findings(store)
     words = consensus_words(store)
-    residue = residue_words(store)
+    lexicon = task_lexicon(config, task_family, hint)
     units = _expected_units(
         hint,
         task_family,
         terminators=str(config.require(_TERMINATORS_KEY)),
-        lexicon=task_lexicon(config, task_family, hint),
+        lexicon=lexicon,
     )
     exemptions = _expected_exemptions(findings, words, units, branch_params(config).p_normalise, near_match(config))
     exempt_findings = {exemption.finding_id for exemption in exemptions}
-    exempt_word_ids = frozenset(word_id for exemption in exemptions for word_id in exemption.word_ids)
+    lexicon_ids = {words[i].id for i in lexicon.positions([str(w.attributes.get("text") or "") for w in words])}
+    content = task_content(store, words, findings, task_family, lexicon_ids)
+    task_exempt = _task_event_exemptions([f for f in findings if f.id not in exempt_findings], content)
+    exempt_findings |= {finding.id for finding in task_exempt}
+    exempt_word_ids = frozenset(word_id for exemption in exemptions for word_id in exemption.word_ids) | frozenset(
+        str(word_id) for finding in task_exempt for word_id in finding.attributes.get("word_ids") or ()
+    )
     extents = _extents_from_findings([finding for finding in findings if finding.id not in exempt_findings])
     consensus = find_measurement(store, "consensus_transcript")
     consulted = _pii_marking_assertions(store)
-    marked = _pii_marked_words(store)
-
     planned = plan_redactions(extents, padding_ms=margin_ms)
     records, transcript_text, unplaced_n = _render(words, planned)
-    checked = (
-        _verify(_render(residue, planned)[0], required_detectors)
-        if not scan_incomplete
-        else _Verification(verified=False, survived=[], scan_ran=False, failed=[], missing=[])
-    )
-    attributed = _expected_survivors(checked.survived, residue, marked, planned, exempt_word_ids)
-    outstanding = [category for category in checked.survived if category not in attributed]
-    replanned_n = 0
-    unremediable: list[str] = []
-    widened: list[tuple[tuple[float, float], str]] = []
-    if checked.scan_ran and outstanding:
-        replanned_n = 1
-        for category in outstanding:
-            for word in residue:
-                marks = marked.get(word.id, {})
-                if word.id in exempt_word_ids or word.extent is None:
-                    continue
-                if not _matches_surviving(word, category, planned, marks):
-                    continue
-                hull = word_hull(word)
-                extents.append(RedactionExtent(start=hull[0], end=hull[1], category=category))
-                widened.append((hull, marks[category]))
-        planned = plan_redactions(extents, padding_ms=margin_ms)
-        records, transcript_text, unplaced_n = _render(words, planned)
-        checked = _verify(_render(residue, planned)[0], required_detectors)
-        attributed = _expected_survivors(checked.survived, residue, marked, planned, exempt_word_ids)
-        outstanding = [category for category in checked.survived if category not in attributed]
-        unremediable = list(outstanding)
+    software = software_agent(store)
 
     stream_id, recording = resolve_stream(store, run_dir, source)
     redacted = apply_redactions(recording, planned, fill=fill, bleep_hz=bleep_hz)
+    covered_ids = {
+        str(word_id)
+        for finding in findings
+        if finding.id not in exempt_findings
+        for word_id in finding.attributes.get("word_ids") or ()
+    } - exempt_word_ids
+    coverage = mask_coverage(words, planned, covered_ids, recording, redacted, fill=fill)
 
-    software = software_agent(store)
     view: list[str] = []
 
-    plan_act = store.activity(node=NODE, step="plan", parameters={"padding_ms": margin_ms, "replanned_n": replanned_n})
+    plan_act = store.activity(node=NODE, step="plan", parameters={"padding_ms": margin_ms})
     store.was_associated_with(plan_act, software)
     store.used(plan_act, scan_measurement.id)
     for finding in findings:
@@ -889,9 +999,6 @@ def redact(
         for finding in findings:
             if finding.extent is not None and _overlaps(finding.extent, (extent.start, extent.end)):
                 store.was_derived_from(span_id, finding.id)
-        for bounds, assertion_id in widened:
-            if _overlaps(bounds, (extent.start, extent.end)):
-                store.was_derived_from(span_id, assertion_id)
         span_ids.append(span_id)
         view.append(span_id)
 
@@ -916,6 +1023,27 @@ def redact(
         for word_id in exemption.word_ids:
             store.was_derived_from(exempt_id, word_id)
         view.append(exempt_id)
+    for finding in task_exempt:
+        covered = [str(word_id) for word_id in finding.attributes.get("word_ids") or ()]
+        bounds = finding.extent if finding.extent is not None else (0.0, 0.0)
+        exempt_id = store.entity(
+            prov_type="assertion",
+            extent=(float(bounds[0]), float(bounds[1])),
+            attributes={
+                "verb": _EXEMPT_VERB,
+                "label": TASK_EVENT_LABEL,
+                "category": str(finding.attributes.get("category", "")),
+                "words_n": len(covered),
+                "events_n": content.events_n,
+                "propagated": any(word_id in content.propagated_ids for word_id in covered),
+            },
+        )
+        store.was_generated_by(exempt_id, plan_act)
+        store.was_attributed_to(exempt_id, software)
+        store.was_derived_from(exempt_id, finding.id)
+        for word_id in covered:
+            store.was_derived_from(exempt_id, word_id)
+        view.append(exempt_id)
     exemptions_id = store.entity(
         prov_type="measurement",
         extent=None,
@@ -923,6 +1051,7 @@ def redact(
             "name": _EXEMPTION_MEASUREMENT,
             "signal": "consensus_transcript",
             "n": len(exemptions),
+            "task_event_n": len(task_exempt),
             "by_category": dict(Counter(exemption.category for exemption in exemptions)),
             "expected_speech_declared": bool(units),
             "n_units": len(units),
@@ -947,12 +1076,9 @@ def redact(
         store.was_derived_from(redacted_stream_id, span_id)
     view.append(redacted_stream_id)
 
-    verify_act = store.activity(node=NODE, step="verify", parameters={"required_detectors": required_detectors})
+    verify_act = store.activity(node=NODE, step="verify", parameters={"check": COVERAGE_CHECK})
     store.was_associated_with(verify_act, software)
-    if checked.cache is not None and not checked.cache["hit"]:
-        annotate_result_origin(
-            checked.cache["key"], {"run": store.run_id, "activity": verify_act, "node": NODE, "step": "verify"}
-        )
+    store.used(verify_act, redacted_stream_id)
     if consensus is not None:
         store.used(verify_act, consensus.id)
     for word in words:
@@ -974,29 +1100,17 @@ def redact(
             f"the store's pii scan is incomplete ({'; '.join(reasons)}); "
             "an unchecked recording is not a clean one (N15)"
         )
-    elif not checked.scan_ran:
-        outcome = Outcome.FLAG
-        parts = []
-        if checked.failed:
-            parts.append(f"detectors failed: {', '.join(checked.failed)}")
-        if checked.missing:
-            parts.append(f"required detectors were not attempted: {', '.join(checked.missing)}")
-        if not parts:
-            parts.append("no detector ran")
-        why = (
-            f"the re-scan over the redacted text is incomplete ({'; '.join(parts)}); an unverified artifact is withheld"
-        )
-    elif outstanding:
-        outcome = Outcome.FAIL
-        why = "verification found pii on the redacted transcript: " + ", ".join(outstanding)
     else:
         outcome = Outcome.PASS
-        why = "every finding redacted; the redacted transcript re-scans clean"
-        if exemptions:
-            why = (
-                f"every finding redacted except {len(exemptions)} the declared stimulus accounts for; "
-                "the redacted transcript carries nothing else"
-            )
+        why = "every finding redacted; each mask covers its words in the text and the audio"
+        if not coverage.ok:
+            why = f"every finding planned; the final plan is verified, this one does not cover: {coverage.describe()}"
+        if exemptions or task_exempt:
+            accounted = [
+                *([f"{len(exemptions)} the declared stimulus accounts for"] if exemptions else []),
+                *([f"{len(task_exempt)} on the task's own events"] if task_exempt else []),
+            ]
+            why = f"every finding redacted except {' and '.join(accounted)}; each mask covers its words"
 
     if outcome is Outcome.PASS:
         artifacts = _write_artifacts(redacted, transcript_text, records, artifacts_dir)
@@ -1013,20 +1127,13 @@ def redact(
             "by_category": dict(Counter(extent.category for extent in planned)),
             "padding_ms": margin_ms,
             "fill": fill,
-            "verified": checked.verified,
-            "survived": checked.survived,
-            "unremediable": unremediable,
-            "outstanding": outstanding,
+            "coverage": coverage.record(),
             "expected_exempt_n": len(exemptions),
+            "task_event_exempt_n": len(task_exempt),
             "expected_exempt_by_category": dict(Counter(exemption.category for exemption in exemptions)),
-            "expected_survivors": attributed,
             "expected_speech_declared": bool(units),
-            "replanned_n": replanned_n,
             "scan_failed": scan_failed,
             "scan_missing": scan_missing,
-            "verify_failed": checked.failed,
-            "verify_missing": checked.missing,
-            "verify_cache": checked.cache,
             "required_detectors": required_detectors,
             "unplaced_words_n": unplaced_n,
             "audio_check": _AUDIO_CHECK,
@@ -1039,22 +1146,6 @@ def redact(
 
 RELEASED_FILES = ("audio.wav", "transcript.txt", "consensus.json")
 """What a release of the redacted copy writes into the release directory."""
-
-_QUOTE_EDGE = "\"'`.,;:!?()[]{}<>-\u2018\u2019\u201c\u201d\u2026"  # stripped from a token's two ends before matching
-
-
-def _match_token(text: str) -> str:
-    """One token as a reviewer quote and a transcript word are compared.
-
-    Args:
-        text: A word's surface, or one whitespace-separated piece of a quote.
-
-    Returns:
-        The token lower-cased, curly apostrophes made straight, and punctuation stripped from both
-        ends. Empty where nothing but punctuation was there.
-    """
-    return text.replace("\u2019", "'").strip(_QUOTE_EDGE).lower()
-
 
 MASKED = "masked"
 """A word a mask still hides in the released copy."""
@@ -1136,6 +1227,24 @@ not place itself, or names a country."""
 POLICY = "policy"
 """A mask the policy places on words it always masks -- a date element, an age, a state -- that no
 detector finding covered."""
+
+PROPAGATED = "propagated"
+"""A mask over words no finding covered that read as a name kept masked elsewhere in the recording."""
+
+PROPAGATION_MASK = "mask"
+"""A word masked because the same token is a name kept masked elsewhere in the recording."""
+
+PROPAGATION_RELEASE = "release"
+"""A word released because a reviewer ``release`` entry named the same token elsewhere in the recording."""
+
+NON_TASK_SPEECH = "non_task_speech"
+"""The source of a mask over a run of lexical speech outside a non-lexical task (``task_speech``)."""
+
+NON_TASK_SPEECH_CATEGORY = "NON_TASK_SPEECH"
+"""The category such a mask carries."""
+
+PERSON_FAMILY = "PERSON"
+LOCATION_FAMILY = "LOCATION"
 
 AGREED_MASKED = "masked"
 """A reviewer ``redact`` entry every content word of which a mask already hides: agreement."""
@@ -1320,8 +1429,10 @@ class MaskWord:
         categories: The categories the detectors marked on it, sorted.
         proper: Whether it is written as a proper noun
             (:func:`~senselab.audio.workflows.triage.residue.is_proper_form`).
-        propagated: Whether a reviewer ``release`` entry named the same term elsewhere in the recording
-            -- the same surface under the same family -- and unmasked this occurrence with it.
+        propagated: Whether its state was carried to it from another occurrence of the same token: a
+            name kept masked elsewhere (:data:`PROPAGATION_MASK`), or a reviewer ``release`` entry naming the
+            same token elsewhere (:data:`PROPAGATION_RELEASE`). A token is a word's consensus surface or
+            any recogniser's reading of it, case folded and edge punctuation stripped (:func:`word_keys`).
         kind_cut: Whether the name kind cut released it: at an edge of a mask whose findings are all
             of :func:`name_families` and which holds a proper noun, a word written all lower-case that
             the transcript also uses outside every finding; or, in a recording declared in a language
@@ -1332,6 +1443,9 @@ class MaskWord:
         locked: One of :data:`LOCKS` where the policy keeps it masked whatever the reviewer said;
             empty otherwise.
         kind: One of :data:`RELEASE_KINDS` where it is :data:`RELEASED_BY_KIND`; empty otherwise.
+        propagation: :data:`PROPAGATION_MASK` or :data:`PROPAGATION_RELEASE` where ``propagated``; empty otherwise.
+        propagated_from: The word ids whose decision it carries, where ``propagated``.
+        source_findings: The ``pii`` finding ids covering those words.
     """
 
     word_id: str
@@ -1343,6 +1457,9 @@ class MaskWord:
     categories: tuple[str, ...] = ()
     proper: bool = False
     propagated: bool = False
+    propagation: str = ""
+    propagated_from: tuple[str, ...] = ()
+    source_findings: tuple[str, ...] = ()
     kind_cut: bool = False
     with_head: bool = False
     locked: str = ""
@@ -1363,8 +1480,9 @@ class MaskOutcome:
         task_words_n: How many words outside the residue -- the task's own content, which no mask
             ever covers -- the finding's own extent reached.
         categories: The detector categories of the findings the mask stands for, sorted; the
-            reviewer's or the policy's category for a :data:`REVIEWER` or :data:`POLICY` mask.
-        source: :data:`DETECTOR`, :data:`REVIEWER` or :data:`POLICY`.
+            reviewer's, the policy's or the source name's family for a :data:`REVIEWER`, :data:`POLICY` or
+            :data:`PROPAGATED` mask.
+        source: :data:`DETECTOR`, :data:`REVIEWER`, :data:`POLICY` or :data:`PROPAGATED`.
     """
 
     planned: RedactionExtent
@@ -1475,6 +1593,19 @@ class MaskPlan:
             masked until a human approves it.
         task_text_ids: The words of the task's own texts (:func:`task_text_positions`) that a finding
             covered or a date, age or state rule would have masked, which no mask covers.
+        task_event_ids: The words a finding covered that are the task's own content read off its events
+            (:func:`task_content`), which no mask covers.
+        task_content_only: Whether every finding located on words touched a non-lexical task's own events
+            (:func:`task_content`) and kept no word once the task's own words were dropped, and none was
+            left unplaced.
+        reviewer_precedence: Whether the reviewer's reading recorded the task and the whole consensus
+            transcript with its PII annotations and every recogniser's reading (``review_inputs_complete``),
+            so its ``release`` of a token outranks a name kept masked at another occurrence.
+        non_task_speech_ids: The timed words of lexical speech outside a non-lexical task
+            (``task_speech_reading``), each kept masked whatever the content-word trim says.
+        non_task_speech_untimed: Such words with no usable timing, which no mask can place.
+        non_task_speech_extensive: Whether an item-set family's speech outside its item runs is extensive.
+        phrase_words_n: How many words the reviewer's phrase quotes place on, in an item-set family.
     """
 
     masks: tuple[MaskOutcome, ...]
@@ -1494,6 +1625,18 @@ class MaskPlan:
     name_approvals: tuple[str, ...] = ()
     name_release_proposed: tuple[str, ...] = ()
     task_text_ids: tuple[str, ...] = ()
+    task_event_ids: tuple[str, ...] = ()
+    task_content_only: bool = False
+    reviewer_precedence: bool = False
+    non_task_speech_ids: tuple[str, ...] = ()
+    non_task_speech_untimed: tuple[str, ...] = ()
+    non_task_speech_extensive: bool = False
+    phrase_words_n: int = 0
+
+    @property
+    def non_task_speech_masked_n(self) -> int:
+        """How many words stay masked as lexical speech outside a non-lexical task."""
+        return len(self.non_task_speech_ids)
 
     @property
     def planned(self) -> list[RedactionExtent]:
@@ -1518,9 +1661,26 @@ class MaskPlan:
         )
 
     @property
+    def pii_masks_final_n(self) -> int:
+        """How many standing extents hide identifying content: every final extent but speech outside the task."""
+        return sum(len(mask.final) for mask in self.masks if mask.source != NON_TASK_SPEECH)
+
+    @property
     def policy_masks_n(self) -> int:
         """How many masks the policy itself placed, over words no detector finding covered."""
         return sum(1 for mask in self.masks if mask.source == POLICY and mask.final)
+
+    @property
+    def propagated_masked_n(self) -> int:
+        """How many words stay masked because the same token is a name kept masked elsewhere."""
+        return len(
+            {
+                word.word_id
+                for mask in self.masks
+                for word in mask.words
+                if word.state == MASKED and word.propagation == PROPAGATION_MASK
+            }
+        )
 
     @property
     def person_names_masked(self) -> int:
@@ -1575,7 +1735,7 @@ class MaskPlan:
             )
         return sorted({mask.planned.category for mask in self.masks if any(word.state == state for word in mask.words)})
 
-    def record(self, *, release: str, release_ground: str | None) -> dict[str, Any]:
+    def record(self, *, release: str | None, release_ground: str | None) -> dict[str, Any]:
         """The ledger, as the measurement VERDICT writes carries it.
 
         Args:
@@ -1595,6 +1755,7 @@ class MaskPlan:
             "release": release,
             "release_ground": release_ground,
             "reviewer_applied": self.reviewer_applied,
+            "reviewer_precedence": self.reviewer_precedence,
             "padding_ms": self.padding_ms,
             "masks": [
                 {
@@ -1617,6 +1778,9 @@ class MaskPlan:
                             "categories": list(word.categories),
                             "proper": word.proper,
                             "propagated": word.propagated,
+                            "propagation": word.propagation,
+                            "propagated_from": list(word.propagated_from),
+                            "source_findings": list(word.source_findings),
                             "kind_cut": word.kind_cut,
                             "with_head": word.with_head,
                             "locked": word.locked,
@@ -1674,6 +1838,12 @@ class MaskPlan:
             "release_off_mask": list(self.release_off_mask),
             "task_lexicon_ids": list(self.task_lexicon_ids),
             "task_text_ids": list(self.task_text_ids),
+            "task_event_ids": list(self.task_event_ids),
+            "non_task_speech_ids": list(self.non_task_speech_ids),
+            "non_task_speech_untimed": list(self.non_task_speech_untimed),
+            "non_task_speech_extensive": self.non_task_speech_extensive,
+            "phrase_words_n": self.phrase_words_n,
+            "task_content_only": self.task_content_only,
             "reviewer_named_no_words": self.named_no_words,
             "counts": {
                 "masks_n": len(self.masks),
@@ -1682,6 +1852,9 @@ class MaskPlan:
                 "task_words_n": sum(mask.task_words_n for mask in self.masks),
                 "task_lexicon_words_n": len(self.task_lexicon_ids),
                 "task_text_words_n": len(self.task_text_ids),
+                "task_event_words_n": len(self.task_event_ids),
+                "non_task_speech_masked_n": self.non_task_speech_masked_n,
+                "non_task_speech_untimed_n": len(self.non_task_speech_untimed),
                 **{
                     f"relabel_{relabel}_n": sum(1 for entry in self.releases if entry.get("relabel") == relabel)
                     for relabel in RELABELS
@@ -1708,6 +1881,7 @@ class MaskPlan:
                 "person_name_masked_n": self.person_names_masked,
                 "name_release_proposed_n": len(self.name_release_proposed),
                 "propagated_n": len({w.word_id for w in words if w.propagated}),
+                "propagated_masked_n": self.propagated_masked_n,
                 "kind_cut_n": len({w.word_id for w in words if w.kind_cut}),
                 "unplaced_n": len(self.unplaced),
                 **{
@@ -1727,7 +1901,7 @@ class MaskPlan:
         }
 
 
-def _tokens(words: Sequence[Entity]) -> list[tuple[str, Entity]]:
+def quote_tokens(words: Sequence[Entity]) -> list[tuple[str, Entity]]:
     """The residue words a quote is matched against, each as its matching token.
 
     Args:
@@ -1737,24 +1911,38 @@ def _tokens(words: Sequence[Entity]) -> list[tuple[str, Entity]]:
         ``(token, word)`` for every non-bracketed, timed word whose token is not empty.
     """
     tokens = [
-        (_match_token(str(word.attributes.get("text") or "")), word)
+        (match_token(str(word.attributes.get("text") or "")), word)
         for word in words
         if not word.attributes.get("bracketed") and word.extent is not None
     ]
     return [(token, word) for token, word in tokens if token]
 
 
-def _place(quote: str, tokens: Sequence[tuple[str, Entity]]) -> list[Entity]:
+def placeable_tokens(store: ProvStore) -> tuple[str, ...]:
+    """The tokens of the consensus words a reviewer quote is placed on (:func:`mask_plan`), in stream order.
+
+    Args:
+        store: The provenance store.
+
+    Returns:
+        :func:`quote_tokens`' tokens over the timed consensus words.
+    """
+    return tuple(
+        token for token, _ in quote_tokens([word for word in consensus_words(store) if word.extent is not None])
+    )
+
+
+def place_quote(quote: str, tokens: Sequence[tuple[str, Entity]]) -> list[Entity]:
     """Every word a quote names, as whole-token runs, over every place it occurs.
 
     Args:
         quote: The reviewer's quote.
-        tokens: :func:`_tokens`' output.
+        tokens: :func:`quote_tokens`' output.
 
     Returns:
         The words, in stream order, without repeats. Empty where the quote matches no run.
     """
-    wanted = [token for token in (_match_token(piece) for piece in quote.split()) if token]
+    wanted = placement_tokens(quote)
     width = len(wanted)
     surfaces = [token for token, _ in tokens]
     named: dict[str, Entity] = {}
@@ -1917,7 +2105,7 @@ def _runs(ids: Sequence[str], order: Mapping[str, int]) -> list[list[str]]:
 
 def _approved(approvals: Sequence[str], tokens: Sequence[tuple[str, Entity]]) -> set[str]:
     """The word ids every approved name places on, over every place it occurs."""
-    return {word.id for approval in approvals for word in _place(str(approval), tokens)}
+    return {word.id for approval in approvals for word in place_quote(str(approval), tokens)}
 
 
 _SUFFIXES = ("ing", "es", "ed", "s")
@@ -2026,6 +2214,126 @@ def _identifier_shaped(text: str) -> bool:
     return is_number(key) or key in words or any(is_number(piece) or piece in words for piece in key.split("-"))
 
 
+@dataclass(frozen=True)
+class _NonTaskSpeech:
+    """What the owning branch's ``task_speech_reading`` gives the mask plan.
+
+    Attributes:
+        timed: A non-lexical family's speech words outside the task with usable timing, where the reading
+            reaches its bound.
+        untimed: Those with none, where it does.
+        item_ids: An item-set family's item-utterance words, which are task content unless the reviewer
+            quoted them as a phrase.
+        member_ids: An item-set family's declared-category members, which are task content wherever they fall.
+    """
+
+    timed: frozenset[str] = frozenset()
+    untimed: tuple[str, ...] = ()
+    item_ids: frozenset[str] = frozenset()
+    member_ids: frozenset[str] = frozenset()
+
+
+@dataclass(frozen=True)
+class _HeardOffTask:
+    """Speech outside the task that COHORT and the reviewer heard, placed on words.
+
+    Attributes:
+        speech_ids: Words inside COHORT's non-matching spans of a non-lexical task, or quoted by the reviewer as
+            off-task speech or another speaker's; in an item-set family, its phrase quotes where it judged
+            phrases instead of items ``predominant``.
+        task_ids: Words the reviewer quoted as the task's own content.
+        phrase_ids: In an item-set family, every word the reviewer's phrase quotes place on, whatever its level.
+        extensive: Whether the reviewer read the off-task speech as extensive, or an item-set family's phrases
+            instead of items as predominant.
+    """
+
+    speech_ids: frozenset[str] = frozenset()
+    task_ids: frozenset[str] = frozenset()
+    phrase_ids: frozenset[str] = frozenset()
+    extensive: bool = False
+
+
+def _heard_off_task(
+    store: ProvStore,
+    words: Sequence[Entity],
+    tokens: Sequence[tuple[str, Entity]],
+    reading: Mapping[str, Any],
+) -> _HeardOffTask:
+    """The speech outside the task COHORT's comparison and the reviewer's reading name, on the timed words.
+
+    In an item-set family the reviewer's phrase quotes are placed whatever its level, and masked only where it
+    judged phrases instead of items ``predominant``; its off-task reading is not read at all. A quote that places
+    on no word names none.
+
+    Args:
+        store: The provenance store, read for the ``cohort_reading`` measurement and the declared family.
+        words: The timed consensus words, in stream order.
+        tokens: :func:`quote_tokens` over them.
+        reading: The reviewer's annotation where the fold applies it, else empty.
+
+    Returns:
+        The words to mask, the words the reviewer called the task's own content, and its phrase words.
+    """
+    from senselab.audio.workflows.triage.cohort_fold import COHORT_READING, non_task_speech_spans  # noqa: PLC0415
+
+    cohort = find_measurement(store, COHORT_READING)
+    spans = non_task_speech_spans(cohort.attributes if cohort is not None else None)
+    speech = {word.id for word in words if any(_overlaps(word_hull(word), span) for span in spans)}
+    read = reading.get("status") in ("clean", "flagged")
+    phrases: set[str] = set()
+    if item_set_family(declared_task_family(store)):
+        extensive = read and reading.get("phrases_instead_of_items") == PHRASES_PREDOMINANT
+        for quote in (reading.get("phrase_quotes") or ()) if read else ():
+            phrases |= {word.id for word in place_quote(str(quote), tokens)}
+        own: Any = ()
+        speech |= phrases if extensive else set()
+    else:
+        extensive = read and reading.get("off_task_speech") == "extensive"
+        aside = narrative_family(declared_task_family(store)) and reading.get("off_task_speech") == OFF_TASK_ASIDE_LEVEL
+        own = () if aside else reading.get("off_task_quotes")
+    quotes = [*(own or ()), *(reading.get("other_speaker_quotes") or ())] if read else []
+    for quote in quotes:
+        speech |= {word.id for word in place_quote(str(quote), tokens)}
+    task = {
+        word.id
+        for quote in (reading.get("task_content_quotes") or ())
+        if read
+        for word in place_quote(str(quote), tokens)
+    }
+    return _HeardOffTask(frozenset(speech), frozenset(task), frozenset(phrases), bool(extensive))
+
+
+def _non_task_speech(store: ProvStore) -> _NonTaskSpeech:
+    """The speech outside the task, as the owning branch's reading names it (``task_speech``).
+
+    Args:
+        store: The provenance store, read for the ``task_speech_reading`` measurement.
+
+    Returns:
+        The words to mask and the task-content words; empty for a family whose speech outside the task is not
+        read or where no reading was written. A non-lexical family's words are masked at ``words_min`` words;
+        an item-set family's reading gives only its task content, because the reviewer's phrase quotes are
+        what is masked there (:func:`_heard_off_task`).
+    """
+    family = declared_task_family(store)
+    bound = words_min_for(family)
+    item_set = item_set_family(family)
+    reading = find_measurement(store, TASK_SPEECH_READING) if bound is not None or item_set else None
+    if reading is None:
+        return _NonTaskSpeech()
+    attributes = reading.attributes
+    untimed = tuple(str(word_id) for word_id in attributes.get("untimed_ids") or ())
+    timed = frozenset(str(word_id) for word_id in attributes.get("word_ids") or ()) - set(untimed)
+    if item_set:
+        return _NonTaskSpeech(
+            item_ids=frozenset(str(i) for i in attributes.get("task_content_ids") or ()),
+            member_ids=frozenset(str(i) for i in attributes.get("member_ids") or ()),
+        )
+    if bound is None or int(attributes.get("words_n") or 0) < bound:
+        return _NonTaskSpeech()
+    return _NonTaskSpeech(timed, untimed)
+
+
 def mask_plan(
     store: ProvStore,
     *,
@@ -2051,13 +2359,26 @@ def mask_plan(
     time of day, a weekday, a season, a relative reference or a length of time (:func:`time_by_kind`), a kinship
     word, and a country that is the whole of a place name unless a reviewer ``redact`` entry names it.
     A health condition the reviewer lists is never masked. A word otherwise leaves its mask when a
-    reviewer ``release`` entry names it -- whole-token runs, at every place the quote occurs -- or
-    names the same term (surface and family) elsewhere, unless a ``redact`` entry places on that term;
+    reviewer ``release`` entry names it -- whole-token runs over the whole consensus transcript the
+    reviewer read, kept on residue words, at every place the quote occurs -- or
+    names the same token elsewhere, unless a ``redact`` entry places on that token;
     or when it is not a residue content word
     (:func:`~senselab.audio.workflows.triage.residue.is_content_word`). In a recording declared in a
     language other than English, a word of a name-family mask not written as a proper noun is released.
+    A word lying on the declared task's own events (:func:`task_content`) is task content: no finding,
+    reviewer entry or rule masks it, and neither any other word reading as the token a finding read on it.
+    A decision about a token holds at every occurrence (:func:`word_keys`, the consensus surface or any
+    recogniser's reading): a reviewer ``release`` releases every covered occurrence the policy does not
+    lock, and a name kept masked -- adjacent kept name words matched as one run -- masks every other
+    occurrence that is not task content, approved, a condition or released by kind, placing a
+    :data:`PROPAGATED` mask where no finding covers it. Where the reading recorded the task and the whole
+    consensus transcript with its PII annotations and every recogniser's reading (``review_inputs``,
+    :func:`review_inputs_complete`), a release that frees an
+    occurrence of a token outranks the name kept masked: the token's person or place lock is lifted at
+    every covered occurrence and no mask spreads onto a released word. Otherwise the kept name wins.
     The kept words are cut into one extent per adjacent run, padded up to the nearest unmasked word.
-    The rules are in ``specs/20261003-redaction-policy-v7/design.md``.
+    The rules are in ``specs/20261003-redaction-policy-v7/design.md`` and
+    ``specs/20261007-task-events-in-background/design.md`` ("Redaction decisions per token").
 
     Args:
         store: The provenance store, carrying SPEECH's findings and residue, REDACT's plan and
@@ -2093,19 +2414,34 @@ def mask_plan(
     except ValueError:
         residue = []
     residue_ids = {word.id for word in residue}
-    tokens = _tokens(residue)
+    tokens = quote_tokens(residue)
     words = [word for word in consensus_words(store) if word.extent is not None]
+    transcript_tokens = quote_tokens(words)
     by_id = {word.id: word for word in words}
     order = {word.id: position for position, word in enumerate(words)}
     vocabulary = lexicon if lexicon is not None else declared_names_lexicon(declared_task_family(store))
     word_texts = [str(w.attributes.get("text") or "") for w in words]
     declared_ids = {words[i].id for i in vocabulary.positions(word_texts)}
+    lexicon_ids = frozenset(declared_ids)
     task_text_ids = {words[i].id for i in task_text_positions(word_texts, task_text)}
     declared_ids |= task_text_ids
-    located, unplaced_records = _located_findings(store, residue_ids, declared_ids)
-    finding_word_ids = {
-        str(i) for finding in live_entities(store, "pii") for i in (finding.attributes.get("word_ids") or ())
+    live_findings = live_entities(store, "pii")
+    task_words = task_content(store, words, live_findings, declared_task_family(store), lexicon_ids)
+    off_task = _non_task_speech(store)
+    heard = _heard_off_task(store, words, transcript_tokens, reading if reviewer_applies else {})
+    item_ids = (off_task.item_ids - heard.phrase_ids) | off_task.member_ids
+    excluded_ids = declared_ids | task_words.ids | item_ids | heard.task_ids
+    located, unplaced_records = _located_findings(store, residue_ids, excluded_ids)
+    finding_word_ids_of = {
+        entity.id: {str(i) for i in (entity.attributes.get("word_ids") or ())} for entity in live_findings
     }
+    finding_word_ids = {word_id for ids in finding_word_ids_of.values() for word_id in ids}
+    read_keys = finding_keys(live_findings, by_id)
+    keys_of = {word.id: word_keys(word) for word in words}
+    findings_of: dict[str, list[str]] = {}
+    for entity in live_findings:
+        for word_id in entity.attributes.get("word_ids") or ():
+            findings_of.setdefault(str(word_id), []).append(entity.id)
     unplaced_categories = [str(record.get("category") or "") for record in unplaced_records]
     redact_ran = find_verdict(store, NODE) is not None
     non_english = bool(language) and not str(language).strip().lower().startswith("en")
@@ -2152,11 +2488,11 @@ def mask_plan(
     def capitalised(word: Entity) -> bool:
         if non_english:
             return proper(word)
-        surface = text_of(word).strip(_QUOTE_EDGE)
-        return surface[:1].isupper() and _match_token(surface) not in ("i", "i'm", "i'll", "i've", "i'd")
+        surface = text_of(word).strip(QUOTE_EDGE)
+        return surface[:1].isupper() and match_token(surface) not in ("i", "i'm", "i'll", "i've", "i'd")
 
     def content(word: Entity) -> bool:
-        if residue_ids and word.id not in residue_ids:
+        if word.id in task_words.ids or (residue_ids and word.id not in residue_ids):
             return False
         if protected_name(word):
             return True
@@ -2167,7 +2503,7 @@ def mask_plan(
     scan = [
         word
         for word in (residue or words)
-        if word.extent is not None and not word.attributes.get("bracketed") and word.id not in declared_ids
+        if word.extent is not None and not word.attributes.get("bracketed") and word.id not in excluded_ids
     ]
     scan_texts = [text_of(word) for word in scan]
     with_task = [
@@ -2189,11 +2525,12 @@ def mask_plan(
         for word_id in member_ids:
             family_of_word.setdefault(word_id, category_family(members[0].category))
 
-    def term(word_id: str) -> tuple[str, str]:
-        return _match_token(str(by_id[word_id].attributes.get("text") or "")), family_of_word.get(word_id, "")
+    def quoted_words(quote: str) -> list[Entity]:
+        hits = [word for word in place_quote(quote, transcript_tokens) if word.id in residue_ids]
+        return hits or place_quote(quote, tokens)
 
     def placed_words(quote: str) -> tuple[list[Entity], str]:
-        hits = _place(quote, tokens)
+        hits = quoted_words(quote)
         if hits:
             return hits, PLACED_WORDS
         hits = _place_substring(quote, residue)
@@ -2232,7 +2569,7 @@ def mask_plan(
     for index, entry in enumerate(entries):
         if str(entry.get("action")) != "release" or index in condition_indices:
             continue
-        hits = _place(str(entry.get("text") or ""), tokens)
+        hits = quoted_words(str(entry.get("text") or ""))
         category = str(entry.get("category") or "OTHER").upper()
         relabel = str(entry.get("relabel") or "").strip().lower()
         place_reason = str(entry.get("place_reason") or "").strip().lower()
@@ -2270,7 +2607,7 @@ def mask_plan(
     }
     country_redacted = {word.id for hits, _ in redact_placed.values() for word in hits if word.id in country_ids}
     blocked_tokens = {
-        _match_token(str(word.attributes.get("text") or "")) for hits, _ in redact_placed.values() for word in hits
+        match_token(str(word.attributes.get("text") or "")) for hits, _ in redact_placed.values() for word in hits
     }
     approved_ids = _approved(name_approvals, tokens)
     name_kinds = name_families()
@@ -2327,12 +2664,15 @@ def mask_plan(
     for word_id in always_ids:
         kind_of.pop(word_id, None)
 
-    # A reviewer release that says a name is no person, or a place identifies nobody, lifts that lock,
-    # for every occurrence of the same term the reviewer does not also ask to hide.
+    def surface_key(word_id: str) -> str:
+        return match_token(text_of(by_id[word_id])) if word_id in by_id else ""
+
     def same_term(ids: set[str]) -> set[str]:
-        terms = {term(word_id) for word_id in ids if word_id in family_of_word}
+        tokens = {surface_key(word_id) for word_id in ids} - {""}
         return ids | {
-            word_id for word_id in family_of_word if term(word_id) in terms and term(word_id)[0] not in blocked_tokens
+            word_id
+            for word_id in family_of_word
+            if keys_of.get(word_id, set()) & tokens and surface_key(word_id) not in blocked_tokens
         }
 
     not_person_ids = same_term(not_person_ids)
@@ -2350,17 +2690,37 @@ def mask_plan(
         if locked.get(word_id) == LOCK_PLACE and (word_id not in state_ids or word_id in historical_ids):
             locked.pop(word_id)
 
-    named_terms = {term(word_id) for word_id in named if word_id in family_of_word}
+    named_tokens = {surface_key(word_id) for word_id in named} - {""}
     propagated = {
         word_id
         for word_id in family_of_word
         if word_id not in named
         and content(by_id[word_id])
-        and term(word_id) in named_terms
-        and term(word_id)[0] not in blocked_tokens
+        and keys_of.get(word_id, set()) & named_tokens
+        and surface_key(word_id) not in blocked_tokens
+    }
+    released_from = {
+        word_id: tuple(
+            sorted(source for source in named if surface_key(source) and surface_key(source) in keys_of[word_id])
+        )
+        for word_id in propagated
     }
     applied = reviewer_applies and bool(named)
     released = ((named | propagated) - set(locked)) if applied else set()
+    reviewer_wins = applied and review_inputs_complete(reading.get("review_inputs"))
+    if reviewer_wins:
+        for token in named_tokens:
+            occurrences = {
+                word_id
+                for word_id in named | propagated
+                if surface_key(word_id) == token or token in keys_of.get(word_id, set())
+            }
+            if not occurrences & released:
+                continue
+            for word_id in occurrences:
+                if locked.get(word_id) in (LOCK_PERSON, LOCK_PLACE):
+                    locked.pop(word_id)
+                    released.add(word_id)
     approved_release = {word_id for word_id in approved_ids if word_id not in locked}
     # A name the reviewer released takes its lower-case words with it: "Gladiator fighter" tagged
     # PERSON, with "Gladiator" released, does not leave "fighter" masked.
@@ -2379,18 +2739,18 @@ def mask_plan(
                 if word.id not in released
                 and word.id not in locked
                 and text_of(word) == text_of(word).lower()
-                and _match_token(text_of(word)) not in blocked_tokens
+                and match_token(text_of(word)) not in blocked_tokens
             )
         released |= with_head
     ordinary = {
-        _match_token(str(word.attributes.get("text") or ""))
+        match_token(str(word.attributes.get("text") or ""))
         for word in words
         if word.id not in covered_ids and word.id not in finding_word_ids
     }
 
     def common_word(word: Entity) -> bool:
         text = str(word.attributes.get("text") or "")
-        return text == text.lower() and _match_token(text) in ordinary
+        return text == text.lower() and match_token(text) in ordinary
 
     name_only: set[str] = set()
     elsewhere: set[str] = set()
@@ -2512,6 +2872,55 @@ def mask_plan(
             )
         )
 
+    reviewer_name_ids = {word.id for family, group in reviewer_masks if family in name_kinds for word in group}
+    name_ids = {
+        word_id
+        for word_id in kept_ids
+        if {category_family(category) for category in found.get(word_id, ())} & name_kinds
+        or locked.get(word_id) in (LOCK_PERSON, LOCK_PLACE)
+        or word_id in reviewer_name_ids
+    }
+    patterns: list[tuple[tuple[frozenset[str], ...], tuple[str, ...]]] = []
+    for run in _runs(sorted(name_ids & set(order)), order):
+        pattern = tuple(
+            frozenset(key for key in (read_keys.get(word_id) or {surface_key(word_id)}) if key) - task_words.keys
+            for word_id in run
+        )
+        if all(pattern) and any(is_content_word(key) for keys in pattern for key in keys):
+            patterns.append((pattern, tuple(run)))
+    spread_from: dict[str, tuple[str, ...]] = {}
+    for at in range(len(words)):
+        for pattern, sources in patterns:
+            width = len(pattern)
+            if at + width > len(words) or not all(
+                keys_of[words[at + offset].id] & pattern[offset] for offset in range(width)
+            ):
+                continue
+            for word in words[at : at + width]:
+                if (
+                    word.id in kept_ids
+                    or word.id in excluded_ids
+                    or word.id in approved_ids
+                    or word.id in condition_ids
+                    or word.id in kind_of
+                    or (reviewer_wins and word.id in released)
+                    or word.attributes.get("bracketed")
+                ):
+                    continue
+                spread_from[word.id] = tuple(sorted({*spread_from.get(word.id, ()), *sources}))
+    kept_ids |= set(spread_from)
+    propagated_masks: list[tuple[str, list[Entity]]] = []
+    for run in _runs(sorted(set(spread_from) - covered_ids), order):
+        source = spread_from[run[0]][0]
+        family = family_of_word.get(source) or (LOCATION_FAMILY if locked.get(source) == LOCK_PLACE else PERSON_FAMILY)
+        propagated_masks.append((family, [by_id[word_id] for word_id in run]))
+    speech_ids = ((set(off_task.timed) | heard.speech_ids) - excluded_ids) & set(order)
+    speech_untimed = off_task.untimed
+    kept_ids |= speech_ids
+    speech_masks = [
+        (NON_TASK_SPEECH_CATEGORY, [by_id[word_id] for word_id in run]) for run in _runs(sorted(speech_ids), order)
+    ]
+
     def state_of(word: Entity) -> str:
         if word.id in kept_ids:
             return MASKED
@@ -2541,7 +2950,12 @@ def mask_plan(
                 max(finding.task_words_n for finding in members),
             )
         )
-    for source, masks in ((REVIEWER, reviewer_masks), (POLICY, policy_masks)):
+    for source, masks in (
+        (REVIEWER, reviewer_masks),
+        (POLICY, policy_masks),
+        (PROPAGATED, propagated_masks),
+        (NON_TASK_SPEECH, speech_masks),
+    ):
         for family, group in masks:
             if not group:
                 continue
@@ -2573,7 +2987,22 @@ def mask_plan(
                 finding=word.id in found,
                 categories=tuple(sorted(found.get(word.id, set()))),
                 proper=proper(word),
-                propagated=word.id in propagated,
+                propagated=word.id in propagated or word.id in spread_from,
+                propagation=PROPAGATION_MASK
+                if word.id in spread_from
+                else PROPAGATION_RELEASE
+                if word.id in propagated
+                else "",
+                propagated_from=spread_from.get(word.id) or released_from.get(word.id) or (),
+                source_findings=tuple(
+                    sorted(
+                        {
+                            finding_id
+                            for source_id in (spread_from.get(word.id) or released_from.get(word.id) or ())
+                            for finding_id in findings_of.get(source_id, ())
+                        }
+                    )
+                ),
                 kind_cut=word.id in kind_cut,
                 with_head=word.id in with_head,
                 locked=locked.get(word.id, "") if state == MASKED else "",
@@ -2666,7 +3095,7 @@ def mask_plan(
         for index, entry in enumerate(entries)
         if str(entry.get("action")) == "release"
         and index not in condition_indices
-        and (hits := _place(str(entry.get("text") or ""), tokens))
+        and (hits := quoted_words(str(entry.get("text") or "")))
         and not any(word.id in family_of_word for word in hits)
     ]
     name_release_proposed = [
@@ -2674,7 +3103,7 @@ def mask_plan(
         for index, entry in enumerate(entries)
         if str(entry.get("action")) == "release"
         and index not in condition_indices
-        and any(locked.get(word.id) == LOCK_PERSON for word in _place(str(entry.get("text") or ""), tokens))
+        and any(locked.get(word.id) == LOCK_PERSON for word in quoted_words(str(entry.get("text") or "")))
     ]
     return MaskPlan(
         masks=tuple(outcomes),
@@ -2687,6 +3116,17 @@ def mask_plan(
         redact_planned=tuple(redact_planned),
         task_lexicon_ids=tuple(sorted(declared_ids & finding_word_ids)),
         task_text_ids=tuple(sorted(task_text_ids & (finding_word_ids | task_policy_ids))),
+        task_event_ids=tuple(sorted(task_words.ids & finding_word_ids)),
+        task_content_only=bool(located)
+        and not unplaced_records
+        and all(
+            not finding.word_ids and finding_word_ids_of[finding.finding_id] & task_words.ids for finding in located
+        ),
+        reviewer_precedence=reviewer_wins,
+        non_task_speech_ids=tuple(sorted(speech_ids, key=lambda word_id: order[word_id])),
+        non_task_speech_untimed=speech_untimed,
+        non_task_speech_extensive=heard.extensive,
+        phrase_words_n=len(heard.phrase_ids),
         named_no_words=reviewer_named_no_words(reading),
         releases=tuple(releases),
         conditions=tuple(conditions),
@@ -2805,7 +3245,7 @@ MASK_SOURCE = "recording"
 
 
 def released_audio(store: ProvStore, run_dir: Path, *, bleep_hz: float | None, fill: str) -> ReleasedAudio:
-    """The audio of the redacted copy, as :func:`settle_release` writes it under ``release_with_redaction``.
+    """The audio of the redacted copy, as :func:`settle_release` writes it under ``redacted``.
 
     Args:
         store: The provenance store, after VERDICT.
@@ -2841,7 +3281,7 @@ def released_audio(store: ProvStore, run_dir: Path, *, bleep_hz: float | None, f
 
 def settle_release(
     store: ProvStore,
-    release: str,
+    release: str | None,
     release_ground: str | None,
     *,
     run_dir: Path,
@@ -2851,7 +3291,7 @@ def settle_release(
 ) -> dict[str, Path]:
     """Make the release directory hold exactly the copy the fold released.
 
-    The directory holds a redacted copy only under ``release_with_redaction``; every other release
+    The directory holds a redacted copy only under ``redacted``; every other release
     empties it, including of a copy REDACT itself wrote on a pass. The copy masks the fold's final
     masks, as its ledger records them (:func:`released_masks`), and its text hides exactly the words
     the ledger keeps masked. Where the final extents are REDACT's own, the audio is REDACT's
@@ -2873,7 +3313,7 @@ def settle_release(
         written.
     """
     verdict = find_verdict(store, NODE)
-    if release != Release.WITH_REDACTION.value:
+    if release != Release.REDACTED.value:
         for name in RELEASED_FILES:
             (artifacts_dir / name).unlink(missing_ok=True)
         return {}

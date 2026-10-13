@@ -9,13 +9,15 @@ import dataclasses
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+import pytest
+
 from senselab.audio.data_structures import AudioHints
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.nodes.second_opinion import (
     ABSENT,
+    BYPASSED,
     DISABLED,
     NODE,
-    NOTHING_TO_READ,
     OK,
     opinion_cache_key,
     pin_of,
@@ -34,8 +36,13 @@ def _config(tmp_path: Path, text: str = ON) -> TriageConfig:
     return load_triage_config(path)
 
 
-def _store(words: Sequence[str] = ("my", "name", "is", "alicia")) -> ProvStore:
-    """Consensus words and SPEECH's scan of all of them: the residue REVIEW reads."""
+def _store(
+    words: Sequence[str] = ("my", "name", "is", "alicia"), residue: Sequence[int] | None = None, scanned: bool = True
+) -> ProvStore:
+    """Consensus words and SPEECH's scan of them (all, unless ``residue`` names positions): the residue REVIEW reads.
+
+    ``scanned=False`` leaves the scan out, as a store SPEECH never scanned.
+    """
     store = ProvStore(run_id="second-opinion")
     software = store.agent(agent_type="software", version="senselab test-seed")
     activity = store.activity(node="PREPROCESS", step="consensus", parameters={})
@@ -59,10 +66,17 @@ def _store(words: Sequence[str] = ("my", "name", "is", "alicia")) -> ProvStore:
         },
     )
     store.was_generated_by(transcript, activity)
+    if not scanned:
+        return store
     scan = store.entity(
         prov_type="measurement",
         extent=None,
-        attributes={"name": PII_SCAN, "signal": "consensus_transcript", "findings_n": 0, "residue_word_ids": word_ids},
+        attributes={
+            "name": PII_SCAN,
+            "signal": "consensus_transcript",
+            "findings_n": 0,
+            "residue_word_ids": word_ids if residue is None else [word_ids[position] for position in residue],
+        },
     )
     store.was_generated_by(scan, activity)
     return store
@@ -73,6 +87,8 @@ def _answers(other: float = 0.9) -> dict[str, Any]:
         "other_voice": {"choice": "more_than_one", "probabilities": {"one": 1 - other, "more_than_one": other}},
         "instructions_spoken": {"noul": 0.02},
         "policy_identifier_present": {"noul": 0.97},
+        "masked_text_free_of_identifiers": {"noul": 0.1},
+        "off_task_speech": {"choice": "none", "probabilities": {"none": 0.8, "some": 0.15, "extensive": 0.05}},
     }
 
 
@@ -104,6 +120,11 @@ class TestItAsksAndRecords:
         assert outcome.status == OK and held["name"] == SECOND_OPINION_ANSWERS
         assert held["probabilities"]["other_voice"] == 0.9
         assert held["probabilities"]["policy_identifier_present"] == 0.97
+        assert held["probabilities"]["masked_text_free_of_identifiers"] == 0.1
+        assert held["probabilities"]["off_task_speech"] == pytest.approx(0.2)
+        assert held["choices"] == {"other_voice": "more_than_one", "off_task_speech": "none"}
+        assert held["class_probabilities"]["off_task_speech"] == {"none": 0.8, "some": 0.15, "extensive": 0.05}
+        assert ask.states[0]["masked_text"] == ask.states[0]["transcript"] and held["masked_differs"] is False
         assert held["blob_digest"] == pin_of(config).blob_digest
         assert "alicia" in ask.states[0]["transcript"]
         assert store.get_activity(store.generated_by(outcome.measurement_id) or "").node == NODE
@@ -141,39 +162,87 @@ class TestItAsksAndRecords:
         assert outcome.status == OK and not again.states
         assert _opinion(store, outcome.measurement_id)["result_cache"]["hit"] is True
 
+    def test_the_shipped_masked_text_is_sent_and_a_new_mask_asks_again(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The state carries the final mask plan's text, and a changed mask misses the cache."""
+        from senselab.audio.workflows.triage.nodes import second_opinion as node
+
+        config = _config(tmp_path)
+        monkeypatch.setattr(node, "masked_text", lambda store, config, hint: ("", "my name is [PERSON]"))
+        first = _Ask(_answers())
+        outcome = second_opinion(_store(), config, None, first)
+        assert first.states[0]["masked_text"] == "my name is [PERSON]"
+        assert outcome.status == OK
+        cached = _Ask(_answers())
+        assert second_opinion(_store(), config, None, cached).status == OK and not cached.states
+        monkeypatch.setattr(node, "masked_text", lambda store, config, hint: ("", "my [PERSON] is [PERSON]"))
+        second = _Ask(_answers())
+        assert second_opinion(_store(), config, None, second).status == OK and second.states
+
     def test_the_key_moves_with_the_text_the_context_the_blob_and_the_seed(self, tmp_path: Path) -> None:
         """Each of the four is in the key."""
         pin = pin_of(_config(tmp_path))
-        base = opinion_cache_key("hello", {"task": "a"}, pin, 7)
+        base = opinion_cache_key("hello", "hello", {"task": "a"}, pin, 7)
         moved_pin = dataclasses.replace(pin, blob_digest="sha256:" + "0" * 64)
         assert (
             len(
                 {
                     base,
-                    opinion_cache_key("hello there", {"task": "a"}, pin, 7),
-                    opinion_cache_key("hello", {"task": "b"}, pin, 7),
-                    opinion_cache_key("hello", {"task": "a"}, moved_pin, 7),
-                    opinion_cache_key("hello", {"task": "a"}, pin, 8),
+                    opinion_cache_key("hello there", "hello there", {"task": "a"}, pin, 7),
+                    opinion_cache_key("hello", "[PERSON]", {"task": "a"}, pin, 7),
+                    opinion_cache_key("hello", "hello", {"task": "b"}, pin, 7),
+                    opinion_cache_key("hello", "hello", {"task": "a"}, moved_pin, 7),
+                    opinion_cache_key("hello", "hello", {"task": "a"}, pin, 8),
                 }
             )
-            == 5
+            == 6
         )
 
 
 class TestTheOtherPaths:
-    """Off, nothing to read, and asked without an answer are each recorded, and none asks the model."""
+    """Off, bypassed, and asked without an answer are each recorded, and none asks the model."""
 
     def test_the_packaged_config_is_disabled_and_asks_nothing(self, tmp_path: Path) -> None:
         """No GPU and no store in a default run."""
         store, ask = _store(), _Ask(_answers())
         outcome = second_opinion(store, load_triage_config(), None, ask)
         assert outcome.status == DISABLED and not ask.states
+        assert _opinion(store, outcome.measurement_id)["bypass_reason"] is None
 
-    def test_an_empty_transcript_asks_nothing(self, tmp_path: Path) -> None:
-        """No residue, nothing to read."""
-        store, ask = _store(words=()), _Ask(_answers())
+    @pytest.mark.parametrize(
+        ("words", "residue", "reason"),
+        [
+            ((), None, "no_words"),
+            (("[breath]", "[cough]"), [], "non_lexical_only"),
+            (("[breath]", "buttercup", "meadow"), [], "task_content_only"),
+        ],
+    )
+    def test_an_empty_residue_is_bypassed_with_its_reason(
+        self, tmp_path: Path, words: Sequence[str], residue: Sequence[int] | None, reason: str
+    ) -> None:
+        """No residue: bypassed, the reason recorded, and the model never asked."""
+        store, ask = _store(words=words, residue=residue), _Ask(_answers())
         outcome = second_opinion(store, _config(tmp_path), None, ask)
-        assert outcome.status == NOTHING_TO_READ and not ask.states
+        assert outcome.status == BYPASSED and not ask.states
+        assert _opinion(store, outcome.measurement_id)["bypass_reason"] == reason
+
+    def test_lexical_words_with_no_scan_are_absent_not_bypassed(self, tmp_path: Path) -> None:
+        """A lexical family's words and no PII scan: a missing measurement, the model never asked."""
+        store, ask = _store(scanned=False), _Ask(_answers())
+        outcome = second_opinion(store, _config(tmp_path), AudioHints(metadata={"task_token": "free-speech"}), ask)
+        assert outcome.status == ABSENT and not ask.states
+        opinion = _opinion(store, outcome.measurement_id)
+        assert (opinion["bypass_reason"], opinion["absent_reason"]) == (None, "pii_scan_missing")
+        assert opinion["failure"]
+
+    def test_a_non_lexical_family_with_no_scan_is_bypassed(self, tmp_path: Path) -> None:
+        """A voice family's words are masked on the task-speech path; the second opinion is not needed."""
+        store, ask = _store(scanned=False), _Ask(_answers())
+        outcome = second_opinion(store, _config(tmp_path), AudioHints(metadata={"task_token": "prolonged-vowel"}), ask)
+        assert outcome.status == BYPASSED and not ask.states
+        opinion = _opinion(store, outcome.measurement_id)
+        assert (opinion["bypass_reason"], opinion["absent_reason"]) == ("non_lexical_task", None)
 
     def test_no_server_is_absent_with_a_failure(self, tmp_path: Path) -> None:
         """ask=None on a cache miss."""

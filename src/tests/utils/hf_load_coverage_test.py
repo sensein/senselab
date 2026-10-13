@@ -105,6 +105,7 @@ REVIEWED_SUBPROCESS = {
     # directory as the worker's load target, so the worker runs under HF_HUB_OFFLINE with no
     # per-call Hub version check. Checked the same way subprocess_backend.py's gliner branch was.
     "text/tasks/pii_detection/redaction_review.py",
+    "text/tasks/pii_detection/redaction_review_vllm.py",
     # scene-quality / ASR (branch-only, #536)
     "audio/tasks/scene_quality/brouhaha.py",
     "audio/tasks/speech_to_text/crisperwhisper.py",
@@ -174,11 +175,11 @@ def _inprocess_load_files() -> dict[str, set[str]]:
 
 
 def _subprocess_worker_files() -> set[str]:
-    """Files that launch a subprocess whose worker string loads an HF model."""
+    """Files that launch a subprocess, one-shot or served, whose worker string loads an HF model."""
     found: set[str] = set()
     for py in _iter_src_files():
         txt = py.read_text()
-        if "subprocess.run(" not in txt and "subprocess.Popen(" not in txt:
+        if not any(launch in txt for launch in ("subprocess.run(", "subprocess.Popen(", "serve_in_venv(")):
             continue
         try:
             tree = ast.parse(txt)

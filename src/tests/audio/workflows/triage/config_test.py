@@ -262,7 +262,6 @@ class TestTheV2OpenKeys:
         "windows.hear.label_thresholds",
         "taxonomy.speech_labels",
         "routing.hint_branch_map",
-        "speech.enrollment_model",
         "speech.separation_sound_class",
         "speech.nontarget.level_db",
         "speech.nontarget.tilt_db_per_octave",

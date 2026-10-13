@@ -13,8 +13,11 @@ from senselab.audio.data_structures import Audio
 from senselab.audio.workflows.triage.nodes.common import (
     HOST_ENV_PACKAGES,
     STREAM_SUFFIX,
+    bound_word,
+    bound_word_extent,
     capture_environments,
     clamp_extent,
+    clamp_to_recording,
     consensus_words,
     find_measurement,
     host_environment,
@@ -375,6 +378,51 @@ class TestClampExtent:
         assert "1.1" in str(raised.value) and "1.0" in str(raised.value)
 
 
+class TestStoredWordOverrun:
+    """A stored point window past the decoded audio is clamped on read; an overrun no window explains still raises."""
+
+    DURATION = 4.8298125
+
+    @staticmethod
+    def _seed(store: ProvStore, duration_s: float, extent: tuple[float, float]) -> None:
+        store.entity(prov_type="stream", extent=(0.0, duration_s), attributes={"name": "plain"})
+        store.entity(prov_type="word", extent=extent, attributes={"text": "w", "index": 0, "bracketed": False})
+
+    def test_a_stored_overrun_of_013_s_is_clamped_by_the_reader(self, store: ProvStore) -> None:
+        """A consensus written before the writer bounded its windows replays without re-deriving it."""
+        self._seed(store, self.DURATION, (self.DURATION - 0.19, self.DURATION + 0.13))
+        [word] = consensus_words(store)
+        assert word.extent == pytest.approx((self.DURATION - 0.19, self.DURATION))
+        assert store.entities("word")[0].extent == pytest.approx((self.DURATION - 0.19, self.DURATION + 0.13))
+
+    def test_the_clamped_extent_passes_the_slicing_check(self) -> None:
+        """What SPEECH did with the stored extent raised; the bounded one slices."""
+        audio = TestClampExtent._audio(seconds=1.0)
+        with pytest.raises(ValueError, match="past the"):
+            clamp_extent((0.7, 1.13), audio)
+        assert clamp_extent(bound_word_extent((0.7, 1.13), 1.0), audio) == (0.7, 1.0)
+
+    def test_a_large_overrun_still_raises(self, store: ProvStore) -> None:
+        """Past the end by more than a point window is an inconsistency: the reader leaves it to be refused."""
+        with pytest.raises(ValueError, match="past the"):
+            bound_word_extent((4.0, self.DURATION + 0.5), self.DURATION)
+        self._seed(store, self.DURATION, (4.0, self.DURATION + 0.5))
+        [word] = consensus_words(store)
+        assert word.extent == pytest.approx((4.0, self.DURATION + 0.5))
+        with pytest.raises(ValueError, match="past the"):
+            bound_word(word, self.DURATION)
+
+    def test_a_start_past_the_end_raises(self) -> None:
+        """An inverted extent is invalid whatever the duration."""
+        with pytest.raises(ValueError, match="past its end"):
+            bound_word_extent((2.0, 1.0), 5.0)
+
+    def test_without_a_stored_duration_the_extent_is_returned_as_stored(self, store: ProvStore) -> None:
+        """No ``plain`` stream, no bound to apply."""
+        store.entity(prov_type="word", extent=(0.0, 9.0), attributes={"text": "w", "index": 0, "bracketed": False})
+        assert consensus_words(store)[0].extent == pytest.approx((0.0, 9.0))
+
+
 class TestPathAttributes:
     """What a node records about a file it has just written."""
 
@@ -393,3 +441,13 @@ class TestPathAttributes:
         """A write that did not land records the reason, not a null and not an exception."""
         attributes = path_attributes("derivatives/gone.npz", tmp_path)
         assert attributes == {"path": "derivatives/gone.npz", CHECKSUM_UNRESOLVED_KEY: "file not found"}
+
+
+def test_clamp_to_recording_bounds_an_extent_past_the_shortest_stream() -> None:
+    """r37: 83 airway extents ended up to 5 ms past their recording; the written span stops at its end."""
+    store = ProvStore(run_id="clamp")
+    assert clamp_to_recording(store, (0.0, 0.405)) == (0.0, 0.405)
+    store.entity(prov_type="stream", extent=(0.0, 0.399), attributes={"name": "recording", "path": "r.wav"})
+    store.entity(prov_type="stream", extent=(0.0, 0.4), attributes={"name": "plain", "path": "p.flac"})
+    assert clamp_to_recording(store, (-0.01, 0.405)) == (0.0, 0.399)
+    assert clamp_to_recording(store, (0.5, 0.6)) == (0.5, 0.6)

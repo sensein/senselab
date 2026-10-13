@@ -178,7 +178,7 @@ def test_the_residue_and_a_declined_scan_are_in_the_popup_not_on_the_card() -> N
         "task": "free-speech-1",
         "stem": "p_s_task-free-speech-1",
         "fam": "free-speech",
-        "rel": "release_without_redaction",
+        "rel": "as_is",
         "rg": None,
         "why": "",
         "rwhy": "",
@@ -283,7 +283,7 @@ def test_recording_record_reads_the_live_generation(tmp_path: Path) -> None:
         _entity(
             "verdict-old",
             "verdict",
-            {"node": "VERDICT", "release": "release_with_redaction", "declared_family": "free-speech"},
+            {"node": "VERDICT", "release": "redacted", "declared_family": "free-speech"},
         ),
         {"record": "relation", "relation": "wasInvalidatedBy", "source": "verdict-old", "target": "act-replay"},
         _verdict("withheld"),
@@ -302,10 +302,20 @@ def test_recording_record_reads_the_live_generation(tmp_path: Path) -> None:
 
 def test_recording_record_skips_a_family_outside_the_pattern(tmp_path: Path) -> None:
     """An item-list task under the same tree is not a free response."""
-    run_root = _store(
-        tmp_path, "sub-aaa_ses-bbb_task-animal-fluency", [_verdict("release_with_redaction", family="animal-fluency")]
-    )
+    run_root = _store(tmp_path, "sub-aaa_ses-bbb_task-animal-fluency", [_verdict("redacted", family="animal-fluency")])
     assert page.recording_record(run_root, page.free_response_families()) is None
+
+
+def test_recording_record_with_no_family_filter_keeps_an_airway_family(tmp_path: Path) -> None:
+    """``families=None`` keeps any declared family: an airway task with consensus words carries them."""
+    stem = "sub-aaa_ses-bbb_task-respiration-and-cough-breath"
+    records = [_word(0, "one"), _word(1, "two"), _verdict("as_is", family="respiration-and-cough-breath")]
+    run_root = _store(tmp_path, stem, records)
+    assert page.recording_record(run_root, page.free_response_families()) is None
+    row = page.recording_record(run_root, None)
+    assert row is not None
+    assert row["fam"] == "respiration-and-cough-breath"
+    assert [w[0] for w in row["w"]] == ["one", "two"]
 
 
 def test_recording_record_builds_one_mark_with_its_detector(tmp_path: Path) -> None:
@@ -401,15 +411,13 @@ def test_finding_key_is_stable_and_position_independent() -> None:
 
 def test_extract_writes_one_line_per_recording(tmp_path: Path) -> None:
     """The sweep keeps the free-response recordings and reports its counts."""
-    _store(tmp_path, _FAMILY_STEM, [_word(0, "one"), _verdict("release_with_redaction")])
+    _store(tmp_path, _FAMILY_STEM, [_word(0, "one"), _verdict("redacted")])
     _store(
         tmp_path,
         "sub-ccc_ses-ddd_task-cinderella-story",
-        [_word(0, "two"), _verdict("release_without_redaction", "x", "cinderella-story")],
+        [_word(0, "two"), _verdict("as_is", "x", "cinderella-story")],
     )
-    _store(
-        tmp_path, "sub-eee_ses-fff_task-animal-fluency", [_verdict("release_with_redaction", family="animal-fluency")]
-    )
+    _store(tmp_path, "sub-eee_ses-fff_task-animal-fluency", [_verdict("redacted", family="animal-fluency")])
     report = page.extract(tmp_path, tmp_path / "out.jsonl", workers=1)
     assert report["candidates"] == 2
     assert report["participants"] == 2
@@ -529,7 +537,7 @@ def _row(participant: str, **rest: Any) -> dict[str, Any]:  # noqa: ANN401 -- mi
         "task": "free-speech-1",
         "stem": f"{participant}_ses-b_task-free-speech-1",
         "fam": "free-speech",
-        "rel": "release_with_redaction",
+        "rel": "redacted",
         "rg": None,
         "tri": "pass",
         "why": "",
@@ -568,7 +576,7 @@ def test_render_is_self_contained_and_groups_by_participant(tmp_path: Path) -> N
                     "sub-ccc",
                     task="cinderella-story",
                     fam="cinderella-story",
-                    rel="release_without_redaction",
+                    rel="as_is",
                     rg="the scan ran over the transcript and found nothing to redact",
                     w=[["two", 0, -1]],
                     ch=3,
@@ -708,11 +716,12 @@ def _determined_store(tmp_path: Path) -> Path:
             "declared_family": "cinderella-story",
             "why": "folded the node verdicts",
             "llm_redaction": {
-                "status": "nothing_to_read",
+                "status": "bypassed",
+                "bypass_reason": "task_content_only",
                 "iterations": 0,
                 "model_id": "",
                 "flagged": [],
-                "failure": "none",
+                "failure": None,
             },
             "ran": {"REDACT": "completed", "SPEECH": "completed", "VOICE": "skipped"},
             "critical_absences": {},
@@ -761,7 +770,8 @@ def test_determination_records_who_decided_and_what_never_ran(tmp_path: Path) ->
     determination = row["d"]
     assert determination["redact"]["outcome"] == "fail"
     assert determination["redact"]["why"] == "pii survived"
-    assert determination["llm"]["status"] == "nothing_to_read"
+    assert determination["llm"]["status"] == "bypassed"
+    assert determination["llm"]["bypass_reason"] == "task_content_only"
     assert determination["ran"]["VOICE"] == "skipped"
     assert [gate["gate"] for gate in determination["gates"]["applied"]] == ["response_min_s"]
     assert set(determination["gates"]["bounds"]) == {"response_min_s", "verbatim_overlap_max", "echo_overlap_max"}
@@ -803,7 +813,7 @@ def test_pooled_determination_keeps_the_per_recording_gate_reading() -> None:
     determination = {
         "redact": {"outcome": "fail", "why": "pii survived"},
         "nodes": [{"node": "REDACT", "outcome": "fail", "why": "pii survived"}],
-        "llm": {"status": "nothing_to_read"},
+        "llm": {"status": "bypassed", "bypass_reason": "no_words"},
         "gates": {
             "applied": [
                 {
@@ -838,9 +848,9 @@ def test_pooled_determination_keeps_the_per_recording_gate_reading() -> None:
 
 
 def test_the_page_keeps_the_three_non_readings_apart() -> None:
-    """Switched off, nothing to review, and could-not-load are three different silences."""
+    """Switched off, bypassed, and could-not-load are three different silences."""
     assert "Switched off." in page._SCRIPT
-    assert "There was no text to read." in page._SCRIPT
+    assert "Reviewer bypassed" in page._SCRIPT
     assert "It tried and could not load." in page._SCRIPT
     assert "It reached no conclusion about this recording." in page._SCRIPT
 
@@ -867,7 +877,7 @@ def test_render_carries_the_determination_payload() -> None:
             d={
                 "redact": {"outcome": "fail", "why": "pii survived"},
                 "nodes": [{"node": "REDACT", "outcome": "fail", "why": "pii survived"}],
-                "llm": {"status": "nothing_to_read"},
+                "llm": {"status": "bypassed", "bypass_reason": "no_words"},
                 "gates": {"applied": [], "flagging": [], "bounds": {}, "layers": {}, "group": ""},
                 "ran": {"REDACT": "completed"},
                 "absences": [],
@@ -921,17 +931,22 @@ def test_the_page_separates_every_reviewer_state() -> None:
     assert "It ran and flagged nothing" in page._SCRIPT
     assert "It flagged " in page._SCRIPT
     assert "No annotation was recorded." in page._SCRIPT
-    assert page.LLM_STATES == ("disabled", "nothing_to_read", "absent", "clean", "flagged")
+    assert page.LLM_STATES == ("disabled", "bypassed", "absent", "clean", "flagged")
     assert page.LLM_RAN == ("absent", "clean", "flagged")
 
 
-def test_nothing_to_read_means_an_empty_transcript_and_the_old_sentence_is_gone() -> None:
-    """The reviewer no longer comes through the detectors, so its old sentence is false twice over."""
+def test_bypassed_names_its_reason_and_the_old_sentences_are_gone() -> None:
+    """The reviewer no longer comes through the detectors, and an empty residue is a bypass with a reason."""
     assert "could not have run" not in page._SCRIPT
     assert "REDACT withholds before the reviewer is reached" not in page._SCRIPT
     assert "the detectors found nothing, so there was no redacted text to read back" not in page._SCRIPT
     assert "not_run" not in page.LLM_STATES
-    assert "transcript carries no words, so there was nothing to read back" in page._SCRIPT
+    assert "nothing_to_read" not in page._SCRIPT
+    assert "Reviewer bypassed" in page._SCRIPT
+    for reason in ("no_words", "non_lexical_only", "task_content_only", "non_lexical_task"):
+        assert f"{reason}:" in page._SCRIPT
+    assert "unscanned:'the transcript" not in page._SCRIPT
+    assert "llm.absent_reason==='pii_scan_missing'" in page._SCRIPT
 
 
 def test_a_clean_reading_beside_a_failure_is_named_a_disagreement() -> None:
@@ -1014,8 +1029,8 @@ def test_the_release_decision_is_the_axis_own_vocabulary() -> None:
     """
     assert [value for value, _, _, _ in page.RELEASE_DECISIONS] == [
         "withheld",
-        "release_with_redaction",
-        "release_without_redaction",
+        "redacted",
+        "as_is",
     ]
     assert set(value for value, _, _, _ in page.RELEASE_DECISIONS) <= set(page.RELEASE_ORDER)
 
@@ -1076,7 +1091,7 @@ def test_the_release_decision_reaches_the_filters_and_the_progress_line() -> Non
     corpus.add(_row("sub-a"))
     document = page.render(corpus, "Review")
     assert 'id="dec"' in document
-    for value in ("decided", "undecided", "withheld", "release_without_redaction", "release_with_redaction"):
+    for value in ("decided", "undecided", "withheld", "as_is", "redacted"):
         assert f'<option value="{value}">' in document
     assert "rows given a release decision" in page._SCRIPT
 
@@ -1130,7 +1145,7 @@ def test_every_progress_term_counts_the_cards_on_this_page() -> None:
 def test_the_decided_row_stripe_is_legible_in_both_themes() -> None:
     """A 3px stripe at the light theme's value is all but invisible on the dark card."""
     dark = page._STYLE.split("@media (prefers-color-scheme:dark)")[1]
-    for value in ("release_without_redaction", "release_with_redaction", "withheld"):
+    for value in ("as_is", "redacted", "withheld"):
         assert f'.rec[data-dec="{value}"]' in dark, value
 
 
@@ -1398,7 +1413,7 @@ def test_census_counts_what_a_rebuild_is_judged_by(tmp_path: Path) -> None:
                     f=[_mark("k1", ["PERSON"], ["presidio"], 0, 1, brk=1)],
                     d={"llm": {"status": "disabled"}},
                 ),
-                _census_row("sub-b", rel="release_with_redaction", d={"llm": {"status": "clean"}}),
+                _census_row("sub-b", rel="redacted", d={"llm": {"status": "clean"}}),
             ]
         )
         + "\n"
@@ -1433,7 +1448,7 @@ def test_compare_reports_each_count_in_both_with_its_delta(tmp_path: Path) -> No
 
 def test_an_extract_carries_its_schema_version(tmp_path: Path) -> None:
     """The header is what lets the page know which graph the rows came from."""
-    _store(tmp_path, _FAMILY_STEM, [_word(0, "one"), _verdict("release_with_redaction")])
+    _store(tmp_path, _FAMILY_STEM, [_word(0, "one"), _verdict("redacted")])
     out = tmp_path / "out.jsonl"
     report = page.extract(tmp_path, out, workers=1)
     assert report["version"] == page.EXTRACT_VERSION
@@ -1542,7 +1557,7 @@ def test_a_mark_matched_by_the_stimulus_reads_as_matched(tmp_path: Path) -> None
             [0, 1],
         ),
         *_label("assertion-1", "NAME", "word-0"),
-        _verdict("release_with_redaction", family="cinderella-story"),
+        _verdict("redacted", family="cinderella-story"),
     ]
     run_root = _store(tmp_path, "sub-aaa_ses-bbb_task-cinderella-story", records)
     row = page.recording_record(run_root, page.free_response_families())
@@ -1693,7 +1708,7 @@ def test_the_marks_are_the_ledgers_spans_each_with_its_state(tmp_path: Path) -> 
             ],
             name_release_proposed=["Alice"],
         ),
-        _verdict("release_with_redaction"),
+        _verdict("redacted"),
     ]
     row = page.recording_record(_store(tmp_path, _FAMILY_STEM, records), page.free_response_families())
     assert row is not None
@@ -1740,7 +1755,7 @@ def test_a_word_released_by_kind_is_a_green_labelled_mark(tmp_path: Path) -> Non
             proposals=[],
             counts={"released_by_kind_n": 2},
         ),
-        _verdict("release_without_redaction"),
+        _verdict("as_is"),
     ]
     row = page.recording_record(_store(tmp_path, _FAMILY_STEM, records), page.free_response_families())
     assert row is not None
@@ -1783,7 +1798,7 @@ def test_a_condition_over_a_detector_mask_is_released(tmp_path: Path) -> None:
                 }
             ],
         ),
-        _verdict("release_without_redaction"),
+        _verdict("as_is"),
     ]
     row = page.recording_record(_store(tmp_path, _FAMILY_STEM, records), page.free_response_families())
     assert row is not None
@@ -1803,7 +1818,7 @@ def test_a_word_two_detectors_mark_differently_is_two_single_category_marks(tmp_
         _word(0, "Acme"),
         *_label("assertion-1", "PERSON", "word-0"),
         *_label("assertion-2", "ORG", "word-0"),
-        _verdict("release_without_redaction"),
+        _verdict("as_is"),
     ]
     row = page.recording_record(_store(tmp_path, _FAMILY_STEM, records), page.free_response_families())
     assert row is not None
@@ -1847,7 +1862,7 @@ def test_a_detector_mark_on_a_task_word_is_not_drawn(tmp_path: Path) -> None:
         _word(2, "Maria"),
         *_label("assertion-1", "PERSON", "word-1"),
         *_label("assertion-2", "PERSON", "word-2"),
-        _verdict("release_without_redaction"),
+        _verdict("as_is"),
     ]
     row = page.recording_record(_store(tmp_path, _FAMILY_STEM, records), page.free_response_families())
     assert row is not None
@@ -1873,7 +1888,7 @@ def test_a_card_with_no_consensus_words_shows_one_recogniser_s_stream(tmp_path: 
                 "words": [{"text": "When", "start": 1.4, "end": 1.6}, {"text": "the", "start": 1.6, "end": 1.7}],
             },
         ),
-        _verdict("not_assessed"),
+        _verdict("withheld"),
     ]
     row = page.recording_record(_store(tmp_path, _FAMILY_STEM, records), page.free_response_families())
     assert row is not None

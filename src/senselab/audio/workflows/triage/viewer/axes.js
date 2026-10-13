@@ -14,10 +14,12 @@ var SchemaAxes = (function () {
     'breath_coverage_fraction',
     'breath_peak_over_floor_db',
     'cough_peak_over_floor_db',
-    'ddk_ppg_period_dispersion',
-    'ddk_repetition_count_from_ppg_decode',
+    'ddk_cycle_rate_hz',
+    'ddk_events_found',
+    'ddk_identity',
+    'ddk_period_cv',
     'ddk_syllable_rate_from_envelope_modulation_hz',
-    'ddk_syllable_rate_from_ppg_decode_hz',
+    'ddk_syllable_rate_hz',
     'expected_sequence_repeat_fraction',
     'extent_dominant_speaker_share',
     'extent_secondary_source_s',
@@ -69,7 +71,6 @@ var SchemaAxes = (function () {
     ['dominant_speaker_share_min', 'extent_dominant_speaker_share', 'at_least', null],
     ['items_min', 'items_produced', 'at_least', null],
     ['events_min', 'airway_events_found', 'at_least', null],
-    ['repetitions_min', 'ddk_repetitions_found', 'at_least', null],
     ['instructed_count_min_fraction', 'instructed_count_fraction', 'at_least', null],
     ['repeat_overlap_min', null, 'at_least', null],
     ['echo_overlap_max', null, 'at_most', null],
@@ -83,8 +84,8 @@ var SchemaAxes = (function () {
 
   // Orders for the closed vocabularies. Anything not listed orders by frequency.
   var ORDERINGS = {
-    verdict: ['pass', 'flag', 'rerun', 'discard'],
-    release: ['release_without_redaction', 'release_with_redaction', 'withheld', 'discarded', 'not_assessed'],
+    verdict: ['pass', 'review', 'discard'],
+    release: ['as_is', 'redacted', 'withheld'],
     conformance_airway: ['true', 'undetermined', 'false'],
     conformance_speech: ['true', 'undetermined', 'false'],
     conformance_voice: ['true', 'undetermined', 'false'],
@@ -196,6 +197,7 @@ var SchemaAxes = (function () {
     // REVIEW's reading. It decides nothing itself, but VERDICT weights both axes by it, so a row
     // that cannot show what the reviewer read cannot explain the verdict beside it.
     column({ name: 'llm_status', kind: 'categorical', group: 'review', nullMeans: 'REVIEW left no annotation' }),
+    column({ name: 'llm_bypass_reason', kind: 'categorical', group: 'review', nullMeans: 'REVIEW was not bypassed' }),
     column({ name: 'llm_speakers', kind: 'categorical', group: 'review', nullMeans: 'the reader answered none' }),
     column({
       name: 'llm_original_judgment', kind: 'categorical', group: 'review',
@@ -237,6 +239,7 @@ var SchemaAxes = (function () {
     // SECOND_OPINION: a decision model's probabilities over the same text, and where they
     // confidently disagree with the reviewer.
     column({ name: 'second_opinion_status', kind: 'categorical', group: 'review', nullMeans: 'SECOND_OPINION wrote nothing' }),
+    column({ name: 'second_opinion_bypass_reason', kind: 'categorical', group: 'review', nullMeans: 'SECOND_OPINION was not bypassed' }),
     column({
       name: 'second_opinion_other_voice_p', kind: 'numeric', group: 'review',
       label: 'second opinion · P(other voice)', nullMeans: 'no ok opinion',
@@ -288,7 +291,7 @@ var SchemaAxes = (function () {
     MATRIX_MEASUREMENTS.forEach(function (n) {
       out.push(column({
         name: 'm_' + n, kind: 'matrix', group: 'measurement', assignable: false,
-        reason: 'a matrix, repetitions by syllable position, flattened row-major — no single number to place on an axis',
+        reason: 'a matrix, task events by template position, flattened row-major — no single number to place on an axis',
         countColumn: 'm_' + n + '_n',
       }));
       out.push(column({ name: 'm_' + n + '_n', kind: 'count', group: 'measurement count' }));
@@ -482,6 +485,25 @@ var SchemaAxes = (function () {
   var CATALOGUE = IDENTITY.concat(GATE_SUMMARY, SPEAKER_AND_LEVEL, EVALUATION, gateColumns(), measurementColumns());
   var BY_NAME = {};
   CATALOGUE.forEach(function (c) { BY_NAME[c.name] = c; });
+
+  /**
+   * Add columns a page carries beyond recording_vectors, so the corpus view and the facets can read
+   * them. A name already in the catalogue is left as it is.
+   *
+   * @param {Array<Object>} specs column specs, in the shape `column` takes.
+   * @returns {Array<Object>} the columns added.
+   */
+  function register(specs) {
+    var added = [];
+    specs.forEach(function (spec) {
+      if (BY_NAME[spec.name]) return;
+      var c = column(spec);
+      CATALOGUE.push(c);
+      BY_NAME[c.name] = c;
+      added.push(c);
+    });
+    return added;
+  }
 
   // Owner-directed: participant, task, verdict first. The remaining seven are ranked by
   // discrimination — separation times decision-relevance, under a redundancy cut and a
@@ -680,6 +702,7 @@ var SchemaAxes = (function () {
     MAX_AXES: MAX_AXES,
     KEY_CHARS: KEY_CHARS,
     categoryLabel: categoryLabel,
+    register: register,
     corpusColumns: corpusColumns,
     readValue: readValue,
     summarise: summarise,

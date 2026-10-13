@@ -526,18 +526,19 @@ class TestThePhonationTracks:
 class TestADerivationThatCannotApply:
     """An unvoiced recording has no F0 range. That is the answer, not a failure of the pass."""
 
-    def test_a_recording_with_no_pitch_records_an_absence_and_not_an_error(
+    def test_a_recording_with_no_pitch_is_tracked_over_the_search_range(
         self, corpus: Callable[..., tuple[Path, list[Path]]], tmp_path: Path
     ) -> None:
-        """613 rows of the last corpus pass were this, and every array task exited nonzero."""
+        """No range derives, so the tracks run over the wide search and record that they did."""
         manifest, roots = corpus(1, voiced=False)
 
         assert _run(manifest) == 0
 
         record = _log(tmp_path)[0]
-        assert record[PHONATION_TRACKS].startswith("absent: F0RangeUnavailable")
+        assert not str(record[PHONATION_TRACKS]).startswith("absent")
         assert record["status"] == "ok"
-        assert find_measurement(_store_of(roots[0]), PHONATION_TRACKS) is None
+        tracks = find_measurement(_store_of(roots[0]), PHONATION_TRACKS)
+        assert tracks is not None and tracks.attributes["f0_range_from"] == "search"
 
     def test_the_other_derivations_still_land_on_that_recording(
         self, corpus: Callable[..., tuple[Path, list[Path]]], tmp_path: Path

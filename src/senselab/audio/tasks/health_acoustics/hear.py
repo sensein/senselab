@@ -95,6 +95,7 @@ from __future__ import annotations
 import atexit
 import json
 import queue
+import shutil
 import subprocess
 import tempfile
 import threading
@@ -105,7 +106,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
-import soundfile as sf
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.preprocessing import resample_audios
@@ -117,6 +117,7 @@ from senselab.utils.portable_audio_io import write_audio
 from senselab.utils.subprocess_venv import (
     _clean_subprocess_env,
     ensure_venv,
+    stage_portable_audio_io,
     venv_python,
 )
 
@@ -236,14 +237,14 @@ def signature_of(tf, loaded, saved_model_dir):
     return entry[1], entry[2], entry[3]
 
 
-def handle(np, sf, tf, loaded, request):
+def handle(np, read_audio, tf, loaded, request):
     win = int(request["window_samples"])
     fn, input_name, static_batch = signature_of(tf, loaded, request["saved_model_dir"])
     batch = 1 if static_batch is not None else max(1, int(request.get("batch_size", 1)))
 
     results = []
     for job in request["jobs"]:
-        x, sr = sf.read(job["wav"], dtype="float32", always_2d=False)
+        x, sr = read_audio(job["wav"], channels_first=False)
         if x.ndim > 1:
             x = x.mean(axis=1)
         starts = [int(s) for s in job["starts"]]
@@ -275,8 +276,10 @@ def handle(np, sf, tf, loaded, request):
 def main():
     started = time.monotonic()
     import numpy as np
-    import soundfile as sf
     import tensorflow as tf
+
+    sys.path.insert(0, sys.argv[1])
+    from portable_audio_io import read_audio
 
     loaded = {}
     emit({"ready": True, "load_s": round(time.monotonic() - started, 3)})
@@ -290,7 +293,7 @@ def main():
         if request.get("stop"):
             return
         try:
-            emit(handle(np, sf, tf, loaded, request))
+            emit(handle(np, read_audio, tf, loaded, request))
         except Exception as exc:
             emit({"error": {"type": type(exc).__name__, "message": str(exc)}})
 
@@ -323,6 +326,7 @@ class _HearWorker:
         self.device_type = device_type
         self.load_s = 0.0
         self._process: Optional["subprocess.Popen[str]"] = None
+        self._io_dir: Optional[str] = None
         self._replies: "queue.Queue[Dict[str, Any]]" = queue.Queue()
         self._noise: "deque[str]" = deque(maxlen=40)
 
@@ -342,8 +346,9 @@ class _HearWorker:
             # request is honoured, and the environment is fixed when the process starts.
             env["CUDA_VISIBLE_DEVICES"] = "-1"
         began = time.monotonic()
+        self._io_dir = stage_portable_audio_io(tempfile.mkdtemp(prefix="senselab-io-"))
         self._process = subprocess.Popen(  # noqa: S603 — the interpreter is this repo's own venv
-            [venv_python(venv_dir), "-c", _HEAR_WORKER],
+            [venv_python(venv_dir), "-c", _HEAR_WORKER, self._io_dir],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -380,6 +385,9 @@ class _HearWorker:
     def close(self) -> None:
         """End the worker, releasing its models. Safe to call on a worker that never started."""
         process, self._process = self._process, None
+        io_dir, self._io_dir = self._io_dir, None
+        if io_dir is not None:
+            shutil.rmtree(io_dir, ignore_errors=True)
         if process is None:
             return
         try:

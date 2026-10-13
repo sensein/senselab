@@ -3,7 +3,7 @@
 import inspect
 import random
 from dataclasses import fields, replace
-from typing import Sequence
+from typing import Any, Sequence, cast
 
 import pytest
 
@@ -14,13 +14,18 @@ from senselab.audio.workflows.triage.consensus import (
     SourceHypothesis,
     align_sources,
     bracketed_form,
+    degenerate_parameters,
+    degenerate_token,
     is_bracketed,
     isotonic_median_fit,
+    located_span,
+    missing_span,
     rebracket,
     render_transcript,
     vocabulary_key,
     word_attributes,
     word_from_attributes,
+    word_timing_parameters,
 )
 
 
@@ -210,7 +215,8 @@ class TestTheRepetitionFinding:
         assert all(later >= earlier for earlier, later in zip(offsets, offsets[1:]))
         assert all(word.extent[0] <= word.extent[1] for word in consensus.words)
         assert all(
-            word.temporal_uncertainty_s >= max(word.onset_spread_s, word.offset_spread_s) for word in consensus.words
+            (word.temporal_uncertainty_s or 0.0) >= max(word.onset_spread_s, word.offset_spread_s)
+            for word in consensus.words
         )
         assert [word.index for word in consensus.words] == list(range(len(consensus.words)))
 
@@ -334,12 +340,28 @@ class TestSourceOrderAndBrackets:
 class TestGuardsAndWordlessSources:
     """R-2 and the wordless cases."""
 
-    def test_fewer_than_two_sources_raise_and_the_message_names_the_count(self) -> None:
-        """Test 13."""
-        with pytest.raises(LookupError, match=r"found 1: \['a'\]"):
-            _align(_source("a", "hello"))
-        with pytest.raises(LookupError, match=r"found 0: \[\]"):
+    def test_no_source_raises(self) -> None:
+        """Test 13: nothing to align."""
+        with pytest.raises(LookupError, match="found none"):
             align_sources([], onomatopoeic=set())
+
+    def test_a_single_hypothesis_is_a_single_reading_transcript(self) -> None:
+        """One recognizer survived: every word an insertion with no agreement, and the stream says so."""
+        consensus = _align(_source("a", "hello there"))
+        assert _texts(consensus) == ["hello", "there"]
+        assert _outcomes(consensus) == ["insertion", "insertion"]
+        assert [word.agreement for word in consensus.words] == [None, None]
+        assert consensus.provenance["single_hypothesis"] is True
+        assert consensus.provenance["n_sources"] == 1
+        stored = word_attributes(consensus.words[0])
+        assert stored["agreement"] is None
+        back = word_from_attributes(stored, consensus.words[0].extent)
+        assert back == consensus.words[0]
+        assert rebracket(back, onomatopoeic=set(), n_sources=1).word == back
+
+    def test_two_hypotheses_are_not_single(self) -> None:
+        """The flag is the count of hypotheses, not of words."""
+        assert _align(_source("a", "hi"), _source("b", "hi")).provenance["single_hypothesis"] is False
 
     def test_a_wordless_source_still_counts(self) -> None:
         """Test 14."""
@@ -381,6 +403,8 @@ class TestRenderingAndProvenance:
             "source_order",
             "sources",
             "n_sources",
+            "single_hypothesis",
+            "degenerate_n",
             "reference_source",
             "n_words",
             "outcomes",
@@ -389,9 +413,16 @@ class TestRenderingAndProvenance:
             "time_fit",
             "n_words_time_shifted",
             "max_time_shift_s",
+            "version",
+            "point_width_s",
+            "untimed_members",
+            "unlocated_n",
+            "unconfirmed_n",
+            "aligner_failed",
         }
         assert consensus.provenance["algorithm"] == "star_sequence_alignment"
-        assert consensus.provenance["time_fit"] == "weighted_isotonic_median"
+        assert consensus.provenance["time_fit"] == "weighted_isotonic_median_over_located_spans"
+        assert consensus.provenance["version"] == 2
         assert consensus.provenance["source_order"] == "lexicographic_by_source_name"
         assert consensus.provenance["outcomes"] == {"agreement": 1, "variant": 0, "insertion": 0}
         assert set(consensus.provenance["sources"][0]) == {"name", "n_words", "timestamp_source", "timestamp_model"}
@@ -403,7 +434,7 @@ class TestRenderingAndProvenance:
         assert [f.name for f in fields(Consensus)] == ["words", "provenance"]
         names = {f.name for f in fields(ConsensusWord)}
         assert not any("slot" in name or "span" in name for name in names)
-        assert set(inspect.signature(align_sources).parameters) == {"sources", "onomatopoeic"}
+        assert set(inspect.signature(align_sources).parameters) == {"sources", "onomatopoeic", "duration_s"}
 
 
 class TestBracketingDoesNotMoveTheAlignment:
@@ -505,3 +536,154 @@ class TestReadingOneStoredColumnAgain:
         mixed = _align(_timed("a", [("[KHH]", 0.1, 0.2)]), _timed("b", [("khh", 0.11, 0.21)])).words[0]
         assert rebracket(mixed, onomatopoeic=set(), n_sources=2).bracket_overrides == 1
         assert rebracket(mixed, onomatopoeic={"khh"}, n_sources=2).bracket_overrides == 0
+
+
+class TestDegenerateRecognizerRuns:
+    """A decoder loop is marked, so readers treat it as unreliable rather than as content."""
+
+    BOUNDS: dict[str, Any] = {"chars_min": 60, "unit_chars_max": 8, "repeats_min": 10.0}
+
+    def test_a_long_or_looping_token_is_degenerate(self) -> None:
+        """One unbroken token past the length bound, or one unit repeated past the repeat bound."""
+        assert degenerate_token("Twi" + "twi" * 30, **self.BOUNDS)
+        assert degenerate_token("-".join("AWZ" * 12), **self.BOUNDS)
+        assert degenerate_token("x" * 60, **self.BOUNDS)
+
+    def test_ordinary_words_and_short_stutters_are_not(self) -> None:
+        """A stutter of a few repeats is the participant's speech, not a loop."""
+        for token in ("hello", "p-p-p-paper", "hahaha", "K-N-O-Z-D", "antidisestablishmentarianism", ""):
+            assert not degenerate_token(token, **self.BOUNDS)
+
+    def test_the_packaged_bounds_load(self) -> None:
+        """``data/asr_degenerate.yaml`` carries the three bounds."""
+        assert set(degenerate_parameters()) == {"chars_min", "unit_chars_max", "repeats_min"}
+
+    def test_a_column_every_reading_of_which_loops_is_degenerate(self) -> None:
+        """Both recognizers' readings are runs: the word is degenerate and round-trips."""
+        loop = "awz" * 12
+        a = replace(_source("a", f"one {loop}"), degenerate=frozenset({1}))
+        b = replace(_source("b", f"one {loop}"), degenerate=frozenset({1}))
+        consensus = _align(a, b)
+        assert [word.degenerate for word in consensus.words] == [False, True]
+        assert consensus.provenance["degenerate_n"] == 1
+        stored = word_attributes(consensus.words[1])
+        assert stored["degenerate"] is True
+        assert "degenerate" not in word_attributes(consensus.words[0]), "an ordinary word keeps its stored shape"
+        assert word_from_attributes(stored, consensus.words[1].extent) == consensus.words[1]
+
+    def test_a_reading_one_recognizer_looped_does_not_win_the_column(self) -> None:
+        """Where one recognizer read a word and the other a loop, the word is the surface."""
+        a = replace(_timed("a", [("zzzzzzzzzzzz", 0.0, 0.4)]), degenerate=frozenset({0}))
+        b = _timed("b", [("table", 0.0, 0.4)])
+        [word] = _align(a, b).words
+        assert word.text == "table"
+        assert word.degenerate_sources == ("a",)
+        assert word.degenerate is False
+
+
+class TestUntimedSpans:
+    """A missing span stays out of the time fit; a point span is a location; a lone untimed reading is unconfirmed."""
+
+    WIDTH = 0.32
+
+    def test_a_missing_span_is_none_zero_or_inverted_and_a_point_is_not(self) -> None:
+        """``(0, 0)``, None and an end before its start carry no timing; a point past zero does."""
+        assert missing_span(None, 1.0) and missing_span(0.0, 0.0) and missing_span(2.0, 1.0)
+        assert missing_span(float("nan"), 1.0)
+        assert not missing_span(1.0, 1.0) and not missing_span(0.0, 0.4)
+
+    def test_a_point_span_is_read_over_the_fitted_width(self) -> None:
+        """A point is centred in a window of ``data/word_timing.yaml``'s width, floored at zero."""
+        assert word_timing_parameters()["point_width_s"] == pytest.approx(self.WIDTH)
+        assert located_span(2.0, 2.0) == pytest.approx((2.0 - self.WIDTH / 2, 2.0 + self.WIDTH / 2))
+        assert located_span(0.05, 0.05) == pytest.approx((0.0, 0.05 + self.WIDTH / 2))
+        assert located_span(1.0, 1.5) == (1.0, 1.5)
+        assert located_span(0.0, 0.0) is None
+
+    def test_a_point_span_near_the_end_is_shifted_inside_the_duration(self) -> None:
+        """A point 0.01 s before the end keeps its full width, moved back off the end rather than cut."""
+        start, end = cast(tuple[float, float], located_span(4.99, 4.99, duration_s=5.0))
+        assert end == pytest.approx(5.0) and end <= 5.0
+        assert end - start == pytest.approx(self.WIDTH)
+
+    def test_a_point_span_near_the_start_is_shifted_inside_the_duration(self) -> None:
+        """With the duration known the window is shifted off zero, not floored there."""
+        assert located_span(0.05, 0.05, duration_s=5.0) == pytest.approx((0.0, self.WIDTH))
+
+    def test_a_recording_shorter_than_the_window_bounds_it_on_both_sides(self) -> None:
+        """Only where the duration cannot hold the window is it narrowed, to the whole recording."""
+        assert located_span(0.1, 0.1, duration_s=0.2) == pytest.approx((0.0, 0.2))
+
+    def test_the_consensus_extent_of_a_point_at_the_end_stays_inside_the_duration(self) -> None:
+        """The stored extent is what SPEECH slices; it must not reach past the audio."""
+        a = _timed("a", [("one", 1.0, 1.4), ("two", 4.99, 4.99)])
+        b = _timed("b", [("one", 1.0, 1.4), ("two", 4.99, 4.99)])
+        two = align_sources([a, b], onomatopoeic=set(), duration_s=5.0).words[1]
+        assert two.extent[1] <= 5.0
+        assert two.extent == pytest.approx((5.0 - self.WIDTH, 5.0))
+        assert two.timings == {"a": (4.99, 4.99), "b": (4.99, 4.99)}
+
+    def test_a_point_span_places_its_word(self) -> None:
+        """A word whose every reading is a point gets a positive extent around it."""
+        a = _timed("a", [("one", 1.0, 1.4), ("two", 2.0, 2.0)])
+        b = _timed("b", [("one", 1.0, 1.4), ("two", 2.0, 2.0)])
+        two = _align(a, b).words[1]
+        assert two.extent[1] > two.extent[0]
+        assert two.extent == pytest.approx((2.0 - self.WIDTH / 2, 2.0 + self.WIDTH / 2))
+        assert two.timings == {"a": (2.0, 2.0), "b": (2.0, 2.0)}
+        assert two.untimed_sources == () and not two.unconfirmed
+
+    def test_a_zero_span_never_reaches_the_fit_or_the_timings(self) -> None:
+        """A ``(0, 0)`` member beside a timed one: the word sits where the timed reading puts it."""
+        a = _timed("a", [("one", 5.0, 5.4), ("two", 6.0, 6.4)])
+        b = _timed("b", [("one", 0.0, 0.0), ("two", 6.0, 6.4)])
+        one, two = _align(a, b).words
+        assert one.extent == pytest.approx((5.0, 5.4))
+        assert one.timings == {"a": (5.0, 5.4)}
+        assert one.untimed_sources == ("b",) and not one.unconfirmed
+        assert one.temporal_uncertainty_s == pytest.approx(0.0)
+        assert two.extent == pytest.approx((6.0, 6.4))
+
+    def test_a_lone_untimed_reading_is_unconfirmed_and_unlocated(self) -> None:
+        """Only one recogniser read it and it carries no span: a zero-length extent where the stream stands."""
+        a = _timed("a", [("one", 5.0, 5.4), ("two", 6.0, 6.4)])
+        b = _timed("b", [("one", 5.0, 5.4), ("extra", 0.0, 0.0), ("two", 6.0, 6.4)])
+        consensus = _align(a, b)
+        [extra] = [word for word in consensus.words if word.text == "extra"]
+        assert extra.unconfirmed and extra.untimed_sources == ("b",)
+        assert extra.extent[0] == extra.extent[1] == pytest.approx(5.4)
+        assert extra.temporal_uncertainty_s is None and extra.timings == {}
+        assert consensus.provenance["unconfirmed_n"] == 1 and consensus.provenance["unlocated_n"] == 1
+        attributes = word_attributes(extra)
+        assert attributes["unconfirmed"] is True and attributes["untimed_sources"] == ["b"]
+        assert word_from_attributes(attributes, extra.extent) == extra
+        assert "unconfirmed" not in word_attributes(consensus.words[0])
+
+    def test_a_word_both_recognisers_read_without_timing_is_confirmed(self) -> None:
+        """Two readings confirm a word even where neither places it; it stays unlocated."""
+        a = _timed("a", [("one", 5.0, 5.4), ("two", 0.0, 0.0)])
+        b = _timed("b", [("one", 5.0, 5.4), ("two", None, None)])  # type: ignore[list-item]
+        two = _align(a, b).words[1]
+        assert not two.unconfirmed and set(two.untimed_sources) == {"a", "b"}
+        assert two.extent[0] == two.extent[1]
+
+    def test_a_whole_file_aligner_failure_is_named(self) -> None:
+        """Every word of one recogniser at ``(0, 0)``: it is ``aligner_failed`` and its insertions are unconfirmed."""
+        timed = _timed("asr_crisperwhisper", [("in", 1.0, 1.3), ("out", 2.0, 2.3)])
+        failed = _timed("asr_qwen", [("in", 0.0, 0.0), ("and", 0.0, 0.0), ("out", 0.0, 0.0)])
+        consensus = _align(timed, failed)
+        assert consensus.provenance["aligner_failed"] == ["asr_qwen"]
+        assert consensus.provenance["untimed_members"] == {"asr_crisperwhisper": 0, "asr_qwen": 3}
+        by_text = {word.text: word for word in consensus.words}
+        assert by_text["in"].extent == pytest.approx((1.0, 1.3)) and not by_text["in"].unconfirmed
+        assert by_text["out"].extent == pytest.approx((2.0, 2.3))
+        assert by_text["and"].unconfirmed
+        assert all(word.extent[0] >= 1.0 for word in consensus.words), "no extent is stretched to zero"
+
+    def test_rebracketing_a_column_with_an_untimed_member(self) -> None:
+        """A stored column whose member carries no span re-reads without its timing."""
+        a = _timed("a", [("one", 5.0, 5.4)])
+        b = _timed("b", [("one", 0.0, 0.0)])
+        [word] = _align(a, b).words
+        stored = word_from_attributes(word_attributes(word), word.extent)
+        assert rebracket(stored, onomatopoeic=set(), n_sources=2).word == word

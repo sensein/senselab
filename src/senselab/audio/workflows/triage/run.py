@@ -14,10 +14,21 @@ from pathlib import Path
 from typing import Any, Callable, TypeVar
 
 from senselab.audio.data_structures import Audio, AudioHints
+from senselab.audio.workflows.triage.cohort_fold import COHORT_NODE
+from senselab.audio.workflows.triage.cohort_stage import write_cohort_unavailable
 from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.enrollment import Enrollment
+from senselab.audio.workflows.triage.live_evidence import recording_stem
 from senselab.audio.workflows.triage.nodes.admit import admit
 from senselab.audio.workflows.triage.nodes.airway import airway
+from senselab.audio.workflows.triage.nodes.background import (
+    BACKGROUND_NODE,
+    SESSION_NODE,
+    session_key,
+    write_background,
+    write_session_floor,
+    write_speech_residual,
+)
 from senselab.audio.workflows.triage.nodes.branches import declared_task_family, record_unrun_owner
 from senselab.audio.workflows.triage.nodes.common import (
     BranchResult,
@@ -26,7 +37,7 @@ from senselab.audio.workflows.triage.nodes.common import (
     describe_exception,
 )
 from senselab.audio.workflows.triage.nodes.preprocess import preprocess
-from senselab.audio.workflows.triage.nodes.quality import quality
+from senselab.audio.workflows.triage.nodes.quality import clip_spans, quality
 from senselab.audio.workflows.triage.nodes.redact import redact, settle_release
 from senselab.audio.workflows.triage.nodes.report import report
 from senselab.audio.workflows.triage.nodes.review import NODE as REVIEW_NODE
@@ -45,6 +56,7 @@ from senselab.audio.workflows.triage.vocabulary import (
     NodeVerdict,
     Outcome,
     RunState,
+    release_value,
 )
 from senselab.utils.prov_store import ProvStore
 from senselab.utils.subprocess_venv import record_venv_use
@@ -72,7 +84,7 @@ _ENTITY_ORDER = ("sub-", "ses-")
 _CONDITIONED_STREAM = "plain"
 _SOURCE_STREAM = "recording"
 
-_R = TypeVar("_R", bound="NodeResult | BranchResult | ReviewOutcome")
+_R = TypeVar("_R", bound="NodeResult | BranchResult | ReviewOutcome | str")
 
 
 @dataclass(frozen=True)
@@ -261,7 +273,11 @@ def _drive_branches(
     outcomes: dict[str, NodeOutcome],
     enrollment: Enrollment | None,
 ) -> dict[str, Path]:
-    """Run PREPROCESS, then hand the rest of the graph to :func:`drive_decisions`.
+    """Run PREPROCESS and SESSION, then hand the rest of the graph to :func:`drive_decisions`.
+
+    A single-file run sees no siblings, so SESSION records the recording's own floor as the floor
+    it uses and its own speech-residual reading as its session background's only member; a corpus
+    run writes SESSION per BIDS session (``scripts/extend_session_floor.py``).
 
     A PREPROCESS that fails records every node between it and VERDICT ``SKIPPED`` and calls
     nothing further. See ``specs/20260817-triage-workflow-dag/dag.md``.
@@ -284,6 +300,16 @@ def _drive_branches(
         for node in GRAPH_ORDER[GRAPH_ORDER.index("PREPROCESS") + 1 : GRAPH_ORDER.index("VERDICT")]:
             outcomes[node] = NodeOutcome(node=node, state=RunState.SKIPPED)
         return {}
+    _attempt(
+        outcomes,
+        SESSION_NODE,
+        lambda: write_session_floor(
+            store,
+            (),
+            session=session_key(recording_stem(store)),
+            background_members=(write_speech_residual(store, run_dir),),
+        ),
+    )
     return drive_decisions(
         store,
         config,
@@ -305,7 +331,7 @@ def drive_decisions(
     outcomes: dict[str, NodeOutcome],
     enrollment: Enrollment | None,
 ) -> dict[str, Path]:
-    """Run TAXONOMY, routing, the branches routing selects, QUALITY and REDACT over a preprocessed store.
+    """Run BACKGROUND, TAXONOMY, routing, the routed branches, QUALITY, COHORT and REDACT over a preprocessed store.
 
     Every input is the store and the sidecars under ``run_dir``, so the caller may be a graph pass
     that has just run PREPROCESS or a driver replaying over a finished run. A branch routing
@@ -313,8 +339,9 @@ def drive_decisions(
     (noted :data:`WITHHELD_CRITICAL`) are all recorded ``SKIPPED`` and never called. A branch that
     did not complete and owns the declared family gets a ``task_extent_absent`` finding from
     :func:`~senselab.audio.workflows.triage.nodes.branches.record_unrun_owner`. QUALITY is
-    called after the branch loop over the source recording; REDACT only when SPEECH ran and its scan
-    found PII. See ``specs/20260817-triage-workflow-dag/dag.md``.
+    called after the branch loop over the source recording, then COHORT, which on one recording records
+    ``unavailable`` unless a corpus pass's reading already stands (``scripts/extend_cohort.py``);
+    REDACT only when SPEECH ran and its scan found PII. See ``specs/20260817-triage-workflow-dag/dag.md``.
 
     Args:
         store: The provenance store, holding ADMIT's ``recording`` stream and PREPROCESS's output.
@@ -328,6 +355,15 @@ def drive_decisions(
     Returns:
         REDACT's released pair, empty unless it cleared one.
     """
+    _attempt(
+        outcomes,
+        BACKGROUND_NODE,
+        lambda: write_background(
+            store,
+            run_dir,
+            clips=[span.extent for span in clip_spans(store, _SOURCE_STREAM) if span.extent is not None],
+        ),
+    )
     _attempt(outcomes, "TAXONOMY", lambda: taxonomy(store, _CONDITIONED_STREAM, config, hint, run_dir=run_dir))
     routed = _attempt(outcomes, "routing", lambda: routing(store, None, config, hint, run_dir=run_dir))
     selected = set(routed.runs) if routed is not None else set()
@@ -353,6 +389,7 @@ def drive_decisions(
                 store, branch, family, outcome.note or outcome.error or outcome.state.value, signal=_CONDITIONED_STREAM
             )
     _attempt(outcomes, QUALITY, lambda: quality(store, _SOURCE_STREAM, config, hint, run_dir=run_dir))
+    _attempt(outcomes, COHORT_NODE, lambda: write_cohort_unavailable(store))
     if "SPEECH" in selected and _speech_found_pii(store):
         redacted = _attempt(
             outcomes,
@@ -372,7 +409,13 @@ def drive_decisions(
         outcomes["REDACT"] = NodeOutcome(node="REDACT", state=RunState.SKIPPED)
         artifacts = {}
     _attempt(outcomes, REVIEW_NODE, lambda: review(store, config, hint))
+    outcomes[SECOND_OPINION] = NodeOutcome(node=SECOND_OPINION, state=RunState.SKIPPED, note=SECOND_OPINION_DRIVER)
     return artifacts
+
+
+SECOND_OPINION = "SECOND_OPINION"
+SECOND_OPINION_DRIVER = "driven over finished stores by scripts/extend_second_opinion.py"
+"""Why a single-file run leaves SECOND_OPINION to its driver, which needs a pinned model server."""
 
 
 def _attempt_artifacts(
@@ -491,7 +534,7 @@ def run_triage(
                 **released,
                 **settle_release(
                     store,
-                    folded.file_verdict.release.value,
+                    release_value(folded.file_verdict.release),
                     folded.file_verdict.release_ground,
                     run_dir=layout.run_dir,
                     artifacts_dir=layout.artifacts_dir,

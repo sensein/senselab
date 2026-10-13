@@ -21,9 +21,19 @@ import numpy as np
 import yaml
 from scipy.signal import find_peaks
 
+from senselab.audio.workflows.triage.background_model import BACKGROUND_MODEL
+from senselab.audio.workflows.triage.background_speech import background_speech_parameters
 from senselab.audio.workflows.triage.breath_pattern import SPECTROGRAM, _in_script, _moving_median, _sidecar
 from senselab.audio.workflows.triage.nodes.common import lexical_words, word_hull
 from senselab.audio.workflows.triage.residue import is_non_lexical
+from senselab.audio.workflows.triage.task_events import (
+    TaskEvidence,
+    evidence_of,
+    generic_view_of,
+    speech_spans,
+    task_events_parameters,
+)
+from senselab.audio.workflows.triage.task_extent import diarized_turns, task_extent_parameters
 from senselab.utils.prov_store import ProvStore
 
 COUGH_PATTERN_PATH = Path(__file__).parent / "data" / "cough_pattern.yaml"
@@ -191,6 +201,8 @@ class CoughPattern:
         extent: The cough-task extent, or None where no cough was found.
         onsets_strict_n: The onsets with the rise and coherence thresholds raised by the review margins.
         onsets_lenient_n: The onsets with them lowered by the same margins.
+        evidence: The task layer's reading of the coughs against the background, or None where the
+            plain stream was absent.
     """
 
     onsets_s: tuple[float, ...] = ()
@@ -202,11 +214,12 @@ class CoughPattern:
     extent: CoughExtent | None = None
     onsets_strict_n: int = 0
     onsets_lenient_n: int = 0
+    evidence: TaskEvidence | None = None
 
     @property
     def onsets_n(self) -> int:
-        """How many coughs were found."""
-        return len(self.onsets_s)
+        """How many coughs were found: the task events no impulse explains, where the evidence was read."""
+        return self.evidence.events_found_n if self.evidence is not None else len(self.onsets_s)
 
     def record(self) -> dict[str, Any]:
         """The reading, as JSON-ready values.
@@ -225,6 +238,7 @@ class CoughPattern:
             "onsets_strict_n": self.onsets_strict_n,
             "onsets_lenient_n": self.onsets_lenient_n,
             "extent": self.extent.record() if self.extent is not None else None,
+            "evidence": self.evidence.record() if self.evidence is not None else None,
         }
 
 
@@ -459,7 +473,7 @@ def speech_word_spans(store: ProvStore, language: str | None) -> list[tuple[floa
 
 
 def cough_pattern_of(
-    store: ProvStore, run_dir: Path, *, sampling_hz: float, language: str | None = None
+    store: ProvStore, run_dir: Path, *, sampling_hz: float, language: str | None = None, instructed: int | None = None
 ) -> CoughPattern | tuple[str, ...]:
     """The recording's coughs, or the stored inputs they could not be read without.
 
@@ -470,10 +484,13 @@ def cough_pattern_of(
         sampling_hz: The conditioned stream's sampling rate, which with the spectrogram's own
             ``n_fft`` and ``hop_length`` fixes its bin width and hop.
         language: The recording's declared language, which fixes the script speech words are read in.
+        instructed: The coughs the instruction asks for, or None.
 
     Returns:
-        The reading of :func:`measure_cough_pattern`; or ``("spectrogram_narrowband",)`` where the
-        derivative, its sidecar or its framing is missing.
+        The reading of :func:`measure_cough_pattern`, its extent over the task cluster's coughs
+        (:func:`~senselab.audio.workflows.triage.task_events.task_cluster`); or ``("spectrogram_narrowband",)``
+        where the derivative, its sidecar or its framing is missing; or ``("background_model",)`` where
+        BACKGROUND wrote no background.
     """
     held = _sidecar(store, run_dir, SPECTROGRAM)
     if held is None:
@@ -488,6 +505,30 @@ def cough_pattern_of(
         power = power[0]
     p = cough_parameters()
     bands = band_levels_db(power, bin_hz=sampling_hz / n_fft, band_edges_hz=p.band_edges_hz)
-    return measure_cough_pattern(
-        bands, hop_s=hop_length / sampling_hz, words=speech_word_spans(store, language), parameters=p
+    words = speech_word_spans(store, language)
+    read = measure_cough_pattern(bands, hop_s=hop_length / sampling_hz, words=words, parameters=p)
+    view = generic_view_of(store, run_dir)
+    if view is None:
+        return (BACKGROUND_MODEL,)
+    q = task_events_parameters()
+    per_cough = int(q["extent"]["events_per_instructed"]["cough"])
+    speech = speech_spans(store, run_dir, background_speech_parameters().speech_labels, q)
+    turns = diarized_turns(store, run_dir, float(task_extent_parameters()["growth"]["diarized_turn_min_s"]))
+    evidence = evidence_of(
+        view,
+        read.event_spans_s,
+        gap_s=float(q["cough"]["gap_s"]),
+        inhale=False,
+        entangle_inside=False,
+        speech=speech,
+        instructed_n=None if instructed is None else instructed * per_cough,
+        stops=sorted({*(w for w in words if w[1] > w[0]), *turns}),
+        grow_kind="cough",
     )
+    extent = cough_extent(
+        [(e.start_s, e.end_s) for e in evidence.events],
+        words=words,
+        duration_s=bands.shape[1] * hop_length / sampling_hz,
+        parameters=cough_extent_parameters(),
+    )
+    return replace(read, evidence=evidence, extent=extent if evidence.events_found_n else None)

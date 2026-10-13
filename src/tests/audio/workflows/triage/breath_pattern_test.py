@@ -18,9 +18,11 @@ from senselab.audio.workflows.triage.breath_pattern import (
     BreathPattern,
     BreathTrain,
     BreathVeto,
+    Burst,
     breath_extent_fallback,
     breath_in_review,
     breath_pattern_parameters,
+    breath_train,
     breath_veto_of,
     in_review_band,
     measure_breath_pattern,
@@ -485,3 +487,42 @@ def test_a_word_its_recognizers_disagree_on_stands_at_its_consensus_extent() -> 
     spread = train_parameters().word_spread_max_s
     assert placed_word(store.get_entity(loose), spread_max_s=spread) == (10.94, 10.98)
     assert placed_word(store.get_entity(tight), spread_max_s=spread) == (13.05, 13.31)
+
+
+def _bursts(peaks: list[float]) -> list[Burst]:
+    return [Burst(peak_s=t, start_s=t - 0.3, end_s=t + 0.3, prominence=2.0, coherence=0.8, rise_db=12.0) for t in peaks]
+
+
+def test_the_breath_train_takes_the_early_instructed_run_over_a_late_larger_one() -> None:
+    """Run selection reads the instructed count and earliness, not size: the late pause run is not the task."""
+    early = [1.0, 2.5, 4.5, 6.0, 8.5, 10.0]
+    late = [float(t) for t in np.arange(101.0, 123.0, 2.5)]
+    p = train_parameters()
+    broadband = np.zeros(int(130.0 * p.fs_mod))
+    for instructed in (6, None):
+        train = breath_train(
+            _bursts([*early, *late]),
+            (),
+            duration_s=130.0,
+            broadband=broadband,
+            floor=0.0,
+            parameters=p,
+            instructed_n=instructed,
+        )
+        assert train.extent_s is not None and train.extent_s[1] < 20.0
+
+
+def test_the_breath_train_sets_aside_a_run_touching_speech() -> None:
+    """A run of bursts inside a YAMNet speech window is a talker's pauses, not the task."""
+    p = train_parameters()
+    train = breath_train(
+        _bursts([1.0, 2.5, 4.0, 40.0, 41.5, 43.0]),
+        (),
+        duration_s=60.0,
+        broadband=np.zeros(int(60.0 * p.fs_mod)),
+        floor=0.0,
+        parameters=p,
+        speech_windows=((0.5, 5.0),),
+        instructed_n=6,
+    )
+    assert train.extent_s is not None and train.extent_s[0] > 30.0

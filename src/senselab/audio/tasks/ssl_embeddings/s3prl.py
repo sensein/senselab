@@ -17,7 +17,13 @@ import torch
 
 from senselab.audio.data_structures import Audio
 from senselab.utils.data_structures import DeviceType, _select_device_and_dtype, logger
-from senselab.utils.subprocess_venv import _clean_subprocess_env, ensure_venv, parse_subprocess_result, venv_python
+from senselab.utils.subprocess_venv import (
+    _clean_subprocess_env,
+    ensure_venv,
+    parse_subprocess_result,
+    stage_portable_audio_io,
+    venv_python,
+)
 
 # S3PRL venv specification
 _S3PRL_VENV = "s3prl"
@@ -40,10 +46,11 @@ import traceback
 from pathlib import Path
 
 import numpy as np
-import soundfile as sf
 import torch
 
 args = json.loads(sys.stdin.read())
+sys.path.insert(0, args["io_dir"])
+from portable_audio_io import read_audio
 audio_paths = args["audio_paths"]
 model_name = args["model_name"]
 device = args["device"]
@@ -68,7 +75,7 @@ try:
     output_paths = []
     shapes = []
     for i, audio_path in enumerate(audio_paths):
-        data, sr = sf.read(audio_path, dtype="float32")
+        data, sr = read_audio(audio_path, channels_first=False)
         waveform = torch.tensor(data.squeeze()).to(device)
 
         with torch.no_grad():
@@ -173,6 +180,7 @@ class S3PRLEmbeddingExtractor:
                     "model_name": model_name,
                     "device": device.value,
                     "output_dir": str(tmp),
+                    "io_dir": stage_portable_audio_io(tmp),
                 }
             )
 

@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import platform
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any, Mapping
@@ -20,6 +20,7 @@ from typing import Any, Mapping
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.features_extraction.praat_parselmouth import CppsSettings
 from senselab.audio.workflows.triage.config import TriageConfig
+from senselab.audio.workflows.triage.consensus import located_span, word_timing_parameters
 from senselab.audio.workflows.triage.vocabulary import (
     CONFORMANCE_REFERENTS,
     BranchReport,
@@ -468,11 +469,88 @@ def live_entities(store: ProvStore, prov_type: PROV_TYPE) -> list[Entity]:
     return [e for e in store.entities(prov_type) if not store.is_invalidated(e.id)]
 
 
+PLAIN_STREAM = "plain"
+"""The stream the recognizers were timed against."""
+
+
+def recording_duration(store: ProvStore) -> float | None:
+    """The duration the ``plain`` stream decoded to, as PREPROCESS stored its extent.
+
+    Args:
+        store: The provenance store.
+
+    Returns:
+        The end of the latest live ``plain`` stream's extent, or None where the store carries none.
+    """
+    found = [
+        entity
+        for entity in live_entities(store, "stream")
+        if entity.attributes.get("name") == PLAIN_STREAM and entity.extent is not None
+    ]
+    return float(found[-1].extent[1]) if found and found[-1].extent is not None else None
+
+
+def clamp_to_recording(store: ProvStore, extent: tuple[float, float]) -> tuple[float, float]:
+    """An extent bounded by the recording: never before 0, never past the shortest live recording stream's end.
+
+    Args:
+        store: The provenance store, read for its live ``recording`` and ``plain`` streams.
+        extent: ``(start, end)``, in seconds.
+
+    Returns:
+        The bounded extent; the extent unchanged where no stream carries a duration or bounding it would leave
+        no positive duration.
+    """
+    ends = [
+        float(entity.extent[1])
+        for entity in live_entities(store, "stream")
+        if entity.attributes.get("name") in ("recording", PLAIN_STREAM) and entity.extent is not None
+    ]
+    start, end = max(0.0, float(extent[0])), float(extent[1])
+    if ends:
+        end = min(end, min(ends))
+    return (start, end) if end > start else (float(extent[0]), float(extent[1]))
+
+
+def bound_word_extent(extent: tuple[float, float], duration_s: float) -> tuple[float, float]:
+    """Bound a stored consensus word extent by the duration its audio decoded to.
+
+    A point span's window (:func:`~senselab.audio.workflows.triage.consensus.located_span`) could reach
+    past the end of the recording; an end past it by at most ``point_width_s`` is clamped to it.
+
+    Args:
+        extent: The word's stored ``(start, end)``, in seconds.
+        duration_s: The duration the audio decoded to, in seconds.
+
+    Returns:
+        The extent with both ends at most ``duration_s``.
+
+    Raises:
+        ValueError: If the start is past the end, or the end overruns ``duration_s`` by more than
+            ``point_width_s``: no point window reaches that far.
+    """
+    start, end = float(extent[0]), float(extent[1])
+    if start > end:
+        raise ValueError(f"word extent starts at {start}s, past its end at {end}s")
+    if end <= duration_s:
+        return start, end
+    width = word_timing_parameters()["point_width_s"]
+    if end - duration_s > width:
+        raise ValueError(
+            f"word extent ends at {end}s, past the {duration_s}s this audio decoded to by "
+            f"{end - duration_s:.3f}s; more than a point window ({width}s) outside the recording is an "
+            "inconsistency, not a widened point"
+        )
+    return min(start, duration_s), duration_s
+
+
 def consensus_words(store: ProvStore) -> list[Entity]:
     """The consensus stream: every live ``word`` entity, in ``index`` order.
 
     ``index`` is the position PREPROCESS's consensus emitted the word at, and is the only order a
-    reader may use.
+    reader may use. Where the store carries the ``plain`` stream's duration, a word's extent reaching
+    past it by at most ``point_width_s`` is returned clamped to it (:func:`bound_word_extent`); a word
+    reaching further is returned as stored, for the node slicing it to refuse.
 
     Args:
         store: The provenance store.
@@ -480,38 +558,89 @@ def consensus_words(store: ProvStore) -> list[Entity]:
     Returns:
         The live ``word`` entities, sorted by their ``index`` attribute.
     """
-    return sorted(live_entities(store, "word"), key=lambda word: int(word.attributes["index"]))
+    words = sorted(live_entities(store, "word"), key=lambda word: int(word.attributes["index"]))
+    duration_s = recording_duration(store)
+    if duration_s is None:
+        return words
+    bounded: list[Entity] = []
+    for word in words:
+        try:
+            bounded.append(bound_word(word, duration_s))
+        except ValueError:
+            bounded.append(word)
+    return bounded
+
+
+def bound_word(word: Entity, duration_s: float) -> Entity:
+    """A consensus word with its extent bounded by the duration its audio decoded to.
+
+    Args:
+        word: A consensus ``word`` entity, as stored.
+        duration_s: The duration the audio decoded to, in seconds.
+
+    Returns:
+        The word itself where its extent is None or inside ``duration_s``; otherwise a copy carrying
+        :func:`bound_word_extent`'s extent. The store is not touched.
+
+    Raises:
+        ValueError: As :func:`bound_word_extent`.
+    """
+    if word.extent is None or float(word.extent[1]) <= duration_s:
+        return word
+    return replace(word, extent=bound_word_extent(word.extent, duration_s))
 
 
 def lexical_words(store: ProvStore) -> list[Entity]:
-    """The consensus words that are not bracketed, in ``index`` order.
+    """The consensus words that are not bracketed, not a degenerate recognizer run and not unconfirmed.
 
     Args:
         store: The provenance store.
 
     Returns:
-        The subset of :func:`consensus_words` whose ``bracketed`` attribute is False.
+        The subset of :func:`consensus_words` whose ``bracketed``, ``degenerate`` and ``unconfirmed`` attributes
+        are not set, in ``index`` order.
     """
-    return [word for word in consensus_words(store) if not word.attributes["bracketed"]]
+    return [
+        word
+        for word in consensus_words(store)
+        if not word.attributes["bracketed"]
+        and not word.attributes.get("degenerate")
+        and not word.attributes.get("unconfirmed")
+    ]
 
 
-def word_hull(word: Entity) -> tuple[float, float]:
-    """The hull of a word's per-source timings — every recognizer's placement of it.
+def word_hull(word: Entity, duration_s: float | None = None) -> tuple[float, float]:
+    """The hull of a word's located per-source timings — every recognizer's placement of it.
 
-    The union of the derived extent and every source's own reading.
+    The union of the derived extent and every source's located span
+    (:func:`~senselab.audio.workflows.triage.consensus.located_span`); a missing span is left out.
 
     Args:
         word: A consensus ``word`` entity.
+        duration_s: The duration the audio decoded to (:func:`recording_duration`); a point span's
+            window is kept inside it. Unbounded where None.
 
     Returns:
-        ``(min member start, max member end)``, or the derived extent when no source timed it.
+        ``(min located start, max located end)``; the derived extent where no source located it, or where the
+        recognizers placed it far apart and its time was arbitrated (``arbitrated_source``) or found on no sound
+        (``unlocated``); for an unlocated word, the gap between its timed neighbours (``mask_gap``) where it
+        carries one; ``(0.0, 0.0)`` where the word carries neither.
     """
-    spans = [tuple(span) for span in (word.attributes.get("timings") or {}).values()]
-    if word.extent is not None:
-        spans.append(word.extent)
+    gap = word.attributes.get("mask_gap")
+    if word.attributes.get("unlocated") and gap is not None:
+        return float(gap[0]), float(gap[1])
+    if word.attributes.get("arbitrated_source") is not None or word.attributes.get("unlocated"):
+        return (float(word.extent[0]), float(word.extent[1])) if word.extent is not None else (0.0, 0.0)
+    spans = [
+        located
+        for span in (word.attributes.get("timings") or {}).values()
+        if (located := located_span(span[0], span[1], duration_s=duration_s)) is not None
+    ]
     if not spans:
-        return (0.0, 0.0)
-    return min(float(span[0]) for span in spans), max(float(span[1]) for span in spans)
+        return (float(word.extent[0]), float(word.extent[1])) if word.extent is not None else (0.0, 0.0)
+    if word.extent is not None and word.extent[1] > word.extent[0]:
+        spans.append((float(word.extent[0]), float(word.extent[1])))
+    return min(span[0] for span in spans), max(span[1] for span in spans)
 
 
 PITCH_NARROWING_KEYS = (
@@ -685,19 +814,20 @@ BRANCH_MEASURES: dict[str, tuple[str, ...]] = {
         "train_fraction",
         "modulation_peak_hz",
         "modulation_unit",
-        "ppg_syllable_rate_hz",
-        "ppg_cycle_rate_hz",
-        "ppg_repetitions",
-        "ppg_required_repetitions",
-        "ppg_period_s",
-        "ppg_period_cv",
-        "ppg_period_trend_s_per_step",
-        "ppg_positions",
-        "ppg_realised_mass",
-        "ppg_occupancy_s",
-        "ppg_filler_fraction",
-        "ppg_score_per_frame",
-        "ppg_contradicted_words_n",
+        "ddk_decision",
+        "ddk_why",
+        "ddk_unit",
+        "ddk_events_n",
+        "ddk_required_count",
+        "ddk_syllables_n",
+        "ddk_identity",
+        "ddk_syllable_rate_hz",
+        "ddk_cycle_rate_hz",
+        "ddk_period_cv",
+        "ddk_period_trend_s_per_step",
+        "ddk_positions",
+        "ddk_realised_mass",
+        "ddk_contradicted_words_n",
     ),
     "VOICE": ("spans_n", "phonation_s", "longest_span_s"),
 }

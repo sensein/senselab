@@ -661,7 +661,7 @@ so nothing new is read from the store:
 
 | column | what it is |
 |---|---|
-| `llm_status` | `clean` / `flagged` / `absent` / `disabled` / `nothing_to_read` |
+| `llm_status` | `clean` / `flagged` / `absent` / `disabled` / `bypassed` (+ `llm_bypass_reason`) |
 | `llm_speakers` | whether the words show more than one person speaking |
 | `llm_original_judgment` | whether the recording's own words carry anything identifying |
 | `llm_redaction_judgment` | whether an applied redaction removed what identifies the speaker |
@@ -690,7 +690,7 @@ nothing new is read from the store:
 
 | column | what it is |
 |---|---|
-| `nimble_status` | `ok` / `disabled` / `nothing_to_read` / `absent` |
+| `nimble_status` | `ok` / `disabled` / `bypassed` / `absent` |
 | `nimble_other_voice_p` | P(someone besides the participant speaks) |
 | `nimble_instructions_spoken_p` | P(the task's instructions are spoken) |
 | `nimble_named_diagnosis_p` | P(the speaker names a diagnosis of their own) |

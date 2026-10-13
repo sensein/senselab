@@ -17,15 +17,31 @@ import json
 import unicodedata
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 import numpy as np
 import yaml
 from scipy.signal import find_peaks
 
 from senselab.audio.tasks.classification.label_scores import label_scores
+from senselab.audio.workflows.triage.background_speech import background_speech_parameters
 from senselab.audio.workflows.triage.nodes.common import find_measurement, lexical_words, live_entities, word_hull
 from senselab.audio.workflows.triage.residue import is_non_lexical
+from senselab.audio.workflows.triage.task_events import (
+    REVIEW,
+    GenericView,
+    Rhythm,
+    TaskEvidence,
+    cluster_scores,
+    evidence_of,
+    generic_view_of,
+    modulation_candidates,
+    rhythm_of,
+    speech_spans,
+    task_events_parameters,
+    touches,
+)
+from senselab.audio.workflows.triage.task_extent import diarized_turns, enabled, task_extent_parameters
 from senselab.audio.workflows.triage.vocabulary import SUPERSEDES
 from senselab.utils.prov_store import Entity, ProvStore
 
@@ -195,7 +211,8 @@ class ModulationReading:
 EXTENT_BREATH_TRAIN = "breath_train"
 EXTENT_MEASURE_EVENTS = "measure_events"
 EXTENT_AIRWAY_EVENTS = "airway_events"
-EXTENT_SOURCES = (EXTENT_BREATH_TRAIN, EXTENT_MEASURE_EVENTS, EXTENT_AIRWAY_EVENTS)
+EXTENT_TASK_EVENTS = "task_events"
+EXTENT_SOURCES = (EXTENT_TASK_EVENTS, EXTENT_BREATH_TRAIN, EXTENT_MEASURE_EVENTS, EXTENT_AIRWAY_EVENTS)
 
 
 @dataclass(frozen=True)
@@ -386,6 +403,7 @@ class BreathTrain:
         coherence: The bursts' mean coherence.
         rise_db: The bursts' median rise over the floor.
         bursts_found_n: Every burst found in the file, inside the run or not.
+        candidates: Every burst outside speech, in any run: the task layer's breath candidates.
     """
 
     bursts: tuple[Burst, ...] = ()
@@ -397,6 +415,7 @@ class BreathTrain:
     coherence: float | None = None
     rise_db: float | None = None
     bursts_found_n: int = 0
+    candidates: tuple[Burst, ...] = ()
 
     def record(self) -> dict[str, Any]:
         """The train, as JSON-ready values.
@@ -581,6 +600,9 @@ class BreathPattern:
         event_spans_s: Each event's ``(start, end)`` in seconds, trimmed to the frames near its peak.
         extent: The breath-task extent, or None where it was not read.
         train: The breath train, or None where it was not read.
+        evidence: The task layer's reading of the train's candidates against the background
+            (:func:`~senselab.audio.workflows.triage.task_events.evidence_of`), or None where the
+            plain stream was absent.
     """
 
     pattern: str
@@ -594,6 +616,7 @@ class BreathPattern:
     event_spans_s: tuple[tuple[float, float], ...] = field(default_factory=tuple)
     extent: BreathExtent | None = None
     train: BreathTrain | None = None
+    evidence: TaskEvidence | None = None
 
     def record(self) -> dict[str, Any]:
         """The reading, as JSON-ready values.
@@ -602,6 +625,7 @@ class BreathPattern:
             The fields, keyed by name.
         """
         return {
+            "evidence": self.evidence.record() if self.evidence is not None else None,
             "pattern": self.pattern,
             "events_n": self.events_n,
             "event_durations_s": list(self.event_durations_s),
@@ -616,15 +640,18 @@ class BreathPattern:
 
 
 def breath_in_review(read: BreathPattern, parameters: ReviewParameters | None = None) -> bool:
-    """Whether a breath reading is left for review: its train is in the band, or a reviewing veto fired.
+    """Whether a breath reading is left for review.
 
     Args:
         read: The breath reading.
         parameters: The band; ``data/breath_pattern.yaml`` when None.
 
     Returns:
-        :func:`in_review_band` of the train, or a veto in ``veto_reviews``.
+        The task evidence's ``review`` decision where it was read; else :func:`in_review_band` of the
+        train, or a veto in ``veto_reviews``.
     """
+    if read.evidence is not None:
+        return read.evidence.decision == REVIEW
     p = parameters or review_parameters()
     vetoed = read.veto.vetoed_by if read.veto is not None else None
     return in_review_band(read.train, p) or (vetoed is not None and vetoed in p.veto_reviews)
@@ -1121,12 +1148,16 @@ def breath_train(
     floor: float,
     parameters: TrainParameters,
     speech_segments: tuple[tuple[float, float], ...] = (),
+    speech_windows: tuple[tuple[float, float], ...] = (),
+    instructed_n: int | None = None,
 ) -> BreathTrain:
-    """Group bursts into runs split at long gaps or speech, and take the largest as the task.
+    """Group bursts into runs split at long gaps or speech, and take the one that is the task.
 
     A burst peaking inside speech is no phase. Speech between two bursts splits the run only where
     the gap across it is over ``speech_bridge_cycles`` of the breathing cycle measured on the gaps no
-    speech crosses; with fewer than two such gaps there is no cadence, and speech always splits.
+    speech crosses; with fewer than two such gaps there is no cadence, and speech always splits. A run
+    one of whose bursts touches speech is set aside unless every run does; of the rest the task is the
+    one nearest the instructed count and earliest (:func:`~senselab.audio.workflows.triage.task_events.cluster_scores`).
 
     Args:
         bursts: The bursts, in time order (:func:`find_bursts`).
@@ -1136,6 +1167,8 @@ def breath_train(
         floor: Its floor.
         parameters: The train's parameters.
         speech_segments: Acoustic speech segments (:func:`voice_segments`), read as speech runs.
+        speech_windows: Further speech spans no task run touches (word runs, YAMNet speech windows).
+        instructed_n: The phases the instruction asks for, or None.
 
     Returns:
         The train; an empty one with no burst.
@@ -1146,6 +1179,7 @@ def breath_train(
     bursts = [b for b in bursts if not any(s <= b.peak_s <= e for s, e in speech)]
     if not bursts:
         return BreathTrain()
+    candidates = tuple(bursts)
     gaps = np.diff([b.peak_s for b in bursts])
     cycle = float(np.median(gaps[:-1] + gaps[1:])) if len(gaps) >= 2 else (2 * float(gaps[0]) if len(gaps) else 4.0)
     gap_max = max(p.gap_min_s, p.gap_cycles * cycle / 2)
@@ -1161,7 +1195,15 @@ def breath_train(
             runs.append([burst])
         else:
             runs[-1].append(burst)
-    run = max(runs, key=lambda r: (len(r), -r[0].start_s))
+    off = [r for r in runs if not touches([(b.start_s, b.end_s) for b in r], [*speech, *speech_windows])]
+    candidates_runs = off or runs
+    scores = cluster_scores(
+        [[(b.start_s, b.end_s) for b in r] for r in candidates_runs],
+        duration_s=duration_s,
+        instructed_n=instructed_n,
+        weights=task_events_parameters()["extent"],
+    )
+    run = candidates_runs[max(range(len(candidates_runs)), key=lambda i: (scores[i], -candidates_runs[i][0].start_s))]
     start, end = max(0.0, run[0].start_s - p.pad_s), min(duration_s, run[-1].end_s + p.pad_s)
     for s, e in speech:
         if start < s < end and s >= run[-1].peak_s:
@@ -1185,6 +1227,7 @@ def breath_train(
         coherence=round(float(np.mean([b.coherence for b in run])), 2),
         rise_db=round(float(np.median([b.rise_db for b in run])), 1),
         bursts_found_n=found_n,
+        candidates=candidates,
     )
 
 
@@ -1199,6 +1242,8 @@ def measure_breath_train(
     parameters: TrainParameters | None = None,
     sustained: tuple[tuple[float, float], ...] = (),
     speech: tuple[tuple[float, float], ...] = (),
+    speech_windows: tuple[tuple[float, float], ...] = (),
+    instructed_n: int | None = None,
 ) -> BreathTrain:
     """The breath train of a power spectrogram (:func:`find_bursts`, then :func:`breath_train`).
 
@@ -1212,6 +1257,8 @@ def measure_breath_train(
         parameters: The train's parameters; ``data/breath_pattern.yaml`` when None.
         sustained: The sustained vocalisations (:func:`voice_segments`).
         speech: The acoustic speech segments (:func:`voice_segments`).
+        speech_windows: Further speech spans no task run touches.
+        instructed_n: The phases the instruction asks for, or None.
 
     Returns:
         The train.
@@ -1235,6 +1282,8 @@ def measure_breath_train(
         floor=floor,
         parameters=p,
         speech_segments=speech,
+        speech_windows=speech_windows,
+        instructed_n=instructed_n,
     )
 
 
@@ -1422,6 +1471,102 @@ def breath_veto_of(
     )
 
 
+def breath_evidence(
+    view: GenericView,
+    train: BreathTrain,
+    *,
+    voiced: np.ndarray,
+    times_s: np.ndarray,
+    speech: tuple[tuple[float, float], ...],
+    speech_windows: tuple[tuple[float, float], ...] = (),
+    instructed_n: int | None = None,
+    stops: Sequence[tuple[float, float]] | None = None,
+) -> TaskEvidence:
+    """The breath train's candidates read against the background, with the rhythm prior's recoveries.
+
+    Args:
+        view: The recording-level background.
+        train: The breath train; its ``candidates`` are the breath type test's events.
+        voiced: Whether each spectrogram frame is voiced.
+        times_s: The spectrogram frames' times.
+        speech: Speech runs and segments, where no breath phase stands.
+        speech_windows: Further speech spans no task cluster touches.
+        instructed_n: The phases the instruction asks for, or None.
+        stops: Speech and other-speaker spans growth halts at (:func:`breath_stops`); None reads no
+            completeness.
+
+    Returns:
+        The evidence: the dominant cluster of events, grown where ``data/task_extent.yaml`` switches growth
+        on, its extent with the preparatory inhale, and the decision. Where a breathing-band rhythm stands, a
+        region of activity no candidate overlaps, outside speech and mostly unvoiced, is recovered as a
+        phase; where the modulation detector is on, its mostly unvoiced events off speech runs and segments join
+        growth.
+    """
+    p = task_events_parameters()
+    q = p["breath"]
+    rhythm: Rhythm | None = rhythm_of(view, p["rhythm"]["band_hz"], float(p["rhythm"]["prominence_min_db"]))
+    spans = [(b.start_s, b.end_s) for b in train.candidates]
+
+    def unvoiced(span: tuple[float, float]) -> bool:
+        inside = (times_s >= span[0]) & (times_s <= span[1])
+        return not inside.any() or float(voiced[inside].mean()) <= q["recover_voiced_max"]
+
+    recovered: list[tuple[float, float]] = []
+    if rhythm is not None:
+        for region in view.regions:
+            span = (region.start_s, region.end_s)
+            if any(s < span[1] and e > span[0] for s, e in [*spans, *speech]):
+                continue
+            if unvoiced(span):
+                recovered.append(span)
+    modulated: list[tuple[float, float]] = []
+    if enabled("modulation"):
+        modulated = [
+            span
+            for span in modulation_candidates(view, task_extent_parameters()["modulation"])
+            if unvoiced(span) and not any(s < span[1] and e > span[0] for s, e in speech)
+        ]
+    gap = float(q["gap_min_s"])
+    if rhythm is not None:
+        gap = max(gap, float(q["gap_cycles"]) * rhythm.period_s)
+    return evidence_of(
+        view,
+        spans,
+        gap_s=gap,
+        rhythm=rhythm,
+        recovered=recovered,
+        speech=sorted({*speech, *speech_windows}),
+        instructed_n=instructed_n,
+        p=p,
+        stops=stops,
+        growth_candidates=modulated,
+        grow_kind="breath",
+    )
+
+
+def breath_stops(
+    store: ProvStore,
+    run_dir: Path,
+    *,
+    speech: Sequence[tuple[float, float]],
+    words: Sequence[tuple[float, float]],
+) -> list[tuple[float, float]]:
+    """Where an airway task's extent may not grow: speech, every lexical word, and long diarized turns.
+
+    Args:
+        store: The provenance store, read for the diarization.
+        run_dir: The run directory its sidecar is relative to.
+        speech: Speech runs and segments (lexical words and the voiced runs chained to them).
+        words: Every lexical word's span.
+
+    Returns:
+        The spans, in time order: ``speech``, ``words`` and the diarized turns at least
+        ``growth.diarized_turn_min_s`` long (``data/task_extent.yaml``).
+    """
+    turns = diarized_turns(store, run_dir, float(task_extent_parameters()["growth"]["diarized_turn_min_s"]))
+    return sorted({*speech, *(w for w in words if w[1] > w[0]), *turns})
+
+
 def breath_pattern_of(
     store: ProvStore,
     run_dir: Path,
@@ -1431,6 +1576,7 @@ def breath_pattern_of(
     modulation: ModulationParameters | None = None,
     language: str | None = None,
     family: str | None = None,
+    instructed: int | None = None,
 ) -> BreathPattern | tuple[str, ...]:
     """The recording's breathing pattern, or the stored inputs it could not be read without.
 
@@ -1451,6 +1597,7 @@ def breath_pattern_of(
         modulation: The modulation reading's parameters; ``data/breath_pattern.yaml`` when None.
         language: The recording's declared language, which fixes the script speech words are read in.
         family: The declared task family, which fixes the breath train's least burst spacing.
+        instructed: The breaths the instruction asks for, or None.
 
     Returns:
         The pattern with its veto reading (:func:`breath_veto_of`); or the names of the absent inputs,
@@ -1492,6 +1639,9 @@ def breath_pattern_of(
     sustained, speech = voice_segments(
         track_times, f0, strength, words, voicing_strength_min=p.voicing_strength_min, parameters=t
     )
+    windows = tuple(speech_spans(store, run_dir, background_speech_parameters().speech_labels))
+    per_breath = int(task_events_parameters()["extent"]["events_per_instructed"]["breath"])
+    instructed_phases = None if instructed is None else instructed * per_breath
     train = measure_breath_train(
         power,
         hop_s=hop_s,
@@ -1502,12 +1652,38 @@ def breath_pattern_of(
         parameters=t,
         sustained=sustained,
         speech=speech,
+        speech_windows=windows,
+        instructed_n=instructed_phases,
     )
-    breath_extent = (
-        train_extent(train, pattern.event_spans_s)
-        if train.extent_s is not None
-        else breath_extent_fallback(pattern.event_spans_s, airway, duration_s=duration_s, pad_s=t.pad_s)
+    view = generic_view_of(store, run_dir)
+    runs = tuple(speech_runs(words, words_min=t.speech_words_min, gap_s=t.speech_gap_s)) + speech
+    evidence = (
+        breath_evidence(
+            view,
+            train,
+            voiced=voiced,
+            times_s=times,
+            speech=runs,
+            speech_windows=windows,
+            instructed_n=instructed_phases,
+            stops=breath_stops(store, run_dir, speech=runs, words=words),
+        )
+        if view is not None
+        else None
     )
+    if evidence is not None and evidence.extent is not None:
+        phases = len(evidence.events)
+        breath_extent: BreathExtent | None = BreathExtent(
+            start_s=round(evidence.extent[0], 3),
+            end_s=round(evidence.extent[1], 3),
+            source=EXTENT_TASK_EVENTS,
+            phases=phases,
+            breaths=_rhu(phases / 2),
+        )
+    elif train.extent_s is not None:
+        breath_extent = train_extent(train, pattern.event_spans_s)
+    else:
+        breath_extent = breath_extent_fallback(pattern.event_spans_s, airway, duration_s=duration_s, pad_s=t.pad_s)
     active_fraction: float | None = None
     active_over: str | None = None
     if airway is not None:
@@ -1521,4 +1697,4 @@ def breath_pattern_of(
     veto = breath_veto_of(
         store, run_dir, active_fraction=active_fraction, active_over=active_over, extent=airway, language=language
     )
-    return replace(pattern, veto=veto, extent=breath_extent, train=train)
+    return replace(pattern, veto=veto, extent=breath_extent, train=train, evidence=evidence)

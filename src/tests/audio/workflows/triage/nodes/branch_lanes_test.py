@@ -219,35 +219,36 @@ class TestTheLaneReadsWhatTheBranchesWrote:
             "speech_s": 0.3,
             "nontarget_speech_s": None,
         }
-        assert "ppg_syllable_rate_hz" not in dict(lane.measures)
+        assert "ddk_syllable_rate_hz" not in dict(lane.measures)
 
-    def test_every_ppg_measure_reaches_the_lane_when_the_report_carries_them(self, routed: ProvStore) -> None:
-        """The decode reports these under SPEECH; the lane must not drop one."""
+    def test_every_ddk_measure_reaches_the_lane_when_the_report_carries_them(self, routed: ProvStore) -> None:
+        """The task layer reports these under SPEECH; the lane must not drop one."""
         source = _envelope_spans(routed)[0].id
-        ppg = {
-            "ppg_syllable_rate_hz": 5.1,
-            "ppg_cycle_rate_hz": 1.7,
-            "ppg_repetitions": 8,
-            "ppg_required_repetitions": 10,
-            "ppg_period_s": 0.588,
-            "ppg_period_cv": 0.41,
-            "ppg_period_trend_s_per_step": 0.001,
-            "ppg_positions": ["p", "aa", "t", "aa", "k", "aa"],
-            "ppg_realised_mass": [0.83, 0.76, 0.79, 0.68, 0.81, 0.8],
-            "ppg_occupancy_s": [0.4, 0.9, 0.4, 0.9, 0.4, 0.9],
-            "ppg_filler_fraction": 0.31,
-            "ppg_score_per_frame": -0.58,
-            "ppg_contradicted_words_n": 2,
+        ddk = {
+            "ddk_decision": "present",
+            "ddk_why": "clear",
+            "ddk_unit": "cycle",
+            "ddk_events_n": 8,
+            "ddk_required_count": 10,
+            "ddk_syllables_n": 24,
+            "ddk_identity": 0.62,
+            "ddk_syllable_rate_hz": 5.1,
+            "ddk_cycle_rate_hz": 1.7,
+            "ddk_period_cv": 0.41,
+            "ddk_period_trend_s_per_step": 0.001,
+            "ddk_positions": ["p", "aa", "t", "aa", "k", "aa"],
+            "ddk_realised_mass": [0.83, 0.76, 0.79, 0.68, 0.81, 0.8],
+            "ddk_contradicted_words_n": 2,
         }
         _run_branch(
             routed,
             "SPEECH",
-            [("task_extent", (1.1, 1.9), source, {"production": "syllable_task_from_decode"})],
+            [("task_extent", (1.1, 1.9), source, {"production": "syllable_task_from_events"})],
             kind="speech",
-            detail={"speaker_count": 1, "words_n": 2, "speech_s": 0.8, "nontarget_speech_s": 0.0, **ppg, "notes": []},
+            detail={"speaker_count": 1, "words_n": 2, "speech_s": 0.8, "nontarget_speech_s": 0.0, **ddk, "notes": []},
         )
         [lane] = [lane for lane in branch_lanes(routed) if lane.branch == "SPEECH"]
-        assert {key: value for key, value in lane.measures if key.startswith("ppg_")} == ppg
+        assert {key: value for key, value in lane.measures if key.startswith("ddk_")} == ddk
 
 
 class TestABranchThatDidNotRunIsNotABranchThatFoundNothing:

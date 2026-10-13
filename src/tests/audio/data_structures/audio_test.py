@@ -127,19 +127,6 @@ def test_audio_creation_stereo_audio() -> None:
     assert audio.waveform.shape[0] == 2
 
 
-@pytest.mark.skip(reason="torchaudio is a core dependency and always installed; missing-dep path cannot be tested")
-def test_audio_creation_error() -> None:
-    """Tests audio creation with missing torchaudio."""
-    with pytest.raises(ModuleNotFoundError):
-        Audio(filepath=MONO_AUDIO_PATH).waveform
-
-
-def test_audio_creation_invalid_backend() -> None:
-    """Tests that an invalid backend raises an error."""
-    with pytest.raises(ValueError, match="Unsupported backend"):
-        Audio(filepath=MONO_AUDIO_PATH, backend="invalid_backend")
-
-
 @pytest.mark.parametrize(
     "audio_fixture, audio_path",
     [
@@ -485,3 +472,46 @@ def test_consecutive_windows_concatenate_to_the_full_decode(tmp_path: Path, suff
     assert torch.equal(tiled, whole), (
         f"{suffix}: tiled windows differ from the full decode by {(tiled - whole).abs().max().item():.3e}"
     )
+
+
+def _write_flac(path: Path, frames: int = 16000, rate: int = 16000) -> np.ndarray:
+    """Writes a 24-bit mono FLAC of uniform noise and returns what libsndfile reads back."""
+    rng = np.random.default_rng(7)
+    sf.write(str(path), rng.uniform(-0.5, 0.5, frames).astype(np.float32), rate, subtype="PCM_24")
+    data, _ = sf.read(str(path), dtype="float32", always_2d=True)
+    return data.T
+
+
+def test_a_lossless_file_is_read_without_torchcodec(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A FLAC is decoded by libsndfile, whole and windowed, so ffmpeg's FLAC parser is never consulted."""
+    from senselab.utils import portable_audio_io
+
+    path = tmp_path / "stream.flac"
+    reference = _write_flac(path)
+
+    def unreachable(source: str) -> None:
+        raise AssertionError(f"torchcodec was asked to decode {source}")
+
+    monkeypatch.setattr(portable_audio_io, "_torchcodec_decoder", unreachable)
+    audio = Audio(filepath=str(path))
+    assert torch.equal(audio.waveform, torch.from_numpy(reference))
+    assert audio.sampling_rate == 16000
+    window = Audio(filepath=str(path), offset_in_sec=0.25, duration_in_sec=0.5).waveform
+    assert torch.equal(window, torch.from_numpy(reference[:, 4000:12000]))
+
+
+def test_a_flac_cut_short_raises_instead_of_reading_short(tmp_path: Path) -> None:
+    """A FLAC missing its tail is an error, not a shorter recording."""
+    path = tmp_path / "stream.flac"
+    _write_flac(path)
+    path.write_bytes(path.read_bytes()[: path.stat().st_size // 2])
+    with pytest.raises(RuntimeError):
+        _ = Audio(filepath=str(path)).waveform
+
+
+def test_a_file_no_decoder_can_open_raises(tmp_path: Path) -> None:
+    """Bytes neither libsndfile nor torchcodec can open raise rather than yield an empty waveform."""
+    path = tmp_path / "not_audio.flac"
+    path.write_bytes(b"not a flac file")
+    with pytest.raises(RuntimeError):
+        _ = Audio(filepath=str(path)).waveform

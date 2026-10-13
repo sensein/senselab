@@ -25,6 +25,7 @@ from senselab.utils.subprocess_venv import (
     ensure_venv,
     parse_subprocess_result,
     provisioned_venv_dirs,
+    stage_portable_audio_io,
     venv_python,
 )
 
@@ -103,10 +104,11 @@ import traceback
 from pathlib import Path
 
 import numpy as np
-import soundfile as sf
 import torch
 
 args = json.loads(sys.stdin.read())
+sys.path.insert(0, args["io_dir"])
+from portable_audio_io import read_audio
 audio_paths = args["audio_paths"]
 device = args["device"]
 output_dir = args["output_dir"]
@@ -117,7 +119,7 @@ gpu = 0 if device == "cuda" else None
 
 outputs = []
 for i, audio_path in enumerate(audio_paths):
-    data, sr = sf.read(audio_path, dtype="float32")
+    data, sr = read_audio(audio_path, channels_first=False)
     waveform = torch.from_numpy(data).unsqueeze(0) if data.ndim == 1 else torch.from_numpy(data.T)
     try:
         posteriorgram = ppgs.from_audio(
@@ -202,7 +204,7 @@ def _worker_timeout_s(audio_seconds: float) -> float:
 
 
 def extract_ppgs_from_audios(
-    audios: List[Audio], device: Optional[DeviceType] = None
+    audios: List[Audio], device: Optional[DeviceType] = None, timeout_min_s: Optional[float] = None
 ) -> List["torch.Tensor | PpgsPosteriorgramUnavailable"]:
     """Extracts phonetic posteriorgrams (PPGs) from every audio.
 
@@ -213,6 +215,8 @@ def extract_ppgs_from_audios(
         audios: The audios to extract PPGs from. Every one must be mono and at
             :data:`PPGS_SAMPLE_RATE`.
         device: Device to use (CUDA or CPU).
+        timeout_min_s: The least the worker is allowed, in seconds, whatever the audio's length; None
+            allows only the length-scaled budget.
 
     Returns:
         One entry per input audio, in input order: a PPG tensor in ``(1, phonemes, frames)`` layout
@@ -235,6 +239,8 @@ def extract_ppgs_from_audios(
 
     python = venv_python(ensure_ppgs_venv())
     budget = _worker_timeout_s(sum(audio.waveform.shape[-1] / audio.sampling_rate for audio in audios))
+    if timeout_min_s is not None:
+        budget = max(budget, float(timeout_min_s))
 
     with tempfile.TemporaryDirectory(prefix="senselab-ppgs-") as tmpdir:
         tmp = Path(tmpdir)
@@ -252,6 +258,7 @@ def extract_ppgs_from_audios(
                 "audio_paths": audio_paths,
                 "device": device.value,
                 "output_dir": str(tmp),
+                "io_dir": stage_portable_audio_io(tmp),
             }
         )
 

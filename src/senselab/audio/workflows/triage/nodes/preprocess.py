@@ -19,7 +19,7 @@ from dataclasses import asdict, dataclass
 from functools import partial
 from importlib.metadata import version as _dist_version
 from pathlib import Path
-from typing import Any, Callable, Sequence
+from typing import Any, Callable, Sequence, cast
 
 import numpy as np
 import torch
@@ -70,7 +70,7 @@ from senselab.audio.tasks.health_acoustics.hear import (
     shutdown_hear_worker,
     span_hear_input,
 )
-from senselab.audio.tasks.phonation.api import derive_f0_range, f0_track, formant_track
+from senselab.audio.tasks.phonation.api import F0RangeUnavailable, derive_f0_range, f0_track, formant_track
 from senselab.audio.tasks.preprocessing.preprocessing import resample_audios
 from senselab.audio.tasks.spans.api import (
     NoContrast,
@@ -88,10 +88,15 @@ from senselab.audio.tasks.speech_to_text.api import transcribe_audios
 from senselab.audio.workflows.audio_analysis.level import integrated_lufs
 from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.consensus import (
+    CONSENSUS_VERSION,
     ROUTINE,
     SOURCE_ORDER,
     SourceHypothesis,
     align_sources,
+    degenerate_parameters,
+    degenerate_token,
+    located_span,
+    missing_span,
     render_transcript,
     vocabulary_key,
     word_attributes,
@@ -101,6 +106,8 @@ from senselab.audio.workflows.triage.label_membership import (
     load_label_membership,
     optional_label_membership,
 )
+from senselab.audio.workflows.triage.nodes.background import OWN_FLOOR, write_own_floor
+from senselab.audio.workflows.triage.nodes.branches import declared_task_family
 from senselab.audio.workflows.triage.nodes.common import (
     NodeResult,
     cpps_settings,
@@ -138,6 +145,7 @@ from senselab.audio.workflows.triage.stimulus import (
     align_stimulus,
 )
 from senselab.audio.workflows.triage.vocabulary import Outcome
+from senselab.audio.workflows.triage.word_arbitration import WORD_ARBITRATION, arbitrate_words
 from senselab.utils.data_structures import DeviceType, HFModel, PyannoteAudioModel, ScriptLine
 from senselab.utils.prov_store import CHECKSUM_KEY, PATH_KEY, Entity, ProvStore, file_digest
 
@@ -157,6 +165,10 @@ DIARIZATION_DERIVATIVE = "diarization"
 DIARIZATION_SAMPLE_RATE = 16000
 """The rate pyannote's model is fixed at; the backend refuses any other."""
 PHONATION_TRACKS_MEASUREMENT = "phonation_tracks"
+F0_RANGE_DERIVED = "derived"
+"""``f0_range_from`` where the recording's own F0 range was derived from its pitch."""
+F0_RANGE_SEARCH = "search"
+"""``f0_range_from`` where the wide search placed no pitch, so the tracks run over ``voice.f0_search_range_hz``."""
 WITHDRAW_VERB = "withdraw"
 """The assertion verb for a candidate the detector proposed and then took back."""
 WITHDRAWN_CLIPS = "clip_withdrawn"
@@ -825,12 +837,13 @@ def write_ppg_posteriorgram(
     )
 
 
-def ppg_posteriorgram(store: ProvStore, *, run_dir: Path) -> str:
+def ppg_posteriorgram(store: ProvStore, *, run_dir: Path, timeout_min_s: float | None = None) -> str:
     """The phonetic posteriorgram over the ``enhanced`` stream, to one npz sidecar.
 
     Args:
         store: The provenance store.
         run_dir: The run directory the sidecar is written under.
+        timeout_min_s: The least the ppgs worker is allowed, in seconds (``ppg.timeout_min_s``).
 
     Returns:
         The measurement entity's id.
@@ -840,7 +853,7 @@ def ppg_posteriorgram(store: ProvStore, *, run_dir: Path) -> str:
         PpgsPosteriorgramUnavailable: If the model produced no posteriorgram for this recording.
     """
     enhanced_id, audio = ppg_input(store, run_dir)
-    [result] = extract_ppgs_from_audios([audio])
+    [result] = extract_ppgs_from_audios([audio], timeout_min_s=timeout_min_s)
     return write_ppg_posteriorgram(
         store,
         run_dir=run_dir,
@@ -882,7 +895,7 @@ def stimulus_input(store: ProvStore, hint: AudioHints | None) -> tuple[str, list
             index=int(word.attributes["index"]),
             text=str(word.attributes["text"]),
             extent=(float(word.extent[0]), float(word.extent[1])) if word.extent is not None else None,
-            agreement=float(word.attributes["agreement"]),
+            agreement=None if word.attributes.get("agreement") is None else float(word.attributes["agreement"]),
         )
         for word in lexical_words(store)
     ]
@@ -1413,7 +1426,9 @@ def sharp_stream(store: ProvStore, run_dir: Path) -> tuple[str, Audio, str]:
 def phonation_tracks(store: ProvStore, config: TriageConfig, *, run_dir: Path) -> str:
     """F0 over the pre-emphasised stream and the first four formants over ``plain``, per frame.
 
-    Both streams are read back out of the store, not taken from a conditioning pass's own arrays.
+    Both streams are read back out of the store, not taken from a conditioning pass's own arrays. The
+    F0 range is the recording's own (:func:`derive_f0_range`), or the wide search range where the
+    search placed no pitch; ``f0_range_from`` names which.
 
     Args:
         store: The provenance store, read for the live ``plain`` and pre-emphasised streams.
@@ -1431,7 +1446,12 @@ def phonation_tracks(store: ProvStore, config: TriageConfig, *, run_dir: Path) -
     f0_range = f0_range_parameters(config)
     plain_id, plain = resolve_stream(store, run_dir, "plain")
     sharp_id, sharp, sharp_signal = sharp_stream(store, run_dir)
-    f0_min_hz, f0_max_hz = derive_f0_range(plain, **f0_range)
+    try:
+        f0_min_hz, f0_max_hz = derive_f0_range(plain, **f0_range)
+        f0_range_from = F0_RANGE_DERIVED
+    except F0RangeUnavailable:
+        f0_min_hz, f0_max_hz = f0_range["search_floor_hz"], f0_range["search_ceiling_hz"]
+        f0_range_from = F0_RANGE_SEARCH
     parameters: dict[str, Any] = {
         "hop_s": float(config.require("phonation_spans.hop_s")),
         "max_formants": int(config.require("phonation_spans.max_formants")),
@@ -1479,6 +1499,7 @@ def phonation_tracks(store: ProvStore, config: TriageConfig, *, run_dir: Path) -
             "hop_s": parameters["hop_s"],
             "f0_min_hz": f0_min_hz,
             "f0_max_hz": f0_max_hz,
+            "f0_range_from": f0_range_from,
             "f0_signal": sharp_signal,
             "formant_signal": "plain",
         },
@@ -2542,14 +2563,23 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         untimed_chunks_n = 0
         out_of_bounds_chunks_n = 0
         for chunk in line.chunks or []:
-            if chunk.start is None or chunk.end is None:
+            span: tuple[float, float] | None = None
+            if missing_span(chunk.start, chunk.end):
                 untimed_chunks_n += 1
-                continue
-            span = _bound_to_duration(float(chunk.start), float(chunk.end), duration_s)
-            if span is None:
-                out_of_bounds_chunks_n += 1
-                continue
-            words.append({"text": chunk.text, "start": span[0], "end": span[1], "score": chunk.score})
+            else:
+                span = _bound_to_duration(float(cast(float, chunk.start)), float(cast(float, chunk.end)), duration_s)
+                if span is None:
+                    out_of_bounds_chunks_n += 1
+                    continue
+            words.append(
+                {
+                    "text": chunk.text,
+                    "start": None if span is None else span[0],
+                    "end": None if span is None else span[1],
+                    "score": chunk.score,
+                    "degenerate": degenerate_token(str(chunk.text or ""), **degenerate_parameters()),
+                }
+            )
         meta: dict[str, Any] = {
             "role": "asr_hypothesis",
             "source": name,
@@ -2558,10 +2588,12 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             "transcript": line.text or "",
             "words": words,
             "n_words": len(words),
+            "degenerate_n": sum(1 for word in words if word["degenerate"]),
             "untimed_chunks_n": untimed_chunks_n,
             "out_of_bounds_chunks_n": out_of_bounds_chunks_n,
             "timestamp_source": source_kind,
             "timestamp_model": timing_model,
+            "decode_strategy": line.decode_strategy,
             "duration_s": duration_s,
         }
         entity_id = _measurement(
@@ -2580,20 +2612,30 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             SourceHypothesis(
                 name=source,
                 words=tuple(
-                    (str(word["text"]), float(word["start"]), float(word["end"]))
+                    (
+                        str(word["text"]),
+                        None if word.get("start") is None else float(word["start"]),
+                        None if word.get("end") is None else float(word["end"]),
+                    )
                     for word in measurement.attributes["words"]
                 ),
                 timestamp_source=str(measurement.attributes["timestamp_source"]),
                 timestamp_model=measurement.attributes.get("timestamp_model"),
+                degenerate=frozenset(
+                    position for position, word in enumerate(measurement.attributes["words"]) if word.get("degenerate")
+                ),
             )
             for source, measurement in hypotheses.items()
         ]
         onomatopoeic = {vocabulary_key(str(token)) for token in (config.get("words.onomatopoeic_tokens") or [])}
-        consensus = align_sources(sources, onomatopoeic=onomatopoeic)
+        consensus = align_sources(sources, onomatopoeic=onomatopoeic, duration_s=duration_s)
         names = [row["name"] for row in consensus.provenance["sources"]]
         measurement_ids = tuple(hypotheses[name].id for name in names)
         activity = _step(
-            "consensus", {"routine": ROUTINE, "source_order": SOURCE_ORDER, "sources": names}, measurement_ids, software
+            "consensus",
+            {"routine": ROUTINE, "version": CONSENSUS_VERSION, "source_order": SOURCE_ORDER, "sources": names},
+            measurement_ids,
+            software,
         )
         word_ids: list[str] = []
         for word in consensus.words:
@@ -2646,6 +2688,17 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         entity_id = stimulus_alignment(store, config, run_dir=run_dir, hint=hint)
         derivatives[STIMULUS_MEASUREMENT] = entity_id
         view.append(entity_id)
+
+    def _word_arbitration() -> None:
+        """Each word the recognizers place far apart takes the time that falls on sound; its text stays.
+
+        Reads the spans and the phonation tracks back out of the store, and rewrites the consensus words it
+        moves (:func:`~senselab.audio.workflows.triage.word_arbitration.arbitrate_words`).
+        """
+        entity_id = arbitrate_words(store, run_dir=run_dir, family=declared_task_family(store, hint))
+        if entity_id is not None:
+            derivatives[WORD_ARBITRATION] = entity_id
+            view.append(entity_id)
 
     def _phonation_tracks() -> None:
         """F0 and formant tracks over the whole stream — measured once, localised nowhere.
@@ -2768,7 +2821,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
 
     def _ppg_posteriorgram() -> None:
         """The phonetic posteriorgram over the ``enhanced`` stream, to one npz sidecar."""
-        entity_id = ppg_posteriorgram(store, run_dir=run_dir)
+        entity_id = ppg_posteriorgram(store, run_dir=run_dir, timeout_min_s=float(config.require("ppg.timeout_min_s")))
         derivatives[PPG_MEASUREMENT] = entity_id
         view.append(entity_id)
 
@@ -2815,7 +2868,13 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         """
         words = state.get("consensus")
         if words is not None:
-            spans = [span for word in words if not word.bracketed for span in word.timings.values()]
+            spans = [
+                located
+                for word in words
+                if not word.bracketed
+                for start, end in word.timings.values()
+                if (located := located_span(start, end, duration_s=duration_s)) is not None
+            ]
             return _merge_intervals(spans), "consensus_transcript"
         amplitude_spans: list[tuple[float, float]] = []
         for span_id in state.get("span_ids") or []:
@@ -3101,7 +3160,6 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             lambda: _asr("asr_qwen", _qwen_model, "bundled_aligner", QWEN_TIMESTAMP_MODEL, return_timestamps=True),
         ),
         ("consensus_transcript", _consensus),
-        (STIMULUS_MEASUREMENT, _stimulus_alignment),
         (PHONATION_TRACKS_MEASUREMENT, _phonation_tracks),
         ("energy_envelope", _envelope),
         ("normalized_envelope", _normalized_envelope),
@@ -3112,7 +3170,10 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         ),
         ("continuity_trace", _continuity_trace),
         ("spans", _spans),
+        (WORD_ARBITRATION, _word_arbitration),
+        (STIMULUS_MEASUREMENT, _stimulus_alignment),
         ("residual", _residual),
+        (OWN_FLOOR, lambda: view.append(write_own_floor(store, run_dir))),
         ("enhanced_yamnet", lambda: _stream_yamnet("enhanced")),
         ("enhanced_ast", lambda: _stream_ast("enhanced")),
         ("enhanced_hear", lambda: _stream_hear("enhanced")),
@@ -3144,10 +3205,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         if not bool(config.require("hear.keep_worker_resident")):
             shutdown_hear_worker()
 
-    if hard_failures:
-        summary = "; ".join(f"{name}: {message}" for name, message in hard_failures)
-        raise RuntimeError(f"PREPROCESS: {len(hard_failures)} block(s) failed unexpectedly: {summary}")
-
+    failed = dict(sorted(hard_failures))
     verdict_id, verdict = write_verdict(
         store,
         condition,
@@ -3155,8 +3213,9 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         node=NODE,
         outcome=Outcome.PASS,
         kind=None,
-        why="conditioning complete; absent derivatives are listed",
-        detail={"absent": dict(sorted(absent.items())), "derivatives": derivatives},
+        why="conditioning complete; absent derivatives are listed"
+        + (f"; {len(failed)} block(s) failed: {', '.join(failed)}" if failed else ""),
+        detail={"absent": dict(sorted(absent.items())), "derivatives": derivatives, "failed": failed},
     )
     view.append(verdict_id)
     return PreprocessResult(

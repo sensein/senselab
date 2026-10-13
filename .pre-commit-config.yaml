@@ -57,7 +57,7 @@ repos:
   - id: end-of-file-fixer
     exclude: ^(specs/.*/raw/|src/senselab/audio/workflows/triage/data/b2ai_task_registry/)
   - id: trailing-whitespace
-    exclude: ^specs/.*/raw/
+    exclude: ^(specs/.*/raw/|src/senselab/audio/workflows/triage/review_page/vendor/)
   - id: pretty-format-json
     exclude: ^(specs/.*/raw/|src/senselab/audio/workflows/triage/data/b2ai_task_registry/)
     args:
@@ -82,7 +82,7 @@ repos:
     # extensions in the I/O format matrix. Each is a term codespell reads as a misspelling of
     # another word. Raw captured output is excluded rather than corrected: it is a verbatim
     # record, and a truncated word in a printed table is part of what was printed.
-    exclude: ^specs/.*/raw/
+    exclude: ^(specs/.*/raw/|src/senselab/audio/workflows/triage/review_page/vendor/)
     # The second group are this workflow's own vocabulary and its verbatim records:
     # UNDET/UNDETERMINED and NotIn are value names; FigureStyle is a class; allk, empt and
     # empted are fragments of identifiers codespell splits; disjointness, declaring, meaned,
