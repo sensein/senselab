@@ -1,0 +1,373 @@
+"""Assemble the review page: a compact index inlined into one HTML file, and per-recording side files.
+
+The index carries what the Explore and Review tabs filter on (identity, decision, every evidence
+value, a recording's plain transcript for search). Each side file carries a block of recordings'
+spectrograms, overlays, stream paths, full evidence and transcript view as Parquet
+(:mod:`~senselab.audio.workflows.triage.review_page.shards`), fetched when the page is served and
+loaded through its script wrapper when the page is opened from ``file://``. The Parquet reader is
+vendored beside the page, so it needs no network.
+"""
+
+from __future__ import annotations
+
+import base64
+import hashlib
+import html
+import json
+import re
+import shutil
+from collections import Counter
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+import pyarrow as pa
+
+from senselab.audio.workflows.triage.review_page.shards import parquet_bytes, wrapper_script
+from senselab.audio.workflows.triage.review_page.spectrogram import settings
+
+SOURCE_DIR = Path(__file__).parent
+VENDOR_DIR = SOURCE_DIR / "vendor"
+VIEWER_DIR = SOURCE_DIR.parent / "viewer"
+SHELL = SOURCE_DIR / "shell.html"
+INLINE_PATTERN = re.compile(r"/\*@INLINE:(?P<path>[^@]+)@\*/")
+DATA_MARKER = "/*@INDEX@*/"
+INDEX_PATTERN = re.compile(r"var REVIEW_INDEX_ZSTD = (\{.*?\});</script>", re.S)
+INDEX_ZSTD_LEVEL = 19
+PARTS = {
+    "viewer/styles.css": VIEWER_DIR / "styles.css",
+    "viewer/theme.js": VIEWER_DIR / "theme.js",
+    "viewer/axes.js": VIEWER_DIR / "axes.js",
+    "viewer/facets.js": VIEWER_DIR / "facets.js",
+    "viewer/corpus.js": VIEWER_DIR / "corpus.js",
+    "review.css": SOURCE_DIR / "review.css",
+    "review.js": SOURCE_DIR / "review.js",
+}
+SCALARS = (
+    "participant",
+    "session",
+    "task",
+    "family",
+    "branch",
+    "verdict",
+    "release",
+    "release_reason",
+    "reason",
+    "run_status",
+)
+LISTS = ("reasons", "annotations")
+SHARD_DIR = "data"
+SPEECH_TEXT = re.compile(r"<[^>]+>")
+
+
+def ordered(records: Iterable[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
+    """Records in page order: participant, session, stem.
+
+    Args:
+        records: The review records.
+
+    Returns:
+        The records, sorted.
+    """
+    return sorted(records, key=lambda r: (str(r.get("participant") or ""), str(r.get("session") or ""), r["stem"]))
+
+
+def participant_summaries(records: Iterable[Mapping[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Each participant's issues across their recordings, for grouping the review list.
+
+    Args:
+        records: The review records.
+
+    Returns:
+        By participant: ``recordings``, ``sessions``, ``verdicts`` (count per verdict), ``issues`` (distinct
+        reasons plus distinct annotations, summed over the recordings), ``reasons`` and ``annotations`` (count
+        of recordings per key, most frequent first).
+    """
+    out: dict[str, dict[str, Any]] = {}
+    for record in records:
+        key = str(record.get("participant") or "")
+        entry = out.setdefault(
+            key,
+            {
+                "recordings": 0,
+                "sessions": set(),
+                "verdicts": Counter(),
+                "issues": 0,
+                "reasons": Counter(),
+                "annotations": Counter(),
+            },
+        )
+        reasons, annotations = set(record.get("reasons") or ()), set(record.get("annotations") or ())
+        entry["recordings"] += 1
+        entry["sessions"].add(str(record.get("session") or ""))
+        entry["verdicts"][str(record.get("verdict"))] += 1
+        entry["issues"] += len(reasons) + len(annotations)
+        entry["reasons"].update(reasons)
+        entry["annotations"].update(annotations)
+    return {
+        key: {
+            "recordings": entry["recordings"],
+            "sessions": len(entry["sessions"]),
+            "verdicts": dict(sorted(entry["verdicts"].items())),
+            "issues": entry["issues"],
+            "reasons": dict(entry["reasons"].most_common()),
+            "annotations": dict(entry["annotations"].most_common()),
+        }
+        for key, entry in sorted(out.items())
+    }
+
+
+def _dictionary(values: Sequence[Any]) -> dict[str, Any]:
+    """One scalar column as distinct values and per-row codes, -1 for absent."""
+    distinct: dict[Any, int] = {}
+    codes = []
+    for value in values:
+        if value is None:
+            codes.append(-1)
+            continue
+        codes.append(distinct.setdefault(value, len(distinct)))
+    return {"values": list(distinct), "codes": codes}
+
+
+def _list_dictionary(values: Sequence[Sequence[Any]]) -> dict[str, Any]:
+    """One list column as distinct terms and per-row code lists."""
+    distinct: dict[Any, int] = {}
+    codes = [[distinct.setdefault(term, len(distinct)) for term in (row or ())] for row in values]
+    return {"values": list(distinct), "codes": codes}
+
+
+def _plain_text(speech: Mapping[str, Any] | None) -> str | None:
+    """A recording's transcript as plain lower-case text, for search."""
+    if not speech or not speech.get("html"):
+        return None
+    return " ".join(html.unescape(SPEECH_TEXT.sub(" ", str(speech["html"]))).lower().split())
+
+
+def _kind(values: Iterable[Any]) -> str:
+    present = [v for v in values if v is not None]
+    if present and all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in present):
+        return "numeric"
+    return "categorical"
+
+
+@dataclass(frozen=True)
+class ListenSet:
+    """A named list of recordings for an owner to label, with the check values each was listed with.
+
+    Attributes:
+        name: The export's ``listen_set``.
+        question: The question the label answers, shown over the label control.
+        labels: The answers to choose from; the chosen one is the export's ``owner_label``.
+        columns: The check columns, in display order.
+        checks: Each listed stem's check values, in ``columns`` order.
+        proposed: Each listed stem's proposed extent ``(start_s, end_s)``, marked beside its current one.
+        directions: The answers to a second question, which way the proposed extent is off; empty for none.
+    """
+
+    name: str
+    question: str
+    labels: tuple[str, ...]
+    columns: tuple[str, ...]
+    checks: Mapping[str, tuple[str, ...]]
+    proposed: Mapping[str, tuple[float, float]] = field(default_factory=dict)
+    directions: tuple[str, ...] = ()
+
+
+SOURCE_BASE = "/_source"
+"""The URL route a served page fetches a stream outside the scan root through: the stream's absolute path
+appended to it (``scripts/triage_review_serve.py`` serves it)."""
+
+
+def index_of(
+    records: Sequence[Mapping[str, Any]],
+    *,
+    title: str,
+    audio_base: str,
+    source_base: str = SOURCE_BASE,
+    listen: ListenSet | None = None,
+) -> dict[str, Any]:
+    """The page's index over records already in page order.
+
+    Args:
+        records: The review records, in page order.
+        title: The page title.
+        audio_base: The URL prefix from the page to the scan root, used when the page is served.
+        source_base: The URL route an absolute stream path (one outside the scan root) is appended to.
+        listen: The listen set the page labels, or None for the triage verdicts. Its check values become
+            the ``checks`` column, one list per record in ``listen.columns`` order, and its proposed extents
+            the ``proposed_extent`` column.
+
+    Returns:
+        The index the page reads.
+    """
+    columns: dict[str, Any] = {"stem": [r["stem"] for r in records]}
+    for name in SCALARS:
+        columns[name] = _dictionary([r.get(name) for r in records])
+    for name in LISTS:
+        columns[name] = _list_dictionary([r.get(name) or () for r in records])
+    columns["items"] = _list_dictionary([sorted({item["name"] for item in r.get("evidence") or ()}) for r in records])
+    columns["decisive"] = _list_dictionary(
+        [sorted({item["name"] for item in r.get("evidence") or () if item.get("decisive")}) for r in records]
+    )
+    columns["extent_duration_s"] = [
+        None if not r.get("extent") else round(float(r["extent"][1]) - float(r["extent"][0]), 3) for r in records
+    ]
+    columns["duration_s"] = [None if r.get("duration_s") is None else round(float(r["duration_s"]), 3) for r in records]
+    columns["text"] = [_plain_text(r.get("speech")) for r in records]
+    evidence: dict[str, dict[str, Any]] = {}
+    for row, record in enumerate(records):
+        for item in record.get("evidence") or ():
+            entry = evidence.setdefault(
+                item["name"], {"group": item.get("group"), "unit": item.get("unit"), "rows": [], "values": []}
+            )
+            value = item.get("value")
+            entry["rows"].append(row)
+            entry["values"].append(str(value).lower() if isinstance(value, bool) else value)
+    for entry in evidence.values():
+        entry["kind"] = _kind(entry["values"])
+        if entry["kind"] == "categorical":
+            entry["values"] = [None if v is None else str(v) for v in entry["values"]]
+    spec = settings()
+    payload = {
+        "title": title,
+        "n": len(records),
+        "shard_size": int(spec["shards"]["records"]),
+        "shard_dir": SHARD_DIR,
+        "audio_base": audio_base,
+        "source_base": source_base,
+        "spec": {k: int(spec["spectrogram"][k]) for k in ("frames", "bands", "levels")},
+        "counts": dict(Counter(str(r.get("verdict")) for r in records)),
+    }
+    if listen is not None:
+        listened: dict[str, Any] = {
+            "name": listen.name,
+            "question": listen.question,
+            "labels": list(listen.labels),
+            "columns": list(listen.columns),
+        }
+        if listen.directions:
+            listened["directions"] = list(listen.directions)
+        payload["listen"] = listened
+        columns["checks"] = [list(listen.checks[r["stem"]]) if r["stem"] in listen.checks else None for r in records]
+        if listen.proposed:
+            columns["proposed_extent"] = [
+                [float(v) for v in listen.proposed[r["stem"]]] if r["stem"] in listen.proposed else None
+                for r in records
+            ]
+    index = {"build": payload, "cols": columns, "evidence": evidence, "participants": participant_summaries(records)}
+    payload["id"] = hashlib.sha256(json.dumps(index, sort_keys=True, default=str).encode()).hexdigest()[:12]
+    return index
+
+
+def _inline(match: re.Match[str]) -> str:
+    part = PARTS.get(match.group("path"))
+    if part is None:
+        raise ValueError(f"the shell inlines {match.group('path')}, which PARTS does not list")
+    return part.read_text(encoding="utf-8").rstrip("\n")
+
+
+def page_html(index: Mapping[str, Any], mark_style: str = "") -> str:
+    """The single page, with the index inlined as :func:`pack_index` packs it.
+
+    Args:
+        index: The page index.
+        mark_style: The marked-transcript CSS rules, from the free-speech review page.
+
+    Returns:
+        The HTML.
+    """
+    text = SHELL.read_text(encoding="utf-8")
+    named = set(INLINE_PATTERN.findall(text))
+    missing = set(PARTS) - named
+    if missing:
+        raise ValueError(f"PARTS lists {sorted(missing)}, which the shell does not inline")
+    text = INLINE_PATTERN.sub(_inline, text)
+    text = text.replace("/*@MARKSTYLE@*/", mark_style)
+    text = text.replace("@TITLE@", html.escape(str(index["build"]["title"])))
+    return text.replace(DATA_MARKER, json.dumps(pack_index(index), separators=(",", ":")))
+
+
+def pack_index(index: Mapping[str, Any]) -> dict[str, Any]:
+    """The index as the page inlines it: its JSON, zstd-compressed and base64-encoded.
+
+    Args:
+        index: The page index.
+
+    Returns:
+        ``{n, zstd}``: the JSON's length in bytes and the compressed bytes as base64.
+    """
+    data = json.dumps(index, separators=(",", ":"), default=str).encode("utf-8")
+    packed = pa.Codec("zstd", compression_level=INDEX_ZSTD_LEVEL).compress(data, asbytes=True)
+    return {"n": len(data), "zstd": base64.b64encode(packed).decode("ascii")}
+
+
+def read_index(page: str) -> dict[str, Any]:
+    """The index a written page inlines.
+
+    Args:
+        page: The page's HTML.
+
+    Returns:
+        The index.
+
+    Raises:
+        ValueError: When the page inlines no index.
+    """
+    found = INDEX_PATTERN.search(page)
+    if found is None:
+        raise ValueError("the page inlines no index")
+    packed = json.loads(found.group(1))
+    data = pa.Codec("zstd").decompress(base64.b64decode(packed["zstd"]), decompressed_size=packed["n"], asbytes=True)
+    return json.loads(data)
+
+
+def write_page(
+    records: Iterable[Mapping[str, Any]],
+    out_dir: Path,
+    *,
+    title: str,
+    audio_base: str,
+    mark_style: str = "",
+    source_base: str = SOURCE_BASE,
+    listen: ListenSet | None = None,
+) -> dict[str, Any]:
+    """Write ``index.html`` and its side files.
+
+    Args:
+        records: The review records.
+        out_dir: The directory to write into.
+        title: The page title.
+        audio_base: The URL prefix from the page to the scan root.
+        mark_style: The marked-transcript CSS rules.
+        source_base: The URL route an absolute stream path is appended to.
+        listen: The listen set the page labels, or None for the triage verdicts; only its stems are written.
+
+    Returns:
+        The page's id, record count and sizes in bytes: the page, the Parquet shards and their wrappers.
+    """
+    rows = ordered(r for r in records if listen is None or r["stem"] in listen.checks)
+    index = index_of(rows, title=title, audio_base=audio_base, source_base=source_base, listen=listen)
+    size = int(index["build"]["shard_size"])
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / SHARD_DIR).mkdir(exist_ok=True)
+    parquet_total = 0
+    wrapper_total = 0
+    for number, start in enumerate(range(0, len(rows), size)):
+        data = parquet_bytes(rows[start : start + size])
+        (out_dir / SHARD_DIR / f"shard-{number:04d}.parquet").write_bytes(data)
+        wrapper = out_dir / SHARD_DIR / f"shard-{number:04d}.js"
+        wrapper.write_text(wrapper_script(number, data), encoding="ascii")
+        parquet_total += len(data)
+        wrapper_total += wrapper.stat().st_size
+    shutil.copytree(VENDOR_DIR, out_dir / VENDOR_DIR.name, dirs_exist_ok=True)
+    page = out_dir / "index.html"
+    page.write_text(page_html(index, mark_style), encoding="utf-8")
+    return {
+        "id": index["build"]["id"],
+        "recordings": len(rows),
+        "shards": (len(rows) + size - 1) // size,
+        "index_bytes": page.stat().st_size,
+        "parquet_bytes": parquet_total,
+        "wrapper_bytes": wrapper_total,
+    }

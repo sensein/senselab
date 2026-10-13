@@ -32,19 +32,24 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
+import numpy as np
 import yaml
 
 from senselab.audio.data_structures import AudioHints
+from senselab.audio.tasks.redaction.api import apply_redactions
+from senselab.audio.workflows.triage.background_model import BACKGROUND_MODEL
+from senselab.audio.workflows.triage.cohort_fold import COHORT_NODE, COHORT_READING
 from senselab.audio.workflows.triage.config import TriageConfig
+from senselab.audio.workflows.triage.ddk_task import CYCLE, DDK_READING, SYLLABLE
 from senselab.audio.workflows.triage.live_evidence import declared_task, recording_stem
 from senselab.audio.workflows.triage.nodes.airway import EVENTS_FOUND as AIRWAY_EVENTS_FOUND
 from senselab.audio.workflows.triage.nodes.airway import INSTRUMENT_ABSENT as AIRWAY_INSTRUMENT_ABSENT
 from senselab.audio.workflows.triage.nodes.airway_task import (
-    BACKGROUND_SPEECH,
     BREATH_READING,
     COUGH_READING,
     required_event,
 )
+from senselab.audio.workflows.triage.nodes.background import BACKGROUND_NODE, SESSION_FLOOR, SESSION_NODE
 from senselab.audio.workflows.triage.nodes.branches import (
     BRANCH_FAMILY,
     EXPECTATIONS,
@@ -60,8 +65,12 @@ from senselab.audio.workflows.triage.nodes.common import (
     find_measurements,
     find_verdict,
     lexical_words,
+    live_entities,
     mint_live,
+    recording_duration,
+    resolve_stream,
     software_agent,
+    word_hull,
     write_verdict,
 )
 from senselab.audio.workflows.triage.nodes.gates import (
@@ -91,21 +100,36 @@ from senselab.audio.workflows.triage.nodes.gates import (
     load_gate_bounds,
 )
 from senselab.audio.workflows.triage.nodes.redact import (
+    MASK_SOURCE,
     NEW,
     UNMASKED_BY_REVIEWER,
+    Coverage,
     MaskPlan,
-    mask_plan,
-    name_approvals,
-    padding_ms,
-    task_texts,
+    fold_mask_plan,
+    mask_coverage,
+    place_quote,
+    quote_tokens,
 )
 from senselab.audio.workflows.triage.nodes.voice import PHONATION_READING
+from senselab.audio.workflows.triage.quality_join import QUALITY_JOIN
+from senselab.audio.workflows.triage.routing_analysis.families import LEXICAL_SPEECH, SYLLABLE_REPETITION
+from senselab.audio.workflows.triage.task_extent import STIMULUS_EXTENT_CHECK, task_extent_parameters
 from senselab.audio.workflows.triage.task_lexicon import task_lexicon
+from senselab.audio.workflows.triage.task_speech import (
+    TASK_SPEECH_READING,
+    item_set_family,
+    narrative_family,
+    non_lexical_family,
+    reads_task_speech,
+    speech_before,
+    words_min_for,
+)
 from senselab.audio.workflows.triage.vocabulary import (
     BREATH_COUNTED,
     BREATH_SUSTAINED,
     COUGH_COUNTED,
     COUGH_PERFORMED,
+    DOMINANT_SPEAKER_GATE,
     GRAPH_ORDER,
     KEY_NODE_OUTCOME_UNREADABLE,
     PII_SCAN,
@@ -128,7 +152,9 @@ from senselab.audio.workflows.triage.vocabulary import (
     RunState,
     TaskEvidence,
     fold_file_verdict,
+    release_value,
     reviewer_may_unmask,
+    standing_task_extents,
 )
 from senselab.utils.prov_store import PROV_TYPE, Entity, ProvStore
 
@@ -449,6 +475,29 @@ def _owner_absent_inputs(
     return tuple(dict.fromkeys(absent))
 
 
+DECISION_INPUTS: dict[str, tuple[str, ...]] = {
+    BREATH_READING: ("decision",),
+    COUGH_READING: ("onsets_n", "review"),
+    PHONATION_READING: ("found",),
+    DDK_READING: ("decision",),
+}
+"""Per task reading, the attributes the fold decides on; a reading lacking one is not measured."""
+
+
+def _undecidable(name: str, node: str, attributes: Mapping[str, Any]) -> tuple[str, ...]:
+    """The decision inputs a stored task reading lacks, named for the owner's absent inputs.
+
+    Args:
+        name: The reading's measurement name.
+        node: The node that wrote it.
+        attributes: The measurement's attributes.
+
+    Returns:
+        ``<node>:<name>.<field>`` for each field of :data:`DECISION_INPUTS` that is missing or None.
+    """
+    return tuple(f"{node}:{name}.{field}" for field in DECISION_INPUTS.get(name, ()) if attributes.get(field) is None)
+
+
 def _airway_reading(store: ProvStore, name: str) -> tuple[dict[str, Any] | None, tuple[str, ...]]:
     """AIRWAY's task reading and the inputs it lacked, as AIRWAY wrote them.
 
@@ -458,7 +507,8 @@ def _airway_reading(store: ProvStore, name: str) -> tuple[dict[str, Any] | None,
 
     Returns:
         The measurement's attributes and ``()``; ``None`` and the absent inputs where AIRWAY lacked
-        them; ``None`` and the measurement's own name where AIRWAY reported and wrote no reading;
+        them or the reading lacks a :data:`DECISION_INPUTS` field; ``None`` and the measurement's own
+        name where AIRWAY reported and wrote no reading;
         ``None`` and ``()`` where AIRWAY did not report at all.
     """
     measurement = find_measurement(store, name)
@@ -466,6 +516,7 @@ def _airway_reading(store: ProvStore, name: str) -> tuple[dict[str, Any] | None,
         reported = any(report.node == "AIRWAY" for _, report in _branch_reports(store))
         return None, ((f"AIRWAY:{name}",) if reported else ())
     absent = tuple(str(each) for each in measurement.attributes.get("absent") or ())
+    absent = absent or _undecidable(name, "AIRWAY", measurement.attributes)
     return (None, absent) if absent else (dict(measurement.attributes), ())
 
 
@@ -492,6 +543,27 @@ def _voice_reading(store: ProvStore) -> tuple[dict[str, Any] | None, tuple[str, 
         reported = any(report.node == "VOICE" for _, report in _branch_reports(store))
         return None, ((f"VOICE:{PHONATION_READING}",) if reported else ())
     absent = tuple(f"VOICE:{each}" for each in measurement.attributes.get("absent") or ())
+    absent = absent or _undecidable(PHONATION_READING, "VOICE", measurement.attributes)
+    return (None, absent) if absent else (dict(measurement.attributes), ())
+
+
+def _speech_ddk_reading(store: ProvStore) -> tuple[dict[str, Any] | None, tuple[str, ...]]:
+    """SPEECH's syllable-task reading and the inputs it lacked, as SPEECH wrote them.
+
+    Args:
+        store: The provenance store.
+
+    Returns:
+        The measurement's attributes and ``()``; ``None`` and the absent inputs where SPEECH lacked
+        them; ``None`` and the measurement's own name where SPEECH reported and wrote no reading;
+        ``None`` and ``()`` where SPEECH did not report at all.
+    """
+    measurement = find_measurement(store, DDK_READING)
+    if measurement is None:
+        reported = any(report.node == "SPEECH" for _, report in _branch_reports(store))
+        return None, ((f"SPEECH:{DDK_READING}",) if reported else ())
+    absent = tuple(f"SPEECH:{each}" for each in measurement.attributes.get("absent") or ())
+    absent = absent or _undecidable(DDK_READING, "SPEECH", measurement.attributes)
     return (None, absent) if absent else (dict(measurement.attributes), ())
 
 
@@ -546,9 +618,29 @@ def _task_evidence(
         voice_mode = "glide" if voice.pattern == Pattern.GLIDE else "sustained"
         phonation, missing = _voice_reading(store)
         absent = missing if phonation is not None or missing else absent
+    speech = EXPECTATIONS["SPEECH"].get(declared_family or "") if "SPEECH" in owners else None
+    ddk_mode: str | None = None
+    ddk: dict[str, Any] | None = None
+    if speech is not None and declared_family in SYLLABLE_REPETITION:
+        ddk_mode = CYCLE if speech.pattern == Pattern.SYLLABLE_SEQUENCE else SYLLABLE
+        ddk, missing = _speech_ddk_reading(store)
+        absent = missing if ddk is not None or missing else absent
     instructed = airway.required_count.value if airway is not None and airway.required_count is not None else None
-    heard = find_measurement(store, BACKGROUND_SPEECH) if reading is not None or cough is not None else None
-    background = {k: v for k, v in heard.attributes.items() if k not in ("name", "signal")} if heard else {}
+    joined = find_measurement(store, QUALITY_JOIN)
+    quality = (
+        {k: v for k, v in joined.attributes.items() if k not in ("name", "signal")}
+        if joined is not None
+        else {"missing": [QUALITY_JOIN]}
+        if find_measurement(store, BACKGROUND_MODEL) is not None
+        else {}
+    )
+    speech_reading = find_measurement(store, TASK_SPEECH_READING) if reads_task_speech(declared_family) else None
+    task_speech = (
+        {k: v for k, v in speech_reading.attributes.items() if k not in ("name", "signal")}
+        if speech_reading is not None
+        else {}
+    )
+    check, growth_s = extent_reading(store, reading, cough, phonation, ddk)
     return TaskEvidence(
         owning_branches=owners,
         duration_s=duration,
@@ -556,7 +648,8 @@ def _task_evidence(
         event_tokens_n=event_tokens_n(store, declared_family),
         owner_absent_inputs=absent,
         required_event=(needed if needed != "cough" or cough_mode is not None else None)
-        or ("phonation" if voice_mode is not None else None),
+        or ("phonation" if voice_mode is not None else None)
+        or ("syllable" if ddk_mode is not None else None),
         events_found_n=_airway_events_found(store) if "AIRWAY" in owners else None,
         event_kind=airway.label_set if airway is not None else None,
         instructed_count=airway.required_count.value
@@ -569,21 +662,19 @@ def _task_evidence(
         breath_pattern=reading["pattern"] if reading is not None else None,
         breath_events_n=reading["events_n"] if reading is not None else None,
         breath_vetoed_by=reading.get("vetoed_by") if reading is not None else None,
-        breath_train_breaths=reading.get("train_breaths") if reading is not None else None,
+        breath_train_breaths=reading.get("breaths") if reading is not None else None,
+        breath_decision=reading.get("decision") if reading is not None else None,
         breath_review=bool(reading.get("review")) if reading is not None else False,
         breath_reading={"mode": breath_mode, **reading["reading"]} if reading is not None else {},
         cough_mode=cough_mode,
         cough_onsets_n=cough["onsets_n"] if cough is not None else None,
         cough_review=bool(cough.get("review")) if cough is not None else False,
         cough_reading={"mode": cough_mode, **cough["reading"]} if cough is not None else {},
-        background_speech=background,
+        quality=quality,
         voice_mode=voice_mode,
         voice_found=bool(phonation["found"]) if phonation is not None else None,
         voice_mismatch=phonation.get("mismatch") if phonation is not None else None,
         voice_review=tuple(phonation.get("review") or ()) if phonation is not None else (),
-        voice_capture_cut=bool((phonation or {}).get("shutoff", {}).get("during_task")),
-        voice_shutoff_after=bool((phonation or {}).get("shutoff"))
-        and not (phonation or {}).get("shutoff", {}).get("during_task"),
         voice_outside_speech=tuple((phonation or {}).get("outside_speech") or ()),
         voice_reading={
             "mode": voice_mode,
@@ -591,7 +682,206 @@ def _task_evidence(
         }
         if phonation is not None
         else {},
+        ddk_mode=ddk_mode,
+        ddk_decision=ddk.get("decision") if ddk is not None else None,
+        ddk_reading={
+            "mode": ddk_mode,
+            **{k: v for k, v in ddk.items() if k not in ("name", "signal", "absent", "value", "reading")},
+        }
+        if ddk is not None
+        else {},
+        task_speech=task_speech,
+        task_speech_words_min=words_min_for(declared_family) if task_speech else None,
+        item_set=item_set_family(declared_family),
+        narrative=narrative_family(declared_family),
+        separated_speakers_n=separated_speakers_n(store),
+        speech_before_task=_speech_before_task(store, declared_family),
+        extent_check=check,
+        extent_reviews=bool(task_extent_parameters()["completeness"]["reviews"]),
+        extent_growth_s=growth_s,
+        atypical=atypical_readings(cough, ddk),
+        task_background=background_of(reading, cough, ddk),
     )
+
+
+def explained_gate(store: ProvStore, record: dict[str, Any]) -> dict[str, Any]:
+    """A flag gate's record, with the model and the spans behind the speaker gate's worst reading.
+
+    Args:
+        store: The provenance store.
+        record: The applied gate's record.
+
+    Returns:
+        The record; for the speaker gate, with ``model`` (the diarizer) and ``spans`` (where a second voice
+        holds the extent alone) of the reading the gate was answered with.
+    """
+    if record.get("gate") != DOMINANT_SPEAKER_GATE:
+        return record
+    readings = [m for m in find_measurements(store, SPEAKER_SHARE_READING) if m.attributes.get("value") is not None]
+    if not readings:
+        return record
+    worst = min(readings, key=lambda m: float(m.attributes["value"]))
+    return {
+        **record,
+        "model": worst.attributes.get("diarizer"),
+        "spans": [list(span) for span in worst.attributes.get("secondary_exclusive_spans") or ()],
+    }
+
+
+def reviewer_other_spans(store: ProvStore, annotation: Mapping[str, Any] | None) -> tuple[tuple[float, float], ...]:
+    """Where the reviewer's other-speaker quotes lie on the timed consensus words.
+
+    Args:
+        store: The provenance store.
+        annotation: REVIEW's annotation, or None.
+
+    Returns:
+        The timing hull of each placed quote, earliest first; empty where nothing is quoted or placed.
+    """
+    reading = dict(annotation or {})
+    quotes = [
+        *(str(q) for q in reading.get("other_speaker_quotes") or ()),
+        *(str(entry.get("text")) for entry in reading.get("other_speakers") or () if isinstance(entry, Mapping)),
+    ]
+    quotes = [quote for quote in quotes if quote.strip()]
+    if not quotes:
+        return ()
+    tokens = quote_tokens(consensus_words(store))
+    spans = []
+    for quote in quotes:
+        placed = place_quote(quote, tokens)
+        if placed:
+            hulls = [word_hull(word) for word in placed]
+            spans.append((min(a for a, _ in hulls), max(b for _, b in hulls)))
+    return tuple(sorted(set(spans)))
+
+
+SEPARATED_SOURCE_READING = "extent_source_active_s"
+"""SPEECH's per-separated-source reading inside a task extent, carrying the speaker it is attributed to."""
+
+
+def separated_speakers_n(store: ProvStore) -> int | None:
+    """How many distinct speakers SPEECH's separated sources inside the task extents are attributed to.
+
+    Args:
+        store: The provenance store.
+
+    Returns:
+        The count of distinct ``speaker`` labels over the live ``extent_source_active_s`` readings, or None
+        where SPEECH separated nothing.
+    """
+    readings = find_measurements(store, SEPARATED_SOURCE_READING)
+    if not readings:
+        return None
+    return len({str(reading.attributes.get("speaker")) for reading in readings})
+
+
+def _speech_before_task(store: ProvStore, declared_family: str | None) -> dict[str, Any]:
+    """The lexical speech before a lexical family's task extent (:func:`speech_before`).
+
+    Args:
+        store: The provenance store.
+        declared_family: The declared task family.
+
+    Returns:
+        The reading; empty for any other family, where no task extent stands, or where no word precedes it.
+    """
+    if declared_family not in LEXICAL_SPEECH or non_lexical_family(declared_family):
+        return {}
+    extents = [span.extent for span in standing_task_extents(live_entities(store, "span")) if span.extent is not None]
+    if not extents:
+        return {}
+    return speech_before(lexical_words(store), min(float(extent[0]) for extent in extents))
+
+
+def extent_reading(
+    store: ProvStore,
+    breath: Mapping[str, Any] | None,
+    cough: Mapping[str, Any] | None,
+    phonation: Mapping[str, Any] | None,
+    ddk: Mapping[str, Any] | None,
+) -> tuple[dict[str, Any], float | None]:
+    """The owning branch's completeness reading of the task extent, and how far growth moved it.
+
+    Args:
+        store: The provenance store, read for SPEECH's ``stimulus_extent_check``.
+        breath: AIRWAY's breath reading, or None.
+        cough: AIRWAY's cough reading, or None.
+        phonation: VOICE's phonation reading, or None.
+        ddk: SPEECH's syllable-task reading, or None.
+
+    Returns:
+        ``(check, growth seconds)``: the first reading's ``extent_check`` (a stimulus's from its measurement)
+        and its growth; ``({}, None)`` where none was read.
+    """
+    for reading in (breath, cough):
+        if reading is not None:
+            evidence = dict((reading.get("reading") or {}).get("evidence") or {})
+            growth = evidence.get("growth") or {}
+            seconds = growth.get("seconds")
+            return dict(evidence.get("extent_check") or {}), None if seconds is None else float(seconds)
+    if phonation is not None:
+        return dict(phonation.get("extent_check") or {}), None
+    if ddk is not None:
+        return dict(((ddk.get("reading") or {}).get("evidence") or {}).get("extent_check") or {}), None
+    measurement = find_measurement(store, STIMULUS_EXTENT_CHECK)
+    if measurement is None:
+        return {}, None
+    attributes = dict(measurement.attributes)
+    return {
+        "status": attributes.get("value"),
+        "outside_n": attributes.get("outside_n", 0),
+        "checks": list(attributes.get("checks") or ()),
+    }, None
+
+
+def background_of(
+    breath: Mapping[str, Any] | None, cough: Mapping[str, Any] | None, ddk: Mapping[str, Any] | None
+) -> dict[str, Any]:
+    """The owning reading's task events against the recording's background (``task_events.background_reading``).
+
+    Args:
+        breath: AIRWAY's breath reading, or None.
+        cough: AIRWAY's cough reading, or None.
+        ddk: SPEECH's syllable-task reading, or None.
+
+    Returns:
+        The first reading's ``background``; empty where none was read.
+    """
+    for reading in (breath, cough, ddk):
+        if reading is not None:
+            return dict((((reading.get("reading") or {}).get("evidence") or {}).get("background")) or {})
+    return {}
+
+
+def atypical_readings(cough: Mapping[str, Any] | None, ddk: Mapping[str, Any] | None) -> tuple[str, ...]:
+    """The readings of an attempted cough or syllable task outside its family's corpus range.
+
+    Args:
+        cough: AIRWAY's cough reading, or None.
+        ddk: SPEECH's syllable-task reading, or None.
+
+    Returns:
+        ``cough_event_s=<median>`` where the cough events' median duration exceeds ``atypical.cough_event_s_max``,
+        and ``ddk_rate_hz=<rate>`` where the syllable rate lies outside ``atypical.ddk_rate_hz``
+        (``data/task_extent.yaml``); a null bound reads nothing.
+    """
+    q = task_extent_parameters()["atypical"]
+    out: list[str] = []
+    events = (((cough or {}).get("reading") or {}).get("evidence") or {}).get("events") or ()
+    durations = [float(e["end_s"]) - float(e["start_s"]) for e in events]
+    bound = q.get("cough_event_s_max")
+    if durations and bound is not None and float(np.median(durations)) > float(bound):
+        out.append(f"cough_event_s={float(np.median(durations)):.2f}")
+    rate = ((ddk or {}).get("annotations") or {}).get("syllable_rate_hz")
+    low, high = (list(q.get("ddk_rate_hz") or ()) + [None, None])[:2]
+    if (
+        rate is not None
+        and (ddk or {}).get("decision") != "absent"
+        and ((low is not None and float(rate) < float(low)) or (high is not None and float(rate) > float(high)))
+    ):
+        out.append(f"ddk_rate_hz={float(rate):.2f}")
+    return tuple(out)
 
 
 def _route_state(store: ProvStore) -> tuple[str | None, list[str]]:
@@ -667,8 +957,63 @@ def _second_opinion(store: ProvStore) -> tuple[dict[str, object] | None, list[st
     ]
 
 
+def final_coverage(store: ProvStore, plan: MaskPlan, config: TriageConfig, run_dir: Path) -> Coverage:
+    """Whether the final plan's masks cover their words in the released text and the released audio.
+
+    Args:
+        store: The provenance store, read for the consensus words and the ``recording`` stream.
+        plan: The final mask plan.
+        config: The triage configuration, read for ``redaction.fill`` and ``redaction.bleep_hz``.
+        run_dir: The run directory the stream's path is relative to.
+
+    Returns:
+        The check; the audio is not checked where the plan masks nothing or the stream is not stored.
+    """
+    fill = str(config.require("redaction.fill"))
+    source = masked = None
+    if plan.final:
+        try:
+            _, source = resolve_stream(store, run_dir, MASK_SOURCE)
+            masked = apply_redactions(source, plan.final, fill=fill, bleep_hz=config.get("redaction.bleep_hz"))
+        except (LookupError, OSError, RuntimeError):
+            source = masked = None
+    return mask_coverage(
+        consensus_words(store), plan.final, set(plan.owners()), source, masked, fill=fill, owners=plan.owners()
+    )
+
+
+def task_audible(store: ProvStore, masks: Sequence[Any]) -> tuple[float | None, float | None]:
+    """The task extent a release is cut to, and how much of it no mask covers.
+
+    Args:
+        store: The provenance store, read for its live task-extent spans and the recording's duration.
+        masks: The final masks, each with ``start`` and ``end``.
+
+    Returns:
+        ``(extent_s, audible_s)``: the hull of the live task-extent spans clamped to the recording, and its time
+        outside every mask; ``(None, None)`` where no task extent stands.
+    """
+    extents = [span.extent for span in standing_task_extents(live_entities(store, "span")) if span.extent is not None]
+    if not extents:
+        return None, None
+    duration = recording_duration(store)
+    start = max(0.0, min(float(extent[0]) for extent in extents))
+    end = max(float(extent[1]) for extent in extents)
+    if duration is not None:
+        start, end = min(start, float(duration)), min(end, float(duration))
+    length = max(0.0, end - start)
+    covered = 0.0
+    edge = start
+    for lo, hi in sorted((max(start, float(m.start)), min(end, float(m.end))) for m in masks):
+        lo = max(lo, edge)
+        if hi > lo:
+            covered += hi - lo
+            edge = hi
+    return round(length, 3), round(max(0.0, length - covered), 3)
+
+
 def _redaction_evidence(
-    store: ProvStore, reports: Sequence[tuple[Entity, BranchReport]], plan: MaskPlan
+    store: ProvStore, reports: Sequence[tuple[Entity, BranchReport]], plan: MaskPlan, coverage: Coverage
 ) -> RedactionEvidence:
     """What the store says about whether this recording carried anything a redaction could remove.
 
@@ -677,29 +1022,41 @@ def _redaction_evidence(
         reports: The reporting nodes' reports, paired with the entities they were read from, so
             SPEECH's own lexical count can be read off its report.
         plan: Which masks stand once the reviewer's unmasks and the content-word trim are applied.
+        coverage: Whether the final plan's masks cover their words (:func:`final_coverage`).
 
     Returns:
         SPEECH's lexical count, its scan record as a tri-state, how many live ``pii`` findings the
-        store holds, what REDACT's re-scan still read after its re-plan, and the masks that stand.
+        store holds, what REDACT's re-scan still read after its re-plan, the masks that stand, and the
+        recognisers the consensus names ``aligner_failed``.
     """
     speech = next((entity for entity, report in reports if report.node == SPEECH), None)
     words = None if speech is None else speech.attributes.get("words_n")
     scans = [measurement.attributes for measurement in find_measurements(store, PII_SCAN)]
-    redact = find_verdict(store, _REDACT_NODE)
-    survivors = () if redact is None else tuple(str(c) for c in redact.attributes.get("unremediable") or ())
+    extent_s, audible_s = task_audible(store, plan.final)
     return RedactionEvidence(
         lexical_words_n=None if words is None else int(words),
         scanned=None if not scans else not any(scan.get(SCANNED) is False for scan in scans),
         findings_n=len([finding for finding in store.entities("pii") if not store.is_invalidated(finding.id)]),
-        rescan_survivors=survivors,
+        coverage_failed=not coverage.ok,
         masks_n=len(plan.masks),
         masks_final_n=len(plan.final),
+        pii_masks_final_n=plan.pii_masks_final_n,
         masks_changed=plan.changed,
         reviewer_unmasked_n=plan.count(UNMASKED_BY_REVIEWER),
         policy_masks_n=plan.policy_masks_n,
         person_names_masked_n=plan.person_names_masked,
         name_release_proposed=plan.name_release_proposed,
         reviewer_requested_n=sum(1 for span in plan.proposals if span.agreement == NEW),
+        propagated_masked_n=plan.propagated_masked_n,
+        task_content_only=plan.task_content_only,
+        non_task_speech_masked_n=plan.non_task_speech_masked_n,
+        non_task_speech_untimed_n=len(plan.non_task_speech_untimed),
+        non_task_speech_extensive=plan.non_task_speech_extensive,
+        task_extent_s=extent_s,
+        task_audible_s=audible_s,
+        aligner_failed=tuple(str(source) for source in (consensus.attributes.get("aligner_failed") or ()))
+        if (consensus := find_measurement(store, "consensus_transcript")) is not None
+        else (),
     )
 
 
@@ -837,7 +1194,7 @@ TRACKS_ABSENT_MEASUREMENTS = ("phonation_extent", "sweep_extent")
 CARRIER_PRESENCE_READING = "carrier_duration_s"
 """The reading VOICE writes for every carrier it measured over: its absence means none qualified."""
 
-SPEAKER_SHARE_READING = "extent_dominant_speaker_share"
+SPEAKER_SHARE_READING = "extent_dominant_exclusive_share"
 """The reading the speaker gate is answered with."""
 
 
@@ -1037,12 +1394,20 @@ def _derived_ran(
         reports: Every branch report read from the store.
 
     Returns:
-        ``COMPLETED`` for a node carrying a verdict, a report or (REVIEW) an annotation, ``ERRORED``
+        ``COMPLETED`` for a node carrying a verdict, a report, (REVIEW) an annotation or (SESSION,
+        BACKGROUND) its measurement, ``ERRORED``
         for one carrying a live activity but none of those, and ``SKIPPED`` for one carrying none.
     """
     concluded = {v.node for v in verdicts} | {r.node for r in reports}
     if find_measurement(store, REDACTION_LLM_ANNOTATION) is not None:
         concluded.add(_REVIEW)
+    for node, name in (
+        (SESSION_NODE, SESSION_FLOOR),
+        (BACKGROUND_NODE, BACKGROUND_MODEL),
+        (COHORT_NODE, COHORT_READING),
+    ):
+        if find_measurement(store, name) is not None:
+            concluded.add(node)
     outputs: dict[str, list[str]] = {}
     for entity in store.entities():
         activity_id = store.generated_by(entity.id)
@@ -1107,24 +1472,15 @@ def verdict(
     decisions, decision_ids = _branch_decisions(store)
     annotation, annotation_ids = _llm_redaction(store)
     opinion, opinion_ids = _second_opinion(store)
+    cohort = find_measurement(store, COHORT_READING)
     resolved_ran = {**_derived_ran(store, node_verdicts, reports), **(ran or {})}
     policy = FoldPolicy.from_config(config)
-    plan = mask_plan(
-        store,
-        reviewer_applies=policy.llm_reset_redactions and reviewer_may_unmask(annotation),
-        padding_ms=padding_ms(config),
-        condition_categories=policy.condition_categories,
-        protected_categories=policy.trim_protected_categories,
-        cohort_conditions=policy.cohort_conditions,
-        lexicon=task_lexicon(config, declared_task_family(store), hint),
-        language=None if hint is None else str(hint.metadata.get("language") or "") or None,
-        name_approvals=name_approvals(config, recording_stem(store)),
-        task_text=task_texts(hint),
+    plan = fold_mask_plan(
+        store, config, hint, reviewer_applies=policy.llm_reset_redactions and reviewer_may_unmask(annotation)
     )
-    task_evidence = _task_evidence(
-        store,
-        declared_family or None,
-        outcome.record(),
+    task_evidence = replace(
+        _task_evidence(store, declared_family or None, outcome.record()),
+        reviewer_other_spans=reviewer_other_spans(store, annotation),
     )
     file_verdict = fold_file_verdict(
         node_verdicts,
@@ -1135,16 +1491,17 @@ def verdict(
         hint_claims=_hint_claims(decisions, hint, declared_family=declared_family),
         route_state=route_state,
         declared_family=declared_family or None,
-        redaction=_redaction_evidence(store, report_pairs, plan),
+        redaction=_redaction_evidence(store, report_pairs, plan, final_coverage(store, plan, config, run_dir)),
         llm_redaction=annotation,
         critical_absences=_critical_absences(store),
         gates=outcome.record(),
-        flag_gates=[gate.record() for gate in outcome.flagging],
+        flag_gates=[explained_gate(store, gate.record()) for gate in outcome.flagging],
         policy=policy,
         agreed_redactions=plan.agreed,
         unplaced=[(finding.family, finding.state) for finding in plan.unplaced],
         second_opinion=opinion,
         task=task_evidence,
+        cohort=None if cohort is None else cohort.attributes,
     )
 
     software = software_agent(store)
@@ -1157,6 +1514,7 @@ def verdict(
         + decision_ids
         + annotation_ids
         + opinion_ids
+        + ([] if cohort is None else [cohort.id])
     )
     for folded_id in folded_ids:
         store.used(activity, folded_id)
@@ -1178,7 +1536,7 @@ def verdict(
         store,
         prov_type="measurement",
         extent=None,
-        attributes=plan.record(release=file_verdict.release.value, release_ground=file_verdict.release_ground),
+        attributes=plan.record(release=release_value(file_verdict.release), release_ground=file_verdict.release_ground),
     )
     store.was_generated_by(ledger_id, activity)
     store.was_attributed_to(ledger_id, software)

@@ -1,0 +1,220 @@
+# triage.tsv: one row per recording, built by triage_table.py from triage_decisions.parquet and
+# triage_evidence.parquet, plus the run tree for the source path, the recording's duration, which
+# task-audio files exist and the store's whole-file readings, and recording_vectors.parquet for the
+# whole-file SNR, noise floor and SQUIM. Quality readings are whole-file. No transcripts. A list is
+# joined with ";", empty when there is none; a missing value is an empty field. Columns are written in
+# the order listed here. The files group is relative to derivatives/senselab-triage/ and empty when the
+# file is absent. units, levels and levels_from (reasons: data/decision_reasons.yaml meaning; release_grounds:
+# vocabulary.RELEASE_GROUND_KEYS) feed the BIDS sidecar triage.json.
+version: 3
+columns:
+- name: participant_id
+  group: identity
+  description: BIDS participant label, with its sub- prefix
+- name: session_id
+  group: identity
+  description: BIDS session label, with its ses- prefix
+- name: task
+  group: identity
+  description: BIDS task label
+- name: task_family
+  group: identity
+  description: the task family the recording declares
+- name: branch
+  group: identity
+  description: the branch that owns the family (SPEECH, VOICE or AIRWAY), else none
+  levels:
+    SPEECH: speech and reading families
+    VOICE: phonation, glide and loudness families
+    AIRWAY: breathing and cough families
+    none: no branch owns the declared family
+- name: source_path
+  group: identity
+  description: the recording WAV, relative to the BIDS root
+- name: verdict
+  group: decision
+  description: pass, review or discard
+  levels:
+    pass: the recording can be used as released
+    review: a person should look before it is used
+    discard: the recording does not hold its task; nothing is released
+- name: release
+  group: decision
+  description: as_is, redacted or withheld; empty on discard
+  levels:
+    as_is: the recording is released as recorded
+    redacted: only the redacted copy is released; the verdict is review
+    withheld: neither copy is released until a person reviews it; the verdict is review
+- name: release_reason
+  group: decision
+  description: the release ground key behind the release; empty on discard
+  levels_from: release_grounds
+- name: reason
+  group: decision
+  description: the reason key that names the verdict; empty on a clean pass
+  levels_from: reasons
+- name: reasons
+  group: decision
+  description: every reason key, joined with ";"
+  levels_from: reasons
+- name: issues_n
+  group: decision
+  description: distinct reasons plus distinct annotation keys; 0 is a clean file
+- name: run_status
+  group: decision
+  description: whether every node the decision needed ran
+  levels:
+    complete: every measurement the decision needed ran
+    incomplete: a measurement the decision needed is missing (see missing); the verdict is review
+- name: missing
+  group: decision
+  description: the inputs the decision lacked, joined with ";"
+- name: recording_duration_s
+  group: task
+  description: the recording's duration, seconds
+  units: s
+- name: task_start_s
+  group: task
+  description: start of the task extent in the recording, seconds
+  units: s
+- name: task_end_s
+  group: task
+  description: end of the task extent in the recording, seconds
+  units: s
+- name: task_duration_s
+  group: task
+  description: task_end_s minus task_start_s
+  units: s
+- name: task_fraction
+  group: task
+  description: task_duration_s over recording_duration_s
+  units: fraction
+- name: task_events_found
+  group: task
+  description: breaths, coughs or syllables/cycles the task layer found; empty for other families
+  units: events
+- name: task_events_instructed
+  group: task
+  description: the count the instruction asked for; empty where the family is not counted
+  units: events
+- name: annotations
+  group: task
+  description: annotation keys that did not change the verdict, joined with ";"
+- name: decisive_evidence
+  group: evidence
+  description: the evidence items that decided the verdict, each name=value<op>threshold→effect, joined with "; "
+- name: level_rel_session_db
+  group: acquisition
+  description: the recording's level against its session, dB
+  units: dB
+- name: active_s
+  group: acquisition
+  description: seconds of activity in the plain stream
+  units: s
+- name: interference_in_task
+  group: acquisition
+  description: interference kinds touching the task extent, joined with ";"
+- name: fault_in_task
+  group: acquisition
+  description: capture faults touching the task extent, each kind:seconds, joined with ";"
+- name: snr_db
+  group: quality
+  description: the plain stream's active frame level (95th percentile) over its noise floor, whole file, dB (recording_vectors q_plain_snr_db)
+  units: dB
+- name: noise_floor_dbfs
+  group: quality
+  description: the plain stream's 10th-percentile frame level, whole file, dBFS (recording_vectors q_plain_floor_dbfs)
+  units: dBFS
+- name: session_background_dbfs
+  group: quality
+  description: the session's background level from the residual of its speech tasks, dBFS (SESSION's session_floor)
+  units: dBFS
+- name: speech_over_residual_db
+  group: quality
+  description: the enhanced foreground over the residual, whole file, dB (speech_residual foreground_minus_residual_db); empty where the enhanced stream carries no speech
+  units: dB
+- name: squim_pesq
+  group: quality
+  description: the median SQUIM PESQ over the plain stream's spans; empty for airway families
+- name: squim_stoi
+  group: quality
+  description: the median SQUIM STOI over the plain stream's spans; empty for airway families
+- name: squim_si_sdr
+  group: quality
+  description: the median SQUIM SI-SDR over the plain stream's spans, dB; empty for airway families
+  units: dB
+- name: clipped_s
+  group: quality
+  description: seconds the clip detector's live spans hold (PREPROCESS clip spans); empty where PREPROCESS did not measure the recording
+  units: s
+- name: dropout_s
+  group: quality
+  description: seconds of dropout in the raw recording (disruptions_file)
+  units: s
+- name: lexical_words_n
+  group: speech_content
+  description: lexical consensus words; empty where SPEECH did not read the recording
+  units: words
+- name: off_task_words_n
+  group: speech_content
+  description: words that are not the task's own content (the redaction ledger's non-task speech, else the speech words in a non-lexical task)
+  units: words
+- name: asr_agreement
+  group: speech_content
+  description: the share of consensus words both recognisers agree on
+  units: fraction
+- name: asr_single_hypothesis
+  group: speech_content
+  description: true where only one recogniser produced a transcript
+  levels:
+    'true': only one recogniser produced a transcript
+    'false': both recognisers produced a transcript
+- name: asr_degenerate_n
+  group: speech_content
+  description: recogniser loop or garbage tokens dropped from the consensus
+  units: tokens
+- name: masked_s
+  group: speech_content
+  description: seconds of the task extent the redaction masks; empty when withheld or discarded
+  units: s
+- name: masked_fraction
+  group: speech_content
+  description: masked_s over task_duration_s; empty when withheld or discarded
+  units: fraction
+- name: speaker_target_cosine
+  group: speaker
+  description: the task's own speech, pooled, against the participant's enrollment (COHORT); empty where not compared
+- name: speaker_non_task_cosine
+  group: speaker
+  description: the speech outside the task, pooled, against the participant's enrollment (COHORT); empty where not compared
+- name: session_consistency_cosine
+  group: speaker
+  description: the session's enrollment against the participant's other sessions' (COHORT)
+- name: enrollment_source
+  group: speaker
+  description: what the cosines compare against, session, participant_other_sessions or none
+  levels:
+    session: the participant's speech in the same session
+    participant_other_sessions: the participant's speech in their other sessions
+    none: no enrollment could be built; the cosines are empty
+- name: task_audio_plain
+  group: files
+  description: the task extent cut from the plain stream
+- name: task_audio_enhanced
+  group: files
+  description: the task extent cut from the enhanced stream
+- name: task_audio_redacted
+  group: files
+  description: the task extent cut from the redacted stream
+- name: figure
+  group: files
+  description: the summary figure
+- name: pipeline_commit
+  group: provenance
+  description: the senselab commit the decision was last written under
+- name: config_hash
+  group: provenance
+  description: the triage configuration's hash
+- name: schema_version
+  group: provenance
+  description: this table's version, the version key of triage_table.yaml

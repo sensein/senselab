@@ -630,7 +630,6 @@ def embed_subject(
     Raises:
         ValueError: If ``extents`` is empty, or no window survived extraction for any of them.
     """
-    import soundfile as sf  # noqa: PLC0415 -- heavy; only needed when an estimate actually runs
     import torch  # noqa: PLC0415
 
     from senselab.audio.data_structures import Audio  # noqa: PLC0415
@@ -642,6 +641,7 @@ def embed_subject(
         extract_per_window_embeddings,
     )
     from senselab.utils.model_revision import resolve_revision  # noqa: PLC0415
+    from senselab.utils.portable_audio_io import audio_info, read_audio  # noqa: PLC0415
     from senselab.utils.tasks.embedding_distribution import (  # noqa: PLC0415
         describe_embedding_distribution,
     )
@@ -658,12 +658,13 @@ def embed_subject(
     extraction_failures: dict[str, str] = {}
     kept: list[Extent] = []
     for extent in extents:
-        info = sf.info(str(extent.audio_path))
-        first = max(0, int(round(extent.start_s * info.samplerate)))
-        last = min(info.frames, int(round(extent.end_s * info.samplerate)))
+        info = audio_info(extent.audio_path)
+        first = max(0, int(round(extent.start_s * info.sampling_rate)))
+        last = int(round(extent.end_s * info.sampling_rate))
+        last = last if info.frames is None else min(info.frames, last)
         if last <= first:
             continue
-        samples, rate = sf.read(str(extent.audio_path), start=first, stop=last, dtype="float32", always_2d=True)
+        samples, rate = read_audio(extent.audio_path, start=first, stop=last, always_2d=True, channels_first=False)
         waveform = torch.from_numpy(np.ascontiguousarray(samples[:, 0])).unsqueeze(0)
         kept.append(extent)
 

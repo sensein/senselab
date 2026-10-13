@@ -15,11 +15,9 @@ signal via ``ScriptLine.score`` (line-level) and each word chunk's ``score``.
 from __future__ import annotations
 
 import hashlib
-import json
 import os
 import platform
 import shutil
-import subprocess
 import sys
 import tempfile
 import uuid
@@ -29,7 +27,8 @@ from typing import List, Optional
 from senselab.audio.data_structures import Audio
 from senselab.utils.data_structures import DeviceType, HFModel, ScriptLine, _select_device_and_dtype
 from senselab.utils.dependencies import hf_subprocess_env, resolve_model
-from senselab.utils.subprocess_venv import _clean_subprocess_env, ensure_venv, parse_subprocess_result, venv_python
+from senselab.utils.subprocess_venv import _clean_subprocess_env, ensure_venv, venv_python
+from senselab.utils.venv_worker import serve_in_venv
 
 _CRISPER_VENV = "crisperwhisper"
 # The CT2 backend on Linux x86_64, the transformers backend elsewhere. One requirement list with
@@ -58,6 +57,18 @@ _CT2_MARKER = ".conversion_complete"
 # CTranslate2's C++ message when a decode step indexes past Whisper's 448 position
 # encodings; see specs/20260910-crisperwhisper-decoder-positions/.
 _CT2_POSITION_LIMIT = "No position encodings are defined for positions >="
+
+LONGFORM_STRATEGY = "continuation"
+"""The long-form strategy: 30 s windows, each prompted with the last words of the transcript so far."""
+
+CONTEXT_CAPPED = "continuation_context_capped"
+"""The ``decode_strategy`` of a recording decoded again after a position overrun, its context prompts capped."""
+
+DECODER_POSITIONS = 448
+"""Whisper's decoder position encodings, which a window's prompt and its generated tokens share."""
+
+MAX_NEW_TOKENS = 256
+"""The tokens a window may generate; the library's own default, passed explicitly."""
 
 
 class CrisperWhisperDecoderPositionsExceeded(ValueError):
@@ -117,35 +128,31 @@ def _discard_torn_ct2_entry(entry: Path) -> bool:
     return True
 
 
-# Worker — runs inside the isolated venv.
+# Worker — runs inside the isolated venv, served by senselab.utils.venv_worker.
 _CRISPER_WORKER_SCRIPT = r"""
-import json
 import os
 import shutil
-import sys
+import uuid
 from pathlib import Path
 
-try:
+
+def load(init):
     from crisperwhisper import CrisperWhisperModel
 
-    args = json.loads(sys.stdin.read())
-    audio_paths = args["audio_paths"]
-    model_id = args["model_id"]
-    backend = args.get("backend", "auto")
-    device = args.get("device", "auto")
-    compute_type = args.get("compute_type", "float32")
-    language = args.get("language") or "en"
+    model_id = init["model_id"]
+    backend = init["backend"]
+    compute_type = init["compute_type"]
 
     # The CT2 backend converts the HF snapshot into a shared cache directory whose
     # writer is neither atomic nor locked. Convert into a private staging directory
     # and publish it with one rename, so a concurrent converter can neither be read
     # half-written nor delete what this process just wrote.
     if backend == "ct2":
-        entry = Path(args["ct2_entry"])
+        entry = Path(init["ct2_entry"])
         if not (entry / "model.bin").exists():
             from crisperwhisper.converter import ensure_ct2_model
 
-            staging = Path(args["ct2_staging"])
+            staging = Path(init["ct2_staging_root"]) / (".staging-" + uuid.uuid4().hex)
             converted = Path(ensure_ct2_model(model_id, quantization=compute_type, cache_dir=str(staging)))
             entry.parent.mkdir(parents=True, exist_ok=True)
             try:
@@ -157,25 +164,64 @@ try:
             shutil.rmtree(str(staging), ignore_errors=True)
         model_id = str(entry)
 
-    # CrisperWhisperModel's __init__ (and both backends it dispatches to -- CT2's
-    # ensure_ct2_model/_resolve_hf_or_local, and the transformers backend's
-    # AutoProcessor/AutoModelForSpeechSeq2Seq.from_pretrained) take no revision kwarg
-    # anywhere in the chain. `model_id` here is therefore the *local snapshot directory*
-    # the parent already resolved+staged for the run-agreed commit, not a repo id --
-    # `_resolve_hf_or_local`/`from_pretrained` both treat an existing local directory as
-    # already pinned and never touch the Hub for it, which is what actually pins the load.
-    model = CrisperWhisperModel(model_id, backend=backend, device=device, compute_type=compute_type)
+    # CrisperWhisperModel takes no revision anywhere in its call chain; `model_id` is the local
+    # snapshot directory the parent resolved and staged for the run-agreed commit.
+    return CrisperWhisperModel(model_id, backend=backend, device=init["device"], compute_type=compute_type)
 
-    def _first_attr(obj, names):
-        for n in names:
-            v = getattr(obj, n, None)
-            if v is not None:
-                return v
-        return None
+
+def _first_attr(obj, names):
+    for n in names:
+        v = getattr(obj, n, None)
+        if v is not None:
+            return v
+    return None
+
+
+def handle(model, args):
+    language = args.get("language") or "en"
+    strategy = args["longform_strategy"]
+    max_new_tokens = int(args["max_new_tokens"])
+    prompt_budget = args.get("prompt_token_budget")
+    position_limit = args["position_limit"]
+
+    def _decode(path):
+        return model.transcribe(
+            path,
+            language=language,
+            word_timestamps=True,
+            longform_strategy=strategy,
+            max_new_tokens=max_new_tokens,
+        )
+
+    def _decode_capped(path):
+        from crisperwhisper.prompt import PromptBuilder
+
+        original = PromptBuilder._build
+
+        def _build(self, mode, hotwords=None, context=None):
+            ids = original(self, mode, hotwords=hotwords, context=context)
+            words = (context or "").split()
+            while words and len(ids) > prompt_budget:
+                words = words[1:]
+                ids = original(self, mode, hotwords=hotwords, context=" ".join(words) or None)
+            return ids
+
+        PromptBuilder._build = _build
+        try:
+            return _decode(path)
+        finally:
+            PromptBuilder._build = original
 
     results = []
-    for path in audio_paths:
-        r = model.transcribe(path, language=language, word_timestamps=True)
+    for path in args["audio_paths"]:
+        used = strategy
+        try:
+            r = _decode(path)
+        except Exception as overrun:
+            if prompt_budget is None or position_limit not in str(overrun):
+                raise
+            used = args["capped_strategy"]
+            r = _decode_capped(path)
         words = []
         for w in (getattr(r, "words", None) or []):
             conf = _first_attr(w, ("probability", "confidence", "score", "prob"))
@@ -194,15 +240,13 @@ try:
             "language": getattr(r, "language", language),
             "words": words,
             "score": (float(line_conf) if line_conf is not None else None),
+            "decode_strategy": used,
         })
-
-    print(json.dumps({"results": results}))
-except Exception as exc:
-    import traceback
-    err = {"type": type(exc).__name__, "message": str(exc), "traceback": traceback.format_exc(limit=5)}
-    print(json.dumps({"error": err}))
-    sys.exit(1)
+    return {"results": results}
 """
+
+_LOAD_TIMEOUT_S = 1800
+_REQUEST_TIMEOUT_S = 1800
 
 
 class CrisperWhisperASR:
@@ -233,11 +277,15 @@ class CrisperWhisperASR:
         Returns:
             One ``ScriptLine`` per input with verbatim ``text``, word-level
             ``chunks`` carrying timestamps + ``score`` (native word confidence
-            when exposed), and a line-level ``score``.
+            when exposed), a line-level ``score``, and the ``decode_strategy``
+            used: :data:`LONGFORM_STRATEGY`, or :data:`CONTEXT_CAPPED` for an input
+            whose first decode overran the decoder's positions and was decoded
+            again with each window's context prompt cut, leading words first,
+            to :data:`DECODER_POSITIONS` less :data:`MAX_NEW_TOKENS`.
 
         Raises:
-            CrisperWhisperDecoderPositionsExceeded: A chunk's decoder prompt plus its
-                token budget overran Whisper's 448 position encodings.
+            CrisperWhisperDecoderPositionsExceeded: The capped decode also
+                overran Whisper's 448 position encodings.
         """
         if model is None:
             model = HFModel(path_or_uri="nyralabs/CrisperWhisper2.0_turbo")
@@ -271,33 +319,36 @@ class CrisperWhisperASR:
             ct2_entry = cache_root / _ct2_cache_key(str(snapshot_path), compute_type)
             if _CRISPER_BACKEND == "ct2":
                 _discard_torn_ct2_entry(ct2_entry)
-            input_json = json.dumps(
-                {
-                    "audio_paths": audio_paths,
-                    "model_id": str(snapshot_path),
-                    "backend": _CRISPER_BACKEND,
-                    "device": device_str,
-                    "compute_type": compute_type,
-                    "language": language or "en",
-                    "ct2_entry": str(ct2_entry),
-                    "ct2_staging": str(cache_root / f".staging-{uuid.uuid4().hex}"),
-                }
-            )
-            # Stage the model once (cross-process heartbeat lock) + run the worker
-            # offline so its weight fetch makes no per-call Hub version check — the
-            # 429 source under parallel batch. If staging fails, hf_subprocess_env
-            # leaves the env online so the worker's current fetch path still runs.
+            # Stage the model once (cross-process heartbeat lock) and run the worker offline so
+            # its weight fetch makes no Hub version check.
             env = hf_subprocess_env(model_id, revision, base_env=_clean_subprocess_env())
-            result = subprocess.run(
-                [python, "-c", _CRISPER_WORKER_SCRIPT],
-                input=input_json,
-                capture_output=True,
-                text=True,
-                timeout=1800,
-                env=env,
-            )
             try:
-                output = parse_subprocess_result(result, "CrisperWhisper 2.0")
+                output = serve_in_venv(
+                    (Path(venv_dir).name, str(snapshot_path), revision, device_str, compute_type),
+                    python=python,
+                    script=_CRISPER_WORKER_SCRIPT,
+                    init={
+                        "model_id": str(snapshot_path),
+                        "backend": _CRISPER_BACKEND,
+                        "device": device_str,
+                        "compute_type": compute_type,
+                        "ct2_entry": str(ct2_entry),
+                        "ct2_staging_root": str(cache_root),
+                    },
+                    request={
+                        "audio_paths": audio_paths,
+                        "language": language or "en",
+                        "longform_strategy": LONGFORM_STRATEGY,
+                        "max_new_tokens": MAX_NEW_TOKENS,
+                        "prompt_token_budget": DECODER_POSITIONS - MAX_NEW_TOKENS - 1,
+                        "capped_strategy": CONTEXT_CAPPED,
+                        "position_limit": _CT2_POSITION_LIMIT,
+                    },
+                    env=env,
+                    label="CrisperWhisper 2.0",
+                    load_timeout_s=_LOAD_TIMEOUT_S,
+                    request_timeout_s=_REQUEST_TIMEOUT_S,
+                )
             except RuntimeError as err:
                 if _CT2_POSITION_LIMIT in str(err):
                     raise CrisperWhisperDecoderPositionsExceeded(str(err)) from err
@@ -331,6 +382,7 @@ class CrisperWhisperASR:
                         end=line_end,
                         chunks=chunks,
                         score=(float(entry["score"]) if entry.get("score") is not None else None),
+                        decode_strategy=entry.get("decode_strategy"),
                     )
                 )
             return results

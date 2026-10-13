@@ -1,0 +1,760 @@
+"""Speech outside the task (task_speech.py): what is read, what the fold reviews and what the mask plan hides."""
+
+from __future__ import annotations
+
+from dataclasses import replace
+from pathlib import Path
+from typing import Sequence
+
+import pytest
+
+from senselab.audio.tasks.redaction.api import RedactionExtent
+from senselab.audio.workflows.triage.config import load_triage_config
+from senselab.audio.workflows.triage.nodes.common import consensus_words, software_agent, write_measurement
+from senselab.audio.workflows.triage.nodes.redact import NON_TASK_SPEECH, MaskPlan, mask_plan
+from senselab.audio.workflows.triage.nodes.verdict import task_audible
+from senselab.audio.workflows.triage.task_content import task_content_ids
+from senselab.audio.workflows.triage.task_speech import (
+    TASK_SPEECH_READING,
+    lexical_voice_family,
+    narrative_family,
+    non_lexical_family,
+    speech_before,
+    task_speech_of,
+    voice_task_text,
+    words_min_for,
+)
+from senselab.audio.workflows.triage.vocabulary import (
+    DECLINED,
+    NON_TASK_SPEECH_EXTENSIVE,
+    NON_TASK_SPEECH_MASKED,
+    NON_TASK_SPEECH_UNTIMED,
+    RELEASE_EMPTY,
+    REVIEWER_QUOTES_UNPLACED,
+    ROUTED,
+    SECOND_OPINION_PHRASES_PREDOMINANT,
+    BranchDecision,
+    FileVerdict,
+    FoldPolicy,
+    NodeVerdict,
+    Outcome,
+    RedactionEvidence,
+    Release,
+    TaskEvidence,
+    Triage,
+    fold_file_verdict,
+    release_ground_key,
+)
+from senselab.utils.prov_store import ProvStore
+from tests.audio.workflows.triage.nodes.conftest import word_attributes
+from tests.audio.workflows.triage.nodes.redact_test import _seed_redact_store, _word_extent
+
+BREATH_STEM = "sub-x_ses-y_task-respiration-and-cough-v2-threebreathsnose"
+VOWEL_STEM = "sub-x_ses-y_task-prolonged-vowel"
+ITEMS_STEM = "sub-x_ses-y_task-random-item-generation"
+QWEN = {"asr_crisperwhisper": "Hey", "asr_qwen": "Hay"}
+
+
+def _breath_reading(store: ProvStore, events: Sequence[tuple[float, float]]) -> None:
+    activity = store.activity(node="AIRWAY", step="align", parameters={})
+    evidence = {"decision": "present", "events": [{"start_s": a, "end_s": b} for a, b in events]}
+    write_measurement(
+        store,
+        activity,
+        software_agent(store),
+        name="airway_breath_reading",
+        signal="plain",
+        attributes={"decision": "present", "reading": {"evidence": evidence}},
+    )
+
+
+def _write(store: ProvStore, family: str, **kwargs: object) -> None:
+    reading = task_speech_of(store, family, **kwargs)  # type: ignore[arg-type]
+    activity = store.activity(node="AIRWAY", step="speech", parameters={"family": family})
+    write_measurement(
+        store, activity, software_agent(store), name=TASK_SPEECH_READING, signal="plain", attributes=reading.record()
+    )
+
+
+class TestSpeechInANonLexicalTask:
+    """Owner, 2026-10-10: any lexical word in a non-lexical recording that is not task content is speech."""
+
+    def test_a_talker_outside_a_wrong_extent_is_read_over_the_whole_file(
+        self, store: ProvStore, tmp_path: Path
+    ) -> None:
+        """Words far from the breaths, which the extent never reached, are all speech outside the task."""
+        _seed_redact_store(
+            store, tmp_path, words=["[breath]", "[breath]", "so", "where", "did", "you"], recording_stem=BREATH_STEM
+        )
+        _breath_reading(store, [_word_extent(0), _word_extent(1)])
+        read = task_speech_of(store, "respiration-and-cough-v2-threebreathsnose")
+        assert read.words_n == 4 and read.lexical_n == 4
+        assert len(read.runs) == 1 and read.runs[0][2] == 4
+
+    def test_a_misreading_alone_on_a_breath_is_task_content_and_an_agreed_run_on_it_is_not(
+        self, store: ProvStore, tmp_path: Path
+    ) -> None:
+        """The recognisers' disagreement on one word on one event is the task misread; agreed words are speech."""
+        _seed_redact_store(
+            store,
+            tmp_path,
+            words=["Hey", "[breath]", "what", "time", "is"],
+            readings={0: QWEN},
+            recording_stem=BREATH_STEM,
+        )
+        _breath_reading(store, [_word_extent(0), (_word_extent(2)[0], _word_extent(4)[1])])
+        read = task_speech_of(store, "respiration-and-cough-v2-threebreathsnose")
+        assert len(read.task_content_ids) == 1 and read.words_n == 3
+
+    def test_the_prolonged_vowel_count_in_is_task_text(self, store: ProvStore, tmp_path: Path) -> None:
+        """The count-in before the vowel is the voice family's declared text; anything else is speech."""
+        _seed_redact_store(store, tmp_path, words=["1", "two", "three", "aaaah", "okay"], recording_stem=VOWEL_STEM)
+        read = task_speech_of(store, "prolonged-vowel")
+        assert len(read.task_text_ids) == 3 and read.words_n == 1
+
+    def test_words_after_the_last_task_event_are_speech(self, store: ProvStore, tmp_path: Path) -> None:
+        """r37 B3: the count-in said after the vowel's last hold is no longer task text; before it, it is."""
+        _seed_redact_store(store, tmp_path, words=["1", "two", "aaaah", "three", "okay"], recording_stem=VOWEL_STEM)
+        activity = store.activity(node="VOICE", step="phonation", parameters={})
+        write_measurement(
+            store,
+            activity,
+            software_agent(store),
+            name="voice_phonation_reading",
+            signal="plain",
+            attributes={"found": True, "holds": [list(_word_extent(2))]},
+        )
+        read = task_speech_of(store, "prolonged-vowel")
+        assert len(read.task_text_ids) == 2 and len(read.post_task_ids) == 2
+        assert read.words_n == 2 and read.record()["post_task_n"] == 2
+
+    def test_a_word_with_no_usable_timing_is_untimed(self, store: ProvStore) -> None:
+        """A consensus word at (0, 0) cannot be masked."""
+        store.entity(
+            prov_type="stream",
+            extent=(0.0, 10.0),
+            attributes={"name": "recording", "path": f"streams/{BREATH_STEM}.wav"},
+        )
+        store.entity(
+            prov_type="word",
+            extent=(0.0, 0.0),
+            attributes=word_attributes("hello", (0.0, 0.0), index=0, timings={"asr_qwen": (0.0, 0.0)}),
+        )
+        read = task_speech_of(store, "respiration-and-cough-v2-threebreathsnose")
+        assert read.words_n == 1 and len(read.untimed_ids) == 1 and read.runs == ()
+
+    def test_a_lexical_family_reads_nothing(self, store: ProvStore, tmp_path: Path) -> None:
+        """A free-speech recording's words are its task."""
+        _seed_redact_store(store, tmp_path, words=["hello", "there"], recording_stem="sub-x_ses-y_task-free-speech")
+        assert task_speech_of(store, "free-speech").words_n == 0
+
+
+class TestTaskContentIsAMisreadingOnly:
+    """Owner, 2026-10-10: task content is a recogniser's misreading of the task's sound, never agreed words."""
+
+    def test_a_syllable_family_keeps_any_word_on_its_events(self, store: ProvStore, tmp_path: Path) -> None:
+        """A word alone on a syllable train is the train misread, as before."""
+        _seed_redact_store(store, tmp_path, words=["pat", "cake"], recording_stem="plain")
+        words = consensus_words(store)
+        events = [(_word_extent(0)[0], _word_extent(1)[1])]
+        assert len(task_content_ids(words, events, family="diadochokinesis-pa")) == 0
+        assert len(task_content_ids(words[:1], events, family="diadochokinesis-pa")) == 1
+
+    def test_two_words_on_one_breath_are_not_one_to_one(self, store: ProvStore, tmp_path: Path) -> None:
+        """Two disputed words on one event are speech, not one misreading."""
+        _seed_redact_store(store, tmp_path, words=["Hey", "Hey"], readings={0: QWEN, 1: QWEN}, recording_stem="plain")
+        words = consensus_words(store)
+        one_event = [(_word_extent(0)[0], _word_extent(1)[1])]
+        two_events = [_word_extent(0), _word_extent(1)]
+        family = "respiration-and-cough-v2-threebreathsnose"
+        assert task_content_ids(words, one_event, family=family) == set()
+        assert len(task_content_ids(words, two_events, family=family)) == 2
+
+
+class TestSpeechOutsideTheTaskIsMasked:
+    """The fold's mask plan hides each run of speech outside the task, whatever the content-word trim says."""
+
+    def test_each_run_is_one_mask_and_no_word_is_trimmed(self, store: ProvStore, tmp_path: Path) -> None:
+        """Function words of a talker's sentence stay masked; the breath tokens between runs stay audible."""
+        _seed_redact_store(
+            store,
+            tmp_path,
+            words=["[breath]", "is", "it", "on", "[breath]", "yes"],
+            recording_stem=BREATH_STEM,
+            scanned=False,
+        )
+        _write(store, "respiration-and-cough-v2-threebreathsnose")
+        plan = mask_plan(store, reviewer_applies=False, padding_ms=50)
+        speech = [mask for mask in plan.masks if mask.source == NON_TASK_SPEECH]
+        assert [len(mask.words) for mask in speech] == [3, 1]
+        assert all(word.state == "masked" for mask in speech for word in mask.words)
+        assert plan.non_task_speech_masked_n == 4
+
+
+def _fold(task: TaskEvidence, redaction: RedactionEvidence, *, airway: str = ROUTED) -> FileVerdict:
+    decisions = {
+        name: BranchDecision(name, False, route, False)
+        for name, route in (("AIRWAY", airway), ("SPEECH", DECLINED), ("VOICE", DECLINED))
+    }
+    return fold_file_verdict(
+        [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
+        branch_decisions=decisions,
+        ran={},
+        hint_claims={},
+        route_state=ROUTED,
+        redaction=redaction,
+        task=task,
+    )
+
+
+class TestTheFoldReviewsAndReleases:
+    """VERDICT: speech outside the task reviews; its masks release a redacted copy; an untimed word withholds."""
+
+    _TASK = TaskEvidence(
+        owning_branches=("AIRWAY",),
+        task_speech={"words_n": 2, "runs_n": 1, "untimed_n": 0},
+        task_speech_words_min=1,
+    )
+
+    def test_speech_reviews_and_its_masks_release_a_redacted_copy(self) -> None:
+        """K = 1: two words are review; the masks make the release redacted, itself review in an airway task."""
+        folded = _fold(self._TASK, RedactionEvidence(non_task_speech_masked_n=2))
+        assert folded.triage is Triage.REVIEW
+        assert folded.release is Release.REDACTED and folded.release_ground == NON_TASK_SPEECH_MASKED
+        assert "speech_in_task" in folded.ground_keys and folded.reason == "off_task_speech"
+
+    def test_an_untimed_word_withholds(self) -> None:
+        """A word no mask can place holds the recording."""
+        folded = _fold(self._TASK, RedactionEvidence(non_task_speech_masked_n=1, non_task_speech_untimed_n=1))
+        assert folded.release is Release.WITHHELD and folded.release_ground == NON_TASK_SPEECH_UNTIMED
+
+    def test_a_release_its_masks_leave_empty_withholds_and_reviews(self) -> None:
+        """r37, 1f06eb2c: masks over all but a sliver of the task extent hand on nothing; held, and reviewed."""
+        evidence = RedactionEvidence(non_task_speech_masked_n=1, task_extent_s=5.74, task_audible_s=0.235)
+        folded = _fold(self._TASK, evidence)
+        assert folded.release is Release.WITHHELD and folded.release_ground == RELEASE_EMPTY
+        assert folded.triage is Triage.REVIEW
+        kept = _fold(self._TASK, replace(evidence, task_audible_s=3.0))
+        assert kept.release is Release.REDACTED
+
+    def test_a_zero_length_task_extent_withholds_and_no_extent_does_not(self) -> None:
+        """An empty extent hands on nothing; a recording with no task extent is not judged here."""
+        empty = _fold(self._TASK, RedactionEvidence(non_task_speech_masked_n=1, task_extent_s=0.0, task_audible_s=0.0))
+        assert empty.release is Release.WITHHELD and empty.release_ground == RELEASE_EMPTY
+        none = _fold(self._TASK, RedactionEvidence(non_task_speech_masked_n=1))
+        assert none.release is Release.REDACTED
+
+    def test_an_extensive_off_task_share_withholds(self) -> None:
+        """An item list whose phrases reach their bound is held."""
+        folded = _fold(self._TASK, RedactionEvidence(non_task_speech_masked_n=4, non_task_speech_extensive=True))
+        assert folded.release is Release.WITHHELD and folded.release_ground == NON_TASK_SPEECH_EXTENSIVE
+
+    def test_a_non_lexical_redacted_release_is_reviewed_with_a_reason(self) -> None:
+        """A redacted airway recording is review even with no speech reading."""
+        task = TaskEvidence(owning_branches=("AIRWAY",))
+        folded = _fold(task, RedactionEvidence(non_task_speech_masked_n=1))
+        assert folded.triage is Triage.REVIEW
+        assert "release_in_nonlexical_task" in folded.ground_keys
+
+    def test_no_speech_passes(self) -> None:
+        """The control: no word outside the task, nothing masked, the original released."""
+        task = TaskEvidence(owning_branches=("AIRWAY",), task_speech={"words_n": 0}, task_speech_words_min=1)
+        folded = _fold(task, RedactionEvidence())
+        assert folded.triage is Triage.PASS and folded.release is Release.AS_IS
+
+
+def _timed_words(store: ProvStore, stem: str, words: Sequence[tuple[str, float]]) -> None:
+    """A recording stream naming the stem, and one agreed word per ``(text, start)``, 0.4 s long."""
+    store.entity(
+        prov_type="stream", extent=(0.0, 60.0), attributes={"name": "recording", "path": f"streams/{stem}.wav"}
+    )
+    for index, (text, start) in enumerate(words):
+        extent = (start, start + 0.4)
+        store.entity(prov_type="word", extent=extent, attributes=word_attributes(text, extent, index=index))
+
+
+def _said(store: ProvStore, utterances: Sequence[str], *, pause_s: float = 0.8) -> None:
+    """One utterance per string, its words 0.4 s long and 0.1 s apart, the utterances ``pause_s`` apart."""
+    words: list[tuple[str, float]] = []
+    at = 0.0
+    for utterance in utterances:
+        for text in utterance.split():
+            words.append((text, at))
+            at += 0.5
+        at += pause_s - 0.1
+    _timed_words(store, ITEMS_STEM, words)
+
+
+def _item_fold(
+    store: ProvStore,
+    *,
+    annotation: dict | None = None,
+    opinion: dict | None = None,
+    cohort: dict | None = None,
+) -> FileVerdict:
+    """Fold an item list's reading under the reviewer, the second opinion and COHORT."""
+    family = "random-item-generation"
+    reading = task_speech_of(store, family)
+    decisions = {
+        name: BranchDecision(name, False, route, False)
+        for name, route in (("AIRWAY", DECLINED), ("SPEECH", ROUTED), ("VOICE", DECLINED))
+    }
+    return fold_file_verdict(
+        [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
+        branch_decisions=decisions,
+        ran={},
+        hint_claims={},
+        route_state=ROUTED,
+        redaction=RedactionEvidence(
+            lexical_words_n=reading.lexical_n,
+            scanned=True,
+            non_task_speech_extensive=(annotation or {}).get("phrases_instead_of_items") == "predominant",
+        ),
+        llm_redaction=annotation,
+        second_opinion=opinion,
+        cohort=cohort,
+        task=TaskEvidence(
+            owning_branches=("SPEECH",),
+            task_speech=reading.record(),
+            item_set=True,
+        ),
+        policy=FoldPolicy.from_config(load_triage_config()),
+    )
+
+
+_ITEMS = ["lion", "tiger", "bear", "zebra", "giraffe", "monkey", "elephant", "horse"]
+
+
+class TestPhrasesInsteadOfItems:
+    """Owner, 2026-10-10: in an item-set task the question is whether phrases are said instead of items."""
+
+    def test_utterances_split_at_pauses_and_a_clause_of_three_words_is_a_phrase(self, store: ProvStore) -> None:
+        """Items apart are each an utterance; three words holding a closed-class word is a phrase, two is not."""
+        _said(store, ["lion", "polar bear", "is that enough", "i don't know what else to say"])
+        read = task_speech_of(store, "animal-fluency")
+        assert [(n, phrase) for _a, _b, n, phrase in read.utterances] == [
+            (1, False),
+            (2, False),
+            (3, True),
+            (7, True),
+        ]
+        assert read.phrase_share == 0.5 and read.phrase_word_share == round(10 / 13, 3)
+        assert read.words_n == 10 and len(read.task_content_ids) == 3
+
+    def test_four_items_said_together_are_not_a_phrase(self, store: ProvStore) -> None:
+        """A run of content words with no closed-class word is a list, however long; a letter is not a function word."""
+        _said(store, ["one two three four five", "a b c d e"])
+        read = task_speech_of(store, "random-item-generation")
+        assert read.phrase_share == 0.0 and read.words_n == 0
+
+    def test_a_list_with_asides_is_not_reviewed(self, store: ProvStore) -> None:
+        """Short asides between items read as lexical phrases, but only the readers decide: occasional annotates."""
+        _said(store, [*_ITEMS[:4], "um", "let me think", *_ITEMS[4:], "is that enough"])
+        assert (task_speech_of(store, "random-item-generation").phrase_share or 0.0) > 0.0
+        annotation = {
+            "status": "clean",
+            "original": "clean",
+            "proposal": [],
+            "phrases_instead_of_items": "occasional",
+            "phrase_quotes": ["let me think"],
+            "off_task_speech": "some",
+        }
+        opinion = {"status": "ok", "choices": {"phrases_instead_of_items": "occasional"}, "probabilities": {}}
+        folded = _item_fold(store, annotation=annotation, opinion=opinion)
+        assert folded.triage is Triage.PASS and folded.release is Release.AS_IS
+        assert "phrases_occasional" in {note.key for note in folded.annotations}
+        assert not {"reviewer_off_task_speech", "phrases_instead_of_items"} & set(folded.ground_keys)
+
+    def test_the_lexical_phrase_share_is_evidence_and_decides_nothing(self, store: ProvStore) -> None:
+        """One item, then clauses: the share is high and reported, but without a reader's predominant it passes."""
+        _said(
+            store,
+            [
+                "lion",
+                "my dog's name is buddy",
+                "he likes to run in the park",
+                "and we go there every day",
+                "i don't know what else to say",
+                "it was a long time ago",
+            ],
+        )
+        read = task_speech_of(store, "random-item-generation")
+        assert read.phrase_share is not None and read.phrase_share > 0.5
+        folded = _item_fold(store)
+        assert folded.triage is Triage.PASS and "phrases_instead_of_items" not in folded.ground_keys
+        share = [entry for entry in folded.evidence if entry.name == "phrase_share"]
+        assert [(entry.value, entry.effect, entry.threshold) for entry in share] == [
+            (read.phrase_share, "annotation", None)
+        ]
+        reviewed = _item_fold(
+            store,
+            annotation={
+                "status": "clean",
+                "original": "clean",
+                "proposal": [],
+                "phrases_instead_of_items": "predominant",
+                "phrase_quotes": ["my dog's name is buddy"],
+            },
+        )
+        assert reviewed.triage is Triage.REVIEW and reviewed.reason == "off_task_speech"
+
+    def test_predominant_from_either_reader_reviews(self, store: ProvStore) -> None:
+        """A plain list: the reviewer's or the second opinion's predominant reviews."""
+        _said(store, _ITEMS)
+        read = {"status": "clean", "original": "clean", "proposal": []}
+        reviewer = _item_fold(store, annotation={**read, "phrases_instead_of_items": "predominant"})
+        assert "reviewer_phrases_instead_of_items" in reviewer.ground_keys and reviewer.triage is Triage.REVIEW
+        opinion = {"status": "ok", "choices": {"phrases_instead_of_items": "predominant"}, "probabilities": {}}
+        second = _item_fold(store, annotation=read, opinion=opinion)
+        assert "second_opinion:phrases_instead_of_items" in second.ground_keys and second.triage is Triage.REVIEW
+
+    def test_the_second_opinion_s_predominant_withholds_the_release(self, store: ProvStore) -> None:
+        """Owner, 2026-10-10: the second opinion's predominant withholds, not only reviews (8ca6baff was as_is)."""
+        _said(store, _ITEMS)
+        read = {"status": "clean", "original": "clean", "proposal": []}
+        opinion = {"status": "ok", "choices": {"phrases_instead_of_items": "predominant"}, "probabilities": {}}
+        folded = _item_fold(store, annotation=read, opinion=opinion)
+        assert folded.triage is Triage.REVIEW and "second_opinion:phrases_instead_of_items" in folded.ground_keys
+        assert folded.release is Release.WITHHELD and folded.release_ground == SECOND_OPINION_PHRASES_PREDOMINANT
+        assert release_ground_key(folded.release_ground) == "second_opinion_phrases_predominant"
+        placed = _item_fold(store, annotation={**read, "phrases_instead_of_items": "predominant"}, opinion=opinion)
+        assert placed.release is Release.WITHHELD and placed.release_ground == NON_TASK_SPEECH_EXTENSIVE
+
+    def test_unplaced_reviewer_quotes_review_and_withhold_whatever_its_level(self, store: ProvStore) -> None:
+        """Rounds ran out with phrase quotes unplaced: the phrase level is not read; review, withheld."""
+        _said(store, _ITEMS)
+        annotation = {
+            "status": "clean",
+            "original": "clean",
+            "proposal": [],
+            "converged": False,
+            "phrases_instead_of_items": "none",
+            "phrase_quotes": ["nothing said like this"],
+            "phrase_quotes_unplaced_n": 1,
+        }
+        folded = _item_fold(store, annotation=annotation)
+        assert folded.triage is Triage.REVIEW and "reviewer_quotes_unplaced" in folded.ground_keys
+        assert folded.reason == "off_task_speech"
+        assert folded.release is Release.WITHHELD and folded.release_ground == REVIEWER_QUOTES_UNPLACED
+        assert release_ground_key(folded.release_ground) == "reviewer_quotes_unplaced"
+        predominant = _item_fold(store, annotation={**annotation, "phrases_instead_of_items": "predominant"})
+        assert "reviewer_phrases_instead_of_items" not in predominant.ground_keys
+        assert predominant.release_ground == REVIEWER_QUOTES_UNPLACED
+
+    def test_occasional_from_both_readers_releases(self, store: ProvStore) -> None:
+        """The control: no predominant, nothing withheld."""
+        _said(store, _ITEMS)
+        opinion = {"status": "ok", "choices": {"phrases_instead_of_items": "occasional"}, "probabilities": {}}
+        folded = _item_fold(store, annotation={"status": "clean", "original": "clean", "proposal": []}, opinion=opinion)
+        assert folded.release is Release.AS_IS
+
+    def test_a_list_with_a_background_speaker_is_reviewed_through_cohort(self, store: ProvStore) -> None:
+        """No phrase at all, but a target pool that does not match the session enrollment: another speaker, review."""
+        _said(store, _ITEMS)
+        cohort = {
+            "other_speaker": {
+                "status": "measured",
+                "target": {"status": "measured", "spans": [[0.0, 2.1]], "pooled_s": 2.1, "cosine": 0.1, "match": False},
+            }
+        }
+        folded = _item_fold(store, cohort=cohort)
+        assert folded.triage is Triage.REVIEW and "other_speaker_in_session" in folded.ground_keys
+        assert folded.reason == "other_speaker"
+
+
+def test_the_packaged_setting_reviews_every_release_but_the_original() -> None:
+    """Owner, 2026-10-10: masks are not yet validated, so redacted and withheld releases are both reviewed."""
+    from senselab.audio.workflows.triage.decision import reviewed_releases
+
+    assert reviewed_releases() == frozenset({"redacted", "withheld"})
+
+
+class TestTheReviewerAndTheSecondOpinionDecide:
+    """Owner, 2026-10-10: the reviewer's task reading and the second opinion on the shipped text reach the verdict."""
+
+    _READ = {"status": "clean", "original": "clean", "proposal": []}
+
+    def _fold(
+        self,
+        *,
+        annotation: dict | None = None,
+        opinion: dict | None = None,
+        cohort: dict | None = None,
+        task: TaskEvidence | None = None,
+    ) -> FileVerdict:
+        decisions = {
+            name: BranchDecision(name, False, route, False)
+            for name, route in (("AIRWAY", DECLINED), ("SPEECH", ROUTED), ("VOICE", DECLINED))
+        }
+        return fold_file_verdict(
+            [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
+            branch_decisions=decisions,
+            ran={},
+            hint_claims={},
+            route_state=ROUTED,
+            redaction=RedactionEvidence(lexical_words_n=5, scanned=True),
+            llm_redaction=annotation,
+            second_opinion=opinion,
+            cohort=cohort,
+            task=task or TaskEvidence(owning_branches=("SPEECH",)),
+            policy=FoldPolicy.from_config(load_triage_config()),
+        )
+
+    def test_the_reviewer_s_off_task_and_other_speaker_readings_review_under_their_subjects(self) -> None:
+        """Off-task speech is the participant's; an assistant is another speaker."""
+        folded = self._fold(annotation={**self._READ, "off_task_speech": "some", "other_speaker": "assistant"})
+        assert {"reviewer_off_task_speech", "reviewer_other_speaker"} <= set(folded.ground_keys)
+        assert folded.reason_keys[:2] == ["other_speaker", "off_task_speech"]
+
+    def test_an_uncorroborated_not_free_reviews_and_keeps_the_release(self) -> None:
+        """r37 G2 (fac74f45): the second opinion alone reads identifiers in what would ship: review, release kept."""
+        opinion = {"status": "ok", "probabilities": {"masked_text_free_of_identifiers": 0.05}}
+        folded = self._fold(annotation=self._READ, opinion=opinion)
+        assert "second_opinion:masked_text_free_of_identifiers" in folded.ground_keys
+        assert folded.triage is Triage.REVIEW and folded.reason == "identifying_content"
+        assert folded.release is Release.AS_IS
+
+    def test_speech_matching_no_enrollment_is_another_speaker(self) -> None:
+        """The same speech outside the task is other_speaker where COHORT's comparison does not match it."""
+        task = TaskEvidence(
+            owning_branches=("AIRWAY",),
+            task_speech={"words_n": 3, "runs_n": 1, "runs": [[100.0, 104.0, 3]]},
+            task_speech_words_min=1,
+        )
+        cohort = {
+            "other_speaker": {
+                "status": "measured",
+                "non_task": {"status": "measured", "spans": [[99.0, 110.0]], "cosine": 0.1, "match": False},
+            }
+        }
+        folded = self._fold(cohort=cohort, task=task)
+        assert "other_speaker_in_task" in folded.ground_keys and "speech_in_task" not in folded.ground_keys
+        matched = self._fold(
+            cohort={
+                "other_speaker": {
+                    "status": "measured",
+                    "non_task": {"status": "measured", "spans": [[99.0, 110.0]], "cosine": 0.6, "match": True},
+                }
+            },
+            task=task,
+        )
+        assert "speech_in_task" in matched.ground_keys
+
+
+class TestTheReviewerQuotesBecomeMasks:
+    """The reviewer's off-task quotes are masked; its task-content quotes release a finding."""
+
+    _READ = {"status": "clean", "original": "clean", "proposal": []}
+
+    def _annotate(self, store: ProvStore, **attributes: object) -> None:
+        activity = store.activity(node="REVIEW", step="read", parameters={})
+        write_measurement(
+            store,
+            activity,
+            software_agent(store),
+            name="redaction_llm_annotation",
+            signal="plain",
+            attributes={**self._READ, **attributes},
+        )
+
+    def test_an_item_list_masks_phrase_quotes_only_when_predominant_and_never_an_item(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Occasional phrases mask nothing; predominant ones mask the phrase's words and never an item's."""
+        from tests.audio.workflows.triage.nodes import redact_test
+
+        words = ["lion", "tiger", "bear", "zebra", "so", "my", "doctor", "said", "that"]
+        monkeypatch.setattr(
+            redact_test,
+            "_word_extent",
+            lambda i: (float(i), i + 0.5) if i < 4 else (4.0 + (i - 4) * 0.6, 4.5 + (i - 4) * 0.6),
+        )
+        joined: dict[int, dict[str, tuple[float, float]]] = {}
+        _seed_redact_store(store, tmp_path, words=words, timings=joined, recording_stem=ITEMS_STEM, scanned=False)
+        _write(store, "random-item-generation")
+        self._annotate(store, phrases_instead_of_items="occasional", phrase_quotes=["so my doctor said that"])
+        assert mask_plan(store, reviewer_applies=True, padding_ms=50).non_task_speech_masked_n == 0
+        other = ProvStore(run_id="predominant")
+        _seed_redact_store(other, tmp_path, words=words, timings=joined, recording_stem=ITEMS_STEM, scanned=False)
+        _write(other, "random-item-generation")
+        self._annotate(other, phrases_instead_of_items="predominant", phrase_quotes=["so my doctor said that"])
+        plan = mask_plan(other, reviewer_applies=True, padding_ms=50)
+        masked = [word.text for mask in plan.masks if mask.source == NON_TASK_SPEECH for word in mask.words]
+        assert masked == words[4:] and plan.non_task_speech_extensive
+
+    def test_the_reviewer_s_phrase_outranks_an_item_utterance_but_not_a_category_member(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A quoted phrase covering lexical item utterances masks them; a declared-category member stays content."""
+        from tests.audio.workflows.triage.nodes import redact_test
+
+        words = ["lion", "tiger", "bear", "zebra", "so", "my", "doctor", "said", "that"]
+        monkeypatch.setattr(
+            redact_test,
+            "_word_extent",
+            lambda i: (float(i), i + 0.5) if i < 4 else (4.0 + (i - 4) * 0.6, 4.5 + (i - 4) * 0.6),
+        )
+        _seed_redact_store(store, tmp_path, words=words, timings={}, recording_stem=ITEMS_STEM, scanned=False)
+        bear = next(word.id for word in consensus_words(store) if word.attributes.get("text") == "bear")
+        _write(store, "random-item-generation", member_ids={bear})
+        self._annotate(
+            store, phrases_instead_of_items="predominant", phrase_quotes=["bear zebra so my doctor said that"]
+        )
+        plan = mask_plan(store, reviewer_applies=True, padding_ms=50)
+        masked = [word.text for mask in plan.masks if mask.source == NON_TASK_SPEECH for word in mask.words]
+        assert masked == words[3:]
+
+    @staticmethod
+    def _off_task_plan(store: ProvStore, tmp_path: Path, stem: str, level: str = "some") -> MaskPlan:
+        _seed_redact_store(
+            store,
+            tmp_path,
+            words=["lion", "tiger", "my", "doctor", "said", "Paris"],
+            findings=[("LOCATION", _word_extent(5))],
+            recording_stem=stem,
+        )
+        activity = store.activity(node="REVIEW", step="read", parameters={})
+        write_measurement(
+            store,
+            activity,
+            software_agent(store),
+            name="redaction_llm_annotation",
+            signal="plain",
+            attributes={
+                "status": "clean",
+                "original": "clean",
+                "proposal": [],
+                "off_task_speech": level,
+                "off_task_quotes": ["my doctor said"],
+                "task_content_quotes": ["Paris"],
+            },
+        )
+        return mask_plan(store, reviewer_applies=True, padding_ms=50)
+
+    def test_an_off_task_quote_masks_its_words_and_a_task_content_quote_releases_them(
+        self, store: ProvStore, tmp_path: Path
+    ) -> None:
+        """Three quoted off-task words stay masked; a finding the reviewer called task content is not."""
+        plan = self._off_task_plan(store, tmp_path, "sub-x_ses-y_task-rainbow-passage")
+        assert plan.non_task_speech_masked_n == 3
+        assert all(word.text != "Paris" or word.state != "masked" for mask in plan.masks for word in mask.words)
+
+    def test_a_narrative_task_s_off_task_aside_is_not_masked(self, store: ProvStore, tmp_path: Path) -> None:
+        """r37 G1 (07929b7b cinderella): "some" off-task speech in a free response masks nothing; extensive does."""
+        assert self._off_task_plan(store, tmp_path, "sub-x_ses-y_task-cinderella-story").non_task_speech_masked_n == 0
+        other = ProvStore(run_id="extensive")
+        (tmp_path / "extensive").mkdir()
+        plan = self._off_task_plan(
+            other, tmp_path / "extensive", "sub-x_ses-y_task-cinderella-story", level="extensive"
+        )
+        assert plan.non_task_speech_masked_n == 3
+        assert plan.pii_masks_final_n == 0
+
+
+def test_a_lexical_task_s_own_words_are_its_own_sound_and_an_airway_task_has_none(
+    store: ProvStore, tmp_path: Path
+) -> None:
+    """QUALITY sets a spoken task's words aside as the participant's; a breath task's words stay candidates."""
+    from senselab.audio.workflows.triage.nodes.quality import spoken_task_words
+
+    _seed_redact_store(store, tmp_path, words=["once", "upon", "a"], recording_stem="sub-x_ses-y_task-cinderella-story")
+    assert len(spoken_task_words(store)) == 3
+    other = ProvStore(run_id="airway")
+    _seed_redact_store(other, tmp_path, words=["hello"], recording_stem=BREATH_STEM)
+    assert spoken_task_words(other) == []
+
+
+LOUDNESS_STEM = "sub-x_ses-y_task-loudness"
+LOUDNESS_V2_STEM = "sub-x_ses-y_task-loudness-v2"
+
+
+def _speech_fold(task: TaskEvidence, redaction: RedactionEvidence) -> FileVerdict:
+    decisions = {
+        name: BranchDecision(name, False, route, False)
+        for name, route in (("AIRWAY", DECLINED), ("SPEECH", ROUTED), ("VOICE", DECLINED))
+    }
+    return fold_file_verdict(
+        [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
+        branch_decisions=decisions,
+        ran={},
+        hint_claims={},
+        route_state=ROUTED,
+        redaction=redaction,
+        task=task,
+    )
+
+
+class TestLoudnessIsAVoiceTask:
+    """Owner, 2026-10-11: loudness is a voice task beyond its "hey", as the count-in is in prolonged-vowel."""
+
+    @pytest.mark.parametrize("stem,family", [(LOUDNESS_STEM, "loudness"), (LOUDNESS_V2_STEM, "loudness-v2")])
+    def test_every_variant_of_hey_is_task_text(self, store: ProvStore, tmp_path: Path, stem: str, family: str) -> None:
+        """Casing, punctuation, hyphenation and repetition of the declared word are all task text."""
+        words = ["hey", "Hey!", "HEY", "hey-hey", "HEY-HEY!", "heyhey", "hey,", "Hey."]
+        _seed_redact_store(store, tmp_path, words=words, recording_stem=stem)
+        assert non_lexical_family(family) and lexical_voice_family(family) and words_min_for(family) == 1
+        read = task_speech_of(store, family)
+        assert read.words_n == 0 and len(read.task_text_ids) == len(words)
+
+    def test_only_hey_neither_reviews_nor_masks(self, store: ProvStore, tmp_path: Path) -> None:
+        """'hey', 'hey hey' and 'HEY!' pass the fold and leave no mask."""
+        _seed_redact_store(store, tmp_path, words=["hey", "hey", "HEY!"], recording_stem=LOUDNESS_STEM, scanned=False)
+        _write(store, "loudness")
+        plan = mask_plan(store, reviewer_applies=False, padding_ms=50)
+        assert [mask for mask in plan.masks if mask.source == NON_TASK_SPEECH] == []
+        assert plan.non_task_speech_masked_n == 0
+        reading = task_speech_of(store, "loudness").record()
+        task = TaskEvidence(owning_branches=("SPEECH",), task_speech=reading, task_speech_words_min=1)
+        folded = _speech_fold(task, RedactionEvidence(lexical_words_n=3, scanned=True))
+        assert "speech_in_task" not in folded.ground_keys and folded.release is Release.AS_IS
+
+    def test_any_other_word_is_masked_and_reviewed(self, store: ProvStore, tmp_path: Path) -> None:
+        """A word beside the 'hey's is speech outside the task: masked, and the recording reviewed."""
+        _seed_redact_store(
+            store, tmp_path, words=["hey", "okay", "hey", "HEY!"], recording_stem=LOUDNESS_STEM, scanned=False
+        )
+        read = task_speech_of(store, "loudness")
+        assert read.words_n == 1 and len(read.task_text_ids) == 3
+        _write(store, "loudness")
+        plan = mask_plan(store, reviewer_applies=False, padding_ms=50)
+        speech = [mask for mask in plan.masks if mask.source == NON_TASK_SPEECH]
+        assert [len(mask.words) for mask in speech] == [1] and plan.non_task_speech_masked_n == 1
+        task = TaskEvidence(owning_branches=("SPEECH",), task_speech=read.record(), task_speech_words_min=1)
+        folded = _speech_fold(task, RedactionEvidence(lexical_words_n=4, scanned=True, non_task_speech_masked_n=1))
+        assert folded.triage is Triage.REVIEW and "speech_in_task" in folded.ground_keys
+        assert folded.release is Release.REDACTED and folded.release_ground == NON_TASK_SPEECH_MASKED
+
+    def test_prolonged_vowel_is_unchanged(self, store: ProvStore, tmp_path: Path) -> None:
+        """The count-in stays the vowel's task text; neither 'hey' nor a run-together count-in is."""
+        _seed_redact_store(store, tmp_path, words=["one", "two", "three", "hey", "oneone"], recording_stem=VOWEL_STEM)
+        read = task_speech_of(store, "prolonged-vowel")
+        assert len(read.task_text_ids) == 3 and read.words_n == 2
+        assert not lexical_voice_family("prolonged-vowel") and voice_task_text("prolonged-vowel") is None
+        assert not lexical_voice_family("free-speech") and not non_lexical_family("free-speech")
+
+
+def test_the_narrative_families_are_the_free_responses() -> None:
+    """r37 G1: story retell, free speech, picture description and open response; not items, sentences or DDK."""
+    for family in ("cinderella-story", "story-recall", "free-speech", "picture-description", "open-response-questions"):
+        assert narrative_family(family), family
+    for other in ("animal-fluency", "harvard-sentences-list", "word-color-stroop", "diadochokinesis-pa"):
+        assert not narrative_family(other), other
+    assert not narrative_family(None)
+
+
+def test_speech_before_the_task_is_its_words_and_their_span(store: ProvStore) -> None:
+    """r37 G3 (168c5e68): the words whose midpoint precedes the extent, from the first's start to the last's end."""
+    _timed_words(store, ITEMS_STEM, [("hello", 0.1), ("there", 0.6), ("cat", 2.5), ("dog", 3.5)])
+    words = consensus_words(store)
+    assert speech_before(words, 2.4) == {"words_n": 2, "start_s": 0.1, "end_s": 1.0, "seconds": 0.9}
+    assert speech_before(words, 0.0) == {}
+
+
+def test_task_audible_is_the_extent_outside_every_mask_clamped_to_the_recording() -> None:
+    """Overlapping masks count once; an extent past the recording's end is clamped to it."""
+    store = ProvStore(run_id="audible")
+    store.entity(prov_type="stream", extent=(0.0, 6.5), attributes={"name": "plain", "path": "p.flac"})
+    assert task_audible(store, []) == (None, None)
+    store.entity(prov_type="span", extent=(0.0, 7.0), attributes={"role": "task_extent", "branch": "VOICE"})
+    masks = [RedactionExtent(start=0.25, end=4.0, category="X"), RedactionExtent(start=3.0, end=6.0, category="X")]
+    assert task_audible(store, masks) == (6.5, 0.75)

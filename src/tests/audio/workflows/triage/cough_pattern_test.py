@@ -5,7 +5,9 @@ from __future__ import annotations
 from pathlib import Path
 
 import numpy as np
+import pytest
 
+from senselab.audio.workflows.triage import cough_pattern as cough_pattern_module
 from senselab.audio.workflows.triage.cough_pattern import (
     CoughPattern,
     band_levels_db,
@@ -14,6 +16,7 @@ from senselab.audio.workflows.triage.cough_pattern import (
     in_cough_review_band,
     measure_cough_pattern,
 )
+from senselab.audio.workflows.triage.task_events import generic_view
 from senselab.utils.prov_store import ProvStore
 
 HOP = 0.005
@@ -140,8 +143,23 @@ def test_an_absent_spectrogram_names_itself(tmp_path: Path) -> None:
     assert cough_pattern_of(ProvStore(run_id="t"), tmp_path, sampling_hz=16000.0) == ("spectrogram_narrowband",)
 
 
-def test_a_stored_spectrogram_is_read(tmp_path: Path) -> None:
+def test_without_the_background_the_reading_names_it(tmp_path: Path) -> None:
+    """A stored spectrogram but no BACKGROUND reading: the measure says the background was absent."""
+    np.savez(tmp_path / "spec.npz", spectrogram=np.full((161, 600), 1e-6))
+    store = ProvStore(run_id="t")
+    store.entity(
+        prov_type="measurement",
+        extent=None,
+        attributes={"name": "spectrogram_narrowband", "path": "spec.npz", "n_fft": 320, "hop_length": 80},
+    )
+    assert cough_pattern_of(store, tmp_path, sampling_hz=16000.0) == ("background_model",)
+
+
+def test_a_stored_spectrogram_is_read(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The stored narrowband spectrogram is read through its sidecar."""
+    rng = np.random.default_rng(0)
+    view = generic_view((rng.standard_normal(16000 * 4) * 1e-3, 16000), None)
+    monkeypatch.setattr(cough_pattern_module, "generic_view_of", lambda store, run_dir: view)
     p = cough_parameters()
     power = np.full((161, 600), 1e-6)
     power[:, 200:240] = 1.0

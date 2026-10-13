@@ -148,19 +148,20 @@ _SYLLABLE_DETAIL = {
     "train_fraction": 0.4,
     "modulation_peak_hz": 5.5,
     "modulation_unit": "syllables_per_s",
-    "ppg_syllable_rate_hz": 5.4,
-    "ppg_cycle_rate_hz": 1.8,
-    "ppg_repetitions": 9,
-    "ppg_required_repetitions": 10,
-    "ppg_period_s": 0.556,
-    "ppg_period_cv": 0.12,
-    "ppg_period_trend_s_per_step": 0.001,
-    "ppg_positions": ["b", "ah", "t", "er", "k", "ah", "p"],
-    "ppg_realised_mass": [0.78, 0.78, 0.69, 0.57, 0.81, 0.83, 0.77],
-    "ppg_occupancy_s": [0.42, 0.9, 0.38, 0.5, 0.4, 0.95, 0.35],
-    "ppg_filler_fraction": 0.32,
-    "ppg_score_per_frame": -0.61,
-    "ppg_contradicted_words_n": 2,
+    "ddk_decision": "present",
+    "ddk_why": "clear",
+    "ddk_unit": "cycle",
+    "ddk_events_n": 9,
+    "ddk_required_count": 10,
+    "ddk_syllables_n": 27,
+    "ddk_identity": 0.61,
+    "ddk_syllable_rate_hz": 5.4,
+    "ddk_cycle_rate_hz": 1.8,
+    "ddk_period_cv": 0.12,
+    "ddk_period_trend_s_per_step": 0.001,
+    "ddk_positions": ["b", "ah", "t", "er", "k", "ah", "p"],
+    "ddk_realised_mass": [0.78, 0.78, 0.69, 0.57, 0.81, 0.83, 0.77],
+    "ddk_contradicted_words_n": 2,
 }
 """What ``ddk.syllable_detail`` returns for an in-family syllable task, as ``speech()`` merges it."""
 
@@ -1554,31 +1555,30 @@ class TestTheSyllableMeasuresReachThePage:
         blocks = "\n".join(panels[0][-1]["lines"])
         assert "modulation_peak_hz=5.5" in blocks
         assert "modulation_unit=syllables_per_s" in blocks
-        assert "ppg_period_cv=0.12" in blocks
+        assert "ddk_period_cv=0.12" in blocks
 
-    def test_every_ppg_field_the_instrument_measures_reaches_the_page(
+    def test_every_ddk_field_the_task_layer_measures_reaches_the_page(
         self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """The decode's readings are the branch's own evidence and once reached nothing."""
+        """The task layer's readings are the branch's own evidence and must reach the page."""
         panels = _capture_panels(monkeypatch)
         _seed_report_store(store, tmp_path, full=True, syllable=True)
         report(store, tmp_path / "summary", _png(tmp_path))
         blocks = "\n".join(panels[0][-1]["lines"])
         expected = {
-            "ppg_syllable_rate_hz=5.4",
-            "ppg_cycle_rate_hz=1.8",
-            "ppg_repetitions=9",
-            "ppg_required_repetitions=10",
-            "ppg_period_s=0.556",
-            "ppg_period_cv=0.12",
-            "ppg_period_trend_s_per_step=0.001",
-            "ppg_filler_fraction=0.32",
-            "ppg_score_per_frame=-0.61",
-            "ppg_contradicted_words_n=2",
+            "ddk_decision=present",
+            "ddk_identity=0.61",
+            "ddk_syllable_rate_hz=5.4",
+            "ddk_cycle_rate_hz=1.8",
+            "ddk_events_n=9",
+            "ddk_required_count=10",
+            "ddk_period_cv=0.12",
+            "ddk_period_trend_s_per_step=0.001",
+            "ddk_contradicted_words_n=2",
         }
         assert expected <= set(blocks.split())
-        assert "ppg_positions=" in blocks
-        assert "ppg_realised_mass=" in blocks
+        assert "ddk_positions=" in blocks
+        assert "ddk_realised_mass=" in blocks
 
     def test_the_pdf_decision_pages_measured_findings_name_them_too(self, store: ProvStore, tmp_path: Path) -> None:
         """Both readers of ``BRANCH_MEASURES`` were blind to these, not just the branch-detail one."""
@@ -1588,8 +1588,8 @@ class TestTheSyllableMeasuresReachThePage:
         findings = blocks.split("MEASURED BRANCH FINDINGS", 1)[1].split("SUPPORTING EVIDENCE", 1)[0]
         assert "SPEECH: " in findings
         named = {token.strip("; ") for token in findings.split()}
-        assert "trains_n=1" in named, "the train count itself, not the ppg_ prefixed one"
-        assert "ppg_syllable_rate_hz=5.4" in named
+        assert "trains_n=1" in named
+        assert "ddk_syllable_rate_hz=5.4" in named
 
     def test_a_recording_that_ran_no_syllable_body_carries_none_of_the_keys(
         self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1600,7 +1600,7 @@ class TestTheSyllableMeasuresReachThePage:
         report(store, tmp_path / "summary", _png(tmp_path))
         blocks = "\n".join(panels[0][-1]["lines"])
         assert "trains_n" not in blocks
-        assert "ppg_syllable_rate_hz" not in blocks
+        assert "ddk_syllable_rate_hz" not in blocks
 
 
 class TestInitialAndUpdatedSpansShareALane:
@@ -2514,7 +2514,7 @@ class TestASpeechSpanNobodyDiarizedSaysWhatItIs:
             store,
             activity,
             software_agent(store),
-            [mint("task_extent", (1.0, 2.6), parent, production="syllable_task_from_decode")],
+            [mint("task_extent", (1.0, 2.6), parent, production="syllable_task_from_events")],
         )
 
     @pytest.fixture
@@ -2531,7 +2531,7 @@ class TestASpeechSpanNobodyDiarizedSaysWhatItIs:
         panels = _capture_panels(monkeypatch)
         report(with_train, tmp_path / "summary", _png(tmp_path))
         captions = [token["text"] for tokens in _lane_rows(panels[0], "speech spans").values() for token in tokens]
-        train = [caption for caption in captions if "syllable_task_from_decode" in caption]
+        train = [caption for caption in captions if "syllable_task_from_events" in caption]
         assert train, captions
         assert not any("unattributed" in caption for caption in captions), captions
 
@@ -2539,7 +2539,7 @@ class TestASpeechSpanNobodyDiarizedSaysWhatItIs:
         """The JSON a consumer audits carries the same reading the lane draws."""
         payload = json.loads(report(with_train, tmp_path / "summary", _png(tmp_path))["json"].read_text())
         descriptions = {item["description"] for item in payload["evidence"]["branches"]["SPEECH"]}
-        assert "speech span: task_extent/syllable_task_from_decode" in descriptions
+        assert "speech span: task_extent/syllable_task_from_events" in descriptions
         assert not any("unattributed" in description for description in descriptions), descriptions
 
     def test_a_diarized_span_still_captions_itself_with_its_speaker(

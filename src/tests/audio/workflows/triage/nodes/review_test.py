@@ -24,7 +24,7 @@ from senselab.audio.workflows.triage.extend import (
     retire_decisions,
 )
 from senselab.audio.workflows.triage.nodes import review as review_module
-from senselab.audio.workflows.triage.nodes.common import find_measurement, software_agent
+from senselab.audio.workflows.triage.nodes.common import consensus_words, find_measurement, software_agent
 from senselab.audio.workflows.triage.nodes.redact import transcript_texts
 from senselab.audio.workflows.triage.nodes.review import (
     BACKFILL_HELD,
@@ -39,6 +39,7 @@ from senselab.audio.workflows.triage.nodes.review import (
 )
 from senselab.audio.workflows.triage.vocabulary import PII_SCAN, REDACTION_LLM_ANNOTATION, SCANNED, Outcome
 from senselab.text.tasks.pii_detection.redaction_review import (
+    PHRASE_QUOTES_UNPLACED_FEEDBACK,
     PROMPT_VERSION,
     ReviewProposal,
     ReviewResult,
@@ -209,23 +210,89 @@ def _annotation(store: ProvStore) -> dict[str, Any]:
 class TestTheReviewerReadsTheResidue:
     """The reviewer reads exactly the string SPEECH's scan read, and nothing where it read nothing."""
 
-    def test_a_declined_scan_is_nothing_to_read(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_a_declined_scan_is_bypassed_as_task_content(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """SPEECH declined because nothing lexical lay outside the task: no model is contacted."""
         store = ProvStore(run_id="review-test")
         _seed(store, words=["buttercup", "meadow"], scan="declined")
         seen = _stub(monkeypatch, [_clean()])
         review(store, _config(tmp_path))
         assert seen == []
-        assert _annotation(store)["status"] == "nothing_to_read"
+        annotation = _annotation(store)
+        assert (annotation["status"], annotation["bypass_reason"]) == ("bypassed", "task_content_only")
+        assert annotation["failure"] is None
 
-    def test_a_store_with_no_scan_is_nothing_to_read(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """SPEECH never ran, so no residue was computed and nothing reaches the pathway."""
+    def test_lexical_words_with_no_scan_are_a_missing_measurement(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A lexical family's words with no PII scan: absent with pii_scan_missing, never bypassed, no model asked."""
+        from senselab.audio.data_structures import AudioHints
+
+        for hint in (None, AudioHints(metadata={"task_token": "free-speech"})):
+            store = ProvStore(run_id="review-test")
+            _seed(store, scan=None)
+            seen = _stub(monkeypatch, [_clean()])
+            review(store, _config(tmp_path), hint)
+            assert seen == []
+            annotation = _annotation(store)
+            assert annotation["detector_state"] == "unscanned"
+            assert (annotation["status"], annotation["bypass_reason"], annotation["absent_reason"]) == (
+                "absent",
+                None,
+                "pii_scan_missing",
+            )
+            assert annotation["failure"]
+            assert not store.agents("model")
+
+    @pytest.mark.parametrize("task", ["prolonged-vowel", "voluntary-cough", "respiration-and-cough-breath"])
+    def test_a_non_lexical_family_with_no_scan_is_bypassed_as_non_lexical_task(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, task: str
+    ) -> None:
+        """Voice and airway words are masked and reviewed on the task-speech path, not read for PII."""
+        from senselab.audio.data_structures import AudioHints
+
         store = ProvStore(run_id="review-test")
         _seed(store, scan=None)
         seen = _stub(monkeypatch, [_clean()])
-        review(store, _config(tmp_path))
+        review(store, _config(tmp_path), AudioHints(metadata={"task_token": task}))
         assert seen == []
-        assert _annotation(store)["detector_state"] == "unscanned"
+        annotation = _annotation(store)
+        assert (annotation["status"], annotation["bypass_reason"], annotation["absent_reason"]) == (
+            "bypassed",
+            "non_lexical_task",
+            None,
+        )
+        assert annotation["failure"] is None
+
+    @pytest.mark.parametrize("task", ["loudness", "loudness-v2"])
+    def test_a_scanned_loudness_recording_of_hey_is_bypassed_as_non_lexical_task(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, task: str
+    ) -> None:
+        """Owner, 2026-10-11: loudness is a voice task, so its 'hey' alone is a non-lexical task, scanned or not."""
+        from senselab.audio.data_structures import AudioHints
+
+        for scan, residue in (("ran", []), (None, None)):
+            store = ProvStore(run_id="review-test")
+            _seed(store, words=["hey", "HEY!"], scan=scan, residue=residue)
+            seen = _stub(monkeypatch, [_clean()])
+            review(store, _config(tmp_path), AudioHints(metadata={"task_token": task}))
+            assert seen == []
+            annotation = _annotation(store)
+            assert (annotation["status"], annotation["bypass_reason"]) == ("bypassed", "non_lexical_task")
+
+    def test_a_scanned_prolonged_vowel_of_task_words_stays_task_content(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The vowel's count-in under a scan keeps its reason: the loudness change does not reach it."""
+        from senselab.audio.data_structures import AudioHints
+
+        store = ProvStore(run_id="review-test")
+        _seed(store, words=["one", "two", "three"], scan="ran", residue=[])
+        review(store, _config(tmp_path), AudioHints(metadata={"task_token": "prolonged-vowel"}))
+        assert (_annotation(store)["status"], _annotation(store)["bypass_reason"]) == ("bypassed", "task_content_only")
+
+    def test_no_bypass_reason_names_a_missing_scan(self) -> None:
+        """``bypassed`` is only no words, non-lexical words, task content, or a family that asks for a sound."""
+        assert review_module.BYPASS_REASONS == ("no_words", "non_lexical_only", "task_content_only", "non_lexical_task")
 
     def test_only_the_residue_is_read(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """A syllable train around a disclosure: the reviewer reads the disclosure alone."""
@@ -255,8 +322,93 @@ class TestTheReviewerReadsTheResidue:
         assert seen == ["hello [PERSON]"]
 
 
+class TestTheReviewerSeesEveryRecogniserSReading:
+    """Owner, 2026-10-09: the reviewer reads the consensus column by column, and its reading records that it did."""
+
+    def test_the_whole_consensus_reaches_the_reviewer_with_each_recogniser_s_word(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Every consensus word, not only the residue, with its kind, its PII findings and both readings."""
+        store = ProvStore(run_id="review-test")
+        _seed(store, words=["pa", "um", "my", "name", "is", "alice"], scan="ran", residue=[2, 3, 4, 5])
+        alice = consensus_words(store)[5]
+        finding = store.entity(
+            prov_type="pii",
+            extent=_extent(5),
+            attributes={"category": "PERSON", "source": "gliner", "haystack": "asr_qwen", "word_ids": [alice.id]},
+        )
+        store.was_generated_by(finding, store.activity(node="SPEECH", step="pii", parameters={}))
+        contexts: list[dict[str, Any]] = []
+
+        def _fake(original: str, *, context: dict[str, Any] | None = None, **kw: Any) -> ReviewResult:  # noqa: ANN401
+            contexts.append(dict(context or {}))
+            return _clean()
+
+        monkeypatch.setattr(review_module, "review_transcript", _fake)
+        review(store, _config(tmp_path))
+        (context,) = contexts
+        transcript = context["consensus_transcript"]
+        assert transcript["recognisers"] == ["asr_crisperwhisper", "asr_qwen"]
+        assert transcript["findings_n"] == 1
+        assert [word[4] for word in transcript["words"]] == ["task", "non_lexical", "", "", "", ""]
+        assert transcript["words"][0][:4] == [0, "pa", "agreement", ["pa", "pa"]]
+        assert transcript["words"][5][5] == [["PERSON", "gliner", "asr_qwen"]]
+        assert len(transcript["words"]) == 6
+
+    def test_the_reading_and_each_round_record_their_inputs(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """No task declared: the consensus and the readings were given, the task was not."""
+        store = ProvStore(run_id="review-test")
+        _seed(store, scan="ran")
+        _stub(monkeypatch, [_clean()])
+        review(store, _config(tmp_path))
+        inputs = _annotation(store)["review_inputs"]
+        assert (inputs["task"], inputs["full_transcript"], inputs["pii_annotations"], inputs["asr_readings"]) == (
+            False,
+            True,
+            True,
+            True,
+        )
+        assert inputs["prompt_version"] == PROMPT_VERSION and inputs["version"] == 3
+        assert [round_["review_inputs"] for round_ in _rounds_in(store)] == [inputs]
+
+    def test_the_task_reading_reaches_the_annotation_and_the_context_names_the_nature(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """v12: the five task-reading fields are stored, and the task's nature, name and speech type are sent."""
+        from senselab.audio.data_structures import AudioHints
+
+        store = ProvStore(run_id="review-test")
+        _seed(store, words=("hello", "world"), scan="ran")
+        answer = _clean()
+        answer.off_task_speech = "some"
+        answer.off_task_quotes = ["hello"]
+        answer.other_speaker = "assistant"
+        answer.other_speaker_quotes = ["world"]
+        answer.task_content_quotes = ["hello world"]
+        _stub(monkeypatch, [answer])
+        hint = AudioHints(
+            instructions="Say it.",
+            speech_type="elicited",
+            metadata={"task_token": "animal-fluency", "task_name": "Animal fluency"},
+        )
+        review(store, _config(tmp_path), hint)
+        annotation = _annotation(store)
+        assert {key: annotation[key] for key in ("off_task_speech", "other_speaker")} == {
+            "off_task_speech": "some",
+            "other_speaker": "assistant",
+        }
+        assert annotation["off_task_quotes"] == ["hello"] and annotation["other_speaker_quotes"] == ["world"]
+        assert annotation["task_content_quotes"] == ["hello world"]
+        context = annotation["task_context"]
+        assert context["task_nature"] == "item_generation" and context["speech_type"] == "elicited"
+        assert context["task_name"] == "Animal fluency"
+        assert annotation["review_inputs"]["instructions"] is True
+
+
 class TestTheFourSilencesStayApart:
-    """Switched off, nothing to read, tried and could not load, and ran: each its own state."""
+    """Switched off, bypassed, tried and could not load, and ran: each its own state."""
 
     def test_switched_off_contacts_nothing_and_says_so(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """Off means no subprocess and an annotation recording the absence as a choice."""
@@ -266,15 +418,54 @@ class TestTheFourSilencesStayApart:
         review(store, _config(tmp_path, "redaction:\n  llm_check:\n    enabled: false\n"))
         assert seen == []
         assert _annotation(store)["status"] == "disabled"
+        assert _annotation(store)["bypass_reason"] is None
 
-    def test_an_empty_transcript_is_nothing_to_read(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """The 20,518 with no lexical word; there is no text, so there is no reading."""
+    def test_switched_off_over_an_empty_residue_is_still_disabled(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The switch is read before the residue: off wins over bypassed."""
+        store = ProvStore(run_id="review-test")
+        _seed(store, words=[], scan=None)
+        seen = _stub(monkeypatch, [])
+        review(store, _config(tmp_path, "redaction:\n  llm_check:\n    enabled: false\n"))
+        assert seen == []
+        assert (_annotation(store)["status"], _annotation(store)["bypass_reason"]) == ("disabled", None)
+
+    def test_an_empty_transcript_is_bypassed_as_no_words(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The recordings with no word at all; there is no text, so there is no reading."""
         store = ProvStore(run_id="review-test")
         _seed(store, words=[], scan=None)
         seen = _stub(monkeypatch, [])
         review(store, _config(tmp_path))
         assert seen == []
-        assert _annotation(store)["status"] == "nothing_to_read"
+        annotation = _annotation(store)
+        assert (annotation["status"], annotation["bypass_reason"]) == ("bypassed", "no_words")
+        assert annotation["failure"] is None and annotation["iterations"] == 0
+
+    def test_a_scan_with_only_non_lexical_words_is_bypassed_as_non_lexical(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The scan ran and set every word aside as non-lexical."""
+        store = ProvStore(run_id="review-test")
+        _seed(store, words=["[breath]", "[cough]"], scan="ran", residue=[])
+        seen = _stub(monkeypatch, [])
+        review(store, _config(tmp_path))
+        assert seen == []
+        assert (_annotation(store)["status"], _annotation(store)["bypass_reason"]) == ("bypassed", "non_lexical_only")
+
+    def test_a_scan_with_lexical_task_words_is_bypassed_as_task_content(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Lexical words exist, but the scan read none of them: every one is task content."""
+        store = ProvStore(run_id="review-test")
+        _seed(store, words=["[breath]", "buttercup", "meadow"], scan="ran", residue=[])
+        seen = _stub(monkeypatch, [])
+        review(store, _config(tmp_path))
+        assert seen == []
+        assert (_annotation(store)["status"], _annotation(store)["bypass_reason"]) == (
+            "bypassed",
+            "task_content_only",
+        )
 
     def test_a_model_that_would_not_load_is_absent_not_clean(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -392,6 +583,23 @@ class TestTheProposalBecomesTheAppliedRedaction:
         assert [(round(e.start, 3), round(e.end, 3)) for e in applied.extents] == [(1.0, 1.5)]
         assert applied.released_n == 0
         assert applied.unplaced == ("not here",)
+
+    def test_a_quote_across_a_task_word_lands_on_the_residue_words_only(self) -> None:
+        """Prompt 11 shows the task word "pa"; a quote running across it covers the residue words around it."""
+        store = ProvStore(run_id="review-test")
+        _seed(store, words=["alicia", "pa", "smith"], scan="ran", residue=[0, 2])
+        _annotate(store, [{"text": "alicia pa smith", "action": "redact", "category": "PERSON", "why": "a name"}])
+        applied = refine_plan(store, padding_ms=0)
+        assert applied.unplaced == ()
+        assert [(round(e.start, 3), round(e.end, 3)) for e in applied.extents] == [(0.0, 2.5)]
+
+    def test_a_quote_of_a_task_word_alone_is_unplaced(self) -> None:
+        """The task word is shown for context; the redaction never reaches it."""
+        store = ProvStore(run_id="review-test")
+        _seed(store, words=["alicia", "pa", "smith"], scan="ran", residue=[0, 2])
+        _annotate(store, [{"text": "pa", "action": "redact", "category": "OTHER", "why": "?"}])
+        applied = refine_plan(store, padding_ms=0)
+        assert applied.extents == [] and applied.unplaced == ("pa",)
 
     def test_every_applied_span_carries_the_reason_it_is_there(self) -> None:
         """The audit trail the discarded second artefact would otherwise have been."""
@@ -584,6 +792,51 @@ class TestTheLoopStopsWhenAnotherRoundCannotDiffer:
         assert "do not occur in the ORIGINAL" in rounds[1]["feedback"] and '"[PERSON]"' in rounds[1]["feedback"]
         assert _annotation(store)["converged"] is True
 
+    @staticmethod
+    def _phrased(*quotes: str) -> ReviewResult:
+        """A clean round that judges phrases predominant and quotes them."""
+        return ReviewResult(
+            available=True,
+            reasoning="Nothing identifies the speaker.",
+            redaction="not_applicable",
+            original="clean",
+            speakers="one",
+            phrases_instead_of_items="predominant",
+            phrase_quotes=list(quotes),
+            model_id="s/m",
+            revision="a" * 40,
+        )
+
+    def test_an_unplaced_phrase_quote_is_asked_again_and_the_correction_converges(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Owner, 2026-10-10: a phrase quote that places on no word is incorrect, so the reviewer retries."""
+        store = ProvStore(run_id="r")
+        _seed(store, words=["i", "like", "the", "elephants"])
+        seen = _stub(monkeypatch, [self._phrased("i like the elephant"), self._phrased("i like the elephants")])
+        review(store, _config(tmp_path, LLM_ON + "    max_iterations: 3\n"))
+        assert len(seen) == 2
+        rounds = _rounds_in(store)
+        assert [entry["phrase_quotes_unplaced_n"] for entry in rounds] == [1, 0]
+        assert rounds[1]["feedback"] == PHRASE_QUOTES_UNPLACED_FEEDBACK
+        annotation = _annotation(store)
+        assert annotation["converged"] is True and annotation["phrase_quotes_unplaced_n"] == 0
+
+    def test_a_phrase_quote_still_unplaced_at_the_ceiling_is_not_converged(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The same unplaceable quote each round: the ceiling ends it and the reading records the count."""
+        store = ProvStore(run_id="r")
+        _seed(store, words=["i", "like", "the", "elephants"])
+        wrong = self._phrased("i like the elephant")
+        seen = _stub(monkeypatch, [wrong, wrong, wrong])
+        review(store, _config(tmp_path, LLM_ON + "    max_iterations: 3\n"))
+        assert len(seen) == 3
+        annotation = _annotation(store)
+        assert (annotation["converged"], annotation["phrase_quotes_unplaced_n"]) == (False, 1)
+        assert annotation["problem"] == PHRASE_QUOTES_UNPLACED_FEEDBACK
+        assert all(entry["feedback"] == PHRASE_QUOTES_UNPLACED_FEEDBACK for entry in _rounds_in(store)[1:])
+
     def test_a_flag_that_proposes_a_removal_still_iterates(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -681,16 +934,14 @@ class TestTheBracketedTokensAreNotSpeech:
     reading one string, and about not spending a card to be told that ``[breath]`` is not a name.
     """
 
-    def test_a_transcript_of_only_markers_is_nothing_to_read(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_a_transcript_of_only_markers_is_bypassed(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """It renders empty, so the node records the silence rather than contacting a model."""
         store = ProvStore(run_id="r")
         _seed(store, words=["[breath]", "[cough]"])
         seen = _stub(monkeypatch, [])
         review(store, _config(tmp_path))
         assert seen == [], "no model may be contacted for a transcript of markers"
-        assert _annotation(store)["status"] == "nothing_to_read"
+        assert (_annotation(store)["status"], _annotation(store)["bypass_reason"]) == ("bypassed", "non_lexical_only")
 
     def test_a_marker_between_two_words_leaves_the_words_joined(self, tmp_path: Path) -> None:
         """What the reviewer is shown, and therefore what its quotes are taken from."""
@@ -845,7 +1096,7 @@ class TestAReadingIsKeptInTheResultCache:
 
     def test_the_settings_and_the_context_are_in_the_key(self) -> None:
         """A different iteration bound, generation ceiling, commit or task context is a different reading."""
-        settings = {"model_id": "s/m", "max_new_tokens": 1024, "max_iterations": 3}
+        settings = {"model_id": "s/m", "max_new_tokens": 1024, "max_iterations": 3, "engine": "transformers"}
         base = review_cache_key("a b", None, {"task": "x"}, settings, "a" * 40)
         assert base == review_cache_key("a b", None, {"task": "x"}, dict(settings), "a" * 40)
         assert base != review_cache_key("a b", None, {"task": "x"}, {**settings, "max_iterations": 2}, "a" * 40)

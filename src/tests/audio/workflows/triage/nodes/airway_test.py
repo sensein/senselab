@@ -44,7 +44,7 @@ from senselab.audio.workflows.triage.nodes.common import find_measurements, live
 from senselab.audio.workflows.triage.nodes.routing import routing
 from senselab.audio.workflows.triage.nodes.verdict import verdict
 from senselab.audio.workflows.triage.routing_analysis.ruleset import GateOutcome, RouteEvaluation, RouteState
-from senselab.audio.workflows.triage.vocabulary import Outcome, Triage
+from senselab.audio.workflows.triage.vocabulary import Outcome, RunStatus, Triage
 from senselab.utils.prov_store import Entity, ProvStore
 from tests.audio.workflows.triage.nodes.conftest import gated_from_store, store_readings, word_attributes
 
@@ -1949,7 +1949,7 @@ class TestTheFoldNamesTheHintMismatchThisBranchDoesNot:
         assert branch.report.conformance == UNDETERMINED
 
         folded = verdict(store, None, hint_config, hint, run_dir=tmp_path).file_verdict
-        assert folded.triage is Triage.RERUN
+        assert folded.triage is Triage.REVIEW and folded.run_status is RunStatus.INCOMPLETE
         assert folded.findings["AIRWAY"] == "absent"
         assert folded.hints["AIRWAY"] == "claimed_not_found"
         assert folded.discard_ground is None

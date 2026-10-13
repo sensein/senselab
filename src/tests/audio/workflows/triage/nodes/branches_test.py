@@ -836,7 +836,7 @@ class TestEveryOperatingPointIsAConfigKey:
         mappings = {key for key in PARAM_KEYS if f"{PARAM_SECTION}.{key}" in DATA_MAP_PATHS}
         numeric = [key for key in PARAM_KEYS if key not in mappings]
         assert mappings == {"label_sets", "phoneme_place_classes", "phoneme_vowel_classes"}
-        assert len(numeric) == 14
+        assert len(numeric) == 13
         params = branch_params(config)
         for key in numeric:
             assert config.values[PARAM_SECTION][key] is not None, key

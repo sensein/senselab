@@ -51,6 +51,7 @@ from senselab.audio.workflows.triage.vocabulary import (
     Outcome,
     RedactionEvidence,
     Release,
+    RunStatus,
     Triage,
     fold_file_verdict,
 )
@@ -229,13 +230,13 @@ class TestTheFoldDecidesFromWhatIsReported:
     def test_a_non_conformance_flags(self) -> None:
         """The one claim a reporting node makes that reaches the triage axis."""
         folded = _fold([_report("AIRWAY", conformance=False)], spans={"AIRWAY": 1}, routes={"AIRWAY": ROUTED})
-        assert folded.triage is Triage.FLAG
+        assert folded.triage is Triage.REVIEW
         assert folded.conformance["AIRWAY"] is False
 
     def test_a_conformance_does_not_flag(self) -> None:
         """The instruction was met; there is nothing for a human to look at."""
         folded = _fold([_report("AIRWAY", conformance=True)], spans={"AIRWAY": 1}, routes={"AIRWAY": ROUTED})
-        assert folded.triage is Triage.PASS
+        assert not folded.ground_keys
 
     def test_the_spans_are_what_say_a_branch_found_its_subject(self) -> None:
         """``findings`` is read off the spans, not off any conclusion of the branch's own."""
@@ -257,8 +258,8 @@ class TestTheFoldDecidesFromWhatIsReported:
         missed = _fold([_report("AIRWAY", conformance=True)], spans={"AIRWAY": 1}, routes={"AIRWAY": DECLINED})
         assert over.agreement["AIRWAY"] == "mismatch"
         assert missed.agreement["AIRWAY"] == "mismatch"
-        assert over.triage is Triage.PASS
-        assert missed.triage is Triage.FLAG
+        assert not over.ground_keys
+        assert missed.triage is Triage.REVIEW
 
     def test_the_fold_is_task_aware(self) -> None:
         """The same non-conformance flags on one declared family and is excepted on another."""
@@ -277,8 +278,8 @@ class TestTheFoldDecidesFromWhatIsReported:
             declared_family="story-recall",
             policy=policy,
         )
-        assert flagged.triage is Triage.FLAG
-        assert excepted.triage is Triage.PASS
+        assert flagged.triage is Triage.REVIEW
+        assert not excepted.ground_keys
         assert excepted.conformance["SPEECH"] is False
         assert excepted.declared_family == "story-recall"
 
@@ -303,7 +304,7 @@ class TestADeviationAloneDoesNotFlag:
             spans={"SPEECH": 1},
             routes={"SPEECH": ROUTED},
         )
-        assert folded.triage is Triage.PASS
+        assert not folded.ground_keys
         assert folded.deviations["SPEECH"] == ["filler", "stimulus_mismatch"]
 
     def test_the_packaged_policy_does_not_fold_deviations(self) -> None:
@@ -318,7 +319,7 @@ class TestADeviationAloneDoesNotFlag:
             routes={"SPEECH": ROUTED},
             policy=FoldPolicy(deviation_flags=True),
         )
-        assert folded.triage is Triage.FLAG
+        assert folded.triage is Triage.REVIEW
 
 
 class TestAllUndeterminedIsSane:
@@ -331,7 +332,7 @@ class TestAllUndeterminedIsSane:
             spans={branch: 1 for branch in BRANCHES},
             routes={branch: ROUTED for branch in BRANCHES},
         )
-        assert folded.triage is Triage.PASS
+        assert not folded.ground_keys
         assert set(folded.conformance.values()) == {UNDETERMINED}
 
     def test_the_packaged_policy_does_not_flag_an_unanswered_conformance(self) -> None:
@@ -346,7 +347,7 @@ class TestAllUndeterminedIsSane:
             routes={"AIRWAY": ROUTED},
             policy=FoldPolicy(undetermined_flags=True),
         )
-        assert folded.triage is Triage.FLAG
+        assert folded.triage is Triage.REVIEW
 
     def test_an_all_undetermined_fold_still_reports_findings_and_agreement(self) -> None:
         """Answering no conformance question is not the same as measuring nothing."""
@@ -375,7 +376,7 @@ class TestAnUngatedBranchIsNotScoredForAgreement:
             declared_family="diadochokinesis-pataka",
         )
         assert folded.agreement["SPEECH"] == "resolved"
-        assert folded.triage is Triage.PASS
+        assert not folded.ground_keys
         assert [reason.why for reason in folded.reasons if reason.node == "SPEECH"] == []
 
     def test_an_ungated_branch_that_found_nothing_does_not_score_agreement_either(self) -> None:
@@ -418,7 +419,7 @@ class TestAnOutOfFamilyResultIsFoldedLikeAnyOther:
                 routes={branch: ROUTED},
                 declared_family="rainbow-passage",
             )
-            assert folded.triage is Triage.FLAG, branch
+            assert folded.triage is Triage.REVIEW, branch
 
     def test_the_fold_records_no_detector_covariate_for_any_branch(self) -> None:
         """The covariate record had one member and went with it; nothing writes one."""
@@ -442,7 +443,7 @@ class TestQualityEntersThroughConformanceAboutTheStore:
             declared_family="anything",
             policy=policy,
         )
-        assert folded.triage is Triage.FLAG
+        assert folded.triage is Triage.REVIEW
         assert folded.conformance_of["QUALITY"] == STORE_ASSERTIONS
 
     def test_quality_gets_no_route_no_finding_and_no_hint_row(self) -> None:
@@ -460,8 +461,8 @@ class TestQualityEntersThroughConformanceAboutTheStore:
         store_side = _fold(
             [_report("QUALITY", None, conformance=False, referent=STORE_ASSERTIONS, in_family=False)], policy=policy
         )
-        assert task.triage is Triage.PASS
-        assert store_side.triage is Triage.FLAG
+        assert not task.ground_keys
+        assert store_side.triage is Triage.REVIEW
 
 
 class TestTheRedactInterlockIsUntouched:
@@ -471,7 +472,7 @@ class TestTheRedactInterlockIsUntouched:
         """REDACT keeps its ``Outcome``; the split reached the branches and not it."""
         releasable = _fold(node_verdicts=[NodeVerdict("REDACT", Outcome.PASS, None, "scanned")])
         withheld = _fold(node_verdicts=[NodeVerdict("REDACT", Outcome.FAIL, None, "a finding survived")])
-        assert releasable.release is Release.WITH_REDACTION
+        assert releasable.release is Release.REDACTED
         assert withheld.release is Release.WITHHELD
 
     def test_redacts_absence_decides_nothing(self) -> None:
@@ -491,7 +492,7 @@ class TestTheRedactInterlockIsUntouched:
             spans={"SPEECH": 1},
             node_verdicts=[NodeVerdict("REDACT", Outcome.PASS, None, "scanned")],
         )
-        assert folded.release is Release.WITH_REDACTION
+        assert folded.release is Release.REDACTED
 
     def test_redact_is_still_gated_on_pii_entities_not_on_speechs_report(self) -> None:
         """``run._speech_found_pii`` reads ``pii`` entities; nothing in this change touched it."""
@@ -611,13 +612,13 @@ class TestABranchNeverRefuses:
             spans={},
         )
         assert folded.unmeasured["AIRWAY"] == ["verdict.gates.by_group.EVENT_SERIES.score_min"]
-        assert folded.triage is Triage.RERUN
+        assert folded.triage is Triage.REVIEW and folded.run_status is RunStatus.INCOMPLETE
         quiet = _fold(
             [_report("AIRWAY", conformance=UNDETERMINED, unmeasured=["verdict.gates.by_group.EVENT_SERIES.score_min"])],
             spans={},
             policy=FoldPolicy(unmeasured_points_flag=False),
         )
-        assert quiet.triage is Triage.PASS
+        assert not quiet.ground_keys
 
 
 class TestTheBranchSectionShipsValues:
@@ -682,7 +683,7 @@ class TestTheReportSurvivesTheStore:
         )
         assert report.unmeasured == ("branch.target_match_cosine",)
         folded = _fold([report], spans={"SPEECH": 0}, routes={"SPEECH": ROUTED})
-        assert folded.triage is Triage.RERUN
+        assert folded.triage is Triage.REVIEW and folded.run_status is RunStatus.INCOMPLETE
         assert folded.unmeasured["SPEECH"] == ["branch.target_match_cosine"]
 
     def test_in_family_reaches_the_fold(self) -> None:
@@ -702,7 +703,7 @@ class TestTheReportSurvivesTheStore:
             routes={"SPEECH": ROUTED},
             declared_family="rainbow-passage",
         )
-        assert folded.triage is Triage.FLAG
+        assert folded.triage is Triage.REVIEW
 
     def test_in_family_is_not_hardcoded_at_the_writer(self) -> None:
         """The align mode has to survive the round trip too, not only the detect one."""
@@ -721,4 +722,4 @@ class TestTheReportSurvivesTheStore:
             routes={"SPEECH": ROUTED},
             declared_family="diadochokinesis-pataka",
         )
-        assert folded.triage is Triage.FLAG
+        assert folded.triage is Triage.REVIEW

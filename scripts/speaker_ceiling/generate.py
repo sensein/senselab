@@ -198,7 +198,6 @@ from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
-import soundfile as sf
 import torch
 
 from senselab.audio.data_structures import Audio
@@ -209,6 +208,7 @@ from senselab.audio.tasks.text_to_speech.qwen_tts import (
     synthesize_texts_with_qwen,
 )
 from senselab.utils.data_structures import DeviceType, HFModel
+from senselab.utils.portable_audio_io import audio_info
 
 # --------------------------------------------------------------------------------------
 # Session model constants, borrowed from NeMo's MultiSpeakerSimulator defaults.
@@ -582,10 +582,10 @@ def _session_is_complete(wav_path: Path, rttm_path: Path) -> bool:
     if not any(line.strip() for line in rttm_text.splitlines()):
         return False
     try:
-        info = sf.info(str(wav_path))
+        info = audio_info(wav_path)
     except Exception:  # noqa: BLE001 -- any unreadable wav (truncated, zero-length) is not-done
         return False
-    return bool(info.frames > 0)
+    return bool((info.frames or 0) > 0)
 
 
 def _reconstruct_session_record(

@@ -422,6 +422,14 @@ DC offset, handling noise and room rumble, none of which is content, and all of 
 lowest band's level and any slope taken through it. The top edge is not a key: it is Nyquist, which
 is a property of the file, not a decision.
 
+## ppg
+
+The phonetic posteriorgram's worker. `timeout_min_s` (1800 s) is the least the ppgs subprocess is allowed,
+whatever the recording's length. The length-scaled budget (300 s startup plus 2 s per audio second) timed out
+on 211cf773 (a 30 s breath recording) in the 2026-09-20 run under node contention, which errored PREPROCESS
+and left the recording not_measured. Thirty minutes is six times that budget for a 30 s file; a worker still
+running then is hung, not slow. Derivation: `specs/20261012-r37-extents/design.md` ("E3").
+
 ## gammatone
 
 The auditory filterbank's channel layout.
@@ -1251,8 +1259,12 @@ maximum-phonation-time task should produce.
 SPEECH's enrollment, separation, diarization and non-target settings.
 
 speech v2 -- branch-speech.md. speech.enrollment_model names the speaker-embedding model AND its
-revision that enrollment is estimated with; null, and while null an enrollment is refused rather than
-compared. speech.separation_backend chooses between unasdiff in speech_sound mode and
+resolved commit that enrollment is estimated with: speechbrain/spkrec-ecapa-voxceleb at
+0f99f2d0ebe89ac095bcc5903c4dd8f72b367286, the model the speaker vectors were fitted on
+(specs/20260922-speaker-vectors/design.md). speech.target_match_cosine is 0.231, the midpoint of
+that fit's same-speaker 5th percentile (0.2493) and between-speaker 95th percentile (0.2125) at the
+1.0 s refusal floor (D-6), the shortest run either SPEECH or COHORT embeds. Both are read by COHORT's
+session enrollment (specs/20261007-task-events-in-background/design.md, "Cohort stage"). speech.separation_backend chooses between unasdiff in speech_sound mode and
 MossFormer2_SS_16K, and ships **MossFormer2_SS_16K**, which turns the multi-speaker instrument on.
 
 THE TWO WERE NOT RANKED, AND THE VALUE IS NOT A RANKING. The earlier null said "until the two are
@@ -2100,6 +2112,13 @@ taxonomy.ruleset -- the whole ruleset block (reference_family_set, branch_gates,
 emptiness, gates) is derived in family-taxonomy-ruleset.md, keyed by gate name, and is not repeated
 here.
 
+taxonomy.ruleset.emptiness.active_s_max (2026-10-07, unit C step 2) replaces peak_streams and
+peak_floor. A recording no gate routed is empty where BACKGROUND read no more than this many seconds
+of activity over its (session-informed) floor, rather than where every tracked YAMNet peak on the
+enhanced and residual streams stayed under 0.2. Zero is the owner's rule as decided ("nothing
+captured: no active region in any stream"); the measurement is in
+specs/20261007-task-events-in-background/design.md, "Unit C step 2".
+
 taxonomy.ruleset.reference_family_set now has a second reader, and the same four entries serve both.
 It was the family set each branch is SCORED against; as of this session it is also the mapping the
 declared task ROUTES through, since a declared task always adds a route to its own branch
@@ -2295,6 +2314,19 @@ so leaving it off costs nothing that the detector cascade was doing. What its an
   may make residency cost ~24 GB instead of ~70 GB. Not measured; it changes numerics.
   See specs/20260817-triage-workflow-dag/llm-check-amortised-load.md.
 
+  engine transformers -- the venv worker above stays the default so a run that turns the reviewer on
+  needs nothing new. vllm is owner-approved (2026-10-10) for corpus passes: measured on one H100 over
+  246 reviewer requests (/orcd/scratch/bcs/002/satra/bench_reviewer_20261009), vLLM 0.31.0 at
+  concurrency 1 answered 246/246 with token ids identical across two runs, at 3.7x the transformers
+  worker's throughput (0.179 against 0.049 calls/s); at concurrency 32 it was not reproducible, with
+  or without VLLM_BATCH_INVARIANT, so one request at a time is part of the engine's identity.
+  vllm.* -- the benchmark's own server arguments, every one in the reading's engine identity and
+  cache key: max_model_len 12288 (every benchmark request fit with max_new_tokens 1024),
+  gpu_memory_utilization 0.90 (one server per card; a pass with several servers per card overrides
+  it, see specs/20261010-vllm-reviewer/design.md), enable_prefix_caching true, kv_cache_dtype auto,
+  generation_config vllm (the request sets every sampling parameter), limit_mm_per_prompt
+  {image: 0, audio: 0} (text only).
+
 redaction.fill silence -- owner-directed. redact.md left this DEFERRED, and which of silence, noise
 or bleep is least damaging to the measurements taken downstream of a released artifact is still not
 measured; silence is a declared choice rather than a fitted one. It is the fill with no content of
@@ -2465,8 +2497,6 @@ Keys deliberately left null, and what each one owes.
 UNSET, and why -- benchmarks/open.md carries each of these:
   speech.second_diarizer: no measured ranking of second diarizers exists; while null, a count of
     not-1 records second_diarizer "not_consulted" and still flags.
-  speech.target_match_cosine: no similarity threshold has been derived; a hint carrying a target
-    embedding under this null is refused rather than answered with an invented cut.
   speech.speech_test_stoi_floor, speech.speech_test_si_sdr_floor: SQUIM thresholds over speech
     spans are unmeasured; while null each span's corroboration records squim_vote "not_evaluated"
     and YAMNet coverage alone decides. Distinct from quality.stoi_floor/pesq_floor: these gate

@@ -13,7 +13,7 @@ from senselab.audio.data_structures.audio_hints import ExpectedSpeech
 from senselab.audio.tasks.classification.huggingface import AudioTooShortForAST
 from senselab.audio.tasks.classification.yamnet import YAMNET_WINDOW_SECONDS
 from senselab.audio.tasks.features_extraction.ppg import PHONEME_LABELS, PpgsPosteriorgramUnavailable
-from senselab.audio.tasks.phonation import F0RangeFailed
+from senselab.audio.tasks.phonation import F0RangeFailed, F0RangeUnavailable
 from senselab.audio.tasks.speech_enhancement.residual import compute_residual
 from senselab.audio.tasks.speech_to_text.crisperwhisper import CrisperWhisperDecoderPositionsExceeded
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
@@ -23,6 +23,7 @@ from senselab.audio.workflows.triage.nodes.common import (
     PITCH_NARROWING_KEYS,
     find_measurement,
     find_measurements,
+    lexical_words,
     live_entities,
     resolve_stream,
 )
@@ -1100,7 +1101,7 @@ class TestPhonationTracks:
         assert not [e for e in live_entities(store, "span") if e.attributes.get("family") == "phonation"]
         assert not find_measurements(store, "formant_tracks")
 
-    def test_an_underivable_range_leaves_the_tracks_absent(
+    def test_an_underivable_range_is_tracked_over_the_search_range(
         self,
         store: ProvStore,
         config: TriageConfig,
@@ -1108,17 +1109,42 @@ class TestPhonationTracks:
         wav_writer: Callable[..., Path],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """A recording no range derives from leaves the pass absent, rather than guessing one."""
+        """No pitch to narrow on: the tracks still run, over the wide search, and say so."""
+        searched: list[tuple[float, float]] = []
 
         def _no_range(
             audio: Audio, *, search_floor_hz: float, search_ceiling_hz: float, **coefficients: float
         ) -> tuple[float, float]:
             assert set(coefficients) == set(PITCH_NARROWING_KEYS)
-            raise ValueError("no F0 range could be derived from this recording")
+            searched.append((search_floor_hz, search_ceiling_hz))
+            raise F0RangeUnavailable("no F0 range could be derived from this recording")
 
         _seed_admit(store, tmp_path, wav_writer, samples=_default_samples())
         _stub_models(monkeypatch)
         monkeypatch.setattr(preprocess_module, "derive_f0_range", _no_range)
+        result = preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
+        assert "phonation_tracks" not in result.absent
+        tracks = find_measurement(store, "phonation_tracks")
+        assert tracks is not None
+        assert tracks.attributes["f0_range_from"] == "search"
+        assert (tracks.attributes["f0_min_hz"], tracks.attributes["f0_max_hz"]) == searched[0]
+
+    def test_another_range_error_still_leaves_the_tracks_absent(
+        self,
+        store: ProvStore,
+        config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Only the typed no-pitch absence falls back; any other ValueError is still an absence."""
+
+        def _bad(audio: Audio, **parameters: float) -> tuple[float, float]:
+            raise ValueError("unmeasured key")
+
+        _seed_admit(store, tmp_path, wav_writer, samples=_default_samples())
+        _stub_models(monkeypatch)
+        monkeypatch.setattr(preprocess_module, "derive_f0_range", _bad)
         result = preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
         assert "phonation_tracks" in result.absent
         assert find_measurement(store, "phonation_tracks") is None
@@ -1249,7 +1275,7 @@ class TestTheConsensusTranscript:
         assert attributes["n_sources"] == 2
         assert attributes["text"] == "hello world"
         assert attributes["outcomes"] == {"agreement": 2, "variant": 0, "insertion": 0}
-        assert attributes["time_fit"] == "weighted_isotonic_median"
+        assert attributes["time_fit"] == "weighted_isotonic_median_over_located_spans"
         assert len(attributes["word_ids"]) == attributes["n_words"] == 2
         for retired in ("words", "provenance", "systems", "timing_authority", "event_ids"):
             assert retired not in attributes
@@ -1371,7 +1397,7 @@ class TestTheConsensusTranscript:
         assert world.attributes["outcome"] == "variant"
         assert world.attributes["agreement"] == pytest.approx(2 / 3)
 
-    def test_a_single_recognizer_is_an_absence_not_a_consensus(
+    def test_a_single_recognizer_is_a_single_reading_consensus(
         self,
         store: ProvStore,
         config: TriageConfig,
@@ -1379,7 +1405,7 @@ class TestTheConsensusTranscript:
         wav_writer: Callable[..., Path],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Test 20 (R-2): one block raising leaves no consensus and no word; the other blocks still run."""
+        """One block raising leaves a consensus of the other's words, flagged, with no agreement read."""
         _seed_admit(store, tmp_path, wav_writer)
         _stub_models(monkeypatch, crisper=_line("hello world"), qwen=_line("hello world"))
         real = preprocess_module.transcribe_audios
@@ -1392,14 +1418,16 @@ class TestTheConsensusTranscript:
         monkeypatch.setattr(preprocess_module, "transcribe_audios", _one_fails)
         result = preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
         absent = dict(store.get_entity(result.verdict_entity_id).attributes["absent"])
-        assert absent["consensus_transcript"].startswith("LookupError: consensus needs at least two")
-        assert "found 1: ['asr_crisperwhisper']" in absent["consensus_transcript"]
-        assert find_measurement(store, "consensus_transcript") is None
-        assert live_entities(store, "word") == []
-        assert find_measurement(store, "asr_crisperwhisper") is not None
+        assert "consensus_transcript" not in absent
+        consensus = find_measurement(store, "consensus_transcript")
+        assert consensus is not None
+        assert consensus.attributes["single_hypothesis"] is True
+        words = live_entities(store, "word")
+        assert [w.attributes["outcome"] for w in words] == ["insertion", "insertion"]
+        assert [w.attributes["agreement"] for w in words] == [None, None]
         assert find_measurement(store, "energy_envelope") is not None
 
-    def test_a_defect_in_the_consensus_fails_the_node(
+    def test_no_recognizer_is_an_absence_not_a_consensus(
         self,
         store: ProvStore,
         config: TriageConfig,
@@ -1407,7 +1435,30 @@ class TestTheConsensusTranscript:
         wav_writer: Callable[..., Path],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Test 21: a RuntimeError from align_sources is a hard failure naming the block."""
+        """Both blocks raising leaves no consensus and no word; the other blocks still run."""
+        _seed_admit(store, tmp_path, wav_writer)
+        _stub_models(monkeypatch, crisper=_line("hello world"), qwen=_line("hello world"))
+
+        def _both_fail(audios: list, model: Any, **kwargs: Any) -> Any:  # noqa: ANN401
+            raise LookupError("recognizer unavailable")
+
+        monkeypatch.setattr(preprocess_module, "transcribe_audios", _both_fail)
+        result = preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
+        absent = dict(store.get_entity(result.verdict_entity_id).attributes["absent"])
+        assert absent["consensus_transcript"].startswith("LookupError: consensus needs at least one")
+        assert find_measurement(store, "consensus_transcript") is None
+        assert live_entities(store, "word") == []
+        assert find_measurement(store, "energy_envelope") is not None
+
+    def test_a_defect_in_the_consensus_is_a_failed_block(
+        self,
+        store: ProvStore,
+        config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Test 21: a RuntimeError from align_sources is a failed block, named, and the node completes."""
         _seed_admit(store, tmp_path, wav_writer)
         _stub_models(monkeypatch, crisper=_line("hello world"), qwen=_line("hello world"))
 
@@ -1415,8 +1466,9 @@ class TestTheConsensusTranscript:
             raise RuntimeError("alignment blew up")
 
         monkeypatch.setattr(preprocess_module, "align_sources", _broken)
-        with pytest.raises(RuntimeError, match="consensus_transcript: RuntimeError: alignment blew up"):
-            preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
+        result = preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
+        assert "consensus_transcript" in result.absent
+        assert "consensus_transcript" in result.verdict.why
 
     def test_provenance_links_words_to_the_sources_that_produced_them(
         self,
@@ -1703,10 +1755,10 @@ class TestTheEnvelopeSidecarHoldsMeasurementsOnly:
             assert span.extent[1] < 2.9, "the burst ends at 1.5 s; a span to 3.0 s is the NaN hangover"
 
 
-class TestAnUnexpectedBlockFailureIsNotAbsorbed:
+class TestAnUnexpectedBlockFailureStopsOnlyItsReaders:
     """A failure that is neither a null-config ValueError nor a missing-prerequisite LookupError."""
 
-    def test_every_other_block_still_runs_before_preprocess_raises(
+    def test_every_other_block_runs_and_the_node_completes_naming_the_failure(
         self,
         store: ProvStore,
         config: TriageConfig,
@@ -1714,7 +1766,7 @@ class TestAnUnexpectedBlockFailureIsNotAbsorbed:
         wav_writer: Callable[..., Path],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """The loop does not abort early: unrelated derivatives, before and after the break, survive."""
+        """The failed blocks are absent and named on the verdict; every other derivative survives."""
         _seed_admit(store, tmp_path, wav_writer)
         _stub_models(monkeypatch)
 
@@ -1723,12 +1775,11 @@ class TestAnUnexpectedBlockFailureIsNotAbsorbed:
 
         monkeypatch.setattr(preprocess_module, "extract_spectrogram_from_audios", _broken)
 
-        with pytest.raises(RuntimeError) as excinfo:
-            preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
+        result = preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
 
-        message = str(excinfo.value)
-        assert "spectrogram_wideband" in message
-        assert "spectrogram_narrowband" in message
+        assert {"spectrogram_wideband", "spectrogram_narrowband"} <= set(result.absent)
+        assert "spectrogram_wideband" in result.verdict.why
+        assert "spectrogram_narrowband" in result.verdict.why
         # Before the failing blocks in `blocks`' own order:
         assert find_measurement(store, "energy_envelope") is not None
         # After the failing blocks: `spans` still proposes from the amplitude sources alone, and
@@ -1824,6 +1875,35 @@ class TestCrisperWhisperPositionOverrunDegradesWithoutLosingTheRecording:
         assert find_measurement(store, "asr_crisperwhisper") is None
         assert find_measurement(store, "asr_qwen") is not None
         assert find_measurement(store, "energy_envelope") is not None
+        consensus = find_measurement(store, "consensus_transcript")
+        assert consensus is not None, "one surviving hypothesis still gives the recording a transcript"
+        assert consensus.attributes["single_hypothesis"] is True
+        assert "consensus_transcript" not in absent
+
+
+class TestARecognizerLoopIsMarkedDegenerate:
+    """A token past the degenerate bounds is flagged on its hypothesis and on the consensus word."""
+
+    def test_the_loop_is_flagged_and_left_out_of_the_lexical_words(
+        self,
+        store: ProvStore,
+        config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Both recognizers loop on the second word; the first stays an ordinary lexical word."""
+        loop = "awz" * 30
+        _seed_admit(store, tmp_path, wav_writer)
+        _stub_models(monkeypatch, crisper=_line(f"hello {loop}"), qwen=_line(f"hello {loop}"))
+        preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
+        crisper = find_measurement(store, "asr_crisperwhisper")
+        assert crisper is not None
+        assert [word["degenerate"] for word in crisper.attributes["words"]] == [False, True]
+        assert crisper.attributes["degenerate_n"] == 1
+        consensus = find_measurement(store, "consensus_transcript")
+        assert consensus is not None and consensus.attributes["degenerate_n"] == 1
+        assert [word.attributes["text"] for word in lexical_words(store)] == ["hello"]
 
 
 def _absent_map(store: ProvStore) -> dict[str, str]:
@@ -2296,7 +2376,7 @@ class TestThePosteriorgramAndPraatBlocks:
         _seed_admit(store, tmp_path, wav_writer)
         seen: list[int] = []
 
-        def _recording_ppgs(audios: list, device: Any = None) -> list:  # noqa: ANN401
+        def _recording_ppgs(audios: list, device: Any = None, timeout_min_s: float | None = None) -> list:  # noqa: ANN401
             seen.append(audios[0].waveform.shape[-1])
             return fake_ppgs(audios, device)
 
@@ -2317,7 +2397,7 @@ class TestThePosteriorgramAndPraatBlocks:
         """The typed absence is caught by the block runner: no entity, a reason, and Praat still runs."""
         _seed_admit(store, tmp_path, wav_writer)
 
-        def _unavailable(audios: list, device: Any = None) -> list:  # noqa: ANN401
+        def _unavailable(audios: list, device: Any = None, timeout_min_s: float | None = None) -> list:  # noqa: ANN401
             return [PpgsPosteriorgramUnavailable("ppgs produced no posteriorgram: RuntimeError: shapes")]
 
         _stub_models(monkeypatch, enhance=_fake_enhance(0.5, noise_scale=0.05, seed=1), ppgs=_unavailable)
@@ -2508,13 +2588,11 @@ class TestTheStimulusAlignmentBlock:
         wav_writer: Callable[..., Path],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """One recognizer is not a consensus, so the alignment has no word stream to read."""
+        """No recognizer is no consensus, so the alignment has no word stream to read."""
         _seed_admit(store, tmp_path, wav_writer)
 
         def _only_crisper(audios: list, model: Any, **kwargs: Any) -> list:  # noqa: ANN401
-            if str(model.path_or_uri) == QWEN_ID:
-                raise ValueError("this host could not run the recognizer")
-            return [_line("hello world")]
+            raise ValueError("this host could not run the recognizer")
 
         _stub_models(monkeypatch, crisper=_line("hello world"))
         monkeypatch.setattr(preprocess_module, "transcribe_audios", _only_crisper)

@@ -1,5 +1,6 @@
 """Audio data structure module."""
 
+import io
 import os
 import uuid
 import warnings
@@ -14,50 +15,11 @@ from senselab.utils.constants import SENSELAB_NAMESPACE
 from senselab.utils.portable_audio_io import (
     RAISE,
     AudioWriteReport,
-    apply_range_policy,
-    format_for,
-    libsndfile_can_write,
+    audio_info,
+    read_audio,
+    read_audio_blocks,
     write_audio,
 )
-
-try:
-    from torchcodec.decoders import AudioDecoder
-    from torchcodec.encoders import AudioEncoder
-
-    TORCHCODEC_AVAILABLE = True
-except (ImportError, RuntimeError):
-    TORCHCODEC_AVAILABLE = False
-
-from senselab.utils.dependencies import torchaudio_available
-
-TORCHAUDIO_AVAILABLE = torchaudio_available()
-if TORCHAUDIO_AVAILABLE:
-    import torchaudio
-
-try:
-    import soundfile as sf
-
-    SOUNDFILE_AVAILABLE = True
-except ModuleNotFoundError:
-    SOUNDFILE_AVAILABLE = False
-
-
-# What the non-libsndfile backends write; neither exposes encoding control.
-_TORCH_BACKEND_SUBTYPE = "PCM_16"
-
-
-def _decoded_samples_start_the_stream_timeline(decoder: "AudioDecoder") -> bool:
-    """Reports whether a stream's decoded samples and its timestamps share an origin.
-
-    Args:
-        decoder: An open torchcodec AudioDecoder.
-
-    Returns:
-        True when the stream's first timestamp is zero, so a time range requested of the decoder
-        and the sequence of decoded samples are measured from the same point. False when the
-        stream begins at a non-zero timestamp, and False when the decoder does not report one.
-    """
-    return getattr(decoder.metadata, "begin_stream_seconds", None) == 0
 
 
 class Audio(BaseModel):
@@ -79,7 +41,6 @@ class Audio(BaseModel):
     _sampling_rate: Optional[int] = PrivateAttr(default=None)  # Actual sampling rate; loaded on demand
     _offset_in_sec: float = PrivateAttr(default=0.0)  # Offset in seconds from which to start loading audio
     _duration_in_sec: Optional[float] = PrivateAttr(default=None)  # Duration in seconds to load; None means full file
-    _backend: Optional[str] = PrivateAttr(default=None)  # Backend to use when loading the audio
 
     # Public fields:
     metadata: Dict = Field(default={})
@@ -96,7 +57,6 @@ class Audio(BaseModel):
             filepath (optional): File path for lazy loading the waveform if not provided.
             offset_in_sec (optional): Offset (in seconds) from which to start reading the file. Defaults to 0.0.
             duration_in_sec (optional): Duration (in seconds) to read from the file. If None, the full file is loaded.
-            backend (optional): I/O backend to use when loading the audio (e.g. "ffmpeg", "sox", "soundfile").
             metadata (optional): A dictionary of additional metadata.
 
         Raises:
@@ -107,7 +67,6 @@ class Audio(BaseModel):
         filepath = data.pop("filepath", None)
         offset_in_sec = data.pop("offset_in_sec", 0.0)
         duration_in_sec = data.pop("duration_in_sec", None)
-        backend = data.pop("backend", None)
         metadata = data.pop("metadata", {})
 
         super().__init__(**data)
@@ -135,14 +94,8 @@ class Audio(BaseModel):
         if duration_in_sec is not None and duration_in_sec < 0 and duration_in_sec != -1:
             raise ValueError("Duration must be -1 (for full file) or a positive value")
 
-        # Validate backend if provided
-        allowed_backends = {"ffmpeg", "sox", "soundfile"}
-        if backend is not None and backend not in allowed_backends:
-            raise ValueError("Unsupported backend")
-
         self._offset_in_sec = offset_in_sec
         self._duration_in_sec = duration_in_sec
-        self._backend = backend
 
         # Set the metadata
         self.metadata = metadata
@@ -166,19 +119,9 @@ class Audio(BaseModel):
         If the sampling rate is not set and a file is available, it is inferred from the file metadata.
         """
         if self._sampling_rate is None:
-            if self._file_path and TORCHCODEC_AVAILABLE:
-                decoder = AudioDecoder(str(self._file_path))
-                self._sampling_rate = decoder.metadata.sample_rate
-            elif self._file_path:
-                # Fallback: use soundfile to get sample rate (always available,
-                # works even when torchcodec can't load and torchaudio.info is
-                # removed in torchaudio 2.11+)
-                import soundfile as sf
-
-                info = sf.info(str(self._file_path))
-                self._sampling_rate = info.samplerate
-            else:
+            if not self._file_path:
                 raise ValueError("Sampling rate is not available.")
+            self._sampling_rate = audio_info(self._file_path).sampling_rate
         assert self._sampling_rate is not None, "Sampling rate should be set."
         return self._sampling_rate
 
@@ -206,107 +149,25 @@ class Audio(BaseModel):
         return temporary_tensor.to(torch.float32)
 
     def _lazy_load_data_from_filepath(self, filepath: Union[str, os.PathLike]) -> torch.Tensor:
-        """Lazy-loads audio data from the given filepath.
-
-        Converts the stored offset and duration (in seconds) to torchcodec range parameters.
+        """Read the stored window of ``filepath`` through :func:`senselab.utils.portable_audio_io.read_audio`.
 
         Args:
             filepath: The path to the audio file.
 
         Returns:
-            A torch.Tensor containing the loaded audio data.
-
-        Raises:
-            RuntimeError: If torchcodec is not available.
-            ValueError: If the offset or duration exceeds the file duration.
-        """
-        if TORCHCODEC_AVAILABLE:
-            # Preferred: torchcodec AudioDecoder (modern, maintained)
-            start_seconds = self._offset_in_sec if self._offset_in_sec else 0.0
-            stop_seconds = None
-            if self._duration_in_sec is not None and self._duration_in_sec > 0:
-                stop_seconds = start_seconds + self._duration_in_sec
-
-            decoder = AudioDecoder(str(filepath))
-            self._sampling_rate = decoder.metadata.sample_rate
-
-            if stop_seconds is None and start_seconds == 0.0:
-                return decoder.get_all_samples().data  # shape: (num_channels, num_samples)
-
-            if _decoded_samples_start_the_stream_timeline(decoder):
-                if stop_seconds is not None:
-                    samples = decoder.get_samples_played_in_range(
-                        start_seconds=start_seconds, stop_seconds=stop_seconds
-                    )
-                else:
-                    samples = decoder.get_samples_played_in_range(start_seconds=start_seconds)
-                return samples.data  # shape: (num_channels, num_samples)
-
-            return self._window_of_all_samples(decoder, start_seconds, stop_seconds)
-
-        if TORCHAUDIO_AVAILABLE:
-            # Fallback: torchaudio for loading, soundfile for metadata
-            # (torchaudio.info removed in 2.11+)
-            import soundfile as sf
-
-            sf_info = sf.info(str(filepath))
-            self._sampling_rate = sf_info.samplerate
-            total_frames = sf_info.frames
-
-            frame_offset = int(self._offset_in_sec * self.sampling_rate)
-            if frame_offset > total_frames:
-                raise ValueError(
-                    f"Offset ({self._offset_in_sec} s) exceeds the audio file duration "
-                    f"({total_frames / self.sampling_rate:.2f} s)."
-                )
-            if self._duration_in_sec is not None and self._duration_in_sec > 0:
-                num_frames = int(self._duration_in_sec * self.sampling_rate)
-                num_frames = min(num_frames, total_frames - frame_offset)
-            else:
-                num_frames = -1
-
-            array, _ = torchaudio.load(
-                filepath,
-                frame_offset=frame_offset,
-                num_frames=num_frames,
-                backend=self._backend,
-            )
-            return array
-
-        raise RuntimeError(
-            "Neither torchcodec nor torchaudio is available for audio loading. "
-            "Ensure FFmpeg is installed system-wide and torchcodec/torchaudio matches your torch version."
-        )
-
-    def _window_of_all_samples(
-        self, decoder: "AudioDecoder", start_seconds: float, stop_seconds: Optional[float]
-    ) -> torch.Tensor:
-        """Decodes the whole stream and returns the requested window as a slice of it.
-
-        Args:
-            decoder: An open torchcodec AudioDecoder.
-            start_seconds: Start of the window, measured from the first decoded sample.
-            stop_seconds: End of the window, measured from the first decoded sample.
-                None reads to the end of the stream.
-
-        Returns:
             A torch.Tensor of shape (num_channels, num_samples).
 
         Raises:
-            ValueError: If the start lies beyond the end of the stream.
+            ValueError: If the offset lies beyond the end of the file.
+            RuntimeError: If no decoder can read the file, or a lossless decode is short of its header.
         """
-        all_samples = decoder.get_all_samples().data
-        total_samples = all_samples.shape[-1]
-        first_sample = round(start_seconds * self.sampling_rate)
-        if first_sample >= total_samples:
-            raise ValueError(
-                f"Offset ({start_seconds} s) exceeds the audio file duration "
-                f"({total_samples / self.sampling_rate:.2f} s)."
-            )
-        last_sample = total_samples
-        if stop_seconds is not None:
-            last_sample = min(round(stop_seconds * self.sampling_rate), total_samples)
-        return all_samples[:, first_sample:last_sample]
+        rate = self.sampling_rate
+        start = round(self._offset_in_sec * rate) if self._offset_in_sec else None
+        stop = None
+        if self._duration_in_sec is not None and self._duration_in_sec > 0:
+            stop = round((self._offset_in_sec + self._duration_in_sec) * rate)
+        samples, self._sampling_rate = read_audio(filepath, always_2d=True, start=start, stop=stop)
+        return torch.from_numpy(samples)
 
     def filepath(self) -> Union[str, None]:
         """Returns the file path of the audio if available."""
@@ -388,8 +249,8 @@ class Audio(BaseModel):
             format: Audio format (e.g. "wav", "ogg", "flac", "mp3"). Inferred from the file
                 extension if None.
             subtype: libsndfile subtype (e.g. ``"FLOAT"``, ``"PCM_16"``, ``"PCM_24"``). None
-                preserves as much as the format allows. On the non-libsndfile fallback path it is
-                translated to ``torchaudio.save``'s encoding and bit depth.
+                preserves as much as the format allows. A container libsndfile cannot write takes
+                no subtype.
             out_of_range: What to do when the resolved subtype cannot represent the samples:
                 ``"raise"`` (default), ``"warn"`` (clip, loudly) or ``"normalize"`` (rescale,
                 with the applied gain in the returned report).
@@ -415,89 +276,20 @@ class Audio(BaseModel):
         if output_dir and not os.access(output_dir, os.W_OK):
             raise RuntimeError(f"Output directory '{output_dir}' is not writable.")
 
-        samples = self.waveform.detach().cpu().numpy()
-        fmt = format_for(file_path, format)
-
-        if libsndfile_can_write(fmt):
-            try:
-                return write_audio(
-                    file_path,
-                    samples,
-                    self.sampling_rate,
-                    format=fmt,
-                    subtype=subtype,
-                    out_of_range=out_of_range,
-                    channels_first=True,
-                )
-            except ValueError:
-                raise
-            except Exception as e:
-                raise RuntimeError(f"Error saving audio to file: {e}") from e
-
-        return self._save_via_torch_backend(file_path, fmt, subtype, out_of_range, samples)
-
-    def _save_via_torch_backend(
-        self,
-        file_path: Union[str, os.PathLike],
-        fmt: str,
-        subtype: Optional[str],
-        out_of_range: str,
-        samples: "np.ndarray",
-    ) -> AudioWriteReport:
-        """Write a container libsndfile cannot, under the same range policy.
-
-        Reached only for formats outside ``soundfile.available_formats()`` -- AAC in an ``.m4a``,
-        for instance. None of those carries float samples, so the policy is applied against
-        ``PCM_16`` before either backend is called, and an explicit ``subtype`` is refused because
-        neither backend can honour one (see the spec named in the class docstring).
-
-        Args:
-            file_path: Destination file path.
-            fmt: Resolved format name.
-            subtype: The caller's subtype request, or None.
-            out_of_range: The range policy.
-            samples: Channels-first samples.
-
-        Returns:
-            An :class:`~senselab.utils.portable_audio_io.AudioWriteReport`.
-
-        Raises:
-            RuntimeError: If a subtype was requested, no backend is available, or the write fails.
-        """
-        if subtype is not None:
-            raise RuntimeError(
-                f"subtype={subtype!r} cannot be honoured for a {fmt} file: soundfile cannot write "
-                "this container, and neither torchcodec's AudioEncoder nor torchaudio's "
-                "torchcodec-backed save exposes encoding control."
-            )
-        if not TORCHCODEC_AVAILABLE and not TORCHAUDIO_AVAILABLE:
-            raise RuntimeError(f"No backend available to write a {fmt} file.")
-
-        samples, peak, fraction, gain = apply_range_policy(
-            samples, fmt, _TORCH_BACKEND_SUBTYPE, out_of_range, os.fspath(file_path)
-        )
-        waveform = torch.from_numpy(samples)
         try:
-            if TORCHCODEC_AVAILABLE:
-                AudioEncoder(samples=waveform, sample_rate=self.sampling_rate).to_file(os.fspath(file_path))
-            else:
-                torchaudio.save(
-                    uri=os.fspath(file_path),
-                    src=waveform,
-                    sample_rate=self.sampling_rate,
-                    channels_first=True,
-                )
+            return write_audio(
+                file_path,
+                self.waveform.detach().cpu().numpy(),
+                self.sampling_rate,
+                format=format,
+                subtype=subtype,
+                out_of_range=out_of_range,
+                channels_first=True,
+            )
+        except (ValueError, RuntimeError):
+            raise
         except Exception as e:
             raise RuntimeError(f"Error saving audio to file: {e}") from e
-
-        return AudioWriteReport(
-            path=os.fspath(file_path),
-            format=fmt,
-            subtype=_TORCH_BACKEND_SUBTYPE,
-            peak=peak,
-            out_of_range_fraction=fraction,
-            gain=gain,
-        )
 
     @classmethod
     def from_stream(
@@ -516,27 +308,12 @@ class Audio(BaseModel):
         Yields:
             Audio objects for each chunk read from the stream.
         """
-        if not SOUNDFILE_AVAILABLE:
-            raise ModuleNotFoundError(
-                "`soundfile` is not installed. Please install senselab audio dependencies using `pip install senselab`."
-            )
-
         if isinstance(stream_source, (os.PathLike, str)) and not os.path.exists(stream_source):
             raise FileNotFoundError(f"File {stream_source} does not exist.")
 
-        with sf.SoundFile(stream_source, "r") as audio_file:
-            sampling_rate = audio_file.samplerate
-            chunk_frames = int(chunk_duration_in_sec * sampling_rate)
-
-            while True:
-                chunk = audio_file.read(frames=chunk_frames, dtype="float32", always_2d=True)
-                if chunk.shape[0] == 0:
-                    break
-                yield cls(
-                    waveform=chunk.T,
-                    sampling_rate=sampling_rate,
-                    metadata=metadata if metadata else {},
-                )
+        source = io.BytesIO(stream_source) if isinstance(stream_source, (bytes, bytearray)) else stream_source
+        for chunk, sampling_rate in read_audio_blocks(source, chunk_duration_in_sec):
+            yield cls(waveform=chunk, sampling_rate=sampling_rate, metadata=metadata if metadata else {})
 
 
 def batch_audios(audios: List[Audio]) -> Tuple[torch.Tensor, Union[int, List[int]], List[Dict]]:

@@ -32,7 +32,7 @@ from senselab.audio.workflows.triage.cohort import CONDITION_KINDS
 from senselab.audio.workflows.triage.vocabulary import UNPLACED_OPEN, UNPLACED_UNREAD, standing_task_extents
 from senselab.utils import fastio
 
-SCHEMA_VERSION = 24
+SCHEMA_VERSION = 28
 """Bumped whenever a column is added, removed or retyped, a binary layout changes, or a categorical
 column's controlled vocabulary changes."""
 
@@ -70,10 +70,12 @@ SCALAR_MEASUREMENTS = (
     "breath_coverage_fraction",
     "breath_peak_over_floor_db",
     "cough_peak_over_floor_db",
-    "ddk_ppg_period_dispersion",
-    "ddk_repetition_count_from_ppg_decode",
+    "ddk_cycle_rate_hz",
+    "ddk_events_found",
+    "ddk_identity",
+    "ddk_period_cv",
     "ddk_syllable_rate_from_envelope_modulation_hz",
-    "ddk_syllable_rate_from_ppg_decode_hz",
+    "ddk_syllable_rate_hz",
     "expected_sequence_repeat_fraction",
     "extent_dominant_speaker_share",
     "extent_secondary_source_s",
@@ -122,7 +124,6 @@ GATE_NAMES = (
     "dominant_speaker_share_min",
     "items_min",
     "events_min",
-    "repetitions_min",
     "instructed_count_min_fraction",
     "repeat_overlap_min",
     "echo_overlap_max",
@@ -170,7 +171,7 @@ SECONDARY_ROLE = "secondary_source_extent"
 SOLO_ROLE = "solo_extent"
 SEPARATED_PREFIX = "separated_"
 DOMINANT_SHARE = "extent_dominant_speaker_share"
-"""The reading ``dominant_speaker_share_min`` gates. Folded by ``min``, as the gate folds it."""
+"""The overlap-inclusive dominant-speaker share, folded by ``min``; the gate reads the exclusive share."""
 
 SPANS_LAYOUT = "BHH"
 SPAN_LABELS_LAYOUT = "HBB"
@@ -376,12 +377,14 @@ class StoreView:
         invalidated: The ids of entities some activity invalidated.
         derived: Entity id to the ids it ``wasDerivedFrom``.
         malformed_lines: How many lines did not parse.
+        activities: Every activity's node, step and parameters, in file order.
     """
 
     entities: list[Entity] = field(default_factory=list)
     invalidated: set[str] = field(default_factory=set)
     derived: dict[str, list[str]] = field(default_factory=dict)
     malformed_lines: int = 0
+    activities: list[dict[str, Any]] = field(default_factory=list)
 
     def live(self, prov_type: str) -> list[Entity]:
         """Every live entity of one type, in file order.
@@ -438,6 +441,14 @@ def read_store(path: Path) -> StoreView:
                         extent=(float(extent[0]), float(extent[1])) if extent else None,
                         attributes=record.get("attributes") or {},
                     )
+                )
+            elif kind == "activity":
+                view.activities.append(
+                    {
+                        "node": record.get("node"),
+                        "step": record.get("step"),
+                        "parameters": record.get("parameters") or {},
+                    }
                 )
             elif kind == "relation":
                 relation, source, target = record.get("relation"), record.get("source"), record.get("target")
@@ -530,7 +541,7 @@ def _waveform(run_dir: Path, view: StoreView) -> np.ndarray | None:
         The samples of the first stream that decodes, in the figure's own preference order, or
         None when none does.
     """
-    import soundfile
+    from senselab.utils.portable_audio_io import read_audio  # noqa: PLC0415
 
     for name in ("preemphasised", "plain"):
         stream = view.last("stream", name=name)
@@ -538,7 +549,7 @@ def _waveform(run_dir: Path, view: StoreView) -> np.ndarray | None:
             continue
         path = run_dir / str(stream.attributes["path"])
         try:
-            samples, _ = soundfile.read(path, dtype="float32", always_2d=True)
+            samples, _ = read_audio(path, always_2d=True, channels_first=False)
         except (OSError, RuntimeError):
             continue
         return np.asarray(samples, dtype="float64").mean(axis=1)
@@ -766,8 +777,8 @@ def _ledger_columns(view: StoreView) -> dict[str, Any]:
         ``policy_version``, ``language``, ``masks_n``, ``masks_final_n``, ``policy_masks_n``,
         ``task_words_n``, a count and a category list per :data:`LEDGER_STATES`, a count per
         :data:`LEDGER_RELEASE_KINDS`, :data:`LEDGER_LOCKS`, :data:`LEDGER_RELABELS` and
-        :data:`LEDGER_PLACE_REASONS`, ``task_text_words_n``, ``person_name_masked_n``,
-        ``name_release_proposed_n``, ``propagated_n``, ``unplaced_n``, ``unplaced_open``,
+        :data:`LEDGER_PLACE_REASONS`, ``task_text_words_n``, ``task_event_words_n``, ``person_name_masked_n``,
+        ``name_release_proposed_n``, ``propagated_n``, ``propagated_masked_n``, ``unplaced_n``, ``unplaced_open``,
         ``redact_agreed_n``, ``redact_by_kind_n``, ``redact_new_n``, ``conditions_n``, a count per
         condition kind and ``cohort_diagnoses``. All null where the store carries no ledger.
     """
@@ -789,9 +800,11 @@ def _ledger_columns(view: StoreView) -> dict[str, Any]:
         *(f"relabel_{kind}_n" for kind in LEDGER_RELABELS),
         *(f"place_reason_{reason}_n" for reason in LEDGER_PLACE_REASONS),
         "task_text_words_n",
+        "task_event_words_n",
         "person_name_masked_n",
         "name_release_proposed_n",
         "propagated_n",
+        "propagated_masked_n",
         "unplaced_n",
         "unplaced_open",
         "redact_agreed_n",
@@ -823,9 +836,11 @@ def _ledger_columns(view: StoreView) -> dict[str, Any]:
             for reason in LEDGER_PLACE_REASONS
         },
         "task_text_words_n": int(counts.get("task_text_words_n") or 0),
+        "task_event_words_n": int(counts.get("task_event_words_n") or 0),
         "person_name_masked_n": int(counts.get("person_name_masked_n") or 0),
         "name_release_proposed_n": int(counts.get("name_release_proposed_n") or 0),
         "propagated_n": int(counts.get("propagated_n") or 0),
+        "propagated_masked_n": int(counts.get("propagated_masked_n") or 0),
         "unplaced_n": int(counts.get("unplaced_n") or 0),
         "unplaced_open": any(
             str(finding.get("state")) in UNPLACED_SETTLES_NOTHING for finding in ledger.get("unplaced_findings") or ()
@@ -860,6 +875,7 @@ def _reviewer_columns(decision: Mapping[str, Any]) -> dict[str, Any]:
     flagged = annotation.get("flagged") or []
     return {
         "llm_status": annotation.get("status"),
+        "llm_bypass_reason": annotation.get("bypass_reason") or None,
         "llm_iterations": int(annotation["iterations"]) if annotation.get("iterations") is not None else None,
         "llm_redaction_judgment": annotation.get("redaction") or None,
         "llm_original_judgment": annotation.get("original") or None,
@@ -902,6 +918,7 @@ def _second_opinion_columns(decision: Mapping[str, Any]) -> dict[str, Any]:
     disagreements = [str(entry).split(" ", 1)[0] for entry in opinion.get("disagreements") or ()]
     return {
         "second_opinion_status": opinion.get("status"),
+        "second_opinion_bypass_reason": opinion.get("bypass_reason") or None,
         **{f"second_opinion_{name}_p": _number(probabilities.get(name)) for name in SECOND_OPINION_PROBABILITIES},
         "second_opinion_disagrees": disagreements,
         "second_opinion_disagrees_n": len(disagreements),
@@ -1197,13 +1214,13 @@ def _stream_frames_dbfs(run_dir: Path, view: StoreView, name: str) -> np.ndarray
         One level per frame at the evaluation window and hop, or None when the stream is absent or
         does not decode.
     """
-    import soundfile
+    from senselab.utils.portable_audio_io import read_audio  # noqa: PLC0415
 
     stream = view.last("stream", name=name)
     if stream is None or not stream.attributes.get("path"):
         return None
     try:
-        samples, rate = soundfile.read(run_dir / str(stream.attributes["path"]), dtype="float32", always_2d=True)
+        samples, rate = read_audio(run_dir / str(stream.attributes["path"]), always_2d=True, channels_first=False)
     except (OSError, RuntimeError):
         return None
     x = np.asarray(samples, dtype=np.float64).mean(axis=1)
@@ -1371,6 +1388,12 @@ def extract(run_root: Path, root: Path, anomalies: dict[str, int] | None = None)
         "participant": participant,
         "task": task,
         "verdict": decision.get("triage"),
+        "run_status": decision.get("run_status"),
+        "missing": [str(key) for key in decision["missing"]] if isinstance(decision.get("missing"), list) else None,
+        "reason": decision.get("reason"),
+        "reason_keys": (
+            [str(key) for key in decision["reason_keys"]] if isinstance(decision.get("reason_keys"), list) else None
+        ),
         "session": session,
         "stem": stem,
         "run_dir": str(run_root.relative_to(root)) if run_root.is_relative_to(root) else str(run_root),
@@ -1571,6 +1594,10 @@ def _fields() -> list[pa.Field]:
         pa.field("participant", pa.string()),
         pa.field("task", pa.string()),
         pa.field("verdict", pa.string()),
+        pa.field("run_status", pa.string()),
+        pa.field("missing", pa.list_(pa.string())),
+        pa.field("reason", pa.string()),
+        pa.field("reason_keys", pa.list_(pa.string())),
         pa.field("session", pa.string()),
         pa.field("stem", pa.string()),
         pa.field("run_dir", pa.string()),
@@ -1611,9 +1638,11 @@ def _fields() -> list[pa.Field]:
         *[pa.field(f"relabel_{kind}_n", pa.int32()) for kind in LEDGER_RELABELS],
         *[pa.field(f"place_reason_{reason}_n", pa.int32()) for reason in LEDGER_PLACE_REASONS],
         pa.field("task_text_words_n", pa.int32()),
+        pa.field("task_event_words_n", pa.int32()),
         pa.field("person_name_masked_n", pa.int32()),
         pa.field("name_release_proposed_n", pa.int32()),
         pa.field("propagated_n", pa.int32()),
+        pa.field("propagated_masked_n", pa.int32()),
         pa.field("unplaced_n", pa.int32()),
         pa.field("unplaced_open", pa.bool_()),
         pa.field("redact_agreed_n", pa.int32()),
@@ -1635,6 +1664,7 @@ def _fields() -> list[pa.Field]:
         pa.field("gate_failed_names", pa.list_(pa.string())),
         pa.field("gate_flagged_names", pa.list_(pa.string())),
         pa.field("llm_status", pa.string()),
+        pa.field("llm_bypass_reason", pa.string()),
         pa.field("llm_iterations", pa.int32()),
         pa.field("llm_redaction_judgment", pa.string()),
         pa.field("llm_original_judgment", pa.string()),
@@ -1650,6 +1680,7 @@ def _fields() -> list[pa.Field]:
         pa.field("llm_revision", pa.string()),
         pa.field("llm_failed", pa.bool_()),
         pa.field("second_opinion_status", pa.string()),
+        pa.field("second_opinion_bypass_reason", pa.string()),
         *[pa.field(f"second_opinion_{name}_p", pa.float64()) for name in SECOND_OPINION_PROBABILITIES],
         pa.field("second_opinion_disagrees", pa.list_(pa.string())),
         pa.field("second_opinion_disagrees_n", pa.int32()),
@@ -2030,21 +2061,21 @@ class ScanReport:
     anomalies: dict[str, int] = field(default_factory=dict)
 
 
-def scan(
-    root: Path, slice_index: int = 0, slices: int = 1, *, walk_threads: int = fastio.DEFAULT_THREADS
-) -> tuple[list[dict[str, Any]], ScanReport]:
-    """Extract every row this shard owns.
+def latest_recordings(
+    root: Path, slice_index: int, slices: int, report: ScanReport, *, walk_threads: int = fastio.DEFAULT_THREADS
+) -> list[Path]:
+    """The run directory this shard reads for each stem it owns: the lexically latest.
 
     Args:
         root: The tree of finished run directories.
         slice_index: This shard's index.
         slices: How many shards share the tree.
+        report: Counted into: considered and superseded run directories.
         walk_threads: How many participants are listed at once while finding run directories.
 
     Returns:
-        The rows and what the shard met.
+        One run directory per stem, in stem order.
     """
-    report = ScanReport()
     latest: dict[str, Path] = {}
     for recording in recording_dirs(root, threads=walk_threads):
         stem = stem_of(recording)
@@ -2058,8 +2089,36 @@ def scan(
             latest[stem] = recording
         else:
             report.superseded.append(recording.name)
+    return [recording for _, recording in sorted(latest.items())]
+
+
+def scan(
+    root: Path,
+    slice_index: int = 0,
+    slices: int = 1,
+    *,
+    walk_threads: int = fastio.DEFAULT_THREADS,
+    recordings: Sequence[Path] | None = None,
+    report: ScanReport | None = None,
+) -> tuple[list[dict[str, Any]], ScanReport]:
+    """Extract every row this shard owns.
+
+    Args:
+        root: The tree of finished run directories.
+        slice_index: This shard's index.
+        slices: How many shards share the tree.
+        walk_threads: How many participants are listed at once while finding run directories.
+        recordings: The run directories to read, as :func:`latest_recordings` chose them; walked when None.
+        report: The report those were counted into, continued; a new one when None.
+
+    Returns:
+        The rows and what the shard met.
+    """
+    report = report or ScanReport()
+    if recordings is None:
+        recordings = latest_recordings(root, slice_index, slices, report, walk_threads=walk_threads)
     rows: list[dict[str, Any]] = []
-    for _, recording in sorted(latest.items()):
+    for recording in recordings:
         try:
             row = extract(recording, root, report.anomalies)
         except (OSError, ValueError, KeyError, TypeError):

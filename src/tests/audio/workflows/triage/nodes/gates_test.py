@@ -80,7 +80,6 @@ MOVED = (
 """
 
 STAYED = (
-    "burst_window_ms",
     "echo_ngram_n",
     "effort_split_hz",
     "event_min_s",
@@ -283,7 +282,7 @@ class TestAnAbsenceIsAnsweredByItsReason:
         """A family whose instruction permits a model speaker is not asked who spoke."""
         bounds = _bounds(Pattern.ORDERED_TOKENS, dominant_speaker_share_min=0.9)
         applied = apply_flag_gates(
-            bounds, {"extent_dominant_speaker_share": 0.5}, exempt=("dominant_speaker_share_min",)
+            bounds, {"extent_dominant_exclusive_share": 0.5}, exempt=("dominant_speaker_share_min",)
         )
         assert applied == []
 
@@ -549,11 +548,11 @@ class TestNoGateReadsACountNobodyGave:
         assert apply_gates(("events_min",), bounds, {"airway_events_found": 2})[0] is True
         assert apply_gates(("events_min",), bounds, {"airway_events_found": 9})[0] is True
 
-    def test_the_syllable_gate_reads_repetitions_found_and_not_the_ten_nobody_asked_for(self) -> None:
-        """A DDK train is measured by its rate; the ten in the row is not a target."""
-        assert GATE_SPECS["repetitions_min"].reading == "ddk_repetitions_found"
-        bounds = _bounds(Pattern.SYLLABLE_TRAIN, repetitions_min=1)
-        assert apply_gates(("repetitions_min",), bounds, {"ddk_repetitions_found": 8})[0] is True
+    def test_no_gate_reads_a_syllable_task_s_count(self) -> None:
+        """A DDK task is decided by its task layer; its count against the ten asked is an annotation."""
+        assert "repetitions_min" not in GATE_SPECS
+        assert conformance_gate_names(Pattern.SYLLABLE_TRAIN) == ()
+        assert conformance_gate_names(Pattern.SYLLABLE_SEQUENCE) == ()
 
 
 class TestABranchReadsItsOwnGroupsGates:

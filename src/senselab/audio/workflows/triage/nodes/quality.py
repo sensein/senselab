@@ -1,10 +1,12 @@
-"""QUALITY — the terminal node, reading the store's own records for internal contradiction.
+"""QUALITY — the join of the recording-level background against the task spans, on every recording.
 
 Runs after every branch, on every path PREPROCESS completed, and before REDACT and VERDICT;
-``run._drive_branches`` places the call. It reads stored outputs only — entities and their
-attributes — decoding no audio and opening no sidecar.
+``run._drive_branches`` places the call. The recording-level background is not QUALITY's: it is
+read before the branches (:mod:`~senselab.audio.workflows.triage.nodes.background`). QUALITY joins
+it against the branches' task spans (:func:`write_join`, :mod:`~senselab.audio.workflows.triage.quality_join`)
+and writes the clip-consistency audit below, a self-check of the store's own records.
 
-Its one check is clip consistency. A clip span asserts that the signal reached its ceiling over its
+The audit is clip consistency. A clip span asserts that the signal reached its ceiling over its
 extent; a sample outside every clip span, louder than that ceiling, contradicts the assertion.
 QUALITY reads PREPROCESS's ``clip`` spans for their extents and its
 :data:`CLIP_AMPLITUDE_MEASUREMENT` for the amplitudes, and records each contradiction as an
@@ -23,19 +25,56 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 from senselab.audio.data_structures import AudioHints
+from senselab.audio.workflows.triage.background_model import BACKGROUND_MODEL, _named_stream
+from senselab.audio.workflows.triage.background_speech import background_speech_of, background_speech_parameters
 from senselab.audio.workflows.triage.config import TriageConfig, UnmeasuredConfigKey
+from senselab.audio.workflows.triage.ddk_task import DDK_READING
+from senselab.audio.workflows.triage.nodes.airway_task import BREATH_READING, COUGH_READING
+from senselab.audio.workflows.triage.nodes.background import SESSION_FLOOR, SPEECH_RESIDUAL
+from senselab.audio.workflows.triage.nodes.branches import SPEECH_EXPECTATIONS, declared_task_family
 from senselab.audio.workflows.triage.nodes.common import (
     BranchResult,
     find_measurement,
+    lexical_words,
     live_entities,
+    recording_duration,
     software_agent,
+    word_hull,
+    write_measurement,
     write_report,
 )
-from senselab.audio.workflows.triage.vocabulary import STORE_ASSERTIONS, UNDETERMINED, Conformance
+from senselab.audio.workflows.triage.nodes.voice import PHONATION_READING
+from senselab.audio.workflows.triage.quality_join import (
+    QUALITY_JOIN,
+    Span,
+    drop_levels,
+    join_record,
+    quality_join_parameters,
+    separate_gates,
+    stream_agreement,
+)
+from senselab.audio.workflows.triage.routing_analysis.families import SYLLABLE_REPETITION
+from senselab.audio.workflows.triage.task_events import generic_view, generic_view_of
+from senselab.audio.workflows.triage.task_speech import TASK_SPEECH_READING
+from senselab.audio.workflows.triage.vocabulary import (
+    STORE_ASSERTIONS,
+    UNDETERMINED,
+    Conformance,
+    standing_task_extents,
+)
 from senselab.utils.prov_store import Entity, ProvStore
+
+ENHANCED_STREAM = "enhanced"
+EVENT_READINGS = (
+    (BREATH_READING, "breath"),
+    (COUGH_READING, "cough"),
+    (PHONATION_READING, "phonation"),
+    (DDK_READING, "syllable"),
+)
+"""The task readings whose events the join re-reads, with the event kind each holds."""
 
 NODE = "QUALITY"
 KIND: str | None = None
@@ -45,6 +84,9 @@ CONTRADICTED_CLIP = "clip_above_unclipped_sample"
 
 CONTEST_VERB = "contest"
 """The assertion verb for a clip span this node answers but does not withdraw."""
+
+STREAM_NOT_STORED = "stream_not_stored"
+"""The note QUALITY records when the stream its clip spans would be detected on is not in the store."""
 
 CLIP_AMPLITUDE_MEASUREMENT = "clip_amplitude"
 """PREPROCESS's amplitude reading of the signal its clip spans were detected on.
@@ -113,7 +155,7 @@ def preceded_by(store: ProvStore) -> list[str]:
     )
 
 
-def _stream_id(store: ProvStore, name: str) -> str:
+def _stream_id(store: ProvStore, name: str) -> str | None:
     """The live stream entity's id, by name, without decoding it.
 
     Invalidated entities are never returned and the latest write wins.
@@ -123,15 +165,10 @@ def _stream_id(store: ProvStore, name: str) -> str:
         name: The stream entity's ``name`` attribute.
 
     Returns:
-        The stream entity's id.
-
-    Raises:
-        LookupError: If no live stream entity carries that name.
+        The stream entity's id, or None where no live stream entity carries that name.
     """
     found = [entity for entity in live_entities(store, "stream") if entity.attributes.get("name") == name]
-    if not found:
-        raise LookupError(f"no stream named {name!r} in the store; the node that writes it has not run")
-    return found[-1].id
+    return found[-1].id if found else None
 
 
 def clip_spans(store: ProvStore, signal: str) -> list[Entity]:
@@ -181,6 +218,173 @@ def _clip_amplitudes(store: ProvStore, signal: str) -> Entity:
     return found
 
 
+def task_spans_of(store: ProvStore) -> list[Span]:
+    """The task spans that stand: the branches' task extents, or the measure's where it superseded them.
+
+    Args:
+        store: The provenance store.
+
+    Returns:
+        Each standing ``task_extent`` span's extent, in time order.
+    """
+    spans = standing_task_extents(live_entities(store, "span"))
+    return sorted((float(s.extent[0]), float(s.extent[1])) for s in spans if s.extent is not None)
+
+
+def task_events_of(store: ProvStore) -> tuple[str | None, list[Span]]:
+    """The task events the branches read, and their kind.
+
+    Args:
+        store: The provenance store, read for the breath, cough and phonation readings.
+
+    Returns:
+        ``(kind, events)``: the first reading of :data:`EVENT_READINGS` that holds events, with its
+        breath, cough or syllable-task events or its phonation holds; ``(None, [])`` where none does.
+    """
+    for name, kind in EVENT_READINGS:
+        found = find_measurement(store, name)
+        if found is None:
+            continue
+        attributes = found.attributes
+        if kind == "phonation":
+            events = [(float(a), float(b)) for a, b in attributes.get("holds") or ()]
+        else:
+            evidence = (attributes.get("reading") or {}).get("evidence") or {}
+            events = [(float(e["start_s"]), float(e["end_s"])) for e in evidence.get("events") or ()]
+        if events:
+            return kind, events
+    return None, []
+
+
+def spoken_task_words(store: ProvStore) -> list[Span]:
+    """The participant's own words where the task is spoken: a lexical family's words, off-task words left out.
+
+    Args:
+        store: The provenance store, read for the declared family, the consensus words and the task's speech reading.
+
+    Returns:
+        The timing hulls of the lexical consensus words of a lexical (not syllable-repetition) family, less those the
+        task's speech reading names as outside the task; empty for every other family, whose own sound is its events.
+    """
+    family = declared_task_family(store)
+    if not family or family not in SPEECH_EXPECTATIONS or family in SYLLABLE_REPETITION:
+        return []
+    reading = find_measurement(store, TASK_SPEECH_READING)
+    off_task = {str(i) for i in (reading.attributes.get("word_ids") or ())} if reading is not None else set()
+    duration_s = recording_duration(store)
+    return [
+        word_hull(word, duration_s)
+        for word in lexical_words(store)
+        if word.id not in off_task and word.extent is not None
+    ]
+
+
+def measure_join(store: ProvStore, run_dir: Path) -> dict[str, Any]:
+    """The join of the recording-level background against the branches' task spans.
+
+    Args:
+        store: The provenance store, read for the task spans and events, BACKGROUND's reading, the
+            session floor and the plain, enhanced and residual streams.
+        run_dir: The run directory the streams' and sidecars' paths are relative to.
+
+    Returns:
+        :func:`~senselab.audio.workflows.triage.quality_join.join_record`, with ``missing`` naming
+        what was not stored. Without BACKGROUND's reading the record carries ``missing`` alone.
+    """
+    background = find_measurement(store, BACKGROUND_MODEL)
+    if background is None or background.attributes.get("missing"):
+        return {"missing": [BACKGROUND_MODEL]}
+    p = quality_join_parameters()
+    spans = task_spans_of(store)
+    kind, events = task_events_of(store)
+    missing: list[str] = []
+    raw = generic_view_of(store, run_dir)
+    enhanced_signal = _named_stream(store, run_dir, ENHANCED_STREAM)
+    enhanced = generic_view(enhanced_signal, None) if enhanced_signal is not None else None
+    if enhanced is None:
+        missing.append(ENHANCED_STREAM)
+    streams = stream_agreement(events, raw, enhanced, p) if raw is not None and events else None
+    other_voice: list[Span] | None = None
+    heard = background_speech_of(store, run_dir, [*events, *spoken_task_words(store)])
+    if heard is None:
+        missing.append("background_speech")
+    else:
+        other_voice = [(float(w[0]), float(w[1])) for w in (*heard.speech_windows, *heard.voice_runs)]
+    session = find_measurement(store, SESSION_FLOOR)
+    level = session.attributes.get("level_rel_db") if session is not None else None
+    faults = dict(background.attributes.get("faults") or {})
+    drops = drop_levels(faults.get("shutoff") or (), raw, p)
+    cut, gated = separate_gates(drops, p)
+    faults["shutoff"], faults["gate"] = [list(s) for s in cut], [list(s) for s in gated]
+    residual_reading = find_measurement(store, SPEECH_RESIDUAL)
+    background_record = (session.attributes.get("session_background") or {}) if session is not None else {}
+    record = join_record(
+        task_spans=spans,
+        event_kind=kind,
+        faults=faults,
+        other_voice=other_voice,
+        impulses=[(float(i["start_s"]), float(i["end_s"])) for i in background.attributes.get("impulses") or ()],
+        streams=streams,
+        plain_active_s=background.attributes.get("active_s"),
+        enhanced_active_s=None if enhanced is None else float(sum(r.end_s - r.start_s for r in enhanced.regions)),
+        level_rel_db=None if level is None else float(level),
+        p=p,
+    )
+    return {
+        **record,
+        "drops": drops,
+        "missing": missing,
+        "speech_quality": speech_quality_record(
+            None if residual_reading is None else residual_reading.attributes, background_record
+        ),
+    }
+
+
+def speech_quality_record(reading: Mapping[str, Any] | None, session_background: Mapping[str, Any]) -> dict[str, Any]:
+    """The recording's and its session's foreground-over-background quality, as QUALITY reports it.
+
+    Args:
+        reading: SESSION's ``speech_residual`` record for the recording, or None where SESSION wrote none.
+        session_background: SESSION's ``session_background`` record; empty where it wrote none.
+
+    Returns:
+        ``recording``: the reading's ``foreground_db``, ``foreground_minus_residual_db``,
+        ``plain_minus_residual_db``, ``residual_db`` and ``not_applicable``; ``session``: the session
+        background's ``source``, ``fallback``, ``members_n``, ``level_db`` and ``quality``. A side that was
+        not read is ``{"missing": [...]}``.
+    """
+    keys = ("foreground_db", "foreground_minus_residual_db", "plain_minus_residual_db", "residual_db", "not_applicable")
+    if reading is None:
+        recording: dict[str, Any] = {"missing": [SPEECH_RESIDUAL]}
+    elif reading.get("missing"):
+        recording = {"missing": list(reading["missing"])}
+    else:
+        recording = {key: reading.get(key) for key in keys}
+    session = (
+        {key: session_background.get(key) for key in ("source", "fallback", "members_n", "level_db", "quality")}
+        if session_background
+        else {"missing": [SESSION_FLOOR]}
+    )
+    return {"recording": recording, "session": session}
+
+
+def write_join(store: ProvStore, activity: str, software: str, run_dir: Path) -> str:
+    """Write the join's measurement (:func:`measure_join`).
+
+    Args:
+        store: The provenance store.
+        activity: QUALITY's activity.
+        software: The software agent.
+        run_dir: The run directory.
+
+    Returns:
+        The measurement's id.
+    """
+    return write_measurement(
+        store, activity, software, name=QUALITY_JOIN, signal="plain", attributes=measure_join(store, run_dir)
+    )
+
+
 def quality(
     store: ProvStore,
     source: str,
@@ -189,10 +393,11 @@ def quality(
     *,
     run_dir: Path,
 ) -> BranchResult:
-    """Read PREPROCESS's clip spans against its own amplitude reading, and contest the denied ones.
+    """Join the background against the task spans, and audit PREPROCESS's clip spans against their amplitudes.
 
-    A clip span's level is the peak absolute amplitude of the samples it covers, which PREPROCESS
-    stored in the clip-amplitude measurement under the span's id. An unclipped sample contradicts
+    The join (:func:`write_join`) is one measurement every recording gets. A clip span's level is the
+    peak absolute amplitude of the samples it covers, which PREPROCESS stored in the clip-amplitude
+    measurement under the span's id. An unclipped sample contradicts
     that span when its own absolute amplitude exceeds the level by more than
     ``quality.clip_contradiction_margin`` of the level. What counts as unclipped, the edge guard
     included, was decided by PREPROCESS and is recorded on the measurement.
@@ -203,19 +408,20 @@ def quality(
         source: The store-held stream the clip spans were detected on, ``"recording"``.
         config: The triage configuration.
         hint: Accepted for the shared node shape; not read.
-        run_dir: Accepted for the shared node shape; not read.
+        run_dir: The run directory the join reads streams and sidecars under.
 
     Returns:
-        The branch report, the view over the assertions written, and the ``branch_report``
+        The branch report, the view over the assertions and the join written, and the ``branch_report``
         entity's id.
 
     Raises:
         UnknownConfigKey: If ``quality.clip_contradiction_margin`` is not a packaged key. A key
             that is packaged but null is reported instead, in ``unmeasured``.
-        LookupError: If the ``source`` stream is absent, or if clip spans over it carry no
-            clip-amplitude measurement to read them against.
+        LookupError: If clip spans over ``source`` carry no clip-amplitude measurement to read
+            them against. An absent ``source`` stream is not raised on: the report is undetermined
+            and names the stream in ``missing``.
     """
-    del hint, run_dir
+    del hint
     # An unmeasured margin is reported, not raised on; a misspelled key still raises.
     margin: float | None
     try:
@@ -244,7 +450,8 @@ def quality(
         },
     )
     store.was_associated_with(activity, software)
-    store.used(activity, stream_id)
+    if stream_id is not None:
+        store.used(activity, stream_id)
     for span in spans:
         store.used(activity, span.id)
 
@@ -290,6 +497,8 @@ def quality(
         assertion_ids.append(assertion_id)
 
     notes: list[str] = []
+    if stream_id is None:
+        notes.append(f"{STREAM_NOT_STORED}: no live {source!r} stream, so no clip span over it was checked")
     if contradictions:
         loudest = max(contradictions, key=lambda found: found.louder_amplitude)
         notes.append(
@@ -299,6 +508,17 @@ def quality(
 
     # The referent is STORE_ASSERTIONS, not TASK: QUALITY has no route and no declared task.
     conformance: Conformance = UNDETERMINED if not measured else not contradictions
+
+    join_activity = store.activity(
+        node=NODE,
+        step=QUALITY_JOIN,
+        parameters={
+            "version": quality_join_parameters()["version"],
+            "background_speech_version": background_speech_parameters().version,
+        },
+    )
+    store.was_associated_with(join_activity, software)
+    join_id = write_join(store, join_activity, software, run_dir)
 
     report_id, report = write_report(
         store,
@@ -312,6 +532,7 @@ def quality(
         unmeasured=() if margin is not None else ("quality.clip_contradiction_margin",),
         detail={
             "signal": source,
+            "missing": [] if stream_id is not None else [source],
             "preceded_by": preceded,
             "clip_spans_n": len(spans),
             "checked_n": len(measured),
@@ -326,4 +547,4 @@ def quality(
             "notes": notes,
         },
     )
-    return BranchResult(report=report, view=(*assertion_ids, report_id), report_entity_id=report_id)
+    return BranchResult(report=report, view=(*assertion_ids, join_id, report_id), report_entity_id=report_id)

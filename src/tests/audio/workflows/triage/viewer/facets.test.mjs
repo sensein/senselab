@@ -33,12 +33,12 @@ function corpus () {
   const spec = [
     // [n, task, verdict, conformance_speech, gate_failed_names]
     [10, 'story-recall', 'pass', 'true', []],
-    [6, 'story-recall', 'flag', 'false', ['response_min_s']],
+    [6, 'story-recall', 'review', 'false', ['response_min_s']],
     [4, 'story-recall', 'pass', null, []],
     [7, 'free-speech', 'pass', 'true', []],
-    [3, 'free-speech', 'flag', null, ['response_min_s', 'items_min']],
+    [3, 'free-speech', 'review', null, ['response_min_s', 'items_min']],
     [2, 'cough', 'discard', 'undetermined', ['items_min']],
-    [1, 'cough', 'flag', null, null]
+    [1, 'cough', 'review', null, null]
   ]
   for (const [n, task, verdict, conf, failed] of spec) {
     for (let i = 0; i < n; i++) {
@@ -66,7 +66,7 @@ test('the fixture is the size every count below is read against', () => {
 test('every categorical and set column is offered, and the two unusable ones are refused', () => {
   const names = F.CATALOGUE.map(f => f.col.name)
   for (const n of ['verdict', 'task', 'release', 'release_ground', 'route_state',
-    'route_airway', 'conformance_speech', 'gate_repetitions_min_passed']) {
+    'route_airway', 'conformance_speech', 'gate_events_min_passed']) {
     assert.ok(names.includes(n), `${n} must be offered as a facet`)
   }
   assert.ok(!names.includes('participant'), 'participant is a list, not a facet')
@@ -76,9 +76,9 @@ test('every categorical and set column is offered, and the two unusable ones are
   for (const f of F.CATALOGUE) assert.ok(['categorical', 'set'].includes(f.col.kind), f.col.name)
 })
 
-test('the outcomes of the 13 applied gates are facets, and the set columns face by membership', () => {
+test('the outcomes of the 12 applied gates are facets, and the set columns face by membership', () => {
   const passed = F.CATALOGUE.filter(f => /^gate_.*_passed$/.test(f.col.name))
-  assert.equal(passed.length, 13)
+  assert.equal(passed.length, 12)
   assert.equal(F.BY_NAME.gate_failed_names.mode, 'set')
   assert.equal(F.BY_NAME.flag_nodes.mode, 'set')
   assert.equal(F.BY_NAME.verdict.mode, 'scalar')
@@ -112,7 +112,7 @@ test('a closed vocabulary keeps its declared order and an open one sorts by coun
   const m = new F.FacetModel(ROWS)
   assert.deepEqual(
     m.values('verdict').values.map(x => x.term),
-    ['pass', 'flag', 'discard', ABSENT]
+    ['pass', 'review', 'discard', ABSENT]
   )
   assert.deepEqual(
     m.values('task').values.map(x => x.term),
@@ -145,17 +145,17 @@ test('two facets are an intersection', () => {
   m.toggle('task', 'story-recall')
   m.toggle('verdict', 'pass')
   assert.equal(m.after(), 14) // 10 + 4
-  m.toggle('verdict', 'flag')
-  assert.equal(m.after(), 20) // pass|flag over story-recall
+  m.toggle('verdict', 'review')
+  assert.equal(m.after(), 20) // pass|review over story-recall
 })
 
 test('a sibling value keeps a meaningful count after its neighbour is chosen', () => {
   const m = new F.FacetModel(ROWS)
   m.toggle('verdict', 'pass')
   const v = m.values('verdict')
-  // `available` for a facet excludes that facet's own constraint, so `flag` is not zeroed
+  // `available` for a facet excludes that facet's own constraint, so `review` is not zeroed
   assert.equal(v.values.find(x => x.term === 'pass').available, 21)
-  assert.equal(v.values.find(x => x.term === 'flag').available, 10)
+  assert.equal(v.values.find(x => x.term === 'review').available, 10)
   assert.equal(v.values.find(x => x.term === 'discard').available, 2)
   // but another facet's counts *do* narrow, which is the whole point
   const t = m.values('task')
@@ -188,7 +188,7 @@ test('a set facet is membership, and its absent bucket is null rather than the e
 test('clearing one facet and clearing all restore the denominator exactly', () => {
   const m = new F.FacetModel(ROWS)
   m.toggle('task', 'cough')
-  m.toggle('verdict', 'flag')
+  m.toggle('verdict', 'review')
   assert.equal(m.after(), 1)
   m.clear('verdict')
   assert.equal(m.after(), 3)
@@ -213,7 +213,7 @@ test('a term that names an Object.prototype key is coded like any other', () => 
   const rows = [
     { __i: 0, task: 'constructor', verdict: 'pass' },
     { __i: 1, task: '__proto__', verdict: 'pass' },
-    { __i: 2, task: 'constructor', verdict: 'flag' },
+    { __i: 2, task: 'constructor', verdict: 'review' },
     { __i: 3, task: 'story-recall', verdict: 'pass' }
   ]
   const m = new F.FacetModel(rows)
@@ -229,7 +229,7 @@ test('a term that names an Object.prototype key is coded like any other', () => 
 
 test('the base mask is the brushes, and the facet counts are read against it', () => {
   const m = new F.FacetModel(ROWS)
-  // a brush that keeps only the first 12 rows: 10 story-recall/pass and 2 story-recall/flag
+  // a brush that keeps only the first 12 rows: 10 story-recall/pass and 2 story-recall/review
   const base = new Uint8Array(33)
   for (let i = 0; i < 12; i++) base[i] = 1
   m.setBase(base)
@@ -237,9 +237,9 @@ test('the base mask is the brushes, and the facet counts are read against it', (
   assert.equal(m.after(), 12)
   const v = m.values('verdict')
   assert.equal(v.values.find(x => x.term === 'pass').available, 10)
-  assert.equal(v.values.find(x => x.term === 'flag').available, 2)
+  assert.equal(v.values.find(x => x.term === 'review').available, 2)
   assert.equal(v.values.find(x => x.term === 'pass').total, 21, 'total is the corpus, not the brush')
-  m.toggle('verdict', 'flag')
+  m.toggle('verdict', 'review')
   assert.equal(m.after(), 2)
 })
 
@@ -314,4 +314,19 @@ test('all on a set column chooses every member', () => {
   const m = new F.FacetModel(ROWS)
   const chosen = m.selectAll('gate_failed_names')
   assert.ok(chosen.includes('response_min_s') && chosen.includes('items_min'))
+})
+
+test('a page can register its own columns, and the facets read them after a refresh', () => {
+  const added = A.register([
+    { name: 'review_reason', kind: 'categorical', group: 'decision', nullMeans: 'no reason' },
+    { name: 'participant', kind: 'categorical', group: 'identity' },
+  ])
+  assert.deepEqual(added.map((c) => c.name), ['review_reason'])
+  assert.equal(A.BY_NAME.review_reason.kind, 'categorical')
+  assert.equal(F.BY_NAME.review_reason, undefined)
+  F.refresh()
+  assert.equal(F.BY_NAME.review_reason.mode, 'scalar')
+  const model = new F.FacetModel([{ review_reason: 'weak_events' }, { review_reason: null }])
+  model.toggle('review_reason', 'weak_events')
+  assert.deepEqual(Array.from(model.mask()), [1, 0])
 })

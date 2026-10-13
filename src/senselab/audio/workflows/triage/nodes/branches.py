@@ -23,7 +23,12 @@ from senselab.audio.data_structures import AudioHints
 from senselab.audio.workflows.triage.config import TriageConfig, UnmeasuredConfigKey
 from senselab.audio.workflows.triage.consensus import vocabulary_key
 from senselab.audio.workflows.triage.nodes.admit import NODE as ADMIT_NODE
-from senselab.audio.workflows.triage.nodes.common import find_measurement, live_entities, software_agent
+from senselab.audio.workflows.triage.nodes.common import (
+    clamp_to_recording,
+    find_measurement,
+    live_entities,
+    software_agent,
+)
 from senselab.audio.workflows.triage.nodes.gates import (
     DEFAULT_LAYER,
     FAMILY_LAYER,
@@ -461,7 +466,7 @@ def record_unrun_owner(
 
 
 def propose_span(store: ProvStore, activity_id: str, agent_id: str, proposal: Proposal) -> str:
-    """Write one proposed span, with its family, its role and its derivation.
+    """Write one proposed span, with its family, its role and its derivation, bounded by the recording.
 
     Args:
         store: The provenance store.
@@ -482,7 +487,7 @@ def propose_span(store: ProvStore, activity_id: str, agent_id: str, proposal: Pr
         )
     span_id = store.entity(
         prov_type="span",
-        extent=(proposal.start, proposal.end),
+        extent=clamp_to_recording(store, (proposal.start, proposal.end)),
         attributes={**proposal.attributes, "family": proposal.family, "role": proposal.role},
     )
     store.was_generated_by(span_id, activity_id)
@@ -1311,26 +1316,56 @@ CATEGORY_LINE = re.compile(r"Category:\s*([^.\n]+)")
 """Where a per-recording category is spoken in the instructions: ``Category: Country names.``"""
 
 
+ITEM_CATEGORY_KEY = "item_category"
+"""The hint ``metadata`` key a per-recording category is declared under, where the instructions name none."""
+
+ITEM_CATEGORY_FROM_KEY = "item_category_from"
+"""The hint ``metadata`` key naming where :data:`ITEM_CATEGORY_KEY` was read."""
+
+CATEGORY_FROM_FAMILY = "family"
+CATEGORY_FROM_INSTRUCTIONS = "instructions"
+
+
+def item_category_of(task_family: str | None, hint: AudioHints | None) -> tuple[str | None, str | None]:
+    """The category a list task asks items of, for this recording, and where it was read.
+
+    Args:
+        task_family: The declared family, a key of :data:`SPEECH_EXPECTATIONS`, or None.
+        hint: What the recording was declared to contain; its instructions carry a per-recording
+            category, and its ``metadata`` may declare one under :data:`ITEM_CATEGORY_KEY`.
+
+    Returns:
+        ``(category, source)``: the family's declared category (:data:`CATEGORY_FROM_FAMILY`), else the
+        one its instructions name (:data:`CATEGORY_FROM_INSTRUCTIONS`), else the hint metadata's, with
+        the source that metadata names; ``(None, None)`` where none of them declares one.
+    """
+    expectation = SPEECH_EXPECTATIONS.get(str(task_family))
+    if expectation is None:
+        return None, None
+    if expectation.item_category is not None:
+        return expectation.item_category, CATEGORY_FROM_FAMILY
+    if not expectation.repetition_from_category or hint is None:
+        return None, None
+    found = CATEGORY_LINE.search(str(hint.instructions)) if hint.instructions else None
+    if found:
+        return found.group(1).strip(), CATEGORY_FROM_INSTRUCTIONS
+    declared = str(hint.metadata.get(ITEM_CATEGORY_KEY) or "").strip()
+    if declared:
+        return declared, str(hint.metadata.get(ITEM_CATEGORY_FROM_KEY) or "metadata")
+    return None, None
+
+
 def item_category(task_family: str | None, hint: AudioHints | None) -> str | None:
     """The category a list task asks items of, for this recording.
 
     Args:
         task_family: The declared family, a key of :data:`SPEECH_EXPECTATIONS`, or None.
-        hint: What the recording was declared to contain; its instructions carry a per-recording category.
+        hint: What the recording was declared to contain.
 
     Returns:
-        The family's declared category, else the one its instructions name where the family reads it off
-        them, else None.
+        :func:`item_category_of`'s category.
     """
-    expectation = SPEECH_EXPECTATIONS.get(str(task_family))
-    if expectation is None:
-        return None
-    if expectation.item_category is not None:
-        return expectation.item_category
-    if not expectation.repetition_from_category or hint is None or not hint.instructions:
-        return None
-    found = CATEGORY_LINE.search(str(hint.instructions))
-    return found.group(1).strip() if found else None
+    return item_category_of(task_family, hint)[0]
 
 
 def mode_of(branch: str, store: ProvStore, hint: AudioHints | None = None) -> tuple[str, str | None]:
@@ -1397,7 +1432,6 @@ POINT_TYPES: dict[str, Callable[[Any], Any]] = {
     "run_gap_max_s": float,
     "echo_ngram_n": int,
     "modulation_band_hz": _band,
-    "burst_window_ms": float,
     "effort_split_hz": float,
     "label_sets": _label_sets,
     "phoneme_place_classes": _label_sets,
@@ -1561,7 +1595,6 @@ PARAM_KEYS = (
     "run_gap_max_s",
     "echo_ngram_n",
     "modulation_band_hz",
-    "burst_window_ms",
     "effort_split_hz",
     "label_sets",
     "phoneme_place_classes",
@@ -1749,15 +1782,15 @@ def gaps(spans: Sequence[Entity]) -> list[Entity]:
 
 
 def lexical(words: Sequence[Entity]) -> list[Entity]:
-    """The consensus words that are not bracketed.
+    """The consensus words that are not bracketed and not a degenerate recognizer run.
 
     Args:
         words: The ``word`` entities, in index order.
 
     Returns:
-        The subset whose ``bracketed`` attribute is false.
+        The subset whose ``bracketed`` and ``degenerate`` attributes are not set.
     """
-    return [word for word in words if not word.attributes.get("bracketed")]
+    return [word for word in words if not word.attributes.get("bracketed") and not word.attributes.get("degenerate")]
 
 
 def word_text(word: Entity) -> str:

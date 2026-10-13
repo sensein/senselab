@@ -47,7 +47,12 @@ from senselab.audio.workflows.triage.vocabulary import UNDETERMINED
 from senselab.text.tasks.pii_detection.api import PiiScan, PiiSpan, default_detectors
 from senselab.utils.data_structures import ScriptLine
 from senselab.utils.prov_store import Entity, ProvStore
-from tests.audio.workflows.triage.nodes.conftest import gated_from_store, store_readings
+from tests.audio.workflows.triage.nodes.conftest import (
+    gated_from_store,
+    level_of_raster,
+    seed_background_view,
+    store_readings,
+)
 
 SR = 16000
 ENROLLMENT_MODEL = "speechbrain/spkrec-ecapa-voxceleb"
@@ -1754,12 +1759,30 @@ class TestTheDiarizersReachPastTheDecode:
     def test_an_extent_this_branch_composed_itself_still_raises(
         self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Bounding a foreign reading does not widen the tolerance on this branch's own arithmetic."""
-        _seed_speech_store(store, tmp_path, words=["one", "two"], word_extents=[(1.0, 1.3), (5.0, 5.6)], duration_s=5.5)
+        """Bounding a foreign reading does not widen the tolerance past a point window's reach."""
+        _seed_speech_store(store, tmp_path, words=["one", "two"], word_extents=[(1.0, 1.3), (5.0, 6.0)], duration_s=5.5)
         _seed_diarization(store, tmp_path, [(0.5, 5.5, "SPEAKER_00")])
         _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
         with pytest.raises(ValueError, match="past the"):
             speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
+
+    def test_a_stored_point_window_013_s_past_the_decode_is_clamped(
+        self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A consensus written before its point windows were bounded replays: the word is read up to the end."""
+        duration_s = 5.5
+        _seed_speech_store(
+            store,
+            tmp_path,
+            words=["one", "two"],
+            word_extents=[(1.0, 1.3), (duration_s - 0.19, duration_s + 0.13)],
+            duration_s=duration_s,
+        )
+        _seed_diarization(store, tmp_path, [(0.5, duration_s, "SPEAKER_00")])
+        _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
+        speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
+        spans = [entity.extent for entity in live_entities(store, "span") if entity.extent is not None]
+        assert spans and max(end for _, end in spans) <= duration_s
 
 
 class TestTheClampTolerance:
@@ -1786,11 +1809,11 @@ class TestTheClampTolerance:
         assert last.extent is not None
         assert last.extent[1] == duration_s, "the overshoot is clamped to the decode, not refused"
 
-    def test_a_word_ending_a_tenth_of_a_second_past_the_decode_still_raises(
+    def test_a_word_ending_more_than_a_point_window_past_the_decode_still_raises(
         self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path
     ) -> None:
-        """An extent that far outside the recording is an inconsistency, not rounding."""
-        _seed_speech_store(store, tmp_path, words=["one", "two"], word_extents=[(1.0, 1.3), (5.0, 5.6)], duration_s=5.5)
+        """An extent further outside the recording than a point window reaches is an inconsistency."""
+        _seed_speech_store(store, tmp_path, words=["one", "two"], word_extents=[(1.0, 1.3), (5.0, 6.0)], duration_s=5.5)
         with pytest.raises(ValueError, match="past the"):
             speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
 
@@ -1902,7 +1925,7 @@ class TestEnrollment:
     def test_a_null_enrollment_model_key_refuses_before_the_branch_measures_anything(
         self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """speech.enrollment_model is null on the packaged config; nothing invents a probe.
+        """With speech.enrollment_model and the match cut null, nothing invents a probe.
 
         A branch never refuses: it proceeds with everything else it can measure — the PII scan, the
         spans, the speakers — and names the two unreadable keys in ``unmeasured`` and a note, rather
@@ -1910,7 +1933,8 @@ class TestEnrollment:
         """
         _seed_speech_store(store, tmp_path, words=["hello", "world"])
         _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
-        result = speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=_enrollment())
+        unset = _override(tmp_path, "speech:\n  enrollment_model:\n  target_match_cosine:\n")
+        result = speech(store, "plain", unset, run_dir=tmp_path, enrollment=_enrollment())
         assert result.report.conformance == UNDETERMINED
         report = _report_entity(store, "SPEECH")
         assert "speech.enrollment_model" in report.attributes["unmeasured"]
@@ -3100,6 +3124,7 @@ def _seed_pa_posteriorgram(
         },
     )
     store.was_generated_by(entity_id, preprocess)
+    seed_background_view(store, tmp_path, level_of_raster(np.asarray(frames, dtype=float)))
 
 
 class TestADeclaredSyllableTaskIsEvaluatedBySpeech:
@@ -3121,8 +3146,9 @@ class TestADeclaredSyllableTaskIsEvaluatedBySpeech:
     ) -> None:
         """The owner's case: /pa pa pa/ is a speaking task and SPEECH says whether it happened.
 
-        No posteriorgram, so no instrument located the task: the modulation channel still reports
-        its rate and the carrier still answers conformance, and no ``task_extent`` is manufactured.
+        No posteriorgram and no background view, so the task layer took no reading: the modulation
+        channel still reports its rate, no gate answers conformance, and no ``task_extent`` is
+        manufactured.
         """
         _seed_speech_store(store, tmp_path, words=[])
         _seed_train_envelope(store, tmp_path, extent=(1.0, 4.0), rate_hz=5.0)
@@ -3135,7 +3161,7 @@ class TestADeclaredSyllableTaskIsEvaluatedBySpeech:
         assert detail["modulation_peak_hz"] == pytest.approx(5.0, abs=0.5)
         assert detail["modulation_unit"] == "syllables_per_s"
         assert result.report.conformance == UNDETERMINED
-        assert gated_from_store(store, Pattern.SYLLABLE_TRAIN, settings=syllable_config) is True
+        assert gated_from_store(store, Pattern.SYLLABLE_TRAIN, settings=syllable_config) == UNDETERMINED
         assert result.report.conformance_of == "task"
 
     def test_the_train_is_a_speech_span_carrying_its_production(
@@ -3150,7 +3176,7 @@ class TestADeclaredSyllableTaskIsEvaluatedBySpeech:
         trains = [
             entity
             for entity in live_entities(store, "span")
-            if entity.attributes.get("production") == "syllable_task_from_decode"
+            if entity.attributes.get("production") == "syllable_task_from_events"
         ]
         assert [entity.attributes["family"] for entity in trains] == ["speech"]
         assert trains[0].attributes["role"] == "task_extent"

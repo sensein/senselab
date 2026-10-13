@@ -6,9 +6,9 @@ thirteen chances to be forgotten -- and were, repeatedly and silently. Enforcing
 ``subtype=`` at each site would have patched the instances; enforcing the boundary makes the class
 of defect structurally unrepeatable.
 
-The layer is two files with one policy: ``audio/data_structures/audio.py`` for in-process callers,
-and ``utils/portable_audio_io.py`` for subprocess workers, which cannot import senselab at all and
-are handed that file instead. Everything else goes through one of those.
+The layer is one file, ``utils/portable_audio_io.py``: ``Audio.save_to_file`` delegates to its
+``write_audio``, and subprocess workers, which cannot import senselab at all, are handed the file
+itself. The sweep covers ``src/senselab``, ``scripts/`` and worker scripts held in string literals.
 
 Fixing a failure means routing the write through ``Audio.save_to_file`` (in-process) or
 ``portable_audio_io.write_audio`` (worker), not adding an allowlist entry. ``UNGUARDED_AUDIO_WRITE``
@@ -26,7 +26,6 @@ from typing import List, Tuple
 
 # The audio I/O layer, relative to ``src/senselab``. Only these may call a writer directly.
 AUDIO_IO_LAYER = {
-    "audio/data_structures/audio.py",
     "utils/portable_audio_io.py",
 }
 
@@ -40,6 +39,14 @@ _WRITER_CALLS = {
     ("soundfile", "SoundFile"),
 }
 _WRITER_NAMES = {"AudioEncoder"}
+# ``from <module> import <name>`` spellings that would let a writer be called bare.
+_WRITER_IMPORTS = {
+    ("soundfile", "write"),
+    ("soundfile", "SoundFile"),
+    ("torchaudio", "save"),
+    ("scipy.io.wavfile", "write"),
+    ("torchcodec.encoders", "AudioEncoder"),
+}
 
 # relpath -> why a direct write is unavoidable there. Empty: every write goes through the layer.
 UNGUARDED_AUDIO_WRITE: dict[str, str] = {}
@@ -55,6 +62,28 @@ def _src_root() -> Path:
     from tests.utils.hf_load_coverage_test import _SRC
 
     return _SRC
+
+
+def _scripts_root() -> Path:
+    return _src_root().parents[1] / "scripts"
+
+
+def _is_writer_import(node: ast.AST) -> bool:
+    """Whether ``node`` imports a writer under a bare name."""
+    if not isinstance(node, ast.ImportFrom) or node.module is None:
+        return False
+    return any((node.module, alias.name) in _WRITER_IMPORTS for alias in node.names)
+
+
+def _docstrings(tree: ast.AST) -> set:
+    """``id()`` of every docstring constant, which is prose and not a worker script."""
+    found = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)) and node.body:
+            first = node.body[0]
+            if isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant):
+                found.add(id(first.value))
+    return found
 
 
 def _is_writer_call(node: ast.AST) -> bool:
@@ -101,27 +130,34 @@ def _writes_in_source(source: str, origin: str) -> List[str]:
     except SyntaxError:
         return [f"{origin}: does not parse, so its writes cannot be checked"]
 
+    prose = _docstrings(tree)
     for node in ast.walk(tree):
-        if _is_writer_call(node):
+        if _is_writer_import(node):
+            found.append(f"{origin}:{node.lineno}")  # type: ignore[attr-defined]
+        elif _is_writer_call(node):
             assert isinstance(node, ast.Call)
             if _opens_for_reading_only(node):
                 continue
             found.append(f"{origin}:{node.lineno}")
-        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in prose:
             if not any(f"{recv}.{attr}(" in node.value for recv, attr in _WRITER_CALLS):
                 if not any(f"{name}(" in node.value for name in _WRITER_NAMES):
-                    continue
+                    if not any(f"from {m} import {n}" in node.value for m, n in _WRITER_IMPORTS):
+                        continue
             found.extend(_writes_in_source(node.value, f"{origin}:{node.lineno} (worker script)"))
     return found
 
 
 def _sweep() -> Tuple[List[str], List[str]]:
-    """``(inside_layer, outside_layer)`` direct writer calls across ``src/senselab``."""
+    """``(inside_layer, outside_layer)`` direct writer calls across ``src/senselab`` and ``scripts/``."""
     root = _src_root()
+    files = [(str(py.relative_to(root)), py) for py in sorted(root.rglob("*.py"))]
+    scripts = _scripts_root()
+    if scripts.is_dir():
+        files += [(f"scripts/{py.relative_to(scripts)}", py) for py in sorted(scripts.rglob("*.py"))]
     inside: List[str] = []
     outside: List[str] = []
-    for py in sorted(root.rglob("*.py")):
-        relpath = str(py.relative_to(root))
+    for relpath, py in files:
         findings = _writes_in_source(py.read_text(), relpath)
         (inside if relpath in AUDIO_IO_LAYER else outside).extend(findings)
     return inside, outside
@@ -176,6 +212,8 @@ def test_the_detector_finds_each_api_and_ignores_reads() -> None:
         "AudioEncoder(samples=w, sample_rate=sr).to_file(p)",
         "scipy.io.wavfile.write(p, sr, x)",
         'sf.SoundFile(p, "w")',
+        "from soundfile import write",
+        "from torchcodec.encoders import AudioEncoder",
     ]
     ignored = [
         "write_audio(p, x, sr)",
@@ -277,7 +315,7 @@ def test_the_subtype_constant_has_one_home() -> None:
     duplicates: List[str] = []
     for py in sorted(root.rglob("*.py")):
         relpath = str(py.relative_to(root))
-        if relpath in {_CONSTANT_HOME, "audio/data_structures/audio.py"}:
+        if relpath == _CONSTANT_HOME:
             continue
         try:
             tree = ast.parse(py.read_text())

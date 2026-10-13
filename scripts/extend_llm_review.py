@@ -37,9 +37,14 @@ report and every other node's verdict stands, which is what separates this from 
 is to collect readings.
 
 Resumability is the store's, as in the other adding drivers: a recording whose store already holds
-a live ``redaction_llm_annotation`` **that a REVIEW activity generated** is ``present`` and is not
-read again, so a preempted array task is resumed by resubmitting it. ``--force`` reads again and
-retires what stood only where the re-reading actually differs.
+a live ``redaction_llm_annotation`` **that a REVIEW activity generated**, under the current prompt version
+and on the configured engine, is ``present`` and is not read again, so a preempted or requeued array task
+is resumed by resubmitting it. A reading under an earlier prompt or another engine is read again and
+retired. ``--force`` reads again and retires what stood only where the re-reading actually differs.
+
+The engine is the configuration's (``redaction.llm_check.engine``): the transformers worker, or a vLLM
+server this process starts and feeds one request at a time. Several processes may share one GPU, each with
+its own server and its own shard of the manifest.
 
 The node is the whole of that test. A corpus replayed before the reviewer became its own node
 carries a live annotation from REDACT's ``llm_check`` step, and over the r4 corpus every one of
@@ -67,7 +72,7 @@ import os
 import sys
 import time
 from pathlib import Path
-from typing import Any, Callable, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 from senselab.audio.data_structures import AudioHints
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
@@ -100,9 +105,18 @@ from senselab.audio.workflows.triage.nodes.common import (
     software_agent,
 )
 from senselab.audio.workflows.triage.nodes.redact import STREAM_NAME as REDACTED_STREAM
-from senselab.audio.workflows.triage.nodes.review import ABSENT, DISABLED, NODE, apply_proposal, review
+from senselab.audio.workflows.triage.nodes.review import (
+    ABSENT,
+    DISABLED,
+    NODE,
+    apply_proposal,
+    configured_engine,
+    review,
+)
 from senselab.audio.workflows.triage.run import RELEASE_SUBDIR, REPORT_NODE, SUMMARY_SUBDIR
 from senselab.audio.workflows.triage.vocabulary import REDACTION_LLM_ANNOTATION
+from senselab.text.tasks.pii_detection.redaction_review import PROMPT_VERSION
+from senselab.text.tasks.pii_detection.redaction_review_vllm import ENGINE_TRANSFORMERS, engine_identity
 from senselab.utils.prov_store import Entity, ProvStore
 from senselab.utils.subprocess_venv import record_venv_use
 
@@ -189,7 +203,7 @@ def mirror_run_root(run_root: Path, out_root: Path) -> Path:
     return mirror
 
 
-def standing(store: ProvStore) -> Entity | None:
+def standing(store: ProvStore, engine: Mapping[str, Any] | None = None) -> Entity | None:
     """The reading REVIEW has already left here, if any.
 
     An annotation is this pass's work only where a ``REVIEW`` activity generated it. A store
@@ -202,10 +216,12 @@ def standing(store: ProvStore) -> Entity | None:
 
     Args:
         store: The run's store.
+        engine: The configured engine's identity; where given, a reading under an earlier prompt version or
+            on another engine is not standing. A reading that records no engine was the transformers worker's.
 
     Returns:
-        The annotation entity, or None where REVIEW has left none, left only ``disabled``, or left
-        only a failed attempt.
+        The annotation entity, or None where REVIEW has left none, left only ``disabled``, left only a
+        failed attempt, or (given ``engine``) left one this configuration would not have read.
     """
     annotation = find_measurement(store, REDACTION_LLM_ANNOTATION)
     if annotation is None:
@@ -219,6 +235,10 @@ def standing(store: ProvStore) -> Entity | None:
         return None
     if node != NODE or annotation.attributes.get("status") == DISABLED or failed_reading(annotation) is not None:
         return None
+    if engine is not None:
+        held = dict(annotation.attributes.get("engine") or engine_identity(ENGINE_TRANSFORMERS))
+        if annotation.attributes.get("prompt_version") != PROMPT_VERSION or held != dict(engine):
+            return None
     return annotation
 
 
@@ -346,7 +366,7 @@ def extend_one(
         store = read_store(run_root)
     except (OSError, ValueError) as error:
         return {"status": ERROR, NODE: describe_exception(error)}
-    held = standing(store)
+    held = standing(store, configured_engine(config))
     if held is not None and not force:
         return {"status": PRESENT, NODE: str(held.attributes.get("status") or "")}
     replaced = live_annotations(store)

@@ -1,0 +1,206 @@
+# Fit and held-out subjects (8-hex prefixes) per listen set; numpy default_rng(20261007), 30% held out,
+# stratified by target, grouped by subject. Written once by scripts/evaluate_task_events.py;
+# subjects absent here are held out.
+breath_absent_check_20261005:
+  fit:
+  - 21031c4f
+  heldout: []
+breath_evidence_check_20261005:
+  fit:
+  - 25351e19
+  - 324cd5d0
+  - 475ff714
+  - 4d596bce
+  - 772aa876
+  - 80e179b4
+  - b5add389
+  - cb69d304
+  - fac74f45
+  heldout:
+  - 2337c1e6
+  - 357e229c
+  - b7b42f0a
+breath_modspec_check_20261005:
+  fit:
+  - 3c6a97e9
+  - 66a03988
+  - 670e8db6
+  - cdfa7e4e
+  heldout:
+  - 14acce61
+  - 1ba3214d
+breath_pattern_check_20261005:
+  fit:
+  - 1c2f13bb
+  - .inf
+  - 89505e27
+  - 943a8bbc
+  - ba1d1459
+  - e02a3f8b
+  - ecc63817
+  heldout:
+  - 09f16959
+  - 30db5329
+  - 39ba8784
+breath_review_check_20261006:
+  fit:
+  - 03ca6c69
+  - 19c5c847
+  - 1f4ea26f
+  - 2ba9a335
+  - 2bb59c22
+  - 3d446af4
+  - 75b49def
+  - cbe8a315
+  - efadb6b3
+  - fc8a8729
+  heldout:
+  - 16eded62
+  - 1965766f
+  - 6330763d
+  - 67c60a9f
+  - 793732ff
+breath_veto_check_20261006:
+  fit:
+  - 01f52a78
+  - 0b9b68cf
+  - 167ac3f5
+  - 42442f80
+  - 6f73b8d2
+  - 81873ca0
+  - 988c1609
+  - b26208dd
+  heldout:
+  - 0dc15213
+  - 6ca9935e
+  - c9b77a28
+contrast_check_20261005:
+  fit:
+  - 05bf77bd
+  - 0b8dcad5
+  - 254e47be
+  - 517381e9
+  - 531b6b20
+  - 7c169ccc
+  - 8c42135a
+  - 9d16c147
+  heldout:
+  - 29be45ea
+  - 7869a54a
+cough_check_20261006:
+  fit:
+  - 22c5f400
+  - 3b7ace99
+  - 4164d528
+  - 45f1c7ec
+  - 4c91e682
+  - 53dddba6
+  - 56baa32a
+  - 6ca9935e
+  - 725c2db2
+  - 889afc08
+  - a28e5022
+  - a6de8e15
+  - aa5114f6
+  - aad9e6c6
+  - bffe3a4f
+  - c7410c7c
+  - cdfa7e4e
+  - f997d0e3
+  heldout:
+  - 28cc3eda
+  - 9c6e4508
+  - b91cd93f
+  - c60d8bb8
+  - eab3b2e8
+  - f286ac55
+discard_contested_check_20261006:
+  fit:
+  - .inf
+  - 249a4469
+  - 5201d61d
+  - 6087f14c
+  - fef8f989
+  - ff532a57
+  heldout:
+  - 11ec42cc
+  - 9227a6c1
+empty_route_check_20261005:
+  fit:
+  - 0c9d86bd
+  - '32809704'
+  - 49f6bc1b
+  - 5201d61d
+  - 61c442e4
+  - 65e78c30
+  - 70a071a1
+  - 8c42135a
+  - b16c01e3
+  - cddfec7c
+  - f91736dd
+  heldout:
+  - 1ba3214d
+  - 1fcc920c
+  - a9e7e15f
+  - bebe28e0
+  - e8044ea4
+speech_guard_check_20261005:
+  fit:
+  - 0bcffa40
+  - a03b5325
+  - ae2a7223
+  - b451fe70
+  - c7c405c7
+  - d5a327c7
+  - dac345e2
+  heldout:
+  - 3d889bf8
+  - 430950c2
+  - 5cc93330
+  - b16acf04
+voice_check_20261006:
+  fit:
+  - 1c139a67
+  - 2558e9da
+  - 3856c95a
+  - 3b06709b
+  - 3bbc69ef
+  - 445c8cdf
+  - 5b4817c2
+  - 6112f3a9
+  - 63779be0
+  - 685fb824
+  - 6b7bd347
+  - 709b34e1
+  - 7ae91a65
+  - 840041f9
+  - 85a22592
+  - 889afc08
+  - 8cec2c76
+  - a9500875
+  - b442b86a
+  - b7990104
+  - e0b4d428
+  - e421c733
+  - ebd757bf
+  - fa6befa4
+  heldout:
+  - 028943cf
+  - 164584f3
+  - 4464b02f
+  - 5e68a500
+  - 68de3829
+  - 6b0c36f0
+  - 74a221d7
+  - ad6bfe11
+  - c35284b1
+voice_check_20261006/discard_cause:
+  fit:
+  - 0581355f
+  - 2f122abe
+  - 68d62b1e
+  - eaa742f4
+  - f47eeda7
+  heldout:
+  - 3c6a97e9
+  - dbd096ea

@@ -23,6 +23,7 @@ import torch
 
 from senselab.audio.data_structures import Audio, AudioHints
 from senselab.audio.workflows.triage import run as run_module
+from senselab.audio.workflows.triage import vocabulary as vocabulary_module
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.nodes import routing as routing_module
 from senselab.audio.workflows.triage.nodes.admit import AdmitResult
@@ -53,9 +54,17 @@ from senselab.audio.workflows.triage.vocabulary import (
     Outcome,
     Release,
     RunState,
+    RunStatus,
     Triage,
 )
 from senselab.utils.prov_store import ProvStore
+
+
+@pytest.fixture(autouse=True)
+def _withheld_alone_is_reviewed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """These tests read other rules: the release review is narrowed to ``withheld``, its relaxed setting."""
+    monkeypatch.setattr(vocabulary_module, "reviewed_releases", lambda: frozenset({"withheld"}))
+
 
 REPO_ROOT = Path(__file__).resolve().parents[5]
 CLI = REPO_ROOT / "scripts" / "triage_audio.py"
@@ -63,17 +72,22 @@ CLI = REPO_ROOT / "scripts" / "triage_audio.py"
 GRAPH = (
     "ADMIT",
     "PREPROCESS",
+    "SESSION",
+    "BACKGROUND",
     "TAXONOMY",
     "routing",
     "AIRWAY",
     "SPEECH",
     "VOICE",
     "QUALITY",
+    "COHORT",
     "REDACT",
     "REVIEW",
     "VERDICT",
 )
-"""Every node the runner drives. QUALITY, routing and REVIEW run for real here; the rest are faked."""
+"""Every node the runner drives. SESSION, BACKGROUND, QUALITY, COHORT, routing and REVIEW run for real.
+
+The rest are faked."""
 
 _MISSING = object()
 
@@ -369,6 +383,25 @@ def graph(monkeypatch: pytest.MonkeyPatch) -> Callable[..., list[str]]:
             calls.append("VERDICT")
             return real_verdict(*args, **kwargs)
 
+        real_session, real_background = run_module.write_session_floor, run_module.write_background
+
+        def _session(*args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
+            calls.append("SESSION")
+            return real_session(*args, **kwargs)
+
+        def _background(*args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
+            calls.append("BACKGROUND")
+            return real_background(*args, **kwargs)
+
+        real_cohort = run_module.write_cohort_unavailable
+
+        def _cohort(*args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
+            calls.append("COHORT")
+            return real_cohort(*args, **kwargs)
+
+        monkeypatch.setattr(run_module, "write_cohort_unavailable", _cohort)
+        monkeypatch.setattr(run_module, "write_session_floor", _session)
+        monkeypatch.setattr(run_module, "write_background", _background)
         monkeypatch.setattr(run_module, "quality", _quality)
         monkeypatch.setattr(run_module, "review", _review)
         monkeypatch.setattr(run_module, "verdict", _verdict)
@@ -398,6 +431,7 @@ class TestHappyPath:
         assert result.file_verdict.triage is Triage.PASS
         assert result.ran == {
             **dict.fromkeys(GRAPH, RunState.COMPLETED),
+            "SECOND_OPINION": RunState.SKIPPED,
             "REPORT": RunState.COMPLETED,
         }
         assert result.file_verdict.ran["QUALITY"] is RunState.COMPLETED
@@ -427,7 +461,7 @@ class TestHappyPath:
         assert result.ran["QUALITY"] is RunState.COMPLETED
         assert result.ran["REPORT"] is RunState.COMPLETED
         assert result.file_verdict is not None
-        assert result.file_verdict.triage is Triage.FLAG
+        assert result.file_verdict.triage is Triage.REVIEW
         assert any(
             reason.node == "QUALITY" and reason.outcome is Outcome.FLAG for reason in result.file_verdict.reasons
         )
@@ -574,7 +608,7 @@ class TestHappyPath:
         graph()
         result = run_triage(tmp_path / "recording.wav", tmp_path / "out", config)
         assert result.file_verdict is not None
-        assert result.file_verdict.release is Release.WITH_REDACTION
+        assert result.file_verdict.release is Release.REDACTED
 
     def test_the_hint_reaches_every_node(
         self, graph: Callable[..., list[str]], config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -716,7 +750,7 @@ class TestConditionalExecution:
         result = run_triage(tmp_path / "recording.wav", tmp_path / "out", config)
         assert "SPEECH" in calls and "REDACT" not in calls
         assert result.file_verdict is not None
-        assert result.file_verdict.release is Release.WITHOUT_REDACTION
+        assert result.file_verdict.release is Release.AS_IS
         assert result.file_verdict.release_ground == SCAN_FOUND_NOTHING
 
     def test_speech_running_with_a_finding_reaches_redact(
@@ -750,11 +784,22 @@ class TestConditionalExecution:
         """Branches do not run without ROUTING's decisions; QUALITY, which reads none, still does."""
         calls = graph(routing_outcome=routing_outcome)
         result = run_triage(tmp_path / "recording.wav", tmp_path / "out", config)
-        assert tuple(calls) == ("ADMIT", "PREPROCESS", "TAXONOMY", "routing", "QUALITY", "REVIEW", "VERDICT")
+        assert tuple(calls) == (
+            "ADMIT",
+            "PREPROCESS",
+            "SESSION",
+            "BACKGROUND",
+            "TAXONOMY",
+            "routing",
+            "QUALITY",
+            "COHORT",
+            "REVIEW",
+            "VERDICT",
+        )
         assert result.ran["routing"] is RunState.ERRORED
         assert all(result.ran[branch] is RunState.SKIPPED for branch in ("AIRWAY", "SPEECH", "VOICE", "REDACT"))
         assert result.file_verdict is not None
-        assert result.file_verdict.triage is Triage.RERUN
+        assert result.file_verdict.triage is Triage.REVIEW and result.file_verdict.run_status is RunStatus.INCOMPLETE
         assert any(
             "routing failed; branch execution was withheld" in reason.why for reason in result.file_verdict.reasons
         )
@@ -840,7 +885,7 @@ class TestPreprocessFailShortCircuits:
         result = run_triage(tmp_path / "recording.wav", tmp_path / "out", config)
         assert result.ran["VERDICT"] is RunState.COMPLETED
         assert result.file_verdict is not None
-        assert result.file_verdict.triage is Triage.RERUN
+        assert result.file_verdict.triage is Triage.REVIEW and result.file_verdict.run_status is RunStatus.INCOMPLETE
         assert any("preprocess failed" in reason.why for reason in result.file_verdict.reasons)
 
     def test_the_store_is_still_persisted_and_report_still_runs(
@@ -877,7 +922,7 @@ class TestAdmitFailShortCircuits:
         result = run_triage(tmp_path / "recording.wav", tmp_path / "out", config)
         assert result.file_verdict is not None
         assert result.file_verdict.triage is Triage.DISCARD
-        assert result.file_verdict.release is Release.DISCARDED
+        assert result.file_verdict.release is None
         assert result.file_verdict.release_ground == DISCARDED
         assert result.released == {}
         assert result.store_path.is_file()
@@ -1036,9 +1081,7 @@ def fake_result(tmp_path: Path) -> Callable[..., Any]:
         run_dir = tmp_path / "run"
         run_dir.mkdir(exist_ok=True)
         return run_module.TriageRunResult(
-            file_verdict=FileVerdict(triage=Triage.PASS, release=Release.NOT_ASSESSED)
-            if file_verdict is _MISSING
-            else file_verdict,
+            file_verdict=FileVerdict(triage=Triage.PASS, release=None) if file_verdict is _MISSING else file_verdict,
             nodes=nodes or {},
             run_dir=run_dir,
             artifacts_dir=tmp_path / "released",
@@ -1070,7 +1113,7 @@ class TestCli:
             run_dir = tmp_path / "run"
             run_dir.mkdir(exist_ok=True)
             return run_module.TriageRunResult(
-                file_verdict=FileVerdict(triage=Triage.PASS, release=Release.NOT_ASSESSED),
+                file_verdict=FileVerdict(triage=Triage.PASS, release=None),
                 nodes={},
                 run_dir=run_dir,
                 artifacts_dir=tmp_path / "released",
@@ -1100,7 +1143,7 @@ class TestCli:
             run_dir = tmp_path / "run"
             run_dir.mkdir(exist_ok=True)
             return run_module.TriageRunResult(
-                file_verdict=FileVerdict(triage=Triage.PASS, release=Release.NOT_ASSESSED),
+                file_verdict=FileVerdict(triage=Triage.PASS, release=None),
                 nodes={},
                 run_dir=run_dir,
                 artifacts_dir=tmp_path / "released",
@@ -1327,7 +1370,7 @@ class TestTheExitCodeSaysWhetherTheGraphRanClean:
     ) -> None:
         """The exit code reports whether the graph ran, never what it concluded about the recording."""
         nodes = {node: run_module.NodeOutcome(node=node, state=RunState.COMPLETED) for node in GRAPH}
-        discarded = FileVerdict(triage=Triage.DISCARD, release=Release.DISCARDED, discard_ground="acoustically_empty")
+        discarded = FileVerdict(triage=Triage.DISCARD, release=None, discard_ground="acoustically_empty")
         assert self._drive(_cli(), monkeypatch, tmp_path, fake_result(file_verdict=discarded, nodes=nodes)) == 0
 
     def test_the_errored_node_is_named_on_stderr(

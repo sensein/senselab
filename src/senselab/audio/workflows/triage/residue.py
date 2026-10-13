@@ -43,6 +43,7 @@ __all__ = [
     "Residue",
     "ResidueRule",
     "is_content_word",
+    "is_function_word",
     "is_name_homograph",
     "is_proper_form",
     "is_non_lexical",
@@ -349,6 +350,20 @@ def is_content_word(text: str) -> bool:
     return bool(key) and not is_non_lexical(text) and _base(key) not in FUNCTION_WORDS
 
 
+def is_function_word(text: str) -> bool:
+    """Whether a transcript token is a closed-class word of :data:`FUNCTION_WORDS`, a single character excepted.
+
+    Args:
+        text: The token as the recognizer wrote it.
+
+    Returns:
+        True where its base form is in :data:`FUNCTION_WORDS` and is longer than one character; a single
+        character (``a``, ``I``, ``y``, ``o``) is False, as a letter said as an item is.
+    """
+    key = _key(text)
+    return len(_base(key)) > 1 and not is_non_lexical(text) and _base(key) in FUNCTION_WORDS
+
+
 def _syllable_letters(sequence: Sequence[str]) -> frozenset[str]:
     return frozenset(letter for phoneme in sequence for letter in _SYLLABLE_LETTERS.get(phoneme, ""))
 
@@ -411,6 +426,18 @@ def _skeleton(key: str) -> str:
 def _key(text: str) -> str:
     key = normalise_token(text)
     return _NUMERALS.get(key, key)
+
+
+def token_key(text: str) -> str:
+    """A token as the residue compares it: normalised, a digit written as its number word.
+
+    Args:
+        text: The token as the recognizer wrote it.
+
+    Returns:
+        The key; empty for a token with nothing left.
+    """
+    return _key(text)
 
 
 def _base(key: str) -> str:

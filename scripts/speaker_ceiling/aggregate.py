@@ -37,7 +37,7 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Mapping, Sequence
 
-import soundfile as sf
+from senselab.utils.portable_audio_io import audio_info
 
 # scripts/ is deliberately not an importable package (pyproject sets pythonpath = ["src"]).
 # Put this file's own directory on sys.path instead, matching the convention every other
@@ -46,7 +46,13 @@ _THIS_DIR = Path(__file__).resolve().parent
 if str(_THIS_DIR) not in sys.path:
     sys.path.insert(0, str(_THIS_DIR))
 
-from evaluate import SessionOutcome, cell_path, corpus_identity_from_manifest, read_cell, read_cell_identity  # noqa: E402
+from evaluate import (  # noqa: E402
+    SessionOutcome,
+    cell_path,
+    corpus_identity_from_manifest,
+    read_cell,
+    read_cell_identity,
+)
 from generate import CORPUS_SAMPLE_RATE  # noqa: E402
 
 
@@ -185,12 +191,12 @@ def validate_corpus_for_counts(corpus_dir: Path, manifest: Mapping[str, object],
             problems.append(f"missing rttm: {rttm_path}")
             continue
         try:
-            info = sf.info(str(wav_path))
+            info = audio_info(wav_path)
         except Exception as exc:  # noqa: BLE001 -- any unreadable wav is a validation failure to report, not raise past
             problems.append(f"unreadable wav {wav_path}: {exc}")
             continue
-        if info.samplerate != CORPUS_SAMPLE_RATE:
-            problems.append(f"{wav_path} is {info.samplerate} Hz, expected {CORPUS_SAMPLE_RATE}")
+        if info.sampling_rate != CORPUS_SAMPLE_RATE:
+            problems.append(f"{wav_path} is {info.sampling_rate} Hz, expected {CORPUS_SAMPLE_RATE}")
 
     missing_k = sorted(set(counts) - seen_k)
     if missing_k:

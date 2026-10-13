@@ -51,7 +51,7 @@ RECORDING_STREAM = "recording"
 UNDECLARED = ""
 """The task id and family of a recording whose stem carries no ``task-`` entity."""
 
-EMPTINESS_SOURCE = "stream_peak_max"
+EMPTINESS_SOURCE = "activity"
 """The feature source the emptiness bypass reads, which no gate names and every evaluation uses."""
 
 

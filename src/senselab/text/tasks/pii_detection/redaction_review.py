@@ -20,6 +20,10 @@ Heavy dependencies (``transformers``, ``torch``, ``accelerate``, ``compressed-te
 isolated venv built by :func:`senselab.utils.subprocess_venv.ensure_venv`, the same way the detector
 cascade's own venv does, so the host stays off a fixed torch stack.
 
+The model is served by one of two engines (:data:`~senselab.text.tasks.pii_detection.redaction_review_vllm.ENGINES`):
+the transformers worker below, or a pinned vLLM server fed one request at a time
+(:mod:`~senselab.text.tasks.pii_detection.redaction_review_vllm`). Each reading records which.
+
 The venv holds **one long-lived worker per process**, started on the first review and reused by every
 later one, so the weights are loaded once rather than once per review. :func:`shutdown_review_worker`
 ends it; it also ends at interpreter exit and when its stdin reaches EOF, so a killed parent does not
@@ -73,9 +77,34 @@ _SPEAKERS_HEADING = "SPEAKERS:"
 _CONDITIONS_HEADING = "CONDITIONS:"
 _OTHER_SPEAKERS_HEADING = "OTHER_SPEAKERS:"
 _INSTRUCTIONS_SPOKEN_HEADING = "INSTRUCTIONS_SPOKEN:"
+_OTHER_SPEAKER_ROLE_HEADING = "OTHER_SPEAKER_ROLE:"
+_OTHER_SPEAKER_QUOTES_HEADING = "OTHER_SPEAKER_QUOTES:"
+_OFF_TASK_SPEECH_HEADING = "OFF_TASK_SPEECH:"
+_OFF_TASK_QUOTES_HEADING = "OFF_TASK_QUOTES:"
+_PHRASES_HEADING = "PHRASES_INSTEAD_OF_ITEMS:"
+_PHRASE_QUOTES_HEADING = "PHRASE_QUOTES:"
+_TASK_CONTENT_QUOTES_HEADING = "TASK_CONTENT_QUOTES:"
 
-PROMPT_VERSION = 9
+PROMPT_VERSION = 15
 """The prompt and its parse, as one number: it changes whenever either changes what a reading holds."""
+
+REVIEW_INPUTS_VERSION = 3
+"""The shape of the ``review_inputs`` record a reading carries (:func:`review_inputs`)."""
+
+REQUIRED_REVIEW_INPUTS = ("task", "full_transcript", "pii_annotations", "asr_readings", "instructions")
+"""The ``review_inputs`` keys a reading must have had for its releases to be weighed."""
+
+CONSENSUS_TRANSCRIPT = "consensus_transcript"
+"""The context key holding the whole consensus transcript, word by word, with its PII and variation."""
+
+WORD_SCANNED = ""
+WORD_TASK = "task"
+WORD_NON_LEXICAL = "non_lexical"
+WORD_KINDS = (WORD_SCANNED, WORD_TASK, WORD_NON_LEXICAL)
+"""What a consensus word is to the PII scan: a word it read, the task's own content, or non-lexical."""
+
+CONSENSUS_HAYSTACK = "consensus"
+"""The reading a finding was found on when it was found on the consensus transcript itself."""
 
 REDACTION_STATES = ("complete", "incomplete", "not_applicable")
 """Whether the redaction, where one was applied, removed the identifying content."""
@@ -85,6 +114,22 @@ ORIGINAL_STATES = ("clean", "carries_pii")
 
 SPEAKER_STATES = ("one", "more_than_one", "unclear")
 """How many people the transcript's own words show speaking in the recording."""
+
+OFF_TASK_STATES = ("none", "some", "extensive")
+"""How much of the recording the participant spends off the task."""
+
+PHRASES_NONE = "none"
+PHRASES_OCCASIONAL = "occasional"
+PHRASES_PREDOMINANT = "predominant"
+PHRASE_STATES = (PHRASES_NONE, PHRASES_OCCASIONAL, PHRASES_PREDOMINANT)
+"""In an item-set task, whether the participant utters phrases instead of items."""
+
+ITEM_SET = "item_set"
+"""The context key that is True where the declared task is an item-set task: it is asked about phrases instead
+of items, not about off-task speech (:func:`review_prompt`)."""
+
+OTHER_SPEAKER_ROLES = ("none", "assistant", "background", "unclear")
+"""Who besides the participant speaks: nobody, an assistant or examiner, someone in the background, or unclear."""
 
 REDACT = "redact"
 RELEASE = "release"
@@ -112,7 +157,14 @@ redaction policy (:mod:`~senselab.text.tasks.pii_detection.redaction_policy`) in
 
 
 TASK_GUIDANCE_PATH = Path(__file__).parent / "data" / "task_guidance.yaml"
-"""What counts as the task's own content in each task family, as the reviewer is told it."""
+"""What counts as the task's own content in each task family, and what kind of task each family is."""
+
+NATURE_OPEN_RESPONSE = "open_response"
+NATURE_ITEM_GENERATION = "item_generation"
+NATURE_READ_OR_RECALL = "read_or_recall"
+NATURE_NON_LEXICAL = "non_lexical"
+TASK_NATURES = (NATURE_OPEN_RESPONSE, NATURE_ITEM_GENERATION, NATURE_READ_OR_RECALL, NATURE_NON_LEXICAL)
+"""The kinds of task a declared family is, as ``task_guidance.yaml`` names them under ``natures``."""
 
 
 @lru_cache(maxsize=1)
@@ -135,10 +187,64 @@ def task_guidance(family: str | None) -> str:
         The first entry whose names include the family, or a prefix of it followed by ``-``; the empty
         string where none does.
     """
-    key = str(family or "").strip().lower()
     for names, guidance in _task_guidance():
-        if any(key == name or key.startswith(f"{name}-") for name in names):
+        if _family_matches(family, names):
             return guidance
+    return ""
+
+
+def _family_matches(family: str | None, names: Sequence[str]) -> bool:
+    """Whether a declared family equals one of the names, or starts with one followed by ``-``."""
+    key = str(family or "").strip().lower()
+    return bool(key) and any(key == name or key.startswith(f"{name}-") for name in names)
+
+
+@lru_cache(maxsize=1)
+def _task_natures() -> tuple[tuple[str, tuple[str, ...], str], ...]:
+    """The packaged natures, as ``(nature, family names, description)`` in file order."""
+    raw = yaml.safe_load(TASK_GUIDANCE_PATH.read_text()) or {}
+    natures = tuple(
+        (
+            str(entry.get("nature") or ""),
+            tuple(str(name) for name in entry.get("names") or ()),
+            " ".join(str(entry.get("description") or "").split()),
+        )
+        for entry in raw.get("natures") or ()
+    )
+    unknown = [nature for nature, _names, _description in natures if nature not in TASK_NATURES]
+    if unknown:
+        raise ValueError(f"{TASK_GUIDANCE_PATH.name}: unknown natures {unknown}; known: {TASK_NATURES}")
+    return natures
+
+
+def task_nature(family: str | None) -> str:
+    """What kind of task a declared family is.
+
+    Args:
+        family: The declared family, or None.
+
+    Returns:
+        One of :data:`TASK_NATURES` for the first ``natures`` entry whose names match the family, or the
+        empty string where none does.
+    """
+    for nature, names, _description in _task_natures():
+        if _family_matches(family, names):
+            return nature
+    return ""
+
+
+def task_nature_description(family: str | None) -> str:
+    """The description of a declared family's nature, as both prompts send it.
+
+    Args:
+        family: The declared family, or None.
+
+    Returns:
+        The matching ``natures`` entry's description, or the empty string where none matches.
+    """
+    for _nature, names, description in _task_natures():
+        if _family_matches(family, names):
+            return description
     return ""
 
 
@@ -225,14 +331,73 @@ _POLICY = (
 )
 
 
+def redaction_policy_text() -> str:
+    """The redaction policy as the reviewer is given it: the rules, then the remaining Safe Harbor identifiers.
+
+    Returns:
+        The policy text, the one source every prompt that asks what the policy removes is built from.
+    """
+    return _POLICY + _identifier_rule()
+
+
+_POINT_8_OFF_TASK = (
+    "8. Whether the participant stopped doing the task and talked about something else: a remark, a "
+    "question, a story or a conversation that is not what the instructions ask for. Asking whether "
+    'they are done ("Is that enough?") is some; talking at length about something else is extensive. In a '
+    "non-lexical task (breathing, coughing, phonation, repeated syllables) any words the participant says "
+    "are off-task.\n"
+)
+_OFF_TASK_PARTS = (
+    "OFF_TASK_SPEECH: one of none, some, extensive (point 8).\n"
+    "OFF_TASK_QUOTES: a JSON array of strings, each an exact passage, quoted from the ORIGINAL, where the "
+    "participant talks off-task. Return [] when OFF_TASK_SPEECH is none; otherwise quote at least one.\n"
+)
+_POINT_8_PHRASES = (
+    "8. This task asks for a list of items. Find every phrase in the recording. An item is a short unit, "
+    "typically one to three words: a name, a number, a letter, an animal, whatever the instructions ask for. "
+    "A phrase is clausal or non-item speech: a clause, a sentence, a comment, a question or a story rather "
+    'than an item ("I don\'t know what else to say", "my dog\'s name is ...", "is that enough?"). Judge each '
+    "stretch of the transcript by what it says; neither a pause nor the number of words decides it. Then judge "
+    "whether the participant is uttering phrases instead of items: none where they list items and say no "
+    'phrase, or only brief asides about the task itself ("um, let me think", "is that enough?"); occasional '
+    "where a few phrases come between the items; predominant where phrases make up much of the recording, the "
+    "list giving way to narration or conversation.\n"
+)
+_PHRASE_PARTS = (
+    "PHRASES_INSTEAD_OF_ITEMS: one of none, occasional, predominant (point 8).\n"
+    "PHRASE_QUOTES: a JSON array of strings quoting every phrase under point 8, one entry per phrase, each "
+    "exactly as it appears in the ORIGINAL and never an item. Return [] only when there is no phrase at all; "
+    "when PHRASES_INSTEAD_OF_ITEMS is occasional or predominant, quote at least one.\n"
+)
+
+
 _PROMPT = (
     "You are auditing one recording's transcript before it is released. You are given the "
     "ORIGINAL words as transcribed, and where an automatic redaction has already been applied, "
-    "the RELEASED text it produced, in which every [CATEGORY] token marks removed text. Where no "
+    "the RELEASED text it produced from the words the detectors read (every word outside the <task> and "
+    "<nonlex> tags), in which every [CATEGORY] token marks removed text. Where no "
     "redaction was applied the RELEASED section says so, and nothing has been removed.\n\n"
-    + _POLICY
-    + _identifier_rule()
-    + "\n\nJudge six things independently.\n"
+    "Where the ORIGINAL is headed TRANSCRIPT, it is the whole recording as the speech recognisers heard it: "
+    "every consensus word in order, written as plain words with annotations attached. The heading names "
+    "each recogniser by a letter; C is the consensus itself. Words inside <task>...</task> are the task's "
+    "own content (its stimulus, target words or syllables) and words inside <nonlex>...</nonlex> are "
+    "non-lexical (fillers, sounds, bracketed markers); the automatic detectors did not read either, the "
+    "redaction never removes them, and they are there so you read every word in its place. A word with "
+    "something to say about it carries it in braces right after it, parts separated by ' | ':\n"
+    "  pii CATEGORY by DETECTOR@READING, ... -- an automatic detector found that category on this word, "
+    "reading the transcript the letter names (several categories are separated by ' ; ');\n"
+    "  variant A=word B=word -- the recognisers read different words here;\n"
+    "  insertion A=word B=- -- only some recognisers heard a word here ('-' is none);\n"
+    "  agreement A=word B=word -- they agree on the word but spell it differently.\n"
+    'For example, "my sister Maria{pii PERSON by gliner@C, presidio@A | variant A=Maria B=Mario} lives '
+    'in <task>the cookie jar</task> <nonlex>um</nonlex> Ohio{pii LOCATION by presidio@C}" has a name two '
+    "detectors found and the recognisers read differently, a place one detector found, three task words and "
+    "a filler. A word without braces is one every recogniser read the same way and no detector marked. Use "
+    "the readings to judge whether a word was said at all and what it was: a name only one recogniser read, "
+    "where another read an ordinary word, may be a misreading. Quote words as the ORIGINAL writes them, "
+    "without the braces, their contents or the tags.\n\n"
+    + redaction_policy_text()
+    + "\n\nJudge nine things independently.\n"
     "1. Whether the redaction, where one was applied, actually removed everything the policy removes.\n"
     "2. Whether the ORIGINAL words carry anything the policy removes at all, which is a separate "
     "question and the one no automatic detector here has asked.\n"
@@ -271,8 +436,21 @@ _PROMPT = (
     'familiarize yourself with it. You have up to 5 minutes to read it as many times as you want". '
     'Words that only mention the task ("is that enough?", "I\'ll describe the picture", "five '
     "minutes\" in passing) do not. The task's stimulus -- what the participant was asked to say or "
-    "recall -- is never instructions. Judge this apart from point 4.\n\n"
-    "Answer in exactly eight parts, each on its own line or block, in this order.\n"
+    "recall -- is never instructions. Judge this apart from point 4.\n"
+    "7. For every word an automatic detector marked (each word carrying a pii annotation), whether it is "
+    "task content or a personal disclosure. Task content is what the INSTRUCTIONS ask the participant to "
+    "say, or part of the STIMULUS, or an item the task asks for; a personal disclosure is the participant "
+    "telling something about their own life. Weigh the NATURE OF THIS TASK: an open response invites "
+    "personal content, so a name or a place said there is a real candidate for removal; in item "
+    "generation or fluency the task asks for names, places and numbers, so an item said as part of the "
+    "list usually is not; in reading or recall the given text's words are task content; in a non-lexical "
+    "task no word is task content.\n"
+    + _POINT_8_OFF_TASK
+    + "9. Whether anyone besides the participant speaks, and who: an assistant, examiner or clinician "
+    "(reading the instructions aloud, prompting, encouraging, counting, asking the participant to start "
+    "or stop), or someone in the background (a conversation, a television, another person in the room "
+    "not addressing the participant). Judge it from the words, as under point 4.\n\n"
+    "Answer in exactly thirteen parts, each on its own line or block, in this order.\n"
     "REASONING: your full reasoning, in prose, including what you considered and rejected.\n"
     "REDACTION: one of complete, incomplete, not_applicable (use not_applicable when no "
     "redaction was applied).\n"
@@ -283,6 +461,14 @@ _PROMPT = (
     'task\'s instructions expect that voice, false where they do not) and "why" (one sentence). Return [] '
     "when SPEAKERS is one; when it is more_than_one the array must quote at least one person, and when it is "
     "unclear it quotes the words you could not attribute to the participant.\n"
+    "OTHER_SPEAKER_ROLE: one of none, assistant, background, unclear (point 9: none when only the "
+    "participant speaks; assistant for an examiner, clinician or anyone addressing the participant about the "
+    "task; background for anyone else).\n"
+    "OTHER_SPEAKER_QUOTES: a JSON array of strings, each the exact words another person said, quoted from the "
+    "ORIGINAL. Return [] when OTHER_SPEAKER_ROLE is none; otherwise quote at least one passage.\n"
+    + _OFF_TASK_PARTS
+    + "TASK_CONTENT_QUOTES: a JSON array of strings, each a word or phrase carrying a pii annotation that you "
+    "judge under point 7 to be task content, quoted exactly from the ORIGINAL. Return [] when there is none.\n"
     "CONDITIONS: a JSON array of every diagnosis under point 5. Each element is an object with "
     'keys "text" (the exact words, quoted from the ORIGINAL) and "why" (one sentence: which diagnosis it is). '
     "Return [] when the speaker mentions none; the part is required either way.\n"
@@ -315,6 +501,171 @@ _PROMPT = (
 )
 
 
+_ITEM_SET_PROMPT = _PROMPT.replace(_POINT_8_OFF_TASK, _POINT_8_PHRASES).replace(_OFF_TASK_PARTS, _PHRASE_PARTS)
+
+
+def review_prompt(item_set: bool) -> str:
+    """The reviewer's instructions.
+
+    Args:
+        item_set: Whether the declared task is an item-set task (the context's :data:`ITEM_SET`).
+
+    Returns:
+        The prompt; for an item-set task point 8 and its parts ask for every phrase the participant says, quoted,
+        and whether they utter phrases instead of items (:data:`PHRASE_STATES`), in place of off-task speech.
+    """
+    return _ITEM_SET_PROMPT if item_set else _PROMPT
+
+
+_BARE_READING = re.compile(r"[^\s{}|=<>;,]+")
+
+
+def _reading(text: str | None) -> str:
+    """One recogniser's word as an annotation writes it: bare, ``-`` where it read none, else JSON-quoted."""
+    if text is None or text == "":
+        return "-"
+    return text if _BARE_READING.fullmatch(text) else json.dumps(text, ensure_ascii=False)
+
+
+def _letters(count: int) -> list[str]:
+    """The letters naming ``count`` recognisers: ``A``, ``B`` ... skipping ``C``, which names the consensus."""
+    letters = [chr(code) for code in range(ord("A"), ord("Z") + 1) if chr(code) != "C"]
+    return [letters[i] if i < len(letters) else f"R{i + 1}" for i in range(count)]
+
+
+def transcript_block(transcript: Mapping[str, Any] | None) -> str:
+    """The whole consensus transcript, as the reviewer reads it.
+
+    Args:
+        transcript: The context's :data:`CONSENSUS_TRANSCRIPT` mapping: ``recognisers``, the recogniser
+            names, and ``words``, one ``[index, word, outcome, [each recogniser's word or None], kind,
+            [[category, detector, reading], ...]]`` per consensus word in stream order, where ``kind`` is
+            one of :data:`WORD_KINDS` and ``reading`` is a recogniser name or :data:`CONSENSUS_HAYSTACK`.
+
+    Returns:
+        A heading naming each recogniser's letter, then the words on one line: each word followed by its
+        annotations in braces, and each run of task or non-lexical words inside a ``<task>`` or ``<nonlex>``
+        tag. An agreement whose readings differ from the word only in case and punctuation carries no
+        variation. Empty where there are no words.
+    """
+    if not transcript or not transcript.get("words"):
+        return ""
+    names = [str(name) for name in transcript.get("recognisers") or ()]
+    letters = _letters(len(names))
+    letter_of = {name: letter for name, letter in zip(names, letters)}
+    letter_of[CONSENSUS_HAYSTACK] = "C"
+    legend = ", ".join(f"{letter} = {name}" for letter, name in zip(letters, names))
+    heading = f"TRANSCRIPT (recognisers: {legend}; C = the consensus):"
+    tags = {WORD_TASK: "task", WORD_NON_LEXICAL: "nonlex"}
+    pieces: list[str] = []
+    open_kind = WORD_SCANNED
+    for _index, text, outcome, readings, kind, findings in transcript["words"]:
+        if kind != open_kind:
+            if open_kind in tags:
+                pieces[-1] += f"</{tags[open_kind]}>"
+            open_kind = kind if kind in tags else WORD_SCANNED
+            opening = f"<{tags[open_kind]}>" if open_kind in tags else ""
+        else:
+            opening = ""
+        parts: list[str] = []
+        by_category: dict[str, list[str]] = {}
+        for category, detector, haystack in findings or ():
+            source = f"{detector}@{letter_of.get(str(haystack), str(haystack))}"
+            listed = by_category.setdefault(str(category), [])
+            if source not in listed:
+                listed.append(source)
+        if by_category:
+            parts.append("pii " + " ; ".join(f"{cat} by {', '.join(src)}" for cat, src in by_category.items()))
+        heard = [None if reading is None else str(reading) for reading in readings]
+        same = outcome == "agreement" and all(
+            reading is not None and _quote_tokens(reading) == _quote_tokens(str(text)) for reading in heard
+        )
+        if heard and not same:
+            each = " ".join(f"{letters[i]}={_reading(reading)}" for i, reading in enumerate(heard))
+            parts.append(f"{outcome or 'unaligned'} {each}")
+        note = "{" + " | ".join(parts) + "}" if parts else ""
+        pieces.append(f"{opening}{text}{note}")
+    if open_kind in tags and pieces:
+        pieces[-1] += f"</{tags[open_kind]}>"
+    return heading + "\n" + " ".join(pieces)
+
+
+def transcript_text(transcript: Mapping[str, Any] | None) -> str:
+    """The whole consensus transcript as plain words, the text a reviewer quote is checked against.
+
+    Args:
+        transcript: The context's :data:`CONSENSUS_TRANSCRIPT` mapping.
+
+    Returns:
+        Every word's consensus text, space-joined; empty where there are no words.
+    """
+    if not transcript:
+        return ""
+    return " ".join(str(word[1]) for word in transcript.get("words") or () if str(word[1]))
+
+
+def quotable_texts(original: str, context: Mapping[str, Any] | None) -> tuple[str, ...]:
+    """The texts a reviewer quote may come from: the whole transcript where one was given, and the residue.
+
+    Args:
+        original: The lexical residue the PII scan read.
+        context: The context the reading was composed from.
+
+    Returns:
+        The non-empty texts.
+    """
+    whole = transcript_text((context or {}).get(CONSENSUS_TRANSCRIPT))
+    return tuple(text for text in (whole, original) if text)
+
+
+def review_inputs(context: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Which of the inputs the fold weighs a reviewer release by a reading was given.
+
+    Args:
+        context: The context the reading was composed from (:func:`_compose`).
+
+    Returns:
+        ``version`` (:data:`REVIEW_INPUTS_VERSION`), ``prompt_version``, ``task`` (the declared task and
+        its instructions or stimulus), ``instructions`` (the task's instructions), ``full_transcript``
+        (every consensus word, task and non-lexical words included), ``pii_annotations`` (each word's
+        detector findings with the reading they were found on), ``asr_readings`` (each of two or more
+        recognisers' word wherever they differ, with the outcome), and ``recognisers``, ``words_n``,
+        ``pii_words_n`` and ``variation_words_n``.
+    """
+    facts = dict(context or {})
+    transcript = facts.get(CONSENSUS_TRANSCRIPT) or {}
+    words = list(transcript.get("words") or ())
+    recognisers = [str(name) for name in transcript.get("recognisers") or ()]
+    return {
+        "version": REVIEW_INPUTS_VERSION,
+        "prompt_version": PROMPT_VERSION,
+        "task": bool(facts.get("task")) and bool(facts.get("instructions") or facts.get("asked_to_say")),
+        "instructions": bool(str(facts.get("instructions") or "").strip()),
+        "full_transcript": bool(words) and all(len(word) == 6 and word[4] in WORD_KINDS for word in words),
+        "pii_annotations": bool(words) and "findings_n" in transcript,
+        "asr_readings": bool(words) and len(recognisers) >= 2,
+        "recognisers": recognisers,
+        "words_n": len(words),
+        "pii_words_n": sum(1 for word in words if len(word) == 6 and word[5]),
+        "variation_words_n": sum(1 for word in words if word[2] != "agreement"),
+    }
+
+
+def review_inputs_complete(inputs: Mapping[str, Any] | None) -> bool:
+    """Whether a reading recorded the task, its instructions, and the whole transcript with its PII and readings.
+
+    Args:
+        inputs: The reading's ``review_inputs`` record, or None where it recorded none.
+
+    Returns:
+        True only for a record of :data:`REVIEW_INPUTS_VERSION` or later with every one of
+        :data:`REQUIRED_REVIEW_INPUTS` set.
+    """
+    if not isinstance(inputs, Mapping) or int(inputs.get("version") or 0) < REVIEW_INPUTS_VERSION:
+        return False
+    return all(bool(inputs.get(key)) for key in REQUIRED_REVIEW_INPUTS)
+
+
 def _compose(
     original: str, redacted: str | None, context: Mapping[str, Any] | None = None, feedback: str | None = None
 ) -> str:
@@ -323,9 +674,12 @@ def _compose(
     Args:
         original: The transcript as the recording's words were read.
         redacted: The text an applied redaction produced, or None where none was applied.
-        context: What the recording declares about itself -- ``task``, ``speech_type``, ``language``,
-            ``instructions``, ``asked_to_say``, ``declared_names`` and ``task_words``. Any key absent or empty is
-            omitted rather than sent empty.
+        context: What the recording declares about itself -- ``task`` (the family, whose nature
+            :func:`task_nature_description` sends), ``task_name``, ``speech_type``, ``language``,
+            ``instructions``, ``asked_to_say``, ``declared_names``, ``task_words`` and
+            :data:`CONSENSUS_TRANSCRIPT`. Any key absent or empty is omitted rather than sent empty. Where
+            the transcript is given it is the ORIGINAL (:func:`transcript_block`) and ``original`` is not
+            sent.
         feedback: What was wrong with the previous round's answer, which this round must correct; None
             on a first round.
 
@@ -336,6 +690,11 @@ def _compose(
     facts = dict(context or {})
     if facts.get("task"):
         lines.append(f"TASK: {facts['task']}")
+    if facts.get("task_name") and facts.get("task_name") != facts.get("task"):
+        lines.append(f"TASK NAME THE RECORDING DECLARES: {facts['task_name']}")
+    nature = task_nature_description(facts.get("task"))
+    if nature:
+        lines.append(f"NATURE OF THIS TASK: {nature}")
     if facts.get("speech_type"):
         lines.append(f"SPEECH TYPE: {facts['speech_type']}")
     if facts.get("language"):
@@ -362,8 +721,9 @@ def _compose(
             "and instructions read aloud by someone else are a sign of more than one speaker."
         )
         lines.append("")
+    block = transcript_block(facts.get(CONSENSUS_TRANSCRIPT)) or original
     released = redacted if redacted is not None else "(no redaction was applied to this recording)"
-    body = "\n".join(lines) + f"ORIGINAL:\n{original}\n\nRELEASED:\n{released}\n"
+    body = "\n".join(lines) + f"ORIGINAL:\n{block}\n\nRELEASED:\n{released}\n"
     if feedback:
         body += f"\nYOUR PREVIOUS ANSWER HAD A PROBLEM TO CORRECT: {feedback}\n"
     return body
@@ -447,6 +807,13 @@ class ReviewResult:
             instructions are spoken in the recording.
         instructions_answered: Whether the answer carried its INSTRUCTIONS_SPOKEN part, an empty list
             included.
+        off_task_speech: One of :data:`OFF_TASK_STATES`, or None where the answer gave none of them.
+        off_task_quotes: The passages the OFF_TASK_QUOTES part quotes.
+        phrases_instead_of_items: One of :data:`PHRASE_STATES`, or None where the answer gave none of them.
+        phrase_quotes: The phrases the PHRASE_QUOTES part quotes.
+        other_speaker: One of :data:`OTHER_SPEAKER_ROLES`, or None where the answer gave none of them.
+        other_speaker_quotes: The passages the OTHER_SPEAKER_QUOTES part quotes.
+        task_content_quotes: The PII-annotated words the TASK_CONTENT_QUOTES part judges task content.
         conditions_answered: Whether the answer carried its CONDITIONS part, an empty list included.
             :func:`parse_completion` decides it for every answer the model gave; a result built any
             other way is taken as answered, and a failure is never read for it.
@@ -465,6 +832,9 @@ class ReviewResult:
             before it was emptied. ``0`` on a CPU worker and on a call that did not answer.
         resident_mib: Device memory it holds between reviews — the weights and nothing else, which
             is what a second process on the same card has to live beside.
+        engine: The engine that answered, as the worker reported it
+            (:func:`~senselab.text.tasks.pii_detection.redaction_review_vllm.engine_identity`); empty where none
+            answered.
     """
 
     available: bool
@@ -478,6 +848,13 @@ class ReviewResult:
     conditions_answered: bool = True
     instructions_spoken: list[str] = field(default_factory=list)
     instructions_answered: bool = True
+    off_task_speech: Optional[str] = None
+    off_task_quotes: list[str] = field(default_factory=list)
+    phrases_instead_of_items: Optional[str] = None
+    phrase_quotes: list[str] = field(default_factory=list)
+    other_speaker: Optional[str] = None
+    other_speaker_quotes: list[str] = field(default_factory=list)
+    task_content_quotes: list[str] = field(default_factory=list)
     failure: Optional[str] = None
     model_id: str = ""
     revision: Optional[str] = None
@@ -488,6 +865,7 @@ class ReviewResult:
     output_tokens: Optional[int] = None
     peak_reserved_mib: int = 0
     resident_mib: int = 0
+    engine: dict[str, Any] = field(default_factory=dict)
 
 
 # A line protocol over the worker's stdin/stdout, one JSON object per line.
@@ -646,6 +1024,13 @@ class ParsedCompletion:
         other_speakers: The OTHER_SPEAKERS part's entries that quote words.
         instructions_spoken: The INSTRUCTIONS_SPOKEN part's quoted passages.
         instructions_answered: Whether the answer carried an INSTRUCTIONS_SPOKEN part whose array parsed.
+        off_task_speech: One of :data:`OFF_TASK_STATES`, or None.
+        off_task_quotes: The OFF_TASK_QUOTES part's quoted passages.
+        phrases_instead_of_items: One of :data:`PHRASE_STATES`, or None.
+        phrase_quotes: The PHRASE_QUOTES part's quoted phrases.
+        other_speaker: One of :data:`OTHER_SPEAKER_ROLES`, or None.
+        other_speaker_quotes: The OTHER_SPEAKER_QUOTES part's quoted passages.
+        task_content_quotes: The TASK_CONTENT_QUOTES part's quoted words.
     """
 
     reasoning: str
@@ -658,6 +1043,13 @@ class ParsedCompletion:
     other_speakers: list[OtherSpeaker] = field(default_factory=list)
     instructions_spoken: list[str] = field(default_factory=list)
     instructions_answered: bool = False
+    off_task_speech: Optional[str] = None
+    off_task_quotes: list[str] = field(default_factory=list)
+    phrases_instead_of_items: Optional[str] = None
+    phrase_quotes: list[str] = field(default_factory=list)
+    other_speaker: Optional[str] = None
+    other_speaker_quotes: list[str] = field(default_factory=list)
+    task_content_quotes: list[str] = field(default_factory=list)
 
 
 CONDITION = "CONDITION"
@@ -707,13 +1099,53 @@ def _array(segment: str) -> list[Any] | None:
     return parsed if isinstance(parsed, list) else None
 
 
-def parse_completion(completion: str) -> ParsedCompletion:
-    """Split the model's answer into its reasoning, its judgments, its conditions and its proposal.
+def _heading_at(completion: str, heading: str) -> int:
+    """The position of a heading's last occurrence that is not the tail of a longer heading, or -1."""
+    marker = -1
+    for found in re.finditer(re.escape(heading), completion):
+        before = completion[found.start() - 1] if found.start() else ""
+        if not before or (not before.isalnum() and before != "_"):
+            marker = found.start()
+    return marker
 
-    The two arrays are looked for after the last ``PROPOSAL:`` and ``CONDITIONS:`` headings, each up to
-    the other heading where that one follows it, rather than at the first ``[`` in the completion,
-    because the reasoning routinely quotes the transcript's own ``[CATEGORY]`` placeholders. The
-    reasoning ends at the first judgment heading, so a one-word answer never reads as prose.
+
+def _quotes(parsed: list[Any] | None) -> list[str]:
+    """The non-empty strings of a parsed array, an element's ``text`` read where it is an object."""
+    quotes: list[str] = []
+    for item in parsed or ():
+        text = item.get("text") if isinstance(item, dict) else item
+        if isinstance(text, str) and text.strip():
+            quotes.append(text)
+    return quotes
+
+
+_ARRAY_HEADINGS = (
+    _PROPOSAL_HEADING,
+    _CONDITIONS_HEADING,
+    _OTHER_SPEAKERS_HEADING,
+    _INSTRUCTIONS_SPOKEN_HEADING,
+    _OTHER_SPEAKER_QUOTES_HEADING,
+    _OFF_TASK_QUOTES_HEADING,
+    _PHRASE_QUOTES_HEADING,
+    _TASK_CONTENT_QUOTES_HEADING,
+)
+_LABEL_HEADINGS = (
+    _REDACTION_HEADING,
+    _ORIGINAL_HEADING,
+    _SPEAKERS_HEADING,
+    _OTHER_SPEAKER_ROLE_HEADING,
+    _OFF_TASK_SPEECH_HEADING,
+    _PHRASES_HEADING,
+)
+
+
+def parse_completion(completion: str) -> ParsedCompletion:
+    """Split the model's answer into its reasoning, its judgments, its quotes and its proposal.
+
+    Each array is looked for after the last occurrence of its heading, up to the next heading of any
+    part, rather than at the first ``[`` in the completion, because the reasoning routinely quotes the
+    transcript's own ``[CATEGORY]`` placeholders. The reasoning ends at the first judgment heading, so
+    a one-word answer never reads as prose.
 
     Args:
         completion: The model's raw text.
@@ -723,51 +1155,37 @@ def parse_completion(completion: str) -> ParsedCompletion:
         because the reasoning is what the step exists to capture. A malformed array yields no entries
         rather than raising -- a caller reads ``available`` to tell that from a reviewer that read the
         text and would change nothing, and ``conditions_answered`` to tell a missing CONDITIONS part
-        from one that listed none.
+        from one that listed none. A one-word part outside its allowed words reads as the empty string
+        for ``redaction``, ``original`` and ``speakers``, and as None for ``off_task_speech``,
+        ``phrases_instead_of_items`` and ``other_speaker``.
     """
-    proposal_at = completion.rfind(_PROPOSAL_HEADING)
-    conditions_at = completion.rfind(_CONDITIONS_HEADING)
-    others_at = completion.rfind(_OTHER_SPEAKERS_HEADING)
-    spoken_at = completion.rfind(_INSTRUCTIONS_SPOKEN_HEADING)
+    at = {heading: _heading_at(completion, heading) for heading in _ARRAY_HEADINGS + _LABEL_HEADINGS}
+    found = sorted(position for position in at.values() if position != -1)
 
-    def segment(at: int, heading: str, *others: int) -> str:
-        end = min((other for other in others if other > at), default=len(completion))
-        return completion[at + len(heading) : end]
+    def segment(heading: str) -> str:
+        start = at[heading]
+        end = min((position for position in found if position > start), default=len(completion))
+        return completion[start + len(heading) : end]
 
+    def parsed(heading: str) -> list[Any] | None:
+        return _array(segment(heading)) if at[heading] != -1 else None
+
+    proposal_at = at[_PROPOSAL_HEADING]
     if proposal_at != -1:
-        proposal_text = segment(proposal_at, _PROPOSAL_HEADING, conditions_at, others_at, spoken_at)
+        proposal_text = segment(_PROPOSAL_HEADING)
         head = completion[:proposal_at]
     else:
         start = completion.find("[")
-        cut = min((at for at in (conditions_at, others_at, spoken_at) if at != -1), default=-1)
+        cut = min(
+            (at[heading] for heading in _ARRAY_HEADINGS if heading != _PROPOSAL_HEADING and at[heading] != -1),
+            default=-1,
+        )
         proposal_text = completion if cut == -1 else completion[:cut]
         head = completion if start == -1 else completion[:start]
-    conditions_parsed = (
-        _array(segment(conditions_at, _CONDITIONS_HEADING, proposal_at, others_at, spoken_at))
-        if conditions_at != -1
-        else None
-    )
-    others_parsed = (
-        _array(segment(others_at, _OTHER_SPEAKERS_HEADING, proposal_at, conditions_at, spoken_at))
-        if others_at != -1
-        else None
-    )
-    spoken_parsed = (
-        _array(segment(spoken_at, _INSTRUCTIONS_SPOKEN_HEADING, proposal_at, conditions_at, others_at))
-        if spoken_at != -1
-        else None
-    )
-    cuts = [
-        head.find(heading)
-        for heading in (
-            _REDACTION_HEADING,
-            _ORIGINAL_HEADING,
-            _SPEAKERS_HEADING,
-            _OTHER_SPEAKERS_HEADING,
-            _CONDITIONS_HEADING,
-            _INSTRUCTIONS_SPOKEN_HEADING,
-        )
-    ]
+    conditions_parsed = parsed(_CONDITIONS_HEADING)
+    others_parsed = parsed(_OTHER_SPEAKERS_HEADING)
+    spoken_parsed = parsed(_INSTRUCTIONS_SPOKEN_HEADING)
+    cuts = [head.find(heading) for heading in _LABEL_HEADINGS + _ARRAY_HEADINGS]
     first = min((cut for cut in cuts if cut != -1), default=-1)
     reasoning = (head if first == -1 else head[:first]).replace(_REASONING_HEADING, " ")
 
@@ -803,12 +1221,6 @@ def parse_completion(completion: str) -> ParsedCompletion:
         for item in others_parsed or ()
         if isinstance(item, dict) and isinstance(item.get("text"), str) and str(item["text"]).strip()
     ]
-    spoken = [
-        str(item.get("text") if isinstance(item, dict) else item)
-        for item in spoken_parsed or ()
-        if isinstance(item.get("text") if isinstance(item, dict) else item, str)
-        and str(item.get("text") if isinstance(item, dict) else item).strip()
-    ]
     return ParsedCompletion(
         reasoning=reasoning.strip(),
         redaction=_labelled(completion, _REDACTION_HEADING, REDACTION_STATES),
@@ -818,8 +1230,15 @@ def parse_completion(completion: str) -> ParsedCompletion:
         conditions=conditions,
         conditions_answered=conditions_parsed is not None,
         other_speakers=other_speakers,
-        instructions_spoken=spoken,
+        instructions_spoken=_quotes(spoken_parsed),
         instructions_answered=spoken_parsed is not None,
+        off_task_speech=_labelled(completion, _OFF_TASK_SPEECH_HEADING, OFF_TASK_STATES) or None,
+        off_task_quotes=_quotes(parsed(_OFF_TASK_QUOTES_HEADING)),
+        phrases_instead_of_items=_labelled(completion, _PHRASES_HEADING, PHRASE_STATES) or None,
+        phrase_quotes=_quotes(parsed(_PHRASE_QUOTES_HEADING)),
+        other_speaker=_labelled(completion, _OTHER_SPEAKER_ROLE_HEADING, OTHER_SPEAKER_ROLES) or None,
+        other_speaker_quotes=_quotes(parsed(_OTHER_SPEAKER_QUOTES_HEADING)),
+        task_content_quotes=_quotes(parsed(_TASK_CONTENT_QUOTES_HEADING)),
     )
 
 
@@ -848,27 +1267,97 @@ def _token_close(a: str, b: str) -> bool:
     return difflib.SequenceMatcher(None, a, b).ratio() >= 0.8
 
 
-def quote_occurs(quote: str, original: str) -> bool:
+def quote_occurs(quote: str, original: str | Sequence[str]) -> bool:
     """Whether a quote occurs in the ORIGINAL, allowing case, punctuation, apostrophe, hyphen and spacing.
 
     A word of five letters or more may also differ by a transcription spelling (similarity 0.8).
 
     Args:
         quote: The quoted words.
-        original: The ORIGINAL text.
+        original: The ORIGINAL text, or several texts any one of which may hold the quote
+            (:func:`quotable_texts`).
 
     Returns:
-        True where the quote's words occur, in order and contiguously, in the ORIGINAL's words.
+        True where the quote's words occur, in order and contiguously, in one text's words.
     """
     wanted = _quote_tokens(quote)
     if not wanted:
         return True
-    words = _quote_tokens(original)
     span = len(wanted)
-    return any(
-        all(_token_close(word, want) for word, want in zip(words[start : start + span], wanted))
-        for start in range(len(words) - span + 1)
+    for text in (original,) if isinstance(original, str) else original:
+        words = _quote_tokens(text)
+        if any(
+            all(_token_close(word, want) for word, want in zip(words[start : start + span], wanted))
+            for start in range(len(words) - span + 1)
+        ):
+            return True
+    return False
+
+
+QUOTE_EDGE = "\"'`.,;:!?()[]{}<>-\u2018\u2019\u201c\u201d\u2026"
+"""Stripped from a token's two ends before a quote is placed on transcript words."""
+
+
+def match_token(text: str) -> str:
+    """One token as a reviewer quote and a transcript word are compared when a quote is placed.
+
+    Args:
+        text: A word's surface, or one whitespace-separated piece of a quote.
+
+    Returns:
+        The token lower-cased, curly apostrophes made straight, and punctuation stripped from both
+        ends. Empty where nothing but punctuation was there.
+    """
+    return text.replace("\u2019", "'").strip(QUOTE_EDGE).lower()
+
+
+def placement_tokens(quote: str) -> list[str]:
+    """A quote's tokens as they are placed on transcript words (:func:`match_token`), empty ones dropped.
+
+    Args:
+        quote: The reviewer's quote.
+
+    Returns:
+        The tokens, in order.
+    """
+    return [token for token in (match_token(piece) for piece in quote.split()) if token]
+
+
+def quote_places(quote: str, tokens: Sequence[str]) -> bool:
+    """Whether a quote places on the transcript as a whole-token run, verbatim.
+
+    Args:
+        quote: The reviewer's quote.
+        tokens: The placeable words' tokens (:func:`match_token`), in stream order.
+
+    Returns:
+        True where the quote's tokens occur contiguously in ``tokens``; False for a quote with no token.
+    """
+    wanted = placement_tokens(quote)
+    width = len(wanted)
+    return bool(width) and any(
+        list(tokens[start : start + width]) == wanted for start in range(len(tokens) - width + 1)
     )
+
+
+def unplaced_phrase_quotes(result: "ReviewResult", tokens: Sequence[str]) -> list[str]:
+    """The round's ``PHRASE_QUOTES`` entries that place on no run of the transcript's words.
+
+    Args:
+        result: One round's result.
+        tokens: The placeable words' tokens, in stream order.
+
+    Returns:
+        The unplaced quotes, in the order quoted.
+    """
+    return [quote for quote in result.phrase_quotes if not quote_places(quote, tokens)]
+
+
+PHRASE_QUOTES_UNPLACED_FEEDBACK = (
+    "some PHRASE_QUOTES entries do not occur verbatim in the transcript's words; quote each phrase exactly, word "
+    "for word as the ORIGINAL writes it, or drop it"
+)
+"""The correction sent where a phrase quote places on no run of the transcript's words."""
 
 
 _IDENTIFIER_CUE = re.compile(
@@ -879,7 +1368,7 @@ _IDENTIFIER_CUE = re.compile(
 _QUOTED = re.compile(r"[\"\u201c]([^\"\u201d]{2,60})[\"\u201d]")
 
 
-def _named_unproposed(reasoning: str, proposal: Sequence[ReviewProposal], original: str) -> list[str]:
+def _named_unproposed(reasoning: str, proposal: Sequence[ReviewProposal], original: str | Sequence[str]) -> list[str]:
     """Quoted names the reasoning calls a venue, employer, school or street with no PROPOSAL entry quoting them."""
     proposed = [_quote_tokens(entry.text) for entry in proposal]
     missing: list[str] = []
@@ -903,13 +1392,20 @@ def _named_unproposed(reasoning: str, proposal: Sequence[ReviewProposal], origin
     return missing
 
 
-def answer_problem(result: "ReviewResult", original: str, redacted: str | None) -> str | None:
+def answer_problem(
+    result: "ReviewResult",
+    original: str | Sequence[str],
+    redacted: str | None,
+    placeable: Sequence[str] | None = None,
+) -> str | None:
     """What makes an answer unusable under the prompt's own rule, as feedback for another round.
 
     Args:
         result: One round's result.
-        original: The ORIGINAL the round read.
+        original: The ORIGINAL the round read, or the texts its quotes may come from (:func:`quotable_texts`).
         redacted: The RELEASED text it read, or None where no redaction was applied.
+        placeable: The tokens of the transcript words a quote can be placed on, in stream order; where given, a
+            phrase quote that places on no run of them (:func:`unplaced_phrase_quotes`) is a problem.
 
     Returns:
         None where the answer is usable. Otherwise one sentence naming the problem: a judgment that
@@ -918,7 +1414,9 @@ def answer_problem(result: "ReviewResult", original: str, redacted: str | None) 
         proposal, a release of something the policy always removes (:func:`dated`, :func:`stated`), a
         relabel or place reason outside the allowed values, a place released without a place reason, a
         name or a place released without a reason, proposal quotes that do not occur in the ORIGINAL, or
-        an answer without its CONDITIONS or INSTRUCTIONS_SPOKEN part.
+        an answer without its CONDITIONS or INSTRUCTIONS_SPOKEN part, an off-task or other-speaker
+        judgment that quotes nothing, or a phrase quote that places on no run of the transcript's words
+        (:data:`PHRASE_QUOTES_UNPLACED_FEEDBACK`, which repeats no quoted text).
     """
     if not result.available:
         return None
@@ -933,6 +1431,21 @@ def answer_problem(result: "ReviewResult", original: str, redacted: str | None) 
             "your answer had no INSTRUCTIONS_SPOKEN part; add it as a JSON array quoting, exactly from the "
             "ORIGINAL, every passage where the task's instructions are spoken, verbatim or paraphrased, by "
             "anyone, or [] when there is none"
+        )
+    if result.off_task_speech in ("some", "extensive") and not result.off_task_quotes:
+        return (
+            f"you judged OFF_TASK_SPEECH {result.off_task_speech} but OFF_TASK_QUOTES quoted nothing; quote each "
+            "off-task passage exactly from the ORIGINAL"
+        )
+    if result.phrases_instead_of_items in (PHRASES_OCCASIONAL, PHRASES_PREDOMINANT) and not result.phrase_quotes:
+        return (
+            f"you judged PHRASES_INSTEAD_OF_ITEMS {result.phrases_instead_of_items} but PHRASE_QUOTES quoted "
+            "nothing; quote each phrase exactly from the ORIGINAL"
+        )
+    if result.other_speaker in ("assistant", "background") and not result.other_speaker_quotes:
+        return (
+            f"you judged OTHER_SPEAKER_ROLE {result.other_speaker} but OTHER_SPEAKER_QUOTES quoted nothing; quote "
+            "what the other person said exactly from the ORIGINAL"
         )
     if result.speakers == "more_than_one" and not result.other_speakers:
         return (
@@ -1007,11 +1520,17 @@ def answer_problem(result: "ReviewResult", original: str, redacted: str | None) 
         [entry.text for entry in result.proposal]
         + [entry.text for entry in result.other_speakers]
         + list(result.instructions_spoken)
+        + list(result.off_task_quotes)
+        + list(result.phrase_quotes)
+        + list(result.other_speaker_quotes)
+        + list(result.task_content_quotes)
     )
     missing = [text for text in quotes if not quote_occurs(text, original)]
     if missing:
         quoted = ", ".join(json.dumps(text) for text in missing)
         return f"these quotes do not occur in the ORIGINAL: {quoted}; quote the exact words from the ORIGINAL"
+    if placeable is not None and unplaced_phrase_quotes(result, placeable):
+        return PHRASE_QUOTES_UNPLACED_FEEDBACK
     unproposed = _named_unproposed(result.reasoning, result.proposal, original)
     if unproposed:
         quoted = ", ".join(json.dumps(text) for text in unproposed)
@@ -1090,18 +1609,25 @@ class _ReviewWorker:
         model_id: The repo whose weights it holds.
         revision: The 40-hex commit those weights are, as the worker read it back.
         load_s: How long starting it and loading the weights took.
+        engine: The engine's identity: as expected before :meth:`start`, as the worker reported it after.
+        engine_details: Everything the worker reported about its engine.
     """
 
-    def __init__(self, model_id: str, revision: str) -> None:
+    def __init__(self, model_id: str, revision: str, engine: Mapping[str, Any] | None = None) -> None:
         """Record what the worker will be asked to load. Starting it is :meth:`start`.
 
         Args:
             model_id: The HuggingFace repo.
             revision: The resolved 40-hex commit.
+            engine: The expected engine identity; the transformers engine where None.
         """
+        from senselab.text.tasks.pii_detection.redaction_review_vllm import ENGINE_TRANSFORMERS, engine_identity
+
         self.model_id = model_id
         self.revision: Optional[str] = revision
         self.load_s = 0.0
+        self.engine: dict[str, Any] = dict(engine or engine_identity(ENGINE_TRANSFORMERS))
+        self.engine_details: dict[str, Any] = dict(self.engine)
         self._process: Optional[subprocess.Popen[str]] = None
         self._replies: queue.Queue[dict[str, Any]] = queue.Queue()
         self._noise: deque[str] = deque(maxlen=40)
@@ -1115,6 +1641,11 @@ class _ReviewWorker:
         Raises:
             ReviewWorkerError: If the worker died, raised, or did not report ready in time.
         """
+        from senselab.text.tasks.pii_detection.redaction_review_vllm import ENGINE_VLLM, start_vllm_worker
+
+        if self.engine.get("name") == ENGINE_VLLM:
+            start_vllm_worker(self, timeout_s)
+            return
         venv_dir = ensure_venv(REVIEW_VENV, REVIEW_REQUIREMENTS, python_version=REVIEW_PYTHON)
         model_path = _staged_snapshot(self.model_id, str(self.revision))
         env = hf_subprocess_env(self.model_id, str(self.revision), base_env=_clean_subprocess_env())
@@ -1140,11 +1671,12 @@ class _ReviewWorker:
         """Whether the worker process is still running and still holding its weights."""
         return self._process is not None and self._process.poll() is None
 
-    def review(self, text: str, max_new_tokens: int, timeout_s: int) -> dict[str, Any]:
+    def review(self, text: str, prompt: str, max_new_tokens: int, timeout_s: int) -> dict[str, Any]:
         """Ask the loaded model for one review.
 
         Args:
             text: The redacted transcript.
+            prompt: The instructions (:func:`review_prompt`).
             max_new_tokens: Generation ceiling.
             timeout_s: Wall-clock ceiling on this generation alone.
 
@@ -1154,7 +1686,7 @@ class _ReviewWorker:
         Raises:
             ReviewWorkerError: If the worker died, raised, or did not answer in time.
         """
-        self._send({"text": text, "prompt": _PROMPT, "max_new_tokens": int(max_new_tokens)})
+        self._send({"text": text, "prompt": prompt, "max_new_tokens": int(max_new_tokens)})
         return self._await(timeout_s)
 
     def close(self) -> None:
@@ -1202,7 +1734,8 @@ class _ReviewWorker:
             The reply.
 
         Raises:
-            ReviewWorkerError: On a timeout, a dead worker, or a worker-reported exception.
+            ReviewWorkerError: On a timeout, a dead worker, or a worker-reported exception. Only a reply the
+                worker marks ``recoverable`` (a request it could not take) leaves it running.
         """
         try:
             reply = self._replies.get(timeout=timeout_s)
@@ -1210,7 +1743,8 @@ class _ReviewWorker:
             self.close()
             raise ReviewWorkerError(f"redaction review worker did not answer in {timeout_s}s\n{self._tail()}") from None
         if "error" in reply:
-            self.close()
+            if not reply.get("recoverable"):
+                self.close()
             error = reply["error"] or {}
             raise ReviewWorkerError(f"{error.get('type', 'RuntimeError')}: {error.get('message', 'unknown error')}")
         if reply.get("eof"):
@@ -1249,7 +1783,7 @@ class _ReviewWorker:
 
 _WORKER_LOCK = threading.Lock()
 _WORKER: Optional[_ReviewWorker] = None
-_WORKER_KEY: Optional[tuple[str, str]] = None
+_WORKER_KEY: Optional[tuple[str, str, str]] = None
 _WORKER_REFUSED: Optional[str] = None
 
 
@@ -1279,13 +1813,16 @@ def shutdown_review_worker(*, forget_failure: bool = True) -> None:
 atexit.register(shutdown_review_worker)
 
 
-def _worker_for(model_id: str, revision: str, timeout_s: int) -> tuple[_ReviewWorker, float]:
-    """The running worker holding this commit, started if there is not a live one already.
+def _worker_for(
+    model_id: str, revision: str, timeout_s: int, engine: Mapping[str, Any] | None = None
+) -> tuple[_ReviewWorker, float]:
+    """The running worker holding this commit on this engine, started if there is not a live one already.
 
     Args:
         model_id: The HuggingFace repo.
         revision: The resolved 40-hex commit.
         timeout_s: Wall-clock ceiling on a load, when one is needed.
+        engine: The expected engine identity; the transformers engine where None.
 
     Returns:
         ``(worker, load_s)`` — the worker with its weights loaded, and the seconds this call spent
@@ -1297,19 +1834,20 @@ def _worker_for(model_id: str, revision: str, timeout_s: int) -> tuple[_ReviewWo
     global _WORKER, _WORKER_KEY, _WORKER_REFUSED
     if _WORKER_REFUSED is not None:
         raise ReviewWorkerError(_WORKER_REFUSED)
-    if _WORKER is not None and _WORKER_KEY == (model_id, revision) and _WORKER.alive:
+    key = (model_id, revision, json.dumps(dict(engine or {}), sort_keys=True))
+    if _WORKER is not None and _WORKER_KEY == key and _WORKER.alive:
         return _WORKER, 0.0
     if _WORKER is not None:
         _WORKER.close()
         _WORKER, _WORKER_KEY = None, None
-    worker = _ReviewWorker(model_id, revision)
+    worker = _ReviewWorker(model_id, revision, engine)
     try:
         worker.start(timeout_s)
     except Exception as exc:
         worker.close()
         _WORKER_REFUSED = _failure(exc)
         raise
-    _WORKER, _WORKER_KEY = worker, (model_id, revision)
+    _WORKER, _WORKER_KEY = worker, key
     return worker, worker.load_s
 
 
@@ -1323,6 +1861,7 @@ def review_transcript(
     max_new_tokens: int = 1024,
     timeout_s: int = 1800,
     feedback: str | None = None,
+    engine: Mapping[str, Any] | None = None,
 ) -> ReviewResult:
     """Ask the reviewer to read one recording's transcript, reporting failure rather than raising.
 
@@ -1345,6 +1884,9 @@ def review_transcript(
         timeout_s: Wall-clock ceiling, applied to the load and to the generation separately.
         feedback: The problem with the previous round's answer (:func:`answer_problem`), sent with the
             texts so this round corrects it; None on a first round.
+        engine: The engine to serve it
+            (:func:`~senselab.text.tasks.pii_detection.redaction_review_vllm.engine_identity`); the transformers
+            worker where None.
 
     Returns:
         The review. ``available`` is ``True`` only when the worker answered; every other path —
@@ -1368,8 +1910,13 @@ def review_transcript(
 
     with _WORKER_LOCK:
         try:
-            worker, load_s = _worker_for(model_id, revision, timeout_s)
-            output = worker.review(_compose(original, redacted, context, feedback), max_new_tokens, timeout_s)
+            worker, load_s = _worker_for(model_id, revision, timeout_s, engine)
+            output = worker.review(
+                _compose(original, redacted, context, feedback),
+                review_prompt(bool((context or {}).get(ITEM_SET))),
+                max_new_tokens,
+                timeout_s,
+            )
         except Exception as exc:  # noqa: BLE001 — every failure mode becomes a recorded absence
             return ReviewResult(
                 available=False,
@@ -1379,6 +1926,7 @@ def review_transcript(
                 elapsed_s=round(time.monotonic() - began, 3),
             )
         loaded_revision = worker.revision
+        answered_by = dict(worker.engine)
 
     completion = str(output.get("completion") or "")
     parsed = parse_completion(completion)
@@ -1394,6 +1942,13 @@ def review_transcript(
         conditions_answered=parsed.conditions_answered,
         instructions_spoken=parsed.instructions_spoken,
         instructions_answered=parsed.instructions_answered,
+        off_task_speech=parsed.off_task_speech,
+        off_task_quotes=parsed.off_task_quotes,
+        phrases_instead_of_items=parsed.phrases_instead_of_items,
+        phrase_quotes=parsed.phrase_quotes,
+        other_speaker=parsed.other_speaker,
+        other_speaker_quotes=parsed.other_speaker_quotes,
+        task_content_quotes=parsed.task_content_quotes,
         model_id=model_id,
         revision=loaded_revision or revision,
         raw="" if parsed.reasoning else completion,
@@ -1403,6 +1958,7 @@ def review_transcript(
         output_tokens=output.get("output_tokens"),
         peak_reserved_mib=int(output.get("peak_reserved_mib") or 0),
         resident_mib=int(output.get("resident_mib") or 0),
+        engine=answered_by,
     )
 
 
@@ -1417,6 +1973,10 @@ def review_payload(result: ReviewResult) -> dict[str, Any]:
         ``elapsed_s`` and ``load_s`` are what the round cost and how much of that was the weights,
         and the two ``_mib`` fields are what it held on the device at its peak and between reviews,
         so a store answers the time and the memory without a stopwatch outside the graph.
+        ``off_task_speech`` (one of :data:`OFF_TASK_STATES` or None), ``off_task_quotes``,
+        ``phrases_instead_of_items`` (one of :data:`PHRASE_STATES` or None), ``phrase_quotes``,
+        ``other_speaker`` (one of :data:`OTHER_SPEAKER_ROLES` or None), ``other_speaker_quotes`` and
+        ``task_content_quotes`` (lists of quoted strings) are the task reading.
     """
     return {
         "available": result.available,
@@ -1443,6 +2003,13 @@ def review_payload(result: ReviewResult) -> dict[str, Any]:
         "conditions_answered": result.conditions_answered,
         "instructions_spoken": list(result.instructions_spoken),
         "instructions_answered": result.instructions_answered,
+        "off_task_speech": result.off_task_speech,
+        "off_task_quotes": list(result.off_task_quotes),
+        "phrases_instead_of_items": result.phrases_instead_of_items,
+        "phrase_quotes": list(result.phrase_quotes),
+        "other_speaker": result.other_speaker,
+        "other_speaker_quotes": list(result.other_speaker_quotes),
+        "task_content_quotes": list(result.task_content_quotes),
         "prompt_version": PROMPT_VERSION,
         "failure": result.failure,
         "model_id": result.model_id,
@@ -1453,4 +2020,5 @@ def review_payload(result: ReviewResult) -> dict[str, Any]:
         "output_tokens": result.output_tokens,
         "peak_reserved_mib": result.peak_reserved_mib,
         "resident_mib": result.resident_mib,
+        "engine": dict(result.engine),
     }

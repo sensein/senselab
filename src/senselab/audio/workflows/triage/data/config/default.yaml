@@ -79,6 +79,10 @@ band_profile:
   ltas_bands: 24                       # SIZE: how many log-spaced bands span ltas_low_hz to Nyquist
   ltas_low_hz: 50.0                    # bottom edge of the lowest band; below it is rumble, not content
 
+# The phonetic posteriorgram's worker.
+ppg:
+  timeout_min_s: 1800.0                # the least the ppgs worker is allowed, whatever the audio's length
+
 # Auditory filterbank layout.
 gammatone:
   n_channels: 40                       # ERB-spaced channel count
@@ -165,7 +169,8 @@ routing:
   # The branch to run when no gate fired, no declaration named one, and the run was not critical.
   # Null: nobody has measured which branch a recording no rule accounted for belongs in, and picking
   # one would turn a visible ruleset gap into a branch report that looks like a route. The two ways
-  # to get here are already decided — `empty` discards, `unexplained` flags. See
+  # to get here are already decided — `empty` discards, `unexplained` flags `no_branch_measured` unless
+  # the branch owning the declared task measured it. See
   # `specs/20260817-triage-workflow-dag/critical-failure.md` § the no-hint-no-gate case.
   default_branch:
 
@@ -248,11 +253,14 @@ voice:
 # SPEECH's enrollment, separation, diarization and non-target settings.
 speech:
   second_diarizer:                     # which model corroborates pyannote's speaker count
-  target_match_cosine:                 # similarity above which a diarized speaker is the enrolled target
+  target_match_cosine: 0.231           # similarity at or above which a speaker or run is the enrolled target
+  secondary_exclusive_min_s: 1.0       # exclusive second-voice time in a task extent under which it holds no turn; specs/20261012-r37-words-speaker/design.md
   speech_test_stoi_floor:              # STOI floor for a speech span to pass quality
   speech_test_si_sdr_floor:            # SI-SDR floor, same
   hint_tags: [speech, read-speech]     # unread as of v2; hints route through routing.hint_branch_map alone
-  enrollment_model:                    # speaker-embedding model AND revision enrollment is computed with
+  enrollment_model:                    # speaker-embedding model AND resolved commit enrollment is computed with
+    model_id: speechbrain/spkrec-ecapa-voxceleb
+    revision: 0f99f2d0ebe89ac095bcc5903c4dd8f72b367286
   separation_backend: MossFormer2_SS_16K  # which separator runs on overlapping speech
   separation_sound_class:              # the sound class that separator is asked for
   nontarget:                           # what marks a diarized speaker as not the target
@@ -284,7 +292,6 @@ branch:
   run_gap_max_s: 0.5                   # largest gap two lexical words may straddle and stay one run
   echo_ngram_n: 3                      # n of the n-gram the prompt-echo overlap is measured over
   modulation_band_hz: [1.0, 10.0]      # [lo, hi] band the envelope modulation peak is searched in
-  burst_window_ms: 20.0                # shortest stop burst and aspiration, which is the decode's minimum phone duration
   effort_split_hz: 1000.0              # split the low and high spectral balance of an effort token is taken at
   # kind -> the HeAR heads that ARE that sound. HeAR spellings only: the AudioSet names YAMNet
   # reports are derived per kind from the packaged classifier-ontology profile's corroboration set
@@ -292,7 +299,7 @@ branch:
   label_sets:
     cough: [Cough]
     breath: [Breathe]
-  # The posteriorgram template decode's equivalence classes. Vocabulary only: it reports mass, it
+  # The posteriorgram identity alignment's equivalence classes. Vocabulary only: it reports mass, it
   # does not judge it. Derivations in specs/20260817-triage-workflow-dag/config-derivations.md.
   # consonant class -> the phonemes that ARE that class, in the posteriorgram's ARPAbet spelling.
   # Data, not schema: a campaign may add a class, and `DATA_MAP_PATHS` carries the key so an
@@ -321,7 +328,6 @@ verdict:
   # REVIEW's reading annotates; these decide what the annotation means.
   llm_redaction_flags: true            # a reading proposing a redaction is a triage flag ground
   llm_redaction_withholds: false       # UNFITTED. a reading of residue withholds a recording REDACT passed
-  llm_rescan_clears: true              # a clean reading releases the redacted copy of a REDACT re-scan fail
   llm_reset_redactions: true           # owner, 2026-09-27: a reading's release entries unmask exactly the words they name
   condition_categories: [CONDITION]    # owner, 2026-10-03 (policy v7): a listed health condition is never masked and never withholds
   cohort_conditions: bridge2ai_voice_adult_2026-09-04  # data/cohort_conditions profile: which listed conditions the study recruits for
@@ -385,18 +391,18 @@ verdict:
       ORDERED_TOKENS:                    # a prescribed token sequence
         expected_tokens_matched_min: 1   # prescribed tokens the recording must realise
         content_omission_fraction_max: 0.0  # a sentence: any content word unread fails; function-word drops do not
-        dominant_speaker_share_min: 0.9  # share of the task extent's attributed seconds one voice must hold
+        dominant_speaker_share_min: 0.9  # exclusive share: the dominant voice over itself plus time another voice holds the extent alone
         repeat_overlap_min: 0.5          # overlap at which an alignment covers the sequence twice
         gap_off_task_min_s: 1.0          # shortest gap reported as off-task extent
       FREE_RESPONSE:                     # a task prescribing no words
         response_min_s: 0.5              # shortest extent that counts as a response at all
-        dominant_speaker_share_min: 0.9  # share of the task extent's attributed seconds one voice must hold
+        dominant_speaker_share_min: 0.9  # exclusive share: the dominant voice over itself plus time another voice holds the extent alone
         echo_overlap_max: 0.5            # prompt n-gram overlap above which a response echoes its prompt
         verbatim_overlap_max: 0.5        # source content overlap above which a recall is verbatim
         gap_off_task_min_s: 1.0          # shortest gap reported as off-task extent
       ITEM_LIST:                         # a list of items
         items_min: 1                     # items the recording must carry
-        dominant_speaker_share_min: 0.9  # share of the task extent's attributed seconds one voice must hold
+        dominant_speaker_share_min: 0.9  # exclusive share: the dominant voice over itself plus time another voice holds the extent alone
         gap_off_task_min_s: 1.0          # shortest gap reported as off-task extent
       EVENT_SERIES:                      # a counted series of airway events
         score_min: 0.2                   # classifier raw score at or above which a label is present
@@ -416,15 +422,11 @@ verdict:
       SYLLABLE_TRAIN:                    # one syllable repeated
         train_min_s: 1.0                 # shortest carrier that can hold a train
         rate_prominence_min: 2.0         # modulation peak over its band mean that makes a rate readable
-        repetitions_min: 1               # repetitions either instrument must read
-        instructed_count_min_fraction: 0.5  # UNFITTED: repetitions decoded over the count the instruction spoke
-        dominant_speaker_share_min: 0.9  # share of the task extent's attributed seconds one voice must hold
+        dominant_speaker_share_min: 0.9  # exclusive share: the dominant voice over itself plus time another voice holds the extent alone
       SYLLABLE_SEQUENCE:                 # a syllable sequence repeated
         train_min_s: 1.0                 # shortest carrier that can hold a train
         rate_prominence_min: 2.0         # modulation peak over its band mean that makes a rate readable
-        repetitions_min: 1               # repetitions either instrument must read
-        instructed_count_min_fraction: 0.5  # UNFITTED: repetitions decoded over the count the instruction spoke
-        dominant_speaker_share_min: 0.9  # share of the task extent's attributed seconds one voice must hold
+        dominant_speaker_share_min: 0.9  # exclusive share: the dominant voice over itself plus time another voice holds the extent alone
       PER_SENTENCE: {}                   # no row reaches this group; no gate is configured for it
       EFFORT: {}                         # no row reaches this group; no gate is configured for it
     # Per-family overrides, each one applied key by key over its group's entry. **Ships empty**:
@@ -484,8 +486,7 @@ taxonomy:
       SPEECH: [speech.transcript_agreement]
       VOICE: []
     emptiness:                          # the bypass, consulted only when no branch gate fired
-      peak_streams: [enhanced|yamnet, residual|yamnet]  # every stream whose top tracked-label score must fall below the floor
-      peak_floor: 0.2                   # score under which a stream carries nothing; one value for both streams
+      active_s_max: 0.0                 # seconds of activity BACKGROUND may read over the floor in a recording that carried nothing
     gates:                              # gate -> the one number it reads, the comparison, and the cut
       speech.lexical:
         feature: [words, lexical]       # live consensus words that are not bracketed, any outcome
@@ -561,6 +562,14 @@ redaction:
     max_new_tokens: 1024               # generation ceiling; the reasoning is the product, not the verdict
     timeout_s: 1800                    # wall clock per review, model load included
     keep_worker_resident: false        # hold the loaded weights across recordings; needs a GPU to itself
+    engine: transformers               # transformers (the venv worker) or vllm (a pinned vLLM server, one request at a time)
+    vllm:                              # the vLLM server's arguments; every one is in the reading's engine identity
+      max_model_len: 12288             # the longest prompt plus max_new_tokens a request may hold
+      gpu_memory_utilization: 0.90     # the card's share this server may take; split across servers on one card
+      enable_prefix_caching: true      # reuse the shared prompt prefix across requests
+      kv_cache_dtype: auto             # the KV cache in the model's own dtype
+      generation_config: vllm          # the server's own sampling defaults; every request sets its own
+      limit_mm_per_prompt: {image: 0, audio: 0}  # text only: no multimodal encoder memory
 
 # A decision model's second opinion over the text the reviewer reads (SECOND_OPINION).
 second_opinion:

@@ -1,0 +1,297 @@
+# The decision table's evidence items: the name of every reading the fold weighs, by family group.
+# Each item is one scalar row: value, unit, comparison, threshold (from data/), effect and whether it
+# decided. A number compares with >=, <=, >, < or == against a number, a flag with == against a flag,
+# a category with in / not in against a list of categories; a reported reading has neither.
+# `producer` names the unit of specs/20261007-task-events-in-background/design.md that emits it;
+# an item a later unit produces is absent from the tables until that unit lands.
+version: 15
+groups:
+  acquisition:
+    admit_outcome:
+      unit:
+      producer: fold
+      meaning: ADMIT's outcome; a fail discards the recording as unmeasurable
+    task_duration_s:
+      unit: s
+      producer: fold
+      meaning: the recording's duration against its family's minimum in data/task_minimum_duration.yaml
+    declared_task_found:
+      unit:
+      producer: fold
+      meaning: whether the branch owning the declared task found it
+    task_replaced_by_talk:
+      unit:
+      producer: fold
+      meaning: the discard_replaced_task.py reading a task_replaced_by_talk discard rests on (talk fraction of the free-speech rate, expected tokens matched, or response fraction of the family median) against data/discard_replaced_task.yaml
+    streams_disagree:
+      unit:
+      producer: unit C
+      meaning: the share of the raw stream's standing task events the enhanced stream loses, against data/quality_join.yaml streams.lost_fraction
+    residual_speech_in_task:
+      unit: spans
+      producer: unit C
+      meaning: the other voice's spans in the residual touching a task span; an annotation, attributed to another speaker by COHORT or a reader
+    capture.route_state:
+      unit:
+      producer: unit C
+      meaning: the ruleset's reading of the whole recording, not in [empty]; empty with no task event heard discards
+    capture.plain_active_s:
+      unit: s
+      producer: unit C
+      meaning: seconds of activity BACKGROUND read on the plain stream, > 0; with the enhanced stream also silent and no task event heard, discards
+    capture.enhanced_active_s:
+      unit: s
+      producer: unit C
+      meaning: seconds of activity on the enhanced stream, > 0; read with capture.plain_active_s
+    capture.level_rel_db:
+      unit: dB
+      producer: unit C
+      meaning: the recording's active level against its BIDS session's (SESSION), > data/quality_join.yaml capture.level_rel_db_max; only the room, with no task event heard, discards
+    speech_quality.foreground_minus_residual_db.whole:
+      unit: dB
+      producer: session background
+      meaning: the enhanced stream's level over speech frames less the residual's over the whole file (data/session_background.yaml); not applicable where the enhanced stream carries no speech; reported only
+    speech_quality.foreground_minus_residual_db.speech:
+      unit: dB
+      producer: session background
+      meaning: that foreground less the residual's level over speech frames; reported only
+    speech_quality.foreground_minus_residual_db.non_speech:
+      unit: dB
+      producer: session background
+      meaning: that foreground less the residual's level over non-speech frames; reported only
+    speech_quality.plain_minus_residual_db.whole:
+      unit: dB
+      producer: session background
+      meaning: the median per-frame plain level over the residual's, over the whole file; reported only
+    speech_quality.plain_minus_residual_db.speech:
+      unit: dB
+      producer: session background
+      meaning: the same over speech frames, roughly the foreground's share; not applicable where the enhanced stream carries no speech; reported only
+    speech_quality.plain_minus_residual_db.non_speech:
+      unit: dB
+      producer: session background
+      meaning: the same over non-speech frames, near 0 dB where the enhancer removes only background; reported only
+    speech_quality.session_foreground_minus_residual_db:
+      unit: dB
+      producer: session background
+      meaning: the median over the session's speech tasks with foreground of foreground less residual, whole file; not applicable where the session has none; reported only
+  breath:
+    breath_event_db_over_floor:
+      unit: dB
+      producer: unit B
+      meaning: the strongest breath event's level over the stationary floor, against data/task_events.yaml decision.snr_low_db
+    breath_event_db_over_local:
+      unit: dB
+      producer: unit B
+      meaning: that event's level over its local background, against decision.snr_high_db
+    breath_events_entangled:
+      unit:
+      producer: unit B
+      meaning: whether an impulse overlaps or abuts every clear breath event
+    breaths_found:
+      unit: breaths
+      producer: unit B
+      meaning: breaths the train counted, against the instructed count
+    breath_rhythm_hz:
+      unit: Hz
+      producer: unit B
+      meaning: the breathing-band modulation rate; a prior, never a decision
+    breath_events_outside_extent:
+      unit: events
+      producer: unit B
+      meaning: breath events outside the task cluster standing over the floor; reported, they decide nothing
+  cough:
+    cough_onsets:
+      unit: coughs
+      producer: unit B
+      meaning: cough onsets found; none discards
+    coughs_against_instructed:
+      unit: coughs
+      producer: unit B
+      meaning: coughs found against the instructed count
+    cough_review:
+      unit:
+      producer: unit B
+      meaning: whether the cough count sits in the review band
+    cough_events_outside_extent:
+      unit: events
+      producer: unit B
+      meaning: cough events outside the task cluster standing over the floor; reported, they decide nothing
+  voice:
+    phonation_found:
+      unit:
+      producer: unit B
+      meaning: whether phonation stands over the floor
+    phonation_voiced_s:
+      unit: s
+      producer: unit B
+      meaning: voiced time inside the phonation extent
+    longest_hold_s:
+      unit: s
+      producer: unit B
+      meaning: the longest held phonation
+    glide_travel_declared_st:
+      unit: semitones
+      producer: unit B
+      meaning: the glide's travel in the declared direction
+  ddk:
+    ddk_event_db_over_floor:
+      unit: dB
+      producer: DDK task layer
+      meaning: the strongest syllable or cycle event's level over the stationary floor, against data/task_events.yaml decision.snr_low_db; none standing discards
+    ddk_identity:
+      unit:
+      producer: DDK task layer
+      meaning: the standing task events' median identity against the declared template, against ddk.identity_min (review under it) and ddk.identity_absent_max (another activity under it, discards)
+    ddk_clear_events:
+      unit: events
+      producer: DDK task layer
+      meaning: task events clear of their local background with no impulse from outside the train touching them, against ddk.events_min
+    ddk_events_against_instructed:
+      unit: events
+      producer: DDK task layer
+      meaning: task events (cycles or syllables) in the dominant cluster against the instructed count
+    ddk_events_found:
+      unit: events
+      producer: DDK task layer
+      meaning: task events in the dominant cluster, where the instruction speaks no count
+    ddk_syllable_rate_hz:
+      unit: Hz
+      producer: DDK task layer
+      meaning: syllables per second over the syllables' onset intervals inside each run
+    ddk_cycle_rate_hz:
+      unit: Hz
+      producer: DDK task layer
+      meaning: cycles per second over the cycle events' onset intervals (sequence families)
+    ddk_period_cv:
+      unit:
+      producer: DDK task layer
+      meaning: the coefficient of variation of the task events' onset intervals
+    ddk_period_trend_s_per_step:
+      unit: s
+      producer: DDK task layer
+      meaning: how the onset interval changes across the train, seconds per event
+    ddk_train_fraction:
+      unit:
+      producer: DDK task layer
+      meaning: the task extent over the recording's duration
+  extent:
+    extent_complete:
+      unit:
+      producer: r37 extents
+      meaning: whether the task extent holds the whole task and nothing beyond it (complete, too_narrow, too_wide, both, no_task), in [complete]; not complete reviews under data/task_extent.yaml completeness.reviews, else an annotation
+    task_events_outside_extent:
+      unit: events
+      producer: r37 extents
+      meaning: task events (or words read as the stimulus, or a count-in) outside the extent with no speech between them and it; reported
+    extent_growth_s:
+      unit: s
+      producer: r37 extents
+      meaning: how far bounded growth moved a breath or cough extent (data/task_extent.yaml growth); reported
+  speech:
+    lexical_words:
+      unit: words
+      producer: fold
+      meaning: lexical words in the consensus transcript
+    speech_in_task:
+      unit: words
+      producer: unit B
+      meaning: lexical words outside a non-lexical task's own content (neither its declared text nor a misreading of its events), over the whole file, against data/task_speech.yaml words_min
+    speech_before_task_s:
+      unit: s
+      producer: fold
+      meaning: in a lexical family, from the first to the last lexical word before the task extent; an annotation (speech_before_task)
+    phrase_share:
+      unit: fraction
+      producer: unit B
+      meaning: an item-set task's lexical utterances (split at data/task_speech.yaml utterance_gap_s) that are phrases (phrase_words_min words or more, holding a closed-class word), over all its utterances; reported, never compared (the reviewer and the second opinion decide)
+  cohort:
+    cohort.target_cosine:
+      unit:
+      producer: COHORT
+      meaning: one embedding pooled over the task's own speech (lexical speech in the task extent; loudness's "hey") against the participant's session enrollment with the recording left out (or, where the session has none, the other sessions'), >= data/cohort_stage.yaml comparison.cosine_min (task_text for loudness's target, else default); no value where the pool is under data/cohort_stage.yaml comparison.pooled_min_s (too_short_for_speaker_id) or no enrollment was available, an annotation
+    cohort.non_task_cosine:
+      unit:
+      producer: COHORT
+      meaning: one embedding pooled over the speech outside the task (its words, and removed speech holding one) against the same enrollment, >= comparison.cosine_min.default; no value where the pool is under comparison.pooled_min_s, an annotation
+    cohort.speaker_comparison:
+      unit:
+      producer: COHORT
+      meaning: the speaker comparison had nothing to read (a single-file run, no enrollment, or the plain stream unreadable); not measured, moves nothing
+    cohort.session_vs_other_sessions_cosine:
+      unit:
+      producer: COHORT
+      meaning: the session enrollment's cosine against the participant enrollment pooled from the other sessions, >= data/cohort_stage.yaml participant.consistency_cosine_min; under it the session is session_speaker_inconsistent
+    cohort.session_speaker_consistency:
+      unit:
+      producer: COHORT
+      meaning: the consistency check had nothing to read (a single-file run, or a session without an enrollment of its own); not measured, moves nothing
+    cohort.duration_over_family_median:
+      unit:
+      producer: COHORT
+      meaning: the recording's duration over its family's corpus median, <= data/cohort_stage.yaml recording_duration_outlier.duration_ratio_max; review only with the extent fraction under its bound
+    cohort.task_extent_fraction:
+      unit:
+      producer: COHORT
+      meaning: the task extent's share of the recording, >= recording_duration_outlier.extent_fraction_min
+    cohort.participant_hot_or_clipped:
+      unit:
+      producer: COHORT
+      meaning: whether the participant's median RMS or share of clipped recordings reaches data/cohort_stage.yaml condition.hot_rms_dbfs_min or condition.clipped_fraction_min; reported only
+    cohort.session_level_shift_db:
+      unit: dB
+      producer: COHORT
+      meaning: the session's median RMS less the participant's other sessions'; with session_snr_shift_db, at or over data/cohort_stage.yaml condition.shift_* the consistency check is session_condition_shift
+    cohort.session_snr_shift_db:
+      unit: dB
+      producer: COHORT
+      meaning: the session's median envelope SNR less the participant's other sessions'
+    cohort.recording_duration_outlier:
+      unit:
+      producer: COHORT
+      meaning: the duration check had no cohort to read against (a single-file run); not measured, moves nothing
+  release:
+    release_ground:
+      unit:
+      producer: fold
+      meaning: why the release axis reads as it does; a withholding ground holds the recording
+    reviewer_quotes_unplaced:
+      unit:
+      producer: fold
+      meaning: in an item-set task, the reviewer's phrase quotes still placed on no run of the timed consensus words after redaction.llm_check.max_iterations rounds; its phrase level is not read, the recording is reviewed and the release withheld (owner, 2026-10-10)
+prefixes:              # `<prefix>:<name>` items, named by what follows the colon
+  gate:
+    group: speech
+    unit:
+    producer: fold
+    meaning: a task-group or flag gate's reading against its bound
+  fault_in_task:
+    group: acquisition
+    unit: s
+    producer: unit C
+    meaning: a capture fault (shutoff, dropout, clip) touching a task span, against data/quality_join.yaml faults.<kind>.min_s
+  interference_in_task:
+    group: acquisition
+    unit: spans
+    producer: unit C
+    meaning: a non-speech source (a BACKGROUND impulse) overlapping or abutting a task span, where data/quality_join.yaml lets its kind decide
+  ddk_realised_mass:
+    group: ddk
+    unit:
+    producer: DDK task layer
+    meaning: one item per template position, `ddk_realised_mass:<index>.<phone>`, the class mass the identity alignment realised there, averaged over the task events
+  owning_branch_input_absent:
+    group: acquisition
+    unit:
+    producer: unit C
+    meaning: one flag per decision input the owning branch's stored reading lacks, `owning_branch_input_absent:<node>:<reading>.<field>`
+  phonation_review:
+    group: voice
+    unit:
+    producer: unit B
+    meaning: a phonation reading that leaves the recording for review
+flags:                 # every other item is a ground key of data/decision_reasons.yaml, read as a flag
+  group: acquisition
+  unit:
+  producer: fold
+  meaning: a ground the fold raised; its reason is in data/decision_reasons.yaml

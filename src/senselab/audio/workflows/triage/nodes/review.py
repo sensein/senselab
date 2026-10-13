@@ -22,7 +22,7 @@ See ``specs/20260924-reviewer-over-every-transcript/design.md``.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -35,6 +35,7 @@ from senselab.audio.workflows.triage.nodes.common import (
     consensus_words,
     find_measurement,
     find_verdict,
+    live_entities,
     mint_live,
     path_attributes,
     resolve_stream,
@@ -44,23 +45,38 @@ from senselab.audio.workflows.triage.nodes.common import (
 )
 from senselab.audio.workflows.triage.nodes.redact import (
     REDACTION_SPAN,
+    placeable_tokens,
     planned_extents,
     residue_words,
     transcript_texts,
 )
 from senselab.audio.workflows.triage.nodes.redact import STREAM_NAME as REDACTED_STREAM
+from senselab.audio.workflows.triage.residue import VOCAL, is_non_lexical
 from senselab.audio.workflows.triage.task_lexicon import TaskLexicon, task_lexicon
-from senselab.audio.workflows.triage.vocabulary import PII_SCAN, REDACTION_LLM_ANNOTATION, SCANNED
+from senselab.audio.workflows.triage.task_speech import item_set_family, lexical_voice_family, non_lexical_family
+from senselab.audio.workflows.triage.vocabulary import PII_SCAN, PII_SCAN_MISSING, REDACTION_LLM_ANNOTATION, SCANNED
 from senselab.text.tasks.pii_detection.redaction_review import (
+    CONSENSUS_HAYSTACK,
+    CONSENSUS_TRANSCRIPT,
+    ITEM_SET,
     PROMPT_VERSION,
     REDACT,
+    REVIEW_INPUTS_VERSION,
+    WORD_NON_LEXICAL,
+    WORD_SCANNED,
+    WORD_TASK,
     ReviewProposal,
     answer_problem,
+    quotable_texts,
+    review_inputs,
     review_payload,
     review_transcript,
     shutdown_review_worker,
     task_guidance_digest,
+    task_nature,
+    unplaced_phrase_quotes,
 )
+from senselab.text.tasks.pii_detection.redaction_review_vllm import ENGINE_TRANSFORMERS, engine_identity
 from senselab.utils.prov_store import ProvStore
 from senselab.utils.tasks.cached_inference import (
     canonical_params,
@@ -79,16 +95,29 @@ _LLM_PLACEHOLDER = "[LLM_{category}]"  # what a proposed redaction is masked wit
 SCANNED_STATE = "scanned"
 DECLINED_STATE = "declined"
 UNSCANNED_STATE = "unscanned"
+UNCONFIRMED = "unconfirmed"
+"""The outcome the reviewer reads for a word only one recogniser read and none located."""
 DETECTOR_STATES = (SCANNED_STATE, DECLINED_STATE, UNSCANNED_STATE)
 """What the detectors did to this recording: read it, declined to read it, or never reached it."""
 
 DISABLED = "disabled"
-NOTHING_TO_READ = "nothing_to_read"
+BYPASSED = "bypassed"
 ABSENT = "absent"
+PII_SCAN_MISSING_FAILURE = "the consensus carries lexical words and no PII scan read them"
+"""The ``failure`` an :data:`ABSENT` annotation carries where its ``absent_reason`` is ``pii_scan_missing``."""
 CLEAN = "clean"
 FLAGGED = "flagged"
-REVIEW_STATES = (DISABLED, NOTHING_TO_READ, ABSENT, CLEAN, FLAGGED)
-"""Switched off, nothing to read, tried and could not load, and the two readings it can reach."""
+REVIEW_STATES = (DISABLED, BYPASSED, ABSENT, CLEAN, FLAGGED)
+"""Switched off, bypassed with one of :data:`BYPASS_REASONS`, tried and could not load, and the two readings."""
+
+NO_WORDS = "no_words"
+NON_LEXICAL_ONLY = "non_lexical_only"
+TASK_CONTENT_ONLY = "task_content_only"
+NON_LEXICAL_TASK = "non_lexical_task"
+BYPASS_REASONS = (NO_WORDS, NON_LEXICAL_ONLY, TASK_CONTENT_ONLY, NON_LEXICAL_TASK)
+"""Why the reviewer is not asked: the consensus has no words; only bracketed, non-lexical or degenerate
+tokens; lexical words, every one task content; or the declared family asks for a sound (airway, voice), whose
+lexical words outside the task text are masked and reviewed on the task-speech path, not read for PII."""
 
 
 @dataclass(frozen=True)
@@ -131,6 +160,19 @@ class _Reading:
             instructions are spoken in the recording.
         conditions: The health conditions the last answering round listed, each with ``text`` and
             ``why``; recorded, never masked.
+        off_task_speech: The last answering round's ``none`` / ``some`` / ``extensive``, or None.
+        off_task_quotes: The off-task passages it quoted.
+        phrases_instead_of_items: In an item-set task, its ``none`` / ``occasional`` / ``predominant``, or None.
+        phrase_quotes: The phrases it quoted as said instead of items.
+        other_speaker: Its ``none`` / ``assistant`` / ``background`` / ``unclear``, or None.
+        other_speaker_quotes: The passages it attributed to the other speaker.
+        task_content_quotes: The PII-annotated words it judged task content.
+        engine: The engine that answered the last round, as the worker reported it; empty where none did.
+        phrase_quotes_unplaced_n: How many of the last answering round's phrase quotes place on no run of the
+            timed consensus words (:func:`~senselab.text.tasks.pii_detection.redaction_review.unplaced_phrase_quotes`).
+        bypass_reason: One of :data:`BYPASS_REASONS` where the status is :data:`BYPASSED`, else None.
+        absent_reason: :data:`~senselab.audio.workflows.triage.vocabulary.PII_SCAN_MISSING` where the status is
+            :data:`ABSENT` because the measurement the reviewer reads was never taken, else None.
     """
 
     status: str
@@ -148,6 +190,41 @@ class _Reading:
     other_speakers: tuple[dict[str, Any], ...] = ()
     instructions_spoken: tuple[str, ...] = ()
     conditions: tuple[dict[str, str], ...] = ()
+    off_task_speech: str | None = None
+    off_task_quotes: tuple[str, ...] = ()
+    phrases_instead_of_items: str | None = None
+    phrase_quotes: tuple[str, ...] = ()
+    other_speaker: str | None = None
+    other_speaker_quotes: tuple[str, ...] = ()
+    task_content_quotes: tuple[str, ...] = ()
+    engine: dict[str, Any] = field(default_factory=dict)
+    phrase_quotes_unplaced_n: int = 0
+    bypass_reason: str | None = None
+    absent_reason: str | None = None
+
+
+TASK_READING_QUOTES = ("off_task_quotes", "phrase_quotes", "other_speaker_quotes", "task_content_quotes")
+"""The task reading's quote lists, on a round's payload, a reading and the annotation alike."""
+
+
+def _task_reading(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """The task-reading fields of one round's payload or one stored reading.
+
+    Args:
+        payload: A :func:`review_payload` mapping, or an annotation's attributes.
+
+    Returns:
+        ``off_task_speech``, ``phrases_instead_of_items`` and ``other_speaker`` (a string or None) and the
+        quote lists as tuples.
+    """
+    fields_: dict[str, Any] = {
+        "off_task_speech": payload.get("off_task_speech") or None,
+        "phrases_instead_of_items": payload.get("phrases_instead_of_items") or None,
+        "other_speaker": payload.get("other_speaker") or None,
+    }
+    for key in TASK_READING_QUOTES:
+        fields_[key] = tuple(str(text) for text in payload.get(key) or ())
+    return fields_
 
 
 def _stamp() -> str:
@@ -179,8 +256,34 @@ def _llm_settings(config: TriageConfig) -> dict[str, Any]:
         "max_new_tokens",
         "timeout_s",
         "keep_worker_resident",
+        "engine",
+        "vllm",
     )
     return {name: config.require(f"{_LLM_SECTION}.{name}") for name in names}
+
+
+def review_engine(settings: Mapping[str, Any]) -> dict[str, Any]:
+    """The engine identity a configuration asks the reviewer to run on.
+
+    Args:
+        settings: :func:`_llm_settings`' mapping.
+
+    Returns:
+        :func:`~senselab.text.tasks.pii_detection.redaction_review_vllm.engine_identity` of its ``engine``.
+    """
+    return engine_identity(str(settings["engine"]), settings.get("vllm"))
+
+
+def configured_engine(config: TriageConfig) -> dict[str, Any]:
+    """The engine identity the configuration's reviewer runs on.
+
+    Args:
+        config: The triage configuration.
+
+    Returns:
+        :func:`review_engine` over its ``redaction.llm_check`` settings.
+    """
+    return review_engine(_llm_settings(config))
 
 
 def task_context(store: ProvStore, hint: AudioHints | None, lexicon: TaskLexicon | None = None) -> dict[str, Any]:
@@ -193,10 +296,12 @@ def task_context(store: ProvStore, hint: AudioHints | None, lexicon: TaskLexicon
             ``task_words``.
 
     Returns:
-        ``task``, ``speech_type``, ``language``, ``instructions``, ``asked_to_say``, ``declared_names`` and
-        ``task_words``, each
-        omitted where the recording declares none, and ``instructions_from`` and ``stimulus_from``
-        naming where those texts came from.
+        ``task`` (the family), ``task_name``, ``task_nature`` (from
+        :func:`~senselab.text.tasks.pii_detection.redaction_review.task_nature`), ``item_set`` (True for an
+        item-set family, :func:`~senselab.audio.workflows.triage.task_speech.item_set_family`), ``speech_type`` (the
+        hint's, else its metadata's), ``language``, ``instructions``, ``asked_to_say``, ``declared_names``
+        and ``task_words``, each omitted where the recording declares none, and ``instructions_from`` and
+        ``stimulus_from`` naming where those texts came from.
     """
     family = declared_task_family(store, hint)
     prompts = [
@@ -205,8 +310,16 @@ def task_context(store: ProvStore, hint: AudioHints | None, lexicon: TaskLexicon
     context: dict[str, Any] = {}
     if family:
         context["task"] = str(family)
-    if hint is not None and hint.speech_type:
-        context["speech_type"] = str(hint.speech_type)
+        nature = task_nature(str(family))
+        if nature:
+            context["task_nature"] = nature
+        if item_set_family(str(family)):
+            context[ITEM_SET] = True
+    if hint is not None and hint.metadata.get("task_name"):
+        context["task_name"] = str(hint.metadata["task_name"])
+    speech_type = (hint.speech_type or hint.metadata.get("speech_type")) if hint is not None else None
+    if speech_type:
+        context["speech_type"] = str(speech_type)
     if hint is not None and hint.metadata.get("language"):
         context["language"] = str(hint.metadata["language"])
     if hint is not None and hint.instructions:
@@ -223,6 +336,113 @@ def task_context(store: ProvStore, hint: AudioHints | None, lexicon: TaskLexicon
     words = [phrase for phrase in (lexicon.texts() if lexicon is not None else ()) if phrase not in named]
     if words:
         context["task_words"] = words
+    return context
+
+
+def consensus_transcript(store: ProvStore) -> dict[str, Any]:
+    """The whole consensus transcript word by word, with each word's PII findings and its variation.
+
+    Args:
+        store: The provenance store.
+
+    Returns:
+        ``recognisers``, every recogniser a word holds a reading of, sorted; ``words``, one ``[index,
+        consensus word, outcome, [each recogniser's word or None], kind, [[category, detector, reading],
+        ...]]`` per consensus word in stream order, where ``outcome`` is :data:`UNCONFIRMED` for an unconfirmed
+        word, ``kind`` says whether the PII scan read the word (:data:`WORD_SCANNED`), or set it aside as task
+        content (:data:`WORD_TASK`) or non-lexical (:data:`WORD_NON_LEXICAL`), and ``reading`` is the recogniser
+        whose transcript a live finding was found on, or :data:`CONSENSUS_HAYSTACK`; and ``findings_n``, the live
+        findings annotated.
+    """
+    words = consensus_words(store)
+    recognisers = sorted({str(name) for word in words for name in (word.attributes.get("readings") or {})})
+    scan = find_measurement(store, "pii_scan")
+    residue = {str(word_id) for word_id in (scan.attributes.get("residue_word_ids") or ())} if scan else set()
+    vocal = scan is not None and scan.attributes.get("residue_method") == VOCAL
+    findings: dict[str, list[list[str]]] = {}
+    live = live_entities(store, "pii")
+    for finding in live:
+        entry = [
+            str(finding.attributes.get("category") or ""),
+            str(finding.attributes.get("source") or ""),
+            str(finding.attributes.get("haystack") or CONSENSUS_HAYSTACK),
+        ]
+        for word_id in finding.attributes.get("word_ids") or ():
+            listed = findings.setdefault(str(word_id), [])
+            if entry not in listed:
+                listed.append(entry)
+    rows = []
+    for word in words:
+        text = str(word.attributes.get("text") or "")
+        readings = {str(name): str(reading) for name, reading in (word.attributes.get("readings") or {}).items()}
+        if word.id in residue:
+            kind = WORD_SCANNED
+        elif (
+            word.attributes.get("bracketed")
+            or word.attributes.get("degenerate")
+            or is_non_lexical(text, vocal_task=vocal)
+        ):
+            kind = WORD_NON_LEXICAL
+        else:
+            kind = WORD_TASK
+        rows.append(
+            [
+                int(word.attributes["index"]),
+                text,
+                UNCONFIRMED if word.attributes.get("unconfirmed") else str(word.attributes.get("outcome") or ""),
+                [readings.get(name) for name in recognisers],
+                kind,
+                findings.get(word.id, []),
+            ]
+        )
+    return {"recognisers": recognisers, "words": rows, "findings_n": len(live)}
+
+
+def bypass_reason(
+    store: ProvStore, transcript: Mapping[str, Any] | None = None, hint: AudioHints | None = None
+) -> str | None:
+    """Why a recording whose lexical residue is empty was not read, from :func:`consensus_transcript`'s word kinds.
+
+    Args:
+        store: The provenance store.
+        transcript: :func:`consensus_transcript` of the store, where the caller already holds it.
+        hint: The caller's declaration, read for the declared family.
+
+    Returns:
+        One of :data:`BYPASS_REASONS`; :data:`NON_LEXICAL_TASK` for a lexical family read as a voice task
+        (``task_speech.lexical_voice_family``) whether or not it was scanned. None where the consensus carries
+        lexical words, the store holds no PII scan and the declared family asks for words: a missing measurement
+        (:data:`~senselab.audio.workflows.triage.vocabulary.PII_SCAN_MISSING`), not a bypass.
+    """
+    kinds = {row[4] for row in (transcript or consensus_transcript(store))["words"]}
+    if not kinds:
+        return NO_WORDS
+    if WORD_TASK not in kinds:
+        return NON_LEXICAL_ONLY
+    family = declared_task_family(store, hint)
+    if lexical_voice_family(family):
+        return NON_LEXICAL_TASK
+    if detector_state(store) != UNSCANNED_STATE:
+        return TASK_CONTENT_ONLY
+    return NON_LEXICAL_TASK if non_lexical_family(family) else None
+
+
+def review_context(store: ProvStore, hint: AudioHints | None, lexicon: TaskLexicon | None = None) -> dict[str, Any]:
+    """What the reviewer is given beside the texts: the task context and the whole consensus transcript.
+
+    Args:
+        store: The provenance store.
+        hint: The caller's declaration, or None.
+        lexicon: The family's task lexicon.
+
+    Returns:
+        :func:`task_context`'s mapping, with :func:`consensus_transcript` under ``consensus_transcript``
+        where the store holds consensus words.
+    """
+    context = task_context(store, hint, lexicon)
+    transcript = consensus_transcript(store)
+    if transcript["words"]:
+        context[CONSENSUS_TRANSCRIPT] = transcript
     return context
 
 
@@ -327,7 +547,11 @@ def _is_flag(result: Any) -> bool:  # noqa: ANN401 — the backend's own result 
 
 
 def _rounds(
-    original: str, redacted: str | None, settings: Mapping[str, Any], context: Mapping[str, Any]
+    original: str,
+    redacted: str | None,
+    settings: Mapping[str, Any],
+    context: Mapping[str, Any],
+    placeable: Sequence[str] | None = None,
 ) -> tuple[_Reading, list[dict[str, Any]]]:
     """The bounded loop, with whether its final answer was usable recorded on the reading.
 
@@ -335,26 +559,37 @@ def _rounds(
         original: The recording's words.
         redacted: The text an applied redaction produced, or None where none was applied.
         settings: :func:`_llm_settings`' mapping.
-        context: :func:`task_context`'s mapping.
+        context: :func:`review_context`'s mapping.
+        placeable: The tokens of the timed consensus words a quote is placed on (:func:`placeable_tokens`).
 
     Returns:
-        ``(reading, reviews)``, as :func:`_loop`.
+        ``(reading, reviews)``, as :func:`_loop`, with the last answering round's unplaced phrase quotes counted.
     """
-    reading, reviews = _loop(original, redacted, settings, context)
+    reading, reviews = _loop(original, redacted, settings, context, placeable)
     problem = reviews[-1].get("problem") if reviews and reviews[-1].get("available") else None
-    return replace(reading, converged=problem is None, problem=problem), reviews
+    answered = [review for review in reviews if review.get("available")]
+    unplaced = int(answered[-1].get("phrase_quotes_unplaced_n") or 0) if answered else 0
+    return replace(reading, converged=problem is None, problem=problem, phrase_quotes_unplaced_n=unplaced), reviews
 
 
 def _loop(
-    original: str, redacted: str | None, settings: Mapping[str, Any], context: Mapping[str, Any]
+    original: str,
+    redacted: str | None,
+    settings: Mapping[str, Any],
+    context: Mapping[str, Any],
+    placeable: Sequence[str] | None = None,
 ) -> tuple[_Reading, list[dict[str, Any]]]:
     """The bounded review / mask / re-review loop, without the worker's lifetime.
+
+    A round whose answer :func:`answer_problem` rejects -- a phrase quote placing on no run of ``placeable``
+    included -- is asked again with that problem as its feedback, until ``max_iterations``.
 
     Args:
         original: The recording's words.
         redacted: The text an applied redaction produced, or None where none was applied.
         settings: :func:`_llm_settings`' mapping.
-        context: :func:`task_context`'s mapping.
+        context: :func:`review_context`'s mapping.
+        placeable: The tokens of the timed consensus words a quote is placed on, or None to skip that check.
 
     Returns:
         ``(reading, reviews)`` -- the summary and one payload per round, in order.
@@ -377,9 +612,19 @@ def _loop(
             max_new_tokens=int(settings["max_new_tokens"]),
             timeout_s=int(settings["timeout_s"]),
             feedback=feedback,
+            engine=review_engine(settings),
         )
-        problem = answer_problem(result, original, redacted)
-        reviews.append({**review_payload(result), "iteration": iteration, "feedback": feedback, "problem": problem})
+        problem = answer_problem(result, quotable_texts(original, context), redacted, placeable)
+        unplaced = len(unplaced_phrase_quotes(result, placeable)) if placeable is not None and result.available else 0
+        reviews.append(
+            {
+                **review_payload(result),
+                "iteration": iteration,
+                "feedback": feedback,
+                "problem": problem,
+                "phrase_quotes_unplaced_n": unplaced,
+            }
+        )
         revision = result.revision or revision
         # An answer the prompt's own rule rejects -- a judgment that asks for the redaction to change
         # with no words named, or quotes that are not in the text -- is fed back and asked again over
@@ -479,21 +724,26 @@ def review_cache_key(
     context: Mapping[str, Any],
     settings: Mapping[str, Any],
     revision: str,
+    placeable: Sequence[str] = (),
 ) -> str:
     """The result-cache key of one reading: exactly what the loop reads, and everything that shapes it.
 
     Args:
         original: The recording's words, as the loop reads them.
         redacted: The released text, or None.
-        context: :func:`task_context`'s mapping.
+        context: :func:`review_context`'s mapping.
         settings: :func:`_llm_settings`' mapping.
         revision: The 40-hex commit the reviewer's ref resolved to.
+        placeable: The tokens a phrase quote is placed on (:func:`placeable_tokens`).
 
     Returns:
-        The key: the texts and context, the prompt and parse version, the model and its commit, and the
-        generation ceiling and iteration bound.
+        The key: the texts, the placeable tokens and the context (the whole annotated transcript included),
+        the prompt and parse version, the ``review_inputs`` version, the model and its commit, the generation
+        ceiling and iteration bound, and the engine's identity (:func:`review_engine`).
     """
-    request = canonical_params({"original": original, "redacted": redacted, "context": dict(context)})
+    request = canonical_params(
+        {"original": original, "redacted": redacted, "context": dict(context), "placeable": list(placeable)}
+    )
     return result_cache_key(
         input_signature=transcript_signature(request),
         process=REVIEW_PROCESS,
@@ -501,9 +751,11 @@ def review_cache_key(
         commit_sha=revision,
         params={
             "prompt_version": PROMPT_VERSION,
+            "review_inputs_version": REVIEW_INPUTS_VERSION,
             "task_guidance": task_guidance_digest(),
             "max_new_tokens": int(settings["max_new_tokens"]),
             "max_iterations": int(settings["max_iterations"]),
+            "engine": review_engine(settings),
         },
     )
 
@@ -523,9 +775,9 @@ def reading_key(store: ProvStore, config: TriageConfig, hint: AudioHints | None,
     Raises:
         ValueError: If any ``redaction.llm_check`` key is unmeasured.
     """
-    context = task_context(store, hint, task_lexicon(config, declared_task_family(store, hint), hint))
+    context = review_context(store, hint, task_lexicon(config, declared_task_family(store, hint), hint))
     original, redacted = transcript_texts(store)
-    return review_cache_key(original, redacted, context, _llm_settings(config), revision)
+    return review_cache_key(original, redacted, context, _llm_settings(config), revision, placeable_tokens(store))
 
 
 def reading_from_cache(payload: Mapping[str, Any]) -> tuple[_Reading, list[dict[str, Any]]]:
@@ -543,6 +795,8 @@ def reading_from_cache(payload: Mapping[str, Any]) -> tuple[_Reading, list[dict[
     fields_["other_speakers"] = tuple(dict(entry) for entry in fields_.get("other_speakers") or ())
     fields_["instructions_spoken"] = tuple(str(text) for text in fields_.get("instructions_spoken") or ())
     fields_["conditions"] = tuple(dict(entry) for entry in fields_.get("conditions") or ())
+    fields_["engine"] = dict(fields_.get("engine") or {})
+    fields_.update(_task_reading(fields_))
     return _Reading(**fields_), [dict(review) for review in payload.get("reviews") or ()]
 
 
@@ -599,6 +853,9 @@ def backfill_from_store(store: ProvStore, config: TriageConfig) -> tuple[str, st
     settings = _llm_settings(config)
     if str(held.get("model_id")) != str(settings["model_id"]):
         return BACKFILL_SKIPPED, f"model {held.get('model_id')!r} is not the configured one"
+    engine = dict(held.get("engine") or engine_identity(ENGINE_TRANSFORMERS))
+    if engine != review_engine(settings):
+        return BACKFILL_SKIPPED, f"engine {engine.get('name')!r} is not the configured one"
     original, redacted = transcript_texts(store)
     if bool(held.get("read_redacted")) != (redacted is not None):
         return BACKFILL_SKIPPED, "the store's redaction differs from the one the reading read"
@@ -617,13 +874,24 @@ def backfill_from_store(store: ProvStore, config: TriageConfig) -> tuple[str, st
         problem=held.get("problem"),
         other_speakers=tuple(dict(entry) for entry in held.get("other_speakers") or ()),
         instructions_spoken=tuple(str(text) for text in held.get("instructions_spoken") or ()),
+        conditions=tuple(dict(entry) for entry in held.get("conditions") or ()),
+        engine=engine,
+        phrase_quotes_unplaced_n=int(held.get("phrase_quotes_unplaced_n") or 0),
+        **_task_reading(held),
     )
     reviews = [
         {key: value for key, value in entity.attributes.items() if key not in ("name", "signal")}
         for entity in store.entities("measurement")
         if entity.attributes.get("name") == LLM_REVIEW_MEASUREMENT and not store.is_invalidated(entity.id)
     ]
-    key = review_cache_key(original, redacted, dict(held.get("task_context") or {}), settings, reading.revision or "")
+    key = review_cache_key(
+        original,
+        redacted,
+        dict(held.get("task_context") or {}),
+        settings,
+        reading.revision or "",
+        placeable_tokens(store),
+    )
     return (BACKFILL_STORED, key) if cache_reading(key, reading, reviews) else (BACKFILL_HELD, key)
 
 
@@ -638,7 +906,11 @@ def _resolved(settings: Mapping[str, Any]) -> str | None:
 
 
 def _read(
-    original: str, redacted: str | None, settings: Mapping[str, Any], context: Mapping[str, Any]
+    original: str,
+    redacted: str | None,
+    settings: Mapping[str, Any],
+    context: Mapping[str, Any],
+    placeable: Sequence[str] | None = None,
 ) -> tuple[_Reading, list[dict[str, Any]]]:
     """The loop, with the worker released afterwards unless the run asked to keep it.
 
@@ -646,13 +918,14 @@ def _read(
         original: The recording's words.
         redacted: The text an applied redaction produced, or None.
         settings: :func:`_llm_settings`' mapping.
-        context: :func:`task_context`'s mapping.
+        context: :func:`review_context`'s mapping.
+        placeable: :func:`placeable_tokens` of the store.
 
     Returns:
         :func:`_rounds`' pair.
     """
     try:
-        return _rounds(original, redacted, settings, context)
+        return _rounds(original, redacted, settings, context, placeable)
     finally:
         if not settings["keep_worker_resident"]:
             shutdown_review_worker(forget_failure=False)
@@ -678,8 +951,10 @@ def review(store: ProvStore, config: TriageConfig, hint: AudioHints | None = Non
             before any model is contacted.
     """
     settings = _llm_settings(config)
-    context = task_context(store, hint, task_lexicon(config, declared_task_family(store, hint), hint))
+    context = review_context(store, hint, task_lexicon(config, declared_task_family(store, hint), hint))
+    inputs = review_inputs(context)
     original, redacted = transcript_texts(store)
+    placeable = placeable_tokens(store)
     state = detector_state(store)
     findings_n = _findings_n(store)
     outcome = _redact_outcome(store)
@@ -690,24 +965,36 @@ def review(store: ProvStore, config: TriageConfig, hint: AudioHints | None = Non
     if not settings["enabled"]:
         reading = _Reading(DISABLED, 0, (), "", "", "", (), "", None, None)
     elif not original.strip():
-        reading = _Reading(
-            NOTHING_TO_READ, 0, (), "", "", "", (), "", None, "the transcript is empty; there was no text to read"
+        reason = bypass_reason(store, context.get(CONSENSUS_TRANSCRIPT), hint)
+        reading = (
+            _Reading(BYPASSED, 0, (), "", "", "", (), "", None, None, bypass_reason=reason)
+            if reason is not None
+            else _Reading(
+                ABSENT, 0, (), "", "", "", (), "", None, PII_SCAN_MISSING_FAILURE, absent_reason=PII_SCAN_MISSING
+            )
         )
     else:
         revision = _resolved(settings)
-        key = None if revision is None else review_cache_key(original, redacted, context, settings, revision)
+        key = None if revision is None else review_cache_key(original, redacted, context, settings, revision, placeable)
         held = None if key is None else result_lookup(key)
         if held is not None:
             reading, reviews = reading_from_cache(held["result"])
             cache = {"key": key, "hit": True}
         else:
-            reading, reviews = _read(original, redacted, settings, context)
+            reading, reviews = _read(original, redacted, settings, context, placeable)
             answered = [review for review in reviews if review.get("available")]
             if answered:
                 others = tuple(dict(other) for other in answered[-1].get("other_speakers") or ())
                 spoken = tuple(str(text) for text in answered[-1].get("instructions_spoken") or ())
                 conditions = tuple(dict(entry) for entry in answered[-1].get("conditions") or ())
-                reading = replace(reading, other_speakers=others, instructions_spoken=spoken, conditions=conditions)
+                reading = replace(
+                    reading,
+                    other_speakers=others,
+                    instructions_spoken=spoken,
+                    conditions=conditions,
+                    engine=dict(answered[-1].get("engine") or {}),
+                    **_task_reading(answered[-1]),
+                )
             stored = key is not None and reading.revision == revision and cache_reading(key, reading, reviews)
             cache = {"key": key, "hit": False, "stored": stored}
 
@@ -723,12 +1010,13 @@ def review(store: ProvStore, config: TriageConfig, hint: AudioHints | None = Non
             "read_redacted": redacted is not None,
             "context_keys": sorted(context),
             "prompt_version": PROMPT_VERSION,
+            "engine": review_engine(settings),
         },
         started=started,
         ended=_stamp(),
     )
     store.was_associated_with(activity, software)
-    if reading.status not in (DISABLED, NOTHING_TO_READ):
+    if reading.status not in (DISABLED, BYPASSED) and reading.absent_reason is None:
         if reading.revision is not None:
             store.was_associated_with(
                 activity, store.agent(agent_type="model", model_id=reading.model_id, commit_sha=reading.revision)
@@ -750,7 +1038,12 @@ def review(store: ProvStore, config: TriageConfig, hint: AudioHints | None = Non
                 store,
                 prov_type="measurement",
                 extent=None,
-                attributes={"name": LLM_REVIEW_MEASUREMENT, "signal": "consensus_transcript", **review_payload_},
+                attributes={
+                    "name": LLM_REVIEW_MEASUREMENT,
+                    "signal": "consensus_transcript",
+                    **review_payload_,
+                    "review_inputs": dict(inputs),
+                },
             )
             store.was_generated_by(review_id, activity)
             store.was_attributed_to(review_id, software)
@@ -764,9 +1057,12 @@ def review(store: ProvStore, config: TriageConfig, hint: AudioHints | None = Non
             "name": REDACTION_LLM_ANNOTATION,
             "signal": "consensus_transcript",
             "status": reading.status,
+            "bypass_reason": reading.bypass_reason,
+            "absent_reason": reading.absent_reason,
             "iterations": reading.iterations,
             "converged": reading.converged,
             "problem": reading.problem,
+            "phrase_quotes_unplaced_n": reading.phrase_quotes_unplaced_n,
             "flagged": list(reading.flagged),
             "redaction": reading.redaction,
             "original": reading.original,
@@ -774,7 +1070,15 @@ def review(store: ProvStore, config: TriageConfig, hint: AudioHints | None = Non
             "other_speakers": [dict(entry) for entry in reading.other_speakers],
             "instructions_spoken": list(reading.instructions_spoken),
             "conditions": [dict(entry) for entry in reading.conditions],
+            "off_task_speech": reading.off_task_speech,
+            "off_task_quotes": list(reading.off_task_quotes),
+            "phrases_instead_of_items": reading.phrases_instead_of_items,
+            "phrase_quotes": list(reading.phrase_quotes),
+            "other_speaker": reading.other_speaker,
+            "other_speaker_quotes": list(reading.other_speaker_quotes),
+            "task_content_quotes": list(reading.task_content_quotes),
             "prompt_version": PROMPT_VERSION,
+            "engine": dict(reading.engine),
             "proposal": [dict(entry) for entry in reading.proposal],
             "proposal_redact_n": sum(1 for entry in reading.proposal if entry["action"] == REDACT),
             "proposal_release_n": sum(1 for entry in reading.proposal if entry["action"] != REDACT),
@@ -786,6 +1090,7 @@ def review(store: ProvStore, config: TriageConfig, hint: AudioHints | None = Non
             "detector_outcome": outcome,
             "read_redacted": redacted is not None,
             "task_context": dict(context),
+            "review_inputs": dict(inputs),
             "result_cache": cache,
         },
     )
@@ -817,11 +1122,12 @@ class RefinedPlan:
 
 
 def _word_spans(words: Sequence[Any]) -> tuple[str, list[tuple[int, int, Any]]]:
-    """The residue as one string, with each word's character range in it.
+    """Words as one string, with each word's character range in it.
 
     Args:
-        words: The residue words, :func:`~senselab.audio.workflows.triage.nodes.redact.residue_words`,
-            in stream order. Bracketed words are skipped, as ``transcript_texts`` skips them.
+        words: Consensus words in stream order: the residue
+            (:func:`~senselab.audio.workflows.triage.nodes.redact.residue_words`) or the whole
+            transcript. Bracketed words are skipped, as ``transcript_texts`` skips them.
 
     Returns:
         ``(text, spans)``, each span ``(start_char, end_char, word)``. The join is the one
@@ -870,8 +1176,9 @@ def refine_plan(store: ProvStore, *, padding_ms: int) -> RefinedPlan:
     """The redaction the reviewer's proposal asks for, as extents over this recording.
 
     The proposal is about text and an extent is about time, so the consensus words' own timings are
-    the join. A proposal entry naming text the transcript does not contain is recorded and
-    otherwise ignored.
+    the join. A quote is found in the whole consensus transcript the reviewer read and keeps the
+    residue words it covers; one found only in the residue text is placed there. A proposal entry
+    naming text neither contains is recorded and otherwise ignored.
 
     Args:
         store: The provenance store, carrying the annotation and the detectors' own spans.
@@ -883,7 +1190,10 @@ def refine_plan(store: ProvStore, *, padding_ms: int) -> RefinedPlan:
     annotation = find_measurement(store, REDACTION_LLM_ANNOTATION)
     proposal = list(annotation.attributes.get("proposal") or ()) if annotation is not None else []
     detector = planned_extents(store)
-    text, spans = _word_spans(residue_words(store))
+    residue = residue_words(store)
+    residue_ids = {word.id for word in residue}
+    whole_text, whole_spans = _word_spans(consensus_words(store))
+    text, spans = _word_spans(residue)
 
     keep = list(detector)
     added: list[RedactionExtent] = []
@@ -893,7 +1203,8 @@ def refine_plan(store: ProvStore, *, padding_ms: int) -> RefinedPlan:
     for entry in proposal:
         quoted = str(entry.get("text") or "")
         action = str(entry.get("action") or REDACT)
-        covered = _covered(text, spans, quoted)
+        covered = [word for word in _covered(whole_text, whole_spans, quoted) if word.id in residue_ids]
+        covered = covered or _covered(text, spans, quoted)
         if not covered:
             unplaced.append(quoted)
             continue
