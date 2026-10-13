@@ -5,13 +5,18 @@
         [--manifest MANIFEST.jsonl] [--vectors DIR/recording_vectors.parquet]
 
 The decision tables are the ones ``scripts/triage_recording_vectors.py --merge`` writes; ``--run-root``
-is the tree they were built over. The columns are ``data/triage_table.yaml``, copied beside the TSV as
-``triage.columns.yaml``. The table carries no transcript text. Nothing is written, and the exit status is
-2, where the table would not be one row per recording (``triage_table.coverage_problems``): a stem, run
-directory or source path held twice, a row with no source path, or, with ``--manifest``, a run asked for
-and absent or present and not asked for. The manifest also supplies the source path of a run whose
-store records none. ``--vectors`` is the ``recording_vectors.parquet`` built over the same tree, read for the
-whole-file SNR, noise floor and SQUIM columns; without it they are empty. Every store is read, never written.
+is the tree they were built over. The columns are ``data/triage_table.yaml``; their BIDS sidecar is
+written beside the TSV as ``triage.json``. The table carries no transcript text. Nothing is written,
+and the exit status is 2, where the table would not be one row per recording
+(``triage_table.coverage_problems``): a stem, run directory or source path held twice, a row with no
+source path, or, with ``--manifest``, a run asked for and absent or present and not asked for. The
+manifest also supplies the source path of a run whose store records none. ``--vectors`` is the
+``recording_vectors.parquet`` built over the same tree, read for the whole-file SNR, noise floor and
+SQUIM columns; without it they are empty. Every store is read, never written.
+
+    uv run python scripts/triage_table.py --sidecar-only DIR/triage.json
+
+writes only the sidecar, building no table.
 """
 
 from __future__ import annotations
@@ -36,8 +41,18 @@ def main(argv: list[str] | None = None) -> int:
         argv: The command line, or None to read ``sys.argv``.
 
     Returns:
-        0 when rows were written, 1 when none were, 2 when coverage failed and nothing was written.
+        0 when rows (or, with ``--sidecar-only``, the sidecar) were written, 1 when no rows were, 2 when
+        coverage failed and nothing was written.
     """
+    if argv is None:
+        argv = sys.argv[1:]
+    if argv[:1] == ["--sidecar-only"]:
+        sidecar = argparse.ArgumentParser(description="Write only triage.json, the BIDS sidecar of triage.tsv.")
+        sidecar.add_argument("--sidecar-only", type=Path, required=True, help="Where triage.json goes.")
+        path = sidecar.parse_args(argv).sidecar_only
+        triage_table.write_sidecar(path)
+        print(f"{len(triage_table.sidecar())} columns -> {path}")
+        return 0
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--decisions", type=Path, required=True, help="triage_decisions.parquet")
     parser.add_argument("--evidence", type=Path, required=True, help="triage_evidence.parquet")

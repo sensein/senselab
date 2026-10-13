@@ -23,14 +23,18 @@ import pyarrow as pa
 import pyarrow.compute as pc
 import yaml
 
+from senselab.audio.workflows.triage.decision import reason_vocabulary
 from senselab.audio.workflows.triage.nodes.branches import EXPECTATIONS
 from senselab.audio.workflows.triage.recording_vectors import RUN_SUBDIR, STORE_NAME, StoreView, read_store
 from senselab.audio.workflows.triage.routing_analysis.families import task_family, task_id_of
+from senselab.audio.workflows.triage.vocabulary import release_ground_meanings
 from senselab.utils import fastio
 
 COLUMNS_PATH = Path(__file__).parent / "data" / "triage_table.yaml"
 TABLE_NAME = "triage.tsv"
-COLUMNS_NAME = "triage.columns.yaml"
+SIDECAR_NAME = "triage.json"
+LEVELS_FROM_REASONS = "reasons"
+LEVELS_FROM_RELEASE_GROUNDS = "release_grounds"
 NO_BRANCH = "none"
 LIST_SEP = ";"
 EVIDENCE_SEP = "; "
@@ -80,6 +84,56 @@ def columns() -> list[str]:
         Every ``columns[].name`` of ``data/triage_table.yaml``.
     """
     return [str(column["name"]) for column in column_dictionary()["columns"]]
+
+
+def _levels_from(source: str) -> dict[str, str]:
+    """The levels a ``levels_from`` key names.
+
+    Args:
+        source: ``reasons`` (``data/decision_reasons.yaml`` ``meaning``) or ``release_grounds``
+            (:func:`~senselab.audio.workflows.triage.vocabulary.release_ground_meanings`).
+
+    Returns:
+        Level to meaning.
+
+    Raises:
+        ValueError: For any other source.
+    """
+    if source == LEVELS_FROM_REASONS:
+        return {str(key): str(text) for key, text in reason_vocabulary()["meaning"].items()}
+    if source == LEVELS_FROM_RELEASE_GROUNDS:
+        return release_ground_meanings()
+    raise ValueError(f"unknown levels_from {source!r}")
+
+
+def sidecar() -> dict[str, dict[str, Any]]:
+    """The BIDS tabular sidecar of ``triage.tsv``.
+
+    Returns:
+        One entry per column, in table order: ``Description``, and ``Units`` and ``Levels`` where
+        ``data/triage_table.yaml`` gives them. A ``;``-joined list column's ``Levels`` are its items'.
+    """
+    entries: dict[str, dict[str, Any]] = {}
+    for column in column_dictionary()["columns"]:
+        entry: dict[str, Any] = {"Description": str(column["description"])}
+        if "units" in column:
+            entry["Units"] = str(column["units"])
+        if "levels" in column:
+            entry["Levels"] = {str(key): str(text) for key, text in column["levels"].items()}
+        if "levels_from" in column:
+            entry["Levels"] = _levels_from(str(column["levels_from"]))
+        entries[str(column["name"])] = entry
+    return entries
+
+
+def write_sidecar(path: Path) -> None:
+    """Write :func:`sidecar` as JSON.
+
+    Args:
+        path: Where ``triage.json`` goes.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(sidecar(), indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
 def branch_of(family: str | None) -> str:
@@ -581,7 +635,7 @@ def coverage_problems(
 
 
 def write_tsv(table_rows: Iterable[Mapping[str, Any]], path: Path) -> int:
-    """Write the rows as ``triage.tsv``, and the column dictionary beside it as ``triage.columns.yaml``.
+    """Write the rows as ``triage.tsv``, and its BIDS sidecar beside it as ``triage.json``.
 
     Args:
         table_rows: Rows keyed by :func:`columns`.
@@ -599,5 +653,5 @@ def write_tsv(table_rows: Iterable[Mapping[str, Any]], path: Path) -> int:
         for table_row in table_rows:
             writer.writerow([field_text(table_row.get(name)) for name in names])
             written += 1
-    (path.parent / COLUMNS_NAME).write_text(COLUMNS_PATH.read_text())
+    write_sidecar(path.parent / SIDECAR_NAME)
     return written
