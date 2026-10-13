@@ -35,11 +35,21 @@ def test_the_script_writes_the_table_and_reports_its_counts(tmp_path: Path, caps
     assert _script().main(argv) == 0
     lines = out.read_text(encoding="utf-8").splitlines()
     assert lines[0].split("\t") == HEADER and len(lines) == 4
-    assert (out.parent / triage_table.COLUMNS_NAME).exists()
+    assert list(json.loads((out.parent / triage_table.SIDECAR_NAME).read_text())) == HEADER
+    assert not (out.parent / "triage.columns.yaml").exists()
     printed = capsys.readouterr().out
     assert "3 rows" in printed
     assert "verdict {'discard': 1, 'pass': 1, 'review': 1}" in printed
     assert "release {'': 1, 'as_is': 1, 'redacted': 1}" in printed
+
+
+def test_sidecar_only_writes_the_sidecar_and_no_table(tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+    """--sidecar-only writes triage.json at the path given and builds nothing else."""
+    path = tmp_path / "pub" / triage_table.SIDECAR_NAME
+    assert _script().main(["--sidecar-only", str(path)]) == 0
+    assert list(json.loads(path.read_text())) == HEADER
+    assert sorted(p.name for p in path.parent.iterdir()) == [triage_table.SIDECAR_NAME]
+    assert f"{len(HEADER)} columns" in capsys.readouterr().out
 
 
 def _argv(tmp_path: Path, out: Path) -> list[str]:

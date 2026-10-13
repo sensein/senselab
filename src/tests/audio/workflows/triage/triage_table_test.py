@@ -11,7 +11,7 @@ import pyarrow as pa
 import pytest
 import yaml
 
-from senselab.audio.workflows.triage import decision_tables, triage_table
+from senselab.audio.workflows.triage import decision, decision_tables, triage_table, vocabulary
 
 BIDS = "bids"
 HEADER = [
@@ -281,8 +281,39 @@ def test_the_header_is_the_column_dictionary_in_order(tmp_path: Path) -> None:
     assert triage_table.columns() == HEADER
     parsed, _ = _written(tmp_path)
     assert parsed[0] == HEADER
-    copied = yaml.safe_load((tmp_path / "pub" / triage_table.COLUMNS_NAME).read_text())
-    assert [column["name"] for column in copied["columns"]] == HEADER
+    written = json.loads((tmp_path / "pub" / triage_table.SIDECAR_NAME).read_text())
+    assert list(written) == HEADER
+
+
+def test_the_sidecar_describes_every_column_in_order() -> None:
+    """Every column has a Description; units and levels appear where the dictionary gives them."""
+    sidecar = triage_table.sidecar()
+    assert list(sidecar) == HEADER
+    assert all(entry["Description"] for entry in sidecar.values())
+    assert sidecar["task_start_s"]["Units"] == "s"
+    assert sidecar["noise_floor_dbfs"]["Units"] == "dBFS"
+    assert set(sidecar["verdict"]["Levels"]) == {"pass", "review", "discard"}
+    assert set(sidecar["release"]["Levels"]) == {"as_is", "redacted", "withheld"}
+    assert set(sidecar["asr_single_hypothesis"]["Levels"]) == {"true", "false"}
+    assert "none" in sidecar["branch"]["Levels"] and "none" in sidecar["enrollment_source"]["Levels"]
+    assert all(
+        isinstance(text, str) and text for entry in sidecar.values() for text in entry.get("Levels", {}).values()
+    )
+
+
+def test_every_reason_is_a_level_of_reason_and_reasons() -> None:
+    """Each reason in the precedence has a level, with its meaning, in both reason columns."""
+    precedence = decision.reason_vocabulary()["precedence"]
+    sidecar = triage_table.sidecar()
+    for column in ("reason", "reasons"):
+        assert set(precedence) <= set(sidecar[column]["Levels"])
+
+
+def test_every_release_ground_is_a_level_of_release_reason() -> None:
+    """Each release ground key the vocabulary can write, and REDACT's own decision, has a level."""
+    levels = triage_table.sidecar()["release_reason"]["Levels"]
+    assert set(vocabulary.RELEASE_GROUND_KEYS.values()) | {vocabulary.RELEASE_DECIDED_BY_REDACT} <= set(levels)
+    assert {"release_empty", "second_opinion_not_free", "nothing_beyond_stimulus"} <= set(levels)
 
 
 def test_no_field_carries_a_tab_or_a_line_break(tmp_path: Path) -> None:

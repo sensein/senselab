@@ -1187,6 +1187,18 @@ RELEASE_GROUND_KEYS: dict[str, str] = {
 :data:`RELEASE_DECIDED_BY_REDACT`."""
 
 RELEASE_DECIDED_BY_REDACT = "redact_decided"
+RELEASE_DECIDED_BY_REDACT_MEANING = "REDACT decided the release itself, with no other release ground standing"
+
+
+def release_ground_meanings() -> dict[str, str]:
+    """Every release ground key a ``release_reason`` can hold, with its meaning.
+
+    Returns:
+        Key to meaning, from :data:`RELEASE_GROUND_KEYS` plus :data:`RELEASE_DECIDED_BY_REDACT`.
+    """
+    meanings = {key: text for text, key in RELEASE_GROUND_KEYS.items()}
+    meanings[RELEASE_DECIDED_BY_REDACT] = RELEASE_DECIDED_BY_REDACT_MEANING
+    return meanings
 
 
 def is_operational(key: str | None) -> bool:
