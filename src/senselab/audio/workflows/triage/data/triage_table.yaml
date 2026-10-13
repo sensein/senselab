@@ -27,7 +27,7 @@ columns:
     SPEECH: speech and reading families
     VOICE: phonation, glide and loudness families
     AIRWAY: breathing and cough families
-    "none": no branch owns the declared family
+    none: no branch owns the declared family
 - name: source_path
   group: identity
   description: the recording WAV, relative to the BIDS root
@@ -167,8 +167,8 @@ columns:
   group: speech_content
   description: true where only one recogniser produced a transcript
   levels:
-    "true": only one recogniser produced a transcript
-    "false": both recognisers produced a transcript
+    'true': only one recogniser produced a transcript
+    'false': both recognisers produced a transcript
 - name: asr_degenerate_n
   group: speech_content
   description: recogniser loop or garbage tokens dropped from the consensus
@@ -196,7 +196,7 @@ columns:
   levels:
     session: the participant's speech in the same session
     participant_other_sessions: the participant's speech in their other sessions
-    "none": no enrollment could be built; the cosines are empty
+    none: no enrollment could be built; the cosines are empty
 - name: task_audio_plain
   group: files
   description: the task extent cut from the plain stream
