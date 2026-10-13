@@ -32,6 +32,9 @@
             <h2>API Documentation</h2>
                 <ul class="memberlist">
             <li>
+                    <a class="variable" href="#ITEM_SET_QUESTIONS">ITEM_SET_QUESTIONS</a>
+            </li>
+            <li>
                     <a class="variable" href="#QUESTIONS">QUESTIONS</a>
             </li>
             <li>
@@ -149,7 +152,10 @@
                                 <a class="variable" href="#SecondOpinion.probabilities">probabilities</a>
                         </li>
                         <li>
-                                <a class="variable" href="#SecondOpinion.other_voice_choice">other_voice_choice</a>
+                                <a class="variable" href="#SecondOpinion.choices">choices</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#SecondOpinion.class_probabilities">class_probabilities</a>
                         </li>
                         <li>
                                 <a class="variable" href="#SecondOpinion.raw">raw</a>
@@ -162,6 +168,9 @@
             </li>
             <li>
                     <a class="function" href="#ask_second_opinion">ask_second_opinion</a>
+            </li>
+            <li>
+                    <a class="function" href="#questions_for">questions_for</a>
             </li>
             <li>
                     <a class="function" href="#read_answers">read_answers</a>
@@ -212,35 +221,52 @@ questions triage asks and reads the answers back.</p>
 </span><span id="L-14"><a href="#L-14"><span class="linenos">14</span></a>    <span class="n">verify_pin</span><span class="p">,</span>
 </span><span id="L-15"><a href="#L-15"><span class="linenos">15</span></a><span class="p">)</span>
 </span><span id="L-16"><a href="#L-16"><span class="linenos">16</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">senselab.text.tasks.decision_model.second_opinion</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
-</span><span id="L-17"><a href="#L-17"><span class="linenos">17</span></a>    <span class="n">QUESTION_SET_VERSION</span><span class="p">,</span>
-</span><span id="L-18"><a href="#L-18"><span class="linenos">18</span></a>    <span class="n">QUESTIONS</span><span class="p">,</span>
-</span><span id="L-19"><a href="#L-19"><span class="linenos">19</span></a>    <span class="n">SecondOpinion</span><span class="p">,</span>
-</span><span id="L-20"><a href="#L-20"><span class="linenos">20</span></a>    <span class="n">ask_second_opinion</span><span class="p">,</span>
-</span><span id="L-21"><a href="#L-21"><span class="linenos">21</span></a>    <span class="n">read_answers</span><span class="p">,</span>
-</span><span id="L-22"><a href="#L-22"><span class="linenos">22</span></a><span class="p">)</span>
-</span><span id="L-23"><a href="#L-23"><span class="linenos">23</span></a>
-</span><span id="L-24"><a href="#L-24"><span class="linenos">24</span></a><span class="n">__all__</span> <span class="o">=</span> <span class="p">[</span>
-</span><span id="L-25"><a href="#L-25"><span class="linenos">25</span></a>    <span class="s2">&quot;QUESTIONS&quot;</span><span class="p">,</span>
-</span><span id="L-26"><a href="#L-26"><span class="linenos">26</span></a>    <span class="s2">&quot;QUESTION_SET_VERSION&quot;</span><span class="p">,</span>
-</span><span id="L-27"><a href="#L-27"><span class="linenos">27</span></a>    <span class="s2">&quot;OllamaPin&quot;</span><span class="p">,</span>
-</span><span id="L-28"><a href="#L-28"><span class="linenos">28</span></a>    <span class="s2">&quot;OllamaServer&quot;</span><span class="p">,</span>
-</span><span id="L-29"><a href="#L-29"><span class="linenos">29</span></a>    <span class="s2">&quot;PinMismatchError&quot;</span><span class="p">,</span>
-</span><span id="L-30"><a href="#L-30"><span class="linenos">30</span></a>    <span class="s2">&quot;ServerUnusableError&quot;</span><span class="p">,</span>
-</span><span id="L-31"><a href="#L-31"><span class="linenos">31</span></a>    <span class="s2">&quot;SecondOpinion&quot;</span><span class="p">,</span>
-</span><span id="L-32"><a href="#L-32"><span class="linenos">32</span></a>    <span class="s2">&quot;ask_decisions&quot;</span><span class="p">,</span>
-</span><span id="L-33"><a href="#L-33"><span class="linenos">33</span></a>    <span class="s2">&quot;ask_second_opinion&quot;</span><span class="p">,</span>
-</span><span id="L-34"><a href="#L-34"><span class="linenos">34</span></a>    <span class="s2">&quot;read_answers&quot;</span><span class="p">,</span>
-</span><span id="L-35"><a href="#L-35"><span class="linenos">35</span></a>    <span class="s2">&quot;verify_pin&quot;</span><span class="p">,</span>
-</span><span id="L-36"><a href="#L-36"><span class="linenos">36</span></a><span class="p">]</span>
+</span><span id="L-17"><a href="#L-17"><span class="linenos">17</span></a>    <span class="n">ITEM_SET_QUESTIONS</span><span class="p">,</span>
+</span><span id="L-18"><a href="#L-18"><span class="linenos">18</span></a>    <span class="n">QUESTION_SET_VERSION</span><span class="p">,</span>
+</span><span id="L-19"><a href="#L-19"><span class="linenos">19</span></a>    <span class="n">QUESTIONS</span><span class="p">,</span>
+</span><span id="L-20"><a href="#L-20"><span class="linenos">20</span></a>    <span class="n">SecondOpinion</span><span class="p">,</span>
+</span><span id="L-21"><a href="#L-21"><span class="linenos">21</span></a>    <span class="n">ask_second_opinion</span><span class="p">,</span>
+</span><span id="L-22"><a href="#L-22"><span class="linenos">22</span></a>    <span class="n">questions_for</span><span class="p">,</span>
+</span><span id="L-23"><a href="#L-23"><span class="linenos">23</span></a>    <span class="n">read_answers</span><span class="p">,</span>
+</span><span id="L-24"><a href="#L-24"><span class="linenos">24</span></a><span class="p">)</span>
+</span><span id="L-25"><a href="#L-25"><span class="linenos">25</span></a>
+</span><span id="L-26"><a href="#L-26"><span class="linenos">26</span></a><span class="n">__all__</span> <span class="o">=</span> <span class="p">[</span>
+</span><span id="L-27"><a href="#L-27"><span class="linenos">27</span></a>    <span class="s2">&quot;ITEM_SET_QUESTIONS&quot;</span><span class="p">,</span>
+</span><span id="L-28"><a href="#L-28"><span class="linenos">28</span></a>    <span class="s2">&quot;QUESTIONS&quot;</span><span class="p">,</span>
+</span><span id="L-29"><a href="#L-29"><span class="linenos">29</span></a>    <span class="s2">&quot;QUESTION_SET_VERSION&quot;</span><span class="p">,</span>
+</span><span id="L-30"><a href="#L-30"><span class="linenos">30</span></a>    <span class="s2">&quot;OllamaPin&quot;</span><span class="p">,</span>
+</span><span id="L-31"><a href="#L-31"><span class="linenos">31</span></a>    <span class="s2">&quot;OllamaServer&quot;</span><span class="p">,</span>
+</span><span id="L-32"><a href="#L-32"><span class="linenos">32</span></a>    <span class="s2">&quot;PinMismatchError&quot;</span><span class="p">,</span>
+</span><span id="L-33"><a href="#L-33"><span class="linenos">33</span></a>    <span class="s2">&quot;ServerUnusableError&quot;</span><span class="p">,</span>
+</span><span id="L-34"><a href="#L-34"><span class="linenos">34</span></a>    <span class="s2">&quot;SecondOpinion&quot;</span><span class="p">,</span>
+</span><span id="L-35"><a href="#L-35"><span class="linenos">35</span></a>    <span class="s2">&quot;ask_decisions&quot;</span><span class="p">,</span>
+</span><span id="L-36"><a href="#L-36"><span class="linenos">36</span></a>    <span class="s2">&quot;ask_second_opinion&quot;</span><span class="p">,</span>
+</span><span id="L-37"><a href="#L-37"><span class="linenos">37</span></a>    <span class="s2">&quot;questions_for&quot;</span><span class="p">,</span>
+</span><span id="L-38"><a href="#L-38"><span class="linenos">38</span></a>    <span class="s2">&quot;read_answers&quot;</span><span class="p">,</span>
+</span><span id="L-39"><a href="#L-39"><span class="linenos">39</span></a>    <span class="s2">&quot;verify_pin&quot;</span><span class="p">,</span>
+</span><span id="L-40"><a href="#L-40"><span class="linenos">40</span></a><span class="p">]</span>
 </span></pre></div>
 
 
             </section>
+                <section id="ITEM_SET_QUESTIONS">
+                    <div class="attr variable">
+            <span class="name">ITEM_SET_QUESTIONS</span>        =
+<input id="ITEM_SET_QUESTIONS-view-value" class="view-value-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
+            <label class="view-value-button pdoc-button" for="ITEM_SET_QUESTIONS-view-value"></label><span class="default_value">{&#39;other_voice&#39;: {&#39;type&#39;: &#39;choice&#39;, &#39;instructions&#39;: &#34;Is any of this transcript spoken by someone other than the participant (for example an examiner giving or repeating instructions, or a second person talking)? The participant addressing the examiner (for example &#39;Is that enough?&#39;) is still the participant. Judge it against the task (state.task, state.task_nature, state.instructions, state.task_content).&#34;, &#39;criteria&#39;: {&#39;one&#39;: &#39;Only the participant speaks&#39;, &#39;more_than_one&#39;: &#39;Someone else also speaks&#39;, &#39;unclear&#39;: &#39;Cannot tell&#39;}}, &#39;instructions_spoken&#39;: {&#39;type&#39;: &#39;noul&#39;, &#39;instructions&#39;: &#39;Are the task instructions (given in state.instructions) spoken in the transcript, verbatim or paraphrased, by anyone? The stimulus (state.stimulus) is not the instructions.&#39;}, &#39;policy_identifier_present&#39;: {&#39;type&#39;: &#39;noul&#39;, &#39;instructions&#39;: &#34;Does the transcript (state.transcript) contain anything that must be removed before release? Apply the redaction policy in state.redaction_policy, the same policy the redaction reviewer applies, as the definition of what must be removed: judge only what it removes, not its instructions about proposing releases. Anything the policy keeps or releases does not count, and neither does the task&#39;s own content (state.stimulus, state.task_content).&#34;}, &#39;masked_text_free_of_identifiers&#39;: {&#39;type&#39;: &#39;noul&#39;, &#39;instructions&#39;: &#34;state.masked_text is the transcript exactly as it would be released: every removed span is replaced by a [CATEGORY] token, and where nothing was removed it equals state.transcript. Is state.masked_text free of everything that must be removed, so that nothing the policy removes can still be read in it? Apply the redaction policy in state.redaction_policy, the same policy the redaction reviewer applies, as the definition of what must be removed: judge only what it removes, not its instructions about proposing releases. Anything the policy keeps or releases does not count, and neither does the task&#39;s own content (state.stimulus, state.task_content).&#34;}, &#39;phrases_instead_of_items&#39;: {&#39;type&#39;: &#39;choice&#39;, &#39;instructions&#39;: &#34;This task asks for a list of items (state.task, state.task_nature, state.instructions). Is the participant uttering phrases instead of items? An item is a short unit, typically one to three words: a name, a number, a letter, an animal, whatever the instructions ask for. A phrase is clausal or non-item speech: a clause, a sentence, a comment, a question or a story rather than an item, such as &#39;I don&#39;t know what else to say&#39; or &#39;my dog&#39;s name is ...&#39;. Judge each stretch of the transcript by what it says; neither a pause nor the number of words decides it. Brief asides about the task itself (&#39;um, let me think&#39;, &#39;is that enough?&#39;) are normal in this task and do not count.&#34;, &#39;criteria&#39;: {&#39;none&#39;: &#39;The participant lists items, with at most brief asides about the task&#39;, &#39;occasional&#39;: &#39;A few phrases come between the items&#39;, &#39;predominant&#39;: &#39;Phrases make up much of the recording; the list gives way to narration&#39;}}}</span>
+
+        
+    </div>
+    <a class="headerlink" href="#ITEM_SET_QUESTIONS"></a>
+    
+    
+
+                </section>
                 <section id="QUESTIONS">
                     <div class="attr variable">
             <span class="name">QUESTIONS</span>        =
 <input id="QUESTIONS-view-value" class="view-value-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
-            <label class="view-value-button pdoc-button" for="QUESTIONS-view-value"></label><span class="default_value">{&#39;other_voice&#39;: {&#39;type&#39;: &#39;choice&#39;, &#39;instructions&#39;: &#34;Is any of this transcript spoken by someone other than the participant (for example an examiner giving or repeating instructions, or a second person talking)? The participant addressing the examiner (for example &#39;Is that enough?&#39;) is still the participant. Judge it against the task (state.task, state.instructions, state.task_content).&#34;, &#39;criteria&#39;: {&#39;one&#39;: &#39;Only the participant speaks&#39;, &#39;more_than_one&#39;: &#39;Someone else also speaks&#39;, &#39;unclear&#39;: &#39;Cannot tell&#39;}}, &#39;instructions_spoken&#39;: {&#39;type&#39;: &#39;noul&#39;, &#39;instructions&#39;: &#39;Are the task instructions (given in state.instructions) spoken in the transcript, verbatim or paraphrased, by anyone? The stimulus (state.stimulus) is not the instructions.&#39;}, &#39;policy_identifier_present&#39;: {&#39;type&#39;: &#39;noul&#39;, &#39;instructions&#39;: &#34;Does the transcript contain anything that must be removed before release: the name of a person connected to the participant (not a public figure, a fictional character or a work title); an absolute date element (a year, a month, a holiday, a day of the month); a place smaller than a country connected to the participant (where they or their people live, work, travel or are treated); a specific named organization (an employer, a school, a hospital, a military unit); an age; or a contact or ID number? Relationship words, seasons, weekdays, relative times, countries, health conditions, and anything that is the task&#39;s own content (state.stimulus, state.task_content) do not count.&#34;}}</span>
+            <label class="view-value-button pdoc-button" for="QUESTIONS-view-value"></label><span class="default_value">{&#39;other_voice&#39;: {&#39;type&#39;: &#39;choice&#39;, &#39;instructions&#39;: &#34;Is any of this transcript spoken by someone other than the participant (for example an examiner giving or repeating instructions, or a second person talking)? The participant addressing the examiner (for example &#39;Is that enough?&#39;) is still the participant. Judge it against the task (state.task, state.task_nature, state.instructions, state.task_content).&#34;, &#39;criteria&#39;: {&#39;one&#39;: &#39;Only the participant speaks&#39;, &#39;more_than_one&#39;: &#39;Someone else also speaks&#39;, &#39;unclear&#39;: &#39;Cannot tell&#39;}}, &#39;instructions_spoken&#39;: {&#39;type&#39;: &#39;noul&#39;, &#39;instructions&#39;: &#39;Are the task instructions (given in state.instructions) spoken in the transcript, verbatim or paraphrased, by anyone? The stimulus (state.stimulus) is not the instructions.&#39;}, &#39;policy_identifier_present&#39;: {&#39;type&#39;: &#39;noul&#39;, &#39;instructions&#39;: &#34;Does the transcript (state.transcript) contain anything that must be removed before release? Apply the redaction policy in state.redaction_policy, the same policy the redaction reviewer applies, as the definition of what must be removed: judge only what it removes, not its instructions about proposing releases. Anything the policy keeps or releases does not count, and neither does the task&#39;s own content (state.stimulus, state.task_content).&#34;}, &#39;masked_text_free_of_identifiers&#39;: {&#39;type&#39;: &#39;noul&#39;, &#39;instructions&#39;: &#34;state.masked_text is the transcript exactly as it would be released: every removed span is replaced by a [CATEGORY] token, and where nothing was removed it equals state.transcript. Is state.masked_text free of everything that must be removed, so that nothing the policy removes can still be read in it? Apply the redaction policy in state.redaction_policy, the same policy the redaction reviewer applies, as the definition of what must be removed: judge only what it removes, not its instructions about proposing releases. Anything the policy keeps or releases does not count, and neither does the task&#39;s own content (state.stimulus, state.task_content).&#34;}, &#39;off_task_speech&#39;: {&#39;type&#39;: &#39;choice&#39;, &#39;instructions&#39;: &#39;Did the participant stop doing the task or talk about something other than what the instructions ask for (state.task, state.task_nature, state.instructions)? In a non-lexical task (breathing, coughing, phonation, repeated syllables) any words the participant says are off-task.&#39;, &#39;criteria&#39;: {&#39;none&#39;: &#39;The participant only does the task&#39;, &#39;some&#39;: &#39;A remark or question outside the task&#39;, &#39;extensive&#39;: &#39;Much of the recording is outside the task&#39;}}}</span>
 
         
     </div>
@@ -252,7 +278,7 @@ questions triage asks and reads the answers back.</p>
                 <section id="QUESTION_SET_VERSION">
                     <div class="attr variable">
             <span class="name">QUESTION_SET_VERSION</span>        =
-<span class="default_value">3</span>
+<span class="default_value">6</span>
 
         
     </div>
@@ -1099,20 +1125,23 @@ residency check decides.</li>
 
     </div>
     <a class="headerlink" href="#SecondOpinion"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="SecondOpinion-69"><a href="#SecondOpinion-69"><span class="linenos">69</span></a><span class="nd">@dataclass</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
-</span><span id="SecondOpinion-70"><a href="#SecondOpinion-70"><span class="linenos">70</span></a><span class="k">class</span><span class="w"> </span><span class="nc">SecondOpinion</span><span class="p">:</span>
-</span><span id="SecondOpinion-71"><a href="#SecondOpinion-71"><span class="linenos">71</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;One transcript&#39;s answers.</span>
-</span><span id="SecondOpinion-72"><a href="#SecondOpinion-72"><span class="linenos">72</span></a>
-</span><span id="SecondOpinion-73"><a href="#SecondOpinion-73"><span class="linenos">73</span></a><span class="sd">    Attributes:</span>
-</span><span id="SecondOpinion-74"><a href="#SecondOpinion-74"><span class="linenos">74</span></a><span class="sd">        probabilities: Question name to the probability of &quot;yes&quot; -- for ``other_voice``, of</span>
-</span><span id="SecondOpinion-75"><a href="#SecondOpinion-75"><span class="linenos">75</span></a><span class="sd">            ``more_than_one``.</span>
-</span><span id="SecondOpinion-76"><a href="#SecondOpinion-76"><span class="linenos">76</span></a><span class="sd">        other_voice_choice: The class the model chose for ``other_voice``.</span>
-</span><span id="SecondOpinion-77"><a href="#SecondOpinion-77"><span class="linenos">77</span></a><span class="sd">        raw: The answers as the model returned them.</span>
-</span><span id="SecondOpinion-78"><a href="#SecondOpinion-78"><span class="linenos">78</span></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="SecondOpinion-79"><a href="#SecondOpinion-79"><span class="linenos">79</span></a>
-</span><span id="SecondOpinion-80"><a href="#SecondOpinion-80"><span class="linenos">80</span></a>    <span class="n">probabilities</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">float</span><span class="p">]</span>
-</span><span id="SecondOpinion-81"><a href="#SecondOpinion-81"><span class="linenos">81</span></a>    <span class="n">other_voice_choice</span><span class="p">:</span> <span class="nb">str</span>
-</span><span id="SecondOpinion-82"><a href="#SecondOpinion-82"><span class="linenos">82</span></a>    <span class="n">raw</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]</span> <span class="o">=</span> <span class="n">field</span><span class="p">(</span><span class="n">default_factory</span><span class="o">=</span><span class="nb">dict</span><span class="p">)</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="SecondOpinion-164"><a href="#SecondOpinion-164"><span class="linenos">164</span></a><span class="nd">@dataclass</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</span><span id="SecondOpinion-165"><a href="#SecondOpinion-165"><span class="linenos">165</span></a><span class="k">class</span><span class="w"> </span><span class="nc">SecondOpinion</span><span class="p">:</span>
+</span><span id="SecondOpinion-166"><a href="#SecondOpinion-166"><span class="linenos">166</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;One transcript&#39;s answers.</span>
+</span><span id="SecondOpinion-167"><a href="#SecondOpinion-167"><span class="linenos">167</span></a>
+</span><span id="SecondOpinion-168"><a href="#SecondOpinion-168"><span class="linenos">168</span></a><span class="sd">    Attributes:</span>
+</span><span id="SecondOpinion-169"><a href="#SecondOpinion-169"><span class="linenos">169</span></a><span class="sd">        probabilities: Question name to the probability of &quot;yes&quot;: for a ``noul`` question its own</span>
+</span><span id="SecondOpinion-170"><a href="#SecondOpinion-170"><span class="linenos">170</span></a><span class="sd">            probability, for a choice question the sum of its :data:`POSITIVE_CLASSES` (``other_voice``:</span>
+</span><span id="SecondOpinion-171"><a href="#SecondOpinion-171"><span class="linenos">171</span></a><span class="sd">            ``more_than_one``; ``off_task_speech``: ``some`` plus ``extensive``).</span>
+</span><span id="SecondOpinion-172"><a href="#SecondOpinion-172"><span class="linenos">172</span></a><span class="sd">        choices: Choice question name to the class the model chose.</span>
+</span><span id="SecondOpinion-173"><a href="#SecondOpinion-173"><span class="linenos">173</span></a><span class="sd">        class_probabilities: Choice question name to its class probabilities as the model gave them.</span>
+</span><span id="SecondOpinion-174"><a href="#SecondOpinion-174"><span class="linenos">174</span></a><span class="sd">        raw: The answers as the model returned them.</span>
+</span><span id="SecondOpinion-175"><a href="#SecondOpinion-175"><span class="linenos">175</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="SecondOpinion-176"><a href="#SecondOpinion-176"><span class="linenos">176</span></a>
+</span><span id="SecondOpinion-177"><a href="#SecondOpinion-177"><span class="linenos">177</span></a>    <span class="n">probabilities</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">float</span><span class="p">]</span>
+</span><span id="SecondOpinion-178"><a href="#SecondOpinion-178"><span class="linenos">178</span></a>    <span class="n">choices</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="n">field</span><span class="p">(</span><span class="n">default_factory</span><span class="o">=</span><span class="nb">dict</span><span class="p">)</span>
+</span><span id="SecondOpinion-179"><a href="#SecondOpinion-179"><span class="linenos">179</span></a>    <span class="n">class_probabilities</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">float</span><span class="p">]]</span> <span class="o">=</span> <span class="n">field</span><span class="p">(</span><span class="n">default_factory</span><span class="o">=</span><span class="nb">dict</span><span class="p">)</span>
+</span><span id="SecondOpinion-180"><a href="#SecondOpinion-180"><span class="linenos">180</span></a>    <span class="n">raw</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]</span> <span class="o">=</span> <span class="n">field</span><span class="p">(</span><span class="n">default_factory</span><span class="o">=</span><span class="nb">dict</span><span class="p">)</span>
 </span></pre></div>
 
 
@@ -1121,9 +1150,11 @@ residency check decides.</li>
 <h6 id="attributes">Attributes:</h6>
 
 <ul>
-<li><strong>probabilities:</strong>  Question name to the probability of "yes" -- for <code>other_voice</code>, of
-<code>more_than_one</code>.</li>
-<li><strong>other_voice_choice:</strong>  The class the model chose for <code>other_voice</code>.</li>
+<li><strong>probabilities:</strong>  Question name to the probability of "yes": for a <code>noul</code> question its own
+probability, for a choice question the sum of its <code>POSITIVE_CLASSES</code> (<code>other_voice</code>:
+<code>more_than_one</code>; <code>off_task_speech</code>: <code>some</code> plus <code>extensive</code>).</li>
+<li><strong>choices:</strong>  Choice question name to the class the model chose.</li>
+<li><strong>class_probabilities:</strong>  Choice question name to its class probabilities as the model gave them.</li>
 <li><strong>raw:</strong>  The answers as the model returned them.</li>
 </ul>
 </div>
@@ -1132,7 +1163,7 @@ residency check decides.</li>
                             <div id="SecondOpinion.__init__" class="classattr">
                                 <div class="attr function">
             
-        <span class="name">SecondOpinion</span><span class="signature pdoc-code multiline">(<span class="param">	<span class="n">probabilities</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">float</span><span class="p">]</span>,</span><span class="param">	<span class="n">other_voice_choice</span><span class="p">:</span> <span class="nb">str</span>,</span><span class="param">	<span class="n">raw</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">typing</span><span class="o">.</span><span class="n">Any</span><span class="p">]</span> <span class="o">=</span> <span class="o">&lt;</span><span class="n">factory</span><span class="o">&gt;</span></span>)</span>
+        <span class="name">SecondOpinion</span><span class="signature pdoc-code multiline">(<span class="param">	<span class="n">probabilities</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">float</span><span class="p">]</span>,</span><span class="param">	<span class="n">choices</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="o">&lt;</span><span class="n">factory</span><span class="o">&gt;</span>,</span><span class="param">	<span class="n">class_probabilities</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">float</span><span class="p">]]</span> <span class="o">=</span> <span class="o">&lt;</span><span class="n">factory</span><span class="o">&gt;</span>,</span><span class="param">	<span class="n">raw</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">typing</span><span class="o">.</span><span class="n">Any</span><span class="p">]</span> <span class="o">=</span> <span class="o">&lt;</span><span class="n">factory</span><span class="o">&gt;</span></span>)</span>
 
         
     </div>
@@ -1152,13 +1183,24 @@ residency check decides.</li>
     
 
                             </div>
-                            <div id="SecondOpinion.other_voice_choice" class="classattr">
+                            <div id="SecondOpinion.choices" class="classattr">
                                 <div class="attr variable">
-            <span class="name">other_voice_choice</span><span class="annotation">: str</span>
+            <span class="name">choices</span><span class="annotation">: dict[str, str]</span>
 
         
     </div>
-    <a class="headerlink" href="#SecondOpinion.other_voice_choice"></a>
+    <a class="headerlink" href="#SecondOpinion.choices"></a>
+    
+    
+
+                            </div>
+                            <div id="SecondOpinion.class_probabilities" class="classattr">
+                                <div class="attr variable">
+            <span class="name">class_probabilities</span><span class="annotation">: dict[str, dict[str, float]]</span>
+
+        
+    </div>
+    <a class="headerlink" href="#SecondOpinion.class_probabilities"></a>
     
     
 
@@ -1264,28 +1306,31 @@ residency check decides.</li>
 <div class="attr function">
             
         <span class="def">def</span>
-        <span class="name">ask_second_opinion</span><span class="signature pdoc-code multiline">(<span class="param">	<span class="n">ask</span><span class="p">:</span> <span class="n">Callable</span><span class="p">[[</span><span class="n">Mapping</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">],</span> <span class="n">Mapping</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Mapping</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]]],</span> <span class="n">Mapping</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]]</span>,</span><span class="param">	<span class="n">transcript</span><span class="p">:</span> <span class="nb">str</span>,</span><span class="param">	<span class="n">context</span><span class="p">:</span> <span class="n">Mapping</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]</span></span><span class="return-annotation">) -> <span class="n"><a href="#SecondOpinion">SecondOpinion</a></span>:</span></span>
+        <span class="name">ask_second_opinion</span><span class="signature pdoc-code multiline">(<span class="param">	<span class="n">ask</span><span class="p">:</span> <span class="n">Callable</span><span class="p">[[</span><span class="n">Mapping</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">],</span> <span class="n">Mapping</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Mapping</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]]],</span> <span class="n">Mapping</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]]</span>,</span><span class="param">	<span class="n">transcript</span><span class="p">:</span> <span class="nb">str</span>,</span><span class="param">	<span class="n">context</span><span class="p">:</span> <span class="n">Mapping</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]</span>,</span><span class="param">	<span class="n">masked_text</span><span class="p">:</span> <span class="nb">str</span></span><span class="return-annotation">) -> <span class="n"><a href="#SecondOpinion">SecondOpinion</a></span>:</span></span>
 
                 <label class="view-source-button" for="ask_second_opinion-view-source"><span>View Source</span></label>
 
     </div>
     <a class="headerlink" href="#ask_second_opinion"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="ask_second_opinion-137"><a href="#ask_second_opinion-137"><span class="linenos">137</span></a><span class="k">def</span><span class="w"> </span><span class="nf">ask_second_opinion</span><span class="p">(</span>
-</span><span id="ask_second_opinion-138"><a href="#ask_second_opinion-138"><span class="linenos">138</span></a>    <span class="n">ask</span><span class="p">:</span> <span class="n">Callable</span><span class="p">[[</span><span class="n">Mapping</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">],</span> <span class="n">Mapping</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Mapping</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]]],</span> <span class="n">Mapping</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]],</span>
-</span><span id="ask_second_opinion-139"><a href="#ask_second_opinion-139"><span class="linenos">139</span></a>    <span class="n">transcript</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
-</span><span id="ask_second_opinion-140"><a href="#ask_second_opinion-140"><span class="linenos">140</span></a>    <span class="n">context</span><span class="p">:</span> <span class="n">Mapping</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">],</span>
-</span><span id="ask_second_opinion-141"><a href="#ask_second_opinion-141"><span class="linenos">141</span></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">SecondOpinion</span><span class="p">:</span>
-</span><span id="ask_second_opinion-142"><a href="#ask_second_opinion-142"><span class="linenos">142</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Ask the question set about one transcript.</span>
-</span><span id="ask_second_opinion-143"><a href="#ask_second_opinion-143"><span class="linenos">143</span></a>
-</span><span id="ask_second_opinion-144"><a href="#ask_second_opinion-144"><span class="linenos">144</span></a><span class="sd">    Args:</span>
-</span><span id="ask_second_opinion-145"><a href="#ask_second_opinion-145"><span class="linenos">145</span></a><span class="sd">        ask: Sends a state and questions to the model and returns its ``answers``.</span>
-</span><span id="ask_second_opinion-146"><a href="#ask_second_opinion-146"><span class="linenos">146</span></a><span class="sd">        transcript: The text the reviewer reads.</span>
-</span><span id="ask_second_opinion-147"><a href="#ask_second_opinion-147"><span class="linenos">147</span></a><span class="sd">        context: The reviewer&#39;s task context.</span>
-</span><span id="ask_second_opinion-148"><a href="#ask_second_opinion-148"><span class="linenos">148</span></a>
-</span><span id="ask_second_opinion-149"><a href="#ask_second_opinion-149"><span class="linenos">149</span></a><span class="sd">    Returns:</span>
-</span><span id="ask_second_opinion-150"><a href="#ask_second_opinion-150"><span class="linenos">150</span></a><span class="sd">        The answers.</span>
-</span><span id="ask_second_opinion-151"><a href="#ask_second_opinion-151"><span class="linenos">151</span></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="ask_second_opinion-152"><a href="#ask_second_opinion-152"><span class="linenos">152</span></a>    <span class="k">return</span> <span class="n">read_answers</span><span class="p">(</span><span class="n">ask</span><span class="p">(</span><span class="n">opinion_state</span><span class="p">(</span><span class="n">transcript</span><span class="p">,</span> <span class="n">context</span><span class="p">),</span> <span class="n">QUESTIONS</span><span class="p">))</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="ask_second_opinion-251"><a href="#ask_second_opinion-251"><span class="linenos">251</span></a><span class="k">def</span><span class="w"> </span><span class="nf">ask_second_opinion</span><span class="p">(</span>
+</span><span id="ask_second_opinion-252"><a href="#ask_second_opinion-252"><span class="linenos">252</span></a>    <span class="n">ask</span><span class="p">:</span> <span class="n">Callable</span><span class="p">[[</span><span class="n">Mapping</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">],</span> <span class="n">Mapping</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Mapping</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]]],</span> <span class="n">Mapping</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]],</span>
+</span><span id="ask_second_opinion-253"><a href="#ask_second_opinion-253"><span class="linenos">253</span></a>    <span class="n">transcript</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+</span><span id="ask_second_opinion-254"><a href="#ask_second_opinion-254"><span class="linenos">254</span></a>    <span class="n">context</span><span class="p">:</span> <span class="n">Mapping</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">],</span>
+</span><span id="ask_second_opinion-255"><a href="#ask_second_opinion-255"><span class="linenos">255</span></a>    <span class="n">masked_text</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+</span><span id="ask_second_opinion-256"><a href="#ask_second_opinion-256"><span class="linenos">256</span></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">SecondOpinion</span><span class="p">:</span>
+</span><span id="ask_second_opinion-257"><a href="#ask_second_opinion-257"><span class="linenos">257</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Ask the question set about one transcript.</span>
+</span><span id="ask_second_opinion-258"><a href="#ask_second_opinion-258"><span class="linenos">258</span></a>
+</span><span id="ask_second_opinion-259"><a href="#ask_second_opinion-259"><span class="linenos">259</span></a><span class="sd">    Args:</span>
+</span><span id="ask_second_opinion-260"><a href="#ask_second_opinion-260"><span class="linenos">260</span></a><span class="sd">        ask: Sends a state and questions to the model and returns its ``answers``.</span>
+</span><span id="ask_second_opinion-261"><a href="#ask_second_opinion-261"><span class="linenos">261</span></a><span class="sd">        transcript: The text the reviewer reads.</span>
+</span><span id="ask_second_opinion-262"><a href="#ask_second_opinion-262"><span class="linenos">262</span></a><span class="sd">        context: The reviewer&#39;s task context.</span>
+</span><span id="ask_second_opinion-263"><a href="#ask_second_opinion-263"><span class="linenos">263</span></a><span class="sd">        masked_text: The transcript as the release would ship it.</span>
+</span><span id="ask_second_opinion-264"><a href="#ask_second_opinion-264"><span class="linenos">264</span></a>
+</span><span id="ask_second_opinion-265"><a href="#ask_second_opinion-265"><span class="linenos">265</span></a><span class="sd">    Returns:</span>
+</span><span id="ask_second_opinion-266"><a href="#ask_second_opinion-266"><span class="linenos">266</span></a><span class="sd">        The answers to :func:`questions_for` the context.</span>
+</span><span id="ask_second_opinion-267"><a href="#ask_second_opinion-267"><span class="linenos">267</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="ask_second_opinion-268"><a href="#ask_second_opinion-268"><span class="linenos">268</span></a>    <span class="n">questions</span> <span class="o">=</span> <span class="n">questions_for</span><span class="p">(</span><span class="n">context</span><span class="p">)</span>
+</span><span id="ask_second_opinion-269"><a href="#ask_second_opinion-269"><span class="linenos">269</span></a>    <span class="k">return</span> <span class="n">read_answers</span><span class="p">(</span><span class="n">ask</span><span class="p">(</span><span class="n">opinion_state</span><span class="p">(</span><span class="n">transcript</span><span class="p">,</span> <span class="n">context</span><span class="p">,</span> <span class="n">masked_text</span><span class="p">),</span> <span class="n">questions</span><span class="p">),</span> <span class="n">questions</span><span class="p">)</span>
 </span></pre></div>
 
 
@@ -1297,12 +1342,54 @@ residency check decides.</li>
 <li><strong>ask:</strong>  Sends a state and questions to the model and returns its <code>answers</code>.</li>
 <li><strong>transcript:</strong>  The text the reviewer reads.</li>
 <li><strong>context:</strong>  The reviewer's task context.</li>
+<li><strong>masked_text:</strong>  The transcript as the release would ship it.</li>
 </ul>
 
 <h6 id="returns">Returns:</h6>
 
 <blockquote>
-  <p>The answers.</p>
+  <p>The answers to <code><a href="#questions_for">questions_for()</a></code> the context.</p>
+</blockquote>
+</div>
+
+
+                </section>
+                <section id="questions_for">
+                            <input id="questions_for-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
+<div class="attr function">
+            
+        <span class="def">def</span>
+        <span class="name">questions_for</span><span class="signature pdoc-code condensed">(<span class="param"><span class="n">context</span><span class="p">:</span> <span class="n">Mapping</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]</span></span><span class="return-annotation">) -> <span class="n">Mapping</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Mapping</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]]</span>:</span></span>
+
+                <label class="view-source-button" for="questions_for-view-source"><span>View Source</span></label>
+
+    </div>
+    <a class="headerlink" href="#questions_for"></a>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="questions_for-152"><a href="#questions_for-152"><span class="linenos">152</span></a><span class="k">def</span><span class="w"> </span><span class="nf">questions_for</span><span class="p">(</span><span class="n">context</span><span class="p">:</span> <span class="n">Mapping</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="n">Mapping</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Mapping</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]]:</span>
+</span><span id="questions_for-153"><a href="#questions_for-153"><span class="linenos">153</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;The question set to ask about one transcript.</span>
+</span><span id="questions_for-154"><a href="#questions_for-154"><span class="linenos">154</span></a>
+</span><span id="questions_for-155"><a href="#questions_for-155"><span class="linenos">155</span></a><span class="sd">    Args:</span>
+</span><span id="questions_for-156"><a href="#questions_for-156"><span class="linenos">156</span></a><span class="sd">        context: The reviewer&#39;s task context.</span>
+</span><span id="questions_for-157"><a href="#questions_for-157"><span class="linenos">157</span></a>
+</span><span id="questions_for-158"><a href="#questions_for-158"><span class="linenos">158</span></a><span class="sd">    Returns:</span>
+</span><span id="questions_for-159"><a href="#questions_for-159"><span class="linenos">159</span></a><span class="sd">        :data:`ITEM_SET_QUESTIONS` where the context&#39;s ``item_set`` is True, :data:`QUESTIONS` otherwise.</span>
+</span><span id="questions_for-160"><a href="#questions_for-160"><span class="linenos">160</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="questions_for-161"><a href="#questions_for-161"><span class="linenos">161</span></a>    <span class="k">return</span> <span class="n">ITEM_SET_QUESTIONS</span> <span class="k">if</span> <span class="n">context</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">ITEM_SET</span><span class="p">)</span> <span class="k">else</span> <span class="n">QUESTIONS</span>
+</span></pre></div>
+
+
+            <div class="docstring"><p>The question set to ask about one transcript.</p>
+
+<h6 id="arguments">Arguments:</h6>
+
+<ul>
+<li><strong>context:</strong>  The reviewer's task context.</li>
+</ul>
+
+<h6 id="returns">Returns:</h6>
+
+<blockquote>
+  <p><code><a href="#ITEM_SET_QUESTIONS">ITEM_SET_QUESTIONS</a></code> where the context's <code>item_set</code> is True, <code><a href="#QUESTIONS">QUESTIONS</a></code> otherwise.</p>
 </blockquote>
 </div>
 
@@ -1313,62 +1400,72 @@ residency check decides.</li>
 <div class="attr function">
             
         <span class="def">def</span>
-        <span class="name">read_answers</span><span class="signature pdoc-code multiline">(<span class="param">	<span class="n">answers</span><span class="p">:</span> <span class="n">Mapping</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]</span></span><span class="return-annotation">) -> <span class="n"><a href="#SecondOpinion">SecondOpinion</a></span>:</span></span>
+        <span class="name">read_answers</span><span class="signature pdoc-code multiline">(<span class="param">	<span class="n">answers</span><span class="p">:</span> <span class="n">Mapping</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]</span>,</span><span class="param">	<span class="n">questions</span><span class="p">:</span> <span class="n">Mapping</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Mapping</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]]</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;other_voice&#39;</span><span class="p">:</span> <span class="p">{</span><span class="s1">&#39;type&#39;</span><span class="p">:</span> <span class="s1">&#39;choice&#39;</span><span class="p">,</span> <span class="s1">&#39;instructions&#39;</span><span class="p">:</span> <span class="s2">&quot;Is any of this transcript spoken by someone other than the participant (for example an examiner giving or repeating instructions, or a second person talking)? The participant addressing the examiner (for example &#39;Is that enough?&#39;) is still the participant. Judge it against the task (state.task, state.task_nature, state.instructions, state.task_content).&quot;</span><span class="p">,</span> <span class="s1">&#39;criteria&#39;</span><span class="p">:</span> <span class="p">{</span><span class="s1">&#39;one&#39;</span><span class="p">:</span> <span class="s1">&#39;Only the participant speaks&#39;</span><span class="p">,</span> <span class="s1">&#39;more_than_one&#39;</span><span class="p">:</span> <span class="s1">&#39;Someone else also speaks&#39;</span><span class="p">,</span> <span class="s1">&#39;unclear&#39;</span><span class="p">:</span> <span class="s1">&#39;Cannot tell&#39;</span><span class="p">}},</span> <span class="s1">&#39;instructions_spoken&#39;</span><span class="p">:</span> <span class="p">{</span><span class="s1">&#39;type&#39;</span><span class="p">:</span> <span class="s1">&#39;noul&#39;</span><span class="p">,</span> <span class="s1">&#39;instructions&#39;</span><span class="p">:</span> <span class="s1">&#39;Are the task instructions (given in state.instructions) spoken in the transcript, verbatim or paraphrased, by anyone? The stimulus (state.stimulus) is not the instructions.&#39;</span><span class="p">},</span> <span class="s1">&#39;policy_identifier_present&#39;</span><span class="p">:</span> <span class="p">{</span><span class="s1">&#39;type&#39;</span><span class="p">:</span> <span class="s1">&#39;noul&#39;</span><span class="p">,</span> <span class="s1">&#39;instructions&#39;</span><span class="p">:</span> <span class="s2">&quot;Does the transcript (state.transcript) contain anything that must be removed before release? Apply the redaction policy in state.redaction_policy, the same policy the redaction reviewer applies, as the definition of what must be removed: judge only what it removes, not its instructions about proposing releases. Anything the policy keeps or releases does not count, and neither does the task&#39;s own content (state.stimulus, state.task_content).&quot;</span><span class="p">},</span> <span class="s1">&#39;masked_text_free_of_identifiers&#39;</span><span class="p">:</span> <span class="p">{</span><span class="s1">&#39;type&#39;</span><span class="p">:</span> <span class="s1">&#39;noul&#39;</span><span class="p">,</span> <span class="s1">&#39;instructions&#39;</span><span class="p">:</span> <span class="s2">&quot;state.masked_text is the transcript exactly as it would be released: every removed span is replaced by a [CATEGORY] token, and where nothing was removed it equals state.transcript. Is state.masked_text free of everything that must be removed, so that nothing the policy removes can still be read in it? Apply the redaction policy in state.redaction_policy, the same policy the redaction reviewer applies, as the definition of what must be removed: judge only what it removes, not its instructions about proposing releases. Anything the policy keeps or releases does not count, and neither does the task&#39;s own content (state.stimulus, state.task_content).&quot;</span><span class="p">},</span> <span class="s1">&#39;off_task_speech&#39;</span><span class="p">:</span> <span class="p">{</span><span class="s1">&#39;type&#39;</span><span class="p">:</span> <span class="s1">&#39;choice&#39;</span><span class="p">,</span> <span class="s1">&#39;instructions&#39;</span><span class="p">:</span> <span class="s1">&#39;Did the participant stop doing the task or talk about something other than what the instructions ask for (state.task, state.task_nature, state.instructions)? In a non-lexical task (breathing, coughing, phonation, repeated syllables) any words the participant says are off-task.&#39;</span><span class="p">,</span> <span class="s1">&#39;criteria&#39;</span><span class="p">:</span> <span class="p">{</span><span class="s1">&#39;none&#39;</span><span class="p">:</span> <span class="s1">&#39;The participant only does the task&#39;</span><span class="p">,</span> <span class="s1">&#39;some&#39;</span><span class="p">:</span> <span class="s1">&#39;A remark or question outside the task&#39;</span><span class="p">,</span> <span class="s1">&#39;extensive&#39;</span><span class="p">:</span> <span class="s1">&#39;Much of the recording is outside the task&#39;</span><span class="p">}}}</span></span><span class="return-annotation">) -> <span class="n"><a href="#SecondOpinion">SecondOpinion</a></span>:</span></span>
 
                 <label class="view-source-button" for="read_answers-view-source"><span>View Source</span></label>
 
     </div>
     <a class="headerlink" href="#read_answers"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="read_answers-85"><a href="#read_answers-85"><span class="linenos"> 85</span></a><span class="k">def</span><span class="w"> </span><span class="nf">read_answers</span><span class="p">(</span><span class="n">answers</span><span class="p">:</span> <span class="n">Mapping</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="n">SecondOpinion</span><span class="p">:</span>
-</span><span id="read_answers-86"><a href="#read_answers-86"><span class="linenos"> 86</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Read a decision model&#39;s answers to :data:`QUESTIONS`.</span>
-</span><span id="read_answers-87"><a href="#read_answers-87"><span class="linenos"> 87</span></a>
-</span><span id="read_answers-88"><a href="#read_answers-88"><span class="linenos"> 88</span></a><span class="sd">    Args:</span>
-</span><span id="read_answers-89"><a href="#read_answers-89"><span class="linenos"> 89</span></a><span class="sd">        answers: The ``answers`` mapping, question name to typed answer.</span>
-</span><span id="read_answers-90"><a href="#read_answers-90"><span class="linenos"> 90</span></a>
-</span><span id="read_answers-91"><a href="#read_answers-91"><span class="linenos"> 91</span></a><span class="sd">    Returns:</span>
-</span><span id="read_answers-92"><a href="#read_answers-92"><span class="linenos"> 92</span></a><span class="sd">        The probabilities and the ``other_voice`` choice.</span>
-</span><span id="read_answers-93"><a href="#read_answers-93"><span class="linenos"> 93</span></a>
-</span><span id="read_answers-94"><a href="#read_answers-94"><span class="linenos"> 94</span></a><span class="sd">    Raises:</span>
-</span><span id="read_answers-95"><a href="#read_answers-95"><span class="linenos"> 95</span></a><span class="sd">        ValueError: If a question is unanswered or an answer has no probability.</span>
-</span><span id="read_answers-96"><a href="#read_answers-96"><span class="linenos"> 96</span></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="read_answers-97"><a href="#read_answers-97"><span class="linenos"> 97</span></a>    <span class="n">probabilities</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">float</span><span class="p">]</span> <span class="o">=</span> <span class="p">{}</span>
-</span><span id="read_answers-98"><a href="#read_answers-98"><span class="linenos"> 98</span></a>    <span class="n">choice</span> <span class="o">=</span> <span class="s2">&quot;&quot;</span>
-</span><span id="read_answers-99"><a href="#read_answers-99"><span class="linenos"> 99</span></a>    <span class="k">for</span> <span class="n">name</span> <span class="ow">in</span> <span class="n">QUESTION_NAMES</span><span class="p">:</span>
-</span><span id="read_answers-100"><a href="#read_answers-100"><span class="linenos">100</span></a>        <span class="n">answer</span> <span class="o">=</span> <span class="n">answers</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">name</span><span class="p">)</span>
-</span><span id="read_answers-101"><a href="#read_answers-101"><span class="linenos">101</span></a>        <span class="k">if</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">answer</span><span class="p">,</span> <span class="n">Mapping</span><span class="p">):</span>
-</span><span id="read_answers-102"><a href="#read_answers-102"><span class="linenos">102</span></a>            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;no answer to </span><span class="si">{</span><span class="n">name</span><span class="si">!r}</span><span class="s2">&quot;</span><span class="p">)</span>
-</span><span id="read_answers-103"><a href="#read_answers-103"><span class="linenos">103</span></a>        <span class="k">if</span> <span class="n">QUESTIONS</span><span class="p">[</span><span class="n">name</span><span class="p">][</span><span class="s2">&quot;type&quot;</span><span class="p">]</span> <span class="o">==</span> <span class="s2">&quot;choice&quot;</span><span class="p">:</span>
-</span><span id="read_answers-104"><a href="#read_answers-104"><span class="linenos">104</span></a>            <span class="n">classes</span> <span class="o">=</span> <span class="n">answer</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;probabilities&quot;</span><span class="p">)</span>
-</span><span id="read_answers-105"><a href="#read_answers-105"><span class="linenos">105</span></a>            <span class="k">if</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">classes</span><span class="p">,</span> <span class="n">Mapping</span><span class="p">)</span> <span class="ow">or</span> <span class="n">MORE_THAN_ONE</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">classes</span><span class="p">:</span>
-</span><span id="read_answers-106"><a href="#read_answers-106"><span class="linenos">106</span></a>                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">name</span><span class="si">!r}</span><span class="s2"> answered without class probabilities&quot;</span><span class="p">)</span>
-</span><span id="read_answers-107"><a href="#read_answers-107"><span class="linenos">107</span></a>            <span class="n">probabilities</span><span class="p">[</span><span class="n">name</span><span class="p">]</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">classes</span><span class="p">[</span><span class="n">MORE_THAN_ONE</span><span class="p">])</span>
-</span><span id="read_answers-108"><a href="#read_answers-108"><span class="linenos">108</span></a>            <span class="n">choice</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span><span class="n">answer</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;choice&quot;</span><span class="p">)</span> <span class="ow">or</span> <span class="s2">&quot;&quot;</span><span class="p">)</span>
-</span><span id="read_answers-109"><a href="#read_answers-109"><span class="linenos">109</span></a>        <span class="k">else</span><span class="p">:</span>
-</span><span id="read_answers-110"><a href="#read_answers-110"><span class="linenos">110</span></a>            <span class="k">if</span> <span class="n">answer</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;noul&quot;</span><span class="p">)</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
-</span><span id="read_answers-111"><a href="#read_answers-111"><span class="linenos">111</span></a>                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">name</span><span class="si">!r}</span><span class="s2"> answered without a probability&quot;</span><span class="p">)</span>
-</span><span id="read_answers-112"><a href="#read_answers-112"><span class="linenos">112</span></a>            <span class="n">probabilities</span><span class="p">[</span><span class="n">name</span><span class="p">]</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">answer</span><span class="p">[</span><span class="s2">&quot;noul&quot;</span><span class="p">])</span>
-</span><span id="read_answers-113"><a href="#read_answers-113"><span class="linenos">113</span></a>    <span class="k">return</span> <span class="n">SecondOpinion</span><span class="p">(</span><span class="n">probabilities</span><span class="o">=</span><span class="n">probabilities</span><span class="p">,</span> <span class="n">other_voice_choice</span><span class="o">=</span><span class="n">choice</span><span class="p">,</span> <span class="n">raw</span><span class="o">=</span><span class="nb">dict</span><span class="p">(</span><span class="n">answers</span><span class="p">))</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="read_answers-183"><a href="#read_answers-183"><span class="linenos">183</span></a><span class="k">def</span><span class="w"> </span><span class="nf">read_answers</span><span class="p">(</span><span class="n">answers</span><span class="p">:</span> <span class="n">Mapping</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">],</span> <span class="n">questions</span><span class="p">:</span> <span class="n">Mapping</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Mapping</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]]</span> <span class="o">=</span> <span class="n">QUESTIONS</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">SecondOpinion</span><span class="p">:</span>
+</span><span id="read_answers-184"><a href="#read_answers-184"><span class="linenos">184</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Read a decision model&#39;s answers to a question set.</span>
+</span><span id="read_answers-185"><a href="#read_answers-185"><span class="linenos">185</span></a>
+</span><span id="read_answers-186"><a href="#read_answers-186"><span class="linenos">186</span></a><span class="sd">    Args:</span>
+</span><span id="read_answers-187"><a href="#read_answers-187"><span class="linenos">187</span></a><span class="sd">        answers: The ``answers`` mapping, question name to typed answer.</span>
+</span><span id="read_answers-188"><a href="#read_answers-188"><span class="linenos">188</span></a><span class="sd">        questions: The set asked (:func:`questions_for`).</span>
+</span><span id="read_answers-189"><a href="#read_answers-189"><span class="linenos">189</span></a>
+</span><span id="read_answers-190"><a href="#read_answers-190"><span class="linenos">190</span></a><span class="sd">    Returns:</span>
+</span><span id="read_answers-191"><a href="#read_answers-191"><span class="linenos">191</span></a><span class="sd">        The probabilities, the choices and the class probabilities.</span>
+</span><span id="read_answers-192"><a href="#read_answers-192"><span class="linenos">192</span></a>
+</span><span id="read_answers-193"><a href="#read_answers-193"><span class="linenos">193</span></a><span class="sd">    Raises:</span>
+</span><span id="read_answers-194"><a href="#read_answers-194"><span class="linenos">194</span></a><span class="sd">        ValueError: If a question is unanswered, an answer has no probability, or a choice answer gives</span>
+</span><span id="read_answers-195"><a href="#read_answers-195"><span class="linenos">195</span></a><span class="sd">            no probability for any of its classes.</span>
+</span><span id="read_answers-196"><a href="#read_answers-196"><span class="linenos">196</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="read_answers-197"><a href="#read_answers-197"><span class="linenos">197</span></a>    <span class="n">probabilities</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">float</span><span class="p">]</span> <span class="o">=</span> <span class="p">{}</span>
+</span><span id="read_answers-198"><a href="#read_answers-198"><span class="linenos">198</span></a>    <span class="n">choices</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="p">{}</span>
+</span><span id="read_answers-199"><a href="#read_answers-199"><span class="linenos">199</span></a>    <span class="n">classes_of</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">float</span><span class="p">]]</span> <span class="o">=</span> <span class="p">{}</span>
+</span><span id="read_answers-200"><a href="#read_answers-200"><span class="linenos">200</span></a>    <span class="k">for</span> <span class="n">name</span><span class="p">,</span> <span class="n">question</span> <span class="ow">in</span> <span class="n">questions</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+</span><span id="read_answers-201"><a href="#read_answers-201"><span class="linenos">201</span></a>        <span class="n">answer</span> <span class="o">=</span> <span class="n">answers</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">name</span><span class="p">)</span>
+</span><span id="read_answers-202"><a href="#read_answers-202"><span class="linenos">202</span></a>        <span class="k">if</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">answer</span><span class="p">,</span> <span class="n">Mapping</span><span class="p">):</span>
+</span><span id="read_answers-203"><a href="#read_answers-203"><span class="linenos">203</span></a>            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;no answer to </span><span class="si">{</span><span class="n">name</span><span class="si">!r}</span><span class="s2">&quot;</span><span class="p">)</span>
+</span><span id="read_answers-204"><a href="#read_answers-204"><span class="linenos">204</span></a>        <span class="k">if</span> <span class="n">question</span><span class="p">[</span><span class="s2">&quot;type&quot;</span><span class="p">]</span> <span class="o">==</span> <span class="s2">&quot;choice&quot;</span><span class="p">:</span>
+</span><span id="read_answers-205"><a href="#read_answers-205"><span class="linenos">205</span></a>            <span class="n">classes</span> <span class="o">=</span> <span class="n">answer</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;probabilities&quot;</span><span class="p">)</span>
+</span><span id="read_answers-206"><a href="#read_answers-206"><span class="linenos">206</span></a>            <span class="n">criteria</span> <span class="o">=</span> <span class="n">question</span><span class="p">[</span><span class="s2">&quot;criteria&quot;</span><span class="p">]</span>
+</span><span id="read_answers-207"><a href="#read_answers-207"><span class="linenos">207</span></a>            <span class="k">if</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">classes</span><span class="p">,</span> <span class="n">Mapping</span><span class="p">)</span> <span class="ow">or</span> <span class="ow">not</span> <span class="nb">any</span><span class="p">(</span><span class="n">label</span> <span class="ow">in</span> <span class="n">classes</span> <span class="k">for</span> <span class="n">label</span> <span class="ow">in</span> <span class="n">criteria</span><span class="p">):</span>
+</span><span id="read_answers-208"><a href="#read_answers-208"><span class="linenos">208</span></a>                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">name</span><span class="si">!r}</span><span class="s2"> answered without class probabilities&quot;</span><span class="p">)</span>
+</span><span id="read_answers-209"><a href="#read_answers-209"><span class="linenos">209</span></a>            <span class="n">held</span> <span class="o">=</span> <span class="p">{</span><span class="nb">str</span><span class="p">(</span><span class="n">label</span><span class="p">):</span> <span class="nb">float</span><span class="p">(</span><span class="n">p</span><span class="p">)</span> <span class="k">for</span> <span class="n">label</span><span class="p">,</span> <span class="n">p</span> <span class="ow">in</span> <span class="n">classes</span><span class="o">.</span><span class="n">items</span><span class="p">()</span> <span class="k">if</span> <span class="n">label</span> <span class="ow">in</span> <span class="n">criteria</span><span class="p">}</span>
+</span><span id="read_answers-210"><a href="#read_answers-210"><span class="linenos">210</span></a>            <span class="n">probabilities</span><span class="p">[</span><span class="n">name</span><span class="p">]</span> <span class="o">=</span> <span class="nb">sum</span><span class="p">(</span><span class="n">held</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">label</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">)</span> <span class="k">for</span> <span class="n">label</span> <span class="ow">in</span> <span class="n">POSITIVE_CLASSES</span><span class="p">[</span><span class="n">name</span><span class="p">])</span>
+</span><span id="read_answers-211"><a href="#read_answers-211"><span class="linenos">211</span></a>            <span class="n">choices</span><span class="p">[</span><span class="n">name</span><span class="p">]</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span><span class="n">answer</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;choice&quot;</span><span class="p">)</span> <span class="ow">or</span> <span class="s2">&quot;&quot;</span><span class="p">)</span>
+</span><span id="read_answers-212"><a href="#read_answers-212"><span class="linenos">212</span></a>            <span class="n">classes_of</span><span class="p">[</span><span class="n">name</span><span class="p">]</span> <span class="o">=</span> <span class="n">held</span>
+</span><span id="read_answers-213"><a href="#read_answers-213"><span class="linenos">213</span></a>        <span class="k">else</span><span class="p">:</span>
+</span><span id="read_answers-214"><a href="#read_answers-214"><span class="linenos">214</span></a>            <span class="k">if</span> <span class="n">answer</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;noul&quot;</span><span class="p">)</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="read_answers-215"><a href="#read_answers-215"><span class="linenos">215</span></a>                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">name</span><span class="si">!r}</span><span class="s2"> answered without a probability&quot;</span><span class="p">)</span>
+</span><span id="read_answers-216"><a href="#read_answers-216"><span class="linenos">216</span></a>            <span class="n">probabilities</span><span class="p">[</span><span class="n">name</span><span class="p">]</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">answer</span><span class="p">[</span><span class="s2">&quot;noul&quot;</span><span class="p">])</span>
+</span><span id="read_answers-217"><a href="#read_answers-217"><span class="linenos">217</span></a>    <span class="k">return</span> <span class="n">SecondOpinion</span><span class="p">(</span>
+</span><span id="read_answers-218"><a href="#read_answers-218"><span class="linenos">218</span></a>        <span class="n">probabilities</span><span class="o">=</span><span class="n">probabilities</span><span class="p">,</span> <span class="n">choices</span><span class="o">=</span><span class="n">choices</span><span class="p">,</span> <span class="n">class_probabilities</span><span class="o">=</span><span class="n">classes_of</span><span class="p">,</span> <span class="n">raw</span><span class="o">=</span><span class="nb">dict</span><span class="p">(</span><span class="n">answers</span><span class="p">)</span>
+</span><span id="read_answers-219"><a href="#read_answers-219"><span class="linenos">219</span></a>    <span class="p">)</span>
 </span></pre></div>
 
 
-            <div class="docstring"><p>Read a decision model's answers to <code><a href="#QUESTIONS">QUESTIONS</a></code>.</p>
+            <div class="docstring"><p>Read a decision model's answers to a question set.</p>
 
 <h6 id="arguments">Arguments:</h6>
 
 <ul>
 <li><strong>answers:</strong>  The <code>answers</code> mapping, question name to typed answer.</li>
+<li><strong>questions:</strong>  The set asked (<code><a href="#questions_for">questions_for()</a></code>).</li>
 </ul>
 
 <h6 id="returns">Returns:</h6>
 
 <blockquote>
-  <p>The probabilities and the <code>other_voice</code> choice.</p>
+  <p>The probabilities, the choices and the class probabilities.</p>
 </blockquote>
 
 <h6 id="raises">Raises:</h6>
 
 <ul>
-<li><strong>ValueError:</strong>  If a question is unanswered or an answer has no probability.</li>
+<li><strong>ValueError:</strong>  If a question is unanswered, an answer has no probability, or a choice answer gives
+no probability for any of its classes.</li>
 </ul>
 </div>
 
