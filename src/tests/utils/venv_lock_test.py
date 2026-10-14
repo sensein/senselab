@@ -177,6 +177,21 @@ def test_only_the_cuda_variant_packages_torch_alone_pulls_in_are_left_out() -> N
     ]
 
 
+def test_triton_torch_pulls_in_is_left_out_even_when_another_package_needs_it() -> None:
+    """Triton comes from the torch index with torch whenever torch depends on it; without torch it stays."""
+    packages = {
+        "torch": ("2.13.0", {"vllm"}),
+        "triton": ("3.7.1", {"torch", "vllm", "xgrammar"}),
+        "pytorch-triton-rocm": ("3.7.0", {"torch", "vllm"}),
+        "nvidia-nccl-cu13": ("2.28.3", {"torch", "vllm"}),
+        "vllm": ("0.31.0", set()),
+        "xgrammar": ("0.2.0", {"vllm"}),
+    }
+    assert torch_only_cuda_packages(packages) == ["pytorch-triton-rocm", "torch", "triton"]
+    without_torch = {"triton": ("3.7.1", {"xgrammar"}), "xgrammar": ("0.2.0", set())}
+    assert torch_only_cuda_packages(without_torch) == []
+
+
 def test_torch_is_bounded_down_until_every_index_serves_it(monkeypatch: pytest.MonkeyPatch) -> None:
     """A torch the CUDA or CPU index lacks is excluded and the resolution repeated."""
     compiles: list[str] = []

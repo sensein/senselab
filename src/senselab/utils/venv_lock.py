@@ -362,8 +362,8 @@ def resolved_packages(line_annotated: str) -> dict[str, tuple[str, set[str]]]:
 def torch_only_cuda_packages(packages: dict[str, tuple[str, set[str]]]) -> list[str]:
     """Names to leave out of the lock body.
 
-    These are ``torch``, ``torchaudio``, the CUDA-variant packages that only they pull in, and ``triton``
-    wherever ``torch`` pulls it in.
+    These are ``torch``, ``torchaudio``, the CUDA-variant packages that only they pull in, and ``triton`` /
+    ``pytorch-triton*`` wherever ``torch`` is one of their parents.
     """
     family = {name for name in packages if name in TORCH_PACKAGES}
     changed = True
