@@ -183,7 +183,9 @@ def check_manifest_set(manifests: Sequence[Manifest], base_dir: Path, profile: P
 
     Raises:
         ValueError: ``E_SPEC_UNDECLARED_ROOT: {<step>: [<paths>]}`` for a ``{root:<name>}`` path no declared
-            pattern or lock input tree covers (`undeclared_roots`); then as `check_restricted`.
+            pattern or lock input tree covers (`undeclared_roots`); then as `check_restricted`; then
+            ``E_INPUT_UNPURGED: [<ids>]`` for a restricted lock input whose public dependants the purge
+            (``verify-inputs``) has not removed yet (`unpurged_inputs`).
     """
     steps = [s for m in manifests for s in m.steps]
     registry = step_registry(steps, base_dir)
@@ -191,6 +193,9 @@ def check_manifest_set(manifests: Sequence[Manifest], base_dir: Path, profile: P
     if uncovered:
         raise ValueError(f"{UNDECLARED_ROOT}: {uncovered}")
     check_restricted(steps, registry, profile)
+    unpurged = unpurged_inputs(steps, registry, profile)
+    if unpurged:
+        raise ValueError(f"{UNPURGED}: {unpurged}")
 
 
 # --- the scan hook -----------------------------------------------------------------------------------------
@@ -349,16 +354,64 @@ def _summary_bytes(summary: dict[str, object]) -> bytes:
 # --- the closure purge -------------------------------------------------------------------------------------
 
 
-def _closure_of(out: Path) -> list[str] | None:
-    """The summary's ``input_closure`` (empty when it has none); None when there is no readable summary."""
+UNPURGED = "E_INPUT_UNPURGED"
+_NO_SUMMARY = "no-summary"
+_NO_CLOSURE = "no-closure"
+
+
+def _closure_state(out: Path) -> list[str] | str:
+    """The summary's ``input_closure``, or why there is none.
+
+    `_NO_SUMMARY` when no summary is readable, `_NO_CLOSURE` when it has no ``input_closure`` list (a summary
+    written before A8 recorded closures).
+    """
     try:
         fd = os.open(out / cache.SUMMARY, os.O_RDONLY | os.O_NOFOLLOW)
         with os.fdopen(fd, "rb") as handle:
             data = json.loads(handle.read())
     except (OSError, ValueError):
-        return None
+        return _NO_SUMMARY
     closure = data.get("input_closure") if isinstance(data, dict) else None
-    return [c for c in closure if isinstance(c, str)] if isinstance(closure, list) else []
+    return [c for c in closure if isinstance(c, str)] if isinstance(closure, list) else _NO_CLOSURE
+
+
+def _closure_of(out: Path) -> list[str] | None:
+    """The summary's ``input_closure``; None when it cannot say (no readable summary, or no closure recorded)."""
+    state = _closure_state(out)
+    return state if isinstance(state, list) else None
+
+
+def _public_results(profile: Profile) -> list[Path]:
+    root = profile.results_root
+    if not root.is_dir():
+        return []
+    return [
+        Path(e.path)
+        for e in sorted(os.scandir(root), key=lambda e: e.name)
+        if _KEY.match(e.name) and e.is_dir(follow_symlinks=False)
+    ]
+
+
+def unpurged_dependants(profile: Profile, input_id: str) -> int:
+    """How many public results the purge of ``input_id`` would remove that are not in flight.
+
+    Those are results whose readable summary's ``input_closure`` holds the id, or that has no closure (pre-A8);
+    a result with no readable summary yet (a run in flight, or one that died) is not counted here.
+    """
+    count = 0
+    for out in _public_results(profile):
+        state = _closure_state(out)
+        count += state == _NO_CLOSURE or (isinstance(state, list) and input_id in state)
+    return count
+
+
+def unpurged_inputs(
+    steps: Sequence[StepSpec], registry: Mapping[str, inputs.RegisteredInput], profile: Profile
+) -> list[str]:
+    """The restricted lock inputs of ``steps`` (`input_is_restricted`) that still have unpurged public dependants."""
+    ids = sorted({i for s in steps for i in s.lock_inputs if i in registry})
+    restricted_ids = [i for i in ids if input_is_restricted(registry[i], profile)]
+    return [i for i in restricted_ids if unpurged_dependants(profile, i)]
 
 
 def _run_links(runs_root: Path) -> list[Path]:
@@ -383,7 +436,8 @@ def purge_closure(profile: Profile, input_id: str) -> int:
     """Remove every public result whose summary's ``input_closure`` holds ``input_id``, and its run links.
 
     A result with no readable summary (a run in flight, or one that died) is taken under its claim too, which
-    waits for a live run: it is removed unless its summary, read again there, has a closure without the id.
+    waits for a live run: it is removed unless its summary, read again there, has a closure without the id. A
+    summary with no ``input_closure`` (written before A8) cannot say, so it is purged too.
     A held claim (`PURGE_CLAIM_TIMEOUT_S`) skips that result and the purge goes on. Stateless: no earlier
     record is consulted, so a second call removes nothing.
 
@@ -395,19 +449,14 @@ def purge_closure(profile: Profile, input_id: str) -> int:
         OSError: When a dir or link cannot be removed.
     """
     root = profile.results_root
-    if not root.is_dir():
-        return 0
     purged, held = 0, False
     links = None
-    for entry in sorted(os.scandir(root), key=lambda e: e.name):
-        if not _KEY.match(entry.name) or not entry.is_dir(follow_symlinks=False):
-            continue
-        out = Path(entry.path)
+    for out in _public_results(profile):
         closure = _closure_of(out)
         if closure is not None and input_id not in closure:
             continue
         try:
-            with cache.claim(root, entry.name, timeout=PURGE_CLAIM_TIMEOUT_S):
+            with cache.claim(root, out.name, timeout=PURGE_CLAIM_TIMEOUT_S):
                 closure = _closure_of(out)
                 if (closure is not None and input_id not in closure) or not out.is_dir():
                     continue

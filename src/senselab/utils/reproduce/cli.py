@@ -477,8 +477,10 @@ def lint_findings(
     steps = [s for _, m in loaded for s in m.steps]
     registry = restricted.step_registry(steps, base)
     uncovered = restricted.undeclared_roots(steps, registry)
+    unpurged: set[str] = set()
     if profile is not None:
         refused = set(restricted.violations(steps, registry, profile))
+        unpurged = set(restricted.unpurged_inputs(steps, registry, profile))
     for path, manifest in loaded:
         for step in manifest.steps:
             where = f"{path}:{step.name}"
@@ -486,6 +488,7 @@ def lint_findings(
                 out.append(f"{where}: {restricted.CODE}")
             if step.name in uncovered:
                 out.append(f"{where}: {UNDECLARED_ROOT} {' '.join(uncovered[step.name])}")
+            out += [f"{where}: {restricted.UNPURGED} {i}" for i in sorted(unpurged & set(step.lock_inputs))]
             if profile is not None and step.extract and restricted.hook_missing(profile):
                 out.append(f"{where}: scan-hook-missing")
             if profile is not None:
