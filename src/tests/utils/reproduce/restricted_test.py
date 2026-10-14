@@ -685,12 +685,18 @@ def test_purge_waits_for_a_claim_and_removes_incomplete_results(site: Site, monk
             time.sleep(1.0)
             (flying / cache.SUMMARY).write_text(json.dumps({"exit": 0, "input_closure": ["flip"]}))
 
+    analysis = profile.runs_root / "2026-01-02" / "demo"
+    (analysis / "parts").mkdir(parents=True)
+    (analysis / "pools").mkdir()
+    for link in (analysis / "parts" / "0", analysis / "pools" / "kept", analysis / "single"):
+        os.symlink(dead, link)
     worker = threading.Thread(target=in_flight)
     worker.start()
     started.wait(10)
     assert restricted.purge_closure(profile, "flip") == 2
     worker.join()
     assert not dead.exists() and not flying.exists() and other.exists()
+    assert sorted(p.name for p in analysis.rglob("*") if p.is_symlink()) == ["kept"]
 
     held, free = _key_dir(root, ["flip"], "held"), _key_dir(root, ["flip"], "free")
     release = threading.Event()

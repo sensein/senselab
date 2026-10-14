@@ -63,7 +63,9 @@ def _commands(config: slurm.SubmitConfig) -> list[list[str]]:
     return [slurm.shard_command(base, "parts", i, "/opt/py/bin/python") for i in range(3)]
 
 
-def test_a_sharded_step_publishes_one_item_per_shard_to_its_class(tmp_path: Path) -> None:
+def test_a_sharded_step_publishes_one_item_per_shard_to_its_class(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Submit makes the pool and a held pool job afterok the needs; that job publishes one item per shard."""
     manifests, config = _sharded(tmp_path)
     fake = FakeSbatch((0, PROBE_OK))
@@ -100,6 +102,31 @@ def test_a_sharded_step_publishes_one_item_per_shard_to_its_class(tmp_path: Path
     assert outcome.status == "failed" and outcome.codes == ("E_SHARD_UNFINISHED",)
     again = slurm.run_pool(manifests, _run_config(config, manifests), "parts", "sub1", commands, drain=drain)
     assert again.codes == ("E_SHARD_UNFINISHED",) and len(seen["items"]) == 3
+    changed = slurm.run_pool(
+        manifests,
+        _run_config(config, manifests),
+        "parts",
+        "sub1",
+        commands,
+        drain=_fail_or_complete(set()),
+        recheck=lambda: ("E_MANIFEST_CHANGED",),
+    )
+    assert changed.codes == ("E_MANIFEST_CHANGED",)
+    assert {r["step"]: r["codes"] for r in _rows(tmp_path, "alpha")}["parts"] == ["E_MANIFEST_CHANGED"]
+
+    ticks: list[list[str]] = []
+
+    def run_controller(self: work_pool.Controller, once: bool = False) -> int:
+        ticks.append(list(self.worker_command))
+        return work_pool.CONTROLLER_LOCKED_EXIT if len(ticks) == 1 else 0
+
+    monkeypatch.setattr(work_pool.Controller, "run", run_controller)
+    monkeypatch.setattr(slurm.time, "sleep", lambda s: None)
+    pool = work_pool.WorkPool(root)
+    slurm.pool_drain(config.profile, DATE, "/opt/py/bin/python")(pool, seen["classes"])
+    assert len(ticks) == 2
+    python = ["/usr/bin/env", "-u", "TMPDIR", "/opt/py/bin/python", "-P", "-m", "senselab.utils.work_pool"]
+    assert ticks[0] == [*python, "work", str(pool.root)] and ticks[0] == ticks[1]
 
     unknown = _profile(tmp_path, resource_classes=CLASSES, work_pool=POOL_SETTINGS)
     bad = _spec("parts", shards={"count": 2, "resource_class": "nowhere"})
@@ -108,7 +135,7 @@ def test_a_sharded_step_publishes_one_item_per_shard_to_its_class(tmp_path: Path
         check_step_profile(bad, unknown)
     no_pool = _profile(tmp_path, resource_classes=CLASSES)
     assert [f.code for f in slurm.step_findings(_spec("parts", shards=SHARDS), no_pool)] == ["pool-unset"]
-    with pytest.raises(ValueError, match="reserved"):
+    with pytest.raises(ValueError, match="E_SPEC_RESERVED_NAME"):
         _spec("pools")
     reading = _step("sum", needs=["parts"], inputs=[{"root": "up:parts", "patterns": ["*.json"]}])
     with pytest.raises(DagError, match="E_DAG_SHARD_NEED: sum"):
@@ -166,9 +193,24 @@ def test_a_dead_shard_fails_the_step_and_its_dependants_never_run(tmp_path: Path
         ["E_SHARD_DEAD"],
         "102",
     )
-    assert rows["parts"]["exit"] != 0
+    assert rows["parts"]["exit"] != 0 and rows["parts"]["shards"] is None
     assert (rows["gather"]["status"], rows["gather"]["codes"]) == ("never-ran", ["E_SHARD_DEAD"])
     assert rows["prep"]["status"] == "pending"
+
+    stale = tmp_path / "runs" / DATE.isoformat() / "alpha" / "parts"
+    os.symlink("elsewhere", stale)
+    real_unlink = Path.unlink
+
+    def racing(self: Path, missing_ok: bool = False) -> None:
+        real_unlink(self, missing_ok)
+        raise FileNotFoundError(self)
+
+    target = tmp_path / "result"
+    target.mkdir()
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(Path, "unlink", racing)
+        run._link(rconfig, "alpha", manifests[0].steps[1], 0, target)
+    assert os.path.realpath(stale / "0") == os.path.realpath(target)
 
 
 GATHER = """\
@@ -179,6 +221,8 @@ values = [json.load(open(os.path.join(up, n, "result.json")))["value"] for n in 
 blocked = []
 for target in (os.path.join(up, "0", "x.txt"), os.path.join(up, "new.txt")):
     try:
+        if target.endswith("new.txt"):
+            os.chmod(up, 0o770)
         open(target, "w").write("x")
         blocked.append(False)
     except OSError:
@@ -220,11 +264,17 @@ def test_the_gather_step_sees_every_shard_read_only(world: World) -> None:
     seen = json.loads((outcomes["gather"].out / run.WORK / "seen.json").read_text())
     assert seen == {"names": ["0", "1", "2"], "blocked": [True, True]}
     assert json.loads((outcomes["gather"].out / run.WORK / "result.json").read_text())["value"] == 39.0
-    assert not (outcomes["gather"].out / run.TMP).exists()
+    assert not (outcomes["gather"].out / run.TMP).exists() and not (outcomes["gather"].out / run.UP).exists()
     day = world.tmp / "runs" / world.config().date.strftime("%Y-%m-%d") / "demo"
     assert [os.path.realpath(day / "parts" / str(i)) for i in range(3)] == [os.path.realpath(p) for p in parts.shards]
     rows = {r["step"]: r for r in json.loads((day / run.RUN_JSON).read_text())["steps"]}
     assert rows["parts"]["key"] == parts.key and rows["parts"]["shards"] == keys
     again = world.run(manifest)
     assert [again[n].status for n in ("parts", "gather")] == ["skipped", "skipped"]
+    gathered = outcomes["gather"].out
+    (gathered / cache.SUMMARY).unlink()
+    (gathered / run.UP / "parts").mkdir(parents=True)
+    os.symlink(parts.shards[0] / run.WORK, gathered / run.UP / "parts" / "0")
+    rerun = world.run(manifest)["gather"]
+    assert rerun.status == "executed" and rerun.ok and not (gathered / run.UP).exists()
     assert again["parts"].key == parts.key

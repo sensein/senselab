@@ -51,7 +51,15 @@ from senselab.utils import work_pool
 from senselab.utils.reproduce import cache, inputs, restricted, run
 from senselab.utils.reproduce.build import SYSTEM_PATH
 from senselab.utils.reproduce.dag import toposort
-from senselab.utils.reproduce.spec import RESERVED_ROOT_NAMES, Manifest, PartitionSpec, Profile, StepSpec, placeholders
+from senselab.utils.reproduce.spec import (
+    POOLS_DIR,
+    RESERVED_ROOT_NAMES,
+    Manifest,
+    PartitionSpec,
+    Profile,
+    StepSpec,
+    placeholders,
+)
 
 SBATCH = "sbatch"
 SCANCEL = "scancel"
@@ -65,7 +73,6 @@ FINALIZE_STEP = "finalize"
 FINALIZE_CPUS = 1
 FINALIZE_MEM = "1G"
 FINALIZE_TIME = "00:10:00"
-POOLS = "pools"
 SUBMIT_TIMEOUT = 120
 CODES = frozenset(
     {
@@ -971,7 +978,7 @@ Drain = Callable[[work_pool.WorkPool, list[work_pool.ResourceClass]], None]
 
 def pool_dir(profile: Profile, date: datetime.date, analysis: str, step: str) -> Path:
     """A sharded step's work pool: ``<runs_root>/<date>/<analysis>/pools/<step>``."""
-    return cache.run_dir(profile.runs_root, date, analysis) / POOLS / step
+    return cache.run_dir(profile.runs_root, date, analysis) / POOLS_DIR / step
 
 
 def create_pool(profile: Profile, date: datetime.date, analysis: str, step: str) -> work_pool.WorkPool:
@@ -1015,12 +1022,33 @@ def shard_item_id(submission: str, shard: int) -> str:
     return f"{submission}-{shard}"
 
 
-def _controller_drain(profile: Profile, date: datetime.date) -> Drain:
+WORKER_ENV = ("/usr/bin/env", "-u", "TMPDIR")
+"""Workers start through ``env -u TMPDIR``: the pool job's private ``TMPDIR`` is on its own node and removed with
+it, so a worker (and each shard it runs) keeps its node's default instead."""
+
+
+def pool_drain(profile: Profile, date: datetime.date, driver_python: str) -> Drain:
+    """The pool job's drain: a `work_pool.Controller` run until the pool drains, waiting out another controller.
+
+    Its workers run ``env -u TMPDIR <driver python> -P -m senselab.utils.work_pool work <pool>`` (`WORKER_ENV`;
+    ``-P`` keeps the dated log dir, their working dir, off ``sys.path``) and write their logs to that dir.
+
+    Args:
+        profile: The site profile; it must have ``work_pool`` settings (``poll_s``).
+        date: The run date (the dated log dir).
+        driver_python: The interpreter with senselab installed.
+
+    Returns:
+        The drain.
+    """
     settings = profile.work_pool
     assert settings is not None
 
     def drain(pool: work_pool.WorkPool, classes: list[work_pool.ResourceClass]) -> None:
-        controller = work_pool.Controller(pool, classes, poll_s=settings.poll_s, log_dir=log_dir(profile, date))
+        worker = [*WORKER_ENV, driver_python, "-P", "-m", "senselab.utils.work_pool", "work", str(pool.root)]
+        controller = work_pool.Controller(
+            pool, classes, worker_command=worker, poll_s=settings.poll_s, log_dir=log_dir(profile, date)
+        )
         while controller.run() == work_pool.CONTROLLER_LOCKED_EXIT:
             time.sleep(settings.poll_s)
 
@@ -1035,14 +1063,18 @@ def run_pool(
     commands: Sequence[Sequence[str]],
     *,
     drain: Drain | None = None,
+    recheck: Callable[[], Sequence[str]] | None = None,
+    driver_python: str = sys.executable,
 ) -> run.StepOutcome:
     """A sharded step's pool job: publish one item per shard, drain the pool, settle the step's row.
 
     Items already in the pool (a requeued pool job) are not published again. Once the pool drains, the step is
-    ``failed`` with ``E_SHARD_DEAD`` when a shard is dead, or ``E_SHARD_UNFINISHED`` when one is neither done nor
-    dead; otherwise it is resolved (`run.resolve_step`) and, when every shard is done, ``executed`` with the
-    shard keys. Its row is written under this submission and, unless it succeeded, its dependants' pending rows
-    become ``never-ran`` with the same codes.
+    ``failed`` with the codes ``recheck`` returns (e.g. ``E_MANIFEST_CHANGED``), else with ``E_SHARD_DEAD`` when a
+    shard is dead, or ``E_SHARD_UNFINISHED`` when one is neither done nor dead; otherwise it is resolved
+    (`run.resolve_step`) and, when every shard is done, ``executed`` with the shard keys: the pool ran every
+    item in this submission, whether an item's run computed its shard or found it done. Its row is written
+    under this submission and, unless it succeeded, its dependants' pending rows become ``never-ran`` with the
+    same codes.
 
     Args:
         manifests: The manifests of the submission.
@@ -1050,8 +1082,9 @@ def run_pool(
         step: The sharded step.
         submission: The submission id.
         commands: One argv per shard (`shard_command`), by index.
-        drain: Runs the pool until it drains (default: `work_pool.Controller` with the profile's ``poll_s`` and
-            the dated log dir, waiting out a controller that already holds the pool's lock).
+        drain: Runs the pool until it drains (default: `pool_drain`).
+        recheck: Called once the pool drains; codes it returns fail the step with them.
+        driver_python: The interpreter the default drain's workers run.
 
     Returns:
         The step's outcome.
@@ -1074,9 +1107,14 @@ def run_pool(
             if pool.state(item_id) is None
         ]
         pool.publish(fresh)
-        (drain or _controller_drain(profile, config.date))(pool, [resource_class(profile, spec.shards.resource_class)])
+        (drain or pool_drain(profile, config.date, driver_python))(
+            pool, [resource_class(profile, spec.shards.resource_class)]
+        )
         states = [pool.state(item_id) for item_id in ids]
-        if "dead" in states:
+        changed = tuple(recheck()) if recheck is not None else ()
+        if changed:
+            outcome = run.StepOutcome(step, None, "failed", run.EXIT_DRIVER, changed, None)
+        elif "dead" in states:
             outcome = run.StepOutcome(step, None, "failed", run.EXIT_DRIVER, ("E_SHARD_DEAD",), None)
         elif any(state != "done" for state in states):
             outcome = run.StepOutcome(step, None, "failed", run.EXIT_DRIVER, ("E_SHARD_UNFINISHED",), None)

@@ -26,7 +26,15 @@ from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 
 from senselab.utils.reproduce import cache, digest, inputs
-from senselab.utils.reproduce.spec import RESERVED_ROOT_NAMES, InputSpec, Manifest, Profile, StageSpec, StepSpec
+from senselab.utils.reproduce.spec import (
+    POOLS_DIR,
+    RESERVED_ROOT_NAMES,
+    InputSpec,
+    Manifest,
+    Profile,
+    StageSpec,
+    StepSpec,
+)
 
 CODE = "E_SPEC_RESTRICTED"
 HOOK_MISSING = "E_SCAN_HOOK_MISSING"
@@ -336,13 +344,20 @@ def _closure_of(out: Path) -> list[str] | None:
 
 
 def _run_links(runs_root: Path) -> list[Path]:
-    """Every ``<runs_root>/<date>/<analysis>/<step>`` symlink."""
+    """Every ``<runs_root>/<date>/<analysis>/<step>`` symlink, and every shard link ``<step>/<i>``.
+
+    The work pools under ``<analysis>/pools`` hold no run links and are not entered.
+    """
     found: list[Path] = []
     if not runs_root.is_dir():
         return found
     for day in (p for p in runs_root.iterdir() if p.is_dir() and not p.is_symlink()):
         for analysis in (p for p in day.iterdir() if p.is_dir() and not p.is_symlink()):
-            found += [p for p in analysis.iterdir() if p.is_symlink()]
+            for entry in analysis.iterdir():
+                if entry.is_symlink():
+                    found.append(entry)
+                elif entry.is_dir() and entry.name != POOLS_DIR:
+                    found += [p for p in entry.iterdir() if p.is_symlink()]
     return found
 
 
