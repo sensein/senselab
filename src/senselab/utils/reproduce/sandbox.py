@@ -411,6 +411,8 @@ def _keyed(step: StepSpec, profile: Profile) -> tuple[dict[str, str], dict[str, 
         templated["R_ENVIRON_USER"] = R_STARTUP_TEMPLATE
         templated["R_PROFILE_USER"] = R_STARTUP_TEMPLATE
         literal["R_LIBS_SITE"] = ""
+    if step.shards is not None:
+        literal["REPRO_SHARDS"] = str(step.shards.count)
     return {**profile.env, **literal}, templated
 
 
@@ -437,6 +439,7 @@ def build_env(
     profile: Profile,
     paths: Mapping[str, str | os.PathLike[str]],
     parent: Mapping[str, str] | None = None,
+    shard: int | None = None,
 ) -> tuple[dict[str, str], str, str]:
     """Build a step's whole environment.
 
@@ -447,6 +450,8 @@ def build_env(
         parent: Where the recorded-only job variables (``SLURM_JOB_ID``, ``SLURM_ARRAY_JOB_ID``,
             ``SLURM_ARRAY_TASK_ID``, ``SLURM_CPUS_PER_TASK``, ``CUDA_VISIBLE_DEVICES``) are read from;
             defaults to ``os.environ``. Nothing else is read from it.
+        shard: A sharded step's shard index, set as ``REPRO_SHARD`` (keyed by the step key's ``shard``, so it
+            is not in the keyed sha).
 
     Returns:
         ``(env, keyed_sha, recorded_sha)``: the expanded env to run with; the sha256 of the keyed
@@ -466,6 +471,8 @@ def build_env(
     env |= {k: render(v, values) for k, v in VOLATILE_TEMPLATES.items()}
     source = os.environ if parent is None else parent
     env |= {k: v for k, v in source.items() if k in INHERITED}
+    if shard is not None:
+        env["REPRO_SHARD"] = str(shard)
     return env, _sha(literal | templated), _sha(env)
 
 

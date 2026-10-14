@@ -39,6 +39,15 @@ _PARTS: dict[str, dict[str, Any]] = {
     "gpu": {"partition": "accel", "gres": "gpu:a:1", "cpus": 8, "mem": "32G", "time": "02:00:00"},
     "build": {"partition": "quick", "cpus": 2, "mem": "4G", "time": "00:15:00"},
 }
+POOL_SETTINGS: dict[str, Any] = {"lease_s": 30.0, "heartbeat_s": 5.0, "poll_s": 1.0, "time": "02:00:00"}
+CLASSES: dict[str, Any] = {
+    "small": {
+        "partitions": [
+            {"partition": "main", "cpus": 1, "mem": "1G", "time": "00:10:00", "max_workers": 2},
+            {"partition": "spare", "cpus": 1, "mem": "1G", "time": "00:10:00", "exclude": ["n[1-2]"], "requeue": True},
+        ]
+    }
+}
 
 
 def _profile(tmp: Path, **change: Any) -> Profile:  # noqa: ANN401
@@ -357,6 +366,59 @@ def test_no_probe_without_a_fallback(tmp_path: Path) -> None:
     step = _spec("train", resources={"profile": "gpu"})
     assert slurm.choose_partition(step, _profile(tmp_path), lambda p: p, fake) == "accel"
     assert fake.calls == []
+
+
+def test_a_partition_list_is_passed_through_unprobed(tmp_path: Path) -> None:
+    """A comma list of partitions has no fallback: it is not probed and goes to sbatch whole."""
+    parts = {**_PARTS, "cpu": {k: v for k, v in _PARTS["cpu"].items() if k != "fallback"} | {"partition": "main,spare"}}
+    profile = _profile(tmp_path, partitions=parts)
+    fake = FakeSbatch((1, "rejected"))
+    assert slurm.choose_partition(_spec("prep"), profile, lambda p: p, fake) == "main,spare"
+    assert fake.calls == []
+    slurm.submit([_manifest("alpha", _step("prep"))], _config(tmp_path, [Path("/m/a.yaml")], profile=profile), fake)
+    assert "--partition=main,spare" in _sbatch_lines(fake.submissions()[0])
+    assert not [a for a, _ in fake.calls if "--test-only" in a]
+
+
+def test_requeue_and_exclude_are_rendered(tmp_path: Path) -> None:
+    """A partition's ``requeue`` and ``exclude`` reach its step jobs, and only them."""
+    parts = {**_PARTS, "cpu": {**_PARTS["cpu"], "requeue": True, "exclude": ["n1", "n[3-4,7]"]}}
+    profile = _profile(tmp_path, partitions=parts)
+    kwargs: dict[str, Any] = {"command": ["run"], "date": DATE, "exports": EXPORTS}
+    flags = _sbatch_lines(slurm.render_step_job(_spec("prep"), profile, partition="main", **kwargs))
+    assert "--requeue" in flags and "--exclude=n1,n[3-4,7]" in flags
+    assert flags.index("--requeue") < flags.index("--export=NONE")
+    gpu = _spec("train", resources={"profile": "gpu", "gpu_arch": ["sm_80"]})
+    plain = _sbatch_lines(slurm.render_step_job(gpu, profile, partition="accel", **kwargs))
+    assert not any(f == "--requeue" or f.startswith("--exclude") for f in plain)
+    final = _sbatch_lines(slurm.render_finalize_job(profile, dependencies=["5"], **kwargs))
+    assert not any(f == "--requeue" or f.startswith("--exclude") for f in final)
+
+
+def test_a_list_with_a_fallback_is_refused(tmp_path: Path) -> None:
+    """A partition list replaces ``fallback``, so the two together do not validate; nor does a list in a class."""
+    parts = {**_PARTS, "cpu": {**_PARTS["cpu"], "partition": "main,spare"}}
+    with pytest.raises(ValueError, match="partition list"):
+        _profile(tmp_path, partitions=parts)
+    row = {"partition": "main,spare", "cpus": 1, "mem": "1G", "time": "00:10:00"}
+    with pytest.raises(ValueError, match="one partition"):
+        _profile(tmp_path, resource_classes={"small": {"partitions": [row]}})
+
+
+def test_exclude_words_are_checked(tmp_path: Path) -> None:
+    """An exclude entry that is not a node name or a bracketed node range is ``resource-invalid``, in lint."""
+    for bad in ("n1 n2", "n1;rm", "n[1-", "-x"):
+        parts = {**_PARTS, "cpu": {**_PARTS["cpu"], "exclude": ["ok1", bad]}}
+        findings = slurm.step_findings(_spec("ok"), _profile(tmp_path, partitions=parts))
+        assert ("resource-invalid", "cpu.exclude") in [(f.code, f.detail) for f in findings], bad
+    good = {**_PARTS, "cpu": {**_PARTS["cpu"], "exclude": ["n1", "node-2.a", "n[01-03,7]"]}}
+    assert slurm.step_findings(_spec("ok"), _profile(tmp_path, partitions=good)) == []
+    row = {"partition": "main", "cpus": 1, "mem": "1G", "time": "00:10:00", "exclude": ["a b"]}
+    classes = {"small": {"partitions": [row]}}
+    profile = _profile(tmp_path, resource_classes=classes, work_pool=POOL_SETTINGS)
+    sharded = _spec("parts", shards={"count": 2, "resource_class": "small"})
+    found = [(f.code, f.detail) for f in slurm.step_findings(sharded, profile)]
+    assert found == [("resource-invalid", "small.main.exclude")]
 
 
 # --- resource and root cross-checks --------------------------------------------------------------

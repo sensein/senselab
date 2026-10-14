@@ -54,6 +54,9 @@ Name = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9_][A-Za-z0-9_.-]*$"
 Label = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9][A-Za-z0-9_+-]{0,63}$")]
 CountName = Annotated[str, StringConstraints(pattern=r"^[a-z][a-z0-9_]{0,63}$")]
 SourceRoot = Annotated[str, StringConstraints(pattern=r"^(up:)?[A-Za-z0-9_.-]+$")]
+ClassName = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")]
+RESERVED_STEP_NAMES = frozenset({"pools"})
+"""Names a step may not take: ``<runs_root>/<date>/<analysis>/pools/`` holds the work pools of sharded steps."""
 
 
 def _relative_path(value: str) -> str:
@@ -653,6 +656,16 @@ class ExtractSpec(_Model):
         return self
 
 
+class ShardSpec(_Model):
+    """A sharded step: ``count`` shards, each its own key and result dir, run through the work pool of a class.
+
+    Each shard sees ``REPRO_SHARD`` (its index, from 0) and ``REPRO_SHARDS`` (``count``) in its env.
+    """
+
+    count: Annotated[int, Field(ge=2)]
+    resource_class: ClassName
+
+
 class StepSpec(_Model):
     """One step: a repository commit, an env, an argv template, its inputs, outputs and expectations.
 
@@ -668,7 +681,9 @@ class StepSpec(_Model):
     ``extract`` declares the categorical values its adapter may emit (`ExtractSpec`). ``restricted`` has no
     default: a restricted step's results live under the profile's ``restricted_results_root``, and a step on
     a restricted input, on a data-root pattern reaching a restricted dir, or needing a restricted step must
-    declare it (`restricted.check_restricted`).
+    declare it (`restricted.check_restricted`). ``shards`` makes the step one step per shard (`ShardSpec`); a
+    step that needs it (a gather step) sees ``{up:<step>}`` as a read-only directory of links ``<i>``, one to each
+    shard's ``{out}``.
     """
 
     name: Name
@@ -695,12 +710,15 @@ class StepSpec(_Model):
     extract: list[ExtractSpec] = []
     lock_inputs: list[Name] = []
     restricted: bool
+    shards: ShardSpec | None = None
 
     _unique_lock_inputs = field_validator("lock_inputs")(_no_duplicates)
 
     @model_validator(mode="after")
     def _consistent(self) -> "StepSpec":
         needs = set(self.needs)
+        if self.name in RESERVED_STEP_NAMES:
+            raise ValueError(f"step name {self.name!r} is reserved")
         if len({e.name for e in self.extract}) != len(self.extract):
             raise ValueError(f"E_SPEC_EXTRACT: step {self.name!r} has duplicate extract names")
         if len(needs) != len(self.needs):
@@ -818,7 +836,11 @@ class SourceSpec(_Model):
 
 
 class PartitionSpec(_Model):
-    """A batch partition and its limits."""
+    """A batch partition and its limits.
+
+    ``partition`` may be a comma list, which Slurm takes whole; a list replaces ``fallback``. ``requeue`` and
+    ``exclude`` (node names or bracketed node ranges) reach the step jobs as ``--requeue`` and ``--exclude``.
+    """
 
     partition: str
     gres: str | None = None
@@ -826,6 +848,60 @@ class PartitionSpec(_Model):
     mem: str
     time: str
     fallback: str | None = None
+    requeue: bool = False
+    exclude: list[str] = []
+
+    @model_validator(mode="after")
+    def _list_or_fallback(self) -> "PartitionSpec":
+        if "," in self.partition and self.fallback is not None:
+            raise ValueError("a partition list replaces fallback; give one or the other")
+        return self
+
+
+class ClassPartition(_Model):
+    """One partition of a resource class: the ``sbatch`` limits of the class's workers there (`work_pool`)."""
+
+    partition: str
+    gres: str | None = None
+    cpus: Annotated[int, Field(ge=1)]
+    mem: str
+    time: str
+    exclude: list[str] = []
+    requeue: bool = False
+    max_workers: Annotated[int, Field(ge=1)] = 1
+
+    @field_validator("partition")
+    @classmethod
+    def _one(cls, value: str) -> str:
+        if "," in value:
+            raise ValueError("a resource class lists one partition per entry")
+        return value
+
+
+class ResourceClassSpec(_Model):
+    """A resource class: the partitions whose workers claim its shards, in order of preference on ties."""
+
+    partitions: list[ClassPartition] = Field(min_length=1)
+
+
+class PoolSettings(_Model):
+    """The work pools of sharded steps: lease and heartbeat seconds, the controller's tick, its job's time limit.
+
+    ``max_attempts`` failed attempts and ``max_interrupts`` releases or reaps send a shard to ``dead/``.
+    """
+
+    lease_s: Annotated[float, Field(gt=0)]
+    heartbeat_s: Annotated[float, Field(gt=0)]
+    poll_s: Annotated[float, Field(gt=0)] = 30.0
+    time: str
+    max_attempts: Annotated[int, Field(ge=1)] = 2
+    max_interrupts: Annotated[int, Field(ge=1)] = 6
+
+    @model_validator(mode="after")
+    def _lease(self) -> "PoolSettings":
+        if self.lease_s < 3 * self.heartbeat_s:
+            raise ValueError("work_pool.lease_s must be at least three heartbeats")
+        return self
 
 
 class NativeSpec(_Model):
@@ -916,6 +992,9 @@ class Profile(_Model):
     under a data root, so the sandbox shows it read-only, and in no restricted dir (``E_PROFILE_RESTRICTED``),
     which public steps never see. ``url_weights_root`` holds every step's ``url_weights`` files, with the same
     rules.
+
+    ``resource_classes`` name the classes sharded steps run in (`ResourceClassSpec`), and ``work_pool`` the
+    settings of their pools (`PoolSettings`).
     """
 
     roots: dict[Name, Path] = Field(min_length=1)
@@ -941,6 +1020,8 @@ class Profile(_Model):
     mirror_map_strict: bool = False
     hf_hub_cache: Path | None = None
     url_weights_root: Path | None = None
+    resource_classes: dict[ClassName, ResourceClassSpec] = {}
+    work_pool: PoolSettings | None = None
 
     _no_secrets = field_validator("env")(_reject_secret_keys)
 
@@ -1046,8 +1127,9 @@ def check_step_profile(step: StepSpec, profile: Profile) -> None:
         profile: The caller's profile.
 
     Raises:
-        ValueError: If the step selects a native entry the profile lacks, names a partition key it lacks, or
-            declares headline names the profile's ``policy.headline_rule`` refuses.
+        ValueError: If the step selects a native entry the profile lacks, names a partition key it lacks,
+            declares headline names the profile's ``policy.headline_rule`` refuses, or is sharded in a resource
+            class the profile lacks or on a profile with no ``work_pool`` (``E_SPEC_RESOURCE_CLASS``).
     """
     schema = step.metrics_schema
     problem = headline_rule_error(schema.kind, list(schema.headline), profile.policy.headline_rule)
@@ -1058,6 +1140,10 @@ def check_step_profile(step: StepSpec, profile: Profile) -> None:
         raise ValueError(f"step {step.name!r} selects native entries the profile lacks: {missing}")
     if step.resources.profile not in profile.partitions:
         raise ValueError(f"step {step.name!r} names partition key {step.resources.profile!r}, not in the profile")
+    if step.shards is not None and (
+        step.shards.resource_class not in profile.resource_classes or profile.work_pool is None
+    ):
+        raise ValueError(f"E_SPEC_RESOURCE_CLASS: step {step.name!r} needs its resource class and work_pool settings")
 
 
 def _read(path: Path) -> Any:  # noqa: ANN401
