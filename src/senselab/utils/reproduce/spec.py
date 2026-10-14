@@ -56,6 +56,8 @@ CountName = Annotated[str, StringConstraints(pattern=r"^[a-z][a-z0-9_]{0,63}$")]
 SourceRoot = Annotated[str, StringConstraints(pattern=r"^(up:)?[A-Za-z0-9_.-]+$")]
 ClassName = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")]
 POOLS_DIR = "pools"
+RESUME_RESERVED = frozenset({"stage", "notebooks"})
+"""Dirs under ``{out}`` the driver makes on every run, which a ``resume_dir`` may not be or lie in."""
 RESERVED_STEP_NAMES = frozenset({POOLS_DIR})
 """Names a step may not take: ``<runs_root>/<date>/<analysis>/pools/`` holds the work pools of sharded steps."""
 
@@ -684,7 +686,9 @@ class StepSpec(_Model):
     a restricted input, on a data-root pattern reaching a restricted dir, or needing a restricted step must
     declare it (`restricted.check_restricted`). ``shards`` makes the step one step per shard (`ShardSpec`); a
     step that needs it (a gather step) sees ``{up:<step>}`` as a read-only directory of links ``<i>``, one to each
-    shard's ``{out}``. The name ``pools`` is reserved (``E_SPEC_RESERVED_NAME``).
+    shard's ``{out}``. The name ``pools`` is reserved (``E_SPEC_RESERVED_NAME``). ``resumable`` (``items`` or
+    ``checkpoint``) and ``resume_dir`` (relative to ``{out}``) come together (``E_SPEC_RESUME``): on an attempt
+    (`run`) the driver keeps ``{out}/<resume_dir>`` instead of clearing it.
     """
 
     name: Name
@@ -712,6 +716,8 @@ class StepSpec(_Model):
     lock_inputs: list[Name] = []
     restricted: bool
     shards: ShardSpec | None = None
+    resumable: Literal["items", "checkpoint"] | None = None
+    resume_dir: RelPath | None = None
 
     _unique_lock_inputs = field_validator("lock_inputs")(_no_duplicates)
 
@@ -720,6 +726,11 @@ class StepSpec(_Model):
         needs = set(self.needs)
         if self.name in RESERVED_STEP_NAMES:
             raise ValueError(f"E_SPEC_RESERVED_NAME: step name {self.name!r} is reserved")
+        if (self.resumable is None) != (self.resume_dir is None):
+            raise ValueError(f"E_SPEC_RESUME: step {self.name!r} gives resumable and resume_dir together or neither")
+        parts = PurePosixPath(self.resume_dir).parts if self.resume_dir is not None else ("ok",)
+        if not parts or parts[0] in RESUME_RESERVED:
+            raise ValueError(f"E_SPEC_RESUME: step {self.name!r} resume_dir names a dir the driver makes")
         if len({e.name for e in self.extract}) != len(self.extract):
             raise ValueError(f"E_SPEC_EXTRACT: step {self.name!r} has duplicate extract names")
         if len(needs) != len(self.needs):

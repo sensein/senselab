@@ -764,7 +764,7 @@ def test_claim_excludes_a_second_process(tmp_path: Path) -> None:
         with claim(root, OTHER, timeout=0.5):
             pass
         release.write_text("go")
-        with claim(root, SHA, timeout=60) as out:
+        with claim(root, SHA, timeout=60) as (out, _):
             assert out == result_dir(root, SHA)
             assert is_done(out)
     finally:

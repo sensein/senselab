@@ -558,10 +558,10 @@ def test_the_senselab_logger_goes_to_the_driver_log_only(
     real = cache.claim
 
     @contextlib.contextmanager
-    def noisy(results_root: Path, key: str, **kwargs: Any) -> Iterator[Path]:  # noqa: ANN401
+    def noisy(results_root: Path, key: str, **kwargs: Any) -> Iterator[tuple[Path, bool]]:  # noqa: ANN401
         logging.getLogger("senselab").warning("stale takeover LOCKPATH-5512")
-        with real(results_root, key, **kwargs) as out:
-            yield out
+        with real(results_root, key, **kwargs) as held:
+            yield held
 
     monkeypatch.setattr(cache, "claim", noisy)
     manifest = world.manifest(world.step("prep", "prep", "{root:data}/in/a.txt"))
