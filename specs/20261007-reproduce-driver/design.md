@@ -34,8 +34,10 @@ A **manifest** lists steps. Each step names:
 - a repository and a 40-hex commit, plus whether submodules are needed
 - a kind: python, notebook, r or ir_notebook
 - an env spec (below)
-- an argv template, with placeholders `{out}`, `{tmp}`, `{checkout}`, `{venv}`, `{cache}`, `{root:<name>}` and `{up:<step>}`
-- inputs and staged files, both drawn from named data roots
+- an argv template, with placeholders `{out}`, `{tmp}`, `{checkout}`, `{venv}`, `{cache}`, `{root:<name>}`,
+  `{up:<step>}` and `{input:<id>}`
+- inputs and staged files, both drawn from named data roots, and registered inputs (`lock_inputs`)
+- whether it is `restricted`, and optionally weights, an engine, a draw, shards, a resume dir and extracted values
 - patches and an adapter
 - `needs`, the upstream steps
 - resources, and the expected metrics
@@ -47,9 +49,14 @@ A **profile** is supplied by the caller and kept outside this repository. It nam
 - the keyed environment map
 - the partitions
 - the R module
-- a deny-pattern file
+- a deny-pattern file and a canary host (each required only when the policy says so)
 - the environment-modules init script (`modules_init`) and the batch jobs' temporary root
   (`job_tmp_root`), both optional
+- the project `policy` (required; "Policy plug-ins")
+- optionally: restricted dirs with their results root, released-metrics root and scan hook; a mirror map; the
+  read-only hub cache and URL-weights root; resource classes and work-pool settings (sections below)
+
+Each manifest also references one sources lock ("Registered inputs, sources locks and verification").
 
 Nothing site-specific lives in this package.
 
@@ -361,6 +368,25 @@ How `env` installs (B7):
   entries, then a suffix; `LD_LIBRARY_PATH` is the module's entries, then the native lib dirs, each
   entry kept at its first position.
 
+### Shared uv and lock helpers (A15b)
+
+The driver no longer carries its own copies of the uv and lock primitives: `locks.normalize_name`,
+`locks.is_torch_family`, `TORCH_NAMES` and `TORCH_VARIANT_PREFIXES` are `senselab.utils.uv_tools`' own (re-exported),
+and `locks.requirements_sha256` keeps only its reproduce signature, hashing through `uv_tools.requirements_sha256`
+with the same fields, so every committed lock digest is unchanged. `lockgen.uv_executable` (formerly `find_uv`) keeps
+the `REPRO_UV` pin and its `ReproduceLockError`, and otherwise asks `uv_tools.find_uv(home=False)`: a batch job's uv
+comes from its pinned `PATH`, never from a home install. The exclusive locks of `env` and `build` (venv and R library
+rebuilds, `wheels.lock` writes) are `SharedFileLock`s (`build.exclusive_lock`) on the same `<resource>.lock` file the
+steps' shared `file_lock` takes, so readers and writers still exclude each other; they wait with no timeout, as the
+`flock` did, record their holder and heartbeat beside the lock, and leave the directory's mode alone. `file_lock`
+stays for the shared (reader) locks. `filelock` (3.29) unlinks the lock file before it unlocks, so a reader that was
+waiting on the old file would hold a lock no later writer sees: `file_lock` therefore checks, after `flock`, that the
+file it locked is still the one at the path, and retries on the new one otherwise. Side effects of the switch: the
+`.lock`, `.holder` and `.heartbeat` files get `SharedFileLock`'s fixed mode 0o664 rather than 0o666 less the umask
+(the dirs that hold them stay as the umask made them), a killed builder leaves `.holder`/`.heartbeat` beside the lock
+(including `wheels.lock.holder` in a manifest repo, which that repo should ignore), and a thread that blocks on a lock
+it already holds through another instance gets `filelock`'s deadlock error instead of hanging. The host's CUDA version comes from `cuda_probe.detect_host_cuda` (A14).
+
 ## Sandbox
 
 Every step runs as
@@ -436,8 +462,9 @@ own tmp for the same reason.
 one, a symlink (`/var/run` usually is), or one holding a path the sandbox needs is skipped. That hides the
 munge, sssd, nscd and slurmd sockets. Other `AF_UNIX` sockets on the remaining read-only mounts stay
 reachable: connecting to a socket needs no write permission on its file, so a read-only bind does not
-stop it. A step with `hf_weights: []` also gets `{cache}/huggingface` masked the same way, so it cannot
-read weights another step pinned.
+stop it. Every step also gets `{cache}/huggingface` masked the same way (A10; before, only steps with
+`hf_weights: []`): weights come only through the step's own hub view ("Hub view and URL weights"). Public steps
+also get every restricted dir masked ("Restricted root, release and closure purge").
 
 **Network:** there is none.
 
@@ -500,7 +527,8 @@ How `sandbox` reads those rules:
   and `R_LIBS_USER` (`r_lib`, as the plan's B7 says, with `R_LIBS_SITE` keyed as an empty constant so no site library
   is seen), `JUPYTER_PATH`
   (`{venv}/share/jupyter`), `JUPYTER_DATA_DIR`/`JUPYTER_CONFIG_DIR`/`XDG_CACHE_HOME` (under
-  `{tmp}`), `HF_HOME`/`TORCH_HOME` (under `{cache}`), `CUDA_CACHE_PATH` (`{tmp}/cuda-cache`; spec §15.6
+  `{tmp}`), `HF_HOME`/`TORCH_HOME` (under `{cache}`; `HF_HOME={tmp}/hf` with a per-step hub view for
+  `hf_weights` steps and `TORCH_HOME={tmp}/torch` for `url_weights` steps, A10/A11), `CUDA_CACHE_PATH` (`{tmp}/cuda-cache`; spec §15.6
   put it under `{out}`, and B12's review moved it into the step's scratch so it is writable without
   being an output), `REPRO_OUT`/`REPRO_TMP`, and for R steps `R_ENVIRON_USER`/`R_PROFILE_USER`
   (`{cache}/empty-r-startup`).
@@ -614,8 +642,11 @@ How `sandbox` reads those rules:
 - `hf_weights` (commit-pinned, per-file sha256s), R session and R module-env digests
 - metrics schema, expectations, replicate index
 - upstream keys
+- since A0b–A15: `policy_sha256`, `sources_lock_sha256` and `lock_inputs`, `restricted`, `url_weights`, `extract`,
+  `shard`, `resumable`/`resume_dir`, `engine` and `draw` (each described in its section below)
 
-**Result dir:** each step writes to `<results_root>/<step_key>/`. A step whose result dir holds a
+**Result dir:** each step writes to `<results_root>/<step_key>/` (a restricted step to
+`<restricted_results_root>/<step_key>/`). A step whose result dir holds a
 completed summary with exit 0 is skipped, and its result dir is linked into the dated run. Downstream steps
 therefore read the same files on any day.
 
@@ -735,15 +766,17 @@ the step.
   carry that file's sha256 before a run. Taking the post-prefetch sha256 as an argument instead
   would let a key depend on an uncommitted file.
 - **Serialization.** `canonical_json`: `json.dumps(sort_keys=True, separators=(",", ":"),
-  ensure_ascii=True, allow_nan=False)`, tagged `"schema": "reproduce-step-key-3"`. Mappings
+  ensure_ascii=True, allow_nan=False)`, tagged `"schema": "reproduce-step-key-4"` (bumped from `-3` in A4,
+  when the sources lock and registered inputs joined the payload). Mappings
   (submodules, upstream, env, native) are dicts, so their caller-side order cannot matter. Floats
   in expectations are Pydantic-coerced, so `77` and `77.0` key alike. Changing what the payload
   holds bumps the schema tag; changing driver code changes `reproduce_source_sha256` by itself.
 - **`hf_weights`.** Required on `StepSpec`, with no default, so every manifest states `[]` for a
-  step that loads no weights (every step of the first rerun set). Each entry is `{repo: "<org>/<name>", repo_type:
+  step that loads no weights. Each entry is `{repo: "<org>/<name>", repo_type:
   model|dataset, revision: <40-hex commit>, files: [{path, sha256}, ...]}`. The revision is a
   commit, never a branch or tag (senselab's rule that a load passes a commit SHA). `files` lists
-  every file the step reads with its sha256, which prefetch checks after download. It needs at
+  every file the step reads with its sha256, which prefetch checks against the profile's read-only hub cache (A10:
+  the driver downloads nothing). It needs at
   least one file, no duplicate paths, and one entry per repository.
 - **Completion marker.** A result dir is done when `summary.json` parses as an object with integer
   `exit` 0 (a JSON `true` is not 0). `write_summary` writes a temporary file with `O_EXCL` and
@@ -824,9 +857,10 @@ suppressed.
   sensitive: no participant, site or diagnosis identifiers. The same rule holds for analysis and step
   names, which also name directories and appear in queue listings.
 - **Balanced accuracy is the only classification headline (Satra, 2026-10-07: "Raw accuracy is
-  unhelpful without a null rate, so only a balanced accuracy headline is helpful.").** A
+  unhelpful without a null rate, so only a balanced accuracy headline is helpful.").** Under the policy's
+  `headline_rule: balanced_accuracy_only` (A0b; the default when no profile is given) a
   classification step's `headline` is exactly `["balanced_accuracy"]`; anything else is the schema
-  error `E_SPEC_HEADLINE_NOT_BA`. Accuracy, top-1, macro F1, AUROC, PR-AUC, MCC and F1 may be declared
+  error `E_SPEC_HEADLINE_NOT_BA`. `kind_vocabulary` allows any of the kind's headline or secondary names. Accuracy, top-1, macro F1, AUROC, PR-AUC, MCC and F1 may be declared
   as `secondary` metrics. Secondary entries go through the same validation as headline entries
   (value range, `floor` checked against `expected_floor`, `lift` required), so accuracy and top-1
   always travel with their null rate, the majority-class prevalence. `macro_recall` was removed
@@ -904,12 +938,12 @@ protocol) still reports `n_groups` as its number of subjects, so a fold of three
 freedom: they are properties of the fitted model that a reader needs to interpret an F (or t) statistic,
 and an F value without its numerator and denominator df cannot be checked against a target.
 
-**The minimum cell is one constant, `metrics.MIN_CELL = 5`.** Its value is the small-cell suppression
-convention the approved spec states (§2.3, "any count cell below a minimum size (default 5) is
-suppressed"), the threshold disclosure-control practice commonly uses for counts of people. It is a
-constant, not a parameter: there is no `--min-cell` flag and no `RunConfig.min_cell`, so no caller can
-lower it, and since it lives in a reproduce module, `reproduce_source_sha256` keys it; changing it
-recomputes every step. The token is always `"<5"`.
+**The minimum cell comes from the profile's policy (`policy.min_cell`, A0b).** Until A0b it was one constant,
+`metrics.MIN_CELL = 5`, keyed through `reproduce_source_sha256`. It is now a required parameter of
+`validate_metrics` and `validate_extracted`, read only from the profile: there is still no `--min-cell` flag and no
+`RunConfig.min_cell`, so no caller lowers it outside the reviewed profile, and the key carries `policy_sha256`, so
+changing it recomputes every step. A suppressed count is written as `"<min_cell>"` (`"<5"` for the common
+disclosure-control threshold of 5).
 
 Accepted residual risk: a prevalence multiplied by an unsuppressed `n` (or a recall times a
 class size) can reconstruct a small cell that was suppressed elsewhere, and an unsuppressed denominator
@@ -919,8 +953,8 @@ to report. The output stays aggregate-only, and only the result files named in t
 rules (`summary.json`, `metrics.json`, `run.json`) are read.
 
 The driver validates twice, once the adapter's output and once the final object after writing the
-`expect` results (`writer="driver"`), both times with `MIN_CELL`, so a `"<5"` token passes the second
-validation.
+`expect` results (`writer="driver"`), both times with the policy's `min_cell`, so a `"<min_cell>"` token passes
+the second validation.
 
 **Absent classes.** A declared class with prevalence 0 does not count toward k, matching
 scikit-learn's balanced accuracy, which averages recall over the classes present in `y_true`.
@@ -967,7 +1001,7 @@ several entries is refused when read, rather than picking one.
   pattern that matches nothing fails with `E_DIGEST_EMPTY` instead of digesting the empty set the
   same way before and after the step. Output digests cover `work/` only, which holds no CUDA cache.
 - The final object, after the driver writes the `expect` results, is validated again with
-  `writer="driver"` (same `MIN_CELL`).
+  `writer="driver"` (same `min_cell`).
 
 **Host record.** Hostname, CPU model and counts, and the first GPU's name and driver from `nvidia-smi`
 with the GPU count, probed on the host. The venv's Python, torch and torch CUDA versions come from the
@@ -1015,7 +1049,8 @@ It holds no messages, and no paths other than checkout-relative code frames.
   `prov:Entity`, not `Files`, because BEP028's `Files` are located files.
 - **The command is withheld.** BEP028's `Command` is required; a rendered argv names data files, and
   even the argv template may hold a data-root-relative path, so `Command` stays null, the activity
-  `Description` says why, and the argv is recorded as `argv_sha256`. The `Description` was hardcoded
+  `Description` says why, and the argv is recorded as `argv_sha256` (under `policy.confidential_provenance:
+  false`, A0b, the rendered argv and input paths are recorded as well). The `Description` was hardcoded
   to triage's wording; it is now a `description` argument of `to_bep028_graph` and
   `convert_store_file`, with triage's wording as the default. `write_bep028_files` serializes an
   already-built graph and has no activity to describe, so it takes no `description`.
@@ -1160,7 +1195,7 @@ It holds no messages, and no paths other than checkout-relative code frames.
   `__name__` to a `senselab.` name. Adapters live in a reviewed repository.
 - **Validation and expectations.** The adapter's object is validated with `writer="adapter"`, then
   `evaluate_expect` writes the results, then the whole object is validated again with
-  `writer="driver"` (same `MIN_CELL`), and only then written to `R/metrics.json`. Only `E_*`
+  `writer="driver"` (same `min_cell`), and only then written to `R/metrics.json`. Only `E_*`
   codes fail a step; `W_*` codes are recorded. An expectation is compared in its own `unit` when it
   gives one, else in the unit of the step's metric entry, converting upstream values (pp = 100 ×
   fraction); per-class rates are fractions. `target`, `tolerance` and `delta` are then written in the
@@ -1345,9 +1380,11 @@ next run.
 - `lock`: compile locks
 - `prefetch`: mirrors, worktrees, venvs, wheels, R libraries. `--sources-only` creates worktrees only.
 - `build-one`: one sdist build, as a batch job
-- `run`: run steps locally, in DAG order; `--step` runs one batch job's step, `--finalize` settles a submission
-- `submit`: one batch job per step, chained with `afterok`
-- `lint`: check manifests and patches
+- `run`: run steps locally, in DAG order; `--step` runs one batch job's step (`--shard <i>` one shard of it),
+  `--pool <step> --submission <id>` drives a sharded step's work pool, `--finalize` settles a submission
+- `submit`: one batch job per plain step, chained with `afterok`; one pool job per sharded step
+- `lint`: check manifests and patches (`--lock` a sources lock alone, `--skip-locks` without lock findings)
+- `verify-inputs`: re-hash registered inputs against their manifests and record the outcome
 - `status`: per step: key, executed, skipped, failed, never-ran or pending, exit, codes
 
 Exit codes, for every subcommand: `0` success (for `lint`, no findings; for `run` and `status`, every step
@@ -1379,12 +1416,12 @@ patch text.
      together exactly one reserves a run dir; an overlap found at a later analysis undoes the reservations
      already made (restoring the replaced rows) and nothing is submitted. A test races two threads against a
      fake sbatch that blocks between calls;
-  4. the dated log dir (mode `2770`); the partition probes; every step job `--hold` and
+  4. the dated log dir (mode `2770`, that is setgid `2777` less the policy umask, A0b); the partition probes; every step job `--hold` and
      `--comment=<submission id>` in DAG order, each `--dependency=afterok:<needs' job ids>` (in `needs` order)
      with `--kill-on-invalid-dep=yes`; the job ids, filled into this submission's rows under the lock; the
      finalize job (`afterany` every step job, also `--hold` and tagged); one `scontrol release` of all of them.
 
-  Steps 3 and 4 run under `umask 007` with SIGTERM and SIGHUP raising `Terminated`, so an interrupt during
+  Steps 3 and 4 run under the policy umask (`007` above) with SIGTERM and SIGHUP raising `Terminated`, so an interrupt during
   the reservation also undoes it. Any interrupt prints `interrupted: submission <id>` (the id only) on
   stderr. A slow test runs two real `submit` processes against one run dir on NFS with a fake sbatch on
   `PATH`: exactly one wins.
@@ -1442,7 +1479,8 @@ patch text.
 - **Scripts.** Each script goes to sbatch on standard input, so nothing is written to the submit dir.
   `--output`/`--error` are `<slurm_logs_root>/<date>/%j.{out,err}` for step and finalize jobs (spec §2.3
   item 6) and `build-<sdist>-%j.{out,err}` for build jobs, and every job (step, finalize and build) runs there (`--chdir`), with the driver started as `python -P` so that directory is
-  not on `sys.path`. The driver creates the dir with mode `2770` and runs sbatch under `umask 007`, so the
+  not on `sys.path`. The driver creates the dir with mode `2770` and runs sbatch under `umask 007` (both from the policy since A0b; the
+  values here are a `007` policy's), so the
   `.out`/`.err` files are never world-readable. Checked with a real trivial job through `submit` from a shell with umask `022`: the
   job's `.out` and `.err` came out `0660`, so the submit-time umask reaches them (through `SLURM_UMASK`). `--export=NONE`, then `set -euo pipefail`, `umask 007`,
   `PATH=/usr/bin:/bin`, and explicitly `UV_CACHE_DIR`, `UV_LINK_MODE=hardlink`, `UV_PYTHON_INSTALL_DIR`,
@@ -1498,8 +1536,9 @@ patch text.
   `--local-builds` builds them in-process instead. The wait has no timeout (a CUDA build takes minutes).
   Each build job is named `reproduce-build-<sdist>-<random>` on the sbatch command line, so if the driver
   is interrupted (Ctrl-C, SIGTERM, any exception) it runs `scancel --name` on it: no orphan job finishes
-  later and rewrites the manifest. The job gets the `--base-dir` prefetch used. Steps declaring `hf_weights` are refused: downloading
-  pinned weights is out of the current scope, and no step of the first rerun set needs it. `--sources-only` reads a draft
+  later and rewrites the manifest. The job gets the `--base-dir` prefetch used. Steps declaring `hf_weights` were refused here until A10; prefetch now
+  verifies them (and `url_weights`) against the profile's read-only caches and still downloads nothing ("Hub view
+  and URL weights"). `--sources-only` reads a draft
   (one source mapping, a list, or a `{name, steps}` manifest whose steps may lack `env`; only `name`,
   `repo`, `commit` and `submodules` are read) and creates only the cleared worktrees with the empty patch
   set.
@@ -1525,51 +1564,279 @@ patch text.
 - **`__main__.py`** guards its call to `main`, because the adapter runner imports every module of the
   package and would otherwise run the command line inside the adapter sandbox.
 
-## Sources locks (A4; completed in A16)
+## Policy plug-ins (A0b)
+
+A deployment's project rules are not the library's. The profile carries them in a required `policy` block
+(`spec.Policy`, no extra keys), and the library implies none:
+
+- `min_cell` (at least 1): the small-cell threshold. `metrics.validate_metrics(..., min_cell)` and
+  `extract.validate_extracted(..., min_cell)` take it as a required parameter; a suppressed count is written as
+  `"<min_cell>"`. There is no module constant and no command-line flag.
+- `headline_rule`: `balanced_accuracy_only` (a classification headline is exactly `[balanced_accuracy]`,
+  `E_SPEC_HEADLINE_NOT_BA`) or `kind_vocabulary` (any of the kind's headline or secondary names).
+  `metrics.headline_rule_error` applies it; manifest loaders and the command line pass the profile's rule, and
+  `MetricsSchema` reads it from the pydantic validation context (default `balanced_accuracy_only`), so a manifest
+  validated without a profile gets the stricter rule.
+- `require_deny_patterns`, `require_canary`: when true, the profile must name `deny_patterns_file` or
+  `canary_host` (`E_PROFILE_POLICY`). Both profile fields are optional otherwise. With no canary host the
+  preamble runs `run.NO_CANARY_CODE`, which attempts no connect and reports `canary_failed: true`; the step still
+  runs in a network namespace with only loopback.
+- `confidential_provenance`: true records no paths and only the argv's sha256 (the B10 behaviour); false also
+  records each input's paths and the rendered argv (`provenance.Artifact.paths`, `record_step(argv=...)`, passed
+  by `run.py` only then).
+- `umask` (`007` or `022`): the umask of batch scripts and of `sbatch` itself (`slurm.submit_umask`); the dated log
+  dir gets setgid `2777` less it (`slurm.log_dir_mode`, `2770` for `007`). The fixed `SUBMIT_UMASK` and
+  `LOG_DIR_MODE` constants are gone. Sandboxed wheel builds keep their own fixed umask `007` (Environments), since
+  that one is part of the wheel's bytes.
+
+**Keyed.** The key payload carries `policy_sha256`, the sha256 of `canonical_json` over the whole block, so a
+policy change recomputes every step. Before, the threshold was keyed only through `reproduce_source_sha256`.
+
+## Registered inputs, sources locks and verification (A4, A5, A6)
+
+**Registered input.** A frozen tree under a profile root, described by a registry entry
+`<base_dir>/inputs/<id>.yaml` (`inputs.RegisteredInput`): root and relpath, its per-file manifest and that
+manifest's sha256, `include`/`exclude` in the digest pattern grammar, `extras: check|ignore`, `restricted` (no
+default), a category, licence, the result rows it feeds, and optionally an `original` tree it is a hardlinked
+derivative of. The **manifest** is a TSV: one `# root=…` line, the header `relpath size mtime_ns xxh3_128
+link_target` (optionally `sha256`), then one row per file or symlink in ascending relpath order. A symlink is recorded by
+its target and never followed. `read_manifest` refuses absolute, empty, `.`/`..`, duplicate and non-ascending
+relpaths. `write_manifest` `lstat`s every component of a literal path or wildcard base, so a symlinked component
+becomes a link row rather than being followed, and a missing literal include is `E_INPUT_REGISTRY`. The written file
+gets mode `0o666` less the umask.
+
+**Sources lock.** A manifest references exactly one lock, `Manifest.sources` (required): `{lock, sha256}`, with
+the path forced to `sources/<name>.lock.yaml` of the manifest repository. The lock (`lock.SourcesLock`, schema
+`reproduce-sources-lock-1`) lists what a run may use: `data` (registered entries pinned by registry and manifest
+sha256, and `kind: pattern` entries naming a root and patterns that stay content-digested at run time),
+`external` (registered), `models` (HF repositories at a commit with per-file sha256s), `urls` (URL files by
+sha256), `code` (repository, commit, patch sha256s in order, submodule commits) and `envs` (env lock files and
+their sha256s). Its sha256 joins every step key (`sources_lock_sha256`) and every result's provenance. The checks
+(`lock.step_findings`, `E_LOCK_REF`/`E_LOCK_MISMATCH`/`E_LOCK_STALE`): a step's commit, patches and env locks match a
+`code`/`envs` entry; each `lock_inputs` id is a registered entry whose registry file and manifest still hash to the
+pinned values (`E_LOCK_STALE` otherwise); every data-root `inputs` or `stage` pattern is listed in a pattern entry; each `hf_weights` entry
+matches a `models` entry; each `url_weights` file matches a `urls` entry. Submodule commits are compared at key
+time, at prefetch, and at lint when a prefetched checkout is at hand. A key computed against a lock that no longer
+passes is refused with `E_KEY_LOCK`, its findings carried as the error's detail. `lint --lock` lints a lock alone,
+and `lint --skip-locks` skips the lock and registry findings (alone with `--lock`, a usage error).
 
 - **`hf_weights` against the lock's `models`.** A step's `hf_weights` entry matches a `models` entry with the same
-  repository, type and revision. Each file the step declares must be in that entry with the same sha256. The step may
-  declare a subset of the entry's files: the lock pins the snapshot's files, and steps that read different files of
-  one snapshot share one entry. Every declared file is still pinned.
+  repository, type and revision. Each file the step declares must be in that entry with the same sha256. The step
+  may declare a subset of the entry's files: the lock pins the snapshot's files, and steps that read different
+  files of one snapshot share one entry. Every declared file is still pinned.
+- **Why a lock and not per-input keys only.** A step names its inputs, models and URL files by reference; the
+  lock holds the pins once per run, so a re-frozen input moves one file and the keys of exactly the steps that use
+  it, and a reviewer reads one file to see what a run consumed.
 
-## Resumable steps (A13; completed in A16)
+**Keyed by manifest, not by content.** `StepSpec.lock_inputs` lists registered ids, and `{input:<id>}` expands to
+the input's tree. Such an input is keyed by `(id, manifest sha256)` through the lock, not by an input-set digest, so
+a skip check on a large tree reads no file content. The trade is that content is trusted only as far as the
+checks below.
 
-**Attempt.** A run of a key whose result dir has no `summary.json` and whose claim was taken over a holder that
-never released (`cache.claim` yields `leftover`), or a work-pool item's run with `POOL_ATTEMPT > 1`. `leftover` is
-`SharedFileLock.took_over`, the lock's own verdict: `.holder` is read before the acquire, and only an uncontended
-acquire (under `_UNCONTENDED_ACQUIRE_THRESHOLD`, timed over the acquire alone) over a legible identity means a killed
-holder. Timing the whole `__enter__` from outside also counted its file touches and its stale-takeover warning, which
-on a loaded network filesystem can push a real takeover over the threshold. A clean release clears
-`.holder` before it drops the lock, so a waiter either sees no identity or waits, and its acquire is contended. A
-waiter that saw a holder's identity and got the lock within the threshold is the one misread case; it can only keep
-a store of the same key from a run that wrote no summary, which is what a kill leaves anyway. Every run that gets
-past its reset writes a summary, and a run ended by an integrity code discards its store first, so a kept store is
-always one an interrupted run of the same key left. A run refused before its reset (no user namespaces, a venv not
-checked, a GPU floor) touches nothing and releases the claim cleanly, so the run after it is an attempt only
-through `POOL_ATTEMPT`: a plain job resubmitted after such a refusal starts its store again. Two more cases are not
-attempts: a run that starts while a failed node's lock is still held (the acquire waits, so it is contended; a pool
-item still counts through `POOL_ATTEMPT`), and none is needed after a restricted purge killed mid-way, whose key a
-public step can no longer run.
+**Pre-check (`inputs.precheck`; at dry run, run and submit, and again after the run).** `lstat` and `readlink`
+of every manifest row, never content. It counts `missing`, `size_diff`, `mtime_diff` (an accepted-mtime overlay
+may accept the exact new mtime), `link_diff`, `links_out`, and for an input with an `original` the rows `paired`
+(same inode as the original's row) and `unlinked`; the top-level `dataset_description.json` is not paired, a
+nested one is. Codes: `E_INPUT_MISSING`, `E_INPUT_MISMATCH` (also a symlinked or non-directory parent component),
+`E_INPUT_LINK_UNREGISTERED`, and `E_INPUT_REGISTRY` for an unreadable manifest; a missing tree, manifest or
+original root is `E_ROOT_MISSING`, the same in the key and the gate. The gate runs inside the claim and before the
+pre-reset refusals: any code fails the step with no reset. The after-run repeat, with the same entries and
+overlays the key used (`_Keyed.entries`), gives `E_INPUT_MUTATED`. The dry run shows the gate's codes in every
+not-done branch, beside a missing checkout or a key refusal. A done result is reused without gating.
 
-**What survives.** On an attempt the reset keeps `R/attempts.jsonl` and, for a `resumable` step, `work/<resume_dir>`
-(moved to `R/.resume-keep` during the wipe and back, kept only when every component is a real directory; a
-`.resume-keep` left by a reset that died is restored the same way). Everything else is cleared as before. A run that
-is not an attempt resets the whole dir, so `attempts.jsonl` restarts at 1. The summary carries `attempt`.
+**Link rule.** A link row's target, resolved against the link's own directory, must lie under the input itself or
+under another registered input the step declares in `lock_inputs`: a link into input B makes the step key on B.
+The registry-wide form is `verify-inputs`' `links_out` count, which does not change the status. **Link targets are
+resolved lexically**, against the recorded target and the profile roots as written: a manifest that recorded an
+absolute target through a differently spelled alias of the same tree (a symlinked mount point, say) reads as
+`E_INPUT_LINK_UNREGISTERED`. Profile roots and recorded absolute targets must use one canonical spelling;
+resolving through the filesystem would make the rule depend on mounts the manifest cannot pin.
 
-**Discard.** The store is removed before the summary when the run ends with `E_INPUT_MUTATED`, `E_SRC_MUTATED`,
-`E_ENV_CHANGED`, `E_ENV_MISSING`, `E_ENV_UNCHECKED`, `E_ADAPTER_CHANGED` or `E_ENGINE_FIT`, and when a run is
-refused before its reset with one of them. `resume_dir` may not be or lie in `stage`/`notebooks`, nor have a component
-the driver removes after every step (`summary.json`, `metrics.json`, `run.json`, `extracted.json`). The attempt line
-is written inside the run, so a failure to write it still leaves an `E_DRIVER` summary. A symlink on the way to the store is removed, never followed.
+**Full verification (`verify-inputs (<id>… | --all) [--registry-only]`).** `inputs.verify` re-hashes an input
+against its manifest (xxh3-128 through `fastio.ordered_map`, 32 threads), counting `COUNT_NAMES`: an unreadable
+file counts under `hash`, a walk error under `extra`, files the manifest lacks under `extra` when `extras: check`.
+`unlinked > 0` makes the status `mismatch`. `append_record` writes the `VerifyRecord` (manifest sha, status, an
+aware start date, counts, `restricted`, overlay sha) and, when only mtimes drifted, an overlay
+`<id>.mtime-overlay.tsv` (a `relpath\tmtime_ns` header, sorted rows), both 0660 and atomic, under
+`<id>.json.lock`, in `input-verify/` beside the results root (the restricted one for a restricted input). The
+latest record is the one whose verification **started** last, a mismatch winning a tie, so a slow earlier `ok`
+cannot mask a newer mismatch; only the latest record writes an overlay. A records file that does not parse is
+`E_INPUT_RECORD` and kept. The command runs under the policy umask; an `OSError` for one id prints `<id>\tE_DRIVER`,
+an unreadable registry file `<id>\tE_INPUT_REGISTRY`. `--registry-only` checks the registry and manifest shas and
+that the manifest's `# root=` line (read up to ` date=`) names the input's tree or its original's.
 
-**Item-store contract** (`resumable: items`). The driver keeps the dir and does not read it. The step writes each
-item to `<resume_dir>/<item_id>.tmp`, renames it into place, then creates the completion marker
-`<resume_dir>/<item_id>.done`. An item counts as present only with its marker, so a partial item (written, not
-marked) is recomputed. The item id covers what makes an item's result differ within one key: the key itself already
-covers the engine identity and the prompt or config version. `resumable: checkpoint` keeps the declared checkpoint
-dir; the step restarts from its latest checkpoint with the same seed and data order.
+**Submit rule.** `inputs.accepted`: the latest record is `ok`, for the registered manifest sha, at most 31 days old
+and not dated more than 10 minutes ahead (`FUTURE_SKEW`), with its overlay's sha checked; otherwise
+`E_INPUT_UNVERIFIED` at dry run, run and submit. When any step of a submission has a gate code, `slurm.submit`
+submits nothing step-related: the rows it would have written become `never-ran` with the step's own gate codes,
+else its gated ancestors' codes, else `E_SUBMIT_ABORTED` (rows of another submission are untouched, and an
+`executed` or `skipped` row of a step that already ran is kept, since a refused submit is no evidence that earlier
+work did not happen); one unheld `verify-inputs <id>` job goes to each input with `E_INPUT_MISMATCH` or
+`E_INPUT_MISSING`, on the build partition entry's resources, tagged with the submission. The command prints
+`never-ran` rows, `verify-submitted\t<id>\t<job>` or `verify-not-submitted\t<id>`, and exits 1.
 
-## Engine steps (A14; completed in A16)
+## Restricted root, release and closure purge (A7, A8)
+
+**Declared.** `StepSpec.restricted` is required, with no default. The profile's restricted fields are set together
+or not at all (`E_PROFILE_RESTRICTED`): `restricted_dirs`; `restricted_results_root`, strictly under a restricted dir
+(so the restricted `input-verify` records, whose overlays hold relpaths, stay inside one) and under an
+`rw_under_roots` entry; `released_metrics_root`, under an `rw_under_roots` entry and in no restricted dir; and
+`scan_hook`, the argv of the release scan. The public results, runs, log and job-tmp roots and the released root
+may not overlap a restricted dir, as written or resolved. A restricted step on a profile with no restricted root
+is refused at load.
+
+**Exposure rule (`restricted.check_manifest_set`; in `run_steps`, `plan_steps`, `submit` and `lint`).** A public
+step may not read a restricted step through `needs`, `up:` or an expectation source; may not declare a restricted
+registered input (an input counts as restricted when flagged, or when its tree, manifest or original lies in a
+restricted dir, flagged or not); and may not have an input or stage pattern that can name a file in a restricted
+dir: the pattern's fixed prefix lies inside one, or a restricted dir lies below the prefix where the remaining
+components can reach it, the prefix checked as written and resolved, since the digest follows symlinks there. At
+run time a staged or digested file of a public step that resolves into a restricted dir is `E_SPEC_RESTRICTED` (a
+file symlink a pattern matched included). Findings: `<manifest>:<step>: E_SPEC_RESTRICTED`.
+
+**Where results go.** A restricted step's key dir, claim and reset are under `restricted_results_root`
+(`run.results_root_of`); its run link stays in the public runs tree, a symlink named by the step. Every `run.json`
+row carries `restricted`, and the key payload does too. Public sandboxes mask every restricted dir (at the resolved
+path, as every mask). Build-time sandboxes see none of them either: sdist builds, offline uv runs, smoke imports and
+R installs go through `sandbox.tool_argv`, which binds no data root and masks the dirs `sandbox.tool_masks` set;
+`prefetch`, `build-one` and the env prefetches set them from the profile, and outside such a block the call fails
+closed with `E_SANDBOX_NO_MASKS`.
+
+**Release (`restricted.release`, after the record and before the summary).** The exact final summary (with
+`released: true`) and the `metrics.json` bytes are staged, each scanned by the hook, and those same bytes written
+atomically (0660) to `released_metrics_root/<key>/`. The hook (`run_scan_hook`) runs outside the sandbox with stdin
+closed, `PATH=/usr/bin:/bin`, `LC_ALL=C.UTF-8`, in its own session, for at most `SCAN_TIMEOUT_S = 300` seconds (the
+process group is killed on timeout). Only exit 0 passes: a non-zero exit, a timeout, an `OSError` or no hook all
+refuse, which is `W_RELEASE_REFUSED` (exit 0, `released: false`) and withdraws any earlier copy for the key; a
+failed summary write withdraws it too, and a symlinked key dir or `metrics.json` is refused. The hook's output is
+kept in `R/logs/scan.log` for restricted steps only; a public step's logs are public, so there it goes to
+`/dev/null`. A restricted step whose `argv[0]` is not an executable file or whose absolute arguments are missing
+is refused before the reset (`E_SCAN_HOOK_MISSING`), so the dry run is blocked; `lint` reports
+`scan-hook-missing` for the profile and for each `extract` step.
+
+**Input closure and reclassification.** A public summary carries `input_closure`: the step's `lock_inputs` and its
+upstream summaries' closures (`E_UPSTREAM_CLOSURE` when one is missing). When an input becomes restricted
+(flagged, or moved under a restricted dir), `verify-inputs` purges first (`purge_closure`, printing `purged=<n>`):
+every public result whose closure holds the id is removed under its claim, which waits for a live run; a result with
+no readable summary is taken under its claim and checked there, dead summary-less dirs included; a held claim does
+not stop the purge of the others, after which `E_CLAIM_HELD` is raised (`PURGE_CLAIM_TIMEOUT_S`). Old public verify
+records and overlays are removed under the records lock. Only then is an unflagged input in a restricted dir refused
+(`E_INPUT_REGISTRY`, in `verify_dir`, `accepted` and `registry_codes`). A public run whose closure became restricted
+mid-run fails with `E_SPEC_RESTRICTED` and loses `work/`. Public results whose summary predates `input_closure` are
+not purged; the re-key that introduced the field left none.
+
+## Mirror map (A9)
+
+The profile's `mirror_map` maps repository URLs to local bare repositories (absolute paths). Its keys are stored as
+`source.canonical_repo` names: scp-like, `ssh://`, `https://` and `http://` spellings all give `host/owner/repo`
+(host lower-cased, user, port, `.git` and trailing `/` dropped; owner and repository keep their case); an absolute,
+`./`, `../` or `file://` path gives its realpath; anything else is taken as already canonical, so stored keys can be
+passed back (a relative local path must therefore start with `./` or `../`). Two keys naming one
+repository with different paths are refused. A mapped URL, the repository's or a resolved submodule's (relative
+submodule URLs are resolved against the parent's), is fetched from the local repository
+(`+refs/heads/*:refs/upstream/heads/*`, `+refs/tags/*:refs/tags/*`, then the commit into
+`refs/upstream/pinned/<commit>`) with the network off and `GIT_ALLOW_PROTOCOL=file`; `remote.origin.url` stays the
+manifest URL, and the origin check compares canonical names. Under `mirror_map_strict` an unmapped repository or
+submodule URL is refused (`mirror-unmapped`), even when the cache mirror already holds the commit. `prefetch`,
+`lock` and `prefetch --sources-only --profile` pass the map; `lint` reports `repo-unmapped <step>` (when the map is
+non-empty or strict), `commit-missing <step>` (a mapped repository, or a mapped submodule's gitlink, lacks the
+commit) and, under strict, `submodule-unmapped <step> <count>`. The URL is still not keyed: the commit pins the
+code wherever it is fetched from.
+
+## Hub view and URL weights (A10, A11)
+
+**Hugging Face weights.** Weights are never downloaded by the driver. The profile's `hf_hub_cache` is a read-only
+hub cache under a data root (as written and resolved) and in no restricted dir. `prefetch` runs
+`weights.verify_hf` over every manifest's steps: each declared file is hashed at most once (deduplicated by type,
+repository, full revision and path; each blob by realpath), except that a file is accepted without hashing when the
+entry's `input` (`HFWeights.input`, which must be in the step's `lock_inputs`) is a registered input whose manifest
+row for that blob has the declared sha256, whose verification is accepted, and whose `lstat` size and `mtime_ns` equal
+the row or its overlay. It prints `weights files=<n> hashed=<n> accepted=<n>`. `HFWeights.input` is not keyed: the
+manifest sha already is, through `lock_inputs`, and the field only decides whether prefetch hashes. In `run.gate`,
+`check_hf_present` refuses a missing file (`E_WEIGHTS_MISSING`) at dry run, run and submit; a profile with
+`hf_weights` steps and no hub cache gives the same code.
+
+**Per-step view.** An `hf_weights` step gets `HF_HOME={tmp}/hf` and `HF_HUB_CACHE`/`HUGGINGFACE_HUB_CACHE=
+{tmp}/hf-hub` (keyed templates; `HUGGINGFACE_HUB_CACHE` joins `RESERVED`). `weights.build_hub_view` builds, for each
+declared repository, `<type>s--<org>--<name>/` with `snapshots` and `blobs` as absolute links into the profile cache
+and `refs/main` naming the declared revision (`dependencies._point_ref_at`, read back); an `OSError` is
+`E_WEIGHTS_VIEW`. The step sees only the repositories it declared, and `{cache}/huggingface` is now masked for every
+step. **Deviation:** the plan asked for `dependencies.is_hf_model_cached(..., cache_dir=hf_hub_cache)` on every
+repository. That function checks only `config.json`, so an unconditional call would refuse repositories without one
+(a `config.yaml` model). It is called only for repositories that declare `config.json`; beside `check_hf_present`
+it adds huggingface_hub's own resolution of that snapshot and nothing else.
+
+**URL weights.** `StepSpec.url_weights` lists `{file, sha256, place}`, `file` relative to the profile's
+`url_weights_root` (same placement rules as the hub cache), `place` one of `whisper` (`{tmp}/cache/whisper/<name>`),
+`torch_hub` (`{tmp}/torch/hub/checkpoints/<name>`) or `path:<rel>` (`{tmp}/weights/<rel>`, no `..`, not `.`).
+Targets are distinct and not nested. `url_weights` steps get `TORCH_HOME={tmp}/torch` (`XDG_CACHE_HOME` was already
+`{tmp}/cache`); `run._prepare` links each target to the file's realpath. The list is keyed, and the sources lock must
+pin each file (`E_LOCK_REF`). `check_url_present` gates presence, a symlink leaving the root counting as missing;
+`verify_url` hashes each file once at prefetch with the accept rule above, trying every registered input of the
+step's `lock_inputs` whose tree holds the file, and prints `url-weights files=<n> hashed=<n> accepted=<n>`.
+
+**Prefetch-only hashing.** A URL file under no registered input, like an `HFWeights` entry with no `input`, is
+hashed at prefetch only: between prefetch and the run nothing but its presence is checked. Registering the weights
+tree as an input closes that gap through the input's pre-check and verification records. Registry entries are merged
+across manifests by id, the last manifest's pin winning; a file accepted through it matches that entry's verified
+manifest, so the content check still holds. An id whose lock cannot resolve is dropped from the accept set, so its
+files are hashed (fail-safe).
+
+## Band verdicts (A1, A2)
+
+**`Expect.kind: seed_band`** judges a stored headline against the spread of independent chains
+(`spec.BandSpec`; pure evaluation in `bands.evaluate_band`). The band gives `stored`, its `unit` (`fraction`|`pp`;
+`Expect.unit` is refused, and `pp` on an unscaled metric is `E_SPEC_EXPECT_UNIT`), exactly one of `floor` and
+`floor_from: entry` (the metric entry's own floor, allowed only on a headline or secondary metric of a
+classification or detection step), `floor_source`, `k` (2), `rho` (0.10, below `max_width_frac`,
+`E_SPEC_BAND_RHO`), `a_min` (default by unit, `BAND_A_MIN`: 0.002 or 0.2), `max_width_frac` (0.25) and
+`characterise`. `stored` and `floor` must lie in the metric's range in the band's unit. Exactly one of:
+
+- `chains` (at least two, in `needs`, no duplicates), with an optional `chain1`, the originally seeded chain, among
+  them;
+- `redraws` for an inference row: exactly three re-draw steps over `n_subset` of `n_full` items, with
+  `max(ceil(0.10·n_full), min(200, n_full)) <= n_subset <= n_full` (`E_SPEC_BAND_SUBSET`); `chain1` is refused.
+
+Shape errors are `E_SPEC_BAND_SHAPE`. Chains and re-draws reach the `needs` check, `dag.check_expect_sources`
+(`E_DAG_TOLERANCE_METRIC`: each must declare the metric) and the run's source list through `BandSpec.sources()`.
+
+**Verdict.** With `lift = stored − floor` (signed), `sd` the sample standard deviation over the chains (re-draws:
+`sd(redraws)·sqrt(n_subset/n_full)`), and `h = max(a_min, k·sd, rho·|lift|)`: `characterise` when declared or
+`lift <= a_min/max_width_frac` (at or near chance); else `fail` when `|mean − stored| > h`; else `uninformative`
+when `h > max_width_frac·lift`; else `pass`. With chains, `mean` is the step's own metric (its adapter emits the chain
+mean) and the driver recomputes the mean, `E_BAND_MEAN` when they differ by a relative `1e-9`; with re-draws `mean`
+is the step's full-set metric and the `fail` check compares it with the stored value. `chain1_pass`, with at least
+two other chains, is `|chain1 − stored| <= max(a_min, k·sd(others))` and does not change the verdict. **Only `fail`
+fails a step** (exit non-zero); `uninformative` and `characterise` exit 0 with `pass: false` in the summary.
+
+**Written.** The metric's entry gets `target`, `delta`, `tolerance`, `pass`, `verdict`, `floor_used`, `lift_used`,
+`sd` and `chain1_pass` (new driver-only keys, refused in adapter output), in the entry's unit; `metrics.json` gets a
+top-level `verdict`, the worst over the step's bands (`fail` > `uninformative` > `characterise` > `pass`), and
+`summary.json` the same (`None` without bands). **`W_BAND_AMIN_WIDE`** follows the spec's rule
+`a_min > max_width_frac·|lift|` (the plan's two-clause form can never hold); it fires only on near-chance rows, which
+are `characterise` anyway, is reported by `lint` for a declared floor and at run time for `floor_from: entry`, and
+like every `W_` finding is printed without failing `lint`, `prefetch` or `submit`. Known limits: when a band and
+another expectation share one metric entry only one `pass` lands there (the top-level `verdict` survives); with
+`E_BAND_MEAN` the summary's verdict may read `pass` while the step fails on the code.
+
+## Categorical extraction (A3)
+
+A step may declare `extract`: named values its adapter reports beside the metrics, for result rows that are a
+category rather than a number. `spec.ExtractSpec` kinds: `model_id` (`allowed` HF repository ids, optionally
+`@<40-hex>`, the shared `HFRepo` pattern), `yesno`, `index` (`allowed` labels), `series` (`max_len ≥ 1`; may be
+empty) and `count` (an int, not an integral float). `allowed` is accepted only on `model_id` and `index`, `max_len`
+only on `series`; duplicates are refused (`E_SPEC_EXTRACT`). The list is keyed.
+
+With `extract`, the adapter returns `{metrics, extracted}`; a non-object or one without `metrics` is
+`E_ADAPTER_NO_METRICS`, any other key `E_EXTRACT`. `extract.validate_extracted(obj, specs, min_cell=...)` checks the
+names match the declarations exactly and each value its kind, bounds integers by `MAX_INT = 2**53`, writes a count
+below the policy's `min_cell` as `"<min_cell>"`, and gives the single code `E_EXTRACT` without echoing a value. The
+clean values are scanned by the profile's scan hook (a refusal, or no hook, is `E_EXTRACT`), then written to
+`R/work/extracted.json` (before `metrics.json`; a reserved name the step may not write) and to `summary.json` under
+`extracted` (`None` otherwise). They are withdrawn, the file removed and the summary field `None`, when the step's
+exit is not 0. Downstream steps read `extracted.json` through `{up:<step>}` like any output.
+
+## Engine integration (A14)
 
 **Declared, keyed.** `StepSpec.engine` declares the engine whole: `name` (`vllm` or `transformers-batched`), the
 pinned `version`, the served `model` (one of the step's `hf_weights`), `concurrency`, `batch_size`, and for `vllm`
@@ -1577,32 +1844,34 @@ pinned `version`, the served `model` (one of the step's `hf_weights`), `concurre
 `server_args`. The engine identity (`engine.engine_identity`, `vllm_server.engine_identity` for `vllm`) joins the
 key with the served model and the sha256 of `vllm_server.py`, which the launcher runs and which lies outside the
 reproduce package that `reproduce_source_sha256` covers. `startup_timeout_s` is not keyed: it changes only how long
-a start may take. The identity is also the step's `REPRO_ENGINE_IDENTITY` and its provenance `details.engine`.
-`server_args` may not name or abbreviate (in either spelling of `-` and `_`, as vLLM's parser reads them) a flag the
-driver sets (`--host`, `--port`, `--model`, the valued flags and
-switches it builds) or refuses (`--config`, content logging), nor an absolute or home path at the start or after
-`=`, `:`, `,`, a quote, `{` or `[`: provenance records the identity, and a path there could name data.
+a start may take. The identity is also the step's `REPRO_ENGINE_IDENTITY` (a keyed literal) and its provenance
+`details.engine`. `transformers-batched` has the identity `{name, version, concurrency, batch_size}`, no launcher and
+no loopback `no_proxy`. `server_args` may not name or abbreviate (in either spelling of `-` and `_`, as vLLM's parser
+reads them; `vllm_server.option_name`/`refused_arg`) a flag the driver sets (`--host`, `--port`, `--model`, the
+valued flags and switches it builds) or refuses (`--config`, content logging), nor an absolute or home path at the
+start or after `=`, `:`, `,`, a quote, `{` or `[`: provenance records the identity, and a path there could name data.
 
 **Startup probe.** The servers per card, `max_num_seqs` and `max_model_len` are declared, so the probe only checks
 that they fit: a server that exits before `/health` (a KV cache that cannot hold `max_model_len`) is `E_ENGINE_FIT`,
 which discards a resumable store, since items written under an engine that does not fit are not trusted. A start
 that times out is `E_ENGINE_START_TIMEOUT` and keeps the store (a slow node, not a wrong engine); another served
 version or snapshot is `E_ENGINE_VERSION`. A step's own non-zero exit stays `E_STEP_FAILED`; when the servers did
-not start the step's argv never ran and the summary's `executed` is false.
+not start the step's argv never ran, the launcher exits 93 and the summary's `executed` is false.
 
-**Launcher.** The preamble (canary, program rule) execs `engine.LAUNCHER_CODE` with the driver's interpreter before
-the step's argv; it starts the servers one after the other (each sizes its KV cache after the last), with the step
-venv's own `vllm` over the hub view's `snapshots/<revision>`, start locks and logs under `{tmp}`. Its report goes on a
-second driver-held pipe that it closes before the step starts, not to a file under `{tmp}`, so the step's argv cannot
-alter the verdict. The fd is open while the preamble runs in the step venv (its `.pth` files, `import torch`), so the
-report is trusted only as far as that venv; the launcher makes itself non-dumpable so the servers cannot reopen the fd
-through `/proc`, and a second line makes the report malformed. A launcher failure other than a server start (no
-`vllm` in the venv, an exception) reports `error`, `E_ENGINE_LAUNCH`, which keeps a resumable store; a missing or
-malformed report is `E_ENGINE_FIT`, as the plan has it. It runs the step as a child with `REPRO_ENGINE_URLS`, forwards SIGTERM/SIGINT/SIGHUP, stops the servers
-when the step exits and exits with the step's code. The servers also die with the sandbox: they run in its PID
-namespace, whose end kills every process in it, besides `vllm_server`'s own watchdog. The server logs are copied to
-`R/logs/engine-<name>` (served steps only, regular files only, mode 600, at most 64 MiB each) before `{tmp}` is
-removed.
+**Launcher.** The preamble (canary, program rule) execs `engine.LAUNCHER_CODE` with the driver's interpreter
+(`-I -B`, the package root on `sys.path`) before the step's argv; it starts the servers one after the other (each
+sizes its KV cache after the last), with the step venv's own `vllm` over the hub view's `snapshots/<revision>` of the
+`model` entry, start locks and logs under `{tmp}`. Its report goes on a second driver-held pipe that it closes before
+the step starts, not to a file under `{tmp}`, so the step's argv cannot alter the verdict. The fd is open while the
+preamble runs in the step venv (its `.pth` files, `import torch`), so the report is trusted only as far as that venv;
+the launcher makes itself non-dumpable so the servers cannot reopen the fd through `/proc`, and a second line makes
+the report malformed. A launcher failure other than a server start (no `vllm` in the venv, an exception) reports
+`error`, `E_ENGINE_LAUNCH`, which keeps a resumable store; a missing or malformed report is `E_ENGINE_FIT`. It runs
+the step as a child with `REPRO_ENGINE_URLS` (comma-separated loopback URLs), with the signal mask unblocked,
+forwards SIGTERM/SIGINT/SIGHUP, stops the servers when the step exits and exits with the step's code (128+n on a
+signal). The servers also die with the sandbox: they run in its PID namespace, whose end kills every process in it,
+besides `vllm_server`'s own watchdog. The server logs are copied to `R/logs/engine-<name>` (served steps only, regular
+files only, mode 600, at most 64 MiB each) before `{tmp}` is removed.
 
 **Loopback and caches.** A `vllm` step gets `no_proxy=NO_PROXY=127.0.0.1,localhost` (the proxies still point at the
 dead port for everything else) and `VLLM_CACHE_ROOT`, `TRITON_CACHE_DIR`, `TORCHINDUCTOR_CACHE_DIR` and
@@ -1612,45 +1881,110 @@ dead port for everything else) and `VLLM_CACHE_ROOT`, `TRITON_CACHE_DIR`, `TORCH
 at least `spec.CUDA13_MIN_DRIVER` (580.65.06, the first CUDA 13 driver); the existing host floor check
 (`E_DRIVER_OLD`) enforces it on the node, and profiles exclude older-driver nodes from the partition list. The host
 record carries `host_cuda` from `cuda_probe.detect_host_cuda`, kept only when `nvidia-smi` gave it (an `nvcc` fallback
-names a toolkit, not the driver's CUDA).
+names a toolkit, not the driver's CUDA); a probe error records None.
 
-## Draw provenance (A15; completed in A16)
+## Work-pool shards and resume (A12, A13)
+
+### Partition lists and resource classes
+
+A plain step's partition entry may now be a comma list with `requeue` and `exclude` (node names or bracketed ranges,
+checked: `resource-invalid`); a list with a `fallback` is refused, since the probe-and-fallback rule assumes one
+partition. Plain steps keep held `afterok` jobs. Only sharded steps go through `senselab.utils.work_pool`:
+`Profile.resource_classes` name classes (`ResourceClassSpec`: one partition per entry, `max_workers`) and
+`Profile.work_pool` the pool settings (`PoolSettings`: `lease_s ≥ 3·heartbeat_s`, `poll_s`, `time`, `max_attempts`,
+`max_interrupts`).
+
+### Sharded steps
+
+`StepSpec.shards {count ≥ 2, resource_class}` (`E_SPEC_RESOURCE_CLASS` for an unknown class). Each shard has its own
+key: the payload's `shard` is `[i, count]` (`E_KEY_SHARD` when missing, out of range or on a plain step); the
+resource class is placement, like a partition, and not keyed. A shard sees `REPRO_SHARD` and the keyed literal
+`REPRO_SHARDS`. A sharded step has no single result dir, so it is read only through `{up:<step>}`, never as an `up:`
+input or stage root or an expectation source (`E_DAG_SHARD_NEED`); `shards_key(keys)` names it taken whole. The step
+name `pools` is reserved (`E_SPEC_RESERVED_NAME`).
+
+`submit` creates `<runs_root>/<date>/<analysis>/pools/<step>/` and submits a held pool job (build partition, 1 CPU,
+1G, `work_pool.time`, `afterok` the needs). `run --pool <step> --submission <id>` (`slurm.run_pool`) publishes items
+`<submission>-<i>` to the class (skipping ids already published, through `WorkPool.state`), drains them
+(`pool_drain`: a `work_pool.Controller` whose workers run `env -u TMPDIR <python> -P -m senselab.utils.work_pool work
+<pool>`, waiting out a controller that holds the lock), then settles: `E_MANIFEST_CHANGED` when the pins moved during
+the pool, `E_SHARD_DEAD`, `E_SHARD_UNFINISHED`, else every shard resolved and the step `executed` (the pool ran every
+item of this submission, whether an item's run computed its shard or found it done). Dependants' pending rows become
+`never-ran` on failure. Each worker runs `run --step <step> --shard <i>`, which writes no row. The step's run link is a
+dir of shard links `<run>/<step>/<i>`; a sharded row carries `shards`, None unless every shard succeeded. A gather
+step gets `R/up/<step>/`, links `<i>` to each shard's `work/`, read-only in the sandbox with the rest of `R` (shard
+work dirs bound read-only) and removed after the run; a leftover from a killed gather is reset with the dir.
+`purge_closure` also removes shard links.
+
+**Pool workers are not reachable from finalize.** Workers are submitted by the controller, untagged, and recorded
+only under `pools/<step>/controller/jobs/`, so `cancel_submission` and `run --finalize --submission` do not cancel
+them. After a pool-job timeout idle workers linger and exit, and busy ones finish their shard (whose key and claim
+make that harmless). Cancelling the recorded worker ids from finalize is a follow-up.
+
+### Resumable steps
+
+**Declared, keyed.** `StepSpec.resumable: items|checkpoint` and `resume_dir` (relative to `{out}`, which is `R/work`), together
+or neither (`E_SPEC_RESUME`); both keyed.
+
+**Attempt.** A run of a key whose result dir has no `summary.json` and whose claim was taken over a holder that
+never released (`cache.claim` yields `(out, leftover)`), or a work-pool item's run with `POOL_ATTEMPT > 1` (read,
+like the Slurm ids, from `RunConfig.parent_env`). `leftover` is `SharedFileLock.took_over`, the lock's own verdict:
+`.holder` is read before the acquire, and only an uncontended acquire (under `_UNCONTENDED_ACQUIRE_THRESHOLD`, timed
+over the acquire alone) over a legible identity means a killed holder. Timing the whole `__enter__` from outside also
+counted its file touches and its stale-takeover warning, which on a loaded network filesystem can push a real takeover
+over the threshold. A clean release clears `.holder` before it drops the lock, so a waiter either sees no identity or
+waits, and its acquire is contended. A waiter that saw a holder's identity and got the lock within the threshold is
+the one misread case; it can only keep a store of the same key from a run that wrote no summary, which is what a kill
+leaves anyway. Every run that gets past its reset writes a summary, and a run ended by an integrity code discards its
+store first, so a kept store is always one an interrupted run of the same key left. A run refused before its reset
+(no user namespaces, a venv not checked, a GPU floor) touches nothing and releases the claim cleanly, so the run after
+it is an attempt only through `POOL_ATTEMPT`: a plain job resubmitted after such a refusal starts its store again. Two
+more cases are not attempts: a run that starts while a failed node's lock is still held (the acquire waits, so it is
+contended; a pool item still counts through `POOL_ATTEMPT`), and none is needed after a restricted purge killed
+mid-way, whose key a public step can no longer run.
+
+**What survives.** On an attempt the reset (`reset_result_dir(..., keep=, keep_attempts=)`) keeps `R/attempts.jsonl`
+and, for a `resumable` step, `work/<resume_dir>` (moved to `R/.resume-keep` during the wipe and back, kept only when
+every component is a real directory, intermediate dirs re-made one by one with mode 0o770; a `.resume-keep` left by a
+reset that died is restored the same way). Everything else is cleared as before. Each run appends `{attempt, started,
+host, slurm_job_id, slurm_restart_count}` to `R/attempts.jsonl`; numbering is one more than the kept lines, at least 2
+on an attempt. A run that is not an attempt resets the whole dir, so `attempts.jsonl` restarts at 1: a run after a
+completed (failed) summary is a new run, and `attempt` counts takeovers of one run; the earlier runs' provenance stays
+in their own `prov/` until that reset. The summary carries `attempt`.
+
+**Discard.** The store is removed before the summary when the run ends with an integrity code (`run.INTEGRITY_CODES`:
+`E_INPUT_MUTATED`, `E_SRC_MUTATED`, `E_ENV_CHANGED`, `E_ENV_MISSING`, `E_ENV_UNCHECKED`, `E_ADAPTER_CHANGED`,
+`E_ENGINE_FIT`), and when a run is refused before its reset with one of them, attempt or not (a failed removal is
+logged). `resume_dir` may not be `.`, be or lie in `stage`/`notebooks`, nor have a component named like a file the
+driver removes after every step (`spec.DRIVER_FILE_NAMES`: `summary.json`, `metrics.json`, `run.json`,
+`extracted.json`). The attempt line is written inside the run, so a failure to write it still leaves an `E_DRIVER`
+summary. A symlink on the way to the store is removed, never followed.
+
+**Item-store contract** (`resumable: items`). The driver keeps the dir and does not read it. The step writes each
+item to `<resume_dir>/<item_id>.tmp`, renames it into place, then creates the completion marker
+`<resume_dir>/<item_id>.done`. An item counts as present only with its marker, so a partial item (written, not
+marked) is recomputed. The item id covers what makes an item's result differ within one key: the key itself already
+covers the engine identity and the prompt or config version. `resumable: checkpoint` keeps the declared checkpoint
+dir; the step restarts from its latest checkpoint with the same seed and data order.
+
+## Draw provenance (A15)
 
 **Declared, keyed.** `StepSpec.draw` declares `seed`, `data_order_seed` (ints from 0 to 2**32 - 1, what Python,
-numpy's legacy seeding and torch all accept) and `sampling` (named bools, ints, finite floats or short labels:
-`temperature`, `top_p`, `top_k`, `do_sample`, `max_new_tokens`, ...). It is keyed whole; a draw that declares nothing
-keys as no draw. A value's type is part of the key (`1` and `1.0` key apart). It reaches the step as keyed literals
-`REPRO_SEED`, `REPRO_DATA_ORDER_SEED` and `REPRO_SAMPLING` (compact sorted JSON), each only when set. The driver
-seeds nothing itself: the step's code reads them, so a draw is reproducible only as far as that code honours them.
-String values are labels that start with a letter and do not read as a number, so provenance stays a closed form and
-YAML 1.1's `1e-7` (a string there; it needs a dot to be a float) is refused rather than recorded as a label.
-Free-text sampling values (stop strings, prompts) belong in the step's config, keyed through its inputs.
+numpy's legacy seeding and torch all accept; a bool is refused) and `sampling` (named bools, ints, finite floats or
+short labels: `temperature`, `top_p`, `top_k`, `do_sample`, `max_new_tokens`, ...). It is keyed whole; a draw that
+declares nothing keys as no draw. A value's type is part of the key (`1` and `1.0` key apart). It reaches the step as
+keyed literals `REPRO_SEED`, `REPRO_DATA_ORDER_SEED` and `REPRO_SAMPLING` (compact sorted JSON), each only when set.
+The driver seeds nothing itself: the step's code reads them, so a draw is reproducible only as far as that code
+honours them. String values are labels that start with a letter and do not read as a number, so provenance stays a
+closed form and YAML 1.1's `1e-7` (a string there; it needs a dot to be a float) is refused rather than recorded as a
+label. Free-text sampling values (stop strings, prompts) belong in the step's config, keyed through its inputs.
 
 **Recorded together.** Every step record's `details.draw` holds, in one place, what a re-draw from provenance alone
-needs (SC8): the seeds and sampling, the engine identity with its concurrency and batch size (None without an
-engine), the GPU model, driver and count, host CUDA and torch CUDA, and the env lock (`env_key`, body and torch lock
-sha256s, `overlay_sha256`, `installed_sha256`). The caller gives only the declared part; `provenance.record_step`
-copies the rest from the host record and the env values it records, so the block cannot disagree with the record
-(after `E_ENV_CHANGED` too), and refuses a draw whose engine, concurrency or batch size differ from `details.engine`.
-A step without `draw` still records the block, with null seeds and empty sampling, so a checker can tell "no seed
-declared" from "not recorded". A training step's batch size is part of its keyed config, not of the draw; the draw's
-`batch_size` is the inference engine's.
-
-## Shared helpers (A15b; completed in A16)
-
-The driver no longer carries its own copies of the uv and lock primitives: `locks.normalize_name`,
-`locks.is_torch_family`, `TORCH_NAMES` and `TORCH_VARIANT_PREFIXES` are `senselab.utils.uv_tools`' own (re-exported),
-and `locks.requirements_sha256` keeps only its reproduce signature, hashing through `uv_tools.requirements_sha256`
-with the same fields, so every committed lock digest is unchanged. `lockgen.uv_executable` (formerly `find_uv`) keeps
-the `REPRO_UV` pin and its `ReproduceLockError`, and otherwise asks `uv_tools.find_uv(home=False)`: a batch job's uv
-comes from its pinned `PATH`, never from a home install. The exclusive locks of `env` and `build` (venv and R library
-rebuilds, `wheels.lock` writes) are `SharedFileLock`s (`build.exclusive_lock`) on the same `<resource>.lock` file the
-steps' shared `file_lock` takes, so readers and writers still exclude each other; they wait with no timeout, as the
-`flock` did, record their holder and heartbeat beside the lock, and leave the directory's mode alone. `file_lock`
-stays for the shared (reader) locks. `filelock` (3.29) unlinks the lock file before it unlocks, so a reader that was
-waiting on the old file would hold a lock no later writer sees: `file_lock` therefore checks, after `flock`, that the
-file it locked is still the one at the path, and retries on the new one otherwise. Side effects of the switch: the
-`.lock`, `.holder` and `.heartbeat` files get `SharedFileLock`'s fixed mode 0o664 rather than 0o666 less the umask
-(the dirs that hold them stay as the umask made them), a killed builder leaves `.holder`/`.heartbeat` beside the lock
-(including `wheels.lock.holder` in a manifest repo, which that repo should ignore), and a thread that blocks on a lock
-it already holds through another instance gets `filelock`'s deadlock error instead of hanging. The host's CUDA version comes from `cuda_probe.detect_host_cuda` (A14).
+needs: the seeds and sampling, the engine identity with its concurrency and batch size (None without an engine), the
+GPU model, driver and count, host CUDA and torch CUDA, and the env lock (`env_key`, body and torch lock sha256s,
+`overlay_sha256`, `installed_sha256`) (`DRAW_KEYS`). The caller gives only the declared part (`DRAW_GIVEN`);
+`provenance.record_step` copies the rest from the host record and the env values it records, so the block cannot
+disagree with the record (after `E_ENV_CHANGED` too), and refuses a draw whose engine, concurrency or batch size
+differ from `details.engine`. A step without `draw` still records the block, with null seeds and empty sampling, so a
+checker can tell "no seed declared" from "not recorded". A training step's batch size is part of its keyed config, not
+of the draw; the draw's `batch_size` is the inference engine's.
