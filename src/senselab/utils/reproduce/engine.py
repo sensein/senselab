@@ -28,8 +28,10 @@ STATUS_CODES = {
     "error": "E_ENGINE_LAUNCH",
 }
 """The step code of each `vllm_server.START_ERROR_KINDS` kind, and of ``error`` (the launcher failed otherwise, e.g.
-no ``vllm`` in the venv); a report that is absent or malformed is ``E_ENGINE_FIT``."""
-NO_REPORT = "E_ENGINE_FIT"
+no ``vllm`` in the venv); a report that is absent or malformed is ``E_ENGINE_LAUNCH`` (`NO_REPORT`)."""
+NO_REPORT = "E_ENGINE_LAUNCH"
+"""The code of an absent or malformed report. It says nothing about the engine's fit, so it is not ``E_ENGINE_FIT``
+(only ``exited`` is, and only that discards a resumable store): the launcher died or was not reached."""
 CODES = frozenset({*STATUS_CODES.values(), NO_REPORT})
 LOOPBACK = "127.0.0.1,localhost"
 """``no_proxy`` and ``NO_PROXY`` of a ``vllm`` step, so its clients reach the servers past the dead proxy."""
