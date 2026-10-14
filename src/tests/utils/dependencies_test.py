@@ -349,6 +349,19 @@ def test_offline_mode_does_not_make_every_model_report_as_cached(
     assert dep.is_hf_model_cached("org/definitely-not-here", "main") is False
 
 
+def test_is_hf_model_cached_honours_an_explicit_cache_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """``cache_dir`` checks that cache, not the process-global one ``huggingface_hub`` froze at import."""
+    import huggingface_hub.constants as hf_constants
+
+    _fake_cache(monkeypatch, tmp_path / "other", "org/model", "main", "b" * 40)
+    monkeypatch.setattr(hf_constants, "HF_HUB_CACHE", str(tmp_path / "empty"))
+
+    assert dep.is_hf_model_cached("org/model", "main") is False
+    assert dep.is_hf_model_cached("org/model", "main", cache_dir=tmp_path / "other") is True
+    assert dep.is_hf_model_cached("org/model", "main", cache_dir=str(tmp_path / "other")) is True
+    assert dep.is_hf_model_cached("org/model", "main", cache_dir=tmp_path / "empty") is False
+
+
 def test_a_definitive_404_is_not_retried() -> None:
     """A missing repo is a verdict, not a blip: retrying it only delays the real error.
 
