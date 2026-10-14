@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 import threading
 import time
@@ -210,3 +211,11 @@ def test_two_callers_of_a_dead_idle_worker_share_one_replacement(tmp_path: Path)
     assert len(_loads(tmp_path)) == 2 and len(venv_worker._POOL) == 1
     assert [e["event"] for e in venv_worker_events()] == ["died_idle", "restart"]
 
+
+def test_importing_venv_worker_pulls_in_neither_torch_nor_the_data_structures() -> None:
+    """The module logs through ``logging.getLogger``, so a lean host can import it without senselab's heavy deps."""
+    heavy = ("torch", "senselab.utils.data_structures")
+    code = f"import sys, senselab.utils.venv_worker; print([m for m in {heavy!r} if m in sys.modules])"
+    result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=120)
+    assert result.returncode == 0, result.stderr[-2000:]
+    assert result.stdout.strip().splitlines()[-1] == "[]"

@@ -30,6 +30,7 @@ from __future__ import annotations
 import atexit
 import hashlib
 import json
+import logging
 import os
 import queue
 import subprocess
@@ -38,7 +39,7 @@ import time
 from collections import deque
 from typing import Any, Dict, List, Optional, Tuple
 
-from senselab.utils.data_structures.logging import logger
+logger = logging.getLogger("senselab")
 
 _SERVE_PREAMBLE = r"""
 import json as _sv_json
