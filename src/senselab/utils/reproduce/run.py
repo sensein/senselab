@@ -1,6 +1,7 @@
 """The step runner: key, skip or claim, run in the sandbox, check, adapt, evaluate, record.
 
-A step's result dir ``R = <results_root>/<step_key>`` is laid out by the driver:
+A step's result dir ``R = <results_root>/<step_key>`` is laid out by the driver, where ``results_root`` is the
+profile's ``restricted_results_root`` for a restricted step (`results_root_of`):
 
 - ``R/work/``: the only directory the step may write; the ``{out}`` placeholder (argv, ``REPRO_OUT``,
   ``outputs`` patterns, ``{up:<step>}`` of a dependent) names it. Staged files go to ``R/work/stage``.
@@ -84,6 +85,7 @@ from senselab.utils.reproduce import (
     lock,
     metrics,
     provenance,
+    restricted,
     sandbox,
     source,
 )
@@ -611,6 +613,19 @@ def _roots_missing(entry: inputs.RegisteredInput, profile: Profile) -> bool:
     return any(r not in profile.roots for r in roots)
 
 
+def results_root_of(step: StepSpec, profile: Profile) -> Path:
+    """The results root of a step: ``restricted_results_root`` for a restricted step, else ``results_root``.
+
+    Raises:
+        RunError: ``E_SPEC_RESTRICTED`` for a restricted step on a profile with no restricted results root.
+    """
+    if not step.restricted:
+        return profile.results_root
+    if profile.restricted_results_root is None:
+        raise RunError(restricted.CODE)
+    return profile.restricted_results_root
+
+
 def _key(step: StepSpec, analysis: str, config: RunConfig, upstream: Mapping[str, StepOutcome]) -> _Keyed:
     try:
         co = source.prefetched_checkout(step, cache=config.cache)
@@ -646,7 +661,7 @@ def _key(step: StepSpec, analysis: str, config: RunConfig, upstream: Mapping[str
     except ValueError:
         raise RunError("E_KEY_INVALID") from None
     venv_path, _ = _step_venv(step, analysis, config.cache)
-    result = cache.result_dir(config.profile.results_root, key)
+    result = cache.result_dir(results_root_of(step, config.profile), key)
     paths = {
         "out": result / WORK,
         "tmp": result / TMP,
@@ -971,7 +986,7 @@ def _run_step(
         return _skipped(step, keyed.key, run, result)
     with _driver_log() as log:
         try:
-            with cache.claim(config.profile.results_root, keyed.key):
+            with cache.claim(results_root_of(step, config.profile), keyed.key):
                 if cache.is_done(result):
                     return _skipped(step, keyed.key, run, result)
                 execution = _Execution(step, analysis, config, upstream, schemas, keyed)
@@ -983,7 +998,7 @@ def _run_step(
                         execution.refusals()
                     except RunError as error:
                         return _failed(step, error.code, keyed.key)
-                    cache.reset_result_dir(config.profile.results_root, keyed.key)
+                    cache.reset_result_dir(results_root_of(step, config.profile), keyed.key)
                     summary = _summary_or_driver_error(execution, log)
         except cache.CacheError as error:
             return _failed(step, error.code, keyed.key)
@@ -1280,6 +1295,9 @@ class _Execution:
                 real_root = os.path.realpath(root)
                 if any(not _under(os.path.realpath(root / rel), real_root) for rel in files):
                     raise RunError("E_OUTPUT_SYMLINK")
+            dirs = [] if self.step.restricted else restricted.restricted_dir_paths(self.config.profile)
+            if any(_under(os.path.realpath(root / rel), d) for rel in files for d in dirs):
+                raise RunError(restricted.CODE)
             for rel in files:
                 target = target_root / dest / rel
                 if target in taken:
@@ -1298,6 +1316,9 @@ class _Execution:
 
     def _sandbox(self, argv: list[str], rw: list[Path], *, tmp: Path | None) -> list[str]:
         roots, rw_dirs, extra = self._sandbox_args(rw)
+        masked = [] if self.step.hf_weights else [self.config.cache / "huggingface"]
+        if not self.step.restricted:
+            masked += restricted.mask_dirs(self.config.profile)
         return sandbox.sandbox_argv(
             argv,
             roots,
@@ -1306,7 +1327,7 @@ class _Execution:
             netns=not self.config.no_netns,
             tmp=tmp,
             visible=[self.result, self.config.cache],
-            masked=[] if self.step.hf_weights else [self.config.cache / "huggingface"],
+            masked=masked,
         )
 
     def program_ok(self) -> bool | None:
@@ -1925,13 +1946,14 @@ def resolve_step(
     return StepOutcome(step.name, keyed.key, "skipped", 0, _read_summary(keyed.result), keyed.result)
 
 
-def _row(outcome: StepOutcome) -> dict[str, Any]:
+def _row(outcome: StepOutcome, spec: StepSpec) -> dict[str, Any]:
     return {
         "step": outcome.step,
         "key": outcome.key,
         "status": outcome.status,
         "exit": outcome.exit,
         "codes": list(outcome.codes),
+        "restricted": spec.restricted,
     }
 
 
@@ -1941,9 +1963,12 @@ def upstream_codes(step: StepSpec, upstream: Mapping[str, StepOutcome]) -> tuple
     return tuple(sorted(codes)) or ("E_UPSTREAM_NOT_DONE",)
 
 
-def never_ran_row(step: str, codes: Sequence[str] = ()) -> dict[str, Any]:
-    """The ``run.json`` row of a step that did not run and will not: no key, no exit."""
-    return {"step": step, "key": None, "status": "never-ran", "exit": None, "codes": list(codes)}
+def never_ran_row(step: str, codes: Sequence[str] = (), restricted: bool | None = None) -> dict[str, Any]:
+    """The ``run.json`` row of a step that did not run and will not: no key, no exit; ``restricted`` when known."""
+    row: dict[str, Any] = {"step": step, "key": None, "status": "never-ran", "exit": None, "codes": list(codes)}
+    if restricted is not None:
+        row["restricted"] = restricted
+    return row
 
 
 def read_run_record(path: Path) -> list[dict[str, Any]]:
@@ -2258,11 +2283,15 @@ def plan_steps(manifests: Sequence[Manifest], config: RunConfig) -> list[Plan]:
 
     Returns:
         One plan per step, in DAG order.
+
+    Raises:
+        ValueError: ``E_SPEC_RESTRICTED`` (`restricted.check_restricted`).
     """
     config = _with_sources(config, manifests)
     analysis = {s.name: m.name for m in manifests for s in m.steps}
     specs = {s.name: s for m in manifests for s in m.steps}
     ordered = toposort(list(specs.values()))
+    restricted.check_manifest_set(manifests, config.base_dir, config.profile)
     plans: dict[str, Plan] = {}
     done: dict[str, StepOutcome] = {}
     with _quiet_log():
@@ -2330,8 +2359,8 @@ def run_steps(
 
     A step whose need did not succeed (`StepOutcome.ok`) is ``never-ran``; the others run or skip as
     `run_step` decides. Each analysis gets ``<runs_root>/<date>/<analysis>/run.json`` listing its steps'
-    keys, statuses, exits and codes; when it cannot be written, every step of that analysis also carries
-    ``E_DRIVER`` and a non-zero exit (its result dirs are unchanged).
+    keys, statuses, exits, codes and ``restricted`` flags; when it cannot be written, every step of that
+    analysis also carries ``E_DRIVER`` and a non-zero exit (its result dirs are unchanged).
 
     With ``only``, the named steps run and every step they depend on, directly or not, is resolved with
     `resolve_step` (keyed, never run). Only the named steps' rows are written, merged into ``run.json``
@@ -2351,13 +2380,15 @@ def run_steps(
     dirs, and never rewrites a row a submission tagged; rows of steps it did not run are kept.
 
     Raises:
-        ValueError: If ``only`` names a step outside the manifests.
+        ValueError: If ``only`` names a step outside the manifests, or ``E_SPEC_RESTRICTED``
+            (`restricted.check_restricted`) before anything runs.
         SubmissionOverlap: For a local run while a submission is live in one of the run dirs.
     """
     config = _with_sources(config, manifests)
     analysis = {s.name: m.name for m in manifests for s in m.steps}
     specs = {s.name: s for m in manifests for s in m.steps}
     ordered = toposort(list(specs.values()))
+    restricted.check_manifest_set(manifests, config.base_dir, config.profile)
     if submission is None:
         check_no_live_submission(config.profile.runs_root, config.date, sorted(set(analysis.values())))
     if only is not None:
@@ -2372,7 +2403,12 @@ def run_steps(
         order = [s.name for s in ordered if analysis[s.name] == name]
         try:
             update_run_record(
-                config.profile.runs_root, config.date, name, [_row(o) for o in rows], order=order, untagged_only=True
+                config.profile.runs_root,
+                config.date,
+                name,
+                [_row(o, specs[o.step]) for o in rows],
+                order=order,
+                untagged_only=True,
             )
         except (OSError, TypeError, ValueError, RunError, cache.CacheError):
             for o in rows:
@@ -2413,8 +2449,8 @@ def _run_only(
     why = tuple(sorted({c for o in failed for c in o.codes})) or ("E_UPSTREAM_NOT_DONE",)
     for name in sorted({analysis[o.step] for o in selected} | {analysis[d] for d in dependents}):
         order = [s.name for s in ordered if analysis[s.name] == name]
-        own = [_row(o) for o in selected if analysis[o.step] == name]
-        gone = [never_ran_row(d, why) for d in order if d in dependents]
+        own = [_row(o, specs[o.step]) for o in selected if analysis[o.step] == name]
+        gone = [never_ran_row(d, why, specs[d].restricted) for d in order if d in dependents]
         try:
             if own:
                 update_run_record(

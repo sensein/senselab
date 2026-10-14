@@ -333,6 +333,7 @@ def step_key_payload(
         "policy_sha256": policy_sha256(profile),
         "sources_lock_sha256": sources_lock_sha256,
         "lock_inputs": sorted(step.lock_inputs),
+        "restricted": step.restricted,
     }
 
 

@@ -600,6 +600,7 @@ def _step(repo: str, commit: str, patches: list[FileRef]) -> StepSpec:
             "resources": {"profile": "cpu"},
             "adapter": "a.py",
             "hf_weights": [],
+            "restricted": False,
             "patches": [p.model_dump() for p in patches],
             "metrics_schema": {"kind": "statistic", "headline": ["f_stat"]},
         }

@@ -39,6 +39,7 @@ def _step(**extra: Any) -> StepSpec:  # noqa: ANN401
         "resources": {"profile": "cpu"},
         "adapter": "a.py",
         "hf_weights": [],
+        "restricted": False,
         "metrics_schema": {"kind": "statistic", "headline": ["f_stat"]},
     }
     data.update(extra)

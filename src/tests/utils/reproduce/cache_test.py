@@ -77,6 +77,7 @@ def _step_data(**over: Any) -> dict[str, Any]:  # noqa: ANN401
         "patches": [{"file": "patches/train/0001.diff", "sha256": SHA}],
         "adapter": "adapters/train.py",
         "hf_weights": [],
+        "restricted": False,
         "metrics_schema": {"kind": "statistic", "headline": ["f_stat"]},
         "expect": [{"metric": "f_stat", "value": 3.5, "tolerance": 0.1, "kind": "abs"}],
     }
