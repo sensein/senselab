@@ -278,6 +278,9 @@ def test_lint_flags_unmapped_repos_and_submodules(site: Site, capsys: pytest.Cap
     clean = site.manifest("demo", _step("prep", commit=commit), file="c.yaml")
     assert site.main("lint", str(clean), *site.common()) == cli.EXIT_OK
     assert capsys.readouterr().out == ""
+    site.write_profile(mirror_map={"git@git.example:org/analysis.git": str(mirrors / "absent.git")})
+    assert site.main("lint", str(clean), *site.common()) == cli.EXIT_FAILED
+    assert capsys.readouterr().out.splitlines() == [f"{clean}:prep: commit-missing prep"]
     site.write_profile()
     assert site.main("lint", str(path), *site.common()) == cli.EXIT_OK
 
@@ -328,6 +331,10 @@ def test_prefetch_sources_only_on_a_draft_manifest(
     assert cleared["outputs"] == [] and cleared["execution_count"] is None
     assert not (site.cache / env.VENVS).exists()
     assert "row" in capsys.readouterr().out
+    site.write_profile(mirror_map_strict=True)
+    strict = ["prefetch", "--sources-only", str(path), "--cache", str(site.cache), "--profile", str(site.profile_path)]
+    assert site.main(*strict) == cli.EXIT_FAILED
+    assert "mirror-unmapped" in capsys.readouterr().err
 
 
 def _venv_result(path: Path) -> env.VenvResult:
@@ -352,7 +359,7 @@ def test_prefetch_passes_the_profile_and_deny_patterns_and_records_wheels(
 
     def checkout_step(step: Any, *, cache: Path, base_dir: Path, deny_patterns: Any, **kwargs: Any) -> Any:  # noqa: ANN401
         seen["deny"] = list(deny_patterns)
-        seen["mirror_map"] = kwargs["mirror_map"]
+        seen["mirror_map"], seen["strict"] = kwargs["mirror_map"], kwargs["strict"]
         return type("Co", (), {"worktree": site.tmp, "submodules": {}})()
 
     def prefetch_env(env_spec: Any, base_dir: Path, cache_dir: Path, **kwargs: Any) -> env.PrefetchResult:  # noqa: ANN401
@@ -362,11 +369,13 @@ def test_prefetch_passes_the_profile_and_deny_patterns_and_records_wheels(
 
     monkeypatch.setattr(source, "checkout_step", checkout_step)
     monkeypatch.setattr(env, "prefetch_env", prefetch_env)
+    monkeypatch.setattr(cli, "_mirror_findings", lambda where, step, profile: [])
+    site.write_profile(mirror_map={"git@git.example:org/analysis.git": "/m/analysis.git"}, mirror_map_strict=True)
     sdist_env = dict(_step("x")["env"], sdist_allow=[_sdist(site)])
     path = site.manifest("demo", _step("prep", env=sdist_env), _step("again", env=sdist_env))
     assert site.main("prefetch", str(path), *site.common()) == cli.EXIT_OK
     assert seen["deny"] == ["FORBIDDEN-[0-9]+"]
-    assert seen["mirror_map"] == {}
+    assert seen["mirror_map"] == {"git.example/org/analysis": Path("/m/analysis.git")} and seen["strict"] is True
     assert seen["profile"] is not None and seen["profile"].deny_patterns_file == site.deny
     assert seen["calls"] == 1 and seen["wheels_lock"] == site.base / "wheels.lock"
     assert seen["wheelhouse"] == site.cache / cli.WHEELHOUSE
@@ -494,9 +503,14 @@ def test_lock_from_a_repository_uv_lock(site: Site, monkeypatch: pytest.MonkeyPa
     checkout = site.tmp / "checkout"
     checkout.mkdir()
     (checkout / "uv.lock").write_text('[[package]]\nname = "torch"\nversion = "2.8.0"\n')
-    monkeypatch.setattr(
-        source, "checkout_step", lambda step, **kw: type("Co", (), {"worktree": checkout, "submodules": {}})()
-    )
+    forwarded: list[Any] = []
+
+    def checkout_step(step: Any, **kw: Any) -> Any:  # noqa: ANN401
+        forwarded.append((kw["mirror_map"], kw["strict"]))
+        return type("Co", (), {"worktree": checkout, "submodules": {}})()
+
+    monkeypatch.setattr(source, "checkout_step", checkout_step)
+    site.write_profile(mirror_map={"git@git.example:org/analysis.git": "/m/analysis.git"}, mirror_map_strict=True)
     order: list[str] = []
 
     def torch_lock(env_spec: Any, base_dir: Path, uv_lock: Path, roots: Any) -> list[str]:  # noqa: ANN401
@@ -526,6 +540,7 @@ def test_lock_from_a_repository_uv_lock(site: Site, monkeypatch: pytest.MonkeyPa
     path = site.manifest("demo", _step("prep", env=env_spec))
     assert site.main("lock", str(path), *site.common()) == cli.EXIT_OK
     assert order == ["torch:torch:True", "body:['gpu']:['eval']"]
+    assert forwarded == [({"git.example/org/analysis": Path("/m/analysis.git")}, True)]
     (step,) = load_manifest(path).steps
     assert step.env.body.export_cmd == ["uv", "export", "--frozen", "--extra", "gpu"]
     assert step.env.body.lock_sha256 == _sha(site.base / "body.lock")

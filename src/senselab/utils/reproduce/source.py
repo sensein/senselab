@@ -255,7 +255,9 @@ def canonical_repo(url: str) -> str:
     ``git@host:o/r(.git)``, ``ssh://[user@]host[:port]/o/r(.git)``, ``https://…`` and ``http://…`` all give
     ``host/o/r``, with the host lower-cased and ``.git`` and trailing ``/`` dropped. An absolute path, a
     ``./`` or ``../`` path and a ``file://`` URL give their ``realpath``. Anything else is taken as already
-    canonical (cleaned the same way), so the function is idempotent.
+    canonical (cleaned the same way), so the function is idempotent; a relative local path must therefore
+    start with ``./`` or ``../``. Owner and repository keep their case, and an scp-like path keeps no leading
+    ``/`` (``git@h:/o/r`` and ``git@h:o/r`` give one name).
 
     Args:
         url: A git URL, scp-like address or local path.
@@ -280,7 +282,7 @@ def canonical_repo(url: str) -> str:
     path = path.strip("/")
     if path.endswith(".git"):
         path = path[: -len(".git")]
-    return f"{host}/{path}"
+    return f"{host}/{path}" if path else host
 
 
 def canonical_map(mirror_map: Mapping[str, Path] | None) -> dict[str, Path]:
@@ -422,7 +424,7 @@ def _ensure_mirror(git: _Git, path: Path, url: str, commit: str, mapped: Path | 
         git.ok(path, "config", "remote.origin.fetch", f"+refs/heads/*:{UPSTREAM_HEADS}*")
         git.ok(path, "config", "--add", "remote.origin.fetch", "+refs/tags/*:refs/tags/*")
         git.ok(path, "config", "remote.origin.prune", "false")
-    elif git.ok(path, "config", "--get", "remote.origin.url") != url:
+    elif canonical_repo(git.ok(path, "config", "--get", "remote.origin.url")) != canonical_repo(url):
         raise ReproduceSourceError(MIRROR_URL_CONFLICT, f"mirror {path.name} has another origin")
     if git.has_commit(path, commit):
         return
@@ -513,8 +515,7 @@ def submodule_urls(
 ) -> list[str]:
     """Every submodule URL at ``commit``, recursively, read from local repositories only (no fetch).
 
-    Relative URLs resolve against ``url``. A submodule is recursed into when its URL is mapped and its mapped
-    repository holds the gitlink commit.
+    Relative URLs resolve against ``url``. A submodule whose URL is mapped is recursed into.
 
     Args:
         mapped_repo: The local repository ``url`` maps to.
@@ -526,7 +527,8 @@ def submodule_urls(
         The resolved URLs, in first-seen order, without duplicates.
 
     Raises:
-        ReproduceSourceError: ``commit-missing`` if ``mapped_repo`` lacks ``commit``; ``git-failed`` or
+        ReproduceSourceError: ``commit-missing`` if ``mapped_repo``, or a mapped submodule's repository, lacks
+            its commit; ``git-failed`` or
             ``submodule-unknown`` for an unreadable tree.
     """
     table = canonical_map(mirror_map)
@@ -543,9 +545,12 @@ def submodule_urls(
                 if resolved not in found:
                     found.append(resolved)
                 sub_repo = table.get(canonical_repo(resolved))
-                if sub_repo is not None and (resolved, sha) not in seen and git.has_commit(sub_repo, sha):
-                    seen.add((resolved, sha))
-                    pending.append((sub_repo, sha, resolved))
+                if sub_repo is None or (resolved, sha) in seen:
+                    continue
+                if not git.has_commit(sub_repo, sha):
+                    raise ReproduceSourceError(COMMIT_MISSING, f"{sha[:8]} not found in the mapped mirror")
+                seen.add((resolved, sha))
+                pending.append((sub_repo, sha, resolved))
     return found
 
 
@@ -825,6 +830,20 @@ def _read_marker(path: Path) -> Checkout:
     data["worktree"], data["mirror"] = Path(data["worktree"]), Path(data["mirror"])
     data["patches"] = [(file, sha) for file, sha in data["patches"]]
     return Checkout(**data)
+
+
+def mapped_has_commit(mapped_repo: Path, commit: str) -> bool:
+    """Whether a local repository holds ``commit``; no fetch.
+
+    Args:
+        mapped_repo: A mirror map's local repository.
+        commit: The pinned commit.
+
+    Returns:
+        True when the repository exists and has the commit.
+    """
+    with tempfile.TemporaryDirectory() as home:
+        return _Git(Path(home)).has_commit(mapped_repo, commit)
 
 
 def _add_submodules(
