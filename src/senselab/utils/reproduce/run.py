@@ -91,6 +91,7 @@ from senselab.utils.reproduce import (
     restricted,
     sandbox,
     source,
+    weights,
 )
 from senselab.utils.reproduce.dag import toposort
 from senselab.utils.reproduce.spec import (
@@ -185,6 +186,8 @@ CODES = frozenset(
         "E_SCAN_HOOK_MISSING",
         "E_UPSTREAM_CLOSURE",
         "W_RELEASE_REFUSED",
+        "E_WEIGHTS_MISSING",
+        "E_WEIGHTS_VIEW",
     }
 )
 """The run's own codes. Digest, cache, metrics and stage codes (``E_DIGEST_*``, ``E_KEY_*``,
@@ -737,14 +740,17 @@ def gate(
 
     Returns:
         The gate; ``codes`` is empty when the step may run: ``E_INPUT_UNVERIFIED`` (no current ``ok`` record
-        for the registered manifest) and the pre-check's codes. A lock that cannot be used gives its own code,
+        for the registered manifest), the pre-check's codes, and ``E_WEIGHTS_MISSING`` when a declared
+        Hugging Face file is absent from the profile's hub cache (`weights.check_hf_present`). A lock that
+        cannot be used gives its own code,
         and an input naming a root the profile lacks gives ``E_ROOT_MISSING``.
     """
+    missing = weights.check_hf_present(step, config.profile)
     if entries is None:
         try:
             entries = _registered(step, analysis, config)
         except RunError as error:
-            return Gate((error.code,), {}, {}, {})
+            return Gate(tuple(sorted({error.code, *missing})), {}, {}, {})
     entries = dict(entries)
     per_input: dict[str, tuple[str, ...]] = {}
     overlays: dict[str, dict[str, int] | None] = {}
@@ -757,7 +763,7 @@ def gate(
         unverified, overlays[input_id] = inputs.accepted(entry, config.profile, now=now)
         found = inputs.precheck(entry, config.profile, entries, overlays[input_id])
         per_input[input_id] = tuple(sorted({*unverified, *found}))
-    codes = tuple(sorted({c for found in per_input.values() for c in found}))
+    codes = tuple(sorted({*missing, *(c for found in per_input.values() for c in found)}))
     return Gate(codes, per_input, entries, overlays)
 
 
@@ -1254,6 +1260,12 @@ class _Execution:
         _mkdir(self.tmp / "cuda-cache")
         if step.kind in NOTEBOOK_KINDS:
             _mkdir(self.work / "notebooks")
+        if step.hf_weights:
+            _mkdir(self.tmp / "hf")
+            try:
+                weights.build_hub_view(self.tmp / "hf-hub", step, config.profile)
+            except weights.WeightsError as error:
+                raise RunError(error.code) from None
         self._stage()
         try:
             self.env, _, self.recorded_sha = sandbox.build_env(
@@ -1387,7 +1399,7 @@ class _Execution:
 
     def _sandbox(self, argv: list[str], rw: list[Path], *, tmp: Path | None) -> list[str]:
         roots, rw_dirs, extra = self._sandbox_args(rw)
-        masked = [] if self.step.hf_weights else [self.config.cache / "huggingface"]
+        masked = [self.config.cache / "huggingface"]
         if not self.step.restricted:
             masked += restricted.mask_dirs(self.config.profile)
         return sandbox.sandbox_argv(

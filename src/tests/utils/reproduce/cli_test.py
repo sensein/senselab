@@ -403,12 +403,36 @@ def test_a_changed_wheels_sha_is_written_in_place_keeping_comments(site: Site, m
     assert text.startswith("# keep this comment\n") and "f" * 64 in text and "e" * 64 not in text
 
 
-def test_prefetch_refuses_hf_weights_and_lint_findings(site: Site, capsys: pytest.CaptureFixture[str]) -> None:
-    """Steps that load Hugging Face weights are not prefetched yet; lint findings stop a prefetch."""
-    weights = [{"repo": "org/model", "revision": "a" * 40, "files": [{"path": "w.bin", "sha256": "2" * 64}]}]
+def test_prefetch_accepts_hf_weights_present_in_the_cache_and_refuses_missing(
+    site: Site, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A step whose weights are in the hub cache with their sha256 is prefetched; a missing file fails it.
+
+    Lint findings stop a prefetch before anything else.
+    """
+    monkeypatch.setattr(
+        source, "checkout_step", lambda step, **kw: type("Co", (), {"worktree": site.tmp, "submodules": {}})()
+    )
+    monkeypatch.setattr(
+        env, "prefetch_env", lambda e, b, c, **kw: env.PrefetchResult(_venv_result(c / "v"), {}, None, False, ())
+    )
+    hub = site.tmp / "data" / "hub"
+    blob = hub / "models--org--model" / "blobs" / "b1"
+    blob.parent.mkdir(parents=True)
+    blob.write_bytes(b"weights\n")
+    link = hub / "models--org--model" / "snapshots" / ("a" * 40) / "w.bin"
+    link.parent.mkdir(parents=True)
+    link.symlink_to("../../blobs/b1")
+    site.write_profile(hf_hub_cache=str(hub))
+    declared = [{"path": "w.bin", "sha256": hashlib.sha256(b"weights\n").hexdigest()}]
+    weights = [{"repo": "org/model", "revision": "a" * 40, "files": declared}]
     path = site.manifest("demo", _step("prep", hf_weights=weights))
+    assert site.main("prefetch", str(path), *site.common()) == cli.EXIT_OK
+    out = capsys.readouterr().out
+    assert "weights files=1 hashed=1 accepted=0" in out and "prep\tprefetched" in out
+    link.unlink()
     assert site.main("prefetch", str(path), *site.common()) == cli.EXIT_FAILED
-    assert "hf_weights" in capsys.readouterr().err
+    assert "E_WEIGHTS_MISSING org/model@aaaaaaaa w.bin" in capsys.readouterr().err
     bad = site.manifest("demo", _step("prep", resources={"profile": "tpu"}), file="b.yaml")
     assert site.main("prefetch", str(bad), *site.common()) == cli.EXIT_FAILED
 

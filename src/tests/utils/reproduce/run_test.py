@@ -126,6 +126,7 @@ class World:
         self.hook.chmod(0o755)
         self.restricted_dirs: list[Path] = [self.data / "restricted"]
         self.restricted_fields = True
+        self.profile_extra: dict[str, Any] = {}
 
     def write_patch(self, line: str) -> None:
         """Write the patch that changes the step script's first line to ``line``."""
@@ -150,6 +151,7 @@ class World:
         return Profile.model_validate(
             {
                 **extra,
+                **self.profile_extra,
                 "roots": {"data": str(self.data)},
                 "results_root": str(self.tmp / "results"),
                 "runs_root": str(self.tmp / "runs"),

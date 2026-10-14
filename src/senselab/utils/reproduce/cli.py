@@ -4,9 +4,11 @@ Subcommands:
 
 - ``lock``: run the lock builders for each env, in order (first resolve, torch, body, overlays), and
   write each lock's sha256 (and a uv-export body's command) into the manifest.
-- ``prefetch``: lint, then check out every step (with the profile's deny patterns), build or reuse each
-  env with the profile's checks, record a changed ``wheels.lock`` sha256 in the manifest, and install R
-  libraries. CUDA sdists are built as batch jobs (``build-one``) first, unless ``--local-builds``.
+- ``prefetch``: lint, then check every declared Hugging Face file against its sha256 once
+  (`weights.verify_hf`; printed as ``weights files=… hashed=… accepted=…``), then check out every step
+  (with the profile's deny patterns), build or reuse each env with the profile's checks, record a changed
+  ``wheels.lock`` sha256 in the manifest, and install R libraries. CUDA sdists are built as batch jobs
+  (``build-one``) first, unless ``--local-builds``.
   ``--sources-only`` checks out draft manifests with the empty patch set and nothing else (through the
   ``--profile``'s mirror map when one is given).
 - ``build-one``: build or reuse one sdist's wheel and record the new ``wheels.lock`` sha256.
@@ -72,6 +74,7 @@ from senselab.utils.reproduce import (
     sandbox,
     slurm,
     source,
+    weights,
 )
 from senselab.utils.reproduce.dag import DagError, toposort
 from senselab.utils.reproduce.locks import TORCH_NAMES, ReproduceLockError, file_sha256, normalize_name
@@ -741,10 +744,13 @@ def _cmd_prefetch_masked(args: argparse.Namespace) -> int:
         _error(f"{code}: {detail}")
         return EXIT_FAILED
     rule = profile.policy.headline_rule
-    weighted = [s.name for p in paths for s in load_manifest(p, headline_rule=rule).steps if s.hf_weights]
-    if weighted:
-        _error(f"steps declaring hf_weights cannot be prefetched yet: {', '.join(weighted)}")
-        return EXIT_FAILED
+    manifests = [load_manifest(p, headline_rule=rule) for p in paths]
+    steps = [s for m in manifests for s in m.steps]
+    if any(s.hf_weights for s in steps):
+        failed = weights.verify_hf(steps, profile, _weights_registry(manifests, base))
+        if failed:
+            _error("; ".join(failed))
+            return EXIT_FAILED
     if not args.local_builds:
         _batch_builds(args, paths, profile, base, cache_dir)
     deny = _deny(profile)
@@ -775,6 +781,28 @@ def _cmd_prefetch_masked(args: argparse.Namespace) -> int:
                 env.prefetch_r(step.env, cache_dir, profile, kind=step.kind, venv=venv)
             print(f"{step.name}\tprefetched")
     return EXIT_OK
+
+
+def _weights_registry(manifests: Sequence[Manifest], base: Path) -> dict[str, inputs.RegisteredInput]:
+    """The registry entries the steps' ``HFWeights.input`` name, as each manifest's sources lock pins them.
+
+    An id the lock cannot resolve is left out, so its files are hashed (lint reports the lock problem).
+    """
+    registry: dict[str, inputs.RegisteredInput] = {}
+    for manifest in manifests:
+        ids = sorted({w.input for s in manifest.steps for w in s.hf_weights if w.input is not None})
+        if not ids:
+            continue
+        try:
+            sources_lock, _ = lock.load_lock(base, manifest.sources)
+        except lock.LockError:
+            continue
+        for input_id in ids:
+            try:
+                registry |= lock.resolve_inputs(base, sources_lock, [input_id])
+            except lock.LockError:
+                continue
+    return registry
 
 
 def _prefetch_env(

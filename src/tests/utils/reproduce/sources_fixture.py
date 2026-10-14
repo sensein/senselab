@@ -80,12 +80,18 @@ def register_input(
     *,
     root: str,
     relpath: str,
+    sha256: bool = False,
     **over: Any,  # noqa: ANN401
 ) -> dict[str, str]:
-    """Freeze ``roots[root]/relpath`` into ``<root>/_manifests``, register it and return its lock entry."""
+    """Freeze ``roots[root]/relpath`` into ``<root>/_manifests``, register it and return its lock entry.
+
+    ``sha256`` also records each file's sha256 in the manifest.
+    """
     manifest_rel = f"_manifests/{input_id}.xxh3.tsv"
     out = roots[root] / manifest_rel
-    inputs.write_manifest(roots[root] / relpath, out, include=over.get("include", ()), exclude=over.get("exclude", ()))
+    inputs.write_manifest(
+        roots[root] / relpath, out, include=over.get("include", ()), exclude=over.get("exclude", ()), sha256=sha256
+    )
     entry: dict[str, Any] = {
         "id": input_id,
         "root": root,
