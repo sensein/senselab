@@ -5,7 +5,9 @@ every mount is read-only except the writable directories it names, with loopback
 runs with every capability dropped, so it cannot undo the mounts.
 `build_env` builds the step's whole environment from the profile and the step; nothing is inherited
 from the caller except a few ``SLURM_*`` job ids and ``CUDA_VISIBLE_DEVICES``, which are recorded but
-not keyed. `canary` is a Python snippet whose TCP connect must fail inside the sandbox.
+not keyed. Proxies point at a dead port; an engine step also gets ``REPRO_ENGINE_IDENTITY``, and a ``vllm`` step
+``no_proxy=127.0.0.1,localhost`` and its compile caches under ``{tmp}`` (`engine`). `canary` is a Python snippet
+whose TCP connect must fail inside the sandbox.
 """
 
 from __future__ import annotations
@@ -20,6 +22,7 @@ import sys
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from pathlib import Path
 
+from senselab.utils.reproduce import engine
 from senselab.utils.reproduce.spec import Profile, StepSpec, check_step_profile, render
 
 IP = "/usr/sbin/ip"
@@ -413,6 +416,11 @@ def _keyed(step: StepSpec, profile: Profile) -> tuple[dict[str, str], dict[str, 
         literal["R_LIBS_SITE"] = ""
     if step.shards is not None:
         literal["REPRO_SHARDS"] = str(step.shards.count)
+    if step.engine is not None:
+        literal["REPRO_ENGINE_IDENTITY"] = engine.identity_json(step.engine)
+        if step.engine.name == "vllm":
+            literal |= {v: engine.LOOPBACK for v in NO_PROXY_VARS}
+            templated |= engine.CACHE_TEMPLATES
     return {**profile.env, **literal}, templated
 
 

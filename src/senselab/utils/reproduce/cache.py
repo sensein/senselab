@@ -37,6 +37,7 @@ from packaging.requirements import InvalidRequirement, Requirement
 from packaging.utils import canonicalize_name
 
 from senselab.utils.file_lock import SharedFileLock
+from senselab.utils.reproduce import engine
 from senselab.utils.reproduce.digest import input_set_digest
 from senselab.utils.reproduce.env import env_key
 from senselab.utils.reproduce.sandbox import keyed_templates
@@ -350,6 +351,19 @@ def step_key_payload(
         "shard": None if shard is None else [shard, count],
         "resumable": step.resumable,
         "resume_dir": step.resume_dir,
+        "engine": _engine_key(step),
+    }
+
+
+def _engine_key(step: StepSpec) -> dict[str, Any] | None:
+    """The keyed engine: its identity, the served model and, for ``vllm``, the server module's sha256."""
+    spec = step.engine
+    if spec is None:
+        return None
+    return {
+        "identity": engine.engine_identity(spec),
+        "model": [spec.model.repo, spec.model.revision],
+        "server_module_sha256": engine.server_module_sha256() if spec.name == "vllm" else None,
     }
 
 

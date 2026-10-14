@@ -1568,3 +1568,41 @@ item to `<resume_dir>/<item_id>.tmp`, renames it into place, then creates the co
 marked) is recomputed. The item id covers what makes an item's result differ within one key: the key itself already
 covers the engine identity and the prompt or config version. `resumable: checkpoint` keeps the declared checkpoint
 dir; the step restarts from its latest checkpoint with the same seed and data order.
+
+## Engine steps (A14; completed in A16)
+
+**Declared, keyed.** `StepSpec.engine` declares the engine whole: `name` (`vllm` or `transformers-batched`), the
+pinned `version`, the served `model` (one of the step's `hf_weights`), `concurrency`, `batch_size`, and for `vllm`
+`servers_per_card`, `max_num_seqs`, `max_model_len`, the other valued settings and switches, and ordered extra
+`server_args`. The engine identity (`engine.engine_identity`, `vllm_server.engine_identity` for `vllm`) joins the
+key with the served model and the sha256 of `vllm_server.py`, which the launcher runs and which lies outside the
+reproduce package that `reproduce_source_sha256` covers. `startup_timeout_s` is not keyed: it changes only how long
+a start may take. The identity is also the step's `REPRO_ENGINE_IDENTITY` and its provenance `details.engine`.
+`server_args` may not name or abbreviate a flag the driver sets (`--host`, `--port`, `--model`, the valued flags and
+switches it builds) or refuses (`--config`, content logging), nor an absolute path: provenance records the identity,
+and a path there could name data.
+
+**Startup probe.** The servers per card, `max_num_seqs` and `max_model_len` are declared, so the probe only checks
+that they fit: a server that exits before `/health` (a KV cache that cannot hold `max_model_len`) is `E_ENGINE_FIT`,
+which discards a resumable store, since items written under an engine that does not fit are not trusted. A start
+that times out is `E_ENGINE_START_TIMEOUT` and keeps the store (a slow node, not a wrong engine); another served
+version or snapshot is `E_ENGINE_VERSION`. A step's own non-zero exit stays `E_STEP_FAILED`; when the servers did
+not start the step's argv never ran and the summary's `executed` is false.
+
+**Launcher.** The preamble (canary, program rule) execs `engine.LAUNCHER_CODE` with the driver's interpreter before
+the step's argv; it starts the servers one after the other (each sizes its KV cache after the last), with the step
+venv's own `vllm` over the hub view's `snapshots/<revision>`, start locks and logs under `{tmp}`. Its report goes on a
+second driver-held pipe that it closes before the step starts, not to a file under `{tmp}`, so the step cannot alter
+the verdict. It runs the step as a child with `REPRO_ENGINE_URLS`, forwards SIGTERM/SIGINT/SIGHUP, stops the servers
+when the step exits and exits with the step's code. The servers also die with the sandbox: they run in its PID
+namespace, whose end kills every process in it, besides `vllm_server`'s own watchdog. The server logs are copied to
+`R/logs/engine-<name>` (regular files only) before `{tmp}` is removed.
+
+**Loopback and caches.** A `vllm` step gets `no_proxy=NO_PROXY=127.0.0.1,localhost` (the proxies still point at the
+dead port for everything else) and `VLLM_CACHE_ROOT`, `TRITON_CACHE_DIR`, `TORCHINDUCTOR_CACHE_DIR` and
+`FLASHINFER_WORKSPACE_BASE` under `{tmp}`, so compiled kernels never enter a result.
+
+**CUDA floor.** vLLM 0.31 needs CUDA 13, so a `vllm` engine needs `resources.gpu_arch` and `resources.min_driver` of
+at least `spec.CUDA13_MIN_DRIVER` (580.65.06, the first CUDA 13 driver); the existing host floor check
+(`E_DRIVER_OLD`) enforces it on the node, and profiles exclude older-driver nodes from the partition list. The host
+record carries `host_cuda` from `cuda_probe.detect_host_cuda`.

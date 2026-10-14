@@ -96,6 +96,7 @@ from senselab.utils.reproduce import (
     build,
     cache,
     digest,
+    engine,
     env,
     extract,
     host,
@@ -120,6 +121,7 @@ from senselab.utils.reproduce.spec import (
     SourcesRef,
     StepSpec,
     render,
+    version_tuple,
 )
 
 Status = Literal["executed", "skipped", "failed", "never-ran"]
@@ -218,6 +220,7 @@ CODES = frozenset(
         "W_RELEASE_REFUSED",
         "E_WEIGHTS_MISSING",
         "E_WEIGHTS_VIEW",
+        *engine.CODES,
     }
 )
 """The run's own codes. Digest, cache, metrics and stage codes (``E_DIGEST_*``, ``E_KEY_*``,
@@ -234,6 +237,7 @@ _FRAME = re.compile(r'^\s*File "([^"]+)", line (\d+)')
 _CODE_PATH = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_./+-]{0,255}$")
 _PREAMBLE_KEYS = frozenset({"sys_prefix", "python", "torch", "torch_cuda", "canary_failed", "interpreter_ok"})
 _RESERVED_ROOTS = ("checkout",)
+_LOG_NAME = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}\.log$")
 
 WRAPPER = 'cd -- "$1" || exit 96\nshift\nexec "$@"\n'
 """The script the sandbox execs after its mounts: ``cd`` into the cwd (inside the namespace, so the cwd is on
@@ -271,7 +275,8 @@ except ValueError:
 _failed = _canary.get("canary_failed") if isinstance(_canary, dict) else None
 {rule_code}
 _rule = json.loads(sys.argv[2])
-_target = sys.argv[3]
+_launch = json.loads(sys.argv[3])
+_target = sys.argv[4]
 _ok = program_allowed(_target, os.environ.get("PATH", ""), _rule)
 _out = {{"sys_prefix": sys.prefix, "python": platform.python_version(), "torch": None, "torch_cuda": None,
          "canary_failed": _failed, "interpreter_ok": _ok}}
@@ -289,11 +294,13 @@ if _failed is not True:
     sys.exit(97)
 if not _ok:
     sys.exit(95)
-os.execvp(sys.argv[3], sys.argv[3:])
+_argv = _launch + sys.argv[4:]
+os.execvp(_argv[0], _argv)
 """
-"""Run as ``<venv>/bin/python -I -B -c PREAMBLE <pipe fd> <rule JSON> <step argv…>``: the canary, then torch, a
-JSON line on the driver's pipe (closed before the step starts), then ``execvp`` of the step, only when the
-canary's connect failed and the step's program, found on its ``PATH``, passes the rule. With ``targets`` null
+"""Run as ``<venv>/bin/python -I -B -c PREAMBLE <pipe fd> <rule JSON> <launcher JSON> <step argv…>``: the canary,
+then torch, a JSON line on the driver's pipe (closed before the step starts), then ``execvp`` of the launcher
+argv (empty, or `engine.LAUNCHER_CODE` for a ``vllm`` step) followed by the step's, only when the canary's connect
+failed and the step's program, found on its ``PATH``, passes the rule. With ``targets`` null
 (R kinds) its real path, or the real path of the dir it was found in, lies in ``dirs``; with ``targets`` (Python
 kinds) it was found in ``dirs`` and its final target lies in ``dirs`` or ``targets`` (the uv-managed install)."""
 
@@ -931,7 +938,7 @@ def _ready(
         raise RunError("E_GPU_MISSING")
     if resources.min_driver is not None:
         driver = record.get("gpu_driver")
-        if not isinstance(driver, str) or _version(driver) < _version(resources.min_driver):
+        if not isinstance(driver, str) or version_tuple(driver) < version_tuple(resources.min_driver):
             raise RunError("E_DRIVER_OLD")
     return venv, overlay, env.installed_sha256(venv.path), record
 
@@ -1318,6 +1325,7 @@ class _Execution:
                 _log().error("could not remove the resume store\n%s", traceback.format_exc())
                 self.codes.add("E_DRIVER")
         outputs = self._outputs()
+        self._engine_logs()
         for scratch in (self.tmp, self.result / UP, self.result / ADAPTER_TMP, self.result / R_SESSION_DIR):
             try:
                 _remove_tree(scratch)
@@ -1329,6 +1337,31 @@ class _Execution:
         if self.step.restricted:
             self._release()
         return self._summary()
+
+    def _engine_logs(self) -> None:
+        """Copy each server log of ``{tmp}/engine-logs`` to ``R/logs/engine-<name>``, skipping links and odd names."""
+        source_dir = self.tmp / engine.LOG_DIR
+        try:
+            if not stat.S_ISDIR(os.lstat(source_dir).st_mode):
+                return
+            names = sorted(os.listdir(source_dir))
+        except FileNotFoundError:
+            return
+        except OSError:
+            _log().error("could not list the engine logs\n%s", traceback.format_exc())
+            return
+        for name in names:
+            if not _LOG_NAME.match(name):
+                continue
+            try:
+                fd = os.open(source_dir / name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+                with os.fdopen(fd, "rb") as source_file:
+                    if not stat.S_ISREG(os.fstat(source_file.fileno()).st_mode):
+                        continue
+                    with os.fdopen(_create(self.result / LOGS / f"engine-{name}"), "wb") as handle:
+                        shutil.copyfileobj(source_file, handle)
+            except OSError:
+                _log().error("could not copy an engine log\n%s", traceback.format_exc())
 
     def _make_gathers(self) -> None:
         """``R/up/<step>`` for each sharded need: links ``<i>`` to each shard's ``work/``."""
@@ -1668,11 +1701,15 @@ class _Execution:
         canary = NO_CANARY_CODE if host is None else sandbox.canary(host)
         preamble = _PREAMBLE_CODE.format(canary=canary, rule_code=PROGRAM_RULE_CODE)
         allowed = json.dumps(self._interpreter_rule())
-        read, write = os.pipe()
-        wrapped = [sandbox.SH, "-c", WRAPPER, "sh", str(cwd), python, "-I", "-B", "-c", preamble, str(write), allowed]
-        wrapped += argv
-        self.rc, data = self._spawn(self._sandbox(wrapped, [self.work], tmp=self.tmp), self.env, "step", (read, write))
-        self.preamble = _parse_preamble(data)
+        pipes = [os.pipe()]
+        served = step.engine is not None and step.engine.name == "vllm"
+        if served:
+            pipes.append(os.pipe())
+        launch = json.dumps(self._launcher(pipes[1][1]) if served else [])
+        wrapped = [sandbox.SH, "-c", WRAPPER, "sh", str(cwd), python, "-I", "-B", "-c", preamble, str(pipes[0][1])]
+        wrapped += [allowed, launch, *argv]
+        self.rc, reports = self._spawn(self._sandbox(wrapped, [self.work], tmp=self.tmp), self.env, "step", pipes)
+        self.preamble = _parse_preamble(reports[0])
         self.executed = (
             self.preamble is not None
             and self.preamble["canary_failed"] is True
@@ -1680,18 +1717,40 @@ class _Execution:
         )
         if self.preamble is not None and self.host is not None:
             self.host |= {k: self.preamble[k] for k in ("python", "torch", "torch_cuda")}
+        engine_code = engine.status_code(reports[1]) if served and self.executed else None
+        if engine_code is not None:
+            self.codes.add(engine_code)
+            self.executed = False
         if self.executed and self.rc != 0:
             self.codes.add("E_STEP_FAILED")
             self.frame = _traceback(self.result / LOGS / "step.stderr.log", self.keyed.checkout.worktree)
 
+    def _launcher(self, report_fd: int) -> list[str]:
+        """The `engine.LAUNCHER_CODE` argv the preamble execs before a ``vllm`` step's own argv."""
+        spec = self.step.engine
+        assert spec is not None
+        repo = next(w for w in self.step.hf_weights if (w.repo, w.revision) == (spec.model.repo, spec.model.revision))
+        hub = self._render("{tmp}/hf-hub")
+        model_dir = f"{hub}/{weights.repo_dir_name(repo.repo, repo.repo_type)}/snapshots/{repo.revision}"
+        config = engine.launcher_config(
+            spec, executable=self._render("{venv}/bin/vllm"), model_dir=model_dir, tmp=self._render("{tmp}")
+        )
+        senselab_root = str(Path(sys.modules["senselab"].__file__ or "").resolve().parent.parent)
+        launcher = [sys.executable, "-I", "-B", "-c", engine.LAUNCHER_CODE]
+        return [*launcher, senselab_root, str(report_fd), json.dumps(config)]
+
     def _spawn(
-        self, argv: list[str], run_env: Mapping[str, str], name: str, pipe: tuple[int, int] | None = None
-    ) -> tuple[int, bytes]:
-        """Run a sandbox with stdout and stderr on driver-held log files and, given one, a pipe to read."""
+        self, argv: list[str], run_env: Mapping[str, str], name: str, pipes: Sequence[tuple[int, int]] = ()
+    ) -> tuple[int, list[bytes]]:
+        """Run a sandbox with stdout and stderr on driver-held log files, reading each pipe's ``(read, write)`` pair.
+
+        Returns:
+            The exit code and what each pipe carried, in order.
+        """
         logs = self.result / LOGS
         out, err = _create(logs / f"{name}.stdout.log"), _create(logs / f"{name}.stderr.log")
-        chunks: list[bytes] = []
-        reader: threading.Thread | None = None
+        chunks: list[list[bytes]] = [[] for _ in pipes]
+        readers: list[threading.Thread] = []
         try:
             proc = subprocess.Popen(
                 argv,
@@ -1700,12 +1759,12 @@ class _Execution:
                 stdin=subprocess.DEVNULL,
                 stdout=out,
                 stderr=err,
-                pass_fds=() if pipe is None else (pipe[1],),
+                pass_fds=tuple(write for _, write in pipes),
             )
-            if pipe is not None:
-                os.close(pipe[1])
-                reader = threading.Thread(target=_drain, args=(pipe[0], chunks), daemon=True)
-                reader.start()
+            for (read, write), sink in zip(pipes, chunks):
+                os.close(write)
+                readers.append(threading.Thread(target=_drain, args=(read, sink), daemon=True))
+                readers[-1].start()
             try:
                 rc = proc.wait(timeout=self.config.timeout)
             except subprocess.TimeoutExpired:
@@ -1715,14 +1774,16 @@ class _Execution:
         finally:
             os.close(out)
             os.close(err)
-            if pipe is not None:
+            if len(readers) < len(pipes):
+                for _, write in pipes[len(readers) :]:
+                    with contextlib.suppress(OSError):
+                        os.close(write)
+            for reader in readers:
+                reader.join()
+            for read, _ in pipes:
                 with contextlib.suppress(OSError):
-                    os.close(pipe[1])
-                if reader is not None:
-                    reader.join()
-                with contextlib.suppress(OSError):
-                    os.close(pipe[0])
-        return rc, b"".join(chunks)
+                    os.close(read)
+        return rc, [b"".join(sink) for sink in chunks]
 
     # --- after the step -----------------------------------------------------------------------
 
@@ -1800,7 +1861,7 @@ class _Execution:
         if self.step.resources.gpu_arch and pre.get("torch") is not None and torch_cuda is None:
             self.codes.add("E_GPU_TORCH_CPU")
         max_cuda = self.step.env.max_cuda
-        if max_cuda is not None and isinstance(torch_cuda, str) and _version(torch_cuda) > _version(max_cuda):
+        if max_cuda is not None and isinstance(torch_cuda, str) and version_tuple(torch_cuda) > version_tuple(max_cuda):
             self.codes.add("E_MAX_CUDA")
 
     # --- adapter, expectations -----------------------------------------------------------------
@@ -1837,7 +1898,7 @@ class _Execution:
             **{v: "" for v in sandbox.NO_PROXY_VARS},
         }
         wrapped = [sandbox.SH, "-c", WRAPPER, "sh", str(self.work), *argv]
-        rc, raw = self._spawn(self._sandbox(wrapped, [scratch], tmp=scratch), adapter_env, "adapter", (read, write))
+        rc, [raw] = self._spawn(self._sandbox(wrapped, [scratch], tmp=scratch), adapter_env, "adapter", [(read, write)])
         if rc == EXIT_ADAPTER_IMPORT:
             raise RunError("E_ADAPTER_IMPORT")
         if rc != 0:
@@ -1926,6 +1987,12 @@ class _Execution:
         root = _root_dir(spec.root, self.config, self.upstream, self.keyed.checkout.worktree)
         return tuple(os.fspath(root / p) for p in spec.patterns)
 
+    def _details(self) -> dict[str, Any]:
+        details: dict[str, Any] = {"sources_lock": self.keyed.lock_name, "sources_lock_sha256": self.keyed.lock_sha256}
+        if self.step.engine is not None:
+            details["engine"] = engine.engine_identity(self.step.engine)
+        return details
+
     def _record(self, outputs: list[provenance.Artifact]) -> None:
         if self.venv is None or self.host is None:
             return
@@ -1959,7 +2026,7 @@ class _Execution:
                 env_sha256=self.recorded_sha,
                 argv_sha256=argv_sha,
                 argv=None if confidential or not self.argv else self.argv,
-                details={"sources_lock": self.keyed.lock_name, "sources_lock_sha256": self.keyed.lock_sha256},
+                details=self._details(),
             )
         except ValueError:
             _log().error("provenance refused\n%s", traceback.format_exc())
@@ -1982,14 +2049,6 @@ def _expect_sources(step: StepSpec) -> list[str]:
     names += [s for e in step.expect if e.tolerance_from is not None for s in e.tolerance_from.steps]
     names += [s for e in step.expect if e.band is not None for s in e.band.sources()]
     return sorted(set(names))
-
-
-def _version(text: str) -> tuple[int, ...]:
-    parts = []
-    for part in text.split("."):
-        digits = re.match(r"\d+", part)
-        parts.append(int(digits.group(0)) if digits else 0)
-    return tuple(parts)
 
 
 def _parse_preamble(data: bytes) -> dict[str, Any] | None:

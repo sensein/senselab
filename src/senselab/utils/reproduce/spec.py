@@ -34,6 +34,7 @@ from pydantic import (
     model_validator,
 )
 
+from senselab.utils import vllm_server
 from senselab.utils.reproduce.metrics import (
     CLASSIFICATION_KINDS,
     POSITIVE_FLOOR_METRICS,
@@ -671,6 +672,106 @@ class ShardSpec(_Model):
     resource_class: ClassName
 
 
+CUDA13_MIN_DRIVER = "580.65.06"
+"""The lowest NVIDIA driver that runs CUDA 13, which a ``vllm`` engine's venv needs (`vllm_server.VLLM_MAX_CUDA`)."""
+ENGINE_RESERVED_FLAGS = (
+    "--host",
+    "--port",
+    "--model",
+    *(flag for _, flag in vllm_server.SERVER_FLAGS),
+    *(flag for _, on, off in vllm_server.SWITCHES for flag in (on, off)),
+    *vllm_server.REFUSED_FLAGS,
+)
+"""Server flags the driver sets itself, or refuses; ``server_args`` may not name one, nor abbreviate one."""
+ENGINE_SERVER_FIELDS = frozenset(
+    {
+        "servers_per_card",
+        "max_num_seqs",
+        "max_model_len",
+        "kv_cache_dtype",
+        "generation_config",
+        "limit_mm_per_prompt",
+        "enable_prefix_caching",
+        "server_args",
+        "startup_timeout_s",
+    }
+)
+"""The `EngineSpec` fields only a ``vllm`` engine takes."""
+_SERVER_ARG = re.compile(r"^[!-~]{1,256}$")
+
+
+def version_tuple(text: str) -> tuple[int, ...]:
+    """A dotted version as integers, each part's leading digits (0 when it has none): ``580.65.06`` is (580, 65, 6)."""
+    parts = []
+    for part in text.split("."):
+        digits = re.match(r"\d+", part)
+        parts.append(int(digits.group(0)) if digits else 0)
+    return tuple(parts)
+
+
+def _server_arg_error(arg: str) -> str | None:
+    if not _SERVER_ARG.match(arg):
+        return "is empty, too long, or holds a space or a non-ASCII character"
+    if arg.startswith("/") or "=/" in arg:
+        return "names an absolute path"
+    if arg.startswith(vllm_server.CONTENT_LOGGING_PREFIXES):
+        return "could log request or output content"
+    name = arg.split("=", 1)[0]
+    if name.startswith("--") and len(name) > 2 and any(flag.startswith(name) for flag in ENGINE_RESERVED_FLAGS):
+        return "names a flag the driver sets or refuses"
+    return None
+
+
+class EngineModel(_Model):
+    """The model an engine serves: one of the step's ``hf_weights`` model repositories, at its revision."""
+
+    repo: HFRepo
+    revision: Commit
+
+
+class EngineSpec(_Model):
+    """The inference engine of a step, all of it declared so that it is keyed (`engine.engine_identity`).
+
+    ``vllm``: the driver serves ``model`` from the step's hub view with ``servers_per_card`` servers of its own
+    venv's ``vllm``, sized by ``max_num_seqs`` and ``max_model_len`` (both required), with the valued flags and
+    switches built from the remaining fields, then ``server_args`` in order; the step reaches them over loopback
+    (`engine`). ``server_args`` may not name a flag the driver sets or refuses (`ENGINE_RESERVED_FLAGS`, or an
+    abbreviation), a content-logging flag, or an absolute path. ``transformers-batched``: no server; only its
+    ``version``, ``concurrency`` and ``batch_size`` are declared and keyed (`ENGINE_SERVER_FIELDS` are refused).
+    ``startup_timeout_s`` is not keyed.
+    """
+
+    name: Literal["vllm", "transformers-batched"]
+    version: Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9][A-Za-z0-9.+!_-]{0,63}$")]
+    model: EngineModel
+    concurrency: Annotated[int, Field(ge=1)]
+    batch_size: Annotated[int, Field(ge=1)]
+    servers_per_card: Annotated[int, Field(ge=1)] = 1
+    max_num_seqs: Annotated[int, Field(ge=1)] | None = None
+    max_model_len: Annotated[int, Field(ge=1)] | None = None
+    kv_cache_dtype: Label = "auto"
+    generation_config: Label = "vllm"
+    limit_mm_per_prompt: dict[Literal["image", "video", "audio"], Annotated[int, Field(ge=0)]] = {}
+    enable_prefix_caching: bool = True
+    server_args: list[str] = []
+    startup_timeout_s: Annotated[float, Field(gt=0, allow_inf_nan=False)] = 1800.0
+
+    @model_validator(mode="after")
+    def _shape(self) -> "EngineSpec":
+        for arg in self.server_args:
+            problem = _server_arg_error(arg)
+            if problem is not None:
+                raise ValueError(f"E_SPEC_ENGINE: server argument {arg!r} {problem}")
+        if self.name == "vllm":
+            if self.max_num_seqs is None or self.max_model_len is None:
+                raise ValueError("E_SPEC_ENGINE: a vllm engine declares max_num_seqs and max_model_len")
+            return self
+        given = sorted(ENGINE_SERVER_FIELDS & self.model_fields_set)
+        if given:
+            raise ValueError(f"E_SPEC_ENGINE: a transformers-batched engine takes no server settings: {given}")
+        return self
+
+
 class StepSpec(_Model):
     """One step: a repository commit, an env, an argv template, its inputs, outputs and expectations.
 
@@ -690,7 +791,10 @@ class StepSpec(_Model):
     step that needs it (a gather step) sees ``{up:<step>}`` as a read-only directory of links ``<i>``, one to each
     shard's ``{out}``. The name ``pools`` is reserved (``E_SPEC_RESERVED_NAME``). ``resumable`` (``items`` or
     ``checkpoint``) and ``resume_dir`` (relative to ``{out}``) come together (``E_SPEC_RESUME``): on an attempt
-    (`run`) the driver keeps ``{out}/<resume_dir>`` instead of clearing it.
+    (`run`) the driver keeps ``{out}/<resume_dir>`` instead of clearing it. ``engine`` declares the step's
+    inference engine (`EngineSpec`): its model must be one of the step's ``hf_weights``, and a ``vllm`` engine needs
+    ``resources.gpu_arch`` and a ``resources.min_driver`` of at least `CUDA13_MIN_DRIVER` (``E_SPEC_ENGINE``), which
+    the host floor check (``E_DRIVER_OLD``) then enforces.
     """
 
     name: Name
@@ -720,6 +824,7 @@ class StepSpec(_Model):
     shards: ShardSpec | None = None
     resumable: Literal["items", "checkpoint"] | None = None
     resume_dir: RelPath | None = None
+    engine: EngineSpec | None = None
 
     _unique_lock_inputs = field_validator("lock_inputs")(_no_duplicates)
 
@@ -733,6 +838,7 @@ class StepSpec(_Model):
         parts = PurePosixPath(self.resume_dir).parts if self.resume_dir is not None else ("ok",)
         if not parts or parts[0] in RESUME_RESERVED or DRIVER_FILE_NAMES & set(parts):
             raise ValueError(f"E_SPEC_RESUME: step {self.name!r} resume_dir names a dir the driver makes")
+        self._engine_consistent()
         if len({e.name for e in self.extract}) != len(self.extract):
             raise ValueError(f"E_SPEC_EXTRACT: step {self.name!r} has duplicate extract names")
         if len(needs) != len(self.needs):
@@ -798,6 +904,23 @@ class StepSpec(_Model):
         ):
             raise ValueError(f"kind {self.kind} needs env.r_packages, env.r_snapshot and env.r_lib")
         return self
+
+    def _engine_consistent(self) -> None:
+        engine = self.engine
+        if engine is None:
+            return
+        served = (engine.model.repo, engine.model.revision)
+        if served not in {(w.repo, w.revision) for w in self.hf_weights if w.repo_type == "model"}:
+            raise ValueError(f"E_SPEC_ENGINE: step {self.name!r} serves a model that is not one of its hf_weights")
+        if engine.name != "vllm":
+            return
+        driver = self.resources.min_driver
+        if not self.resources.gpu_arch or driver is None:
+            raise ValueError(f"E_SPEC_ENGINE: step {self.name!r} runs vllm, so it declares gpu_arch and min_driver")
+        if version_tuple(driver) < version_tuple(CUDA13_MIN_DRIVER):
+            raise ValueError(
+                f"E_SPEC_ENGINE: step {self.name!r} runs vllm, which needs min_driver {CUDA13_MIN_DRIVER} (CUDA 13)"
+            )
 
 
 def _unique_names(steps: list[StepSpec]) -> list[StepSpec]:

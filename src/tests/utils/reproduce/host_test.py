@@ -19,6 +19,7 @@ KEYS = {
     "gpu_name",
     "gpu_driver",
     "gpu_count",
+    "host_cuda",
     "torch",
     "torch_cuda",
     "python",
