@@ -16,9 +16,13 @@ Subcommands:
   found by recorded id and by their ``--comment`` tag) and settles its ``pending`` rows. A local run refuses
   (``E_SUBMIT_OVERLAP``) while a submission is live in its run dir.
 - ``submit``: lint, then one held batch job per step chained with ``afterok``, then release
-  (`slurm.submit`).
+  (`slurm.submit`). When the inputs gate has a code for any step, nothing is submitted but one
+  ``verify-inputs`` job per input whose pre-check found a mismatch or a missing file; each step prints as
+  ``never-ran`` with its codes, and each such job as ``verify-submitted <id> <job id>``.
 - ``lint``: check manifests and patches against the profile.
 - ``status``: print each step's key, status, exit and codes from ``run.json`` and ``summary.json``.
+- ``verify-inputs``: re-hash registered inputs and append a record each (`inputs.verify`); one line of counts
+  per input id. ``--registry-only`` checks the registry files and their manifests and hashes nothing.
 
 Exit codes, for every subcommand:
 
@@ -76,7 +80,7 @@ EXIT_PENDING = 3
 WHEELHOUSE = "wheelhouse"
 SDISTS = "sdists"
 WHEELS_LOCK = "wheels.lock"
-_SUBCOMMANDS = ("lock", "prefetch", "build-one", "run", "submit", "lint", "status")
+_SUBCOMMANDS = ("lock", "prefetch", "build-one", "run", "submit", "lint", "status", "verify-inputs")
 _CODE = re.compile(r"^[EW]_[A-Z0-9_]{1,64}$")
 _STEP = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
 _KEY = re.compile(r"^[0-9a-f]{64}$")
@@ -104,7 +108,7 @@ def _site_options(parser: argparse.ArgumentParser, *, profile_required: bool = T
 
 
 def build_parser() -> argparse.ArgumentParser:
-    """The argument parser with its seven subcommands."""
+    """The argument parser with its eight subcommands."""
     parser = argparse.ArgumentParser(
         prog="python -m senselab.utils.reproduce",
         description="Reproduce analyses: pinned code, locked venvs, sandboxed steps.",
@@ -163,6 +167,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     status = sub.add_parser("status", help="per step: key, status, exit, codes")
     status.add_argument("run_dir", type=Path, help="<runs_root>/<date>/<analysis>")
+
+    verify = sub.add_parser("verify-inputs", help="re-hash registered inputs and record each result")
+    verify.add_argument("ids", nargs="*", help="registered input ids")
+    verify.add_argument("--profile", type=Path, required=True, help="the site profile (YAML or JSON)")
+    verify.add_argument("--base-dir", type=Path, required=True, help="the manifest repository")
+    verify.add_argument("--all", action="store_true", help="every registry file under <base-dir>/inputs")
+    verify.add_argument("--registry-only", action="store_true", help="check registry files only; hash nothing")
     return parser
 
 
@@ -886,6 +897,12 @@ def _cmd_submit(args: argparse.Namespace) -> int:
         manifest_sha256s=shas,
     )
     submission = slurm.submit(manifests, config)
+    if submission.refused:
+        for step, codes in submission.refused.items():
+            print(status_line(step, None, "never-ran", None, codes))
+        for input_id, job_id in submission.verify_jobs:
+            print(f"verify-submitted\t{input_id}\t{job_id}")
+        return EXIT_FAILED
     print(f"submission\t{submission.submission}")
     for job in submission.jobs:
         print(f"{job.step}\t{job.job_id}")
@@ -960,6 +977,46 @@ def _cmd_lint(args: argparse.Namespace) -> int:
     return EXIT_FAILED if blocking(findings) else EXIT_OK
 
 
+def _cmd_verify_inputs(args: argparse.Namespace) -> int:
+    if bool(args.ids) == bool(args.all):
+        raise UsageError("give input ids or --all")
+    profile = _profile(args)
+    base = Path(args.base_dir).absolute()
+    stems = sorted(p.stem for p in (base / inputs.REGISTRY_DIR).glob("*.yaml"))
+    ids = stems if args.all else list(args.ids)
+    failed = False
+    if args.registry_only:
+        for input_id in ids:
+            codes = inputs.registry_codes(base, input_id, profile)
+            failed |= bool(codes)
+            print(f"{_id_text(input_id)}\t{codes[0] if codes else 'registry-ok'}")
+        return EXIT_FAILED if failed else EXIT_OK
+    registry: dict[str, inputs.RegisteredInput] = {}
+    for stem in stems:
+        with contextlib.suppress(inputs.InputError):
+            registry[stem] = inputs.read_registry_entry(base, stem)[0]
+    for input_id in ids:
+        try:
+            entry = inputs.read_registry_entry(base, input_id)[0]
+            directory = inputs.verify_dir(entry, profile)
+            others = [e for i, e in registry.items() if i != input_id]
+            verification = inputs.verify(entry, profile, now=datetime.datetime.now(datetime.UTC), others=others)
+            inputs.append_record(directory, input_id, verification)
+        except inputs.InputError as error:
+            failed = True
+            print(f"{_id_text(input_id)}\t{error.code}")
+            continue
+        record = verification.record
+        failed |= record.status != "ok"
+        counts = " ".join(f"{name}={record.counts[name]}" for name in inputs.COUNT_NAMES)
+        print(f"{_id_text(input_id)}\t{record.status}\t{counts}")
+    return EXIT_FAILED if failed else EXIT_OK
+
+
+def _id_text(input_id: str) -> str:
+    return input_id if _STEP.match(input_id) else "?"
+
+
 _HANDLERS: dict[str, Callable[[argparse.Namespace], int]] = {
     "lock": _cmd_lock,
     "prefetch": _cmd_prefetch,
@@ -968,6 +1025,7 @@ _HANDLERS: dict[str, Callable[[argparse.Namespace], int]] = {
     "submit": _cmd_submit,
     "lint": _cmd_lint,
     "status": _cmd_status,
+    "verify-inputs": _cmd_verify_inputs,
 }
 
 

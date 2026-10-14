@@ -16,7 +16,7 @@ from senselab.utils.reproduce.lock import LockError, SourcesLock
 from senselab.utils.reproduce.spec import SourcesRef, StepSpec
 from tests.utils.reproduce.cache_test import OTHER, REV, SHA, _step_data
 from tests.utils.reproduce.run_test import World, _summary, needs_userns
-from tests.utils.reproduce.sources_fixture import lock_data, register_input, write_lock
+from tests.utils.reproduce.sources_fixture import lock_data, register_input, verify_input, write_lock
 
 WEIGHTS = [{"repo": "org/model", "revision": REV, "files": [{"path": "model.safetensors", "sha256": SHA}]}]
 TABLES = {"registry_sha256": SHA, "manifest_sha256": SHA}
@@ -139,6 +139,7 @@ def test_provenance_records_the_lock_sha(world: World) -> None:
     world.registered["tables"] = register_input(
         world.base, {"data": world.data}, "tables", root="data", relpath="derivatives/tables"
     )
+    verify_input(world.base, world.profile(), "tables")
     step = world.step("prep", "prep", "{input:tables}/t.csv", inputs=[], lock_inputs=["tables"])
     manifest = world.manifest(step)
     world.prefetch(manifest)

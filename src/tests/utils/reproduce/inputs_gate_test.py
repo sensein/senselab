@@ -6,8 +6,13 @@ Every site is synthetic, under ``tmp_path``.
 from __future__ import annotations
 
 import builtins
+import datetime
+import hashlib
 import io
+import json
 import os
+import re
+import sys
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -15,11 +20,18 @@ from typing import Any
 import pytest
 import yaml
 
-from senselab.utils.reproduce import cli, inputs, run, sandbox, source
+from senselab.utils.reproduce import cli, inputs, run, sandbox, slurm, source
 from senselab.utils.reproduce.inputs import RegisteredInput
 from tests.utils.reproduce.run_test import World
-from tests.utils.reproduce.sources_fixture import register_input
+from tests.utils.reproduce.slurm_test import FakeSbatch
+from tests.utils.reproduce.sources_fixture import register_input, verify_input
 
+NOW = datetime.datetime(2026, 3, 4, 12, 0, tzinfo=datetime.UTC)
+LINE = re.compile(
+    r"^[A-Za-z0-9_.-]+\t(ok|mismatch)\t"
+    r"(files|missing|size|hash|mtime_only|links|extra|links_out|unlinked|paired|purged)=\d+"
+    r"( (files|missing|size|hash|mtime_only|links|extra|links_out|unlinked|paired|purged)=\d+)*$"
+)
 needs_userns = pytest.mark.skipif(not sandbox.userns_available(), reason="unprivileged user namespaces are unavailable")
 
 
@@ -94,6 +106,7 @@ def test_dry_run_with_a_deleted_file_is_blocked_e_input_missing(
     """
     tables = _tables(world)
     _register(world)
+    verify_input(world.base, world.profile(), "tables")
     manifest = _manifest(world)
     first = _plan(world, manifest)
     assert first.status == "will-execute" and first.codes == ()
@@ -199,10 +212,15 @@ def test_a_broken_hardlink_between_derivative_and_original_is_e_input_mismatch(w
     os.replace(temp, target)
     assert os.stat(target).st_size == st.st_size and os.stat(target).st_mtime_ns == st.st_mtime_ns
     assert _precheck(world) == ["E_INPUT_MISMATCH"]
+    broken = inputs.verify(_entry(world), world.profile(), now=NOW).record
+    assert broken.status == "mismatch" and broken.counts["unlinked"] == 1 and broken.counts["paired"] == 3
+    assert broken.counts["hash"] == 0
     target.unlink()
     assert _precheck(world) == ["E_INPUT_MISMATCH"]
     os.link(tables / "sub" / "u.csv", target)
     assert _precheck(world) == []
+    restored = inputs.verify(_entry(world), world.profile(), now=NOW).record
+    assert restored.status == "ok" and restored.counts["unlinked"] == 0
 
     _register(world, "orphan", original={"root": "elsewhere", "relpath": "orig/tables"})
     manifest = world.manifest(world.step("prep", "prep", "{input:orphan}/t.csv", inputs=[], lock_inputs=["orphan"]))
@@ -216,6 +234,7 @@ def test_a_registered_input_changed_during_the_step_is_e_input_mutated(
     """The pre-check is repeated after the step: an mtime moved while it ran fails it with ``E_INPUT_MUTATED``."""
     tables = _tables(world)
     _register(world)
+    verify_input(world.base, world.profile(), "tables")
     manifest = _manifest(world)
     real_exec = run._Execution._exec
 
@@ -265,3 +284,277 @@ def test_a_link_into_an_unregistered_tree_blocks_and_is_a_lint_finding(
     assert "E_INPUT_LINK_UNREGISTERED" not in _plan(world, both).codes
     code, out = lint(both)
     assert code == cli.EXIT_OK, out
+
+
+# --- A6: verify-inputs, records, overlay, submit rule, mismatch trigger -------------------------------------
+
+
+def _files(world: World) -> tuple[Path, Path]:
+    """The profile file (with a deny file) and the manifest file of the latest `_manifest`."""
+    (world.tmp / "deny.txt").write_text("FORBIDDEN-[0-9]+\n")
+    profile = world.tmp / "profile.yaml"
+    profile.write_text(yaml.safe_dump(world.profile().model_dump(mode="json")))
+    return profile, world.base / "demo.yaml"
+
+
+def _write_manifest(world: World, manifest: Any) -> Path:  # noqa: ANN401
+    path = world.base / "demo.yaml"
+    path.write_text(yaml.safe_dump(manifest.model_dump(mode="json"), sort_keys=False))
+    return path
+
+
+def _verify_cli(world: World, capsys: pytest.CaptureFixture[str], *args: str) -> tuple[int, list[str]]:
+    profile, _ = _files(world)
+    code = cli.main(["verify-inputs", "--profile", str(profile), "--base-dir", str(world.base), *args])
+    return code, capsys.readouterr().out.splitlines()
+
+
+def _counts(line: str) -> dict[str, int]:
+    return {k: int(v) for k, v in (field.split("=") for field in line.split("\t")[2].split(" "))}
+
+
+def _submit_config(world: World, manifest: Any) -> slurm.SubmitConfig:  # noqa: ANN401
+    profile, _ = _files(world)
+    path = _write_manifest(world, manifest)
+    return slurm.SubmitConfig(
+        profile=world.profile(),
+        profile_path=profile,
+        manifest_paths=[path],
+        base_dir=world.base,
+        cache=world.cache,
+        date=datetime.date(2026, 3, 4),
+        exports={},
+        driver_python=sys.executable,
+        submission="sub1",
+    )
+
+
+def _rows(world: World) -> dict[str, dict[str, Any]]:
+    path = world.tmp / "runs" / "2026-03-04" / "demo" / run.RUN_JSON
+    return {r["step"]: r for r in run.read_run_record(path)}
+
+
+@needs_userns
+def test_one_byte_change_with_size_and_mtime_restored_is_caught_by_verify_and_blocks(
+    world: World, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """SC1(a): a same-size edit with the mtime put back is caught by ``verify-inputs`` and then blocks the step.
+
+    The pre-check passes, ``verify-inputs`` prints ``mismatch`` with ``hash=1``, the dry run is ``blocked
+    E_INPUT_UNVERIFIED``, and submit issues no sbatch.
+    """
+    tables = _tables(world)
+    _register(world)
+    manifest = _manifest(world)
+    code, lines = _verify_cli(world, capsys, "tables")
+    assert code == cli.EXIT_OK and lines[0].split("\t")[:2] == ["tables", "ok"]
+    assert _plan(world, manifest).status == "will-execute"
+
+    path = tables / "sub" / "u.csv"
+    st = os.stat(path)
+    path.write_text("abd\n")
+    os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns))
+    assert _precheck(world) == []
+    code, lines = _verify_cli(world, capsys, "tables")
+    assert code == cli.EXIT_FAILED and lines[0].split("\t")[:2] == ["tables", "mismatch"]
+    assert _counts(lines[0])["hash"] == 1 and _counts(lines[0])["size"] == 0
+
+    plan = _plan(world, manifest)
+    assert plan.status == "blocked" and plan.codes == ("E_INPUT_UNVERIFIED",)
+    profile, _ = _files(world)
+    dry = ["run", str(_write_manifest(world, manifest)), "--profile", str(profile), "--base-dir", str(world.base)]
+    assert cli.main([*dry, "--cache", str(world.cache), "--dry-run"]) == cli.EXIT_FAILED
+    assert "blocked" in capsys.readouterr().out
+    fake = FakeSbatch()
+    submission = slurm.submit([manifest], _submit_config(world, manifest), runner=fake)
+    assert fake.calls == [] and submission.jobs == [] and submission.verify_jobs == ()
+    assert submission.refused == {"prep": ("E_INPUT_UNVERIFIED",)}
+    assert {s: (r["status"], r["codes"]) for s, r in _rows(world).items()} == {
+        "prep": ("never-ran", ["E_INPUT_UNVERIFIED"])
+    }
+
+
+@needs_userns
+def test_no_verification_record_blocks_e_input_unverified(world: World) -> None:
+    """SC1(c): a registered input with no record is ``blocked`` at dry run and refused by a run, until verified."""
+    _tables(world)
+    _register(world)
+    manifest = _manifest(world)
+    plan = _plan(world, manifest)
+    assert plan.status == "blocked" and plan.codes == ("E_INPUT_UNVERIFIED",)
+    outcome = world.run(manifest)["prep"]
+    assert outcome.status == "failed" and outcome.codes == ("E_INPUT_UNVERIFIED",) and outcome.out is None
+    verify_input(world.base, world.profile(), "tables")
+    assert _plan(world, manifest).status == "will-execute"
+    assert world.run(manifest)["prep"].ok
+
+
+def test_mtime_only_drift_records_ok_with_an_overlay_and_keeps_the_key(world: World) -> None:
+    """Only mtimes drifted: the record is ``ok`` with an overlay the pre-check honours; the key is unchanged."""
+    tables = _tables(world)
+    _register(world)
+    manifest = _manifest(world)
+    step, config = manifest.steps[0], world.config()
+    verify_input(world.base, world.profile(), "tables")
+    key = run._key(step, "demo", config, {}).key
+    assert run.gate(step, "demo", config).codes == ()
+    st = os.stat(tables / "t.csv")
+    os.utime(tables / "t.csv", ns=(st.st_atime_ns, st.st_mtime_ns + 5_000_000_000))
+    assert run.gate(step, "demo", config).codes == ("E_INPUT_MISMATCH",)
+
+    record = verify_input(world.base, world.profile(), "tables")
+    assert record.status == "ok" and record.counts["mtime_only"] == 1 and record.overlay_sha256 is not None
+    overlay = world.tmp / "input-verify" / "tables.mtime-overlay.tsv"
+    assert overlay.is_file() and (overlay.stat().st_mode & 0o777) == 0o660
+    assert run.gate(step, "demo", config).codes == ()
+    assert run._key(step, "demo", config, {}).key == key
+    manifest_file = world.data / "_manifests" / "tables.xxh3.tsv"
+    assert _entry(world).manifest.sha256 == hashlib.sha256(manifest_file.read_bytes()).hexdigest()
+
+    overlay.write_text(overlay.read_text() + "sub/u.csv\t1\n")
+    assert run.gate(step, "demo", config).codes == ("E_INPUT_MISMATCH", "E_INPUT_UNVERIFIED")
+
+
+def test_a_record_older_than_31_days_blocks(world: World) -> None:
+    """A record is current for 31 days; a day later the input is unverified."""
+    _tables(world)
+    _register(world)
+    entry, profile = _entry(world), world.profile()
+    verify_input(world.base, profile, "tables", now=NOW)
+    assert inputs.verified_codes(entry, profile, now=NOW + datetime.timedelta(days=31)) == []
+    assert inputs.verified_codes(entry, profile, now=NOW + datetime.timedelta(days=32)) == ["E_INPUT_UNVERIFIED"]
+    verify_input(world.base, profile, "tables", now=NOW + datetime.timedelta(days=32))
+    assert inputs.verified_codes(entry, profile, now=NOW + datetime.timedelta(days=32)) == []
+
+
+def test_an_extra_file_is_a_mismatch_unless_extras_ignore(world: World) -> None:
+    """A selected file absent from the manifest is ``extra``; ``extras: ignore`` and excluded files do not count."""
+    tables = _tables(world)
+    _register(world, exclude=["**/*.tmp"])
+    entry, profile = _entry(world), world.profile()
+    assert inputs.verify(entry, profile, now=NOW).record.status == "ok"
+    (tables / "sub" / "scratch.tmp").write_text("x\n")
+    assert inputs.verify(entry, profile, now=NOW).record.counts["extra"] == 0
+    (tables / "sub" / "new.csv").write_text("x\n")
+    record = inputs.verify(entry, profile, now=NOW).record
+    assert record.status == "mismatch" and record.counts["extra"] == 1
+    ignored = entry.model_copy(update={"extras": "ignore"})
+    assert inputs.verify(ignored, profile, now=NOW).record.status == "ok"
+
+    one = world.data / "single"
+    one.mkdir()
+    (one / "a.csv").write_text("1\n")
+    (one / "b.csv").write_text("2\n")
+    _register(world, "single", relpath="single", include=["a.csv"])
+    assert inputs.verify(_entry(world, "single"), profile, now=NOW).record.counts["files"] == 1
+    (one / "c.csv").write_text("3\n")
+    assert inputs.verify(_entry(world, "single"), profile, now=NOW).record.status == "ok"
+
+
+def test_a_newer_mismatch_record_supersedes_an_older_ok(world: World) -> None:
+    """Only the latest record counts: ok, then mismatch, blocks; a later ok clears it; another manifest sha blocks."""
+    tables = _tables(world)
+    _register(world)
+    entry, profile = _entry(world), world.profile()
+    verify_input(world.base, profile, "tables", now=NOW)
+    assert inputs.verified_codes(entry, profile, now=NOW) == []
+    path = tables / "t.csv"
+    st = os.stat(path)
+    path.write_text("4\n")
+    os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns))
+    assert verify_input(world.base, profile, "tables", now=NOW).status == "mismatch"
+    assert inputs.verified_codes(entry, profile, now=NOW) == ["E_INPUT_UNVERIFIED"]
+    records = json.loads((world.tmp / "input-verify" / "tables.json").read_text())["records"]
+    assert [r["status"] for r in records] == ["ok", "mismatch"]
+    path.write_text("3\n")
+    os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns))
+    verify_input(world.base, profile, "tables", now=NOW)
+    assert inputs.verified_codes(entry, profile, now=NOW) == []
+    other = entry.model_copy(update={"manifest": entry.manifest.model_copy(update={"sha256": "cd" * 32})})
+    assert inputs.verified_codes(other, profile, now=NOW) == ["E_INPUT_UNVERIFIED"]
+
+
+def test_verify_output_has_counts_only(world: World, capsys: pytest.CaptureFixture[str]) -> None:
+    """One line per id of counts only; ``links_out`` counts links outside every registry entry."""
+    tables = _tables(world)
+    elsewhere = world.data / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "e.csv").write_text("1\n")
+    shared = world.data / "shared"
+    shared.mkdir()
+    (shared / "s.csv").write_text("1\n")
+    (tables / "out.csv").symlink_to("../../elsewhere/e.csv")
+    (tables / "in.csv").symlink_to("../../shared/s.csv")
+    _register(world)
+    _register(world, "shared", relpath="shared")
+    code, lines = _verify_cli(world, capsys, "--all")
+    assert code == cli.EXIT_OK and [line.split("\t")[0] for line in lines] == ["shared", "tables"]
+    assert all(LINE.match(line) for line in lines), lines
+    assert _counts(lines[1])["links_out"] == 1 and _counts(lines[1])["links"] == 0
+    assert _counts(lines[0])["links_out"] == 0
+    text = "\n".join(lines)
+    assert str(world.tmp) not in text and "csv" not in text
+    code, lines = _verify_cli(world, capsys)
+    assert code == cli.EXIT_USAGE
+
+
+def test_registry_only_mode_hashes_nothing(
+    world: World, capsys: pytest.CaptureFixture[str], opened: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``--registry-only`` checks each registry file, its manifest sha and root line, and opens no input file."""
+    tables = _tables(world)
+    _register(world)
+
+    def refuse(*args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
+        raise AssertionError("hashed")
+
+    monkeypatch.setattr(inputs, "_hashes", refuse)
+    opened.clear()
+    code, lines = _verify_cli(world, capsys, "--all", "--registry-only")
+    assert code == cli.EXIT_OK and lines == ["tables\tregistry-ok"]
+    assert not [p for p in opened if p.startswith(str(tables) + os.sep)]
+    assert not (world.tmp / "input-verify").exists()
+
+    registry = world.base / "inputs" / "bad.yaml"
+    registry.write_text(
+        yaml.safe_dump({**yaml.safe_load((world.base / "inputs" / "tables.yaml").read_text()), "id": "bad"})
+    )
+    data = yaml.safe_load(registry.read_text())
+    data["manifest"]["sha256"] = "cd" * 32
+    registry.write_text(yaml.safe_dump(data))
+    moved = world.base / "inputs" / "moved.yaml"
+    data = yaml.safe_load((world.base / "inputs" / "tables.yaml").read_text())
+    moved.write_text(yaml.safe_dump({**data, "id": "moved", "relpath": "derivatives"}))
+    code, lines = _verify_cli(world, capsys, "--all", "--registry-only")
+    assert code == cli.EXIT_FAILED
+    assert lines == ["bad\tE_INPUT_REGISTRY", "moved\tE_INPUT_REGISTRY", "tables\tregistry-ok"]
+
+
+def test_a_precheck_mismatch_at_submit_submits_a_verify_job(
+    world: World, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A pre-check mismatch at submit: one ``verify-inputs <id>`` job on the build partition, no step job."""
+    tables = _tables(world)
+    _register(world)
+    manifest = _manifest(world)
+    verify_input(world.base, world.profile(), "tables")
+    st = os.stat(tables / "t.csv")
+    os.utime(tables / "t.csv", ns=(st.st_atime_ns, st.st_mtime_ns + 5_000_000_000))
+    fake = FakeSbatch()
+    monkeypatch.setattr(slurm, "default_runner", fake)
+    monkeypatch.setenv("UV_CACHE_DIR", str(world.tmp / "uv-cache"))
+    monkeypatch.setenv("UV_PYTHON_INSTALL_DIR", str(world.tmp / "uv-python"))
+    profile, _ = _files(world)
+    path = _write_manifest(world, manifest)
+    argv = ["submit", str(path), "--profile", str(profile), "--base-dir", str(world.base), "--cache", str(world.cache)]
+    assert cli.main([*argv, "--date", "2026-03-04"]) == cli.EXIT_FAILED
+    out = capsys.readouterr().out.splitlines()
+    scripts = fake.submissions()
+    assert len(scripts) == 1 and len(fake.calls) == 1
+    assert "--hold" not in fake.calls[0][0]
+    last = scripts[0].splitlines()[-1]
+    assert " verify-inputs " in last and last.endswith(" tables") and "--step" not in last
+    assert "#SBATCH --partition=p" in scripts[0] and "#SBATCH --export=NONE" in scripts[0]
+    assert "verify-submitted\ttables\t101" in out
+    assert any(line.startswith("prep\t-\tnever-ran\t-\tE_INPUT_MISMATCH") for line in out), out
+    assert _rows(world)["prep"]["codes"] == ["E_INPUT_MISMATCH"]

@@ -10,6 +10,11 @@ symlink is recorded by its target and never followed; a file by its size, ``mtim
 content. It also applies the link rule: a link row's target, resolved against the link's own directory,
 must lie under the input itself or under another registered input the step declares.
 
+`verify` re-hashes a registered input against its manifest. `append_record` stores the outcome in
+``<verify dir>/<id>.json`` (`verify_dir`) under a lock, with an accepted-mtime overlay
+``<id>.mtime-overlay.tsv`` when only mtimes drifted. `verified_codes` gives ``E_INPUT_UNVERIFIED`` unless
+the latest record is current, ``ok`` and for the registered manifest.
+
 Errors are an `InputError` whose message is a fixed code only.
 """
 
@@ -17,22 +22,23 @@ from __future__ import annotations
 
 import datetime
 import hashlib
+import json
 import os
 import re
 import socket
 import stat
 import tempfile
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from pathlib import Path
-from typing import Annotated, Literal, NamedTuple
+from typing import Annotated, Literal, NamedTuple, TypeVar
 
 import pydantic
 import xxhash
 import yaml
-from pydantic import AfterValidator, BaseModel, ConfigDict, StringConstraints, field_validator
+from pydantic import AfterValidator, AwareDatetime, BaseModel, ConfigDict, StringConstraints, field_validator
 
 from senselab.utils import fastio
-from senselab.utils.reproduce import digest
+from senselab.utils.reproduce import build, digest
 from senselab.utils.reproduce.spec import Name, Profile, RelPath, Sha256
 
 REGISTRY_DIR = "inputs"
@@ -42,11 +48,22 @@ CODE = "E_INPUT_REGISTRY"
 MISSING = "E_INPUT_MISSING"
 MISMATCH = "E_INPUT_MISMATCH"
 LINK_UNREGISTERED = "E_INPUT_LINK_UNREGISTERED"
+UNVERIFIED = "E_INPUT_UNVERIFIED"
 DESCRIPTION = "dataset_description.json"
+VERIFY_DIR = "input-verify"
+OVERLAY_SUFFIX = ".mtime-overlay.tsv"
+OVERLAY_HEADER = "relpath\tmtime_ns"
+RECORD_MODE = 0o660
+MAX_AGE = datetime.timedelta(days=31)
+VERIFY_THREADS = 32
+COUNT_NAMES = ("files", "missing", "size", "hash", "mtime_only", "links", "extra", "links_out", "unlinked", "paired")
+"""The counts of a verification, in the order ``verify-inputs`` prints them."""
 _CHUNK = 8 << 20
 _XXH = re.compile(r"^[0-9a-f]{32}$")
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
 _ROW = re.compile(r"^([A-Z])([0-9]{1,2})(?:-([A-Z])([0-9]{1,2}))?$")
+
+T = TypeVar("T")
 
 Licence = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.+-]{0,63}$")]
 
@@ -323,6 +340,84 @@ def _lstat_path(top: str, rel: str) -> tuple[str, str]:
     return "dir", rel
 
 
+def _collect(
+    top: str,
+    include: Sequence[str],
+    exclude: Sequence[str],
+    visit: Callable[[str, str], T],
+    *,
+    strict: bool = True,
+) -> tuple[dict[str, T], list[str]]:
+    """Select the files and links of a tree as `write_manifest` does, and apply ``visit(path, rel)`` to each.
+
+    Args:
+        top: The tree's top.
+        include: Selecting patterns (empty: everything).
+        exclude: Patterns whose matches are left out.
+        visit: Applied to each selected entry, inside the walk's threads.
+        strict: Refuse a literal include that is missing or cannot be ``lstat``-ed; otherwise skip it.
+
+    Returns:
+        ``({rel: visit result}, the paths whose listing or ``lstat`` failed)``.
+
+    Raises:
+        InputError: ``E_INPUT_REGISTRY`` for a pattern outside the grammar, a top that is not a directory,
+            or (``strict``) a literal include that is missing or cannot be ``lstat``-ed.
+    """
+    try:
+        for pattern in (*include, *exclude):
+            digest._check_pattern(pattern)
+    except digest.DigestError:
+        raise InputError(CODE) from None
+    if not os.path.isdir(top):
+        raise InputError(CODE)
+    patterns: list[str] = []
+    files: list[str] = []
+    bases: set[str] = set() if include else {""}
+    links: set[str] = set()
+    errors: list[str] = []
+    for pattern in include:
+        literal = not digest._WILD.search(pattern)
+        try:
+            kind, at = _lstat_path(top, pattern if literal else digest._base(pattern))
+        except OSError:
+            if literal and strict:
+                raise InputError(CODE) from None
+            errors.append(pattern)
+            continue
+        if kind == "missing" and literal:
+            if strict:
+                raise InputError(CODE)
+            continue
+        if kind == "link":
+            links.add(at)
+        elif kind == "dir":
+            bases.add(at)
+            patterns.append(f"{pattern}/**" if literal else pattern)
+        elif kind == "file":
+            files.append(at)
+            patterns.append(pattern)
+    walks = sorted(b for b in bases if not any(o != b and (o == "" or b.startswith(o + "/")) for o in bases))
+    found: dict[str, T] = {}
+
+    def selected(path: str) -> tuple[str, T] | None:
+        rel = os.path.relpath(path, top).replace(os.sep, "/")
+        return (rel, visit(path, rel)) if _selected(rel, patterns, exclude) else None
+
+    for rel in sorted(links):
+        if _selected(rel, (), exclude):
+            found[rel] = visit(os.path.join(top, rel), rel)
+    for rel_file in files:
+        if (item := selected(os.path.join(top, rel_file))) is not None:
+            found[item[0]] = item[1]
+    for base in walks:
+        start = os.path.join(top, base) if base else top
+        for item in fastio.map_files(start, selected, links_as_files=True, on_error=lambda p, e: errors.append(p)):
+            if item is not None:
+                found[item[0]] = item[1]
+    return found, errors
+
+
 def write_manifest(
     root: str | os.PathLike[str],
     out: str | os.PathLike[str],
@@ -352,56 +447,7 @@ def write_manifest(
             or a literal include that is missing or cannot be ``lstat``-ed.
     """
     top = os.fspath(root)
-    try:
-        for pattern in (*include, *exclude):
-            digest._check_pattern(pattern)
-    except digest.DigestError:
-        raise InputError(CODE) from None
-    if not os.path.isdir(top):
-        raise InputError(CODE)
-    patterns: list[str] = []
-    files: list[str] = []
-    bases: set[str] = set() if include else {""}
-    links: set[str] = set()
-    errors: list[str] = []
-    for pattern in include:
-        literal = not digest._WILD.search(pattern)
-        try:
-            kind, at = _lstat_path(top, pattern if literal else digest._base(pattern))
-        except OSError:
-            if literal:
-                raise InputError(CODE) from None
-            errors.append(pattern)
-            continue
-        if kind == "missing" and literal:
-            raise InputError(CODE)
-        if kind == "link":
-            links.add(at)
-        elif kind == "dir":
-            bases.add(at)
-            patterns.append(f"{pattern}/**" if literal else pattern)
-        elif kind == "file":
-            files.append(at)
-            patterns.append(pattern)
-    walks = sorted(b for b in bases if not any(o != b and (o == "" or b.startswith(o + "/")) for o in bases))
-    found: dict[str, tuple[str, ...]] = {}
-
-    def visit(path: str) -> tuple[str, ...] | None:
-        rel = os.path.relpath(path, top).replace(os.sep, "/")
-        return _row(path, rel, sha256) if _selected(rel, patterns, exclude) else None
-
-    for rel in sorted(links):
-        if not _selected(rel, (), exclude):
-            continue
-        found[rel] = _row(os.path.join(top, rel), rel, sha256)
-    for rel_file in files:
-        if (row := visit(os.path.join(top, rel_file))) is not None:
-            found[row[0]] = row
-    for base in walks:
-        start = os.path.join(top, base) if base else top
-        for row in fastio.map_files(start, visit, links_as_files=True, on_error=lambda p, e: errors.append(p)):
-            if row is not None:
-                found[row[0]] = row
+    found, errors = _collect(top, include, exclude, lambda path, rel: _row(path, rel, sha256))
     rows = [found[k] for k in sorted(found)]
     header = (*MANIFEST_COLUMNS, SHA256_COLUMN) if sha256 else MANIFEST_COLUMNS
     when = datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
@@ -417,7 +463,8 @@ def write_manifest(
     }
 
 
-def _atomic_write(path: Path, data: bytes) -> None:
+def _atomic_write(path: Path, data: bytes, mode: int | None = None) -> None:
+    """Write ``data`` through a temporary file and a rename; ``mode`` defaults to ``0o666`` less the umask."""
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
     try:
@@ -425,9 +472,11 @@ def _atomic_write(path: Path, data: bytes) -> None:
             handle.write(data)
             handle.flush()
             os.fsync(handle.fileno())
-        mask = os.umask(0)
-        os.umask(mask)
-        os.chmod(tmp, 0o666 & ~mask)
+        if mode is None:
+            mask = os.umask(0)
+            os.umask(mask)
+            mode = 0o666 & ~mask
+        os.chmod(tmp, mode)
         os.replace(tmp, path)
     finally:
         if os.path.exists(tmp):
@@ -646,3 +695,236 @@ def unregistered_links(inp: RegisteredInput, profile: Profile, others: Iterable[
         for r in rows
         if r.link_target is not None and not link_resolves_inside(os.path.join(top, r.relpath), r.link_target, tops)
     )
+
+
+# --- full verification and its records --------------------------------------------------------------------
+
+
+class VerifyRecord(_Model):
+    """One completed verification of a registered input.
+
+    ``counts`` are `COUNT_NAMES`. ``overlay_sha256`` is the sha256 of the accepted-mtime overlay written with
+    an ``ok`` record whose ``mtime_only`` is not 0, else None. ``restricted`` is the registry flag at the time.
+    """
+
+    manifest_sha256: Sha256
+    status: Literal["ok", "mismatch"]
+    date: AwareDatetime
+    counts: dict[str, int]
+    restricted: bool
+    overlay_sha256: Sha256 | None = None
+
+
+class Verification(NamedTuple):
+    """A record and the overlay bytes it names (None without an overlay)."""
+
+    record: VerifyRecord
+    overlay: bytes | None
+
+
+def verify_dir(inp: RegisteredInput, profile: Profile) -> Path:
+    """Where an input's records live: ``input-verify/`` beside the results root.
+
+    Raises:
+        InputError: ``E_INPUT_REGISTRY`` for a restricted input (the profile has no restricted results root).
+    """
+    if inp.restricted:
+        raise InputError(CODE)
+    return profile.results_root.parent / VERIFY_DIR
+
+
+def _xxh(path: str) -> str | None:
+    try:
+        return _hashes(path, False)[0]
+    except OSError:
+        return None
+
+
+def _extras(inp: RegisteredInput, top: str, listed: set[str]) -> int:
+    """Selected entries under the input that the manifest lacks; a failed listing counts as one each."""
+    found, errors = _collect(top, inp.include, inp.exclude, lambda path, rel: None, strict=False)
+    return len(set(found) - listed) + len(errors)
+
+
+def _overlay_bytes(overlay: Mapping[str, int]) -> bytes:
+    lines = [OVERLAY_HEADER, *(f"{rel}\t{overlay[rel]}" for rel in sorted(overlay))]
+    return ("\n".join(lines) + "\n").encode()
+
+
+def verify(
+    inp: RegisteredInput,
+    profile: Profile,
+    *,
+    now: datetime.datetime,
+    others: Iterable[RegisteredInput] = (),
+) -> Verification:
+    """Re-hash every file row of a registered input (xxh3-128) and count the differences; nothing is written.
+
+    Args:
+        inp: The registered input.
+        profile: The site profile.
+        now: The record's date.
+        others: The other registry entries; a link into one of them is not counted in ``links_out``.
+
+    Returns:
+        The verification. ``status`` is ``ok`` iff ``missing``, ``size``, ``hash``, ``links``, ``extra`` and
+        ``unlinked`` are 0. ``hash`` counts files whose hash differs or that cannot be read; ``mtime_only``
+        files with the recorded hash and another mtime; ``links`` changed link rows; ``extra`` selected
+        entries absent from the manifest (0 with ``extras: ignore``); ``links_out`` links outside the input
+        and ``others`` (it does not change the status). An ``ok`` record with ``mtime_only`` above 0 carries
+        the overlay of the current mtimes.
+
+    Raises:
+        InputError: ``E_INPUT_REGISTRY`` when the manifest cannot be read (`manifest_rows`).
+    """
+    rows = manifest_rows(inp, profile)
+    found = scan(inp, profile, rows, _tops(others, profile))
+    hashes = list(fastio.ordered_map(lambda item: _xxh(item[1]), found.present, threads=VERIFY_THREADS))
+    hash_diff = mtime_only = 0
+    overlay: dict[str, int] = {}
+    for (row, _, mtime), xxh in zip(found.present, hashes):
+        if xxh != row.xxh3_128:
+            hash_diff += 1
+        elif mtime != row.mtime_ns:
+            mtime_only += 1
+            overlay[row.relpath] = mtime
+    top = os.fspath(input_top(inp, profile))
+    extra = 0 if inp.extras == "ignore" or not os.path.isdir(top) else _extras(inp, top, {r.relpath for r in rows})
+    counts = dict(
+        zip(
+            COUNT_NAMES,
+            (
+                found.files,
+                found.missing,
+                found.size_diff,
+                hash_diff,
+                mtime_only,
+                found.link_diff,
+                extra,
+                found.links_out,
+                found.unlinked,
+                found.paired,
+            ),
+        )
+    )
+    ok = not (found.missing or found.size_diff or hash_diff or found.link_diff or extra or found.unlinked)
+    data = _overlay_bytes(overlay) if ok and overlay else None
+    record = VerifyRecord(
+        manifest_sha256=inp.manifest.sha256,
+        status="ok" if ok else "mismatch",
+        date=now,
+        counts=counts,
+        restricted=inp.restricted,
+        overlay_sha256=None if data is None else hashlib.sha256(data).hexdigest(),
+    )
+    return Verification(record, data)
+
+
+def _records_path(directory: Path, input_id: str) -> Path:
+    return directory / f"{input_id}.json"
+
+
+def _read_records(path: Path) -> list[object]:
+    try:
+        data = json.loads(path.read_bytes())
+    except (OSError, ValueError):
+        return []
+    records = data.get("records") if isinstance(data, dict) else None
+    return records if isinstance(records, list) else []
+
+
+def append_record(directory: Path, input_id: str, verification: Verification) -> None:
+    """Append a completed verification to ``<directory>/<id>.json`` under its lock; write its overlay first.
+
+    Both files are written atomically with mode ``0660``; the manifest is never touched.
+    """
+    path = _records_path(directory, input_id)
+    with build.file_lock(path.with_name(path.name + ".lock")):
+        if verification.overlay is not None:
+            _atomic_write(directory / f"{input_id}{OVERLAY_SUFFIX}", verification.overlay, RECORD_MODE)
+        records = [*_read_records(path), verification.record.model_dump(mode="json")]
+        _atomic_write(path, (json.dumps({"records": records}) + "\n").encode(), RECORD_MODE)
+
+
+def latest_record(directory: Path, input_id: str) -> VerifyRecord | None:
+    """The last record of ``<directory>/<id>.json``; None when there is none or it does not validate."""
+    records = _read_records(_records_path(directory, input_id))
+    if not records:
+        return None
+    try:
+        return VerifyRecord.model_validate(records[-1])
+    except pydantic.ValidationError:
+        return None
+
+
+def _read_overlay(data: bytes) -> dict[str, int]:
+    lines = data.decode().split("\n")
+    if lines[-1] == "":
+        lines.pop()
+    if not lines or lines[0] != OVERLAY_HEADER:
+        raise ValueError("bad overlay header")
+    overlay: dict[str, int] = {}
+    for line in lines[1:]:
+        rel, mtime = line.split("\t")
+        overlay[rel] = _int(mtime)
+    return overlay
+
+
+def accepted(
+    inp: RegisteredInput, profile: Profile, *, now: datetime.datetime
+) -> tuple[list[str], dict[str, int] | None]:
+    """The submit rule for one input, and the overlay the pre-check may use.
+
+    Returns:
+        ``([], overlay or None)`` when the latest record has the registered manifest sha256, ``status: ok``
+        and is at most 31 days old, and its overlay (if any) has the recorded sha256; otherwise
+        ``(["E_INPUT_UNVERIFIED"], None)``, or ``(["E_INPUT_REGISTRY"], None)`` for a restricted input.
+    """
+    try:
+        directory = verify_dir(inp, profile)
+    except InputError as error:
+        return [error.code], None
+    record = latest_record(directory, inp.id)
+    if (
+        record is None
+        or record.manifest_sha256 != inp.manifest.sha256
+        or record.status != "ok"
+        or now - record.date > MAX_AGE
+    ):
+        return [UNVERIFIED], None
+    if record.overlay_sha256 is None:
+        return [], None
+    try:
+        data = (directory / f"{inp.id}{OVERLAY_SUFFIX}").read_bytes()
+        if hashlib.sha256(data).hexdigest() != record.overlay_sha256:
+            return [UNVERIFIED], None
+        return [], _read_overlay(data)
+    except (OSError, ValueError):
+        return [UNVERIFIED], None
+
+
+def verified_codes(inp: RegisteredInput, profile: Profile, *, now: datetime.datetime) -> list[str]:
+    """``E_INPUT_UNVERIFIED`` unless the submit rule holds for the input (`accepted`); empty when it does."""
+    return accepted(inp, profile, now=now)[0]
+
+
+def registry_codes(base_dir: Path, input_id: str, profile: Profile) -> list[str]:
+    """Check one registry file without hashing any input file: its types, manifest sha256 and root line.
+
+    Returns:
+        ``["E_INPUT_REGISTRY"]`` when the entry does not validate, its manifest cannot be read with the
+        registered sha256, or the manifest's ``# root=`` names neither the input's tree nor its original;
+        empty otherwise.
+    """
+    try:
+        entry, _ = read_registry_entry(base_dir, input_id)
+        manifest_rows(entry, profile)
+        path = profile.roots[entry.manifest.root] / entry.manifest.relpath
+        first = path.read_bytes().split(b"\n", 1)[0].decode()
+        named = os.path.normpath(first[len("# root=") :].split(" ")[0])
+        trees = [os.fspath(input_top(entry, profile))]
+        if (other := original_top(entry, profile)) is not None:
+            trees.append(os.fspath(other))
+    except (InputError, OSError, UnicodeDecodeError):
+        return [CODE]
+    return [] if named in trees else [CODE]
