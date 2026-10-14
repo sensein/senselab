@@ -236,6 +236,52 @@ def test_lint_exit_codes(site: Site, capsys: pytest.CaptureFixture[str]) -> None
     assert info.value.code == cli.EXIT_USAGE
 
 
+def test_lint_flags_unmapped_repos_and_submodules(site: Site, capsys: pytest.CaptureFixture[str]) -> None:
+    """With a mirror map, an unmapped step repository is a finding; under strict, so are unmapped submodules."""
+    sub = site.tmp / "upstream" / "lib"
+    sub.mkdir(parents=True)
+    _git(sub, "init", "-q")
+    (sub / "lib.py").write_text("VALUE = 1\n")
+    _git(sub, "add", "-A")
+    _git(sub, "commit", "-q", "-m", "lib")
+    top = site.tmp / "upstream" / "analysis"
+    top.mkdir(parents=True)
+    _git(top, "init", "-q")
+    (top / "step.py").write_text("print(1)\n")
+    _git(top, "-c", "protocol.file.allow=always", "submodule", "add", "-q", str(sub), "ext/lib")
+    _git(top, "config", "-f", ".gitmodules", "submodule.ext/lib.url", "https://git.example/org/lib.git")
+    _git(top, "add", "-A")
+    _git(top, "commit", "-q", "-m", "top")
+    commit = _git(top, "rev-parse", "HEAD").strip()
+    mirrors = site.tmp / "mirrors"
+    mirrors.mkdir()
+    _git(mirrors, "clone", "-q", "--mirror", str(top), "org__analysis.git")
+    _git(mirrors, "clone", "-q", "--mirror", str(sub), "org__lib.git")
+    path = site.manifest("demo", _step("prep", commit=commit), _step("other", repo="https://git.example/org/other.git"))
+    mapping = {"git@git.example:org/analysis.git": str(mirrors / "org__analysis.git")}
+
+    site.write_profile(mirror_map=mapping)
+    assert site.main("lint", str(path), *site.common()) == cli.EXIT_FAILED
+    out = capsys.readouterr().out.splitlines()
+    assert [line for line in out if "unmapped" in line] == [f"{path}:other: repo-unmapped other"]
+
+    site.write_profile(mirror_map=mapping, mirror_map_strict=True)
+    assert site.main("lint", str(path), *site.common()) == cli.EXIT_FAILED
+    out = capsys.readouterr().out.splitlines()
+    assert sorted(line for line in out if "unmapped" in line) == [
+        f"{path}:other: repo-unmapped other",
+        f"{path}:prep: submodule-unmapped prep 1",
+    ]
+
+    mapping["ssh://git@git.example/org/lib"] = str(mirrors / "org__lib.git")
+    site.write_profile(mirror_map=mapping, mirror_map_strict=True)
+    clean = site.manifest("demo", _step("prep", commit=commit), file="c.yaml")
+    assert site.main("lint", str(clean), *site.common()) == cli.EXIT_OK
+    assert capsys.readouterr().out == ""
+    site.write_profile()
+    assert site.main("lint", str(path), *site.common()) == cli.EXIT_OK
+
+
 # --- prefetch -------------------------------------------------------------------------------------------
 
 
@@ -304,8 +350,9 @@ def test_prefetch_passes_the_profile_and_deny_patterns_and_records_wheels(
     """Checkouts get the profile's deny patterns, ``prefetch_env`` the profile; a new wheels.lock sha is recorded."""
     seen: dict[str, Any] = {}
 
-    def checkout_step(step: Any, *, cache: Path, base_dir: Path, deny_patterns: Any) -> Any:  # noqa: ANN401
+    def checkout_step(step: Any, *, cache: Path, base_dir: Path, deny_patterns: Any, **kwargs: Any) -> Any:  # noqa: ANN401
         seen["deny"] = list(deny_patterns)
+        seen["mirror_map"] = kwargs["mirror_map"]
         return type("Co", (), {"worktree": site.tmp, "submodules": {}})()
 
     def prefetch_env(env_spec: Any, base_dir: Path, cache_dir: Path, **kwargs: Any) -> env.PrefetchResult:  # noqa: ANN401
@@ -319,6 +366,7 @@ def test_prefetch_passes_the_profile_and_deny_patterns_and_records_wheels(
     path = site.manifest("demo", _step("prep", env=sdist_env), _step("again", env=sdist_env))
     assert site.main("prefetch", str(path), *site.common()) == cli.EXIT_OK
     assert seen["deny"] == ["FORBIDDEN-[0-9]+"]
+    assert seen["mirror_map"] == {}
     assert seen["profile"] is not None and seen["profile"].deny_patterns_file == site.deny
     assert seen["calls"] == 1 and seen["wheels_lock"] == site.base / "wheels.lock"
     assert seen["wheelhouse"] == site.cache / cli.WHEELHOUSE
