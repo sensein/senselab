@@ -25,9 +25,10 @@ STATUS_CODES = {
     "timeout": "E_ENGINE_START_TIMEOUT",
     "version": "E_ENGINE_VERSION",
     "snapshot": "E_ENGINE_VERSION",
+    "error": "E_ENGINE_LAUNCH",
 }
-"""The step code of each `vllm_server.START_ERROR_KINDS` kind; a report that is absent or malformed is
-``E_ENGINE_FIT``."""
+"""The step code of each `vllm_server.START_ERROR_KINDS` kind, and of ``error`` (the launcher failed otherwise, e.g.
+no ``vllm`` in the venv); a report that is absent or malformed is ``E_ENGINE_FIT``."""
 NO_REPORT = "E_ENGINE_FIT"
 CODES = frozenset({*STATUS_CODES.values(), NO_REPORT})
 LOOPBACK = "127.0.0.1,localhost"
@@ -114,7 +115,7 @@ def status_code(report: bytes) -> str | None:
     try:
         lines = report.decode().splitlines()
         parsed = json.loads(lines[0]) if len(lines) == 1 else None
-    except (UnicodeDecodeError, ValueError):
+    except (UnicodeDecodeError, ValueError, RecursionError):
         return NO_REPORT
     status = parsed.get("status") if isinstance(parsed, dict) else None
     if status == READY:
@@ -123,7 +124,11 @@ def status_code(report: bytes) -> str | None:
 
 
 LAUNCHER_CODE = """\
-import json, os, signal, subprocess, sys, traceback
+import ctypes, json, os, signal, subprocess, sys, traceback
+try:
+    ctypes.CDLL(None).prctl(4, 0)
+except Exception:
+    pass
 sys.path.insert(0, sys.argv[1])
 from senselab.utils import vllm_server
 _fd, _config, _argv = int(sys.argv[2]), json.loads(sys.argv[3]), sys.argv[4:]
@@ -158,7 +163,7 @@ except vllm_server.VllmStartError as error:
 except BaseException:
     traceback.print_exc()
     _stop()
-    os.close(_fd)
+    _report("error")
     sys.exit(%(exit)d)
 os.environ["REPRO_ENGINE_URLS"] = ",".join(server.url for server in _servers)
 _report("ready")
@@ -168,10 +173,15 @@ def _forward(signum, frame):
     if _child is not None:
         _child.send_signal(signum)
 
-for _signal in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+_forwarded = (signal.SIGTERM, signal.SIGINT, signal.SIGHUP)
+signal.pthread_sigmask(signal.SIG_BLOCK, _forwarded)
+for _signal in _forwarded:
     signal.signal(_signal, _forward)
 try:
-    _child = subprocess.Popen(_argv)
+    try:
+        _child = subprocess.Popen(_argv, preexec_fn=lambda: signal.pthread_sigmask(signal.SIG_UNBLOCK, _forwarded))
+    finally:
+        signal.pthread_sigmask(signal.SIG_UNBLOCK, _forwarded)
     _code = _child.wait()
 finally:
     _stop()
@@ -179,8 +189,10 @@ sys.exit(_code if _code >= 0 else 128 - _code)
 """ % {"exit": EXIT_ENGINE}
 """Runs as ``<driver python> -I -B -c LAUNCHER_CODE <senselab root> <report fd> <launcher_config JSON> <step argv…>``.
 
-It reports ``{"status": "ready"}`` or ``{"status": <kind>}`` (a `vllm_server.VllmStartError` kind) on the report
-fd and closes it, so the step cannot write it; any other failure is printed to stderr and closes the fd without a
-report. Only ``ready`` runs the step, as a child that inherits the env plus ``REPRO_ENGINE_URLS`` (the servers'
-loopback URLs, comma-separated); the launcher forwards SIGTERM, SIGINT and SIGHUP to it, stops every server when it
-exits, and exits with its code (``128 + n`` for signal ``n``). When no server starts it exits `EXIT_ENGINE`."""
+It makes itself non-dumpable, so the servers cannot open its fds through ``/proc``. It reports ``{"status": "ready"}``,
+``{"status": <kind>}`` (a `vllm_server.VllmStartError` kind) or, on any other failure (printed to stderr), ``{"status":
+"error"}`` on the report fd and closes it before the step starts. The fd is open while the preamble runs in the step's
+venv, so the report is the launcher's only as far as that venv is trusted. Only ``ready`` runs the step, as a child that
+inherits the env plus ``REPRO_ENGINE_URLS`` (the servers' loopback URLs, comma-separated); the launcher forwards
+SIGTERM, SIGINT and SIGHUP to it (held back while the child starts), stops every server when it exits, and exits with
+its code (``128 + n`` for signal ``n``). When no server starts it exits `EXIT_ENGINE`."""

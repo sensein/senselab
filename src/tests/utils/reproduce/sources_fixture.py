@@ -46,7 +46,8 @@ def lock_data(steps: Iterable[StepSpec], registered: Mapping[str, Mapping[str, s
                 data.append(pattern)
         for w in step.hf_weights:
             model = {
-                "id": f"{w.repo.replace('/', '__')}-{w.revision[:8]}",
+                "id": f"{w.repo.replace('/', '__')}-{w.revision[:8]}"
+                + ("-dataset" if w.repo_type == "dataset" else ""),
                 "repo": w.repo,
                 "repo_type": w.repo_type,
                 "revision": w.revision,

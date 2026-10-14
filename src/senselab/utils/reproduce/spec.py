@@ -698,6 +698,7 @@ ENGINE_SERVER_FIELDS = frozenset(
 )
 """The `EngineSpec` fields only a ``vllm`` engine takes."""
 _SERVER_ARG = re.compile(r"^[!-~]{1,256}$")
+_ABSOLUTE = re.compile(r"(^|[=:,\"'{\[])[/~]")
 
 
 def version_tuple(text: str) -> tuple[int, ...]:
@@ -712,11 +713,11 @@ def version_tuple(text: str) -> tuple[int, ...]:
 def _server_arg_error(arg: str) -> str | None:
     if not _SERVER_ARG.match(arg):
         return "is empty, too long, or holds a space or a non-ASCII character"
-    if arg.startswith("/") or "=/" in arg:
+    if _ABSOLUTE.search(arg):
         return "names an absolute path"
-    if arg.startswith(vllm_server.CONTENT_LOGGING_PREFIXES):
+    if vllm_server.refused_arg(arg):
         return "could log request or output content"
-    name = arg.split("=", 1)[0]
+    name = vllm_server.option_name(arg)
     if name.startswith("--") and len(name) > 2 and any(flag.startswith(name) for flag in ENGINE_RESERVED_FLAGS):
         return "names a flag the driver sets or refuses"
     return None
@@ -732,13 +733,14 @@ class EngineModel(_Model):
 class EngineSpec(_Model):
     """The inference engine of a step, all of it declared so that it is keyed (`engine.engine_identity`).
 
-    ``vllm``: the driver serves ``model`` from the step's hub view with ``servers_per_card`` servers of its own
-    venv's ``vllm``, sized by ``max_num_seqs`` and ``max_model_len`` (both required), with the valued flags and
-    switches built from the remaining fields, then ``server_args`` in order; the step reaches them over loopback
-    (`engine`). ``server_args`` may not name a flag the driver sets or refuses (`ENGINE_RESERVED_FLAGS`, or an
-    abbreviation), a content-logging flag, or an absolute path. ``transformers-batched``: no server; only its
-    ``version``, ``concurrency`` and ``batch_size`` are declared and keyed (`ENGINE_SERVER_FIELDS` are refused).
-    ``startup_timeout_s`` is not keyed.
+    ``vllm``: the driver serves ``model`` from the step's hub view with ``servers_per_card`` servers of its own venv's
+    ``vllm``, sized by ``max_num_seqs`` and ``max_model_len`` (both required), with the valued flags and switches built
+    from the remaining fields, then ``server_args`` in order; the step reaches them over loopback (`engine`).
+    ``server_args`` may not name a flag the driver sets or refuses (`ENGINE_RESERVED_FLAGS`, or an abbreviation, in
+    either spelling of dashes and underscores), a content-logging flag (`vllm_server.refused_arg`), or an absolute or
+    home path (at the start or after ``=``, ``:``, ``,``, a quote, ``{`` or ``[``). ``transformers-batched``: no server;
+    only its ``version``, ``concurrency`` and ``batch_size`` are declared and keyed (`ENGINE_SERVER_FIELDS` are
+    refused). ``startup_timeout_s`` is not keyed.
     """
 
     name: Literal["vllm", "transformers-batched"]
