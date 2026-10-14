@@ -230,6 +230,22 @@ def test_driver_may_write_driver_keys() -> None:
     assert _codes(obj, writer="driver") == ["E_METRICS_NOT_NUMBER"]
 
 
+def test_verdict_is_driver_only_and_tokenised() -> None:
+    """``verdict`` is a driver key from a fixed vocabulary; ``chain1_pass`` is a bool; the band numbers are numbers."""
+    obj = _obj()
+    obj["headline"][0]["verdict"] = "pass"
+    assert _codes(obj) == ["E_METRICS_DRIVER_KEY"]
+    band = {"verdict": "uninformative", "floor_used": 0.5, "lift_used": -0.03, "sd": 0.01, "chain1_pass": False}
+    obj["headline"][0].update(band)
+    assert _codes(obj, writer="driver") == []
+    obj["headline"][0]["verdict"] = "maybe"
+    assert _codes(obj, writer="driver") == ["E_METRICS_BAD_TOKEN"]
+    obj["headline"][0].update(verdict="fail", chain1_pass=1)
+    assert _codes(obj, writer="driver") == ["E_METRICS_NOT_BOOL"]
+    obj["headline"][0].update(chain1_pass=True, sd="0.01")
+    assert _codes(obj, writer="driver") == ["E_METRICS_NOT_NUMBER"]
+
+
 def test_classification_without_prevalence_is_rejected() -> None:
     """Classification without prevalence is rejected."""
     obj = _obj()

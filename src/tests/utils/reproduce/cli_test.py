@@ -195,6 +195,12 @@ def test_lint_exit_codes(site: Site, capsys: pytest.CaptureFixture[str]) -> None
     assert site.main("lint", str(no_adapter), *site.common()) == cli.EXIT_FAILED
     assert "adapter-missing" in capsys.readouterr().out
 
+    band = {"stored": 0.505, "unit": "fraction", "floor": 0.5, "floor_source": "declared-zero", "chains": ["a", "b"]}
+    banded = _step("g", needs=["a", "b"], expect=[{"metric": "f_stat", "kind": "seed_band", "band": band}])
+    near_chance = site.manifest("demo", _step("a"), _step("b"), banded, file="w.yaml")
+    assert site.main("lint", str(near_chance), *site.common()) == cli.EXIT_OK
+    assert "W_BAND_AMIN_WIDE g f_stat" in capsys.readouterr().out
+
     assert site.main("lint", str(site.base / "absent.yaml"), *site.common()) == cli.EXIT_USAGE
     with pytest.raises(SystemExit) as info:
         site.main("lint", "--no-such-option")

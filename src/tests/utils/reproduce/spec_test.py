@@ -345,6 +345,25 @@ def test_expect_needs_one_target_and_one_tolerance() -> None:
             StepSpec.model_validate(_step(needs=["x"], expect=[expect]))
 
 
+def test_seed_band_shape_rho_and_needs_validators() -> None:
+    """A ``seed_band`` takes only a band, ``rho < max_width_frac``, chains in needs, values in range."""
+    band = {"stored": 70.0, "unit": "pp", "floor": 50.0, "floor_source": "expected_floor", "chains": ["a", "b"]}
+    good = {"metric": "top1", "kind": "seed_band", "band": band}
+    step = StepSpec.model_validate(_step(needs=["a", "b"], expect=[good]))
+    assert step.expect[0].band is not None and step.expect[0].band.a_min == 0.2
+    cases: list[tuple[dict[str, Any], list[str], str]] = [
+        ({"metric": "top1", "kind": "seed_band"}, ["a", "b"], "E_SPEC_BAND_SHAPE"),
+        ({**good, "tolerance": 0.5}, ["a", "b"], "E_SPEC_BAND_SHAPE"),
+        ({**good, "band": {**band, "rho": 0.3}}, ["a", "b"], "E_SPEC_BAND_RHO"),
+        ({**good, "band": {**band, "chains": ["a", "c"]}}, ["a", "b"], "outside its needs"),
+        ({**good, "band": {**band, "stored": 0.7, "unit": "fraction"}}, ["a", "b"], "outside its range"),
+        ({**good, "metric": "counts.n_systems"}, ["a", "b"], "E_SPEC_EXPECT_UNIT"),
+    ]
+    for expect, needs, message in cases:
+        with pytest.raises(ValidationError, match=message):
+            StepSpec.model_validate(_step(needs=needs, expect=[expect]))
+
+
 def test_escaped_braces_are_not_placeholders() -> None:
     """Doubled braces are literal text, not placeholders."""
     step = StepSpec.model_validate(_step(argv=["awk", "{{print $1}}", "{out}/a"]))

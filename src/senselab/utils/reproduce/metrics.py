@@ -30,8 +30,9 @@ ci_high`` (``E_METRICS_RANGE``); ``floor`` takes the value's bounds and ``lift``
 minus their width. Per-class recall, precision and f1 lie in [0, 1]. With a top-level ``n``, a class
 prevalence above 0 but below ``1/n`` (less than one example) gives ``E_METRICS_PREVALENCE_SUBSAMPLE``.
 
-``delta``, ``target``, ``tolerance`` and ``pass`` are written only by the driver, at the top level, in a
-headline entry or in a ``per_class`` entry.
+``delta``, ``target``, ``tolerance`` and ``pass``, and a ``seed_band``'s ``verdict`` (one of `VERDICTS`),
+``floor_used``, ``lift_used``, ``sd`` and ``chain1_pass`` (a bool), are written only by the driver, at the
+top level, in a headline entry or in a ``per_class`` entry.
 
 **Classification** (single-label) and **detection** steps must carry:
 
@@ -116,7 +117,13 @@ SPLIT_UNITS = ("subject", "family", "session", "video", "clip", "recording", "ro
 SPLIT_STRATIFY = ("none", "class", "class_timepoint", "class_site", "class_age", "timepoint")
 FOLD_KEYS = ("n_groups", "prevalence")
 TUNING_SPLITS = ("validation", "none", "test")
-DRIVER_KEYS = frozenset({"delta", "target", "tolerance", "pass"})
+DRIVER_KEYS = frozenset(
+    {"delta", "target", "tolerance", "pass", "verdict", "floor_used", "lift_used", "sd", "chain1_pass"}
+)
+DRIVER_BOOLS = frozenset({"pass", "chain1_pass"})
+VERDICTS = ("pass", "fail", "uninformative", "characterise")
+"""A ``seed_band`` verdict, worst first in `VERDICT_ORDER`."""
+VERDICT_ORDER = ("fail", "uninformative", "characterise", "pass")
 TOP_KEYS = frozenset(
     {"headline", "secondary", "per_class", "confusion", "counts", "split_report", "threshold_tuning", "n", "n_folds"}
 )
@@ -266,9 +273,11 @@ class _Check:
             if key in DRIVER_KEYS and self.writer == "adapter":
                 self.codes.add("E_METRICS_DRIVER_KEY")
             elif key in DRIVER_KEYS and driver:
-                if key == "pass" and not isinstance(obj[key], bool):
+                if key in DRIVER_BOOLS and not isinstance(obj[key], bool):
                     self.codes.add("E_METRICS_NOT_BOOL")
-                elif key != "pass" and not _is_number(obj[key]):
+                elif key == "verdict":
+                    self.word(obj, key, VERDICTS)
+                elif key not in DRIVER_BOOLS and not _is_number(obj[key]):
                     self.codes.add("E_METRICS_NOT_NUMBER")
             elif key not in allowed:
                 self.codes.add("E_METRICS_UNKNOWN_KEY")
@@ -679,3 +688,43 @@ def metric_value(obj: Mapping[str, Any], address: str) -> float:
         raise MetricsError("E_METRICS_ABSENT")
     assert isinstance(value, (int, float))
     return value
+
+
+def metric_with_unit(obj: Mapping[str, Any], address: str) -> tuple[float, str | None]:
+    """A metric's value and unit.
+
+    Args:
+        obj: A clean object returned by `validate_metrics`.
+        address: A metric address (see `metric_address_error`).
+
+    Returns:
+        ``(value, unit)``: the unit is an entry's ``unit`` (default ``fraction``), ``fraction`` for a
+        per-class rate, None for a count or statistic.
+
+    Raises:
+        MetricsError: As `metric_value`.
+    """
+    value = metric_value(obj, address)
+    if metric_quantity(address) not in SCALED_QUANTITIES:
+        return value, None
+    if address.startswith("per_class."):
+        return value, "fraction"
+    entry = metric_entry(obj, address)
+    return value, str(entry.get("unit", "fraction")) if entry is not None else "fraction"
+
+
+def metric_entry(obj: Mapping[str, Any], address: str) -> dict[str, Any] | None:
+    """The first headline or secondary entry a ``<name>`` or ``<name>@<label>`` address names, else None."""
+    name, _, label = address.partition("@")
+    for entry in (*obj.get("headline", []), *obj.get("secondary", [])):
+        if entry.get("name") == name and (entry.get("label") == label if label else True):
+            found: dict[str, Any] = entry
+            return found
+    return None
+
+
+def convert_unit(value: float, unit: str | None, to: str | None) -> float:
+    """Convert a value between ``fraction`` and ``pp`` (= 100 x ``fraction``); None on either side keeps it."""
+    if unit is None or to is None or unit == to:
+        return value
+    return value * 100.0 if to == "pp" else value / 100.0
