@@ -151,7 +151,7 @@ INTEGRITY_CODES = frozenset(
     }
 )
 """Codes on which an attempt's kept store is removed before the summary is written."""
-RUN_LOCK = ".run.json.lock"
+RUN_LOCK = ".run.json"  # `build.exclusive_lock(run / RUN_LOCK)` locks `.run.json.lock` beside run.json
 PENDING = "pending"
 RESERVED_NAMES = DRIVER_FILE_NAMES
 NOTEBOOK_KINDS = frozenset({"notebook", "ir_notebook"})
@@ -2436,7 +2436,7 @@ def update_run_record(
     """
     run = cache.run_dir(runs_root, date, analysis)
     run.mkdir(parents=True, exist_ok=True)
-    with build.file_lock(run / RUN_LOCK):
+    with build.exclusive_lock(run / RUN_LOCK):
         current = {r["step"]: r for r in read_run_record(run / RUN_JSON)}
         for row in rows:
             old = current.get(row["step"])
@@ -2499,7 +2499,7 @@ def reserve_run_record(
     """
     run = cache.run_dir(runs_root, date, analysis)
     run.mkdir(parents=True, exist_ok=True)
-    with build.file_lock(run / RUN_LOCK):
+    with build.exclusive_lock(run / RUN_LOCK):
         current = {r["step"]: r for r in read_run_record(run / RUN_JSON)}
         others = sorted(
             {
@@ -2534,7 +2534,7 @@ def release_reservation(
     ``never-ran`` with ``codes``, tagged with this submission.
     """
     run = cache.run_dir(runs_root, date, analysis)
-    with build.file_lock(run / RUN_LOCK):
+    with build.exclusive_lock(run / RUN_LOCK):
         current = {r["step"]: r for r in read_run_record(run / RUN_JSON)}
         for name in order:
             row = current.get(name)

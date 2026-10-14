@@ -378,10 +378,15 @@ the `REPRO_UV` pin and its `ReproduceLockError`, and otherwise asks `uv_tools.fi
 comes from its pinned `PATH`, never from a home install. The exclusive locks of `env` and `build` (venv and R library
 rebuilds, `wheels.lock` writes) are `SharedFileLock`s (`build.exclusive_lock`) on the same `<resource>.lock` file the
 steps' shared `file_lock` takes, so readers and writers still exclude each other; they wait with no timeout, as the
-`flock` did, record their holder and heartbeat beside the lock, and leave the directory's mode alone. `file_lock`
-stays for the shared (reader) locks. `filelock` (3.29) unlinks the lock file before it unlocks, so a reader that was
-waiting on the old file would hold a lock no later writer sees: `file_lock` therefore checks, after `flock`, that the
-file it locked is still the one at the path, and retries on the new one otherwise. Side effects of the switch: the
+`flock` did, record their holder and heartbeat beside the lock, and leave the directory's mode alone. The other
+exclusive locks (the `input-verify/` records files, `run.json`) are `build.exclusive_lock`s too (A17 fix round 1);
+`file_lock` is only the shared (reader) lock. `filelock` (3.29) unlinks the lock file before it unlocks and keeps a
+lock unless the locked file has no links; on NFS the releasing client silly-renames a file it still has open, so
+the old file keeps a link, and a waiter (reader or writer) that opened it before the release would hold a lock no
+later caller sees. Both `SharedFileLock` (for every writer) and `file_lock` (for readers) therefore check, after
+`flock`, that the file they locked is still the one at the path, by opening the path and comparing `fstat`
+(`senselab.utils.file_lock.lock_fd_matches_path`; never `stat`, which NFS can answer from a cached dentry), and
+retry on the file now there otherwise. Side effects of the switch: the
 `.lock`, `.holder` and `.heartbeat` files get `SharedFileLock`'s fixed mode 0o664 rather than 0o666 less the umask
 (the dirs that hold them stay as the umask made them), a killed builder leaves `.holder`/`.heartbeat` beside the lock
 (including `wheels.lock.holder` in a manifest repo, which that repo should ignore), and a thread that blocks on a lock
