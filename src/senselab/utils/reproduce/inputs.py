@@ -56,6 +56,20 @@ def _row_ref(value: str) -> str:
 RowRef = Annotated[str, AfterValidator(_row_ref)]
 
 
+def check_patterns(patterns: list[str]) -> list[str]:
+    """Refuse a pattern outside the `digest` grammar (absolute, empty, or with an empty, ``.`` or ``..`` part).
+
+    Raises:
+        ValueError: For such a pattern.
+    """
+    try:
+        for pattern in patterns:
+            digest._check_pattern(pattern)
+    except digest.DigestError:
+        raise ValueError("a pattern is outside the digest grammar") from None
+    return patterns
+
+
 class InputError(Exception):
     """A registry entry or manifest could not be used; the message is the fixed code only."""
 
@@ -117,6 +131,11 @@ class RegisteredInput(_Model):
         "external-validation",
     ]
     original: OriginalRef | None = None
+
+    @field_validator("include", "exclude")
+    @classmethod
+    def _patterns(cls, value: list[str]) -> list[str]:
+        return check_patterns(value)
 
     @field_validator("rows", mode="before")
     @classmethod
@@ -205,7 +224,8 @@ def read_manifest(path: Path, expected_sha256: str) -> list[Row]:
 
     Raises:
         InputError: ``E_INPUT_REGISTRY`` for a missing or unreadable file, a sha256 other than
-            ``expected_sha256``, a missing ``# root=`` line or header, a malformed row, or an ``ERR:`` hash.
+            ``expected_sha256``, a missing ``# root=`` line or header, a malformed row, an ``ERR:`` hash, or a
+            relpath that is absolute, has an empty, ``.`` or ``..`` component, or is not strictly ascending.
     """
     try:
         data = Path(path).read_bytes()
@@ -223,12 +243,18 @@ def read_manifest(path: Path, expected_sha256: str) -> list[Row]:
         with_sha = header == (*MANIFEST_COLUMNS, SHA256_COLUMN)
         if header != MANIFEST_COLUMNS and not with_sha:
             raise ValueError("bad header")
-        rows = []
+        rows: list[Row] = []
         for line in lines[2:]:
             fields = line.split("\t")
             if len(fields) != len(header):
                 raise ValueError("bad row")
-            rows.append(_parse_row(fields, with_sha))
+            row = _parse_row(fields, with_sha)
+            parts = row.relpath.split("/")
+            if row.relpath.startswith("/") or any(p in ("", ".", "..") for p in parts):
+                raise ValueError("bad relpath")
+            if rows and row.relpath <= rows[-1].relpath:
+                raise ValueError("relpaths not strictly ascending")
+            rows.append(row)
     except (UnicodeDecodeError, ValueError):
         raise InputError(CODE) from None
     return rows
@@ -263,15 +289,30 @@ def _selected(rel: str, include: Sequence[str], exclude: Sequence[str]) -> bool:
     return not any(digest.pattern_matches(rel, p) for p in exclude)
 
 
-def _starts(root: str, include: Sequence[str]) -> tuple[list[str], list[str]]:
-    """The literal includes to ``lstat`` and the directories to walk, pruned to the includes' fixed prefixes."""
-    if not include:
-        return [], [""]
-    literal = [p for p in include if not digest._WILD.search(p)]
-    files = [p for p in literal if not os.path.isdir(os.path.join(root, p)) or os.path.islink(os.path.join(root, p))]
-    bases = {p for p in literal if p not in files} | {digest._base(p) for p in include if digest._WILD.search(p)}
-    walks = sorted(b for b in bases if not any(o != b and (o == "" or b.startswith(o + "/")) for o in bases))
-    return files, walks
+def _lstat_path(top: str, rel: str) -> tuple[str, str]:
+    """``lstat`` each component of ``rel`` under ``top``, never following a symlink.
+
+    Returns:
+        ``("link", prefix)`` at the first symlinked component, ``("missing", prefix)`` where the path
+        stops existing (or a non-final component is not a directory), else ``("dir" | "file", rel)``.
+
+    Raises:
+        OSError: When a component cannot be ``lstat``-ed for another reason.
+    """
+    parts = rel.split("/") if rel else []
+    for index in range(len(parts)):
+        prefix = "/".join(parts[: index + 1])
+        try:
+            st = os.lstat(os.path.join(top, prefix))
+        except (FileNotFoundError, NotADirectoryError):
+            return "missing", prefix
+        if stat.S_ISLNK(st.st_mode):
+            return "link", prefix
+        if index < len(parts) - 1 and not stat.S_ISDIR(st.st_mode):
+            return "missing", prefix
+        if index == len(parts) - 1:
+            return ("dir" if stat.S_ISDIR(st.st_mode) else "file"), rel
+    return "dir", rel
 
 
 def write_manifest(
@@ -289,7 +330,9 @@ def write_manifest(
         out: The manifest file to write.
         include: Patterns (the `digest` grammar) selecting what is recorded; empty records everything. A
             pattern with no wildcard is ``lstat``-ed directly (a literal directory is walked whole), and a
-            wildcard pattern walks only from its wildcard-free leading directories.
+            wildcard pattern walks only from its wildcard-free leading directories. Each component of a
+            literal path or a walk's base is ``lstat``-ed; a symlinked component is recorded as a link row
+            and not followed.
         exclude: Patterns whose matches are left out.
         sha256: Also record each file's sha256, as a sixth column.
 
@@ -297,7 +340,8 @@ def write_manifest(
         ``{"entries", "links", "unreadable", "walk_errors", "bytes"}`` counts.
 
     Raises:
-        InputError: ``E_INPUT_REGISTRY`` for a pattern outside the grammar or a root that is not a directory.
+        InputError: ``E_INPUT_REGISTRY`` for a pattern outside the grammar, a root that is not a directory,
+            or a literal include that is missing or cannot be ``lstat``-ed.
     """
     top = os.fspath(root)
     try:
@@ -307,25 +351,46 @@ def write_manifest(
         raise InputError(CODE) from None
     if not os.path.isdir(top):
         raise InputError(CODE)
-    patterns = [
-        f"{p}/**" if p and not digest._WILD.search(p) and os.path.isdir(os.path.join(top, p)) else p for p in include
-    ]
-    files, walks = _starts(top, include)
+    patterns: list[str] = []
+    files: list[str] = []
+    bases: set[str] = set() if include else {""}
+    links: set[str] = set()
     errors: list[str] = []
+    for pattern in include:
+        literal = not digest._WILD.search(pattern)
+        try:
+            kind, at = _lstat_path(top, pattern if literal else digest._base(pattern))
+        except OSError:
+            if literal:
+                raise InputError(CODE) from None
+            errors.append(pattern)
+            continue
+        if kind == "missing" and literal:
+            raise InputError(CODE)
+        if kind == "link":
+            links.add(at)
+        elif kind == "dir":
+            bases.add(at)
+            patterns.append(f"{pattern}/**" if literal else pattern)
+        elif kind == "file":
+            files.append(at)
+            patterns.append(pattern)
+    walks = sorted(b for b in bases if not any(o != b and (o == "" or b.startswith(o + "/")) for o in bases))
     found: dict[str, tuple[str, ...]] = {}
 
     def visit(path: str) -> tuple[str, ...] | None:
         rel = os.path.relpath(path, top).replace(os.sep, "/")
         return _row(path, rel, sha256) if _selected(rel, patterns, exclude) else None
 
-    for literal in files:
-        path = os.path.join(top, literal)
-        if os.path.lexists(path) and (row := visit(path)) is not None:
+    for rel in sorted(links):
+        if not _selected(rel, (), exclude):
+            continue
+        found[rel] = _row(os.path.join(top, rel), rel, sha256)
+    for rel_file in files:
+        if (row := visit(os.path.join(top, rel_file))) is not None:
             found[row[0]] = row
     for base in walks:
         start = os.path.join(top, base) if base else top
-        if not os.path.isdir(start):
-            continue
         for row in fastio.map_files(start, visit, links_as_files=True, on_error=lambda p, e: errors.append(p)):
             if row is not None:
                 found[row[0]] = row
@@ -352,6 +417,9 @@ def _atomic_write(path: Path, data: bytes) -> None:
             handle.write(data)
             handle.flush()
             os.fsync(handle.fileno())
+        mask = os.umask(0)
+        os.umask(mask)
+        os.chmod(tmp, 0o666 & ~mask)
         os.replace(tmp, path)
     finally:
         if os.path.exists(tmp):

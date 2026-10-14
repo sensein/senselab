@@ -288,15 +288,30 @@ def _patch_findings(where: str, step: StepSpec, base: Path, deny: Sequence[str])
     return out
 
 
-def _lock_findings(path: Path, manifest: Manifest, base: Path) -> list[str]:
-    """Each manifest's sources lock: its sha256, and every step's pins and ``lock_inputs`` against it."""
+def _checked_submodules(step: StepSpec, cache_dir: Path | None) -> dict[str, str] | None:
+    """The submodule commits of the step's prefetched checkout, when one exists; None otherwise."""
+    if cache_dir is None:
+        return None
+    try:
+        co = source.prefetched_checkout(step, cache=cache_dir)
+    except source.ReproduceSourceError:
+        return None
+    return co.submodules if step.submodules else {}
+
+
+def _lock_findings(path: Path, manifest: Manifest, base: Path, cache_dir: Path | None) -> list[str]:
+    """Each manifest's sources lock: its sha256, and every step's pins and ``lock_inputs`` against it.
+
+    Submodule commits are compared when ``cache_dir`` holds the step's prefetched checkout.
+    """
     try:
         sources_lock, _ = lock.load_lock(base, manifest.sources)
     except lock.LockError as error:
         return [f"{path}: {error.code} {manifest.sources.lock}"]
     out = []
     for step in manifest.steps:
-        out += [f"{path}:{step.name}: {code} {detail}" for code, detail in lock.step_findings(step, sources_lock)]
+        found = lock.step_findings(step, sources_lock, _checked_submodules(step, cache_dir))
+        out += [f"{path}:{step.name}: {code} {detail}" for code, detail in found]
         for input_id in step.lock_inputs:
             try:
                 lock.resolve_inputs(base, sources_lock, [input_id])
@@ -306,7 +321,14 @@ def _lock_findings(path: Path, manifest: Manifest, base: Path) -> list[str]:
     return out
 
 
-def lint_findings(paths: Sequence[Path], profile_path: Path, base: Path, *, skip_locks: bool = False) -> list[str]:
+def lint_findings(
+    paths: Sequence[Path],
+    profile_path: Path,
+    base: Path,
+    *,
+    skip_locks: bool = False,
+    cache_dir: Path | None = None,
+) -> list[str]:
     """Check manifests, their sources locks and their patches against a profile.
 
     Args:
@@ -314,6 +336,8 @@ def lint_findings(paths: Sequence[Path], profile_path: Path, base: Path, *, skip
         profile_path: The profile file.
         base: The manifest repository.
         skip_locks: Leave out the sources-lock checks and report the warning ``W_LOCKS_SKIPPED`` instead.
+        cache_dir: The reproduce cache; a step's submodule commits are checked against its lock entry when
+            the cache holds its prefetched checkout.
 
     Returns:
         One line per finding, ``<where>: <code> <detail>``; empty when clean. Codes: ``profile-invalid``,
@@ -374,7 +398,7 @@ def lint_findings(paths: Sequence[Path], profile_path: Path, base: Path, *, skip
         out.append(f"{', '.join(str(p) for p in paths)}: W_LOCKS_SKIPPED")
     else:
         for path, manifest in loaded:
-            out += _lock_findings(path, manifest, base)
+            out += _lock_findings(path, manifest, base, cache_dir)
     return out
 
 
@@ -592,7 +616,7 @@ def _cmd_prefetch(args: argparse.Namespace) -> int:
         return EXIT_OK
     profile = _profile(args)
     base = _base_dir(args, paths[0])
-    findings = lint_findings(paths, Path(args.profile), base)
+    findings = lint_findings(paths, Path(args.profile), base, cache_dir=cache_dir)
     if findings:
         print("\n".join(findings))
     if blocking(findings):
@@ -615,6 +639,12 @@ def _cmd_prefetch(args: argparse.Namespace) -> int:
         done: list[tuple[EnvSpec, env.PrefetchResult]] = []
         for step in manifest.steps:
             co = source.checkout_step(step, cache=cache_dir, base_dir=base, deny_patterns=deny)
+            sources_lock, _ = lock.load_lock(base, manifest.sources)
+            submodules = co.submodules if step.submodules else {}
+            found = [f"{c} {d}" for c, d in lock.step_findings(step, sources_lock, submodules)]
+            if found:
+                _error(f"{path}:{step.name}: {', '.join(found)}")
+                return EXIT_FAILED
             result = next((r for e, r in done if e == step.env), None)
             if result is None:
                 result = _prefetch_env(step, co.worktree, manifest.name, path, profile, base, cache_dir, args.rebuild)
@@ -810,7 +840,7 @@ def _cmd_submit(args: argparse.Namespace) -> int:
     profile = _profile(args)
     _require(paths)
     base, cache_dir = _base_dir(args, paths[0]), _cache_dir(args)
-    findings = lint_findings(paths, Path(args.profile), base)
+    findings = lint_findings(paths, Path(args.profile), base, cache_dir=cache_dir)
     if findings:
         print("\n".join(findings))
     if blocking(findings):
@@ -879,6 +909,8 @@ def _cmd_lint(args: argparse.Namespace) -> int:
     paths = list(args.manifests)
     if not paths and args.lock is None:
         raise UsageError("give manifests, --lock or both")
+    if not paths and args.skip_locks:
+        raise UsageError("--skip-locks applies to manifests, not to --lock alone")
     _require([*paths, *([args.lock] if args.lock is not None else [])])
     findings: list[str] = []
     if args.lock is not None:
@@ -887,7 +919,14 @@ def _cmd_lint(args: argparse.Namespace) -> int:
     if paths:
         if args.profile is None:
             raise UsageError("--profile is required with manifests")
-        findings += lint_findings(paths, Path(args.profile), _base_dir(args, paths[0]), skip_locks=args.skip_locks)
+        cache_value = args.cache or os.environ.get(slurm.CACHE_VARIABLE)
+        findings += lint_findings(
+            paths,
+            Path(args.profile),
+            _base_dir(args, paths[0]),
+            skip_locks=args.skip_locks,
+            cache_dir=Path(cache_value).absolute() if cache_value else None,
+        )
     if findings:
         print("\n".join(findings))
     return EXIT_FAILED if blocking(findings) else EXIT_OK

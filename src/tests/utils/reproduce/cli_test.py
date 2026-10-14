@@ -230,6 +230,7 @@ def test_lint_exit_codes(site: Site, capsys: pytest.CaptureFixture[str]) -> None
 
     assert site.main("lint", str(site.base / "absent.yaml"), *site.common()) == cli.EXIT_USAGE
     assert site.main("lint", *site.common()) == cli.EXIT_USAGE
+    assert site.main("lint", "--lock", str(lock_file), "--skip-locks", "--base-dir", str(site.base)) == cli.EXIT_USAGE
     with pytest.raises(SystemExit) as info:
         site.main("lint", "--no-such-option")
     assert info.value.code == cli.EXIT_USAGE
@@ -305,7 +306,7 @@ def test_prefetch_passes_the_profile_and_deny_patterns_and_records_wheels(
 
     def checkout_step(step: Any, *, cache: Path, base_dir: Path, deny_patterns: Any) -> Any:  # noqa: ANN401
         seen["deny"] = list(deny_patterns)
-        return type("Co", (), {"worktree": site.tmp})()
+        return type("Co", (), {"worktree": site.tmp, "submodules": {}})()
 
     def prefetch_env(env_spec: Any, base_dir: Path, cache_dir: Path, **kwargs: Any) -> env.PrefetchResult:  # noqa: ANN401
         seen["calls"] = seen.get("calls", 0) + 1
@@ -328,7 +329,9 @@ def test_prefetch_passes_the_profile_and_deny_patterns_and_records_wheels(
 
 def test_a_changed_wheels_sha_is_written_in_place_keeping_comments(site: Site, monkeypatch: pytest.MonkeyPatch) -> None:
     """A recorded sha that changed is replaced in the file text, so comments and layout survive."""
-    monkeypatch.setattr(source, "checkout_step", lambda step, **kw: type("Co", (), {"worktree": site.tmp})())
+    monkeypatch.setattr(
+        source, "checkout_step", lambda step, **kw: type("Co", (), {"worktree": site.tmp, "submodules": {}})()
+    )
     monkeypatch.setattr(
         env,
         "prefetch_env",
@@ -443,7 +446,9 @@ def test_lock_from_a_repository_uv_lock(site: Site, monkeypatch: pytest.MonkeyPa
     checkout = site.tmp / "checkout"
     checkout.mkdir()
     (checkout / "uv.lock").write_text('[[package]]\nname = "torch"\nversion = "2.8.0"\n')
-    monkeypatch.setattr(source, "checkout_step", lambda step, **kw: type("Co", (), {"worktree": checkout})())
+    monkeypatch.setattr(
+        source, "checkout_step", lambda step, **kw: type("Co", (), {"worktree": checkout, "submodules": {}})()
+    )
     order: list[str] = []
 
     def torch_lock(env_spec: Any, base_dir: Path, uv_lock: Path, roots: Any) -> list[str]:  # noqa: ANN401
@@ -646,7 +651,9 @@ def _cuda_manifest(site: Site) -> Path:
 
 def _no_install(monkeypatch: pytest.MonkeyPatch, site: Site) -> list[str]:
     calls: list[str] = []
-    monkeypatch.setattr(source, "checkout_step", lambda step, **kw: type("Co", (), {"worktree": site.tmp})())
+    monkeypatch.setattr(
+        source, "checkout_step", lambda step, **kw: type("Co", (), {"worktree": site.tmp, "submodules": {}})()
+    )
 
     def prefetch_env(e: Any, b: Path, c: Path, **kw: Any) -> env.PrefetchResult:  # noqa: ANN401
         calls.append("prefetch_env")
