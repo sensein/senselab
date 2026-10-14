@@ -23,7 +23,7 @@ from typing import Any
 import pytest
 
 import senselab
-from senselab.utils.reproduce import cache, digest, env, host, provenance, restricted, run, sandbox, source
+from senselab.utils.reproduce import cache, digest, env, host, provenance, restricted, run, sandbox, source, weights
 from senselab.utils.reproduce.digest import input_set_digest
 from senselab.utils.reproduce.run import RunConfig, StepOutcome, evaluate_expect, run_step, run_steps
 from senselab.utils.reproduce.spec import Manifest, Profile, SourcesRef, StepSpec
@@ -233,8 +233,15 @@ class World:
         return self.manifest(prep, score)
 
     def prefetch(self, manifest: Manifest, *, checked: bool = True) -> None:
-        """Check out every step and give it a stdlib venv with a marker, as `env.prefetch_env` would."""
+        """Check out every step and give it a stdlib venv with a marker, as `env.prefetch_env` would.
+
+        Each weights file present is stamped as verified, as prefetch's sha256 check would (`weights.write_stamp`).
+        """
+        profile = self.profile()
         for step in manifest.steps:
+            for file, sha256 in weights.declared_files(step, profile):
+                if file is not None and file.is_file():
+                    weights.write_stamp(self.cache / weights.STAMPS_DIR, file, sha256)
             source.checkout_step(step, cache=self.cache, base_dir=self.base)
             path, overlay = run._step_venv(step, manifest.name, self.cache)
             if not (path / "bin" / "python").exists():

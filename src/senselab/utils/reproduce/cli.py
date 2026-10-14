@@ -759,8 +759,11 @@ def _cmd_prefetch_masked(args: argparse.Namespace) -> int:
     steps = [s for m in manifests for s in m.steps]
     if any(s.hf_weights or s.url_weights for s in steps):
         registry = _weights_registry(manifests, base)
-        failed = weights.verify_hf(steps, profile, registry) if any(s.hf_weights for s in steps) else []
-        failed += weights.verify_url(steps, profile, registry) if any(s.url_weights for s in steps) else []
+        stamps = cache_dir / weights.STAMPS_DIR
+        hf = any(s.hf_weights for s in steps)
+        failed = weights.verify_hf(steps, profile, registry, stamps=stamps) if hf else []
+        url = any(s.url_weights for s in steps)
+        failed += weights.verify_url(steps, profile, registry, stamps=stamps) if url else []
         if failed:
             _error("; ".join(failed))
             return EXIT_FAILED

@@ -147,6 +147,9 @@ def test_a_missing_weight_blocks_the_dry_run_and_submit(tmp_path: Path) -> None:
     assert outcome.status == "failed" and outcome.codes == ("E_WEIGHTS_MISSING",)
     make_snapshot(_hub(world), REPO, REVISION, {"weights.bin": WEIGHTS})
     (plan,) = run.plan_steps([manifest], world.config())
+    assert (plan.status, plan.codes) == ("blocked", ("E_WEIGHTS_UNVERIFIED",))  # not stamped by a prefetch yet
+    world.prefetch(manifest)
+    (plan,) = run.plan_steps([manifest], world.config())
     assert plan.status == "will-execute", plan.codes
 
 
@@ -522,3 +525,62 @@ def test_url_weights_change_the_key(tmp_path: Path) -> None:
     step = StepSpec.model_validate({**_step_data(), "url_weights": [weight]})
     unpinned = lock.SourcesLock.model_validate({"schema": lock.LOCK_SCHEMA})
     assert ("E_LOCK_REF", "url_weights w/model.pt") in lock.step_findings(step, unpinned, None)
+
+
+def _bump_mtime(path: Path) -> None:
+    st = os.lstat(path)
+    os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000))
+
+
+def _new_inode(path: Path) -> None:
+    """Replace ``path`` by a copy with the same bytes and times: only its inode differs."""
+    st = os.lstat(path)
+    copy = path.with_name(path.name + ".new")
+    copy.write_bytes(path.read_bytes())
+    os.utime(copy, ns=(st.st_atime_ns, st.st_mtime_ns))
+    os.replace(copy, path)
+
+
+def test_the_gate_rechecks_each_weights_file_against_its_prefetch_stamp(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Prefetch stamps every verified file (size, mtime_ns, inode); the gate refuses a changed or unstamped one.
+
+    No stamp is ``E_WEIGHTS_UNVERIFIED``; a stamp the file no longer matches is ``E_WEIGHTS_CHANGED``. A mismatch
+    at prefetch leaves no stamp.
+    """
+    world = _url_world(tmp_path)
+    top = make_snapshot(_hub(world), REPO, REVISION, {"weights.bin": WEIGHTS})
+    step = StepSpec.model_validate(_url_step(world, hf_weights=_weights({"weights.bin": WEIGHTS})))
+    profile, stamps = world.profile(), world.cache / weights.STAMPS_DIR
+    assert weights.check_stamps(step, profile, stamps) == ["E_WEIGHTS_UNVERIFIED"]
+    assert weights.verify_hf([step], profile, {}, stamps=stamps) == []
+    assert weights.check_stamps(step, profile, stamps) == ["E_WEIGHTS_UNVERIFIED"]
+    assert weights.verify_url([step], profile, {}, stamps=stamps) == []
+    assert weights.check_stamps(step, profile, stamps) == []
+    blob = top / "blobs" / _sha(WEIGHTS)
+    url = world.data / "model-cache" / "urls" / "whisper" / "small.pt"
+    for path, change in ((blob, _bump_mtime), (blob, _new_inode), (url, _bump_mtime), (url, _new_inode)):
+        change(path)
+        assert weights.check_stamps(step, profile, stamps) == ["E_WEIGHTS_CHANGED"], (path.name, change.__name__)
+        assert weights.verify_hf([step], profile, {}, stamps=stamps) == []
+        assert weights.verify_url([step], profile, {}, stamps=stamps) == []
+        assert weights.check_stamps(step, profile, stamps) == []
+    url.write_bytes(b"whisper weightz\n")
+    assert weights.verify_url([step], profile, {}, stamps=stamps) != []
+    assert weights.check_stamps(step, profile, stamps) == ["E_WEIGHTS_UNVERIFIED"]
+    capsys.readouterr()
+
+
+@needs_userns
+def test_a_weights_file_changed_after_prefetch_blocks_the_dry_run(tmp_path: Path) -> None:
+    """The inputs gate refuses a step whose weights blob changed since prefetch stamped it (``E_WEIGHTS_CHANGED``)."""
+    world = _world(tmp_path)
+    top = make_snapshot(_hub(world), REPO, REVISION, {"weights.bin": WEIGHTS})
+    manifest = world.manifest(_step(world))
+    world.prefetch(manifest)
+    (plan,) = run.plan_steps([manifest], world.config())
+    assert plan.status == "will-execute", plan.codes
+    _bump_mtime(top / "blobs" / _sha(WEIGHTS))
+    (plan,) = run.plan_steps([manifest], world.config())
+    assert (plan.status, plan.codes) == ("blocked", ("E_WEIGHTS_CHANGED",))

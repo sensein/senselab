@@ -1792,8 +1792,16 @@ pin each file (`E_LOCK_REF`). `check_url_present` gates presence, a symlink leav
 `verify_url` hashes each file once at prefetch with the accept rule above, trying every registered input of the
 step's `lock_inputs` whose tree holds the file, and prints `url-weights files=<n> hashed=<n> accepted=<n>`.
 
+**Stamps (A17 fix round 1).** Prefetch passes `<cache>/weights-stamps` (`weights.STAMPS_DIR`) to `verify_hf` and
+`verify_url`, which stamp every file they verify, by hash or by the accept rule: one JSON file per (blob realpath,
+declared sha256) holding the blob's `lstat` size, `mtime_ns`, device and inode, taken before the hash and written only
+if unchanged after it; a mismatching sha256 loses its stamp. In `run.gate`, once the presence checks pass,
+`weights.check_stamps` re-checks each declared file's blob against its stamp without hashing: no readable stamp is
+`E_WEIGHTS_UNVERIFIED` (prefetch has not verified it), a different size, mtime or inode is `E_WEIGHTS_CHANGED`.
+
 **Prefetch-only hashing.** A URL file under no registered input, like an `HFWeights` entry with no `input`, is
-hashed at prefetch only: between prefetch and the run nothing but its presence is checked. Registering the weights
+hashed at prefetch only: between prefetch and the run its presence and its stamp are checked, not its content
+(a rewrite that restores size, mtime and inode is not seen). Registering the weights
 tree as an input closes that gap through the input's pre-check and verification records. Registry entries are merged
 across manifests by id, the last manifest's pin winning; a file accepted through it matches that entry's verified
 manifest, so the content check still holds. An id whose lock cannot resolve is dropped from the accept set, so its
