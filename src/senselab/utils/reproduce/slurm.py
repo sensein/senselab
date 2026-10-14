@@ -778,6 +778,7 @@ def submit(manifests: Sequence[Manifest], config: SubmitConfig, runner: Runner |
 
 _MISMATCH_CODES = frozenset({inputs.MISMATCH, inputs.MISSING})
 ABORTED = "E_SUBMIT_ABORTED"
+_RAN = ("executed", "skipped")
 
 
 def _refused_by_gate(
@@ -791,7 +792,8 @@ def _refused_by_gate(
     """The submit rule: refuse the whole submission when the inputs gate (`run.gate`) has a code for any step.
 
     Each step's row becomes ``never-ran`` with its own gate codes, else those of the gated steps it depends on,
-    else ``E_SUBMIT_ABORTED``; rows another submission tagged are left alone. For each input whose pre-check
+    else ``E_SUBMIT_ABORTED``. Rows another submission tagged, and rows of steps that already ran
+    (``executed`` or ``skipped``), are left alone. For each input whose pre-check
     found ``E_INPUT_MISMATCH`` or ``E_INPUT_MISSING``, one ``verify-inputs`` job is submitted (not held); a
     failed sbatch is recorded in ``verify_failed`` and the others are still submitted.
 
@@ -819,7 +821,9 @@ def _refused_by_gate(
     with _umask(submit_umask(profile)):
         for name, order in orders.items():
             rows = [run.never_ran_row(s, refused[s]) for s in order]
-            run.update_run_record(profile.runs_root, config.date, name, rows, order=order, untagged_only=True)
+            run.update_run_record(
+                profile.runs_root, config.date, name, rows, order=order, untagged_only=True, keep_statuses=_RAN
+            )
         if mismatched:
             prepare_log_dir(profile, config.date)
         for input_id in mismatched:

@@ -1980,6 +1980,7 @@ def update_run_record(
     submission: str | None = None,
     allow_untagged: bool = False,
     untagged_only: bool = False,
+    keep_statuses: Collection[str] = (),
 ) -> None:
     """Merge rows into ``<runs_root>/<date>/<analysis>/run.json`` under an exclusive lock.
 
@@ -1998,6 +1999,7 @@ def update_run_record(
             job's own row may be one a local run wrote.
         untagged_only: Change only rows with no submission tag (or no row): a local run never rewrites a
             submission's rows.
+        keep_statuses: Leave rows whose current status is one of these as they are.
 
     Raises:
         OSError: If the run dir, the lock or the file cannot be written.
@@ -2015,6 +2017,8 @@ def update_run_record(
             if submission is not None and not _tag_matches(old, submission, allow_untagged):
                 continue
             if untagged_only and old is not None and old.get("submission") is not None:
+                continue
+            if old is not None and old.get("status") in keep_statuses:
                 continue
             current[row["step"]] = {**(old or {}), **row}
         _write_ordered(run, current, order)
