@@ -22,6 +22,7 @@ from pydantic import ValidationError
 from senselab.utils.reproduce import build, sandbox
 from senselab.utils.reproduce.locks import ReproduceLockError, file_sha256, lock_entries
 from senselab.utils.reproduce.spec import FileRef, LockRef, Profile, SdistSpec, TorchSpec
+from tests.utils.reproduce.masks_fixture import _tool_masks as _tool_masks  # autouse, also under --noconftest
 
 DATA = Path(__file__).parent / "data"
 UV = "/fake/uv"
