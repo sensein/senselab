@@ -148,8 +148,9 @@ def verify_hf(
         now: The time the verification records are judged at; defaults to now.
 
     Returns:
-        One ``<code> <repo>@<revision[:8]> <path>`` per failing declaration: ``E_WEIGHTS_MISSING`` (no hub
-        cache, or no such file) or ``E_WEIGHTS_MISMATCH``; empty when every file checks.
+        ``E_WEIGHTS_MISSING <repo>@<revision[:8]> <path>`` per missing file (or every file, with no hub cache)
+        and ``E_WEIGHTS_MISMATCH <repo>@<revision[:8]> <path> <declared sha256[:8]>`` per declared sha256 the
+        blob does not have; empty when every file checks.
     """
     when = now or datetime.datetime.now(datetime.UTC)
     declared: dict[tuple[str, str, str, str], list[tuple[str, str | None]]] = {}
@@ -168,14 +169,15 @@ def verify_hf(
         where = f"{repo}@{revision[:8]} {path}"
         file = None if hub is None else hub / repo_dir_name(repo, repo_type) / "snapshots" / revision / path
         if file is None or not file.is_file():
-            findings += [f"{WEIGHTS_MISSING} {where}"] * len({sha for sha, _ in uses})
+            findings.append(f"{WEIGHTS_MISSING} {where}")
             continue
         blob = os.path.realpath(file)
         pending: list[str] = []
         for sha, input_id in uses:
             if input_id is not None and input_id in registry:
-                state = registered.setdefault(input_id, _Registered(registry[input_id], profile, when))
-                if state.accepts(blob, sha):
+                if input_id not in registered:
+                    registered[input_id] = _Registered(registry[input_id], profile, when)
+                if registered[input_id].accepts(blob, sha):
                     continue
             pending.append(sha)
         if not pending:
@@ -183,7 +185,7 @@ def verify_hf(
             continue
         if blob not in digests:
             digests[blob] = _sha256(blob)
-        findings += [f"{WEIGHTS_MISMATCH} {where}" for sha in sorted(set(pending)) if sha != digests[blob]]
+        findings += [f"{WEIGHTS_MISMATCH} {where} {sha[:8]}" for sha in sorted(set(pending)) if sha != digests[blob]]
     print(f"weights files={len(declared)} hashed={len(digests)} accepted={accepted}")
     return findings
 
@@ -202,13 +204,16 @@ def build_hub_view(view_dir: Path, step: StepSpec, profile: Profile) -> None:
 
     Raises:
         WeightsError: ``E_WEIGHTS_MISSING`` when a declared file is missing (`check_hf_present`);
-            ``E_WEIGHTS_VIEW`` when ``refs/main`` could not be written.
+            ``E_WEIGHTS_VIEW`` when a dir, link or ``refs/main`` could not be written.
     """
     if check_hf_present(step, profile):
         raise WeightsError(WEIGHTS_MISSING)
     hub = profile.hf_hub_cache
     assert hub is not None
-    view_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        view_dir.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        raise WeightsError(WEIGHTS_VIEW) from None
     for w in step.hf_weights:
         if CONFIG in {f.path for f in w.files} and not is_hf_model_cached(
             w.repo, w.revision, w.repo_type, cache_dir=hub
@@ -216,9 +221,12 @@ def build_hub_view(view_dir: Path, step: StepSpec, profile: Profile) -> None:
             raise WeightsError(WEIGHTS_MISSING)
         source = Path(os.path.realpath(hub / repo_dir_name(w.repo, w.repo_type)))
         root = view_dir / repo_dir_name(w.repo, w.repo_type)
-        root.mkdir()
-        for sub in ("snapshots", "blobs"):
-            (root / sub).symlink_to(source / sub)
+        try:
+            root.mkdir()
+            for sub in ("snapshots", "blobs"):
+                (root / sub).symlink_to(source / sub)
+        except OSError:
+            raise WeightsError(WEIGHTS_VIEW) from None
         _point_ref_at(root, "main", w.revision)
         try:
             written = (root / "refs" / "main").read_text()

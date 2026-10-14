@@ -110,11 +110,24 @@ def test_prefetch_verifies_every_declared_file_sha256(tmp_path: Path, capsys: py
     assert weights.verify_hf([step], world.profile(), {}) == []
     assert _counts(capsys.readouterr().out) == "weights files=2 hashed=2 accepted=0"
     wrong = StepSpec.model_validate(world.step("prep", "prep", "x", hf_weights=_weights({"weights.bin": b"other"})))
-    assert weights.verify_hf([wrong], world.profile(), {}) == [f"E_WEIGHTS_MISMATCH {REPO}@cccccccc weights.bin"]
+    assert weights.verify_hf([wrong], world.profile(), {}) == [
+        f"E_WEIGHTS_MISMATCH {REPO}@cccccccc weights.bin {_sha(b'other')[:8]}"
+    ]
     (top / "blobs" / _sha(WEIGHTS)).write_bytes(b"fake weights 0123456788\n")
-    assert weights.verify_hf([step], world.profile(), {}) == [f"E_WEIGHTS_MISMATCH {REPO}@cccccccc weights.bin"]
+    assert weights.verify_hf([step], world.profile(), {}) == [
+        f"E_WEIGHTS_MISMATCH {REPO}@cccccccc weights.bin {_sha(WEIGHTS)[:8]}"
+    ]
     other = StepSpec.model_validate(world.step("prep", "prep", "x", hf_weights=_weights({"absent.bin": WEIGHTS})))
     assert weights.verify_hf([other], world.profile(), {}) == [f"E_WEIGHTS_MISSING {REPO}@cccccccc absent.bin"]
+    make_snapshot(_hub(world), "org/data", REVISION, {"d.csv": b"1\n"}, repo_type="dataset")
+    data = _weights({"d.csv": b"1\n"}, repo="org/data", repo_type="dataset")
+    assert (
+        weights.verify_hf([StepSpec.model_validate(world.step("d", "prep", "x", hf_weights=data))], world.profile(), {})
+        == []
+    )
+    world.profile_extra = {"hf_hub_cache": str(world.restricted_dirs[0] / "hub")}
+    with pytest.raises(ValueError, match="E_PROFILE_RESTRICTED"):
+        world.profile()
 
 
 @needs_userns
@@ -176,6 +189,14 @@ def test_the_step_loads_through_the_view_offline(tmp_path: Path) -> None:
     weights.build_hub_view(view, StepSpec.model_validate(step), world.profile())
     found = try_to_load_from_cache(REPO, "weights.bin", cache_dir=view)
     assert isinstance(found, str) and Path(found).read_bytes() == WEIGHTS
+    with pytest.raises(weights.WeightsError) as info:
+        weights.build_hub_view(view, StepSpec.model_validate(step), world.profile())
+    assert info.value.code == "E_WEIGHTS_VIEW"
+    make_snapshot(_hub(world), "org/data", REVISION, {"d.csv": b"1\n"}, repo_type="dataset")
+    data = world.step("d", "prep", "x", hf_weights=_weights({"d.csv": b"1\n"}, repo="org/data", repo_type="dataset"))
+    weights.build_hub_view(tmp_path / "view2", StepSpec.model_validate(data), world.profile())
+    found = try_to_load_from_cache("org/data", "d.csv", cache_dir=tmp_path / "view2", repo_type="dataset")
+    assert isinstance(found, str) and Path(found).read_bytes() == b"1\n"
 
 
 def test_two_steps_with_the_same_weights_hash_once(
@@ -197,12 +218,20 @@ def test_two_steps_with_the_same_weights_hash_once(
     assert weights.verify_hf(steps, profile, {}) == []
     assert len(calls) == 1
     assert _counts(capsys.readouterr().out) == "weights files=1 hashed=1 accepted=0"
+    make_snapshot(_hub(world), REPO, REVISION, {"copy.bin": WEIGHTS})
+    both = [StepSpec.model_validate(_step(world, hf_weights=_weights({"weights.bin": WEIGHTS, "copy.bin": WEIGHTS})))]
+    wrong = StepSpec.model_validate(_step(world, "wrong", hf_weights=_weights({"weights.bin": b"other"})))
+    expected = [f"E_WEIGHTS_MISMATCH {REPO}@cccccccc weights.bin {_sha(b'other')[:8]}"]
+    calls.clear()
+    found = weights.verify_hf([*both, wrong], profile, {})
+    assert found == expected and len(calls) == 1
+    assert _counts(capsys.readouterr().out) == "weights files=2 hashed=1 accepted=0"
 
 
 def _registered_world(tmp_path: Path) -> tuple[World, StepSpec, dict[str, Any]]:
     """A world whose model-cache repository is a registered, verified input with a sha256 column."""
     world = _world(tmp_path)
-    make_snapshot(_hub(world), REPO, REVISION, {"weights.bin": WEIGHTS})
+    make_snapshot(_hub(world), REPO, REVISION, {"weights.bin": WEIGHTS, "config.json": CONFIG})
     world.registered[INPUT] = register_input(
         world.base, {"data": world.data}, INPUT, root="data", relpath="model-cache/hub/models--org--model", sha256=True
     )
@@ -213,12 +242,34 @@ def _registered_world(tmp_path: Path) -> tuple[World, StepSpec, dict[str, Any]]:
 
 
 def test_a_registered_verified_snapshot_is_accepted_without_hashing(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """A file whose registered input carries its sha256 and a current ``ok`` record is not hashed."""
     world, step, registry = _registered_world(tmp_path)
+    reads: list[str] = []
+    real = inputs.manifest_rows
+
+    def counted(entry: Any, profile: Any) -> Any:  # noqa: ANN401
+        reads.append(entry.id)
+        return real(entry, profile)
+
+    monkeypatch.setattr(inputs, "manifest_rows", counted)
+    two = _spec(
+        world, lock_inputs=[INPUT], hf_weights=_weights({"weights.bin": WEIGHTS, "config.json": CONFIG}, input=INPUT)
+    )
+    assert weights.verify_hf([two], world.profile(), registry) == []
+    assert _counts(capsys.readouterr().out) == "weights files=2 hashed=0 accepted=2" and reads == [INPUT]
     assert weights.verify_hf([step], world.profile(), registry) == []
     assert _counts(capsys.readouterr().out) == "weights files=1 hashed=0 accepted=1"
+    make_snapshot(_hub(world), "org/other", REVISION, {"weights.bin": WEIGHTS})
+    foreign = _spec(
+        world, lock_inputs=[INPUT], hf_weights=_weights({"weights.bin": WEIGHTS}, repo="org/other", input=INPUT)
+    )
+    assert weights.verify_hf([foreign], world.profile(), registry) == []
+    assert _counts(capsys.readouterr().out) == "weights files=1 hashed=1 accepted=0"
+    claimed = _spec(world, lock_inputs=[INPUT], hf_weights=_weights({"weights.bin": b"other"}, input=INPUT))
+    assert len(weights.verify_hf([claimed], world.profile(), registry)) == 1
+    assert _counts(capsys.readouterr().out) == "weights files=1 hashed=1 accepted=0"
     stale = datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=40)
     assert weights.verify_hf([step], world.profile(), registry, now=stale) == []
     assert _counts(capsys.readouterr().out) == "weights files=1 hashed=1 accepted=0"
@@ -237,8 +288,13 @@ def test_a_blob_whose_size_or_mtime_drifted_is_rehashed(tmp_path: Path, capsys: 
     os.utime(blob, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000_000))
     assert weights.verify_hf([step], world.profile(), registry) == []
     assert _counts(capsys.readouterr().out) == "weights files=1 hashed=1 accepted=0"
+    verify_input(world.base, world.profile(), INPUT)
+    assert weights.verify_hf([step], world.profile(), registry) == []
+    assert _counts(capsys.readouterr().out) == "weights files=1 hashed=0 accepted=1"
     os.utime(blob, ns=(st.st_atime_ns, st.st_mtime_ns))
     blob.write_bytes(WEIGHTS + b"x")
     os.utime(blob, ns=(st.st_atime_ns, st.st_mtime_ns))
-    assert weights.verify_hf([step], world.profile(), registry) == [f"E_WEIGHTS_MISMATCH {REPO}@cccccccc weights.bin"]
+    assert weights.verify_hf([step], world.profile(), registry) == [
+        f"E_WEIGHTS_MISMATCH {REPO}@cccccccc weights.bin {_sha(WEIGHTS)[:8]}"
+    ]
     assert _counts(capsys.readouterr().out) == "weights files=1 hashed=1 accepted=0"

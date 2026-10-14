@@ -878,7 +878,8 @@ class Profile(_Model):
     Under ``mirror_map_strict`` an unmapped repository or submodule URL is refused (``mirror-unmapped``).
 
     ``hf_hub_cache`` is the read-only Hugging Face hub cache that holds every step's ``hf_weights``; it lies
-    under a data root, so the sandbox shows it read-only.
+    under a data root, so the sandbox shows it read-only, and in no restricted dir (``E_PROFILE_RESTRICTED``),
+    which public steps never see.
     """
 
     roots: dict[Name, Path] = Field(min_length=1)
@@ -975,7 +976,10 @@ class Profile(_Model):
                 raise ValueError(f"{code}: {field} lies under no rw_under_roots entry")
         dirs += [PurePosixPath(os.path.realpath(d)) for d in self.restricted_dirs]
         public = {"released_metrics_root": self.released_metrics_root}
-        public |= {f: getattr(self, f) for f in ("results_root", "runs_root", "slurm_logs_root", "job_tmp_root")}
+        public |= {
+            f: getattr(self, f)
+            for f in ("results_root", "runs_root", "slurm_logs_root", "job_tmp_root", "hf_hub_cache")
+        }
         for field, value in public.items():
             if value is None:
                 continue
