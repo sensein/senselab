@@ -397,6 +397,8 @@ def _keyed(step: StepSpec, profile: Profile) -> tuple[dict[str, str], dict[str, 
         templated["HF_HOME"] = "{tmp}/hf"
         templated["HF_HUB_CACHE"] = "{tmp}/hf-hub"
         templated["HUGGINGFACE_HUB_CACHE"] = "{tmp}/hf-hub"
+    if step.url_weights:
+        templated["TORCH_HOME"] = "{tmp}/torch"
     if step.pythonpath:
         templated["PYTHONPATH"] = ":".join(step.pythonpath)
     if _native(step, profile, "lib_dirs"):

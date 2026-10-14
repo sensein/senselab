@@ -26,12 +26,14 @@ def env_locks(step: StepSpec) -> list[dict[str, str]]:
 
 
 def lock_data(steps: Iterable[StepSpec], registered: Mapping[str, Mapping[str, str]] = {}) -> dict[str, Any]:
-    """A sources lock (as data) pinning every step's code, env locks, data-root patterns and weights."""
+    """A sources lock (as data) pinning every step's code, env locks, data-root patterns, weights and URL files."""
     data: list[dict[str, Any]] = [{"id": i, "kind": "registered", **dict(e)} for i, e in sorted(registered.items())]
     code: list[dict[str, Any]] = []
     envs: list[dict[str, str]] = []
     models: list[dict[str, Any]] = []
+    urls: list[dict[str, str]] = []
     for step in steps:
+        urls += [u for u in ({"file": w.file, "sha256": w.sha256} for w in step.url_weights) if u not in urls]
         entry = {"repo": step.repo, "commit": step.commit, "patches": [p.sha256 for p in step.patches]}
         if {**entry, "submodules": {}} not in code:
             code.append({**entry, "submodules": {}})
@@ -57,7 +59,7 @@ def lock_data(steps: Iterable[StepSpec], registered: Mapping[str, Mapping[str, s
         "data": data,
         "external": [],
         "models": models,
-        "urls": [],
+        "urls": urls,
         "code": code,
         "envs": envs,
     }

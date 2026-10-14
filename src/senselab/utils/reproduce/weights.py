@@ -1,4 +1,4 @@
-"""Pinned weights: Hugging Face snapshots in the profile's hub cache, checked by sha256, and the per-step hub view.
+"""Pinned weights: Hugging Face snapshots and URL files, checked by sha256, and where each step sees them.
 
 A step's ``hf_weights`` name repositories at 40-hex revisions and the sha256 of every file the step reads.
 The files live in the profile's read-only ``hf_hub_cache`` (Hugging Face layout:
@@ -12,6 +12,10 @@ verification record is current and ``ok`` (`inputs.accepted`), and the blob's ``
 ``mtime_ns`` equal the row (or the record's overlay). `build_hub_view` lays out the step's own hub cache
 under its ``{tmp}``: ``snapshots`` and ``blobs`` link to the profile's copy, ``refs/main`` names the
 declared revision.
+
+``url_weights`` files live under the profile's ``url_weights_root``. `check_url_present` and `verify_url` are
+their presence check and prefetch check (the same accept rule, against the step's registered inputs), and
+`place_url_weights` links each where its loader looks under the step's ``{tmp}``.
 """
 
 from __future__ import annotations
@@ -24,7 +28,7 @@ from pathlib import Path
 
 from senselab.utils.dependencies import _point_ref_at, is_hf_model_cached
 from senselab.utils.reproduce import inputs
-from senselab.utils.reproduce.spec import HFWeights, Profile, StepSpec
+from senselab.utils.reproduce.spec import HFWeights, Profile, StepSpec, UrlWeight
 
 WEIGHTS_MISSING = "E_WEIGHTS_MISSING"
 WEIGHTS_MISMATCH = "E_WEIGHTS_MISMATCH"
@@ -127,6 +131,50 @@ class _Registered:
         return st.st_size == row.size and st.st_mtime_ns in (row.mtime_ns, self.overlay.get(rel))
 
 
+_Use = tuple[str, tuple[str, ...]]
+"""One declaration of a file: its sha256 and the registered inputs that may accept it."""
+
+
+def _check(
+    files: Mapping[str, tuple[Path | None, list[_Use]]],
+    profile: Profile,
+    registry: Mapping[str, inputs.RegisteredInput],
+    now: datetime.datetime,
+) -> tuple[list[str], int, int]:
+    """Findings, blobs hashed and files accepted, for ``{label: (file or None, declarations)}``."""
+    registered: dict[str, _Registered] = {}
+    digests: dict[str, str] = {}
+    findings: list[str] = []
+    accepted = 0
+    for label, (file, uses) in sorted(files.items()):
+        if file is None or not file.is_file():
+            findings.append(f"{WEIGHTS_MISSING} {label}")
+            continue
+        blob = os.path.realpath(file)
+        pending: list[str] = []
+        for sha, ids in uses:
+            for input_id in (i for i in ids if i in registry):
+                if input_id not in registered:
+                    registered[input_id] = _Registered(registry[input_id], profile, now)
+                if registered[input_id].accepts(blob, sha):
+                    break
+            else:
+                pending.append(sha)
+        if not pending:
+            accepted += 1
+            continue
+        if blob not in digests:
+            digests[blob] = _sha256(blob)
+        findings += [f"{WEIGHTS_MISMATCH} {label} {sha[:8]}" for sha in sorted(set(pending)) if sha != digests[blob]]
+    return findings, len(digests), accepted
+
+
+def _add(files: dict[str, tuple[Path | None, list[_Use]]], label: str, file: Path | None, use: _Use) -> None:
+    uses = files.setdefault(label, (file, []))[1]
+    if use not in uses:
+        uses.append(use)
+
+
 def verify_hf(
     steps: Iterable[StepSpec],
     profile: Profile,
@@ -152,42 +200,96 @@ def verify_hf(
         and ``E_WEIGHTS_MISMATCH <repo>@<revision[:8]> <path> <declared sha256[:8]>`` per declared sha256 the
         blob does not have; empty when every file checks.
     """
-    when = now or datetime.datetime.now(datetime.UTC)
-    declared: dict[tuple[str, str, str, str], list[tuple[str, str | None]]] = {}
+    hub = profile.hf_hub_cache
+    files: dict[str, tuple[Path | None, list[_Use]]] = {}
     for step in steps:
         for w in step.hf_weights:
+            snapshot = None if hub is None else hf_snapshot(hub, w)
             for f in w.files:
-                uses = declared.setdefault((w.repo_type, w.repo, w.revision, f.path), [])
-                if (f.sha256, w.input) not in uses:
-                    uses.append((f.sha256, w.input))
-    hub = profile.hf_hub_cache
-    registered: dict[str, _Registered] = {}
-    digests: dict[str, str] = {}
-    findings: list[str] = []
-    accepted = 0
-    for (repo_type, repo, revision, path), uses in sorted(declared.items()):
-        where = f"{repo}@{revision[:8]} {path}"
-        file = None if hub is None else hub / repo_dir_name(repo, repo_type) / "snapshots" / revision / path
-        if file is None or not file.is_file():
-            findings.append(f"{WEIGHTS_MISSING} {where}")
-            continue
-        blob = os.path.realpath(file)
-        pending: list[str] = []
-        for sha, input_id in uses:
-            if input_id is not None and input_id in registry:
-                if input_id not in registered:
-                    registered[input_id] = _Registered(registry[input_id], profile, when)
-                if registered[input_id].accepts(blob, sha):
-                    continue
-            pending.append(sha)
-        if not pending:
-            accepted += 1
-            continue
-        if blob not in digests:
-            digests[blob] = _sha256(blob)
-        findings += [f"{WEIGHTS_MISMATCH} {where} {sha[:8]}" for sha in sorted(set(pending)) if sha != digests[blob]]
-    print(f"weights files={len(declared)} hashed={len(digests)} accepted={accepted}")
+                label = f"{w.repo}@{w.revision[:8]} {f.path}"
+                if w.repo_type != "model":
+                    label = f"{w.repo_type}:{label}"
+                file = None if snapshot is None else snapshot / f.path
+                _add(files, label, file, (f.sha256, () if w.input is None else (w.input,)))
+    findings, hashed, accepted = _check(files, profile, registry, now or datetime.datetime.now(datetime.UTC))
+    print(f"weights files={len(files)} hashed={hashed} accepted={accepted}")
     return findings
+
+
+def url_file(profile: Profile, w: UrlWeight) -> Path | None:
+    """``<url_weights_root>/<file>``; None when the profile has no root."""
+    root = profile.url_weights_root
+    return None if root is None else root / w.file
+
+
+def check_url_present(step: StepSpec, profile: Profile) -> list[str]:
+    """Whether every ``url_weights`` file of the step exists under the profile's root; no hashing.
+
+    Returns:
+        ``["E_WEIGHTS_MISSING"]`` when one is missing or the profile has no ``url_weights_root``; else empty.
+    """
+    for w in step.url_weights:
+        file = url_file(profile, w)
+        if file is None or not file.is_file():
+            return [WEIGHTS_MISSING]
+    return []
+
+
+def verify_url(
+    steps: Iterable[StepSpec],
+    profile: Profile,
+    registry: Mapping[str, inputs.RegisteredInput],
+    *,
+    now: datetime.datetime | None = None,
+) -> list[str]:
+    """Check every ``url_weights`` file of ``steps`` against its sha256, once per file.
+
+    The accept rule is `verify_hf`'s, tried against each registered input of the step's ``lock_inputs`` (the
+    model-cache input holding the URL files, when the step registers it). Prints
+    ``url-weights files=<n> hashed=<n> accepted=<n>``.
+
+    Args:
+        steps: Every step of the prefetch.
+        profile: The site profile; its ``url_weights_root`` holds the files.
+        registry: The registry entries of the steps' ``lock_inputs``, as their sources locks pin them.
+        now: The time the verification records are judged at; defaults to now.
+
+    Returns:
+        ``E_WEIGHTS_MISSING url <file>`` and ``E_WEIGHTS_MISMATCH url <file> <declared sha256[:8]>`` lines;
+        empty when every file checks.
+    """
+    files: dict[str, tuple[Path | None, list[_Use]]] = {}
+    for step in steps:
+        for w in step.url_weights:
+            _add(files, f"url {w.file}", url_file(profile, w), (w.sha256, tuple(step.lock_inputs)))
+    findings, hashed, accepted = _check(files, profile, registry, now or datetime.datetime.now(datetime.UTC))
+    print(f"url-weights files={len(files)} hashed={hashed} accepted={accepted}")
+    return findings
+
+
+def place_url_weights(tmp: Path, step: StepSpec, profile: Profile) -> None:
+    """Link each ``url_weights`` file where its loader looks, under the step's ``tmp`` (`UrlWeight.target`).
+
+    Args:
+        tmp: The step's ``{tmp}`` on the host.
+        step: The step.
+        profile: The site profile.
+
+    Raises:
+        WeightsError: ``E_WEIGHTS_MISSING`` when a file is missing (`check_url_present`); ``E_WEIGHTS_VIEW``
+            when a link cannot be made.
+    """
+    if check_url_present(step, profile):
+        raise WeightsError(WEIGHTS_MISSING)
+    for w in step.url_weights:
+        file = url_file(profile, w)
+        assert file is not None
+        link = tmp / w.target()
+        try:
+            link.parent.mkdir(parents=True, exist_ok=True)
+            link.symlink_to(os.path.realpath(file))
+        except OSError:
+            raise WeightsError(WEIGHTS_VIEW) from None
 
 
 def build_hub_view(view_dir: Path, step: StepSpec, profile: Profile) -> None:
