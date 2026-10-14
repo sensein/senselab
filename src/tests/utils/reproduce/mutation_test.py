@@ -23,7 +23,7 @@ import yaml
 
 from senselab.utils.reproduce import build, cache, cli, env, run, sandbox
 from senselab.utils.reproduce.run import evaluate_expect
-from senselab.utils.reproduce.spec import StepSpec
+from senselab.utils.reproduce.spec import Manifest, StepSpec
 from tests.utils.reproduce.cache_test import OTHER, REV, SHA, _key, _step_data
 from tests.utils.reproduce.run_test import World, _metrics, _py, _r_step, _schema_step, _session, _sha
 
@@ -75,7 +75,7 @@ def _race_child(base: str, queue: Any, submission: str) -> None:  # noqa: ANN401
     for name in ("tmp", "repo", "base", "data", "cache", "hook"):
         setattr(world, name, Path(getattr(world, name)))
     world.restricted_dirs = [Path(p) for p in world.restricted_dirs]
-    manifest = world.manifest(_py(world, SLOW))
+    manifest = Manifest.model_validate({"name": "demo", "sources": world.sources, "steps": [_py(world, SLOW)]})
     outcomes = run.run_steps([manifest], world.config(), only=["prep"], submission=submission)
     queue.put([(o.step, o.status, o.exit, list(o.codes)) for o in outcomes])
 
