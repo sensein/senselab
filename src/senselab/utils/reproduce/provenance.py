@@ -22,6 +22,7 @@ each input's ``paths`` and the rendered ``argv`` as well; they are then recorded
 from __future__ import annotations
 
 import datetime
+import math
 import os
 import platform
 import re
@@ -62,8 +63,28 @@ _PACKAGE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 _VERSION = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.+!_-]{0,63}$")
 _WORDS = re.compile(r"^[A-Za-z0-9()@.,_+-]+( [A-Za-z0-9()@.,_+-]+)*$")
 _FILE_NAME = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$")
-DETAIL_KEYS = ("sources_lock", "sources_lock_sha256", "engine")
+DETAIL_KEYS = ("sources_lock", "sources_lock_sha256", "engine", "draw")
 """The keys a step record's ``details`` may carry."""
+DRAW_KEYS = (
+    "seed",
+    "data_order_seed",
+    "sampling",
+    "engine",
+    "concurrency",
+    "batch_size",
+    "gpu_name",
+    "gpu_driver",
+    "gpu_count",
+    "host_cuda",
+    "torch_cuda",
+    "env_key",
+    "body_lock_sha256",
+    "torch_lock_sha256",
+    "installed_sha256",
+)
+"""The keys of ``details.draw``: what a re-draw needs (SC8), in one place."""
+_SAMPLING_KEY = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+_LABEL = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_+-]{0,63}$")
 ENGINE_NAMES = ("vllm", "transformers-batched")
 _SERVER_ARG = re.compile(r"^[!-~]{1,256}$")
 _NUMERIC = re.compile(r"^[0-9]+(\.[0-9]+)*$")
@@ -196,6 +217,36 @@ def _engine_ok(identity: object) -> bool:
     )
 
 
+def _sampling_ok(value: object) -> bool:
+    if isinstance(value, bool) or _is_int(value):
+        return True
+    if isinstance(value, float):
+        return math.isfinite(value)
+    return _matches(value, _LABEL)
+
+
+def _draw_ok(draw: object) -> bool:
+    """Whether ``draw`` has the closed form of `DRAW_KEYS` (seeds, sampling, engine, GPU, CUDA, env lock)."""
+    if not isinstance(draw, Mapping) or set(draw) != set(DRAW_KEYS):
+        return False
+    sampling = draw["sampling"]
+    checks = [
+        all(draw[k] is None or (_is_int(draw[k]) and draw[k] >= 0) for k in ("seed", "data_order_seed")),
+        isinstance(sampling, Mapping)
+        and all(_matches(k, _SAMPLING_KEY) and _sampling_ok(v) for k, v in sampling.items()),
+        draw["engine"] is None or _engine_ok(draw["engine"]),
+        all(draw[k] is None or (_is_int(draw[k]) and draw[k] >= 1) for k in ("concurrency", "batch_size")),
+        draw["gpu_count"] is None or (_is_int(draw["gpu_count"]) and draw["gpu_count"] >= 0),
+        all(
+            draw[k] is None or (_matches(draw[k], _HOST_STRINGS[k]) and len(draw[k]) <= _HOST_STRING_MAX)
+            for k in ("gpu_name", "gpu_driver", "host_cuda", "torch_cuda")
+        ),
+        all(draw[k] is None or _matches(draw[k], _HEX64) for k in ("env_key", "torch_lock_sha256", "installed_sha256")),
+        _matches(draw["body_lock_sha256"], _HEX64),
+    ]
+    return all(checks)
+
+
 def _check_venv(venv: VenvResult) -> str:
     _check(_is_name(venv.path.name, _VENV_NAME), "venv name")
     _check(_matches(venv.env_key, _HEX64), "venv env_key")
@@ -262,7 +313,7 @@ def record_step(
         argv: The rendered argv, given only under a non-confidential policy; recorded as the activity's
             ``argv``.
         details: Recorded as the activity's ``details``: ``sources_lock_sha256`` (hex), ``sources_lock`` (the lock
-            file's name) and ``engine`` (`engine.engine_identity`), and no other key.
+            file's name), ``engine`` (`engine.engine_identity`) and ``draw`` (`DRAW_KEYS`), and no other key.
 
     Returns:
         The files written: ``store.jsonl``, then the BEP028 files in `write_bep028_files` order. Any
@@ -294,6 +345,7 @@ def record_step(
     _check("sources_lock_sha256" not in details or _matches(details["sources_lock_sha256"], _HEX64), "details")
     _check("sources_lock" not in details or _matches(details["sources_lock"], _FILE_NAME), "details")
     _check("engine" not in details or _engine_ok(details["engine"]), "details engine")
+    _check("draw" not in details or _draw_ok(details["draw"]), "details draw")
     installed = _check_venv(venv)
 
     store = ProvStore(run_id=step_key)

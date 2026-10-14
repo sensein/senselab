@@ -2008,10 +2008,27 @@ class _Execution:
         root = _root_dir(spec.root, self.config, self.upstream, self.keyed.checkout.worktree)
         return tuple(os.fspath(root / p) for p in spec.patterns)
 
-    def _details(self) -> dict[str, Any]:
+    def _details(self, host_record: Mapping[str, Any]) -> dict[str, Any]:
+        """The record's details: the sources lock, the engine identity, and the draw (`provenance.DRAW_KEYS`)."""
+        step = self.step
+        identity = None if step.engine is None else engine.engine_identity(step.engine)
         details: dict[str, Any] = {"sources_lock": self.keyed.lock_name, "sources_lock_sha256": self.keyed.lock_sha256}
-        if self.step.engine is not None:
-            details["engine"] = engine.engine_identity(self.step.engine)
+        if identity is not None:
+            details["engine"] = identity
+        assert self.venv is not None
+        details["draw"] = {
+            "seed": None if step.draw is None else step.draw.seed,
+            "data_order_seed": None if step.draw is None else step.draw.data_order_seed,
+            "sampling": {} if step.draw is None else dict(step.draw.sampling),
+            "engine": identity,
+            "concurrency": None if step.engine is None else step.engine.concurrency,
+            "batch_size": None if step.engine is None else step.engine.batch_size,
+            **{k: host_record.get(k) for k in ("gpu_name", "gpu_driver", "gpu_count", "host_cuda", "torch_cuda")},
+            "env_key": self.venv.env_key,
+            "body_lock_sha256": step.env.body.lock_sha256,
+            "torch_lock_sha256": None if step.env.torch is None else step.env.torch.lock_sha256,
+            "installed_sha256": self.installed,
+        }
         return details
 
     def _record(self, outputs: list[provenance.Artifact]) -> None:
@@ -2047,7 +2064,7 @@ class _Execution:
                 env_sha256=self.recorded_sha,
                 argv_sha256=argv_sha,
                 argv=None if confidential or not self.argv else self.argv,
-                details=self._details(),
+                details=self._details(record),
             )
         except ValueError:
             _log().error("provenance refused\n%s", traceback.format_exc())

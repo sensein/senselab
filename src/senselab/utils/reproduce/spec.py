@@ -28,6 +28,9 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    StrictBool,
+    StrictFloat,
+    StrictInt,
     StringConstraints,
     ValidationInfo,
     field_validator,
@@ -723,6 +726,24 @@ def _server_arg_error(arg: str) -> str | None:
     return None
 
 
+SamplingValue = StrictBool | StrictInt | Annotated[StrictFloat, Field(allow_inf_nan=False)] | Label
+"""A sampling parameter's value: a bool, an int, a finite float or a short label."""
+Seed = Annotated[StrictInt, Field(ge=0)]
+
+
+class DrawSpec(_Model):
+    """The random draw of a step, keyed and recorded in its provenance for a re-draw from provenance alone.
+
+    ``seed`` and ``data_order_seed`` reach the step as ``REPRO_SEED`` and ``REPRO_DATA_ORDER_SEED`` and ``sampling``
+    (e.g. ``temperature``, ``top_p``, ``top_k``, ``do_sample``, ``max_new_tokens``) as ``REPRO_SAMPLING``, compact
+    JSON with sorted keys; each only when set. The step reads them; the driver does not seed anything itself.
+    """
+
+    seed: Seed | None = None
+    data_order_seed: Seed | None = None
+    sampling: dict[CountName, SamplingValue] = {}
+
+
 class EngineModel(_Model):
     """The model an engine serves: one of the step's ``hf_weights`` model repositories, at its revision."""
 
@@ -796,7 +817,7 @@ class StepSpec(_Model):
     (`run`) the driver keeps ``{out}/<resume_dir>`` instead of clearing it. ``engine`` declares the step's
     inference engine (`EngineSpec`): its model must be one of the step's ``hf_weights``, and a ``vllm`` engine needs
     ``resources.gpu_arch`` and a ``resources.min_driver`` of at least `CUDA13_MIN_DRIVER` (``E_SPEC_ENGINE``), which
-    the host floor check (``E_DRIVER_OLD``) then enforces.
+    the host floor check (``E_DRIVER_OLD``) then enforces. ``draw`` declares its seeds and sampling (`DrawSpec`).
     """
 
     name: Name
@@ -827,6 +848,7 @@ class StepSpec(_Model):
     resumable: Literal["items", "checkpoint"] | None = None
     resume_dir: RelPath | None = None
     engine: EngineSpec | None = None
+    draw: DrawSpec | None = None
 
     _unique_lock_inputs = field_validator("lock_inputs")(_no_duplicates)
 

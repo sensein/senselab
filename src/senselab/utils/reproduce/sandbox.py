@@ -5,7 +5,8 @@ every mount is read-only except the writable directories it names, with loopback
 runs with every capability dropped, so it cannot undo the mounts.
 `build_env` builds the step's whole environment from the profile and the step; nothing is inherited
 from the caller except a few ``SLURM_*`` job ids and ``CUDA_VISIBLE_DEVICES``, which are recorded but
-not keyed. Proxies point at a dead port; an engine step also gets ``REPRO_ENGINE_IDENTITY``, and a ``vllm`` step
+not keyed. A step's ``draw`` reaches it as ``REPRO_SEED``, ``REPRO_DATA_ORDER_SEED`` and ``REPRO_SAMPLING``.
+Proxies point at a dead port; an engine step also gets ``REPRO_ENGINE_IDENTITY``, and a ``vllm`` step
 ``no_proxy=127.0.0.1,localhost`` and its compile caches under ``{tmp}`` (`engine`). `canary` is a Python snippet
 whose TCP connect must fail inside the sandbox.
 """
@@ -23,7 +24,7 @@ from collections.abc import Iterable, Iterator, Mapping, Sequence
 from pathlib import Path
 
 from senselab.utils.reproduce import engine
-from senselab.utils.reproduce.spec import Profile, StepSpec, check_step_profile, render
+from senselab.utils.reproduce.spec import DrawSpec, Profile, StepSpec, check_step_profile, render
 
 IP = "/usr/sbin/ip"
 SH = "/bin/sh"
@@ -416,12 +417,26 @@ def _keyed(step: StepSpec, profile: Profile) -> tuple[dict[str, str], dict[str, 
         literal["R_LIBS_SITE"] = ""
     if step.shards is not None:
         literal["REPRO_SHARDS"] = str(step.shards.count)
+    if step.draw is not None:
+        literal |= draw_env(step.draw)
     if step.engine is not None:
         literal["REPRO_ENGINE_IDENTITY"] = engine.identity_json(step.engine)
         if step.engine.name == "vllm":
             literal |= {v: engine.LOOPBACK for v in NO_PROXY_VARS}
             templated |= engine.CACHE_TEMPLATES
     return {**profile.env, **literal}, templated
+
+
+def draw_env(draw: DrawSpec) -> dict[str, str]:
+    """``REPRO_SEED``, ``REPRO_DATA_ORDER_SEED`` and ``REPRO_SAMPLING`` (compact sorted JSON), each only when set."""
+    out: dict[str, str] = {}
+    if draw.seed is not None:
+        out["REPRO_SEED"] = str(draw.seed)
+    if draw.data_order_seed is not None:
+        out["REPRO_DATA_ORDER_SEED"] = str(draw.data_order_seed)
+    if draw.sampling:
+        out["REPRO_SAMPLING"] = json.dumps(draw.sampling, sort_keys=True, separators=(",", ":"))
+    return out
 
 
 def keyed_templates(step: StepSpec, profile: Profile) -> dict[str, str]:

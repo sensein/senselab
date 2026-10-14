@@ -1613,3 +1613,19 @@ at least `spec.CUDA13_MIN_DRIVER` (580.65.06, the first CUDA 13 driver); the exi
 (`E_DRIVER_OLD`) enforces it on the node, and profiles exclude older-driver nodes from the partition list. The host
 record carries `host_cuda` from `cuda_probe.detect_host_cuda`, kept only when `nvidia-smi` gave it (an `nvcc` fallback
 names a toolkit, not the driver's CUDA).
+
+## Draw provenance (A15; completed in A16)
+
+**Declared, keyed.** `StepSpec.draw` declares `seed`, `data_order_seed` (non-negative ints) and `sampling` (named
+bools, ints, finite floats or short labels: `temperature`, `top_p`, `top_k`, `do_sample`, `max_new_tokens`, ...). It
+is keyed whole, and reaches the step as keyed literals `REPRO_SEED`, `REPRO_DATA_ORDER_SEED` and `REPRO_SAMPLING`
+(compact sorted JSON), each only when set. The driver seeds nothing itself: the step's code reads them, so a draw is
+reproducible only as far as that code honours them. Strings are restricted to labels so that provenance stays a
+closed form; free-text sampling values (stop strings, prompts) belong in the step's config, keyed through its inputs.
+
+**Recorded together.** Every step record's `details.draw` holds, in one place, what a re-draw from provenance alone
+needs (SC8): the seeds and sampling, the engine identity with its concurrency and batch size (None without an
+engine), the GPU model, driver, count, host CUDA and torch CUDA from the host record, and the env lock (`env_key`,
+body and torch lock sha256s, `installed_sha256`). Some of these repeat the record's top-level parameters; the copy
+keeps the draw self-contained. A step without `draw` still records the block, with null seeds and empty sampling,
+so a checker can tell "no seed declared" from "not recorded".

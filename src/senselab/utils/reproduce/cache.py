@@ -352,6 +352,7 @@ def step_key_payload(
         "resumable": step.resumable,
         "resume_dir": step.resume_dir,
         "engine": _engine_key(step),
+        "draw": None if step.draw is None else step.draw.model_dump(mode="json"),
     }
 
 
