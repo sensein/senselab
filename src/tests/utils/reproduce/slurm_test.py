@@ -94,7 +94,8 @@ def _spec(name: str, **change: Any) -> StepSpec:  # noqa: ANN401
 
 
 def _manifest(name: str, *steps: dict[str, Any]) -> Manifest:
-    return Manifest.model_validate({"name": name, "steps": list(steps)})
+    sources = {"lock": f"sources/{name}.lock.yaml", "sha256": "ab" * 32}
+    return Manifest.model_validate({"name": name, "sources": sources, "steps": list(steps)})
 
 
 def _render(tmp: Path, step: StepSpec, **change: Any) -> str:  # noqa: ANN401

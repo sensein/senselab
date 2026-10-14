@@ -68,7 +68,7 @@ RelPath = Annotated[str, AfterValidator(_relative_path)]
 FIXED_PLACEHOLDERS = frozenset({"out", "tmp", "checkout", "venv", "cache"})
 RESERVED_ROOT_NAMES = frozenset({"checkout"})
 _TOKEN = re.compile(r"\{\{|\}\}|\{([^{}]*)\}|[{}]")
-_KEYED_PLACEHOLDER = re.compile(r"^(root|up):([A-Za-z0-9_.-]+)$")
+_KEYED_PLACEHOLDER = re.compile(r"^(root|up|input):([A-Za-z0-9_.-]+)$")
 _SECRET_KEY = re.compile(r"(^|_)(TOKEN|KEY|SECRET|PASSWORD|PASSWD|CREDENTIALS?)S?(_|$)", re.IGNORECASE)
 ALLOWED_SECRET_LIKE_KEYS = frozenset({"TOKENIZERS_PARALLELISM"})
 _ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -87,7 +87,7 @@ def placeholders(template: str) -> list[str]:
 
     Raises:
         ValueError: If a placeholder is outside ``{out}``, ``{tmp}``, ``{checkout}``, ``{venv}``,
-            ``{cache}``, ``{root:<name>}`` and ``{up:<step>}``, or a brace is unmatched.
+            ``{cache}``, ``{root:<name>}``, ``{up:<step>}`` and ``{input:<id>}``, or a brace is unmatched.
     """
     found = []
     for match in _TOKEN.finditer(template):
@@ -129,6 +129,10 @@ def render(template: str, values: Mapping[str, str | os.PathLike[str]]) -> str:
 
 def _upstream(template: str) -> list[str]:
     return [p.split(":", 1)[1] for p in placeholders(template) if p.startswith("up:")]
+
+
+def _registered(template: str) -> list[str]:
+    return [p.split(":", 1)[1] for p in placeholders(template) if p.startswith("input:")]
 
 
 def _reject_secret_keys(env: dict[str, str]) -> dict[str, str]:
@@ -624,7 +628,9 @@ class StepSpec(_Model):
     keyed by the commit, patches and upstream keys. An expectation ``unit`` is allowed only on a rate
     or ``mcc`` metric (`metrics.metric_quantity`). An ``argv`` or ``pythonpath`` entry may not be an absolute
     path without a placeholder (``E_SPEC_ABSOLUTE_PATH``): a program or module outside the checkout, venv,
-    cache and roots would run unkeyed.
+    cache and roots would run unkeyed. ``lock_inputs`` names registered inputs of the manifest's sources
+    lock, and every ``{input:<id>}`` placeholder must name one of them (``E_SPEC_INPUT_UNDECLARED``);
+    ``extract`` declares the categorical values its adapter may emit (`ExtractSpec`).
     """
 
     name: Name
@@ -648,6 +654,9 @@ class StepSpec(_Model):
     metrics_schema: MetricsSchema
     expect: list[Expect] = []
     extract: list[ExtractSpec] = []
+    lock_inputs: list[Name] = []
+
+    _unique_lock_inputs = field_validator("lock_inputs")(_no_duplicates)
 
     @model_validator(mode="after")
     def _consistent(self) -> "StepSpec":
@@ -670,6 +679,11 @@ class StepSpec(_Model):
         if self.env.r_lib is not None:
             templates.append(self.env.r_lib)
         referenced = [s for t in templates for s in _upstream(t)]
+        undeclared = sorted({i for t in templates for i in _registered(t)} - set(self.lock_inputs))
+        if undeclared:
+            raise ValueError(
+                f"E_SPEC_INPUT_UNDECLARED: step {self.name!r} names inputs outside its lock_inputs: {undeclared}"
+            )
         roots = [i.root for i in self.inputs] + [s.root for s in self.stage]
         referenced += [r.split(":", 1)[1] for r in roots if r.startswith("up:")]
         referenced += [e.from_step.step for e in self.expect if e.from_step is not None]
@@ -717,8 +731,24 @@ def _unique_names(steps: list[StepSpec]) -> list[StepSpec]:
     return steps
 
 
+SOURCES_LOCK = re.compile(r"^sources/[A-Za-z0-9_][A-Za-z0-9_.-]*\.lock\.yaml$")
+
+
+def _sources_lock_path(value: str) -> str:
+    if not SOURCES_LOCK.match(value) or ".." in value.split("/"):
+        raise ValueError(f"a sources lock lives at sources/<name>.lock.yaml: {value!r}")
+    return value
+
+
+class SourcesRef(_Model):
+    """The sources lock a manifest references: ``sources/<name>.lock.yaml`` in the manifest repository, and its sha."""
+
+    lock: Annotated[str, AfterValidator(_sources_lock_path)]
+    sha256: Sha256
+
+
 class Manifest(_Model):
-    """One analysis: a name and its steps.
+    """One analysis: a name, the sources lock its steps run from, and its steps.
 
     The analysis and step names name directories and appear in batch job names (``reproduce-<step>``),
     which every user of the cluster can list; class labels, count names and headline labels of each
@@ -728,6 +758,7 @@ class Manifest(_Model):
     """
 
     name: Name
+    sources: SourcesRef
     steps: list[StepSpec] = Field(min_length=1)
 
     _unique = field_validator("steps")(_unique_names)

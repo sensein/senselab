@@ -42,7 +42,7 @@ from senselab.utils.reproduce.sandbox import keyed_templates
 from senselab.utils.reproduce.source import patch_set_sha256
 from senselab.utils.reproduce.spec import Profile, StepSpec
 
-STEP_KEY_SCHEMA = "reproduce-step-key-3"
+STEP_KEY_SCHEMA = "reproduce-step-key-4"
 REPRODUCE_SOURCE_SCHEMA = "reproduce-source-1"
 DRIVER_PACKAGE = "senselab"
 NATIVE_EXCLUDE = ("**/__pycache__/**", "**/*.pyc")
@@ -60,6 +60,7 @@ CODES = frozenset(
         "E_KEY_SUBMODULES",
         "E_KEY_R_SESSION",
         "E_KEY_NO_WHEELS",
+        "E_KEY_LOCK",
         "E_RESULT_DONE",
         "E_RESULT_UNREADABLE",
         "E_RESULT_NOT_DIR",
@@ -222,6 +223,7 @@ def step_key_payload(
     adapter_env_sha256: str,
     input_digests: Sequence[str],
     native: Mapping[str, Sequence[str]],
+    sources_lock_sha256: str,
     r_session_sha256: str | None = None,
     r_module_env_sha256: str | None = None,
 ) -> dict[str, Any]:
@@ -240,6 +242,8 @@ def step_key_payload(
         input_digests: One `digest.input_set_digest` hex per ``step.inputs`` entry, in manifest order.
         native: Each name in ``step.resources.native`` mapped to `native_digests`' digests for it (one per
             ``bin_dirs`` then ``lib_dirs`` entry of the profile's `NativeSpec`), and nothing else.
+        sources_lock_sha256: The sha256 of the manifest's sources lock (`lock.load_lock`); with the step's
+            ``lock_inputs`` ids it stands for the registered inputs, whose files are not read for the key.
         r_session_sha256: The sha256 of the prefetch ``SESSION.json``; required for ``r`` and
             ``ir_notebook`` steps and refused for others.
         r_module_env_sha256: The sha256 of the captured R module env; required and refused likewise.
@@ -254,9 +258,11 @@ def step_key_payload(
             ``native`` does not give one hex digest per selected native dir, ``E_KEY_SUBMODULES`` for a commit
             that is not 40-hex or submodules on a step that disables them, ``E_KEY_R_SESSION`` for R
             digests missing on an R step or given on another, ``E_KEY_NO_WHEELS`` for an env with
-            sdist builds and no recorded ``wheels.lock``.
+            sdist builds and no recorded ``wheels.lock``, ``E_KEY_LOCK`` for a lock sha256 that is not hex.
         ValueError: As `sandbox.keyed_templates`.
     """
+    if not _is_sha256(sources_lock_sha256):
+        raise CacheError("E_KEY_LOCK")
     if set(upstream) != set(step.needs) or not all(_is_sha256(k) for k in upstream.values()):
         raise CacheError("E_KEY_UPSTREAM")
     if len(input_digests) != len(step.inputs) or not all(_is_sha256(d) for d in input_digests):
@@ -325,6 +331,8 @@ def step_key_payload(
         "replicate": step.replicate,
         "upstream": dict(sorted(upstream.items())),
         "policy_sha256": policy_sha256(profile),
+        "sources_lock_sha256": sources_lock_sha256,
+        "lock_inputs": sorted(step.lock_inputs),
     }
 
 
@@ -343,6 +351,7 @@ def step_key(
     adapter_env_sha256: str,
     input_digests: Sequence[str],
     native: Mapping[str, Sequence[str]],
+    sources_lock_sha256: str,
     r_session_sha256: str | None = None,
     r_module_env_sha256: str | None = None,
 ) -> str:
@@ -357,6 +366,7 @@ def step_key(
         adapter_env_sha256: The identity of the env that runs the adapter.
         input_digests: One input-set digest per ``step.inputs`` entry.
         native: Each selected native entry's dir digests.
+        sources_lock_sha256: The sha256 of the manifest's sources lock.
         r_session_sha256: The prefetch ``SESSION.json`` sha256 (R steps only).
         r_module_env_sha256: The captured R module env sha256 (R steps only).
 
@@ -376,6 +386,7 @@ def step_key(
         adapter_env_sha256=adapter_env_sha256,
         input_digests=input_digests,
         native=native,
+        sources_lock_sha256=sources_lock_sha256,
         r_session_sha256=r_session_sha256,
         r_module_env_sha256=r_module_env_sha256,
     )

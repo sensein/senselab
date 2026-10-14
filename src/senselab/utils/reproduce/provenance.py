@@ -61,6 +61,9 @@ _ENV_KEY = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
 _PACKAGE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 _VERSION = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.+!_-]{0,63}$")
 _WORDS = re.compile(r"^[A-Za-z0-9()@.,_+-]+( [A-Za-z0-9()@.,_+-]+)*$")
+_FILE_NAME = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$")
+DETAIL_KEYS = ("sources_lock", "sources_lock_sha256")
+"""The keys a step record's ``details`` may carry."""
 _NUMERIC = re.compile(r"^[0-9]+(\.[0-9]+)*$")
 _HOST_STRINGS: dict[str, re.Pattern[str]] = {
     "hostname": re.compile(r"^[A-Za-z0-9]([A-Za-z0-9.-]{0,252}[A-Za-z0-9])?$"),
@@ -211,6 +214,7 @@ def record_step(
     env_sha256: str | None = None,
     argv_sha256: str | None = None,
     argv: Sequence[str] | None = None,
+    details: Mapping[str, str] | None = None,
 ) -> list[Path]:
     """Write one step's provenance into ``prov_dir``.
 
@@ -235,6 +239,8 @@ def record_step(
         argv_sha256: The sha256 of the step's argv.
         argv: The rendered argv, given only under a non-confidential policy; recorded as the activity's
             ``argv``.
+        details: Recorded as the activity's ``details``: ``sources_lock_sha256`` (hex) and ``sources_lock``
+            (the lock file's name), and no other key.
 
     Returns:
         The files written: ``store.jsonl``, then the BEP028 files in `write_bep028_files` order. Any
@@ -261,6 +267,10 @@ def record_step(
     for value, what in ((env_sha256, "env_sha256"), (argv_sha256, "argv_sha256")):
         _check(value is None or _matches(value, _HEX64), what)
     _check(argv is None or (not isinstance(argv, str) and _strings(argv)), "argv")
+    details = dict(details or {})
+    _check(set(details) <= set(DETAIL_KEYS), "details")
+    _check("sources_lock_sha256" not in details or _matches(details["sources_lock_sha256"], _HEX64), "details")
+    _check("sources_lock" not in details or _matches(details["sources_lock"], _FILE_NAME), "details")
     installed = _check_venv(venv)
 
     store = ProvStore(run_id=step_key)
@@ -281,6 +291,8 @@ def record_step(
     }
     if argv is not None:
         parameters["argv"] = list(argv)
+    if details:
+        parameters["details"] = dict(sorted(details.items()))
     activity = store.activity(node=NODE, step=step, parameters=parameters, started=started, ended=ended)
     store.was_associated_with(activity, agent)
     for index, artifact in enumerate(inputs):

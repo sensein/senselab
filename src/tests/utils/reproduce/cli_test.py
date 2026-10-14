@@ -16,13 +16,15 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import pydantic
 import pytest
 import yaml
 
 from senselab.utils.reproduce import build, cache, cli, env, lockgen, run, sandbox, slurm, source
-from senselab.utils.reproduce.spec import load_manifest, load_profile
+from senselab.utils.reproduce.spec import StepSpec, load_manifest, load_profile
 from tests.utils.reproduce.run_test import ADAPTER, World
 from tests.utils.reproduce.slurm_test import FakeSbatch, _step
+from tests.utils.reproduce.sources_fixture import lock_data, write_lock
 
 SUBCOMMANDS = ["lock", "prefetch", "build-one", "run", "submit", "lint", "status"]
 ZERO = "0" * 64
@@ -103,9 +105,20 @@ class Site:
         return {"file": "patches/p.patch", "sha256": _sha(path)}
 
     def manifest(self, name: str, *steps: dict[str, Any], file: str = "m.yaml", header: str = "") -> Path:
-        """Write a manifest file under the manifest repository."""
+        """Write a manifest file under the manifest repository, with a sources lock pinning its steps.
+
+        Steps that do not validate get a reference to a lock that does not exist.
+        """
         path = self.base / file
-        path.write_text(header + yaml.safe_dump({"name": name, "steps": list(steps)}, sort_keys=False))
+        lock_name = Path(file).stem
+        try:
+            validated = [StepSpec.model_validate(s) for s in steps]
+        except pydantic.ValidationError:
+            sources = {"lock": f"sources/{lock_name}.lock.yaml", "sha256": "0" * 64}
+        else:
+            sources = write_lock(self.base, lock_name, lock_data(validated))
+        data = {"name": name, "sources": sources, "steps": list(steps)}
+        path.write_text(header + yaml.safe_dump(data, sort_keys=False))
         return path
 
     def main(self, *argv: str) -> int:
@@ -201,7 +214,22 @@ def test_lint_exit_codes(site: Site, capsys: pytest.CaptureFixture[str]) -> None
     assert site.main("lint", str(near_chance), *site.common()) == cli.EXIT_OK
     assert "W_BAND_AMIN_WIDE g f_stat" in capsys.readouterr().out
 
+    locked = site.manifest("demo", _step("prep"), file="k.yaml")
+    lock_file = site.base / "sources" / "k.lock.yaml"
+    lock_file.write_text(lock_file.read_text() + "# edited\n")
+    assert site.main("lint", str(locked), *site.common()) == cli.EXIT_FAILED
+    assert "E_LOCK_SHA sources/k.lock.yaml" in capsys.readouterr().out
+    data = yaml.safe_load(locked.read_text())
+    pins = lock_data([StepSpec.model_validate(_step("prep", commit="f" * 40))])
+    data["sources"] = write_lock(site.base, "k", pins)
+    locked.write_text(yaml.safe_dump(data, sort_keys=False))
+    assert site.main("lint", str(locked), *site.common()) == cli.EXIT_FAILED
+    assert "k.yaml:prep: E_LOCK_MISMATCH code" in capsys.readouterr().out
+    assert site.main("lint", str(locked), "--skip-locks", *site.common()) == cli.EXIT_OK
+    assert "W_LOCKS_SKIPPED" in capsys.readouterr().out
+
     assert site.main("lint", str(site.base / "absent.yaml"), *site.common()) == cli.EXIT_USAGE
+    assert site.main("lint", *site.common()) == cli.EXIT_USAGE
     with pytest.raises(SystemExit) as info:
         site.main("lint", "--no-such-option")
     assert info.value.code == cli.EXIT_USAGE

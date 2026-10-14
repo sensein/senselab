@@ -129,6 +129,7 @@ def _kwargs(**over: Any) -> dict[str, Any]:  # noqa: ANN401
         "adapter_env_sha256": SHA,
         "input_digests": [SHA, SHA],
         "native": {},
+        "sources_lock_sha256": SHA,
     }
     kwargs.update(over)
     return kwargs
@@ -495,6 +496,54 @@ def test_key_refuses_unrecorded_wheels(tmp_path: Path) -> None:
     with pytest.raises(CacheError) as info:
         _key(tmp_path, data)
     assert info.value.code == "E_KEY_NO_WHEELS"
+
+
+def test_the_sources_lock_sha_is_keyed_not_input_content(tmp_path: Path) -> None:
+    """The lock's sha256 and the ``lock_inputs`` ids are keyed; a registered input's files are never read."""
+    from senselab.utils.reproduce import run
+    from tests.utils.reproduce.run_test import World
+    from tests.utils.reproduce.sources_fixture import register_input
+
+    step = StepSpec.model_validate(_step_data(lock_inputs=["b", "a"]))
+    payload = step_key_payload(step, _profile(tmp_path), **_kwargs())
+    assert payload["sources_lock_sha256"] == SHA and payload["lock_inputs"] == ["a", "b"]
+    assert _key(tmp_path, sources_lock_sha256=OTHER) != _key(tmp_path)
+    assert _key(tmp_path, _step_data(lock_inputs=["a"])) != _key(tmp_path)
+    with pytest.raises(CacheError) as info:
+        _key(tmp_path, sources_lock_sha256="x")
+    assert info.value.code == "E_KEY_LOCK"
+
+    world = World(tmp_path / "site")
+    tables = world.data / "tables"
+    tables.mkdir()
+    (tables / "t.csv").write_text("1\n")
+    world.registered["tables"] = register_input(
+        world.base, {"data": world.data}, "tables", root="data", relpath="tables"
+    )
+    manifest = world.manifest(world.step("prep", "prep", "{input:tables}/t.csv", inputs=[], lock_inputs=["tables"]))
+    world.prefetch(manifest)
+    first = run._key(manifest.steps[0], "demo", world.config(), {})
+    assert first.paths["input:tables"] == tables
+    (tables / "t.csv").write_text("2\n")
+    (tables / "t.csv").chmod(0)
+    try:
+        assert run._key(manifest.steps[0], "demo", world.config(), {}).key == first.key
+    finally:
+        (tables / "t.csv").chmod(0o600)
+    other = world.data / "other"
+    other.mkdir()
+    (other / "o.csv").write_text("1\n")
+    world.registered["other"] = register_input(world.base, {"data": world.data}, "other", root="data", relpath="other")
+    moved = world.manifest(world.step("prep", "prep", "{input:tables}/t.csv", inputs=[], lock_inputs=["tables"]))
+    assert moved.sources != manifest.sources
+    assert run._key(moved.steps[0], "demo", world.config(), {}).key != first.key
+
+
+def test_key_schema_is_4(tmp_path: Path) -> None:
+    """The key payload is tagged ``reproduce-step-key-4`` since the sources lock joined it."""
+    assert cache.STEP_KEY_SCHEMA == "reproduce-step-key-4"
+    step = StepSpec.model_validate(_step_data())
+    assert step_key_payload(step, _profile(tmp_path), **_kwargs())["schema"] == "reproduce-step-key-4"
 
 
 # --- hf_weights field ------------------------------------------------------------------------------
