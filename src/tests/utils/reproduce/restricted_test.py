@@ -11,6 +11,8 @@ import hashlib
 import json
 import os
 import stat
+import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -19,7 +21,7 @@ from typing import Any
 import pytest
 import yaml
 
-from senselab.utils.reproduce import cache, cli, inputs, restricted, run, sandbox, slurm
+from senselab.utils.reproduce import build, cache, cli, env, inputs, restricted, run, sandbox, slurm
 from senselab.utils.reproduce.spec import Manifest, Profile, StepSpec
 from tests.utils.reproduce.run_test import World, _git
 from tests.utils.reproduce.slurm_test import FakeSbatch
@@ -778,3 +780,50 @@ def test_a_failed_summary_write_or_a_restricted_closure_withdraws_the_result(
     capsys.readouterr()
     assert cli.main(["lint", str(path), "--profile", str(profile_file), "--base-dir", str(site.base)]) == 1
     assert f"{path}:X: scan-hook-missing" in capsys.readouterr().out
+
+
+@needs_userns
+def test_build_and_env_sandboxes_never_see_restricted_dirs(site: Site, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A build-time command reading a file under a restricted dir fails; with no masks set it is refused outright.
+
+    The entry points holding a profile (``build-one``, ``prefetch_env``) set the masks from it.
+    """
+    secret = site.restricted_dir / "canary" / "in.txt"
+    tool = site.tmp / "fake-uv"
+    tool.write_text(f"#!/bin/sh\nexec /usr/bin/cat {secret}\n")
+    tool.chmod(0o755)
+    work = site.tmp / "build-work"
+    work.mkdir()
+
+    def build_run(masks: list[Path]) -> subprocess.CompletedProcess[str]:
+        with sandbox.tool_masks(masks):
+            argv = build.wheel_build_argv(str(tool), Path(sys.executable), work, work, venv=site.cache, writable=[work])
+        return subprocess.run(argv, capture_output=True, text=True, check=False, timeout=60)
+
+    site.cache.mkdir(exist_ok=True)
+    unmasked = build_run([])
+    assert CANARY in unmasked.stdout
+    masked = build_run(site.restricted_dirs)
+    assert masked.returncode != 0 and CANARY not in masked.stdout + masked.stderr
+
+    monkeypatch.setattr(sandbox, "_TOOL_MASKS", None)
+    with pytest.raises(ValueError, match="E_SANDBOX_NO_MASKS"):
+        build.wheel_build_argv(str(tool), Path(sys.executable), work, work, venv=site.cache, writable=[work])
+    seen: list[Any] = []
+
+    def record(*args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
+        seen.append(sandbox.active_tool_masks())
+        raise RuntimeError("stop")
+
+    monkeypatch.setattr(env, "_prefetch_env", record)
+    with pytest.raises(RuntimeError):
+        env.prefetch_env(
+            _steps(site.step("P", "prep", "x"))[0].env,
+            site.base,
+            site.cache,
+            analysis="demo",
+            wheelhouse=site.cache / "w",
+            profile=site.profile(),
+        )
+    assert seen == [tuple(str(p) for p in site.restricted_dirs)]
+    assert sandbox.active_tool_masks() is None

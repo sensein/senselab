@@ -10,13 +10,14 @@ not keyed. `canary` is a Python snippet whose TCP connect must fail inside the s
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
 import shlex
 import subprocess
 import sys
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from pathlib import Path
 
 from senselab.utils.reproduce.spec import Profile, StepSpec, check_step_profile, render
@@ -275,6 +276,40 @@ def sandbox_argv(
     unshare = UNSHARE if netns else UNSHARE_NO_NETNS
     script = sandbox_script(ro_roots, rw_dirs, ro_extra, netns=netns, tmp=tmp, visible=visible, masked=masked)
     return [*unshare, SH, "-c", script, "sh", *argv]
+
+
+_TOOL_MASKS: tuple[str, ...] | None = None
+
+
+@contextlib.contextmanager
+def tool_masks(dirs: Iterable[str | os.PathLike[str]]) -> Iterator[None]:
+    """Mask ``dirs`` (with any already set) in every `tool_argv` sandbox while the block runs."""
+    global _TOOL_MASKS  # noqa: PLW0603
+    saved = _TOOL_MASKS
+    _TOOL_MASKS = (*(saved or ()), *(os.fspath(d) for d in dirs))
+    try:
+        yield
+    finally:
+        _TOOL_MASKS = saved
+
+
+def active_tool_masks() -> tuple[str, ...] | None:
+    """The dirs `tool_argv` masks now; None outside every `tool_masks` block."""
+    return _TOOL_MASKS
+
+
+def tool_argv(
+    argv: Sequence[str], rw_dirs: Iterable[str | os.PathLike[str]], ro_extra: Iterable[str | os.PathLike[str]] = ()
+) -> list[str]:
+    """`sandbox_argv` for build and env tools: no data root is bound, and the `tool_masks` dirs are masked.
+
+    Raises:
+        ValueError: ``E_SANDBOX_NO_MASKS`` outside every `tool_masks` block, so a caller with no profile
+            cannot run third-party code with restricted dirs visible; or as `sandbox_argv`.
+    """
+    if _TOOL_MASKS is None:
+        raise ValueError("E_SANDBOX_NO_MASKS: build and env sandboxes run only inside sandbox.tool_masks")
+    return sandbox_argv(argv, [], rw_dirs, ro_extra, masked=_TOOL_MASKS)
 
 
 SWEEP_REFUSED = "reproduce sandbox: mounts left writable"
