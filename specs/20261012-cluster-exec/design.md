@@ -111,7 +111,9 @@ The primitives shared by both hashed-lock formats. The header formats themselves
 
 - `find_uv(*, install=False)` searches `PATH`, then `~/.local/bin`, then `~/.cargo/bin`. It installs uv with pip
   only when `install=True`, and otherwise raises `FileNotFoundError`. It replaces `subprocess_venv._find_uv` and
-  `venv_lock._uv`, and `venv_lock` still raises `VenvLockError` when uv is missing.
+  `venv_lock._uv`, and `venv_lock` still raises `VenvLockError` when uv is missing. `home=False` searches `PATH` only:
+  the reproduce driver's uv must come from its pinned `PATH` (or `REPRO_UV`), never from a home install that a batch
+  job's environment did not name.
 - `normalize_name(name)` gives the PEP 503 form of a name.
 - `requirements_sha256(lines, *, header_fields)` digests the sorted requirements with the header fields. It is
   order-insensitive and header-sensitive, and the committed digests are unchanged.

@@ -29,14 +29,16 @@ def _home_locations() -> list[Path]:
     return [Path.home() / ".local" / "bin" / "uv", Path.home() / ".cargo" / "bin" / "uv"]
 
 
-def find_uv(*, install: bool = False) -> str:
+def find_uv(*, install: bool = False, home: bool = True) -> str:
     """Return the path of the ``uv`` executable.
 
-    The search order is ``PATH``, then ``~/.local/bin/uv``, then ``~/.cargo/bin/uv``.
+    The search order is ``PATH``, then (with ``home``) ``~/.local/bin/uv``, then ``~/.cargo/bin/uv``.
 
     Args:
         install: When nothing is found, ``pip install uv`` and search ``PATH`` again (for hosts
             such as notebooks where uv is not pre-installed).
+        home: Whether to search the home install locations after ``PATH``; False for a caller whose uv must
+            come from ``PATH`` alone, such as one that pins the environment it runs in.
 
     Returns:
         The path of ``uv``.
@@ -47,7 +49,7 @@ def find_uv(*, install: bool = False) -> str:
     found = shutil.which("uv")
     if found:
         return found
-    for candidate in _home_locations():
+    for candidate in _home_locations() if home else []:
         if candidate.is_file():
             return str(candidate)
     if install:
@@ -58,7 +60,7 @@ def find_uv(*, install: bool = False) -> str:
             if found:
                 return found
         raise FileNotFoundError("uv not found and auto-install failed. Install with: pip install uv")
-    raise FileNotFoundError("uv not found on PATH or in the standard install locations")
+    raise FileNotFoundError("uv not found on PATH" + (" or in the standard install locations" if home else ""))
 
 
 def normalize_name(name: str) -> str:
