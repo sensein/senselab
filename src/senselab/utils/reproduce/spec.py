@@ -55,7 +55,8 @@ Label = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9][A-Za-z0-9_+-]{0,
 CountName = Annotated[str, StringConstraints(pattern=r"^[a-z][a-z0-9_]{0,63}$")]
 SourceRoot = Annotated[str, StringConstraints(pattern=r"^(up:)?[A-Za-z0-9_.-]+$")]
 ClassName = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")]
-RESERVED_STEP_NAMES = frozenset({"pools"})
+POOLS_DIR = "pools"
+RESERVED_STEP_NAMES = frozenset({POOLS_DIR})
 """Names a step may not take: ``<runs_root>/<date>/<analysis>/pools/`` holds the work pools of sharded steps."""
 
 
@@ -683,7 +684,7 @@ class StepSpec(_Model):
     a restricted input, on a data-root pattern reaching a restricted dir, or needing a restricted step must
     declare it (`restricted.check_restricted`). ``shards`` makes the step one step per shard (`ShardSpec`); a
     step that needs it (a gather step) sees ``{up:<step>}`` as a read-only directory of links ``<i>``, one to each
-    shard's ``{out}``.
+    shard's ``{out}``. The name ``pools`` is reserved (``E_SPEC_RESERVED_NAME``).
     """
 
     name: Name
@@ -718,7 +719,7 @@ class StepSpec(_Model):
     def _consistent(self) -> "StepSpec":
         needs = set(self.needs)
         if self.name in RESERVED_STEP_NAMES:
-            raise ValueError(f"step name {self.name!r} is reserved")
+            raise ValueError(f"E_SPEC_RESERVED_NAME: step name {self.name!r} is reserved")
         if len({e.name for e in self.extract}) != len(self.extract):
             raise ValueError(f"E_SPEC_EXTRACT: step {self.name!r} has duplicate extract names")
         if len(needs) != len(self.needs):

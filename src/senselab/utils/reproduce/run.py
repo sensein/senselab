@@ -6,9 +6,10 @@ profile's ``restricted_results_root`` for a restricted step (`results_root_of`):
 - ``R/work/``: the only directory the step may write; the ``{out}`` placeholder (argv, ``REPRO_OUT``,
   ``outputs`` patterns, ``{up:<step>}`` of a dependent) names it. Staged files go to ``R/work/stage``.
 - ``R/tmp/``: the step's scratch (``{tmp}``, ``TMPDIR``, ``/tmp`` when possible); removed after the
-  run, and never read by the driver after the step. For each need that is a sharded step, the driver makes
-  ``R/tmp/up-<step>/``, a read-only dir of links ``<i>`` to each shard's ``work/`` (bound read-only), and
-  ``{up:<step>}`` names it.
+  run, and never read by the driver after the step.
+- ``R/up/<step>/``: for each need that is a sharded step, a dir of links ``<i>`` to each shard's ``work/``, made by
+  the driver and read-only in the sandbox like the rest of ``R``; ``{up:<step>}`` names it, each shard's ``work/``
+  is bound read-only, and ``R/up`` is removed after the run.
 - ``R/logs/``, ``R/prov/``, ``R/adapter/``, ``R/metrics.json`` and ``R/summary.json``: written by the
   driver only, never writable inside a sandbox.
 
@@ -117,6 +118,7 @@ Status = Literal["executed", "skipped", "failed", "never-ran"]
 
 WORK = "work"
 TMP = "tmp"
+UP = "up"
 LOGS = "logs"
 STAGE = "stage"
 ADAPTER_DIR = "adapter"
@@ -709,7 +711,7 @@ def _key(
         "cache": config.cache,
     }
     gathers = _gathers(step, upstream)
-    paths |= {f"up:{n}": result / TMP / f"up-{n}" if n in gathers else _up_work(upstream, n) for n in step.needs}
+    paths |= {f"up:{n}": result / UP / n if n in gathers else _up_work(upstream, n) for n in step.needs}
     paths |= registered
     ref_name = PurePosixPath(config.sources[analysis].lock).name
     return _Keyed(
@@ -955,7 +957,8 @@ def _link(config: RunConfig, analysis: str, step: StepSpec, shard: int | None, o
         return
     parent = run / step.name
     if parent.is_symlink():
-        parent.unlink()
+        with contextlib.suppress(FileNotFoundError):
+            parent.unlink()
     cache.link_run(parent, str(shard), out)
 
 
@@ -1216,8 +1219,7 @@ class _Execution:
             self.codes.add("E_NOT_REPORTABLE")
         self._closure_recheck()
         outputs = self._outputs()
-        self._open_gathers()
-        for scratch in (self.tmp, self.result / ADAPTER_TMP, self.result / R_SESSION_DIR):
+        for scratch in (self.tmp, self.result / UP, self.result / ADAPTER_TMP, self.result / R_SESSION_DIR):
             try:
                 _remove_tree(scratch)
             except OSError:
@@ -1229,21 +1231,15 @@ class _Execution:
             self._release()
         return self._summary()
 
-    def _open_gathers(self) -> None:
-        """Make each ``tmp/up-<step>`` gather dir writable again, so the scratch removal can empty it."""
-        for name in self.keyed.gathers:
-            path = self.tmp / f"up-{name}"
-            with contextlib.suppress(OSError):
-                if stat.S_ISDIR(os.lstat(path).st_mode):
-                    os.chmod(path, 0o770)
-
     def _make_gathers(self) -> None:
-        """``tmp/up-<step>`` for each sharded need: links ``<i>`` to each shard's ``work/``, then made read-only."""
+        """``R/up/<step>`` for each sharded need: links ``<i>`` to each shard's ``work/``."""
+        if not self.keyed.gathers:
+            return
+        up = _mkdir(self.result / UP)
         for name, outs in self.keyed.gathers.items():
-            gather = _mkdir(self.tmp / f"up-{name}")
+            gather = _mkdir(up / name)
             for index, out in enumerate(outs):
                 os.symlink(os.path.realpath(out / WORK), gather / str(index))
-            os.chmod(gather, 0o550)
 
     def _closure_recheck(self) -> None:
         """Fail a public step, and remove its ``work/``, when an input of its closure became restricted mid-run."""
@@ -2150,7 +2146,10 @@ def resolve_steps(manifests: Sequence[Manifest], config: RunConfig, names: Colle
 
 
 def step_row(outcome: StepOutcome, spec: StepSpec) -> dict[str, Any]:
-    """The ``run.json`` row of a step's outcome; a sharded step's row also lists its shard keys (``shards``)."""
+    """The ``run.json`` row of a step's outcome.
+
+    A sharded step's row also lists its shard keys (``shards``), or None unless every shard succeeded.
+    """
     row = {
         "step": outcome.step,
         "key": outcome.key,
@@ -2159,8 +2158,8 @@ def step_row(outcome: StepOutcome, spec: StepSpec) -> dict[str, Any]:
         "codes": list(outcome.codes),
         "restricted": spec.restricted,
     }
-    if outcome.shards:
-        row["shards"] = [out.name for out in outcome.shards]
+    if spec.shards is not None:
+        row["shards"] = [out.name for out in outcome.shards] or None
     return row
 
 

@@ -1023,7 +1023,12 @@ def _run_pool(args: argparse.Namespace, paths: Sequence[Path], manifests: list[M
         pins=args.pin,
     )
     commands = [slurm.shard_command(base, spec.name, i, sys.executable) for i in range(spec.shards.count)]
-    outcome = slurm.run_pool(manifests, config, spec.name, args.submission, commands)
+
+    def recheck() -> tuple[str, ...]:
+        changed = bool(args.pin) and _read_bytes(paths)[1] != list(args.pin)
+        return ("E_MANIFEST_CHANGED",) if changed else ()
+
+    outcome = slurm.run_pool(manifests, config, spec.name, args.submission, commands, recheck=recheck)
     print(status_line(outcome.step, outcome.key, outcome.status, outcome.exit, outcome.codes))
     return EXIT_OK if outcome.ok else EXIT_FAILED
 
