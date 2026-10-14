@@ -59,7 +59,9 @@ What `vllm_server` takes from these numbers:
     (requirements-sha256 `5b1a68e3…d8a4`, Python 3.12, exclude-newer `2026-10-10T00:00:00Z`).
 - **Logging.** vLLM logs no request content unless `--enable-log-requests` is passed. `VllmServer` refuses any
   argument starting with `--enable-log-req` or `--enable-log-out` (argparse accepts abbreviations), and
-  `--config` (a config file could turn them on). The clients log nothing.
+  `--config` (a config file could turn them on). The clients log nothing. `refused_arg` reads an option name as
+  vLLM's parser does (`_` as `-`, unique abbreviations accepted), so `--enable_log_requests`, `--enable-log-r` and
+  `--conf` are refused too; `--enable-log-stats` stays allowed.
 
 ### The slice pool (`specs/20261011-slice-pool/`)
 

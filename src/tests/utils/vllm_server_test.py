@@ -705,6 +705,18 @@ def test_abbreviated_logging_flags_and_config_files_are_refused(fake: dict[str, 
     assert _server(fake, "--enable-log-stats").server_args == ["--enable-log-stats"]
 
 
+def test_underscored_and_short_logging_flags_are_refused(fake: dict[str, Path]) -> None:
+    """The parser reads ``_`` as ``-`` and takes unique abbreviations, so those spellings are refused too."""
+    for flag in ("--enable_log_requests", "--enable-log-r", "--enable_log_out=1", "--Config", "--conf", "--config_x"):
+        assert vs.refused_arg(flag) == (flag not in ("--Config", "--config_x")), flag
+    for flag in ("--enable_log_requests", "--enable-log-r", "--conf=serve.yaml"):
+        with pytest.raises(ValueError):
+            _server(fake, flag)
+    for flag in ("--enable-log-stats", "--enable_log_stats", "--enable-chunked-prefill", "-O3"):
+        assert not vs.refused_arg(flag), flag
+    assert vs.option_name("--max_model_len=8") == "--max-model-len"
+
+
 def test_media_errors_name_a_path_only_by_suffix_and_digest(tmp_path: Path) -> None:
     """A refused media path shows up as its suffix and a short sha256 of the path, never its name or directory."""
     folder = tmp_path / CANARY
