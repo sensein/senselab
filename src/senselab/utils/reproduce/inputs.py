@@ -724,12 +724,44 @@ class Verification(NamedTuple):
     overlay: bytes | None
 
 
+def restricted_dir_paths(profile: Profile) -> list[str]:
+    """Every restricted dir of the profile, as written and resolved."""
+    return sorted({s for d in profile.restricted_dirs for s in (os.path.normpath(d), os.path.realpath(d))})
+
+
+def in_restricted_dir(inp: RegisteredInput, profile: Profile) -> bool:
+    """Whether the input's tree, manifest or original lies in (or holds) a restricted dir, as written or resolved."""
+    places = [(inp.root, inp.relpath), (inp.manifest.root, inp.manifest.relpath)]
+    if inp.original is not None:
+        places.append((inp.original.root, inp.original.relpath))
+    dirs = restricted_dir_paths(profile)
+    for root, rel in places:
+        if root in profile.roots:
+            path = profile.roots[root] / rel
+            for spelled in (os.path.normpath(path), os.path.realpath(path)):
+                if any(_under(spelled, d) or _under(d, spelled) for d in dirs):
+                    return True
+    return False
+
+
+def check_flag(inp: RegisteredInput, profile: Profile) -> None:
+    """Refuse an input in a restricted dir that is not flagged ``restricted: true``.
+
+    Raises:
+        InputError: ``E_INPUT_REGISTRY``.
+    """
+    if not inp.restricted and in_restricted_dir(inp, profile):
+        raise InputError(CODE)
+
+
 def verify_dir(inp: RegisteredInput, profile: Profile) -> Path:
     """Where an input's records live: ``input-verify/`` beside the results root (the restricted one if restricted).
 
     Raises:
-        InputError: ``E_INPUT_REGISTRY`` for a restricted input on a profile with no restricted results root.
+        InputError: ``E_INPUT_REGISTRY`` for a restricted input on a profile with no restricted results root, or
+            an unflagged input in a restricted dir (`check_flag`).
     """
+    check_flag(inp, profile)
     if not inp.restricted:
         return profile.results_root.parent / VERIFY_DIR
     if profile.restricted_results_root is None:
@@ -912,8 +944,7 @@ def accepted(
         ``([], overlay or None)`` when the latest record has the registered manifest sha256, ``status: ok``
         and is at most 31 days old (and not dated more than `FUTURE_SKEW` ahead), and its overlay (if any)
         has the recorded sha256; otherwise
-        ``(["E_INPUT_UNVERIFIED"], None)``, or ``(["E_INPUT_REGISTRY"], None)`` for a restricted input on a
-        profile with no restricted results root.
+        ``(["E_INPUT_UNVERIFIED"], None)``, or ``(["E_INPUT_REGISTRY"], None)`` when `verify_dir` refuses.
     """
     try:
         directory = verify_dir(inp, profile)
@@ -948,12 +979,14 @@ def registry_codes(base_dir: Path, input_id: str, profile: Profile) -> list[str]
     """Check one registry file without hashing any input file: its types, manifest sha256 and root line.
 
     Returns:
-        ``["E_INPUT_REGISTRY"]`` when the entry does not validate, its manifest cannot be read with the
-        registered sha256, or the manifest's ``# root=`` names neither the input's tree nor its original;
+        ``["E_INPUT_REGISTRY"]`` when the entry does not validate, lies in a restricted dir unflagged
+        (`check_flag`), its manifest cannot be read with the registered sha256, or the manifest's ``# root=``
+        names neither the input's tree nor its original;
         empty otherwise.
     """
     try:
         entry, _ = read_registry_entry(base_dir, input_id)
+        check_flag(entry, profile)
         manifest_rows(entry, profile)
         path = profile.roots[entry.manifest.root] / entry.manifest.relpath
         first = path.read_bytes().split(b"\n", 1)[0].decode()

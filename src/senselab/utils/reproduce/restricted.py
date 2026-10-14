@@ -6,19 +6,37 @@ tree, manifest or original in a restricted dir), an
 through symlinks in the pattern's fixed prefix), or a ``needs`` entry on a restricted step
 (`check_restricted`). A restricted step needs a profile with a restricted results root. A public step's
 sandbox masks every restricted dir (`mask_dirs`).
+
+A done restricted step's ``metrics.json`` and ``summary.json`` are copied to the profile's release root only
+when the scan hook passes both (`release`); the hook fails closed (`run_scan_hook`). A public step's summary
+records its ``input_closure``; verifying a restricted input purges every public result whose closure holds it
+(`purge_closure`).
 """
 
 from __future__ import annotations
 
+import json
 import os
 import re
+import shutil
+import signal
+import subprocess
+import uuid
 from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 
-from senselab.utils.reproduce import digest, inputs
+from senselab.utils.reproduce import cache, digest, inputs
 from senselab.utils.reproduce.spec import RESERVED_ROOT_NAMES, InputSpec, Manifest, Profile, StageSpec, StepSpec
 
 CODE = "E_SPEC_RESTRICTED"
+HOOK_MISSING = "E_SCAN_HOOK_MISSING"
+RELEASE_REFUSED = "W_RELEASE_REFUSED"
+SCAN_TIMEOUT_S = 300.0
+SCAN_LOG = "scan.log"
+HOOK_ENV = {"PATH": "/usr/bin:/bin", "LC_ALL": "C.UTF-8"}
+RELEASED_FILES = ("metrics.json", "summary.json")
+RELEASE_MODE = 0o660
+_KEY = re.compile(r"^[0-9a-f]{64}$")
 PROFILE_FIELDS = ("restricted_dirs", "restricted_results_root", "released_metrics_root", "scan_hook")
 _WILD = re.compile(r"[*?\[]")
 
@@ -31,9 +49,7 @@ def _spellings(path: str | os.PathLike[str]) -> set[str]:
     return {os.path.normpath(path), os.path.realpath(path)}
 
 
-def restricted_dir_paths(profile: Profile) -> list[str]:
-    """Every restricted dir of the profile, as written and resolved."""
-    return sorted({s for d in profile.restricted_dirs for s in _spellings(d)})
+restricted_dir_paths = inputs.restricted_dir_paths
 
 
 def mask_dirs(profile: Profile) -> list[Path]:
@@ -75,19 +91,8 @@ def pattern_reaches(top: str | os.PathLike[str], pattern: str, dirs: Iterable[st
 
 
 def input_is_restricted(entry: inputs.RegisteredInput, profile: Profile) -> bool:
-    """Whether a registered input is flagged restricted, or its tree, manifest or original lies in a restricted dir."""
-    if entry.restricted:
-        return True
-    places = [(entry.root, entry.relpath), (entry.manifest.root, entry.manifest.relpath)]
-    if entry.original is not None:
-        places.append((entry.original.root, entry.original.relpath))
-    dirs = restricted_dir_paths(profile)
-    for root, rel in places:
-        if root in profile.roots:
-            for spelled in _spellings(profile.roots[root] / rel):
-                if any(_under(spelled, d) or _under(d, spelled) for d in dirs):
-                    return True
-    return False
+    """Whether a registered input is flagged restricted, or its tree, manifest or original is in a restricted dir."""
+    return entry.restricted or inputs.in_restricted_dir(entry, profile)
 
 
 def _pattern_violation(step: StepSpec, profile: Profile, dirs: Sequence[str]) -> bool:
@@ -157,3 +162,201 @@ def check_manifest_set(manifests: Sequence[Manifest], base_dir: Path, profile: P
     """`check_restricted` over every step of ``manifests``, with the registry read from ``base_dir``."""
     steps = [s for m in manifests for s in m.steps]
     check_restricted(steps, step_registry(steps, base_dir), profile)
+
+
+# --- the scan hook -----------------------------------------------------------------------------------------
+
+
+def hook_missing(profile: Profile) -> bool:
+    """Whether the scan hook cannot run: none named, `argv[0]` not executable, or an absolute argument absent."""
+    hook = profile.scan_hook
+    if not hook:
+        return True
+    program = hook[0]
+    if not (os.path.isabs(program) and os.path.isfile(program) and os.access(program, os.X_OK)):
+        return True
+    return any(os.path.isabs(arg) and not os.path.exists(arg) for arg in hook[1:])
+
+
+def _log_fd(log: Path | None) -> int:
+    if log is None:
+        return os.open(os.devnull, os.O_WRONLY)
+    return os.open(log, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o660)
+
+
+def run_scan_hook(profile: Profile, path: str | os.PathLike[str], log: Path | None = None) -> bool:
+    """Run ``scan_hook + [path]`` outside the sandbox; True only when it exits 0 within `SCAN_TIMEOUT_S`.
+
+    The hook gets `HOOK_ENV` only, no stdin, and its own process group (killed on a timeout). Its output goes to
+    ``log`` (appended), or nowhere. Fails closed: no hook, a non-zero exit, a timeout, a missing or
+    non-executable program or any ``OSError`` is False.
+    """
+    if not profile.scan_hook:
+        return False
+    try:
+        fd = _log_fd(log)
+    except OSError:
+        return False
+    try:
+        child = subprocess.Popen(
+            [*profile.scan_hook, os.fspath(path)],
+            env=dict(HOOK_ENV),
+            stdin=subprocess.DEVNULL,
+            stdout=fd,
+            stderr=fd,
+            start_new_session=True,
+        )
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return False
+    finally:
+        os.close(fd)
+    try:
+        return child.wait(timeout=SCAN_TIMEOUT_S) == 0
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(child.pid, signal.SIGKILL)
+        except OSError:
+            child.kill()
+        child.wait()
+        return False
+
+
+def scan_values(profile: Profile, values: object, directory: Path, log: Path | None = None) -> bool:
+    """Write ``values`` as JSON to a temporary file in ``directory``, run the hook on it, remove it."""
+    path = directory / f".scan-{uuid.uuid4().hex}.json"
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, "w") as handle:
+            json.dump(values, handle, sort_keys=True)
+        return run_scan_hook(profile, path, log)
+    except (OSError, TypeError, ValueError):
+        return False
+    finally:
+        try:
+            path.unlink()
+        except OSError:
+            pass
+
+
+# --- the release copy --------------------------------------------------------------------------------------
+
+
+def _write(path: Path, data: bytes) -> None:
+    tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, RELEASE_MODE)
+    try:
+        try:
+            os.write(fd, data)
+            os.fchmod(fd, RELEASE_MODE)
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        os.replace(tmp, path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+
+
+def release(result: Path, key: str, profile: Profile, summary: dict[str, object], log: Path | None = None) -> bool:
+    """Scan a done restricted step's ``metrics.json`` and its final ``summary`` and, when both are clean, copy them.
+
+    Args:
+        result: The step's result dir; ``R/metrics.json`` has passed the driver's validator.
+        key: The step key, naming ``<released_metrics_root>/<key>/``.
+        profile: The profile (its ``scan_hook`` and ``released_metrics_root``).
+        summary: The summary the step will write, with ``"released": true``.
+        log: Where the hook's output goes.
+
+    Returns:
+        True when both files were scanned clean and copied (atomically, mode ``0660``); False otherwise, and
+        then nothing is left under the release dir.
+    """
+    root = profile.released_metrics_root
+    if root is None or not _KEY.match(key):
+        return False
+    staged = result / f".release-{uuid.uuid4().hex}"
+    target = root / key
+    try:
+        os.mkdir(staged, 0o700)
+        metrics = (result / RELEASED_FILES[0]).read_bytes()
+        data = {RELEASED_FILES[0]: metrics, RELEASED_FILES[1]: _summary_bytes(summary)}
+        for name, content in data.items():
+            _write(staged / name, content)
+        if not all(run_scan_hook(profile, staged / name, log) for name in RELEASED_FILES):
+            return False
+        target.mkdir(parents=True, exist_ok=True)
+        for name, content in data.items():
+            _write(target / name, content)
+        return True
+    except OSError:
+        shutil.rmtree(target, ignore_errors=True)
+        return False
+    finally:
+        shutil.rmtree(staged, ignore_errors=True)
+
+
+def _summary_bytes(summary: dict[str, object]) -> bytes:
+    """The bytes `cache.write_summary` writes for ``summary``."""
+    return (json.dumps(dict(summary), indent=2, sort_keys=True, allow_nan=False) + "\n").encode()
+
+
+# --- the closure purge -------------------------------------------------------------------------------------
+
+
+def _closure_of(out: Path) -> list[str]:
+    try:
+        fd = os.open(out / cache.SUMMARY, os.O_RDONLY | os.O_NOFOLLOW)
+        with os.fdopen(fd, "rb") as handle:
+            data = json.loads(handle.read())
+    except (OSError, ValueError):
+        return []
+    closure = data.get("input_closure") if isinstance(data, dict) else None
+    return [c for c in closure if isinstance(c, str)] if isinstance(closure, list) else []
+
+
+def _run_links(runs_root: Path) -> list[Path]:
+    """Every ``<runs_root>/<date>/<analysis>/<step>`` symlink."""
+    found: list[Path] = []
+    if not runs_root.is_dir():
+        return found
+    for day in (p for p in runs_root.iterdir() if p.is_dir() and not p.is_symlink()):
+        for analysis in (p for p in day.iterdir() if p.is_dir() and not p.is_symlink()):
+            found += [p for p in analysis.iterdir() if p.is_symlink()]
+    return found
+
+
+def purge_closure(profile: Profile, input_id: str) -> int:
+    """Remove every public result whose summary's ``input_closure`` holds ``input_id``, and its run links.
+
+    Each result dir is removed under its own claim, after its summary is read again there. Stateless: no
+    earlier record is consulted, so a second call removes nothing.
+
+    Returns:
+        The number of result dirs removed.
+
+    Raises:
+        CacheError: ``E_CLAIM_HELD`` when a result's claim stays held.
+        OSError: When a dir or link cannot be removed.
+    """
+    root = profile.results_root
+    if not root.is_dir():
+        return 0
+    purged = 0
+    links = None
+    for entry in sorted(os.scandir(root), key=lambda e: e.name):
+        if not _KEY.match(entry.name) or not entry.is_dir(follow_symlinks=False):
+            continue
+        out = Path(entry.path)
+        if input_id not in _closure_of(out):
+            continue
+        with cache.claim(root, entry.name):
+            if input_id not in _closure_of(out):
+                continue
+            real = os.path.realpath(out)
+            links = _run_links(profile.runs_root) if links is None else links
+            for link in links:
+                if os.path.realpath(link) == real and link.is_symlink():
+                    link.unlink()
+            shutil.rmtree(out)
+            purged += 1
+    return purged
