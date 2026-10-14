@@ -14,6 +14,12 @@ Two invisible assumptions:
   true for local disks and NFSv4 (or equivalent), not guaranteed for NFSv3 or
   other network filesystems that treat locking as advisory-only or per-client.
   On such a filesystem two hosts can both believe they hold the lock.
+- **The locked file must still be the one at the path.** ``filelock`` unlinks the lock
+  file before it unlocks, and rejects a lock taken on a file only when its link count is 0.
+  On NFS a client that unlinks a file it still has open silly-renames it (``.nfsXXXX``), so
+  the old file keeps a link: a waiter that opened it before the release locks it, and the
+  next caller creates and locks a new file at the path. :func:`lock_fd_matches_path`
+  closes that gap; :class:`SharedFileLock` checks it after every acquire and retries.
 """
 
 import getpass
@@ -28,6 +34,7 @@ from pathlib import Path
 from typing import Optional
 
 from filelock import FileLock, Timeout
+from filelock._unix import UnixFileLock, has_fcntl
 
 logger = logging.getLogger("senselab")
 
@@ -38,6 +45,45 @@ LOCK_FILE_MODE = 0o664
 # inherit the parent directory's group, so the *next* user's files land in the
 # same group as the first, not their own primary group.
 LOCK_DIR_MODE = 0o2775
+
+
+def lock_fd_matches_path(fd: int, path: "os.PathLike[str] | str") -> bool:
+    """Return whether the file locked through ``fd`` is the file now at ``path`` (same device and inode).
+
+    The path is resolved with ``open`` and ``fstat``, never ``stat``: on NFS ``stat`` can be answered from a
+    cached dentry that still names the old file, while ``open`` revalidates the name (close-to-open). The
+    descriptor is opened read-only with ``O_NOFOLLOW`` and closed at once; closing it does not release the
+    lock held through ``fd`` (``flock`` locks, NFS-emulated ones included, belong to the open file
+    description, not to the process). A path that is missing or cannot be opened does not match.
+    """
+    held = os.fstat(fd)
+    try:
+        probe = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    except OSError:
+        return False
+    try:
+        current = os.fstat(probe)
+    finally:
+        os.close(probe)
+    return (current.st_dev, current.st_ino) == (held.st_dev, held.st_ino)
+
+
+class _PathCheckedFileLock(UnixFileLock):
+    """``filelock``'s ``flock`` lock, which also drops a lock taken on a file no longer at the path.
+
+    ``UnixFileLock._acquire`` keeps a lock unless the locked file has no links; on NFS the released file is
+    silly-renamed and keeps one (see the module docstring). After each successful attempt the descriptor is
+    checked with :func:`lock_fd_matches_path`; on a mismatch it is closed (which drops the ``flock``) and
+    left unset, so ``filelock``'s own retry loop opens the file now at the path, as it does for an unlinked
+    file. Nothing is unlinked on that path: the file there may be another holder's.
+    """
+
+    def _acquire(self) -> None:
+        super()._acquire()
+        fd = self._context.lock_file_fd
+        if fd is not None and not lock_fd_matches_path(fd, self.lock_file):
+            self._context.lock_file_fd = None
+            os.close(fd)
 
 
 def _ensure_dir(path: Path, *, manage_mode: bool = True) -> None:
@@ -217,7 +263,9 @@ class SharedFileLock:
         self._heartbeat_interval = heartbeat_interval
         self._stale_after = stale_after
         self._manage_dir_mode = manage_dir_mode
-        self._lock = FileLock(str(self._lock_path))
+        self._lock: FileLock | UnixFileLock = (
+            _PathCheckedFileLock(str(self._lock_path)) if has_fcntl else FileLock(str(self._lock_path))
+        )
         self._stop_event = threading.Event()
         self._heartbeat_thread: Optional[threading.Thread] = None
         self._token: Optional[str] = None

@@ -487,3 +487,81 @@ def test_timeout_tolerates_a_holder_without_taken_at(tmp_path: Path, monkeypatch
                 pass
     finally:
         proc.join(timeout=10)
+
+
+NFS_ENV = "SENSELAB_WORK_POOL_NFS_DIR"
+
+
+@pytest.mark.parametrize("where", ["local", "nfs"])
+def test_a_waiter_that_locked_the_released_file_does_not_share_the_lock(
+    where: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A waiter that opened the lock file before the holder released it never ends up holding a stale inode.
+
+    ``filelock`` unlinks the lock file before it unlocks, and only rejects a lock taken on a file with
+    ``st_nlink == 0``. On NFS the releasing client silly-renames a file it still has open (to ``.nfsXXXX``), so
+    the old inode keeps ``st_nlink == 1``: a waiter that opened it beforehand locks it, and the next caller creates
+    a new file at the path and locks that too. ``local`` simulates the silly-rename (the unlink renames the file);
+    ``nfs`` runs on the directory named by ``SENSELAB_WORK_POOL_NFS_DIR``, where the client does it itself.
+    """
+    import fcntl
+    import threading
+    import uuid
+
+    import filelock._unix as unix
+
+    if where == "nfs":
+        base = os.environ.get(NFS_ENV, "")
+        if not base:
+            pytest.skip(f"{NFS_ENV} is not set")
+        root = Path(base) / f"file-lock-race-{uuid.uuid4().hex[:12]}"
+        root.mkdir(parents=True)
+    else:
+        root = tmp_path
+
+        class SillyRenamePath(type(Path())):  # type: ignore[misc]
+            def unlink(self, missing_ok: bool = False) -> None:
+                os.rename(self, self.with_name(f".nfs{uuid.uuid4().hex[:12]}"))
+
+        monkeypatch.setattr(unix, "Path", SillyRenamePath)
+    resource = root / "resource"
+    opened, released, holding, done = (threading.Event() for _ in range(4))
+    real_flock = fcntl.flock
+    waiter: list[threading.Thread] = []
+
+    def flock(fd: int, operation: int) -> None:
+        # The waiter's first poll: it has the old file open; let the holder release before it locks.
+        if waiter and threading.current_thread() is waiter[0] and not opened.is_set():
+            opened.set()
+            released.wait(10)
+        real_flock(fd, operation)
+
+    monkeypatch.setattr(unix.fcntl, "flock", flock)
+
+    def wait_then_hold() -> None:
+        with SharedFileLock(resource, timeout=10, manage_dir_mode=False):
+            holding.set()
+            done.wait(30)
+
+    try:
+        first = SharedFileLock(resource, timeout=5, manage_dir_mode=False)
+        first.__enter__()
+        waiter.append(threading.Thread(target=wait_then_hold))
+        waiter[0].start()
+        assert opened.wait(10)
+        first.__exit__(None, None, None)
+        released.set()
+        assert holding.wait(10)
+        third = SharedFileLock(resource, timeout=1, manage_dir_mode=False)
+        with pytest.raises(TimeoutError):
+            with third:
+                pytest.fail("a second holder entered while the waiter held the lock")
+    finally:
+        released.set()
+        done.set()
+        if waiter:
+            waiter[0].join(30)
+        if where == "nfs":
+            import shutil
+
+            shutil.rmtree(root, ignore_errors=True)
