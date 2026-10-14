@@ -215,18 +215,28 @@ def test_a_server_that_does_not_fit_is_e_engine_fit(world: World) -> None:
     assert summary["executed"] is False and summary["attempt"] == 2
     [log] = (out / run.LOGS).glob("engine-*.log")
     assert "KV cache cannot hold" in log.read_text()
+
+
+def test_only_an_exited_server_is_e_engine_fit() -> None:
+    """``E_ENGINE_FIT`` (which discards a store) is only a server that exited before it was healthy.
+
+    An absent or malformed launcher report says nothing about the engine's fit: it is ``E_ENGINE_LAUNCH``, which is
+    not an integrity code, so a resumable store is kept.
+    """
     deep = b"[" * 100000 + b"]" * 100000 + b"\n"
     for report, code in (
         (b'{"status": "ready"}\n', None),
-        (b"", "E_ENGINE_FIT"),
-        (b'{"status": "ready"}\n{"status": "ready"}\n', "E_ENGINE_FIT"),
+        (b"", "E_ENGINE_LAUNCH"),
+        (b'{"status": "ready"}\n{"status": "ready"}\n', "E_ENGINE_LAUNCH"),
         (b'{"status": "exited"}\n', "E_ENGINE_FIT"),
         (b'{"status": "snapshot"}\n', "E_ENGINE_VERSION"),
         (b'{"status": "error"}\n', "E_ENGINE_LAUNCH"),
-        (b'{"status": "other"}\n', "E_ENGINE_FIT"),
-        (deep, "E_ENGINE_FIT"),
+        (b'{"status": "other"}\n', "E_ENGINE_LAUNCH"),
+        (b"\xff\n", "E_ENGINE_LAUNCH"),
+        (deep, "E_ENGINE_LAUNCH"),
     ):
         assert engine.status_code(report) == code, report[:40]
+    assert "E_ENGINE_LAUNCH" not in run.INTEGRITY_CODES and "E_ENGINE_FIT" in run.INTEGRITY_CODES
 
 
 @needs_userns

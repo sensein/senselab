@@ -1871,7 +1871,8 @@ the step starts, not to a file under `{tmp}`, so the step's argv cannot alter th
 preamble runs in the step venv (its `.pth` files, `import torch`), so the report is trusted only as far as that venv;
 the launcher makes itself non-dumpable so the servers cannot reopen the fd through `/proc`, and a second line makes
 the report malformed. A launcher failure other than a server start (no `vllm` in the venv, an exception) reports
-`error`, `E_ENGINE_LAUNCH`, which keeps a resumable store; a missing or malformed report is `E_ENGINE_FIT`. It runs
+`error`, `E_ENGINE_LAUNCH`, which keeps a resumable store; a missing or malformed report is `E_ENGINE_LAUNCH` too
+(A17 fix round 1: it says nothing about the engine's fit; only `exited` is `E_ENGINE_FIT`). It runs
 the step as a child with `REPRO_ENGINE_URLS` (comma-separated loopback URLs), with the signal mask unblocked,
 forwards SIGTERM/SIGINT/SIGHUP, stops the servers when the step exits and exits with the step's code (128+n on a
 signal). The servers also die with the sandbox: they run in its PID namespace, whose end kills every process in it,
