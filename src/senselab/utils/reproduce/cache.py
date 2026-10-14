@@ -321,6 +321,7 @@ def step_key_payload(
         "r_module_env_sha256": r_module_env_sha256,
         "metrics_schema": step.metrics_schema.model_dump(mode="json"),
         "expect": [e.model_dump(mode="json") for e in step.expect],
+        "extract": [e.model_dump(mode="json") for e in step.extract],
         "replicate": step.replicate,
         "upstream": dict(sorted(upstream.items())),
         "policy_sha256": policy_sha256(profile),

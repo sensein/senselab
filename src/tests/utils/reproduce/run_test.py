@@ -268,6 +268,7 @@ def test_two_step_dag_runs_then_skips_and_reruns_on_each_keyed_change(world: Wor
         "canary_failed",
         "executed",
         "verdict",
+        "extracted",
     }
     link = world.tmp / "runs" / world.config().date.strftime("%Y-%m-%d") / "demo" / "score"
     assert link.is_symlink() and link.resolve() == score_out.resolve()
@@ -1084,6 +1085,63 @@ def test_a_band_gather_step_writes_verdict_and_exits_zero_unless_fail(world: Wor
     assert gather.status == "executed" and gather.exit != 0 and "E_EXPECT" in gather.codes
     assert _summary(gather)["verdict"] == "fail"
     assert outcomes["after"].status == "never-ran"
+
+
+EXTRACT_ADAPTER = """\
+import json, pathlib, sys
+out, dest = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
+value = json.loads((out / "result.json").read_text())["value"]
+metrics = {"headline": [{"name": "f_stat", "value": value, "numdf": 1, "dendf": 10}]}
+dest.write_text(json.dumps({"metrics": metrics, "extracted": EXTRACTED}))
+"""
+EXTRACT = [{"name": "matched", "kind": "yesno"}, {"name": "run_dir", "kind": "index", "allowed": ["run-00", "run-01"]}]
+
+
+@needs_userns
+def test_extracted_values_reach_summary_and_up_dir(world: World) -> None:
+    """Clean values go to ``summary.json`` and ``work/extracted.json``; free text fails the step with ``E_EXTRACT``."""
+    extracted = {"matched": "yes", "run_dir": 1}
+    (world.base / "adapter_extract.py").write_text(EXTRACT_ADAPTER.replace("EXTRACTED", repr(extracted)))
+    prep = world.step("prep", "prep", "{root:data}/in/a.txt", adapter="adapter_extract.py", extract=EXTRACT)
+    after = world.step(
+        "after",
+        "score",
+        "{up:prep}/result.json",
+        needs=["prep"],
+        inputs=[{"root": "up:prep", "patterns": ["result.json", "extracted.json"]}],
+    )
+    manifest = world.manifest(prep, after)
+    world.prefetch(manifest)
+    outcomes = world.run(manifest)
+    assert all(o.ok for o in outcomes.values()), {n: o.codes for n, o in outcomes.items()}
+    out = outcomes["prep"].out
+    assert out is not None
+    assert _summary(outcomes["prep"])["extracted"] == extracted
+    assert json.loads((out / run.WORK / run.EXTRACTED).read_text()) == extracted
+    assert "extracted" not in json.loads((out / run.METRICS).read_text())
+    assert _summary(outcomes["after"])["extracted"] is None
+
+    secret = "see /x/y.csv"
+    bad = {"matched": secret, "run_dir": 1}
+    (world.base / "adapter_extract.py").write_text(EXTRACT_ADAPTER.replace("EXTRACTED", repr(bad)))
+    outcomes = world.run(manifest)
+    failed = outcomes["prep"]
+    assert failed.status == "executed" and failed.exit != 0 and failed.codes == ("E_EXTRACT",)
+    assert failed.out is not None and not (failed.out / run.WORK / run.EXTRACTED).exists()
+    summary = _summary(failed)
+    assert summary["extracted"] is None and secret not in json.dumps(summary)
+    assert outcomes["after"].status == "never-ran"
+
+
+@needs_userns
+def test_a_step_cannot_write_extracted_json_itself(world: World) -> None:
+    """A step that writes ``extracted.json`` under ``work/`` fails with ``E_RESERVED_NAME`` and the file is gone."""
+    code = f"import json, sys; open(sys.argv[1] + '/extracted.json', 'w').write('{{}}'); {RESULT}"
+    manifest = world.manifest(_py(world, code))
+    world.prefetch(manifest)
+    outcome = world.run(manifest)["prep"]
+    assert outcome.codes == ("E_RESERVED_NAME",) and outcome.exit != 0
+    assert outcome.out is not None and not (outcome.out / run.WORK / "extracted.json").exists()
 
 
 @needs_userns
