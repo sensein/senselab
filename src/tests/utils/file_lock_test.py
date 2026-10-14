@@ -325,6 +325,35 @@ def test_a_normal_handoff_after_waiting_is_not_logged_as_a_stale_takeover(
     assert not any("Stale lock" in r.message for r in caplog.records), caplog.text
 
 
+def test_took_over_names_an_uncontended_acquire_over_a_leftover_identity(tmp_path: Path) -> None:
+    """``took_over`` is true only after an uncontended acquire over a holder identity left on disk."""
+    import multiprocessing as mp
+
+    resource = tmp_path / "thing"
+    resource.parent.mkdir(parents=True, exist_ok=True)
+    lock = SharedFileLock(resource, timeout=1.0)
+    assert lock.took_over is False
+    with lock:
+        assert lock.took_over is False
+    _holder_file(resource).write_text(json.dumps({"user": "u", "host": "h", "pid": 1, "taken_at": 0}))
+    heartbeat = _heartbeat_file(resource)
+    heartbeat.touch()
+    now = os.path.getmtime(heartbeat)
+    os.utime(heartbeat, (now - 10, now - 10))
+    with lock:
+        assert lock.took_over is True
+    ctx = mp.get_context("spawn")
+    acquired = ctx.Event()
+    proc = ctx.Process(target=_hold, args=(str(resource), 2.0, acquired))
+    proc.start()
+    try:
+        assert acquired.wait(timeout=30)
+        with SharedFileLock(resource, timeout=10.0) as waiter:
+            assert waiter.took_over is False
+    finally:
+        proc.join(timeout=10)
+
+
 def test_a_holder_without_a_heartbeat_yet_is_not_taken_over(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     """A holder that has just acquired and not yet written a heartbeat must not be judged stale.
 

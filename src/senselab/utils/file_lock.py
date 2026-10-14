@@ -221,6 +221,7 @@ class SharedFileLock:
         self._stop_event = threading.Event()
         self._heartbeat_thread: Optional[threading.Thread] = None
         self._token: Optional[str] = None
+        self.took_over = False
 
     def _heartbeat_loop(self) -> None:
         while not self._stop_event.wait(self._heartbeat_interval):
@@ -330,6 +331,9 @@ class SharedFileLock:
         itself lives in the separate ``.holder`` file precisely so this reasoning about
         the ``.lock`` file's content doesn't have to extend to identity too.
 
+        Sets ``took_over``: True when the acquire was uncontended over a holder identity left on disk, i.e. a
+        previous holder that never released (a clean release clears ``.holder``), such as a killed process.
+
         Returns:
             This instance, for use as a context manager.
 
@@ -337,6 +341,7 @@ class SharedFileLock:
             TimeoutError: The lock is held by a live process, or staleness cannot be
                 determined for a holder identity left behind by an uncontended acquire.
         """
+        self.took_over = False
         _ensure_dir(self._lock_path.parent, manage_mode=self._manage_dir_mode)
         _touch_shared(self._lock_path)
         _touch_shared(self._holder_path)
@@ -378,6 +383,7 @@ class SharedFileLock:
             # Only a genuinely uncontended (near-instant) acquire can mean `previous_holder`,
             # if present, is an untouched leftover from a holder that never released at all.
             contended = (time.monotonic() - acquire_started) > self._UNCONTENDED_ACQUIRE_THRESHOLD
+            self.took_over = previous_holder is not None and not contended
             if previous_holder is not None and not contended:
                 age, basis, bound = self._staleness(previous_holder)
                 if age is None:
