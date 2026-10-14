@@ -10,6 +10,7 @@ from __future__ import annotations
 import fcntl
 import json
 import sys
+import time
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -36,6 +37,16 @@ _alive = open(os.path.join(_record, "alive-%d" % os.getpid()), "w")
 fcntl.flock(_alive, fcntl.LOCK_EX)
 with open(os.path.join(_record, "argv-%d.json" % os.getpid()), "w") as _handle:
     json.dump(sys.argv[1:], _handle)
+
+
+def _stopped(signum, frame):
+    with open(os.path.join(_record, "events.log"), "a") as handle:
+        handle.write("stopped %d 0\\n" % os.getpid())
+    os._exit(0)
+
+
+import signal
+signal.signal(signal.SIGTERM, _stopped)
 """
 """Prepended to the fake: its record dir, a lock held while it (or its forked child) lives, and its argv."""
 
@@ -56,6 +67,9 @@ report = {
 (out / "result.json").write_text(json.dumps(report))
 if mode == "exit94":
     sys.exit(94)
+if mode == "term":
+    import signal
+    os.kill(os.getpid(), signal.SIGTERM)
 if mode == "sleep":
     time.sleep(600)
 """
@@ -114,6 +128,10 @@ def _manifest(world: World, mode: str = "ok", **change: Any) -> Manifest:  # noq
     return manifest
 
 
+def _raises() -> cuda_probe.HostCuda:
+    raise PermissionError("nvidia-smi")
+
+
 def _gpu(argv: Sequence[str]) -> tuple[int, str]:
     return (0, f"Test GPU, {DRIVER}\n") if argv[0] == "nvidia-smi" else (1, "")
 
@@ -126,16 +144,24 @@ def _record(out: Path) -> Path:
     return out / run.WORK / "fake"
 
 
-def _all_gone(out: Path) -> bool:
-    """Whether no fake server process holds its lock any more (each one, and its forked child, has exited)."""
+def _all_gone(out: Path, timeout_s: float = 30.0) -> bool:
+    """Whether, within the timeout, no fake server process holds its lock (each one and its forked child exited).
+
+    A kill is asynchronous: the kernel ends the sandbox's processes after the driver's wait returns.
+    """
     alive = sorted(_record(out).glob("alive-*"))
     assert alive, "no server started"
+    deadline = time.monotonic() + timeout_s
     for path in alive:
         with open(path) as handle:
-            try:
-                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError:
-                return False
+            while True:
+                try:
+                    fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if time.monotonic() > deadline:
+                        return False
+                    time.sleep(0.2)
     return True
 
 
@@ -147,7 +173,9 @@ def _summary(out: Path) -> dict[str, Any]:
 @needs_userns
 def test_servers_start_one_at_a_time_and_urls_reach_the_step(world: World) -> None:
     """Two servers start one after the other with the declared args; the step reaches both through loopback."""
-    manifest = _manifest(world)
+    make_snapshot(_hub(world), REPO, REVISION, {"d.csv": b"1\n"}, repo_type="dataset")
+    both = [*_weights({"d.csv": b"1\n"}, repo_type="dataset"), *_weights({"weights.bin": WEIGHTS})]
+    manifest = _manifest(world, hf_weights=both)
     outcome = _run(world, manifest)
     assert outcome.ok and outcome.status == "executed", outcome.codes
     assert outcome.out is not None
@@ -155,13 +183,14 @@ def test_servers_start_one_at_a_time_and_urls_reach_the_step(world: World) -> No
     assert report["roots"] == [REVISION, REVISION]
     assert report["identity"] == engine.engine_identity(manifest.steps[0].engine)  # type: ignore[arg-type]
     assert report["no_proxy"] == ["127.0.0.1,localhost", "127.0.0.1,localhost"]
-    events = [line.split() for line in (_record(outcome.out) / "events.log").read_text().splitlines()]
+    lines = (_record(outcome.out) / "events.log").read_text().splitlines()
+    events = [line.split() for line in lines if not line.startswith("stopped")]
     assert [e[0] for e in sorted(events, key=lambda e: float(e[2]))] == ["start", "ready", "start", "ready"]
     first, second = sorted(events, key=lambda e: float(e[2]))[:2], sorted(events, key=lambda e: float(e[2]))[2:]
     assert first[0][1] == first[1][1] and second[0][1] == second[1][1] and first[0][1] != second[0][1]
     for path in _record(outcome.out).glob("argv-*.json"):
         argv = json.loads(path.read_text())
-        assert argv[:2] == ["serve", str(Path(argv[1]))] and Path(argv[1]).name == REVISION
+        assert argv[0] == "serve" and Path(argv[1]).parts[-3:] == ("models--org--model", "snapshots", REVISION)
         assert argv[argv.index("--host") + 1] == "127.0.0.1"
         for flag, value in (("--gpu-memory-utilization", "0.45"), ("--max-num-seqs", "4"), ("--max-model-len", "2048")):
             assert argv[argv.index(flag) + 1] == value
@@ -186,6 +215,18 @@ def test_a_server_that_does_not_fit_is_e_engine_fit(world: World) -> None:
     assert summary["executed"] is False and summary["attempt"] == 2
     [log] = (out / run.LOGS).glob("engine-*.log")
     assert "KV cache cannot hold" in log.read_text()
+    deep = b"[" * 100000 + b"]" * 100000 + b"\n"
+    for report, code in (
+        (b'{"status": "ready"}\n', None),
+        (b"", "E_ENGINE_FIT"),
+        (b'{"status": "ready"}\n{"status": "ready"}\n', "E_ENGINE_FIT"),
+        (b'{"status": "exited"}\n', "E_ENGINE_FIT"),
+        (b'{"status": "snapshot"}\n', "E_ENGINE_VERSION"),
+        (b'{"status": "error"}\n', "E_ENGINE_LAUNCH"),
+        (b'{"status": "other"}\n', "E_ENGINE_FIT"),
+        (deep, "E_ENGINE_FIT"),
+    ):
+        assert engine.status_code(report) == code, report[:40]
 
 
 @needs_userns
@@ -198,9 +239,24 @@ def test_a_slow_start_is_e_engine_start_timeout_and_keeps_the_store(world: World
     out = _killed(world, plan.key)
     outcome = _run(world, manifest)
     assert outcome.codes == ("E_ENGINE_START_TIMEOUT",) and outcome.exit != 0
-    assert sorted(p.name for p in (out / run.WORK / "items").iterdir()) == ["a.done", "a.json", "b.done", "b.json", "c.json"]
+    assert sorted(p.name for p in (out / run.WORK / "items").iterdir()) == [
+        "a.done",
+        "a.json",
+        "b.done",
+        "b.json",
+        "c.json",
+    ]
     assert not (out / run.WORK / "result.json").exists()
     assert _all_gone(out)
+
+    manifest = _manifest(world, engine=_engine(servers_per_card=1), resumable="items", resume_dir="items")
+    (run._step_venv(manifest.steps[0], manifest.name, world.cache)[0] / "bin" / "vllm").unlink()
+    [plan] = run.plan_steps([manifest], world.config())
+    assert plan.key is not None
+    out = _killed(world, plan.key)
+    outcome = _run(world, manifest)
+    assert outcome.codes == ("E_ENGINE_LAUNCH",) and outcome.exit != 0
+    assert (out / run.WORK / "items" / "a.done").is_file()
 
 
 @needs_userns
@@ -221,6 +277,8 @@ def test_a_step_that_itself_exits_94_is_e_step_failed(world: World) -> None:
     assert outcome.status == "executed" and outcome.codes == ("E_STEP_FAILED",) and outcome.exit == 94
     assert outcome.out is not None and (outcome.out / run.WORK / "result.json").is_file()
     assert _summary(outcome.out)["executed"] is True
+    termed = _run(world, _manifest(world, "term"))
+    assert termed.codes == ("E_STEP_FAILED",) and termed.exit == 143
 
 
 @needs_userns
@@ -229,6 +287,9 @@ def test_servers_die_with_the_step(world: World) -> None:
     outcome = _run(world, _manifest(world))
     assert outcome.ok, outcome.codes
     assert outcome.out is not None and _all_gone(outcome.out)
+    events = [line.split() for line in (_record(outcome.out) / "events.log").read_text().splitlines()]
+    started = {e[1] for e in events if e[0] == "start"}
+    assert len(started) == 2 and started <= {e[1] for e in events if e[0] == "stopped"}
     killed = _run(world, _manifest(world, "sleep"), timeout=15)
     assert killed.codes == ("E_TIMEOUT",)
     assert killed.out is not None and _all_gone(killed.out)
@@ -289,6 +350,8 @@ def test_engine_identity_is_keyed_and_in_provenance(world: World, monkeypatch: p
         {"enable_prefix_caching": False},
         {"limit_mm_per_prompt": {"image": 2}},
         {"server_args": ["--seed", "0"]},
+        {"kv_cache_dtype": "fp8"},
+        {"generation_config": "auto"},
     ):
         assert key(_engine(**change)) != base, change
     batched = {"name": "transformers-batched", "version": "4.57.1", "model": _engine()["model"], "concurrency": 1}
@@ -299,7 +362,20 @@ def test_engine_identity_is_keyed_and_in_provenance(world: World, monkeypatch: p
         {"engine": _engine(model={"repo": REPO, "revision": "e" * 40})},
         *[
             {"engine": _engine(server_args=[arg])}
-            for arg in ("--port", "--max-model-len=8", "--gpu-memory", "--enable-log-requests", "--config=x", "/x")
+            for arg in (
+                "--port",
+                "--max-model-len=8",
+                "--max_model_len=8",
+                "--gpu_memory_utilization=0.99",
+                "--gpu-memory",
+                "--enable-log-requests",
+                "--enable_log_requests",
+                "--enable-log-r",
+                "--config=x",
+                "/x",
+                '--hf-overrides={"x":"/etc"}',
+                "--download-dir=x:/abs",
+            )
         ],
         {"engine": _engine(max_num_seqs=None)},
         {"resources": {"profile": "cpu", "gpu_arch": ["sm_90"]}},
@@ -316,6 +392,10 @@ def test_engine_identity_is_keyed_and_in_provenance(world: World, monkeypatch: p
     )
     record = host.host_record(None, runner=_gpu)
     assert (record["gpu_name"], record["gpu_driver"], record["host_cuda"]) == ("Test GPU", DRIVER, "13.0")
+    for probe in (lambda: cuda_probe.HostCuda((12, 9), "nvcc", "release 12.9"), _raises):
+        with monkeypatch.context() as patched:
+            patched.setattr(cuda_probe, "detect_host_cuda", probe)
+            assert host.host_record(None, runner=_gpu)["host_cuda"] is None
     manifest = _manifest(world)
     outcome = _run(world, manifest)
     assert outcome.ok and outcome.out is not None, outcome.codes

@@ -1578,9 +1578,10 @@ pinned `version`, the served `model` (one of the step's `hf_weights`), `concurre
 key with the served model and the sha256 of `vllm_server.py`, which the launcher runs and which lies outside the
 reproduce package that `reproduce_source_sha256` covers. `startup_timeout_s` is not keyed: it changes only how long
 a start may take. The identity is also the step's `REPRO_ENGINE_IDENTITY` and its provenance `details.engine`.
-`server_args` may not name or abbreviate a flag the driver sets (`--host`, `--port`, `--model`, the valued flags and
-switches it builds) or refuses (`--config`, content logging), nor an absolute path: provenance records the identity,
-and a path there could name data.
+`server_args` may not name or abbreviate (in either spelling of `-` and `_`, as vLLM's parser reads them) a flag the
+driver sets (`--host`, `--port`, `--model`, the valued flags and
+switches it builds) or refuses (`--config`, content logging), nor an absolute or home path at the start or after
+`=`, `:`, `,`, a quote, `{` or `[`: provenance records the identity, and a path there could name data.
 
 **Startup probe.** The servers per card, `max_num_seqs` and `max_model_len` are declared, so the probe only checks
 that they fit: a server that exits before `/health` (a KV cache that cannot hold `max_model_len`) is `E_ENGINE_FIT`,
@@ -1592,11 +1593,16 @@ not start the step's argv never ran and the summary's `executed` is false.
 **Launcher.** The preamble (canary, program rule) execs `engine.LAUNCHER_CODE` with the driver's interpreter before
 the step's argv; it starts the servers one after the other (each sizes its KV cache after the last), with the step
 venv's own `vllm` over the hub view's `snapshots/<revision>`, start locks and logs under `{tmp}`. Its report goes on a
-second driver-held pipe that it closes before the step starts, not to a file under `{tmp}`, so the step cannot alter
-the verdict. It runs the step as a child with `REPRO_ENGINE_URLS`, forwards SIGTERM/SIGINT/SIGHUP, stops the servers
+second driver-held pipe that it closes before the step starts, not to a file under `{tmp}`, so the step's argv cannot
+alter the verdict. The fd is open while the preamble runs in the step venv (its `.pth` files, `import torch`), so the
+report is trusted only as far as that venv; the launcher makes itself non-dumpable so the servers cannot reopen the fd
+through `/proc`, and a second line makes the report malformed. A launcher failure other than a server start (no
+`vllm` in the venv, an exception) reports `error`, `E_ENGINE_LAUNCH`, which keeps a resumable store; a missing or
+malformed report is `E_ENGINE_FIT`, as the plan has it. It runs the step as a child with `REPRO_ENGINE_URLS`, forwards SIGTERM/SIGINT/SIGHUP, stops the servers
 when the step exits and exits with the step's code. The servers also die with the sandbox: they run in its PID
 namespace, whose end kills every process in it, besides `vllm_server`'s own watchdog. The server logs are copied to
-`R/logs/engine-<name>` (regular files only) before `{tmp}` is removed.
+`R/logs/engine-<name>` (served steps only, regular files only, mode 600, at most 64 MiB each) before `{tmp}` is
+removed.
 
 **Loopback and caches.** A `vllm` step gets `no_proxy=NO_PROXY=127.0.0.1,localhost` (the proxies still point at the
 dead port for everything else) and `VLLM_CACHE_ROOT`, `TRITON_CACHE_DIR`, `TORCHINDUCTOR_CACHE_DIR` and
@@ -1605,4 +1611,5 @@ dead port for everything else) and `VLLM_CACHE_ROOT`, `TRITON_CACHE_DIR`, `TORCH
 **CUDA floor.** vLLM 0.31 needs CUDA 13, so a `vllm` engine needs `resources.gpu_arch` and `resources.min_driver` of
 at least `spec.CUDA13_MIN_DRIVER` (580.65.06, the first CUDA 13 driver); the existing host floor check
 (`E_DRIVER_OLD`) enforces it on the node, and profiles exclude older-driver nodes from the partition list. The host
-record carries `host_cuda` from `cuda_probe.detect_host_cuda`.
+record carries `host_cuda` from `cuda_probe.detect_host_cuda`, kept only when `nvidia-smi` gave it (an `nvcc` fallback
+names a toolkit, not the driver's CUDA).

@@ -115,8 +115,14 @@ def _probe(venv: Path, runner: Runner) -> dict[str, Any]:
 
 
 def _host_cuda() -> str | None:
-    version = cuda_probe.detect_host_cuda().version
-    return None if version is None else f"{version[0]}.{version[1]}"
+    """The driver's CUDA version as ``nvidia-smi`` reports it (`cuda_probe.detect_host_cuda`); None otherwise."""
+    try:
+        found = cuda_probe.detect_host_cuda()
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if found.source != "nvidia-smi" or found.version is None:
+        return None
+    return f"{found.version[0]}.{found.version[1]}"
 
 
 def host_record(venv: str | os.PathLike[str] | None, *, runner: Runner | None = None) -> dict[str, Any]:
@@ -128,7 +134,7 @@ def host_record(venv: str | os.PathLike[str] | None, *, runner: Runner | None = 
             caller that learns them inside the sandbox instead (the run's preamble).
         runner: Runs an argv and returns ``(returncode, stdout)``; a missing program or timeout is
             ``(127, "")``. Defaults to a subprocess runner. The host CUDA version is always probed by
-            `cuda_probe.detect_host_cuda`.
+            `cuda_probe.detect_host_cuda` and kept only from ``nvidia-smi`` (an ``nvcc`` toolkit is not the driver's).
 
     Returns:
         A dict with exactly the keys in `HOST_KEYS`.

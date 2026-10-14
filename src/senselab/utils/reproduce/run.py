@@ -237,6 +237,8 @@ _FRAME = re.compile(r'^\s*File "([^"]+)", line (\d+)')
 _CODE_PATH = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_./+-]{0,255}$")
 _PREAMBLE_KEYS = frozenset({"sys_prefix", "python", "torch", "torch_cuda", "canary_failed", "interpreter_ok"})
 _RESERVED_ROOTS = ("checkout",)
+ENGINE_LOG_MAX = 64 << 20
+"""The most bytes of one server log copied to ``R/logs``."""
 _LOG_NAME = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}\.log$")
 
 WRAPPER = 'cd -- "$1" || exit 96\nshift\nexec "$@"\n'
@@ -1339,7 +1341,12 @@ class _Execution:
         return self._summary()
 
     def _engine_logs(self) -> None:
-        """Copy each server log of ``{tmp}/engine-logs`` to ``R/logs/engine-<name>``, skipping links and odd names."""
+        """Copy a served step's server logs to ``R/logs/engine-<name>`` (mode 600, at most `ENGINE_LOG_MAX` bytes each).
+
+        Links, other file types and names off `_LOG_NAME` are skipped.
+        """
+        if not self._served():
+            return
         source_dir = self.tmp / engine.LOG_DIR
         try:
             if not stat.S_ISDIR(os.lstat(source_dir).st_mode):
@@ -1358,8 +1365,10 @@ class _Execution:
                 with os.fdopen(fd, "rb") as source_file:
                     if not stat.S_ISREG(os.fstat(source_file.fileno()).st_mode):
                         continue
-                    with os.fdopen(_create(self.result / LOGS / f"engine-{name}"), "wb") as handle:
-                        shutil.copyfileobj(source_file, handle)
+                    target = self.result / LOGS / f"engine-{name}"
+                    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+                    with os.fdopen(os.open(target, flags, 0o600), "wb") as handle:
+                        handle.write(source_file.read(ENGINE_LOG_MAX))
             except OSError:
                 _log().error("could not copy an engine log\n%s", traceback.format_exc())
 
@@ -1701,14 +1710,19 @@ class _Execution:
         canary = NO_CANARY_CODE if host is None else sandbox.canary(host)
         preamble = _PREAMBLE_CODE.format(canary=canary, rule_code=PROGRAM_RULE_CODE)
         allowed = json.dumps(self._interpreter_rule())
-        pipes = [os.pipe()]
-        served = step.engine is not None and step.engine.name == "vllm"
-        if served:
-            pipes.append(os.pipe())
-        launch = json.dumps(self._launcher(pipes[1][1]) if served else [])
-        wrapped = [sandbox.SH, "-c", WRAPPER, "sh", str(cwd), python, "-I", "-B", "-c", preamble, str(pipes[0][1])]
-        wrapped += [allowed, launch, *argv]
-        self.rc, reports = self._spawn(self._sandbox(wrapped, [self.work], tmp=self.tmp), self.env, "step", pipes)
+        served = self._served()
+        pipes: list[tuple[int, int]] = []
+        try:
+            pipes += [os.pipe(), *([os.pipe()] if served else [])]
+            launch = json.dumps(self._launcher(pipes[1][1]) if served else [])
+            wrapped = [sandbox.SH, "-c", WRAPPER, "sh", str(cwd), python, "-I", "-B", "-c", preamble, str(pipes[0][1])]
+            sandboxed = self._sandbox([*wrapped, allowed, launch, *argv], [self.work], tmp=self.tmp)
+        except BaseException:
+            for fd in (fd for pair in pipes for fd in pair):
+                with contextlib.suppress(OSError):
+                    os.close(fd)
+            raise
+        self.rc, reports = self._spawn(sandboxed, self.env, "step", pipes)
         self.preamble = _parse_preamble(reports[0])
         self.executed = (
             self.preamble is not None
@@ -1725,11 +1739,16 @@ class _Execution:
             self.codes.add("E_STEP_FAILED")
             self.frame = _traceback(self.result / LOGS / "step.stderr.log", self.keyed.checkout.worktree)
 
+    def _served(self) -> bool:
+        """Whether the step's engine is served by the launcher (a ``vllm`` engine)."""
+        return self.step.engine is not None and self.step.engine.name == "vllm"
+
     def _launcher(self, report_fd: int) -> list[str]:
         """The `engine.LAUNCHER_CODE` argv the preamble execs before a ``vllm`` step's own argv."""
         spec = self.step.engine
         assert spec is not None
-        repo = next(w for w in self.step.hf_weights if (w.repo, w.revision) == (spec.model.repo, spec.model.revision))
+        served = ("model", spec.model.repo, spec.model.revision)
+        repo = next(w for w in self.step.hf_weights if (w.repo_type, w.repo, w.revision) == served)
         hub = self._render("{tmp}/hf-hub")
         model_dir = f"{hub}/{weights.repo_dir_name(repo.repo, repo.repo_type)}/snapshots/{repo.revision}"
         config = engine.launcher_config(
@@ -1751,6 +1770,7 @@ class _Execution:
         out, err = _create(logs / f"{name}.stdout.log"), _create(logs / f"{name}.stderr.log")
         chunks: list[list[bytes]] = [[] for _ in pipes]
         readers: list[threading.Thread] = []
+        closed: set[int] = set()
         try:
             proc = subprocess.Popen(
                 argv,
@@ -1762,6 +1782,7 @@ class _Execution:
                 pass_fds=tuple(write for _, write in pipes),
             )
             for (read, write), sink in zip(pipes, chunks):
+                closed.add(write)
                 os.close(write)
                 readers.append(threading.Thread(target=_drain, args=(read, sink), daemon=True))
                 readers[-1].start()
@@ -1774,8 +1795,8 @@ class _Execution:
         finally:
             os.close(out)
             os.close(err)
-            if len(readers) < len(pipes):
-                for _, write in pipes[len(readers) :]:
+            for _, write in pipes:
+                if write not in closed:
                     with contextlib.suppress(OSError):
                         os.close(write)
             for reader in readers:
