@@ -6,6 +6,8 @@ under ``data/restricted`` and must never reach a public tree or a command's outp
 
 from __future__ import annotations
 
+import datetime
+import json
 import os
 import stat
 from pathlib import Path
@@ -41,12 +43,6 @@ else:
 (out / "result.json").write_text(json.dumps({"value": value}))
 """
 
-HOOK = """\
-#!/bin/sh
-if /usr/bin/grep -q CANARY-7f3a "$1"; then exit 1; fi
-exit 0
-"""
-
 
 class Site(World):
     """A `World` with a restricted dir holding the canary, a restricted results root and a fixture scan hook."""
@@ -61,28 +57,12 @@ class Site(World):
         self.restricted_dir = self.data / "restricted"
         (self.restricted_dir / "canary").mkdir(parents=True)
         (self.restricted_dir / "canary" / "in.txt").write_text(CANARY + "\n")
-        self.hook = tmp / "hook.sh"
-        self.hook.write_text(HOOK)
-        self.hook.chmod(0o755)
         (tmp / "deny.txt").write_text("FORBIDDEN-[0-9]+\n")
-        self.restricted_dirs: list[Path] = [self.restricted_dir]
 
     @property
     def restricted_root(self) -> Path:
         """The restricted results root, under the first restricted dir."""
         return self.restricted_dirs[0] / "reruns" / "results"
-
-    def profile(self) -> Profile:
-        """The `World` profile with the restricted fields set."""
-        data = super().profile().model_dump(mode="json")
-        data |= {
-            "restricted_dirs": [str(p) for p in self.restricted_dirs],
-            "restricted_results_root": str(self.restricted_root),
-            "released_metrics_root": str(self.data / "reruns" / "restricted-metrics"),
-            "scan_hook": [str(self.hook)],
-            "rw_under_roots": [str(self.restricted_dirs[0] / "reruns"), str(self.data / "reruns")],
-        }
-        return Profile.model_validate(data)
 
     def register_canary(self) -> None:
         """Register ``data/restricted/canary`` as the restricted input ``canary``."""
@@ -431,3 +411,236 @@ def test_every_run_record_row_carries_the_restricted_flag(site: Site) -> None:
     run.update_run_record(runs, config.date, "demo", [run.never_ran_row("A"), run.never_ran_row("P")], order=["A"])
     cli.main([*argv, "--date", config.date.isoformat(), "--pin", "0" * 64, "--step", "A"])
     assert flags() == {"A": True, "P": None}
+
+
+# --- A8: release copy, scan hook, closure purge -------------------------------------------------------------
+
+LABEL_ADAPTER = """\
+import json, pathlib, sys
+out, dest = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
+value = json.loads((out / "result.json").read_text())["value"]
+entry = {"name": "f_stat", "label": "CANARY-7f3a", "value": value, "numdf": 1, "dendf": 10}
+dest.write_text(json.dumps({"headline": [entry]}))
+"""
+
+
+def _released(site: Site, key: str | None) -> Path:
+    assert key is not None
+    return site.data / "reruns" / "restricted-metrics" / key
+
+
+def _run_one(site: Site, step: dict[str, Any]) -> run.StepOutcome:
+    manifest = site.manifest(step)
+    site.prefetch(manifest)
+    (outcome,) = run.run_steps([manifest], site.config())
+    return outcome
+
+
+def _summary(outcome: run.StepOutcome) -> dict[str, Any]:
+    assert outcome.out is not None
+    data: dict[str, Any] = json.loads((outcome.out / cache.SUMMARY).read_text())
+    return data
+
+
+def _verified_canary(site: Site) -> None:
+    site.register_canary()
+    verify_input(site.base, site.profile(), "canary")
+
+
+def _hit_step(site: Site, name: str = "H") -> dict[str, Any]:
+    (site.base / "adapter_label.py").write_text(LABEL_ADAPTER)
+    schema = {"kind": "statistic", "headline": ["f_stat"], "headline_labels": [CANARY]}
+    return _canary_step(site, name, restricted=True, adapter="adapter_label.py", metrics_schema=schema)
+
+
+@needs_userns
+def test_released_metrics_appear_after_a_clean_scan(site: Site) -> None:
+    """SC7: a done restricted step's clean ``metrics.json`` and ``summary.json`` are copied to the release root."""
+    _verified_canary(site)
+    outcome = _run_one(site, _canary_step(site, restricted=True))
+    assert outcome.ok and outcome.out is not None, outcome.codes
+    summary = _summary(outcome)
+    assert summary["released"] is True and "W_RELEASE_REFUSED" not in summary["codes"]
+    released = _released(site, outcome.key)
+    for name in (run.METRICS, cache.SUMMARY):
+        assert (released / name).read_bytes() == (outcome.out / name).read_bytes()
+        assert stat.S_IMODE(os.stat(released / name).st_mode) == 0o660
+    assert (outcome.out / run.LOGS / restricted.SCAN_LOG).is_file()
+    public = _run_one(site, site.step("P", "prep", "{root:data}/in/a.txt"))
+    assert _summary(public)["released"] is None
+
+
+@needs_userns
+def test_a_scan_hit_withholds_the_release(site: Site) -> None:
+    """A headline label carrying the canary reaches ``metrics.json``: the hook refuses, nothing is released, exit 0."""
+    _verified_canary(site)
+    outcome = _run_one(site, _hit_step(site))
+    assert outcome.out is not None and CANARY in (outcome.out / run.METRICS).read_text()
+    assert outcome.ok and "W_RELEASE_REFUSED" in outcome.codes
+    summary = _summary(outcome)
+    assert summary["released"] is False and summary["exit"] == 0
+    assert not _released(site, outcome.key).exists()
+
+
+@needs_userns
+def test_a_missing_hook_executable_fails_closed(
+    site: Site, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A hook gone after the load check releases nothing; a hook missing at load is ``E_SCAN_HOOK_MISSING``."""
+    _verified_canary(site)
+    step = _canary_step(site, restricted=True)
+    site.hook.rename(site.tmp / "hook.away")
+    with monkeypatch.context() as patched:
+        patched.setattr(restricted, "hook_missing", lambda profile: False)
+        outcome = _run_one(site, step)
+    assert outcome.ok and "W_RELEASE_REFUSED" in outcome.codes and _summary(outcome)["released"] is False
+    assert not _released(site, outcome.key).exists()
+
+    manifest = site.manifest(_canary_step(site, restricted=True, replicate=1))
+    (plan,) = run.plan_steps([manifest], site.config())
+    assert plan.status == "blocked" and "E_SCAN_HOOK_MISSING" in plan.codes
+    site.prefetch(manifest)
+    (failed,) = run.run_steps([manifest], site.config())
+    assert failed.status == "failed" and failed.codes == ("E_SCAN_HOOK_MISSING",)
+    profile_file, path = site.files(manifest)
+    capsys.readouterr()
+    assert cli.main(["lint", str(path), "--profile", str(profile_file), "--base-dir", str(site.base)]) == 1
+    assert f"{profile_file}: scan-hook-missing" in capsys.readouterr().out
+    site.hook.write_text("#!/bin/sh\nexit 0\n")
+    site.hook.chmod(0o644)
+    assert restricted.hook_missing(site.profile())
+
+
+@needs_userns
+def test_a_hook_error_or_timeout_fails_closed(site: Site, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A hook exiting 2, or running past ``SCAN_TIMEOUT_S``, refuses the release."""
+    _verified_canary(site)
+    for body, timeout in (("exit 2", 300.0), ("/usr/bin/sleep 5\nexit 0", 1.0)):
+        site.hook.write_text(f"#!/bin/sh\n{body}\n")
+        monkeypatch.setattr(restricted, "SCAN_TIMEOUT_S", timeout)
+        outcome = _run_one(site, _canary_step(site, restricted=True, replicate=int(timeout)))
+        summary = _summary(outcome)
+        assert outcome.ok and "W_RELEASE_REFUSED" in summary["codes"] and summary["released"] is False, body
+        assert not _released(site, outcome.key).exists()
+    assert not restricted.run_scan_hook(site.profile(), site.hook)
+
+
+@needs_userns
+def test_extracted_values_are_scanned(site: Site) -> None:
+    """Extracted values the hook refuses fail the step with ``E_EXTRACT``; so does a profile with no hook."""
+    from tests.utils.reproduce.run_test import EXTRACT, EXTRACT_ADAPTER
+
+    (site.base / "adapter_extract.py").write_text(EXTRACT_ADAPTER.replace("EXTRACTED", repr({"matched": "yes"})))
+    extract = [EXTRACT[0]]
+    step = site.step("X", "prep", "{root:data}/in/a.txt", adapter="adapter_extract.py", extract=extract)
+    assert _run_one(site, step).ok
+    site.hook.write_text('#!/bin/sh\nif /usr/bin/grep -q \'"yes"\' "$1"; then exit 1; fi\nexit 0\n')
+    refused = _run_one(site, {**step, "replicate": 1})
+    assert "E_EXTRACT" in refused.codes and not refused.ok and _summary(refused)["extracted"] is None
+    site.restricted_fields = False
+    plain = _run_one(site, {**step, "replicate": 2})
+    assert "E_EXTRACT" in plain.codes and not plain.ok
+
+
+def _flip_input(site: Site, relpath: str = "pub/flip") -> None:
+    tree = site.data / relpath
+    tree.mkdir(parents=True, exist_ok=True)
+    (tree / "f.txt").write_text("3\n")
+    site.registered["flip"] = register_input(site.base, {"data": site.data}, "flip", root="data", relpath=relpath)
+    verify_input(site.base, site.profile(), "flip")
+
+
+def _chain(site: Site) -> Manifest:
+    a = site.step("A", "prep", "{input:flip}/f.txt", lock_inputs=["flip"])
+    unrelated = site.step("U", "prep", "{root:data}/in/a.txt")
+    manifest = site.manifest(a, _up_step(site, "B", "A"), _up_step(site, "C", "B"), unrelated)
+    site.prefetch(manifest)
+    return manifest
+
+
+def _verify_line(site: Site, capsys: pytest.CaptureFixture[str], input_id: str) -> str:
+    profile_file = site.tmp / "profile.yaml"
+    profile_file.write_text(yaml.safe_dump(site.profile().model_dump(mode="json")))
+    capsys.readouterr()
+    cli.main(["verify-inputs", "--profile", str(profile_file), "--base-dir", str(site.base), input_id])
+    out: str = capsys.readouterr().out
+    return out.strip()
+
+
+def _reflag(site: Site, input_id: str, **change: Any) -> None:  # noqa: ANN401
+    path = site.base / inputs.REGISTRY_DIR / f"{input_id}.yaml"
+    path.write_text(yaml.safe_dump({**yaml.safe_load(path.read_text()), **change}, sort_keys=False))
+
+
+@needs_userns
+def test_public_summaries_record_the_input_closure(site: Site) -> None:
+    """Each public summary records the registered inputs of the step and of all its upstream steps."""
+    _flip_input(site)
+    outcomes = site.run(_chain(site))
+    assert all(o.ok for o in outcomes.values()), {n: o.codes for n, o in outcomes.items()}
+    closures = {n: _summary(o)["input_closure"] for n, o in outcomes.items()}
+    assert closures == {"A": ["flip"], "B": ["flip"], "C": ["flip"], "U": []}
+    _verified_canary(site)
+    assert _summary(_run_one(site, _canary_step(site, restricted=True)))["input_closure"] is None
+
+
+@needs_userns
+def test_reclassifying_an_input_purges_its_whole_public_closure(site: Site, capsys: pytest.CaptureFixture[str]) -> None:
+    """Flip ``flip`` to restricted and verify: ``purged=3``; A, B, C and their run links are gone; U stays."""
+    _flip_input(site)
+    outcomes = site.run(_chain(site))
+    assert all(o.ok for o in outcomes.values())
+    public_line = _verify_line(site, capsys, "flip")
+    assert public_line.startswith("flip\tok\t") and "purged" not in public_line
+    _reflag(site, "flip", restricted=True, category="restricted-derivative")
+    line = _verify_line(site, capsys, "flip")
+    assert line.startswith("flip\tok\t") and line.endswith(" purged=3"), line
+    for name in ("A", "B", "C"):
+        out = outcomes[name].out
+        assert out is not None and not out.exists()
+        assert not (cache.run_dir(site.tmp / "runs", site.config().date, "demo") / name).is_symlink()
+    assert outcomes["U"].out is not None and cache.is_done(outcomes["U"].out)
+    assert _verify_line(site, capsys, "flip").endswith(" purged=0")
+
+
+@needs_userns
+def test_moving_an_input_under_a_restricted_dir_purges_too(site: Site, capsys: pytest.CaptureFixture[str]) -> None:
+    """A tree moved under a restricted dir: unflagged is ``E_INPUT_REGISTRY``; flagged, its closure is purged."""
+    _flip_input(site)
+    outcomes = site.run(_chain(site))
+    assert all(o.ok for o in outcomes.values())
+    (site.data / "pub" / "flip").rename(site.restricted_dir / "flip")
+    register_input(site.base, {"data": site.data}, "flip", root="data", relpath="restricted/flip")
+    assert _verify_line(site, capsys, "flip") == "flip\tE_INPUT_REGISTRY"
+    moved = inputs.read_registry_entry(site.base, "flip")[0]
+    now = datetime.datetime.now(datetime.UTC)
+    assert inputs.accepted(moved, site.profile(), now=now) == (["E_INPUT_REGISTRY"], None)
+    assert inputs.registry_codes(site.base, "flip", site.profile()) == ["E_INPUT_REGISTRY"]
+    assert outcomes["A"].out is not None and outcomes["A"].out.exists()
+    register_input(
+        site.base,
+        {"data": site.data},
+        "flip",
+        root="data",
+        relpath="restricted/flip",
+        restricted=True,
+        category="restricted-derivative",
+    )
+    assert _verify_line(site, capsys, "flip").endswith(" purged=3")
+    assert all(not (o.out is not None and o.out.exists()) for n, o in outcomes.items() if n != "U")
+
+
+@needs_userns
+def test_canary_grep_over_public_trees_is_zero(site: Site, capsys: pytest.CaptureFixture[str]) -> None:
+    """After a release, a refused release and a purge, no public tree holds the canary."""
+    _verified_canary(site)
+    released = _run_one(site, _canary_step(site, restricted=True))
+    hit = _run_one(site, _hit_step(site))
+    assert released.ok and hit.ok and "W_RELEASE_REFUSED" in hit.codes
+    _flip_input(site)
+    site.run(_chain(site))
+    _reflag(site, "flip", restricted=True, category="restricted-derivative")
+    assert _verify_line(site, capsys, "flip").endswith(" purged=3")
+    assert _released(site, released.key).is_dir()
+    public = [site.tmp / "results", site.tmp / "runs", site.tmp / "slurm", site.data / "reruns"]
+    assert [f for top in public for f in _files_with(top, CANARY)] == []

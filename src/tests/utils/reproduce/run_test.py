@@ -76,6 +76,14 @@ dest.write_text(json.dumps({"headline": [{"name": "f_stat", "value": value, "num
 """
 
 
+SCAN_HOOK = """\
+#!/bin/sh
+if /usr/bin/grep -q CANARY-7f3a "$1"; then exit 1; fi
+exit 0
+"""
+"""The fixture scan hook: refuses a file holding the canary ``CANARY-7f3a``, passes any other."""
+
+
 def _git(cwd: Path, *args: str) -> str:
     argv = ["git", "-c", "init.defaultBranch=main", "-C", str(cwd), *args]
     env_vars = {**FIXTURE_ENV, "HOME": str(cwd)}
@@ -113,6 +121,11 @@ class World:
         self.wheels_sha: str | None = None
         self.registered: dict[str, dict[str, str]] = {}
         self.sources: dict[str, str] | None = None
+        self.hook = tmp / "hook.sh"
+        self.hook.write_text(SCAN_HOOK)
+        self.hook.chmod(0o755)
+        self.restricted_dirs: list[Path] = [self.data / "restricted"]
+        self.restricted_fields = True
 
     def write_patch(self, line: str) -> None:
         """Write the patch that changes the step script's first line to ``line``."""
@@ -120,10 +133,23 @@ class World:
         text = f"--- a/step.py\n+++ b/step.py\n@@ -1,4 +1,4 @@\n-# v0\n+{line}\n{context}"
         (self.base / "patches" / "p.patch").write_text(text)
 
+    def restricted_profile_fields(self) -> dict[str, Any]:
+        """The restricted fields: ``<first restricted dir>/reruns/results``, released metrics under the data root."""
+        first = self.restricted_dirs[0]
+        return {
+            "restricted_dirs": [str(p) for p in self.restricted_dirs],
+            "restricted_results_root": str(first / "reruns" / "results"),
+            "released_metrics_root": str(self.data / "reruns" / "restricted-metrics"),
+            "scan_hook": [str(self.hook)],
+            "rw_under_roots": [str(first / "reruns"), str(self.data / "reruns")],
+        }
+
     def profile(self) -> Profile:
-        """The profile, rebuilt from the current env map and canary host."""
+        """The profile, rebuilt from the current env map, canary host and restricted fields."""
+        extra = self.restricted_profile_fields() if self.restricted_fields else {}
         return Profile.model_validate(
             {
+                **extra,
                 "roots": {"data": str(self.data)},
                 "results_root": str(self.tmp / "results"),
                 "runs_root": str(self.tmp / "runs"),
@@ -276,6 +302,8 @@ def test_two_step_dag_runs_then_skips_and_reruns_on_each_keyed_change(world: Wor
         "executed",
         "verdict",
         "extracted",
+        "released",
+        "input_closure",
     }
     link = world.tmp / "runs" / world.config().date.strftime("%Y-%m-%d") / "demo" / "score"
     assert link.is_symlink() and link.resolve() == score_out.resolve()

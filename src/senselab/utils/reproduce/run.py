@@ -37,10 +37,13 @@ profile's ``restricted_results_root`` for a restricted step (`results_root_of`):
    Validate, evaluate ``expect`` (`evaluate_expect`), validate again as the driver with the same
    ``policy.min_cell`` of the profile and write ``R/metrics.json``. A step that declares ``extract``
    gets ``{"metrics": ..., "extracted": ...}`` from its adapter; the extracted values are checked
-   (`extract.validate_extracted`, ``E_EXTRACT``) and written to ``R/work/extracted.json`` and the summary.
+   (`extract.validate_extracted`, then the scan hook over them, which fails closed: ``E_EXTRACT``) and
+   written to ``R/work/extracted.json`` and the summary.
 8. Remove ``R/tmp``, fix the exit, record provenance with that exit (`provenance.record_step`; with
-   ``policy.confidential_provenance`` false it also records each input's paths and the rendered argv) and
-   write ``R/summary.json`` last.
+   ``policy.confidential_provenance`` false it also records each input's paths and the rendered argv). A
+   done restricted step's metrics and summary are then released when the scan hook passes both
+   (`restricted.release`; ``W_RELEASE_REFUSED`` otherwise, recorded in the summary but not in provenance);
+   ``R/summary.json`` is written last, with ``released`` and, for a public step, ``input_closure``.
 
 Only ``E_*`` codes fail a step; ``W_*`` codes are recorded. Driver errors go to ``R/logs/driver.log``;
 callers get fixed codes only. `run_steps` runs a set of manifests in DAG order; a step whose need did
@@ -178,6 +181,10 @@ CODES = frozenset(
         "E_JOB_ENDED_WITHOUT_RECORD",
         "W_HOST_VALUE_DROPPED",
         "W_BAND_AMIN_WIDE",
+        "E_SPEC_RESTRICTED",
+        "E_SCAN_HOOK_MISSING",
+        "E_UPSTREAM_CLOSURE",
+        "W_RELEASE_REFUSED",
     }
 )
 """The run's own codes. Digest, cache, metrics and stage codes (``E_DIGEST_*``, ``E_KEY_*``,
@@ -1083,6 +1090,8 @@ class _Execution:
         self.recorded_sha: str | None = None
         self.argv: list[str] = []
         self.started = _now()
+        self.released: bool | None = False if step.restricted else None
+        self.closure: list[str] | None = None
 
     # --- before the reset ----------------------------------------------------------------------
 
@@ -1090,11 +1099,14 @@ class _Execution:
         """Refuse without touching the result dir, so a previous run's diagnostics survive.
 
         Raises:
-            RunError: ``E_SANDBOX_UNAVAILABLE`` (a mount refuses the read-only remount; the sweep's line goes
+            RunError: ``E_SCAN_HOOK_MISSING`` (a restricted step whose profile's scan hook cannot run),
+                ``E_SANDBOX_UNAVAILABLE`` (a mount refuses the read-only remount; the sweep's line goes
                 to ``R/logs/driver.log``), ``E_NO_USERNS``, ``E_ENV_MISSING``, ``E_ENV_UNCHECKED``,
                 ``E_ENV_CHANGED`` (the dist-info METADATA in the venv no longer name the installed set, or an
                 notebook venv's kernel specs changed), ``E_GPU_MISSING`` or ``E_DRIVER_OLD``.
         """
+        if self.step.restricted and restricted.hook_missing(self.config.profile):
+            raise RunError(restricted.HOOK_MISSING)
         try:
             ready = _ready(self.step, self.analysis, self.config)
         except RunError as error:
@@ -1112,6 +1124,7 @@ class _Execution:
             The summary; provenance carries the same exit.
         """
         try:
+            self.closure = self._input_closure()
             self._prepare()
             self._exec()
             self._after()
@@ -1135,7 +1148,40 @@ class _Execution:
                 self.codes.add("E_DRIVER")
         self._record(outputs)
         self._withdraw_extracted()
+        if self.step.restricted:
+            self._release()
         return self._summary()
+
+    def _input_closure(self) -> list[str] | None:
+        """A public step's registered inputs and its upstream steps' closures (from their summaries), sorted."""
+        if self.step.restricted:
+            return None
+        found = set(self.step.lock_inputs)
+        for name in self.step.needs:
+            out = self.upstream[name].out
+            try:
+                data = json.loads(_read_nofollow(out / cache.SUMMARY)) if out is not None else None
+            except (OSError, ValueError):
+                data = None
+            closure = data.get("input_closure") if isinstance(data, dict) else None
+            if not isinstance(closure, list) or not all(isinstance(c, str) for c in closure):
+                raise RunError("E_UPSTREAM_CLOSURE")
+            found.update(closure)
+        return sorted(found)
+
+    def _scan_log(self) -> Path | None:
+        """``R/logs/scan.log`` for a restricted step; a public step keeps no hook output."""
+        return self.result / LOGS / restricted.SCAN_LOG if self.step.restricted else None
+
+    def _release(self) -> None:
+        """Release a done restricted step's metrics (`restricted.release`), or record ``W_RELEASE_REFUSED``."""
+        if self._exit() != 0 or not (self.result / METRICS).is_file():
+            return
+        self.released = True
+        if restricted.release(self.result, self.keyed.key, self.config.profile, self._summary(), self._scan_log()):
+            return
+        self.released = False
+        self.codes.add(restricted.RELEASE_REFUSED)
 
     def _withdraw_extracted(self) -> None:
         """Remove ``work/extracted.json`` and the summary's values unless the step succeeds."""
@@ -1176,6 +1222,8 @@ class _Execution:
             "executed": self.executed,
             "verdict": self.verdict,
             "extracted": self.extracted,
+            "released": self.released,
+            "input_closure": self.closure,
         }
 
     # --- before the step ----------------------------------------------------------------------
@@ -1588,7 +1636,8 @@ class _Execution:
         if clean is None or (step.extract and extracted is None):
             return
         if extracted is not None:
-            self.codes.update(_scan_values(self.config.profile, extracted))
+            if not restricted.scan_values(self.config.profile, extracted, self.result, self._scan_log()):
+                self.codes.add("E_EXTRACT")
             if self._failing():
                 return
         upstream_metrics = {name: self._upstream_metrics(name) for name in _expect_sources(step)}
@@ -1692,12 +1741,6 @@ class _Execution:
         except (OSError, TypeError):
             _log().error("provenance failed\n%s", traceback.format_exc())
             self.codes.add("E_DRIVER")
-
-
-def _scan_values(profile: Profile, values: Mapping[str, Any]) -> list[str]:
-    """Run the profile's scan hook over emitted values; codes for any finding. No profile names a hook yet."""
-    del profile, values
-    return []
 
 
 def _drain(fd: int, chunks: list[bytes]) -> None:

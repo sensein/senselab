@@ -397,6 +397,7 @@ def lint_findings(
         (``E_LOCK_SHA``/``E_LOCK_INVALID`` with the lock path, ``E_LOCK_REF``/``E_LOCK_MISMATCH`` with the
         step field, ``E_LOCK_STALE``/``E_INPUT_REGISTRY`` with the input id), ``input-link-unregistered`` with
         the input id and the number of its manifest's links whose target lies in no input the step declares,
+        ``scan-hook-missing`` when the profile's scan hook cannot run (`restricted.hook_missing`),
         ``E_SPEC_RESTRICTED`` for a step whose ``restricted`` declaration is refused (`restricted.violations`);
         and the warning
         ``W_BAND_AMIN_WIDE <step> <metric>`` for a band whose ``a_min`` exceeds ``max_width_frac`` times its
@@ -417,6 +418,8 @@ def lint_findings(
     deny: list[str] = []
     if profile is not None:
         out += [f"{profile_path}: {f.code} {f.detail}" for f in slurm.profile_findings(profile)]
+        if profile.scan_hook and restricted.hook_missing(profile):
+            out.append(f"{profile_path}: scan-hook-missing")
         try:
             deny = _deny(profile)
         except OSError:
@@ -1010,7 +1013,11 @@ def _cmd_verify_inputs(args: argparse.Namespace) -> int:
 
 
 def _verify_inputs(args: argparse.Namespace, profile: Profile) -> int:
-    """Run ``verify-inputs``; each id prints one line, and an ``OSError`` for one id prints ``E_DRIVER``."""
+    """Run ``verify-inputs``; each id prints one line, and an ``OSError`` for one id prints ``E_DRIVER``.
+
+    Verifying a restricted input first purges its public closure (`restricted.purge_closure`) and adds
+    ``purged=<n>`` to its line.
+    """
     base = Path(args.base_dir).absolute()
     stems = sorted(p.stem for p in (base / inputs.REGISTRY_DIR).glob("*.yaml"))
     ids = stems if args.all else list(args.ids)
@@ -1026,13 +1033,17 @@ def _verify_inputs(args: argparse.Namespace, profile: Profile) -> int:
         with contextlib.suppress(inputs.InputError):
             registry[stem] = inputs.read_registry_entry(base, stem)[0]
     for input_id in ids:
+        purged: int | None = None
         try:
             entry = inputs.read_registry_entry(base, input_id)[0]
+            inputs.check_flag(entry, profile)
+            if entry.restricted:
+                purged = restricted.purge_closure(profile, input_id)
             directory = inputs.verify_dir(entry, profile)
             others = [e for i, e in registry.items() if i != input_id]
             verification = inputs.verify(entry, profile, now=datetime.datetime.now(datetime.UTC), others=others)
             inputs.append_record(directory, input_id, verification)
-        except inputs.InputError as error:
+        except (inputs.InputError, cache.CacheError) as error:
             failed = True
             print(f"{_id_text(input_id)}\t{error.code}")
             continue
@@ -1043,7 +1054,8 @@ def _verify_inputs(args: argparse.Namespace, profile: Profile) -> int:
         record = verification.record
         failed |= record.status != "ok"
         counts = " ".join(f"{name}={record.counts[name]}" for name in inputs.COUNT_NAMES)
-        print(f"{_id_text(input_id)}\t{record.status}\t{counts}")
+        suffix = "" if purged is None else f" purged={purged}"
+        print(f"{_id_text(input_id)}\t{record.status}\t{counts}{suffix}")
     return EXIT_FAILED if failed else EXIT_OK
 
 
