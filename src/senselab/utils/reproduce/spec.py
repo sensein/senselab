@@ -12,6 +12,7 @@ Files are YAML (``.yaml``/``.yml``) or JSON (``.json``).
 import copy
 import datetime
 import json
+import math
 import os
 import re
 import stat
@@ -340,8 +341,10 @@ class BandSpec(_Model):
     ``floor`` (declared) or ``floor_from: entry`` (the metric entry's own ``floor``) gives the chance floor,
     and ``floor_source`` names where it comes from. ``chains`` are the step names of the independent chains
     (at least two, all in the step's ``needs``); ``chain1``, when set, is the originally seeded chain and
-    gets a sub-verdict. ``a_min`` defaults by ``unit`` (`BAND_A_MIN`); ``rho`` must be below
-    ``max_width_frac`` (``E_SPEC_BAND_RHO``).
+    gets a sub-verdict. An inference row gives ``redraws`` instead: exactly three re-draw steps over a subset
+    of ``n_subset`` of the ``n_full`` items, with ``max(ceil(0.10 * n_full), min(200, n_full)) <= n_subset
+    <= n_full`` (``E_SPEC_BAND_SUBSET``); ``chain1`` is refused with them. ``a_min`` defaults by ``unit``
+    (`BAND_A_MIN`); ``rho`` must be below ``max_width_frac`` (``E_SPEC_BAND_RHO``).
     """
 
     stored: Finite
@@ -349,8 +352,11 @@ class BandSpec(_Model):
     floor: Finite | None = None
     floor_from: Literal["entry"] | None = None
     floor_source: Label
-    chains: list[Name] = Field(min_length=2)
+    chains: Annotated[list[Name], Field(min_length=2)] | None = None
     chain1: Name | None = None
+    redraws: Annotated[list[Name], Field(min_length=3, max_length=3)] | None = None
+    n_subset: Annotated[int, Field(ge=1)] | None = None
+    n_full: Annotated[int, Field(ge=1)] | None = None
     k: NonNegative = 2.0
     rho: NonNegative = 0.10
     a_min: Annotated[float, Field(gt=0, allow_inf_nan=False)]
@@ -368,17 +374,26 @@ class BandSpec(_Model):
     def _shape(self) -> "BandSpec":
         if (self.floor is None) == (self.floor_from is None):
             raise ValueError("E_SPEC_BAND_SHAPE: a band takes exactly one of floor and floor_from")
-        if len(set(self.chains)) != len(self.chains):
-            raise ValueError("E_SPEC_BAND_SHAPE: band chains have duplicates")
-        if self.chain1 is not None and self.chain1 not in self.chains:
+        if (self.chains is None) == (self.redraws is None):
+            raise ValueError("E_SPEC_BAND_SHAPE: a band takes exactly one of chains and redraws")
+        if len(set(self.sources())) != len(self.sources()):
+            raise ValueError("E_SPEC_BAND_SHAPE: band steps have duplicates")
+        if self.chain1 is not None and (self.chains is None or self.chain1 not in self.chains):
             raise ValueError("E_SPEC_BAND_SHAPE: chain1 must be one of the chains")
+        counts = (self.n_subset is not None) + (self.n_full is not None)
+        if counts != (2 if self.redraws is not None else 0):
+            raise ValueError("E_SPEC_BAND_SHAPE: n_subset and n_full go with redraws, both or neither")
+        if self.n_subset is not None and self.n_full is not None:
+            least = max(math.ceil(0.10 * self.n_full), min(200, self.n_full))
+            if not least <= self.n_subset <= self.n_full:
+                raise ValueError(f"E_SPEC_BAND_SUBSET: n_subset must be in [{least}, n_full]")
         if self.rho >= self.max_width_frac:
             raise ValueError("E_SPEC_BAND_RHO: rho must be below max_width_frac")
         return self
 
     def sources(self) -> list[str]:
-        """The upstream steps the band reads."""
-        return list(self.chains)
+        """The upstream steps the band reads: its chains or its re-draws."""
+        return list(self.chains if self.chains is not None else self.redraws or [])
 
 
 def _check_band_scale(step: str, metric: str, band: BandSpec) -> None:

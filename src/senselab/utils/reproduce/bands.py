@@ -12,6 +12,8 @@ deviation of the metric over the band's chains, the half-width is
 
 ``mean`` is the step's own metric value (the gather step's adapter emits the chain mean); the driver
 recomputes the chain mean and returns ``E_BAND_MEAN`` when the two differ by more than a relative ``1e-9``.
+For an inference row with ``redraws``, ``mean`` is the step's own full-set metric and
+``sd = sd(redraws) * sqrt(n_subset / n_full)``; the verdict rules are the same.
 With ``chain1`` set and at least two other chains, ``chain1_pass`` is
 ``|chain1 - stored| <= max(a_min, k * sd(other chains))``; it does not change the verdict.
 
@@ -84,12 +86,16 @@ def evaluate_band(
     work = band.unit
     raw, unit = metric_with_unit(own, expect.metric)
     mean = convert_unit(raw, unit, work)
-    values = {name: _value(upstream[name], expect.metric, work) for name in band.chains}
-    chains = [values[name] for name in band.chains]
+    values = {name: _value(upstream[name], expect.metric, work) for name in band.sources()}
+    spread = [values[name] for name in band.sources()]
     codes: list[str] = []
-    if not math.isclose(mean, statistics.fmean(chains), rel_tol=MEAN_RELATIVE, abs_tol=0.0):
-        codes.append("E_BAND_MEAN")
-    sd = statistics.stdev(chains)
+    if band.chains is not None:
+        if not math.isclose(mean, statistics.fmean(spread), rel_tol=MEAN_RELATIVE, abs_tol=0.0):
+            codes.append("E_BAND_MEAN")
+        sd = statistics.stdev(spread)
+    else:
+        assert band.n_subset is not None and band.n_full is not None
+        sd = statistics.stdev(spread) * math.sqrt(band.n_subset / band.n_full)
     floor = band.floor if band.floor is not None else _entry_floor(own, expect.metric, work)
     if band.floor_from == "entry" and amin_too_wide(band, floor):
         codes.append("W_BAND_AMIN_WIDE")
@@ -118,7 +124,7 @@ def evaluate_band(
         "lift_used": back(lift),
         "sd": back(sd),
     }
-    if band.chain1 is not None and len(band.chains) >= 3:
+    if band.chain1 is not None and band.chains is not None and len(band.chains) >= 3:
         others = [values[name] for name in band.chains if name != band.chain1]
         allowed = max(band.a_min, band.k * statistics.stdev(others))
         fields["chain1_pass"] = abs(values[band.chain1] - band.stored) <= allowed + SLACK * max(1.0, abs(band.stored))
