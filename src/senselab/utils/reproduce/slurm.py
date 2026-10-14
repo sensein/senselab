@@ -101,7 +101,7 @@ class Submission(NamedTuple):
 
     A submission the inputs gate refused has no jobs: ``refused`` maps each step to the codes of its row, and
     ``verify_jobs`` lists ``(input id, job id)`` for each ``verify-inputs`` job submitted after a pre-check
-    mismatch.
+    mismatch, and ``verify_failed`` the input ids whose job could not be submitted.
     """
 
     jobs: list[Job]
@@ -109,6 +109,7 @@ class Submission(NamedTuple):
     submission: str
     refused: Mapping[str, tuple[str, ...]] = MappingProxyType({})
     verify_jobs: tuple[tuple[str, str], ...] = ()
+    verify_failed: tuple[str, ...] = ()
 
 
 def _new_submission() -> str:
@@ -791,7 +792,8 @@ def _refused_by_gate(
 
     Each step's row becomes ``never-ran`` with its own gate codes, else those of the gated steps it depends on,
     else ``E_SUBMIT_ABORTED``; rows another submission tagged are left alone. For each input whose pre-check
-    found ``E_INPUT_MISMATCH`` or ``E_INPUT_MISSING``, one ``verify-inputs`` job is submitted (not held).
+    found ``E_INPUT_MISMATCH`` or ``E_INPUT_MISSING``, one ``verify-inputs`` job is submitted (not held); a
+    failed sbatch is recorded in ``verify_failed`` and the others are still submitted.
 
     Returns:
         None when no step has a gate code; otherwise the refused submission.
@@ -813,6 +815,7 @@ def _refused_by_gate(
         refused[step.name] = gates[step.name].codes or tuple(sorted(inherited)) or (ABORTED,)
     mismatched = sorted({i for g in gates.values() for i, codes in g.per_input.items() if _MISMATCH_CODES & set(codes)})
     verify_jobs: list[tuple[str, str]] = []
+    failed: list[str] = []
     with _umask(submit_umask(profile)):
         for name, order in orders.items():
             rows = [run.never_ran_row(s, refused[s]) for s in order]
@@ -827,12 +830,17 @@ def _refused_by_gate(
                 exports=config.exports,
                 driver_python=config.driver_python,
             )
-            result = runner([SBATCH, "--parsable", f"--comment={config.submission}"], script)
+            try:
+                result = runner([SBATCH, "--parsable", f"--comment={config.submission}"], script)
+            except (SlurmError, OSError, subprocess.SubprocessError):
+                failed.append(input_id)
+                continue
             job_id = (result.stdout or "").strip().split(";", 1)[0]
             if result.returncode != 0 or not _JOB_ID.match(job_id):
-                raise SlurmError(f"sbatch of the verify-inputs job for {input_id} exited {result.returncode}")
+                failed.append(input_id)
+                continue
             verify_jobs.append((input_id, job_id))
-    return Submission([], None, config.submission, refused, tuple(verify_jobs))
+    return Submission([], None, config.submission, refused, tuple(verify_jobs), tuple(failed))
 
 
 def _check(result: subprocess.CompletedProcess[str], what: str) -> None:

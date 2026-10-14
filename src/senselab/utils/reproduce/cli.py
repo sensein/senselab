@@ -902,6 +902,8 @@ def _cmd_submit(args: argparse.Namespace) -> int:
             print(status_line(step, None, "never-ran", None, codes))
         for input_id, job_id in submission.verify_jobs:
             print(f"verify-submitted\t{input_id}\t{job_id}")
+        for input_id in submission.verify_failed:
+            print(f"verify-not-submitted\t{input_id}")
         return EXIT_FAILED
     print(f"submission\t{submission.submission}")
     for job in submission.jobs:
@@ -981,6 +983,12 @@ def _cmd_verify_inputs(args: argparse.Namespace) -> int:
     if bool(args.ids) == bool(args.all):
         raise UsageError("give input ids or --all")
     profile = _profile(args)
+    with slurm._umask(slurm.submit_umask(profile)):
+        return _verify_inputs(args, profile)
+
+
+def _verify_inputs(args: argparse.Namespace, profile: Profile) -> int:
+    """Run ``verify-inputs``; each id prints one line, and an ``OSError`` for one id prints ``E_DRIVER``."""
     base = Path(args.base_dir).absolute()
     stems = sorted(p.stem for p in (base / inputs.REGISTRY_DIR).glob("*.yaml"))
     ids = stems if args.all else list(args.ids)
@@ -1005,6 +1013,10 @@ def _cmd_verify_inputs(args: argparse.Namespace) -> int:
         except inputs.InputError as error:
             failed = True
             print(f"{_id_text(input_id)}\t{error.code}")
+            continue
+        except OSError:
+            failed = True
+            print(f"{_id_text(input_id)}\tE_DRIVER")
             continue
         record = verification.record
         failed |= record.status != "ok"

@@ -55,6 +55,8 @@ OVERLAY_SUFFIX = ".mtime-overlay.tsv"
 OVERLAY_HEADER = "relpath\tmtime_ns"
 RECORD_MODE = 0o660
 MAX_AGE = datetime.timedelta(days=31)
+FUTURE_SKEW = datetime.timedelta(minutes=10)
+RECORD = "E_INPUT_RECORD"
 VERIFY_THREADS = 32
 COUNT_NAMES = ("files", "missing", "size", "hash", "mtime_only", "links", "extra", "links_out", "unlinked", "paired")
 """The counts of a verification, in the order ``verify-inputs`` prints them."""
@@ -824,37 +826,66 @@ def _records_path(directory: Path, input_id: str) -> Path:
     return directory / f"{input_id}.json"
 
 
-def _read_records(path: Path) -> list[object]:
+def _load_records(path: Path) -> list[VerifyRecord]:
+    """Every record of a records file; none when the file is absent.
+
+    Raises:
+        ValueError: When the file exists but cannot be read, or a record does not validate.
+    """
     try:
         data = json.loads(path.read_bytes())
-    except (OSError, ValueError):
+    except FileNotFoundError:
         return []
+    except OSError as error:
+        raise ValueError("unreadable records") from error
     records = data.get("records") if isinstance(data, dict) else None
-    return records if isinstance(records, list) else []
+    if not isinstance(records, list):
+        raise ValueError("not a records file")
+    try:
+        return [VerifyRecord.model_validate(r) for r in records]
+    except pydantic.ValidationError as error:
+        raise ValueError("a record does not validate") from error
+
+
+def _order(record: VerifyRecord) -> tuple[datetime.datetime, bool]:
+    """Records are ordered by the date their verification started; on a tie a mismatch comes last."""
+    return record.date, record.status == "mismatch"
 
 
 def append_record(directory: Path, input_id: str, verification: Verification) -> None:
-    """Append a completed verification to ``<directory>/<id>.json`` under its lock; write its overlay first.
+    """Append a completed verification to ``<directory>/<id>.json`` under its lock.
 
-    Both files are written atomically with mode ``0660``; the manifest is never touched.
+    Its overlay is written first, and only when the record is the latest (`latest_record`), so a verification
+    that started earlier but finished later never replaces a newer overlay. Both files are written
+    atomically with mode ``0660``; the manifest is never touched.
+
+    Raises:
+        InputError: ``E_INPUT_RECORD`` when the records file exists but does not parse (it is left as it is).
     """
     path = _records_path(directory, input_id)
     with build.file_lock(path.with_name(path.name + ".lock")):
-        if verification.overlay is not None:
+        try:
+            records = _load_records(path)
+        except ValueError:
+            raise InputError(RECORD) from None
+        latest = all(_order(verification.record) >= _order(r) for r in records)
+        if verification.overlay is not None and latest:
             _atomic_write(directory / f"{input_id}{OVERLAY_SUFFIX}", verification.overlay, RECORD_MODE)
-        records = [*_read_records(path), verification.record.model_dump(mode="json")]
-        _atomic_write(path, (json.dumps({"records": records}) + "\n").encode(), RECORD_MODE)
+        data = [*(r.model_dump(mode="json") for r in records), verification.record.model_dump(mode="json")]
+        _atomic_write(path, (json.dumps({"records": data}) + "\n").encode(), RECORD_MODE)
 
 
 def latest_record(directory: Path, input_id: str) -> VerifyRecord | None:
-    """The last record of ``<directory>/<id>.json``; None when there is none or it does not validate."""
-    records = _read_records(_records_path(directory, input_id))
-    if not records:
-        return None
+    """The record whose verification started last (a mismatch wins a tie), whatever the order of appending.
+
+    Returns:
+        None when there is no record, or the file or any record in it does not validate.
+    """
     try:
-        return VerifyRecord.model_validate(records[-1])
-    except pydantic.ValidationError:
+        records = _load_records(_records_path(directory, input_id))
+    except ValueError:
         return None
+    return max(records, key=_order) if records else None
 
 
 def _read_overlay(data: bytes) -> dict[str, int]:
@@ -877,7 +908,8 @@ def accepted(
 
     Returns:
         ``([], overlay or None)`` when the latest record has the registered manifest sha256, ``status: ok``
-        and is at most 31 days old, and its overlay (if any) has the recorded sha256; otherwise
+        and is at most 31 days old (and not dated more than `FUTURE_SKEW` ahead), and its overlay (if any)
+        has the recorded sha256; otherwise
         ``(["E_INPUT_UNVERIFIED"], None)``, or ``(["E_INPUT_REGISTRY"], None)`` for a restricted input.
     """
     try:
@@ -890,6 +922,7 @@ def accepted(
         or record.manifest_sha256 != inp.manifest.sha256
         or record.status != "ok"
         or now - record.date > MAX_AGE
+        or record.date - now > FUTURE_SKEW
     ):
         return [UNVERIFIED], None
     if record.overlay_sha256 is None:
@@ -921,7 +954,9 @@ def registry_codes(base_dir: Path, input_id: str, profile: Profile) -> list[str]
         manifest_rows(entry, profile)
         path = profile.roots[entry.manifest.root] / entry.manifest.relpath
         first = path.read_bytes().split(b"\n", 1)[0].decode()
-        named = os.path.normpath(first[len("# root=") :].split(" ")[0])
+        if not first.startswith("# root="):
+            return [CODE]
+        named = os.path.normpath(first.removeprefix("# root=").partition(" date=")[0])
         trees = [os.fspath(input_top(entry, profile))]
         if (other := original_top(entry, profile)) is not None:
             trees.append(os.fspath(other))

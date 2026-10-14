@@ -364,7 +364,9 @@ def test_one_byte_change_with_size_and_mtime_restored_is_caught_by_verify_and_bl
     profile, _ = _files(world)
     dry = ["run", str(_write_manifest(world, manifest)), "--profile", str(profile), "--base-dir", str(world.base)]
     assert cli.main([*dry, "--cache", str(world.cache), "--dry-run"]) == cli.EXIT_FAILED
-    assert "blocked" in capsys.readouterr().out
+    assert capsys.readouterr().out.split("\t")[2::3][:1] == ["blocked"]
+    assert cli.main([*dry, "--cache", str(world.cache), "--dry-run"]) == cli.EXIT_FAILED
+    assert capsys.readouterr().out.rstrip("\n").endswith("\tE_INPUT_UNVERIFIED")
     fake = FakeSbatch()
     submission = slurm.submit([manifest], _submit_config(world, manifest), runner=fake)
     assert fake.calls == [] and submission.jobs == [] and submission.verify_jobs == ()
@@ -372,6 +374,10 @@ def test_one_byte_change_with_size_and_mtime_restored_is_caught_by_verify_and_bl
     assert {s: (r["status"], r["codes"]) for s, r in _rows(world).items()} == {
         "prep": ("never-ran", ["E_INPUT_UNVERIFIED"])
     }
+    run.reserve_run_record(world.tmp / "runs", datetime.date(2026, 3, 4), "demo", ["prep"], "other")
+    config = _submit_config(world, manifest)
+    assert slurm.submit([manifest], config, runner=FakeSbatch()).refused == {"prep": ("E_INPUT_UNVERIFIED",)}
+    assert (_rows(world)["prep"]["status"], _rows(world)["prep"]["submission"]) == ("pending", "other")
 
 
 @needs_userns
@@ -425,6 +431,7 @@ def test_a_record_older_than_31_days_blocks(world: World) -> None:
     assert inputs.verified_codes(entry, profile, now=NOW + datetime.timedelta(days=32)) == ["E_INPUT_UNVERIFIED"]
     verify_input(world.base, profile, "tables", now=NOW + datetime.timedelta(days=32))
     assert inputs.verified_codes(entry, profile, now=NOW + datetime.timedelta(days=32)) == []
+    assert inputs.verified_codes(entry, profile, now=NOW + datetime.timedelta(days=31)) == ["E_INPUT_UNVERIFIED"]
 
 
 def test_an_extra_file_is_a_mismatch_unless_extras_ignore(world: World) -> None:
@@ -468,10 +475,26 @@ def test_a_newer_mismatch_record_supersedes_an_older_ok(world: World) -> None:
     assert [r["status"] for r in records] == ["ok", "mismatch"]
     path.write_text("3\n")
     os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns))
-    verify_input(world.base, profile, "tables", now=NOW)
-    assert inputs.verified_codes(entry, profile, now=NOW) == []
+    later = NOW + datetime.timedelta(seconds=1)
+    verify_input(world.base, profile, "tables", now=later)
+    assert inputs.verified_codes(entry, profile, now=later) == []
     other = entry.model_copy(update={"manifest": entry.manifest.model_copy(update={"sha256": "cd" * 32})})
-    assert inputs.verified_codes(other, profile, now=NOW) == ["E_INPUT_UNVERIFIED"]
+    assert inputs.verified_codes(other, profile, now=later) == ["E_INPUT_UNVERIFIED"]
+
+    directory = world.tmp / "input-verify"
+    newer = inputs.verify(entry, profile, now=later + datetime.timedelta(seconds=2))
+    stale_mismatch = newer._replace(record=newer.record.model_copy(update={"status": "mismatch"}))
+    inputs.append_record(directory, "tables", stale_mismatch)
+    inputs.append_record(directory, "tables", inputs.verify(entry, profile, now=later + datetime.timedelta(seconds=1)))
+    assert inputs.verified_codes(entry, profile, now=later + datetime.timedelta(seconds=3)) == ["E_INPUT_UNVERIFIED"]
+    tie = newer._replace(record=newer.record.model_copy(update={"status": "ok"}))
+    inputs.append_record(directory, "tables", tie)
+    assert inputs.verified_codes(entry, profile, now=later + datetime.timedelta(seconds=3)) == ["E_INPUT_UNVERIFIED"]
+
+    (directory / "tables.json").write_text("{not json")
+    with pytest.raises(inputs.InputError) as info:
+        verify_input(world.base, profile, "tables", now=later)
+    assert info.value.code == "E_INPUT_RECORD" and (directory / "tables.json").read_text() == "{not json"
 
 
 def test_verify_output_has_counts_only(world: World, capsys: pytest.CaptureFixture[str]) -> None:
@@ -497,6 +520,25 @@ def test_verify_output_has_counts_only(world: World, capsys: pytest.CaptureFixtu
     code, lines = _verify_cli(world, capsys)
     assert code == cli.EXIT_USAGE
 
+    directory = world.tmp / "input-verify"
+    for path in [directory, *directory.iterdir()]:
+        path.unlink() if path.is_file() else None
+    directory.rmdir()
+    saved = os.umask(0o022)
+    try:
+        assert _verify_cli(world, capsys, "tables")[0] == cli.EXIT_OK
+    finally:
+        os.umask(saved)
+    assert directory.stat().st_mode & 0o070 == 0o070
+    assert (directory / "tables.json.lock").stat().st_mode & 0o777 == 0o660
+    directory.chmod(0o500)
+    try:
+        code, lines = _verify_cli(world, capsys, "tables")
+        err = capsys.readouterr().err
+    finally:
+        directory.chmod(0o770)
+    assert code == cli.EXIT_FAILED and lines == ["tables\tE_DRIVER"] and str(world.tmp) not in err
+
 
 def test_registry_only_mode_hashes_nothing(
     world: World, capsys: pytest.CaptureFixture[str], opened: list[str], monkeypatch: pytest.MonkeyPatch
@@ -504,6 +546,10 @@ def test_registry_only_mode_hashes_nothing(
     """``--registry-only`` checks each registry file, its manifest sha and root line, and opens no input file."""
     tables = _tables(world)
     _register(world)
+    spaced = world.data / "derivatives" / "two words"
+    spaced.mkdir()
+    (spaced / "w.csv").write_text("1\n")
+    _register(world, "spaced", relpath="derivatives/two words")
 
     def refuse(*args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
         raise AssertionError("hashed")
@@ -511,8 +557,8 @@ def test_registry_only_mode_hashes_nothing(
     monkeypatch.setattr(inputs, "_hashes", refuse)
     opened.clear()
     code, lines = _verify_cli(world, capsys, "--all", "--registry-only")
-    assert code == cli.EXIT_OK and lines == ["tables\tregistry-ok"]
-    assert not [p for p in opened if p.startswith(str(tables) + os.sep)]
+    assert code == cli.EXIT_OK and lines == ["spaced\tregistry-ok", "tables\tregistry-ok"]
+    assert not [p for p in opened if p.startswith((str(tables) + os.sep, str(spaced) + os.sep))]
     assert not (world.tmp / "input-verify").exists()
 
     registry = world.base / "inputs" / "bad.yaml"
@@ -527,7 +573,7 @@ def test_registry_only_mode_hashes_nothing(
     moved.write_text(yaml.safe_dump({**data, "id": "moved", "relpath": "derivatives"}))
     code, lines = _verify_cli(world, capsys, "--all", "--registry-only")
     assert code == cli.EXIT_FAILED
-    assert lines == ["bad\tE_INPUT_REGISTRY", "moved\tE_INPUT_REGISTRY", "tables\tregistry-ok"]
+    assert lines == ["bad\tE_INPUT_REGISTRY", "moved\tE_INPUT_REGISTRY", "spaced\tregistry-ok", "tables\tregistry-ok"]
 
 
 def test_a_precheck_mismatch_at_submit_submits_a_verify_job(
@@ -558,3 +604,13 @@ def test_a_precheck_mismatch_at_submit_submits_a_verify_job(
     assert "verify-submitted\ttables\t101" in out
     assert any(line.startswith("prep\t-\tnever-ran\t-\tE_INPUT_MISMATCH") for line in out), out
     assert _rows(world)["prep"]["codes"] == ["E_INPUT_MISMATCH"]
+    assert any(a.startswith("--comment=") for a in fake.calls[0][0])
+    head = scripts[0].splitlines()
+    assert {"#SBATCH --cpus-per-task=1", "#SBATCH --mem=1G", "#SBATCH --time=0:10:00"} <= set(head)
+
+    failing = FakeSbatch(fail_at=1)
+    monkeypatch.setattr(slurm, "default_runner", failing)
+    assert cli.main([*argv, "--date", "2026-03-04"]) == cli.EXIT_FAILED
+    captured = capsys.readouterr()
+    assert "verify-not-submitted\ttables" in captured.out.splitlines()
+    assert any(line.startswith("prep\t-\tnever-ran") for line in captured.out.splitlines())
