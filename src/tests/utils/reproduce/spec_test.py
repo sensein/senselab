@@ -749,3 +749,34 @@ def test_step_may_select_only_profile_native_entries() -> None:
         check_step_profile(
             step.model_copy(update={"resources": step.resources.model_copy(update={"profile": "x"})}), profile
         )
+
+
+def test_a_root_path_no_declared_pattern_covers_is_refused_at_load() -> None:
+    """``{root:X}`` in argv, cwd, pythonpath or a stage dest must be covered by an ``inputs`` pattern of root X.
+
+    A path a pattern matches, a dir a pattern reaches below, and the root itself are covered. A step with
+    ``lock_inputs`` defers the paths no pattern covers to the registry gate (`undeclared_root_paths`).
+    """
+    from senselab.utils.reproduce.spec import undeclared_root_paths
+
+    def argv(path: str) -> dict[str, Any]:
+        return {"argv": ["{venv}/bin/python", "run.py", path]}
+
+    for ok in ("{root:proj}/x", "{root:proj}", "{root:proj}/x/a/b.csv", "--data={root:proj}/x/"):
+        StepSpec.model_validate(_step(**argv(ok)))
+    refused = [
+        argv("{root:proj}/y/a.csv"),
+        argv("{root:other}/x"),
+        argv("{root:proj}/x/../y"),
+        {"cwd": "{root:other}"},
+        {"pythonpath": ["{root:other}/lib"]},
+        {"stage": [{"root": "checkout", "patterns": ["configs/*.yaml"], "dest": "{root:other}/d"}]},
+    ]
+    for change in refused:
+        with pytest.raises(ValidationError, match="E_SPEC_UNDECLARED_ROOT"):
+            StepSpec.model_validate(_step(**change))
+    deferred = StepSpec.model_validate(_step(**argv("{root:other}/t/f.csv"), lock_inputs=["t"]))
+    assert undeclared_root_paths(deferred, {"other": ["t"]}) == []
+    assert undeclared_root_paths(deferred, {"other": ["t/f.csv/x"]}) == []
+    assert undeclared_root_paths(deferred, {"other": ["u"]}) == ["{root:other}/t/f.csv"]
+    assert undeclared_root_paths(deferred, {}) == ["{root:other}/t/f.csv"]

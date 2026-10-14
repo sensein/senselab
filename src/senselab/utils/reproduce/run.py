@@ -120,6 +120,7 @@ from senselab.utils.reproduce.spec import (
     Profile,
     SourcesRef,
     StepSpec,
+    declared_roots,
     render,
     version_tuple,
 )
@@ -1518,7 +1519,47 @@ class _Execution:
         ups = [self.keyed.paths[f"up:{n}"] for n in self.step.needs if n not in gathers]
         ups += [out / WORK for outs in gathers.values() for out in outs]
         extra = [self.keyed.checkout.worktree, self.keyed.paths["venv"], *ups]
-        return list(self.config.profile.roots.values()), rw, extra
+        return list(self._bound_roots().values()), rw, extra
+    def _bound_roots(self) -> dict[str, Path]:
+        """The data roots the sandbox binds.
+
+        Those behind the step's inputs, stage and lock inputs, and the roots holding the hub cache or the URL
+        weights root when the step declares Hugging Face or URL weights.
+        """
+        profile = self.config.profile
+        names = declared_roots(self.step, (e.root for e in self.keyed.entries.values()))
+        held = [
+            *([profile.hf_hub_cache] if self.step.hf_weights and profile.hf_hub_cache is not None else []),
+            *([profile.url_weights_root] if self.step.url_weights and profile.url_weights_root is not None else []),
+        ]
+        for name, root in profile.roots.items():
+            if any(_under(os.path.realpath(p), os.path.realpath(root)) for p in held):
+                names.add(name)
+        return {n: r for n, r in profile.roots.items() if n in names}
+
+    def _unbound_masks(self, roots: list[Path], rw: list[Path], extra: list[Path]) -> list[Path]:
+        """The undeclared roots to mask.
+
+        Every profile root not bound, unless a path the sandbox or the profile needs lies under it or above it
+        (masking it would hide that path).
+        """
+        profile = self.config.profile
+        needed: list[str | Path] = [*roots, *rw, *extra, self.result, self.config.cache, self.tmp]
+        needed += [sys.executable, sys.prefix]
+        needed += [sys.base_prefix, profile.results_root, profile.runs_root, profile.slurm_logs_root]
+        needed += profile.rw_under_roots
+        needed += [d for native in profile.native.values() for d in (*native.bin_dirs, *native.lib_dirs)]
+        optional = (profile.modules_init, profile.job_tmp_root, profile.hf_hub_cache, profile.url_weights_root)
+        needed += [p for p in optional if p is not None]
+        real = [os.path.realpath(p) for p in needed]
+        out = []
+        for root in profile.roots.values():
+            top = os.path.realpath(root)
+            if root in roots or any(_under(p, top) or _under(top, p) for p in real):
+                continue
+            out.append(root)
+        return out
+
 
     def _inner(self, rw: list[Path], tmp: Path) -> str:
         """Where a sandbox with these writable dirs shows ``tmp``: ``/tmp`` or the short fallback."""
@@ -1531,7 +1572,7 @@ class _Execution:
 
     def _values(self) -> dict[str, str | os.PathLike[str]]:
         values: dict[str, str | os.PathLike[str]] = {k: os.path.realpath(v) for k, v in self._inner_paths().items()}
-        values |= {f"root:{n}": os.path.realpath(r) for n, r in self.config.profile.roots.items()}
+        values |= {f"root:{n}": os.path.realpath(r) for n, r in self._bound_roots().items()}
         return values
 
     def _render(self, template: str) -> str:
@@ -1636,7 +1677,7 @@ class _Execution:
 
     def _sandbox(self, argv: list[str], rw: list[Path], *, tmp: Path | None) -> list[str]:
         roots, rw_dirs, extra = self._sandbox_args(rw)
-        masked = [self.config.cache / "huggingface"]
+        masked = [self.config.cache / "huggingface", *self._unbound_masks(roots, rw_dirs, extra)]
         if not self.step.restricted:
             masked += restricted.mask_dirs(self.config.profile)
         return sandbox.sandbox_argv(

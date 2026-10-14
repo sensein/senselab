@@ -394,6 +394,18 @@ it already holds through another instance gets `filelock`'s deadlock error inste
 
 ## Sandbox
 
+**Declared roots (A17 fix round 1).** A step's sandbox binds only the data roots it declares: the roots of its
+`inputs` and data-root `stage` entries, the roots of its `lock_inputs` (registry `root`), and the roots holding the
+hub cache or the URL weights root when it declares `hf_weights` or `url_weights` (`run._bound_roots`). Every other
+root is masked under an empty tmpfs, unless a path the sandbox or the profile needs lies under it or above it
+(`run._unbound_masks`): the binds are onto themselves, so an unbound root would otherwise stay readable through the
+read-only sweep. `{root:<name>}` renders only for a bound root. At load, a `{root:<name>}` path in argv, cwd,
+pythonpath or a stage dest must be covered by an `inputs` pattern of that root: a pattern matches it, or reaches
+below it (a dir holding declared files, the root itself included); a path with `..` never is
+(`spec.undeclared_root_paths`, `E_SPEC_UNDECLARED_ROOT`). A step with `lock_inputs` defers the paths no pattern
+covers to the registry gate (`restricted.undeclared_roots`, in `check_manifest_set` and lint), where a lock input's
+tree, or a dir above it, covers them too.
+
 Every step runs as
 `/usr/bin/unshare -rnm --pid --fork --kill-child --mount-proc --propagation private /bin/sh -c 'set -e; <mounts>; /usr/sbin/ip link set lo up; exec /usr/bin/setpriv --bounding-set=-all --inh-caps=-all --ambient-caps=-all --no-new-privs "$@"' sh <argv>`.
 With `set -e`, any failed mount aborts the step before it runs, so read-only data cannot fail open.

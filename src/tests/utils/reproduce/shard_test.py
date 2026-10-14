@@ -137,7 +137,8 @@ def test_a_sharded_step_publishes_one_item_per_shard_to_its_class(
     assert [f.code for f in slurm.step_findings(_spec("parts", shards=SHARDS), no_pool)] == ["pool-unset"]
     with pytest.raises(ValueError, match="E_SPEC_RESERVED_NAME"):
         _spec("pools")
-    reading = _step("sum", needs=["parts"], inputs=[{"root": "up:parts", "patterns": ["*.json"]}])
+    up = [{"root": "data", "patterns": ["in/*.txt"]}, {"root": "up:parts", "patterns": ["*.json"]}]
+    reading = _step("sum", needs=["parts"], inputs=up)
     with pytest.raises(DagError, match="E_DAG_SHARD_NEED: sum"):
         toposort(_manifest("alpha", _step("parts", shards=SHARDS), reading).steps)
 

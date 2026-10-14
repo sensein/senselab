@@ -431,7 +431,13 @@ def test_resource_and_root_findings(tmp_path: Path) -> None:
     bad = _spec(
         "bad",
         argv=["{venv}/bin/python", "{root:nowhere}/x", "{out}"],
-        inputs=[{"root": "missing", "patterns": ["a"]}, {"root": "elsewhere", "patterns": ["b"]}],
+        # nowhere and cwdroot are declared too, or the {root:...} paths are refused at load (E_SPEC_UNDECLARED_ROOT).
+        inputs=[
+            {"root": "missing", "patterns": ["a"]},
+            {"root": "elsewhere", "patterns": ["b"]},
+            {"root": "nowhere", "patterns": ["x"]},
+            {"root": "cwdroot", "patterns": ["c"]},
+        ],
         stage=[{"root": "elsewhere", "patterns": ["b"], "dest": "s"}],
         cwd="{root:cwdroot}",
         resources={"profile": "cpu", "gpu_arch": ["sm_80"], "native": ["ffmpeg"]},

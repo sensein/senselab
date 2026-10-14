@@ -29,11 +29,13 @@ from senselab.utils.reproduce import cache, digest, inputs
 from senselab.utils.reproduce.spec import (
     POOLS_DIR,
     RESERVED_ROOT_NAMES,
+    UNDECLARED_ROOT,
     InputSpec,
     Manifest,
     Profile,
     StageSpec,
     StepSpec,
+    undeclared_root_paths,
 )
 
 CODE = "E_SPEC_RESTRICTED"
@@ -68,17 +70,6 @@ def mask_dirs(profile: Profile) -> list[Path]:
     return list(profile.restricted_dirs)
 
 
-def _reaches_below(parts: Sequence[str], rel: Sequence[str]) -> bool:
-    """Whether pattern components ``parts`` can match a path that runs through every component of ``rel``."""
-    if not rel:
-        return bool(parts)
-    if not parts:
-        return False
-    if parts[0] == "**":
-        return True
-    return digest.pattern_matches(rel[0], parts[0]) and _reaches_below(parts[1:], rel[1:])
-
-
 def pattern_reaches(top: str | os.PathLike[str], pattern: str, dirs: Iterable[str]) -> bool:
     """Whether ``pattern`` under ``top`` can name a file in one of ``dirs``.
 
@@ -96,7 +87,7 @@ def pattern_reaches(top: str | os.PathLike[str], pattern: str, dirs: Iterable[st
         for d in dirs:
             if _under(base, d):
                 return True
-            if _under(d, base) and _reaches_below(rest, os.path.relpath(d, base).split("/")):
+            if _under(d, base) and digest.reaches_below(rest, os.path.relpath(d, base).split("/")):
                 return True
     return False
 
@@ -169,10 +160,37 @@ def step_registry(steps: Iterable[StepSpec], base_dir: Path) -> dict[str, inputs
     return out
 
 
+def undeclared_roots(steps: Sequence[StepSpec], registry: Mapping[str, inputs.RegisteredInput]) -> dict[str, list[str]]:
+    """Each step's ``{root:<name>}`` paths that neither its ``inputs`` patterns nor its lock inputs' trees cover.
+
+    A step with a lock input missing from ``registry`` is left out: its own lock checks refuse it later.
+    """
+    out: dict[str, list[str]] = {}
+    for step in steps:
+        if any(i not in registry for i in step.lock_inputs):
+            continue
+        trees: dict[str, list[str]] = {}
+        for input_id in step.lock_inputs:
+            trees.setdefault(registry[input_id].root, []).append(registry[input_id].relpath)
+        uncovered = undeclared_root_paths(step, trees)
+        if uncovered:
+            out[step.name] = uncovered
+    return out
+
+
 def check_manifest_set(manifests: Sequence[Manifest], base_dir: Path, profile: Profile) -> None:
-    """`check_restricted` over every step of ``manifests``, with the registry read from ``base_dir``."""
+    """The manifest-set checks that need the registry (read from ``base_dir``).
+
+    Raises:
+        ValueError: ``E_SPEC_UNDECLARED_ROOT: {<step>: [<paths>]}`` for a ``{root:<name>}`` path no declared
+            pattern or lock input tree covers (`undeclared_roots`); then as `check_restricted`.
+    """
     steps = [s for m in manifests for s in m.steps]
-    check_restricted(steps, step_registry(steps, base_dir), profile)
+    registry = step_registry(steps, base_dir)
+    uncovered = undeclared_roots(steps, registry)
+    if uncovered:
+        raise ValueError(f"{UNDECLARED_ROOT}: {uncovered}")
+    check_restricted(steps, registry, profile)
 
 
 # --- the scan hook -----------------------------------------------------------------------------------------

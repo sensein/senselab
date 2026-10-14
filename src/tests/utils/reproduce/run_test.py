@@ -23,11 +23,11 @@ from typing import Any
 import pytest
 
 import senselab
-from senselab.utils.reproduce import cache, digest, env, host, provenance, run, sandbox, source
+from senselab.utils.reproduce import cache, digest, env, host, provenance, restricted, run, sandbox, source
 from senselab.utils.reproduce.digest import input_set_digest
 from senselab.utils.reproduce.run import RunConfig, StepOutcome, evaluate_expect, run_step, run_steps
 from senselab.utils.reproduce.spec import Manifest, Profile, SourcesRef, StepSpec
-from tests.utils.reproduce.sources_fixture import lock_data, write_lock
+from tests.utils.reproduce.sources_fixture import lock_data, register_input, write_lock
 
 SHA = "ab" * 32
 MARKER = "MARKER-STDOUT-7731"
@@ -127,6 +127,7 @@ class World:
         self.restricted_dirs: list[Path] = [self.data / "restricted"]
         self.restricted_fields = True
         self.profile_extra: dict[str, Any] = {}
+        self.extra_roots: dict[str, str] = {}
 
     def write_patch(self, line: str) -> None:
         """Write the patch that changes the step script's first line to ``line``."""
@@ -152,7 +153,7 @@ class World:
             {
                 **extra,
                 **self.profile_extra,
-                "roots": {"data": str(self.data)},
+                "roots": {"data": str(self.data), **self.extra_roots},
                 "results_root": str(self.tmp / "results"),
                 "runs_root": str(self.tmp / "runs"),
                 "slurm_logs_root": str(self.tmp / "slurm"),
@@ -467,7 +468,7 @@ def test_a_step_without_a_prefetched_checkout_is_refused_before_any_key(world: W
 def test_an_input_pattern_that_matches_nothing_is_refused(world: World) -> None:
     """Declared inputs are digested with ``require_nonempty``."""
     manifest = world.manifest(
-        world.step("prep", "prep", "{root:data}/in/a.txt", inputs=[{"root": "data", "patterns": ["in/none*.txt"]}])
+        world.step("prep", "prep", "{root:data}/in", inputs=[{"root": "data", "patterns": ["in/none*.txt"]}])
     )
     world.prefetch(manifest)
     assert run_step(manifest.steps[0], "demo", world.config()).codes == ("E_DIGEST_EMPTY",)
@@ -1352,3 +1353,62 @@ def test_a_driver_error_prints_nothing_on_the_terminal(tmp_path: Path) -> None:
     result = json.loads(done.stdout.strip().splitlines()[-1])
     assert "E_DRIVER" in result["codes"] and result["logged"] is True
     assert "Traceback" not in done.stderr and str(tmp_path) not in done.stderr
+
+
+def test_the_registry_gate_refuses_a_root_path_no_lock_input_covers(world: World) -> None:
+    """A step whose ``{root:X}`` path only a ``lock_inputs`` tree could cover is checked against the registry."""
+    world.registered["t"] = register_input(world.base, {"data": world.data}, "t", root="data", relpath="in")
+    covered = world.manifest(world.step("prep", "prep", "{root:data}/in/a.txt", inputs=[], lock_inputs=["t"]))
+    restricted.check_manifest_set([covered], world.base, world.profile())
+    outside = world.manifest(world.step("prep", "prep", "{root:data}/other/a.txt", inputs=[], lock_inputs=["t"]))
+    with pytest.raises(ValueError, match="E_SPEC_UNDECLARED_ROOT"):
+        restricted.check_manifest_set([outside], world.base, world.profile())
+    assert run_dry_plan_refuses(outside, world)
+
+
+def run_dry_plan_refuses(manifest: Manifest, world: World) -> bool:
+    """Whether `run.run_steps` refuses ``manifest`` with ``E_SPEC_UNDECLARED_ROOT`` before running anything."""
+    try:
+        run_steps([manifest], world.config())
+    except ValueError as error:
+        return "E_SPEC_UNDECLARED_ROOT" in str(error)
+    return False
+
+
+LIST_CODE = (
+    "import json, os, sys; out = sys.argv[1]; "
+    "open(os.path.join(out, 'names.txt'), 'w').write(' '.join(sorted(os.listdir({path!r})))); "
+    "json.dump({{{{'value': 2.0}}}}, open(os.path.join(out, 'result.json'), 'w'))"
+)
+
+
+@needs_userns
+def test_a_step_sees_only_the_roots_it_declares(world: World) -> None:
+    """A root behind none of the step's inputs, stage, lock_inputs or hub cache is not bound, and is masked.
+
+    Both steps list the other root through a literal path: the step that declares an input there sees its
+    entries; the step that does not sees an empty dir.
+    """
+    other = world.tmp / "other"
+    (other / "in").mkdir(parents=True)
+    (other / "in" / "b.txt").write_text("3\n")
+    world.extra_roots = {"other": str(other)}
+    code = LIST_CODE.format(path=str(other))
+    argv = ["{venv}/bin/python", "-c", code, "{out}"]
+    blind = world.step("blind", "prep", "", argv=argv)
+    seeing = world.step(
+        "seeing",
+        "prep",
+        "",
+        argv=argv,
+        inputs=[{"root": "data", "patterns": ["in/a.txt"]}, {"root": "other", "patterns": ["in/b.txt"]}],
+    )
+    manifest = world.manifest(blind, seeing)
+    world.prefetch(manifest)
+    outcomes = world.run(manifest)
+    assert all(o.ok for o in outcomes.values()), {n: o.codes for n, o in outcomes.items()}
+    listed = {}
+    for name, outcome in outcomes.items():
+        assert outcome.out is not None
+        listed[name] = (outcome.out / run.WORK / "names.txt").read_text()
+    assert listed == {"blind": "", "seeing": "in"}

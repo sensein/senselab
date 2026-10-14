@@ -79,6 +79,7 @@ from senselab.utils.reproduce import (
 from senselab.utils.reproduce.dag import DagError, toposort
 from senselab.utils.reproduce.locks import TORCH_NAMES, ReproduceLockError, file_sha256, normalize_name
 from senselab.utils.reproduce.spec import (
+    UNDECLARED_ROOT,
     EnvSpec,
     Manifest,
     Profile,
@@ -473,14 +474,18 @@ def lint_findings(
         except DagError as error:
             out.append(f"{', '.join(str(p) for p in paths)}: dag-invalid {error}")
     refused: set[str] = set()
+    steps = [s for _, m in loaded for s in m.steps]
+    registry = restricted.step_registry(steps, base)
+    uncovered = restricted.undeclared_roots(steps, registry)
     if profile is not None:
-        steps = [s for _, m in loaded for s in m.steps]
-        refused = set(restricted.violations(steps, restricted.step_registry(steps, base), profile))
+        refused = set(restricted.violations(steps, registry, profile))
     for path, manifest in loaded:
         for step in manifest.steps:
             where = f"{path}:{step.name}"
             if step.name in refused:
                 out.append(f"{where}: {restricted.CODE}")
+            if step.name in uncovered:
+                out.append(f"{where}: {UNDECLARED_ROOT} {' '.join(uncovered[step.name])}")
             if profile is not None and step.extract and restricted.hook_missing(profile):
                 out.append(f"{where}: scan-hook-missing")
             if profile is not None:
