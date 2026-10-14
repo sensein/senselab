@@ -762,11 +762,11 @@ def test_an_interrupt_during_the_reservation_undoes_it(
     real = run.reserve_run_record
     calls: list[str] = []
 
-    def reserve(runs_root: Path, date: datetime.date, analysis: str, order: Any, submission: str) -> Any:  # noqa: ANN401
+    def reserve(runs_root: Path, date: datetime.date, analysis: str, order: Any, *rest: Any) -> Any:  # noqa: ANN401
         calls.append(analysis)
         if len(calls) == 2:
             raise KeyboardInterrupt
-        return real(runs_root, date, analysis, order, submission)
+        return real(runs_root, date, analysis, order, *rest)
 
     monkeypatch.setattr(run, "reserve_run_record", reserve)
     fake = FakeSbatch((0, PROBE_OK))
