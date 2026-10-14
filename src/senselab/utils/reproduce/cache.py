@@ -23,19 +23,21 @@ import json
 import os
 import re
 import shutil
+import stat
 import sys
 import sysconfig
+import time
 import uuid
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from importlib.metadata import Distribution, distributions
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from packaging.requirements import InvalidRequirement, Requirement
 from packaging.utils import canonicalize_name
 
-from senselab.utils.file_lock import SharedFileLock
+from senselab.utils.file_lock import SharedFileLock, lock_holder
 from senselab.utils.reproduce.digest import input_set_digest
 from senselab.utils.reproduce.env import env_key
 from senselab.utils.reproduce.sandbox import keyed_templates
@@ -48,6 +50,8 @@ SHARDS_KEY_SCHEMA = "reproduce-shards-1"
 DRIVER_PACKAGE = "senselab"
 NATIVE_EXCLUDE = ("**/__pycache__/**", "**/*.pyc")
 SUMMARY = "summary.json"
+ATTEMPTS = "attempts.jsonl"
+RESUME_KEEP = ".resume-keep"
 CLAIMS = ".claims"
 R_KINDS = frozenset({"r", "ir_notebook"})
 CLAIM_TIMEOUT_S = 600.0
@@ -345,6 +349,8 @@ def step_key_payload(
         "lock_inputs": sorted(step.lock_inputs),
         "restricted": step.restricted,
         "shard": None if shard is None else [shard, count],
+        "resumable": step.resumable,
+        "resume_dir": step.resume_dir,
     }
 
 
@@ -502,15 +508,59 @@ def write_summary(out: Path, summary: Mapping[str, Any]) -> Path:
     return target
 
 
-def reset_result_dir(results_root: Path, key: str) -> Path:
+def _real_dir(base: Path, rel: str) -> Path | None:
+    """``base/rel`` when every component of ``rel`` is a real directory (no symlink), else None."""
+    path = base
+    for part in PurePosixPath(rel).parts:
+        path = path / part
+        try:
+            if not stat.S_ISDIR(os.lstat(path).st_mode):
+                return None
+        except FileNotFoundError:
+            return None
+    return path
+
+
+def _remove(path: Path) -> None:
+    if os.path.isdir(path) and not os.path.islink(path):
+        shutil.rmtree(path)
+    else:
+        os.unlink(path)
+
+
+def _wipe_keeping(out: Path, keep: str | None, keep_attempts: bool) -> None:
+    """Empty ``out`` but for ``out/<keep>`` (moved to `RESUME_KEEP` and back) and, if asked, `ATTEMPTS`."""
+    held = out / RESUME_KEEP
+    store = _real_dir(out, keep) if keep is not None else None
+    if store is not None:
+        if os.path.lexists(held):
+            _remove(held)
+        os.rename(store, held)
+    for entry in os.scandir(out):
+        attempts = keep_attempts and entry.name == ATTEMPTS and entry.is_file(follow_symlinks=False)
+        if entry.name != RESUME_KEEP and not attempts:
+            _remove(Path(entry.path))
+    if keep is not None and _real_dir(out, RESUME_KEEP) is not None:
+        target = out / keep
+        target.parent.mkdir(mode=0o770, parents=True, exist_ok=True)
+        os.rename(held, target)
+    elif os.path.lexists(held):
+        _remove(held)
+
+
+def reset_result_dir(results_root: Path, key: str, *, keep: str | None = None, keep_attempts: bool = False) -> Path:
     """Give a step an empty result dir, removing what an incomplete or failed run left; call under `claim`.
 
     Args:
         results_root: The profile's results root.
         key: The step key.
+        keep: A dir relative to the result dir (an attempt's ``work/<resume_dir>``) kept through the wipe: moved
+            to `RESUME_KEEP` and back, only when every component is a real directory. A `RESUME_KEEP` left by a
+            reset that died is restored the same way.
+        keep_attempts: Keep `ATTEMPTS`, the per-attempt record.
 
     Returns:
-        The step's result dir (`result_dir`), now an empty directory.
+        The step's result dir (`result_dir`), now empty but for what was kept.
 
     A dir is wiped only when its ``summary.json`` is absent or records a non-zero integer exit.
 
@@ -540,6 +590,9 @@ def reset_result_dir(results_root: Path, key: str) -> Path:
             if summary["exit"] == 0:
                 raise CacheError("E_RESULT_DONE")
     try:
+        if out.exists() and (keep is not None or keep_attempts):
+            _wipe_keeping(out, keep, keep_attempts)
+            return out
         if out.exists():
             shutil.rmtree(out)
         out.mkdir(parents=True)
@@ -549,11 +602,14 @@ def reset_result_dir(results_root: Path, key: str) -> Path:
 
 
 @contextmanager
-def claim(results_root: Path, key: str, *, timeout: float = CLAIM_TIMEOUT_S) -> Iterator[Path]:
+def claim(results_root: Path, key: str, *, timeout: float = CLAIM_TIMEOUT_S) -> Iterator[tuple[Path, bool]]:
     """Hold the exclusive claim on one step key while it is checked, computed and marked done.
 
     The lock files are ``<results_root>/.claims/<key>.{lock,heartbeat,holder}``; the results root's own
-    mode is never changed.
+    mode is never changed. ``.holder`` is read once before the acquire, and the acquire is timed: an identity
+    there and an uncontended acquire (under ``SharedFileLock._UNCONTENDED_ACQUIRE_THRESHOLD``, the test
+    `SharedFileLock` itself makes) mean a holder that never released, i.e. one that was killed, since a clean
+    release clears ``.holder`` and a waiter's acquire is contended.
 
     Args:
         results_root: The profile's results root.
@@ -561,8 +617,9 @@ def claim(results_root: Path, key: str, *, timeout: float = CLAIM_TIMEOUT_S) -> 
         timeout: Seconds to wait for a live holder before giving up.
 
     Yields:
-        The step's result dir (`result_dir`); re-check `is_done` inside the claim, since another job may
-        have completed the step while this one waited.
+        ``(out, leftover)``: the step's result dir (`result_dir`), and whether a killed holder's identity was
+        left. Re-check `is_done` inside the claim, since another job may have completed the step while this
+        one waited.
 
     Raises:
         CacheError: ``E_KEY_BAD`` for a malformed key, ``E_CLAIM_HELD`` if another live process held
@@ -572,12 +629,15 @@ def claim(results_root: Path, key: str, *, timeout: float = CLAIM_TIMEOUT_S) -> 
     claims = results_root / CLAIMS
     claims.mkdir(parents=True, exist_ok=True)
     lock = SharedFileLock(claims / key, timeout=timeout, manage_dir_mode=False)
+    snapshot = lock_holder(claims / f"{key}.holder")
+    started = time.monotonic()
     try:
         lock.__enter__()
     except TimeoutError:
         raise CacheError("E_CLAIM_HELD") from None
+    leftover = snapshot is not None and time.monotonic() - started < SharedFileLock._UNCONTENDED_ACQUIRE_THRESHOLD
     try:
-        yield out
+        yield out, leftover
     finally:
         lock.__exit__(None, None, None)
 

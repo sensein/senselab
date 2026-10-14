@@ -10,8 +10,14 @@ profile's ``restricted_results_root`` for a restricted step (`results_root_of`):
 - ``R/up/<step>/``: for each need that is a sharded step, a dir of links ``<i>`` to each shard's ``work/``, made by
   the driver and read-only in the sandbox like the rest of ``R``; ``{up:<step>}`` names it, each shard's ``work/``
   is bound read-only, and ``R/up`` is removed after the run.
-- ``R/logs/``, ``R/prov/``, ``R/adapter/``, ``R/metrics.json`` and ``R/summary.json``: written by the
-  driver only, never writable inside a sandbox.
+- ``R/logs/``, ``R/prov/``, ``R/adapter/``, ``R/metrics.json``, ``R/summary.json`` and ``R/attempts.jsonl``:
+  written by the driver only, never writable inside a sandbox.
+
+An **attempt** is a run of a key whose result dir has no ``summary.json`` and whose claim was taken over a
+killed holder (`cache.claim`'s ``leftover``), or a work-pool item's run with ``POOL_ATTEMPT`` above 1. An attempt
+keeps ``R/attempts.jsonl`` (one line per run start: attempt, start time, host, Slurm job id and restart count) and,
+for a ``resumable`` step, ``work/<resume_dir>``; anything else resets the dir whole. The kept store is removed
+when the run ends with one of `INTEGRITY_CODES`. The summary carries ``attempt`` (from 1).
 
 `run_step` runs one step:
 
@@ -71,6 +77,7 @@ import math
 import os
 import re
 import shutil
+import socket
 import stat
 import statistics
 import subprocess
@@ -128,6 +135,19 @@ METRICS = "metrics.json"
 EXTRACTED = "extracted.json"
 DRIVER_LOG = "driver.log"
 RUN_JSON = "run.json"
+ATTEMPTS = cache.ATTEMPTS
+INTEGRITY_CODES = frozenset(
+    {
+        "E_INPUT_MUTATED",
+        "E_SRC_MUTATED",
+        "E_ENV_CHANGED",
+        "E_ENV_MISSING",
+        "E_ENV_UNCHECKED",
+        "E_ADAPTER_CHANGED",
+        "E_ENGINE_FIT",
+    }
+)
+"""Codes on which an attempt's kept store is removed before the summary is written."""
 RUN_LOCK = ".run.json.lock"
 PENDING = "pending"
 RESERVED_NAMES = frozenset({cache.SUMMARY, METRICS, RUN_JSON, EXTRACTED})
@@ -1074,7 +1094,7 @@ def _run_step(
         return _skipped(step, keyed.key, config, analysis, shard, result)
     with _driver_log() as log:
         try:
-            with cache.claim(results_root_of(step, config.profile), keyed.key):
+            with cache.claim(results_root_of(step, config.profile), keyed.key) as (_, leftover):
                 if cache.is_done(result):
                     return _skipped(step, keyed.key, config, analysis, shard, result)
                 execution = _Execution(step, analysis, config, upstream, schemas, keyed)
@@ -1082,11 +1102,20 @@ def _run_step(
                     execution.gate = gate(step, analysis, config, keyed.entries)
                     if execution.gate.codes:
                         return StepOutcome(step.name, keyed.key, "failed", EXIT_DRIVER, execution.gate.codes, None)
+                    attempt = _is_attempt(result, leftover, config)
                     try:
                         execution.refusals()
                     except RunError as error:
+                        if attempt and error.code in INTEGRITY_CODES:
+                            with contextlib.suppress(OSError):
+                                _discard_store(result, step)
                         return _failed(step, error.code, keyed.key)
-                    cache.reset_result_dir(results_root_of(step, config.profile), keyed.key)
+                    keep = f"{WORK}/{step.resume_dir}" if attempt and step.resume_dir is not None else None
+                    cache.reset_result_dir(
+                        results_root_of(step, config.profile), keyed.key, keep=keep, keep_attempts=attempt
+                    )
+                    execution.resumed = os.path.lexists(result / WORK)
+                    execution.attempt = _note_attempt(result, attempt, config)
                     summary = _summary_or_driver_error(execution, log)
         except cache.CacheError as error:
             return _failed(step, error.code, keyed.key)
@@ -1097,6 +1126,61 @@ def _run_step(
     except cache.CacheError as error:
         codes, exit_code = tuple(sorted({*codes, error.code})), exit_code or EXIT_DRIVER
     return StepOutcome(step.name, keyed.key, status, exit_code, codes, result)
+
+
+def _job_env(config: RunConfig) -> Mapping[str, str]:
+    return os.environ if config.parent_env is None else config.parent_env
+
+
+def _is_attempt(result: Path, leftover: bool, config: RunConfig) -> bool:
+    """An attempt: no summary, and a killed holder's leftover claim or a work-pool re-run (``POOL_ATTEMPT > 1``)."""
+    try:
+        pool_attempt = int(_job_env(config).get("POOL_ATTEMPT", "1"))
+    except ValueError:
+        pool_attempt = 1
+    return (leftover or pool_attempt > 1) and not os.path.lexists(result / cache.SUMMARY)
+
+
+def _note_attempt(result: Path, attempt: bool, config: RunConfig) -> int:
+    """Append this run's line to ``R/attempts.jsonl`` and return its number (at least 2 on an attempt)."""
+    path = result / ATTEMPTS
+    previous = 0
+    if attempt:
+        with contextlib.suppress(OSError):
+            previous = len(_read_nofollow(path).splitlines())
+    number = max(previous + 1, 2) if attempt else 1
+    env = _job_env(config)
+    line = {
+        "attempt": number,
+        "started": _now(),
+        "host": socket.gethostname(),
+        "slurm_job_id": env.get("SLURM_JOB_ID"),
+        "slurm_restart_count": env.get("SLURM_RESTART_COUNT"),
+    }
+    fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o660)
+    try:
+        os.write(fd, (json.dumps(line, sort_keys=True) + "\n").encode())
+    finally:
+        os.close(fd)
+    return number
+
+
+def _discard_store(result: Path, step: StepSpec) -> None:
+    """Remove ``work/<resume_dir>``; a symlink on the way is removed itself, never followed."""
+    if step.resume_dir is None:
+        return
+    path = result / WORK
+    parts = PurePosixPath(step.resume_dir).parts
+    for index, part in enumerate(parts):
+        path = path / part
+        if path.is_symlink():
+            path.unlink()
+            return
+        if not path.is_dir():
+            if index == len(parts) - 1 and os.path.lexists(path):
+                path.unlink()
+            return
+    shutil.rmtree(path)
 
 
 @contextlib.contextmanager
@@ -1168,6 +1252,8 @@ class _Execution:
         self.recorded_sha: str | None = None
         self.argv: list[str] = []
         self.started = _now()
+        self.attempt = 1
+        self.resumed = False
         self.released: bool | None = False if step.restricted else None
         self.closure: list[str] | None = None
 
@@ -1218,6 +1304,12 @@ class _Execution:
         if self.config.no_netns:
             self.codes.add("E_NOT_REPORTABLE")
         self._closure_recheck()
+        if self.codes & INTEGRITY_CODES:
+            try:
+                _discard_store(self.result, self.step)
+            except OSError:
+                _log().error("could not remove the resume store\n%s", traceback.format_exc())
+                self.codes.add("E_DRIVER")
         outputs = self._outputs()
         for scratch in (self.tmp, self.result / UP, self.result / ADAPTER_TMP, self.result / R_SESSION_DIR):
             try:
@@ -1330,13 +1422,17 @@ class _Execution:
             "extracted": self.extracted,
             "released": self.released,
             "input_closure": self.closure,
+            "attempt": self.attempt,
         }
 
     # --- before the step ----------------------------------------------------------------------
 
     def _prepare(self) -> None:
         step, config = self.step, self.config
-        _mkdir(self.work)
+        if not self.resumed:
+            _mkdir(self.work)
+        elif not stat.S_ISDIR(os.lstat(self.work).st_mode):
+            raise RunError("E_DRIVER")
         _mkdir(self.tmp)
         for sub in ("home", "ipython", "jupyter", "jupyter/runtime", "jupyter/data", "jupyter/config", "cache"):
             _mkdir(self.tmp / sub)
