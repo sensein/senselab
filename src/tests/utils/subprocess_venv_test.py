@@ -54,8 +54,8 @@ def fake_cache_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 @pytest.fixture
 def fake_uv(monkeypatch: pytest.MonkeyPatch) -> str:
-    """Make ``_find_uv()`` return a deterministic fake path so it doesn't shell out to ``which uv``."""
-    monkeypatch.setattr(subprocess_venv, "_find_uv", lambda: "/fake/uv")
+    """Make ``find_uv()`` return a deterministic fake path so it doesn't shell out to ``which uv``."""
+    monkeypatch.setattr(subprocess_venv, "find_uv", lambda **_: "/fake/uv")
     return "/fake/uv"
 
 
