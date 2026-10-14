@@ -177,6 +177,8 @@ The primitives shared by both hashed-lock formats. The header formats themselves
   - `release` sends the item back to the queue with attempt+1 and counts toward `max_interrupts`, not toward the
     failure budget.
   - `reap` re-publishes leases whose heartbeat is older than `lease_s`, and abandoned `tmp/` entries.
+  - `state(item_id)` names where one item is (`done`, `dead`, `leased`, `queued`, `staged` or None), so a caller
+    that publishes a fixed set of ids can skip ids already published and read each one's outcome.
 - **Worker:** `python -m senselab.utils.work_pool work POOL --classes a,b [--linger N] [--poll S]
   [--host-check CMD]`.
   - It runs each item's command with `POOL_ITEM_ID` and `POOL_ATTEMPT` set, under a heartbeat thread.
